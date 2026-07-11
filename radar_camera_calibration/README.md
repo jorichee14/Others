@@ -1,79 +1,82 @@
 # Radar ↔ Camera Extrinsic Calibration (ChArUco board + trihedral reflector)
 
 Estimate the rigid extrinsic **`T_cam_radar`** between a camera and a radar using
-a single rigid target: a **ChArUco board with a trihedral corner reflector**
-bolted to it at a known, fixed offset.
+one rigid target: a **ChArUco board with a trihedral corner reflector** bolted to
+it at a known, fixed offset.
 
-- `radar_camera_calib.py` — the calibration tool (this task).
+- `radar_camera_calib.py` — the calibration node (this task).
 - `general_charuco.py` — the original **camera-to-camera** tool you started from,
-  kept for reference. It does not apply to radar (a radar return has no
-  orientation), but the ChArUco detection code is shared in spirit.
+  kept for reference.
 
 ---
 
-## Why a corner reflector?
+## Method
 
-A radar doesn't see a checkerboard — it sees a sparse set of range/azimuth
-(/elevation) detections. A **trihedral corner reflector** is engineered to be
-the single brightest return in the scene, so the radar reliably reports **one
-point**: the reflector's apex.
-
-That apex is rigidly fixed to the ChArUco board, so the **camera** can also
-locate it:
+The trihedral corner reflector is the trick. It is the **single brightest radar
+return** in the scene, and it is **rigidly fixed to the ChArUco board**, so both
+sensors can locate the same physical point (the reflector apex):
 
 ```
-camera:  detect board → T_cam_board (6-DOF) → p_cam = T_cam_board · apex_in_board
-radar :  strongest gated return                → p_radar   (a 3-D point)
+camera : detect ChArUco board → T_cam_board (6-DOF) → p_cam = T_cam_board · apex_board
+radar  : reflector = strongest gated return          → p_radar   (a 3-D point)
 ```
 
-Each pose gives one **corresponding 3-D point pair** `(p_cam, p_radar)`.
-
-## Why you must move the rig
-
-A single point has no orientation, so **one view cannot recover a 6-DOF
-transform.** Collect `N ≥ 3` non-collinear pairs by moving the rig around the
-shared field of view, then solve the rigid point-set registration
-(Kabsch / Umeyama, scale fixed at 1):
+A radar point has **no orientation**, so one view can't give a 6-DOF transform.
+Move the rig to `N ≥ 3` non-collinear positions, collect corresponding point
+pairs, and solve the rigid registration (Kabsch/Umeyama, scale = 1):
 
 ```
-min_{R,t}  Σ_i ‖ R·p_radar^i + t − p_cam^i ‖²      ⇒   T_cam_radar
-p_cam = R · p_radar + t          (X = T_cam_radar maps a radar point into the camera frame)
+min_{R,t} Σ ‖ R·p_radar^i + t − p_cam^i ‖²   ⇒   X = T_cam_radar
+p_cam = R · p_radar + t      (X maps a radar point into the camera frame)
 ```
 
-**Pose diversity is everything.** Spread captures across **range, azimuth, and
-height**. If all captures lie in a plane or a line the out-of-plane rotation is
-unobservable — the tool detects this (singular-value check) and warns.
-Aim for **8–15 well-spread poses**.
+**Pose diversity is everything** — spread captures across range, azimuth, and
+**height**. Collinear/planar poses make out-of-plane rotation unobservable; the
+tool detects this (condition number + planar singular value) and warns. Aim for
+**8–15 well-spread poses**.
+
+### Why the camera side uses the board, not depth
+
+A bare corner reflector is specular: stereo/ToF depth on bare metal is
+unreliable and a hand-click on it is ~10 px noisy. The **ChArUco board pose is
+metric** (from the known square size), sub-mm, and fully automatic. You only
+measure the apex→board offset once. This is the main upgrade over click-and-depth
+calibration tools — no depth topic is even required.
+
+### Radar side (robust reflector identification)
+
+1. **Background subtraction** — pool `bg_accum_frames` radar frames with the rig
+   *out* of the scene (`~/background`). A live point counts as "new" only if it's
+   farther than `bg_match_dist` from every background point. Kills static clutter.
+2. **Gating** — range window `[min_range, max_range]`; optional `|doppler|`
+   window (the held-still reflector is ≈0 doppler, so walking people are
+   rejected); and, once an extrinsic exists, proximity to the camera-predicted
+   apex (`gate_radius`).
+3. **Highest-SNR selection** — among the survivors, take **argmax(SNR)**. The
+   trihedral is built to be the strongest reflector, so this *is* the apex. One
+   bright background-subtracted point — no clustering needed.
 
 ---
 
 ## Measuring `apex_in_board` (the one number that matters most)
 
 `reflector_offset_{x,y,z}` is the vector from the **ChArUco board origin** to the
-**reflector apex**, expressed **in the board frame**. The whole calibration is
-biased by exactly this error, so measure it carefully.
+**reflector apex**, in the board frame. The whole calibration is biased by this
+error — measure it carefully.
 
-Board frame (OpenCV ChArUco convention):
-- **origin** = the first inner chessboard corner (top-left of the board grid),
-- **+x** along the `squares_x` direction,
-- **+y** along the `squares_y` direction,
-- **+z** out of the board plane, toward the camera side.
-
-Measure the apex position with a ruler/caliper along those three axes. If the
-reflector sits, say, 3 cm to the right of the origin, 10 cm below it, and its
-apex stands 4 cm proud of the board surface:
+Board frame (OpenCV ChArUco): origin at the first inner chessboard corner,
+**+x** along `squares_x`, **+y** along `squares_y`, **+z** out of the board plane
+toward the camera. Example: apex 3 cm right, 10 cm down, 4 cm proud of the board:
 
 ```
-reflector_offset_x:  0.03
-reflector_offset_y:  0.10
-reflector_offset_z:  0.04
+reflector_offset_x: 0.03
+reflector_offset_y: 0.10
+reflector_offset_z: 0.04
 ```
 
-**Verify visually before capturing:** enable `debug_image` (on by default) and
-view `/radar_camera_calib/debug_image`. The tool draws the board axes and a dot
-at the projected apex. That dot must land on the real reflector apex in the
-image. If it's off, fix the offset (usually a sign). This 30-second check saves
-the whole calibration.
+**Verify visually first.** View `debug_image_topic` — the tool draws the board
+axes and a dot at the projected apex. That dot must land on the real reflector.
+If not, fix the offset (usually a sign). 30 seconds here saves the calibration.
 
 ---
 
@@ -82,54 +85,74 @@ the whole calibration.
 **Subscribes**
 | topic (param) | type | purpose |
 |---|---|---|
-| `image_topic` | `sensor_msgs/Image` | camera image (ChArUco detection) |
+| `image_topic` | `sensor_msgs/Image` | camera image (ChArUco) |
 | `info_topic` | `sensor_msgs/CameraInfo` | intrinsics K, D |
-| `radar_topic` | `sensor_msgs/PointCloud2` **or** `radar_msgs/RadarScan` | radar detections |
-| `~/capture` `~/solve` `~/reset` `~/save` | `std_msgs/Empty` | manual control |
+| `radar_topic` | `sensor_msgs/PointCloud2` | radar detections (`/points_all`: x,y,z,snr,doppler) |
+| `~/background` `~/capture` `~/solve` `~/reset` `~/save` | `std_msgs/Empty` | control |
 
 **Publishes**
 - static TF `parent_frame → child_frame` (camera optical → radar), if `publish_tf`.
-- `debug_image_topic` — annotated image (axes + projected apex), if `debug_image`.
-- files `extrinsic_<cam>__<radar>.yaml` and `.json` with `T_cam_radar`, its
-  inverse `T_radar_cam`, RMS residual, capture count, and a planar-warning flag.
+- `debug_image_topic` — annotated image: board axes, projected apex, and (once
+  solved) the **whole radar cloud projected onto the feed, coloured by depth**.
+  This live overlay is the most trustworthy check — walk the reflector around and
+  confirm the dots stay glued to it near/far and left/right/high/low.
+- `extrinsic_<cam>__<radar>.yaml` / `.json` — `T_cam_radar`, its inverse, RMS,
+  LOO-CV, per-axis bias, condition number, verdict, and a ready-to-run
+  `static_transform_publisher` command.
 
 ---
 
 ## Usage
 
-Install deps (ROS 2 + OpenCV with aruco + these):
-
 ```bash
 pip install -r requirements.txt        # numpy, scipy, opencv-contrib-python
-# plus ROS 2: rclpy, cv_bridge, message_filters, tf2_ros, sensor_msgs_py
-# for RadarScan input: the radar_msgs package
+# plus ROS 2: rclpy, cv_bridge, sensor_msgs_py, message_filters, tf2_ros
 ```
-
-Run (edit params to your rig):
 
 ```bash
 python3 radar_camera_calib.py --ros-args \
   -p image_topic:=/zed/zed_node/left/image_rect_color \
   -p info_topic:=/zed/zed_node/left/camera_info \
-  -p radar_topic:=/radar/points \
-  -p radar_type:=pointcloud2 \
-  -p pc_field_intensity:=rcs \
+  -p radar_topic:=/points_all \
+  -p pc_field_snr:=snr -p pc_field_doppler:=doppler \
   -p squares_x:=9 -p squares_y:=7 -p square_len:=0.020 -p marker_len:=0.015 \
   -p dictionary:=DICT_4X4_50 \
   -p reflector_offset_x:=0.03 -p reflector_offset_y:=0.10 -p reflector_offset_z:=0.04 \
-  -p parent_frame:=zed_left_camera_optical_frame \
-  -p child_frame:=radar_link \
+  -p parent_frame:=zed_left_camera_optical_frame -p child_frame:=radar_link \
   -p capture_mode:=auto -p min_points:=6 -p min_baseline:=0.15
 ```
 
 Then:
-1. Watch `/radar_camera_calib/debug_image` — confirm the apex dot is on the reflector.
-2. Move the rig to a spot in view of **both** sensors, hold still ~1 s. In
-   `auto` mode it captures once stable and far enough from prior captures.
-   (Or `ros2 topic pub -1 /radar_camera_calib/capture std_msgs/msg/Empty {}`.)
-3. Repeat across a spread of ranges / angles / heights (8–15 poses).
-4. The extrinsic solves and refines after each capture and is saved on lock /
-   `~/save` / Ctrl-C. Force a solve any time with `~/solve`; clear with `~/reset`.
+1. Rig **out** of the scene → `ros2 topic pub -1 /radar_camera_calib/background std_msgs/msg/Empty {}`.
+2. Watch `debug_image_topic` — confirm the apex dot sits on the reflector.
+3. Bring the rig in; move it to a spot seen by **both** sensors and hold ~1 s.
+   Auto mode captures when stable and moved ≥ `min_baseline` from prior captures.
+   (Or publish on `~/capture`.)
+4. Repeat across a spread of ranges/angles/heights (8–15 poses). The extrinsic
+   solves and re-validates after each capture; force with `~/solve`, write with
+   `~/save`, clear with `~/reset`.
+
+---
+
+## What "good" looks like
+
+Printed on every solve and checked against thresholds (radar angular noise is a
+few degrees, so pixel error is naturally larger than a camera-camera rig — don't
+chase sub-pixel numbers):
+
+| metric | threshold (param) | meaning |
+|---|---|---|
+| mean reproj | `val_pass_reproj_px` (20 px) | radar-predicted apex lands on the visual apex |
+| mean 3-D | `val_pass_3d_mm` (150 mm) | 3-D agreement |
+| max per-axis bias | `val_pass_bias_mm` (50 mm) | **signed** residual — a non-zero mean on an axis is a systematic error RMS would hide |
+| LOO-CV RMS | ≈ in-sample RMS | honest generalisation; ≫ in-sample ⇒ overfit / too few / clustered |
+| \|t\| | `measured_baseline_m` ± `baseline_tol_m` | tape-measure the radar↔camera distance for metric ground truth |
+| condition number | < ~200 | pose spread; high ⇒ add diversity |
+| live overlay | — | dots track the reflector everywhere in the FoV |
+
+**Range diagnostic** — if radar range disagrees with the camera, the solve prints
+a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_bias_m`
+(applied at ingest, before everything). `a ≠ 1` is a scale error; `b ≠ 0` a bias.
 
 ---
 
@@ -137,43 +160,31 @@ Then:
 
 | param | default | meaning |
 |---|---|---|
-| `radar_type` | `pointcloud2` | `pointcloud2` or `radarscan` |
-| `pc_field_x/y/z` | `x`/`y`/`z` | PointCloud2 coordinate field names |
-| `pc_field_intensity` | `intensity` | intensity/RCS field for picking the strongest return (`''` disables) |
-| `pick_by_intensity` | `true` | pick strongest return; else nearest. A prior estimate always gates by proximity |
-| `min_range`/`max_range` | `0.3`/`20` m | radar range gate (clutter rejection) |
-| `gate_radius` | `1.0` m | once an extrinsic exists, radar pt must be within this of the predicted apex |
-| `capture_mode` | `auto` | `auto` (stable + moved) or `manual` (`~/capture`) |
-| `stable_window` | `12` | frames averaged per pose |
-| `stable_t_std` | `0.004` m | jitter threshold to call the rig "still" |
-| `min_baseline` | `0.12` m | minimum move between auto-captures |
-| `min_points` | `4` | captures before the first solve (≥3 required) |
-| `max_reproj_px` | `1.5` | reject bad board detections |
+| `radar_topic` | `/points_all` | radar PointCloud2 |
+| `pc_field_x/y/z/snr/doppler` | `x/y/z/snr/doppler` | field names (missing ones tolerated) |
+| `select_by` | `snr` | `snr` (highest return) or `nearest` |
+| `min_range`/`max_range` | `0.3`/`20` m | range gate |
+| `max_abs_doppler` | `-1` (off) | keep `|doppler| ≤` this — rejects moving clutter |
+| `gate_radius` | `1.0` m | proximity gate to predicted apex once solved |
+| `bg_accum_frames` | `15` | frames pooled on `~/background` |
+| `bg_match_dist` | `0.2` m | "new point" distance threshold |
+| `require_background` | `false` | refuse to capture until background pooled |
+| `radar_range_scale`/`_bias_m` | `1.0`/`0.0` | ingest range correction |
+| `capture_mode` | `auto` | `auto` or `manual` (`~/capture`) |
+| `stable_window`/`stable_std` | `12`/`0.01 m` | per-pose stability gate |
+| `min_baseline`/`min_points` | `0.15 m`/`6` | capture spacing / count |
 | `reflector_offset_{x,y,z}` | `0` | **apex offset in board frame — measure this!** |
+| `measured_baseline_m` | `-1` (off) | tape-measured `|t|` for the baseline check |
 
 ---
 
-## 2-D radar (range + azimuth only)
+## Coordinate conventions
 
-If your radar has no elevation, all points have `z ≈ 0`. The tool auto-detects
-this (planar singular value) and warns: with in-plane points you can recover the
-in-plane rotation (yaw) and the in-plane translation, but the out-of-plane
-rotation (pitch/roll) and the height offset are unobservable from point
-correspondences alone. Options:
-- Mount the reflector at several **different heights** so the camera-side points
-  span z even if the radar's don't — this constrains the fit through the known
-  board geometry.
-- Or fix the unobservable DOFs from CAD / a spirit level and only trust yaw +
-  planar translation from this tool.
+- radar: `X=forward, Y=left, Z=up` (automotive)
+- camera: `X=right, Y=down, Z=forward` (optical/pinhole)
 
----
-
-## Sanity checks
-
-- **RMS residual** printed on every solve should fall to a few mm–cm as poses
-  accumulate. A residual that stays large ⇒ wrong `apex_in_board`, wrong radar
-  field/units, or bad time sync (`sync_slop`).
-- **Singular values** of the radar point spread are printed; the smallest being
-  near zero ⇒ poses too planar/collinear, add diversity.
-- Reproject: with `publish_tf` on, `ros2 run tf2_ros tf2_echo parent child`
-  should match the saved YAML.
+Raw radar points go straight into Kabsch, so the solved `R` absorbs the **full**
+~90° frame difference **and** the mounting rotation — there is no separate remap
+step to get wrong. A large-looking `R` (≈90°) is therefore expected and correct.
+`T_cam_radar` (and its inverse) in the YAML already map raw radar points into the
+camera frame; the emitted `static_transform_publisher` command is ready to use.
