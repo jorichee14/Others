@@ -1,0 +1,6 @@
+# Python deps for radar_camera_calib.py (in addition to a ROS 2 install).
+# ROS 2 provides: rclpy, cv_bridge, message_filters, tf2_ros, sensor_msgs,
+# sensor_msgs_py, std_msgs, geometry_msgs (and radar_msgs if radar_type=radarscan).
+numpy>=1.21
+scipy>=1.7
+opencv-contrib-python>=4.7   # needs cv2.aruco (ChArUco)
