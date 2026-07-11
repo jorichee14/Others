@@ -753,9 +753,14 @@ class RadarCameraCalib(Node):
         # board pose held still during capture: mean translation, averaged rotation
         tb = np.mean([w[5] for w in self.win], 0)
         Rb = Rot.from_matrix(np.array([w[4] for w in self.win])).mean().as_matrix()
-        if (not force and self.last_capture_cam is not None and
-                np.linalg.norm(p_cam - self.last_capture_cam) < self.min_baseline):
-            return
+        if (not force and self.last_capture_cam is not None):
+            d = float(np.linalg.norm(p_cam - self.last_capture_cam))
+            if d < self.min_baseline:
+                self.get_logger().info(
+                    f"steady but only {d*100:.0f} cm from last capture "
+                    f"(need {self.min_baseline*100:.0f} cm) — MOVE the rig to a NEW spot",
+                    throttle_duration_sec=2.0)
+                return
         self.captures.append({'p_radar': p_radar, 'snr': snr_i, 'dop': dop_i,
                               'Rb': Rb, 'tb': tb})
         self.last_capture_cam = p_cam; self.win.clear()
