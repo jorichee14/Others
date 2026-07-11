@@ -55,13 +55,34 @@ min_{R,t} Σ ρ( [ (r_m−r_p)/σ_r , (az_m−az_p)/σ_az , (el_m−el_p)/σ_el 
 Set `sigma_range_m`, `sigma_az_deg`, `sigma_el_deg` from your radar's spec — the
 *relative* sizes are what steer the weighting.
 
-### The apex offset is a fixed, measured input (on purpose)
+### The apex offset — measured, refined, or calculated (`solve_offset`)
 
-Radar cross-range noise (~10 cm) is **larger than the apex offset itself
-(~5 cm)**, so the offset **cannot be recovered from radar** — verified in
-simulation, joint-solving it doesn't help and can hurt. Measure it physically
-(below); the debug overlay confirms it visually. A 4 cm offset error propagates
-to ~12 cm of extrinsic error, so measure it to ~cm.
+You don't have to trust a hand-measurement. The offset `a` (board→apex, in the
+board frame) enters as `p_cam = board_R·a + board_t`, and because the board
+**rotates** between poses, `a` is separable from the constant extrinsic
+translation — so the tool can **jointly estimate it** (MAP: a free offset
+regularised toward your measured value). Verified in simulation:
+
+| your measurement | fixed | **joint solve** |
+|---|---|---|
+| good (~5 mm) | 0.82° / 23 mm | 0.77° / 20 mm — doesn't hurt |
+| wrong (44 mm) | 0.89° / 44 mm | 0.59° / 20 mm — repairs it, offset → ~15 mm |
+| **none** (seed 0) | — | 0.38° / 25 mm, offset **calculated** 114 → ~15 mm |
+
+**The catch — observability.** The offset is only visible where radar cross-range
+noise (≈ `range·σ_az`) is *smaller* than the offset, i.e. at **close range
+(1.5–3 m) with high board tilt (±45–55°)**. At long range it's swamped and the
+solve just returns your prior. The reported **apex 1σ** tells you which happened
+(`✓ data-determined` vs `trusting your prior`), and the debug overlay confirms
+the apex visually either way.
+
+**How to use it:**
+- Measured it well → leave `solve_offset:=true`, `offset_prior_sigma_m:=0.02`
+  (tight). It stays put; nothing lost.
+- Measured it roughly → `offset_prior_sigma_m:=0.05`. It refines toward truth.
+- Can't measure it → set `reflector_offset_*` to a rough guess (or 0),
+  `offset_prior_sigma_m:=0.10` (loose), and **include a batch of close-range,
+  high-tilt poses** so it's observable.
 
 **Pose diversity is everything** — spread captures across range, azimuth, and
 **height**. Collinear/planar poses make out-of-plane rotation unobservable; the
@@ -91,11 +112,13 @@ calibration tools — no depth topic is even required.
 
 ---
 
-## Measuring `apex_in_board` (the one number that matters most)
+## Measuring `apex_in_board`
 
 `reflector_offset_{x,y,z}` is the vector from the **ChArUco board origin** to the
-**reflector apex**, in the board frame. The whole calibration is biased by this
-error — measure it carefully.
+**reflector apex**, in the board frame. You can measure it, and the tool will
+also **refine or fully calculate** it (`solve_offset`, see above) — a rough value
+here just seeds/anchors the estimate. Still, a good measurement is the tight
+prior that makes everything robust, so measure it if you can.
 
 Board frame (OpenCV ChArUco): origin at the first inner chessboard corner,
 **+x** along `squares_x`, **+y** along `squares_y`, **+z** out of the board plane
@@ -217,7 +240,9 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 | `capture_mode` | `auto` | `auto` or `manual` (`~/capture`) |
 | `stable_window`/`stable_std` | `12`/`0.01 m` | per-pose stability gate |
 | `min_baseline`/`min_points` | `0.15 m`/`6` | capture spacing / count |
-| `reflector_offset_{x,y,z}` | `0` | **apex offset in board frame — measure this!** |
+| `reflector_offset_{x,y,z}` | `0` | apex offset in board frame (measured value / prior centre) |
+| `solve_offset` | `true` | jointly estimate the apex offset (MAP) |
+| `offset_prior_sigma_m` | `0.03` | prior width on the offset — tight if measured well, `0.10` if not |
 | `measured_baseline_m` | `-1` (off) | tape-measured `|t|` for the baseline check |
 
 ---

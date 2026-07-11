@@ -39,10 +39,22 @@ by each component's real σ:
     dropped — but then out-of-plane rotation and height are UNOBSERVABLE; the
     covariance readout flags exactly which DOFs are weak.
 
-The apex offset is a FIXED input, deliberately: radar cross-range noise (~10 cm)
-is larger than the offset itself (~5 cm), so it can't be recovered from radar
-(verified — joint solving doesn't help). Measure it physically (see README);
-the debug overlay lets you confirm it visually.
+THE APEX OFFSET — measured, refined, or CALCULATED (solve_offset)
+────────────────────────────────────────────────────────────────
+The offset a (board→apex, board frame) can be jointly estimated with the
+extrinsic (MAP: free a regularised toward your measured value):
+  p_cam_i = board_R_i · a + board_t_i.  Because the board rotates between poses,
+a is separable from the constant extrinsic translation.
+  • measured well → keep offset_prior_sigma tight; the solve barely moves it.
+  • measured badly → the solve repairs it (verified: 44 mm error → ~15 mm,
+    translation error 44 → 24 mm).
+  • can't measure → seed 0 with a loose prior and it CALCULATES the offset
+    (114 mm → ~15 mm) — provided you include the poses that make it observable.
+Observability caveat: a is only visible where the radar's cross-range noise is
+smaller than the offset, i.e. at CLOSE range (1.5–3 m) with HIGH board tilt
+(±45–55°). At long range it is swamped; the solve then just returns your prior.
+The reported apex 1σ tells you which happened, and the debug overlay confirms
+the apex visually regardless.
 
 WHY THE CAMERA SIDE USES THE BOARD, NOT DEPTH
 ─────────────────────────────────────────────
@@ -171,74 +183,108 @@ def _wrap(a):
     return (a + np.pi) % (2 * np.pi) - np.pi
 
 
-def robust_ml_calibrate(P_radar, Q_cam, sig_r, sig_az, sig_el,
-                        use_elevation=True, huber=1.5, reject_sigma=4.0, max_iter=5):
+def _cam_apex(Rb, tb, a):
+    """Apex in the camera frame for board pose (Rb,tb) and board-frame offset a."""
+    return (Rb @ a) + tb
+
+
+def robust_ml_calibrate(P_radar, board_R, board_t, apex0,
+                        sig_r, sig_az, sig_el, use_elevation=True,
+                        solve_offset=True, offset_prior_sigma=0.03,
+                        huber=1.5, reject_sigma=4.0, max_iter=5):
     """
-    Maximum-likelihood extrinsic estimate in the radar's MEASUREMENT space.
+    Maximum-likelihood extrinsic in the radar's MEASUREMENT space, optionally
+    jointly estimating the reflector apex offset (board frame).
 
-    A radar measures range precisely but angle poorly, and cross-range error
-    grows with range — so isotropic Cartesian Kabsch is biased. Here we predict
-    each radar measurement from the (accurate) camera apex via the current
-    (R,t), convert to (range, az, el), and minimise residuals weighted by the
-    real per-component sigmas. Huber loss + iterative sigma-gating reject bad
-    matches. For a 2-D radar (no elevation) pass use_elevation=False and the
-    elevation residual is dropped (that DOF is simply not constrained).
+    A radar measures range precisely but angle poorly, with cross-range error
+    that grows with range — so isotropic Cartesian Kabsch is biased. We predict
+    each radar measurement from the camera apex via the current (R,t[,a]),
+    convert to (range,az,el), and minimise residuals weighted by the real per-
+    component sigmas. Huber loss + iterative sigma-gating reject bad matches.
 
-        p_cam = R · p_radar + t          (returns this T_cam_radar)
-        predicted radar pt = R^T (p_cam − t)
+        p_cam_i = board_R_i · a + board_t_i        (a = apex offset, board frame)
+        predicted radar pt = Rᵀ (p_cam_i − t)      (X = T_cam_radar: p_cam = R q + t)
 
-    Returns dict: R, t, cov(6×6 on [rotvec,t]), inlier_mask, rms_sigma (residual
-    RMS in sigma units), n_in.
+    solve_offset=True adds a (3 params) with a Gaussian PRIOR at apex0 of width
+    offset_prior_sigma (MAP). This never hurts a good hand-measurement, repairs a
+    bad one, and can recover the offset from scratch given close-range, high-tilt
+    poses (offset is unobservable at long range where cross-range noise ≫ offset).
+    Set offset_prior_sigma<=0 for a free (un-regularised) offset.
+
+    Returns dict: R, t, apex, cov(6×6 on [rotvec,t]), apex_sigma(3), inlier_mask,
+    rms_sigma, n_in, solved_offset(bool).
     """
-    P = np.asarray(P_radar, float); Q = np.asarray(Q_cam, float)
-    w = np.array([sig_r, sig_az] + ([sig_el] if use_elevation else []))
-    k = len(w)
+    P = np.asarray(P_radar, float)
+    Rb = np.asarray(board_R, float); Tb = np.asarray(board_t, float)
+    a0 = np.asarray(apex0, float)
+    k = 3 if use_elevation else 2
+    prior = solve_offset and offset_prior_sigma and offset_prior_sigma > 0
 
-    def residuals(x, Pm, Qm):
+    def unpack(x):
         R = Rot.from_rotvec(x[:3]).as_matrix(); t = x[3:6]
+        a = x[6:9] if solve_offset else a0
+        return R, t, a
+
+    def residuals(x, idx):
+        R, t, a = unpack(x)
         out = []
-        for pc, qm in zip(Qm, Pm):
-            pr = R.T @ (pc - t)
-            rp = cart_to_raz(pr); rm = cart_to_raz(qm)
+        for i in idx:
+            pr = R.T @ (_cam_apex(Rb[i], Tb[i], a) - t)
+            rp = cart_to_raz(pr); rm = cart_to_raz(P[i])
+            out.append((rm[0] - rp[0]) / sig_r); out.append(_wrap(rm[1] - rp[1]) / sig_az)
+            if use_elevation:
+                out.append(_wrap(rm[2] - rp[2]) / sig_el)
+        if prior:
+            out.extend(list((x[6:9] - a0) / offset_prior_sigma))
+        return np.array(out)
+
+    def per_point_sigma(x, idx):
+        R, t, a = unpack(x)
+        s = []
+        for i in idx:
+            pr = R.T @ (_cam_apex(Rb[i], Tb[i], a) - t)
+            rp = cart_to_raz(pr); rm = cart_to_raz(P[i])
             d = [(rm[0] - rp[0]) / sig_r, _wrap(rm[1] - rp[1]) / sig_az]
             if use_elevation:
                 d.append(_wrap(rm[2] - rp[2]) / sig_el)
-            out.extend(d)
-        return np.array(out)
+            s.append(np.linalg.norm(d) / np.sqrt(k))
+        return np.array(s)
 
-    def per_point_sigma(x, Pm, Qm):
-        return np.linalg.norm(residuals(x, Pm, Qm).reshape(-1, k), axis=1) / np.sqrt(k)
-
-    R0, t0 = kabsch(P, Q)                              # Cartesian init
-    x = np.concatenate([Rot.from_matrix(R0).as_rotvec(), t0])
-    mask = np.ones(len(P), bool)
+    # Cartesian Kabsch init (apex fixed at a0)
+    Q0 = np.array([_cam_apex(Rb[i], Tb[i], a0) for i in range(len(P))])
+    R0, t0 = kabsch(P, Q0)
+    x = np.concatenate([Rot.from_matrix(R0).as_rotvec(), t0] + ([a0] if solve_offset else []))
+    allidx = np.arange(len(P)); mask = np.ones(len(P), bool)
     sol = None
     for _ in range(max_iter):
-        sol = least_squares(residuals, x, args=(P[mask], Q[mask]),
-                            method='trf', loss='huber', f_scale=huber, max_nfev=4000)
+        sol = least_squares(residuals, x, args=(allidx[mask],),
+                            method='trf', loss='huber', f_scale=huber, max_nfev=6000)
         x = sol.x
-        pn = per_point_sigma(x, P, Q)                  # score ALL points
+        pn = per_point_sigma(x, allidx)
         new = pn < reject_sigma
-        if new.sum() < max(4, int(0.5 * len(P))):      # never reject too many
+        if new.sum() < max(4, int(0.5 * len(P))):
             keep_n = max(4, int(0.6 * len(P)))
             new = pn <= np.sort(pn)[keep_n - 1]
         if np.array_equal(new, mask):
             break
         mask = new
-    R = Rot.from_rotvec(x[:3]).as_matrix(); t = x[3:6]
+    R, t, a = unpack(x)
     try:
-        cov = np.linalg.pinv(sol.jac.T @ sol.jac)      # residuals already σ-normalised
+        full = np.linalg.pinv(sol.jac.T @ sol.jac)
     except Exception:
-        cov = np.full((6, 6), np.nan)
-    rms_sigma = float(np.sqrt((residuals(x, P[mask], Q[mask]) ** 2).mean()))
-    return {'R': R, 't': t, 'cov': cov, 'inlier_mask': mask,
-            'rms_sigma': rms_sigma, 'n_in': int(mask.sum())}
+        full = np.full((len(x), len(x)), np.nan)
+    cov6 = full[:6, :6]
+    apex_sigma = np.sqrt(np.clip(np.diag(full)[6:9], 0, None)) if solve_offset else np.zeros(3)
+    rms_sigma = float(np.sqrt((per_point_sigma(x, allidx[mask]) ** 2).mean()))
+    return {'R': R, 't': t, 'apex': a, 'cov': cov6, 'apex_sigma': apex_sigma,
+            'inlier_mask': mask, 'rms_sigma': rms_sigma, 'n_in': int(mask.sum()),
+            'solved_offset': bool(solve_offset)}
 
 
-def loo_cross_val(P, Q, sigmas, use_elevation):
-    """Leave-one-out in MEASUREMENT space: refit (robust ML) on N−1, predict the
-    held-out radar measurement, score its (range,az,el) error in sigma units.
-    Returns (rms_sigma, max_sigma) or None."""
+def loo_cross_val(P, board_R, board_t, apex, sigmas, use_elevation):
+    """Leave-one-out in MEASUREMENT space with the apex FIXED at the solved value
+    (cheap, honest): refit extrinsic on N−1, predict the held-out radar
+    measurement, score its error in sigma units. Returns (rms_sigma, max_sigma)."""
     n = len(P)
     if n < 5:
         return None
@@ -247,9 +293,10 @@ def loo_cross_val(P, Q, sigmas, use_elevation):
     idx = np.arange(n)
     for i in range(n):
         m = idx != i
-        r = robust_ml_calibrate(P[m], Q[m], sig_r, sig_az, sig_el,
-                                use_elevation, max_iter=3)
-        pr = r['R'].T @ (Q[i] - r['t'])
+        r = robust_ml_calibrate(P[m], board_R[m], board_t[m], apex,
+                                sig_r, sig_az, sig_el, use_elevation,
+                                solve_offset=False, max_iter=3)
+        pr = r['R'].T @ (_cam_apex(board_R[i], board_t[i], apex) - r['t'])
         rp = cart_to_raz(pr); rm = cart_to_raz(P[i])
         d = [(rm[0] - rp[0]) / sig_r, _wrap(rm[1] - rp[1]) / sig_az]
         if use_elevation:
@@ -285,10 +332,19 @@ class RadarCameraCalib(Node):
         dp('square_len', 0.020); dp('marker_len', 0.015)
         dp('dictionary', 'DICT_4X4_50')
         dp('min_corners', 8); dp('max_reproj_px', 1.5)
-        # --- reflector apex offset in the BOARD frame (metres) — MEASURE THIS ---
+        # --- reflector apex offset in the BOARD frame (metres) ---
+        #   Best measured to ~cm; but the solver can also REFINE or fully
+        #   CALCULATE it (see solve_offset). These values seed / prior-anchor it.
         dp('reflector_offset_x', 0.0)
         dp('reflector_offset_y', 0.0)
         dp('reflector_offset_z', 0.0)
+        # jointly estimate the apex offset (MAP: free offset regularised toward
+        # the measured value). Never worse than fixing it; repairs a bad measure;
+        # can solve it from scratch given CLOSE-range, HIGH-TILT poses.
+        dp('solve_offset', True)
+        # prior width on the offset (m). Tight if you measured well; large/<=0 to
+        # let the data drive it (set ~0.10 if you did NOT measure the offset).
+        dp('offset_prior_sigma_m', 0.03)
         # --- radar (/points_all: x,y,z,snr,doppler) ---
         dp('radar_topic', '/points_all')
         dp('pc_field_x', 'x'); dp('pc_field_y', 'y'); dp('pc_field_z', 'z')
@@ -344,6 +400,9 @@ class RadarCameraCalib(Node):
         self.apex_board = np.array([g('reflector_offset_x'),
                                     g('reflector_offset_y'),
                                     g('reflector_offset_z')], float)
+        self.apex_prior = self.apex_board.copy()          # prior centre (measured)
+        self.solve_offset = bool(g('solve_offset'))
+        self.offset_prior_sigma = g('offset_prior_sigma_m')
         self.bridge = CvBridge(); self.K = None; self.D = None
 
         self.radar_topic = g('radar_topic')
@@ -573,7 +632,8 @@ class RadarCameraCalib(Node):
                                    throttle_duration_sec=2.0)
             return
 
-        self.win.append((p_cam, p_radar, snr_i, dop_i))
+        Rb = cv2.Rodrigues(pose[0])[0]; tb = pose[1][:, 0]
+        self.win.append((p_cam, p_radar, snr_i, dop_i, Rb, tb))
         if len(self.win) > self.stable_window:
             self.win.pop(0)
         stable = False
@@ -597,10 +657,14 @@ class RadarCameraCalib(Node):
         p_radar = np.mean([w[1] for w in self.win], 0)
         snr_i = float(np.mean([w[2] for w in self.win]))
         dop_i = float(np.mean([w[3] for w in self.win]))
+        # board pose held still during capture: mean translation, averaged rotation
+        tb = np.mean([w[5] for w in self.win], 0)
+        Rb = Rot.from_matrix(np.array([w[4] for w in self.win])).mean().as_matrix()
         if (not force and self.last_capture_cam is not None and
                 np.linalg.norm(p_cam - self.last_capture_cam) < self.min_baseline):
             return
-        self.captures.append((p_cam, p_radar, snr_i, dop_i))
+        self.captures.append({'p_radar': p_radar, 'snr': snr_i, 'dop': dop_i,
+                              'Rb': Rb, 'tb': tb})
         self.last_capture_cam = p_cam; self.win.clear()
         self.get_logger().info(
             f"*** CAPTURED #{len(self.captures)}  cam {p_cam.round(3).tolist()}  "
@@ -618,20 +682,27 @@ class RadarCameraCalib(Node):
             if force:
                 self.get_logger().warn(f"need ≥3 captures (have {len(self.captures)})")
             return
-        P = np.array([c[1] for c in self.captures])   # radar measurements (source)
-        Q = np.array([c[0] for c in self.captures])   # camera apex (target, accurate)
+        P = np.array([c['p_radar'] for c in self.captures])       # radar measurements
+        Rb = np.array([c['Rb'] for c in self.captures])           # board rotations
+        Tb = np.array([c['tb'] for c in self.captures])           # board translations
 
         # auto-detect 2-D radar: no meaningful elevation spread → drop el residual
         rr = np.linalg.norm(P, axis=1); rr = np.where(rr < 1e-6, 1e-6, rr)
         el_spread = float(np.std(np.abs(P[:, 2]) / rr))
         use_el = (not self.force_2d) and el_spread > 0.01
 
-        # ── the accurate estimator: measurement-space ML + robust rejection ──
-        r = robust_ml_calibrate(P, Q, self.sig_r, self.sig_az, self.sig_el,
-                                use_elevation=use_el, huber=self.huber,
-                                reject_sigma=self.reject_sigma)
+        # ── the accurate estimator: measurement-space ML + robust rejection,
+        #    optionally jointly refining the apex offset (MAP toward measured) ──
+        r = robust_ml_calibrate(P, Rb, Tb, self.apex_prior,
+                                self.sig_r, self.sig_az, self.sig_el, use_elevation=use_el,
+                                solve_offset=self.solve_offset,
+                                offset_prior_sigma=self.offset_prior_sigma,
+                                huber=self.huber, reject_sigma=self.reject_sigma)
         R, t = r['R'], r['t']; mask = r['inlier_mask']; cov = r['cov']
+        self.apex_board = r['apex']                    # use refined offset downstream
         self.X = np.eye(4); self.X[:3, :3] = R; self.X[:3, 3] = t
+        # camera apex per capture, using the (possibly refined) offset
+        Q = np.array([(_cam_apex(Rb[i], Tb[i], self.apex_board)) for i in range(len(P))])
         Pin, Qin = P[mask], Q[mask]
         self.rms = rms_3d(Pin, Qin, R, t)             # in-sample 3-D RMS (inliers), for overlay/text
 
@@ -665,7 +736,18 @@ class RadarCameraCalib(Node):
                          + ("  — 2-D radar can't see out-of-plane rotation or height; "
                             "fix those from CAD" if not use_el else
                             "  — add pose diversity (range/azimuth/height)"))
-        loo = loo_cross_val(P[mask], Q[mask], (self.sig_r, self.sig_az, self.sig_el), use_el)
+        if self.solve_offset:
+            a = self.apex_board; asig = r['apex_sigma'] * 1000
+            moved = np.linalg.norm(a - self.apex_prior) * 1000
+            weak = np.any(asig > 30)
+            lines.append(
+                f"  apex off: [{a[0]:+.3f} {a[1]:+.3f} {a[2]:+.3f}] m  "
+                f"1σ [{asig[0]:.0f} {asig[1]:.0f} {asig[2]:.0f}] mm  "
+                f"(moved {moved:.0f} mm from measured)"
+                + ("  !! offset weakly observed — trusting your prior; add CLOSE-range "
+                   "HIGH-TILT poses to calculate it" if weak else "  ✓ data-determined"))
+        loo = loo_cross_val(P[mask], Rb[mask], Tb[mask], self.apex_board,
+                            (self.sig_r, self.sig_az, self.sig_el), use_el)
         if loo is not None:
             loo_s, loo_max = loo
             lines.append(f"  LOO CV  : {loo_s:.2f} σ (max {loo_max:.2f})"
@@ -716,11 +798,14 @@ class RadarCameraCalib(Node):
         self._save({'mean_px': mean_px, 'mean_3d': mean_3d, 'bias_mm': bias_mm, 'cond': cond,
                     'loo': loo, 'planar': planar, 'verdict': verdict, 'use_el': use_el,
                     'rot_sig_deg': rot_sig_deg, 't_sig_mm': t_sig_mm, 'unobs': unobs,
-                    'n_in': r['n_in'], 'n_out': n_out, 'rms_sigma': r['rms_sigma']})
+                    'n_in': r['n_in'], 'n_out': n_out, 'rms_sigma': r['rms_sigma'],
+                    'apex': self.apex_board, 'apex_sigma': r['apex_sigma'],
+                    'apex_prior': self.apex_prior, 'solved_offset': r['solved_offset']})
 
     def _reset(self):
         self.captures.clear(); self.win.clear(); self.last_capture_cam = None
         self.X = None; self.rms = None
+        self.apex_board = self.apex_prior.copy()      # drop the refined offset
         self.get_logger().info("reset — captures cleared (background kept)")
 
     def _save_now(self):
@@ -773,7 +858,10 @@ class RadarCameraCalib(Node):
             # inverse
             'T_radar_cam_translation': [float(v) for v in Xinv[:3, 3]],
             'T_radar_cam_quaternion_xyzw': [float(v) for v in qi],
-            'apex_offset_in_board_m': [float(v) for v in self.apex_board],
+            'apex_offset_in_board_m': [float(v) for v in m['apex']],
+            'apex_offset_solved': bool(m['solved_offset']),
+            'apex_offset_1sigma_mm_xyz': [float(v) for v in m['apex_sigma'] * 1000],
+            'apex_offset_measured_prior_m': [float(v) for v in m['apex_prior']],
             'static_tf_cmd': (f"ros2 run tf2_ros static_transform_publisher "
                               f"{X[0,3]:.6f} {X[1,3]:.6f} {X[2,3]:.6f} "
                               f"{q[0]:.6f} {q[1]:.6f} {q[2]:.6f} {q[3]:.6f} "
