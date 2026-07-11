@@ -240,12 +240,49 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 | `capture_mode` | `auto` | `auto` or `manual` (`~/capture`) |
 | `stable_window`/`stable_std` | `12`/`0.01 m` | per-pose stability gate |
 | `min_baseline`/`min_points` | `0.15 m`/`6` | capture spacing / count |
-| `reflector_offset_{x,y,z}` | `0` | apex offset in board frame (measured value / prior centre) |
+| `reflector_offset_{x,y,z}` | `0` | apex offset in board frame (measured value / **offset prior centre**) |
 | `solve_offset` | `true` | jointly estimate the apex offset (MAP) |
-| `offset_prior_sigma_m` | `0.03` | prior width on the offset — tight if measured well, `0.10` if not |
+| `offset_prior_sigma_m` | `0.03` | **offset prior** width — tight if measured well, `0.10` if not |
+| `use_extrinsic_prior` | `false` | regularise + initialise the extrinsic toward a known mounting |
+| `prior_t_xyz` | `[0,0,0]` | **extrinsic prior**: radar position in camera frame (m) |
+| `prior_rpy_deg` | `[0,0,0]` | extrinsic prior: radar orientation in camera frame (xyz euler) |
+| `prior_t_sigma_m` / `prior_rot_sigma_deg` | `0.05` / `10` | extrinsic prior widths (tight = trust it more) |
+| `min_snr` | `0` (off) | **strict capture**: reject a pick whose reflector SNR is below this |
 | `measured_baseline_m` | `-1` (off) | tape-measured `|t|` for the baseline check |
 
 ---
+
+## Priors and strict captures (for under-constrained / close-range rigs)
+
+When poses are few or clustered, the extrinsic is under-determined (large `1σ`).
+Two knobs stabilise it.
+
+**Offset prior** (always on): `reflector_offset_{x,y,z}` is the prior centre and
+`offset_prior_sigma_m` its width. Measure the offset and set a tight sigma
+(`0.02`) to pin it; use `0.10` to let the data drive it.
+
+**Extrinsic prior** (opt-in): give a rough known radar-in-camera pose from a tape
+measure / CAD and the solve is both **initialised from it and regularised toward
+it** (MAP). It caps the uncertainty of poorly-observed DOFs at the prior width
+instead of letting them blow up.
+```
+-p use_extrinsic_prior:=true \
+-p prior_t_xyz:="[0.20, 0.0, 0.0]" \      # radar ~20 cm along camera +x, measured
+-p prior_rpy_deg:="[-115, -70, -130]" \   # rough radar orientation in camera frame
+-p prior_t_sigma_m:=0.05 \                # tighten to trust the prior more
+-p prior_rot_sigma_deg:=10
+```
+Get `prior_rpy_deg` from the nominal mounting (or from a first rough solve's
+`rpy(deg)` line), and `prior_t_xyz` by tape-measuring the radar position relative
+to the camera optical centre. Tighten the sigmas only as far as you trust the
+measurement — a wrong-but-tight prior biases the result.
+
+**Strict captures**: `min_snr` rejects any capture whose reflector return is
+weaker than the threshold (weak returns are the ones most likely mis-associated
+with clutter). Also tighten `stable_std_radar` and/or raise `stable_window` so
+only rock-steady poses are accepted. These are the cheapest defences against a
+bad correspondence poisoning the solve (on top of the built-in Huber +
+`reject_sigma` outlier rejection).
 
 ## Coordinate conventions
 

@@ -191,6 +191,8 @@ def _cam_apex(Rb, tb, a):
 def robust_ml_calibrate(P_radar, board_R, board_t, apex0,
                         sig_r, sig_az, sig_el, use_elevation=True,
                         solve_offset=True, offset_prior_sigma=0.03,
+                        R_prior=None, t_prior=None,
+                        rot_prior_sigma=None, t_prior_sigma=None,
                         huber=1.5, reject_sigma=4.0, max_iter=5):
     """
     Maximum-likelihood extrinsic in the radar's MEASUREMENT space, optionally
@@ -219,6 +221,8 @@ def robust_ml_calibrate(P_radar, board_R, board_t, apex0,
     a0 = np.asarray(apex0, float)
     k = 3 if use_elevation else 2
     prior = solve_offset and offset_prior_sigma and offset_prior_sigma > 0
+    ext_rot_prior = R_prior is not None and rot_prior_sigma and rot_prior_sigma > 0
+    ext_t_prior = t_prior is not None and t_prior_sigma and t_prior_sigma > 0
 
     def unpack(x):
         R = Rot.from_rotvec(x[:3]).as_matrix(); t = x[3:6]
@@ -236,6 +240,12 @@ def robust_ml_calibrate(P_radar, board_R, board_t, apex0,
                 out.append(_wrap(rm[2] - rp[2]) / sig_el)
         if prior:
             out.extend(list((x[6:9] - a0) / offset_prior_sigma))
+        # extrinsic priors (MAP): pin poorly-observed DOFs to a known mounting
+        if ext_rot_prior:
+            dr = Rot.from_matrix(R_prior.T @ R).as_rotvec()   # geodesic rotation error
+            out.extend(list(dr / rot_prior_sigma))
+        if ext_t_prior:
+            out.extend(list((t - np.asarray(t_prior, float)) / t_prior_sigma))
         return np.array(out)
 
     def per_point_sigma(x, idx):
@@ -250,9 +260,13 @@ def robust_ml_calibrate(P_radar, board_R, board_t, apex0,
             s.append(np.linalg.norm(d) / np.sqrt(k))
         return np.array(s)
 
-    # Cartesian Kabsch init (apex fixed at a0)
-    Q0 = np.array([_cam_apex(Rb[i], Tb[i], a0) for i in range(len(P))])
-    R0, t0 = kabsch(P, Q0)
+    # init: prefer the extrinsic prior (robust when data is under-constrained),
+    # else Cartesian Kabsch (apex fixed at a0)
+    if ext_rot_prior and ext_t_prior:
+        R0 = R_prior; t0 = np.asarray(t_prior, float)
+    else:
+        Q0 = np.array([_cam_apex(Rb[i], Tb[i], a0) for i in range(len(P))])
+        R0, t0 = kabsch(P, Q0)
     x = np.concatenate([Rot.from_matrix(R0).as_rotvec(), t0] + ([a0] if solve_offset else []))
     allidx = np.arange(len(P)); mask = np.ones(len(P), bool)
     sol = None
@@ -374,6 +388,18 @@ class RadarCameraCalib(Node):
         dp('force_2d_radar', False)     # True → ignore elevation entirely (2-D radar)
         dp('huber_f_scale', 1.5)        # robust-loss knee, in sigma units
         dp('reject_sigma', 4.0)         # drop a match whose residual exceeds this (sigma)
+        # --- extrinsic prior (MAP): pin poorly-observed DOFs to a known mounting.
+        #     Give a rough measured/CAD radar-in-camera pose; the solve is
+        #     regularised toward it AND initialised from it. Tight sigma = trust
+        #     the prior; loose = let the data move it. Disabled by default. ---
+        dp('use_extrinsic_prior', False)
+        dp('prior_t_xyz', [0.0, 0.0, 0.0])       # radar position in camera frame (m)
+        dp('prior_rpy_deg', [0.0, 0.0, 0.0])     # radar orientation in camera frame (xyz euler)
+        dp('prior_t_sigma_m', 0.05)              # translation prior width
+        dp('prior_rot_sigma_deg', 10.0)          # rotation prior width
+        # --- strict-capture gate: reject a capture whose reflector SNR is below
+        #     this (weak returns are the ones most likely mis-associated). 0=off ---
+        dp('min_snr', 0.0)
         # --- capture / convergence ---
         dp('capture_mode', 'auto')      # 'auto' | 'manual'
         dp('stable_window', 12)
@@ -428,6 +454,13 @@ class RadarCameraCalib(Node):
         self.sig_az = np.radians(g('sigma_az_deg')); self.sig_el = np.radians(g('sigma_el_deg'))
         self.force_2d = bool(g('force_2d_radar'))
         self.huber = g('huber_f_scale'); self.reject_sigma = g('reject_sigma')
+        self.use_ext_prior = bool(g('use_extrinsic_prior'))
+        self.prior_R = (Rot.from_euler('xyz', g('prior_rpy_deg'), degrees=True).as_matrix()
+                        if self.use_ext_prior else None)
+        self.prior_t = np.array(g('prior_t_xyz'), float) if self.use_ext_prior else None
+        self.prior_t_sigma = g('prior_t_sigma_m')
+        self.prior_rot_sigma = np.radians(g('prior_rot_sigma_deg'))
+        self.min_snr = g('min_snr')
 
         self.capture_mode = g('capture_mode')
         self.stable_window = int(g('stable_window')); self.stable_std = g('stable_std')
@@ -602,6 +635,8 @@ class RadarCameraCalib(Node):
             idx = int(np.argmax(snr))            # ← highest-SNR return = the trihedral
         else:
             idx = int(np.argmin(np.linalg.norm(xyz, axis=1)))
+        if self.min_snr > 0 and snr[idx] < self.min_snr:
+            return None, None, None, n_gated     # too weak → likely mis-associated, skip
         return xyz[idx], float(snr[idx]), float(dop[idx]), n_gated
 
     # ── camera: board pose → apex in camera frame ──
@@ -725,6 +760,9 @@ class RadarCameraCalib(Node):
                                 self.sig_r, self.sig_az, self.sig_el, use_elevation=use_el,
                                 solve_offset=self.solve_offset,
                                 offset_prior_sigma=self.offset_prior_sigma,
+                                R_prior=self.prior_R, t_prior=self.prior_t,
+                                rot_prior_sigma=self.prior_rot_sigma,
+                                t_prior_sigma=self.prior_t_sigma,
                                 huber=self.huber, reject_sigma=self.reject_sigma)
         R, t = r['R'], r['t']; mask = r['inlier_mask']; cov = r['cov']
         self.apex_board = r['apex']                    # use refined offset downstream
