@@ -674,9 +674,18 @@ class RadarCameraCalib(Node):
             self.get_logger().warn(f"cv_bridge: {e}"); return
         p_cam, reproj, n, pose = self._apex_in_camera(gray)
         xyz, snr, dop = self._read_radar(radar_msg)
+        # Predict the reflector's radar location and search only AROUND it:
+        #   p_cam already = R_board·(measured apex offset) + t_board, so |p_cam|
+        #   and the predicted radar point both bake in the OFFSET PRIOR. Once an
+        #   extrinsic is solved we use it; before that, the EXTRINSIC PRIOR (if
+        #   given) predicts it too — so selection is tight from the first frame.
+        #   The offset and extrinsic are still fully optimised in _solve.
         predicted = None
-        if self.X is not None and p_cam is not None:
-            predicted = self.X[:3, :3].T @ (p_cam - self.X[:3, 3])   # camera → radar
+        if p_cam is not None:
+            if self.X is not None:
+                predicted = self.X[:3, :3].T @ (p_cam - self.X[:3, 3])       # camera → radar
+            elif self.use_ext_prior and self.prior_R is not None:
+                predicted = self.prior_R.T @ (p_cam - self.prior_t)          # prior-predicted
         cam_range = float(np.linalg.norm(p_cam)) if p_cam is not None else None
         p_radar, snr_i, dop_i, n_gated = self._select_radar(xyz, snr, dop, predicted, cam_range)
 
@@ -779,6 +788,17 @@ class RadarCameraCalib(Node):
         tmag = float(np.linalg.norm(t))
         n_out = int((~mask).sum())
 
+        # diversity guard: the extrinsic is only observable if the RADAR points
+        # span range + azimuth (+ elevation). Warn loudly when they don't.
+        raz = np.array([cart_to_raz(p) for p in Pin])
+        rng_span = float(raz[:, 0].max() - raz[:, 0].min())
+        az_span = float(np.degrees(raz[:, 1].max() - raz[:, 1].min()))
+        el_span = float(np.degrees(raz[:, 2].max() - raz[:, 2].min()))
+        low_div = rng_span < 0.20 or az_span < 20.0
+        div_msg = (f"  RADAR spread: range {rng_span*100:.0f} cm, az {az_span:.0f}°, el {el_span:.0f}°"
+                   + ("   !! TOO CLUSTERED — move the rig NEAR↔FAR and LEFT↔RIGHT; "
+                      "extrinsic under-constrained until this grows" if low_div else "  ✓"))
+
         # per-DOF 1-sigma from the covariance (rotvec rad → deg, t m → mm)
         dsig = np.sqrt(np.clip(np.diag(cov), 0, None))
         rot_sig_deg = np.degrees(dsig[:3]); t_sig_mm = dsig[3:6] * 1000
@@ -796,6 +816,7 @@ class RadarCameraCalib(Node):
             f"  rpy(deg): {rpy[0]:+.2f} {rpy[1]:+.2f} {rpy[2]:+.2f}",
             f"  1σ rot  : {rot_sig_deg[0]:.2f} {rot_sig_deg[1]:.2f} {rot_sig_deg[2]:.2f} deg   "
             f"1σ t: {t_sig_mm[0]:.1f} {t_sig_mm[1]:.1f} {t_sig_mm[2]:.1f} mm",
+            div_msg,
         ]
         if unobs:
             lines.append("  !! WEAK/UNOBSERVABLE dof: " + ", ".join(unobs)
