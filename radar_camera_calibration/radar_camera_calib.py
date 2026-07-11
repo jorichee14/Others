@@ -621,23 +621,29 @@ class RadarCameraCalib(Node):
             diff = xyz[:, None, :] - self.bg_radar[None, :, :]
             mind = np.sqrt((diff ** 2).sum(2)).min(1)
             keep &= (mind > self.bg_match_dist)
-        if predicted is not None:
-            keep &= (np.linalg.norm(xyz - predicted, axis=1) <= self.gate_radius)
-        elif cam_range is not None and self.range_gate_margin > 0:
+        # Reliable bootstrap: range-around-board (rotation-invariant) — ALWAYS on.
+        if cam_range is not None and self.range_gate_margin > 0:
             keep &= (np.abs(rng - cam_range) <= self.range_gate_margin)
+        # Optional tighten around the predicted apex (from solve OR prior). If the
+        # prior is imperfect and this would empty the set, KEEP the range-gated
+        # set instead — never reject everything just because a prior is off.
+        if predicted is not None:
+            tight = keep & (np.linalg.norm(xyz - predicted, axis=1) <= self.gate_radius)
+            if tight.any():
+                keep = tight
         n_gated = int(keep.sum())
         if n_gated == 0:
             return None, None, None, 0
-        xyz, snr, dop = xyz[keep], snr[keep], dop[keep]
-        if predicted is not None:
-            idx = int(np.argmin(np.linalg.norm(xyz - predicted, axis=1)))
-        elif self.select_by == 'snr' and np.any(np.isfinite(snr)) and snr.max() > 0:
-            idx = int(np.argmax(snr))            # ← highest-SNR return = the trihedral
+        xg, sg, dg = xyz[keep], snr[keep], dop[keep]
+        if self.select_by == 'snr' and np.any(np.isfinite(sg)) and sg.max() > 0:
+            idx = int(np.argmax(sg))             # ← highest-SNR survivor = the trihedral
+        elif predicted is not None:
+            idx = int(np.argmin(np.linalg.norm(xg - predicted, axis=1)))
         else:
-            idx = int(np.argmin(np.linalg.norm(xyz, axis=1)))
-        if self.min_snr > 0 and snr[idx] < self.min_snr:
+            idx = int(np.argmin(np.linalg.norm(xg, axis=1)))
+        if self.min_snr > 0 and sg[idx] < self.min_snr:
             return None, None, None, n_gated     # too weak → likely mis-associated, skip
-        return xyz[idx], float(snr[idx]), float(dop[idx]), n_gated
+        return xg[idx], float(sg[idx]), float(dg[idx]), n_gated
 
     # ── camera: board pose → apex in camera frame ──
     def _apex_in_camera(self, gray):
@@ -690,7 +696,7 @@ class RadarCameraCalib(Node):
         p_radar, snr_i, dop_i, n_gated = self._select_radar(xyz, snr, dop, predicted, cam_range)
 
         self._publish_debug(bgr, pose, p_cam, xyz, n, reproj,
-                            p_radar is not None, n_gated)
+                            p_radar is not None, n_gated, p_radar)
 
         if p_cam is None:
             self.get_logger().info(f"no board (n={n}, reproj={reproj})", throttle_duration_sec=2.0)
@@ -963,19 +969,34 @@ class RadarCameraCalib(Node):
         except Exception as e:
             self.get_logger().warn(f"save failed: {e}")
 
-    def _publish_debug(self, bgr, pose, p_cam, radar_xyz, n, reproj, got_radar, n_gated):
+    def _publish_debug(self, bgr, pose, p_cam, radar_xyz, n, reproj, got_radar,
+                       n_gated, p_radar=None):
         if self.dbg_pub is None and not self.show_window:
             return
         try:
             h, w = bgr.shape[:2]
-            # live overlay: whole radar cloud projected via X, coloured by depth
-            if self.X is not None and radar_xyz is not None and len(radar_xyz):
-                Pc = (radar_xyz @ self.X[:3, :3].T) + self.X[:3, 3]
+            # Project the WHOLE radar cloud into the image so you can SEE where the
+            # radar points land vs the reflector. Use the solved extrinsic if we
+            # have one, else the extrinsic prior. Yellow = generic radar point.
+            Xr = self.X
+            if Xr is None and self.use_ext_prior and self.prior_R is not None:
+                Xr = np.eye(4); Xr[:3, :3] = self.prior_R; Xr[:3, 3] = self.prior_t
+            if Xr is not None and radar_xyz is not None and len(radar_xyz):
+                Pc = (radar_xyz @ Xr[:3, :3].T) + Xr[:3, 3]
                 for p in Pc:
                     uv = project(p, self.K, self.D)
                     if uv and 0 <= uv[0] < w and 0 <= uv[1] < h:
-                        f = max(0.0, min(1.0, (p[2] - 0.5) / 7.5))
-                        cv2.circle(bgr, uv, 4, (int(255 * f), 60, int(255 * (1 - f))), -1)
+                        cv2.circle(bgr, uv, 3, (0, 220, 220), -1)   # yellow dots
+            # Highlight the SELECTED reflector point (magenta) with range + SNR,
+            # projected the same way — check it lands on the real reflector.
+            if p_radar is not None and Xr is not None:
+                pc = Xr[:3, :3] @ np.asarray(p_radar) + Xr[:3, 3]
+                uv = project(pc, self.K, self.D)
+                if uv and 0 <= uv[0] < w and 0 <= uv[1] < h:
+                    cv2.circle(bgr, uv, 10, (255, 0, 255), 2)
+                    cv2.putText(bgr, f"radar r={np.linalg.norm(p_radar):.2f}m",
+                                (uv[0] + 12, uv[1] + 18),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
             if pose is not None:
                 rvec, tvec = pose
                 cv2.drawFrameAxes(bgr, self.K, self.D, rvec, tvec, 0.05)
