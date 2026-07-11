@@ -366,6 +366,7 @@ class RadarCameraCalib(Node):
         dp('select_by', 'snr')          # 'snr' (recommended) | 'nearest'
         dp('min_range', 0.3); dp('max_range', 20.0)
         dp('max_abs_doppler', -1.0)     # >0 → keep |doppler| below this (still rig ≈0); <=0 disables
+        dp('min_abs_doppler', -1.0)     # >0 → keep |doppler| ABOVE this (MOVING reflector); <=0 disables
         dp('gate_radius', 1.0)          # m; once X exists, radar pt must be within this of predicted apex
         # bootstrap gate BEFORE any extrinsic: keep radar pts whose range matches
         # the camera's board distance |p_cam| within this margin, then take the
@@ -445,6 +446,7 @@ class RadarCameraCalib(Node):
         self.select_by = g('select_by')
         self.min_range = g('min_range'); self.max_range = g('max_range')
         self.max_abs_doppler = g('max_abs_doppler')
+        self.min_abs_doppler = g('min_abs_doppler')
         self.gate_radius = g('gate_radius')
         self.range_gate_margin = g('range_gate_margin_m')
         self.bg_accum_frames = int(g('bg_accum_frames')); self.bg_match_dist = g('bg_match_dist')
@@ -617,6 +619,8 @@ class RadarCameraCalib(Node):
         keep = (rng >= self.min_range) & (rng <= self.max_range); n_rng = int(keep.sum())
         if self.max_abs_doppler > 0:
             keep &= (np.abs(dop) <= self.max_abs_doppler)
+        if self.min_abs_doppler > 0:
+            keep &= (np.abs(dop) >= self.min_abs_doppler)   # MOVING reflector only
         n_dop = int(keep.sum())
         if self.bg_radar is not None and len(self.bg_radar):
             diff = xyz[:, None, :] - self.bg_radar[None, :, :]
@@ -726,6 +730,28 @@ class RadarCameraCalib(Node):
             return
 
         Rb = cv2.Rodrigues(pose[0])[0]; tb = pose[1][:, 0]
+
+        # CONTINUOUS mode: no stillness required. Sweep the (moving) reflector
+        # through the FoV; capture the current frame whenever it has moved
+        # min_baseline from the last capture. A tiny 3-frame average tames the
+        # per-frame radar noise without needing the rig to stop. Pair this with
+        # a moving reflector + min_abs_doppler (or the points_dynamic topic) so
+        # Doppler isolates it from static clutter.
+        if self.capture_mode == 'continuous':
+            self.win.append((p_cam, p_radar, snr_i, dop_i, Rb, tb))
+            if len(self.win) > 3:
+                self.win.pop(0)
+            moved = (self.last_capture_cam is None or
+                     np.linalg.norm(p_cam - self.last_capture_cam) >= self.min_baseline)
+            if moved:
+                self._accept(force=True)
+            else:
+                self.get_logger().info(
+                    f"sweep… cam {p_cam.round(3).tolist()} radar {p_radar.round(3).tolist()} "
+                    f"snr {snr_i:.0f} captures {len(self.captures)} (move {self.min_baseline*100:.0f}cm for next)",
+                    throttle_duration_sec=0.8)
+            return
+
         self.win.append((p_cam, p_radar, snr_i, dop_i, Rb, tb))
         if len(self.win) > self.stable_window:
             self.win.pop(0)
