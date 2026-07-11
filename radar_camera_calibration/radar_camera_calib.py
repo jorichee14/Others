@@ -612,27 +612,41 @@ class RadarCameraCalib(Node):
             apex supersedes the range gate."""
         if xyz is None or len(xyz) == 0:
             return None, None, None, 0
-        keep = np.ones(len(xyz), bool)
+        n0 = len(xyz)
         rng = np.linalg.norm(xyz, axis=1)
-        keep &= (rng >= self.min_range) & (rng <= self.max_range)
+        keep = (rng >= self.min_range) & (rng <= self.max_range); n_rng = int(keep.sum())
         if self.max_abs_doppler > 0:
             keep &= (np.abs(dop) <= self.max_abs_doppler)
+        n_dop = int(keep.sum())
         if self.bg_radar is not None and len(self.bg_radar):
             diff = xyz[:, None, :] - self.bg_radar[None, :, :]
             mind = np.sqrt((diff ** 2).sum(2)).min(1)
             keep &= (mind > self.bg_match_dist)
+        n_bg = int(keep.sum())
         # Reliable bootstrap: range-around-board (rotation-invariant) — ALWAYS on.
         if cam_range is not None and self.range_gate_margin > 0:
             keep &= (np.abs(rng - cam_range) <= self.range_gate_margin)
+        n_cam = int(keep.sum())
         # Optional tighten around the predicted apex (from solve OR prior). If the
-        # prior is imperfect and this would empty the set, KEEP the range-gated
-        # set instead — never reject everything just because a prior is off.
+        # prior is imperfect and this would empty the set, KEEP the range-gated set.
         if predicted is not None:
             tight = keep & (np.linalg.norm(xyz - predicted, axis=1) <= self.gate_radius)
             if tight.any():
                 keep = tight
         n_gated = int(keep.sum())
+
+        def _diag(reason):
+            self.get_logger().info(
+                f"[gate] {reason}: total {n0} → range[{self.min_range},{self.max_range}] {n_rng}"
+                + (f" → dop {n_dop}" if self.max_abs_doppler > 0 else "")
+                + (f" → bg(>{self.bg_match_dist}m) {n_bg}" if self.bg_radar is not None else "")
+                + (f" → cam±{self.range_gate_margin}m {n_cam}" if cam_range is not None else "")
+                + f" → final {n_gated}"
+                + (f"  (cam_range {cam_range:.2f}m)" if cam_range is not None else ""),
+                throttle_duration_sec=1.5)
+
         if n_gated == 0:
+            _diag("REJECTED-ALL")
             return None, None, None, 0
         xg, sg, dg = xyz[keep], snr[keep], dop[keep]
         if self.select_by == 'snr' and np.any(np.isfinite(sg)) and sg.max() > 0:
@@ -642,6 +656,7 @@ class RadarCameraCalib(Node):
         else:
             idx = int(np.argmin(np.linalg.norm(xg, axis=1)))
         if self.min_snr > 0 and sg[idx] < self.min_snr:
+            _diag(f"best snr {sg[idx]:.0f} < min_snr {self.min_snr:.0f}")
             return None, None, None, n_gated     # too weak → likely mis-associated, skip
         return xg[idx], float(sg[idx]), float(dg[idx]), n_gated
 
