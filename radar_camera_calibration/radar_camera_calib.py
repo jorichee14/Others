@@ -12,10 +12,37 @@ apex from the board pose.
 
 A radar point has no orientation, so ONE view can't give a 6-DOF transform.
 Move the rig to N ≥ 3 non-collinear spots, collect corresponding point pairs
-{(p_cam^i, p_radar^i)}, and solve the rigid registration (Kabsch/Umeyama):
+{(p_cam^i, p_radar^i)}, and solve for X = T_cam_radar (p_cam = R·p_radar + t).
 
-    min_{R,t} Σ ‖ R·p_radar^i + t − p_cam^i ‖²   ⇒   X = T_cam_radar
-    p_cam = R·p_radar + t        (X maps a radar point into the camera frame)
+THE ESTIMATOR — why NOT plain Kabsch
+────────────────────────────────────
+A radar measures RANGE precisely (~cm) but ANGLE poorly (degrees), and the
+cross-range error GROWS with range (≈ range·σ_az: ~9 cm at 5 m for σ_az=1°).
+Isotropic Cartesian Kabsch (min ‖R·p_radar+t−p_cam‖²) weights that large,
+range-dependent angular error the same as the tiny range error, so it is
+biased. Monte-Carlo on this exact geometry: Kabsch ≈ 1.7°/120 mm vs the
+estimator below ≈ 1.0°/38 mm (≈1.6× rotation, ≈3× translation better).
+
+Instead we do MAXIMUM-LIKELIHOOD estimation in the radar's MEASUREMENT space:
+predict each radar measurement from the (accurate) camera apex via the current
+(R,t), convert to (range, azimuth, elevation), and minimise residuals weighted
+by each component's real σ:
+
+    predicted radar pt = R^T (p_cam − t)
+    min_{R,t} Σ ρ( [ (r_m−r_p)/σ_r , (az_m−az_p)/σ_az , (el_m−el_p)/σ_el ] )
+
+  • ρ = Huber → robust to the occasional bad radar match; plus iterative
+    σ-gated rejection of gross outliers (both proven necessary: one wrong
+    match blows plain L2 up to ~50°).
+  • Kabsch provides the initial guess.
+  • 2-D radar (no elevation) is auto-detected and the elevation residual is
+    dropped — but then out-of-plane rotation and height are UNOBSERVABLE; the
+    covariance readout flags exactly which DOFs are weak.
+
+The apex offset is a FIXED input, deliberately: radar cross-range noise (~10 cm)
+is larger than the offset itself (~5 cm), so it can't be recovered from radar
+(verified — joint solving doesn't help). Measure it physically (see README);
+the debug overlay lets you confirm it visually.
 
 WHY THE CAMERA SIDE USES THE BOARD, NOT DEPTH
 ─────────────────────────────────────────────
@@ -69,6 +96,7 @@ Deps:  numpy scipy opencv-contrib-python  +  ROS2 rclpy cv_bridge sensor_msgs_py
 import json
 import numpy as np
 from scipy.spatial.transform import Rotation as Rot
+from scipy.optimize import least_squares
 import cv2
 import rclpy
 from rclpy.node import Node
@@ -131,18 +159,102 @@ def rms_3d(P, Q, R, t):
     return float(np.sqrt(((pred - Q) ** 2).sum(1).mean()))
 
 
-def loo_cross_val(P, Q):
-    """Leave-one-out CV: refit on N-1, predict the held-out point. Returns
-    (rms_m, max_m) of held-out 3-D errors, or None if too few points."""
+def cart_to_raz(p):
+    """radar Cartesian (X=fwd,Y=left,Z=up) → (range, azimuth, elevation)."""
+    r = float(np.linalg.norm(p))
+    if r < 1e-9:
+        return np.array([0.0, 0.0, 0.0])
+    return np.array([r, np.arctan2(p[1], p[0]), np.arcsin(np.clip(p[2] / r, -1, 1))])
+
+
+def _wrap(a):
+    return (a + np.pi) % (2 * np.pi) - np.pi
+
+
+def robust_ml_calibrate(P_radar, Q_cam, sig_r, sig_az, sig_el,
+                        use_elevation=True, huber=1.5, reject_sigma=4.0, max_iter=5):
+    """
+    Maximum-likelihood extrinsic estimate in the radar's MEASUREMENT space.
+
+    A radar measures range precisely but angle poorly, and cross-range error
+    grows with range — so isotropic Cartesian Kabsch is biased. Here we predict
+    each radar measurement from the (accurate) camera apex via the current
+    (R,t), convert to (range, az, el), and minimise residuals weighted by the
+    real per-component sigmas. Huber loss + iterative sigma-gating reject bad
+    matches. For a 2-D radar (no elevation) pass use_elevation=False and the
+    elevation residual is dropped (that DOF is simply not constrained).
+
+        p_cam = R · p_radar + t          (returns this T_cam_radar)
+        predicted radar pt = R^T (p_cam − t)
+
+    Returns dict: R, t, cov(6×6 on [rotvec,t]), inlier_mask, rms_sigma (residual
+    RMS in sigma units), n_in.
+    """
+    P = np.asarray(P_radar, float); Q = np.asarray(Q_cam, float)
+    w = np.array([sig_r, sig_az] + ([sig_el] if use_elevation else []))
+    k = len(w)
+
+    def residuals(x, Pm, Qm):
+        R = Rot.from_rotvec(x[:3]).as_matrix(); t = x[3:6]
+        out = []
+        for pc, qm in zip(Qm, Pm):
+            pr = R.T @ (pc - t)
+            rp = cart_to_raz(pr); rm = cart_to_raz(qm)
+            d = [(rm[0] - rp[0]) / sig_r, _wrap(rm[1] - rp[1]) / sig_az]
+            if use_elevation:
+                d.append(_wrap(rm[2] - rp[2]) / sig_el)
+            out.extend(d)
+        return np.array(out)
+
+    def per_point_sigma(x, Pm, Qm):
+        return np.linalg.norm(residuals(x, Pm, Qm).reshape(-1, k), axis=1) / np.sqrt(k)
+
+    R0, t0 = kabsch(P, Q)                              # Cartesian init
+    x = np.concatenate([Rot.from_matrix(R0).as_rotvec(), t0])
+    mask = np.ones(len(P), bool)
+    sol = None
+    for _ in range(max_iter):
+        sol = least_squares(residuals, x, args=(P[mask], Q[mask]),
+                            method='trf', loss='huber', f_scale=huber, max_nfev=4000)
+        x = sol.x
+        pn = per_point_sigma(x, P, Q)                  # score ALL points
+        new = pn < reject_sigma
+        if new.sum() < max(4, int(0.5 * len(P))):      # never reject too many
+            keep_n = max(4, int(0.6 * len(P)))
+            new = pn <= np.sort(pn)[keep_n - 1]
+        if np.array_equal(new, mask):
+            break
+        mask = new
+    R = Rot.from_rotvec(x[:3]).as_matrix(); t = x[3:6]
+    try:
+        cov = np.linalg.pinv(sol.jac.T @ sol.jac)      # residuals already σ-normalised
+    except Exception:
+        cov = np.full((6, 6), np.nan)
+    rms_sigma = float(np.sqrt((residuals(x, P[mask], Q[mask]) ** 2).mean()))
+    return {'R': R, 't': t, 'cov': cov, 'inlier_mask': mask,
+            'rms_sigma': rms_sigma, 'n_in': int(mask.sum())}
+
+
+def loo_cross_val(P, Q, sigmas, use_elevation):
+    """Leave-one-out in MEASUREMENT space: refit (robust ML) on N−1, predict the
+    held-out radar measurement, score its (range,az,el) error in sigma units.
+    Returns (rms_sigma, max_sigma) or None."""
     n = len(P)
-    if n < 4:
+    if n < 5:
         return None
+    sig_r, sig_az, sig_el = sigmas
     errs = []
     idx = np.arange(n)
     for i in range(n):
         m = idx != i
-        Ri, ti = kabsch(P[m], Q[m])
-        errs.append(float(np.linalg.norm((Ri @ P[i] + ti) - Q[i])))
+        r = robust_ml_calibrate(P[m], Q[m], sig_r, sig_az, sig_el,
+                                use_elevation, max_iter=3)
+        pr = r['R'].T @ (Q[i] - r['t'])
+        rp = cart_to_raz(pr); rm = cart_to_raz(P[i])
+        d = [(rm[0] - rp[0]) / sig_r, _wrap(rm[1] - rp[1]) / sig_az]
+        if use_elevation:
+            d.append(_wrap(rm[2] - rp[2]) / sig_el)
+        errs.append(float(np.linalg.norm(d) / np.sqrt(len(d))))
     errs = np.array(errs)
     return float(np.sqrt((errs ** 2).mean())), float(errs.max())
 
@@ -192,6 +304,15 @@ class RadarCameraCalib(Node):
         # --- radar range correction (applied at ingest, before everything) ---
         dp('radar_range_scale', 1.0)    # multiply xyz (fixes proportional/units error)
         dp('radar_range_bias_m', 0.0)   # subtract along radial dir (fixes constant offset)
+        # --- radar measurement noise (drives the ML solver's weighting) ---
+        #   range is precise, angle is not; cross-range error ≈ range·sigma_az.
+        #   Set from your radar's spec / resolution; relative sizes matter most.
+        dp('sigma_range_m', 0.05)
+        dp('sigma_az_deg', 2.0)
+        dp('sigma_el_deg', 5.0)         # elevation is usually the worst (few el antennas)
+        dp('force_2d_radar', False)     # True → ignore elevation entirely (2-D radar)
+        dp('huber_f_scale', 1.5)        # robust-loss knee, in sigma units
+        dp('reject_sigma', 4.0)         # drop a match whose residual exceeds this (sigma)
         # --- capture / convergence ---
         dp('capture_mode', 'auto')      # 'auto' | 'manual'
         dp('stable_window', 12)
@@ -235,6 +356,10 @@ class RadarCameraCalib(Node):
         self.bg_accum_frames = int(g('bg_accum_frames')); self.bg_match_dist = g('bg_match_dist')
         self.require_background = bool(g('require_background'))
         self.range_scale = g('radar_range_scale'); self.range_bias = g('radar_range_bias_m')
+        self.sig_r = g('sigma_range_m')
+        self.sig_az = np.radians(g('sigma_az_deg')); self.sig_el = np.radians(g('sigma_el_deg'))
+        self.force_2d = bool(g('force_2d_radar'))
+        self.huber = g('huber_f_scale'); self.reject_sigma = g('reject_sigma')
 
         self.capture_mode = g('capture_mode')
         self.stable_window = int(g('stable_window')); self.stable_std = g('stable_std')
@@ -493,62 +618,86 @@ class RadarCameraCalib(Node):
             if force:
                 self.get_logger().warn(f"need ≥3 captures (have {len(self.captures)})")
             return
-        P = np.array([c[1] for c in self.captures])   # radar (source)
-        Q = np.array([c[0] for c in self.captures])   # camera (target)
-        R, t = kabsch(P, Q)
-        self.X = np.eye(4); self.X[:3, :3] = R; self.X[:3, 3] = t
-        self.rms = rms_3d(P, Q, R, t)
+        P = np.array([c[1] for c in self.captures])   # radar measurements (source)
+        Q = np.array([c[0] for c in self.captures])   # camera apex (target, accurate)
 
-        cond = condition_number(P)
-        span = np.linalg.svd(P - P.mean(0), compute_uv=False)
+        # auto-detect 2-D radar: no meaningful elevation spread → drop el residual
+        rr = np.linalg.norm(P, axis=1); rr = np.where(rr < 1e-6, 1e-6, rr)
+        el_spread = float(np.std(np.abs(P[:, 2]) / rr))
+        use_el = (not self.force_2d) and el_spread > 0.01
+
+        # ── the accurate estimator: measurement-space ML + robust rejection ──
+        r = robust_ml_calibrate(P, Q, self.sig_r, self.sig_az, self.sig_el,
+                                use_elevation=use_el, huber=self.huber,
+                                reject_sigma=self.reject_sigma)
+        R, t = r['R'], r['t']; mask = r['inlier_mask']; cov = r['cov']
+        self.X = np.eye(4); self.X[:3, :3] = R; self.X[:3, 3] = t
+        Pin, Qin = P[mask], Q[mask]
+        self.rms = rms_3d(Pin, Qin, R, t)             # in-sample 3-D RMS (inliers), for overlay/text
+
+        cond = condition_number(Pin)
+        span = np.linalg.svd(Pin - Pin.mean(0), compute_uv=False)
         planar = span[2] < max(1e-3, 0.02 * span[0])
         q = Rot.from_matrix(R).as_quat(); rpy = Rot.from_matrix(R).as_euler('xyz', degrees=True)
         tmag = float(np.linalg.norm(t))
+        n_out = int((~mask).sum())
+
+        # per-DOF 1-sigma from the covariance (rotvec rad → deg, t m → mm)
+        dsig = np.sqrt(np.clip(np.diag(cov), 0, None))
+        rot_sig_deg = np.degrees(dsig[:3]); t_sig_mm = dsig[3:6] * 1000
+        unobs = [nm for nm, s in zip(('rot_x', 'rot_y', 'rot_z'), dsig[:3]) if s > 0.3]
+        unobs += [nm for nm, s in zip(('t_x', 't_y', 't_z'), dsig[3:6]) if s > 0.2]
 
         lines = [
             f"\n=== T_{self.parent_frame}_{self.child_frame}  (camera ← radar) ===",
-            f"  captures {len(self.captures)}   in-sample RMS {self.rms*1000:.1f} mm   cond {cond:.1f}",
+            f"  method   : measurement-space ML ({'3-D' if use_el else '2-D, no elevation'}), "
+            f"Huber+reject   inliers {r['n_in']}/{len(P)}" + (f"  ({n_out} rejected)" if n_out else ""),
+            f"  captures {len(self.captures)}   in-sample RMS {self.rms*1000:.1f} mm   "
+            f"residual {r['rms_sigma']:.2f} σ   cond {cond:.1f}",
             f"  xyz (m) : {t[0]:+.4f} {t[1]:+.4f} {t[2]:+.4f}   |t| {tmag*100:.1f} cm",
             f"  quat    : {q[0]:+.4f} {q[1]:+.4f} {q[2]:+.4f} {q[3]:+.4f}",
             f"  rpy(deg): {rpy[0]:+.2f} {rpy[1]:+.2f} {rpy[2]:+.2f}",
+            f"  1σ rot  : {rot_sig_deg[0]:.2f} {rot_sig_deg[1]:.2f} {rot_sig_deg[2]:.2f} deg   "
+            f"1σ t: {t_sig_mm[0]:.1f} {t_sig_mm[1]:.1f} {t_sig_mm[2]:.1f} mm",
         ]
-        loo = loo_cross_val(P, Q)
+        if unobs:
+            lines.append("  !! WEAK/UNOBSERVABLE dof: " + ", ".join(unobs)
+                         + ("  — 2-D radar can't see out-of-plane rotation or height; "
+                            "fix those from CAD" if not use_el else
+                            "  — add pose diversity (range/azimuth/height)"))
+        loo = loo_cross_val(P[mask], Q[mask], (self.sig_r, self.sig_az, self.sig_el), use_el)
         if loo is not None:
-            loo_rms, loo_max = loo
-            infl = loo_rms / self.rms if self.rms > 1e-9 else float('inf')
-            lines.append(f"  LOO CV  : {loo_rms*1000:.1f} mm (max {loo_max*1000:.1f})"
-                         + (f"  !! {infl:.1f}× in-sample — overfit/too few/clustered" if infl > 3 else ""))
+            loo_s, loo_max = loo
+            lines.append(f"  LOO CV  : {loo_s:.2f} σ (max {loo_max:.2f})"
+                         + ("  !! ≫1 — poses too few/clustered or noise underestimated"
+                            if loo_s > 2.5 else ""))
         if planar:
-            lines.append("  !! radar points PLANAR/collinear — out-of-plane rotation weak; "
-                         "vary height & range")
+            lines.append("  !! radar inliers PLANAR/collinear — vary height & range")
         elif cond > 200:
             lines.append(f"  !! high condition ({cond:.0f}) — spread poses more in X/Y/Z")
 
-        # per-axis signed bias + reproj px
-        res = (P @ R.T + t) - Q
-        bias_mm = res.mean(0) * 1000; std_mm = res.std(0) * 1000
-        lines.append("  signed residual (pred − cam), mm:  "
-                     f"X {bias_mm[0]:+.0f}±{std_mm[0]:.0f}  Y {bias_mm[1]:+.0f}±{std_mm[1]:.0f}  "
-                     f"Z {bias_mm[2]:+.0f}±{std_mm[2]:.0f}")
+        # Cartesian cross-checks (inliers) for the human-readable verdict
+        res = (Pin @ R.T + t) - Qin
+        bias_mm = res.mean(0) * 1000
         errs_px = []
-        for i in range(len(P)):
-            uv_t = project(Q[i], self.K, self.D); uv_p = project(P[i] @ R.T + t, self.K, self.D)
+        for i in range(len(Pin)):
+            uv_t = project(Qin[i], self.K, self.D); uv_p = project(Pin[i] @ R.T + t, self.K, self.D)
             if uv_t and uv_p:
                 errs_px.append(float(np.linalg.norm(np.subtract(uv_p, uv_t))))
         mean_px = float(np.mean(errs_px)) if errs_px else float('nan')
         mean_3d = float(np.linalg.norm(res, axis=1).mean()) * 1000
-        lines.append(f"  reproj  : {mean_px:.1f} px   mean 3-D {mean_3d:.1f} mm")
+        lines.append(f"  signed residual (pred−cam) mm: X {bias_mm[0]:+.0f} Y {bias_mm[1]:+.0f} "
+                     f"Z {bias_mm[2]:+.0f}   reproj {mean_px:.1f} px   mean 3-D {mean_3d:.1f} mm")
 
-        # range diagnostic (camera range vs radar range)
-        cam_r = np.linalg.norm(Q, axis=1); rad_r = np.linalg.norm(P, axis=1)
-        if len(P) >= 2:
+        # range diagnostic (camera range vs radar range, inliers)
+        cam_r = np.linalg.norm(Qin, axis=1); rad_r = np.linalg.norm(Pin, axis=1)
+        if len(Pin) >= 2:
             A = np.vstack([rad_r, np.ones_like(rad_r)]).T
             (a, b), *_ = np.linalg.lstsq(A, cam_r, rcond=None)
             if abs(a - 1) > 0.03 or abs(b) > 0.05:
                 lines.append(f"  range fit: cam_r = {a:.3f}·radar_r {b:+.3f} m  → "
                              f"try radar_range_scale={1/a:.4f} bias={-b:+.4f}")
 
-        # baseline check + verdict
         if self.measured_baseline > 0:
             d = abs(tmag - self.measured_baseline)
             lines.append(f"  baseline: |t| {tmag*100:.1f} cm vs measured "
@@ -556,7 +705,7 @@ class RadarCameraCalib(Node):
                          f"[{'OK' if d <= self.baseline_tol else 'MISMATCH'}]")
         checks = [("reproj_px", mean_px, self.val_px), ("3d_mm", mean_3d, self.val_3d),
                   ("bias_mm", float(np.abs(bias_mm).max()), self.val_bias)]
-        verdict = all(v <= lim for _, v, lim in checks)
+        verdict = all(v <= lim for _, v, lim in checks) and not unobs
         lines.append("  VERDICT : " + ("✔ GOOD  " if verdict else "✗ SUSPECT  ")
                      + "  ".join(f"{k} {v:.1f}/{lim:.0f}[{'P' if v<=lim else 'F'}]"
                                  for k, v, lim in checks))
@@ -564,7 +713,10 @@ class RadarCameraCalib(Node):
 
         if self.publish_tf:
             self._broadcast()
-        self._save(mean_px, mean_3d, bias_mm, cond, loo, planar, verdict)
+        self._save({'mean_px': mean_px, 'mean_3d': mean_3d, 'bias_mm': bias_mm, 'cond': cond,
+                    'loo': loo, 'planar': planar, 'verdict': verdict, 'use_el': use_el,
+                    'rot_sig_deg': rot_sig_deg, 't_sig_mm': t_sig_mm, 'unobs': unobs,
+                    'n_in': r['n_in'], 'n_out': n_out, 'rms_sigma': r['rms_sigma']})
 
     def _reset(self):
         self.captures.clear(); self.win.clear(); self.last_capture_cam = None
@@ -590,20 +742,29 @@ class RadarCameraCalib(Node):
          m.transform.rotation.z, m.transform.rotation.w) = map(float, q)
         self.tf_static.sendTransform(m)
 
-    def _save(self, mean_px, mean_3d, bias_mm, cond, loo, planar, verdict):
+    def _save(self, m):
         X = self.X; Xinv = np.linalg.inv(X)
         q = Rot.from_matrix(X[:3, :3]).as_quat(); rpy = Rot.from_matrix(X[:3, :3]).as_euler('xyz', degrees=True)
         qi = Rot.from_matrix(Xinv[:3, :3]).as_quat()
         data = {
             'parent_frame': self.parent_frame, 'child_frame': self.child_frame,
             'camera_name': self.camera_name, 'radar_name': self.radar_name,
-            'n_captures': len(self.captures),
-            'verdict_pass': bool(verdict), 'planar_warning': bool(planar),
+            'method': 'measurement_space_ML_robust',
+            'elevation_used': bool(m['use_el']),
+            'n_captures': len(self.captures), 'n_inliers': m['n_in'], 'n_rejected': m['n_out'],
+            'verdict_pass': bool(m['verdict']), 'planar_warning': bool(m['planar']),
+            'unobservable_dof': m['unobs'],
             'in_sample_rms_mm': float(self.rms) * 1000,
-            'loo_cv_rms_mm': (loo[0] * 1000 if loo else None),
-            'mean_reproj_px': float(mean_px), 'mean_3d_mm': float(mean_3d),
-            'residual_bias_mm_xyz': [float(v) for v in bias_mm],
-            'condition_number': float(cond),
+            'residual_rms_sigma': float(m['rms_sigma']),
+            'loo_cv_rms_sigma': (m['loo'][0] if m['loo'] else None),
+            'sigma_1_rot_deg_xyz': [float(v) for v in m['rot_sig_deg']],
+            'sigma_1_t_mm_xyz': [float(v) for v in m['t_sig_mm']],
+            'radar_noise_sigma_range_m': self.sig_r,
+            'radar_noise_sigma_az_deg': float(np.degrees(self.sig_az)),
+            'radar_noise_sigma_el_deg': float(np.degrees(self.sig_el)),
+            'mean_reproj_px': float(m['mean_px']), 'mean_3d_mm': float(m['mean_3d']),
+            'residual_bias_mm_xyz': [float(v) for v in m['bias_mm']],
+            'condition_number': float(m['cond']),
             'radar_range_scale': self.range_scale, 'radar_range_bias_m': self.range_bias,
             # T_cam_radar : p_cam = R p_radar + t
             'T_cam_radar_translation': [float(v) for v in X[:3, 3]],

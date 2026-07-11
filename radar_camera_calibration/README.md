@@ -23,17 +23,50 @@ radar  : reflector = strongest gated return          → p_radar   (a 3-D point)
 
 A radar point has **no orientation**, so one view can't give a 6-DOF transform.
 Move the rig to `N ≥ 3` non-collinear positions, collect corresponding point
-pairs, and solve the rigid registration (Kabsch/Umeyama, scale = 1):
+pairs, and solve for `X = T_cam_radar` (`p_cam = R·p_radar + t`).
+
+### The estimator — why not plain Kabsch
+
+A radar measures **range precisely (~cm)** but **angle poorly (degrees)**, and
+cross-range error **grows with range** (≈ `range·σ_az` — ~9 cm at 5 m for
+σ_az = 1°, ~17 cm at 10 m). Isotropic Cartesian Kabsch
+(`min ‖R·p_radar + t − p_cam‖²`) weights that large, range-dependent angular
+error the same as the tiny range error, so it is **biased**. Monte-Carlo on this
+exact geometry: **Kabsch ≈ 1.7° / 120 mm** vs the estimator below
+**≈ 1.0° / 38 mm** (≈1.6× better rotation, ≈3× better translation).
+
+So the tool does **maximum-likelihood estimation in the radar's measurement
+space**: predict each radar measurement from the (accurate) camera apex via the
+current `(R,t)`, convert to `(range, azimuth, elevation)`, and minimise
+residuals weighted by each component's real σ:
 
 ```
-min_{R,t} Σ ‖ R·p_radar^i + t − p_cam^i ‖²   ⇒   X = T_cam_radar
-p_cam = R · p_radar + t      (X maps a radar point into the camera frame)
+predicted radar pt = R^T (p_cam − t)
+min_{R,t} Σ ρ( [ (r_m−r_p)/σ_r , (az_m−az_p)/σ_az , (el_m−el_p)/σ_el ] )
 ```
+
+- `ρ` = **Huber** + iterative σ-gated **outlier rejection** — one wrong radar
+  match blows plain least-squares up to ~50°; the robust solver holds ~1°.
+- **Kabsch** supplies the initial guess.
+- **2-D radar** (no elevation) is auto-detected and the elevation residual is
+  dropped — but then **out-of-plane rotation and height are unobservable**, and
+  the per-DOF covariance readout flags exactly which parameters are weak.
+
+Set `sigma_range_m`, `sigma_az_deg`, `sigma_el_deg` from your radar's spec — the
+*relative* sizes are what steer the weighting.
+
+### The apex offset is a fixed, measured input (on purpose)
+
+Radar cross-range noise (~10 cm) is **larger than the apex offset itself
+(~5 cm)**, so the offset **cannot be recovered from radar** — verified in
+simulation, joint-solving it doesn't help and can hurt. Measure it physically
+(below); the debug overlay confirms it visually. A 4 cm offset error propagates
+to ~12 cm of extrinsic error, so measure it to ~cm.
 
 **Pose diversity is everything** — spread captures across range, azimuth, and
 **height**. Collinear/planar poses make out-of-plane rotation unobservable; the
-tool detects this (condition number + planar singular value) and warns. Aim for
-**8–15 well-spread poses**.
+tool detects this (condition number, planar singular value, and per-DOF σ) and
+warns. Aim for **8–15 well-spread poses**.
 
 ### Why the camera side uses the board, not depth
 
@@ -142,13 +175,19 @@ chase sub-pixel numbers):
 
 | metric | threshold (param) | meaning |
 |---|---|---|
+| residual | ≈ 1 σ | measurement-space fit vs the radar noise model; ≫1 ⇒ σ too small, bad matches, or a real misfit |
+| per-DOF 1σ (rot/t) | small | from the covariance; a large σ on a DOF ⇒ that parameter is weak/unobservable (esp. 2-D radar) |
+| LOO-CV | ≈ residual σ | honest generalisation; ≫ residual ⇒ too few / clustered poses |
 | mean reproj | `val_pass_reproj_px` (20 px) | radar-predicted apex lands on the visual apex |
-| mean 3-D | `val_pass_3d_mm` (150 mm) | 3-D agreement |
+| mean 3-D | `val_pass_3d_mm` (150 mm) | Cartesian agreement (cross-check) |
 | max per-axis bias | `val_pass_bias_mm` (50 mm) | **signed** residual — a non-zero mean on an axis is a systematic error RMS would hide |
-| LOO-CV RMS | ≈ in-sample RMS | honest generalisation; ≫ in-sample ⇒ overfit / too few / clustered |
 | \|t\| | `measured_baseline_m` ± `baseline_tol_m` | tape-measure the radar↔camera distance for metric ground truth |
 | condition number | < ~200 | pose spread; high ⇒ add diversity |
+| inliers / rejected | — | how many matches the robust solver kept vs threw out |
 | live overlay | — | dots track the reflector everywhere in the FoV |
+
+The **VERDICT** line fails if any threshold is exceeded **or** any DOF is flagged
+unobservable (e.g. a 2-D radar can never pin out-of-plane rotation from points).
 
 **Range diagnostic** — if radar range disagrees with the camera, the solve prints
 a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_bias_m`
@@ -170,6 +209,11 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 | `bg_match_dist` | `0.2` m | "new point" distance threshold |
 | `require_background` | `false` | refuse to capture until background pooled |
 | `radar_range_scale`/`_bias_m` | `1.0`/`0.0` | ingest range correction |
+| `sigma_range_m` | `0.05` | radar range noise (drives ML weighting) |
+| `sigma_az_deg` | `2.0` | radar azimuth noise — the dominant cross-range term |
+| `sigma_el_deg` | `5.0` | radar elevation noise (usually the worst) |
+| `force_2d_radar` | `false` | ignore elevation entirely; auto-detected otherwise |
+| `huber_f_scale` / `reject_sigma` | `1.5` / `4.0` | robust-loss knee / outlier cutoff (σ units) |
 | `capture_mode` | `auto` | `auto` or `manual` (`~/capture`) |
 | `stable_window`/`stable_std` | `12`/`0.01 m` | per-pose stability gate |
 | `min_baseline`/`min_points` | `0.15 m`/`6` | capture spacing / count |
