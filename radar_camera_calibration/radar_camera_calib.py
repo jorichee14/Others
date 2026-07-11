@@ -372,7 +372,9 @@ class RadarCameraCalib(Node):
         # --- capture / convergence ---
         dp('capture_mode', 'auto')      # 'auto' | 'manual'
         dp('stable_window', 12)
-        dp('stable_std', 0.01)          # m; per-pose jitter (cam & radar) to call it "still"
+        dp('stable_std', 0.01)          # m; CAMERA (board) jitter to call it "still"
+        dp('stable_std_radar', 0.08)    # m; RADAR jitter allowed (angular noise is cm-dm;
+                                        # window-averaging beats it down — don't set this tight)
         dp('min_baseline', 0.15)        # m; min move between auto-captures
         dp('min_points', 6)
         dp('sync_slop', 0.06)
@@ -390,6 +392,7 @@ class RadarCameraCalib(Node):
         dp('publish_tf', True)
         dp('debug_image', True)
         dp('debug_image_topic', '/radar_camera_calib/debug_image')
+        dp('show_window', False)        # True → pop a native OpenCV window (needs a display)
         dp('radar_watchdog_s', 3.0)
 
         g = lambda n: self.get_parameter(n).value
@@ -422,6 +425,7 @@ class RadarCameraCalib(Node):
 
         self.capture_mode = g('capture_mode')
         self.stable_window = int(g('stable_window')); self.stable_std = g('stable_std')
+        self.stable_std_radar = g('stable_std_radar')
         self.min_baseline = g('min_baseline'); self.min_points = int(g('min_points'))
 
         self.val_px = g('val_pass_reproj_px'); self.val_3d = g('val_pass_3d_mm')
@@ -434,6 +438,9 @@ class RadarCameraCalib(Node):
         self.output_path = op if op else f"extrinsic_{self.camera_name}__{self.radar_name}.yaml"
         self.publish_tf = bool(g('publish_tf'))
         self.want_debug = bool(g('debug_image'))
+        self.show_window = bool(g('show_window'))
+        self.window_name = 'radar_camera_calib — apex (green=matched) | reflector overlay'
+        self._last_dbg = None; self._win_ok = None
         self.watchdog_s = g('radar_watchdog_s')
 
         # state
@@ -466,6 +473,8 @@ class RadarCameraCalib(Node):
         self.dbg_pub = (self.create_publisher(Image, g('debug_image_topic'), 1)
                         if self.want_debug else None)
         self.create_timer(1.0, self._watchdog)
+        if self.show_window:
+            self.create_timer(0.05, self._gui)      # ~20 Hz native window refresh
 
         self.get_logger().info(
             f"[radar_camera_calib] OpenCV {cv2.__version__}, {'new' if self.new_api else 'old'} aruco\n"
@@ -640,7 +649,7 @@ class RadarCameraCalib(Node):
         if len(self.win) >= self.stable_window:
             cams = np.array([w[0] for w in self.win]); rads = np.array([w[1] for w in self.win])
             cstd = float(np.linalg.norm(cams.std(0))); rstd = float(np.linalg.norm(rads.std(0)))
-            stable = (cstd < self.stable_std and rstd < self.stable_std)
+            stable = (cstd < self.stable_std and rstd < self.stable_std_radar)
             self.get_logger().info(
                 f"apex cam {p_cam.round(3).tolist()} radar {p_radar.round(3).tolist()} "
                 f"snr {snr_i:.1f} still? {stable} (cam σ {cstd*1000:.0f}mm) captures {len(self.captures)}",
@@ -877,7 +886,7 @@ class RadarCameraCalib(Node):
             self.get_logger().warn(f"save failed: {e}")
 
     def _publish_debug(self, bgr, pose, p_cam, radar_xyz, n, reproj, got_radar, n_gated):
-        if self.dbg_pub is None:
+        if self.dbg_pub is None and not self.show_window:
             return
         try:
             h, w = bgr.shape[:2]
@@ -894,19 +903,46 @@ class RadarCameraCalib(Node):
                 cv2.drawFrameAxes(bgr, self.K, self.D, rvec, tvec, 0.05)
                 uv = project(p_cam, self.K, self.D)
                 if uv:
+                    # reticle at the current apex estimate — aim the reflector here
                     col = (0, 255, 0) if got_radar else (0, 165, 255)
-                    cv2.circle(bgr, uv, 9, col, 2)
-                    cv2.putText(bgr, "apex", (uv[0] + 10, uv[1]),
+                    cv2.circle(bgr, uv, 12, col, 2)
+                    cv2.line(bgr, (uv[0] - 18, uv[1]), (uv[0] + 18, uv[1]), col, 1)
+                    cv2.line(bgr, (uv[0], uv[1] - 18), (uv[0], uv[1] + 18), col, 1)
+                    tag = "apex (matched)" if got_radar else "apex (no radar)"
+                    if self.solve_offset and self.X is None:
+                        tag += " — offset unsolved, will shift"
+                    cv2.putText(bgr, tag, (uv[0] + 14, uv[1] - 6),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1)
-            txt = f"corners {n} reproj {reproj if reproj else 0:.2f}px  gated {n_gated}  captures {len(self.captures)}"
+            l1 = f"corners {n}  reproj {reproj if reproj else 0:.2f}px  gated {n_gated}  captures {len(self.captures)}"
             if self.rms is not None:
-                txt += f"  RMS {self.rms*1000:.0f}mm"
-            if self.bg_radar is None:
-                txt += "  [no bg]"
-            cv2.putText(bgr, txt, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            self.dbg_pub.publish(self.bridge.cv2_to_imgmsg(bgr, 'bgr8'))
+                l1 += f"  RMS {self.rms*1000:.0f}mm"
+            l2 = ("BG: none — press ~/background (rig OUT of scene)" if self.bg_radar is None
+                  else "BG: set")
+            cv2.putText(bgr, l1, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.putText(bgr, l2, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                        (0, 200, 255) if self.bg_radar is None else (0, 255, 0), 2)
+            self._last_dbg = bgr
+            if self.dbg_pub is not None:
+                self.dbg_pub.publish(self.bridge.cv2_to_imgmsg(bgr, 'bgr8'))
         except Exception as e:
             self.get_logger().warn(f"debug image: {e}", throttle_duration_sec=5.0)
+
+    def _gui(self):
+        """Native OpenCV window (opt-in). Runs in the executor thread alongside
+        spin; needs a display (X11). Degrades to the debug topic if none."""
+        if not self.show_window or self._last_dbg is None or self._win_ok is False:
+            return
+        try:
+            if self._win_ok is None:
+                cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+                self._win_ok = True
+            cv2.imshow(self.window_name, self._last_dbg)
+            cv2.waitKey(1)
+        except Exception as e:
+            self._win_ok = False
+            self.get_logger().warn(
+                f"show_window failed ({e}) — no display? Use "
+                f"'rqt_image_view {self.get_parameter('debug_image_topic').value}' instead.")
 
 
 def main():
@@ -917,6 +953,10 @@ def main():
         if node.X is not None:
             node.get_logger().info(f"Final extrinsic in {node.output_path}")
     finally:
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
         node.destroy_node(); rclpy.shutdown()
 
 
