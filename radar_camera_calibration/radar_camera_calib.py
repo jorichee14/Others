@@ -353,6 +353,11 @@ class RadarCameraCalib(Node):
         dp('min_range', 0.3); dp('max_range', 20.0)
         dp('max_abs_doppler', -1.0)     # >0 → keep |doppler| below this (still rig ≈0); <=0 disables
         dp('gate_radius', 1.0)          # m; once X exists, radar pt must be within this of predicted apex
+        # bootstrap gate BEFORE any extrinsic: keep radar pts whose range matches
+        # the camera's board distance |p_cam| within this margin, then take the
+        # highest SNR among them ("highest SNR around the board"). Rejects far
+        # clutter without needing a background snapshot. <=0 disables.
+        dp('range_gate_margin_m', 1.0)
         # --- background subtraction ---
         dp('bg_accum_frames', 15)       # radar frames pooled on ~/background
         dp('bg_match_dist', 0.2)        # m; live pt is "new" if farther than this from all bg pts
@@ -415,6 +420,7 @@ class RadarCameraCalib(Node):
         self.min_range = g('min_range'); self.max_range = g('max_range')
         self.max_abs_doppler = g('max_abs_doppler')
         self.gate_radius = g('gate_radius')
+        self.range_gate_margin = g('range_gate_margin_m')
         self.bg_accum_frames = int(g('bg_accum_frames')); self.bg_match_dist = g('bg_match_dist')
         self.require_background = bool(g('require_background'))
         self.range_scale = g('radar_range_scale'); self.range_bias = g('radar_range_bias_m')
@@ -559,8 +565,18 @@ class RadarCameraCalib(Node):
         self.get_logger().info(
             f"pooling {self.bg_accum_frames} background frames — keep the rig OUT of the scene…")
 
-    def _select_radar(self, xyz, snr, dop, predicted=None):
-        """Background-subtract + gate, then pick the reflector return."""
+    def _select_radar(self, xyz, snr, dop, predicted=None, cam_range=None):
+        """Gate the cloud, then pick the reflector return (highest SNR among the
+        survivors). Gates, in order of strength:
+          • range window [min_range, max_range]
+          • optional |doppler| window (static reflector ≈ 0)
+          • optional background subtraction
+          • CAMERA-RANGE gate (bootstrap): keep points whose range matches the
+            camera's board distance |p_cam| within range_gate_margin. Range is
+            rotation-invariant, so this works BEFORE any extrinsic exists and
+            rejects far clutter — "highest SNR AROUND THE BOARD".
+          • once an extrinsic exists, a tight 3-D proximity gate to the predicted
+            apex supersedes the range gate."""
         if xyz is None or len(xyz) == 0:
             return None, None, None, 0
         keep = np.ones(len(xyz), bool)
@@ -574,6 +590,8 @@ class RadarCameraCalib(Node):
             keep &= (mind > self.bg_match_dist)
         if predicted is not None:
             keep &= (np.linalg.norm(xyz - predicted, axis=1) <= self.gate_radius)
+        elif cam_range is not None and self.range_gate_margin > 0:
+            keep &= (np.abs(rng - cam_range) <= self.range_gate_margin)
         n_gated = int(keep.sum())
         if n_gated == 0:
             return None, None, None, 0
@@ -624,7 +642,8 @@ class RadarCameraCalib(Node):
         predicted = None
         if self.X is not None and p_cam is not None:
             predicted = self.X[:3, :3].T @ (p_cam - self.X[:3, 3])   # camera → radar
-        p_radar, snr_i, dop_i, n_gated = self._select_radar(xyz, snr, dop, predicted)
+        cam_range = float(np.linalg.norm(p_cam)) if p_cam is not None else None
+        p_radar, snr_i, dop_i, n_gated = self._select_radar(xyz, snr, dop, predicted, cam_range)
 
         self._publish_debug(bgr, pose, p_cam, xyz, n, reproj,
                             p_radar is not None, n_gated)
@@ -916,7 +935,7 @@ class RadarCameraCalib(Node):
             l1 = f"corners {n}  reproj {reproj if reproj else 0:.2f}px  gated {n_gated}  captures {len(self.captures)}"
             if self.rms is not None:
                 l1 += f"  RMS {self.rms*1000:.0f}mm"
-            l2 = ("BG: none — press ~/background (rig OUT of scene)" if self.bg_radar is None
+            l2 = ("BG: none (optional — range-gated around board)" if self.bg_radar is None
                   else "BG: set")
             cv2.putText(bgr, l1, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             cv2.putText(bgr, l2, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
