@@ -109,6 +109,58 @@ calibration tools — no depth topic is even required.
 3. **Highest-SNR selection** — among the survivors, take **argmax(SNR)**. The
    trihedral is built to be the strongest reflector, so this *is* the apex. One
    bright background-subtracted point — no clustering needed.
+4. **Doppler ↔ motion consistency** (`use_doppler_consistency`, for a *moving /
+   hand-held* rig) — while you sweep, the reflector is rigidly tied to the board,
+   so its radar radial velocity must equal the rate of change of the camera's
+   range to the apex. Your hand, arm, and body also move, but at a *different*
+   radial velocity, so a static `|doppler|≈0` gate can't separate them — this
+   consistency check can. It keeps only survivors whose measured doppler matches
+   the camera-predicted `v_pred = (p_cam − t_ext)·ṗ_cam / |p_cam − t_ext|`
+   (rotation-free) within `doppler_match_tol`, then takes argmax(SNR); it falls
+   back to the full set if that would empty it, and the sign convention is
+   auto-learned. **This is the primary fix for "the dynamic mode picks the wrong
+   feature."** See *Moving / hand-held rigs* below.
+
+---
+
+## Moving / hand-held rigs (the "dynamic" mode)
+
+Sweeping a hand-held rig is the easy way to get pose diversity, but motion
+introduces three correspondence errors that a static capture never has:
+
+1. **Time mismatch** — the camera and radar are sampled at slightly different
+   instants; at hand speed `v` and sync gap `Δt`, `p_cam` and `p_radar` are
+   `v·Δt` apart (0.3 m/s × 60 ms ≈ 18 mm) even though they should be the *same*
+   point. Guard it with `max_sync_dt` (drops badly-aligned pairs) and by moving
+   slowly.
+2. **Tracker lag** — people-counting firmware smooths a moving target, so its
+   reported position lags the truth by the filter's time constant. This scales
+   with speed too; keep speed modest.
+3. **Feature ambiguity** — your hand/arm/body are strong, *moving* reflectors, so
+   `min_abs_doppler`/`max_abs_doppler` alone can't isolate the reflector.
+   `use_doppler_consistency` resolves this using the motion itself (above).
+
+**Two ways to run it, most-robust first:**
+
+- **Step-and-settle (recommended).** `capture_mode:=auto`; move, pause ~0.5 s,
+  let it capture during the settle, move again. You get wide diversity *and* zero
+  moving-correspondence error (errors 1–2 vanish when stationary). This is almost
+  always the most accurate hand-held option.
+- **Continuous sweep.** `capture_mode:=continuous` with
+  `use_doppler_consistency:=true`, `max_sync_dt:=0.03`, and
+  `max_capture_speed:=0.25` (skips captures while you move too fast). Turn motion
+  into your discriminator instead of fighting it.
+
+Extra params for these modes:
+
+| Param | Meaning |
+|---|---|
+| `use_doppler_consistency` | keep radar pts whose doppler matches the camera-predicted radial velocity |
+| `doppler_match_tol` (m/s) | match tolerance (default 0.30) |
+| `doppler_sign` | `auto` (learn) \| `1` \| `-1` — TI radial-velocity sign |
+| `min_motion_mps` | only apply the doppler gate above this apex speed |
+| `max_sync_dt` (s) | drop image/radar pairs whose stamps differ by more than this (`-1` off) |
+| `max_capture_speed` (m/s) | continuous mode: skip captures while moving faster than this (`-1` off) |
 
 ---
 

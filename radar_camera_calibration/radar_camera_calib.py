@@ -73,6 +73,13 @@ RADAR SIDE (inspired by the click-based v8 tool, improved)
   • HIGHEST-SNR SELECTION — among the surviving points, take argmax(SNR). The
     trihedral is engineered to be the strongest reflector, so this is the apex.
     (No clustering: one bright, background-subtracted point is the target.)
+  • DOPPLER↔MOTION CONSISTENCY (moving / hand-held rig) — while you sweep, the
+    reflector is rigidly tied to the board, so its radar radial velocity must
+    equal d|range|/dt from the CAMERA (v_pred = (p_cam−t_ext)·ṗ_cam/|p_cam−t_ext|,
+    rotation-free). Hand/arm/body move at a DIFFERENT radial rate, so this
+    separates the reflector from moving clutter where a static |doppler| gate
+    cannot. Keeps only doppler-matching survivors, then argmax(SNR), with a
+    fallback + auto-learned sign (use_doppler_consistency).
 
 VALIDATION (carried over from v8)
 ─────────────────────────────────
@@ -367,6 +374,19 @@ class RadarCameraCalib(Node):
         dp('min_range', 0.3); dp('max_range', 20.0)
         dp('max_abs_doppler', -1.0)     # >0 → keep |doppler| below this (still rig ≈0); <=0 disables
         dp('min_abs_doppler', -1.0)     # >0 → keep |doppler| ABOVE this (MOVING reflector); <=0 disables
+        # --- Doppler ↔ motion consistency (for a MOVING / hand-held rig) ---
+        #   While you sweep, the reflector is RIGIDLY tied to the board, so its
+        #   radar radial velocity MUST equal the rate of change of the camera's
+        #   range to the apex. Your hand / arm / body move too, but at a DIFFERENT
+        #   radial velocity, so this separates the reflector from moving clutter
+        #   far better than a static |doppler|≈0 gate ever can. Rotation-free:
+        #       v_pred = (p_cam − t_ext) · ṗ_cam / |p_cam − t_ext|
+        #   (needs only the small baseline t_ext, and ≈ d|p_cam|/dt even without it).
+        #   This is the primary lever for "identifying the correct feature" while moving.
+        dp('use_doppler_consistency', False)
+        dp('doppler_match_tol', 0.30)   # m/s; keep radar pts whose doppler matches v_pred within this
+        dp('doppler_sign', 'auto')      # 'auto' | '1' | '-1' — TI radial-velocity sign convention
+        dp('min_motion_mps', 0.05)      # only apply the doppler gate when |ṗ_cam| exceeds this
         dp('gate_radius', 1.0)          # m; once X exists, radar pt must be within this of predicted apex
         # bootstrap gate BEFORE any extrinsic: keep radar pts whose range matches
         # the camera's board distance |p_cam| within this margin, then take the
@@ -410,6 +430,12 @@ class RadarCameraCalib(Node):
         dp('min_baseline', 0.15)        # m; min move between auto-captures
         dp('min_points', 6)
         dp('sync_slop', 0.06)
+        # A moving, hand-held rig makes correspondence errors that static capture
+        # does not: (1) camera/radar time mismatch × speed, (2) the people-counting
+        # tracker lags a moving target. Both scale with hand speed. These two gates
+        # keep those errors small by capturing only when well-aligned and slow.
+        dp('max_sync_dt', -1.0)         # s; drop image/radar pairs whose stamps differ by more than this. <=0 off
+        dp('max_capture_speed', -1.0)   # m/s; in continuous mode, skip captures while |ṗ_cam| exceeds this. <=0 off
         # --- validation thresholds / verdict ---
         dp('val_pass_reproj_px', 20.0)
         dp('val_pass_3d_mm', 150.0)
@@ -447,6 +473,12 @@ class RadarCameraCalib(Node):
         self.min_range = g('min_range'); self.max_range = g('max_range')
         self.max_abs_doppler = g('max_abs_doppler')
         self.min_abs_doppler = g('min_abs_doppler')
+        self.use_dop_consistency = bool(g('use_doppler_consistency'))
+        self.doppler_match_tol = g('doppler_match_tol')
+        _ds = str(g('doppler_sign')).strip().lower()
+        self.doppler_sign = 0.0 if _ds == 'auto' else float(_ds)  # 0.0 → learn from data
+        self._dop_sign_vote = 0.0
+        self.min_motion_mps = g('min_motion_mps')
         self.gate_radius = g('gate_radius')
         self.range_gate_margin = g('range_gate_margin_m')
         self.bg_accum_frames = int(g('bg_accum_frames')); self.bg_match_dist = g('bg_match_dist')
@@ -468,6 +500,7 @@ class RadarCameraCalib(Node):
         self.stable_window = int(g('stable_window')); self.stable_std = g('stable_std')
         self.stable_std_radar = g('stable_std_radar')
         self.min_baseline = g('min_baseline'); self.min_points = int(g('min_points'))
+        self.max_sync_dt = g('max_sync_dt'); self.max_capture_speed = g('max_capture_speed')
 
         self.val_px = g('val_pass_reproj_px'); self.val_3d = g('val_pass_3d_mm')
         self.val_bias = g('val_pass_bias_mm')
@@ -488,6 +521,7 @@ class RadarCameraCalib(Node):
         self.win = []                 # rolling [(p_cam, p_radar), ...] for stability
         self.captures = []            # accepted [(p_cam, p_radar, snr, doppler), ...]
         self.last_capture_cam = None
+        self._prev_apex = None; self._prev_apex_t = None   # camera-side apex velocity (radial-Doppler predict)
         self.manual_capture_req = False
         self.bg_radar = None          # (M,3) pooled background points (raw radar frame)
         self.bg_accum = None          # accumulation buffer while pooling
@@ -541,6 +575,10 @@ class RadarCameraCalib(Node):
             self.K = np.array(msg.k).reshape(3, 3)
             self.D = np.array(msg.d) if len(msg.d) else np.zeros(5)
             self.get_logger().info(f"intrinsics locked ({msg.width}x{msg.height})")
+
+    @staticmethod
+    def _stamp_s(msg):
+        return msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
     def _watchdog(self):
         if self.last_radar_stamp == 0.0:
@@ -600,7 +638,7 @@ class RadarCameraCalib(Node):
         self.get_logger().info(
             f"pooling {self.bg_accum_frames} background frames — keep the rig OUT of the scene…")
 
-    def _select_radar(self, xyz, snr, dop, predicted=None, cam_range=None):
+    def _select_radar(self, xyz, snr, dop, predicted=None, cam_range=None, v_pred=None):
         """Gate the cloud, then pick the reflector return (highest SNR among the
         survivors). Gates, in order of strength:
           • range window [min_range, max_range]
@@ -653,6 +691,19 @@ class RadarCameraCalib(Node):
             _diag("REJECTED-ALL")
             return None, None, None, 0
         xg, sg, dg = xyz[keep], snr[keep], dop[keep]
+        # Doppler ↔ motion consistency: among the survivors, keep only those whose
+        # radial velocity matches the camera-predicted v_pred. This rejects moving
+        # clutter (hand/arm/body) that a static |doppler| gate cannot, because that
+        # clutter moves at a DIFFERENT radial rate than the rigidly-fixed reflector.
+        # Falls back to the full survivor set if the match would empty it (so a bad
+        # v_pred or sign never rejects everything). Only active while actually moving.
+        dop_applied = False
+        if (self.use_dop_consistency and v_pred is not None
+                and abs(v_pred) >= self.min_motion_mps and self.doppler_match_tol > 0):
+            sign = self.doppler_sign or (1.0 if self._dop_sign_vote >= 0 else -1.0)
+            keepd = np.abs(sign * dg - v_pred) <= self.doppler_match_tol
+            if keepd.any():
+                xg, sg, dg = xg[keepd], sg[keepd], dg[keepd]; dop_applied = True
         if self.select_by == 'snr' and np.any(np.isfinite(sg)) and sg.max() > 0:
             idx = int(np.argmax(sg))             # ← highest-SNR survivor = the trihedral
         elif predicted is not None:
@@ -662,6 +713,15 @@ class RadarCameraCalib(Node):
         if self.min_snr > 0 and sg[idx] < self.min_snr:
             _diag(f"best snr {sg[idx]:.0f} < min_snr {self.min_snr:.0f}")
             return None, None, None, n_gated     # too weak → likely mis-associated, skip
+        # auto-learn the Doppler sign convention from the chosen reflector point
+        if (self.use_dop_consistency and self.doppler_sign == 0.0 and v_pred is not None
+                and abs(v_pred) >= self.min_motion_mps):
+            self._dop_sign_vote += float(dg[idx]) * v_pred
+        if self.use_dop_consistency and v_pred is not None:
+            self.get_logger().info(
+                f"[dop] v_pred {v_pred:+.2f} m/s  sel doppler {float(dg[idx]):+.2f}  "
+                f"tol {self.doppler_match_tol:.2f}  {'filtered' if dop_applied else 'off/fallback'}",
+                throttle_duration_sec=1.0)
         return xg[idx], float(sg[idx]), float(dg[idx]), n_gated
 
     # ── camera: board pose → apex in camera frame ──
@@ -697,6 +757,14 @@ class RadarCameraCalib(Node):
             gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         except Exception as e:
             self.get_logger().warn(f"cv_bridge: {e}"); return
+        # Hand-held rigs move; a large image↔radar stamp gap turns into a
+        # correspondence error (Δt × speed). Drop badly-aligned pairs outright.
+        t_img = self._stamp_s(a_img); t_rad = self._stamp_s(radar_msg)
+        if self.max_sync_dt > 0 and abs(t_img - t_rad) > self.max_sync_dt:
+            self.get_logger().info(
+                f"skip pair: img/radar Δt {abs(t_img - t_rad)*1000:.0f} ms "
+                f"> max_sync_dt {self.max_sync_dt*1000:.0f} ms", throttle_duration_sec=2.0)
+            return
         p_cam, reproj, n, pose = self._apex_in_camera(gray)
         xyz, snr, dop = self._read_radar(radar_msg)
         # Predict the reflector's radar location and search only AROUND it:
@@ -712,7 +780,23 @@ class RadarCameraCalib(Node):
             elif self.use_ext_prior and self.prior_R is not None:
                 predicted = self.prior_R.T @ (p_cam - self.prior_t)          # prior-predicted
         cam_range = float(np.linalg.norm(p_cam)) if p_cam is not None else None
-        p_radar, snr_i, dop_i, n_gated = self._select_radar(xyz, snr, dop, predicted, cam_range)
+        # Camera-side apex velocity → predicted radar radial velocity (Doppler).
+        # Rotation-free: v_pred = (p_cam − t_ext)·ṗ_cam / |p_cam − t_ext|.
+        v_pred = None; speed = None
+        if p_cam is not None:
+            if self._prev_apex is not None and self._prev_apex_t is not None:
+                dt = t_img - self._prev_apex_t
+                if 1e-3 < dt < 0.5:
+                    vdot = (p_cam - self._prev_apex) / dt
+                    speed = float(np.linalg.norm(vdot))
+                    t_ext = (self.X[:3, 3] if self.X is not None
+                             else (self.prior_t if (self.use_ext_prior and self.prior_t is not None)
+                                   else np.zeros(3)))
+                    d = p_cam - t_ext; nd = float(np.linalg.norm(d))
+                    if nd > 1e-6:
+                        v_pred = float(d @ vdot / nd)
+            self._prev_apex = p_cam.copy(); self._prev_apex_t = t_img
+        p_radar, snr_i, dop_i, n_gated = self._select_radar(xyz, snr, dop, predicted, cam_range, v_pred)
 
         self._publish_debug(bgr, pose, p_cam, xyz, n, reproj,
                             p_radar is not None, n_gated, p_radar)
@@ -743,7 +827,13 @@ class RadarCameraCalib(Node):
                 self.win.pop(0)
             moved = (self.last_capture_cam is None or
                      np.linalg.norm(p_cam - self.last_capture_cam) >= self.min_baseline)
-            if moved:
+            too_fast = (self.max_capture_speed > 0 and speed is not None
+                        and speed > self.max_capture_speed)
+            if too_fast:
+                self.get_logger().info(
+                    f"sweep too fast ({speed:.2f} m/s > {self.max_capture_speed:.2f}) — "
+                    f"slow down / pause briefly for a clean capture", throttle_duration_sec=1.0)
+            elif moved:
                 self._accept(force=True)
             else:
                 self.get_logger().info(
