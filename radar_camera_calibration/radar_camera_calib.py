@@ -931,20 +931,32 @@ class RadarCameraCalib(Node):
         n_out = int((~mask).sum())
 
         # diversity guard: the extrinsic is only observable if the RADAR points
-        # span range + azimuth (+ elevation). Warn loudly when they don't.
+        # span range + azimuth + ELEVATION. Rotation error ≈ cross-range_noise /
+        # cloud_extent, so a thin/planar cloud gives good translation but BAD
+        # rotation — the classic single-reflector signature. Warn per-axis.
         raz = np.array([cart_to_raz(p) for p in Pin])
         rng_span = float(raz[:, 0].max() - raz[:, 0].min())
         az_span = float(np.degrees(raz[:, 1].max() - raz[:, 1].min()))
         el_span = float(np.degrees(raz[:, 2].max() - raz[:, 2].min()))
-        low_div = rng_span < 0.20 or az_span < 20.0
+        # elevation must span too, else out-of-plane rotation stays under-constrained
+        low_div = rng_span < 0.20 or az_span < 20.0 or (use_el and el_span < 10.0)
         div_msg = (f"  RADAR spread: range {rng_span*100:.0f} cm, az {az_span:.0f}°, el {el_span:.0f}°"
-                   + ("   !! TOO CLUSTERED — move the rig NEAR↔FAR and LEFT↔RIGHT; "
-                      "extrinsic under-constrained until this grows" if low_div else "  ✓"))
+                   + ("   !! TOO CLUSTERED — spread NEAR↔FAR, LEFT↔RIGHT and UP↔DOWN; "
+                      "rotation stays under-constrained (good |t|, bad R) until this grows"
+                      if low_div else "  ✓"))
 
-        # per-DOF 1-sigma from the covariance (rotvec rad → deg, t m → mm)
+        # per-DOF 1-sigma from the covariance (rotvec rad → deg, t m → mm).
+        # rot 1σ is in the CAMERA optical frame (X=right, Y=down, Z=forward); each
+        # weak rotation axis is fixed by a specific spatial spread of the points:
+        #   rot_x (pitch) ← vertical (UP↔DOWN) + range (NEAR↔FAR) spread
+        #   rot_y (yaw)   ← horizontal (LEFT↔RIGHT) + range (NEAR↔FAR) spread
+        #   rot_z (roll)  ← spread ACROSS the image (LEFT↔RIGHT *and* UP↔DOWN)
         dsig = np.sqrt(np.clip(np.diag(cov), 0, None))
         rot_sig_deg = np.degrees(dsig[:3]); t_sig_mm = dsig[3:6] * 1000
-        unobs = [nm for nm, s in zip(('rot_x', 'rot_y', 'rot_z'), dsig[:3]) if s > 0.3]
+        _rot_fix = {'rot_x': 'move UP↔DOWN + NEAR↔FAR', 'rot_y': 'move LEFT↔RIGHT + NEAR↔FAR',
+                    'rot_z': 'spread poses ACROSS the image (LEFT↔RIGHT and UP↔DOWN)'}
+        weak_rot = [nm for nm, s in zip(('rot_x', 'rot_y', 'rot_z'), dsig[:3]) if s > 0.3]
+        unobs = list(weak_rot)
         unobs += [nm for nm, s in zip(('t_x', 't_y', 't_z'), dsig[3:6]) if s > 0.2]
 
         lines = [
@@ -963,8 +975,13 @@ class RadarCameraCalib(Node):
         if unobs:
             lines.append("  !! WEAK/UNOBSERVABLE dof: " + ", ".join(unobs)
                          + ("  — 2-D radar can't see out-of-plane rotation or height; "
-                            "fix those from CAD" if not use_el else
+                            "fix those from CAD or an extrinsic prior" if not use_el else
                             "  — add pose diversity (range/azimuth/height)"))
+            for nm in weak_rot:                        # axis-specific rotation fix
+                lines.append(f"     {nm} weak → {_rot_fix[nm]} (more lever arm shrinks rot 1σ)")
+            if not self.use_ext_prior:
+                lines.append("     tip: set use_extrinsic_prior:=true (rough mounting rpy/xyz) to "
+                             "pin the weak rotation DOF while the data refines the rest")
         if self.solve_offset:
             a = self.apex_board; asig = r['apex_sigma'] * 1000
             moved = np.linalg.norm(a - self.apex_prior) * 1000
