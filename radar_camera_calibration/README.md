@@ -117,6 +117,14 @@ calibration tools — no depth topic is even required.
      and **rejects an isolated bright clutter point** that SNR-max would grab.
      Falls back to `snr` if no cluster meets `min_cluster_size`.
    - `nearest` — nearest the predicted apex / radar origin.
+
+   **Cluster around the estimated apex.** Once the extrinsic (from a solve or an
+   extrinsic prior) predicts where the reflector should be, `cluster` mode
+   restricts to points within `cluster_apex_radius` of that prediction and takes
+   the cluster nearest it — so a *brighter* off-apex blob can't win. With
+   `cluster_strict:=true`, a capture with **no** cluster within that radius is
+   **rejected** (no SNR fall-back) — the strictest, cleanest gate for the
+   reflector once you have a decent prior.
 4. **Doppler ↔ motion consistency** (`use_doppler_consistency`, for a *moving /
    hand-held* rig) — while you sweep, the reflector is rigidly tied to the board,
    so its radar radial velocity must equal the rate of change of the camera's
@@ -331,6 +339,7 @@ chase sub-pixel numbers):
 | LOO-CV | ≈ residual σ | honest generalisation; ≫ residual ⇒ too few / clustered poses |
 | mean reproj | `val_pass_reproj_px` (20 px) | radar-predicted apex lands on the visual apex |
 | mean 3-D | `val_pass_3d_mm` (150 mm) | Cartesian agreement (cross-check) |
+| 3-D error RMS X/Y/Z | — | the 3-D error **split per axis** (camera frame: X/Y = cross-range, Z = range); a big X/Y ⇒ radar angular error, a big Z ⇒ a range error |
 | max per-axis bias | `val_pass_bias_mm` (50 mm) | **signed** residual — a non-zero mean on an axis is a systematic error RMS would hide |
 | \|t\| | `measured_baseline_m` ± `baseline_tol_m` | tape-measure the radar↔camera distance for metric ground truth |
 | condition number | < ~200 | pose spread; high ⇒ add diversity |
@@ -355,6 +364,8 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 | `select_by` | `snr` | `snr` (highest return), `cluster` (blob centroid), or `nearest` |
 | `cluster_eps` | `0.15` m | `select_by:=cluster`: points within this join one cluster |
 | `min_cluster_size` | `2` | `select_by:=cluster`: min points to accept a cluster (else fall back to SNR) |
+| `cluster_apex_radius` | `0.30` m | cluster only points within this radius of the **predicted apex** (once solved/prior) |
+| `cluster_strict` | `false` | `true` → reject the capture if no cluster forms within that radius of the predicted apex (no SNR fall-back) |
 | `min_range`/`max_range` | `0.3`/`20` m | range gate |
 | `max_abs_doppler` | `-1` (off) | keep `|doppler| ≤` this — rejects moving clutter |
 | `gate_radius` | `1.0` m | proximity gate to predicted apex once solved |

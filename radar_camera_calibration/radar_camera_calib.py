@@ -456,6 +456,11 @@ class RadarCameraCalib(Node):
         # centroid of the reflector blob (robust to a single noisy SNR spike).
         dp('cluster_eps', 0.15)         # m; points within this distance join one cluster
         dp('min_cluster_size', 2)       # min points to accept a cluster (else fall back to SNR)
+        # cluster AROUND the estimated apex: once an extrinsic (solve) or extrinsic
+        # prior predicts the apex, cluster only points within this radius of it.
+        dp('cluster_apex_radius', 0.30) # m; window around the predicted apex to cluster in
+        dp('cluster_strict', False)     # True → if NO cluster forms within that radius of the
+                                        # predicted apex, REJECT the capture (no fall back to SNR)
         dp('min_range', 0.3); dp('max_range', 20.0)
         dp('max_abs_doppler', -1.0)     # >0 → keep |doppler| below this (still rig ≈0); <=0 disables
         dp('min_abs_doppler', -1.0)     # >0 → keep |doppler| ABOVE this (MOVING reflector); <=0 disables
@@ -560,6 +565,7 @@ class RadarCameraCalib(Node):
         self.fsnr, self.fdop = g('pc_field_snr'), g('pc_field_doppler')
         self.select_by = g('select_by')
         self.cluster_eps = g('cluster_eps'); self.min_cluster_size = int(g('min_cluster_size'))
+        self.cluster_apex_radius = g('cluster_apex_radius'); self.cluster_strict = bool(g('cluster_strict'))
         self.min_range = g('min_range'); self.max_range = g('max_range')
         self.max_abs_doppler = g('max_abs_doppler')
         self.min_abs_doppler = g('min_abs_doppler')
@@ -803,7 +809,11 @@ class RadarCameraCalib(Node):
         #   'nearest' : nearest the predicted apex, else nearest the radar origin.
         sel = None
         if self.select_by == 'cluster':
-            sel = self._pick_cluster(xg, sg, dg, predicted)   # None → fall through to snr
+            sel = self._pick_cluster(xg, sg, dg, predicted)   # None → fall through / strict-reject
+            if sel is None and self.cluster_strict and predicted is not None:
+                _diag(f"strict cluster: no reflector cluster within "
+                      f"{self.cluster_apex_radius}m of the predicted apex")
+                return None, None, None, n_gated              # strict → reject this capture
         if sel is None:
             if self.select_by != 'nearest' and np.any(np.isfinite(sg)) and sg.max() > 0:
                 idx = int(np.argmax(sg))         # highest-SNR survivor = the trihedral
@@ -829,25 +839,35 @@ class RadarCameraCalib(Node):
 
     def _pick_cluster(self, xg, sg, dg, predicted):
         """Cluster the gated survivors and return (centroid, snr, doppler) of the
-        reflector blob, or None if no cluster meets min_cluster_size (caller then
-        falls back to the SNR pick). Blob choice: nearest the camera-predicted
-        apex if we have an extrinsic/prior, else the cluster holding the brightest
-        return (the trihedral is the strongest reflector). The representative
-        point is the SNR-WEIGHTED CENTROID — averaging the blob's returns beats a
-        single argmax spike for angular noise."""
-        clusters = cluster_points(xg, self.cluster_eps, self.min_cluster_size)
+        reflector blob, or None if none qualifies (caller then falls back to the
+        SNR pick, or — in cluster_strict mode with a predicted apex — rejects).
+
+        When an extrinsic/prior PREDICTS the apex, cluster ONLY points within
+        cluster_apex_radius of it ("cluster around the estimated apex"), and take
+        the cluster nearest the prediction. Without a prediction, use the cluster
+        holding the brightest return. The representative point is the SNR-WEIGHTED
+        CENTROID — averaging the blob beats a single argmax spike for angular noise."""
+        xs, ss, ds = xg, sg, dg
+        if predicted is not None and self.cluster_apex_radius > 0:
+            near = np.linalg.norm(xg - predicted, axis=1) <= self.cluster_apex_radius
+            if near.any():
+                xs, ss, ds = xg[near], sg[near], dg[near]     # cluster around the estimated apex
+            elif self.cluster_strict:
+                return None                                   # strict: nothing near the apex
+            # non-strict & nothing near → cluster over the whole gated set (lenient)
+        clusters = cluster_points(xs, self.cluster_eps, self.min_cluster_size)
         if not clusters:
             return None
         if predicted is not None:
-            best = min(clusters, key=lambda c: float(np.linalg.norm(xg[c].mean(0) - predicted)))
+            best = min(clusters, key=lambda c: float(np.linalg.norm(xs[c].mean(0) - predicted)))
         else:
-            seed = int(np.argmax(sg)) if (np.any(np.isfinite(sg)) and sg.max() > 0) else 0
+            seed = int(np.argmax(ss)) if (np.any(np.isfinite(ss)) and ss.max() > 0) else 0
             best = next((c for c in clusters if seed in set(c.tolist())), None)
             if best is None:
-                best = max(clusters, key=lambda c: float(np.nanmax(sg[c])))
-        w = np.clip(np.nan_to_num(sg[best]), 1e-6, None); w = w / w.sum()
-        p = (xg[best] * w[:, None]).sum(0)
-        return p, float(np.nanmax(sg[best])), float(np.median(dg[best]))
+                best = max(clusters, key=lambda c: float(np.nanmax(ss[c])))
+        w = np.clip(np.nan_to_num(ss[best]), 1e-6, None); w = w / w.sum()
+        p = (xs[best] * w[:, None]).sum(0)
+        return p, float(np.nanmax(ss[best])), float(np.median(ds[best]))
 
     # ── camera: board pose → apex in camera frame ──
     def _apex_in_camera(self, gray):
@@ -1140,8 +1160,14 @@ class RadarCameraCalib(Node):
                 errs_px.append(float(np.linalg.norm(np.subtract(uv_p, uv_t))))
         mean_px = float(np.mean(errs_px)) if errs_px else float('nan')
         mean_3d = float(np.linalg.norm(res, axis=1).mean()) * 1000
+        # split the 3-D error into per-axis RMS (mm) — shows WHERE the error lives
+        # (camera frame X=right, Y=down, Z=forward/range); a big Z is a range error,
+        # a big X/Y is cross-range (the radar's weak angular direction).
+        rms_xyz_mm = np.sqrt((res ** 2).mean(0)) * 1000
         lines.append(f"  signed residual (pred−cam) mm: X {bias_mm[0]:+.0f} Y {bias_mm[1]:+.0f} "
                      f"Z {bias_mm[2]:+.0f}   reproj {mean_px:.1f} px   mean 3-D {mean_3d:.1f} mm")
+        lines.append(f"  3-D error RMS  mm: X {rms_xyz_mm[0]:.1f}  Y {rms_xyz_mm[1]:.1f}  "
+                     f"Z {rms_xyz_mm[2]:.1f}   (X/Y = cross-range, Z = range)")
 
         # range diagnostic (camera range vs radar range, inliers)
         cam_r = np.linalg.norm(Qin, axis=1); rad_r = np.linalg.norm(Pin, axis=1)
@@ -1167,7 +1193,8 @@ class RadarCameraCalib(Node):
 
         if self.publish_tf:
             self._broadcast()
-        self._save({'mean_px': mean_px, 'mean_3d': mean_3d, 'bias_mm': bias_mm, 'cond': cond,
+        self._save({'mean_px': mean_px, 'mean_3d': mean_3d, 'rms_xyz_mm': rms_xyz_mm,
+                    'bias_mm': bias_mm, 'cond': cond,
                     'loo': loo, 'planar': planar, 'verdict': verdict, 'use_el': use_el,
                     'rot_sig_deg': rot_sig_deg, 't_sig_mm': t_sig_mm, 'unobs': unobs,
                     'n_in': r['n_in'], 'n_out': n_out, 'rms_sigma': r['rms_sigma'],
@@ -1220,6 +1247,7 @@ class RadarCameraCalib(Node):
             'radar_noise_sigma_az_deg': float(np.degrees(self.sig_az)),
             'radar_noise_sigma_el_deg': float(np.degrees(self.sig_el)),
             'mean_reproj_px': float(m['mean_px']), 'mean_3d_mm': float(m['mean_3d']),
+            'error_3d_rms_mm_xyz': [float(v) for v in m['rms_xyz_mm']],
             'residual_bias_mm_xyz': [float(v) for v in m['bias_mm']],
             'condition_number': float(m['cond']),
             'radar_range_scale': self.range_scale, 'radar_range_bias_m': self.range_bias,
