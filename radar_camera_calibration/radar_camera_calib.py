@@ -70,9 +70,14 @@ RADAR SIDE (inspired by the click-based v8 tool, improved)
   • GATING — range window, optional |doppler| window (the held-still reflector
     is ~0 doppler, so moving people are rejected), and — once an extrinsic
     exists — proximity to the camera-predicted apex.
-  • HIGHEST-SNR SELECTION — among the surviving points, take argmax(SNR). The
-    trihedral is engineered to be the strongest reflector, so this is the apex.
-    (No clustering: one bright, background-subtracted point is the target.)
+  • SELECTION (select_by) — among the surviving points, identify the reflector:
+      'snr'     : take argmax(SNR); the trihedral is the strongest reflector.
+      'cluster' : group the survivors (connected components at cluster_eps) and
+                  take the SNR-WEIGHTED CENTROID of the reflector blob (the blob
+                  holding the brightest return, or nearest the predicted apex).
+                  More robust than a lone argmax spike — averages the blob's
+                  returns down and rejects an isolated bright clutter point.
+      'nearest' : nearest the predicted apex / radar origin.
   • DOPPLER↔MOTION CONSISTENCY (moving / hand-held rig) — while you sweep, the
     reflector is rigidly tied to the board, so its radar radial velocity must
     equal d|range|/dt from the CAMERA (v_pred = (p_cam−t_ext)·ṗ_cam/|p_cam−t_ext|,
@@ -341,6 +346,39 @@ def project(pt_cam, K, D):
     return int(round(uv[0, 0, 0])), int(round(uv[0, 0, 1]))
 
 
+def cluster_points(xyz, eps, min_size):
+    """Group nearby radar points into clusters (single-linkage / connected
+    components at distance `eps`), keeping only clusters of at least `min_size`
+    points. No sklearn: the gated set is small, so an O(N²) union-find is ample
+    and deterministic. Returns a list of index arrays (one per cluster), largest
+    first. Used to identify the reflector as a compact bright BLOB rather than a
+    single (noisy) highest-SNR spike."""
+    xyz = np.asarray(xyz, float)
+    n = len(xyz)
+    if n == 0:
+        return []
+    parent = list(range(n))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]; a = parent[a]
+        return a
+
+    D = np.linalg.norm(xyz[:, None, :] - xyz[None, :, :], axis=2)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if D[i, j] <= eps:
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[ri] = rj
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    out = [np.array(g) for g in groups.values() if len(g) >= min_size]
+    out.sort(key=len, reverse=True)
+    return out
+
+
 # targets that make ROTATION (and, via the offset, translation) well-observed
 DIVERSITY_TARGETS = {'pitch': 40.0, 'roll': 30.0, 'yaw': 40.0,       # board orientation spread, deg
                      'az': 40.0, 'el': 15.0, 'range': 0.30}          # radar point spread, deg / deg / m
@@ -413,7 +451,11 @@ class RadarCameraCalib(Node):
         dp('radar_topic', '/points_all')
         dp('pc_field_x', 'x'); dp('pc_field_y', 'y'); dp('pc_field_z', 'z')
         dp('pc_field_snr', 'snr'); dp('pc_field_doppler', 'doppler')
-        dp('select_by', 'snr')          # 'snr' (recommended) | 'nearest'
+        dp('select_by', 'snr')          # 'snr' | 'nearest' | 'cluster' (blob centroid)
+        # 'cluster' selection: group the gated returns and take the SNR-weighted
+        # centroid of the reflector blob (robust to a single noisy SNR spike).
+        dp('cluster_eps', 0.15)         # m; points within this distance join one cluster
+        dp('min_cluster_size', 2)       # min points to accept a cluster (else fall back to SNR)
         dp('min_range', 0.3); dp('max_range', 20.0)
         dp('max_abs_doppler', -1.0)     # >0 → keep |doppler| below this (still rig ≈0); <=0 disables
         dp('min_abs_doppler', -1.0)     # >0 → keep |doppler| ABOVE this (MOVING reflector); <=0 disables
@@ -517,6 +559,7 @@ class RadarCameraCalib(Node):
         self.fx, self.fy, self.fz = g('pc_field_x'), g('pc_field_y'), g('pc_field_z')
         self.fsnr, self.fdop = g('pc_field_snr'), g('pc_field_doppler')
         self.select_by = g('select_by')
+        self.cluster_eps = g('cluster_eps'); self.min_cluster_size = int(g('min_cluster_size'))
         self.min_range = g('min_range'); self.max_range = g('max_range')
         self.max_abs_doppler = g('max_abs_doppler')
         self.min_abs_doppler = g('min_abs_doppler')
@@ -753,25 +796,58 @@ class RadarCameraCalib(Node):
             keepd = np.abs(sign * dg - v_pred) <= self.doppler_match_tol
             if keepd.any():
                 xg, sg, dg = xg[keepd], sg[keepd], dg[keepd]; dop_applied = True
-        if self.select_by == 'snr' and np.any(np.isfinite(sg)) and sg.max() > 0:
-            idx = int(np.argmax(sg))             # ← highest-SNR survivor = the trihedral
-        elif predicted is not None:
-            idx = int(np.argmin(np.linalg.norm(xg - predicted, axis=1)))
-        else:
-            idx = int(np.argmin(np.linalg.norm(xg, axis=1)))
-        if self.min_snr > 0 and sg[idx] < self.min_snr:
-            _diag(f"best snr {sg[idx]:.0f} < min_snr {self.min_snr:.0f}")
+        # Pick the reflector return → (point, snr, doppler).
+        #   'cluster' : group the survivors and take the SNR-weighted CENTROID of
+        #               the reflector blob (robust to a single noisy SNR spike).
+        #   'snr'     : the single highest-SNR survivor.
+        #   'nearest' : nearest the predicted apex, else nearest the radar origin.
+        sel = None
+        if self.select_by == 'cluster':
+            sel = self._pick_cluster(xg, sg, dg, predicted)   # None → fall through to snr
+        if sel is None:
+            if self.select_by != 'nearest' and np.any(np.isfinite(sg)) and sg.max() > 0:
+                idx = int(np.argmax(sg))         # highest-SNR survivor = the trihedral
+            elif predicted is not None:
+                idx = int(np.argmin(np.linalg.norm(xg - predicted, axis=1)))
+            else:
+                idx = int(np.argmin(np.linalg.norm(xg, axis=1)))
+            sel = (xg[idx], float(sg[idx]), float(dg[idx]))
+        p_sel, snr_sel, dop_sel = sel
+        if self.min_snr > 0 and snr_sel < self.min_snr:
+            _diag(f"best snr {snr_sel:.0f} < min_snr {self.min_snr:.0f}")
             return None, None, None, n_gated     # too weak → likely mis-associated, skip
         # auto-learn the Doppler sign convention from the chosen reflector point
         if (self.use_dop_consistency and self.doppler_sign == 0.0 and v_pred is not None
                 and abs(v_pred) >= self.min_motion_mps):
-            self._dop_sign_vote += float(dg[idx]) * v_pred
+            self._dop_sign_vote += float(dop_sel) * v_pred
         if self.use_dop_consistency and v_pred is not None:
             self.get_logger().info(
-                f"[dop] v_pred {v_pred:+.2f} m/s  sel doppler {float(dg[idx]):+.2f}  "
+                f"[dop] v_pred {v_pred:+.2f} m/s  sel doppler {dop_sel:+.2f}  "
                 f"tol {self.doppler_match_tol:.2f}  {'filtered' if dop_applied else 'off/fallback'}",
                 throttle_duration_sec=1.0)
-        return xg[idx], float(sg[idx]), float(dg[idx]), n_gated
+        return np.asarray(p_sel, float), float(snr_sel), float(dop_sel), n_gated
+
+    def _pick_cluster(self, xg, sg, dg, predicted):
+        """Cluster the gated survivors and return (centroid, snr, doppler) of the
+        reflector blob, or None if no cluster meets min_cluster_size (caller then
+        falls back to the SNR pick). Blob choice: nearest the camera-predicted
+        apex if we have an extrinsic/prior, else the cluster holding the brightest
+        return (the trihedral is the strongest reflector). The representative
+        point is the SNR-WEIGHTED CENTROID — averaging the blob's returns beats a
+        single argmax spike for angular noise."""
+        clusters = cluster_points(xg, self.cluster_eps, self.min_cluster_size)
+        if not clusters:
+            return None
+        if predicted is not None:
+            best = min(clusters, key=lambda c: float(np.linalg.norm(xg[c].mean(0) - predicted)))
+        else:
+            seed = int(np.argmax(sg)) if (np.any(np.isfinite(sg)) and sg.max() > 0) else 0
+            best = next((c for c in clusters if seed in set(c.tolist())), None)
+            if best is None:
+                best = max(clusters, key=lambda c: float(np.nanmax(sg[c])))
+        w = np.clip(np.nan_to_num(sg[best]), 1e-6, None); w = w / w.sum()
+        p = (xg[best] * w[:, None]).sum(0)
+        return p, float(np.nanmax(sg[best])), float(np.median(dg[best]))
 
     # ── camera: board pose → apex in camera frame ──
     def _apex_in_camera(self, gray):

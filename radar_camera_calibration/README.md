@@ -106,9 +106,17 @@ calibration tools — no depth topic is even required.
    window (the held-still reflector is ≈0 doppler, so walking people are
    rejected); and, once an extrinsic exists, proximity to the camera-predicted
    apex (`gate_radius`).
-3. **Highest-SNR selection** — among the survivors, take **argmax(SNR)**. The
-   trihedral is built to be the strongest reflector, so this *is* the apex. One
-   bright background-subtracted point — no clustering needed.
+3. **Reflector selection** (`select_by`) — identify the reflector among the
+   survivors:
+   - `snr` (default) — **argmax(SNR)**; the trihedral is the strongest reflector.
+   - `cluster` — group the survivors (connected components within `cluster_eps`,
+     min `min_cluster_size` points) and take the **SNR-weighted centroid** of the
+     reflector blob (the cluster holding the brightest return, or the one nearest
+     the predicted apex once an extrinsic/prior exists). More robust than a lone
+     argmax spike: it **averages the blob's returns down** (less angular noise)
+     and **rejects an isolated bright clutter point** that SNR-max would grab.
+     Falls back to `snr` if no cluster meets `min_cluster_size`.
+   - `nearest` — nearest the predicted apex / radar origin.
 4. **Doppler ↔ motion consistency** (`use_doppler_consistency`, for a *moving /
    hand-held* rig) — while you sweep, the reflector is rigidly tied to the board,
    so its radar radial velocity must equal the rate of change of the camera's
@@ -344,7 +352,9 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 |---|---|---|
 | `radar_topic` | `/points_all` | radar PointCloud2 |
 | `pc_field_x/y/z/snr/doppler` | `x/y/z/snr/doppler` | field names (missing ones tolerated) |
-| `select_by` | `snr` | `snr` (highest return) or `nearest` |
+| `select_by` | `snr` | `snr` (highest return), `cluster` (blob centroid), or `nearest` |
+| `cluster_eps` | `0.15` m | `select_by:=cluster`: points within this join one cluster |
+| `min_cluster_size` | `2` | `select_by:=cluster`: min points to accept a cluster (else fall back to SNR) |
 | `min_range`/`max_range` | `0.3`/`20` m | range gate |
 | `max_abs_doppler` | `-1` (off) | keep `|doppler| ≤` this — rejects moving clutter |
 | `gate_radius` | `1.0` m | proximity gate to predicted apex once solved |
