@@ -201,6 +201,24 @@ and they explain the "wrong feature / bad output" behaviour:
 
 ---
 
+## Script split + rotation-readiness HUD 🖥️
+
+- **Two profiles over one shared node** (`radar_camera_calib.py` unchanged as the
+  engine): `radar_camera_calib_static.py` (stillness-gated, **HUD on**) and
+  `radar_camera_calib_dynamic.py` (continuous + Doppler consistency + sync/speed
+  guards). Thin default-preset wrappers; every param still CLI-overridable. Add
+  both to `setup.py` `console_scripts`.
+- **Diversity HUD** (`show_diversity_hud`, `pose_diversity()`): six live bars —
+  board **PITCH/ROLL/YAW** spread (offset observability) and radar **AZ/EL/RANGE**
+  spread (extrinsic-rotation lever arm) — each green past its target
+  (`DIVERSITY_TARGETS`), plus the measured **rot 1σ** after a solve and a
+  **READY / KEEP MOVING** verdict. Directly targets the "good |t|, bad R" trap:
+  the bars tell you *which* motion (tilt vs translate, and in which axis) is
+  missing. Orientation math unit-tested offline (pitch/yaw/roll decode exactly
+  and in isolation); cv2/ROS rendering **not yet run on hardware**.
+
+---
+
 ## Recommended parameters (current best)
 
 ```

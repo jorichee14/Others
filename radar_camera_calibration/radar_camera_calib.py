@@ -341,10 +341,53 @@ def project(pt_cam, K, D):
     return int(round(uv[0, 0, 0])), int(round(uv[0, 0, 1]))
 
 
+# targets that make ROTATION (and, via the offset, translation) well-observed
+DIVERSITY_TARGETS = {'pitch': 40.0, 'roll': 30.0, 'yaw': 40.0,       # board orientation spread, deg
+                     'az': 40.0, 'el': 15.0, 'range': 0.30}          # radar point spread, deg / deg / m
+
+
+def pose_diversity(Rb_list, P_list):
+    """How diverse the collected STATIC poses are — the quantity that decides
+    whether rotation can be recovered accurately (good |t|, bad R is the classic
+    single-reflector failure). Two independent needs:
+
+      • BOARD ORIENTATION spread (pitch/roll/yaw, in the camera optical frame:
+        pitch=about X/right, yaw=about Y/down, roll=about Z/forward) — makes the
+        apex OFFSET observable (board tilt), which in turn tightens translation.
+      • RADAR POINT spread (azimuth/elevation/range) — the lever arm that makes
+        the EXTRINSIC ROTATION observable (rot error ≈ cross-range_noise / extent).
+
+    Returns {name: (value, target, ok)} for pitch/roll/yaw/az/el/range plus 'n'.
+    Robust near gimbal lock: orientation spread is measured as the rotvec spread
+    of each pose about the mean pose (small-angle roll/pitch/yaw of the board)."""
+    out = {'n': len(Rb_list)}
+    if len(Rb_list) >= 2:
+        Rs = Rot.from_matrix(np.asarray(Rb_list))
+        dv = np.degrees((Rs * Rs.mean().inv()).as_rotvec())          # (N,3): about cam X,Y,Z
+        span = dv.max(0) - dv.min(0)
+        for nm, i in (('pitch', 0), ('yaw', 1), ('roll', 2)):
+            tgt = DIVERSITY_TARGETS[nm]; v = float(span[i])
+            out[nm] = (v, tgt, v >= tgt)
+    else:
+        for nm in ('pitch', 'yaw', 'roll'):
+            out[nm] = (0.0, DIVERSITY_TARGETS[nm], False)
+    P = np.asarray(P_list, float)
+    if len(P) >= 2:
+        raz = np.array([cart_to_raz(p) for p in P])
+        for nm, i, scale in (('range', 0, 1.0), ('az', 1, np.degrees(1)), ('el', 2, np.degrees(1))):
+            tgt = DIVERSITY_TARGETS[nm]; v = float((raz[:, i].max() - raz[:, i].min()) * scale)
+            out[nm] = (v, tgt, v >= tgt)
+    else:
+        for nm in ('range', 'az', 'el'):
+            out[nm] = (0.0, DIVERSITY_TARGETS[nm], False)
+    return out
+
+
 class RadarCameraCalib(Node):
-    def __init__(self):
+    def __init__(self, default_overrides=None):
         super().__init__('radar_camera_calib')
-        dp = self.declare_parameter
+        self._defaults = dict(default_overrides or {})   # profile presets (static/dynamic scripts)
+        dp = lambda name, val: self.declare_parameter(name, self._defaults.get(name, val))
         # --- camera ---
         dp('image_topic', '/zed/zed_node/left/image_rect_color')
         dp('info_topic',  '/zed/zed_node/left/camera_info')
@@ -451,6 +494,10 @@ class RadarCameraCalib(Node):
         dp('debug_image', True)
         dp('debug_image_topic', '/radar_camera_calib/debug_image')
         dp('show_window', False)        # True → pop a native OpenCV window (needs a display)
+        # live diversity HUD: bars for board pitch/roll/yaw + radar az/el/range spread,
+        # green when each crosses the target that makes rotation (& translation)
+        # well-observed. On by default in the STATIC profile. See pose_diversity().
+        dp('show_diversity_hud', False)
         dp('radar_watchdog_s', 3.0)
 
         g = lambda n: self.get_parameter(n).value
@@ -513,6 +560,7 @@ class RadarCameraCalib(Node):
         self.publish_tf = bool(g('publish_tf'))
         self.want_debug = bool(g('debug_image'))
         self.show_window = bool(g('show_window'))
+        self.show_diversity_hud = bool(g('show_diversity_hud'))
         self.window_name = 'radar_camera_calib — apex (green=matched) | reflector overlay'
         self._last_dbg = None; self._win_ok = None
         self.watchdog_s = g('radar_watchdog_s')
@@ -526,6 +574,7 @@ class RadarCameraCalib(Node):
         self.bg_radar = None          # (M,3) pooled background points (raw radar frame)
         self.bg_accum = None          # accumulation buffer while pooling
         self.X = None; self.rms = None
+        self._rot_sig_deg = None       # per-axis rotation 1σ from the last solve (for the HUD)
         self.last_radar_stamp = 0.0
 
         self.create_subscription(CameraInfo, g('info_topic'), self._info, qos_profile_sensor_data)
@@ -953,6 +1002,7 @@ class RadarCameraCalib(Node):
         #   rot_z (roll)  ← spread ACROSS the image (LEFT↔RIGHT *and* UP↔DOWN)
         dsig = np.sqrt(np.clip(np.diag(cov), 0, None))
         rot_sig_deg = np.degrees(dsig[:3]); t_sig_mm = dsig[3:6] * 1000
+        self._rot_sig_deg = rot_sig_deg                # expose to the diversity HUD
         _rot_fix = {'rot_x': 'move UP↔DOWN + NEAR↔FAR', 'rot_y': 'move LEFT↔RIGHT + NEAR↔FAR',
                     'rot_z': 'spread poses ACROSS the image (LEFT↔RIGHT and UP↔DOWN)'}
         weak_rot = [nm for nm, s in zip(('rot_x', 'rot_y', 'rot_z'), dsig[:3]) if s > 0.3]
@@ -1050,7 +1100,7 @@ class RadarCameraCalib(Node):
 
     def _reset(self):
         self.captures.clear(); self.win.clear(); self.last_capture_cam = None
-        self.X = None; self.rms = None
+        self.X = None; self.rms = None; self._rot_sig_deg = None
         self.apex_board = self.apex_prior.copy()      # drop the refined offset
         self.get_logger().info("reset — captures cleared (background kept)")
 
@@ -1173,11 +1223,58 @@ class RadarCameraCalib(Node):
             cv2.putText(bgr, l1, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             cv2.putText(bgr, l2, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                         (0, 200, 255) if self.bg_radar is None else (0, 255, 0), 2)
+            if self.show_diversity_hud:
+                self._draw_diversity_hud(bgr)
             self._last_dbg = bgr
             if self.dbg_pub is not None:
                 self.dbg_pub.publish(self.bridge.cv2_to_imgmsg(bgr, 'bgr8'))
         except Exception as e:
             self.get_logger().warn(f"debug image: {e}", throttle_duration_sec=5.0)
+
+    def _draw_diversity_hud(self, bgr):
+        """Live 'is my pose set diverse enough for accurate ROTATION?' cue.
+        Six bars — board PITCH/ROLL/YAW spread (offset observability) and radar
+        AZ/EL/RANGE spread (extrinsic-rotation lever arm) — each turns green when
+        it crosses the target in DIVERSITY_TARGETS. Also shows the measured rot 1σ
+        from the last solve. Green verdict = rotation is observable; good |t| with
+        red bars is exactly the 'translation fine, rotation bad' trap."""
+        h, w = bgr.shape[:2]
+        div = pose_diversity([c['Rb'] for c in self.captures],
+                             [c['p_radar'] for c in self.captures])
+        rows = [('PITCH', 'pitch', 'deg'), ('ROLL', 'roll', 'deg'), ('YAW', 'yaw', 'deg'),
+                ('AZ', 'az', 'deg'), ('EL', 'el', 'deg'), ('RANGE', 'range', 'm')]
+        pw, rh = 250, 22
+        x0 = max(10, w - pw - 12); y0 = 78
+        panel_h = rh * (len(rows) + 2) + 18
+        ov = bgr.copy()
+        cv2.rectangle(ov, (x0 - 10, y0 - 26), (x0 + pw, y0 + panel_h), (0, 0, 0), -1)
+        cv2.addWeighted(ov, 0.45, bgr, 0.55, 0, bgr)
+        cv2.putText(bgr, f"POSE DIVERSITY  n={div['n']}", (x0, y0 - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        y = y0 + 12
+        all_ok = div['n'] >= max(3, self.min_points)
+        for label, key, unit in rows:
+            v, tgt, ok = div[key]
+            all_ok = all_ok and ok
+            frac = 0.0 if tgt <= 0 else min(1.0, max(0.0, v / tgt))
+            bx = x0 + 62; bw = pw - 132
+            col = (0, 200, 0) if ok else (0, 140, 255)
+            cv2.putText(bgr, label, (x0, y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
+            cv2.rectangle(bgr, (bx, y - 6), (bx + bw, y + 6), (70, 70, 70), -1)
+            cv2.rectangle(bgr, (bx, y - 6), (bx + int(bw * frac), y + 6), col, -1)
+            txt = f"{v:.0f}/{tgt:.0f}" if unit == 'deg' else f"{v:.2f}/{tgt:.2f}"
+            cv2.putText(bgr, txt, (bx + bw + 6, y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.42, col, 1)
+            y += rh
+        if self._rot_sig_deg is not None:
+            rs = self._rot_sig_deg; rmax = float(np.max(rs))
+            rc = (0, 200, 0) if rmax < 1.5 else ((0, 140, 255) if rmax < 4.0 else (0, 0, 255))
+            cv2.putText(bgr, f"rot 1sig {rs[0]:.1f}/{rs[1]:.1f}/{rs[2]:.1f} deg",
+                        (x0, y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.42, rc, 1)
+            all_ok = all_ok and rmax < 1.5
+            y += rh
+        verdict = "READY - rotation observable" if all_ok else "KEEP MOVING - tilt & spread more"
+        cv2.putText(bgr, verdict, (x0, y + 7), cv2.FONT_HERSHEY_SIMPLEX, 0.46,
+                    (0, 220, 0) if all_ok else (0, 140, 255), 1)
 
     def _gui(self):
         """Native OpenCV window (opt-in). Runs in the executor thread alongside
@@ -1197,8 +1294,8 @@ class RadarCameraCalib(Node):
                 f"'rqt_image_view {self.get_parameter('debug_image_topic').value}' instead.")
 
 
-def main():
-    rclpy.init(); node = RadarCameraCalib()
+def main(default_overrides=None):
+    rclpy.init(); node = RadarCameraCalib(default_overrides)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

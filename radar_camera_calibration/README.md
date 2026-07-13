@@ -210,12 +210,80 @@ If not, fix the offset (usually a sign). 30 seconds here saves the calibration.
 
 ---
 
+## Two scripts: static vs dynamic
+
+The calibration comes in two profiles over one shared implementation
+(`radar_camera_calib.py` — same solver, gating, validation, save/TF):
+
+| Script | For | Capture | Extras enabled |
+|---|---|---|---|
+| **`radar_camera_calib_static.py`** | rig held **still** at each pose (step-and-settle) — **most accurate** | `capture_mode:=auto` (stability-gated) | **diversity HUD** on |
+| **`radar_camera_calib_dynamic.py`** | rig you keep **moving** (continuous sweep) | `capture_mode:=continuous` | Doppler↔motion consistency, `max_sync_dt`, `max_capture_speed` |
+
+Each is a thin profile that just presets sensible defaults; every parameter is
+still overridable on the command line. Prefer **static** whenever you can pause —
+stopping removes the time-mismatch and tracker-lag errors that a moving rig
+suffers (see *Moving / hand-held rigs*). Use **dynamic** only if you truly can't
+stop. The old `radar_camera_calib.py` still runs both via `capture_mode`.
+
+> Package entry points (add to your `setup.py` `console_scripts`):
+> ```python
+> 'radar_camera_calib_static  = wicoms_utils.radar_camera_calib_static:main',
+> 'radar_camera_calib_dynamic = wicoms_utils.radar_camera_calib_dynamic:main',
+> ```
+
+### Diversity HUD — "is my pose set good enough for rotation?"
+
+A single reflector gives good **translation** but **bad rotation** unless the
+poses are diverse — the #1 static-calibration failure. The static script draws a
+live HUD (`show_diversity_hud:=true`) with six bars that go **green** when each
+crosses the target that makes rotation (and, via the offset, translation)
+well-observed:
+
+- **PITCH / ROLL / YAW** — spread of the **board orientation** (camera frame:
+  pitch=about X, yaw=about Y, roll=about Z). Board tilt is what makes the apex
+  **offset** observable. Targets: 40° / 30° / 40°.
+- **AZ / EL / RANGE** — spread of the **radar points**. This is the lever arm
+  that makes the **extrinsic rotation** observable (rotation error ≈
+  cross-range noise ÷ point-cloud extent). Targets: 40° / 15° / 0.30 m.
+
+When all bars are green, `n ≥ min_points`, and the measured **`rot 1σ`** (shown
+after a solve) is small, the HUD reads **READY — rotation observable**. In
+practice: **tilt** the board in pitch and yaw, **roll** it, *and* **move** the
+rig near↔far, left↔right, and up↔down. Watch the red bars fill.
+
+---
+
 ## Usage
 
 ```bash
 pip install -r requirements.txt        # numpy, scipy, opencv-contrib-python
 # plus ROS 2: rclpy, cv_bridge, sensor_msgs_py, message_filters, tf2_ros
 ```
+
+Static (recommended), with the diversity HUD:
+
+```bash
+python3 radar_camera_calib_static.py --ros-args \
+  -p image_topic:=/zed/zed_node/left/image_rect_color \
+  -p info_topic:=/zed/zed_node/left/camera_info \
+  -p radar_topic:=/points_all -p pc_field_snr:=snr \
+  -p squares_x:=9 -p squares_y:=7 -p square_len:=0.020 -p marker_len:=0.015 \
+  -p reflector_offset_x:=0.03 -p reflector_offset_y:=0.10 -p reflector_offset_z:=0.04 \
+  -p parent_frame:=zed_left_camera_optical_frame -p child_frame:=radar_link \
+  -p min_points:=8 -p show_window:=true
+```
+
+Dynamic (only if you can't stop moving):
+
+```bash
+python3 radar_camera_calib_dynamic.py --ros-args \
+  -p radar_topic:=/radar1/radar/points_all -p pc_field_snr:=intensity \
+  -p use_doppler_consistency:=true -p max_sync_dt:=0.03 -p max_capture_speed:=0.25 \
+  # ...same camera/board/offset/frame params as above...
+```
+
+Or the fully-explicit shared node:
 
 ```bash
 python3 radar_camera_calib.py --ros-args \
