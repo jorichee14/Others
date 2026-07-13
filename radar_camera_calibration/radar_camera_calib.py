@@ -334,103 +334,66 @@ def project(pt_cam, K, D):
     return int(round(uv[0, 0, 0])), int(round(uv[0, 0, 1]))
 
 
+# ─────────────── default parameters ───────────────
+# One place for every parameter default. The two entry scripts
+# (radar_camera_calib_static.py / _dynamic.py) pass a small `overrides` dict on
+# top of this; CLI  -p name:=value  still overrides everything. Types matter to
+# ROS 2 (int vs float), so keep 9 as int and 0.02 as float, etc.
+DEFAULTS = {
+    # camera
+    'image_topic': '/zed/zed_node/left/image_rect_color',
+    'info_topic': '/zed/zed_node/left/camera_info',
+    # board (ChArUco) — must match the printed board
+    'squares_x': 9, 'squares_y': 7, 'square_len': 0.020, 'marker_len': 0.015,
+    'dictionary': 'DICT_4X4_50', 'min_corners': 6, 'max_reproj_px': 1.5,
+    # reflector apex offset in BOARD frame (m) + its prior width
+    'reflector_offset_x': 0.10, 'reflector_offset_y': 0.23, 'reflector_offset_z': -0.05,
+    'solve_offset': True, 'offset_prior_sigma_m': 0.05,
+    # radar (IWR6843ISK 3DPC points_all: x,y,z,doppler,intensity)
+    'radar_topic': '/radar1/radar/points_all',
+    'pc_field_x': 'x', 'pc_field_y': 'y', 'pc_field_z': 'z',
+    'pc_field_snr': 'intensity', 'pc_field_doppler': 'doppler', 'select_by': 'snr',
+    'min_range': 0.5, 'max_range': 2.5,
+    'max_abs_doppler': -1.0,   # >0 keep |dop|<= (STILL reflector); <=0 off
+    'min_abs_doppler': -1.0,   # >0 keep |dop|>= (MOVING reflector); <=0 off
+    'gate_radius': 0.5, 'range_gate_margin_m': 0.5,
+    # background subtraction
+    'bg_accum_frames': 15, 'bg_match_dist': 0.2, 'require_background': False,
+    # radar range correction (ingest)
+    'radar_range_scale': 1.0, 'radar_range_bias_m': 0.0,
+    # radar measurement-noise model (drives ML weighting)
+    'sigma_range_m': 0.05, 'sigma_az_deg': 3.0, 'sigma_el_deg': 10.0,
+    'force_2d_radar': False, 'huber_f_scale': 1.5, 'reject_sigma': 4.0,
+    # extrinsic prior (radar-in-camera): ON, this rig's mounting
+    'use_extrinsic_prior': True,
+    'prior_t_xyz': [0.207, 0.016, 0.020], 'prior_rpy_deg': [-90.0, -90.0, 0.0],
+    'prior_t_sigma_m': 0.05, 'prior_rot_sigma_deg': 15.0,
+    # strict-capture gate
+    'min_snr': 100.0,
+    # capture / convergence
+    'capture_mode': 'continuous',    # 'continuous' | 'auto' | 'manual'
+    'stable_window': 12, 'stable_std': 0.01, 'stable_std_radar': 0.08,
+    'min_baseline': 0.10, 'min_points': 20, 'sync_slop': 0.08,
+    # validation thresholds / verdict
+    'val_pass_reproj_px': 200.0, 'val_pass_3d_mm': 150.0, 'val_pass_bias_mm': 50.0,
+    'measured_baseline_m': -1.0, 'baseline_tol_m': 0.03,
+    # frames / output / display
+    'parent_frame': 'zed_left_camera_optical_frame', 'child_frame': 'radar1_link',
+    'camera_name': 'zed_left', 'radar_name': 'radar1', 'output_path': '',
+    'publish_tf': True, 'debug_image': True,
+    'debug_image_topic': '/radar_camera_calib/debug_image',
+    'show_window': True, 'radar_watchdog_s': 3.0,
+}
+
+
 class RadarCameraCalib(Node):
-    def __init__(self):
+    def __init__(self, overrides=None):
         super().__init__('radar_camera_calib')
-        dp = self.declare_parameter
-        # --- camera ---
-        dp('image_topic', '/zed/zed_node/left/image_rect_color')
-        dp('info_topic',  '/zed/zed_node/left/camera_info')
-        # --- board (ChArUco) ---
-        dp('squares_x', 9); dp('squares_y', 7)
-        dp('square_len', 0.020); dp('marker_len', 0.015)
-        dp('dictionary', 'DICT_4X4_50')
-        dp('min_corners', 6); dp('max_reproj_px', 1.5)
-        # --- reflector apex offset in the BOARD frame (metres) ---
-        #   Best measured to ~cm; but the solver can also REFINE or fully
-        #   CALCULATE it (see solve_offset). These values seed / prior-anchor it.
-        #   Defaults = this rig's measured offset.
-        dp('reflector_offset_x', 0.10)
-        dp('reflector_offset_y', 0.23)
-        dp('reflector_offset_z', -0.05)
-        # jointly estimate the apex offset (MAP: free offset regularised toward
-        # the measured value). Never worse than fixing it; repairs a bad measure;
-        # can solve it from scratch given CLOSE-range, HIGH-TILT poses.
-        dp('solve_offset', True)
-        # prior width on the offset (m). Tight if you measured well; large/<=0 to
-        # let the data drive it. 0.05 lets it find the radar phase centre (which
-        # sits a few cm behind a large reflector's geometric apex).
-        dp('offset_prior_sigma_m', 0.05)
-        # --- radar (IWR6843ISK 3DPC /points_all: x,y,z,doppler,intensity) ---
-        dp('radar_topic', '/radar1/radar/points_all')
-        dp('pc_field_x', 'x'); dp('pc_field_y', 'y'); dp('pc_field_z', 'z')
-        dp('pc_field_snr', 'intensity'); dp('pc_field_doppler', 'doppler')
-        dp('select_by', 'snr')          # 'snr' (recommended) | 'nearest'
-        dp('min_range', 0.5); dp('max_range', 2.5)
-        dp('max_abs_doppler', -1.0)     # >0 → keep |doppler| below this (still rig ≈0); <=0 disables
-        dp('min_abs_doppler', -1.0)     # >0 → keep |doppler| ABOVE this (MOVING reflector); <=0 disables
-        dp('gate_radius', 0.5)          # m; once X exists, radar pt must be within this of predicted apex
-        # bootstrap gate BEFORE any extrinsic: keep radar pts whose range matches
-        # the camera's board distance |p_cam| within this margin, then take the
-        # highest SNR among them ("highest SNR around the board"). Rejects far
-        # clutter without needing a background snapshot. <=0 disables.
-        dp('range_gate_margin_m', 0.5)
-        # --- background subtraction ---
-        dp('bg_accum_frames', 15)       # radar frames pooled on ~/background
-        dp('bg_match_dist', 0.2)        # m; live pt is "new" if farther than this from all bg pts
-        dp('require_background', False) # if True, refuse to capture until background pooled
-        # --- radar range correction (applied at ingest, before everything) ---
-        dp('radar_range_scale', 1.0)    # multiply xyz (fixes proportional/units error)
-        dp('radar_range_bias_m', 0.0)   # subtract along radial dir (fixes constant offset)
-        # --- radar measurement noise (drives the ML solver's weighting) ---
-        #   range is precise, angle is not; cross-range error ≈ range·sigma_az.
-        #   Set from your radar's spec / resolution; relative sizes matter most.
-        dp('sigma_range_m', 0.05)
-        dp('sigma_az_deg', 3.0)
-        dp('sigma_el_deg', 10.0)        # elevation is the worst (IWR6843ISK ±20° FoV, ~2 el rows)
-        dp('force_2d_radar', False)     # True → ignore elevation entirely (2-D radar)
-        dp('huber_f_scale', 1.5)        # robust-loss knee, in sigma units
-        dp('reject_sigma', 4.0)         # drop a match whose residual exceeds this (sigma)
-        # --- extrinsic prior (MAP): pin poorly-observed DOFs to a known mounting.
-        #     Give a rough measured/CAD radar-in-camera pose; the solve is
-        #     regularised toward it AND initialised from it. Tight sigma = trust
-        #     the prior; loose = let the data move it. Disabled by default. ---
-        #   Defaults = this rig's mounting (radar ~21 cm to camera's right, same
-        #   facing but 180° rolled about boresight → rpy [-90,-90,0]). ON by
-        #   default: it holds the rotation in the correct basin.
-        dp('use_extrinsic_prior', True)
-        dp('prior_t_xyz', [0.207, 0.016, 0.020])   # radar position in camera frame (m)
-        dp('prior_rpy_deg', [-90.0, -90.0, 0.0])   # radar orientation in camera frame (xyz euler)
-        dp('prior_t_sigma_m', 0.05)                # translation prior width
-        dp('prior_rot_sigma_deg', 15.0)            # rotation prior width
-        # --- strict-capture gate: reject a capture whose reflector SNR is below
-        #     this (weak returns are the ones most likely mis-associated). 0=off ---
-        dp('min_snr', 100.0)
-        # --- capture / convergence ---
-        dp('capture_mode', 'continuous')  # 'continuous' (sweep, no stillness) | 'auto' | 'manual'
-        dp('stable_window', 12)
-        dp('stable_std', 0.01)          # m; CAMERA (board) jitter to call it "still"
-        dp('stable_std_radar', 0.08)    # m; RADAR jitter allowed (angular noise is cm-dm;
-                                        # window-averaging beats it down — don't set this tight)
-        dp('min_baseline', 0.10)        # m; min move between captures
-        dp('min_points', 20)
-        dp('sync_slop', 0.08)
-        # --- validation thresholds / verdict ---
-        dp('val_pass_reproj_px', 200.0)   # radar close-range reproj is large; judge by 3-D + overlay
-        dp('val_pass_3d_mm', 150.0)
-        dp('val_pass_bias_mm', 50.0)
-        dp('measured_baseline_m', -1.0) # >0 → compare |t| against tape measure
-        dp('baseline_tol_m', 0.03)
-        # --- frames / output ---
-        dp('parent_frame', 'zed_left_camera_optical_frame')
-        dp('child_frame',  'radar1_link')
-        dp('camera_name', 'zed_left'); dp('radar_name', 'radar1')
-        dp('output_path', '')
-        dp('publish_tf', True)
-        dp('debug_image', True)
-        dp('debug_image_topic', '/radar_camera_calib/debug_image')
-        dp('show_window', True)         # True → pop a native OpenCV window (needs a display)
-        dp('radar_watchdog_s', 3.0)
+        params = dict(DEFAULTS)
+        if overrides:
+            params.update(overrides)
+        for name, value in params.items():        # CLI -p still overrides these
+            self.declare_parameter(name, value)
 
         g = lambda n: self.get_parameter(n).value
         self.min_corners = int(g('min_corners')); self.max_reproj = g('max_reproj_px')
@@ -1095,8 +1058,8 @@ class RadarCameraCalib(Node):
                 f"'rqt_image_view {self.get_parameter('debug_image_topic').value}' instead.")
 
 
-def main():
-    rclpy.init(); node = RadarCameraCalib()
+def main(overrides=None):
+    rclpy.init(); node = RadarCameraCalib(overrides)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
