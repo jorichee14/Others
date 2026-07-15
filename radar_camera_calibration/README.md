@@ -432,6 +432,31 @@ bad correspondence poisoning the solve (on top of the built-in Huber +
 
 ---
 
+## Calibrated results — this rig (2026-07-15)
+
+Two IWR6843ISK radars calibrated to `zed_left_camera_optical_frame`; radar2 rolled
+~87° (orthogonal). Full records + offline cross-checks in
+[`sessions/`](sessions/): [radar1](sessions/2026-07-15_zed_radar1.md) ·
+[radar2](sessions/2026-07-15_zed_radar2.md) ·
+**[radar1-vs-radar2 comparison](sessions/two_radars.md)**.
+
+| TF (zed_left → radarN_link) | translation xyz (m) | quaternion xyzw |
+|---|---|---|
+| **radar1** | `+0.2218  −0.0067  −0.1721` | `−0.5345  +0.5853  −0.4196  −0.4424` |
+| **radar2** | `−0.0999  −0.0124  −0.0011` | `+0.7882  −0.0406  +0.6121  +0.0499` |
+
+**Independent offset cross-check (the key validation):** the corner-reflector
+apex offset is a property of the *rig*, so both radars must recover the same value.
+They agree to **8 mm (X)** and **34 mm (Y)** — both inside their combined 1σ — on
+the two well-observed in-plane axes (the board-normal Z differs by 157 mm because
+radar2's Z was weakly observed and its own solve flagged it). Two radars mounted
+87° apart, sharing only the board, landing on the same offset ⇒ both extrinsics
+are sound. Systematic bias is ~1 mm (radar2) and a few mm (radar1, except its
+weak-elevation vertical); the large per-detection RMS is random radar angular
+noise that averages out in the fusion/tracking below.
+
+---
+
 ## Fusing two radars to locate the reflector (`radar_fusion_reflector.py`)
 
 Once **both** radars are calibrated, this node fuses their detections to place

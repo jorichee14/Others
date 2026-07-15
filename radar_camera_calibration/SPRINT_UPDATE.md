@@ -4,10 +4,16 @@
 **ZED** camera, using a **ChArUco board + trihedral corner reflector** rig.
 **Tool:** `radar_camera_calib.py` (packaged as `wicoms_utils/radar_camera_calibration`).
 
-> Status: tool validated and hardened through several live sessions. Live
-> calibration now **captures cleanly** but has **not yet converged** to a
-> trustworthy extrinsic — blocked mainly by pose diversity (azimuth spread) and
-> hardware (small board, low camera resolution, large reflector).
+> Status: tool validated and hardened through several live sessions. **Both radars
+> now calibrated** to the ZED (2026-07-15): radar1 (31 poses) and radar2 (30 poses,
+> mounted orthogonal). The two independent solves **agree on the reflector apex
+> offset to 8 mm / 34 mm** in the well-observed axes — cross-validating both
+> extrinsics. Results + offline re-solves in [`sessions/`](sessions/) (see
+> [`two_radars.md`](sessions/two_radars.md)). A two-radar **fusion + tracking**
+> node ([`radar_fusion_reflector.py`](radar_fusion_reflector.py)) exploits the
+> orthogonal mount to locate the reflector at ≈`[53,69,29]` mm 1σ. Remaining
+> hardware limits (small board, 960×540 camera, weak radar elevation) still cap
+> per-detection RMS, but the systematic extrinsic accuracy is a few mm.
 
 ---
 
