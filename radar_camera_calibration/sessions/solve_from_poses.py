@@ -86,7 +86,7 @@ def main():
     # result section: node writes it under "result"; the hand-written record uses
     # "tool_result_31_captures". Translation key is "..._translation" (node) or
     # "..._translation_m" (hand-written).
-    tr = d.get("result") or d.get("tool_result_31_captures")
+    tr = d.get("result") or d.get("tool_result_31_captures") or d.get("result_offline_round1")
     ref_t = np.array(tr.get("T_cam_radar_translation") or tr["T_cam_radar_translation_m"], float)
     ref_R = Rot.from_quat(tr["T_cam_radar_quaternion_xyzw"]).as_matrix()
 
@@ -110,7 +110,9 @@ def main():
     # in-sample 3-D residual of the ML fit (inliers) vs the node's 297.8 mm RMS
     pred = (P @ Rm.T) + tm
     rms = float(np.sqrt(((pred - Q) ** 2).sum(1).mean())) * 1000
-    print(f"\nML in-sample 3-D RMS: {rms:.1f} mm   (node reported 297.8 mm)")
+    ref_rms = tr.get("in_sample_rms_mm")
+    print(f"\nML in-sample 3-D RMS: {rms:.1f} mm"
+          + (f"   (recorded {ref_rms:.1f} mm)" if ref_rms else ""))
     dR = Rot.from_matrix(ref_R.T @ Rm).magnitude() * 180 / np.pi
     dt = np.linalg.norm(tm - ref_t) * 1000
     verdict = "MATCH" if (dR < 5 and dt < 60) else "CHECK"
