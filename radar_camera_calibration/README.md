@@ -445,26 +445,42 @@ in elevation. We mounted **radar2 rolled ~90°** vs radar1, so their weak axes a
 
 Each detection becomes a 3-D point **plus an anisotropic covariance**
 (σ_range along the radial, `range·σ_az` / `range·σ_el` across it), rotated into
-the camera frame by that radar's calibrated extrinsic. A covariance-weighted
-(BLUE / information-filter) fusion then takes the **horizontal from radar1** and
-the **vertical from radar2** automatically:
+the camera frame by that radar's calibrated extrinsic.
+
+**A tracker, not a per-frame combine.** A memoryless per-frame BLUE is only as
+steady as the raw detections — which hop between multipath returns → a *jumpy*
+output. Instead the node runs a **constant-velocity Kalman filter** in the camera
+frame. Both radars update it **asynchronously** with their full 3-D covariance, so
+every axis is constrained by whichever radar sees it sharply **and** the estimate
+is smoothed over time (it takes the **horizontal from radar1** and the **vertical
+from radar2** — both, over time, not one component):
 
 ```
-p_i = R_i q_i + t_i                                   (radar i → camera frame)
-Σ_i = R_i · diag_local(σ_r², (r·σ_az)², (r·σ_el)²) · R_iᵀ
-Σ_f = (Σ1⁻¹ + Σ2⁻¹)⁻¹        p_f = Σ_f (Σ1⁻¹ p1 + Σ2⁻¹ p2)
+predict:  x⁻ = F x,   P⁻ = F P Fᵀ + Q(σ_a)
+update :  y = z_i − H x⁻,   S = H P⁻ Hᵀ + R_i,   K = P⁻ Hᵀ S⁻¹
+          x = x⁻ + K y,     P = (I − K H) P⁻
+R_i    = R_model_i (anisotropic, from the extrinsic) + Cov(recent innovations of i)
 ```
 
-For this rig at ~1.5 m the single-radar 1σ is ≈ `[90, 233, 51]` mm (radar1) and
-`[209, 83, 56]` mm (radar2); **fused** it drops to ≈ `[79, 75, 36]` mm — each
-axis constrained by whichever radar sees it sharply.
+**Adaptive covariance from recent errors.** Each radar's `R_i` is inflated by the
+sample covariance of its *recent innovations* (how far its detections have been
+landing from the track), capped at `adapt_max_scale × model`. A radar that is
+currently jumpy gets automatically trusted less. Every measurement is
+**Mahalanobis-gated** (`innov_gate_chi2`) so a clutter jump is rejected before it
+can move the estimate; selection itself is the SNR-weighted **centroid** of the
+blob within `select_radius_m` of the prediction, not the single brightest pixel.
 
-**Display**: radar1 (cyan) and radar2 (orange) each with a bar along its blind
-axis; the **fused** point (green cross) sits where the two error ellipsoids
-intersect. The fused 1σ per axis (mm) is printed next to it. Falls back to a
-single radar's point if only one has a fresh detection. Publishes the fused
-reflector on `/radar_fusion/reflector` (camera frame) and the annotated image on
-`debug_image_topic`.
+Simulated on this rig (static reflector @ 2 m, 20 Hz), vs the raw per-frame
+numbers: frame-to-frame **jitter drops 3.2×** (234 → 74 mm) and RMS error 43%
+(165 → 95 mm), with per-axis 1σ ≈ `[53, 69, 29]` mm. On a moving reflector
+(±0.4 m hand sweep) it holds ~88 mm RMS without lag.
+
+**Display**: radar1 (cyan) and radar2 (orange) show each radar's **raw** detection
+with a bar along its blind axis; the **tracked** point (green cross) is the smooth
+KF estimate with a short trail and its per-axis 1σ (mm) + speed. Coasts on
+prediction up to `coast_s` if both radars drop; hard-reinitialises after
+`reinit_gap_s`. Publishes the tracked reflector on `/radar_fusion/reflector`
+(camera frame) and the annotated image on `debug_image_topic`.
 
 The extrinsic defaults are already the solved values for this rig; override any
 with params.
@@ -481,11 +497,21 @@ python3 radar_fusion_reflector.py --ros-args \
 #   -p r1_t_xyz:="[...]" -p r1_quat_xyzw:="[...]" (same for r2), r{1,2}_range_scale
 ```
 
-Needs **both** radars streaming. `assoc_gate_m` guards the fusion — the two
-camera-frame points must agree within this distance or the node keeps them
-separate (a mismatch means one radar locked onto clutter). Tune
-`sigma_az_deg`/`sigma_el_deg` to change how much each axis trusts each radar;
-they should match the values used at calibration.
+Needs **both** radars streaming (works with one — it just tracks that radar's
+axes). Tuning knobs for the tracker:
+
+| param | default | effect |
+|---|---|---|
+| `process_accel` | `2.0` m/s² | KF process noise. ↓ = smoother/steadier but lags fast motion; ↑ = follows motion but jumpier |
+| `innov_gate_chi2` | `11.35` | Mahalanobis gate (3-DOF 99%). ↓ rejects more outliers |
+| `adapt_window` / `adapt_max_scale` | `12` / `4.0` | how many recent innovations set the adaptive R, and the cap on its inflation |
+| `select_radius_m` | `0.5` m | blob-centroid radius around the prediction (stabilises selection) |
+| `reinit_gap_s` / `coast_s` | `1.0` / `0.5` s | hard-reinit after this gap; keep drawing the tracked point this long after last update |
+| `sigma_az_deg` / `sigma_el_deg` | `3.0` / `8.0` | the model-floor angular noise (should match calibration) — sets each axis's baseline trust |
+
+If the tracked point feels **too sluggish** on a fast sweep, raise
+`process_accel`; if it's still **jumpy**, lower it (and/or lower
+`innov_gate_chi2`).
 
 ---
 
