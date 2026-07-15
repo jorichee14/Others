@@ -250,6 +250,7 @@ stop. The old `radar_camera_calib.py` still runs both via `capture_mode`.
 > ```python
 > 'radar_camera_calib_static  = wicoms_utils.radar_camera_calib_static:main',
 > 'radar_camera_calib_dynamic = wicoms_utils.radar_camera_calib_dynamic:main',
+> 'radar_fusion_reflector     = wicoms_utils.radar_fusion_reflector:main',
 > ```
 
 ### Diversity HUD — "is my pose set good enough for rotation?"
@@ -428,6 +429,65 @@ with clutter). Also tighten `stable_std_radar` and/or raise `stable_window` so
 only rock-steady poses are accepted. These are the cheapest defences against a
 bad correspondence poisoning the solve (on top of the built-in Huber +
 `reject_sigma` outlier rejection).
+
+---
+
+## Fusing two radars to locate the reflector (`radar_fusion_reflector.py`)
+
+Once **both** radars are calibrated, this node fuses their detections to place
+the corner reflector accurately and draws it on the ZED image. It exists because
+a single IWR6843 is **anisotropic**: precise in range, moderate in azimuth, poor
+in elevation. We mounted **radar2 rolled ~90°** vs radar1, so their weak axes are
+**perpendicular** in the camera frame:
+
+- **radar1** — sharp horizontal, soft vertical
+- **radar2** — sharp vertical, soft horizontal
+
+Each detection becomes a 3-D point **plus an anisotropic covariance**
+(σ_range along the radial, `range·σ_az` / `range·σ_el` across it), rotated into
+the camera frame by that radar's calibrated extrinsic. A covariance-weighted
+(BLUE / information-filter) fusion then takes the **horizontal from radar1** and
+the **vertical from radar2** automatically:
+
+```
+p_i = R_i q_i + t_i                                   (radar i → camera frame)
+Σ_i = R_i · diag_local(σ_r², (r·σ_az)², (r·σ_el)²) · R_iᵀ
+Σ_f = (Σ1⁻¹ + Σ2⁻¹)⁻¹        p_f = Σ_f (Σ1⁻¹ p1 + Σ2⁻¹ p2)
+```
+
+For this rig at ~1.5 m the single-radar 1σ is ≈ `[90, 233, 51]` mm (radar1) and
+`[209, 83, 56]` mm (radar2); **fused** it drops to ≈ `[79, 75, 36]` mm — each
+axis constrained by whichever radar sees it sharply.
+
+**Display**: radar1 (cyan) and radar2 (orange) each with a bar along its blind
+axis; the **fused** point (green cross) sits where the two error ellipsoids
+intersect. The fused 1σ per axis (mm) is printed next to it. Falls back to a
+single radar's point if only one has a fresh detection. Publishes the fused
+reflector on `/radar_fusion/reflector` (camera frame) and the annotated image on
+`debug_image_topic`.
+
+The extrinsic defaults are already the solved values for this rig; override any
+with params.
+
+```bash
+python3 radar_fusion_reflector.py --ros-args \
+  -p image_topic:=/zed/zed_node/left/image_rect_color \
+  -p info_topic:=/zed/zed_node/left/camera_info \
+  -p radar1_topic:=/radar1/radar/points_all \
+  -p radar2_topic:=/radar2/radar/points_all \
+  -p pc_field_snr:=intensity \
+  -p min_snr:=100 -p assoc_gate_m:=0.6 -p show_window:=true
+# override extrinsics if re-solved:
+#   -p r1_t_xyz:="[...]" -p r1_quat_xyzw:="[...]" (same for r2), r{1,2}_range_scale
+```
+
+Needs **both** radars streaming. `assoc_gate_m` guards the fusion — the two
+camera-frame points must agree within this distance or the node keeps them
+separate (a mismatch means one radar locked onto clutter). Tune
+`sigma_az_deg`/`sigma_el_deg` to change how much each axis trusts each radar;
+they should match the values used at calibration.
+
+---
 
 ## Coordinate conventions
 
