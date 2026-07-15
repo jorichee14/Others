@@ -331,6 +331,115 @@ Then:
 
 ---
 
+## Full run reference — every parameter
+
+Two ways to run each node: a **launch file** (recommended — typed, so the CLI
+YAML-boolean trap `-p pc_field_y:=y → true` can't happen) or an **explicit CLI
+command** listing every parameter. The launch files double as the parameter
+reference.
+
+### A. Calibration node — launch file (recommended)
+
+```bash
+ros2 launch wicoms_utils iwr6843isk.launch.py     # edit launch/iwr6843isk.launch.py for your rig
+```
+
+### B. Calibration node — full CLI (all parameters)
+
+```bash
+ros2 run wicoms_utils radar_camera_calibration --ros-args \
+  `# camera` \
+  -p image_topic:=/zed/zed_node/left/image_rect_color \
+  -p info_topic:=/zed/zed_node/left/camera_info \
+  `# board (edit to your printed ChArUco)` \
+  -p squares_x:=4 -p squares_y:=4 -p square_len:=0.12 -p marker_len:=0.09 \
+  -p dictionary:=DICT_4X4_50 -p min_corners:=4 -p max_reproj_px:=1.5 \
+  `# radar topic + fields` \
+  -p radar_topic:=/radar1/radar/points_all \
+  -p pc_field_x:=x -p pc_field_y:=y -p pc_field_z:=z \
+  -p pc_field_snr:=intensity -p pc_field_doppler:=doppler \
+  `# reflector selection` \
+  -p select_by:=cluster -p cluster_eps:=0.20 -p min_cluster_size:=1 \
+  -p cluster_apex_radius:=0.40 -p cluster_strict:=false \
+  `# range / doppler gating` \
+  -p min_range:=0.5 -p max_range:=2.5 -p range_gate_margin_m:=0.5 -p gate_radius:=0.5 \
+  -p max_abs_doppler:=-1.0 -p min_abs_doppler:=-1.0 \
+  -p use_doppler_consistency:=false -p doppler_match_tol:=0.30 \
+  -p doppler_sign:=auto -p min_motion_mps:=0.05 \
+  `# background subtraction` \
+  -p bg_accum_frames:=15 -p bg_match_dist:=0.2 -p require_background:=false \
+  `# range correction (per-radar; applied at ingest)` \
+  -p radar_range_scale:=1.0 -p radar_range_bias_m:=0.0 \
+  `# radar noise model` \
+  -p sigma_range_m:=0.05 -p sigma_az_deg:=3.0 -p sigma_el_deg:=8.0 -p force_2d_radar:=false \
+  `# robust solver` \
+  -p huber_f_scale:=1.5 -p reject_sigma:=4.0 -p reject_axis_sigma:=0.0 \
+  `# apex offset + offset prior` \
+  -p reflector_offset_x:=0.0 -p reflector_offset_y:=0.0 -p reflector_offset_z:=0.0 \
+  -p solve_offset:=true -p offset_prior_sigma_m:=0.05 \
+  `# extrinsic prior (opt-in)` \
+  -p use_extrinsic_prior:=false \
+  -p prior_t_xyz:="[0.0,0.0,0.0]" -p prior_rpy_deg:="[0.0,0.0,0.0]" \
+  -p prior_t_sigma_m:=0.05 -p prior_rot_sigma_deg:=10.0 \
+  `# capture / strictness` \
+  -p capture_mode:=auto -p stable_window:=12 -p stable_std:=0.02 -p stable_std_radar:=0.10 \
+  -p min_baseline:=0.15 -p min_points:=25 -p min_snr:=100.0 -p sync_slop:=0.06 \
+  -p max_sync_dt:=-1.0 -p max_capture_speed:=-1.0 \
+  `# validation thresholds` \
+  -p val_pass_reproj_px:=20.0 -p val_pass_3d_mm:=150.0 -p val_pass_bias_mm:=50.0 \
+  -p measured_baseline_m:=-1.0 -p baseline_tol_m:=0.03 \
+  `# frames / output / display` \
+  -p parent_frame:=zed_left_camera_optical_frame -p child_frame:=radar1_link \
+  -p camera_name:=zed_left -p radar_name:=radar1 -p output_path:="" \
+  -p publish_tf:=true -p debug_image:=true \
+  -p debug_image_topic:=/radar_camera_calib/debug_image \
+  -p show_window:=true -p show_diversity_hud:=true -p radar_watchdog_s:=3.0
+```
+
+> **Dynamic profile:** flip `-p capture_mode:=continuous -p use_doppler_consistency:=true
+> -p max_sync_dt:=0.03 -p max_capture_speed:=0.25`. **Multipath-ghost rejection:**
+> add `-p reject_axis_sigma:=3.5`. Every `*_poses.json` / `*_session.json` in
+> `sessions/` lists the exact params used for that run.
+
+### C. Fusion + tracking node — launch file
+
+```bash
+ros2 launch wicoms_utils radar_fusion.launch.py   # edit launch/radar_fusion.launch.py with YOUR extrinsics
+```
+
+### D. Fusion + tracking node — full CLI (all parameters)
+
+```bash
+ros2 run wicoms_utils radar_fusion_reflector --ros-args \
+  `# topics` \
+  -p image_topic:=/zed/zed_node/left/image_rect_color \
+  -p info_topic:=/zed/zed_node/left/camera_info \
+  -p radar1_topic:=/radar1/radar/points_all -p radar2_topic:=/radar2/radar/points_all \
+  -p pc_field_x:=x -p pc_field_y:=y -p pc_field_z:=z -p pc_field_snr:=intensity \
+  `# per-radar extrinsics T_cam_radar (replace with YOUR solved values)` \
+  -p r1_t_xyz:="[0.2218,-0.0067,-0.1721]" \
+  -p r1_quat_xyzw:="[-0.5345,0.5853,-0.4196,-0.4424]" \
+  -p r2_t_xyz:="[-0.0999,-0.0124,-0.0011]" \
+  -p r2_quat_xyzw:="[0.7882,-0.0406,0.6121,0.0499]" \
+  -p r1_range_scale:=1.039 -p r2_range_scale:=1.026 \
+  `# radar noise model (drives fusion weighting)` \
+  -p sigma_range_m:=0.05 -p sigma_az_deg:=3.0 -p sigma_el_deg:=8.0 \
+  `# reflector selection` \
+  -p min_range:=0.3 -p max_range:=6.0 -p min_snr:=100.0 -p select_radius_m:=0.5 \
+  `# maneuvering-target tracker` \
+  -p process_accel:=1.0 -p maneuver_gain:=3.0 -p maneuver_deadband:=0.15 \
+  -p innov_gate_chi2:=11.35 -p adapt_window:=12 -p adapt_max_scale:=4.0 \
+  -p reinit_gap_s:=1.0 -p coast_s:=0.5 -p trail_len:=60 -p trail_s:=3.0 \
+  `# output / display` \
+  -p publish_point:=true -p debug_image_topic:=/radar_fusion/debug_image -p show_window:=true
+```
+
+> The `` `# comment` `` lines are bash no-ops (command substitution of a comment) —
+> they group the flags and are safe to keep or delete. Inline-array params
+> (`prior_t_xyz`, `r1_t_xyz`, …) **must** be quoted as shown.
+
+---
+
 ## What "good" looks like
 
 Printed on every solve and checked against thresholds (radar angular noise is a
