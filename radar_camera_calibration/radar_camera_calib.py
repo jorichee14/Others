@@ -206,7 +206,7 @@ def robust_ml_calibrate(P_radar, board_R, board_t, apex0,
                         solve_offset=True, offset_prior_sigma=0.03,
                         R_prior=None, t_prior=None,
                         rot_prior_sigma=None, t_prior_sigma=None,
-                        huber=1.5, reject_sigma=4.0, max_iter=5):
+                        huber=1.5, reject_sigma=4.0, reject_axis_sigma=0.0, max_iter=5):
     """
     Maximum-likelihood extrinsic in the radar's MEASUREMENT space, optionally
     jointly estimating the reflector apex offset (board frame).
@@ -273,6 +273,22 @@ def robust_ml_calibrate(P_radar, board_R, board_t, apex0,
             s.append(np.linalg.norm(d) / np.sqrt(k))
         return np.array(s)
 
+    def per_point_axis_max(x, idx):
+        """Largest single-axis |normalized residual| per point. Catches a bad
+        match that spreads its error across two axes so its RMS (per_point_sigma)
+        stays under reject_sigma — e.g. a multipath ghost wrong in range AND
+        elevation but clean in azimuth."""
+        R, t, a = unpack(x)
+        s = []
+        for i in idx:
+            pr = R.T @ (_cam_apex(Rb[i], Tb[i], a) - t)
+            rp = cart_to_raz(pr); rm = cart_to_raz(P[i])
+            d = [abs(rm[0] - rp[0]) / sig_r, abs(_wrap(rm[1] - rp[1])) / sig_az]
+            if use_elevation:
+                d.append(abs(_wrap(rm[2] - rp[2])) / sig_el)
+            s.append(max(d))
+        return np.array(s)
+
     # init: prefer the extrinsic prior (robust when data is under-constrained),
     # else Cartesian Kabsch (apex fixed at a0)
     if ext_rot_prior and ext_t_prior:
@@ -289,6 +305,8 @@ def robust_ml_calibrate(P_radar, board_R, board_t, apex0,
         x = sol.x
         pn = per_point_sigma(x, allidx)
         new = pn < reject_sigma
+        if reject_axis_sigma and reject_axis_sigma > 0:      # opt-in per-axis cap
+            new &= per_point_axis_max(x, allidx) < reject_axis_sigma
         if new.sum() < max(4, int(0.5 * len(P))):
             keep_n = max(4, int(0.6 * len(P)))
             new = pn <= np.sort(pn)[keep_n - 1]
@@ -503,7 +521,8 @@ class RadarCameraCalib(Node):
         dp('sigma_el_deg', 5.0)         # elevation is usually the worst (few el antennas)
         dp('force_2d_radar', False)     # True → ignore elevation entirely (2-D radar)
         dp('huber_f_scale', 1.5)        # robust-loss knee, in sigma units
-        dp('reject_sigma', 4.0)         # drop a match whose residual exceeds this (sigma)
+        dp('reject_sigma', 4.0)         # drop a match whose RMS-across-axes residual exceeds this (sigma)
+        dp('reject_axis_sigma', 0.0)    # opt-in (0=off): also drop a match if ANY single axis exceeds this (sigma) — catches multipath ghosts that hide under the RMS gate
         # --- extrinsic prior (MAP): pin poorly-observed DOFs to a known mounting.
         #     Give a rough measured/CAD radar-in-camera pose; the solve is
         #     regularised toward it AND initialised from it. Tight sigma = trust
@@ -589,6 +608,7 @@ class RadarCameraCalib(Node):
         self.sig_az = np.radians(g('sigma_az_deg')); self.sig_el = np.radians(g('sigma_el_deg'))
         self.force_2d = bool(g('force_2d_radar'))
         self.huber = g('huber_f_scale'); self.reject_sigma = g('reject_sigma')
+        self.reject_axis_sigma = g('reject_axis_sigma')
         self.use_ext_prior = bool(g('use_extrinsic_prior'))
         self.prior_R = (Rot.from_euler('xyz', g('prior_rpy_deg'), degrees=True).as_matrix()
                         if self.use_ext_prior else None)
@@ -1064,7 +1084,8 @@ class RadarCameraCalib(Node):
                                 R_prior=self.prior_R, t_prior=self.prior_t,
                                 rot_prior_sigma=self.prior_rot_sigma,
                                 t_prior_sigma=self.prior_t_sigma,
-                                huber=self.huber, reject_sigma=self.reject_sigma)
+                                huber=self.huber, reject_sigma=self.reject_sigma,
+                                reject_axis_sigma=self.reject_axis_sigma)
         R, t = r['R'], r['t']; mask = r['inlier_mask']; cov = r['cov']
         self.apex_board = r['apex']                    # use refined offset downstream
         self.X = np.eye(4); self.X[:3, :3] = R; self.X[:3, 3] = t

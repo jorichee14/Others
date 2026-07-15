@@ -382,7 +382,8 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 | `sigma_az_deg` | `2.0` | radar azimuth noise — the dominant cross-range term |
 | `sigma_el_deg` | `5.0` | radar elevation noise (usually the worst) |
 | `force_2d_radar` | `false` | ignore elevation entirely; auto-detected otherwise |
-| `huber_f_scale` / `reject_sigma` | `1.5` / `4.0` | robust-loss knee / outlier cutoff (σ units) |
+| `huber_f_scale` / `reject_sigma` | `1.5` / `4.0` | robust-loss knee / outlier cutoff — the **RMS-across-axes** residual (σ units) |
+| `reject_axis_sigma` | `0` (off) | opt-in **per-axis** cutoff: also drop a match if *any single* axis (range/az/el) exceeds this σ. Catches a multipath ghost that's wrong in range **and** elevation but clean in azimuth, whose RMS therefore hides under `reject_sigma`. Try `3.5`. |
 | `capture_mode` | `auto` | `auto` or `manual` (`~/capture`) |
 | `stable_window`/`stable_std` | `12`/`0.01 m` | per-pose stability gate |
 | `min_baseline`/`min_points` | `0.15 m`/`6` | capture spacing / count |
