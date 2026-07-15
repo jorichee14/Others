@@ -106,9 +106,77 @@ calibration tools — no depth topic is even required.
    window (the held-still reflector is ≈0 doppler, so walking people are
    rejected); and, once an extrinsic exists, proximity to the camera-predicted
    apex (`gate_radius`).
-3. **Highest-SNR selection** — among the survivors, take **argmax(SNR)**. The
-   trihedral is built to be the strongest reflector, so this *is* the apex. One
-   bright background-subtracted point — no clustering needed.
+3. **Reflector selection** (`select_by`) — identify the reflector among the
+   survivors:
+   - `snr` (default) — **argmax(SNR)**; the trihedral is the strongest reflector.
+   - `cluster` — group the survivors (connected components within `cluster_eps`,
+     min `min_cluster_size` points) and take the **SNR-weighted centroid** of the
+     reflector blob (the cluster holding the brightest return, or the one nearest
+     the predicted apex once an extrinsic/prior exists). More robust than a lone
+     argmax spike: it **averages the blob's returns down** (less angular noise)
+     and **rejects an isolated bright clutter point** that SNR-max would grab.
+     Falls back to `snr` if no cluster meets `min_cluster_size`.
+   - `nearest` — nearest the predicted apex / radar origin.
+
+   **Cluster around the estimated apex.** Once the extrinsic (from a solve or an
+   extrinsic prior) predicts where the reflector should be, `cluster` mode
+   restricts to points within `cluster_apex_radius` of that prediction and takes
+   the cluster nearest it — so a *brighter* off-apex blob can't win. With
+   `cluster_strict:=true`, a capture with **no** cluster within that radius is
+   **rejected** (no SNR fall-back) — the strictest, cleanest gate for the
+   reflector once you have a decent prior.
+4. **Doppler ↔ motion consistency** (`use_doppler_consistency`, for a *moving /
+   hand-held* rig) — while you sweep, the reflector is rigidly tied to the board,
+   so its radar radial velocity must equal the rate of change of the camera's
+   range to the apex. Your hand, arm, and body also move, but at a *different*
+   radial velocity, so a static `|doppler|≈0` gate can't separate them — this
+   consistency check can. It keeps only survivors whose measured doppler matches
+   the camera-predicted `v_pred = (p_cam − t_ext)·ṗ_cam / |p_cam − t_ext|`
+   (rotation-free) within `doppler_match_tol`, then takes argmax(SNR); it falls
+   back to the full set if that would empty it, and the sign convention is
+   auto-learned. **This is the primary fix for "the dynamic mode picks the wrong
+   feature."** See *Moving / hand-held rigs* below.
+
+---
+
+## Moving / hand-held rigs (the "dynamic" mode)
+
+Sweeping a hand-held rig is the easy way to get pose diversity, but motion
+introduces three correspondence errors that a static capture never has:
+
+1. **Time mismatch** — the camera and radar are sampled at slightly different
+   instants; at hand speed `v` and sync gap `Δt`, `p_cam` and `p_radar` are
+   `v·Δt` apart (0.3 m/s × 60 ms ≈ 18 mm) even though they should be the *same*
+   point. Guard it with `max_sync_dt` (drops badly-aligned pairs) and by moving
+   slowly.
+2. **Tracker lag** — people-counting firmware smooths a moving target, so its
+   reported position lags the truth by the filter's time constant. This scales
+   with speed too; keep speed modest.
+3. **Feature ambiguity** — your hand/arm/body are strong, *moving* reflectors, so
+   `min_abs_doppler`/`max_abs_doppler` alone can't isolate the reflector.
+   `use_doppler_consistency` resolves this using the motion itself (above).
+
+**Two ways to run it, most-robust first:**
+
+- **Step-and-settle (recommended).** `capture_mode:=auto`; move, pause ~0.5 s,
+  let it capture during the settle, move again. You get wide diversity *and* zero
+  moving-correspondence error (errors 1–2 vanish when stationary). This is almost
+  always the most accurate hand-held option.
+- **Continuous sweep.** `capture_mode:=continuous` with
+  `use_doppler_consistency:=true`, `max_sync_dt:=0.03`, and
+  `max_capture_speed:=0.25` (skips captures while you move too fast). Turn motion
+  into your discriminator instead of fighting it.
+
+Extra params for these modes:
+
+| Param | Meaning |
+|---|---|
+| `use_doppler_consistency` | keep radar pts whose doppler matches the camera-predicted radial velocity |
+| `doppler_match_tol` (m/s) | match tolerance (default 0.30) |
+| `doppler_sign` | `auto` (learn) \| `1` \| `-1` — TI radial-velocity sign |
+| `min_motion_mps` | only apply the doppler gate above this apex speed |
+| `max_sync_dt` (s) | drop image/radar pairs whose stamps differ by more than this (`-1` off) |
+| `max_capture_speed` (m/s) | continuous mode: skip captures while moving faster than this (`-1` off) |
 
 ---
 
@@ -155,14 +223,62 @@ If not, fix the offset (usually a sign). 30 seconds here saves the calibration.
 - `<debug_image_topic>/compressed` — the **same overlay, JPEG-compressed**
   (`sensor_msgs/CompressedImage`, the `image_transport` convention). Subscribe to
   this one when the node runs **remotely** — it's a fraction of the raw
-  bandwidth. `rqt_image_view` auto-lists it (pick the `compressed` transport).
-  Tune `debug_jpeg_quality` (1–100) to trade sharpness for bandwidth; you can
-  **toggle it live**, no restart:
+  bandwidth. `rqt_image_view` and Foxglove auto-list it. Tune `debug_jpeg_quality`
+  (1–100) to trade sharpness for bandwidth, **live**, no restart:
   `ros2 param set /radar_camera_calib debug_jpeg_quality 20`. Set `debug_raw:=false`
-  to send *only* the compressed stream and drop the raw topic entirely.
+  to send *only* the compressed stream.
 - `extrinsic_<cam>__<radar>.yaml` / `.json` — `T_cam_radar`, its inverse, RMS,
   LOO-CV, per-axis bias, condition number, verdict, and a ready-to-run
   `static_transform_publisher` command.
+- `extrinsic_<cam>__<radar>_session.json` — full **reproducible session record**:
+  ISO timestamp, every parameter used, every capture (radar point + camera apex +
+  full board pose), and the solved result. Re-solve or audit it offline with
+  `sessions/solve_from_poses.py` (no ROS needed). Written on every solve/`~/save`.
+
+---
+
+## Two scripts: static vs dynamic
+
+The calibration comes in two profiles over one shared implementation
+(`radar_camera_calib.py` — same solver, gating, validation, save/TF):
+
+| Script | For | Capture | Extras enabled |
+|---|---|---|---|
+| **`radar_camera_calib_static.py`** | rig held **still** at each pose (step-and-settle) — **most accurate** | `capture_mode:=auto` (stability-gated) | **diversity HUD** on |
+| **`radar_camera_calib_dynamic.py`** | rig you keep **moving** (continuous sweep) | `capture_mode:=continuous` | Doppler↔motion consistency, `max_sync_dt`, `max_capture_speed` |
+
+Each is a thin profile that just presets sensible defaults; every parameter is
+still overridable on the command line. Prefer **static** whenever you can pause —
+stopping removes the time-mismatch and tracker-lag errors that a moving rig
+suffers (see *Moving / hand-held rigs*). Use **dynamic** only if you truly can't
+stop. The old `radar_camera_calib.py` still runs both via `capture_mode`.
+
+> Package entry points (add to your `setup.py` `console_scripts`):
+> ```python
+> 'radar_camera_calib_static  = wicoms_utils.radar_camera_calib_static:main',
+> 'radar_camera_calib_dynamic = wicoms_utils.radar_camera_calib_dynamic:main',
+> 'radar_fusion_reflector     = wicoms_utils.radar_fusion_reflector:main',
+> ```
+
+### Diversity HUD — "is my pose set good enough for rotation?"
+
+A single reflector gives good **translation** but **bad rotation** unless the
+poses are diverse — the #1 static-calibration failure. The static script draws a
+live HUD (`show_diversity_hud:=true`) with six bars that go **green** when each
+crosses the target that makes rotation (and, via the offset, translation)
+well-observed:
+
+- **PITCH / ROLL / YAW** — spread of the **board orientation** (camera frame:
+  pitch=about X, yaw=about Y, roll=about Z). Board tilt is what makes the apex
+  **offset** observable. Targets: 40° / 30° / 40°.
+- **AZ / EL / RANGE** — spread of the **radar points**. This is the lever arm
+  that makes the **extrinsic rotation** observable (rotation error ≈
+  cross-range noise ÷ point-cloud extent). Targets: 40° / 15° / 0.30 m.
+
+When all bars are green, `n ≥ min_points`, and the measured **`rot 1σ`** (shown
+after a solve) is small, the HUD reads **READY — rotation observable**. In
+practice: **tilt** the board in pitch and yaw, **roll** it, *and* **move** the
+rig near↔far, left↔right, and up↔down. Watch the red bars fill.
 
 ---
 
@@ -172,6 +288,30 @@ If not, fix the offset (usually a sign). 30 seconds here saves the calibration.
 pip install -r requirements.txt        # numpy, scipy, opencv-contrib-python
 # plus ROS 2: rclpy, cv_bridge, sensor_msgs_py, message_filters, tf2_ros
 ```
+
+Static (recommended), with the diversity HUD:
+
+```bash
+python3 radar_camera_calib_static.py --ros-args \
+  -p image_topic:=/zed/zed_node/left/image_rect_color \
+  -p info_topic:=/zed/zed_node/left/camera_info \
+  -p radar_topic:=/points_all -p pc_field_snr:=snr \
+  -p squares_x:=9 -p squares_y:=7 -p square_len:=0.020 -p marker_len:=0.015 \
+  -p reflector_offset_x:=0.03 -p reflector_offset_y:=0.10 -p reflector_offset_z:=0.04 \
+  -p parent_frame:=zed_left_camera_optical_frame -p child_frame:=radar_link \
+  -p min_points:=8 -p show_window:=true
+```
+
+Dynamic (only if you can't stop moving):
+
+```bash
+python3 radar_camera_calib_dynamic.py --ros-args \
+  -p radar_topic:=/radar1/radar/points_all -p pc_field_snr:=intensity \
+  -p use_doppler_consistency:=true -p max_sync_dt:=0.03 -p max_capture_speed:=0.25 \
+  # ...same camera/board/offset/frame params as above...
+```
+
+Or the fully-explicit shared node:
 
 ```bash
 python3 radar_camera_calib.py --ros-args \
@@ -211,6 +351,7 @@ chase sub-pixel numbers):
 | LOO-CV | ≈ residual σ | honest generalisation; ≫ residual ⇒ too few / clustered poses |
 | mean reproj | `val_pass_reproj_px` (20 px) | radar-predicted apex lands on the visual apex |
 | mean 3-D | `val_pass_3d_mm` (150 mm) | Cartesian agreement (cross-check) |
+| 3-D error RMS X/Y/Z | — | the 3-D error **split per axis** (camera frame: X/Y = cross-range, Z = range); a big X/Y ⇒ radar angular error, a big Z ⇒ a range error |
 | max per-axis bias | `val_pass_bias_mm` (50 mm) | **signed** residual — a non-zero mean on an axis is a systematic error RMS would hide |
 | \|t\| | `measured_baseline_m` ± `baseline_tol_m` | tape-measure the radar↔camera distance for metric ground truth |
 | condition number | < ~200 | pose spread; high ⇒ add diversity |
@@ -232,7 +373,11 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 |---|---|---|
 | `radar_topic` | `/points_all` | radar PointCloud2 |
 | `pc_field_x/y/z/snr/doppler` | `x/y/z/snr/doppler` | field names (missing ones tolerated) |
-| `select_by` | `snr` | `snr` (highest return) or `nearest` |
+| `select_by` | `snr` | `snr` (highest return), `cluster` (blob centroid), or `nearest` |
+| `cluster_eps` | `0.15` m | `select_by:=cluster`: points within this join one cluster |
+| `min_cluster_size` | `2` | `select_by:=cluster`: min points to accept a cluster (else fall back to SNR) |
+| `cluster_apex_radius` | `0.30` m | cluster only points within this radius of the **predicted apex** (once solved/prior) |
+| `cluster_strict` | `false` | `true` → reject the capture if no cluster forms within that radius of the predicted apex (no SNR fall-back) |
 | `min_range`/`max_range` | `0.3`/`20` m | range gate |
 | `max_abs_doppler` | `-1` (off) | keep `|doppler| ≤` this — rejects moving clutter |
 | `gate_radius` | `1.0` m | proximity gate to predicted apex once solved |
@@ -257,7 +402,7 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 | `prior_t_sigma_m` / `prior_rot_sigma_deg` | `0.05` / `10` | extrinsic prior widths (tight = trust it more) |
 | `min_snr` | `0` (off) | **strict capture**: reject a pick whose reflector SNR is below this |
 | `measured_baseline_m` | `-1` (off) | tape-measured `|t|` for the baseline check |
-| `rectify_image` | `false` | **undistort each frame in-node** from `camera_info` — use for a RAW/unrectified `image_topic`; detection & projection then run with the rectified K and zero D. Leave off if the feed is already rectified (D≈0). |
+| `rectify_image` | `false` | **undistort each frame in-node** from `camera_info` — use for a RAW/unrectified `image_topic`; detection & projection then run with the rectified K and zero D. Leave off if the feed is already rectified (D≈0, e.g. ZED `image_rect_color`). |
 | `rectify_alpha` | `0.0` | undistort crop: `0`=only valid pixels (zoomed), `1`=keep whole FoV (black borders) |
 | `debug_raw` | `true` | publish the raw `Image` debug topic (set `false` on a remote node to save bandwidth) |
 | `debug_compressed` | `true` | also publish `<debug_image_topic>/compressed` (JPEG) — subscribe to this from a remote |
@@ -296,6 +441,132 @@ with clutter). Also tighten `stable_std_radar` and/or raise `stable_window` so
 only rock-steady poses are accepted. These are the cheapest defences against a
 bad correspondence poisoning the solve (on top of the built-in Huber +
 `reject_sigma` outlier rejection).
+
+---
+
+## Calibrated results — this rig (2026-07-15)
+
+Two IWR6843ISK radars calibrated to `zed_left_camera_optical_frame`; radar2 rolled
+~87° (orthogonal). Full records + offline cross-checks in
+[`sessions/`](sessions/): [radar1](sessions/2026-07-15_zed_radar1.md) ·
+[radar2](sessions/2026-07-15_zed_radar2.md) ·
+**[radar1-vs-radar2 comparison](sessions/two_radars.md)**.
+
+| TF (zed_left → radarN_link) | translation xyz (m) | quaternion xyzw |
+|---|---|---|
+| **radar1** | `+0.2218  −0.0067  −0.1721` | `−0.5345  +0.5853  −0.4196  −0.4424` |
+| **radar2** | `−0.0999  −0.0124  −0.0011` | `+0.7882  −0.0406  +0.6121  +0.0499` |
+
+**Independent offset cross-check (the key validation):** the corner-reflector
+apex offset is a property of the *rig*, so both radars must recover the same value.
+They agree to **8 mm (X)** and **34 mm (Y)** — both inside their combined 1σ — on
+the two well-observed in-plane axes (the board-normal Z differs by 157 mm because
+radar2's Z was weakly observed and its own solve flagged it). Two radars mounted
+87° apart, sharing only the board, landing on the same offset ⇒ both extrinsics
+are sound. Systematic bias is ~1 mm (radar2) and a few mm (radar1, except its
+weak-elevation vertical); the large per-detection RMS is random radar angular
+noise that averages out in the fusion/tracking below.
+
+---
+
+## Fusing two radars to locate the reflector (`radar_fusion_reflector.py`)
+
+Once **both** radars are calibrated, this node fuses their detections to place
+the corner reflector accurately and draws it on the ZED image. It exists because
+a single IWR6843 is **anisotropic**: precise in range, moderate in azimuth, poor
+in elevation. We mounted **radar2 rolled ~90°** vs radar1, so their weak axes are
+**perpendicular** in the camera frame:
+
+- **radar1** — sharp horizontal, soft vertical
+- **radar2** — sharp vertical, soft horizontal
+
+Each detection becomes a 3-D point **plus an anisotropic covariance**
+(σ_range along the radial, `range·σ_az` / `range·σ_el` across it), rotated into
+the camera frame by that radar's calibrated extrinsic.
+
+**A tracker, not a per-frame combine.** A memoryless per-frame BLUE is only as
+steady as the raw detections — which hop between multipath returns → a *jumpy*
+output. Instead the node runs a **constant-velocity Kalman filter** (tuned for a
+**moving / dynamic** reflector) in the camera frame. Both radars update it
+**asynchronously** with their full 3-D covariance, so every axis is constrained by
+whichever radar sees it sharply **and** the estimate is smoothed over time (it
+takes the **horizontal from radar1** and the **vertical from radar2** — both, over
+time, not one component):
+
+```
+predict:  x⁻ = F x,   P⁻ = F P Fᵀ + Q(σ_a)
+update :  y = z_i − H x⁻,   S = H P⁻ Hᵀ + R_i,   K = P⁻ Hᵀ S⁻¹
+          x = x⁻ + K y,     P = (I − K H) P⁻
+R_i    = R_model_i (anisotropic, from the extrinsic) + Cov(recent innovations of i)
+```
+
+**Adaptive covariance from recent errors.** Each radar's `R_i` is inflated by the
+sample covariance of its *recent innovations* (how far its detections have been
+landing from the track), capped at `adapt_max_scale × model`. A radar that is
+currently jumpy gets automatically trusted less. Every measurement is
+**Mahalanobis-gated** (`innov_gate_chi2`) so a clutter jump is rejected before it
+can move the estimate; selection itself is the SNR-weighted **centroid** of the
+blob within `select_radius_m` of the prediction, not the single brightest pixel.
+
+**Tracing a dynamic reflector (maneuvering-target model).** A *fixed* process
+noise forces a bad tradeoff — small σ_a is smooth on a still reflector but **lags a
+fast one** (sim: 392 mm RMS on a ~2.7 m/s sweep); large σ_a follows the fast one
+but is jittery when still. So the process-noise accel std is **speed-adaptive**:
+
+```
+σ_a = process_accel + maneuver_gain · max(0, speed − maneuver_deadband)
+```
+
+Still → smooth (the deadband ignores measurement-noise-driven phantom velocity);
+moving → agile. In sim this stays within ~10 mm of the *best fixed filter in every
+regime* (static 86, slow 90, aggressive 119 mm RMS) instead of blowing up in one.
+Versus the raw per-frame detections it cuts frame-to-frame **jitter ~3×** (234 →
+~70 mm) and RMS error ~40%.
+
+**Display**: radar1 (cyan) and radar2 (orange) show each radar's **raw** detection
+with a bar along its blind axis; the **tracked** point (green cross) is the smooth
+KF estimate with a **fading motion trace** of its recent path, a **heading arrow**
+when it moves, and its per-axis 1σ (mm) + speed. Coasts on prediction up to
+`coast_s` if both radars drop; hard-reinitialises after `reinit_gap_s`. Publishes
+the tracked reflector on `/radar_fusion/reflector` (camera frame) and the
+annotated image on `debug_image_topic`.
+
+The extrinsic defaults are already the solved values for this rig; override any
+with params.
+
+```bash
+python3 radar_fusion_reflector.py --ros-args \
+  -p image_topic:=/zed/zed_node/left/image_rect_color \
+  -p info_topic:=/zed/zed_node/left/camera_info \
+  -p radar1_topic:=/radar1/radar/points_all \
+  -p radar2_topic:=/radar2/radar/points_all \
+  -p pc_field_snr:=intensity \
+  -p min_snr:=100 -p assoc_gate_m:=0.6 -p show_window:=true
+# override extrinsics if re-solved:
+#   -p r1_t_xyz:="[...]" -p r1_quat_xyzw:="[...]" (same for r2), r{1,2}_range_scale
+```
+
+Needs **both** radars streaming (works with one — it just tracks that radar's
+axes). Tuning knobs for the tracker:
+
+| param | default | effect |
+|---|---|---|
+| `process_accel` | `1.0` m/s² | **quiet-state** smoothing floor. ↓ = steadier when still |
+| `maneuver_gain` | `3.0` 1/s | how hard σ_a ramps with speed. ↑ = snappier follow of a fast reflector |
+| `maneuver_deadband` | `0.15` m/s | speed below this doesn't ramp σ_a — keeps a still reflector smooth |
+| `innov_gate_chi2` | `11.35` | Mahalanobis gate (3-DOF 99%). ↓ rejects more outliers |
+| `adapt_window` / `adapt_max_scale` | `12` / `4.0` | how many recent innovations set the adaptive R, and the cap on its inflation |
+| `select_radius_m` | `0.5` m | blob-centroid radius around the prediction (stabilises selection) |
+| `reinit_gap_s` / `coast_s` | `1.0` / `0.5` s | hard-reinit after this gap; keep drawing the tracked point this long after last update |
+| `trail_len` / `trail_s` | `60` / `3.0` s | length / max age of the motion trace |
+| `sigma_az_deg` / `sigma_el_deg` | `3.0` / `8.0` | the model-floor angular noise (should match calibration) — sets each axis's baseline trust |
+
+Because σ_a is speed-adaptive you rarely need to touch it, but: if the tracked
+point **lags** a fast sweep, raise `maneuver_gain` (or lower `maneuver_deadband`);
+if it's **jumpy** when the reflector is still, lower `process_accel` (or raise
+`maneuver_deadband`).
+
+---
 
 ## Coordinate conventions
 

@@ -70,9 +70,21 @@ RADAR SIDE (inspired by the click-based v8 tool, improved)
   • GATING — range window, optional |doppler| window (the held-still reflector
     is ~0 doppler, so moving people are rejected), and — once an extrinsic
     exists — proximity to the camera-predicted apex.
-  • HIGHEST-SNR SELECTION — among the surviving points, take argmax(SNR). The
-    trihedral is engineered to be the strongest reflector, so this is the apex.
-    (No clustering: one bright, background-subtracted point is the target.)
+  • SELECTION (select_by) — among the surviving points, identify the reflector:
+      'snr'     : take argmax(SNR); the trihedral is the strongest reflector.
+      'cluster' : group the survivors (connected components at cluster_eps) and
+                  take the SNR-WEIGHTED CENTROID of the reflector blob (the blob
+                  holding the brightest return, or nearest the predicted apex).
+                  More robust than a lone argmax spike — averages the blob's
+                  returns down and rejects an isolated bright clutter point.
+      'nearest' : nearest the predicted apex / radar origin.
+  • DOPPLER↔MOTION CONSISTENCY (moving / hand-held rig) — while you sweep, the
+    reflector is rigidly tied to the board, so its radar radial velocity must
+    equal d|range|/dt from the CAMERA (v_pred = (p_cam−t_ext)·ṗ_cam/|p_cam−t_ext|,
+    rotation-free). Hand/arm/body move at a DIFFERENT radial rate, so this
+    separates the reflector from moving clutter where a static |doppler| gate
+    cannot. Keeps only doppler-matching survivors, then argmax(SNR), with a
+    fallback + auto-learned sign (use_doppler_consistency).
 
 VALIDATION (carried over from v8)
 ─────────────────────────────────
@@ -106,6 +118,7 @@ Control (std_msgs/Empty topics)
 Deps:  numpy scipy opencv-contrib-python  +  ROS2 rclpy cv_bridge sensor_msgs_py
 """
 import json
+from datetime import datetime, timezone
 import numpy as np
 from scipy.spatial.transform import Rotation as Rot
 from scipy.optimize import least_squares
@@ -334,78 +347,222 @@ def project(pt_cam, K, D):
     return int(round(uv[0, 0, 0])), int(round(uv[0, 0, 1]))
 
 
-# ─────────────── default parameters ───────────────
-# One place for every parameter default. The two entry scripts
-# (radar_camera_calib_static.py / _dynamic.py) pass a small `overrides` dict on
-# top of this; CLI  -p name:=value  still overrides everything. Types matter to
-# ROS 2 (int vs float), so keep 9 as int and 0.02 as float, etc.
-DEFAULTS = {
-    # camera
-    'image_topic': '/zed/zed_node/left/image_rect_color',
-    'info_topic': '/zed/zed_node/left/camera_info',
-    # in-node rectification — for a RAW/unrectified image_topic. Undistorts each
-    # frame from camera_info (K,D), then detects & projects with the rectified K
-    # and ZERO distortion (no projectPoints overflow, cleaner ArUco). Leave off
-    # if image_topic is already rectified (D≈0). alpha 0=crop to valid pixels,
-    # 1=keep all (black borders).
-    'rectify_image': False, 'rectify_alpha': 0.0,
-    # board (ChArUco) — must match the printed board
-    'squares_x': 9, 'squares_y': 7, 'square_len': 0.020, 'marker_len': 0.015,
-    'dictionary': 'DICT_4X4_50', 'min_corners': 6, 'max_reproj_px': 1.5,
-    # reflector apex offset in BOARD frame (m) + its prior width
-    'reflector_offset_x': 0.10, 'reflector_offset_y': 0.23, 'reflector_offset_z': -0.05,
-    'solve_offset': True, 'offset_prior_sigma_m': 0.05,
-    # radar (IWR6843ISK 3DPC points_all: x,y,z,doppler,intensity)
-    'radar_topic': '/radar1/radar/points_all',
-    'pc_field_x': 'x', 'pc_field_y': 'y', 'pc_field_z': 'z',
-    'pc_field_snr': 'intensity', 'pc_field_doppler': 'doppler', 'select_by': 'snr',
-    'min_range': 0.5, 'max_range': 2.5,
-    'max_abs_doppler': -1.0,   # >0 keep |dop|<= (STILL reflector); <=0 off
-    'min_abs_doppler': -1.0,   # >0 keep |dop|>= (MOVING reflector); <=0 off
-    'gate_radius': 0.5, 'range_gate_margin_m': 0.5,
-    # background subtraction
-    'bg_accum_frames': 15, 'bg_match_dist': 0.2, 'require_background': False,
-    # radar range correction (ingest)
-    'radar_range_scale': 1.0, 'radar_range_bias_m': 0.0,
-    # radar measurement-noise model (drives ML weighting)
-    'sigma_range_m': 0.05, 'sigma_az_deg': 3.0, 'sigma_el_deg': 10.0,
-    'force_2d_radar': False, 'huber_f_scale': 1.5, 'reject_sigma': 4.0,
-    # extrinsic prior (radar-in-camera): ON, this rig's mounting
-    'use_extrinsic_prior': True,
-    'prior_t_xyz': [0.207, 0.016, 0.020], 'prior_rpy_deg': [-90.0, -90.0, 0.0],
-    'prior_t_sigma_m': 0.05, 'prior_rot_sigma_deg': 15.0,
-    # strict-capture gate
-    'min_snr': 100.0,
-    # capture / convergence
-    'capture_mode': 'continuous',    # 'continuous' | 'auto' | 'manual'
-    'stable_window': 12, 'stable_std': 0.01, 'stable_std_radar': 0.08,
-    'min_baseline': 0.10, 'min_points': 20, 'sync_slop': 0.08,
-    # validation thresholds / verdict
-    'val_pass_reproj_px': 200.0, 'val_pass_3d_mm': 150.0, 'val_pass_bias_mm': 50.0,
-    'measured_baseline_m': -1.0, 'baseline_tol_m': 0.03,
-    # frames / output / display
-    'parent_frame': 'zed_left_camera_optical_frame', 'child_frame': 'radar1_link',
-    'camera_name': 'zed_left', 'radar_name': 'radar1', 'output_path': '',
-    'publish_tf': True, 'debug_image': True,
-    'debug_image_topic': '/radar_camera_calib/debug_image',
-    # Remote monitoring: raw Image is bandwidth-heavy over the network. Also
-    # publish a JPEG-compressed frame on '<debug_image_topic>/compressed' (the
-    # image_transport / rqt_image_view convention). Drop debug_raw on a remote
-    # node to send ONLY the compressed stream; toggle debug_jpeg_quality live
-    # with `ros2 param set` to trade sharpness for bandwidth.
-    'debug_raw': True, 'debug_compressed': True, 'debug_jpeg_quality': 40,
-    'show_window': True, 'radar_watchdog_s': 3.0,
-}
+def cluster_points(xyz, eps, min_size):
+    """Group nearby radar points into clusters (single-linkage / connected
+    components at distance `eps`), keeping only clusters of at least `min_size`
+    points. No sklearn: the gated set is small, so an O(N²) union-find is ample
+    and deterministic. Returns a list of index arrays (one per cluster), largest
+    first. Used to identify the reflector as a compact bright BLOB rather than a
+    single (noisy) highest-SNR spike."""
+    xyz = np.asarray(xyz, float)
+    n = len(xyz)
+    if n == 0:
+        return []
+    parent = list(range(n))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]; a = parent[a]
+        return a
+
+    D = np.linalg.norm(xyz[:, None, :] - xyz[None, :, :], axis=2)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if D[i, j] <= eps:
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[ri] = rj
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    out = [np.array(g) for g in groups.values() if len(g) >= min_size]
+    out.sort(key=len, reverse=True)
+    return out
+
+
+# targets that make ROTATION (and, via the offset, translation) well-observed
+DIVERSITY_TARGETS = {'pitch': 40.0, 'roll': 30.0, 'yaw': 40.0,       # board orientation spread, deg
+                     'az': 40.0, 'el': 15.0, 'range': 0.30}          # radar point spread, deg / deg / m
+
+
+def pose_diversity(Rb_list, P_list):
+    """How diverse the collected STATIC poses are — the quantity that decides
+    whether rotation can be recovered accurately (good |t|, bad R is the classic
+    single-reflector failure). Two independent needs:
+
+      • BOARD ORIENTATION spread (pitch/roll/yaw, in the camera optical frame:
+        pitch=about X/right, yaw=about Y/down, roll=about Z/forward) — makes the
+        apex OFFSET observable (board tilt), which in turn tightens translation.
+      • RADAR POINT spread (azimuth/elevation/range) — the lever arm that makes
+        the EXTRINSIC ROTATION observable (rot error ≈ cross-range_noise / extent).
+
+    Returns {name: (value, target, ok)} for pitch/roll/yaw/az/el/range plus 'n'.
+    Robust near gimbal lock: orientation spread is measured as the rotvec spread
+    of each pose about the mean pose (small-angle roll/pitch/yaw of the board)."""
+    out = {'n': len(Rb_list)}
+    if len(Rb_list) >= 2:
+        Rs = Rot.from_matrix(np.asarray(Rb_list))
+        dv = np.degrees((Rs * Rs.mean().inv()).as_rotvec())          # (N,3): about cam X,Y,Z
+        span = dv.max(0) - dv.min(0)
+        for nm, i in (('pitch', 0), ('yaw', 1), ('roll', 2)):
+            tgt = DIVERSITY_TARGETS[nm]; v = float(span[i])
+            out[nm] = (v, tgt, v >= tgt)
+    else:
+        for nm in ('pitch', 'yaw', 'roll'):
+            out[nm] = (0.0, DIVERSITY_TARGETS[nm], False)
+    P = np.asarray(P_list, float)
+    if len(P) >= 2:
+        raz = np.array([cart_to_raz(p) for p in P])
+        for nm, i, scale in (('range', 0, 1.0), ('az', 1, np.degrees(1)), ('el', 2, np.degrees(1))):
+            tgt = DIVERSITY_TARGETS[nm]; v = float((raz[:, i].max() - raz[:, i].min()) * scale)
+            out[nm] = (v, tgt, v >= tgt)
+    else:
+        for nm in ('range', 'az', 'el'):
+            out[nm] = (0.0, DIVERSITY_TARGETS[nm], False)
+    return out
 
 
 class RadarCameraCalib(Node):
-    def __init__(self, overrides=None):
+    def __init__(self, default_overrides=None):
         super().__init__('radar_camera_calib')
-        params = dict(DEFAULTS)
-        if overrides:
-            params.update(overrides)
-        for name, value in params.items():        # CLI -p still overrides these
-            self.declare_parameter(name, value)
+        self._defaults = dict(default_overrides or {})   # profile presets (static/dynamic scripts)
+        self._param_names = []                            # recorded for the session dump
+
+        def dp(name, val):
+            self._param_names.append(name)
+            return self.declare_parameter(name, self._defaults.get(name, val))
+        # --- camera ---
+        dp('image_topic', '/zed/zed_node/left/image_rect_color')
+        dp('info_topic',  '/zed/zed_node/left/camera_info')
+        # in-node rectification — for a RAW/unrectified image_topic. Undistorts
+        # each frame from camera_info (K,D), then detects & projects with the
+        # rectified K and ZERO distortion (no projectPoints overflow, cleaner
+        # ArUco). Leave off if the feed is already rectified (D≈0, e.g. the ZED
+        # image_rect_color). alpha 0=crop to valid pixels, 1=keep whole FoV.
+        dp('rectify_image', False); dp('rectify_alpha', 0.0)
+        # --- board (ChArUco) ---
+        dp('squares_x', 9); dp('squares_y', 7)
+        dp('square_len', 0.020); dp('marker_len', 0.015)
+        dp('dictionary', 'DICT_4X4_50')
+        dp('min_corners', 8); dp('max_reproj_px', 1.5)
+        # --- reflector apex offset in the BOARD frame (metres) ---
+        #   Best measured to ~cm; but the solver can also REFINE or fully
+        #   CALCULATE it (see solve_offset). These values seed / prior-anchor it.
+        dp('reflector_offset_x', 0.0)
+        dp('reflector_offset_y', 0.0)
+        dp('reflector_offset_z', 0.0)
+        # jointly estimate the apex offset (MAP: free offset regularised toward
+        # the measured value). Never worse than fixing it; repairs a bad measure;
+        # can solve it from scratch given CLOSE-range, HIGH-TILT poses.
+        dp('solve_offset', True)
+        # prior width on the offset (m). Tight if you measured well; large/<=0 to
+        # let the data drive it (set ~0.10 if you did NOT measure the offset).
+        dp('offset_prior_sigma_m', 0.03)
+        # --- radar (/points_all: x,y,z,snr,doppler) ---
+        dp('radar_topic', '/points_all')
+        dp('pc_field_x', 'x'); dp('pc_field_y', 'y'); dp('pc_field_z', 'z')
+        dp('pc_field_snr', 'snr'); dp('pc_field_doppler', 'doppler')
+        dp('select_by', 'snr')          # 'snr' | 'nearest' | 'cluster' (blob centroid)
+        # 'cluster' selection: group the gated returns and take the SNR-weighted
+        # centroid of the reflector blob (robust to a single noisy SNR spike).
+        dp('cluster_eps', 0.15)         # m; points within this distance join one cluster
+        dp('min_cluster_size', 2)       # min points to accept a cluster (else fall back to SNR)
+        # cluster AROUND the estimated apex: once an extrinsic (solve) or extrinsic
+        # prior predicts the apex, cluster only points within this radius of it.
+        dp('cluster_apex_radius', 0.30) # m; window around the predicted apex to cluster in
+        dp('cluster_strict', False)     # True → if NO cluster forms within that radius of the
+                                        # predicted apex, REJECT the capture (no fall back to SNR)
+        dp('min_range', 0.3); dp('max_range', 20.0)
+        dp('max_abs_doppler', -1.0)     # >0 → keep |doppler| below this (still rig ≈0); <=0 disables
+        dp('min_abs_doppler', -1.0)     # >0 → keep |doppler| ABOVE this (MOVING reflector); <=0 disables
+        # --- Doppler ↔ motion consistency (for a MOVING / hand-held rig) ---
+        #   While you sweep, the reflector is RIGIDLY tied to the board, so its
+        #   radar radial velocity MUST equal the rate of change of the camera's
+        #   range to the apex. Your hand / arm / body move too, but at a DIFFERENT
+        #   radial velocity, so this separates the reflector from moving clutter
+        #   far better than a static |doppler|≈0 gate ever can. Rotation-free:
+        #       v_pred = (p_cam − t_ext) · ṗ_cam / |p_cam − t_ext|
+        #   (needs only the small baseline t_ext, and ≈ d|p_cam|/dt even without it).
+        #   This is the primary lever for "identifying the correct feature" while moving.
+        dp('use_doppler_consistency', False)
+        dp('doppler_match_tol', 0.30)   # m/s; keep radar pts whose doppler matches v_pred within this
+        dp('doppler_sign', 'auto')      # 'auto' | '1' | '-1' — TI radial-velocity sign convention
+        dp('min_motion_mps', 0.05)      # only apply the doppler gate when |ṗ_cam| exceeds this
+        dp('gate_radius', 1.0)          # m; once X exists, radar pt must be within this of predicted apex
+        # bootstrap gate BEFORE any extrinsic: keep radar pts whose range matches
+        # the camera's board distance |p_cam| within this margin, then take the
+        # highest SNR among them ("highest SNR around the board"). Rejects far
+        # clutter without needing a background snapshot. <=0 disables.
+        dp('range_gate_margin_m', 1.0)
+        # --- background subtraction ---
+        dp('bg_accum_frames', 15)       # radar frames pooled on ~/background
+        dp('bg_match_dist', 0.2)        # m; live pt is "new" if farther than this from all bg pts
+        dp('require_background', False) # if True, refuse to capture until background pooled
+        # --- radar range correction (applied at ingest, before everything) ---
+        dp('radar_range_scale', 1.0)    # multiply xyz (fixes proportional/units error)
+        dp('radar_range_bias_m', 0.0)   # subtract along radial dir (fixes constant offset)
+        # --- radar measurement noise (drives the ML solver's weighting) ---
+        #   range is precise, angle is not; cross-range error ≈ range·sigma_az.
+        #   Set from your radar's spec / resolution; relative sizes matter most.
+        dp('sigma_range_m', 0.05)
+        dp('sigma_az_deg', 2.0)
+        dp('sigma_el_deg', 5.0)         # elevation is usually the worst (few el antennas)
+        dp('force_2d_radar', False)     # True → ignore elevation entirely (2-D radar)
+        dp('huber_f_scale', 1.5)        # robust-loss knee, in sigma units
+        dp('reject_sigma', 4.0)         # drop a match whose residual exceeds this (sigma)
+        # --- extrinsic prior (MAP): pin poorly-observed DOFs to a known mounting.
+        #     Give a rough measured/CAD radar-in-camera pose; the solve is
+        #     regularised toward it AND initialised from it. Tight sigma = trust
+        #     the prior; loose = let the data move it. Disabled by default. ---
+        dp('use_extrinsic_prior', False)
+        dp('prior_t_xyz', [0.0, 0.0, 0.0])       # radar position in camera frame (m)
+        dp('prior_rpy_deg', [0.0, 0.0, 0.0])     # radar orientation in camera frame (xyz euler)
+        dp('prior_t_sigma_m', 0.05)              # translation prior width
+        dp('prior_rot_sigma_deg', 10.0)          # rotation prior width
+        # --- strict-capture gate: reject a capture whose reflector SNR is below
+        #     this (weak returns are the ones most likely mis-associated). 0=off ---
+        dp('min_snr', 0.0)
+        # --- capture / convergence ---
+        dp('capture_mode', 'auto')      # 'auto' | 'manual'
+        dp('stable_window', 12)
+        dp('stable_std', 0.01)          # m; CAMERA (board) jitter to call it "still"
+        dp('stable_std_radar', 0.08)    # m; RADAR jitter allowed (angular noise is cm-dm;
+                                        # window-averaging beats it down — don't set this tight)
+        dp('min_baseline', 0.15)        # m; min move between auto-captures
+        dp('min_points', 6)
+        dp('sync_slop', 0.06)
+        # A moving, hand-held rig makes correspondence errors that static capture
+        # does not: (1) camera/radar time mismatch × speed, (2) the people-counting
+        # tracker lags a moving target. Both scale with hand speed. These two gates
+        # keep those errors small by capturing only when well-aligned and slow.
+        dp('max_sync_dt', -1.0)         # s; drop image/radar pairs whose stamps differ by more than this. <=0 off
+        dp('max_capture_speed', -1.0)   # m/s; in continuous mode, skip captures while |ṗ_cam| exceeds this. <=0 off
+        # --- validation thresholds / verdict ---
+        dp('val_pass_reproj_px', 20.0)
+        dp('val_pass_3d_mm', 150.0)
+        dp('val_pass_bias_mm', 50.0)
+        dp('measured_baseline_m', -1.0) # >0 → compare |t| against tape measure
+        dp('baseline_tol_m', 0.03)
+        # --- frames / output ---
+        dp('parent_frame', 'zed_left_camera_optical_frame')
+        dp('child_frame',  'radar_link')
+        dp('camera_name', 'zed_left'); dp('radar_name', 'radar')
+        dp('output_path', '')
+        dp('publish_tf', True)
+        dp('debug_image', True)
+        dp('debug_image_topic', '/radar_camera_calib/debug_image')
+        # Remote monitoring: raw Image is bandwidth-heavy over the network. Also
+        # publish a JPEG-compressed frame on '<debug_image_topic>/compressed' (the
+        # image_transport / rqt_image_view convention). Drop debug_raw on a remote
+        # node to send ONLY the compressed stream; toggle debug_jpeg_quality live
+        # with `ros2 param set` to trade sharpness for bandwidth.
+        dp('debug_raw', True); dp('debug_compressed', True); dp('debug_jpeg_quality', 40)
+        dp('show_window', False)        # True → pop a native OpenCV window (needs a display)
+        # live diversity HUD: bars for board pitch/roll/yaw + radar az/el/range spread,
+        # green when each crosses the target that makes rotation (& translation)
+        # well-observed. On by default in the STATIC profile. See pose_diversity().
+        dp('show_diversity_hud', False)
+        dp('radar_watchdog_s', 3.0)
 
         g = lambda n: self.get_parameter(n).value
         self.min_corners = int(g('min_corners')); self.max_reproj = g('max_reproj_px')
@@ -426,9 +583,17 @@ class RadarCameraCalib(Node):
         self.fx, self.fy, self.fz = g('pc_field_x'), g('pc_field_y'), g('pc_field_z')
         self.fsnr, self.fdop = g('pc_field_snr'), g('pc_field_doppler')
         self.select_by = g('select_by')
+        self.cluster_eps = g('cluster_eps'); self.min_cluster_size = int(g('min_cluster_size'))
+        self.cluster_apex_radius = g('cluster_apex_radius'); self.cluster_strict = bool(g('cluster_strict'))
         self.min_range = g('min_range'); self.max_range = g('max_range')
         self.max_abs_doppler = g('max_abs_doppler')
         self.min_abs_doppler = g('min_abs_doppler')
+        self.use_dop_consistency = bool(g('use_doppler_consistency'))
+        self.doppler_match_tol = g('doppler_match_tol')
+        _ds = str(g('doppler_sign')).strip().lower()
+        self.doppler_sign = 0.0 if _ds == 'auto' else float(_ds)  # 0.0 → learn from data
+        self._dop_sign_vote = 0.0
+        self.min_motion_mps = g('min_motion_mps')
         self.gate_radius = g('gate_radius')
         self.range_gate_margin = g('range_gate_margin_m')
         self.bg_accum_frames = int(g('bg_accum_frames')); self.bg_match_dist = g('bg_match_dist')
@@ -450,6 +615,7 @@ class RadarCameraCalib(Node):
         self.stable_window = int(g('stable_window')); self.stable_std = g('stable_std')
         self.stable_std_radar = g('stable_std_radar')
         self.min_baseline = g('min_baseline'); self.min_points = int(g('min_points'))
+        self.max_sync_dt = g('max_sync_dt'); self.max_capture_speed = g('max_capture_speed')
 
         self.val_px = g('val_pass_reproj_px'); self.val_3d = g('val_pass_3d_mm')
         self.val_bias = g('val_pass_bias_mm')
@@ -465,6 +631,7 @@ class RadarCameraCalib(Node):
         self.debug_compressed = bool(g('debug_compressed'))
         self.jpeg_quality = int(g('debug_jpeg_quality'))
         self.show_window = bool(g('show_window'))
+        self.show_diversity_hud = bool(g('show_diversity_hud'))
         self.window_name = 'radar_camera_calib — apex (green=matched) | reflector overlay'
         self._last_dbg = None; self._win_ok = None
         self.watchdog_s = g('radar_watchdog_s')
@@ -473,10 +640,12 @@ class RadarCameraCalib(Node):
         self.win = []                 # rolling [(p_cam, p_radar), ...] for stability
         self.captures = []            # accepted [(p_cam, p_radar, snr, doppler), ...]
         self.last_capture_cam = None
+        self._prev_apex = None; self._prev_apex_t = None   # camera-side apex velocity (radial-Doppler predict)
         self.manual_capture_req = False
         self.bg_radar = None          # (M,3) pooled background points (raw radar frame)
         self.bg_accum = None          # accumulation buffer while pooling
         self.X = None; self.rms = None
+        self._rot_sig_deg = None       # per-axis rotation 1σ from the last solve (for the HUD)
         self.last_radar_stamp = 0.0
 
         self.create_subscription(CameraInfo, g('info_topic'), self._info, qos_profile_sensor_data)
@@ -551,6 +720,10 @@ class RadarCameraCalib(Node):
             else:
                 self.get_logger().info(f"intrinsics locked ({w}x{h})")
 
+    @staticmethod
+    def _stamp_s(msg):
+        return msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+
     def _watchdog(self):
         if self.last_radar_stamp == 0.0:
             return
@@ -609,7 +782,7 @@ class RadarCameraCalib(Node):
         self.get_logger().info(
             f"pooling {self.bg_accum_frames} background frames — keep the rig OUT of the scene…")
 
-    def _select_radar(self, xyz, snr, dop, predicted=None, cam_range=None):
+    def _select_radar(self, xyz, snr, dop, predicted=None, cam_range=None, v_pred=None):
         """Gate the cloud, then pick the reflector return (highest SNR among the
         survivors). Gates, in order of strength:
           • range window [min_range, max_range]
@@ -662,16 +835,85 @@ class RadarCameraCalib(Node):
             _diag("REJECTED-ALL")
             return None, None, None, 0
         xg, sg, dg = xyz[keep], snr[keep], dop[keep]
-        if self.select_by == 'snr' and np.any(np.isfinite(sg)) and sg.max() > 0:
-            idx = int(np.argmax(sg))             # ← highest-SNR survivor = the trihedral
-        elif predicted is not None:
-            idx = int(np.argmin(np.linalg.norm(xg - predicted, axis=1)))
-        else:
-            idx = int(np.argmin(np.linalg.norm(xg, axis=1)))
-        if self.min_snr > 0 and sg[idx] < self.min_snr:
-            _diag(f"best snr {sg[idx]:.0f} < min_snr {self.min_snr:.0f}")
+        # Doppler ↔ motion consistency: among the survivors, keep only those whose
+        # radial velocity matches the camera-predicted v_pred. This rejects moving
+        # clutter (hand/arm/body) that a static |doppler| gate cannot, because that
+        # clutter moves at a DIFFERENT radial rate than the rigidly-fixed reflector.
+        # Falls back to the full survivor set if the match would empty it (so a bad
+        # v_pred or sign never rejects everything). Only active while actually moving.
+        dop_applied = False
+        if (self.use_dop_consistency and v_pred is not None
+                and abs(v_pred) >= self.min_motion_mps and self.doppler_match_tol > 0):
+            sign = self.doppler_sign or (1.0 if self._dop_sign_vote >= 0 else -1.0)
+            keepd = np.abs(sign * dg - v_pred) <= self.doppler_match_tol
+            if keepd.any():
+                xg, sg, dg = xg[keepd], sg[keepd], dg[keepd]; dop_applied = True
+        # Pick the reflector return → (point, snr, doppler).
+        #   'cluster' : group the survivors and take the SNR-weighted CENTROID of
+        #               the reflector blob (robust to a single noisy SNR spike).
+        #   'snr'     : the single highest-SNR survivor.
+        #   'nearest' : nearest the predicted apex, else nearest the radar origin.
+        sel = None
+        if self.select_by == 'cluster':
+            sel = self._pick_cluster(xg, sg, dg, predicted)   # None → fall through / strict-reject
+            if sel is None and self.cluster_strict and predicted is not None:
+                _diag(f"strict cluster: no reflector cluster within "
+                      f"{self.cluster_apex_radius}m of the predicted apex")
+                return None, None, None, n_gated              # strict → reject this capture
+        if sel is None:
+            if self.select_by != 'nearest' and np.any(np.isfinite(sg)) and sg.max() > 0:
+                idx = int(np.argmax(sg))         # highest-SNR survivor = the trihedral
+            elif predicted is not None:
+                idx = int(np.argmin(np.linalg.norm(xg - predicted, axis=1)))
+            else:
+                idx = int(np.argmin(np.linalg.norm(xg, axis=1)))
+            sel = (xg[idx], float(sg[idx]), float(dg[idx]))
+        p_sel, snr_sel, dop_sel = sel
+        if self.min_snr > 0 and snr_sel < self.min_snr:
+            _diag(f"best snr {snr_sel:.0f} < min_snr {self.min_snr:.0f}")
             return None, None, None, n_gated     # too weak → likely mis-associated, skip
-        return xg[idx], float(sg[idx]), float(dg[idx]), n_gated
+        # auto-learn the Doppler sign convention from the chosen reflector point
+        if (self.use_dop_consistency and self.doppler_sign == 0.0 and v_pred is not None
+                and abs(v_pred) >= self.min_motion_mps):
+            self._dop_sign_vote += float(dop_sel) * v_pred
+        if self.use_dop_consistency and v_pred is not None:
+            self.get_logger().info(
+                f"[dop] v_pred {v_pred:+.2f} m/s  sel doppler {dop_sel:+.2f}  "
+                f"tol {self.doppler_match_tol:.2f}  {'filtered' if dop_applied else 'off/fallback'}",
+                throttle_duration_sec=1.0)
+        return np.asarray(p_sel, float), float(snr_sel), float(dop_sel), n_gated
+
+    def _pick_cluster(self, xg, sg, dg, predicted):
+        """Cluster the gated survivors and return (centroid, snr, doppler) of the
+        reflector blob, or None if none qualifies (caller then falls back to the
+        SNR pick, or — in cluster_strict mode with a predicted apex — rejects).
+
+        When an extrinsic/prior PREDICTS the apex, cluster ONLY points within
+        cluster_apex_radius of it ("cluster around the estimated apex"), and take
+        the cluster nearest the prediction. Without a prediction, use the cluster
+        holding the brightest return. The representative point is the SNR-WEIGHTED
+        CENTROID — averaging the blob beats a single argmax spike for angular noise."""
+        xs, ss, ds = xg, sg, dg
+        if predicted is not None and self.cluster_apex_radius > 0:
+            near = np.linalg.norm(xg - predicted, axis=1) <= self.cluster_apex_radius
+            if near.any():
+                xs, ss, ds = xg[near], sg[near], dg[near]     # cluster around the estimated apex
+            elif self.cluster_strict:
+                return None                                   # strict: nothing near the apex
+            # non-strict & nothing near → cluster over the whole gated set (lenient)
+        clusters = cluster_points(xs, self.cluster_eps, self.min_cluster_size)
+        if not clusters:
+            return None
+        if predicted is not None:
+            best = min(clusters, key=lambda c: float(np.linalg.norm(xs[c].mean(0) - predicted)))
+        else:
+            seed = int(np.argmax(ss)) if (np.any(np.isfinite(ss)) and ss.max() > 0) else 0
+            best = next((c for c in clusters if seed in set(c.tolist())), None)
+            if best is None:
+                best = max(clusters, key=lambda c: float(np.nanmax(ss[c])))
+        w = np.clip(np.nan_to_num(ss[best]), 1e-6, None); w = w / w.sum()
+        p = (xs[best] * w[:, None]).sum(0)
+        return p, float(np.nanmax(ss[best])), float(np.median(ds[best]))
 
     # ── camera: board pose → apex in camera frame ──
     def _apex_in_camera(self, gray):
@@ -708,6 +950,14 @@ class RadarCameraCalib(Node):
             gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         except Exception as e:
             self.get_logger().warn(f"cv_bridge: {e}"); return
+        # Hand-held rigs move; a large image↔radar stamp gap turns into a
+        # correspondence error (Δt × speed). Drop badly-aligned pairs outright.
+        t_img = self._stamp_s(a_img); t_rad = self._stamp_s(radar_msg)
+        if self.max_sync_dt > 0 and abs(t_img - t_rad) > self.max_sync_dt:
+            self.get_logger().info(
+                f"skip pair: img/radar Δt {abs(t_img - t_rad)*1000:.0f} ms "
+                f"> max_sync_dt {self.max_sync_dt*1000:.0f} ms", throttle_duration_sec=2.0)
+            return
         p_cam, reproj, n, pose = self._apex_in_camera(gray)
         xyz, snr, dop = self._read_radar(radar_msg)
         # Predict the reflector's radar location and search only AROUND it:
@@ -723,7 +973,23 @@ class RadarCameraCalib(Node):
             elif self.use_ext_prior and self.prior_R is not None:
                 predicted = self.prior_R.T @ (p_cam - self.prior_t)          # prior-predicted
         cam_range = float(np.linalg.norm(p_cam)) if p_cam is not None else None
-        p_radar, snr_i, dop_i, n_gated = self._select_radar(xyz, snr, dop, predicted, cam_range)
+        # Camera-side apex velocity → predicted radar radial velocity (Doppler).
+        # Rotation-free: v_pred = (p_cam − t_ext)·ṗ_cam / |p_cam − t_ext|.
+        v_pred = None; speed = None
+        if p_cam is not None:
+            if self._prev_apex is not None and self._prev_apex_t is not None:
+                dt = t_img - self._prev_apex_t
+                if 1e-3 < dt < 0.5:
+                    vdot = (p_cam - self._prev_apex) / dt
+                    speed = float(np.linalg.norm(vdot))
+                    t_ext = (self.X[:3, 3] if self.X is not None
+                             else (self.prior_t if (self.use_ext_prior and self.prior_t is not None)
+                                   else np.zeros(3)))
+                    d = p_cam - t_ext; nd = float(np.linalg.norm(d))
+                    if nd > 1e-6:
+                        v_pred = float(d @ vdot / nd)
+            self._prev_apex = p_cam.copy(); self._prev_apex_t = t_img
+        p_radar, snr_i, dop_i, n_gated = self._select_radar(xyz, snr, dop, predicted, cam_range, v_pred)
 
         self._publish_debug(bgr, pose, p_cam, xyz, n, reproj,
                             p_radar is not None, n_gated, p_radar)
@@ -754,7 +1020,13 @@ class RadarCameraCalib(Node):
                 self.win.pop(0)
             moved = (self.last_capture_cam is None or
                      np.linalg.norm(p_cam - self.last_capture_cam) >= self.min_baseline)
-            if moved:
+            too_fast = (self.max_capture_speed > 0 and speed is not None
+                        and speed > self.max_capture_speed)
+            if too_fast:
+                self.get_logger().info(
+                    f"sweep too fast ({speed:.2f} m/s > {self.max_capture_speed:.2f}) — "
+                    f"slow down / pause briefly for a clean capture", throttle_duration_sec=1.0)
+            elif moved:
                 self._accept(force=True)
             else:
                 self.get_logger().info(
@@ -852,20 +1124,33 @@ class RadarCameraCalib(Node):
         n_out = int((~mask).sum())
 
         # diversity guard: the extrinsic is only observable if the RADAR points
-        # span range + azimuth (+ elevation). Warn loudly when they don't.
+        # span range + azimuth + ELEVATION. Rotation error ≈ cross-range_noise /
+        # cloud_extent, so a thin/planar cloud gives good translation but BAD
+        # rotation — the classic single-reflector signature. Warn per-axis.
         raz = np.array([cart_to_raz(p) for p in Pin])
         rng_span = float(raz[:, 0].max() - raz[:, 0].min())
         az_span = float(np.degrees(raz[:, 1].max() - raz[:, 1].min()))
         el_span = float(np.degrees(raz[:, 2].max() - raz[:, 2].min()))
-        low_div = rng_span < 0.20 or az_span < 20.0
+        # elevation must span too, else out-of-plane rotation stays under-constrained
+        low_div = rng_span < 0.20 or az_span < 20.0 or (use_el and el_span < 10.0)
         div_msg = (f"  RADAR spread: range {rng_span*100:.0f} cm, az {az_span:.0f}°, el {el_span:.0f}°"
-                   + ("   !! TOO CLUSTERED — move the rig NEAR↔FAR and LEFT↔RIGHT; "
-                      "extrinsic under-constrained until this grows" if low_div else "  ✓"))
+                   + ("   !! TOO CLUSTERED — spread NEAR↔FAR, LEFT↔RIGHT and UP↔DOWN; "
+                      "rotation stays under-constrained (good |t|, bad R) until this grows"
+                      if low_div else "  ✓"))
 
-        # per-DOF 1-sigma from the covariance (rotvec rad → deg, t m → mm)
+        # per-DOF 1-sigma from the covariance (rotvec rad → deg, t m → mm).
+        # rot 1σ is in the CAMERA optical frame (X=right, Y=down, Z=forward); each
+        # weak rotation axis is fixed by a specific spatial spread of the points:
+        #   rot_x (pitch) ← vertical (UP↔DOWN) + range (NEAR↔FAR) spread
+        #   rot_y (yaw)   ← horizontal (LEFT↔RIGHT) + range (NEAR↔FAR) spread
+        #   rot_z (roll)  ← spread ACROSS the image (LEFT↔RIGHT *and* UP↔DOWN)
         dsig = np.sqrt(np.clip(np.diag(cov), 0, None))
         rot_sig_deg = np.degrees(dsig[:3]); t_sig_mm = dsig[3:6] * 1000
-        unobs = [nm for nm, s in zip(('rot_x', 'rot_y', 'rot_z'), dsig[:3]) if s > 0.3]
+        self._rot_sig_deg = rot_sig_deg                # expose to the diversity HUD
+        _rot_fix = {'rot_x': 'move UP↔DOWN + NEAR↔FAR', 'rot_y': 'move LEFT↔RIGHT + NEAR↔FAR',
+                    'rot_z': 'spread poses ACROSS the image (LEFT↔RIGHT and UP↔DOWN)'}
+        weak_rot = [nm for nm, s in zip(('rot_x', 'rot_y', 'rot_z'), dsig[:3]) if s > 0.3]
+        unobs = list(weak_rot)
         unobs += [nm for nm, s in zip(('t_x', 't_y', 't_z'), dsig[3:6]) if s > 0.2]
 
         lines = [
@@ -884,8 +1169,13 @@ class RadarCameraCalib(Node):
         if unobs:
             lines.append("  !! WEAK/UNOBSERVABLE dof: " + ", ".join(unobs)
                          + ("  — 2-D radar can't see out-of-plane rotation or height; "
-                            "fix those from CAD" if not use_el else
+                            "fix those from CAD or an extrinsic prior" if not use_el else
                             "  — add pose diversity (range/azimuth/height)"))
+            for nm in weak_rot:                        # axis-specific rotation fix
+                lines.append(f"     {nm} weak → {_rot_fix[nm]} (more lever arm shrinks rot 1σ)")
+            if not self.use_ext_prior:
+                lines.append("     tip: set use_extrinsic_prior:=true (rough mounting rpy/xyz) to "
+                             "pin the weak rotation DOF while the data refines the rest")
         if self.solve_offset:
             a = self.apex_board; asig = r['apex_sigma'] * 1000
             moved = np.linalg.norm(a - self.apex_prior) * 1000
@@ -918,8 +1208,14 @@ class RadarCameraCalib(Node):
                 errs_px.append(float(np.linalg.norm(np.subtract(uv_p, uv_t))))
         mean_px = float(np.mean(errs_px)) if errs_px else float('nan')
         mean_3d = float(np.linalg.norm(res, axis=1).mean()) * 1000
+        # split the 3-D error into per-axis RMS (mm) — shows WHERE the error lives
+        # (camera frame X=right, Y=down, Z=forward/range); a big Z is a range error,
+        # a big X/Y is cross-range (the radar's weak angular direction).
+        rms_xyz_mm = np.sqrt((res ** 2).mean(0)) * 1000
         lines.append(f"  signed residual (pred−cam) mm: X {bias_mm[0]:+.0f} Y {bias_mm[1]:+.0f} "
                      f"Z {bias_mm[2]:+.0f}   reproj {mean_px:.1f} px   mean 3-D {mean_3d:.1f} mm")
+        lines.append(f"  3-D error RMS  mm: X {rms_xyz_mm[0]:.1f}  Y {rms_xyz_mm[1]:.1f}  "
+                     f"Z {rms_xyz_mm[2]:.1f}   (X/Y = cross-range, Z = range)")
 
         # range diagnostic (camera range vs radar range, inliers)
         cam_r = np.linalg.norm(Qin, axis=1); rad_r = np.linalg.norm(Pin, axis=1)
@@ -945,7 +1241,8 @@ class RadarCameraCalib(Node):
 
         if self.publish_tf:
             self._broadcast()
-        self._save({'mean_px': mean_px, 'mean_3d': mean_3d, 'bias_mm': bias_mm, 'cond': cond,
+        self._save({'mean_px': mean_px, 'mean_3d': mean_3d, 'rms_xyz_mm': rms_xyz_mm,
+                    'bias_mm': bias_mm, 'cond': cond,
                     'loo': loo, 'planar': planar, 'verdict': verdict, 'use_el': use_el,
                     'rot_sig_deg': rot_sig_deg, 't_sig_mm': t_sig_mm, 'unobs': unobs,
                     'n_in': r['n_in'], 'n_out': n_out, 'rms_sigma': r['rms_sigma'],
@@ -954,7 +1251,7 @@ class RadarCameraCalib(Node):
 
     def _reset(self):
         self.captures.clear(); self.win.clear(); self.last_capture_cam = None
-        self.X = None; self.rms = None
+        self.X = None; self.rms = None; self._rot_sig_deg = None
         self.apex_board = self.apex_prior.copy()      # drop the refined offset
         self.get_logger().info("reset — captures cleared (background kept)")
 
@@ -998,6 +1295,7 @@ class RadarCameraCalib(Node):
             'radar_noise_sigma_az_deg': float(np.degrees(self.sig_az)),
             'radar_noise_sigma_el_deg': float(np.degrees(self.sig_el)),
             'mean_reproj_px': float(m['mean_px']), 'mean_3d_mm': float(m['mean_3d']),
+            'error_3d_rms_mm_xyz': [float(v) for v in m['rms_xyz_mm']],
             'residual_bias_mm_xyz': [float(v) for v in m['bias_mm']],
             'condition_number': float(m['cond']),
             'radar_range_scale': self.range_scale, 'radar_range_bias_m': self.range_bias,
@@ -1023,8 +1321,49 @@ class RadarCameraCalib(Node):
                     f.write(f"{k}: {v}\n")
             with open(self.output_path.replace('.yaml', '.json'), 'w') as f:
                 json.dump(data, f, indent=2)
+            # full session record: params + every capture (with board pose) + result.
+            # Lets you re-solve or audit the run offline (see sessions/solve_from_poses.py).
+            sess_path = self.output_path.replace('.yaml', '_session.json')
+            with open(sess_path, 'w') as f:
+                json.dump(self._session_dict(data), f, indent=2)
         except Exception as e:
             self.get_logger().warn(f"save failed: {e}")
+
+    def _param_snapshot(self):
+        """All declared parameters and their current values, as a plain dict."""
+        out = {}
+        for n in self._param_names:
+            try:
+                v = self.get_parameter(n).value
+                out[n] = list(v) if isinstance(v, (list, tuple)) else v
+            except Exception:
+                pass
+        return out
+
+    def _session_dict(self, result):
+        """Reproducible session record: ISO time, params, per-capture poses (radar
+        point + camera apex + full board pose, so an offline solve can reproduce the
+        joint offset estimation), and the solved result/metrics."""
+        caps = []
+        for c in self.captures:
+            Rb = np.asarray(c['Rb'], float); tb = np.asarray(c['tb'], float)
+            p_cam = (Rb @ self.apex_board + tb)
+            caps.append({
+                'p_radar': [float(v) for v in c['p_radar']],
+                'p_cam': [float(v) for v in p_cam],
+                'board_R_quat_xyzw': [float(v) for v in Rot.from_matrix(Rb).as_quat()],
+                'board_t': [float(v) for v in tb],
+                'snr': float(c['snr']), 'doppler': float(c['dop'])})
+        return {
+            'iso_time_utc': datetime.now(timezone.utc).isoformat(),
+            'stamp_ns': int(self.get_clock().now().nanoseconds),
+            'node': 'radar_camera_calib',
+            'parent_frame': self.parent_frame, 'child_frame': self.child_frame,
+            'apex_offset_in_board_m': [float(v) for v in self.apex_board],
+            'n_captures': len(self.captures),
+            'params': self._param_snapshot(),
+            'captures': caps,
+            'result': result}
 
     def _publish_debug(self, bgr, pose, p_cam, radar_xyz, n, reproj, got_radar,
                        n_gated, p_radar=None):
@@ -1077,6 +1416,8 @@ class RadarCameraCalib(Node):
             cv2.putText(bgr, l1, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             cv2.putText(bgr, l2, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                         (0, 200, 255) if self.bg_radar is None else (0, 255, 0), 2)
+            if self.show_diversity_hud:
+                self._draw_diversity_hud(bgr)
             self._last_dbg = bgr
             if self.dbg_pub is not None or self.dbg_pub_c is not None:
                 stamp = self.get_clock().now().to_msg()
@@ -1110,6 +1451,51 @@ class RadarCameraCalib(Node):
                 self.debug_compressed = bool(p.value)
         return SetParametersResult(successful=True)
 
+    def _draw_diversity_hud(self, bgr):
+        """Live 'is my pose set diverse enough for accurate ROTATION?' cue.
+        Six bars — board PITCH/ROLL/YAW spread (offset observability) and radar
+        AZ/EL/RANGE spread (extrinsic-rotation lever arm) — each turns green when
+        it crosses the target in DIVERSITY_TARGETS. Also shows the measured rot 1σ
+        from the last solve. Green verdict = rotation is observable; good |t| with
+        red bars is exactly the 'translation fine, rotation bad' trap."""
+        h, w = bgr.shape[:2]
+        div = pose_diversity([c['Rb'] for c in self.captures],
+                             [c['p_radar'] for c in self.captures])
+        rows = [('PITCH', 'pitch', 'deg'), ('ROLL', 'roll', 'deg'), ('YAW', 'yaw', 'deg'),
+                ('AZ', 'az', 'deg'), ('EL', 'el', 'deg'), ('RANGE', 'range', 'm')]
+        pw, rh = 250, 22
+        x0 = max(10, w - pw - 12); y0 = 78
+        panel_h = rh * (len(rows) + 2) + 18
+        ov = bgr.copy()
+        cv2.rectangle(ov, (x0 - 10, y0 - 26), (x0 + pw, y0 + panel_h), (0, 0, 0), -1)
+        cv2.addWeighted(ov, 0.45, bgr, 0.55, 0, bgr)
+        cv2.putText(bgr, f"POSE DIVERSITY  n={div['n']}", (x0, y0 - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        y = y0 + 12
+        all_ok = div['n'] >= max(3, self.min_points)
+        for label, key, unit in rows:
+            v, tgt, ok = div[key]
+            all_ok = all_ok and ok
+            frac = 0.0 if tgt <= 0 else min(1.0, max(0.0, v / tgt))
+            bx = x0 + 62; bw = pw - 132
+            col = (0, 200, 0) if ok else (0, 140, 255)
+            cv2.putText(bgr, label, (x0, y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
+            cv2.rectangle(bgr, (bx, y - 6), (bx + bw, y + 6), (70, 70, 70), -1)
+            cv2.rectangle(bgr, (bx, y - 6), (bx + int(bw * frac), y + 6), col, -1)
+            txt = f"{v:.0f}/{tgt:.0f}" if unit == 'deg' else f"{v:.2f}/{tgt:.2f}"
+            cv2.putText(bgr, txt, (bx + bw + 6, y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.42, col, 1)
+            y += rh
+        if self._rot_sig_deg is not None:
+            rs = self._rot_sig_deg; rmax = float(np.max(rs))
+            rc = (0, 200, 0) if rmax < 1.5 else ((0, 140, 255) if rmax < 4.0 else (0, 0, 255))
+            cv2.putText(bgr, f"rot 1sig {rs[0]:.1f}/{rs[1]:.1f}/{rs[2]:.1f} deg",
+                        (x0, y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.42, rc, 1)
+            all_ok = all_ok and rmax < 1.5
+            y += rh
+        verdict = "READY - rotation observable" if all_ok else "KEEP MOVING - tilt & spread more"
+        cv2.putText(bgr, verdict, (x0, y + 7), cv2.FONT_HERSHEY_SIMPLEX, 0.46,
+                    (0, 220, 0) if all_ok else (0, 140, 255), 1)
+
     def _gui(self):
         """Native OpenCV window (opt-in). Runs in the executor thread alongside
         spin; needs a display (X11). Degrades to the debug topic if none."""
@@ -1128,8 +1514,8 @@ class RadarCameraCalib(Node):
                 f"'rqt_image_view {self.get_parameter('debug_image_topic').value}' instead.")
 
 
-def main(overrides=None):
-    rclpy.init(); node = RadarCameraCalib(overrides)
+def main(default_overrides=None):
+    rclpy.init(); node = RadarCameraCalib(default_overrides)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

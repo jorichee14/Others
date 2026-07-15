@@ -85,6 +85,7 @@ def generate_launch_description():
         'debug_image': True,
         'debug_image_topic': '/radar_camera_calib/debug_image',
         'show_window': True,
+        'show_diversity_hud': True,       # pitch/roll/yaw + az/el/range readiness bars (static)
         'radar_watchdog_s': 3.0,
     }
 

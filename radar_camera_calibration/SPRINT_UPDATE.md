@@ -4,10 +4,16 @@
 **ZED** camera, using a **ChArUco board + trihedral corner reflector** rig.
 **Tool:** `radar_camera_calib.py` (packaged as `wicoms_utils/radar_camera_calibration`).
 
-> Status: tool validated and hardened through several live sessions. Live
-> calibration now **captures cleanly** but has **not yet converged** to a
-> trustworthy extrinsic — blocked mainly by pose diversity (azimuth spread) and
-> hardware (small board, low camera resolution, large reflector).
+> Status: tool validated and hardened through several live sessions. **Both radars
+> now calibrated** to the ZED (2026-07-15): radar1 (31 poses) and radar2 (30 poses,
+> mounted orthogonal). The two independent solves **agree on the reflector apex
+> offset to 8 mm / 34 mm** in the well-observed axes — cross-validating both
+> extrinsics. Results + offline re-solves in [`sessions/`](sessions/) (see
+> [`two_radars.md`](sessions/two_radars.md)). A two-radar **fusion + tracking**
+> node ([`radar_fusion_reflector.py`](radar_fusion_reflector.py)) exploits the
+> orthogonal mount to locate the reflector at ≈`[53,69,29]` mm 1σ. Remaining
+> hardware limits (small board, 960×540 camera, weak radar elevation) still cap
+> per-detection RMS, but the systematic extrinsic accuracy is a few mm.
 
 ---
 
@@ -152,6 +158,70 @@ holds ~1° with gross outliers (L2 → 50°); offset recoverable from scratch to
   3. **Camera hardware**: raise ZED to HD1080/HD2K; ideally print a **~100 mm
      ChArUco** to enable far poses (range diversity → accuracy).
   4. Consider a **smaller / point-like reflector** to reduce phase-center wander.
+
+---
+
+## Dynamic (moving / hand-held) mode — why it mis-picked, and the fix 🏃
+
+Continuous sweep is the easy way to get pose diversity, but **holding the rig
+while moving** introduces three correspondence errors that stop-and-go does not,
+and they explain the "wrong feature / bad output" behaviour:
+
+1. **Time mismatch** — camera and radar are sampled at slightly different instants;
+   at speed `v` and sync gap `Δt` the two "same" points are `v·Δt` apart
+   (0.3 m/s × 60 ms ≈ 18 mm). Corrupts every correspondence while moving.
+2. **Tracker lag** — the 3D people-counting firmware smooths a moving target, so
+   its reported position lags the truth (scales with speed).
+3. **Feature ambiguity** — your **hand/arm/body are strong *moving* reflectors**,
+   so `min/max_abs_doppler` alone can't isolate the trihedral (exactly the
+   "SNR 5–100, 3-D 200 mm" symptom from the last session). A static `|doppler|≈0`
+   gate is for a *still* reflector; a *moving* one shares the clutter's Doppler band.
+
+**Fix added this sprint (all param-gated, default-off → old behaviour preserved):**
+
+- **`use_doppler_consistency`** — the key one. The reflector is rigidly tied to
+  the board, so its radial velocity must equal the camera's `d|range|/dt`:
+  `v_pred = (p_cam − t_ext)·ṗ_cam / |p_cam − t_ext|` (**rotation-free** — needs only
+  the small baseline `t_ext`, works from a rough prior or even `t_ext≈0`). Keep
+  only survivors whose measured doppler matches `v_pred` within
+  `doppler_match_tol`, then argmax(SNR). Falls back to the full set if that would
+  empty it; the Doppler **sign is auto-learned**. This turns the motion into the
+  discriminator instead of fighting it — the direct answer to "identify the
+  correct feature while moving."
+- **`max_sync_dt`** — drop image/radar pairs whose stamps differ too much (kills error 1).
+- **`max_capture_speed`** — continuous mode skips captures while you move too fast
+  (bounds errors 1–2 without stopping).
+
+**Recommended way to run a hand-held rig, most-robust first:**
+
+1. **Step-and-settle** (`capture_mode:=auto`): move, pause ~0.5 s, it captures
+   during the settle, move on. Wide diversity **and** zero moving-correspondence
+   error — almost always the most accurate hand-held option.
+2. **Continuous sweep**: `capture_mode:=continuous use_doppler_consistency:=true
+   max_sync_dt:=0.03 max_capture_speed:=0.25` — only if you truly need to move
+   without pausing.
+
+> Note: these are implemented but **not yet validated on hardware** — enable them
+> live and confirm with the overlay (magenta dot glued to the reflector) and the
+> `[dop] v_pred … sel doppler …` log line before trusting a solve.
+
+---
+
+## Script split + rotation-readiness HUD 🖥️
+
+- **Two profiles over one shared node** (`radar_camera_calib.py` unchanged as the
+  engine): `radar_camera_calib_static.py` (stillness-gated, **HUD on**) and
+  `radar_camera_calib_dynamic.py` (continuous + Doppler consistency + sync/speed
+  guards). Thin default-preset wrappers; every param still CLI-overridable. Add
+  both to `setup.py` `console_scripts`.
+- **Diversity HUD** (`show_diversity_hud`, `pose_diversity()`): six live bars —
+  board **PITCH/ROLL/YAW** spread (offset observability) and radar **AZ/EL/RANGE**
+  spread (extrinsic-rotation lever arm) — each green past its target
+  (`DIVERSITY_TARGETS`), plus the measured **rot 1σ** after a solve and a
+  **READY / KEEP MOVING** verdict. Directly targets the "good |t|, bad R" trap:
+  the bars tell you *which* motion (tilt vs translate, and in which axis) is
+  missing. Orientation math unit-tested offline (pitch/yaw/roll decode exactly
+  and in isolation); cv2/ROS rendering **not yet run on hardware**.
 
 ---
 
