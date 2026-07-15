@@ -449,11 +449,12 @@ the camera frame by that radar's calibrated extrinsic.
 
 **A tracker, not a per-frame combine.** A memoryless per-frame BLUE is only as
 steady as the raw detections — which hop between multipath returns → a *jumpy*
-output. Instead the node runs a **constant-velocity Kalman filter** in the camera
-frame. Both radars update it **asynchronously** with their full 3-D covariance, so
-every axis is constrained by whichever radar sees it sharply **and** the estimate
-is smoothed over time (it takes the **horizontal from radar1** and the **vertical
-from radar2** — both, over time, not one component):
+output. Instead the node runs a **constant-velocity Kalman filter** (tuned for a
+**moving / dynamic** reflector) in the camera frame. Both radars update it
+**asynchronously** with their full 3-D covariance, so every axis is constrained by
+whichever radar sees it sharply **and** the estimate is smoothed over time (it
+takes the **horizontal from radar1** and the **vertical from radar2** — both, over
+time, not one component):
 
 ```
 predict:  x⁻ = F x,   P⁻ = F P Fᵀ + Q(σ_a)
@@ -470,17 +471,28 @@ currently jumpy gets automatically trusted less. Every measurement is
 can move the estimate; selection itself is the SNR-weighted **centroid** of the
 blob within `select_radius_m` of the prediction, not the single brightest pixel.
 
-Simulated on this rig (static reflector @ 2 m, 20 Hz), vs the raw per-frame
-numbers: frame-to-frame **jitter drops 3.2×** (234 → 74 mm) and RMS error 43%
-(165 → 95 mm), with per-axis 1σ ≈ `[53, 69, 29]` mm. On a moving reflector
-(±0.4 m hand sweep) it holds ~88 mm RMS without lag.
+**Tracing a dynamic reflector (maneuvering-target model).** A *fixed* process
+noise forces a bad tradeoff — small σ_a is smooth on a still reflector but **lags a
+fast one** (sim: 392 mm RMS on a ~2.7 m/s sweep); large σ_a follows the fast one
+but is jittery when still. So the process-noise accel std is **speed-adaptive**:
+
+```
+σ_a = process_accel + maneuver_gain · max(0, speed − maneuver_deadband)
+```
+
+Still → smooth (the deadband ignores measurement-noise-driven phantom velocity);
+moving → agile. In sim this stays within ~10 mm of the *best fixed filter in every
+regime* (static 86, slow 90, aggressive 119 mm RMS) instead of blowing up in one.
+Versus the raw per-frame detections it cuts frame-to-frame **jitter ~3×** (234 →
+~70 mm) and RMS error ~40%.
 
 **Display**: radar1 (cyan) and radar2 (orange) show each radar's **raw** detection
 with a bar along its blind axis; the **tracked** point (green cross) is the smooth
-KF estimate with a short trail and its per-axis 1σ (mm) + speed. Coasts on
-prediction up to `coast_s` if both radars drop; hard-reinitialises after
-`reinit_gap_s`. Publishes the tracked reflector on `/radar_fusion/reflector`
-(camera frame) and the annotated image on `debug_image_topic`.
+KF estimate with a **fading motion trace** of its recent path, a **heading arrow**
+when it moves, and its per-axis 1σ (mm) + speed. Coasts on prediction up to
+`coast_s` if both radars drop; hard-reinitialises after `reinit_gap_s`. Publishes
+the tracked reflector on `/radar_fusion/reflector` (camera frame) and the
+annotated image on `debug_image_topic`.
 
 The extrinsic defaults are already the solved values for this rig; override any
 with params.
@@ -502,16 +514,20 @@ axes). Tuning knobs for the tracker:
 
 | param | default | effect |
 |---|---|---|
-| `process_accel` | `2.0` m/s² | KF process noise. ↓ = smoother/steadier but lags fast motion; ↑ = follows motion but jumpier |
+| `process_accel` | `1.0` m/s² | **quiet-state** smoothing floor. ↓ = steadier when still |
+| `maneuver_gain` | `3.0` 1/s | how hard σ_a ramps with speed. ↑ = snappier follow of a fast reflector |
+| `maneuver_deadband` | `0.15` m/s | speed below this doesn't ramp σ_a — keeps a still reflector smooth |
 | `innov_gate_chi2` | `11.35` | Mahalanobis gate (3-DOF 99%). ↓ rejects more outliers |
 | `adapt_window` / `adapt_max_scale` | `12` / `4.0` | how many recent innovations set the adaptive R, and the cap on its inflation |
 | `select_radius_m` | `0.5` m | blob-centroid radius around the prediction (stabilises selection) |
 | `reinit_gap_s` / `coast_s` | `1.0` / `0.5` s | hard-reinit after this gap; keep drawing the tracked point this long after last update |
+| `trail_len` / `trail_s` | `60` / `3.0` s | length / max age of the motion trace |
 | `sigma_az_deg` / `sigma_el_deg` | `3.0` / `8.0` | the model-floor angular noise (should match calibration) — sets each axis's baseline trust |
 
-If the tracked point feels **too sluggish** on a fast sweep, raise
-`process_accel`; if it's still **jumpy**, lower it (and/or lower
-`innov_gate_chi2`).
+Because σ_a is speed-adaptive you rarely need to touch it, but: if the tracked
+point **lags** a fast sweep, raise `maneuver_gain` (or lower `maneuver_deadband`);
+if it's **jumpy** when the reflector is still, lower `process_accel` (or raise
+`maneuver_deadband`).
 
 ---
 

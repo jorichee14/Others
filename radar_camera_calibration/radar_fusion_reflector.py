@@ -36,11 +36,22 @@ A radar that has recently been landing far from the track gets its R inflated an
 is automatically down-weighted. Each measurement is Mahalanobis-gated so a clutter
 jump is rejected before it can move the estimate.
 
+Tracing a DYNAMIC reflector (maneuvering-target model)
+──────────────────────────────────────────────────────
+A fixed process noise forces a bad tradeoff: small σ_a is smooth on a still
+reflector but LAGS a fast one (sim: 392 mm RMS on a ~2.7 m/s sweep); large σ_a
+follows the fast one but is jittery when still. So σ_a is made SPEED-ADAPTIVE:
+    σ_a = process_accel + maneuver_gain · max(0, speed − deadband)
+Still → smooth (deadband ignores noise-driven phantom velocity); moving → agile.
+In sim this stays within ~10 mm of the best fixed filter in EVERY regime (static
+86, slow 90, aggressive 119 mm RMS) instead of blowing up in one.
+
 Display
 ───────
   • radar1 raw point (cyan)  + bar along its blind axis (≈ vertical)
   • radar2 raw point (orange)+ bar along its blind axis (≈ horizontal)
-  • TRACKED fused point (green) with a short trail + per-axis 1σ from P
+  • TRACKED reflector (green) with a fading MOTION TRACE of its recent path, a
+    heading arrow when it moves, and per-axis 1σ + speed
 Falls back to whichever radar is fresh; coasts briefly on prediction if both drop.
 
 Extrinsics default to the values solved by radar_camera_calib.py for this rig;
@@ -91,11 +102,16 @@ def radar_cov_cam(q, R, sr, saz, sel):
 
 
 class TrackKF:
-    """Constant-velocity Kalman filter, state = [x,y,z, vx,vy,vz] in the camera
-    frame. Asynchronous 3-D position updates (one per radar detection)."""
+    """Constant-velocity Kalman filter for a MANEUVERING (dynamic) target,
+    state = [x,y,z, vx,vy,vz] in the camera frame. Asynchronous 3-D position
+    updates (one per radar detection). The process-noise accel std is
+    speed-adaptive: small when the reflector is still (smooth), large when it
+    moves (agile, no lag) — best of both for tracing a moving corner reflector."""
 
-    def __init__(self, sigma_accel, v0_sigma=1.0):
-        self.qa = float(sigma_accel)            # process accel std (m/s²)
+    def __init__(self, sigma_accel, maneuver_gain=3.0, v_deadband=0.15, v0_sigma=1.0):
+        self.qa0 = float(sigma_accel)           # quiet-state accel std (m/s²)
+        self.kman = float(maneuver_gain)        # speed → accel-noise gain (1/s)
+        self.vdb = float(v_deadband)            # ignore speed below this (kills noise-driven jitter)
         self.v0 = float(v0_sigma)
         self.x = None                           # (6,)
         self.P = None                           # (6,6)
@@ -104,6 +120,16 @@ class TrackKF:
 
     def valid(self):
         return self.x is not None
+
+    def speed(self):
+        return float(np.linalg.norm(self.x[3:])) if self.x is not None else 0.0
+
+    def _qa_eff(self):
+        """Effective accel-noise std: floor + gain·(speed above a deadband). A fast
+        reflector gets a more agile filter automatically (maneuvering-target model);
+        the deadband stops measurement-noise-driven phantom velocity from inflating
+        Q when the reflector is actually still."""
+        return self.qa0 + self.kman * max(0.0, self.speed() - self.vdb)
 
     def init(self, z, R, t):
         self.x = np.zeros(6); self.x[:3] = z
@@ -115,7 +141,7 @@ class TrackKF:
     def _FQ(self, dt):
         F = np.eye(6)
         F[0, 3] = F[1, 4] = F[2, 5] = dt
-        q = self.qa ** 2
+        q = self._qa_eff() ** 2
         dt2, dt3 = dt * dt, dt * dt * dt
         Q = np.zeros((6, 6))
         Q[:3, :3] = np.eye(3) * (dt3 / 3.0 * q)
@@ -181,14 +207,17 @@ class RadarFusionReflector(Node):
         # reflector selection
         dp('min_range', 0.3); dp('max_range', 6.0); dp('min_snr', 100.0)
         dp('select_radius_m', 0.5)   # SNR-weighted centroid of points within this of prediction
-        # tracker
-        dp('process_accel', 2.0)     # KF process noise: reflector accel std (m/s²). ↑ = follows faster/jumpier
+        # tracker (maneuvering-target: quiet-state smoothing + speed-adaptive agility)
+        dp('process_accel', 1.0)     # quiet-state accel std (m/s²): smoothing floor when the reflector is still
+        dp('maneuver_gain', 3.0)     # speed→accel-noise gain (1/s): higher = snappier follow of a fast reflector
+        dp('maneuver_deadband', 0.15)# ignore speed below this (m/s): keeps a still reflector smooth
         dp('innov_gate_chi2', 11.35) # Mahalanobis gate, 3-DOF 99% = 11.34
         dp('adapt_window', 12)       # # recent innovations used to inflate R per radar
         dp('adapt_max_scale', 4.0)   # cap adaptive R inflation at this × the model
         dp('reinit_gap_s', 1.0)      # gap with no update longer than this ⇒ hard reinit
         dp('coast_s', 0.5)           # keep drawing the tracked point up to this long after last update
-        dp('trail_len', 25)
+        dp('trail_len', 60)          # points of motion trace to draw
+        dp('trail_s', 3.0)           # drop trace points older than this many seconds
         dp('publish_point', True)    # publish tracked reflector as PointStamped in the camera frame
         dp('show_window', True)
         dp('debug_image_topic', '/radar_fusion/debug_image')
@@ -211,12 +240,14 @@ class RadarFusionReflector(Node):
         self._win_ok = None; self._last = None
 
         self.bridge = CvBridge(); self.K = None; self.D = None
-        self.kf = TrackKF(g('process_accel'))
+        self.kf = TrackKF(g('process_accel'), maneuver_gain=g('maneuver_gain'),
+                          v_deadband=g('maneuver_deadband'))
         # per-radar: latest RAW detection (p_cam, blind_vec, snr, stamp) for display,
         # and a ring buffer of recent innovations for the adaptive R.
         self.raw = {1: None, 2: None}
         self.innov = {1: deque(maxlen=self.adapt_win), 2: deque(maxlen=self.adapt_win)}
-        self.trail = deque(maxlen=int(g('trail_len')))
+        self.trail = deque(maxlen=int(g('trail_len')))     # (pos, stamp) motion trace
+        self.trail_s = g('trail_s')
 
         self.create_subscription(CameraInfo, g('info_topic'), self._info, qos_profile_sensor_data)
         self.create_subscription(Image, self.image_topic, self._image, qos_profile_sensor_data)
@@ -308,6 +339,7 @@ class RadarFusionReflector(Node):
         if (not self.kf.valid()) or (now - self.kf.t) > self.reinit_gap:
             self.kf.init(p, R_model, now)
             self.innov[which].clear()
+            self.trail.clear()                                 # start a fresh motion trace
             return
         R_use = self._adaptive_R(which, R_model)
         y = self.kf.update(p, R_use, now, self.gate_chi2)      # gated CV-KF update
@@ -352,13 +384,23 @@ class RadarFusionReflector(Node):
             tracked = x_pred[:3]
             sig = np.sqrt(np.clip(np.diag(P_pred)[:3], 0, None)) * 1000
             spd = np.linalg.norm(x_pred[3:]) * 100             # cm/s
-            self.trail.append(tracked.copy())
-            pts = [project(p, self.K, self.D) for p in self.trail]
-            pts = [q for q in pts if q and 0 <= q[0] < w and 0 <= q[1] < h]
-            for a, b in zip(pts[:-1], pts[1:]):
-                cv2.line(bgr, a, b, (0, 140, 0), 1)            # fading trail
+            self.trail.append((tracked.copy(), now))
+            while self.trail and (now - self.trail[0][1]) > self.trail_s:
+                self.trail.popleft()                           # age out old trace points
+            # motion trace: project each point, fade + thin with age (oldest = dark/thin)
+            proj = [(project(p, self.K, self.D), ts) for p, ts in self.trail]
+            proj = [(uv, ts) for uv, ts in proj if uv and 0 <= uv[0] < w and 0 <= uv[1] < h]
+            for (a, ta), (b, tb) in zip(proj[:-1], proj[1:]):
+                age = (now - tb) / max(self.trail_s, 1e-3)     # 0 = newest, 1 = oldest
+                c = (0, int(120 + 135 * (1 - age)), int(60 * age))
+                cv2.line(bgr, a, b, c, 1 + int(round(1 - age)))
             uv = project(tracked, self.K, self.D)
             if uv and 0 <= uv[0] < w and 0 <= uv[1] < h:
+                # velocity heading arrow (where the reflector is going)
+                vlead = tracked + x_pred[3:] * 0.3             # 0.3 s ahead
+                lv = project(vlead, self.K, self.D)
+                if lv and spd > 8:                             # only when actually moving
+                    cv2.arrowedLine(bgr, uv, lv, (0, 255, 120), 2, tipLength=0.3)
                 cv2.circle(bgr, uv, 10, (0, 255, 0), 2)
                 cv2.line(bgr, (uv[0]-16, uv[1]), (uv[0]+16, uv[1]), (0, 255, 0), 1)
                 cv2.line(bgr, (uv[0], uv[1]-16), (uv[0], uv[1]+16), (0, 255, 0), 1)
