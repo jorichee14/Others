@@ -6,6 +6,10 @@ so their weak angular axes are perpendicular (radar1 soft vertical, radar2 soft
 horizontal). Per-radar sessions:
 [radar1](2026-07-15_zed_radar1.md) · [radar2](2026-07-15_zed_radar2.md).
 
+> A third radar, **radar_infra**, has a round-1 bootstrap only
+> ([record](2026-07-15_zed_radar_infra_round1.md)) — ⚠️ **not final** (10 poses,
+> rot 1σ ≈ 7°). Excluded from the validated comparison below until it converges.
+
 ## TF transforms (parent `zed_left_camera_optical_frame` → child `radarN_link`)
 
 | | translation xyz (m) | \|t\| | quaternion xyzw | rpy (deg) |
