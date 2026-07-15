@@ -343,6 +343,12 @@ DEFAULTS = {
     # camera
     'image_topic': '/zed/zed_node/left/image_rect_color',
     'info_topic': '/zed/zed_node/left/camera_info',
+    # in-node rectification — for a RAW/unrectified image_topic. Undistorts each
+    # frame from camera_info (K,D), then detects & projects with the rectified K
+    # and ZERO distortion (no projectPoints overflow, cleaner ArUco). Leave off
+    # if image_topic is already rectified (D≈0). alpha 0=crop to valid pixels,
+    # 1=keep all (black borders).
+    'rectify_image': False, 'rectify_alpha': 0.0,
     # board (ChArUco) — must match the printed board
     'squares_x': 9, 'squares_y': 7, 'square_len': 0.020, 'marker_len': 0.015,
     'dictionary': 'DICT_4X4_50', 'min_corners': 6, 'max_reproj_px': 1.5,
@@ -413,6 +419,8 @@ class RadarCameraCalib(Node):
         self.solve_offset = bool(g('solve_offset'))
         self.offset_prior_sigma = g('offset_prior_sigma_m')
         self.bridge = CvBridge(); self.K = None; self.D = None
+        self.rectify = bool(g('rectify_image')); self.rectify_alpha = g('rectify_alpha')
+        self.map1 = None; self.map2 = None       # undistort maps, built on first CameraInfo
 
         self.radar_topic = g('radar_topic')
         self.fx, self.fy, self.fz = g('pc_field_x'), g('pc_field_y'), g('pc_field_z')
@@ -521,10 +529,27 @@ class RadarCameraCalib(Node):
 
     # ── intrinsics / watchdog ──
     def _info(self, msg):
-        if self.K is None:
-            self.K = np.array(msg.k).reshape(3, 3)
-            self.D = np.array(msg.d) if len(msg.d) else np.zeros(5)
-            self.get_logger().info(f"intrinsics locked ({msg.width}x{msg.height})")
+        if self.K is not None:
+            return
+        K = np.array(msg.k).reshape(3, 3)
+        D = np.array(msg.d) if len(msg.d) else np.zeros(5)
+        w, h = int(msg.width), int(msg.height)
+        if self.rectify and w and h and np.any(np.abs(D) > 1e-9):
+            # Undistort each frame; afterwards the effective intrinsics are newK
+            # with ZERO distortion, used for all solvePnP/projectPoints downstream.
+            newK, _ = cv2.getOptimalNewCameraMatrix(K, D, (w, h), self.rectify_alpha, (w, h))
+            self.map1, self.map2 = cv2.initUndistortRectifyMap(
+                K, D, None, newK, (w, h), cv2.CV_16SC2)
+            self.K, self.D = newK, np.zeros(5)
+            self.get_logger().info(
+                f"intrinsics locked ({w}x{h}) — rectifying in-node (alpha={self.rectify_alpha})")
+        else:
+            self.K, self.D = K, D
+            if self.rectify:
+                self.get_logger().info(
+                    f"intrinsics locked ({w}x{h}) — rectify requested but D≈0, feed treated as rectified")
+            else:
+                self.get_logger().info(f"intrinsics locked ({w}x{h})")
 
     def _watchdog(self):
         if self.last_radar_stamp == 0.0:
@@ -678,6 +703,8 @@ class RadarCameraCalib(Node):
             return
         try:
             bgr = self.bridge.imgmsg_to_cv2(a_img, 'bgr8')
+            if self.map1 is not None:                 # in-node rectification
+                bgr = cv2.remap(bgr, self.map1, self.map2, cv2.INTER_LINEAR)
             gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         except Exception as e:
             self.get_logger().warn(f"cv_bridge: {e}"); return

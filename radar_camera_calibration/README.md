@@ -141,7 +141,7 @@ If not, fix the offset (usually a sign). 30 seconds here saves the calibration.
 **Subscribes**
 | topic (param) | type | purpose |
 |---|---|---|
-| `image_topic` | `sensor_msgs/Image` | camera image (ChArUco) |
+| `image_topic` | `sensor_msgs/Image` | camera image (ChArUco). If it's **raw/unrectified**, set `rectify_image:=true` to undistort in-node (or feed an already-rectified topic). |
 | `info_topic` | `sensor_msgs/CameraInfo` | intrinsics K, D |
 | `radar_topic` | `sensor_msgs/PointCloud2` | radar detections (`/points_all`: x,y,z,snr,doppler) |
 | `~/background` `~/capture` `~/solve` `~/reset` `~/save` | `std_msgs/Empty` | control |
@@ -257,6 +257,8 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 | `prior_t_sigma_m` / `prior_rot_sigma_deg` | `0.05` / `10` | extrinsic prior widths (tight = trust it more) |
 | `min_snr` | `0` (off) | **strict capture**: reject a pick whose reflector SNR is below this |
 | `measured_baseline_m` | `-1` (off) | tape-measured `|t|` for the baseline check |
+| `rectify_image` | `false` | **undistort each frame in-node** from `camera_info` — use for a RAW/unrectified `image_topic`; detection & projection then run with the rectified K and zero D. Leave off if the feed is already rectified (D≈0). |
+| `rectify_alpha` | `0.0` | undistort crop: `0`=only valid pixels (zoomed), `1`=keep whole FoV (black borders) |
 | `debug_raw` | `true` | publish the raw `Image` debug topic (set `false` on a remote node to save bandwidth) |
 | `debug_compressed` | `true` | also publish `<debug_image_topic>/compressed` (JPEG) — subscribe to this from a remote |
 | `debug_jpeg_quality` | `40` | compressed-window JPEG quality 1–100 (lower = smaller); **live-toggleable** via `ros2 param set` |
