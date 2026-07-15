@@ -14,9 +14,13 @@ reflector's opening pointed at the radar so it stays bright.
 Run:  ros2 run wicoms_utils radar_camera_calibration_dynamic
 Only overrides vs radar_camera_calib.DEFAULTS live here; -p still overrides these.
 """
-try:                                    # core module name may differ per package
+import os, sys
+# Ensure the sibling core module imports whether this file is run directly,
+# via `ros2 run`, or as an installed console_script — the core lives next to it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
     from radar_camera_calib import main
-except ImportError:
+except ImportError:                     # installed as a package submodule
     from radar_camera_calibration import main
 
 DYNAMIC = {
