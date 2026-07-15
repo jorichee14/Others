@@ -152,6 +152,14 @@ If not, fix the offset (usually a sign). 30 seconds here saves the calibration.
   solved) the **whole radar cloud projected onto the feed, coloured by depth**.
   This live overlay is the most trustworthy check — walk the reflector around and
   confirm the dots stay glued to it near/far and left/right/high/low.
+- `<debug_image_topic>/compressed` — the **same overlay, JPEG-compressed**
+  (`sensor_msgs/CompressedImage`, the `image_transport` convention). Subscribe to
+  this one when the node runs **remotely** — it's a fraction of the raw
+  bandwidth. `rqt_image_view` auto-lists it (pick the `compressed` transport).
+  Tune `debug_jpeg_quality` (1–100) to trade sharpness for bandwidth; you can
+  **toggle it live**, no restart:
+  `ros2 param set /radar_camera_calib debug_jpeg_quality 20`. Set `debug_raw:=false`
+  to send *only* the compressed stream and drop the raw topic entirely.
 - `extrinsic_<cam>__<radar>.yaml` / `.json` — `T_cam_radar`, its inverse, RMS,
   LOO-CV, per-axis bias, condition number, verdict, and a ready-to-run
   `static_transform_publisher` command.
@@ -249,6 +257,9 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 | `prior_t_sigma_m` / `prior_rot_sigma_deg` | `0.05` / `10` | extrinsic prior widths (tight = trust it more) |
 | `min_snr` | `0` (off) | **strict capture**: reject a pick whose reflector SNR is below this |
 | `measured_baseline_m` | `-1` (off) | tape-measured `|t|` for the baseline check |
+| `debug_raw` | `true` | publish the raw `Image` debug topic (set `false` on a remote node to save bandwidth) |
+| `debug_compressed` | `true` | also publish `<debug_image_topic>/compressed` (JPEG) — subscribe to this from a remote |
+| `debug_jpeg_quality` | `40` | compressed-window JPEG quality 1–100 (lower = smaller); **live-toggleable** via `ros2 param set` |
 
 ---
 

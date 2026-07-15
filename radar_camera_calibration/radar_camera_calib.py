@@ -115,7 +115,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 import message_filters
 import tf2_ros
-from sensor_msgs.msg import Image, CameraInfo, PointCloud2
+from sensor_msgs.msg import Image, CompressedImage, CameraInfo, PointCloud2
 from std_msgs.msg import Empty
 from geometry_msgs.msg import TransformStamped
 from cv_bridge import CvBridge
@@ -382,6 +382,12 @@ DEFAULTS = {
     'camera_name': 'zed_left', 'radar_name': 'radar1', 'output_path': '',
     'publish_tf': True, 'debug_image': True,
     'debug_image_topic': '/radar_camera_calib/debug_image',
+    # Remote monitoring: raw Image is bandwidth-heavy over the network. Also
+    # publish a JPEG-compressed frame on '<debug_image_topic>/compressed' (the
+    # image_transport / rqt_image_view convention). Drop debug_raw on a remote
+    # node to send ONLY the compressed stream; toggle debug_jpeg_quality live
+    # with `ros2 param set` to trade sharpness for bandwidth.
+    'debug_raw': True, 'debug_compressed': True, 'debug_jpeg_quality': 40,
     'show_window': True, 'radar_watchdog_s': 3.0,
 }
 
@@ -447,6 +453,9 @@ class RadarCameraCalib(Node):
         self.output_path = op if op else f"extrinsic_{self.camera_name}__{self.radar_name}.yaml"
         self.publish_tf = bool(g('publish_tf'))
         self.want_debug = bool(g('debug_image'))
+        self.debug_raw = bool(g('debug_raw'))
+        self.debug_compressed = bool(g('debug_compressed'))
+        self.jpeg_quality = int(g('debug_jpeg_quality'))
         self.show_window = bool(g('show_window'))
         self.window_name = 'radar_camera_calib — apex (green=matched) | reflector overlay'
         self._last_dbg = None; self._win_ok = None
@@ -479,8 +488,15 @@ class RadarCameraCalib(Node):
         self.create_subscription(Empty, '~/save',       lambda _: self._save_now(), 1)
 
         self.tf_static = tf2_ros.StaticTransformBroadcaster(self)
-        self.dbg_pub = (self.create_publisher(Image, g('debug_image_topic'), 1)
-                        if self.want_debug else None)
+        # Raw Image and/or a JPEG-compressed frame on '<topic>/compressed'.
+        # rqt_image_view / image_transport auto-discover the compressed sub-topic;
+        # over a remote link subscribe to the compressed one to monitor the window.
+        dbg_topic = g('debug_image_topic')
+        self.dbg_pub = (self.create_publisher(Image, dbg_topic, 1)
+                        if self.want_debug and self.debug_raw else None)
+        self.dbg_pub_c = (self.create_publisher(CompressedImage, dbg_topic + '/compressed', 1)
+                          if self.want_debug and self.debug_compressed else None)
+        self.add_on_set_parameters_callback(self._on_set_params)
         self.create_timer(1.0, self._watchdog)
         if self.show_window:
             self.create_timer(0.05, self._gui)      # ~20 Hz native window refresh
@@ -985,7 +1001,7 @@ class RadarCameraCalib(Node):
 
     def _publish_debug(self, bgr, pose, p_cam, radar_xyz, n, reproj, got_radar,
                        n_gated, p_radar=None):
-        if self.dbg_pub is None and not self.show_window:
+        if self.dbg_pub is None and self.dbg_pub_c is None and not self.show_window:
             return
         try:
             h, w = bgr.shape[:2]
@@ -1035,10 +1051,37 @@ class RadarCameraCalib(Node):
             cv2.putText(bgr, l2, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                         (0, 200, 255) if self.bg_radar is None else (0, 255, 0), 2)
             self._last_dbg = bgr
-            if self.dbg_pub is not None:
-                self.dbg_pub.publish(self.bridge.cv2_to_imgmsg(bgr, 'bgr8'))
+            if self.dbg_pub is not None or self.dbg_pub_c is not None:
+                stamp = self.get_clock().now().to_msg()
+                if self.dbg_pub is not None:
+                    msg = self.bridge.cv2_to_imgmsg(bgr, 'bgr8')
+                    msg.header.stamp = stamp
+                    self.dbg_pub.publish(msg)
+                if self.dbg_pub_c is not None and self.debug_compressed:
+                    q = int(np.clip(self.jpeg_quality, 1, 100))
+                    ok, buf = cv2.imencode('.jpg', bgr,
+                                           [cv2.IMWRITE_JPEG_QUALITY, q])
+                    if ok:
+                        cmsg = CompressedImage()
+                        cmsg.header.stamp = stamp
+                        cmsg.format = 'jpeg'
+                        cmsg.data = buf.tobytes()
+                        self.dbg_pub_c.publish(cmsg)
         except Exception as e:
             self.get_logger().warn(f"debug image: {e}", throttle_duration_sec=5.0)
+
+    def _on_set_params(self, params):
+        """Live-toggle the compressed-window quality (and on/off) without a
+        restart — handy when the node runs remotely:
+          ros2 param set /radar_camera_calib debug_jpeg_quality 20
+        """
+        from rcl_interfaces.msg import SetParametersResult
+        for p in params:
+            if p.name == 'debug_jpeg_quality':
+                self.jpeg_quality = int(np.clip(int(p.value), 1, 100))
+            elif p.name == 'debug_compressed':
+                self.debug_compressed = bool(p.value)
+        return SetParametersResult(successful=True)
 
     def _gui(self):
         """Native OpenCV window (opt-in). Runs in the executor thread alongside
