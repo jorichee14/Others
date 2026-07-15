@@ -118,6 +118,7 @@ Control (std_msgs/Empty topics)
 Deps:  numpy scipy opencv-contrib-python  +  ROS2 rclpy cv_bridge sensor_msgs_py
 """
 import json
+from datetime import datetime, timezone
 import numpy as np
 from scipy.spatial.transform import Rotation as Rot
 from scipy.optimize import least_squares
@@ -425,7 +426,11 @@ class RadarCameraCalib(Node):
     def __init__(self, default_overrides=None):
         super().__init__('radar_camera_calib')
         self._defaults = dict(default_overrides or {})   # profile presets (static/dynamic scripts)
-        dp = lambda name, val: self.declare_parameter(name, self._defaults.get(name, val))
+        self._param_names = []                            # recorded for the session dump
+
+        def dp(name, val):
+            self._param_names.append(name)
+            return self.declare_parameter(name, self._defaults.get(name, val))
         # --- camera ---
         dp('image_topic', '/zed/zed_node/left/image_rect_color')
         dp('info_topic',  '/zed/zed_node/left/camera_info')
@@ -1273,8 +1278,49 @@ class RadarCameraCalib(Node):
                     f.write(f"{k}: {v}\n")
             with open(self.output_path.replace('.yaml', '.json'), 'w') as f:
                 json.dump(data, f, indent=2)
+            # full session record: params + every capture (with board pose) + result.
+            # Lets you re-solve or audit the run offline (see sessions/solve_from_poses.py).
+            sess_path = self.output_path.replace('.yaml', '_session.json')
+            with open(sess_path, 'w') as f:
+                json.dump(self._session_dict(data), f, indent=2)
         except Exception as e:
             self.get_logger().warn(f"save failed: {e}")
+
+    def _param_snapshot(self):
+        """All declared parameters and their current values, as a plain dict."""
+        out = {}
+        for n in self._param_names:
+            try:
+                v = self.get_parameter(n).value
+                out[n] = list(v) if isinstance(v, (list, tuple)) else v
+            except Exception:
+                pass
+        return out
+
+    def _session_dict(self, result):
+        """Reproducible session record: ISO time, params, per-capture poses (radar
+        point + camera apex + full board pose, so an offline solve can reproduce the
+        joint offset estimation), and the solved result/metrics."""
+        caps = []
+        for c in self.captures:
+            Rb = np.asarray(c['Rb'], float); tb = np.asarray(c['tb'], float)
+            p_cam = (Rb @ self.apex_board + tb)
+            caps.append({
+                'p_radar': [float(v) for v in c['p_radar']],
+                'p_cam': [float(v) for v in p_cam],
+                'board_R_quat_xyzw': [float(v) for v in Rot.from_matrix(Rb).as_quat()],
+                'board_t': [float(v) for v in tb],
+                'snr': float(c['snr']), 'doppler': float(c['dop'])})
+        return {
+            'iso_time_utc': datetime.now(timezone.utc).isoformat(),
+            'stamp_ns': int(self.get_clock().now().nanoseconds),
+            'node': 'radar_camera_calib',
+            'parent_frame': self.parent_frame, 'child_frame': self.child_frame,
+            'apex_offset_in_board_m': [float(v) for v in self.apex_board],
+            'n_captures': len(self.captures),
+            'params': self._param_snapshot(),
+            'captures': caps,
+            'result': result}
 
     def _publish_debug(self, bgr, pose, p_cam, radar_xyz, n, reproj, got_radar,
                        n_gated, p_radar=None):

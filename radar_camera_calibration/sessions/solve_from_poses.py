@@ -82,11 +82,16 @@ def main():
         d = json.load(f)
     P = np.array([c["p_radar"] for c in d["captures"]], float)   # radar
     Q = np.array([c["p_cam"] for c in d["captures"]], float)     # camera apex
-    prm = d["params"]; tr = d["tool_result_31_captures"]
-    ref_t = np.array(tr["T_cam_radar_translation_m"], float)
+    prm = d["params"]
+    # result section: node writes it under "result"; the hand-written record uses
+    # "tool_result_31_captures". Translation key is "..._translation" (node) or
+    # "..._translation_m" (hand-written).
+    tr = d.get("result") or d.get("tool_result_31_captures")
+    ref_t = np.array(tr.get("T_cam_radar_translation") or tr["T_cam_radar_translation_m"], float)
     ref_R = Rot.from_quat(tr["T_cam_radar_quaternion_xyzw"]).as_matrix()
 
-    print(f"session: {d['session']}   {d['date_utc']}   N={len(P)} poses")
+    print(f"session: {d.get('session', d.get('node','?'))}   "
+          f"{d.get('date_utc', d.get('iso_time_utc','?'))}   N={len(P)} poses")
 
     Rk, tk = kabsch(P, Q)
     report("Kabsch (isotropic)", Rk, tk, ref_R, ref_t)

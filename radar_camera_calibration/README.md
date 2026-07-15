@@ -223,6 +223,10 @@ If not, fix the offset (usually a sign). 30 seconds here saves the calibration.
 - `extrinsic_<cam>__<radar>.yaml` / `.json` — `T_cam_radar`, its inverse, RMS,
   LOO-CV, per-axis bias, condition number, verdict, and a ready-to-run
   `static_transform_publisher` command.
+- `extrinsic_<cam>__<radar>_session.json` — full **reproducible session record**:
+  ISO timestamp, every parameter used, every capture (radar point + camera apex +
+  full board pose), and the solved result. Re-solve or audit it offline with
+  `sessions/solve_from_poses.py` (no ROS needed). Written on every solve/`~/save`.
 
 ---
 
