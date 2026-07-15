@@ -14,6 +14,7 @@
   "camera_intrinsics": "960x540 (ZED left, rectified)",
   "board": "ChArUco 4x4, square 0.12 m, marker 0.09 m, DICT_4X4_50",
   "note_radar_range_scale": "radar_range_scale=1.039 was applied at ingest, so p_radar below is already scale-corrected (same space the solver used).",
+  "correction_note": "POST-HOC AUDIT (see 2026-07-15_zed_radar1_CORRECTED.json): two defects found in this run. (1) capture i=23 is a bad elevation outlier (p_radar z=+0.511, the only positive; residual 1356mm vs 167mm median) that was wrongly kept as an inlier. (2) a residual ~-9cm range bias survives the 1.039 scale (range_fit slope 0.971, bias -0.108m); since the boresight is 96.6% aligned with camera +Z, it dumped ~-8.7cm into t_z, inflating t_z from a true ~-2..-7cm to the recorded -0.1721. Original values below are UNCHANGED for the record; the corrected extrinsic is in the sibling CORRECTED file. Confirm the true fore-aft setback by tape to pin the exact bias.",
   "note_pcam": "p_cam is the camera apex = R_board*apex_offset + t_board at capture time; apex_offset was being jointly refined, so early/late p_cam use slightly different offsets. Rounded to 3 dp in the console log.",
   "params": {
     "image_topic": "/zed/zed_node/left/image_rect_color",

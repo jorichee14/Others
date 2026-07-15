@@ -1,0 +1,42 @@
+{
+  "session": "zed_left <-> radar1 (IWR6843ISK) — POST-HOC CORRECTED extrinsic",
+  "date_utc": "2026-07-15",
+  "corrected_utc": "2026-07-15",
+  "source": "2026-07-15_zed_radar1_poses.json (31 recorded poses, UNCHANGED)",
+  "solver": "offline measurement-space ML (Kabsch init, Huber), sessions/solve_from_poses.py logic",
+  "status": "CORRECTED estimate. Rotation is unchanged/trustworthy; t_z is fixed. The exact range bias (hence exact t_z) still needs a tape measurement of the radar's fore-aft setback to finalize.",
+  "frames": {
+    "parent": "zed_left_camera_optical_frame (X=right, Y=down, Z=forward)",
+    "child": "radar1_link (X=forward, Y=left, Z=up)"
+  },
+  "why_corrected": {
+    "defect_1_outlier": "capture i=23 is a bad elevation point: p_radar=[2.395,-0.021,+0.511] — the only positive radar-Z in the set (all others -0.08..-0.77). 3-D residual 1356 mm vs 167 mm median (8x). The radar's weak elevation axis flipped sign. It was wrongly kept as an inlier (node reported 31/31). Removed here.",
+    "defect_2_range_bias": "range_fit cam_r = 0.971*radar_r - 0.108 m: a ~-9 cm range bias remains AFTER the 1.039 scale. The radar boresight is 96.6% aligned with camera +Z, so this bias projects ~-8.7 cm into t_z, inflating it from a true ~-2..-7 cm to the recorded -0.1721. Corrected by applying r' = 0.979*r - 0.09 on the (already 1.039-scaled) ranges."
+  },
+  "corrections_applied": {
+    "dropped_captures": [23],
+    "range_recorrection_on_scaled_p_radar": "r_corr = 0.979 * r - 0.09  (m)",
+    "equivalent_ingest_params_from_raw": {
+      "radar_range_scale": 1.0172,
+      "radar_range_bias_m": -0.09
+    }
+  },
+  "result_corrected": {
+    "method": "measurement-space ML (3-D), Huber, offset fixed",
+    "n_poses": 30,
+    "T_cam_radar_translation_m": [0.2131, -0.0193, -0.0207],
+    "T_cam_radar_quaternion_xyzw": [-0.5359, 0.5906, -0.4177, -0.4354],
+    "T_cam_radar_rpy_deg": [-174.38, -74.14, -99.81],
+    "t_norm_cm": 21.5,
+    "in_sample_rms_mm": 186.3
+  },
+  "comparison_to_recorded": {
+    "recorded_t_m":  [0.2218, -0.0067, -0.1721],
+    "corrected_t_m": [0.2131, -0.0193, -0.0207],
+    "delta_t_z_cm": "+15.1 (from -17.2 to -2.1)",
+    "delta_rotation_deg": "~1.5 (rotation was already correct)",
+    "rms_mm": "298 (recorded) -> 186 (corrected)"
+  },
+  "caveats": "The range bias here is radar1-specific (radar2's range fit was +0.089, opposite sign — so it is NOT the reflector phase center; each radar has its own range calibration). The exact -9 cm was fit from these poses and is coupled with the reflector offset; the precise t_z depends on the true range calibration. To finalize: tape-measure the radar1 fore-aft setback behind the ZED lens, set radar_range_bias_m so the solved t_z matches it, and re-run (with a stricter reject_sigma so i=23-type points are dropped). Then this file can be promoted to the radar1 result.",
+  "static_transform_publisher_corrected": "0.2131 -0.0193 -0.0207  -0.5359 0.5906 -0.4177 -0.4354  zed_left_camera_optical_frame radar1_link"
+}
