@@ -118,6 +118,7 @@ Control (std_msgs/Empty topics)
 Deps:  numpy scipy opencv-contrib-python  +  ROS2 rclpy cv_bridge sensor_msgs_py
 """
 import json
+import os
 from datetime import datetime, timezone
 import numpy as np
 from scipy.spatial.transform import Rotation as Rot
@@ -624,7 +625,14 @@ class RadarCameraCalib(Node):
         self.parent_frame, self.child_frame = g('parent_frame'), g('child_frame')
         self.camera_name, self.radar_name = g('camera_name'), g('radar_name')
         op = g('output_path')
-        self.output_path = op if op else f"extrinsic_{self.camera_name}__{self.radar_name}.yaml"
+        default_name = f"extrinsic_{self.camera_name}__{self.radar_name}.yaml"
+        if not op:                              # empty → default file in cwd
+            op = default_name
+        elif os.path.isdir(op):                 # a directory (e.g. '.') → write the file INTO it
+            op = os.path.join(op, default_name)
+        elif not op.endswith(('.yaml', '.yml')):  # a bare name/prefix → give it the extension
+            op = op + '.yaml'
+        self.output_path = op
         self.publish_tf = bool(g('publish_tf'))
         self.want_debug = bool(g('debug_image'))
         self.debug_raw = bool(g('debug_raw'))
@@ -1316,6 +1324,9 @@ class RadarCameraCalib(Node):
                               f"{self.parent_frame} {self.child_frame}"),
             'stamp': self.get_clock().now().nanoseconds}
         try:
+            d = os.path.dirname(self.output_path)
+            if d:
+                os.makedirs(d, exist_ok=True)
             with open(self.output_path, 'w') as f:
                 for k, v in data.items():
                     f.write(f"{k}: {v}\n")
