@@ -1,0 +1,59 @@
+# NOTE: the numbers below are ILLUSTRATIVE PLACEHOLDERS to show the FORMAT only.
+# They are not internally consistent, so don't read meaning into the report they
+# produce. For a correctness demonstration of the math, run test_agreement.py.
+#
+# One entry per (roughly time-synchronized) moment where the chair is visible to
+# >= 2 sensors. Fill this from the bag with extract_observations.py, or by hand.
+#
+# Frames:  x-right, y-down, z-forward for cameras (optical); sensor-native for
+#          LiDAR (os_lidar) and radar (radar*_link). Points are in METRES, in the
+#          named sensor's own frame. Poses are T_map_sensor at THIS frame's time.
+#
+# What each sensor needs:
+#   zed        : point (chair centroid in zed_left_camera_optical_frame from depth)
+#                pose_map (T_map_zed at this time, from /glim/camera_pose)
+#                pixel   (optional, for the reprojection cross-check)
+#   lidar      : point (chair centroid in os_lidar frame). No pose: it rides on ZED.
+#   radar1/2   : point (chair return in radarN_link). Often too sparse for a chair.
+#   realsense  : point (chair centroid in camera_color_optical_frame)
+#                pose_map (T_map_rs at this time, from /vo_pose) -- START/MIDDLE only
+#                pixel   (optional)
+#   arducam    : pixel  (RGB only, no depth). Fixed node -> no pose needed.
+#                extra_points: OPTIONAL other static landmarks (see README) to make
+#                              its metric z observable.
+
+frames:
+  - id: 0
+    t: 12.480                 # seconds; used only to document the sync instant
+    sensors:
+      zed:
+        point: [0.42, 0.05, 3.10]
+        pixel: [351.0, 181.0]
+        pose_map:
+          trans: [1.204, 0.298, 0.181]
+          quat:  [-0.031, 0.006, -0.999, 0.028]   # T_map_zed from /glim/camera_pose
+      lidar:
+        point: [3.11, -0.44, -0.02]               # os_lidar frame
+      realsense:
+        point: [-0.18, 0.11, 2.87]
+        pixel: [301.0, 262.0]
+        pose_map:
+          trans: [-14.90, -4.40, 0.51]
+          quat:  [-0.50, 0.47, -0.51, 0.51]        # T_map_rs from /vo_pose
+      arducam:
+        pixel: [512.0, 351.0]
+        # extra_points:      # optional static landmarks, in arducam pixels + a known
+        #   table_corner:    # map point, to make the fixed node's metric z solvable
+        #     pixel: [640, 300]
+        #     map:   [-2.0, -5.5, 0.75]
+
+  - id: 1
+    t: 14.960
+    sensors:
+      zed:
+        point: [0.30, 0.02, 2.40]
+        pose_map:
+          trans: [1.880, 0.402, 0.180]
+          quat:  [-0.030, 0.007, -0.999, 0.030]
+      lidar:
+        point: [2.41, -0.31, -0.01]

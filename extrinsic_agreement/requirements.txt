@@ -1,0 +1,9 @@
+# Analysis core (agreement.py, se3.py, dataset.py, test_agreement.py)
+numpy
+scipy
+pyyaml
+
+# extract_observations.py additionally needs a ROS 2 environment providing:
+#   rclpy, rosbag2_py, sensor_msgs, geometry_msgs, sensor_msgs_py, cv_bridge
+# plus OpenCV with a GUI backend:
+#   opencv-python
