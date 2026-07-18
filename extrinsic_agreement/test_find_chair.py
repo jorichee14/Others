@@ -77,10 +77,52 @@ def test_empty():
     print("E. empty input -> empty output   OK")
 
 
+def test_required_all_three_cameras():
+    from find_chair import _present
+    # zed 10..30, realsense 12..25, arducam 5..40.
+    # All three overlap only on 12..25 -> requiring all three must confine here,
+    # and EVERY suggested instant must have all three present.
+    dets = {
+        "zed": list(np.arange(10, 30, 0.3)),
+        "realsense": list(np.arange(12, 25, 0.3)),
+        "arducam": list(np.arange(5, 40, 0.3)),
+    }
+    req = ("zed", "realsense", "arducam")
+    wins = covisibility_windows(dets, bin_s=0.5, min_sensors=3, required=req)
+    assert len(wins) == 1
+    a, b, sset = wins[0]
+    assert 11.5 <= a <= 12.5 and 24.5 <= b <= 25.5, (a, b)
+    assert sset == frozenset(req)                      # all three hold everywhere
+    times = suggest_times(dets, bin_s=0.5, min_sensors=3, n=6, required=req)
+    assert times, "should find times with all three"
+    for t in times:                                    # the hard guarantee
+        assert set(req).issubset(_present(dets, t, 0.25)), (t, _present(dets, t, 0.25))
+    assert all(11.5 <= t <= 25.5 for t in times), times
+    print(f"F. require all three cameras -> {times}, each has all three   OK")
+
+
+def test_required_excludes_two_only_instants():
+    from find_chair import _present
+    # realsense drops out entirely after t=20; instants at t>20 have only 2 cams.
+    dets = {
+        "zed": list(np.arange(10, 40, 0.3)),
+        "realsense": list(np.arange(10, 20, 0.3)),
+        "arducam": list(np.arange(10, 40, 0.3)),
+    }
+    req = ("zed", "realsense", "arducam")
+    times = suggest_times(dets, bin_s=0.5, min_sensors=3, n=8, required=req)
+    assert times and max(times) <= 20.5, times         # nothing past realsense's end
+    for t in times:
+        assert set(req).issubset(_present(dets, t, 0.25)), t
+    print(f"G. two-only instants excluded when three required -> max t={max(times):.1f}   OK")
+
+
 if __name__ == "__main__":
     test_single_overlap_window()
     test_three_sensor_core()
     test_two_disjoint_windows()
     test_suggest_spread_and_covered()
     test_empty()
+    test_required_all_three_cameras()
+    test_required_excludes_two_only_instants()
     print("\nall find_chair logic tests passed")

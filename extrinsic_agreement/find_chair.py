@@ -51,12 +51,25 @@ CAMERA_STREAMS = {
 # --------------------------------------------------------------------------- #
 # Pure logic (unit-tested, no ROS / no ML)
 # --------------------------------------------------------------------------- #
-def covisibility_windows(times_by_sensor: dict, bin_s: float = 0.5,
-                         min_sensors: int = 2):
-    """Intervals where >= min_sensors have a detection within bin_s/2 of a grid.
+def _present(times_by_sensor, g, half):
+    """Set of sensors with a detection within ``half`` of time ``g``."""
+    return {s for s, ts in times_by_sensor.items()
+            if any(abs(x - g) <= half for x in ts)}
 
-    Returns a list of ``(start_s, end_s, frozenset(sensors))`` sorted by start.
+
+def covisibility_windows(times_by_sensor: dict, bin_s: float = 0.5,
+                         min_sensors: int = 2, required=()):
+    """Intervals where the chair is co-visible.
+
+    A grid instant qualifies iff it has ``>= min_sensors`` detections within
+    ``bin_s/2`` AND every sensor in ``required`` is among them. So passing
+    ``required=("zed","realsense","arducam")`` yields only spans where the chair
+    is in *all three cameras at once* — the window's sensor set then holds for
+    every instant in it, not just somewhere inside.
+
+    Returns ``[(start_s, end_s, frozenset(sensors)), ...]`` sorted by start.
     """
+    required = set(required)
     all_t = sorted(t for ts in times_by_sensor.values() for t in ts)
     if not all_t:
         return []
@@ -65,13 +78,16 @@ def covisibility_windows(times_by_sensor: dict, bin_s: float = 0.5,
     windows, cur = [], None
     g = all_t[0]
     while g <= all_t[-1] + 1e-9:
-        present = {s for s, ts in times_by_sensor.items()
-                   if any(abs(x - g) <= half for x in ts)}
-        if len(present) >= min_sensors:
+        present = _present(times_by_sensor, g, half)
+        ok = len(present) >= min_sensors and required.issubset(present)
+        if ok:
             if cur is None:
                 cur = [g, g, set(present)]
             else:
-                cur[1], cur[2] = g, cur[2] | present
+                # with `required`, intersect so the reported set is what holds
+                # everywhere in the window; without it, keep the union.
+                cur[1] = g
+                cur[2] = (cur[2] & present) if required else (cur[2] | present)
         elif cur is not None:
             windows.append((cur[0], cur[1], frozenset(cur[2])))
             cur = None
@@ -82,37 +98,40 @@ def covisibility_windows(times_by_sensor: dict, bin_s: float = 0.5,
 
 
 def _coverage(times_by_sensor, g, half):
-    return sum(1 for ts in times_by_sensor.values()
-               if any(abs(x - g) <= half for x in ts))
+    return len(_present(times_by_sensor, g, half))
 
 
 def suggest_times(times_by_sensor: dict, bin_s: float = 0.5, min_sensors: int = 2,
-                  n: int = 6):
-    """Pick up to ``n`` well-spread timestamps, each with as many sensors as
-    possible, drawn only from the co-visibility windows."""
-    wins = covisibility_windows(times_by_sensor, bin_s, min_sensors)
+                  n: int = 6, required=()):
+    """Pick up to ``n`` well-spread timestamps, drawn only from the co-visibility
+    windows. Every returned instant is guaranteed to satisfy ``required`` (all
+    listed sensors present) — not merely to fall inside a qualifying window."""
+    required = set(required)
+    half = bin_s / 2.0
+    wins = covisibility_windows(times_by_sensor, bin_s, min_sensors, required)
     if not wins:
         return []
-    half = bin_s / 2.0
     lo, hi = wins[0][0], wins[-1][1]
     covered = [(a, b) for a, b, _ in wins]
 
     def in_window(t):
         return any(a <= t <= b for a, b in covered)
 
+    def satisfies(t):
+        return in_window(t) and required.issubset(_present(times_by_sensor, t, half))
+
     picks = []
     for i in range(n):
         target = lo + (hi - lo) * (i + 0.5) / n
-        # snap target into a covered interval, then to the best-coverage instant nearby
         if not in_window(target):
             target = min((a for a, b in covered if a >= target), default=None) \
                 or max(b for a, b in covered)
-        # local search over a fine grid inside +/- bin_s for max coverage
-        cands = np.arange(target - bin_s, target + bin_s, half / 2)
-        cands = [t for t in cands if in_window(t)]
+        cands = [t for t in np.arange(target - bin_s, target + bin_s, half / 2)
+                 if satisfies(t)]
         if not cands:
-            cands = [target]
-        best = max(cands, key=lambda t: (_coverage(times_by_sensor, t, half), -abs(t - target)))
+            continue                       # no instant here meets `required`; skip
+        best = max(cands, key=lambda t: (_coverage(times_by_sensor, t, half),
+                                         -abs(t - target)))
         if all(abs(best - p) > half for p in picks):
             picks.append(round(float(best), 3))
     return sorted(picks)
@@ -197,14 +216,19 @@ def _emit_type(key):
             "zed_pose": PoseStamped, "rs_pose": PoseStamped}[key]
 
 
-def emit_observations(times, dets, buffers, lidar_roi):
-    """Build an observations dict from detections + depth/pose buffers."""
+def emit_observations(times, dets, buffers, lidar_roi, required=()):
+    """Build an observations dict from detections + depth/pose buffers.
+
+    Any frame missing a chair pixel for a sensor in ``required`` is dropped, so
+    every emitted frame really does see the chair in all the required cameras.
+    """
     import dataset as ds
     from cv_bridge import CvBridge
     bridge = CvBridge()
     Kmap = {"zed": ds.ZED_LEFT, "realsense": ds.REALSENSE, "arducam": ds.ARDUCAM}
+    required = set(required)
 
-    frames = []
+    frames, dropped = [], []
     for i, tt in enumerate(times):
         sensors = {}
         for key, meta in CAMERA_STREAMS.items():
@@ -239,7 +263,17 @@ def emit_observations(times, dets, buffers, lidar_roi):
                 if c:
                     sensors["lidar"] = {"point": [round(v, 4) for v in c]}
 
-        frames.append({"id": i, "t": round(float(tt), 3), "sensors": sensors})
+        # enforce the "all required cameras see the chair" guarantee at emit time
+        missing = [s for s in required if s not in sensors or "pixel" not in sensors[s]]
+        if missing:
+            dropped.append((round(float(tt), 3), missing))
+            continue
+        frames.append({"id": len(frames), "t": round(float(tt), 3), "sensors": sensors})
+
+    if dropped:
+        print("\n  dropped frames missing a required camera:")
+        for tt, miss in dropped:
+            print(f"    t={tt:.2f}s  missing {', '.join(miss)}")
     return {"frames": frames}
 
 
@@ -255,6 +289,11 @@ def main():
     ap.add_argument("--bin", type=float, default=0.5,
                     help="co-visibility time tolerance (s)")
     ap.add_argument("--min-sensors", type=int, default=2)
+    ap.add_argument("--require", nargs="*", default=None,
+                    help="sensors that MUST all see the chair at each chosen "
+                         "instant. Default: all three cameras "
+                         "(zed realsense arducam). Relax with e.g. "
+                         "'--require zed realsense', or disable with '--require'.")
     ap.add_argument("--n-times", type=int, default=6)
     ap.add_argument("--csv", default="chair_detections.csv")
     ap.add_argument("--emit-observations", default=None,
@@ -283,20 +322,34 @@ def main():
             print(f"  {sensor:10s}: {len(rows):4d} detections, t in [{min(ts):.1f}, {max(ts):.1f}] s")
 
     times_by_sensor = {s: [t for t, _ in rows] for s, rows in dets.items() if rows}
-    wins = covisibility_windows(times_by_sensor, args.bin, args.min_sensors)
-    print(f"\nco-visibility windows (>= {args.min_sensors} sensors):")
-    if not wins:
-        print("  none — lower --min-sensors or check topic names")
-    for a, b, sset in wins:
-        print(f"  [{a:6.1f} .. {b:6.1f}] s  ({b - a:4.1f}s)  sensors: {', '.join(sorted(sset))}")
 
-    times = suggest_times(times_by_sensor, args.bin, args.min_sensors, args.n_times)
+    # Default: require the chair in all three cameras at the chosen instant.
+    all_cameras = [c["sensor"] for c in CAMERA_STREAMS.values()]
+    required = all_cameras if args.require is None else args.require
+    min_sensors = max(args.min_sensors, len(required))
+
+    never = [s for s in required if not times_by_sensor.get(s)]
+    if never:
+        print(f"\n  WARNING: chair never detected in: {', '.join(never)} — no timestamp "
+              f"can satisfy all required cameras.\n"
+              f"  Check the topic/detector, or relax with --require "
+              f"{' '.join(s for s in required if s not in never)}")
+
+    req_txt = ", ".join(required) if required else "(none)"
+    wins = covisibility_windows(times_by_sensor, args.bin, min_sensors, required)
+    print(f"\nco-visibility windows (require: {req_txt}):")
+    if not wins:
+        print("  none — relax --require / --min-sensors or check topic names")
+    for a, b, sset in wins:
+        print(f"  [{a:6.1f} .. {b:6.1f}] s  ({b - a:4.1f}s)  all-present: {', '.join(sorted(sset))}")
+
+    times = suggest_times(times_by_sensor, args.bin, min_sensors, args.n_times, required)
     if times:
-        print("\nsuggested capture times:")
+        print(f"\nsuggested capture times (each sees the chair in: {req_txt}):")
         print("  --times " + " ".join(f"{t:.2f}" for t in times))
 
     if args.emit_observations and times:
-        obs = emit_observations(times, dets, buffers, args.lidar_roi)
+        obs = emit_observations(times, dets, buffers, args.lidar_roi, required)
         with open(args.emit_observations, "w") as f:
             yaml.safe_dump(obs, f, sort_keys=False)
         print(f"\nwrote filled observations -> {args.emit_observations}")

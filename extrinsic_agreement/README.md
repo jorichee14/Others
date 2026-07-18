@@ -120,14 +120,25 @@ python3 agreement.py observations.yaml --lidar-interp auto
 `find_chair.py` runs YOLO (COCO class `chair`) over `/zed/.../left/image_rect_color`,
 `/camera/camera/color/image_raw`, and `/arducam/image_raw`, sampling each stream at
 `--every-sec`. It writes `chair_detections.csv` (every hit: sensor, time, confidence,
-box, centre pixel), prints the windows where `>= --min-sensors` see the chair at
-once (those are the moments worth capturing — the description says both platforms
-pass it in the **start-to-middle**, so expect the windows there), and prints a
-spread-out `--times` list. With `--emit-observations` it also fills the YAML
-automatically: box centre → aligned-depth deproject → 3D point, plus the nearest
-pose and (with `--lidar-roi`) the LiDAR centroid — so you can go straight to
-`agreement.py`. Sanity-check a couple of the auto-filled points against the images;
-a box centre can land between chair parts and pull a background depth.
+box, centre pixel), prints the co-visibility windows, and prints a spread-out
+`--times` list. (The description says both platforms pass the chair in the
+**start-to-middle**, so expect the windows there.)
+
+**By default every chosen timestamp is guaranteed to see the chair in all three
+cameras** (`zed`, `realsense`, `arducam`) — not merely to fall inside a window
+where each is seen *somewhere*. Each returned instant is checked to have a
+detection in all three within `--bin/2` seconds; instants where any camera has
+dropped out are excluded, and `--emit-observations` re-checks and drops any frame
+missing a required camera (it prints which). Relax it if a camera never sees the
+chair: `--require zed realsense` (or `--require` alone for no constraint). If a
+required camera is never detected at all, it warns and tells you no timestamp can
+satisfy the set.
+
+With `--emit-observations` it also fills the YAML automatically: box centre →
+aligned-depth deproject → 3D point, plus the nearest pose and (with `--lidar-roi`)
+the LiDAR centroid — so you can go straight to `agreement.py`. Sanity-check a
+couple of the auto-filled points against the images; a box centre can land between
+chair parts and pull a background depth.
 
 If you'd rather just grab a timestamp yourself: scrub the bag in `rqt_bag`/`rviz2`,
 note a few seconds where the chair is clearly in view of two platforms, and pass
