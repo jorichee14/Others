@@ -75,6 +75,8 @@ z error**.
 | `se3.py` | SE(3) algebra with **one** stated convention (`T_a_b · p_b = p_a`) | via self-test |
 | `agreement.py` | the three tests + a printed report; CLI over an observations YAML | via self-test |
 | `test_agreement.py` | synthetic ground-truth self-test of the transform math | **run me** |
+| `find_chair.py` | detect the chair over the bag → all timestamps + co-visibility windows + suggested `--times`; can emit a filled observations YAML | logic unit-tested |
+| `test_find_chair.py` | unit test of the co-visibility / time-selection logic | **run me** |
 | `extract_observations.py` | interactive rosbag → observations YAML (needs ROS 2) | env-specific |
 | `observations.example.yaml` | the input format (placeholder numbers) | — |
 
@@ -93,8 +95,17 @@ python3 test_agreement.py                 # prove the math (no ROS needed)
 ```
 
 ```bash
-# 1. Pull chair observations out of the bag at a few times where it's visible
-#    (start/middle — where /vo_pose is still good and both platforms pass it):
+# 0. FIND THE CHAIR. Detect it across the camera streams, list every timestamp,
+#    the co-visibility windows, and a ready-to-paste --times list. Add
+#    --emit-observations to skip step 1 entirely (auto box -> depth -> pose):
+pip install ultralytics                            # detector (COCO 'chair')
+python3 find_chair.py mirc_dataset_20260706_complete --every-sec 0.3 \
+    --lidar-roi 1.5 4.0 -1.0 1.0 -0.6 0.8 \
+    --emit-observations observations.yaml
+#   -> chair_detections.csv, the windows, --times ..., and a filled YAML.
+
+# 1. (only if you didn't use --emit-observations) pull observations by hand,
+#    clicking the chair at the times find_chair suggested:
 python3 extract_observations.py mirc_dataset_20260706_complete \
     --times 12.5 15.0 21.3 28.0 \
     --lidar-roi  1.5 4.0  -1.0 1.0  -0.6 0.8 \    # os_lidar box around the chair
@@ -103,6 +114,24 @@ python3 extract_observations.py mirc_dataset_20260706_complete \
 # 2. Quantify the agreement:
 python3 agreement.py observations.yaml --lidar-interp auto
 ```
+
+### Finding the chair / getting the timestamps
+
+`find_chair.py` runs YOLO (COCO class `chair`) over `/zed/.../left/image_rect_color`,
+`/camera/camera/color/image_raw`, and `/arducam/image_raw`, sampling each stream at
+`--every-sec`. It writes `chair_detections.csv` (every hit: sensor, time, confidence,
+box, centre pixel), prints the windows where `>= --min-sensors` see the chair at
+once (those are the moments worth capturing — the description says both platforms
+pass it in the **start-to-middle**, so expect the windows there), and prints a
+spread-out `--times` list. With `--emit-observations` it also fills the YAML
+automatically: box centre → aligned-depth deproject → 3D point, plus the nearest
+pose and (with `--lidar-roi`) the LiDAR centroid — so you can go straight to
+`agreement.py`. Sanity-check a couple of the auto-filled points against the images;
+a box centre can land between chair parts and pull a background depth.
+
+If you'd rather just grab a timestamp yourself: scrub the bag in `rqt_bag`/`rviz2`,
+note a few seconds where the chair is clearly in view of two platforms, and pass
+those to `--times` in step 1.
 
 ## Reading the report
 
