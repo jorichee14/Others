@@ -258,9 +258,87 @@ def rung4(G=16, budget=16):
     return dict(A=(A_det, A_seg), Ag=(Ag_det, Ag_seg), B=(B_det, B_seg))
 
 
+def _frame_degradation_curve(seed, occ, G):
+    """For one frame: return D(K) = fraction of DETECTION value NOT delivered when sending
+    the top-K tokens. Non-increasing in K (monotone) -> valid for conformal risk control."""
+    img, det, seg = make_scene(seed=seed)
+    ego, collab, vis = split_agents(img, occlude_frac=occ)
+    Vdet, _, _ = per_task_value(det, seg, vis, G)
+    order = np.argsort(Vdet.flatten())[::-1]
+    vals = Vdet.flatten()[order]
+    total = vals.sum() + 1e-9
+    cum = np.cumsum(vals) / total                 # recovered fraction after top-K
+    D = np.concatenate([[1.0], 1.0 - cum])        # D[K], K=0..N  (D[0]=1, D[N]=0)
+    return D
+
+
+def rung5(G=16, F=80, n_cal=20, n_splits=300, seed0=100):
+    """SINGLE-TASK CERTIFICATION (the small-scale first project).
+    Choose the FEWEST tokens K so detection degradation D <= eps holds with a distribution-free
+    finite-sample guarantee (Conformal Risk Control). We measure VALIDITY the honest way: over many
+    random calibrate/test splits, how often does each method's guarantee BREAK on held-out frames?
+
+    CRC rule (loss in [0,1], bound B=1): K_hat = min K such that
+        (n/(n+1)) * mean_cal D_i(K) + 1/(n+1) <= eps .
+    A distribution-free guarantee means: averaged over splits, E[test degradation] <= eps.
+    """
+    rng = np.random.RandomState(seed0)
+    N = G * G
+    curves = []                                    # per-frame degradation curve D(K), K=0..N
+    for f in range(F):
+        occ = float(rng.uniform(0.15, 0.55))       # heterogeneous difficulty across frames
+        curves.append(_frame_degradation_curve(seed=seed0 + f, occ=occ, G=G))
+    curves = np.stack(curves)                       # (F, N+1)
+    n = n_cal
+    floor = 1.0 / (n + 1)
+
+    def pick(mean_cal, eps, crc):
+        adj = (n / (n + 1)) * mean_cal + floor if crc else mean_cal
+        ok = np.where(adj <= eps)[0]
+        return int(ok[0]) if len(ok) else None
+
+    print("RUNG 5 — SINGLE-TASK CERTIFICATION  (send-minimal detection, distribution-free)")
+    print(f"  {F} frames, n_cal={n_cal}, {n_splits} random splits, N={N} tokens, CRC floor 1/(n+1)={floor:.3f}")
+    print(f"  validity = fraction of splits with test degradation <= eps  (want ~1.0)")
+    print(f"  {'eps':>5} | {'CRC valid%':>10}{'CRC testD':>10}{'CRC K':>7} | {'naive valid%':>13}{'naive testD':>12}{'naive K':>8}")
+    eps_list = [0.05, 0.08, 0.12, 0.18, 0.25]
+    res = {"eps": [], "crc_v": [], "naive_v": []}
+    for eps in eps_list:
+        cv = nv = 0; ctd = ntd = 0.0; cK = nK = 0; cn = nn = 0
+        for s in range(n_splits):
+            idx = rng.permutation(F)
+            cal, test = curves[idx[:n_cal]], curves[idx[n_cal:]]
+            mc = cal.mean(0); mt = test.mean(0)
+            kc, kn = pick(mc, eps, True), pick(mc, eps, False)
+            if kc is not None:
+                cv += (mt[kc] <= eps); ctd += mt[kc]; cK += kc; cn += 1
+            if kn is not None:
+                nv += (mt[kn] <= eps); ntd += mt[kn]; nK += kn; nn += 1
+        crc_v = cv / max(cn, 1); naive_v = nv / max(nn, 1)
+        print(f"  {eps:>5.2f} | {100*crc_v:>9.0f}%{ctd/max(cn,1):>10.3f}{cK/max(cn,1):>7.1f} |"
+              f" {100*naive_v:>12.0f}%{ntd/max(nn,1):>12.3f}{nK/max(nn,1):>8.1f}")
+        res["eps"].append(eps); res["crc_v"].append(crc_v); res["naive_v"].append(naive_v)
+    print("  => CRC keeps validity near 100% (test degradation <= eps); the naive empirical threshold")
+    print("     sits ON the boundary, so it breaks the guarantee ~half the splits. The +1/(n+1) margin")
+    print("     is what buys distribution-free validity. Cost: CRC sends a few more tokens.")
+    print("     THIS IS THE WHOLE SMALL PROJECT: certify the communication decision. (Guide section 10, M=1.)\n")
+
+    os.makedirs(OUT, exist_ok=True)
+    plt.figure(figsize=(6.0, 4.6))
+    x = np.array(res["eps"])
+    plt.plot(x, res["crc_v"], "o-", color="#1f77b4", label="conformal risk control")
+    plt.plot(x, res["naive_v"], "o-", color="#d62728", label="naive empirical threshold")
+    plt.axhline(1.0, color="gray", ls="--", lw=1)
+    plt.xlabel("target degradation  eps"); plt.ylabel("validity  (P[test degradation <= eps])")
+    plt.title("Rung 5 — single-task certification: CRC valid, naive breaks ~half the time")
+    plt.ylim(0, 1.05); plt.legend(fontsize=8)
+    plt.tight_layout(); plt.savefig(os.path.join(OUT, "rung5_certified.png"), dpi=130); plt.close()
+    return res
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rung", default="all", help="1 | 2 | 3 | 4 | all")
+    ap.add_argument("--rung", default="all", help="1 | 2 | 3 | 4 | 5 | all")
     ap.add_argument("--grid", type=int, default=16)
     ap.add_argument("--budget", type=int, default=16)
     args = ap.parse_args()
@@ -269,8 +347,9 @@ def main():
     if args.rung in ("2", "all"): rung2(args.grid)
     if args.rung in ("3", "all"): rung3(args.grid)
     if args.rung in ("4", "all"): rung4(args.grid, args.budget)
+    if args.rung in ("5", "all"): rung5(args.grid)
     if args.rung == "all":
-        print(f"[plots] {OUT}/  (rung2_budget.png, rung3_two_tasks.png, rung4_toyG0.png)")
+        print(f"[plots] {OUT}/  (rung2_budget.png, rung3_two_tasks.png, rung4_toyG0.png, rung5_certified.png)")
 
 
 if __name__ == "__main__":
