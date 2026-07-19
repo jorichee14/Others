@@ -69,6 +69,24 @@ verify in full text). Their axis is *representation*; yours is *communication un
   at equal budget.
 - **G3 — certificate holds.** Per-task preservation: each requested task <= alpha degradation.
 
+## Wedge verification — STAMP + Scene Completion (checked 2026-07-19)
+
+Read via official READMEs (raw.githubusercontent) + abstracts + search snippets. NOTE: arxiv /
+openreview / mlr are blocked by this session's egress policy, so full method sections were not read —
+confidence levels noted.
+
+| Check | Scene Completion / STAR (CoRL'22) | STAMP (ICLR'25) |
+|---|---|---|
+| Optimized bandwidth budget / adaptive select-what-to-send | No — fixed spatial sub-sampling + temporal mixing ("amortizes comm cost"); not adaptive | No — optimizes interoperability + training scalability (~1MB adapters), not transmit-selection |
+| Transmission conditioned on receiver's TASK | **No — explicitly task-agnostic**; one message, det & seg read same completion output, no fine-tune | **No — task-agnostic by design**; "collaborate without being conditioned on specific tasks" |
+| Link failure / multi-radio | Not addressed | Not addressed |
+
+**Verdict: the wedge is open.** Both make "task-agnostic" a virtue (one message for all tasks); the
+thesis is the counter — under a tight budget, task-agnostic sending is wasteful, condition on task
+demand. Position on top of their representation, not against it. STAMP (det + BEV-seg, OPV2V/V2V4Real,
+public code) is the ideal G0 testbed. Confidence: task-conditioning = high; budget = medium-high
+(confirm no accuracy-vs-bandwidth selection sweep in STAMP full text before submission).
+
 ## Immediate next actions
 
 1. Full-text check of STAMP + Scene Completion for (a) bandwidth budget, (b) task-demand conditioning
