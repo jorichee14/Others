@@ -59,8 +59,16 @@ Ranked by threat to your novelty claim. **★ = the ones a reviewer will most li
 |---|---|---|
 | ★ **JigsawComm** (arXiv 2511.17843, Nov 2025) | End-to-end learned feature encode+select; provably-optimal top-1 policy eliminating cross-agent redundancy; O(1) comm. | Single abstract channel. *Drops* redundant content; you *offload* it. No link model, no failure guarantee. This is your headline baseline. |
 | ★ **V2X-DSC** (arXiv 2602.00687, Feb 2026) | Distributed source coding (Wyner–Ziv) conditional codec: receiver only needs the *innovation* not predictable from its own BEV feature as side info. | This **is** your `Rec` axis, already built for CP. Single channel, no routing, no offload, no failure guarantee. **Biggest threat to the "reconstructability is novel" reading** — so do not claim Rec as novel; cite V2X-DSC as the source and route on top of it. |
+| ★ **HydraCollab** (arXiv 2607.00191, UC Irvine AICPS, 2026) | Two parts: (a) *collaboration-aware sensor gating* (top-k which sensor — LiDAR/Radar/fusion — to request); (b) *spatially-aware hybrid collaboration* — per region, **intermediate** (rich features) where two agents' confidence overlaps, **late** (cheap detection outputs) where only one is confident. Datasets V2X-R / V2X-Radar / UAV3D-mini; vs Where2comm uses 41%/26% bandwidth at +0.78%/+0.75% AP. | **This is the work your note names, and it is the closest on *structure*: a per-region *discrete adaptive choice on confidence maps*, exactly the shape of your `{drop, best-effort, reliable}` routing.** But: single channel with a byte budget B, **no physical-link model, no dual-radio, no failure guarantee**. Your core gap survives. See the tension note below — you must distinguish your routing from its intermediate/late selection *and* reconcile a genuine conceptual conflict. |
 | ★ **CoSDH** (CVPR 2025, arXiv 2503.03430) | Supply–demand awareness selects collaboration regions; intermediate-late hybrid for low-bandwidth robustness. | "Supply–demand" ≈ your Imp×Rec at region level; single channel. Late-fusion fallback is *conceptually adjacent* to your failure guarantee — call this out before a reviewer does. |
 | **Where2comm** (NeurIPS 2022) | Spatial confidence map → send sparse-but-critical features. | Importance-only, single channel. Your Policy-1 baseline. |
+
+**⚠️ Tension to resolve (HydraCollab vs. your `Rec` axis) — this is now the sharpest attack on your formulation.** HydraCollab and your note make *opposite* assumptions about mutually-observed (overlap) content:
+
+- **HydraCollab:** overlap regions get **intermediate** (rich feature) collaboration — i.e. mutually-observed content is treated as **fusion-valuable** (two confident views fused > one).
+- **Your note (2×2):** high-Rec / mutually-observed content is treated as **reconstructable/redundant** → offload to the droppable best-effort link.
+
+Both cannot be unconditionally true. If a second confident view carries independent information that *improves* fused detection (HydraCollab's premise, and it has AP numbers supporting it), then routing that content to a link that can vanish will lose accuracy under failure — contradicting your assumption that high-Rec content is safely offloadable. **The reconciliation is your `Rec` definition itself:** `Rec = 1 − H(f_j(u)|S_i)/H(f_j(u))` measures *conditional predictability given ego side-info*, which is stricter than *confidence overlap*. Overlap ≠ reconstructable: two agents can both be confident about a region yet the collaborator's features still carry unpredictable innovation (different viewpoint, complementary modality). Your note already anticipates this (§Definitions: "`S_i` must be broader than instantaneous confidence overlap — otherwise Rec collapses into HydraCollab's pairwise-overlap mask"), and HydraCollab's binary `I_Inter = 1(c_i≥λ)⊙1(c_j≥λ)` mask is **exactly** the overlap mask you must not collapse to. So: (1) the note's warning is now precisely verified against the real method — good rigor; (2) you must *empirically show* Rec (measured via a V2X-DSC-style conditional codec) diverges from HydraCollab's overlap mask, or the offload decision is unsafe. **This is really a fourth go/no-go test: does calibrated Rec predict fusion-innovation-loss better than overlap?** If not, HydraCollab's intermediate-in-overlap policy beats your offload-in-overlap policy and the contribution weakens.
 
 ### Tier 2 — adjacent axes you must cite to look literate
 
@@ -75,9 +83,9 @@ Ranked by threat to your novelty claim. **★ = the ones a reviewer will most li
 | **Reliable V2C over multiple paths + redundancy mitigation** (Applied Sciences 2024); **NC-MAC** (TVT 2021) | Multipath + redundancy for *reliability*. | Duplication for reliability, not value-routing for capacity. |
 | **Interruption-Aware CP / V2X-INCOP** (arXiv 2304.11821) | Robustness to comm interruption via history recovery. | Single-channel outage *recovery* after the fact; you *prevent* degradation by construction. |
 
-### ⚠️ Citation you must fix
+### Citation status (corrected)
 
-Your note cites **"HydraCollab"** (§Definitions, "HydraCollab's pairwise-overlap mask") and **"JigsawComm relevance"** as established. I could **not verify a paper named HydraCollab** in the literature (July 2026). Treat that citation as unconfirmed — locate the real title or drop it, because a reviewer who can't find it will discount the surrounding argument. (JigsawComm, Where2comm, CoSDH, ETSI CPS, V2X-DSC, ATSSS all verified.)
+An earlier draft of this analysis flagged **"HydraCollab"** as unverifiable. **That was wrong — HydraCollab is a real paper** (arXiv 2607.00191, Chen et al., UC Irvine AICPS; code at github.com/AICPS/HydraCollab). Your note's reference to "HydraCollab's pairwise-overlap mask" is accurate: its intermediate-collaboration mask is literally `1(c_i≥λ)⊙1(c_j≥λ)`. It is now promoted to a Tier-1 competitor (above). All other cited works — JigsawComm, Where2comm, CoSDH, ETSI CPS, V2X-DSC, ATSSS — remain verified.
 
 ---
 
@@ -86,7 +94,7 @@ Your note cites **"HydraCollab"** (§Definitions, "HydraCollab's pairwise-overla
 Three converging trends put a clock on this idea:
 
 1. **The reconstructability axis just got built for CP.** V2X-DSC (Feb 2026) operationalizes Wyner–Ziv side-info reconstruction in exactly this setting. A follow-up that adds a second link is the obvious next step — you may be racing the same group.
-2. **The selection half is saturating.** Five+ 2025–2026 selectors (JigsawComm, CoSDH, What2Keep, InfoCom, SRA-CP, COOPERTRIM) means reviewers are fatigued by "yet another selection method." You **cannot** lead with selection.
+2. **The selection *and adaptive-strategy* halves are saturating.** Five+ 2025–2026 selectors (JigsawComm, CoSDH, What2Keep, InfoCom, SRA-CP, COOPERTRIM) plus HydraCollab's per-region *discrete adaptive choice* (intermediate/late on confidence maps) mean reviewers are fatigued by both "yet another selector" *and* "yet another adaptive per-region decision." You **cannot** lead with selection or with "adaptive routing" framed generically — HydraCollab already owns the discrete-choice-on-confidence-maps shape. Lead with the two things it lacks: a **physical-link/offload model** and a **failure guarantee**.
 3. **Cross-layer / physical-aware CP is arriving.** SComCP and task-oriented wireless CP already couple perception to channel state; UEP semantic comms already maps importance to protection. The step from "adapt rate to one channel" to "route across two radios" is small and someone will take it.
 
 **Implication:** your defensible moat is the *narrowest, hardest-to-replicate* claim — the **failure-conditioned sufficiency guarantee** and the **offload-inversion**, not the selection or the reconstructability. Build the paper around the guarantee.
@@ -140,6 +148,7 @@ Collaborative-perception selection / bandwidth:
 - JigsawComm — https://arxiv.org/abs/2511.17843
 - Where2comm — https://arxiv.org/abs/2209.12836
 - CoSDH (CVPR 2025) — https://arxiv.org/abs/2503.03430
+- HydraCollab (adaptive sensor gating + intermediate/late hybrid) — arXiv 2607.00191 · code https://github.com/AICPS/HydraCollab
 - What2Keep (CVIU 2025) — https://www.sciencedirect.com/science/article/abs/pii/S1077314225002954
 - InfoCom (information bottleneck) — https://arxiv.org/html/2512.10305
 - SRA-CP (risk-aware selection) — https://arxiv.org/pdf/2511.17461
@@ -168,4 +177,4 @@ Multipath / multi-radio / reliability:
 Robustness to interruption:
 - Interruption-Aware Cooperative Perception (V2X-INCOP) — https://arxiv.org/abs/2304.11821
 
-> Note: the note's cited **"HydraCollab"** could not be verified in the literature as of July 2026 — confirm the real title or remove the citation.
+> Correction: an earlier draft called "HydraCollab" unverifiable. It is real — arXiv 2607.00191 (UC Irvine AICPS) — and is now a Tier-1 competitor. The note's "pairwise-overlap mask" reference is accurate.
