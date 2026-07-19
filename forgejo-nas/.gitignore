@@ -1,0 +1,7 @@
+# Secrets — never commit
+.env
+
+# Runtime data created by the containers on the NAS.
+# These live on the NAS, not in git.
+data/
+db/

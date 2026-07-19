@@ -1,0 +1,85 @@
+# Forgejo Git server for Synology NAS (Docker Compose / Container Manager Project)
+# -----------------------------------------------------------------------------
+# - Forgejo: the Git server (web UI + Git over HTTP/SSH + built-in Git LFS)
+# - PostgreSQL: the database that stores users, permissions, issues, etc.
+#   (Repository files and LFS objects live on disk in the ./data volume,
+#    NOT in Postgres.)
+#
+# Copy .env.example to .env and fill it in BEFORE starting.
+# See README.md for the full step-by-step.
+
+services:
+  server:
+    image: codeberg.org/forgejo/forgejo:11
+    container_name: forgejo
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      # --- Run as the Synology user that owns the shared folder ---
+      # Find these with `id your_user` over SSH (see README step 2).
+      USER_UID: ${FORGEJO_UID}
+      USER_GID: ${FORGEJO_GID}
+
+      # --- Database connection (must match the db service below) ---
+      FORGEJO__database__DB_TYPE: postgres
+      FORGEJO__database__HOST: db:5432
+      FORGEJO__database__NAME: ${POSTGRES_DB}
+      FORGEJO__database__USER: ${POSTGRES_USER}
+      FORGEJO__database__PASSWD: ${POSTGRES_PASSWORD}
+
+      # --- Public identity (used to build clone URLs) ---
+      # Set these to your real domain once you have one. See README step 6.
+      FORGEJO__server__DOMAIN: ${FORGEJO_DOMAIN}
+      FORGEJO__server__ROOT_URL: ${FORGEJO_ROOT_URL}
+      FORGEJO__server__SSH_DOMAIN: ${FORGEJO_DOMAIN}
+      # Port shown in the "git clone ssh://..." string. This is the HOST port
+      # you mapped below (2222), because that's what external clients connect to.
+      FORGEJO__server__SSH_PORT: ${FORGEJO_SSH_PORT}
+
+      # --- Git LFS: turn the LFS server on (large-file storage) ---
+      FORGEJO__server__LFS_START_SERVER: "true"
+
+      # --- Security / user policy ---
+      # Lock the web installer: we configure everything via env instead, and
+      # create the admin from the command line (README step 5). Safer when
+      # the server will face the internet.
+      FORGEJO__security__INSTALL_LOCK: "true"
+      # No open sign-ups: you invite/create users yourself.
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      # New accounts require an admin to confirm (belt-and-suspenders).
+      FORGEJO__service__REGISTER_EMAIL_CONFIRM: "false"
+      # Keep repos private unless explicitly made public.
+      FORGEJO__repository__DEFAULT_PRIVATE: "private"
+      FORGEJO__repository__FORCE_PRIVATE: "false"
+    volumes:
+      # Everything Forgejo owns (repos, LFS objects, config app.ini, logs).
+      # Point ./data at a folder on a Synology *shared folder / volume*, not the
+      # system partition — see README step 3.
+      - ./data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      # Web UI:  http://NAS-IP:3000  (put HTTPS in front of this — README step 6)
+      - "3000:3000"
+      # Git over SSH: external clients use port 2222 (Synology already uses 22).
+      - "${FORGEJO_SSH_PORT}:22"
+    networks:
+      - forgejo
+
+  db:
+    image: postgres:17
+    container_name: forgejo-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./db:/var/lib/postgresql/data
+    networks:
+      - forgejo
+
+networks:
+  forgejo:
+    external: false
