@@ -7,6 +7,10 @@ over the internet with HTTPS.
 If you've never done this before, read the "What each piece is" section once,
 then follow the numbered steps in order.
 
+> **Want to try it first?** Run the throwaway local version on your own computer
+> before touching the NAS — see [`local-test/TESTING.md`](local-test/TESTING.md).
+> It's a 10-minute, single-container test you can delete cleanly.
+
 ---
 
 ## What you're building (and why these pieces)

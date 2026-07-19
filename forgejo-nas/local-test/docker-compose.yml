@@ -1,0 +1,34 @@
+# Forgejo — LOCAL TEST on your own computer (NOT the NAS setup)
+# -----------------------------------------------------------------------------
+# Deliberately minimal so you can kick the tires:
+#   - one container (no separate database — uses built-in SQLite)
+#   - the web setup wizard is ON, so you register the first user in the browser
+#     and it becomes the admin (most GitHub-like first experience)
+#   - Git LFS turned on so you can test large files
+#
+# Everything lives in ./data next to this file. Delete that folder (or run
+# `docker compose down -v` and remove it) to wipe the test completely.
+#
+# Start:  docker compose up -d
+# Open:   http://localhost:3000
+# Stop:   docker compose down
+
+services:
+  server:
+    image: codeberg.org/forgejo/forgejo:11
+    container_name: forgejo-test
+    restart: unless-stopped
+    environment:
+      # SQLite = no database container needed. Great for a throwaway test.
+      FORGEJO__database__DB_TYPE: sqlite3
+      # So clone URLs point at your laptop.
+      FORGEJO__server__DOMAIN: localhost
+      FORGEJO__server__ROOT_URL: http://localhost:3000/
+      FORGEJO__server__SSH_PORT: "2222"
+      # Turn on the Git LFS server.
+      FORGEJO__server__LFS_START_SERVER: "true"
+    volumes:
+      - ./data:/data
+    ports:
+      - "3000:3000"   # web UI
+      - "2222:22"     # git over ssh (optional for the test)
