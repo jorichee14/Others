@@ -3,6 +3,39 @@
 Reviewer-style assessment of the concept note `dual_link_collaborative_perception.md`.
 Prepared 2026-07-19. All prior-art claims below were checked against the live literature (July 2026); sources are linked at the end.
 
+> **⚠️ Read §0 first.** A later adversarial re-check (below) revised the verdict *downward*. Sections 1–7 were the first pass and are now partially superseded — §0 is the current, honest bottom line.
+
+---
+
+## 0. Comprehensive re-check (adversarial sweep) — the honest, revised verdict
+
+After a second sweep deliberately hunting for the paper that kills the idea, the answer to *"is it really novel?"* is:
+
+**Not fundamentally novel. It is *integratively* novel — a legitimate but modest applied/systems contribution — and two of its three headline claims now have strong, citable precedents that a knowledgeable reviewer will raise.** The exact assembled whole (joint per-unit `{drop, best-effort, reliable}` routing of *collaborative-perception features*, partitioned by importance × cross-agent-reconstructability, under a failure-survival constraint) still has **no single-paper match**. But every structural piece is now precedented, and the neighborhood is denser than the original note assumed:
+
+**New threats found in the second sweep (these are the ones that hurt):**
+
+1. **Layered / scalable coding + UEP across a reliable + best-effort channel pair — decades old.** The canonical scheme is *base layer → reliable/protected channel, enhancement layer(s) → best-effort channel*, so that critical content survives channel failure and extra content is offloaded for quality when the link permits. **This is the conceptual skeleton of the "capacity-offload inversion + survival guarantee."** A reviewer *will* say your reliable/best-effort partition is base/enhancement-layer UEP re-cast at the feature level. This is the single biggest hit to novelty claims #2 and #3.
+2. **Packet-loss-tolerant & progressive split inference — the recent ML-systems twin.** Work like *Packet-Loss-Tolerant Split Inference* (2104.13629) and *Progressive Feature Transmission for Split Inference* (2112.07244) already partitions/orders DNN **intermediate features** for transmission over an **unreliable channel**, has the receiver infer from **what survives**, and "selectively receives the most informative feature dimensions and decides whether to continue based on channel quality." That is mechanically very close to your select-and-route-under-loss, minus the multi-agent/dual-radio framing.
+3. **NR-V2X already standardizes routing content across reliability tiers.** Sidelink QoS exposes **PPPP** (per-packet priority) *and* **PPPR** (per-packet reliability) with multiple sidelink radio bearers of different reliability profiles. So "send this packet on a more-reliable vs. less-reliable bearer according to its importance" is a *standardized primitive*, not a new capability. What the standard does **not** provide is the *content-value computation from perception task-loss × cross-agent reconstructability*, or the *coupling with selection*.
+4. **Receiver-side regeneration of dropped features is being built into CP directly** — *Send Less, Perceive More* (masked quantized comm, 2602.21667) and *R-ACP* (2410.04168) train CP models to reconstruct missing/dropped features. This further erodes "reconstructability" as a novel axis (on top of V2X-DSC / DiffCP).
+
+**What survives as genuinely un-done (make *this* the core):**
+
+- **The selection↔routing coupling in the *multi-agent* setting.** That the availability of a second physical link *changes the optimal selection* — *routing-induced retention* and *failure-conditioned promotion* — is not produced by layered coding (fixed layers, no selection), by single-agent split inference (no cross-agent side-info), or by NR-V2X QoS (no content-value model). **This is your one claim with no clean precedent.**
+- **Reconstructability defined by *cross-agent + ego* side-information as the offload criterion** — the offload set is scene- and collaborator-dependent and *computed*, unlike a fixed codec enhancement layer. This is the honest distinction from layered UEP, and it is real but subtle.
+
+**Revised ratings (supersede the table in §1):**
+
+| Dimension | First pass | Revised | Why |
+|---|---|---|---|
+| Conceptual originality | 6.5/10 | **4.5/10** | Capacity-offload + survival ≈ layered UEP; progressive split inference is a close mechanical twin. |
+| Whitespace / crowding | 5.5/10 | **4/10** | Denser than assumed; routing primitive is standardized; reconstructability being built into CP. |
+| Defensibility vs. reviewers | 7/10 | **5/10** | Strong *only if* reframed around the coupling and layered-UEP is cited head-on; weak if pitched as "capacity offload is new." |
+| Practical impact ceiling | 6/10 | 6/10 | Unchanged — the real problem is real. |
+
+**Bottom line for "is it really novel?":** *As an assembled system, yes, narrowly — nobody has published this exact joint CP-feature router with a failure constraint. As a research contribution, it is modest and integrative, not fundamental, and it is one honest reviewer away from "this is layered UEP / progressive split inference for CP features."* To be publishable-strong within the joint-task scope you must (a) **lead with the multi-agent selection↔routing coupling** as the contribution, (b) **cite layered-coding UEP and progressive split inference head-on** and show — empirically, via G2 — that your joint partition differs from and beats what a fixed-layer or single-agent scheme can produce, and (c) treat "capacity-offload inversion" as *"the cross-agent-reconstructability generalization of base/enhancement UEP,"* not as a from-scratch novelty. If G2 cannot show a partition the precedents can't produce, the joint-task-only version is too thin — that is when the deferred certification angle (which *is* un-precedented) becomes worth reviving.
+
 ---
 
 ## 1. Bottom line up front
@@ -176,5 +209,19 @@ Multipath / multi-radio / reliability:
 
 Robustness to interruption:
 - Interruption-Aware Cooperative Perception (V2X-INCOP) — https://arxiv.org/abs/2304.11821
+
+Second-sweep threats (§0):
+- Packet-Loss-Tolerant Split Inference — https://arxiv.org/abs/2104.13629
+- Progressive Feature Transmission for Split Inference at the Wireless Edge — https://arxiv.org/pdf/2112.07244
+- Send Less, Perceive More: Masked Quantized Point Cloud Comm for Loss-Tolerant CP — https://arxiv.org/html/2602.21667
+- R-ACP: Real-Time Adaptive Collaborative Perception via Robust Task-Oriented Comms — https://arxiv.org/pdf/2410.04168
+- HEAD: Bandwidth-Efficient CP for Heterogeneous CAVs (sensor/model heterogeneity, not link) — https://arxiv.org/abs/2408.15428
+- Task-Oriented Comm for V2I Cooperative Perception — https://arxiv.org/abs/2407.20748
+- SComCP: Task-Oriented Semantic Comm for CP — https://arxiv.org/html/2507.00895
+- InfoCom: Kilobyte-Scale CP with Information Bottleneck (claims a theoretical guarantee, on compression not failure) — https://arxiv.org/html/2512.10305
+- Importance-Aware Resource Allocation for MIMO Semantic Comm — https://www.ncbi.nlm.nih.gov/pmc/articles/PMC12191451/
+- Multi-RAT Diversity for Cooperative Automated Driving (content-blind, for reliability) — https://ieeexplore.ieee.org/document/8891072/
+- NR-V2X sidelink QoS: PPPP/PPPR, multiple SL radio bearers (standardized reliability-tier routing) — https://patents.google.com/patent/US20210337423A1/en
+- Layered/scalable video coding + UEP over reliable/best-effort channels (the decades-old ancestor of capacity-offload) — see SVC overview: https://www.sciencedirect.com/topics/computer-science/scalable-video-coding
 
 > Correction: an earlier draft called "HydraCollab" unverifiable. It is real — arXiv 2607.00191 (UC Irvine AICPS) — and is now a Tier-1 competitor. The note's "pairwise-overlap mask" reference is accurate.
