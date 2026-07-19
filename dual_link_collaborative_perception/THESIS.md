@@ -71,21 +71,23 @@ verify in full text). Their axis is *representation*; yours is *communication un
 
 ## Wedge verification — STAMP + Scene Completion (checked 2026-07-19)
 
-Read via official READMEs (raw.githubusercontent) + abstracts + search snippets. NOTE: arxiv /
-openreview / mlr are blocked by this session's egress policy, so full method sections were not read —
-confidence levels noted.
+Confirmed at FULL-TEXT level (both PDFs read end-to-end, 2026-07-19).
 
 | Check | Scene Completion / STAR (CoRL'22) | STAMP (ICLR'25) |
 |---|---|---|
-| Optimized bandwidth budget / adaptive select-what-to-send | No — fixed spatial sub-sampling + temporal mixing ("amortizes comm cost"); not adaptive | No — optimizes interoperability + training scalability (~1MB adapters), not transmit-selection |
-| Transmission conditioned on receiver's TASK | **No — explicitly task-agnostic**; one message, det & seg read same completion output, no fine-tune | **No — task-agnostic by design**; "collaborate without being conditioned on specific tasks" |
+| Reduces bandwidth, but how? | Yes — **spatiotemporal sub-sampling** (complementary spatial patches + temporal mixing; "static patches needn't be shared every frame"). Task-blind, importance-blind redundancy heuristic. | Yes — a **fixed uniform channel compressor** `phi_i` shrinks BEV features before broadcast. For interoperability, not adaptive selection. |
+| Adaptive / importance / budget selection of what to send | No | No |
+| Transmission conditioned on receiver's TASK | **No — explicitly task-agnostic**; "independent from downstream tasks", one message feeds det & seg without fine-tune | **No — task-agnostic protocol feature**; heterogeneous tasks fuse a common feature, transmission never task-conditioned |
+| Robustness tested | async training (not link loss) | **localization/pose noise** (Gaussian sigma) — NOT link failure/packet loss |
 | Link failure / multi-radio | Not addressed | Not addressed |
 
-**Verdict: the wedge is open.** Both make "task-agnostic" a virtue (one message for all tasks); the
-thesis is the counter — under a tight budget, task-agnostic sending is wasteful, condition on task
-demand. Position on top of their representation, not against it. STAMP (det + BEV-seg, OPV2V/V2V4Real,
-public code) is the ideal G0 testbed. Confidence: task-conditioning = high; budget = medium-high
-(confirm no accuracy-vs-bandwidth selection sweep in STAMP full text before submission).
+**Verdict: the wedge is open (high confidence, full-text).** Precise framing for related work: both
+**reduce** bandwidth by a *task-blind, fixed* scheme (STAR = spatiotemporal sub-sampling; STAMP =
+uniform channel compression) — neither selects what to send by per-task value, adapts to a budget, or
+survives link loss. Contrast: vs STAR, its drop criterion is spatiotemporal redundancy, yours is
+task-conditioned value; vs STAMP, it compresses uniformly for interoperability, you route/select by
+task demand. Position ON TOP of their representation, not against it. STAMP (det + BEV-seg,
+OPV2V/V2V4Real, public code, pose-noise robustness harness) is the ideal G0 testbed.
 
 ## Immediate next actions
 
