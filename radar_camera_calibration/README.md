@@ -5,8 +5,62 @@ one rigid target: a **ChArUco board with a trihedral corner reflector** bolted t
 it at a known, fixed offset.
 
 - `radar_camera_calib.py` — the calibration node (this task).
+- `radar_merge.py` — **deployment-time cloud merge** (no rig): fuse N radar
+  clouds into one frame using the saved extrinsics. See below.
 - `general_charuco.py` — the original **camera-to-camera** tool you started from,
   kept for reference.
+
+---
+
+## Merging radar clouds at deployment (`radar_merge.py`) — no rig
+
+Once each radar is calibrated against the **same camera** (you have a
+`T_cam_radar` JSON per radar), fusing their point clouds needs **no ChArUco
+board and no corner reflector** — calibration is already done. Merging is pure
+composition of known rigid transforms:
+
+```
+p_cam = R_i · p_radar_i + t_i                    (T_cam_radar_i, radar i's calib)
+
+T_cam_target      = I              if target_frame == the shared camera (parent)
+                  = T_cam_radar_j  if target_frame == radar j's link
+T_target_radar_i  = inv(T_cam_target) · T_cam_radar_i
+```
+
+Each radar's points go through `T_target_radar_i` and are concatenated into one
+`PointCloud2` in `target_frame`. The merged cloud keeps `intensity` (SNR) and
+`doppler` and adds a `source` field (the radar index) — which also disambiguates
+Doppler, a **radial** velocity along each radar's own line of sight that stays
+relative to that radar after a rigid transform.
+
+```bash
+python3 radar_merge.py --ros-args \
+  -p extrinsic_files:="['/root/extrinsics/extrinsic_zed_left__radar1.json','/root/extrinsics/extrinsic_zed_left__radar2.json']" \
+  -p radar_topics:="['/radar1/radar/points_all','/radar2/radar/points_all']" \
+  -p pc_field_snr:=intensity \
+  -p target_frame:=zed_left_camera_optical_frame \
+  -p output_topic:=/radar_merged/points
+# or: ros2 launch wicoms_utils radar_merge.launch.py   (edit the paths)
+```
+
+`extrinsic_files` and `radar_topics` are **index-matched**. `target_frame` empty
+→ the shared camera/parent frame from the first file; set it to a radar link
+(e.g. `radar1_link`) to merge in that radar's frame instead. Clouds are cached
+per radar and republished on a timer (`publish_rate_hz`, default 15; set `0` to
+publish on every incoming cloud); a radar's cloud is dropped once older than
+`max_age_s`. `publish_tf:=true` also broadcasts the static `parent→radar_i`
+transforms so RViz can show the raw per-radar clouds beside the merged one.
+
+**Orthogonal pair.** Mount the second radar rolled ~90° about boresight and its
+strong (azimuth) axis covers the first's weak elevation (the IWR6843ISK's ±20°
+elevation FoV). The merged cloud then spans both the azimuth and elevation FoV.
+This node does the **geometric merge**; a single de-duplicated 3-D point per
+target (azimuth from A, elevation from B) is a measurement-level association
+step layered on top of this cloud.
+
+If a radar is physically bumped, its `T_cam_radar` is stale — re-run
+`radar_camera_calib.py` for that unit and drop in the new JSON. Nothing in
+`radar_merge.py` estimates geometry; it only applies what calibration found.
 
 ---
 
