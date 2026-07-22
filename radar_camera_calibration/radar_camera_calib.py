@@ -1201,8 +1201,17 @@ class RadarCameraCalib(Node):
             A = np.vstack([rad_r, np.ones_like(rad_r)]).T
             (a, b), *_ = np.linalg.lstsq(A, cam_r, rcond=None)
             if abs(a - 1) > 0.03 or abs(b) > 0.05:
-                lines.append(f"  range fit: cam_r = {a:.3f}·radar_r {b:+.3f} m  → "
-                             f"try radar_range_scale={1/a:.4f} bias={-b:+.4f}")
+                # rad_r is ALREADY corrected by the current scale/bias, so the fit
+                # slope a is the RESIDUAL scale error — the goal is a ≈ 1.00. The
+                # suggestion must fold in the scale already applied:
+                #   corrected = scale·raw − bias ;  cam = a·corrected + b
+                #   ⇒ new_scale = a·scale ,  new_bias = a·bias − b
+                # (the old "1/a" ignored the current scale and, iterated, drove the
+                #  scale the wrong way — over-scaling leaks straight into t_z/depth.)
+                new_scale = a * self.range_scale
+                new_bias = a * self.range_bias - b
+                lines.append(f"  range fit: cam_r = {a:.3f}·radar_r {b:+.3f} m (want a≈1) → "
+                             f"set radar_range_scale={new_scale:.4f} bias={new_bias:+.4f}")
 
         if self.measured_baseline > 0:
             d = abs(tmag - self.measured_baseline)

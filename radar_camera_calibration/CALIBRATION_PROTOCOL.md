@@ -41,9 +41,15 @@ Two numbers per radar, taken before collecting:
    rotation IS observable, so the data refines it. A loose prior is fine.
 
 ### 0c. Range scale — verify per radar (once, early)
-On the first ~10 captures the solve prints `cam_r = a·radar_r + b`. Set
-`radar_range_scale` so **a ≈ 1** (leave bias at 0 unless it persists with wide
-range spread). Do this once; then freeze it for that radar.
+On the first ~10 captures the solve prints `cam_r = a·radar_r + b`. **Tune
+`radar_range_scale` until the slope `a ≈ 1.00`** — that is the whole criterion.
+The printed `set radar_range_scale=…` value already folds in the scale you have
+applied, so just set it (don't add to the old value); re-check that `a` landed on
+1.00 and freeze it. These IWR6843s read range slightly *long*, so the scale is
+typically **below 1** (~0.96), not above. Leave bias at 0 unless it persists with
+wide range spread. A residual range error doesn't show up in the residual — it
+leaks into `t_z` (depth), so getting `a ≈ 1` is what keeps the radar from being
+placed too far forward/back.
 
 > **Why measurement-first?** A single-reflector radar has one translation axis it
 > physically cannot see (its weak angular direction). No pose set fixes that — it
