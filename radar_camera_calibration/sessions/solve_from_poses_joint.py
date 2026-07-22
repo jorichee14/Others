@@ -107,7 +107,8 @@ def solve(P, Rb, Tb, a0, sig_r, sig_az, sig_el, use_el=True,
         full = np.full((len(x), len(x)), np.nan)
     apex_sig = np.sqrt(np.clip(np.diag(full)[6:9], 0, None))
     rms = float(np.sqrt((pps(x, allidx[mask]) ** 2).mean()))
-    return dict(R=R, t=t, a=a, apex_sigma=apex_sig, rms=rms, n_in=int(mask.sum()), n=len(P))
+    return dict(R=R, t=t, a=a, apex_sigma=apex_sig, rms=rms, n_in=int(mask.sum()),
+                n=len(P), cov6=full[:6, :6], mask=mask)
 
 
 def main():
