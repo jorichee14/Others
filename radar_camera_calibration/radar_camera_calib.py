@@ -564,6 +564,12 @@ class RadarCameraCalib(Node):
         dp('publish_tf', True)
         dp('debug_image', True)
         dp('debug_image_topic', '/radar_camera_calib/debug_image')
+        # debug throughput knobs — on a big/slow feed (e.g. Arducam) drawing and
+        # publishing a full-res overlay every frame stalls real time. Build/publish
+        # the debug frame only every Nth pair, and/or downscale it. Visualization
+        # only — capture and solve are unaffected.
+        dp('debug_every_n', 1)          # 1 = every frame; 3 = every 3rd pair, …
+        dp('debug_scale', 1.0)          # <1 shrinks the published/shown image (0.5 = half)
         # in-node rectification — for a RAW/unrectified image_topic (e.g. Arducam
         # image_raw). Undistort each frame from camera_info, then run all detection
         # and projection with the rectified K and ZERO distortion (cleaner ArUco, no
@@ -641,6 +647,8 @@ class RadarCameraCalib(Node):
         self.output_path = op if op else f"extrinsic_{self.camera_name}__{self.radar_name}.yaml"
         self.publish_tf = bool(g('publish_tf'))
         self.want_debug = bool(g('debug_image'))
+        self.debug_every_n = max(1, int(g('debug_every_n'))); self._dbg_count = 0
+        self.debug_scale = float(g('debug_scale'))
         self.show_window = bool(g('show_window'))
         self.show_diversity_hud = bool(g('show_diversity_hud'))
         self.window_name = 'radar_camera_calib — apex (green=matched) | reflector overlay'
@@ -995,8 +1003,10 @@ class RadarCameraCalib(Node):
             self._prev_apex = p_cam.copy(); self._prev_apex_t = t_img
         p_radar, snr_i, dop_i, n_gated = self._select_radar(xyz, snr, dop, predicted, cam_range, v_pred)
 
-        self._publish_debug(bgr, pose, p_cam, xyz, n, reproj,
-                            p_radar is not None, n_gated, p_radar)
+        self._dbg_count += 1
+        if self._dbg_count % self.debug_every_n == 0:      # throttle heavy debug draw/publish
+            self._publish_debug(bgr, pose, p_cam, xyz, n, reproj,
+                                p_radar is not None, n_gated, p_radar)
 
         if p_cam is None:
             self.get_logger().info(f"no board (n={n}, reproj={reproj})", throttle_duration_sec=2.0)
@@ -1432,6 +1442,9 @@ class RadarCameraCalib(Node):
                         (0, 200, 255) if self.bg_radar is None else (0, 255, 0), 2)
             if self.show_diversity_hud:
                 self._draw_diversity_hud(bgr)
+            if self.debug_scale != 1.0 and self.debug_scale > 0:   # shrink for bandwidth/render
+                bgr = cv2.resize(bgr, None, fx=self.debug_scale, fy=self.debug_scale,
+                                 interpolation=cv2.INTER_AREA)
             self._last_dbg = bgr
             if self.dbg_pub is not None:
                 self.dbg_pub.publish(self.bridge.cv2_to_imgmsg(bgr, 'bgr8'))

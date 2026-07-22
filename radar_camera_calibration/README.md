@@ -477,6 +477,8 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 |---|---|---|
 | `rectify_image` | `false` | undistort each frame in-node from `camera_info` — for a RAW feed (e.g. Arducam `image_raw`); detection & projection then use the rectified K and zero D. No-op when D≈0 (already-rectified feeds like ZED `image_rect_color`). |
 | `rectify_alpha` | `0.0` | undistort crop: `0`=only valid pixels (zoomed), `1`=keep whole FoV (black borders) |
+| `debug_every_n` | `1` | build/publish the debug overlay only every Nth pair — raise it (e.g. `3`) if a big feed (Arducam) lags. Visualization only; capture/solve unaffected. |
+| `debug_scale` | `1.0` | downscale the published/shown debug image (`0.5`=half) — cheaper bandwidth/render on a big feed |
 | `radar_topic` | `/points_all` | radar PointCloud2 |
 | `pc_field_x/y/z/snr/doppler` | `x/y/z/snr/doppler` | field names (missing ones tolerated) |
 | `select_by` | `snr` | `snr` (highest return), `cluster` (blob centroid), or `nearest` |
