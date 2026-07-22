@@ -1,24 +1,60 @@
-# Standardized Radar ↔ Camera Calibration Protocol
+# Standardized Radar ↔ Camera Calibration Process
 
-A repeatable procedure for calibrating each IWR6843ISK radar to the ZED left
-camera with the ChArUco + trihedral rig. It exists because the 2026-07-15 runs,
-while successful, drifted between radars (sigmas, gates, priors, the reflector
-offset seed) and improvised their rounds — and two sets were never logged, so
-they can't be re-solved. This freezes everything that must not change and defines
-numeric gates for what does.
+One identical procedure for **every** radar. You **measure first** (rig offset +
+extrinsic prior), seed those as priors, then collect one diverse pose set and
+solve. There is **no per-radar improvisation** and **no no-prior bootstrap round**
+— measuring the extrinsic up front replaces it.
 
-**Order: calibrate `radar1` first, then `radar2`.** radar1's well-observed apex
-offset is the cross-check reference for every later radar.
-
-Tool: `radar_camera_calib.py` (static profile). See `README.md` for parameter
-meanings, `sessions/` for the reference runs.
+The only things that differ between radars are the **measured numbers** (each
+radar sits in a different place — unavoidable) and which translation axis is
+"blind." Everything else — parameters, steps, gates — is frozen below.
 
 ---
 
-## Part A — FROZEN block (identical for every radar, every round)
+## 0. Measure BEFORE any capture
 
-Never change these between radars or rounds. They are the settings that produced
-`residual 1.03σ / cond 2.2` on radar1.
+### 0a. The rig offset — measure **ONCE**, reuse for every radar
+The board + corner reflector is one rigid rig. The **apex offset** (reflector apex
+position in the *board* frame) is a property of the *rig*, not the radar, so you
+measure it a single time and reuse it for radar1, radar2, … It also becomes the
+cross-check between radars (all must recover the same offset).
+
+Measure from the **board origin** (first inner chessboard corner) to the
+**reflector apex**, in board axes (+x along squares_x, +y along squares_y, +z out
+of the board toward the camera):
+```
+reflector_offset_x, reflector_offset_y, reflector_offset_z
+```
+
+### 0b. The extrinsic prior — measure **per radar**
+Two numbers per radar, taken before collecting:
+
+1. **Translation** `prior_t_xyz` = radar position in the **ZED left optical frame**,
+   tape-measured from the **left lens center** (X = right, Y = down, Z = forward).
+   *This is the key measurement.* It seeds the solve into the right basin AND
+   anchors the radar's **blind axis** — the one translation direction the radar's
+   weak angular resolution (elevation for an upright IWR6843) cannot observe. The
+   data pins the other two axes; only the blind one relies on this tape.
+
+2. **Rotation** `prior_rpy_deg` = the radar's rough orientation in the camera frame
+   from the nominal mounting (xyz euler). This only needs to be *roughly* right —
+   rotation IS observable, so the data refines it. A loose prior is fine.
+
+### 0c. Range scale — verify per radar (once, early)
+On the first ~10 captures the solve prints `cam_r = a·radar_r + b`. Set
+`radar_range_scale` so **a ≈ 1** (leave bias at 0 unless it persists with wide
+range spread). Do this once; then freeze it for that radar.
+
+> **Why measurement-first?** A single-reflector radar has one translation axis it
+> physically cannot see (its weak angular direction). No pose set fixes that — it
+> must come from a tape measure. Measuring the extrinsic up front supplies that
+> anchor AND removes the need for a separate no-prior bootstrap round. The radar
+> then *confirms your tape on the two axes it CAN see* (they'll agree to a few cm),
+> which is exactly what tells you the tape is trustworthy on the blind third axis.
+
+---
+
+## 1. FROZEN parameter block (identical every radar, every time)
 
 ```bash
 -p image_topic:=/zed/zed_node/left/image_rect_color \
@@ -28,127 +64,92 @@ Never change these between radars or rounds. They are the settings that produced
 -p dictionary:=DICT_4X4_50 -p min_corners:=4 \
 -p min_range:=0.5 -p max_range:=2.5 -p range_gate_margin_m:=0.5 \
 -p sigma_range_m:=0.05 -p sigma_az_deg:=3.0 -p sigma_el_deg:=8.0 \
--p reflector_offset_x:=0.284 -p reflector_offset_y:=0.631 -p reflector_offset_z:=-0.009 \
 -p solve_offset:=true -p offset_prior_sigma_m:=0.05 \
+-p use_extrinsic_prior:=true -p prior_t_sigma_m:=0.05 -p prior_rot_sigma_deg:=30.0 \
 -p select_by:=cluster -p cluster_eps:=0.20 -p min_cluster_size:=1 -p cluster_strict:=false \
 -p stable_std:=0.02 -p stable_std_radar:=0.10 -p min_snr:=100.0 \
+-p capture_mode:=auto -p min_baseline:=0.12 -p min_points:=25 \
 -p parent_frame:=zed_left_camera_optical_frame \
 -p show_window:=true -p show_diversity_hud:=true
 ```
 
-**Reflector offset is frozen to the combined rig value** (X +284, Y +631,
-Z −9 mm; Z from radar1, the well-observed axis). The offset is a property of the
-*rig*, not the radar — every radar must recover the same X/Y, so it is seeded, not
-re-guessed. `solve_offset:=true` still lets it refine and doubles as a cross-check.
+The three prior *widths* are frozen on purpose:
+- `offset_prior_sigma_m:=0.05` — keeps the offset near your measured rig value while
+  letting the data refine it (offset_z only refines with high tilt — see step 2).
+- `prior_t_sigma_m:=0.05` — a **uniform moderate** translation prior. This is what
+  makes it standardized: it automatically **dominates the blind axis** (where the
+  data is uninformative, the tape wins) and is automatically **overridden on the
+  two observable axes** (where the data is tight, ~3–4 cm, the data wins and
+  happens to agree with your tape). You never have to identify which axis is blind.
+- `prior_rot_sigma_deg:=30` — loose; the data pins rotation.
 
----
+## 2. PER-RADAR inputs (fill from step 0 — the only things that change)
 
-## Part B — Per-radar deltas (the ONLY things that change)
-
-| param | **radar1** | radar2 |
-|---|---|---|
-| `radar_topic` | `/radar1/radar/points_all` | `/radar2/radar/points_all` |
-| `child_frame` / `radar_name` | `radar1_link` / `radar1` | `radar2_link` / `radar2` |
-| `radar_range_scale` | `1.039` *(re-verify in R1)* | `1.026` *(re-verify in R1)* |
-| `cluster_apex_radius` | `0.40` | `0.50` |
-| `gate_radius` | `0.50` | `0.60` |
-| **blind translation axis** | **t_z (vertical)** | **t_x (horizontal)** — tape ≈ −0.10 m |
-
-The blind axis is the soft translation DOF of a single-reflector rig: radar1's is
-vertical (t_z), radar2's is horizontal (t_x, its rolled mount). It is pinned by
-tape measure in Round 3, not solved.
-
----
-
-## Part C — The four rounds (same procedure for every radar)
-
-### Round 0 — Setup & background *(no captures)*
-1. Mount rig; confirm `radar_topic`, `image_topic`, `info_topic` all publishing.
-2. Rig **out** of scene → pool background (`~/background`).
-3. In the debug view confirm **both**: the apex reticle sits on the reflector
-   (offset sign correct) **and** the magenta radar dot lands on it.
-
-✅ **Gate:** apex reticle + magenta radar dot both on the reflector; ≥1 clean
-gated return in the `[gate]` line.
-
-### Round 1 — Bootstrap, no prior
-Add: `-p use_extrinsic_prior:=false -p min_points:=10`
-1. Collect **10–15** poses, spread as wide as the geometry allows.
-2. Read the range diagnostic `cam_r = a·radar_r + b`; set `radar_range_scale` so
-   **a ≈ 1, b ≈ 0** (re-verifies the per-radar scale rather than trusting the
-   stored value).
-3. **Save the pose JSON** (mandatory — every round is logged).
-
-✅ **Gate:** residual ≤ ~1.5σ, plausible `|t|`, no gross outliers. Record the
-printed `prior_t_xyz` / `prior_rpy_deg` → these seed Round 2.
-
-### Round 2 — Prior-seeded diverse collection
-Add: `-p use_extrinsic_prior:=true -p prior_t_xyz:="[…R1…]" -p prior_rpy_deg:="[…R1…]"
--p prior_t_sigma_m:=0.10 -p prior_rot_sigma_deg:=30 -p min_points:=25`
-1. Keep collecting to **25–30** poses until **all six diversity HUD bars are
-   green** (targets: pitch 40° / roll 30° / yaw 40°, az 40° / el 15° / range 0.30 m).
-2. Vary board tilt (pitch/yaw/roll) **and** rig position (near↔far, left↔right,
-   up↔down) — orientation spread makes the offset observable, radar-point spread
-   makes rotation observable. Both are required.
-
-✅ **Gate:** all six bars green, `cond ≲ 5`, residual ≈ 1σ, LOO ≈ residual.
-
-### Round 3 — Pin blind axis & finalize
-1. From the per-DOF `1σ t` readout, identify the soft translation axis
-   (radar1 → t_z; radar2 → t_x). Tape-measure it and re-solve with a tight prior
-   on that axis: `-p prior_t_sigma_m:=0.04` (keep the rest of the R2 prior).
-2. Save YAML/JSON + the emitted `static_transform_publisher` command.
-3. Offline re-solve the saved poses:
-   `cd sessions && python3 solve_from_poses.py <radarN>_poses.json` — must
-   reproduce the live extrinsic to **< 1° / < 40 mm**.
-
-✅ **DONE gate** — all of Part D must hold.
-
----
-
-## Part D — "Done" definition (all must hold)
-
-| gate | threshold | notes |
-|---|---|---|
-| residual / LOO | ≈ 1σ, LOO ≈ residual | noise model matches reality |
-| condition number | ≲ 5 | pose diversity |
-| rot 1σ | ≲ 3° | needs wide azimuth spread |
-| t 1σ | ≲ 40 mm | on observed axes |
-| diversity HUD | all six bars green | — |
-| offline re-solve | < 1° / < 40 mm vs live | independent confirmation |
-| apex offset | X/Y match the frozen rig value within combined 1σ | radar1 is the reference |
-
-**Not a gate:** the vertical (radar1) / horizontal (radar2) 3-D **RMS** is the
-IWR6843's random per-detection angular noise (weak elevation / rolled mount). It
-averages out in fusion. Judge accuracy by **signed bias** and **1σ**, never RMS.
-
----
-
-## Part E — Per-round log template (fill one per round, per radar)
-
-Keeps every round reproducible (the gap that made radar2-final and radar_infra
-un-resolvable). Save to `sessions/<date>_zed_<radar>_round<N>.md` + a poses JSON.
-
-```
-radar: radarN      round: N      date/time (UTC):
-poses: __ (inliers __)      radar_range_scale: __      prior: none | from R(N-1)
-|t| (m): [ , , ]   rpy(deg): [ , , ]   |t|=__
-1σ rot (deg): [ , , ]        1σ t (mm): [ , , ]
-apex offset (m): [ , , ]  1σ (mm): [ , , ]
-residual / LOO / cond: __σ / __σ / __
-signed bias (mm): X __  Y __  Z __
-diversity HUD: pitch_ roll_ yaw_ | az_ el_ range_   (green/red each)
-gate result: PASS advance to R(N+1)  |  HOLD — collect: ______
-poses JSON: <file>
+```bash
+-p radar_topic:=/radarN/radar/points_all \
+-p child_frame:=radarN_link -p radar_name:=radarN \
+-p radar_range_scale:=<from 0c> \
+-p reflector_offset_x:=<0a> -p reflector_offset_y:=<0a> -p reflector_offset_z:=<0a> \
+-p prior_t_xyz:="[<x>,<y>,<z>]"      # 0b tape \
+-p prior_rpy_deg:="[<r>,<p>,<y>]"    # 0b mounting
 ```
 
+## 3. The run — same four steps every radar
+
+**Step 1 — Setup & background.** Mount, confirm topics publishing. Rig **out** →
+`~/background`. In the debug view confirm the apex reticle **and** the magenta
+radar dot both sit on the reflector. *(Also read the range fit → set 0c.)*
+
+**Step 2 — Collect one diverse pose set.** `capture_mode:=auto` captures each held
+pose. Collect **25–30 poses until all six diversity HUD bars are green**
+(pitch 40° / roll 30° / yaw 40°, az 40° / el 15° / range 0.30 m). Keep the
+reflector **aimed at the radar** (SNR ≥ 100), board at **0.8–1.8 m**, and include
+**3–4 close-range (~0.6–0.7 m) high pitch/roll tilt** poses (these make
+`offset_z` observable). Ignore `no board` / `REJECTED-ALL` chatter between poses.
+
+**Step 3 — Solve (automatic).** The solve refreshes after every capture. The
+frozen moderate priors do the right thing with no fiddling: tape anchors the blind
+axis, data owns the rest, rotation is data-driven.
+
+**Step 4 — Validate & save.** Pass **all** of section 4, then `~/save` (writes
+YAML + JSON + `_session.json`). Move the session file into `sessions/` as
+`<date>_zed_<radar>_session.json`.
+
+## 4. "Done" gate (identical every radar)
+
+| gate | threshold |
+|---|---|
+| residual / LOO | ≈ 1σ, LOO ≈ residual |
+| condition number | ≲ 5 |
+| rot 1σ | ≲ 4° (worst axis) |
+| all six HUD bars | green |
+| `|t|` observable axes vs tape | agree within ~5 cm |
+| **live overlay** | magenta dot glued to the reflector across the whole FoV, **including up/down** |
+| offline re-solve | `solve_from_poses_joint.py` reproduces to < 1° / < 40 mm |
+
+The overlay is the final, tape-free judge — if the dot tracks the reflector
+everywhere (near/far, left/right, **high/low**), the extrinsic is correct,
+blind-axis anchor included.
+
+**Not a gate:** the large 3-D **RMS** on the blind axis is the radar's random
+angular noise (weak elevation / rolled mount). It averages out in fusion. Judge by
+signed bias, per-DOF 1σ, and the overlay — never RMS.
+
+## 5. Multi-radar cross-check (when you calibrate more than one)
+
+The apex offset must match across radars (rig property). After each radar, compare
+its solved `apex_offset_in_board_m` to the others — agreement on the observable
+in-plane axes (X, Y) within combined 1σ is the strongest evidence both extrinsics
+are correct. Do this only after each radar independently passes section 4.
+
 ---
 
-## Cross-checks between radars
+## What changed vs the old flow (and why)
 
-1. **Apex offset must agree.** After radar2, its solved offset X/Y must match
-   radar1's within combined 1σ (radar1: X +288±23, Y +614±21 mm). A match is the
-   strongest evidence both extrinsics are correct — the radars share only the rig.
-2. **Blind axes are complementary.** radar1 is sharp horizontally / soft
-   vertically; radar2 (rolled ~90°) is the reverse. Fusing both constrains every
-   axis — see `radar_fusion_reflector.py` / `sessions/two_radars.md`.
+- **Measurement-first replaces the no-prior "Round 1."** You always measure the
+  extrinsic prior, so there is never a cold-start bootstrap. One path for all radars.
+- **Uniform moderate translation prior** handles the blind axis automatically — no
+  per-radar reasoning about which axis to pin.
+- **Offset measured once as a rig property**, reused and cross-checked across radars.
+- Offline re-solve is `solve_from_poses_joint.py` (jointly refines the offset), so a
+  saved session can be re-solved / audited at any prior width without recollecting.
