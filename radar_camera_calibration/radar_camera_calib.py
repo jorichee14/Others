@@ -564,6 +564,12 @@ class RadarCameraCalib(Node):
         dp('publish_tf', True)
         dp('debug_image', True)
         dp('debug_image_topic', '/radar_camera_calib/debug_image')
+        # in-node rectification — for a RAW/unrectified image_topic (e.g. Arducam
+        # image_raw). Undistort each frame from camera_info, then run all detection
+        # and projection with the rectified K and ZERO distortion (cleaner ArUco, no
+        # projectPoints overflow on a distorted feed). No-op when D≈0 (already-
+        # rectified feeds like the ZED image_rect_color), so it is safe to leave on.
+        dp('rectify_image', False); dp('rectify_alpha', 0.0)
         dp('show_window', False)        # True → pop a native OpenCV window (needs a display)
         # live diversity HUD: bars for board pitch/roll/yaw + radar az/el/range spread,
         # green when each crosses the target that makes rotation (& translation)
@@ -583,6 +589,8 @@ class RadarCameraCalib(Node):
         self.solve_offset = bool(g('solve_offset'))
         self.offset_prior_sigma = g('offset_prior_sigma_m')
         self.bridge = CvBridge(); self.K = None; self.D = None
+        self.rectify = bool(g('rectify_image')); self.rectify_alpha = g('rectify_alpha')
+        self.map1 = None; self.map2 = None       # undistort maps, built on first CameraInfo
 
         self.radar_topic = g('radar_topic')
         self.fx, self.fy, self.fz = g('pc_field_x'), g('pc_field_y'), g('pc_field_z')
@@ -694,10 +702,27 @@ class RadarCameraCalib(Node):
 
     # ── intrinsics / watchdog ──
     def _info(self, msg):
-        if self.K is None:
-            self.K = np.array(msg.k).reshape(3, 3)
-            self.D = np.array(msg.d) if len(msg.d) else np.zeros(5)
-            self.get_logger().info(f"intrinsics locked ({msg.width}x{msg.height})")
+        if self.K is not None:
+            return
+        K = np.array(msg.k).reshape(3, 3)
+        D = np.array(msg.d) if len(msg.d) else np.zeros(5)
+        w, h = int(msg.width), int(msg.height)
+        if self.rectify and w and h and np.any(np.abs(D) > 1e-9):
+            # RAW feed (e.g. Arducam): undistort every frame; downstream K becomes
+            # newK with ZERO distortion, used for all solvePnP/projectPoints.
+            newK, _ = cv2.getOptimalNewCameraMatrix(K, D, (w, h), self.rectify_alpha, (w, h))
+            self.map1, self.map2 = cv2.initUndistortRectifyMap(
+                K, D, None, newK, (w, h), cv2.CV_16SC2)
+            self.K, self.D = newK, np.zeros(5)
+            self.get_logger().info(
+                f"intrinsics locked ({w}x{h}) — rectifying in-node (alpha={self.rectify_alpha})")
+        else:
+            self.K, self.D = K, D
+            if self.rectify:
+                self.get_logger().info(
+                    f"intrinsics locked ({w}x{h}) — rectify requested but D≈0, feed already rectified")
+            else:
+                self.get_logger().info(f"intrinsics locked ({w}x{h})")
 
     @staticmethod
     def _stamp_s(msg):
@@ -924,6 +949,8 @@ class RadarCameraCalib(Node):
             return
         try:
             bgr = self.bridge.imgmsg_to_cv2(a_img, 'bgr8')
+            if self.map1 is not None:                 # in-node rectification (RAW feed)
+                bgr = cv2.remap(bgr, self.map1, self.map2, cv2.INTER_LINEAR)
             gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         except Exception as e:
             self.get_logger().warn(f"cv_bridge: {e}"); return

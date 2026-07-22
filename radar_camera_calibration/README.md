@@ -239,6 +239,7 @@ The calibration comes in two profiles over one shared implementation
 |---|---|---|---|
 | **`radar_camera_calib_static.py`** | rig held **still** at each pose (step-and-settle) — **most accurate** | `capture_mode:=auto` (stability-gated) | **diversity HUD** on |
 | **`radar_camera_calib_dynamic.py`** | rig you keep **moving** (continuous sweep) | `capture_mode:=continuous` | Doppler↔motion consistency, `max_sync_dt`, `max_capture_speed` |
+| **`radar_camera_calib_arducam.py`** | **Arducam** (raw/unrectified feed), step-and-settle | `capture_mode:=auto` (stability-gated) | static profile **+ `rectify_image`** (in-node undistort) |
 
 Each is a thin profile that just presets sensible defaults; every parameter is
 still overridable on the command line. Prefer **static** whenever you can pause —
@@ -250,6 +251,7 @@ stop. The old `radar_camera_calib.py` still runs both via `capture_mode`.
 > ```python
 > 'radar_camera_calib_static  = wicoms_utils.radar_camera_calib_static:main',
 > 'radar_camera_calib_dynamic = wicoms_utils.radar_camera_calib_dynamic:main',
+> 'radar_camera_calib_arducam = wicoms_utils.radar_camera_calib_arducam:main',
 > 'radar_fusion_reflector     = wicoms_utils.radar_fusion_reflector:main',
 > ```
 
@@ -473,6 +475,8 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 
 | param | default | meaning |
 |---|---|---|
+| `rectify_image` | `false` | undistort each frame in-node from `camera_info` — for a RAW feed (e.g. Arducam `image_raw`); detection & projection then use the rectified K and zero D. No-op when D≈0 (already-rectified feeds like ZED `image_rect_color`). |
+| `rectify_alpha` | `0.0` | undistort crop: `0`=only valid pixels (zoomed), `1`=keep whole FoV (black borders) |
 | `radar_topic` | `/points_all` | radar PointCloud2 |
 | `pc_field_x/y/z/snr/doppler` | `x/y/z/snr/doppler` | field names (missing ones tolerated) |
 | `select_by` | `snr` | `snr` (highest return), `cluster` (blob centroid), or `nearest` |
