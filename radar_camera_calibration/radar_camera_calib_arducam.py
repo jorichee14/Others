@@ -50,6 +50,10 @@ ARDUCAM_DEFAULTS = {
     'max_sync_dt': -1.0,               # stationary → time mismatch is harmless
     'max_capture_speed': -1.0,
     'show_diversity_hud': True,        # pitch/roll/yaw + az/el/range readiness cue
+    # a full-res Arducam overlay every frame stalls real time — throttle + shrink
+    # the debug view by default (visualization only; capture/solve run every frame).
+    'debug_every_n': 3,                # build/publish debug every 3rd pair
+    'debug_scale': 0.5,                # publish/show the overlay at half resolution
 }
 
 
