@@ -60,23 +60,47 @@ placed too far forward/back.
 
 ---
 
-## 1. FROZEN parameter block (identical every radar, every time)
+## 1. Command = camera profile + frozen block
+
+The *process* is camera-agnostic. Only the **camera profile** (which script + which
+image/info topics + which optical frame) differs; everything else is frozen.
+
+### 1a. Camera profile — pick ONE (the only camera-specific lines)
+
+**ZED** (already-rectified feed — `image_rect_color`):
+```bash
+ros2 run wicoms_utils radar_camera_calib_static --ros-args \
+  -p image_topic:=/zed/zed_node/left/image_rect_color \
+  -p info_topic:=/zed/zed_node/left/camera_info \
+  -p parent_frame:=zed_left_camera_optical_frame \
+```
+
+**Arducam** (RAW/unrectified feed — undistorted in-node; separate script, `rectify_image` on):
+```bash
+ros2 run wicoms_utils radar_camera_calib_arducam --ros-args \
+  -p image_topic:=/arducam/image_raw \
+  -p info_topic:=/arducam/camera_info \
+  -p parent_frame:=arducam_optical_frame \
+```
+The Arducam script *is* the static profile with `rectify_image:=true` baked in — it
+undistorts each frame from `camera_info`, then runs the identical solver/HUD/gates.
+Set your real Arducam topic names and optical-frame id. (If you ever point it at an
+already-rectified feed, rectification auto-disables and it behaves like the ZED.)
+
+### 1b. FROZEN block (camera-agnostic — identical every radar, both cameras)
 
 ```bash
--p image_topic:=/zed/zed_node/left/image_rect_color \
--p info_topic:=/zed/zed_node/left/camera_info \
--p pc_field_snr:=intensity -p pc_field_doppler:=doppler \
--p squares_x:=4 -p squares_y:=4 -p square_len:=0.12 -p marker_len:=0.09 \
--p dictionary:=DICT_4X4_50 -p min_corners:=4 \
--p min_range:=0.5 -p max_range:=2.5 -p range_gate_margin_m:=0.5 \
--p sigma_range_m:=0.05 -p sigma_az_deg:=3.0 -p sigma_el_deg:=8.0 \
--p solve_offset:=true -p offset_prior_sigma_m:=0.05 \
--p use_extrinsic_prior:=true -p prior_t_sigma_m:=0.05 -p prior_rot_sigma_deg:=30.0 \
--p select_by:=cluster -p cluster_eps:=0.20 -p min_cluster_size:=1 -p cluster_strict:=false \
--p stable_std:=0.02 -p stable_std_radar:=0.10 -p min_snr:=100.0 \
--p capture_mode:=auto -p min_baseline:=0.12 -p min_points:=25 \
--p parent_frame:=zed_left_camera_optical_frame \
--p show_window:=true -p show_diversity_hud:=true
+  -p pc_field_snr:=intensity -p pc_field_doppler:=doppler \
+  -p squares_x:=4 -p squares_y:=4 -p square_len:=0.12 -p marker_len:=0.09 \
+  -p dictionary:=DICT_4X4_50 -p min_corners:=4 \
+  -p min_range:=0.5 -p max_range:=2.5 -p range_gate_margin_m:=0.5 \
+  -p sigma_range_m:=0.05 -p sigma_az_deg:=3.0 -p sigma_el_deg:=8.0 \
+  -p solve_offset:=true -p offset_prior_sigma_m:=0.05 \
+  -p use_extrinsic_prior:=true -p prior_t_sigma_m:=0.05 -p prior_rot_sigma_deg:=30.0 \
+  -p select_by:=cluster -p cluster_eps:=0.20 -p min_cluster_size:=1 -p cluster_strict:=false \
+  -p stable_std:=0.02 -p stable_std_radar:=0.10 -p min_snr:=100.0 \
+  -p capture_mode:=auto -p min_baseline:=0.12 -p min_points:=25 \
+  -p show_window:=true -p show_diversity_hud:=true
 ```
 
 The three prior *widths* are frozen on purpose:
@@ -159,3 +183,6 @@ are correct. Do this only after each radar independently passes section 4.
 - **Offset measured once as a rig property**, reused and cross-checked across radars.
 - Offline re-solve is `solve_from_poses_joint.py` (jointly refines the offset), so a
   saved session can be re-solved / audited at any prior width without recollecting.
+- **Camera-agnostic:** the same process runs on the **ZED** (`radar_camera_calib_static`)
+  or an **Arducam** (`radar_camera_calib_arducam`, raw feed undistorted in-node). Only
+  the camera profile in §1a changes — the frozen block, steps, and gates are identical.
