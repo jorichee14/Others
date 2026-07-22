@@ -128,7 +128,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 import message_filters
 import tf2_ros
-from sensor_msgs.msg import Image, CameraInfo, PointCloud2
+from sensor_msgs.msg import Image, CompressedImage, CameraInfo, PointCloud2
 from std_msgs.msg import Empty
 from geometry_msgs.msg import TransformStamped
 from cv_bridge import CvBridge
@@ -570,6 +570,13 @@ class RadarCameraCalib(Node):
         # only — capture and solve are unaffected.
         dp('debug_every_n', 1)          # 1 = every frame; 3 = every 3rd pair, …
         dp('debug_scale', 1.0)          # <1 shrinks the published/shown image (0.5 = half)
+        # publish a JPEG-compressed frame on '<debug_image_topic>/compressed' — for a
+        # REMOTE/big feed this is the real-time fix (a raw bgr8 frame is ~MBs; a JPEG
+        # is ~tens of KB, so the overlay stays live over a link without dropping
+        # frames). rqt_image_view auto-discovers the /compressed sub-topic. On a
+        # remote node set debug_raw:=false to send ONLY the compressed stream; toggle
+        # debug_jpeg_quality live via `ros2 param set`.
+        dp('debug_raw', True); dp('debug_compressed', True); dp('debug_jpeg_quality', 40)
         # in-node rectification — for a RAW/unrectified image_topic (e.g. Arducam
         # image_raw). Undistort each frame from camera_info, then run all detection
         # and projection with the rectified K and ZERO distortion (cleaner ArUco, no
@@ -649,6 +656,8 @@ class RadarCameraCalib(Node):
         self.want_debug = bool(g('debug_image'))
         self.debug_every_n = max(1, int(g('debug_every_n'))); self._dbg_count = 0
         self.debug_scale = float(g('debug_scale'))
+        self.debug_raw = bool(g('debug_raw')); self.debug_compressed = bool(g('debug_compressed'))
+        self.jpeg_quality = int(g('debug_jpeg_quality'))
         self.show_window = bool(g('show_window'))
         self.show_diversity_hud = bool(g('show_diversity_hud'))
         self.window_name = 'radar_camera_calib — apex (green=matched) | reflector overlay'
@@ -684,8 +693,14 @@ class RadarCameraCalib(Node):
         self.create_subscription(Empty, '~/save',       lambda _: self._save_now(), 1)
 
         self.tf_static = tf2_ros.StaticTransformBroadcaster(self)
-        self.dbg_pub = (self.create_publisher(Image, g('debug_image_topic'), 1)
-                        if self.want_debug else None)
+        # Raw Image and/or a JPEG-compressed frame on '<topic>/compressed'. Over a
+        # remote link subscribe to the compressed one to keep the overlay live.
+        dbg_topic = g('debug_image_topic')
+        self.dbg_pub = (self.create_publisher(Image, dbg_topic, 1)
+                        if self.want_debug and self.debug_raw else None)
+        self.dbg_pub_c = (self.create_publisher(CompressedImage, dbg_topic + '/compressed', 1)
+                          if self.want_debug and self.debug_compressed else None)
+        self.add_on_set_parameters_callback(self._on_set_params)
         self.create_timer(1.0, self._watchdog)
         if self.show_window:
             self.create_timer(0.05, self._gui)      # ~20 Hz native window refresh
@@ -1391,7 +1406,7 @@ class RadarCameraCalib(Node):
 
     def _publish_debug(self, bgr, pose, p_cam, radar_xyz, n, reproj, got_radar,
                        n_gated, p_radar=None):
-        if self.dbg_pub is None and not self.show_window:
+        if self.dbg_pub is None and self.dbg_pub_c is None and not self.show_window:
             return
         try:
             h, w = bgr.shape[:2]
@@ -1446,10 +1461,31 @@ class RadarCameraCalib(Node):
                 bgr = cv2.resize(bgr, None, fx=self.debug_scale, fy=self.debug_scale,
                                  interpolation=cv2.INTER_AREA)
             self._last_dbg = bgr
-            if self.dbg_pub is not None:
-                self.dbg_pub.publish(self.bridge.cv2_to_imgmsg(bgr, 'bgr8'))
+            if self.dbg_pub is not None or self.dbg_pub_c is not None:
+                stamp = self.get_clock().now().to_msg()
+                if self.dbg_pub is not None:                          # raw Image
+                    msg = self.bridge.cv2_to_imgmsg(bgr, 'bgr8'); msg.header.stamp = stamp
+                    self.dbg_pub.publish(msg)
+                if self.dbg_pub_c is not None and self.debug_compressed:   # JPEG (remote-friendly)
+                    ok, buf = cv2.imencode('.jpg', bgr,
+                                           [cv2.IMWRITE_JPEG_QUALITY, int(np.clip(self.jpeg_quality, 1, 100))])
+                    if ok:
+                        cmsg = CompressedImage(); cmsg.header.stamp = stamp
+                        cmsg.format = 'jpeg'; cmsg.data = buf.tobytes()
+                        self.dbg_pub_c.publish(cmsg)
         except Exception as e:
             self.get_logger().warn(f"debug image: {e}", throttle_duration_sec=5.0)
+
+    def _on_set_params(self, params):
+        """Live-toggle the compressed-window quality (and on/off) without a restart —
+        handy on a remote node:  ros2 param set /radar_camera_calib debug_jpeg_quality 20"""
+        from rcl_interfaces.msg import SetParametersResult
+        for p in params:
+            if p.name == 'debug_jpeg_quality':
+                self.jpeg_quality = int(np.clip(int(p.value), 1, 100))
+            elif p.name == 'debug_compressed':
+                self.debug_compressed = bool(p.value)
+        return SetParametersResult(successful=True)
 
     def _draw_diversity_hud(self, bgr):
         """Live 'is my pose set diverse enough for accurate ROTATION?' cue.

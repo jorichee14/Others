@@ -50,10 +50,13 @@ ARDUCAM_DEFAULTS = {
     'max_sync_dt': -1.0,               # stationary → time mismatch is harmless
     'max_capture_speed': -1.0,
     'show_diversity_hud': True,        # pitch/roll/yaw + az/el/range readiness cue
-    # a full-res Arducam overlay every frame stalls real time — throttle + shrink
-    # the debug view by default (visualization only; capture/solve run every frame).
-    'debug_every_n': 3,                # build/publish debug every 3rd pair
-    'debug_scale': 0.5,                # publish/show the overlay at half resolution
+    # Real-time debug on a remote/big feed WITHOUT dropping frames: publish only the
+    # JPEG-compressed overlay (~tens of KB) — the board axes + apex show EVERY frame,
+    # just small over the wire. View '<debug_image_topic>/compressed' in rqt_image_view.
+    # (A raw bgr8 frame is ~MBs and is what stalls the link — so debug_raw is off here.)
+    'debug_raw': False,                # don't publish the heavy raw Image stream
+    'debug_compressed': True,          # publish the compressed JPEG stream instead
+    'debug_jpeg_quality': 40,          # 1–100; raise for crisper, lower for lighter
 }
 
 
