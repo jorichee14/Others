@@ -717,9 +717,16 @@ frame the node reports:
 | **σ shrink** (fused ÷ best single) | < 1 | fusion genuinely tightened the estimate |
 | pairs/frame, 2-radar vs 1-radar counts | — | overlap / confirmation rate |
 
-It publishes the fused cloud on `fused_cloud_topic` (PointCloud2:
-`x,y,z,intensity,n_radars,sigma_mm`) and the annotated image on
-`debug_image_topic`, and logs a `VALID`/`CHECK` verdict every `report_every_s`.
+It publishes the fused cloud on `fused_cloud_topic` (default `/radar_fusion/cloud`;
+`PointCloud2` with fields `x,y,z,intensity,n_radars,sigma_mm`) and the annotated
+image on `debug_image_topic`, and logs a `VALID`/`CHECK` verdict every
+`report_every_s`. The cloud's `header.frame_id` is the **left camera optical
+frame** — by default taken straight from the incoming `CameraInfo` (`use_info_frame`,
+so it always matches the frame the points actually live in), or set explicitly with
+`camera_frame`. Its `header.stamp` is the freshest contributing radar's sensor time,
+so it lines up with TF against the camera. View it directly in RViz (Fixed Frame =
+that optical frame, add a PointCloud2 on the topic; colour by `n_radars` to see
+confirmed vs single-radar, or `sigma_mm` to see per-point uncertainty).
 
 **Offline proof (no ROS needed).** The math is self-validating on synthetic data
 using this rig's final extrinsics:

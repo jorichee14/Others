@@ -277,6 +277,9 @@ if _HAVE_ROS:
             dp('pc_field_x', 'x'); dp('pc_field_y', 'y'); dp('pc_field_z', 'z')
             dp('pc_field_snr', 'intensity')
             dp('camera_frame', 'zed_left_camera_optical_frame')
+            dp('use_info_frame', True)    # publish in CameraInfo's frame_id (the true
+            #                               left optical frame the points live in);
+            #                               falls back to camera_frame until info arrives
             # per-radar extrinsics T_cam_radar — FINAL values for this rig
             # (sessions/2026-07-22_zed_radar1_radar2_final.md)
             dp('r1_t_xyz', [0.2368, 0.0190, -0.0542])
@@ -314,6 +317,7 @@ if _HAVE_ROS:
             self.fx, self.fy, self.fz = g('pc_field_x'), g('pc_field_y'), g('pc_field_z')
             self.fsnr = g('pc_field_snr')
             self.camera_frame = g('camera_frame')
+            self.use_info_frame = bool(g('use_info_frame')); self.info_frame = None
             self.R1 = Rot.from_quat(g('r1_quat_xyzw')).as_matrix(); self.t1 = np.array(g('r1_t_xyz'), float)
             self.R2 = Rot.from_quat(g('r2_quat_xyzw')).as_matrix(); self.t2 = np.array(g('r2_t_xyz'), float)
             self.s1 = g('r1_range_scale'); self.s2 = g('r2_range_scale')
@@ -363,7 +367,19 @@ if _HAVE_ROS:
             if self.K is None:
                 self.K = np.array(msg.k).reshape(3, 3)
                 self.D = np.array(msg.d) if len(msg.d) else np.zeros(5)
-                self.get_logger().info(f"intrinsics locked ({msg.width}x{msg.height})")
+                if msg.header.frame_id:
+                    self.info_frame = msg.header.frame_id      # the true left optical frame
+                frame = self._cloud_frame()
+                self.get_logger().info(f"intrinsics locked ({msg.width}x{msg.height}); "
+                                       f"fused cloud published in frame '{frame}'")
+
+        def _cloud_frame(self):
+            """Frame the fused cloud is published in: CameraInfo's frame_id (the
+            left camera optical frame the points actually live in) when available
+            and use_info_frame, else the camera_frame param."""
+            if self.use_info_frame and self.info_frame:
+                return self.info_frame
+            return self.camera_frame
 
         def _now(self):
             return self.get_clock().now().nanoseconds * 1e-9
@@ -408,12 +424,16 @@ if _HAVE_ROS:
                 return
             P, C, snr = ing
             now = self._now()
-            self.latest[which] = (P, C, snr, now)
+            self.latest[which] = (P, C, snr, now, msg.header.stamp)  # keep sensor stamp
             self._fuse(now)
 
         def _fuse(self, now):
             a, b = self.latest[1], self.latest[2]
             fresh = lambda d: d is not None and (now - d[3]) <= self.sync_s
+            # stamp the fused cloud with the freshest contributing radar's sensor
+            # time so TF lookups against the camera frame line up
+            src = a if (fresh(a) and (b is None or a[3] >= b[3])) else b
+            stamp = src[4] if src is not None else self.get_clock().now().to_msg()
             if fresh(a) and fresh(b):
                 fused, stats = fuse_clouds(a[0], a[1], a[2], b[0], b[1], b[2],
                                            self.gate, self.require_both)
@@ -433,7 +453,7 @@ if _HAVE_ROS:
                 fused = voxel_merge(merged, self.voxel_m)
             self.fused = fused; self.stats = stats
             self._accumulate_stats(stats, len(fused))
-            self._publish_cloud(fused, now)
+            self._publish_cloud(fused, stamp)
             self._maybe_report(now)
 
         def _accumulate_stats(self, stats, n_total):
@@ -478,7 +498,7 @@ if _HAVE_ROS:
             return (float(np.mean(chi2)), float(np.mean(chi2 <= self.gate)),
                     float(np.median(shrink)) if len(shrink) else float('nan'))
 
-        def _publish_cloud(self, fused, now):
+        def _publish_cloud(self, fused, stamp):
             if self.cloud_pub is None or not fused:
                 return
             fields = [
@@ -493,14 +513,11 @@ if _HAVE_ROS:
                 sig_mm = float(np.sqrt(max(np.trace(pt['C']) / 3.0, 0.0)) * 1000.0)
                 pts.append((float(pt['p'][0]), float(pt['p'][1]), float(pt['p'][2]),
                             float(pt['snr']), float(pt['n']), sig_mm))
-            hdr = self._make_header(now)
-            self.cloud_pub.publish(pc2.create_cloud(hdr, fields, pts))
-
-        def _make_header(self, now):
             from std_msgs.msg import Header
-            h = Header(); h.frame_id = self.camera_frame
-            h.stamp = self.get_clock().now().to_msg()
-            return h
+            hdr = Header()
+            hdr.frame_id = self._cloud_frame()        # parent = left camera optical frame
+            hdr.stamp = stamp                          # sensor time of the freshest radar
+            self.cloud_pub.publish(pc2.create_cloud(hdr, fields, pts))
 
         def _image(self, msg):
             if self.K is None:

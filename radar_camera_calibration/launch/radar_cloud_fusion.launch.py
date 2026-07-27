@@ -26,6 +26,8 @@ def generate_launch_description():
         'pc_field_x': 'x', 'pc_field_y': 'y', 'pc_field_z': 'z',
         'pc_field_snr': 'intensity',
         'camera_frame': 'zed_left_camera_optical_frame',
+        'use_info_frame': True,             # publish the fused cloud in CameraInfo's
+        #                                     frame_id (the true left optical frame)
 
         # ── per-radar extrinsics T_cam_radar (FINAL values; REPLACE if re-solved) ──
         'r1_t_xyz': [0.2368, 0.0190, -0.0542],
