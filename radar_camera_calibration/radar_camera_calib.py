@@ -34,10 +34,25 @@ by each component's real σ:
   • ρ = Huber → robust to the occasional bad radar match; plus iterative
     σ-gated rejection of gross outliers (both proven necessary: one wrong
     match blows plain L2 up to ~50°).
-  • Kabsch provides the initial guess.
-  • 2-D radar (no elevation) is auto-detected and the elevation residual is
-    dropped — but then out-of-plane rotation and height are UNOBSERVABLE; the
-    covariance readout flags exactly which DOFs are weak.
+  • Kabsch provides the initial guess. When an extrinsic prior is supplied the
+    problem is ALSO solved without it, from Kabsch, and the two rotations are
+    compared — a wrong prior fits as well as a right one, so the residual can
+    never catch it and only that disagreement can.
+  • 2-D radar (one reporting z == 0 for every point) is auto-detected and the
+    elevation residual is dropped — but then out-of-plane rotation and height
+    are UNOBSERVABLE; the covariance readout flags exactly which DOFs are weak.
+
+READING THE ROTATION — rpy is a TRAP on this rig
+────────────────────────────────────────────────
+The extrinsic is a ~90° frame swap, i.e. |pitch| = 90°, which is EXACTLY the
+singularity of the 'xyz' euler convention. There the triple is not unique and a
+1° physical change rewrites it by 90°:  [-90,-90,0] -> [0,-89,-90]. A perfectly
+good calibration can therefore print an rpy that looks catastrophically wrong,
+and pasting a printed triple back in as prior_rpy_deg turns that display artefact
+into a genuinely wrong prior. So: the rotation is reported as quaternion +
+axis-angle + an explicit "radar axis -> camera axis" map (exact, singularity
+free, eyeball-checkable against the mounting), rotations are only ever COMPARED
+geodesically, and every solve prints a round-trip-safe prior_quat_xyzw line.
 
 THE APEX OFFSET — measured, refined, or CALCULATED (solve_offset)
 ────────────────────────────────────────────────────────────────
@@ -106,6 +121,7 @@ Control (std_msgs/Empty topics)
 Deps:  numpy scipy opencv-contrib-python  +  ROS2 rclpy cv_bridge sensor_msgs_py
 """
 import json
+import warnings
 import numpy as np
 from scipy.spatial.transform import Rotation as Rot
 from scipy.optimize import least_squares
@@ -188,12 +204,57 @@ def _cam_apex(Rb, tb, a):
     return (Rb @ a) + tb
 
 
+# ─────────────── rotation readout (NEVER trust euler here) ───────────────
+# This rig's extrinsic is a ~90° frame swap, which puts it ON the singularity of
+# the 'xyz' euler convention (|pitch| = 90°). There, scipy zeroes the third angle
+# and a ONE DEGREE physical change swings the printed triple by NINETY degrees:
+#     [-90,-90,0]  --(+1° about camera X)-->  [0,-89,-90]
+# Nothing is wrong with the rotation; the *representation* has blown up. Reading
+# rpy as "the answer" — or worse, pasting a printed triple back in as
+# prior_rpy_deg — turns that display artefact into a real, large error. So every
+# rotation is reported as quaternion + axis-angle + an explicit axis mapping, and
+# rotations are only ever COMPARED geodesically.
+GIMBAL_WARN_DEG = 8.0
+_CAM_AXES = ('X(right)', 'Y(down)', 'Z(fwd)')
+_RADAR_AXES = ('X(fwd)', 'Y(left)', 'Z(up)')
+
+
+def geodesic_deg(Ra, Rb):
+    """Angle of the single rotation taking Ra to Rb — the only meaningful
+    'how far apart are these two rotations' number."""
+    return float(np.degrees(np.linalg.norm(Rot.from_matrix(Ra.T @ Rb).as_rotvec())))
+
+
+def axis_mapping(R):
+    """Where each RADAR axis points in CAMERA coordinates, as readable text.
+
+    This is the readout to trust: exact, singularity-free, and checkable against
+    the physical mounting by eye. For a radar sitting beside the camera facing
+    the same way you should see fwd→+Z; if 'up' comes out as camera +Y (down),
+    the radar is mounted rolled 180°."""
+    out = []
+    for j, name in enumerate(_RADAR_AXES):
+        v = R[:, j]
+        k = int(np.argmax(np.abs(v)))
+        sign = '+' if v[k] >= 0 else '-'
+        out.append(f"radar {name:<8} -> camera {sign}{_CAM_AXES[k]:<9} "
+                   f"[{v[0]:+.3f} {v[1]:+.3f} {v[2]:+.3f}]")
+    return out
+
+
+def near_gimbal_lock(R, tol_deg=GIMBAL_WARN_DEG):
+    """(is_near, pitch_deg) for the 'xyz' euler readout of R. R = Rz·Ry·Rx, so
+    R[2,0] = -sin(pitch) and the convention is singular at |pitch| = 90°."""
+    pitch = float(np.degrees(np.arcsin(np.clip(-R[2, 0], -1.0, 1.0))))
+    return bool(abs(abs(pitch) - 90.0) < tol_deg), pitch
+
+
 def robust_ml_calibrate(P_radar, board_R, board_t, apex0,
                         sig_r, sig_az, sig_el, use_elevation=True,
                         solve_offset=True, offset_prior_sigma=0.03,
                         R_prior=None, t_prior=None,
                         rot_prior_sigma=None, t_prior_sigma=None,
-                        huber=1.5, reject_sigma=4.0, max_iter=5):
+                        huber=1.5, reject_sigma=4.0, max_iter=5, init=None):
     """
     Maximum-likelihood extrinsic in the radar's MEASUREMENT space, optionally
     jointly estimating the reflector apex offset (board frame).
@@ -213,8 +274,11 @@ def robust_ml_calibrate(P_radar, board_R, board_t, apex0,
     poses (offset is unobservable at long range where cross-range noise ≫ offset).
     Set offset_prior_sigma<=0 for a free (un-regularised) offset.
 
-    Returns dict: R, t, apex, cov(6×6 on [rotvec,t]), apex_sigma(3), inlier_mask,
-    rms_sigma, n_in, solved_offset(bool).
+    Returns dict: R, t, apex, cov(6×6 on [rotvec,t]), cov_data(6×6, prior rows
+    EXCLUDED), apex_sigma(3), inlier_mask, rms_sigma, n_in, cost, solved_offset.
+
+    `init=(R0,t0)` overrides the starting guess — used by calibrate_extrinsic to
+    try more than one basin instead of trusting whichever one the prior sits in.
     """
     P = np.asarray(P_radar, float)
     Rb = np.asarray(board_R, float); Tb = np.asarray(board_t, float)
@@ -260,45 +324,107 @@ def robust_ml_calibrate(P_radar, board_R, board_t, apex0,
             s.append(np.linalg.norm(d) / np.sqrt(k))
         return np.array(s)
 
-    # init: prefer the extrinsic prior (robust when data is under-constrained),
-    # else Cartesian Kabsch (apex fixed at a0)
-    if ext_rot_prior and ext_t_prior:
+    # init: caller-supplied, else the extrinsic prior, else Cartesian Kabsch
+    # (apex fixed at a0). NOTE: initialising from the prior alone is what lets a
+    # WRONG prior go unchallenged — calibrate_extrinsic always tries Kabsch too.
+    if init is not None:
+        R0 = np.asarray(init[0], float); t0 = np.asarray(init[1], float)
+    elif ext_rot_prior and ext_t_prior:
         R0 = R_prior; t0 = np.asarray(t_prior, float)
     else:
         Q0 = np.array([_cam_apex(Rb[i], Tb[i], a0) for i in range(len(P))])
         R0, t0 = kabsch(P, Q0)
     x = np.concatenate([Rot.from_matrix(R0).as_rotvec(), t0] + ([a0] if solve_offset else []))
     allidx = np.arange(len(P)); mask = np.ones(len(P), bool)
-    sol = None
+    sol = None; fit_mask = mask.copy()
     for _ in range(max_iter):
-        sol = least_squares(residuals, x, args=(allidx[mask],),
+        fit_mask = mask.copy()                      # the set sol.jac corresponds to
+        sol = least_squares(residuals, x, args=(allidx[fit_mask],),
                             method='trf', loss='huber', f_scale=huber, max_nfev=6000)
         x = sol.x
         pn = per_point_sigma(x, allidx)
         new = pn < reject_sigma
-        if new.sum() < max(4, int(0.5 * len(P))):
-            keep_n = max(4, int(0.6 * len(P)))
+        # Keep a floor of inliers — but never ask for more points than exist.
+        # (The old code indexed np.sort(pn)[3] unconditionally, so a 3-capture
+        # solve, which ~/solve explicitly permits, died with an IndexError.)
+        floor = min(len(P), max(4, int(0.5 * len(P))))
+        if new.sum() < floor:
+            keep_n = min(len(P), max(4, int(0.6 * len(P))))
             new = pn <= np.sort(pn)[keep_n - 1]
         if np.array_equal(new, mask):
             break
         mask = new
     R, t, a = unpack(x)
-    try:
-        full = np.linalg.pinv(sol.jac.T @ sol.jac)
-    except Exception:
-        full = np.full((len(x), len(x)), np.nan)
-    cov6 = full[:6, :6]
+
+    def _cov(J):
+        try:
+            return np.linalg.pinv(J.T @ J)
+        except Exception:
+            return np.full((len(x), len(x)), np.nan)
+
+    # Two covariances, because they answer different questions:
+    #   cov      — posterior, priors included: how well do we know the answer?
+    #   cov_data — DATA ONLY: is this DOF actually observable from the poses?
+    # Reporting only the former lets a tight prior masquerade as data-derived
+    # confidence (a 15° prior alone shrinks the rotation 1σ from 6.8° to 5.3°),
+    # which is exactly how an under-constrained rotation hides.
+    full = _cov(sol.jac)
+    n_data = k * int(fit_mask.sum())
+    full_data = _cov(sol.jac[:n_data]) if n_data < sol.jac.shape[0] else full
     apex_sigma = np.sqrt(np.clip(np.diag(full)[6:9], 0, None)) if solve_offset else np.zeros(3)
     rms_sigma = float(np.sqrt((per_point_sigma(x, allidx[mask]) ** 2).mean()))
-    return {'R': R, 't': t, 'apex': a, 'cov': cov6, 'apex_sigma': apex_sigma,
-            'inlier_mask': mask, 'rms_sigma': rms_sigma, 'n_in': int(mask.sum()),
+    return {'R': R, 't': t, 'apex': a, 'cov': full[:6, :6], 'cov_data': full_data[:6, :6],
+            'apex_sigma': apex_sigma, 'inlier_mask': mask, 'rms_sigma': rms_sigma,
+            'n_in': int(mask.sum()), 'cost': float(sol.cost),
             'solved_offset': bool(solve_offset)}
 
 
-def loo_cross_val(P, board_R, board_t, apex, sigmas, use_elevation):
+def calibrate_extrinsic(P, Rb, Tb, apex0, sig_r, sig_az, sig_el, use_elevation,
+                        solve_offset, offset_prior_sigma,
+                        R_prior, t_prior, rot_prior_sigma, t_prior_sigma,
+                        huber, reject_sigma):
+    """Solve twice — once from the DATA ALONE, once with the extrinsic prior —
+    and report how far apart the two rotations are.
+
+    The prior exists to stabilise DOFs the poses don't constrain, and it does
+    that well. But a wrong prior is invisible to the residual: a prior 35° off,
+    at σ=15°, still fits at 0.53σ while dragging the answer 15° away from truth.
+    The old code made that worse by using the prior as the ONLY initialisation,
+    so the data never got a chance to contradict it.
+
+    So: fit the data on its own from a Kabsch start, then fit with the prior from
+    BOTH starts and keep the lower-cost basin. The geodesic gap between the two
+    answers is the diagnostic — small means prior and data agree, large means one
+    of them is wrong and neither should be trusted yet.
+
+    Returns (best, data_only, gap_deg)."""
+    common = dict(use_elevation=use_elevation, solve_offset=solve_offset,
+                  offset_prior_sigma=offset_prior_sigma,
+                  huber=huber, reject_sigma=reject_sigma)
+    free = robust_ml_calibrate(P, Rb, Tb, apex0, sig_r, sig_az, sig_el, **common)
+    if R_prior is None or not rot_prior_sigma or rot_prior_sigma <= 0:
+        return free, free, 0.0
+    best = None
+    for init in ((R_prior, t_prior), (free['R'], free['t'])):
+        r = robust_ml_calibrate(P, Rb, Tb, apex0, sig_r, sig_az, sig_el,
+                                R_prior=R_prior, t_prior=t_prior,
+                                rot_prior_sigma=rot_prior_sigma,
+                                t_prior_sigma=t_prior_sigma, init=init, **common)
+        if best is None or r['cost'] < best['cost']:
+            best = r
+    return best, free, geodesic_deg(free['R'], best['R'])
+
+
+def loo_cross_val(P, board_R, board_t, apex, sigmas, use_elevation,
+                  R_prior=None, t_prior=None, rot_prior_sigma=None, t_prior_sigma=None):
     """Leave-one-out in MEASUREMENT space with the apex FIXED at the solved value
     (cheap, honest): refit extrinsic on N−1, predict the held-out radar
-    measurement, score its error in sigma units. Returns (rms_sigma, max_sigma)."""
+    measurement, score its error in sigma units. Returns (rms_sigma, max_sigma).
+
+    The refits MUST carry the same priors as the real solve. Without them each
+    fold is a different (unregularised) estimator, so on an under-constrained rig
+    the folds scatter and LOO reads far worse than the residual — which looks
+    like bad data but is really just a mismatched control."""
     n = len(P)
     if n < 5:
         return None
@@ -309,7 +435,10 @@ def loo_cross_val(P, board_R, board_t, apex, sigmas, use_elevation):
         m = idx != i
         r = robust_ml_calibrate(P[m], board_R[m], board_t[m], apex,
                                 sig_r, sig_az, sig_el, use_elevation,
-                                solve_offset=False, max_iter=3)
+                                solve_offset=False, max_iter=3,
+                                R_prior=R_prior, t_prior=t_prior,
+                                rot_prior_sigma=rot_prior_sigma,
+                                t_prior_sigma=t_prior_sigma)
         pr = r['R'].T @ (_cam_apex(board_R[i], board_t[i], apex) - r['t'])
         rp = cart_to_raz(pr); rm = cart_to_raz(P[i])
         d = [(rm[0] - rp[0]) / sig_r, _wrap(rm[1] - rp[1]) / sig_az]
@@ -346,6 +475,11 @@ DEFAULTS = {
     # board (ChArUco) — must match the printed board
     'squares_x': 9, 'squares_y': 7, 'square_len': 0.020, 'marker_len': 0.015,
     'dictionary': 'DICT_4X4_50', 'min_corners': 6, 'max_reproj_px': 1.5,
+    # planar pose ambiguity: reject a board pose when IPPE's two hypotheses are
+    # within this reprojection-error ratio of each other (<=0 disables the guard)
+    'pnp_ambiguity_ratio': 1.2,
+    # 'auto' (decide from the topic name) | 'true' | 'false' — see _info
+    'rectified_input': 'auto',
     # reflector apex offset in BOARD frame (m) + its prior width
     'reflector_offset_x': 0.10, 'reflector_offset_y': 0.23, 'reflector_offset_z': -0.05,
     'solve_offset': True, 'offset_prior_sigma_m': 0.05,
@@ -364,10 +498,23 @@ DEFAULTS = {
     # radar measurement-noise model (drives ML weighting)
     'sigma_range_m': 0.05, 'sigma_az_deg': 3.0, 'sigma_el_deg': 10.0,
     'force_2d_radar': False, 'huber_f_scale': 1.5, 'reject_sigma': 4.0,
-    # extrinsic prior (radar-in-camera): ON, this rig's mounting
+    # extrinsic prior (radar-in-camera): ON, this rig's mounting.
+    # prior_quat_xyzw WINS over prior_rpy_deg when its norm is non-zero. Prefer
+    # it: this rig's mounting is a ~90° frame swap, i.e. exactly the gimbal-lock
+    # singularity of the rpy convention, where the euler triple is ambiguous and
+    # a 1° change swings it by 90°. Every solve prints a ready-to-paste
+    # prior_quat_xyzw line — use that, never the printed rpy.
     'use_extrinsic_prior': True,
     'prior_t_xyz': [0.207, 0.016, 0.020], 'prior_rpy_deg': [-90.0, -90.0, 0.0],
+    'prior_quat_xyzw': [0.0, 0.0, 0.0, 0.0],   # zero norm = unset, fall back to rpy
     'prior_t_sigma_m': 0.05, 'prior_rot_sigma_deg': 15.0,
+    # Warn (and fail the verdict) when the data-only and prior-pulled rotations
+    # disagree by more than this — one of the two is wrong. Calibrated on
+    # synthetic sweeps: a CORRECT prior lands at 1.4–1.7°, 10°-wrong at ~2.9°,
+    # 35°-or-worse at 5.3–9.0°. 5° separates them.
+    'prior_disagree_warn_deg': 5.0,
+    # a DOF counts as unobservable when its data-only 1σ exceeds these
+    'unobs_rot_sigma_deg': 10.0, 'unobs_t_sigma_mm': 100.0,
     # strict-capture gate
     'min_snr': 100.0,
     # capture / convergence
@@ -396,6 +543,9 @@ class RadarCameraCalib(Node):
             self.declare_parameter(name, value)
 
         g = lambda n: self.get_parameter(n).value
+        self.image_topic = g('image_topic')
+        self.rectified_input = str(g('rectified_input')).lower()
+        self.pnp_ratio = g('pnp_ambiguity_ratio')
         self.min_corners = int(g('min_corners')); self.max_reproj = g('max_reproj_px')
         self.dict, self.board, self.det, self.new_api, self.obj = build_board(
             int(g('squares_x')), int(g('squares_y')),
@@ -425,11 +575,13 @@ class RadarCameraCalib(Node):
         self.force_2d = bool(g('force_2d_radar'))
         self.huber = g('huber_f_scale'); self.reject_sigma = g('reject_sigma')
         self.use_ext_prior = bool(g('use_extrinsic_prior'))
-        self.prior_R = (Rot.from_euler('xyz', g('prior_rpy_deg'), degrees=True).as_matrix()
-                        if self.use_ext_prior else None)
+        self.prior_R = self._prior_rotation(g('prior_quat_xyzw'), g('prior_rpy_deg'))
         self.prior_t = np.array(g('prior_t_xyz'), float) if self.use_ext_prior else None
         self.prior_t_sigma = g('prior_t_sigma_m')
         self.prior_rot_sigma = np.radians(g('prior_rot_sigma_deg'))
+        self.prior_disagree = g('prior_disagree_warn_deg')
+        self.unobs_rot = np.radians(g('unobs_rot_sigma_deg'))
+        self.unobs_t = g('unobs_t_sigma_mm') / 1000.0
         self.min_snr = g('min_snr')
 
         self.capture_mode = g('capture_mode')
@@ -455,6 +607,7 @@ class RadarCameraCalib(Node):
         # state
         self.win = []                 # rolling [(p_cam, p_radar), ...] for stability
         self.captures = []            # accepted [(p_cam, p_radar, snr, doppler), ...]
+        self.n_ambiguous = 0          # board poses dropped as planar-ambiguous
         self.last_capture_cam = None
         self.manual_capture_req = False
         self.bg_radar = None          # (M,3) pooled background points (raw radar frame)
@@ -503,12 +656,58 @@ class RadarCameraCalib(Node):
             f"  2) bring rig in, move it around the shared FoV, pausing at each spot\n"
             f"  3) auto-captures when still+moved; ~/solve, ~/save, ~/reset any time")
 
-    # ── intrinsics / watchdog ──
+    # ── prior rotation / intrinsics / watchdog ──
+    def _prior_rotation(self, quat, rpy):
+        """Build the prior rotation, preferring the quaternion.
+
+        prior_rpy_deg is a trap for this rig: the mounting is a ~90° frame swap,
+        which is the gimbal-lock singularity of the 'xyz' euler convention. There
+        the triple is not unique, scipy zeroes the third angle, and a 1° change
+        rewrites two of the three numbers by 90°. Pasting a printed rpy back in
+        as the prior therefore injects a genuinely wrong prior. The quaternion
+        has no such singularity."""
+        if not self.use_ext_prior:
+            return None
+        q = np.array(quat, float)
+        if q.shape == (4,) and np.linalg.norm(q) > 1e-6:
+            R = Rot.from_quat(q / np.linalg.norm(q)).as_matrix()
+            self.get_logger().info("extrinsic prior taken from prior_quat_xyzw")
+            return R
+        R = Rot.from_euler('xyz', rpy, degrees=True).as_matrix()
+        locked, pitch = near_gimbal_lock(R)
+        if locked:
+            qq = Rot.from_matrix(R).as_quat()
+            self.get_logger().warn(
+                f"prior_rpy_deg {list(rpy)} sits at GIMBAL LOCK (pitch {pitch:+.1f}°). "
+                f"The euler triple is ambiguous there — a 1° change rewrites it by 90°. "
+                f"Pin the prior with the quaternion instead:\n"
+                f"    -p prior_quat_xyzw:=\"[{qq[0]:.6f},{qq[1]:.6f},{qq[2]:.6f},{qq[3]:.6f}]\"")
+        return R
+
     def _info(self, msg):
-        if self.K is None:
-            self.K = np.array(msg.k).reshape(3, 3)
-            self.D = np.array(msg.d) if len(msg.d) else np.zeros(5)
-            self.get_logger().info(f"intrinsics locked ({msg.width}x{msg.height})")
+        if self.K is not None:
+            return
+        K = np.array(msg.k).reshape(3, 3)
+        D = np.array(msg.d) if len(msg.d) else np.zeros(5)
+        Pm = np.array(msg.p).reshape(3, 4) if len(msg.p) == 12 else None
+        rect = ('rect' in self.image_topic if self.rectified_input == 'auto'
+                else self.rectified_input in ('true', '1', 'yes'))
+        # On a RECTIFIED image the valid intrinsics are P[:3,:3] with ZERO
+        # distortion. Feeding the raw k/d of a rectified stream into solvePnP
+        # bends the board pose, and board-rotation error is multiplied by the
+        # ~25 cm apex offset before it ever reaches the extrinsic solve.
+        if rect and Pm is not None and Pm[0, 0] > 0:
+            if np.abs(D).max() > 1e-6:
+                self.get_logger().warn(
+                    f"'{self.image_topic}' looks rectified but camera_info carries "
+                    f"non-zero distortion {np.round(D, 4).tolist()} — using P with zero D. "
+                    f"Pass rectified_input:=false if the image really is raw.")
+            K = Pm[:3, :3].copy(); D = np.zeros(5)
+        self.K = K; self.D = D
+        self.get_logger().info(
+            f"intrinsics locked ({msg.width}x{msg.height}) "
+            f"fx {K[0,0]:.1f} fy {K[1,1]:.1f}  "
+            f"{'rectified (P, D=0)' if rect else 'raw (K, D)'}")
 
     def _watchdog(self):
         if self.last_radar_stamp == 0.0:
@@ -633,6 +832,40 @@ class RadarCameraCalib(Node):
         return xg[idx], float(sg[idx]), float(dg[idx]), n_gated
 
     # ── camera: board pose → apex in camera frame ──
+    def _board_pose(self, objp, cc):
+        """ChArUco pose, with the planar two-fold ambiguity handled.
+
+        A planar target always has two poses that project almost identically.
+        SOLVEPNP_ITERATIVE silently returns one of them, and at this rig's scale
+        (160×120 mm board, fx≈500) that is ~3° of board-rotation noise at 2 m
+        with ~10% outright flips (>15°) — measured. Every one of those degrees is
+        amplified by the 25 cm apex offset before it reaches the solver, and a
+        flip is a 14 cm gross outlier.
+
+        IPPE returns BOTH hypotheses with their reprojection errors. When the two
+        are too close to call the pose is genuinely ambiguous, so we drop the
+        frame instead of gambling; otherwise we polish the winner.
+        Returns (rvec, tvec, ambiguous)."""
+        op = np.ascontiguousarray(objp, np.float32).reshape(-1, 1, 3)
+        ip = np.ascontiguousarray(cc, np.float32).reshape(-1, 1, 2)
+        if self.pnp_ratio > 0 and len(op) >= 4:
+            try:
+                n, rvs, tvs, rep = cv2.solvePnPGeneric(
+                    op, ip, self.K, self.D, flags=cv2.SOLVEPNP_IPPE)
+                if n >= 1:
+                    e = np.asarray(rep, float).ravel()
+                    if n >= 2 and e[0] > 1e-9 and (e[1] / e[0]) < self.pnp_ratio:
+                        return None, None, True
+                    ok, rvec, tvec = cv2.solvePnP(
+                        op, ip, self.K, self.D, rvs[0].copy(), tvs[0].copy(),
+                        useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE)
+                    return (rvec, tvec, False) if ok else (rvs[0], tvs[0], False)
+            except cv2.error:
+                pass            # IPPE is fussy about degenerate sets — fall through
+        ok, rvec, tvec = cv2.solvePnP(op, ip, self.K, self.D,
+                                      flags=cv2.SOLVEPNP_ITERATIVE)
+        return (rvec, tvec, False) if ok else (None, None, False)
+
     def _apex_in_camera(self, gray):
         if self.new_api:
             cc, cid, _, _ = self.det.detectBoard(gray)
@@ -645,8 +878,18 @@ class RadarCameraCalib(Node):
         if n < self.min_corners:
             return None, None, n, None
         objp = self.obj[cid.flatten()]
-        ok, rvec, tvec = cv2.solvePnP(objp, cc, self.K, self.D, flags=cv2.SOLVEPNP_ITERATIVE)
-        if not ok:
+        rvec, tvec, ambiguous = self._board_pose(objp, cc)
+        if ambiguous:
+            self.n_ambiguous += 1
+            self.get_logger().info(
+                f"board pose AMBIGUOUS ({n} corners) — frame skipped. The board is "
+                f"too small/flat in the image to pin its rotation; move CLOSER or "
+                f"TILT it more (expect this past ~1.5 m with a 160 mm board). "
+                f"{self.n_ambiguous} so far; relax with pnp_ambiguity_ratio "
+                f"(now {self.pnp_ratio}, 0 disables the guard).",
+                throttle_duration_sec=3.0)
+            return None, None, n, None
+        if rvec is None:
             return None, None, n, None
         proj, _ = cv2.projectPoints(objp, rvec, tvec, self.K, self.D)
         reproj = float(cv2.norm(cc, proj, cv2.NORM_L2) / len(proj))
@@ -778,21 +1021,26 @@ class RadarCameraCalib(Node):
         Rb = np.array([c['Rb'] for c in self.captures])           # board rotations
         Tb = np.array([c['tb'] for c in self.captures])           # board translations
 
-        # auto-detect 2-D radar: no meaningful elevation spread → drop el residual
-        rr = np.linalg.norm(P, axis=1); rr = np.where(rr < 1e-6, 1e-6, rr)
-        el_spread = float(np.std(np.abs(P[:, 2]) / rr))
-        use_el = (not self.force_2d) and el_spread > 0.01
+        # Detect a 2-D radar: one that reports z == 0 for EVERY point. That is
+        # the only thing that justifies dropping the elevation residual.
+        # The old test used std(|z|/r) > 0.01, which measures how much elevation
+        # DIVERSITY the poses happened to have — so a genuine 3-D radar swept
+        # horizontally got silently demoted to 2-D, throwing away real elevation
+        # measurements. Measured cost of that mistake: rotation error 3.6° → 5.6°
+        # and the rotation 1σ doubles. Thin elevation spread is a collection
+        # problem (reported below in RADAR spread), not a sensor capability.
+        radar_is_2d = float(np.abs(P[:, 2]).max()) < 1e-3
+        use_el = (not self.force_2d) and not radar_is_2d
 
         # ── the accurate estimator: measurement-space ML + robust rejection,
-        #    optionally jointly refining the apex offset (MAP toward measured) ──
-        r = robust_ml_calibrate(P, Rb, Tb, self.apex_prior,
-                                self.sig_r, self.sig_az, self.sig_el, use_elevation=use_el,
-                                solve_offset=self.solve_offset,
-                                offset_prior_sigma=self.offset_prior_sigma,
-                                R_prior=self.prior_R, t_prior=self.prior_t,
-                                rot_prior_sigma=self.prior_rot_sigma,
-                                t_prior_sigma=self.prior_t_sigma,
-                                huber=self.huber, reject_sigma=self.reject_sigma)
+        #    optionally jointly refining the apex offset (MAP toward measured).
+        #    Solved BOTH with and without the extrinsic prior so a wrong prior
+        #    cannot quietly own the answer (see calibrate_extrinsic). ──
+        r, r_free, prior_gap = calibrate_extrinsic(
+            P, Rb, Tb, self.apex_prior, self.sig_r, self.sig_az, self.sig_el,
+            use_el, self.solve_offset, self.offset_prior_sigma,
+            self.prior_R, self.prior_t, self.prior_rot_sigma, self.prior_t_sigma,
+            self.huber, self.reject_sigma)
         R, t = r['R'], r['t']; mask = r['inlier_mask']; cov = r['cov']
         self.apex_board = r['apex']                    # use refined offset downstream
         self.X = np.eye(4); self.X[:3, :3] = R; self.X[:3, 3] = t
@@ -804,7 +1052,10 @@ class RadarCameraCalib(Node):
         cond = condition_number(Pin)
         span = np.linalg.svd(Pin - Pin.mean(0), compute_uv=False)
         planar = span[2] < max(1e-3, 0.02 * span[0])
-        q = Rot.from_matrix(R).as_quat(); rpy = Rot.from_matrix(R).as_euler('xyz', degrees=True)
+        q = Rot.from_matrix(R).as_quat()
+        with warnings.catch_warnings():      # we detect and explain the lock ourselves
+            warnings.simplefilter('ignore')
+            rpy = Rot.from_matrix(R).as_euler('xyz', degrees=True)
         tmag = float(np.linalg.norm(t))
         n_out = int((~mask).sum())
 
@@ -819,12 +1070,22 @@ class RadarCameraCalib(Node):
                    + ("   !! TOO CLUSTERED — move the rig NEAR↔FAR and LEFT↔RIGHT; "
                       "extrinsic under-constrained until this grows" if low_div else "  ✓"))
 
-        # per-DOF 1-sigma from the covariance (rotvec rad → deg, t m → mm)
-        dsig = np.sqrt(np.clip(np.diag(cov), 0, None))
+        # Per-DOF 1σ, inflated by the residual. pinv(JᵀJ) alone assumes the noise
+        # model is exactly right; when the fit sits at 2.3σ the real uncertainty
+        # is ~2.3× bigger, so reporting the raw number flatters a bad solve.
+        # DATA-ONLY covariance drives the observability call: with the prior rows
+        # included, the prior's own width reads as data-derived confidence.
+        infl = max(1.0, r['rms_sigma'])
+        dsig = np.sqrt(np.clip(np.diag(cov), 0, None)) * infl
+        dsig_data = np.sqrt(np.clip(np.diag(r['cov_data']), 0, None)) * infl
         rot_sig_deg = np.degrees(dsig[:3]); t_sig_mm = dsig[3:6] * 1000
-        unobs = [nm for nm, s in zip(('rot_x', 'rot_y', 'rot_z'), dsig[:3]) if s > 0.3]
-        unobs += [nm for nm, s in zip(('t_x', 't_y', 't_z'), dsig[3:6]) if s > 0.2]
+        rot_sig_data = np.degrees(dsig_data[:3]); t_sig_data = dsig_data[3:6] * 1000
+        unobs = [nm for nm, s in zip(('rot_x', 'rot_y', 'rot_z'), dsig_data[:3])
+                 if s > self.unobs_rot]
+        unobs += [nm for nm, s in zip(('t_x', 't_y', 't_z'), dsig_data[3:6])
+                  if s > self.unobs_t]
 
+        locked, pitch = near_gimbal_lock(R)
         lines = [
             f"\n=== T_{self.parent_frame}_{self.child_frame}  (camera ← radar) ===",
             f"  method   : measurement-space ML ({'3-D' if use_el else '2-D, no elevation'}), "
@@ -832,12 +1093,41 @@ class RadarCameraCalib(Node):
             f"  captures {len(self.captures)}   in-sample RMS {self.rms*1000:.1f} mm   "
             f"residual {r['rms_sigma']:.2f} σ   cond {cond:.1f}",
             f"  xyz (m) : {t[0]:+.4f} {t[1]:+.4f} {t[2]:+.4f}   |t| {tmag*100:.1f} cm",
-            f"  quat    : {q[0]:+.4f} {q[1]:+.4f} {q[2]:+.4f} {q[3]:+.4f}",
-            f"  rpy(deg): {rpy[0]:+.2f} {rpy[1]:+.2f} {rpy[2]:+.2f}",
+            f"  quat    : {q[0]:+.6f} {q[1]:+.6f} {q[2]:+.6f} {q[3]:+.6f}   "
+            f"(axis-angle {np.degrees(np.linalg.norm(Rot.from_matrix(R).as_rotvec())):.2f}°)",
+            "  ROTATION (read THIS, not rpy):",
+        ]
+        lines += [f"      {s}" for s in axis_mapping(R)]
+        lines += [
+            f"  rpy(deg): {rpy[0]:+.2f} {rpy[1]:+.2f} {rpy[2]:+.2f}"
+            + ("   !! AT GIMBAL LOCK (pitch %+.1f°) — this triple is NOT unique and "
+               "jumps ~90° between solves. It is a display artefact, not a rotation "
+               "error. Compare rotations with the axis map or the quaternion."
+               % pitch if locked else ""),
             f"  1σ rot  : {rot_sig_deg[0]:.2f} {rot_sig_deg[1]:.2f} {rot_sig_deg[2]:.2f} deg   "
-            f"1σ t: {t_sig_mm[0]:.1f} {t_sig_mm[1]:.1f} {t_sig_mm[2]:.1f} mm",
+            f"1σ t: {t_sig_mm[0]:.1f} {t_sig_mm[1]:.1f} {t_sig_mm[2]:.1f} mm  (posterior)",
+            f"  1σ data : {rot_sig_data[0]:.2f} {rot_sig_data[1]:.2f} {rot_sig_data[2]:.2f} deg   "
+            f"1σ t: {t_sig_data[0]:.1f} {t_sig_data[1]:.1f} {t_sig_data[2]:.1f} mm  "
+            f"(priors EXCLUDED — what the poses alone pin down)",
             div_msg,
         ]
+        # A wrong prior fits as well as a right one, so the residual can't catch
+        # it. Only the data-vs-prior disagreement can.
+        if self.prior_R is not None:
+            lines.append(
+                f"  prior   : data-only vs prior-pulled rotation differ by {prior_gap:.2f}° "
+                f"(prior σ {np.degrees(self.prior_rot_sigma):.0f}°)"
+                + ("   !! THE PRIOR AND THE DATA DISAGREE — one of them is wrong. "
+                   "Check the axis map above against the physical mounting, then either "
+                   "fix prior_quat_xyzw or set use_extrinsic_prior:=false and collect "
+                   "wider azimuth." if prior_gap > self.prior_disagree else "  ✓ consistent"))
+            lines.append(f"  data-only rotation (no prior) → "
+                         + " | ".join(axis_mapping(r_free['R'])[0:1]))
+        lines.append(
+            "  paste-back prior (round-trip safe, unlike rpy):\n"
+            f"      -p use_extrinsic_prior:=true "
+            f"-p prior_quat_xyzw:=\"[{q[0]:.6f},{q[1]:.6f},{q[2]:.6f},{q[3]:.6f}]\" "
+            f"-p prior_t_xyz:=\"[{t[0]:.4f},{t[1]:.4f},{t[2]:.4f}]\"")
         if unobs:
             lines.append("  !! WEAK/UNOBSERVABLE dof: " + ", ".join(unobs)
                          + ("  — 2-D radar can't see out-of-plane rotation or height; "
@@ -854,7 +1144,10 @@ class RadarCameraCalib(Node):
                 + ("  !! offset weakly observed — trusting your prior; add CLOSE-range "
                    "HIGH-TILT poses to calculate it" if weak else "  ✓ data-determined"))
         loo = loo_cross_val(P[mask], Rb[mask], Tb[mask], self.apex_board,
-                            (self.sig_r, self.sig_az, self.sig_el), use_el)
+                            (self.sig_r, self.sig_az, self.sig_el), use_el,
+                            R_prior=self.prior_R, t_prior=self.prior_t,
+                            rot_prior_sigma=self.prior_rot_sigma,
+                            t_prior_sigma=self.prior_t_sigma)
         if loo is not None:
             loo_s, loo_max = loo
             lines.append(f"  LOO CV  : {loo_s:.2f} σ (max {loo_max:.2f})"
@@ -894,6 +1187,8 @@ class RadarCameraCalib(Node):
                          f"[{'OK' if d <= self.baseline_tol else 'MISMATCH'}]")
         checks = [("reproj_px", mean_px, self.val_px), ("3d_mm", mean_3d, self.val_3d),
                   ("bias_mm", float(np.abs(bias_mm).max()), self.val_bias)]
+        if self.prior_R is not None:
+            checks.append(("prior_gap_deg", prior_gap, self.prior_disagree))
         verdict = all(v <= lim for _, v, lim in checks) and not unobs
         lines.append("  VERDICT : " + ("✔ GOOD  " if verdict else "✗ SUSPECT  ")
                      + "  ".join(f"{k} {v:.1f}/{lim:.0f}[{'P' if v<=lim else 'F'}]"
@@ -905,6 +1200,8 @@ class RadarCameraCalib(Node):
         self._save({'mean_px': mean_px, 'mean_3d': mean_3d, 'bias_mm': bias_mm, 'cond': cond,
                     'loo': loo, 'planar': planar, 'verdict': verdict, 'use_el': use_el,
                     'rot_sig_deg': rot_sig_deg, 't_sig_mm': t_sig_mm, 'unobs': unobs,
+                    'rot_sig_data_deg': rot_sig_data, 't_sig_data_mm': t_sig_data,
+                    'prior_gap_deg': prior_gap, 'R_free': r_free['R'], 'gimbal': locked,
                     'n_in': r['n_in'], 'n_out': n_out, 'rms_sigma': r['rms_sigma'],
                     'apex': self.apex_board, 'apex_sigma': r['apex_sigma'],
                     'apex_prior': self.apex_prior, 'solved_offset': r['solved_offset']})
@@ -951,6 +1248,12 @@ class RadarCameraCalib(Node):
             'loo_cv_rms_sigma': (m['loo'][0] if m['loo'] else None),
             'sigma_1_rot_deg_xyz': [float(v) for v in m['rot_sig_deg']],
             'sigma_1_t_mm_xyz': [float(v) for v in m['t_sig_mm']],
+            # priors excluded — what the poses alone actually determine
+            'sigma_1_rot_deg_xyz_data_only': [float(v) for v in m['rot_sig_data_deg']],
+            'sigma_1_t_mm_xyz_data_only': [float(v) for v in m['t_sig_data_mm']],
+            'prior_data_rotation_gap_deg': float(m['prior_gap_deg']),
+            'rpy_at_gimbal_lock': bool(m['gimbal']),
+            'radar_axes_in_camera': axis_mapping(X[:3, :3]),
             'radar_noise_sigma_range_m': self.sig_r,
             'radar_noise_sigma_az_deg': float(np.degrees(self.sig_az)),
             'radar_noise_sigma_el_deg': float(np.degrees(self.sig_el)),
@@ -961,6 +1264,9 @@ class RadarCameraCalib(Node):
             # T_cam_radar : p_cam = R p_radar + t
             'T_cam_radar_translation': [float(v) for v in X[:3, 3]],
             'T_cam_radar_quaternion_xyzw': [float(v) for v in q],
+            # rpy is DISPLAY ONLY — this rig's ~90° extrinsic sits at the 'xyz'
+            # euler singularity, where the triple is not unique. Consume the
+            # quaternion; never round-trip the rpy back in as a prior.
             'T_cam_radar_rpy_deg': [float(v) for v in rpy],
             # inverse
             'T_radar_cam_translation': [float(v) for v in Xinv[:3, 3]],

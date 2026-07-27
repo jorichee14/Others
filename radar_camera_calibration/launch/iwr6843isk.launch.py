@@ -25,6 +25,12 @@ def generate_launch_description():
         'dictionary': 'DICT_4X4_50',
         'min_corners': 6,            # small board at close range → allow fewer corners
         'max_reproj_px': 1.5,
+        # A planar board has two poses that project almost identically. Drop the
+        # frame when IPPE's two hypotheses are within this reprojection ratio —
+        # otherwise ~10% of poses past ~1.5 m come back flipped, and every degree
+        # of board error is multiplied by the apex offset. 0 disables the guard.
+        'pnp_ambiguity_ratio': 1.2,
+        'rectified_input': 'auto',   # 'auto' reads P (not k/d) on a *_rect_* topic
 
         # ── radar (IWR6843ISK / points_all: x,y,z,doppler,intensity) ──
         'radar_topic': '/radar1/radar/points_all',
@@ -54,11 +60,22 @@ def generate_launch_description():
 
         # ── EXTRINSIC PRIOR (opt-in): rough known radar-in-camera pose ──
         #   turn on and fill from a tape measure / CAD / a first rough solve.
+        #   USE THE QUATERNION. This rig's extrinsic is a ~90° frame swap, which
+        #   is exactly the gimbal-lock singularity of the rpy convention: there
+        #   the euler triple is not unique and a 1° change rewrites it by 90°, so
+        #   pasting a printed rpy back in as a prior injects a real error. Every
+        #   solve prints a ready-to-paste prior_quat_xyzw line.
         'use_extrinsic_prior': False,
         'prior_t_xyz': [0.0, 0.0, 0.0],       # radar position in camera frame (m)
-        'prior_rpy_deg': [0.0, 0.0, 0.0],     # radar orientation (xyz euler, deg)
+        'prior_quat_xyzw': [0.0, 0.0, 0.0, 0.0],   # zero norm = unset → rpy used
+        'prior_rpy_deg': [0.0, 0.0, 0.0],     # legacy/rough entry only
         'prior_t_sigma_m': 0.05,
         'prior_rot_sigma_deg': 10.0,
+        # fail the verdict when the data-only and prior-pulled rotations disagree
+        # by more than this — a wrong prior fits just as well as a right one, so
+        # the residual can never catch it and this is the only thing that can
+        'prior_disagree_warn_deg': 5.0,
+        'unobs_rot_sigma_deg': 10.0, 'unobs_t_sigma_mm': 100.0,
 
         # ── capture / strictness ──
         'capture_mode': 'auto',

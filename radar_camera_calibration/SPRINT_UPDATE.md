@@ -108,7 +108,13 @@ holds ~1° with gross outliers (L2 → 50°); offset recoverable from scratch to
 | `still? True` but no capture #2 | rig not moved `min_baseline` from last | skip message added; **move ≥10 cm** |
 | Dynamic sweep → SNR 5–100, 3-D 200 mm | `min_abs_doppler` grabbed weak moving clutter (hand/body), `min_snr:=0` | drop doppler filter, `min_snr:=100` |
 | Offset pulls to Y≈0.30 vs measured 0.23 | large trihedral's **radar phase center ~7 cm behind geometric apex** | loosen `offset_prior_sigma_m:=0.05`, let it refine |
-| Euler pitch bounces −47↔−72 across solves | **gimbal lock** at pitch −90 (representation, not the rotation) | judge rotation by geodesic/overlay, not euler |
+| **Rotation reads as a "huge error"** | **gimbal lock**: the extrinsic sits at pitch −90, the singularity of the `xyz` euler convention. A **1° real change rewrites the printed triple by 90°** (`[-90,-90,0]`→`[0,-89,-90]`); scipy zeroes the third angle. Pasting a printed rpy back in as `prior_rpy_deg` (as the README used to advise) then makes it a **real** error | report quat + axis-angle + **radar→camera axis map**; compare rotations geodesically only; `prior_quat_xyzw` param + a paste-back line printed every solve; warn when within 8° of the lock |
+| Wrong prior invisible to every metric | a prior 35° off still fits at **0.53 σ** while dragging the answer 15°; the prior was also the *only* initialisation, so the data never contradicted it | solve **twice** (data-only from Kabsch, and with the prior, multi-start) and report the **geodesic gap**; verdict check at 5° |
+| `1σ` looks tight on an under-constrained rotation | covariance included the prior rows, so the prior's own width read as data-derived confidence (6.8°→5.3° from adding a prior alone) | report **`1σ data`** with prior rows excluded, and inflate by the residual |
+| `LOO ≈ 3σ` while residual ≈ 2.3σ | LOO refit **without** the priors — a different estimator, so folds scattered | LOO now carries the same priors |
+| `~/solve` with exactly 3 captures | `np.sort(pn)[3]` on a length-3 array | **`IndexError` crash** — clamp the inlier floor to `len(P)` |
+| Board rotation noisy / occasionally flipped | **planar PnP two-fold ambiguity**, unguarded: measured ~3.9° median and **7/80 flips >15°** at 2 m with the 160 mm board; each degree is multiplied by the 25 cm apex offset | `solvePnPGeneric`+IPPE, reject when the two hypotheses are within `pnp_ambiguity_ratio` (removes all flips) |
+| 3-D radar silently demoted to 2-D | `use_el` keyed on `std(|z|/r)`, which measures **pose diversity**, not whether the radar reports elevation | key on `z ≡ 0`; cost of the old behaviour measured at ~2° rotation and a doubled 1σ |
 | `reproj` always ≫ 20 px | 20 px is unrealistic for close-range radar | judge by **3-D mm** + overlay; `val_pass_reproj_px:=200` |
 
 ---
@@ -135,6 +141,15 @@ holds ~1° with gross outliers (L2 → 50°); offset recoverable from scratch to
 8. **Translation is well-observed; rotation is not** — rotation needs wide
    **azimuth** spread; clustered poses leave it under-constrained (and a bad
    basin can hide behind a small local `1σ`). Extrinsic prior guards against this.
+9. **A ~90° extrinsic cannot be read, compared, or stored as roll/pitch/yaw.**
+   It lands on the euler singularity, where the triple is neither unique nor
+   continuous. Use the quaternion to store it, the **axis map** to read it, and
+   the **geodesic angle** to compare it. Most of what looked like a "huge
+   rotation error" in the live sessions was this representation blowing up.
+10. **No metric the fit produces can validate the prior it was given.** Residual,
+   RMS and reprojection are all just as happy with a 35°-wrong prior. Only
+   re-solving *without* the prior and comparing exposes it — which is why the
+   solve now always does both.
 
 ---
 
@@ -164,15 +179,19 @@ holds ~1° with gross outliers (L2 → 50°); offset recoverable from scratch to
 -p max_abs_doppler:=-1.0 -p min_abs_doppler:=-1.0
 -p reflector_offset_x:=0.10 -p reflector_offset_y:=0.23 -p reflector_offset_z:=-0.05
 -p solve_offset:=true -p offset_prior_sigma_m:=0.05
--p use_extrinsic_prior:=true -p prior_t_xyz:="[0.207,0.016,0.020]" -p prior_rpy_deg:="[-90.0,-90.0,0.0]"
+-p use_extrinsic_prior:=true -p prior_t_xyz:="[0.207,0.016,0.020]"
+-p prior_quat_xyzw:="[-0.5,-0.5,-0.5,0.5]"   # NOT prior_rpy_deg — gimbal lock
 -p prior_t_sigma_m:=0.05 -p prior_rot_sigma_deg:=15.0 -p gate_radius:=0.5
+-p pnp_ambiguity_ratio:=1.2 -p prior_disagree_warn_deg:=5.0
 -p capture_mode:=continuous -p min_baseline:=0.10 -p min_snr:=100.0
 -p val_pass_reproj_px:=200.0 -p val_pass_3d_mm:=150.0 -p min_points:=20
 -p parent_frame:=zed_left_camera_optical_frame -p child_frame:=radar1_link -p show_window:=true
 ```
 Convergence targets: `az spread > 40°`, `3-D < ~150 mm`, `residual ≈ 1σ`,
-`LOO ≈ residual`, `apex ✓ data-determined`, and — the real judge — the **magenta
-radar dot glued to the reflector** across the whole FoV.
+`LOO ≈ residual`, `apex ✓ data-determined`, **`1σ data` (not just the posterior)
+small**, **`prior` gap < 5°**, the printed **axis map matching the physical
+mounting** — and, the real judge, the **magenta radar dot glued to the
+reflector** across the whole FoV. Ignore `rpy(deg)` entirely.
 
 ---
 

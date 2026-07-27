@@ -48,9 +48,14 @@ min_{R,t} Σ ρ( [ (r_m−r_p)/σ_r , (az_m−az_p)/σ_az , (el_m−el_p)/σ_el 
 - `ρ` = **Huber** + iterative σ-gated **outlier rejection** — one wrong radar
   match blows plain least-squares up to ~50°; the robust solver holds ~1°.
 - **Kabsch** supplies the initial guess.
-- **2-D radar** (no elevation) is auto-detected and the elevation residual is
-  dropped — but then **out-of-plane rotation and height are unobservable**, and
-  the per-DOF covariance readout flags exactly which parameters are weak.
+- **2-D radar** (one that reports `z == 0` for every point) is auto-detected and
+  the elevation residual is dropped — but then **out-of-plane rotation and height
+  are unobservable**, and the per-DOF covariance readout flags exactly which
+  parameters are weak. Note this keys on the radar *reporting* no elevation, not
+  on your poses *having* little elevation spread: thin elevation spread is a
+  collection problem (see the `RADAR spread` line), and demoting a real 3-D radar
+  to 2-D over it throws away good measurements — measured cost, ~2° of rotation
+  accuracy and a doubled rotation 1σ.
 
 Set `sigma_range_m`, `sigma_az_deg`, `sigma_el_deg` from your radar's spec — the
 *relative* sizes are what steer the weighting.
@@ -199,7 +204,9 @@ chase sub-pixel numbers):
 | metric | threshold (param) | meaning |
 |---|---|---|
 | residual | ≈ 1 σ | measurement-space fit vs the radar noise model; ≫1 ⇒ σ too small, bad matches, or a real misfit |
-| per-DOF 1σ (rot/t) | small | from the covariance; a large σ on a DOF ⇒ that parameter is weak/unobservable (esp. 2-D radar) |
+| `1σ rot/t` (posterior) | small | priors included — how well the answer is known |
+| **`1σ data`** | small | **priors excluded — what the poses alone pin down.** This is the observability number; the posterior one can be small purely because the prior is tight |
+| `prior` gap | < `prior_disagree_warn_deg` | data-only vs prior-pulled rotation. The *only* check that can catch a wrong prior — the residual cannot |
 | LOO-CV | ≈ residual σ | honest generalisation; ≫ residual ⇒ too few / clustered poses |
 | mean reproj | `val_pass_reproj_px` (20 px) | radar-predicted apex lands on the visual apex |
 | mean 3-D | `val_pass_3d_mm` (150 mm) | Cartesian agreement (cross-check) |
@@ -243,10 +250,15 @@ a `cam_r = a·radar_r + b` fit and suggests `radar_range_scale` / `radar_range_b
 | `reflector_offset_{x,y,z}` | `0` | apex offset in board frame (measured value / **offset prior centre**) |
 | `solve_offset` | `true` | jointly estimate the apex offset (MAP) |
 | `offset_prior_sigma_m` | `0.03` | **offset prior** width — tight if measured well, `0.10` if not |
-| `use_extrinsic_prior` | `false` | regularise + initialise the extrinsic toward a known mounting |
+| `use_extrinsic_prior` | `false` | regularise the extrinsic toward a known mounting |
 | `prior_t_xyz` | `[0,0,0]` | **extrinsic prior**: radar position in camera frame (m) |
-| `prior_rpy_deg` | `[0,0,0]` | extrinsic prior: radar orientation in camera frame (xyz euler) |
+| `prior_quat_xyzw` | `[0,0,0,0]` | extrinsic prior rotation — **use this**; zero norm falls back to rpy |
+| `prior_rpy_deg` | `[0,0,0]` | rough entry only; unusable near gimbal lock (see above) |
 | `prior_t_sigma_m` / `prior_rot_sigma_deg` | `0.05` / `10` | extrinsic prior widths (tight = trust it more) |
+| `prior_disagree_warn_deg` | `5` | fail the verdict when data-only and prior-pulled rotations differ by more |
+| `unobs_rot_sigma_deg` / `unobs_t_sigma_mm` | `10` / `100` | data-only 1σ above which a DOF is called unobservable |
+| `pnp_ambiguity_ratio` | `1.2` | drop board poses whose two planar-PnP hypotheses are this close (`0` = off) |
+| `rectified_input` | `auto` | read `P` (not `k`/`d`) on a rectified image topic |
 | `min_snr` | `0` (off) | **strict capture**: reject a pick whose reflector SNR is below this |
 | `measured_baseline_m` | `-1` (off) | tape-measured `|t|` for the baseline check |
 
@@ -262,20 +274,39 @@ Two knobs stabilise it.
 (`0.02`) to pin it; use `0.10` to let the data drive it.
 
 **Extrinsic prior** (opt-in): give a rough known radar-in-camera pose from a tape
-measure / CAD and the solve is both **initialised from it and regularised toward
-it** (MAP). It caps the uncertainty of poorly-observed DOFs at the prior width
-instead of letting them blow up.
+measure / CAD and the solve is regularised toward it (MAP). It caps the
+uncertainty of poorly-observed DOFs at the prior width instead of letting them
+blow up.
 ```
 -p use_extrinsic_prior:=true \
--p prior_t_xyz:="[0.20, 0.0, 0.0]" \      # radar ~20 cm along camera +x, measured
--p prior_rpy_deg:="[-115, -70, -130]" \   # rough radar orientation in camera frame
--p prior_t_sigma_m:=0.05 \                # tighten to trust the prior more
+-p prior_t_xyz:="[0.20, 0.0, 0.0]" \                    # tape-measured, camera frame
+-p prior_quat_xyzw:="[-0.5, -0.5, -0.5, 0.5]" \         # USE THE QUATERNION
+-p prior_t_sigma_m:=0.05 \                              # tighten to trust it more
 -p prior_rot_sigma_deg:=10
 ```
-Get `prior_rpy_deg` from the nominal mounting (or from a first rough solve's
-`rpy(deg)` line), and `prior_t_xyz` by tape-measuring the radar position relative
-to the camera optical centre. Tighten the sigmas only as far as you trust the
-measurement — a wrong-but-tight prior biases the result.
+
+> **Give the prior as a quaternion, never as `prior_rpy_deg`.** Every solve
+> prints a ready-to-paste `prior_quat_xyzw` line — use that. See
+> [Reading the rotation](#reading-the-rotation-do-not-trust-rpy) for why the rpy
+> round-trip is a trap on this rig.
+
+**The prior cannot be validated by the fit.** A prior 35° wrong still fits at
+~0.5σ while dragging the answer 15° off — residual, RMS and reprojection all look
+fine. So the solve now runs **twice**: once from the data alone (Kabsch start, no
+prior) and once with the prior, and reports the geodesic gap between the two
+rotations:
+
+```
+prior   : data-only vs prior-pulled rotation differ by 5.30° (prior σ 15°)
+          !! THE PRIOR AND THE DATA DISAGREE — one of them is wrong.
+```
+
+A correct prior lands at ~1.5°; 35°-or-worse shows up at 5–9°. The gap is a
+verdict check (`prior_disagree_warn_deg`, default 5°). When it trips, check the
+printed axis map against the physical mounting to find out which side is wrong.
+
+Tighten the sigmas only as far as you trust the measurement — a wrong-but-tight
+prior biases the result, and only the gap will tell you.
 
 **Strict captures**: `min_snr` rejects any capture whose reflector return is
 weaker than the threshold (weak returns are the ones most likely mis-associated
@@ -283,6 +314,51 @@ with clutter). Also tighten `stable_std_radar` and/or raise `stable_window` so
 only rock-steady poses are accepted. These are the cheapest defences against a
 bad correspondence poisoning the solve (on top of the built-in Huber +
 `reject_sigma` outlier rejection).
+
+## Reading the rotation (do NOT trust rpy)
+
+**If the printed `rpy(deg)` looks wildly wrong, read this before believing it.**
+
+This rig's extrinsic is a ~90° frame swap between radar (X=fwd) and camera
+(Z=fwd) — nominally `rpy = [-90, -90, 0]`. That pitch of −90° is *exactly* the
+singularity of the `xyz` Euler convention. On the singularity the triple is not
+unique, SciPy silently zeroes the third angle, and a **one-degree** physical
+change rewrites two of the three numbers by **ninety degrees**:
+
+| | rotation | printed `rpy(deg)` |
+|---|---|---|
+| solve A | — | `[-90, -90, 0]` |
+| solve B | **1.0° away from A** | `[0, -89, -90]` |
+
+Nothing moved. The *representation* blew up. This is why the pitch was seen
+bouncing −47 ↔ −72 between solves, and why a good calibration can print a triple
+that looks like a catastrophic error.
+
+So the tool now reports the rotation three ways, and `rpy` is display-only:
+
+```
+quat    : +0.502717 +0.512599 +0.479534 -0.504544   (axis-angle 119.40°)
+ROTATION (read THIS, not rpy):
+    radar X(fwd)   -> camera +Z(fwd)    [+0.015 +0.031 +0.999]
+    radar Y(left)  -> camera +X(right)  [+0.999 +0.035 -0.016]
+    radar Z(up)    -> camera +Y(down)   [-0.035 +0.999 -0.031]
+rpy(deg): -153.16 -88.01 +65.16   !! AT GIMBAL LOCK — display artefact, not error
+```
+
+**The axis map is the readout to trust.** It is exact, has no singularities, and
+you can check it against the physical mounting by eye: radar forward should come
+out as camera `+Z`; if radar "up" maps to camera `+Y (down)`, the radar is
+mounted rolled 180° about its boresight. Compare two rotations only by the
+**geodesic angle** (printed for the prior gap) — never by subtracting Euler
+triples.
+
+Consequences elsewhere:
+
+- **Never paste a printed `rpy(deg)` back in as `prior_rpy_deg`.** Near the lock
+  the triple is not round-trippable, so that turns a display artefact into a
+  genuinely wrong prior. Use the `prior_quat_xyzw` line every solve prints.
+- The YAML keeps `T_cam_radar_rpy_deg` for human reading only; consume
+  `T_cam_radar_quaternion_xyzw` (and `radar_axes_in_camera`).
 
 ## Coordinate conventions
 
