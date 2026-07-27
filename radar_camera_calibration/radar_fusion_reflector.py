@@ -196,12 +196,13 @@ class RadarFusionReflector(Node):
         dp('radar2_topic', '/radar2/radar/points_all')
         dp('pc_field_x', 'x'); dp('pc_field_y', 'y'); dp('pc_field_z', 'z')
         dp('pc_field_snr', 'intensity')
-        # per-radar extrinsics T_cam_radar (defaults = this rig's solved values)
-        dp('r1_t_xyz', [0.2218, -0.0067, -0.1721])
-        dp('r1_quat_xyzw', [-0.5345, 0.5853, -0.4196, -0.4424])
-        dp('r2_t_xyz', [-0.0999, -0.0124, -0.0011])
-        dp('r2_quat_xyzw', [0.7882, -0.0406, 0.6121, 0.0499])
-        dp('r1_range_scale', 1.039); dp('r2_range_scale', 1.026)
+        # per-radar extrinsics T_cam_radar — FINAL values for this rig
+        # (sessions/2026-07-22_zed_radar1_radar2_final.md)
+        dp('r1_t_xyz', [0.2368, 0.0190, -0.0542])
+        dp('r1_quat_xyzw', [-0.4995, 0.6007, -0.4224, -0.4596])
+        dp('r2_t_xyz', [-0.1194, -0.0096, -0.0157])
+        dp('r2_quat_xyzw', [0.7572, 0.0539, 0.6506, -0.0217])
+        dp('r1_range_scale', 0.958); dp('r2_range_scale', 0.967)
         # radar noise (same chip for both) — the MODEL floor for the fusion weighting
         dp('sigma_range_m', 0.05); dp('sigma_az_deg', 3.0); dp('sigma_el_deg', 8.0)
         # reflector selection

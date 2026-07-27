@@ -253,6 +253,7 @@ stop. The old `radar_camera_calib.py` still runs both via `capture_mode`.
 > 'radar_camera_calib_dynamic = wicoms_utils.radar_camera_calib_dynamic:main',
 > 'radar_camera_calib_arducam = wicoms_utils.radar_camera_calib_arducam:main',
 > 'radar_fusion_reflector     = wicoms_utils.radar_fusion_reflector:main',
+> 'radar_cloud_fusion         = wicoms_utils.radar_cloud_fusion:main',
 > ```
 
 ### Diversity HUD — "is my pose set good enough for rotation?"
@@ -418,12 +419,12 @@ ros2 run wicoms_utils radar_fusion_reflector --ros-args \
   -p info_topic:=/zed/zed_node/left/camera_info \
   -p radar1_topic:=/radar1/radar/points_all -p radar2_topic:=/radar2/radar/points_all \
   -p pc_field_x:=x -p pc_field_y:=y -p pc_field_z:=z -p pc_field_snr:=intensity \
-  `# per-radar extrinsics T_cam_radar (replace with YOUR solved values)` \
-  -p r1_t_xyz:="[0.2218,-0.0067,-0.1721]" \
-  -p r1_quat_xyzw:="[-0.5345,0.5853,-0.4196,-0.4424]" \
-  -p r2_t_xyz:="[-0.0999,-0.0124,-0.0011]" \
-  -p r2_quat_xyzw:="[0.7882,-0.0406,0.6121,0.0499]" \
-  -p r1_range_scale:=1.039 -p r2_range_scale:=1.026 \
+  `# per-radar extrinsics T_cam_radar (FINAL values — replace if re-solved)` \
+  -p r1_t_xyz:="[0.2368,0.0190,-0.0542]" \
+  -p r1_quat_xyzw:="[-0.4995,0.6007,-0.4224,-0.4596]" \
+  -p r2_t_xyz:="[-0.1194,-0.0096,-0.0157]" \
+  -p r2_quat_xyzw:="[0.7572,0.0539,0.6506,-0.0217]" \
+  -p r1_range_scale:=0.958 -p r2_range_scale:=0.967 \
   `# radar noise model (drives fusion weighting)` \
   -p sigma_range_m:=0.05 -p sigma_az_deg:=3.0 -p sigma_el_deg:=8.0 \
   `# reflector selection` \
@@ -672,6 +673,99 @@ Because σ_a is speed-adaptive you rarely need to touch it, but: if the tracked
 point **lags** a fast sweep, raise `maneuver_gain` (or lower `maneuver_deadband`);
 if it's **jumpy** when the reflector is still, lower `process_accel` (or raise
 `maneuver_deadband`).
+
+---
+
+## Fusing two radars into a better SCENE cloud (`radar_cloud_fusion.py`)
+
+`radar_fusion_reflector.py` tracks **one** corner reflector. `radar_cloud_fusion.py`
+is the cloud-level sibling: it fuses the **entire** point cloud of both radars into
+a single, denser, less-noisy cloud in the camera frame, projects it onto the ZED
+image, and **validates the fusion live** — for perception, not a single target.
+
+**Why fusing helps (same anisotropy trick).** Each IWR6843 is sharp in range,
+moderate in azimuth, poor in elevation; radar2 is rolled ~90°, so their weak axes
+are perpendicular in the camera frame. Where **both** radars see the same physical
+point, an information-form BLUE merge is tight on *both* axes:
+
+```
+C_f = (C1⁻¹ + C2⁻¹)⁻¹      p_f = C_f (C1⁻¹ p1 + C2⁻¹ p2)
+```
+
+radar1 supplies the horizontal, radar2 the vertical — a real accuracy gain, not
+just more dots. Points seen by only one radar are kept (flagged `n_radars=1`) with
+that radar's honest anisotropic covariance, so downstream code can weight them.
+
+**The pipeline** — ingest (range_scale → gate → transform → per-point covariance)
+→ **associate** the two clouds by Mahalanobis distance under `C1+C2` (optimal
+Hungarian assignment, χ²-gated at `assoc_gate_chi2`) → **fuse** matched pairs with
+the BLUE above, pass unmatched points through → optional temporal **voxel merge**
+(`accum_s`, static scenes only) → **project** onto the image, coloured by depth,
+each point drawn with its **1σ uncertainty ellipse** (the 3-D covariance through
+the projection Jacobian; confirmed 2-radar points filled, single-radar hollow).
+
+**Validation is built in — this is the point of "then validate".** Matched pairs
+are 3-DOF, so their Mahalanobis **χ² should average ≈ 3** when the extrinsics *and*
+the noise model are right. A mean ≫ 3 means the cloud is *not* trustworthy
+(miscalibration or too-small σ), regardless of how good the overlay looks. Every
+frame the node reports:
+
+| metric | ideal | meaning |
+|---|---|---|
+| **mean χ²** of matched pairs | ≈ 3 | cross-radar consistency; ≫3 ⇒ extrinsics/σ wrong |
+| within-gate % | high | fraction of pairs that associated under the χ² gate |
+| **σ shrink** (fused ÷ best single) | < 1 | fusion genuinely tightened the estimate |
+| pairs/frame, 2-radar vs 1-radar counts | — | overlap / confirmation rate |
+
+It publishes the fused cloud on `fused_cloud_topic` (PointCloud2:
+`x,y,z,intensity,n_radars,sigma_mm`) and the annotated image on
+`debug_image_topic`, and logs a `VALID`/`CHECK` verdict every `report_every_s`.
+
+**Offline proof (no ROS needed).** The math is self-validating on synthetic data
+using this rig's final extrinsics:
+
+```bash
+python3 radar_cloud_fusion.py --selftest
+```
+
+It confirms the fused cloud beats **both** radars in 3-D RMS, that radar1 wins
+horizontally / radar2 wins vertically (and fusion inherits the best of each), and
+that matched-pair χ² is statistically consistent (mean ≈ 3). Representative run:
+
+```
+  axis        radar1 RMS    radar2 RMS     FUSED RMS
+  X (horiz)      203mm         519mm         184mm
+  Y (vert)       506mm         225mm         210mm
+  Z (range)      104mm         135mm          67mm
+  |3D|           321mm         336mm         166mm      matched-pair mean χ² = 2.79
+```
+
+**Run (live):**
+
+```bash
+python3 radar_cloud_fusion.py --ros-args \
+  -p image_topic:=/zed/zed_node/left/image_rect_color \
+  -p info_topic:=/zed/zed_node/left/camera_info \
+  -p radar1_topic:=/radar1/radar/points_all \
+  -p radar2_topic:=/radar2/radar/points_all \
+  -p pc_field_snr:=intensity \
+  -p show_window:=true
+# extrinsics default to the FINAL rig values; override r{1,2}_t_xyz / _quat_xyzw /
+# _range_scale if re-solved. Or: ros2 launch wicoms_utils radar_cloud_fusion.launch.py
+```
+
+Key knobs (full list in `launch/radar_cloud_fusion.launch.py`):
+
+| param | default | effect |
+|---|---|---|
+| `assoc_gate_chi2` | `7.815` | cross-radar match gate (3-DOF 95%). Lower rejects looser pairs |
+| `require_both` | `false` | `true` → publish **only** 2-radar confirmed points (max robustness, sparser) |
+| `sync_s` | `0.15` s | both clouds must be within this window to cross-fuse |
+| `accum_s` / `voxel_m` | `0.0` / `0.10` m | temporal accumulate + voxel-merge for a denser cloud — **static scenes only** (it smears motion) |
+| `min_range`/`max_range`/`min_snr` | `0.3`/`8.0`/`0` | ingest gates |
+| `max_points` | `400` | per-cloud cap (keeps the brightest) so association stays O(n·m)-bounded |
+| `draw_ellipse` | `true` | per-point 1σ projected uncertainty ellipse on the overlay |
+| `sigma_range_m`/`sigma_az_deg`/`sigma_el_deg` | `0.05`/`3.0`/`8.0` | radar noise model — **must match calibration**; it sets both the covariances and the χ² scale, so a wrong σ makes the χ² verdict lie |
 
 ---
 
