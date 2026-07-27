@@ -37,12 +37,19 @@ def generate_launch_description():
         # ── radar noise model (same chip; sets each point's anisotropic covariance) ──
         'sigma_range_m': 0.05, 'sigma_az_deg': 3.0, 'sigma_el_deg': 8.0,
 
+        # ── extrinsic 1σ (from the calibration) — folded into each point's cov so
+        #    the cross-radar χ² is calibrated (≈3). Without it, χ² reads ~2× high. ──
+        'r1_ext_sigma_t_m': 0.035, 'r1_ext_sigma_rot_deg': 4.0,
+        'r2_ext_sigma_t_m': 0.030, 'r2_ext_sigma_rot_deg': 3.5,
+
         # ── gating ──
         'min_range': 0.3, 'max_range': 8.0, 'min_snr': 0.0,
         'max_points': 400,                  # cap per cloud before O(n·m) association
 
         # ── fusion ──
         'assoc_gate_chi2': 7.815,           # 3-DOF 95% = 7.815 (99% = 11.345)
+        'valid_chi2_max': 6.0,              # VALID if windowed mean χ² ≤ this (2× ideal)
+        'stats_window': 300,               # report χ²/shrink over the last N matches
         'require_both': False,              # True → publish ONLY 2-radar confirmed points
         'sync_s': 0.15,                     # both clouds must be within this to cross-fuse
         'accum_s': 0.0,                     # >0: temporal accumulate+voxel merge (STATIC scenes)

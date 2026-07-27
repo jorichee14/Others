@@ -108,6 +108,23 @@ def radar_cov_cam(q, R, sr, saz, sel):
     return R @ S @ R.T, R @ eel * (r * sel)
 
 
+def ext_cov(p_cam, sig_t, sig_rot):
+    """Covariance contributed by the EXTRINSIC's own uncertainty, in the camera
+    frame. A translation 1σ `sig_t` (m) displaces the point isotropically; a
+    rotation 1σ `sig_rot` (rad) rotates it about the camera origin, so it displaces
+    the point by ≈ range·σ_rot PERPENDICULAR to the line of sight. Folding this in
+    is what calibrates the cross-radar χ² back toward 3 on real data — without it,
+    matched pairs look farther apart than the pure sensor-noise model predicts
+    (the extrinsic's few-degree / few-cm error is unmodelled)."""
+    p_cam = np.asarray(p_cam, float)
+    r = float(np.linalg.norm(p_cam))
+    if r < 1e-6:
+        return (sig_t ** 2) * np.eye(3)
+    er = p_cam / r
+    perp = np.eye(3) - np.outer(er, er)               # project onto the line-of-sight ⊥ plane
+    return (sig_t ** 2) * np.eye(3) + (r * sig_rot) ** 2 * perp
+
+
 def _inv3(C):
     """Robust 3×3 inverse with a tiny diagonal jitter fallback (covariances from
     a near-degenerate geometry can be numerically singular)."""
@@ -269,11 +286,17 @@ if _HAVE_ROS:
             dp('r1_range_scale', 0.958); dp('r2_range_scale', 0.967)
             # radar noise model (same chip) — sets each point's anisotropic covariance
             dp('sigma_range_m', 0.05); dp('sigma_az_deg', 3.0); dp('sigma_el_deg', 8.0)
+            # extrinsic 1σ (from the calibration) — folded into each point's covariance
+            # so the cross-radar χ² is calibrated (≈3). Defaults ≈ the final solve's σ.
+            dp('r1_ext_sigma_t_m', 0.035); dp('r1_ext_sigma_rot_deg', 4.0)
+            dp('r2_ext_sigma_t_m', 0.030); dp('r2_ext_sigma_rot_deg', 3.5)
             # gating
             dp('min_range', 0.3); dp('max_range', 8.0); dp('min_snr', 0.0)
             dp('max_points', 400)         # cap per cloud before O(n·m) association
             # fusion
             dp('assoc_gate_chi2', 7.815)  # 3-DOF 95% = 7.815 (99% = 11.345)
+            dp('valid_chi2_max', 6.0)     # VALID if windowed mean χ² ≤ this (2× ideal)
+            dp('stats_window', 300)       # report χ²/shrink over the last N matches (recent state)
             dp('require_both', False)     # True → publish ONLY 2-radar confirmed points
             dp('sync_s', 0.15)            # both clouds must be within this to cross-fuse
             dp('accum_s', 0.0)            # >0: accumulate+voxel-merge (STATIC scenes only)
@@ -296,9 +319,13 @@ if _HAVE_ROS:
             self.s1 = g('r1_range_scale'); self.s2 = g('r2_range_scale')
             self.sr = g('sigma_range_m')
             self.saz = np.radians(g('sigma_az_deg')); self.sel = np.radians(g('sigma_el_deg'))
+            self.ext_t = {1: g('r1_ext_sigma_t_m'), 2: g('r2_ext_sigma_t_m')}
+            self.ext_rot = {1: np.radians(g('r1_ext_sigma_rot_deg')),
+                            2: np.radians(g('r2_ext_sigma_rot_deg'))}
             self.min_range = g('min_range'); self.max_range = g('max_range'); self.min_snr = g('min_snr')
             self.max_points = int(g('max_points'))
             self.gate = g('assoc_gate_chi2'); self.require_both = bool(g('require_both'))
+            self.valid_chi2_max = g('valid_chi2_max'); self.stats_window = int(g('stats_window'))
             self.sync_s = g('sync_s'); self.accum_s = g('accum_s'); self.voxel_m = g('voxel_m')
             self.draw_ellipse = bool(g('draw_ellipse')); self.prad = int(g('point_radius'))
             self.report_every = g('report_every_s')
@@ -366,7 +393,11 @@ if _HAVE_ROS:
                 xyz, snr = xyz[idx], snr[idx]
             R, t = (self.R1, self.t1) if which == 1 else (self.R2, self.t2)
             P = (xyz @ R.T) + t
-            C = [radar_cov_cam(q, R, self.sr, self.saz, self.sel)[0] for q in xyz]
+            # per-point covariance = radar measurement noise + this radar's extrinsic
+            # uncertainty (calibrates the cross-radar χ²)
+            st, srot = self.ext_t[which], self.ext_rot[which]
+            C = [radar_cov_cam(q, R, self.sr, self.saz, self.sel)[0] + ext_cov(p, st, srot)
+                 for q, p in zip(xyz, P)]
             return P, C, snr
 
         def _radar(self, msg, which):
@@ -425,18 +456,27 @@ if _HAVE_ROS:
                 self.get_logger().info("[validate] no 2-radar matches yet "
                                        "(check overlap, sync_s, or extrinsics)")
                 return
-            chi2 = np.array(r['chi2']); shrink = np.array(r['shrink'])
-            mean_chi2 = float(np.mean(chi2))
-            frac_gate = float(np.mean(chi2 <= self.gate))
-            med_shrink = float(np.median(shrink)) if len(shrink) else float('nan')
-            match_rate = float(np.mean(r['match']))
+            mean_chi2, frac_gate, med_shrink = self._window_stats()
+            match_rate = float(np.mean(r['match'][-self.stats_window:]))
             # Verdict: matched pairs are 3-DOF, so E[χ²]=3 when extrinsics+σ are
-            # right. ≫3 ⇒ miscalibration or too-small σ; the cloud is NOT trustworthy.
-            ok = mean_chi2 <= 3.0 * 2.0 and med_shrink <= 1.0
+            # right (extrinsic covariance is folded in, so this is calibrated). ≫
+            # valid_chi2_max ⇒ miscalibration or too-small σ; cloud not trustworthy.
+            ok = mean_chi2 <= self.valid_chi2_max and med_shrink <= 1.0
             self.get_logger().info(
                 f"[validate] {'VALID' if ok else 'CHECK'} | "
                 f"mean χ²={mean_chi2:.2f} (ideal 3) | within-gate {100*frac_gate:.0f}% | "
                 f"fused σ shrink×{med_shrink:.2f} | ~{match_rate:.1f} pairs/frame")
+
+        def _window_stats(self):
+            """(mean χ², within-gate fraction, median shrink) over the last
+            `stats_window` matches — reflects CURRENT state, not all history."""
+            r = self._roll
+            chi2 = np.array(r['chi2'][-self.stats_window:])
+            shrink = np.array(r['shrink'][-self.stats_window:])
+            if not len(chi2):
+                return float('nan'), float('nan'), float('nan')
+            return (float(np.mean(chi2)), float(np.mean(chi2 <= self.gate)),
+                    float(np.median(shrink)) if len(shrink) else float('nan'))
 
         def _publish_cloud(self, fused, now):
             if self.cloud_pub is None or not fused:
@@ -497,10 +537,9 @@ if _HAVE_ROS:
                 else:
                     cv2.circle(bgr, uv, self.prad, col, 1)          # single-radar: hollow
 
-            r = self._roll
-            mean_chi2 = float(np.mean(r['chi2'])) if r['chi2'] else float('nan')
-            med_shrink = float(np.median(r['shrink'])) if r['shrink'] else float('nan')
-            ok = (r['chi2'] and mean_chi2 <= 6.0 and med_shrink <= 1.0)
+            mean_chi2, _, med_shrink = self._window_stats()
+            ok = (self._roll['chi2'] and mean_chi2 <= self.valid_chi2_max
+                  and med_shrink <= 1.0)
             l1 = (f"fused {len(fused)}  (2-radar {n2}, 1-radar {len(fused)-n2})  "
                   f"in-img {in_img}")
             l2 = (f"VALIDATE: mean chi2 {mean_chi2:.2f}/3  shrink x{med_shrink:.2f}  "

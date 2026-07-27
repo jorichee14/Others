@@ -766,6 +766,10 @@ Key knobs (full list in `launch/radar_cloud_fusion.launch.py`):
 | `max_points` | `400` | per-cloud cap (keeps the brightest) so association stays O(n·m)-bounded |
 | `draw_ellipse` | `true` | per-point 1σ projected uncertainty ellipse on the overlay |
 | `sigma_range_m`/`sigma_az_deg`/`sigma_el_deg` | `0.05`/`3.0`/`8.0` | radar noise model — **must match calibration**; it sets both the covariances and the χ² scale, so a wrong σ makes the χ² verdict lie |
+| `rN_ext_sigma_t_m` / `rN_ext_sigma_rot_deg` | `0.03`/`4°` | the extrinsic's own 1σ (from the solve), folded into each point's covariance. This is what calibrates the cross-radar χ² to ≈3 on real data — omit it and χ² reads ~2× high (the few-degree / few-cm extrinsic error is unmodelled) |
+| `valid_chi2_max` / `stats_window` | `6.0` / `300` | VALID threshold on the windowed mean χ² (2× the ideal 3), and how many recent matches the reported χ²/shrink average over |
+
+**Colours in the overlay** — point/ellipse colour is **depth** (JET: red=near → blue=far over `[min_range,max_range]`), *not* radar identity. Radar identity is the **fill**: filled = 2-radar confirmed (fused), hollow = single-radar. The ellipse is the point's **1σ** uncertainty. The `VALIDATE:` HUD line is green when VALID, orange when CHECK.
 
 ---
 
