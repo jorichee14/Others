@@ -140,26 +140,21 @@ ros2 topic echo /diagnostics
 | `frame_id`         | `wifi`  | `header.frame_id` stamped on each message.     |
 | `warn_signal_dbm`  | `-70.0` | RSSI at/below which diagnostics report WARN.    |
 | `error_signal_dbm` | `-80.0` | RSSI at/below which diagnostics report ERROR.   |
-| `assumed_noise_dbm`| `NaN`   | Assumed noise floor to **estimate** SNR when the driver reports none (e.g. `-95`). `NaN` disables estimation. |
 
-### Estimated SNR (for drivers without a noise floor)
+### When the driver reports no noise floor
 
 Many USB adapters (e.g. Realtek `rtl88xx`/`rtl8852bu`) never report a noise
-floor, so a *measured* SNR is impossible. Set `assumed_noise_dbm` to get an
-**estimate** instead:
+floor, so a real SNR cannot be computed. In that case the node makes the
+situation explicit rather than guessing:
 
-```bash
-ros2 run wifi_monitor wifi_monitor_node --ros-args \
-    -p interface:=wlx8876b9eae0ff -p assumed_noise_dbm:=-95.0
-```
+* `signal_dbm` (RSSI) is still published — use it as your signal indicator.
+* `noise_dbm` and `snr_db` are published as **`NaN`**.
+* `noise_valid = false` and **`snr_valid = false`**.
 
-Then `snr_db = signal_dbm - assumed_noise_dbm`, published with
-`snr_estimated = true` and `noise_valid = false` so it is never confused with
-a measured value. Leave the parameter at `NaN` (default) to publish `snr_db`
-as `NaN` whenever noise is unmeasured. Typical assumed floors: `-95` dBm at
-5 GHz, `-90` dBm at 2.4 GHz. For a **measured** noise floor / true SNR, use
-an `ath9k_htc`, `mt76`, or Intel `iwlwifi` adapter — those report it via
-`iw survey dump`.
+The node never fabricates an SNR from an assumed noise floor. For a
+**measured** noise floor / true SNR, use an `ath9k_htc`, `mt76`, or Intel
+`iwlwifi` adapter — those report it via `iw survey dump`, and the node then
+sets `snr_valid = true` automatically.
 
 ## Notes
 

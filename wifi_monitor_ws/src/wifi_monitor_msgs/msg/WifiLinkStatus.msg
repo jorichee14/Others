@@ -28,10 +28,11 @@ float64  link_quality_ratio # link_quality / link_quality_max (NaN if unknown)
 float64  signal_dbm         # RSSI, e.g. -37.0 (NaN if unknown)
 float64  signal_avg_dbm     # averaged RSSI from `iw station dump` (NaN if unknown)
 float64  noise_dbm          # noise floor (NaN if the driver does not report it)
-float64  snr_db             # signal_dbm - noise_dbm (NaN if noise unknown)
+float64  snr_db             # signal_dbm - noise_dbm; NaN when noise is not
+                            # measured (many USB adapters never report noise)
 bool     noise_valid        # true when the driver reported a real noise floor
-bool     snr_estimated      # true when snr_db is derived from an ASSUMED noise
-                            # floor (assumed_noise_dbm param), not a measured one
+bool     snr_valid          # true only when snr_db is a real measured value.
+                            # false => no SNR available; use signal_dbm (RSSI).
 
 # --- PHY rate details (iw dev <iface> link / station dump) ------------------
 # rx/tx bit rate is split so you can see asymmetry; bit_rate_mbps above keeps

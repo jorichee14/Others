@@ -33,12 +33,6 @@ def generate_launch_description() -> LaunchDescription:
             default_value="-80.0",
             description="RSSI at/below which diagnostics error.",
         ),
-        DeclareLaunchArgument(
-            "assumed_noise_dbm",
-            default_value="nan",
-            description="Assumed noise floor for ESTIMATED SNR when the "
-            "driver reports none (e.g. -95). 'nan' disables estimation.",
-        ),
     ]
 
     node = Node(
@@ -53,7 +47,6 @@ def generate_launch_description() -> LaunchDescription:
                 "frame_id": LaunchConfiguration("frame_id"),
                 "warn_signal_dbm": LaunchConfiguration("warn_signal_dbm"),
                 "error_signal_dbm": LaunchConfiguration("error_signal_dbm"),
-                "assumed_noise_dbm": LaunchConfiguration("assumed_noise_dbm"),
             }
         ],
     )
