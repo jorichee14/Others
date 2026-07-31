@@ -162,7 +162,7 @@ ros2 launch wifi_monitor iperf_runner.launch.py
 ros2 launch wifi_monitor iperf_runner.launch.py reverse:=true
 
 # UDP loss/jitter, pushing 300 Mbit/s:
-ros2 launch wifi_monitor iperf_runner.launch.py protocol:=udp udp_bitrate:=300M
+ros2 launch wifi_monitor iperf_runner.launch.py protocol:=udp udp_bitrate_mbps:=300
 
 # Continuous "survey" mode (back-to-back tests) for a coverage pass:
 ros2 launch wifi_monitor iperf_runner.launch.py interval_s:=0.0

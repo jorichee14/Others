@@ -46,8 +46,9 @@ def generate_launch_description() -> LaunchDescription:
             description="true => downlink (server->robot).",
         ),
         DeclareLaunchArgument(
-            "udp_bitrate", default_value="0",
-            description="UDP target rate, e.g. 300M (only for protocol:=udp).",
+            "udp_bitrate_mbps", default_value="0.0",
+            description="UDP target rate in Mbit/s, e.g. 300 (0 = unlimited; "
+            "only for protocol:=udp).",
         ),
         DeclareLaunchArgument("omit_s", default_value="1.0"),
         DeclareLaunchArgument(
@@ -74,7 +75,7 @@ def generate_launch_description() -> LaunchDescription:
             "duration_s": LaunchConfiguration("duration_s"),
             "interval_s": LaunchConfiguration("interval_s"),
             "reverse": LaunchConfiguration("reverse"),
-            "udp_bitrate": _str("udp_bitrate"),
+            "udp_bitrate_mbps": LaunchConfiguration("udp_bitrate_mbps"),
             "omit_s": LaunchConfiguration("omit_s"),
             "connect_timeout_ms": LaunchConfiguration("connect_timeout_ms"),
             "reconnect_poll_s": LaunchConfiguration("reconnect_poll_s"),

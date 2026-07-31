@@ -30,7 +30,7 @@ protocol : str         "tcp" or "udp".
 duration_s : float     per-test duration (iperf3 -t). Default 2.0.
 interval_s : float     gap between tests. 0 => back-to-back (survey). Def 30.
 reverse : bool         true => downlink (server -> robot, iperf3 -R).
-udp_bitrate : str      target rate for UDP tests, e.g. "300M". Default "0".
+udp_bitrate_mbps : float  target rate for UDP tests in Mbit/s (0 = unlimited).
 omit_s : float         initial seconds to omit (iperf3 -O). Default 1.0.
 connect_timeout_ms : int  iperf3 --connect-timeout. Default 2000.
 reconnect_poll_s : float  poll/backoff period when link is down or a test
@@ -66,7 +66,9 @@ class IperfRunnerNode(Node):
         self.declare_parameter("duration_s", 2.0)
         self.declare_parameter("interval_s", 30.0)
         self.declare_parameter("reverse", False)
-        self.declare_parameter("udp_bitrate", "0")
+        # UDP target rate in Mbit/s (0 = unlimited). Numeric so launch can
+        # never mistype it; converted to iperf3's "<N>M" form internally.
+        self.declare_parameter("udp_bitrate_mbps", 0.0)
         self.declare_parameter("omit_s", 1.0)
         self.declare_parameter("connect_timeout_ms", 2000)
         self.declare_parameter("reconnect_poll_s", 3.0)
@@ -81,8 +83,8 @@ class IperfRunnerNode(Node):
         self._duration = gp("duration_s").get_parameter_value().double_value
         self._interval = gp("interval_s").get_parameter_value().double_value
         self._reverse = gp("reverse").get_parameter_value().bool_value
-        self._udp_bitrate = (
-            gp("udp_bitrate").get_parameter_value().string_value or "0"
+        self._udp_mbps = (
+            gp("udp_bitrate_mbps").get_parameter_value().double_value
         )
         self._omit = gp("omit_s").get_parameter_value().double_value
         self._connect_timeout = (
@@ -197,7 +199,8 @@ class IperfRunnerNode(Node):
         if self._reverse:
             cmd += ["-R"]
         if self._proto == "udp":
-            cmd += ["-u", "-b", self._udp_bitrate]
+            rate = f"{self._udp_mbps:g}M" if self._udp_mbps > 0 else "0"
+            cmd += ["-u", "-b", rate]
         return cmd
 
     def _run_once(self) -> IperfResult:
