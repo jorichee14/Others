@@ -61,6 +61,11 @@ def generate_launch_description() -> LaunchDescription:
             "per-test overhead. Saturates the link (dedicated survey pass).",
         ),
         DeclareLaunchArgument(
+            "rtt_via_ss", default_value="true",
+            description="In continuous mode, fill RTT from the live socket via "
+            "`ss` (needs iproute2) -- dense RTT without ping.",
+        ),
+        DeclareLaunchArgument(
             "connect_timeout_ms", default_value="2000",
             description="iperf3 --connect-timeout so a dead server fails fast.",
         ),
@@ -90,6 +95,7 @@ def generate_launch_description() -> LaunchDescription:
             "connect_timeout_ms": LaunchConfiguration("connect_timeout_ms"),
             "reconnect_poll_s": LaunchConfiguration("reconnect_poll_s"),
             "continuous": LaunchConfiguration("continuous"),
+            "rtt_via_ss": LaunchConfiguration("rtt_via_ss"),
         }],
     )
 

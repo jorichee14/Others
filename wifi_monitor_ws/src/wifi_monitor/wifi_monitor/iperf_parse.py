@@ -73,6 +73,51 @@ def parse_interval_line(line: str, parallel: int = 1) -> Optional[Dict[str, obje
     return res
 
 
+# --- ss -ti TCP RTT parser (for dense RTT in continuous mode) ---------------
+# Reads the kernel's tcpi_rtt of the live iperf connection(s), the same value
+# iperf itself reports -- but samplable every second without waiting for an
+# end summary. The idle control connection is flagged 'app_limited' and is
+# excluded so the average reflects the loaded data streams.
+_SS_RTT = re.compile(r"\brtt:([\d.]+)/[\d.]+")
+_SS_MINRTT = re.compile(r"\bminrtt:([\d.]+)")
+
+
+def parse_ss_rtt(text: str) -> Optional[Dict[str, object]]:
+    """Aggregate TCP RTT from `ss -ti` output into {mean, min, max} ms.
+
+    Averages the data connections (excludes ``app_limited`` control sockets).
+    Falls back to including all sockets if every one looks app-limited.
+    Returns None if no RTT could be read.
+    """
+    def collect(skip_app_limited: bool):
+        means: List[float] = []
+        mins: List[float] = []
+        for line in text.splitlines():
+            if "rtt:" not in line:
+                continue
+            if skip_app_limited and "app_limited" in line:
+                continue
+            m = _SS_RTT.search(line)
+            if not m:
+                continue
+            means.append(float(m.group(1)))
+            mm = _SS_MINRTT.search(line)
+            if mm:
+                mins.append(float(mm.group(1)))
+        return means, mins
+
+    means, mins = collect(True)
+    if not means:
+        means, mins = collect(False)
+    if not means:
+        return None
+    return {
+        "rtt_ms_mean": sum(means) / len(means),
+        "rtt_ms_min": min(mins) if mins else min(means),
+        "rtt_ms_max": max(means),
+    }
+
+
 def parse_iperf_json(text: str) -> Dict[str, object]:
     """Convert iperf3 JSON text into a metrics dict.
 

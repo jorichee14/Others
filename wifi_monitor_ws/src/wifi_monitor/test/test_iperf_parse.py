@@ -2,7 +2,9 @@
 
 import json
 
-from wifi_monitor.iperf_parse import parse_iperf_json, parse_interval_line
+from wifi_monitor.iperf_parse import (
+    parse_iperf_json, parse_interval_line, parse_ss_rtt,
+)
 
 # Trimmed but structurally faithful iperf3 TCP JSON (Linux client -> RTT).
 TCP_JSON = json.dumps({
@@ -108,3 +110,38 @@ def test_interval_ignores_noise():
     assert parse_interval_line(
         "[  5]   0.00-10.00  sec  60.0 MBytes  50.0 Mbits/sec    0  sender") is None
     assert parse_interval_line("[ ID] Interval           Transfer") is None
+
+
+# --- ss -ti TCP RTT parsing (real output) -----------------------------------
+SS_SAMPLE = """State  Recv-Q  Send-Q   Local Address:Port   Peer Address:Port
+ESTAB  0  496664  192.168.233.106:41402  192.168.233.142:5201
+\t cubic wscale:8,7 rto:256 rtt:54.518/4.764 mss:1448 cwnd:94 minrtt:9.73
+ESTAB  0  687800  192.168.233.106:41398  192.168.233.142:5201
+\t cubic wscale:8,7 rto:256 rtt:55.602/5.36 mss:1448 cwnd:95 minrtt:9.211
+ESTAB  0  0  192.168.233.106:41368  192.168.233.142:5201
+\t cubic rto:224 rtt:23.585/17.488 ato:40 app_limited busy:60ms minrtt:3.998
+ESTAB  0  522728  192.168.233.106:41390  192.168.233.142:5201
+\t cubic wscale:8,7 rto:264 rtt:61.382/9.118 mss:1448 cwnd:96 minrtt:9.653
+ESTAB  0  503904  192.168.233.106:41380  192.168.233.142:5201
+\t cubic wscale:8,7 rto:264 rtt:61.98/6.042 mss:1448 cwnd:95 minrtt:5.047
+"""
+
+
+def test_ss_rtt_excludes_app_limited():
+    r = parse_ss_rtt(SS_SAMPLE)
+    # data streams: 54.518, 55.602, 61.382, 61.98 -> mean 58.37; control
+    # (23.585, app_limited) excluded.
+    assert abs(r["rtt_ms_mean"] - (54.518 + 55.602 + 61.382 + 61.98) / 4) < 1e-6
+    assert r["rtt_ms_max"] == 61.98
+    assert r["rtt_ms_min"] == 5.047       # min of data-stream minrtt values
+
+
+def test_ss_rtt_all_app_limited_fallback():
+    text = ("ESTAB 0 0 a:1 b:5201\n"
+            "\t cubic rtt:12.5/3.0 app_limited minrtt:4.0\n")
+    r = parse_ss_rtt(text)
+    assert abs(r["rtt_ms_mean"] - 12.5) < 1e-6   # falls back to all sockets
+
+
+def test_ss_rtt_none_when_empty():
+    assert parse_ss_rtt("State Recv-Q Send-Q ...\n") is None

@@ -189,8 +189,17 @@ ros2 launch wifi_monitor iperf_runner.launch.py server_address:=192.168.233.50
   per-test connection overhead. This is the densest throughput sampling
   available and the right choice for a *dedicated survey pass* on a moving
   robot. It saturates the link the whole time, so don't use it during real
-  operation. In this mode `rtt`/`jitter`/`loss` are `NaN` (they come only from
-  a completed test's end summary); use `parallel:=4` to fill the link.
+  operation. Use `parallel:=4` to fill the link. `jitter`/`loss` are `NaN`
+  in this mode.
+
+  **RTT in continuous mode (`rtt_via_ss`, default on).** Continuous mode fills
+  `rtt_ms_mean/min/max` by sampling the live connection's kernel TCP RTT via
+  `ss -ti` each second — the *same* `tcpi_rtt` iperf reports, but dense and
+  measured on the very connection carrying the throughput. So you get 1 Hz
+  throughput **and** RTT from one consistent source, no separate ping. The
+  idle control socket (`app_limited`) is excluded so the average reflects the
+  loaded data streams. Needs `iproute2` (`sudo apt install -y iproute2`); if
+  `ss` is missing, RTT falls back to `NaN`.
 
 > **Stop-and-measure is the most accurate way to map capacity.** A multi-second
 > test taken while moving smears over several metres and the channel changes

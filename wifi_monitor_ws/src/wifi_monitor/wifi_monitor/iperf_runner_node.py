@@ -42,8 +42,11 @@ continuous : bool      survey mode: keep ONE long iperf3 open and publish a
                        per-test connection overhead, true 1 Hz). Saturates the
                        link continuously, so it is a dedicated survey pass, not
                        for normal operation. In this mode duration_s / interval_s
-                       / omit_s are ignored. rtt / jitter / loss are NaN (those
-                       come only from a completed test's end summary).
+                       / omit_s are ignored; jitter / loss are NaN.
+rtt_via_ss : bool      in continuous mode, sample the live connection's TCP RTT
+                       via `ss -ti` each second (same tcpi_rtt iperf reports) and
+                       fill rtt_ms_mean/min/max -- dense RTT consistent with the
+                       throughput, no ping. Default True; needs iproute2 (`ss`).
 """
 
 from __future__ import annotations
@@ -89,6 +92,11 @@ class IperfRunnerNode(Node):
         # result every second from its interval reports (no per-test connection
         # overhead). Saturates the link continuously -> dedicated survey pass.
         self.declare_parameter("continuous", False)
+        # In continuous mode, sample the live connection's TCP RTT via `ss`
+        # each second and fill rtt_ms_* -- the same tcpi_rtt iperf reports, but
+        # dense and consistent with the throughput (no ping needed). Ignored
+        # if ss is unavailable or not in continuous mode.
+        self.declare_parameter("rtt_via_ss", True)
 
         gp = self.get_parameter
         self._server = gp("server_address").get_parameter_value().string_value
@@ -112,6 +120,13 @@ class IperfRunnerNode(Node):
             gp("reconnect_poll_s").get_parameter_value().double_value
         )
         self._continuous = gp("continuous").get_parameter_value().bool_value
+        self._rtt_via_ss = gp("rtt_via_ss").get_parameter_value().bool_value
+        self._ss_ok = shutil.which("ss") is not None
+        if self._continuous and self._rtt_via_ss and not self._ss_ok:
+            self.get_logger().warn(
+                "rtt_via_ss set but 'ss' not found (apt install iproute2); "
+                "continuous RTT will be NaN."
+            )
 
         if not self._iface:
             found = wifi_parsers.list_wireless_interfaces()
@@ -295,6 +310,17 @@ class IperfRunnerNode(Node):
             cmd += ["-u", "-b", rate]
         return cmd
 
+    def _sample_ss_rtt(self):
+        """Read the live iperf connection's TCP RTT via `ss` (dict or None)."""
+        try:
+            out = subprocess.run(
+                ["ss", "-tin", "dst", f"{self._server}:{self._port}"],
+                capture_output=True, text=True, timeout=2.0, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return iperf_parse.parse_ss_rtt(out.stdout or "")
+
     def _run_continuous(self) -> None:
         """Run one long iperf3 and publish an IperfResult per interval line.
 
@@ -338,6 +364,12 @@ class IperfRunnerNode(Node):
                 msg.duration_s = float(parsed.get("seconds", 1.0))
                 if "retransmits" in parsed:
                     msg.retransmits = int(parsed["retransmits"])
+                if self._rtt_via_ss and self._ss_ok:
+                    rtt = self._sample_ss_rtt()
+                    if rtt is not None:
+                        msg.rtt_ms_mean = rtt["rtt_ms_mean"]
+                        msg.rtt_ms_min = rtt["rtt_ms_min"]
+                        msg.rtt_ms_max = rtt["rtt_ms_max"]
                 self._pub.publish(msg)
         finally:
             if proc.poll() is None:
