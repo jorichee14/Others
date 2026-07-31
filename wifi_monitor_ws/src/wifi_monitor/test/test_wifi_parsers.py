@@ -203,6 +203,25 @@ def test_iw_survey_in_use_channel(monkeypatch):
     assert d["channel_busy_ms"] == 2500.0
 
 
+def test_sysfs_flags_hex_up_running(tmp_path, monkeypatch):
+    base = tmp_path / "wlan0"
+    (base / "statistics").mkdir(parents=True)
+    monkeypatch.setattr(wp, "SYS_NET", str(tmp_path))
+    # flags is hex in sysfs; 0x1043 = 4163 = UP|BROADCAST|RUNNING|MULTICAST
+    # (matches the interface's own `ifconfig` output).
+    (base / "flags").write_text("0x1043\n")
+    (base / "address").write_text("88:76:b9:ea:e0:ff\n")
+
+    d = wp.collect_sysfs("wlan0")
+    assert d["up"] is True
+    assert d["running"] is True
+    assert d["mac_address"] == "88:76:b9:ea:e0:ff"
+
+    # a down interface (no UP bit)
+    (base / "flags").write_text("0x1002\n")
+    assert wp.collect_sysfs("wlan0")["up"] is False
+
+
 def test_link_up_from_carrier(tmp_path, monkeypatch):
     base = tmp_path / "wlan0"
     base.mkdir()

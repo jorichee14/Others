@@ -68,6 +68,15 @@ def _read_str(path: str) -> Optional[str]:
         return None
 
 
+def _read_auto_int(path: str) -> Optional[int]:
+    """Read an int that may be hex (0x...) or decimal, e.g. sysfs 'flags'."""
+    try:
+        with open(path, "r") as fh:
+            return int(fh.read().strip(), 0)
+    except (OSError, ValueError):
+        return None
+
+
 def channel_from_freq_ghz(freq_ghz: Optional[float]) -> int:
     """Best-effort 802.11 channel number from a centre frequency in GHz."""
     if freq_ghz is None or math.isnan(freq_ghz):
@@ -97,7 +106,8 @@ def collect_sysfs(iface: str) -> Dict[str, object]:
     if mac:
         data["mac_address"] = mac
 
-    flags = _read_int(os.path.join(base, "flags"))
+    # /sys/class/net/<iface>/flags is a hex value (e.g. 0x1003).
+    flags = _read_auto_int(os.path.join(base, "flags"))
     if flags is not None:
         data["up"] = bool(flags & IFF_UP)
         data["running"] = bool(flags & IFF_RUNNING)
@@ -489,6 +499,14 @@ def collect_all(iface: str) -> Dict[str, object]:
     merged.update(collect_iw_link(iface))
     merged.update(collect_iw_station(iface))
     merged.update(collect_iw_survey(iface))
+
+    # If neither iw nor iwconfig reported association state (e.g. they are
+    # not installed), fall back to the interface carrier: a STA with carrier
+    # up is associated.
+    if "associated" not in merged:
+        up = link_up(iface)
+        if up is not None:
+            merged["associated"] = up
 
     # Derived fields.
     lq = merged.get("link_quality")
