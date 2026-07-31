@@ -260,13 +260,18 @@ ros2 topic echo /wifi/ping     # rtt_ms, loss_percent, rtt_ms_avg/min/max
 throughput + latency/loss), sharing one server/target address:
 
 ```bash
-# Dedicated survey pass (iperf saturates the link):
+# Dedicated survey pass -- throughput + RTT (iperf+ss), saturates the link:
 ros2 launch wifi_monitor survey.launch.py server_address:=192.168.233.142
 
-# Non-saturating monitoring during real operation (passive + ping only):
+# Non-saturating monitoring during real operation (passive + ping, no iperf):
 ros2 launch wifi_monitor survey.launch.py \
-    server_address:=192.168.233.142 run_iperf:=false
+    server_address:=192.168.233.142 run_iperf:=false run_ping:=true
 ```
+
+> Since continuous iperf now reports RTT itself (via `ss`), the ping node is
+> **off by default** (`run_ping:=false`) — it would only duplicate the RTT.
+> Turn it on when you drop iperf (`run_iperf:=false`) and still want RTT +
+> loss without saturating the link.
 
 This gives you, together:
 

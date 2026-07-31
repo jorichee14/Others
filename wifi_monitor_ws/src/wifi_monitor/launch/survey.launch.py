@@ -1,13 +1,17 @@
 """Full Wi-Fi survey stack in one launch.
 
-Starts three nodes on the robot:
+Nodes on the robot:
   * wifi_monitor  -> /wifi/status  (5 Hz passive: RSSI, MCS/rate, retries)
-  * iperf_runner  -> /wifi/iperf   (continuous 1 Hz throughput to the server)
-  * ping_monitor  -> /wifi/ping    (1 Hz RTT + rolling loss to the server)
+  * iperf_runner  -> /wifi/iperf   (continuous throughput + RTT via ss)   [run_iperf]
+  * ping_monitor  -> /wifi/ping    (RTT + loss)                           [run_ping]
 
-The server host is used both as the iperf3 server and the ping target, so
-pass it once. iperf saturates the link (dedicated survey pass); ping does
-not. Record everything with pose to map it offline:
+Continuous iperf now reports RTT itself (via ss), so ping is OFF by default
+-- it would just duplicate the RTT. Enable run_ping only when you want RTT +
+loss WITHOUT running iperf (i.e. run_iperf:=false), e.g. monitoring latency
+during real operation without saturating the link.
+
+The server host is the iperf3 server and the ping target; pass it once.
+Record with pose to map it offline:
 
     ros2 bag record /wifi/status /wifi/iperf /wifi/ping /tf /odom
 """
@@ -48,8 +52,14 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             "run_iperf", default_value="true",
-            description="Set false to survey with passive + ping only (no "
-            "link saturation) during real operation.",
+            description="Continuous iperf throughput+RTT (via ss). Set false "
+            "for non-saturating monitoring during real operation.",
+        ),
+        DeclareLaunchArgument(
+            "run_ping", default_value="false",
+            description="Also run the ping node. Redundant when run_iperf is "
+            "true (iperf+ss already gives RTT); enable it for RTT+loss during "
+            "operation when run_iperf is false.",
         ),
     ]
 
@@ -81,6 +91,7 @@ def generate_launch_description() -> LaunchDescription:
     ping = Node(
         package="wifi_monitor", executable="ping_monitor_node",
         name="ping_monitor", output="screen",
+        condition=IfCondition(LaunchConfiguration("run_ping")),
         parameters=[{
             "target": server,
             "interface": iface,
