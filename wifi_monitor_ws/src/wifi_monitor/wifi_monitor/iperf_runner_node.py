@@ -334,6 +334,7 @@ class IperfRunnerNode(Node):
                     continue
                 msg = self._new_msg(success=True)
                 msg.bitrate_mbps = float(parsed["mbps"])
+                msg.bytes = int(parsed.get("bytes", 0))
                 msg.duration_s = float(parsed.get("seconds", 1.0))
                 if "retransmits" in parsed:
                     msg.retransmits = int(parsed["retransmits"])

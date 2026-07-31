@@ -29,15 +29,17 @@ def _mean(vals: List[float]) -> Optional[float]:
 #   [SUM]   1.00-2.00   sec  13.1 MBytes   110 Mbits/sec    0
 _IV_LINE = re.compile(
     r"\[\s*(SUM|\d+)\]\s+([\d.]+)-\s*([\d.]+)\s+sec\s+"
-    r"[\d.]+\s+[KMGT]?Bytes\s+"
+    r"([\d.]+)\s+([KMGT]?)Bytes\s+"
     r"([\d.]+)\s+([KMGT]?)bits/sec"
     r"(?:\s+(\d+))?"
 )
 _UNIT = {"G": 1000.0, "M": 1.0, "K": 1e-3, "": 1e-6}
+# Transfer amounts are binary (KiB/MiB/GiB) in iperf3 output.
+_BYTE_UNIT = {"": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3, "T": 1024 ** 4}
 
 
 def parse_interval_line(line: str, parallel: int = 1) -> Optional[Dict[str, object]]:
-    """Parse one live iperf3 interval line into {mbps, seconds[, retransmits]}.
+    """Parse one live iperf3 interval line into {mbps, bytes, seconds[, retransmits]}.
 
     Returns None for non-interval lines (headers, connect banner, the final
     sender/receiver summary). With parallel>1, only the aggregate ``[SUM]``
@@ -55,16 +57,19 @@ def parse_interval_line(line: str, parallel: int = 1) -> Optional[Dict[str, obje
         return None          # single stream: ignore any stray SUM
     try:
         start, end = float(m.group(2)), float(m.group(3))
-        val = float(m.group(4))
+        xfer = float(m.group(4))
+        rate = float(m.group(6))
     except ValueError:
         return None
-    unit = (m.group(5) or "").upper()
+    xfer_unit = (m.group(5) or "").upper()
+    rate_unit = (m.group(7) or "").upper()
     res: Dict[str, object] = {
-        "mbps": val * _UNIT.get(unit, 1e-6),
+        "mbps": rate * _UNIT.get(rate_unit, 1e-6),
+        "bytes": int(xfer * _BYTE_UNIT.get(xfer_unit, 1)),
         "seconds": max(0.0, end - start),
     }
-    if m.group(6) is not None:
-        res["retransmits"] = int(m.group(6))
+    if m.group(8) is not None:
+        res["retransmits"] = int(m.group(8))
     return res
 
 

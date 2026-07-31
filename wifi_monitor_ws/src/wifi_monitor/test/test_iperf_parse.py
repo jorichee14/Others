@@ -80,6 +80,7 @@ def test_interval_single_stream():
     assert abs(r["mbps"] - 50.0) < 1e-6
     assert abs(r["seconds"] - 1.0) < 1e-6
     assert r["retransmits"] == 0
+    assert r["bytes"] == int(5.97 * 1024 ** 2)   # MBytes are binary
 
 
 def test_interval_units():
