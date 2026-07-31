@@ -37,11 +37,19 @@ omit_s : float         initial seconds to omit (iperf3 -O). Default 1.0.
 connect_timeout_ms : int  iperf3 --connect-timeout. Default 2000.
 reconnect_poll_s : float  poll/backoff period when link is down or a test
                           fails. Default 3.0.
+continuous : bool      survey mode: keep ONE long iperf3 open and publish a
+                       result every second from its interval reports (no
+                       per-test connection overhead, true 1 Hz). Saturates the
+                       link continuously, so it is a dedicated survey pass, not
+                       for normal operation. In this mode duration_s / interval_s
+                       / omit_s are ignored. rtt / jitter / loss are NaN (those
+                       come only from a completed test's end summary).
 """
 
 from __future__ import annotations
 
 import math
+import select
 import shutil
 import subprocess
 import threading
@@ -77,6 +85,10 @@ class IperfRunnerNode(Node):
         self.declare_parameter("omit_s", 1.0)
         self.declare_parameter("connect_timeout_ms", 2000)
         self.declare_parameter("reconnect_poll_s", 3.0)
+        # Continuous survey mode: keep ONE long iperf3 open and publish a
+        # result every second from its interval reports (no per-test connection
+        # overhead). Saturates the link continuously -> dedicated survey pass.
+        self.declare_parameter("continuous", False)
 
         gp = self.get_parameter
         self._server = gp("server_address").get_parameter_value().string_value
@@ -99,6 +111,7 @@ class IperfRunnerNode(Node):
         self._reconnect_poll = (
             gp("reconnect_poll_s").get_parameter_value().double_value
         )
+        self._continuous = gp("continuous").get_parameter_value().bool_value
 
         if not self._iface:
             found = wifi_parsers.list_wireless_interfaces()
@@ -124,10 +137,14 @@ class IperfRunnerNode(Node):
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+        mode = (
+            "continuous 1 Hz survey"
+            if self._continuous
+            else f"{self._duration:.0f}s every {self._interval:.0f}s"
+        )
         self.get_logger().info(
             f"iperf_runner -> {self._proto.upper()} to "
-            f"'{self._server or '<unset>'}:{self._port}', "
-            f"{self._duration:.0f}s every {self._interval:.0f}s, "
+            f"'{self._server or '<unset>'}:{self._port}', {mode}, "
             f"{'downlink' if self._reverse else 'uplink'}, iface "
             f"'{self._iface or '<none>'}' -> topic 'wifi/iperf'."
         )
@@ -162,6 +179,14 @@ class IperfRunnerNode(Node):
                     f"link back up on '{self._iface}'; resuming iperf."
                 )
             self._link_up = True
+
+            if self._continuous:
+                # Blocks, publishing ~1 Hz until the iperf process exits
+                # (link drop, error, or duration end); then re-check + restart.
+                self._run_continuous()
+                if self._stop.wait(min(poll, 2.0)):
+                    break
+                continue
 
             msg = self._run_once()
             self._pub.publish(msg)
@@ -251,6 +276,75 @@ class IperfRunnerNode(Node):
                      if not math.isnan(msg.rtt_ms_mean) else ""))
         )
         return msg
+
+    # ----------------------------------------------------------------------
+    def _build_continuous_cmd(self) -> list:
+        # -t 0 runs until we kill it; -i 1 emits a report every second.
+        cmd = [
+            "iperf3", "-c", self._server, "-p", str(self._port),
+            "-t", "0", "-i", "1", "--forceflush",
+        ]
+        if self._connect_timeout > 0:
+            cmd += ["--connect-timeout", str(self._connect_timeout)]
+        if self._parallel > 1:
+            cmd += ["-P", str(self._parallel)]
+        if self._reverse:
+            cmd += ["-R"]
+        if self._proto == "udp":
+            rate = f"{self._udp_mbps:g}M" if self._udp_mbps > 0 else "0"
+            cmd += ["-u", "-b", rate]
+        return cmd
+
+    def _run_continuous(self) -> None:
+        """Run one long iperf3 and publish an IperfResult per interval line.
+
+        Returns when the process exits or the node stops. A 1 s select()
+        watchdog means a mid-run link drop is noticed within a second so the
+        loop can restart against the reconnected link.
+        """
+        try:
+            proc = subprocess.Popen(
+                self._build_continuous_cmd(),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+        except OSError as exc:
+            self._pub.publish(
+                self._new_msg(success=False, error=f"iperf3 launch failed: {exc}")
+            )
+            return
+
+        arrow = "down" if self._reverse else "up"
+        self.get_logger().info(
+            f"continuous iperf {self._proto.upper()} {arrow} started (1 Hz)."
+        )
+        try:
+            while not self._stop.is_set() and proc.poll() is None:
+                rlist, _, _ = select.select([proc.stdout], [], [], 1.0)
+                if not rlist:
+                    # No output for 1 s: bail out if the link dropped.
+                    if self._iface and wifi_parsers.link_up(self._iface) is False:
+                        break
+                    continue
+                line = proc.stdout.readline()
+                if line == "":
+                    break  # EOF: process ended
+                parsed = iperf_parse.parse_interval_line(line, self._parallel)
+                if parsed is None:
+                    continue
+                msg = self._new_msg(success=True)
+                msg.bitrate_mbps = float(parsed["mbps"])
+                msg.duration_s = float(parsed.get("seconds", 1.0))
+                if "retransmits" in parsed:
+                    msg.retransmits = int(parsed["retransmits"])
+                self._pub.publish(msg)
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
     @staticmethod
     def _apply(msg: IperfResult, parsed: dict) -> None:

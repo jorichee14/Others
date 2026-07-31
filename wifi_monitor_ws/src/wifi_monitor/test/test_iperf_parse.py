@@ -2,7 +2,7 @@
 
 import json
 
-from wifi_monitor.iperf_parse import parse_iperf_json
+from wifi_monitor.iperf_parse import parse_iperf_json, parse_interval_line
 
 # Trimmed but structurally faithful iperf3 TCP JSON (Linux client -> RTT).
 TCP_JSON = json.dumps({
@@ -70,3 +70,40 @@ def test_malformed_json():
 def test_missing_end():
     r = parse_iperf_json(json.dumps({"start": {}}))
     assert r["success"] is False
+
+
+# --- streaming per-second interval lines ------------------------------------
+def test_interval_single_stream():
+    line = "[  5]   1.00-2.00   sec  5.97 MBytes  50.0 Mbits/sec    0    269 KBytes"
+    r = parse_interval_line(line, parallel=1)
+    assert r is not None
+    assert abs(r["mbps"] - 50.0) < 1e-6
+    assert abs(r["seconds"] - 1.0) < 1e-6
+    assert r["retransmits"] == 0
+
+
+def test_interval_units():
+    # Kbits/sec and Gbits/sec convert to Mbit/s
+    assert abs(parse_interval_line(
+        "[  5]   0.00-1.00   sec  100 KBytes  800 Kbits/sec")["mbps"] - 0.8) < 1e-9
+    assert abs(parse_interval_line(
+        "[  5]   0.00-1.00   sec  1.10 GBytes  9.50 Gbits/sec")["mbps"] - 9500.0) < 1e-6
+
+
+def test_interval_parallel_uses_sum():
+    stream = "[  5]   1.00-2.00   sec  6.5 MBytes  54.9 Mbits/sec    0    260 KBytes"
+    summ = "[SUM]   1.00-2.00   sec  13.1 MBytes   110 Mbits/sec    0"
+    # With parallel>1, per-stream lines are ignored; only SUM is used.
+    assert parse_interval_line(stream, parallel=4) is None
+    r = parse_interval_line(summ, parallel=4)
+    assert abs(r["mbps"] - 110.0) < 1e-6
+    # With a single stream, the per-stream line is used and stray SUM ignored.
+    assert parse_interval_line(stream, parallel=1) is not None
+    assert parse_interval_line(summ, parallel=1) is None
+
+
+def test_interval_ignores_noise():
+    assert parse_interval_line("Connecting to host 192.168.233.142, port 5201") is None
+    assert parse_interval_line(
+        "[  5]   0.00-10.00  sec  60.0 MBytes  50.0 Mbits/sec    0  sender") is None
+    assert parse_interval_line("[ ID] Interval           Transfer") is None

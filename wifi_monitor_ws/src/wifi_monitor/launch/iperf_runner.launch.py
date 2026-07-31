@@ -56,6 +56,11 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument("omit_s", default_value="1.0"),
         DeclareLaunchArgument(
+            "continuous", default_value="false",
+            description="Survey mode: one long iperf3, ~1 Hz results, no "
+            "per-test overhead. Saturates the link (dedicated survey pass).",
+        ),
+        DeclareLaunchArgument(
             "connect_timeout_ms", default_value="2000",
             description="iperf3 --connect-timeout so a dead server fails fast.",
         ),
@@ -84,6 +89,7 @@ def generate_launch_description() -> LaunchDescription:
             "omit_s": LaunchConfiguration("omit_s"),
             "connect_timeout_ms": LaunchConfiguration("connect_timeout_ms"),
             "reconnect_poll_s": LaunchConfiguration("reconnect_poll_s"),
+            "continuous": LaunchConfiguration("continuous"),
         }],
     )
 

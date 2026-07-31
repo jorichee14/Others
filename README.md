@@ -164,8 +164,8 @@ ros2 launch wifi_monitor iperf_runner.launch.py reverse:=true
 # UDP loss/jitter, pushing 300 Mbit/s:
 ros2 launch wifi_monitor iperf_runner.launch.py protocol:=udp udp_bitrate_mbps:=300
 
-# Continuous "survey" mode (back-to-back tests) for a coverage pass:
-ros2 launch wifi_monitor iperf_runner.launch.py interval_s:=0.0
+# Continuous 1 Hz survey mode (ONE long iperf, per-second results):
+ros2 launch wifi_monitor iperf_runner.launch.py continuous:=true parallel:=4
 
 # Different server:
 ros2 launch wifi_monitor iperf_runner.launch.py server_address:=192.168.233.50
@@ -178,6 +178,26 @@ ros2 launch wifi_monitor iperf_runner.launch.py server_address:=192.168.233.50
 > ⚠️ iperf **saturates the link** for the test duration — use short periodic
 > bursts (`interval_s` >> `duration_s`) during real operation, or a dedicated
 > survey pass. Don't run it continuously while the robot depends on the link.
+
+**Two survey styles:**
+
+- **Periodic bursts** (default) — a short test every `interval_s`. Each test
+  pays a TCP connect/teardown cost, so back-to-back tests only reach ~0.25 Hz.
+  Good for spot-checks during normal operation with a long interval.
+- **Continuous 1 Hz** (`continuous:=true`) — keeps a **single** iperf3 open and
+  publishes a result **every second** from its interval reports, with no
+  per-test connection overhead. This is the densest throughput sampling
+  available and the right choice for a *dedicated survey pass* on a moving
+  robot. It saturates the link the whole time, so don't use it during real
+  operation. In this mode `rtt`/`jitter`/`loss` are `NaN` (they come only from
+  a completed test's end summary); use `parallel:=4` to fill the link.
+
+> **Stop-and-measure is the most accurate way to map capacity.** A multi-second
+> test taken while moving smears over several metres and the channel changes
+> mid-test. For clean, comparable capacity numbers, pause the robot at
+> waypoints and run a full `duration_s:=5 parallel:=4` test; the stops show up
+> offline as zero-velocity segments in `/odom`. Use continuous mode when you
+> want a dense throughput trace along a slow survey drive instead.
 
 ### Failsafes for a moving robot (disconnect / reconnect)
 

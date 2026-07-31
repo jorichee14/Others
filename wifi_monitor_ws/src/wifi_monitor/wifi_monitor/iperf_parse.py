@@ -12,6 +12,7 @@ Returns a dict with any subset of the following keys populated:
 from __future__ import annotations
 
 import json
+import re
 from typing import Dict, List, Optional
 
 
@@ -20,6 +21,51 @@ def _mean(vals: List[float]) -> Optional[float]:
     if not vals:
         return None
     return sum(vals) / len(vals)
+
+
+# --- Streaming (per-second) interval line parser ---------------------------
+# Matches a live iperf3 interval report line, e.g.:
+#   [  5]   1.00-2.00   sec  5.97 MBytes  50.0 Mbits/sec    0    269 KBytes
+#   [SUM]   1.00-2.00   sec  13.1 MBytes   110 Mbits/sec    0
+_IV_LINE = re.compile(
+    r"\[\s*(SUM|\d+)\]\s+([\d.]+)-\s*([\d.]+)\s+sec\s+"
+    r"[\d.]+\s+[KMGT]?Bytes\s+"
+    r"([\d.]+)\s+([KMGT]?)bits/sec"
+    r"(?:\s+(\d+))?"
+)
+_UNIT = {"G": 1000.0, "M": 1.0, "K": 1e-3, "": 1e-6}
+
+
+def parse_interval_line(line: str, parallel: int = 1) -> Optional[Dict[str, object]]:
+    """Parse one live iperf3 interval line into {mbps, seconds[, retransmits]}.
+
+    Returns None for non-interval lines (headers, connect banner, the final
+    sender/receiver summary). With parallel>1, only the aggregate ``[SUM]``
+    line is used; with a single stream, the per-stream line is used.
+    """
+    if "sender" in line or "receiver" in line:
+        return None  # final summary rows, not a live interval
+    m = _IV_LINE.search(line)
+    if not m:
+        return None
+    ident = m.group(1)
+    if parallel > 1 and ident != "SUM":
+        return None          # wait for the SUM of all streams
+    if parallel <= 1 and ident == "SUM":
+        return None          # single stream: ignore any stray SUM
+    try:
+        start, end = float(m.group(2)), float(m.group(3))
+        val = float(m.group(4))
+    except ValueError:
+        return None
+    unit = (m.group(5) or "").upper()
+    res: Dict[str, object] = {
+        "mbps": val * _UNIT.get(unit, 1e-6),
+        "seconds": max(0.0, end - start),
+    }
+    if m.group(6) is not None:
+        res["retransmits"] = int(m.group(6))
+    return res
 
 
 def parse_iperf_json(text: str) -> Dict[str, object]:
