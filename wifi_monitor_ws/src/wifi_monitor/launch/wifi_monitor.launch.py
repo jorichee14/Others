@@ -15,9 +15,9 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             "publish_rate_hz",
-            default_value="2.0",
-            description="Sampling / publishing rate in Hz (2-5 Hz suits a "
-            "slowly moving robot).",
+            default_value="5.0",
+            description="Sampling / publishing rate in Hz (5 Hz suits a robot "
+            "moving up to ~1 m/s; ~5 Hz is the practical ceiling).",
         ),
         DeclareLaunchArgument(
             "frame_id",
