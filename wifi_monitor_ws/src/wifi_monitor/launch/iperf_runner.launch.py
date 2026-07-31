@@ -66,6 +66,11 @@ def generate_launch_description() -> LaunchDescription:
             "`ss` (needs iproute2) -- dense RTT without ping.",
         ),
         DeclareLaunchArgument(
+            "continuous_interval_s", default_value="1.0",
+            description="Continuous-mode report interval (s): 1.0=1Hz, "
+            "0.2-0.5=2-5Hz. Lower = denser but noisier.",
+        ),
+        DeclareLaunchArgument(
             "connect_timeout_ms", default_value="2000",
             description="iperf3 --connect-timeout so a dead server fails fast.",
         ),
@@ -96,6 +101,7 @@ def generate_launch_description() -> LaunchDescription:
             "reconnect_poll_s": LaunchConfiguration("reconnect_poll_s"),
             "continuous": LaunchConfiguration("continuous"),
             "rtt_via_ss": LaunchConfiguration("rtt_via_ss"),
+            "continuous_interval_s": LaunchConfiguration("continuous_interval_s"),
         }],
     )
 

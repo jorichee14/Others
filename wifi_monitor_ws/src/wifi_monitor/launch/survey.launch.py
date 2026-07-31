@@ -39,6 +39,10 @@ def generate_launch_description() -> LaunchDescription:
             description="Parallel TCP streams for the throughput test.",
         ),
         DeclareLaunchArgument(
+            "continuous_interval_s", default_value="1.0",
+            description="Continuous throughput/RTT rate (s): 1.0=1Hz, 0.2=5Hz.",
+        ),
+        DeclareLaunchArgument(
             "wifi_rate_hz", default_value="5.0",
             description="Passive monitor sampling rate.",
         ),
@@ -70,6 +74,7 @@ def generate_launch_description() -> LaunchDescription:
             "interface": iface,
             "continuous": True,
             "parallel": LaunchConfiguration("parallel"),
+            "continuous_interval_s": LaunchConfiguration("continuous_interval_s"),
         }],
     )
 

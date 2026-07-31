@@ -47,6 +47,9 @@ rtt_via_ss : bool      in continuous mode, sample the live connection's TCP RTT
                        via `ss -ti` each second (same tcpi_rtt iperf reports) and
                        fill rtt_ms_mean/min/max -- dense RTT consistent with the
                        throughput, no ping. Default True; needs iproute2 (`ss`).
+continuous_interval_s : float  reporting interval for continuous mode (iperf3
+                       -i and the ss cadence). 1.0 = 1 Hz. 0.2-0.5 (2-5 Hz) is a
+                       good moving-robot range; ~0.1 (10 Hz) works but is noisier.
 """
 
 from __future__ import annotations
@@ -97,6 +100,11 @@ class IperfRunnerNode(Node):
         # dense and consistent with the throughput (no ping needed). Ignored
         # if ss is unavailable or not in continuous mode.
         self.declare_parameter("rtt_via_ss", True)
+        # Reporting interval for continuous mode (iperf3 -i, and the ss RTT
+        # cadence). 1.0 = 1 Hz. Down to ~0.1 (10 Hz) is possible but noisier;
+        # 0.2-0.5 (2-5 Hz) is a good range for a moving robot. Ignored outside
+        # continuous mode.
+        self.declare_parameter("continuous_interval_s", 1.0)
 
         gp = self.get_parameter
         self._server = gp("server_address").get_parameter_value().string_value
@@ -121,6 +129,11 @@ class IperfRunnerNode(Node):
         )
         self._continuous = gp("continuous").get_parameter_value().bool_value
         self._rtt_via_ss = gp("rtt_via_ss").get_parameter_value().bool_value
+        self._cont_interval = (
+            gp("continuous_interval_s").get_parameter_value().double_value
+        )
+        if self._cont_interval <= 0.0:
+            self._cont_interval = 1.0
         self._ss_ok = shutil.which("ss") is not None
         if self._continuous and self._rtt_via_ss and not self._ss_ok:
             self.get_logger().warn(
@@ -153,7 +166,7 @@ class IperfRunnerNode(Node):
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         mode = (
-            "continuous 1 Hz survey"
+            f"continuous survey @ {1.0 / self._cont_interval:.1f} Hz"
             if self._continuous
             else f"{self._duration:.0f}s every {self._interval:.0f}s"
         )
@@ -297,7 +310,7 @@ class IperfRunnerNode(Node):
         # -t 0 runs until we kill it; -i 1 emits a report every second.
         cmd = [
             "iperf3", "-c", self._server, "-p", str(self._port),
-            "-t", "0", "-i", "1", "--forceflush",
+            "-t", "0", "-i", f"{self._cont_interval:g}", "--forceflush",
         ]
         if self._connect_timeout > 0:
             cmd += ["--connect-timeout", str(self._connect_timeout)]
