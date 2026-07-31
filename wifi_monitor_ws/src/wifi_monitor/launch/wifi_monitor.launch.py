@@ -4,6 +4,12 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+
+def _str(name: str) -> ParameterValue:
+    """Force a launch arg to be a STRING parameter (see iperf launch note)."""
+    return ParameterValue(LaunchConfiguration(name), value_type=str)
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -43,9 +49,9 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             {
-                "interface": LaunchConfiguration("interface"),
+                "interface": _str("interface"),
                 "publish_rate_hz": LaunchConfiguration("publish_rate_hz"),
-                "frame_id": LaunchConfiguration("frame_id"),
+                "frame_id": _str("frame_id"),
                 "warn_signal_dbm": LaunchConfiguration("warn_signal_dbm"),
                 "error_signal_dbm": LaunchConfiguration("error_signal_dbm"),
             }

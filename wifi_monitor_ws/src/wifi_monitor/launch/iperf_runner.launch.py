@@ -4,6 +4,17 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+
+def _str(name: str) -> ParameterValue:
+    """Force a launch arg to be a STRING parameter.
+
+    Without this, launch infers the type from the text, so a value like
+    "0" (udp_bitrate) or an all-digit interface name would be passed as an
+    int and the node's string parameter declaration would reject it.
+    """
+    return ParameterValue(LaunchConfiguration(name), value_type=str)
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -56,14 +67,14 @@ def generate_launch_description() -> LaunchDescription:
         name="iperf_runner",
         output="screen",
         parameters=[{
-            "server_address": LaunchConfiguration("server_address"),
+            "server_address": _str("server_address"),
             "server_port": LaunchConfiguration("server_port"),
-            "interface": LaunchConfiguration("interface"),
-            "protocol": LaunchConfiguration("protocol"),
+            "interface": _str("interface"),
+            "protocol": _str("protocol"),
             "duration_s": LaunchConfiguration("duration_s"),
             "interval_s": LaunchConfiguration("interval_s"),
             "reverse": LaunchConfiguration("reverse"),
-            "udp_bitrate": LaunchConfiguration("udp_bitrate"),
+            "udp_bitrate": _str("udp_bitrate"),
             "omit_s": LaunchConfiguration("omit_s"),
             "connect_timeout_ms": LaunchConfiguration("connect_timeout_ms"),
             "reconnect_poll_s": LaunchConfiguration("reconnect_poll_s"),
