@@ -12,7 +12,9 @@ interface : str
     Wireless interface to monitor (e.g. ``wlx8876b9eae0ff``). If empty, the
     first interface exposing ``/sys/class/net/<iface>/wireless`` is used.
 publish_rate_hz : float
-    Sampling / publishing rate. Default 1.0 Hz.
+    Sampling / publishing rate. Default 2.0 Hz. For a slowly moving robot,
+    2-5 Hz is the practical sweet spot (each sample shells out to iw/sysfs,
+    ~10-40 ms), enough to map coverage/shadowing without aliasing overhead.
 frame_id : str
     ``header.frame_id`` stamped on every message. Default ``wifi``.
 warn_signal_dbm : float
@@ -43,7 +45,7 @@ class WifiMonitorNode(Node):
         super().__init__("wifi_monitor")
 
         self.declare_parameter("interface", "")
-        self.declare_parameter("publish_rate_hz", 1.0)
+        self.declare_parameter("publish_rate_hz", 2.0)
         self.declare_parameter("frame_id", "wifi")
         self.declare_parameter("warn_signal_dbm", -70.0)
         self.declare_parameter("error_signal_dbm", -80.0)

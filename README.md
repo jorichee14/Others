@@ -136,7 +136,7 @@ ros2 topic echo /diagnostics
 | Parameter          | Default | Description                                    |
 | ------------------ | ------- | ---------------------------------------------- |
 | `interface`        | `""`    | Interface to monitor (empty = auto-detect).    |
-| `publish_rate_hz`  | `1.0`   | Sampling / publishing rate.                    |
+| `publish_rate_hz`  | `2.0`   | Sampling / publishing rate. 2-5 Hz suits a slowly moving robot. |
 | `frame_id`         | `wifi`  | `header.frame_id` stamped on each message.     |
 | `warn_signal_dbm`  | `-70.0` | RSSI at/below which diagnostics report WARN.    |
 | `error_signal_dbm` | `-80.0` | RSSI at/below which diagnostics report ERROR.   |
