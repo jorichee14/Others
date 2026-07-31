@@ -99,6 +99,7 @@ class WifiMonitorNode(Node):
             DiagnosticArray, "diagnostics", qos
         )
 
+        self._assoc_prev = None  # for disconnect/reconnect transition logs
         self._timer = self.create_timer(1.0 / rate, self._on_timer)
         self.get_logger().info(
             f"wifi_monitor running on '{self._interface or '<none>'}' "
@@ -141,6 +142,18 @@ class WifiMonitorNode(Node):
         # Otherwise leave snr_db = NaN and flag it: consumers use signal_dbm
         # (RSSI) as the signal indicator instead.
         msg.snr_valid = bool(msg.noise_valid) and not math.isnan(msg.snr_db)
+
+        # Failsafe visibility: keep publishing through outages, but log the
+        # disconnect/reconnect edges so gaps in the data are explained.
+        if self._assoc_prev is not None and msg.associated != self._assoc_prev:
+            if msg.associated:
+                self.get_logger().info(
+                    f"link reconnected ({msg.essid or '?'}, "
+                    f"{msg.signal_dbm:.0f} dBm)"
+                )
+            else:
+                self.get_logger().warn("link disconnected; still publishing")
+        self._assoc_prev = msg.associated
 
         self._pub.publish(msg)
         self._diag_pub.publish(self._to_diagnostics(msg))

@@ -444,6 +444,22 @@ def collect_iwconfig(iface: str) -> Dict[str, object]:
     return data
 
 
+def link_up(iface: str) -> Optional[bool]:
+    """True if the interface currently has carrier (is associated).
+
+    Cheap sysfs check used as a failsafe gate: ``carrier`` reads 1 when the
+    STA is associated to an AP and 0 when it is not. Falls back to
+    ``operstate``. Returns None if neither can be read (interface gone).
+    """
+    val = _read_int(os.path.join(SYS_NET, iface, "carrier"))
+    if val is not None:
+        return val == 1
+    state = _read_str(os.path.join(SYS_NET, iface, "operstate"))
+    if state is not None:
+        return state == "up"
+    return None
+
+
 def list_wireless_interfaces() -> list:
     """Return interface names that expose a ``wireless`` sysfs node."""
     found = []

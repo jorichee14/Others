@@ -203,6 +203,34 @@ def test_iw_survey_in_use_channel(monkeypatch):
     assert d["channel_busy_ms"] == 2500.0
 
 
+def test_link_up_from_carrier(tmp_path, monkeypatch):
+    base = tmp_path / "wlan0"
+    base.mkdir()
+    monkeypatch.setattr(wp, "SYS_NET", str(tmp_path))
+
+    (base / "carrier").write_text("1\n")
+    assert wp.link_up("wlan0") is True
+
+    (base / "carrier").write_text("0\n")
+    assert wp.link_up("wlan0") is False
+
+
+def test_link_up_operstate_fallback(tmp_path, monkeypatch):
+    base = tmp_path / "wlan0"
+    base.mkdir()
+    monkeypatch.setattr(wp, "SYS_NET", str(tmp_path))
+    # no carrier file -> fall back to operstate
+    (base / "operstate").write_text("up\n")
+    assert wp.link_up("wlan0") is True
+    (base / "operstate").write_text("down\n")
+    assert wp.link_up("wlan0") is False
+
+
+def test_link_up_unknown(tmp_path, monkeypatch):
+    monkeypatch.setattr(wp, "SYS_NET", str(tmp_path))
+    assert wp.link_up("nope") is None
+
+
 def test_iw_denied_returns_empty(monkeypatch):
     # Operation not permitted -> _run returns None (non-zero exit, no stdout)
     monkeypatch.setattr(wp, "_run", lambda cmd: None)

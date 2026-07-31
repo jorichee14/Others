@@ -145,30 +145,30 @@ the robot's link, so the measurement reflects *the robot's* Wi-Fi capacity:
 robot ──wifi──► AP ──ethernet──► laptop (iperf3 -s)
 ```
 
-On the server (the wired laptop; Windows or Linux):
+On the server (the wired laptop at `192.168.233.142`; Windows or Linux):
 
 ```bash
 iperf3 -s                 # listens on 5201
 # Windows: allow inbound TCP/UDP 5201 through Windows Firewall
 ```
 
-On the robot:
+On the robot (the server defaults to `192.168.233.142`):
 
 ```bash
 # TCP capacity + RTT, a 2 s test every 30 s (uplink):
-ros2 launch wifi_monitor iperf_runner.launch.py server_address:=192.168.233.50
+ros2 launch wifi_monitor iperf_runner.launch.py
 
 # Downlink instead (server -> robot):
-ros2 launch wifi_monitor iperf_runner.launch.py \
-    server_address:=192.168.233.50 reverse:=true
+ros2 launch wifi_monitor iperf_runner.launch.py reverse:=true
 
 # UDP loss/jitter, pushing 300 Mbit/s:
-ros2 launch wifi_monitor iperf_runner.launch.py \
-    server_address:=192.168.233.50 protocol:=udp udp_bitrate:=300M
+ros2 launch wifi_monitor iperf_runner.launch.py protocol:=udp udp_bitrate:=300M
 
 # Continuous "survey" mode (back-to-back tests) for a coverage pass:
-ros2 launch wifi_monitor iperf_runner.launch.py \
-    server_address:=192.168.233.50 interval_s:=0.0
+ros2 launch wifi_monitor iperf_runner.launch.py interval_s:=0.0
+
+# Different server:
+ros2 launch wifi_monitor iperf_runner.launch.py server_address:=192.168.233.50
 ```
 
 `IperfResult` carries `bitrate_mbps` (goodput), `retransmits`,
@@ -178,6 +178,30 @@ ros2 launch wifi_monitor iperf_runner.launch.py \
 > ⚠️ iperf **saturates the link** for the test duration — use short periodic
 > bursts (`interval_s` >> `duration_s`) during real operation, or a dedicated
 > survey pass. Don't run it continuously while the robot depends on the link.
+
+### Failsafes for a moving robot (disconnect / reconnect)
+
+Both nodes are built to survive the link dropping and coming back as the
+robot moves:
+
+**`wifi_monitor`** keeps publishing right through an outage — during a
+disconnect it emits `associated=false` with RF fields as `NaN` (so gaps are
+explicit in the data, not missing samples), and logs the disconnect and
+reconnect edges. It never blocks or crashes if the interface goes away.
+
+**`iperf_runner`** guards every test:
+- **Link-down gate** — before launching iperf it checks the interface
+  carrier. If the Wi-Fi is not associated it does *not* start a test (which
+  would hang); it publishes a `success=false` result tagged `link down` and
+  polls every `reconnect_poll_s` until the link returns, then resumes
+  automatically. Those `link down` samples mark dead zones in your map.
+- **`--connect-timeout`** (`connect_timeout_ms`, default 2000) bounds how
+  long a test waits for the server, so a reachable-Wi-Fi/unreachable-server
+  case fails fast instead of stalling.
+- **Failure backoff** — a failed test backs off to `reconnect_poll_s` even in
+  survey mode (`interval_s=0`), so a dead server is never hammered.
+- All subprocess errors (timeout, launch failure, bad JSON) are caught and
+  reported as `success=false` with an `error` string; the node never dies.
 
 ### Mapping results to position
 

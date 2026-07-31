@@ -10,19 +10,31 @@ Runs each test in a background thread so the ROS executor is never blocked
 for the test duration. Publishes an ``IperfResult`` per test; stamp each with
 ``header.stamp`` so it time-joins to pose in a rosbag.
 
+Failsafes for a moving robot (link drops and reconnects):
+  * Before each test the node checks link carrier. If the Wi-Fi is not
+    associated it does NOT launch iperf (which would hang or fail slowly);
+    it publishes a ``success=false`` result tagged "link down" and polls at
+    ``reconnect_poll_s`` until the link returns, then resumes automatically.
+  * ``iperf3 --connect-timeout`` bounds how long a single test waits for the
+    server, so a reachable-Wi-Fi-but-unreachable-server case fails fast.
+  * A failed test backs off to ``reconnect_poll_s`` even in survey mode
+    (interval 0), so a dead server is never hammered.
+  * All subprocess errors are caught; the node never crashes on a bad test.
+
 Parameters
 ----------
-server_address : str   iperf3 server IP/host (required; node warns if empty).
+server_address : str   iperf3 server IP/host. Default 192.168.233.142.
 server_port : int      default 5201.
+interface : str        wireless iface for the link-state failsafe (""=auto).
 protocol : str         "tcp" or "udp".
 duration_s : float     per-test duration (iperf3 -t). Default 2.0.
-interval_s : float     gap between the END of one test and the START of the
-                       next. 0 => back-to-back (survey mode). Default 30.0.
-reverse : bool         true => measure downlink (server -> robot, iperf3 -R).
-udp_bitrate : str      target rate for UDP tests, e.g. "300M". Default "0"
-                       (iperf3 default 1 Mbit/s -> set this for UDP capacity).
-omit_s : float         initial seconds to omit (iperf3 -O) to skip TCP
-                       slow-start. Default 1.0.
+interval_s : float     gap between tests. 0 => back-to-back (survey). Def 30.
+reverse : bool         true => downlink (server -> robot, iperf3 -R).
+udp_bitrate : str      target rate for UDP tests, e.g. "300M". Default "0".
+omit_s : float         initial seconds to omit (iperf3 -O). Default 1.0.
+connect_timeout_ms : int  iperf3 --connect-timeout. Default 2000.
+reconnect_poll_s : float  poll/backoff period when link is down or a test
+                          fails. Default 3.0.
 """
 
 from __future__ import annotations
@@ -38,7 +50,7 @@ from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy
 
 from wifi_monitor_msgs.msg import IperfResult
 
-from wifi_monitor import iperf_parse
+from wifi_monitor import iperf_parse, wifi_parsers
 
 NAN = float("nan")
 
@@ -47,18 +59,22 @@ class IperfRunnerNode(Node):
     def __init__(self) -> None:
         super().__init__("iperf_runner")
 
-        self.declare_parameter("server_address", "")
+        self.declare_parameter("server_address", "192.168.233.142")
         self.declare_parameter("server_port", 5201)
+        self.declare_parameter("interface", "")
         self.declare_parameter("protocol", "tcp")
         self.declare_parameter("duration_s", 2.0)
         self.declare_parameter("interval_s", 30.0)
         self.declare_parameter("reverse", False)
         self.declare_parameter("udp_bitrate", "0")
         self.declare_parameter("omit_s", 1.0)
+        self.declare_parameter("connect_timeout_ms", 2000)
+        self.declare_parameter("reconnect_poll_s", 3.0)
 
         gp = self.get_parameter
         self._server = gp("server_address").get_parameter_value().string_value
         self._port = gp("server_port").get_parameter_value().integer_value
+        self._iface = gp("interface").get_parameter_value().string_value
         self._proto = (
             gp("protocol").get_parameter_value().string_value or "tcp"
         ).lower()
@@ -69,6 +85,16 @@ class IperfRunnerNode(Node):
             gp("udp_bitrate").get_parameter_value().string_value or "0"
         )
         self._omit = gp("omit_s").get_parameter_value().double_value
+        self._connect_timeout = (
+            gp("connect_timeout_ms").get_parameter_value().integer_value
+        )
+        self._reconnect_poll = (
+            gp("reconnect_poll_s").get_parameter_value().double_value
+        )
+
+        if not self._iface:
+            found = wifi_parsers.list_wireless_interfaces()
+            self._iface = found[0] if found else ""
 
         qos = QoSProfile(
             depth=10,
@@ -79,14 +105,14 @@ class IperfRunnerNode(Node):
 
         if not self._server:
             self.get_logger().warn(
-                "'server_address' is empty; set it to the iperf3 server IP. "
-                "No tests will run until it is provided."
+                "'server_address' is empty; set it to the iperf3 server IP."
             )
         if shutil.which("iperf3") is None:
             self.get_logger().error(
                 "iperf3 not found on PATH; install it (apt install iperf3)."
             )
 
+        self._link_up = None  # tracks link state for transition logging
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -94,28 +120,78 @@ class IperfRunnerNode(Node):
             f"iperf_runner -> {self._proto.upper()} to "
             f"'{self._server or '<unset>'}:{self._port}', "
             f"{self._duration:.0f}s every {self._interval:.0f}s, "
-            f"{'downlink' if self._reverse else 'uplink'} -> topic 'wifi/iperf'."
+            f"{'downlink' if self._reverse else 'uplink'}, iface "
+            f"'{self._iface or '<none>'}' -> topic 'wifi/iperf'."
         )
 
     # ----------------------------------------------------------------------
     def _loop(self) -> None:
-        # Wait one interval before the first test if a gap is configured,
-        # otherwise start immediately (survey mode).
+        poll = max(0.5, self._reconnect_poll)
         while not self._stop.is_set() and rclpy.ok():
-            if self._server and shutil.which("iperf3") is not None:
-                msg = self._run_once()
-                self._pub.publish(msg)
-            # Sleep the interval, but wake promptly on shutdown.
-            wait = self._interval if self._server else 5.0
+            if not self._server or shutil.which("iperf3") is None:
+                if self._stop.wait(poll):
+                    break
+                continue
+
+            # Failsafe: don't launch iperf while the Wi-Fi is disconnected.
+            up = wifi_parsers.link_up(self._iface) if self._iface else None
+            if up is False:
+                if self._link_up is not False:
+                    self.get_logger().warn(
+                        f"link down on '{self._iface}'; pausing iperf, "
+                        "will resume on reconnect."
+                    )
+                self._link_up = False
+                self._pub.publish(
+                    self._new_msg(success=False, error="link down (not associated)")
+                )
+                if self._stop.wait(poll):
+                    break
+                continue
+
+            if self._link_up is False:
+                self.get_logger().info(
+                    f"link back up on '{self._iface}'; resuming iperf."
+                )
+            self._link_up = True
+
+            msg = self._run_once()
+            self._pub.publish(msg)
+
+            # Normal cadence on success; back off on failure so a dead server
+            # (even in survey mode, interval 0) is not hammered.
+            wait = self._interval if msg.success else max(self._interval, poll)
             if self._stop.wait(max(0.0, wait)):
                 break
 
     # ----------------------------------------------------------------------
+    def _new_msg(self, success: bool = False, error: str = "") -> IperfResult:
+        """Fresh IperfResult with header + config fields + NaN defaults."""
+        msg = IperfResult()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "wifi"
+        msg.server_address = self._server
+        msg.server_port = int(self._port)
+        msg.protocol = self._proto.upper()
+        msg.reverse = bool(self._reverse)
+        msg.duration_s = float(self._duration)
+        msg.success = success
+        msg.error = error
+        msg.bitrate_mbps = NAN
+        msg.rtt_ms_mean = NAN
+        msg.rtt_ms_min = NAN
+        msg.rtt_ms_max = NAN
+        msg.jitter_ms = NAN
+        msg.lost_percent = NAN
+        return msg
+
     def _build_cmd(self) -> list:
         cmd = [
             "iperf3", "-c", self._server, "-p", str(self._port),
             "-t", str(self._duration), "-J",
         ]
+        if self._connect_timeout > 0:
+            cmd += ["--connect-timeout", str(self._connect_timeout)]
         if self._omit > 0.0:
             cmd += ["-O", str(self._omit)]
         if self._reverse:
@@ -125,23 +201,7 @@ class IperfRunnerNode(Node):
         return cmd
 
     def _run_once(self) -> IperfResult:
-        msg = IperfResult()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "wifi"
-        msg.server_address = self._server
-        msg.server_port = int(self._port)
-        msg.protocol = self._proto.upper()
-        msg.reverse = bool(self._reverse)
-        msg.duration_s = float(self._duration)
-
-        # Unknown-value defaults.
-        msg.bitrate_mbps = NAN
-        msg.rtt_ms_mean = NAN
-        msg.rtt_ms_min = NAN
-        msg.rtt_ms_max = NAN
-        msg.jitter_ms = NAN
-        msg.lost_percent = NAN
-
+        msg = self._new_msg()
         timeout = self._duration + self._omit + 10.0
         try:
             out = subprocess.run(
@@ -151,13 +211,13 @@ class IperfRunnerNode(Node):
         except subprocess.TimeoutExpired:
             msg.success = False
             msg.error = "iperf3 timed out"
+            self.get_logger().warn("iperf3 test timed out")
             return msg
         except OSError as exc:
             msg.success = False
             msg.error = f"iperf3 launch failed: {exc}"
             return msg
 
-        # iperf3 emits JSON on stdout even for most errors (-J).
         parsed = iperf_parse.parse_iperf_json(out.stdout or "")
         if not parsed.get("success"):
             msg.success = False
