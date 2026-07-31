@@ -21,8 +21,8 @@ wlx8876b9eae0ff  IEEE 802.11  ESSID:"BML"
 
 | Package             | Build type   | Contents                                   |
 | ------------------- | ------------ | ------------------------------------------ |
-| `wifi_monitor_msgs` | ament_cmake  | `WifiLinkStatus.msg` (custom message type) |
-| `wifi_monitor`      | ament_python | `wifi_monitor_node`, launch file, tests    |
+| `wifi_monitor_msgs` | ament_cmake  | `WifiLinkStatus.msg`, `IperfResult.msg`    |
+| `wifi_monitor`      | ament_python | `wifi_monitor_node`, `iperf_runner_node`, launch files, tests |
 
 Tested against ROS 2 (Humble / Iron / Jazzy). Python‑only node, no compiled
 dependencies beyond the message package.
@@ -118,7 +118,7 @@ ros2 run wifi_monitor wifi_monitor_node
 
 # Or specify the interface and rate:
 ros2 run wifi_monitor wifi_monitor_node --ros-args \
-    -p interface:=wlx8876b9eae0ff -p publish_rate_hz:=2.0
+    -p interface:=wlx8876b9eae0ff -p publish_rate_hz:=5.0
 
 # Via launch (all parameters overridable):
 ros2 launch wifi_monitor wifi_monitor.launch.py interface:=wlx8876b9eae0ff
@@ -130,6 +130,66 @@ Inspect the output:
 ros2 topic echo /wifi/status
 ros2 topic echo /diagnostics
 ```
+
+## Active throughput: `iperf_runner` node
+
+`wifi_monitor` is passive (RSSI, MCS/rate, retries). To measure **actual
+throughput / capacity**, the `iperf_runner` node periodically runs `iperf3`
+against a fixed server and publishes an `IperfResult` on `/wifi/iperf`.
+
+**Setup — single wireless hop.** Put the iperf3 server on a machine **wired
+(Ethernet) to the router/AP**, not on Wi-Fi. Then the only wireless hop is
+the robot's link, so the measurement reflects *the robot's* Wi-Fi capacity:
+
+```
+robot ──wifi──► AP ──ethernet──► laptop (iperf3 -s)
+```
+
+On the server (the wired laptop; Windows or Linux):
+
+```bash
+iperf3 -s                 # listens on 5201
+# Windows: allow inbound TCP/UDP 5201 through Windows Firewall
+```
+
+On the robot:
+
+```bash
+# TCP capacity + RTT, a 2 s test every 30 s (uplink):
+ros2 launch wifi_monitor iperf_runner.launch.py server_address:=192.168.233.50
+
+# Downlink instead (server -> robot):
+ros2 launch wifi_monitor iperf_runner.launch.py \
+    server_address:=192.168.233.50 reverse:=true
+
+# UDP loss/jitter, pushing 300 Mbit/s:
+ros2 launch wifi_monitor iperf_runner.launch.py \
+    server_address:=192.168.233.50 protocol:=udp udp_bitrate:=300M
+
+# Continuous "survey" mode (back-to-back tests) for a coverage pass:
+ros2 launch wifi_monitor iperf_runner.launch.py \
+    server_address:=192.168.233.50 interval_s:=0.0
+```
+
+`IperfResult` carries `bitrate_mbps` (goodput), `retransmits`,
+`rtt_ms_mean/min/max` (TCP), and `jitter_ms` / `lost_packets` /
+`lost_percent` (UDP), plus `success`/`error`.
+
+> ⚠️ iperf **saturates the link** for the test duration — use short periodic
+> bursts (`interval_s` >> `duration_s`) during real operation, or a dedicated
+> survey pass. Don't run it continuously while the robot depends on the link.
+
+### Mapping results to position
+
+Every `WifiLinkStatus` and `IperfResult` is stamped, so record locally on the
+robot and time-join to pose offline:
+
+```bash
+ros2 bag record /wifi/status /wifi/iperf /tf /odom
+```
+
+Recording **on the robot's local disk** (not streamed over the Wi-Fi you are
+measuring) avoids losing data exactly when the link degrades.
 
 ## Parameters
 
