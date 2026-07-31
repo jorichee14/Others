@@ -45,6 +45,39 @@ consumer Wi‑Fi drivers do not report noise; in that case `snr_db` and
 `noise_dbm` are published as `NaN`. Unknown float fields are always `NaN`
 rather than a misleading `0.0`.
 
+> **Noise floor availability.** The noise value is taken from
+> `iw ... survey dump` first, then `/proc/net/wireless`. Some USB adapters
+> report a sentinel of `-256` (or `0`) in `/proc/net/wireless`, meaning "not
+> measured" — the node correctly discards that. If neither source yields a
+> real noise floor, `snr_db` stays `NaN`; use the RSSI (`signal_dbm`) and
+> link quality as your signal indicators instead.
+
+### Richer PHY + reliability data (from `iw`)
+
+Beyond RSSI, the node parses `iw dev <iface> link`, `station dump` and
+`survey dump`:
+
+| Field | Source | Example |
+| ----- | ------ | ------- |
+| `rx_bitrate_mbps` / `tx_bitrate_mbps` | link / station | 162.0 / 240.0 |
+| `rx_mcs` / `tx_mcs` | link / station | 4 / 5 |
+| `rx_nss` / `tx_nss` | link / station | 2 / 2 |
+| `rx_width_mhz` / `tx_width_mhz` | link / station | 40 |
+| `rx_phy_mode` / `tx_phy_mode` | link / station | VHT / HE / HT |
+| `tx_short_gi` | link / station | true |
+| `signal_avg_dbm` | station dump | -65 |
+| `tx_retries` / `tx_failed` | station dump | 123 / 4 |
+| `expected_mbps` | station dump | 114.7 |
+| `connected_time_s` | station dump | 3600 |
+| `sta_rx_bytes` / `sta_tx_bytes` (per-assoc) | link / station | 170807384 |
+| `noise_dbm` / `snr_db` | survey dump / proc | -95 / 29 |
+| `channel_active_ms` / `channel_busy_ms` / `channel_busy_ratio` | survey dump | 10000 / 2500 / 0.25 |
+
+`station dump` and `survey dump` are read-only and usually need no root, but
+if a driver denies them the node falls back to `NaN`/`-1` for those fields
+and keeps publishing everything else. `iw ... scan` (triggering a scan) does
+require `CAP_NET_ADMIN` and is intentionally **not** used.
+
 ## Message: `wifi_monitor_msgs/msg/WifiLinkStatus`
 
 Key fields (see [the full definition](wifi_monitor_ws/src/wifi_monitor_msgs/msg/WifiLinkStatus.msg)):

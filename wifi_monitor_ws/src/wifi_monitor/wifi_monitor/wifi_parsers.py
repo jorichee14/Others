@@ -168,14 +168,75 @@ def collect_proc_wireless(iface: str) -> Dict[str, object]:
 
 
 # --------------------------------------------------------------------------
+# Shared bitrate-line parser
+# --------------------------------------------------------------------------
+# Handles all of:
+#   240.0 MBit/s VHT-MCS 5 40MHz short GI VHT-NSS 2
+#   162.0 MBit/s VHT-MCS 4 40MHz VHT-NSS 2
+#   130.0 MBit/s MCS 15 40MHz short GI          (legacy HT, NSS implied)
+#   1201.0 MBit/s HE-MCS 11 80MHz HE-NSS 2 HE-GI 0
+_BR_MBPS = re.compile(r"([\d.]+)\s*MBit/s")
+_BR_MCS = re.compile(r"(VHT|HE|HT)-MCS\s*(\d+)")
+_BR_MCS_PLAIN = re.compile(r"(?<![-\w])MCS\s*(\d+)")  # legacy HT "MCS 15"
+_BR_NSS = re.compile(r"(?:VHT|HE)-NSS\s*(\d+)")
+_BR_WIDTH = re.compile(r"(\d+)\s*MHz")
+
+
+def _parse_bitrate(line: str) -> Dict[str, object]:
+    """Extract rate/MCS/NSS/width/GI/mode from an `iw` bitrate line."""
+    d: Dict[str, object] = {}
+    m = _BR_MBPS.search(line)
+    if m:
+        d["mbps"] = float(m.group(1))
+    m = _BR_MCS.search(line)
+    if m:
+        d["phy_mode"] = m.group(1)
+        d["mcs"] = int(m.group(2))
+    else:
+        m = _BR_MCS_PLAIN.search(line)
+        if m:
+            d["phy_mode"] = "HT"
+            d["mcs"] = int(m.group(1))
+    m = _BR_NSS.search(line)
+    if m:
+        d["nss"] = int(m.group(1))
+    m = _BR_WIDTH.search(line)
+    if m:
+        d["width"] = int(m.group(1))
+    d["short_gi"] = "short GI" in line
+    return d
+
+
+def _apply_bitrate(data: Dict[str, object], line: str, direction: str) -> None:
+    """Store a parsed bitrate line under rx_*/tx_* keys."""
+    br = _parse_bitrate(line)
+    if "mbps" in br:
+        data[f"{direction}_bitrate_mbps"] = br["mbps"]
+    if "mcs" in br:
+        data[f"{direction}_mcs"] = br["mcs"]
+    if "nss" in br:
+        data[f"{direction}_nss"] = br["nss"]
+    if "width" in br:
+        data[f"{direction}_width_mhz"] = br["width"]
+    if "phy_mode" in br:
+        data[f"{direction}_phy_mode"] = br["phy_mode"]
+    if direction == "tx":
+        data["tx_short_gi"] = bool(br.get("short_gi"))
+        if "mbps" in br:
+            data["bit_rate_mbps"] = br["mbps"]  # backward-compat field
+
+
+# --------------------------------------------------------------------------
 # iw dev <iface> link  (preferred, modern nl80211 tool)
 # --------------------------------------------------------------------------
 _IW_ESSID = re.compile(r"SSID:\s*(.+)")
 _IW_BSSID = re.compile(r"Connected to\s+([0-9a-fA-F:]{17})")
 _IW_FREQ = re.compile(r"freq:\s*(\d+)")
 _IW_SIGNAL = re.compile(r"signal:\s*(-?\d+)\s*dBm")
-_IW_RXBR = re.compile(r"rx bitrate:\s*([\d.]+)\s*MBit/s")
-_IW_TXBR = re.compile(r"tx bitrate:\s*([\d.]+)\s*MBit/s")
+_IW_RXLINE = re.compile(r"rx bitrate:\s*(.+)")
+_IW_TXLINE = re.compile(r"tx bitrate:\s*(.+)")
+_IW_RXBYTES = re.compile(r"RX:\s*(\d+)\s*bytes\s*\((\d+)\s*packets\)")
+_IW_TXBYTES = re.compile(r"TX:\s*(\d+)\s*bytes\s*\((\d+)\s*packets\)")
 
 
 def collect_iw_link(iface: str) -> Dict[str, object]:
@@ -200,10 +261,116 @@ def collect_iw_link(iface: str) -> Dict[str, object]:
     m = _IW_SIGNAL.search(out)
     if m:
         data["signal_dbm"] = float(m.group(1))
-    # Prefer the tx bitrate as the reported PHY rate; fall back to rx.
-    m = _IW_TXBR.search(out) or _IW_RXBR.search(out)
+    m = _IW_RXLINE.search(out)
     if m:
-        data["bit_rate_mbps"] = float(m.group(1))
+        _apply_bitrate(data, m.group(1), "rx")
+    m = _IW_TXLINE.search(out)
+    if m:
+        _apply_bitrate(data, m.group(1), "tx")
+    m = _IW_RXBYTES.search(out)
+    if m:
+        data["sta_rx_bytes"] = int(m.group(1))
+        data["sta_rx_packets"] = int(m.group(2))
+    m = _IW_TXBYTES.search(out)
+    if m:
+        data["sta_tx_bytes"] = int(m.group(1))
+        data["sta_tx_packets"] = int(m.group(2))
+    return data
+
+
+# --------------------------------------------------------------------------
+# iw dev <iface> station dump  (retries, failed, expected throughput, avg)
+# --------------------------------------------------------------------------
+_ST_RXBYTES = re.compile(r"rx bytes:\s*(\d+)")
+_ST_RXPKTS = re.compile(r"rx packets:\s*(\d+)")
+_ST_TXBYTES = re.compile(r"tx bytes:\s*(\d+)")
+_ST_TXPKTS = re.compile(r"tx packets:\s*(\d+)")
+_ST_RETRIES = re.compile(r"tx retries:\s*(\d+)")
+_ST_FAILED = re.compile(r"tx failed:\s*(\d+)")
+_ST_SIGNAL = re.compile(r"signal:\s*(-?\d+)")
+_ST_SIGNAL_AVG = re.compile(r"signal avg:\s*(-?\d+)")
+_ST_EXPECTED = re.compile(r"expected throughput:\s*([\d.]+)\s*[MG]bps")
+_ST_CONNTIME = re.compile(r"connected time:\s*(\d+)\s*seconds")
+_ST_RXLINE = re.compile(r"rx bitrate:\s*(.+)")
+_ST_TXLINE = re.compile(r"tx bitrate:\s*(.+)")
+
+
+def collect_iw_station(iface: str) -> Dict[str, object]:
+    """Per-station link reliability. Needs no root on most kernels, but
+    returns an empty dict if the driver denies the dump."""
+    out = _run(["iw", "dev", iface, "station", "dump"])
+    data: Dict[str, object] = {}
+    if not out or "Station" not in out:
+        return data
+
+    for key, rx, cast in (
+        ("sta_rx_bytes", _ST_RXBYTES, int),
+        ("sta_rx_packets", _ST_RXPKTS, int),
+        ("sta_tx_bytes", _ST_TXBYTES, int),
+        ("sta_tx_packets", _ST_TXPKTS, int),
+        ("tx_retries", _ST_RETRIES, int),
+        ("tx_failed", _ST_FAILED, int),
+        ("connected_time_s", _ST_CONNTIME, int),
+    ):
+        m = rx.search(out)
+        if m:
+            data[key] = cast(m.group(1))
+
+    m = _ST_SIGNAL_AVG.search(out)
+    if m:
+        data["signal_avg_dbm"] = float(m.group(1))
+    m = _ST_SIGNAL.search(out)
+    if m:
+        data["signal_dbm"] = float(m.group(1))
+    m = _ST_EXPECTED.search(out)
+    if m:
+        val = float(m.group(1))
+        # normalise Gbps -> Mbps if the unit says Gbps
+        if "Gbps" in out[m.start():m.end() + 4]:
+            val *= 1000.0
+        data["expected_mbps"] = val
+    m = _ST_RXLINE.search(out)
+    if m:
+        _apply_bitrate(data, m.group(1), "rx")
+    m = _ST_TXLINE.search(out)
+    if m:
+        _apply_bitrate(data, m.group(1), "tx")
+    return data
+
+
+# --------------------------------------------------------------------------
+# iw dev <iface> survey dump  (noise floor + channel busy time)
+# --------------------------------------------------------------------------
+_SV_INUSE = re.compile(r"frequency:\s*(\d+)\s*MHz\s*\[in use\]")
+_SV_NOISE = re.compile(r"noise:\s*(-?\d+)\s*dBm")
+_SV_ACTIVE = re.compile(r"channel active time:\s*(\d+)\s*ms")
+_SV_BUSY = re.compile(r"channel busy time:\s*(\d+)\s*ms")
+
+
+def collect_iw_survey(iface: str) -> Dict[str, object]:
+    """Noise floor and channel busy/active time for the in-use channel."""
+    out = _run(["iw", "dev", iface, "survey", "dump"])
+    data: Dict[str, object] = {}
+    if not out:
+        return data
+
+    # Each channel is a "Survey data from <iface>" block; pick the in-use one.
+    for block in re.split(r"Survey data from", out):
+        if "[in use]" not in block:
+            continue
+        m = _SV_NOISE.search(block)
+        if m:
+            noise = float(m.group(1))
+            if noise > -254.0 and noise != 0.0:
+                data["noise_dbm"] = noise
+                data["noise_valid"] = True
+        m = _SV_ACTIVE.search(block)
+        if m:
+            data["channel_active_ms"] = float(m.group(1))
+        m = _SV_BUSY.search(block)
+        if m:
+            data["channel_busy_ms"] = float(m.group(1))
+        break
     return data
 
 
@@ -293,16 +460,19 @@ def collect_all(iface: str) -> Dict[str, object]:
     """Merge every source into a single dict.
 
     Precedence (later overrides earlier for overlapping keys):
-    sysfs -> /proc/net/wireless -> iwconfig -> iw. ``iw`` wins for the
-    association fields because nl80211 is the most reliable source; the
-    wireless error counters only come from ``iwconfig``; noise only comes
-    from ``/proc/net/wireless``.
+    sysfs -> /proc/net/wireless -> iwconfig -> iw link -> iw station ->
+    iw survey. nl80211 (``iw``) wins for association/PHY fields; the
+    wireless error counters only come from ``iwconfig``; the noise floor
+    comes from ``iw survey`` when available, else ``/proc/net/wireless``;
+    retries/failed/expected-throughput only come from ``iw station``.
     """
     merged: Dict[str, object] = {}
     merged.update(collect_sysfs(iface))
     merged.update(collect_proc_wireless(iface))
     merged.update(collect_iwconfig(iface))
     merged.update(collect_iw_link(iface))
+    merged.update(collect_iw_station(iface))
+    merged.update(collect_iw_survey(iface))
 
     # Derived fields.
     lq = merged.get("link_quality")
@@ -314,10 +484,15 @@ def collect_all(iface: str) -> Dict[str, object]:
     noise = merged.get("noise_dbm")
     if (
         merged.get("noise_valid")
-        and isinstance(sig, float)
-        and isinstance(noise, float)
+        and isinstance(sig, (int, float))
+        and isinstance(noise, (int, float))
     ):
-        merged["snr_db"] = sig - noise
+        merged["snr_db"] = float(sig) - float(noise)
+
+    active = merged.get("channel_active_ms")
+    busy = merged.get("channel_busy_ms")
+    if isinstance(active, float) and isinstance(busy, float) and active > 0.0:
+        merged["channel_busy_ratio"] = busy / active
 
     if "frequency_ghz" in merged:
         merged["channel"] = channel_from_freq_ghz(

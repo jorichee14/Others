@@ -109,14 +109,25 @@ class WifiMonitorNode(Node):
         msg.interface = self._interface
 
         # Float fields default to 0.0 in ROS; use NaN to mean "unknown".
-        msg.frequency_ghz = NAN
-        msg.bit_rate_mbps = NAN
-        msg.tx_power_dbm = NAN
-        msg.link_quality_ratio = NAN
-        msg.signal_dbm = NAN
-        msg.noise_dbm = NAN
-        msg.snr_db = NAN
-        msg.channel = -1
+        for f in (
+            "frequency_ghz", "bit_rate_mbps", "tx_power_dbm",
+            "link_quality_ratio", "signal_dbm", "signal_avg_dbm",
+            "noise_dbm", "snr_db", "rx_bitrate_mbps", "tx_bitrate_mbps",
+            "expected_mbps", "channel_active_ms", "channel_busy_ms",
+            "channel_busy_ratio",
+        ):
+            setattr(msg, f, NAN)
+        # Integer fields where 0 is a valid value use -1 to mean "unknown".
+        for f in (
+            "channel", "rx_mcs", "tx_mcs", "rx_nss", "tx_nss",
+            "rx_width_mhz", "tx_width_mhz",
+        ):
+            setattr(msg, f, -1)
+        for f in (
+            "tx_retries", "tx_failed", "connected_time_s",
+            "sta_rx_bytes", "sta_tx_bytes", "sta_rx_packets", "sta_tx_packets",
+        ):
+            setattr(msg, f, -1)
 
         if self._interface:
             data = wifi_parsers.collect_all(self._interface)
@@ -129,12 +140,15 @@ class WifiMonitorNode(Node):
     @staticmethod
     def _apply(msg: WifiLinkStatus, data: dict) -> None:
         """Copy parsed values onto the message, respecting field types."""
-        str_fields = ("mac_address", "essid", "bssid", "mode")
+        str_fields = (
+            "mac_address", "essid", "bssid", "mode",
+            "rx_phy_mode", "tx_phy_mode",
+        )
         for f in str_fields:
             if f in data:
                 setattr(msg, f, str(data[f]))
 
-        bool_fields = ("up", "associated", "noise_valid")
+        bool_fields = ("up", "associated", "noise_valid", "tx_short_gi")
         for f in bool_fields:
             if f in data:
                 setattr(msg, f, bool(data[f]))
@@ -145,14 +159,25 @@ class WifiMonitorNode(Node):
             "tx_power_dbm",
             "link_quality_ratio",
             "signal_dbm",
+            "signal_avg_dbm",
             "noise_dbm",
             "snr_db",
+            "rx_bitrate_mbps",
+            "tx_bitrate_mbps",
+            "expected_mbps",
+            "channel_active_ms",
+            "channel_busy_ms",
+            "channel_busy_ratio",
         )
         for f in float_fields:
             if f in data:
                 setattr(msg, f, float(data[f]))
 
-        int32_fields = ("channel", "link_quality", "link_quality_max")
+        int32_fields = (
+            "channel", "link_quality", "link_quality_max",
+            "rx_mcs", "tx_mcs", "rx_nss", "tx_nss",
+            "rx_width_mhz", "tx_width_mhz",
+        )
         for f in int32_fields:
             if f in data:
                 setattr(msg, f, int(data[f]))
@@ -164,6 +189,13 @@ class WifiMonitorNode(Node):
             "tx_excessive_retries",
             "invalid_misc",
             "missed_beacon",
+            "tx_retries",
+            "tx_failed",
+            "connected_time_s",
+            "sta_rx_bytes",
+            "sta_tx_bytes",
+            "sta_rx_packets",
+            "sta_tx_packets",
         )
         for f in int64_fields:
             if f in data:
@@ -224,9 +256,20 @@ class WifiMonitorNode(Node):
             kv("bit_rate_mbps", f"{msg.bit_rate_mbps:.1f}"),
             kv("tx_power_dbm", f"{msg.tx_power_dbm:.0f}"),
             kv("signal_dbm", f"{msg.signal_dbm:.0f}"),
+            kv("signal_avg_dbm", f"{msg.signal_avg_dbm:.0f}"),
             kv("noise_dbm", f"{msg.noise_dbm:.0f}"),
             kv("snr_db", f"{msg.snr_db:.1f}"),
             kv("link_quality", f"{msg.link_quality}/{msg.link_quality_max}"),
+            kv("rx_bitrate_mbps", f"{msg.rx_bitrate_mbps:.1f}"),
+            kv("tx_bitrate_mbps", f"{msg.tx_bitrate_mbps:.1f}"),
+            kv("rx_mcs_nss", f"{msg.rx_phy_mode} MCS{msg.rx_mcs}/NSS{msg.rx_nss}"
+               f" @{msg.rx_width_mhz}MHz"),
+            kv("tx_mcs_nss", f"{msg.tx_phy_mode} MCS{msg.tx_mcs}/NSS{msg.tx_nss}"
+               f" @{msg.tx_width_mhz}MHz"),
+            kv("expected_mbps", f"{msg.expected_mbps:.1f}"),
+            kv("tx_retries", msg.tx_retries),
+            kv("tx_failed", msg.tx_failed),
+            kv("channel_busy_ratio", f"{msg.channel_busy_ratio:.3f}"),
             kv("missed_beacon", msg.missed_beacon),
             kv("tx_excessive_retries", msg.tx_excessive_retries),
             kv("rx_packets", msg.rx_packets),

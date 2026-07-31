@@ -95,3 +95,117 @@ def test_channel_from_freq():
     assert wp.channel_from_freq_ghz(5.18) == 36
     assert wp.channel_from_freq_ghz(5.5) == 100
     assert wp.channel_from_freq_ghz(None) == -1
+
+
+# --- iw dev <iface> link (the real supplied output) ------------------------
+IW_LINK_SAMPLE = """Connected to 82:2a:a8:cb:d4:34 (on wlx8876b9eae0ff)
+	SSID: BML
+	freq: 5180
+	RX: 170807384 bytes (62867 packets)
+	TX: 6279838 bytes (44776 packets)
+	signal: -66 dBm
+	rx bitrate: 162.0 MBit/s VHT-MCS 4 40MHz VHT-NSS 2
+	tx bitrate: 240.0 MBit/s VHT-MCS 5 40MHz short GI VHT-NSS 2
+"""
+
+
+def test_iw_link_full_parse(monkeypatch):
+    monkeypatch.setattr(wp, "_run", lambda cmd: IW_LINK_SAMPLE)
+    d = wp.collect_iw_link("wlx8876b9eae0ff")
+
+    assert d["associated"] is True
+    assert d["bssid"] == "82:2A:A8:CB:D4:34"
+    assert d["essid"] == "BML"
+    assert d["frequency_ghz"] == 5.18
+    assert d["signal_dbm"] == -66.0
+
+    # rx bitrate: 162.0 MBit/s VHT-MCS 4 40MHz VHT-NSS 2
+    assert d["rx_bitrate_mbps"] == 162.0
+    assert d["rx_mcs"] == 4
+    assert d["rx_nss"] == 2
+    assert d["rx_width_mhz"] == 40
+    assert d["rx_phy_mode"] == "VHT"
+
+    # tx bitrate: 240.0 MBit/s VHT-MCS 5 40MHz short GI VHT-NSS 2
+    assert d["tx_bitrate_mbps"] == 240.0
+    assert d["tx_mcs"] == 5
+    assert d["tx_nss"] == 2
+    assert d["tx_short_gi"] is True
+    assert d["bit_rate_mbps"] == 240.0  # backward-compat mirrors tx
+
+    # per-association byte/packet counters
+    assert d["sta_rx_bytes"] == 170807384
+    assert d["sta_rx_packets"] == 62867
+    assert d["sta_tx_bytes"] == 6279838
+    assert d["sta_tx_packets"] == 44776
+
+
+def test_parse_bitrate_variants():
+    ht = wp._parse_bitrate("130.0 MBit/s MCS 15 40MHz short GI")
+    assert ht["mbps"] == 130.0 and ht["mcs"] == 15
+    assert ht["phy_mode"] == "HT" and ht["short_gi"] is True
+
+    he = wp._parse_bitrate("1201.0 MBit/s HE-MCS 11 80MHz HE-NSS 2 HE-GI 0")
+    assert he["mcs"] == 11 and he["nss"] == 2
+    assert he["width"] == 80 and he["phy_mode"] == "HE"
+
+
+IW_STATION_SAMPLE = """Station 82:2a:a8:cb:d4:34 (on wlx8876b9eae0ff)
+	inactive time:	40 ms
+	rx bytes:	170807384
+	rx packets:	62867
+	tx bytes:	6279838
+	tx packets:	44776
+	tx retries:	123
+	tx failed:	4
+	signal:  	-66 [-67, -71] dBm
+	signal avg:	-65 dBm
+	tx bitrate:	240.0 MBit/s VHT-MCS 5 40MHz short GI VHT-NSS 2
+	rx bitrate:	162.0 MBit/s VHT-MCS 4 40MHz VHT-NSS 2
+	expected throughput:	114.688Mbps
+	connected time:	3600 seconds
+"""
+
+
+def test_iw_station_parse(monkeypatch):
+    monkeypatch.setattr(wp, "_run", lambda cmd: IW_STATION_SAMPLE)
+    d = wp.collect_iw_station("wlx8876b9eae0ff")
+    assert d["tx_retries"] == 123
+    assert d["tx_failed"] == 4
+    assert d["signal_avg_dbm"] == -65.0
+    assert d["signal_dbm"] == -66.0
+    assert d["expected_mbps"] == 114.688
+    assert d["connected_time_s"] == 3600
+    assert d["sta_tx_bytes"] == 6279838
+    assert d["tx_mcs"] == 5
+
+
+IW_SURVEY_SAMPLE = """Survey data from wlx8876b9eae0ff
+	frequency:			5200 MHz
+	noise:				-90 dBm
+Survey data from wlx8876b9eae0ff
+	frequency:			5180 MHz [in use]
+	noise:				-95 dBm
+	channel active time:		10000 ms
+	channel busy time:		2500 ms
+	channel receive time:		1200 ms
+	channel transmit time:		300 ms
+"""
+
+
+def test_iw_survey_in_use_channel(monkeypatch):
+    monkeypatch.setattr(wp, "_run", lambda cmd: IW_SURVEY_SAMPLE)
+    d = wp.collect_iw_survey("wlx8876b9eae0ff")
+    # must pick the [in use] block, not the first block
+    assert d["noise_dbm"] == -95.0
+    assert d["noise_valid"] is True
+    assert d["channel_active_ms"] == 10000.0
+    assert d["channel_busy_ms"] == 2500.0
+
+
+def test_iw_denied_returns_empty(monkeypatch):
+    # Operation not permitted -> _run returns None (non-zero exit, no stdout)
+    monkeypatch.setattr(wp, "_run", lambda cmd: None)
+    assert wp.collect_iw_station("wlan0") == {}
+    assert wp.collect_iw_survey("wlan0") == {}
+    assert wp.collect_iw_link("wlan0") == {}
