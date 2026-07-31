@@ -21,8 +21,8 @@ wlx8876b9eae0ff  IEEE 802.11  ESSID:"BML"
 
 | Package             | Build type   | Contents                                   |
 | ------------------- | ------------ | ------------------------------------------ |
-| `wifi_monitor_msgs` | ament_cmake  | `WifiLinkStatus.msg`, `IperfResult.msg`    |
-| `wifi_monitor`      | ament_python | `wifi_monitor_node`, `iperf_runner_node`, launch files, tests |
+| `wifi_monitor_msgs` | ament_cmake  | `WifiLinkStatus.msg`, `IperfResult.msg`, `PingStat.msg` |
+| `wifi_monitor`      | ament_python | `wifi_monitor_node`, `iperf_runner_node`, `ping_monitor_node`, launch files, tests |
 
 Tested against ROS 2 (Humble / Iron / Jazzy). Python‑only node, no compiled
 dependencies beyond the message package.
@@ -223,13 +223,57 @@ reconnect edges. It never blocks or crashes if the interface goes away.
 - All subprocess errors (timeout, launch failure, bad JSON) are caught and
   reported as `success=false` with an `error` string; the node never dies.
 
-### Mapping results to position
+## Latency + loss: `ping_monitor` node
 
-Every `WifiLinkStatus` and `IperfResult` is stamped, so record locally on the
-robot and time-join to pose offline:
+iperf's live throughput stream carries **no RTT** (and on iperf 3.9 there is
+no per-interval JSON), so continuous latency/loss comes from a separate,
+cheap source: `ping`. The `ping_monitor` node pings a fixed host and
+publishes a `PingStat` on `/wifi/ping` with the per-ping RTT plus
+**rolling-window loss and RTT stats**. Ping does **not** saturate the link,
+so unlike iperf it can run continuously during real operation.
+
+The target only needs to answer ICMP — **no ROS or software on the other
+end**. On the Windows laptop, allow *ICMP Echo Request* through the firewall:
+
+```powershell
+New-NetFirewallRule -DisplayName "ICMPv4-In" -Protocol ICMPv4 -IcmpType 8 -Direction Inbound -Action Allow
+```
+
+Run it:
+```bash
+ros2 launch wifi_monitor ping_monitor.launch.py target:=192.168.233.142
+ros2 topic echo /wifi/ping     # rtt_ms, loss_percent, rtt_ms_avg/min/max
+```
+
+## Full survey stack in one launch
+
+`survey.launch.py` starts all three nodes at once (passive + continuous
+throughput + latency/loss), sharing one server/target address:
 
 ```bash
-ros2 bag record /wifi/status /wifi/iperf /tf /odom
+# Dedicated survey pass (iperf saturates the link):
+ros2 launch wifi_monitor survey.launch.py server_address:=192.168.233.142
+
+# Non-saturating monitoring during real operation (passive + ping only):
+ros2 launch wifi_monitor survey.launch.py \
+    server_address:=192.168.233.142 run_iperf:=false
+```
+
+This gives you, together:
+
+| Topic | Rate | Content |
+| ----- | ---- | ------- |
+| `/wifi/status` | 5 Hz | RSSI, MCS/rate, retries (passive, continuous) |
+| `/wifi/iperf`  | ~1 Hz | max achievable throughput (continuous; `run_iperf:=true`) |
+| `/wifi/ping`   | 1 Hz | RTT + rolling packet loss (continuous, cheap) |
+
+### Mapping results to position
+
+Every message is stamped, so record locally on the robot and time-join to
+pose offline:
+
+```bash
+ros2 bag record /wifi/status /wifi/iperf /wifi/ping /tf /odom
 ```
 
 Recording **on the robot's local disk** (not streamed over the Wi-Fi you are

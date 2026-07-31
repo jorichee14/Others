@@ -31,6 +31,7 @@ setup(
         "console_scripts": [
             "wifi_monitor_node = wifi_monitor.wifi_monitor_node:main",
             "iperf_runner_node = wifi_monitor.iperf_runner_node:main",
+            "ping_monitor_node = wifi_monitor.ping_monitor_node:main",
         ],
     },
 )
