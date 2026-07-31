@@ -30,6 +30,8 @@ float64  signal_avg_dbm     # averaged RSSI from `iw station dump` (NaN if unkno
 float64  noise_dbm          # noise floor (NaN if the driver does not report it)
 float64  snr_db             # signal_dbm - noise_dbm (NaN if noise unknown)
 bool     noise_valid        # true when the driver reported a real noise floor
+bool     snr_estimated      # true when snr_db is derived from an ASSUMED noise
+                            # floor (assumed_noise_dbm param), not a measured one
 
 # --- PHY rate details (iw dev <iface> link / station dump) ------------------
 # rx/tx bit rate is split so you can see asymmetry; bit_rate_mbps above keeps

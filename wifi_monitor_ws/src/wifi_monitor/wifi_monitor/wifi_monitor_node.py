@@ -47,6 +47,11 @@ class WifiMonitorNode(Node):
         self.declare_parameter("frame_id", "wifi")
         self.declare_parameter("warn_signal_dbm", -70.0)
         self.declare_parameter("error_signal_dbm", -80.0)
+        # Assumed noise floor (dBm) used to ESTIMATE SNR when the driver does
+        # not report a real one. NaN (default) disables estimation so no
+        # misleading value is published. Typical values: -95 (5 GHz),
+        # -90 (2.4 GHz).
+        self.declare_parameter("assumed_noise_dbm", NAN)
 
         self._interface = (
             self.get_parameter("interface").get_parameter_value().string_value
@@ -68,6 +73,11 @@ class WifiMonitorNode(Node):
         )
         self._error_dbm = (
             self.get_parameter("error_signal_dbm")
+            .get_parameter_value()
+            .double_value
+        )
+        self._assumed_noise_dbm = (
+            self.get_parameter("assumed_noise_dbm")
             .get_parameter_value()
             .double_value
         )
@@ -133,8 +143,24 @@ class WifiMonitorNode(Node):
             data = wifi_parsers.collect_all(self._interface)
             self._apply(msg, data)
 
+        self._estimate_snr_if_needed(msg)
+
         self._pub.publish(msg)
         self._diag_pub.publish(self._to_diagnostics(msg))
+
+    # ----------------------------------------------------------------------
+    def _estimate_snr_if_needed(self, msg: WifiLinkStatus) -> None:
+        """Fill snr_db from an assumed noise floor when the driver reports no
+        real one. Only runs if the 'assumed_noise_dbm' parameter is set and
+        we have a valid RSSI. The result is flagged snr_estimated=True and
+        noise_valid stays False so consumers never mistake it for measured."""
+        if msg.noise_valid:
+            return  # real noise floor already produced a measured SNR
+        if math.isnan(self._assumed_noise_dbm) or math.isnan(msg.signal_dbm):
+            return
+        msg.noise_dbm = self._assumed_noise_dbm
+        msg.snr_db = msg.signal_dbm - self._assumed_noise_dbm
+        msg.snr_estimated = True
 
     # ----------------------------------------------------------------------
     @staticmethod
@@ -258,7 +284,8 @@ class WifiMonitorNode(Node):
             kv("signal_dbm", f"{msg.signal_dbm:.0f}"),
             kv("signal_avg_dbm", f"{msg.signal_avg_dbm:.0f}"),
             kv("noise_dbm", f"{msg.noise_dbm:.0f}"),
-            kv("snr_db", f"{msg.snr_db:.1f}"),
+            kv("snr_db", f"{msg.snr_db:.1f}"
+               + (" (est)" if msg.snr_estimated else "")),
             kv("link_quality", f"{msg.link_quality}/{msg.link_quality_max}"),
             kv("rx_bitrate_mbps", f"{msg.rx_bitrate_mbps:.1f}"),
             kv("tx_bitrate_mbps", f"{msg.tx_bitrate_mbps:.1f}"),
