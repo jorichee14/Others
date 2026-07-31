@@ -50,6 +50,10 @@ def generate_launch_description() -> LaunchDescription:
             description="UDP target rate in Mbit/s, e.g. 300 (0 = unlimited; "
             "only for protocol:=udp).",
         ),
+        DeclareLaunchArgument(
+            "parallel", default_value="1",
+            description="Parallel TCP streams (iperf3 -P). Try 4 for capacity.",
+        ),
         DeclareLaunchArgument("omit_s", default_value="1.0"),
         DeclareLaunchArgument(
             "connect_timeout_ms", default_value="2000",
@@ -76,6 +80,7 @@ def generate_launch_description() -> LaunchDescription:
             "interval_s": LaunchConfiguration("interval_s"),
             "reverse": LaunchConfiguration("reverse"),
             "udp_bitrate_mbps": LaunchConfiguration("udp_bitrate_mbps"),
+            "parallel": LaunchConfiguration("parallel"),
             "omit_s": LaunchConfiguration("omit_s"),
             "connect_timeout_ms": LaunchConfiguration("connect_timeout_ms"),
             "reconnect_poll_s": LaunchConfiguration("reconnect_poll_s"),

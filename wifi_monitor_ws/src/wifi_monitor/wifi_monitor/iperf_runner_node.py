@@ -31,6 +31,8 @@ duration_s : float     per-test duration (iperf3 -t). Default 2.0.
 interval_s : float     gap between tests. 0 => back-to-back (survey). Def 30.
 reverse : bool         true => downlink (server -> robot, iperf3 -R).
 udp_bitrate_mbps : float  target rate for UDP tests in Mbit/s (0 = unlimited).
+parallel : int         parallel TCP streams (iperf3 -P). Default 1; 4 fills a
+                       Wi-Fi link far better and is recommended for capacity.
 omit_s : float         initial seconds to omit (iperf3 -O). Default 1.0.
 connect_timeout_ms : int  iperf3 --connect-timeout. Default 2000.
 reconnect_poll_s : float  poll/backoff period when link is down or a test
@@ -69,6 +71,9 @@ class IperfRunnerNode(Node):
         # UDP target rate in Mbit/s (0 = unlimited). Numeric so launch can
         # never mistype it; converted to iperf3's "<N>M" form internally.
         self.declare_parameter("udp_bitrate_mbps", 0.0)
+        # Parallel TCP streams (iperf3 -P). >1 fills a Wi-Fi link much better
+        # than a single stream; 4 is a good default for capacity tests.
+        self.declare_parameter("parallel", 1)
         self.declare_parameter("omit_s", 1.0)
         self.declare_parameter("connect_timeout_ms", 2000)
         self.declare_parameter("reconnect_poll_s", 3.0)
@@ -86,6 +91,7 @@ class IperfRunnerNode(Node):
         self._udp_mbps = (
             gp("udp_bitrate_mbps").get_parameter_value().double_value
         )
+        self._parallel = gp("parallel").get_parameter_value().integer_value
         self._omit = gp("omit_s").get_parameter_value().double_value
         self._connect_timeout = (
             gp("connect_timeout_ms").get_parameter_value().integer_value
@@ -196,6 +202,8 @@ class IperfRunnerNode(Node):
             cmd += ["--connect-timeout", str(self._connect_timeout)]
         if self._omit > 0.0:
             cmd += ["-O", str(self._omit)]
+        if self._parallel > 1:
+            cmd += ["-P", str(self._parallel)]
         if self._reverse:
             cmd += ["-R"]
         if self._proto == "udp":
@@ -223,13 +231,13 @@ class IperfRunnerNode(Node):
 
         parsed = iperf_parse.parse_iperf_json(out.stdout or "")
         if not parsed.get("success"):
+            reason = str(parsed.get("error") or f"iperf3 exit {out.returncode}")
+            stderr = (out.stderr or "").strip()
+            if stderr:
+                reason = f"{reason} | stderr: {stderr[:200]}"
             msg.success = False
-            msg.error = str(
-                parsed.get("error")
-                or (out.stderr or "").strip()
-                or f"iperf3 exit {out.returncode}"
-            )
-            self.get_logger().warn(f"iperf3 test failed: {msg.error}")
+            msg.error = reason
+            self.get_logger().warn(f"iperf3 test failed: {reason}")
             return msg
 
         self._apply(msg, parsed)
