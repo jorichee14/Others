@@ -2,7 +2,7 @@
 
 *Research direction, motivation, contributions, related work, ground-truth model, and benchmark suite.*
 
-> **Status:** Draft research-direction document for a dataset currently being recorded. Citations were web-verified during drafting; entries still marked *(verify)* need a final check before external publication. Numeric ground-truth values quoted here are taken from the calibration session records referenced in the appendix and are subject to update as recording completes.
+> **Status:** Draft research-direction document for a dataset currently being recorded. Related-work citations were web-verified during drafting (see §5 and Appendix C); a handful of author-list / volume-issue details behind paywalled or proxy-blocked hosts remain flagged in Appendix C and need a final check before external publication. Numeric ground-truth values quoted here are taken from the calibration session records referenced in the appendix and are subject to update as recording completes.
 
 ---
 
@@ -36,7 +36,7 @@ Fixed cameras and radars watching a shared indoor space are the sensing substrat
 
 Infrastructure perception is almost never fully on-device. Frames are streamed to an edge server; tracks are fused in a central node; a robot offloads heavy inference over Wi-Fi. **The wireless link is part of the perception pipeline** — and it is the least reliable part. Link quality varies by tens of dB across a single room, throughput can collapse behind a metal shelf, and dead zones are common precisely in the cluttered areas where perception matters most.
 
-Today a researcher who wants to study *connectivity-aware perception* — adaptive offloading, graceful degradation, coverage-aware sensor placement, communication-aware planning — has **no dataset** that provides perception and connectivity in the same spatial frame. They must either simulate the radio or ignore it. This dataset removes that gap: every Wi-Fi/RF sample is timestamped and pose-registrable, so a coverage/throughput/latency field can be built over the exact space the cameras and radars observe.
+Today a researcher who wants to study *connectivity-aware perception* — adaptive offloading, graceful degradation, coverage-aware sensor placement, communication-aware planning — has no dataset that provides *perception* and *link quality* in the same spatial frame. Indoor RF datasets that include radar and cameras (MM-Fi, XRF55) use Wi-Fi CSI as a sensing signal, not as a communications link measurement, and robot radio-mapping datasets (Milosheski et al. 2026) pair RSSI with LiDAR only — no imaging perception and no active throughput/latency (§5.5). So today one must either simulate the radio or ignore it. This dataset removes that gap: every Wi-Fi/RF sample is timestamped and pose-registrable, so a coverage/throughput/latency field can be built over the exact space the cameras and radars observe.
 
 ### 2.3 Why honest, bounded ground truth
 
@@ -49,7 +49,7 @@ Concretely, camera world-poses come from ChArUco handshakes (bounded, drift-free
 ## 3. Contributions
 
 1. **A single-frame, tri-modal infrastructure dataset.** Multi-view fixed cameras + multi-radar mmWave + Wi-Fi/RF link quality, all co-registered into one metric world frame with a published transform tree.
-2. **The first perception dataset with a co-located, pose-registered RF-connectivity modality**, enabling joint study of perception and communication (to our knowledge, no prior public dataset provides both in one spatial frame — *to be confirmed against the related-work survey in §5*).
+2. **The first perception dataset with a co-located, pose-registered RF *link-quality* modality**, enabling joint study of perception and communication. Indoor datasets that combine radar+camera+Wi-Fi (MM-Fi, XRF55) treat Wi-Fi as a *sensing signal* (CSI for activity recognition), and the one radio-mapping dataset that measures RF as link quality alongside perception (Milosheski et al. 2026) uses passive RSSI + LiDAR only. To our knowledge, no public dataset pairs camera/radar perception with a **communications link-quality** modality (RSSI/SNR + active throughput + latency/loss) in one metric frame (see §5.5).
 3. **Uncertainty-as-metadata ground truth.** Every ground-truth pose carries an independent, per-sensor error bound with a stated derivation (ChArUco reprojection residual, GLIM loop-closure drift, radar per-DOF covariance), not a single blanket accuracy claim.
 4. **A reproducible, measurement-first calibration methodology** for both camera-network and radar-camera extrinsics, released with the data so the ground truth is auditable rather than asserted.
 5. **A benchmark suite of seven tasks** spanning calibration, multi-view 3D tracking, radar-camera fusion, privacy-preserving sensing, RF coverage mapping, connectivity-aware perception, and calibration-robustness — each specified with inputs, ground truth, metrics, and a provided baseline.
@@ -92,27 +92,28 @@ Every message is timestamped for **offline time-join to pose**, producing covera
 
 The dominant line of radar-inclusive perception datasets is vehicle-mounted and outdoor:
 
-- **nuScenes** (Caesar et al., CVPR 2020) — 6 cameras, 5 automotive radars, 1 LiDAR; the reference multimodal AD dataset, but radar is sparse 2D and the setting is ego-motion on roads.
-- **View-of-Delft (VoD)** (Palffy et al., RA-L 2022) — 4D (elevation-capable) radar + stereo camera + LiDAR, urban driving.
-- **TJ4DRadSet** (Zheng et al., ITSC 2022) — 4D radar + camera + LiDAR with tracking labels.
-- **K-Radar** (Paek et al., NeurIPS 2022) — 4D radar tensor dataset with adverse-weather emphasis.
-- **RADIATE** (Sheeny et al., ICRA 2021) — scanning radar + camera + LiDAR in adverse weather.
-- **aiMotive** (Matuszka et al., 2022) — long-range multimodal AD dataset.
-- **CARRADA** (Ouaknine et al., ICPR 2020), **RadarScenes** (Schumann et al., 2021), **Astyx HiRes2019** (Meyer & Kuschk, 2019) — radar-focused sets with camera/annotation of varying richness.
+- **nuScenes** (Caesar et al., CVPR 2020) — 6 cameras, **5 automotive radars** (Continental ARS408, 2D/Doppler, no elevation), 1 LiDAR; the reference multimodal AD benchmark, 1000 scenes.
+- **View-of-Delft (VoD)** (Palffy et al., *RA-L* 7(2):4961–4968, 2022) — 3+1D (4D) radar + stereo camera + 64-layer LiDAR, urban VRU detection.
+- **TJ4DRadSet** (Zheng et al., ITSC 2022) — 4D radar + camera + LiDAR with tracking IDs, 7757 frames.
+- **K-Radar** (Paek et al., NeurIPS D&B 2022) — dense **4D radar *tensor*** (range/az/el/Doppler power) + LiDAR + camera, adverse weather.
+- **RADIATE** (Sheeny et al., ICRA 2021) — Navtech 360° **scanning radar** + camera + LiDAR in fog/rain/snow/night.
+- **aiMotive** (Matuszka et al., ICLR-W 2023) — 360° long-range camera + LiDAR + radar for highway perception.
+- **CRUW** (Wang et al., WACV 2021) — camera + raw radar RA heatmaps, no LiDAR.
+- **RadarScenes** (Schumann et al., **FUSION 2021**), **CARRADA** (Ouaknine et al., ICPR 2020/21), **Astyx HiRes2019** (Meyer & Kuschk, EuRAD 2019), **Oxford Radar RobotCar** (Barnes et al., ICRA 2020, scanning-radar odometry), **Dual Radar** (Zhang et al., *Sci. Data* 2025, two 4D radars) — radar-focused sets of varying modality richness.
 
-*Gap:* all are vehicle-mounted, outdoor, ego-motion; none are fixed-infrastructure indoor, and none include an RF-connectivity modality.
+*Gap:* all are vehicle-mounted, outdoor, ego-motion; none are fixed-infrastructure indoor, and none record an RF-connectivity/link-quality modality.
 
 ### 5.2 Roadside / infrastructure perception datasets
 
 The closest existing work in *fixed-sensor* spirit is roadside/ITS:
 
-- **DAIR-V2X** (Yu et al., CVPR 2022) — the first large vehicle-infrastructure-cooperative dataset; infrastructure side has camera + LiDAR.
-- **Rope3D** (Ye et al., CVPR 2022) — roadside monocular 3D detection.
-- **IPS300+** (Wang et al., ICRA 2022) — dense roadside multi-modal (camera + LiDAR).
-- **TUMTraf / A9 (Providentia++)** (Cress et al., 2022–2024) — highway/intersection infrastructure sensing.
-- **LUMPI** (Busch et al., 2022) — multi-perspective intersection dataset.
+- **DAIR-V2X** (Yu et al., CVPR 2022) — the first large vehicle-infrastructure-cooperative dataset; infrastructure side has camera + LiDAR. V2X communication is the *application*, but no RF link-quality is recorded as a data modality.
+- **Rope3D** (Ye et al., CVPR 2022) — roadside monocular 3D detection (camera, LiDAR-derived GT).
+- **IPS300+** (Wang et al., ICRA 2022) — dense roadside intersection perception (camera + 80-layer LiDAR).
+- **A9-Dataset** (Creß et al., IEEE IV 2022) — gantry-mounted highway sensing that **does include radar** alongside cameras and LiDARs; and **TUMTraf Intersection** (Zimmer et al., ITSC 2023) — the urban camera+LiDAR intersection set (no radar).
+- **LUMPI** (Busch et al., IEEE IV 2022) — multi-perspective (up to 5 LiDARs + 3 cameras) intersection dataset.
 
-*Gap:* these establish the fixed-infrastructure paradigm but are **outdoor traffic, camera+LiDAR** — radar is rare and Wi-Fi/RF absent; indoor is out of scope.
+*Gap:* these establish the fixed-infrastructure paradigm but are **outdoor traffic**; radar appears only in the A9 highway set, none are indoor, and none record a Wi-Fi/RF link-quality modality.
 
 ### 5.3 Radar-camera extrinsic calibration
 
@@ -138,13 +139,20 @@ The dataset's ground truth depends on radar-camera calibration, so the method is
 
 ### 5.5 Wi-Fi / RF sensing, coverage mapping, and connectivity-aware robotics
 
-- **RSSI/CSI indoor localization** — RADAR (Bahl & Padmanabhan, INFOCOM 2000), Horus, SpotFi (Kotaru et al., SIGCOMM 2015), and surveys thereof.
-- **Radio maps / REM / radio environment maps** and Gaussian-process signal-strength interpolation for coverage prediction.
-- **Communication-aware / connectivity-aware motion planning** — robots planning to maintain bandwidth/coverage (surveys of comm-aware robotics).
-- **Computation offloading under varying link quality** — edge/cloud robotics where offload decisions depend on the link.
-- **Wi-Fi CSI human sensing** datasets (activity recognition, presence) — contrasted here with our *radar-based* privacy-preserving sensing.
+- **RSSI/CSI indoor localization** — RADAR (Bahl & Padmanabhan, INFOCOM 2000), Horus (Youssef & Agrawala, MobiSys 2005), SpotFi (Kotaru et al., SIGCOMM 2015); survey: Ma, Zhou & Wang, *WiFi Sensing with CSI: A Survey*, ACM CSUR 52(3), 2019.
+- **Radio maps / REM and Gaussian-process signal fields** — Ferris, Hähnel & Fox (*GP for signal-strength location estimation*, RSS 2006) introduced GP models of the RSS field with predictive uncertainty; Fink & Kumar (*Online radio signal mapping with mobile robots*, ICRA 2010) is the classic robot RF-mapping reference; GP+path-loss hybrids bound variance far from samples.
+- **Communication-/connectivity-aware motion planning** — Yan & Mostofi (*Communication-aware motion planning*, IEEE TAC / TWC 2013); best review: Muralidharan & Mostofi, *Communication-Aware Robotics*, Annual Review of Control, Robotics, and Autonomous Systems 4:115–139, 2021; resilient-connectivity planners (RCAMP, IROS 2017).
+- **Computation offloading under location-varying bandwidth** — edge/cloud robotics where offload decisions track link quality (recent works tie cloud-inference offloading to spatially heterogeneous connectivity; edge-robotics surveys, 2025).
 
-*Gap:* Wi-Fi sensing and perception are studied in **separate communities with separate datasets**. We are not aware of a public dataset that provides **perception (camera/radar) and wireless link quality in one metric frame** — the union this dataset targets. *(To be confirmed by the survey; stated as the central novelty claim.)*
+**Indoor RF-sensing datasets that DO combine radar + camera + Wi-Fi — and why they are not the same thing.** Two indoor human-sensing datasets already pair mmWave radar, camera, and Wi-Fi:
+- **MM-Fi** (Yang et al., NeurIPS D&B 2023) — RGB, depth, LiDAR, mmWave radar point cloud, **and Wi-Fi CSI**, 40 subjects, fixed indoor rig.
+- **XRF55** (Wang et al., ACM IMWUT 8(1), 2024) — 9 Wi-Fi CSI links + mmWave radar + RFID + Azure Kinect RGB-D, 39 subjects.
+
+Crucially, in both, **Wi-Fi is a *sensing signal*** — CSI subcarrier amplitude/phase treated as an imaging modality for human activity/pose recognition — **not a *communications link-quality* measurement**. Neither records throughput, latency, loss, RSSI/SNR-as-link-health co-registered to the scene. The nearest thing to a link-quality-plus-perception dataset is **Milosheski et al.** (*multimodal indoor radio mapping with 3D point clouds and RSSI*, Data in Brief / arXiv:2511.00494, 2026) — but that is **LiDAR point clouds + passive RSSI only**: no camera/radar imaging perception and no active throughput/latency.
+
+- **Contrast for privacy framing:** Wi-Fi CSI human-sensing datasets (Widar3.0, MobiSys 2019; SignFi, IMWUT 2018; UT-HAR; SenseFi benchmark, *Patterns* 2023) recognize activity from RF echoes; we instead offer **radar-based** privacy-preserving sensing and treat Wi-Fi purely as the communications link.
+
+*Gap (the central novelty claim, now precisely scoped):* **no public dataset pairs camera/radar *perception* with a co-located Wi-Fi/RF *link-quality* modality (RSSI/SNR + active throughput + latency/loss) time-joined to pose in one metric frame.** Datasets that combine radar+camera+Wi-Fi treat Wi-Fi as a sensing signal (MM-Fi, XRF55); the one dataset that treats RF as link quality alongside perception uses passive RSSI + LiDAR only (Milosheski 2026). This dataset fills that specific gap.
 
 ## 6. Ground Truth and Its Uncertainty Model
 
@@ -186,7 +194,7 @@ Because camera GT error originates in **pixel detection** and radar GT error in 
 - **Passive + active + latency Wi-Fi triad.** Passive monitoring is safe to run continuously and captures link *state*; active iperf captures true *capacity* but saturates the link and is confined to survey passes; ping captures *responsiveness* cheaply. Together they give link *quality, capacity, and responsiveness* on one time base — no single tool does.
 - **Recording locally, not over the measured link.** Bags are written to the robot's own disk so data is not lost precisely when the link (the thing under study) degrades.
 
-**Honest novelty stance (carried verbatim in spirit from the calibration doc).** Individually, the building blocks have precedent. This dataset does **not** claim a new calibration paradigm. What is defensibly new is (a) the **modality union** — camera + radar + RF connectivity in one indoor infrastructure frame — which the survey in §5 finds unoccupied; (b) the **uncertainty-as-metadata** ground-truth discipline applied across all modalities; and (c) the **specific calibration engineering combination** in §5.3. Any stronger claim (e.g. "first ever") is scoped to the literature check performed and should be re-verified with a formal prior-art search before a paper or patent.
+**Honest novelty stance (carried in spirit from the calibration doc).** Individually, the building blocks have precedent. This dataset does **not** claim a new calibration paradigm, and it is **not** the first to put radar + camera + Wi-Fi in one indoor rig — MM-Fi and XRF55 already do, using Wi-Fi CSI as a *sensing* signal (§5.5). What is defensibly new is (a) the **specific modality union** — camera + radar perception + a Wi-Fi/RF *link-quality* (communications-performance) modality in one indoor infrastructure frame — which the survey in §5.5 finds unoccupied; (b) the **uncertainty-as-metadata** ground-truth discipline applied across all modalities; and (c) the **specific calibration engineering combination** in §5.3. Any stronger claim (e.g. "first ever") is scoped to the literature check performed (via web search, not a formal prior-art/patent search) and should be re-verified before a paper or patent — in particular, directly inspecting Milosheski et al. (2026) to confirm it carries no active throughput/latency.
 
 ## 8. Benchmark Suite
 
@@ -257,7 +265,7 @@ Each task lists **inputs → ground truth → metrics → provided baseline**. T
 ## 11. Open Questions to Resolve Before Freeze
 
 1. Finalize radar_infra (round 2) or ship it flagged as provisional.
-2. Confirm the §5 novelty gap with the completed related-work survey (agents in progress).
+2. ~~Confirm the §5 novelty gap with the related-work survey.~~ **Done** — survey completed; novelty reframed precisely as *perception + RF link-quality* (MM-Fi/XRF55 use Wi-Fi as a sensing signal; Milosheski 2026 is RSSI+LiDAR only). Remaining: directly inspect Milosheski et al. (2026) to confirm it carries no active throughput/latency.
 3. Decide camera resolution for the recording (raise above 960×540 if handshake range matters for the target tasks).
 4. Fix the site/AP topology for the Wi-Fi survey so B5/B6 have a well-defined radio environment.
 5. Define exact synchronization guarantees across the three modalities (clock domains, max sync dt) and record them per sequence.
@@ -275,3 +283,20 @@ Each task lists **inputs → ground truth → metrics → provided baseline**. T
 - **radar2:** t = [−0.1194, −0.0096, −0.0157] m (|t|=12.1 cm), range-scale 0.967, rot 1σ [3.06, 4.08, 3.58]°, t 1σ [32.7, 29.1, 23.0] mm, soft axis horizontal.
 - **radar_infra:** round-1 bootstrap only — **not deployable**.
 - **Apex-offset cross-check:** radar1 vs radar2 in-plane X 256/250 mm, Y 539/544 mm (match); Z −20/−55 mm (weak axis on both, expected).
+
+### Appendix C — Verified references and flagged items
+
+**Closest prior art (cite explicitly):**
+- MM-Fi — Yang et al., *MM-Fi: Multi-Modal Non-Intrusive 4D Human Dataset for Versatile Wireless Sensing*, NeurIPS Datasets & Benchmarks 2023 (arXiv:2305.10345).
+- XRF55 — Wang et al., *XRF55: A Radio Frequency Dataset for Human Indoor Action Analysis*, Proc. ACM IMWUT 8(1), 2024, DOI 10.1145/3643543.
+- Milosheski et al., *Multimodal indoor radio mapping with 3D point clouds and RSSI*, Data in Brief 2026 (arXiv:2511.00494) — LiDAR + passive RSSI only.
+
+**Datasets:** nuScenes (Caesar et al., CVPR 2020, arXiv:1903.11027); VoD (Palffy et al., RA-L 7(2):4961–4968, 2022); TJ4DRadSet (Zheng et al., ITSC 2022, arXiv:2204.13483); K-Radar (Paek et al., NeurIPS D&B 2022, arXiv:2206.08171); RADIATE (Sheeny et al., ICRA 2021); aiMotive (Matuszka et al., ICLR-W 2023, arXiv:2211.09445); CRUW/RODNet (Wang et al., WACV 2021); RadarScenes (Schumann et al., FUSION 2021, arXiv:2104.02493); CARRADA (Ouaknine et al., ICPR 2020/21); Astyx HiRes2019 (Meyer & Kuschk, EuRAD 2019); Oxford Radar RobotCar (Barnes et al., ICRA 2020); Dual Radar (Zhang et al., Sci. Data 2025); DAIR-V2X (Yu et al., CVPR 2022); Rope3D (Ye et al., CVPR 2022); IPS300+ (Wang et al., ICRA 2022); A9-Dataset (Creß et al., IEEE IV 2022, radar-inclusive); TUMTraf Intersection (Zimmer et al., ITSC 2023); LUMPI (Busch et al., IEEE IV 2022).
+
+**Calibration / SLAM / geometry:** GLIM (Koide, Yokozuka, Oishi & Banno, *Robotics and Autonomous Systems* 179:104750, 2024); ArUco (Garrido-Jurado et al., *Pattern Recognition* 47(6):2280–2292, 2014); Umeyama (*IEEE TPAMI* 13(4):376–380, 1991); Kabsch (*Acta Cryst.* A32, 1976); Huber (*Ann. Math. Stat.* 35(1), 1964); SLERP (Shoemake, SIGGRAPH 1985); Rotation Averaging (Hartley et al., *IJCV* 103(3):267–305, 2013).
+
+**Radar-camera calibration:** 4D-CAAL (Yao et al., arXiv:2601.21454, 2026); 3D-UPnP (Cao et al., arXiv:2507.19829, 2025); Domhof et al. (ICRA 2019; IEEE T-IV 6(3), 2021); Durmaz & Cevikalp (*Sensors* 2025, trajectory alignment); Liu et al. (*Sensors* 25(3):949, 2025, track-to-track); Cheng & Cao (NAECON 2023, arXiv:2309.00787); Fusion calib (Zhang et al., *Sci. Reports* 2025 — distinct from the PRL 2023 nickname collision); Doppler Correspondence (Kim et al., arXiv:2502.11461, 2025); surveys: Shi et al. (arXiv:2410.19872, 2024) and Han et al. (arXiv:2306.04242, 2023).
+
+**Wi-Fi/RF sensing & connectivity-aware robotics:** RADAR (Bahl & Padmanabhan, INFOCOM 2000); Horus (Youssef & Agrawala, MobiSys 2005); SpotFi (Kotaru et al., SIGCOMM 2015); CSI survey (Ma, Zhou & Wang, ACM CSUR 52(3), 2019); GP RSS field (Ferris, Hähnel & Fox, RSS 2006); robot RF mapping (Fink & Kumar, ICRA 2010); comm-aware planning (Yan & Mostofi, IEEE TAC/TWC 2013); review (Muralidharan & Mostofi, Annu. Rev. Control Robot. Auton. Syst. 4:115–139, 2021); RCAMP (IROS 2017); CSI-HAR datasets Widar3.0 (MobiSys 2019), SignFi (IMWUT 2018), UT-HAR, SenseFi (*Patterns* 2023).
+
+**Flagged — confirm before camera-ready** (author lists / volume-issue behind blocked or paywalled hosts): Zendar (venue/authors, likely Mostajabi et al., CVPRW 2020); Fusion calib (Sci. Reports) author list; Trajectory-Alignment (*Sensors*) volume/article number; Shi et al. fusion survey IEEE journal name/volume; RCAMP / JCMP author lists; REM survey (2014) and RAS 2018 GP+path-loss author lists; recent offloading preprints (arXiv:2606.31497 authors); Widar3.0/SignFi author lists; Yan & Mostofi TAC exact vol/issue/pages. **Also directly inspect Milosheski et al. (2026)** to confirm no active throughput/latency and whether robot pose is released as an explicit stream.
