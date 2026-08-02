@@ -64,7 +64,7 @@ Concretely, camera world-poses come from ChArUco handshakes (bounded, drift-free
 4. **An indoor ego ↔ infrastructure cooperative-perception benchmark.** Fixed infrastructure and two moving agents observe the same scene from different viewpoints in one frame — the radar- and RF-inclusive indoor analogue of vehicle-infrastructure cooperative datasets (DAIR-V2X), enabling cross-view fusion, handoff, and cooperative tracking.
 5. **Uncertainty-as-metadata ground truth.** Every ground-truth pose carries an independent, per-sensor error bound with a stated derivation (ChArUco reprojection residual, GLIM loop-closure drift, radar per-DOF covariance), not a single blanket accuracy claim.
 6. **A reproducible, measurement-first calibration methodology** for both camera-network and radar-camera extrinsics, released with the data so the ground truth is auditable rather than asserted.
-7. **A curated, tiered benchmark suite** headlining one **flagship** task — connectivity-aware cooperative perception under a *measured* channel (F1) — plus two signature tasks (uncertainty-aware cross-view tracking; geometry-fused connectivity mapping) and a compact enabling tier (calibration, anisotropic fusion, privacy-preserving radar, re-localization). Selection is deliberate: we headline only what no other public dataset can support (§8).
+7. **A curated, tiered benchmark suite** — a **foundational** tier (standard single/multi-view perception and *plain* collaborative perception, usable without the RF modality), one **flagship** (connectivity-aware cooperative perception under a *measured* channel, F1), two **signature** tasks (uncertainty-aware cross-view tracking; geometry-fused connectivity mapping), and a compact **enabling** tier (calibration, anisotropic fusion, privacy-preserving radar, re-localization). We headline only what no other public dataset can support, while still serving mainstream users (§8).
 8. **An anisotropic-covariance radar fusion baseline** with measured performance (fused 1σ ≈ [53, 69, 29] mm vs. ≈[112, 325] / [287, 112] mm single-radar), demonstrating that the released extrinsics and uncertainty model are usable end-to-end.
 
 ## 4. Background: the sensing stack
@@ -254,16 +254,37 @@ Because camera GT error originates in **pixel detection** and radar GT error in 
 
 ## 8. Benchmark Suite
 
-**Selection principle.** We do not benchmark everything the data *can* support; we headline only what **no other public dataset can**. A task earns *flagship* status only if it requires the dataset's capabilities *simultaneously* — independent perception **and** a measured link **and** certified independent dynamic GT **and** cooperative infra+ego viewpoints. Tasks the automotive / V2X / radio-map communities already serve well are demoted to *enabling*: they establish and validate the ground truth, but they are not the reason this dataset exists. The result is one flagship, two signature tasks, and a compact enabling tier.
+**Selection principle.** We do not headline everything the data *can* support; the *flagship* is reserved for what **no other public dataset can** — a task that needs the dataset's capabilities *simultaneously* (independent perception **and** a measured link **and** certified independent dynamic GT **and** cooperative infra+ego viewpoints). But a dataset also has to serve the mainstream: the standard perception and *plain* collaborative-perception tasks that any user runs, with or without the RF modality. So the suite has four tiers: a **foundational** tier (the standard tasks, no RF required — including ordinary collaborative perception), one **flagship**, two **signature** tasks, and a compact **enabling** tier that establishes and validates the ground truth.
 
 Each task lists **inputs → ground truth → metrics → baseline**, with metrics stated relative to the §6 uncertainty bounds.
+
+---
+
+### Tier 0 — Foundational (the standard tasks; usable without the RF modality)
+
+These make the dataset immediately usable by the perception and cooperative-perception communities even if they ignore Wi-Fi. They are also the reference points the flagship builds on: **F1 is P2 run under a measured communication budget**, and the value of F1 is precisely the gap between it and unconstrained P2.
+
+#### P1 — Single-viewpoint & multi-view 3D detection and tracking
+- **Inputs:** infrastructure cameras + `radar_infra`; and, separately, each ego stream (Robot A fusion; Robot B RGBD).
+- **GT:** the robots' certified trajectories as moving-target GT (§6.3); per-camera pose bounds.
+- **Metrics:** 3D AP / BEV AP, MOTA/MOTP, IDF1.
+- **Baselines:** per-view detector; multi-view triangulation through the released extrinsics; radar-camera fusion (E2).
+- **Role:** the **non-cooperative lower bounds** (single agent / single viewpoint) against which cooperation is measured.
+
+#### P2 — Collaborative (cooperative) perception with unconstrained communication
+The standard cooperative-perception benchmark — the indoor, radar-inclusive analogue of OPV2V / DAIR-V2X — with **full, unconstrained feature/detection sharing** between ego (Robot A), infrastructure, and Robot B's RGBD view.
+- **Inputs:** all viewpoints (infrastructure cameras + `radar_infra` + Robot A ego fusion + Robot B RGBD), assuming an idealized/unlimited link.
+- **GT:** the observed robot's certified trajectory (§6.3); per-viewpoint extrinsic bounds.
+- **Metrics:** 3D / BEV AP, MOTA/MOTP, IDF1; the **cooperative gain** over the P1 single-viewpoint bound.
+- **Baselines:** the three canonical fusion strategies — **early / intermediate (feature) / late (track)** fusion — i.e. the OPV2V-style comparison, run indoors with radar in the loop.
+- **Role:** the **unconstrained upper bound**. F1 subjects exactly this setup to the measured channel; P2 minus F1 is the real cost of connectivity.
 
 ---
 
 ### Tier 1 — Flagship (unique to this dataset)
 
 #### F1 — Connectivity-aware cooperative perception under a *measured* channel
-The one task that only this dataset enables. It is the Where2comm/DiscoNet problem — cooperative perception under a communication budget — with the **abstract byte budget replaced by the real, pose-tied, measured link** (throughput/latency/loss/RSSI at each location), and with certified GT to score against.
+The one task that only this dataset enables. It takes the foundational collaborative-perception setup of **P2** and constrains it by the real link: the Where2comm/DiscoNet problem — cooperative perception under a communication budget — with the **abstract byte budget replaced by the real, pose-tied, measured link** (throughput/latency/loss/RSSI at each location), and with certified GT to score against. The headline result is the gap between P2 (unconstrained) and F1 (measured channel).
 
 - **Inputs:** cooperative perception streams — Robot A ego (ZED + radar1/radar2 fusion), Robot B RGBD, and infrastructure (cameras + `radar_infra`) — **plus** the co-registered Robot-A link-quality field over the space.
 - **GT:** the observed robot's certified trajectory as moving-target GT (Robot A: GLIM; Robot B: point-cloud/fiducial — §6.3), plus per-viewpoint extrinsic bounds; the **measured** throughput/latency/loss along the path.
@@ -279,7 +300,7 @@ The one task that only this dataset enables. It is the Where2comm/DiscoNet probl
 ### Tier 2 — Signature (rare; showcases the certified-GT and cooperative capabilities)
 
 #### S1 — Uncertainty-aware cross-view 3D tracking with independent dynamic GT
-Highlights the **certified, independent, hand-label-free dynamic GT**: the robots are the moving targets, localized by a modality that fails differently from the trackers under test.
+Extends the foundational tracking of P1/P2 with the dataset's distinctive angle: **certified, independent, hand-label-free dynamic GT** and **handoff**. The robots are the moving targets, localized by a modality that fails differently from the trackers under test.
 - **Inputs:** multi-view infrastructure cameras + `radar_infra`, and each robot as a moving target (optionally the other robot's ego view).
 - **GT:** each robot's certified trajectory (§6.3); per-camera pose bounds.
 - **Metrics:** 3D MOTA/MOTP, IDF1, and localization error **reported relative to the GT bound** (no method penalized below GT uncertainty); **handoff** continuity across camera FoV boundaries / occlusion (ID consistency, gap-bridging error).
@@ -318,7 +339,7 @@ Highlights that link quality is co-registered with **perceived structure**, not 
 
 - **Container:** ROS 2 bags (native) — **per-robot** bags recorded on each robot's own disk (avoiding the measured Wi-Fi link) plus the infrastructure bag — with exported per-modality files (images + camera_info, radar point clouds with x/y/z/doppler/intensity, Wi-Fi/iperf/ping messages), each robot's **GT trajectory** (Robot A: GLIM; Robot B: point-cloud-registration / fiducial poses), and a transform tree linking fixed and mobile frames to the world frame.
 - **Ground-truth package:** extrinsic YAML/JSON per sensor + `*_session.json` reproducibility records + both robots' GT trajectories + a machine-readable **uncertainty manifest** (per-camera bound, per-radar covariance, Robot A loop-closure drift, Robot B registration/fiducial residuals, apex-offset agreement).
-- **Splits:** by session/site and by task; held-out survey passes reserved for F1/S2; a calibration-only split for E1/E4.
+- **Splits:** by session/site and by task; a standard train/val/test split for the foundational tier (P1/P2); held-out survey passes reserved for F1/S2; a calibration-only split for E1/E4.
 - **Tooling:** the calibration pipelines (`radar_camera_calib*`, `general_charuco`) and the Wi-Fi monitor stack shipped so ground truth is auditable and reproducible.
 - **Licensing / ethics:** indoor human subjects imply consent and privacy handling; radar-only tracks are highlighted as the privacy-preserving alternative.
 
