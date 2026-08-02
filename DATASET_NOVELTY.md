@@ -59,12 +59,12 @@ Concretely, camera world-poses come from ChArUco handshakes (bounded, drift-free
 ## 3. Contributions
 
 1. **A single-frame, hybrid infrastructure + mobile-agent dataset.** Multi-view fixed cameras and a fixed radar, plus **two mobile robots** — Robot A with ego radar+camera perception and a Wi-Fi/RF monitor, Robot B a lighter RGBD-only agent — all co-registered into one metric world frame with a published transform tree.
-2. **The first perception dataset with a co-located, pose-registered RF *link-quality* modality**, enabling joint study of perception and communication. Indoor datasets that combine radar+camera+Wi-Fi (MM-Fi, XRF55) treat Wi-Fi as a *sensing signal* (CSI for activity recognition), and the one radio-mapping dataset that measures RF as link quality alongside perception (Milosheski et al. 2026) uses passive RSSI + LiDAR only. To our knowledge, no public dataset pairs camera/radar perception with a **communications link-quality** modality (RSSI/SNR + active throughput + latency/loss) in one metric frame (see §5.5).
+2. **The first dataset to make the communication budget a *measured, pose-tied variable* beside independent perception.** It co-registers multi-view radar+camera perception with **end-to-end measured link quality** (RSSI/SNR + iperf throughput + ping latency/loss) in one indoor metric frame. The closest real perception+RF datasets sense *with* the channel (DeepSense 6G; LuViRA — beam power / CSI as the target), and the bandwidth-aware collaborative-perception line (Where2comm, DiscoNet …) trades accuracy against an *abstract, simulated* byte budget; none pairs independent perception with a **measured** channel (§5.5–§5.6). This turns "communication cost" from a bit-count proxy into a real, location-dependent quantity.
 3. **Certified, independent *dynamic* ground truth from the mobile robots.** Each robot's trajectory gives a bounded estimate of where it actually was — Robot A from GLIM (LiDAR-inertial, loop-closure-checked), Robot B from RGBD point-cloud registration / fiducials — a moving-target GT for the infrastructure's and Robot A's tracking that is produced by a **different modality** than the systems under test, so it fails differently and can expose their errors.
 4. **An indoor ego ↔ infrastructure cooperative-perception benchmark.** Fixed infrastructure and two moving agents observe the same scene from different viewpoints in one frame — the radar- and RF-inclusive indoor analogue of vehicle-infrastructure cooperative datasets (DAIR-V2X), enabling cross-view fusion, handoff, and cooperative tracking.
 5. **Uncertainty-as-metadata ground truth.** Every ground-truth pose carries an independent, per-sensor error bound with a stated derivation (ChArUco reprojection residual, GLIM loop-closure drift, radar per-DOF covariance), not a single blanket accuracy claim.
 6. **A reproducible, measurement-first calibration methodology** for both camera-network and radar-camera extrinsics, released with the data so the ground truth is auditable rather than asserted.
-7. **A benchmark suite of nine tasks** spanning calibration, multi-view 3D tracking, radar-camera fusion, privacy-preserving sensing, RF coverage mapping, connectivity-aware perception, calibration-robustness, ego↔infrastructure cooperative perception, and robot re-localization — each specified with inputs, ground truth, metrics, and a provided baseline.
+7. **A curated, tiered benchmark suite** headlining one **flagship** task — connectivity-aware cooperative perception under a *measured* channel (F1) — plus two signature tasks (uncertainty-aware cross-view tracking; geometry-fused connectivity mapping) and a compact enabling tier (calibration, anisotropic fusion, privacy-preserving radar, re-localization). Selection is deliberate: we headline only what no other public dataset can support (§8).
 8. **An anisotropic-covariance radar fusion baseline** with measured performance (fused 1σ ≈ [53, 69, 29] mm vs. ≈[112, 325] / [287, 112] mm single-radar), demonstrating that the released extrinsics and uncertainty model are usable end-to-end.
 
 ## 4. Background: the sensing stack
@@ -83,7 +83,7 @@ The dataset spans **fixed infrastructure** and **two mobile robots**, all tied i
 Three consequences drive the rest of the design:
 
 - **Radar1 and radar2 are ego (Robot-A-mounted) and fused on the robot; `radar_infra` is the fixed one.** The finalized extrinsics in Appendix B are the **ego** ZED↔radar1/radar2 transforms; `radar_infra`'s extrinsic into the world frame is the outstanding calibration item.
-- **Only Robot A carries radar and the Wi-Fi monitor.** So the ego radar-camera fusion (B3), radar-only privacy sensing (B4), and connectivity tasks (B5/B6) run from Robot A; Robot B contributes an RGBD viewpoint and a second moving target.
+- **Only Robot A carries radar and the Wi-Fi monitor.** So the ego radar-camera fusion (E2), radar-only privacy sensing (E3), and connectivity tasks (F1/S2) run from Robot A; Robot B contributes an RGBD viewpoint and a second moving target.
 - **Both robots' trajectories are certified, bounded, and independent** of the camera/radar perception being evaluated — Robot A via GLIM (loop-closure residual), Robot B via point-cloud registration / fiducials (§6.3). So the robots serve simultaneously as *sensing agents* and as *moving ground-truth targets* for the infrastructure and for each other.
 
 ### 4.1 Multi-view infrastructure camera network
@@ -142,7 +142,7 @@ The closest existing work in *fixed-sensor* spirit is roadside/ITS:
 - **A9-Dataset** (Creß et al., IEEE IV 2022) — gantry-mounted highway sensing that **does include radar** alongside cameras and LiDARs; and **TUMTraf Intersection** (Zimmer et al., ITSC 2023) — the urban camera+LiDAR intersection set (no radar).
 - **LUMPI** (Busch et al., IEEE IV 2022) — multi-perspective (up to 5 LiDARs + 3 cameras) intersection dataset.
 
-*Gap:* these establish the fixed-infrastructure and **vehicle-infrastructure cooperative** paradigm (DAIR-V2X) but are **outdoor traffic**; radar appears only in the A9 highway set, none are indoor, and none record a Wi-Fi/RF link-quality modality. Our hybrid topology — fixed infrastructure plus two mobile agents in one indoor frame — is the radar- and RF-inclusive **indoor** counterpart to that cooperative paradigm (cross-view fusion/handoff is task B8).
+*Gap:* these establish the fixed-infrastructure and **vehicle-infrastructure cooperative** paradigm (DAIR-V2X) but are **outdoor traffic**; radar appears only in the A9 highway set, none are indoor, and none record a Wi-Fi/RF link-quality modality. Our hybrid topology — fixed infrastructure plus two mobile agents in one indoor frame — is the radar- and RF-inclusive **indoor** counterpart to that cooperative paradigm (cross-view fusion/handoff appears in tasks F1/S1). The V2X benchmark suites and the bandwidth-aware collaborative-perception line are treated in detail in §5.6.
 
 ### 5.3 Radar-camera extrinsic calibration
 
@@ -182,6 +182,22 @@ Crucially, in both, **Wi-Fi is a *sensing signal*** — CSI subcarrier amplitude
 - **Contrast for privacy framing:** Wi-Fi CSI human-sensing datasets (Widar3.0, MobiSys 2019; SignFi, IMWUT 2018; UT-HAR; SenseFi benchmark, *Patterns* 2023) recognize activity from RF echoes; we instead offer **radar-based** privacy-preserving sensing and treat Wi-Fi purely as the communications link.
 
 *Gap (the central novelty claim, now precisely scoped):* **no public dataset pairs camera/radar *perception* with a co-located Wi-Fi/RF *link-quality* modality (RSSI/SNR + active throughput + latency/loss) time-joined to pose in one metric frame.** Datasets that combine radar+camera+Wi-Fi treat Wi-Fi as a sensing signal (MM-Fi, XRF55); the one dataset that treats RF as link quality alongside perception uses passive RSSI + LiDAR only (Milosheski 2026). This dataset fills that specific gap.
+
+### 5.6 The closest work: perception × communication
+
+This is where the dataset's central claim must survive contact with the literature. Two lines of work approach the perception–communication intersection from opposite sides, and **each misses on a different axis**:
+
+**(a) Real datasets that co-locate perception and RF — but treat the channel as the *sensing target*, not a measured link.**
+- **DeepSense 6G** (Alkhateeb et al., *IEEE Comms Mag.* 61(9), 2023; arXiv:2211.09769) — the single closest real dataset: co-located camera, LiDAR, **radar**, GPS, and mmWave (28/60 GHz) wireless, outdoor vehicular. But its "communication" signal is **mmWave beam / received power used as the prediction target** for sensing-aided communication (beam/blockage prediction) — the channel *is* the thing being predicted, not an independently measured link quality logged beside perception. Single Tx–Rx link; no throughput/latency/loss; no certified GT uncertainty.
+- **LuViRA** (Yaman et al., ICRA 2024; arXiv:2302.05309) — the closest **indoor** cousin: robot-mounted camera + depth + IMU + **5G massive-MIMO channel** + audio, with 0.5 mm 6-DOF pose GT. But the radio is **CSI/channel response for localization**, single-agent, radar-free, and carries no link-quality (throughput/latency/loss/RSSI-as-health) measurement.
+- **ISAC / RF-sensing sets** (mmHSense, DISC) sense *using* the comm waveform (CIR → activity/gait); no independent perception task, no link-quality co-registration.
+
+**(b) Cooperative-perception benchmarks that model the communication budget — but never measure a channel.**
+- **The V2X family** — OPV2V (R. Xu et al., ICRA 2022), V2X-Sim (Y. Li et al., RA-L 2022, RSU+vehicles — the closest simulated infrastructure↔agent analogue), V2V4Real (R. Xu et al., CVPR 2023), DAIR-V2X / V2X-Seq (Yu et al., CVPR 2022/2023), TUMTraf V2X (Zimmer et al., CVPR 2024) — define the cooperative-perception paradigm we bring indoors, but are **outdoor AD, LiDAR/camera, with communication idealized or simulated**.
+- **Bandwidth-aware collaborative perception** — Where2comm (Hu et al., NeurIPS 2022), When2com (Liu et al., CVPR 2020), Who2com (Liu et al., ICRA 2020), DiscoNet (Y. Li et al., NeurIPS 2021), CoSDH (Xu et al., CVPR 2025) — the **direct methodological competitors to our flagship task**. They report **accuracy vs. communication-volume** curves, deciding *what/when/whom* to communicate under a budget. But that budget is an **abstract byte count over an idealized channel**; none ties it to a measured throughput/latency/loss.
+- **Real-link edge perception** is essentially a tooling gap: PEERNet (Narayanan et al., IROS 2024) profiles end-to-end latency of networked robotics over real hardware, but it is instrumentation, not a released co-registered perception+GT dataset.
+
+**Where this dataset sits.** It is the first to make the communication budget a **measured, pose-tied variable** sitting next to independent perception: co-registering multi-view perception (fixed infrastructure + mobile radar/camera) with **end-to-end measured link quality** (iperf throughput, ping latency/loss, RSSI/SNR) in one indoor metric frame, with **certified per-sensor and dynamic GT uncertainty**. DeepSense 6G and LuViRA have the *real-RF-with-perception* half but sense with the channel; the Where2comm/DiscoNet line has the *perception-under-a-budget* half but simulates the channel. This dataset is what lets those methods be evaluated against a **real** channel rather than a bit-count proxy — the precise wedge, and the substrate for benchmark F1 below.
 
 ## 6. Ground Truth and Its Uncertainty Model
 
@@ -238,64 +254,54 @@ Because camera GT error originates in **pixel detection** and radar GT error in 
 
 ## 8. Benchmark Suite
 
-Each task lists **inputs → ground truth → metrics → provided baseline**. Tasks are designed so the uncertainty model in §6 is usable (e.g. metrics reported relative to the per-camera bound).
+**Selection principle.** We do not benchmark everything the data *can* support; we headline only what **no other public dataset can**. A task earns *flagship* status only if it requires the dataset's capabilities *simultaneously* — independent perception **and** a measured link **and** certified independent dynamic GT **and** cooperative infra+ego viewpoints. Tasks the automotive / V2X / radio-map communities already serve well are demoted to *enabling*: they establish and validate the ground truth, but they are not the reason this dataset exists. The result is one flagship, two signature tasks, and a compact enabling tier.
 
-### B1 — Radar↔Camera extrinsic calibration
-- **Inputs:** synchronized radar point clouds + camera frames of the ChArUco+reflector rig.
-- **GT:** finalized `T_cam_radar` for radar1/radar2 with per-DOF covariance; independent apex-offset invariant.
-- **Metrics:** rotation geodesic error, translation error, per-DOF within-1σ rate, apex-offset agreement; LOO-CV residual.
-- **Baseline:** the measurement-space MLE estimator; isotropic Kabsch as the lower bound.
+Each task lists **inputs → ground truth → metrics → baseline**, with metrics stated relative to the §6 uncertainty bounds.
 
-### B2 — Multi-view 3D agent localization & tracking
-- **Inputs:** synchronized multi-view infrastructure camera streams.
-- **GT:** world-frame camera poses (with per-camera bounds) for the sensor rig; **each robot's certified trajectory as moving-target position GT** (Robot A via GLIM, Robot B via point-cloud matching / fiducials — §6.3); radar group-tracker as an auxiliary cross-modal reference.
-- **Metrics:** 3D MOTA/MOTP, IDF1, localization error **reported against both the per-camera pose bound and the robot-trajectory bound** (so a method is not penalized below GT uncertainty).
-- **Baseline:** multi-view triangulation from 2D detections through the released extrinsics.
+---
 
-### B3 — Radar-camera fusion for detection & tracking
-- **Inputs:** radar1+radar2 detections + camera.
-- **GT:** fused-track reference (anisotropic Kalman, ≈[53,69,29] mm) and camera-derived tracks.
-- **Metrics:** track accuracy, jitter (frame-to-frame), covariance calibration (are predicted σ's honest?).
-- **Baseline:** the provided anisotropic-covariance constant-velocity fusion node.
+### Tier 1 — Flagship (unique to this dataset)
 
-### B4 — Privacy-preserving radar-only sensing vs. camera
-- **Inputs:** radar-only streams.
-- **GT:** camera-derived person tracks (as the higher-fidelity reference).
-- **Metrics:** detection/counting accuracy, localization error, degradation vs. camera; occlusion/low-light robustness.
-- **Baseline:** radar group-tracker + fusion; camera tracker as the reference ceiling.
+#### F1 — Connectivity-aware cooperative perception under a *measured* channel
+The one task that only this dataset enables. It is the Where2comm/DiscoNet problem — cooperative perception under a communication budget — with the **abstract byte budget replaced by the real, pose-tied, measured link** (throughput/latency/loss/RSSI at each location), and with certified GT to score against.
 
-### B5 — Wi-Fi / RF coverage mapping & prediction
-- **Inputs:** RSSI/SNR/throughput/latency/loss sampled by **Robot A** (the only platform with the Wi-Fi monitor), time-joined to its GLIM trajectory.
-- **GT:** dense measured coverage on held-out Robot-A survey passes.
-- **Metrics:** map RMSE / MAE on held-out locations, dead-zone detection F1, calibration of predictive variance.
-- **Baseline:** Gaussian-process / kriging interpolation of a radio map from pose-tagged samples.
-
-### B6 — Connectivity-aware perception *(flagship)*
-- **Inputs:** perception streams **plus** the co-registered link-quality field.
-- **GT:** perception GT (B2/B3) + measured throughput/latency/loss along the trajectory.
+- **Inputs:** cooperative perception streams — Robot A ego (ZED + radar1/radar2 fusion), Robot B RGBD, and infrastructure (cameras + `radar_infra`) — **plus** the co-registered Robot-A link-quality field over the space.
+- **GT:** the observed robot's certified trajectory as moving-target GT (Robot A: GLIM; Robot B: point-cloud/fiducial — §6.3), plus per-viewpoint extrinsic bounds; the **measured** throughput/latency/loss along the path.
 - **Tasks & metrics:**
-  - *Adaptive offloading:* choose on-device vs. offloaded inference per location; score end-to-end accuracy **under the real measured link budget** (accuracy achieved per byte / per ms of latency).
-  - *Graceful degradation:* accuracy retained as the link drops (measured, not simulated).
-  - *Coverage-aware sensor/relay placement:* place a sensor/relay to maximize joint perception+connectivity coverage; score against measured maps.
-- **Baseline:** a link-agnostic always-offload policy vs. a link-aware policy driven by the B5 coverage map — quantifying the value of knowing the radio.
+  - *Bandwidth-constrained cooperative fusion:* decide *what/when/whom* to share between ego and infrastructure **under the measured link**; report the **accuracy-vs-measured-cost curve** (3D AP / MOTA against deliverable bytes and ms of latency at each pose) — the real-channel analogue of the AP-vs-communication-volume curves in Where2comm/DiscoNet.
+  - *Adaptive offloading:* per-location on-device vs. offloaded inference, scored end-to-end **under the real link budget** (accuracy per byte / per ms).
+  - *Graceful degradation:* accuracy retained as the link drops — **measured, not simulated (`netem`)**.
+- **Baselines:** (i) a link-agnostic always-share/always-offload policy; (ii) a link-aware policy driven by the measured field; (iii) a bandwidth-aware method (e.g. a Where2comm-style selector) evaluated first on its assumed budget and then on the **measured** channel — quantifying the sim-to-real gap the dataset exposes.
+- **Why it's flagship:** the entire bandwidth-aware collaborative-perception line (§5.6) evaluates on idealized channels; DeepSense 6G / LuViRA have real RF but sense *with* it. F1 needs measured-link + cooperative perception + certified GT at once — no other dataset has all three.
 
-### B7 — Calibration robustness & drift re-estimation
-- **Inputs:** sequences with induced mount perturbation / long-trajectory cameras / re-visits.
-- **GT:** before/after extrinsics with bounds; loop-closure drift.
-- **Metrics:** re-estimation accuracy, drift-detection latency, degradation vs. trajectory length.
-- **Baseline:** re-run the calibration pipelines; report per-camera accuracy vs. path length.
+---
 
-### B8 — Ego ↔ infrastructure cooperative perception *(hybrid-topology task)*
-- **Inputs:** ego streams from Robot A (ZED + radar1/radar2 fusion), Robot B's RGBD view, **and** the infrastructure streams (cameras + `radar_infra`) observing the same scene, including each robot as a moving target.
-- **GT:** the observed robot's certified trajectory as moving-target GT (Robot A via GLIM, Robot B via point-cloud matching / fiducials — §6.3); each viewpoint's own extrinsic bounds.
-- **Tasks & metrics:** cross-view detection/tracking agreement; accuracy of **fused ego+infrastructure** tracks vs. either viewpoint alone; **handoff** continuity as a robot leaves one camera's field of view and enters another / passes behind occlusion (ID consistency, gap-bridging error).
-- **Baseline:** late-fusion of ego and infrastructure tracks in the world frame vs. single-viewpoint tracking, quantifying the cooperative gain.
+### Tier 2 — Signature (rare; showcases the certified-GT and cooperative capabilities)
 
-### B9 — Robot re-localization against infrastructure
-- **Inputs:** a robot's ego camera/radar observations of the instrumented space.
-- **GT:** the robot's GLIM world-frame trajectory (bounded); the calibrated infrastructure poses.
-- **Metrics:** absolute pose error vs. GLIM, re-localization recall/latency after occlusion or kidnapping, degradation vs. distance from the nearest calibrated camera.
-- **Baseline:** localize the robot by matching its ego view to the known infrastructure-camera poses / map; compare to onboard odometry-only.
+#### S1 — Uncertainty-aware cross-view 3D tracking with independent dynamic GT
+Highlights the **certified, independent, hand-label-free dynamic GT**: the robots are the moving targets, localized by a modality that fails differently from the trackers under test.
+- **Inputs:** multi-view infrastructure cameras + `radar_infra`, and each robot as a moving target (optionally the other robot's ego view).
+- **GT:** each robot's certified trajectory (§6.3); per-camera pose bounds.
+- **Metrics:** 3D MOTA/MOTP, IDF1, and localization error **reported relative to the GT bound** (no method penalized below GT uncertainty); **handoff** continuity across camera FoV boundaries / occlusion (ID consistency, gap-bridging error).
+- **Baseline:** multi-view triangulation through the released extrinsics; late-fused ego+infrastructure tracking vs. single-viewpoint, quantifying the cooperative gain.
+- **Why it's signature:** cooperative 3D tracking exists in the V2X family, but outdoor, with hand-labelled GT and simulated comms; here it is indoor, radar-inclusive, and scored against *independent, bounded* dynamic GT.
+
+#### S2 — Connectivity mapping fused with scene geometry
+Highlights that link quality is co-registered with **perceived structure**, not just pose — so blockage can be *explained*, not merely mapped.
+- **Inputs:** Robot-A RSSI/SNR/throughput/latency/loss time-joined to its GLIM trajectory, alongside the perceived scene (infrastructure + ego geometry/occupancy).
+- **GT:** dense measured coverage on held-out survey passes.
+- **Metrics:** coverage-map RMSE/MAE at held-out poses, dead-zone F1, **predictive-variance calibration**, and the lift from conditioning the radio map on scene geometry vs. pose alone (does seeing the metal shelf predict the dead zone?).
+- **Baseline:** GP/kriging radio map from pose only vs. a geometry-conditioned predictor.
+- **Why it's signature:** radio-map datasets give RSSI+pose; only here is the map co-registered with independent radar+camera scene perception, enabling geometry-aware connectivity prediction.
+
+---
+
+### Tier 3 — Enabling (foundational; establish and validate the GT — cited with real numbers, not headlined)
+
+- **E1 — Radar↔camera extrinsic calibration.** GT: finalized `T_cam_radar` (radar1/radar2) with per-DOF covariance + the apex-offset invariant. Metrics: rotation/translation error, within-1σ rate, LOO-CV. Baseline: measurement-space MLE vs. isotropic Kabsch (the dataset ships the ≈1.6×/≈3× margin as reference).
+- **E2 — Anisotropic radar-camera fusion.** GT: fused-track reference (≈[53,69,29] mm). Metrics: track accuracy, jitter, **covariance calibration** (are predicted σ's honest?). Baseline: the provided anisotropic constant-velocity fusion node.
+- **E3 — Privacy-preserving radar-first sensing.** Radar-only detection/counting/localization vs. camera-derived reference, under occlusion/low-light; quantifies the privacy-vs-fidelity trade the deployment setting cares about.
+- **E4 — Robot re-localization & calibration-drift.** Ego re-localization against the calibrated infrastructure (APE vs. GLIM, recall/latency after occlusion), and re-estimation accuracy vs. trajectory length / induced mount perturbation.
 
 ## 9. Limitations and Honest Scope
 
@@ -305,14 +311,14 @@ Each task lists **inputs → ground truth → metrics → provided baseline**. T
 - **Radar soft axes.** Each radar has a physically weak axis; single-radar localization on that axis is noisy by hardware design. The dataset documents which axis and relies on fusion to constrain it.
 - **Novelty is scoped to a literature check**, not a formal prior-art/patent search (§7). The "first to combine" claim in §3 must be re-verified before formal publication.
 - **Dynamic GT quality differs by robot.** Robot A's moving-target GT (§6.3) inherits GLIM drift (bounded by loop-closure residual); Robot B's depends on point-cloud registration quality (needs a good reference map + clean depth) or fiducial visibility. Both are reported per pose rather than hidden, and evaluation metrics are stated relative to the applicable bound.
-- **Cross-platform time sync.** With two robots plus fixed infrastructure on independent clocks, cooperative and cross-view tasks (B8/B9) depend on tight synchronization; clock domains and max sync-dt must be recorded per sequence (open question §11.5) or cross-view association degrades.
+- **Cross-platform time sync.** With two robots plus fixed infrastructure on independent clocks, the cooperative and cross-view tasks (F1/S1) depend on tight synchronization; clock domains and max sync-dt must be recorded per sequence (open question §11.5) or cross-view association degrades.
 - **Wi-Fi coverage is single-robot and site/hardware-specific.** Only Robot A samples the link, so the radio map reflects Robot A's radio and the session's AP placement/chipset (some chipsets report no noise floor → no true SNR); generalization across radios and sites is itself a research question, not an assumption.
 
 ## 10. Data Format, Splits, and Release (proposed)
 
 - **Container:** ROS 2 bags (native) — **per-robot** bags recorded on each robot's own disk (avoiding the measured Wi-Fi link) plus the infrastructure bag — with exported per-modality files (images + camera_info, radar point clouds with x/y/z/doppler/intensity, Wi-Fi/iperf/ping messages), each robot's **GT trajectory** (Robot A: GLIM; Robot B: point-cloud-registration / fiducial poses), and a transform tree linking fixed and mobile frames to the world frame.
 - **Ground-truth package:** extrinsic YAML/JSON per sensor + `*_session.json` reproducibility records + both robots' GT trajectories + a machine-readable **uncertainty manifest** (per-camera bound, per-radar covariance, Robot A loop-closure drift, Robot B registration/fiducial residuals, apex-offset agreement).
-- **Splits:** by session/site and by task; held-out survey passes reserved for B5/B6; a calibration-only split for B1/B7.
+- **Splits:** by session/site and by task; held-out survey passes reserved for F1/S2; a calibration-only split for E1/E4.
 - **Tooling:** the calibration pipelines (`radar_camera_calib*`, `general_charuco`) and the Wi-Fi monitor stack shipped so ground truth is auditable and reproducible.
 - **Licensing / ethics:** indoor human subjects imply consent and privacy handling; radar-only tracks are highlighted as the privacy-preserving alternative.
 
@@ -321,9 +327,9 @@ Each task lists **inputs → ground truth → metrics → provided baseline**. T
 1. Finalize radar_infra (round 2) or ship it flagged as provisional.
 2. ~~Confirm the §5 novelty gap with the related-work survey.~~ **Done** — survey completed; novelty reframed precisely as *perception + RF link-quality* (MM-Fi/XRF55 use Wi-Fi as a sensing signal; Milosheski 2026 is RSSI+LiDAR only). Remaining: directly inspect Milosheski et al. (2026) to confirm it carries no active throughput/latency.
 3. Decide camera resolution for the recording (raise above 960×540 if handshake range matters for the target tasks).
-4. Fix the site/AP topology for the Wi-Fi survey so B5/B6 have a well-defined radio environment.
-5. Define exact synchronization guarantees across the modalities **and across the two robots + fixed infrastructure** (clock domains, max sync dt) and record them per sequence — cooperative tasks B8/B9 depend on it.
-6. ~~Confirm platform composition.~~ **Resolved** — Robot A is fully instrumented (ZED + radar1 + radar2 + Wi-Fi + GLIM); Robot B is RGBD-only. Radar/Wi-Fi tasks (B3/B4/B5/B6) run from Robot A; Robot B is a secondary RGBD viewpoint + moving target.
+4. Fix the site/AP topology for the Wi-Fi survey so F1/S2 have a well-defined radio environment.
+5. Define exact synchronization guarantees across the modalities **and across the two robots + fixed infrastructure** (clock domains, max sync dt) and record them per sequence — flagship/signature tasks F1/S1 depend on it.
+6. ~~Confirm platform composition.~~ **Resolved** — Robot A is fully instrumented (ZED + radar1 + radar2 + Wi-Fi + GLIM); Robot B is RGBD-only. Radar/Wi-Fi tasks (E2/E3/F1/S2) run from Robot A; Robot B is a secondary RGBD viewpoint + moving target.
 7. **Fix Robot B's pose-GT method:** point-cloud registration against the LiDAR reference map, fiducial markers, or both (with one as a cross-check). Decide before recording so the reference map / marker layout is in place (§6.3).
 8. Decide whether to also mount a ChArUco/reflector target on **each** robot so the infrastructure's detection of them anchors to the same fiducial machinery as the static calibration.
 
@@ -355,5 +361,9 @@ Each task lists **inputs → ground truth → metrics → provided baseline**. T
 **Radar-camera calibration:** 4D-CAAL (Yao et al., arXiv:2601.21454, 2026); 3D-UPnP (Cao et al., arXiv:2507.19829, 2025); Domhof et al. (ICRA 2019; IEEE T-IV 6(3), 2021); Durmaz & Cevikalp (*Sensors* 2025, trajectory alignment); Liu et al. (*Sensors* 25(3):949, 2025, track-to-track); Cheng & Cao (NAECON 2023, arXiv:2309.00787); Fusion calib (Zhang et al., *Sci. Reports* 2025 — distinct from the PRL 2023 nickname collision); Doppler Correspondence (Kim et al., arXiv:2502.11461, 2025); surveys: Shi et al. (arXiv:2410.19872, 2024) and Han et al. (arXiv:2306.04242, 2023).
 
 **Wi-Fi/RF sensing & connectivity-aware robotics:** RADAR (Bahl & Padmanabhan, INFOCOM 2000); Horus (Youssef & Agrawala, MobiSys 2005); SpotFi (Kotaru et al., SIGCOMM 2015); CSI survey (Ma, Zhou & Wang, ACM CSUR 52(3), 2019); GP RSS field (Ferris, Hähnel & Fox, RSS 2006); robot RF mapping (Fink & Kumar, ICRA 2010); comm-aware planning (Yan & Mostofi, IEEE TAC/TWC 2013); review (Muralidharan & Mostofi, Annu. Rev. Control Robot. Auton. Syst. 4:115–139, 2021); RCAMP (IROS 2017); CSI-HAR datasets Widar3.0 (MobiSys 2019), SignFi (IMWUT 2018), UT-HAR, SenseFi (*Patterns* 2023).
+
+**Perception × communication (the intersection — §5.6):** DeepSense 6G (Alkhateeb et al., *IEEE Comms Mag.* 61(9), 2023, arXiv:2211.09769 — real camera/LiDAR/radar + mmWave, but channel-as-target); LuViRA (Yaman et al., ICRA 2024, arXiv:2302.05309 — indoor vision + 5G CSI + 0.5 mm GT, CSI-for-localization); mmHSense (arXiv:2509.21396), DISC (arXiv:2306.09469 — ISAC/RF human-sensing). Cooperative-perception benchmarks: OPV2V (R. Xu et al., ICRA 2022), V2X-Sim (Y. Li et al., RA-L 2022), V2V4Real (R. Xu et al., CVPR 2023), DAIR-V2X / V2X-Seq (Yu et al., CVPR 2022/2023), TUMTraf V2X (Zimmer et al., CVPR 2024). Bandwidth-aware collaborative perception: Where2comm (Hu et al., NeurIPS 2022), When2com (Liu et al., CVPR 2020), Who2com (Liu et al., ICRA 2020), DiscoNet (Y. Li et al., NeurIPS 2021), CoSDH (Xu et al., CVPR 2025). Real-link edge robotics: PEERNet (Narayanan et al., IROS 2024, arXiv:2409.06078).
+
+**Flagged in §5.6 set — confirm before camera-ready:** DeepSense 6G comm-data semantics (beam/received power vs. link metric) verified via secondary sources only (primary PDF proxy-blocked); confirm exact venue/volume for the Shi et al. fusion survey and TUMTraf V2X page numbers.
 
 **Flagged — confirm before camera-ready** (author lists / volume-issue behind blocked or paywalled hosts): Zendar (venue/authors, likely Mostajabi et al., CVPRW 2020); Fusion calib (Sci. Reports) author list; Trajectory-Alignment (*Sensors*) volume/article number; Shi et al. fusion survey IEEE journal name/volume; RCAMP / JCMP author lists; REM survey (2014) and RAS 2018 GP+path-loss author lists; recent offloading preprints (arXiv:2606.31497 authors); Widar3.0/SignFi author lists; Yan & Mostofi TAC exact vol/issue/pages. **Also directly inspect Milosheski et al. (2026)** to confirm no active throughput/latency and whether robot pose is released as an explicit stream.
