@@ -11,12 +11,14 @@
 We are recording an **indoor, multi-modal sensing dataset with a hybrid infrastructure-plus-mobile-agent topology**:
 
 - **Fixed infrastructure** — a **multi-view camera network** and a fixed infrastructure radar (`radar_infra`, TI IWR6843ISK) that watch a shared indoor space.
-- **Two operational mobile robots** that move through that space, each carrying an **ego perception + connectivity suite** (ZED stereo camera + two mmWave radars, radar1/radar2, fused + a **Wi-Fi/RF link-quality** monitor) and each running **GLIM** (LiDAR-inertial SLAM) for a globally-optimised trajectory.
+- **Two operational mobile robots** that move through that space:
+  - **Robot A (fully instrumented ego agent)** — ZED stereo camera + two mmWave radars (radar1/radar2, fused) + a **Wi-Fi/RF link-quality** monitor, with **GLIM** (LiDAR-inertial SLAM) providing its globally-optimised trajectory.
+  - **Robot B (lightweight secondary agent)** — an **RGBD camera only**; its ground-truth pose comes from **point-cloud registration** (RGBD depth against the LiDAR reference map) or **fiducial markers**, not GLIM.
 
 Everything is expressed in a **single metric world frame** and shipped with **independently-bounded, per-sensor ground-truth uncertainty**. Two features distinguish it:
 
-1. **Perception coupled to communication.** The mobile robots measure Wi-Fi link quality along their paths, co-registered to the same frame the perception lives in — so one can study how perception quality and wireless connectivity co-vary through space, and how a system should behave when the link it depends on degrades exactly where perception is hardest.
-2. **Certified, independent *dynamic* ground truth.** Because each robot's own trajectory is estimated by GLIM (LiDAR-inertial, with a stated loop-closure bound), the moving robots *are* the tracked targets whose true position is known — and known by a modality (LiDAR-inertial) that fails **differently** from the cameras and radars being evaluated. This makes the dataset a self-contained **ego ↔ infrastructure cooperative-perception** benchmark: an indoor, radar- and RF-inclusive analogue to vehicle-infrastructure datasets like DAIR-V2X.
+1. **Perception coupled to communication.** Robot A measures Wi-Fi link quality along its path, co-registered to the same frame the perception lives in — so one can study how perception quality and wireless connectivity co-vary through space, and how a system should behave when the link it depends on degrades exactly where perception is hardest.
+2. **Certified, independent *dynamic* ground truth.** The robots *are* the tracked targets, and their true positions are known by methods that fail **differently** from the cameras and radars being evaluated — Robot A by LiDAR-inertial GLIM, Robot B by point-cloud matching / fiducials. This makes the dataset a self-contained **ego ↔ infrastructure cooperative-perception** benchmark: an indoor, radar- and RF-inclusive analogue to vehicle-infrastructure datasets like DAIR-V2X.
 
 ---
 
@@ -32,7 +34,7 @@ Both worlds share three limits that this dataset is designed to escape:
 
 This dataset attacks all three. It is **indoor**; it carries **per-sensor, independently-bounded uncertainty as first-class metadata**; and it adds a **co-located, spatially-registered Wi-Fi/RF modality** so that perception and connectivity can be studied together for the first time in one frame.
 
-It also **does not stop at fixed infrastructure**. Two mobile robots operate inside the instrumented space, each with its own ego perception (radar + camera) and its own GLIM-certified trajectory. This gives the dataset a **cooperative, multi-viewpoint** character that a purely fixed rig cannot: the infrastructure sees the robots; each robot sees the space (and the other robot); and every viewpoint is expressed in one world frame. The robots' certified trajectories double as **dynamic ground truth** for the infrastructure's tracking of moving objects — the indoor, radar+RF counterpart to the vehicle-infrastructure cooperative paradigm (DAIR-V2X, §5.2), which no existing dataset provides indoors with radar and connectivity.
+It also **does not stop at fixed infrastructure**. Two mobile robots operate inside the instrumented space — Robot A with a full ego suite (radar + camera + Wi-Fi) and a GLIM-certified trajectory, and Robot B a lighter RGBD-only agent whose pose is recovered by point-cloud matching or fiducials. This gives the dataset a **cooperative, multi-viewpoint** character that a purely fixed rig cannot: the infrastructure sees both robots; Robot A senses the space (and Robot B); and every viewpoint is expressed in one world frame. Both robots' certified trajectories double as **dynamic ground truth** for the infrastructure's tracking of moving objects — the indoor, radar+RF counterpart to the vehicle-infrastructure cooperative paradigm (DAIR-V2X, §5.2), which no existing dataset provides indoors with radar and connectivity.
 
 ## 2. Motivation
 
@@ -56,9 +58,9 @@ Concretely, camera world-poses come from ChArUco handshakes (bounded, drift-free
 
 ## 3. Contributions
 
-1. **A single-frame, hybrid infrastructure + mobile-agent dataset.** Multi-view fixed cameras and a fixed radar, plus **two mobile robots** each carrying ego radar+camera perception and a Wi-Fi/RF monitor, all co-registered into one metric world frame with a published transform tree.
+1. **A single-frame, hybrid infrastructure + mobile-agent dataset.** Multi-view fixed cameras and a fixed radar, plus **two mobile robots** — Robot A with ego radar+camera perception and a Wi-Fi/RF monitor, Robot B a lighter RGBD-only agent — all co-registered into one metric world frame with a published transform tree.
 2. **The first perception dataset with a co-located, pose-registered RF *link-quality* modality**, enabling joint study of perception and communication. Indoor datasets that combine radar+camera+Wi-Fi (MM-Fi, XRF55) treat Wi-Fi as a *sensing signal* (CSI for activity recognition), and the one radio-mapping dataset that measures RF as link quality alongside perception (Milosheski et al. 2026) uses passive RSSI + LiDAR only. To our knowledge, no public dataset pairs camera/radar perception with a **communications link-quality** modality (RSSI/SNR + active throughput + latency/loss) in one metric frame (see §5.5).
-3. **Certified, independent *dynamic* ground truth from the mobile robots.** Each robot's GLIM (LiDAR-inertial) trajectory gives a bounded, loop-closure-checked estimate of where that robot actually was — a moving-target GT for the infrastructure's and the other robot's tracking that is produced by a **different modality** than the systems under test, so it fails differently and can expose their errors.
+3. **Certified, independent *dynamic* ground truth from the mobile robots.** Each robot's trajectory gives a bounded estimate of where it actually was — Robot A from GLIM (LiDAR-inertial, loop-closure-checked), Robot B from RGBD point-cloud registration / fiducials — a moving-target GT for the infrastructure's and Robot A's tracking that is produced by a **different modality** than the systems under test, so it fails differently and can expose their errors.
 4. **An indoor ego ↔ infrastructure cooperative-perception benchmark.** Fixed infrastructure and two moving agents observe the same scene from different viewpoints in one frame — the radar- and RF-inclusive indoor analogue of vehicle-infrastructure cooperative datasets (DAIR-V2X), enabling cross-view fusion, handoff, and cooperative tracking.
 5. **Uncertainty-as-metadata ground truth.** Every ground-truth pose carries an independent, per-sensor error bound with a stated derivation (ChArUco reprojection residual, GLIM loop-closure drift, radar per-DOF covariance), not a single blanket accuracy claim.
 6. **A reproducible, measurement-first calibration methodology** for both camera-network and radar-camera extrinsics, released with the data so the ground truth is auditable rather than asserted.
@@ -75,15 +77,14 @@ The dataset spans **fixed infrastructure** and **two mobile robots**, all tied i
 |---|---|---|---|
 | **Infrastructure camera network** (*N* cameras) | Fixed | RGB (optionally depth) | Multi-view overhead perception; world-frame extrinsics are the calibration target |
 | **`radar_infra`** (IWR6843ISK) | Fixed | 1 mmWave radar | Infrastructure-side radar perception *(calibration pending — §8)* |
-| **Robot A** | Mobile | ZED stereo + radar1 + radar2 (fused) + Wi-Fi/RF monitor + odometry; **GLIM** onboard | Ego perception + connectivity survey; GLIM trajectory = its pose GT |
-| **Robot B** | Mobile | ego suite as above; **GLIM** onboard | Second operational agent; GLIM trajectory = its pose GT |
+| **Robot A** (fully instrumented ego agent) | Mobile | ZED stereo + radar1 + radar2 (fused) + Wi-Fi/RF monitor + odometry; **GLIM** onboard | Ego perception + connectivity survey; GLIM trajectory = its pose GT |
+| **Robot B** (lightweight secondary agent) | Mobile | **RGBD camera only** | Second moving agent + secondary RGBD viewpoint; pose GT via point-cloud matching or fiducials |
 
-Two consequences drive the rest of the design:
+Three consequences drive the rest of the design:
 
-- **Radar1 and radar2 are ego (robot-mounted) and fused on the robot; `radar_infra` is the fixed one.** The finalized extrinsics in Appendix B are the **ego** ZED↔radar1/radar2 transforms; `radar_infra`'s extrinsic into the world frame is the outstanding calibration item.
-- **Each robot's GLIM trajectory is certified, bounded (loop-closure residual), and independent** of the camera/radar perception being evaluated. So the robots serve simultaneously as *sensing agents* and as *moving ground-truth targets* for the infrastructure and for each other.
-
-> *Assumption to confirm:* both robots carry the full ego suite (ZED + radar1 + radar2 + Wi-Fi). If only one robot is fully instrumented and the other is primarily a moving agent/target, the cross-agent tasks (B8) still hold but the "ego perception from both" framing narrows to one robot — tell me and I'll adjust.
+- **Radar1 and radar2 are ego (Robot-A-mounted) and fused on the robot; `radar_infra` is the fixed one.** The finalized extrinsics in Appendix B are the **ego** ZED↔radar1/radar2 transforms; `radar_infra`'s extrinsic into the world frame is the outstanding calibration item.
+- **Only Robot A carries radar and the Wi-Fi monitor.** So the ego radar-camera fusion (B3), radar-only privacy sensing (B4), and connectivity tasks (B5/B6) run from Robot A; Robot B contributes an RGBD viewpoint and a second moving target.
+- **Both robots' trajectories are certified, bounded, and independent** of the camera/radar perception being evaluated — Robot A via GLIM (loop-closure residual), Robot B via point-cloud registration / fiducials (§6.3). So the robots serve simultaneously as *sensing agents* and as *moving ground-truth targets* for the infrastructure and for each other.
 
 ### 4.1 Multi-view infrastructure camera network
 
@@ -210,12 +211,14 @@ A crucial honesty note carried from the calibration procedure: **large per-axis 
 
 ### 6.3 Mobile-robot trajectories as dynamic ground truth
 
-| GT product | Derivation | Reported uncertainty |
+| Robot | GT trajectory `T_world_robot(t)` | Reported uncertainty |
 |---|---|---|
-| Each robot's world-frame trajectory `T_world_robot(t)` | **GLIM** (LiDAR-inertial) final, globally-optimised, loop-closed trajectory | **Loop-closure residual** (drift bound), plus cross-pass RMSE / RPE as in §6.1 |
-| Moving-target position for tracking | The robot's own GLIM pose (a known, calibrated point on the robot) | Inherits the trajectory bound above |
+| **Robot A** | **GLIM** (LiDAR-inertial) final, globally-optimised, loop-closed trajectory | **Loop-closure residual** (drift bound), plus cross-pass RMSE / RPE as in §6.1 |
+| **Robot B** | **RGBD point-cloud registration** against the LiDAR reference map, and/or **fiducial-marker** detection (markers on the robot seen by the calibrated infrastructure cameras, or environment markers seen by the robot) | Registration residual / fiducial reprojection residual — bounded and reported per pose |
 
-This is the piece that makes dynamic evaluation possible without hand-labelling. When the infrastructure (or the other robot) tracks a moving agent, the agent's *true* position is the robot's own GLIM pose — a metric, timestamped, bounded reference. Crucially it is produced by a **LiDAR-inertial** estimator, so it is independent of the **camera/radar** trackers being scored: the two fail differently (§6.4). The robots can also be *fitted with a ChArUco/reflector target* so the infrastructure's detection of them is unambiguous, tying the dynamic GT back to the same fiducial machinery as the static calibration.
+This is the piece that makes dynamic evaluation possible without hand-labelling. When the infrastructure (or Robot A) tracks a moving agent, the agent's *true* position is that robot's own certified pose — a metric, timestamped, bounded reference. Crucially the GT is produced by a **different modality** than the tracker under test — LiDAR-inertial (Robot A) or depth-registration/fiducials (Robot B) versus the camera/radar systems being scored — so they fail differently (§6.4). Mounting a ChArUco/reflector target on each robot further ties the dynamic GT back to the same fiducial machinery as the static calibration and disambiguates the infrastructure's detection.
+
+*Note:* Robot B's GT method (point-cloud matching vs. fiducials, or both) is a design decision still to be fixed (§11.7); point-cloud registration is drift-free but needs a good reference map and depth quality, while fiducials are drift-free and simple but require marker visibility.
 
 ### 6.4 What "independent" buys the benchmark
 
@@ -245,7 +248,7 @@ Each task lists **inputs → ground truth → metrics → provided baseline**. T
 
 ### B2 — Multi-view 3D agent localization & tracking
 - **Inputs:** synchronized multi-view infrastructure camera streams.
-- **GT:** world-frame camera poses (with per-camera bounds) for the sensor rig; **each mobile robot's GLIM trajectory as the moving-target position GT** (§6.3); radar group-tracker as an auxiliary cross-modal reference.
+- **GT:** world-frame camera poses (with per-camera bounds) for the sensor rig; **each robot's certified trajectory as moving-target position GT** (Robot A via GLIM, Robot B via point-cloud matching / fiducials — §6.3); radar group-tracker as an auxiliary cross-modal reference.
 - **Metrics:** 3D MOTA/MOTP, IDF1, localization error **reported against both the per-camera pose bound and the robot-trajectory bound** (so a method is not penalized below GT uncertainty).
 - **Baseline:** multi-view triangulation from 2D detections through the released extrinsics.
 
@@ -262,8 +265,8 @@ Each task lists **inputs → ground truth → metrics → provided baseline**. T
 - **Baseline:** radar group-tracker + fusion; camera tracker as the reference ceiling.
 
 ### B5 — Wi-Fi / RF coverage mapping & prediction
-- **Inputs:** RSSI/SNR/throughput/latency/loss sampled by the **two mobile robots**, time-joined to their GLIM trajectories.
-- **GT:** dense measured coverage on held-out robot survey passes.
+- **Inputs:** RSSI/SNR/throughput/latency/loss sampled by **Robot A** (the only platform with the Wi-Fi monitor), time-joined to its GLIM trajectory.
+- **GT:** dense measured coverage on held-out Robot-A survey passes.
 - **Metrics:** map RMSE / MAE on held-out locations, dead-zone detection F1, calibration of predictive variance.
 - **Baseline:** Gaussian-process / kriging interpolation of a radio map from pose-tagged samples.
 
@@ -283,8 +286,8 @@ Each task lists **inputs → ground truth → metrics → provided baseline**. T
 - **Baseline:** re-run the calibration pipelines; report per-camera accuracy vs. path length.
 
 ### B8 — Ego ↔ infrastructure cooperative perception *(hybrid-topology task)*
-- **Inputs:** ego streams from a robot (ZED + radar1/radar2 fusion) **and** the infrastructure streams (cameras + `radar_infra`) observing the same scene, including the other robot.
-- **GT:** the observed robot's GLIM trajectory as moving-target GT (§6.3); each viewpoint's own extrinsic bounds.
+- **Inputs:** ego streams from Robot A (ZED + radar1/radar2 fusion), Robot B's RGBD view, **and** the infrastructure streams (cameras + `radar_infra`) observing the same scene, including each robot as a moving target.
+- **GT:** the observed robot's certified trajectory as moving-target GT (Robot A via GLIM, Robot B via point-cloud matching / fiducials — §6.3); each viewpoint's own extrinsic bounds.
 - **Tasks & metrics:** cross-view detection/tracking agreement; accuracy of **fused ego+infrastructure** tracks vs. either viewpoint alone; **handoff** continuity as a robot leaves one camera's field of view and enters another / passes behind occlusion (ID consistency, gap-bridging error).
 - **Baseline:** late-fusion of ego and infrastructure tracks in the world frame vs. single-viewpoint tracking, quantifying the cooperative gain.
 
@@ -301,14 +304,14 @@ Each task lists **inputs → ground truth → metrics → provided baseline**. T
 - **Non-uniform camera-pose accuracy.** Distant cameras inherit GLIM drift; this is a *feature of the honest GT*, not a defect, but users must weight per-camera bounds accordingly.
 - **Radar soft axes.** Each radar has a physically weak axis; single-radar localization on that axis is noisy by hardware design. The dataset documents which axis and relies on fusion to constrain it.
 - **Novelty is scoped to a literature check**, not a formal prior-art/patent search (§7). The "first to combine" claim in §3 must be re-verified before formal publication.
-- **Dynamic GT is only as good as onboard GLIM.** The moving-target ground truth (§6.3) inherits each robot's GLIM drift; on a long, revisit-poor path the bound widens. As with the static poses, this is reported (loop-closure residual) rather than hidden, and evaluation metrics are stated relative to it.
+- **Dynamic GT quality differs by robot.** Robot A's moving-target GT (§6.3) inherits GLIM drift (bounded by loop-closure residual); Robot B's depends on point-cloud registration quality (needs a good reference map + clean depth) or fiducial visibility. Both are reported per pose rather than hidden, and evaluation metrics are stated relative to the applicable bound.
 - **Cross-platform time sync.** With two robots plus fixed infrastructure on independent clocks, cooperative and cross-view tasks (B8/B9) depend on tight synchronization; clock domains and max sync-dt must be recorded per sequence (open question §11.5) or cross-view association degrades.
-- **Wi-Fi coverage is site- and hardware-specific.** Radio maps depend on the AP placement, chipset (some report no noise floor → no true SNR), and environment; generalization across sites is itself a research question, not an assumption. With two robots sampling, each measures its *own* link — the maps are per-robot-radio unless the hardware is identical.
+- **Wi-Fi coverage is single-robot and site/hardware-specific.** Only Robot A samples the link, so the radio map reflects Robot A's radio and the session's AP placement/chipset (some chipsets report no noise floor → no true SNR); generalization across radios and sites is itself a research question, not an assumption.
 
 ## 10. Data Format, Splits, and Release (proposed)
 
-- **Container:** ROS 2 bags (native) — **per-robot** bags recorded on each robot's own disk (avoiding the measured Wi-Fi link) plus the infrastructure bag — with exported per-modality files (images + camera_info, radar point clouds with x/y/z/doppler/intensity, Wi-Fi/iperf/ping messages), each robot's **GLIM trajectory**, and a transform tree linking fixed and mobile frames to the world frame.
-- **Ground-truth package:** extrinsic YAML/JSON per sensor + `*_session.json` reproducibility records + each robot's GLIM trajectory + a machine-readable **uncertainty manifest** (per-camera bound, per-radar covariance, loop-closure drift per robot, apex-offset agreement).
+- **Container:** ROS 2 bags (native) — **per-robot** bags recorded on each robot's own disk (avoiding the measured Wi-Fi link) plus the infrastructure bag — with exported per-modality files (images + camera_info, radar point clouds with x/y/z/doppler/intensity, Wi-Fi/iperf/ping messages), each robot's **GT trajectory** (Robot A: GLIM; Robot B: point-cloud-registration / fiducial poses), and a transform tree linking fixed and mobile frames to the world frame.
+- **Ground-truth package:** extrinsic YAML/JSON per sensor + `*_session.json` reproducibility records + both robots' GT trajectories + a machine-readable **uncertainty manifest** (per-camera bound, per-radar covariance, Robot A loop-closure drift, Robot B registration/fiducial residuals, apex-offset agreement).
 - **Splits:** by session/site and by task; held-out survey passes reserved for B5/B6; a calibration-only split for B1/B7.
 - **Tooling:** the calibration pipelines (`radar_camera_calib*`, `general_charuco`) and the Wi-Fi monitor stack shipped so ground truth is auditable and reproducible.
 - **Licensing / ethics:** indoor human subjects imply consent and privacy handling; radar-only tracks are highlighted as the privacy-preserving alternative.
@@ -320,8 +323,9 @@ Each task lists **inputs → ground truth → metrics → provided baseline**. T
 3. Decide camera resolution for the recording (raise above 960×540 if handshake range matters for the target tasks).
 4. Fix the site/AP topology for the Wi-Fi survey so B5/B6 have a well-defined radio environment.
 5. Define exact synchronization guarantees across the modalities **and across the two robots + fixed infrastructure** (clock domains, max sync dt) and record them per sequence — cooperative tasks B8/B9 depend on it.
-6. Confirm the platform composition: do **both** robots carry the full ego suite (ZED + radar1 + radar2 + Wi-Fi), or is one primarily a moving agent/target? (Affects how much of B3/B4/B6 runs from each robot.)
-7. Decide the moving-target GT convention: publish the robots' GLIM trajectories directly, and/or mount a ChArUco/reflector target on each robot so the infrastructure's detection anchors to the same fiducial machinery (§6.3).
+6. ~~Confirm platform composition.~~ **Resolved** — Robot A is fully instrumented (ZED + radar1 + radar2 + Wi-Fi + GLIM); Robot B is RGBD-only. Radar/Wi-Fi tasks (B3/B4/B5/B6) run from Robot A; Robot B is a secondary RGBD viewpoint + moving target.
+7. **Fix Robot B's pose-GT method:** point-cloud registration against the LiDAR reference map, fiducial markers, or both (with one as a cross-check). Decide before recording so the reference map / marker layout is in place (§6.3).
+8. Decide whether to also mount a ChArUco/reflector target on **each** robot so the infrastructure's detection of them anchors to the same fiducial machinery as the static calibration.
 
 ---
 
