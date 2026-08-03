@@ -37,7 +37,7 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 
 ## Phase 0 — Testbed setup
 
-### Step 0.1 — Environment setup  `🟨 IN PROGRESS`
+### Step 0.1 — Environment setup  `✅ DONE`
 - Create the project skeleton in this repo (this folder). ✅
 - On the run machine (per I1): conda env with Python 3.7–3.9, PyTorch matching the CUDA
   version, then clone and install [OpenCOOD](https://github.com/DerrickXuNu/OpenCOOD)
@@ -45,9 +45,10 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   CUDA NMS op (`python opencood/utils/setup.py build_ext --inplace`).
 - Record exact versions in `env/VERSIONS.md`.
 - **Done when:** `python -c "import opencood"` succeeds on the run machine and a GPU is visible to PyTorch — verified via `scripts/verify_phase0.py --stage env`.
-- **Result:** repo skeleton created; full run-machine instructions written in
-  `docs/PHASE0_SETUP.md` with gate automation in `scripts/verify_phase0.py` and record
-  templates in `env/`. Awaiting execution on the run machine (blocked on I1/I2).
+- **Result:** env gate passed 4/4 on `wicomsrobot` (2026-08-04): torch 1.13.1+cu117 with
+  CUDA available on RTX 3080, numpy 1.23.5, spconv 2.3.6, opencood importable from
+  `~/cpfa/OpenCOOD`. Box-overlaps extension built (Cython-only — no nvcc needed, so the
+  11.5-toolkit fallback was never required). Versions recorded in `env/VERSIONS.md`.
 
 ### Step 0.2 — Dataset download  `⬜ TODO`
 - Download OPV2V **test split** (per I3) from the official source; verify directory structure
@@ -165,3 +166,4 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 | 2026-08-03 | 0.1 | Branch + project skeleton created; tracker, README, CLAUDE.md committed. Awaiting inputs I1–I7. |
 | 2026-08-03 | 0.1–0.4 | Phase 0 implementation instructions authored: `docs/PHASE0_SETUP.md` (copy-paste setup guide, CUDA-version table, known failure modes), `scripts/verify_phase0.py` (automated gates for env/dataset/checkpoints), `env/VERSIONS.md` + `env/CHECKPOINTS.md` templates. Execution on run machine still pending I1/I2. |
 | 2026-08-03 | I1/I2 | Inputs answered: local machine `wicomsrobot`, RTX 3080 12GB, driver CUDA 13.0, system nvcc 11.5. Resolved to cu117 stack (torch 1.13.1+cu117, spconv-cu117); machine-specific command block added to `docs/PHASE0_SETUP.md` with conda cuda-toolkit 11.7 fallback for the NMS build. Step 0.1 execution now unblocked. |
+| 2026-08-04 | 0.1 ✅ | Env gate passed 4/4 on `wicomsrobot`: torch 1.13.1+cu117 (CUDA visible, RTX 3080), numpy 1.23.5, spconv 2.3.6, opencood import OK. Extension build succeeded (only a harmless NumPy deprecated-API warning). `env/VERSIONS.md` filled in; OpenCOOD commit hash still to record. Next: 0.2 dataset download. |
