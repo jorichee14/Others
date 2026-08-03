@@ -25,8 +25,8 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 
 | # | Decision | Options | Default if unanswered | Answer |
 |---|----------|---------|----------------------|--------|
-| I1 | Where do experiments run? | Local GPU machine / university cluster / cloud GPU | — (required; this repo's remote session has no GPU — code is written here, runs happen on your machine) | _pending_ |
-| I2 | GPU + VRAM available | e.g. RTX 3090 24GB, 4090, A100 | — (required; OpenCOOD inference needs CUDA, ~8GB+ VRAM) | _pending_ |
+| I1 | Where do experiments run? | Local GPU machine / university cluster / cloud GPU | — (required; this repo's remote session has no GPU — code is written here, runs happen on your machine) | **Local machine `wicomsrobot` (Ubuntu, GNOME desktop)** |
+| I2 | GPU + VRAM available | e.g. RTX 3090 24GB, 4090, A100 | — (required; OpenCOOD inference needs CUDA, ~8GB+ VRAM) | **RTX 3080 12GB; driver 580.173.02 (CUDA 13.0); system nvcc 11.5 → use cu117 stack** |
 | I3 | Disk space for dataset | OPV2V test split only (~30GB) vs full (~130GB) | Test split only — evaluation of pretrained models needs no training data | _pending_ |
 | I4 | Algorithm shortlist for Phase 1 | All OpenCOOD-supported vs a starter subset | Starter subset: No-Comm, Late Fusion, Early Fusion, AttFuse, F-Cooper, V2VNet, V2X-ViT, Where2comm, CoAlign | _pending_ |
 | I5 | Conflicting-evidence injection model | Gaussian feature noise / scene-swapped features / ghost activations / pose perturbation | Scene-swap + ghost activations (Gaussian noise kept only as a sanity check — too easy to dismiss) | _pending_ |
@@ -164,3 +164,4 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 |------|------|-------|
 | 2026-08-03 | 0.1 | Branch + project skeleton created; tracker, README, CLAUDE.md committed. Awaiting inputs I1–I7. |
 | 2026-08-03 | 0.1–0.4 | Phase 0 implementation instructions authored: `docs/PHASE0_SETUP.md` (copy-paste setup guide, CUDA-version table, known failure modes), `scripts/verify_phase0.py` (automated gates for env/dataset/checkpoints), `env/VERSIONS.md` + `env/CHECKPOINTS.md` templates. Execution on run machine still pending I1/I2. |
+| 2026-08-03 | I1/I2 | Inputs answered: local machine `wicomsrobot`, RTX 3080 12GB, driver CUDA 13.0, system nvcc 11.5. Resolved to cu117 stack (torch 1.13.1+cu117, spconv-cu117); machine-specific command block added to `docs/PHASE0_SETUP.md` with conda cuda-toolkit 11.7 fallback for the NMS build. Step 0.1 execution now unblocked. |

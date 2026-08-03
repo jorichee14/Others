@@ -145,3 +145,42 @@ GATE — all three:
 3. (Optional) `--show_vis` renders boxes on vehicles, not in the sky.
 
 Paste the AP output back into the session; 0.4 gets marked ✅ and Phase 0 is closed.
+
+---
+
+## Machine-specific commands: `wicomsrobot` (RTX 3080 12GB, driver CUDA 13.0, nvcc 11.5)
+
+Resolved from the table above: **cu117 stack**. Exact Step 0.1 sequence:
+
+```bash
+conda create -y -n opencood python=3.8
+conda activate opencood
+
+pip install torch==1.13.1+cu117 torchvision==0.14.1+cu117 \
+    --extra-index-url https://download.pytorch.org/whl/cu117
+pip install spconv-cu117
+
+mkdir -p ~/cpfa && cd ~/cpfa
+git clone https://github.com/DerrickXuNu/OpenCOOD.git
+cd OpenCOOD
+pip install -r requirements.txt
+python setup.py develop
+pip install "numpy<1.24"
+
+python opencood/utils/setup.py build_ext --inplace
+```
+
+Notes for this machine:
+- The system nvcc (11.5) vs torch runtime (11.7) is a *minor*-version mismatch: PyTorch's
+  extension builder warns on minor mismatches and only errors on major ones, and 11.5
+  fully supports the RTX 3080 (sm_86). If the build nevertheless refuses with a CUDA
+  version error, install a matching toolkit inside the env (no sudo needed) and retry:
+
+  ```bash
+  conda install -y -c "nvidia/label/cuda-11.7.1" cuda-toolkit
+  export CUDA_HOME=$CONDA_PREFIX
+  python opencood/utils/setup.py build_ext --inplace
+  ```
+
+- 12GB VRAM is ample for inference; the desktop session holds ~200MB, which is fine.
+- Gate: `python <repo>/collab_perception_failure_analysis/scripts/verify_phase0.py --stage env`
