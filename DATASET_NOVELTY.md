@@ -2,7 +2,9 @@
 
 *Research direction, motivation, contributions, related work, ground-truth model, and benchmark suite.*
 
-> **Status:** Draft research-direction document for a dataset currently being recorded. Related-work citations were web-verified during drafting (see §5 and Appendix C); a handful of author-list / volume-issue details behind paywalled or proxy-blocked hosts remain flagged in Appendix C and need a final check before external publication. Numeric ground-truth values quoted here are taken from the calibration session records referenced in the appendix and are subject to update as recording completes.
+> **Status — Version 2.** This revision unifies two threads into one work: (a) the multi-modal **perception + connectivity** dataset (v1), and (b) the **dual-link communication (DLC)** robustness benchmark it empirically grounds. The dataset's Wi-Fi suite — run on *two concurrently monitored radios* — measures the inter-link correlation ρ that the DLC thread turns from a synthetic knob into a deployment-grounded quantity (see §2.4, §5.7, §8-F2). Related-work citations for the perception thread were web-verified (§5, Appendix C); the DLC-thread citations are given as descriptive anchors with a `.bib` key-mapping in Appendix D and should be resolved before submission. Numeric perception-GT values are from the calibration session records; DLC numeric results (e.g. 21.9% → 17.5%) are quoted from the prior AgentComm-Bench benchmark.
+>
+> **Changelog v1 → v2:** added the inter-link-correlation axis ρ (§2.4); dual-radio Wi-Fi monitoring for ρ grounding (§4.3); robust-cooperative-communication & multipath related work (§5.7); the DLC contribution group (§3); the dual-link novelty claims (§7); a second flagship benchmark F2 and an enabling task E5 (§8); and the citation key-mapping (Appendix D).
 
 ---
 
@@ -19,6 +21,7 @@ Everything is expressed in a **single metric world frame** and shipped with **in
 
 1. **Perception coupled to communication.** Robot A measures Wi-Fi link quality along its path, co-registered to the same frame the perception lives in — so one can study how perception quality and wireless connectivity co-vary through space, and how a system should behave when the link it depends on degrades exactly where perception is hardest.
 2. **Certified, independent *dynamic* ground truth.** The robots *are* the tracked targets, and their true positions are known by methods that fail **differently** from the cameras and radars being evaluated — Robot A by LiDAR-inertial GLIM, Robot B by point-cloud matching / fiducials. This makes the dataset a self-contained **ego ↔ infrastructure cooperative-perception** benchmark: an indoor, radar- and RF-inclusive analogue to vehicle-infrastructure datasets like DAIR-V2X.
+3. **A measured inter-link correlation axis (ρ).** Because the Wi-Fi suite monitors **two radios at once**, the dataset yields per-link and joint loss, per-link Gilbert–Elliott fits, and the cross-link overlap of "Bad" states — the parameter **ρ** that governs whether redundant transmissions actually diversify or merely duplicate. This grounds the **Dual-Link Communication (DLC)** robustness thread (§2.4, §5.7, §8-F2) in real deployment conditions rather than a synthetic channel.
 
 ---
 
@@ -56,6 +59,14 @@ The calibration procedures underpinning this dataset were deliberately designed 
 
 Concretely, camera world-poses come from ChArUco handshakes (bounded, drift-free, mm-level) carried by a GLIM trajectory (drift-prone, growing with path length), and each camera's pose ships with a residual bound tied to the trajectory length that fed it. Radar-camera extrinsics come with **per-DOF covariance and observability**, and are cross-validated by an independent physical invariant (the shared rig apex offset). This turns "ground truth" from a number into a **distribution with a stated shape**, which is what makes uncertainty-aware benchmarking possible.
 
+### 2.4 From single-link redundancy to dual-link diversity: the correlation axis ρ
+
+The connectivity modality is not only about coverage maps — it is what grounds the dataset's **dual-link communication (DLC)** thread. Our prior benchmark, **AgentComm-Bench**, established that redundant message coding more than doubles navigation performance under 80% packet loss, but it also exposed the limit of that gain. Under a bursty **Gilbert–Elliott** channel the advantage of same-channel redundancy narrows (**21.9% → 17.5%** at 80% loss): the two copies traverse one radio at nearly the same instant, so inside a loss burst they share the channel's *Bad* state and are dropped together. The redundancy that promises an effective loss of **p²** delivers only **≈ p** precisely when it is needed most. A second symptom appears under a fixed bit budget: with one link, redundancy and message fidelity compete for the same capacity, forcing the payload to be halved and silently dropping every waypoint beyond the truncation point (clean navigation falls to **34.2%**).
+
+Both symptoms share one cause — the two copies are **correlated** because they ride the same channel. We formalize this with an **inter-link correlation parameter ρ ∈ [0, 1]**: the probability that when one link is in its dropping state, the other is too. Same-channel redundancy is the **ρ = 1** endpoint, where the second copy adds nothing during a burst; physically independent links (2.4 GHz vs 5 GHz, two access points, or Wi-Fi vs cellular) approach **ρ = 0**, where joint loss is the product **p₁p₂** and diversity is genuine. Redundancy and diversity are therefore **not competing methods but the two ends of one axis**, and the effective loss of any dual-transmission scheme is governed by where on that axis its links fall.
+
+This axis is exactly the lower-layer structure current benchmarks abstract away (and that CooperScene names as unfinished work, §5.7) — and it is **physically measurable**. Per-link received-signal traces reveal whether two radios fade together or independently (the empirical basis for ρ), while channel-occupancy and retry counters expose whether the links draw on separate resources or merely contend on a shared medium (which would manufacture correlation regardless of physics). Using standard on-robot Wi-Fi telemetry, **two concurrently monitored radios** yield the measured joint-loss fraction **p_joint**, per-link Gilbert–Elliott fits, and the cross-link overlap of *Bad* states — the very quantities that parameterize the benchmark channel — turning ρ from a synthetic knob into a value **grounded in deployment** and **mappable to position** along a robot's trajectory.
+
 ## 3. Contributions
 
 1. **A single-frame, hybrid infrastructure + mobile-agent dataset.** Multi-view fixed cameras and a fixed radar, plus **two mobile robots** — Robot A with ego radar+camera perception and a Wi-Fi/RF monitor, Robot B a lighter RGBD-only agent — all co-registered into one metric world frame with a published transform tree.
@@ -64,8 +75,16 @@ Concretely, camera world-poses come from ChArUco handshakes (bounded, drift-free
 4. **An indoor ego ↔ infrastructure cooperative-perception benchmark.** Fixed infrastructure and two moving agents observe the same scene from different viewpoints in one frame — the radar- and RF-inclusive indoor analogue of vehicle-infrastructure cooperative datasets (DAIR-V2X), enabling cross-view fusion, handoff, and cooperative tracking.
 5. **Uncertainty-as-metadata ground truth.** Every ground-truth pose carries an independent, per-sensor error bound with a stated derivation (ChArUco reprojection residual, GLIM loop-closure drift, radar per-DOF covariance), not a single blanket accuracy claim.
 6. **A reproducible, measurement-first calibration methodology** for both camera-network and radar-camera extrinsics, released with the data so the ground truth is auditable rather than asserted.
-7. **A curated, tiered benchmark suite** — a **foundational** tier (standard single/multi-view perception and *plain* collaborative perception, usable without the RF modality), one **flagship** (connectivity-aware cooperative perception under a *measured* channel, F1), two **signature** tasks (uncertainty-aware cross-view tracking; geometry-fused connectivity mapping), and a compact **enabling** tier (calibration, anisotropic fusion, privacy-preserving radar, re-localization). We headline only what no other public dataset can support, while still serving mainstream users (§8).
+7. **A curated, tiered benchmark suite** — a **foundational** tier (standard single/multi-view perception and *plain* collaborative perception, usable without the RF modality), **two flagship** tasks (F1 connectivity-aware cooperative perception under a *measured* channel; F2 dual-link diversity along measured ρ), two **signature** tasks (uncertainty-aware cross-view tracking; geometry-fused connectivity mapping), and a compact **enabling** tier (calibration, anisotropic fusion, privacy-preserving radar, re-localization, ρ estimation). We headline only what no other public dataset can support, while still serving mainstream users (§8).
 8. **An anisotropic-covariance radar fusion baseline** with measured performance (fused 1σ ≈ [53, 69, 29] mm vs. ≈[112, 325] / [287, 112] mm single-radar), demonstrating that the released extrinsics and uncertainty model are usable end-to-end.
+
+**Dual-Link Communication (DLC) thread — enabled by the dataset's per-link RF telemetry.** The following contributions extend our prior AgentComm-Bench benchmark and are grounded by the dataset above; DLC introduces *no* new communication mechanism (§7), only a new way to measure and parameterize link diversity.
+
+9. **A dual-link channel model with a correlation axis.** We extend the AgentComm-Bench corruption pipeline from one channel to two, parameterized by inter-link loss correlation **ρ**, which interpolates single-link redundancy (**ρ = 1**) and independent dual-link diversity (**ρ = 0**) and recovers *ResilientComm* as the ρ = 1 special case.
+10. **Dual-Link Communication (DLC).** A lightweight wrapper applying established multipath primitives — mirrored transmission, coded split-plus-parity, heterogeneous high-bandwidth/low-latency link assignment, and correlation-aware adaptive arbitration — layered on the existing staleness-aware fusion. The contribution is not the primitives but their **evaluation within a systematic task-level benchmark**.
+11. **The first task-level characterization of link diversity for cooperative embodied AI.** Across the AgentComm-Bench task families and the full impairment suite, we quantify when a second independent link improves *task* performance (waypoint completion, perception F1, search recall), using the benchmark's NPD, robustness-curve, AURC, and rank-stability protocol — including a **bandwidth-normalized** comparison that treats two links as two independent budgets, not an unfair 2×.
+12. **A three-way specificity finding.** Link diversity helps **delivery-limited** impairments on **communication-critical** tasks and provably does **not** aid **content corruption** (where the message arrives but is wrong). Vulnerability *and* the effectiveness of a defense are jointly specific to the **(task, impairment, mechanism)** triple.
+13. **Empirical grounding of ρ.** From two concurrently monitored on-robot radios we estimate per-link and joint loss, per-link Gilbert–Elliott parameters, and cross-link *Bad*-state overlap, producing **position-indexed maps of ρ** that connect the benchmark's synthetic channel to real deployment conditions — the cross-layer artifact current benchmarks identify as missing.
 
 ## 4. Background: the sensing stack
 
@@ -112,6 +131,8 @@ The Wi-Fi/RF suite runs **on the mobile robots**, measuring each robot's own lin
 - **Latency/loss monitor** (ping, 1 Hz, cheap enough to run during live operation): per-ping RTT and rolling-window loss.
 
 Every message is timestamped for **offline time-join to pose**, producing coverage / throughput / latency / dead-zone maps over the observed space.
+
+**Dual-radio mode (for ρ).** For the DLC thread (§2.4), the passive monitor is run on **two radios concurrently** (e.g. 2.4 GHz and 5 GHz, or two access points / a Wi-Fi + cellular pair). Concurrent per-link RSSI/loss traces, per-link Gilbert–Elliott fits, channel-occupancy and retry counters, and the cross-link overlap of *Bad* states give the measured **inter-link correlation ρ** and joint-loss fraction **p_joint** as functions of pose — the empirical parameterization the dual-link benchmark consumes.
 
 ## 5. Related Work
 
@@ -199,6 +220,20 @@ This is where the dataset's central claim must survive contact with the literatu
 
 **Where this dataset sits.** It is the first to make the communication budget a **measured, pose-tied variable** sitting next to independent perception: co-registering multi-view perception (fixed infrastructure + mobile radar/camera) with **end-to-end measured link quality** (iperf throughput, ping latency/loss, RSSI/SNR) in one indoor metric frame, with **certified per-sensor and dynamic GT uncertainty**. DeepSense 6G and LuViRA have the *real-RF-with-perception* half but sense with the channel; the Where2comm/DiscoNet line has the *perception-under-a-budget* half but simulates the channel. This dataset is what lets those methods be evaluated against a **real** channel rather than a bit-count proxy — the precise wedge, and the substrate for benchmark F1 below.
 
+### 5.7 Robust communication for cooperative agents — and the dual-link gap
+
+The DLC thread (§2.4) sits in a seam between two mature bodies of work.
+
+**Robust communication in cooperative MARL.** The dominant assumption in cooperative multi-agent learning is that communication is instantaneous, lossless, and unbounded — an assumption a recent survey identifies as rarely met in real deployments, where links suffer message perturbations, delays, and limited bandwidth [Robust-Comm-MARL-Survey]. A line of work relaxes individual pieces: Bayesian belief updates to tolerate dropped messages [Bayesian-Belief-MARL], scheduling and event-triggering under bandwidth limits [Event-Triggered-MARL], and topology adaptation such as **DCT-MARL**, which mitigates packet loss with a multi-key gated mechanism that adjusts the communication topology from the correlation between vehicles and their communication status [DCT-MARL]. These methods react to impairment on a **single logical channel** — they reschedule, gate, or re-weight one stream — rather than introducing redundant physical channels.
+
+**Robust cooperative perception under realistic channels.** In V2X perception, several methods target our goal — surviving a degraded link — but through **single-channel recovery**. **V2X-INCOP** recovers information missing during communication interruptions from historical information via a communication-adaptive spatio-temporal prediction model [V2X-INCOP]. **Coop-WD** applies weighting and denoising for robust V2V perception, noting that few works consider realistic wireless impairments such as fading and lossy communication [Coop-WD]. Latency-robust perception instead compensates temporally, using asynchronous feature fusion and flow prediction [Latency-Robust-CP]. The closest analogue to our redundancy argument is *spatial*: in dense traffic, packet-loss degradation is offset because several CAVs report the same object, keeping the probability that at least one message is received high [Dense-CAV-Redundancy]. None of these provisions a **second independent link**; redundancy, where it appears, comes from multiple senders, not multiple channels.
+
+**Communication-aware cooperative benchmarks.** Recent benchmarks move beyond idealized channels. **WHALES** targets communication-aware agent scheduling under dynamic constraints [WHALES], and **CooperScene** attaches real cellular-V2X measurements to the perception task, showing that resolving the bandwidth gap alone is insufficient — robustness to packet loss and latency matters equally [CooperScene]. CooperScene bills itself as bridging vision, robotics, and networking, yet concedes it does not yet capture lower-layer information such as wireless-resource scheduling or received signal strengths, and that integrating those metrics remains future work. Our own **AgentComm-Bench** is even further abstracted, synthesizing loss and delay from a single-channel Bernoulli / Gilbert–Elliott model [AgentComm-Bench]. **No cooperative-AI benchmark to date exposes inter-link structure or evaluates redundant independent links by their effect on task performance.**
+
+**Multipath and multi-connectivity at the transport layer.** The mechanism we build on — duplicating traffic across independent links — is mature in networking. Packet-duplication transmits redundant information via multiple spatial/temporal deliveries with duplication scheduling adapted to channel quality [Packet-Duplication], and the refinements we need already exist: correlation-aware path selection that minimizes the impact of overlapping links by combining RTT and loss into a path-state value [Corr-Path-Select], and adaptive FEC-plus-multipath that splits data and redundancy across paths from a capacity forecast [Adaptive-FEC-MP]. In vehicular settings, prior work improves vehicle-to-cloud reliability via multipath packet duplication with dynamic path-combination adjustment [V2C-Multipath], and 3GPP Release 16 already defines multi-connectivity and resource-allocation mechanisms realized in dual-mode DSRC/C-V2X hardware [3GPP-Rel16]. Critically, **this literature evaluates redundancy by network QoS — delivery ratio, throughput, latency — never by its effect on a downstream cooperative-embodied-AI task.**
+
+*Our position.* Link diversity is well understood at the **transport layer**; channel-robust cooperation is well studied at the **task layer**; the two are evaluated separately. This dataset + the DLC benchmark close that seam by measuring link diversity (via ρ) by its effect on the task.
+
 ## 6. Ground Truth and Its Uncertainty Model
 
 Ground truth is released **with its error model**, per modality.
@@ -252,9 +287,18 @@ Because camera GT error originates in **pixel detection** and radar GT error in 
 
 **Honest novelty stance (carried in spirit from the calibration doc).** Individually, the building blocks have precedent. This dataset does **not** claim a new calibration paradigm, and it is **not** the first to put radar + camera + Wi-Fi in one indoor rig — MM-Fi and XRF55 already do, using Wi-Fi CSI as a *sensing* signal (§5.5). What is defensibly new is (a) the **specific modality union** — camera + radar perception + a Wi-Fi/RF *link-quality* (communications-performance) modality in one indoor infrastructure frame — which the survey in §5.5 finds unoccupied; (b) the **uncertainty-as-metadata** ground-truth discipline applied across all modalities; and (c) the **specific calibration engineering combination** in §5.3. Any stronger claim (e.g. "first ever") is scoped to the literature check performed (via web search, not a formal prior-art/patent search) and should be re-verified before a paper or patent — in particular, directly inspecting Milosheski et al. (2026) to confirm it carries no active throughput/latency.
 
+**Novelty of the dual-link (DLC) thread.** We are explicit that DLC introduces **no new communication mechanism** — duplicating traffic across independent, correlation-aware, adaptively scheduled links is standard in the multipath / multi-connectivity literature (§5.7); presenting it as a protocol would be reinvention. The novelty is in four claims the prior work does not make:
+
+- **Task-level measurement of link diversity.** Multipath redundancy has been evaluated almost exclusively by network QoS. We are the first to measure link diversity by its effect on **cooperative-embodied-AI task performance** (waypoint completion, perception F1, search recall) inside a controlled impairment benchmark — the cross-layer measurement CooperScene names as a priority but does not provide.
+- **Inter-link correlation as a robustness axis.** No cooperative-AI benchmark parameterizes **ρ** to interpolate continuously between single-link redundancy and dual-link diversity. Doing so converts a binary design choice into a **robustness curve** and recovers *ResilientComm* as the ρ = 1 special case — a stronger position than a head-to-head win, since our method *contains* the prior one.
+- **A diagnosed-and-repaired failure.** We give a mechanistic account of AgentComm-Bench's bursty-channel collapse (copies share channel state, so effective ρ ≈ 1 during bursts) and a corresponding fix (physically independent links drive ρ → 0), then **predict and test** the recovery rather than merely reporting it.
+- **A three-way specificity result.** Because link diversity is a *delivery* mechanism, it helps only delivery-limited impairments on communication-critical tasks and **provably does not** help content corruption (message arrives but is wrong). Vulnerability *and* defense are jointly specific to the **(task, impairment, mechanism)** triple.
+
+Finally, ρ and its independence assumption are **not merely simulated**: they are grounded in per-link Wi-Fi telemetry (§2.4, §4.3), the empirical bridge that separates this study from a purely in-silico sweep.
+
 ## 8. Benchmark Suite
 
-**Selection principle.** We do not headline everything the data *can* support; the *flagship* is reserved for what **no other public dataset can** — a task that needs the dataset's capabilities *simultaneously* (independent perception **and** a measured link **and** certified independent dynamic GT **and** cooperative infra+ego viewpoints). But a dataset also has to serve the mainstream: the standard perception and *plain* collaborative-perception tasks that any user runs, with or without the RF modality. So the suite has four tiers: a **foundational** tier (the standard tasks, no RF required — including ordinary collaborative perception), one **flagship**, two **signature** tasks, and a compact **enabling** tier that establishes and validates the ground truth.
+**Selection principle.** We do not headline everything the data *can* support; the *flagship* tier is reserved for what **no other public dataset can** — tasks that need the dataset's capabilities *simultaneously* (independent perception **and** a measured link **and** certified independent dynamic GT **and** cooperative infra+ego viewpoints). But a dataset also has to serve the mainstream: the standard perception and *plain* collaborative-perception tasks that any user runs, with or without the RF modality. So the suite has four tiers: a **foundational** tier (the standard tasks, no RF required — including ordinary collaborative perception), **two flagship** tasks (F1 connectivity-aware cooperative perception; F2 dual-link diversity — the DLC thread), two **signature** tasks, and a compact **enabling** tier that establishes and validates the ground truth.
 
 Each task lists **inputs → ground truth → metrics → baseline**, with metrics stated relative to the §6 uncertainty bounds.
 
@@ -295,6 +339,14 @@ The one task that only this dataset enables. It takes the foundational collabora
 - **Baselines:** (i) a link-agnostic always-share/always-offload policy; (ii) a link-aware policy driven by the measured field; (iii) a bandwidth-aware method (e.g. a Where2comm-style selector) evaluated first on its assumed budget and then on the **measured** channel — quantifying the sim-to-real gap the dataset exposes.
 - **Why it's flagship:** the entire bandwidth-aware collaborative-perception line (§5.6) evaluates on idealized channels; DeepSense 6G / LuViRA have real RF but sense *with* it. F1 needs measured-link + cooperative perception + certified GT at once — no other dataset has all three.
 
+#### F2 — Dual-link diversity: task-level characterization along ρ *(DLC thread)*
+Measures **link diversity by its effect on the task**, sweeping the inter-link correlation ρ from single-link redundancy (ρ = 1) to independent dual-link diversity (ρ = 0).
+- **Inputs:** the dual-radio Wi-Fi telemetry (§4.3) giving measured ρ / p_joint along pose; the cooperative-agent tasks and impairment suite from AgentComm-Bench (navigation, perception, search), run over the DLC dual-link channel model.
+- **GT:** task-level ground truth (waypoint completion, perception F1, search recall) plus the **measured ρ maps** as the channel parameterization.
+- **Tasks & metrics:** robustness curves and **AURC** vs. ρ; NPD and rank-stability; a **bandwidth-normalized** comparison (two links = two independent budgets, not an unfair 2×); the **three-way specificity** check (diversity helps delivery-limited impairments, not content corruption).
+- **Baselines:** single-link *ResilientComm* (recovered exactly at ρ = 1); DLC variants — mirrored, coded split+parity, heterogeneous, correlation-aware arbitration.
+- **Why it's flagship:** no cooperative-AI benchmark exposes inter-link structure or evaluates redundant *independent* links by task performance; F2 is the first, and it is grounded in *measured* ρ rather than a synthetic knob (§2.4, §5.7).
+
 ---
 
 ### Tier 2 — Signature (rare; showcases the certified-GT and cooperative capabilities)
@@ -323,6 +375,7 @@ Highlights that link quality is co-registered with **perceived structure**, not 
 - **E2 — Anisotropic radar-camera fusion.** GT: fused-track reference (≈[53,69,29] mm). Metrics: track accuracy, jitter, **covariance calibration** (are predicted σ's honest?). Baseline: the provided anisotropic constant-velocity fusion node.
 - **E3 — Privacy-preserving radar-first sensing.** Radar-only detection/counting/localization vs. camera-derived reference, under occlusion/low-light; quantifies the privacy-vs-fidelity trade the deployment setting cares about.
 - **E4 — Robot re-localization & calibration-drift.** Ego re-localization against the calibrated infrastructure (APE vs. GLIM, recall/latency after occlusion), and re-estimation accuracy vs. trajectory length / induced mount perturbation.
+- **E5 — Per-link channel characterization & ρ estimation.** From the dual-radio telemetry, fit per-link Gilbert–Elliott parameters, joint-loss p_joint, and cross-link *Bad*-state overlap; produce **position-indexed ρ maps**. Metrics: fit quality, ρ stability across passes, correlation of ρ with scene geometry (does the metal shelf that kills coverage also *correlate* the two radios?). This is the artifact that parameterizes F2 and connects the benchmark channel to real deployment.
 
 ## 9. Limitations and Honest Scope
 
@@ -339,7 +392,7 @@ Highlights that link quality is co-registered with **perceived structure**, not 
 
 - **Container:** ROS 2 bags (native) — **per-robot** bags recorded on each robot's own disk (avoiding the measured Wi-Fi link) plus the infrastructure bag — with exported per-modality files (images + camera_info, radar point clouds with x/y/z/doppler/intensity, Wi-Fi/iperf/ping messages), each robot's **GT trajectory** (Robot A: GLIM; Robot B: point-cloud-registration / fiducial poses), and a transform tree linking fixed and mobile frames to the world frame.
 - **Ground-truth package:** extrinsic YAML/JSON per sensor + `*_session.json` reproducibility records + both robots' GT trajectories + a machine-readable **uncertainty manifest** (per-camera bound, per-radar covariance, Robot A loop-closure drift, Robot B registration/fiducial residuals, apex-offset agreement).
-- **Splits:** by session/site and by task; a standard train/val/test split for the foundational tier (P1/P2); held-out survey passes reserved for F1/S2; a calibration-only split for E1/E4.
+- **Splits:** by session/site and by task; a standard train/val/test split for the foundational tier (P1/P2); held-out survey passes reserved for F1/S2; a calibration-only split for E1/E4; dual-radio survey passes with measured ρ maps reserved for F2/E5.
 - **Tooling:** the calibration pipelines (`radar_camera_calib*`, `general_charuco`) and the Wi-Fi monitor stack shipped so ground truth is auditable and reproducible.
 - **Licensing / ethics:** indoor human subjects imply consent and privacy handling; radar-only tracks are highlighted as the privacy-preserving alternative.
 
@@ -388,3 +441,29 @@ Highlights that link quality is co-registered with **perceived structure**, not 
 **Flagged in §5.6 set — confirm before camera-ready:** DeepSense 6G comm-data semantics (beam/received power vs. link metric) verified via secondary sources only (primary PDF proxy-blocked); confirm exact venue/volume for the Shi et al. fusion survey and TUMTraf V2X page numbers.
 
 **Flagged — confirm before camera-ready** (author lists / volume-issue behind blocked or paywalled hosts): Zendar (venue/authors, likely Mostajabi et al., CVPRW 2020); Fusion calib (Sci. Reports) author list; Trajectory-Alignment (*Sensors*) volume/article number; Shi et al. fusion survey IEEE journal name/volume; RCAMP / JCMP author lists; REM survey (2014) and RAS 2018 GP+path-loss author lists; recent offloading preprints (arXiv:2606.31497 authors); Widar3.0/SignFi author lists; Yan & Mostofi TAC exact vol/issue/pages. **Also directly inspect Milosheski et al. (2026)** to confirm no active throughput/latency and whether robot pose is released as an explicit stream.
+
+### Appendix D — Citation key mapping for the DLC thread (§2.4, §5.7, §7, §8-F2)
+
+The dual-link thread cites by **descriptive anchor**; resolve each to a `.bib` key before submission. Anchors marked *(ours)* are prior work by the authors.
+
+| Anchor (used in text) | Suggested `\cite{}` key | What it is | Source hint |
+|---|---|---|---|
+| Robust-Comm-MARL-Survey | `robustcomm_marl_survey` | Survey: robust communication in cooperative MARL (perturbation/delay/bandwidth) | arXiv:2601.17069 |
+| Bayesian-Belief-MARL | `bayesian_belief_marl` | Bayesian belief updates tolerant to dropped messages | arXiv:2111.11868 |
+| Event-Triggered-MARL | `event_triggered_marl` | Scheduling / event-triggered comms under bandwidth limits | *to fill* |
+| DCT-MARL | `dct_marl` | Multi-key gated topology adaptation vs. packet loss | *to fill* |
+| V2X-INCOP | `v2x_incop` | Interruption-aware cooperative perception (spatio-temporal recovery) | ResearchGate pub. 378674117 |
+| Coop-WD | `coop_wd` | Weighting + denoising for robust V2V perception | arXiv:2505.03528 |
+| Latency-Robust-CP | `latency_robust_cp` | Latency-robust perception via async fusion + flow prediction | *to fill* |
+| Dense-CAV-Redundancy | `dense_cav_redundancy` | Multi-sender spatial redundancy in dense traffic | *to fill* |
+| WHALES | `whales` | Communication-aware agent-scheduling benchmark | *to fill* |
+| CooperScene | `cooperscene` | Cooperative perception + real C-V2X measurements benchmark | *to fill* |
+| AgentComm-Bench *(ours)* | `agentcomm_bench` | Single-channel Bernoulli / Gilbert–Elliott cooperative-AI benchmark | *ours* |
+| Packet-Duplication | `packet_duplication` | Redundant multipath packet duplication (quality-adapted scheduling) | ResearchGate pub. 336434800 |
+| Corr-Path-Select | `corr_path_select` | Correlation-aware path selection (RTT+loss path-state) | *to fill* |
+| Adaptive-FEC-MP | `adaptive_fec_mp` | Adaptive FEC + multipath with capacity forecast | *to fill* |
+| V2C-Multipath | `v2c_multipath` | Vehicle-to-cloud multipath duplication, dynamic path combos | *to fill* |
+| 3GPP-Rel16 | `tgpp_rel16_multiconn` | 3GPP Rel-16 multi-connectivity / DSRC+C-V2X dual-mode | 3GPP TS (Rel-16) |
+| ResilientComm *(ours)* | `resilientcomm` | Single-link redundant coding (= DLC at ρ = 1) | *ours* |
+
+*Note:* several URLs supplied with the source prose were aggregator/landing pages; verify each resolves to the intended primary reference (and fill the *to fill* rows) before building the bibliography.
