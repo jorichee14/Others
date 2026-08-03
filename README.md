@@ -27,6 +27,9 @@ wlx8876b9eae0ff  IEEE 802.11  ESSID:"BML"
 Tested against ROS 2 (Humble / Iron / Jazzy). Python‑only node, no compiled
 dependencies beyond the message package.
 
+See [`docs/architecture.md`](wifi_monitor_ws/src/wifi_monitor/docs/architecture.md)
+for a block diagram of the three nodes, their data sources, topics and consumers.
+
 ## Data sources
 
 The node merges several sources so it degrades gracefully when a driver is
