@@ -10,6 +10,6 @@
 | torch / torchvision | 1.13.1+cu117 / 0.14.1+cu117 |
 | spconv package | spconv-cu117 2.3.6 |
 | numpy | 1.23.5 |
-| OpenCOOD commit (`git rev-parse HEAD` in the clone) | _pending — run `git -C ~/cpfa/OpenCOOD rev-parse HEAD`_ |
+| OpenCOOD commit (`git rev-parse HEAD` in the clone) | `31ba16025da27ffe4e336f011290dfbc66f9a1f1` |
 | Dataset root path | `~/cpfa/data/OPV2V` (planned; confirm at Step 0.2) |
 | Checkpoint root path | `~/cpfa/checkpoints` (planned; confirm at Step 0.3) |
