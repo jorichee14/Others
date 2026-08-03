@@ -44,8 +44,10 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   (`python setup.py develop`), including `spconv` (version must match CUDA) and the
   CUDA NMS op (`python opencood/utils/setup.py build_ext --inplace`).
 - Record exact versions in `env/VERSIONS.md`.
-- **Done when:** `python -c "import opencood"` succeeds on the run machine and a GPU is visible to PyTorch.
-- **Result:** repo skeleton created; run-machine install pending I1/I2.
+- **Done when:** `python -c "import opencood"` succeeds on the run machine and a GPU is visible to PyTorch — verified via `scripts/verify_phase0.py --stage env`.
+- **Result:** repo skeleton created; full run-machine instructions written in
+  `docs/PHASE0_SETUP.md` with gate automation in `scripts/verify_phase0.py` and record
+  templates in `env/`. Awaiting execution on the run machine (blocked on I1/I2).
 
 ### Step 0.2 — Dataset download  `⬜ TODO`
 - Download OPV2V **test split** (per I3) from the official source; verify directory structure
@@ -161,3 +163,4 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 | Date | Step | Notes |
 |------|------|-------|
 | 2026-08-03 | 0.1 | Branch + project skeleton created; tracker, README, CLAUDE.md committed. Awaiting inputs I1–I7. |
+| 2026-08-03 | 0.1–0.4 | Phase 0 implementation instructions authored: `docs/PHASE0_SETUP.md` (copy-paste setup guide, CUDA-version table, known failure modes), `scripts/verify_phase0.py` (automated gates for env/dataset/checkpoints), `env/VERSIONS.md` + `env/CHECKPOINTS.md` templates. Execution on run machine still pending I1/I2. |
