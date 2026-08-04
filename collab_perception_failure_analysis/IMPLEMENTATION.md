@@ -72,11 +72,16 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   No-Comm floor will be derived from the late-fusion checkpoint (no single-vehicle
   checkpoint exists in the zoo).
 
-### Step 0.4 — Smoke test  `⬜ TODO`
-- Run OpenCOOD `inference.py` with AttFuse on ~20 test frames; confirm detections render
-  and AP computation runs.
+### Step 0.4 — Smoke test  `✅ DONE`
+- Run OpenCOOD `inference.py` with AttFuse on the test split; confirm AP computation runs
+  and matches published numbers.
 - **Done when:** one end-to-end inference completes and AP numbers are printed.
-- **Result:** _pending_
+- **Result:** passed (2026-08-04). AttFuse on full 2,170-frame test split:
+  **AP@0.3/0.5/0.7 = 0.91 / 0.91 / 0.82** vs published 0.90/0.815 — matches. Runtime
+  3m16s (~11 it/s) on the RTX 3080, which bodes very well for the Phase 3 sweep budget.
+  Required fix along the way: a stray plain `cumm 0.5.3` package was shadowing
+  `cumm-cu117` and breaking `spconv.core_cc` — removed, pinned `cumm-cu117==0.4.11`
+  (see `env/VERSIONS.md`). **Phase 0 complete.**
 
 ## Phase 1 — Perfect-channel baseline
 
@@ -180,3 +185,4 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 | 2026-08-04 | 0.1 | OpenCOOD commit pinned: `31ba16025da27ffe4e336f011290dfbc66f9a1f1`. |
 | 2026-08-04 | 0.2 ✅ | Dataset gate passed: 16 scenarios, 5,985 frame-CAV pairs at `~/cpfa/data/OPV2V/test`. Drive chunk zips → `cat`-joined `test.zip.part*` → verified → extracted. Next: 0.3 checkpoints. |
 | 2026-08-04 | 0.3 ✅ | Checkpoints gate passed 10/10 after flattening double-nested zips and fixing the gate script (OpenCOOD configs embed numpy YAML tags; now greps `validate_dir` instead of safe_load). Manifest filled with md5s. Caveat logged: 4 checkpoints ship `latest.pth` and need a `net_epoch1.pth` copy for OpenCOOD's loader. Next: 0.4 smoke test. |
+| 2026-08-04 | 0.4 ✅ | **Phase 0 complete.** Smoke test hit a spconv failure first: stray plain `cumm 0.5.3` shadowed `cumm-cu117`, breaking `spconv.core_cc`. Fixed by uninstalling both and pinning `cumm-cu117==0.4.11`. Env gate hardened (imports compiled core, detects dual cumm installs). AttFuse full-split inference: AP@0.3/0.5/0.7 = 0.91/0.91/0.82 (published: 0.90/0.815), 3m16s for 2,170 frames. Next: Phase 1 baselines. |

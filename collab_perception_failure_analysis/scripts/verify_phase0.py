@@ -43,8 +43,22 @@ def stage_env():
         return "numpy %s" % numpy.__version__
 
     def spconv_check():
+        # Import the compiled core, not just the top-level package — a cumm/spconv binary
+        # mismatch only surfaces when spconv.core_cc loads.
+        from spconv.utils import Point2VoxelCPU3d  # noqa: F401
         import spconv
-        return "spconv %s" % getattr(spconv, "__version__", "unknown")
+        return "spconv %s (compiled core OK)" % getattr(spconv, "__version__", "unknown")
+
+    def cumm_check():
+        from importlib import metadata
+        names = sorted({(d.metadata["Name"] or "") for d in metadata.distributions()})
+        cumms = [n for n in names if n.lower().startswith("cumm")]
+        if len(cumms) > 1:
+            raise RuntimeError(
+                "conflicting cumm packages installed (%s) — they overwrite each other's "
+                "files and break spconv; keep only the CUDA-specific one (cumm-cuXXX)"
+                % ", ".join(cumms))
+        return ", ".join(cumms) if cumms else "no cumm dist found"
 
     def opencood_check():
         import opencood
@@ -52,7 +66,8 @@ def stage_env():
 
     check("torch + CUDA", torch_check)
     check("numpy < 1.24", numpy_check)
-    check("spconv import", spconv_check)
+    check("spconv compiled core", spconv_check)
+    check("single cumm package", cumm_check)
     check("opencood import", opencood_check)
 
 
