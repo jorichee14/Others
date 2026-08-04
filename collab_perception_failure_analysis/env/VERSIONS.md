@@ -11,5 +11,5 @@
 | spconv package | spconv-cu117 2.3.6 |
 | numpy | 1.23.5 |
 | OpenCOOD commit (`git rev-parse HEAD` in the clone) | `31ba16025da27ffe4e336f011290dfbc66f9a1f1` |
-| Dataset root path | `~/cpfa/data/OPV2V` (planned; confirm at Step 0.2) |
+| Dataset root path | `~/cpfa/data/OPV2V` (confirmed: test/ = 16 scenarios, 5,985 frame-CAV pairs) |
 | Checkpoint root path | `~/cpfa/checkpoints` (planned; confirm at Step 0.3) |
