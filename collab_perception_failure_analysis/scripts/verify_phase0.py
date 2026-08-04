@@ -96,14 +96,19 @@ def stage_checkpoints(root):
 
     def one(ckpt_dir):
         def load():
+            import re
             import torch
-            import yaml
             cfg = os.path.join(ckpt_dir, "config.yaml")
             if not os.path.isfile(cfg):
                 raise RuntimeError("missing config.yaml")
+            # OpenCOOD configs embed numpy objects that safe_load rejects (OpenCOOD's own
+            # loader handles them); we only need the validate_dir line, so grep for it.
             with open(cfg) as f:
-                conf = yaml.safe_load(f)
-            vdir = conf.get("validate_dir", "")
+                text = f.read()
+            m = re.search(r"^validate_dir:\s*['\"]?([^'\"\n]+?)['\"]?\s*$", text, re.M)
+            if not m:
+                raise RuntimeError("no validate_dir line in config.yaml")
+            vdir = m.group(1)
             if not os.path.isdir(os.path.expanduser(vdir)):
                 raise RuntimeError("validate_dir does not exist: %r (edit config.yaml)" % vdir)
             pths = [f for f in os.listdir(ckpt_dir) if f.endswith((".pth", ".pt"))]
