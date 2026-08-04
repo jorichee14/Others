@@ -10,14 +10,22 @@ Downloaded 2026-08-04 into `~/cpfa/checkpoints/` (folder names as shipped):
 
 | Folder | Algorithm (README row) | Source URL | Weights file | md5 |
 |--------|------------------------|------------|--------------|-----|
-| pointpillar_late_fusion | Late fusion ("Naive Late", PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621128604521 | _pending_ | _pending_ |
-| pointpillar_early_fusion | Early fusion ("Cooper", PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621122534978 | _pending_ | _pending_ |
-| pointpillar_attentive_fusion | AttFuse ("Attentive Fusion", PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621110356814 | _pending_ | _pending_ |
-| pointpillar_fcooper | F-Cooper (PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621123814293 | _pending_ | _pending_ |
-| pointpillar_v2vnet | V2VNet (PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621111444798 | _pending_ | _pending_ |
-| point_pillar_coalign | CoAlign (PointPillar) | https://drive.google.com/file/d/1mUEI_Dh4tkG6-LG3QcZ05kK7oOGJzCGK/view?usp=sharing | _pending_ | _pending_ |
-| pointpillar_CoBEVT_nocompression | CoBEVT (PointPillar, no compression) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/folder/280139625059 | _pending_ | _pending_ |
-| cobevt_compression | CoBEVT (PointPillar, compression variant) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/folder/280139625059 | _pending_ | _pending_ |
+| pointpillar_late_fusion | Late fusion ("Naive Late", PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621128604521 | net_epoch30.pth | eed40b69d9c3c6e3c5ce5787bba0a034 |
+| pointpillar_early_fusion | Early fusion ("Cooper", PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621122534978 | latest.pth | 83851f7bf3fe3471cb053e34d5534f92 |
+| pointpillar_attentive_fusion | AttFuse ("Attentive Fusion", PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621110356814 | latest.pth | 35c2953c7a168d203c8311c14c75e57b |
+| pointpillar_attentive_fusion_compression | AttFuse, compression variant | (same download as above) | latest.pth | 618071b0e2cc50915c99488fce8f5916 |
+| pointpillar_fcooper | F-Cooper (PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621123814293 | latest.pth | 39ce8dd1c69d9916ac0d2845ef5c8b0f |
+| pointpillar_v2vnet | V2VNet (PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621111444798 | net_epoch83.pth | 1804d01ceab6de22daa9817927c5ca7f |
+| point_pillar_coalign | CoAlign (PointPillar) | https://drive.google.com/file/d/1mUEI_Dh4tkG6-LG3QcZ05kK7oOGJzCGK/view?usp=sharing | net_epoch15.pth | b9577e1e8b11b93fc20ad4a1b404bf55 |
+| point_pillar_coalign_compression | CoAlign, compression variant | (same download as above) | net_epoch20.pth | 9e0220515a0281eeef570a00f85b8018 |
+| pointpillar_CoBEVT_nocompression | CoBEVT (PointPillar, no compression) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/folder/280139625059 | net_epoch19.pth | e90b54f53ce5644bf2765a85827b6663 |
+| cobevt_compression | CoBEVT (PointPillar, compression variant) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/folder/280139625059 | net_epoch33.pth | bcd084b3ea557e252f93a853aa29d651 |
+
+Naming caveat: four checkpoints ship weights as `latest.pth`, but OpenCOOD's model loader
+scans for `net_epoch*.pth` and picks the highest epoch. Before inference, copy each
+`latest.pth` to `net_epoch1.pth` in the same folder (keep `latest.pth` so the md5s above
+stay valid). Affected: pointpillar_early_fusion, pointpillar_attentive_fusion,
+pointpillar_attentive_fusion_compression, pointpillar_fcooper.
 
 Notes:
 - **No-Comm floor:** the model zoo ships no dedicated single-vehicle checkpoint. The late

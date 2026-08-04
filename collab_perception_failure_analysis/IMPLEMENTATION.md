@@ -60,11 +60,17 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   `test_culver_city` downloaded but left unextracted (optional domain-shift split).
   Full-dataloader iteration will be exercised implicitly by the 0.4 smoke test.
 
-### Step 0.3 — Pretrained checkpoints  `⬜ TODO`
+### Step 0.3 — Pretrained checkpoints  `✅ DONE`
 - Download OpenCOOD model-zoo checkpoints for every algorithm in the I4 shortlist into
   `checkpoints/` (git-ignored). Log each checkpoint's source URL and md5 in `env/CHECKPOINTS.md`.
 - **Done when:** every shortlisted algorithm has a loadable checkpoint.
-- **Result:** _pending_
+- **Result:** gate passed 10/10 (2026-08-04). Ten checkpoints at `~/cpfa/checkpoints/`:
+  late, early, AttFuse (+compression), F-Cooper, V2VNet, CoAlign (+compression), CoBEVT
+  (no-compression + compression) — CoAlign/CoBEVT and the compression variants are bonus
+  coverage beyond the minimum five. All `validate_dir`s point at the test split; md5s and
+  the `latest.pth`→`net_epoch1.pth` naming caveat recorded in `env/CHECKPOINTS.md`.
+  No-Comm floor will be derived from the late-fusion checkpoint (no single-vehicle
+  checkpoint exists in the zoo).
 
 ### Step 0.4 — Smoke test  `⬜ TODO`
 - Run OpenCOOD `inference.py` with AttFuse on ~20 test frames; confirm detections render
@@ -173,3 +179,4 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 | 2026-08-04 | 0.1 ✅ | Env gate passed 4/4 on `wicomsrobot`: torch 1.13.1+cu117 (CUDA visible, RTX 3080), numpy 1.23.5, spconv 2.3.6, opencood import OK. Extension build succeeded (only a harmless NumPy deprecated-API warning). `env/VERSIONS.md` filled in; OpenCOOD commit hash still to record. Next: 0.2 dataset download. |
 | 2026-08-04 | 0.1 | OpenCOOD commit pinned: `31ba16025da27ffe4e336f011290dfbc66f9a1f1`. |
 | 2026-08-04 | 0.2 ✅ | Dataset gate passed: 16 scenarios, 5,985 frame-CAV pairs at `~/cpfa/data/OPV2V/test`. Drive chunk zips → `cat`-joined `test.zip.part*` → verified → extracted. Next: 0.3 checkpoints. |
+| 2026-08-04 | 0.3 ✅ | Checkpoints gate passed 10/10 after flattening double-nested zips and fixing the gate script (OpenCOOD configs embed numpy YAML tags; now greps `validate_dir` instead of safe_load). Manifest filled with md5s. Caveat logged: 4 checkpoints ship `latest.pth` and need a `net_epoch1.pth` copy for OpenCOOD's loader. Next: 0.4 smoke test. |
