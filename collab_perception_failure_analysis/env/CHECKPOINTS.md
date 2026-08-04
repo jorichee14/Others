@@ -6,15 +6,18 @@ UCLA Box (https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V) and Google Drive.
 
 md5 via: `md5sum ~/cpfa/checkpoints/*/net_epoch*.pth`
 
+Downloaded 2026-08-04 into `~/cpfa/checkpoints/` (folder names as shipped):
+
 | Folder | Algorithm (README row) | Source URL | Weights file | md5 |
 |--------|------------------------|------------|--------------|-----|
-| pointpillar_late | Late fusion ("Naive Late", PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621128604521 | _pending_ | _pending_ |
-| pointpillar_early | Early fusion ("Cooper", PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621122534978 | _pending_ | _pending_ |
+| pointpillar_late_fusion | Late fusion ("Naive Late", PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621128604521 | _pending_ | _pending_ |
+| pointpillar_early_fusion | Early fusion ("Cooper", PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621122534978 | _pending_ | _pending_ |
 | pointpillar_attentive_fusion | AttFuse ("Attentive Fusion", PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621110356814 | _pending_ | _pending_ |
 | pointpillar_fcooper | F-Cooper (PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621123814293 | _pending_ | _pending_ |
 | pointpillar_v2vnet | V2VNet (PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/file/1621111444798 | _pending_ | _pending_ |
-| pointpillar_coalign (optional now) | CoAlign (PointPillar) | https://drive.google.com/file/d/1mUEI_Dh4tkG6-LG3QcZ05kK7oOGJzCGK/view?usp=sharing | _pending_ | _pending_ |
-| cobevt (optional now) | CoBEVT (PointPillar) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/folder/280139625059 | _pending_ | _pending_ |
+| point_pillar_coalign | CoAlign (PointPillar) | https://drive.google.com/file/d/1mUEI_Dh4tkG6-LG3QcZ05kK7oOGJzCGK/view?usp=sharing | _pending_ | _pending_ |
+| pointpillar_CoBEVT_nocompression | CoBEVT (PointPillar, no compression) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/folder/280139625059 | _pending_ | _pending_ |
+| cobevt_compression | CoBEVT (PointPillar, compression variant) | https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V/folder/280139625059 | _pending_ | _pending_ |
 
 Notes:
 - **No-Comm floor:** the model zoo ships no dedicated single-vehicle checkpoint. The late
