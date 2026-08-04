@@ -85,12 +85,16 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 
 ## Phase 1 — Perfect-channel baseline
 
-### Step 1.1 — No-Comm floor  `⬜ TODO`
+### Step 1.1 — No-Comm floor  `🟨 IN PROGRESS`
 - Evaluate ego-only (no collaboration) on the full test split. This floor is the key
   diagnostic reference for Phase 4: degradation **toward** it = delivery failure,
   **below** it = content failure (collaboration actively harming).
 - **Done when:** AP@0.5 / AP@0.7 + precision/recall recorded in `results/baseline.md`.
-- **Result:** _pending_
+- **Result:** runner authored (`scripts/run_phase1.py`, `nocomm` mode): model and box
+  post-processing see only the ego vehicle, but GT is generated from the full
+  collaborator set (`generate_gt_bbx(batch_data)`) so the floor is scored against the
+  same GT as collaborative methods. AP math verified identical to OpenCOOD
+  `eval_utils` on 200 randomized trials. Awaiting execution on run machine.
 
 ### Step 1.2 — Late & early fusion  `⬜ TODO`
 - Same protocol for late fusion (box sharing + NMS merge) and early fusion (raw point cloud
@@ -186,3 +190,4 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 | 2026-08-04 | 0.2 ✅ | Dataset gate passed: 16 scenarios, 5,985 frame-CAV pairs at `~/cpfa/data/OPV2V/test`. Drive chunk zips → `cat`-joined `test.zip.part*` → verified → extracted. Next: 0.3 checkpoints. |
 | 2026-08-04 | 0.3 ✅ | Checkpoints gate passed 10/10 after flattening double-nested zips and fixing the gate script (OpenCOOD configs embed numpy YAML tags; now greps `validate_dir` instead of safe_load). Manifest filled with md5s. Caveat logged: 4 checkpoints ship `latest.pth` and need a `net_epoch1.pth` copy for OpenCOOD's loader. Next: 0.4 smoke test. |
 | 2026-08-04 | 0.4 ✅ | **Phase 0 complete.** Smoke test hit a spconv failure first: stray plain `cumm 0.5.3` shadowed `cumm-cu117`, breaking `spconv.core_cc`. Fixed by uninstalling both and pinning `cumm-cu117==0.4.11`. Env gate hardened (imports compiled core, detects dual cumm installs). AttFuse full-split inference: AP@0.3/0.5/0.7 = 0.91/0.91/0.82 (published: 0.90/0.815), 3m16s for 2,170 frames. Next: Phase 1 baselines. |
+| 2026-08-04 | 1.1–1.3 | Phase 1 runner authored: `scripts/run_phase1.py` — 12 runs (No-Comm floor + 11 checkpointed methods), per-method JSON + auto-regenerated `baseline.md`, resumable (skips finished methods), AP + overall precision/recall per IoU. Verified against OpenCOOD source at pinned commit (fusion interfaces, GT union semantics, non-mutating AP math cross-checked on 200 random trials). CoAlign + CoBEVT model classes confirmed present in stock OpenCOOD at commit `31ba160`. Awaiting run. |
