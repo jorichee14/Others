@@ -131,8 +131,9 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   quantization (per-model registry; AttFuse intercepted at backbone input since its
   fusion is interleaved — documented approximation). GT policy: runners take
   predictions from the impaired dataset, GT from a parallel clean dataset.
-  Identity gate script authored (`scripts/run_phase2_identity.py`, asserts per-frame
-  box/score equality — stricter than AP match). **Gate run on GPU machine pending.**
+  Identity gate: **PASSED for AttFuse** (2026-08-05: 100/100 input batches bitwise
+  identical, 10/10 model outputs identical). Coverage runs for `late` and `fcooper`
+  pending before marking ✅.
 
 ### Step 2.2 — Delivery impairments  `⬜ TODO`
 - Implement: (a) **latency** — delay collaborator messages by k frames; (b) **packet loss** —
