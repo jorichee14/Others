@@ -117,7 +117,7 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 
 ## Phase 2 — Channel wrapper (`commchannel/`)
 
-### Step 2.1 — Interception design  `🟨 IN PROGRESS`
+### Step 2.1 — Interception design  `✅ DONE`
 - Write `commchannel/channel.py`: a wrapper that sits between feature extraction and fusion
   in OpenCOOD's forward pass, receiving per-agent messages and returning (possibly delayed,
   dropped, or corrupted) messages. Must be model-agnostic across the I4 shortlist and
@@ -131,9 +131,9 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   quantization (per-model registry; AttFuse intercepted at backbone input since its
   fusion is interleaved — documented approximation). GT policy: runners take
   predictions from the impaired dataset, GT from a parallel clean dataset.
-  Identity gate: **PASSED for AttFuse** (2026-08-05: 100/100 input batches bitwise
-  identical, 10/10 model outputs identical). Coverage runs for `late` and `fcooper`
-  pending before marking ✅.
+  Identity gate: **PASSED for AttFuse, late, and F-Cooper** (2026-08-05: 100/100 input
+  batches bitwise identical, 10/10 model outputs identical, each). Channel proven
+  transparent across the late-fusion and intermediate-fusion code paths.
 
 ### Step 2.2 — Delivery impairments  `⬜ TODO`
 - Implement: (a) **latency** — delay collaborator messages by k frames; (b) **packet loss** —
@@ -165,17 +165,26 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 
 ## Phase 3 — Constrained-link sweeps
 
-### Step 3.1 — Experiment matrix  `⬜ TODO`
+### Step 3.1 — Experiment matrix  `✅ DONE`
 - `configs/matrix.yaml`: algorithms × 6 impairments × severity levels × seeds (per I6).
   Frozen: agent count, detection range, split, evaluation frames.
 - **Done when:** matrix file committed and a dry run enumerates every cell.
-- **Result:** _pending_
+- **Result:** committed (2026-08-05): 7 methods × 8 impairment families (latency,
+  iid loss, bursty loss, bandwidth, stale, pose, ghosts, swap) × 5–6 levels × 3 seeds
+  = **831 cells** (bandwidth restricted to intermediate fusion), frame stride 3
+  (724 frames/cell). Dry run enumerates all cells; Gilbert-Elliott levels calibrated
+  to stationary loss rate (empirical 0.712 at target 0.7); pose yaw coupling verified.
 
-### Step 3.2 — Run sweeps  `⬜ TODO`
+### Step 3.2 — Run sweeps  `🟨 IN PROGRESS`
 - Runner script executes the matrix, writing one JSON per cell into `results/sweeps/`
   (AP@0.5/0.7, precision, recall, per-region breakdown — see 4.3). Resumable.
 - **Done when:** all cells complete with mean ± std over seeds.
-- **Result:** _pending_
+- **Result:** runner authored (`scripts/run_phase3.py`): per-cell JSON, resumable,
+  clean-dataset GT cache (GT never shrinks under impairment), per-(cell,frame) seeding,
+  bandwidth hooks + bits/frame metering, mean-collaborators observable, one model/
+  dataset build per method. Execution on GPU machine pending (est. ~24–30 h full,
+  resumable in any-size chunks). Per-region breakdown deferred to Phase 4 reruns on
+  selected cells.
 
 ## Phase 4 — Failure attribution
 
@@ -224,4 +233,5 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 | 2026-08-04 | 1.1–1.3 | Quick pass (60 frames) succeeded for all 12 methods — zero config/checkpoint failures, incl. CoAlign and nocomm mode. Early signal confirms the study's core structure: nocomm P@0.7 0.917 / R@0.7 0.594 (precise but occlusion-blind) vs collaborative methods R@0.7 ≈ 0.89–0.94. CoBEVT ~2× slower per frame (transformer). Full-split run launched next; est. ~1h. |
 | 2026-08-04 | 1.1–1.3 ✅ | **Phase 1 complete.** Full-split run: every published AP@0.7 reproduced within ±0.001. Frozen table committed to `results/baseline.md`. Floor: 0.575/P 0.825/R 0.666. Perfect-channel collaboration benefit is almost purely recall (+0.20–0.25 R@0.7 over floor) — the Phase 4 attribution axes are now calibrated. Next: Phase 2 `commchannel/` wrapper (identity gate = reproduce this table). |
 | 2026-08-05 | 2.1 | First identity-gate run mismatched on every frame — diagnosis: the GATE was flawed, not the channel. OpenCOOD's test-time `__getitem__` is stochastic (`shuffle_points` draws a fresh permutation each call), so any two passes differ; point order changes voxelization. Gate rewritten: numpy seeded identically before each side's `__getitem__`, collated input batches compared bitwise tensor-by-tensor (stronger than the old box comparison), plus a model-output check on input-identical frames. |
+| 2026-08-05 | 2.1 ✅ / 3.1 ✅ / 3.2 | Identity gate passed for late and fcooper too (100/100 + 10/10 each) — Step 2.1 closed. Phase 3 built: `configs/matrix.yaml` (831 cells, GE stationarity + pose coupling validated in dev container) and `scripts/run_phase3.py` (resumable per-cell runner with clean-GT cache and bandwidth metering). Awaiting sweep execution. |
 | 2026-08-05 | 2.1–2.3 | `commchannel/` package built: config (composable impairments), crc32-seeded worker-safe schedules, dataset-level channel (drop/latency/stale/pose-noise/ghosts/scene-swap via `retrieve_base_data` monkeypatch reusing stock `reform_param`), feature-level bandwidth hooks with per-model registry + bits/frame meter. 10/10 unit tests + mocked-dataset integration pass in dev container. Design notes: GT always from parallel clean dataset; stock `wild_setting` latency exists but its pose-noise path has a constant-offset reseeding bug — ours replaces it. Remaining for ✅: identity gate + ghost visual check on GPU machine. |

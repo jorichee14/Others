@@ -1,0 +1,46 @@
+# Phase 3 experiment matrix.
+# Frozen once sweeps start — change only by adding, never by editing run levels.
+#
+# Cell = (method, impairment, level, seed). Each cell is one evaluation run of the
+# pretrained model under that channel condition; results land in results/sweeps/ as
+# one JSON per cell (resumable). Severity level L0 is mildest.
+
+# every Nth frame of the 2170-frame test split (stride 3 -> 724 frames/cell)
+frame_stride: 3
+
+seeds: [0, 1, 2]
+
+# nocomm is the floor (Phase 1) and needs no channel; compression variants excluded
+# from the core sweep to keep the matrix tractable.
+methods: [late, early, attfuse, fcooper, v2vnet, coalign, cobevt]
+
+impairments:
+  # ---------------- delivery ----------------
+  latency:          # constant message age, frames @ 10Hz (100ms .. 1s)
+    param: latency_frames
+    levels: [1, 2, 4, 6, 8, 10]
+  loss_iid:         # Bernoulli packet loss per (frame, collaborator)
+    param: loss_p
+    levels: [0.1, 0.3, 0.5, 0.7, 0.9]
+  loss_burst:       # Gilbert-Elliott bursty loss; level = mean loss rate,
+    param: ge_mean_loss     # burstiness fixed via p_bad_to_good
+    levels: [0.1, 0.3, 0.5, 0.7, 0.9]
+    p_bad_to_good: 0.3
+  bandwidth:        # uniform quantization of shared features (bits); intermediate
+    param: bandwidth_bits   # fusion only (late/early share boxes/points, not features)
+    levels: [16, 8, 4, 2, 1]
+  # ---------------- content -----------------
+  stale:            # collaborator message refreshes only every N frames (sawtooth age)
+    param: stale_period
+    levels: [2, 4, 8, 16, 32]
+  pose:             # Gaussian collaborator pose error; yaw coupled to xyz severity
+    param: pose_xyz_std     # meters
+    levels: [0.2, 0.4, 0.8, 1.6, 3.2]
+    yaw_deg_per_m: 2.0
+  ghosts:           # car-shaped point clusters injected into every collaborator
+    param: ghost_count      # message; level = ghosts per message
+    levels: [1, 2, 4, 8, 16]
+    ghost_p: 1.0
+  swap:             # collaborator cloud replaced with another scenario's, w.p. p
+    param: swap_p
+    levels: [0.1, 0.3, 0.5, 0.75, 1.0]
