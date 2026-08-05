@@ -111,11 +111,16 @@ def main():
     with torch.no_grad():
         for i in range(n):
             # pin the pipeline's own randomness (shuffle_points) identically
+            # pin the pipeline's randomness identically on both sides — BOTH
+            # __getitem__ (shuffle_points) and collate (downsample_lidar_minimum
+            # for the visualization cloud) consume the global numpy RNG.
             np.random.seed(SEED0 + i)
             sample_c = clean_ds[i]
             np.random.seed(SEED0 + i)
             sample_w = wrapped_ds[i]
+            np.random.seed(SEED0 + i)
             batch_c = clean_ds.collate_batch_test([sample_c])
+            np.random.seed(SEED0 + i)
             batch_w = wrapped_ds.collate_batch_test([sample_w])
 
             diffs = compare(batch_c, batch_w)
