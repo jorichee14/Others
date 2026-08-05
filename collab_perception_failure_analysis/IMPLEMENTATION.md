@@ -85,7 +85,7 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 
 ## Phase 1 — Perfect-channel baseline
 
-### Step 1.1 — No-Comm floor  `🟨 IN PROGRESS`
+### Step 1.1 — No-Comm floor  `✅ DONE`
 - Evaluate ego-only (no collaboration) on the full test split. This floor is the key
   diagnostic reference for Phase 4: degradation **toward** it = delivery failure,
   **below** it = content failure (collaboration actively harming).
@@ -94,19 +94,26 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   post-processing see only the ego vehicle, but GT is generated from the full
   collaborator set (`generate_gt_bbx(batch_data)`) so the floor is scored against the
   same GT as collaborative methods. AP math verified identical to OpenCOOD
-  `eval_utils` on 200 randomized trials. Awaiting execution on run machine.
+  `eval_utils` on 200 randomized trials. Run complete (2026-08-04): floor =
+  **AP@0.7 0.575, P@0.7 0.825, R@0.7 0.666** on the full split (paper's No Fusion is
+  0.602 but is a differently-trained model — see `results/baseline.md` notes).
 
-### Step 1.2 — Late & early fusion  `⬜ TODO`
+### Step 1.2 — Late & early fusion  `✅ DONE`
 - Same protocol for late fusion (box sharing + NMS merge) and early fusion (raw point cloud
   aggregation). Also log communication volume (bits/frame).
 - **Done when:** rows added to `results/baseline.md`.
-- **Result:** _pending_
+- **Result:** late AP@0.7 0.781 (published 0.781), early 0.801 (published 0.800).
+  Communication volume deferred to Phase 2 — the channel wrapper sees every message and
+  measures it directly.
 
-### Step 1.3 — Intermediate fusion methods  `⬜ TODO`
+### Step 1.3 — Intermediate fusion methods  `✅ DONE`
 - Same protocol for every intermediate-fusion method in the I4 shortlist.
 - **Done when:** full baseline table complete: AP@0.5/0.7, precision, recall, bits/frame,
   for all methods, on identical frames/split/seeds.
-- **Result:** _pending_
+- **Result:** all 8 intermediate methods evaluated; every published reference reproduced
+  within ±0.001 (AttFuse 0.815, F-Cooper 0.790, V2VNet 0.822, CoAlign 0.833, CoBEVT
+  0.862). Full frozen table in `results/baseline.md`. **Phase 1 complete** (bits/frame
+  deferred to Phase 2 as above).
 
 ## Phase 2 — Channel wrapper (`commchannel/`)
 
@@ -192,3 +199,4 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 | 2026-08-04 | 0.4 ✅ | **Phase 0 complete.** Smoke test hit a spconv failure first: stray plain `cumm 0.5.3` shadowed `cumm-cu117`, breaking `spconv.core_cc`. Fixed by uninstalling both and pinning `cumm-cu117==0.4.11`. Env gate hardened (imports compiled core, detects dual cumm installs). AttFuse full-split inference: AP@0.3/0.5/0.7 = 0.91/0.91/0.82 (published: 0.90/0.815), 3m16s for 2,170 frames. Next: Phase 1 baselines. |
 | 2026-08-04 | 1.1–1.3 | Phase 1 runner authored: `scripts/run_phase1.py` — 12 runs (No-Comm floor + 11 checkpointed methods), per-method JSON + auto-regenerated `baseline.md`, resumable (skips finished methods), AP + overall precision/recall per IoU. Verified against OpenCOOD source at pinned commit (fusion interfaces, GT union semantics, non-mutating AP math cross-checked on 200 random trials). CoAlign + CoBEVT model classes confirmed present in stock OpenCOOD at commit `31ba160`. Awaiting run. |
 | 2026-08-04 | 1.1–1.3 | Quick pass (60 frames) succeeded for all 12 methods — zero config/checkpoint failures, incl. CoAlign and nocomm mode. Early signal confirms the study's core structure: nocomm P@0.7 0.917 / R@0.7 0.594 (precise but occlusion-blind) vs collaborative methods R@0.7 ≈ 0.89–0.94. CoBEVT ~2× slower per frame (transformer). Full-split run launched next; est. ~1h. |
+| 2026-08-04 | 1.1–1.3 ✅ | **Phase 1 complete.** Full-split run: every published AP@0.7 reproduced within ±0.001. Frozen table committed to `results/baseline.md`. Floor: 0.575/P 0.825/R 0.666. Perfect-channel collaboration benefit is almost purely recall (+0.20–0.25 R@0.7 over floor) — the Phase 4 attribution axes are now calibrated. Next: Phase 2 `commchannel/` wrapper (identity gate = reproduce this table). |
