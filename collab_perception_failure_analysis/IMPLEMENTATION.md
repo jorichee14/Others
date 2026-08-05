@@ -117,13 +117,22 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 
 ## Phase 2 — Channel wrapper (`commchannel/`)
 
-### Step 2.1 — Interception design  `⬜ TODO`
+### Step 2.1 — Interception design  `🟨 IN PROGRESS`
 - Write `commchannel/channel.py`: a wrapper that sits between feature extraction and fusion
   in OpenCOOD's forward pass, receiving per-agent messages and returning (possibly delayed,
   dropped, or corrupted) messages. Must be model-agnostic across the I4 shortlist and
   work for late fusion (boxes) as well as intermediate fusion (features).
 - **Done when:** identity channel (no impairment) reproduces Phase 1 numbers exactly.
-- **Result:** _pending_
+- **Result:** package built. Interception is two-level: (a) data level — instance
+  monkeypatch of `retrieve_base_data`, mirroring stock logic and reusing
+  `reform_param` (inherits OpenCOOD's current-timestamp-GT semantics); covers drop,
+  latency, staleness, pose noise, ghosts, scene swap uniformly for late/early/
+  intermediate fusion; (b) feature level — forward-pre-hooks for bandwidth
+  quantization (per-model registry; AttFuse intercepted at backbone input since its
+  fusion is interleaved — documented approximation). GT policy: runners take
+  predictions from the impaired dataset, GT from a parallel clean dataset.
+  Identity gate script authored (`scripts/run_phase2_identity.py`, asserts per-frame
+  box/score equality — stricter than AP match). **Gate run on GPU machine pending.**
 
 ### Step 2.2 — Delivery impairments  `⬜ TODO`
 - Implement: (a) **latency** — delay collaborator messages by k frames; (b) **packet loss** —
@@ -131,14 +140,27 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   channel quantization/truncation of shared features.
 - **Done when:** unit tests pass (drop rate matches configured p; delayed features come from
   the correct past frame; quantization hits the configured bit budget).
-- **Result:** _pending_
+- **Result:** implemented (`commchannel/schedule.py`, `channel.py`, `feature_hooks.py`).
+  All decisions crc32-seeded ⇒ deterministic and DataLoader-worker-safe;
+  Gilbert-Elliott re-simulated from scenario start per query. 10/10 unit tests pass
+  (Bernoulli rate ±2%, GE burstiness ≫ i.i.d. control, latency constant, staleness
+  sawtooth, additive composition, quantizer level/monotonicity/ego-untouched) plus a
+  7-scenario mocked-dataset integration test (drop, delay, scenario-boundary clamp,
+  ghosts, swap, pose noise). Bandwidth meter records bits/frame (Phase 1 deferral).
 
 ### Step 2.3 — Content impairments  `⬜ TODO`
 - Implement: (a) **stale memory** — freeze a collaborator's shared message for k frames while
   ego moves; (b) **conflicting evidence** — per I5 (scene-swapped features, ghost activations);
   (c) **pose noise** — Gaussian perturbation of collaborator pose before spatial warping.
 - **Done when:** unit tests pass and a visual sanity check shows injected ghosts appear in fused BEV.
-- **Result:** _pending_
+- **Result:** implemented alongside 2.2 (same package): stale memory as sawtooth refresh
+  (composes additively with latency), conflicting evidence as car-shaped ghost point
+  clusters (geometry unit-tested: 220 pts/vehicle on box surfaces, ground-supported,
+  deterministic per seed) and cross-scenario scene swap; pose noise recomputes
+  `transformation_matrix` from the perturbed pose while leaving
+  `gt_transformation_matrix` untouched (verified) — also fixes OpenCOOD's
+  `add_loc_noise` constant-offset reseeding bug (regression test included).
+  **Visual ghost sanity check on GPU machine pending.**
 
 ## Phase 3 — Constrained-link sweeps
 
@@ -200,3 +222,4 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 | 2026-08-04 | 1.1–1.3 | Phase 1 runner authored: `scripts/run_phase1.py` — 12 runs (No-Comm floor + 11 checkpointed methods), per-method JSON + auto-regenerated `baseline.md`, resumable (skips finished methods), AP + overall precision/recall per IoU. Verified against OpenCOOD source at pinned commit (fusion interfaces, GT union semantics, non-mutating AP math cross-checked on 200 random trials). CoAlign + CoBEVT model classes confirmed present in stock OpenCOOD at commit `31ba160`. Awaiting run. |
 | 2026-08-04 | 1.1–1.3 | Quick pass (60 frames) succeeded for all 12 methods — zero config/checkpoint failures, incl. CoAlign and nocomm mode. Early signal confirms the study's core structure: nocomm P@0.7 0.917 / R@0.7 0.594 (precise but occlusion-blind) vs collaborative methods R@0.7 ≈ 0.89–0.94. CoBEVT ~2× slower per frame (transformer). Full-split run launched next; est. ~1h. |
 | 2026-08-04 | 1.1–1.3 ✅ | **Phase 1 complete.** Full-split run: every published AP@0.7 reproduced within ±0.001. Frozen table committed to `results/baseline.md`. Floor: 0.575/P 0.825/R 0.666. Perfect-channel collaboration benefit is almost purely recall (+0.20–0.25 R@0.7 over floor) — the Phase 4 attribution axes are now calibrated. Next: Phase 2 `commchannel/` wrapper (identity gate = reproduce this table). |
+| 2026-08-05 | 2.1–2.3 | `commchannel/` package built: config (composable impairments), crc32-seeded worker-safe schedules, dataset-level channel (drop/latency/stale/pose-noise/ghosts/scene-swap via `retrieve_base_data` monkeypatch reusing stock `reform_param`), feature-level bandwidth hooks with per-model registry + bits/frame meter. 10/10 unit tests + mocked-dataset integration pass in dev container. Design notes: GT always from parallel clean dataset; stock `wild_setting` latency exists but its pose-noise path has a constant-offset reseeding bug — ours replaces it. Remaining for ✅: identity gate + ghost visual check on GPU machine. |
