@@ -104,14 +104,40 @@ def main():
     ap.add_argument('--seeds', nargs='*', type=int)
     ap.add_argument('--stride', type=int)
     ap.add_argument('--max-cells', type=int, default=0)
+    ap.add_argument('--num-workers', type=int, default=8)
     args = ap.parse_args()
 
     import yaml
     import torch
+    from torch.utils.data import DataLoader, Dataset
     from opencood.tools import train_utils
     import opencood.hypes_yaml.yaml_utils as yaml_utils
     from opencood.data_utils.datasets import build_dataset
     from opencood.utils import eval_utils
+
+    class SeededView(Dataset):
+        """View of `inner` restricted to `indices`, seeding numpy inside __getitem__
+        so the pipeline's own randomness (shuffle_points) is deterministic per
+        (tag, frame) regardless of DataLoader worker count."""
+
+        def __init__(self, inner, tag, indices):
+            self.inner = inner
+            self.tag = tag
+            self.indices = indices
+
+        def __len__(self):
+            return len(self.indices)
+
+        def __getitem__(self, k):
+            i = self.indices[k]
+            np.random.seed(crc(self.tag, i))
+            return self.inner[i]
+
+    def make_loader(inner, tag, indices):
+        return DataLoader(SeededView(inner, tag, indices), batch_size=1,
+                          num_workers=args.num_workers, shuffle=False,
+                          collate_fn=inner.collate_batch_test,
+                          pin_memory=False, drop_last=False)
 
     with open(args.matrix) as f:
         matrix = yaml.safe_load(f)
@@ -151,8 +177,10 @@ def main():
         print('[%s] building model + datasets (%d cells pending)'
               % (method, len(cells)))
         hypes = yaml_utils.load_yaml(os.path.join(ckpt_dir, 'config.yaml'))
-        ds_clean = build_dataset(hypes, visualize=True, train=False)
-        ds_chan = build_dataset(hypes, visualize=True, train=False)
+        # visualize=False: the visualization cloud is never used by sweep metrics and
+        # costs per-frame projection/stacking work.
+        ds_clean = build_dataset(hypes, visualize=False, train=False)
+        ds_chan = build_dataset(hypes, visualize=False, train=False)
         model = train_utils.create_model(hypes)
         if torch.cuda.is_available():
             model.cuda()
@@ -161,15 +189,16 @@ def main():
 
         n_total = len(ds_clean)
         frame_indices = list(range(0, n_total, stride))
-        gt_cache = {}
 
-        def gt_for(i):
-            if i not in gt_cache:
-                np.random.seed(crc('gt', method, i))
-                sample = ds_clean[i]
-                batch = ds_clean.collate_batch_test([sample])
-                gt_cache[i] = ds_clean.post_processor.generate_gt_bbx(batch)
-            return gt_cache[i]
+        print('[%s] building clean-GT cache (%d frames)'
+              % (method, len(frame_indices)))
+        t_gt = time.time()
+        gt_cache = {}
+        for i, batch in zip(frame_indices,
+                            make_loader(ds_clean, 'gt/' + method,
+                                        frame_indices)):
+            gt_cache[i] = ds_clean.post_processor.generate_gt_bbx(batch)
+        print('[%s] GT cache ready (%.0fs)' % (method, time.time() - t_gt))
 
         for (cid, imp_name, imp_spec, li, level, seed) in cells:
             if args.max_cells and ran_cells >= args.max_cells:
@@ -192,14 +221,13 @@ def main():
             collab_sum = 0
             try:
                 with torch.no_grad():
-                    for i in frame_indices:
-                        np.random.seed(crc(cid, i))
-                        sample = ds_chan[i]
-                        batch = ds_chan.collate_batch_test([sample])
+                    for i, batch in zip(frame_indices,
+                                        make_loader(ds_chan, cid,
+                                                    frame_indices)):
                         batch = train_utils.to_device(batch, device)
                         pred_box, pred_score = \
                             predict_boxes(fusion, ds_chan, model, batch)
-                        gt_box = gt_for(i)
+                        gt_box = gt_cache[i]
                         collab_sum += collaborators_in(fusion, batch)
                         for iou in IOUS:
                             eval_utils.caluclate_tp_fp(
