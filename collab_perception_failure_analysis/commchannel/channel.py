@@ -116,11 +116,40 @@ class CommChannel:
 
             if is_ego:
                 ego_cur_pose = entry['params']['lidar_pose']
-            elif dec.pose_noise is not None:
-                self._apply_pose_noise(entry, ego_cur_pose, dec.pose_noise)
+            else:
+                if dec.pose_noise is not None:
+                    self._apply_pose_noise(entry, ego_cur_pose, dec.pose_noise)
+                if not self._survives_crop(dataset, entry):
+                    # The impaired message would contribute ZERO points inside
+                    # ego's detection crop. Stock OpenCOOD cannot represent an
+                    # empty agent (the scatter builds one fewer canvas than
+                    # record_len claims and warp-based fusers crash), and an
+                    # empty message is indistinguishable from an absent one at
+                    # fusion anyway — so drop the collaborator for this frame.
+                    continue
 
             data[cav_id] = entry
         return data
+
+    @staticmethod
+    def _survives_crop(dataset, entry, min_points=2):
+        """True if the collaborator's (possibly impaired) cloud keeps at least
+        min_points inside the ego-frame detection range after projection.
+        Only relevant when the dataset projects points to ego first."""
+        if not getattr(dataset, 'proj_first', False):
+            return True
+        try:
+            lr = dataset.params['preprocess']['cav_lidar_range']
+        except (AttributeError, KeyError, TypeError):
+            return True
+        tm = np.asarray(entry['params']['transformation_matrix'],
+                        dtype=np.float64)
+        pts = entry['lidar_np'][:, :3].astype(np.float64)
+        proj = pts @ tm[:3, :3].T + tm[:3, 3]
+        inside = ((proj[:, 0] > lr[0]) & (proj[:, 0] < lr[3])
+                  & (proj[:, 1] > lr[1]) & (proj[:, 1] < lr[4])
+                  & (proj[:, 2] > lr[2]) & (proj[:, 2] < lr[5]))
+        return int(inside.sum()) >= min_points
 
     # -------------------------------------------------------------- impairments
     def _apply_pose_noise(self, entry, ego_cur_pose, noise):
