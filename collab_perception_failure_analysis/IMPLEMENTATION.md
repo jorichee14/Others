@@ -209,12 +209,16 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   collapse both jointly. Standouts: CoBEVT precision immune to loss (ΔP −0.022);
   V2VNet ghost precision best-in-class by 2.4× (ΔP −0.056).
 
-### Step 4.3 — Spatial decomposition  `⬜ TODO (optional)`
+### Step 4.3 — Spatial decomposition  `🟨 IN PROGRESS`
 - Split GT/detections into ego-visible vs occluded/beyond-range regions. Delivery impairments
   should only hurt the occluded region; content corruption should contaminate ego-visible too.
-- **Result:** deferred — requires per-frame box dumps on selected cells (runner flag to
-  add). The 4.1/4.2 diagnostics already agree on every attribution, so this is a third
-  confirmation rather than a gap; scoped as follow-up work alongside Phase 5.
+- **Result:** runner authored (`scripts/run_phase43.py`): zones defined by ego's OWN
+  lidar (GT box ego-visible iff ≥5 ego points inside; box-membership test unit-verified
+  incl. rotated boxes); reports recall per zone + FP/frame + **FP_egovis/frame**
+  (false positives claiming objects where ego's own sensor sees points — direct
+  contamination evidence). 3 methods (attfuse/coalign/fcooper) × 5 conditions
+  (identity, loss90, latency200ms, ghosts8, swap50), no per-frame dumps needed
+  (metrics computed inline). Awaiting GPU run (~1.5–2 h).
 
 ### Step 4.4 — Rank stability & summary  `✅ DONE`
 - Method ranking per impairment, robustness curves, area-under-robustness-curve; test the
@@ -232,8 +236,24 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   optional).**
 
 ## Phase 5 (optional, per I7) — Medium/hard tasks
-- `⬜ TODO` — Take the 2–3 most and least robust methods to BEV segmentation and/or tracking;
-  hard tier: trajectory prediction or CARLA closed loop. Scope after Phase 4.
+
+### Step 5.1 — Cooperative tracking under impairment  `🟨 IN PROGRESS`
+- Test the detection study's two standing predictions: P1 — burstiness (irrelevant for
+  detection at matched rate) should matter for tracking; P2 — staleness verdicts under
+  a motion-model tracker.
+- **Result:** harness authored (`scripts/run_phase5_tracking.py`): world-frame
+  constant-velocity Kalman tracker (Hungarian association, 2-hit confirm / 3-miss
+  delete, per-scenario reset), GT tracks from clean-dataset object ids transformed to
+  world via ego pose, MOT accounting (MOTA/FN/FP/IDSW/fragmentation). 3 methods
+  (coalign/cobevt/fcooper) × 7 conditions (clean, iid/burst @30%/70%, stale4,
+  latency2), stride 1 (contiguous frames). Unit-verified: coasts 2-frame gaps
+  without ID switch, switches after 6-frame bursts; synthetic sensitivity check at
+  matched 30% loss: burst 60 IDSW / MOTA 0.68 vs iid 8 IDSW / MOTA 0.97 — the
+  harness resolves the predicted effect. Awaiting GPU run (~8–9 h, resumable
+  per condition).
+
+- `⬜ TODO` — further tiers (BEV segmentation, trajectory prediction, CARLA closed
+  loop) unscoped; decide after 5.1 results.
 
 ---
 
@@ -256,6 +276,7 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 | 2026-08-05 | 2.1 ✅ / 3.1 ✅ / 3.2 | Identity gate passed for late and fcooper too (100/100 + 10/10 each) — Step 2.1 closed. Phase 3 built: `configs/matrix.yaml` (831 cells, GE stationarity + pose coupling validated in dev container) and `scripts/run_phase3.py` (resumable per-cell runner with clean-GT cache and bandwidth metering). Awaiting sweep execution. |
 | 2026-08-05 | 3.2 | **Pilot complete: attfuse × full grid, 123/123 cells, 0 failures, ~78s/cell** (runner optimization: 13min→78s). Findings in `results/pilot_attfuse.md`: loss→floor (delivery signature, never below); latency/stale/pose/swap cross BELOW floor (content failures — 200ms latency worse than total silence); ghosts = pure precision collapse w/ flat recall (sanity check passed, stays above floor); pose non-monotonic (worst at 0.8m); burst≈iid at matched rate; bandwidth free to 4 bits, below floor at 1 bit. Bandwidth L0 reproduces frozen baseline 0.815. Aggregator authored (`scripts/aggregate_sweeps.py`, floor-test classifier, tested). Remaining 6 methods ≈ 16h. |
 | 2026-08-06 | 3.2 | Full sweep first pass: late 108/108 ✅; v2vnet/coalign/cobevt mostly ✅. Two runner/channel bugs found and fixed: (1) all `early` cells crashed — early fusion merges agents pre-collation so `record_len` doesn't exist; collaborator count now recorded as unobservable for early. (2) v2vnet/coalign `pose` cells at ≥0.8m crashed on a LATENT STOCK OpenCOOD bug: dataset filters CAVs by COM_RANGE using (noised) lidar_pose but builds pairwise matrices from the unfiltered dict — a membership flip desyncs feature count vs matrix and crashes models that warp with pairwise_t_matrix. Fix: pose noise now clamps the noised position to the true pose's side of the COM_RANGE boundary (connectivity loss is drop's job, not pose noise's). All `pose` cells to be deleted and rerun under the clamped protocol for uniformity. |
+| 2026-08-06 | 4.3 / 5.1 | Both follow-up tracks built. 4.3: `run_phase43.py` — ego-lidar-defined zones, per-zone recall + ego-visible-FP contamination metric, 15 cells. 5.1: `run_phase5_tracking.py` — Kalman/Hungarian MOT harness over contiguous frames, GT tracks from object ids in world frame, 21 runs targeting predictions P1 (burstiness × temporal state) and P2 (staleness × motion model). All geometry/tracker/MOT logic unit-tested in dev container; synthetic matched-rate check shows burst≫iid in IDSW — harness sensitivity confirmed. Awaiting GPU runs. |
 | 2026-08-06 | 4.1/4.2/4.4 ✅ | **Phase 4 complete** (4.3 spatial decomposition deferred as optional third confirmation). Master table committed (`results/sweep_summary.md`, 277 rows); attribution analysis written (`results/ANALYSIS.md`): floor-test matrix, P/R decomposition (both signatures hold, zero exceptions), rank stability, fusion-mechanism verdict (confirmed + sharpened: each mechanism's vulnerability is the impairment that mimics evidence it was trained to trust), misalignment valley, bandwidth cliff, deployment guidance ("prioritize freshness over completeness"). |
 | 2026-08-06 | 3.2 ✅ | **Phase 3 complete: 831/831 cells, 0 failures.** Final pose rerun (105 cells) clean incl. v2vnet/coalign at all levels. Zero-voxel guard fingerprint: collab 1.59→1.55 (L3)→1.31 (L4); attfuse L4 AP unchanged pre/post guard (recovery intrinsic). CoAlign most pose-robust at every level (L4 0.511). Next: aggregate + Phase 4 attribution analysis. |
 | 2026-08-06 | 3.2 | Pose rerun still crashed v2vnet/coalign at the same cells — COM_RANGE clamp was treating the wrong mechanism. Real cause (read from source): **zero-voxel agent**. With proj_first, collaborator points are projected to ego frame and cropped to the detection range (±40m laterally); an edge-of-crop collaborator's surviving sliver can hit zero points under meter-scale pose shifts → scatter builds one fewer canvas than record_len → warp-based fusers (V2VNet/CoAlign) crash out-by-one. Another latent stock fragility. Fix: channel now drops a collaborator whose impaired message would land <2 points inside ego's crop (an empty message ≡ absent at fusion). Guard verified on 5 mock cases; COM_RANGE clamp retained (prevents a separate silent pairwise-row misalignment). Pose cells to be deleted and rerun once more. |
