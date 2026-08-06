@@ -175,16 +175,18 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   (724 frames/cell). Dry run enumerates all cells; Gilbert-Elliott levels calibrated
   to stationary loss rate (empirical 0.712 at target 0.7); pose yaw coupling verified.
 
-### Step 3.2 — Run sweeps  `🟨 IN PROGRESS`
+### Step 3.2 — Run sweeps  `✅ DONE`
 - Runner script executes the matrix, writing one JSON per cell into `results/sweeps/`
   (AP@0.5/0.7, precision, recall, per-region breakdown — see 4.3). Resumable.
 - **Done when:** all cells complete with mean ± std over seeds.
-- **Result:** runner authored (`scripts/run_phase3.py`): per-cell JSON, resumable,
-  clean-dataset GT cache (GT never shrinks under impairment), per-(cell,frame) seeding,
-  bandwidth hooks + bits/frame metering, mean-collaborators observable, one model/
-  dataset build per method. Execution on GPU machine pending (est. ~24–30 h full,
-  resumable in any-size chunks). Per-region breakdown deferred to Phase 4 reruns on
-  selected cells.
+- **Result:** **complete (2026-08-06): 831/831 cells, 0 unresolved failures** across
+  three passes (pilot 123 → main 586 → early/pose reruns 213 after the record_len and
+  zero-voxel fixes). Final pose rerun clean for all 7 methods; zero-voxel guard's
+  message-drop observable visible (collab 1.59→~1.31 at pose L4) with a built-in
+  control: attfuse pose L4 AP identical pre/post guard ⇒ the pose non-monotonic
+  recovery is intrinsic, not guard-induced. CoAlign confirmed most pose-robust
+  (L4 0.511 vs 0.26–0.46 for others). Per-region breakdown deferred to Phase 4
+  reruns on selected cells.
 
 ## Phase 4 — Failure attribution
 
@@ -236,6 +238,7 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 | 2026-08-05 | 2.1 ✅ / 3.1 ✅ / 3.2 | Identity gate passed for late and fcooper too (100/100 + 10/10 each) — Step 2.1 closed. Phase 3 built: `configs/matrix.yaml` (831 cells, GE stationarity + pose coupling validated in dev container) and `scripts/run_phase3.py` (resumable per-cell runner with clean-GT cache and bandwidth metering). Awaiting sweep execution. |
 | 2026-08-05 | 3.2 | **Pilot complete: attfuse × full grid, 123/123 cells, 0 failures, ~78s/cell** (runner optimization: 13min→78s). Findings in `results/pilot_attfuse.md`: loss→floor (delivery signature, never below); latency/stale/pose/swap cross BELOW floor (content failures — 200ms latency worse than total silence); ghosts = pure precision collapse w/ flat recall (sanity check passed, stays above floor); pose non-monotonic (worst at 0.8m); burst≈iid at matched rate; bandwidth free to 4 bits, below floor at 1 bit. Bandwidth L0 reproduces frozen baseline 0.815. Aggregator authored (`scripts/aggregate_sweeps.py`, floor-test classifier, tested). Remaining 6 methods ≈ 16h. |
 | 2026-08-06 | 3.2 | Full sweep first pass: late 108/108 ✅; v2vnet/coalign/cobevt mostly ✅. Two runner/channel bugs found and fixed: (1) all `early` cells crashed — early fusion merges agents pre-collation so `record_len` doesn't exist; collaborator count now recorded as unobservable for early. (2) v2vnet/coalign `pose` cells at ≥0.8m crashed on a LATENT STOCK OpenCOOD bug: dataset filters CAVs by COM_RANGE using (noised) lidar_pose but builds pairwise matrices from the unfiltered dict — a membership flip desyncs feature count vs matrix and crashes models that warp with pairwise_t_matrix. Fix: pose noise now clamps the noised position to the true pose's side of the COM_RANGE boundary (connectivity loss is drop's job, not pose noise's). All `pose` cells to be deleted and rerun under the clamped protocol for uniformity. |
+| 2026-08-06 | 3.2 ✅ | **Phase 3 complete: 831/831 cells, 0 failures.** Final pose rerun (105 cells) clean incl. v2vnet/coalign at all levels. Zero-voxel guard fingerprint: collab 1.59→1.55 (L3)→1.31 (L4); attfuse L4 AP unchanged pre/post guard (recovery intrinsic). CoAlign most pose-robust at every level (L4 0.511). Next: aggregate + Phase 4 attribution analysis. |
 | 2026-08-06 | 3.2 | Pose rerun still crashed v2vnet/coalign at the same cells — COM_RANGE clamp was treating the wrong mechanism. Real cause (read from source): **zero-voxel agent**. With proj_first, collaborator points are projected to ego frame and cropped to the detection range (±40m laterally); an edge-of-crop collaborator's surviving sliver can hit zero points under meter-scale pose shifts → scatter builds one fewer canvas than record_len → warp-based fusers (V2VNet/CoAlign) crash out-by-one. Another latent stock fragility. Fix: channel now drops a collaborator whose impaired message would land <2 points inside ego's crop (an empty message ≡ absent at fusion). Guard verified on 5 mock cases; COM_RANGE clamp retained (prevents a separate silent pairwise-row misalignment). Pose cells to be deleted and rerun once more. |
 | 2026-08-06 | 3.2 | First full-sweep pass finished: **709/831 cells banked** (586 + 123 pilot), 122 failed = 108 early (record_len bug) + 14 v2vnet/coalign pose (COM_RANGE flip bug) — both fixed. CoBEVT full grid clean incl. pose (no pairwise warp, as predicted). Notables: CoBEVT keeps P@0.7 ≈ 0.91–0.93 under ANY loss rate (highest precision retention); its bandwidth curve confirmed non-monotonic (2-bit 0.32 < 1-bit 0.45); pose non-monotonicity reproduces across attfuse/fcooper/late/cobevt. Remaining: rerun early (108) + all pose cells under clamped protocol (105). |
 | 2026-08-05 | 3.2 | Sweep smoke test: 6 cells (attfuse latency L0/L1 × 3 seeds, stride 30), 0 failures. Seeds agree to ±0.002 AP (deterministic impairment + shuffle noise only) — seeding design validated. First physics sensible: 100ms latency barely moves AP@0.5 but craters AP@0.7 with P and R falling together (misplaced collaborator evidence), consistent with V2X-ViT async findings. Cell runtime ⇒ full sweep ≈ 25 h. Pilot (attfuse, full grid, stride 3) is next. |
