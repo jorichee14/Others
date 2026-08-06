@@ -89,7 +89,11 @@ def predict_boxes(fusion, dataset, model, batch):
 def collaborators_in(fusion, batch):
     if fusion == 'late':
         return len(batch) - 1
-    return int(batch['ego']['record_len'].sum().item()) - 1
+    ego = batch['ego']
+    if 'record_len' in ego:
+        return int(ego['record_len'].sum().item()) - 1
+    # early fusion merges all agents' points before collation — count not observable
+    return None
 
 
 def main():
@@ -219,6 +223,7 @@ def main():
             stat = {iou: {'tp': [], 'fp': [], 'gt': 0, 'score': []}
                     for iou in IOUS}
             collab_sum = 0
+            collab_n = 0
             try:
                 with torch.no_grad():
                     for i, batch in zip(frame_indices,
@@ -228,7 +233,10 @@ def main():
                         pred_box, pred_score = \
                             predict_boxes(fusion, ds_chan, model, batch)
                         gt_box = gt_cache[i]
-                        collab_sum += collaborators_in(fusion, batch)
+                        n_collab = collaborators_in(fusion, batch)
+                        if n_collab is not None:
+                            collab_sum += n_collab
+                            collab_n += 1
                         for iou in IOUS:
                             eval_utils.caluclate_tp_fp(
                                 pred_box, pred_score, gt_box, stat, iou)
@@ -243,8 +251,8 @@ def main():
                     'channel_config': cfg.to_dict(),
                     'frames': len(frame_indices),
                     'frame_stride': stride,
-                    'mean_collaborators': round(
-                        collab_sum / len(frame_indices), 3),
+                    'mean_collaborators': (round(collab_sum / collab_n, 3)
+                                           if collab_n else None),
                     'mean_bits_per_frame': meter.mean_bits if meter else None,
                     'metrics': {str(iou): compute_metrics(stat, iou)
                                 for iou in IOUS},
@@ -254,11 +262,13 @@ def main():
                 with open(os.path.join(out_dir, cid + '.json'), 'w') as f:
                     json.dump(record, f, indent=2)
                 m = record['metrics']
+                collab_str = ('%.2f' % record['mean_collaborators']
+                              if record['mean_collaborators'] is not None else 'n/a')
                 print('[%s] AP@0.5/0.7 = %.3f/%.3f | P@0.7 %.3f R@0.7 %.3f | '
-                      'collab %.2f | %.0fs'
+                      'collab %s | %.0fs'
                       % (cid, m['0.5']['ap'], m['0.7']['ap'],
                          m['0.7']['precision'], m['0.7']['recall'],
-                         record['mean_collaborators'], record['runtime_s']))
+                         collab_str, record['runtime_s']))
                 done += 1
             except Exception as e:  # noqa: BLE001 - a bad cell must not kill the sweep
                 import traceback

@@ -69,8 +69,11 @@ def main():
             'ap70_mean': round(ap70[0], 4), 'ap70_std': round(ap70[1], 4),
             'p70_mean': round(p70[0], 4), 'p70_std': round(p70[1], 4),
             'r70_mean': round(r70[0], 4), 'r70_std': round(r70[1], 4),
-            'mean_collaborators': round(
-                statistics.mean(c['mean_collaborators'] for c in cells), 3),
+            'mean_collaborators': (round(statistics.mean(collabs), 3)
+                                   if (collabs := [c['mean_collaborators']
+                                                   for c in cells
+                                                   if c.get('mean_collaborators')
+                                                   is not None]) else None),
             'mean_bits_per_frame': cells[0].get('mean_bits_per_frame'),
             'floor_class': classify(ap70[0], args.floor_ap70, args.margin),
         })
@@ -97,10 +100,12 @@ def main():
             for r in rows:
                 if r['method'] != method:
                     continue
-                f.write('| %s | L%d (%s) | %.3f ± %.3f | %.3f | %.3f | %.2f | %s |\n' % (
+                collab = ('%.2f' % r['mean_collaborators']
+                          if r['mean_collaborators'] is not None else 'n/a')
+                f.write('| %s | L%d (%s) | %.3f ± %.3f | %.3f | %.3f | %s | %s |\n' % (
                     r['impairment'], r['level_index'], r['level_value'],
                     r['ap70_mean'], r['ap70_std'], r['p70_mean'], r['r70_mean'],
-                    r['mean_collaborators'], r['floor_class']))
+                    collab, r['floor_class']))
     print('wrote %s (%d rows) and %s' % (csv_path, len(rows), md_path))
 
 

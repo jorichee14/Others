@@ -22,6 +22,7 @@ Impairments applied here (data level, works for late/early/intermediate fusion):
 
 Bandwidth quantization is feature-level: see feature_hooks.py.
 """
+import math
 from collections import OrderedDict
 
 import numpy as np
@@ -124,13 +125,39 @@ class CommChannel:
     # -------------------------------------------------------------- impairments
     def _apply_pose_noise(self, entry, ego_cur_pose, noise):
         """Recompute the cav->ego projection from a perturbed collaborator pose.
-        gt_transformation_matrix is untouched: GT stays anchored to the true pose."""
+        gt_transformation_matrix is untouched: GT stays anchored to the true pose.
+
+        The noised position is clamped to the true pose's side of OpenCOOD's
+        COM_RANGE boundary: the dataset filters CAVs by this distance but builds
+        pairwise matrices from the unfiltered dict, so a membership flip crashes
+        V2VNet/CoAlign (latent stock bug). Physically, meter-scale localization
+        error should not change connectivity — link loss is modeled by drop."""
         from opencood.utils.transformation_utils import x1_to_x2
         assert ego_cur_pose is not None, \
             'ego must precede collaborators in scenario_database'
         pose = list(entry['params']['lidar_pose'])
         noised = [pose[0] + noise[0], pose[1] + noise[1], pose[2] + noise[2],
                   pose[3], pose[4] + noise[3], pose[5]]
+
+        try:
+            import opencood.data_utils.datasets as _od_datasets
+            com_range = float(getattr(_od_datasets, 'COM_RANGE', 70.0))
+        except Exception:  # noqa: BLE001 - fall back to the OPV2V default
+            com_range = 70.0
+        ex, ey = ego_cur_pose[0], ego_cur_pose[1]
+        d_true = math.hypot(pose[0] - ex, pose[1] - ey)
+        d_noised = math.hypot(noised[0] - ex, noised[1] - ey)
+        margin = 0.1
+        target = None
+        if d_true <= com_range < d_noised:
+            target = com_range - margin
+        elif d_noised <= com_range < d_true:
+            target = com_range + margin
+        if target is not None and d_noised > 0:
+            scale = target / d_noised
+            noised[0] = ex + (noised[0] - ex) * scale
+            noised[1] = ey + (noised[1] - ey) * scale
+
         entry['params']['lidar_pose'] = noised
         entry['params']['transformation_matrix'] = \
             x1_to_x2(noised, ego_cur_pose)
