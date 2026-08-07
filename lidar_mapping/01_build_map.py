@@ -1309,6 +1309,30 @@ def _instance_stats(Q, C, label, class_id, votes, seen, floor_z, det_conf,
     return st
 
 
+def print_funnel(funnel, names, min_ratio, keep_pts):
+    """Show where each detected class died, so tuning is not guesswork."""
+    if not funnel:
+        return
+    rows = sorted(funnel.items(), key=lambda kv: -kv[1]["voted"])
+    print(f"    {'class':<16}{'voted':>9}{'seen':>7}{'agreed':>9}"
+          f"{'kept':>9}{'objects':>9}   bottleneck")
+    for c, f in rows[:25]:
+        if f["clusters"]:
+            why = ""
+        elif f["agreed"] == 0:
+            why = (f"agreement (median {f['ratio']:.0%} of views < "
+                   f"min_ratio {min_ratio:.0%})")
+        elif f["kept"] == 0:
+            why = "structural veto (all points flush on a plane)"
+        elif f["flat"]:
+            why = "wall-like clusters (raise min_area / lower min_protrusion)"
+        else:
+            why = f"clusters below min_pts_keep ({keep_pts})"
+        print(f"    {names.get(c, c)[:15]:<16}{f['voted']:>9}"
+              f"{f['ratio']:>6.0%}{f['agreed']:>9}{f['kept']:>9}"
+              f"{f['clusters']:>9}   {why}")
+
+
 def detect_objects(P, S, s, pcd):
     """[6] fuse YOLO detections across views onto the map, cluster into
     instances. Returns a dict of layers + the inventory, or None."""
@@ -1412,6 +1436,24 @@ def detect_objects(P, S, s, pcd):
           f"{int(confident.sum())} points pass multi-view agreement "
           f"(>= {min_votes} votes and >= {min_ratio:.0%} of views)")
 
+    # Per-class funnel. Every stage here is a filter, so a disappointing
+    # inventory is almost always ONE of them cutting too hard -- and without
+    # the intermediate counts there is no way to tell which. `seen` is the
+    # median fraction of views in which a voted point was actually labelled:
+    # when it sits well below min_ratio, the agreement test is the bottleneck
+    # and no amount of veto or cluster tuning will bring the class back.
+    funnel = {}
+    for c in votes.keys():
+        vm = best_c == c
+        nv = int(vm.sum())
+        if nv == 0:
+            continue
+        ratio = (best_v[vm] / np.maximum(n_seen[vm], 1))
+        funnel[c] = {"voted": nv,
+                     "ratio": float(np.median(ratio)),
+                     "agreed": int((confident & vm).sum()),
+                     "kept": 0, "clusters": 0, "small": 0, "flat": 0}
+
     # ---- structural veto: the one failure voting cannot catch ---------------
     # A detector that fires on the same wall patch from every view (a poster
     # read as "tv", a dark rectangle, a plain hallucination) scores a PERFECT
@@ -1437,6 +1479,8 @@ def detect_objects(P, S, s, pcd):
         print(f"    structural veto: {len(planes)} large planes -> "
               f"{n_kill} voted pts dropped as flush-on-structure, "
               f"{int(confident.sum())} object pts remain")
+    for c, f in funnel.items():
+        f["kept"] = int((confident & (best_c == c)).sum())
 
     cl = d.get("cluster", {})
     eps = float(cl.get("eps", 0.12))
@@ -1450,6 +1494,8 @@ def detect_objects(P, S, s, pcd):
     for c in sorted(votes.keys()):
         sel = np.flatnonzero(confident & (best_c == c))
         if len(sel) < keep_pts:
+            if c in funnel:
+                funnel[c]["small"] = 1
             continue
         sub = work.select_by_index(sel)
         lb = np.asarray(sub.cluster_dbscan(eps=eps, min_points=min_points))
@@ -1457,6 +1503,8 @@ def detect_objects(P, S, s, pcd):
         for L in range(int(lb.max()) + 1):
             m = lb == L
             if int(m.sum()) < keep_pts:
+                if c in funnel:
+                    funnel[c]["small"] += 1
                 continue
             gidx = sel[m]
             pr = protr[gidx]
@@ -1465,6 +1513,8 @@ def detect_objects(P, S, s, pcd):
             # as one object) is rejected as a body, not point by point
             if np.isfinite(pr).any() and float(np.median(pr)) < min_protrusion:
                 n_flat += 1
+                if c in funnel:
+                    funnel[c]["flat"] += 1
                 continue
             st = _instance_stats(
                 pts[gidx], None if cols is None else cols[gidx],
@@ -1473,10 +1523,13 @@ def detect_objects(P, S, s, pcd):
             st["id"] = len(instances) + 1
             inst_id[gidx] = len(instances)
             instances.append(st)
+            if c in funnel:
+                funnel[c]["clusters"] += 1
 
     if n_flat:
         print(f"    rejected {n_flat} wall-like clusters "
               f"(median protrusion < {min_protrusion} m)")
+    print_funnel(funnel, names, min_ratio, keep_pts)
     print(f"[6] detect: {len(instances)} object instances "
           f"({sum(i['n_points'] for i in instances)} voting pts) in "
           f"{len(set(i['label'] for i in instances))} classes")
