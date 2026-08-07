@@ -132,6 +132,49 @@ Optional YOLO stage that turns the single cloud into **layers**:
    height) rather than a full 3D OBB, which degenerates on the flat one-sided
    clusters LiDAR produces.
 
+### The structural veto — when a wall gets detected as an object
+
+Multi-view voting measures **consistency, not correctness**. A detector that
+fires "tv" on the same wall patch from *every* viewpoint earns a near-perfect
+vote ratio and passes every fusion threshold — fusion is structurally blind to
+systematic error. The depth band doesn't help for wall-mounted objects either,
+since the wall behind a TV sits at the same depth as the TV.
+
+So a second, independent signal is used: **geometry**. Structure is large and
+planar; objects stand off it.
+
+1. Large planes (≥ `min_area`, default 4 m²) are RANSAC-fitted to the map.
+   A plane whose inliers are >50% already-voted-as-object is **skipped as a
+   veto surface**, so a large planar object (a long counter, a table top) can
+   never veto itself.
+2. **Per point** (`flush_tol`, 0.05 m): voted points lying flush on a
+   structural plane are dropped. This trims the wall halo around a genuinely
+   wall-mounted object — the TV body is 6–8 cm off the wall and survives, the
+   halo sits at ~0 and dies.
+3. **Per cluster** (`min_protrusion`, 0.04 m on the **median**): a cluster
+   that still sits flat against structure is rejected as a body. Median, not
+   mean, so a noisy tail can't rescue a flat patch.
+
+The measured standoff is reported as `protrusion` on every inventory entry.
+
+| | wall around a real TV | wall hallucinated as "tv" | the TV itself |
+|---|---|---|---|
+| vote ratio | 0.7 | 0.9 | 0.8 |
+| passes fusion | ✅ | ✅ | ✅ |
+| protrusion | ~0.00 m | ~0.01 m | ~0.07 m |
+| result | trimmed per-point | cluster rejected | **kept** |
+
+Costs, all one-directional: flat wall-mounted things thinner than `flush_tol`
+(posters, framed pictures, a 3 cm ultraslim TV) are removed — lower
+`flush_tol` if you need them, though below ~3 cm LiDAR noise makes the
+distinction unreliable anyway. Objects on the floor lose their bottom ring,
+which strips floor bleed out of a chair mask and leaves the body intact.
+Raise `min_area` if a large flat object (counter, table top) disappears.
+
+Not fixed by this: a detector consistently *mislabelling* a free-standing
+object (a trash can read as a "chair"). It protrudes correctly, so the veto
+passes it — wrong label, right geometry. That needs a better model.
+
 ### Inventory format
 
 ```yaml
@@ -160,6 +203,7 @@ objects:
     footprint: { yaw_deg: 35.5, length: 0.61, width: 0.58, height: 0.91 }
     base_z: -1.44
     height_above_floor: 0.03
+    protrusion: 0.42          # median standoff from the nearest large plane
     mean_rgb: [0.31, 0.28, 0.26]
 ```
 
@@ -185,6 +229,9 @@ the same shift is applied to the inventory and recorded as `anchor_shift`.
 |---|---|
 | objects missing | lower `conf`, lower `min_votes`/`min_ratio`, lower `img_stride`, raise `max_range` |
 | walls bleed into objects | raise `mask_erode`/`bbox_shrink`, lower `depth_band`, raise `min_ratio` |
+| a wall/poster is inventoried as an object | raise `structure_veto.flush_tol` / `min_protrusion` |
+| thin wall-mounted objects vanish | lower `structure_veto.flush_tol` / `min_protrusion` |
+| a counter or table top vanishes | raise `structure_veto.min_area` |
 | one object split into several | raise `cluster.eps` |
 | touching objects merged | lower `cluster.eps` |
 | clutter in the inventory | raise `cluster.min_pts_keep`, or set an explicit `classes` allowlist |

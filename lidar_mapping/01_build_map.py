@@ -123,9 +123,30 @@ OBJECT DETECTION + INVENTORY, stage [6], optional:
       "min_votes": 3,              # label needs >= this many frames agreeing
       "min_ratio": 0.35,           # ...and >= this fraction of frames seen
       "cluster": { "eps": 0.12, "min_points": 60, "min_pts_keep": 120 },
+      "structure_veto": {         # reject detections that landed on structure
+        "enable": true,
+        "voxel": 0.08,            # plane-fitting resolution (m)
+        "plane_dist": 0.06,       # RANSAC inlier distance (m)
+        "min_area": 4.0,          # only veto against planes this large (m^2)
+        "max_planes": 40,
+        "flush_tol": 0.05,        # voted points within this of a big plane
+                                  #   are structure, not object
+        "min_protrusion": 0.04    # ...and a whole cluster must stand off the
+                                  #   nearest plane by at least this much
+      },
       "save_layers": true, "save_per_object": false,
       "inventory": "objects_inventory.yaml"
     }
+  On the structural veto: multi-view voting measures CONSISTENCY, not
+  correctness, so a detector that fires on the same wall patch from every view
+  ("tv" on a poster or a dark rectangle) earns a perfect vote ratio and fusion
+  alone can never reject it. The veto answers that with geometry -- flush on a
+  large plane means structure -- and it also trims the wall halo around
+  genuinely wall-mounted objects, where the depth band cannot help because the
+  wall behind sits at the same depth. Raise flush_tol/min_protrusion if wall
+  fuzz still enters the inventory; LOWER them if thin wall-mounted objects
+  (flat TVs, radiators) vanish, and raise min_area if large flat objects
+  (counters, table tops) are being treated as structure.
   Needs `pip install ultralytics`. Run detection AFTER dynamic removal so
   people/movers are already gone -- the two stages are complementary: carving
   removes what moved, detection names what stayed.
@@ -640,6 +661,57 @@ def yolo_label_image(model, names, img, d, W, H, ok):
     return lab, insts
 
 
+def fit_structure_planes(work_pts, obj_mask, voxel=0.08, dist=0.06,
+                         min_area=4.0, max_planes=40):
+    """Large planes of the map (walls, floor, ceiling) used to veto object
+    votes that actually landed on structure.
+
+    Multi-view voting measures CONSISTENCY, not correctness: a detector that
+    fires "tv" on the same wall patch from every viewpoint produces a perfect
+    vote ratio, so no amount of fusion can reject it. Geometry can. Fitting is
+    done on a coarse copy for speed, then each candidate plane is re-evaluated
+    analytically on the full voting cloud.
+
+    A plane whose inliers are mostly voted-as-object is SKIPPED, so a large
+    planar object (a long counter, a table top) can never veto itself."""
+    pc = _pc(work_pts).voxel_down_sample(voxel)
+    rest = pc
+    planes = []
+    cell = voxel * voxel
+    for _ in range(max_planes):
+        if len(rest.points) < 200:
+            break
+        model, inl = rest.segment_plane(dist, 3, 500)
+        if len(inl) * cell < min_area:      # largest first -> rest are smaller
+            break
+        n = np.array(model[:3], float)
+        L = np.linalg.norm(n)
+        if L < 1e-9:
+            break
+        n /= L
+        d0 = float(model[3] / L)
+        m = np.abs(work_pts @ n + d0) < dist
+        if m.any() and obj_mask[m].mean() < 0.5:
+            planes.append((n, d0))
+        rest = rest.select_by_index(inl, invert=True)
+    return planes
+
+
+def min_plane_distance(pts, planes, chunk=2_000_000):
+    """Distance from each point to the NEAREST structural plane (inf if none).
+    This doubles as the protrusion measure: a wall point sits at ~0, a real
+    object stands off by its depth."""
+    if not planes:
+        return np.full(len(pts), np.inf)
+    Nn = np.array([p[0] for p in planes]).T          # (3, K)
+    dd = np.array([p[1] for p in planes])            # (K,)
+    out = np.empty(len(pts))
+    for a in range(0, len(pts), chunk):
+        b = min(a + chunk, len(pts))
+        out[a:b] = np.abs(pts[a:b] @ Nn + dd).min(axis=1)
+    return out
+
+
 def _footprint(Q):
     """PCA of the XY footprint -> (yaw_deg, [length, width]).
 
@@ -661,7 +733,8 @@ def _footprint(Q):
     return float(yaw), loc.max(0) - loc.min(0)
 
 
-def _instance_stats(Q, C, label, class_id, votes, seen, floor_z, det_conf):
+def _instance_stats(Q, C, label, class_id, votes, seen, floor_z, det_conf,
+                    protr=None):
     yaw, ext = _footprint(Q)
     lo = Q.min(axis=0); hi = Q.max(axis=0)
     cen = Q.mean(axis=0)
@@ -685,6 +758,10 @@ def _instance_stats(Q, C, label, class_id, votes, seen, floor_z, det_conf):
         "base_z": round(float(lo[2]), 3),
         "height_above_floor": round(float(lo[2] - floor_z), 3),
     }
+    if protr is not None and np.isfinite(protr).any():
+        # how far this object stands off the nearest wall/floor/ceiling plane;
+        # near zero means the "object" IS structure
+        st["protrusion"] = round(float(np.median(protr)), 3)
     if C is not None:
         st["mean_rgb"] = [round(float(x), 3) for x in C.mean(axis=0)]
     return st
@@ -787,6 +864,32 @@ def detect_objects(P, S, s, pcd):
           f"{int(confident.sum())} points pass multi-view agreement "
           f"(>= {min_votes} votes and >= {min_ratio:.0%} of views)")
 
+    # ---- structural veto: the one failure voting cannot catch ---------------
+    # A detector that fires on the same wall patch from every view (a poster
+    # read as "tv", a dark rectangle, a plain hallucination) scores a PERFECT
+    # vote ratio -- consistency is exactly what it has. It is rejected here on
+    # geometry instead: points lying flush on a large structural plane are not
+    # objects. This also trims the wall halo around genuinely wall-mounted
+    # objects, where the depth-band gate is useless because the wall behind
+    # sits at the same depth as the object.
+    vt = d.get("structure_veto", {})
+    protr = np.full(N, np.inf)
+    min_protrusion = float(vt.get("min_protrusion", 0.04))
+    if vt.get("enable", True):
+        planes = fit_structure_planes(
+            pts, confident,
+            voxel=float(vt.get("voxel", 0.08)),
+            dist=float(vt.get("plane_dist", 0.06)),
+            min_area=float(vt.get("min_area", 4.0)),
+            max_planes=int(vt.get("max_planes", 40)))
+        protr = min_plane_distance(pts, planes)
+        flush = protr < float(vt.get("flush_tol", 0.05))
+        n_kill = int((confident & flush).sum())
+        confident &= ~flush
+        print(f"    structural veto: {len(planes)} large planes -> "
+              f"{n_kill} voted pts dropped as flush-on-structure, "
+              f"{int(confident.sum())} object pts remain")
+
     cl = d.get("cluster", {})
     eps = float(cl.get("eps", 0.12))
     min_points = int(cl.get("min_points", 60))
@@ -795,6 +898,7 @@ def detect_objects(P, S, s, pcd):
     floor_z = float(np.percentile(pts[:, 2], 1.0))
     inst_id = np.full(N, -1, np.int64)
     instances = []
+    n_flat = 0
     for c in sorted(votes.keys()):
         sel = np.flatnonzero(confident & (best_c == c))
         if len(sel) < keep_pts:
@@ -807,13 +911,24 @@ def detect_objects(P, S, s, pcd):
             if int(m.sum()) < keep_pts:
                 continue
             gidx = sel[m]
+            pr = protr[gidx]
+            # second line of defence: a cluster that survived per-point vetoing
+            # but still sits flat against structure (a whole wall segment read
+            # as one object) is rejected as a body, not point by point
+            if np.isfinite(pr).any() and float(np.median(pr)) < min_protrusion:
+                n_flat += 1
+                continue
             st = _instance_stats(
                 pts[gidx], None if cols is None else cols[gidx],
-                names[c], c, best_v[gidx], n_seen[gidx], floor_z, det_conf)
+                names[c], c, best_v[gidx], n_seen[gidx], floor_z, det_conf,
+                protr=pr)
             st["id"] = len(instances) + 1
             inst_id[gidx] = len(instances)
             instances.append(st)
 
+    if n_flat:
+        print(f"    rejected {n_flat} wall-like clusters "
+              f"(median protrusion < {min_protrusion} m)")
     print(f"[6] detect: {len(instances)} object instances "
           f"({sum(i['n_points'] for i in instances)} voting pts) in "
           f"{len(set(i['label'] for i in instances))} classes")
