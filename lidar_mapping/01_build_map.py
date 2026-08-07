@@ -283,6 +283,31 @@ def xp():
     return _GPU["xp"]
 
 
+def mod_of(a):
+    """The array module that OWNS `a`.
+
+    Stage code must follow the data, not the global backend: colorize falls
+    back to the host when a cloud will not fit in VRAM, and a shared helper
+    that assumed xp() would then try to matmul a numpy array against a cupy
+    one."""
+    return _GPU["xp"] if _GPU["on"] and not isinstance(a, np.ndarray) else np
+
+
+def gpu_free_bytes():
+    if not _GPU["on"]:
+        return 0
+    try:
+        return int(_GPU["xp"].cuda.runtime.memGetInfo()[0])
+    except Exception:
+        return 0
+
+
+def gpu_fits(nbytes, headroom=2.0):
+    """True when `nbytes` can be held resident with room for the per-frame
+    temporaries (which need roughly as much again during projection)."""
+    return _GPU["on"] and nbytes * headroom < gpu_free_bytes()
+
+
 def on_gpu():
     return _GPU["on"]
 
@@ -840,6 +865,36 @@ class BlockIndex:
                                in zip(self.start[bi], self.count[bi])])
 
 
+def projection_chunk(m, n_pts, bytes_per_point=44):
+    """Points per projection slice, sized to what is actually free on the card.
+
+    Each point in flight costs roughly Xc (12 B) + z/u/v (12 B) + the boolean
+    masks and the gathered outputs, so ~44 B. Half the free pool is used, which
+    leaves room for the sort that follows."""
+    if m is np:
+        return n_pts
+    try:
+        free, _ = m.cuda.runtime.memGetInfo()
+    except Exception:
+        free = 1 << 30
+    return int(max(1_000_000, min(n_pts, free * 0.5 / bytes_per_point)))
+
+
+def _project_chunk(m, sub, R, tvec, S, W, H, max_range):
+    """Transform + in-bounds test for one slice. Returns local indices."""
+    Xc = sub @ R.T + tvec
+    z = Xc[:, 2]
+    fr = z > 1e-3
+    zs = m.where(fr, z, 1.0)                   # branchless: no divide by ~0
+    u = m.where(fr, S.fx * Xc[:, 0] / zs + S.cx, -1.0)
+    v = m.where(fr, S.fy * Xc[:, 1] / zs + S.cy, -1.0)
+    inb = fr & (u >= 0) & (u < W) & (v >= 0) & (v < H) & (z < max_range)
+    if not bool(inb.any()):
+        return None
+    sel = m.flatnonzero(inb)
+    return sel, u[sel], v[sel], z[sel]
+
+
 def project_visible(index, pts, Twc, S, W, H, max_range):
     """Map points visible from camera pose Twc, at most one per pixel.
 
@@ -851,31 +906,40 @@ def project_visible(index, pts, Twc, S, W, H, max_range):
     `index` is a BlockIndex on the CPU, or None on the GPU: transforming every
     point costs a couple of milliseconds there, less than the gather that
     culling would need, so the GPU path skips the index entirely."""
-    m = xp()
+    m = mod_of(pts)                            # follow the data, not xp()
     Tcw = _inv_se3(Twc)
+    R = m.asarray(Tcw[:3, :3], dtype=pts.dtype)
+    tvec = m.asarray(Tcw[:3, 3], dtype=pts.dtype)
     if index is None:
-        sub = pts
-        idx = None
+        # GPU: no cull, but the transform is CHUNKED. sub @ R.T allocates a
+        # second full (N,3) array, so a 124 M-point cloud needs 1.5 GB of
+        # temporaries per frame on top of the 2.3 GB already resident -- which
+        # is exactly how this used to die with OutOfMemoryError. Slicing keeps
+        # the working set bounded while the resident cloud stays on the card.
+        parts = []
+        step = projection_chunk(m, len(pts))
+        for a in range(0, len(pts), step):
+            r = _project_chunk(m, pts[a:a + step], R, tvec, S, W, H, max_range)
+            if r is not None:
+                sel, uu_, vv_, z_ = r
+                parts.append((sel + a, uu_, vv_, z_))
+        if not parts:
+            return None
+        g = m.concatenate([p[0] for p in parts])
+        u = m.concatenate([p[1] for p in parts])
+        v = m.concatenate([p[2] for p in parts])
+        zc = m.concatenate([p[3] for p in parts])
+        del parts
     else:
         idx = index.candidates(Tcw, S, W, H, max_range)
         if idx is None:
             return None
-        sub = pts[idx]
-    R = as_dev(Tcw[:3, :3], sub.dtype)
-    tvec = as_dev(Tcw[:3, 3], sub.dtype)
-    Xc = sub @ R.T + tvec
-    z = Xc[:, 2]
-    fr = z > 1e-3
-    zs = m.where(fr, z, 1.0)                   # branchless: no divide by ~0
-    u = m.where(fr, S.fx * Xc[:, 0] / zs + S.cx, -1.0)
-    v = m.where(fr, S.fy * Xc[:, 1] / zs + S.cy, -1.0)
-    inb = fr & (u >= 0) & (u < W) & (v >= 0) & (v < H) & (z < max_range)
-    if not bool(inb.any()):
-        return None
-    sel = m.flatnonzero(inb)
-    g = sel if idx is None else idx[sel]       # GPU: mask index IS the global
-    zc = z[sel]
-    uu = u[sel].astype(np.int64); vv = v[sel].astype(np.int64)
+        r = _project_chunk(m, pts[idx], R, tvec, S, W, H, max_range)
+        if r is None:
+            return None
+        sel, u, v, zc = r
+        g = idx[sel]
+    uu = u.astype(np.int64); vv = v.astype(np.int64)
     # ONE sort instead of two: pack pixel id and mm-quantised depth into a
     # single key so argsort orders by pixel then by depth. The old
     # argsort(z) + np.unique(pix) pair sorted the same data twice. A single
@@ -950,17 +1014,26 @@ def colorize(P, S, s, pcd):
     else:
         work = pcd
 
-    m = xp()
     N = len(work.points)
     # uint8 colours + float32 depth: at 40 M points this is 200 MB instead of
     # 1.3 GB, and the inner loop is memory-bandwidth bound. float32 xyz is
     # accurate to ~10 um at building scale, far below a pixel footprint.
-    if on_gpu():
+    resident = N * (12 + 3 + 4)               # xyz f32 + rgb u8 + depth f32
+    use_dev = on_gpu() and gpu_fits(resident)
+    m = xp() if use_dev else np
+    if use_dev:
         pts = m.asarray(np.asarray(work.points), dtype=m.float32)
-        index = None                          # transform-all beats gather here
+        index = None                          # cull is unnecessary on device
         print(f"    {N} pts resident on GPU "
               f"({pts.nbytes / 2**20:.0f} MiB), no cull needed")
     else:
+        if on_gpu():
+            free = gpu_free_bytes()
+            print(f"    cloud needs ~{resident / 2**30:.1f} GiB resident but "
+                  f"only {free / 2**30:.1f} GiB is free on the card -> "
+                  f"colorizing on the CPU.\n"
+                  f"    set colorize.voxel (e.g. 0.04) to colour a "
+                  f"downsampled copy and keep this on the GPU")
         pts = np.asarray(work.points, dtype=np.float64)
         index = BlockIndex(pts, block=float(c.get("cull_block", 2.0)))
         print(f"    frustum index: {len(index.start)} blocks")
@@ -999,14 +1072,14 @@ def colorize(P, S, s, pcd):
             gb = g_keep[better]
             # 640x360x3 is under a megabyte -- cheaper to push the image to the
             # device than to pull the (much larger) index arrays back
-            img_d = as_dev(np.ascontiguousarray(img[:, :, ::-1]))
+            img_d = m.asarray(np.ascontiguousarray(img[:, :, ::-1]))
             colors[gb] = img_d[vv_k[better], uu_k[better]]
             best[gb] = z_keep[better]
             if n % 750 == 0:
                 print(f"    img {n} ({n_used} used)", flush=True)
 
-    colors = as_cpu(colors)
-    seen = np.isfinite(as_cpu(best))
+    colors = np.asarray(colors if m is np else m.asnumpy(colors))
+    seen = np.isfinite(np.asarray(best if m is np else m.asnumpy(best)))
     del pts, best
     gpu_free()
     print(f"    {n_used} frames used; colored {seen.sum()}/{N} "
@@ -1256,11 +1329,15 @@ def detect_objects(P, S, s, pcd):
         return None
     print(f"[6] detect: voting on {N} pts at {dv} m "
           f"(from {len(pcd.points)}), every {stride}th image")
-    m = xp()
-    if on_gpu():
+    use_dev = gpu_fits(N * (12 + 4 + 4))
+    m = xp() if use_dev else np
+    if use_dev:
         ptsd = m.asarray(pts, dtype=m.float32)
         index = None
     else:
+        if on_gpu():
+            print(f"    cloud too large for free VRAM -> voting on the CPU "
+                  f"(raise detect_objects.voxel to use the GPU)")
         ptsd = pts
         index = BlockIndex(pts, block=float(d.get("cull_block", 2.0)))
     frames, names = detection_frames(P, S, s, d)
@@ -1286,7 +1363,7 @@ def detect_objects(P, S, s, pcd):
         n_seen[m.unique(g)] += 1            # unique: one point may win >1 pixel
         if not insts or lab_img is None:
             continue                        # frame still counted above
-        lab = as_dev(lab_img)[vv, uu]
+        lab = m.asarray(lab_img)[vv, uu]
         for k, (c, cf) in enumerate(insts):
             sel = lab == k
             ns = int(sel.sum())
@@ -1317,8 +1394,9 @@ def detect_objects(P, S, s, pcd):
 
     # voting is done; everything downstream (plane RANSAC, DBSCAN, instance
     # stats) is Open3D/CPU, so bring the accumulators back and free the card
-    n_seen = as_cpu(n_seen)
-    votes = {c: as_cpu(v) for c, v in votes.items()}
+    n_seen = np.asarray(n_seen if m is np else m.asnumpy(n_seen))
+    votes = {c: np.asarray(v if m is np else m.asnumpy(v))
+             for c, v in votes.items()}
     del ptsd
     gpu_free()
 
