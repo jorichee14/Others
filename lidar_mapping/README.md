@@ -99,6 +99,51 @@ both kinds of evidence.
 
 ---
 
+## GPU acceleration (stage 01)
+
+Set `"gpu": true` in `01_build_map` (the default) and install CuPy for your
+CUDA version:
+
+```bash
+pip install cupy-cuda12x     # or cupy-cuda11x
+```
+
+There is **no separate GPU code path**. Every hot kernel is plain array
+arithmetic, so numpy and CuPy drive the same source through one module
+handle — which is why the CPU tests also validate the GPU logic. If CuPy or
+the driver is missing, the stage prints why and runs on the CPU.
+
+**What moves to the GPU**
+
+| stage | kernel | why it fits |
+|---|---|---|
+| `[1]` merge | range filter + pose transform | elementwise over every scan |
+| `[1b]` carving | ray march | the densest kernel here — a scan generates tens of millions of samples over a (rays × steps) grid |
+| `[1b]` both filters | int64 key sort / unique / group reduce | GPU radix sort is where the biggest single win is; these arrays reach hundreds of millions of keys |
+| `[1b]` | `drop_dynamic_points` membership | chunked `searchsorted` over the full cloud |
+| `[2]` denoise | statistical outlier removal | via Open3D's CUDA tensor API, with automatic CPU fallback |
+| `[3]` colorize | projection + z-buffer | cloud stays resident on the card; culling is skipped because transforming everything is cheaper than the gather |
+| `[6]` detect | projection + vote accumulation | same kernel; YOLO was already on the GPU |
+
+**What deliberately stays on the CPU**
+
+Bag reading and deserialization (I/O and Python bound — no kernel to run),
+Poisson / RANSAC / DBSCAN (Open3D has no CUDA path for them), and Open3D's
+`voxel_down_sample`, whose C++ implementation is already fast and whose GPU
+equivalent needs a second full-size index array — the one place where VRAM,
+not time, is the binding constraint.
+
+**Memory.** Accumulators compact once they pass a threshold
+(`carve.compact_at`, and the same inside `DynStats`), which is what keeps a
+30-minute bag from exhausting VRAM. Device caches are released between
+stages. If you hit OOM, lower `carve.chunk` (65536 on GPU by default) and
+`compact_at`, or set `colorize.voxel` so the resident cloud is smaller.
+
+Bag reading is not accelerated, so it becomes the floor: once the kernels are
+on the GPU, stage 01 is roughly as fast as your disk can feed it.
+
+---
+
 ## Layer 3 — object detection & inventory (stage 01, `[6]`)
 
 Optional YOLO stage that turns the single cloud into **layers**:

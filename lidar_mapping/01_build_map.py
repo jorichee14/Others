@@ -167,6 +167,102 @@ from pipeline_common import load_pipeline
 
 TS = get_typestore(Stores.ROS2_HUMBLE)
 
+# =============================================================================
+# GPU BACKEND
+# =============================================================================
+# Stage 01's cost is concentrated in a handful of embarrassingly parallel
+# kernels: the per-frame projection in colorize [3] and detect [6], the ray
+# march in free-space carving [1b], and the very large int64 key sorts behind
+# both voxel filters. Every one of them is plain array arithmetic, so the whole
+# stage runs on numpy or cupy through ONE module handle -- there is no second
+# code path to keep in sync, and anything the GPU cannot do falls back with a
+# message instead of failing.
+#
+# Deliberately kept on the CPU: bag reading and message deserialization (I/O
+# and Python bound, no kernel to run), Poisson/RANSAC/DBSCAN (Open3D has no
+# CUDA path for them), and Open3D's voxel_down_sample, whose C++ implementation
+# is already fast and whose GPU equivalent would need a second full-size index
+# array -- the one place where VRAM, not time, is the binding constraint.
+_GPU = {"xp": np, "on": False, "name": ""}
+
+
+def init_gpu(want):
+    """Bring up CuPy if requested and available. Returns True when live."""
+    if not want:
+        return False
+    try:
+        import cupy as cp
+        if cp.cuda.runtime.getDeviceCount() == 0:
+            raise RuntimeError("no CUDA device visible")
+        cp.zeros(1).sum()                      # force context creation now
+        props = cp.cuda.runtime.getDeviceProperties(0)
+        name = props["name"]
+        free, total = cp.cuda.runtime.memGetInfo()
+        _GPU.update(xp=cp, on=True,
+                    name=name.decode() if isinstance(name, bytes) else str(name))
+        print(f"[gpu] {_GPU['name']}: {free / 2**30:.1f} of "
+              f"{total / 2**30:.1f} GiB free")
+        return True
+    except Exception as e:
+        print(f"[gpu] requested but unavailable ({type(e).__name__}: {e})"
+              f" -> running on CPU")
+        return False
+
+
+def xp():
+    """The active array module: numpy, or cupy when the GPU is live."""
+    return _GPU["xp"]
+
+
+def on_gpu():
+    return _GPU["on"]
+
+
+def as_cpu(a):
+    """Device array -> numpy (no-op on the CPU backend)."""
+    return _GPU["xp"].asnumpy(a) if _GPU["on"] else np.asarray(a)
+
+
+def as_dev(a, dtype=None):
+    """numpy -> device (no-op on the CPU backend)."""
+    if _GPU["on"]:
+        return _GPU["xp"].asarray(a, dtype=dtype)
+    return np.asarray(a, dtype=dtype) if dtype is not None else a
+
+
+def gpu_free():
+    """Release cached device blocks between stages so the next one starts
+    with the full card available."""
+    if _GPU["on"]:
+        _GPU["xp"].get_default_memory_pool().free_all_blocks()
+
+
+def group_bounds(m, keys):
+    """Sort keys and return (order, uniq, start, count).
+
+    The backbone of every voxel reduction here. Uses only argsort, slicing and
+    comparison, so it behaves identically on numpy and cupy -- unlike
+    ufunc.reduceat, which cupy does not implement at all. The sort is STABLE,
+    which is what lets callers read per-group first/last values straight out of
+    the sorted array instead of running a separate min/max reduction."""
+    order = m.argsort(keys, kind="stable")
+    ks = keys[order]
+    if ks.size == 0:
+        return order, ks, ks, ks
+    first = m.concatenate((m.ones(1, bool), ks[1:] != ks[:-1]))
+    start = m.flatnonzero(first)
+    end = m.concatenate((start[1:], m.array([ks.size], dtype=start.dtype)))
+    return order, ks[start], start, end - start
+
+
+def group_sum(m, vals, start, count):
+    """Per-group sum via cumsum differences (reduceat-free, so cupy-safe)."""
+    if start.size == 0:
+        return vals[:0]
+    cs = m.cumsum(vals)
+    total = cs[start + count - 1]
+    return total - m.concatenate((m.zeros(1, cs.dtype), total[:-1]))
+
 # ---- global voxel-key packing for the dynamic filter -------------------------
 # Pack a signed integer voxel index (vx, vy, vz) into one int64 so per-voxel
 # stats live in flat numpy arrays. 20 bits/axis (+/-524287 voxels) stays well
@@ -235,45 +331,83 @@ def iter_world_scans(P, S, s):
             j = nearest_pose_idx(tr_t, t)
             if abs(tr_t[j] - t) > tol:
                 continue
-            p = pc2_xyz(msg)
-            d = np.linalg.norm(p, axis=1)
-            p = p[np.isfinite(p).all(1) & (d > lo) & (d < hi)]
+            m = xp()
+            p = as_dev(pc2_xyz(msg))
+            dist = m.linalg.norm(p, axis=1)
+            p = p[m.isfinite(p).all(1) & (dist > lo) & (dist < hi)]
             if p.shape[0] == 0:
                 continue
             Tw = tr_T[j]
-            yield t, (Tw[:3, :3] @ p.T).T + Tw[:3, 3], Tw[:3, 3].copy()
+            R = as_dev(Tw[:3, :3], p.dtype); tv = as_dev(Tw[:3, 3], p.dtype)
+            # world points stay on the device: the dynamic filter and the
+            # carver consume them there, and only merge's accumulator needs
+            # them back on the host
+            yield t, p @ R.T + tv, as_dev(Tw[:3, 3].copy())
 
 
 class DynStats:
     """Per-voxel occupancy accumulator for dynamic-object removal. add() one
-    scan's world points at a time; dynamic_keys() returns the transient voxels."""
-    def __init__(self, voxel):
+    scan's world points at a time; dynamic_keys() returns the transient voxels.
+
+    Runs on whichever backend is active. Partial results are compacted once the
+    buffer passes compact_at entries, which bounds memory on long runs -- on
+    the GPU that is the difference between finishing and an out-of-memory
+    abort, since a 30-minute bag can deposit hundreds of millions of keys."""
+
+    def __init__(self, voxel, compact_at=40_000_000):
         self.inv = 1.0 / float(voxel)
+        self.compact_at = int(compact_at)
         self._keys = []   # per-scan unique voxel keys
         self._time = []   # matching scan time, broadcast per key
+        self._n = 0
+        # compacted state, always sorted by key and chronological within a key
+        self.k = None; self.hits = None; self.tmin = None; self.tmax = None
 
     def add(self, world_pts, t):
-        vox = np.floor(world_pts * self.inv).astype(np.int64)
-        u = np.unique(pack_voxels(vox))
+        m = xp()
+        vox = m.floor(as_dev(world_pts) * self.inv).astype(np.int64)
+        u = m.unique(pack_voxels(vox))
         if u.size:
             self._keys.append(u)
-            self._time.append(np.full(u.shape, float(t)))
+            self._time.append(m.full(u.shape, float(t)))
+            self._n += int(u.size)
+            if self._n >= self.compact_at:
+                self._compact()
+
+    def _compact(self):
+        """Fold the buffer into (key, hits, tmin, tmax) running totals."""
+        m = xp()
+        if not self._keys:
+            return
+        keys = m.concatenate(self._keys)
+        times = m.concatenate(self._time)
+        hits = m.ones(keys.size, np.int64)
+        self._keys = []; self._time = []; self._n = 0
+        if self.k is not None:
+            # prior summaries FIRST: they cover earlier scans, so a stable sort
+            # keeps every group chronological and first/last stay valid
+            keys = m.concatenate((self.k, keys))
+            hits = m.concatenate((self.hits, hits))
+            times = m.concatenate((self.tmin, times))
+            tmax_in = m.concatenate((self.tmax, times[self.tmin.size:]))
+        else:
+            tmax_in = times
+        order, uniq, start, count = group_bounds(m, keys)
+        self.k = uniq
+        self.hits = group_sum(m, hits[order], start, count)
+        self.tmin = times[order][start]
+        self.tmax = tmax_in[order][start + count - 1]
 
     def dynamic_keys(self, min_hits, min_span_s, carver=None,
                      min_free=3, free_ratio=0.25):
         """Sorted int64 keys of voxels judged transient (moving objects).
         Returns (keys, (n_static, n_dyn, n_carved))."""
-        if not self._keys:
+        m = xp()
+        if not self._keys and self.k is None:
             return np.empty(0, np.int64), (0, 0, 0)
-        keys = np.concatenate(self._keys)
-        times = np.concatenate(self._time)
-        order = np.argsort(keys, kind="stable")
-        keys = keys[order]; times = times[order]
-        uniq, start = np.unique(keys, return_index=True)
-        hits = np.diff(np.append(start, keys.size))         # distinct scans / voxel
-        tmin = np.minimum.reduceat(times, start)
-        tmax = np.maximum.reduceat(times, start)
-        span = tmax - tmin
+        self._compact()
+        uniq = self.k; hits = self.hits
+        span = self.tmax - self.tmin
         # span is the fast-mover discriminator: static structure is observed
         # across a long stretch of the run; a moving object leaves only a short
         # contiguous burst in any one voxel. min_hits is just a noise guard
@@ -317,8 +451,8 @@ class FreeSpaceCarver:
         self.margin = 2.0 * self.voxel + float(endpoint_margin)
         self.chunk = int(chunk)
         self.compact_at = int(compact_at)
-        self.keys = np.empty(0, np.int64)
-        self.counts = np.empty(0, np.int64)
+        self.keys = None
+        self.counts = None
         self._buf = []
         self._buf_n = 0
         self._n_scan = 0
@@ -327,58 +461,67 @@ class FreeSpaceCarver:
         self._n_scan += 1
         if (self._n_scan - 1) % self.scan_stride:
             return
-        p = world_pts[::self.ray_stride]
+        # The densest kernel in stage 01: every ray samples one point per voxel
+        # length, so a single scan can generate tens of millions of samples.
+        # It is also pure elementwise arithmetic over a (rays x steps) grid --
+        # exactly what a GPU is for. Chunking bounds the peak allocation on
+        # either backend; on the GPU raise carve.chunk to fill the card.
+        m = xp()
+        origin = as_dev(origin)
+        p = as_dev(world_pts)[::self.ray_stride]
         vec = p - origin[None, :]
-        dist = np.linalg.norm(vec, axis=1)
-        m = dist > (self.margin + self.step)
-        if not m.any():
+        dist = m.linalg.norm(vec, axis=1)
+        keep = dist > (self.margin + self.step)
+        if not bool(keep.any()):
             return
-        vec = vec[m]; dist = dist[m]
-        end = np.minimum(dist - self.margin, self.max_range)
+        vec = vec[keep]; dist = dist[keep]
+        end = m.minimum(dist - self.margin, self.max_range)
         scan_keys = []
         for a in range(0, len(vec), self.chunk):
             b = min(a + self.chunk, len(vec))
             d = dist[a:b]; e = end[a:b]
             dirs = vec[a:b] / d[:, None]
-            n_steps = int(np.ceil(e.max() / self.step))
+            n_steps = int(np.ceil(float(e.max()) / self.step))
             if n_steps <= 0:
                 continue
-            t = (np.arange(n_steps) + 0.5) * self.step          # (S,)
+            t = (m.arange(n_steps) + 0.5) * self.step           # (S,)
             valid = t[None, :] < e[:, None]                     # (n,S)
             pts = origin[None, None, :] + dirs[:, None, :] * t[None, :, None]
-            vox = np.floor(pts[valid] * self.inv).astype(np.int64)
+            vox = m.floor(pts[valid] * self.inv).astype(np.int64)
             if vox.size:
                 scan_keys.append(pack_voxels(vox))
         if not scan_keys:
             return
-        u = np.unique(np.concatenate(scan_keys))
+        u = m.unique(m.concatenate(scan_keys))
         self._buf.append(u)
-        self._buf_n += u.size
+        self._buf_n += int(u.size)
         if self._buf_n >= self.compact_at:
             self._compact()
 
     def _compact(self):
+        m = xp()
         if not self._buf:
             return
-        k = np.concatenate(self._buf)
+        k = m.concatenate(self._buf)
         self._buf = []; self._buf_n = 0
-        uniq, inv = np.unique(k, return_inverse=True)
-        c = np.bincount(inv).astype(np.int64)
-        if self.keys.size:
-            comb = np.concatenate([self.keys, uniq])
-            combc = np.concatenate([self.counts, c])
-            uniq, inv = np.unique(comb, return_inverse=True)
-            c = np.bincount(inv, weights=combc).astype(np.int64)
+        _, uniq, start, count = group_bounds(m, k)
+        c = count.astype(np.int64)
+        if self.keys is not None and self.keys.size:
+            comb = m.concatenate([self.keys, uniq])
+            combc = m.concatenate([self.counts, c])
+            order, uniq, start, count = group_bounds(m, comb)
+            c = group_sum(m, combc[order], start, count).astype(np.int64)
         self.keys, self.counts = uniq, c
 
     def counts_for(self, query):
         """Free-scan count per (sorted or unsorted) packed voxel key."""
+        m = xp()
         self._compact()
-        if self.keys.size == 0:
-            return np.zeros(query.shape, np.int64)
-        pos = np.searchsorted(self.keys, query)
-        pos = np.clip(pos, 0, self.keys.size - 1)
-        return np.where(self.keys[pos] == query, self.counts[pos], 0)
+        if self.keys is None or self.keys.size == 0:
+            return m.zeros(query.shape, np.int64)
+        pos = m.searchsorted(self.keys, query)
+        pos = m.clip(pos, 0, self.keys.size - 1)
+        return m.where(self.keys[pos] == query, self.counts[pos], 0)
 
 
 def make_carver(rd, s):
@@ -392,23 +535,30 @@ def make_carver(rd, s):
         max_range=min(float(cv.get("max_range", 20.0)), float(s["lidar_max"])),
         ray_stride=cv.get("ray_stride", 4),
         scan_stride=cv.get("scan_stride", 2),
-        endpoint_margin=cv.get("endpoint_margin", 0.0))
+        endpoint_margin=cv.get("endpoint_margin", 0.0),
+        # the GPU eats far larger ray batches than the CPU wants to allocate
+        chunk=int(cv.get("chunk", 65536 if on_gpu() else 8000)),
+        compact_at=int(cv.get("compact_at", 20_000_000)))
 
 
-def drop_dynamic_points(pcd, dyn_keys, voxel):
+def drop_dynamic_points(pcd, dyn_keys, voxel, chunk=20_000_000):
     """Return pcd with points whose global voxel is in dyn_keys removed."""
     if len(pcd.points) == 0 or dyn_keys.size == 0:
         return pcd, 0
+    m = xp()
+    dyn_keys = as_dev(dyn_keys)
     pts = np.asarray(pcd.points)
-    vox = np.floor(pts * (1.0 / float(voxel))).astype(np.int64)
-    packed = pack_voxels(vox)
-    # dyn_keys is sorted -> membership via searchsorted (fast, low memory)
-    pos = np.searchsorted(dyn_keys, packed)
-    pos = np.clip(pos, 0, dyn_keys.size - 1)
-    is_dyn = dyn_keys[pos] == packed
-    keep = np.where(~is_dyn)[0]
+    flags = np.empty(len(pts), bool)
+    for a in range(0, len(pts), chunk):       # chunked: bounds VRAM on 40M+
+        b = min(a + chunk, len(pts))
+        vox = m.floor(as_dev(pts[a:b]) * (1.0 / float(voxel))).astype(np.int64)
+        packed = pack_voxels(vox)
+        # dyn_keys is sorted -> membership via searchsorted (fast, low memory)
+        pos = m.clip(m.searchsorted(dyn_keys, packed), 0, dyn_keys.size - 1)
+        flags[a:b] = as_cpu(dyn_keys[pos] == packed)
+    keep = np.where(~flags)[0]
     out = pcd.select_by_index(keep)
-    return out, int(is_dyn.sum())
+    return out, int(flags.sum())
 
 
 def merge(P, S, s, dyn=None, carver=None):
@@ -434,7 +584,7 @@ def merge(P, S, s, dyn=None, carver=None):
             dyn.add(wp, t)                 # collect stats before downsampling
         if carver is not None:
             carver.add(origin, wp)
-        buf.append(wp)
+        buf.append(as_cpu(wp))             # accumulator + Open3D live on host
         n += 1
         if n % flush == 0:
             compressed = compress(); buf = []
@@ -467,6 +617,7 @@ def remove_dynamic(P, S, s, pcd, dyn, carver):
         min_free=cv.get("min_free", 3),
         free_ratio=cv.get("free_ratio", 0.25))
     out, removed = drop_dynamic_points(pcd, dyn_keys, voxel)
+    gpu_free()
     carve_note = (f", {n_carved} of them span-static but carved by free-space"
                   if carver is not None else " (carving off)")
     print(f"[1b] remove-dynamic: {n_static} static / {n_dyn} dynamic voxels "
@@ -537,35 +688,48 @@ class BlockIndex:
 def project_visible(index, pts, Twc, S, W, H, max_range):
     """Map points visible from camera pose Twc, at most one per pixel.
 
-    Frustum-culls with the BlockIndex, projects through the pinhole
-    intrinsics, then z-buffers so an occluded point never receives the pixel's
-    colour or class label. Shared by colorize [3] and detect_objects [6] so
-    both stages agree on exactly which point a pixel belongs to.
-    Returns (global_idx, u, v, z) of the winning points, or None."""
+    Projects through the pinhole intrinsics, then z-buffers so an occluded
+    point never receives the pixel's colour or class label. Shared by colorize
+    [3] and detect_objects [6] so both stages agree on exactly which point a
+    pixel belongs to. Returns (global_idx, u, v, z) of the winners, or None.
+
+    `index` is a BlockIndex on the CPU, or None on the GPU: transforming every
+    point costs a couple of milliseconds there, less than the gather that
+    culling would need, so the GPU path skips the index entirely."""
+    m = xp()
     Tcw = _inv_se3(Twc)
-    idx = index.candidates(Tcw, S, W, H, max_range)
-    if idx is None:
-        return None
-    sub = pts[idx]
-    Xc = (Tcw[:3, :3] @ sub.T).T + Tcw[:3, 3]
+    if index is None:
+        sub = pts
+        idx = None
+    else:
+        idx = index.candidates(Tcw, S, W, H, max_range)
+        if idx is None:
+            return None
+        sub = pts[idx]
+    R = as_dev(Tcw[:3, :3], sub.dtype)
+    tvec = as_dev(Tcw[:3, 3], sub.dtype)
+    Xc = sub @ R.T + tvec
     z = Xc[:, 2]
     fr = z > 1e-3
-    u = np.full(len(sub), -1.0); v = np.full(len(sub), -1.0)
-    u[fr] = S.fx * Xc[fr, 0] / z[fr] + S.cx
-    v[fr] = S.fy * Xc[fr, 1] / z[fr] + S.cy
+    zs = m.where(fr, z, 1.0)                   # branchless: no divide by ~0
+    u = m.where(fr, S.fx * Xc[:, 0] / zs + S.cx, -1.0)
+    v = m.where(fr, S.fy * Xc[:, 1] / zs + S.cy, -1.0)
     inb = fr & (u >= 0) & (u < W) & (v >= 0) & (v < H) & (z < max_range)
-    if not inb.any():
+    if not bool(inb.any()):
         return None
-    g = idx[inb]; zc = z[inb]
-    uu = u[inb].astype(np.int64); vv = v[inb].astype(np.int64)
+    sel = m.flatnonzero(inb)
+    g = sel if idx is None else idx[sel]       # GPU: mask index IS the global
+    zc = z[sel]
+    uu = u[sel].astype(np.int64); vv = v[sel].astype(np.int64)
     # ONE sort instead of two: pack pixel id and mm-quantised depth into a
     # single key so argsort orders by pixel then by depth. The old
-    # argsort(z) + np.unique(pix) pair sorted the same data twice.
-    zq = np.minimum((zc * 1000.0).astype(np.int64), (1 << 21) - 1)
+    # argsort(z) + np.unique(pix) pair sorted the same data twice. A single
+    # radix sort is also the one primitive a GPU accelerates best.
+    zq = m.minimum((zc * 1000.0).astype(np.int64), (1 << 21) - 1)
     key = ((vv * W + uu) << 21) | zq
-    order = np.argsort(key, kind="stable")
+    order = m.argsort(key, kind="stable")
     ks = key[order] >> 21
-    first = np.concatenate(([True], ks[1:] != ks[:-1]))
+    first = m.concatenate((m.ones(1, bool), ks[1:] != ks[:-1]))
     keep = order[first]
     return g[keep], uu[keep], vv[keep], zc[keep]
 
@@ -594,6 +758,30 @@ def pose_gate(c):
     return use
 
 
+def denoise(s, pcd):
+    """[2] statistical outlier removal, on the GPU when Open3D was built with
+    CUDA. This is a k-NN over the whole cloud -- the one heavy step here with
+    no CuPy expression, but Open3D's tensor API does carry a CUDA nearest-
+    neighbour backend, so try it and fall back to the legacy CPU call."""
+    nb, std = s["denoise"]["nb"], s["denoise"]["std"]
+    if on_gpu():
+        try:
+            dev = o3d.core.Device("CUDA:0")
+            t = o3d.t.geometry.PointCloud.from_legacy(pcd, o3d.core.float32,
+                                                      dev)
+            print("[2] denoise: statistical outlier removal (GPU)")
+            t, _ = t.remove_statistical_outliers(nb, std)
+            out = t.to_legacy()
+            del t
+            gpu_free()
+            return out
+        except Exception as e:
+            print(f"    GPU denoise unavailable ({type(e).__name__}) -> CPU")
+    print("[2] denoise: light statistical outlier removal")
+    pcd, _ = pcd.remove_statistical_outlier(nb, std)
+    return pcd
+
+
 def colorize(P, S, s, pcd):
     print("[3] colorize: best-view projection (frustum-culled)")
     tr_t, tr_T = P.traj
@@ -607,14 +795,22 @@ def colorize(P, S, s, pcd):
     else:
         work = pcd
 
-    pts = np.asarray(work.points, dtype=np.float64)
-    N = len(pts)
+    m = xp()
+    N = len(work.points)
     # uint8 colours + float32 depth: at 40 M points this is 200 MB instead of
-    # 1.3 GB, and the inner loop is memory-bandwidth bound
-    colors = np.full((N, 3), 128, np.uint8)
-    best = np.full(N, np.inf, np.float32)
-    index = BlockIndex(pts, block=float(c.get("cull_block", 2.0)))
-    print(f"    frustum index: {len(index.start)} blocks")
+    # 1.3 GB, and the inner loop is memory-bandwidth bound. float32 xyz is
+    # accurate to ~10 um at building scale, far below a pixel footprint.
+    if on_gpu():
+        pts = m.asarray(np.asarray(work.points), dtype=m.float32)
+        index = None                          # transform-all beats gather here
+        print(f"    {N} pts resident on GPU "
+              f"({pts.nbytes / 2**20:.0f} MiB), no cull needed")
+    else:
+        pts = np.asarray(work.points, dtype=np.float64)
+        index = BlockIndex(pts, block=float(c.get("cull_block", 2.0)))
+        print(f"    frustum index: {len(index.start)} blocks")
+    colors = m.full((N, 3), 128, np.uint8)
+    best = m.full(N, np.inf, np.float32)
     use_frame = pose_gate(c)
 
     with AnyReader([Path(P.dataset["bag"])], default_typestore=TS) as r:
@@ -638,7 +834,7 @@ def colorize(P, S, s, pcd):
             n_used += 1
             g_keep, uu_k, vv_k, z_keep = vis
             better = z_keep.astype(np.float32) < best[g_keep]
-            if not better.any():
+            if not bool(better.any()):
                 continue
             img = decode_img(msg)
             if img is None:
@@ -646,12 +842,18 @@ def colorize(P, S, s, pcd):
             if (img.shape[1], img.shape[0]) != (W, H):
                 img = cv2.resize(img, (W, H))
             gb = g_keep[better]
-            colors[gb] = img[vv_k[better], uu_k[better]][:, ::-1]
+            # 640x360x3 is under a megabyte -- cheaper to push the image to the
+            # device than to pull the (much larger) index arrays back
+            img_d = as_dev(np.ascontiguousarray(img[:, :, ::-1]))
+            colors[gb] = img_d[vv_k[better], uu_k[better]]
             best[gb] = z_keep[better]
             if n % 750 == 0:
                 print(f"    img {n} ({n_used} used)", flush=True)
 
-    seen = np.isfinite(best)
+    colors = as_cpu(colors)
+    seen = np.isfinite(as_cpu(best))
+    del pts, best
+    gpu_free()
     print(f"    {n_used} frames used; colored {seen.sum()}/{N} "
           f"({100 * seen.mean():.1f}%)")
     work.colors = o3d.utility.Vector3dVector(colors.astype(np.float64) / 255.0)
@@ -882,12 +1084,18 @@ def detect_objects(P, S, s, pcd):
         return None
     print(f"[6] detect: voting on {N} pts at {dv} m "
           f"(from {len(pcd.points)}), every {stride}th image")
-    index = BlockIndex(pts, block=float(d.get("cull_block", 2.0)))
+    m = xp()
+    if on_gpu():
+        ptsd = m.asarray(pts, dtype=m.float32)
+        index = None
+    else:
+        ptsd = pts
+        index = BlockIndex(pts, block=float(d.get("cull_block", 2.0)))
     model, names = _yolo_model(d)
     ok = _class_filter(d)
     use_frame = pose_gate(d)
 
-    n_seen = np.zeros(N, np.int32)          # frames the point was visible in
+    n_seen = m.zeros(N, np.int32)           # frames the point was visible in
     votes = {}                              # class_id -> per-point vote count
     conf_acc = {}                           # class_id -> [sum_conf, n_det]
     n_frames = n_det = 0
@@ -909,7 +1117,7 @@ def detect_objects(P, S, s, pcd):
                 continue
             # cull BEFORE decoding/inferring: a frame with nothing in view
             # must not pay for a YOLO pass
-            vis = project_visible(index, pts, Twc, S, W, H, max_range)
+            vis = project_visible(index, ptsd, Twc, S, W, H, max_range)
             if vis is None:
                 continue
             img = decode_img(msg)
@@ -919,11 +1127,11 @@ def detect_objects(P, S, s, pcd):
                 img = cv2.resize(img, (W, H))
             g, uu, vv, z = vis
             n_frames += 1
-            n_seen[np.unique(g)] += 1       # unique: one point may win >1 pixel
+            n_seen[m.unique(g)] += 1        # unique: one point may win >1 pixel
             lab_img, insts = yolo_label_image(model, names, img, d, W, H, ok)
             if not insts:
                 continue
-            lab = lab_img[vv, uu]
+            lab = as_dev(lab_img)[vv, uu]
             for k, (c, cf) in enumerate(insts):
                 sel = lab == k
                 ns = int(sel.sum())
@@ -934,12 +1142,12 @@ def detect_objects(P, S, s, pcd):
                 # that slips past the silhouette lands on the far wall, which
                 # is metres behind -> rejected here rather than voted on
                 inb = sel.copy()
-                inb[sel] = np.abs(zk - np.median(zk)) <= band
-                gi = np.unique(g[inb])
+                inb[sel] = m.abs(zk - m.median(zk)) <= band
+                gi = m.unique(g[inb])
                 if gi.size == 0:
                     continue
                 if c not in votes:
-                    votes[c] = np.zeros(N, np.int32)
+                    votes[c] = m.zeros(N, np.int32)
                     conf_acc[c] = [0.0, 0]
                 votes[c][gi] += 1
                 conf_acc[c][0] += cf; conf_acc[c][1] += 1
@@ -952,10 +1160,17 @@ def detect_objects(P, S, s, pcd):
         print("[6] detect: no detections survived - check model/classes/conf")
         return None
 
+    # voting is done; everything downstream (plane RANSAC, DBSCAN, instance
+    # stats) is Open3D/CPU, so bring the accumulators back and free the card
+    n_seen = as_cpu(n_seen)
+    votes = {c: as_cpu(v) for c, v in votes.items()}
+    del ptsd
+    gpu_free()
+
     best_v = np.zeros(N, np.int32); best_c = np.full(N, -1, np.int32)
     for c, v in votes.items():
-        m = v > best_v
-        best_v[m] = v[m]; best_c[m] = c
+        gt = v > best_v
+        best_v[gt] = v[gt]; best_c[gt] = c
     min_votes = int(d.get("min_votes", 3))
     min_ratio = float(d.get("min_ratio", 0.35))
     confident = (best_c >= 0) & (best_v >= min_votes) & \
@@ -1214,6 +1429,7 @@ def main():
     P = load_pipeline(cfg_path)
     S = P.sensor
     s = P.stage("01_build_map")
+    init_gpu(s.get("gpu", True))
     P.traj = load_traj_cached(P)
     print(f"loaded {len(P.traj[0])} GLIM poses; outputs -> {P.out_dir}/")
 
@@ -1237,8 +1453,7 @@ def main():
         pcd = o3d.io.read_point_cloud(static_p)
         print(f"    {len(pcd.points)} pts")
         if s["denoise"]["enable"]:
-            print("[2] denoise: light statistical outlier removal")
-            pcd, _ = pcd.remove_statistical_outlier(s["denoise"]["nb"], s["denoise"]["std"])
+            pcd = denoise(s, pcd)
             save(P, pcd, "denoised.pcd")
     else:
         if os.path.exists(merged_p):
@@ -1257,8 +1472,7 @@ def main():
                 save(P, pcd, "static.pcd")
 
         if s["denoise"]["enable"]:
-            print("[2] denoise: light statistical outlier removal")
-            pcd, _ = pcd.remove_statistical_outlier(s["denoise"]["nb"], s["denoise"]["std"])
+            pcd = denoise(s, pcd)
             save(P, pcd, "denoised.pcd")
 
     if s["colorize"]["enable"]:
