@@ -147,23 +147,22 @@ def main():
         frame_indices = list(range(0, len(ds_clean), args.stride))
 
         # per-frame clean context: GT corners + zone labels (from ego's own cloud).
-        # Ego points are 1-in-3 subsampled (MIN_PTS scaled accordingly) to keep the
-        # cache ~3x lighter; zone labels are insensitive to this at these densities.
+        # Visibility definition: a GT box is ego-visible iff it contains >= MIN_PTS
+        # of the ego's own (full-density) lidar returns.
         print('[%s] building GT + zone cache (%d frames)'
               % (method, len(frame_indices)))
         t_gt = time.time()
         gt_cache = {}
-        min_pts_sub = max(2, MIN_PTS // 3)
         for n_done, i in enumerate(frame_indices):
             np.random.seed(crc('gt', method, i))
             base = ds_clean.retrieve_base_data(i)
             ego_entry = next(v for v in base.values() if v['ego'])
             ego_pts = pcd_utils.mask_ego_points(
-                ego_entry['lidar_np'])[::3, :3].astype(np.float32)
+                ego_entry['lidar_np'])[:, :3].astype(np.float32)
             sample = ds_clean[i]
             batch = ds_clean.collate_batch_test([sample])
             gt = ds_clean.post_processor.generate_gt_bbx(batch).cpu().numpy()
-            visible = np.array([points_in_box(ego_pts, gt[k]).sum() >= min_pts_sub
+            visible = np.array([points_in_box(ego_pts, gt[k]).sum() >= MIN_PTS
                                 for k in range(len(gt))], dtype=bool)
             gt_cache[i] = (gt, visible, ego_pts)
             if (n_done + 1) % 100 == 0:
@@ -198,7 +197,7 @@ def main():
                         fp_total += len(fps)
                         for pi in fps:
                             if points_in_box(ego_pts,
-                                             pred_np[pi]).sum() >= min_pts_sub:
+                                             pred_np[pi]).sum() >= MIN_PTS:
                                 fp_egovis += 1
             finally:
                 channel.detach()
