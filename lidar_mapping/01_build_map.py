@@ -256,12 +256,15 @@ def group_bounds(m, keys):
 
 
 def group_sum(m, vals, start, count):
-    """Per-group sum via cumsum differences (reduceat-free, so cupy-safe)."""
+    """Per-group sum via cumsum differences (reduceat-free, so cupy-safe).
+    Handles (N,) and (N,C) values -- the latter sums each column, which is how
+    the merge accumulator carries xyz totals."""
     if start.size == 0:
         return vals[:0]
-    cs = m.cumsum(vals)
+    cs = m.cumsum(vals, axis=0)              # axis matters: 2-D must not flatten
     total = cs[start + count - 1]
-    return total - m.concatenate((m.zeros(1, cs.dtype), total[:-1]))
+    pad = m.zeros((1,) + vals.shape[1:], cs.dtype)
+    return total - m.concatenate((pad, total[:-1]))
 
 # ---- global voxel-key packing for the dynamic filter -------------------------
 # Pack a signed integer voxel index (vx, vy, vz) into one int64 so per-voxel
@@ -275,6 +278,15 @@ def pack_voxels(vox):
     """(N,3) int64 voxel indices -> (N,) int64 keys (bijective within range)."""
     v = vox.astype(np.int64) + _VOX_OFF
     return (v[:, 0] << (2 * _VOX_BITS)) | (v[:, 1] << _VOX_BITS) | v[:, 2]
+
+
+def unpack_voxels(keys):
+    """Inverse of pack_voxels: (N,) int64 keys -> (N,3) int64 indices."""
+    m = np if isinstance(keys, np.ndarray) else xp()
+    mask = (1 << _VOX_BITS) - 1
+    return m.stack([(keys >> (2 * _VOX_BITS)) & mask,
+                    (keys >> _VOX_BITS) & mask,
+                    keys & mask], axis=1) - _VOX_OFF
 
 
 def pc2_xyz(msg):
@@ -561,37 +573,128 @@ def drop_dynamic_points(pcd, dyn_keys, voxel, chunk=20_000_000):
     return out, int(flags.sum())
 
 
+def reduce_module(nbytes):
+    """Pick numpy or cupy for one big reduction, by whether it comfortably
+    fits in free VRAM (x3 covers the sort workspace and the output)."""
+    if not on_gpu():
+        return np
+    try:
+        free, _ = xp().cuda.runtime.memGetInfo()
+        return xp() if nbytes * 3 < free else np
+    except Exception:
+        return np
+
+
+class VoxelAccumulator:
+    """Memory-bounded replacement for merge's grow-then-downsample buffer.
+
+    The previous accumulator appended every scan and periodically ran Open3D's
+    voxel_down_sample over the whole pile. That keeps the old array, the
+    concatenated array and Open3D's internal copy alive at once -- roughly 4x
+    the cloud -- while the cloud itself grows without bound at a fine voxel. A
+    180 M-point run therefore peaked near 17 GB and was killed by the OS.
+
+    This keeps ONE entry per occupied voxel, so memory tracks the mapped
+    surface area rather than the number of scans, and no step ever needs a
+    second full-size copy of the raw points.
+
+    centroid=True reproduces voxel_down_sample's result (mean of the points
+    falling in each voxel) at 36 bytes per voxel. centroid=False stores the
+    voxel centre instead: 8 bytes per voxel, 4.5x leaner, displacing each point
+    by at most half a voxel -- 5 mm on a 1 cm grid, far below the sensor's own
+    range noise."""
+
+    def __init__(self, voxel, centroid=True, flush_pts=20_000_000):
+        self.voxel = float(voxel)
+        self.inv = 1.0 / self.voxel
+        self.centroid = bool(centroid)
+        self.flush_pts = int(flush_pts)
+        self.keys = None; self.sums = None; self.cnts = None
+        self._buf = []; self._n = 0
+
+    def add(self, pts):
+        self._buf.append(np.asarray(as_cpu(pts), dtype=np.float32))
+        self._n += len(self._buf[-1])
+        if self._n >= self.flush_pts:
+            self.flush()
+
+    def flush(self):
+        if not self._buf:
+            return
+        pts = np.concatenate(self._buf); self._buf = []; self._n = 0
+        n_old = 0 if self.keys is None else self.keys.size
+        m = reduce_module((n_old + len(pts)) * (32 if self.centroid else 8))
+        k = pack_voxels(m.floor(m.asarray(pts, dtype=m.float64)
+                                * self.inv).astype(np.int64))
+        if self.keys is not None:
+            k = m.concatenate([m.asarray(self.keys), k])
+        if not self.centroid:
+            self.keys = as_cpu_of(m, m.unique(k))
+            del k
+            return
+        vals = m.asarray(pts, dtype=m.float64)
+        ones = m.ones(len(pts), np.int64)
+        if self.sums is not None:
+            vals = m.concatenate([m.asarray(self.sums), vals])
+            ones = m.concatenate([m.asarray(self.cnts), ones])
+        order, uniq, start, count = group_bounds(m, k)
+        del k
+        self.keys = as_cpu_of(m, uniq)
+        self.sums = as_cpu_of(m, group_sum(m, vals[order], start, count))
+        self.cnts = as_cpu_of(m, group_sum(m, ones[order], start, count))
+
+    def points(self):
+        """The merged cloud, one point per occupied voxel."""
+        self.flush()
+        if self.keys is None or self.keys.size == 0:
+            return np.empty((0, 3))
+        if self.centroid:
+            return self.sums / self.cnts[:, None]
+        return (unpack_voxels(self.keys) + 0.5) * self.voxel
+
+    def nbytes(self):
+        return sum(a.nbytes for a in (self.keys, self.sums, self.cnts)
+                   if a is not None)
+
+
+def as_cpu_of(m, a):
+    """as_cpu() for a reduction that may have run on a different module."""
+    return m.asnumpy(a) if m is not np else np.asarray(a)
+
+
 def merge(P, S, s, dyn=None, carver=None):
     extras = [x for x, on in (("dynamic-voxel stats", dyn is not None),
                               ("free-space carving", carver is not None)) if on]
     print("[1] merge: LiDAR scans -> world cloud"
           + (f" (+ {', '.join(extras)})" if extras else ""))
     scan_voxel = s["scan_voxel"]; final_voxel = s["final_voxel"]
-    flush = s["flush_every"]
-    buf = []; compressed = None; n = 0
-
-    def compress():
-        nonlocal buf, compressed
-        if not buf:
-            return compressed
-        stack = np.vstack(buf) if compressed is None else np.vstack([compressed] + buf)
-        if scan_voxel > 0:
-            stack = np.asarray(_pc(stack).voxel_down_sample(scan_voxel).points)
-        return stack
-
+    # the accumulator grid is the finer of the two: anything coarser would
+    # throw away detail the final downsample is still asking for
+    grid = min(v for v in (scan_voxel, final_voxel) if v > 0) \
+        if (scan_voxel > 0 or final_voxel > 0) else 0.0
+    if grid <= 0:
+        raise SystemExit("merge needs scan_voxel or final_voxel > 0; an "
+                         "un-voxelised merge cannot be memory-bounded")
+    acc = VoxelAccumulator(grid,
+                           centroid=bool(s.get("merge_centroid", True)),
+                           flush_pts=int(s.get("merge_flush_pts", 20_000_000)))
+    n = 0
+    report = max(1, int(s["flush_every"]))
     for t, wp, origin in iter_world_scans(P, S, s):
         if dyn is not None:
             dyn.add(wp, t)                 # collect stats before downsampling
         if carver is not None:
             carver.add(origin, wp)
-        buf.append(as_cpu(wp))             # accumulator + Open3D live on host
+        acc.add(wp)
         n += 1
-        if n % flush == 0:
-            compressed = compress(); buf = []
-            print(f"    {n} scans, {0 if compressed is None else len(compressed)} pts")
-    compressed = compress()
-    m = _pc(compressed if compressed is not None else np.empty((0, 3)))
-    if final_voxel > 0:
+        if n % report == 0:
+            acc.flush()
+            print(f"    {n} scans, {0 if acc.keys is None else acc.keys.size} "
+                  f"voxels ({acc.nbytes() / 2**20:.0f} MiB)", flush=True)
+    m = _pc(acc.points())
+    del acc
+    gpu_free()
+    if final_voxel > 0 and final_voxel > grid:
         m = m.voxel_down_sample(final_voxel)
     print(f"    merged {n} scans -> {len(m.points)} pts")
     return m
