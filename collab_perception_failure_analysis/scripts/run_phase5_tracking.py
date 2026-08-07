@@ -213,8 +213,25 @@ def main():
         for end in ds_clean.len_record:
             bounds.append((start, end)); start = end
 
+        def ego_pose_of(i):
+            """Ego world pose via direct yaml lookup — avoids retrieve_base_data,
+            which loads every collaborator's point cloud as a side effect."""
+            scenario_index = 0
+            for k, ele in enumerate(ds_clean.len_record):
+                if i < ele:
+                    scenario_index = k
+                    break
+            t_index = i if scenario_index == 0 else \
+                i - ds_clean.len_record[scenario_index - 1]
+            sdb = ds_clean.scenario_database[scenario_index]
+            t_key = ds_clean.return_timestamp_key(sdb, t_index)
+            ego_content = next(v for v in sdb.values() if v['ego'])
+            return load_yaml(ego_content[t_key]['yaml'])['lidar_pose']
+
         # per-frame clean context (shared by all conditions): world-frame GT tracks
-        print('[%s] building GT-track + ego-pose cache' % method)
+        print('[%s] building GT-track + ego-pose cache (%d frames)'
+              % (method, n_total))
+        t_gt = time.time()
         gt_cache = {}
         for i in range(n_total):
             np.random.seed(crc('gt', method, i))
@@ -223,13 +240,14 @@ def main():
             mask = ego['object_bbx_mask'] == 1
             centers = np.asarray(ego['object_bbx_center'])[mask][:, :3]
             ids = list(ego['object_ids'])
-            base = ds_clean.retrieve_base_data(i)
-            ego_pose = next(v for v in base.values()
-                            if v['ego'])['params']['lidar_pose']
-            M = x1_to_x2(ego_pose, [0, 0, 0, 0, 0, 0])   # ego frame -> world
+            M = x1_to_x2(ego_pose_of(i), [0, 0, 0, 0, 0, 0])  # ego frame -> world
             pts = centers @ M[:3, :3].T + M[:3, 3]
             gt_cache[i] = ([(gid, float(p[0]), float(p[1]))
                             for gid, p in zip(ids, pts)], M)
+            if (i + 1) % 200 == 0:
+                print('[%s]   cache %d/%d (%.0fs)'
+                      % (method, i + 1, n_total, time.time() - t_gt))
+        print('[%s] cache ready (%.0fs)' % (method, time.time() - t_gt))
 
         for cond in pending:
             t0 = time.time()
