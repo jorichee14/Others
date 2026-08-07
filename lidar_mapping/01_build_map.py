@@ -164,6 +164,8 @@ from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
 from pipeline_common import load_pipeline
+# numpy+cv2 only, shared with detect_cache.py across the venv boundary
+from yolo_labels import decode_img
 
 TS = get_typestore(Stores.ROS2_HUMBLE)
 
@@ -294,23 +296,6 @@ def pc2_xyz(msg):
     raw = np.frombuffer(bytes(msg.data), np.uint8).reshape(-1, msg.point_step)
     def c(n): return raw[:, off[n]:off[n] + 4].copy().view(np.float32).ravel()
     return np.stack([c("x"), c("y"), c("z")], 1)
-
-
-def decode_img(msg):
-    enc = msg.encoding.lower()
-    buf = np.frombuffer(bytes(msg.data), np.uint8)
-    h, w = msg.height, msg.width
-    if enc in ("bgra8", "rgba8"):
-        img = buf.reshape(h, w, 4)[:, :, :3]
-        if enc == "rgba8":
-            img = img[:, :, ::-1]
-    elif enc in ("bgr8", "rgb8"):
-        img = buf.reshape(h, w, 3)
-        if enc == "rgb8":
-            img = img[:, :, ::-1]
-    else:
-        return None
-    return np.ascontiguousarray(img)
 
 
 def _pc(points):
@@ -991,74 +976,91 @@ def colorize(P, S, s, pcd):
 # [6] OBJECT DETECTION + INVENTORY (semantic layer)
 # =============================================================================
 
-def _yolo_model(d):
-    try:
-        from ultralytics import YOLO
-    except ImportError:
+def cached_frames(P, s, d):
+    """Yield (t, label_image, insts) from a detect_cache.py run, plus names.
+
+    Reading the cache costs nothing but numpy and cv2, which is the whole
+    point: torch never enters this environment. Note that frames with NO
+    detections are yielded too -- stage 01 counts every frame a point was
+    visible in as the denominator of its agreement test, so skipping empty
+    frames would inflate every vote ratio."""
+    cache = P.outp(d.get("cache", "detections"))
+    idx_p = os.path.join(cache, "index.json")
+    if not os.path.exists(idx_p):
+        return None, None
+    import json
+    with open(idx_p) as f:
+        idx = json.load(f)
+    names = {int(k): v for k, v in idx["names"].items()}
+    W, H = int(s["image_width"]), int(s["image_height"])
+    if (idx.get("width"), idx.get("height")) != (W, H):
         raise SystemExit(
-            "detect_objects is enabled but ultralytics is missing.\n"
-            "  pip install ultralytics\n"
-            "Then point detect_objects.model at a segmentation checkpoint, "
-            "e.g. yolo11n-seg.pt (masks give far cleaner 3D objects than boxes).")
-    m = YOLO(d.get("model", "yolo11n-seg.pt"))
-    return m, m.names
+            f"detection cache was built at {idx.get('width')}x{idx.get('height')} "
+            f"but the config says {W}x{H}; rebuild it with detect_cache.py")
 
-
-def _class_filter(d):
-    """allowlist AND denylist by class NAME (empty allowlist = everything)."""
-    allow = set(d.get("classes") or [])
-    deny = set(d.get("exclude", ["person"]) or [])
-    def ok(name):
-        return (not allow or name in allow) and name not in deny
-    return ok
-
-
-def yolo_label_image(model, names, img, d, W, H, ok):
-    """One frame -> (int16 image of per-instance ids, [(class_id, conf), ...]).
-
-    Segmentation masks are used when the weights provide them and are eroded a
-    couple of pixels, because the outermost mask ring straddles the silhouette
-    and would label whatever is behind the object. Box-only weights fall back
-    to the box shrunk by bbox_shrink per side, for the same reason."""
-    res = model.predict(img, conf=d.get("conf", 0.35), iou=d.get("iou", 0.5),
-                        imgsz=d.get("imgsz", 640), device=d.get("device"),
-                        verbose=False)[0]
-    lab = np.full((H, W), -1, np.int16)
-    insts = []
-    if res.boxes is None or len(res.boxes) == 0:
-        return lab, insts
-    cls = res.boxes.cls.cpu().numpy().astype(int)
-    conf = res.boxes.conf.cpu().numpy()
-    xyxy = res.boxes.xyxy.cpu().numpy()
-    masks = None
-    if getattr(res, "masks", None) is not None:
-        masks = res.masks.data.cpu().numpy()
-    shrink = float(d.get("bbox_shrink", 0.12))
-    erode = int(d.get("mask_erode", 2))
-    for i in range(len(cls)):
-        nm = names[int(cls[i])]
-        if not ok(nm):
-            continue
-        k = len(insts)
-        if masks is not None and i < len(masks):
-            m = cv2.resize(masks[i].astype(np.uint8), (W, H),
-                           interpolation=cv2.INTER_NEAREST)
-            if erode > 0:
-                m = cv2.erode(m, np.ones((3, 3), np.uint8), iterations=erode)
-            m = m > 0
-            if not m.any():
+    def gen():
+        for e in idx["frames"]:
+            insts = [(int(c), float(cf)) for c, cf in e.get("insts", [])]
+            if not insts or "png" not in e:
+                yield float(e["t"]), None, []
                 continue
-            lab[m] = k
-        else:
-            x0, y0, x1, y1 = xyxy[i]
-            dx = shrink * (x1 - x0); dy = shrink * (y1 - y0)
-            x0 = int(max(0, x0 + dx)); x1 = int(min(W, x1 - dx))
-            y0 = int(max(0, y0 + dy)); y1 = int(min(H, y1 - dy))
-            if x1 <= x0 or y1 <= y0:
+            png = cv2.imread(os.path.join(cache, e["png"]), cv2.IMREAD_UNCHANGED)
+            if png is None:
+                yield float(e["t"]), None, []
                 continue
-            lab[y0:y1, x0:x1] = k
-        insts.append((int(cls[i]), float(conf[i])))
-    return lab, insts
+            yield float(e["t"]), png.astype(np.int16) - 1, insts
+
+    print(f"[6] detect: using cached detections from {cache}/ "
+          f"({len(idx['frames'])} frames, model {idx.get('model')})")
+    return gen(), names
+
+
+def live_frames(P, S, s, d):
+    """Yield (t, label_image, insts) by running YOLO in THIS process. Works,
+    but pulls torch into the ROS/Open3D environment -- prefer detect_cache.py
+    when that upgrade breaks numpy/Open3D (see README)."""
+    from yolo_labels import load_model, class_filter, label_image
+    model, names = load_model(d)
+    names = {int(k): v for k, v in dict(names).items()}
+    ok = class_filter(d)
+    W, H = int(s["image_width"]), int(s["image_height"])
+    stride = max(1, int(d.get("img_stride", 5)))
+
+    def gen():
+        with AnyReader([Path(P.dataset["bag"])], default_typestore=TS) as r:
+            conns = [cc for cc in r.connections if cc.topic == S.image_topic]
+            n = 0
+            for conn, _, raw in r.messages(connections=conns):
+                n += 1
+                if n % stride:
+                    continue
+                msg = r.deserialize(raw, conn.msgtype)
+                t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+                img = decode_img(msg)
+                if img is None:
+                    continue
+                if (img.shape[1], img.shape[0]) != (W, H):
+                    img = cv2.resize(img, (W, H))
+                lab, insts = label_image(model, names, img, d, W, H, ok)
+                yield t, lab, insts
+
+    print("[6] detect: running YOLO in-process (no cache found)")
+    return gen(), names
+
+
+def detection_frames(P, S, s, d):
+    """Cache if present, live otherwise -- honouring detect_objects.source."""
+    src = d.get("source", "auto")
+    if src in ("auto", "cache"):
+        gen, names = cached_frames(P, s, d)
+        if gen is not None:
+            return gen, names
+        if src == "cache":
+            raise SystemExit(
+                f"detect_objects.source is 'cache' but no index.json was found "
+                f"in {P.outp(d.get('cache', 'detections'))}/.\n"
+                f"Build it first:  python detect_cache.py <config>")
+    return live_frames(P, S, s, d)
 
 
 def fit_structure_planes(work_pts, obj_mask, voxel=0.08, dist=0.06,
@@ -1194,8 +1196,7 @@ def detect_objects(P, S, s, pcd):
     else:
         ptsd = pts
         index = BlockIndex(pts, block=float(d.get("cull_block", 2.0)))
-    model, names = _yolo_model(d)
-    ok = _class_filter(d)
+    frames, names = detection_frames(P, S, s, d)
     use_frame = pose_gate(d)
 
     n_seen = m.zeros(N, np.int32)           # frames the point was visible in
@@ -1203,61 +1204,45 @@ def detect_objects(P, S, s, pcd):
     conf_acc = {}                           # class_id -> [sum_conf, n_det]
     n_frames = n_det = 0
 
-    with AnyReader([Path(P.dataset["bag"])], default_typestore=TS) as r:
-        conns = [cc for cc in r.connections if cc.topic == S.image_topic]
-        n = 0
-        for conn, _, raw in r.messages(connections=conns):
-            n += 1
-            if n % stride:
+    for t, lab_img, insts in frames:
+        j = nearest_pose_idx(tr_t, t)
+        if abs(tr_t[j] - t) > s["time_tol"]:
+            continue
+        Twc = tr_T[j] @ S.T_lidar_camera
+        if not use_frame(Twc):
+            continue
+        vis = project_visible(index, ptsd, Twc, S, W, H, max_range)
+        if vis is None:
+            continue
+        g, uu, vv, z = vis
+        n_frames += 1
+        n_seen[m.unique(g)] += 1            # unique: one point may win >1 pixel
+        if not insts or lab_img is None:
+            continue                        # frame still counted above
+        lab = as_dev(lab_img)[vv, uu]
+        for k, (c, cf) in enumerate(insts):
+            sel = lab == k
+            ns = int(sel.sum())
+            if ns < min_px:
                 continue
-            msg = r.deserialize(raw, conn.msgtype)
-            t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            j = nearest_pose_idx(tr_t, t)
-            if abs(tr_t[j] - t) > s["time_tol"]:
+            zk = z[sel]
+            # depth band around the detection's median depth: a mask edge
+            # that slips past the silhouette lands on the far wall, which
+            # is metres behind -> rejected here rather than voted on
+            inb = sel.copy()
+            inb[sel] = m.abs(zk - m.median(zk)) <= band
+            gi = m.unique(g[inb])
+            if gi.size == 0:
                 continue
-            Twc = tr_T[j] @ S.T_lidar_camera
-            if not use_frame(Twc):
-                continue
-            # cull BEFORE decoding/inferring: a frame with nothing in view
-            # must not pay for a YOLO pass
-            vis = project_visible(index, ptsd, Twc, S, W, H, max_range)
-            if vis is None:
-                continue
-            img = decode_img(msg)
-            if img is None:
-                continue
-            if (img.shape[1], img.shape[0]) != (W, H):
-                img = cv2.resize(img, (W, H))
-            g, uu, vv, z = vis
-            n_frames += 1
-            n_seen[m.unique(g)] += 1        # unique: one point may win >1 pixel
-            lab_img, insts = yolo_label_image(model, names, img, d, W, H, ok)
-            if not insts:
-                continue
-            lab = as_dev(lab_img)[vv, uu]
-            for k, (c, cf) in enumerate(insts):
-                sel = lab == k
-                ns = int(sel.sum())
-                if ns < min_px:
-                    continue
-                zk = z[sel]
-                # depth band around the detection's median depth: a mask edge
-                # that slips past the silhouette lands on the far wall, which
-                # is metres behind -> rejected here rather than voted on
-                inb = sel.copy()
-                inb[sel] = m.abs(zk - m.median(zk)) <= band
-                gi = m.unique(g[inb])
-                if gi.size == 0:
-                    continue
-                if c not in votes:
-                    votes[c] = m.zeros(N, np.int32)
-                    conf_acc[c] = [0.0, 0]
-                votes[c][gi] += 1
-                conf_acc[c][0] += cf; conf_acc[c][1] += 1
-                n_det += 1
-            if n_frames % 200 == 0:
-                print(f"    {n_frames} frames, {n_det} detections, "
-                      f"{len(votes)} classes", flush=True)
+            if c not in votes:
+                votes[c] = m.zeros(N, np.int32)
+                conf_acc[c] = [0.0, 0]
+            votes[c][gi] += 1
+            conf_acc[c][0] += cf; conf_acc[c][1] += 1
+            n_det += 1
+        if n_frames % 200 == 0:
+            print(f"    {n_frames} frames, {n_det} detections, "
+                  f"{len(votes)} classes", flush=True)
 
     if not votes:
         print("[6] detect: no detections survived - check model/classes/conf")

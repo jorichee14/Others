@@ -1,0 +1,15 @@
+# Hard version ceilings applied to the WHOLE resolution.
+#
+# pip applies constraints to every package it resolves, including transitive
+# ones, which is exactly what was missing before: `pip install ultralytics`
+# resolved torch, torch pulled numpy 2.x, and Open3D + the apt scipy -- both
+# compiled against the numpy 1.x ABI -- stopped importing. Passing this file
+# with -c forces the resolver to pick a torch build that is happy on numpy 1.x
+# instead of silently upgrading the foundation of the stack.
+#
+# The pipeline is pinned to the numpy 1.x track because the PyPI Open3D wheel
+# is built against it. If you move to open3d >= 0.19 you can lift this, but
+# then EVERY compiled package (scipy, opencv, cupy, torch) must be numpy-2
+# builds as well -- change all of them together or not at all.
+numpy<2
+opencv-python<5

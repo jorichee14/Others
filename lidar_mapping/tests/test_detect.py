@@ -1,6 +1,7 @@
 """Synthetic tests for the detection/inventory stage helpers (no YOLO needed)."""
 import sys, types, io
 import numpy as np
+sys.path.insert(0, "/home/user/Others/lidar_mapping")
 
 for name in ("open3d", "cv2", "rosbags", "rosbags.highlevel",
              "rosbags.typesys", "pipeline_common"):

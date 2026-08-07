@@ -1,0 +1,27 @@
+# Everything the pipeline needs, in ONE environment.
+#
+# Install with the constraints file so the resolver cannot upgrade numpy out
+# from under Open3D:
+#     pip install -r requirements.txt -c constraints.txt
+# setup_env.sh does this for you and adds the CUDA-specific wheels.
+
+# ---- core geometry / IO ----------------------------------------------------
+numpy>=1.24,<2
+scipy>=1.10,<1.14          # 1.14 drops numpy 1.x
+open3d==0.18.0             # PyPI wheel is numpy-1.x ABI (see constraints.txt)
+opencv-python>=4.8,<5
+rosbags>=0.9.19            # pure python, reads ROS2 bags without a ROS install
+PyYAML>=6.0                # inventory output (01 falls back if absent)
+
+# ---- ultralytics runtime deps ---------------------------------------------
+# Listed explicitly so setup_env.sh can install ultralytics with --no-deps.
+# Letting ultralytics resolve its own dependency tree is what broke the
+# environment: its resolver has no reason to respect Open3D's numpy ceiling.
+pillow>=10.0
+requests>=2.31
+tqdm>=4.66
+psutil>=5.9
+py-cpuinfo>=9.0
+matplotlib>=3.7,<4
+pandas>=2.0,<3
+ultralytics-thop>=2.0

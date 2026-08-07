@@ -1,6 +1,7 @@
 """VoxelAccumulator: must match Open3D's voxel_down_sample and stay bounded."""
 import sys, types, tracemalloc
 import numpy as np
+sys.path.insert(0, "/home/user/Others/lidar_mapping")
 
 for name in ("open3d", "cv2", "rosbags", "rosbags.highlevel",
              "rosbags.typesys", "pipeline_common"):

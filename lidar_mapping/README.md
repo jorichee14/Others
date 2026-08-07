@@ -1,5 +1,75 @@
 # LiDAR map → clean point cloud → Sionna RT mesh
 
+## Environment (do this first)
+
+```bash
+cd environment
+./setup_env.sh                 # creates ~/lidar-env, or pass a path
+```
+
+One virtualenv runs everything — merge, dynamic removal, colorize, YOLO
+detection, meshing. It picks CUDA wheels from the **driver's** reported CUDA
+version rather than `nvcc` (nvcc is what you compile with; the driver is what
+runs the kernels, and they routinely differ on these machines), then verifies
+the result.
+
+```bash
+~/lidar-env/bin/python 01_build_map.py pipeline_config.json
+# or: source ~/lidar-env/bin/activate
+```
+
+### Why a venv, and why the constraints file
+
+The failure mode this prevents: `pip install ultralytics` into `~/.local`
+resolves torch, torch pulls **numpy 2.x**, and both Open3D and apt's scipy are
+compiled against the numpy **1.x** ABI — so they stop importing entirely. The
+traceback points at `scipy.sparse`, not at the numpy upgrade that caused it.
+
+Two things fix it, and you need both:
+
+- **A venv without `--system-site-packages`.** It owns its whole stack, so no
+  apt package can be half-upgraded underneath it.
+- **`-c constraints.txt` on every install.** pip applies constraints to
+  transitive dependencies too, so the resolver must pick a torch build that
+  runs on numpy 1.x instead of upgrading numpy. Installing *without* it is
+  exactly how the ceiling gets lifted again.
+
+`ultralytics` is installed with `--no-deps` for the same reason — its own
+resolver has no reason to respect Open3D's numpy ceiling, so its dependencies
+are pinned explicitly in `requirements.txt` instead.
+
+### Checking it
+
+```bash
+~/lidar-env/bin/python environment/verify_env.py
+```
+
+Run it after any `pip install` touches the env. An ABI break shows up as a
+clean report rather than as a traceback four minutes into a merge. It also
+reports whether CuPy can actually launch a kernel and whether torch sees CUDA.
+
+**Known limitation:** the PyPI Open3D wheel is CPU-only, so the GPU denoise
+path in `[2]` always falls back (it says so at runtime). Everything else on
+the GPU goes through CuPy and is unaffected. Open3D with CUDA needs a source
+build.
+
+### Optional: pre-cached detections
+
+`detect_cache.py` runs YOLO once and writes label masks to disk, so stage 01
+reads them with nothing but numpy and cv2. With a working single environment
+you don't need it — but it's still useful to run YOLO once and re-run stage 01
+many times, or to keep torch out of a ROS environment you can't rebuild:
+
+```bash
+python detect_cache.py pipeline_config.json     # writes out_dir/detections/
+python 01_build_map.py pipeline_config.json     # picks the cache up
+```
+
+Stage 01 uses the cache when present and runs YOLO in-process otherwise;
+`detect_objects.source` can force either (`"cache"` / `"live"` / `"auto"`).
+
+---
+
 Two-stage pipeline:
 
 1. `01_build_map.py` — merge LiDAR scans placed by GLIM poses into a world
