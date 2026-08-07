@@ -3,13 +3,17 @@
 STAGE 01 - build the map cloud from LiDAR scans placed by GLIM poses.
 
   bag (/ouster/points) + traj_lidar.txt  ->  merge -> [remove dynamic]
-  -> denoise -> colorize -> [flatten] -> [anchor to camera start] -> map_final.pcd
+  -> denoise -> colorize -> [detect objects] -> [flatten]
+  -> [anchor to camera start] -> map_final.pcd
 
 Everything (paths, voxels, toggles, sensor calib, topics) comes from
 pipeline_config.json + the calibration.json it points at. Nothing hardcoded.
 
 Intermediate stages are written to out_dir so a re-run can resume from merge:
   merged.pcd  [static.pcd]  denoised.pcd  colored.pcd  [flattened.pcd]  [anchored.pcd]
+
+The optional detection stage adds a SEMANTIC LAYER on top of the geometry:
+  background.pcd  objects.pcd  objects_by_instance.pcd  objects_inventory.yaml
 
 DYNAMIC-OBJECT REMOVAL (moving people / vehicles), stage [1b], optional.
 Two complementary tests, combined per voxel of a global decision grid:
@@ -67,6 +71,64 @@ Two complementary tests, combined per voxel of a global decision grid:
   or the endpoint_margin; if ghosts survive, lower free_ratio (e.g. 0.1) or
   scan_stride/ray_stride (denser evidence). Carving costs roughly one extra
   50-70%% of merge time at the default strides.
+
+OBJECT DETECTION + INVENTORY, stage [6], optional:
+  A YOLO detector runs on the camera stream and its 2D masks/boxes are lifted
+  onto the 3D map, giving a layered result instead of one undifferentiated
+  cloud:
+
+    layer 0  map_final.pcd            everything (geometry, as before)
+    layer 1  background.pcd           map MINUS all detected objects -- the
+                                      clean structural shell (best input for
+                                      the mesher / Sionna)
+    layer 2  objects.pcd              only object points, photo colours
+             objects_by_instance.pcd  same points, one colour per instance
+             objects/<id>_<label>.pcd optional per-object clouds
+    layer 3  objects_inventory.yaml   the inventory: class, position, size,
+                                      orientation, footprint, point count,
+                                      colour, per-class totals
+
+  How a 2D detection becomes a 3D object:
+    1. For each (strided) image, the map points visible from that pose are
+       found by radius cull + pinhole projection + z-buffer, so an occluded
+       point can never receive a label meant for the surface in front of it.
+    2. Each visible point inherits the class of the mask pixel it lands on
+       (segmentation weights strongly preferred; plain boxes are shrunk by
+       bbox_shrink because a box corner is background), and a depth-band gate
+       around the detection's median depth stops a detection from labelling
+       the wall behind it.
+    3. Votes ACCUMULATE over every frame in which the point was visible. A
+       label survives only with multi-view agreement -- min_votes absolute and
+       min_ratio relative to how often that point was actually seen -- which
+       is what kills single-frame false positives and silhouette bleed.
+    4. Surviving points are DBSCAN-clustered per class in 3D; each cluster is
+       one inventory entry, measured with a PCA footprint (yaw + extents +
+       height, robust where a full 3D OBB degenerates on flat clusters).
+
+  Config block (under 01_build_map, omit to disable):
+    "detect_objects": {
+      "enable": true,
+      "model": "yolo11n-seg.pt",   # any ultralytics model; -seg strongly preferred
+      "device": "cuda:0",          # omit for auto
+      "conf": 0.35, "iou": 0.5, "imgsz": 640,
+      "img_stride": 5,             # YOLO is the slow part -- stride the images
+      "voxel": 0.05,               # voting resolution (labels propagate to full res)
+      "max_range": 8.0,            # only label points closer than this (m)
+      "classes": [],               # [] = every class the model knows
+      "exclude": ["person"],       # never inventory these (dynamic anyway)
+      "bbox_shrink": 0.12,         # box-only models: trim this fraction per side
+      "mask_erode": 2,             # segmentation: erode masks by N px
+      "depth_band": 1.0,           # keep points within +-this of median depth (m)
+      "min_pixels": 60,            # ignore detections smaller than this on screen
+      "min_votes": 3,              # label needs >= this many frames agreeing
+      "min_ratio": 0.35,           # ...and >= this fraction of frames seen
+      "cluster": { "eps": 0.12, "min_points": 60, "min_pts_keep": 120 },
+      "save_layers": true, "save_per_object": false,
+      "inventory": "objects_inventory.yaml"
+    }
+  Needs `pip install ultralytics`. Run detection AFTER dynamic removal so
+  people/movers are already gone -- the two stages are complementary: carving
+  removes what moved, detection names what stayed.
 
   python3 01_build_map.py [pipeline_config.json]
 """
@@ -392,11 +454,42 @@ def remove_dynamic(P, S, s, pcd, dyn, carver):
     return out
 
 
+def project_visible(kdt, pts, Twc, S, W, H, max_range):
+    """Map points visible from camera pose Twc, at most one per pixel.
+
+    Radius-culls with the KDTree, projects through the pinhole intrinsics,
+    then z-buffers so an occluded point never receives the pixel's colour or
+    class label. Shared by colorize [3] and detect_objects [6] so both stages
+    agree on exactly which point a pixel belongs to.
+    Returns (global_idx, u, v, z) of the winning points, or None."""
+    cam = Twc[:3, 3]
+    k, idx, _ = kdt.search_radius_vector_3d(cam, max_range)
+    if k == 0:
+        return None
+    idx = np.asarray(idx)
+    sub = pts[idx]
+    Tcw = np.linalg.inv(Twc)
+    Xc = (Tcw[:3, :3] @ sub.T).T + Tcw[:3, 3]
+    z = Xc[:, 2]
+    fr = z > 1e-3
+    u = np.full(len(sub), -1.0); v = np.full(len(sub), -1.0)
+    u[fr] = S.fx * Xc[fr, 0] / z[fr] + S.cx
+    v[fr] = S.fy * Xc[fr, 1] / z[fr] + S.cy
+    inb = fr & (u >= 0) & (u < W) & (v >= 0) & (v < H) & (z < max_range)
+    if not inb.any():
+        return None
+    g = idx[inb]; zc = z[inb]
+    uu = u[inb].astype(np.int64); vv = v[inb].astype(np.int64)
+    order = np.argsort(zc)
+    _, first = np.unique((vv * W + uu)[order], return_index=True)
+    keep = order[first]
+    return g[keep], uu[keep], vv[keep], zc[keep]
+
+
 def colorize(P, S, s, pcd):
     print("[3] colorize: best-view projection (KDTree-culled)")
     tr_t, tr_T = P.traj
     W, H = s["image_width"], s["image_height"]
-    fx, fy, cx, cy = S.fx, S.fy, S.cx, S.cy
     c = s["colorize"]; stride = c["img_stride"]; max_range = c["max_range"]
     on_voxel = c["voxel"]; drop_gray = c["drop_gray"]
 
@@ -425,29 +518,10 @@ def colorize(P, S, s, pcd):
             if abs(tr_t[j] - t) > s["time_tol"]:
                 continue
             Twc = tr_T[j] @ S.T_lidar_camera
-            cam = Twc[:3, 3]
-            k, idx, _ = kdt.search_radius_vector_3d(cam, max_range)
-            if k == 0:
+            vis = project_visible(kdt, pts, Twc, S, W, H, max_range)
+            if vis is None:
                 continue
-            idx = np.asarray(idx); sub = pts[idx]
-            Tcw = np.linalg.inv(Twc)
-            Xc = (Tcw[:3, :3] @ sub.T).T + Tcw[:3, 3]
-            z = Xc[:, 2]
-            fr = z > 1e-3
-            u = np.full(len(sub), -1.0); v = np.full(len(sub), -1.0)
-            u[fr] = fx * Xc[fr, 0] / z[fr] + cx
-            v[fr] = fy * Xc[fr, 1] / z[fr] + cy
-            inb = fr & (u >= 0) & (u < W) & (v >= 0) & (v < H) & (z < max_range)
-            if not inb.any():
-                continue
-            g_idx = idx[inb]; zc = z[inb]
-            uu = u[inb].astype(np.int64); vv = v[inb].astype(np.int64)
-            pix = vv * W + uu
-            order = np.argsort(zc)
-            _, first = np.unique(pix[order], return_index=True)
-            keep = order[first]
-            g_keep = g_idx[keep]; z_keep = zc[keep]
-            uu_k = uu[keep]; vv_k = vv[keep]
+            g_keep, uu_k, vv_k, z_keep = vis
             better = z_keep < best[g_keep]
             if not better.any():
                 continue
@@ -490,6 +564,399 @@ def colorize(P, S, s, pcd):
         print(f"    dropped gray -> {len(pcd.points)}")
         return pcd
     return work
+
+
+# =============================================================================
+# [6] OBJECT DETECTION + INVENTORY (semantic layer)
+# =============================================================================
+
+def _yolo_model(d):
+    try:
+        from ultralytics import YOLO
+    except ImportError:
+        raise SystemExit(
+            "detect_objects is enabled but ultralytics is missing.\n"
+            "  pip install ultralytics\n"
+            "Then point detect_objects.model at a segmentation checkpoint, "
+            "e.g. yolo11n-seg.pt (masks give far cleaner 3D objects than boxes).")
+    m = YOLO(d.get("model", "yolo11n-seg.pt"))
+    return m, m.names
+
+
+def _class_filter(d):
+    """allowlist AND denylist by class NAME (empty allowlist = everything)."""
+    allow = set(d.get("classes") or [])
+    deny = set(d.get("exclude", ["person"]) or [])
+    def ok(name):
+        return (not allow or name in allow) and name not in deny
+    return ok
+
+
+def yolo_label_image(model, names, img, d, W, H, ok):
+    """One frame -> (int16 image of per-instance ids, [(class_id, conf), ...]).
+
+    Segmentation masks are used when the weights provide them and are eroded a
+    couple of pixels, because the outermost mask ring straddles the silhouette
+    and would label whatever is behind the object. Box-only weights fall back
+    to the box shrunk by bbox_shrink per side, for the same reason."""
+    res = model.predict(img, conf=d.get("conf", 0.35), iou=d.get("iou", 0.5),
+                        imgsz=d.get("imgsz", 640), device=d.get("device"),
+                        verbose=False)[0]
+    lab = np.full((H, W), -1, np.int16)
+    insts = []
+    if res.boxes is None or len(res.boxes) == 0:
+        return lab, insts
+    cls = res.boxes.cls.cpu().numpy().astype(int)
+    conf = res.boxes.conf.cpu().numpy()
+    xyxy = res.boxes.xyxy.cpu().numpy()
+    masks = None
+    if getattr(res, "masks", None) is not None:
+        masks = res.masks.data.cpu().numpy()
+    shrink = float(d.get("bbox_shrink", 0.12))
+    erode = int(d.get("mask_erode", 2))
+    for i in range(len(cls)):
+        nm = names[int(cls[i])]
+        if not ok(nm):
+            continue
+        k = len(insts)
+        if masks is not None and i < len(masks):
+            m = cv2.resize(masks[i].astype(np.uint8), (W, H),
+                           interpolation=cv2.INTER_NEAREST)
+            if erode > 0:
+                m = cv2.erode(m, np.ones((3, 3), np.uint8), iterations=erode)
+            m = m > 0
+            if not m.any():
+                continue
+            lab[m] = k
+        else:
+            x0, y0, x1, y1 = xyxy[i]
+            dx = shrink * (x1 - x0); dy = shrink * (y1 - y0)
+            x0 = int(max(0, x0 + dx)); x1 = int(min(W, x1 - dx))
+            y0 = int(max(0, y0 + dy)); y1 = int(min(H, y1 - dy))
+            if x1 <= x0 or y1 <= y0:
+                continue
+            lab[y0:y1, x0:x1] = k
+        insts.append((int(cls[i]), float(conf[i])))
+    return lab, insts
+
+
+def _footprint(Q):
+    """PCA of the XY footprint -> (yaw_deg, [length, width]).
+
+    Deliberately 2D: indoor objects stand upright, and a full 3D oriented box
+    degenerates (or throws) on the flat, one-sided clusters LiDAR produces."""
+    xy = Q[:, :2]
+    c = xy.mean(axis=0)
+    d = xy - c
+    if len(xy) >= 3:
+        w, V = np.linalg.eigh(d.T @ d / len(xy))
+        e = V[:, -1]
+    else:
+        e = np.array([1.0, 0.0])
+    R = np.array([[e[0], e[1]], [-e[1], e[0]]])
+    loc = d @ R.T
+    # a principal axis has no sign, so fold yaw into [-90, 90): 35 and -145
+    # describe the same box and only one of them reads sensibly
+    yaw = (np.degrees(np.arctan2(e[1], e[0])) + 90.0) % 180.0 - 90.0
+    return float(yaw), loc.max(0) - loc.min(0)
+
+
+def _instance_stats(Q, C, label, class_id, votes, seen, floor_z, det_conf):
+    yaw, ext = _footprint(Q)
+    lo = Q.min(axis=0); hi = Q.max(axis=0)
+    cen = Q.mean(axis=0)
+    agree = float(np.median(votes / np.maximum(seen, 1)))
+    st = {
+        "label": label,
+        "class_id": int(class_id),
+        "det_conf": round(float(det_conf), 3),
+        "view_agreement": round(agree, 3),
+        "n_points": int(len(Q)),
+        "centroid": [round(float(x), 3) for x in cen],
+        "aabb_min": [round(float(x), 3) for x in lo],
+        "aabb_max": [round(float(x), 3) for x in hi],
+        "size": [round(float(x), 3) for x in (hi - lo)],
+        "footprint": {
+            "yaw_deg": round(yaw, 1),
+            "length": round(float(ext[0]), 3),
+            "width": round(float(ext[1]), 3),
+            "height": round(float(hi[2] - lo[2]), 3),
+        },
+        "base_z": round(float(lo[2]), 3),
+        "height_above_floor": round(float(lo[2] - floor_z), 3),
+    }
+    if C is not None:
+        st["mean_rgb"] = [round(float(x), 3) for x in C.mean(axis=0)]
+    return st
+
+
+def detect_objects(P, S, s, pcd):
+    """[6] fuse YOLO detections across views onto the map, cluster into
+    instances. Returns a dict of layers + the inventory, or None."""
+    d = s["detect_objects"]
+    tr_t, tr_T = P.traj
+    W, H = s["image_width"], s["image_height"]
+    stride = max(1, int(d.get("img_stride", 5)))
+    max_range = float(d.get("max_range", 8.0))
+    dv = float(d.get("voxel", 0.05))
+    band = float(d.get("depth_band", 1.0))
+    min_px = int(d.get("min_pixels", 60))
+
+    work = pcd.voxel_down_sample(dv) if dv > 0 else pcd
+    pts = np.asarray(work.points)
+    N = len(pts)
+    if N == 0:
+        print("[6] detect: empty cloud, skipping")
+        return None
+    print(f"[6] detect: voting on {N} pts at {dv} m "
+          f"(from {len(pcd.points)}), every {stride}th image")
+    kdt = o3d.geometry.KDTreeFlann(work)
+    model, names = _yolo_model(d)
+    ok = _class_filter(d)
+
+    n_seen = np.zeros(N, np.int32)          # frames the point was visible in
+    votes = {}                              # class_id -> per-point vote count
+    conf_acc = {}                           # class_id -> [sum_conf, n_det]
+    n_frames = n_det = 0
+
+    with AnyReader([Path(P.dataset["bag"])], default_typestore=TS) as r:
+        conns = [cc for cc in r.connections if cc.topic == S.image_topic]
+        n = 0
+        for conn, _, raw in r.messages(connections=conns):
+            n += 1
+            if n % stride:
+                continue
+            msg = r.deserialize(raw, conn.msgtype)
+            t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            j = nearest_pose_idx(tr_t, t)
+            if abs(tr_t[j] - t) > s["time_tol"]:
+                continue
+            img = decode_img(msg)
+            if img is None:
+                continue
+            if (img.shape[1], img.shape[0]) != (W, H):
+                img = cv2.resize(img, (W, H))
+            Twc = tr_T[j] @ S.T_lidar_camera
+            vis = project_visible(kdt, pts, Twc, S, W, H, max_range)
+            if vis is None:
+                continue
+            g, uu, vv, z = vis
+            n_frames += 1
+            n_seen[np.unique(g)] += 1       # unique: one point may win >1 pixel
+            lab_img, insts = yolo_label_image(model, names, img, d, W, H, ok)
+            if not insts:
+                continue
+            lab = lab_img[vv, uu]
+            for k, (c, cf) in enumerate(insts):
+                sel = lab == k
+                ns = int(sel.sum())
+                if ns < min_px:
+                    continue
+                zk = z[sel]
+                # depth band around the detection's median depth: a mask edge
+                # that slips past the silhouette lands on the far wall, which
+                # is metres behind -> rejected here rather than voted on
+                inb = sel.copy()
+                inb[sel] = np.abs(zk - np.median(zk)) <= band
+                gi = np.unique(g[inb])
+                if gi.size == 0:
+                    continue
+                if c not in votes:
+                    votes[c] = np.zeros(N, np.int32)
+                    conf_acc[c] = [0.0, 0]
+                votes[c][gi] += 1
+                conf_acc[c][0] += cf; conf_acc[c][1] += 1
+                n_det += 1
+            if n_frames % 200 == 0:
+                print(f"    {n_frames} frames, {n_det} detections, "
+                      f"{len(votes)} classes", flush=True)
+
+    if not votes:
+        print("[6] detect: no detections survived - check model/classes/conf")
+        return None
+
+    best_v = np.zeros(N, np.int32); best_c = np.full(N, -1, np.int32)
+    for c, v in votes.items():
+        m = v > best_v
+        best_v[m] = v[m]; best_c[m] = c
+    min_votes = int(d.get("min_votes", 3))
+    min_ratio = float(d.get("min_ratio", 0.35))
+    confident = (best_c >= 0) & (best_v >= min_votes) & \
+                (best_v >= min_ratio * np.maximum(n_seen, 1))
+    print(f"    {n_frames} frames, {n_det} detections -> "
+          f"{int(confident.sum())} points pass multi-view agreement "
+          f"(>= {min_votes} votes and >= {min_ratio:.0%} of views)")
+
+    cl = d.get("cluster", {})
+    eps = float(cl.get("eps", 0.12))
+    min_points = int(cl.get("min_points", 60))
+    keep_pts = int(cl.get("min_pts_keep", 120))
+    cols = np.asarray(work.colors) if work.has_colors() else None
+    floor_z = float(np.percentile(pts[:, 2], 1.0))
+    inst_id = np.full(N, -1, np.int64)
+    instances = []
+    for c in sorted(votes.keys()):
+        sel = np.flatnonzero(confident & (best_c == c))
+        if len(sel) < keep_pts:
+            continue
+        sub = work.select_by_index(sel)
+        lb = np.asarray(sub.cluster_dbscan(eps=eps, min_points=min_points))
+        det_conf = conf_acc[c][0] / max(conf_acc[c][1], 1)
+        for L in range(int(lb.max()) + 1):
+            m = lb == L
+            if int(m.sum()) < keep_pts:
+                continue
+            gidx = sel[m]
+            st = _instance_stats(
+                pts[gidx], None if cols is None else cols[gidx],
+                names[c], c, best_v[gidx], n_seen[gidx], floor_z, det_conf)
+            st["id"] = len(instances) + 1
+            inst_id[gidx] = len(instances)
+            instances.append(st)
+
+    print(f"[6] detect: {len(instances)} object instances "
+          f"({sum(i['n_points'] for i in instances)} voting pts) in "
+          f"{len(set(i['label'] for i in instances))} classes")
+    return {"instances": instances, "inst_id": inst_id, "work": work,
+            "floor_z": floor_z, "model": str(d.get("model", "")),
+            "n_frames": n_frames}
+
+
+def instance_palette(n):
+    """Visually distinct per-instance colours (golden-ratio hue walk)."""
+    if n == 0:
+        return np.zeros((0, 3))
+    h = ((np.arange(n) * 0.6180339887) % 1.0) * 179.0
+    hsv = np.stack([h, np.full(n, 200.0), np.full(n, 245.0)], 1)
+    hsv = hsv.astype(np.uint8)[None, :, :]
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)[0].astype(np.float64) / 255.0
+
+
+def _yaml_scalar(v):
+    if isinstance(v, str):
+        return v if v.replace("_", "").replace("-", "").isalnum() else f'"{v}"'
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_yaml_scalar(x) for x in v) + "]"
+    return str(v)
+
+
+def _yaml_emit(o, f, ind=0):
+    """Minimal YAML writer so stage 01 needs no pyyaml (used when it is
+    absent). Only handles the shapes the inventory actually produces."""
+    pad = "  " * ind
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if isinstance(v, dict) and v:
+                f.write(f"{pad}{k}:\n"); _yaml_emit(v, f, ind + 1)
+            elif isinstance(v, list) and v and isinstance(v[0], dict):
+                f.write(f"{pad}{k}:\n"); _yaml_emit(v, f, ind + 1)
+            else:
+                f.write(f"{pad}{k}: {_yaml_scalar(v)}\n")
+    elif isinstance(o, list):
+        for v in o:
+            if isinstance(v, dict):
+                items = list(v.items())
+                k0, v0 = items[0]
+                f.write(f"{pad}- {k0}: {_yaml_scalar(v0)}\n")
+                _yaml_emit(dict(items[1:]), f, ind + 1)
+            else:
+                f.write(f"{pad}- {_yaml_scalar(v)}\n")
+
+
+def save_object_layers(P, s, res, pcd, shift):
+    """Split the map into background / object layers and write the inventory.
+
+    `shift` is the anchor translation already applied to the final cloud, so
+    the inventory coordinates match whatever map_final.pcd is in."""
+    d = s["detect_objects"]
+    inst_id = res["inst_id"]; work = res["work"]; instances = res["instances"]
+    dv = float(d.get("voxel", 0.05))
+
+    if work is pcd:
+        full_id = inst_id
+    else:
+        from scipy.spatial import cKDTree
+        # the voting cloud lives in the pre-anchor frame; undo the shift on the
+        # query points so the two clouds are compared in the same frame
+        full = np.asarray(pcd.points) - np.asarray(shift, float)
+        tree = cKDTree(np.asarray(work.points))
+        full_id = np.empty(len(full), np.int64)
+        chunk = 5_000_000
+        for a in range(0, len(full), chunk):
+            b = min(a + chunk, len(full))
+            dd, nn = tree.query(full[a:b], workers=-1)
+            fid = inst_id[nn].copy()
+            fid[dd > 2.0 * dv] = -1   # never drag a label onto far-away points
+            full_id[a:b] = fid
+        print(f"    propagated instance ids to {len(full)} full-res pts")
+
+    obj_idx = np.flatnonzero(full_id >= 0)
+    bg_idx = np.flatnonzero(full_id < 0)
+    objects = pcd.select_by_index(obj_idx)
+    background = pcd.select_by_index(bg_idx)
+    print(f"[6] layers: {len(bg_idx)} background pts / "
+          f"{len(obj_idx)} object pts")
+
+    if d.get("save_layers", True):
+        save(P, background, "background.pcd")
+        save(P, objects, "objects.pcd")
+        pal = instance_palette(len(instances))
+        by_inst = o3d.geometry.PointCloud(objects)
+        by_inst.colors = o3d.utility.Vector3dVector(pal[full_id[obj_idx]])
+        save(P, by_inst, "objects_by_instance.pcd")
+
+    if d.get("save_per_object", False) and len(instances):
+        odir = P.outp("objects")
+        os.makedirs(odir, exist_ok=True)
+        for i, st in enumerate(instances):
+            sel = np.flatnonzero(full_id == i)
+            if sel.size == 0:
+                continue
+            o3d.io.write_point_cloud(
+                os.path.join(odir, f"{st['id']:04d}_{st['label']}.pcd"),
+                pcd.select_by_index(sel))
+        print(f"    wrote {len(instances)} per-object clouds -> {odir}/")
+
+    # inventory coordinates follow the final cloud through the anchor shift
+    if np.any(shift):
+        sh = np.asarray(shift, float)
+        for st in instances:
+            for key in ("centroid", "aabb_min", "aabb_max"):
+                st[key] = [round(float(a + b), 3) for a, b in zip(st[key], sh)]
+            st["base_z"] = round(float(st["base_z"] + sh[2]), 3)
+
+    counts = {}
+    for st in instances:
+        counts[st["label"]] = counts.get(st["label"], 0) + 1
+    doc = {
+        "map": {
+            "source": os.path.basename(P.outp(s["output"])),
+            "frame": "map_anchored" if np.any(shift) else "map",
+            "anchor_shift": [round(float(x), 3) for x in np.asarray(shift)],
+            "floor_z": round(float(res["floor_z"]), 3),
+            "model": res["model"],
+            "frames_used": int(res["n_frames"]),
+            "background_points": int(len(bg_idx)),
+            "object_points": int(len(obj_idx)),
+        },
+        "totals": dict(sorted(counts.items(), key=lambda kv: -kv[1])),
+        "objects": [dict([("id", st["id"])] +
+                         [(k, v) for k, v in st.items() if k != "id"])
+                    for st in instances],
+    }
+    path = P.outp(d.get("inventory", "objects_inventory.yaml"))
+    with open(path, "w") as f:
+        try:
+            import yaml
+            yaml.safe_dump(doc, f, sort_keys=False, default_flow_style=None)
+        except ImportError:
+            _yaml_emit(doc, f)
+    print(f"    saved {path}  ({len(instances)} objects)")
+    for k, v in doc["totals"].items():
+        print(f"      {v:4d}  {k}")
+    return background, objects
 
 
 def flatten(s, pcd):
@@ -582,21 +1049,35 @@ def main():
     if s["colorize"]["enable"]:
         pcd = colorize(P, S, s, pcd); save(P, pcd, "colored.pcd")
 
+    # detection runs BEFORE flatten (which would distort object geometry) and
+    # its layers are written after the anchor shift so every output shares one
+    # coordinate frame with map_final.pcd
+    det = None
+    if s.get("detect_objects", {}).get("enable", False):
+        det = detect_objects(P, S, s, pcd)
+
     if s["flatten"]["enable"]:
         pcd = flatten(s, pcd); save(P, pcd, "flattened.pcd")
 
+    shift = np.zeros(3)
     if s["anchor_camera_start"]:
         print("[5] anchor: origin at camera start (z-up)")
         tr_t, tr_T = P.traj
         cam0 = (tr_T[0] @ S.T_lidar_camera)[:3, 3]
-        pcd.translate(-cam0)
-        print(f"    shift {(-cam0).round(3)}  (NOTE: stage 03 must know this via "
+        shift = -cam0
+        pcd.translate(shift)
+        print(f"    shift {shift.round(3)}  (NOTE: stage 03 must know this via "
               f"01_build_map.anchor_camera_start)")
         save(P, pcd, "anchored.pcd")
 
     final = P.outp(s["output"])
     o3d.io.write_point_cloud(final, pcd)
     print(f"DONE -> {final}  ({len(pcd.points)} points)")
+
+    if det is not None:
+        # layers are cut from the same cloud that was just written, so the
+        # background layer is exactly map_final minus the inventoried objects
+        save_object_layers(P, s, det, pcd, shift)
 
 
 def load_traj_cached(P):

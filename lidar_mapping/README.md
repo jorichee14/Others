@@ -99,6 +99,98 @@ both kinds of evidence.
 
 ---
 
+## Layer 3 — object detection & inventory (stage 01, `[6]`)
+
+Optional YOLO stage that turns the single cloud into **layers**:
+
+| layer | file | what it is |
+|---|---|---|
+| 0 | `map_final_*.pcd` | everything (geometry, unchanged) |
+| 1 | `background.pcd` | map **minus** all detected objects — the clean structural shell, the best input for the mesher |
+| 2 | `objects.pcd` | object points only, photo colours |
+| 2 | `objects_by_instance.pcd` | same points, one distinct colour per instance |
+| 2 | `objects/<id>_<label>.pcd` | per-object clouds (`save_per_object: true`) |
+| 3 | `objects_inventory.yaml` | the inventory itself |
+
+### How a 2D detection becomes a 3D object
+
+1. Per (strided) image, map points visible from that pose are found by radius
+   cull → pinhole projection → **z-buffer**, so an occluded point can never
+   take a label meant for the surface in front of it. Same helper colorize
+   uses, so both stages agree on which point owns a pixel.
+2. Each visible point inherits the class of the mask pixel it lands on
+   (segmentation weights strongly preferred; boxes are shrunk by
+   `bbox_shrink`, masks eroded by `mask_erode` — the outer ring straddles the
+   silhouette). A **depth band** around the detection's median depth stops a
+   detection from labelling the wall metres behind it.
+3. Votes **accumulate across frames**. A label survives only with multi-view
+   agreement: `min_votes` absolute **and** `min_ratio` of the frames in which
+   that point was actually visible. This is what kills single-frame false
+   positives — one bad detection out of ten views never reaches the map.
+4. Surviving points are **DBSCAN-clustered per class** in 3D. Each cluster is
+   one inventory entry, measured with a PCA footprint (yaw + length/width +
+   height) rather than a full 3D OBB, which degenerates on the flat one-sided
+   clusters LiDAR produces.
+
+### Inventory format
+
+```yaml
+map:
+  source: map_final_20260722.pcd
+  frame: map                # or map_anchored, with anchor_shift applied
+  floor_z: -1.47
+  model: yolo11n-seg.pt
+  frames_used: 1204
+  background_points: 41203112
+  object_points: 2841901
+totals:
+  chair: 12
+  table: 4
+objects:
+  - id: 1
+    label: chair
+    class_id: 56
+    det_conf: 0.71          # mean YOLO confidence for that class
+    view_agreement: 0.62    # median votes / times seen — fusion confidence
+    n_points: 5321
+    centroid: [3.12, -1.44, -1.02]
+    aabb_min: [...]
+    aabb_max: [...]
+    size: [0.61, 0.58, 0.91]
+    footprint: { yaw_deg: 35.5, length: 0.61, width: 0.58, height: 0.91 }
+    base_z: -1.44
+    height_above_floor: 0.03
+    mean_rgb: [0.31, 0.28, 0.26]
+```
+
+Coordinates always match `map_final.pcd` — if `anchor_camera_start` is on,
+the same shift is applied to the inventory and recorded as `anchor_shift`.
+
+### Notes
+
+- Needs `pip install ultralytics`. Use a **`-seg`** checkpoint; box-only
+  weights work but produce much coarser objects.
+- Run it **after** dynamic removal — the stages are complementary: carving
+  removes what *moved*, detection names what *stayed*. `person` is excluded
+  by default since carving already handles them.
+- Cost is dominated by YOLO; `img_stride` is the main lever (5 ≈ every 5th
+  frame is plenty given multi-view voting).
+- **Feed `background.pcd` to the mesher** for a clean structural shell, and
+  mesh objects separately (or place them from the inventory as boxes) — that
+  gives Sionna per-object materials for free.
+
+### Tuning
+
+| symptom | change |
+|---|---|
+| objects missing | lower `conf`, lower `min_votes`/`min_ratio`, lower `img_stride`, raise `max_range` |
+| walls bleed into objects | raise `mask_erode`/`bbox_shrink`, lower `depth_band`, raise `min_ratio` |
+| one object split into several | raise `cluster.eps` |
+| touching objects merged | lower `cluster.eps` |
+| clutter in the inventory | raise `cluster.min_pts_keep`, or set an explicit `classes` allowlist |
+
+---
+
 ## Problem 2 — "the mesh looks awful"
 
 The v8 mesher ran **Poisson over everything first** and then tried to
