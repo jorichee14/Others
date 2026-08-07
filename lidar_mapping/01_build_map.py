@@ -188,6 +188,45 @@ TS = get_typestore(Stores.ROS2_HUMBLE)
 _GPU = {"xp": np, "on": False, "name": ""}
 
 
+def preload_cuda_libs():
+    """Make the pip-installed CUDA libraries dlopen-able by soname.
+
+    CuPy compiles its kernels at runtime and dlopen()s libnvrtc by plain
+    soname. The pip CUDA wheels (pulled in by torch, or installed directly)
+    put those .so files under site-packages/nvidia/*/lib, which is NOT on the
+    loader path -- so a venv that physically contains every required library
+    still fails with "libnvrtc.so.12: cannot open shared object file".
+
+    Loading them by absolute path with RTLD_GLOBAL registers their SONAMEs in
+    this process, and glibc then satisfies CuPy's later dlopen from the
+    already-loaded set. Returns the number of libraries pinned."""
+    import ctypes
+    import glob
+    import site
+    want = ("nvrtc", "nvJitLink", "cudart", "cublas", "cufft", "curand",
+            "cusolver", "cusparse")
+    roots = list(site.getsitepackages())
+    try:
+        roots.append(site.getusersitepackages())
+    except Exception:
+        pass
+    roots.append(os.path.dirname(os.path.dirname(np.__file__)))
+    n = 0
+    seen = set()
+    for r in dict.fromkeys(roots):
+        for so in glob.glob(os.path.join(r, "nvidia", "*", "lib", "lib*.so*")):
+            base = os.path.basename(so)
+            if base in seen or not any(w.lower() in base.lower() for w in want):
+                continue
+            try:
+                ctypes.CDLL(so, mode=ctypes.RTLD_GLOBAL)
+                seen.add(base)
+                n += 1
+            except OSError:
+                pass
+    return n
+
+
 def init_gpu(want):
     """Bring up CuPy if requested and available. Returns True when live."""
     if not want:
@@ -196,7 +235,15 @@ def init_gpu(want):
         import cupy as cp
         if cp.cuda.runtime.getDeviceCount() == 0:
             raise RuntimeError("no CUDA device visible")
-        cp.zeros(1).sum()                      # force context creation now
+        try:
+            _gpu_smoke_test(cp)
+        except Exception:
+            # most likely the NVRTC-not-on-the-loader-path case; pin the pip
+            # CUDA libs and try once more before giving up
+            n = preload_cuda_libs()
+            if n:
+                print(f"[gpu] pinned {n} CUDA libraries from the pip wheels")
+            _gpu_smoke_test(cp)
         props = cp.cuda.runtime.getDeviceProperties(0)
         name = props["name"]
         free, total = cp.cuda.runtime.memGetInfo()
@@ -206,9 +253,29 @@ def init_gpu(want):
               f"{total / 2**30:.1f} GiB free")
         return True
     except Exception as e:
-        print(f"[gpu] requested but unavailable ({type(e).__name__}: {e})"
+        msg = str(e)
+        print(f"[gpu] requested but unavailable ({type(e).__name__}: {msg})"
               f" -> running on CPU")
+        if "nvrtc" in msg.lower():
+            print("[gpu] CuPy JIT-compiles kernels and needs NVRTC. Install "
+                  "the matching runtime wheel:\n"
+                  "        pip install nvidia-cuda-nvrtc-cu12   # or -cu11")
         return False
+
+
+def _gpu_smoke_test(cp):
+    """Actually compile and run a kernel.
+
+    Deliberately exercises an elementwise uint8 fill and a reduction, because
+    those are the first things colorize does. A weaker probe (zeros().sum())
+    can be served entirely from CuPy's on-disk kernel cache and prebuilt
+    reductions, reporting a healthy GPU that then dies on the first real
+    compile -- twenty minutes into a run, after the resume has already loaded
+    a 120 M-point cloud."""
+    a = cp.full((4, 3), 7, cp.uint8)
+    b = cp.arange(12, dtype=cp.float32).reshape(4, 3)
+    c = (a.astype(cp.float32) * b).sum() + cp.argsort(b[:, 0]).sum()
+    float(c)                                   # forces a device sync
 
 
 def xp():

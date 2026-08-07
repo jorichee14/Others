@@ -38,6 +38,7 @@ def probe(name):
 def main():
     print(f"python {sys.version.split()[0]}\n{sys.executable}\n")
     bad = []
+    warn = []
 
     print("required:")
     for name, why, _ in REQUIRED:
@@ -82,13 +83,24 @@ def main():
             props = cp.cuda.runtime.getDeviceProperties(0)
             nm = props["name"]
             free, total = cp.cuda.runtime.memGetInfo()
-            float(cp.zeros(4).sum())       # actually execute a kernel
+            # must force a real NVRTC compile: zeros().sum() alone can be
+            # served from the kernel cache and passes on a box that cannot
+            # actually compile anything
+            a = cp.full((4, 3), 7, cp.uint8)
+            b = cp.arange(12, dtype=cp.float32).reshape(4, 3)
+            float((a.astype(cp.float32) * b).sum() + cp.argsort(b[:, 0]).sum())
             print(f"GPU: {nm.decode() if isinstance(nm, bytes) else nm}, "
                   f"{n} device(s), {free / 2**30:.1f}/{total / 2**30:.1f} GiB "
-                  f"free, kernel launch ok")
+                  f"free, kernel COMPILE + launch ok")
         except Exception as e:
             print(f"GPU: cupy imports but cannot run ({type(e).__name__}: {e})"
                   f"\n     stage 01 will fall back to the CPU")
+            if "nvrtc" in str(e).lower():
+                print("     CuPy JIT-compiles kernels and needs NVRTC:\n"
+                      "       pip install nvidia-cuda-nvrtc-cu12  # or -cu11")
+            # degraded, not broken: the pipeline still runs on the CPU, so
+            # this is a warning rather than a NOT READY
+            warn.append("cupy cannot run kernels -> stage 01 on CPU")
     else:
         print("GPU: cupy absent -> stage 01 runs on the CPU")
 
@@ -112,6 +124,8 @@ def main():
             print(f"open3d CUDA: {cpu_only}")
 
     print()
+    for w in warn:
+        print(f"WARNING {w}")
     if bad:
         print(f"NOT READY: {len(bad)} problem(s) above")
         for n, why, _ in bad:

@@ -32,10 +32,18 @@ else
     echo "nvidia-smi not found -> CPU-only install"
 fi
 
+# CuPy JIT-compiles every kernel, so it needs NVRTC at RUNTIME -- the cupy
+# wheel does not bundle it. Without these the GPU reports healthy and then
+# dies on the first kernel compile with "libnvrtc.so.NN: cannot open shared
+# object file". torch's wheels usually drag most of them in, but not
+# dependably, so ask for them explicitly.
 case "$CUDA_MAJOR" in
-    12|13) CUPY_PKG="cupy-cuda12x"; TORCH_IDX="https://download.pytorch.org/whl/cu121" ;;
-    11)    CUPY_PKG="cupy-cuda11x"; TORCH_IDX="https://download.pytorch.org/whl/cu118" ;;
-    *)     CUPY_PKG="";             TORCH_IDX="https://download.pytorch.org/whl/cpu" ;;
+    12|13) CUPY_PKG="cupy-cuda12x"; TORCH_IDX="https://download.pytorch.org/whl/cu121"
+           CUDA_LIBS="nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-nvjitlink-cu12" ;;
+    11)    CUPY_PKG="cupy-cuda11x"; TORCH_IDX="https://download.pytorch.org/whl/cu118"
+           CUDA_LIBS="nvidia-cuda-nvrtc-cu11 nvidia-cuda-runtime-cu11 nvidia-cublas-cu11" ;;
+    *)     CUPY_PKG="";             TORCH_IDX="https://download.pytorch.org/whl/cpu"
+           CUDA_LIBS="" ;;
 esac
 [ -n "$CUPY_PKG" ] && echo "selected $CUPY_PKG and torch from ${TORCH_IDX##*/}" \
                    || echo "no CUDA detected: installing CPU torch, skipping cupy"
@@ -64,8 +72,12 @@ echo "=== ultralytics (--no-deps: its deps are already pinned above) ==="
 
 if [ -n "$CUPY_PKG" ]; then
     echo
-    echo "=== cupy ==="
+    echo "=== cupy + CUDA runtime libraries ==="
     "$PIP" install "$CUPY_PKG" -c "$HERE/constraints.txt"
+    # shellcheck disable=SC2086
+    "$PIP" install $CUDA_LIBS -c "$HERE/constraints.txt" || \
+        echo "WARNING: could not install $CUDA_LIBS -- if the GPU fails on a "\
+             "kernel compile, install nvidia-cuda-nvrtc-cu* manually"
 fi
 
 echo
