@@ -39,6 +39,7 @@ Two complementary tests, combined per voxel of a global decision grid:
   hits AND many free-space observations held an object that was sometimes
   there and sometimes not -> dynamic, no matter how long it dwelled:
       dynamic if  free >= min_free  AND  free >= free_ratio * hits
+  with free_ratio ABOVE 1, so free-space evidence must dominate occupancy.
   Genuinely static structure is (almost) never seen through -- rays stop at
   it -- so noise-level free counts are absorbed by min_free / free_ratio.
   This is the same principle as Removert / ERASOR / OctoMap occupancy.
@@ -61,15 +62,24 @@ Two complementary tests, combined per voxel of a global decision grid:
         "max_range": 20.0,  # ignore ray free-space beyond this (m)
         "endpoint_margin": 0.0,  # extra pull-back from the hit, on top of the
                                  # built-in 2-voxel guard band (m)
-        "min_free": 3,      # voxel must be seen THROUGH in >= this many scans
-        "free_ratio": 0.25  # ...and free >= this fraction of its hit count
+        "min_free": 5,      # voxel must be seen THROUGH in >= this many scans
+        "free_ratio": 1.0,  # ...and free must at least MATCH its hit count
+        "grazing_margin": 0.03  # extra ray pull-back per metre of range (m/m)
       }
     }
   Tuning: with carving on, min_span_s only needs to catch fast movers (leave
   at ~1.0); carving handles everything that dwells. If thin static structure
   (railings, poles, foliage) starts disappearing, raise min_free / free_ratio
-  or the endpoint_margin; if ghosts survive, lower free_ratio (e.g. 0.1) or
-  scan_stride/ray_stride (denser evidence). Carving costs roughly one extra
+  or the endpoint_margin; if ghosts survive, lower free_ratio (never below 1.0)
+  or scan_stride/ray_stride (denser evidence). If the FLOOR or a whole wall
+  section vanishes, the cause is grazing incidence: raise grazing_margin
+  first, then free_ratio.
+  A REFLECTIVE surface (glass, polished metal) is a hard limit rather than a
+  tuning problem: when it returns nothing the rays pass through and hit what
+  is behind, so the carver has genuine free-space evidence and no occupancy
+  evidence to weigh against it. Where the LiDAR never measured the surface,
+  no filter can preserve it -- set carve.enable false, or add those panels to
+  the mesh by hand. Carving costs roughly one extra
   50-70%% of merge time at the default strides.
 
 OBJECT DETECTION + INVENTORY, stage [6], optional:
@@ -488,7 +498,7 @@ class DynStats:
         self.tmax = tmax_in[order][start + count - 1]
 
     def dynamic_keys(self, min_hits, min_span_s, carver=None,
-                     min_free=3, free_ratio=0.25):
+                     min_free=5, free_ratio=1.0):
         """Sorted int64 keys of voxels judged transient (moving objects).
         Returns (keys, (n_static, n_dyn, n_carved))."""
         m = xp()
@@ -509,6 +519,13 @@ class DynStats:
             # was empty at those times; if it also has occupancy hits, whatever
             # sat there came and went -> dynamic even if it dwelled for minutes.
             free = carver.counts_for(uniq)
+            # free must DOMINATE occupancy, not merely match a fraction of it.
+            # A surface grazed by many rays -- a floor seen edge-on down a
+            # corridor, a wall along the direction of travel -- collects large
+            # free counts alongside large hit counts, so a threshold below 1.0
+            # deletes exactly the structure it is meant to keep. A real mover
+            # is the opposite: a handful of hits during its passage against
+            # free evidence from the whole rest of the run.
             carved = (free >= int(min_free)) & \
                      (free.astype(np.float64) >= float(free_ratio) * hits)
             n_carved = int((carved & static).sum())
@@ -528,16 +545,24 @@ class FreeSpaceCarver:
     memory stays bounded on long runs."""
 
     def __init__(self, voxel, max_range=20.0, ray_stride=4, scan_stride=2,
-                 endpoint_margin=0.0, chunk=8000, compact_at=20_000_000):
+                 endpoint_margin=0.0, grazing_margin=0.03, chunk=8000,
+                 compact_at=20_000_000):
         self.voxel = float(voxel)
         self.inv = 1.0 / self.voxel
         self.step = self.voxel
         self.max_range = float(max_range)
         self.ray_stride = max(1, int(ray_stride))
         self.scan_stride = max(1, int(scan_stride))
-        # never carve closer than 2 voxels to the hit: range noise + grazing
-        # incidence would otherwise eat the surface itself
+        # never carve closer than 2 voxels to the hit: range noise would
+        # otherwise eat the surface itself
         self.margin = 2.0 * self.voxel + float(endpoint_margin)
+        # ...and pull back FURTHER in proportion to range. A ray striking a
+        # surface at a shallow angle runs alongside it for metres before it
+        # terminates, so a fixed guard protects only the last few centimetres
+        # and the rest of the ray carves the very surface it just measured.
+        # Pose error also grows with range. This is what keeps floors and
+        # along-travel walls alive.
+        self.grazing = float(grazing_margin)
         self.chunk = int(chunk)
         self.compact_at = int(compact_at)
         self.keys = None
@@ -560,11 +585,12 @@ class FreeSpaceCarver:
         p = as_dev(world_pts)[::self.ray_stride]
         vec = p - origin[None, :]
         dist = m.linalg.norm(vec, axis=1)
-        keep = dist > (self.margin + self.step)
+        keep = dist * (1.0 - self.grazing) > (self.margin + self.step)
         if not bool(keep.any()):
             return
         vec = vec[keep]; dist = dist[keep]
-        end = m.minimum(dist - self.margin, self.max_range)
+        end = m.minimum(dist - (self.margin + self.grazing * dist),
+                        self.max_range)
         scan_keys = []
         for a in range(0, len(vec), self.chunk):
             b = min(a + self.chunk, len(vec))
@@ -582,6 +608,22 @@ class FreeSpaceCarver:
         if not scan_keys:
             return
         u = m.unique(m.concatenate(scan_keys))
+        # THE grazing fix: never carve a voxel that THIS SAME SCAN measured a
+        # return in. A ray striking the floor 14 m away runs within one voxel
+        # of it for the last two metres, passing over voxels where its sibling
+        # rays terminate -- so without this the surface carves itself, and the
+        # floor disappears. A real mover's voxels are absent from occ in every
+        # scan after it leaves, so they still carve normally.
+        # Distance-based guards cannot do this job: the offending samples are
+        # metres from their own ray's endpoint while sitting millimetres above
+        # the surface, and only the neighbouring returns know that.
+        occ = m.unique(pack_voxels(
+            m.floor(as_dev(world_pts) * self.inv).astype(np.int64)))
+        if occ.size:
+            pos = m.clip(m.searchsorted(occ, u), 0, occ.size - 1)
+            u = u[occ[pos] != u]
+        if u.size == 0:
+            return
         self._buf.append(u)
         self._buf_n += int(u.size)
         if self._buf_n >= self.compact_at:
@@ -625,6 +667,7 @@ def make_carver(rd, s):
         ray_stride=cv.get("ray_stride", 4),
         scan_stride=cv.get("scan_stride", 2),
         endpoint_margin=cv.get("endpoint_margin", 0.0),
+        grazing_margin=cv.get("grazing_margin", 0.03),
         # the GPU eats far larger ray batches than the CPU wants to allocate
         chunk=int(cv.get("chunk", 65536 if on_gpu() else 8000)),
         compact_at=int(cv.get("compact_at", 20_000_000)))
@@ -794,8 +837,8 @@ def remove_dynamic(P, S, s, pcd, dyn, carver):
     dyn_keys, (n_static, n_dyn, n_carved) = dyn.dynamic_keys(
         rd.get("min_hits", 2), rd.get("min_span_s", 1.0),
         carver=carver,
-        min_free=cv.get("min_free", 3),
-        free_ratio=cv.get("free_ratio", 0.25))
+        min_free=cv.get("min_free", 5),
+        free_ratio=cv.get("free_ratio", 1.0))
     out, removed = drop_dynamic_points(pcd, dyn_keys, voxel)
     gpu_free()
     carve_note = (f", {n_carved} of them span-static but carved by free-space"
