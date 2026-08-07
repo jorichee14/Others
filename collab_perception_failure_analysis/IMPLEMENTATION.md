@@ -209,16 +209,21 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
   collapse both jointly. Standouts: CoBEVT precision immune to loss (ΔP −0.022);
   V2VNet ghost precision best-in-class by 2.4× (ΔP −0.056).
 
-### Step 4.3 — Spatial decomposition  `🟨 IN PROGRESS`
+### Step 4.3 — Spatial decomposition  `✅ DONE`
 - Split GT/detections into ego-visible vs occluded/beyond-range regions. Delivery impairments
   should only hurt the occluded region; content corruption should contaminate ego-visible too.
-- **Result:** runner authored (`scripts/run_phase43.py`): zones defined by ego's OWN
-  lidar (GT box ego-visible iff ≥5 ego points inside; box-membership test unit-verified
-  incl. rotated boxes); reports recall per zone + FP/frame + **FP_egovis/frame**
-  (false positives claiming objects where ego's own sensor sees points — direct
-  contamination evidence). 3 methods (attfuse/coalign/fcooper) × 5 conditions
-  (identity, loss90, latency200ms, ghosts8, swap50), no per-frame dumps needed
-  (metrics computed inline). Awaiting GPU run (~1.5–2 h).
+- **Result:** complete (2026-08-07), 15/15 cells; full table + findings in
+  `results/ANALYSIS.md` §8. Both predictions confirmed: loss90 removes 0.50–0.59 of
+  occluded recall vs only 0.06–0.08 of ego-visible (~8:1 surgical selectivity);
+  latency200ms cuts ego-visible recall 0.21–0.46 with 3.4–4.6× ego-visible FP
+  contamination — fusion poisoning measured inside ego's own field of view.
+  Contamination magnitude reproduces the sweep's content-fragility ranking
+  (fcooper > attfuse > coalign): three independent diagnostics now agree on
+  attribution AND method ordering. Bonus: latency contaminates ~2× more than swap
+  (misalignment valley made spatial); attfuse/coalign cells reproduced
+  digit-for-digit across two full executions. Ops lesson recorded: Shapely-heavy
+  runs need one process per method (heap fragmentation: same cache 797s fresh vs
+  11,752s in a 3rd-position process).
 
 ### Step 4.4 — Rank stability & summary  `✅ DONE`
 - Method ranking per impairment, robustness curves, area-under-robustness-curve; test the
@@ -276,6 +281,7 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 | 2026-08-05 | 2.1 ✅ / 3.1 ✅ / 3.2 | Identity gate passed for late and fcooper too (100/100 + 10/10 each) — Step 2.1 closed. Phase 3 built: `configs/matrix.yaml` (831 cells, GE stationarity + pose coupling validated in dev container) and `scripts/run_phase3.py` (resumable per-cell runner with clean-GT cache and bandwidth metering). Awaiting sweep execution. |
 | 2026-08-05 | 3.2 | **Pilot complete: attfuse × full grid, 123/123 cells, 0 failures, ~78s/cell** (runner optimization: 13min→78s). Findings in `results/pilot_attfuse.md`: loss→floor (delivery signature, never below); latency/stale/pose/swap cross BELOW floor (content failures — 200ms latency worse than total silence); ghosts = pure precision collapse w/ flat recall (sanity check passed, stays above floor); pose non-monotonic (worst at 0.8m); burst≈iid at matched rate; bandwidth free to 4 bits, below floor at 1 bit. Bandwidth L0 reproduces frozen baseline 0.815. Aggregator authored (`scripts/aggregate_sweeps.py`, floor-test classifier, tested). Remaining 6 methods ≈ 16h. |
 | 2026-08-06 | 3.2 | Full sweep first pass: late 108/108 ✅; v2vnet/coalign/cobevt mostly ✅. Two runner/channel bugs found and fixed: (1) all `early` cells crashed — early fusion merges agents pre-collation so `record_len` doesn't exist; collaborator count now recorded as unobservable for early. (2) v2vnet/coalign `pose` cells at ≥0.8m crashed on a LATENT STOCK OpenCOOD bug: dataset filters CAVs by COM_RANGE using (noised) lidar_pose but builds pairwise matrices from the unfiltered dict — a membership flip desyncs feature count vs matrix and crashes models that warp with pairwise_t_matrix. Fix: pose noise now clamps the noised position to the true pose's side of the COM_RANGE boundary (connectivity loss is drop's job, not pose noise's). All `pose` cells to be deleted and rerun under the clamped protocol for uniformity. |
+| 2026-08-07 | 4.3 ✅ | Spatial decomposition complete (15/15). Delivery surgically confined to occluded zone (~8:1); content contaminates ego-visible space (latency: R_vis −0.21…−0.46, FP_egovis ×3.4–4.6), ordering fcooper>attfuse>coalign = sweep's fragility ranking. Latency contaminates ~2× more than swap at similar AP cost. attfuse/coalign reproduced digit-for-digit across two runs. Analysis in ANALYSIS.md §8. Tracking runs (5.1) launched per-method after heap-fragmentation lesson. |
 | 2026-08-06 | 4.3 / 5.1 | Both follow-up tracks built. 4.3: `run_phase43.py` — ego-lidar-defined zones, per-zone recall + ego-visible-FP contamination metric, 15 cells. 5.1: `run_phase5_tracking.py` — Kalman/Hungarian MOT harness over contiguous frames, GT tracks from object ids in world frame, 21 runs targeting predictions P1 (burstiness × temporal state) and P2 (staleness × motion model). All geometry/tracker/MOT logic unit-tested in dev container; synthetic matched-rate check shows burst≫iid in IDSW — harness sensitivity confirmed. Awaiting GPU runs. |
 | 2026-08-06 | 4.1/4.2/4.4 ✅ | **Phase 4 complete** (4.3 spatial decomposition deferred as optional third confirmation). Master table committed (`results/sweep_summary.md`, 277 rows); attribution analysis written (`results/ANALYSIS.md`): floor-test matrix, P/R decomposition (both signatures hold, zero exceptions), rank stability, fusion-mechanism verdict (confirmed + sharpened: each mechanism's vulnerability is the impairment that mimics evidence it was trained to trust), misalignment valley, bandwidth cliff, deployment guidance ("prioritize freshness over completeness"). |
 | 2026-08-06 | 3.2 ✅ | **Phase 3 complete: 831/831 cells, 0 failures.** Final pose rerun (105 cells) clean incl. v2vnet/coalign at all levels. Zero-voxel guard fingerprint: collab 1.59→1.55 (L3)→1.31 (L4); attfuse L4 AP unchanged pre/post guard (recovery intrinsic). CoAlign most pose-robust at every level (L4 0.511). Next: aggregate + Phase 4 attribution analysis. |

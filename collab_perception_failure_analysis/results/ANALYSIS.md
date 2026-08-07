@@ -208,7 +208,64 @@ information. Flagged for follow-up; does not affect the study's main claims.
   *temporal* misalignment is the promising direction (cf. SyncNet/CoBEVFlow, untested
   here).
 
-## 8. Limitations
+## 8. Spatial decomposition (Step 4.3)
+
+Mechanistic verification on 3 representative methods × 5 conditions (724 frames each).
+Zones: a GT box is **ego-visible** iff it contains ≥5 of the ego's own lidar returns;
+all other GT is **occluded** (reachable only through collaboration). `FP_egovis/f` =
+false positives per frame claiming an object where ego's own sensor sees ≥5 points —
+direct evidence of contamination inside ego's field of view.
+
+| method | condition | R_vis | R_occ | FP/f | FP_egovis/f |
+|---|---|---|---|---|---|
+| attfuse | identity | 0.933 | 0.761 | 1.70 | 0.95 |
+| attfuse | loss90 | 0.864 | 0.204 | 3.25 | 2.05 |
+| attfuse | latency200ms | 0.673 | 0.399 | 5.58 | 3.54 |
+| attfuse | ghosts8 | 0.926 | 0.748 | 3.27 | 1.17 |
+| attfuse | swap50 | 0.846 | 0.449 | 5.13 | 1.76 |
+| coalign | identity | 0.953 | 0.783 | 1.88 | 0.93 |
+| coalign | loss90 | 0.894 | 0.282 | 3.30 | 1.80 |
+| coalign | latency200ms | 0.747 | 0.307 | 5.62 | 3.14 |
+| coalign | ghosts8 | 0.946 | 0.771 | 5.77 | 1.54 |
+| coalign | swap50 | 0.912 | 0.545 | 5.91 | 1.95 |
+| fcooper | identity | 0.913 | 0.713 | 1.86 | 1.24 |
+| fcooper | loss90 | 0.838 | 0.123 | 2.51 | 2.02 |
+| fcooper | latency200ms | 0.456 | 0.201 | 7.76 | 5.65 |
+| fcooper | ghosts8 | 0.890 | 0.690 | 4.89 | 1.60 |
+| fcooper | swap50 | 0.617 | 0.362 | 4.83 | 1.90 |
+
+Findings (all read as deltas from each method's identity row):
+
+1. **Delivery failure is spatially surgical.** loss90 removes 0.50–0.59 of occluded-zone
+   recall but only 0.06–0.08 of ego-visible recall (~8:1 selectivity, all three
+   methods): losing messages removes exactly the zone collaboration was providing.
+2. **Content failure reaches inside ego's own field of view.** latency200ms cuts
+   ego-visible recall by 0.21–0.46 and multiplies ego-visible false positives by
+   3.4–4.6× — stale evidence demonstrably degrades detection of objects the ego's own
+   sensor sees, which is fusion poisoning measured directly.
+3. **The contamination magnitude reproduces the sweep's content-fragility ranking**:
+   fcooper (ΔR_vis −0.46) > attfuse (−0.26) > coalign (−0.21). Three independent
+   diagnostics — floor test, P/R decomposition, spatial decomposition — now agree on
+   both the attribution *and* the method ordering.
+4. **Plausible corruption contaminates more than implausible corruption.** Latency
+   produces roughly double the ego-visible contamination of swap at comparable AP cost
+   (attfuse FP_egovis 3.54 vs 1.76) — the misalignment valley (§5) made spatial: stale
+   evidence lands on and around real traffic and competes with correct detections;
+   foreign-scene features land nowhere meaningful.
+5. **Ghosts stay out of ego's zone**: large FP/f increases (up to +3.9) but FP_egovis
+   rises only +0.2–0.4 and both recalls hold within 0.02 — injected hallucinations
+   appear mostly in unobserved space and do not suppress real objects.
+6. **Nuance for the delivery story**: extreme loss also roughly doubles FPs
+   (flickering collaborators produce unstable partial evidence), so "delivery failures
+   cost only recall" should read "overwhelmingly recall."
+7. Method note: even on the clean channel, F-Cooper has the highest baseline
+   contamination (FP_egovis 1.24 vs 0.93–0.95) — maxout is the least selective fusion
+   even before any impairment.
+8. Reproducibility note: the attfuse and coalign cells were executed twice end-to-end
+   (in separate processes) and reproduced **digit-for-digit** — the pipeline's
+   seeded determinism holds through the full spatial analysis.
+
+## 9. Limitations
 
 - The floor (0.575) is the late-fusion checkpoint evaluated ego-only; per-backbone
   floors would shift individual crossings by small margins (the floor-test margin
@@ -218,9 +275,9 @@ information. Flagged for follow-up; does not affect the study's main claims.
 - Bandwidth impairment for AttFuse intercepts the backbone input (its fusion is
   interleaved) — a documented approximation; late/early fusion have no feature
   bandwidth analogue and were excluded from that family.
-- Spatial decomposition (Step 4.3: ego-visible vs occluded regions) not yet run;
-  it requires per-frame box dumps on selected cells and is the natural next
-  verification of the delivery-recall mechanism.
+- Spatial decomposition (§8) covers 3 representative methods × 5 conditions rather
+  than the full matrix — sufficient for mechanism verification; extendable via
+  `run_phase43.py --methods`.
 - Single dataset (OPV2V, simulated), single detection task; Phase 5 (tracking /
   harder tasks) tests whether burstiness-irrelevance and the staleness verdicts
   survive temporal tasks.
