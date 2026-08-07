@@ -146,20 +146,30 @@ def main():
 
         frame_indices = list(range(0, len(ds_clean), args.stride))
 
-        # per-frame clean context: GT corners + zone labels (from ego's own cloud)
-        print('[%s] building GT + zone cache' % method)
+        # per-frame clean context: GT corners + zone labels (from ego's own cloud).
+        # Ego points are 1-in-3 subsampled (MIN_PTS scaled accordingly) to keep the
+        # cache ~3x lighter; zone labels are insensitive to this at these densities.
+        print('[%s] building GT + zone cache (%d frames)'
+              % (method, len(frame_indices)))
+        t_gt = time.time()
         gt_cache = {}
-        for i in frame_indices:
+        min_pts_sub = max(2, MIN_PTS // 3)
+        for n_done, i in enumerate(frame_indices):
             np.random.seed(crc('gt', method, i))
             base = ds_clean.retrieve_base_data(i)
             ego_entry = next(v for v in base.values() if v['ego'])
-            ego_pts = pcd_utils.mask_ego_points(ego_entry['lidar_np'])[:, :3]
+            ego_pts = pcd_utils.mask_ego_points(
+                ego_entry['lidar_np'])[::3, :3].astype(np.float32)
             sample = ds_clean[i]
             batch = ds_clean.collate_batch_test([sample])
             gt = ds_clean.post_processor.generate_gt_bbx(batch).cpu().numpy()
-            visible = np.array([points_in_box(ego_pts, gt[k]).sum() >= MIN_PTS
+            visible = np.array([points_in_box(ego_pts, gt[k]).sum() >= min_pts_sub
                                 for k in range(len(gt))], dtype=bool)
             gt_cache[i] = (gt, visible, ego_pts)
+            if (n_done + 1) % 100 == 0:
+                print('[%s]   cache %d/%d (%.0fs)' % (
+                    method, n_done + 1, len(frame_indices), time.time() - t_gt))
+        print('[%s] cache ready (%.0fs)' % (method, time.time() - t_gt))
 
         for cond in pending:
             t0 = time.time()
@@ -187,7 +197,8 @@ def main():
                         tp_occ += sum(1 for g in matched if not visible[g])
                         fp_total += len(fps)
                         for pi in fps:
-                            if points_in_box(ego_pts, pred_np[pi]).sum() >= MIN_PTS:
+                            if points_in_box(ego_pts,
+                                             pred_np[pi]).sum() >= min_pts_sub:
                                 fp_egovis += 1
             finally:
                 channel.detach()
@@ -210,6 +221,14 @@ def main():
                   % (method, cond, record['recall_visible'],
                      record['recall_occluded'], record['fp_per_frame'],
                      record['fp_egovis_per_frame'], record['runtime_s']))
+
+        # release per-method state before the next model (caches are ~GB-scale;
+        # keeping several alive drives the machine into swap)
+        import gc
+        del gt_cache, ds_clean, ds_chan, model
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     print('done — results in %s' % out_dir)
 
 
