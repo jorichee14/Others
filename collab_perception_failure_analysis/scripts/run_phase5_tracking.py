@@ -42,18 +42,22 @@ EVAL_GATE = 2.0       # GT<->track matching gate for MOT metrics (m)
 CONFIRM_HITS = 2
 MAX_MISSES = 3
 
-def ge(loss):
-    p_bg = 0.3
+def ge(loss, p_bg=0.3):
     return {'ge_p_bad_to_good': p_bg, 'ge_p_good_to_bad': loss * p_bg / (1 - loss)}
 
+# burst mean length = 1/p_bad_to_good frames: 0.3 -> ~3.3 (at the tracker's coast
+# limit), 0.1 -> ~10 (well beyond it). Same marginal loss rate in each pair, so
+# P1 becomes a burst-length dose-response at fixed rate.
 CONDITIONS = OrderedDict([
-    ('clean',    {}),
-    ('iid30',    {'loss_p': 0.3}),
-    ('burst30',  ge(0.3)),
-    ('iid70',    {'loss_p': 0.7}),
-    ('burst70',  ge(0.7)),
-    ('stale4',   {'stale_period': 4}),
-    ('latency2', {'latency_frames': 2}),
+    ('clean',        {}),
+    ('iid30',        {'loss_p': 0.3}),
+    ('burst30',      ge(0.3)),
+    ('burst30_long', ge(0.3, p_bg=0.1)),
+    ('iid70',        {'loss_p': 0.7}),
+    ('burst70',      ge(0.7)),
+    ('burst70_long', ge(0.7, p_bg=0.1)),
+    ('stale4',       {'stale_period': 4}),
+    ('latency2',     {'latency_frames': 2}),
 ])
 DEFAULT_METHODS = ['coalign', 'cobevt', 'fcooper']
 
@@ -173,14 +177,35 @@ def main():
     ap.add_argument('--methods', nargs='*', default=DEFAULT_METHODS)
     ap.add_argument('--conditions', nargs='*', default=list(CONDITIONS.keys()),
                     choices=list(CONDITIONS.keys()))
+    ap.add_argument('--num-workers', type=int, default=6)
     args = ap.parse_args()
 
+    import pickle
     import torch
+    from torch.utils.data import DataLoader, Dataset
     from opencood.tools import train_utils
     import opencood.hypes_yaml.yaml_utils as yaml_utils
     from opencood.data_utils.datasets import build_dataset
     from opencood.hypes_yaml.yaml_utils import load_yaml
     from opencood.utils.transformation_utils import x1_to_x2
+
+    class SeededView(Dataset):
+        """Seed numpy inside __getitem__ so pipeline randomness is deterministic
+        per (tag, frame) regardless of DataLoader worker count — and so the data
+        pipeline's allocations happen in worker processes, keeping the main
+        process heap lean (the in-process manual loop degrades over hours)."""
+
+        def __init__(self, inner, tag, n):
+            self.inner = inner
+            self.tag = tag
+            self.n = n
+
+        def __len__(self):
+            return self.n
+
+        def __getitem__(self, i):
+            np.random.seed(crc(self.tag, i))
+            return self.inner[i]
 
     out_dir = os.path.expanduser(args.out)
     os.makedirs(out_dir, exist_ok=True)
@@ -228,26 +253,43 @@ def main():
             ego_content = next(v for v in sdb.values() if v['ego'])
             return load_yaml(ego_content[t_key]['yaml'])['lidar_pose']
 
-        # per-frame clean context (shared by all conditions): world-frame GT tracks
-        print('[%s] building GT-track + ego-pose cache (%d frames)'
-              % (method, n_total))
-        t_gt = time.time()
-        gt_cache = {}
-        for i in range(n_total):
-            np.random.seed(crc('gt', method, i))
-            sample = ds_clean[i]
-            ego = sample['ego']
-            mask = ego['object_bbx_mask'] == 1
-            centers = np.asarray(ego['object_bbx_center'])[mask][:, :3]
-            ids = list(ego['object_ids'])
-            M = x1_to_x2(ego_pose_of(i), [0, 0, 0, 0, 0, 0])  # ego frame -> world
-            pts = centers @ M[:3, :3].T + M[:3, 3]
-            gt_cache[i] = ([(gid, float(p[0]), float(p[1]))
-                            for gid, p in zip(ids, pts)], M)
-            if (i + 1) % 200 == 0:
-                print('[%s]   cache %d/%d (%.0fs)'
-                      % (method, i + 1, n_total, time.time() - t_gt))
-        print('[%s] cache ready (%.0fs)' % (method, time.time() - t_gt))
+        # per-frame clean context (shared by all conditions): world-frame GT
+        # tracks. Persisted to disk so restarts and per-condition invocations
+        # never rebuild it.
+        cache_path = os.path.join(out_dir, '%s__gtcache.pkl' % method)
+        gt_cache = None
+        if os.path.isfile(cache_path):
+            with open(cache_path, 'rb') as f:
+                gt_cache = pickle.load(f)
+            if len(gt_cache) != n_total:
+                gt_cache = None
+        if gt_cache is None:
+            print('[%s] building GT-track + ego-pose cache (%d frames)'
+                  % (method, n_total))
+            t_gt = time.time()
+            gt_cache = {}
+            for i, batch in zip(
+                    range(n_total),
+                    DataLoader(SeededView(ds_clean, 'gt/' + method, n_total),
+                               batch_size=1, num_workers=args.num_workers,
+                               shuffle=False, collate_fn=lambda s: s[0])):
+                ego = batch['ego']
+                mask = ego['object_bbx_mask'] == 1
+                centers = np.asarray(ego['object_bbx_center'])[mask][:, :3]
+                ids = list(ego['object_ids'])
+                M = x1_to_x2(ego_pose_of(i), [0, 0, 0, 0, 0, 0])  # ego -> world
+                pts = centers @ M[:3, :3].T + M[:3, 3]
+                gt_cache[i] = ([(gid, float(p[0]), float(p[1]))
+                                for gid, p in zip(ids, pts)], M)
+                if (i + 1) % 200 == 0:
+                    print('[%s]   cache %d/%d (%.0fs)'
+                          % (method, i + 1, n_total, time.time() - t_gt))
+            with open(cache_path, 'wb') as f:
+                pickle.dump(gt_cache, f)
+            print('[%s] cache ready (%.0fs), saved to %s'
+                  % (method, time.time() - t_gt, cache_path))
+        else:
+            print('[%s] GT cache loaded from %s' % (method, cache_path))
 
         for cond in pending:
             t0 = time.time()
@@ -256,27 +298,30 @@ def main():
             channel = CommChannel(cfg)
             channel.attach(ds_chan)
             acc = MotAccumulator()
+            scenario_starts = {s for (s, e) in bounds}
+            tracker = None
             try:
                 with torch.no_grad():
-                    for (s, e) in bounds:
-                        tracker = Tracker()
-                        acc.reset_sequence()
-                        for i in range(s, e):
-                            np.random.seed(crc(method, cond, i))
-                            sample = ds_chan[i]
-                            batch = ds_chan.collate_batch_test([sample])
-                            batch = train_utils.to_device(batch, device)
-                            pred, score = predict_boxes(fusion, ds_chan,
-                                                        model, batch)
-                            gt_items, M = gt_cache[i]
-                            if pred is not None and len(pred):
-                                c_ego = pred.cpu().numpy().mean(axis=1)  # (N,3)
-                                c_w = c_ego @ M[:3, :3].T + M[:3, 3]
-                                det_xy = c_w[:, :2]
-                            else:
-                                det_xy = np.zeros((0, 2))
-                            trk = tracker.step(det_xy)
-                            acc.step(gt_items, [(t[0], t[1], t[2]) for t in trk])
+                    loader = DataLoader(
+                        SeededView(ds_chan, '%s/%s' % (method, cond), n_total),
+                        batch_size=1, num_workers=args.num_workers,
+                        shuffle=False, collate_fn=ds_chan.collate_batch_test)
+                    for i, batch in zip(range(n_total), loader):
+                        if i in scenario_starts:
+                            tracker = Tracker()
+                            acc.reset_sequence()
+                        batch = train_utils.to_device(batch, device)
+                        pred, score = predict_boxes(fusion, ds_chan,
+                                                    model, batch)
+                        gt_items, M = gt_cache[i]
+                        if pred is not None and len(pred):
+                            c_ego = pred.cpu().numpy().mean(axis=1)  # (N,3)
+                            c_w = c_ego @ M[:3, :3].T + M[:3, 3]
+                            det_xy = c_w[:, :2]
+                        else:
+                            det_xy = np.zeros((0, 2))
+                        trk = tracker.step(det_xy)
+                        acc.step(gt_items, [(t[0], t[1], t[2]) for t in trk])
             finally:
                 channel.detach()
             record = {'method': method, 'condition': cond,
