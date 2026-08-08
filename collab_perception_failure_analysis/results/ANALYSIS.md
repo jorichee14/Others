@@ -265,7 +265,78 @@ Findings (all read as deltas from each method's identity row):
    (in separate processes) and reproduced **digit-for-digit** — the pipeline's
    seeded determinism holds through the full spatial analysis.
 
-## 9. Limitations
+## 9. Cooperative tracking under impairment (Phase 5, Step 5.1)
+
+Detection + constant-velocity Kalman tracking (world frame, Hungarian association,
+2-hit confirm / 3-miss delete, per-scenario reset), full test split at stride 1.
+GT tracks from dataset object identities. Burst conditions share the marginal loss
+rate of their iid pair; `_long` bursts average ~10 frames (beyond the tracker's
+3-frame coast window) vs ~3.3 (at it).
+
+| method | condition | MOTA | FN | FP | IDSW | FRAG |
+|---|---|---|---|---|---|---|
+| coalign | clean | 0.835 | 1331 | 3914 | 149 | 483 |
+| coalign | iid30 | 0.809 | 1547 | 4492 | 185 | 550 |
+| coalign | burst30 | 0.806 | 1612 | 4502 | 200 | 563 |
+| coalign | burst30_long | 0.802 | 1761 | 4494 | 208 | 567 |
+| coalign | iid70 | 0.728 | 2708 | 5813 | 349 | 856 |
+| coalign | burst70 | 0.734 | 2583 | 5716 | 362 | 815 |
+| coalign | burst70_long | 0.701 | 3394 | 5942 | 413 | 892 |
+| coalign | stale4 | 0.653 | 3193 | 7474 | 629 | 1394 |
+| coalign | latency2 | 0.654 | 4106 | 6935 | 223 | 806 |
+| cobevt | clean | 0.881 | 1832 | 1883 | 160 | 511 |
+| cobevt | iid30 | 0.877 | 2029 | 1799 | 194 | 546 |
+| cobevt | burst30 | 0.864 | 2347 | 1837 | 260 | 625 |
+| cobevt | burst30_long | 0.855 | 2524 | 1968 | 231 | 629 |
+| cobevt | iid70 | 0.815 | 3760 | 1944 | 341 | 788 |
+| cobevt | burst70 | 0.801 | 4000 | 2097 | 378 | 878 |
+| cobevt | burst70_long | 0.795 | 4198 | 2055 | 418 | 844 |
+| cobevt | stale4 | 0.541 | 5845 | 8091 | 1031 | 2248 |
+| cobevt | latency2 | 0.555 | 7305 | 6980 | 230 | 966 |
+| fcooper | clean | 0.818 | 2428 | 3328 | 167 | 597 |
+| fcooper | iid30 | 0.799 | 2717 | 3623 | 196 | 648 |
+| fcooper | burst30 | 0.801 | 2824 | 3406 | 265 | 683 |
+| fcooper | burst30_long | 0.783 | 3146 | 3632 | 282 | 746 |
+| fcooper | iid70 | 0.742 | 4222 | 3828 | 375 | 872 |
+| fcooper | burst70 | 0.722 | 4605 | 4075 | 378 | 933 |
+| fcooper | burst70_long | 0.711 | 4964 | 4042 | 430 | 937 |
+| fcooper | stale4 | 0.505 | 6239 | 8987 | 917 | 2109 |
+| fcooper | latency2 | 0.478 | 8484 | 8284 | 248 | 1021 |
+
+**P1 — burstiness matters for tracking, confirmed with a dose-response.** At every
+matched loss rate, IDSW rises with burst length for all three methods (e.g. fcooper
+@30%: 196 → 265 → 282; coalign @70%: 349 → 362 → 413; cobevt @70%: 341 → 378 → 418),
+and MOTA orders iid ≥ burst ≥ burst_long almost everywhere. The contrast with
+detection is the finding: at 70% loss, detection AP was statistically identical for
+iid vs bursty loss (§2), yet tracking loses 15–23% more identities under bursts.
+Burstiness irrelevance was a property of the stateless task, not of the channel —
+**failure attribution depends on the task's temporal structure.** Nuance: short
+(~3-frame) bursts, inside the tracker's coast window, barely move MOTA while already
+inflating IDSW ~35% — aggregate metrics hide identity churn that downstream consumers
+(prediction, planning) would feel.
+
+**P2 — staleness and latency, near-twins at detection level, have OPPOSITE tracking
+signatures.** Staleness (sawtooth age, refresh every 0.4 s) explodes identity
+switches (4–6× clean: 629/1031/917) and fragmentation; constant latency (0.2 s)
+leaves IDSW almost untouched (223/230/248 vs clean 149/160/167) but produces the
+table's largest miss counts. Mechanism: constant delay is a *consistent* bias — the
+motion model locks onto steadily-displaced detections and keeps identities coherent
+(wrong in place, stable in identity → FN-dominated); sawtooth staleness makes
+detections *oscillate* between true and displaced positions each refresh cycle,
+shredding association. A motion-model tracker therefore partially absorbs consistent
+temporal error and actively amplifies oscillating temporal error — a distinction
+invisible at the detection level, where stale4 and latency2 cost similar AP.
+Deployment corollary: for tracking-based pipelines, a channel with *predictable*
+delay is preferable to one with *variable* freshness at equal average age — the
+opposite of what detection-level analysis alone would suggest.
+
+Method notes: CoBEVT's delivery excellence carries to tracking (best MOTA in every
+loss condition; FP nearly flat under loss — its precision retention becomes track
+stability); CoAlign's clean-channel FP-heaviness (3914, 2× cobevt) caps its clean
+MOTA at 0.835 despite the best detection AP among the three under misalignment;
+F-Cooper is last in every condition, consistent with all prior diagnostics.
+
+## 10. Limitations
 
 - The floor (0.575) is the late-fusion checkpoint evaluated ego-only; per-backbone
   floors would shift individual crossings by small margins (the floor-test margin
@@ -278,6 +349,8 @@ Findings (all read as deltas from each method's identity row):
 - Spatial decomposition (§8) covers 3 representative methods × 5 conditions rather
   than the full matrix — sufficient for mechanism verification; extendable via
   `run_phase43.py --methods`.
-- Single dataset (OPV2V, simulated), single detection task; Phase 5 (tracking /
-  harder tasks) tests whether burstiness-irrelevance and the staleness verdicts
-  survive temporal tasks.
+- Single dataset (OPV2V, simulated). The tracking tier (§9) uses a deliberately
+  simple constant-velocity Kalman tracker — an instrument for measuring impairment
+  effects, not a tracking contribution; absolute MOTA values should not be compared
+  to the tracking literature. Harder tiers (trajectory prediction, closed-loop
+  CARLA) remain unscoped.
