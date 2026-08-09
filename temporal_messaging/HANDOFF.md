@@ -136,6 +136,14 @@ their own timestamp. Testable across detection + tracking with the existing harn
 
 ### Novelty — honest accounting
 
+> **⚠️ SUPERSEDED 2026-08-09 by [`RELATED_WORK.md`](RELATED_WORK.md) §8.** The literature check
+> this section asks for has been done. Outcome: candidate 3 (rate×age) and the task-agnostic
+> angle are **dead**; candidate 2 (discountability) is **wounded** and survives only in a
+> narrowed form; candidate 1 (the displacement diagnostic) **survives and is the only
+> defensible headline**. The core mechanism — time-parameterized self-describing messages — is
+> prior art in ETSI CPM (`timeOfMeasurement`), FFNet (NeurIPS 2023), and SparseCoop (AAAI 2026).
+> Read §8–§9 there before writing anything. The text below is kept as the original record.
+
 **NOT novel (state plainly in any write-up):**
 - Transmitting object state with velocity — ETSI CPM standardizes this.
 - Latency compensation in collaborative perception — SyncNet, CoBEVFlow, mmCooper, V2X-INCOP.
@@ -209,7 +217,7 @@ not a failure — report it.
 
 | # | Decision | Notes |
 |---|---|---|
-| D1 | Literature check on the rate×age claim | Required before asserting novelty item 3 |
+| ~~D1~~ | ~~Literature check on the rate×age claim~~ | **CLOSED 2026-08-09 — NO-GO.** See `RELATED_WORK.md` §5. |
 | D2 | Object-level only, or feature-level hybrid? | Object-level is Phase 0/1; feature-level needs retraining |
 | D3 | Which downstream tasks count as the task-agnostic evidence? | Detection + tracking exist; prediction would need new harness |
 | D4 | Agent density | ~1.59 collaborators/ego frame; measure the histogram if scheduling re-enters |
