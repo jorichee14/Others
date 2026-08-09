@@ -113,7 +113,26 @@ OpenCOOD commit 31ba16025da27ffe4e336f011290dfbc66f9a1f1  at ~/cpfa/OpenCOOD
 
 ## 4. The new direction
 
-### Thesis
+> **SUPERSEDED, 2026-08-09.** The thesis and novelty accounting below were written before
+> the literature check. That check ([`docs/LITERATURE.md`](docs/LITERATURE.md), 16 searches
+> + one full-text fetch) falsified load-bearing parts of it. **Read
+> [`METHOD.md`](METHOD.md) for the current position.** This section is kept as the record
+> of what was believed and why it changed — do not cite it.
+>
+> Short version of what changed:
+> - "Every CP system is stateless snapshot exchange" is **false as of 2023** (SCOPE,
+>   V2XPnP, CoST, V2X-INCOP all retain state).
+> - The persistent-belief + Δt-dynamics + async-update + time-query architecture already
+>   exists as **StreamingFlow** (CVPR 2024), for intra-vehicle multi-sensor fusion.
+> - Delta messaging is **substantially anticipated** by CoST (ICCV 2025) and CooperTrim.
+> - "CoBEVFlow discretises time" is **false**; it claims continuous irregular timestamps.
+>   The surviving distinction is *retention vs. transformation*.
+> - The latency premise is weaker than assumed: **TraF-Align (CVPR 2025) reports −4.87%
+>   AP50 at 400 ms.**
+> - What survives: the **network-specific** problems — out-of-order arrival, unbounded
+>   per-agent age, permanent loss, hard bit budget — none of which exist inside one vehicle.
+
+### Thesis (superseded — see METHOD.md §2)
 
 > Collaborative perception transmits **snapshots** — "here is what the world looked like
 > at my timestamp" — which carry no description of their own dynamics or validity. When
@@ -134,7 +153,7 @@ Two consequences, each attacking a finding from §1:
 estimate is consumer-agnostic: detector, tracker, predictor, planner each query it at
 their own timestamp. Testable across detection + tracking with the existing harness.
 
-### Novelty — honest accounting
+### Novelty — honest accounting (superseded — see METHOD.md §1–§2 and docs/LITERATURE.md §12)
 
 **NOT novel (state plainly in any write-up):**
 - Transmitting object state with velocity — ETSI CPM standardizes this.
@@ -209,7 +228,11 @@ not a failure — report it.
 
 | # | Decision | Notes |
 |---|---|---|
-| D1 | Literature check on the rate×age claim | Required before asserting novelty item 3 |
+| D1 | ~~Literature check on the rate×age claim~~ | **RESOLVED 2026-08-09.** Done: `docs/LITERATURE.md`. The claim does not survive as a *measurement* novelty (InfoCom names temporal cues as next work; CooperTrim and CoST already trade on temporal continuity). It survives as a *mechanism*: make the encoder implement the rate×age coupling via residuals against the receiver's predicted belief — `METHOD.md` §2 M2. |
+| D1b | Read the four unread decisive papers | CoST (arXiv:2508.00359), CooperTrim (2602.13287), AoI alignment (2602.13439), V2X-DSC (2602.00687). Only StreamingFlow was read in full. |
+| D1c | Search out-of-sequence measurement (OOSM) filtering | Not covered by the check at all, and it is M1 in linear-Gaussian form. A robotics reviewer will ask. |
+| D6 | Discrete Δt-GRU or continuous ODE/CDE? | `METHOD.md` §5 says discrete first. ODE training OOM'd on a 48 GB card in StreamingFlow; this machine has 12 GB. |
+| D7 | Retraining is now unavoidable | M1/M2 need a trained dynamics model → OPV2V train split (~100 GB) and a small-model config. The pretrained-only discipline does not survive into this project. |
 | D2 | Object-level only, or feature-level hybrid? | Object-level is Phase 0/1; feature-level needs retraining |
 | D3 | Which downstream tasks count as the task-agnostic evidence? | Detection + tracking exist; prediction would need new harness |
 | D4 | Agent density | ~1.59 collaborators/ego frame; measure the histogram if scheduling re-enters |
