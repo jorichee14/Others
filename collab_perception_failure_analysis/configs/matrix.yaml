@@ -29,6 +29,17 @@ impairments:
   bandwidth:        # uniform quantization of shared features (bits); intermediate
     param: bandwidth_bits   # fusion only (late/early share boxes/points, not features)
     levels: [16, 8, 4, 2, 1]
+  loss_blocked:     # SCENE-CONDITIONED loss: drop when a labeled vehicle stands on
+    param: blockage_p       # the ego<->collaborator chord. Level = P(drop|blocked),
+    levels: [0.2, 0.4, 0.6, 0.8, 1.0]   # so realized loss = level x geometric base
+    clearance_m: 1.0        # rate (data-determined; measured per cell and recorded
+    min_blockers: 1         # as channel_stats.realized_drop_rate).
+  loss_iid_matched: # i.i.d. control for loss_blocked, compared at EQUAL packet
+    param: loss_p           # delivery. Levels are empty by design: they must be set
+    levels: []              # from measured rates — run scripts/run_blockage_audit.py
+                            # and paste its matched-PDR block here. An unmeasured
+                            # guess would silently break the matched comparison,
+                            # which is the entire point of the family.
   # ---------------- content -----------------
   stale:            # collaborator message refreshes only every N frames (sawtooth age)
     param: stale_period

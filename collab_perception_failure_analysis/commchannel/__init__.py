@@ -1,9 +1,10 @@
 from .config import ChannelConfig
 from .schedule import Schedule, Decision
 from .channel import CommChannel
+from .blockage import BlockageTable, locate_frame
 
 __all__ = ['ChannelConfig', 'Schedule', 'Decision', 'CommChannel',
-           'attach_bandwidth_hooks']
+           'BlockageTable', 'locate_frame', 'attach_bandwidth_hooks']
 
 
 def attach_bandwidth_hooks(*args, **kwargs):

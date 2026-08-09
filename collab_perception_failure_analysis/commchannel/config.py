@@ -8,6 +8,15 @@ Delivery impairments (message never usefully arrives):
     loss_p           : i.i.d. Bernoulli packet loss probability per (frame, collaborator).
     ge_*             : Gilbert-Elliott bursty loss (2-state Markov chain per collaborator
                        per scenario; drops occur in the Bad state).
+    blockage_p       : P(drop | the ego<->collaborator chord is geometrically blocked
+                       by a labeled vehicle). Loss is SCENE-CONDITIONED rather than
+                       i.i.d.: the realized loss rate is blockage_p x the geometric
+                       base rate, so it must be measured, not assumed (see
+                       docs/BLOCKAGE.md and scripts/run_blockage_audit.py).
+    blockage_clearance      : metres the blocker box is inflated by before the chord
+                       test — a stand-in for the first Fresnel radius.
+    blockage_min_blockers   : how many vehicles must sit on the chord to call it
+                       blocked (1 = any).
     bandwidth_bits   : uniform quantization bit-width of shared features (32 = off).
                        Applied via model hooks, not the dataset wrapper.
 
@@ -38,6 +47,9 @@ class ChannelConfig:
     ge_p_bad_to_good: float = 0.0
     ge_loss_good: float = 0.0
     ge_loss_bad: float = 1.0
+    blockage_p: float = 0.0
+    blockage_clearance: float = 1.0
+    blockage_min_blockers: int = 1
     bandwidth_bits: int = 32
     # content
     stale_period: int = 0
@@ -63,8 +75,12 @@ class ChannelConfig:
                 and self.ge_p_good_to_bad == 0.0 and self.bandwidth_bits >= 32
                 and self.stale_period == 0 and self.pose_xyz_std == 0.0
                 and self.pose_yaw_std_deg == 0.0 and self.ghost_p == 0.0
-                and self.swap_p == 0.0)
+                and self.swap_p == 0.0 and self.blockage_p == 0.0)
 
     @property
     def uses_gilbert_elliott(self):
         return self.ge_p_good_to_bad > 0.0
+
+    @property
+    def uses_blockage(self):
+        return self.blockage_p > 0.0

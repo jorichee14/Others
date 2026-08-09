@@ -70,6 +70,10 @@ def cell_channel_config(imp_name, imp_spec, level_value, cell_seed):
         kw['pose_xyz_std'] = float(level_value)
         kw['pose_yaw_std_deg'] = float(level_value) * \
             float(imp_spec.get('yaw_deg_per_m', 0.0))
+    elif param == 'blockage_p':
+        kw['blockage_p'] = float(level_value)
+        kw['blockage_clearance'] = float(imp_spec.get('clearance_m', 1.0))
+        kw['blockage_min_blockers'] = int(imp_spec.get('min_blockers', 1))
     else:
         kw[param] = type(ChannelConfig.__dataclass_fields__[param].default)(level_value)
     return ChannelConfig(**kw)
@@ -254,6 +258,11 @@ def main():
                     'mean_collaborators': (round(collab_sum / collab_n, 3)
                                            if collab_n else None),
                     'mean_bits_per_frame': meter.mean_bits if meter else None,
+                    # measured delivery, not the configured nominal: the
+                    # loss_blocked family's loss rate is data-determined, and its
+                    # matched i.i.d. control is only valid if both arms are
+                    # verified to have dropped the same share of messages.
+                    'channel_stats': channel.stats_dict(),
                     'metrics': {str(iou): compute_metrics(stat, iou)
                                 for iou in IOUS},
                     'runtime_s': round(time.time() - t0, 1),

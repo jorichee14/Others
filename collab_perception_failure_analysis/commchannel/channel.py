@@ -14,6 +14,9 @@ a parallel clean dataset (same pattern as the Phase 1 `nocomm` mode). See
 
 Impairments applied here (data level, works for late/early/intermediate fusion):
     drop (packet loss)  - collaborator removed from the sample entirely
+    blockage            - collaborator removed when a labeled vehicle stands on the
+                          ego<->collaborator chord (scene-conditioned loss; see
+                          blockage.py and docs/BLOCKAGE.md)
     latency / staleness - collaborator lidar + reported pose come from a past frame
     pose noise          - collaborator's cav->ego transformation recomputed from a
                           perturbed pose (gt_transformation_matrix left untouched)
@@ -27,6 +30,7 @@ from collections import OrderedDict
 
 import numpy as np
 
+from .blockage import BlockageTable, locate_frame
 from .schedule import Schedule
 
 # Ghost vehicle dimensions (m): typical sedan, matching OPV2V vehicle scale.
@@ -36,10 +40,28 @@ GHOST_RANGE_XY = (8.0, 60.0)  # ghosts placed in this radial band from the colla
 
 
 class CommChannel:
-    def __init__(self, config):
+    def __init__(self, config, blockage=None):
         self.cfg = config
-        self.schedule = Schedule(config)
+        self.blockage = blockage
+        self.schedule = Schedule(config, blockage)
         self._attached = False
+        self.reset_stats()
+
+    # ------------------------------------------------------------------- stats
+    def reset_stats(self):
+        """Delivery accounting. `blockage_p` sweeps have a data-determined loss
+        rate, and the matched-PDR comparison is the whole point of that family —
+        so the realized rate is measured here rather than inferred from config."""
+        self.stats = {'messages': 0, 'dropped_channel': 0, 'dropped_empty': 0,
+                      'blocked': 0}
+
+    def stats_dict(self):
+        n = self.stats['messages']
+        d = dict(self.stats)
+        dropped = self.stats['dropped_channel'] + self.stats['dropped_empty']
+        d['realized_drop_rate'] = round(dropped / n, 5) if n else None
+        d['blocked_rate'] = round(self.stats['blocked'] / n, 5) if n else None
+        return d
 
     # ------------------------------------------------------------------ attach
     def attach(self, dataset):
@@ -47,6 +69,14 @@ class CommChannel:
         version. Returns the dataset for chaining."""
         if self._attached:
             raise RuntimeError('channel already attached')
+        if self.cfg.uses_blockage and self.blockage is None:
+            # Build on the standard grid plus whatever this config asks for, so a
+            # single cached table serves every clearance the study uses.
+            from .blockage import DEFAULT_CLEARANCES
+            grid = tuple(sorted(set(DEFAULT_CLEARANCES)
+                                | {float(self.cfg.blockage_clearance)}))
+            self.blockage = BlockageTable.load_or_build(dataset, clearances=grid)
+            self.schedule.blockage = self.blockage
         self._dataset = dataset
         self._orig_retrieve = dataset.retrieve_base_data
         channel = self
@@ -65,14 +95,7 @@ class CommChannel:
 
     # ------------------------------------------------------------ core retrieve
     def _locate(self, dataset, idx):
-        scenario_index = 0
-        for i, ele in enumerate(dataset.len_record):
-            if idx < ele:
-                scenario_index = i
-                break
-        t_index = idx if scenario_index == 0 else \
-            idx - dataset.len_record[scenario_index - 1]
-        return scenario_index, t_index
+        return locate_frame(dataset, idx)
 
     def _retrieve(self, dataset, idx, cur_ego_pose_flag):
         from opencood.utils import pcd_utils
@@ -88,7 +111,16 @@ class CommChannel:
             is_ego = cav_content['ego']
             dec = self.schedule.decide(scenario_index, t_index, cav_id, is_ego)
 
+            if not is_ego:
+                self.stats['messages'] += 1
+                if self.blockage is not None and self.blockage.is_blocked(
+                        scenario_index, t_index, cav_id,
+                        self.cfg.blockage_clearance,
+                        self.cfg.blockage_min_blockers):
+                    self.stats['blocked'] += 1
+
             if dec.drop:
+                self.stats['dropped_channel'] += 1
                 continue  # the message never arrived
 
             delay = min(dec.delay_frames, t_index)
@@ -126,6 +158,7 @@ class CommChannel:
                     # record_len claims and warp-based fusers crash), and an
                     # empty message is indistinguishable from an absent one at
                     # fusion anyway — so drop the collaborator for this frame.
+                    self.stats['dropped_empty'] += 1
                     continue
 
             data[cav_id] = entry

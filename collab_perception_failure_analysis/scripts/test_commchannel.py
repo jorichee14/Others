@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from commchannel.config import ChannelConfig          # noqa: E402
 from commchannel.schedule import Schedule             # noqa: E402
 from commchannel.channel import CommChannel, GHOST_LWH, GHOST_RANGE_XY  # noqa: E402
+from commchannel.blockage import BlockageTable         # noqa: E402
 
 FAILED = []
 
@@ -152,6 +153,113 @@ def test_identity_config_flag():
     assert not ChannelConfig(loss_p=0.1).is_identity
     assert not ChannelConfig(stale_period=5).is_identity
     assert not ChannelConfig(bandwidth_bits=8).is_identity
+    assert not ChannelConfig(blockage_p=0.5).is_identity
+
+
+# ---------------------------------------------------------------- blockage
+def _table(rows, clearances=(0.0, 1.0, 2.0)):
+    return BlockageTable(rows, clearances)
+
+
+def test_blockage_drops_only_blocked_links():
+    """Blockage is scene-conditioned: WHICH links drop is geometry, not a draw."""
+    tbl = _table({(0, t, 'cav2'): [0, 1, 1] for t in range(0, 100, 2)})
+    cfg = ChannelConfig(blockage_p=1.0, blockage_clearance=1.0, seed=5)
+    s = Schedule(cfg, tbl)
+    for t in range(100):
+        blocked_now = (t % 2 == 0)
+        assert s.decide(0, t, 'cav2', False).drop is blocked_now, t
+    # a link absent from the table is never blocked
+    for t in range(100):
+        assert not s.decide(0, t, 'cav9', False).drop
+
+
+def test_blockage_clearance_selects_grid_column():
+    tbl = _table({(0, 0, 'cav2'): [0, 1, 3]})
+    for clearance, want in ((0.0, False), (1.0, True), (2.0, True)):
+        s = Schedule(ChannelConfig(blockage_p=1.0, blockage_clearance=clearance),
+                     tbl)
+        assert s.decide(0, 0, 'cav2', False).drop is want, clearance
+    # min_blockers raises the bar: 1 blocker at c=1 is no longer enough
+    s = Schedule(ChannelConfig(blockage_p=1.0, blockage_clearance=1.0,
+                               blockage_min_blockers=2), tbl)
+    assert not s.decide(0, 0, 'cav2', False).drop
+    s = Schedule(ChannelConfig(blockage_p=1.0, blockage_clearance=2.0,
+                               blockage_min_blockers=2), tbl)
+    assert s.decide(0, 0, 'cav2', False).drop
+    # a clearance outside the built grid must fail loudly, not silently read 0
+    bad = Schedule(ChannelConfig(blockage_p=1.0, blockage_clearance=1.7), tbl)
+    try:
+        bad.decide(0, 0, 'cav2', False)
+        raise AssertionError('expected KeyError for off-grid clearance')
+    except KeyError:
+        pass
+
+
+def test_blockage_realized_rate_is_p_times_base_rate():
+    """The family's headline arithmetic: realized loss = P(drop|blocked) x base
+    rate. This is why the matched i.i.d. control has to be measured, not guessed."""
+    n = 20000
+    tbl = _table({(0, t, 'cav2'): [0, 1 if t % 4 == 0 else 0, 0]
+                  for t in range(n)})           # base rate exactly 0.25
+    for p in (0.2, 0.5, 1.0):
+        s = Schedule(ChannelConfig(blockage_p=p, blockage_clearance=1.0, seed=11),
+                     tbl)
+        drops = sum(s.decide(0, t, 'cav2', False).drop for t in range(n))
+        assert abs(drops / n - 0.25 * p) < 0.01, (p, drops / n)
+
+
+def test_blockage_is_deterministic_and_ego_exempt():
+    tbl = _table({(0, t, 'cav2'): [0, 1, 1] for t in range(200)})
+    a = Schedule(ChannelConfig(blockage_p=0.5, blockage_clearance=1.0, seed=2), tbl)
+    b = Schedule(ChannelConfig(blockage_p=0.5, blockage_clearance=1.0, seed=2), tbl)
+    assert [a.decide(0, t, 'cav2', False).drop for t in range(200)] == \
+           [b.decide(0, t, 'cav2', False).drop for t in range(200)]
+    assert not any(a.decide(0, t, 'cav2', True).drop for t in range(200))
+
+
+def test_blockage_inactive_without_table_or_p():
+    """Config without a table must not silently drop, and a table without
+    blockage_p must not activate."""
+    tbl = _table({(0, 0, 'cav2'): [1, 1, 1]})
+    assert not Schedule(ChannelConfig(blockage_p=1.0), None).decide(
+        0, 0, 'cav2', False).drop
+    assert not Schedule(ChannelConfig(), tbl).decide(0, 0, 'cav2', False).drop
+
+
+def test_channel_stats_accounting():
+    """End-to-end through CommChannel on a mocked dataset: the realized drop rate
+    the sweep records must equal what the geometry dictates."""
+    tbl = _table({(0, t, 'cav2'): [0, 1, 1] for t in range(0, 10, 2)})
+    cfg = ChannelConfig(blockage_p=1.0, blockage_clearance=1.0, seed=1)
+    ch = CommChannel(cfg, blockage=tbl)
+    for t in range(10):
+        dec_ego = ch.schedule.decide(0, t, 'ego', True)
+        dec_cav = ch.schedule.decide(0, t, 'cav2', False)
+        assert not dec_ego.drop
+        ch.stats['messages'] += 1
+        if tbl.is_blocked(0, t, 'cav2', 1.0):
+            ch.stats['blocked'] += 1
+        if dec_cav.drop:
+            ch.stats['dropped_channel'] += 1
+    d = ch.stats_dict()
+    assert d['messages'] == 10 and d['blocked'] == 5 and d['dropped_channel'] == 5
+    assert d['realized_drop_rate'] == 0.5 and d['blocked_rate'] == 0.5
+    ch.reset_stats()
+    assert ch.stats_dict()['realized_drop_rate'] is None
+
+
+def test_blockage_composes_with_other_families():
+    """Drop wins over content impairments (an unarrived message has no content),
+    and i.i.d. loss short-circuits before the blockage branch."""
+    tbl = _table({(0, 0, 'cav2'): [1, 1, 1]})
+    cfg = ChannelConfig(blockage_p=1.0, blockage_clearance=1.0,
+                        latency_frames=4, pose_xyz_std=1.0, ghost_p=1.0)
+    d = Schedule(cfg, tbl).decide(0, 0, 'cav2', False)
+    assert d.drop and d.delay_frames == 0 and d.pose_noise is None
+    # unblocked link still receives the content impairments
+    d2 = Schedule(cfg, tbl).decide(0, 1, 'cav2', False)
+    assert not d2.drop and d2.delay_frames == 4 and d2.pose_noise is not None
 
 
 if __name__ == '__main__':

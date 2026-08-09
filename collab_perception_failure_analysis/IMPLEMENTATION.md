@@ -269,10 +269,58 @@ Steps are ordered; do not start a step whose prerequisites are not ✅ unless no
 
 ---
 
+## Phase 6 — Geometry-conditioned loss (does independence hold?)
+
+Every impairment family in Phases 2–5 drops messages **independently of the scene**,
+as does every robustness result we are aware of in this literature. The physical
+objection: the vehicle that occludes an agent's lidar is the vehicle that obstructs
+its radio, so `P(arrives | you needed it) < P(arrives)` and all such numbers —
+ours included — are optimistic. Protocol and scope caveats: `docs/BLOCKAGE.md`.
+
+### Step 6.1 — Blockage audit (model-free go/no-go)  `⬜ TODO — awaiting run`
+- Measure, with labels and geometry only (no detector, no checkpoint, no propagation
+  model), whether a blocked collaborator is a *more valuable* collaborator:
+  `E[U|blocked]` vs `E[U|clear]`, and availability `A` vs `1 − mean(B)`, where `U`
+  counts GT boxes the ego cannot see but that collaborator can.
+- **Built:** `commchannel/blockage.py` (oriented-box/chord intersection, clearance
+  grid as a Fresnel-radius proxy, endpoint-vehicle exclusion, disk-cached
+  `BlockageTable` from yaml alone) and `scripts/run_blockage_audit.py` (per-link
+  records, per-clearance and per-scenario summaries, matched-PDR level emitter).
+  Visibility reuses the Step 4.3 convention (`MIN_PTS = 5`) so results are
+  comparable to the published spatial decomposition. Verified in the dev container:
+  19 geometry self-tests + 17 decision-statistic self-tests on synthetic links whose
+  answers are known by hand (null / effect / inverted / degenerate cases), plus 8
+  blockage tests in `scripts/test_commchannel.py`.
+- **Done when:** `results/blockage/blockage_audit.md` exists and its verdict line is
+  recorded here.
+- **Go/no-go, fixed in advance:** NO-GO if base rate < 0.10 at 1.0 m clearance, or
+  if `E[U|blocked] ≤ E[U|clear]`. A NO-GO is a real result — it says the coupling
+  needs physical geometry rather than CARLA — and costs one script, not a sweep.
+
+### Step 6.2 — Matched-PDR sweep  `⬜ TODO — blocked on 6.1`
+- Two families added to `configs/matrix.yaml`: `loss_blocked` (`blockage_p` =
+  P(drop | chord blocked); geometry picks *which* links) and `loss_iid_matched`
+  (i.i.d. control at **equal packet delivery**). With the already-banked
+  `loss_burst` cells this is a three-way comparison at matched mean loss —
+  none / temporal / geometric correlation — which isolates that damage comes from
+  *which* messages are lost, not merely that loss is correlated.
+- `loss_iid_matched.levels` ships **empty by design**: realized loss under
+  `loss_blocked` is data-determined (`blockage_p` × base rate), so the control's
+  levels must come from the 6.1 audit. Empty levels yield zero cells rather than
+  wrong ones. Every cell now records `channel_stats.realized_drop_rate`, so the
+  matched claim is verified from the run rather than asserted from the config.
+- **Prediction:** equal delivery, worse AP, deficit concentrated in
+  `recall_occluded` (re-run Step 4.3's decomposition on the new cells).
+- **Done when:** both arms complete at matched measured PDR and the per-zone
+  decomposition is written up.
+
+---
+
 ## Progress log
 
 | Date | Step | Notes |
 |------|------|-------|
+| 2026-08-09 | 6.1/6.2 | **Phase 6 built (awaiting run).** Tests whether the independence assumption underlying every impairment family in this study — and in the wider literature — actually holds: the vehicle that occludes an agent's lidar is the vehicle that obstructs its radio, so i.i.d. loss may be the best case rather than a neutral one. `commchannel/blockage.py`: oriented-box/chord intersection (Liang-Barsky in box frame), clearance grid as first-Fresnel-radius proxy (0/1/2 m in one pass), endpoint-vehicle exclusion (OPV2V lists CAVs in `vehicles` and each sits on its own lidar_pose), disk-cached `BlockageTable` built from yaml alone. `scripts/run_blockage_audit.py` (Step 6.1): model-free — no detector, no checkpoint, no propagation model, so no downstream modelling choice can manufacture the correlation; reports E[U|blocked] vs E[U|clear], availability vs 1-mean(B), point-biserial r, per-clearance and per-scenario breakdowns, and emits matched-PDR levels for the control arm. Go/no-go thresholds fixed before running. Step 6.2 wiring: `loss_blocked` + `loss_iid_matched` families, `blockage_p` branch in `cell_channel_config`, and `channel_stats.realized_drop_rate` recorded per cell so the matched-PDR claim is verified from the run rather than asserted. With the banked `loss_burst` cells this becomes a three-way test (no / temporal / geometric correlation) at matched mean loss. Dev-container verification: 19 geometry + 17 decision-statistic self-tests (null, effect, inverted and degenerate cases hand-computed) and 8 new blockage tests; `scripts/test_commchannel.py` 16/17 (only `test_quantizer` fails — no torch in the dev container, pre-existing). Scope caveat recorded in `docs/BLOCKAGE.md`: OPV2V geometry is real but carries no radio, so this phase establishes THAT geometric correlation matters, not how often real links are obstructed. |
 | 2026-08-03 | 0.1 | Branch + project skeleton created; tracker, README, CLAUDE.md committed. Awaiting inputs I1–I7. |
 | 2026-08-03 | 0.1–0.4 | Phase 0 implementation instructions authored: `docs/PHASE0_SETUP.md` (copy-paste setup guide, CUDA-version table, known failure modes), `scripts/verify_phase0.py` (automated gates for env/dataset/checkpoints), `env/VERSIONS.md` + `env/CHECKPOINTS.md` templates. Execution on run machine still pending I1/I2. |
 | 2026-08-03 | I1/I2 | Inputs answered: local machine `wicomsrobot`, RTX 3080 12GB, driver CUDA 13.0, system nvcc 11.5. Resolved to cu117 stack (torch 1.13.1+cu117, spconv-cu117); machine-specific command block added to `docs/PHASE0_SETUP.md` with conda cuda-toolkit 11.7 fallback for the NMS build. Step 0.1 execution now unblocked. |

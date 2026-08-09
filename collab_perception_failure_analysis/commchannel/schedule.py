@@ -31,8 +31,12 @@ class Decision:
 
 
 class Schedule:
-    def __init__(self, config):
+    def __init__(self, config, blockage=None):
         self.cfg = config
+        # Optional BlockageTable. Unlike every other family here, blockage is a
+        # property of the SCENE, not of a random draw: the table is pure geometry
+        # and the only stochastic part is P(drop | blocked).
+        self.blockage = blockage
 
     def decide(self, scenario_index, timestamp_index, cav_id, is_ego):
         cfg = self.cfg
@@ -52,6 +56,25 @@ class Schedule:
             if self._ge_lost(scenario_index, timestamp_index, cav_id):
                 d.drop = True
                 return d
+
+        # --- delivery: geometry-conditioned blockage ---
+        # Same drop mechanism as i.i.d. loss, but WHICH links drop is decided by
+        # scene geometry: a labeled vehicle standing on the ego<->collaborator
+        # chord. Realized loss rate = blockage_p x geometric base rate, so a
+        # matched-PDR i.i.d. control must be calibrated against the measured rate
+        # (CommChannel.stats_dict reports it per run).
+        if cfg.uses_blockage and self.blockage is not None:
+            if self.blockage.is_blocked(scenario_index, timestamp_index, cav_id,
+                                        cfg.blockage_clearance,
+                                        cfg.blockage_min_blockers):
+                if cfg.blockage_p >= 1.0:
+                    d.drop = True
+                    return d
+                r = _rng(cfg.seed, 'blockage', scenario_index, timestamp_index,
+                         cav_id)
+                if r.random_sample() < cfg.blockage_p:
+                    d.drop = True
+                    return d
 
         # --- delivery: constant latency / content: stale memory ---
         # Latency: message is k frames old. Stale: message refreshes every N frames,
