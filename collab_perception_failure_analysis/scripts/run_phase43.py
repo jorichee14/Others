@@ -51,7 +51,14 @@ CONDITIONS = OrderedDict([
     ('latency200ms', {'latency_frames': 2}),
     ('ghosts8',  {'ghost_p': 1.0, 'ghost_count': 8}),
     ('swap50',   {'swap_p': 0.5}),
+    # Phase 6: same drop mechanism as loss90, but geometry decides WHICH links go.
+    # Its i.i.d. control is added at runtime via --matched-loss-p, because the
+    # realized rate is data-determined (see docs/BLOCKAGE.md) and a hard-coded
+    # guess would break the only comparison the pair exists to make.
+    ('blocked',  {'blockage_p': 1.0, 'blockage_clearance': 1.0}),
 ])
+# Defined at runtime from --matched-loss-p (measured by run_blockage_audit.py).
+RUNTIME_CONDITIONS = ('loss_matched',)
 DEFAULT_METHODS = ['attfuse', 'coalign', 'fcooper']
 
 
@@ -109,10 +116,24 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--methods', nargs='*', default=DEFAULT_METHODS,
                     choices=[m for m in METHODS if m != 'nocomm'])
-    ap.add_argument('--conditions', nargs='*', default=list(CONDITIONS.keys()),
-                    choices=list(CONDITIONS.keys()))
+    ap.add_argument('--conditions', nargs='*', default=None,
+                    choices=list(CONDITIONS.keys()) + list(RUNTIME_CONDITIONS))
     ap.add_argument('--stride', type=int, default=3)
+    ap.add_argument('--matched-loss-p', type=float, default=None,
+                    help='adds a `loss_matched` i.i.d. condition at this drop rate '
+                         '— the control for `blocked`. Take the value from '
+                         'run_blockage_audit.py (realized_drop_rate at '
+                         'blockage_p=1.0); guessing it breaks the comparison.')
     args = ap.parse_args()
+
+    conditions = OrderedDict(CONDITIONS)
+    if args.matched_loss_p is not None:
+        conditions['loss_matched'] = {'loss_p': float(args.matched_loss_p)}
+    selected = args.conditions if args.conditions is not None \
+        else list(conditions.keys())
+    if 'loss_matched' in selected and args.matched_loss_p is None:
+        ap.error('condition `loss_matched` requires --matched-loss-p (measured by '
+                 'scripts/run_blockage_audit.py)')
 
     import torch
     from opencood.tools import train_utils
@@ -128,7 +149,7 @@ def main():
     for method in args.methods:
         folder, fusion, _ = METHODS[method]
         ckpt_dir = os.path.join(ckpt_root, folder)
-        pending = [c for c in args.conditions if not os.path.isfile(
+        pending = [c for c in selected if not os.path.isfile(
             os.path.join(out_dir, '%s__%s.json' % (method, c)))]
         if not pending:
             print('[%s] all conditions done — skipping' % method)
@@ -173,7 +194,7 @@ def main():
         for cond in pending:
             t0 = time.time()
             cfg = ChannelConfig(seed=crc(method, cond), name=cond,
-                                **CONDITIONS[cond])
+                                **conditions[cond])
             channel = CommChannel(cfg)
             channel.attach(ds_chan)
             tp_vis = tp_occ = n_vis = n_occ = 0
