@@ -146,7 +146,8 @@ def _refit_plane(V, ref_n):
 
 
 def extract_planes(P, N, dist, ang_deg, min_inliers, max_planes,
-                   iters=200, score_cap=40000, seed=0, nz_max=None):
+                   iters=200, score_cap=40000, seed=0, nz_max=None,
+                   min_lateral=None):
     """Sequential point-normal RANSAC on the point cloud. Uses |N.n| so
     UNORIENTED normals suffice (no slow MST orientation for structure).
     Opposite faces of a real wall are separated by its thickness, which is
@@ -190,6 +191,21 @@ def extract_planes(P, N, dist, ang_deg, min_inliers, max_planes,
         if m.sum() < min_inliers:
             break
         g = idx[np.flatnonzero(m)]
+        if min_lateral is not None:
+            # curved surfaces masquerading as walls: RANSAC shaves a round
+            # pillar into narrow vertical facets that each clear the AREA
+            # threshold (tall x thin), and the pillar comes out faceted. A
+            # real wall segment is WIDE. Reject narrow candidates and retire
+            # their points from the pool WITHOUT assigning them, so they fall
+            # through to the object stage and Poisson meshes them smoothly.
+            t = np.cross(n, [0.0, 0.0, 1.0])
+            nt = np.linalg.norm(t)
+            if nt > 1e-6:
+                w = P[g] @ (t / nt)
+                width = float(np.percentile(w, 98) - np.percentile(w, 2))
+                if width < min_lateral:
+                    avail[g] = False
+                    continue
         pid[g] = len(planes)
         planes.append((n, d0))
         avail[g] = False
@@ -198,7 +214,7 @@ def extract_planes(P, N, dist, ang_deg, min_inliers, max_planes,
 
 def extract_planes_two_phase(P, N, struct_voxel, dist, ang_deg,
                              big_area=8.0, wall_area=1.0, wall_nz=0.35,
-                             max_planes=200):
+                             max_planes=200, wall_min_len=1.2):
     """Phase 1: large planes of any orientation. Phase 2: VERTICAL-ONLY
     planes at a much lower area threshold, so short wall segments (doorway-
     and corner-fragmented walls) still become flat structure while
@@ -215,7 +231,8 @@ def extract_planes_two_phase(P, N, struct_voxel, dist, ang_deg,
         planes2, pid2 = extract_planes(
             P[rem], N[rem], dist=dist, ang_deg=ang_deg, min_inliers=mi2,
             max_planes=max_planes - len(planes), iters=150,
-            score_cap=30000, seed=1, nz_max=wall_nz)
+            score_cap=30000, seed=1, nz_max=wall_nz,
+            min_lateral=wall_min_len if wall_min_len > 0 else None)
         hit = pid2 >= 0
         pid[rem[hit]] = pid2[hit] + len(planes)
         planes = planes + planes2
@@ -329,6 +346,50 @@ def merge_coplanar(P, planes, pid, ang_deg=5.0, off_tol=0.08,
 # ---------------------------------------------------------------------- #
 #  per-plane 2D grid meshing (exactly flat, holes preserved)
 # ---------------------------------------------------------------------- #
+
+def fit_cuboid(Q, tol=0.04, frac=0.80):
+    """Upright PCA-yaw cuboid fit for box-like object clusters.
+
+    Returns (V, F) of the box when the cluster genuinely lies ON a box
+    surface, else None. The measure is distance to the box SURFACE:
+    min(u-u0, u1-u, v-v0, v1-v, z-z0, z1-z) inside, Euclidean outside. A
+    flat-faced object (cabinet, kiosk, crate) has every point near some
+    face, so the within-tol fraction is high. A round pillar bulges up to
+    r*(1-cos45) ~ 0.3*r off the box wall midway between faces and fails,
+    staying on the smooth Poisson path. Missing faces (the unscanned back)
+    do not hurt: the test asks that scanned points lie on the box, not that
+    every face was scanned."""
+    if len(Q) < 8:
+        return None
+    xy = Q[:, :2]
+    c2 = xy.mean(axis=0)
+    d2 = xy - c2
+    _, Vp = np.linalg.eigh(d2.T @ d2 / len(xy))
+    e = Vp[:, -1]
+    R = np.array([[e[0], e[1]], [-e[1], e[0]]])
+    loc = d2 @ R.T
+    pts = np.stack([loc[:, 0], loc[:, 1], Q[:, 2]], 1)
+    lo = np.percentile(pts, 1, axis=0)
+    hi = np.percentile(pts, 99, axis=0)
+    if (hi - lo).min() < 0.02:
+        lo = np.minimum(lo, hi - 0.02)   # a lone panel becomes a thin slab
+    ax_out = np.maximum(np.maximum(lo - pts, pts - hi), 0.0)
+    d_out = np.linalg.norm(ax_out, axis=1)
+    inner = np.minimum(pts - lo, hi - pts).min(axis=1)
+    dist = np.where(d_out > 0, d_out, inner)
+    if float((dist <= tol).mean()) < frac:
+        return None
+    C = []
+    for zz in (lo[2], hi[2]):
+        for uu, vv in ((lo[0], lo[1]), (hi[0], lo[1]),
+                       (hi[0], hi[1]), (lo[0], hi[1])):
+            x, y = np.array([uu, vv]) @ R + c2
+            C.append([x, y, zz])
+    F = np.array([[0, 1, 2], [0, 2, 3], [4, 6, 5], [4, 7, 6],
+                  [0, 4, 5], [0, 5, 1], [1, 5, 6], [1, 6, 2],
+                  [2, 6, 7], [2, 7, 3], [3, 7, 4], [3, 4, 0]])
+    return np.array(C), F
+
 
 def plane_basis(n):
     a = (np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.9
@@ -448,6 +509,11 @@ def main():
     wall_area    = 1.0    # phase 2: min VERTICAL plane area (m^2); lower ->
                           #   flatten shorter wall bits, but below ~1.0
                           #   furniture faces start becoming "walls"
+    wall_min_len = 1.2    # ...and must span this much laterally (m). Narrow
+                          #   tall facets are round pillars/columns shaved by
+                          #   RANSAC; rejecting them here sends the pillar to
+                          #   the object stage, where Poisson meshes it as a
+                          #   smooth cylinder instead of flat facets. 0 = off
     max_planes   = 200
     merge_ang    = 5.0    # merge coplanar fragments: normal tolerance (deg)
     merge_off    = 0.08   #   ...and mutual offset tolerance (m)
@@ -459,11 +525,11 @@ def main():
     join_overlap = 0.25   #   ...when their footprints overlap by this
                           #   fraction (keeps distinct parallel walls apart).
                           #   Set join_ang = None to disable joining
-    close_floor  = True   # fill EVERY enclosed hole on floor planes so the
-                          #   slab is one continuous surface (only regions
-                          #   touching the outer border stay open). If the
-                          #   central area is a REAL void down to another
-                          #   storey, set False and rely on max_fill_m2
+    close_floor  = False  # True fills EVERY enclosed hole on floor planes.
+                          #   Off here: the central atrium is a REAL void, and
+                          #   flooring it would invent a reflector that does
+                          #   not exist. Corridor occlusion shadows are still
+                          #   healed by max_fill_m2 above
 
     grid_cell    = 0.10   # structure mesh resolution (m). Vertex colours
                           #   carry photo detail at this pitch; 0.10 is
@@ -480,6 +546,12 @@ def main():
                           #   way. 0 disables.
     seal_dilate  = 1      # grow each plane 1 cell to close corner/base seams
 
+    box_fit      = True   # object clusters whose points lie on an upright
+    box_tol      = 0.04   #   PCA box (within box_tol for box_frac of them)
+    box_frac     = 0.80   #   are emitted as clean CUBOIDS instead of Poisson
+    box_min_pts  = 400    #   blobs: cabinets/kiosks/crates become crisp
+                          #   blocks. Curved clusters fail the test and stay
+                          #   on the smooth Poisson path
     obj_keep_dist = 0.15  # fine points closer than this to the structure
                           #   mesh are wall/floor skin (noise) -> dropped;
                           #   farther = real object. Raise to shave more off
@@ -557,7 +629,8 @@ def main():
     print("\n[A] Extracting planes (two-phase RANSAC on points)...")
     planes, pid = extract_planes_two_phase(
         P, N, struct_voxel, dist=plane_dist, ang_deg=plane_ang,
-        big_area=big_area, wall_area=wall_area, max_planes=max_planes)
+        big_area=big_area, wall_area=wall_area, max_planes=max_planes,
+        wall_min_len=wall_min_len)
     planes, pid, n_merged = merge_coplanar(
         P, planes, pid, ang_deg=merge_ang, off_tol=merge_off,
         join_ang=join_ang, join_off=join_off, join_overlap=join_overlap)
@@ -632,18 +705,32 @@ def main():
 
     obj_mesh = None
     if obj_sel.sum() > 5000:
-        obj = o3d.geometry.PointCloud(
-            o3d.utility.Vector3dVector(Pf[obj_sel].astype(np.float64)))
+        Po = Pf[obj_sel].astype(np.float64)
+        obj = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(Po))
         # crumbs never reach the mesher: cluster first, keep real objects
         labels = np.asarray(obj.cluster_dbscan(
             eps=obj_eps_mult * fine_voxel, min_points=10))
         keep_lab = [l for l in range(labels.max() + 1)
                     if (labels == l).sum() >= obj_min_pts]
-        keep_m = np.isin(labels, keep_lab)
-        obj = obj.select_by_index(np.flatnonzero(keep_m))
+        # box-like clusters become clean cuboids; everything else -- round
+        # pillars included, now that the wall sweep rejects their facets --
+        # takes the smooth Poisson path
+        boxes = []
+        rest_idx = []
+        for l in keep_lab:
+            m_ = np.flatnonzero(labels == l)
+            fit = (fit_cuboid(Po[m_], box_tol, box_frac)
+                   if box_fit and len(m_) >= box_min_pts else None)
+            if fit is not None:
+                boxes.append(fit)
+            else:
+                rest_idx.append(m_)
+        kept_pts = int(sum((labels == l).sum() for l in keep_lab))
         stage(f"[B] {len(keep_lab)} object clusters kept "
-              f"({int(keep_m.sum()):,} pts); "
-              f"{int((~keep_m).sum()):,} crumb points dropped pre-mesh")
+              f"({kept_pts:,} pts); {len(Po) - kept_pts:,} crumb points "
+              f"dropped pre-mesh; {len(boxes)} box-like -> cuboids")
+        obj = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(
+            Po[np.concatenate(rest_idx)] if rest_idx else np.empty((0, 3))))
 
         if len(obj.points) > 5000:
             obj.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(
@@ -695,7 +782,18 @@ def main():
                 stage(f"[B] object mesh: {len(obj_mesh.vertices):,} verts, "
                       f"{len(obj_mesh.triangles):,} tris")
         else:
-            print("[B] too few clustered object points - skipping")
+            print("[B] too few clustered object points - skipping Poisson")
+
+        if boxes:
+            cub = o3d.geometry.TriangleMesh()
+            for V_, F_ in boxes:
+                cub += o3d.geometry.TriangleMesh(
+                    o3d.utility.Vector3dVector(V_),
+                    o3d.utility.Vector3iVector(F_))
+            cub.compute_vertex_normals()
+            obj_mesh = cub if obj_mesh is None else obj_mesh + cub
+            stage(f"[B] {len(boxes)} cuboid(s) emitted "
+                  f"({len(cub.triangles)} tris)")
     else:
         print("[B] too few object points - skipping object stage")
 
