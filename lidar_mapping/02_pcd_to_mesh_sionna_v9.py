@@ -290,15 +290,30 @@ def plane_basis(n):
 
 
 def mesh_plane(Q, n, d, cell=0.10, close_cells=3, min_region_m2=0.5,
-               seal_dilate=1):
+               seal_dilate=1, max_fill_m2=2.0):
     """Grid-triangulate ONE plane from its inlier points.
 
     Rasterize the inliers on the plane at `cell` resolution, binary-close
     (seals scan gaps up to ~close_cells*cell wide; doorways and windows are
-    larger and stay open), drop occupancy islands under min_region_m2,
-    dilate seal_dilate cells (closes the corner gap where two planes meet
-    and the wall-base gap at the floor), then emit two triangles per
-    occupied cell with shared corner vertices. Returns (V, F) or None."""
+    larger and stay open), drop occupancy islands under min_region_m2, fill
+    ENCLOSED holes up to max_fill_m2, dilate seal_dilate cells (closes the
+    corner gap where two planes meet and the wall-base gap at the floor),
+    then emit two triangles per occupied cell with shared corner vertices.
+    Returns (V, F) or None.
+
+    Two different hole mechanisms, because scan holes come in two shapes.
+    Closing is width-based and handles hairline gaps between passes. It
+    cannot reach an occlusion shadow -- the patch of floor behind a pillar or
+    under a desk is often metres long and half a metre wide, far wider than
+    any close_cells you could set without also sealing doorways. That is what
+    max_fill_m2 is for: it fills background regions ENCLOSED by surface, up
+    to an area cap, so a 2 m^2 shadow is floored while a courtyard or atrium
+    of hundreds of m^2 is left open. Filling by area rather than by width is
+    what lets those two cases be separated at all.
+
+    A background region touching the grid border is outside the surface, not
+    a hole in it, and is never filled -- so the plane never grows past its
+    measured extent."""
     o = Q.mean(axis=0)
     o = o - (o @ n + d) * n                    # origin exactly on the plane
     eu, ev = plane_basis(n)
@@ -324,6 +339,18 @@ def mesh_plane(Q, n, d, cell=0.10, close_cells=3, min_region_m2=0.5,
             sizes = ndimage.sum(occ, lab, np.arange(1, nl + 1))
             keep = np.flatnonzero(sizes * cell * cell >= min_region_m2) + 1
             occ = np.isin(lab, keep)
+    if max_fill_m2 > 0:
+        holes, nh = ndimage.label(~occ)
+        if nh:
+            # the pad ring guarantees the exterior touches the border, so any
+            # component that does is outside rather than an interior hole
+            border = np.unique(np.concatenate(
+                [holes[0, :], holes[-1, :], holes[:, 0], holes[:, -1]]))
+            sizes = ndimage.sum(~occ, holes, np.arange(1, nh + 1))
+            fill = np.flatnonzero(sizes * cell * cell <= max_fill_m2) + 1
+            fill = np.setdiff1d(fill, border)
+            if fill.size:
+                occ |= np.isin(holes, fill)
     if seal_dilate > 0:
         occ = ndimage.binary_dilation(occ, iterations=seal_dilate)
     if not occ.any():
@@ -381,6 +408,13 @@ def main():
     close_cells  = 3      # seal scan gaps up to ~close_cells*grid_cell wide
                           #   (0.3 m default); doorways/windows stay open
     min_region_m2 = 0.5   # drop floating occupancy islands on a plane
+    max_fill_m2  = 2.0    # fill holes ENCLOSED by a surface up to this area
+                          #   (m^2). Occlusion shadows -- floor behind a
+                          #   pillar, under a desk -- are metres long and far
+                          #   too wide for close_cells to reach. Raise to
+                          #   floor bigger unscanned patches; a courtyard or
+                          #   atrium is hundreds of m^2 and stays open either
+                          #   way. 0 disables.
     seal_dilate  = 1      # grow each plane 1 cell to close corner/base seams
 
     obj_keep_dist = 0.15  # fine points closer than this to the structure
@@ -493,7 +527,7 @@ def main():
             continue
         out = mesh_plane(Q, n_, d_, cell=grid_cell, close_cells=close_cells,
                          min_region_m2=min_region_m2,
-                         seal_dilate=seal_dilate)
+                         seal_dilate=seal_dilate, max_fill_m2=max_fill_m2)
         if out is None:
             continue
         Vk, Fk = out
