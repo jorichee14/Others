@@ -222,23 +222,50 @@ def extract_planes_two_phase(P, N, struct_voxel, dist, ang_deg,
     return planes, pid
 
 
-def merge_coplanar(P, planes, pid, ang_deg=5.0, off_tol=0.08):
-    """Unify planes that are fragments of one physical surface (normals
-    agree within ang_deg -- sign-agnostic -- AND centroids mutually within
-    off_tol of each other's plane). One wall fragmented into patches becomes
-    ONE plane, so its grid mesh has no kinks. Opposite faces of a wall are
-    a wall-thickness apart and fail the offset test."""
+def merge_coplanar(P, planes, pid, ang_deg=5.0, off_tol=0.08,
+                   join_ang=None, join_off=0.30, join_overlap=0.25,
+                   wall_nz=0.35, horiz_nz=0.75, sub_cap=4000):
+    """Unify planes that are fragments of one physical surface.
+
+    Two rules, applied pairwise with union-find:
+
+    STRICT (always on): normals agree within ang_deg -- sign-agnostic -- AND
+    centroids mutually within off_tol of each other's plane. Catches a wall
+    fragmented into patches along one surface.
+
+    JOIN (when join_ang is set): the fix for "multiple planes on one wall".
+    The two FACES of a wall are a wall-thickness apart, and residual drift
+    leaves slightly-offset copies of one surface; both fail the strict offset
+    test and render as stacked sheets. Planes of the same class (wall-wall,
+    or horizontal-horizontal) whose normals agree up to sign within join_ang,
+    whose planes lie within join_off of each other, AND whose footprints
+    overlap laterally by at least join_overlap are merged. The refit over the
+    union is the MID-PLANE, so one wall becomes one continuous zero-thickness
+    sheet -- which is also what Sionna wants, since RadioMaterial models the
+    slab thickness itself. The overlap test is what keeps genuinely distinct
+    parallel structure (the far side of a corridor, a pillar face near a
+    wall) from being swallowed: those are laterally disjoint or metres
+    apart."""
     K = len(planes)
     if K < 2:
         return planes, pid, 0
     ns_ = np.array([p[0] for p in planes])
     ds_ = np.array([p[1] for p in planes])
     cents = np.zeros((K, 3))
+    subs = [None] * K
+    rngj = np.random.default_rng(0)
     for k in range(K):
-        m = pid == k
-        if m.any():
+        m = np.flatnonzero(pid == k)
+        if len(m):
             cents[k] = P[m].mean(axis=0)
+            if join_ang is not None:
+                take = (m if len(m) <= sub_cap
+                        else rngj.choice(m, sub_cap, replace=False))
+                subs[k] = P[take]
     cos_t = np.cos(np.deg2rad(ang_deg))
+    cos_j = np.cos(np.deg2rad(join_ang)) if join_ang is not None else None
+    vert = np.abs(ns_[:, 2]) < wall_nz
+    horiz = np.abs(ns_[:, 2]) > horiz_nz
     parent = list(range(K))
 
     def find(a):
@@ -247,15 +274,38 @@ def merge_coplanar(P, planes, pid, ang_deg=5.0, off_tol=0.08):
             a = parent[a]
         return a
 
+    def iv(v):
+        return float(np.percentile(v, 2)), float(np.percentile(v, 98))
+
+    def ov(a, b):
+        lo = max(a[0], b[0]); hi = min(a[1], b[1])
+        return (hi - lo) / max(1e-6, min(a[1] - a[0], b[1] - b[0]))
+
     for i in range(K):
         for j in range(i + 1, K):
-            if abs(float(ns_[i] @ ns_[j])) < cos_t:
+            absdot = abs(float(ns_[i] @ ns_[j]))
+            di = abs(float(cents[j] @ ns_[i] + ds_[i]))
+            dj = abs(float(cents[i] @ ns_[j] + ds_[j]))
+            if absdot >= cos_t and di <= off_tol and dj <= off_tol:
+                parent[find(i)] = find(j)
                 continue
-            if abs(float(cents[j] @ ns_[i] + ds_[i])) > off_tol:
+            if cos_j is None or absdot < cos_j:
                 continue
-            if abs(float(cents[i] @ ns_[j] + ds_[j])) > off_tol:
+            if di > join_off or dj > join_off:
                 continue
-            parent[find(i)] = find(j)
+            if subs[i] is None or subs[j] is None:
+                continue
+            if vert[i] and vert[j]:
+                t = np.cross(ns_[i], [0.0, 0.0, 1.0])
+                t /= max(np.linalg.norm(t), 1e-9)
+                frac = ov(iv(subs[i] @ t), iv(subs[j] @ t))
+            elif horiz[i] and horiz[j]:
+                frac = min(ov(iv(subs[i][:, 0]), iv(subs[j][:, 0])),
+                           ov(iv(subs[i][:, 1]), iv(subs[j][:, 1])))
+            else:
+                continue                    # mixed/slanted: strict rule only
+            if frac >= join_overlap:
+                parent[find(i)] = find(j)
 
     groups = {}
     for k in range(K):
@@ -401,6 +451,19 @@ def main():
     max_planes   = 200
     merge_ang    = 5.0    # merge coplanar fragments: normal tolerance (deg)
     merge_off    = 0.08   #   ...and mutual offset tolerance (m)
+    join_ang     = 8.0    # ONE SHEET PER WALL: also merge same-class planes
+    join_off     = 0.30   #   (wall-wall, floor-floor) whose normals agree up
+                          #   to sign within join_ang and whose planes lie
+                          #   within join_off -- collapses a wall's two faces
+                          #   and drift copies into one mid-plane sheet
+    join_overlap = 0.25   #   ...when their footprints overlap by this
+                          #   fraction (keeps distinct parallel walls apart).
+                          #   Set join_ang = None to disable joining
+    close_floor  = True   # fill EVERY enclosed hole on floor planes so the
+                          #   slab is one continuous surface (only regions
+                          #   touching the outer border stay open). If the
+                          #   central area is a REAL void down to another
+                          #   storey, set False and rely on max_fill_m2
 
     grid_cell    = 0.10   # structure mesh resolution (m). Vertex colours
                           #   carry photo detail at this pitch; 0.10 is
@@ -496,7 +559,8 @@ def main():
         P, N, struct_voxel, dist=plane_dist, ang_deg=plane_ang,
         big_area=big_area, wall_area=wall_area, max_planes=max_planes)
     planes, pid, n_merged = merge_coplanar(
-        P, planes, pid, ang_deg=merge_ang, off_tol=merge_off)
+        P, planes, pid, ang_deg=merge_ang, off_tol=merge_off,
+        join_ang=join_ang, join_off=join_off, join_overlap=join_overlap)
     n_wall = sum(1 for n_, _ in planes if abs(n_[2]) < 0.35)
     n_horz = sum(1 for n_, _ in planes if abs(n_[2]) > 0.75)
     stage(f"    {len(planes)} planes after merging {n_merged} coplanar "
@@ -525,9 +589,11 @@ def main():
         Q = P[pid == k]
         if len(Q) == 0:
             continue
+        fill = (float("inf") if (close_floor and plane_class[k] == "floor")
+                else max_fill_m2)
         out = mesh_plane(Q, n_, d_, cell=grid_cell, close_cells=close_cells,
                          min_region_m2=min_region_m2,
-                         seal_dilate=seal_dilate, max_fill_m2=max_fill_m2)
+                         seal_dilate=seal_dilate, max_fill_m2=fill)
         if out is None:
             continue
         Vk, Fk = out
