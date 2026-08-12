@@ -347,7 +347,59 @@ def merge_coplanar(P, planes, pid, ang_deg=5.0, off_tol=0.08,
 #  per-plane 2D grid meshing (exactly flat, holes preserved)
 # ---------------------------------------------------------------------- #
 
-def fit_cuboid(Q, tol=0.04, frac=0.80):
+def fit_cylinder(Q, tol=0.035, frac=0.80, seg=48, r_min=0.06, r_max=0.8,
+                 min_arc=0.5):
+    """Upright cylinder fit -> smooth analytic pillar mesh, or None.
+
+    Kasa circle fit on the XY footprint; accepted when frac of the points lie
+    within tol of the cylinder SURFACE and the points cover at least min_arc
+    of the circumference. Tried BEFORE the cuboid: a slender pillar's bulge
+    (~0.3*r) shrinks below the box tolerance as r gets small, so a round
+    column would otherwise pass the box test and come out square -- while a
+    real box has corners far off any circle and can never pass this one. The
+    emitted mesh is a capped seg-gon, i.e. actually round."""
+    if len(Q) < 50:
+        return None
+    xy = Q[:, :2]
+    A = np.column_stack([2.0 * xy, np.ones(len(xy))])
+    b = (xy ** 2).sum(axis=1)
+    try:
+        sol = np.linalg.lstsq(A, b, rcond=None)[0]
+    except np.linalg.LinAlgError:
+        return None
+    cx, cy = float(sol[0]), float(sol[1])
+    r2 = float(sol[2]) + cx * cx + cy * cy
+    if r2 <= 0:
+        return None
+    r = float(np.sqrt(r2))
+    if not (r_min <= r <= r_max):
+        return None
+    res = np.abs(np.linalg.norm(xy - [cx, cy], axis=1) - r)
+    if float((res <= tol).mean()) < frac:
+        return None
+    th = np.arctan2(xy[:, 1] - cy, xy[:, 0] - cx)
+    covered = (np.histogram(th, bins=24, range=(-np.pi, np.pi))[0] > 0).mean()
+    if covered < min_arc:
+        return None                       # a wall arc, not a column
+    z0 = float(np.percentile(Q[:, 2], 1))
+    z1 = float(np.percentile(Q[:, 2], 99))
+    if z1 - z0 < 0.05:
+        return None
+    a = np.linspace(0, 2 * np.pi, seg, endpoint=False)
+    ring = np.stack([cx + r * np.cos(a), cy + r * np.sin(a)], 1)
+    V = np.vstack([np.column_stack([ring, np.full(seg, z0)]),
+                   np.column_stack([ring, np.full(seg, z1)]),
+                   [[cx, cy, z0]], [[cx, cy, z1]]])
+    F = []
+    for i in range(seg):
+        j = (i + 1) % seg
+        F += [[i, j, seg + j], [i, seg + j, seg + i],
+              [2 * seg, j, i], [2 * seg + 1, seg + i, seg + j]]
+    return V, np.array(F)
+
+
+def fit_cuboid(Q, tol=0.04, frac=0.80, min_dim=0.10, max_dim=3.5,
+               cover=0.45):
     """Upright PCA-yaw cuboid fit for box-like object clusters.
 
     Returns (V, F) of the box when the cluster genuinely lies ON a box
@@ -379,6 +431,23 @@ def fit_cuboid(Q, tol=0.04, frac=0.80):
     dist = np.where(d_out > 0, d_out, inner)
     if float((dist <= tol).mean()) < frac:
         return None
+    # ANY thin cluster passes the surface test through its thin dimension --
+    # a diagonal ghost line becomes a long tilted sliver box, which is exactly
+    # the "protruding planes" artefact. Two guards: sane dimensions, and real
+    # occupancy of the box's largest face (a line covers only its diagonal).
+    dims = np.sort(hi - lo)
+    if dims[1] < min_dim or dims[2] > max_dim:
+        return None
+    order = np.argsort(hi - lo)
+    a1, a2 = int(order[-1]), int(order[-2])
+    gi = np.clip(((pts[:, a1] - lo[a1]) / max(hi[a1] - lo[a1], 1e-9)
+                  * 10).astype(int), 0, 9)
+    gj = np.clip(((pts[:, a2] - lo[a2]) / max(hi[a2] - lo[a2], 1e-9)
+                  * 10).astype(int), 0, 9)
+    occ2 = np.zeros((10, 10), bool)
+    occ2[gi, gj] = True
+    if occ2.mean() < cover:
+        return None
     C = []
     for zz in (lo[2], hi[2]):
         for uu, vv in ((lo[0], lo[1]), (hi[0], lo[1]),
@@ -401,7 +470,7 @@ def plane_basis(n):
 
 
 def mesh_plane(Q, n, d, cell=0.10, close_cells=3, min_region_m2=0.5,
-               seal_dilate=1, max_fill_m2=2.0):
+               seal_dilate=1, max_fill_m2=2.0, fill_all_but_largest=False):
     """Grid-triangulate ONE plane from its inlier points.
 
     Rasterize the inliers on the plane at `cell` resolution, binary-close
@@ -450,7 +519,7 @@ def mesh_plane(Q, n, d, cell=0.10, close_cells=3, min_region_m2=0.5,
             sizes = ndimage.sum(occ, lab, np.arange(1, nl + 1))
             keep = np.flatnonzero(sizes * cell * cell >= min_region_m2) + 1
             occ = np.isin(lab, keep)
-    if max_fill_m2 > 0:
+    if max_fill_m2 > 0 or fill_all_but_largest:
         holes, nh = ndimage.label(~occ)
         if nh:
             # the pad ring guarantees the exterior touches the border, so any
@@ -458,8 +527,15 @@ def mesh_plane(Q, n, d, cell=0.10, close_cells=3, min_region_m2=0.5,
             border = np.unique(np.concatenate(
                 [holes[0, :], holes[-1, :], holes[:, 0], holes[:, -1]]))
             sizes = ndimage.sum(~occ, holes, np.arange(1, nh + 1))
-            fill = np.flatnonzero(sizes * cell * cell <= max_fill_m2) + 1
-            fill = np.setdiff1d(fill, border)
+            cand = np.setdiff1d(np.arange(1, nh + 1), border)
+            if fill_all_but_largest and cand.size:
+                # close EVERYTHING enclosed except the single largest hole --
+                # the atrium keeps itself open by being the biggest, with no
+                # area threshold to tune
+                largest = cand[np.argmax(sizes[cand - 1])]
+                fill = np.setdiff1d(cand, [largest])
+            else:
+                fill = cand[sizes[cand - 1] * cell * cell <= max_fill_m2]
             if fill.size:
                 occ |= np.isin(holes, fill)
     if seal_dilate > 0:
@@ -525,11 +601,12 @@ def main():
     join_overlap = 0.25   #   ...when their footprints overlap by this
                           #   fraction (keeps distinct parallel walls apart).
                           #   Set join_ang = None to disable joining
-    close_floor  = False  # True fills EVERY enclosed hole on floor planes.
-                          #   Off here: the central atrium is a REAL void, and
-                          #   flooring it would invent a reflector that does
-                          #   not exist. Corridor occlusion shadows are still
-                          #   healed by max_fill_m2 above
+    floor_fill   = "all_but_center"
+                          # "all_but_center": close EVERY enclosed floor hole
+                          #   except the largest one -- the atrium stays open
+                          #   by being the biggest, nothing to tune.
+                          # "area": heal only holes under max_fill_m2.
+                          # "all": close everything enclosed, atrium included
 
     grid_cell    = 0.10   # structure mesh resolution (m). Vertex colours
                           #   carry photo detail at this pitch; 0.10 is
@@ -537,21 +614,22 @@ def main():
     close_cells  = 3      # seal scan gaps up to ~close_cells*grid_cell wide
                           #   (0.3 m default); doorways/windows stay open
     min_region_m2 = 0.5   # drop floating occupancy islands on a plane
-    max_fill_m2  = 2.0    # fill holes ENCLOSED by a surface up to this area
-                          #   (m^2). Occlusion shadows -- floor behind a
-                          #   pillar, under a desk -- are metres long and far
-                          #   too wide for close_cells to reach. Raise to
-                          #   floor bigger unscanned patches; a courtyard or
-                          #   atrium is hundreds of m^2 and stays open either
-                          #   way. 0 disables.
+    max_fill_m2  = 20.0   # fill holes ENCLOSED by a surface up to this area
+                          #   (m^2) -- on walls and ceilings too, so unscanned
+                          #   glass panels and reflective patches close.
+                          #   Doorways survive any cap: they cut the wall's
+                          #   bottom edge, so they are border-connected, not
+                          #   enclosed. 0 disables.
     seal_dilate  = 1      # grow each plane 1 cell to close corner/base seams
 
-    box_fit      = True   # object clusters whose points lie on an upright
-    box_tol      = 0.04   #   PCA box (within box_tol for box_frac of them)
-    box_frac     = 0.80   #   are emitted as clean CUBOIDS instead of Poisson
-    box_min_pts  = 400    #   blobs: cabinets/kiosks/crates become crisp
-                          #   blocks. Curved clusters fail the test and stay
-                          #   on the smooth Poisson path
+    box_fit      = True   # fit analytic primitives to object clusters:
+    cyl_tol      = 0.035  #   CYLINDER first (round pillars come out round),
+    box_tol      = 0.04   #   then upright PCA CUBOID (cabinets come out
+    box_frac     = 0.80   #   crisp). A cluster must put box_frac of its
+    box_min_pts  = 400    #   points within tol of the primitive surface;
+                          #   what fails both stays on the Poisson path.
+                          #   Sliver/ghost clusters are rejected by dimension
+                          #   and face-coverage guards inside fit_cuboid
     obj_keep_dist = 0.15  # fine points closer than this to the structure
                           #   mesh are wall/floor skin (noise) -> dropped;
                           #   farther = real object. Raise to shave more off
@@ -662,11 +740,14 @@ def main():
         Q = P[pid == k]
         if len(Q) == 0:
             continue
-        fill = (float("inf") if (close_floor and plane_class[k] == "floor")
-                else max_fill_m2)
-        out = mesh_plane(Q, n_, d_, cell=grid_cell, close_cells=close_cells,
-                         min_region_m2=min_region_m2,
-                         seal_dilate=seal_dilate, max_fill_m2=fill)
+        is_floor = plane_class[k] == "floor"
+        out = mesh_plane(
+            Q, n_, d_, cell=grid_cell, close_cells=close_cells,
+            min_region_m2=min_region_m2, seal_dilate=seal_dilate,
+            max_fill_m2=(float("inf") if (is_floor and floor_fill == "all")
+                         else max_fill_m2),
+            fill_all_but_largest=(is_floor
+                                  and floor_fill == "all_but_center"))
         if out is None:
             continue
         Vk, Fk = out
@@ -712,15 +793,23 @@ def main():
             eps=obj_eps_mult * fine_voxel, min_points=10))
         keep_lab = [l for l in range(labels.max() + 1)
                     if (labels == l).sum() >= obj_min_pts]
-        # box-like clusters become clean cuboids; everything else -- round
-        # pillars included, now that the wall sweep rejects their facets --
-        # takes the smooth Poisson path
+        # analytic primitives first: cylinder (pillars come out ROUND),
+        # then cuboid (cabinets come out crisp). Everything else takes the
+        # smooth Poisson path.
         boxes = []
+        n_cyl = n_box = 0
         rest_idx = []
         for l in keep_lab:
             m_ = np.flatnonzero(labels == l)
-            fit = (fit_cuboid(Po[m_], box_tol, box_frac)
-                   if box_fit and len(m_) >= box_min_pts else None)
+            fit = None
+            if box_fit and len(m_) >= box_min_pts:
+                fit = fit_cylinder(Po[m_], cyl_tol, box_frac)
+                if fit is not None:
+                    n_cyl += 1
+                else:
+                    fit = fit_cuboid(Po[m_], box_tol, box_frac)
+                    if fit is not None:
+                        n_box += 1
             if fit is not None:
                 boxes.append(fit)
             else:
@@ -728,7 +817,7 @@ def main():
         kept_pts = int(sum((labels == l).sum() for l in keep_lab))
         stage(f"[B] {len(keep_lab)} object clusters kept "
               f"({kept_pts:,} pts); {len(Po) - kept_pts:,} crumb points "
-              f"dropped pre-mesh; {len(boxes)} box-like -> cuboids")
+              f"dropped pre-mesh; {n_cyl} cylinders + {n_box} cuboids fitted")
         obj = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(
             Po[np.concatenate(rest_idx)] if rest_idx else np.empty((0, 3))))
 
@@ -792,7 +881,7 @@ def main():
                     o3d.utility.Vector3iVector(F_))
             cub.compute_vertex_normals()
             obj_mesh = cub if obj_mesh is None else obj_mesh + cub
-            stage(f"[B] {len(boxes)} cuboid(s) emitted "
+            stage(f"[B] {n_cyl} cylinder(s) + {n_box} cuboid(s) emitted "
                   f"({len(cub.triangles)} tris)")
     else:
         print("[B] too few object points - skipping object stage")

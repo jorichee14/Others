@@ -79,10 +79,53 @@ print(f"guard OFF: cylinder captured as planes {cyl0:.0%} "
       f"(the faceting bug this fixes)")
 assert cyl0>0.25, "without the guard the pillar should get faceted"
 
-# ---- close_floor default is off (the centre is a real void) ----------------
+# ---- cylinder primitive: slender pillar comes out ROUND --------------------
+def pillar(r=0.14, n=4000):
+    th=rng.uniform(0,2*np.pi,n)
+    return np.stack([2.+r*np.cos(th), 5.+r*np.sin(th),
+                     rng.uniform(0,2.6,n)],1)+rng.normal(0,0.006,(n,3))
+Q=pillar()
+cyl_fit=ms.fit_cylinder(Q, 0.035, 0.80)
+assert cyl_fit is not None, "a clean pillar must fit the cylinder"
+Vc,Fc=cyl_fit
+r_est=np.linalg.norm(Vc[:48,:2]-[2.,5.],axis=1).mean()
+print(f"pillar r=0.14 -> cylinder primitive: {len(Vc)} verts, "
+      f"{len(Fc)} tris, r={r_est:.3f}")
+assert abs(r_est-0.14)<0.02
+# the same slender pillar PASSES the box test (bulge ~0.3*r ~ 0.04 = tol),
+# which is why cylinders were coming out square: order matters
+assert ms.fit_cuboid(Q, 0.04, 0.80) is not None, \
+    "expected: slender pillars fool the box test -- cylinder must go first"
+print("           ...and it fools fit_cuboid, so cylinder-first is required")
+# a real box must never fit a cylinder (corners are far off any circle)
+assert ms.fit_cylinder(cabinet(), 0.035, 0.80) is None
+print("cabinet   -> cylinder rejected (corners kill the circle fit)")
+
+# ---- sliver guards: the 'protruding planes' artefact -----------------------
+t=rng.uniform(0,1,3000)
+ghost=np.stack([t*2.0, t*1.2, t*1.8],1)+rng.normal(0,0.01,(3000,3))
+assert ms.fit_cuboid(ghost, 0.04, 0.80) is None, \
+    "a diagonal ghost line must not become a sliver box"
+print("diagonal ghost line -> rejected (dims + face-coverage guards)")
+
+# ---- floor fill: everything closed EXCEPT the largest hole -----------------
+n=500_000
+x=rng.uniform(0,30,n); y=rng.uniform(0,20,n)
+atrium=(x>9)&(x<21)&(y>6)&(y<14)              # 96 m^2  -> stays open
+big   =(x>1)&(x<7)&(y>1)&(y<6)                # 30 m^2  -> closed
+small =(x>23)&(x<27)&(y>15)&(y<17)            # 8 m^2   -> closed
+keep=~(atrium|big|small)
+Qf=np.stack([x[keep],y[keep],np.zeros(keep.sum())],1)
+V,_=ms.mesh_plane(Qf,np.array([0.,0.,1.]),0.0,cell=0.10,
+                  max_fill_m2=20.0, fill_all_but_largest=True)
+at=lambda px,py: bool(((np.abs(V[:,0]-px)<0.15)&(np.abs(V[:,1]-py)<0.15)).any())
+print(f"all_but_center: 30 m^2 patch filled={at(4,3.5)}, "
+      f"8 m^2 filled={at(25,16)}, atrium open={not at(15,10)}, "
+      f"outside open={not at(-2,10)}")
+assert at(4,3.5) and at(25,16) and not at(15,10) and not at(-2,10)
+
 import re
 src=open("/home/user/Others/lidar_mapping/02_pcd_to_mesh_sionna_v9.py").read()
-m=re.search(r"close_floor\s*=\s*(True|False)", src)
-assert m.group(1)=="False", "close_floor must default off now"
-print("close_floor defaults to False (atrium stays open)")
-print("\nALL ROUND-OBJECT / CUBOID TESTS PASSED")
+assert re.search(r'floor_fill\s*=\s*"all_but_center"', src)
+print('floor_fill defaults to "all_but_center"')
+print("\nALL ROUND-OBJECT / CUBOID / FILL TESTS PASSED")
