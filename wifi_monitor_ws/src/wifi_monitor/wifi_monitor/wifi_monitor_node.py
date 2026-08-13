@@ -28,6 +28,7 @@ error_signal_dbm : float
 from __future__ import annotations
 
 import math
+import shutil
 
 import rclpy
 from rclpy.node import Node
@@ -98,6 +99,16 @@ class WifiMonitorNode(Node):
         self._diag_pub = self.create_publisher(
             DiagnosticArray, "diagnostics", qos
         )
+
+        # Warn once if the tools that provide the rich fields are missing --
+        # otherwise essid/bssid/frequency/MCS silently come out blank (common
+        # after an ephemeral container reset wipes apt packages).
+        if shutil.which("iw") is None and shutil.which("iwconfig") is None:
+            self.get_logger().warn(
+                "neither 'iw' nor 'iwconfig' found -- essid/bssid/frequency/"
+                "channel/MCS/NSS will be blank. Install with: "
+                "sudo apt install -y iw wireless-tools"
+            )
 
         self._assoc_prev = None  # for disconnect/reconnect transition logs
         self._timer = self.create_timer(1.0 / rate, self._on_timer)
