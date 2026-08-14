@@ -201,13 +201,6 @@ def depth_colors(z, lo, hi, mode="linear", boost=1.0):
     return c
 
 
-def fit_depth_limits(z, qlo=2.0, qhi=98.0):
-    if len(z) < 20:
-        return None
-    lo, hi = float(np.percentile(z, qlo)), float(np.percentile(z, qhi))
-    return max(lo, 0.2), max(hi, lo * 1.5)
-
-
 def ramp_value(frac, lo, hi, mode):
     frac = np.asarray(frac, float)
     if mode == "log":
@@ -302,7 +295,9 @@ class LiveProjector(Node):
         self.range_max = d("range_max", 20.0).value
         self.dim = d("dim", 0.55).value
         self.depth_scale = d("depth_scale", "linear").value
-        self.color_min = d("color_min", 0.0).value   # 0 = fit to data (EMA)
+        # colour ramp is CONSTANT so a given distance always has the same
+        # colour; 0 = use range_min / range_max
+        self.color_min = d("color_min", 0.0).value
         self.color_max = d("color_max", 0.0).value
         self.saturate = d("saturate", 1.4).value
         self.point_size = d("point_size", 4).value   # radar dot radius
@@ -313,7 +308,6 @@ class LiveProjector(Node):
         self.K = None
         self.ci_wh = None
         self.ci_frame = None
-        self.lim = {}          # per-sensor EMA'd colour limits
         self.warned = set()
 
         self.tf_buffer = tf2_ros.Buffer()
@@ -456,17 +450,8 @@ class LiveProjector(Node):
         uv, z = project(pts, s["T"], Ks, w, h,
                         z_min=self.range_min, z_max=self.range_max)
 
-        if self.color_min > 0 and self.color_max > 0:
-            lo, hi = self.color_min, self.color_max
-        else:
-            fit = fit_depth_limits(z)
-            old = self.lim.get(s["key"])
-            if fit and old:                       # EMA so colours don't flicker
-                self.lim[s["key"]] = (0.9 * old[0] + 0.1 * fit[0],
-                                      0.9 * old[1] + 0.1 * fit[1])
-            elif fit:
-                self.lim[s["key"]] = fit
-            lo, hi = self.lim.get(s["key"], (1.0, 10.0))
+        lo = self.color_min if self.color_min > 0 else self.range_min
+        hi = self.color_max if self.color_max > 0 else self.range_max
 
         im = base.copy()
         cols = depth_colors(z, lo, hi, self.depth_scale, self.saturate)
