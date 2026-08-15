@@ -196,6 +196,24 @@ from pipeline_common import load_pipeline, pose_at_interp
 import pipeline_detect as pdet
 import pipeline_assets as past
 
+# These four files are ONE unit. They are routinely copied between machines by
+# hand, and a partial copy leaves the stage script calling a signature the
+# helper module does not have -- which surfaces as a TypeError fifteen frames
+# into a run that has already spent an hour on the bag, naming a keyword rather
+# than the actual problem. Check it up front instead.
+_NEED_API = 2
+for _mod, _name in ((pdet, "pipeline_detect.py"), (past, "pipeline_assets.py")):
+    _have = getattr(_mod, "API", 0)
+    if _have != _NEED_API:
+        raise SystemExit(
+            f"{_name} is out of step with 01_build_map.py: this script needs "
+            f"API {_NEED_API}, found "
+            f"{_have if _have else 'an older copy with no API marker'}.\n"
+            f"  Copy ALL of these together, from the same commit:\n"
+            f"      01_build_map.py  pipeline_detect.py  pipeline_assets.py  "
+            f"pipeline_common.py\n"
+            f"  (loaded from {os.path.dirname(os.path.abspath(_mod.__file__))})")
+
 TS = get_typestore(Stores.ROS2_HUMBLE)
 
 

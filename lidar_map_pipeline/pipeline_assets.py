@@ -31,6 +31,13 @@ import numpy as np
 import open3d as o3d
 from scipy.spatial import cKDTree
 
+# Interface level, checked by 01_build_map.py at import. These files are
+# versioned TOGETHER: the stage script calls into them by keyword, so a
+# hand-copied mismatch surfaces as a TypeError deep inside a run rather
+# than as a message you can act on. Bump this whenever a signature the
+# stage script uses changes.
+API = 2
+
 
 def rotz(yaw):
     c, s = np.cos(yaw), np.sin(yaw)

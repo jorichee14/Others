@@ -26,6 +26,12 @@ turning this on cannot change the map an existing downstream stage reads.
 | `check_config.py` | validates a config before you spend an hour on a bag |
 | `pipeline_common.py` | unchanged, included so the folder runs standalone |
 
+**These four `.py` files are one unit** — `01_build_map.py`, `pipeline_detect.py`,
+`pipeline_assets.py`, `pipeline_common.py`. The stage script calls into the
+helpers by keyword, so copying one without the others produces a `TypeError`
+deep inside a run that has already spent an hour on the bag. An `API` marker is
+checked at import and refuses to start with the file names to copy instead.
+
 ## Outputs
 
 **From [6] detect** — the map, and what is in it:
