@@ -1,0 +1,135 @@
+{
+  "dataset": {
+    "bag": "/data/run01",
+    "traj": "/data/run01/traj_lidar.txt",
+    "calib_json": "/data/run01/calibration.json",
+    "out_dir": "/data/run01/out"
+  },
+
+  "01_build_map": {
+    "gpu": true,
+
+    "lidar_min": 0.5,
+    "lidar_max": 50.0,
+    "time_tol": 0.05,
+
+    "scan_voxel": 0.02,
+    "final_voxel": 0.02,
+    "flush_every": 200,
+    "merge_centroid": true,
+    "merge_flush_pts": 20000000,
+
+    "remove_dynamic": {
+      "enable": true,
+      "voxel": 0.15,
+      "min_span_s": 1.0,
+      "min_hits": 2,
+      "save": true,
+      "carve": {
+        "enable": true,
+        "ray_stride": 4,
+        "scan_stride": 2,
+        "max_range": 20.0,
+        "endpoint_margin": 0.0,
+        "grazing_margin": 0.03,
+        "min_free": 5,
+        "free_ratio": 1.0
+      }
+    },
+
+    "denoise": {
+      "enable": true,
+      "nb": 20,
+      "std": 2.0
+    },
+
+    "image_width": 1280,
+    "image_height": 720,
+
+    "colorize": {
+      "enable": true,
+      "img_stride": 2,
+      "max_range": 12.0,
+      "voxel": 0.0,
+      "drop_gray": false,
+      "cull_block": 2.0,
+      "min_baseline": 0.15,
+      "min_rotation_deg": 8.0
+    },
+
+    "detect": {
+      "enable": true,
+      "weights": "assets/models/yolo11x-seg.pt",
+      "conf": 0.35,
+      "iou": 0.6,
+      "imgsz": 960,
+      "img_stride": 2,
+      "max_range": 8.0,
+      "classes": null,
+      "gpu_reserve_gib": 2.0,
+      "cull_block": 2.0,
+      "min_baseline": 0.25,
+      "min_rotation_deg": 10.0,
+      "save_semantic": true,
+      "semantic_output": "semantic.pcd",
+      "vote": {
+        "min_frames": 3,
+        "min_ratio": 0.5,
+        "mask_erode_px": 3,
+        "depth_span": 0.6,
+        "min_det_points": 25,
+        "link_frac": 0.3
+      },
+      "cluster": {
+        "eps": 0.12,
+        "min_points": 60,
+        "min_frames_seen": 2
+      },
+      "structure": {
+        "enable": true,
+        "dist": 0.04,
+        "min_points": 20000,
+        "max_planes": 12,
+        "fit_voxel": 0.05,
+        "normal_tol_deg": 15.0,
+        "min_wall_height": 0.8
+      }
+    },
+
+    "synthesize": {
+      "enable": false,
+      "assets": "assets",
+      "output": "map_synth.pcd",
+      "density": 4000,
+      "min_coverage": 0.35,
+      "scale_min": 0.75,
+      "scale_max": 1.35,
+      "icp": true,
+      "dedupe_eps": 0.0,
+      "fill_holes": true,
+      "fill_spacing": 0.02,
+      "fill_margin": 0.03,
+      "repaint_radius": 0.08,
+      "repaint_tint": 0.65,
+      "rules": {
+        "tv": {"on_wall": "remove", "default": "replace"},
+        "clock": "remove",
+        "person": "remove",
+        "potted plant": "replace",
+        "chair": "replace",
+        "dining table": "replace",
+        "couch": "replace"
+      }
+    },
+
+    "flatten": {
+      "enable": false,
+      "min": 20000,
+      "dist": 0.02,
+      "max_planes": 8
+    },
+
+    "anchor_camera_start": false,
+    "output": "map_final.pcd"
+  }
+}

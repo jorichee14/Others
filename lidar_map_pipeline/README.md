@@ -21,6 +21,8 @@ turning this on cannot change the map an existing downstream stage reads.
 | `pipeline_assets.py` | asset library, fitting, repainting, surface repair |
 | `assets/` | procedural placeholder models + manifest ([contract](assets/README.md)) |
 | `test_semantics.py` | synthetic-room self-test — no bag, no weights, no GPU |
+| `pipeline_config.example.json` | every key stage 01 reads, with working defaults |
+| `check_config.py` | validates a config before you spend an hour on a bag |
 | `pipeline_common.py` | unchanged, included so the folder runs standalone |
 
 ## Outputs
@@ -128,11 +130,28 @@ lives with the config, and `out_dir` is often scratch.
 ## Running
 
 ```bash
-pip install ultralytics                 # torch + YOLO
-python3 assets/make_assets.py --verify  # placeholder models (already committed)
-python3 test_semantics.py               # self-test, ~20 s
+pip install ultralytics                       # torch + YOLO
+cp pipeline_config.example.json pipeline_config.json
+$EDITOR pipeline_config.json                  # set the four dataset paths
+python3 check_config.py pipeline_config.json  # validate BEFORE the long run
 python3 01_build_map.py pipeline_config.json
 ```
+
+`check_config.py` exists because stage 01 reads its config **lazily**:
+`flatten` isn't touched until after the merge, `detect.weights` not until after
+colorize. A missing key therefore fails forty minutes in, having already done
+the expensive work — and fails again at the same place on every resume. The
+checker walks every key the stage will eventually read and reports all the
+problems at once.
+
+### The one trap worth knowing
+
+`image_width` / `image_height` must equal the resolution the **intrinsics were
+calibrated at**. Stage 01 resizes images to `(W, H)` but does *not* rescale
+`fx/fy/cx/cy`, so a mismatch projects every point to the wrong pixel — colours
+smear and detections land on the wrong surfaces, with nothing in the log to say
+why. `check_config.py` catches it by comparing `2·cx` against `image_width`.
+Either set W/H to the calibration resolution, or rescale the intrinsics.
 
 Resume: `labels.npz` is reused if present. It records the point count it was
 built for and **refuses to load against a different cloud** — if `drop_gray`
