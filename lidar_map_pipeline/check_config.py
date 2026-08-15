@@ -194,6 +194,10 @@ def main():
                  f"vote.min_frames={vote.get('min_frames', 3)}: the pose gate "
                  f"may not admit enough views for a small object to clear "
                  f"min_frames, and it will be dropped silently.")
+        if d.get("structure") is not None:
+            warn("detect.structure is no longer read -- stage 01 detects "
+                 "objects only. Structure classification now lives under "
+                 "synthesize.structure, its sole consumer.")
         if d.get("max_range", 8.0) > s.get("lidar_max", 50.0):
             warn("detect.max_range exceeds lidar_max; points that far away "
                  "were never merged into the map.")

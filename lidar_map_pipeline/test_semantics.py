@@ -476,8 +476,7 @@ def main():
     # ---- inspection outputs ----------------------------------------------- #
     print("\n[6b] inspection")
     cls = pdet.reconcile(cls, instances)
-    struct_lab = struct.labels(N)
-    col, legend = pdet.semantic_colors(cls, struct_lab, names)
+    col, legend = pdet.semantic_colors(cls, names)
     check("class colours are deterministic",
           pdet.class_color(56) == pdet.class_color(56)
           and pdet.class_color(56) != pdet.class_color(62))
@@ -487,11 +486,10 @@ def main():
         check(f"{key} points carry the {key} colour",
               bool(np.allclose(col[ins["idx"]], want)),
               pdet.hexc(want))
-    fl = struct.floors[0]["idx"]
-    fl = fl[cls[fl] < 0]
-    check("floor points carry the floor tint",
-          bool(np.allclose(col[fl], np.asarray(pdet._STRUCT_RGB[1]))))
-    check("legend covers structure and objects", len(legend) >= 5,
+    bg = np.flatnonzero(cls < 0)
+    check("background stays uniform dim grey",
+          bool(np.allclose(col[bg], np.asarray(pdet._UNLABELLED))))
+    check("legend covers the detected classes", len(legend) == 2,
           f"{len(legend)} entries")
 
     geom = pdet.instance_geometry(pts, instances)
@@ -547,8 +545,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="stage01_test_")
     FP = FakeP(tmp)
     dcfg = {"save_split": True, "save_layers": True, "save_per_object": True}
-    split = S01.split_clouds(FP, dcfg, pts, cols, cls, struct_lab, instances,
-                             names)
+    split = S01.split_clouds(FP, dcfg, pts, cols, cls, instances, names)
 
     import open3d as o3d
     bg = o3d.io.read_point_cloud(os.path.join(tmp, "background.pcd"))
@@ -560,7 +557,7 @@ def main():
     check("objects.pcd holds only labelled points",
           len(ob.points) == int((cls >= 0).sum()),
           f"{len(ob.points)} vs {int((cls >= 0).sum())}")
-    for nm in ("floor", "wall", "ceiling", "tv", "chair"):
+    for nm in ("tv", "chair"):
         f = os.path.join(tmp, "layers", f"{nm}.pcd")
         check(f"layers/{nm}.pcd written", os.path.exists(f),
               f"{len(o3d.io.read_point_cloud(f).points)} pts"
@@ -568,9 +565,8 @@ def main():
     check("one cloud per object", len(split["objects"]) == len(instances),
           f"{len(split['objects'])}")
 
-    ctx = pdet.object_context(pts, instances, struct)
     ipath = os.path.join(tmp, "objects_inventory.yaml")
-    pdet.write_inventory(ipath, instances, names, geom, ctx, cls, struct, pts,
+    pdet.write_inventory(ipath, instances, names, geom, cls, pts,
                          meta={"source_cloud": "synthetic_room",
                                "model": "stub"},
                          clouds=split["objects"])
@@ -579,19 +575,6 @@ def main():
     check("inventory counts both objects",
           inv["counts"].get("tv") == 1 and inv["counts"].get("chair") == 1,
           str(inv["counts"]))
-    check("inventory floor area matches the room",
-          abs(inv["structure"]["floor"]["area_m2"] - ROOM[0] * ROOM[1]) < 2.0,
-          f"{inv['structure']['floor']['area_m2']} m^2 vs "
-          f"{ROOM[0] * ROOM[1]:.0f}")
-    check("inventory room height matches",
-          abs(inv["structure"]["room_height_m"] - ROOM[2]) < 0.05,
-          f"{inv['structure']['room_height_m']} m")
-    tvo = next(o for o in inv["objects"] if o["class"] == "tv")
-    cho = next(o for o in inv["objects"] if o["class"] == "chair")
-    check("inventory marks the TV as wall-mounted", tvo["on_wall"] is True)
-    check("inventory marks the chair as floor-supported",
-          cho["on_wall"] is False and cho["support"] == "floor",
-          f"on_wall={cho['on_wall']} support={cho['support']}")
     check("inventory links each object to its cloud",
           all("cloud" in o for o in inv["objects"]))
     if VERBOSE:

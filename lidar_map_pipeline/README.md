@@ -17,14 +17,13 @@ turning this on cannot change the map an existing downstream stage reads.
 | file | what it is |
 |---|---|
 | `01_build_map.py` | your stage script, with `detect()` / `synthesize()` wired in |
-| `pipeline_detect.py` | detector wrapper, vote fusion, instance tracking, plane structure |
+| `pipeline_detect.py` | detector wrapper, vote fusion, instance tracking, background rejection |
 | `pipeline_assets.py` | asset library, fitting, repainting, surface repair |
 | `assets/` | procedural placeholder models + manifest ([contract](assets/README.md)) |
 | `test_semantics.py` | synthetic-room self-test — no bag, no weights, no GPU |
 | `test_resume.py` | proves the expensive stages are skipped on a resume |
 | `pipeline_config.example.json` | every key stage 01 reads, with working defaults |
 | `check_config.py` | validates a config before you spend an hour on a bag |
-| `diagnose_structure.py` | answers "why are there no walls?" in minutes, without re-running detect |
 | `pipeline_common.py` | unchanged, included so the folder runs standalone |
 
 **These four `.py` files are one unit** — `01_build_map.py`, `pipeline_detect.py`,
@@ -39,15 +38,14 @@ checked at import and refuses to start with the file names to copy instead.
 
 | file | contents |
 |---|---|
-| `objects_inventory.yaml` | **the map inventory** — structure areas/heights, per-class counts, and every object with its position, size, support and cloud |
-| `background.pcd` | **the room without its contents** — structure + unclaimed points |
+| `objects_inventory.yaml` | **the map inventory** — per-class counts, and every object with its position, size and cloud |
+| `background.pcd` | **the room without its contents** — everything no object claimed |
 | `objects.pcd` | every detected object point (the exact complement of the above) |
-| `layers/*.pcd` | one per structure kind (`floor`, `wall`, `ceiling`, `support`) and one per detected class (`chair.pcd`, `tv.pcd`, …) |
+| `layers/*.pcd` | one per detected class (`chair.pcd`, `tv.pcd`, …) |
 | `objects/NNN_class.pcd` | one cloud per instance (`save_per_object`) |
-| `semantic.pcd` | the map coloured by class, structure muted underneath |
+| `semantic.pcd` | the map coloured by object class, background uniformly dim |
 | `instances.json` | machine-readable form of the inventory |
-| `labels.npz` | per-point `cls`, `conf`, `frames`, `structure`, `inst`, `n_points` |
-| `structure.json` | plane models + kinds, so a resume skips RANSAC |
+| `labels.npz` | per-point `cls`, `conf`, `frames`, `inst`, `n_points` |
 
 `background.pcd` / `objects.pcd` **partition the map exactly** — every point is
 in one or the other, never both and never neither, which the self-test asserts.
@@ -58,27 +56,20 @@ The inventory is hand-rolled YAML in the same style as `dump_cameras_yaml` in
 `pipeline_common.py`, so stage 01 gains no new dependency for one output file:
 
 ```yaml
-structure:
-  floor:   { planes: 1, points: 50175, area_m2: 31.11, height_m: [0.0] }
-  wall:    { planes: 4, points: 88140, area_m2: 57.20 }
-  room_height_m: 2.600
+n_objects: 35
 counts:
-  chair: 4
-  tv: 1
+  chair: 22
+  tv: 6
 objects:
-  - id: 0
+  - id: 1
     class: chair
-    confidence: 0.910
-    centroid: [2.0655, 2.4833, 0.5953]
-    extent: [0.51, 0.55, 0.94]
-    on_wall: false
-    support: floor
-    cloud: objects/000_chair.pcd
+    confidence: 1.000
+    n_points: 17843
+    n_views: 37
+    centroid: [16.0600, 4.0700, -0.4800]
+    extent: [1.2200, 0.9500, 0.7800]
+    cloud: objects/001_chair.pcd
 ```
-
-Areas count occupied cells of an in-plane grid, not bounding boxes — a wall
-with a doorway or an L-shaped floor is meaningfully smaller than its extent,
-and a bbox would overstate a room by a third.
 
 `semantic.pcd` is not an extra. Arrays cannot be reviewed — the only way to
 know whether "chair" landed on the chair or on the wall behind it is to open
@@ -123,7 +114,18 @@ Detect uses `pose_at_interp`, not stage 01's local `nearest_pose_idx`. At
 walking pace a 0.1 s lever arm is tens of millimetres of camera error, which is
 exactly what slides a mask off an object onto the surface behind it.
 
-### Objects first; the leftovers are the background
+### Objects only
+
+Stage 01 detects **objects**. It does not classify floors, walls, ceilings or
+supports, and nothing in the object path depends on doing so — the structure
+work that used to live here is now internal to synthesize `[7]`, its only
+consumer (`on_wall` rules, asset grounding), and runs only when that stage is
+enabled.
+
+`background.pcd` is simply everything no object claimed. That is the floor,
+the walls and the ceiling, and it needs no classifier to be useful.
+
+### The leftovers are the background
 
 Object quality does **not** depend on classifying a building's planes. What
 makes a bled point background is not that a classifier called some plane a
@@ -155,10 +157,6 @@ Structure classification is therefore **optional enrichment**: it gives you
 Turn it off with `detect.structure.enable: false` and objects are unaffected —
 `background.pcd` still holds everything no object claimed.
 
-**Walls and floors are not detected.** COCO has no class for them. They come
-from RANSAC planes classified by orientation against gravity — floor, ceiling,
-wall, support (table/shelf tops). That is what makes "the TV is on a wall" a
-computable predicate, and it gives removal a surface to patch afterwards.
 
 ## How [7] works
 
@@ -257,103 +255,6 @@ Two rules the resume enforces, both tested in `test_resume.py`:
   against a different cloud**. If `drop_gray` changed or the merge was rebuilt,
   stale indices would still resolve and every label would land silently on a
   different point. Delete it to re-detect.
-
-## Tuning on a real building
-
-Defaults are sized for a room. A 50 m building needs three of them moved, and
-the first is not optional:
-
-| symptom in the log | cause | fix |
-|---|---|---|
-| `structure: … 0 wall …` | RANSAC peels **largest first**, so floors, ceilings and table tops consume every `max_planes` slot before a wall is reached | `structure.max_planes` 80–150 |
-| `bus`, `train`, `airplane`, `car` indoors | nothing constrains the class set | `detect.classes` allowlist, not `exclude` |
-| many instances with 2 views and a few hundred points | vote and cluster gates are permissive | `vote.min_frames` 5, `cluster.min_frames_seen` 4, `cluster.min_points` 250 |
-| objects 2–4 m across that should be 0.5 m | mask bleed merged the object with its surroundings | `vote.mask_erode_px` 3, `vote.depth_span` 0.5, and fix the walls above |
-
-### Dark or reflective sites
-
-Both change the diagnosis, and they fail in opposite directions.
-
-**Dark footage.** A segmenter given underexposed, low-contrast input does not
-politely return nothing — it returns *confident nonsense*, and those votes are
-indistinguishable from good ones downstream. Two guards:
-
-```json
-"enhance": "clahe", "clahe_clip": 2.5, "clahe_grid": 8,
-"min_brightness": 10.0, "min_contrast": 5.0
-```
-
-`enhance` applies CLAHE to the L channel before inference only — **the map's
-colours are untouched**, because colorize samples the raw image. An equalised
-map would misrepresent the site; an equalised detector input only changes which
-pixels get labelled. On a synthetic dim interior this takes frame contrast from
-σ=6.7 to σ=15.5. `min_brightness`/`min_contrast` drop frames too dark to read at
-all, and detect reports the median frame luminance so the thresholds can be set
-from evidence rather than guessed.
-
-**Reflective surfaces (glass, polished floors, metal).** This is a hard limit,
-not a tuning problem, and it hits two stages:
-
-- *structure* — glass returns nothing at oblique incidence, so a glass wall may
-  have too few points to fit a plane at all. That is a **second, independent
-  cause of `0 wall`**, and unlike the plane budget no setting fixes it: where
-  the LiDAR never measured the surface, no filter can recover it.
-- *free-space carving* — worse, carving actively **erases** what glass does
-  return. Sparse angle-dependent hits against free-space evidence from every
-  pass that went through means `free ≥ free_ratio × hits` fires easily.
-
-The trade-off, decided at rebuild time since it invalidates the merge:
-
-| | glass/polished surfaces | dwelling people |
-|---|---|---|
-| `carve.enable: true` (default) | eroded or erased | removed |
-| `carve.enable: false` | preserved | survive in the map |
-| `carve.free_ratio: 3.0+` | mostly preserved | mostly removed |
-
-### Why are there no walls?
-
-Two causes print the identical `0 wall` line and want opposite responses, so
-don't guess — `diagnose_structure.py` peels far more planes than a run would
-and reports where the first wall appears in the ranking:
-
-```bash
-python3 diagnose_structure.py pipeline_config.json --planes 150
-```
-
-- **first wall at rank 40** → plane budget. The walls are in the cloud; raise
-  `structure.max_planes` and re-run detect.
-- **no wall at any rank** → the surface is not in the data. On a reflective
-  site that is the expected outcome and no setting recovers it.
-
-Two thresholds keep the classification honest on a big map, and both were
-found by running one:
-
-**A wall needs area as well as height**: `min_wall_area` (2 m² default) is what
-separates architecture from a chair back or a cabinet side, which are equally
-vertical and equally tall. Without it a 0.5 m² furniture face is classified as
-a wall, `wall_contact()` starts matching objects against furniture, and the
-diagnostic itself would report "plane budget" for a building whose walls are
-entirely missing — the one wrong answer that sends you tuning a setting that
-cannot help.
-
-**The ground reference must come from a substantial plane.** Floor, ceiling and
-support are all classified relative to the lowest horizontal plane, so a single
-scrap — a plate under a desk, a ledge one step down — used to redefine the
-ground and push the real floor out of the floor band. Raising `max_planes` from
-25 to 120 on a 50 m building did exactly that: the floor went from 43.9 M points
-to 79 k and the rest was relabelled `support`, while the structure summary still
-read plausibly. `min_floor_area` (5 m² default) now decides which planes may
-define the ground, and a floor covering under 5% of the mapped footprint is
-reported as a warning.
-
-**Zero walls is the one to watch.** It disables `wall_contact()` and
-`trim_wall_skirt()` together, so nothing can be judged "on a wall" and the only
-guard that removes wall bleed from an object's points stops running — while the
-run completes normally and the counts still look plausible. `Structure.warnings()`
-now reports it, along with plane-budget exhaustion and a missing floor.
-
-`yolo11n-seg.pt` is a false-positive machine on real scenes. `yolo11m-seg.pt`
-is the smallest weight worth trusting here.
 
 ## Limitations
 

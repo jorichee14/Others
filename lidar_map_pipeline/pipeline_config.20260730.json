@@ -150,21 +150,20 @@
         "dominance": 2.0,
         "margin": 0.7,
         "keep_frac": 0.35
-      },
+      }
+    },
+    "synthesize": {
+      "enable": false,
       "structure": {
-        "enable": true,
         "dist": 0.06,
         "min_points": 20000,
-        "max_planes": 250,
+        "max_planes": 120,
         "fit_voxel": 0.05,
         "normal_tol_deg": 15.0,
         "min_wall_height": 0.8,
         "min_wall_area": 2.0,
         "min_floor_area": 5.0
       }
-    },
-    "synthesize": {
-      "enable": false
     },
     "anchor_camera_start": false
   },

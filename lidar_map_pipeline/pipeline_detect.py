@@ -856,10 +856,6 @@ class Structure:
 # whether "chair" landed on the chair or on the wall behind it is to look at
 # the map with the labels painted on. semantic.pcd exists so that check takes
 # one drag into a viewer rather than a bespoke script every time.
-_STRUCT_RGB = {1: (0.42, 0.36, 0.30),      # floor   -- warm, dark
-               2: (0.62, 0.66, 0.72),      # wall    -- cool, light
-               3: (0.80, 0.82, 0.85),      # ceiling -- near white
-               4: (0.60, 0.50, 0.34)}      # support -- tan
 _UNLABELLED = (0.24, 0.25, 0.27)
 def class_color(cid):
     """Deterministic, well-separated colour for a class id.
@@ -875,27 +871,22 @@ def class_color(cid):
     p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
     return [(v, t, p), (q, v, p), (p, v, t),
             (p, q, v), (t, p, v), (v, p, q)][i % 6]
-def semantic_colors(cls, struct_lab, names):
-    """Colour every point by what stage [6] decided it is.
-    Structure is deliberately muted and objects saturated: the question this
-    cloud answers is "did the objects land in the right places", and a
-    full-brightness wall competes with the answer. Returns (colours, legend).
+def semantic_colors(cls, names):
+    """Colour every point by which object stage [6] decided it belongs to.
+    Everything unclaimed stays a uniform dim grey -- it is background, and the
+    question this cloud answers is whether the OBJECTS landed in the right
+    places. Returns (colours, legend).
     """
     col = np.tile(np.asarray(_UNLABELLED, np.float64), (len(cls), 1))
     legend = []
-    for code, rgb in _STRUCT_RGB.items():
-        m = struct_lab == code
-        if m.any():
-            col[m] = rgb
-            legend.append((["", "floor", "wall", "ceiling", "support"][code],
-                           rgb, int(m.sum())))
-    # objects last: an object standing on a plane wins the pixel over the plane
     for cid in np.unique(cls[cls >= 0]):
         m = cls == cid
         rgb = class_color(int(cid))
         col[m] = rgb
         legend.append((coco_or_id(names, int(cid)), rgb, int(m.sum())))
     return col, legend
+
+
 def hexc(rgb):
     return "#%02x%02x%02x" % tuple(int(round(255 * c)) for c in rgb)
 def _basis(n):
@@ -922,26 +913,6 @@ def plane_area(pts, model, cell=0.10, max_pts=200_000):
     q = np.stack([pts @ u, pts @ v], 1)
     g = np.floor(q / float(cell)).astype(np.int64)
     return float(len(np.unique(g[:, 0] * 1000003 + g[:, 1])) * cell * cell)
-def object_context(pts, instances, struct):
-    """What each object is standing on or attached to.
-    The inventory is far more useful when it says a TV is on a wall and a vase
-    is on a table than when it only says both exist -- and this is the same
-    query stage [7]'s rules run on, so the two can never disagree about what an
-    object is attached to."""
-    out = {}
-    for ins in instances:
-        p = pts[ins["idx"]]
-        rec = {"on_wall": False, "wall_fraction": 0.0,
-               "support": None, "support_z": None}
-        if struct is not None:
-            w, frac = struct.wall_contact(p)
-            rec["on_wall"] = bool(w is not None)
-            rec["wall_fraction"] = round(float(frac), 3)
-            plane, z = struct.support_under(p, prefer="any")
-            rec["support"] = None if plane is None else plane["kind"]
-            rec["support_z"] = round(float(z), 4)
-        out[ins["instance"]] = rec
-    return out
 def _y(v):
     """Scalar -> YAML literal."""
     if isinstance(v, bool):
@@ -955,9 +926,9 @@ def _y(v):
     return str(v)
 def _yl(vals):
     return "[" + ", ".join(_y(x) for x in vals) + "]"
-def write_inventory(path, instances, names, geom, ctx, cls, struct, pts,
-                    meta=None, clouds=None):
-    """A human-readable inventory of what is in the map.
+def write_inventory(path, instances, names, geom, cls, pts, meta=None,
+                    clouds=None):
+    """A human-readable inventory of the objects in the map.
     Hand-rolled YAML rather than pyyaml, matching dump_cameras_yaml in
     pipeline_common: the pipeline already writes YAML this way and it keeps
     stage 01 free of another dependency for one output file.
@@ -970,33 +941,10 @@ def write_inventory(path, instances, names, geom, ctx, cls, struct, pts,
     L.append("n_labelled: %d" % int((cls >= 0).sum()))
     L.append("n_objects: %d" % len(instances))
     L.append("")
-    L.append("structure:")
-    if struct is None:
-        L.append("  enabled: false")
-    else:
-        for kind, group in (("floor", struct.floors), ("wall", struct.walls),
-                            ("ceiling", struct.ceilings),
-                            ("support", struct.supports)):
-            if not group:
-                continue
-            npts = sum(p["n_points"] for p in group)
-            area = sum(plane_area(pts[p["idx"]], p["model"]) for p in group)
-            L.append("  %s:" % kind)
-            L.append("    planes: %d" % len(group))
-            L.append("    points: %d" % npts)
-            L.append("    area_m2: %.2f" % area)
-            if kind in ("floor", "ceiling", "support"):
-                L.append("    height_m: %s"
-                         % _yl([round(float(p["z"]), 3) for p in group]))
-        if struct.floors and struct.ceilings:
-            L.append("  room_height_m: %.3f"
-                     % (max(p["z"] for p in struct.ceilings)
-                        - min(p["z"] for p in struct.floors)))
-    L.append("")
     counts = {}
     for ins in instances:
-        counts[coco_or_id(names, ins["cls_id"])] = \
-            counts.get(coco_or_id(names, ins["cls_id"]), 0) + 1
+        nm = coco_or_id(names, ins["cls_id"])
+        counts[nm] = counts.get(nm, 0) + 1
     L.append("counts:")
     for k in sorted(counts, key=lambda x: (-counts[x], x)):
         L.append("  %s: %d" % (_y(k), counts[k]))
@@ -1004,7 +952,6 @@ def write_inventory(path, instances, names, geom, ctx, cls, struct, pts,
     L.append("objects:")
     for ins in sorted(instances, key=lambda i: -i["idx"].size):
         g = geom[ins["instance"]]
-        c = ctx.get(ins["instance"], {})
         L.append("  - id: %d" % ins["instance"])
         L.append("    class: %s" % _y(coco_or_id(names, ins["cls_id"])))
         L.append("    confidence: %.3f" % ins["conf"])
@@ -1015,12 +962,6 @@ def write_inventory(path, instances, names, geom, ctx, cls, struct, pts,
         L.append("    bbox_min: %s" % _yl(g["bbox_min"]))
         L.append("    bbox_max: %s" % _yl(g["bbox_max"]))
         L.append("    base_z: %s" % _y(g["base_z"]))
-        L.append("    on_wall: %s" % _y(c.get("on_wall", False)))
-        if c.get("on_wall"):
-            L.append("    wall_fraction: %s" % _y(c.get("wall_fraction")))
-        L.append("    support: %s" % _y(c.get("support")))
-        if c.get("support") is not None:
-            L.append("    support_z: %s" % _y(c.get("support_z")))
         if clouds and ins["instance"] in clouds:
             L.append("    cloud: %s" % _y(clouds[ins["instance"]]))
     if not instances:
@@ -1028,6 +969,8 @@ def write_inventory(path, instances, names, geom, ctx, cls, struct, pts,
     with open(path, "w") as f:
         f.write("\n".join(L) + "\n")
     return path
+
+
 def instance_geometry(pts, instances):
     """Where each object IS: centroid, footprint, extent, axis-aligned bbox.
     Without this, instances.json says an object exists but not where, which

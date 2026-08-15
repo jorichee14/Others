@@ -1249,17 +1249,17 @@ def safe_name(s):
     return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in s)
 
 
-def split_clouds(P, d, pts, cols, cls, struct_lab, instances, names):
+def split_clouds(P, d, pts, cols, cls, instances, names):
     """Write the map split by what stage [6] decided each point is.
 
     Four groupings, because they answer different questions:
 
-      background.pcd   the room WITHOUT its contents -- structure and anything
-                       unclaimed. This is the one to re-mesh or hand to a
+      background.pcd   the room WITHOUT its contents -- everything no object
+                       claimed. This is the one to re-mesh or hand to a
                        planner; objects are what makes a map non-reusable.
       objects.pcd      every detected object point, the complement of the above
-      layers/<x>.pcd   one per class AND one per structure kind, so "just the
-                       walls" or "just the chairs" is a file, not a filter
+      layers/<x>.pcd   one per detected class, so "just the chairs" is a
+                       file rather than a filter
       objects/<n>.pcd  one per instance, for measuring or exporting a single
                        object
 
@@ -1274,7 +1274,7 @@ def split_clouds(P, d, pts, cols, cls, struct_lab, instances, names):
 
     if d.get("save_split", True):
         n = save_subset(P.outp("background.pcd"), pts, cols, bg_idx)
-        print(f"    background.pcd  {n:9d} pts  (structure + unclaimed)")
+        print(f"    background.pcd  {n:9d} pts  (everything not an object)")
         out["clouds"]["background"] = "background.pcd"
         n = save_subset(P.outp("objects.pcd"), pts, cols, obj_idx)
         print(f"    objects.pcd     {n:9d} pts  ({len(instances)} objects)")
@@ -1282,13 +1282,6 @@ def split_clouds(P, d, pts, cols, cls, struct_lab, instances, names):
 
     if d.get("save_layers", True):
         ld = sub_dir(P, "layers")
-        for code, nm in ((1, "floor"), (2, "wall"), (3, "ceiling"),
-                         (4, "support")):
-            idx = np.flatnonzero((struct_lab == code) & ~obj_mask)
-            if idx.size:
-                save_subset(os.path.join(ld, f"{nm}.pcd"), pts, cols, idx)
-                print(f"    layers/{nm}.pcd  {idx.size:9d} pts")
-                out["clouds"][nm] = f"layers/{nm}.pcd"
         for cid in np.unique(cls[obj_mask]):
             nm = safe_name(names.get(int(cid), str(int(cid))))
             idx = np.flatnonzero(cls == cid)
@@ -1467,59 +1460,12 @@ def detect(P, S, s, pcd):
         print(f"    background trim: dropped {n_trim} pts from {n_inst} "
               f"instances sitting on surfaces that continue into the map")
 
-    st = d.get("structure", {})
-    struct = None
-    if st.get("enable", True):
-        models = pdet.fit_plane_models(
-            pts_np, dist=float(st.get("dist", 0.04)),
-            min_points=int(st.get("min_points", 20000)),
-            max_planes=int(st.get("max_planes", 12)),
-            fit_voxel=float(st.get("fit_voxel", 0.05)))
-        planes = pdet.assign_planes(pts_np, models,
-                                    dist=float(st.get("dist", 0.04)),
-                                    min_points=int(st.get("min_points", 20000)))
-        struct = pdet.Structure(
-            planes, pts_np, tol_deg=float(st.get("normal_tol_deg", 15.0)),
-            min_wall_height=float(st.get("min_wall_height", 0.8)),
-            min_wall_area=float(st.get("min_wall_area", 2.0)),
-            min_floor_area=float(st.get("min_floor_area", 5.0)))
-        print(f"    structure: {struct.summary()}")
-        for msg in struct.warnings(len(models), st.get("max_planes", 12)):
-            print(f"    ! {msg}")
-        # structure exists now, so instances can be cleaned of the wall skirt
-        # that no purely image-space or depth-space guard could reach
-        trimmed = 0
-        for ins in instances:
-            new_idx, w = struct.trim_wall_skirt(ins["idx"], pts_np)
-            if w is not None and new_idx.size >= int(cl.get("min_points", 60)):
-                trimmed += ins["idx"].size - new_idx.size
-                ins["idx"] = new_idx
-        if trimmed:
-            print(f"    wall-skirt trim: dropped {trimmed} bled wall points "
-                  f"from instances standing proud of a wall")
-        with open(P.outp("structure.json"), "w") as f:
-            json.dump({"models": [p["model"].tolist() for p in struct.planes],
-                       "kinds": [p["kind"] for p in struct.planes],
-                       "dist": float(st.get("dist", 0.04)),
-                       "min_points": int(st.get("min_points", 20000)),
-                       "normal_tol_deg": float(st.get("normal_tol_deg", 15.0)),
-                       "min_wall_height": float(st.get("min_wall_height", 0.8)),
-                       "min_wall_area": float(st.get("min_wall_area", 2.0)),
-                       "min_floor_area": float(st.get("min_floor_area", 5.0))},
-                      f, indent=2)
-
     # instances are final now (clustered, and skirt-trimmed if structure ran),
     # so the per-point labels are made to agree with them before either is
     # written -- the two files must never disagree about what a point is
     cls = pdet.reconcile(cls, instances)
-    if struct is None:
-        print("    structure off: floor/wall/ceiling are not classified. "
-              "background.pcd still holds everything no object claimed, and "
-              "the object labels are unaffected.")
-    struct_lab = (struct.labels(N) if struct is not None
-                  else np.zeros(N, np.uint8))
     np.savez_compressed(P.outp("labels.npz"), cls=cls, conf=conf,
-                        frames=frames, structure=struct_lab,
+                        frames=frames,
                         inst=pdet.instance_array(N, instances),
                         n_points=np.int64(N))
     geom = pdet.instance_geometry(pts_np, instances)
@@ -1549,7 +1495,7 @@ def detect(P, S, s, pcd):
                   f"conf {ins['conf']:.2f}  {ins['n_frames']} views")
 
     if d.get("save_semantic", True):
-        col, legend = pdet.semantic_colors(cls, struct_lab, detector.names)
+        col, legend = pdet.semantic_colors(cls, detector.names)
         sem = o3d.geometry.PointCloud()
         sem.points = o3d.utility.Vector3dVector(pts_np)
         sem.colors = o3d.utility.Vector3dVector(col)
@@ -1560,15 +1506,13 @@ def detect(P, S, s, pcd):
 
     # ---- the map, split by what each point turned out to be ----------------
     src_cols = np.asarray(pcd.colors) if pcd.has_colors() else None
-    split = split_clouds(P, d, pts_np, src_cols, cls, struct_lab, instances,
+    split = split_clouds(P, d, pts_np, src_cols, cls, instances,
                          detector.names)
 
     inv = d.get("inventory", "objects_inventory.yaml")
     if inv:
-        ctx = pdet.object_context(pts_np, instances, struct)
         pdet.write_inventory(
-            P.outp(inv), instances, detector.names, geom, ctx, cls, struct,
-            pts_np,
+            P.outp(inv), instances, detector.names, geom, cls, pts_np,
             meta={"source_cloud": os.path.basename(
                       P.outp("colored.pcd") if s["colorize"]["enable"]
                       else P.outp("denoised.pcd")),
@@ -1580,7 +1524,7 @@ def detect(P, S, s, pcd):
         print(f"    inventory -> {P.outp(inv)}")
 
     print(f"    saved {P.outp('labels.npz')} and {P.outp('instances.json')}")
-    return cls, conf, instances, struct, detector.names
+    return cls, conf, instances, detector.names
 
 
 def load_semantics(P, pcd):
@@ -1613,22 +1557,8 @@ def load_semantics(P, pcd):
                           "cls_id": rec["class_id"], "idx": idx,
                           "conf": rec["confidence"],
                           "n_frames": rec.get("n_frames", 0)})
-    struct = None
-    sp = P.outp("structure.json")
-    if os.path.exists(sp):
-        sj = json.load(open(sp))
-        pts = np.asarray(pcd.points)
-        planes = pdet.assign_planes(pts, [np.asarray(m) for m in sj["models"]],
-                                    dist=sj.get("dist", 0.04),
-                                    min_points=sj.get("min_points", 20000))
-        struct = pdet.Structure(planes, pts,
-                                tol_deg=sj.get("normal_tol_deg", 15.0),
-                                min_wall_height=sj.get("min_wall_height", 0.8),
-                                min_wall_area=sj.get("min_wall_area", 2.0),
-                                min_floor_area=sj.get("min_floor_area", 5.0))
-    print(f"[resume] loaded labels.npz: {len(instances)} instances"
-          + (f", structure {struct.summary()}" if struct else ""))
-    return cls, conf, instances, struct, names
+    print(f"[resume] loaded labels.npz: {len(instances)} instances")
+    return cls, conf, instances, names
 
 
 # =============================================================================
@@ -1648,10 +1578,32 @@ def resolve_rule(rules, cls_name, on_wall):
     return r
 
 
-def synthesize(P, S, s, pcd, instances, struct, names):
+def synthesize(P, S, s, pcd, instances, names):
     """[7] Apply the rules table -> map_synth.pcd + scene.json."""
     y = s["synthesize"]
     print("[7] synthesize: rules applied per instance")
+    # Structure is computed HERE, not in detect [6], because synthesize is its
+    # only consumer: the on_wall rules need wall_contact() and asset grounding
+    # needs support_under(). Detect deals in objects alone, so a building whose
+    # planes are awkward to classify cannot affect the object outputs at all.
+    st = y.get("structure", {})
+    _sp = np.asarray(pcd.points)
+    _models = pdet.fit_plane_models(
+        _sp, dist=float(st.get("dist", 0.04)),
+        min_points=int(st.get("min_points", 20000)),
+        max_planes=int(st.get("max_planes", 120)),
+        fit_voxel=float(st.get("fit_voxel", 0.05)))
+    struct = pdet.Structure(
+        pdet.assign_planes(_sp, _models, dist=float(st.get("dist", 0.04)),
+                           min_points=int(st.get("min_points", 20000))),
+        _sp, tol_deg=float(st.get("normal_tol_deg", 15.0)),
+        min_wall_height=float(st.get("min_wall_height", 0.8)),
+        min_wall_area=float(st.get("min_wall_area", 2.0)),
+        min_floor_area=float(st.get("min_floor_area", 5.0)))
+    print(f"    structure (placement rules only): {struct.summary()}")
+    for msg in struct.warnings(len(_models), st.get("max_planes", 120)):
+        print(f"    ! {msg}")
+    del _sp, _models
     lib = past.AssetLibrary(resolve_in(P, y.get("assets", "assets")))
     print(f"    asset library: {lib.describe()}")
     rules = y.get("rules", {})
@@ -1934,9 +1886,9 @@ def main():
         sem = load_semantics(P, pcd)
         if sem is None:
             sem = detect(P, S, s, pcd)
-        cls, conf, instances, struct, names = sem
+        cls, conf, instances, names = sem
         if s.get("synthesize", {}).get("enable", False):
-            synth = synthesize(P, S, s, pcd, instances, struct, names)
+            synth = synthesize(P, S, s, pcd, instances, names)
             save(P, synth, s["synthesize"].get("output", "map_synth.pcd"))
 
     if s["flatten"]["enable"]:
