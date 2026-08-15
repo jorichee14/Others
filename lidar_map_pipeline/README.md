@@ -24,6 +24,7 @@ turning this on cannot change the map an existing downstream stage reads.
 | `test_resume.py` | proves the expensive stages are skipped on a resume |
 | `pipeline_config.example.json` | every key stage 01 reads, with working defaults |
 | `check_config.py` | validates a config before you spend an hour on a bag |
+| `diagnose_structure.py` | answers "why are there no walls?" in minutes, without re-running detect |
 | `pipeline_common.py` | unchanged, included so the folder runs standalone |
 
 **These four `.py` files are one unit** — `01_build_map.py`, `pipeline_detect.py`,
@@ -276,6 +277,29 @@ The trade-off, decided at rebuild time since it invalidates the merge:
 | `carve.enable: true` (default) | eroded or erased | removed |
 | `carve.enable: false` | preserved | survive in the map |
 | `carve.free_ratio: 3.0+` | mostly preserved | mostly removed |
+
+### Why are there no walls?
+
+Two causes print the identical `0 wall` line and want opposite responses, so
+don't guess — `diagnose_structure.py` peels far more planes than a run would
+and reports where the first wall appears in the ranking:
+
+```bash
+python3 diagnose_structure.py pipeline_config.json --planes 150
+```
+
+- **first wall at rank 40** → plane budget. The walls are in the cloud; raise
+  `structure.max_planes` and re-run detect.
+- **no wall at any rank** → the surface is not in the data. On a reflective
+  site that is the expected outcome and no setting recovers it.
+
+A wall needs **area as well as height**: `min_wall_area` (2 m² default) is what
+separates architecture from a chair back or a cabinet side, which are equally
+vertical and equally tall. Without it a 0.5 m² furniture face is classified as
+a wall, `wall_contact()` starts matching objects against furniture, and the
+diagnostic itself would report "plane budget" for a building whose walls are
+entirely missing — the one wrong answer that sends you tuning a setting that
+cannot help.
 
 **Zero walls is the one to watch.** It disables `wall_contact()` and
 `trim_wall_skirt()` together, so nothing can be judged "on a wall" and the only

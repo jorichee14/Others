@@ -464,7 +464,7 @@ class Structure:
     """Classified planes plus the queries stage [7] asks of them."""
 
     def __init__(self, planes, pts, tol_deg=15.0, min_wall_height=0.8,
-                 support_range=(0.35, 1.30)):
+                 min_wall_area=2.0, support_range=(0.35, 1.30)):
         up = np.array([0.0, 0.0, 1.0])
         ct = np.cos(np.deg2rad(tol_deg))
         st = np.sin(np.deg2rad(tol_deg))
@@ -481,8 +481,15 @@ class Structure:
             if c >= ct:
                 rec["kind"] = "horizontal"
             elif c <= st:
-                rec["kind"] = "wall" if (p[:, 2].max() - p[:, 2].min()) \
-                    >= min_wall_height else "other"
+                # Height alone is not enough. The back of a chair, the side of
+                # a cabinet and a door leaf are all vertical and taller than
+                # 0.8 m, and calling one a wall makes wall_contact() match
+                # objects against furniture -- so an area floor is what
+                # separates architecture from things standing in front of it.
+                rec["area"] = plane_area(p, rec["model"])
+                rec["kind"] = "wall" if (
+                    (p[:, 2].max() - p[:, 2].min()) >= min_wall_height
+                    and rec["area"] >= min_wall_area) else "other"
             self.planes.append(rec)
 
         hor = [p for p in self.planes if p["kind"] == "horizontal"]
@@ -703,7 +710,7 @@ def _basis(n):
     a = np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
     u = np.cross(n, a); u /= np.linalg.norm(u)
     return u, np.cross(n, u)
-def plane_area(pts, model, cell=0.10):
+def plane_area(pts, model, cell=0.10, max_pts=200_000):
     """Occupied area of a plane's inliers, m^2.
     Counting occupied cells of an in-plane grid, not the bounding box: a wall
     with a doorway, or an L-shaped floor, has an area meaningfully smaller than
@@ -711,6 +718,12 @@ def plane_area(pts, model, cell=0.10):
     the point density varying with how close the sensor passed."""
     if len(pts) == 0:
         return 0.0
+    if len(pts) > max_pts:
+        # occupied-cell area converges long before the point count does: a
+        # 40 m2 floor at 10 cm cells has 4000 cells, and 200k samples fill
+        # them many times over. Subsampling keeps this callable per plane on a
+        # full-resolution map instead of only on a downsampled one.
+        pts = pts[::max(1, len(pts) // max_pts)]
     u, v = _basis(model[:3])
     q = np.stack([pts @ u, pts @ v], 1)
     g = np.floor(q / float(cell)).astype(np.int64)

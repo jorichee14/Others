@@ -98,7 +98,8 @@
         "max_planes": 12,
         "fit_voxel": 0.05,
         "normal_tol_deg": 15.0,
-        "min_wall_height": 0.8
+        "min_wall_height": 0.8,
+        "min_wall_area": 2.0
       }
     },
     "synthesize": {

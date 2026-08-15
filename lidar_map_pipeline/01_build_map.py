@@ -1458,7 +1458,8 @@ def detect(P, S, s, pcd):
                                     min_points=int(st.get("min_points", 20000)))
         struct = pdet.Structure(
             planes, pts_np, tol_deg=float(st.get("normal_tol_deg", 15.0)),
-            min_wall_height=float(st.get("min_wall_height", 0.8)))
+            min_wall_height=float(st.get("min_wall_height", 0.8)),
+            min_wall_area=float(st.get("min_wall_area", 2.0)))
         print(f"    structure: {struct.summary()}")
         for msg in struct.warnings(len(models), st.get("max_planes", 12)):
             print(f"    ! {msg}")
@@ -1479,7 +1480,8 @@ def detect(P, S, s, pcd):
                        "dist": float(st.get("dist", 0.04)),
                        "min_points": int(st.get("min_points", 20000)),
                        "normal_tol_deg": float(st.get("normal_tol_deg", 15.0)),
-                       "min_wall_height": float(st.get("min_wall_height", 0.8))},
+                       "min_wall_height": float(st.get("min_wall_height", 0.8)),
+                       "min_wall_area": float(st.get("min_wall_area", 2.0))},
                       f, indent=2)
 
     # instances are final now (clustered, and skirt-trimmed if structure ran),
@@ -1593,7 +1595,8 @@ def load_semantics(P, pcd):
                                     min_points=sj.get("min_points", 20000))
         struct = pdet.Structure(planes, pts,
                                 tol_deg=sj.get("normal_tol_deg", 15.0),
-                                min_wall_height=sj.get("min_wall_height", 0.8))
+                                min_wall_height=sj.get("min_wall_height", 0.8),
+                                min_wall_area=sj.get("min_wall_area", 2.0))
     print(f"[resume] loaded labels.npz: {len(instances)} instances"
           + (f", structure {struct.summary()}" if struct else ""))
     return cls, conf, instances, struct, names

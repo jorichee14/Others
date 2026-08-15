@@ -271,6 +271,22 @@ def main():
     if struct.floors:
         check("floor is at z=0", abs(struct.floors[0]["z"]) < 0.02,
               f"z={struct.floors[0]['z']:.4f}")
+    # a chair back is vertical and 0.9 m tall; only area separates it from a wall
+    panel = np.column_stack([np.zeros(4000),
+                             np.random.default_rng(1).uniform(-0.3, 0.3, 4000),
+                             np.random.default_rng(2).uniform(0, 0.95, 4000)])
+    panel[:, 0] = 40.0
+    pstruct = pdet.Structure(pdet.assign_planes(
+        panel, [np.array([1.0, 0, 0, -40.0])], dist=0.03, min_points=100),
+        panel, min_wall_height=0.8, min_wall_area=2.0)
+    check("a small vertical panel is not called a wall",
+          len(pstruct.walls) == 0,
+          f"{len(pstruct.walls)} walls from a 0.6x0.95 m panel")
+    pstruct2 = pdet.Structure(pdet.assign_planes(
+        panel, [np.array([1.0, 0, 0, -40.0])], dist=0.03, min_points=100),
+        panel, min_wall_height=0.8, min_wall_area=0.1)
+    check("...but it is with the area gate lowered", len(pstruct2.walls) == 1)
+
     check("a healthy structure raises no warnings",
           struct.warnings(len(models), 10) == [],
           "; ".join(struct.warnings(len(models), 10))[:90])
