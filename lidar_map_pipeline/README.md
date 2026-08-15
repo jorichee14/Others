@@ -97,20 +97,6 @@ its class, world centroid, extent in metres, point count and view count.
 `scene.json` carries poses, so stage 03 can instantiate real **meshes** instead
 of the point samples baked into `map_synth.pcd`.
 
-### PLY twins
-
-Every `.pcd` in `out_dir` has a `.ply` twin, and stage 01 itself enforces it
-(`01_build_map.ply`, default true) — no separate converter. Two mechanisms:
-this run's own outputs are twinned at save time through the one write
-function, and at the end of every run a sweep backfills twins for anything a
-resume never touched (`merged.pcd`, `colored.pcd` from earlier runs, …). The
-sweep skips twins already newer than their source, so a second run converts
-nothing, and a corrupt file is reported without stopping the rest.
-
-PLY is what CloudCompare, MeshLab, Blender and web viewers open without a
-plugin. The twins roughly double disk per cloud; set `"ply": false` to keep
-`.pcd` only.
-
 ## How [6] works
 
 `project_visible()` already returns the map points visible from a camera pose,

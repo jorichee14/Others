@@ -124,17 +124,6 @@ def main():
             check("point count preserved end to end", len(got.points) == n,
                   f"{len(got.points)} vs {n}")
             check("colours carried through", got.has_colors())
-        # every .pcd this stage writes must have a .ply twin
-        plyp = os.path.join(out, "map_final.ply")
-        check("map_final.ply twin written", os.path.exists(plyp))
-        if os.path.exists(plyp):
-            tw = o3d.io.read_point_cloud(plyp)
-            check("ply twin matches the pcd", len(tw.points) == n
-                  and tw.has_colors(), f"{len(tw.points)} pts")
-        # colored.pcd was written by the FIXTURE, not by this run -- the
-        # backfill sweep must twin it anyway, since a resume never rewrites it
-        check("pre-existing colored.pcd got a .ply twin by backfill",
-              os.path.exists(os.path.join(out, "colored.ply")))
         # the tell-tale: colorize would have written these
         check("merge/denoise did not re-run",
               not os.path.exists(os.path.join(out, "merged.pcd"))
