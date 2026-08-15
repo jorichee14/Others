@@ -5,20 +5,16 @@
     "calib_json": "/data/run01/calibration.json",
     "out_dir": "/data/run01/out"
   },
-
   "01_build_map": {
     "gpu": true,
-
     "lidar_min": 0.5,
     "lidar_max": 50.0,
     "time_tol": 0.05,
-
     "scan_voxel": 0.02,
     "final_voxel": 0.02,
     "flush_every": 200,
     "merge_centroid": true,
     "merge_flush_pts": 20000000,
-
     "remove_dynamic": {
       "enable": true,
       "voxel": 0.15,
@@ -36,16 +32,13 @@
         "free_ratio": 1.0
       }
     },
-
     "denoise": {
       "enable": true,
       "nb": 20,
       "std": 2.0
     },
-
     "image_width": 1280,
     "image_height": 720,
-
     "colorize": {
       "enable": true,
       "img_stride": 2,
@@ -56,7 +49,6 @@
       "min_baseline": 0.15,
       "min_rotation_deg": 8.0
     },
-
     "detect": {
       "enable": true,
       "weights": "assets/models/yolo11x-seg.pt",
@@ -66,12 +58,20 @@
       "img_stride": 2,
       "max_range": 8.0,
       "classes": null,
+      "exclude": [
+        "person"
+      ],
+      "device": null,
       "gpu_reserve_gib": 2.0,
       "cull_block": 2.0,
       "min_baseline": 0.25,
       "min_rotation_deg": 10.0,
       "save_semantic": true,
       "semantic_output": "semantic.pcd",
+      "save_split": true,
+      "save_layers": true,
+      "save_per_object": false,
+      "inventory": "objects_inventory.yaml",
       "vote": {
         "min_frames": 3,
         "min_ratio": 0.5,
@@ -95,7 +95,6 @@
         "min_wall_height": 0.8
       }
     },
-
     "synthesize": {
       "enable": false,
       "assets": "assets",
@@ -112,7 +111,10 @@
       "repaint_radius": 0.08,
       "repaint_tint": 0.65,
       "rules": {
-        "tv": {"on_wall": "remove", "default": "replace"},
+        "tv": {
+          "on_wall": "remove",
+          "default": "replace"
+        },
         "clock": "remove",
         "person": "remove",
         "potted plant": "replace",
@@ -121,14 +123,12 @@
         "couch": "replace"
       }
     },
-
     "flatten": {
       "enable": false,
       "min": 20000,
       "dist": 0.02,
       "max_planes": 8
     },
-
     "anchor_camera_start": false,
     "output": "map_final.pcd"
   }

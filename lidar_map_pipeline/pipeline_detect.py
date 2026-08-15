@@ -45,7 +45,7 @@ class Detector:
     """
 
     def __init__(self, weights, conf=0.35, iou=0.6, imgsz=960, classes=None,
-                 device=None, verbose=False):
+                 exclude=None, device=None, verbose=False):
         try:
             from ultralytics import YOLO
         except ImportError:
@@ -59,13 +59,29 @@ class Detector:
         self.imgsz = int(imgsz)
         self.device = device
         self.verbose = bool(verbose)
+        # `classes` allows, `exclude` denies, and denial wins. Filtering here
+        # rather than after inference is not just tidier -- ultralytics skips
+        # mask generation for suppressed classes, so excluding `person` on a
+        # walk-through with people in half the frames is a real saving on top
+        # of keeping them out of the map.
         self.classes = None
+        allow = set(self.names.values())
         if classes:
-            want = set(classes)
-            self.classes = sorted(i for i, n in self.names.items() if n in want)
-            missing = want - set(self.names.values())
-            if missing:
-                print(f"    ! detect.classes not in the model: {sorted(missing)}")
+            miss = set(classes) - allow
+            if miss:
+                print(f"    ! detect.classes not in the model: {sorted(miss)}")
+            allow &= set(classes)
+        if exclude:
+            miss = set(exclude) - set(self.names.values())
+            if miss:
+                print(f"    ! detect.exclude not in the model: {sorted(miss)}")
+            allow -= set(exclude)
+        if allow != set(self.names.values()):
+            self.classes = sorted(i for i, n in self.names.items()
+                                  if n in allow)
+            if not self.classes:
+                raise SystemExit("detect.classes/exclude leave no classes at "
+                                 "all; nothing could ever be detected")
 
     def describe(self):
         return (f"YOLO-seg {len(self.names)} classes, conf={self.conf} "
@@ -619,6 +635,130 @@ def semantic_colors(cls, struct_lab, names):
     return col, legend
 def hexc(rgb):
     return "#%02x%02x%02x" % tuple(int(round(255 * c)) for c in rgb)
+def _basis(n):
+    """Two in-plane axes for a unit normal."""
+    n = np.asarray(n, float) / np.linalg.norm(n)
+    a = np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+    u = np.cross(n, a); u /= np.linalg.norm(u)
+    return u, np.cross(n, u)
+def plane_area(pts, model, cell=0.10):
+    """Occupied area of a plane's inliers, m^2.
+    Counting occupied cells of an in-plane grid, not the bounding box: a wall
+    with a doorway, or an L-shaped floor, has an area meaningfully smaller than
+    its extent, and the bbox would overstate a room by a third. Also immune to
+    the point density varying with how close the sensor passed."""
+    if len(pts) == 0:
+        return 0.0
+    u, v = _basis(model[:3])
+    q = np.stack([pts @ u, pts @ v], 1)
+    g = np.floor(q / float(cell)).astype(np.int64)
+    return float(len(np.unique(g[:, 0] * 1000003 + g[:, 1])) * cell * cell)
+def object_context(pts, instances, struct):
+    """What each object is standing on or attached to.
+    The inventory is far more useful when it says a TV is on a wall and a vase
+    is on a table than when it only says both exist -- and this is the same
+    query stage [7]'s rules run on, so the two can never disagree about what an
+    object is attached to."""
+    out = {}
+    for ins in instances:
+        p = pts[ins["idx"]]
+        rec = {"on_wall": False, "wall_fraction": 0.0,
+               "support": None, "support_z": None}
+        if struct is not None:
+            w, frac = struct.wall_contact(p)
+            rec["on_wall"] = bool(w is not None)
+            rec["wall_fraction"] = round(float(frac), 3)
+            plane, z = struct.support_under(p, prefer="any")
+            rec["support"] = None if plane is None else plane["kind"]
+            rec["support_z"] = round(float(z), 4)
+        out[ins["instance"]] = rec
+    return out
+def _y(v):
+    """Scalar -> YAML literal."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if v is None:
+        return "null"
+    if isinstance(v, float):
+        return "%.4f" % v
+    if isinstance(v, str):
+        return v if v and all(c.isalnum() or c in "._-/" for c in v) else '"%s"' % v
+    return str(v)
+def _yl(vals):
+    return "[" + ", ".join(_y(x) for x in vals) + "]"
+def write_inventory(path, instances, names, geom, ctx, cls, struct, pts,
+                    meta=None, clouds=None):
+    """A human-readable inventory of what is in the map.
+    Hand-rolled YAML rather than pyyaml, matching dump_cameras_yaml in
+    pipeline_common: the pipeline already writes YAML this way and it keeps
+    stage 01 free of another dependency for one output file.
+    """
+    L = ["# objects_inventory.yaml -- written by 01_build_map.py stage [6]",
+         "# every length is metres, every coordinate is in the map frame"]
+    for k, v in (meta or {}).items():
+        L.append("%s: %s" % (k, _y(v)))
+    L.append("n_points: %d" % len(pts))
+    L.append("n_labelled: %d" % int((cls >= 0).sum()))
+    L.append("n_objects: %d" % len(instances))
+    L.append("")
+    L.append("structure:")
+    if struct is None:
+        L.append("  enabled: false")
+    else:
+        for kind, group in (("floor", struct.floors), ("wall", struct.walls),
+                            ("ceiling", struct.ceilings),
+                            ("support", struct.supports)):
+            if not group:
+                continue
+            npts = sum(p["n_points"] for p in group)
+            area = sum(plane_area(pts[p["idx"]], p["model"]) for p in group)
+            L.append("  %s:" % kind)
+            L.append("    planes: %d" % len(group))
+            L.append("    points: %d" % npts)
+            L.append("    area_m2: %.2f" % area)
+            if kind in ("floor", "ceiling", "support"):
+                L.append("    height_m: %s"
+                         % _yl([round(float(p["z"]), 3) for p in group]))
+        if struct.floors and struct.ceilings:
+            L.append("  room_height_m: %.3f"
+                     % (max(p["z"] for p in struct.ceilings)
+                        - min(p["z"] for p in struct.floors)))
+    L.append("")
+    counts = {}
+    for ins in instances:
+        counts[coco_or_id(names, ins["cls_id"])] = \
+            counts.get(coco_or_id(names, ins["cls_id"]), 0) + 1
+    L.append("counts:")
+    for k in sorted(counts, key=lambda x: (-counts[x], x)):
+        L.append("  %s: %d" % (_y(k), counts[k]))
+    L.append("")
+    L.append("objects:")
+    for ins in sorted(instances, key=lambda i: -i["idx"].size):
+        g = geom[ins["instance"]]
+        c = ctx.get(ins["instance"], {})
+        L.append("  - id: %d" % ins["instance"])
+        L.append("    class: %s" % _y(coco_or_id(names, ins["cls_id"])))
+        L.append("    confidence: %.3f" % ins["conf"])
+        L.append("    n_points: %d" % ins["idx"].size)
+        L.append("    n_views: %d" % ins.get("n_frames", 0))
+        L.append("    centroid: %s" % _yl(g["centroid"]))
+        L.append("    extent: %s" % _yl(g["extent"]))
+        L.append("    bbox_min: %s" % _yl(g["bbox_min"]))
+        L.append("    bbox_max: %s" % _yl(g["bbox_max"]))
+        L.append("    base_z: %s" % _y(g["base_z"]))
+        L.append("    on_wall: %s" % _y(c.get("on_wall", False)))
+        if c.get("on_wall"):
+            L.append("    wall_fraction: %s" % _y(c.get("wall_fraction")))
+        L.append("    support: %s" % _y(c.get("support")))
+        if c.get("support") is not None:
+            L.append("    support_z: %s" % _y(c.get("support_z")))
+        if clouds and ins["instance"] in clouds:
+            L.append("    cloud: %s" % _y(clouds[ins["instance"]]))
+    if not instances:
+        L.append("  []")
+    with open(path, "w") as f:
+        f.write("\n".join(L) + "\n")
+    return path
 def instance_geometry(pts, instances):
     """Where each object IS: centroid, footprint, extent, axis-aligned bbox.
     Without this, instances.json says an object exists but not where, which

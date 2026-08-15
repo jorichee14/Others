@@ -31,10 +31,46 @@ turning this on cannot change the map an existing downstream stage reads.
 
 | file | contents |
 |---|---|
-| `semantic.pcd` | **the map coloured by class**, structure muted underneath |
-| `instances.json` | per object: class, confidence, **centroid, extent, bbox, base height**, point count, views |
+| `objects_inventory.yaml` | **the map inventory** — structure areas/heights, per-class counts, and every object with its position, size, support and cloud |
+| `background.pcd` | **the room without its contents** — structure + unclaimed points |
+| `objects.pcd` | every detected object point (the exact complement of the above) |
+| `layers/*.pcd` | one per structure kind (`floor`, `wall`, `ceiling`, `support`) and one per detected class (`chair.pcd`, `tv.pcd`, …) |
+| `objects/NNN_class.pcd` | one cloud per instance (`save_per_object`) |
+| `semantic.pcd` | the map coloured by class, structure muted underneath |
+| `instances.json` | machine-readable form of the inventory |
 | `labels.npz` | per-point `cls`, `conf`, `frames`, `structure`, `inst`, `n_points` |
 | `structure.json` | plane models + kinds, so a resume skips RANSAC |
+
+`background.pcd` / `objects.pcd` **partition the map exactly** — every point is
+in one or the other, never both and never neither, which the self-test asserts.
+Background is the file to re-mesh or hand to a planner: object clutter is what
+makes a map non-reusable between runs.
+
+The inventory is hand-rolled YAML in the same style as `dump_cameras_yaml` in
+`pipeline_common.py`, so stage 01 gains no new dependency for one output file:
+
+```yaml
+structure:
+  floor:   { planes: 1, points: 50175, area_m2: 31.11, height_m: [0.0] }
+  wall:    { planes: 4, points: 88140, area_m2: 57.20 }
+  room_height_m: 2.600
+counts:
+  chair: 4
+  tv: 1
+objects:
+  - id: 0
+    class: chair
+    confidence: 0.910
+    centroid: [2.0655, 2.4833, 0.5953]
+    extent: [0.51, 0.55, 0.94]
+    on_wall: false
+    support: floor
+    cloud: objects/000_chair.pcd
+```
+
+Areas count occupied cells of an in-plane grid, not bounding boxes — a wall
+with a doorway or an L-shaped floor is meaningfully smaller than its extent,
+and a bbox would overstate a room by a third.
 
 `semantic.pcd` is not an extra. Arrays cannot be reviewed — the only way to
 know whether "chair" landed on the chair or on the wall behind it is to open

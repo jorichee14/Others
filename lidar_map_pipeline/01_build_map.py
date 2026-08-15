@@ -175,6 +175,7 @@ are, not when they run.
 import os
 import sys
 import json
+import time
 import numpy as np
 import open3d as o3d
 import cv2
@@ -1193,6 +1194,93 @@ def resolve_in(P, path):
     return os.path.join(P.cfg_dir, path)
 
 
+def sub_dir(P, *parts):
+    """A directory under out_dir, created on demand.
+
+    P.outp() cannot do this: it passes any name containing a directory
+    separator straight through, so P.outp("layers/chair.pcd") resolves against
+    the CURRENT WORKING DIRECTORY instead of out_dir and quietly scatters the
+    layer clouds wherever the script was launched from."""
+    d = os.path.join(P.out_dir, *parts)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def save_subset(path, pts, cols, idx):
+    """Write a subset of the map as its own cloud. Returns points written."""
+    if idx is None or len(idx) == 0:
+        return 0
+    pc = o3d.geometry.PointCloud()
+    pc.points = o3d.utility.Vector3dVector(pts[idx])
+    if cols is not None:
+        pc.colors = o3d.utility.Vector3dVector(cols[idx])
+    o3d.io.write_point_cloud(path, pc)
+    return len(idx)
+
+
+def safe_name(s):
+    return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in s)
+
+
+def split_clouds(P, d, pts, cols, cls, struct_lab, instances, names):
+    """Write the map split by what stage [6] decided each point is.
+
+    Four groupings, because they answer different questions:
+
+      background.pcd   the room WITHOUT its contents -- structure and anything
+                       unclaimed. This is the one to re-mesh or hand to a
+                       planner; objects are what makes a map non-reusable.
+      objects.pcd      every detected object point, the complement of the above
+      layers/<x>.pcd   one per class AND one per structure kind, so "just the
+                       walls" or "just the chairs" is a file, not a filter
+      objects/<n>.pcd  one per instance, for measuring or exporting a single
+                       object
+
+    Colours come from the map itself (colorize's), not the semantic palette --
+    these are extracted geometry meant to be looked at and reused, and
+    semantic.pcd already exists for the label view.
+    """
+    out = {"clouds": {}, "objects": {}}
+    obj_mask = cls >= 0
+    obj_idx = np.flatnonzero(obj_mask)
+    bg_idx = np.flatnonzero(~obj_mask)
+
+    if d.get("save_split", True):
+        n = save_subset(P.outp("background.pcd"), pts, cols, bg_idx)
+        print(f"    background.pcd  {n:9d} pts  (structure + unclaimed)")
+        out["clouds"]["background"] = "background.pcd"
+        n = save_subset(P.outp("objects.pcd"), pts, cols, obj_idx)
+        print(f"    objects.pcd     {n:9d} pts  ({len(instances)} objects)")
+        out["clouds"]["objects"] = "objects.pcd"
+
+    if d.get("save_layers", True):
+        ld = sub_dir(P, "layers")
+        for code, nm in ((1, "floor"), (2, "wall"), (3, "ceiling"),
+                         (4, "support")):
+            idx = np.flatnonzero((struct_lab == code) & ~obj_mask)
+            if idx.size:
+                save_subset(os.path.join(ld, f"{nm}.pcd"), pts, cols, idx)
+                print(f"    layers/{nm}.pcd  {idx.size:9d} pts")
+                out["clouds"][nm] = f"layers/{nm}.pcd"
+        for cid in np.unique(cls[obj_mask]):
+            nm = safe_name(names.get(int(cid), str(int(cid))))
+            idx = np.flatnonzero(cls == cid)
+            save_subset(os.path.join(ld, f"{nm}.pcd"), pts, cols, idx)
+            print(f"    layers/{nm}.pcd  {idx.size:9d} pts")
+            out["clouds"][nm] = f"layers/{nm}.pcd"
+
+    if d.get("save_per_object", False):
+        od = sub_dir(P, "objects")
+        for ins in instances:
+            nm = safe_name(names.get(ins["cls_id"], str(ins["cls_id"])))
+            rel = f"objects/{ins['instance']:03d}_{nm}.pcd"
+            save_subset(os.path.join(od, os.path.basename(rel)),
+                        pts, cols, ins["idx"])
+            out["objects"][ins["instance"]] = rel
+        print(f"    objects/        {len(instances)} per-object clouds")
+    return out
+
+
 def detect(P, S, s, pcd):
     """[6] YOLO-seg masks -> per-point labels, object instances, structure."""
     d = s["detect"]
@@ -1213,7 +1301,9 @@ def detect(P, S, s, pcd):
     detector = pdet.Detector(resolve_in(P, d["weights"]),
                              conf=d.get("conf", 0.35), iou=d.get("iou", 0.6),
                              imgsz=d.get("imgsz", 960),
-                             classes=d.get("classes"))
+                             classes=d.get("classes"),
+                             exclude=d.get("exclude"),
+                             device=d.get("device"))
     print(f"    {detector.describe()}")
     n_cls = max(detector.names) + 1
 
@@ -1380,7 +1470,28 @@ def detect(P, S, s, pcd):
         save(P, sem, d.get("semantic_output", "semantic.pcd"))
         print("    legend: " + "  ".join(f"{pdet.hexc(c)} {n}"
                                          for n, c, _ in legend))
-        del sem
+        del sem, col
+
+    # ---- the map, split by what each point turned out to be ----------------
+    src_cols = np.asarray(pcd.colors) if pcd.has_colors() else None
+    split = split_clouds(P, d, pts_np, src_cols, cls, struct_lab, instances,
+                         detector.names)
+
+    inv = d.get("inventory", "objects_inventory.yaml")
+    if inv:
+        ctx = pdet.object_context(pts_np, instances, struct)
+        pdet.write_inventory(
+            P.outp(inv), instances, detector.names, geom, ctx, cls, struct,
+            pts_np,
+            meta={"source_cloud": os.path.basename(
+                      P.outp("colored.pcd") if s["colorize"]["enable"]
+                      else P.outp("denoised.pcd")),
+                  "model": os.path.basename(resolve_in(P, d["weights"])),
+                  "conf": float(d.get("conf", 0.35)),
+                  "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                 time.gmtime())},
+            clouds=split["objects"])
+        print(f"    inventory -> {P.outp(inv)}")
 
     print(f"    saved {P.outp('labels.npz')} and {P.outp('instances.json')}")
     return cls, conf, instances, struct, detector.names

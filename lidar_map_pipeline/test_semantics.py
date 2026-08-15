@@ -26,6 +26,7 @@ which YOLO has a class for.
 
 import importlib.util
 import os
+import shutil
 import sys
 import numpy as np
 
@@ -413,6 +414,71 @@ def main():
           f"centroid {gch['centroid']}")
     check("chair base sits on the floor", abs(gch["base_z"]) < 0.05,
           f"base_z {gch['base_z']}")
+
+    # ---- split clouds + inventory ------------------------------------------ #
+    print("\n[6c] outputs")
+    import tempfile, yaml
+
+    class FakeP:
+        def __init__(self, d):
+            self.out_dir = d
+        def outp(self, name):
+            return (name if os.path.isabs(name) or os.path.dirname(name)
+                    else os.path.join(self.out_dir, name))
+
+    tmp = tempfile.mkdtemp(prefix="stage01_test_")
+    FP = FakeP(tmp)
+    dcfg = {"save_split": True, "save_layers": True, "save_per_object": True}
+    split = S01.split_clouds(FP, dcfg, pts, cols, cls, struct_lab, instances,
+                             names)
+
+    import open3d as o3d
+    bg = o3d.io.read_point_cloud(os.path.join(tmp, "background.pcd"))
+    ob = o3d.io.read_point_cloud(os.path.join(tmp, "objects.pcd"))
+    check("background + objects partition the map exactly",
+          len(bg.points) + len(ob.points) == N,
+          f"{len(bg.points)} + {len(ob.points)} = "
+          f"{len(bg.points) + len(ob.points)} vs {N}")
+    check("objects.pcd holds only labelled points",
+          len(ob.points) == int((cls >= 0).sum()),
+          f"{len(ob.points)} vs {int((cls >= 0).sum())}")
+    for nm in ("floor", "wall", "ceiling", "tv", "chair"):
+        f = os.path.join(tmp, "layers", f"{nm}.pcd")
+        check(f"layers/{nm}.pcd written", os.path.exists(f),
+              f"{len(o3d.io.read_point_cloud(f).points)} pts"
+              if os.path.exists(f) else "missing")
+    check("one cloud per object", len(split["objects"]) == len(instances),
+          f"{len(split['objects'])}")
+
+    ctx = pdet.object_context(pts, instances, struct)
+    ipath = os.path.join(tmp, "objects_inventory.yaml")
+    pdet.write_inventory(ipath, instances, names, geom, ctx, cls, struct, pts,
+                         meta={"source_cloud": "synthetic_room",
+                               "model": "stub"},
+                         clouds=split["objects"])
+    inv = yaml.safe_load(open(ipath))          # must be REAL yaml, not close
+    check("inventory parses as YAML", isinstance(inv, dict))
+    check("inventory counts both objects",
+          inv["counts"].get("tv") == 1 and inv["counts"].get("chair") == 1,
+          str(inv["counts"]))
+    check("inventory floor area matches the room",
+          abs(inv["structure"]["floor"]["area_m2"] - ROOM[0] * ROOM[1]) < 2.0,
+          f"{inv['structure']['floor']['area_m2']} m^2 vs "
+          f"{ROOM[0] * ROOM[1]:.0f}")
+    check("inventory room height matches",
+          abs(inv["structure"]["room_height_m"] - ROOM[2]) < 0.05,
+          f"{inv['structure']['room_height_m']} m")
+    tvo = next(o for o in inv["objects"] if o["class"] == "tv")
+    cho = next(o for o in inv["objects"] if o["class"] == "chair")
+    check("inventory marks the TV as wall-mounted", tvo["on_wall"] is True)
+    check("inventory marks the chair as floor-supported",
+          cho["on_wall"] is False and cho["support"] == "floor",
+          f"on_wall={cho['on_wall']} support={cho['support']}")
+    check("inventory links each object to its cloud",
+          all("cloud" in o for o in inv["objects"]))
+    if VERBOSE:
+        print(open(ipath).read())
+    shutil.rmtree(tmp, ignore_errors=True)
 
     if "--render" in sys.argv:
         import open3d as o3d
