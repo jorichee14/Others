@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "generated_by": "make_assets.py",
+  "conventions": {
+    "units": "m",
+    "up": "+z",
+    "front": "+y",
+    "anchor": "base",
+    "note": "origin at footprint centre, min(z) == 0, colours are placeholders that synthesize repaints from measurement"
+  },
+  "assets": {
+    "chair": {
+      "support": "floor",
+      "yaw_symmetry": 1,
+      "variants": [
+        {
+          "path": "meshes/chair/chair_01.ply",
+          "size": [
+            0.44,
+            0.46,
+            0.885
+          ],
+          "vertices": 536,
+          "triangles": 1032,
+          "source": "procedural"
+        }
+      ]
+    },
+    "dining table": {
+      "support": "floor",
+      "yaw_symmetry": 2,
+      "variants": [
+        {
+          "path": "meshes/dining_table/dining_table_01.ply",
+          "size": [
+            1.4,
+            0.8,
+            0.75
+          ],
+          "vertices": 56,
+          "triangles": 84,
+          "source": "procedural"
+        }
+      ]
+    },
+    "couch": {
+      "support": "floor",
+      "yaw_symmetry": 1,
+      "variants": [
+        {
+          "path": "meshes/couch/couch_01.ply",
+          "size": [
+            1.9,
+            0.85,
+            0.8
+          ],
+          "vertices": 544,
+          "triangles": 1044,
+          "source": "procedural"
+        }
+      ]
+    },
+    "potted plant": {
+      "support": "any",
+      "yaw_symmetry": 0,
+      "variants": [
+        {
+          "path": "meshes/potted_plant/potted_plant_01.ply",
+          "size": [
+            0.4082,
+            0.3655,
+            0.8824
+          ],
+          "vertices": 3700,
+          "triangles": 7352,
+          "source": "procedural"
+        }
+      ]
+    },
+    "tv": {
+      "support": "surface",
+      "yaw_symmetry": 1,
+      "variants": [
+        {
+          "path": "meshes/tv/tv_01.ply",
+          "size": [
+            1.1,
+            0.24,
+            0.7505
+          ],
+          "vertices": 32,
+          "triangles": 48,
+          "source": "procedural"
+        }
+      ]
+    },
+    "bed": {
+      "support": "floor",
+      "yaw_symmetry": 1,
+      "variants": [
+        {
+          "path": "meshes/bed/bed_01.ply",
+          "size": [
+            1.58,
+            2.08,
+            0.675
+          ],
+          "vertices": 72,
+          "triangles": 108,
+          "source": "procedural"
+        }
+      ]
+    },
+    "refrigerator": {
+      "support": "floor",
+      "yaw_symmetry": 1,
+      "variants": [
+        {
+          "path": "meshes/refrigerator/refrigerator_01.ply",
+          "size": [
+            0.7,
+            0.734,
+            1.8
+          ],
+          "vertices": 268,
+          "triangles": 516,
+          "source": "procedural"
+        }
+      ]
+    },
+    "vase": {
+      "support": "surface",
+      "yaw_symmetry": 0,
+      "variants": [
+        {
+          "path": "meshes/vase/vase_01.ply",
+          "size": [
+            0.22,
+            0.22,
+            0.35
+          ],
+          "vertices": 386,
+          "triangles": 768,
+          "source": "procedural"
+        }
+      ]
+    },
+    "laptop": {
+      "support": "surface",
+      "yaw_symmetry": 1,
+      "variants": [
+        {
+          "path": "meshes/laptop/laptop_01.ply",
+          "size": [
+            0.33,
+            0.2905,
+            0.2251
+          ],
+          "vertices": 32,
+          "triangles": 48,
+          "source": "procedural"
+        }
+      ]
+    }
+  }
+}
