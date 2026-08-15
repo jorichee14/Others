@@ -1846,6 +1846,44 @@ def write_cloud(path, pcd):
         o3d.io.write_point_cloud(path[:-4] + ".ply", pcd)
 
 
+def backfill_ply(out_dir):
+    """Ensure EVERY .pcd under out_dir has a current .ply twin.
+
+    Twins for this run's own outputs are written at save time; this sweep is
+    for the clouds a resumed run never touches -- merged.pcd, static.pcd, a
+    colored.pcd from before the twin policy existed. The invariant is on the
+    DIRECTORY, not on today's writes, so a resume-only run still leaves the
+    whole output set openable in CloudCompare/MeshLab/Blender.
+
+    Skips twins already newer than their source (a second run converts
+    nothing), holds one cloud in memory at a time, and a corrupt file is
+    reported without stopping the rest."""
+    if not _PLY["on"]:
+        return
+    n = 0
+    for root, _, files in os.walk(out_dir):
+        for f in sorted(files):
+            if not f.lower().endswith(".pcd"):
+                continue
+            src = os.path.join(root, f)
+            dst = src[:-4] + ".ply"
+            if os.path.exists(dst)                     and os.path.getmtime(dst) >= os.path.getmtime(src):
+                continue
+            try:
+                pc = o3d.io.read_point_cloud(src)
+                if len(pc.points) == 0:
+                    print(f"    ! {src}: empty/unreadable, no twin")
+                    continue
+                o3d.io.write_point_cloud(dst, pc)
+                n += 1
+                print(f"    ply twin: {os.path.relpath(src, out_dir)}  "
+                      f"({len(pc.points)} pts)", flush=True)
+            except Exception as e:
+                print(f"    ! ply twin failed for {src}: {type(e).__name__}")
+    if n:
+        print(f"[ply] backfilled {n} twin(s) in {out_dir}")
+
+
 def save(P, pcd, name):
     path = P.outp(name)
     write_cloud(path, pcd)
@@ -1975,6 +2013,7 @@ def main():
 
     final = P.outp(s["output"])
     write_cloud(final, pcd)
+    backfill_ply(P.out_dir)
     print(f"DONE -> {final}{' (+ .ply)' if _PLY['on'] else ''}"
           f"  ({len(pcd.points)} points)")
 
