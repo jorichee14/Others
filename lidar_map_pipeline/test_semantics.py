@@ -425,6 +425,28 @@ def main():
     check("chair base sits on the floor", abs(gch["base_z"]) < 0.05,
           f"base_z {gch['base_z']}")
 
+    # ---- dark / low-contrast footage --------------------------------------- #
+    print("\n[6d] dark footage")
+    rng2 = np.random.default_rng(2)
+    bright_img = (rng2.integers(60, 200, (64, 64, 3))).astype(np.uint8)
+    dark_img = (bright_img * 0.13).astype(np.uint8)
+    black = np.zeros((64, 64, 3), np.uint8)
+
+    bm, bs = pdet.frame_quality(bright_img)
+    dm, ds = pdet.frame_quality(dark_img)
+    check("frame_quality separates a dark frame from a lit one",
+          dm < 0.3 * bm, f"dark {dm:.0f} vs lit {bm:.0f} (/255)")
+    check("a black frame is flagged flat", pdet.frame_quality(black)[1] < 1.0)
+
+    eq = pdet.enhance_image(dark_img, "clahe", clip=2.0, grid=8)
+    em, es = pdet.frame_quality(eq)
+    check("CLAHE restores contrast on a dark frame", es > 2.0 * ds,
+          f"std {ds:.1f} -> {es:.1f}")
+    check("CLAHE leaves shape and dtype alone",
+          eq.shape == dark_img.shape and eq.dtype == np.uint8)
+    check("enhance=none is a pass-through",
+          pdet.enhance_image(dark_img, "none") is dark_img)
+
     # ---- split clouds + inventory ------------------------------------------ #
     print("\n[6c] outputs")
     import tempfile, yaml

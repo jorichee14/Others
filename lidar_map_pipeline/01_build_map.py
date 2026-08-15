@@ -1299,6 +1299,11 @@ def detect(P, S, s, pcd):
     stride = int(d.get("img_stride", 2))
     max_range = float(d.get("max_range", 8.0))
     vote = d.get("vote", {})
+    enhance = d.get("enhance", "none")
+    clahe_clip = float(d.get("clahe_clip", 2.0))
+    clahe_grid = int(d.get("clahe_grid", 8))
+    min_bright = float(d.get("min_brightness", 0.0))
+    min_contrast = float(d.get("min_contrast", 0.0))
     erode_px = int(vote.get("mask_erode_px", 3))
     depth_span = float(vote.get("depth_span", 0.6))
     min_det_pts = int(vote.get("min_det_points", 25))
@@ -1328,7 +1333,8 @@ def detect(P, S, s, pcd):
 
     with AnyReader([Path(P.dataset["bag"])], default_typestore=TS) as r:
         conns = [cc for cc in r.connections if cc.topic == S.image_topic]
-        n = n_used = n_det = 0
+        n = n_used = n_det = n_dark = 0
+        bright = []
         for conn, _, raw in r.messages(connections=conns):
             n += 1
             if n % stride:
@@ -1350,9 +1356,19 @@ def detect(P, S, s, pcd):
                 continue
             if (img.shape[1], img.shape[0]) != (W, H):
                 img = cv2.resize(img, (W, H))
+            # A frame too dark or too flat to read is worse than no frame:
+            # the detector does not decline to answer on underexposed input,
+            # it answers confidently and wrongly, and those votes are
+            # indistinguishable from good ones downstream.
+            mean_y, std_y = pdet.frame_quality(img)
+            bright.append(mean_y)
+            if mean_y < min_bright or std_y < min_contrast:
+                n_dark += 1
+                continue
             # inference BEFORE projection: a frame with nothing in it is the
             # common case outdoors, and skipping its projection is free
-            dets = detector(img)
+            dets = detector(pdet.enhance_image(img, enhance, clahe_clip,
+                                               clahe_grid))
             if not dets:
                 continue
             vis = project_visible(index, pts, Twc, S, W, H, max_range)
@@ -1384,6 +1400,17 @@ def detect(P, S, s, pcd):
 
     del pts
     gpu_free()
+    if bright:
+        med = float(np.median(bright))
+        print(f"    frame luminance: median {med:.0f}/255"
+              + (f", {n_dark} frames skipped as too dark/flat"
+                 if n_dark else "")
+              + (f"  [enhance={enhance}]" if enhance != "none" else ""))
+        if med < 60 and enhance == "none":
+            print("    ! this footage is dark and detect.enhance is off. A "
+                  "segmenter given underexposed input returns confident "
+                  "nonsense rather than nothing -- set detect.enhance to "
+                  "\"clahe\".")
     print(f"    {n_used} frames used, {n_det} detections, "
           f"{len(tracker.cls)} tracked instances")
 
@@ -1808,8 +1835,8 @@ def main():
         # at detect was pure waste.
         print(f"[resume] loading existing {colored_name} -- skips merge, "
               f"dynamic, denoise AND colorize")
-        print(f"          (delete it to re-colorize; any change to the "
-              f"colorize/merge settings needs that)")
+        print("          (delete it to re-colorize; any change to the "
+              "colorize/merge settings needs that)")
         pcd = o3d.io.read_point_cloud(colored_p)
         print(f"    {len(pcd.points)} pts")
         if not pcd.has_colors():

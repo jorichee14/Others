@@ -231,6 +231,46 @@ the first is not optional:
 | many instances with 2 views and a few hundred points | vote and cluster gates are permissive | `vote.min_frames` 5, `cluster.min_frames_seen` 4, `cluster.min_points` 250 |
 | objects 2–4 m across that should be 0.5 m | mask bleed merged the object with its surroundings | `vote.mask_erode_px` 3, `vote.depth_span` 0.5, and fix the walls above |
 
+### Dark or reflective sites
+
+Both change the diagnosis, and they fail in opposite directions.
+
+**Dark footage.** A segmenter given underexposed, low-contrast input does not
+politely return nothing — it returns *confident nonsense*, and those votes are
+indistinguishable from good ones downstream. Two guards:
+
+```json
+"enhance": "clahe", "clahe_clip": 2.5, "clahe_grid": 8,
+"min_brightness": 10.0, "min_contrast": 5.0
+```
+
+`enhance` applies CLAHE to the L channel before inference only — **the map's
+colours are untouched**, because colorize samples the raw image. An equalised
+map would misrepresent the site; an equalised detector input only changes which
+pixels get labelled. On a synthetic dim interior this takes frame contrast from
+σ=6.7 to σ=15.5. `min_brightness`/`min_contrast` drop frames too dark to read at
+all, and detect reports the median frame luminance so the thresholds can be set
+from evidence rather than guessed.
+
+**Reflective surfaces (glass, polished floors, metal).** This is a hard limit,
+not a tuning problem, and it hits two stages:
+
+- *structure* — glass returns nothing at oblique incidence, so a glass wall may
+  have too few points to fit a plane at all. That is a **second, independent
+  cause of `0 wall`**, and unlike the plane budget no setting fixes it: where
+  the LiDAR never measured the surface, no filter can recover it.
+- *free-space carving* — worse, carving actively **erases** what glass does
+  return. Sparse angle-dependent hits against free-space evidence from every
+  pass that went through means `free ≥ free_ratio × hits` fires easily.
+
+The trade-off, decided at rebuild time since it invalidates the merge:
+
+| | glass/polished surfaces | dwelling people |
+|---|---|---|
+| `carve.enable: true` (default) | eroded or erased | removed |
+| `carve.enable: false` | preserved | survive in the map |
+| `carve.free_ratio: 3.0+` | mostly preserved | mostly removed |
+
 **Zero walls is the one to watch.** It disables `wall_contact()` and
 `trim_wall_skirt()` together, so nothing can be judged "on a wall" and the only
 guard that removes wall bleed from an object's points stops running — while the

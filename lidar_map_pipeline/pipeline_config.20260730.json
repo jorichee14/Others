@@ -87,6 +87,11 @@
       "conf": 0.4,
       "iou": 0.5,
       "imgsz": 640,
+      "enhance": "clahe",
+      "clahe_clip": 2.5,
+      "clahe_grid": 8,
+      "min_brightness": 10.0,
+      "min_contrast": 5.0,
       "img_stride": 3,
       "max_range": 8.0,
       "classes": [

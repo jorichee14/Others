@@ -111,6 +111,34 @@ class Detector:
         return out
 
 
+def frame_quality(img_bgr):
+    """(mean, std) of luminance, 0-255. Cheap enough to run on every frame."""
+    y = (0.114 * img_bgr[:, :, 0] + 0.587 * img_bgr[:, :, 1]
+         + 0.299 * img_bgr[:, :, 2])
+    return float(y.mean()), float(y.std())
+def enhance_image(img_bgr, mode="clahe", clip=2.0, grid=8):
+    """Lift a dark frame before detection -- and ONLY before detection.
+    A detector trained on well-exposed photographs is being asked about a dim
+    interior, and on underexposed low-contrast input it does not politely
+    return nothing: it returns confident nonsense. CLAHE on the L channel
+    restores local contrast without touching hue, which is what the segmenter
+    keys on.
+    This never touches the map's colours. Colorize samples the raw image, so
+    the cloud keeps the scene's true (dark) appearance -- an equalised map
+    would misrepresent the site, while an equalised detector input only ever
+    affects which pixels get labelled.
+    """
+    if mode in (None, "none", False):
+        return img_bgr
+    if mode != "clahe":
+        raise SystemExit(f"detect.enhance: unknown mode {mode!r} "
+                         f"(expected \"clahe\" or \"none\")")
+    import cv2
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+    g = max(1, int(grid))
+    lab[:, :, 0] = cv2.createCLAHE(clipLimit=float(clip),
+                                   tileGridSize=(g, g)).apply(lab[:, :, 0])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 def erode_mask(mask, px):
     """Shrink a boolean mask by `px`, cheaply and without a cv2 dependency.
 
