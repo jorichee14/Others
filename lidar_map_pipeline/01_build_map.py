@@ -1415,6 +1415,8 @@ def detect(P, S, s, pcd):
             planes, pts_np, tol_deg=float(st.get("normal_tol_deg", 15.0)),
             min_wall_height=float(st.get("min_wall_height", 0.8)))
         print(f"    structure: {struct.summary()}")
+        for msg in struct.warnings(len(models), st.get("max_planes", 12)):
+            print(f"    ! {msg}")
         # structure exists now, so instances can be cleaned of the wall skirt
         # that no purely image-space or depth-space guard could reach
         trimmed = 0

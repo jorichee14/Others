@@ -219,6 +219,27 @@ Two rules the resume enforces, both tested in `test_resume.py`:
   stale indices would still resolve and every label would land silently on a
   different point. Delete it to re-detect.
 
+## Tuning on a real building
+
+Defaults are sized for a room. A 50 m building needs three of them moved, and
+the first is not optional:
+
+| symptom in the log | cause | fix |
+|---|---|---|
+| `structure: … 0 wall …` | RANSAC peels **largest first**, so floors, ceilings and table tops consume every `max_planes` slot before a wall is reached | `structure.max_planes` 80–150 |
+| `bus`, `train`, `airplane`, `car` indoors | nothing constrains the class set | `detect.classes` allowlist, not `exclude` |
+| many instances with 2 views and a few hundred points | vote and cluster gates are permissive | `vote.min_frames` 5, `cluster.min_frames_seen` 4, `cluster.min_points` 250 |
+| objects 2–4 m across that should be 0.5 m | mask bleed merged the object with its surroundings | `vote.mask_erode_px` 3, `vote.depth_span` 0.5, and fix the walls above |
+
+**Zero walls is the one to watch.** It disables `wall_contact()` and
+`trim_wall_skirt()` together, so nothing can be judged "on a wall" and the only
+guard that removes wall bleed from an object's points stops running — while the
+run completes normally and the counts still look plausible. `Structure.warnings()`
+now reports it, along with plane-budget exhaustion and a missing floor.
+
+`yolo11n-seg.pt` is a false-positive machine on real scenes. `yolo11m-seg.pt`
+is the smallest weight worth trusting here.
+
 ## Limitations
 
 Found while building, stated rather than papered over:

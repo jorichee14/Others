@@ -271,6 +271,16 @@ def main():
     if struct.floors:
         check("floor is at z=0", abs(struct.floors[0]["z"]) < 0.02,
               f"z={struct.floors[0]['z']:.4f}")
+    check("a healthy structure raises no warnings",
+          struct.warnings(len(models), 10) == [],
+          "; ".join(struct.warnings(len(models), 10))[:90])
+    # the failure that must never be silent: too few plane slots to reach walls
+    starved = pdet.Structure(pdet.assign_planes(pts, models[:2], dist=0.03,
+                                                min_points=4000), pts)
+    wmsgs = " ".join(starved.warnings(2, 2))
+    check("plane-budget exhaustion is reported", "budget exhausted" in wmsgs)
+    check("missing walls are reported", "NO WALLS" in wmsgs,
+          f"{len(starved.walls)} walls from 2 planes")
 
     # the skirt trim needs structure, so it runs here, exactly as stage [6] does
     for ins in instances:

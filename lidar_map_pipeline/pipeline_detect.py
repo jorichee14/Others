@@ -472,6 +472,33 @@ class Structure:
         self.supports = [p for p in self.planes if p["kind"] == "support"]
         self.ceilings = [p for p in self.planes if p["kind"] == "ceiling"]
 
+    def warnings(self, n_models=None, max_planes=None):
+        """Structural failures that degrade detection SILENTLY.
+        Every item here weakens a guard without raising anything: the run still
+        finishes, the counts still look plausible, and the damage only shows up
+        as objects wearing a skirt of the wall behind them. Loud beats subtle.
+        """
+        w = []
+        if (max_planes and n_models is not None and n_models >= int(max_planes)):
+            w.append(
+                f"plane budget exhausted: {n_models} planes fitted = "
+                f"structure.max_planes. RANSAC peels LARGEST first, so on a "
+                f"big map floors, ceilings and table tops can consume every "
+                f"slot before a single wall is reached. Raise "
+                f"structure.max_planes (a building wants 80-150, not 12).")
+        if not self.walls:
+            w.append(
+                "NO WALLS classified. wall_contact() and trim_wall_skirt() are "
+                "both inert without them, so nothing can be judged 'on a wall' "
+                "and the one guard that removes wall bleed from an object's "
+                "points is not running. Expect objects to carry a skirt of the "
+                "surface behind them.")
+        if not self.floors:
+            w.append(
+                "NO FLOOR classified. support_under() falls back to each "
+                "object's own lowest points, so base heights are whatever the "
+                "scan happened to reach rather than the real ground.")
+        return w
     def summary(self):
         return (f"{len(self.floors)} floor, {len(self.walls)} wall, "
                 f"{len(self.supports)} support, {len(self.ceilings)} ceiling, "
