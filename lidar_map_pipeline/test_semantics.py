@@ -296,6 +296,36 @@ def main():
     check("ceiling survives the scrap too", len(s2.ceilings) == 1,
           f"{len(s2.ceilings)}")
 
+    # A second ground LEVEL must stay a floor. This is the 4320 m2-site
+    # failure: with a global zmin, ground a step below the slab put the whole
+    # interior floor 0.35-1.3 m above "the" ground -- the SUPPORT band -- so
+    # entire floors were relabelled as table tops (17 supports, 3 M points,
+    # while layers/floor.pcd held 41 m2 of a whole building).
+    upper = grid(8.0, 12.0, 0.0, 4.0, 0.05)
+    upper = np.column_stack([upper[:, 0], upper[:, 1], np.full(len(upper), 1.2)])
+    two = np.vstack([pts, upper])
+    m3 = models + [np.array([0.0, 0.0, 1.0, -1.2])]
+    s3 = pdet.Structure(pdet.assign_planes(two, m3, dist=0.03, min_points=400),
+                        two, tol_deg=15.0, min_wall_height=0.8,
+                        min_wall_area=2.0, min_floor_area=5.0)
+    fz = sorted(round(p["z"], 2) for p in s3.floors)
+    check("a second ground level is a floor, not a table",
+          len(s3.floors) == 2 and 1.2 in fz and 0.0 in fz,
+          f"floors at z={fz}, {len(s3.supports)} supports")
+    # ...while a genuine table over the SAME floor stays a support
+    table = grid(4.0, 5.0, 3.0, 4.0, 0.05)
+    table = np.column_stack([table[:, 0], table[:, 1],
+                             np.full(len(table), 0.75)])
+    three = np.vstack([pts, table])
+    m4 = models + [np.array([0.0, 0.0, 1.0, -0.75])]
+    s4 = pdet.Structure(pdet.assign_planes(three, m4, dist=0.03,
+                                           min_points=400),
+                        three, tol_deg=15.0, min_wall_height=0.8,
+                        min_wall_area=2.0, min_floor_area=5.0)
+    check("a table over the floor is still a support",
+          len(s4.supports) == 1 and len(s4.floors) == 1,
+          f"{len(s4.floors)} floors, {len(s4.supports)} supports")
+
     # a chair back is vertical and 0.9 m tall; only area separates it from a wall
     panel = np.column_stack([np.zeros(4000),
                              np.random.default_rng(1).uniform(-0.3, 0.3, 4000),
@@ -324,11 +354,10 @@ def main():
           f"{len(starved.walls)} walls from 2 planes")
 
     # ---- structure-free background rejection -------------------------------- #
-    grid = pdet.GridIndex(pts, cell=1.0)
+    gidx = pdet.GridIndex(pts, cell=1.0)
     is_obj = pdet.instance_array(N, instances) >= 0
     before = {i["instance"]: i["idx"].size for i in instances}
-    tv_before = next(i for i in instances if i["cls_id"] == 62)["idx"].copy()
-    n_trim, n_inst = pdet.trim_background_planes(pts, instances, grid, is_obj)
+    n_trim, n_inst = pdet.trim_background_planes(pts, instances, gidx, is_obj)
     print(f"     background trim: {n_trim} pts from {n_inst} instances")
     tv = next(i for i in instances if i["cls_id"] == 62)
     ch = next(i for i in instances if i["cls_id"] == 56)

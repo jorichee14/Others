@@ -492,6 +492,60 @@ def trim_background_planes(pts, instances, grid, is_obj, dist=0.035,
             n_trim += int(drop.sum())
             n_inst += 1
     return n_trim, n_inst
+class HeightGrids:
+    """Per-XY-cell low/high height references, built once from a sample.
+
+    A GLOBAL zmin cannot classify a building. A site with outdoor ground a
+    step below the slab, a ramp, or a second level has several valid grounds,
+    and one global band puts every other level's floor at "0.35-1.3 m above
+    zmin" -- which is the SUPPORT band, so entire floors get relabelled as
+    table tops. That is exactly what a real run produced: 17 supports carrying
+    3 M points while the floor layer held 41 m2 of a whole building.
+
+    The reference has to be LOCAL: what is the lowest (highest) surface here,
+    in this cell. Percentiles per cell rather than min/max, so a stray return
+    below the slab does not redefine the ground of its cell -- the failure the
+    previous global fix addressed, preserved under the local one.
+    """
+
+    def __init__(self, pts, cell=0.5, lo_pct=5.0, hi_pct=95.0,
+                 max_pts=3_000_000):
+        if len(pts) > max_pts:
+            pts = pts[::max(1, len(pts) // max_pts)]
+        self.cell = float(cell)
+        key = self._key(pts[:, :2])
+        order = np.lexsort((pts[:, 2], key))
+        ks = key[order]
+        zs = pts[order, 2]
+        start = np.flatnonzero(np.concatenate(([True], ks[1:] != ks[:-1])))
+        count = np.diff(np.append(start, ks.size))
+        li = start + np.minimum(count - 1,
+                                (count * lo_pct / 100.0).astype(np.int64))
+        hj = start + np.minimum(count - 1,
+                                (count * hi_pct / 100.0).astype(np.int64))
+        self.keys = ks[start]
+        self.low = zs[li]
+        self.high = zs[hj]
+
+    def _key(self, xy):
+        cx = np.floor(xy[:, 0] / self.cell).astype(np.int64) + (1 << 19)
+        cy = np.floor(xy[:, 1] / self.cell).astype(np.int64) + (1 << 19)
+        return (cx << 20) | cy
+
+    def refs(self, xy):
+        """(low, high) height reference per query point; NaN off the map."""
+        key = self._key(xy)
+        pos = np.clip(np.searchsorted(self.keys, key), 0, self.keys.size - 1)
+        ok = self.keys[pos] == key
+        return (np.where(ok, self.low[pos], np.nan),
+                np.where(ok, self.high[pos], np.nan))
+
+    def footprint_m2(self):
+        """Occupied footprint -- cells that actually contain points. The
+        bounding-box area of an L-shaped site overstates this several-fold."""
+        return float(self.keys.size) * self.cell * self.cell
+
+
 # =============================================================================
 # STRUCTURE:  floor / ceiling / wall / support  (optional enrichment)
 # =============================================================================
@@ -601,42 +655,44 @@ class Structure:
                     and rec["area"] >= min_wall_area) else "other"
             self.planes.append(rec)
 
+        grids = HeightGrids(pts)
+        self._xy_span = grids.footprint_m2()
+        mid = float(np.median((grids.low + grids.high) / 2.0))
         hor = [p for p in self.planes if p["kind"] == "horizontal"]
-        if hor:
-            for p in hor:
-                p["area"] = plane_area(pts[p["idx"]], p["model"])
-            # The ground reference must come from a SUBSTANTIAL plane, never
-            # from the lowest one. Every height test below is relative to it,
-            # so a single scrap -- a plate under a desk, a low ledge, a stray
-            # plane a step below floor level -- would otherwise redefine the
-            # ground and push the real floor out of the floor band entirely.
-            #
-            # This is not hypothetical: on a 50 m building, raising max_planes
-            # from 25 to 120 introduced exactly such a scrap, and the floor
-            # went from 43.9 M points to 79 k while the rest of it was
-            # relabelled `support`. The symptom was a plausible-looking
-            # structure summary with a floor two orders of magnitude too small.
-            big = [p for p in hor if p["area"] >= float(min_floor_area)]
-            ref = big or hor
-            zmin = min(p["z"] for p in ref)
-            zmax = max(p["z"] for p in ref)
-            for p in hor:
-                # floor and ceiling are the extremes; a horizontal plane in
-                # between at sitting/standing height is furniture -- a table or
-                # shelf top, which is exactly where a vase or laptop belongs
-                substantial = p["area"] >= float(min_floor_area)
-                if abs(p["z"] - zmin) < 0.25 and substantial:
-                    p["kind"] = "floor"
-                elif (abs(p["z"] - zmax) < 0.25 and zmax - zmin > 1.5
-                        and substantial):
-                    p["kind"] = "ceiling"
-                elif support_range[0] <= p["z"] - zmin <= support_range[1]:
-                    p["kind"] = "support"
-                else:
-                    p["kind"] = "other"
-
-        lo2, hi2 = pts[:, :2].min(0), pts[:, :2].max(0)
-        self._xy_span = float((hi2[0] - lo2[0]) * (hi2[1] - lo2[1]))
+        for p in hor:
+            p["area"] = plane_area(pts[p["idx"]], p["model"])
+            # Height is judged against the LOCAL ground and ceiling, per
+            # cell, not against one global band. A floor is the surface with
+            # (almost) nothing below it HERE; a table top has the floor below
+            # it HERE; a ceiling sits at the local top. This is what lets a
+            # site with outdoor ground below the slab, ramps, or a second
+            # level keep every floor as floor -- a global zmin puts all but
+            # the lowest of them in the support band.
+            sample = pts[p["idx"]]
+            if len(sample) > 4000:
+                sample = sample[::max(1, len(sample) // 4000)]
+            low, high = grids.refs(sample[:, :2])
+            ok = np.isfinite(low)
+            if not ok.any():
+                p["kind"] = "other"
+                continue
+            d_floor = float(np.median(sample[ok, 2] - low[ok]))
+            d_ceil = float(np.median(high[ok] - sample[ok, 2]))
+            substantial = p["area"] >= float(min_floor_area)
+            if d_floor < 0.25 and d_ceil < 0.25:
+                # the only surface its cells ever saw (a roof over an
+                # unscanned void, a slab with nothing above): break the tie
+                # by which half of the site's height range it sits in
+                p["kind"] = ("floor" if p["z"] < mid else "ceiling") \
+                    if substantial else "other"
+            elif d_floor < 0.25 and substantial:
+                p["kind"] = "floor"
+            elif d_ceil < 0.25 and d_floor > 1.5 and substantial:
+                p["kind"] = "ceiling"
+            elif support_range[0] <= d_floor <= support_range[1]:
+                p["kind"] = "support"
+            else:
+                p["kind"] = "other"
         self.floors = [p for p in self.planes if p["kind"] == "floor"]
         self.walls = [p for p in self.planes if p["kind"] == "wall"]
         self.supports = [p for p in self.planes if p["kind"] == "support"]

@@ -1464,9 +1464,8 @@ def detect(P, S, s, pcd):
             keep_frac=float(bg.get("keep_frac", 0.35)),
             min_keep=int(cl.get("min_points", 60)))
         del grid, is_obj
-        if n_trim:
-            print(f"    background trim: dropped {n_trim} pts from {n_inst} "
-                  f"instances sitting on surfaces that continue into the map")
+        print(f"    background trim: dropped {n_trim} pts from {n_inst} "
+              f"instances sitting on surfaces that continue into the map")
 
     st = d.get("structure", {})
     struct = None
