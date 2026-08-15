@@ -36,7 +36,7 @@ import open3d as o3d
 # hand-copied mismatch surfaces as a TypeError deep inside a run rather
 # than as a message you can act on. Bump this whenever a signature the
 # stage script uses changes.
-API = 2
+API = 3
 
 
 # =============================================================================
@@ -389,10 +389,114 @@ def build_instances(pts, cls, conf, owner, inst_cls, min_points=60,
 
 
 # =============================================================================
-# STRUCTURE:  floor / ceiling / wall / support
+# BACKGROUND REJECTION  (structure-free)
+# =============================================================================
+class GridIndex:
+    """Coarse voxel hash over the map, for box queries. Built once.
+
+    A cKDTree over 187 M points is not affordable, and a full bbox scan per
+    instance is 187 M comparisons each. Sorting coarse voxel keys once makes
+    every neighbourhood query a handful of searchsorted calls.
+    """
+
+    def __init__(self, pts, cell=1.0):
+        self.cell = float(cell)
+        v = np.floor(pts / self.cell).astype(np.int64) + (1 << 19)
+        self.keys = (v[:, 0] << 40) | (v[:, 1] << 20) | v[:, 2]
+        self.order = np.argsort(self.keys, kind="stable")
+        self.sorted = self.keys[self.order]
+
+    def query_box(self, lo, hi):
+        """Indices of points in cells overlapping [lo, hi]. Conservative."""
+        a = np.floor(np.asarray(lo) / self.cell).astype(np.int64) + (1 << 19)
+        b = np.floor(np.asarray(hi) / self.cell).astype(np.int64) + (1 << 19)
+        if np.any(b - a > 64):                     # runaway query, refuse
+            return None
+        out = []
+        for x in range(a[0], b[0] + 1):
+            for y in range(a[1], b[1] + 1):
+                k0 = (x << 40) | (y << 20) | a[2]
+                k1 = (x << 40) | (y << 20) | b[2]
+                i = np.searchsorted(self.sorted, k0, "left")
+                j = np.searchsorted(self.sorted, k1, "right")
+                if j > i:
+                    out.append(self.order[i:j])
+        return np.concatenate(out) if out else np.empty(0, np.int64)
+def trim_background_planes(pts, instances, grid, is_obj, dist=0.035,
+                           min_frac=0.04, min_plane=40, dominance=2.0,
+                           margin=0.7, keep_frac=0.35, min_keep=60):
+    """Drop instance points lying on a surface that CONTINUES into the map.
+
+    The structure-free replacement for trim_wall_skirt, and a better statement
+    of the same idea. What makes a bled point background is not that a
+    classifier called some plane a wall -- it is that the surface it sits on
+    carries on well past the object, into points no detection claimed. So test
+    exactly that, per instance, with no global floor/wall classification
+    involved and nothing to get wrong at building scale:
+
+      1. peel a few planes from the instance's own points
+      2. for each plane holding a real share of the instance, count how many
+         NON-object points in the surrounding shell lie on the same plane
+      3. if the background side dominates, the plane is a surface the mask bled
+         onto -- drop the instance points on it
+
+    A chair's floor-contact points go, because the floor continues for metres.
+    A table top stays, because it ends at the table edge. The ring of wall
+    around a TV goes; the TV's own face stays. None of that needs to know what
+    a floor or a wall is.
+
+    Self-limiting: an object genuinely flush with a large surface -- a poster, a
+    whiteboard -- would lose everything, so a trim that leaves less than
+    keep_frac of the instance is refused and the instance is returned untouched.
+    Degrading to unchanged beats deleting the object.
+
+    min_frac stays LOW on purpose. The bleed is a thin ring around a
+    silhouette, not a major share of the object -- on a 1.1 m TV it is under 7%
+    of the instance -- so a size floor set where it feels safe simply never
+    looks at the thing it was meant to remove. The dominance ratio is what
+    makes this safe: a plane is only ever dropped when the background side of
+    it outweighs the object side, which no genuine part of an object does.
+    """
+    n_trim = n_inst = 0
+    for ins in instances:
+        idx = ins["idx"]
+        p = pts[idx]
+        if len(p) < min_keep * 2:
+            continue
+        models = fit_plane_models(
+            p, dist=dist,
+            min_points=max(int(min_frac * len(p)), int(min_plane)),
+            max_planes=4, fit_voxel=0.0, min_abs=int(min_plane))
+        if not models:
+            continue
+        lo, hi = p.min(0) - margin, p.max(0) + margin
+        nb = grid.query_box(lo, hi)
+        if nb is None or nb.size == 0:
+            continue
+        nb = nb[~is_obj[nb]]                    # background only
+        if nb.size == 0:
+            continue
+        bg = pts[nb]
+        drop = np.zeros(len(p), bool)
+        for m in models:
+            on_i = np.abs(p @ m[:3] + m[3]) < dist
+            k = int(on_i.sum())
+            if k < max(min_frac * len(p), min_plane):
+                continue
+            on_b = int((np.abs(bg @ m[:3] + m[3]) < dist).sum())
+            if on_b > dominance * k:
+                drop |= on_i
+        keep = ~drop
+        if drop.any() and keep.sum() >= max(min_keep, keep_frac * len(p)):
+            ins["idx"] = idx[keep]
+            n_trim += int(drop.sum())
+            n_inst += 1
+    return n_trim, n_inst
+# =============================================================================
+# STRUCTURE:  floor / ceiling / wall / support  (optional enrichment)
 # =============================================================================
 def fit_plane_models(pts, dist=0.04, min_points=20000, max_planes=12,
-                     fit_voxel=0.05):
+                     fit_voxel=0.05, min_abs=100):
     """RANSAC plane peel -> normalised [nx, ny, nz, d] models, largest first.
 
     Planes are FITTED on a voxel-downsampled copy. RANSAC on 40 M points costs
@@ -405,7 +509,11 @@ def fit_plane_models(pts, dist=0.04, min_points=20000, max_planes=12,
     work = np.asarray(small.points)
     live = np.arange(len(work))
     scale = max(len(work) / max(len(pts), 1), 1e-9)
-    need = max(int(min_points * scale), 100)
+    # min_abs is the floor on what counts as a plane at all. 100 is right for
+    # a map, and far too high for peeling planes out of a single object: the
+    # mask bleed on a 1.1 m TV is under a hundred points, so the surface that
+    # most needs finding is the one this floor silently refuses to look for.
+    need = max(int(min_points * scale), int(min_abs))
     models = []
     for _ in range(int(max_planes)):
         if live.size < need:

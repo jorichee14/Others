@@ -323,6 +323,22 @@ def main():
     check("missing walls are reported", "NO WALLS" in wmsgs,
           f"{len(starved.walls)} walls from 2 planes")
 
+    # ---- structure-free background rejection -------------------------------- #
+    grid = pdet.GridIndex(pts, cell=1.0)
+    is_obj = pdet.instance_array(N, instances) >= 0
+    before = {i["instance"]: i["idx"].size for i in instances}
+    tv_before = next(i for i in instances if i["cls_id"] == 62)["idx"].copy()
+    n_trim, n_inst = pdet.trim_background_planes(pts, instances, grid, is_obj)
+    print(f"     background trim: {n_trim} pts from {n_inst} instances")
+    tv = next(i for i in instances if i["cls_id"] == 62)
+    ch = next(i for i in instances if i["cls_id"] == 56)
+    check("background trim keeps the TV face",
+          np.isin(tv["idx"], gt["tv"]).mean() > 0.95 and tv["idx"].size > 500,
+          f"{tv['idx'].size} pts, {100*np.isin(tv['idx'], gt['tv']).mean():.0f}% real")
+    check("background trim does not delete the chair",
+          ch["idx"].size > 0.35 * before[ch["instance"]],
+          f"{before[ch['instance']]} -> {ch['idx'].size}")
+
     # the skirt trim needs structure, so it runs here, exactly as stage [6] does
     for ins in instances:
         new_idx, w = struct.trim_wall_skirt(ins["idx"], pts)

@@ -91,6 +91,16 @@
         "min_points": 60,
         "min_frames_seen": 2
       },
+      "background_trim": {
+        "enable": true,
+        "cell": 1.0,
+        "dist": 0.035,
+        "min_frac": 0.04,
+        "min_plane": 40,
+        "dominance": 2.0,
+        "margin": 0.7,
+        "keep_frac": 0.35
+      },
       "structure": {
         "enable": true,
         "dist": 0.04,

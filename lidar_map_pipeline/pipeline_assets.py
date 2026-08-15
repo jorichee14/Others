@@ -36,7 +36,7 @@ from scipy.spatial import cKDTree
 # hand-copied mismatch surfaces as a TypeError deep inside a run rather
 # than as a message you can act on. Bump this whenever a signature the
 # stage script uses changes.
-API = 2
+API = 3
 
 
 def rotz(yaw):

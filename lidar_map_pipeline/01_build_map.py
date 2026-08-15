@@ -201,7 +201,7 @@ import pipeline_assets as past
 # helper module does not have -- which surfaces as a TypeError fifteen frames
 # into a run that has already spent an hour on the bag, naming a keyword rather
 # than the actual problem. Check it up front instead.
-_NEED_API = 2
+_NEED_API = 3
 for _mod, _name in ((pdet, "pipeline_detect.py"), (past, "pipeline_assets.py")):
     _have = getattr(_mod, "API", 0)
     if _have != _NEED_API:
@@ -1445,6 +1445,29 @@ def detect(P, S, s, pcd):
     print(f"    voted {int((cls >= 0).sum())}/{N} pts -> {len(instances)} "
           f"instances after clustering")
 
+    # Background rejection runs FIRST and does not need structure. What makes
+    # a bled point background is that its surface continues past the object
+    # into unclaimed points -- which is exactly what "the leftovers are the
+    # floor and the walls" means, tested locally per instance. Object quality
+    # therefore no longer depends on classifying a building's planes correctly.
+    bg = d.get("background_trim", {})
+    if bg.get("enable", True) and instances:
+        grid = pdet.GridIndex(pts_np, cell=float(bg.get("cell", 1.0)))
+        is_obj = pdet.instance_array(N, instances) >= 0
+        n_trim, n_inst = pdet.trim_background_planes(
+            pts_np, instances, grid, is_obj,
+            dist=float(bg.get("dist", 0.035)),
+            min_frac=float(bg.get("min_frac", 0.04)),
+            min_plane=int(bg.get("min_plane", 40)),
+            dominance=float(bg.get("dominance", 2.0)),
+            margin=float(bg.get("margin", 0.7)),
+            keep_frac=float(bg.get("keep_frac", 0.35)),
+            min_keep=int(cl.get("min_points", 60)))
+        del grid, is_obj
+        if n_trim:
+            print(f"    background trim: dropped {n_trim} pts from {n_inst} "
+                  f"instances sitting on surfaces that continue into the map")
+
     st = d.get("structure", {})
     struct = None
     if st.get("enable", True):
@@ -1490,6 +1513,10 @@ def detect(P, S, s, pcd):
     # so the per-point labels are made to agree with them before either is
     # written -- the two files must never disagree about what a point is
     cls = pdet.reconcile(cls, instances)
+    if struct is None:
+        print("    structure off: floor/wall/ceiling are not classified. "
+              "background.pcd still holds everything no object claimed, and "
+              "the object labels are unaffected.")
     struct_lab = (struct.labels(N) if struct is not None
                   else np.zeros(N, np.uint8))
     np.savez_compressed(P.outp("labels.npz"), cls=cls, conf=conf,

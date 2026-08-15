@@ -113,7 +113,7 @@ A single frame's mask is never clean, so four guards apply in order:
 3. **multi-frame voting** — bleed lands on a different background point each
    frame because the camera moves, so it collects one vote; the object collects
    one per view.
-4. **wall-skirt trim** — see [Limitations](#limitations).
+4. **background-plane trim** — the structure-free guard, below.
 
 Instance identity comes from the detector rather than being rediscovered
 spatially: two chairs side by side are one connected blob to any clustering,
@@ -122,6 +122,38 @@ but YOLO separated them in every image, and `InstanceTracker` keeps that.
 Detect uses `pose_at_interp`, not stage 01's local `nearest_pose_idx`. At
 walking pace a 0.1 s lever arm is tens of millimetres of camera error, which is
 exactly what slides a mask off an object onto the surface behind it.
+
+### Objects first; the leftovers are the background
+
+Object quality does **not** depend on classifying a building's planes. What
+makes a bled point background is not that a classifier called some plane a
+wall — it is that the surface it sits on **continues past the object into
+points no detection claimed**. `trim_background_planes` tests exactly that, per
+instance:
+
+1. peel a few planes from the instance's own points
+2. count how many *non-object* points in the surrounding shell lie on each
+3. if the background side dominates, that plane is bleed — drop those points
+
+A chair's floor-contact points go, because the floor continues for metres. A
+table top stays, because it ends at the table edge. The ring of wall around a
+TV goes; the TV's own face stays. None of it needs to know what a floor or a
+wall *is*, so none of it can be broken by a building-scale plane budget. In the
+self-test this takes TV labelling from 93% to 100% precision on its own.
+
+It refuses to fire when it would delete the object: a trim leaving less than
+`keep_frac` of an instance is skipped, so a poster genuinely flush with a wall
+degrades to unchanged rather than vanishing.
+
+`min_frac` is deliberately **low** (0.04). The bleed is a thin ring, not a major
+share — under 7% of a 1.1 m TV — so a size floor set where it *feels* safe
+never looks at the thing it exists to remove. The dominance ratio is what makes
+it safe.
+
+Structure classification is therefore **optional enrichment**: it gives you
+`layers/floor.pcd`, inventory areas, and the `on_wall` rules for stage `[7]`.
+Turn it off with `detect.structure.enable: false` and objects are unaffected —
+`background.pcd` still holds everything no object claimed.
 
 **Walls and floors are not detected.** COCO has no class for them. They come
 from RANSAC planes classified by orientation against gravity — floor, ceiling,
