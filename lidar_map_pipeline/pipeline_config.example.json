@@ -41,6 +41,7 @@
     "image_height": 720,
     "colorize": {
       "enable": true,
+      "output": "colored.pcd",
       "img_stride": 2,
       "max_range": 12.0,
       "voxel": 0.0,

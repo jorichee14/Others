@@ -21,6 +21,7 @@ turning this on cannot change the map an existing downstream stage reads.
 | `pipeline_assets.py` | asset library, fitting, repainting, surface repair |
 | `assets/` | procedural placeholder models + manifest ([contract](assets/README.md)) |
 | `test_semantics.py` | synthetic-room self-test — no bag, no weights, no GPU |
+| `test_resume.py` | proves the expensive stages are skipped on a resume |
 | `pipeline_config.example.json` | every key stage 01 reads, with working defaults |
 | `check_config.py` | validates a config before you spend an hour on a bag |
 | `pipeline_common.py` | unchanged, included so the folder runs standalone |
@@ -189,10 +190,34 @@ smear and detections land on the wrong surfaces, with nothing in the log to say
 why. `check_config.py` catches it by comparing `2·cx` against `image_width`.
 Either set W/H to the calibration resolution, or rescale the intrinsics.
 
-Resume: `labels.npz` is reused if present. It records the point count it was
-built for and **refuses to load against a different cloud** — if `drop_gray`
-changed or the merge was rebuilt, stale indices would still resolve and every
-label would land silently on a different point. Delete it to re-detect.
+### Resume — already have a colorized cloud?
+
+Stage 01 resumes from the **furthest** intermediate present, and deleting a
+file is how you force it (and everything after it) to recompute:
+
+```
+merged.pcd → static.pcd → denoised.pcd → colored.pcd → labels.npz
+```
+
+Finding `colored.pcd` skips **merge, dynamic, denoise and colorize in one
+step**. That is the case that matters: colorize reads every image in the bag
+and projects the whole map per frame, so re-running it merely to reach detect
+costs more than detect does. If your existing cloud has another name, point
+`colorize.output` at it rather than copying:
+
+```json
+"colorize": { "enable": true, "output": "map_final_20260730.pcd", ... }
+```
+
+Two rules the resume enforces, both tested in `test_resume.py`:
+
+- a `colored.pcd` is only reused when **`colorize.enable` is true**. Reusing a
+  colorized cloud after colorize was switched off would hand back a different
+  cloud than the config asks for, so it falls through to merge instead.
+- `labels.npz` records the point count it was built for and **refuses to load
+  against a different cloud**. If `drop_gray` changed or the merge was rebuilt,
+  stale indices would still resolve and every label would land silently on a
+  different point. Delete it to re-detect.
 
 ## Limitations
 

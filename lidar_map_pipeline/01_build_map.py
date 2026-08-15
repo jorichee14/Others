@@ -9,9 +9,18 @@ STAGE 01 - build the map cloud from LiDAR scans placed by GLIM poses.
 Everything (paths, voxels, toggles, sensor calib, topics) comes from
 pipeline_config.json + the calibration.json it points at. Nothing hardcoded.
 
-Intermediate stages are written to out_dir so a re-run can resume from merge:
-  merged.pcd  [static.pcd]  denoised.pcd  colored.pcd  [labels.npz]
-  [map_synth.pcd]  [flattened.pcd]  [anchored.pcd]
+Intermediate stages are written to out_dir and a re-run resumes from the
+FURTHEST one present, deleting a file being how you force it (and everything
+after it) to recompute:
+
+  merged.pcd -> [static.pcd] -> denoised.pcd -> colored.pcd -> [labels.npz]
+                                       [map_synth.pcd] [flattened.pcd] [anchored.pcd]
+
+Resuming from colored.pcd skips merge, dynamic, denoise AND colorize in one
+step, which is the case that matters: colorize reads every image in the bag and
+projects the whole map per frame, so re-running it merely to reach detect costs
+more than detect itself. Point colorize.output at a cloud you already have if
+it is not named colored.pcd.
 
 DYNAMIC-OBJECT REMOVAL (moving people / vehicles), stage [1b], optional.
 Two complementary tests, combined per voxel of a global decision grid:
@@ -1752,6 +1761,20 @@ def save(P, pcd, name):
     return path
 
 
+def run_colorize(P, S, s, pcd, name):
+    """Colorize and persist, or pass through when it is disabled.
+
+    Every resume branch has to end up at the same place -- a cloud that either
+    is colorized or was never going to be -- so the call lives in one function
+    rather than being repeated per branch, where one of them would eventually
+    be missed."""
+    if not s["colorize"]["enable"]:
+        return pcd
+    pcd = colorize(P, S, s, pcd)
+    save(P, pcd, name)
+    return pcd
+
+
 def main():
     cfg_path = sys.argv[1] if len(sys.argv) > 1 else "pipeline_config.json"
     P = load_pipeline(cfg_path)
@@ -1772,10 +1795,30 @@ def main():
     dyn = None
     carver = None
 
-    if s["denoise"]["enable"] and os.path.exists(denoised_p):
+    colored_name = s["colorize"].get("output", "colored.pcd")
+    colored_p = P.outp(colored_name)
+
+    if s["colorize"]["enable"] and os.path.exists(colored_p):
+        # colored.pcd sits downstream of merge, dynamic AND denoise, so finding
+        # it means none of those need to run either. Colorize is the most
+        # expensive stage in this file to repeat -- it reads every image in the
+        # bag and projects the whole map per frame -- and re-running it to get
+        # at detect was pure waste.
+        print(f"[resume] loading existing {colored_name} -- skips merge, "
+              f"dynamic, denoise AND colorize")
+        print(f"          (delete it to re-colorize; any change to the "
+              f"colorize/merge settings needs that)")
+        pcd = o3d.io.read_point_cloud(colored_p)
+        print(f"    {len(pcd.points)} pts")
+        if not pcd.has_colors():
+            print("    ! no colours in this cloud. detect still works, but the "
+                  "semantic/layer clouds come out uncoloured -- if that is "
+                  "unexpected, delete it and let colorize run.")
+    elif s["denoise"]["enable"] and os.path.exists(denoised_p):
         print("[resume] loading existing denoised.pcd (delete to redo denoise/merge)")
         pcd = o3d.io.read_point_cloud(denoised_p)
         print(f"    {len(pcd.points)} pts")
+        pcd = run_colorize(P, S, s, pcd, colored_name)
     elif rd_on and os.path.exists(static_p):
         print("[resume] loading existing static.pcd (delete to redo dynamic/merge)")
         pcd = o3d.io.read_point_cloud(static_p)
@@ -1783,6 +1826,7 @@ def main():
         if s["denoise"]["enable"]:
             pcd = denoise(s, pcd)
             save(P, pcd, "denoised.pcd")
+        pcd = run_colorize(P, S, s, pcd, colored_name)
     else:
         if os.path.exists(merged_p):
             print("[resume] loading existing merged.pcd (delete to rebuild)")
@@ -1803,8 +1847,7 @@ def main():
             pcd = denoise(s, pcd)
             save(P, pcd, "denoised.pcd")
 
-    if s["colorize"]["enable"]:
-        pcd = colorize(P, S, s, pcd); save(P, pcd, "colored.pcd")
+        pcd = run_colorize(P, S, s, pcd, colored_name)
 
     # ---- semantic side branch: never touches `pcd`, writes its own files ----
     synth = None
