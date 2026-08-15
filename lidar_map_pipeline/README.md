@@ -24,6 +24,7 @@ turning this on cannot change the map an existing downstream stage reads.
 | `test_resume.py` | proves the expensive stages are skipped on a resume |
 | `pipeline_config.example.json` | every key stage 01 reads, with working defaults |
 | `check_config.py` | validates a config before you spend an hour on a bag |
+| `pcd_to_ply.py` | backfills `.ply` twins for outputs from earlier runs |
 | `diagnose_structure.py` | answers "why are there no walls?" in minutes, without re-running detect |
 | `pipeline_common.py` | unchanged, included so the folder runs standalone |
 
@@ -96,6 +97,22 @@ its class, world centroid, extent in metres, point count and view count.
 
 `scene.json` carries poses, so stage 03 can instantiate real **meshes** instead
 of the point samples baked into `map_synth.pcd`.
+
+### PLY twins
+
+Every `.pcd` the stage writes gets a `.ply` twin (`01_build_map.ply`, default
+true) — same in-memory cloud, two files, so CloudCompare/MeshLab/Blender and
+web viewers open the outputs without a converter. All writes go through one
+function, so the policy cannot miss a call site. Disk roughly doubles per
+cloud; set `"ply": false` to keep `.pcd` only. For outputs produced before
+this existed:
+
+```bash
+python3 pcd_to_ply.py map_stages_20260722_v2_outputs/
+```
+
+Recursive, skips twins already up to date, survives a corrupt file, converts
+one cloud at a time so RAM stays at the largest single file.
 
 ## How [6] works
 

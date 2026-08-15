@@ -36,6 +36,7 @@
   },
   "01_build_map": {
     "gpu": true,
+    "ply": true,
     "output": "map_final_20260730.pcd",
     "image_width": 640,
     "image_height": 360,

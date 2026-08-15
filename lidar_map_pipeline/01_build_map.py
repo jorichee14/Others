@@ -1241,7 +1241,7 @@ def save_subset(path, pts, cols, idx):
     pc.points = o3d.utility.Vector3dVector(pts[idx])
     if cols is not None:
         pc.colors = o3d.utility.Vector3dVector(cols[idx])
-    o3d.io.write_point_cloud(path, pc)
+    write_cloud(path, pc)
     return len(idx)
 
 
@@ -1833,10 +1833,24 @@ def flatten(s, pcd):
     return out
 
 
+# Every cloud this stage writes goes through ONE function, so "also write a
+# .ply" is a policy, not something each call site remembers. PLY is the format
+# most external tools (CloudCompare, MeshLab, Blender, web viewers) ingest
+# without a plugin, which is why the twin exists at all.
+_PLY = {"on": True}
+
+
+def write_cloud(path, pcd):
+    o3d.io.write_point_cloud(path, pcd)
+    if _PLY["on"] and path.lower().endswith(".pcd"):
+        o3d.io.write_point_cloud(path[:-4] + ".ply", pcd)
+
+
 def save(P, pcd, name):
     path = P.outp(name)
-    o3d.io.write_point_cloud(path, pcd)
-    print(f"    saved {path}  ({len(pcd.points)} pts)")
+    write_cloud(path, pcd)
+    print(f"    saved {path}{' (+ .ply)' if _PLY['on'] else ''}"
+          f"  ({len(pcd.points)} pts)")
     return path
 
 
@@ -1860,6 +1874,7 @@ def main():
     S = P.sensor
     s = P.stage("01_build_map")
     init_gpu(s.get("gpu", True))
+    _PLY["on"] = bool(s.get("ply", True))
     P.traj = load_traj_cached(P)
     print(f"loaded {len(P.traj[0])} GLIM poses; outputs -> {P.out_dir}/")
 
@@ -1959,8 +1974,9 @@ def main():
             save(P, synth, s["synthesize"].get("output", "map_synth.pcd"))
 
     final = P.outp(s["output"])
-    o3d.io.write_point_cloud(final, pcd)
-    print(f"DONE -> {final}  ({len(pcd.points)} points)")
+    write_cloud(final, pcd)
+    print(f"DONE -> {final}{' (+ .ply)' if _PLY['on'] else ''}"
+          f"  ({len(pcd.points)} points)")
 
 
 def load_traj_cached(P):
