@@ -152,10 +152,9 @@ share — under 7% of a 1.1 m TV — so a size floor set where it *feels* safe
 never looks at the thing it exists to remove. The dominance ratio is what makes
 it safe.
 
-Structure classification is therefore **optional enrichment**: it gives you
-`layers/floor.pcd`, inventory areas, and the `on_wall` rules for stage `[7]`.
-Turn it off with `detect.structure.enable: false` and objects are unaffected —
-`background.pcd` still holds everything no object claimed.
+Structure classification does not run in stage `[6]` at all — it lives inside
+synthesize `[7]`, configured under `synthesize.structure`, and only when that
+stage is enabled.
 
 
 ## How [7] works
