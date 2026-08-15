@@ -293,13 +293,26 @@ python3 diagnose_structure.py pipeline_config.json --planes 150
 - **no wall at any rank** → the surface is not in the data. On a reflective
   site that is the expected outcome and no setting recovers it.
 
-A wall needs **area as well as height**: `min_wall_area` (2 m² default) is what
+Two thresholds keep the classification honest on a big map, and both were
+found by running one:
+
+**A wall needs area as well as height**: `min_wall_area` (2 m² default) is what
 separates architecture from a chair back or a cabinet side, which are equally
 vertical and equally tall. Without it a 0.5 m² furniture face is classified as
 a wall, `wall_contact()` starts matching objects against furniture, and the
 diagnostic itself would report "plane budget" for a building whose walls are
 entirely missing — the one wrong answer that sends you tuning a setting that
 cannot help.
+
+**The ground reference must come from a substantial plane.** Floor, ceiling and
+support are all classified relative to the lowest horizontal plane, so a single
+scrap — a plate under a desk, a ledge one step down — used to redefine the
+ground and push the real floor out of the floor band. Raising `max_planes` from
+25 to 120 on a 50 m building did exactly that: the floor went from 43.9 M points
+to 79 k and the rest was relabelled `support`, while the structure summary still
+read plausibly. `min_floor_area` (5 m² default) now decides which planes may
+define the ground, and a floor covering under 5% of the mapped footprint is
+reported as a warning.
 
 **Zero walls is the one to watch.** It disables `wall_contact()` and
 `trim_wall_skirt()` together, so nothing can be judged "on a wall" and the only

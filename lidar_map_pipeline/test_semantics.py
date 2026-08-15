@@ -271,6 +271,31 @@ def main():
     if struct.floors:
         check("floor is at z=0", abs(struct.floors[0]["z"]) < 0.02,
               f"z={struct.floors[0]['z']:.4f}")
+    # A scrap plane below floor level must not redefine the ground. This is the
+    # 50 m-building failure: raising max_planes surfaced a small low plane, the
+    # raw z-minimum moved down, and the real floor fell out of the floor band
+    # and was relabelled `support` -- 43.9 M points down to 79 k.
+    scrap = np.column_stack([
+        np.random.default_rng(4).uniform(1.0, 1.5, 800),
+        np.random.default_rng(5).uniform(1.0, 1.5, 800),
+        np.full(800, -0.40)])
+    withscrap = np.vstack([pts, scrap])
+    m2 = models + [np.array([0.0, 0.0, 1.0, 0.40])]
+    s2 = pdet.Structure(pdet.assign_planes(withscrap, m2, dist=0.03,
+                                           min_points=400),
+                        withscrap, tol_deg=15.0, min_wall_height=0.8,
+                        min_wall_area=2.0, min_floor_area=5.0)
+    fa = sum(p.get("area", 0.0) for p in s2.floors)
+    check("a low scrap plane does not steal the floor reference",
+          len(s2.floors) >= 1 and fa > 0.5 * ROOM[0] * ROOM[1],
+          f"{len(s2.floors)} floor plane(s), {fa:.0f} m2 of "
+          f"{ROOM[0] * ROOM[1]:.0f}")
+    check("the scrap itself is not the floor",
+          all(abs(p["z"] + 0.40) > 0.1 for p in s2.floors),
+          f"floor z = {[round(p['z'], 2) for p in s2.floors]}")
+    check("ceiling survives the scrap too", len(s2.ceilings) == 1,
+          f"{len(s2.ceilings)}")
+
     # a chair back is vertical and 0.9 m tall; only area separates it from a wall
     panel = np.column_stack([np.zeros(4000),
                              np.random.default_rng(1).uniform(-0.3, 0.3, 4000),

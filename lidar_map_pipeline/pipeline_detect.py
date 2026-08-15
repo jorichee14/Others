@@ -464,7 +464,8 @@ class Structure:
     """Classified planes plus the queries stage [7] asks of them."""
 
     def __init__(self, planes, pts, tol_deg=15.0, min_wall_height=0.8,
-                 min_wall_area=2.0, support_range=(0.35, 1.30)):
+                 min_wall_area=2.0, min_floor_area=5.0,
+                 support_range=(0.35, 1.30)):
         up = np.array([0.0, 0.0, 1.0])
         ct = np.cos(np.deg2rad(tol_deg))
         st = np.sin(np.deg2rad(tol_deg))
@@ -494,21 +495,40 @@ class Structure:
 
         hor = [p for p in self.planes if p["kind"] == "horizontal"]
         if hor:
-            zmin = min(p["z"] for p in hor)
-            zmax = max(p["z"] for p in hor)
+            for p in hor:
+                p["area"] = plane_area(pts[p["idx"]], p["model"])
+            # The ground reference must come from a SUBSTANTIAL plane, never
+            # from the lowest one. Every height test below is relative to it,
+            # so a single scrap -- a plate under a desk, a low ledge, a stray
+            # plane a step below floor level -- would otherwise redefine the
+            # ground and push the real floor out of the floor band entirely.
+            #
+            # This is not hypothetical: on a 50 m building, raising max_planes
+            # from 25 to 120 introduced exactly such a scrap, and the floor
+            # went from 43.9 M points to 79 k while the rest of it was
+            # relabelled `support`. The symptom was a plausible-looking
+            # structure summary with a floor two orders of magnitude too small.
+            big = [p for p in hor if p["area"] >= float(min_floor_area)]
+            ref = big or hor
+            zmin = min(p["z"] for p in ref)
+            zmax = max(p["z"] for p in ref)
             for p in hor:
                 # floor and ceiling are the extremes; a horizontal plane in
                 # between at sitting/standing height is furniture -- a table or
                 # shelf top, which is exactly where a vase or laptop belongs
-                if p["z"] - zmin < 0.25:
+                substantial = p["area"] >= float(min_floor_area)
+                if abs(p["z"] - zmin) < 0.25 and substantial:
                     p["kind"] = "floor"
-                elif zmax - p["z"] < 0.25 and zmax - zmin > 1.5:
+                elif (abs(p["z"] - zmax) < 0.25 and zmax - zmin > 1.5
+                        and substantial):
                     p["kind"] = "ceiling"
                 elif support_range[0] <= p["z"] - zmin <= support_range[1]:
                     p["kind"] = "support"
                 else:
                     p["kind"] = "other"
 
+        lo2, hi2 = pts[:, :2].min(0), pts[:, :2].max(0)
+        self._xy_span = float((hi2[0] - lo2[0]) * (hi2[1] - lo2[1]))
         self.floors = [p for p in self.planes if p["kind"] == "floor"]
         self.walls = [p for p in self.planes if p["kind"] == "wall"]
         self.supports = [p for p in self.planes if p["kind"] == "support"]
@@ -535,6 +555,16 @@ class Structure:
                 "and the one guard that removes wall bleed from an object's "
                 "points is not running. Expect objects to carry a skirt of the "
                 "surface behind them.")
+        if self.floors and self.walls:
+            fa = sum(p.get("area", 0.0) for p in self.floors)
+            span = self._xy_span
+            if span > 0 and fa < 0.05 * span:
+                w.append(
+                    f"floor area {fa:.0f} m2 is under 5% of the mapped "
+                    f"footprint ({span:.0f} m2). The floor is almost certainly "
+                    f"being split or misclassified -- check structure.dist and "
+                    f"min_floor_area, and compare layers/floor.pcd against the "
+                    f"map.")
         if not self.floors:
             w.append(
                 "NO FLOOR classified. support_under() falls back to each "
