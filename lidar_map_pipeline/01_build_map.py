@@ -112,6 +112,15 @@ are, not when they run.
   makes "the TV is ON A WALL" computable, and it gives removal a surface to
   patch afterwards.
 
+  Detect writes THREE things, and the third is the one a run is read for:
+  labels.npz (per-point class / confidence / views / structure / instance),
+  instances.json (what was found and WHERE -- centroid, extent, bbox, base
+  height, view count), and semantic.pcd, the map coloured by class with
+  structure muted underneath it. Arrays cannot be reviewed; the only way to
+  know whether "chair" landed on the chair or on the wall behind it is to open
+  the map with the labels painted on, so that file is not an extra, it is how
+  the stage is checked.
+
   [7] SYNTHESIZE writes map_synth.pcd: the colorized map with a rules table
   applied per instance.
     remove   delete the points AND re-sample the plane behind them. The LiDAR
@@ -135,6 +144,8 @@ are, not when they run.
       "max_range": 8.0,            # ignore map points beyond this from a camera
       "classes": null,             # or ["chair", "tv", ...] to restrict
       "gpu_reserve_gib": 2.0,      # VRAM held back for the torch model
+      "save_semantic": true,       # write semantic.pcd, coloured by class
+      "semantic_output": "semantic.pcd",
       "vote": {"min_frames": 3, "min_ratio": 0.5, "mask_erode_px": 3,
                "depth_span": 0.6, "min_det_points": 25, "link_frac": 0.30},
       "cluster": {"eps": 0.12, "min_points": 60, "min_frames_seen": 2},
@@ -1287,13 +1298,8 @@ def detect(P, S, s, pcd):
         eps=float(cl.get("eps", 0.12)),
         min_frames_seen=int(cl.get("min_frames_seen", 2)),
         hits=tracker.hits)
-    labelled = int((cls >= 0).sum())
-    print(f"    voted {labelled}/{N} pts ({100 * labelled / max(N, 1):.1f}%) "
-          f"-> {len(instances)} instances after clustering")
-    for ins in instances:
-        print(f"      #{ins['instance']:<3d} {detector.names.get(ins['cls_id'], '?'):<14}"
-              f" {ins['idx'].size:7d} pts  conf {ins['conf']:.2f}"
-              f"  seen in {ins['n_frames']} detections")
+    print(f"    voted {int((cls >= 0).sum())}/{N} pts -> {len(instances)} "
+          f"instances after clustering")
 
     st = d.get("structure", {})
     struct = None
@@ -1340,7 +1346,42 @@ def detect(P, S, s, pcd):
                         frames=frames, structure=struct_lab,
                         inst=pdet.instance_array(N, instances),
                         n_points=np.int64(N))
-    pdet.dump_instances(P.outp("instances.json"), instances, detector.names, N)
+    geom = pdet.instance_geometry(pts_np, instances)
+    pdet.dump_instances(P.outp("instances.json"), instances, detector.names, N,
+                        extra=geom)
+
+    # what was identified, and where -- the summary a run is actually read for
+    print(f"    identified {len(instances)} objects "
+          f"({int((cls >= 0).sum())} of {N} points):")
+    by_cls = {}
+    for ins in instances:
+        by_cls.setdefault(ins["cls_id"], []).append(ins)
+    for cid in sorted(by_cls, key=lambda c: -sum(i["idx"].size
+                                                 for i in by_cls[c])):
+        group = by_cls[cid]
+        nm = detector.names.get(cid, str(cid))
+        print(f"      {nm:<14} x{len(group):<3d} "
+              f"{pdet.hexc(pdet.class_color(cid))}  "
+              f"{sum(i['idx'].size for i in group):7d} pts")
+        for ins in sorted(group, key=lambda i: -i["idx"].size):
+            g = geom[ins["instance"]]
+            print(f"        #{ins['instance']:<3d} at "
+                  f"[{g['centroid'][0]:7.2f},{g['centroid'][1]:7.2f},"
+                  f"{g['centroid'][2]:6.2f}]  "
+                  f"{g['extent'][0]:.2f}x{g['extent'][1]:.2f}x"
+                  f"{g['extent'][2]:.2f} m  {ins['idx'].size:6d} pts  "
+                  f"conf {ins['conf']:.2f}  {ins['n_frames']} views")
+
+    if d.get("save_semantic", True):
+        col, legend = pdet.semantic_colors(cls, struct_lab, detector.names)
+        sem = o3d.geometry.PointCloud()
+        sem.points = o3d.utility.Vector3dVector(pts_np)
+        sem.colors = o3d.utility.Vector3dVector(col)
+        save(P, sem, d.get("semantic_output", "semantic.pcd"))
+        print("    legend: " + "  ".join(f"{pdet.hexc(c)} {n}"
+                                         for n, c, _ in legend))
+        del sem
+
     print(f"    saved {P.outp('labels.npz')} and {P.outp('instances.json')}")
     return cls, conf, instances, struct, detector.names
 

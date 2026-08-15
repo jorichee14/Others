@@ -376,6 +376,52 @@ def main():
         kept = (~remove)[ch_ins["idx"]].all()
         check("measured chair points are kept alongside the asset", bool(kept))
 
+    # ---- inspection outputs ----------------------------------------------- #
+    print("\n[6b] inspection")
+    cls = pdet.reconcile(cls, instances)
+    struct_lab = struct.labels(N)
+    col, legend = pdet.semantic_colors(cls, struct_lab, names)
+    check("class colours are deterministic",
+          pdet.class_color(56) == pdet.class_color(56)
+          and pdet.class_color(56) != pdet.class_color(62))
+    for key, cid in CLS.items():
+        ins = next(i for i in instances if i["cls_id"] == cid)
+        want = np.asarray(pdet.class_color(cid))
+        check(f"{key} points carry the {key} colour",
+              bool(np.allclose(col[ins["idx"]], want)),
+              pdet.hexc(want))
+    fl = struct.floors[0]["idx"]
+    fl = fl[cls[fl] < 0]
+    check("floor points carry the floor tint",
+          bool(np.allclose(col[fl], np.asarray(pdet._STRUCT_RGB[1]))))
+    check("legend covers structure and objects", len(legend) >= 5,
+          f"{len(legend)} entries")
+
+    geom = pdet.instance_geometry(pts, instances)
+    gtv, gch = geom[next(i for i in instances if i["cls_id"] == 62)["instance"]], \
+        geom[next(i for i in instances if i["cls_id"] == 56)["instance"]]
+    check("TV centroid is on the wall it is mounted to",
+          abs(gtv["centroid"][1] - TV_THICK) < 0.02
+          and abs(gtv["centroid"][2] - TV_C[2]) < 0.05,
+          f"centroid {gtv['centroid']}")
+    check("TV extent matches its real size",
+          abs(gtv["extent"][0] - TV_WH[0]) < 0.05
+          and abs(gtv["extent"][2] - TV_WH[1]) < 0.05,
+          f"extent {gtv['extent']}")
+    check("chair centroid is over the measured chair",
+          float(np.linalg.norm(np.array(gch["centroid"][:2]) - CHAIR_XY)) < 0.25,
+          f"centroid {gch['centroid']}")
+    check("chair base sits on the floor", abs(gch["base_z"]) < 0.05,
+          f"base_z {gch['base_z']}")
+
+    if "--render" in sys.argv:
+        import open3d as o3d
+        pc = o3d.geometry.PointCloud()
+        pc.points = o3d.utility.Vector3dVector(pts)
+        pc.colors = o3d.utility.Vector3dVector(col)
+        o3d.io.write_point_cloud("semantic_room.pcd", pc)
+        print("     wrote semantic_room.pcd")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) FAILED: {', '.join(FAILED)}")

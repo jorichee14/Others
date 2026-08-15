@@ -25,17 +25,31 @@ turning this on cannot change the map an existing downstream stage reads.
 
 ## Outputs
 
+**From [6] detect** — the map, and what is in it:
+
 | file | contents |
 |---|---|
+| `semantic.pcd` | **the map coloured by class**, structure muted underneath |
+| `instances.json` | per object: class, confidence, **centroid, extent, bbox, base height**, point count, views |
 | `labels.npz` | per-point `cls`, `conf`, `frames`, `structure`, `inst`, `n_points` |
-| `instances.json` | one record per object: class, confidence, point count, views |
 | `structure.json` | plane models + kinds, so a resume skips RANSAC |
+
+`semantic.pcd` is not an extra. Arrays cannot be reviewed — the only way to
+know whether "chair" landed on the chair or on the wall behind it is to open
+the map with the labels painted on. Class colours are deterministic (golden-
+ratio hue stepping), so two runs are directly comparable and adjacent COCO ids
+never collide. The console prints the same thing as a table: every object with
+its class, world centroid, extent in metres, point count and view count.
+
+**From [7] synthesize** — optional, off unless enabled:
+
+| file | contents |
+|---|---|
 | `map_synth.pcd` | the modified cloud |
 | `scene.json` | per-instance action, asset, 4×4 pose, scale, fit quality |
 
-`scene.json` is the one downstream stages want: it carries poses, so stage 03
-can instantiate real **meshes** instead of the point samples baked into
-`map_synth.pcd`.
+`scene.json` carries poses, so stage 03 can instantiate real **meshes** instead
+of the point samples baked into `map_synth.pcd`.
 
 ## How [6] works
 

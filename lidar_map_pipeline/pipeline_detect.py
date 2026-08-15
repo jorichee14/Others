@@ -570,6 +570,71 @@ class Structure:
         return best
 
 
+# =============================================================================
+# INSPECTION
+# =============================================================================
+# Stage [6] produces arrays. Arrays are not reviewable: the only way to know
+# whether "chair" landed on the chair or on the wall behind it is to look at
+# the map with the labels painted on. semantic.pcd exists so that check takes
+# one drag into a viewer rather than a bespoke script every time.
+_STRUCT_RGB = {1: (0.42, 0.36, 0.30),      # floor   -- warm, dark
+               2: (0.62, 0.66, 0.72),      # wall    -- cool, light
+               3: (0.80, 0.82, 0.85),      # ceiling -- near white
+               4: (0.60, 0.50, 0.34)}      # support -- tan
+_UNLABELLED = (0.24, 0.25, 0.27)
+def class_color(cid):
+    """Deterministic, well-separated colour for a class id.
+    Golden-ratio hue stepping: consecutive class ids land far apart on the
+    wheel, so the two classes most likely to be confused (adjacent COCO ids
+    like chair/couch) never come out the same colour. Deterministic matters as
+    much as distinct -- a class that changes colour between runs makes two
+    screenshots impossible to compare."""
+    h = (int(cid) * 0.6180339887498949 + 0.11) % 1.0
+    s, v = 0.72, 0.98
+    i = int(h * 6.0)
+    f = h * 6.0 - i
+    p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
+    return [(v, t, p), (q, v, p), (p, v, t),
+            (p, q, v), (t, p, v), (v, p, q)][i % 6]
+def semantic_colors(cls, struct_lab, names):
+    """Colour every point by what stage [6] decided it is.
+    Structure is deliberately muted and objects saturated: the question this
+    cloud answers is "did the objects land in the right places", and a
+    full-brightness wall competes with the answer. Returns (colours, legend).
+    """
+    col = np.tile(np.asarray(_UNLABELLED, np.float64), (len(cls), 1))
+    legend = []
+    for code, rgb in _STRUCT_RGB.items():
+        m = struct_lab == code
+        if m.any():
+            col[m] = rgb
+            legend.append((["", "floor", "wall", "ceiling", "support"][code],
+                           rgb, int(m.sum())))
+    # objects last: an object standing on a plane wins the pixel over the plane
+    for cid in np.unique(cls[cls >= 0]):
+        m = cls == cid
+        rgb = class_color(int(cid))
+        col[m] = rgb
+        legend.append((coco_or_id(names, int(cid)), rgb, int(m.sum())))
+    return col, legend
+def hexc(rgb):
+    return "#%02x%02x%02x" % tuple(int(round(255 * c)) for c in rgb)
+def instance_geometry(pts, instances):
+    """Where each object IS: centroid, footprint, extent, axis-aligned bbox.
+    Without this, instances.json says an object exists but not where, which
+    makes it unusable for anything except counting -- and unreviewable against
+    a floor plan."""
+    out = {}
+    for ins in instances:
+        p = pts[ins["idx"]]
+        lo, hi = p.min(0), p.max(0)
+        out[ins["instance"]] = {
+            "centroid": [round(float(v), 4) for v in p.mean(0)],
+            "extent": [round(float(v), 4) for v in (hi - lo)],
+            "bbox_min": [round(float(v), 4) for v in lo],
+            "bbox_max": [round(float(v), 4) for v in hi],
+            "base_z": round(float(np.percentile(p[:, 2], 2.0)), 4)}
+    return out
 def coco_or_id(names, cid):
     return names.get(cid, str(cid)) if isinstance(names, dict) else str(cid)
 
