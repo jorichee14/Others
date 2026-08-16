@@ -99,9 +99,14 @@ twin, not about the twin's sophistication. Tracked-blobs-on-a-map is sufficient.
 - **Result:** _pending_
 
 ### Step 3.2 — Decision D-CSI: channel-state extractability  `⬜ TODO`
-- One afternoon: can usable CSI/RSSI streams be captured from the Wi-Fi NICs and/or
-  5G UE? Yes/no with evidence. NO ⇒ extension C6 dropped; nothing else changes.
-- **Done when:** verdict recorded. **Gates only C6.**
+- **Now load-bearing** (method core per [`METHOD.md`](METHOD.md) — Twin-Coherence
+  Gating): can per-packet CSI be captured from the Wi-Fi NICs and/or reference-signal
+  reports from the 5G UE? One afternoon, yes/no with evidence. Do this EARLY (can run
+  during M1). NO ⇒ fall back to radar-Doppler coherence (same loop); record the pivot.
+- Includes the **empty-room CSI pilot**: record CSI while one AMR drives a known path
+  in an otherwise empty room — if odometry does not explain the channel variation, the
+  coherence mechanism dies cheaply here.
+- **Done when:** verdict + pilot result recorded. **Gates the TCG gate layer.**
 - **Result:** _pending_
 
 ## Milestone 4 — Core experiment (~4–5 weeks) → C2, C3
