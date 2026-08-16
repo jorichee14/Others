@@ -1,11 +1,16 @@
 # Implementation Tracker — Dynamic Digital Twin
 
-**Goal:** measure the AoI → twin-error mapping for a dynamic digital twin over a real
-dual-RAT network (Wi-Fi + 5G), then build divergence-triggered synchronization that
-beats AoI-optimal scheduling on twin-error-per-bit.
+**Goal:** build a dynamic digital twin of the lab space on the existing testbed
+(2 AMRs + infrastructure nodes, ROS 2, Wi-Fi + 5G, edge processing), then measure the
+freshness → twin-error relationship over the real network and build
+divergence-triggered synchronization that beats AoI-based scheduling on
+twin-error-per-bit.
 
 **Read [`INTRODUCTION.md`](INTRODUCTION.md) first** — thesis, gaps G1–G3, contributions
 C1–C6, RQ1–RQ5, positioning, references. Working rules in [`CLAUDE.md`](CLAUDE.md).
+
+**Starting point (2026-08-16): no twin exists yet.** The plan therefore builds the
+instrument first (M1–M2), measures second (M3–M4), contributes third (M5).
 
 ---
 
@@ -18,113 +23,132 @@ row to the progress log. Never mark ✅ without verifying the **Done when** crit
 
 ---
 
-## Phase 0 — Testbed characterization and gates (RQ1 → C1)
+## Milestone 1 — Foundation (testbed research-ready, ~2–3 weeks)
 
-*No science yet — instrumentation and honest error bars. Everything downstream inherits
-these bounds.*
-
-### Step 0.1 — Clock synchronization across all nodes  `⬜ TODO`
-- Establish a common timebase across AMR 1, AMR 2, infrastructure nodes, and the edge
-  server. Preferred: PTP (`ptp4l`/`phc2sys`, or `chrony` with hardware timestamping)
-  with the edge as grandmaster; wired for infrastructure nodes, wireless for AMRs.
-- Quantify residual offset per node (e.g., wired-reference round-trip, or a shared
-  physical event visible to two sensors). Re-measure while an AMR roams between APs.
-- **Done when:** per-node clock-error bound is measured and documented (target ≤ 1 ms
-  wired, ≤ 5 ms wireless; if worse, every downstream age carries the measured bound).
+### Step 1.1 — End-to-end connectivity  `⬜ TODO`
+- Every sensing node (AMR 1, AMR 2, infrastructure) streams into the edge ROS 2
+  environment over Wi-Fi and over 5G. Verify per-topic which network carries what.
+- **Done when:** all sensor topics visible at the edge; per-topic RAT verified by
+  interface counters, switchable between Wi-Fi and 5G.
 - **Result:** _pending_
 
-### Step 0.2 — Per-topic RAT steering  `⬜ TODO`
-- Make traffic routable per stream: pin a given ROS 2 topic to Wi-Fi 2.4, Wi-Fi 5, or
-  5G (Linux policy routing / interface binding in the DDS config / separate DDS
-  domains per interface). Verify with interface byte counters, not assumptions.
-- **Done when:** a chosen topic demonstrably traverses a chosen RAT, switchable
-  without rebooting the robot.
+### Step 1.2 — Common timebase  `⬜ TODO`
+- Synchronize clocks across all nodes and the edge (PTP or equivalent). Measure the
+  residual per-node offset; that bound accompanies every age/latency number reported
+  later. No age measurement is valid before this step is done.
+- **Done when:** per-node clock-error bound measured and documented (target ≤ 1 ms
+  wired, ≤ 5 ms wireless).
 - **Result:** _pending_
 
-### Step 0.3 — Age instrumentation of the pipeline  `⬜ TODO`
-- Stamp every message at three points: `t_sensor` (driver), `t_pub` (publish),
-  `t_recv` (edge). Log `(topic, size_bytes, t_sensor, t_pub, t_recv, seq)` per message
-  via a lightweight edge logger node; compute delivery age and loss (seq gaps) offline.
-- Record raw streams with rosbag2 in the same runs (working rule 6).
-- **Done when:** age/loss records stream to disk for all sensor topics on all nodes;
-  a one-hour smoke capture parses cleanly.
+### Step 1.3 — Static map  `⬜ TODO`
+- Produce the map of the space with the existing SLAM stack. This is the twin's
+  static layer; it changes rarely.
+- **Done when:** map generated, stored, loadable by downstream nodes.
 - **Result:** _pending_
 
-### Step 0.4 — Measurement campaign  `⬜ TODO`
-- Grid: payload {detections/boxes, point cloud, RGB-D image} × RAT {Wi-Fi 2.4, Wi-Fi
-  5, 5G} × mobility {static AMR, moving AMR} × network load {idle, loaded}. Multiple
-  runs per cell; report age distributions (median, p95, p99), loss, and burst
-  structure per cell. External comparison anchors: CoInfra [24], the 5G-vs-Wi-Fi robot
+### Step 1.4 — Decision D-GT: ground truth for dynamic-entity pose  `⬜ TODO`
+- Choose how true positions of robots/objects/people will be known (mocap, tags +
+  infrastructure cameras, surveyed props + odometry). Quantify the method's own
+  accuracy — it caps the resolution of every result. **Gates Milestone 4.**
+- **Done when:** method chosen, its error measured (target ≤ 5–10 cm), documented.
+- **Result:** _pending_
+
+## Milestone 2 — Twin v0, the instrument (~3–4 weeks)
+
+*Keep it as simple as possible: the research is about what the network does to the
+twin, not about the twin's sophistication. Tracked-blobs-on-a-map is sufficient.*
+
+### Step 2.1 — Detections at every node  `⬜ TODO`
+- Each sensing node emits "object of type T at position P at time t" instead of (in
+  addition to) raw streams — pick per-sensor detectors, off the shelf where possible.
+- **Done when:** detection topics from all nodes, in a common world frame, with
+  source timestamps.
+- **Result:** _pending_
+
+### Step 2.2 — State keeper at the edge  `⬜ TODO`
+- The heart of the twin: subscribe to all detection streams, associate detections to
+  entities, maintain per-entity state (id, class, position, velocity, covariance,
+  timestamp), support querying the state at an arbitrary time via constant-velocity
+  extrapolation. No learning.
+- **Done when:** twin runs live from ≥ 3 sources; state queryable at arbitrary *t*;
+  all states logged for offline scoring.
+- **Result:** _pending_
+
+### Step 2.3 — Live visualization  `⬜ TODO`
+- Map + live entity markers (RViz is enough). This is the working-demo milestone.
+- **Done when:** the room's motion is watchable in the twin in real time.
+- **Result:** _pending_
+
+### Step 2.4 — Age plumbed through  `⬜ TODO`
+- Every twin entity knows how old its supporting evidence is (per-source generation
+  timestamps carried end-to-end; delivery age computable per update).
+- **Done when:** per-entity, per-source age is loggable during live operation.
+- **Result:** _pending_
+
+## Milestone 3 — Characterization (~2–3 weeks, may overlap M2) → C1
+
+### Step 3.1 — Measurement campaign  `⬜ TODO`
+- Run the system as-is and measure: age/loss/rate distributions per network (Wi-Fi
+  2.4/5, 5G), per payload type (detections, point clouds, images), per mobility state
+  (static/moving AMR), per load. Record raw streams (rosbag2) in every run so later
+  analyses replay offline. External anchors: CoInfra [24], 5G-vs-Wi-Fi robot
   measurements [29].
-- **Done when:** per-cell distributions with run counts, plots, and trace paths are
-  committed under `results/phase0/`; the campaign is documented well enough to re-run.
+- **Done when:** per-condition distributions (median/p95/p99 age, loss, burst
+  structure), plots, and trace paths committed under `results/m3/`; campaign
+  re-runnable from its documentation.
 - **Result:** _pending_
 
-### Step 0.5 — Decision D-GT: ground truth for dynamic-entity pose  `⬜ TODO`
-- Options: (a) motion capture if available; (b) ceiling/infrastructure cameras +
-  AprilTags on AMRs and props; (c) surveyed static props + AMR odometry/SLAM as
-  silver-standard. Quantify the chosen method's accuracy — it caps the twin-error
-  metric's resolution.
-- **Done when:** method chosen, its error measured (target ≤ 5–10 cm), procedure
-  documented. **Gates Phase 1.**
+### Step 3.2 — Decision D-CSI: channel-state extractability  `⬜ TODO`
+- One afternoon: can usable CSI/RSSI streams be captured from the Wi-Fi NICs and/or
+  5G UE? Yes/no with evidence. NO ⇒ extension C6 dropped; nothing else changes.
+- **Done when:** verdict recorded. **Gates only C6.**
 - **Result:** _pending_
 
-### Step 0.6 — Decision D-CSI: channel-state extractability  `⬜ TODO`
-- Determine whether usable CSI/RSSI streams can be captured from the Wi-Fi NICs
-  (chipset-dependent: FeitCSI/iwl, Nexmon, or AX2xx tooling) and/or the 5G UE (UE
-  metrics, gNB traces). One afternoon, yes/no with evidence.
-- **Done when:** verdict recorded. NO ⇒ Option C (C6) is dropped, no other step
-  changes. **Gates only C6.**
+## Milestone 4 — Core experiment (~4–5 weeks) → C2, C3
+
+### Step 4.1 — Twin-error metric  `⬜ TODO`
+- Per-entity position error vs D-GT ground truth, decomposed: static vs dynamic
+  entities × strict/loose thresholds (the AP@0.5-vs-AP@0.7 analogue) × miss/ghost
+  rates. State its resolution bound (from Steps 1.2 + 1.4).
+- **Done when:** implemented, validated on a recorded bag, resolution bound stated.
 - **Result:** _pending_
 
-## Phase 1 — Twin v0 and the error metric (RQ2 → C2)
-
-### Step 1.1 — Twin v0 at the edge  `⬜ TODO`
-- Minimal object-level twin: static map from SLAM + per-entity state records
-  (id, class, position, velocity, covariance, `t_state`) maintained from all sources'
-  detections; constant-velocity extrapolation available at query time (query the twin
-  at time *t*, get extrapolated states). No learning.
-- **Done when:** twin runs live on edge from ≥ 3 sources; state queryable at
-  arbitrary *t*; states logged for offline scoring.
+### Step 4.2 — ⚠️ PRE-REGISTER the gate, then run it  `⬜ TODO`
+- **Rule to finalize in this file BEFORE the run** (draft): under natural network
+  latency, **NO-GO for the dynamics-aware thesis** if oracle kinematic correction
+  recovers < 50% of the gap between the stale twin and the fresh-snapshot twin.
+  NO-GO ⇒ the project pivots to the measurement contribution (M3 + Step 4.3) alone.
+- **Done when:** rule committed before the run; verdict written with its numbers.
 - **Result:** _pending_
 
-### Step 1.2 — Twin-error metric  `⬜ TODO`
-- Per-entity position error vs D-GT ground truth at sampled instants, decomposed:
-  static vs dynamic entities × strict/loose distance thresholds (the AP@0.5-vs-AP@0.7
-  analogue from the parent study) × miss/ghost rates.
-- **Done when:** metric implemented, unit-tested on a recorded bag, and its
-  resolution bound (from Steps 0.1 + 0.5) stated.
+### Step 4.3 — The freshness → twin-error mapping  `⬜ TODO`
+- Open loop, replay-first from M3 recordings: twin error across network × payload ×
+  entity class; heterogeneous-age conditions (fresh infrastructure + stale AMR and
+  permutations); four kinematic arms (none / oracle velocity / oracle displacement /
+  tracker velocity — the design pre-registered in `temporal_messaging/HANDOFF.md` §5,
+  now on real data). Test whether AoI or a kinematic divergence predictor better
+  predicts measured twin error.
+- **Done when:** the curves exist with seeds/runs documented — the paper's main
+  evidence.
 - **Result:** _pending_
 
-### Step 1.3 — ⚠️ PRE-REGISTER the Phase 1 gate, then run it  `⬜ TODO`
-- **Rule to fix in this file BEFORE the run** (draft, to finalize with Phase 0 numbers
-  in hand): under natural network latency, compare twin error with extrapolation
-  disabled vs enabled (oracle-velocity arm). **NO-GO for the dynamics-aware thesis**
-  if oracle kinematic correction recovers < 50% of the gap between the stale twin and
-  the fresh-snapshot twin — displacement is then not the dominant error mechanism on
-  real data, and the project pivots to the measurement contribution (C1–C3) alone.
-- **Done when:** rule finalized and committed before the run; verdict written with
-  the numbers that produced it.
+## Milestone 5 — The contribution (~4 weeks) → C4
+
+### Step 5.1 — Divergence-triggered synchronization, closed loop  `⬜ TODO`
+- Entity-level rule: transmit when predicted divergence exceeds a bound. Baselines
+  under identical conditions: send-everything, periodic (several rates), AoI-based.
+  Metric: twin-error-per-bit on the live network. Pre-register the comparison
+  protocol before the first closed-loop run.
+- **Done when:** head-to-head results on the live network, protocol pre-registered.
 - **Result:** _pending_
 
-## Phase 2 — The AoI → twin-error mapping (RQ3 → C3)  `⬜ TODO`
-Open loop, replay-first: recompute twin error offline from recorded campaigns across
-RAT × payload × entity class; heterogeneous-age conditions (fresh infra + stale AMR
-and permutations); four kinematic arms (none / oracle velocity / oracle displacement /
-tracker velocity — the pre-registered design from `temporal_messaging/HANDOFF.md` §5,
-on real data). Output: measured curves AoI vs twin error, and the divergence predictor
-that beats AoI as an error predictor.
+## Milestone 6 — Write and extend (ongoing)
 
-## Phase 3 — Divergence-triggered synchronization, closed loop (RQ4 → C4)  `⬜ TODO`
-Entity-level update rule: transmit when predicted divergence exceeds a bound.
-Baselines: periodic (several rates), AoI-optimal scheduling, send-everything.
-Metric: twin-error-per-bit on the live network. Pre-register the comparison protocol
-before the first closed-loop run.
-
-## Phase 4 — Follow-ons  `⬜ TODO`
-- **C5 (Option B):** couple to a network twin — per-link quality prediction feeding
-  dual-RAT selection per source.
-- **C6 (Option C):** channel-as-sensor change detection. ⛔ auto-dropped if D-CSI = NO.
+- Paper drafting runs alongside from M3 onward (M3 = measurements section; M4 = core
+  evidence; M5 = headline).
+- **C5 (network-twin coupling, dual-RAT selection by the twin)** and **C6
+  (channel-as-sensor updates; ⛔ auto-dropped if D-CSI = NO)** start only after M4/M5
+  succeed.
 
 ---
 
@@ -132,4 +156,5 @@ before the first closed-loop run.
 
 | Date | Step | Notes |
 |------|------|-------|
-| 2026-08-16 | setup | Project skeleton: `INTRODUCTION.md` (thesis, gaps, C1–C6, RQ1–RQ5, positioning, 48 refs), `CLAUDE.md` (working rules), this tracker with Phase 0 steps and the two gating decisions (D-GT, D-CSI). |
+| 2026-08-16 | setup | Project skeleton: `INTRODUCTION.md` (thesis, gaps, C1–C6, RQ1–RQ5, positioning, 48 refs), `CLAUDE.md` (working rules), first tracker version. |
+| 2026-08-16 | replan | Tracker restructured for the true starting point (no twin exists yet): M1 foundation → M2 twin v0 → M3 characterization → M4 core experiment → M5 policy → M6 writing/extensions. Gates D-GT (ground truth, blocks M4) and D-CSI (blocks only C6) carried over; pre-registration points marked at Steps 4.2 and 5.1. |
