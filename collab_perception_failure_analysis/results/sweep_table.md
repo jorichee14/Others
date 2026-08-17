@@ -14,6 +14,22 @@ Clean-channel AP@0.7 (`results/baseline.md`), for reference:
 |---|---|---|---|---|---|---|---|
 | AP@0.7, no impairment | 0.862 | 0.833 | 0.822 | 0.815 | 0.801 | 0.790 | 0.781 |
 
+## Summary — mean AP@0.7 per impairment group
+
+The whole sweep in one row per method. Group means average the per-family means (each family equally weighted, not each cell). "families below floor" counts impairment families where at least one severity drops below the floor, out of those in the matrix for that method.
+
+| method | clean | loss | bandwidth | ghosts | misplacement | loss − misplacement | families below floor | worst family |
+|---|---|---|---|---|---|---|---|---|
+| cobevt | 0.862 | 0.775 | 0.651 | 0.780 | 0.414 | +0.361 | 5/8 | latency (0.294) |
+| coalign | 0.833 | 0.732 | 0.714 | 0.729 | 0.513 | +0.220 | 5/8 | latency (0.431) |
+| v2vnet | 0.822 | 0.721 | 0.749 | 0.790 | 0.394 | +0.327 | 4/8 | latency (0.283) |
+| attfuse | 0.815 | 0.704 | 0.746 | 0.760 | 0.479 | +0.225 | 4/8 | latency (0.395) |
+| early | 0.801 | 0.696 | n/a | 0.663 | 0.318 | +0.378 | 5/7 | latency (0.234) |
+| fcooper | 0.790 | 0.698 | 0.635 | 0.688 | 0.308 | +0.390 | 5/8 | latency (0.220) |
+| late | 0.781 | 0.701 | n/a | 0.713 | 0.367 | +0.335 | 4/7 | latency (0.290) |
+
+The two headline groups separate cleanly and in the same direction for every method: loss spans a narrow band well above the 0.575 floor, misplacement (latency, staleness, pose, swap) sits far below it. Per-severity detail, and the rank shuffle between groups, follow below and in `results/ANALYSIS.md` §2–§4.
+
 ## AP@0.7 (mean ± std over seeds)
 
 | impairment | level | cobevt | coalign | v2vnet | attfuse | early | fcooper | late |

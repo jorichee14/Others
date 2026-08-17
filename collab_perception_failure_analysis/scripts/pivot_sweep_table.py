@@ -98,6 +98,49 @@ def write_block(f, rows, conds, methods, metric, *, with_std=False, mark=False):
         f.write('| %s | L%d (%s) | %s |\n' % (imp, li, lv, ' | '.join(cells)))
 
 
+def summary_block(f, rows, methods, clean):
+    """One row per method: mean AP@0.7 per impairment group, and where it crosses.
+
+    Groups are weighted per *family*, not per cell, and bandwidth/ghosts are held
+    out of the two headline groups rather than folded in -- bandwidth changes
+    character mid-sweep (delivery to 4-bit, content below it) and ghosts is the
+    one content family that never crosses the floor, so averaging either into a
+    headline would blur the effect the grouping exists to show. This is the
+    weighting behind ANALYSIS.md's headline spans, and reproduces them.
+    """
+    groups = [('loss', ['loss_iid', 'loss_burst']),
+              ('bandwidth', ['bandwidth']),
+              ('ghosts', ['ghosts']),
+              ('misplacement', ['latency', 'stale', 'pose', 'swap'])]
+    f.write('| method | clean | ' + ' | '.join(g for g, _ in groups) +
+            ' | loss − misplacement | families below floor | worst family |\n')
+    f.write('|---|---|' + '---|' * (len(groups) + 3) + '\n')
+    for method in methods:
+        fam_mean = {}
+        for imp in IMP_ORDER:
+            vals = [r['ap70'] for (i, _, m), r in rows.items()
+                    if i == imp and m == method]
+            if vals:
+                fam_mean[imp] = sum(vals) / len(vals)
+        cells, gm = [], {}
+        for gname, fams in groups:
+            present = [fam_mean[i] for i in fams if i in fam_mean]
+            if not present:
+                cells.append('n/a')
+                continue
+            gm[gname] = sum(present) / len(present)
+            cells.append('%.3f' % gm[gname])
+        crossed = sum(1 for imp in fam_mean
+                      if any(r['floor_class'] == 'below_floor'
+                             for (i, _, m), r in rows.items()
+                             if i == imp and m == method))
+        worst = min(fam_mean.items(), key=lambda kv: kv[1])
+        f.write('| %s | %s | %s | %+.3f | %d/%d | %s (%.3f) |\n' % (
+            method, '%.3f' % clean[method] if method in clean else '—',
+            ' | '.join(cells), gm['loss'] - gm['misplacement'],
+            crossed, len(fam_mean), worst[0], worst[1]))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--summary', default='results/sweep_summary.md')
@@ -139,6 +182,19 @@ def main():
         f.write('| AP@0.7, no impairment | ' +
                 ' | '.join('%.3f' % clean[m] if m in clean else '—'
                            for m in methods) + ' |\n')
+
+        f.write('\n## Summary — mean AP@0.7 per impairment group\n\n')
+        f.write('The whole sweep in one row per method. Group means average the '
+                'per-family means (each family equally weighted, not each cell). '
+                '"families below floor" counts impairment families where at least one '
+                'severity drops below the floor, out of those in the matrix for that '
+                'method.\n\n')
+        summary_block(f, rows, methods, clean)
+        f.write('\nThe two headline groups separate cleanly and in the same direction '
+                'for every method: loss spans a narrow band well above the %.3f floor, '
+                'misplacement (latency, staleness, pose, swap) sits far below it. '
+                'Per-severity detail, and the rank shuffle between groups, follow '
+                'below and in `results/ANALYSIS.md` §2–§4.\n' % floor_ap)
 
         f.write('\n## AP@0.7 (mean ± std over seeds)\n\n')
         write_block(f, rows, conds, methods, 'ap70', with_std=True, mark=True)
