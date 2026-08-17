@@ -126,10 +126,14 @@ python $R/scripts/run_phase3.py --checkpoint-root ~/cpfa/checkpoints --out ~/cpf
 # subsets: --methods attfuse --impairments latency ghosts --seeds 0 --stride 30 --max-cells 6
 ```
 
-**4. Aggregate** (seconds) — writes `sweep_summary.{csv,md}` with the floor-test column.
+**4. Aggregate** (seconds) — writes `sweep_summary.{csv,md}` with the floor-test column,
+then reshapes it into `sweep_table.md`, the full grid with methods as columns (same
+numbers, comparable at a fixed condition).
 
 ```bash
 python $R/scripts/aggregate_sweeps.py --sweeps ~/cpfa/results/sweeps --out ~/cpfa/results
+python $R/scripts/pivot_sweep_table.py --summary ~/cpfa/results/sweep_summary.md \
+    --out ~/cpfa/results/sweep_table.md
 ```
 
 **5. Spatial decomposition** (~4 h) — **one process per method** (see note below).

@@ -7,7 +7,8 @@ and poisoned fusion)?
 **Data:** 831 cells — 7 methods × 8 impairment families × 5–6 severities × 3 seeds,
 OPV2V test split (stride 3), pretrained checkpoints, evaluation pipeline validated
 against published results to ±0.001 (`results/baseline.md`). Full grid in
-`results/sweep_summary.md`. Reference points: ego-only floor **AP@0.7 = 0.575**
+`results/sweep_summary.md` (per method) and `results/sweep_table.md` (one table, methods
+as columns — AP/P/R and delivered-collaborator blocks). Reference points: ego-only floor **AP@0.7 = 0.575**
 (P 0.825 / R 0.666); clean AP@0.7 per method: cobevt 0.862, coalign 0.833, v2vnet
 0.822, attfuse 0.815, early 0.801, fcooper 0.790, late 0.781.
 

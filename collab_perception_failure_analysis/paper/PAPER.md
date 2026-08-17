@@ -778,6 +778,7 @@ numbers before submission.*
 | Unit tests | `scripts/test_commchannel.py` |
 | Frozen baseline table | `results/baseline.md` |
 | Master sweep summary (277 rows) | `results/sweep_summary.md` |
+| Full grid, methods as columns | `results/sweep_table.md`, `scripts/pivot_sweep_table.py` |
 | Full analysis | `results/ANALYSIS.md` |
 | Experimental history and gates | `IMPLEMENTATION.md` |
 
