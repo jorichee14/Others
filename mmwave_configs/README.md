@@ -24,30 +24,42 @@ file → physical-sensor pairing consistent.
 
 ## Range-bias / RX-phase calibration
 
-`calibration_radar1_60G.cfg` and `calibration_radar2_62G.cfg` measure the
-`compRangeBiasAndRxChanPhase` line for their sensor. Their RF lines
-(`channelCfg` / `profileCfg` / `chirpCfg` / `frameCfg`) are identical to the
-matching operating config, so the measurement is taken **at the band the sensor
-actually runs on** and with the **same TX firing order** — a different TX order
-would apply the 12 measured coefficients to the wrong virtual antennas.
+**The calibration is per-BOARD, not per-band.** The mmWave SDK user guide is
+explicit: `measureRangeBiasAndRxChanPhase` "should be enabled only using the
+`profile_calibration.cfg` profile in the mmW demo profiles directory", and the
+resulting string is saved "for that particular mmWave sensor" and then used to
+"tune any running profile in real time". One measurement per physical sensor
+covers every profile and chirp config it will ever run.
 
-1. Flash the **mmWave SDK out-of-box (mmw) demo** — the measurement is an OOB
-   demo feature, not part of the people-counting binary.
+So the supported procedure is:
+
+1. Flash the **mmWave SDK out-of-box (mmw) demo** — the measurement lives in the
+   OOB demo, not in the people-counting binary.
 2. Trihedral corner reflector at boresight, apex level with the antenna array
    centre, area otherwise clear — it must be the strongest return in the search
    window.
-3. Edit `targetDistance` on the `measureRangeBiasAndRxChanPhase` line to the
-   tape-measured reflector range, then send the cfg.
-4. Copy the `compRangeBiasAndRxChanPhase` line the demo prints into the matching
-   `people_counting_radar*.cfg`, replacing the existing one. **The values are
-   unique to that physical board** — never share them between sensors.
-5. Verify: re-send with `measureRangeBiasAndRxChanPhase 0 …` and the new
-   compensation applied; the reflector should report ~0° azimuth at boresight
-   and its true range.
+3. Edit `targetDistance` in
+   `mmwave_sdk_<ver>/packages/ti/demo/xwr68xx/mmw/profiles/profile_calibration.cfg`
+   to the tape-measured reflector range and send that file.
+4. Copy the `compRangeBiasAndRxChanPhase` line the console prints into the
+   matching `people_counting_radar*.cfg`. **The values belong to that physical
+   board** — never share them between sensors.
+5. Verify: re-send with compensation applied and measurement disabled; the
+   reflector should report ~0° azimuth at boresight and its true range.
 
-### Is it actually needed?
+### The two `calibration_radar*.cfg` files here
 
-Optional, and cheaper to check than to redo. Only the *relative* phase between
+They do the same measurement but with RF lines identical to the matching
+operating config, so the sensor is measured on the band it actually runs on.
+That is an **optional refinement that deviates from TI's documented procedure**
+— worth at most ~0.5° azimuth on radar 1 and ~0.15° on radar 2 (see below).
+Prefer TI's shipped `profile_calibration.cfg`; reach for these only if you want
+that last fraction of a degree.
+
+### Is a re-calibration needed at all after the band move?
+
+Per TI, no — the same string is meant to serve any profile. The physics agrees:
+only the *relative* phase between
 the 12 virtual channels affects angle, and decoding the existing coefficients
 that spread is ~90°. Phase scales with frequency, so the band moves cost:
 
