@@ -8,27 +8,34 @@ Floor (ego-only, nocomm) AP@0.7 = **0.575**, margin ±0.02. Floor test, marked i
 
 `n/a` = condition not in the matrix for that method: bandwidth quantizes shared *features*, so it does not apply to late (boxes) or early (raw points) fusion.
 
-## Summary — one row per impairment family
+## Summary — one row per method
 
-All eight families, each collapsed to the mean AP@0.7 over its own severities. Read a row to see what one impairment costs every architecture; read a column to see one architecture's profile. The severities column says how many levels went into the mean and over what range, since a mean over "0.1 → 0.9 drop rate" is a summary of a curve, not a single operating point — the per-severity numbers are in the blocks below.
+Clean channel first, then all eight impairment families across the columns. Read a row for one architecture's whole profile; read a column for what one impairment costs every architecture.
 
-The last two rows are the study's headline aggregates, averaging the named families they list (each family weighted equally, not each cell). `bandwidth` and `ghosts` are in neither: quantization is a delivery impairment down to 4-bit and a content one below that, and ghost injection is the only content family that never crosses the floor, so folding either in would blur the very split the aggregates exist to show.
+Each impairment column is the mean AP@0.7 over that family's severities — a summary of a degradation curve, not one operating point:
 
-| impairment family | severities | CoBEVT | CoAlign | V2VNet | AttFuse | Early fusion | F-Cooper | Late fusion |
-|---|---|---|---|---|---|---|---|---|
-| *clean channel (no impairment)* | — | 0.862 | 0.833 | 0.822 | 0.815 | 0.801 | 0.790 | 0.781 |
-| i.i.d. packet loss (`loss_iid`) | 5 levels, 0.1 → 0.9 (drop rate) | 0.772 | 0.728 | 0.717 | 0.701 | 0.692 | 0.694 | 0.697 |
-| bursty packet loss (`loss_burst`) | 5 levels, 0.1 → 0.9 (mean drop rate) | 0.779 | 0.736 | 0.726 | 0.708 | 0.701 | 0.702 | 0.706 |
-| feature quantization (`bandwidth`) | 5 levels, 16 → 1 (bits) | 0.651 | 0.714 | 0.749 | 0.746 | n/a | 0.635 | n/a |
-| constant latency (`latency`) | 6 levels, 1 → 10 (frames @ 10 Hz) | 0.294 | 0.431 | 0.283 | 0.395 | 0.234 | 0.220 | 0.290 |
-| stale messages (`stale`) | 5 levels, 2 → 32 (refresh period, frames) | 0.386 | 0.501 | 0.377 | 0.470 | 0.324 | 0.313 | 0.360 |
-| collaborator pose error (`pose`) | 5 levels, 0.2 → 3.2 (metres) | 0.445 | 0.534 | 0.423 | 0.491 | 0.287 | 0.304 | 0.338 |
-| ghost injection (`ghosts`) | 5 levels, 1 → 16 (ghosts per message) | 0.780 | 0.729 | 0.790 | 0.760 | 0.663 | 0.688 | 0.713 |
-| scene swap (`swap`) | 5 levels, 0.1 → 1.0 (corrupted fraction) | 0.532 | 0.585 | 0.494 | 0.560 | 0.428 | 0.396 | 0.478 |
-| **delivery mean** (`loss_iid`, `loss_burst`) | — | 0.775 | 0.732 | 0.721 | 0.704 | 0.696 | 0.698 | 0.701 |
-| **content mean** (`latency`, `stale`, `pose`, `swap`) | — | 0.414 | 0.513 | 0.394 | 0.479 | 0.318 | 0.308 | 0.367 |
+- `loss_iid` — i.i.d. packet loss, 5 levels, 0.1 → 0.9 (drop rate)
+- `loss_burst` — bursty packet loss, 5 levels, 0.1 → 0.9 (mean drop rate)
+- `bandwidth` — feature quantization, 5 levels, 16 → 1 (bits)
+- `latency` — constant latency, 6 levels, 1 → 10 (frames @ 10 Hz)
+- `stale` — stale messages, 5 levels, 2 → 32 (refresh period, frames)
+- `pose` — collaborator pose error, 5 levels, 0.2 → 3.2 (metres)
+- `ghosts` — ghost injection, 5 levels, 1 → 16 (ghosts per message)
+- `swap` — scene swap, 5 levels, 0.1 → 1.0 (corrupted fraction)
 
-The two aggregate rows are the whole study in miniature: delivery stays well above the 0.575 floor for every method, content sits far below it for every method, and the gap between them (0.22–0.39) is wider than the spread between methods within either row. Latency is the hardest single family for all seven. Per-severity detail follows; the floor-crossing levels and the ranking reshuffle between delivery and content are in `results/ANALYSIS.md` §2–§4.
+| fusion method | clean | loss_iid | loss_burst | bandwidth | latency | stale | pose | ghosts | swap | delivery | content |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| CoBEVT | 0.862 | 0.772 | 0.779 | 0.651 | 0.294 | 0.386 | 0.445 | 0.780 | 0.532 | 0.775 | 0.414 |
+| CoAlign | 0.833 | 0.728 | 0.736 | 0.714 | 0.431 | 0.501 | 0.534 | 0.729 | 0.585 | 0.732 | 0.513 |
+| V2VNet | 0.822 | 0.717 | 0.726 | 0.749 | 0.283 | 0.377 | 0.423 | 0.790 | 0.494 | 0.721 | 0.394 |
+| AttFuse | 0.815 | 0.701 | 0.708 | 0.746 | 0.395 | 0.470 | 0.491 | 0.760 | 0.560 | 0.704 | 0.479 |
+| Early fusion | 0.801 | 0.692 | 0.701 | n/a | 0.234 | 0.324 | 0.287 | 0.663 | 0.428 | 0.696 | 0.318 |
+| F-Cooper | 0.790 | 0.694 | 0.702 | 0.635 | 0.220 | 0.313 | 0.304 | 0.688 | 0.396 | 0.698 | 0.308 |
+| Late fusion | 0.781 | 0.697 | 0.706 | n/a | 0.290 | 0.360 | 0.338 | 0.713 | 0.478 | 0.701 | 0.367 |
+
+The last two columns are the study's headline aggregates: **delivery** averages `loss_iid` and `loss_burst`, **content** averages `latency`, `stale`, `pose` and `swap`, each family weighted equally rather than each cell. `bandwidth` and `ghosts` are in neither: quantization is a delivery impairment down to 4-bit and a content one below that, and ghost injection is the only content family that never crosses the floor, so folding either in would blur the very split the aggregates exist to show.
+
+Those two columns are the whole study in miniature: delivery stays well above the 0.575 floor for every method, content sits far below it for every method, and the gap between them (0.22–0.39) is wider than the spread between methods within either column. Latency is the hardest single family for all seven. Per-severity detail follows; the floor-crossing levels and the ranking reshuffle between delivery and content are in `results/ANALYSIS.md` §2–§4.
 
 ## AP@0.7 (mean ± std over seeds)
 

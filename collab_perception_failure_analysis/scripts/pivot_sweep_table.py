@@ -125,12 +125,13 @@ AGGREGATES = [('delivery mean', ['loss_iid', 'loss_burst']),
 
 
 def summary_block(f, rows, methods, clean):
-    """One row per impairment family, mean AP@0.7 over that family's severities.
+    """One row per method; clean plus every impairment family across the columns.
 
-    Same orientation as the detail blocks below (families down, methods across) so
-    the summary and the per-severity tables read the same way. Every family in the
-    matrix appears by name -- the aggregate rows are additions at the bottom, never
-    a substitute for the families they average.
+    Column headers are the bare matrix keys: eleven columns leave no room for
+    readable names or severity ranges, so those go in the legend written above the
+    table, and the keys double as the `--impairments` arguments. Every family gets
+    its own column -- the two aggregates are extra trailing columns, never a
+    substitute for the families they average.
     """
     def fam_mean(imp, method):
         vals = [r['ap70'] for (i, _, m), r in rows.items()
@@ -138,36 +139,36 @@ def summary_block(f, rows, methods, clean):
         return sum(vals) / len(vals) if vals else None
 
     def severities(imp):
-        lv = sorted(((li, r['level_value']) for (i, li, _), r in rows.items()
-                     if i == imp), key=lambda x: x[0])
-        vals = [v for _, v in dict(lv).items()] if lv else []
+        lv = {li: r['level_value'] for (i, li, _), r in rows.items() if i == imp}
+        vals = [lv[k] for k in sorted(lv)]
         return len(vals), ('%s → %s' % (vals[0], vals[-1]) if vals else '')
 
-    f.write('| impairment family | severities | ' +
-            ' | '.join(METHOD_NAME.get(m, m) for m in methods) + ' |\n')
-    f.write('|---|---|' + '---|' * len(methods) + '\n')
-    f.write('| *clean channel (no impairment)* | — | ' +
-            ' | '.join('%.3f' % clean[m] if m in clean else '—'
-                       for m in methods) + ' |\n')
-    for imp, label, unit in FAMILY_LABEL:
+    fams = [(imp, label, unit) for imp, label, unit in FAMILY_LABEL
+            if severities(imp)[0]]
+
+    f.write('Each impairment column is the mean AP@0.7 over that family\'s '
+            'severities — a summary of a degradation curve, not one operating '
+            'point:\n\n')
+    for imp, label, unit in fams:
         n, span = severities(imp)
-        if not n:
-            continue
-        cells = []
-        for method in methods:
+        f.write('- `%s` — %s, %d levels, %s (%s)\n' % (imp, label, n, span, unit))
+    f.write('\n')
+
+    f.write('| fusion method | clean | ' + ' | '.join(i for i, _, _ in fams) +
+            ' | ' + ' | '.join(l.split()[0] for l, _ in AGGREGATES) + ' |\n')
+    f.write('|---|---|' + '---|' * (len(fams) + len(AGGREGATES)) + '\n')
+    for method in methods:
+        cells = ['%.3f' % clean[method] if method in clean else '—']
+        for imp, _, _ in fams:
             mu = fam_mean(imp, method)
             cells.append('%.3f' % mu if mu is not None else 'n/a')
-        f.write('| %s (`%s`) | %d levels, %s (%s) | %s |\n' % (
-            label, imp, n, span, unit, ' | '.join(cells)))
-    for label, fams in AGGREGATES:
-        cells = []
-        for method in methods:
-            present = [mu for mu in (fam_mean(i, method) for i in fams)
+        for _, agg_fams in AGGREGATES:
+            present = [mu for mu in (fam_mean(i, method) for i in agg_fams)
                        if mu is not None]
             cells.append('%.3f' % (sum(present) / len(present))
                          if present else 'n/a')
-        f.write('| **%s** (%s) | — | %s |\n' % (
-            label, ', '.join('`%s`' % i for i in fams), ' | '.join(cells)))
+        f.write('| %s | %s |\n' % (METHOD_NAME.get(method, method),
+                                   ' | '.join(cells)))
 
 
 def main():
@@ -206,29 +207,26 @@ def main():
         clean = {'cobevt': 0.862, 'coalign': 0.833, 'v2vnet': 0.822, 'attfuse': 0.815,
                  'early': 0.801, 'fcooper': 0.790, 'late': 0.781}
 
-        f.write('## Summary — one row per impairment family\n\n')
-        f.write('All eight families, each collapsed to the mean AP@0.7 over its own '
-                'severities. Read a row to see what one impairment costs every '
-                'architecture; read a column to see one architecture\'s profile. The '
-                'severities column says how many levels went into the mean and over '
-                'what range, since a mean over "0.1 → 0.9 drop rate" is a summary of a '
-                'curve, not a single operating point — the per-severity numbers are in '
-                'the blocks below.\n\n')
-        f.write('The last two rows are the study\'s headline aggregates, averaging the '
-                'named families they list (each family weighted equally, not each '
-                'cell). `bandwidth` and `ghosts` are in neither: quantization is a '
-                'delivery impairment down to 4-bit and a content one below that, and '
-                'ghost injection is the only content family that never crosses the '
-                'floor, so folding either in would blur the very split the aggregates '
-                'exist to show.\n\n')
+        f.write('## Summary — one row per method\n\n')
+        f.write('Clean channel first, then all eight impairment families across the '
+                'columns. Read a row for one architecture\'s whole profile; read a '
+                'column for what one impairment costs every architecture.\n\n')
         summary_block(f, rows, methods, clean)
-        f.write('\nThe two aggregate rows are the whole study in miniature: delivery '
-                'stays well above the %.3f floor for every method, content sits far '
-                'below it for every method, and the gap between them (0.22–0.39) is '
-                'wider than the spread between methods within either row. Latency is '
-                'the hardest single family for all seven. Per-severity detail follows; '
-                'the floor-crossing levels and the ranking reshuffle between delivery '
-                'and content are in `results/ANALYSIS.md` §2–§4.\n' % floor_ap)
+        f.write('\nThe last two columns are the study\'s headline aggregates: '
+                '**delivery** averages `loss_iid` and `loss_burst`, **content** '
+                'averages `latency`, `stale`, `pose` and `swap`, each family weighted '
+                'equally rather than each cell. `bandwidth` and `ghosts` are in '
+                'neither: quantization is a delivery impairment down to 4-bit and a '
+                'content one below that, and ghost injection is the only content '
+                'family that never crosses the floor, so folding either in would blur '
+                'the very split the aggregates exist to show.\n\n')
+        f.write('Those two columns are the whole study in miniature: delivery stays '
+                'well above the %.3f floor for every method, content sits far below it '
+                'for every method, and the gap between them (0.22–0.39) is wider than '
+                'the spread between methods within either column. Latency is the '
+                'hardest single family for all seven. Per-severity detail follows; the '
+                'floor-crossing levels and the ranking reshuffle between delivery and '
+                'content are in `results/ANALYSIS.md` §2–§4.\n' % floor_ap)
 
         f.write('\n## AP@0.7 (mean ± std over seeds)\n\n')
         write_block(f, rows, conds, methods, 'ap70', with_std=True, mark=True)
