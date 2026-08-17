@@ -27,6 +27,11 @@ FAMILY = {'loss_iid': 'delivery', 'loss_burst': 'delivery', 'bandwidth': 'delive
           'ghosts': 'content', 'swap': 'content'}
 # Clean-channel AP@0.7 order (best -> worst), from results/baseline.md.
 METHOD_ORDER = ['cobevt', 'coalign', 'v2vnet', 'attfuse', 'early', 'fcooper', 'late']
+# Published spellings, for the summary block only. The detail blocks keep the bare
+# checkpoint keys, which are what the runners take on the command line.
+METHOD_NAME = {'cobevt': 'CoBEVT', 'coalign': 'CoAlign', 'v2vnet': 'V2VNet',
+               'attfuse': 'AttFuse', 'fcooper': 'F-Cooper',
+               'early': 'Early fusion', 'late': 'Late fusion'}
 CLASS_MARK = {'above_floor': '', 'at_floor': '~', 'below_floor': '*'}
 
 ROW_RE = re.compile(
@@ -108,12 +113,18 @@ def summary_block(f, rows, methods, clean):
     headline would blur the effect the grouping exists to show. This is the
     weighting behind ANALYSIS.md's headline spans, and reproduces them.
     """
-    groups = [('loss', ['loss_iid', 'loss_burst']),
-              ('bandwidth', ['bandwidth']),
-              ('ghosts', ['ghosts']),
-              ('misplacement', ['latency', 'stale', 'pose', 'swap'])]
-    f.write('| method | clean | ' + ' | '.join(g for g, _ in groups) +
-            ' | loss − misplacement | families below floor | worst family |\n')
+    # (key, column label, families). The label names the failure mode as the study
+    # uses it, not the config key -- the detail blocks below keep the matrix.yaml
+    # keys, which are the identifiers to grep for.
+    groups = [('loss', 'packet loss<br>(delivery)', ['loss_iid', 'loss_burst']),
+              ('bandwidth', 'feature<br>quantization', ['bandwidth']),
+              ('ghosts', 'ghost<br>injection', ['ghosts']),
+              ('misplacement', 'misplaced evidence<br>(content)',
+               ['latency', 'stale', 'pose', 'swap'])]
+    f.write('| fusion method | clean | ' +
+            ' | '.join(lbl for _, lbl, _ in groups) +
+            ' | delivery − content<br>gap | families<br>crossing floor | '
+            'hardest family |\n')
     f.write('|---|---|' + '---|' * (len(groups) + 3) + '\n')
     for method in methods:
         fam_mean = {}
@@ -123,7 +134,7 @@ def summary_block(f, rows, methods, clean):
             if vals:
                 fam_mean[imp] = sum(vals) / len(vals)
         cells, gm = [], {}
-        for gname, fams in groups:
+        for gname, _, fams in groups:
             present = [fam_mean[i] for i in fams if i in fam_mean]
             if not present:
                 cells.append('n/a')
@@ -136,7 +147,8 @@ def summary_block(f, rows, methods, clean):
                              if i == imp and m == method))
         worst = min(fam_mean.items(), key=lambda kv: kv[1])
         f.write('| %s | %s | %s | %+.3f | %d/%d | %s (%.3f) |\n' % (
-            method, '%.3f' % clean[method] if method in clean else '—',
+            METHOD_NAME.get(method, method),
+            '%.3f' % clean[method] if method in clean else '—',
             ' | '.join(cells), gm['loss'] - gm['misplacement'],
             crossed, len(fam_mean), worst[0], worst[1]))
 
@@ -183,18 +195,42 @@ def main():
                 ' | '.join('%.3f' % clean[m] if m in clean else '—'
                            for m in methods) + ' |\n')
 
-        f.write('\n## Summary — mean AP@0.7 per impairment group\n\n')
-        f.write('The whole sweep in one row per method. Group means average the '
-                'per-family means (each family equally weighted, not each cell). '
-                '"families below floor" counts impairment families where at least one '
-                'severity drops below the floor, out of those in the matrix for that '
-                'method.\n\n')
+        f.write('\n## Summary — one row per method\n\n')
+        f.write('Every number is AP@0.7. Columns, and the `configs/matrix.yaml` '
+                'families behind each:\n\n')
+        f.write('- **clean** — the single no-impairment value from '
+                '`results/baseline.md`, not a mean; the reference every other column '
+                'falls away from.\n')
+        f.write('- **packet loss (delivery)** — `loss_iid`, `loss_burst`.\n')
+        f.write('- **feature quantization** — `bandwidth`. Named for the mechanism '
+                'rather than grouped as delivery or content because it is both: '
+                'delivery down to 4-bit, content below that.\n')
+        f.write('- **ghost injection** — `ghosts`. Content-type, but kept out of the '
+                'content column: it is the only content family that never crosses '
+                'the floor, so folding it in would understate the split.\n')
+        f.write('- **misplaced evidence (content)** — `latency`, `stale`, `pose`, '
+                '`swap`. The unifying mechanism is a message that arrives and puts '
+                'evidence in the wrong place.\n')
+        f.write('- **delivery − content gap** — packet loss minus misplaced '
+                'evidence, the size of the study\'s central effect for that method.\n')
+        f.write('- **families crossing floor** — families with at least one severity '
+                'below the floor, out of those in the matrix for that method.\n')
+        f.write('- **hardest family** — the family with the lowest mean, of the '
+                'eight.\n\n')
+        f.write('Methods are spelled as the papers spell them here and as their '
+                'checkpoint keys (`cobevt`, `fcooper`, …) in the detail blocks below, '
+                'since those keys are what the runners take on the command line.\n\n')
+        f.write('The four impairment columns are means over that group\'s severities, '
+                'averaging the per-family means so that each family weighs equally '
+                'rather than each cell — a family with six severities does not '
+                'outvote one with five.\n\n')
         summary_block(f, rows, methods, clean)
-        f.write('\nThe two headline groups separate cleanly and in the same direction '
-                'for every method: loss spans a narrow band well above the %.3f floor, '
-                'misplacement (latency, staleness, pose, swap) sits far below it. '
-                'Per-severity detail, and the rank shuffle between groups, follow '
-                'below and in `results/ANALYSIS.md` §2–§4.\n' % floor_ap)
+        f.write('\nThe two headline columns separate cleanly, and in the same '
+                'direction, for every method: packet loss holds a narrow band well '
+                'above the %.3f floor while misplaced evidence sits far below it, so '
+                'the gap column is positive and large throughout. Per-severity detail, '
+                'and the ranking reshuffle between the two, follow below and in '
+                '`results/ANALYSIS.md` §2–§4.\n' % floor_ap)
 
         f.write('\n## AP@0.7 (mean ± std over seeds)\n\n')
         write_block(f, rows, conds, methods, 'ap70', with_std=True, mark=True)

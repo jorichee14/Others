@@ -14,21 +14,34 @@ Clean-channel AP@0.7 (`results/baseline.md`), for reference:
 |---|---|---|---|---|---|---|---|
 | AP@0.7, no impairment | 0.862 | 0.833 | 0.822 | 0.815 | 0.801 | 0.790 | 0.781 |
 
-## Summary — mean AP@0.7 per impairment group
+## Summary — one row per method
 
-The whole sweep in one row per method. Group means average the per-family means (each family equally weighted, not each cell). "families below floor" counts impairment families where at least one severity drops below the floor, out of those in the matrix for that method.
+Every number is AP@0.7. Columns, and the `configs/matrix.yaml` families behind each:
 
-| method | clean | loss | bandwidth | ghosts | misplacement | loss − misplacement | families below floor | worst family |
+- **clean** — the single no-impairment value from `results/baseline.md`, not a mean; the reference every other column falls away from.
+- **packet loss (delivery)** — `loss_iid`, `loss_burst`.
+- **feature quantization** — `bandwidth`. Named for the mechanism rather than grouped as delivery or content because it is both: delivery down to 4-bit, content below that.
+- **ghost injection** — `ghosts`. Content-type, but kept out of the content column: it is the only content family that never crosses the floor, so folding it in would understate the split.
+- **misplaced evidence (content)** — `latency`, `stale`, `pose`, `swap`. The unifying mechanism is a message that arrives and puts evidence in the wrong place.
+- **delivery − content gap** — packet loss minus misplaced evidence, the size of the study's central effect for that method.
+- **families crossing floor** — families with at least one severity below the floor, out of those in the matrix for that method.
+- **hardest family** — the family with the lowest mean, of the eight.
+
+Methods are spelled as the papers spell them here and as their checkpoint keys (`cobevt`, `fcooper`, …) in the detail blocks below, since those keys are what the runners take on the command line.
+
+The four impairment columns are means over that group's severities, averaging the per-family means so that each family weighs equally rather than each cell — a family with six severities does not outvote one with five.
+
+| fusion method | clean | packet loss<br>(delivery) | feature<br>quantization | ghost<br>injection | misplaced evidence<br>(content) | delivery − content<br>gap | families<br>crossing floor | hardest family |
 |---|---|---|---|---|---|---|---|---|
-| cobevt | 0.862 | 0.775 | 0.651 | 0.780 | 0.414 | +0.361 | 5/8 | latency (0.294) |
-| coalign | 0.833 | 0.732 | 0.714 | 0.729 | 0.513 | +0.220 | 5/8 | latency (0.431) |
-| v2vnet | 0.822 | 0.721 | 0.749 | 0.790 | 0.394 | +0.327 | 4/8 | latency (0.283) |
-| attfuse | 0.815 | 0.704 | 0.746 | 0.760 | 0.479 | +0.225 | 4/8 | latency (0.395) |
-| early | 0.801 | 0.696 | n/a | 0.663 | 0.318 | +0.378 | 5/7 | latency (0.234) |
-| fcooper | 0.790 | 0.698 | 0.635 | 0.688 | 0.308 | +0.390 | 5/8 | latency (0.220) |
-| late | 0.781 | 0.701 | n/a | 0.713 | 0.367 | +0.335 | 4/7 | latency (0.290) |
+| CoBEVT | 0.862 | 0.775 | 0.651 | 0.780 | 0.414 | +0.361 | 5/8 | latency (0.294) |
+| CoAlign | 0.833 | 0.732 | 0.714 | 0.729 | 0.513 | +0.220 | 5/8 | latency (0.431) |
+| V2VNet | 0.822 | 0.721 | 0.749 | 0.790 | 0.394 | +0.327 | 4/8 | latency (0.283) |
+| AttFuse | 0.815 | 0.704 | 0.746 | 0.760 | 0.479 | +0.225 | 4/8 | latency (0.395) |
+| Early fusion | 0.801 | 0.696 | n/a | 0.663 | 0.318 | +0.378 | 5/7 | latency (0.234) |
+| F-Cooper | 0.790 | 0.698 | 0.635 | 0.688 | 0.308 | +0.390 | 5/8 | latency (0.220) |
+| Late fusion | 0.781 | 0.701 | n/a | 0.713 | 0.367 | +0.335 | 4/7 | latency (0.290) |
 
-The two headline groups separate cleanly and in the same direction for every method: loss spans a narrow band well above the 0.575 floor, misplacement (latency, staleness, pose, swap) sits far below it. Per-severity detail, and the rank shuffle between groups, follow below and in `results/ANALYSIS.md` §2–§4.
+The two headline columns separate cleanly, and in the same direction, for every method: packet loss holds a narrow band well above the 0.575 floor while misplaced evidence sits far below it, so the gap column is positive and large throughout. Per-severity detail, and the ranking reshuffle between the two, follow below and in `results/ANALYSIS.md` §2–§4.
 
 ## AP@0.7 (mean ± std over seeds)
 
