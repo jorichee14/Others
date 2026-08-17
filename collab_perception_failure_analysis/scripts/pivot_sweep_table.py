@@ -103,54 +103,71 @@ def write_block(f, rows, conds, methods, metric, *, with_std=False, mark=False):
         f.write('| %s | L%d (%s) | %s |\n' % (imp, li, lv, ' | '.join(cells)))
 
 
-def summary_block(f, rows, methods, clean):
-    """One row per method: mean AP@0.7 per impairment group, and where it crosses.
+# Every impairment family, named, with the failure mode it represents and the unit
+# its severities are expressed in. Ordered delivery-first, matching IMP_ORDER.
+FAMILY_LABEL = [
+    ('loss_iid', 'i.i.d. packet loss', 'drop rate'),
+    ('loss_burst', 'bursty packet loss', 'mean drop rate'),
+    ('bandwidth', 'feature quantization', 'bits'),
+    ('latency', 'constant latency', 'frames @ 10 Hz'),
+    ('stale', 'stale messages', 'refresh period, frames'),
+    ('pose', 'collaborator pose error', 'metres'),
+    ('ghosts', 'ghost injection', 'ghosts per message'),
+    ('swap', 'scene swap', 'corrupted fraction'),
+]
+# The two headline aggregates. bandwidth and ghosts are deliberately in neither:
+# bandwidth changes character mid-sweep (delivery to 4-bit, content below it), and
+# ghosts is the one content family that never crosses the floor, so folding either
+# in would blur the split. This is the weighting behind ANALYSIS.md's headline
+# spans, and reproduces them.
+AGGREGATES = [('delivery mean', ['loss_iid', 'loss_burst']),
+              ('content mean', ['latency', 'stale', 'pose', 'swap'])]
 
-    Groups are weighted per *family*, not per cell, and bandwidth/ghosts are held
-    out of the two headline groups rather than folded in -- bandwidth changes
-    character mid-sweep (delivery to 4-bit, content below it) and ghosts is the
-    one content family that never crosses the floor, so averaging either into a
-    headline would blur the effect the grouping exists to show. This is the
-    weighting behind ANALYSIS.md's headline spans, and reproduces them.
+
+def summary_block(f, rows, methods, clean):
+    """One row per impairment family, mean AP@0.7 over that family's severities.
+
+    Same orientation as the detail blocks below (families down, methods across) so
+    the summary and the per-severity tables read the same way. Every family in the
+    matrix appears by name -- the aggregate rows are additions at the bottom, never
+    a substitute for the families they average.
     """
-    # (key, column label, families). The label names the failure mode as the study
-    # uses it, not the config key -- the detail blocks below keep the matrix.yaml
-    # keys, which are the identifiers to grep for.
-    groups = [('loss', 'packet loss<br>(delivery)', ['loss_iid', 'loss_burst']),
-              ('bandwidth', 'feature<br>quantization', ['bandwidth']),
-              ('ghosts', 'ghost<br>injection', ['ghosts']),
-              ('misplacement', 'misplaced evidence<br>(content)',
-               ['latency', 'stale', 'pose', 'swap'])]
-    f.write('| fusion method | clean | ' +
-            ' | '.join(lbl for _, lbl, _ in groups) +
-            ' | delivery − content<br>gap | families<br>crossing floor | '
-            'hardest family |\n')
-    f.write('|---|---|' + '---|' * (len(groups) + 3) + '\n')
-    for method in methods:
-        fam_mean = {}
-        for imp in IMP_ORDER:
-            vals = [r['ap70'] for (i, _, m), r in rows.items()
-                    if i == imp and m == method]
-            if vals:
-                fam_mean[imp] = sum(vals) / len(vals)
-        cells, gm = [], {}
-        for gname, _, fams in groups:
-            present = [fam_mean[i] for i in fams if i in fam_mean]
-            if not present:
-                cells.append('n/a')
-                continue
-            gm[gname] = sum(present) / len(present)
-            cells.append('%.3f' % gm[gname])
-        crossed = sum(1 for imp in fam_mean
-                      if any(r['floor_class'] == 'below_floor'
-                             for (i, _, m), r in rows.items()
-                             if i == imp and m == method))
-        worst = min(fam_mean.items(), key=lambda kv: kv[1])
-        f.write('| %s | %s | %s | %+.3f | %d/%d | %s (%.3f) |\n' % (
-            METHOD_NAME.get(method, method),
-            '%.3f' % clean[method] if method in clean else '—',
-            ' | '.join(cells), gm['loss'] - gm['misplacement'],
-            crossed, len(fam_mean), worst[0], worst[1]))
+    def fam_mean(imp, method):
+        vals = [r['ap70'] for (i, _, m), r in rows.items()
+                if i == imp and m == method]
+        return sum(vals) / len(vals) if vals else None
+
+    def severities(imp):
+        lv = sorted(((li, r['level_value']) for (i, li, _), r in rows.items()
+                     if i == imp), key=lambda x: x[0])
+        vals = [v for _, v in dict(lv).items()] if lv else []
+        return len(vals), ('%s → %s' % (vals[0], vals[-1]) if vals else '')
+
+    f.write('| impairment family | severities | ' +
+            ' | '.join(METHOD_NAME.get(m, m) for m in methods) + ' |\n')
+    f.write('|---|---|' + '---|' * len(methods) + '\n')
+    f.write('| *clean channel (no impairment)* | — | ' +
+            ' | '.join('%.3f' % clean[m] if m in clean else '—'
+                       for m in methods) + ' |\n')
+    for imp, label, unit in FAMILY_LABEL:
+        n, span = severities(imp)
+        if not n:
+            continue
+        cells = []
+        for method in methods:
+            mu = fam_mean(imp, method)
+            cells.append('%.3f' % mu if mu is not None else 'n/a')
+        f.write('| %s (`%s`) | %d levels, %s (%s) | %s |\n' % (
+            label, imp, n, span, unit, ' | '.join(cells)))
+    for label, fams in AGGREGATES:
+        cells = []
+        for method in methods:
+            present = [mu for mu in (fam_mean(i, method) for i in fams)
+                       if mu is not None]
+            cells.append('%.3f' % (sum(present) / len(present))
+                         if present else 'n/a')
+        f.write('| **%s** (%s) | — | %s |\n' % (
+            label, ', '.join('`%s`' % i for i in fams), ' | '.join(cells)))
 
 
 def main():
@@ -186,51 +203,32 @@ def main():
         f.write('`n/a` = condition not in the matrix for that method: bandwidth '
                 'quantizes shared *features*, so it does not apply to late (boxes) '
                 'or early (raw points) fusion.\n\n')
-        f.write('Clean-channel AP@0.7 (`results/baseline.md`), for reference:\n\n')
-        f.write('| | ' + ' | '.join(methods) + ' |\n')
-        f.write('|---|' + '---|' * len(methods) + '\n')
         clean = {'cobevt': 0.862, 'coalign': 0.833, 'v2vnet': 0.822, 'attfuse': 0.815,
                  'early': 0.801, 'fcooper': 0.790, 'late': 0.781}
-        f.write('| AP@0.7, no impairment | ' +
-                ' | '.join('%.3f' % clean[m] if m in clean else '—'
-                           for m in methods) + ' |\n')
 
-        f.write('\n## Summary — one row per method\n\n')
-        f.write('Every number is AP@0.7. Columns, and the `configs/matrix.yaml` '
-                'families behind each:\n\n')
-        f.write('- **clean** — the single no-impairment value from '
-                '`results/baseline.md`, not a mean; the reference every other column '
-                'falls away from.\n')
-        f.write('- **packet loss (delivery)** — `loss_iid`, `loss_burst`.\n')
-        f.write('- **feature quantization** — `bandwidth`. Named for the mechanism '
-                'rather than grouped as delivery or content because it is both: '
-                'delivery down to 4-bit, content below that.\n')
-        f.write('- **ghost injection** — `ghosts`. Content-type, but kept out of the '
-                'content column: it is the only content family that never crosses '
-                'the floor, so folding it in would understate the split.\n')
-        f.write('- **misplaced evidence (content)** — `latency`, `stale`, `pose`, '
-                '`swap`. The unifying mechanism is a message that arrives and puts '
-                'evidence in the wrong place.\n')
-        f.write('- **delivery − content gap** — packet loss minus misplaced '
-                'evidence, the size of the study\'s central effect for that method.\n')
-        f.write('- **families crossing floor** — families with at least one severity '
-                'below the floor, out of those in the matrix for that method.\n')
-        f.write('- **hardest family** — the family with the lowest mean, of the '
-                'eight.\n\n')
-        f.write('Methods are spelled as the papers spell them here and as their '
-                'checkpoint keys (`cobevt`, `fcooper`, …) in the detail blocks below, '
-                'since those keys are what the runners take on the command line.\n\n')
-        f.write('The four impairment columns are means over that group\'s severities, '
-                'averaging the per-family means so that each family weighs equally '
-                'rather than each cell — a family with six severities does not '
-                'outvote one with five.\n\n')
+        f.write('## Summary — one row per impairment family\n\n')
+        f.write('All eight families, each collapsed to the mean AP@0.7 over its own '
+                'severities. Read a row to see what one impairment costs every '
+                'architecture; read a column to see one architecture\'s profile. The '
+                'severities column says how many levels went into the mean and over '
+                'what range, since a mean over "0.1 → 0.9 drop rate" is a summary of a '
+                'curve, not a single operating point — the per-severity numbers are in '
+                'the blocks below.\n\n')
+        f.write('The last two rows are the study\'s headline aggregates, averaging the '
+                'named families they list (each family weighted equally, not each '
+                'cell). `bandwidth` and `ghosts` are in neither: quantization is a '
+                'delivery impairment down to 4-bit and a content one below that, and '
+                'ghost injection is the only content family that never crosses the '
+                'floor, so folding either in would blur the very split the aggregates '
+                'exist to show.\n\n')
         summary_block(f, rows, methods, clean)
-        f.write('\nThe two headline columns separate cleanly, and in the same '
-                'direction, for every method: packet loss holds a narrow band well '
-                'above the %.3f floor while misplaced evidence sits far below it, so '
-                'the gap column is positive and large throughout. Per-severity detail, '
-                'and the ranking reshuffle between the two, follow below and in '
-                '`results/ANALYSIS.md` §2–§4.\n' % floor_ap)
+        f.write('\nThe two aggregate rows are the whole study in miniature: delivery '
+                'stays well above the %.3f floor for every method, content sits far '
+                'below it for every method, and the gap between them (0.22–0.39) is '
+                'wider than the spread between methods within either row. Latency is '
+                'the hardest single family for all seven. Per-severity detail follows; '
+                'the floor-crossing levels and the ranking reshuffle between delivery '
+                'and content are in `results/ANALYSIS.md` §2–§4.\n' % floor_ap)
 
         f.write('\n## AP@0.7 (mean ± std over seeds)\n\n')
         write_block(f, rows, conds, methods, 'ap70', with_std=True, mark=True)

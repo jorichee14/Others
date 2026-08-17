@@ -8,40 +8,27 @@ Floor (ego-only, nocomm) AP@0.7 = **0.575**, margin ±0.02. Floor test, marked i
 
 `n/a` = condition not in the matrix for that method: bandwidth quantizes shared *features*, so it does not apply to late (boxes) or early (raw points) fusion.
 
-Clean-channel AP@0.7 (`results/baseline.md`), for reference:
+## Summary — one row per impairment family
 
-| | cobevt | coalign | v2vnet | attfuse | early | fcooper | late |
-|---|---|---|---|---|---|---|---|
-| AP@0.7, no impairment | 0.862 | 0.833 | 0.822 | 0.815 | 0.801 | 0.790 | 0.781 |
+All eight families, each collapsed to the mean AP@0.7 over its own severities. Read a row to see what one impairment costs every architecture; read a column to see one architecture's profile. The severities column says how many levels went into the mean and over what range, since a mean over "0.1 → 0.9 drop rate" is a summary of a curve, not a single operating point — the per-severity numbers are in the blocks below.
 
-## Summary — one row per method
+The last two rows are the study's headline aggregates, averaging the named families they list (each family weighted equally, not each cell). `bandwidth` and `ghosts` are in neither: quantization is a delivery impairment down to 4-bit and a content one below that, and ghost injection is the only content family that never crosses the floor, so folding either in would blur the very split the aggregates exist to show.
 
-Every number is AP@0.7. Columns, and the `configs/matrix.yaml` families behind each:
-
-- **clean** — the single no-impairment value from `results/baseline.md`, not a mean; the reference every other column falls away from.
-- **packet loss (delivery)** — `loss_iid`, `loss_burst`.
-- **feature quantization** — `bandwidth`. Named for the mechanism rather than grouped as delivery or content because it is both: delivery down to 4-bit, content below that.
-- **ghost injection** — `ghosts`. Content-type, but kept out of the content column: it is the only content family that never crosses the floor, so folding it in would understate the split.
-- **misplaced evidence (content)** — `latency`, `stale`, `pose`, `swap`. The unifying mechanism is a message that arrives and puts evidence in the wrong place.
-- **delivery − content gap** — packet loss minus misplaced evidence, the size of the study's central effect for that method.
-- **families crossing floor** — families with at least one severity below the floor, out of those in the matrix for that method.
-- **hardest family** — the family with the lowest mean, of the eight.
-
-Methods are spelled as the papers spell them here and as their checkpoint keys (`cobevt`, `fcooper`, …) in the detail blocks below, since those keys are what the runners take on the command line.
-
-The four impairment columns are means over that group's severities, averaging the per-family means so that each family weighs equally rather than each cell — a family with six severities does not outvote one with five.
-
-| fusion method | clean | packet loss<br>(delivery) | feature<br>quantization | ghost<br>injection | misplaced evidence<br>(content) | delivery − content<br>gap | families<br>crossing floor | hardest family |
+| impairment family | severities | CoBEVT | CoAlign | V2VNet | AttFuse | Early fusion | F-Cooper | Late fusion |
 |---|---|---|---|---|---|---|---|---|
-| CoBEVT | 0.862 | 0.775 | 0.651 | 0.780 | 0.414 | +0.361 | 5/8 | latency (0.294) |
-| CoAlign | 0.833 | 0.732 | 0.714 | 0.729 | 0.513 | +0.220 | 5/8 | latency (0.431) |
-| V2VNet | 0.822 | 0.721 | 0.749 | 0.790 | 0.394 | +0.327 | 4/8 | latency (0.283) |
-| AttFuse | 0.815 | 0.704 | 0.746 | 0.760 | 0.479 | +0.225 | 4/8 | latency (0.395) |
-| Early fusion | 0.801 | 0.696 | n/a | 0.663 | 0.318 | +0.378 | 5/7 | latency (0.234) |
-| F-Cooper | 0.790 | 0.698 | 0.635 | 0.688 | 0.308 | +0.390 | 5/8 | latency (0.220) |
-| Late fusion | 0.781 | 0.701 | n/a | 0.713 | 0.367 | +0.335 | 4/7 | latency (0.290) |
+| *clean channel (no impairment)* | — | 0.862 | 0.833 | 0.822 | 0.815 | 0.801 | 0.790 | 0.781 |
+| i.i.d. packet loss (`loss_iid`) | 5 levels, 0.1 → 0.9 (drop rate) | 0.772 | 0.728 | 0.717 | 0.701 | 0.692 | 0.694 | 0.697 |
+| bursty packet loss (`loss_burst`) | 5 levels, 0.1 → 0.9 (mean drop rate) | 0.779 | 0.736 | 0.726 | 0.708 | 0.701 | 0.702 | 0.706 |
+| feature quantization (`bandwidth`) | 5 levels, 16 → 1 (bits) | 0.651 | 0.714 | 0.749 | 0.746 | n/a | 0.635 | n/a |
+| constant latency (`latency`) | 6 levels, 1 → 10 (frames @ 10 Hz) | 0.294 | 0.431 | 0.283 | 0.395 | 0.234 | 0.220 | 0.290 |
+| stale messages (`stale`) | 5 levels, 2 → 32 (refresh period, frames) | 0.386 | 0.501 | 0.377 | 0.470 | 0.324 | 0.313 | 0.360 |
+| collaborator pose error (`pose`) | 5 levels, 0.2 → 3.2 (metres) | 0.445 | 0.534 | 0.423 | 0.491 | 0.287 | 0.304 | 0.338 |
+| ghost injection (`ghosts`) | 5 levels, 1 → 16 (ghosts per message) | 0.780 | 0.729 | 0.790 | 0.760 | 0.663 | 0.688 | 0.713 |
+| scene swap (`swap`) | 5 levels, 0.1 → 1.0 (corrupted fraction) | 0.532 | 0.585 | 0.494 | 0.560 | 0.428 | 0.396 | 0.478 |
+| **delivery mean** (`loss_iid`, `loss_burst`) | — | 0.775 | 0.732 | 0.721 | 0.704 | 0.696 | 0.698 | 0.701 |
+| **content mean** (`latency`, `stale`, `pose`, `swap`) | — | 0.414 | 0.513 | 0.394 | 0.479 | 0.318 | 0.308 | 0.367 |
 
-The two headline columns separate cleanly, and in the same direction, for every method: packet loss holds a narrow band well above the 0.575 floor while misplaced evidence sits far below it, so the gap column is positive and large throughout. Per-severity detail, and the ranking reshuffle between the two, follow below and in `results/ANALYSIS.md` §2–§4.
+The two aggregate rows are the whole study in miniature: delivery stays well above the 0.575 floor for every method, content sits far below it for every method, and the gap between them (0.22–0.39) is wider than the spread between methods within either row. Latency is the hardest single family for all seven. Per-severity detail follows; the floor-crossing levels and the ranking reshuffle between delivery and content are in `results/ANALYSIS.md` §2–§4.
 
 ## AP@0.7 (mean ± std over seeds)
 
