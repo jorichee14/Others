@@ -122,6 +122,15 @@ Shi et al. 2016 hybrid estimators; frame-dropping MOT (arXiv 2308.00330);
 error-detecting-code event scheduling; Wi-Filter; Mobi2Sense. AgentComm-Bench and
 2607.09070 already read in primary text [V].
 
+**Real-time systems bar to meet** (evaluation standards + build guidance): V2X-ReaLO
+(online CP on real vehicles, published ROS bags); Cooperative Infrastructure Perception
+(ROS node, p99 100 ms — engineering template for infrastructure nodes); MobiCom'23
+asynchronous-sensor collaboration (10.1145/3570361.3613271 — what a systems venue counts
+as a contribution); AdaMap (percentile-latency assurance); ROS2-DDS middleware
+evaluation (arXiv 2412.07485 — DDS vendor/kernel choices move latency; fix them before
+measuring). Camp gap TCG fills: real-time CP systems always-send; event-triggered
+estimation almost never runs on real radios — the intersection is empty.
+
 ## 5. Gates and risks
 
 1. **D-CSI is now load-bearing** (was opportunistic): per-packet CSI from the Wi-Fi NICs
