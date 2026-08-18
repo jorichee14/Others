@@ -346,8 +346,7 @@ class LidarReflectorDetector(Node):
         self.create_subscription(Empty, '~/save', lambda _: self._save(), 1)
         self.pub_apex = self.create_publisher(PointStamped, '~/apex_cam', 5)
         self.pub_dbg = self.create_publisher(Image, '~/debug_image', 2)
-        if self.show_window:
-            self.create_timer(0.05, self._gui)
+        self.create_timer(0.05, self._gui)   # always: ~/debug_image feeds radar_lidar_calib
         self._frame = None
         self.get_logger().info(
             'ready — 1) reflector OFF, tripod in place → ~/background   '
@@ -539,8 +538,9 @@ class LidarReflectorDetector(Node):
             im = cv2.resize(im, None, fx=self.dscale, fy=self.dscale)
         self.pub_dbg.publish(self.bridge.cv2_to_imgmsg(im, 'bgr8'))
         self._frame = im
-        cv2.imshow('lidar_reflector (Stage A)', im)
-        cv2.waitKey(1)
+        if self.show_window:
+            cv2.imshow('lidar_reflector (Stage A)', im)
+            cv2.waitKey(1)
 
 
 def main():
