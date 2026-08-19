@@ -87,6 +87,7 @@ Structure: [A] cloud tools · [B] apex locator · [C] node.
 import json
 import os
 import time
+from collections import deque
 
 import numpy as np
 import rclpy
@@ -304,7 +305,13 @@ class RadarLidarCalib(Node):
                                              # zeroed guess on a rig with any baseline
                                              # rejects the genuine return.
         dp('max_abs_doppler', 0.15)          # tripod target is genuinely static
-        dp('radar_cluster_eps', 0.20); dp('radar_min_cluster_size', 1)
+        dp('radar_cluster_eps', 0.20); dp('radar_min_cluster_size', 3)
+        # A single radar frame is not a reliable pick: detections flicker between
+        # the reflector and multipath. Pool the last N frames and cluster the
+        # accumulation instead — the static reflector lands in the same place
+        # every frame (dense, persistent cluster), noise appears once and moves.
+        dp('radar_accum_frames', 10)
+        dp('radar_min_frames', 3)            # cluster must appear in >= this many frames
         dp('gate_radius', 0.40)              # 3-D gate once a solve exists
         dp('cluster_strict', True)
         dp('min_snr', 100.0)                 # threshold on snr·(r/ref)^4
@@ -361,6 +368,7 @@ class RadarLidarCalib(Node):
         self.rmargin = float(g('range_gate_margin_m'))
         self.max_dop = float(g('max_abs_doppler'))
         self.rceps, self.rcmin = float(g('radar_cluster_eps')), int(g('radar_min_cluster_size'))
+        self.acc_n, self.min_frames = int(g('radar_accum_frames')), int(g('radar_min_frames'))
         self.gate_r, self.strict = float(g('gate_radius')), bool(g('cluster_strict'))
         self.min_snr, self.snr_r0 = float(g('min_snr')), float(g('snr_ref_range'))
         self.rscale, self.rbias = float(g('radar_range_scale')), float(g('radar_range_bias_m'))
@@ -411,6 +419,8 @@ class RadarLidarCalib(Node):
         self.lidar_stat = 'lidar: waiting'
         self.lidar_msg_t = 0.0
         self.radar_msg_t = 0.0
+        self.acc = deque(maxlen=int(g('radar_accum_frames')))   # rolling radar frames
+        self.frame_n = 0
         self.cap_deadline = 0.0; self.cap_lidar = []; self.cap_radar = []
         self.captures = []
         self.solution = None
@@ -455,6 +465,7 @@ class RadarLidarCalib(Node):
     def _bg_start(self):
         self.bgl_accum, self.bgl_want, self.bg_lidar = [], self.bgl_n, None
         self.bgr_accum, self.bgr_want, self.bg_radar = [], self.bgr_n, None
+        self.acc.clear()
         self.get_logger().info(
             f'pooling background: lidar {self.bgl_n} + radar {self.bgr_n} frames — '
             f'reflector OFF the tripod, stay out of view')
@@ -605,43 +616,58 @@ class RadarLidarCalib(Node):
             keep &= np.abs(r - r_exp) <= self.rmargin
         if self.max_dop > 0 and dop is not None:
             keep &= np.abs(dop) <= self.max_dop
-        pts, s = xyz[keep], snr[keep]
+        # accumulate this frame, then work on the pooled cloud
+        self.acc.append((xyz[keep], snr[keep], self.frame_n))
+        self.frame_n += 1
+        pts = np.concatenate([a[0] for a in self.acc]) if self.acc else np.zeros((0, 3))
+        sr = np.concatenate([a[1] for a in self.acc]) if self.acc else np.zeros(0)
+        fid = (np.concatenate([np.full(len(a[0]), a[2]) for a in self.acc])
+               if self.acc else np.zeros(0, int))
+        n_frames = len(self.acc)
         if len(pts) == 0:
-            self.aim = (('radar: no return near lidar range (%.2f m) — RE-AIM / unblock'
-                         % r_exp) if self.rmargin > 0 else
-                        'radar: nothing new after background — RE-AIM / re-do background',
-                        'red')
+            self.aim = ('radar: nothing new after background (%d frames pooled) — '
+                        'RE-AIM / re-do background' % n_frames, 'red')
             return
 
         pred = R.T @ (apex - t) if R is not None else None
         if pred is not None:
             near = np.linalg.norm(pts - pred, axis=1) <= self.gate_r
             if near.any():
-                pts, s = pts[near], s[near]
+                pts, sr, fid = pts[near], sr[near], fid[near]
             elif self.strict and self.solution is not None:
                 self.aim = (f'radar: nothing within {self.gate_r:.2f} m of prediction', 'orange')
                 return
         clusters = radar_cluster(pts, self.rceps, self.rcmin)
-        if not clusters:
-            self.aim = ('radar: no cluster after gating', 'orange')
+        # persistence: how many DISTINCT frames contributed to each cluster. The
+        # reflector scores ~n_frames; a one-off multipath spike scores 1.
+        persist = [len(np.unique(fid[c])) for c in clusters]
+        good = [i for i, k in enumerate(persist) if k >= min(self.min_frames, n_frames)]
+        if not good:
+            best = max(persist) if persist else 0
+            self.aim = (f'radar: no persistent cluster (best {best}/{n_frames} frames, '
+                        f'need {self.min_frames}) — flickering / re-aim', 'orange')
             return
         if pred is not None:
-            ci = int(np.argmin([np.linalg.norm(pts[c].mean(0) - pred) for c in clusters]))
+            ci = good[int(np.argmin([np.linalg.norm(pts[clusters[i]].mean(0) - pred)
+                                     for i in good]))]
         else:
-            ci = int(np.argmax([s[c].max() for c in clusters]))
+            ci = good[int(np.argmax([sr[clusters[i]].max() for i in good]))]
         c = clusters[ci]
-        w = s[c] / max(s[c].sum(), 1e-9)
+        w = sr[c] / max(sr[c].sum(), 1e-9)
         p_sel = (pts[c] * w[:, None]).sum(0)
-        snr_sel = float(s[c].max())
+        snr_sel = float(sr[c].max())
+        n_seen = persist[ci]
         r_sel = float(np.linalg.norm(p_sel))
         snr_norm = snr_sel * (r_sel / self.snr_r0) ** 4
         ok = snr_norm >= self.min_snr
-        self.sel = dict(p=p_sel, snr=snr_sel, snr_norm=snr_norm, r=r_sel, n=len(c))
+        self.sel = dict(p=p_sel, snr=snr_sel, snr_norm=snr_norm, r=r_sel, n=len(c),
+                        seen=n_seen, frames=n_frames)
         # Range agreement is reported, not enforced, until a solve exists: before
         # then the baseline is unknown, so a mismatch is uninformative. After the
         # solve the 3-D prediction gate above is already doing the real work.
         gap = abs(r_sel - r_exp)
         self.aim = (f'radar: best {snr_sel:.0f} (norm {snr_norm:.0f}) @ {r_sel:.2f} m'
+                    f' [{n_seen}/{n_frames} frames]'
                     + (f' (lidar {r_exp:.2f}, d {gap*100:.0f} cm)' if self.solution else '')
                     + '  ' + ('OK' if ok else 'RE-AIM'), 'green' if ok else 'orange')
 
@@ -683,6 +709,7 @@ class RadarLidarCalib(Node):
             p_lidar=[round(float(v), 4) for v in p_lidar],
             p_radar=[round(float(v), 4) for v in p_radar],
             method=self.det['method'], snr=round(float(self.sel['snr']), 1),
+            radar_frames_seen=int(self.sel['seen']), radar_frames_pooled=int(self.sel['frames']),
             lidar_std_mm=round(lstd, 1), radar_std_mm=round(rstd * 1000, 1),
             # solve_from_poses_* compatibility: identity pose, apex offset zero
             board_R_quat_xyzw=[0.0, 0.0, 0.0, 1.0],
