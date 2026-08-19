@@ -486,13 +486,17 @@ def _cell(az, el):
 # What to physically do when a given bar is the worst one. Shown as the hint line
 # so the answer to "it is red, now what?" is on screen instead of in a document.
 # Kept short and action-first: they are drawn into a 268 px panel, so the verb
-# has to survive on one line.
+# has to survive on one line. {az}/{el} are filled in with the PHYSICAL direction
+# each radar axis happens to point — see _axis_words. On an upright mount the
+# radar's azimuth is left-right and its elevation is up-down, but a radar rolled
+# 90 deg swaps them, and telling someone to "change height" when the axis they
+# need is horizontal costs a whole collection session.
 COVERAGE_HINT = {
     'range':  'move much nearer AND much farther',
-    'az':     'carry the tripod wider left and right',
-    'az_bal': 'switch sides - one azimuth half is empty',
-    'el':     'change HEIGHT: floor level, then overhead',
-    'el_bal': 'poses all one side - go both high AND low',
+    'az':     'carry the tripod wider {az}',
+    'az_bal': 'one {az} side is empty - go there',
+    'el':     'spread much wider {el}',
+    'el_bal': 'all on one side - go both {el}',
     'near':   f'take captures closer than {NEAR_RANGE_M:.1f} m',
     'cells':  'fill the shaded boxes on the map below',
 }
@@ -1386,6 +1390,26 @@ class RadarLidarCalib(Node):
             cv2.imshow('radar_lidar_calib', im)
             cv2.waitKey(1)
 
+    def _axis_words(self):
+        """Which way the radar's two angular axes physically point, as words.
+
+        Elevation is the radar's weak axis wherever it happens to aim: on an
+        upright mount it is vertical, on a mount rolled 90 deg it is horizontal
+        and the GOOD azimuth axis is the vertical one. The bars are labelled in
+        radar coordinates (az/el) because that is what the solve uses, but the
+        hints have to be in room coordinates or they send you the wrong way.
+        Falls back to the upright assumption until a solve or prior exists."""
+        R, _ = self._current_T()
+        if R is None or self.lidar_frame is None:
+            return dict(az='left/right', el='high/low')
+        vertical = abs(float((R @ [0, 0, 1])[2]))     # radar +Z vs lidar up
+        if vertical > 0.7:                            # elevation axis is vertical
+            return dict(az='left/right', el='high/low')
+        return dict(az='high/low', el='left/right')
+
+    def _hint(self, key):
+        return COVERAGE_HINT[key].format(**self._axis_words())
+
     def _coverage_text(self, pts=None, sep=' '):
         """The same six numbers as the HUD, as text — so the check is available
         in RViz and in the console when no camera is attached. `pts` defaults to
@@ -1401,7 +1425,7 @@ class RadarLidarCalib(Node):
             num = f'{v:.1f}/{tgt:.1f}' if unit == 'm' else f'{v:.0f}/{tgt:.0f}'
             parts.append(f'{label} {num}{unit}[{"P" if ok else "F"}]')
         ok_all = all(cov[k][2] for _, k, _ in rows)
-        tail = 'all DOF constrained' if ok_all else COVERAGE_HINT[cov['worst']]
+        tail = 'all DOF constrained' if ok_all else self._hint(cov['worst'])
         return sep.join(parts), tail, ok_all
 
     @staticmethod
@@ -1482,7 +1506,7 @@ class RadarLidarCalib(Node):
             cv2.putText(im, 'READY - all six DOF constrained', (x0, y + 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 220, 0), 1)
         else:
-            cv2.putText(im, COVERAGE_HINT[cov['worst']], (x0, y + 6),
+            cv2.putText(im, self._hint(cov['worst']), (x0, y + 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 165, 255), 1)
         if draw_map:
             self._draw_coverage_map(im, cov, x0, y + 20, pw)
