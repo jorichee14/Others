@@ -1,0 +1,190 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="700" viewBox="0 0 980 700"
+ font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
+<defs><marker id="aX" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#0b7285"/></marker><marker id="aY" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9c3a06"/></marker><marker id="aZ" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5f3dc4"/></marker></defs>
+<style>
+ .pt{font-size:12.5px;font-weight:650;fill:#1a1a18;text-anchor:middle}
+ .ps{font-size:10.5px;fill:#6d6d68;text-anchor:middle}
+ .fr{fill:#ffffff;stroke:#d8d8d4;stroke-width:1}
+ .gr{stroke:#f0f0ed;stroke-width:1} .ax0{stroke:#cdcdc8;stroke-width:1;stroke-dasharray:3 3}
+ .al{font-size:9.5px;fill:#9a9a94} .sn{font-size:10.5px;font-weight:600}
+ .axl{font-size:10.5px;font-weight:700}
+ .lnk{stroke:#b9b9b3;stroke-width:1.4;stroke-dasharray:4 3}
+ .h1{font-size:16px;font-weight:680;fill:#1a1a18} .h2{font-size:11px;fill:#6d6d68}
+ .sec{font-size:12px;font-weight:680;fill:#1a1a18}
+ .k{font-size:11.5px;fill:#3a3a36} .kb{font-size:11.5px;font-weight:650;fill:#1a1a18}
+ .mn{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;fill:#3a3a36}
+</style>
+<rect x="0" y="0" width="980" height="700" fill="#fbfbfa"/>
+<text x="26" y="32" class="h1">Rig extrinsics &#8212; os_lidar, ZED left, radar1</text>
+<text x="26" y="50" class="h2">All drawn in the LIDAR frame (X forward, Y left, Z up). Grid 5 cm; axis arrows 8.5 cm.
+ &#8857; out of page, &#8855; into page.</text>
+<text x="170.0" y="96" class="pt">FRONT &#8212; looking along lidar +X</text>
+<text x="170.0" y="112" class="ps">lidar +Y left, +Z up</text>
+<rect x="28" y="122" width="284" height="202" class="fr"/>
+<line x1="294.0" y1="122" x2="294.0" y2="324" class="gr"/>
+<line x1="28" y1="318.0" x2="312" y2="318.0" class="gr"/>
+<line x1="263.0" y1="122" x2="263.0" y2="324" class="gr"/>
+<line x1="28" y1="287.0" x2="312" y2="287.0" class="gr"/>
+<line x1="232.0" y1="122" x2="232.0" y2="324" class="gr"/>
+<line x1="28" y1="256.0" x2="312" y2="256.0" class="gr"/>
+<line x1="201.0" y1="122" x2="201.0" y2="324" class="gr"/>
+<line x1="28" y1="225.0" x2="312" y2="225.0" class="gr"/>
+<line x1="139.0" y1="122" x2="139.0" y2="324" class="gr"/>
+<line x1="28" y1="163.0" x2="312" y2="163.0" class="gr"/>
+<line x1="108.0" y1="122" x2="108.0" y2="324" class="gr"/>
+<line x1="28" y1="132.0" x2="312" y2="132.0" class="gr"/>
+<line x1="77.0" y1="122" x2="77.0" y2="324" class="gr"/>
+<line x1="46.0" y1="122" x2="46.0" y2="324" class="gr"/>
+<line x1="28" y1="194" x2="312" y2="194" class="ax0"/>
+<line x1="170.0" y1="122" x2="170.0" y2="324" class="ax0"/>
+<text x="308" y="187" class="al" text-anchor="end">lidar +Y (left)</text>
+<text x="176.0" y="134" class="al">lidar +Z (up)</text>
+<line x1="170.0" y1="194.0" x2="211.5" y2="250.8" class="lnk"/>
+<line x1="170.0" y1="194.0" x2="87.3" y2="324.2" class="lnk"/>
+<line x1="211.5" y1="250.8" x2="87.3" y2="324.2" class="lnk"/>
+<circle cx="170.0" cy="194.0" r="9" fill="none" stroke="#0b7285" stroke-width="1.6" stroke-dasharray="2.5 2.5"/>
+<text x="182.0" y="185.0" class="axl" fill="#0b7285">X&#8857;</text>
+<line x1="170.0" y1="194.0" x2="117.3" y2="194.0" stroke="#9c3a06" stroke-width="2.4" marker-end="url(#aY)"/>
+<text x="109.3" y="188.0" class="axl" fill="#9c3a06" text-anchor="end">Y</text>
+<line x1="170.0" y1="194.0" x2="170.0" y2="141.3" stroke="#5f3dc4" stroke-width="2.4" marker-end="url(#aZ)"/>
+<text x="178.0" y="135.3" class="axl" fill="#5f3dc4" text-anchor="start">Z</text>
+<circle cx="170.0" cy="194.0" r="5.5" fill="#12161c"/>
+<text x="170.0" y="214.0" class="sn" fill="#12161c" text-anchor="middle">os_lidar</text>
+<line x1="211.5" y1="250.8" x2="158.8" y2="250.8" stroke="#0b7285" stroke-width="2.4" marker-end="url(#aX)"/>
+<text x="150.8" y="244.8" class="axl" fill="#0b7285" text-anchor="end">X</text>
+<line x1="211.5" y1="250.8" x2="211.5" y2="303.5" stroke="#9c3a06" stroke-width="2.4" marker-end="url(#aY)"/>
+<text x="203.5" y="316.5" class="axl" fill="#9c3a06" text-anchor="end">Y</text>
+<circle cx="211.5" cy="250.8" r="9" fill="none" stroke="#5f3dc4" stroke-width="1.6" stroke-dasharray="2.5 2.5"/>
+<text x="223.5" y="241.8" class="axl" fill="#5f3dc4">Z&#8855;</text>
+<circle cx="211.5" cy="250.8" r="5.5" fill="#0c6b7a"/>
+<text x="211.5" y="270.8" class="sn" fill="#0c6b7a" text-anchor="middle">zed left</text>
+<line x1="87.3" y1="324.2" x2="88.4" y2="312.5" stroke="#0b7285" stroke-width="2.4" marker-end="url(#aX)"/>
+<text x="96.4" y="306.5" class="axl" fill="#0b7285" text-anchor="start">X</text>
+<line x1="87.3" y1="324.2" x2="139.9" y2="321.6" stroke="#9c3a06" stroke-width="2.4" marker-end="url(#aY)"/>
+<text x="147.9" y="315.6" class="axl" fill="#9c3a06" text-anchor="start">Y</text>
+<line x1="87.3" y1="324.2" x2="84.3" y2="272.9" stroke="#5f3dc4" stroke-width="2.4" marker-end="url(#aZ)"/>
+<text x="76.3" y="266.9" class="axl" fill="#5f3dc4" text-anchor="end">Z</text>
+<circle cx="87.3" cy="324.2" r="5.5" fill="#a8331f"/>
+<text x="87.3" y="344.2" class="sn" fill="#a8331f" text-anchor="middle">radar1</text>
+<text x="490.0" y="96" class="pt">TOP &#8212; looking down</text>
+<text x="490.0" y="112" class="ps">lidar +X forward, +Y left</text>
+<rect x="348" y="122" width="284" height="202" class="fr"/>
+<line x1="614.0" y1="122" x2="614.0" y2="324" class="gr"/>
+<line x1="348" y1="318.0" x2="632" y2="318.0" class="gr"/>
+<line x1="583.0" y1="122" x2="583.0" y2="324" class="gr"/>
+<line x1="348" y1="287.0" x2="632" y2="287.0" class="gr"/>
+<line x1="552.0" y1="122" x2="552.0" y2="324" class="gr"/>
+<line x1="348" y1="256.0" x2="632" y2="256.0" class="gr"/>
+<line x1="521.0" y1="122" x2="521.0" y2="324" class="gr"/>
+<line x1="348" y1="225.0" x2="632" y2="225.0" class="gr"/>
+<line x1="459.0" y1="122" x2="459.0" y2="324" class="gr"/>
+<line x1="348" y1="163.0" x2="632" y2="163.0" class="gr"/>
+<line x1="428.0" y1="122" x2="428.0" y2="324" class="gr"/>
+<line x1="348" y1="132.0" x2="632" y2="132.0" class="gr"/>
+<line x1="397.0" y1="122" x2="397.0" y2="324" class="gr"/>
+<line x1="366.0" y1="122" x2="366.0" y2="324" class="gr"/>
+<line x1="348" y1="194" x2="632" y2="194" class="ax0"/>
+<line x1="490.0" y1="122" x2="490.0" y2="324" class="ax0"/>
+<text x="628" y="187" class="al" text-anchor="end">lidar +Y (left)</text>
+<text x="496.0" y="134" class="al">lidar +X (fwd)</text>
+<line x1="490.0" y1="194.0" x2="531.5" y2="240.5" class="lnk"/>
+<line x1="490.0" y1="194.0" x2="407.3" y2="176.7" class="lnk"/>
+<line x1="531.5" y1="240.5" x2="407.3" y2="176.7" class="lnk"/>
+<line x1="490.0" y1="194.0" x2="490.0" y2="141.3" stroke="#0b7285" stroke-width="2.4" marker-end="url(#aX)"/>
+<text x="498.0" y="135.3" class="axl" fill="#0b7285" text-anchor="start">X</text>
+<line x1="490.0" y1="194.0" x2="437.3" y2="194.0" stroke="#9c3a06" stroke-width="2.4" marker-end="url(#aY)"/>
+<text x="429.3" y="188.0" class="axl" fill="#9c3a06" text-anchor="end">Y</text>
+<circle cx="490.0" cy="194.0" r="9" fill="none" stroke="#5f3dc4" stroke-width="1.6" stroke-dasharray="2.5 2.5"/>
+<text x="502.0" y="185.0" class="axl" fill="#5f3dc4">Z&#8857;</text>
+<circle cx="490.0" cy="194.0" r="5.5" fill="#12161c"/>
+<text x="490.0" y="214.0" class="sn" fill="#12161c" text-anchor="middle">os_lidar</text>
+<line x1="531.5" y1="240.5" x2="478.8" y2="240.4" stroke="#0b7285" stroke-width="2.4" marker-end="url(#aX)"/>
+<text x="470.8" y="234.4" class="axl" fill="#0b7285" text-anchor="end">X</text>
+<circle cx="531.5" cy="240.5" r="9" fill="none" stroke="#9c3a06" stroke-width="1.6" stroke-dasharray="2.5 2.5"/>
+<text x="543.5" y="231.5" class="axl" fill="#9c3a06">Y&#8855;</text>
+<line x1="531.5" y1="240.5" x2="531.5" y2="293.2" stroke="#5f3dc4" stroke-width="2.4" marker-end="url(#aZ)"/>
+<text x="523.5" y="306.2" class="axl" fill="#5f3dc4" text-anchor="end">Z</text>
+<circle cx="531.5" cy="240.5" r="5.5" fill="#0c6b7a"/>
+<text x="531.5" y="260.5" class="sn" fill="#0c6b7a" text-anchor="middle">zed left</text>
+<line x1="407.3" y1="176.7" x2="408.4" y2="228.1" stroke="#0b7285" stroke-width="2.4" marker-end="url(#aX)"/>
+<text x="416.4" y="241.1" class="axl" fill="#0b7285" text-anchor="start">X</text>
+<line x1="407.3" y1="176.7" x2="459.9" y2="175.0" stroke="#9c3a06" stroke-width="2.4" marker-end="url(#aY)"/>
+<text x="467.9" y="169.0" class="axl" fill="#9c3a06" text-anchor="start">Y</text>
+<line x1="407.3" y1="176.7" x2="404.3" y2="165.1" stroke="#5f3dc4" stroke-width="2.4" marker-end="url(#aZ)"/>
+<text x="396.3" y="159.1" class="axl" fill="#5f3dc4" text-anchor="end">Z</text>
+<circle cx="407.3" cy="176.7" r="5.5" fill="#a8331f"/>
+<text x="407.3" y="196.7" class="sn" fill="#a8331f" text-anchor="middle">radar1</text>
+<text x="810.0" y="96" class="pt">SIDE &#8212; from lidar +Y</text>
+<text x="810.0" y="112" class="ps">lidar +X forward, +Z up</text>
+<rect x="668" y="122" width="284" height="202" class="fr"/>
+<line x1="686.0" y1="122" x2="686.0" y2="324" class="gr"/>
+<line x1="668" y1="318.0" x2="952" y2="318.0" class="gr"/>
+<line x1="717.0" y1="122" x2="717.0" y2="324" class="gr"/>
+<line x1="668" y1="287.0" x2="952" y2="287.0" class="gr"/>
+<line x1="748.0" y1="122" x2="748.0" y2="324" class="gr"/>
+<line x1="668" y1="256.0" x2="952" y2="256.0" class="gr"/>
+<line x1="779.0" y1="122" x2="779.0" y2="324" class="gr"/>
+<line x1="668" y1="225.0" x2="952" y2="225.0" class="gr"/>
+<line x1="841.0" y1="122" x2="841.0" y2="324" class="gr"/>
+<line x1="668" y1="163.0" x2="952" y2="163.0" class="gr"/>
+<line x1="872.0" y1="122" x2="872.0" y2="324" class="gr"/>
+<line x1="668" y1="132.0" x2="952" y2="132.0" class="gr"/>
+<line x1="903.0" y1="122" x2="903.0" y2="324" class="gr"/>
+<line x1="934.0" y1="122" x2="934.0" y2="324" class="gr"/>
+<line x1="668" y1="194" x2="952" y2="194" class="ax0"/>
+<line x1="810.0" y1="122" x2="810.0" y2="324" class="ax0"/>
+<text x="948" y="187" class="al" text-anchor="end">lidar +X (fwd)</text>
+<text x="816.0" y="134" class="al">lidar +Z (up)</text>
+<line x1="810.0" y1="194.0" x2="763.5" y2="250.8" class="lnk"/>
+<line x1="810.0" y1="194.0" x2="827.3" y2="324.2" class="lnk"/>
+<line x1="763.5" y1="250.8" x2="827.3" y2="324.2" class="lnk"/>
+<line x1="810.0" y1="194.0" x2="862.7" y2="194.0" stroke="#0b7285" stroke-width="2.4" marker-end="url(#aX)"/>
+<text x="870.7" y="188.0" class="axl" fill="#0b7285" text-anchor="start">X</text>
+<circle cx="810.0" cy="194.0" r="9" fill="none" stroke="#9c3a06" stroke-width="1.6" stroke-dasharray="2.5 2.5"/>
+<text x="822.0" y="185.0" class="axl" fill="#9c3a06">Y&#8857;</text>
+<line x1="810.0" y1="194.0" x2="810.0" y2="141.3" stroke="#5f3dc4" stroke-width="2.4" marker-end="url(#aZ)"/>
+<text x="818.0" y="135.3" class="axl" fill="#5f3dc4" text-anchor="start">Z</text>
+<circle cx="810.0" cy="194.0" r="5.5" fill="#12161c"/>
+<text x="810.0" y="214.0" class="sn" fill="#12161c" text-anchor="middle">os_lidar</text>
+<circle cx="763.5" cy="250.8" r="9" fill="none" stroke="#0b7285" stroke-width="1.6" stroke-dasharray="2.5 2.5"/>
+<text x="775.5" y="241.8" class="axl" fill="#0b7285">X&#8857;</text>
+<line x1="763.5" y1="250.8" x2="763.1" y2="303.5" stroke="#9c3a06" stroke-width="2.4" marker-end="url(#aY)"/>
+<text x="755.1" y="316.5" class="axl" fill="#9c3a06" text-anchor="end">Y</text>
+<line x1="763.5" y1="250.8" x2="710.8" y2="250.4" stroke="#5f3dc4" stroke-width="2.4" marker-end="url(#aZ)"/>
+<text x="702.8" y="244.4" class="axl" fill="#5f3dc4" text-anchor="end">Z</text>
+<circle cx="763.5" cy="250.8" r="5.5" fill="#0c6b7a"/>
+<text x="763.5" y="270.8" class="sn" fill="#0c6b7a" text-anchor="middle">zed left</text>
+<line x1="827.3" y1="324.2" x2="775.9" y2="312.5" stroke="#0b7285" stroke-width="2.4" marker-end="url(#aX)"/>
+<text x="767.9" y="306.5" class="axl" fill="#0b7285" text-anchor="end">X</text>
+<circle cx="827.3" cy="324.2" r="9" fill="none" stroke="#9c3a06" stroke-width="1.6" stroke-dasharray="2.5 2.5"/>
+<text x="839.3" y="315.2" class="axl" fill="#9c3a06">Y&#8855;</text>
+<line x1="827.3" y1="324.2" x2="838.9" y2="272.9" stroke="#5f3dc4" stroke-width="2.4" marker-end="url(#aZ)"/>
+<text x="846.9" y="266.9" class="axl" fill="#5f3dc4" text-anchor="start">Z</text>
+<circle cx="827.3" cy="324.2" r="5.5" fill="#a8331f"/>
+<text x="827.3" y="344.2" class="sn" fill="#a8331f" text-anchor="middle">radar1</text>
+<text x="26" y="380" class="sec">TRANSLATION &#8212; positions in the lidar frame</text>
+<circle cx="34" cy="400" r="5" fill="#12161c"/>
+<text x="48" y="404" class="kb">os_lidar</text>
+<text x="150" y="404" class="mn">[+0.0000  +0.0000  +0.0000] m</text>
+<circle cx="34" cy="424" r="5" fill="#0c6b7a"/>
+<text x="48" y="428" class="kb">zed left</text>
+<text x="150" y="428" class="mn">[-0.0749  -0.0670  -0.0916] m</text>
+<text x="360" y="428" class="k">|t| = 13.6 cm from lidar</text>
+<circle cx="34" cy="448" r="5" fill="#a8331f"/>
+<text x="48" y="452" class="kb">radar1</text>
+<text x="150" y="452" class="mn">[+0.0279  +0.1334  -0.2100] m</text>
+<text x="360" y="452" class="k">|t| = 25.0 cm from lidar</text>
+<text x="150" y="478" class="k">camera &#8594; radar separation = 25.4 cm</text>
+<text x="26" y="518" class="sec">ROTATION &#8212; where each sensor&#8217;s own axes point, in the lidar frame</text>
+<text x="26" y="544" class="kb" fill="#0c6b7a">zed left</text>
+<text x="150" y="544" class="mn" fill="#0b7285">X&#8594;[+0.00 +1.00 +0.00]</text>
+<text x="378" y="544" class="mn" fill="#9c3a06">Y&#8594;[-0.01 +0.00 -1.00]</text>
+<text x="606" y="544" class="mn" fill="#5f3dc4">Z&#8594;[-1.00 +0.00 +0.01]</text>
+<text x="26" y="570" class="kb" fill="#a8331f">radar1</text>
+<text x="150" y="570" class="mn" fill="#0b7285">X&#8594;[-0.97 -0.02 +0.22]</text>
+<text x="378" y="570" class="mn" fill="#9c3a06">Y&#8594;[+0.03 -1.00 +0.05]</text>
+<text x="606" y="570" class="mn" fill="#5f3dc4">Z&#8594;[+0.22 +0.06 +0.97]</text>
+<text x="26" y="604" class="sec">Reading</text>
+<text x="150" y="604" class="k">Radar and camera both look along lidar <tspan class="mn">&#8722;X</tspan>; radar is UPRIGHT (its +Z within 13&#176; of lidar +Z) and pitched 13&#176; down.</text>
+<text x="150" y="626" class="k">Solved from 33 captures, 27 inliers, residual 1.33&#963; &#183; rot 1&#963; 3.8/6.6/1.2&#176; &#183; t 1&#963; 11/31/60 mm</text>
+</svg>
