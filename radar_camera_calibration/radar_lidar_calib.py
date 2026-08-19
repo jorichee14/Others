@@ -1,82 +1,116 @@
 #!/usr/bin/env python3
 """
-RADAR ↔ LIDAR extrinsic calibration (solves T_cam_radar, lidar as reference)
-============================================================================
+RADAR ↔ LIDAR extrinsic calibration  —  solves T_lidar_radar
+=============================================================
 
-Pairs with `lidar_reflector_detector.py` (run BOTH nodes). The detector finds
-the corner-reflector apex in the lidar cloud and publishes it in the CAMERA
-frame (via the Koide T_cam_lidar). This node:
+ONE node, no camera, no board, no hand-measured offsets. The whole target is a
+corner reflector on a tripod. Everything lives in the LIDAR frame; verification
+is done in RViz.
 
-  1. gates the radar cloud around that apex (background subtraction, a
-     rotation-invariant RANGE gate, |doppler|≈0, then a 3-D gate around the
-     predicted point once a solve or prior exists),
-  2. shows a LIVE AIM line so you can see, before triggering, whether the
-     reflector is aimed well enough at the radar for the capture to pass:
-        radar: best 1240 (norm 1870) @ 2.31 m  OK
-        radar: best 41 (norm 62) @ 2.28 m  RE-AIM
-        radar: no return near lidar range
-     `norm` is snr·(r/1.5m)^4 — received power falls as 1/r^4, so a raw SNR
-     threshold would wrongly refuse a well-aimed reflector at 4 m,
-  3. on ~/capture stores one atomic (p_cam, p_radar) pair — BOTH sides must
-     pass their gates or the capture is REFUSED with the reason logged,
-  4. solves T_cam_radar with the same measurement-space ML solver as the
-     camera pipeline (imported from radar_camera_calib — Huber, reject_sigma,
-     per-axis reject, covariance, LOO). The lidar apex enters as
-     board_R = I, board_t = p_cam, apex offset pinned at 0 — no offset,
-     no board, nothing hand-measured on the target,
-  5. draws Stage B on top of the detector's Stage-A overlay: magenta dot =
-     radar's pick projected through the current solve, line + Δmm to the
-     lidar crosshair. The final validation is unchanged: carry the reflector
-     around the FoV (especially UP and DOWN) and the dot must stay glued.
+    p_lidar = R · p_radar + t          (X = T_lidar_radar)
 
-Control topics (this node forwards ~/background to the detector, so ONE
-command pools both sensors):
-  ~/background  reflector OFF, tripod in place, you out of the radar view
-  ~/capture     reflector ON, aimed (aim line OK), you out of the scene
-  ~/solve ~/reset ~/save
+How the reflector is found
+--------------------------
+LIDAR — it does not look for a "reflector". It looks for what is NEW:
+  1. ~/background memorises the empty scene on a voxel grid (walls, floor AND
+     the tripod — the reflector must be OFF the tripod for this),
+  2. every later cloud is background-subtracted, so the only surviving points
+     are the object that was not there before = the reflector,
+  3. the survivors are clustered, and the APEX is localised by RANSAC-fitting
+     the three plates and intersecting them (analytic corner, nothing
+     measured). Fallback when the plates are too sparse: the farthest point
+     along the viewing ray, which for a reflector aimed at the sensor IS the
+     corner.
+  The premise is "nothing else changed since the background" — hence the
+  per-placement loop: background → mount reflector → step out → capture.
+
+RADAR — background subtraction, then a ROTATION-INVARIANT range gate around
+  the lidar's range (you do not know R yet, but |p| is the same in any
+  orientation), |doppler|≈0 (a tripod target is truly static), clustering, and
+  the SNR-weighted centroid of the best blob. Once a solve exists it tightens
+  to a 3-D gate around the predicted point.
+
+Aim feedback (before you trigger)
+---------------------------------
+The status marker / log shows continuously:
+    radar: best 1240 (norm 1870) @ 2.31 m  OK        → capture will pass
+    radar: best 41 (norm 62) @ 2.28 m  RE-AIM        → fix the aim first
+    radar: no return near lidar range                → aimed way off / blocked
+`norm` = snr·(r/1.5 m)^4. Received power falls as 1/r^4, so a raw SNR
+threshold would wrongly refuse a well-aimed reflector at 4 m.
+
+A capture is ATOMIC: both sensors must pass their gates or it is REFUSED with
+the reason logged. Nothing half-good is ever stored.
+
+RViz verification (replaces the old image overlay)
+--------------------------------------------------
+Fixed Frame = your lidar frame. Add the lidar PointCloud2 and a MarkerArray on
+~/markers:
+  cyan points   the foreground cluster        → must sit on the reflector only
+  green sphere  the detected apex             → must sit on its corner
+  amber spheres captured apexes, numbered     → your coverage map
+  magenta       the radar's pick through the current solve (after first solve)
+  magenta line  radar pick ↔ lidar apex, labelled with the gap in mm
+  text          aim status + capture/solve state
+FINAL CHECK: carry the reflector around — near/far, left/right, UP/DOWN — and
+the magenta sphere must stay on the green one. If it mirrors when you raise the
+reflector, the rotation is in the wrong branch: do not save.
 
 Run
 ---
   ros2 run wicoms_utils radar_lidar_calib --ros-args \
+    -p lidar_topic:=/ouster/points \
     -p radar_topic:=/radar1/radar/points_all -p pc_field_snr:=intensity \
-    -p prior_t_xyz:="[0.20, 0.0, 0.0]" -p prior_rpy_deg:="[-90.0, -90.0, 0.0]" \
     -p radar_name:=radar1 -p child_frame:=radar1_link
 
-The session json is compatible with sessions/solve_from_poses_joint.py
-(board pose = identity/apex, offset = 0) for offline audits.
+  ros2 topic pub -1 /radar_lidar_calib/background std_msgs/msg/Empty "{}"
+  ros2 topic pub -1 /radar_lidar_calib/capture    std_msgs/msg/Empty "{}"
+  ros2 topic pub -1 /radar_lidar_calib/solve      std_msgs/msg/Empty "{}"
+  ros2 topic pub -1 /radar_lidar_calib/save       std_msgs/msg/Empty "{}"
+  ros2 topic pub -1 /radar_lidar_calib/reset      std_msgs/msg/Empty "{}"
+
+Later, when you do have lidar→camera, the result composes directly:
+    T_cam_radar = T_cam_lidar · T_lidar_radar
+so nothing measured here is wasted.
+
+Structure: [A] cloud tools · [B] apex locator · [C] node.
 """
 import json
 import os
 import time
-from collections import deque
 
 import numpy as np
-import cv2
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import PointCloud2, Image, CameraInfo
-from geometry_msgs.msg import PointStamped, TransformStamped
-from std_msgs.msg import Empty
-from cv_bridge import CvBridge
+from sensor_msgs.msg import PointCloud2
+from geometry_msgs.msg import PointStamped, TransformStamped, Point
+from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import Empty, ColorRGBA
+from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation as Rot
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
-try:                                             # flat-module or package layout
+try:                                    # flat-module or installed-package layout
     from radar_camera_calib import (robust_ml_calibrate, loo_cross_val,
-                                    condition_number, cluster_points,
-                                    cart_to_raz, _wrap)
+                                    condition_number, cluster_points as radar_cluster,
+                                    cart_to_raz)
 except ImportError:
     from wicoms_utils.radar_camera_calib import (robust_ml_calibrate, loo_cross_val,
-                                                 condition_number, cluster_points,
-                                                 cart_to_raz, _wrap)
+                                                 condition_number,
+                                                 cluster_points as radar_cluster,
+                                                 cart_to_raz)
 
+
+# ────────────────────────────── [A] cloud tools ──────────────────────────────
 _DT = {1: np.int8, 2: np.uint8, 3: np.int16, 4: np.uint16,
        5: np.int32, 6: np.uint32, 7: np.float32, 8: np.float64}
 
 
 def cloud_fields(msg, names):
-    """PointCloud2 → dict of named columns (float32). Missing names → None."""
+    """PointCloud2 → dict of named float32 columns (missing name → None).
+    Parsed straight from the buffer; the read_points generator is far too slow
+    for a 64×1024 Ouster at 10-20 Hz."""
     n = msg.width * msg.height
     if n == 0:
         return {k: None for k in names}
@@ -85,9 +119,9 @@ def cloud_fields(msg, names):
     offs = {f.name: (f.offset, f.datatype) for f in msg.fields}
     out = {}
     for name in names:
-        if name in offs:
+        if name in offs and _DT.get(offs[name][1]) is not None:
             off, dt = offs[name]
-            typ = _DT.get(dt)
+            typ = _DT[dt]
             w = np.dtype(typ).itemsize
             out[name] = buf[:, off:off + w].copy().view(typ).ravel().astype(np.float32)
         else:
@@ -95,61 +129,195 @@ def cloud_fields(msg, names):
     return out
 
 
+def cloud_xyz(msg):
+    f = cloud_fields(msg, ['x', 'y', 'z'])
+    if f['x'] is None or f['y'] is None or f['z'] is None:
+        return np.zeros((0, 3), np.float32)
+    return np.stack([f['x'], f['y'], f['z']], 1)
+
+
+# Voxel background set: keys are packed int64s, membership tested against the
+# 27-neighbourhood so "within ~one voxel of any background point" counts as
+# background. Vectorised with sort + searchsorted (no per-point python).
+_OFF = 1 << 20
+_SX, _SY = 1 << 42, 1 << 21
+_NEIGH = np.array([dx * _SX + dy * _SY + dz
+                   for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)],
+                  dtype=np.int64)
+
+
+def voxel_keys(xyz, voxel):
+    idx = np.floor(xyz / voxel).astype(np.int64) + _OFF
+    return idx[:, 0] * _SX + idx[:, 1] * _SY + idx[:, 2]
+
+
+def foreground_mask(xyz, bg_sorted, voxel):
+    keys = voxel_keys(xyz, voxel)
+    hit = np.zeros(len(keys), bool)
+    for d in _NEIGH:
+        k = keys + d
+        i = np.clip(np.searchsorted(bg_sorted, k), 0, len(bg_sorted) - 1)
+        hit |= (bg_sorted[i] == k)
+    return ~hit
+
+
+def lidar_cluster(P, eps, min_size, cap=20000):
+    """Connected components within `eps` via cKDTree. Returns point arrays,
+    largest first. The foreground should be tiny (just the reflector); the cap
+    is a defensive decimation for when the background went stale."""
+    if len(P) == 0:
+        return []
+    if len(P) > cap:
+        P = P[np.random.choice(len(P), cap, replace=False)]
+    tree = cKDTree(P)
+    lab = np.full(len(P), -1, int)
+    out, cid = [], 0
+    for i in range(len(P)):
+        if lab[i] >= 0:
+            continue
+        stack, members = [i], [i]
+        lab[i] = cid
+        while stack:
+            j = stack.pop()
+            for k in tree.query_ball_point(P[j], eps):
+                if lab[k] < 0:
+                    lab[k] = cid
+                    stack.append(k)
+                    members.append(k)
+        if len(members) >= min_size:
+            out.append(np.array(members))
+        cid += 1
+    out.sort(key=len, reverse=True)
+    return [P[m] for m in out]
+
+
+# ────────────────────────────── [B] apex locator ─────────────────────────────
+def ransac_planes(P, tol, iters, min_pts, rng):
+    """Sequentially RANSAC up to three planes; each refined by SVD on its
+    inliers, whose points are removed before the next fit."""
+    planes, pts = [], P.copy()
+    for _ in range(3):
+        if len(pts) < min_pts:
+            break
+        best = None
+        for _ in range(iters):
+            a, b, c = pts[rng.choice(len(pts), 3, replace=False)]
+            n = np.cross(b - a, c - a)
+            nn = np.linalg.norm(n)
+            if nn < 1e-9:
+                continue
+            n = n / nn
+            inl = np.abs(pts @ n - n @ a) < tol
+            if best is None or inl.sum() > best[0]:
+                best = (int(inl.sum()), inl)
+        if best is None or best[0] < min_pts:
+            break
+        Q = pts[best[1]]
+        c0 = Q.mean(0)
+        n = np.linalg.svd(Q - c0)[2][2]
+        planes.append((n, float(n @ c0)))
+        pts = pts[~best[1]]
+    return planes
+
+
+def locate_apex(P, tol, iters, min_pts, perp_tol_deg, rng):
+    """Trihedral apex from its point cluster.
+    'planes3'  three mutually ~perpendicular planes intersected → exact corner.
+    'deepest'  farthest points along the viewing ray (the corner of a reflector
+               aimed at the sensor is its deepest point). Used when the plates
+               are too sparse to fit — i.e. at longer range."""
+    planes = ransac_planes(P, tol, iters, min_pts, rng)
+    if len(planes) == 3:
+        budget = np.cos(np.radians(90.0 - perp_tol_deg))
+        if all(abs(planes[i][0] @ planes[j][0]) < budget
+               for i in range(3) for j in range(i + 1, 3)):
+            N = np.stack([p[0] for p in planes])
+            d = np.array([p[1] for p in planes])
+            try:
+                apex = np.linalg.solve(N, d)
+                if np.min(np.linalg.norm(P - apex, axis=1)) < 0.10:   # must touch the cluster
+                    return apex, 'planes3'
+            except np.linalg.LinAlgError:
+                pass
+    u = P.mean(0)
+    u = u / (np.linalg.norm(u) + 1e-9)
+    k = min(8, len(P))
+    return P[np.argsort(P @ u)[-k:]].mean(0), 'deepest'
+
+
+# ─────────────────────────────── [C] the node ────────────────────────────────
+CYAN = ColorRGBA(r=0.1, g=0.85, b=0.95, a=1.0)
+GREEN = ColorRGBA(r=0.1, g=1.0, b=0.2, a=1.0)
+AMBER = ColorRGBA(r=1.0, g=0.75, b=0.1, a=0.9)
+MAGENTA = ColorRGBA(r=1.0, g=0.1, b=0.9, a=1.0)
+WHITE = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+
+
 class RadarLidarCalib(Node):
     def __init__(self):
         super().__init__('radar_lidar_calib')
         dp = self.declare_parameter
-        # ── inputs ──
+        # ── topics ──
+        dp('lidar_topic', '/ouster/points')
         dp('radar_topic', '/radar1/radar/points_all')
         dp('pc_field_x', 'x'); dp('pc_field_y', 'y'); dp('pc_field_z', 'z')
         dp('pc_field_snr', 'intensity'); dp('pc_field_doppler', 'doppler')
-        dp('apex_topic', '/lidar_reflector/apex_cam')       # from the detector
-        dp('base_image_topic', '/lidar_reflector/debug_image')  # Stage-A overlay
-        dp('image_topic', '/zed/zed_node/left/image_rect_color')  # fallback base
-        dp('info_topic', '/zed/zed_node/left/camera_info')
-        dp('lidar_background_topic', '/lidar_reflector/background')  # forwarded
-        # ── radar gating ──
-        dp('min_range', 0.3); dp('max_range', 8.0)
-        dp('range_gate_margin_m', 0.5)      # |r_radar − r_expected| gate (rotation-invariant)
-        dp('max_abs_doppler', 0.15)         # tripod target is truly static
-        dp('bg_frames', 15); dp('bg_match_dist', 0.2)
-        dp('cluster_eps', 0.20); dp('min_cluster_size', 1)
-        dp('gate_radius', 0.40)             # 3-D gate around prediction (once solve/prior)
-        dp('cluster_strict', True)          # no blob near prediction → no selection
-        dp('min_snr', 100.0)                # threshold on snr·(r/1.5m)^4
+        # ── lidar detection ──
+        dp('lidar_min_range', 0.3); dp('lidar_max_range', 8.0)
+        dp('bg_frames_lidar', 10)
+        dp('bg_voxel', 0.10)                 # background match distance (m)
+        dp('cluster_eps', 0.12)              # foreground clustering radius (m)
+        dp('min_cluster_size', 15)
+        dp('plane_tol', 0.015)               # RANSAC inlier distance (m)
+        dp('plane_iters', 250)
+        dp('min_plane_pts', 12)              # per plate — sets max planes3 range
+        dp('perp_tol_deg', 25.0)
+        # ── radar detection ──
+        dp('radar_min_range', 0.3); dp('radar_max_range', 8.0)
+        dp('bg_frames_radar', 15); dp('bg_match_dist', 0.2)
+        dp('range_gate_margin_m', 0.75)      # must exceed the lidar↔radar baseline
+        dp('max_abs_doppler', 0.15)          # tripod target is genuinely static
+        dp('radar_cluster_eps', 0.20); dp('radar_min_cluster_size', 1)
+        dp('gate_radius', 0.40)              # 3-D gate once a solve exists
+        dp('cluster_strict', True)
+        dp('min_snr', 100.0)                 # threshold on snr·(r/ref)^4
         dp('snr_ref_range', 1.5)
-        dp('radar_range_scale', 1.0)        # ingest correction; redo §0c vs the LIDAR
+        dp('radar_range_scale', 1.0)         # ingest correction; tune until a≈1
         dp('radar_range_bias_m', 0.0)
-        # ── noise model / solver (radar-dominated; lidar apex ~1 cm ≪ these) ──
+        # ── noise model + solver (radar-dominated; lidar apex ~1 cm ≪ these) ──
         dp('sigma_range_m', 0.05); dp('sigma_az_deg', 3.0); dp('sigma_el_deg', 8.0)
         dp('huber_f_scale', 1.5); dp('reject_sigma', 4.0); dp('reject_axis_sigma', 3.5)
-        # ── extrinsic prior (tape + nominal mounting; camera frame) ──
-        dp('use_extrinsic_prior', True)
+        # ── optional prior (OFF by default) ──
+        dp('use_extrinsic_prior', False)
         dp('prior_t_xyz', [0.0, 0.0, 0.0]); dp('prior_rpy_deg', [0.0, 0.0, 0.0])
-        dp('prior_t_sigma_m', 0.10); dp('prior_rot_sigma_deg', 5.0)
+        dp('prior_t_sigma_m', 0.15); dp('prior_rot_sigma_deg', 15.0)
         # ── capture ──
-        dp('capture_frames', 5)             # radar selections averaged per ~/capture
+        dp('capture_frames', 5)              # radar selections averaged per capture
         dp('capture_timeout_s', 6.0)
-        dp('lidar_std_mm', 15.0)            # apex jitter gate over the window
-        dp('radar_std_m', 0.10)             # radar point jitter gate over the window
-        dp('min_points', 12)                # solve after this many pairs
-        dp('min_baseline', 0.10)
-        # ── validation / output ──
-        dp('measured_baseline_m', -1.0)     # tape |t| for the report (>0 to enable)
-        dp('camera_frame', 'zed_left_camera_optical_frame')
+        dp('lidar_std_mm', 15.0)             # apex jitter gate
+        dp('radar_std_m', 0.10)              # radar point jitter gate
+        dp('min_points', 12)                 # first solve at this many pairs
+        dp('min_baseline', 0.15)
+        # ── output ──
+        dp('measured_baseline_m', -1.0)      # tape lidar→radar distance (check only)
         dp('child_frame', 'radar1_link'); dp('radar_name', 'radar1')
-        dp('camera_name', 'zed_left')
+        dp('lidar_name', 'ouster')
         dp('output_path', ''); dp('publish_tf', True)
-        dp('show_window', True); dp('debug_scale', 1.0)
+        dp('status_marker_xyz', [2.0, 0.0, 1.0])
 
         g = lambda k: self.get_parameter(k).value
         self.fx, self.fy, self.fz = g('pc_field_x'), g('pc_field_y'), g('pc_field_z')
         self.fsnr, self.fdop = g('pc_field_snr'), g('pc_field_doppler')
-        self.min_range, self.max_range = float(g('min_range')), float(g('max_range'))
+        self.lmin, self.lmax = float(g('lidar_min_range')), float(g('lidar_max_range'))
+        self.bgl_n, self.bg_voxel = int(g('bg_frames_lidar')), float(g('bg_voxel'))
+        self.ceps, self.cmin = float(g('cluster_eps')), int(g('min_cluster_size'))
+        self.ptol, self.piters = float(g('plane_tol')), int(g('plane_iters'))
+        self.pmin, self.perp = int(g('min_plane_pts')), float(g('perp_tol_deg'))
+        self.rmin, self.rmax = float(g('radar_min_range')), float(g('radar_max_range'))
+        self.bgr_n, self.bg_dist = int(g('bg_frames_radar')), float(g('bg_match_dist'))
         self.rmargin = float(g('range_gate_margin_m'))
         self.max_dop = float(g('max_abs_doppler'))
-        self.bg_n, self.bg_dist = int(g('bg_frames')), float(g('bg_match_dist'))
-        self.ceps, self.cmin = float(g('cluster_eps')), int(g('min_cluster_size'))
+        self.rceps, self.rcmin = float(g('radar_cluster_eps')), int(g('radar_min_cluster_size'))
         self.gate_r, self.strict = float(g('gate_radius')), bool(g('cluster_strict'))
         self.min_snr, self.snr_r0 = float(g('min_snr')), float(g('snr_ref_range'))
         self.rscale, self.rbias = float(g('radar_range_scale')), float(g('radar_range_bias_m'))
@@ -161,90 +329,75 @@ class RadarLidarCalib(Node):
         self.use_prior = bool(g('use_extrinsic_prior'))
         self.t_prior = np.array(g('prior_t_xyz'), float)
         self.R_prior = Rot.from_euler('xyz', g('prior_rpy_deg'), degrees=True).as_matrix()
-        self.t_psig, self.r_psig = float(g('prior_t_sigma_m')), np.radians(float(g('prior_rot_sigma_deg')))
+        self.t_psig = float(g('prior_t_sigma_m'))
+        self.r_psig = np.radians(float(g('prior_rot_sigma_deg')))
         self.cap_n, self.cap_to = int(g('capture_frames')), float(g('capture_timeout_s'))
-        self.lstd, self.rstd = float(g('lidar_std_mm')), float(g('radar_std_m'))
+        self.lstd_max, self.rstd_max = float(g('lidar_std_mm')), float(g('radar_std_m'))
         self.min_points, self.min_base = int(g('min_points')), float(g('min_baseline'))
         self.meas_base = float(g('measured_baseline_m'))
-        self.camera_frame, self.child_frame = g('camera_frame'), g('child_frame')
-        self.radar_name, self.camera_name = g('radar_name'), g('camera_name')
-        self.out_path = g('output_path') or f'extrinsic_{g("camera_name")}__{self.radar_name}_lidar'
-        self.publish_tf, self.show_window = bool(g('publish_tf')), bool(g('show_window'))
-        self.dscale = float(g('debug_scale'))
+        self.child_frame, self.radar_name = g('child_frame'), g('radar_name')
+        self.lidar_name = g('lidar_name')
+        self.out_path = g('output_path') or f'extrinsic_{self.lidar_name}__{self.radar_name}'
+        self.publish_tf = bool(g('publish_tf'))
+        self.status_xyz = list(g('status_marker_xyz'))
 
-        self.bridge = CvBridge()
-        self.K = self.D = None
-        self.base_img = None; self.base_t = 0.0
-        self.raw_img = None
-        self.apex = None; self.apex_t = 0.0     # latest lidar apex (camera frame)
-        self.bg_pts = None; self.bg_accum = []; self.bg_want = 0
-        self.sel = None                          # latest radar selection dict
-        self.aim = ('no lidar apex yet', (0, 0, 255))
+        self.rng = np.random.default_rng(0)
+        self.lidar_frame = None
+        self.bg_lidar = None; self.bgl_accum = []; self.bgl_want = 0
+        self.bg_radar = None; self.bgr_accum = []; self.bgr_want = 0
+        self.det = None                  # latest lidar detection
+        self.det_t = 0.0
+        self.sel = None                  # latest radar selection
+        self.aim = ('waiting for lidar detection', 'red')
         self.cap_deadline = 0.0; self.cap_lidar = []; self.cap_radar = []
         self.captures = []
         self.solution = None
         self.tfb = StaticTransformBroadcaster(self) if self.publish_tf else None
 
         qs = qos_profile_sensor_data
+        self.create_subscription(PointCloud2, g('lidar_topic'), self._lidar, qs)
         self.create_subscription(PointCloud2, g('radar_topic'), self._radar, qs)
-        self.create_subscription(PointStamped, g('apex_topic'), self._apex, 20)
-        self.create_subscription(Image, g('base_image_topic'), self._base, qs)
-        self.create_subscription(Image, g('image_topic'), self._raw, qs)
-        self.create_subscription(CameraInfo, g('info_topic'), self._info, qs)
         self.create_subscription(Empty, '~/background', lambda _: self._bg_start(), 1)
         self.create_subscription(Empty, '~/capture', lambda _: self._arm(), 1)
         self.create_subscription(Empty, '~/solve', lambda _: self._solve(force=True), 1)
         self.create_subscription(Empty, '~/reset', lambda _: self._reset(), 1)
         self.create_subscription(Empty, '~/save', lambda _: self._save(), 1)
-        self.fwd_bg = self.create_publisher(Empty, g('lidar_background_topic'), 1)
-        self.pub_dbg = self.create_publisher(Image, '~/debug_image', 2)
-        self.create_timer(0.05, self._gui)
+        self.pub_apex = self.create_publisher(PointStamped, '~/apex', 5)
+        self.pub_mk = self.create_publisher(MarkerArray, '~/markers', 2)
+        self.create_timer(0.1, self._markers)
+        self.create_timer(1.0, self._heartbeat)
         self.get_logger().info(
-            f'radar_lidar_calib ready — solving T_{self.camera_frame}_{self.child_frame} '
-            f'from lidar apexes. 1) ~/background (reflector OFF)  2) mount+aim '
-            f'(watch the aim line)  3) ~/capture  4) repeat 12-20 placements')
-
-    # ── plumbing ──
-    def _info(self, m):
-        if self.K is None:
-            self.K = np.array(m.k).reshape(3, 3)
-            self.D = np.array(m.d) if len(m.d) else np.zeros(5)
-
-    def _base(self, m):
-        self.base_img = self.bridge.imgmsg_to_cv2(m, 'bgr8'); self.base_t = time.time()
-
-    def _raw(self, m):
-        self.raw_img = self.bridge.imgmsg_to_cv2(m, 'bgr8')
-
-    def _apex(self, m):
-        self.apex = np.array([m.point.x, m.point.y, m.point.z]); self.apex_t = time.time()
-        if self.cap_deadline > time.time():
-            self.cap_lidar.append(self.apex.copy())
+            'radar_lidar_calib ready (solves T_lidar_radar, no camera).\n'
+            '  RViz: Fixed Frame = your lidar frame, add the cloud + MarkerArray '
+            'on ~/markers\n'
+            '  per placement: reflector OFF -> ~/background | reflector ON, aim, '
+            'step out -> ~/capture')
 
     # ── control ──
     def _bg_start(self):
-        self.bg_accum, self.bg_want, self.bg_pts = [], self.bg_n, None
-        self.fwd_bg.publish(Empty())                     # one trigger pools BOTH sensors
-        self.get_logger().info(f'pooling radar background ({self.bg_n} frames) '
-                               f'+ forwarded to lidar detector — reflector OFF, stay clear')
+        self.bgl_accum, self.bgl_want, self.bg_lidar = [], self.bgl_n, None
+        self.bgr_accum, self.bgr_want, self.bg_radar = [], self.bgr_n, None
+        self.get_logger().info(
+            f'pooling background: lidar {self.bgl_n} + radar {self.bgr_n} frames — '
+            f'reflector OFF the tripod, stay out of view')
 
     def _arm(self):
-        if self.bg_pts is None:
-            self.get_logger().warn('capture refused: no radar background — ~/background first')
+        if self.bg_lidar is None or self.bg_radar is None:
+            self.get_logger().warn('capture refused: background not pooled — ~/background first')
             return
-        if self.apex is None or time.time() - self.apex_t > 1.0:
-            self.get_logger().warn('capture refused: no live lidar apex (reflector on? detector running?)')
+        if self.det is None or time.time() - self.det_t > 1.0:
+            self.get_logger().warn('capture refused: no live lidar detection '
+                                   '(reflector mounted? in range? background stale?)')
             return
         self.cap_lidar, self.cap_radar = [], []
         self.cap_deadline = time.time() + self.cap_to
-        self.get_logger().info(f'capture armed: pairing next {self.cap_n} radar selections '
+        self.get_logger().info(f'capture armed: pairing next {self.cap_n} radar frames '
                                f'(timeout {self.cap_to:.0f} s)')
 
     def _reset(self):
         self.captures, self.solution = [], None
         self.get_logger().info('captures cleared')
 
-    # ── the extrinsic used for prediction/overlay: solve first, else prior ──
     def _current_T(self):
         if self.solution is not None:
             return self.solution['R'], self.solution['t']
@@ -252,76 +405,124 @@ class RadarLidarCalib(Node):
             return self.R_prior, self.t_prior
         return None, None
 
-    # ── radar pipeline, one cloud at a time ──
+    def _heartbeat(self):
+        if self.bg_lidar is None:
+            return
+        self.get_logger().info(self.aim[0], throttle_duration_sec=2.0)
+
+    # ── lidar: background-subtract → cluster → apex ──
+    def _lidar(self, msg):
+        self.lidar_frame = msg.header.frame_id
+        xyz = cloud_xyz(msg)
+        if len(xyz) == 0:
+            return
+        r = np.linalg.norm(xyz, axis=1)
+        xyz = xyz[np.isfinite(r) & (r > self.lmin) & (r < self.lmax)]
+
+        if self.bgl_want > 0:
+            self.bgl_accum.append(voxel_keys(xyz, self.bg_voxel))
+            self.bgl_want -= 1
+            if self.bgl_want == 0:
+                self.bg_lidar = np.unique(np.concatenate(self.bgl_accum))
+                self.bgl_accum = []
+                self.get_logger().info(f'lidar background ready: {len(self.bg_lidar)} voxels')
+            return
+        if self.bg_lidar is None:
+            self.det = None
+            return
+
+        fg = xyz[foreground_mask(xyz, self.bg_lidar, self.bg_voxel)]
+        clusters = lidar_cluster(fg, self.ceps, self.cmin)
+        if not clusters:
+            self.det = None
+            return
+        P = clusters[0]
+        apex, method = locate_apex(P, self.ptol, self.piters, self.pmin, self.perp, self.rng)
+        self.det = dict(apex=apex, cluster=P, method=method,
+                        n_fg=len(fg), n_extra=len(clusters) - 1)
+        self.det_t = time.time()
+        if self.cap_deadline > time.time():
+            self.cap_lidar.append(apex.copy())
+        ps = PointStamped()
+        ps.header = msg.header
+        ps.point.x, ps.point.y, ps.point.z = map(float, apex)
+        self.pub_apex.publish(ps)
+
+    # ── radar: background-subtract → range gate → cluster → SNR centroid ──
     def _radar(self, msg):
         f = cloud_fields(msg, [self.fx, self.fy, self.fz, self.fsnr, self.fdop])
-        x, y, z = f[self.fx], f[self.fy], f[self.fz]
-        if x is None:
+        if f[self.fx] is None:
             return
-        xyz = np.stack([x, y, z if z is not None else np.zeros_like(x)], 1)
+        z = f[self.fz] if f[self.fz] is not None else np.zeros_like(f[self.fx])
+        xyz = np.stack([f[self.fx], f[self.fy], z], 1)
         snr = f[self.fsnr] if f[self.fsnr] is not None else np.ones(len(xyz))
         dop = f[self.fdop]
-        if self.rscale != 1.0 or self.rbias != 0.0:      # ingest range correction
-            r = np.linalg.norm(xyz, axis=1)
-            ok = r > 1e-6
-            xyz[ok] *= ((self.rscale * r[ok] + self.rbias) / r[ok])[:, None]
+        if self.rscale != 1.0 or self.rbias != 0.0:
+            rr = np.linalg.norm(xyz, axis=1)
+            ok = rr > 1e-6
+            xyz[ok] *= ((self.rscale * rr[ok] + self.rbias) / rr[ok])[:, None]
         r = np.linalg.norm(xyz, axis=1)
-        keep = np.isfinite(r) & (r > self.min_range) & (r < self.max_range)
+        keep = np.isfinite(r) & (r > self.rmin) & (r < self.rmax)
 
-        if self.bg_want > 0:                             # background pooling mode
-            self.bg_accum.append(xyz[keep])
-            self.bg_want -= 1
-            if self.bg_want == 0:
-                self.bg_pts = np.concatenate(self.bg_accum) if self.bg_accum else np.zeros((0, 3))
-                self.get_logger().info(f'radar background ready: {len(self.bg_pts)} points')
+        if self.bgr_want > 0:
+            self.bgr_accum.append(xyz[keep])
+            self.bgr_want -= 1
+            if self.bgr_want == 0:
+                self.bg_radar = (np.concatenate(self.bgr_accum) if self.bgr_accum
+                                 else np.zeros((0, 3)))
+                self.bgr_accum = []
+                self.get_logger().info(f'radar background ready: {len(self.bg_radar)} points')
             return
-        if self.bg_pts is not None and len(self.bg_pts) and keep.any():
-            d = np.linalg.norm(xyz[keep][:, None, :] - self.bg_pts[None, :, :], axis=2).min(1)
-            kk = np.where(keep)[0]
-            keep[kk[d <= self.bg_dist]] = False
+        if self.bg_radar is None:
+            return
+        if len(self.bg_radar) and keep.any():
+            idx = np.where(keep)[0]
+            d = np.linalg.norm(xyz[idx][:, None, :] - self.bg_radar[None, :, :], axis=2).min(1)
+            keep[idx[d <= self.bg_dist]] = False
 
         self.sel = None
-        if self.apex is None or time.time() - self.apex_t > 1.0:
-            self.aim = ('no lidar apex — mount reflector / check detector', (0, 0, 255))
+        if self.det is None or time.time() - self.det_t > 1.0:
+            self.aim = ('no lidar detection — mount the reflector / re-do background', 'red')
             return
+        apex = self.det['apex']
         R, t = self._current_T()
-        r_exp = np.linalg.norm(self.apex - (t if t is not None else 0.0))
-        keep &= np.abs(r - r_exp) <= self.rmargin        # rotation-invariant range gate
+        # rotation-invariant: |p_radar| ≈ |apex − t_radar_in_lidar| whatever R is
+        r_exp = np.linalg.norm(apex - t) if t is not None else np.linalg.norm(apex)
+        keep &= np.abs(r - r_exp) <= self.rmargin
         if self.max_dop > 0 and dop is not None:
             keep &= np.abs(dop) <= self.max_dop
         pts, s = xyz[keep], snr[keep]
         if len(pts) == 0:
-            self.aim = ('radar: no return near lidar range — RE-AIM or unblock', (0, 0, 255))
+            self.aim = (f'radar: no return near lidar range ({r_exp:.2f} m) — RE-AIM / unblock',
+                        'red')
             return
 
-        pred = R.T @ (self.apex - t) if R is not None else None
-        if pred is not None:                             # 3-D gate around prediction
+        pred = R.T @ (apex - t) if R is not None else None
+        if pred is not None:
             near = np.linalg.norm(pts - pred, axis=1) <= self.gate_r
             if near.any():
                 pts, s = pts[near], s[near]
             elif self.strict and self.solution is not None:
-                self.aim = (f'radar: nothing within {self.gate_r:.2f} m of prediction', (0, 100, 255))
+                self.aim = (f'radar: nothing within {self.gate_r:.2f} m of prediction', 'orange')
                 return
-        clusters = cluster_points(pts, self.ceps, self.cmin)
+        clusters = radar_cluster(pts, self.rceps, self.rcmin)
         if not clusters:
-            self.aim = ('radar: no cluster after gating', (0, 100, 255))
+            self.aim = ('radar: no cluster after gating', 'orange')
             return
         if pred is not None:
-            cent = [pts[c].mean(0) for c in clusters]
-            ci = int(np.argmin([np.linalg.norm(c - pred) for c in cent]))
+            ci = int(np.argmin([np.linalg.norm(pts[c].mean(0) - pred) for c in clusters]))
         else:
             ci = int(np.argmax([s[c].max() for c in clusters]))
         c = clusters[ci]
         w = s[c] / max(s[c].sum(), 1e-9)
-        p_sel = (pts[c] * w[:, None]).sum(0)             # SNR-weighted blob centroid
+        p_sel = (pts[c] * w[:, None]).sum(0)
         snr_sel = float(s[c].max())
         r_sel = float(np.linalg.norm(p_sel))
-        snr_norm = snr_sel * (r_sel / self.snr_r0) ** 4  # aim metric, range-fair
+        snr_norm = snr_sel * (r_sel / self.snr_r0) ** 4
         ok = snr_norm >= self.min_snr
         self.sel = dict(p=p_sel, snr=snr_sel, snr_norm=snr_norm, r=r_sel, n=len(c))
         self.aim = (f'radar: best {snr_sel:.0f} (norm {snr_norm:.0f}) @ {r_sel:.2f} m  '
-                    + ('OK' if ok else 'RE-AIM'),
-                    (0, 220, 0) if ok else (0, 165, 255))
+                    + ('OK' if ok else 'RE-AIM'), 'green' if ok else 'orange')
 
         if self.cap_deadline > time.time() and ok:
             self.cap_radar.append(p_sel.copy())
@@ -331,53 +532,57 @@ class RadarLidarCalib(Node):
         elif self.cap_deadline and time.time() > self.cap_deadline:
             self.cap_deadline = 0.0
             self.get_logger().warn(
-                f'capture REFUSED: timeout — only {len(self.cap_radar)}/{self.cap_n} passing radar '
-                f'frames in {self.cap_to:.0f} s (last aim: {self.aim[0]})')
+                f'capture REFUSED: timeout — only {len(self.cap_radar)}/{self.cap_n} passing '
+                f'radar frames in {self.cap_to:.0f} s   (last: {self.aim[0]})')
 
-    # ── atomic pair: both sides must pass ──
+    # ── atomic capture: both sensors must pass ──
     def _finish_capture(self):
         if len(self.cap_lidar) < 3:
-            self.get_logger().warn('capture REFUSED: too few lidar apex updates in window')
+            self.get_logger().warn('capture REFUSED: too few lidar detections in the window')
             return
         L, Rr = np.stack(self.cap_lidar), np.stack(self.cap_radar)
         lstd = float(np.linalg.norm(L.std(0)) * 1000)
         rstd = float(np.linalg.norm(Rr.std(0)))
-        if lstd > self.lstd:
-            self.get_logger().warn(f'capture REFUSED: lidar apex std {lstd:.1f} mm > {self.lstd}')
+        if lstd > self.lstd_max:
+            self.get_logger().warn(f'capture REFUSED: lidar apex std {lstd:.1f} mm > '
+                                   f'{self.lstd_max:.0f} (something still moving)')
             return
-        if rstd > self.rstd:
+        if rstd > self.rstd_max:
             self.get_logger().warn(f'capture REFUSED: radar point std {rstd*100:.0f} cm > '
-                                   f'{self.rstd*100:.0f} (multipath flicker? re-aim/move slightly)')
+                                   f'{self.rstd_max*100:.0f} (multipath flicker — nudge or re-aim)')
             return
-        p_cam, p_radar = L.mean(0), Rr.mean(0)
+        p_lidar, p_radar = L.mean(0), Rr.mean(0)
         for i, cp in enumerate(self.captures):
-            if np.linalg.norm(np.array(cp['p_cam']) - p_cam) < self.min_base:
-                self.get_logger().warn(f'note: close to capture #{i+1} — move the tripod more')
+            if np.linalg.norm(np.array(cp['p_lidar']) - p_lidar) < self.min_base:
+                self.get_logger().warn(f'note: {np.linalg.norm(np.array(cp["p_lidar"])-p_lidar)*100:.0f}'
+                                       f' cm from capture #{i+1} — move the tripod further')
                 break
         self.captures.append(dict(
             idx=len(self.captures) + 1, stamp=time.time(),
-            p_cam=[round(float(v), 4) for v in p_cam],
+            p_lidar=[round(float(v), 4) for v in p_lidar],
             p_radar=[round(float(v), 4) for v in p_radar],
-            board_R_quat_xyzw=[0.0, 0.0, 0.0, 1.0],      # identity: apex IS p_cam
-            board_t=[round(float(v), 4) for v in p_cam], # (solve_from_poses compat)
-            snr=round(float(self.sel['snr']), 1), lidar_std_mm=round(lstd, 1),
-            radar_std_mm=round(rstd * 1000, 1)))
+            method=self.det['method'], snr=round(float(self.sel['snr']), 1),
+            lidar_std_mm=round(lstd, 1), radar_std_mm=round(rstd * 1000, 1),
+            # solve_from_poses_* compatibility: identity pose, apex offset zero
+            board_R_quat_xyzw=[0.0, 0.0, 0.0, 1.0],
+            board_t=[round(float(v), 4) for v in p_lidar]))
         self.get_logger().info(
-            f'*** CAPTURED #{len(self.captures)}  cam [{p_cam[0]:.3f}, {p_cam[1]:.3f}, '
-            f'{p_cam[2]:.3f}]  radar [{p_radar[0]:.3f}, {p_radar[1]:.3f}, {p_radar[2]:.3f}]  '
-            f'snr {self.sel["snr"]:.0f} ***')
+            f'*** CAPTURED #{len(self.captures)}  lidar [{p_lidar[0]:.3f} {p_lidar[1]:.3f} '
+            f'{p_lidar[2]:.3f}]  radar [{p_radar[0]:.3f} {p_radar[1]:.3f} {p_radar[2]:.3f}]  '
+            f'{self.det["method"]}  snr {self.sel["snr"]:.0f} ***')
         if len(self.captures) >= self.min_points:
             self._solve()
         self._save(quiet=True)
 
-    # ── solve + report (imported measurement-space ML; offset pinned at 0) ──
+    # ── solve: measurement-space ML, offset pinned at zero ──
     def _solve(self, force=False):
         n = len(self.captures)
         if n < (4 if force else self.min_points):
-            self.get_logger().info(f'{n} captures — solving at {self.min_points} (~/solve to force)')
+            self.get_logger().info(f'{n} captures — first solve at {self.min_points} '
+                                   f'(~/solve to force)')
             return
         P = np.array([c['p_radar'] for c in self.captures])
-        Q = np.array([c['p_cam'] for c in self.captures])
+        Q = np.array([c['p_lidar'] for c in self.captures])
         I = np.repeat(np.eye(3)[None], n, axis=0)
         res = robust_ml_calibrate(
             P, I, Q, np.zeros(3), self.sig_r, self.sig_az, self.sig_el,
@@ -387,70 +592,72 @@ class RadarLidarCalib(Node):
             rot_prior_sigma=self.r_psig if self.use_prior else None,
             t_prior_sigma=self.t_psig if self.use_prior else None,
             huber=self.huber, reject_sigma=self.rej, reject_axis_sigma=self.rej_axis)
-        R, t, mask = res['R'], res['t'], res['inlier_mask']
         self.solution = res
+        R, t, mask = res['R'], res['t'], res['inlier_mask']
         Pin, Qin = P[mask], Q[mask]
-        cov = res['cov']
-        sig = np.sqrt(np.clip(np.diag(cov), 0, None))
+        sig = np.sqrt(np.clip(np.diag(res['cov']), 0, None))
         rot1s, t1s = np.degrees(sig[:3]), sig[3:] * 1000
-        pred = (R @ Pin.T).T + t
-        err = pred - Qin
-        bias = err.mean(0) * 1000
-        rms = np.sqrt((err ** 2).mean(0)) * 1000
-        loo = loo_cross_val(P[mask], I[mask], Q[mask], np.zeros(3),
+        err = ((R @ Pin.T).T + t) - Qin
+        bias, rms = err.mean(0) * 1000, np.sqrt((err ** 2).mean(0)) * 1000
+        loo = loo_cross_val(Pin, I[mask], Qin, np.zeros(3),
                             (self.sig_r, self.sig_az, self.sig_el), True)
         cond = condition_number(Pin)
         raz = np.array([cart_to_raz(p) for p in Pin])
-        spread = (raz[:, 0].ptp(), np.degrees(raz[:, 1].ptp()), np.degrees(raz[:, 2].ptp()))
         q = Rot.from_matrix(R).as_quat()
-        rpy = Rot.from_matrix(R).as_euler('xyz', degrees=True)
-        cam_r, rad_r = np.linalg.norm(Qin - t, axis=1), np.linalg.norm(Pin, axis=1)
-        a, b = np.linalg.lstsq(np.vstack([rad_r, np.ones_like(rad_r)]).T, cam_r, rcond=None)[0]
-        lines = [
-            f'=== T_{self.camera_frame}_{self.child_frame}  (camera <- radar, LIDAR reference) ===',
-            f'  captures {n}   inliers {res["n_in"]}/{n}   residual {res["rms_sigma"]:.2f} s   cond {cond:.1f}',
-            f'  xyz (m) : {t[0]:+.4f} {t[1]:+.4f} {t[2]:+.4f}   |t| {np.linalg.norm(t)*100:.1f} cm',
-            f'  quat    : {q[0]:+.4f} {q[1]:+.4f} {q[2]:+.4f} {q[3]:+.4f}',
-            f'  rpy(deg): {rpy[0]:+.2f} {rpy[1]:+.2f} {rpy[2]:+.2f}   (gimbal-locked near pitch -90: compare quats)',
-            f'  1s rot  : {rot1s[0]:.2f} {rot1s[1]:.2f} {rot1s[2]:.2f} deg   '
-            f'1s t: {t1s[0]:.1f} {t1s[1]:.1f} {t1s[2]:.1f} mm',
-            f'  spread  : range {spread[0]*100:.0f} cm, az {spread[1]:.0f} deg, el {spread[2]:.0f} deg',
-            f'  bias mm : X {bias[0]:+.0f} Y {bias[1]:+.0f} Z {bias[2]:+.0f}   '
-            f'3-D RMS mm: {rms[0]:.0f} {rms[1]:.0f} {rms[2]:.0f}',
-        ]
+        lid_r, rad_r = np.linalg.norm(Qin - t, axis=1), np.linalg.norm(Pin, axis=1)
+        a, b = np.linalg.lstsq(np.vstack([rad_r, np.ones_like(rad_r)]).T, lid_r, rcond=None)[0]
+        axes = {k: R @ v for k, v in (('X fwd', [1, 0, 0]), ('Y left', [0, 1, 0]),
+                                      ('Z up', [0, 0, 1]))}
+        L = [f'=== T_{self.lidar_frame or "lidar"}_{self.child_frame}  (lidar <- radar) ===',
+             f'  captures {n}   inliers {res["n_in"]}/{n}   residual {res["rms_sigma"]:.2f} s'
+             f'   cond {cond:.1f}',
+             f'  xyz (m) : {t[0]:+.4f} {t[1]:+.4f} {t[2]:+.4f}   |t| {np.linalg.norm(t)*100:.1f} cm',
+             f'  quat    : {q[0]:+.4f} {q[1]:+.4f} {q[2]:+.4f} {q[3]:+.4f}',
+             f'  1s rot  : {rot1s[0]:.2f} {rot1s[1]:.2f} {rot1s[2]:.2f} deg'
+             f'   1s t: {t1s[0]:.1f} {t1s[1]:.1f} {t1s[2]:.1f} mm',
+             f'  spread  : range {raz[:,0].ptp()*100:.0f} cm  az {np.degrees(raz[:,1].ptp()):.0f} deg'
+             f'  el {np.degrees(raz[:,2].ptp()):.0f} deg',
+             f'  bias mm : {bias[0]:+.0f} {bias[1]:+.0f} {bias[2]:+.0f}'
+             f'   3-D RMS mm: {rms[0]:.0f} {rms[1]:.0f} {rms[2]:.0f}',
+             '  radar axes in lidar frame: '
+             + '  '.join(f'{k}->[{v[0]:+.2f} {v[1]:+.2f} {v[2]:+.2f}]' for k, v in axes.items())]
         if loo:
-            lines.append(f'  LOO CV  : {loo[0]:.2f} s (max {loo[1]:.2f})')
+            L.append(f'  LOO CV  : {loo[0]:.2f} s (max {loo[1]:.2f})')
         if abs(a - 1) > 0.02 or abs(b) > 0.05:
-            lines.append(f'  range fit: cam_r = {a:.3f}*radar_r {b:+.3f} m (want a~1) -> '
-                         f'set radar_range_scale={a*self.rscale:.4f}')
+            L.append(f'  range fit: lidar_r = {a:.3f}*radar_r {b:+.3f} m (want a~1) -> '
+                     f'set radar_range_scale={a*self.rscale:.4f}')
         if self.meas_base > 0:
             d = abs(np.linalg.norm(t) - self.meas_base)
-            lines.append(f'  baseline: |t| {np.linalg.norm(t)*100:.1f} vs tape '
-                         f'{self.meas_base*100:.1f} cm -> D {d*100:.1f} cm '
-                         f'[{"OK" if d <= 0.05 else "MISMATCH"}]')
+            L.append(f'  baseline: |t| {np.linalg.norm(t)*100:.1f} vs tape '
+                     f'{self.meas_base*100:.1f} cm -> {d*100:.1f} cm '
+                     f'[{"OK" if d <= 0.05 else "MISMATCH"}]')
         gates = [('residual~1s', res['rms_sigma'] <= 1.5), ('cond<=5', cond <= 5),
                  ('rot1s<=4deg', rot1s.max() <= 4), ('bias<=50mm', np.abs(bias).max() <= 50)]
-        lines.append('  GATES   : ' + '  '.join(f'{k}[{"P" if v else "F"}]' for k, v in gates)
-                     + '   + overlay up/down test before ~/save')
-        self.get_logger().info('\n' + '\n'.join(lines))
-        if self.tfb is not None:
+        L.append('  GATES   : ' + '  '.join(f'{k}[{"P" if v else "F"}]' for k, v in gates)
+                 + '   + RViz up/down check before ~/save')
+        self.get_logger().info('\n' + '\n'.join(L))
+        if self.tfb is not None and self.lidar_frame:
             tf = TransformStamped()
             tf.header.stamp = self.get_clock().now().to_msg()
-            tf.header.frame_id = self.camera_frame
+            tf.header.frame_id = self.lidar_frame
             tf.child_frame_id = self.child_frame
-            tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = map(float, t)
+            (tf.transform.translation.x, tf.transform.translation.y,
+             tf.transform.translation.z) = map(float, t)
             (tf.transform.rotation.x, tf.transform.rotation.y,
              tf.transform.rotation.z, tf.transform.rotation.w) = map(float, q)
             self.tfb.sendTransform(tf)
 
+    # ── save ──
     def _save(self, quiet=False):
         g = lambda k: self.get_parameter(k).value
         out = dict(kind='radar_lidar_session', stamp=time.time(),
-                   parent_frame=self.camera_frame, child_frame=self.child_frame,
-                   camera_name=self.camera_name, radar_name=self.radar_name,
+                   parent_frame=self.lidar_frame or 'lidar',
+                   child_frame=self.child_frame,
+                   lidar_name=self.lidar_name, radar_name=self.radar_name,
+                   note='T_lidar_radar. Compose later: T_cam_radar = T_cam_lidar * T_lidar_radar',
                    params=dict(
-                       sigma_range_m=self.sig_r, sigma_az_deg=np.degrees(self.sig_az),
-                       sigma_el_deg=np.degrees(self.sig_el),
+                       sigma_range_m=self.sig_r, sigma_az_deg=float(np.degrees(self.sig_az)),
+                       sigma_el_deg=float(np.degrees(self.sig_el)),
                        reflector_offset_x=0.0, reflector_offset_y=0.0, reflector_offset_z=0.0,
                        use_extrinsic_prior=self.use_prior,
                        prior_t_xyz=[float(v) for v in self.t_prior],
@@ -458,83 +665,109 @@ class RadarLidarCalib(Node):
                        prior_t_sigma_m=self.t_psig,
                        prior_rot_sigma_deg=float(np.degrees(self.r_psig)),
                        radar_range_scale=self.rscale, radar_range_bias_m=self.rbias,
-                       reject_sigma=self.rej, reject_axis_sigma=self.rej_axis),
+                       reject_sigma=self.rej, reject_axis_sigma=self.rej_axis,
+                       min_snr=self.min_snr, gate_radius=self.gate_r),
                    captures=self.captures)
         if self.solution is not None:
             R, t = self.solution['R'], self.solution['t']
             q = Rot.from_matrix(R).as_quat()
             out['result'] = dict(
-                T_cam_radar_translation=[float(v) for v in t],
-                T_cam_radar_quaternion_xyzw=[float(v) for v in q],
+                T_lidar_radar_translation=[float(v) for v in t],
+                T_lidar_radar_quaternion_xyzw=[float(v) for v in q],
                 n_inliers=int(self.solution['n_in']),
                 residual_rms_sigma=float(self.solution['rms_sigma']),
                 static_tf_cmd=('ros2 run tf2_ros static_transform_publisher '
                                + ' '.join(f'{v:.6f}' for v in t) + ' '
-                               + ' '.join(f'{v:.6f}' for v in q)
-                               + f' {self.camera_frame} {self.child_frame}'))
+                               + ' '.join(f'{v:.6f}' for v in q) + ' '
+                               + f'{self.lidar_frame or "lidar"} {self.child_frame}'))
         path = self.out_path + '_session.json'
         with open(path, 'w') as f:
             json.dump(out, f, indent=1)
         if not quiet:
-            self.get_logger().info(f'saved {len(self.captures)} captures -> {os.path.abspath(path)}')
+            self.get_logger().info(f'saved {len(self.captures)} captures -> '
+                                   f'{os.path.abspath(path)}')
 
-    # ── Stage-B overlay on top of the detector's Stage-A image ──
-    def _project(self, p):
-        p = np.asarray(p, np.float64)
-        if p[2] <= 0.05:
-            return None
-        uv, _ = cv2.projectPoints(p.reshape(1, 1, 3), np.zeros(3), np.zeros(3), self.K, self.D)
-        return int(uv[0, 0, 0]), int(uv[0, 0, 1])
+    # ── RViz markers (the verification layer) ──
+    def _mk(self, ns, mid, typ, scale, color):
+        m = Marker()
+        m.header.frame_id = self.lidar_frame or 'lidar'
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.ns, m.id, m.type, m.action = ns, mid, typ, Marker.ADD
+        m.pose.orientation.w = 1.0
+        m.scale.x = m.scale.y = m.scale.z = scale
+        m.color = color
+        return m
 
-    def _gui(self):
-        base = self.base_img if (self.base_img is not None and time.time() - self.base_t < 1.0) \
-            else self.raw_img
-        if base is None or self.K is None:
+    def _markers(self):
+        if self.lidar_frame is None:
             return
-        im = base.copy()
-        h = im.shape[0]
+        arr = MarkerArray()
+        n = 0
 
-        def bline(i, txt, col):
-            y = h - 12 - 22 * i
-            cv2.putText(im, txt, (10, y), cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 0, 0), 3)
-            cv2.putText(im, txt, (10, y), cv2.FONT_HERSHEY_SIMPLEX, .55, col, 1)
+        if self.det is not None and time.time() - self.det_t < 1.0:
+            d = self.det
+            pc = self._mk('cluster', 0, Marker.POINTS, 0.02, CYAN)
+            pc.points = [Point(x=float(p[0]), y=float(p[1]), z=float(p[2])) for p in d['cluster']]
+            arr.markers.append(pc); n += 1
+            ap = self._mk('apex', 1, Marker.SPHERE, 0.07, GREEN)
+            ap.pose.position.x, ap.pose.position.y, ap.pose.position.z = map(float, d['apex'])
+            arr.markers.append(ap); n += 1
+            lab = self._mk('apex_label', 2, Marker.TEXT_VIEW_FACING, 0.09, GREEN)
+            lab.pose.position.x, lab.pose.position.y = float(d['apex'][0]), float(d['apex'][1])
+            lab.pose.position.z = float(d['apex'][2]) + 0.15
+            lab.text = (f'{np.linalg.norm(d["apex"]):.2f} m  {d["method"]}'
+                        + (f'  +{d["n_extra"]} EXTRA CLUSTER' if d['n_extra'] else ''))
+            arr.markers.append(lab); n += 1
 
-        bline(0, self.aim[0], self.aim[1])
-        if self.solution is not None:
-            s = self.solution
-            bline(1, f'solve: n={len(self.captures)} inl={s["n_in"]} residual {s["rms_sigma"]:.2f}s',
-                  (0, 220, 0) if s['rms_sigma'] <= 1.5 else (0, 165, 255))
-        elif self.bg_pts is None:
-            bline(1, 'radar: NO BACKGROUND - ~/background first', (0, 0, 255))
-        else:
-            bline(1, f'pairs {len(self.captures)}/{self.min_points} before first solve', (240, 240, 240))
-        if self.cap_deadline > time.time():
-            bline(2, f'CAPTURING... {len(self.cap_radar)}/{self.cap_n} radar frames', (0, 255, 255))
+        if self.captures:
+            cap = self._mk('captures', 3, Marker.SPHERE_LIST, 0.06, AMBER)
+            cap.points = [Point(x=float(c['p_lidar'][0]), y=float(c['p_lidar'][1]),
+                                z=float(c['p_lidar'][2])) for c in self.captures]
+            arr.markers.append(cap); n += 1
+            for c in self.captures:
+                tm = self._mk('capture_ids', 100 + c['idx'], Marker.TEXT_VIEW_FACING, 0.07, AMBER)
+                tm.pose.position.x, tm.pose.position.y = float(c['p_lidar'][0]), float(c['p_lidar'][1])
+                tm.pose.position.z = float(c['p_lidar'][2]) - 0.12
+                tm.text = str(c['idx'])
+                arr.markers.append(tm); n += 1
 
-        # Stage B: the radar's pick, through the current solve, vs the lidar apex
+        # the radar's pick, mapped into the lidar frame by the current solve
         R, t = self._current_T()
         if self.sel is not None and R is not None:
-            p_cam_radar = R @ self.sel['p'] + t
-            uv = self._project(p_cam_radar)
-            if uv:
-                cv2.circle(im, uv, 7, (255, 0, 255), 2)
-                if self.apex is not None and time.time() - self.apex_t < 1.0:
-                    av = self._project(self.apex)
-                    if av:
-                        cv2.line(im, uv, av, (255, 0, 255), 1)
-                        dmm = np.linalg.norm(p_cam_radar - self.apex) * 1000
-                        tag = 'prior' if self.solution is None else 'solved'
-                        cv2.putText(im, f'D {dmm:.0f} mm ({tag})', (uv[0] + 10, uv[1] + 16),
-                                    cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 0), 3)
-                        cv2.putText(im, f'D {dmm:.0f} mm ({tag})', (uv[0] + 10, uv[1] + 16),
-                                    cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 255), 1)
+            p = R @ self.sel['p'] + t
+            rm = self._mk('radar_pick', 4, Marker.SPHERE, 0.07, MAGENTA)
+            rm.pose.position.x, rm.pose.position.y, rm.pose.position.z = map(float, p)
+            arr.markers.append(rm); n += 1
+            if self.det is not None and time.time() - self.det_t < 1.0:
+                ln = self._mk('delta', 5, Marker.LINE_LIST, 0.012, MAGENTA)
+                ln.points = [Point(x=float(p[0]), y=float(p[1]), z=float(p[2])),
+                             Point(x=float(self.det['apex'][0]), y=float(self.det['apex'][1]),
+                                   z=float(self.det['apex'][2]))]
+                arr.markers.append(ln); n += 1
+                dt = self._mk('delta_label', 6, Marker.TEXT_VIEW_FACING, 0.08, MAGENTA)
+                mid = (p + self.det['apex']) / 2
+                dt.pose.position.x, dt.pose.position.y, dt.pose.position.z = map(float, mid)
+                dt.text = (f'D {np.linalg.norm(p - self.det["apex"])*1000:.0f} mm '
+                           f'({"solved" if self.solution else "prior"})')
+                arr.markers.append(dt); n += 1
 
-        if self.dscale != 1.0:
-            im = cv2.resize(im, None, fx=self.dscale, fy=self.dscale)
-        self.pub_dbg.publish(self.bridge.cv2_to_imgmsg(im, 'bgr8'))
-        if self.show_window:
-            cv2.imshow('radar_lidar_calib (Stage A+B)', im)
-            cv2.waitKey(1)
+        st = self._mk('status', 7, Marker.TEXT_VIEW_FACING, 0.12, WHITE)
+        st.pose.position.x, st.pose.position.y, st.pose.position.z = map(float, self.status_xyz)
+        if self.bg_lidar is None or self.bg_radar is None:
+            st.text = 'NO BACKGROUND — reflector OFF, then ~/background'
+            st.color = ColorRGBA(r=1.0, g=0.3, b=0.2, a=1.0)
+        else:
+            head = (f'captures {len(self.captures)}'
+                    + (f'  |  residual {self.solution["rms_sigma"]:.2f}s '
+                       f'inl {self.solution["n_in"]}' if self.solution else
+                       f'/{self.min_points} to first solve'))
+            st.text = head + '\n' + self.aim[0]
+            st.color = {'green': GREEN, 'orange': AMBER,
+                        'red': ColorRGBA(r=1.0, g=0.3, b=0.2, a=1.0)}[self.aim[1]]
+        if self.cap_deadline > time.time():
+            st.text += f'\nCAPTURING {len(self.cap_radar)}/{self.cap_n}'
+        arr.markers.append(st)
+        self.pub_mk.publish(arr)
 
 
 def main():
