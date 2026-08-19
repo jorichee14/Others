@@ -427,6 +427,15 @@ class RadarLidarCalib(Node):
                                              # how far the growth may spread
         dp('apex_method', 'auto')            # 'auto' (planes3 -> centroid) |
                                              # 'centroid' | 'deepest'
+        # Isolate the reflector from the rest of the foreground. Pool the
+        # background on the EMPTY room (no tripod), then wheel the whole rig in:
+        # the foreground is tripod + reflector, hundreds of points, no erased halo
+        # and no need to re-pool per placement. The reflector is the topmost part
+        # and its size is known, so keeping everything within reflector_size of
+        # the cluster's top drops the post, head and legs.
+        dp('isolate_reflector', True)
+        dp('top_band', 0.03)                 # points within this of the highest are
+                                             # averaged to locate the top robustly
         dp('grow_radius_per_m', 0.03)        # range scaling on the max radius
         dp('grow_eps', 0.06); dp('grow_eps_per_m', 0.02)
         dp('cluster_eps_per_m', 0.02)        # same scaling for the seed clustering
@@ -516,6 +525,8 @@ class RadarLidarCalib(Node):
         self.grow_step, self.grow_plateau = float(g('grow_step')), float(g('grow_plateau_frac'))
         self.refl_size = float(g('reflector_size'))
         self.apex_method = str(g('apex_method'))
+        self.isolate_top = bool(g('isolate_reflector'))
+        self.top_band = float(g('top_band'))
         self.grow_eps = float(g('grow_eps'))
         self.grow_r_pm = float(g('grow_radius_per_m'))
         self.grow_eps_pm = float(g('grow_eps_per_m'))
@@ -714,6 +725,14 @@ class RadarLidarCalib(Node):
                                   f'or raise cluster_eps)'))
             return
         P = clusters[0]
+        n_full = len(P)
+        if self.isolate_top and len(P) > 3:
+            # robust top: mean of the highest points, not a single extreme return
+            z = P[:, 2]                                  # os_lidar +Z is up
+            top = P[z >= z.max() - self.top_band].mean(0)
+            iso = P[np.linalg.norm(P - top, axis=1) <= self.refl_size]
+            if len(iso) >= 3:
+                P = iso
         n_seed = len(P)
         r_seed = float(np.linalg.norm(P.mean(0)))
         grow_r = self.grow_rmax + self.grow_r_pm * r_seed
@@ -730,9 +749,8 @@ class RadarLidarCalib(Node):
         self.det = dict(apex=apex, cluster=P, method=method,
                         n_fg=len(fg), n_extra=len(clusters) - 1)
         self.det_t = time.time()
-        self.lidar_stat = (f'lidar: {len(fg)} new -> seed {n_seed} -> grown {len(P)} '
-                           f'(stop:{why} r{used_r if why != "off" else 0:.2f} '
-                           f'e{grow_eps:.2f} @ {r_seed:.1f} m), {method}'
+        self.lidar_stat = (f'lidar: {len(fg)} new -> cluster {n_full} -> reflector {n_seed} '
+                           f'@ {r_seed:.1f} m, {method}'
                            + (f', +{len(clusters)-1} EXTRA' if len(clusters) > 1 else ''))
         if self.cap_deadline > time.time():
             self.cap_lidar.append(apex.copy())
