@@ -327,7 +327,7 @@ def ransac_planes(P, tol, iters, min_pts, rng, max_planes=6):
     return planes
 
 
-def locate_apex(P, tol, iters, min_pts, perp_tol_deg, rng, seed_c=None):
+def locate_apex(P, tol, iters, min_pts, perp_tol_deg, rng, seed_c=None, mode='auto'):
     """Trihedral apex from a point cluster that may also contain tripod.
 
     'planes3'  fit several planes, then take the mutually ~perpendicular TRIPLE
@@ -339,7 +339,7 @@ def locate_apex(P, tol, iters, min_pts, perp_tol_deg, rng, seed_c=None):
                anchored to the seed when one is given — otherwise a grown blob
                containing the tripod returns a point behind the reflector.
     """
-    planes = ransac_planes(P, tol, iters, min_pts, rng)
+    planes = ransac_planes(P, tol, iters, min_pts, rng) if mode in ('auto', 'planes3') else []
     budget = np.cos(np.radians(90.0 - perp_tol_deg))
     best = None
     for i, j, k in combinations(range(len(planes)), 3):
@@ -363,10 +363,20 @@ def locate_apex(P, tol, iters, min_pts, perp_tol_deg, rng, seed_c=None):
     Q = P if seed_c is None else P[np.linalg.norm(P - seed_c, axis=1) <= 0.25]
     if len(Q) < 3:
         Q = P
-    u = Q.mean(0)
-    u = u / (np.linalg.norm(u) + 1e-9)
-    k = min(8, len(Q))
-    return Q[np.argsort(Q @ u)[-k:]].mean(0), 'deepest'
+    if mode == 'deepest':
+        # Farthest point along the viewing ray. Only valid when the cluster is
+        # PURELY reflector — if any mount or tripod is included it flips between
+        # them frame to frame, which reads as tens of mm of apex jitter.
+        u = Q.mean(0)
+        u = u / (np.linalg.norm(u) + 1e-9)
+        k = min(8, len(Q))
+        return Q[np.argsort(Q @ u)[-k:]].mean(0), 'deepest'
+    # Centroid: not the geometric apex, but averaging hundreds of points makes it
+    # stable to a few mm, where 'deepest' rests on a single extreme point. It sits
+    # a fixed distance from the true corner, so it biases the solved translation
+    # rather than adding noise — the honest trade until the reflector is mounted
+    # clear of the tripod and planes3 can find the real corner.
+    return Q.mean(0), 'centroid'
 
 
 # ─────────────────────────────── [C] the node ────────────────────────────────
@@ -408,7 +418,11 @@ class RadarLidarCalib(Node):
         dp('grow_min_radius', 0.08)
         dp('grow_step', 0.02)
         dp('grow_plateau_frac', 0.04)        # increment below this fraction => done
-        dp('reflector_size', 0.32)           # hard cap on the cluster's extent (m)
+        dp('reflector_size', 0.25)           # SET THIS to your reflector's longest
+                                             # dimension — it is the hard backstop on
+                                             # how far the growth may spread
+        dp('apex_method', 'auto')            # 'auto' (planes3 -> centroid) |
+                                             # 'centroid' | 'deepest'
         dp('grow_radius_per_m', 0.03)        # range scaling on the max radius
         dp('grow_eps', 0.06); dp('grow_eps_per_m', 0.02)
         dp('cluster_eps_per_m', 0.02)        # same scaling for the seed clustering
@@ -487,6 +501,7 @@ class RadarLidarCalib(Node):
         self.grow_rmax, self.grow_rmin = float(g('grow_max_radius')), float(g('grow_min_radius'))
         self.grow_step, self.grow_plateau = float(g('grow_step')), float(g('grow_plateau_frac'))
         self.refl_size = float(g('reflector_size'))
+        self.apex_method = str(g('apex_method'))
         self.grow_eps = float(g('grow_eps'))
         self.grow_r_pm = float(g('grow_radius_per_m'))
         self.grow_eps_pm = float(g('grow_eps_per_m'))
@@ -695,7 +710,7 @@ class RadarLidarCalib(Node):
         else:
             used_r = 0.0
         apex, method = locate_apex(P, self.ptol, self.piters, self.pmin, self.perp,
-                                   self.rng, seed_c=seed_c)
+                                   self.rng, seed_c=seed_c, mode=self.apex_method)
         self.det = dict(apex=apex, cluster=P, method=method,
                         n_fg=len(fg), n_extra=len(clusters) - 1)
         self.det_t = time.time()
