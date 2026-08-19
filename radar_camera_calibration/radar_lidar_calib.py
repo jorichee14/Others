@@ -420,8 +420,10 @@ class RadarLidarCalib(Node):
             self.pub_img = self.create_publisher(Image, '~/debug_image', 2)
             self.create_timer(0.05, self._overlay)
         self.get_logger().info(
-            'radar_lidar_calib ready (solves T_lidar_radar, no camera).\n'
-            '  RViz: Fixed Frame = your lidar frame, add the cloud + MarkerArray '
+            'radar_lidar_calib ready — solves T_lidar_radar; camera used only for '
+            'the composed T_cam_radar'
+            + (' + image overlay.\n' if self.overlay_on else ' (overlay off).\n')
+            + '  RViz: Fixed Frame = your lidar frame, add the cloud + MarkerArray '
             'on ~/markers\n'
             '  per placement: reflector OFF -> ~/background | reflector ON, aim, '
             'step out -> ~/capture')
@@ -854,34 +856,33 @@ class RadarLidarCalib(Node):
         if self.lidar_frame is None:
             return
         arr = MarkerArray()
-        n = 0
 
         if self.det is not None and time.time() - self.det_t < 1.0:
             d = self.det
             pc = self._mk('cluster', 0, Marker.POINTS, 0.02, CYAN)
             pc.points = [Point(x=float(p[0]), y=float(p[1]), z=float(p[2])) for p in d['cluster']]
-            arr.markers.append(pc); n += 1
+            arr.markers.append(pc)
             ap = self._mk('apex', 1, Marker.SPHERE, 0.07, GREEN)
             ap.pose.position.x, ap.pose.position.y, ap.pose.position.z = map(float, d['apex'])
-            arr.markers.append(ap); n += 1
+            arr.markers.append(ap)
             lab = self._mk('apex_label', 2, Marker.TEXT_VIEW_FACING, 0.09, GREEN)
             lab.pose.position.x, lab.pose.position.y = float(d['apex'][0]), float(d['apex'][1])
             lab.pose.position.z = float(d['apex'][2]) + 0.15
             lab.text = (f'{np.linalg.norm(d["apex"]):.2f} m  {d["method"]}'
                         + (f'  +{d["n_extra"]} EXTRA CLUSTER' if d['n_extra'] else ''))
-            arr.markers.append(lab); n += 1
+            arr.markers.append(lab)
 
         if self.captures:
             cap = self._mk('captures', 3, Marker.SPHERE_LIST, 0.06, AMBER)
             cap.points = [Point(x=float(c['p_lidar'][0]), y=float(c['p_lidar'][1]),
                                 z=float(c['p_lidar'][2])) for c in self.captures]
-            arr.markers.append(cap); n += 1
+            arr.markers.append(cap)
             for c in self.captures:
                 tm = self._mk('capture_ids', 100 + c['idx'], Marker.TEXT_VIEW_FACING, 0.07, AMBER)
                 tm.pose.position.x, tm.pose.position.y = float(c['p_lidar'][0]), float(c['p_lidar'][1])
                 tm.pose.position.z = float(c['p_lidar'][2]) - 0.12
                 tm.text = str(c['idx'])
-                arr.markers.append(tm); n += 1
+                arr.markers.append(tm)
 
         # the radar's pick, mapped into the lidar frame by the current solve
         R, t = self._current_T()
@@ -889,19 +890,19 @@ class RadarLidarCalib(Node):
             p = R @ self.sel['p'] + t
             rm = self._mk('radar_pick', 4, Marker.SPHERE, 0.07, MAGENTA)
             rm.pose.position.x, rm.pose.position.y, rm.pose.position.z = map(float, p)
-            arr.markers.append(rm); n += 1
+            arr.markers.append(rm)
             if self.det is not None and time.time() - self.det_t < 1.0:
                 ln = self._mk('delta', 5, Marker.LINE_LIST, 0.012, MAGENTA)
                 ln.points = [Point(x=float(p[0]), y=float(p[1]), z=float(p[2])),
                              Point(x=float(self.det['apex'][0]), y=float(self.det['apex'][1]),
                                    z=float(self.det['apex'][2]))]
-                arr.markers.append(ln); n += 1
+                arr.markers.append(ln)
                 dt = self._mk('delta_label', 6, Marker.TEXT_VIEW_FACING, 0.08, MAGENTA)
                 mid = (p + self.det['apex']) / 2
                 dt.pose.position.x, dt.pose.position.y, dt.pose.position.z = map(float, mid)
                 dt.text = (f'D {np.linalg.norm(p - self.det["apex"])*1000:.0f} mm '
                            f'({"solved" if self.solution else "prior"})')
-                arr.markers.append(dt); n += 1
+                arr.markers.append(dt)
 
         st = self._mk('status', 7, Marker.TEXT_VIEW_FACING, 0.12, WHITE)
         st.pose.position.x, st.pose.position.y, st.pose.position.z = map(float, self.status_xyz)
