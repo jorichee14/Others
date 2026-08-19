@@ -437,6 +437,12 @@ class RadarLidarCalib(Node):
         # ── radar detection ──
         dp('radar_min_range', 0.3); dp('radar_max_range', 8.0)
         dp('bg_frames_radar', 15); dp('bg_match_dist', 0.2)
+        # Physical bound on the rig, not a prior: whatever the extrinsic turns out
+        # to be, the radar's range to the target must lie within one baseline of
+        # the lidar's. Rules out distant strong returns that would otherwise win on
+        # raw SNR (a wall at 7 m beating the reflector at 1.7 m). Set it larger
+        # than the true lidar-radar separation and forget it; <=0 disables.
+        dp('max_baseline_m', 2.0)
         dp('range_gate_margin_m', -1.0)      # <=0 = OFF (default). The reflector is
                                              # the brightest NEW thing in a
                                              # background-subtracted scene, so max-SNR
@@ -515,6 +521,7 @@ class RadarLidarCalib(Node):
         self.rmin, self.rmax = float(g('radar_min_range')), float(g('radar_max_range'))
         self.bgr_n, self.bg_dist = int(g('bg_frames_radar')), float(g('bg_match_dist'))
         self.rmargin = float(g('range_gate_margin_m'))
+        self.max_base = float(g('max_baseline_m'))
         self.max_dop = float(g('max_abs_doppler'))
         self.rceps, self.rcmin = float(g('radar_cluster_eps')), int(g('radar_min_cluster_size'))
         self.acc_n, self.min_frames = int(g('radar_accum_frames')), int(g('radar_min_frames'))
@@ -778,6 +785,11 @@ class RadarLidarCalib(Node):
         # correct return sits one baseline away).
         t_gate = t if t is not None else self.t_prior
         r_exp = np.linalg.norm(apex - t_gate)
+        if self.max_base > 0:
+            # |r_radar - r_lidar| <= baseline by the triangle inequality, for ANY
+            # rotation and any actual baseline up to max_baseline_m.
+            r_lid = float(np.linalg.norm(apex))
+            keep &= np.abs(r - r_lid) <= self.max_base
         if self.rmargin > 0:
             keep &= np.abs(r - r_exp) <= self.rmargin
         if self.max_dop > 0 and dop is not None:
@@ -791,7 +803,10 @@ class RadarLidarCalib(Node):
                if self.acc else np.zeros(0, int))
         n_frames = len(self.acc)
         if len(pts) == 0:
-            self.aim = ('radar: nothing new after background (%d frames pooled) — '
+            self.aim = ('radar: nothing within %.1f m of the lidar range (%.2f m) — '
+                        'RE-AIM / re-do background' % (self.max_base, np.linalg.norm(apex))
+                        if self.max_base > 0 else
+                        'radar: nothing new after background (%d frames pooled) — '
                         'RE-AIM / re-do background' % n_frames, 'red')
             return
 
