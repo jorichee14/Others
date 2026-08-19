@@ -95,12 +95,40 @@ def residual(x, P, Q, sig):
     return out.ravel()
 
 
-def solve(P, Q, sig, reject=4.0, reject_axis=3.5, f_scale=1.5, iters=5):
+def prior_rows(x, t_prior, t_sigma, rot_prior, rot_sigma):
+    """Extra whitened residuals pulling the solution toward a measured pose.
+
+    A single-reflector radar always has directions it cannot see — for an upright
+    mount that is height, for a mount rolled 90 deg it is the horizontal, because
+    the sensor's narrow angular field lies along it. No pose set fixes that; the
+    information has to come from outside, and a tape measure is the cheapest
+    source. The prior only ever wins where the data is silent: on the axes the
+    radar does constrain, the measurement rows dominate these."""
+    rows = []
+    if t_prior is not None:
+        rows.append((x[3:6] - t_prior) / t_sigma)
+    if rot_prior is not None:
+        dR = Rot.from_rotvec(x[:3]).as_matrix() @ rot_prior.T
+        rows.append(Rot.from_matrix(dR).as_rotvec() / rot_sigma)
+    return np.concatenate(rows) if rows else np.empty(0)
+
+
+def solve(P, Q, sig, reject=4.0, reject_axis=3.5, f_scale=1.5, iters=5,
+          t_prior=None, t_sigma=0.05, rot_prior=None, rot_sigma=np.radians(10)):
     R0, t0 = kabsch(P, Q)
+    if t_prior is not None:
+        t0 = np.asarray(t_prior, float)
+    if rot_prior is not None:
+        R0 = rot_prior
     x = np.concatenate([Rot.from_matrix(R0).as_rotvec(), t0])
     mask = np.ones(len(P), bool)
+
+    def full(xx, Pm, Qm, sg):
+        return np.concatenate([residual(xx, Pm, Qm, sg),
+                               prior_rows(xx, t_prior, t_sigma, rot_prior, rot_sigma)])
+
     for _ in range(iters):
-        sol = least_squares(residual, x, args=(P[mask], Q[mask], sig),
+        sol = least_squares(full, x, args=(P[mask], Q[mask], sig),
                             loss='huber', f_scale=f_scale)
         x = sol.x
         d = residual(x, P, Q, sig).reshape(-1, 3)
