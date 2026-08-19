@@ -88,6 +88,7 @@ import json
 import os
 import time
 from collections import deque
+from itertools import combinations
 
 import numpy as np
 import rclpy
@@ -241,11 +242,15 @@ def grow_from_seed(raw, seed, eps, max_r):
 
 
 # ────────────────────────────── [B] apex locator ─────────────────────────────
-def ransac_planes(P, tol, iters, min_pts, rng):
-    """Sequentially RANSAC up to three planes; each refined by SVD on its
-    inliers, whose points are removed before the next fit."""
+def ransac_planes(P, tol, iters, min_pts, rng, max_planes=6):
+    """Sequentially RANSAC up to `max_planes` planes; each refined by SVD on its
+    inliers, whose points are removed before the next fit. Returns (n, d, count).
+
+    More than three because the grown cluster also contains tripod geometry —
+    the trihedral is then identified by picking the mutually perpendicular
+    TRIPLE, not by assuming the first three fits are the plates."""
     planes, pts = [], P.copy()
-    for _ in range(3):
+    for _ in range(max_planes):
         if len(pts) < min_pts:
             break
         best = None
@@ -264,34 +269,51 @@ def ransac_planes(P, tol, iters, min_pts, rng):
         Q = pts[best[1]]
         c0 = Q.mean(0)
         n = np.linalg.svd(Q - c0)[2][2]
-        planes.append((n, float(n @ c0)))
+        planes.append((n, float(n @ c0), len(Q)))
         pts = pts[~best[1]]
     return planes
 
 
-def locate_apex(P, tol, iters, min_pts, perp_tol_deg, rng):
-    """Trihedral apex from its point cluster.
-    'planes3'  three mutually ~perpendicular planes intersected → exact corner.
-    'deepest'  farthest points along the viewing ray (the corner of a reflector
-               aimed at the sensor is its deepest point). Used when the plates
-               are too sparse to fit — i.e. at longer range."""
+def locate_apex(P, tol, iters, min_pts, perp_tol_deg, rng, seed_c=None):
+    """Trihedral apex from a point cluster that may also contain tripod.
+
+    'planes3'  fit several planes, then take the mutually ~perpendicular TRIPLE
+               and intersect it. Three mutually perpendicular planes are the
+               signature of the trihedral, so this finds the reflector inside a
+               mixed cluster instead of assuming the cluster is only reflector.
+    'deepest'  fallback when no such triple exists: farthest points along the
+               viewing ray. Only valid if the cluster IS the reflector, so it is
+               anchored to the seed when one is given — otherwise a grown blob
+               containing the tripod returns a point behind the reflector.
+    """
     planes = ransac_planes(P, tol, iters, min_pts, rng)
-    if len(planes) == 3:
-        budget = np.cos(np.radians(90.0 - perp_tol_deg))
-        if all(abs(planes[i][0] @ planes[j][0]) < budget
-               for i in range(3) for j in range(i + 1, 3)):
-            N = np.stack([p[0] for p in planes])
-            d = np.array([p[1] for p in planes])
-            try:
-                apex = np.linalg.solve(N, d)
-                if np.min(np.linalg.norm(P - apex, axis=1)) < 0.10:   # must touch the cluster
-                    return apex, 'planes3'
-            except np.linalg.LinAlgError:
-                pass
-    u = P.mean(0)
+    budget = np.cos(np.radians(90.0 - perp_tol_deg))
+    best = None
+    for i, j, k in combinations(range(len(planes)), 3):
+        tri = (planes[i], planes[j], planes[k])
+        if any(abs(a[0] @ b[0]) >= budget for a, b in combinations(tri, 2)):
+            continue
+        try:
+            apex = np.linalg.solve(np.stack([p[0] for p in tri]),
+                                   np.array([p[1] for p in tri]))
+        except np.linalg.LinAlgError:
+            continue
+        if np.min(np.linalg.norm(P - apex, axis=1)) > 0.10:      # must touch the cloud
+            continue
+        if seed_c is not None and np.linalg.norm(apex - seed_c) > 0.35:
+            continue                                             # not on the reflector
+        score = sum(p[2] for p in tri)
+        if best is None or score > best[0]:
+            best = (score, apex)
+    if best is not None:
+        return best[1], 'planes3'
+    Q = P if seed_c is None else P[np.linalg.norm(P - seed_c, axis=1) <= 0.25]
+    if len(Q) < 3:
+        Q = P
+    u = Q.mean(0)
     u = u / (np.linalg.norm(u) + 1e-9)
-    k = min(8, len(P))
-    return P[np.argsort(P @ u)[-k:]].mean(0), 'deepest'
+    k = min(8, len(Q))
+    return Q[np.argsort(Q @ u)[-k:]].mean(0), 'deepest'
 
 
 # ─────────────────────────────── [C] the node ────────────────────────────────
@@ -327,7 +349,7 @@ class RadarLidarCalib(Node):
         # distance (0.7 deg is 1.2 cm at 1 m but 4.9 cm at 4 m). A fixed
         # connectivity that works up close silently fails far away.
         #     effective = base + per_m * range_to_target
-        dp('grow_radius', 0.30); dp('grow_radius_per_m', 0.05)   # 0 radius = off
+        dp('grow_radius', 0.20); dp('grow_radius_per_m', 0.03)   # 0 radius = off
         dp('grow_eps', 0.06); dp('grow_eps_per_m', 0.02)
         dp('cluster_eps_per_m', 0.02)        # same scaling for the seed clustering
         dp('plane_tol', 0.015)               # RANSAC inlier distance (m)
@@ -602,9 +624,11 @@ class RadarLidarCalib(Node):
         r_seed = float(np.linalg.norm(P.mean(0)))
         grow_r = self.grow_r + self.grow_r_pm * r_seed      # clear this much around
         grow_eps = self.grow_eps + self.grow_eps_pm * r_seed  # the seed, range-scaled
+        seed_c = P.mean(0)
         if self.grow_r > 0:                 # seed -> whole reflector
             P = grow_from_seed(xyz, P, grow_eps, grow_r)
-        apex, method = locate_apex(P, self.ptol, self.piters, self.pmin, self.perp, self.rng)
+        apex, method = locate_apex(P, self.ptol, self.piters, self.pmin, self.perp,
+                                   self.rng, seed_c=seed_c)
         self.det = dict(apex=apex, cluster=P, method=method,
                         n_fg=len(fg), n_extra=len(clusters) - 1)
         self.det_t = time.time()
