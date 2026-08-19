@@ -321,11 +321,15 @@ class RadarLidarCalib(Node):
                                              # between reflector and tripod head.
         dp('cluster_eps', 0.12)              # foreground clustering radius (m)
         dp('min_cluster_size', 8)
-        dp('grow_radius', 0.30)              # region-grow the seed back into the raw
-                                             # cloud out to this radius (0 = off), to
-                                             # recover the part of the reflector that
-                                             # background subtraction erased
-        dp('grow_eps', 0.06)                 # connectivity for that growth (m)
+        # Region-grow the seed back into the raw cloud to recover the part of the
+        # reflector that background subtraction erased. Both radii scale with
+        # range: lidar point spacing is angular, so it grows linearly with
+        # distance (0.7 deg is 1.2 cm at 1 m but 4.9 cm at 4 m). A fixed
+        # connectivity that works up close silently fails far away.
+        #     effective = base + per_m * range_to_target
+        dp('grow_radius', 0.30); dp('grow_radius_per_m', 0.05)   # 0 radius = off
+        dp('grow_eps', 0.06); dp('grow_eps_per_m', 0.02)
+        dp('cluster_eps_per_m', 0.02)        # same scaling for the seed clustering
         dp('plane_tol', 0.015)               # RANSAC inlier distance (m)
         dp('plane_iters', 250)
         dp('min_plane_pts', 12)              # per plate — sets max planes3 range
@@ -399,6 +403,9 @@ class RadarLidarCalib(Node):
         self.bgl_n, self.bg_voxel = int(g('bg_frames_lidar')), float(g('bg_voxel'))
         self.ceps, self.cmin = float(g('cluster_eps')), int(g('min_cluster_size'))
         self.grow_r, self.grow_eps = float(g('grow_radius')), float(g('grow_eps'))
+        self.grow_r_pm = float(g('grow_radius_per_m'))
+        self.grow_eps_pm = float(g('grow_eps_per_m'))
+        self.ceps_pm = float(g('cluster_eps_per_m'))
         self.ptol, self.piters = float(g('plane_tol')), int(g('plane_iters'))
         self.pmin, self.perp = int(g('min_plane_pts')), float(g('perp_tol_deg'))
         self.rmin, self.rmax = float(g('radar_min_range')), float(g('radar_max_range'))
@@ -572,7 +579,10 @@ class RadarLidarCalib(Node):
             return
 
         fg = xyz[foreground_mask(xyz, self.bg_lidar, self.bg_voxel)]
-        clusters = lidar_cluster(fg, self.ceps, self.cmin)
+        # scale the seed connectivity by how far the new points are
+        r_fg = float(np.median(np.linalg.norm(fg, axis=1))) if len(fg) else 0.0
+        ceps_eff = self.ceps + self.ceps_pm * r_fg
+        clusters = lidar_cluster(fg, ceps_eff, self.cmin)
         if not clusters:
             # the counts say WHICH stage lost it: no foreground at all means the
             # background is eating the target (reflector too close to something
@@ -589,13 +599,17 @@ class RadarLidarCalib(Node):
             return
         P = clusters[0]
         n_seed = len(P)
+        r_seed = float(np.linalg.norm(P.mean(0)))
+        grow_r = self.grow_r + self.grow_r_pm * r_seed      # clear this much around
+        grow_eps = self.grow_eps + self.grow_eps_pm * r_seed  # the seed, range-scaled
         if self.grow_r > 0:                 # seed -> whole reflector
-            P = grow_from_seed(xyz, P, self.grow_eps, self.grow_r)
+            P = grow_from_seed(xyz, P, grow_eps, grow_r)
         apex, method = locate_apex(P, self.ptol, self.piters, self.pmin, self.perp, self.rng)
         self.det = dict(apex=apex, cluster=P, method=method,
                         n_fg=len(fg), n_extra=len(clusters) - 1)
         self.det_t = time.time()
-        self.lidar_stat = (f'lidar: {len(fg)} new -> seed {n_seed} -> grown {len(P)}, {method}'
+        self.lidar_stat = (f'lidar: {len(fg)} new -> seed {n_seed} -> grown {len(P)} '
+                           f'(r{grow_r:.2f}/e{grow_eps:.2f} @ {r_seed:.1f} m), {method}'
                            + (f', +{len(clusters)-1} EXTRA' if len(clusters) > 1 else ''))
         if self.cap_deadline > time.time():
             self.cap_lidar.append(apex.copy())
