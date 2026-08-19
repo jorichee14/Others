@@ -325,7 +325,9 @@ class RadarLidarCalib(Node):
         dp('camera_frame', 'zed_left_camera_optical_frame')
         dp('image_topic', '/zed/zed_node/left/image_rect_color')
         dp('info_topic', '/zed/zed_node/left/camera_info')
-        dp('show_image_overlay', True)
+        dp('show_image_overlay', True)     # build/publish the ZED overlay
+        dp('show_window', True)            # ALSO pop a native cv2 window for it
+        dp('debug_scale', 1.0)             # shrink the published/shown overlay
         # GLIM output, os_lidar -> zed_left_camera_optical_frame (T_lidar_camera)
         dp('lidar_camera_xyz', [-0.074928, -0.066971, -0.091627])
         dp('lidar_camera_quat_xyzw', [-0.497829, -0.498035, 0.501789, 0.502329])
@@ -412,6 +414,8 @@ class RadarLidarCalib(Node):
         self.K = self.D = self.img = None
         self.bridge = CvBridge() if _HAVE_CV else None
         self.overlay_on = bool(g('show_image_overlay')) and _HAVE_CV
+        self.show_window = bool(g('show_window'))
+        self.dscale = float(g('debug_scale'))
         if self.overlay_on:
             self.create_subscription(Image, g('image_topic'),
                                      lambda m: setattr(self, 'img',
@@ -839,7 +843,12 @@ class RadarLidarCalib(Node):
                       + (f' | residual {self.solution["rms_sigma"]:.2f}s inl {self.solution["n_in"]}'
                          if self.solution else f'/{self.min_points} to first solve'))
         txt((10, h - 12), state, (240, 240, 240))
+        if self.dscale != 1.0:
+            im = cv2.resize(im, None, fx=self.dscale, fy=self.dscale)
         self.pub_img.publish(self.bridge.cv2_to_imgmsg(im, 'bgr8'))
+        if self.show_window:
+            cv2.imshow('radar_lidar_calib', im)
+            cv2.waitKey(1)
 
     # ── RViz markers (the verification layer) ──
     def _mk(self, ns, mid, typ, scale, color):
