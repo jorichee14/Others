@@ -307,7 +307,11 @@ class RadarLidarCalib(Node):
         # ── noise model + solver (radar-dominated; lidar apex ~1 cm ≪ these) ──
         dp('sigma_range_m', 0.05); dp('sigma_az_deg', 3.0); dp('sigma_el_deg', 8.0)
         dp('huber_f_scale', 1.5); dp('reject_sigma', 4.0); dp('reject_axis_sigma', 3.5)
-        # ── optional prior (OFF by default) ──
+        # ── radar position guess + optional solver prior ──
+        #   prior_t_xyz is ALWAYS used to predict the radar's range to the target
+        #   (r_exp = |apex - t|). That is pure gating, not regularisation: get it
+        #   wrong by more than range_gate_margin_m and the real return is thrown
+        #   away. use_extrinsic_prior controls only whether it also biases the SOLVE.
         dp('use_extrinsic_prior', False)
         dp('prior_t_xyz', [0.0, 0.0, 0.0]); dp('prior_rpy_deg', [0.0, 0.0, 0.0])
         dp('prior_t_sigma_m', 0.15); dp('prior_rot_sigma_deg', 15.0)
@@ -583,8 +587,13 @@ class RadarLidarCalib(Node):
             return
         apex = self.det['apex']
         R, t = self._current_T()
-        # rotation-invariant: |p_radar| ≈ |apex − t_radar_in_lidar| whatever R is
-        r_exp = np.linalg.norm(apex - t) if t is not None else np.linalg.norm(apex)
+        # Rotation-invariant range gate: |p_radar| = |apex − t_radar| for ANY R, so
+        # only the radar's POSITION matters here. Use the solved t once available,
+        # otherwise the guess — never 0, or a metre of baseline rejects every real
+        # return (the symptom is 'no return near lidar range' while a strong,
+        # correct return sits one baseline away).
+        t_gate = t if t is not None else self.t_prior
+        r_exp = np.linalg.norm(apex - t_gate)
         keep &= np.abs(r - r_exp) <= self.rmargin
         if self.max_dop > 0 and dop is not None:
             keep &= np.abs(dop) <= self.max_dop
