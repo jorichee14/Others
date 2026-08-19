@@ -1176,6 +1176,7 @@ class RadarLidarCalib(Node):
         self._rot_sig_deg, self._t_sig_mm = rot1s, t1s      # for the coverage HUD
         err = ((R @ Pin.T).T + t) - Qin
         bias, rms = err.mean(0) * 1000, np.sqrt((err ** 2).mean(0)) * 1000
+        raz_in = np.array([cart_to_raz(p) for p in Pin])
         loo = loo_cross_val(Pin, I[mask], Qin, np.zeros(3),
                             (self.sig_r, self.sig_az, self.sig_el), True)
         cond = condition_number(Pin)
@@ -1206,6 +1207,33 @@ class RadarLidarCalib(Node):
             L.append(f'  baseline: |t| {np.linalg.norm(t)*100:.1f} vs tape '
                      f'{self.meas_base*100:.1f} cm -> {d*100:.1f} cm '
                      f'[{"OK" if d <= 0.05 else "MISMATCH"}]')
+        # ── does each angular channel actually MEASURE anything? ──
+        # Regress what the radar reported against what the solved extrinsic says
+        # it should have reported. A working channel gives slope ~1. A slope near
+        # zero means the radar is emitting a near-constant angle, which no capture
+        # plan can fix and which silently pins the matching translation axis —
+        # the failure that cost three collection sessions before it was measured.
+        pred_raz = np.array([cart_to_raz(R.T @ (q - t)) for q in Qin])
+        chan = []
+        for i, nm in ((1, 'az'), (2, 'el')):
+            x, y = np.degrees(pred_raz[:, i]), np.degrees(raz_in[:, i])
+            if np.ptp(x) < 5.0:                  # too little leverage to judge
+                chan.append(f'{nm} slope n/a (only {np.ptp(x):.0f} deg of spread)')
+                continue
+            a_c = np.polyfit(x, y, 1)[0]
+            chan.append(f'{nm} slope {a_c:+.2f}' + ('' if abs(a_c - 1) < 0.3 else ' !!'))
+        L.append('  channels: ' + '   '.join(chan) + '   (want ~+1.00 on both)')
+        dead = [nm for i, nm in ((1, 'az'), (2, 'el'))
+                if np.ptp(np.degrees(pred_raz[:, i])) >= 5.0
+                and abs(np.polyfit(np.degrees(pred_raz[:, i]),
+                                   np.degrees(raz_in[:, i]), 1)[0] - 1) > 0.5]
+        for nm in dead:
+            axis = R @ ([0, 1, 0] if nm == 'az' else [0, 0, 1])
+            where = 'VERTICAL' if abs(axis[2]) > 0.7 else 'HORIZONTAL'
+            L.append(f'  !! the {nm.upper()} channel is not tracking the target — the radar is '
+                     f'reporting a near-constant angle. That axis points {where} on this '
+                     f'mount, so the {where.lower()} part of t is unmeasured and its '
+                     f'coverage bar cannot be satisfied by collecting more')
         n_planes = sum(1 for c in self.captures if c.get('method') == 'planes3')
         if n_planes < 0.5 * n:
             L.append(f'  !! {n - n_planes}/{n} captures used a CENTROID, not the plate '
