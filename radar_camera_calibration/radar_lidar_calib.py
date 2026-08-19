@@ -458,10 +458,14 @@ class RadarLidarCalib(Node):
         # accumulation instead — the static reflector lands in the same place
         # every frame (dense, persistent cluster), noise appears once and moves.
         dp('radar_accum_frames', 10)
-        dp('radar_min_frames', 3)            # cluster must appear in >= this many frames
+        dp('radar_min_frames', 5)            # cluster must appear in >= this many frames
         dp('gate_radius', 0.40)              # 3-D gate once a solve exists
         dp('cluster_strict', True)
         dp('min_snr', 100.0)                 # threshold on snr·(r/ref)^4
+        dp('min_snr_raw', 25.0)              # absolute floor too: the r^4 scaling
+                                             # inflates distant returns enormously
+                                             # (snr 58 at 5.7 m normalises to 11800),
+                                             # so a weak far blip would otherwise pass
         dp('snr_ref_range', 1.5)
         dp('radar_range_scale', 1.0)         # ingest correction; tune until a≈1
         dp('radar_range_bias_m', 0.0)
@@ -527,6 +531,7 @@ class RadarLidarCalib(Node):
         self.acc_n, self.min_frames = int(g('radar_accum_frames')), int(g('radar_min_frames'))
         self.gate_r, self.strict = float(g('gate_radius')), bool(g('cluster_strict'))
         self.min_snr, self.snr_r0 = float(g('min_snr')), float(g('snr_ref_range'))
+        self.min_snr_raw = float(g('min_snr_raw'))
         self.rscale, self.rbias = float(g('radar_range_scale')), float(g('radar_range_bias_m'))
         self.sig_r = float(g('sigma_range_m'))
         self.sig_az = np.radians(float(g('sigma_az_deg')))
@@ -840,7 +845,7 @@ class RadarLidarCalib(Node):
         n_seen = persist[ci]
         r_sel = float(np.linalg.norm(p_sel))
         snr_norm = snr_sel * (r_sel / self.snr_r0) ** 4
-        ok = snr_norm >= self.min_snr
+        ok = snr_norm >= self.min_snr and snr_sel >= self.min_snr_raw
         self.sel = dict(p=p_sel, snr=snr_sel, snr_norm=snr_norm, r=r_sel, n=len(c),
                         seen=n_seen, frames=n_frames)
         # Range agreement is reported, not enforced, until a solve exists: before
@@ -880,6 +885,18 @@ class RadarLidarCalib(Node):
                                    f'{self.rstd_max*100:.0f} (multipath flicker — nudge or re-aim)')
             return
         p_lidar, p_radar = L.mean(0), Rr.mean(0)
+        # Final geometric sanity: the two sensors are on one rig, so their ranges
+        # to the same target cannot differ by more than the baseline. Re-checked
+        # here on the AVERAGED pair, so a frame that slipped past the live gate
+        # still cannot become a capture.
+        if self.max_base > 0:
+            dr = abs(np.linalg.norm(p_radar) - np.linalg.norm(p_lidar))
+            if dr > self.max_base:
+                self.get_logger().warn(
+                    f'capture REFUSED: radar {np.linalg.norm(p_radar):.2f} m vs lidar '
+                    f'{np.linalg.norm(p_lidar):.2f} m differ by {dr:.2f} m > '
+                    f'max_baseline {self.max_base:.1f} m — wrong object')
+                return
         for i, cp in enumerate(self.captures):
             if np.linalg.norm(np.array(cp['p_lidar']) - p_lidar) < self.min_base:
                 self.get_logger().warn(f'note: {np.linalg.norm(np.array(cp["p_lidar"])-p_lidar)*100:.0f}'
