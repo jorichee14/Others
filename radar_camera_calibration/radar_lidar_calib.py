@@ -414,7 +414,11 @@ class RadarLidarCalib(Node):
         #     effective = base + per_m * range_to_target
         # Stepwise growth from the tip: expand the radius until the cluster stops
         # growing (object complete) or outgrows a reflector (tripod joined).
-        dp('grow_max_radius', 0.45)          # 0 = growth off entirely
+        # OFF by default: growth only ever worked around a reflector bolted to its
+        # tripod head, and it cannot separate the two cleanly. With the reflector
+        # raised clear of the head, background subtraction returns the whole
+        # reflector on its own and planes3 finds the real corner — no growth needed.
+        dp('grow_max_radius', 0.0)           # 0 = growth off entirely
         dp('grow_min_radius', 0.08)
         dp('grow_step', 0.02)
         dp('grow_plateau_frac', 0.04)        # increment below this fraction => done
