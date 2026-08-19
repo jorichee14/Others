@@ -3,11 +3,17 @@
 RADAR ↔ LIDAR extrinsic calibration  —  solves T_lidar_radar
 =============================================================
 
-ONE node, no camera, no board, no hand-measured offsets. The whole target is a
-corner reflector on a tripod. Everything lives in the LIDAR frame; verification
-is done in RViz.
+ONE node, no board, no hand-measured offsets. The whole target is a corner
+reflector on a tripod. The SOLVE lives entirely in the LIDAR frame:
 
     p_lidar = R · p_radar + t          (X = T_lidar_radar)
+
+The camera is OPTIONAL and never enters the solve. Given the GLIM lidar↔camera
+transform it is used for two things only: composing the deployable
+T_cam_radar = T_cam_lidar · T_lidar_radar, and drawing the ZED image overlay.
+So an error in the lidar↔camera calibration shows up in the composed output and
+the overlay but cannot corrupt the radar↔lidar result — and re-running GLIM
+later lets you recompose without recollecting any radar data.
 
 How the reflector is found
 --------------------------
@@ -42,7 +48,7 @@ threshold would wrongly refuse a well-aimed reflector at 4 m.
 A capture is ATOMIC: both sensors must pass their gates or it is REFUSED with
 the reason logged. Nothing half-good is ever stored.
 
-RViz verification (replaces the old image overlay)
+RViz verification (plus the ZED image overlay when the camera is configured)
 --------------------------------------------------
 Fixed Frame = your lidar frame. Add the lidar PointCloud2 and a MarkerArray on
 ~/markers:
@@ -69,9 +75,12 @@ Run
   ros2 topic pub -1 /radar_lidar_calib/save       std_msgs/msg/Empty "{}"
   ros2 topic pub -1 /radar_lidar_calib/reset      std_msgs/msg/Empty "{}"
 
-Later, when you do have lidar→camera, the result composes directly:
-    T_cam_radar = T_cam_lidar · T_lidar_radar
-so nothing measured here is wasted.
+Camera parameters default to the GLIM result for this rig
+(`lidar_camera_xyz` / `lidar_camera_quat_xyzw`, direction `lidar_camera`,
+i.e. the given transform maps CAMERA points into the LIDAR frame and is
+inverted internally). Set `show_image_overlay:=false` to run headless, or
+override `camera_transform_is:=camera_lidar` if your file stores the other
+direction.
 
 Structure: [A] cloud tools · [B] apex locator · [C] node.
 """
@@ -83,13 +92,20 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, Image, CameraInfo
 from geometry_msgs.msg import PointStamped, TransformStamped, Point
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import Empty, ColorRGBA
 from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation as Rot
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
+
+try:                                    # optional: only for the image overlay
+    import cv2
+    from cv_bridge import CvBridge
+    _HAVE_CV = True
+except ImportError:
+    _HAVE_CV = False
 
 try:                                    # flat-module or installed-package layout
     from radar_camera_calib import (robust_ml_calibrate, loo_cross_val,
@@ -304,6 +320,16 @@ class RadarLidarCalib(Node):
         dp('lidar_name', 'ouster')
         dp('output_path', ''); dp('publish_tf', True)
         dp('status_marker_xyz', [2.0, 0.0, 1.0])
+        # ── OPTIONAL camera (verification + composed output only; the SOLVE never
+        #    uses it, so an error here cannot corrupt the radar calibration) ──
+        dp('camera_frame', 'zed_left_camera_optical_frame')
+        dp('image_topic', '/zed/zed_node/left/image_rect_color')
+        dp('info_topic', '/zed/zed_node/left/camera_info')
+        dp('show_image_overlay', True)
+        # GLIM output, os_lidar -> zed_left_camera_optical_frame (T_lidar_camera)
+        dp('lidar_camera_xyz', [-0.074928, -0.066971, -0.091627])
+        dp('lidar_camera_quat_xyzw', [-0.497829, -0.498035, 0.501789, 0.502329])
+        dp('camera_transform_is', 'lidar_camera')   # 'lidar_camera' | 'camera_lidar'
 
         g = lambda k: self.get_parameter(k).value
         self.fx, self.fy, self.fz = g('pc_field_x'), g('pc_field_y'), g('pc_field_z')
@@ -340,6 +366,21 @@ class RadarLidarCalib(Node):
         self.out_path = g('output_path') or f'extrinsic_{self.lidar_name}__{self.radar_name}'
         self.publish_tf = bool(g('publish_tf'))
         self.status_xyz = list(g('status_marker_xyz'))
+        self.camera_frame = g('camera_frame')
+
+        # ── camera transform: store as T_cam_lidar (p_cam = R_cl·p_lidar + t_cl) ──
+        Rg = Rot.from_quat(list(g('lidar_camera_quat_xyzw'))).as_matrix()
+        tg = np.array(g('lidar_camera_xyz'), float)
+        if str(g('camera_transform_is')) == 'lidar_camera':      # given maps cam -> lidar
+            self.R_cl, self.t_cl = Rg.T, -Rg.T @ tg
+        else:                                                    # given already maps lidar -> cam
+            self.R_cl, self.t_cl = Rg, tg
+        ax = {'lidar +X': self.R_cl @ [1, 0, 0], 'lidar +Y': self.R_cl @ [0, 1, 0],
+              'lidar +Z': self.R_cl @ [0, 0, 1]}
+        self.get_logger().info(
+            'T_cam_lidar (for the composed output / overlay only): t=['
+            + ' '.join(f'{v:+.4f}' for v in self.t_cl) + '] m  |  '
+            + '  '.join(f'{k}->[{v[0]:+.2f} {v[1]:+.2f} {v[2]:+.2f}]' for k, v in ax.items()))
 
         self.rng = np.random.default_rng(0)
         self.lidar_frame = None
@@ -366,6 +407,18 @@ class RadarLidarCalib(Node):
         self.pub_mk = self.create_publisher(MarkerArray, '~/markers', 2)
         self.create_timer(0.1, self._markers)
         self.create_timer(1.0, self._heartbeat)
+
+        # optional image overlay (verification only)
+        self.K = self.D = self.img = None
+        self.bridge = CvBridge() if _HAVE_CV else None
+        self.overlay_on = bool(g('show_image_overlay')) and _HAVE_CV
+        if self.overlay_on:
+            self.create_subscription(Image, g('image_topic'),
+                                     lambda m: setattr(self, 'img',
+                                                       self.bridge.imgmsg_to_cv2(m, 'bgr8')), qs)
+            self.create_subscription(CameraInfo, g('info_topic'), self._info, qs)
+            self.pub_img = self.create_publisher(Image, '~/debug_image', 2)
+            self.create_timer(0.05, self._overlay)
         self.get_logger().info(
             'radar_lidar_calib ready (solves T_lidar_radar, no camera).\n'
             '  RViz: Fixed Frame = your lidar frame, add the cloud + MarkerArray '
@@ -635,6 +688,16 @@ class RadarLidarCalib(Node):
                  ('rot1s<=4deg', rot1s.max() <= 4), ('bias<=50mm', np.abs(bias).max() <= 50)]
         L.append('  GATES   : ' + '  '.join(f'{k}[{"P" if v else "F"}]' for k, v in gates)
                  + '   + RViz up/down check before ~/save')
+        Rcr, tcr = self._compose_cam_radar(R, t)          # T_cam_radar, for deployment
+        qc = Rot.from_matrix(Rcr).as_quat()
+        L += [f'  --- composed T_cam_radar = T_cam_lidar * T_lidar_radar ---',
+              f'  xyz (m) : {tcr[0]:+.4f} {tcr[1]:+.4f} {tcr[2]:+.4f}'
+              f'   |t| {np.linalg.norm(tcr)*100:.1f} cm',
+              f'  quat    : {qc[0]:+.4f} {qc[1]:+.4f} {qc[2]:+.4f} {qc[3]:+.4f}',
+              '  radar axes in CAMERA frame: '
+              + '  '.join(f'{k}->[{v[0]:+.2f} {v[1]:+.2f} {v[2]:+.2f}]'
+                          for k, v in (('X fwd', Rcr @ [1, 0, 0]), ('Y left', Rcr @ [0, 1, 0]),
+                                       ('Z up', Rcr @ [0, 0, 1])))]
         self.get_logger().info('\n' + '\n'.join(L))
         if self.tfb is not None and self.lidar_frame:
             tf = TransformStamped()
@@ -671,6 +734,8 @@ class RadarLidarCalib(Node):
         if self.solution is not None:
             R, t = self.solution['R'], self.solution['t']
             q = Rot.from_matrix(R).as_quat()
+            Rcr, tcr = self._compose_cam_radar(R, t)
+            qc = Rot.from_matrix(Rcr).as_quat()
             out['result'] = dict(
                 T_lidar_radar_translation=[float(v) for v in t],
                 T_lidar_radar_quaternion_xyzw=[float(v) for v in q],
@@ -679,13 +744,100 @@ class RadarLidarCalib(Node):
                 static_tf_cmd=('ros2 run tf2_ros static_transform_publisher '
                                + ' '.join(f'{v:.6f}' for v in t) + ' '
                                + ' '.join(f'{v:.6f}' for v in q) + ' '
-                               + f'{self.lidar_frame or "lidar"} {self.child_frame}'))
+                               + f'{self.lidar_frame or "lidar"} {self.child_frame}'),
+                # composed with the GLIM lidar<->camera transform; this is what
+                # radar_fusion_reflector.py consumes (r1_t_xyz / r1_quat_xyzw)
+                T_cam_radar_translation=[float(v) for v in tcr],
+                T_cam_radar_quaternion_xyzw=[float(v) for v in qc],
+                T_cam_lidar_translation=[float(v) for v in self.t_cl],
+                T_cam_lidar_quaternion_xyzw=[float(v) for v in
+                                             Rot.from_matrix(self.R_cl).as_quat()],
+                static_tf_cmd_cam=('ros2 run tf2_ros static_transform_publisher '
+                                   + ' '.join(f'{v:.6f}' for v in tcr) + ' '
+                                   + ' '.join(f'{v:.6f}' for v in qc) + ' '
+                                   + f'{self.camera_frame} {self.child_frame}'))
         path = self.out_path + '_session.json'
         with open(path, 'w') as f:
             json.dump(out, f, indent=1)
         if not quiet:
             self.get_logger().info(f'saved {len(self.captures)} captures -> '
                                    f'{os.path.abspath(path)}')
+
+    # ── camera composition + image overlay (verification / deployment only) ──
+    def _compose_cam_radar(self, R_lr, t_lr):
+        """T_cam_radar = T_cam_lidar · T_lidar_radar. The solve itself never
+        touches the camera, so a wrong GLIM transform shows up here and in the
+        overlay but leaves the radar↔lidar result intact — and a re-run of the
+        lidar↔camera calibration can be recomposed without recollecting radar."""
+        return self.R_cl @ R_lr, self.R_cl @ t_lr + self.t_cl
+
+    def _info(self, m):
+        if self.K is None:
+            self.K = np.array(m.k).reshape(3, 3)
+            self.D = np.array(m.d) if len(m.d) else np.zeros(5)
+
+    def _proj(self, pts_lidar):
+        """lidar-frame points → pixels, via T_cam_lidar and the ZED intrinsics."""
+        P = np.atleast_2d(np.asarray(pts_lidar, float))
+        Pc = (self.R_cl @ P.T).T + self.t_cl
+        uv = np.full((len(Pc), 2), np.nan)
+        ok = Pc[:, 2] > 0.05
+        if ok.any():
+            p, _ = cv2.projectPoints(Pc[ok].reshape(-1, 1, 3), np.zeros(3), np.zeros(3),
+                                     self.K, self.D)
+            uv[ok] = p.reshape(-1, 2)
+        return uv
+
+    def _overlay(self):
+        if self.img is None or self.K is None:
+            return
+        im = self.img.copy()
+
+        def txt(p, s, col, sc=.55):
+            cv2.putText(im, s, p, cv2.FONT_HERSHEY_SIMPLEX, sc, (0, 0, 0), 3)
+            cv2.putText(im, s, p, cv2.FONT_HERSHEY_SIMPLEX, sc, col, 1)
+
+        # background is never drawn — only the live foreground + apex
+        if self.det is not None and time.time() - self.det_t < 1.0:
+            d = self.det
+            for (u, v) in self._proj(d['cluster']):
+                if np.isfinite(u):
+                    cv2.circle(im, (int(u), int(v)), 2, (255, 220, 40), -1)
+            au, av = self._proj(d['apex'])[0]
+            if np.isfinite(au):
+                au, av = int(au), int(av)
+                cv2.drawMarker(im, (au, av), (0, 255, 0), cv2.MARKER_CROSS, 26, 2)
+                txt((au + 12, av - 10), f'{np.linalg.norm(d["apex"]):.2f} m {d["method"]}',
+                    (0, 255, 0))
+        for c in self.captures:                      # pinned coverage map
+            u, v = self._proj(np.array(c['p_lidar']))[0]
+            if np.isfinite(u):
+                cv2.circle(im, (int(u), int(v)), 6, (255, 200, 0), 2)
+                txt((int(u) + 7, int(v) + 5), str(c['idx']), (255, 200, 0), .45)
+
+        R, t = self._current_T()                     # radar pick through the solve
+        if self.sel is not None and R is not None:
+            p_l = R @ self.sel['p'] + t
+            uv = self._proj(p_l)[0]
+            if np.isfinite(uv[0]):
+                u, v = int(uv[0]), int(uv[1])
+                cv2.circle(im, (u, v), 7, (255, 0, 255), 2)
+                if self.det is not None and time.time() - self.det_t < 1.0:
+                    a = self._proj(self.det['apex'])[0]
+                    if np.isfinite(a[0]):
+                        cv2.line(im, (u, v), (int(a[0]), int(a[1])), (255, 0, 255), 1)
+                        txt((u + 10, v + 16),
+                            f'D {np.linalg.norm(p_l - self.det["apex"])*1000:.0f} mm', (255, 0, 255), .5)
+
+        col = {'green': (0, 220, 0), 'orange': (0, 165, 255), 'red': (0, 0, 255)}[self.aim[1]]
+        h = im.shape[0]
+        txt((10, h - 34), self.aim[0], col)
+        state = ('NO BACKGROUND - ~/background first' if self.bg_lidar is None
+                 else f'captures {len(self.captures)}'
+                      + (f' | residual {self.solution["rms_sigma"]:.2f}s inl {self.solution["n_in"]}'
+                         if self.solution else f'/{self.min_points} to first solve'))
+        txt((10, h - 12), state, (240, 240, 240))
+        self.pub_img.publish(self.bridge.cv2_to_imgmsg(im, 'bgr8'))
 
     # ── RViz markers (the verification layer) ──
     def _mk(self, ns, mid, typ, scale, color):
