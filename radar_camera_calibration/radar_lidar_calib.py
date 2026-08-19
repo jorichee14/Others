@@ -656,6 +656,7 @@ class RadarLidarCalib(Node):
         dp('prior_t_sigma_m', 0.15); dp('prior_rot_sigma_deg', 15.0)
         # ── capture ──
         dp('capture_frames', 5)              # radar selections averaged per capture
+        dp('capture_frames_lidar', 3)        # AND this many lidar apexes, see _maybe_finish
         dp('capture_timeout_s', 6.0)
         dp('lidar_std_mm', 15.0)             # apex jitter gate
         dp('radar_std_m', 0.10)              # radar point jitter gate
@@ -723,6 +724,7 @@ class RadarLidarCalib(Node):
         self.t_psig = float(g('prior_t_sigma_m'))
         self.r_psig = np.radians(float(g('prior_rot_sigma_deg')))
         self.cap_n, self.cap_to = int(g('capture_frames')), float(g('capture_timeout_s'))
+        self.cap_nl = int(g('capture_frames_lidar'))
         self.lstd_max, self.rstd_max = float(g('lidar_std_mm')), float(g('radar_std_m'))
         self.min_points, self.min_base = int(g('min_points')), float(g('min_baseline'))
         self.meas_base = float(g('measured_baseline_m'))
@@ -848,6 +850,8 @@ class RadarLidarCalib(Node):
         if dead:
             self.aim = (' | '.join(dead) + ' — check the topic name and that it is publishing',
                         'red')
+        if self.cap_deadline and time.time() > self.cap_deadline:
+            self._capture_timeout()
         if self.det is None:
             self.get_logger().info(self.lidar_stat, throttle_duration_sec=2.0)
         self.get_logger().info(self.aim[0], throttle_duration_sec=2.0)
@@ -927,6 +931,7 @@ class RadarLidarCalib(Node):
                            + (f', +{len(clusters)-1} EXTRA' if len(clusters) > 1 else ''))
         if self.cap_deadline > time.time():
             self.cap_lidar.append(apex.copy())
+            self._maybe_finish()
         ps = PointStamped()
         ps.header = msg.header
         ps.point.x, ps.point.y, ps.point.z = map(float, apex)
@@ -1059,19 +1064,40 @@ class RadarLidarCalib(Node):
 
         if self.cap_deadline > time.time() and ok:
             self.cap_radar.append(p_sel.copy())
-            if len(self.cap_radar) >= self.cap_n:
-                self.cap_deadline = 0.0
-                self._finish_capture()
+            self._maybe_finish()
         elif self.cap_deadline and time.time() > self.cap_deadline:
+            self._capture_timeout()
+
+    def _maybe_finish(self):
+        """Close the capture window only when BOTH sensors have their quota.
+
+        Closing on the radar count alone was a race: the radar publishes faster
+        than the lidar spins, so five radar frames can land inside a single lidar
+        revolution and the capture is finalised with one or two apexes — then
+        refused for 'too few lidar detections' even though the placement was
+        perfect and just needed another 200 ms."""
+        if len(self.cap_radar) >= self.cap_n and len(self.cap_lidar) >= self.cap_nl:
             self.cap_deadline = 0.0
-            self.get_logger().warn(
-                f'capture REFUSED: timeout — only {len(self.cap_radar)}/{self.cap_n} passing '
-                f'radar frames in {self.cap_to:.0f} s   (last: {self.aim[0]})')
+            self._finish_capture()
+
+    def _capture_timeout(self):
+        """Name whichever sensor came up short — 'timeout' alone does not say
+        whether to re-aim the reflector or to fix the lidar detection."""
+        self.cap_deadline = 0.0
+        short = []
+        if len(self.cap_radar) < self.cap_n:
+            short.append(f'radar {len(self.cap_radar)}/{self.cap_n} (aim: {self.aim[0]})')
+        if len(self.cap_lidar) < self.cap_nl:
+            short.append(f'lidar {len(self.cap_lidar)}/{self.cap_nl} ({self.lidar_stat})')
+        self.get_logger().warn(
+            f'capture REFUSED: timeout after {self.cap_to:.0f} s — ' + ' | '.join(short))
 
     # ── atomic capture: both sensors must pass ──
     def _finish_capture(self):
-        if len(self.cap_lidar) < 3:
-            self.get_logger().warn('capture REFUSED: too few lidar detections in the window')
+        if len(self.cap_lidar) < self.cap_nl:
+            self.get_logger().warn(
+                f'capture REFUSED: only {len(self.cap_lidar)}/{self.cap_nl} lidar '
+                f'detections in the window ({self.lidar_stat})')
             return
         L, Rr = np.stack(self.cap_lidar), np.stack(self.cap_radar)
         lstd = float(np.linalg.norm(L.std(0)) * 1000)
@@ -1349,10 +1375,12 @@ class RadarLidarCalib(Node):
                       + (f' | residual {self.solution["rms_sigma"]:.2f}s inl {self.solution["n_in"]}'
                          if self.solution else f'/{self.min_points} to first solve'))
         txt((10, h - 12), state, (240, 240, 240))
-        if self.show_cov:
-            self._draw_coverage_hud(im)
         if self.dscale != 1.0:
             im = cv2.resize(im, None, fx=self.dscale, fy=self.dscale)
+        # AFTER the resize: the HUD is text, and shrinking a 1280-wide overlay to
+        # fit a screen would shrink the panel into illegibility along with it.
+        if self.show_cov:
+            self._draw_coverage_hud(im)
         self.pub_img.publish(self.bridge.cv2_to_imgmsg(im, 'bgr8'))
         if self.show_window:
             cv2.imshow('radar_lidar_calib', im)
@@ -1419,7 +1447,8 @@ class RadarLidarCalib(Node):
         rows[-1] = rows[-1][:3] + ('map below' if draw_map else 'az x el grid',)
         ov = im.copy()
         cv2.rectangle(ov, (x0 - 10, y0 - 26), (x0 + pw, y0 + panel_h), (0, 0, 0), -1)
-        cv2.addWeighted(ov, 0.45, im, 0.55, 0, im)
+        cv2.addWeighted(ov, 0.78, im, 0.22, 0, im)   # a lit room shows straight
+                                                     # through anything lighter
         cv2.putText(im, f"COVERAGE  n={cov['n']}", (x0, y0 - 9),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         y = y0 + 10
@@ -1520,7 +1549,13 @@ class RadarLidarCalib(Node):
 
         sy = top + mh + 30                                  # range strip
         sh = 11
-        lo, hi = RANGE_BANDS[0][0], max(4.5, self.lmax)
+        # Span the range actually in use, not the lidar's 8 m gate — otherwise
+        # every capture crams into the left fifth of the strip and it says nothing.
+        seen = [float(np.linalg.norm(c['p_radar'])) for c in self.captures]
+        if self.sel is not None:
+            seen.append(float(self.sel['r']))
+        lo = RANGE_BANDS[0][0]
+        hi = min(self.lmax, max(4.5, (max(seen) + 0.5) if seen else 4.5))
         for i, (blo, bhi) in enumerate(RANGE_BANDS):
             a = int(x0 + mw * (blo - lo) / (hi - lo))
             b = int(x0 + mw * (min(bhi, hi) - lo) / (hi - lo))
