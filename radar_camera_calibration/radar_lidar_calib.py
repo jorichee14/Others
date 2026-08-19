@@ -365,6 +365,7 @@ class RadarLidarCalib(Node):
         self.meas_base = float(g('measured_baseline_m'))
         self.child_frame, self.radar_name = g('child_frame'), g('radar_name')
         self.lidar_name = g('lidar_name')
+        self.lidar_topic, self.radar_topic = g('lidar_topic'), g('radar_topic')
         self.out_path = g('output_path') or f'extrinsic_{self.lidar_name}__{self.radar_name}'
         self.publish_tf = bool(g('publish_tf'))
         self.status_xyz = list(g('status_marker_xyz'))
@@ -391,7 +392,9 @@ class RadarLidarCalib(Node):
         self.det = None                  # latest lidar detection
         self.det_t = 0.0
         self.sel = None                  # latest radar selection
-        self.aim = ('waiting for lidar detection', 'red')
+        self.aim = ('starting up — no sensor data yet', 'red')
+        self.lidar_msg_t = 0.0
+        self.radar_msg_t = 0.0
         self.cap_deadline = 0.0; self.cap_lidar = []; self.cap_radar = []
         self.captures = []
         self.solution = None
@@ -465,12 +468,22 @@ class RadarLidarCalib(Node):
         return None, None
 
     def _heartbeat(self):
-        if self.bg_lidar is None:
-            return
+        """Name a silent topic rather than letting the status line go stale —
+        'waiting for X' is otherwise indistinguishable from 'X never arrived'."""
+        now = time.time()
+        dead = []
+        if now - self.lidar_msg_t > 3.0:
+            dead.append(f'LIDAR silent ({self.lidar_topic})')
+        if now - self.radar_msg_t > 3.0:
+            dead.append(f'RADAR silent ({self.radar_topic})')
+        if dead:
+            self.aim = (' | '.join(dead) + ' — check the topic name and that it is publishing',
+                        'red')
         self.get_logger().info(self.aim[0], throttle_duration_sec=2.0)
 
     # ── lidar: background-subtract → cluster → apex ──
     def _lidar(self, msg):
+        self.lidar_msg_t = time.time()
         self.lidar_frame = msg.header.frame_id
         xyz = cloud_xyz(msg)
         if len(xyz) == 0:
@@ -509,8 +522,11 @@ class RadarLidarCalib(Node):
 
     # ── radar: background-subtract → range gate → cluster → SNR centroid ──
     def _radar(self, msg):
+        self.radar_msg_t = time.time()
         f = cloud_fields(msg, [self.fx, self.fy, self.fz, self.fsnr, self.fdop])
         if f[self.fx] is None:
+            have = ', '.join(fl.name for fl in msg.fields)
+            self.aim = (f'radar: no field "{self.fx}" — cloud has: {have}', 'red')
             return
         z = f[self.fz] if f[self.fz] is not None else np.zeros_like(f[self.fx])
         xyz = np.stack([f[self.fx], f[self.fy], z], 1)
@@ -533,6 +549,7 @@ class RadarLidarCalib(Node):
                 self.get_logger().info(f'radar background ready: {len(self.bg_radar)} points')
             return
         if self.bg_radar is None:
+            self.aim = ('NO BACKGROUND — reflector OFF the tripod, then ~/background', 'red')
             return
         if len(self.bg_radar) and keep.any():
             idx = np.where(keep)[0]
