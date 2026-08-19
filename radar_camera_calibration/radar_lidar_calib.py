@@ -209,6 +209,59 @@ def lidar_cluster(P, eps, min_size, cap=20000):
     return [P[m] for m in out]
 
 
+def grow_stepwise(raw, seed, eps, r_min, r_max, step, plateau_frac, max_extent):
+    """Grow outward from the tip and STOP where the object ends.
+
+    A fixed radius cannot work: no value covers a 25 cm reflector without also
+    reaching a tripod head 25 cm away. So sweep the radius outward in `step`
+    increments and watch how the connected cluster grows:
+
+        reflector filling up   -> points added every step
+        reflector complete     -> increments collapse (nothing between it and
+                                  the head but a thin mount)  => PLATEAU, stop
+        head/legs joined       -> extent jumps past a reflector's size => stop
+
+    Deterministic — no RANSAC, so the answer does not change frame to frame.
+    Returns (points, radius_used, why).
+    """
+    c0 = seed.mean(0)
+    pool = raw[np.linalg.norm(raw - c0, axis=1) <= r_max]
+    if len(pool) < len(seed):
+        return seed, 0.0, 'seed'
+    tree = cKDTree(pool)
+    dist = np.linalg.norm(pool - c0, axis=1)
+    seed_hits = [i for p in seed for i in tree.query_ball_point(p, eps)]
+
+    best, best_r, why, prev_n = seed, 0.0, 'cap', 0
+    r = r_min
+    while r <= r_max + 1e-9:
+        allow = dist <= r
+        seen = np.zeros(len(pool), bool)
+        stack = []
+        for i in seed_hits:
+            if allow[i] and not seen[i]:
+                seen[i] = True
+                stack.append(i)
+        while stack:
+            for k in tree.query_ball_point(pool[stack.pop()], eps):
+                if allow[k] and not seen[k]:
+                    seen[k] = True
+                    stack.append(k)
+        P = pool[seen]
+        if len(P) >= len(seed):
+            ext = float(np.linalg.norm(P.max(0) - P.min(0)))
+            if ext > max_extent:                       # swallowed the tripod
+                why = 'size'
+                break
+            grew = len(P) - prev_n
+            best, best_r, prev_n = P, r, len(P)
+            if r > r_min and grew <= plateau_frac * max(len(P), 1):
+                why = 'plateau'                        # object complete
+                break
+        r += step
+    return best, best_r, why
+
+
 def grow_from_seed(raw, seed, eps, max_r):
     """Recover the WHOLE object from a partial detection.
 
@@ -349,11 +402,14 @@ class RadarLidarCalib(Node):
         # distance (0.7 deg is 1.2 cm at 1 m but 4.9 cm at 4 m). A fixed
         # connectivity that works up close silently fails far away.
         #     effective = base + per_m * range_to_target
-        # OFF by default. A reflector bolted straight to the tripod head cannot be
-        # region-grown without reaching the head, and a mixed cluster makes the
-        # plane fit pick a different triple each frame — the apex then flickers.
-        # Only worth enabling once the reflector is raised clear of the head.
-        dp('grow_radius', 0.0); dp('grow_radius_per_m', 0.03)     # 0 = off
+        # Stepwise growth from the tip: expand the radius until the cluster stops
+        # growing (object complete) or outgrows a reflector (tripod joined).
+        dp('grow_max_radius', 0.45)          # 0 = growth off entirely
+        dp('grow_min_radius', 0.08)
+        dp('grow_step', 0.02)
+        dp('grow_plateau_frac', 0.04)        # increment below this fraction => done
+        dp('reflector_size', 0.32)           # hard cap on the cluster's extent (m)
+        dp('grow_radius_per_m', 0.03)        # range scaling on the max radius
         dp('grow_eps', 0.06); dp('grow_eps_per_m', 0.02)
         dp('cluster_eps_per_m', 0.02)        # same scaling for the seed clustering
         dp('plane_tol', 0.015)               # RANSAC inlier distance (m)
@@ -428,7 +484,10 @@ class RadarLidarCalib(Node):
         self.lmin, self.lmax = float(g('lidar_min_range')), float(g('lidar_max_range'))
         self.bgl_n, self.bg_voxel = int(g('bg_frames_lidar')), float(g('bg_voxel'))
         self.ceps, self.cmin = float(g('cluster_eps')), int(g('min_cluster_size'))
-        self.grow_r, self.grow_eps = float(g('grow_radius')), float(g('grow_eps'))
+        self.grow_rmax, self.grow_rmin = float(g('grow_max_radius')), float(g('grow_min_radius'))
+        self.grow_step, self.grow_plateau = float(g('grow_step')), float(g('grow_plateau_frac'))
+        self.refl_size = float(g('reflector_size'))
+        self.grow_eps = float(g('grow_eps'))
         self.grow_r_pm = float(g('grow_radius_per_m'))
         self.grow_eps_pm = float(g('grow_eps_per_m'))
         self.ceps_pm = float(g('cluster_eps_per_m'))
@@ -626,18 +685,23 @@ class RadarLidarCalib(Node):
         P = clusters[0]
         n_seed = len(P)
         r_seed = float(np.linalg.norm(P.mean(0)))
-        grow_r = self.grow_r + self.grow_r_pm * r_seed      # clear this much around
-        grow_eps = self.grow_eps + self.grow_eps_pm * r_seed  # the seed, range-scaled
+        grow_r = self.grow_rmax + self.grow_r_pm * r_seed
+        grow_eps = self.grow_eps + self.grow_eps_pm * r_seed   # point spacing scales
         seed_c = P.mean(0)
-        if self.grow_r > 0:                 # seed -> whole reflector
-            P = grow_from_seed(xyz, P, grow_eps, grow_r)
+        why = 'off'
+        if self.grow_rmax > 0:              # tip -> whole reflector, stop at the break
+            P, used_r, why = grow_stepwise(xyz, P, grow_eps, self.grow_rmin, grow_r,
+                                           self.grow_step, self.grow_plateau, self.refl_size)
+        else:
+            used_r = 0.0
         apex, method = locate_apex(P, self.ptol, self.piters, self.pmin, self.perp,
                                    self.rng, seed_c=seed_c)
         self.det = dict(apex=apex, cluster=P, method=method,
                         n_fg=len(fg), n_extra=len(clusters) - 1)
         self.det_t = time.time()
         self.lidar_stat = (f'lidar: {len(fg)} new -> seed {n_seed} -> grown {len(P)} '
-                           f'(r{grow_r:.2f}/e{grow_eps:.2f} @ {r_seed:.1f} m), {method}'
+                           f'(stop:{why} r{used_r if why != "off" else 0:.2f} '
+                           f'e{grow_eps:.2f} @ {r_seed:.1f} m), {method}'
                            + (f', +{len(clusters)-1} EXTRA' if len(clusters) > 1 else ''))
         if self.cap_deadline > time.time():
             self.cap_lidar.append(apex.copy())
