@@ -106,12 +106,15 @@ for nm, _, M, col in SENS[1:]:
         s.append(f'<text x="{150+k*228}" y="{y}" class="mn" fill="{AXC[a]}">'
                  f'{a}&#8594;[{v[0]:+.2f} {v[1]:+.2f} {v[2]:+.2f}]</text>')
 y += 34
-tilt = math.degrees(math.asin(abs(R_lr[2, 0])))
+# R_lr[2,0] is the vertical component of the radar's boresight in the lidar
+# frame. Keep its SIGN: positive means the nose points UP, and taking abs() here
+# is what made an earlier version of this figure claim "down".
+tilt = math.degrees(math.asin(R_lr[2, 0]))
 s.append(f'<text x="26" y="{y}" class="sec">Reading</text>')
 s.append(f'<text x="150" y="{y}" class="k">Radar and camera both look along lidar '
          f'<tspan class="mn">&#8722;X</tspan>; radar is UPRIGHT (its +Z within '
          f'{math.degrees(math.acos(R_lr[2,2])):.0f}&#176; of lidar +Z) and pitched '
-         f'{tilt:.0f}&#176; down.</text>')
+         f'{abs(tilt):.0f}&#176; {"UP" if tilt > 0 else "DOWN"}.</text>')
 y += 22
 s.append(f'<text x="150" y="{y}" class="k">Solved from 33 captures, 27 inliers, residual 1.33&#963; '
          f'&#183; rot 1&#963; 3.8/6.6/1.2&#176; &#183; t 1&#963; 11/31/60 mm</text>')

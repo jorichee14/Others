@@ -56,13 +56,20 @@ Radar axes expressed in the lidar frame:
 ```
 X -> [-0.97 -0.02 +0.22]     boresight, pointing along lidar -X (yawed ~180 deg)
 Y -> [+0.03 -1.00 +0.05]     radar +Y is lidar -Y
-Z -> [+0.22 +0.06 +0.97]     upright, pitched ~13 deg down
+Z -> [+0.22 +0.06 +0.97]     upright, nose pitched ~13 deg UP
 ```
 
 The radar is **upright** (its +Z lands within 13° of lidar +Z), sits **21 cm
 below** and **13 cm to the left of** the lidar, and is **yawed 180°** — it faces
 along lidar −X. Earlier radar↔camera work called this mount inverted; the lidar
 data says it is not.
+
+Its boresight is pitched **UP** by 12.9°, not down: the vertical component of
+`R·x̂` is **+0.22**. This is not cosmetic — it decides where the reflector has to
+be to reach a given elevation. The el = 0 line rises 22 cm for every metre of
+range, so at 3.5 m it passes 78 cm ABOVE the radar and every practical tripod
+placement is below it. That is why all 33 captures came out negative in
+elevation (−14.9°…+0.7°), and why positive elevation is only reachable close in.
 
 ## Reading the per-axis numbers
 
@@ -158,8 +165,8 @@ geometry alone, with no knowledge of the 6.55° the solve produced. Adding the s
 captures above turns all six bars green in simulation.
 
 Independent checks still open: tape-measure lidar→radar (predicted 25.1 cm) and
-camera→radar (predicted 25.5 cm), and physically confirm the radar is upright and
-pitched ~14° down.
+camera→radar (predicted 25.5 cm), and physically confirm the radar is upright with
+its nose pitched ~13° UP.
 
 ## Reproducing
 

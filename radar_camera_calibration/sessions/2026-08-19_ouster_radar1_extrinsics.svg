@@ -185,6 +185,6 @@
 <text x="378" y="570" class="mn" fill="#9c3a06">Y&#8594;[+0.03 -1.00 +0.05]</text>
 <text x="606" y="570" class="mn" fill="#5f3dc4">Z&#8594;[+0.22 +0.06 +0.97]</text>
 <text x="26" y="604" class="sec">Reading</text>
-<text x="150" y="604" class="k">Radar and camera both look along lidar <tspan class="mn">&#8722;X</tspan>; radar is UPRIGHT (its +Z within 13&#176; of lidar +Z) and pitched 13&#176; down.</text>
+<text x="150" y="604" class="k">Radar and camera both look along lidar <tspan class="mn">&#8722;X</tspan>; radar is UPRIGHT (its +Z within 13&#176; of lidar +Z) and pitched 13&#176; UP.</text>
 <text x="150" y="626" class="k">Solved from 33 captures, 27 inliers, residual 1.33&#963; &#183; rot 1&#963; 3.8/6.6/1.2&#176; &#183; t 1&#963; 11/31/60 mm</text>
 </svg>
