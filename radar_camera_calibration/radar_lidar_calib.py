@@ -977,6 +977,11 @@ class RadarLidarCalib(Node):
             L.append(f'  baseline: |t| {np.linalg.norm(t)*100:.1f} vs tape '
                      f'{self.meas_base*100:.1f} cm -> {d*100:.1f} cm '
                      f'[{"OK" if d <= 0.05 else "MISMATCH"}]')
+        n_planes = sum(1 for c in self.captures if c.get('method') == 'planes3')
+        if n_planes < 0.5 * n:
+            L.append(f'  !! {n - n_planes}/{n} captures used a CENTROID, not the plate '
+                     f'intersection — the lidar point sits a few cm off the true corner, '
+                     f'so t carries a systematic offset no gate below will catch')
         gates = [('residual~1s', res['rms_sigma'] <= 1.5), ('cond<=5', cond <= 5),
                  ('rot1s<=4deg', rot1s.max() <= 4), ('bias<=50mm', np.abs(bias).max() <= 50)]
         L.append('  GATES   : ' + '  '.join(f'{k}[{"P" if v else "F"}]' for k, v in gates)
