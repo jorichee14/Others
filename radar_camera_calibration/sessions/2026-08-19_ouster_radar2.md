@@ -1,8 +1,10 @@
 # radar2 — Ouster ↔ radar2, two rounds (2026-08-19)
 
-**Not deployable, and not for want of poses.** 42 captures over two rounds; the
-geometry is degenerate and more of the same will not fix it. What it needs is a
-tape measure. Poses: `2026-08-19_ouster_radar2_poses.json`.
+**Not deployable yet.** 42 captures over two rounds. The geometry is poorly
+conditioned — the two rounds land 25.7 cm apart, and a random half of either round
+lands further from its other half than that. It does converge with more poses, but
+at 1/√N, which puts the break-even against a tape measure at roughly 1900 captures.
+Poses: `2026-08-19_ouster_radar2_poses.json`.
 
 ## Finding 1 — radar2 is rolled ~90° from radar1, and that is worth keeping
 
@@ -74,23 +76,63 @@ the sensor — measured extent over both rounds is −16.2° to +1.1°. A near-p
 target set cannot pin the out-of-plane DOF, which is exactly the one translation
 and two rotations that move between rounds.
 
-Simulating a radar2 with a genuinely dead elevation channel, varying only how far
-the targets spread horizontally:
+## Correction: poorly conditioned, not degenerate
 
-| horizontal spread | half-vs-half t gap | rot gap |
+An earlier version of this note said the geometry was "structurally short" and
+that more poses could not help. Simulating radar2's real geometry — ±20°
+horizontal, wide vertical, dead elevation channel — shows that is wrong. The
+uncertainty falls as 1/√N, cleanly:
+
+| N poses | 1σ t worst | vs N=20 |
 |---|---|---|
-| 15° (what the mount allows) | 9.3 cm | 5.2° |
-| 50° | 6.8 cm | 8.7° |
-| 110° | **4.8 cm** | **4.1°** |
+| 20 | 55 mm | 1.00× |
+| 40 | 39 mm | 0.72× |
+| 80 | 27 mm | 0.49× |
+| 160 | 19 mm | 0.35× |
+| 640 | 9 mm | 0.17× |
 
-It wants roughly 50°. The mount permits 40° total. **Structurally short — this is
-not a collection-technique problem.**
+0.71× per doubling is exactly 1/√2. Collecting **does** converge. The argument
+for a tape measure is an exchange rate, not an impossibility.
 
-## The fix is a tape measure, not more poses
+## The exchange rate
+
+At 27 s per capture (measured from the round-2 timestamps):
+
+| poses | half-vs-half scatter | time |
+|---|---|---|
+| 42 (now) | 26.0 cm | — |
+| 168 (4×) | 13.0 cm | 1 h |
+| 672 (16×) | 6.5 cm | 5 h |
+| **1867 (44×)** | **3.9 cm** | **14 h** |
+| **42 + a ±3 cm tape** | **3.9 cm** | **2 min** |
+
+That is the whole case. Not "collecting cannot work" — "collecting costs 14 hours
+to buy what a tape measure buys in two minutes, on this axis."
+
+## One thing worth fixing while collecting anyway
+
+The horizontal coverage is heavily one-sided: **36 captures on one side of
+boresight, 5 on the other** (−16.2° to +1.1°). Simulated at 42 poses:
+
+| horizontal coverage | 1σ t worst | half-vs-half |
+|---|---|---|
+| −16…+1° (what you have) | 71 mm | 11.8 cm |
+| **−18…+18° (both sides)** | **49 mm** | **8.8 cm** |
+| −10…+10° (narrow but balanced) | 66 mm | 16.6 cm |
+
+Balancing is worth about 30% on the worst axis and costs nothing extra. Worth
+doing whether or not the prior goes in.
+
+Note also that the real 42 poses scatter **26 cm** where this simulation of the
+same geometry gives 11.8 cm. Reality is about 2× worse than the noise model
+predicts — that gap is the 15 rejected captures and the centroid systematic, not
+the geometry, and it is a second reason the raw pose count is not the lever.
+
+## What a prior buys on the poses already collected
 
 This is the same situation `CALIBRATION_PROTOCOL.md` §0b describes for a single-
-reflector radar's blind axis: information the sensor cannot supply has to come
-from outside. Feeding the offline solver a prior of the stated width, and
+reflector radar's blind axis: information the sensor supplies only very slowly is
+cheaper to get from outside. Feeding the offline solver a prior of the stated width, and
 re-running the split-half test on the same 42 poses:
 
 | prior | half-vs-half t gap | rot gap |
