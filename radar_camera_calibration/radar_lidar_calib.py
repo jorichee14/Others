@@ -281,9 +281,13 @@ class RadarLidarCalib(Node):
         # ── lidar detection ──
         dp('lidar_min_range', 0.3); dp('lidar_max_range', 8.0)
         dp('bg_frames_lidar', 10)
-        dp('bg_voxel', 0.10)                 # background match distance (m)
+        dp('bg_voxel', 0.05)                 # background match distance (m). Anything
+                                             # within this of a background point is
+                                             # erased (up to 3.5x that in the worst
+                                             # case), so keep it well under the gap
+                                             # between reflector and tripod head.
         dp('cluster_eps', 0.12)              # foreground clustering radius (m)
-        dp('min_cluster_size', 15)
+        dp('min_cluster_size', 8)
         dp('plane_tol', 0.015)               # RANSAC inlier distance (m)
         dp('plane_iters', 250)
         dp('min_plane_pts', 12)              # per plate — sets max planes3 range
@@ -393,6 +397,7 @@ class RadarLidarCalib(Node):
         self.det_t = 0.0
         self.sel = None                  # latest radar selection
         self.aim = ('starting up — no sensor data yet', 'red')
+        self.lidar_stat = 'lidar: waiting'
         self.lidar_msg_t = 0.0
         self.radar_msg_t = 0.0
         self.cap_deadline = 0.0; self.cap_lidar = []; self.cap_radar = []
@@ -479,6 +484,8 @@ class RadarLidarCalib(Node):
         if dead:
             self.aim = (' | '.join(dead) + ' — check the topic name and that it is publishing',
                         'red')
+        if self.det is None:
+            self.get_logger().info(self.lidar_stat, throttle_duration_sec=2.0)
         self.get_logger().info(self.aim[0], throttle_duration_sec=2.0)
 
     # ── lidar: background-subtract → cluster → apex ──
@@ -501,18 +508,32 @@ class RadarLidarCalib(Node):
             return
         if self.bg_lidar is None:
             self.det = None
+            self.lidar_stat = f'lidar: {len(xyz)} pts in range — no background yet'
             return
 
         fg = xyz[foreground_mask(xyz, self.bg_lidar, self.bg_voxel)]
         clusters = lidar_cluster(fg, self.ceps, self.cmin)
         if not clusters:
+            # the counts say WHICH stage lost it: no foreground at all means the
+            # background is eating the target (reflector too close to something
+            # memorised, e.g. mounted straight on the tripod head — lower
+            # bg_voxel or raise it off the head); foreground but no cluster means
+            # min_cluster_size is too high or cluster_eps too tight.
             self.det = None
+            self.lidar_stat = (f'lidar: {len(xyz)} in range -> {len(fg)} new -> '
+                               + ('NO new points (background is eating it — lower '
+                                  'bg_voxel / raise the reflector off the tripod)'
+                                  if len(fg) == 0 else
+                                  f'no cluster >= {self.cmin} pts (lower min_cluster_size '
+                                  f'or raise cluster_eps)'))
             return
         P = clusters[0]
         apex, method = locate_apex(P, self.ptol, self.piters, self.pmin, self.perp, self.rng)
         self.det = dict(apex=apex, cluster=P, method=method,
                         n_fg=len(fg), n_extra=len(clusters) - 1)
         self.det_t = time.time()
+        self.lidar_stat = (f'lidar: {len(fg)} new pts, cluster {len(P)}, {method}'
+                           + (f', +{len(clusters)-1} EXTRA' if len(clusters) > 1 else ''))
         if self.cap_deadline > time.time():
             self.cap_lidar.append(apex.copy())
         ps = PointStamped()
@@ -854,6 +875,8 @@ class RadarLidarCalib(Node):
 
         col = {'green': (0, 220, 0), 'orange': (0, 165, 255), 'red': (0, 0, 255)}[self.aim[1]]
         h = im.shape[0]
+        txt((10, h - 56), self.lidar_stat,
+            (200, 255, 200) if self.det is not None else (0, 165, 255))
         txt((10, h - 34), self.aim[0], col)
         state = ('NO BACKGROUND - ~/background first' if self.bg_lidar is None
                  else f'captures {len(self.captures)}'
@@ -940,7 +963,7 @@ class RadarLidarCalib(Node):
                     + (f'  |  residual {self.solution["rms_sigma"]:.2f}s '
                        f'inl {self.solution["n_in"]}' if self.solution else
                        f'/{self.min_points} to first solve'))
-            st.text = head + '\n' + self.aim[0]
+            st.text = head + '\n' + self.lidar_stat + '\n' + self.aim[0]
             st.color = {'green': GREEN, 'orange': AMBER,
                         'red': ColorRGBA(r=1.0, g=0.3, b=0.2, a=1.0)}[self.aim[1]]
         if self.cap_deadline > time.time():
