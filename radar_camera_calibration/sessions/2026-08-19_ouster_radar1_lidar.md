@@ -19,57 +19,94 @@ Capture set: `2026-08-19_ouster_radar1_poses.json` (33 poses, 3 runs merged).
 ```bash
 # solved directly:  os_lidar -> radar1_link
 ros2 run tf2_ros static_transform_publisher \
-  0.0279 0.1334 -0.2100  0.11161 0.02673 0.99330 -0.01330 \
+  0.0334 0.1406 -0.1685  0.12338 0.00126 0.99230 -0.01099 \
   os_lidar radar1_link
 
 # composed through GLIM:  zed_left_camera_optical_frame -> radar1_link
 ros2 run tf2_ros static_transform_publisher \
-  0.200334 0.117691 -0.103728  0.557558 -0.543698 0.463363 0.422867 \
+  0.207505 0.076150 -0.108883  -0.551338 0.560743 -0.443155 -0.430356 \
   zed_left_camera_optical_frame radar1_link
 ```
 
 Fusion-node form:
 
 ```
-r1_t_xyz:="[0.2003,0.1177,-0.1037]"   r1_quat_xyzw:="[0.5576,-0.5437,0.4634,0.4229]"
+r1_t_xyz:="[0.2075,0.0762,-0.1089]"   r1_quat_xyzw:="[-0.5513,0.5607,-0.4432,-0.4304]"
 ```
 
 ## Result
 
-`T_os_lidar_radar1_link` — 27 of 33 poses, range 0.95–4.42 m.
+`T_os_lidar_radar1_link` — 46 of 54 poses, range 0.6–4.4 m, two sessions merged.
 
 | | value |
 |---|---|
-| t (m) | [+0.0279, +0.1334, −0.2100] |
-| \|t\| | 25.0 cm |
-| quat xyzw | [+0.11161, +0.02673, +0.99330, −0.01330] |
-| rpy (deg) | [+2.95, −12.85, −178.80] |
-| rot 1σ (deg) | [3.75, **6.55**, 1.18] |
-| t 1σ (mm) | [11.4, 31.1, **59.5**] |
-| signed bias (mm) | [−7.9, −0.1, **+40.0**] |
-| 3-D RMS (mm) X/Y/Z | [102, 212, 377] |
-| residual / LOO | 1.33σ / 1.47σ |
-| condition number | 4.2 |
+| t (m) | [+0.0334, +0.1406, **−0.1685**] |
+| \|t\| | 22.2 cm |
+| quat xyzw | [+0.12338, +0.00126, +0.99230, −0.01099] |
+| rpy (deg) | [−0.01, −14.17, −178.73] |
+| rot 1σ (deg) | [2.97, **4.29**, 0.92] |
+| t 1σ (mm) | [8.8, 19.3, **40.9**] |
+| signed bias (mm) | [−12.2, +16.8, **+49.4**] |
+| 3-D RMS (mm) X/Y/Z | [102, 185, 352] |
+| residual / LOO | 1.29σ / 1.36σ |
+| condition number | 5.2 |
 
-Radar axes expressed in the lidar frame:
+The two sessions were solved independently first and agree on every axis:
+
+| | 33-pose set | 21-pose set | apart | combined 1σ | |
+|---|---|---|---|---|---|
+| t_x | +2.79 cm | +4.54 cm | 17.5 mm | 18.3 mm | 1.0σ |
+| t_y | +13.34 cm | +13.54 cm | 2.0 mm | 39.7 mm | 0.0σ |
+| t_z | −21.00 cm | −12.87 cm | 81.3 mm | 82.9 mm | 1.0σ |
+
+Rotation differs by 9.8° between them, almost all of it roll — the axis whose own
+1σ is 5–6.5° in each run, so ~1.2σ. Treating them as one rig state is justified,
+and merging cuts every uncertainty by roughly a third.
+
+## The elevation channel does not work
+
+This is the finding that governs everything below. Regressing the radar's
+reported `z` against range and the target's true height over the 21-pose set:
 
 ```
-X -> [-0.97 -0.02 +0.22]     boresight, pointing along lidar -X (yawed ~180 deg)
-Y -> [+0.03 -1.00 +0.05]     radar +Y is lidar -Y
-Z -> [+0.22 +0.06 +0.97]     upright, nose pitched ~13 deg UP
+z_radar = -0.208 * range  +0.171 * height  +0.066
+                            ^^^^^^ should be ~1.0
 ```
 
-The radar is **upright** (its +Z lands within 13° of lidar +Z), sits **21 cm
-below** and **13 cm to the left of** the lidar, and is **yawed 180°** — it faces
-along lidar −X. Earlier radar↔camera work called this mount inverted; the lidar
-data says it is not.
+The radar reports a near-fixed cone at about −11.5°, almost independent of where
+the reflector actually is. 83 cm of height change produces **3.5°** of response
+where it should produce ~30°. Two captures at the same range with 84 cm between
+them differ by 2.1°.
 
-Its boresight is pitched **UP** by 12.9°, not down: the vertical component of
-`R·x̂` is **+0.22**. This is not cosmetic — it decides where the reflector has to
-be to reach a given elevation. The el = 0 line rises 22 cm for every metre of
-range, so at 3.5 m it passes 78 cm ABOVE the radar and every practical tripod
-placement is below it. That is why all 33 captures came out negative in
-elevation (−14.9°…+0.7°), and why positive elevation is only reachable close in.
+Ruled out as causes: `channelCfg 15 7 0` enables all three TX; `antGeometry1`
+carries two elevation rows; `fovCfg` (±20°) clipped only 1 of 21 targets; the
+values are continuous, not quantised; and the RX phase table was independently
+verified against the re-banded 62.05–63.98 GHz profile. Still open: every capture
+came from the demo's **static** angle chain (`staticRangeAngleCfg`) because a
+tripod reflector is exactly zero-Doppler and the node gates `max_abs_doppler 0.15`
+— the dynamic chain (`dynamic2DAngleCfg`, two angles) has never been tested.
+
+Consequence: **no capture plan can fix `t_z`.** Every elevation gate below stays
+red not because of where the tripod stood but because the radar cannot report it.
+
+## How soft is t_z, really
+
+Solving the merged set without the elevation residual at all is the honest bound:
+
+| | t_x | t_y | **t_z** | worst rot 1σ |
+|---|---|---|---|---|
+| with elevation | +3.34 cm | +14.06 cm | **−16.85 cm** | 4.29° |
+| range + azimuth only | +2.75 cm | +13.89 cm | **−23.07 cm** | 9.94° |
+
+x and y move by under 6 mm — they are real, carried by range and azimuth, and
+independent of the elevation question. `t_z` moves **6.2 cm**, which is about 1σ,
+so the two are not in conflict — but it says plainly that roughly a third of the
+height answer is resting on a channel that does not measure height.
+
+Take `t_z` as **−17 to −23 cm** and resolve it with a tape measure; that single
+measurement is worth more than another hundred captures. Note also that dropping
+elevation costs 4.29° → 9.94° of rotation, so simply discarding the channel is
+not an improvement — the fake elevation is still pinning roll.
 
 ## Reading the per-axis numbers
 
