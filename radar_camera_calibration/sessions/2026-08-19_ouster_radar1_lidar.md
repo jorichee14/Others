@@ -189,6 +189,40 @@ The large single-axis 3-D **RMS** (377 mm on Z) is likewise random angular noise
 not a calibration error — it averages out in fusion. Judge by signed bias, per-DOF
 1σ, and the live overlay; never by RMS.
 
+## Verdict: usable, and final for what this radar can currently deliver
+
+Projecting the calibration's own uncertainty (translation and rotation together,
+excluding the radar's per-shot noise) out to fusion ranges:
+
+| range | X right | **Y down** | Z forward | as pixels (fx 525) |
+|---|---|---|---|---|
+| 1.0 m | 15 mm | 87 mm | 20 mm | 8.3 × **47** px |
+| 2.5 m | 31 mm | 191 mm | 45 mm | 6.6 × **41** px |
+| 5.0 m | 67 mm | 371 mm | 89 mm | 7.3 × **40** px |
+| 8.0 m | 113 mm | 588 mm | 143 mm | 7.7 × **40** px |
+
+For scale, a 1.7 m person at 5 m subtends ~180 px tall and ~53 px wide.
+
+The vertical column is roughly constant in pixels because it is dominated by the
+4.29° rotation uncertainty about the camera's X axis, and an angular error is a
+fixed pixel error at every range. Horizontal (7 px, ~13% of a person's width) and
+depth (<2% of range) are production-grade. Vertical (~40 px, ~22% of a person's
+height) is enough to say *which* detection a return belongs to, and not enough to
+say anything about *where* on that detection it sits.
+
+Fit for association and for range-gating a tracker. Not fit for refining a
+bounding box vertically, or for anything that reads height off the radar.
+
+The strongest evidence that this is right is not any single fit's self-reported
+error — it is that two independently collected sessions, 33 poses and 21 poses,
+agree inside 1σ on all three axes. Reproducibility beats a good residual.
+
+Remaining levers, in order of value per minute spent: tape-measure the lidar→radar
+vertical offset (settles the −17 to −23 cm range in five minutes); fix the radar's
+elevation channel (unbounded effort, would improve the vertical column by roughly
+the ratio the channel recovers); collect more captures (helps as 1/√n, so halving
+the vertical needs 4× the poses — and it cannot beat the systematic).
+
 ## Gates
 
 | gate | threshold | value | |
