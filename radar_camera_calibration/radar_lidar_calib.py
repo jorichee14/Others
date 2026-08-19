@@ -349,7 +349,11 @@ class RadarLidarCalib(Node):
         # distance (0.7 deg is 1.2 cm at 1 m but 4.9 cm at 4 m). A fixed
         # connectivity that works up close silently fails far away.
         #     effective = base + per_m * range_to_target
-        dp('grow_radius', 0.20); dp('grow_radius_per_m', 0.03)   # 0 radius = off
+        # OFF by default. A reflector bolted straight to the tripod head cannot be
+        # region-grown without reaching the head, and a mixed cluster makes the
+        # plane fit pick a different triple each frame — the apex then flickers.
+        # Only worth enabling once the reflector is raised clear of the head.
+        dp('grow_radius', 0.0); dp('grow_radius_per_m', 0.03)     # 0 = off
         dp('grow_eps', 0.06); dp('grow_eps_per_m', 0.02)
         dp('cluster_eps_per_m', 0.02)        # same scaling for the seed clustering
         dp('plane_tol', 0.015)               # RANSAC inlier distance (m)
