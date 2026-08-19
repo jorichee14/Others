@@ -75,11 +75,26 @@ unlocks, so a red bar names the axis that will come out loose:
   EL BAL  thinner side   → pitch; this is the bar people leave red
   <1.5 m  count          → everything: angular error is r·sin(σ), so a close
                            capture is worth several distant ones
+  CELLS   of 9           → all of the above at once (see the map)
 
 The BAL rows exist because a spread number alone lies: 16° of elevation all
 BELOW boresight fits a pitch error just as well as a vertical bias in the apex
 estimate, and the two trade off. See COVERAGE_TARGETS for the geometry behind
-each threshold. Below the bars sits the last solve's rot/t 1σ — the OUTCOME, as
+each threshold.
+
+Under the bars is the MAP, which answers the question the bars cannot — not
+"is it enough" but "where do I put the tripod next":
+
+  AZ × EL   the field of view as a 3×3 grid (az ±60°, el ±40°). A cell with no
+            capture is SHADED AMBER — walk the tripod there. Captures are dots,
+            drawn larger when they were taken close (a near capture carries more
+            angular information). The live radar pick is a green ring, so you
+            watch the pose land in an empty cell BEFORE you trigger.
+  RANGE     the same idea in one dimension: three bands, empty ones shaded, one
+            tick per capture, live range as a green caret.
+
+RViz gets the grid as text ([X]/[ ] rows) for a camera-less rig. On a short
+image the map is dropped and the bars are kept — the bars are the verdict. Below the bars sits the last solve's rot/t 1σ — the OUTCOME, as
 opposed to the bars, which are the CAUSE. Green bars with a fat 1σ means the
 reflector is being found badly; a tight 1σ on red bars is the over-confident fit
 from a degenerate geometry, which is exactly what the bars are there to catch.
@@ -443,8 +458,30 @@ COVERAGE_TARGETS = {
     'el':    30.0,    # deg, max-min spread of radar elevation
     'el_bal': 10.0,   # deg, coverage on the THINNER side of boresight
     'near':   6.0,    # count of captures closer than NEAR_RANGE_M
+    'cells':  8.0,    # of the 9 az x el cells below, how many hold a capture
 }
 NEAR_RANGE_M = 1.5
+
+# The az x el map. Every spread row above can be satisfied by a set that is still
+# lopsided — 60 deg of azimuth all taken at eye level passes AZ, AZ BAL, EL BAL
+# and still leaves pitch loose. Filling cells cannot be gamed that way: it is one
+# number that implies both spreads AND both balances at once, and unlike a spread
+# it says WHERE the hole is, which is what you need while the tripod is still up.
+# Target is 8 of 9, not 9 — the two outer corners (high and far to the side) are
+# a long walk for little extra leverage, so one may be skipped.
+AZ_EDGES = (-60.0, -20.0, 20.0, 60.0)
+EL_EDGES = (-40.0, -10.0, 10.0, 40.0)
+# Range bands for the strip; each should hold captures. Near matters most because
+# angular error is r*sin(sigma) — see the NEAR row.
+RANGE_BANDS = ((0.0, 1.5), (1.5, 3.0), (3.0, 99.0))
+
+
+def _cell(az, el):
+    """(col, row) of a point on the 3x3 map; values past the outer edges clamp
+    into the outer cell, so a wide pose still counts rather than vanishing."""
+    c = 0 if az < AZ_EDGES[1] else (1 if az < AZ_EDGES[2] else 2)
+    r = 0 if el < EL_EDGES[1] else (1 if el < EL_EDGES[2] else 2)
+    return c, r
 
 # What to physically do when a given bar is the worst one. Shown as the hint line
 # so the answer to "it is red, now what?" is on screen instead of in a document.
@@ -457,6 +494,7 @@ COVERAGE_HINT = {
     'el':     'change HEIGHT: floor level, then overhead',
     'el_bal': 'poses all one side - go both high AND low',
     'near':   f'take captures closer than {NEAR_RANGE_M:.1f} m',
+    'cells':  'fill the shaded boxes on the map below',
 }
 
 
@@ -472,6 +510,8 @@ def pose_coverage(P_list):
     if len(P) < 2:
         for k, tgt in COVERAGE_TARGETS.items():
             out[k] = (0.0, tgt, False)
+        out['filled'] = set()
+        out['bands'] = [False] * len(RANGE_BANDS)
         out['worst'] = 'range'
         return out
 
@@ -484,13 +524,17 @@ def pose_coverage(P_list):
         leverage, twenty crowded at +2 deg is not."""
         return float(min(max(a.max(), 0.0), max(-a.min(), 0.0)))
 
+    filled = {_cell(a, e) for a, e in zip(az, el)}
     vals = {'range': float(rng.max() - rng.min()),
             'az': float(az.max() - az.min()), 'az_bal': bal(az),
             'el': float(el.max() - el.min()), 'el_bal': bal(el),
-            'near': float((rng < NEAR_RANGE_M).sum())}
+            'near': float((rng < NEAR_RANGE_M).sum()),
+            'cells': float(len(filled))}
     for k, v in vals.items():
         tgt = COVERAGE_TARGETS[k]
         out[k] = (v, tgt, v >= tgt)
+    out['filled'] = filled
+    out['bands'] = [bool(((rng >= lo) & (rng < hi)).any()) for lo, hi in RANGE_BANDS]
     out['worst'] = min(vals, key=lambda k: vals[k] / COVERAGE_TARGETS[k])
     return out
 
@@ -1321,7 +1365,8 @@ class RadarLidarCalib(Node):
         a rejected pose is leverage the fit never got."""
         cov = pose_coverage([c['p_radar'] for c in self.captures] if pts is None else pts)
         rows = [('range', 'range', 'm'), ('az', 'az', 'd'), ('az+-', 'az_bal', 'd'),
-                ('el', 'el', 'd'), ('el+-', 'el_bal', 'd'), ('near', 'near', '')]
+                ('el', 'el', 'd'), ('el+-', 'el_bal', 'd'), ('near', 'near', ''),
+                ('cells', 'cells', '')]
         parts = []
         for label, key, unit in rows:
             v, tgt, ok = cov[key]
@@ -1330,6 +1375,16 @@ class RadarLidarCalib(Node):
         ok_all = all(cov[k][2] for _, k, _ in rows)
         tail = 'all DOF constrained' if ok_all else COVERAGE_HINT[cov['worst']]
         return sep.join(parts), tail, ok_all
+
+    @staticmethod
+    def _coverage_grid(cov):
+        """The az x el map as three lines of text — the image HUD draws it, but a
+        camera-less rig still needs to see WHICH cell is empty, not just how many.
+        Rows run high elevation to low; columns left azimuth to right."""
+        lab = ('el +10..+40', 'el -10..+10', 'el -40..-10')
+        return '\n'.join(
+            ' '.join('[X]' if (c, 2 - r) in cov['filled'] else '[ ]' for c in range(3))
+            + '  ' + lab[r] for r in range(3))
 
     def _draw_coverage_hud(self, im):
         """Live 'will these captures actually constrain the solve?' panel.
@@ -1351,11 +1406,17 @@ class RadarLidarCalib(Node):
                 ('AZ BAL', 'az_bal', 'deg', 'yaw'),
                 ('EL', 'el', 'deg', 'pitch+roll'),
                 ('EL BAL', 'el_bal', 'deg', 'pitch'),
-                (f'<{NEAR_RANGE_M:.1f}m', 'near', 'n', 'all')]
+                (f'<{NEAR_RANGE_M:.1f}m', 'near', 'n', 'all'),
+                ('CELLS', 'cells', 'n', '')]
         pw, rh = 268, 21
         x0 = max(10, w - pw - 12)
         y0 = 40
-        panel_h = rh * (len(rows) + 2) + 22
+        # The map is the useful half but the bars are the verdict, so on a short
+        # image the map is what gets dropped rather than shrunk into illegibility.
+        map_h = 190
+        draw_map = (y0 + rh * (len(rows) + 2) + 22 + map_h) < h - 70
+        panel_h = rh * (len(rows) + 2) + 22 + (map_h if draw_map else 0)
+        rows[-1] = rows[-1][:3] + ('map below' if draw_map else 'az x el grid',)
         ov = im.copy()
         cv2.rectangle(ov, (x0 - 10, y0 - 26), (x0 + pw, y0 + panel_h), (0, 0, 0), -1)
         cv2.addWeighted(ov, 0.45, im, 0.55, 0, im)
@@ -1394,6 +1455,89 @@ class RadarLidarCalib(Node):
         else:
             cv2.putText(im, COVERAGE_HINT[cov['worst']], (x0, y + 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 165, 255), 1)
+        if draw_map:
+            self._draw_coverage_map(im, cov, x0, y + 20, pw)
+
+    def _draw_coverage_map(self, im, cov, x0, y0, pw):
+        """Where the captures actually are, so the answer to 'where do I put the
+        tripod next' is a shaded box rather than a number to interpret.
+
+        Top: the radar's field of view as a 3x3 az x el grid. A cell with no
+        capture is shaded amber — walk the tripod there. Captures are dots sized
+        by how close they were (near counts for more; angular error is r*sin(s)),
+        and the live radar pick is a green ring, so you can see the pose land in
+        an empty cell before you trigger.
+
+        Bottom: the same idea in range — three bands, empty ones shaded, one tick
+        per capture, live range as a caret."""
+        mw = pw - 8
+        mh = 118
+        cw, ch = mw / 3.0, mh / 3.0
+        cv2.putText(im, 'AZ x EL   shaded = no capture yet', (x0, y0),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (170, 170, 170), 1)
+        top = y0 + 8
+
+        def xy(az, el):
+            """deg -> px. az grows to the RIGHT and el UPWARD, so the map reads
+            like the scene in front of you rather than like an array index."""
+            u = (az - AZ_EDGES[0]) / (AZ_EDGES[-1] - AZ_EDGES[0])
+            v = (el - EL_EDGES[0]) / (EL_EDGES[-1] - EL_EDGES[0])
+            return (int(x0 + min(max(u, 0.0), 1.0) * mw),
+                    int(top + (1.0 - min(max(v, 0.0), 1.0)) * mh))
+
+        for c in range(3):                                  # empty cells first
+            for r in range(3):
+                if (c, r) in cov['filled']:
+                    continue
+                a = (int(x0 + c * cw), int(top + (2 - r) * ch))
+                b = (int(x0 + (c + 1) * cw), int(top + (3 - r) * ch))
+                sub = im[a[1]:b[1], a[0]:b[0]]
+                if sub.size:
+                    sub[:] = (sub * 0.55 + np.array((0, 90, 140)) * 0.45).astype(im.dtype)
+        for i in range(4):                                  # grid
+            gx = int(x0 + i * cw); gy = int(top + i * ch)
+            cv2.line(im, (gx, top), (gx, top + mh), (110, 110, 110), 1)
+            cv2.line(im, (x0, gy), (x0 + mw, gy), (110, 110, 110), 1)
+        bx, by = xy(0.0, 0.0)                               # boresight
+        cv2.drawMarker(im, (bx, by), (140, 140, 140), cv2.MARKER_TILTED_CROSS, 9, 1)
+        for c in self.captures:
+            p = np.asarray(c['p_radar'], float)
+            rr, a, e = cart_to_raz(p)
+            u, v = xy(np.degrees(a), np.degrees(e))
+            cv2.circle(im, (u, v), 4 if rr < NEAR_RANGE_M else 2, (255, 200, 0), -1)
+        if self.sel is not None:
+            rr, a, e = cart_to_raz(np.asarray(self.sel['p'], float))
+            u, v = xy(np.degrees(a), np.degrees(e))
+            lc = {'green': (0, 255, 0), 'orange': (0, 165, 255),
+                  'red': (0, 0, 255)}[self.aim[1]]
+            cv2.circle(im, (u, v), 7, lc, 2)
+            cv2.drawMarker(im, (u, v), lc, cv2.MARKER_CROSS, 13, 1)
+        for lbl, pos in ((f'{EL_EDGES[-1]:+.0f}', (x0 + 3, top + 10)),
+                         (f'{EL_EDGES[0]:+.0f}', (x0 + 3, top + mh - 3)),
+                         (f'az {AZ_EDGES[0]:+.0f}', (x0, top + mh + 12)),
+                         (f'{AZ_EDGES[-1]:+.0f} deg', (x0 + mw - 40, top + mh + 12))):
+            cv2.putText(im, lbl, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.32, (150, 150, 150), 1)
+
+        sy = top + mh + 30                                  # range strip
+        sh = 11
+        lo, hi = RANGE_BANDS[0][0], max(4.5, self.lmax)
+        for i, (blo, bhi) in enumerate(RANGE_BANDS):
+            a = int(x0 + mw * (blo - lo) / (hi - lo))
+            b = int(x0 + mw * (min(bhi, hi) - lo) / (hi - lo))
+            cv2.rectangle(im, (a, sy), (b, sy + sh),
+                          (70, 70, 70) if cov['bands'][i] else (0, 90, 140), -1)
+            cv2.rectangle(im, (a, sy), (b, sy + sh), (110, 110, 110), 1)
+        for c in self.captures:
+            rr = float(np.linalg.norm(c['p_radar']))
+            u = int(x0 + mw * (min(rr, hi) - lo) / (hi - lo))
+            cv2.line(im, (u, sy + 1), (u, sy + sh - 1), (255, 200, 0), 1)
+        if self.sel is not None:
+            u = int(x0 + mw * (min(float(self.sel['r']), hi) - lo) / (hi - lo))
+            cv2.drawMarker(im, (u, sy + sh + 3), (0, 255, 0), cv2.MARKER_TRIANGLE_UP, 8, 1)
+        cv2.putText(im, f'RANGE {lo:.1f}', (x0, sy - 3),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, (150, 150, 150), 1)
+        cv2.putText(im, f'{hi:.1f} m', (x0 + mw - 34, sy - 3),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, (150, 150, 150), 1)
 
     # ── RViz markers (the verification layer) ──
     def _mk(self, ns, mid, typ, scale, color):
@@ -1474,8 +1618,11 @@ class RadarLidarCalib(Node):
             if self.show_cov and self.captures:
                 # the same observability check as the image HUD, for a camera-less rig
                 cov_txt, cov_hint, cov_ok = self._coverage_text(sep='\n')
-                st.text += '\n' + cov_txt + '\n' + (
-                    'READY — all six DOF constrained' if cov_ok else 'NEXT: ' + cov_hint)
+                st.text += ('\n' + cov_txt + '\naz -60      0     +60\n'
+                            + self._coverage_grid(
+                                pose_coverage([c['p_radar'] for c in self.captures]))
+                            + '\n' + ('READY — all six DOF constrained'
+                                      if cov_ok else 'NEXT: ' + cov_hint))
         if self.cap_deadline > time.time():
             st.text += f'\nCAPTURING {len(self.cap_radar)}/{self.cap_n}'
         arr.markers.append(st)

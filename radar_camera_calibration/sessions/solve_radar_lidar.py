@@ -35,8 +35,13 @@ from scipy.spatial.transform import Rotation as Rot
 # BOTH sides of boresight, because a wide one-sided smear fits a rotation error
 # and an apex bias equally well and the two trade off.
 COVERAGE_TARGETS = {'range': 1.50, 'az': 60.0, 'az_bal': 20.0,
-                    'el': 30.0, 'el_bal': 10.0, 'near': 6.0}
+                    'el': 30.0, 'el_bal': 10.0, 'near': 6.0, 'cells': 8.0}
 NEAR_RANGE_M = 1.5
+# The az x el map: every spread row above can be satisfied by a lopsided set, but
+# filling cells cannot be gamed that way — it implies both spreads AND both
+# balances at once. 8 of 9, since the outer corners are a long walk.
+AZ_EDGES = (-60.0, -20.0, 20.0, 60.0)
+EL_EDGES = (-40.0, -10.0, 10.0, 40.0)
 
 
 def coverage(P):
@@ -47,8 +52,15 @@ def coverage(P):
     vals = {'range': float(rng.max() - rng.min()),
             'az': float(az.max() - az.min()), 'az_bal': bal(az),
             'el': float(el.max() - el.min()), 'el_bal': bal(el),
-            'near': float((rng < NEAR_RANGE_M).sum())}
-    return {k: (v, COVERAGE_TARGETS[k], v >= COVERAGE_TARGETS[k]) for k, v in vals.items()}
+            'near': float((rng < NEAR_RANGE_M).sum()),
+            'cells': float(len({(0 if a < AZ_EDGES[1] else (1 if a < AZ_EDGES[2] else 2),
+                                 0 if e < EL_EDGES[1] else (1 if e < EL_EDGES[2] else 2))
+                                for a, e in zip(az, el)}))}
+    out = {k: (v, COVERAGE_TARGETS[k], v >= COVERAGE_TARGETS[k]) for k, v in vals.items()}
+    out['grid'] = [[any((0 if a < AZ_EDGES[1] else (1 if a < AZ_EDGES[2] else 2)) == c
+                        and (0 if e < EL_EDGES[1] else (1 if e < EL_EDGES[2] else 2)) == r
+                        for a, e in zip(az, el)) for c in range(3)] for r in range(3)]
+    return out
 
 
 def to_raz(p):
@@ -179,9 +191,13 @@ def main():
     print('\ncoverage of the inlier set — what each spread makes observable')
     for k, unlocks in (('range', 't vs R'), ('az', 'yaw'), ('az_bal', 'yaw, one-sidedness'),
                        ('el', 'pitch + roll'), ('el_bal', 'pitch, one-sidedness'),
-                       ('near', f'all (captures under {NEAR_RANGE_M:.1f} m)')):
+                       ('near', f'all (captures under {NEAR_RANGE_M:.1f} m)'),
+                       ('cells', 'of the 9 az x el cells, how many hold a capture')):
         v, tgt, ok = cov[k]
         print(f"  {k:<7} {v:7.1f} / {tgt:5.1f}   {'PASS' if ok else 'FAIL'}   {unlocks}")
+    print('\n  az -60      0     +60')
+    for r, lab in ((2, 'el +10..+40'), (1, 'el -10..+10'), (0, 'el -40..-10')):
+        print('  ' + ' '.join('[X]' if f else '[ ]' for f in cov['grid'][r]) + '  ' + lab)
 
     if a.cam_quat and a.cam_xyz:
         # Saved transform is T_lidar_camera; invert it to get T_cam_lidar, then
