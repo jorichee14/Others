@@ -208,6 +208,38 @@ def lidar_cluster(P, eps, min_size, cap=20000):
     return [P[m] for m in out]
 
 
+def grow_from_seed(raw, seed, eps, max_r):
+    """Recover the WHOLE object from a partial detection.
+
+    Background subtraction erases everything within ~bg_voxel of a memorised
+    point, so a reflector bolted to a memorised tripod head keeps only its top.
+    Those surviving points are still a reliable SEED: region-grow from them back
+    through the RAW cloud (single-linkage at `eps`) to pull in the erased body.
+
+    Bounded to `max_r` of the seed centroid so the growth cannot run down the
+    tripod legs — it stops after the reflector plus, at worst, the head, which
+    the plane fit then rejects as outliers.
+    """
+    c0 = seed.mean(0)
+    near = raw[np.linalg.norm(raw - c0, axis=1) <= max_r]
+    if len(near) < len(seed):
+        return seed
+    tree = cKDTree(near)
+    seen = np.zeros(len(near), bool)
+    stack = []
+    for p in seed:
+        for i in tree.query_ball_point(p, eps):
+            if not seen[i]:
+                seen[i] = True
+                stack.append(i)
+    while stack:
+        for k in tree.query_ball_point(near[stack.pop()], eps):
+            if not seen[k]:
+                seen[k] = True
+                stack.append(k)
+    return near[seen] if seen.sum() >= len(seed) else seed
+
+
 # ────────────────────────────── [B] apex locator ─────────────────────────────
 def ransac_planes(P, tol, iters, min_pts, rng):
     """Sequentially RANSAC up to three planes; each refined by SVD on its
@@ -289,6 +321,11 @@ class RadarLidarCalib(Node):
                                              # between reflector and tripod head.
         dp('cluster_eps', 0.12)              # foreground clustering radius (m)
         dp('min_cluster_size', 8)
+        dp('grow_radius', 0.30)              # region-grow the seed back into the raw
+                                             # cloud out to this radius (0 = off), to
+                                             # recover the part of the reflector that
+                                             # background subtraction erased
+        dp('grow_eps', 0.06)                 # connectivity for that growth (m)
         dp('plane_tol', 0.015)               # RANSAC inlier distance (m)
         dp('plane_iters', 250)
         dp('min_plane_pts', 12)              # per plate — sets max planes3 range
@@ -361,6 +398,7 @@ class RadarLidarCalib(Node):
         self.lmin, self.lmax = float(g('lidar_min_range')), float(g('lidar_max_range'))
         self.bgl_n, self.bg_voxel = int(g('bg_frames_lidar')), float(g('bg_voxel'))
         self.ceps, self.cmin = float(g('cluster_eps')), int(g('min_cluster_size'))
+        self.grow_r, self.grow_eps = float(g('grow_radius')), float(g('grow_eps'))
         self.ptol, self.piters = float(g('plane_tol')), int(g('plane_iters'))
         self.pmin, self.perp = int(g('min_plane_pts')), float(g('perp_tol_deg'))
         self.rmin, self.rmax = float(g('radar_min_range')), float(g('radar_max_range'))
@@ -550,11 +588,14 @@ class RadarLidarCalib(Node):
                                   f'or raise cluster_eps)'))
             return
         P = clusters[0]
+        n_seed = len(P)
+        if self.grow_r > 0:                 # seed -> whole reflector
+            P = grow_from_seed(xyz, P, self.grow_eps, self.grow_r)
         apex, method = locate_apex(P, self.ptol, self.piters, self.pmin, self.perp, self.rng)
         self.det = dict(apex=apex, cluster=P, method=method,
                         n_fg=len(fg), n_extra=len(clusters) - 1)
         self.det_t = time.time()
-        self.lidar_stat = (f'lidar: {len(fg)} new pts, cluster {len(P)}, {method}'
+        self.lidar_stat = (f'lidar: {len(fg)} new -> seed {n_seed} -> grown {len(P)}, {method}'
                            + (f', +{len(clusters)-1} EXTRA' if len(clusters) > 1 else ''))
         if self.cap_deadline > time.time():
             self.cap_lidar.append(apex.copy())
