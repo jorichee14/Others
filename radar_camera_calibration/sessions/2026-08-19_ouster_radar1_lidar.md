@@ -63,6 +63,63 @@ Rotation differs by 9.8° between them, almost all of it roll — the axis whose
 1σ is 5–6.5° in each run, so ~1.2σ. Treating them as one rig state is justified,
 and merging cuts every uncertainty by roughly a third.
 
+## Camera → radar, per axis
+
+`T_cam_radar` = `T_cam_lidar · T_lidar_radar`, with `T_cam_lidar` from GLIM.
+Camera frame is `zed_left_camera_optical_frame`: **X right, Y down, Z forward**.
+
+```
+t (m)      : +0.207505 +0.076150 -0.108883      |t| = 24.6 cm
+quat xyzw  : -0.551338 +0.560743 -0.443155 -0.430356
+rpy (deg)  : -174.58 -76.24 -95.22
+```
+
+| | **X** (right) | **Y** (down) | **Z** (forward) |
+|---|---|---|---|
+| t (m) | +0.2075 | +0.0762 | −0.1089 |
+| **t 1σ (mm)** | 19.3 | **40.9** | **8.7** |
+| rot 1σ about axis (deg) | 4.29 | 0.91 | 2.98 |
+| signed bias (mm) | +16.8 | **−49.3** | +12.6 |
+| 3-D RMS (mm) | 185 | **352** | 102 |
+
+residual 1.29σ · LOO 1.36σ · cond 5.2 · 46/54 inliers · mean 3-D error 338 mm,
+median 260 mm.
+
+The covariance and residuals were rotated from the lidar frame into the camera
+frame; they do **not** include GLIM's own uncertainty, so these are the
+radar↔lidar numbers seen from the camera, not the full camera↔radar budget.
+
+Radar axes in the camera frame:
+
+```
+radar X fwd  -> [-0.02 -0.24 +0.97]     boresight ~ camera +Z, tipped 14 deg up
+radar Y left -> [-1.00 -0.00 -0.02]     radar left = camera -X
+radar Z up   -> [+0.01 -0.97 -0.24]     radar up   = camera -Y (image up)
+```
+
+**The soft axis is camera Y — vertical in the image.** That is where the radar's
+dead elevation channel lands: 40.9 mm of 1σ and a −49 mm bias, against 8.7 mm on
+depth. Depth is the *best* axis here, which is the opposite of the usual
+camera-fusion intuition and follows directly from the radar measuring range at
+5 cm while inferring height from nothing.
+
+Projected into the image at 2.5 m, the 1σ is roughly:
+
+| fx | X | Y | Z |
+|---|---|---|---|
+| 350 px | 2.7 px | 5.7 px | 1.2 px |
+| 525 px | 4.1 px | **8.6 px** | 1.8 px |
+| 700 px | 5.4 px | **11.5 px** | 2.4 px |
+
+So a radar return lands within about 4 px horizontally and 9 px vertically of
+where it should on an HD720 left image — inside a person-sized box, and usable
+for association. Do not use it to refine a bounding box vertically.
+
+For reference, the previous rig's ChArUco radar↔camera solve gave \|t\| = 24.4 cm
+against 24.6 cm here. The rig was rebuilt between the two, so the components are
+not comparable, but the camera-to-radar separation landing in the same place is a
+weak sanity check that nothing is grossly wrong.
+
 ## The elevation channel does not work
 
 This is the finding that governs everything below. Regressing the radar's
