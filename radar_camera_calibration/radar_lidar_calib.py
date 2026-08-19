@@ -62,6 +62,29 @@ FINAL CHECK: carry the reflector around — near/far, left/right, UP/DOWN — an
 the magenta sphere must stay on the green one. If it mirrors when you raise the
 reflector, the rotation is in the wrong branch: do not save.
 
+Coverage HUD — "will these captures constrain the solve?"
+---------------------------------------------------------
+Six bars, top-right of the image overlay and repeated in the RViz status text
+so the check survives a camera-less rig. Each is labelled with the DOF it
+unlocks, so a red bar names the axis that will come out loose:
+
+  RANGE   spread in m    → separates t from R (same-distance poses can't)
+  AZ      spread in deg  → yaw
+  AZ BAL  thinner side   → yaw, and kills the one-sided azimuth bias
+  EL      spread in deg  → pitch AND roll (both are unobservable in a plane)
+  EL BAL  thinner side   → pitch; this is the bar people leave red
+  <1.5 m  count          → everything: angular error is r·sin(σ), so a close
+                           capture is worth several distant ones
+
+The BAL rows exist because a spread number alone lies: 16° of elevation all
+BELOW boresight fits a pitch error just as well as a vertical bias in the apex
+estimate, and the two trade off. See COVERAGE_TARGETS for the geometry behind
+each threshold. Below the bars sits the last solve's rot/t 1σ — the OUTCOME, as
+opposed to the bars, which are the CAUSE. Green bars with a fat 1σ means the
+reflector is being found badly; a tight 1σ on red bars is the over-confident fit
+from a degenerate geometry, which is exactly what the bars are there to catch.
+Set `show_coverage_hud:=false` to hide it.
+
 Run
 ---
   ros2 run wicoms_utils radar_lidar_calib --ros-args \
@@ -379,6 +402,99 @@ def locate_apex(P, tol, iters, min_pts, perp_tol_deg, rng, seed_c=None, mode='au
     return Q.mean(0), 'centroid'
 
 
+# ──────────────────────── [B2] pose coverage (observability) ──────────────────
+# Six numbers that decide whether the captures can pin all six DOF. Unlike the
+# ChArUco flow there is no board here, so there is no board pitch/roll/yaw to
+# spread — the ONLY lever arm is where the reflector sat in the radar's own
+# (range, azimuth, elevation). Each target below is the spread at which that
+# DOF stops being the limiting one; they come from the geometry, not taste.
+#
+# Why each row matters — a small rotation d about axis k displaces a point p by
+# d(k x p), and the calibration can only see that displacement if the radar
+# measures it on an axis it is GOOD at (range 5 cm, azimuth 3 deg, elevation 8 deg):
+#
+#   YAW   (about Z): k x p = (-p_y, p_x, 0) -> shows up as azimuth error ~ d.
+#                    Needs points spread LEFT-RIGHT.               -> AZ
+#   PITCH (about Y): k x p = ( p_z, 0, -p_x) -> the -p_x term is an elevation
+#                    error ~ d (weak axis), but the p_z term is a RANGE error,
+#                    and range is the radar's best axis. So pitch becomes sharply
+#                    observable the moment points sit well ABOVE and BELOW
+#                    boresight.                                    -> EL, EL BAL
+#   ROLL  (about X): k x p = (0, -p_z, p_y) -> the -p_z term is an azimuth error
+#                    (good axis) proportional to HEIGHT off boresight. Roll is
+#                    therefore unlocked by the same elevation spread as pitch —
+#                    with everything in one horizontal plane it is unobservable.
+#   TRANSLATION    : a rotation about the lidar and a translation look identical
+#                    when every point is at the same distance. RANGE spread is
+#                    what separates them.                          -> RANGE
+#
+# A spread number alone lies when the coverage is one-sided: 16 deg of elevation
+# all BELOW boresight fits a pitch just as well as a vertical bias in the apex
+# estimate, and the two trade off. Hence the two BAL rows, which ask for real
+# coverage on both sides of boresight rather than a wide one-sided smear.
+#
+# NEAR counts close captures because every angular error is a cross-range error
+# of r*sin(sigma): one capture at 1.2 m carries the angular information of three
+# at 3.6 m. It is the cheapest way to tighten rotation.
+COVERAGE_TARGETS = {
+    'range':  1.50,   # m,   max-min spread of radar range
+    'az':    60.0,    # deg, max-min spread of radar azimuth
+    'az_bal': 20.0,   # deg, coverage on the THINNER side of boresight
+    'el':    30.0,    # deg, max-min spread of radar elevation
+    'el_bal': 10.0,   # deg, coverage on the THINNER side of boresight
+    'near':   6.0,    # count of captures closer than NEAR_RANGE_M
+}
+NEAR_RANGE_M = 1.5
+
+# What to physically do when a given bar is the worst one. Shown as the hint line
+# so the answer to "it is red, now what?" is on screen instead of in a document.
+# Kept short and action-first: they are drawn into a 268 px panel, so the verb
+# has to survive on one line.
+COVERAGE_HINT = {
+    'range':  'move much nearer AND much farther',
+    'az':     'carry the tripod wider left and right',
+    'az_bal': 'switch sides - one azimuth half is empty',
+    'el':     'change HEIGHT: floor level, then overhead',
+    'el_bal': 'poses all one side - go both high AND low',
+    'near':   f'take captures closer than {NEAR_RANGE_M:.1f} m',
+}
+
+
+def pose_coverage(P_list):
+    """Is this capture set able to constrain all six DOF?
+
+    Takes the radar-frame reflector points collected so far and returns
+    {name: (value, target, ok)} for the six rows above, plus 'n' and 'worst'
+    (the key furthest below its target — what to fix next). See COVERAGE_TARGETS
+    for why each row exists and which DOF it unlocks."""
+    P = np.asarray(P_list, float).reshape(-1, 3)
+    out = {'n': len(P)}
+    if len(P) < 2:
+        for k, tgt in COVERAGE_TARGETS.items():
+            out[k] = (0.0, tgt, False)
+        out['worst'] = 'range'
+        return out
+
+    raz = np.array([cart_to_raz(p) for p in P])
+    rng, az, el = raz[:, 0], np.degrees(raz[:, 1]), np.degrees(raz[:, 2])
+
+    def bal(a):
+        """Coverage on the thinner side of boresight — 0 if everything is on one
+        side. Deliberately NOT a count: one lonely pose at +30 deg is real
+        leverage, twenty crowded at +2 deg is not."""
+        return float(min(max(a.max(), 0.0), max(-a.min(), 0.0)))
+
+    vals = {'range': float(rng.max() - rng.min()),
+            'az': float(az.max() - az.min()), 'az_bal': bal(az),
+            'el': float(el.max() - el.min()), 'el_bal': bal(el),
+            'near': float((rng < NEAR_RANGE_M).sum())}
+    for k, v in vals.items():
+        tgt = COVERAGE_TARGETS[k]
+        out[k] = (v, tgt, v >= tgt)
+    out['worst'] = min(vals, key=lambda k: vals[k] / COVERAGE_TARGETS[k])
+    return out
+
+
 # ─────────────────────────────── [C] the node ────────────────────────────────
 CYAN = ColorRGBA(r=0.1, g=0.85, b=0.95, a=1.0)
 GREEN = ColorRGBA(r=0.1, g=1.0, b=0.2, a=1.0)
@@ -515,6 +631,7 @@ class RadarLidarCalib(Node):
         dp('show_image_overlay', True)     # build/publish the ZED overlay
         dp('show_window', True)            # ALSO pop a native cv2 window for it
         dp('debug_scale', 1.0)             # shrink the published/shown overlay
+        dp('show_coverage_hud', True)      # overlay the six observability bars
         # GLIM output, os_lidar -> zed_left_camera_optical_frame (T_lidar_camera)
         dp('lidar_camera_xyz', [-0.074928, -0.066971, -0.091627])
         dp('lidar_camera_quat_xyzw', [-0.497829, -0.498035, 0.501789, 0.502329])
@@ -624,6 +741,8 @@ class RadarLidarCalib(Node):
         self.overlay_on = bool(g('show_image_overlay')) and _HAVE_CV
         self.show_window = bool(g('show_window'))
         self.dscale = float(g('debug_scale'))
+        self.show_cov = bool(g('show_coverage_hud'))
+        self._rot_sig_deg = self._t_sig_mm = None  # last solve's per-DOF 1s, for the HUD
         if self.overlay_on:
             self.create_subscription(Image, g('image_topic'),
                                      lambda m: setattr(self, 'img',
@@ -980,12 +1099,12 @@ class RadarLidarCalib(Node):
         Pin, Qin = P[mask], Q[mask]
         sig = np.sqrt(np.clip(np.diag(res['cov']), 0, None))
         rot1s, t1s = np.degrees(sig[:3]), sig[3:] * 1000
+        self._rot_sig_deg, self._t_sig_mm = rot1s, t1s      # for the coverage HUD
         err = ((R @ Pin.T).T + t) - Qin
         bias, rms = err.mean(0) * 1000, np.sqrt((err ** 2).mean(0)) * 1000
         loo = loo_cross_val(Pin, I[mask], Qin, np.zeros(3),
                             (self.sig_r, self.sig_az, self.sig_el), True)
         cond = condition_number(Pin)
-        raz = np.array([cart_to_raz(p) for p in Pin])
         q = Rot.from_matrix(R).as_quat()
         lid_r, rad_r = np.linalg.norm(Qin - t, axis=1), np.linalg.norm(Pin, axis=1)
         a, b = np.linalg.lstsq(np.vstack([rad_r, np.ones_like(rad_r)]).T, lid_r, rcond=None)[0]
@@ -998,8 +1117,7 @@ class RadarLidarCalib(Node):
              f'  quat    : {q[0]:+.4f} {q[1]:+.4f} {q[2]:+.4f} {q[3]:+.4f}',
              f'  1s rot  : {rot1s[0]:.2f} {rot1s[1]:.2f} {rot1s[2]:.2f} deg'
              f'   1s t: {t1s[0]:.1f} {t1s[1]:.1f} {t1s[2]:.1f} mm',
-             f'  spread  : range {raz[:,0].ptp()*100:.0f} cm  az {np.degrees(raz[:,1].ptp()):.0f} deg'
-             f'  el {np.degrees(raz[:,2].ptp()):.0f} deg',
+             '  coverage: ' + self._coverage_text(Pin)[0],
              f'  bias mm : {bias[0]:+.0f} {bias[1]:+.0f} {bias[2]:+.0f}'
              f'   3-D RMS mm: {rms[0]:.0f} {rms[1]:.0f} {rms[2]:.0f}',
              '  radar axes in lidar frame: '
@@ -1023,6 +1141,11 @@ class RadarLidarCalib(Node):
                  ('rot1s<=4deg', rot1s.max() <= 4), ('bias<=50mm', np.abs(bias).max() <= 50)]
         L.append('  GATES   : ' + '  '.join(f'{k}[{"P" if v else "F"}]' for k, v in gates)
                  + '   + RViz up/down check before ~/save')
+        cov_txt, cov_hint, cov_ok = self._coverage_text(Pin)
+        if not cov_ok:
+            # A loose rotation is nearly always a coverage problem, not a solver
+            # one, so name the missing geometry instead of the failing gate.
+            L.append(f'  NEXT    : {cov_hint}')
         Rcr, tcr = self._compose_cam_radar(R, t)          # T_cam_radar, for deployment
         qc = Rot.from_matrix(Rcr).as_quat()
         L += [f'  --- composed T_cam_radar = T_cam_lidar * T_lidar_radar ---',
@@ -1066,6 +1189,14 @@ class RadarLidarCalib(Node):
                        reject_sigma=self.rej, reject_axis_sigma=self.rej_axis,
                        min_snr=self.min_snr, gate_radius=self.gate_r),
                    captures=self.captures)
+        if self.captures:
+            # observability of what was actually collected, so a session can be
+            # judged later without re-deriving where the reflector was placed
+            cov = pose_coverage([c['p_radar'] for c in self.captures])
+            out['coverage'] = {k: dict(value=round(cov[k][0], 2), target=cov[k][1],
+                                       ok=bool(cov[k][2]))
+                               for k in COVERAGE_TARGETS}
+            out['coverage']['worst'] = cov['worst']
         if self.solution is not None:
             R, t = self.solution['R'], self.solution['t']
             q = Rot.from_matrix(R).as_quat()
@@ -1174,12 +1305,95 @@ class RadarLidarCalib(Node):
                       + (f' | residual {self.solution["rms_sigma"]:.2f}s inl {self.solution["n_in"]}'
                          if self.solution else f'/{self.min_points} to first solve'))
         txt((10, h - 12), state, (240, 240, 240))
+        if self.show_cov:
+            self._draw_coverage_hud(im)
         if self.dscale != 1.0:
             im = cv2.resize(im, None, fx=self.dscale, fy=self.dscale)
         self.pub_img.publish(self.bridge.cv2_to_imgmsg(im, 'bgr8'))
         if self.show_window:
             cv2.imshow('radar_lidar_calib', im)
             cv2.waitKey(1)
+
+    def _coverage_text(self, pts=None, sep=' '):
+        """The same six numbers as the HUD, as text — so the check is available
+        in RViz and in the console when no camera is attached. `pts` defaults to
+        every capture; the solve passes its INLIERS instead, since leverage from
+        a rejected pose is leverage the fit never got."""
+        cov = pose_coverage([c['p_radar'] for c in self.captures] if pts is None else pts)
+        rows = [('range', 'range', 'm'), ('az', 'az', 'd'), ('az+-', 'az_bal', 'd'),
+                ('el', 'el', 'd'), ('el+-', 'el_bal', 'd'), ('near', 'near', '')]
+        parts = []
+        for label, key, unit in rows:
+            v, tgt, ok = cov[key]
+            num = f'{v:.1f}/{tgt:.1f}' if unit == 'm' else f'{v:.0f}/{tgt:.0f}'
+            parts.append(f'{label} {num}{unit}[{"P" if ok else "F"}]')
+        ok_all = all(cov[k][2] for _, k, _ in rows)
+        tail = 'all DOF constrained' if ok_all else COVERAGE_HINT[cov['worst']]
+        return sep.join(parts), tail, ok_all
+
+    def _draw_coverage_hud(self, im):
+        """Live 'will these captures actually constrain the solve?' panel.
+
+        Six bars from pose_coverage(), each labelled with the DOF it unlocks, so
+        a red bar names the rotation axis that will come out loose. This is the
+        cue the ChArUco flow got from board tilt; here the only lever arm is
+        where the reflector sat in the radar's own coordinates.
+
+        The bars are about OBSERVABILITY, and the rot 1s line below them is the
+        OUTCOME. Watch for green bars but a fat rot 1s (the reflector is being
+        found badly, not placed badly) and for the reverse — a tight 1s on a red
+        set, which is the classic over-confident fit from a degenerate geometry
+        and is the reason the bars exist at all."""
+        h, w = im.shape[:2]
+        cov = pose_coverage([c['p_radar'] for c in self.captures])
+        rows = [('RANGE', 'range', 'm', 't vs R'),
+                ('AZ', 'az', 'deg', 'yaw'),
+                ('AZ BAL', 'az_bal', 'deg', 'yaw'),
+                ('EL', 'el', 'deg', 'pitch+roll'),
+                ('EL BAL', 'el_bal', 'deg', 'pitch'),
+                (f'<{NEAR_RANGE_M:.1f}m', 'near', 'n', 'all')]
+        pw, rh = 268, 21
+        x0 = max(10, w - pw - 12)
+        y0 = 40
+        panel_h = rh * (len(rows) + 2) + 22
+        ov = im.copy()
+        cv2.rectangle(ov, (x0 - 10, y0 - 26), (x0 + pw, y0 + panel_h), (0, 0, 0), -1)
+        cv2.addWeighted(ov, 0.45, im, 0.55, 0, im)
+        cv2.putText(im, f"COVERAGE  n={cov['n']}", (x0, y0 - 9),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        y = y0 + 10
+        all_ok = cov['n'] >= max(4, self.min_points)
+        for label, key, unit, dof in rows:
+            v, tgt, ok = cov[key]
+            all_ok = all_ok and ok
+            frac = 0.0 if tgt <= 0 else min(1.0, max(0.0, v / tgt))
+            bx = x0 + 54
+            bw = pw - 178
+            col = (0, 200, 0) if ok else (0, 140, 255)
+            cv2.putText(im, label, (x0, y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.40,
+                        (200, 200, 200), 1)
+            cv2.rectangle(im, (bx, y - 5), (bx + bw, y + 5), (70, 70, 70), -1)
+            cv2.rectangle(im, (bx, y - 5), (bx + int(bw * frac), y + 5), col, -1)
+            num = f'{v:.1f}/{tgt:.1f}' if unit == 'm' else f'{v:.0f}/{tgt:.0f}'
+            cv2.putText(im, num, (bx + bw + 5, y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.40, col, 1)
+            cv2.putText(im, dof, (bx + bw + 62, y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.36,
+                        (150, 150, 150), 1)
+            y += rh
+        if self._rot_sig_deg is not None:
+            rs, ts = self._rot_sig_deg, self._t_sig_mm
+            rmax = float(np.max(rs))
+            rc = (0, 200, 0) if rmax <= 4.0 else ((0, 140, 255) if rmax <= 6.0 else (0, 0, 255))
+            cv2.putText(im, f'rot 1s {rs[0]:.1f}/{rs[1]:.1f}/{rs[2]:.1f}d  '
+                            f't {ts[0]:.0f}/{ts[1]:.0f}/{ts[2]:.0f}mm',
+                        (x0, y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.40, rc, 1)
+            all_ok = all_ok and rmax <= 4.0
+            y += rh
+        if all_ok:
+            cv2.putText(im, 'READY - all six DOF constrained', (x0, y + 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 220, 0), 1)
+        else:
+            cv2.putText(im, COVERAGE_HINT[cov['worst']], (x0, y + 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 165, 255), 1)
 
     # ── RViz markers (the verification layer) ──
     def _mk(self, ns, mid, typ, scale, color):
@@ -1257,6 +1471,11 @@ class RadarLidarCalib(Node):
             st.text = head + '\n' + self.lidar_stat + '\n' + self.aim[0]
             st.color = {'green': GREEN, 'orange': AMBER,
                         'red': ColorRGBA(r=1.0, g=0.3, b=0.2, a=1.0)}[self.aim[1]]
+            if self.show_cov and self.captures:
+                # the same observability check as the image HUD, for a camera-less rig
+                cov_txt, cov_hint, cov_ok = self._coverage_text(sep='\n')
+                st.text += '\n' + cov_txt + '\n' + (
+                    'READY — all six DOF constrained' if cov_ok else 'NEXT: ' + cov_hint)
         if self.cap_deadline > time.time():
             st.text += f'\nCAPTURING {len(self.cap_radar)}/{self.cap_n}'
         arr.markers.append(st)

@@ -25,6 +25,32 @@ from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation as Rot
 
 
+# Observability of the capture set — mirrors COVERAGE_TARGETS in
+# radar_lidar_calib.py, so a saved session grades the same offline as it did
+# live. Each row is the spread that unlocks one DOF: a rotation d about axis k
+# displaces a point by d(k x p), and the fit only sees it if the radar measures
+# that displacement on an axis it is good at. AZ spread -> yaw. EL spread ->
+# pitch and roll (in a single horizontal plane both are unobservable). RANGE
+# spread -> separates rotation from translation. The BAL rows demand coverage on
+# BOTH sides of boresight, because a wide one-sided smear fits a rotation error
+# and an apex bias equally well and the two trade off.
+COVERAGE_TARGETS = {'range': 1.50, 'az': 60.0, 'az_bal': 20.0,
+                    'el': 30.0, 'el_bal': 10.0, 'near': 6.0}
+NEAR_RANGE_M = 1.5
+
+
+def coverage(P):
+    """{name: (value, target, ok)} for the six observability rows."""
+    raz = np.array([to_raz(p) for p in P])
+    rng, az, el = raz[:, 0], np.degrees(raz[:, 1]), np.degrees(raz[:, 2])
+    bal = lambda a: float(min(max(a.max(), 0.0), max(-a.min(), 0.0)))
+    vals = {'range': float(rng.max() - rng.min()),
+            'az': float(az.max() - az.min()), 'az_bal': bal(az),
+            'el': float(el.max() - el.min()), 'el_bal': bal(el),
+            'near': float((rng < NEAR_RANGE_M).sum())}
+    return {k: (v, COVERAGE_TARGETS[k], v >= COVERAGE_TARGETS[k]) for k, v in vals.items()}
+
+
 def to_raz(p):
     """Cartesian -> (range, azimuth, elevation) in the radar's own frame."""
     r = float(np.linalg.norm(p))
@@ -148,6 +174,14 @@ def main():
     ax = {k: R @ v for k, v in (('X', [1, 0, 0]), ('Y', [0, 1, 0]), ('Z', [0, 0, 1]))}
     print('  radar axes in lidar frame: ' + '  '.join(
         f'{k}->[{v[0]:+.2f} {v[1]:+.2f} {v[2]:+.2f}]' for k, v in ax.items()))
+
+    cov = coverage(P[mask])
+    print('\ncoverage of the inlier set — what each spread makes observable')
+    for k, unlocks in (('range', 't vs R'), ('az', 'yaw'), ('az_bal', 'yaw, one-sidedness'),
+                       ('el', 'pitch + roll'), ('el_bal', 'pitch, one-sidedness'),
+                       ('near', f'all (captures under {NEAR_RANGE_M:.1f} m)')):
+        v, tgt, ok = cov[k]
+        print(f"  {k:<7} {v:7.1f} / {tgt:5.1f}   {'PASS' if ok else 'FAIL'}   {unlocks}")
 
     if a.cam_quat and a.cam_xyz:
         # Saved transform is T_lidar_camera; invert it to get T_cam_lidar, then

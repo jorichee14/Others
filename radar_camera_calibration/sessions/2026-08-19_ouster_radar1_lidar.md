@@ -139,6 +139,24 @@ At 1.2 m the same 8° elevation error is 17 cm instead of 35 cm, so these six sh
 are worth far more than another twenty at 3 m. Expect rot 1σ to drop under 4° and
 the z bias to shrink as the closer geometry lets the plane fit engage.
 
+`radar_lidar_calib.py` now shows this live as a six-bar **coverage HUD** (image
+overlay + RViz status text), one bar per spread with the DOF it unlocks, so the
+red bar names the axis that will come out loose before you stop collecting.
+`solve_radar_lidar.py` prints the same table for a saved session. On this set:
+
+```
+  range       3.5 /   1.5   PASS   t vs R
+  az         65.0 /  60.0   PASS   yaw
+  az_bal     29.5 /  20.0   PASS   yaw, one-sidedness
+  el         15.6 /  30.0   FAIL   pitch + roll
+  el_bal      0.7 /  10.0   FAIL   pitch, one-sidedness
+  near        6.0 /   6.0   PASS   all (captures under 1.5 m)
+```
+
+The two failing rows are exactly the ones that feed pitch — derived from the
+geometry alone, with no knowledge of the 6.55° the solve produced. Adding the six
+captures above turns all six bars green in simulation.
+
 Independent checks still open: tape-measure lidar→radar (predicted 25.1 cm) and
 camera→radar (predicted 25.5 cm), and physically confirm the radar is upright and
 pitched ~14° down.
