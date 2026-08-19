@@ -295,7 +295,14 @@ class RadarLidarCalib(Node):
         # ── radar detection ──
         dp('radar_min_range', 0.3); dp('radar_max_range', 8.0)
         dp('bg_frames_radar', 15); dp('bg_match_dist', 0.2)
-        dp('range_gate_margin_m', 0.75)      # must exceed the lidar↔radar baseline
+        dp('range_gate_margin_m', -1.0)      # <=0 = OFF (default). The reflector is
+                                             # the brightest NEW thing in a
+                                             # background-subtracted scene, so max-SNR
+                                             # needs no range assumption. Enable only
+                                             # with a real prior_t_xyz: the gate is
+                                             # centred on |apex - t_radar|, so a
+                                             # zeroed guess on a rig with any baseline
+                                             # rejects the genuine return.
         dp('max_abs_doppler', 0.15)          # tripod target is genuinely static
         dp('radar_cluster_eps', 0.20); dp('radar_min_cluster_size', 1)
         dp('gate_radius', 0.40)              # 3-D gate once a solve exists
@@ -594,12 +601,15 @@ class RadarLidarCalib(Node):
         # correct return sits one baseline away).
         t_gate = t if t is not None else self.t_prior
         r_exp = np.linalg.norm(apex - t_gate)
-        keep &= np.abs(r - r_exp) <= self.rmargin
+        if self.rmargin > 0:
+            keep &= np.abs(r - r_exp) <= self.rmargin
         if self.max_dop > 0 and dop is not None:
             keep &= np.abs(dop) <= self.max_dop
         pts, s = xyz[keep], snr[keep]
         if len(pts) == 0:
-            self.aim = (f'radar: no return near lidar range ({r_exp:.2f} m) — RE-AIM / unblock',
+            self.aim = (('radar: no return near lidar range (%.2f m) — RE-AIM / unblock'
+                         % r_exp) if self.rmargin > 0 else
+                        'radar: nothing new after background — RE-AIM / re-do background',
                         'red')
             return
 
@@ -627,8 +637,13 @@ class RadarLidarCalib(Node):
         snr_norm = snr_sel * (r_sel / self.snr_r0) ** 4
         ok = snr_norm >= self.min_snr
         self.sel = dict(p=p_sel, snr=snr_sel, snr_norm=snr_norm, r=r_sel, n=len(c))
-        self.aim = (f'radar: best {snr_sel:.0f} (norm {snr_norm:.0f}) @ {r_sel:.2f} m  '
-                    + ('OK' if ok else 'RE-AIM'), 'green' if ok else 'orange')
+        # Range agreement is reported, not enforced, until a solve exists: before
+        # then the baseline is unknown, so a mismatch is uninformative. After the
+        # solve the 3-D prediction gate above is already doing the real work.
+        gap = abs(r_sel - r_exp)
+        self.aim = (f'radar: best {snr_sel:.0f} (norm {snr_norm:.0f}) @ {r_sel:.2f} m'
+                    + (f' (lidar {r_exp:.2f}, d {gap*100:.0f} cm)' if self.solution else '')
+                    + '  ' + ('OK' if ok else 'RE-AIM'), 'green' if ok else 'orange')
 
         if self.cap_deadline > time.time() and ok:
             self.cap_radar.append(p_sel.copy())
