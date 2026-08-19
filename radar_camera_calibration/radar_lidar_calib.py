@@ -845,11 +845,20 @@ class RadarLidarCalib(Node):
 
         pred = R.T @ (apex - t) if R is not None else None
         if pred is not None:
-            near = np.linalg.norm(pts - pred, axis=1) <= self.gate_r
+            # Widen the gate by what the solve's own uncertainty implies at this
+            # range: a rotation 1sigma of s degrees displaces the prediction by
+            # r*sin(s). Gating tighter than that refuses correct returns, which is
+            # how an early, poorly-conditioned solve locks itself out of collecting
+            # the very captures that would improve it.
+            gate = self.gate_r
+            if self.solution is not None:
+                rs = np.degrees(np.sqrt(np.clip(np.diag(self.solution['cov'])[:3], 0, None))).max()
+                gate += float(np.linalg.norm(apex - t) * np.sin(np.radians(min(rs, 45.0))))
+            near = np.linalg.norm(pts - pred, axis=1) <= gate
             if near.any():
                 pts, sr, fid = pts[near], sr[near], fid[near]
             elif self.strict and self.solution is not None:
-                self.aim = (f'radar: nothing within {self.gate_r:.2f} m of prediction', 'orange')
+                self.aim = (f'radar: nothing within {gate:.2f} m of prediction', 'orange')
                 return
         clusters = radar_cluster(pts, self.rceps, self.rcmin)
         # persistence: how many DISTINCT frames contributed to each cluster. The
