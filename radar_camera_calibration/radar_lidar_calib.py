@@ -434,8 +434,13 @@ class RadarLidarCalib(Node):
         # and its size is known, so keeping everything within reflector_size of
         # the cluster's top drops the post, head and legs.
         dp('isolate_reflector', True)
-        dp('top_band', 0.03)                 # points within this of the highest are
-                                             # averaged to locate the top robustly
+        # The reflector's SIZE is constant, but locating its top is not: beam
+        # spacing grows with range (0.7 deg is 1.2 cm at 1 m, 3.7 cm at 3 m), so a
+        # fixed band catches a single noisy return far away. Both terms scale so
+        # the top stays an average of several points, and the isolation ball gets
+        # a small allowance for that top being less certain.
+        dp('top_band', 0.03); dp('top_band_per_m', 0.025)
+        dp('reflector_size_per_m', 0.02)
         dp('grow_radius_per_m', 0.03)        # range scaling on the max radius
         dp('grow_eps', 0.06); dp('grow_eps_per_m', 0.02)
         dp('cluster_eps_per_m', 0.02)        # same scaling for the seed clustering
@@ -527,6 +532,8 @@ class RadarLidarCalib(Node):
         self.apex_method = str(g('apex_method'))
         self.isolate_top = bool(g('isolate_reflector'))
         self.top_band = float(g('top_band'))
+        self.top_band_pm = float(g('top_band_per_m'))
+        self.refl_size_pm = float(g('reflector_size_per_m'))
         self.grow_eps = float(g('grow_eps'))
         self.grow_r_pm = float(g('grow_radius_per_m'))
         self.grow_eps_pm = float(g('grow_eps_per_m'))
@@ -728,9 +735,12 @@ class RadarLidarCalib(Node):
         n_full = len(P)
         if self.isolate_top and len(P) > 3:
             # robust top: mean of the highest points, not a single extreme return
+            r_c = float(np.linalg.norm(P.mean(0)))
+            band = self.top_band + self.top_band_pm * r_c
+            ball = self.refl_size + self.refl_size_pm * r_c
             z = P[:, 2]                                  # os_lidar +Z is up
-            top = P[z >= z.max() - self.top_band].mean(0)
-            iso = P[np.linalg.norm(P - top, axis=1) <= self.refl_size]
+            top = P[z >= z.max() - band].mean(0)
+            iso = P[np.linalg.norm(P - top, axis=1) <= ball]
             if len(iso) >= 3:
                 P = iso
         n_seed = len(P)
