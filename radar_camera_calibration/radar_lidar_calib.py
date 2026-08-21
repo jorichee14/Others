@@ -120,6 +120,18 @@ inverted internally). Set `show_image_overlay:=false` to run headless, or
 override `camera_transform_is:=camera_lidar` if your file stores the other
 direction.
 
+`camera_transform_from_tf:=true` takes it from the TF tree instead, looked up
+from the frame the CLOUD arrives in to `camera_frame`. Prefer it whenever a
+static_transform_publisher is already broadcasting the transform: restating one
+by hand fails silently in two ways — the direction is easy to invert, and it is
+easy to quote it against a different frame than the cloud's (on an Ouster,
+`os_sensor` and `os_lidar` are 180 deg apart in yaw plus a few cm). TF knows
+both and cannot get either wrong.
+
+The camera's intrinsics are used ONLY to draw the image overlay. An
+uncalibrated camera still composes a correct `T_cam_radar` — run it with
+`show_image_overlay:=false` and verify in RViz, which needs no intrinsics.
+
 Structure: [A] cloud tools · [B] apex locator · [C] node.
 """
 import json
@@ -139,6 +151,7 @@ from std_msgs.msg import Empty, ColorRGBA
 from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation as Rot
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
+from tf2_ros import Buffer, TransformListener
 
 try:                                    # optional: only for the image overlay
     import cv2
@@ -685,6 +698,15 @@ class RadarLidarCalib(Node):
         dp('lidar_camera_xyz', [-0.074928, -0.066971, -0.091627])
         dp('lidar_camera_quat_xyzw', [-0.497829, -0.498035, 0.501789, 0.502329])
         dp('camera_transform_is', 'lidar_camera')   # 'lidar_camera' | 'camera_lidar'
+        # Take the camera transform from the TF tree instead of the two parameters
+        # above. Prefer this whenever a static_transform_publisher is already
+        # broadcasting it: the parameters make you restate a transform by hand,
+        # and the two ways that goes wrong are silent. Its direction is easy to
+        # invert, and it is easy to quote it against a DIFFERENT frame than the
+        # one the cloud arrives in — os_sensor rather than os_lidar on an Ouster,
+        # which are 180 deg apart in yaw. TF knows both and cannot get either
+        # wrong. Looked up once, from the cloud's own frame_id to camera_frame.
+        dp('camera_transform_from_tf', False)
 
         g = lambda k: self.get_parameter(k).value
         self.fx, self.fy, self.fz = g('pc_field_x'), g('pc_field_y'), g('pc_field_z')
@@ -741,6 +763,11 @@ class RadarLidarCalib(Node):
         self.camera_frame = g('camera_frame')
 
         # ── camera transform: store as T_cam_lidar (p_cam = R_cl·p_lidar + t_cl) ──
+        self.cam_tf_wanted = bool(g('camera_transform_from_tf'))
+        self.tf_buf = self.tf_lis = None
+        if self.cam_tf_wanted:
+            self.tf_buf = Buffer()
+            self.tf_lis = TransformListener(self.tf_buf, self)
         Rg = Rot.from_quat(list(g('lidar_camera_quat_xyzw'))).as_matrix()
         tg = np.array(g('lidar_camera_xyz'), float)
         if str(g('camera_transform_is')) == 'lidar_camera':      # given maps cam -> lidar
@@ -861,9 +888,39 @@ class RadarLidarCalib(Node):
         self.get_logger().info(self.aim[0], throttle_duration_sec=2.0)
 
     # ── lidar: background-subtract → cluster → apex ──
+    def _resolve_cam_tf(self):
+        """Look the camera transform up in TF, once, using the frame the cloud
+        actually arrives in. Silent until it succeeds — a static publisher may
+        start after this node, so failing here is normal for the first seconds."""
+        if not self.cam_tf_wanted or self.lidar_frame is None:
+            return
+        try:
+            tr = self.tf_buf.lookup_transform(
+                self.lidar_frame, self.camera_frame, rclpy.time.Time()).transform
+        except Exception as e:
+            self.get_logger().warn(
+                f'camera_transform_from_tf: no {self.lidar_frame} -> {self.camera_frame} '
+                f'yet ({type(e).__name__}) — is the static publisher running?',
+                throttle_duration_sec=5.0)
+            return
+        # lookup gives p_lidar = Rg·p_cam + tg; the node stores the inverse
+        Rg = Rot.from_quat([tr.rotation.x, tr.rotation.y,
+                            tr.rotation.z, tr.rotation.w]).as_matrix()
+        tg = np.array([tr.translation.x, tr.translation.y, tr.translation.z])
+        self.R_cl, self.t_cl = Rg.T, -Rg.T @ tg
+        self.cam_tf_wanted = False                    # resolved; stop looking
+        ax = {'lidar +X': self.R_cl @ [1, 0, 0], 'lidar +Y': self.R_cl @ [0, 1, 0],
+              'lidar +Z': self.R_cl @ [0, 0, 1]}
+        self.get_logger().info(
+            f'camera transform taken from TF ({self.lidar_frame} -> {self.camera_frame}): '
+            f'camera sits [' + ' '.join(f'{v:+.4f}' for v in tg) + '] m from the lidar  |  '
+            + '  '.join(f'{k}->[{v[0]:+.2f} {v[1]:+.2f} {v[2]:+.2f}]' for k, v in ax.items()))
+
     def _lidar(self, msg):
         self.lidar_msg_t = time.time()
         self.lidar_frame = msg.header.frame_id
+        if self.cam_tf_wanted:
+            self._resolve_cam_tf()
         xyz = cloud_xyz(msg)
         if len(xyz) == 0:
             return
