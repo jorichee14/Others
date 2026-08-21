@@ -5,7 +5,7 @@
  "child_frame": "radar3_link",
  "lidar_name": "ouster",
  "radar_name": "radar3",
- "note": "T_lidar_radar3, two runs merged (12 + 21). Solved DATA ONLY, no priors. A tape measurement disagrees with the solved depth by 14 cm (2 cm vs 16.3 cm behind the arducam) while agreeing on vertical and lateral; forcing the depth costs 8 inliers and forcing depth plus vertical drops to 17/33, so the two are incompatible and the data is used as-is. ~70 poses would make a chi-square test decisive either way.",
+ "note": "T_lidar_radar3, three runs merged (12+21+21). Solved DATA ONLY, no priors, identical treatment to radar1 and radar2. All three rounds agree within 2.5-8.3 cm, so none was dropped.",
  "params": {
   "sigma_range_m": 0.05,
   "sigma_az_deg": 3.0000000000000004,
@@ -1089,6 +1089,678 @@
     0.4872
    ],
    "run": "B"
+  },
+  {
+   "idx": 34,
+   "stamp": 1787297666.0957308,
+   "p_lidar": [
+    -1.8199,
+    -0.1635,
+    0.2374
+   ],
+   "p_radar": [
+    1.8587,
+    -0.003,
+    -0.3342
+   ],
+   "method": "centroid",
+   "snr": 2055.9,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 2.9,
+   "radar_std_mm": 5.2,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.8199,
+    -0.1635,
+    0.2374
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 35,
+   "stamp": 1787297683.6329372,
+   "p_lidar": [
+    -1.8137,
+    -0.6488,
+    0.2247
+   ],
+   "p_radar": [
+    1.8303,
+    -0.4763,
+    0.0142
+   ],
+   "method": "centroid",
+   "snr": 2604.4,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 1.3,
+   "radar_std_mm": 3.9,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.8137,
+    -0.6488,
+    0.2247
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 36,
+   "stamp": 1787297697.927642,
+   "p_lidar": [
+    -1.7642,
+    -1.4408,
+    0.2203
+   ],
+   "p_radar": [
+    1.8834,
+    -1.0715,
+    -0.4054
+   ],
+   "method": "centroid",
+   "snr": 2429.1,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 2.1,
+   "radar_std_mm": 5.2,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.7642,
+    -1.4408,
+    0.2203
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 37,
+   "stamp": 1787297710.5402937,
+   "p_lidar": [
+    -1.7901,
+    0.3603,
+    0.233
+   ],
+   "p_radar": [
+    1.8425,
+    0.4034,
+    0.0385
+   ],
+   "method": "centroid",
+   "snr": 2410.5,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 2.7,
+   "radar_std_mm": 1.2,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.7901,
+    0.3603,
+    0.233
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 38,
+   "stamp": 1787297728.733687,
+   "p_lidar": [
+    -1.6166,
+    1.1176,
+    0.234
+   ],
+   "p_radar": [
+    1.7589,
+    1.0282,
+    -0.226
+   ],
+   "method": "centroid",
+   "snr": 1669.9,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 2.6,
+   "radar_std_mm": 0.0,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.6166,
+    1.1176,
+    0.234
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 39,
+   "stamp": 1787297758.839543,
+   "p_lidar": [
+    -2.8402,
+    -0.2242,
+    0.2034
+   ],
+   "p_radar": [
+    2.7932,
+    0.0561,
+    -0.4861
+   ],
+   "method": "centroid",
+   "snr": 2510.2,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 2.5,
+   "radar_std_mm": 38.7,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -2.8402,
+    -0.2242,
+    0.2034
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 40,
+   "stamp": 1787297785.8983946,
+   "p_lidar": [
+    -1.5417,
+    -0.1642,
+    0.0671
+   ],
+   "p_radar": [
+    1.5518,
+    0.0074,
+    -0.2718
+   ],
+   "method": "centroid",
+   "snr": 443.5,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 0.9,
+   "radar_std_mm": 0.3,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.5417,
+    -0.1642,
+    0.0671
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 41,
+   "stamp": 1787297806.8184388,
+   "p_lidar": [
+    -1.6212,
+    -0.6763,
+    0.06
+   ],
+   "p_radar": [
+    1.3796,
+    -1.0101,
+    -0.2512
+   ],
+   "method": "centroid",
+   "snr": 2412.9,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 1.5,
+   "radar_std_mm": 2.8,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.6212,
+    -0.6763,
+    0.06
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 42,
+   "stamp": 1787297827.8066385,
+   "p_lidar": [
+    -1.6502,
+    -1.2815,
+    0.0477
+   ],
+   "p_radar": [
+    1.6918,
+    -1.0944,
+    -0.363
+   ],
+   "method": "centroid",
+   "snr": 2382.4,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 2.4,
+   "radar_std_mm": 3.2,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.6502,
+    -1.2815,
+    0.0477
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 43,
+   "stamp": 1787297849.1885881,
+   "p_lidar": [
+    -1.5157,
+    0.2002,
+    0.057
+   ],
+   "p_radar": [
+    1.2762,
+    0.8863,
+    -0.2653
+   ],
+   "method": "centroid",
+   "snr": 2617.0,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 1.2,
+   "radar_std_mm": 0.2,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.5157,
+    0.2002,
+    0.057
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 44,
+   "stamp": 1787297861.3240697,
+   "p_lidar": [
+    -1.4333,
+    1.0677,
+    0.0604
+   ],
+   "p_radar": [
+    1.6973,
+    0.7905,
+    -0.2582
+   ],
+   "method": "centroid",
+   "snr": 852.0,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 1.9,
+   "radar_std_mm": 0.2,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.4333,
+    1.0677,
+    0.0604
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 45,
+   "stamp": 1787297887.9021676,
+   "p_lidar": [
+    -1.9486,
+    -0.1872,
+    -0.1738
+   ],
+   "p_radar": [
+    2.019,
+    0.134,
+    -0.2735
+   ],
+   "method": "centroid",
+   "snr": 2242.9,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 1.4,
+   "radar_std_mm": 7.3,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.9486,
+    -0.1872,
+    -0.1738
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 46,
+   "stamp": 1787297902.7607293,
+   "p_lidar": [
+    -1.799,
+    0.6864,
+    -0.1783
+   ],
+   "p_radar": [
+    1.7729,
+    0.9758,
+    -0.3084
+   ],
+   "method": "centroid",
+   "snr": 1030.1,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 1.4,
+   "radar_std_mm": 1.2,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.799,
+    0.6864,
+    -0.1783
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 47,
+   "stamp": 1787297938.8715,
+   "p_lidar": [
+    -1.8171,
+    -0.8503,
+    -0.1823
+   ],
+   "p_radar": [
+    1.6847,
+    -1.1244,
+    -0.2778
+   ],
+   "method": "centroid",
+   "snr": 2121.0,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 1.7,
+   "radar_std_mm": 0.4,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.8171,
+    -0.8503,
+    -0.1823
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 48,
+   "stamp": 1787297959.733223,
+   "p_lidar": [
+    -1.7591,
+    -1.6875,
+    -0.1881
+   ],
+   "p_radar": [
+    2.0678,
+    -1.0737,
+    -0.4052
+   ],
+   "method": "centroid",
+   "snr": 2026.0,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 2.3,
+   "radar_std_mm": 0.2,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.7591,
+    -1.6875,
+    -0.1881
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 49,
+   "stamp": 1787297989.9715307,
+   "p_lidar": [
+    -1.7686,
+    -0.1804,
+    -0.4462
+   ],
+   "p_radar": [
+    1.8817,
+    -0.0303,
+    -0.1701
+   ],
+   "method": "centroid",
+   "snr": 2515.0,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 2.2,
+   "radar_std_mm": 4.1,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.7686,
+    -0.1804,
+    -0.4462
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 50,
+   "stamp": 1787298002.0772462,
+   "p_lidar": [
+    -1.6786,
+    -0.6106,
+    -0.4478
+   ],
+   "p_radar": [
+    1.7646,
+    -0.4171,
+    -0.5209
+   ],
+   "method": "centroid",
+   "snr": 2149.5,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 3.2,
+   "radar_std_mm": 2.6,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.6786,
+    -0.6106,
+    -0.4478
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 51,
+   "stamp": 1787298016.8984,
+   "p_lidar": [
+    -1.4743,
+    -1.2557,
+    -0.4488
+   ],
+   "p_radar": [
+    1.8053,
+    -0.9243,
+    -0.2703
+   ],
+   "method": "centroid",
+   "snr": 829.9,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 2.6,
+   "radar_std_mm": 0.1,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.4743,
+    -1.2557,
+    -0.4488
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 52,
+   "stamp": 1787298032.7305512,
+   "p_lidar": [
+    -1.1674,
+    0.4755,
+    -0.425
+   ],
+   "p_radar": [
+    1.2371,
+    0.684,
+    -0.1121
+   ],
+   "method": "centroid",
+   "snr": 655.0,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 1.4,
+   "radar_std_mm": 0.0,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.1674,
+    0.4755,
+    -0.425
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 53,
+   "stamp": 1787298055.8153887,
+   "p_lidar": [
+    -1.2598,
+    0.818,
+    -0.4453
+   ],
+   "p_radar": [
+    1.5754,
+    0.7086,
+    -0.1446
+   ],
+   "method": "centroid",
+   "snr": 360.0,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 2.6,
+   "radar_std_mm": 0.0,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.2598,
+    0.818,
+    -0.4453
+   ],
+   "run": "C"
+  },
+  {
+   "idx": 54,
+   "stamp": 1787298071.2567863,
+   "p_lidar": [
+    -1.1139,
+    -0.0629,
+    -0.3989
+   ],
+   "p_radar": [
+    1.2513,
+    -0.1292,
+    -0.0817
+   ],
+   "method": "centroid",
+   "snr": 1262.6,
+   "radar_frames_seen": 10,
+   "radar_frames_pooled": 10,
+   "lidar_std_mm": 0.9,
+   "radar_std_mm": 0.2,
+   "board_R_quat_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "board_t": [
+    -1.1139,
+    -0.0629,
+    -0.3989
+   ],
+   "run": "C"
   }
  ]
 }

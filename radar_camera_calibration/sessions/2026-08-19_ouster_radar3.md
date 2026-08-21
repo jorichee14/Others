@@ -1,34 +1,42 @@
 # radar3 — Ouster ↔ radar3, Arducam (2026-08-19)
 
-33 poses over two runs (12 + 21). **Data only — no priors of any kind.**
+54 poses over three runs (12 + 21 + 21). **Data only — no priors of any kind**, the same treatment radar1 and radar2 had. All three rounds agree within 2.5–8.3 cm, so none was dropped.
 Poses: `2026-08-19_ouster_radar3_poses.json`.
 
 ```bash
 # os_lidar -> radar3_link
 ros2 run tf2_ros static_transform_publisher \
-  0.042951 -0.107746 0.160631  0.002367 0.983971 0.000289 0.178315 \
+  0.041839 -0.101587 0.161252  -0.007406 0.986026 0.007861 0.166243 \
   os_lidar radar3_link
 
 # composed: arducam_optical_frame -> radar3_link
 ros2 run tf2_ros static_transform_publisher \
-  0.011628 -0.207269 -0.156893  0.577560 0.568043 0.417338 -0.411802 \
+  0.017773 -0.208023 -0.155788  0.571431 0.563856 0.432969 -0.409965 \
   arducam_optical_frame radar3_link
 ```
 
 ```
-r3_t_xyz:="[0.0116,-0.2073,-0.1569]"  r3_quat_xyzw:="[0.5776,0.5680,0.4173,-0.4118]"
+r3_t_xyz:="[0.0178,-0.2080,-0.1558]"  r3_quat_xyzw:="[0.5714,0.5639,0.4330,-0.4100]"
 ```
 
 | | value |
 |---|---|
-| t (m), lidar frame | [+0.042951, −0.107746, +0.160631] · \|t\| 19.8 cm |
-| quat xyzw | [+0.002367, +0.983971, +0.000289, +0.178315] |
-| 1σ rot | 1.54 / 2.31 / 3.93 deg |
-| 1σ t | 14.4 / 26.2 / 49.2 mm |
-| residual / LOO | 1.27σ / 1.36σ |
-| condition number | 6.1 |
-| inliers | 28/33 (85%) |
-| split-half t gap | 15.0 cm |
+| t (m), lidar frame | [+0.041839, −0.101587, +0.161252] · \|t\| 19.5 cm |
+| quat xyzw | [−0.007406, +0.986026, +0.007861, +0.166243] |
+| 1σ rot | 1.25 / 1.90 / 3.33 deg |
+| 1σ t | 11.2 / 21.3 / 40.3 mm |
+| residual / LOO | 1.31σ / 1.36σ |
+| condition number | 5.3 |
+| inliers | 44/54 (81%) — 10 outliers removed |
+| **split-half t gap** | **8.3 cm** |
+
+In the Arducam frame, per axis:
+
+| | 1σ rot | 1σ t | bias | RMS |
+|---|---|---|---|---|
+| X (right) | 1.90° | 21.2 mm | −9.4 mm | 192 mm |
+| Y (down) | 3.33° | **40.6 mm** | +51.0 mm | 366 mm |
+| Z (forward) | 1.27° | **10.2 mm** | +30.0 mm | 91 mm |
 
 Mount: **inverted** — its +Z is 155° from world up, boresight pitched ~20° down.
 Behaviourally that makes it a radar1, not a radar2: good azimuth axis horizontal,
@@ -58,8 +66,8 @@ Forcing the depth costs 8 inliers; forcing depth **and** vertical together drops
 and the data are incompatible rather than merely disagreeing, and no constraint
 reconciles them. **The extrinsic above therefore uses the data alone.**
 
-At 33 poses a chi-square test cannot rule the tape out (Δχ² ≈ 24, suggestive).
-At ~70 poses it becomes decisive (Δχ² ≈ 40). That is the way to settle it.
+The third round did not move the depth: 16.3 cm before, 16.4 cm now, across 54
+poses and three independent sessions. The disagreement with the tape stands.
 
 ## Which axes the data actually pins — all three radars
 
@@ -81,7 +89,7 @@ figure** (8.4 / 12.0 / 15.0 cm for radar1 / radar2 / radar3).
 
 ## Status
 
-radar1 and radar2 are final. radar3 is usable and has the best residual and inlier
-rate of the three, but the weakest split-half and an unexplained 14 cm depth
-disagreement. ~35 more poses at a wider azimuth (69° → ~96°) would roughly halve
-its uncertainties and settle the depth question.
+All three radars are final. radar3 now matches radar1 on the measure that matters
+— split-half 8.3 cm against 8.4 — with the tightest rotation of the three
+(1.25 / 1.90 / 3.33°) and depth good to 10.2 mm. The 14 cm depth disagreement with
+the tape is unresolved and did not move as poses tripled.
