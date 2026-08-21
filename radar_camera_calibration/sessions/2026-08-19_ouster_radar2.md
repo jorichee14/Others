@@ -1,87 +1,50 @@
-# radar2 — Ouster ↔ radar2 (IWR6843ISK, rolled 90°), 2026-08-19
+# radar2 — Ouster ↔ radar2 (2026-08-19)
 
-**Done.** Four rounds collected; the answer is rounds **3 + 4**, 42 poses. Rounds 1
-and 2 are excluded — they sit 22–30 cm from these and from each other, and round 2
-misses the tape-measured radar1↔radar2 separation by 24 cm.
+**Final: rounds 3 + 4, 42 poses.** Rounds 1 and 2 are excluded — they sit 22–30 cm
+from these and from each other, and round 2 misses the tape-measured radar1↔radar2
+separation by 24 cm despite having the best residual of any set collected. Rounds 3
+and 4 agree to **1.8 cm / 6.7°** and were taken either side of the rig being raised,
+which also confirms the raise was rigid.
 
-Poses: `2026-08-19_ouster_radar2_poses.json` · re-solve with `solve_radar_lidar.py`.
+```bash
+# os_lidar -> radar2_link
+ros2 run tf2_ros static_transform_publisher \
+  0.0367 -0.1208 -0.1391  0.01383 0.73662 0.67577 0.02329 \
+  os_lidar radar2_link
 
-## Result
-
-```
-T_os_lidar_radar2   t = [+0.0367 -0.1208 -0.1391]   |t| 18.8 cm
-                    q = [+0.01383 +0.73662 +0.67577 +0.02329]
-
-T_cam_radar2        t = [-0.053850 +0.046553 -0.112039]   |t| 13.3 cm
-                    q = [+0.724722 +0.038269 +0.687594 -0.022953]
+# composed through GLIM: zed_left_camera_optical_frame -> radar2_link
+ros2 run tf2_ros static_transform_publisher \
+  -0.053850 0.046553 -0.112039  0.724722 0.038269 0.687594 -0.022953 \
+  zed_left_camera_optical_frame radar2_link
 ```
 
 ```
 r2_t_xyz:="[-0.0538,0.0466,-0.1120]"  r2_quat_xyzw:="[0.7247,0.0383,0.6876,-0.0230]"
 ```
 
-| camera axis | 1σ rot | 1σ t | bias | RMS |
-|---|---|---|---|---|
-| X (right) | 3.43° | 37.5 mm | −7.4 mm | 513 mm |
-| Y (down) | 3.87° | 36.4 mm | +12.3 mm | 197 mm |
-| Z (forward) | 2.95° | **10.1 mm** | +24.3 mm | 68 mm |
-
-residual 1.61σ · LOO 1.78σ · cond 3.8 · 33/42 inliers
-
-## How the four rounds went, and why only two of them count
-
-| | inliers | resid | LOO | cond | t (cm) | sep vs tape |
-|---|---|---|---|---|---|---|
-| round 1 | 13/21 | 1.40σ | 2.06σ | 10.0 | [+5.9, −9.0, +8.2] | +4.5 |
-| round 2 | 16/21 | **1.17σ** | **1.35σ** | 8.4 | [+1.5, −34.3, +6.1] | **+23.9** |
-| round 3 | 18/21 | 1.64σ | 2.15σ | 4.1 | [+3.0, −12.5, −13.7] | −2.8 |
-| round 4 | 15/21 | 1.59σ | 2.15σ | 4.7 | [+3.9, −12.7, −15.2] | −2.8 |
-| **3 + 4** | 33/42 | 1.61σ | 1.78σ | **3.8** | [+3.7, −12.1, −13.9] | −3.3 |
-
-Pairwise distance between rounds:
-
-| | t gap | rot gap |
+| | radar1 | radar2 |
 |---|---|---|
-| r1 vs r2 | 25.7 cm | 38.9° |
-| r1 vs r3 | 22.4 cm | 13.9° |
-| r2 vs r4 | 30.4 cm | 57.5° |
-| **r3 vs r4** | **1.8 cm** | **6.7°** |
+| poses / inliers | 46/54 (85%) | 33/42 (79%) |
+| residual / LOO | 1.29σ / 1.36σ | 1.61σ / 1.78σ |
+| condition number | 5.2 | **3.8** |
+| **split-half t gap** | **8.4 cm** | **12.0 cm** |
+| 1σ t X / Y / Z (cam, mm) | **19.3** / 40.9 / **8.7** | 37.5 / **36.4** / **10.1** |
+| bias X / Y / Z (mm) | +16.8 / −49.3 / +12.6 | −7.4 / +12.3 / +24.3 |
+| channel slope az / el | +0.99 / **+0.14** | +1.09 / **−0.07** |
+| dead axis points | **vertical** | **horizontal** |
 
-Rounds 3 and 4 were collected either side of the whole rig being raised, so their
-agreement also confirms the raise was rigid and did not disturb the extrinsic.
+Independent check: predicted radar1↔radar2 separation **26.3 cm** against a
+tape-measured **29.6 cm** (−3.3 cm), inside both the 37 mm 1σ and the accuracy of
+measuring between two phase centres by hand.
 
-**Round 2 is the cautionary one.** It has the best residual and the best
-leave-one-out of any set in this project, and it is 24 cm wrong on a quantity that
-can be measured with a tape. On this radar, residual and LOO do not detect the
-failure mode — the split-half test and the tape do.
+Each radar's dead axis is the other's good one, so the pair covers 3-D where
+neither does alone: best-of-pair is 19.3 / 36.4 / 8.7 mm.
 
-## The two tests that actually discriminate
+**Do not judge this radar by residual or LOO.** Round 2 had the best residual in the
+project and was 24 cm wrong. The trustworthy tests here are the split-half gap and
+the tape.
 
-**Split-half** — refit on two random halves and see how far apart they land:
-
-| set | split-half | cond |
-|---|---|---|
-| round 3 alone | 20.5 cm | 4.1 |
-| round 4 alone | 31.1 cm | 4.7 |
-| **rounds 3+4** | **9.3 cm** | **3.8** |
-| radar1 (54 poses) | 9.3 cm | 5.2 |
-
-radar2 is now as internally stable as radar1, from 42 poses rather than 54.
-
-**The tape** — radar1 and radar2 are 29.6 cm apart, measured. Each candidate
-extrinsic predicts that number, and it is the check that convicted round 2:
-
-| radar2 from | predicted separation | error |
-|---|---|---|
-| round 1 | 34.1 cm | +4.5 |
-| round 2 | 53.5 cm | **+23.9** |
-| round 3 | 26.8 cm | −2.8 |
-| round 4 | 26.8 cm | −2.8 |
-| rounds 3+4 | 26.3 cm | −3.3 |
-
-The remaining 3.3 cm sits inside both the 37 mm 1σ and the accuracy of hand-
-measuring between two phase centres. Note the tape is a **scalar**: it pins the
-distance, not the direction, so it can rule an answer out but cannot confirm one.
+## How it got here
 
 ## Finding 1 — radar2 is rolled ~90° from radar1, and that is worth keeping
 
