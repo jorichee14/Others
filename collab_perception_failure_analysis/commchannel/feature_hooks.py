@@ -63,7 +63,12 @@ def attach_bandwidth_hooks(model, bits, meter=None):
     name = type(model).__name__
     handles = []
 
-    if name in ('PointPillarFCooper', 'PointPillarV2VNet'):
+    # InCoP (jorichee14/incop_analysis) shares OpenCOOD's agent-stacked message layout:
+    # _run_fusion calls fusion_net(feature, record_len, affine_matrix[, ...]) with
+    # feature of shape (L, C, H, W), so the same interception applies to all five of its
+    # fusion methods — ours/CGRF, where2comm, cobevt, v2xvit, ermvp.
+    if name in ('PointPillarFCooper', 'PointPillarV2VNet',
+                'HeterModelBevfusionHighresIsaac'):
         def hook(module, args):
             feat = _quantize_rows(args[0], bits, meter)
             return (feat,) + tuple(args[1:])
