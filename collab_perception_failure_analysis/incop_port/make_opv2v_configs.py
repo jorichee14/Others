@@ -69,6 +69,34 @@ FUSION = {
     },
 }
 
+# DCG (density-conditioned gate). Lives at model.args.lidar_support_mask, NOT inside the
+# fusion block: the model does
+#   model_setting["encoder_args"].setdefault("lidar_support_mask", args.get(...", {}))
+# so omitting it silently yields {} -> gate off -> you get the DENSE CLC ABLATION rather
+# than CGRF. Only `ours` uses it.
+#
+# Q_k = clip(log(1 + D_k) / q95, 0, 1) is the continuous cue; M_k = 1[Q_k > 0] hard-filters
+# the encoder output before cooperative fusion, which is where CGRF's bandwidth saving
+# comes from.
+#
+# q95 IS DATASET-SPECIFIC. InCoP's 3.7377 (= log 15) was estimated on 512 evenly sampled
+# *indoor hospital* training sweeps. Outdoor OPV2V LiDAR density is a different
+# distribution entirely, so that constant must be re-estimated or the gate is
+# miscalibrated -- see --dcg-q95 and the README.
+DCG_HOSPITAL_Q95 = 3.737669618283368
+
+
+def dcg_block(q95):
+    return {
+        'enabled': True,
+        'mode': 'log_density',
+        'log_density_q95': q95,
+        'dilation_radius': 0,
+        'apply_to_feature': True,
+        'apply_stage': 'pre_cooperative_fusion',
+    }
+
+
 # CGRF decodes after fusion; the attention-style fusions reuse the shared head path.
 DECODER = {
     'decoder_args': {
@@ -243,7 +271,7 @@ def heter_block():
     }
 
 
-def fusion_config(method, root, head, epochs, batch, pretrained):
+def fusion_config(method, root, head, epochs, batch, pretrained, q95):
     cfg = base('opv2v_%s_lidar' % method, root, head, epochs, batch)
     cfg['fusion'] = {'core_method': 'intermediateheter', 'dataset': 'opv2v',
                      'args': {'proj_first': False, 'grid_conf': 'None',
@@ -260,6 +288,7 @@ def fusion_config(method, root, head, epochs, batch, pretrained):
          'fusion_method': method, method: dict(FUSION[method])}
     if method == 'ours':
         m.update({k: dict(v) for k, v in DECODER.items()})
+        m['lidar_support_mask'] = dcg_block(q95)
     m.update(head_args(head))
     cfg['model'] = {'core_method': 'heter_model_bevfusion_highres_isaac', 'args': m}
     return cfg
@@ -279,7 +308,12 @@ def main():
                     help='2 fits a 12 GB card at this range; raise if you have headroom')
     ap.add_argument('--pretrained', default='',
                     help='single-agent run dir, e.g. opencood/logs/opv2v_single_...')
+    ap.add_argument('--dcg-q95', type=float, default=None,
+                    help='95th percentile of log(1+D) over OPV2V train sweeps, for CGRF\'s '
+                         'density gate. Defaults to InCoP\'s indoor value with a warning.')
     args = ap.parse_args()
+
+    q95 = args.dcg_q95 if args.dcg_q95 is not None else DCG_HOSPITAL_Q95
 
     root = os.path.expanduser(args.opv2v_root)
     out = os.path.expanduser(args.out)
@@ -293,13 +327,22 @@ def main():
                              % (method, ', '.join(sorted(FUSION))))
         written.append(('%s.yaml' % method,
                         fusion_config(method, root, args.head, args.epochs,
-                                      args.batch_size, args.pretrained)))
+                                      args.batch_size, args.pretrained, q95)))
 
     for fname, cfg in written:
         path = os.path.join(out, fname)
         with open(path, 'w') as f:
             yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False)
         print('wrote %s' % path)
+
+    if 'ours' in args.methods and args.dcg_q95 is None:
+        print('\nWARNING: CGRF\'s density gate is using InCoP\'s INDOOR q95 = %.4f'
+              % DCG_HOSPITAL_Q95)
+        print('(= log 15, estimated on 512 hospital training sweeps). OPV2V LiDAR density')
+        print('is a different distribution, so this gate is miscalibrated until you pass')
+        print('--dcg-q95 <95th percentile of log(1+D) over sampled OPV2V train sweeps>.')
+        print('Too low: everything passes and CGRF degenerates toward dense CLC.')
+        print('Too high: the mask starves the fusion of partner evidence.')
 
     if not args.pretrained:
         print('\nNOTE: --pretrained was empty, so the fusion configs train their encoder')

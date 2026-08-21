@@ -56,6 +56,49 @@ Then follow the run order it prints.
 
 ---
 
+## CGRF's density gate must be re-estimated for OPV2V
+
+`ours` = **CGRF** (Complementarity-Guided Residual Fusion), InCoP's own method — see
+`incop_analysis/README.md` and the class `ComplementarityGuidedCLCFusion` in
+`opencood/models/fuse_modules/ours.py`. Two mechanisms:
+
+- **DCG**, a density-conditioned gate: `Q_k = clip(log(1 + D_k) / q95, 0, 1)` per BEV cell,
+  and `M_k = 1[Q_k > 0]` hard-filters the encoder output *before* cooperative fusion. This is
+  where CGRF's bandwidth saving comes from.
+- **CLC**, Complementary Local Correction: the ego feature is the prediction anchor and
+  partner features enter **only** as an additive local residual through directional Swin
+  cross-attention, with output-projection init gain 0.01 — so at initialisation the model is
+  effectively ego-only and learns a correction on top.
+
+Two porting traps:
+
+1. **`lidar_support_mask` lives at `model.args`, not inside the fusion block.** The model does
+   `encoder_args.setdefault("lidar_support_mask", args.get("lidar_support_mask", {}))`, so
+   omitting it silently gives `{}` → gate off → **you are running the dense-CLC ablation, not
+   CGRF**. The generator emits it for `ours` only. (This was wrong in the first version of the
+   generator and is fixed.)
+2. **`log_density_q95` is dataset-specific.** InCoP's `3.7377` (= log 15) was estimated on 512
+   evenly sampled *indoor hospital* sweeps. Outdoor OPV2V LiDAR density is a different
+   distribution, so the gate is miscalibrated until re-estimated: take the 95th percentile of
+   `log(1 + D)` over sampled OPV2V **train** sweeps and pass `--dcg-q95`. Too low and
+   everything passes, degenerating CGRF toward dense CLC; too high and the mask starves fusion
+   of partner evidence. The generator warns loudly when the default is used.
+
+### A prediction the sweep can test
+
+Because partner information can only *add* to an ego anchor, and the residual is initialised
+near zero, CGRF is **structurally floor-protective**: degrading a partner should shrink or
+misdirect the correction rather than corrupt the ego evidence. Compare F-Cooper, whose maxout
+discounts nothing and was worst under every content impairment in the parent study.
+
+So the pre-registerable expectation is that **CGRF resists crossing the ego-only floor, and
+its failure mode appears as lost gain rather than net harm.** Its specific vulnerability
+should be the impairments that corrupt the *gate* rather than the features: `M_k` is computed
+from the partner's own point density, so under pose error or staleness the mask is built on
+geometrically wrong data and passes cells that are no longer valid. That is the parent study's
+fusion-mechanism principle — each mechanism's weakness is the impairment that mimics evidence
+it was trained to trust — applied in advance.
+
 ## The real cost: training
 
 There are **no OPV2V checkpoints for CGRF or Where2comm anywhere** — not in
