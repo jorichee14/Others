@@ -1,34 +1,34 @@
 # radar3 — Ouster ↔ radar3, Arducam (2026-08-19)
 
-33 poses over two runs (12 + 21), solved with a **tape prior on the vertical only**.
+33 poses over two runs (12 + 21). **Data only — no priors of any kind.**
 Poses: `2026-08-19_ouster_radar3_poses.json`.
 
 ```bash
 # os_lidar -> radar3_link
 ros2 run tf2_ros static_transform_publisher \
-  0.0577 -0.1097 0.0717  0.00310 0.98794 0.00233 0.15480 \
+  0.042951 -0.107746 0.160631  0.002367 0.983971 0.000289 0.178315 \
   os_lidar radar3_link
 
 # composed: arducam_optical_frame -> radar3_link
 ros2 run tf2_ros static_transform_publisher \
-  0.011012 -0.117821 -0.168001  0.568811 0.556671 0.431578 -0.424632 \
+  0.011628 -0.207269 -0.156893  0.577560 0.568043 0.417338 -0.411802 \
   arducam_optical_frame radar3_link
 ```
 
 ```
-r3_t_xyz:="[0.0110,-0.1178,-0.1680]"  r3_quat_xyzw:="[0.5688,0.5567,0.4316,-0.4246]"
+r3_t_xyz:="[0.0116,-0.2073,-0.1569]"  r3_quat_xyzw:="[0.5776,0.5680,0.4173,-0.4118]"
 ```
 
 | | value |
 |---|---|
-| t (m), lidar frame | [+0.0577, −0.1097, +0.0717] · \|t\| 14.3 cm |
-| quat xyzw | [+0.00310, +0.98794, +0.00233, +0.15480] |
-| 1σ rot | 1.64 / 1.83 / 3.98 deg |
-| 1σ t | 11.9 / 28.1 / 19.0 mm |
-| residual / LOO | 1.29σ / 1.36σ |
+| t (m), lidar frame | [+0.042951, −0.107746, +0.160631] · \|t\| 19.8 cm |
+| quat xyzw | [+0.002367, +0.983971, +0.000289, +0.178315] |
+| 1σ rot | 1.54 / 2.31 / 3.93 deg |
+| 1σ t | 14.4 / 26.2 / 49.2 mm |
+| residual / LOO | 1.27σ / 1.36σ |
 | condition number | 6.1 |
-| inliers | 28/33 |
-| split-half t gap | 9.6 cm |
+| inliers | 28/33 (85%) |
+| split-half t gap | 15.0 cm |
 
 Mount: **inverted** — its +Z is 155° from world up, boresight pitched ~20° down.
 Behaviourally that makes it a radar1, not a radar2: good azimuth axis horizontal,
@@ -42,38 +42,46 @@ Z up   (ELEVATION, dead)-> [+0.35  0.00 -0.94]   vertical
 channels: az slope +0.91    el slope +0.10
 ```
 
-## Why the vertical came from a tape
+## An unresolved disagreement with the tape
 
-The free solve put radar3 **21.3 cm above the Arducam**; a tape said **11–12 cm**.
-That is 2.0σ on the one axis this radar cannot measure, so the disagreement was
-expected to land exactly there.
+The tape says radar3 sits **2 cm behind** the Arducam; the solve says **16.3 cm**.
+Vertical (11.5 vs 12.4 cm) and lateral (2.8 vs 1.2 cm) both agree — only depth does
+not, by 14 cm.
 
-The Arducam transform was cleared first, not assumed. It is 7.4 cm from the ZED
-left lens by the published transforms, and that was confirmed by tape. A 10 cm
-error in the Arducam's Z would have made that distance ~15.2 cm, so the Arducam is
-sound and the error is radar3's `t_z`.
+The Arducam transform was cleared twice: it is 7.4 cm from the ZED left lens and
+10–11 cm forward of the lidar, both confirmed by tape, and a 14 cm error in it
+would have made the first of those read ~12.9 cm. A radar range bias cannot
+explain it either — it would need ~140 mm, and the range fit shows −35 mm.
 
-Applying an 11.5 cm ±2 cm prior on the vertical alone:
+Forcing the depth costs 8 inliers; forcing depth **and** vertical together drops to
+17/33 and throws the lateral out to 28.6 cm against a measured ~2.8. So the tape
+and the data are incompatible rather than merely disagreeing, and no constraint
+reconciles them. **The extrinsic above therefore uses the data alone.**
 
-| | free | with the tape |
-|---|---|---|
-| residual | 1.27σ | 1.29σ |
-| LOO | 1.36σ | 1.36σ |
-| inliers | 28/33 | 28/33 |
-| **1σ t_z** | **49.2 mm** | **19.0 mm** |
+At 33 poses a chi-square test cannot rule the tape out (Δχ² ≈ 24, suggestive).
+At ~70 poses it becomes decisive (Δχ² ≈ 40). That is the way to settle it.
 
-Moving `t_z` by 9.4 cm cost **0.02σ of residual and nothing in LOO**. A wrong prior
-would have blown the fit up; this one did not, which says the data never had an
-opinion about that axis and the tape is pure added information. `t_x` and `t_y` were
-left free.
+## Which axes the data actually pins — all three radars
 
-It settles at 12.4 cm rather than 11.5 because the prior is soft; tighten it if the
-tape can be taken more precisely.
+Forcing each translation axis 14 cm off, on a **frozen inlier set** so the outlier
+rejection cannot shrink the sample and lower chi-square for the wrong reason:
 
-## Still owed
+| | x (fwd/back) | y (lateral) | z (vertical) |
+|---|---|---|---|
+| radar1 | 27 decisive | 50 decisive | **12 weak** |
+| radar2 | 36 decisive | **14 weak** | 20 weak |
+| radar3 | 68 decisive | 29 decisive | **8 FLOATS** |
 
-`radar1` has the identical geometry — dead axis vertical, `t_z` 1σ 40.9 mm, no tape
-applied. It predicts **16.9 cm below the lidar**. `radar2` is the control: its good
-axis *is* vertical, so its predicted **13.9 cm below the lidar** should hold with no
-prior at all. If radar1 is ~10 cm out and radar2 is not, the pattern is confirmed
-and radar1 gets the same one-line correction.
+>25 decisive · 9–25 weak · <9 the data cannot tell.
+
+Each radar's weak axis is exactly where its dead elevation channel points —
+vertical on radar1 and radar3, horizontal on radar2. **The covariance-derived 1σ
+understates the uncertainty on those axes; the split-half gap is the honest
+figure** (8.4 / 12.0 / 15.0 cm for radar1 / radar2 / radar3).
+
+## Status
+
+radar1 and radar2 are final. radar3 is usable and has the best residual and inlier
+rate of the three, but the weakest split-half and an unexplained 14 cm depth
+disagreement. ~35 more poses at a wider azimuth (69° → ~96°) would roughly halve
+its uncertainties and settle the depth question.

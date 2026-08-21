@@ -5,7 +5,7 @@
  "child_frame": "radar3_link",
  "lidar_name": "ouster",
  "radar_name": "radar3",
- "note": "T_lidar_radar3, two runs merged (12 + 21). Solved with a tape prior on the VERTICAL only (+-2 cm): radar3 is upside down, so its dead elevation axis is vertical and the free solve put t_z 9.4 cm too high. Applying the tape cost 0.02 sigma of residual and nothing in LOO, and halved the t_z uncertainty. x and y are data-only.",
+ "note": "T_lidar_radar3, two runs merged (12 + 21). Solved DATA ONLY, no priors. A tape measurement disagrees with the solved depth by 14 cm (2 cm vs 16.3 cm behind the arducam) while agreeing on vertical and lateral; forcing the depth costs 8 inliers and forcing depth plus vertical drops to 17/33, so the two are incompatible and the data is used as-is. ~70 poses would make a chi-square test decisive either way.",
  "params": {
   "sigma_range_m": 0.05,
   "sigma_az_deg": 3.0000000000000004,
