@@ -574,9 +574,15 @@ WHITE = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
 
 
 class RadarLidarCalib(Node):
-    def __init__(self):
+    def __init__(self, default_overrides=None):
         super().__init__('radar_lidar_calib')
-        dp = self.declare_parameter
+        # Profile presets (see radar_lidar_calib_arducam.py). They only change a
+        # DEFAULT, so anything given on the command line still wins — same shape
+        # radar_camera_calib.py uses.
+        self._defaults = dict(default_overrides or {})
+
+        def dp(name, val):
+            self.declare_parameter(name, self._defaults.get(name, val))
         # ── topics ──
         dp('lidar_topic', '/ouster/points')
         dp('radar_topic', '/radar1/radar/points_all')
@@ -1821,9 +1827,9 @@ class RadarLidarCalib(Node):
         self.pub_mk.publish(arr)
 
 
-def main():
+def main(default_overrides=None):
     rclpy.init()
-    node = RadarLidarCalib()
+    node = RadarLidarCalib(default_overrides)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
