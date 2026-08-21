@@ -132,6 +132,15 @@ The camera's intrinsics are used ONLY to draw the image overlay. An
 uncalibrated camera still composes a correct `T_cam_radar` — run it with
 `show_image_overlay:=false` and verify in RViz, which needs no intrinsics.
 
+`rectify_image:=true` for a RAW feed (an Arducam publishes `/image_raw` with real
+lens distortion): every frame is undistorted from `camera_info`, and projection
+then uses the NEW K with zero distortion. Projecting onto a raw image without
+this is not wrong in itself — projectPoints re-applies D — but the two conventions
+disagree by tens of pixels near the edges, so the overlay must match whichever
+image the rest of the pipeline consumes. Auto-disables with a log line if D is
+already ~0. `rectify_alpha`: 0 crops to valid pixels, 1 keeps the full FoV with
+black borders.
+
 Structure: [A] cloud tools · [B] apex locator · [C] node.
 """
 import json
@@ -690,7 +699,15 @@ class RadarLidarCalib(Node):
         dp('camera_frame', 'zed_left_camera_optical_frame')
         dp('image_topic', '/zed/zed_node/left/image_rect_color')
         dp('info_topic', '/zed/zed_node/left/camera_info')
-        dp('show_image_overlay', True)     # build/publish the ZED overlay
+        dp('show_image_overlay', True)     # build/publish the camera overlay
+        # RAW feeds (an Arducam publishes /image_raw with real lens distortion)
+        # need undistorting before the overlay means anything. Projection would
+        # otherwise be correct only because projectPoints re-applies D — which is
+        # right on a raw image but wrong the moment anything downstream consumes a
+        # rectified one, and the two disagree by tens of pixels at the edges.
+        # After rectification the node projects with the new K and ZERO distortion.
+        dp('rectify_image', False)
+        dp('rectify_alpha', 0.0)           # 0 = crop to valid pixels, 1 = keep full FoV
         dp('show_window', True)            # ALSO pop a native cv2 window for it
         dp('debug_scale', 1.0)             # shrink the published/shown overlay
         dp('show_coverage_hud', True)      # overlay the six observability bars
@@ -814,6 +831,9 @@ class RadarLidarCalib(Node):
 
         # optional image overlay (verification only)
         self.K = self.D = self.img = None
+        self.map1 = self.map2 = None
+        self.rectify = bool(g('rectify_image'))
+        self.rectify_alpha = float(g('rectify_alpha'))
         self.bridge = CvBridge() if _HAVE_CV else None
         self.overlay_on = bool(g('show_image_overlay')) and _HAVE_CV
         self.show_window = bool(g('show_window'))
@@ -821,9 +841,7 @@ class RadarLidarCalib(Node):
         self.show_cov = bool(g('show_coverage_hud'))
         self._rot_sig_deg = self._t_sig_mm = None  # last solve's per-DOF 1s, for the HUD
         if self.overlay_on:
-            self.create_subscription(Image, g('image_topic'),
-                                     lambda m: setattr(self, 'img',
-                                                       self.bridge.imgmsg_to_cv2(m, 'bgr8')), qs)
+            self.create_subscription(Image, g('image_topic'), self._image, qs)
             self.create_subscription(CameraInfo, g('info_topic'), self._info, qs)
             self.pub_img = self.create_publisher(Image, '~/debug_image', 2)
             self.create_timer(0.05, self._overlay)
@@ -1396,10 +1414,40 @@ class RadarLidarCalib(Node):
         lidar↔camera calibration can be recomposed without recollecting radar."""
         return self.R_cl @ R_lr, self.R_cl @ t_lr + self.t_cl
 
+    def _image(self, m):
+        img = self.bridge.imgmsg_to_cv2(m, 'bgr8')
+        if self.map1 is not None:
+            img = cv2.remap(img, self.map1, self.map2, cv2.INTER_LINEAR)
+        self.img = img
+
     def _info(self, m):
-        if self.K is None:
-            self.K = np.array(m.k).reshape(3, 3)
-            self.D = np.array(m.d) if len(m.d) else np.zeros(5)
+        """Latch the intrinsics once, and build the undistort maps if asked.
+
+        After rectification every later projection uses the NEW K with zero
+        distortion, so the overlay and anything downstream that consumes a
+        rectified image agree. None of this touches the solve — it is the
+        overlay only."""
+        if self.K is not None:
+            return
+        K = np.array(m.k).reshape(3, 3)
+        D = np.array(m.d) if len(m.d) else np.zeros(5)
+        w, h = int(m.width), int(m.height)
+        if self.rectify and w and h and np.any(np.abs(D) > 1e-9):
+            newK, _ = cv2.getOptimalNewCameraMatrix(K, D, (w, h), self.rectify_alpha, (w, h))
+            self.map1, self.map2 = cv2.initUndistortRectifyMap(
+                K, D, None, newK, (w, h), cv2.CV_16SC2)
+            self.K, self.D = newK, np.zeros(5)
+            self.get_logger().info(
+                f'intrinsics locked ({w}x{h}) — rectifying in-node '
+                f'(alpha={self.rectify_alpha}, |D| was {np.abs(D).max():.3f})')
+        else:
+            self.K, self.D = K, D
+            if self.rectify:
+                self.get_logger().info(
+                    f'intrinsics locked ({w}x{h}) — rectify requested but D is ~0, '
+                    f'the feed is already rectified')
+            else:
+                self.get_logger().info(f'intrinsics locked ({w}x{h})')
 
     def _proj(self, pts_lidar):
         """lidar-frame points → pixels, via T_cam_lidar and the ZED intrinsics."""
