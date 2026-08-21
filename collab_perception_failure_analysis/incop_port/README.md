@@ -1,5 +1,18 @@
 # InCoP → OPV2V port: running CGRF and Where2comm through the impairment matrix
 
+> ## Two arms, and the indoor one is much cheaper
+>
+> **Arm A — InCoP's own indoor benchmark, under impairment. No training.** Uses the
+> checkpoints InCoP was already trained with. See [§ Arm A](#arm-a--incops-own-benchmark-under-impairment)
+> below and [`configs/matrix_incop.yaml`](../configs/matrix_incop.yaml).
+> **Do this one first**: it needs no download and no GPU-days, and it tests the sharpest
+> claim the parent study left open.
+>
+> **Arm B — CGRF and Where2comm on OPV2V.** Needs the OPV2V train+validate splits and
+> ~2–3 days of training. The rest of this document.
+
+---
+
 **Goal.** Put two more algorithms through the same impairment sweep as the seven baselines:
 **CGRF** (`ours` — Complementarity-Guided Residual Fusion, from
 [`jorichee14/incop_analysis`](https://github.com/jorichee14/incop_analysis)) and
@@ -53,6 +66,92 @@ Plus, on the parent study side, `commchannel/feature_hooks.py` now registers
 ```
 
 Then follow the run order it prints.
+
+---
+
+## Arm A — InCoP's own benchmark, under impairment
+
+**Cost: no download, no training.** It reuses the checkpoints InCoP was trained with.
+Everything else is already written: [`commchannel/incop_channel.py`](../commchannel/incop_channel.py)
+and [`configs/matrix_incop.yaml`](../configs/matrix_incop.yaml).
+
+### Correction to an earlier claim in this file
+
+I previously wrote that `commchannel` attaches to InCoP unchanged because
+`retrieve_base_data` is the same hook. **The hook is the same; the body is not.**
+`channel.py` reimplements OpenCOOD's loader so it can substitute a past timestamp, and
+that reimplementation calls `dataset.reform_param` and `dataset.calc_dist_to_ego` —
+**neither exists in the HEAL lineage InCoP is built on.** They are DerrickXuNu-OpenCOOD
+constructs that HEAL removed; pose transforms are computed in the fusion dataset from
+`lidar_pose` / `lidar_pose_clean` instead. `CommChannel` would fail on the first frame.
+
+`IncopChannel` is the port. Its one design decision is to stop reimplementing the loader
+and instead **call it twice and splice**:
+
+```python
+past = orig_retrieve(idx - delay)   # sensing: lidar, cameras, reported pose
+cur  = orig_retrieve(idx)           # ground truth: params['vehicles']
+```
+
+That buys correctness for free — HEAL's json-vs-yaml params, hdf5-vs-png cameras, depth,
+`add_data_extension`, and InCoP's camera-extrinsic normalisation and image resizing all
+happen inside the dataset's own code path. A reimplementation would have silently skipped
+the camera normalisation and produced subtly wrong geometry under **every** impairment,
+which is exactly the class of error that makes a sweep unattributable.
+
+Pose noise is also simpler and more correct here: HEAL derives `transformation_matrix`
+from `lidar_pose` and `transformation_matrix_clean` from `lidar_pose_clean`, so perturbing
+`lidar_pose` alone produces misalignment with GT still anchored. No COM_RANGE clamp is
+needed — InCoP's 50 m `comm_range` dwarfs its ~22 m scene, so no perturbation can flip
+connectivity the way it did on OPV2V.
+
+### What the matrix keeps and what it rescales
+
+**Verified: InCoP's IsaacSim data is 10 Hz** — `OS0_REV7_128ch10hz512res` with
+`rotation_rate_hz = 10.0` (`IsaacSimGenScript/robot.py:437`), video export at fps 10.
+OPV2V is also 10 Hz. **One frame = 100 ms in both**, so every frame-indexed level
+transfers with identical physical meaning: latency, staleness, loss rates, bandwidth
+bits, and swap probability are all unchanged.
+
+Only two axes needed changing:
+
+- **Pose**, rescaled by **object size, not scene extent** — pose error breaks detection
+  when the displacement is large relative to the object being localised at the IoU
+  threshold. OPV2V's 3.9 m vehicle anchor vs InCoP's 1.0 m anchor gives ~4×, so
+  `[0.2, 0.4, 0.8, 1.6, 3.2]` → `[0.05, 0.1, 0.2, 0.4, 0.8]` m. Independent check that
+  this is right: **InCoP's own `noise_setting` uses `pos_std: 0.2`, landing exactly on
+  level L2.** Yaw is anchored the same way — their `rot_std: 2.0` at 0.2 m gives
+  10.0 deg/m.
+- **Ghosts**, counts kept but box geometry rescaled in code (a 4.5 m sedan is not a
+  plausible false positive among chairs and trash cans). Report ghosts-per-true-object
+  alongside the raw level, since indoor scenes hold far fewer objects.
+
+`loss_blocked` is **not ported** — `BlockageTable` assumes OPV2V vehicle annotations and
+outdoor chord geometry, and it was a negative result on OPV2V anyway. `IncopChannel`
+raises on it deliberately rather than silently doing something wrong.
+
+### The prediction to pre-register before running
+
+On OPV2V, latency drove **all seven** methods below the ego-only floor at 100 ms, and the
+damage was **displacement, not information loss** (ΔAP@0.5 vs ΔAP@0.7 differed 4–9×).
+Displacement scales with object speed. Indoor robots and indoor objects move at ~1 m/s or
+not at all, against 15–20 m/s on the highway.
+
+**So the floor-crossing point should move by close to an order of magnitude.** If it does
+not, latency damage is *not* displacement and the OPV2V interpretation is wrong.
+
+Either outcome is publishable, which is the property that made the parent study's Phase 6
+cost two days instead of two months. Fix the threshold in writing first.
+
+### Still to build for Arm A
+
+1. **Inertness gate on this stack** — mandatory, same as everywhere else. With the channel
+   disabled, `IncopChannel` must return batches bitwise-identical to the stock loader.
+   The splice design makes this likely to pass on the first try (delay 0 returns `cur`
+   verbatim), but likely is not verified.
+2. **A sweep runner** — a variant of `run_phase3.py` importing against the InCoP checkout,
+   driving `inference_isaac.py`'s evaluation path, with the clean-GT parallel dataset.
+3. **The floor** — `--fusion_method no` on the InCoP test split, per scene.
 
 ---
 
