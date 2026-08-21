@@ -106,7 +106,9 @@ def prior_rows(x, t_prior, t_sigma, rot_prior, rot_sigma):
     radar does constrain, the measurement rows dominate these."""
     rows = []
     if t_prior is not None:
-        rows.append((x[3:6] - t_prior) / t_sigma)
+        # t_sigma may be a 3-vector: you usually know ONE axis by tape and not the
+        # others, and a scalar would force you to over- or under-claim the rest.
+        rows.append((x[3:6] - np.asarray(t_prior, float)) / np.asarray(t_sigma, float))
     if rot_prior is not None:
         dR = Rot.from_rotvec(x[:3]).as_matrix() @ rot_prior.T
         rows.append(Rot.from_matrix(dR).as_rotvec() / rot_sigma)
