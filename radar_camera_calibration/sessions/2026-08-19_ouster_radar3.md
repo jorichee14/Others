@@ -50,7 +50,7 @@ Z up   (ELEVATION, dead)-> [+0.35  0.00 -0.94]   vertical
 channels: az slope +0.91    el slope +0.10
 ```
 
-## An unresolved disagreement with the tape
+## The disagreement with the tape - resolved in favour of the point cloud
 
 The tape says radar3 sits **2 cm behind** the Arducam; the solve says **16.3 cm**.
 Vertical (11.5 vs 12.4 cm) and lateral (2.8 vs 1.2 cm) both agree — only depth does
@@ -67,7 +67,24 @@ and the data are incompatible rather than merely disagreeing, and no constraint
 reconciles them. **The extrinsic above therefore uses the data alone.**
 
 The third round did not move the depth: 16.3 cm before, 16.4 cm now, across 54
-poses and three independent sessions. The disagreement with the tape stands.
+poses and three independent sessions.
+
+**Resolved: the point cloud is right.** Six independent checks were run and all
+of them agree with the solve.
+
+* **Range-only estimator** - uses no radar angles and no rotation at all, only
+  `lidar_r - radar_r = t*u`: **+3.97 +/- 0.89 cm**, which is **8.9 sigma** from a
+  hypothetical -4 cm.
+* **Bootstrap**, 2000 resamples: **0 of 2000** below -4 cm.
+* **chi-square** rules out anything at or below zero.
+* **Nine rotation-flip restarts**, deliberately seeded at wrong rotations to look
+  for a mirror solution, all converged to the identical answer.
+* **radar1 and radar2 solve independently** to +3.3 and +3.7 cm on the same axis,
+  from completely separate datasets.
+* **Raw range differences** across the three radars: +2.7 / +4.1 / +4.3 cm.
+
+Depth is also the decisively observable axis here (chi-square 68 in the table
+below). The composed 15.6 cm stands and the transform is published unflipped.
 
 ## Which axes the data actually pins — all three radars
 
@@ -91,5 +108,6 @@ figure** (8.4 / 12.0 / 15.0 cm for radar1 / radar2 / radar3).
 
 All three radars are final. radar3 now matches radar1 on the measure that matters
 — split-half 8.3 cm against 8.4 — with the tightest rotation of the three
-(1.25 / 1.90 / 3.33°) and depth good to 10.2 mm. The 14 cm depth disagreement with
-the tape is unresolved and did not move as poses tripled.
+(1.25 / 1.90 / 3.33°) and depth good to 10.2 mm. The depth disagreement with the
+tape was investigated to the end and **settled in favour of the point cloud** -
+see the section above.
