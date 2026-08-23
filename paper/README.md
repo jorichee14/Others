@@ -1,6 +1,6 @@
-# CoPSC — IEEE Conference Paper
+# SCOOPS — IEEE Conference Paper
 
-IEEE conference paper for **CoPSC**, a multi-agent dataset for cooperative
+IEEE conference paper for **SCOOPS** (Sensing, Communication, cOOperative Perception, and SLAM), a holistic multi-agent dataset for cooperative
 perception, sensing, and communication. Based on the official IEEEtran
 template (version 6/27/2024), structured to follow `paper_outline.docx`.
 

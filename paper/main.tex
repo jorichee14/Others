@@ -26,7 +26,7 @@
 
 % CRITICAL: Do not use symbols, special characters, footnotes, or math in
 % the paper title or abstract.
-\title{CoPSC: A Multi-Agent Dataset for Cooperative Perception, Sensing, and Communication\\
+\title{SCOOPS: A Holistic Multi-Agent Dataset for Sensing, Communication, Cooperative Perception, and SLAM\\
 % Delete the \thanks line if there is no funding to acknowledge.
 \thanks{Identify applicable funding agency here. If none, delete this.}
 }
@@ -51,8 +51,8 @@ jorich.ee14@nycu.edu.tw}
 \begin{abstract}
 Cooperative robotic systems must jointly solve perception, sensing, and
 communication, yet existing datasets capture at most two of these layers at
-once. We present CoPSC, a multi-agent, multi-view, multi-sensor dataset that
-spans all three: synchronized camera, radar, LiDAR, and RTK-GNSS sensing;
+once. We present SCOOPS, a holistic multi-agent, multi-view, multi-sensor
+dataset that spans all three: synchronized camera, radar, LiDAR, and RTK-GNSS sensing;
 cooperative perception annotations; and measured, replayable wireless channel
 traces. Each platform is spatially calibrated and temporally aligned, enabling
 tasks across single-agent and collaborative scenarios and modalities. We
@@ -74,7 +74,7 @@ sensing and communication, dataset, benchmark
 \section{Introduction}
 \label{sec:introduction}
 % Goal (from outline): establish that cooperative robotics needs all three
-% layers jointly, no dataset provides that, and CoPSC does.
+% layers jointly, no dataset provides that, and SCOOPS does.
 Cooperative robotic systems---fleets of vehicles, drone swarms, and
 multi-robot teams---depend on three tightly coupled layers: \emph{sensing}
 for localization and mapping, \emph{perception} for scene understanding, and
@@ -95,9 +95,11 @@ a real, lossy channel erode cooperative perception gains? which modality
 localizes best under communication constraints?---cannot be answered with
 any single existing dataset.
 
-We close this gap with \textbf{CoPSC}, a multi-agent, multi-view,
-multi-sensor dataset that jointly captures all three layers plus dense
-reconstruction supervision. The main contributions of this paper are:
+We close this gap with \textbf{SCOOPS} (\textbf{S}ensing,
+\textbf{C}ommunication, c\textbf{OO}perative \textbf{P}erception, and
+\textbf{S}LAM), a holistic multi-agent, multi-view, multi-sensor dataset
+that jointly captures all three layers plus dense reconstruction
+supervision. The main contributions of this paper are:
 \begin{itemize}
     \item \textbf{A tri-layer dataset.} Synchronized camera, radar, LiDAR,
     and RTK-GNSS streams from multiple spatially calibrated and temporally
@@ -161,15 +163,15 @@ single-agent imagery. They provide no multi-agent configuration and no
 communication dimension, so cooperative reconstruction---where partial
 observations must be fused across a constrained link---cannot be studied.
 
-\subsection{Positioning of CoPSC}
+\subsection{Positioning of SCOOPS}
 Table~\ref{tab:comparison} summarizes the landscape. Each prior family
-covers at most two of the three layers; CoPSC is, to our knowledge, the
+covers at most two of the three layers; SCOOPS is, to our knowledge, the
 only dataset spanning synchronized multi-agent sensing, cooperative
 perception labels, and measured communication, together with dense
 reconstruction supervision.
 
 \begin{table}[htbp]
-\caption{Comparison of CoPSC With Existing Datasets}
+\caption{Comparison of SCOOPS With Existing Datasets}
 \begin{center}
 \begin{tabular}{lcccc}
 \toprule
@@ -181,7 +183,7 @@ OPV2V \cite{opv2v}                 & \cmark & \cmark & \xmark & \xmark \\
 DAIR-V2X \cite{dairv2x}            & \cmark & \cmark & \xmark & \xmark \\
 DeepSense 6G \cite{deepsense6g}    & \xmark & \xmark & \cmark & \xmark \\
 ScanNet \cite{scannet}             & \xmark & \cmark & \xmark & \cmark \\
-\textbf{CoPSC (ours)}              & \cmark & \cmark & \cmark & \cmark \\
+\textbf{SCOOPS (ours)}             & \cmark & \cmark & \cmark & \cmark \\
 \bottomrule
 \end{tabular}
 \label{tab:comparison}
@@ -189,9 +191,9 @@ ScanNet \cite{scannet}             & \xmark & \cmark & \xmark & \cmark \\
 \end{table}
 
 %=======================================================================
-\section{The CoPSC Dataset}
+\section{The SCOOPS Dataset}
 \label{sec:dataset}
-The CoPSC system focuses on bridging the gap between sensing and
+The SCOOPS system focuses on bridging the gap between sensing and
 communication for SLAM and perception tasks. Each platform is spatially
 calibrated and temporally aligned to provide multi-agent, multi-view,
 multi-sensor information, enabling a wide range of tasks across single-agent
@@ -360,7 +362,7 @@ anonymization of captured people and vehicles.}
 %=======================================================================
 \section{Conclusion and Future Work}
 \label{sec:conclusion}
-We presented CoPSC, a multi-agent dataset that jointly captures
+We presented SCOOPS, a holistic multi-agent dataset that jointly captures
 synchronized sensing, cooperative perception labels, and measured
 communication, with dense reconstruction supervision and benchmarks across
 the three layers. \todo{One sentence of headline findings.} Future work
