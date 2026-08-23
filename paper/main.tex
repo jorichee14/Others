@@ -255,9 +255,17 @@ is Y cm.''}
 
 \subsection{Environments}
 % Indoor/outdoor sites chosen for viewpoint, appearance, and radio diversity.
+% Pattern (M2DGR \cite{m2dgr}): keep sensing/calibration sections unified;
+% express the indoor/outdoor split via (a) a sequence-inventory table with a
+% per-sequence ground-truth-source column and (b) per-environment GT
+% paragraphs in Sec.~\ref{sec:groundtruth}. Indoor-outdoor *transition*
+% sequences are worth capturing as first-class scenarios: for SCOOPS the
+% radio channel also changes character at the boundary (LoS to NLoS).
 \todo{Describe the indoor and outdoor sites and why they were chosen:
 viewpoint diversity, appearance diversity, and radio-propagation diversity
-(LoS/NLoS, multipath). Add a site-overview figure.}
+(LoS/NLoS, multipath). Add a site-overview figure and a sequence-inventory
+table (scenario, condition, duration, GT source), following M2DGR
+\cite{m2dgr}.}
 
 \subsection{Collection Protocol}
 \todo{Describe trajectories, agent roles, number of runs per site, operator
@@ -274,6 +282,10 @@ annotated instances.}
 \label{sec:groundtruth}
 
 \subsection{Pose Ground Truth}
+% Structure as per-environment paragraphs with one accuracy number each,
+% as in M2DGR \cite{m2dgr} (mocap indoors, laser tracker in halls, RTK/INS
+% outdoors). If indoor GT covers only parts of a trajectory, state which
+% sequences have full vs. partial GT, following TUM VI \cite{tumvi}.
 \todo{Report per-environment pose ground truth source (RTK-GNSS outdoors,
 motion capture / map-based indoors?) and its accuracy.}
 
