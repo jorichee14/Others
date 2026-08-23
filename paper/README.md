@@ -1,6 +1,13 @@
-# IEEE Conference Paper
+# CoPSC — IEEE Conference Paper
 
-IEEE conference paper based on the official IEEEtran template (version 6/27/2024).
+IEEE conference paper for **CoPSC**, a multi-agent dataset for cooperative
+perception, sensing, and communication. Based on the official IEEEtran
+template (version 6/27/2024), structured to follow `paper_outline.docx`.
+
+Placeholders are marked in red with `\todo{...}` in the PDF — search for
+`\todo` in `main.tex`; none may remain at submission. Bibliography entries
+were filled in from memory as starting points — **verify every entry**
+against the actual publication.
 
 ## Files
 

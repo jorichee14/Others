@@ -1,47 +1,122 @@
-% Add your references here and cite them with \cite{key}.
-% Entry types you will most often need: @inproceedings (conference),
-% @article (journal), @misc (arXiv, websites, datasets).
-% Example entries below are from the IEEE template -- replace them.
+% References for the CoPSC paper. Cite with \cite{key}.
+% NOTE: entries below were filled in from memory as starting points for the
+% outline's "find papers" items -- VERIFY each one (authors, venue, year,
+% pages) against the actual publication before submission.
 
-@article{b1,
-  author  = {G. Eason and B. Noble and I. N. Sneddon},
-  title   = {On certain integrals of {Lipschitz-Hankel} type involving products of {Bessel} functions},
-  journal = {Philosophical Transactions of the Royal Society of London. Series A},
-  volume  = {247},
-  pages   = {529--551},
-  month   = apr,
-  year    = {1955}
+% ---------- Collaborative SLAM (sensing-centric) ----------
+
+@article{s3e,
+  author  = {D. Feng and Y. Qi and S. Zhong and Z. Chen and Q. Chen and H. Chen and J. Wu and J. Ma},
+  title   = {{S3E}: A Multi-Robot Multimodal Dataset for Collaborative {SLAM}},
+  journal = {IEEE Robotics and Automation Letters},
+  volume  = {9},
+  number  = {12},
+  pages   = {11401--11408},
+  year    = {2024}
 }
 
-@book{b2,
-  author    = {J. Clerk Maxwell},
-  title     = {A Treatise on Electricity and Magnetism},
-  edition   = {3rd},
-  volume    = {2},
-  address   = {Oxford},
-  publisher = {Clarendon},
-  year      = {1892},
-  pages     = {68--73}
+@article{kimeramulti,
+  author  = {Y. Tian and Y. Chang and F. Herrera Arias and C. Nieto-Granda and J. P. How and L. Carlone},
+  title   = {Kimera-Multi: Robust, Distributed, Dense Metric-Semantic {SLAM} for Multi-Robot Systems},
+  journal = {IEEE Transactions on Robotics},
+  volume  = {38},
+  number  = {4},
+  pages   = {2022--2038},
+  year    = {2022}
 }
 
-@incollection{b3,
-  author    = {I. S. Jacobs and C. P. Bean},
-  title     = {Fine particles, thin films and exchange anisotropy},
-  booktitle = {Magnetism},
-  volume    = {III},
-  editor    = {G. T. Rado and H. Suhl},
-  address   = {New York},
-  publisher = {Academic},
-  year      = {1963},
-  pages     = {271--350}
+% ---------- Cooperative perception (perception-centric) ----------
+
+@inproceedings{opv2v,
+  author    = {R. Xu and H. Xiang and X. Xia and X. Han and J. Li and J. Ma},
+  title     = {{OPV2V}: An Open Benchmark Dataset and Fusion Pipeline for Perception with Vehicle-to-Vehicle Communication},
+  booktitle = {Proc. IEEE Int. Conf. Robotics and Automation (ICRA)},
+  pages     = {2583--2589},
+  year      = {2022}
 }
 
-@misc{b8,
-  author        = {D. P. Kingma and M. Welling},
-  title         = {Auto-encoding variational {Bayes}},
-  year          = {2013},
-  eprint        = {1312.6114},
-  archivePrefix = {arXiv},
-  howpublished  = {arXiv:1312.6114},
-  url           = {https://arxiv.org/abs/1312.6114}
+@inproceedings{dairv2x,
+  author    = {H. Yu and Y. Luo and M. Shu and Y. Huo and Z. Yang and Y. Shi and Z. Guo and H. Li and X. Hu and J. Yuan and Z. Nie},
+  title     = {{DAIR-V2X}: A Large-Scale Dataset for Vehicle-Infrastructure Cooperative {3D} Object Detection},
+  booktitle = {Proc. IEEE/CVF Conf. Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {21361--21370},
+  year      = {2022}
+}
+
+@inproceedings{v2v4real,
+  author    = {R. Xu and X. Xia and J. Li and H. Li and S. Zhang and Z. Tu and Z. Meng and H. Xiang and X. Dong and R. Song and H. Yu and B. Zhou and J. Ma},
+  title     = {{V2V4Real}: A Real-World Large-Scale Dataset for Vehicle-to-Vehicle Cooperative Perception},
+  booktitle = {Proc. IEEE/CVF Conf. Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {13712--13722},
+  year      = {2023}
+}
+
+@inproceedings{where2comm,
+  author    = {Y. Hu and S. Fang and Z. Lei and Y. Zhong and S. Chen},
+  title     = {Where2comm: Communication-Efficient Collaborative Perception via Spatial Confidence Maps},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2022}
+}
+
+% ---------- Joint sensing-communication (communication-centric) ----------
+
+@article{deepsense6g,
+  author  = {A. Alkhateeb and G. Charan and T. Osman and A. Hredzak and J. Morais and U. Demirhan and N. Srinivas},
+  title   = {{DeepSense 6G}: A Large-Scale Real-World Multi-Modal Sensing and Communication Dataset},
+  journal = {IEEE Communications Magazine},
+  volume  = {61},
+  number  = {9},
+  pages   = {122--128},
+  year    = {2023}
+}
+
+% ---------- 3D reconstruction benchmarks ----------
+
+@inproceedings{scannet,
+  author    = {A. Dai and A. X. Chang and M. Savva and M. Halber and T. Funkhouser and M. Nie{\ss}ner},
+  title     = {{ScanNet}: Richly-Annotated {3D} Reconstructions of Indoor Scenes},
+  booktitle = {Proc. IEEE Conf. Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {5828--5839},
+  year      = {2017}
+}
+
+@article{tanksandtemples,
+  author  = {A. Knapitsch and J. Park and Q.-Y. Zhou and V. Koltun},
+  title   = {Tanks and Temples: Benchmarking Large-Scale Scene Reconstruction},
+  journal = {ACM Transactions on Graphics},
+  volume  = {36},
+  number  = {4},
+  pages   = {78:1--78:13},
+  year    = {2017}
+}
+
+% ---------- Tools / ground truth ----------
+
+@article{glim,
+  author  = {K. Koide and M. Yokozuka and S. Oishi and A. Banno},
+  title   = {{GLIM}: {3D} Range-Inertial Localization and Mapping with {GPU}-Accelerated Scan Matching Factors},
+  journal = {Robotics and Autonomous Systems},
+  volume  = {179},
+  pages   = {104750},
+  year    = {2024}
+}
+
+% ---------- General driving datasets (optional context) ----------
+
+@article{kitti,
+  author  = {A. Geiger and P. Lenz and C. Stiller and R. Urtasun},
+  title   = {Vision Meets Robotics: The {KITTI} Dataset},
+  journal = {The International Journal of Robotics Research},
+  volume  = {32},
+  number  = {11},
+  pages   = {1231--1237},
+  year    = {2013}
+}
+
+@inproceedings{nuscenes,
+  author    = {H. Caesar and V. Bankiti and A. H. Lang and S. Vora and V. E. Liong and Q. Xu and A. Krishnan and Y. Pan and G. Baldan and O. Beijbom},
+  title     = {nu{S}cenes: A Multimodal Dataset for Autonomous Driving},
+  booktitle = {Proc. IEEE/CVF Conf. Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {11621--11631},
+  year      = {2020}
 }

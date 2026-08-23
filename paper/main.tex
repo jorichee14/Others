@@ -16,11 +16,17 @@
 
 \graphicspath{{figures/}}
 
+% Red TODO markers -- search for \todo before submission; none may remain.
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+% Checkmark / dash for the comparison table
+\newcommand{\cmark}{$\checkmark$}
+\newcommand{\xmark}{--}
+
 \begin{document}
 
 % CRITICAL: Do not use symbols, special characters, footnotes, or math in
 % the paper title or abstract.
-\title{Paper Title Goes Here\\
+\title{CoPSC: A Multi-Agent Dataset for Cooperative Perception, Sensing, and Communication\\
 % Delete the \thanks line if there is no funding to acknowledge.
 \thanks{Identify applicable funding agency here. If none, delete this.}
 }
@@ -43,88 +49,328 @@ jorich.ee14@nycu.edu.tw}
 \maketitle
 
 \begin{abstract}
-One paragraph, roughly 150--250 words: the problem you address, why it
-matters, what you propose, how you evaluated it, and the headline result
-(with a number if possible).
+Cooperative robotic systems must jointly solve perception, sensing, and
+communication, yet existing datasets capture at most two of these layers at
+once. We present CoPSC, a multi-agent, multi-view, multi-sensor dataset that
+spans all three: synchronized camera, radar, LiDAR, and RTK-GNSS sensing;
+cooperative perception annotations; and measured, replayable wireless channel
+traces. Each platform is spatially calibrated and temporally aligned, enabling
+tasks across single-agent and collaborative scenarios and modalities. We
+provide ground-truth poses, TSDF reconstruction supervision, RSSI channel
+traces, and object annotations, together with benchmarks for cooperative
+perception under clean and actual channels, point cloud reconstruction, and
+cross-modal localization. \todo{One sentence with the headline result, e.g.
+``Cooperative perception improves mAP by X points over single-agent, and the
+logged channel reduces this gain by Y.''} The dataset and development kit are
+publicly available at \todo{URL/DOI}.
 \end{abstract}
 
 \begin{IEEEkeywords}
-keyword one, keyword two, keyword three, keyword four
+multi-agent systems, cooperative perception, collaborative SLAM, integrated
+sensing and communication, dataset, benchmark
 \end{IEEEkeywords}
 
+%=======================================================================
 \section{Introduction}
 \label{sec:introduction}
-% Suggested flow: (1) context and motivation, (2) the gap or problem in
-% existing approaches, (3) your idea in one or two sentences, (4) list of
-% contributions, (5) optional roadmap of the paper.
-Motivate the problem and state the gap your work fills.
+% Goal (from outline): establish that cooperative robotics needs all three
+% layers jointly, no dataset provides that, and CoPSC does.
+Cooperative robotic systems---fleets of vehicles, drone swarms, and
+multi-robot teams---depend on three tightly coupled layers: \emph{sensing}
+for localization and mapping, \emph{perception} for scene understanding, and
+\emph{communication} for sharing information between agents. Progress on any
+one layer in isolation does not transfer to deployed systems, because the
+layers interact: perception quality depends on what the channel can deliver,
+and localization accuracy bounds how observations from different agents can
+be fused. \todo{Add one or two motivating application sentences.}
 
-The main contributions of this paper are:
+Existing datasets, however, cover these layers only partially.
+Collaborative SLAM datasets provide rich synchronized sensing but treat
+communication implicitly \cite{s3e,kimeramulti}; cooperative perception
+benchmarks provide labels but idealize or simulate the channel
+\cite{opv2v,dairv2x,v2v4real}; and joint sensing--communication datasets log
+the real channel but offer no cooperative scene understanding
+\cite{deepsense6g}. As a result, questions that span layers---how much does
+a real, lossy channel erode cooperative perception gains? which modality
+localizes best under communication constraints?---cannot be answered with
+any single existing dataset.
+
+We close this gap with \textbf{CoPSC}, a multi-agent, multi-view,
+multi-sensor dataset that jointly captures all three layers plus dense
+reconstruction supervision. The main contributions of this paper are:
 \begin{itemize}
-    \item First contribution.
-    \item Second contribution.
-    \item Third contribution.
+    \item \textbf{A tri-layer dataset.} Synchronized camera, radar, LiDAR,
+    and RTK-GNSS streams from multiple spatially calibrated and temporally
+    aligned agents, with measured wireless channel traces recorded alongside
+    the sensing data.
+    \item \textbf{Comprehensive ground truth.} Per-environment pose ground
+    truth, TSDF-based reconstruction supervision, replayable RSSI channel
+    traces, and cooperative perception annotations.
+    \item \textbf{Benchmarks and baselines.} Task definitions, splits, and
+    baseline results for cooperative perception under clean and actual
+    channels, point cloud reconstruction, and localization from camera,
+    radar, and CSI.
+    \todo{Adjust the contribution list once results are final.}
 \end{itemize}
 
+%=======================================================================
 \section{Related Work}
 \label{sec:related}
-% Group prior work by theme, not paper-by-paper. End each group with how
-% your approach differs. Cite with \cite{...}, e.g. \cite{b1}.
-Discuss prior approaches and position your work against them.
+% Theme (from outline): each family of related work lacks one dimension --
+% SLAM, perception, sensing, or communication.
 
-\section{Methodology}
-\label{sec:method}
-% Rename/split this section to match your outline (e.g. System Overview,
-% Proposed Method). Define notation before using it.
-Describe the proposed method. Number equations consecutively and punctuate
-them as part of the sentence, as in
-\begin{equation}
-    a + b = \gamma, \label{eq:example}
-\end{equation}
-where $\gamma$ denotes the example quantity. Refer to equations with
-\eqref{eq:example}, not ``Eq.~(1)''.
+\subsection{Collaborative SLAM Datasets}
+% Sensing-centric: rich sensing, but targets localization/mapping and
+% treats communication only implicitly.
+Multi-robot SLAM datasets such as S3E \cite{s3e} and systems such as
+Kimera-Multi \cite{kimeramulti} provide rich, synchronized multi-agent
+sensing aimed at collaborative localization and mapping. However, they
+target the sensing layer alone: inter-agent communication is either assumed
+ideal or logged only as a system artifact, and cooperative perception is not
+considered. \todo{Add 2--3 more datasets (e.g., GRACO, FordAV, EuRoC-style
+multi-robot sets) and one sentence each.}
 
-\section{Experimental Results}
-\label{sec:results}
-% Describe the setup (hardware, datasets, metrics, baselines) before the
-% results. Place figures/tables at the top or bottom of columns, after
-% their first citation in the text. Refer to figures as Fig.~\ref{...}
-% even at the start of a sentence.
-Fig.~\ref{fig:example} shows an example figure; replace it with your own.
-Table~\ref{tab:example} shows an example results table.
+\subsection{Cooperative Perception and Communication Datasets}
+% Perception-centric: labels exist, but communication is idealized or
+% simulated, not measured.
+Cooperative perception benchmarks provide multi-agent perception labels,
+either in simulation (OPV2V \cite{opv2v}) or from real vehicles and
+infrastructure (DAIR-V2X \cite{dairv2x}, V2V4Real \cite{v2v4real}).
+Communication-efficient methods such as Where2comm \cite{where2comm} are
+evaluated on these benchmarks under idealized bandwidth models. In all
+cases the channel itself is simulated or abstracted away, so the effect of
+a real, time-varying link on cooperation cannot be measured.
+\todo{Verify and extend the paper list.}
 
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\columnwidth]{fig1.png}}
-\caption{Magnetization as a function of applied field (example figure ---
-replace). Use words rather than symbols for axis labels and put units in
-parentheses.}
-\label{fig:example}
-\end{figure}
+\subsection{Joint Sensing--Communication Datasets}
+% Communication-centric: real channel is logged, but no cooperative scene
+% understanding.
+Integrated sensing and communication datasets such as DeepSense~6G
+\cite{deepsense6g} log real wireless channels co-registered with sensing
+modalities. These datasets ground the communication layer in measurement,
+but they are single-link and task-agnostic: they contain no multi-agent
+cooperation and no scene-understanding labels. \todo{Add further ISAC/CSI
+datasets and one sentence each.}
+
+\subsection{3D Reconstruction Benchmarks}
+% Single-agent, posed imagery only; no cooperative or TSDF-supervised
+% configuration.
+Reconstruction benchmarks such as ScanNet \cite{scannet} and Tanks and
+Temples \cite{tanksandtemples} supervise dense geometry from posed
+single-agent imagery. They provide no multi-agent configuration and no
+communication dimension, so cooperative reconstruction---where partial
+observations must be fused across a constrained link---cannot be studied.
+
+\subsection{Positioning of CoPSC}
+Table~\ref{tab:comparison} summarizes the landscape. Each prior family
+covers at most two of the three layers; CoPSC is, to our knowledge, the
+only dataset spanning synchronized multi-agent sensing, cooperative
+perception labels, and measured communication, together with dense
+reconstruction supervision.
 
 \begin{table}[htbp]
-\caption{Example Results Table (Replace)}
+\caption{Comparison of CoPSC With Existing Datasets}
 \begin{center}
-\begin{tabular}{lccc}
+\begin{tabular}{lcccc}
 \toprule
-\textbf{Method} & \textbf{Metric A} & \textbf{Metric B} & \textbf{Metric C} \\
+\textbf{Dataset} & \textbf{Multi-} & \textbf{Percep.} & \textbf{Measured} & \textbf{Recon.} \\
+ & \textbf{agent} & \textbf{labels} & \textbf{comm.} & \textbf{superv.} \\
 \midrule
-Baseline        & 0.00 & 0.00 & 0.00 \\
-Proposed        & \textbf{0.00} & \textbf{0.00} & \textbf{0.00} \\
+S3E \cite{s3e}                     & \cmark & \xmark & \xmark & \xmark \\
+OPV2V \cite{opv2v}                 & \cmark & \cmark & \xmark & \xmark \\
+DAIR-V2X \cite{dairv2x}            & \cmark & \cmark & \xmark & \xmark \\
+DeepSense 6G \cite{deepsense6g}    & \xmark & \xmark & \cmark & \xmark \\
+ScanNet \cite{scannet}             & \xmark & \cmark & \xmark & \cmark \\
+\textbf{CoPSC (ours)}              & \cmark & \cmark & \cmark & \cmark \\
 \bottomrule
 \end{tabular}
-\label{tab:example}
+\label{tab:comparison}
 \end{center}
 \end{table}
 
-\section{Conclusion}
+%=======================================================================
+\section{The CoPSC Dataset}
+\label{sec:dataset}
+The CoPSC system focuses on bridging the gap between sensing and
+communication for SLAM and perception tasks. Each platform is spatially
+calibrated and temporally aligned to provide multi-agent, multi-view,
+multi-sensor information, enabling a wide range of tasks across single-agent
+and collaborative scenarios and across modalities.
+\todo{Add a system-overview figure (Fig.~X) showing agents, sensors, and
+the communication link.}
+
+\subsection{Sensing Suite}
+% Specify the synchronized payload per agent.
+Each agent carries a synchronized payload of camera, radar, LiDAR, network
+interface card (NIC), and RTK-GNSS. Table~\ref{tab:sensors} lists the
+sensor models, rates, and resolutions.
+\todo{Fill in exact sensor models, rates, FoV, and mounting details; state
+whether IR/IMU streams are included.}
+
+\begin{table}[htbp]
+\caption{Per-Agent Sensor Suite}
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+\textbf{Sensor} & \textbf{Model} & \textbf{Rate} & \textbf{Resolution / Notes} \\
+\midrule
+Camera    & \todo{model} & \todo{Hz} & \todo{resolution, FoV} \\
+Radar     & \todo{model} & \todo{Hz} & \todo{range, FoV} \\
+LiDAR     & \todo{model} & \todo{Hz} & \todo{channels, range} \\
+NIC       & \todo{model} & \todo{Hz} & \todo{band, protocol} \\
+RTK-GNSS  & \todo{model} & \todo{Hz} & \todo{accuracy} \\
+\bottomrule
+\end{tabular}
+\label{tab:sensors}
+\end{center}
+\end{table}
+
+\subsection{Spatial Calibration}
+\subsubsection{Agent}
+\todo{Describe intrinsic and extrinsic calibration of each agent's sensors
+(e.g., ChArUco-based camera calibration, radar--camera and LiDAR--camera
+extrinsics) and report residual errors.}
+
+\subsubsection{Infrastructure}
+\todo{Describe how infrastructure-mounted sensors are calibrated into the
+common frame and report accuracy.}
+
+\subsection{Temporal Calibration}
+\subsubsection{NTP Synchronization}
+All agents are synchronized over NTP. \todo{Report achieved clock offset
+statistics (mean/max), and describe hardware triggering if any.}
+
+\subsubsection{Motion Compensation and Fusion Error Bounds}
+% Report worst-case intra-frame spatial error at max agent speed.
+\todo{Derive/report the worst-case intra-frame spatial error at the maximum
+agent speed, combining clock offset and sensor exposure/sweep time, e.g.
+``at \SI{2}{\meter\per\second} and a worst-case offset of X ms, the bound
+is Y cm.''}
+
+%=======================================================================
+\section{Dataset Design and Collection}
+\label{sec:collection}
+
+\subsection{Environments}
+% Indoor/outdoor sites chosen for viewpoint, appearance, and radio diversity.
+\todo{Describe the indoor and outdoor sites and why they were chosen:
+viewpoint diversity, appearance diversity, and radio-propagation diversity
+(LoS/NLoS, multipath). Add a site-overview figure.}
+
+\subsection{Collection Protocol}
+\todo{Describe trajectories, agent roles, number of runs per site, operator
+procedure, and any scripted interactions between agents.}
+
+\subsection{Conditions Captured}
+% Inventory the deliberate difficulty and totals.
+\todo{Inventory the deliberately captured difficulty: low-light, sensor
+dropout, packet loss, occlusion. Report totals: hours, distance, frames,
+annotated instances.}
+
+%=======================================================================
+\section{Ground Truth and Annotations}
+\label{sec:groundtruth}
+
+\subsection{Pose Ground Truth}
+\todo{Report per-environment pose ground truth source (RTK-GNSS outdoors,
+motion capture / map-based indoors?) and its accuracy.}
+
+\subsection{Reconstruction Supervision}
+Dense reconstruction ground truth is produced with GLIM \cite{glim} in
+ROS~2, providing globally consistent maps used as TSDF supervision.
+\todo{Describe the mapping pipeline settings, map resolution, and how map
+quality was validated.}
+
+\subsection{Communication Ground Truth}
+% Channel traces as replayable/resamplable ground truth.
+Wireless channel measurements are logged as time-stamped RSSI traces
+aligned with the sensing streams, so the channel can be replayed or
+resampled as ground truth for communication-aware experiments.
+\todo{State the measurement setup (band, packet rate), what is logged
+(RSSI, CSI?, throughput, loss), and how traces align with sensor frames.}
+
+\subsection{Perception Annotations and Statistics}
+\todo{Detail label types (3D boxes? semantic masks?), the annotation
+protocol and QA process, and class statistics (instances per class, per
+environment). Add a statistics figure.}
+
+%=======================================================================
+\section{Data Format, Structure, and Access}
+\label{sec:format}
+% rosbag, recorded + synced timestamps, devkit, license, DOI, anonymization.
+Recordings are distributed as ROS~2 bags preserving both the originally
+recorded timestamps and the synchronized timestamps, alongside a
+development kit for parsing, calibration lookup, and benchmark evaluation.
+\todo{Specify the directory layout, per-topic message types, devkit
+features, license, DOI, and the anonymization procedure (faces/plates).}
+
+%=======================================================================
+\section{Benchmark Tasks and Baselines}
+\label{sec:benchmarks}
+
+\subsection{Task Definitions}
+We define four benchmark tasks: (i)~cooperative point cloud
+reconstruction, (ii)~cooperative object detection, (iii)~cross-view
+localization from camera, radar, and CSI, and (iv)~communication-efficient
+perception under the logged channel.
+\todo{Give each task a precise input/output definition.}
+
+\subsection{Splits and Metrics}
+\todo{Define the within-environment and leave-one-environment-out
+protocols, and the metric for each task (e.g., mAP for detection, Chamfer
+distance / F-score for reconstruction, ATE for localization, and
+accuracy-vs-bandwidth curves for comm-efficient perception).}
+
+\subsection{Baselines}
+\todo{List baselines per task: cooperative perception (clean channel vs.
+actual logged channel), point cloud reconstruction, and localization from
+camera, radar, and CSI. Cite each baseline method.}
+
+\subsection{Main Results}
+% Headline cooperative-vs-single-agent and bandwidth trade-off numbers.
+\todo{Report the headline numbers: cooperative vs. single-agent
+performance, and the bandwidth/accuracy trade-off under the real channel.
+Add the main results table(s).}
+
+\subsection{Ablations}
+% Isolate each layer, including idealized vs. logged channel.
+\todo{Isolate the contribution of each layer: sensing modalities on/off,
+idealized vs. logged channel, number of cooperating agents.}
+
+\subsection{Qualitative Results}
+\todo{Show cooperative vs. single-agent reconstruction side by side, and a
+failure case under channel degradation.}
+
+%=======================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Findings}
+\todo{State where cooperation helps, where it does not, and how conclusions
+shift when the idealized channel is replaced by the logged one.}
+
+\subsection{Limitations}
+\todo{Bound the dataset plainly: scale, number of agents, ground-truth
+variance, and radio specificity (one band/protocol).}
+
+\subsection{Broader Impact and Ethics}
+\todo{Address dual-use considerations, licensing terms, and the
+anonymization of captured people and vehicles.}
+
+%=======================================================================
+\section{Conclusion and Future Work}
 \label{sec:conclusion}
-% Summarize what was done and found; one or two sentences of future work.
-Summarize the findings and their implications.
+We presented CoPSC, a multi-agent dataset that jointly captures
+synchronized sensing, cooperative perception labels, and measured
+communication, with dense reconstruction supervision and benchmarks across
+the three layers. \todo{One sentence of headline findings.} Future work
+includes scaling to larger teams, adding modalities, and richer channel
+models.
 
 \section*{Acknowledgment}
 % Optional; delete if unused. Sponsor acknowledgments go in the unnumbered
 % footnote on the first page (\thanks in \title).
-The authors thank \ldots
+\todo{Add acknowledgments or delete this section.}
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
