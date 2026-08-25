@@ -1,0 +1,4 @@
+# Python deps for the densification tools (in addition to a ROS 2 install).
+# ROS 2 provides: rclpy, sensor_msgs, sensor_msgs_py, std_msgs, nav_msgs,
+# tf2_ros (ego_mode:=tf), rosbag2_py + rosidl_runtime_py (densify_offline.py).
+numpy>=1.21
