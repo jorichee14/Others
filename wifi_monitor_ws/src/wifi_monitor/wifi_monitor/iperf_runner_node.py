@@ -30,6 +30,16 @@ protocol : str         "tcp" or "udp".
 duration_s : float     per-test duration (iperf3 -t). Default 2.0.
 interval_s : float     gap between tests. 0 => back-to-back (survey). Def 30.
 reverse : bool         true => downlink (server -> robot, iperf3 -R).
+bidirectional : bool   alternate direction on every test (periodic mode) or
+                       every ``bidir_period_s`` segment (continuous mode), so
+                       one instance measures uplink AND downlink. Each message
+                       carries the direction in its ``reverse`` field. Chosen
+                       over iperf3 --bidir because Wi-Fi is half-duplex:
+                       simultaneous both-way traffic contends with itself and
+                       neither number is a per-direction capacity. ``reverse``
+                       picks the starting direction. Default False.
+bidir_period_s : float continuous+bidirectional: seconds per direction before
+                       swapping (each swap costs one reconnect). Default 10.
 udp_bitrate_mbps : float  target rate for UDP tests in Mbit/s (0 = unlimited).
 parallel : int         parallel TCP streams (iperf3 -P). Default 1; 4 fills a
                        Wi-Fi link far better and is recommended for capacity.
@@ -86,6 +96,12 @@ class IperfRunnerNode(Node):
         self.declare_parameter("duration_s", 2.0)
         self.declare_parameter("interval_s", 30.0)
         self.declare_parameter("reverse", False)
+        # Alternate uplink/downlink from this one instance. Sequential (not
+        # iperf3 --bidir) because Wi-Fi is half-duplex: simultaneous two-way
+        # traffic contends with itself and measures neither direction cleanly.
+        self.declare_parameter("bidirectional", False)
+        # Continuous mode: seconds per direction before swapping.
+        self.declare_parameter("bidir_period_s", 10.0)
         # UDP target rate in Mbit/s (0 = unlimited). Numeric so launch can
         # never mistype it; converted to iperf3's "<N>M" form internally.
         self.declare_parameter("udp_bitrate_mbps", 0.0)
@@ -124,6 +140,14 @@ class IperfRunnerNode(Node):
         self._duration = gp("duration_s").get_parameter_value().double_value
         self._interval = gp("interval_s").get_parameter_value().double_value
         self._reverse = gp("reverse").get_parameter_value().bool_value
+        self._bidir = gp("bidirectional").get_parameter_value().bool_value
+        self._bidir_period = (
+            gp("bidir_period_s").get_parameter_value().double_value
+        )
+        if self._bidir_period <= 0.0:
+            self._bidir_period = 10.0
+        # Direction of the *next* test; flips each round when bidirectional.
+        self._cur_reverse = self._reverse
         self._udp_mbps = (
             gp("udp_bitrate_mbps").get_parameter_value().double_value
         )
@@ -181,10 +205,15 @@ class IperfRunnerNode(Node):
             if self._continuous
             else f"{self._duration:.0f}s every {self._interval:.0f}s"
         )
+        direction = (
+            "bidirectional (alternating)"
+            if self._bidir
+            else ("downlink" if self._reverse else "uplink")
+        )
         self.get_logger().info(
             f"iperf_runner -> {self._proto.upper()} to "
             f"'{self._server or '<unset>'}:{self._port}', {mode}, "
-            f"{'downlink' if self._reverse else 'uplink'}, iface "
+            f"{direction}, iface "
             f"'{self._iface or '<none>'}' -> topic 'wifi/iperf'."
         )
 
@@ -223,14 +252,21 @@ class IperfRunnerNode(Node):
 
             if self._continuous:
                 # Blocks, publishing ~1 Hz until the iperf process exits
-                # (link drop, error, or duration end); then re-check + restart.
-                self._run_continuous()
-                if self._stop.wait(min(poll, 2.0)):
+                # (link drop, error, or bidir segment end); then restart.
+                healthy = self._run_continuous()
+                if self._bidir:
+                    self._cur_reverse = not self._cur_reverse
+                # Quick swap between healthy bidir segments; otherwise back
+                # off so a dead server is not hammered.
+                wait = 0.2 if (self._bidir and healthy) else min(poll, 2.0)
+                if self._stop.wait(wait):
                     break
                 continue
 
             msg = self._run_once()
             self._pub.publish(msg)
+            if self._bidir:
+                self._cur_reverse = not self._cur_reverse
 
             # Normal cadence on success; back off on failure so a dead server
             # (even in survey mode, interval 0) is not hammered.
@@ -247,7 +283,7 @@ class IperfRunnerNode(Node):
         msg.server_address = self._server
         msg.server_port = int(self._port)
         msg.protocol = self._proto.upper()
-        msg.reverse = bool(self._reverse)
+        msg.reverse = bool(self._cur_reverse)
         msg.duration_s = float(self._duration)
         msg.success = success
         msg.error = error
@@ -270,7 +306,7 @@ class IperfRunnerNode(Node):
             cmd += ["-O", str(self._omit)]
         if self._parallel > 1:
             cmd += ["-P", str(self._parallel)]
-        if self._reverse:
+        if self._cur_reverse:
             cmd += ["-R"]
         if self._proto == "udp":
             rate = f"{self._udp_mbps:g}M" if self._udp_mbps > 0 else "0"
@@ -309,7 +345,7 @@ class IperfRunnerNode(Node):
         self._apply(msg, parsed)
         msg.success = True
         msg.error = ""
-        arrow = "down" if self._reverse else "up"
+        arrow = "down" if self._cur_reverse else "up"
         self.get_logger().info(
             f"iperf {msg.protocol} {arrow}: {msg.bitrate_mbps:.1f} Mbit/s"
             + (f", loss {msg.lost_percent:.1f}%" if msg.protocol == "UDP"
@@ -321,15 +357,18 @@ class IperfRunnerNode(Node):
     # ----------------------------------------------------------------------
     def _build_continuous_cmd(self) -> list:
         # -t 0 runs until we kill it; -i 1 emits a report every second.
+        # Bidirectional: run bidir_period_s per segment instead, so the loop
+        # restarts us with the direction flipped.
+        seg = f"{self._bidir_period:g}" if self._bidir else "0"
         cmd = [
             "iperf3", "-c", self._server, "-p", str(self._port),
-            "-t", "0", "-i", f"{self._cont_interval:g}", "--forceflush",
+            "-t", seg, "-i", f"{self._cont_interval:g}", "--forceflush",
         ]
         if self._connect_timeout > 0:
             cmd += ["--connect-timeout", str(self._connect_timeout)]
         if self._parallel > 1:
             cmd += ["-P", str(self._parallel)]
-        if self._reverse:
+        if self._cur_reverse:
             cmd += ["-R"]
         if self._proto == "udp":
             rate = f"{self._udp_mbps:g}M" if self._udp_mbps > 0 else "0"
@@ -347,12 +386,14 @@ class IperfRunnerNode(Node):
             return None
         return iperf_parse.parse_ss_rtt(out.stdout or "")
 
-    def _run_continuous(self) -> None:
+    def _run_continuous(self) -> bool:
         """Run one long iperf3 and publish an IperfResult per interval line.
 
-        Returns when the process exits or the node stops. A 1 s select()
-        watchdog means a mid-run link drop is noticed within a second so the
-        loop can restart against the reconnected link.
+        Returns when the process exits or the node stops (True if at least
+        one interval was published, so the caller can distinguish a healthy
+        bidir segment end from a dead server). A 1 s select() watchdog means
+        a mid-run link drop is noticed within a second so the loop can
+        restart against the reconnected link.
         """
         try:
             proc = subprocess.Popen(
@@ -364,12 +405,14 @@ class IperfRunnerNode(Node):
             self._pub.publish(
                 self._new_msg(success=False, error=f"iperf3 launch failed: {exc}")
             )
-            return
+            return False
 
-        arrow = "down" if self._reverse else "up"
+        arrow = "down" if self._cur_reverse else "up"
+        seg = f" ({self._bidir_period:g}s segment)" if self._bidir else ""
         self.get_logger().info(
-            f"continuous iperf {self._proto.upper()} {arrow} started (1 Hz)."
+            f"continuous iperf {self._proto.upper()} {arrow} started{seg}."
         )
+        published = False
         try:
             while not self._stop.is_set() and proc.poll() is None:
                 rlist, _, _ = select.select([proc.stdout], [], [], 1.0)
@@ -397,6 +440,7 @@ class IperfRunnerNode(Node):
                         msg.rtt_ms_min = rtt["rtt_ms_min"]
                         msg.rtt_ms_max = rtt["rtt_ms_max"]
                 self._pub.publish(msg)
+                published = True
         finally:
             if proc.poll() is None:
                 proc.terminate()
@@ -404,6 +448,7 @@ class IperfRunnerNode(Node):
                     proc.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+        return published
 
     @staticmethod
     def _apply(msg: IperfResult, parsed: dict) -> None:

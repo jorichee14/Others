@@ -51,6 +51,16 @@ def generate_launch_description() -> LaunchDescription:
             description="Passive monitor sampling rate.",
         ),
         DeclareLaunchArgument(
+            "bidirectional", default_value="false",
+            description="Alternate the continuous iperf between uplink and "
+            "downlink every bidir_period_s (each message's 'reverse' field "
+            "records its direction).",
+        ),
+        DeclareLaunchArgument(
+            "bidir_period_s", default_value="10.0",
+            description="Seconds per direction when bidirectional.",
+        ),
+        DeclareLaunchArgument(
             "run_iperf", default_value="true",
             description="Continuous iperf throughput+RTT (via ss). Set false "
             "for non-saturating monitoring during real operation.",
@@ -85,6 +95,8 @@ def generate_launch_description() -> LaunchDescription:
             "continuous": True,
             "parallel": LaunchConfiguration("parallel"),
             "continuous_interval_s": LaunchConfiguration("continuous_interval_s"),
+            "bidirectional": LaunchConfiguration("bidirectional"),
+            "bidir_period_s": LaunchConfiguration("bidir_period_s"),
         }],
     )
 

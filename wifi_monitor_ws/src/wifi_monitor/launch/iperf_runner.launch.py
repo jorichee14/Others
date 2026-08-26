@@ -46,6 +46,17 @@ def generate_launch_description() -> LaunchDescription:
             description="true => downlink (server->robot).",
         ),
         DeclareLaunchArgument(
+            "bidirectional", default_value="false",
+            description="Alternate uplink/downlink from this one instance "
+            "(per test, or per bidir_period_s segment in continuous mode). "
+            "Each message's 'reverse' field records its direction.",
+        ),
+        DeclareLaunchArgument(
+            "bidir_period_s", default_value="10.0",
+            description="Continuous+bidirectional: seconds per direction "
+            "before swapping.",
+        ),
+        DeclareLaunchArgument(
             "udp_bitrate_mbps", default_value="0.0",
             description="UDP target rate in Mbit/s, e.g. 300 (0 = unlimited; "
             "only for protocol:=udp).",
@@ -110,6 +121,8 @@ def generate_launch_description() -> LaunchDescription:
             "duration_s": LaunchConfiguration("duration_s"),
             "interval_s": LaunchConfiguration("interval_s"),
             "reverse": LaunchConfiguration("reverse"),
+            "bidirectional": LaunchConfiguration("bidirectional"),
+            "bidir_period_s": LaunchConfiguration("bidir_period_s"),
             "udp_bitrate_mbps": LaunchConfiguration("udp_bitrate_mbps"),
             "parallel": LaunchConfiguration("parallel"),
             "omit_s": LaunchConfiguration("omit_s"),

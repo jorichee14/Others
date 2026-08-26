@@ -161,6 +161,9 @@ ros2 launch wifi_monitor iperf_runner.launch.py
 # Downlink instead (server -> robot):
 ros2 launch wifi_monitor iperf_runner.launch.py reverse:=true
 
+# Both directions, alternating test by test (see "Bidirectional" below):
+ros2 launch wifi_monitor iperf_runner.launch.py bidirectional:=true
+
 # UDP loss/jitter, pushing 300 Mbit/s:
 ros2 launch wifi_monitor iperf_runner.launch.py protocol:=udp udp_bitrate_mbps:=300
 
@@ -208,6 +211,42 @@ ros2 launch wifi_monitor iperf_runner.launch.py server_address:=192.168.233.50
 > offline as zero-velocity segments in `/odom`. Use continuous mode when you
 > want a dense throughput trace along a slow survey drive instead.
 
+### Bidirectional (uplink + downlink) from one instance
+
+`bidirectional:=true` makes a single `iperf_runner` instance **alternate
+direction** — in periodic mode every other test is downlink (`-R`), in
+continuous mode it swaps every `bidir_period_s` seconds (default 10, one
+reconnect per swap). Nothing changes on the server side; `-R` only tells the
+existing server to send instead of receive. Every published message records
+its direction in the **`reverse` field** (`false` = uplink, `true` =
+downlink), so the two directions split cleanly offline:
+
+```bash
+# Periodic: up at t=0, down at t=30, up at t=60, ...
+ros2 launch wifi_monitor iperf_runner.launch.py bidirectional:=true
+
+# Continuous survey: 10 s up, 10 s down, 10 s up, ... at ~1 Hz
+ros2 launch wifi_monitor survey.launch.py bidirectional:=true
+
+# Longer segments (20 s per direction):
+ros2 launch wifi_monitor iperf_runner.launch.py \
+    continuous:=true bidirectional:=true bidir_period_s:=20
+```
+
+**Why alternating and not iperf3 `--bidir` (both at once)?** Wi-Fi is
+half-duplex — uplink and downlink share the same airtime. With `--bidir` the
+two directions contend with *each other*, so neither number is that
+direction's capacity; you'd measure an arbitrary split of one channel.
+Alternating measures each direction at full channel capacity and halves
+nothing. The cost is time resolution: each direction is sampled half as
+often (a position sample every ~2·`bidir_period_s` along the path in
+continuous mode — shrink `bidir_period_s` if you need denser coverage, at
+one reconnect per swap).
+
+Note: uplink and downlink genuinely differ on Wi-Fi (robot TX power/antennas
+vs. AP TX power, different MCS per direction), which is exactly why measuring
+both is worth it.
+
 ### Robot-to-robot (agent-to-agent) measurement
 
 To also measure the link **between two robots**, reuse the same node: one
@@ -225,15 +264,22 @@ On robot A, run the robot-to-robot instance **alongside** the robot-to-server
 one, with its own node name, topic, and a half-interval offset:
 
 ```bash
-# Instance 1: robot A -> laptop (as before), tests at t = 0, 30, 60, ...
+# Instance 1: robot A <-> laptop, alternating up/down at t = 0, 30, 60, ...
 ros2 launch wifi_monitor iperf_runner.launch.py \
-    server_address:=192.168.233.142
+    server_address:=192.168.233.142 bidirectional:=true
 
-# Instance 2: robot A -> robot B, tests at t = 15, 45, 75, ...
+# Instance 2: robot A <-> robot B, alternating up/down at t = 15, 45, 75, ...
 ros2 launch wifi_monitor iperf_runner.launch.py \
     server_address:=<robot_B_ip> server_port:=5202 \
-    name:=iperf_runner_r2r topic:=wifi/iperf_r2r start_delay_s:=15
+    name:=iperf_runner_r2r topic:=wifi/iperf_r2r start_delay_s:=15 \
+    bidirectional:=true
 ```
+
+With `bidirectional:=true` on both, each instance alternates direction test
+by test, so robot A collects all four series — up/down to the server and
+A→B / B→A — from two client instances, and each sample's `reverse` field
+says which direction it was. Note each *direction* is then sampled every
+2×`interval_s`.
 
 Each instance publishes on its own topic (`/wifi/iperf` vs
 `/wifi/iperf_r2r`), and every message carries `server_address`/`server_port`,
