@@ -314,6 +314,77 @@ and iperf deliberately saturates it. Concretely:
   connects mid-test is refused with "server busy". Distinct ports per
   measurement pair (5201 laptop, 5202 robot B, ...) avoid this entirely.
 
+#### Full two-robot deployment (agent↔server + agent↔agent)
+
+The complete recipe for measuring both robots against the server **and** the
+robot-to-robot link, all bidirectional, on one shared 30 s cycle with three
+non-overlapping test slots (t = 0, 10, 20 s):
+
+**Laptop** (wired, 192.168.233.142) — one server per client so a drifted
+schedule can never hit "server busy":
+
+```bash
+iperf3 -s -p 5201 &        # serves robot A
+iperf3 -s -p 5211 &        # serves robot B
+```
+
+**Robot B** — additionally serves robot A's r2r tests:
+
+```bash
+iperf3 -s -p 5202
+```
+
+**Robot A** — two client instances (plus the passive monitor):
+
+```bash
+# A <-> server, up/down alternating, slot t = 0
+ros2 launch wifi_monitor iperf_runner.launch.py \
+    server_address:=192.168.233.142 server_port:=5201 bidirectional:=true
+
+# A <-> B, both directions, slot t = 10
+ros2 launch wifi_monitor iperf_runner.launch.py \
+    server_address:=<robot_B_ip> server_port:=5202 \
+    name:=iperf_runner_r2r topic:=wifi/iperf_r2r \
+    bidirectional:=true start_delay_s:=10
+```
+
+**Robot B** — one client instance, slot t = 20:
+
+```bash
+ros2 launch wifi_monitor iperf_runner.launch.py \
+    server_address:=192.168.233.142 server_port:=5211 \
+    bidirectional:=true start_delay_s:=20
+```
+
+That yields all six series — A↔server up/down, B↔server up/down, and A→B /
+B→A (robot B needs no r2r *client*: robot A's bidirectional instance already
+measures both directions of the pair). Record on **each** robot locally:
+
+```bash
+# robot A:
+ros2 bag record /wifi/status /wifi/iperf /wifi/iperf_r2r /tf /odom
+# robot B:
+ros2 bag record /wifi/status /wifi/iperf /tf /odom
+```
+
+Offline, split by topic (which pair), by `reverse` (which direction), and by
+bag (which robot).
+
+Practicalities:
+
+* The slots are offsets from each *node's own start*, so start the three
+  client instances within a few seconds of each other, and sync the robots'
+  clocks (chrony/NTP) — you need that anyway to time-join stamps to pose
+  across machines. Verify offline that the `header.stamp` windows of the
+  three topics don't overlap; with 2–5 s tests in 10 s slots there is wide
+  margin.
+* Default `duration_s:=2.0` fits easily; don't push `duration_s` past ~8 s
+  or the slots start touching.
+* This periodic scheme runs during normal operation. For **continuous**
+  survey passes there is no interleaving trick — continuous mode owns the
+  channel — so do them one at a time: pass 1 A↔server, pass 2 A↔B, pass 3
+  B↔server (`continuous:=true bidirectional:=true`, others off).
+
 **Interpreting the number.** In infrastructure mode the robot-to-robot path
 is `robot A ──wifi──► AP ──wifi──► robot B`: **two wireless hops on the same
 channel**. The AP must receive every frame and retransmit it, so the
