@@ -79,13 +79,29 @@ def generate_launch_description() -> LaunchDescription:
             description="Poll/backoff period while link is down or a test "
             "fails.",
         ),
+        DeclareLaunchArgument(
+            "name", default_value="iperf_runner",
+            description="Node name. Set a distinct name (e.g. "
+            "iperf_runner_r2r) to run a second instance alongside the first.",
+        ),
+        DeclareLaunchArgument(
+            "topic", default_value="wifi/iperf",
+            description="Output topic. Give a second instance its own topic "
+            "(e.g. wifi/iperf_r2r) so the streams stay separable.",
+        ),
+        DeclareLaunchArgument(
+            "start_delay_s", default_value="0.0",
+            description="Delay before the first test. Offset a second "
+            "instance by interval_s/2 so the two never test at once.",
+        ),
     ]
 
     node = Node(
         package="wifi_monitor",
         executable="iperf_runner_node",
-        name="iperf_runner",
+        name=LaunchConfiguration("name"),
         output="screen",
+        remappings=[("wifi/iperf", LaunchConfiguration("topic"))],
         parameters=[{
             "server_address": _str("server_address"),
             "server_port": LaunchConfiguration("server_port"),
@@ -102,6 +118,7 @@ def generate_launch_description() -> LaunchDescription:
             "continuous": LaunchConfiguration("continuous"),
             "rtt_via_ss": LaunchConfiguration("rtt_via_ss"),
             "continuous_interval_s": LaunchConfiguration("continuous_interval_s"),
+            "start_delay_s": LaunchConfiguration("start_delay_s"),
         }],
     )
 

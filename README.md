@@ -208,6 +208,82 @@ ros2 launch wifi_monitor iperf_runner.launch.py server_address:=192.168.233.50
 > offline as zero-velocity segments in `/odom`. Use continuous mode when you
 > want a dense throughput trace along a slow survey drive instead.
 
+### Robot-to-robot (agent-to-agent) measurement
+
+To also measure the link **between two robots**, reuse the same node: one
+robot plays iperf3 server, the other runs a second `iperf_runner` instance
+pointed at it. No new software is needed on either side beyond `iperf3`.
+
+On robot B (the "server" robot) — use a **different port** than the laptop
+server so the two measurements can never grab each other's server:
+
+```bash
+iperf3 -s -p 5202          # keep it running (e.g. under systemd or tmux)
+```
+
+On robot A, run the robot-to-robot instance **alongside** the robot-to-server
+one, with its own node name, topic, and a half-interval offset:
+
+```bash
+# Instance 1: robot A -> laptop (as before), tests at t = 0, 30, 60, ...
+ros2 launch wifi_monitor iperf_runner.launch.py \
+    server_address:=192.168.233.142
+
+# Instance 2: robot A -> robot B, tests at t = 15, 45, 75, ...
+ros2 launch wifi_monitor iperf_runner.launch.py \
+    server_address:=<robot_B_ip> server_port:=5202 \
+    name:=iperf_runner_r2r topic:=wifi/iperf_r2r start_delay_s:=15
+```
+
+Each instance publishes on its own topic (`/wifi/iperf` vs
+`/wifi/iperf_r2r`), and every message carries `server_address`/`server_port`,
+so the two data sets stay cleanly separable in the bag:
+
+```bash
+ros2 bag record /wifi/status /wifi/iperf /wifi/iperf_r2r /wifi/ping /tf /odom
+```
+
+**Does it affect the other measurements? Yes, if they overlap — so don't let
+them overlap.** All of this traffic shares the same Wi-Fi channel (airtime),
+and iperf deliberately saturates it. Concretely:
+
+* **Interleave, don't parallelize.** Two iperf tests running at the same
+  moment split the airtime and each reports roughly half the true capacity.
+  Give both instances the same `interval_s` and offset one by
+  `start_delay_s:=interval_s/2` (as above); with `duration_s` of a few
+  seconds and `interval_s` of 30, the tests never touch each other. The
+  offset is best-effort (it assumes both instances start around the same
+  time and drifts if tests fail), so keep `duration_s << interval_s` for
+  margin, and sanity-check offline that the `header.stamp` windows of the
+  two topics don't overlap.
+* **Never run `continuous:=true` on both at once** — continuous mode
+  saturates the link 100% of the time. Do robot-to-server and robot-to-robot
+  as **separate survey passes**, or keep one continuous and the other off.
+* **A robot-to-robot test also perturbs robot B.** The traffic occupies
+  robot B's link too, so pause/offset any measurement robot B itself is
+  running during robot A's r2r test slots (and vice versa). Same for two
+  robots testing against the laptop simultaneously — same channel, same
+  airtime, interleave them as well.
+* **One `iperf3 -s` serves one client at a time.** A second client that
+  connects mid-test is refused with "server busy". Distinct ports per
+  measurement pair (5201 laptop, 5202 robot B, ...) avoid this entirely.
+
+**Interpreting the number.** In infrastructure mode the robot-to-robot path
+is `robot A ──wifi──► AP ──wifi──► robot B`: **two wireless hops on the same
+channel**. The AP must receive every frame and retransmit it, so the
+end-to-end throughput is at best about **half** the weaker robot's single-hop
+capacity — a correct measurement of what robots actually get when they talk
+to each other, but not a property of a single link. Comparing it with each
+robot's own `/wifi/iperf` (single-hop) trace tells you which side of the
+relay is the bottleneck. (Only a direct ad-hoc/mesh link between the robots
+would measure a single robot-to-robot hop; that is a different network
+setup, not an iperf option.)
+
+Passive `/wifi/status` and `ping` are so cheap they are unaffected by any of
+this — though a ping RTT sampled *during* someone's iperf burst will show the
+queueing delay of the saturated link (which can itself be a useful signal:
+that is latency-under-load).
+
 ### Failsafes for a moving robot (disconnect / reconnect)
 
 Both nodes are built to survive the link dropping and coming back as the

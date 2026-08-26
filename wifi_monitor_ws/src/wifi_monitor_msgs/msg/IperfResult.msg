@@ -1,6 +1,8 @@
 # IperfResult.msg
-# One completed iperf3 measurement to a fixed server (the static, wired
-# laptop). Published per test so results can be time-joined to robot pose.
+# One completed iperf3 measurement to a fixed server (the static wired
+# laptop, or another robot running `iperf3 -s`). Published per test so
+# results can be time-joined to robot pose. server_address/server_port
+# identify which target a sample belongs to.
 
 std_msgs/Header header
 

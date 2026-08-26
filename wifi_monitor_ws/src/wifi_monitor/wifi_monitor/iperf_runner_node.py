@@ -37,6 +37,10 @@ omit_s : float         initial seconds to omit (iperf3 -O). Default 1.0.
 connect_timeout_ms : int  iperf3 --connect-timeout. Default 2000.
 reconnect_poll_s : float  poll/backoff period when link is down or a test
                           fails. Default 3.0.
+start_delay_s : float  delay before the first test. Use it to interleave two
+                       instances (e.g. robot->server and robot->robot) so
+                       their periodic tests never overlap: give both the same
+                       interval_s and offset one by interval_s/2. Default 0.
 continuous : bool      survey mode: keep ONE long iperf3 open and publish a
                        result every second from its interval reports (no
                        per-test connection overhead, true 1 Hz). Saturates the
@@ -91,6 +95,10 @@ class IperfRunnerNode(Node):
         self.declare_parameter("omit_s", 1.0)
         self.declare_parameter("connect_timeout_ms", 2000)
         self.declare_parameter("reconnect_poll_s", 3.0)
+        # Delay before the first test, so two instances (e.g. robot->server
+        # and robot->robot) can interleave instead of saturating the same
+        # airtime at the same moment.
+        self.declare_parameter("start_delay_s", 0.0)
         # Continuous survey mode: keep ONE long iperf3 open and publish a
         # result every second from its interval reports (no per-test connection
         # overhead). Saturates the link continuously -> dedicated survey pass.
@@ -126,6 +134,9 @@ class IperfRunnerNode(Node):
         )
         self._reconnect_poll = (
             gp("reconnect_poll_s").get_parameter_value().double_value
+        )
+        self._start_delay = (
+            gp("start_delay_s").get_parameter_value().double_value
         )
         self._continuous = gp("continuous").get_parameter_value().bool_value
         self._rtt_via_ss = gp("rtt_via_ss").get_parameter_value().bool_value
@@ -180,6 +191,8 @@ class IperfRunnerNode(Node):
     # ----------------------------------------------------------------------
     def _loop(self) -> None:
         poll = max(0.5, self._reconnect_poll)
+        if self._start_delay > 0.0 and self._stop.wait(self._start_delay):
+            return
         while not self._stop.is_set() and rclpy.ok():
             if not self._server or shutil.which("iperf3") is None:
                 if self._stop.wait(poll):
