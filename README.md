@@ -317,8 +317,12 @@ and iperf deliberately saturates it. Concretely:
 #### Full two-robot deployment (agent↔server + agent↔agent)
 
 The complete recipe for measuring both robots against the server **and** the
-robot-to-robot link, all bidirectional, on one shared 30 s cycle with three
-non-overlapping test slots (t = 0, 10, 20 s):
+robot-to-robot link, on one shared 30 s cycle with three non-overlapping test
+slots (t = 0, 10, 20 s). Direction policy is **per instance**: here the
+agent↔server instances run one direction only (add `reverse:=true` for
+downlink, or `bidirectional:=true` for both), while the agent↔agent instance
+runs bidirectional — one client on robot A then covers both A→B and B→A, so
+robot B never needs an r2r client:
 
 **Laptop** (wired, 192.168.233.142) — one server per client so a drifted
 schedule can never hit "server busy":
@@ -337,11 +341,12 @@ iperf3 -s -p 5202
 **Robot A** — two client instances (plus the passive monitor):
 
 ```bash
-# A <-> server, up/down alternating, slot t = 0
+# A -> server, uplink only, slot t = 0
+# (reverse:=true for downlink instead, bidirectional:=true for both)
 ros2 launch wifi_monitor iperf_runner.launch.py \
-    server_address:=192.168.233.142 server_port:=5201 bidirectional:=true
+    server_address:=192.168.233.142 server_port:=5201
 
-# A <-> B, both directions, slot t = 10
+# A <-> B, both directions alternating, slot t = 10
 ros2 launch wifi_monitor iperf_runner.launch.py \
     server_address:=<robot_B_ip> server_port:=5202 \
     name:=iperf_runner_r2r topic:=wifi/iperf_r2r \
@@ -351,14 +356,15 @@ ros2 launch wifi_monitor iperf_runner.launch.py \
 **Robot B** — one client instance, slot t = 20:
 
 ```bash
+# B -> server, uplink only, slot t = 20
 ros2 launch wifi_monitor iperf_runner.launch.py \
     server_address:=192.168.233.142 server_port:=5211 \
-    bidirectional:=true start_delay_s:=20
+    start_delay_s:=20
 ```
 
-That yields all six series — A↔server up/down, B↔server up/down, and A→B /
-B→A (robot B needs no r2r *client*: robot A's bidirectional instance already
-measures both directions of the pair). Record on **each** robot locally:
+That yields four series — A→server, B→server (every 30 s each), and A→B /
+B→A (every 60 s each, since the r2r instance alternates). Record on **each**
+robot locally:
 
 ```bash
 # robot A:
