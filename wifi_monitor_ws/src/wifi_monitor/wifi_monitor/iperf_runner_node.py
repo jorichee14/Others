@@ -214,7 +214,7 @@ class IperfRunnerNode(Node):
             f"iperf_runner -> {self._proto.upper()} to "
             f"'{self._server or '<unset>'}:{self._port}', {mode}, "
             f"{direction}, iface "
-            f"'{self._iface or '<none>'}' -> topic 'wifi/iperf'."
+            f"'{self._iface or '<none>'}' -> topic '{self._pub.topic_name}'."
         )
 
     # ----------------------------------------------------------------------

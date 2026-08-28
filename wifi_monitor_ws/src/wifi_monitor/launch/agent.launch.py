@@ -47,6 +47,15 @@ def _str(name: str) -> ParameterValue:
     return ParameterValue(LaunchConfiguration(name), value_type=str)
 
 
+def _dbl(name: str) -> ParameterValue:
+    """Force a launch arg to be a DOUBLE parameter.
+
+    Without this, a value typed without a decimal point (start_delay_s:=0)
+    is inferred as INTEGER and rejected by the node's double declaration.
+    """
+    return ParameterValue(LaunchConfiguration(name), value_type=float)
+
+
 def _role_is(role: str) -> IfCondition:
     return IfCondition(
         PythonExpression(["'", LaunchConfiguration("role"), "' == '", role, "'"])
@@ -66,7 +75,8 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             "robot_b_address", default_value="",
-            description="Robot B's IP; required for role:=a (r2r target).",
+            description="Robot B's IP (role:=a). Empty = no robot B yet: the "
+            "r2r instance is skipped and only A->server runs.",
         ),
         DeclareLaunchArgument(
             "laptop_port_a", default_value="5201",
@@ -118,14 +128,14 @@ def generate_launch_description() -> LaunchDescription:
         name="wifi_monitor", output="screen",
         parameters=[{
             "interface": iface,
-            "publish_rate_hz": LaunchConfiguration("wifi_rate_hz"),
+            "publish_rate_hz": _dbl("wifi_rate_hz"),
         }],
     )
 
     common = {
         "interface": iface,
-        "duration_s": LaunchConfiguration("duration_s"),
-        "interval_s": LaunchConfiguration("interval_s"),
+        "duration_s": _dbl("duration_s"),
+        "interval_s": _dbl("interval_s"),
         "parallel": LaunchConfiguration("parallel"),
     }
 
@@ -139,21 +149,25 @@ def generate_launch_description() -> LaunchDescription:
             "server_address": _str("laptop_address"),
             "server_port": LaunchConfiguration("laptop_port_a"),
             "reverse": LaunchConfiguration("reverse"),
-            "start_delay_s": LaunchConfiguration("slot_a_server_s"),
+            "start_delay_s": _dbl("slot_a_server_s"),
         }],
     )
 
+    # Only started when robot B exists (robot_b_address non-empty).
     a_r2r = Node(
         package="wifi_monitor", executable="iperf_runner_node",
         name="iperf_runner_r2r", output="screen",
-        condition=_role_is("a"),
+        condition=IfCondition(PythonExpression([
+            "'", LaunchConfiguration("role"), "' == 'a' and '",
+            LaunchConfiguration("robot_b_address"), "' != ''",
+        ])),
         remappings=[("wifi/iperf", "wifi/iperf_r2r")],
         parameters=[{
             **common,
             "server_address": _str("robot_b_address"),
             "server_port": LaunchConfiguration("r2r_port"),
             "bidirectional": True,
-            "start_delay_s": LaunchConfiguration("slot_a_r2r_s"),
+            "start_delay_s": _dbl("slot_a_r2r_s"),
         }],
     )
 
@@ -174,7 +188,7 @@ def generate_launch_description() -> LaunchDescription:
             "server_address": _str("laptop_address"),
             "server_port": LaunchConfiguration("laptop_port_b"),
             "reverse": LaunchConfiguration("reverse"),
-            "start_delay_s": LaunchConfiguration("slot_b_server_s"),
+            "start_delay_s": _dbl("slot_b_server_s"),
         }],
     )
 

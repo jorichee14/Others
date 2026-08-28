@@ -11,6 +11,11 @@ def _str(name: str) -> ParameterValue:
     return ParameterValue(LaunchConfiguration(name), value_type=str)
 
 
+def _dbl(name: str) -> ParameterValue:
+    """Force a DOUBLE parameter (integer-looking values would be rejected)."""
+    return ParameterValue(LaunchConfiguration(name), value_type=float)
+
+
 def generate_launch_description() -> LaunchDescription:
     args = [
         DeclareLaunchArgument(
@@ -33,8 +38,8 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[{
             "target": _str("target"),
-            "interval_s": LaunchConfiguration("interval_s"),
-            "timeout_s": LaunchConfiguration("timeout_s"),
+            "interval_s": _dbl("interval_s"),
+            "timeout_s": _dbl("timeout_s"),
             "window": LaunchConfiguration("window"),
             "interface": _str("interface"),
         }],

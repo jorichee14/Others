@@ -12,6 +12,11 @@ def _str(name: str) -> ParameterValue:
     return ParameterValue(LaunchConfiguration(name), value_type=str)
 
 
+def _dbl(name: str) -> ParameterValue:
+    """Force a DOUBLE parameter (integer-looking values would be rejected)."""
+    return ParameterValue(LaunchConfiguration(name), value_type=float)
+
+
 def generate_launch_description() -> LaunchDescription:
     args = [
         DeclareLaunchArgument(
@@ -50,10 +55,10 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             {
                 "interface": _str("interface"),
-                "publish_rate_hz": LaunchConfiguration("publish_rate_hz"),
+                "publish_rate_hz": _dbl("publish_rate_hz"),
                 "frame_id": _str("frame_id"),
-                "warn_signal_dbm": LaunchConfiguration("warn_signal_dbm"),
-                "error_signal_dbm": LaunchConfiguration("error_signal_dbm"),
+                "warn_signal_dbm": _dbl("warn_signal_dbm"),
+                "error_signal_dbm": _dbl("error_signal_dbm"),
             }
         ],
     )

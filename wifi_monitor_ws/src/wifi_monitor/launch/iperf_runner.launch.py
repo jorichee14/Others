@@ -17,6 +17,16 @@ def _str(name: str) -> ParameterValue:
     return ParameterValue(LaunchConfiguration(name), value_type=str)
 
 
+def _dbl(name: str) -> ParameterValue:
+    """Force a launch arg to be a DOUBLE parameter.
+
+    Same reason as _str: a value typed without a decimal point (e.g.
+    start_delay_s:=10) would be inferred as INTEGER and rejected by the
+    node's double parameter declaration.
+    """
+    return ParameterValue(LaunchConfiguration(name), value_type=float)
+
+
 def generate_launch_description() -> LaunchDescription:
     args = [
         DeclareLaunchArgument(
@@ -118,20 +128,20 @@ def generate_launch_description() -> LaunchDescription:
             "server_port": LaunchConfiguration("server_port"),
             "interface": _str("interface"),
             "protocol": _str("protocol"),
-            "duration_s": LaunchConfiguration("duration_s"),
-            "interval_s": LaunchConfiguration("interval_s"),
+            "duration_s": _dbl("duration_s"),
+            "interval_s": _dbl("interval_s"),
             "reverse": LaunchConfiguration("reverse"),
             "bidirectional": LaunchConfiguration("bidirectional"),
-            "bidir_period_s": LaunchConfiguration("bidir_period_s"),
-            "udp_bitrate_mbps": LaunchConfiguration("udp_bitrate_mbps"),
+            "bidir_period_s": _dbl("bidir_period_s"),
+            "udp_bitrate_mbps": _dbl("udp_bitrate_mbps"),
             "parallel": LaunchConfiguration("parallel"),
-            "omit_s": LaunchConfiguration("omit_s"),
+            "omit_s": _dbl("omit_s"),
             "connect_timeout_ms": LaunchConfiguration("connect_timeout_ms"),
-            "reconnect_poll_s": LaunchConfiguration("reconnect_poll_s"),
+            "reconnect_poll_s": _dbl("reconnect_poll_s"),
             "continuous": LaunchConfiguration("continuous"),
             "rtt_via_ss": LaunchConfiguration("rtt_via_ss"),
-            "continuous_interval_s": LaunchConfiguration("continuous_interval_s"),
-            "start_delay_s": LaunchConfiguration("start_delay_s"),
+            "continuous_interval_s": _dbl("continuous_interval_s"),
+            "start_delay_s": _dbl("start_delay_s"),
         }],
     )
 

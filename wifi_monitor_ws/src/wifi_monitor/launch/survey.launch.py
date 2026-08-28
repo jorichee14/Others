@@ -28,6 +28,11 @@ def _str(name: str) -> ParameterValue:
     return ParameterValue(LaunchConfiguration(name), value_type=str)
 
 
+def _dbl(name: str) -> ParameterValue:
+    """Force a DOUBLE parameter (integer-looking values would be rejected)."""
+    return ParameterValue(LaunchConfiguration(name), value_type=float)
+
+
 def generate_launch_description() -> LaunchDescription:
     args = [
         DeclareLaunchArgument(
@@ -81,7 +86,7 @@ def generate_launch_description() -> LaunchDescription:
         name="wifi_monitor", output="screen",
         parameters=[{
             "interface": iface,
-            "publish_rate_hz": LaunchConfiguration("wifi_rate_hz"),
+            "publish_rate_hz": _dbl("wifi_rate_hz"),
         }],
     )
 
@@ -94,9 +99,9 @@ def generate_launch_description() -> LaunchDescription:
             "interface": iface,
             "continuous": True,
             "parallel": LaunchConfiguration("parallel"),
-            "continuous_interval_s": LaunchConfiguration("continuous_interval_s"),
+            "continuous_interval_s": _dbl("continuous_interval_s"),
             "bidirectional": LaunchConfiguration("bidirectional"),
-            "bidir_period_s": LaunchConfiguration("bidir_period_s"),
+            "bidir_period_s": _dbl("bidir_period_s"),
         }],
     )
 
