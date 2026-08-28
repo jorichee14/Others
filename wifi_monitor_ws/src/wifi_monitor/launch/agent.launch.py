@@ -70,6 +70,11 @@ def generate_launch_description() -> LaunchDescription:
             "'b' = r2r server robot (runs iperf3 -s for robot A).",
         ),
         DeclareLaunchArgument(
+            "namespace", default_value="",
+            description="Namespace for the nodes and topics, e.g. robota -> "
+            "/robota/wifi/status, /robota/wifi/iperf. '' = no namespace.",
+        ),
+        DeclareLaunchArgument(
             "laptop_address", default_value="192.168.233.142",
             description="The wired iperf3 server (agent->server tests).",
         ),
@@ -122,10 +127,11 @@ def generate_launch_description() -> LaunchDescription:
     ]
 
     iface = _str("interface")
+    ns = LaunchConfiguration("namespace")
 
     wifi = Node(
         package="wifi_monitor", executable="wifi_monitor_node",
-        name="wifi_monitor", output="screen",
+        name="wifi_monitor", namespace=ns, output="screen",
         parameters=[{
             "interface": iface,
             "publish_rate_hz": _dbl("wifi_rate_hz"),
@@ -142,7 +148,7 @@ def generate_launch_description() -> LaunchDescription:
     # --- role a ------------------------------------------------------------
     a_server = Node(
         package="wifi_monitor", executable="iperf_runner_node",
-        name="iperf_runner", output="screen",
+        name="iperf_runner", namespace=ns, output="screen",
         condition=_role_is("a"),
         parameters=[{
             **common,
@@ -156,7 +162,7 @@ def generate_launch_description() -> LaunchDescription:
     # Only started when robot B exists (robot_b_address non-empty).
     a_r2r = Node(
         package="wifi_monitor", executable="iperf_runner_node",
-        name="iperf_runner_r2r", output="screen",
+        name="iperf_runner_r2r", namespace=ns, output="screen",
         condition=IfCondition(PythonExpression([
             "'", LaunchConfiguration("role"), "' == 'a' and '",
             LaunchConfiguration("robot_b_address"), "' != ''",
@@ -181,7 +187,7 @@ def generate_launch_description() -> LaunchDescription:
 
     b_server = Node(
         package="wifi_monitor", executable="iperf_runner_node",
-        name="iperf_runner", output="screen",
+        name="iperf_runner", namespace=ns, output="screen",
         condition=_role_is("b"),
         parameters=[{
             **common,

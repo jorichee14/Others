@@ -36,6 +36,10 @@ def _dbl(name: str) -> ParameterValue:
 def generate_launch_description() -> LaunchDescription:
     args = [
         DeclareLaunchArgument(
+            "namespace", default_value="",
+            description="Namespace for the nodes and topics ('' = none).",
+        ),
+        DeclareLaunchArgument(
             "server_address", default_value="192.168.233.142",
             description="iperf3 server + ping target (the static wired laptop).",
         ),
@@ -80,10 +84,11 @@ def generate_launch_description() -> LaunchDescription:
 
     server = _str("server_address")
     iface = _str("interface")
+    ns = LaunchConfiguration("namespace")
 
     wifi = Node(
         package="wifi_monitor", executable="wifi_monitor_node",
-        name="wifi_monitor", output="screen",
+        name="wifi_monitor", namespace=ns, output="screen",
         parameters=[{
             "interface": iface,
             "publish_rate_hz": _dbl("wifi_rate_hz"),
@@ -92,7 +97,7 @@ def generate_launch_description() -> LaunchDescription:
 
     iperf = Node(
         package="wifi_monitor", executable="iperf_runner_node",
-        name="iperf_runner", output="screen",
+        name="iperf_runner", namespace=ns, output="screen",
         condition=IfCondition(LaunchConfiguration("run_iperf")),
         parameters=[{
             "server_address": server,
@@ -107,7 +112,7 @@ def generate_launch_description() -> LaunchDescription:
 
     ping = Node(
         package="wifi_monitor", executable="ping_monitor_node",
-        name="ping_monitor", output="screen",
+        name="ping_monitor", namespace=ns, output="screen",
         condition=IfCondition(LaunchConfiguration("run_ping")),
         parameters=[{
             "target": server,

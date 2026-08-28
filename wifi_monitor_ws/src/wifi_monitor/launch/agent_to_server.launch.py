@@ -35,6 +35,11 @@ def _dbl(name: str) -> ParameterValue:
 def generate_launch_description() -> LaunchDescription:
     args = [
         DeclareLaunchArgument(
+            "namespace", default_value="",
+            description="Namespace for the nodes and topics, e.g. robota -> "
+            "/robota/wifi/status, /robota/wifi/iperf. '' = no namespace.",
+        ),
+        DeclareLaunchArgument(
             "server_address", default_value="192.168.233.142",
             description="The wired iperf3 server.",
         ),
@@ -85,9 +90,11 @@ def generate_launch_description() -> LaunchDescription:
 
     iface = _str("interface")
 
+    ns = LaunchConfiguration("namespace")
+
     wifi = Node(
         package="wifi_monitor", executable="wifi_monitor_node",
-        name="wifi_monitor", output="screen",
+        name="wifi_monitor", namespace=ns, output="screen",
         parameters=[{
             "interface": iface,
             "publish_rate_hz": _dbl("wifi_rate_hz"),
@@ -96,7 +103,7 @@ def generate_launch_description() -> LaunchDescription:
 
     iperf = Node(
         package="wifi_monitor", executable="iperf_runner_node",
-        name="iperf_runner", output="screen",
+        name="iperf_runner", namespace=ns, output="screen",
         parameters=[{
             "interface": iface,
             "server_address": _str("server_address"),
