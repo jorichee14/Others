@@ -413,6 +413,7 @@ class IperfRunnerNode(Node):
             f"continuous iperf {self._proto.upper()} {arrow} started{seg}."
         )
         published = False
+        last_line = ""  # iperf3's error text, for when no samples arrive
         try:
             while not self._stop.is_set() and proc.poll() is None:
                 rlist, _, _ = select.select([proc.stdout], [], [], 1.0)
@@ -424,6 +425,8 @@ class IperfRunnerNode(Node):
                 line = proc.stdout.readline()
                 if line == "":
                     break  # EOF: process ended
+                if line.strip():
+                    last_line = line.strip()
                 parsed = iperf_parse.parse_interval_line(line, self._parallel)
                 if parsed is None:
                     continue
@@ -448,6 +451,13 @@ class IperfRunnerNode(Node):
                     proc.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+        # A run that produced no samples is a failed connection (unreachable
+        # server, busy server, ...): surface iperf3's own error instead of
+        # silently restarting.
+        if not published and not self._stop.is_set():
+            err = last_line or f"iperf3 exited ({proc.returncode}) with no output"
+            self.get_logger().warn(f"continuous iperf got no samples: {err}")
+            self._pub.publish(self._new_msg(success=False, error=err[:200]))
         return published
 
     @staticmethod
