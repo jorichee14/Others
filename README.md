@@ -332,35 +332,29 @@ iperf3 -s -p 5201 &        # serves robot A
 iperf3 -s -p 5211 &        # serves robot B
 ```
 
-**Robot B** — additionally serves robot A's r2r tests:
+**Each robot: one command** — `agent.launch.py` brings up everything for its
+role. On robot A it starts the passive monitor plus both client instances
+(A→server uplink at slot t=0, A↔B bidirectional at t=10). On robot B it
+starts the passive monitor, the B→server client (uplink, slot t=20), **and
+the `iperf3 -s` server for the r2r link** (respawned automatically if it
+dies):
 
 ```bash
-iperf3 -s -p 5202
+# Robot A:
+ros2 launch wifi_monitor agent.launch.py role:=a \
+    robot_b_address:=<robot_B_ip>
+
+# Robot B:
+ros2 launch wifi_monitor agent.launch.py role:=b
 ```
 
-**Robot A** — two client instances (plus the passive monitor):
-
-```bash
-# A -> server, uplink only, slot t = 0
-# (reverse:=true for downlink instead, bidirectional:=true for both)
-ros2 launch wifi_monitor iperf_runner.launch.py \
-    server_address:=192.168.233.142 server_port:=5201
-
-# A <-> B, both directions alternating, slot t = 10
-ros2 launch wifi_monitor iperf_runner.launch.py \
-    server_address:=<robot_B_ip> server_port:=5202 \
-    name:=iperf_runner_r2r topic:=wifi/iperf_r2r \
-    bidirectional:=true start_delay_s:=10
-```
-
-**Robot B** — one client instance, slot t = 20:
-
-```bash
-# B -> server, uplink only, slot t = 20
-ros2 launch wifi_monitor iperf_runner.launch.py \
-    server_address:=192.168.233.142 server_port:=5211 \
-    start_delay_s:=20
-```
+`laptop_address` (default 192.168.233.142), the three ports
+(`laptop_port_a`/`laptop_port_b`/`r2r_port`), the slot offsets
+(`slot_a_server_s`/`slot_a_r2r_s`/`slot_b_server_s`), `reverse` (direction
+of the agent→server tests), `duration_s` and `interval_s` are all
+overridable. For custom setups (different slot layout, bidirectional server
+tests, extra pairs) compose `iperf_runner.launch.py` instances by hand as
+shown above instead.
 
 That yields four series — A→server, B→server (every 30 s each), and A→B /
 B→A (every 60 s each, since the r2r instance alternates). Record on **each**
