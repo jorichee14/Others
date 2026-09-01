@@ -5,47 +5,50 @@ GOAL
   Before any estimator is built for mobile_2 (D455 + VSLAM, no LiDAR), three questions
   must be answered from the data, because a "no" to any of them changes the design:
 
-  0a  Where are the surveyed boards in the GLIM map frame, and how good is each?
-      Survey poses live in the normalised frame N (anchor board at origin); they are
-      pulled back through inv(T_N_world). Per-board sigma is taken as
-      max(section std, loop-closure disagreement) -- the raw std is optimistic for
-      boards with a thin second section (anchor_b: 2 mm std but a *significant*
-      12.9 mm / 2.6 deg loop closure).
+  0a  Where are the surveyed boards in the map frame, and how good is each?
+      Poses come from stage 03's anchor_frame.json, pulled back through inv(T_N_world).
+      Per-board sigma = max(section std, loop-closure disagreement) -- the raw std is
+      optimistic for boards with a thin second section (anchor_b: 2 mm std but a
+      *significant* 12.9 mm / 2.6 deg loop closure).
 
   0b  How often does mobile_2 actually see a board?  (THE GATE)
       >= 4 well-separated sighting windows -> the fiducial/geometry/joint ablation is
       meaningful. Fewer -> the fiducial arm collapses to "VSLAM with one anchor";
-      reframe, do not fuse. anchor and anchor_b are the SAME physical design
-      (instances of it), so detections are disambiguated by cluster distance to the
-      unambiguous DICT_5X5 board, never by marker id.
+      reframe, do not fuse. anchor / anchor_b are instances of ONE design, so
+      sightings are named by cluster distance to a single-instance design
+      (rs_anchor), never by marker id.
 
   0c  Are the boards still where the survey (96 min earlier) says, and is VSLAM's
       metric scale sane? Extrinsic-free joint test: inter-board baselines measured
       through VSLAM inside this bag vs the surveyed baselines.
 
-  Plus: the board-frame axis convention check. PnP under ANY rigid axis convention
-  reproduces the same image corners and the same board ORIGIN -- only the board's
-  orientation frame changes -- so the convention cannot be picked from detections
-  alone. It is picked by comparing board-to-board RELATIVE rotations against the
-  survey (wrong conventions are off by ~90-180 deg, VSLAM drift by ~1 deg).
+DETECTION
+  Primary: the pipeline's own detector (pipeline_boards.bank_from_config + bank.detect),
+  imported from the directory of --config -- the SAME code and frame_fix(board_axes,
+  board_origin) that produced the survey, so detected poses are in the survey's board
+  frame by construction. Fallback (pipeline modules not importable): a built-in
+  ChArUco detector that tries both legacy and modern square layouts and, because its
+  frame convention is then a guess, checks it against the survey via board-to-board
+  relative rotations (PnP origins are convention-invariant; only orientations
+  discriminate).
 
-OUTPUT (in --out)
-  census_raw.npz        raw detections (resume cache; delete to re-detect)
-  step0_sightings.npz   assigned sightings + chosen axis convention + board poses,
-                        consumed by the registration / pose-graph stage
+  Zero sightings triggers a probe: n frames sampled across the bag, aruco MARKER
+  counts vs interpolated CORNER counts per dictionary (raw and CLAHE-equalised),
+  frames saved with detections drawn. Markers 0 everywhere -> board too small/far,
+  image too dark (--equalize), wrong topic. Markers > 0 but corners 0 -> board
+  layout mismatch. Corners > 0 but 0 accepted -> the gates are rejecting everything.
+
+OUTPUT (--out)
+  step0_sightings.npz   assigned sightings + board poses, for the registration stage
+  census_raw.npz        detection cache (delete or --force to re-detect)
   census.png            sighting timeline + range plot
-  stdout                the 0a/0b/0c report and the PASS/FAIL gate
+  probe_*.png           only when the census comes back empty
 
 USAGE
   python3 m2_step0_boards.py \
-      --bag    /path/to/mirc_dataset_coop2_20260828_merged \
+      --bag    ../../raw/20260828/mirc_dataset_coop2_20260828_merged \
       --survey map_stages_20260828_outputs/anchor_frame.json \
-      --config pipeline_config.json \
-      --out    m2_reference
-  --config supplies the board designs (marker_len, min_corners, max_reproj) from the
-  existing pipeline config; detection defaults fall back to it. Use --image-topic to
-  switch to the color camera if the IR projector speckle ruins infra1 detection
-  (watch mean reproj vs the survey's 0.22-0.39 px).
+      --config pipeline_config.json --out m2_reference
 """
 import argparse, collections, json, math, sys, time
 from pathlib import Path
@@ -77,22 +80,18 @@ def interp_traj(ts_src, Ts_src, ts_q):
     return out
 
 # ----------------------------------------------------------------- bag access
-def bag_reader(path):
-    import rosbag2_py
-    r = rosbag2_py.SequentialReader()
-    r.open(rosbag2_py.StorageOptions(uri=str(path), storage_id="mcap"),
-           rosbag2_py.ConverterOptions("", ""))
-    return r, {t.name: t.type for t in r.get_all_topics_and_types()}
-
 def iter_topic(path, topic, stride=1, limit=None):
     """Yield (t_sec, msg); t is the header stamp when present, else bag time."""
     import rosbag2_py
     from rclpy.serialization import deserialize_message
     try:
         from rosidl_runtime_py.utilities import get_message
-    except ImportError:                      # very old distros
+    except ImportError:
         from rosidl_runtime_py.utility import get_message
-    r, types = bag_reader(path)
+    r = rosbag2_py.SequentialReader()
+    r.open(rosbag2_py.StorageOptions(uri=str(path), storage_id="mcap"),
+           rosbag2_py.ConverterOptions("", ""))
+    types = {t.name: t.type for t in r.get_all_topics_and_types()}
     if topic not in types:
         raise KeyError(f"{topic} not in bag; have {sorted(types)[:8]}...")
     cls = get_message(types[topic])
@@ -123,64 +122,195 @@ def img_to_np(m):
     im = a.reshape(m.height, m.step // ch, ch)[:, :m.width]
     return im[..., ::-1][..., :3] if enc.startswith("rgb") else im[..., :3]
 
+def to_gray(m):
+    import cv2
+    im = img_to_np(m)
+    return im if im.ndim == 2 else cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+
 def odom_to_T(m):
     p = m.pose.pose.position; o = m.pose.pose.orientation
     return Rt(q_to_R([o.x, o.y, o.z, o.w]), np.array([p.x, p.y, p.z]))
 
-# ----------------------------------------------------------------- ChArUco
-# Candidate board-frame axis conventions (map from the surveyed frame to OpenCV's
-# X-right / Y-down / Z-out board frame). Which one the survey used is checked
-# against the data by axis_check(); the config's name ("ros") does not define the
-# rotation unambiguously.
+def _clahe(gray):
+    import cv2
+    return cv2.createCLAHE(3.0, (8, 8)).apply(gray)
+
+# ================================================================= stage 0a
+def load_survey(survey_path):
+    S = json.loads(Path(survey_path).read_text())
+    T_world_N = inv(np.array(S["T_N_world"]))
+    boards = {}
+    for name, b in S["boards"].items():
+        lc = b.get("loop_closure", {}) or {}
+        boards[name] = dict(
+            name=name, design=b.get("design", name),
+            T_map_board=T_world_N @ Rt(q_to_R(b["qxyzw"]), np.array(b["xyz"])),
+            squares=tuple(b["squares"]), square_len=b["square_len"],
+            dictionary=b["dictionary"], id_offset=b.get("id_offset", 0),
+            sigma_t=max(b.get("std_mm", 0.0), lc.get("mm", 0.0)) * 1e-3,
+            sigma_r=math.radians(max(lc.get("deg", 0.0), 0.2)),
+            n_views=b.get("n_views", 0),
+            drift_warning=bool(b.get("drift_warning", False)),
+            lc_significant=bool(lc.get("significant", False)),
+        )
+    meta = dict(board_axes=S.get("board_axes", "opencv"),
+                board_origin=S.get("board_origin", "corner"))
+    return boards, meta
+
+def report_survey(boards):
+    print(f"\n=== 0a: surveyed boards in the map frame ===")
+    print(f"{'board':11s} {'design':10s} {'x':>8s} {'y':>8s} {'z':>8s}  "
+          f"{'sig_t':>7s} {'sig_R':>7s} {'views':>5s}  flags")
+    for n, b in boards.items():
+        p = b["T_map_board"][:3, 3]
+        fl = ",".join(f for f, on in [("DRIFT", b["drift_warning"]),
+                                      ("LC-SIG", b["lc_significant"])] if on) or "-"
+        print(f"{n:11s} {b['design']:10s} {p[0]:8.3f} {p[1]:8.3f} {p[2]:8.3f}  "
+              f"{b['sigma_t']*1000:6.1f}mm {math.degrees(b['sigma_r']):6.2f}d "
+              f"{b['n_views']:5d}  {fl}")
+    multi = {d: [n for n, b in boards.items() if b["design"] == d]
+             for d in {b["design"] for b in boards.values()}}
+    for d, v in multi.items():
+        if len(v) > 1:
+            print(f"!! design '{d}' has instances {v} -> named by position, not id")
+    names = list(boards)
+    print("surveyed baselines (rangefinder targets - long, one in a corridor):")
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            d = np.linalg.norm(boards[names[i]]["T_map_board"][:3, 3] -
+                               boards[names[j]]["T_map_board"][:3, 3])
+            print(f"  {names[i]:11s} -> {names[j]:11s} {d:7.3f} m")
+    return multi
+
+# ================================================================= detection: pipeline
+def census_pipeline(args, boards, meta):
+    """Primary path: the survey's own detector + frame_fix, so detected poses are in
+    the survey board frame by construction. Returns rows or None if unavailable."""
+    cfg_dir = str(Path(args.config).resolve().parent)
+    if cfg_dir not in sys.path: sys.path.insert(0, cfg_dir)
+    try:
+        from pipeline_boards import bank_from_config
+        import pipeline_common  # noqa: F401  (bank may need it)
+    except ImportError as e:
+        print(f"(pipeline detector not importable from {cfg_dir}: {e})")
+        return None
+    import cv2
+    cfg = json.loads(Path(args.config).read_text())
+    designs = sorted({b["design"] for b in boards.values() if b["design"] in cfg.get("boards", {})})
+    if not designs:
+        print("(no survey design matches the --config boards registry)")
+        return None
+    try:
+        bank = bank_from_config(cfg, designs)
+        FIX = {b.name: b.frame_fix(meta["board_axes"], meta["board_origin"])
+               for b in bank.designs}
+    except Exception as e:
+        print(f"(pipeline detector setup failed: {type(e).__name__}: {e})")
+        return None
+    K, w, h = camera_K(args.bag, args.camera_info_topic)
+    D = np.zeros(5)                       # image_rect_raw is rectified
+    print(f"\n=== 0b: census over {args.image_topic} ({w}x{h}, fx={K[0,0]:.1f}) === "
+          f"pipeline detector, designs {designs}, frame_fix"
+          f"({meta['board_axes']},{meta['board_origin']})"
+          + ("  [CLAHE]" if args.equalize else ""))
+    rows, t0, nfr = [], time.time(), 0
+    try:
+        for fi, (t, m) in enumerate(iter_topic(args.bag, args.image_topic,
+                                               stride=args.stride,
+                                               limit=args.limit or None)):
+            nfr += 1
+            gray = to_gray(m)
+            if args.equalize: gray = _clahe(gray)
+            for d in bank.detect(gray, K, D, stamp=t):
+                T_cb = d.T @ FIX[d.design]
+                rows.append(dict(t=t, frame=fi, design=d.design, T_cb=T_cb,
+                                 n=int(d.n), err=float(d.reproj),
+                                 ratio=float(getattr(d, "ratio", np.inf)),
+                                 rng=float(np.linalg.norm(T_cb[:3, 3])),
+                                 ids=None, uv=None, src="pipeline"))
+            if fi and fi % 200 == 0:
+                print(f"  {fi:5d} frames  {len(rows):4d} sightings  "
+                      f"{time.time()-t0:5.1f}s", flush=True)
+    except Exception as e:
+        print(f"(pipeline detector failed mid-run: {type(e).__name__}: {e})")
+        return None
+    print(f"{len(rows)} sightings over {nfr} frames in {time.time()-t0:.1f}s")
+    for b in bank.designs:
+        try:    print(f"  {b.name:12s} {b.reject_str()}")
+        except Exception: pass
+    return rows
+
+# ================================================================= detection: builtin
+_DET, _PARAMS = {}, None
+BOARD_AXES = "cv"          # builtin fallback only; checked by axis_check()
 AXIS_CANDIDATES = {
     "cv":       np.eye(3),
     "xy_flip":  np.diag([1.0, -1.0, -1.0]),
     "ros":      np.array([[0., -1., 0.], [0., 0., -1.], [1., 0., 0.]]),
     "ros_180":  np.array([[0., 1., 0.], [0., 0., -1.], [-1., 0., 0.]]),
 }
-BOARD_AXES = "cv"          # overwritten by axis_check()
-_DET = {}
 
-def make_board(spec):
+def detector_params():
+    import cv2
+    global _PARAMS
+    if _PARAMS is None:
+        try:               p = cv2.aruco.DetectorParameters()
+        except AttributeError: p = cv2.aruco.DetectorParameters_create()
+        try:               p.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        except AttributeError: pass
+        _PARAMS = p
+    return _PARAMS
+
+def make_board(spec, legacy=True):
     import cv2
     d = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, spec["dictionary"]))
     sx, sy = spec["squares"]
-    try:                                  # OpenCV >= 4.7
-        b = cv2.aruco.CharucoBoard((sx, sy), spec["square_len"], spec["marker_len"], d)
-        b.setLegacyPattern(True)
-    except AttributeError:                # OpenCV 4.6
+    if hasattr(cv2.aruco, "CharucoBoard_create"):    # old API (<=4.6): legacy layout inherent
         b = cv2.aruco.CharucoBoard_create(sx, sy, spec["square_len"], spec["marker_len"], d)
+    else:
+        b = cv2.aruco.CharucoBoard((sx, sy), spec["square_len"], spec["marker_len"], d)
+        b.setLegacyPattern(legacy)
     return b, d
 
 def board_object_points(spec, axes=None):
-    """Interior ChArUco corners, (sx-1)*(sy-1) x 3, in the SURVEYED board frame."""
+    """Interior ChArUco corners in the surveyed board frame (builtin path)."""
     sx, sy = spec["squares"]; sq = spec["square_len"]
     j, i = np.meshgrid(np.arange(1, sy), np.arange(1, sx), indexing="ij")
     P = np.column_stack([i.ravel() * sq, j.ravel() * sq, np.zeros(i.size)])
-    P -= np.array([sx * sq / 2, sy * sq / 2, 0.0])           # board_origin = "center"
+    P -= np.array([sx * sq / 2, sy * sq / 2, 0.0])
     Rc = AXIS_CANDIDATES[axes or BOARD_AXES]
-    return P @ np.linalg.inv(Rc).T                           # p_board = Rc^-1 p_cv
+    return P @ np.linalg.inv(Rc).T
 
 def detect_charuco(gray, spec):
-    """-> (corner_ids (n,), uv (n,2)) or (None, None)."""
+    """-> (ids, uv, n_markers, legacy). n_markers reports markers of this DICTIONARY
+    even when interpolation failed - separates 'not visible' from 'layout mismatch'.
+    On OpenCV >= 4.7 both legacy and modern layouts are tried."""
     import cv2
     key = (spec["dictionary"], spec["squares"], spec["square_len"])
-    if key not in _DET: _DET[key] = make_board(spec)
-    board, dic = _DET[key]
-    if hasattr(cv2.aruco, "CharucoDetector"):
-        cc, ci, _, _ = cv2.aruco.CharucoDetector(board).detectBoard(gray)
-        if cc is None or len(cc) < 4: return None, None
-        return ci.ravel().astype(int), cc.reshape(-1, 2)
-    mc, mi, _ = cv2.aruco.detectMarkers(gray, dic)
-    if mi is None or len(mi) < 2: return None, None
-    n, cc, ci = cv2.aruco.interpolateCornersCharuco(mc, mi, gray, board)
-    if n is None or n < 4: return None, None
-    return ci.ravel().astype(int), cc.reshape(-1, 2)
+    old_api = hasattr(cv2.aruco, "CharucoBoard_create")
+    best_ids, best_uv, best_leg, nm_max = None, None, None, 0
+    for legacy in ([True] if old_api else [True, False]):
+        k = key + (legacy,)
+        if k not in _DET: _DET[k] = make_board(spec, legacy)
+        board, dic = _DET[k]
+        cc = ci = None
+        if old_api:
+            mc, mi, _ = cv2.aruco.detectMarkers(gray, dic, parameters=detector_params())
+            nm = 0 if mi is None else len(mi)
+            if nm >= 2:
+                n, cc, ci = cv2.aruco.interpolateCornersCharuco(mc, mi, gray, board)
+                if not n: cc = ci = None
+        else:
+            cc, ci, mc, mi = cv2.aruco.CharucoDetector(board).detectBoard(gray)
+            nm = 0 if mi is None else len(mi)
+            if cc is None or len(cc) < 4: cc = ci = None
+        nm_max = max(nm_max, nm)
+        if ci is not None and (best_ids is None or len(ci) > len(best_ids)):
+            best_ids, best_uv, best_leg = ci.ravel().astype(int), cc.reshape(-1, 2), legacy
+    return best_ids, best_uv, nm_max, best_leg
 
 def pnp_board(ids, uv, spec, K, axes=None):
-    """-> (T_cam_board, mean_reproj_px, ambiguity_ratio). Planar targets have a
-    two-fold pose ambiguity at grazing views; the IPPE ratio (2nd/1st solution
-    reprojection error) flags it -- gated by the config's min_ambiguity_ratio."""
+    """-> (T_cam_board, mean_reproj_px, IPPE ambiguity ratio)."""
     import cv2
     P = board_object_points(spec, axes)[ids].astype(np.float64)
     if len(P) < 4: return None, np.inf, 0.0
@@ -201,107 +331,104 @@ def pnp_board(ids, uv, spec, K, axes=None):
     err = float(np.mean(np.linalg.norm(proj.reshape(-1, 2) - uv, axis=1)))
     return Rt(cv2.Rodrigues(rv)[0], tv.ravel()), err, ratio
 
-# ================================================================= stage 0a
-def load_survey(survey_path, cfg_boards):
-    S = json.loads(Path(survey_path).read_text())
-    T_world_N = inv(np.array(S["T_N_world"]))
-    # detection params come from the pipeline config, matched by design
-    def design_of(b):
-        for d in (cfg_boards or {}).values():
-            if (d.get("dictionary") == b["dictionary"]
-                    and (d.get("squares_x"), d.get("squares_y")) == tuple(b["squares"])
-                    and abs(d.get("square_len", 0) - b["square_len"]) < 1e-9):
-                return d
-        return {}
-    boards = {}
-    for name, b in S["boards"].items():
-        d = design_of(b)
-        lc = b.get("loop_closure", {}) or {}
-        boards[name] = dict(
-            name=name,
-            T_map_board=T_world_N @ Rt(q_to_R(b["qxyzw"]), np.array(b["xyz"])),
-            squares=tuple(b["squares"]), square_len=b["square_len"],
-            marker_len=d.get("marker_len", 0.75 * b["square_len"]),
-            dictionary=b["dictionary"], id_offset=b.get("id_offset", 0),
-            min_corners=d.get("min_corners", 8),
-            max_reproj=d.get("max_reproj", 1.5),
-            min_ambiguity=d.get("min_ambiguity_ratio", 1.5),
-            sigma_t=max(b.get("std_mm", 0.0), lc.get("mm", 0.0)) * 1e-3,
-            sigma_r=math.radians(max(lc.get("deg", 0.0), 0.2)),
-            n_views=b.get("n_views", 0),
-            drift_warning=bool(b.get("drift_warning", False)),
-            lc_significant=bool(lc.get("significant", False)),
-        )
-        if not d:
-            print(f"  (no design in --config matches '{name}'; "
-                  f"marker_len defaulted to {boards[name]['marker_len']:.4f})")
-    return boards
-
-def report_survey(boards):
-    print(f"\n=== 0a: surveyed boards in the map frame ===")
-    print(f"{'board':11s} {'x':>8s} {'y':>8s} {'z':>8s}  {'sig_t':>7s} {'sig_R':>7s} {'views':>5s}  flags")
-    for n, b in boards.items():
-        p = b["T_map_board"][:3, 3]
-        fl = ",".join(f for f, on in [("DRIFT", b["drift_warning"]),
-                                      ("LC-SIG", b["lc_significant"])] if on) or "-"
-        print(f"{n:11s} {p[0]:8.3f} {p[1]:8.3f} {p[2]:8.3f}  "
-              f"{b['sigma_t']*1000:6.1f}mm {math.degrees(b['sigma_r']):6.2f}d {b['n_views']:5d}  {fl}")
-    grp = collections.defaultdict(list)
-    for n, b in boards.items():
-        grp[(b["dictionary"], b["id_offset"], b["squares"])].append(n)
-    ambig = {k: v for k, v in grp.items() if len(v) > 1}
-    for k, v in ambig.items():
-        print(f"!! ID COLLISION {v} share {k[0]} offset {k[1]} {k[2]} "
-              "-> disambiguated by position, not id")
-    names = list(boards)
-    print("surveyed baselines (rangefinder targets - long, one in a corridor):")
-    for i in range(len(names)):
-        for j in range(i + 1, len(names)):
-            d = np.linalg.norm(boards[names[i]]["T_map_board"][:3, 3] -
-                               boards[names[j]]["T_map_board"][:3, 3])
-            print(f"  {names[i]:11s} -> {names[j]:11s} {d:7.3f} m")
-    return ambig
-
-# ================================================================= stage 0b
-def run_census(args, boards, K):
-    """Detect every distinct board design over the image topic. Cached."""
+def census_builtin(args, boards, cfg_boards):
+    """Fallback detector, fully instrumented."""
     import cv2
-    cache = Path(args.out) / "census_raw.npz"
-    if cache.exists() and not args.force:
-        rows = list(np.load(cache, allow_pickle=True)["rows"])
-        print(f"\n=== 0b: census (cached) === {len(rows)} raw sightings from {cache}")
-        return rows
+    print(f"\n=== 0b: census over {args.image_topic} === builtin detector, opencv "
+          f"{cv2.__version__}" + ("  [CLAHE]" if args.equalize else ""))
+    K, w, h = camera_K(args.bag, args.camera_info_topic)
     uniq, seen = [], set()
     for b in boards.values():
-        k = (b["dictionary"], b["squares"], b["square_len"])
-        if k not in seen: seen.add(k); uniq.append((k, b))
-    print(f"\n=== 0b: census over {args.image_topic} === "
-          f"designs: {[k[0] for k, _ in uniq]}")
-    rows, t0 = [], time.time()
+        d = cfg_boards.get(b["design"], {})
+        spec = dict(b, marker_len=d.get("marker_len", 0.75 * b["square_len"]),
+                    min_corners=d.get("min_corners", 8),
+                    max_reproj=d.get("max_reproj", 1.5),
+                    min_ambiguity=d.get("min_ambiguity_ratio", 1.5))
+        if b["design"] not in seen: seen.add(b["design"]); uniq.append(spec)
+    stats = {s_["design"]: collections.Counter() for s_ in uniq}
+    rows, t0, nfr = [], time.time(), 0
     for fi, (t, m) in enumerate(iter_topic(args.bag, args.image_topic,
                                            stride=args.stride, limit=args.limit or None)):
-        im = img_to_np(m)
-        gray = im if im.ndim == 2 else cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
-        for k, spec in uniq:
-            ids, uv = detect_charuco(gray, spec)
-            if ids is None or len(ids) < spec["min_corners"]: continue
+        nfr += 1
+        gray = to_gray(m)
+        if args.equalize: gray = _clahe(gray)
+        for spec in uniq:
+            st = stats[spec["design"]]
+            ids, uv, nm, leg = detect_charuco(gray, spec)
+            if nm: st["frames_markers"] += 1; st["max_markers"] = max(st["max_markers"], nm)
+            if ids is None: continue
+            st["frames_corners"] += 1
+            if len(ids) < spec["min_corners"]: st["rej_corners"] += 1; continue
             T_cb, err, ratio = pnp_board(ids, uv, spec, K)
-            if T_cb is None or err > spec["max_reproj"]: continue
-            if ratio < spec["min_ambiguity"]: continue       # planar-pose ambiguity
-            rows.append(dict(t=t, frame=fi, key=k[0] + str(k[1]), n=len(ids),
-                             rng=float(np.linalg.norm(T_cb[:3, 3])), err=err,
-                             ratio=ratio, ids=ids, uv=uv))
+            if T_cb is None or err > spec["max_reproj"]: st["rej_reproj"] += 1; continue
+            if ratio < spec["min_ambiguity"]: st["rej_ambiguity"] += 1; continue
+            st["accepted"] += 1
+            rows.append(dict(t=t, frame=fi, design=spec["design"], T_cb=T_cb,
+                             n=len(ids), err=err, ratio=ratio,
+                             rng=float(np.linalg.norm(T_cb[:3, 3])),
+                             ids=ids, uv=uv, legacy=leg, src="builtin"))
         if fi and fi % 200 == 0:
             print(f"  {fi:5d} frames  {len(rows):4d} sightings  {time.time()-t0:5.1f}s",
                   flush=True)
-    np.savez_compressed(cache, rows=np.array(rows, dtype=object), allow_pickle=True)
-    print(f"{len(rows)} raw sightings in {time.time()-t0:.1f}s -> {cache}")
+    print(f"{len(rows)} accepted sightings over {nfr} frames in {time.time()-t0:.1f}s")
+    for dgn, st in stats.items():
+        print(f"  {dgn:12s} frames w/ markers {st['frames_markers']:5d} "
+              f"(max {st['max_markers']}/frame)  w/ corners {st['frames_corners']:5d}  "
+              f"accepted {st['accepted']:5d}  rejects c/r/a: "
+              f"{st['rej_corners']}/{st['rej_reproj']}/{st['rej_ambiguity']}")
     if rows:
-        mr = np.mean([r["err"] for r in rows])
-        print(f"mean reproj {mr:.3f} px (survey was 0.22-0.39 px; much worse => "
-              f"IR projector speckle, retry with --image-topic <color topic>)")
-    return rows
+        legs = collections.Counter(r.get("legacy") for r in rows)
+        print(f"mean reproj {np.mean([r['err'] for r in rows]):.3f} px "
+              f"(survey was 0.22-0.39 px); layout used: {dict(legs)}")
+    return rows, K
 
+def probe(args, boards, cfg_boards, n=12):
+    """Why zero? Sample n frames, report markers vs corners per dictionary
+    (raw and CLAHE), save the frames with detections drawn."""
+    import cv2
+    print(f"\n--- probe: {n} frames spread over {args.image_topic} ---")
+    total = None
+    meta = Path(args.bag) / "metadata.yaml"
+    if meta.exists():
+        try:
+            import yaml
+            y = yaml.safe_load(meta.read_text())["rosbag2_bagfile_information"]
+            for t in y["topics_with_message_count"]:
+                if t["topic_metadata"]["name"] == args.image_topic:
+                    total = t["message_count"]
+        except Exception:
+            pass
+    stride = max(1, (total or 3000) // n)
+    uniq, seen = [], set()
+    for b in boards.values():
+        d = cfg_boards.get(b["design"], {})
+        spec = dict(b, marker_len=d.get("marker_len", 0.75 * b["square_len"]))
+        if b["design"] not in seen: seen.add(b["design"]); uniq.append(spec)
+    for fi, (t, m) in enumerate(iter_topic(args.bag, args.image_topic,
+                                           stride=stride, limit=n)):
+        gray = to_gray(m); eq = _clahe(gray)
+        line = f"  frame {fi*stride:6d}  mean_px {gray.mean():5.1f}"
+        vis = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        drew = False
+        for spec in uniq:
+            ids, uv, nm, leg = detect_charuco(gray, spec)
+            ids2, uv2, nm2, _ = detect_charuco(eq, spec)
+            nc = 0 if ids is None else len(ids)
+            nc2 = 0 if ids2 is None else len(ids2)
+            line += (f" | {spec['dictionary'].replace('DICT_','')}: "
+                     f"mk {nm}({nm2}eq) corn {nc}({nc2}eq)")
+            dic = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, spec["dictionary"]))
+            mc, mi, _ = cv2.aruco.detectMarkers(eq, dic, parameters=detector_params())
+            if mi is not None and len(mi):
+                cv2.aruco.drawDetectedMarkers(vis, mc, mi); drew = True
+        print(line)
+        cv2.imwrite(str(Path(args.out) / f"probe_{'hit' if drew else 'raw'}_{fi*stride:06d}.png"), vis)
+    print(f"  frames written to {args.out}/probe_*.png - LOOK at them.")
+    print("  markers 0 everywhere -> too small/far, too dark (--equalize), wrong topic/dict")
+    print("  markers >0, corners 0 -> board layout mismatch (squares/marker_len/legacy)")
+    print("  corners >0, 0 accepted -> gates rejecting (min_corners/max_reproj/ambiguity)")
+
+# ================================================================= stages 0b/0c
 def load_vslam(args):
     vo_t, vo_T = [], []
     for t, m in iter_topic(args.bag, args.vo_topic, limit=args.limit or None):
@@ -311,20 +438,13 @@ def load_vslam(args):
           f"path {np.sum(np.linalg.norm(np.diff(vo_T[:,:3,3],axis=0),axis=1)):.1f} m")
     return vo_t, vo_T
 
-def assign_instances(raw, boards, ambig, vo_t, vo_T, K):
-    """Cluster sightings by board origin in the VSLAM frame (origins are invariant to
-    the axis convention), then name each cluster by its distance to a cluster of an
-    unambiguous design. Instances of one design can never be told apart by id."""
+def assign_instances(rows, boards, vo_t, vo_T):
+    """Cluster sightings by board origin in the VSLAM frame, then name each cluster
+    by its distance to a cluster of a single-instance design."""
     sight = []
-    for r in raw:
-        spec = next(b for b in boards.values()
-                    if b["dictionary"] + str(b["squares"]) == r["key"])
-        T_cb, err, _ = pnp_board(r["ids"], r["uv"], spec, K)
-        if T_cb is None or err > spec["max_reproj"]: continue
+    for r in rows:
         T_vo = interp_traj(vo_t, vo_T, np.array([r["t"]]))[0]
-        sight.append(dict(t=r["t"], n=r["n"], rng=r["rng"], err=err, key=r["key"],
-                          ids=r["ids"], uv=r["uv"], T_cb=T_cb,
-                          p_vo=(T_vo @ T_cb)[:3, 3]))
+        sight.append(dict(r, p_vo=(T_vo @ r["T_cb"])[:3, 3]))
     def cluster(pts, tol=0.6):
         lab = -np.ones(len(pts), int); c = 0
         for i in range(len(pts)):
@@ -332,39 +452,42 @@ def assign_instances(raw, boards, ambig, vo_t, vo_T, K):
             lab[np.linalg.norm(pts - pts[i], axis=1) < tol] = c; c += 1
         return lab, c
     clus = {}
-    for key in sorted({s["key"] for s in sight}):
-        idx = [i for i, s in enumerate(sight) if s["key"] == key]
+    for dgn in sorted({s["design"] for s in sight}):
+        idx = [i for i, s in enumerate(sight) if s["design"] == dgn]
         lab, nc = cluster(np.array([sight[i]["p_vo"] for i in idx]))
         for c in range(nc):
             sel = [idx[k] for k in np.where(lab == c)[0]]
-            clus[f"{key}#{c}"] = dict(key=key, idx=sel,
+            clus[f"{dgn}#{c}"] = dict(design=dgn, idx=sel,
                 p_vo=np.median([sight[i]["p_vo"] for i in sel], axis=0))
     print(f"\n{len(sight)} sightings -> {len(clus)} spatial clusters")
-    unamb = {n: b for n, b in boards.items() if not any(n in v for v in ambig.values())}
+    inst_of = collections.defaultdict(list)
+    for n, b in boards.items(): inst_of[b["design"]].append(n)
     ref_cid = next((cid for cid, c in clus.items()
-                    if any(c["key"] == b["dictionary"] + str(b["squares"])
-                           for b in unamb.values())), None)
+                    if len(inst_of[c["design"]]) == 1), None)
     assign = {}
     if ref_cid is None:
-        print("!! no unambiguous board seen - name the clusters by hand "
-              "(edit ASSIGN in the saved npz).")
+        if len(clus) == 1:
+            cid, c = next(iter(clus.items()))
+            cands = inst_of[c["design"]]
+            print(f"!! single cluster of multi-instance design '{c['design']}' and no "
+                  f"unambiguous board seen - cannot name it ({cands}); FIX BY HAND.")
+        else:
+            print("!! no single-instance design sighted - name clusters by hand.")
     else:
-        ref_name = next(n for n, b in unamb.items()
-                        if b["dictionary"] + str(b["squares"]) == clus[ref_cid]["key"])
+        ref_name = inst_of[clus[ref_cid]["design"]][0]
         assign[ref_cid] = ref_name
         p_ref = clus[ref_cid]["p_vo"]
         print(f"reference cluster {ref_cid} = '{ref_name}'")
         for cid, c in clus.items():
             if cid == ref_cid: continue
             d_meas = float(np.linalg.norm(c["p_vo"] - p_ref))
-            cands = {n: float(np.linalg.norm(b["T_map_board"][:3, 3] -
+            cands = {n: float(np.linalg.norm(boards[n]["T_map_board"][:3, 3] -
                                              boards[ref_name]["T_map_board"][:3, 3]))
-                     for n, b in boards.items()
-                     if n != ref_name and b["dictionary"] + str(b["squares"]) == c["key"]}
+                     for n in inst_of[c["design"]] if n != ref_name}
             if not cands: continue
             best = min(cands, key=lambda n: abs(cands[n] - d_meas))
             assign[cid] = best
-            print(f"  {cid:26s} d_meas={d_meas:6.2f} m -> '{best}'  "
+            print(f"  {cid:16s} d_meas={d_meas:6.2f} m -> '{best}'  "
                   f"(surveyed: {' '.join(f'{n}={v:.2f}' for n, v in cands.items())})")
     for cid, name in assign.items():
         for i in clus[cid]["idx"]: sight[i]["board"] = name
@@ -374,13 +497,21 @@ def assign_instances(raw, boards, ambig, vo_t, vo_T, K):
     return sight, assign
 
 def axis_check(sight, boards, vo_t, vo_T, K):
-    """Pick the surveyed board-frame convention from board-to-board relative
-    rotations (see module docstring). Needs >= 2 distinct boards sighted."""
+    """Builtin path only: the frame convention was a guess there, so verify it via
+    board-to-board relative rotations against the survey (origins cannot discriminate
+    conventions; orientations disagree by ~90-180 deg when wrong)."""
     global BOARD_AXES
+    if not sight or sight[0].get("src") != "builtin":
+        print("\n(frame convention taken from the pipeline's frame_fix - no check needed)")
+        return "pipeline_fix"
+    if any(s.get("ids") is None for s in sight):
+        return BOARD_AXES
     def score(axes):
         Rm = {}
         for s in sight:
-            T_cb, err, _ = pnp_board(s["ids"], s["uv"], boards[s["board"]], K, axes=axes)
+            spec = dict(boards[s["board"]],
+                        marker_len=0.75 * boards[s["board"]]["square_len"])
+            T_cb, err, _ = pnp_board(s["ids"], s["uv"], spec, K, axes=axes)
             if T_cb is None: continue
             T_vo = interp_traj(vo_t, vo_T, np.array([s["t"]]))[0]
             Rm.setdefault(s["board"], []).append((T_vo @ T_cb)[:3, :3])
@@ -395,22 +526,18 @@ def axis_check(sight, boards, vo_t, vo_T, K):
                 worst = max(worst, math.degrees(np.linalg.norm(
                     Rot.from_matrix(R_srv.T @ R_meas).as_rotvec())))
         return worst
-    print("\n=== board-axis convention check ===")
+    print("\n=== board-axis convention check (builtin detector) ===")
     scores = {a: score(a) for a in AXIS_CANDIDATES}
     if all(v is None for v in scores.values()):
-        print("!! <2 distinct boards sighted - convention unchecked; keeping "
-              f"'{BOARD_AXES}'. Set it from the survey tool's board-frame code.")
+        print(f"!! <2 distinct boards - convention unchecked; keeping '{BOARD_AXES}'")
         return BOARD_AXES
     for a, v in sorted(scores.items(), key=lambda kv: (kv[1] is None, kv[1])):
-        print(f"  {a:9s} relative-rotation disagreement "
-              + ("   n/a" if v is None else f"{v:8.2f} deg"))
+        print(f"  {a:9s} " + ("n/a" if v is None else f"{v:8.2f} deg"))
     BOARD_AXES = min((a for a in scores if scores[a] is not None), key=lambda a: scores[a])
     print(f"-> BOARD_AXES = '{BOARD_AXES}'  ({scores[BOARD_AXES]:.2f} deg)")
-    if scores[BOARD_AXES] > 10:
-        print("!! best candidate still >10 deg off - none of the enumerated conventions "
-              "matches the survey; add the survey tool's rotation to AXIS_CANDIDATES.")
-    for s in sight:                       # re-solve stored poses under the winner
-        T_cb, err, _ = pnp_board(s["ids"], s["uv"], boards[s["board"]], K, axes=BOARD_AXES)
+    for s in sight:
+        spec = dict(boards[s["board"]], marker_len=0.75 * boards[s["board"]]["square_len"])
+        T_cb, err, _ = pnp_board(s["ids"], s["uv"], spec, K, axes=BOARD_AXES)
         if T_cb is not None: s["T_cb"], s["err"] = T_cb, err
     return BOARD_AXES
 
@@ -454,9 +581,8 @@ def gate_report(sight, vo_t, out_dir):
     return windows, ok
 
 def stability_check(sight, boards):
-    """0c: measured inter-board baselines vs the survey. Joint test of board
-    stability and VSLAM scale; agreement validates both, disagreement flags a
-    problem without saying which."""
+    """0c: measured inter-board baselines vs the survey. Joint test of board stability
+    and VSLAM scale; agreement validates both."""
     bnames = sorted({s["board"] for s in sight})
     print(f"\n=== 0c: board stability / VSLAM scale ===")
     print(f"{'pair':26s} {'surveyed':>9s} {'measured':>9s} {'diff':>8s} {'n':>5s}")
@@ -473,25 +599,24 @@ def stability_check(sight, boards):
             print(f"{a+' <-> '+b:26s} {d_srv:8.3f}m {d_msr:8.3f}m "
                   f"{1000*(d_msr-d_srv):+7.0f}mm {len(pa)+len(pb):5d}")
     if len(rows) >= 2:
-        s = np.polyfit([r[0] for r in rows], [r[1] for r in rows], 1)[0]
-        print(f"implied VSLAM scale {s:.5f}  ({(s-1)*1e6:+.0f} ppm)")
+        sc = np.polyfit([r[0] for r in rows], [r[1] for r in rows], 1)[0]
+        print(f"implied VSLAM scale {sc:.5f}  ({(sc-1)*1e6:+.0f} ppm)")
         print("  consistent scale != 1 across pairs => VSLAM stereo scale error "
               "(estimable downstream); one pair off while others match => that board moved.")
     elif rows:
-        print("only one pair - cannot separate 'board moved' from 'VSLAM scale'; "
-              "treat a large diff as a warning, not a diagnosis.")
+        print("only one pair - cannot separate 'board moved' from 'VSLAM scale'.")
 
-def save_outputs(sight, assign, boards, out_dir):
+def save_outputs(sight, assign, boards, axes_used, out_dir):
     out = Path(out_dir) / "step0_sightings.npz"
     np.savez_compressed(
         out,
         sightings=np.array(sight, dtype=object),
-        board_axes=BOARD_AXES,
+        board_axes=axes_used,
         assign=np.array(list(assign.items()), dtype=object),
         boards=np.array([(n, b["T_map_board"], b["sigma_t"], b["sigma_r"])
                          for n, b in boards.items()], dtype=object),
         allow_pickle=True)
-    print(f"\nwrote {out}: {len(sight)} assigned sightings, BOARD_AXES='{BOARD_AXES}'")
+    print(f"\nwrote {out}: {len(sight)} assigned sightings (frame convention: {axes_used})")
     print("next stage (depth->clouds, scan-to-map, A/B/C pose graph) consumes this file.")
 
 # ================================================================= main
@@ -499,8 +624,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--bag", required=True, help="coop bag directory (rosbag2/mcap)")
     ap.add_argument("--survey", required=True, help="anchor_frame.json from stage 03")
-    ap.add_argument("--config", default=None,
-                    help="pipeline_config.json - supplies board marker_len + gates")
+    ap.add_argument("--config", default="pipeline_config.json",
+                    help="pipeline config; its directory also provides pipeline_boards.py")
     ap.add_argument("--out", default="m2_reference")
     ap.add_argument("--image-topic", default="/mobile_2/infra1/image_rect_raw")
     ap.add_argument("--camera-info-topic", default="/mobile_2/infra1/camera_info")
@@ -508,28 +633,50 @@ def main(argv=None):
     ap.add_argument("--stride", type=int, default=2, help="detect every Nth frame")
     ap.add_argument("--limit", type=int, default=0, help="frame cap for smoke tests")
     ap.add_argument("--force", action="store_true", help="ignore the detection cache")
+    ap.add_argument("--equalize", action="store_true",
+                    help="CLAHE-equalise frames before detection (dark IR images)")
+    ap.add_argument("--builtin", action="store_true",
+                    help="skip the pipeline detector, use the builtin one")
     args = ap.parse_args(argv)
     Path(args.out).mkdir(parents=True, exist_ok=True)
 
-    cfg_boards = (json.loads(Path(args.config).read_text()).get("boards", {})
-                  if args.config else {})
-    boards = load_survey(args.survey, cfg_boards)
-    ambig = report_survey(boards)
+    boards, meta = load_survey(args.survey)
+    report_survey(boards)
+    cfg_boards = {}
+    if args.config and Path(args.config).exists():
+        cfg_boards = json.loads(Path(args.config).read_text()).get("boards", {})
 
-    K, w, h = camera_K(args.bag, args.camera_info_topic)
-    print(f"\ncamera {args.image_topic}: {w}x{h}, fx={K[0,0]:.1f}")
-    raw = run_census(args, boards, K)
-    if not raw:
-        print("!! NO SIGHTINGS - check the topic, lower min_corners in --config, or "
-              "confirm mobile_2 ever faced a board. Gate: FAIL."); return 1
+    cache = Path(args.out) / "census_raw.npz"
+    rows = None
+    if cache.exists() and not args.force:
+        z = np.load(cache, allow_pickle=True)
+        if "ver" in z.files and int(z["ver"]) == 3:
+            rows = list(z["rows"])
+            print(f"\n=== 0b: census (cached) === {len(rows)} sightings from {cache} "
+                  f"(--force to re-detect)")
+    K = None
+    if rows is None:
+        rows = None if args.builtin else census_pipeline(args, boards, meta)
+        if rows is None:
+            rows, K = census_builtin(args, boards, cfg_boards)
+        np.savez_compressed(cache, rows=np.array(rows, dtype=object), ver=3,
+                            allow_pickle=True)
+    if not rows:
+        probe(args, boards, cfg_boards)
+        print("\n!! NO SIGHTINGS - read the probe table above. Gate: FAIL.")
+        return 1
+    if K is None:
+        K, _, _ = camera_K(args.bag, args.camera_info_topic)
+
     vo_t, vo_T = load_vslam(args)
-    sight, assign = assign_instances(raw, boards, ambig, vo_t, vo_T, K)
+    sight, assign = assign_instances(rows, boards, vo_t, vo_T)
     if not sight:
-        print("!! sightings could not be assigned to boards. Gate: FAIL."); return 1
-    axis_check(sight, boards, vo_t, vo_T, K)
+        print("!! sightings could not be assigned to boards. Gate: FAIL.")
+        return 1
+    axes_used = axis_check(sight, boards, vo_t, vo_T, K)
     gate_report(sight, vo_t, args.out)
     stability_check(sight, boards)
-    save_outputs(sight, assign, boards, args.out)
+    save_outputs(sight, assign, boards, axes_used, args.out)
     return 0
 
 if __name__ == "__main__":
