@@ -486,9 +486,15 @@ def assign_instances(rows, boards, vo_t, vo_T):
                      for n in inst_of[c["design"]] if n != ref_name}
             if not cands: continue
             best = min(cands, key=lambda n: abs(cands[n] - d_meas))
+            if best in assign.values():
+                print(f"  {cid:16s} d_meas={d_meas:6.2f} m -> '{best}' AGAIN: two "
+                      f"clusters of one physical board = VSLAM drift between visits "
+                      f"split them; merging is correct, and their separation is a "
+                      f"free drift measurement between those visit times")
+            else:
+                print(f"  {cid:16s} d_meas={d_meas:6.2f} m -> '{best}'  "
+                      f"(surveyed: {' '.join(f'{n}={v:.2f}' for n, v in cands.items())})")
             assign[cid] = best
-            print(f"  {cid:16s} d_meas={d_meas:6.2f} m -> '{best}'  "
-                  f"(surveyed: {' '.join(f'{n}={v:.2f}' for n, v in cands.items())})")
     for cid, name in assign.items():
         for i in clus[cid]["idx"]: sight[i]["board"] = name
     sight = [s for s in sight if "board" in s]
