@@ -133,7 +133,7 @@ def rpy_deg(R):
 
 
 def localise_camera_only(sensor, board, T_map_board, T_fix, imgs, K, D,
-                         tol_m=0.05, dwell_only=True):
+                         tol_m=0.05, dwell_only=True, trim_s=0.5):
     """No SLAM origin in this bag -- put the CAMERA itself in map.
 
     A board sighting gives T_cam_board outright, so
@@ -176,6 +176,16 @@ def localise_camera_only(sensor, board, T_map_board, T_fix, imgs, K, D,
                 end = i
                 break
         out = out[:end]
+        if dep is not None and len(out) > 5:
+            # A slow start creeps for up to tol_m before the departure triggers,
+            # and in a SHORT dwell that tail carries real weight. Drop the last
+            # trim_s before the departure; keep at least 5 sightings.
+            keep = [h for h in out if h["t"] <= dep[0] - trim_s]
+            if len(keep) >= 5 and len(keep) < len(out):
+                print("  trimmed %d sighting(s) in the %.1f s before the "
+                      "departure (slow-start creep guard)"
+                      % (len(out) - len(keep), trim_s))
+                out = keep
         if len(out) > 1:
             lab = cluster_link(np.array([h["T_board_cam"][:3, 3] for h in out]),
                                tol_m)
@@ -460,9 +470,10 @@ def main():
             dwell_only = bool(sensor.get("dwell_only", s.get("dwell_only", True)))
             tol_m = float(sensor.get("static_tol_mm",
                                      s.get("static_tol_mm", 50.0))) * 1e-3
-            hits, seen, dep = localise_camera_only(sensor, board, T_map_board,
-                                                   T_fix, frames, K, D,
-                                                   tol_m, dwell_only)
+            hits, seen, dep = localise_camera_only(
+                sensor, board, T_map_board, T_fix, frames, K, D, tol_m,
+                dwell_only, float(sensor.get("dwell_trim_s",
+                                             s.get("dwell_trim_s", 0.5))))
             print("  board sightings %d%s"
                   % (seen, " | %d in the opening dwell" % len(hits)
                      if dwell_only else ""))
