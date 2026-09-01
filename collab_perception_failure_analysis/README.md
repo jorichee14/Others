@@ -43,6 +43,10 @@ any run is safe to interrupt.
 | `run_phase43.py` | Spatial decomposition: ego-visible vs occluded recall, ego-visible FP contamination | yes |
 | `run_phase5_tracking.py` | Kalman/Hungarian MOT under impairment (burstiness + staleness predictions) | yes |
 | `run_blockage_audit.py` | **Phase 6** — model-free test of whether i.i.d. loss is a valid assumption (see below) | no |
+| `inspect_bag.py` | **Phase 8** — what a rosbag2 recording contains: rates, clock skew, TF tree, config skeleton | no |
+| `convert_rosbag.py` | **Phase 8** — rosbag2 → OPV2V conversion (`--dry-run` plans without writing) | no |
+| `validate_opv2v.py` | **Phase 8** — checks a converted tree the way `basedataset.py` will read it | no |
+| `test_ros2opv2v.py` | 29 converter tests incl. an end-to-end synthetic-bag conversion | no |
 
 ### Phase 6 — geometry-conditioned loss (`commchannel/blockage.py`)
 
@@ -60,6 +64,33 @@ manufacture the correlation. Full rationale and scope caveats:
 It adds one channel parameter (`blockage_p` = P(drop | chord blocked)), two sweep
 families (`loss_blocked`, `loss_iid_matched`), and a `blocked` condition in the spatial
 decomposition.
+
+### `ros2opv2v/` — real testbed data
+
+Converts a rosbag2 multi-agent recording into the OPV2V layout OpenCOOD reads, so a
+real testbed can go through the same code path as the simulated dataset. No ROS
+install and no GPU: MCAP/`.db3` are read directly, and only the messages the frame
+table selects are ever deserialised.
+
+| File | Role |
+|---|---|
+| `bagreader.py` | Lazy rosbag2 reading; the index pass pulls header stamps out of the raw CDR payload, so a 350k-message bag is indexed without decoding a point cloud |
+| `sync.py` | 10 Hz frame table (complete-or-dropped, because OpenCOOD indexes every agent by the ego's timestamp keys) + interpolated pose tracks |
+| `pointclouds.py` | PointCloud2 passthrough, depth-image reprojection, radar clouds — only one agent in a typical testbed has a LiDAR |
+| `geometry.py` | Solves poses into OpenCOOD's own `x_to_world` parameterisation, exactly rather than by convention-mirroring |
+| `writers.py` | PCD (intensity in the colour channel, the way OpenCOOD reads it), frame yaml, PNG |
+| `labels.py` | Agents-as-objects pseudo ground truth; hook for imported annotations |
+
+```bash
+python scripts/inspect_bag.py    --bag <bag> --emit-config configs/mine.yaml
+python scripts/convert_rosbag.py --config configs/mine.yaml --dry-run
+python scripts/validate_opv2v.py --root <out>/test --with-open3d
+python scripts/test_ros2opv2v.py                      # 29 self-tests, no bag needed
+```
+
+Conventions, what the operator must supply (the shared world frame is not in the
+bag), and an honest account of what converted data can and cannot answer:
+[`docs/ROS2OPV2V.md`](docs/ROS2OPV2V.md).
 
 ### `configs/matrix.yaml`
 The frozen experiment grid: methods × impairment families × severity levels × seeds.

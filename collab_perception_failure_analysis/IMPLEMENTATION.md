@@ -316,10 +316,74 @@ ours included — are optimistic. Protocol and scope caveats: `docs/BLOCKAGE.md`
 
 ---
 
+## Phase 8 — Real testbed data (`ros2opv2v/`)
+
+Every number in Phases 0–6 comes from CARLA. The MIRC testbed recording
+(`mirc_dataset_coop2_20260828`, 156 s, 350k messages: two mobile robots and one
+infrastructure node, with Ouster LiDAR, RealSense depth, mmWave radar, two SLAM
+stacks, WiFi link statistics and CSI) is the first chance to run the same code
+path on measured data — including a real radio, which `docs/BLOCKAGE.md` names
+as the thing OPV2V geometry cannot supply.
+
+### Step 8.1 — Bag -> OPV2V converter  `✅ DONE (code)`
+- `ros2opv2v/` converts a rosbag2 recording into the OPV2V layout OpenCOOD reads:
+  lazy MCAP/`.db3` reading with no ROS install, a 10 Hz frame table that is
+  complete-or-dropped (OpenCOOD indexes every agent by the ego's timestamp keys),
+  LiDAR passthrough + depth-image reprojection + radar clouds, poses solved into
+  OpenCOOD's own `x_to_world` parameterisation, and intensity written through the
+  PCD colour channel the way OpenCOOD reads it.
+- Three entry points: `scripts/inspect_bag.py` (topics, rates, clock skew, TF
+  tree, config skeleton), `scripts/convert_rosbag.py` (`--dry-run` plans without
+  writing), `scripts/validate_opv2v.py` (checks the tree the way `basedataset.py`
+  will read it).
+- **Done when:** the self-tests pass and a real bag converts into a tree that
+  `validate_opv2v.py` accepts.
+- **Result (code):** `scripts/test_ros2opv2v.py` **29/29** in the dev container,
+  including an end-to-end conversion of a synthetic three-agent MCAP with
+  hand-computed geometry (a collaborator 6 m ahead must land at x=+4.0 in the
+  ego's lidar frame after a 2 m ego displacement, and does, to 1e-6). PCD round
+  trip verified through `open3d.io.read_point_cloud` — the exact call OpenCOOD
+  makes — xyz bit-exact, intensity within 1/255. Pose parameterisation verified
+  against a bit-exact replica of `x_to_world` over 2000 random rotations (max
+  error 1e-9) and at gimbal lock. Config for the MIRC bag prefilled from its
+  metadata: `configs/mirc_coop2.yaml`. **Awaiting the operator-supplied geometry**
+  (see 8.2) before it can run on the real recording.
+
+### Step 8.2 — Shared world frame  `⬜ TODO — input needed`
+- mobile_1 (ZED odom), mobile_2 (Isaac VSLAM odom) and infra_1 (static, no pose
+  topic) each start at their own origin; OPV2V assumes one world. The converter
+  refuses to run on a null `align`/`world_pose` rather than defaulting to
+  identity, because a wrong alignment yields a dataset that loads and trains
+  while being geometrically meaningless.
+- **Needed:** per-agent SE(3) into a common frame (project owner will supply),
+  each sensor's `base_link -> sensor` extrinsic, and the robots' half-extents if
+  the agents-as-objects pseudo-labels are wanted.
+- **Done when:** `convert_rosbag.py --dry-run` reports a full frame budget and
+  `validate_opv2v.py` passes on the converted tree.
+
+### Step 8.3 — What the converted data can answer  `⬜ TODO — blocked on 8.2`
+- The recording carries **no 3D annotations**, so the only free labels are the
+  agents themselves (each robot's pose is an exact box for the others): two or
+  three boxes per frame, a geometric sanity signal rather than a benchmark.
+  Verdict recorded here once inspected.
+- Pretrained OPV2V checkpoints will score near zero (car detector, 64-beam
+  automotive LiDAR at 1.9 m, ~4 m objects, outdoors → indoor robot data). That is
+  a documented domain-shift observation, not a measurement of any method; the
+  `ground_lift` knob exists to make the height prior less hostile, and must be
+  reported when used.
+- The real prize is the impairment instrument: `commchannel/` attaches to a
+  *built* OpenCOOD dataset, so once this tree loads, the whole delivery/content
+  matrix applies to real messages — and the bag's `wifi/status` + `csi` topics
+  are a measured channel trace to replace the synthetic one, which is the
+  strongest available answer to Phase 6's scope caveat.
+
+---
+
 ## Progress log
 
 | Date | Step | Notes |
 |------|------|-------|
+| 2026-09-01 | 8.1 | **Bag -> OPV2V converter built** (`ros2opv2v/`, `docs/ROS2OPV2V.md`). Reads rosbag2 MCAP/`.db3` with no ROS install and **lazily**: the indexing pass pulls header stamps straight out of the CDR payload (`std_msgs/Header` sits at a fixed offset), so 350k messages are indexed without deserialising a single point cloud, and only the messages the frame table selects are ever decoded. Three conventions pinned by reading OpenCOOD at commit `31ba160` rather than by assumption: (1) **poses** — `x_to_world` is CARLA-handed, so instead of mirroring ROS data we solve for the `(roll, yaw, pitch)` that makes `x_to_world` reproduce our right-handed matrix exactly (surjective onto SO(3); verified to 1e-9 over 2000 rotations + gimbal lock). The emitted angles are therefore NOT comparable to OPV2V's yaml values, only the matrices they generate are. (2) **intensity** — OpenCOOD reads it from `pcd.colors[:, 0]`, so PCDs are written `FIELDS x y z rgb` with `r=g=b=round(i*255)`; round trip through the real `open3d` call verified (xyz exact, intensity ≤1/255). (3) **frames are complete or dropped** — `basedataset.py` indexes every agent with the *ego's* timestamp keys, so a partially-populated frame is a KeyError at training time, not a skipped sample. Heterogeneous agents supported because only one robot has a LiDAR: PointCloud2 passthrough, depth-image reprojection (optical→FLU), radar clouds with an intensity fallback. `ground_lift` shifts points down and the pose up by the same amount (world geometry provably unchanged) as the OPV2V height-prior mitigation. Config refuses null geometry rather than defaulting to identity — a wrong `align` produces a dataset that trains and is meaningless. 29/29 self-tests incl. an end-to-end conversion of a synthetic three-agent MCAP with hand-computed geometry. |
 | 2026-08-21 | 7.2 | **Arm A built: InCoP indoor benchmark under impairment, no training.** `commchannel/incop_channel.py` + `configs/matrix_incop.yaml`. **Correction:** `CommChannel` does NOT attach to InCoP — the hook (`retrieve_base_data`) is shared but `channel.py`'s body calls `reform_param` and `calc_dist_to_ego`, neither of which exists in the HEAL lineage. `IncopChannel` instead calls the stock loader twice and splices (`past = orig(idx-delay)` for sensing, `cur = orig(idx)` for `params['vehicles']` GT), so HEAL's json/hdf5 loading and InCoP's camera-extrinsic normalisation stay inside the dataset's own code path. Pose noise perturbs `lidar_pose` only (HEAL derives the clean transform from `lidar_pose_clean`); no COM_RANGE clamp needed. **Verified InCoP is 10 Hz** (`OS0_REV7_128ch10hz512res`, `rotation_rate_hz=10.0`), same as OPV2V, so latency/stale/loss/bandwidth levels transfer with identical physical meaning — only pose (rescaled 4x by object size, independently landing on InCoP's own `pos_std: 0.2`) and ghost geometry changed. Blockage deliberately not ported. Pre-registered prediction: the 100 ms floor-crossing should move ~an order of magnitude indoors; if it does not, latency damage is not displacement. |
 | 2026-08-21 | 7.1 | **InCoP port scaffolded (Arm B)** (`incop_port/`): run CGRF (`ours`) and Where2comm from [`jorichee14/incop_analysis`](https://github.com/jorichee14/incop_analysis) through the same impairment matrix, on OPV2V, LiDAR-only first. Port is smaller than expected — InCoP is HEAL→OpenCOOD lineage, `_find_encoder_class_isaac` falls back to the generic encoder lookup, `build_dataset` already accepts `dataset: opv2v`, modality assignment is optional, and `_run_fusion` passes an agent-stacked `(L,C,H,W)` tensor, so **no model code changes**: configs + one loss file. `commchannel/feature_hooks.py` gains a `HeterModelBevfusionHighresIsaac` entry covering all five of its fusion methods. **Blocked on the OPV2V train + validate splits** (only `test` on disk) — no OPV2V checkpoints exist for these methods, so training is unavoidable and the evaluate-pretrained-only rule (working rule 3) does not extend to this sub-project. Cross-codebase absolute AP is not comparable; mitigation is NPD + floor-crossing plus **CoBEVT as a calibration bridge** (it exists in both codebases — train it first). |
 | 2026-08-09 | 6.1/6.2 | **Phase 6 built (awaiting run).** Tests whether the independence assumption underlying every impairment family in this study — and in the wider literature — actually holds: the vehicle that occludes an agent's lidar is the vehicle that obstructs its radio, so i.i.d. loss may be the best case rather than a neutral one. `commchannel/blockage.py`: oriented-box/chord intersection (Liang-Barsky in box frame), clearance grid as first-Fresnel-radius proxy (0/1/2 m in one pass), endpoint-vehicle exclusion (OPV2V lists CAVs in `vehicles` and each sits on its own lidar_pose), disk-cached `BlockageTable` built from yaml alone. `scripts/run_blockage_audit.py` (Step 6.1): model-free — no detector, no checkpoint, no propagation model, so no downstream modelling choice can manufacture the correlation; reports E[U|blocked] vs E[U|clear], availability vs 1-mean(B), point-biserial r, per-clearance and per-scenario breakdowns, and emits matched-PDR levels for the control arm. Go/no-go thresholds fixed before running. Step 6.2 wiring: `loss_blocked` + `loss_iid_matched` families, `blockage_p` branch in `cell_channel_config`, and `channel_stats.realized_drop_rate` recorded per cell so the matched-PDR claim is verified from the run rather than asserted. With the banked `loss_burst` cells this becomes a three-way test (no / temporal / geometric correlation) at matched mean loss. Dev-container verification: 19 geometry + 17 decision-statistic self-tests (null, effect, inverted and degenerate cases hand-computed) and 8 new blockage tests; `scripts/test_commchannel.py` 16/17 (only `test_quantizer` fails — no torch in the dev container, pre-existing). Scope caveat recorded in `docs/BLOCKAGE.md`: OPV2V geometry is real but carries no radio, so this phase establishes THAT geometric correlation matters, not how often real links are obstructed. |

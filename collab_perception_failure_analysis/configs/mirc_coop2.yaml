@@ -1,0 +1,201 @@
+# ============================================================================
+# mirc_dataset_coop2_20260828 -> OPV2V
+#
+# Topics, message types and rates below are taken from the recording's own
+# metadata.yaml. Everything that describes *geometry* is left null: the bag
+# cannot tell us where each sensor sits on its robot, nor what puts the three
+# agents' odometry into one shared world frame. The converter refuses to run
+# while any of them is null — see docs/ROS2OPV2V.md §"What you must supply".
+#
+# Order of work:
+#   1. python scripts/inspect_bag.py --bag <bag>          # confirm frame_ids
+#   2. fill in every REQUIRED value below
+#   3. python scripts/convert_rosbag.py --config <this> --dry-run
+#   4. drop --dry-run, then scripts/validate_opv2v.py
+# ============================================================================
+
+bag: ~/bags/mirc_dataset_coop2_20260828        # rosbag2 dir or the .mcap itself
+
+output:
+  root: ~/cpfa/data/OPV2V_mirc
+  split: test                    # OpenCOOD reads validate_dir at inference
+  scenario_name: coop2_20260828
+  frames_per_scenario: 0         # 0 = one scenario for the whole 156 s
+  frame_stride: 1
+  include_self_in_vehicles: false
+  write_provenance: true
+
+time:
+  stamp_source: header           # sensor clocks; the bag carries NTP monitors
+  master_agent: mobile_1         # the frame grid = the Ouster's own cadence
+  rate_hz: 0                     # 0 = do not resample the master (9.7 Hz here)
+  # The slowest agent is the infrastructure radar at ~8.6 Hz (116 ms period), so
+  # its worst nearest-neighbour offset to a 9.7 Hz grid is ~58 ms. 80 ms leaves
+  # margin; tighten it to 40 and you will drop roughly half the frames.
+  match_tolerance_ms: 80
+  drop_incomplete_frames: true   # OpenCOOD indexes all agents by the ego's keys
+  start_offset_s: 0.0
+  duration_s: 0.0                # 0 = whole bag; set e.g. 20 for a first pass
+
+world:
+  frame_id: world
+
+agents:
+  # ------------------------------------------------------------------ mobile_1
+  # The only true LiDAR agent (Ouster, 1516 sweeps / 156 s = 9.7 Hz) and, with
+  # the lowest non-negative id, the one OpenCOOD will treat as ego.
+  - name: mobile_1
+    id: 1
+    role: cav
+    enabled: true
+    required: true
+    pose:
+      source: odometry
+      topic: /mobile_1/zed/odom            # 2292 msgs, ~14.7 Hz
+      interpolation: linear
+      max_gap_ms: 200
+      # REQUIRED: world <- the ZED odometry origin. This is one of the three
+      # transforms that put the agents in a common frame. Identity is only
+      # correct if you *choose* mobile_1's odom origin as the world origin —
+      # which is a perfectly good choice, and then the other two are measured
+      # relative to it.
+      align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      # REQUIRED if the odometry's child_frame_id is not the robot base
+      # (inspect_bag.py prints it). ZED reports the camera frame, so this is
+      # usually camera -> base_link.
+      child_to_base: null
+    cloud:
+      kind: pointcloud2
+      topic: /mobile_1/ouster/points       # 1516 msgs
+      extrinsic: null                      # REQUIRED: base_link -> os_sensor
+      intensity:
+        field: intensity                   # Ouster also offers 'reflectivity'
+        scale: 0.0001                      # raw counts are O(1e3-1e4); clipped to 1
+        default: 0.5
+      # A 128-beam sweep is ~130k points; OPV2V frames are ~80k. Capping keeps
+      # preprocessing time comparable. Set 0 to keep everything.
+      max_points: 100000
+      ground_lift: 0.0                     # see docs/ROS2OPV2V.md before changing
+      min_points: 1
+    cameras:
+      - topic: /mobile_1/zed/left/image_rect_color
+        camera_info_topic: /mobile_1/zed/left/camera_info
+        extrinsic: null                    # REQUIRED only if you export cameras
+        optical_frame: true
+    object:
+      emit: true                           # mobile_1 is a labelled box for the others
+      extent: null                         # REQUIRED: [dx, dy, dz] HALF-dimensions (m)
+      center: [0.0, 0.0, 0.0]              # base origin -> box centre, base frame
+
+  # ------------------------------------------------------------------ mobile_2
+  # No LiDAR: the RealSense depth image is reprojected into a cloud. Expect a
+  # ~87 deg horizontal FOV and a few metres of usable range, not a 360 deg sweep.
+  - name: mobile_2
+    id: 2
+    role: cav
+    enabled: true
+    required: true
+    pose:
+      source: odometry
+      topic: /mobile_2/visual_slam/tracking/odometry   # 4233 msgs, ~27 Hz
+      interpolation: linear
+      max_gap_ms: 200
+      align: null                          # REQUIRED: world <- Isaac VSLAM origin
+      # REQUIRED: VSLAM child frame -> base_link. Delete this line entirely if
+      # the odometry already reports the robot base.
+      child_to_base: null
+    cloud:
+      kind: depth_image
+      topic: /mobile_2/depth/image_rect_raw            # 4300 msgs, ~27.5 Hz
+      camera_info_topic: /mobile_2/depth/camera_info
+      extrinsic: null                      # REQUIRED: base_link -> depth optical mount
+      depth_scale: 0.001                   # 16UC1 millimetres -> metres
+      min_depth: 0.2
+      max_depth: 10.0                      # D4xx stereo depth degrades past this
+      pixel_stride: 2                      # 2 keeps ~1/4 of the pixels
+      optical_frame: true                  # depth is published optical (x right, y down)
+      max_points: 60000
+      ground_lift: 0.0
+      min_points: 1
+    cameras:
+      - topic: /mobile_2/color/image_raw
+        camera_info_topic: /mobile_2/color/camera_info
+        extrinsic: null
+        optical_frame: true
+    object:
+      emit: true
+      extent: null                         # REQUIRED: half-dimensions (m)
+      center: [0.0, 0.0, 0.0]
+
+  # ------------------------------------- mobile_1's ZED stereo cloud, as an agent
+  # OPV2V gives one cloud per agent folder, so a second sensor on the same robot
+  # has to become its own agent. It sits at (very nearly) the same pose as agent
+  # 1, which is not a configuration OPV2V-trained fusion has ever seen: two
+  # collaborators with a near-zero baseline contribute almost no new geometry,
+  # and any pose-based weighting sees a degenerate pair. Keep it for a
+  # stereo-vs-LiDAR comparison on identical trajectories; set `enabled: false`
+  # for a clean three-agent cooperative setup.
+  - name: mobile_1_zed
+    id: 3
+    role: cav
+    enabled: true
+    required: true
+    pose:
+      source: odometry
+      topic: /mobile_1/zed/odom
+      interpolation: linear
+      max_gap_ms: 200
+      align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}   # same frame as agent 1
+      child_to_base: null                  # REQUIRED: same value as agent 1
+    cloud:
+      kind: pointcloud2
+      topic: /mobile_1/zed/point_cloud/cloud_registered      # 2288 msgs, ~14.7 Hz
+      # REQUIRED: base_link -> the frame this cloud is published in. Check the
+      # frame_id with inspect_bag.py first: "registered" clouds are sometimes
+      # published already in the odom/map frame, in which case this agent needs
+      # its own handling rather than a body-frame extrinsic.
+      extrinsic: null
+      intensity:
+        field: rgb                         # ZED clouds carry colour, not intensity
+        scale: 1.0
+        default: 0.5
+      max_points: 60000
+      ground_lift: 0.0
+      min_points: 1
+    object:
+      emit: false                          # already labelled as agent 1
+
+  # ------------------------------------------------------------------- infra_1
+  # Static roadside unit. The id must be negative: OpenCOOD sorts negative ids
+  # to the end of the agent list so an RSU is never chosen as ego.
+  - name: infra_1
+    id: -1
+    role: rsu
+    enabled: true
+    required: true
+    pose:
+      source: static
+      # REQUIRED: world <- the radar/infra base frame. This is the transform the
+      # whole cooperative geometry hangs on for this agent — it has no odometry
+      # to correct a bad guess.
+      world_pose: null
+    cloud:
+      kind: pointcloud2
+      topic: /infra_1/radar/points_all     # 1343 msgs, ~8.6 Hz
+      extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}  # world_pose is the sensor
+      intensity:
+        field: intensity                   # radar clouds often carry snr/power instead
+        scale: 1.0
+        default: 0.4
+      ground_lift: 0.0
+      # A radar sweep is hundreds of points, not thousands. If frames come back
+      # near-empty, try /infra_1/radar/points_static (1344 msgs) or accept that
+      # this agent contributes detections rather than geometry.
+      min_points: 1
+    cameras:
+      - topic: /infra_1/image_raw
+        camera_info_topic: /infra_1/camera_info
+        extrinsic: null
+        optical_frame: true
+    object:
+      emit: false                          # a tripod is not a detection target
