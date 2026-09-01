@@ -547,27 +547,61 @@ def axis_check(sight, boards, vo_t, vo_T, K):
         if T_cb is not None: s["T_cb"], s["err"] = T_cb, err
     return BOARD_AXES
 
-def gate_report(sight, vo_t, out_dir):
+def gate_report(sight, vo_t, vo_T, out_dir):
     t_rel = np.array([s["t"] for s in sight]) - vo_t[0]
     bnames = sorted({s["board"] for s in sight})
     dur = vo_t[-1] - vo_t[0]
+
+    def robot_path(t0, t1):
+        m = (vo_t - vo_t[0] >= t0) & (vo_t - vo_t[0] <= t1)
+        p = vo_T[m, :3, 3]
+        return float(np.sum(np.linalg.norm(np.diff(p, axis=0), axis=1))) if len(p) > 1 else 0.0
+
     windows = []
     for b in bnames:
-        tb = np.sort(t_rel[[i for i, s in enumerate(sight) if s["board"] == b]])
-        if not len(tb): continue
+        idx = [i for i, s in enumerate(sight) if s["board"] == b]
+        order = np.argsort(t_rel[idx]); idx = [idx[k] for k in order]
+        tb = t_rel[idx]
         br = np.where(np.diff(tb) > 2.0)[0]
         for a, z in zip(np.r_[0, br + 1], np.r_[br, len(tb) - 1]):
-            windows.append((b, tb[a], tb[z], z - a + 1))
+            sel = idx[a:z + 1]
+            windows.append(dict(board=b, t0=tb[a], t1=tb[z], n=z - a + 1,
+                                path=robot_path(tb[a], tb[z]),
+                                p=np.median([sight[i]["p_vo"] for i in sel], axis=0)))
+    # An "event" is a distinct place-and-visit: windows of the same board whose
+    # robot positions sit within 1 m of each other AND with <15 s between them
+    # are one event (a static stare broken by detection dropouts is not two
+    # anchoring opportunities). Revisits after a real excursion count separately.
+    events = []
+    for w in sorted(windows, key=lambda w: w["t0"]):
+        for e in events:
+            if (e["board"] == w["board"]
+                    and np.linalg.norm(e["p"] - w["p"]) < 1.0
+                    and w["t0"] - e["t1"] < 15.0):
+                e["t1"] = max(e["t1"], w["t1"]); e["n"] += w["n"]
+                e["path"] += w["path"]
+                break
+        else:
+            events.append(dict(w))
     print(f"\n=== 0b: THE GATE ===\ntrajectory {dur:.1f} s")
-    print(f"{'board':11s} {'t_start':>8s} {'t_end':>8s} {'n':>5s}")
-    for b, a, z, n in sorted(windows, key=lambda w: w[1]):
-        print(f"{b:11s} {a:8.1f} {z:8.1f} {n:5d}")
-    gaps = np.diff(np.r_[0, sorted(w[1] for w in windows), dur])
-    print(f"{len(windows)} windows; longest board-free stretch {gaps.max():.1f} s "
-          f"({gaps.max()*0.8:.1f} m at 0.8 m/s)")
-    ok = len(windows) >= 4
-    print("GATE:", "PASS - three-arm ablation is meaningful" if ok else
-          "FAIL - reframe as anchored vs unanchored VSLAM, not a fusion ablation")
+    print(f"{'board':11s} {'t_start':>8s} {'t_end':>8s} {'n':>5s}  motion")
+    for e in events:
+        kind = "static dwell" if e["path"] < 0.3 else f"moving ({e['path']:.1f} m)"
+        print(f"{e['board']:11s} {e['t0']:8.1f} {e['t1']:8.1f} {e['n']:5d}  {kind}")
+    gaps = np.diff(np.r_[0, sorted(e["t0"] for e in events), dur])
+    print(f"{len(windows)} raw windows -> {len(events)} distinct anchor events; "
+          f"longest anchor-free stretch {gaps.max():.1f} s")
+    if events and events[0]["t0"] < 10 and events[0]["path"] < 0.3:
+        print(f"(first event is the stage-06 style static init dwell on "
+              f"'{events[0]['board']}' - it initialises the frame but corrects "
+              f"nothing later; sightings inside it are one viewpoint, not "
+              f"{events[0]['n']} independent fixes)")
+    ok = len(events) >= 3
+    print("GATE:", "PASS - init plus >=2 in-run corrections: the fusion ablation "
+          "is meaningful" if ok else
+          ("MARGINAL - init plus one correction; arm B bounds end-drift only"
+           if len(events) == 2 else
+           "FAIL - reframe as anchored vs unanchored VSLAM, not a fusion ablation"))
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -690,7 +724,7 @@ def main(argv=None):
         print("!! sightings could not be assigned to boards. Gate: FAIL.")
         return 1
     axes_used = axis_check(sight, boards, vo_t, vo_T, K)
-    gate_report(sight, vo_t, args.out)
+    gate_report(sight, vo_t, vo_T, args.out)
     stability_check(sight, boards)
     save_outputs(sight, assign, boards, axes_used, args.out)
     return 0
