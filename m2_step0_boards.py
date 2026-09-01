@@ -637,10 +637,20 @@ def main(argv=None):
                     help="CLAHE-equalise frames before detection (dark IR images)")
     ap.add_argument("--builtin", action="store_true",
                     help="skip the pipeline detector, use the builtin one")
+    ap.add_argument("--boards", default=None,
+                    help="comma-separated survey board names to look for "
+                         "(e.g. rs_anchor); default: all surveyed boards")
     args = ap.parse_args(argv)
     Path(args.out).mkdir(parents=True, exist_ok=True)
 
     boards, meta = load_survey(args.survey)
+    if args.boards:
+        keep = set(args.boards.split(","))
+        missing = keep - set(boards)
+        if missing:
+            raise SystemExit(f"--boards {sorted(missing)} not in the survey "
+                             f"(have: {sorted(boards)})")
+        boards = {n: b for n, b in boards.items() if n in keep}
     report_survey(boards)
     cfg_boards = {}
     if args.config and Path(args.config).exists():
