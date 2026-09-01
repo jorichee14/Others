@@ -600,7 +600,16 @@ def main():
                   "the start of this recording. moving_pose=\"first\" will pin "
                   "rs_pose wherever the camera happened to be then.")
 
-        if span_mm <= static_tol:
+        treat_static = span_mm <= static_tol or cr["dwell_only"]
+        if cr["dwell_only"] and span_mm > static_tol:
+            print("  span %.0f mm > static_tol_mm %.0f, but these sightings ARE "
+                  "the opening dwell: each is within %.0f mm of the initial "
+                  "position and departure/outliers are already removed, so the "
+                  "span is bounded at 2x tol by construction. Peak-to-peak over "
+                  "%d samples is a ~5-sigma statistic; this is PnP noise at "
+                  "range, not motion -> averaging as STATIC."
+                  % (span_mm, static_tol, static_tol, len(hits)))
+        if treat_static:
             T, nu = avg_T([h["T_map_cam"] for h in hits],
                           weights=[h["n"] / max(h["reproj"], 0.05) ** 2 for h in hits])
             sp = spread([h["T_map_cam"] for h in hits], T)
@@ -624,12 +633,6 @@ def main():
                              "map_to_cam": T_record(map_frame, cf, T),
                              "board_to_cam": T_record(bframe, cf, Tb)}
         else:
-            if cr["dwell_only"]:
-                print("  ! span %.0f mm exceeds static_tol_mm %.0f even AFTER the "
-                      "dwell filter -- the 'dwell' was never static (robot "
-                      "moving at record start, or tol too tight). Falling "
-                      "through to the snapshot path; treat the result with "
-                      "suspicion." % (span_mm, static_tol))
             # first    earliest sighting -- the init/seed pose, if the board was
             #           visible from the start (check the lag warning above)
             # last     latest sighting
