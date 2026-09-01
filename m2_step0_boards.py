@@ -88,7 +88,10 @@ def iter_topic(path, topic, stride=1, limit=None):
     """Yield (t_sec, msg); t is the header stamp when present, else bag time."""
     import rosbag2_py
     from rclpy.serialization import deserialize_message
-    from rosidl_runtime_py.utility import get_message
+    try:
+        from rosidl_runtime_py.utilities import get_message
+    except ImportError:                      # very old distros
+        from rosidl_runtime_py.utility import get_message
     r, types = bag_reader(path)
     if topic not in types:
         raise KeyError(f"{topic} not in bag; have {sorted(types)[:8]}...")
