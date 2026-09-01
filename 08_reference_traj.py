@@ -1,0 +1,647 @@
+#!/usr/bin/env python3
+"""
+STAGE 08 - per-sensor reference trajectories in `map` for a coop bag.
+
+Stage 06 measured where each camera STARTED (the opening dwell on its board).
+This stage turns whole trajectories into the map frame and corrects them with
+the absolute information each sensor can see:
+
+  lidar_icp   track (mobile_1 Ouster): every scan is registered to the FROZEN
+              reference map by point-to-plane ICP. The session-start pose seeds
+              scan 0 (through T_lidar_camera); after that each scan is seeded
+              by the previous one advanced by odometry. The map itself is the
+              absolute reference - boards are not used, so this track is
+              fiducial-free by construction.
+
+  cam_boards  tracks (mobile_1 ZED, mobile_2 RealSense): the SLAM/odometry
+              chain is anchored at the session-start pose and corrected by a
+              pose graph whenever a board is sighted along the run. Between
+              sightings the odometry carries the pose; at a sighting the board
+              pulls it back to the survey. Without the graph the odometry
+              drift accumulates unbounded (measured on this bag: ~1 m over
+              147 s); with it the error is pulled to the board sigma at every
+              sighting.
+
+Every track outputs a TUM trajectory in `map` plus per-sample quality, and the
+stage cross-checks mobile_1's two tracks against each other through
+T_lidar_camera - two independent estimates of one rigid body, so their gap is
+an honest accuracy statement that needs no ground truth.
+
+BOARD SIGHTINGS
+  Detected with the pipeline's own Board.detect + frame_fix (same convention as
+  stages 03/06). Instances of a shared design are resolved by MAP position:
+  the anchored trajectory predicts where the sighted board is in map, and the
+  nearest surveyed instance within instance_radius claims it - no marker-id
+  guessing, works mid-run.
+
+CONFIG ("08_reference" stage block; see the sample at the bottom of this file)
+  python3 08_reference_traj.py [pipeline_config.json]
+"""
+import os
+import sys
+import json
+import math
+import time
+import numpy as np
+
+from pipeline_common import load_pipeline, R_to_q
+from pipeline_boards import Board, read_bag, pick_intrinsics
+
+# --------------------------------------------------------------------------- #
+# SE(3) helpers (validated: exact right-Jacobian inverse, not the small-angle
+# form - pose-graph rotation residuals are large at iteration 0 and the
+# approximation stalls Gauss-Newton)
+# --------------------------------------------------------------------------- #
+from scipy.spatial.transform import Rotation as Rot
+from scipy.spatial import cKDTree
+from scipy import sparse
+from scipy.sparse.linalg import spsolve
+
+
+def Rt(R, t):
+    T = np.eye(4); T[:3, :3] = R; T[:3, 3] = t; return T
+
+
+def inv(T):
+    R = T[:3, :3]; o = np.eye(4); o[:3, :3] = R.T; o[:3, 3] = -R.T @ T[:3, 3]; return o
+
+
+def hat(v):
+    x, y, z = v
+    return np.array([[0, -z, y], [z, 0, -x], [-y, x, 0]])
+
+
+def log_R(R):
+    return Rot.from_matrix(R).as_rotvec()
+
+
+def exp_r(w):
+    return Rot.from_rotvec(w).as_matrix()
+
+
+def jr_inv(w):
+    th = float(np.linalg.norm(w)); W = hat(w)
+    if th < 1e-6:
+        return np.eye(3) + 0.5 * W
+    a = 1.0 / th ** 2 - (1.0 + math.cos(th)) / (2.0 * th * math.sin(th))
+    return np.eye(3) + 0.5 * W + a * (W @ W)
+
+
+def apply(T, P):
+    return np.asarray(P) @ T[:3, :3].T + T[:3, 3]
+
+
+def interp_traj(ts, Ts, tq):
+    from scipy.spatial.transform import Slerp
+    tq = np.clip(tq, ts[0], ts[-1])
+    i = np.clip(np.searchsorted(ts, tq) - 1, 0, len(ts) - 2)
+    d = ts[i + 1] - ts[i]
+    a = np.where(d > 0, (tq - ts[i]) / np.where(d > 0, d, 1), 0.0)
+    sl = Slerp(ts, Rot.from_matrix(Ts[:, :3, :3]))
+    out = np.tile(np.eye(4), (len(tq), 1, 1))
+    out[:, :3, :3] = sl(tq).as_matrix()
+    out[:, :3, 3] = Ts[i, :3, 3] * (1 - a)[:, None] + Ts[i + 1, :3, 3] * a[:, None]
+    return out
+
+
+def write_tum(path, ts, Ts):
+    with open(path, "w") as f:
+        for t, T in zip(ts, Ts):
+            q = R_to_q(T[:3, :3])
+            f.write("%.9f %.6f %.6f %.6f %.9f %.9f %.9f %.9f\n"
+                    % (t, T[0, 3], T[1, 3], T[2, 3], q[0], q[1], q[2], q[3]))
+    print("  wrote %s (%d poses)" % (path, len(ts)))
+
+
+def make_T_xyzq(v):
+    return Rt(Rot.from_quat(v[3:7]).as_matrix(), np.asarray(v[0:3], float))
+
+
+# --------------------------------------------------------------------------- #
+# bag readers (odometry + point clouds; images go through pipeline_boards)
+# --------------------------------------------------------------------------- #
+def iter_topic(path, topic, stride=1, limit=None):
+    import rosbag2_py
+    from rclpy.serialization import deserialize_message
+    try:
+        from rosidl_runtime_py.utilities import get_message
+    except ImportError:
+        from rosidl_runtime_py.utility import get_message
+    r = rosbag2_py.SequentialReader()
+    r.open(rosbag2_py.StorageOptions(uri=str(path), storage_id="mcap"),
+           rosbag2_py.ConverterOptions("", ""))
+    types = {t.name: t.type for t in r.get_all_topics_and_types()}
+    if topic not in types:
+        raise KeyError("%s not in bag; have %s..." % (topic, sorted(types)[:8]))
+    cls = get_message(types[topic])
+    f = rosbag2_py.StorageFilter(); f.topics = [topic]; r.set_filter(f)
+    i = n = 0
+    while r.has_next():
+        _, data, t_bag = r.read_next()
+        if i % stride:
+            i += 1; continue
+        i += 1
+        m = deserialize_message(data, cls)
+        h = getattr(m, "header", None)
+        t = (h.stamp.sec + h.stamp.nanosec * 1e-9) if h is not None else t_bag * 1e-9
+        yield t, m
+        n += 1
+        if limit and n >= limit:
+            break
+
+
+def read_odom(bag, topic):
+    ts, Ts = [], []
+    for t, m in iter_topic(bag, topic):
+        p = m.pose.pose.position; o = m.pose.pose.orientation
+        ts.append(t)
+        Ts.append(Rt(Rot.from_quat([o.x, o.y, o.z, o.w]).as_matrix(),
+                     np.array([p.x, p.y, p.z])))
+    if not ts:
+        raise SystemExit("no odometry on %s" % topic)
+    ts = np.array(ts); Ts = np.array(Ts)
+    print("  odom %s: %d poses, %.1f s, path %.1f m"
+          % (topic, len(ts), ts[-1] - ts[0],
+             float(np.sum(np.linalg.norm(np.diff(Ts[:, :3, 3], axis=0), axis=1)))))
+    return ts, Ts
+
+
+_DT = {1: np.int8, 2: np.uint8, 3: np.int16, 4: np.uint16,
+       5: np.int32, 6: np.uint32, 7: np.float32, 8: np.float64}
+
+
+def pc2_xyzt(msg):
+    """-> (xyz float32 (N,3), t_rel seconds (N,) or None). Handles row padding."""
+    n = msg.width * msg.height
+    raw = np.frombuffer(msg.data, np.uint8)
+    if msg.row_step != msg.width * msg.point_step and msg.height > 1:
+        raw = raw.reshape(msg.height, msg.row_step)[:, :msg.width * msg.point_step]
+        raw = raw.reshape(-1)
+    buf = raw[:n * msg.point_step].reshape(n, msg.point_step)
+    off = {f.name: (f.offset, _DT[f.datatype]) for f in msg.fields}
+
+    def col(name):
+        o, dt = off[name]
+        return buf[:, o:o + np.dtype(dt).itemsize].copy().view(dt).ravel()
+
+    xyz = np.column_stack([col("x"), col("y"), col("z")]).astype(np.float32)
+    ok = np.isfinite(xyz).all(1) & (np.abs(xyz) < 1e4).all(1)
+    tr = None
+    for name in ("t", "time", "timestamp", "time_offset"):
+        if name in off:
+            tv = col(name).astype(np.float64)[ok]
+            if tv.max() > 1e6:          # nanoseconds
+                tv = tv * 1e-9
+            tr = tv - tv.min()
+            break
+    return xyz[ok], tr
+
+
+def voxel_centroid(P, v):
+    """Average of the points in each voxel (NOT the voxel centre - centres cost
+    2.4 cm of quantisation, measured)."""
+    q = np.floor(P / v).astype(np.int64)
+    q -= q.min(0)
+    key = (q[:, 0] << 40) | (q[:, 1] << 20) | q[:, 2]
+    o = np.argsort(key, kind="stable"); key = key[o]; Ps = P[o]
+    br = np.r_[0, np.flatnonzero(np.diff(key)) + 1, len(key)]
+    cs = np.vstack([np.zeros(3), np.cumsum(Ps, 0)])
+    return ((cs[br[1:]] - cs[br[:-1]]) / np.diff(br)[:, None]).astype(np.float32)
+
+
+def deskew(P, trel, dT_scan, bins=32):
+    """Constant-velocity deskew to the scan midpoint. dT_scan = lidar motion
+    over the scan (from odometry); each point is moved by the fractional
+    motion Exp((f - 0.5) * Log(dT_scan)) for its time fraction f."""
+    if trel is None or trel.max() <= 0:
+        return P
+    w = log_R(dT_scan[:3, :3]); v = dT_scan[:3, 3]
+    if np.linalg.norm(w) < 1e-5 and np.linalg.norm(v) < 1e-4:
+        return P
+    f = trel / trel.max()
+    out = P.copy()
+    for b in range(bins):
+        m = (f >= b / bins) & (f < (b + 1) / bins) if b < bins - 1 else (f >= b / bins)
+        if not m.any():
+            continue
+        a = (b + 0.5) / bins - 0.5
+        out[m] = P[m] @ exp_r(a * w).T + a * v
+    return out
+
+
+def read_map_xyz(path):
+    import open3d as o3d
+    P = np.asarray(o3d.io.read_point_cloud(str(path)).points)
+    if len(P) == 0:
+        raise SystemExit("no points in %s" % path)
+    return P
+
+
+# --------------------------------------------------------------------------- #
+# frozen-map reference: KD-tree + local planes (soft planarity weight, matched
+# by voxel membership - both validated the hard way on the mapping sessions)
+# --------------------------------------------------------------------------- #
+class Reference:
+    def __init__(self, P, voxel=0.05, plane_voxel=0.4, planarity=1.0, min_pts=12):
+        self.P = voxel_centroid(np.asarray(P, float), voxel).astype(float)
+        self.pv = plane_voxel
+        self.origin = self.P.min(0)
+        q = self._vox(self.P)
+        key = (q[:, 0] << 40) | (q[:, 1] << 20) | q[:, 2]
+        o = np.argsort(key, kind="stable"); ks = key[o]; Ps = self.P[o]
+        br = np.r_[0, np.flatnonzero(np.diff(ks)) + 1, len(ks)]
+        C, N, W, kk = [], [], [], []
+        for a, b in zip(br[:-1], br[1:]):
+            if b - a < min_pts:
+                continue
+            X = Ps[a:b]; c = X.mean(0)
+            ev, V = np.linalg.eigh((X - c).T @ (X - c) / (b - a))
+            C.append(c); N.append(V[:, 0]); kk.append(ks[a])
+            W.append(1.0 - min((ev[0] / max(ev[1], 1e-12)) / planarity, 1.0))
+        self.C = np.array(C); self.N = np.array(N); self.W = np.array(W)
+        self.idx = {int(k): i for i, k in enumerate(kk)}
+        print("  reference map: %d pts, %d plane cells" % (len(self.P), len(self.C)))
+
+    def _vox(self, P):
+        return np.clip(np.floor((P - self.origin) / self.pv).astype(np.int64),
+                       0, (1 << 20) - 1)
+
+    def plane_of(self, Q):
+        q = self._vox(Q)
+        key = (q[:, 0] << 40) | (q[:, 1] << 20) | q[:, 2]
+        j = np.array([self.idx.get(int(k), -1) for k in key])
+        m = j >= 0
+        return self.C[j[m]], self.N[j[m]], self.W[j[m]], m
+
+
+def icp_frame(P_body, T_init, ref, gates=(0.4, 0.2, 0.1), iters=5,
+              huber=0.05, beta=0.02):
+    """Point-to-plane ICP of one scan against the frozen map.
+    Convention: t <- t + dt (world), R <- R exp(dphi) (body); Jacobian
+    [n, cross(p, n @ R)] verified against numerical differentiation."""
+    T = T_init.copy(); nu = 0; rms = np.nan; eig = np.zeros(6)
+    L = 1.0 / max(float(np.median(np.linalg.norm(P_body, axis=1))), 1e-3)
+    S = np.diag([1, 1, 1, L, L, L])
+    for gate in gates:
+        for _ in range(iters):
+            Q = apply(T, P_body)
+            c, n, w, m = ref.plane_of(Q)
+            if m.sum() < 100:
+                break
+            p = P_body[m]; R = T[:3, :3]
+            r = np.einsum("ij,ij->i", Q[m] - c, n)
+            keep = np.abs(r) < gate
+            if keep.sum() < 100:
+                break
+            c, n, w, p, r = c[keep], n[keep], w[keep], p[keep], r[keep]
+            ww = w * np.minimum(1.0, huber / np.maximum(np.abs(r), 1e-9))
+            J = np.hstack([n, np.cross(p, n @ R)])
+            Jw = J * ww[:, None]
+            H = J.T @ Jw; g = Jw.T @ r
+            d = -np.linalg.solve(H + beta * np.trace(H) / 6.0 * np.eye(6), g)
+            T = Rt(R @ exp_r(d[3:]), T[:3, 3] + d[:3])
+            nu = int(keep.sum())
+            rms = float(np.sqrt(np.mean(ww * r * r) / max(ww.mean(), 1e-9)))
+            ev = np.linalg.eigvalsh(S @ H @ S)
+            eig = ev / max(ev.max(), 1e-12)
+            if np.linalg.norm(d[:3]) < 1e-4 and np.linalg.norm(d[3:]) < 1e-5:
+                break
+    return T, nu, rms, int((eig > 0.02).sum())
+
+
+# --------------------------------------------------------------------------- #
+# pose graph: odometry relative factors + absolute board-pose factors + a
+# session-anchor prior. Jacobians validated numerically (incl. jr_inv).
+# --------------------------------------------------------------------------- #
+def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, iters=12, verbose=True):
+    """node_t (N,), T_init (N,4,4), Z_rel (N-1,4,4) measured relative motions,
+    sig_rel (sig_t, sig_r) per 0.1 s, abs_meas list of (node_idx, T_meas,
+    sig_t, sig_r). Returns refined (N,4,4)."""
+    n = len(node_t); Ts = T_init.copy()
+    dt = np.maximum(np.diff(node_t), 1e-3)
+    st, sr = sig_rel
+    for it in range(iters):
+        I_, J_, V_, r_ = [], [], [], []
+
+        def add(rows, cols, vals, res):
+            base = len(r_); r_.extend(res)
+            I_.extend((np.asarray(rows) + base).tolist())
+            J_.extend(cols); V_.extend(vals)
+
+        for k in range(n - 1):
+            Ti, Tj, Zm = Ts[k], Ts[k + 1], Z_rel[k]
+            Ri, Rj = Ti[:3, :3], Tj[:3, :3]
+            d = Tj[:3, 3] - Ti[:3, 3]
+            rt = Ri.T @ d - Zm[:3, 3]
+            rr = log_R(Zm[:3, :3].T @ Ri.T @ Rj)
+            Ji = jr_inv(rr)
+            wt = 1.0 / (st * dt[k] / 0.1); wr = 1.0 / (sr * dt[k] / 0.1)
+            B = np.vstack([
+                np.hstack([-Ri.T, hat(Ri.T @ d), Ri.T, np.zeros((3, 3))]) * wt,
+                np.hstack([np.zeros((3, 3)), -Ji @ Rj.T @ Ri,
+                           np.zeros((3, 3)), Ji]) * wr])
+            cols = list(range(6 * k, 6 * k + 6)) + \
+                list(range(6 * (k + 1), 6 * (k + 1) + 6))
+            rows, cc = np.meshgrid(np.arange(6), np.arange(12), indexing="ij")
+            add(rows.ravel(), [cols[c] for c in cc.ravel()], B.ravel(),
+                list(np.r_[rt * wt, rr * wr]))
+        for k, Tm, at, ar in abs_meas:
+            Rm = Tm[:3, :3]
+            res = np.r_[Rm.T @ (Ts[k][:3, 3] - Tm[:3, 3]),
+                        log_R(Rm.T @ Ts[k][:3, :3])]
+            Jb = np.block([[Rm.T, np.zeros((3, 3))],
+                           [np.zeros((3, 3)), jr_inv(res[3:])]])
+            W = np.diag([1 / at] * 3 + [1 / ar] * 3)
+            B = W @ Jb
+            rows, cc = np.meshgrid(np.arange(6), np.arange(6), indexing="ij")
+            add(rows.ravel(), [6 * k + c for c in cc.ravel()], B.ravel(),
+                list(W @ res))
+        A = sparse.csr_matrix((V_, (I_, J_)), shape=(len(r_), 6 * n))
+        rv = np.array(r_)
+        Hn = (A.T @ A).tocsc() + sparse.identity(6 * n, format="csc") * 1e-6
+        dx = spsolve(Hn, -(A.T @ rv))
+        step = 0.0
+        for k in range(n):
+            dk = dx[6 * k:6 * k + 6]
+            Ts[k] = Rt(Ts[k][:3, :3] @ exp_r(dk[3:]), Ts[k][:3, 3] + dk[:3])
+            step = max(step, float(np.linalg.norm(dk[:3])))
+        if verbose:
+            print("    it%2d cost %.1f max step %.2f mm"
+                  % (it, float(rv @ rv), step * 1000))
+        if step < 1e-5:
+            break
+    return Ts
+
+
+# --------------------------------------------------------------------------- #
+def detect_boards_along(track, s, P, bmap, af, bag):
+    """Board sightings over the whole image stream -> [(t, board_name,
+    T_cam_board)], instance-resolved later against the anchored trajectory."""
+    board_cfgs = P.cfg.get("boards", {})
+    axes = af.get("board_axes", "opencv"); borig = af.get("board_origin", "corner")
+    wanted = track.get("boards") or sorted(bmap)
+    designs = sorted({bmap[b][1].get("design", b) for b in wanted if b in bmap})
+    dets = {}
+    for dgn in designs:
+        if dgn not in board_cfgs:
+            print("  ! design '%s' not in boards registry - skipped" % dgn)
+            continue
+        b = Board(dgn, board_cfgs[dgn])
+        dets[dgn] = (b, b.frame_fix(axes, borig))
+    imgs, infos, _, _ = read_bag(bag, image_topics=[track["image_topic"]],
+                                 info_topics=[track.get("camera_info_topic")],
+                                 want_tf=False,
+                                 stride=int(track.get("img_stride", 2)),
+                                 max_images=int(track.get("max_images", 0)))
+    frames = imgs.get(track["image_topic"], [])
+    K, D, from_bag = pick_intrinsics(infos, track.get("camera_info_topic"),
+                                     track.get("rectified", False),
+                                     track.get("K"), track.get("dist"))
+    print("  detect: %d frames, intrinsics %s fx=%.1f, designs %s"
+          % (len(frames), "bag" if from_bag else "config", K[0, 0], designs))
+    out = []
+    for st, gray in frames:
+        for dgn, (b, fix) in dets.items():
+            d = b.detect(gray, K, D)
+            if d is None:
+                continue
+            out.append((st, dgn, d.T @ fix))
+    print("  %d raw sightings" % len(out))
+    return out
+
+
+def resolve_instances(sights, Ts_est, node_t, bmap, wanted, radius=2.0):
+    """Assign each sighting to the nearest surveyed instance in MAP, using the
+    anchored trajectory's prediction. -> [(node_idx, board_name, T_meas)]."""
+    out, dropped = [], 0
+    for t, dgn, T_cb in sights:
+        k = int(np.argmin(np.abs(node_t - t)))
+        if abs(node_t[k] - t) > 0.05:
+            dropped += 1; continue
+        T_map_b = Ts_est[k] @ T_cb
+        best, bd = None, radius
+        for name in wanted:
+            if name not in bmap or bmap[name][1].get("design", name) != dgn:
+                continue
+            d = float(np.linalg.norm(bmap[name][0][:3, 3] - T_map_b[:3, 3]))
+            if d < bd:
+                best, bd = name, d
+        if best is None:
+            dropped += 1; continue
+        out.append((k, best, T_map_b, T_cb))
+    print("  %d sightings resolved to instances, %d dropped (no node / no "
+          "instance within %.1f m of the prediction)" % (len(out), dropped, radius))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+def main():
+    cfg_path = sys.argv[1] if len(sys.argv) > 1 else "pipeline_config.json"
+    P = load_pipeline(cfg_path)
+    s = P.cfg.get("08_reference")
+    if s is None:
+        raise SystemExit("add an '08_reference' block to %s (sample at the "
+                         "bottom of this file)" % cfg_path)
+    bag = s["bag"]
+    outd = s.get("out_dir", "reference_out")
+    os.makedirs(outd, exist_ok=True)
+
+    sa = json.load(open(s["session_anchor"]))
+    af = json.load(open(s["anchor_frame"]))
+    bmap = {}
+    for name, rec in (af.get("boards") or {}).items():
+        T = np.eye(4)
+        T[:3, :3] = Rot.from_quat(rec["qxyzw"]).as_matrix()
+        T[:3, 3] = rec["xyz"]
+        bmap[name] = (T, rec)
+    cams = sa.get("cameras", {})
+    print("session anchors: %s" % {k: np.round(
+        np.array(v["map_to_cam"]["xyz"]), 3).tolist() for k, v in cams.items()
+        if "map_to_cam" in v})
+
+    def anchor_T(cam_name):
+        rec = cams[cam_name]["map_to_cam"]
+        return Rt(Rot.from_quat(rec["qxyzw"]).as_matrix(), np.array(rec["xyz"]))
+
+    REF = None
+    results = {}
+
+    for track in s["tracks"]:
+        name = track["name"]; kind = track["type"]
+        print("\n== %s (%s) ==" % (name, kind))
+        ot, oT = read_odom(bag, track["odom_topic"])
+        # odometry child frame -> the camera optical frame the anchor refers to
+        X = make_T_xyzq(track["cam_extrinsic_xyzquat"]) \
+            if track.get("cam_extrinsic_xyzquat") else np.eye(4)
+        if not track.get("cam_extrinsic_xyzquat"):
+            print("  ! no cam_extrinsic_xyzquat: assuming the odometry child "
+                  "frame IS the anchored camera frame. A wrong assumption here "
+                  "is a fixed rotation error on the whole track.")
+        A = anchor_T(track["anchor_cam"])          # T_map_cam at session start
+        # odom pose at the anchor's own timestamp, not blindly index 0
+        t_anchor = cams[track["anchor_cam"]].get("dwell_t_end") or ot[0]
+        T_o0 = interp_traj(ot, oT, np.array([min(max(t_anchor, ot[0]), ot[-1])]))[0]
+        T_map_origin = A @ inv(T_o0 @ X)
+        print("  anchored: map->odom-origin xyz=%s"
+              % np.round(T_map_origin[:3, 3], 3).tolist())
+
+        if kind == "lidar_icp":
+            if REF is None:
+                REF = Reference(read_map_xyz(s["ref_map"]),
+                                voxel=float(s.get("target_voxel", 0.05)),
+                                plane_voxel=float(s.get("plane_voxel", 0.4)))
+            T_cam_lidar = inv(P.sensor.T_lidar_camera)
+            rate = float(track.get("rate_hz", 5.0))
+            rmin = float(track.get("range_min", 0.7))
+            rmax = float(track.get("range_max", 15.0))
+            vox = float(track.get("scan_voxel", 0.10))
+            keep_dt = 1.0 / rate
+            ts, Ts, RMS, NOBS = [], [], [], []
+            t_last = -1e18; T_prev = None; t0w = time.time()
+            use_deskew = bool(track.get("deskew", True))
+            T_cl = X @ T_cam_lidar
+            for t, m in iter_topic(bag, track["points_topic"]):
+                if t - t_last < keep_dt:
+                    continue
+                xyz, trel = pc2_xyzt(m)
+                rng = np.linalg.norm(xyz, axis=1)
+                sel = (rng > rmin) & (rng < rmax)
+                Pb, tsel = xyz[sel], (None if trel is None else trel[sel])
+                if len(Pb) < 2000:
+                    continue
+                if use_deskew and tsel is not None:
+                    span = float(tsel.max())
+                    T0, T1 = interp_traj(ot, oT, np.array([t, t + span]))
+                    dT_l = inv(T_cl) @ inv(T0) @ T1 @ T_cl
+                    Pb = deskew(Pb.astype(float), tsel, dT_l)
+                Pb = voxel_centroid(np.asarray(Pb, float), vox).astype(float)
+                # seed: previous solution advanced by odometry (scan 0: anchor)
+                T_ol = interp_traj(ot, oT, np.array([t]))[0]
+                if T_prev is None:
+                    T_seed = T_map_origin @ T_ol @ X @ T_cam_lidar
+                else:
+                    T_seed = T_prev @ inv(T_ol_prev) @ T_ol
+                T_i, nu, rms, nobs = icp_frame(Pb, T_seed, REF)
+                T_prev, T_ol_prev = T_i, T_ol
+                t_last = t
+                ts.append(t); Ts.append(T_i); RMS.append(rms); NOBS.append(nobs)
+                if len(ts) % 100 == 0:
+                    print("  %5d scans  rms %5.2f cm  obs %d/6  %5.1fs"
+                          % (len(ts), rms * 100, nobs, time.time() - t0w),
+                          flush=True)
+            Ts = np.array(Ts); ts = np.array(ts)
+            print("  %d scans | plane rms median %.2f cm p95 %.2f cm | "
+                  "rank-deficient %.1f%%"
+                  % (len(ts), np.nanmedian(RMS) * 100,
+                     np.nanpercentile(RMS, 95) * 100,
+                     100 * np.mean(np.array(NOBS) < 6)))
+            write_tum(os.path.join(outd, "traj_%s.tum" % name), ts, Ts)
+            results[name] = dict(kind=kind, ts=ts, Ts=Ts,
+                                 frame="lidar", rms=float(np.nanmedian(RMS)))
+
+        elif kind == "cam_boards":
+            rate = float(track.get("rate_hz", 10.0))
+            keep = np.r_[0, np.flatnonzero(np.diff(ot) >= 0)[
+                np.searchsorted(np.cumsum(np.diff(ot)),
+                                np.arange(1.0 / rate, ot[-1] - ot[0], 1.0 / rate))]]
+            keep = np.unique(np.clip(keep, 0, len(ot) - 1))
+            node_t = ot[keep]
+            To = oT[keep]
+            T_init = np.array([T_map_origin @ To[i] @ X for i in range(len(keep))])
+            Z_rel = np.array([inv(X) @ inv(To[i]) @ To[i + 1] @ X
+                              for i in range(len(keep) - 1)])
+            sights = detect_boards_along(track, s, P, bmap, af, bag)
+            res = resolve_instances(sights, T_init, node_t, bmap,
+                                    track.get("boards") or sorted(bmap),
+                                    float(track.get("instance_radius", 2.0)))
+            abs_meas = []
+            for k, bname, T_map_b_pred, T_cb in res:
+                Tb, rec = bmap[bname]
+                # measured camera pose from the SURVEYED board
+                T_meas = Tb @ inv(T_cb)
+                sig_t = math.hypot(float(rec.get("std_mm", 10)) * 1e-3, 0.010)
+                lc = rec.get("loop_closure") or {}
+                sig_t = max(sig_t, float(lc.get("mm", 0)) * 1e-3)
+                sig_r = math.radians(max(float(lc.get("deg", 0.3)), 1.0))
+                abs_meas.append((k, T_meas, sig_t, sig_r))
+            # session-anchor prior on the first node
+            arec = cams[track["anchor_cam"]]
+            abs_meas.append((0, T_init[0],
+                             max(arec.get("std_mm", 10) * 1e-3, 0.005), 
+                             math.radians(1.0)))
+            print("  graph: %d nodes, %d board factors" % (len(node_t), len(res)))
+            Ts = solve_graph(node_t, T_init, Z_rel,
+                             (float(track.get("odom_sigma_t", 0.003)),
+                              float(track.get("odom_sigma_r", 0.001))),
+                             abs_meas)
+            corr = np.linalg.norm(Ts[:, :3, 3] - T_init[:, :3, 3], axis=1)
+            print("  correction vs anchored odometry: median %.1f cm, max %.1f cm "
+                  "(this IS the measured drift the boards removed)"
+                  % (np.median(corr) * 100, corr.max() * 100))
+            write_tum(os.path.join(outd, "traj_%s.tum" % name), node_t, Ts)
+            write_tum(os.path.join(outd, "traj_%s_odom_only.tum" % name),
+                      node_t, T_init)
+            results[name] = dict(kind=kind, ts=node_t, Ts=Ts, frame="cam",
+                                 n_boards=len(res))
+        else:
+            print("  ! unknown type '%s' - skipped" % kind)
+
+    # -------- cross-check: two independent tracks of one rigid body -------- #
+    lid = next((r for r in results.values() if r["kind"] == "lidar_icp"), None)
+    zed = next((v for k, v in results.items()
+                if v["kind"] == "cam_boards" and "1" in k), None)
+    if lid is not None and zed is not None:
+        T_lc = P.sensor.T_lidar_camera
+        tq = lid["ts"][(lid["ts"] >= zed["ts"][0]) & (lid["ts"] <= zed["ts"][-1])]
+        if len(tq) > 10:
+            Tl = interp_traj(lid["ts"], lid["Ts"], tq)
+            Tz = interp_traj(zed["ts"], zed["Ts"], tq)
+            gap = np.linalg.norm((Tl @ np.tile(T_lc, (len(tq), 1, 1)))[:, :3, 3]
+                                 - Tz[:, :3, 3], axis=1)
+            print("\n== cross-check mobile_1: lidar-ICP track vs ZED-board track "
+                  "(same rigid body through T_lidar_camera) ==")
+            print("  translation gap: median %.1f cm  p95 %.1f cm  max %.1f cm "
+                  "over %d stamps" % (np.median(gap) * 100,
+                                      np.percentile(gap, 95) * 100,
+                                      gap.max() * 100, len(tq)))
+            print("  this needs no ground truth: two independent estimates of "
+                  "one body. A constant offset = extrinsic error; growth "
+                  "between board sightings = ZED odometry drift the boards "
+                  "could not reach.")
+    print("\ndone -> %s" % outd)
+
+
+SAMPLE_CONFIG = r"""
+"08_reference": {
+  "bag": "/path/to/mirc_dataset_coop2_20260828_merged",
+  "session_anchor": "map_stages_20260828_outputs/session_anchor.json",
+  "anchor_frame": "map_stages_20260828_outputs/anchor_frame.json",
+  "ref_map": "map_final_20260828_nc_anchored.pcd",
+  "out_dir": "map_stages_20260828_outputs/reference_coop2",
+  "target_voxel": 0.05, "plane_voxel": 0.4,
+  "tracks": [
+    { "name": "mobile_1_lidar", "type": "lidar_icp",
+      "points_topic": "/mobile_1/ouster/points",
+      "odom_topic": "/mobile_1/zed/odom",
+      "anchor_cam": "zed",
+      "cam_extrinsic_xyzquat": null,
+      "rate_hz": 5.0, "range_min": 0.7, "range_max": 15.0, "scan_voxel": 0.10 },
+    { "name": "mobile_1_zed", "type": "cam_boards",
+      "odom_topic": "/mobile_1/zed/odom",
+      "image_topic": "/mobile_1/zed/left/image_rect_color",
+      "camera_info_topic": "/mobile_1/zed/left/camera_info", "rectified": true,
+      "anchor_cam": "zed", "boards": ["anchor", "anchor_b"],
+      "rate_hz": 10.0, "img_stride": 2 },
+    { "name": "mobile_2_realsense", "type": "cam_boards",
+      "odom_topic": "/mobile_2/visual_slam/tracking/odometry",
+      "image_topic": "/mobile_2/color/image_raw",
+      "camera_info_topic": "/mobile_2/color/camera_info", "rectified": false,
+      "anchor_cam": "realsense",
+      "boards": ["rs_anchor", "anchor", "anchor_b"],
+      "rate_hz": 10.0, "img_stride": 2 }
+  ]
+}
+"""
+
+if __name__ == "__main__":
+    main()
