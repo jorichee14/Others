@@ -110,6 +110,7 @@ print("  lidar ICP  vs truth: median %.1f cm max %.1f cm rot max %.2f deg"
 print("  odom-only  vs truth: median %.1f cm max %.1f cm"
       % (np.median(e_o) * 100, e_o.max() * 100))
 m.report_gap("odom - lidar", lts, *m.traj_gap(lTs, To_l), m.path_length(lTs))
+m.verify_odom_frames(lts, lTs, m.compose_all(lTs, T_lc), ot, oT, T_cl_true, X, Q, "child")
 assert np.median(e_l) < 0.03 and e_l.max() < 0.10, "lidar chain off (max %.2f m)" % e_l.max()
 assert e_o.max() > 0.3, "synthetic drift too small to test anything"
 assert n_rej == 0, "%d unregistered scans" % n_rej

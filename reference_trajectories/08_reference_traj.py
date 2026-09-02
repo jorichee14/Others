@@ -1026,6 +1026,75 @@ def chain_icp(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100,
 chain_lidar = chain_icp        # name kept for the tests
 
 
+def verify_odom_frames(ts, Ts, Ts_cam, ot, oT, T_cl, X, Q, ochild):
+    """Two data checks that the odometry and the ICP track are in ONE frame
+    and that the odometry's error is a break, not a frame mismatch.
+
+    1. Replace ONLY the flagged odometry steps (odom step vs ICP step > 5 cm
+       or 2 deg) by the ICP's own increments and re-integrate the odometry.
+       A frame error is proportional to motion and lives in EVERY step, so
+       the re-integrated chain would still diverge; a tracking break lives in
+       the flagged steps only, so the chain would then follow the ICP.
+    2. Hand-eye: solve T_child_cam from the odometry vs the ICP track over
+       the clean window before the first flagged step and compare with the
+       configured cam_extrinsic_xyzquat."""
+    od = np.array([q[5] for q in Q]); odr = np.array([q[6] for q in Q])
+    flagged = (od > 0.05) | (odr > math.radians(2.0))
+    T_ol = interp_traj(ot, oT, ts)
+    T_rep = [Ts[0]]
+    for k in range(1, len(ts)):
+        if flagged[k]:
+            Z = inv(Ts[k - 1]) @ Ts[k]                       # ICP increment
+        else:
+            Z = inv(T_cl) @ inv(T_ol[k - 1]) @ T_ol[k] @ T_cl  # odom increment
+        T_rep.append(T_rep[-1] @ Z)
+    T_rep = np.array(T_rep)
+    dt_, dr_ = traj_gap(T_rep, Ts)
+    print("  == frame check 1: odometry re-integrated with its %d flagged "
+          "step(s) replaced by the ICP increments ==" % int(flagged.sum()))
+    print("     gap to the ICP track: median %.1f cm, max %.1f cm, rotation "
+          "max %.1f deg over %.1f m of path"
+          % (np.median(dt_) * 100, dt_.max() * 100, math.degrees(dr_.max()),
+             path_length(Ts)))
+    print("     -> %s" % (
+        "the un-flagged odometry follows the ICP track: frames agree, the "
+        "whole error is in the flagged steps (a tracking break)"
+        if dt_.max() < 0.30 else
+        "the odometry STILL diverges with the flagged steps removed: either a "
+        "frame/extrinsic error (check cam_extrinsic_xyzquat) or a slow scale "
+        "drift spread over all steps"))
+    tf = ts[np.flatnonzero(flagged)] if flagged.any() else np.array([ts[-1]])
+    t_end = tf[0] - 0.5
+    sel = ts < t_end
+    print("  == frame check 2: hand-eye T_%s_cam from odometry vs ICP over the "
+          "clean window t < %.1f s (%d stamps) ==" % (ochild, t_end - ts[0], sel.sum()))
+    if sel.sum() < 40:
+        print("     (window too short - skipped)"); return
+    Xh, res, null_axes = estimate_cam_extrinsic(ot, oT, ts[sel], Ts_cam[sel],
+                                                dt=0.5, min_rot=0.05)
+    if Xh is None:
+        print("     (refused: the rotations in this window share one axis, the "
+              "extrinsic rotation is not observable from this motion)"); return
+    dR = math.degrees(np.linalg.norm(log_R(X[:3, :3].T @ Xh[:3, :3])))
+    dtv = Xh[:3, 3] - X[:3, 3]
+    print("     hand-eye: t=%s rpy=%s deg (residual %.1f mm/step)"
+          % (np.round(Xh[:3, 3], 3).tolist(),
+             np.round(Rot.from_matrix(Xh[:3, :3]).as_euler("xyz", degrees=True), 1).tolist(),
+             res * 1000))
+    print("     configured: t=%s rpy=%s deg"
+          % (np.round(X[:3, 3], 3).tolist(),
+             np.round(Rot.from_matrix(X[:3, :3]).as_euler("xyz", degrees=True), 1).tolist()))
+    print("     rotation difference %.1f deg, translation difference %.1f cm%s"
+          % (dR, np.linalg.norm(dtv) * 100,
+             " (translation along %d unobservable axis/axes set to 0 by the "
+             "solver - compare rotation only)" % len(null_axes)
+             if null_axes is not None and len(null_axes) else ""))
+    print("     -> %s" % ("configured extrinsic CONFIRMED by the data"
+                          if dR < 5.0 else
+                          "the data prefers a different extrinsic rotation: "
+                          "cam_extrinsic_xyzquat is suspect"))
+
+
 def report_chain_quality(ts, Q, outd, name, seed_mode="lidar"):
     """Per-scan CSV + a three-panel PNG (plane rms, observability, ZED step
     disagreement) and a summary of where the chain was weak."""
@@ -1767,6 +1836,10 @@ def main():
                   "stamps) ==" % len(ts))
             dtr, drr = traj_gap(Ts, To_l)
             report_gap("odom - lidar", ts, dtr, drr, path_length(Ts))
+            try:
+                verify_odom_frames(ts, Ts, Ts_cam, ot, oT, T_cl, X, Q, ochild)
+            except Exception as e:
+                print("  (frame check failed: %s: %s)" % (type(e).__name__, e))
             print("  (both start at the session anchor, so the gap at t=0 is "
                   "the anchor-vs-map agreement; smooth growth is odometry "
                   "drift; a step is a ZED tracking break - the per-step line "
