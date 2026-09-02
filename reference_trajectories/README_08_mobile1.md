@@ -10,8 +10,8 @@
 
 | step | track | what it produces |
 |---|---|---|
-| 1 | `mobile_1_lidar` (`lidar_icp`) | every Ouster scan registered to the anchored map (board-free). `traj_mobile_1_lidar.tum` (lidar frame), `traj_mobile_1_lidar_in_cam.tum` (same track as the ZED left optical frame), `traj_mobile_1_lidar_odom_only.tum` (anchored ZED odom at the same stamps, lidar frame) |
-| 1b | printed | **lidar ICP vs ZED odom**: translation/rotation gap at the same stamps, gap over time, end gap as % of path. This is the ZED drift measured against the map. |
+| 1 | `mobile_1_lidar` (`lidar_icp`) | every Ouster scan registered to the anchored map, board-free and (after scan 0) odometry-free: each scan is seeded from the lidar's own previous poses, the ZED increment is only a fallback seed, and a scan that fails both is retried with wide gates before being marked unregistered. `traj_mobile_1_lidar.tum` (lidar frame), `traj_mobile_1_lidar_in_cam.tum` (same track as the ZED left optical frame), `traj_mobile_1_lidar_odom_only.tum` (anchored ZED odom at the same stamps, lidar frame), `quality_mobile_1_lidar.csv/png` (per-scan plane rms, observable DOF, seed status, ZED step vs lidar step) |
+| 1b | printed | **lidar ICP vs ZED odom**: translation/rotation gap at the same stamps, gap over time, end gap as % of path, and the per-step disagreement with the stamps of every step over 5 cm or 2 deg. One big step is a ZED jump; a run of them is the ZED losing scale or tracking. |
 | 2 | `mobile_1_zed` (`arms`, `cloud_source: lidar`) | three trajectories of the ZED optical frame from one graph: `A_icp` (ZED odom + lidar map factors), `B_boards` (ZED odom + board sightings + session anchor, **started from the odometry** = "boards correct the ZED odom"), `C_joint` (lidar + boards + odom). Plus `traj_mobile_1_zed_odom_only.tum`. |
 | 2b | printed | ablation table: board residual / map rms / vs C / vs odom per arm. A's board residual and B's map rms are the independent cells. |
 | 3 | printed | cross-check (lidar track scored on the ZED's board sightings, both `T_lidar_camera` conventions), then the rig comparison table: lidar ICP, odom only, A, B, C pairwise, all in the camera frame at the lidar stamps. `compare_mobile_1.csv` has the gap to the lidar track over time; `paths.png` draws everything. |
@@ -58,11 +58,12 @@ Chains used:
 | ZED odom -> camera pose | `T_map_cam(t) = T_map_odom @ T_odom_child(t) @ X` |
 | ZED odom -> lidar pose | `T_map_lidar(t) = T_map_odom @ T_odom_child(t) @ T_cl`, `T_cl = X @ inv(T_lidar_camera)` |
 | lidar ICP seed, scan 0 | `T_map_lidar` from the line above |
-| lidar ICP seed, scan k | `T_prev @ inv(T_cl) @ inv(T_odom_child(k-1)) @ T_odom_child(k) @ T_cl` (odometry increment conjugated from child into lidar frame) |
+| lidar ICP seed, scan k (`seed: lidar`, default) | `T_prev @ scale(inv(T_prev2) @ T_prev, dt_k / dt_{k-1})` : the lidar's own last motion, extrapolated |
+| lidar ICP seed, scan k (`seed: odom`, or fallback) | `T_prev @ inv(T_cl) @ inv(T_odom_child(k-1)) @ T_odom_child(k) @ T_cl` (odometry increment conjugated from child into lidar frame) |
 | deskew | same conjugation on the motion over one scan |
 | lidar pose -> camera pose | `T_map_cam = T_map_lidar @ T_lidar_camera` |
 | lidar cloud -> camera frame (graph factors) | `P_cam = inv(T_lidar_camera) P_lidar` |
-| odometry factor in the graph | `Z = inv(X) @ inv(T_odom_child(i)) @ T_odom_child(i+1) @ X` |
+| odometry factor in the graph | `Z = inv(X) @ inv(T_odom_child(i)) @ T_odom_child(i+1) @ X`; an edge whose `Z` disagrees with the lidar chain's own increment by more than `odom_jump_m` / `odom_jump_deg` gets its sigma multiplied by 1000 (a ZED jump becomes a free joint instead of being smeared over its neighbours) |
 | board factor | `T_map_cam = T_map_board(survey) @ inv(T_cam_board)` |
 | lidar-vs-odom comparison | both in the lidar frame at the scan stamps |
 | rig comparison table | everything in the camera frame at the lidar stamps |
@@ -74,9 +75,11 @@ right. If the inverse wins, set `"invert_T_lidar_camera": true` and rerun.
 
 ## Reading the result
 
-* **lidar vs odom gap** grows with time: ZED drift. A step: an ICP basin
-  jump (see the rejected-scan count). A constant offset from t=0: the anchor
-  vs the map, or `X`.
+* **lidar vs odom gap** grows with time: ZED drift. A step that then stays
+  flat: a ZED jump (the per-step line names its stamp; the lidar chain does
+  not follow it because it is seeded from itself). A constant offset from
+  t=0: the anchor vs the map, or `X`. Unregistered scans are listed with
+  their stamps; poses there are extrapolated, not measured.
 * **arm B vs odom** is the correction the boards applied. The
   board-factor-coverage line says how much of the run the boards can reach;
   outside it B is pure odometry.

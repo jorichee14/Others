@@ -9,12 +9,18 @@ the absolute information each sensor can see.
 MOBILE_1 WORKFLOW (Ouster + ZED on one rigid body) - run these two tracks:
 
   1. lidar_icp   every Ouster scan is registered to the FROZEN anchored map by
-                 point-to-plane ICP (session-start pose seeds scan 0 through
-                 T_lidar_camera; afterwards each scan is seeded by the previous
-                 one advanced by ZED odometry). Boards are never used, so this
-                 track is fiducial-free. It ALSO writes the anchored ZED odometry
-                 at the same stamps and prints the gap between the two - that
-                 gap IS the ZED odometry drift, measured against the map.
+                 point-to-plane ICP. The session-start pose seeds scan 0
+                 (through T_lidar_camera); afterwards each scan is seeded by
+                 the lidar's OWN previous poses (constant velocity), so after
+                 scan 0 nothing from the ZED enters the track. Boards are never
+                 used either: the track is fiducial-free and odometry-free.
+                 A scan whose ICP moved too far from its seed is retried from
+                 the other seed and with wide gates before it is declared
+                 unregistered. Per-scan quality goes to quality_<name>.csv/png.
+                 The track ALSO writes the anchored ZED odometry at the same
+                 stamps and prints the gap between the two, plus the per-step
+                 ZED-vs-lidar disagreement that separates a ZED jump (one big
+                 step) from drift (a run of small ones).
 
   2. arms        with "cloud_source": "lidar": three corrected trajectories of
                  the ZED optical frame from ONE estimator (same nodes, same
@@ -455,7 +461,7 @@ GAUGE_W = 1e-2
 
 def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
                 use_icp=False, use_board=True, icp_pts=400, iters=25,
-                verbose=True, _second_pass=False):
+                verbose=True, edge_scale=None, _second_pass=False):
     """One graph, selectable factor sets (this is what makes the A/B/C arms an
     ablation instead of three pipelines):
       odometry relative factors        always
@@ -463,10 +469,14 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
       point-to-plane map factors       use_icp - RE-LINEARISED each iteration.
         Never chained-ICP poses as priors: their correlated drift out-weighed
         the boards in validation and the joint arm lost to boards-only.
-    clouds: {node_index: (M,3) cloud in the STATE frame}."""
+    clouds: {node_index: (M,3) cloud in the STATE frame}.
+    edge_scale: per-edge multiplier on the odometry sigma (1 = trust as
+    configured; 1e3 = a free joint, used where the odometry is known to have
+    jumped)."""
     n = len(node_t); Ts = T_init.copy()
     dt = np.maximum(np.diff(node_t), 1e-3)
     st, sr = sig_rel
+    es = np.ones(n - 1) if edge_scale is None else np.asarray(edge_scale, float)
     sub = {}
     if use_icp:
         for k, P in (clouds or {}).items():
@@ -488,7 +498,8 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
             rt = Ri.T @ d - Zm[:3, 3]
             rr = log_R(Zm[:3, :3].T @ Ri.T @ Rj)
             Ji = jr_inv(rr)
-            wt = 1.0 / (st * dt[k] / 0.1); wr = 1.0 / (sr * dt[k] / 0.1)
+            wt = 1.0 / (st * es[k] * dt[k] / 0.1)
+            wr = 1.0 / (sr * es[k] * dt[k] / 0.1)
             B = np.vstack([
                 np.hstack([-Ri.T, hat(Ri.T @ d), Ri.T, np.zeros((3, 3))]) * wt,
                 np.hstack([np.zeros((3, 3)), -Ji @ Rj.T @ Ri,
@@ -592,7 +603,7 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
             return solve_graph(node_t, T_init, Z_rel, sig_rel,
                                [f for f, _ in keep], clouds, ref, use_icp,
                                use_board, icp_pts, iters, verbose,
-                               _second_pass=True)
+                               edge_scale=es, _second_pass=True)
     return Ts
 
 
@@ -850,13 +861,33 @@ def decimate_idx(ts, rate):
 # mobile_1 building blocks (pure functions of arrays, so they are testable
 # without a bag): the chained lidar ICP and the three-arm graph
 # --------------------------------------------------------------------------- #
+def se3_scale(D, s):
+    """Fraction s of the rigid motion D (constant-velocity extrapolation)."""
+    return Rt(exp_r(s * log_R(D[:3, :3])), s * D[:3, 3])
+
+
 def chain_lidar(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100):
     """Chained scan-to-map ICP. `scans` yields (t, xyz (N,3) in the LIDAR
     frame, per-point time offsets or None). State = T_map_lidar.
-      scan 0 seed  : T_map_odom @ T_odom_child(t) @ T_child_lidar
-      later seeds  : previous ICP result advanced by the odometry increment,
-                     conjugated from the child frame into the lidar frame
-    -> ts, Ts, RMS, NOBS, clouds (subsampled, LIDAR frame), n_rejected"""
+
+    Seeding (track["seed"]):
+      "lidar" (default) the lidar's OWN previous two ICP poses, extrapolated
+                        at constant velocity. Nothing from the ZED after
+                        scan 0, so the track cannot inherit an odometry jump.
+      "odom"            previous ICP pose advanced by the odometry increment,
+                        conjugated from the child frame into the lidar frame.
+    Scan 0 is always seeded from the session anchor through the odometry pose
+    at that stamp: T_map_odom @ T_odom_child(t) @ T_child_lidar.
+
+    Recovery: an ICP result that moved more than max_shift/max_rot from its
+    seed is NOT accepted, but the seed is not blindly kept either (that is how
+    a chain gets poisoned): the scan is retried from the other seed, then
+    from the constant-velocity seed with wide gates. Only if all fail is the
+    constant-velocity seed kept and the scan marked unregistered (nobs 0).
+
+    -> ts, Ts, RMS, NOBS, clouds (subsampled, LIDAR frame), n_rejected, Q
+       Q = per-scan quality rows (t, rms, nobs, n_matched, shift_from_seed,
+           odom_step_disagreement_m, odom_step_disagreement_rad, status)"""
     rate = float(track.get("rate_hz", 5.0))
     rmin = float(track.get("range_min", 0.7))
     rmax = float(track.get("range_max", 15.0))
@@ -865,10 +896,14 @@ def chain_lidar(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100):
     max_shift = float(track.get("max_shift", 0.5))
     max_rot = math.radians(float(track.get("max_rot_deg", 5.0)))
     use_deskew = bool(track.get("deskew", True))
-    keep_dt = 1.0 / rate
-    ts, Ts, RMS, NOBS, cl = [], [], [], [], []
+    seed_mode = track.get("seed", "lidar")
+    gates = tuple(track.get("gates", (0.4, 0.2, 0.1)))
+    wide = tuple(track.get("wide_gates", (1.0, 0.5, 0.25, 0.1)))
+    keep_dt = (1.0 / rate) * 0.9 if rate > 0 else 0.0   # 0 = every scan
+    ts, Ts, RMS, NOBS, cl, Q = [], [], [], [], [], []
     n_rej = 0
-    t_last = -1e18; T_prev = None; T_ol_prev = None; t0w = time.time()
+    t_last = -1e18; T_prev = None; T_prev2 = None; t_prev = t_prev2 = None
+    T_ol_prev = None; t0w = time.time()
     for t, xyz, trel in scans:
         if t - t_last < keep_dt:
             continue
@@ -877,39 +912,136 @@ def chain_lidar(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100):
         Pb, tsel = xyz[sel], (None if trel is None else trel[sel])
         if len(Pb) < 2000:
             continue
+        T_ol = interp_traj(ot, oT, np.array([t]))[0]
+        # the two candidate seeds
+        T_seed_odom = T_seed_cv = None
+        if T_prev is None:
+            T_seed_odom = T_map_origin @ T_ol @ T_cl
+        else:
+            T_seed_odom = T_prev @ (inv(T_cl) @ inv(T_ol_prev) @ T_ol @ T_cl)
+            if T_prev2 is not None and t_prev > t_prev2:
+                D = inv(T_prev2) @ T_prev                # motion over last step
+                T_seed_cv = T_prev @ se3_scale(D, (t - t_prev) / (t_prev - t_prev2))
+            else:
+                T_seed_cv = T_prev.copy()
+        if T_prev is None or seed_mode == "odom":
+            order = [("odom", T_seed_odom), ("cv", T_seed_cv)]
+        else:
+            order = [("cv", T_seed_cv), ("odom", T_seed_odom)]
+        order = [(n_, S) for n_, S in order if S is not None]
+        # deskew with the motion of the primary seed over the scan
         if use_deskew and tsel is not None:
             span = float(tsel.max())
-            T0, T1 = interp_traj(ot, oT, np.array([t, t + span]))
-            dT_l = inv(T_cl) @ inv(T0) @ T1 @ T_cl
+            if order[0][0] == "odom" or T_prev2 is None:
+                T0, T1 = interp_traj(ot, oT, np.array([t, t + span]))
+                dT_l = inv(T_cl) @ inv(T0) @ T1 @ T_cl
+            else:
+                dT_l = se3_scale(inv(T_prev2) @ T_prev, span / (t_prev - t_prev2))
             Pb = deskew(Pb.astype(float), tsel, dT_l)
         Pb = voxel_centroid(np.asarray(Pb, float), vox).astype(float)
-        T_ol = interp_traj(ot, oT, np.array([t]))[0]
-        if T_prev is None:
-            T_seed = T_map_origin @ T_ol @ T_cl
-        else:
-            # the odometry increment lives in the odom CHILD frame; the state
-            # is the lidar frame, so it must be conjugated by T_cl. Skipping
-            # this misdirects every step by the body-vs-optical rotation and
-            # walks the track off.
-            T_seed = T_prev @ (inv(T_cl) @ inv(T_ol_prev) @ T_ol @ T_cl)
-        T_i, nu, rms, nobs = icp_frame(Pb, T_seed, REF)
-        # one bad ICP basin must not poison the chain: a correction beyond
-        # max_shift/max_rot keeps the odometry-propagated seed (same guard as
-        # 01a, which never chains for exactly this reason)
-        d = float(np.linalg.norm(T_i[:3, 3] - T_seed[:3, 3]))
-        a = float(np.linalg.norm(log_R(T_seed[:3, :3].T @ T_i[:3, :3])))
-        if d > max_shift or a > max_rot:
-            T_i, rms, nobs = T_seed, np.nan, 0
+        # register: primary seed, then the other seed, then wide gates
+        status, T_i, nu, rms, nobs = "fail", None, 0, np.nan, 0
+        attempts = [(n_, S, gates) for n_, S in order] + \
+                   [(n_ + "+wide", S, wide) for n_, S in order]
+        for n_, S, gs in attempts:
+            T_try, nu, rms, nobs = icp_frame(Pb, S, REF, gates=gs)
+            d = float(np.linalg.norm(T_try[:3, 3] - S[:3, 3]))
+            a = float(np.linalg.norm(log_R(S[:3, :3].T @ T_try[:3, :3])))
+            lim = 2.0 if gs is wide else 1.0
+            if d <= max_shift * lim and a <= max_rot * lim and nobs >= 3:
+                status, T_i = n_, T_try
+                break
+        seed_used = order[0][1]
+        if T_i is None:
+            # unregistered: carry the constant-velocity (or anchor) seed
+            T_i, rms, nobs = seed_used, np.nan, 0
             n_rej += 1
-        T_prev, T_ol_prev = T_i, T_ol
+        shift = float(np.linalg.norm(T_i[:3, 3] - seed_used[:3, 3]))
+        # odometry step vs lidar step: the ZED's per-step disagreement with
+        # the map-registered motion. A jump in the ZED shows up here as ONE
+        # large row; a scale/drift problem as a run of small ones.
+        if T_prev is not None and T_seed_odom is not None:
+            Dd = inv(T_seed_odom) @ T_i
+            od_t, od_r = float(np.linalg.norm(Dd[:3, 3])), float(np.linalg.norm(log_R(Dd[:3, :3])))
+        else:
+            od_t = od_r = 0.0
+        Q.append((t, rms, nobs, nu, shift, od_t, od_r, status))
+        T_prev2, t_prev2 = T_prev, t_prev
+        T_prev, t_prev, T_ol_prev = T_i, t, T_ol
         t_last = t
         ts.append(t); Ts.append(T_i); RMS.append(rms); NOBS.append(nobs)
         cl.append(subsample(Pb, keep_pts).astype(np.float32))
         if log_every and len(ts) % log_every == 0:
-            print("  %5d scans  rms %5.2f cm  obs %d/6  %5.1fs"
+            print("  %5d scans  rms %5.2f cm  obs %d/6  seed %-8s %5.1fs"
                   % (len(ts), (rms if np.isfinite(rms) else 0) * 100,
-                     nobs, time.time() - t0w), flush=True)
-    return np.array(ts), np.array(Ts), RMS, NOBS, cl, n_rej
+                     nobs, status, time.time() - t0w), flush=True)
+    return np.array(ts), np.array(Ts), RMS, NOBS, cl, n_rej, Q
+
+
+def report_lidar_quality(ts, Q, outd, name, seed_mode="lidar"):
+    """Per-scan CSV + a three-panel PNG (plane rms, observability, ZED step
+    disagreement) and a summary of where the chain was weak."""
+    t0 = ts[0]
+    csv = os.path.join(outd, "quality_%s.csv" % name)
+    with open(csv, "w") as f:
+        f.write("t,t_rel,rms_cm,nobs,n_matched,shift_from_seed_cm,"
+                "odom_step_disagree_cm,odom_step_disagree_deg,seed_status\n")
+        for (t, rms, nobs, nu, sh, od_t, od_r, st) in Q:
+            f.write("%.6f,%.3f,%.2f,%d,%d,%.2f,%.2f,%.3f,%s\n"
+                    % (t, t - t0, (rms if np.isfinite(rms) else -1) * 100, nobs,
+                       nu, sh * 100, od_t * 100, math.degrees(od_r), st))
+    print("  wrote %s" % csv)
+    st = [q[7] for q in Q[1:]]                 # scan 0 is always odom-seeded
+    prim = "cv" if seed_mode == "lidar" else "odom"
+    othr = "odom" if prim == "cv" else "cv"
+    n_fail = st.count("fail")
+    print("  seed statistics: primary (%s) %d, other seed (%s) %d, wide-gate "
+          "recovery %d, unregistered %d of %d scans"
+          % (prim, st.count(prim), othr, st.count(othr),
+             sum(1 for s_ in st if s_.endswith("+wide")), n_fail, len(st)))
+    if n_fail:
+        tf = [q[0] - t0 for q in Q if q[7] == "fail"]
+        print("  !! unregistered scans at t = %s s: poses there are "
+              "constant-velocity extrapolation, not measurements"
+              % np.round(tf[:12], 1).tolist())
+    od = np.array([q[5] for q in Q]); odr = np.array([q[6] for q in Q])
+    big = np.flatnonzero((od > 0.05) | (odr > math.radians(2.0)))
+    print("  ZED odometry step vs lidar step: median %.1f mm, p95 %.1f mm, "
+          "largest %.1f cm / %.2f deg at t=%.1f s; %d step(s) > 5 cm or 2 deg"
+          % (np.median(od) * 1000, np.percentile(od, 95) * 1000,
+             od.max() * 100, math.degrees(odr.max()), ts[int(np.argmax(od))] - t0,
+             len(big)))
+    if len(big):
+        print("     at t = %s s" % np.round(ts[big[:15]] - t0, 1).tolist())
+        print("     (one big step = a ZED jump; a run of them = the ZED "
+              "losing scale/tracking over that stretch)")
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        rms = np.array([q[1] for q in Q]) * 100
+        nobs = np.array([q[2] for q in Q])
+        fig, ax = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
+        ax[0].plot(ts - t0, rms, lw=0.8); ax[0].set_ylabel("plane rms [cm]")
+        ax[0].set_title("%s: scan-to-map registration quality" % name)
+        ax[1].plot(ts - t0, nobs, lw=0.8, drawstyle="steps-post")
+        ax[1].set_ylabel("observable DOF /6"); ax[1].set_ylim(-0.2, 6.5)
+        ax[2].plot(ts - t0, od * 100, lw=0.8, label="translation [cm]")
+        ax[2].plot(ts - t0, np.degrees(odr), lw=0.8, label="rotation [deg]")
+        ax[2].set_ylabel("ZED step - lidar step"); ax[2].legend(fontsize=8)
+        ax[2].set_xlabel("t [s]")
+        for q in Q:
+            if q[7] == "fail":
+                for a_ in ax:
+                    a_.axvline(q[0] - t0, color="r", lw=0.6, alpha=0.5)
+        for a_ in ax:
+            a_.grid(alpha=.3)
+        png = os.path.join(outd, "quality_%s.png" % name)
+        plt.tight_layout(); plt.savefig(png, dpi=120); plt.close()
+        print("  wrote %s" % png)
+    except Exception as e:
+        print("  (quality plot failed: %s: %s)" % (type(e).__name__, e))
+
 
 
 def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
@@ -936,6 +1068,32 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
                       for i in range(len(node_t) - 1)])
     T_init = interp_traj(reg_t, reg_T, node_t)
     To_anch = np.array([T_map_origin @ To_n[i] @ X for i in range(len(node_t))])
+    # Odometry jumps. Each odometry increment is compared with the increment
+    # of the chained (map-registered) trajectory over the same edge. An edge
+    # that disagrees by more than odom_jump_m / odom_jump_deg is a ZED
+    # tracking break, not drift: its factor is kept but with the sigma
+    # multiplied by 1e3 (a free joint), so the graph does not spread a 2 m
+    # jump over the neighbouring seconds. Only done for lidar clouds - a
+    # depth chain is not reliable enough to indict the odometry.
+    edge_scale = np.ones(len(node_t) - 1)
+    if src == "lidar" and bool(track.get("odom_jump_check", True)):
+        jm = float(track.get("odom_jump_m", 0.05))
+        jr = math.radians(float(track.get("odom_jump_deg", 2.0)))
+        dd = [inv(inv(T_init[i]) @ T_init[i + 1]) @ Z_rel[i]
+              for i in range(len(node_t) - 1)]
+        bad = [i for i, D in enumerate(dd)
+               if np.linalg.norm(D[:3, 3]) > jm
+               or np.linalg.norm(log_R(D[:3, :3])) > jr]
+        for i in bad:
+            edge_scale[i] = 1e3
+        if bad:
+            print("  %d odometry edge(s) freed (ZED step vs lidar step > %.0f cm "
+                  "or %.0f deg) at t = %s s"
+                  % (len(bad), jm * 100, math.degrees(jr),
+                     np.round(node_t[bad][:12] - node_t[0], 1).tolist()))
+            print("     (arm B has no absolute information across a freed "
+                  "edge except the boards: its segments after a jump are "
+                  "placed by the boards seen there, or not at all)")
     # instance resolution: predict where the sighted board is in map. With
     # lidar clouds the chained lidar track is far better than the drifting
     # odometry for this (and its prediction error is then the lidar-vs-survey
@@ -993,7 +1151,8 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
         Ts = solve_graph(node_t, start.copy(), Z_rel, sig_rel, am, clouds, REF,
                          use_icp=ui, use_board=ub,
                          icp_pts=int(track.get("icp_pts", 400)),
-                         iters=int(track.get("gn_iters", 12)), verbose=verbose)
+                         iters=int(track.get("gn_iters", 12)), verbose=verbose,
+                         edge_scale=edge_scale)
         ARMS[arm] = Ts
         if outd:
             write_tum(os.path.join(outd, "traj_%s_%s.tum" % (name, arm)),
@@ -1316,15 +1475,22 @@ def main():
             T_cl = X @ T_cam_lidar          # T_child_lidar
             scans = ((t,) + pc2_xyzt(m)
                      for t, m in iter_topic(bag, track["points_topic"]))
-            ts, Ts, RMS, NOBS, cl, n_rej = chain_lidar(
+            print("  seed mode '%s' (scan 0 from the session anchor; then %s)"
+                  % (track.get("seed", "lidar"),
+                     "the lidar's own previous poses, constant velocity"
+                     if track.get("seed", "lidar") == "lidar"
+                     else "the ZED odometry increment"))
+            ts, Ts, RMS, NOBS, cl, n_rej, Q = chain_lidar(
                 scans, ot, oT, T_map_origin, T_cl, REF, track)
             if len(ts) == 0:
                 raise SystemExit("no usable scans on %s" % track["points_topic"])
-            print("  %d scans (%d ICP results rejected -> seed kept) | plane "
-                  "rms median %.2f cm p95 %.2f cm | rank-deficient %.1f%%"
+            print("  %d scans (%d unregistered) | plane rms median %.2f cm "
+                  "p95 %.2f cm | rank-deficient %.1f%%"
                   % (len(ts), n_rej, np.nanmedian(RMS) * 100,
                      np.nanpercentile(RMS, 95) * 100,
                      100 * np.mean(np.array(NOBS) < 6)))
+            report_lidar_quality(ts, Q, outd, name,
+                                 track.get("seed", "lidar"))
             write_tum(os.path.join(outd, "traj_%s.tum" % name), ts, Ts)
             # the same track as the CAMERA optical frame (through
             # T_lidar_camera) so every trajectory of this rig can be compared
@@ -1696,8 +1862,14 @@ SAMPLE_CONFIG = r"""
       "odom_topic": "/mobile_1/zed/odom",
       "anchor_cam": "zed",
       "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
-      "rate_hz": 5.0, "range_min": 0.7, "range_max": 10.0, "scan_voxel": 0.10,
-      "deskew": true, "max_shift": 0.5, "max_rot_deg": 5.0,
+      "seed": "lidar",        <- "lidar": own previous poses (default);
+                                 "odom": ZED increment (the ZED is only a
+                                 fallback seed either way)
+      "rate_hz": 10.0,        <- 0 = every scan
+      "range_min": 0.7, "range_max": 10.0, "scan_voxel": 0.10,
+      "deskew": true, "gates": [0.4, 0.2, 0.1],
+      "wide_gates": [1.0, 0.5, 0.25, 0.1],
+      "max_shift": 0.5, "max_rot_deg": 5.0,
       "keep_cloud_pts": 3000 },
 
     { "name": "mobile_1_zed", "type": "arms",
@@ -1711,6 +1883,7 @@ SAMPLE_CONFIG = r"""
       "img_stride": 2, "max_images": 0, "instance_radius": 2.0,
       "odom_sigma_t": 0.003, "odom_sigma_r": 0.001,
       "boards_init": "odom", "joint_init": "A_icp",
+      "odom_jump_check": true, "odom_jump_m": 0.05, "odom_jump_deg": 2.0,
       "icp_pts": 400, "gn_iters": 25 }
   ]
 }

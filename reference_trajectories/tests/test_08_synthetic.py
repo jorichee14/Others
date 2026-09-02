@@ -68,6 +68,11 @@ for i in range(1, len(ts)):
     w = w + np.array([0, 0, 0.0025 / HZ])             # 0.14 deg/s yaw bias
     v = v * 1.02 + rng.normal(0, 0.0007, 3)          # 2 % scale + jitter
     odom.append(odom[-1] @ Rt(exp_r(w), v))
+# a ZED jump: 2 m sideways and 6 deg of yaw at t = 45 s, then normal again
+JUMP_I = int(45.0 * HZ)
+J = Rt(exp_r([0, 0, math.radians(6)]), [0.0, 2.0, 0.0])
+for i in range(JUMP_I, len(odom)):
+    odom[i] = odom[JUMP_I - 1] @ J @ inv(odom[JUMP_I - 1]) @ odom[i]
 oT = np.array(odom); ot = ts.copy()
 # session anchor at the end of the dwell: T_map_cam at t=8 s (+ 5 mm noise)
 t_anchor = 8.0
@@ -87,10 +92,14 @@ def scan_at(i):
 scans = ((ts[i], scan_at(i), None) for i in range(0, len(ts), 4))   # 5 Hz
 
 track_l = dict(rate_hz=5.0, range_min=0.7, range_max=10.0, scan_voxel=0.10,
-               keep_cloud_pts=3000, deskew=False)
-print("== chain_lidar ==")
-lts, lTs, RMS, NOBS, cl, n_rej = m.chain_lidar(scans, ot, oT, T_map_origin,
-                                               T_cl_true, REF, track_l, log_every=0)
+               keep_cloud_pts=3000, deskew=False, seed=os.environ.get("SEED", "lidar"))
+print("== chain_lidar (seed=%s) ==" % track_l["seed"])
+lts, lTs, RMS, NOBS, cl, n_rej, Q = m.chain_lidar(scans, ot, oT, T_map_origin,
+                                                  T_cl_true, REF, track_l, log_every=0)
+outd = os.environ.get("TEST_OUT", "/tmp/test_08_out"); os.makedirs(outd, exist_ok=True)
+m.report_lidar_quality(lts, Q, outd, "mobile_1_lidar", track_l["seed"])
+big = [q for q in Q if q[5] > 0.5]
+assert len(big) == 1 and abs(big[0][0] - 45.0) < 0.3, "ZED jump not localised: %r" % [(q[0], q[5]) for q in big]
 Lt = m.interp_traj(ts, L_true, lts)
 e_l, r_l = m.traj_gap(lTs, Lt)
 To_l = m.compose_all(np.tile(T_map_origin, (len(lts), 1, 1)) @ m.interp_traj(ot, oT, lts), T_cl_true)
@@ -101,8 +110,9 @@ print("  lidar ICP  vs truth: median %.1f cm max %.1f cm rot max %.2f deg"
 print("  odom-only  vs truth: median %.1f cm max %.1f cm"
       % (np.median(e_o) * 100, e_o.max() * 100))
 m.report_gap("odom - lidar", lts, *m.traj_gap(lTs, To_l), m.path_length(lTs))
-assert np.median(e_l) < 0.03 and e_l.max() < 0.10, "lidar chain off"
+assert np.median(e_l) < 0.03 and e_l.max() < 0.10, "lidar chain off (max %.2f m)" % e_l.max()
 assert e_o.max() > 0.3, "synthetic drift too small to test anything"
+assert n_rej == 0, "%d unregistered scans" % n_rej
 
 # ---------------- boards: 2 instances of 'anchor' + 1 'rs_anchor'
 def board_T(xyz, yaw_deg):

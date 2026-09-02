@@ -8,7 +8,6 @@
     "target_voxel": 0.05,
     "plane_voxel": 0.4,
     "invert_T_lidar_camera": false,
-
     "tracks": [
       {
         "name": "mobile_1_lidar",
@@ -16,17 +15,36 @@
         "points_topic": "/mobile_1/ouster/points",
         "odom_topic": "/mobile_1/zed/odom",
         "anchor_cam": "zed",
-        "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
-        "rate_hz": 5.0,
+        "cam_extrinsic_xyzquat": [
+          -0.01,
+          0.06,
+          0.015,
+          -0.5,
+          0.5,
+          -0.5,
+          0.5
+        ],
+        "seed": "lidar",
+        "rate_hz": 10.0,
         "range_min": 0.7,
         "range_max": 10.0,
-        "scan_voxel": 0.10,
+        "scan_voxel": 0.1,
         "deskew": true,
+        "gates": [
+          0.4,
+          0.2,
+          0.1
+        ],
+        "wide_gates": [
+          1.0,
+          0.5,
+          0.25,
+          0.1
+        ],
         "max_shift": 0.5,
         "max_rot_deg": 5.0,
         "keep_cloud_pts": 3000
       },
-
       {
         "name": "mobile_1_zed",
         "type": "arms",
@@ -34,11 +52,23 @@
         "lidar_track": "mobile_1_lidar",
         "odom_topic": "/mobile_1/zed/odom",
         "anchor_cam": "zed",
-        "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
+        "cam_extrinsic_xyzquat": [
+          -0.01,
+          0.06,
+          0.015,
+          -0.5,
+          0.5,
+          -0.5,
+          0.5
+        ],
         "image_topic": "/mobile_1/zed/left/image_rect_color",
         "camera_info_topic": "/mobile_1/zed/left/camera_info",
         "rectified": true,
-        "boards": ["anchor", "anchor_b", "rs_anchor"],
+        "boards": [
+          "anchor",
+          "anchor_b",
+          "rs_anchor"
+        ],
         "img_stride": 2,
         "max_images": 0,
         "instance_radius": 2.0,
@@ -47,7 +77,10 @@
         "boards_init": "odom",
         "joint_init": "A_icp",
         "icp_pts": 400,
-        "gn_iters": 25
+        "gn_iters": 25,
+        "odom_jump_check": true,
+        "odom_jump_m": 0.05,
+        "odom_jump_deg": 2.0
       }
     ]
   }
