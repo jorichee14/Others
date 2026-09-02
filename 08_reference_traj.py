@@ -161,19 +161,22 @@ def iter_topic(path, topic, stride=1, limit=None):
 
 
 def read_odom(bag, topic):
-    ts, Ts = [], []
+    ts, Ts, child = [], [], None
     for t, m in iter_topic(bag, topic):
         p = m.pose.pose.position; o = m.pose.pose.orientation
+        if child is None:
+            child = getattr(m, "child_frame_id", "") or "?"
         ts.append(t)
         Ts.append(Rt(Rot.from_quat([o.x, o.y, o.z, o.w]).as_matrix(),
                      np.array([p.x, p.y, p.z])))
     if not ts:
         raise SystemExit("no odometry on %s" % topic)
     ts = np.array(ts); Ts = np.array(Ts)
-    print("  odom %s: %d poses, %.1f s, path %.1f m"
+    print("  odom %s: %d poses, %.1f s, path %.1f m, child_frame_id '%s'"
           % (topic, len(ts), ts[-1] - ts[0],
-             float(np.sum(np.linalg.norm(np.diff(Ts[:, :3, 3], axis=0), axis=1)))))
-    return ts, Ts
+             float(np.sum(np.linalg.norm(np.diff(Ts[:, :3, 3], axis=0), axis=1))),
+             child))
+    return ts, Ts, child
 
 
 _DT = {1: np.int8, 2: np.uint8, 3: np.int16, 4: np.uint16,
@@ -414,6 +417,43 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, iters=12, verbose=True
 
 
 # --------------------------------------------------------------------------- #
+def hand_eye(A_list, B_list):
+    """Solve X in B X = X A (Park-Martin): A = camera motions, B = odometry-child
+    motions, X = T_child_cam. Validated exact on noiseless synthetic data."""
+    a = np.array([log_R(A[:3, :3]) for A in A_list])
+    b = np.array([log_R(B[:3, :3]) for B in B_list])
+    U, _, Vt = np.linalg.svd(b.T @ a)
+    Rx = U @ np.diag([1, 1, np.sign(np.linalg.det(U @ Vt))]) @ Vt
+    M, r = [], []
+    for A, B in zip(A_list, B_list):
+        M.append(B[:3, :3] - np.eye(3)); r.append(Rx @ A[:3, 3] - B[:3, 3])
+    tx = np.linalg.lstsq(np.vstack(M), np.concatenate(r), rcond=None)[0]
+    return Rt(Rx, tx)
+
+
+def estimate_cam_extrinsic(ot, oT, cam_ts, cam_Ts, dt=0.5, min_rot=0.05):
+    """T_child_cam from odometry vs an independent camera-frame trajectory
+    (here: the lidar-ICP track composed with T_lidar_camera)."""
+    t0, t1 = max(ot[0], cam_ts[0]), min(ot[-1], cam_ts[-1])
+    tq = np.arange(t0, t1, dt)
+    if len(tq) < 20:
+        return None, None
+    To = interp_traj(ot, oT, tq)
+    Tc = interp_traj(cam_ts, cam_Ts, tq)
+    A, B = [], []
+    for i in range(len(tq) - 1):
+        Ai = inv(Tc[i]) @ Tc[i + 1]
+        if np.linalg.norm(log_R(Ai[:3, :3])) < min_rot:
+            continue
+        A.append(Ai); B.append(inv(To[i]) @ To[i + 1])
+    if len(A) < 30:
+        return None, None
+    Xh = hand_eye(A, B)
+    res = [np.linalg.norm((inv(Xh) @ Bm @ Xh)[:3, 3] - Am[:3, 3])
+           for Am, Bm in zip(A, B)]
+    return Xh, float(np.median(res))
+
+
 def detect_boards_along(track, s, P, bmap, af, bag):
     """Board sightings over the whole image stream -> [(t, board_name,
     T_cam_board)], instance-resolved later against the anchored trajectory."""
@@ -471,6 +511,11 @@ def resolve_instances(sights, Ts_est, node_t, bmap, wanted, radius=2.0):
         out.append((k, best, T_map_b, T_cb))
     print("  %d sightings resolved to instances, %d dropped (no node / no "
           "instance within %.1f m of the prediction)" % (len(out), dropped, radius))
+    if dropped > len(out):
+        print("  !! most sightings failed to resolve: the anchored trajectory "
+              "predicts board positions far from the survey. The usual cause "
+              "is a wrong/missing cam_extrinsic_xyzquat (body-vs-optical "
+              "odometry frame), not moved boards.")
     return out
 
 
@@ -509,14 +554,38 @@ def main():
     for track in s["tracks"]:
         name = track["name"]; kind = track["type"]
         print("\n== %s (%s) ==" % (name, kind))
-        ot, oT = read_odom(bag, track["odom_topic"])
+        ot, oT, ochild = read_odom(bag, track["odom_topic"])
         # odometry child frame -> the camera optical frame the anchor refers to
         X = make_T_xyzq(track["cam_extrinsic_xyzquat"]) \
-            if track.get("cam_extrinsic_xyzquat") else np.eye(4)
-        if not track.get("cam_extrinsic_xyzquat"):
-            print("  ! no cam_extrinsic_xyzquat: assuming the odometry child "
-                  "frame IS the anchored camera frame. A wrong assumption here "
-                  "is a fixed rotation error on the whole track.")
+            if track.get("cam_extrinsic_xyzquat") else None
+        if X is None:
+            # Try hand-eye against a finished lidar track of the SAME rig -
+            # its poses composed with T_lidar_camera are an independent
+            # camera-frame trajectory, so T_child_cam is observable from
+            # relative motions alone.
+            rig = name.split("_")[0] + "_" + name.split("_")[1]
+            lid = next((r for k, r in results.items()
+                        if r["kind"] == "lidar_icp" and k.startswith(rig)), None)
+            if lid is not None:
+                camT = lid["Ts"] @ np.tile(P.sensor.T_lidar_camera,
+                                           (len(lid["Ts"]), 1, 1))
+                X, he_res = estimate_cam_extrinsic(ot, oT, lid["ts"], camT)
+                if X is not None:
+                    print("  hand-eye T_%s_cam from the lidar track: "
+                          "t=%s rpy=%s deg (residual %.1f mm/step)"
+                          % (ochild, np.round(X[:3, 3], 4).tolist(),
+                             np.round(Rot.from_matrix(X[:3, :3])
+                                      .as_euler("xyz", degrees=True), 2).tolist(),
+                             he_res * 1000))
+        if X is None:
+            X = np.eye(4)
+            print("  !! no cam_extrinsic_xyzquat and no lidar track to "
+                  "hand-eye against: assuming odometry child frame '%s' IS "
+                  "the optical frame. SLAM odometry children are usually "
+                  "BODY frames (x forward) - if so this is a ~90 deg error "
+                  "that bends the whole track by metres. Get the truth with:\n"
+                  "     ros2 run tf2_ros tf2_echo %s <optical frame>\n"
+                  "  and put it in cam_extrinsic_xyzquat." % (ochild, ochild))
         A = anchor_T(track["anchor_cam"])          # T_map_cam at session start
         # odom pose at the anchor's own timestamp, not blindly index 0
         t_anchor = cams[track["anchor_cam"]].get("dwell_t_end") or ot[0]
