@@ -732,20 +732,40 @@ def resolve_instances(sights, Ts_est, node_t, bmap, wanted, radius=2.0):
         per = {}
         for (_, b, _, _), e in zip(out, pred_err):
             per.setdefault(b, []).append(e)
-        for b in sorted(per):
-            v = np.array(per[b])
-            print("      %-12s n=%4d  median %7.2f m  min %6.2f  max %6.2f"
-                  % (b, len(v), np.median(v), v.min(), v.max()))
-        if len(per) > 1:
-            meds = {b: float(np.median(v)) for b, v in per.items()}
-            lo, hi = min(meds.values()), max(meds.values())
-            if hi > 1.0 and hi > 5 * max(lo, 0.01):
-                print("      !! boards disagree by %.1f m about where this "
-                      "trajectory is. Drift moves them TOGETHER, so this is a "
-                      "board-identity or survey problem, not drift. Check "
-                      "whether the far board is really the one being seen "
-                      "(shared designs) and that its surveyed pose is right."
-                      % (hi - lo))
+        # WITH TIME. Per-board error alone cannot separate the two causes:
+        # a board seen only late will show a large error simply because the
+        # odometry has drifted by then. Only a board seen over the SAME time
+        # span as a good one, yet metres out, indicts identity or survey.
+        pert = {}
+        for (k, b, _, _), e in zip(out, pred_err):
+            pert.setdefault(b, []).append((e, node_t[k] - node_t[0]))
+        for b in sorted(pert):
+            v = np.array([x[0] for x in pert[b]])
+            tv = np.array([x[1] for x in pert[b]])
+            print("      %-12s n=%4d  err med %7.2f m (min %6.2f max %6.2f)  "
+                  "seen t=%.0f..%.0f s"
+                  % (b, len(v), np.median(v), v.min(), v.max(), tv.min(), tv.max()))
+        if len(pert) > 1:
+            meds = {b: float(np.median([x[0] for x in v])) for b, v in pert.items()}
+            spans = {b: (min(x[1] for x in v), max(x[1] for x in v))
+                     for b, v in pert.items()}
+            lo_b = min(meds, key=meds.get); hi_b = max(meds, key=meds.get)
+            if meds[hi_b] > 1.0 and meds[hi_b] > 5 * max(meds[lo_b], 0.01):
+                # do the two boards' viewing windows overlap?
+                a0, a1 = spans[lo_b]; b0, b1 = spans[hi_b]
+                overlap = min(a1, b1) - max(a0, b0)
+                if overlap > 1.0:
+                    print("      !! '%s' is %.1f m out while '%s' is %.2f m, and "
+                          "they were seen at OVERLAPPING times (%.0f s of "
+                          "overlap). Drift would move both together, so this is "
+                          "a board-identity or survey problem."
+                          % (hi_b, meds[hi_b], lo_b, meds[lo_b], overlap))
+                else:
+                    print("      ('%s' %.1f m out vs '%s' %.2f m, but their "
+                          "viewing windows do NOT overlap - consistent with "
+                          "odometry drift between them; not evidence of a "
+                          "board problem on its own)"
+                          % (hi_b, meds[hi_b], lo_b, meds[lo_b]))
     return out
 
 
