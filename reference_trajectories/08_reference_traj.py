@@ -876,9 +876,12 @@ def se3_scale(D, s):
     return Rt(exp_r(s * log_R(D[:3, :3])), s * D[:3, 3])
 
 
-def chain_lidar(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100):
-    """Chained scan-to-map ICP. `scans` yields (t, xyz (N,3) in the LIDAR
-    frame, per-point time offsets or None). State = T_map_lidar.
+def chain_icp(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100,
+              default_seed="lidar"):
+    """Chained scan-to-map ICP for ANY range sensor (Ouster scans or D455/ZED
+    depth clouds). `scans` yields (t, xyz (N,3) in the SENSOR frame,
+    per-point time offsets or None). State = T_map_sensor; T_cl = the
+    odometry child -> sensor transform.
 
     Seeding (track["seed"]):
       "lidar" (default) the lidar's OWN previous two ICP poses, extrapolated
@@ -906,7 +909,9 @@ def chain_lidar(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100):
     max_shift = float(track.get("max_shift", 0.5))
     max_rot = math.radians(float(track.get("max_rot_deg", 5.0)))
     use_deskew = bool(track.get("deskew", True))
-    seed_mode = track.get("seed", "lidar")
+    seed_mode = track.get("seed", default_seed)
+    beta = float(track.get("prior_beta", 0.02))     # damping toward the seed
+    min_obs = int(track.get("min_obs", 3))           # observable DOF to accept
     gates = tuple(track.get("gates", (0.4, 0.2, 0.1)))
     wide = tuple(track.get("wide_gates", (1.0, 0.5, 0.25, 0.1)))
     keep_dt = (1.0 / rate) * 0.9 if rate > 0 else 0.0   # 0 = every scan
@@ -954,11 +959,11 @@ def chain_lidar(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100):
         attempts = [(n_, S, gates) for n_, S in order] + \
                    [(n_ + "+wide", S, wide) for n_, S in order]
         for n_, S, gs in attempts:
-            T_try, nu, rms, nobs = icp_frame(Pb, S, REF, gates=gs)
+            T_try, nu, rms, nobs = icp_frame(Pb, S, REF, gates=gs, beta=beta)
             d = float(np.linalg.norm(T_try[:3, 3] - S[:3, 3]))
             a = float(np.linalg.norm(log_R(S[:3, :3].T @ T_try[:3, :3])))
             lim = 2.0 if gs is wide else 1.0
-            if d <= max_shift * lim and a <= max_rot * lim and nobs >= 3:
+            if d <= max_shift * lim and a <= max_rot * lim and nobs >= min_obs:
                 status, T_i = n_, T_try
                 break
         seed_used = order[0][1]
@@ -988,7 +993,10 @@ def chain_lidar(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100):
     return np.array(ts), np.array(Ts), RMS, NOBS, cl, n_rej, Q
 
 
-def report_lidar_quality(ts, Q, outd, name, seed_mode="lidar"):
+chain_lidar = chain_icp        # name kept for the tests
+
+
+def report_chain_quality(ts, Q, outd, name, seed_mode="lidar"):
     """Per-scan CSV + a three-panel PNG (plane rms, observability, ZED step
     disagreement) and a summary of where the chain was weak."""
     t0 = ts[0]
@@ -1016,15 +1024,17 @@ def report_lidar_quality(ts, Q, outd, name, seed_mode="lidar"):
               % np.round(tf[:12], 1).tolist())
     od = np.array([q[5] for q in Q]); odr = np.array([q[6] for q in Q])
     big = np.flatnonzero((od > 0.05) | (odr > math.radians(2.0)))
-    print("  ZED odometry step vs lidar step: median %.1f mm, p95 %.1f mm, "
+    print("  odometry step vs ICP step: median %.1f mm, p95 %.1f mm, "
           "largest %.1f cm / %.2f deg at t=%.1f s; %d step(s) > 5 cm or 2 deg"
           % (np.median(od) * 1000, np.percentile(od, 95) * 1000,
              od.max() * 100, math.degrees(odr.max()), ts[int(np.argmax(od))] - t0,
              len(big)))
     if len(big):
         print("     at t = %s s" % np.round(ts[big[:15]] - t0, 1).tolist())
-        print("     (one big step = a ZED jump; a run of them = the ZED "
-              "losing scale/tracking over that stretch)")
+        print("     (one big step = an odometry jump; a run of them = the "
+              "odometry losing scale/tracking over that stretch - or, for a "
+              "narrow-FOV depth chain, the chain sliding: check the rms and "
+              "observable-DOF panels at those stamps)")
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -1038,7 +1048,7 @@ def report_lidar_quality(ts, Q, outd, name, seed_mode="lidar"):
         ax[1].set_ylabel("observable DOF /6"); ax[1].set_ylim(-0.2, 6.5)
         ax[2].plot(ts - t0, od * 100, lw=0.8, label="translation [cm]")
         ax[2].plot(ts - t0, np.degrees(odr), lw=0.8, label="rotation [deg]")
-        ax[2].set_ylabel("ZED step - lidar step"); ax[2].legend(fontsize=8)
+        ax[2].set_ylabel("odom step - ICP step"); ax[2].legend(fontsize=8)
         ax[2].set_xlabel("t [s]")
         for q in Q:
             if q[7] == "fail":
@@ -1262,49 +1272,66 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
 
 
 # --------------------------------------------------------------------------- #
-def collect_methods(results):
-    """Every trajectory of every rig, in the camera optical frame:
-    [(label, ts, Ts, colour, linestyle)]. Lidar tracks are drawn as the
-    camera frame (Ts_cam) so all curves of a rig are the same point."""
+def collect_methods(results, rig):
+    """Every trajectory of ONE rig, in the camera optical frame:
+    ([(label, ts, Ts, colour, linestyle)], has_reference). The first entry is
+    the rig's geometry-only reference: the lidar ICP track if the rig has one,
+    else the chained depth ICP of its arms track. Lidar tracks are drawn as
+    the camera frame (Ts_cam) so all curves of a rig are the same point."""
     cols = ["tab:red", "tab:green", "tab:blue", "tab:orange", "tab:purple",
             "tab:brown", "tab:pink", "tab:cyan"]
     ls = ["-", (0, (6, 3)), (0, (2, 2)), (0, (1, 3)), (0, (5, 1, 1, 1))]
-    out, i = [], 0
-    have_cam = any(r["kind"] != "lidar_icp" for r in results.values())
-    for nm, r in results.items():
+    rs = {k: r for k, r in results.items() if rig_of(k) == rig}
+    ref, odom, rest, i = [], [], [], 0
+    for nm, r in rs.items():
         if r["kind"] == "lidar_icp":
-            out.append((nm + " lidar ICP", r["ts"], r.get("Ts_cam", r["Ts"]),
+            ref.append((nm + " lidar ICP", r["ts"], r.get("Ts_cam", r["Ts"]),
                         "k", "-"))
-            if not have_cam and r.get("odom_only_cam") is not None:
-                out.append((nm + " odom only", r["ts"], r["odom_only_cam"],
-                            "0.45", (0, (1, 2))))
+            if r.get("odom_only_cam") is not None:
+                odom.append((nm + " odom only", r["ts"], r["odom_only_cam"],
+                             "0.45", (0, (1, 2))))
             continue
+        if r.get("chained_label") and r.get("chained") is not None:
+            ref.append(("%s %s" % (nm, r["chained_label"]), r["ts"],
+                        r["chained"], "k", "-"))
         if r.get("odom_only") is not None:
-            out.append((nm + " odom only", r["ts"], r["odom_only"],
-                        "0.45", (0, (1, 2))))
+            odom.append((nm + " odom only", r["ts"], r["odom_only"],
+                         "0.45", (0, (1, 2))))
         arms = r.get("arms") or {nm: r["Ts"]}
         for an, aT in sorted(arms.items()):
             lbl = ("%s %s" % (nm, an)) if r.get("arms") else nm
-            out.append((lbl, r["ts"], aT, cols[i % len(cols)], ls[i % len(ls)]))
+            rest.append((lbl, r["ts"], aT, cols[i % len(cols)], ls[i % len(ls)]))
             i += 1
-    return out
+    # one reference, one odom-only curve (they are the same odometry)
+    ref = ref[:1]; odom = odom[:1]
+    return ref + odom + rest, bool(ref)
 
 
-def save_paths_png(results, ref, bmap, outd, T_lc=None, fname="paths.png"):
-    """One figure with everything done so far:
+def rigs_of(results):
+    return sorted({rig_of(k) for k in results})
+
+
+def save_paths_png(results, ref, bmap, outd, T_lc=None):
+    """One figure PER RIG (paths_<rig>.png) with everything done so far:
       top-left   all trajectories over the map (overlay)
-      top-right  each camera track's distance from the lidar track over time
-      below      one panel PER METHOD over the map, the lidar track in light
+      top-right  each track's distance from the rig's geometry-only reference
+                 (lidar ICP, or the chained depth ICP when there is no lidar)
+      below      one panel PER METHOD over the map, the reference in light
                  grey behind it, so overlapping curves cannot hide each other
     Re-saved after every track, so the image exists even if a later track
     fails."""
+    for rig in rigs_of(results):
+        methods, has_ref = collect_methods(results, rig)
+        if methods:
+            _paths_figure(results, rig, methods, has_ref, ref, bmap, outd, T_lc)
+
+
+def _paths_figure(results, rig, methods, has_ref, ref, bmap, outd, T_lc):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    methods = collect_methods(results)
-    if not methods:
-        return
-    lid = next((r for r in results.values() if r["kind"] == "lidar_icp"), None)
+    lid = next((r for k, r in results.items()
+                if r["kind"] == "lidar_icp" and rig_of(k) == rig), None)
     n_small = len(methods)
     ncol = 3
     nrow_small = int(math.ceil(n_small / ncol))
@@ -1343,13 +1370,15 @@ def save_paths_png(results, ref, bmap, outd, T_lc=None, fname="paths.png"):
                              mew=0.8, zorder=8)
         ax0.plot([], [], "x", color="tab:purple", ms=6,
                  label="board position implied by the lidar track")
-    ax0.set_title("all methods, map frame, camera optical point (o = start)")
+    ax0.set_title("%s: all methods, map frame, camera optical point (o = start)"
+                  % rig)
     ax0.set_xlabel("x [m]"); ax0.set_ylabel("y [m]")
     ax0.legend(fontsize=7, loc="best")
 
     gaps = {}
-    if lid is not None:
-        ref_ts, ref_T = methods[0][1], methods[0][2]     # first entry = lidar
+    ref_label = methods[0][0] if has_ref else None
+    if has_ref:
+        ref_ts, ref_T = methods[0][1], methods[0][2]     # first entry = reference
         for nm, ts, Ts, c, l in methods[1:]:
             tq = ref_ts[(ref_ts >= ts[0]) & (ref_ts <= ts[-1])]
             if len(tq) < 5:
@@ -1363,20 +1392,21 @@ def save_paths_png(results, ref, bmap, outd, T_lc=None, fname="paths.png"):
                 ax1.axvline(r["ts"][k] - ref_ts[0], color="gold", lw=0.4,
                             alpha=0.35, zorder=0)
         ax1.plot([], [], color="gold", lw=2, label="board sighting")
-        ax1.set_xlabel("t [s]"); ax1.set_ylabel("distance from lidar track [m]")
-        ax1.set_title("agreement with the lidar track over time")
+        ax1.set_xlabel("t [s]"); ax1.set_ylabel("distance from %s [m]" % ref_label)
+        ax1.set_title("agreement with the geometry-only reference over time")
         ax1.set_yscale("symlog", linthresh=0.1)
         ax1.grid(alpha=.3, which="both"); ax1.legend(fontsize=7)
     else:
-        ax1.axis("off"); ax1.text(.5, .5, "no lidar track yet", ha="center")
+        ax1.axis("off"); ax1.text(.5, .5, "no geometry-only reference yet",
+                                  ha="center")
 
     for i, (nm, ts, Ts, c, l) in enumerate(methods):
         ax = fig.add_subplot(gs[1 + i // ncol, i % ncol])
         draw_map(ax)
-        if lid is not None and i > 0:
+        if has_ref and i > 0:
             L = methods[0][2]
             ax.plot(L[:, 0, 3], L[:, 1, 3], "-", color="0.55", lw=1.0, zorder=3,
-                    label="lidar ICP")
+                    label=ref_label)
         ax.plot(Ts[:, 0, 3], Ts[:, 1, 3], "-", color=c, lw=1.6, zorder=4, label=nm)
         ax.plot(Ts[0, 0, 3], Ts[0, 1, 3], "o", color=c, ms=7, mec="k", mew=0.6,
                 zorder=5)
@@ -1385,50 +1415,40 @@ def save_paths_png(results, ref, bmap, outd, T_lc=None, fname="paths.png"):
         ttl = nm
         if nm in gaps:
             d = gaps[nm][1]
-            ttl += "\nvs lidar: median %.1f cm, p95 %.1f cm, max %.1f cm" % (
+            ttl += "\nvs reference: median %.1f cm, p95 %.1f cm, max %.1f cm" % (
                 np.median(d) * 100, np.percentile(d, 95) * 100, d.max() * 100)
         ax.set_title(ttl, fontsize=9)
         ax.set_xlabel("x [m]"); ax.set_ylabel("y [m]")
         ax.legend(fontsize=7, loc="best")
-    png = os.path.join(outd, fname)
+    png = os.path.join(outd, "paths_%s.png" % rig)
     plt.tight_layout(); plt.savefig(png, dpi=110); plt.close()
     print("  wrote %s (%d methods: o = start, square = end)" % (png, len(methods)))
 
 
 def compare_rig(results, T_lc, outd):
-    """One table per rig: every trajectory of that rigid body, expressed in the
-    CAMERA optical frame (lidar poses composed with T_lidar_camera), sampled at
-    the lidar stamps. Pairwise median translation gap in cm, plus p95/max
-    against the chained lidar track, plus a CSV of the gaps over time.
-    Nothing here is ground truth: lidar-vs-boards agreement is the accuracy
-    statement, lidar-vs-odom is the odometry drift, arms-vs-arms says what
-    each information source changed."""
-    for lname, lid in list(results.items()):
-        if lid["kind"] != "lidar_icp":
+    """One table per rig: every trajectory of that rigid body, in the CAMERA
+    optical frame, sampled at the stamps of the rig's geometry-only reference
+    (lidar ICP, or the chained depth ICP without a lidar). Pairwise median
+    translation gap in cm, plus p95/max against the reference, plus a CSV of
+    the gaps over time. Nothing here is ground truth: reference-vs-boards
+    agreement is the accuracy statement, reference-vs-odom is the odometry
+    drift, arms-vs-arms says what each information source changed."""
+    for rig in rigs_of(results):
+        methods, has_ref = collect_methods(results, rig)
+        if not has_ref or len(methods) < 2:
             continue
-        rig = rig_of(lname)
-        tracks = [("lidar chained ICP", lid["ts"], lid["Ts_cam"]),
-                  ("odom only (anchored)", lid["ts"], lid["odom_only_cam"])]
-        for k, r in results.items():
-            if k == lname or rig_of(k) != rig:
-                continue
-            if r["kind"] == "lidar_icp":
-                tracks.append((k, r["ts"], r["Ts_cam"]))
-            elif r.get("arms"):
-                for an, aT in sorted(r["arms"].items()):
-                    tracks.append(("%s %s" % (k, an), r["ts"], aT))
-            else:
-                tracks.append((k, r["ts"], r["Ts"]))
+        tracks = [(nm, ts, Ts) for nm, ts, Ts, _, _ in methods]
         t0 = max(ts[0] for _, ts, _ in tracks)
         t1 = min(ts[-1] for _, ts, _ in tracks)
-        tq = lid["ts"][(lid["ts"] >= t0) & (lid["ts"] <= t1)]
+        rts = tracks[0][1]
+        tq = rts[(rts >= t0) & (rts <= t1)]
         if len(tq) < 10:
             print("\n== %s: tracks do not overlap in time, no comparison" % rig)
             continue
         S = [(nm, interp_traj(ts, Ts, tq)) for nm, ts, Ts in tracks]
         print("\n== %s: all trajectories in the camera optical frame at %d "
-              "lidar stamps over %.0f s ==" % (rig, len(tq), tq[-1] - tq[0]))
-        print("  vs the chained lidar track:")
+              "stamps of '%s' over %.0f s ==" % (rig, len(tq), S[0][0], tq[-1] - tq[0]))
+        print("  vs the reference '%s':" % S[0][0])
         gaps = {}
         for nm, T in S[1:]:
             dt, dr = traj_gap(S[0][1], T)
@@ -1442,9 +1462,7 @@ def compare_rig(results, T_lc, outd):
         print("  pairwise median translation gap [cm]:")
         print("  %*s " % (w, "") + " ".join("%8s" % ("[%d]" % j) for j in range(len(S))))
         for i, (ni, Ti) in enumerate(S):
-            row = []
-            for j, (nj, Tj) in enumerate(S):
-                row.append("%8.1f" % (np.median(traj_gap(Ti, Tj)[0]) * 100))
+            row = ["%8.1f" % (np.median(traj_gap(Ti, Tj)[0]) * 100) for _, Tj in S]
             print("  %*s " % (w, ni) + " ".join(row) + "   [%d]" % i)
         csv = os.path.join(outd, "compare_%s.csv" % rig)
         with open(csv, "w") as f:
@@ -1452,7 +1470,7 @@ def compare_rig(results, T_lc, outd):
             for i, t in enumerate(tq):
                 f.write("%.6f," % t + ",".join("%.2f" % (gaps[nm][i] * 100)
                                                for nm in gaps) + "\n")
-        print("  wrote %s (gap to the chained lidar track over time)" % csv)
+        print("  wrote %s (gap to the reference over time)" % csv)
 
 
 # --------------------------------------------------------------------------- #
@@ -1518,6 +1536,9 @@ def main():
 
     for track in s["tracks"]:
         name = track["name"]; kind = track["type"]
+        if not track.get("enabled", True):
+            print("\n== %s (%s): disabled in config, skipped ==" % (name, kind))
+            continue
         print("\n== %s (%s) ==" % (name, kind))
         ot, oT, ochild = read_odom(bag, track["odom_topic"])
         # odometry child frame -> the camera optical frame the anchor refers to
@@ -1551,6 +1572,21 @@ def main():
                               "this run's rotations - set to 0; supply "
                               "cam_extrinsic_xyzquat for the few-cm truth)"
                               % np.round(ax, 2).tolist())
+        if X is None and track.get("depth_extrinsic_xyzquat") \
+                and track.get("child_is_camera_link", True):
+            # RealSense: `camera_link` IS the depth (left IR) body frame, so
+            # T_child_color = R_optical @ inv(T_color_depth). Only valid if the
+            # odometry child really is camera_link (Isaac VSLAM base_frame).
+            R_opt = Rot.from_quat([-0.5, 0.5, -0.5, 0.5]).as_matrix()
+            X = Rt(R_opt, np.zeros(3)) @ inv(
+                make_T_xyzq(track["depth_extrinsic_xyzquat"]))
+            print("  cam_extrinsic_xyzquat derived from depth_extrinsic_xyzquat "
+                  "ASSUMING odometry child '%s' is the RealSense camera_link "
+                  "(depth body frame): xyzquat=%s. If the child is a base_link "
+                  "with a mount offset this is WRONG - run tf2_echo and set "
+                  "cam_extrinsic_xyzquat explicitly."
+                  % (ochild, np.round(np.r_[X[:3, 3], Rot.from_matrix(X[:3, :3])
+                                                       .as_quat()], 5).tolist()))
         if X is None:
             X = np.eye(4)
             print("  !! no cam_extrinsic_xyzquat and no lidar track to "
@@ -1600,8 +1636,7 @@ def main():
                   % (len(ts), n_rej, np.nanmedian(RMS) * 100,
                      np.nanpercentile(RMS, 95) * 100,
                      100 * np.mean(np.array(NOBS) < 6)))
-            report_lidar_quality(ts, Q, outd, name,
-                                 track.get("seed", "lidar"))
+            report_chain_quality(ts, Q, outd, name, track.get("seed", "lidar"))
             write_tum(os.path.join(outd, "traj_%s.tum" % name), ts, Ts)
             # the same track as the CAMERA optical frame (through
             # T_lidar_camera) so every trajectory of this rig can be compared
@@ -1740,48 +1775,59 @@ def main():
                 Kd = None
                 for _, ci in iter_topic(bag, track["depth_info_topic"], limit=1):
                     Kd = np.array(ci.k).reshape(3, 3)
-                rate = float(track.get("rate_hz", 10.0))
-                keep_dt = 1.0 / rate
-                beta = float(track.get("prior_beta", 0.10))
-                print("  chained ICP pass (initialisation; depth fx=%.1f)" % Kd[0, 0])
-                reg_t, reg_T, cl_l, RMS, NOBS = [], [], [], [], []
-                n_rej = 0
-                t_last = -1e18; T_prev = None; T_ol_prev = None; t0w = time.time()
-                for t, m in iter_topic(bag, track["depth_topic"]):
-                    if t - t_last < keep_dt:
-                        continue
-                    Pd = depth_to_cloud(img_depth(m), Kd,
-                                        rmin=float(track.get("range_min", 0.4)),
-                                        rmax=float(track.get("range_max", 3.5)))
-                    if len(Pd) < 500:
-                        continue
-                    Pc = apply(Xd, Pd).astype(np.float32)   # cloud in COLOR frame
-                    T_ol = interp_traj(ot, oT, np.array([t]))[0]
-                    if T_prev is None:
-                        T_seed = T_map_origin @ T_ol @ X
-                    else:
-                        T_seed = T_prev @ (inv(X) @ inv(T_ol_prev) @ T_ol @ X)
-                    T_i, nu, rms, nobs = icp_frame(np.asarray(Pc, float), T_seed,
-                                                   REF, beta=beta)
-                    d = float(np.linalg.norm(T_i[:3, 3] - T_seed[:3, 3]))
-                    a = float(np.linalg.norm(log_R(T_seed[:3, :3].T @ T_i[:3, :3])))
-                    if d > float(track.get("max_shift", 0.3)) \
-                            or a > math.radians(float(track.get("max_rot_deg", 5.0))):
-                        T_i, rms, nobs = T_seed, np.nan, 0
-                        n_rej += 1
-                    T_prev, T_ol_prev = T_i, T_ol
-                    t_last = t
-                    reg_t.append(t); reg_T.append(T_i); cl_l.append(Pc)
-                    RMS.append(rms); NOBS.append(nobs)
-                    if len(reg_t) % 200 == 0:
-                        print("  %5d frames  rms %5.2f cm  obs %d/6  %5.1fs"
-                              % (len(reg_t), (rms if np.isfinite(rms) else 0) * 100,
-                                 nobs, time.time() - t0w), flush=True)
-                reg_t = np.array(reg_t); reg_T = np.array(reg_T)
-                print("  %d frames (%d rejected -> seed kept) | rms median %.2f cm "
-                      "| rank-deficient %.1f%%"
-                      % (len(reg_t), n_rej, np.nanmedian(RMS) * 100,
-                         100 * np.mean(np.array(NOBS) < 6)))
+                print("  chained depth-ICP pass (depth fx=%.1f, seed '%s'): the "
+                      "geometry-only estimate of this rig - a %s frustum is "
+                      "far more degenerate than a lidar, so read the quality "
+                      "report before trusting corridor stretches"
+                      % (Kd[0, 0], track.get("seed", "odom"),
+                         "narrow" if Kd[0, 0] > 300 else "wide"))
+                rmin = float(track.get("range_min", 0.4))
+                rmax = float(track.get("range_max", 3.5))
+                T_cd = X @ Xd                       # odom child -> DEPTH frame
+
+                def depth_scans():
+                    for t, m in iter_topic(bag, track["depth_topic"]):
+                        Pd = depth_to_cloud(img_depth(m), Kd, rmin=rmin, rmax=rmax)
+                        if len(Pd) >= 500:
+                            yield t, np.asarray(Pd, np.float32), None
+                # state = the DEPTH optical frame (the clouds' own frame)
+                dtrack = dict(track)
+                dtrack.setdefault("rate_hz", 10.0)
+                dtrack.setdefault("prior_beta", 0.10)
+                dtrack.setdefault("min_obs", 1)
+                dtrack.setdefault("max_shift", 0.3)
+                dtrack.setdefault("scan_voxel", 0.05)
+                dtrack["range_min"] = 0.0; dtrack["range_max"] = 1e9   # gated already
+                d_t, d_T, RMS, NOBS, d_cl, n_rej, Q = chain_icp(
+                    depth_scans(), ot, oT, T_map_origin, T_cd, REF, dtrack,
+                    log_every=200, default_seed="odom")
+                if len(d_t) == 0:
+                    print("  ! SKIPPING: no usable depth frames"); continue
+                rd = 100 * np.mean(np.array(NOBS) < 6)
+                print("  %d frames (%d unregistered) | plane rms median %.2f cm "
+                      "p95 %.2f cm | rank-deficient %.1f%%"
+                      % (len(d_t), n_rej, np.nanmedian(RMS) * 100,
+                         np.nanpercentile(RMS, 95) * 100, rd))
+                if rd > 50:
+                    print("  ! most frames are rank-deficient (corridors, flat "
+                          "walls): along the unobservable axis those poses are "
+                          "the odometry seed, damped, not a measurement")
+                report_chain_quality(d_t, Q, outd, name + "_depth",
+                                     track.get("seed", "odom"))
+                # depth-frame poses -> COLOR optical frame (the state of the
+                # graph and of the anchor): T_map_color = T_map_depth @ inv(Xd);
+                # clouds likewise: P_color = Xd P_depth
+                reg_t = d_t
+                reg_T = compose_all(d_T, inv(Xd))
+                cl_l = [apply(Xd, c).astype(np.float32) for c in d_cl]
+                write_tum(os.path.join(outd, "traj_%s_depth_icp.tum" % name),
+                          reg_t, reg_T)
+                To_c = compose_all(np.tile(T_map_origin, (len(reg_t), 1, 1))
+                                   @ interp_traj(ot, oT, reg_t), X)
+                print("  == depth ICP vs anchored odometry (color frame, %d "
+                      "stamps) ==" % len(reg_t))
+                dtr, drr = traj_gap(reg_T, To_c)
+                report_gap("odom - depth ICP", reg_t, dtr, drr, path_length(reg_T))
             sights = detect_boards_along(track, s, P, bmap, af, bag)
             arec = arec_of(track)
             g = run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X,
@@ -1792,7 +1838,9 @@ def main():
                                  Ts=g["arms"]["C_joint"], frame="cam",
                                  arms=g["arms"], res_nodes=g["res_nodes"],
                                  bmap=bmap, odom_only=g["odom_only"],
-                                 chained=g["chained"], cloud_source=src)
+                                 chained=g["chained"], cloud_source=src,
+                                 chained_label=(None if src == "lidar"
+                                                else "depth ICP chained"))
 
         elif kind == "cam_boards":
             rate = float(track.get("rate_hz", 10.0))

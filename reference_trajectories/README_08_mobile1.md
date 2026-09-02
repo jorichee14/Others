@@ -99,3 +99,37 @@ right. If the inverse wins, set `"invert_T_lidar_camera": true` and rerun.
 body-frame odometry child, a non-trivial `T_lidar_camera`, a drifting ZED
 odometry (65 cm over 12 m) and board sightings. Result: lidar chain 0.1 cm
 from truth, B 2.8 cm max, A and C 0.5 cm max.
+
+# mobile_2 (RealSense D455 + Isaac visual SLAM, no lidar)
+
+`pipeline_config_08_mobile2.json` keeps the two mobile_1 tracks with
+`"enabled": false` (frozen, outputs untouched in `reference_coop2_mobile1`)
+and adds `mobile_2_rs`, an `arms` track with `"cloud_source": "depth"`,
+writing to `reference_coop2_mobile2`. Same workflow, one substitution: the
+geometry-only reference is the **chained depth ICP** of the D455 against the
+map instead of the Ouster.
+
+| step | what | outputs |
+|---|---|---|
+| 1 | chained depth ICP: every depth frame (10 Hz) is deprojected, range-gated 0.4-3.5 m, edge-rejected, voxelised, and registered to the map. Seeded from the Isaac odometry increment (`"seed": "odom"`; the constant-velocity seed is the fallback), damped toward the seed along unobservable axes (`prior_beta` 0.10). | `traj_mobile_2_rs_depth_icp.tum` (color optical frame), `quality_mobile_2_rs_depth.csv/png` |
+| 1b | depth ICP vs anchored Isaac odometry, per-step disagreement | printed |
+| 2 | the same A/B/C graph: `A_icp` odom + depth map factors, `B_boards` odom + boards, `C_joint` all. `C` starts from `B` here (`joint_init`): depth ICP can only refine, it cannot relocalise a metre-scale error. `odom_jump_check` is off: a depth chain is not reliable enough to indict the odometry. | `traj_mobile_2_rs_{A_icp,B_boards,C_joint,odom_only}.tum` |
+| 3 | comparison table and `paths_mobile_2.png` with the depth chain as the reference | `compare_mobile_2.csv` |
+
+Read the depth chain with more suspicion than the lidar: the D455 sees an
+87-degree cone to 3.5 m. Facing a flat wall constrains one axis, a corridor
+two. The quality PNG's middle panel (observable DOF) says where. Where it is
+below 6 the chain's pose along the missing axes is the odometry seed, so
+"depth ICP vs odom" is small there by construction, not by measurement. The
+boards are what bound those stretches; `A_icp`'s board residual (A never
+used a board) is the honest accuracy number for the depth-only route.
+
+## mobile_2 transforms
+
+| item | value / rule |
+|---|---|
+| odometry | `/mobile_2/visual_slam/tracking/odometry`, child frame printed at run time |
+| `X` = `cam_extrinsic_xyzquat` | `T_child_color_optical`. The config value `[0.0003, 0.0592, -0.0002, 0.4996, -0.4974, 0.5017, -0.5012]` is derived as `R_optical @ inv(T_color_depth)` from your `depth_extrinsic_xyzquat`, which is right ONLY if the odometry child is the RealSense `camera_link` (the depth/left-IR body frame, what Isaac VSLAM uses when `base_frame` = `camera_link`). If the printed child is a `base_link`, replace it with `ros2 run tf2_ros tf2_echo <child> camera_color_optical_frame`. |
+| `Xd` = `depth_extrinsic_xyzquat` | `T_color_depth` (pose of the depth frame in the color optical frame): depth clouds are moved into the color frame with it, and the depth chain's state (depth frame) is converted to the color frame with its inverse |
+| depth chain seed | `T_map_depth = T_map_odom @ T_odom_child(t) @ X @ Xd` at frame 0, then the odometry increment conjugated by `X @ Xd` |
+| anchor | stage-06 `realsense` `map_to_cam` (color optical frame) at the dwell end |

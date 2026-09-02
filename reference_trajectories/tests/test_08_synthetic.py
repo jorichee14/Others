@@ -97,7 +97,7 @@ print("== chain_lidar (seed=%s) ==" % track_l["seed"])
 lts, lTs, RMS, NOBS, cl, n_rej, Q = m.chain_lidar(scans, ot, oT, T_map_origin,
                                                   T_cl_true, REF, track_l, log_every=0)
 outd = os.environ.get("TEST_OUT", "/tmp/test_08_out"); os.makedirs(outd, exist_ok=True)
-m.report_lidar_quality(lts, Q, outd, "mobile_1_lidar", track_l["seed"])
+m.report_chain_quality(lts, Q, outd, "mobile_1_lidar", track_l["seed"])
 big = [q for q in Q if q[5] > 0.5]
 assert len(big) == 1 and abs(big[0][0] - 45.0) < 0.3, "ZED jump not localised: %r" % [(q[0], q[5]) for q in big]
 Lt = m.interp_traj(ts, L_true, lts)
@@ -179,4 +179,13 @@ results = {"mobile_1_lidar": dict(kind="lidar_icp", ts=lts, Ts=lTs, Ts_cam=Ts_ca
 outd = os.environ.get("TEST_OUT", "/tmp/test_08_out"); os.makedirs(outd, exist_ok=True)
 m.compare_rig(results, T_lc, outd)
 m.save_paths_png(results, REF, BM, outd, T_lc)
+# a rig WITHOUT a lidar (mobile_2 style): the chained depth ICP is the reference
+results2 = {"mobile_2_rs": dict(kind="arms", ts=g["node_t"], Ts=g["arms"]["C_joint"],
+                                arms=g["arms"], res_nodes=g["res_nodes"], bmap=BM,
+                                odom_only=g["odom_only"], chained=g["chained"],
+                                cloud_source="depth", chained_label="depth ICP chained")}
+m.compare_rig(results2, None, outd)
+m.save_paths_png(results2, REF, BM, outd, None)
+assert os.path.exists(os.path.join(outd, "paths_mobile_2.png"))
+assert os.path.exists(os.path.join(outd, "compare_mobile_2.csv"))
 print("\nALL SYNTHETIC CHECKS PASSED")
