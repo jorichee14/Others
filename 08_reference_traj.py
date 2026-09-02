@@ -1258,6 +1258,45 @@ def main():
                           "are not in one frame (stage 03), not a trajectory "
                           "problem; if one is centimetres, that is the correct "
                           "extrinsic convention and the other track is at fault")
+                    # WHERE does the lidar track put the board it is seeing?
+                    # T_map_board = T_map_cam(lidar) @ T_cb, per sighting.
+                    #   tight cluster, far from the survey -> there is a real
+                    #     physical board there and it is NOT the surveyed one
+                    #     (duplicate print, or a wrong surveyed pose)
+                    #   scattered -> the lidar track and the sightings are
+                    #     mutually inconsistent, i.e. the lidar track is wrong
+                    # The sighting RANGE settles it independently: a ChArUco
+                    # board is only detectable within ~1-2 m, so a board seen
+                    # at 1.5 m cannot be one the trajectory places 12 m away.
+                    print("  where the LIDAR track places each board it saw:")
+                    for bn in sorted({rn[j][1] for j in np.flatnonzero(ok)}):
+                        js = [j for j in np.flatnonzero(ok) if rn[j][1] == bn]
+                        P = np.array([(Tl_at[i] @ T_lc @ rn[j][2])[:3, 3]
+                                      for i, j in enumerate(np.flatnonzero(ok))
+                                      if rn[j][1] == bn])
+                        rng_seen = np.array([np.linalg.norm(rn[j][2][:3, 3])
+                                             for j in js])
+                        ctr = np.median(P, axis=0)
+                        spread = float(np.median(np.linalg.norm(P - ctr, axis=1)))
+                        surv = zbm[bn][0][:3, 3]
+                        print("      %-12s n=%4d  seen at %.2f m  |  lidar puts "
+                              "it at %s (scatter %.2f m)"
+                              % (bn, len(js), float(np.median(rng_seen)),
+                                 np.round(ctr, 2).tolist(), spread))
+                        print("      %-12s survey says %s -> %.2f m away"
+                              % ("", np.round(surv, 2).tolist(),
+                                 float(np.linalg.norm(ctr - surv))))
+                        if spread < 0.5 and np.linalg.norm(ctr - surv) > 1.0:
+                            print("      %-12s !! TIGHT cluster %.1f m from the "
+                                  "surveyed pose: a real board is there and it "
+                                  "is NOT the surveyed one - duplicate print of "
+                                  "this design, or that board's survey is wrong"
+                                  % ("", float(np.linalg.norm(ctr - surv))))
+                        elif spread > 1.0:
+                            print("      %-12s !! SCATTERED (%.1f m): the lidar "
+                                  "track and these sightings are mutually "
+                                  "inconsistent - the lidar track is the suspect"
+                                  % ("", spread))
             print("  (lidar track plane rms %.2f cm against the map, board-free "
                   "- a track registering that well is not the one that moved "
                   "metres)" % (lid.get("rms", float("nan")) * 100))
