@@ -6,6 +6,15 @@ Stage 06 measured where each camera STARTED (the opening dwell on its board).
 This stage turns whole trajectories into the map frame and corrects them with
 the absolute information each sensor can see:
 
+  arms        track (mobile_2): the three corrected trajectories from ONE
+              estimator sharing nodes, odometry factors and solver - arm A
+              (odometry + map point-to-plane factors re-linearised every
+              iteration, geometry only), arm B (odometry + board factors +
+              session-anchor prior), arm C (everything). Ends with the
+              ablation table whose off-diagonal cells are independent checks.
+              Supersedes running rgbd_icp + cam_boards separately for the
+              same agent. cam_extrinsic_xyzquat REQUIRED.
+
   rgbd_icp    track (mobile_2 D455 depth): each depth frame is deprojected to a
               point cloud (range-gated 0.4-3.5 m where D455 noise stays under
               the map's own floor, flying pixels rejected at occlusion edges)
@@ -356,13 +365,31 @@ def icp_frame(P_body, T_init, ref, gates=(0.4, 0.2, 0.1), iters=5,
 # pose graph: odometry relative factors + absolute board-pose factors + a
 # session-anchor prior. Jacobians validated numerically (incl. jr_inv).
 # --------------------------------------------------------------------------- #
-def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, iters=12, verbose=True):
-    """node_t (N,), T_init (N,4,4), Z_rel (N-1,4,4) measured relative motions,
-    sig_rel (sig_t, sig_r) per 0.1 s, abs_meas list of (node_idx, T_meas,
-    sig_t, sig_r). Returns refined (N,4,4)."""
+ICP_SIGMA = 0.02          # m; the map's own surface noise
+ICP_HUBER = 0.05
+GAUGE_W = 1e-2
+
+
+def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
+                use_icp=False, use_board=True, icp_pts=400, iters=12,
+                verbose=True):
+    """One graph, selectable factor sets (this is what makes the A/B/C arms an
+    ablation instead of three pipelines):
+      odometry relative factors        always
+      board/anchor absolute factors    use_board
+      point-to-plane map factors       use_icp - RE-LINEARISED each iteration.
+        Never chained-ICP poses as priors: their correlated drift out-weighed
+        the boards in validation and the joint arm lost to boards-only.
+    clouds: {node_index: (M,3) cloud in the STATE frame}."""
     n = len(node_t); Ts = T_init.copy()
     dt = np.maximum(np.diff(node_t), 1e-3)
     st, sr = sig_rel
+    sub = {}
+    if use_icp:
+        for k, P in (clouds or {}).items():
+            if len(P) > icp_pts:
+                P = P[np.linspace(0, len(P) - 1, icp_pts).astype(int)]
+            sub[k] = np.asarray(P, float)
     for it in range(iters):
         I_, J_, V_, r_ = [], [], [], []
 
@@ -371,6 +398,7 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, iters=12, verbose=True
             I_.extend((np.asarray(rows) + base).tolist())
             J_.extend(cols); V_.extend(vals)
 
+        add(np.arange(6), list(range(6)), [GAUGE_W] * 6, list(np.zeros(6)))
         for k in range(n - 1):
             Ti, Tj, Zm = Ts[k], Ts[k + 1], Z_rel[k]
             Ri, Rj = Ti[:3, :3], Tj[:3, :3]
@@ -388,17 +416,37 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, iters=12, verbose=True
             rows, cc = np.meshgrid(np.arange(6), np.arange(12), indexing="ij")
             add(rows.ravel(), [cols[c] for c in cc.ravel()], B.ravel(),
                 list(np.r_[rt * wt, rr * wr]))
-        for k, Tm, at, ar in abs_meas:
-            Rm = Tm[:3, :3]
-            res = np.r_[Rm.T @ (Ts[k][:3, 3] - Tm[:3, 3]),
-                        log_R(Rm.T @ Ts[k][:3, :3])]
-            Jb = np.block([[Rm.T, np.zeros((3, 3))],
-                           [np.zeros((3, 3)), jr_inv(res[3:])]])
-            W = np.diag([1 / at] * 3 + [1 / ar] * 3)
-            B = W @ Jb
-            rows, cc = np.meshgrid(np.arange(6), np.arange(6), indexing="ij")
-            add(rows.ravel(), [6 * k + c for c in cc.ravel()], B.ravel(),
-                list(W @ res))
+        if use_board:
+            for k, Tm, at, ar in abs_meas:
+                Rm = Tm[:3, :3]
+                res = np.r_[Rm.T @ (Ts[k][:3, 3] - Tm[:3, 3]),
+                            log_R(Rm.T @ Ts[k][:3, :3])]
+                Jb = np.block([[Rm.T, np.zeros((3, 3))],
+                               [np.zeros((3, 3)), jr_inv(res[3:])]])
+                W = np.diag([1 / at] * 3 + [1 / ar] * 3)
+                B = W @ Jb
+                rows, cc = np.meshgrid(np.arange(6), np.arange(6), indexing="ij")
+                add(rows.ravel(), [6 * k + c for c in cc.ravel()], B.ravel(),
+                    list(W @ res))
+        if use_icp:
+            for k, P in sub.items():
+                Q = apply(Ts[k], P)
+                c, nn, w, m = ref.plane_of(Q)
+                if m.sum() < 30:
+                    continue
+                p = P[m]; R = Ts[k][:3, :3]
+                r = np.einsum("ij,ij->i", Q[m] - c, nn)
+                keep = np.abs(r) < 0.1
+                if keep.sum() < 30:
+                    continue
+                c, nn, w, p, r = c[keep], nn[keep], w[keep], p[keep], r[keep]
+                ww = w * np.minimum(1.0, ICP_HUBER / np.maximum(np.abs(r), 1e-9)) \
+                    / ICP_SIGMA
+                Jp = np.hstack([nn, np.cross(p, nn @ R)]) * ww[:, None]
+                rows, cc = np.meshgrid(np.arange(len(r)), np.arange(6),
+                                       indexing="ij")
+                add(rows.ravel(), [6 * k + cix for cix in cc.ravel()],
+                    Jp.ravel(), list(r * ww))
         A = sparse.csr_matrix((V_, (I_, J_)), shape=(len(r_), 6 * n))
         rv = np.array(r_)
         Hn = (A.T @ A).tocsc() + sparse.identity(6 * n, format="csc") * 1e-6
@@ -414,6 +462,32 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, iters=12, verbose=True
         if step < 1e-5:
             break
     return Ts
+
+
+def eval_board_resid(Ts, res_nodes, bmap):
+    """Predicted vs surveyed board position at every sighting. Independent
+    accuracy check for an arm that never used boards."""
+    e = [np.linalg.norm((Ts[k] @ T_cb)[:3, 3] - bmap[b][0][:3, 3])
+         for k, b, T_cb in res_nodes]
+    return np.array(e) if e else np.array([np.nan])
+
+
+def eval_map_rms(Ts, clouds, ref, cap=300):
+    """Point-to-plane rms at the given poses (evaluated, not optimised).
+    Independent check for an arm that never used the map."""
+    out = []
+    for k, P in clouds.items():
+        if len(P) > cap:
+            P = P[np.linspace(0, len(P) - 1, cap).astype(int)]
+        Q = apply(Ts[k], np.asarray(P, float))
+        c, nn, w, m = ref.plane_of(Q)
+        if m.sum() < 30:
+            continue
+        r = np.einsum("ij,ij->i", Q[m] - c, nn)
+        r = r[np.abs(r) < 0.3]
+        if len(r) > 20:
+            out.append(float(np.sqrt(np.mean(r ** 2))))
+    return np.array(out) if out else np.array([np.nan])
 
 
 # --------------------------------------------------------------------------- #
@@ -543,6 +617,9 @@ def main():
     print("session anchors: %s" % {k: np.round(
         np.array(v["map_to_cam"]["xyz"]), 3).tolist() for k, v in cams.items()
         if "map_to_cam" in v})
+
+    def arec_of(track):
+        return cams[track["anchor_cam"]]
 
     def anchor_T(cam_name):
         rec = cams[cam_name]["map_to_cam"]
@@ -724,6 +801,142 @@ def main():
             results[name] = dict(kind=kind, ts=ts, Ts=Ts, frame="depth",
                                  rms=float(np.nanmedian(RMS)))
 
+        elif kind == "arms":
+            # mobile_2's three corrected trajectories from ONE estimator:
+            #   A_icp    odometry + relinearised map factors (geometry only)
+            #   B_boards odometry + board factors + session-anchor prior
+            #   C_joint  everything
+            # State = the COLOR optical frame; depth clouds pre-transformed
+            # through the color->depth extrinsic so every factor agrees.
+            if not track.get("cam_extrinsic_xyzquat"):
+                raise SystemExit(
+                    "arms track '%s': cam_extrinsic_xyzquat is REQUIRED "
+                    "(odometry child '%s' -> color optical). Identity bent "
+                    "this bag by 8-9.6 m. Get it:\n  ros2 run tf2_ros "
+                    "tf2_echo %s camera_color_optical_frame"
+                    % (name, ochild, ochild))
+            if REF is None:
+                REF = Reference(read_map_xyz(s["ref_map"]),
+                                voxel=float(s.get("target_voxel", 0.05)),
+                                plane_voxel=float(s.get("plane_voxel", 0.4)))
+            Xd = make_T_xyzq(track["depth_extrinsic_xyzquat"]) \
+                if track.get("depth_extrinsic_xyzquat") else np.eye(4)
+            if not track.get("depth_extrinsic_xyzquat"):
+                print("  ! no depth_extrinsic_xyzquat: ~1.5 cm systematic on D455")
+            Kd = None
+            for _, ci in iter_topic(bag, track["depth_info_topic"], limit=1):
+                Kd = np.array(ci.k).reshape(3, 3)
+            rate = float(track.get("rate_hz", 10.0))
+            keep_dt = 1.0 / rate
+            beta = float(track.get("prior_beta", 0.10))
+            print("  chained ICP pass (initialisation; depth fx=%.1f)" % Kd[0, 0])
+            reg_t, reg_T, cl_l, RMS, NOBS = [], [], [], [], []
+            n_rej = 0
+            t_last = -1e18; T_prev = None; T_ol_prev = None; t0w = time.time()
+            for t, m in iter_topic(bag, track["depth_topic"]):
+                if t - t_last < keep_dt:
+                    continue
+                Pd = depth_to_cloud(img16(m), Kd,
+                                    rmin=float(track.get("range_min", 0.4)),
+                                    rmax=float(track.get("range_max", 3.5)))
+                if len(Pd) < 500:
+                    continue
+                Pc = apply(Xd, Pd).astype(np.float32)   # cloud in COLOR frame
+                T_ol = interp_traj(ot, oT, np.array([t]))[0]
+                if T_prev is None:
+                    T_seed = T_map_origin @ T_ol @ X
+                else:
+                    T_seed = T_prev @ (inv(X) @ inv(T_ol_prev) @ T_ol @ X)
+                T_i, nu, rms, nobs = icp_frame(np.asarray(Pc, float), T_seed,
+                                               REF, beta=beta)
+                d = float(np.linalg.norm(T_i[:3, 3] - T_seed[:3, 3]))
+                a = float(np.linalg.norm(log_R(T_seed[:3, :3].T @ T_i[:3, :3])))
+                if d > float(track.get("max_shift", 0.3)) \
+                        or a > math.radians(float(track.get("max_rot_deg", 5.0))):
+                    T_i, rms, nobs = T_seed, np.nan, 0
+                    n_rej += 1
+                T_prev, T_ol_prev = T_i, T_ol
+                t_last = t
+                reg_t.append(t); reg_T.append(T_i); cl_l.append(Pc)
+                RMS.append(rms); NOBS.append(nobs)
+                if len(reg_t) % 200 == 0:
+                    print("  %5d frames  rms %5.2f cm  obs %d/6  %5.1fs"
+                          % (len(reg_t), (rms if np.isfinite(rms) else 0) * 100,
+                             nobs, time.time() - t0w), flush=True)
+            reg_t = np.array(reg_t); reg_T = np.array(reg_T)
+            print("  %d frames (%d rejected -> seed kept) | rms median %.2f cm "
+                  "| rank-deficient %.1f%%"
+                  % (len(reg_t), n_rej, np.nanmedian(RMS) * 100,
+                     100 * np.mean(np.array(NOBS) < 6)))
+            sights = detect_boards_along(track, s, P, bmap, af, bag)
+            # nodes FIRST (registration stamps + exact sighting stamps), then
+            # resolve against the anchored odometry at those nodes - board
+            # factors land on their own stamps, never a neighbour 50 ms away
+            st_extra = np.array(sorted({round(t, 6) for t, _, _ in sights}))
+            node_t = np.unique(np.round(np.r_[reg_t, st_extra], 6))
+            idx_of = {round(t, 6): i for i, t in enumerate(node_t)}
+            clouds = {idx_of[round(t, 6)]: c
+                      for t, c in zip(np.round(reg_t, 6), cl_l)}
+            To_n = interp_traj(ot, oT, node_t)
+            Z_rel = np.array([inv(X) @ inv(To_n[i]) @ To_n[i + 1] @ X
+                              for i in range(len(node_t) - 1)])
+            T_init = interp_traj(reg_t, reg_T, node_t)
+            To_anch = np.array([T_map_origin @ To_n[i] @ X
+                                for i in range(len(node_t))])
+            res = resolve_instances(sights, To_anch, node_t, bmap,
+                                    track.get("boards") or sorted(bmap),
+                                    float(track.get("instance_radius", 2.0)))
+            abs_meas, res_nodes = [], []
+            for k, bname, T_map_b_pred, T_cb in res:
+                Tb, rec = bmap[bname]
+                T_meas = Tb @ inv(T_cb)
+                sig_t = math.hypot(float(rec.get("std_mm", 10)) * 1e-3, 0.010)
+                lc = rec.get("loop_closure") or {}
+                sig_t = max(sig_t, float(lc.get("mm", 0)) * 1e-3)
+                sig_r = math.radians(max(float(lc.get("deg", 0.3)), 1.0))
+                abs_meas.append((k, T_meas, sig_t, sig_r))
+                res_nodes.append((k, bname, T_cb))
+            anchor_prior = (0, T_init[0],
+                            max(arec_of(track)["std_mm"] * 1e-3
+                                if "std_mm" in arec_of(track) else 0.01, 0.005),
+                            math.radians(1.0))
+            print("  %d nodes, %d board factors, %d clouds"
+                  % (len(node_t), len(abs_meas), len(clouds)))
+            sig_rel = (float(track.get("odom_sigma_t", 0.003)),
+                       float(track.get("odom_sigma_r", 0.001)))
+            ARMS = {}
+            for arm, (ui, ub) in [("A_icp", (True, False)),
+                                  ("B_boards", (False, True)),
+                                  ("C_joint", (True, True))]:
+                print("  == arm %s ==" % arm)
+                am = abs_meas + [anchor_prior] if ub else []
+                Ts = solve_graph(node_t, T_init.copy(), Z_rel, sig_rel, am,
+                                 clouds, REF, use_icp=ui, use_board=ub,
+                                 icp_pts=int(track.get("icp_pts", 400)),
+                                 iters=int(track.get("gn_iters", 12)))
+                ARMS[arm] = Ts
+                write_tum(os.path.join(outd, "traj_%s_%s.tum" % (name, arm)),
+                          node_t, Ts)
+            write_tum(os.path.join(outd, "traj_%s_odom_only.tum" % name),
+                      node_t, To_anch)
+            print("  == evaluation (off-diagonal cells are independent) ==")
+            print("  %-10s %22s %22s %20s"
+                  % ("arm", "board resid (cm)", "map rms (cm)", "vs C (cm)"))
+            for arm, Ts in ARMS.items():
+                br = eval_board_resid(Ts, res_nodes, bmap) * 100
+                mr = eval_map_rms(Ts, clouds, REF) * 100
+                dv = np.linalg.norm(Ts[:, :3, 3]
+                                    - ARMS["C_joint"][:, :3, 3], axis=1) * 100
+                print("  %-10s %10.1f med %6.1f p95 %9.2f med %5.2f p95 "
+                      "%8.1f med %6.1f max"
+                      % (arm, np.nanmedian(br), np.nanpercentile(br, 95),
+                         np.nanmedian(mr), np.nanpercentile(mr, 95),
+                         np.median(dv), dv.max()))
+            print("  arm A board resid and arm B map rms are the honest cells "
+                  "(neither arm saw that data). C should match or beat both.")
+            results[name] = dict(kind=kind, ts=node_t, Ts=ARMS["C_joint"],
+                                 frame="cam", arms=ARMS)
+
         elif kind == "cam_boards":
             rate = float(track.get("rate_hz", 10.0))
             keep = np.r_[0, np.flatnonzero(np.diff(ot) >= 0)[
@@ -758,7 +971,7 @@ def main():
             Ts = solve_graph(node_t, T_init, Z_rel,
                              (float(track.get("odom_sigma_t", 0.003)),
                               float(track.get("odom_sigma_r", 0.001))),
-                             abs_meas)
+                             abs_meas, use_icp=False, use_board=True)
             corr = np.linalg.norm(Ts[:, :3, 3] - T_init[:, :3, 3], axis=1)
             print("  correction vs anchored odometry: median %.1f cm, max %.1f cm "
                   "(this IS the measured drift the boards removed)"
@@ -820,22 +1033,21 @@ SAMPLE_CONFIG = r"""
       "camera_info_topic": "/mobile_1/zed/left/camera_info", "rectified": true,
       "anchor_cam": "zed", "boards": ["anchor", "anchor_b"],
       "rate_hz": 10.0, "img_stride": 2 },
-    { "name": "mobile_2_rgbd", "type": "rgbd_icp",
-      "depth_topic": "/mobile_2/depth/image_rect_raw",
-      "depth_info_topic": "/mobile_2/depth/camera_info",
+    { "name": "mobile_2", "type": "arms",
       "odom_topic": "/mobile_2/visual_slam/tracking/odometry",
       "anchor_cam": "realsense",
       "cam_extrinsic_xyzquat": null,
+      "depth_topic": "/mobile_2/depth/image_rect_raw",
+      "depth_info_topic": "/mobile_2/depth/camera_info",
       "depth_extrinsic_xyzquat": [0.05919025, -0.00000990, -0.00040596,
                                   -0.00296559, 0.00083214, 0.00130485, 0.99999441],
-      "rate_hz": 10.0, "range_min": 0.4, "range_max": 3.5, "prior_beta": 0.10 },
-    { "name": "mobile_2_realsense", "type": "cam_boards",
-      "odom_topic": "/mobile_2/visual_slam/tracking/odometry",
       "image_topic": "/mobile_2/color/image_raw",
       "camera_info_topic": "/mobile_2/color/camera_info", "rectified": false,
-      "anchor_cam": "realsense",
       "boards": ["rs_anchor", "anchor", "anchor_b"],
-      "rate_hz": 10.0, "img_stride": 2 }
+      "rate_hz": 10.0, "img_stride": 2,
+      "odom_sigma_t": 0.003, "odom_sigma_r": 0.001,
+      "range_min": 0.4, "range_max": 3.5, "prior_beta": 0.10,
+      "max_shift": 0.3, "max_rot_deg": 5.0, "icp_pts": 400, "gn_iters": 12 }
   ]
 }
 """
