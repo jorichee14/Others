@@ -488,6 +488,28 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
     return Ts
 
 
+def report_factor_coverage(node_t, ks):
+    """Where in time do the absolute factors sit? A track whose board factors
+    all fall inside the opening dwell is anchored at t=0 and pure odometry
+    afterwards - the correction-vs-odometry number then looks small only
+    because the boards never reach the part that drifts."""
+    if not ks:
+        print("  ! NO absolute factors: this track is anchored odometry only")
+        return
+    t0, t1 = node_t[0], node_t[-1]
+    tf = np.sort(node_t[np.array(sorted(set(ks)))]) - t0
+    span = max(t1 - t0, 1e-9)
+    gaps = np.diff(np.r_[0.0, tf, span])
+    print("  board factors at t = %.1f .. %.1f s of %.1f s (%.0f%% of the run "
+          "covered); largest un-anchored stretch %.1f s"
+          % (tf[0], tf[-1], span, 100 * (tf[-1] - tf[0]) / span, gaps.max()))
+    if tf[-1] < 0.25 * span:
+        print("  !! every board factor is in the first quarter of the run: "
+              "this track is anchored at the start and UNCONSTRAINED after it. "
+              "Its 'correction vs odometry' understates the real error - the "
+              "boards cannot see the stretch that drifts.")
+
+
 def eval_board_resid(Ts, res_nodes, bmap):
     """Predicted vs surveyed board position at every sighting. Independent
     accuracy check for an arm that never used boards."""
@@ -963,6 +985,7 @@ def main():
                             math.radians(1.0))
             print("  %d nodes, %d board factors, %d clouds"
                   % (len(node_t), len(abs_meas), len(clouds)))
+            report_factor_coverage(node_t, [k for k, _, _, _ in abs_meas])
             sig_rel = (float(track.get("odom_sigma_t", 0.003)),
                        float(track.get("odom_sigma_r", 0.001)))
             ARMS = {}
@@ -1029,6 +1052,7 @@ def main():
                              max(arec.get("std_mm", 10) * 1e-3, 0.005), 
                              math.radians(1.0)))
             print("  graph: %d nodes, %d board factors" % (len(node_t), len(res)))
+            report_factor_coverage(node_t, [k for k, _, _, _ in res])
             Ts = solve_graph(node_t, T_init, Z_rel,
                              (float(track.get("odom_sigma_t", 0.003)),
                               float(track.get("odom_sigma_r", 0.001))),
@@ -1063,6 +1087,25 @@ def main():
                   "over %d stamps" % (np.median(gap) * 100,
                                       np.percentile(gap, 95) * 100,
                                       gap.max() * 100, len(tq)))
+            # A constant gap is an extrinsic error; a growing one is drift in
+            # whichever track has no absolute reference over that stretch.
+            qs = np.linspace(0, len(tq) - 1, 6).astype(int)
+            print("  gap over time:  " + "  ".join(
+                "t=%.0fs %.0fcm" % (tq[i] - tq[0], gap[i] * 100) for i in qs))
+            rel = (gap.max() - gap.min()) / max(gap.max(), 1e-9)
+            print("  -> %s" % ("CONSTANT offset (%.0f%% variation): suspect "
+                               "T_lidar_camera, not the trajectories"
+                               % (100 * rel) if rel < 0.25 else
+                               "GROWING (%.0f cm -> %.0f cm): one track is "
+                               "drifting; the one WITHOUT absolute information "
+                               "over that stretch is the suspect - check the "
+                               "board-factor coverage line above"
+                               % (gap.min() * 100, gap.max() * 100)))
+            # the lidar track never used boards, so its own plane rms against
+            # the map is an independent statement about it
+            print("  (lidar track plane rms %.2f cm against the map, board-free "
+                  "- a track registering that well is not the one that moved "
+                  "metres)" % (lid.get("rms", float("nan")) * 100))
             print("  this needs no ground truth: two independent estimates of "
                   "one body. A constant offset = extrinsic error; growth "
                   "between board sightings = ZED odometry drift the boards "
