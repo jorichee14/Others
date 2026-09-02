@@ -144,8 +144,8 @@
         ],
         "max_shift": 0.3,
         "max_rot_deg": 5.0,
-        "odom_sigma_t": 0.003,
-        "odom_sigma_r": 0.001,
+        "odom_sigma_t": 0.01,
+        "odom_sigma_r": 0.0005,
         "boards_init": "odom",
         "joint_init": "B_boards",
         "odom_jump_check": false,
@@ -156,12 +156,29 @@
         "cv_must_agree_with_odom": true,
         "submap_window_s": 3.0,
         "submap_max_pts": 20000,
-        "submap_stride": 1
+        "submap_stride": 1,
+        "odom_source": "imu_vo",
+        "imu_topic": "/mobile_2/imu",
+        "imu_rot_quat": null,
+        "gyro_bias_window_s": 3.0,
+        "vo_image_topic": "/mobile_2/infra1/image_rect_raw",
+        "vo_info_topic": "/mobile_2/infra1/camera_info",
+        "vo_extrinsic_xyzquat": [
+          0.05919025,
+          -9.9e-06,
+          -0.00040596,
+          -0.00296559,
+          0.00083214,
+          0.00130485,
+          0.99999441
+        ],
+        "vo_rate_hz": 10.0,
+        "vo_range_max": 5.0
       },
       {
         "name": "mobile_2_pf",
         "type": "pf",
-        "enabled": true,
+        "enabled": false,
         "odom_topic": "/mobile_2/visual_slam/tracking/odometry",
         "anchor_cam": "realsense",
         "cam_extrinsic_xyzquat": [

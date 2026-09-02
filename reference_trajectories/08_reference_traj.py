@@ -233,6 +233,67 @@ def topic_frame(bag, topic):
     return "?"
 
 
+def img_gray(m):
+    """sensor_msgs/Image -> uint8 grayscale (mono8/bgr8/rgb8/bgra8/rgba8/16UC1)."""
+    a = np.frombuffer(m.data, np.uint8)
+    enc = m.encoding.lower()
+    if enc in ("mono8", "8uc1"):
+        return a.reshape(m.height, m.step)[:, :m.width].copy()
+    if enc in ("bgr8", "rgb8"):
+        im = a.reshape(m.height, m.step)[:, :m.width * 3].reshape(m.height, m.width, 3)
+        w = (0.114, 0.587, 0.299) if enc == "bgr8" else (0.299, 0.587, 0.114)
+        return (im[..., 0] * w[0] + im[..., 1] * w[1] + im[..., 2] * w[2]).astype(np.uint8)
+    if enc in ("bgra8", "rgba8"):
+        im = a.reshape(m.height, m.step)[:, :m.width * 4].reshape(m.height, m.width, 4)
+        w = (0.114, 0.587, 0.299) if enc == "bgra8" else (0.299, 0.587, 0.114)
+        return (im[..., 0] * w[0] + im[..., 1] * w[1] + im[..., 2] * w[2]).astype(np.uint8)
+    if enc in ("mono16", "16uc1"):
+        return (a.view(np.uint16).reshape(m.height, m.step // 2)[:, :m.width] >> 8).astype(np.uint8)
+    raise SystemExit("unsupported image encoding %r" % m.encoding)
+
+
+def read_imu(bag, topic):
+    ts, gyr, acc, frame = [], [], [], None
+    for t, m in iter_topic(bag, topic):
+        if frame is None:
+            frame = m.header.frame_id
+        ts.append(t)
+        gyr.append([m.angular_velocity.x, m.angular_velocity.y, m.angular_velocity.z])
+        acc.append([m.linear_acceleration.x, m.linear_acceleration.y, m.linear_acceleration.z])
+    if not ts:
+        raise SystemExit("no IMU on %s" % topic)
+    ts = np.array(ts); gyr = np.array(gyr); acc = np.array(acc)
+    print("  imu %s: %d samples, %.0f Hz, frame '%s'"
+          % (topic, len(ts), len(ts) / max(ts[-1] - ts[0], 1e-9), frame))
+    return ts, gyr, acc, frame
+
+
+def tf_static_rot(bag, target, source):
+    """Rotation R_target_source (maps source-frame vectors into target) from
+    /tf_static, chaining through intermediate frames. None if not connected."""
+    edges = {}
+    try:
+        for _, m in iter_topic(bag, "/tf_static"):
+            for tr in m.transforms:
+                q = tr.transform.rotation
+                R = Rot.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+                p, c = tr.header.frame_id, tr.child_frame_id
+                edges.setdefault(p, []).append((c, R))          # R_p_c
+                edges.setdefault(c, []).append((p, R.T))        # R_c_p
+    except KeyError:
+        return None
+    # BFS from target to source accumulating R_target_x
+    seen = {target: np.eye(3)}; queue = [target]
+    while queue:
+        x = queue.pop(0)
+        if x == source:
+            return seen[x]
+        for y, R_xy in edges.get(x, []):
+            if y not in seen:
+                seen[y] = seen[x] @ R_xy; queue.append(y)
+    return None
+
+
 def read_odom(bag, topic):
     ts, Ts, child, parent = [], [], None, None
     for t, m in iter_topic(bag, topic):
@@ -1244,7 +1305,7 @@ def report_drift_corrections(node_t, Ts, To_n, X, To_anch, sight_nodes, gap_s=2.
 
 def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
              wanted, track, REF, anchor_sig_t, src="depth", outd=None,
-             verbose=True, cloud_sets=None):
+             verbose=True, cloud_sets=None, edge_scale_fn=None):
     """The three-arm graph for one camera. State = the camera OPTICAL frame.
       reg_t/reg_T  chained-ICP camera poses (initialisation only)
       cl_l         one cloud per reg_t, already in the CAMERA frame
@@ -1296,6 +1357,9 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     # jump over the neighbouring seconds. Only done for lidar clouds - a
     # depth chain is not reliable enough to indict the odometry.
     edge_scale = np.ones(len(node_t) - 1)
+    if edge_scale_fn is not None:
+        # per-edge trust from the odometry builder (e.g. failed VO steps)
+        edge_scale = np.maximum(edge_scale, edge_scale_fn(node_t))
     if "lidar" in src and bool(track.get("odom_jump_check", True)):
         jm = float(track.get("odom_jump_m", 0.05))
         jr = math.radians(float(track.get("odom_jump_deg", 2.0)))
@@ -1487,8 +1551,8 @@ def collect_methods(results, rig):
                 ref.append(("%s A_icp (reference: depth chain failed)" % nm,
                             r["ts"], r["arms"]["A_icp"], "k", "-"))
         if r.get("odom_only") is not None:
-            odom.append((nm + " odom only", r["ts"], r["odom_only"],
-                         "0.45", (0, (1, 2))))
+            odom.append((nm + " " + (r.get("odom_label") or "odom only"),
+                         r["ts"], r["odom_only"], "0.45", (0, (1, 2))))
         arms = r.get("arms") or {nm: r["Ts"]}
         for an, aT in sorted(arms.items()):
             if an == "A_icp" and ref and "reference: depth chain failed" in ref[-1][0]:
@@ -1501,7 +1565,7 @@ def collect_methods(results, rig):
                 lbl += " [%s clouds]" % ac
             rest.append((lbl, r["ts"], aT, cols[i % len(cols)], ls[i % len(ls)]))
             i += 1
-    # one reference, one odom-only curve (they are the same odometry); any
+    # one reference; one odom-only curve per distinct odometry source; any
     # further geometry-only chain (e.g. the ZED depth chain of a rig that
     # also has a lidar) is drawn as an ordinary method against the reference
     for nm, r in rs.items():
@@ -1509,8 +1573,13 @@ def collect_methods(results, rig):
             ref.append(("%s %s" % (nm, lbl), ts, Ts, "k", "-"))
     extra = [(lbl, ts, Ts, cols[(i + j) % len(cols)], ls[(i + j) % len(ls)])
              for j, (lbl, ts, Ts, _, _) in enumerate(ref[1:])]
-    ref = ref[:1]; odom = odom[:1]
-    return ref + odom + extra + rest, bool(ref)
+    ref = ref[:1]
+    seen_lbl, odom2 = set(), []
+    for o in odom:
+        key = o[0].split(" ", 1)[1] if " " in o[0] else o[0]
+        if key not in seen_lbl:
+            seen_lbl.add(key); odom2.append(o)
+    return ref + odom2 + extra + rest, bool(ref)
 
 
 def rigs_of(results):
@@ -1629,6 +1698,145 @@ def _paths_figure(results, rig, methods, has_ref, ref, bmap, outd, T_lc):
     png = os.path.join(outd, "paths_%s.png" % rig)
     plt.tight_layout(); plt.savefig(png, dpi=110); plt.close()
     print("  wrote %s (%d methods: o = start, square = end)" % (png, len(methods)))
+
+
+# --------------------------------------------------------------------------- #
+# odometry replacement for a sensor-constrained agent: heading from the gyro,
+# translation from RGB-D visual odometry, no dependence on the camera's own
+# tracker. Everything below is in the frame of the VO image (= depth frame).
+# --------------------------------------------------------------------------- #
+def preint_gyro(imu_t, gyr, t0, t1, bias):
+    """Rotation of the IMU frame at t1 relative to t0: product of exp((w-b)dt)
+    over the samples in (t0, t1], with the boundary samples clipped."""
+    i0 = max(int(np.searchsorted(imu_t, t0)) - 1, 0)
+    i1 = min(int(np.searchsorted(imu_t, t1)), len(imu_t) - 1)
+    R = np.eye(3); n = 0
+    for k in range(i0, i1):
+        a, b = max(imu_t[k], t0), min(imu_t[k + 1], t1)
+        if b <= a:
+            continue
+        R = R @ exp_r((gyr[k] - bias) * (b - a)); n += 1
+    return R, n
+
+
+def rgbd_vo(bag, img_topic, info_topic, depth_topic, rate_hz=10.0, rmin=0.4,
+            rmax=6.0, n_feat=2000, pair_tol=0.03, log_every=200):
+    """Frame-to-frame RGB-D visual odometry, streamed. For consecutive kept
+    frames i -> j: ORB features on i with 3D from the depth of i, matched to
+    features on j (ratio test), PnP-RANSAC gives T_{j<-i}; the increment is
+    Z = pose of j in i = inv(T_{j<-i}). -> [(t_i, t_j, Z, n_inliers)]"""
+    import cv2
+    K = None
+    for _, ci in iter_topic(bag, info_topic, limit=1):
+        K = np.array(ci.k).reshape(3, 3)
+    orb = cv2.ORB_create(n_feat)
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    depth_it = iter_topic(bag, depth_topic)
+    d_next = next(depth_it, None)
+    keep_dt = (1.0 / rate_hz) * 0.9 if rate_hz > 0 else 0.0
+    prev = None; t_last = -1e18; out = []; n_fail = 0; t0w = time.time()
+    for t, m in iter_topic(bag, img_topic):
+        if t - t_last < keep_dt:
+            continue
+        # advance the depth stream to the frame nearest this image
+        while d_next is not None and d_next[0] < t - pair_tol:
+            d_next = next(depth_it, None)
+        if d_next is None or abs(d_next[0] - t) > pair_tol:
+            continue
+        gray = img_gray(m); Z = img_depth(d_next[1])
+        kp, des = orb.detectAndCompute(gray, None)
+        if des is None or len(kp) < 50:
+            continue
+        uv = np.array([k.pt for k in kp], np.float32)
+        z = Z[np.clip(uv[:, 1].astype(int), 0, Z.shape[0] - 1),
+              np.clip(uv[:, 0].astype(int), 0, Z.shape[1] - 1)]
+        ok = (z > rmin) & (z < rmax) & np.isfinite(z)
+        P3 = np.column_stack([(uv[:, 0] - K[0, 2]) * z / K[0, 0],
+                              (uv[:, 1] - K[1, 2]) * z / K[1, 1], z])
+        cur = (t, uv, des, P3, ok)
+        if prev is not None:
+            tp, uvp, desp, P3p, okp = prev
+            mt = bf.knnMatch(desp, des, k=2)
+            good = [a for a, b in (mm for mm in mt if len(mm) == 2) if a.distance < 0.8 * b.distance]
+            good = [g for g in good if okp[g.queryIdx]]
+            n_inl, Zrel = 0, None
+            if len(good) >= 12:
+                obj = P3p[[g.queryIdx for g in good]].astype(np.float64)
+                img = uv[[g.trainIdx for g in good]].astype(np.float64)
+                okp_, rvec, tvec, inl = cv2.solvePnPRansac(
+                    obj, img, K, None, iterationsCount=300, reprojectionError=2.0,
+                    confidence=0.995, flags=cv2.SOLVEPNP_EPNP)
+                if okp_ and inl is not None and len(inl) >= 12:
+                    inl = inl.ravel()
+                    rvec, tvec = cv2.solvePnPRefineLM(obj[inl], img[inl], K, None, rvec, tvec)
+                    T_ji = Rt(exp_r(rvec.ravel()), tvec.ravel())   # frame-i pts -> frame j
+                    Zrel = inv(T_ji); n_inl = int(len(inl))
+            if Zrel is None:
+                n_fail += 1
+            out.append((tp, t, Zrel, n_inl))
+        prev = cur; t_last = t
+        if log_every and len(out) % log_every == 0 and out:
+            print("  %5d VO steps  inliers %3d  %5.1fs"
+                  % (len(out), out[-1][3], time.time() - t0w), flush=True)
+    print("  RGB-D VO: %d steps, %d failed (<12 inliers), inliers median %.0f"
+          % (len(out), n_fail, np.median([o[3] for o in out if o[2] is not None] or [0])))
+    return out
+
+
+def build_imu_vo_odometry(bag, track, X, T_vo, ochild, outd, name):
+    """Integrate gyro rotation + VO translation into an odometry chain of the
+    CAMERA OPTICAL frame (the graph's state). T_vo = optical -> VO/depth
+    frame (identity when the VO image is the state camera).
+    -> (ot, oT, edge_scale, label)"""
+    imu_t, gyr, acc, imu_frame = read_imu(bag, track["imu_topic"])
+    # IMU rotation into the odometry child frame: config, tf_static, or identity
+    R_ci = None
+    if track.get("imu_rot_quat"):
+        R_ci = Rot.from_quat(track["imu_rot_quat"]).as_matrix()
+        print("  R_%s_imu from config" % ochild)
+    else:
+        R_ci = tf_static_rot(bag, ochild, imu_frame)
+        print("  R_%s_imu %s" % (ochild, "from /tf_static" if R_ci is not None
+                                  else "NOT in /tf_static - assuming identity"))
+        if R_ci is None:
+            R_ci = np.eye(3)
+    R_oi = X[:3, :3].T @ R_ci                                  # optical <- imu
+    R_vi = T_vo[:3, :3].T @ R_oi                               # VO frame <- imu
+    bw = float(track.get("gyro_bias_window_s", 3.0))
+    b = gyr[imu_t < imu_t[0] + bw].mean(0)
+    print("  gyro bias from the first %.0f s: %s deg/s (std %s)"
+          % (bw, np.round(np.degrees(b), 3).tolist(),
+             np.round(np.degrees(gyr[imu_t < imu_t[0] + bw].std(0)), 3).tolist()))
+    vo = rgbd_vo(bag, track["vo_image_topic"], track["vo_info_topic"],
+                 track["depth_topic"], rate_hz=float(track.get("vo_rate_hz", 10.0)),
+                 rmin=float(track.get("range_min", 0.4)),
+                 rmax=float(track.get("vo_range_max", 6.0)))
+    if not vo:
+        raise SystemExit("no VO steps")
+    # chain in the VO frame, then to the optical frame
+    ts_ = [vo[0][0]]; Ts_ = [np.eye(4)]; es = []; dis = []
+    for (ti, tj, Zrel, n_inl) in vo:
+        Rg_imu, ns = preint_gyro(imu_t, gyr, ti, tj, b)
+        Rg = R_vi @ Rg_imu @ R_vi.T
+        if Zrel is not None:
+            dis.append(math.degrees(np.linalg.norm(log_R(Rg.T @ Zrel[:3, :3]))))
+            tv = Zrel[:3, 3]
+            sc = 1.0 if n_inl >= 40 else 3.0
+        else:
+            tv = np.zeros(3); sc = 1e3                          # free translation
+        Z = Rt(Rg if ns else (Zrel[:3, :3] if Zrel is not None else np.eye(3)), tv)
+        Ts_.append(Ts_[-1] @ Z); ts_.append(tj); es.append(sc)
+    Ts_ = np.array(Ts_); ts_ = np.array(ts_)
+    if len(dis):
+        dis = np.array(dis)
+        print("  gyro rotation vs VO rotation per step: median %.2f deg, p95 %.2f "
+              "deg (%s)" % (np.median(dis), np.percentile(dis, 95),
+                            "IMU mounting rotation consistent"
+                            if np.median(dis) < 1.0 else
+                            "LARGE - check imu_rot_quat / the IMU axes"))
+    oT = compose_all(Ts_, inv(T_vo))                            # optical frame
+    write_tum(os.path.join(outd, "traj_%s_imuvo_raw.tum" % name), ts_, oT)
+    return ts_, oT, np.array(es), "imu+vo odom"
 
 
 # --------------------------------------------------------------------------- #
@@ -1912,6 +2120,8 @@ def main():
             continue
         print("\n== %s (%s) ==" % (name, kind))
         ot, oT, ochild = read_odom(bag, track["odom_topic"])
+        sensor_odom = (ot, oT)                       # the platform's own tracker
+        edge_scale_fn = None
         # odometry child frame -> the camera optical frame the anchor refers to
         X = make_T_xyzq(track["cam_extrinsic_xyzquat"]) \
             if track.get("cam_extrinsic_xyzquat") else None
@@ -2122,6 +2332,42 @@ def main():
                       "tf2_ros tf2_echo %s <optical frame>" % (ochild, ochild))
                 continue
             REF = get_ref()
+            if track.get("odom_source", "sensor") == "imu_vo":
+                # replace the platform tracker: gyro heading + RGB-D VO
+                # translation, chained in the CAMERA OPTICAL frame -> X = I
+                T_vo = make_T_xyzq(track["vo_extrinsic_xyzquat"]) \
+                    if track.get("vo_extrinsic_xyzquat") else np.eye(4)
+                ot2, oT2, es_vo, olabel = build_imu_vo_odometry(
+                    bag, track, X, T_vo, ochild, outd, name)
+                # compare the two odometries over their common span
+                t0c, t1c = max(ot[0], ot2[0]), min(ot[-1], ot2[-1])
+                tq = ot2[(ot2 >= t0c) & (ot2 <= t1c)]
+                A_s = compose_all(interp_traj(ot, oT, tq), X)      # sensor odom, optical
+                A_v = interp_traj(ot2, oT2, tq)
+                # align both at the first stamp so only the SHAPE is compared
+                A_s = compose_all(np.tile(inv(A_s[0]), (len(tq), 1, 1)) @ A_s, np.eye(4))
+                A_v = np.tile(inv(A_v[0]), (len(tq), 1, 1)) @ A_v
+                dtv, drv = traj_gap(A_s, A_v)
+                print("  imu+vo odometry vs the platform's own tracker (shape "
+                      "only, both started at their first pose): median %.1f cm, "
+                      "max %.1f cm, rotation max %.1f deg"
+                      % (np.median(dtv) * 100, dtv.max() * 100, math.degrees(drv.max())))
+                es_t = ot2[1:]
+
+                def edge_scale_fn(node_t, _es_t=es_t, _es=es_vo):
+                    # a graph edge inherits the worst VO step it spans
+                    out = np.ones(len(node_t) - 1)
+                    j = np.searchsorted(_es_t, node_t[1:])
+                    j = np.clip(j, 0, len(_es) - 1)
+                    return np.maximum(out, _es[j])
+                ot, oT, X = ot2, oT2, np.eye(4)
+                ochild = "<optical, imu+vo>"
+                A = anchor_T(track["anchor_cam"])
+                t_anchor = cams[track["anchor_cam"]].get("dwell_t_end") or ot[0]
+                T_o0 = interp_traj(ot, oT, np.array([min(max(t_anchor, ot[0]), ot[-1])]))[0]
+                T_map_origin = A @ inv(T_o0 @ X)
+                print("  re-anchored on the imu+vo odometry: map->odom-origin xyz=%s"
+                      % np.round(T_map_origin[:3, 3], 3).tolist())
             src = track.get("cloud_source", "depth")
             srcs = src.split("+")
             cloud_sets, extra_chains, chain_ok = [], [], True
@@ -2250,7 +2496,8 @@ def main():
             g = run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X,
                          T_map_origin, bmap, track.get("boards") or sorted(bmap),
                          track, REF, float(arec.get("std_mm", 10)) * 1e-3,
-                         src=src, outd=outd, cloud_sets=cloud_sets)
+                         src=src, outd=outd, cloud_sets=cloud_sets,
+                         edge_scale_fn=edge_scale_fn)
             final = g["arms"].get("C_joint", list(g["arms"].values())[-1])
             results[name] = dict(kind=kind, ts=g["node_t"], Ts=final, frame="cam",
                                  arms=g["arms"], res_nodes=g["res_nodes"],
@@ -2260,7 +2507,10 @@ def main():
                                                 else "depth ICP chained"),
                                  chain_ok=(True if "lidar" in srcs else chain_ok),
                                  extra_chains=extra_chains,
-                                 arm_clouds=g["arm_clouds"])
+                                 arm_clouds=g["arm_clouds"],
+                                 odom_label=("imu+vo odom only"
+                                             if track.get("odom_source") == "imu_vo"
+                                             else None))
 
         elif kind == "pf":
             # camera-only localiser that survives a broken odometry:

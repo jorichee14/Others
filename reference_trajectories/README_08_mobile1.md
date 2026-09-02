@@ -219,3 +219,27 @@ It is bounded (5-10 cm class), multi-modal in corridors, self-recovering
 after a break, and its accuracy is measured against the lidar on mobile_1
 like every other case. Between a break and the next distinctive geometry or
 board it reports a large spread rather than a confident wrong pose.
+
+# `odom_source: "imu_vo"` - the odometry replacement for camera-only agents
+
+The platform tracker (ZED odom, Isaac VSLAM) is taken out of the loop and
+replaced, inside the same graph, by:
+
+* **heading from the gyro**: `imu_topic` integrated between nodes, bias from
+  the first `gyro_bias_window_s` (the dwell), rotated into the camera frame
+  with `imu_rot_quat` (or `/tf_static` from the IMU frame to the odometry
+  child, else identity). A gyro cannot produce a 95-degree break.
+* **translation from RGB-D visual odometry**: ORB features on
+  `vo_image_topic` with 3D from the paired depth frame, PnP-RANSAC between
+  consecutive frames at `vo_rate_hz`. The VO image must be in the depth
+  frame (ZED left + depth_registered; D455 infra1 + depth). If the state
+  camera differs from the VO camera (D455 colour vs infra1) give
+  `vo_extrinsic_xyzquat` = state -> VO frame (the depth extrinsic).
+* steps with fewer than 12 inliers become free edges; 12-40 inliers get 3x
+  the sigma; `odom_sigma_t` / `odom_sigma_r` are the per-0.1 s sigmas of a
+  good step (1 cm, 0.03 deg by default).
+
+Printed checks: gyro-vs-VO rotation per step (validates the IMU mounting
+rotation from data: median under 1 deg is consistent), and the shape of the
+new odometry against the platform tracker. Outputs `traj_<name>_imuvo_raw.tum`
+and the usual arms; on mobile_1 the lidar remains the reference.
