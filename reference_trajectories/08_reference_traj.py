@@ -1285,7 +1285,9 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     if outd:
         write_tum(os.path.join(outd, "traj_%s_odom_only.tum" % name),
                   node_t, To_anch)
-    print("  == evaluation (off-diagonal cells are independent) ==")
+    print("  == evaluation (off-diagonal cells are independent; map factors "
+          "of A and C use %s clouds, the state is the %s optical frame) =="
+          % (src, name))
     print("  %-10s %22s %22s %20s %20s"
           % ("arm", "board resid (cm)", "map rms (cm)", "vs C (cm)",
              "vs odom (cm)"))
@@ -1345,6 +1347,10 @@ def collect_methods(results, rig):
             if an == "A_icp" and ref and "reference: depth chain failed" in ref[-1][0]:
                 continue
             lbl = ("%s %s" % (nm, an)) if r.get("arms") else nm
+            # say which clouds the map factors came from: "mobile_1_zed A_icp"
+            # is ZED odometry + OUSTER clouds, not ZED depth
+            if r.get("arms") and an in ("A_icp", "C_joint") and r.get("cloud_source"):
+                lbl += " [%s clouds]" % r["cloud_source"]
             rest.append((lbl, r["ts"], aT, cols[i % len(cols)], ls[i % len(ls)]))
             i += 1
     # one reference, one odom-only curve (they are the same odometry)
