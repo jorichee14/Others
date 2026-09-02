@@ -36,9 +36,11 @@ the absolute information each sensor can see:
               trusting corridor stretches.
 
   lidar_icp   track (mobile_1 Ouster): every scan is registered to the FROZEN
-              reference map by point-to-plane ICP. The session-start pose seeds
-              scan 0 (through T_lidar_camera); after that each scan is seeded
-              by the previous one advanced by odometry. The map itself is the
+              reference map by point-to-plane ICP. The session-start pose -
+              this track's own board snapshot, or another track's start via
+              seed_from - seeds scan 0 through T_lidar_camera; after that each
+              scan is seeded by the previous one advanced by odometry and
+              re-registered to the map. The map itself is the
               absolute reference - boards are not used, so this track is
               fiducial-free by construction.
 
@@ -1035,14 +1037,23 @@ def main():
             t_last = -1e18; T_prev = None; t0w = time.time()
             use_deskew = bool(track.get("deskew", True))
             T_cl = X @ T_cam_lidar
-            # Optional: seed every scan from ANOTHER track's finished
-            # trajectory instead of chaining raw odometry. Scan-to-map ICP
-            # cannot tell a corridor from its twin - in a building that
-            # circles a stairwell it will lock onto the wrong one and report
-            # a small residual while metres out (observed: 2.7 cm rms, 6/6
-            # observability, ~9 m from where the boards put the robot). A
-            # board-anchored trajectory puts every scan in the right basin,
-            # and seeding each scan independently means no accumulation.
+            # Optional: take the initial pose from ANOTHER track's finished
+            # trajectory (seed_from) instead of from this track's own board
+            # snapshot. Scan-to-map ICP cannot tell a corridor from its twin -
+            # in a building that circles a stairwell it locks onto the wrong
+            # one and reports a small residual while metres out (observed:
+            # 2.7 cm rms, 6/6 observability, ~9 m from where the boards put
+            # the robot). Starting in the right basin is what prevents that.
+            #
+            #   seed_mode "start" (default) - the seed track sets scan 0 only;
+            #     every later scan is the previous ICP result advanced by
+            #     odometry, so the LiDAR geometry, not the camera, drives the
+            #     trajectory. This is the ablation you want: the boards supply
+            #     the datum, the scans supply the shape.
+            #   seed_mode "every" - re-seed each scan from the seed track.
+            #     No accumulation at all, but the result is then bounded by
+            #     the camera track and is no longer an independent estimate.
+            seed_mode = str(track.get("seed_mode", "start")).lower()
             seed_ts = seed_Ts = None
             if track.get("seed_from"):
                 nm2, _, arm2 = str(track["seed_from"]).partition(":")
@@ -1056,9 +1067,15 @@ def main():
                     if seed_Ts is None:
                         seed_Ts = r2["Ts"]
                     seed_ts = r2["ts"]
-                    print("  seeding every scan from '%s' (%d poses) - no "
-                          "chaining, so no accumulation" % (track["seed_from"],
-                                                            len(seed_ts)))
+                    if seed_mode == "start":
+                        print("  initial pose from '%s' (%d poses); scan 0 "
+                              "only, then ICP + odometry carry the track"
+                              % (track["seed_from"], len(seed_ts)))
+                    else:
+                        print("  seeding EVERY scan from '%s' (%d poses) - no "
+                              "chaining, so no accumulation, but the track is "
+                              "then bounded by that one"
+                              % (track["seed_from"], len(seed_ts)))
             for t, m in iter_topic(bag, track["points_topic"]):
                 if t - t_last < keep_dt:
                     continue
@@ -1076,8 +1093,11 @@ def main():
                 Pb = voxel_centroid(np.asarray(Pb, float), vox).astype(float)
                 # seed: previous solution advanced by odometry (scan 0: anchor)
                 T_ol = interp_traj(ot, oT, np.array([t]))[0]
-                if seed_ts is not None and seed_ts[0] <= t <= seed_ts[-1]:
-                    # seed track's state is the camera optical frame
+                use_seed = (seed_ts is not None
+                            and seed_ts[0] <= t <= seed_ts[-1]
+                            and (seed_mode != "start" or T_prev is None))
+                if use_seed:
+                    # the seed track's state is the camera optical frame
                     T_seed = interp_traj(seed_ts, seed_Ts,
                                          np.array([t]))[0] @ T_cam_lidar
                 elif T_prev is None:
@@ -1551,7 +1571,7 @@ Paste the block below into pipeline_config.json (it is valid JSON as-is).
       "odom_topic": "/mobile_1/zed/odom",
       "anchor_cam": "zed",
       "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
-      "seed_from": "mobile_1_zed:B_boards",
+      "seed_from": "mobile_1_zed:B_boards", "seed_mode": "start",
       "rate_hz": 10.0, "range_min": 0.7, "range_max": 15.0,
       "scan_voxel": 0.10, "deskew": true,
       "max_shift": 0.5, "max_rot_deg": 5.0 },
@@ -1580,13 +1600,22 @@ ref_map MUST be the ANCHORED cloud (stage 03 output). It already is the
   denoised, dynamic-removed map. denoised.pcd itself lives in the pre-anchor
   GLIM frame and would put a fixed R_align+offset error on every trajectory.
 
-seed_from initialises every scan of a lidar_icp track from another track's
-  finished trajectory (composed with T_cam_lidar), instead of chaining
-  odometry. Use it when the map is self-similar - parallel corridors around a
-  stairwell - because scan-to-map ICP cannot tell a corridor from its twin and
-  will settle into the wrong one with a small residual and full rank. The
-  seed source must appear EARLIER in this list, which is why the arms track
-  comes first here.
+seed_from takes a lidar_icp track's INITIAL pose from another track's
+  finished trajectory (composed with T_cam_lidar). Use it when the map is
+  self-similar - parallel corridors around a stairwell - because scan-to-map
+  ICP cannot tell a corridor from its twin and will settle into the wrong one
+  with a small residual and full rank; starting in the right basin is what
+  prevents that. The seed source must appear EARLIER in this list, which is
+  why the arms track comes first here.
+
+seed_mode picks how far that seed reaches.
+  "start" (default) - scan 0 only. Every later scan is the previous ICP
+    result advanced by odometry and re-registered to the map, so the LiDAR
+    geometry determines the trajectory and the camera only supplies the
+    datum. This is the track you want for the ablation.
+  "every" - re-seed each scan from the seed track. No accumulation, but the
+    result is then bounded by the camera track and is not an independent
+    estimate of the same motion, so the two can no longer be cross-checked.
 
 cam_extrinsic_xyzquat is the odometry child frame -> the anchored optical
   frame. Get it with: ros2 run tf2_ros tf2_echo <child_frame_id> <optical>
