@@ -562,6 +562,15 @@ def main():
                 else:
                     T_seed = T_prev @ inv(T_ol_prev) @ T_ol
                 T_i, nu, rms, nobs = icp_frame(Pb, T_seed, REF)
+                # one bad ICP basin must not poison the chain: a correction
+                # beyond max_shift/max_rot keeps the odometry-propagated seed
+                # (same guard as 01a, which never chains for exactly this reason)
+                d = float(np.linalg.norm(T_i[:3, 3] - T_seed[:3, 3]))
+                a = float(np.linalg.norm(log_R(T_seed[:3, :3].T @ T_i[:3, :3])))
+                if d > float(track.get("max_shift", 0.5)) \
+                        or a > math.radians(float(track.get("max_rot_deg", 5.0))):
+                    T_i, rms, nobs = T_seed, np.nan, 0
+                    n_rej += 1
                 T_prev, T_ol_prev = T_i, T_ol
                 t_last = t
                 ts.append(t); Ts.append(T_i); RMS.append(rms); NOBS.append(nobs)
@@ -570,9 +579,9 @@ def main():
                           % (len(ts), rms * 100, nobs, time.time() - t0w),
                           flush=True)
             Ts = np.array(Ts); ts = np.array(ts)
-            print("  %d scans | plane rms median %.2f cm p95 %.2f cm | "
-                  "rank-deficient %.1f%%"
-                  % (len(ts), np.nanmedian(RMS) * 100,
+            print("  %d scans (%d ICP results rejected -> seed kept) | plane "
+                  "rms median %.2f cm p95 %.2f cm | rank-deficient %.1f%%"
+                  % (len(ts), n_rej, np.nanmedian(RMS) * 100,
                      np.nanpercentile(RMS, 95) * 100,
                      100 * np.mean(np.array(NOBS) < 6)))
             write_tum(os.path.join(outd, "traj_%s.tum" % name), ts, Ts)
@@ -600,6 +609,7 @@ def main():
             keep_dt = 1.0 / rate
             beta = float(track.get("prior_beta", 0.10))   # frustum: lean on seed
             ts, Ts, RMS, NOBS = [], [], [], []
+            n_rej = 0
             t_last = -1e18; T_prev = None; T_ol_prev = None; t0w = time.time()
             for t, m in iter_topic(bag, track["depth_topic"]):
                 if t - t_last < keep_dt:
@@ -616,6 +626,12 @@ def main():
                     T_seed = T_prev @ inv(T_ol_prev) @ T_ol
                 T_i, nu, rms, nobs = icp_frame(np.asarray(Pb, float), T_seed,
                                                REF, beta=beta)
+                d = float(np.linalg.norm(T_i[:3, 3] - T_seed[:3, 3]))
+                a = float(np.linalg.norm(log_R(T_seed[:3, :3].T @ T_i[:3, :3])))
+                if d > float(track.get("max_shift", 0.3)) \
+                        or a > math.radians(float(track.get("max_rot_deg", 5.0))):
+                    T_i, rms, nobs = T_seed, np.nan, 0
+                    n_rej += 1
                 T_prev, T_ol_prev = T_i, T_ol
                 t_last = t
                 ts.append(t); Ts.append(T_i); RMS.append(rms); NOBS.append(nobs)
@@ -625,9 +641,9 @@ def main():
                           flush=True)
             Ts = np.array(Ts); ts = np.array(ts)
             rd = 100 * np.mean(np.array(NOBS) < 6)
-            print("  %d frames | plane rms median %.2f cm p95 %.2f cm | "
-                  "rank-deficient %.1f%%"
-                  % (len(ts), np.nanmedian(RMS) * 100,
+            print("  %d frames (%d ICP results rejected -> seed kept) | plane "
+                  "rms median %.2f cm p95 %.2f cm | rank-deficient %.1f%%"
+                  % (len(ts), n_rej, np.nanmedian(RMS) * 100,
                      np.nanpercentile(RMS, 95) * 100, rd))
             if rd > 50:
                 print("  ! most frames are rank-deficient (corridors): those "
@@ -715,7 +731,10 @@ SAMPLE_CONFIG = r"""
   "bag": "/path/to/mirc_dataset_coop2_20260828_merged",
   "session_anchor": "map_stages_20260828_outputs/session_anchor.json",
   "anchor_frame": "map_stages_20260828_outputs/anchor_frame.json",
-  "ref_map": "map_final_20260828_nc_anchored.pcd",
+  "ref_map": "map_final_20260828_nc_anchored.pcd",  <- MUST be the ANCHORED cloud
+      (stage 03 output). It already is the denoised, dynamic-removed map; but
+      denoised.pcd itself lives in the pre-anchor GLIM frame and would put a
+      fixed R_align+offset error on every trajectory here.
   "out_dir": "map_stages_20260828_outputs/reference_coop2",
   "target_voxel": 0.05, "plane_voxel": 0.4,
   "tracks": [
