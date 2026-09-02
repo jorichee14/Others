@@ -151,7 +151,9 @@
         "odom_jump_check": false,
         "sighting_group_gap_s": 2.0,
         "icp_pts": 400,
-        "gn_iters": 25
+        "gn_iters": 25,
+        "icp_init": "odom",
+        "cv_must_agree_with_odom": true
       }
     ]
   }

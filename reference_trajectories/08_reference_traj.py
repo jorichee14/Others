@@ -483,6 +483,7 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
             sub[k] = np.asarray(subsample(P, icp_pts), float)
     lam, best_cost, Ts_best = 1e-8, np.inf, Ts.copy()
     n_flat, step_prev = 0, np.inf
+    n_rejected_same, last_rejected = 0, np.nan
     for it in range(iters):
         I_, J_, V_, r_ = [], [], [], []
 
@@ -559,11 +560,17 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
         # not a strictly comparable objective, so small rises are noise. Only a
         # clearly worse step is a real divergence.
         if it and cost > best_cost * 1.05:
-            Ts = Ts_best.copy(); lam *= 10.0
+            Ts = Ts_best.copy(); lam = max(lam * 10.0, 1e-4)
             if verbose:
                 print("    it%2d cost %.1f REJECTED (worse than %.1f), "
                       "lambda -> %.1e" % (it, cost, best_cost, lam))
-            if lam > 1e8:
+            n_rejected_same = n_rejected_same + 1 \
+                if abs(cost - last_rejected) < 1e-6 * max(cost, 1) else 1
+            last_rejected = cost
+            if lam > 1e8 or n_rejected_same >= 3:
+                if verbose:
+                    print("    (stopping: the step keeps landing on the same "
+                          "rejected cost - the linearisation is stuck)")
                 break
             continue
         if it and abs(cost - best_cost) < 1e-4 * best_cost and step_prev < 1e-3:
@@ -575,7 +582,7 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
         else:
             n_flat = 0
         best_cost, Ts_best = cost, Ts.copy()
-        lam = max(lam * 0.1, 1e-10)
+        lam = max(lam * 0.3, 1e-10)
         Hn = (A.T @ A).tocsc()
         d = Hn.diagonal()
         Hn = Hn + sparse.diags(np.maximum(d, 1e-9) * lam) \
@@ -912,6 +919,7 @@ def chain_icp(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100,
     seed_mode = track.get("seed", default_seed)
     beta = float(track.get("prior_beta", 0.02))     # damping toward the seed
     min_obs = int(track.get("min_obs", 3))           # observable DOF to accept
+    cv_agree = bool(track.get("cv_must_agree_with_odom", seed_mode == "odom"))
     gates = tuple(track.get("gates", (0.4, 0.2, 0.1)))
     wide = tuple(track.get("wide_gates", (1.0, 0.5, 0.25, 0.1)))
     keep_dt = (1.0 / rate) * 0.9 if rate > 0 else 0.0   # 0 = every scan
@@ -936,7 +944,13 @@ def chain_icp(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100,
             T_seed_odom = T_prev @ (inv(T_cl) @ inv(T_ol_prev) @ T_ol @ T_cl)
             if T_prev2 is not None and t_prev > t_prev2:
                 D = inv(T_prev2) @ T_prev                # motion over last step
-                T_seed_cv = T_prev @ se3_scale(D, (t - t_prev) / (t_prev - t_prev2))
+                # bounded extrapolation: an uneven stamp gap must not scale a
+                # small wobble into a metre, and never more than 10 deg
+                ratio = min((t - t_prev) / (t_prev - t_prev2), 1.5)
+                wD = np.linalg.norm(log_R(D[:3, :3])) * ratio
+                if wD > math.radians(10.0):
+                    ratio *= math.radians(10.0) / wD
+                T_seed_cv = T_prev @ se3_scale(D, ratio)
             else:
                 T_seed_cv = T_prev.copy()
         if T_prev is None or seed_mode == "odom":
@@ -958,14 +972,28 @@ def chain_icp(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100,
         status, T_i, nu, rms, nobs = "fail", None, 0, np.nan, 0
         attempts = [(n_, S, gates) for n_, S in order] + \
                    [(n_ + "+wide", S, wide) for n_, S in order]
+        any_match = False
         for n_, S, gs in attempts:
             T_try, nu, rms, nobs = icp_frame(Pb, S, REF, gates=gs, beta=beta)
+            any_match = any_match or nobs > 0
             d = float(np.linalg.norm(T_try[:3, 3] - S[:3, 3]))
             a = float(np.linalg.norm(log_R(S[:3, :3].T @ T_try[:3, :3])))
             lim = 2.0 if gs is wide else 1.0
-            if d <= max_shift * lim and a <= max_rot * lim and nobs >= min_obs:
-                status, T_i = n_, T_try
-                break
+            if d > max_shift * lim or a > max_rot * lim or nobs < min_obs:
+                continue
+            if cv_agree and not n_.startswith("odom") and T_prev is not None:
+                # the odometry is the trusted seed: a result reached from the
+                # constant-velocity guess must not contradict it. Without this
+                # one wild cv guess (measured: 120 deg) gets accepted and
+                # poisons every frame after it.
+                do = float(np.linalg.norm(T_try[:3, 3] - T_seed_odom[:3, 3]))
+                ao = float(np.linalg.norm(log_R(T_seed_odom[:3, :3].T @ T_try[:3, :3])))
+                if do > 2 * max_shift or ao > 2 * max_rot:
+                    continue
+            status, T_i = n_, T_try
+            break
+        if T_i is None:
+            status = "fail:nomatch" if not any_match else "fail:far"
         seed_used = order[0][1]
         if T_i is None:
             # unregistered: carry the constant-velocity (or anchor) seed
@@ -1012,13 +1040,15 @@ def report_chain_quality(ts, Q, outd, name, seed_mode="lidar"):
     st = [q[7] for q in Q[1:]]                 # scan 0 is always odom-seeded
     prim = "cv" if seed_mode == "lidar" else "odom"
     othr = "odom" if prim == "cv" else "cv"
-    n_fail = st.count("fail")
+    n_fail = sum(1 for s_ in st if s_.startswith("fail"))
     print("  seed statistics: primary (%s) %d, other seed (%s) %d, wide-gate "
-          "recovery %d, unregistered %d of %d scans"
+          "recovery %d, unregistered %d of %d scans (%d found no map "
+          "correspondences at all, %d moved too far from every seed)"
           % (prim, st.count(prim), othr, st.count(othr),
-             sum(1 for s_ in st if s_.endswith("+wide")), n_fail, len(st)))
+             sum(1 for s_ in st if s_.endswith("+wide")), n_fail, len(st),
+             st.count("fail:nomatch"), st.count("fail:far")))
     if n_fail:
-        tf = [q[0] - t0 for q in Q if q[7] == "fail"]
+        tf = [q[0] - t0 for q in Q if q[7].startswith("fail")]
         print("  !! unregistered scans at t = %s s: poses there are "
               "constant-velocity extrapolation, not measurements"
               % np.round(tf[:12], 1).tolist())
@@ -1051,7 +1081,7 @@ def report_chain_quality(ts, Q, outd, name, seed_mode="lidar"):
         ax[2].set_ylabel("odom step - ICP step"); ax[2].legend(fontsize=8)
         ax[2].set_xlabel("t [s]")
         for q in Q:
-            if q[7] == "fail":
+            if q[7].startswith("fail"):
                 for a_ in ax:
                     a_.axvline(q[0] - t0, color="r", lw=0.6, alpha=0.5)
         for a_ in ax:
@@ -1201,6 +1231,10 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     #      then cannot recover them.
     b_init = track.get("boards_init", "odom")
     j_init = track.get("joint_init", "A_icp" if src == "lidar" else "B_boards")
+    # A from the chained poses only when the chain is a lidar: a narrow-FOV
+    # depth chain that slid is a worse start than the odometry it was seeded
+    # from (measured: 27 m off), and map factors cannot relocalise it.
+    icp_init = track.get("icp_init", "chained" if src == "lidar" else "odom")
     ARMS = {}
     n_breaks = int((edge_scale > 1).sum())
     # B_boards is the pure "odometry + boards" pose graph: NOTHING from the
@@ -1219,7 +1253,10 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
         print("  == arm %s ==" % arm)
         am = abs_meas + [anchor_prior] if ub else []
         if arm == "A_icp":
-            start = T_init
+            start = T_init if icp_init == "chained" else To_anch
+            print("     (initialised from the %s)"
+                  % ("chained ICP poses" if icp_init == "chained"
+                     else "anchored odometry"))
         elif arm.startswith("B_"):
             start = To_anch if b_init == "odom" else T_init
             print("     (initialised from the %s%s)"
@@ -1292,13 +1329,21 @@ def collect_methods(results, rig):
                              "0.45", (0, (1, 2))))
             continue
         if r.get("chained_label") and r.get("chained") is not None:
-            ref.append(("%s %s" % (nm, r["chained_label"]), r["ts"],
-                        r["chained"], "k", "-"))
+            if r.get("chain_ok", True):
+                ref.append(("%s %s" % (nm, r["chained_label"]), r["ts"],
+                            r["chained"], "k", "-"))
+            elif "A_icp" in (r.get("arms") or {}):
+                # the chain lost most frames: the geometry-only reference of
+                # this rig is arm A (odometry + map factors)
+                ref.append(("%s A_icp (reference: depth chain failed)" % nm,
+                            r["ts"], r["arms"]["A_icp"], "k", "-"))
         if r.get("odom_only") is not None:
             odom.append((nm + " odom only", r["ts"], r["odom_only"],
                          "0.45", (0, (1, 2))))
         arms = r.get("arms") or {nm: r["Ts"]}
         for an, aT in sorted(arms.items()):
+            if an == "A_icp" and ref and "reference: depth chain failed" in ref[-1][0]:
+                continue
             lbl = ("%s %s" % (nm, an)) if r.get("arms") else nm
             rest.append((lbl, r["ts"], aT, cols[i % len(cols)], ls[i % len(ls)]))
             i += 1
@@ -1814,6 +1859,13 @@ def main():
                           "the odometry seed, damped, not a measurement")
                 report_chain_quality(d_t, Q, outd, name + "_depth",
                                      track.get("seed", "odom"))
+                chain_ok = n_rej < 0.1 * len(d_t)
+                if not chain_ok:
+                    print("  !! the depth chain lost %d%% of its frames: it is "
+                          "NOT usable as this rig's reference. Arm A (odometry "
+                          "+ map factors, started from the odometry) takes that "
+                          "role in the tables and the figure."
+                          % (100 * n_rej // max(len(d_t), 1)))
                 # depth-frame poses -> COLOR optical frame (the state of the
                 # graph and of the anchor): T_map_color = T_map_depth @ inv(Xd);
                 # clouds likewise: P_color = Xd P_depth
@@ -1840,7 +1892,8 @@ def main():
                                  bmap=bmap, odom_only=g["odom_only"],
                                  chained=g["chained"], cloud_source=src,
                                  chained_label=(None if src == "lidar"
-                                                else "depth ICP chained"))
+                                                else "depth ICP chained"),
+                                 chain_ok=(True if src == "lidar" else chain_ok))
 
         elif kind == "cam_boards":
             rate = float(track.get("rate_hz", 10.0))
