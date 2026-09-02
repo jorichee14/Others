@@ -1103,7 +1103,21 @@ def main():
                                   ("C_joint", (True, True))]:
                 print("  == arm %s ==" % arm)
                 am = abs_meas + [anchor_prior] if ub else []
-                Ts = solve_graph(node_t, T_init.copy(), Z_rel, sig_rel, am,
+                start = T_init
+                if arm == "C_joint" and "B_boards" in ARMS:
+                    # Start the joint arm from the BOARD-corrected solution.
+                    # Scan-to-map ICP can only REFINE: given a trajectory that
+                    # is metres out, it happily locks onto wrong-but-similar
+                    # geometry and reports a small residual while staying
+                    # wrong (measured here: 1.4 cm rms while ~11 m out). The
+                    # boards are what remove a gross error; the map is what
+                    # sharpens it afterwards. Arm A deliberately keeps the
+                    # chained start - if geometry alone cannot relocalise,
+                    # that IS arm A's honest answer.
+                    start = ARMS["B_boards"]
+                    print("     (initialised from arm B: ICP refines, it "
+                          "cannot relocalise a metre-scale error)")
+                Ts = solve_graph(node_t, start.copy(), Z_rel, sig_rel, am,
                                  clouds, REF, use_icp=ui, use_board=ub,
                                  icp_pts=int(track.get("icp_pts", 400)),
                                  iters=int(track.get("gn_iters", 12)))
@@ -1190,9 +1204,14 @@ def main():
         tq = lid["ts"][(lid["ts"] >= zed["ts"][0]) & (lid["ts"] <= zed["ts"][-1])]
         if len(tq) > 10:
             Tl = interp_traj(lid["ts"], lid["Ts"], tq)
+            Tlc_all = (Tl @ np.tile(T_lc, (len(tq), 1, 1)))[:, :3, 3]
+            for an, aT in sorted((zed.get("arms") or {}).items()):
+                ga = np.linalg.norm(
+                    Tlc_all - interp_traj(zed["ts"], aT, tq)[:, :3, 3], axis=1)
+                print("  arm %-10s vs lidar: median %7.1f cm  p95 %7.1f cm"
+                      % (an, np.median(ga) * 100, np.percentile(ga, 95) * 100))
             Tz = interp_traj(zed["ts"], zed["Ts"], tq)
-            gap = np.linalg.norm((Tl @ np.tile(T_lc, (len(tq), 1, 1)))[:, :3, 3]
-                                 - Tz[:, :3, 3], axis=1)
+            gap = np.linalg.norm(Tlc_all - Tz[:, :3, 3], axis=1)
             print("\n== cross-check mobile_1: lidar-ICP track vs ZED-board track "
                   "(same rigid body through T_lidar_camera) ==")
             print("  translation gap: median %.1f cm  p95 %.1f cm  max %.1f cm "
