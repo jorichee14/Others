@@ -6,6 +6,16 @@ Stage 06 measured where each camera STARTED (the opening dwell on its board).
 This stage turns whole trajectories into the map frame and corrects them with
 the absolute information each sensor can see:
 
+  rgbd_icp    track (mobile_2 D455 depth): each depth frame is deprojected to a
+              point cloud (range-gated 0.4-3.5 m where D455 noise stays under
+              the map's own floor, flying pixels rejected at occlusion edges)
+              and registered to the frozen map exactly like the lidar track -
+              geometry only, no boards. The 87-deg frustum is far more
+              degenerate than a 360-deg lidar (facing a flat wall constrains
+              one direction), so the damping leans harder on the odometry seed
+              and the rank-deficiency rate is reported; read it before
+              trusting corridor stretches.
+
   lidar_icp   track (mobile_1 Ouster): every scan is registered to the FROZEN
               reference map by point-to-plane ICP. The session-start pose seeds
               scan 0 (through T_lidar_camera); after that each scan is seeded
@@ -54,7 +64,7 @@ from pipeline_boards import Board, read_bag, pick_intrinsics
 # --------------------------------------------------------------------------- #
 from scipy.spatial.transform import Rotation as Rot
 from scipy.spatial import cKDTree
-from scipy import sparse
+from scipy import sparse, ndimage
 from scipy.sparse.linalg import spsolve
 
 
@@ -205,7 +215,9 @@ def voxel_centroid(P, v):
     key = (q[:, 0] << 40) | (q[:, 1] << 20) | q[:, 2]
     o = np.argsort(key, kind="stable"); key = key[o]; Ps = P[o]
     br = np.r_[0, np.flatnonzero(np.diff(key)) + 1, len(key)]
-    cs = np.vstack([np.zeros(3), np.cumsum(Ps, 0)])
+    # float64 accumulator: a float32 cumsum over 1e5+ points loses millimetres
+    # to rounding by the last blocks (measured: 6 mm on a 2.6 m wall)
+    cs = np.vstack([np.zeros(3), np.cumsum(Ps.astype(np.float64), 0)])
     return ((cs[br[1:]] - cs[br[:-1]]) / np.diff(br)[:, None]).astype(np.float32)
 
 
@@ -227,6 +239,34 @@ def deskew(P, trel, dT_scan, bins=32):
         a = (b + 0.5) / bins - 0.5
         out[m] = P[m] @ exp_r(a * w).T + a * v
     return out
+
+
+def depth_to_cloud(d16, K, scale=0.001, rmin=0.4, rmax=3.5,
+                   edge_jump=0.05, voxel=0.05, max_pts=8000):
+    """16UC1 depth image -> gated, edge-rejected, voxel-centroid cloud.
+    Flying pixels at occlusion boundaries are the #1 ICP bias source for
+    stereo depth: they always lie BETWEEN two surfaces."""
+    z = d16.astype(np.float32) * scale
+    z[(z < rmin) | (z > rmax)] = 0
+    zz = np.where(z > 0, z, np.nan)
+    hi = ndimage.maximum_filter(np.nan_to_num(zz, nan=-1e3), size=3)
+    lo = ndimage.minimum_filter(np.nan_to_num(zz, nan=1e3), size=3)
+    z[(hi - lo) > edge_jump] = 0
+    v, u = np.nonzero(z)
+    if len(u) < 500:
+        return np.zeros((0, 3), np.float32)
+    zc = z[v, u]
+    P = np.column_stack([(u - K[0, 2]) * zc / K[0, 0],
+                         (v - K[1, 2]) * zc / K[1, 1], zc])
+    P = voxel_centroid(P.astype(np.float32), voxel)
+    if len(P) > max_pts:
+        P = P[np.linspace(0, len(P) - 1, max_pts).astype(int)]
+    return P
+
+
+def img16(m):
+    a = np.frombuffer(m.data, np.uint8)
+    return a.view(np.uint16).reshape(m.height, m.step // 2)[:, :m.width]
 
 
 def read_map_xyz(path):
@@ -539,6 +579,65 @@ def main():
             results[name] = dict(kind=kind, ts=ts, Ts=Ts,
                                  frame="lidar", rms=float(np.nanmedian(RMS)))
 
+        elif kind == "rgbd_icp":
+            if REF is None:
+                REF = Reference(read_map_xyz(s["ref_map"]),
+                                voxel=float(s.get("target_voxel", 0.05)),
+                                plane_voxel=float(s.get("plane_voxel", 0.4)))
+            # anchor refers to the color optical frame; depth lives in the
+            # depth/infra1 frame - a ~1.5 cm baseline plus a small rotation on
+            # the D455. Leaving it identity puts that error on every frame.
+            Xd = make_T_xyzq(track["depth_extrinsic_xyzquat"]) \
+                if track.get("depth_extrinsic_xyzquat") else np.eye(4)
+            if not track.get("depth_extrinsic_xyzquat"):
+                print("  ! no depth_extrinsic_xyzquat (color optical -> depth "
+                      "frame): assuming identity, ~1.5 cm systematic on D455")
+            Kd = None
+            for _, ci in iter_topic(bag, track["depth_info_topic"], limit=1):
+                Kd = np.array(ci.k).reshape(3, 3)
+            print("  depth intrinsics fx=%.1f" % Kd[0, 0])
+            rate = float(track.get("rate_hz", 10.0))
+            keep_dt = 1.0 / rate
+            beta = float(track.get("prior_beta", 0.10))   # frustum: lean on seed
+            ts, Ts, RMS, NOBS = [], [], [], []
+            t_last = -1e18; T_prev = None; T_ol_prev = None; t0w = time.time()
+            for t, m in iter_topic(bag, track["depth_topic"]):
+                if t - t_last < keep_dt:
+                    continue
+                Pb = depth_to_cloud(img16(m), Kd,
+                                    rmin=float(track.get("range_min", 0.4)),
+                                    rmax=float(track.get("range_max", 3.5)))
+                if len(Pb) < 500:
+                    continue
+                T_ol = interp_traj(ot, oT, np.array([t]))[0]
+                if T_prev is None:
+                    T_seed = T_map_origin @ T_ol @ X @ Xd
+                else:
+                    T_seed = T_prev @ inv(T_ol_prev) @ T_ol
+                T_i, nu, rms, nobs = icp_frame(np.asarray(Pb, float), T_seed,
+                                               REF, beta=beta)
+                T_prev, T_ol_prev = T_i, T_ol
+                t_last = t
+                ts.append(t); Ts.append(T_i); RMS.append(rms); NOBS.append(nobs)
+                if len(ts) % 200 == 0:
+                    print("  %5d frames  rms %5.2f cm  obs %d/6  %5.1fs"
+                          % (len(ts), rms * 100, nobs, time.time() - t0w),
+                          flush=True)
+            Ts = np.array(Ts); ts = np.array(ts)
+            rd = 100 * np.mean(np.array(NOBS) < 6)
+            print("  %d frames | plane rms median %.2f cm p95 %.2f cm | "
+                  "rank-deficient %.1f%%"
+                  % (len(ts), np.nanmedian(RMS) * 100,
+                     np.nanpercentile(RMS, 95) * 100, rd))
+            if rd > 50:
+                print("  ! most frames are rank-deficient (corridors): those "
+                      "poses lean on the odometry seed along the unobservable "
+                      "axis. This track is the geometry-only arm - the boards "
+                      "track is what bounds it there.")
+            write_tum(os.path.join(outd, "traj_%s.tum" % name), ts, Ts)
+            results[name] = dict(kind=kind, ts=ts, Ts=Ts, frame="depth",
+                                 rms=float(np.nanmedian(RMS)))
+
         elif kind == "cam_boards":
             rate = float(track.get("rate_hz", 10.0))
             keep = np.r_[0, np.flatnonzero(np.diff(ot) >= 0)[
@@ -632,6 +731,14 @@ SAMPLE_CONFIG = r"""
       "camera_info_topic": "/mobile_1/zed/left/camera_info", "rectified": true,
       "anchor_cam": "zed", "boards": ["anchor", "anchor_b"],
       "rate_hz": 10.0, "img_stride": 2 },
+    { "name": "mobile_2_rgbd", "type": "rgbd_icp",
+      "depth_topic": "/mobile_2/depth/image_rect_raw",
+      "depth_info_topic": "/mobile_2/depth/camera_info",
+      "odom_topic": "/mobile_2/visual_slam/tracking/odometry",
+      "anchor_cam": "realsense",
+      "cam_extrinsic_xyzquat": null,
+      "depth_extrinsic_xyzquat": null,
+      "rate_hz": 10.0, "range_min": 0.4, "range_max": 3.5, "prior_beta": 0.10 },
     { "name": "mobile_2_realsense", "type": "cam_boards",
       "odom_topic": "/mobile_2/visual_slam/tracking/odometry",
       "image_topic": "/mobile_2/color/image_raw",
