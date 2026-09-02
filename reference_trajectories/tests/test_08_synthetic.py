@@ -180,12 +180,20 @@ outd = os.environ.get("TEST_OUT", "/tmp/test_08_out"); os.makedirs(outd, exist_o
 m.compare_rig(results, T_lc, outd)
 m.save_paths_png(results, REF, BM, outd, T_lc)
 # two cloud sets in one graph (lidar at 2 cm + "depth" at 5 cm), only B and C
-track_j = dict(track_a, arms_run=["B_boards", "C_joint"], joint_init="chained")
+track_j = dict(track_a, arms_run=["B_boards", "C_depth", "C_joint"], joint_init="chained")
 gj = m.run_arms("mobile_1_zed", lts, Ts_cam, None, sights, ot, oT, X, T_map_origin, BM,
                 sorted(BM), track_j, REF, 0.005, src="lidar+depth", verbose=False,
                 cloud_sets=[(lts, cl_cam, 0.02, "lidar"),
                             (lts + 0.05, cl_cam, 0.05, "depth")])
-assert set(gj["arms"]) == {"B_boards", "C_joint"}
+assert set(gj["arms"]) == {"B_boards", "C_depth", "C_joint"}, set(gj["arms"])
+ed, _ = m.traj_gap(gj["arms"]["C_depth"], m.interp_traj(ts, C_true, gj["node_t"]))
+# C_depth starts from B (depth ICP can only refine within its 10 cm gate), so
+# where B smeared the jump it stays there: no worse than B, cm-level elsewhere
+eb, _ = m.traj_gap(gj["arms"]["B_boards"], m.interp_traj(ts, C_true, gj["node_t"]))
+assert ed.max() <= eb.max() * 1.2 and np.median(ed) < 0.05, \
+    "C_depth off (median %.2f m, max %.2f m vs B max %.2f m)" % (np.median(ed), ed.max(), eb.max())
+print("  C_depth (odom + boards + depth clouds) vs truth: median %.1f cm max %.1f cm"
+      % (np.median(ed) * 100, ed.max() * 100))
 ej, _ = m.traj_gap(gj["arms"]["C_joint"], m.interp_traj(ts, C_true, gj["node_t"]))
 assert ej.max() < 0.10, "joint with two cloud sets off (%.2f m)" % ej.max()
 print("  joint (lidar+depth clouds) vs truth: median %.1f cm max %.1f cm"

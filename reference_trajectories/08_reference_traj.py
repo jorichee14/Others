@@ -1171,11 +1171,13 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     node_t = np.unique(np.round(np.concatenate(
         [np.asarray(ts_, float) for ts_, _, _, _ in cloud_sets] + [st_extra]), 6))
     idx_of = {round(t, 6): i for i, t in enumerate(node_t)}
-    clouds = {}
+    clouds, by_set = {}, {}
     for ts_, cls_, sg_, lbl_ in cloud_sets:
         n_dup = 0
+        by_set[lbl_] = {}
         for t, c in zip(np.round(ts_, 6), cls_):
             k = idx_of[round(t, 6)]
+            by_set[lbl_][k] = (c, float(sg_))
             if k in clouds:          # two sensors on one stamp: concatenate
                 P0, s0 = clouds[k]
                 clouds[k] = (np.vstack([P0, c]), min(s0, sg_)); n_dup += 1
@@ -1184,6 +1186,7 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
         print("  map factors: %d %s clouds at sigma %.0f mm%s"
               % (len(cls_), lbl_, sg_ * 1000,
                  " (%d shared a stamp with another set)" % n_dup if n_dup else ""))
+    set_labels = [lbl_ for _, _, _, lbl_ in cloud_sets]
     To_n = interp_traj(ot, oT, node_t)
     # odometry increments, conjugated from the child frame into the camera
     Z_rel = np.array([inv(X) @ inv(To_n[i]) @ To_n[i + 1] @ X
@@ -1266,20 +1269,45 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     # the difference between the two is exactly the value of knowing WHERE
     # the odometry broke. A_icp and C_joint use the freed edges (their map
     # factors already sit on the lidar).
-    arms = [("A_icp", True, False, edge_scale),
-            ("B_boards", False, True, np.ones_like(edge_scale))]
+    # (name, map factors, boards, edge scale, cloud sets used or None=all,
+    #  initialisation). Per-source arms exist so "depth + boards" or
+    # "lidar + boards" can be asked for on a rig that has both sensors;
+    # a depth-only arm never receives the lidar-derived break stamps.
+    ones = np.ones_like(edge_scale)
+    arms = [("A_icp", True, False, edge_scale, None, "icp_init"),
+            ("B_boards", False, True, ones, None, "odom")]
     if n_breaks:
-        arms.append(("B_breaks", False, True, edge_scale))
-    arms.append(("C_joint", True, True, edge_scale))
+        arms.append(("B_breaks", False, True, edge_scale, None, "odom"))
+    for lbl_ in set_labels:
+        if len(set_labels) > 1 or lbl_ != src:
+            es_ = edge_scale if lbl_ == "lidar" else ones
+            arms.append(("A_%s" % lbl_, True, False, es_, [lbl_],
+                         "chained" if lbl_ == "lidar" else "odom"))
+            arms.append(("C_%s" % lbl_, True, True, es_, [lbl_],
+                         "A_%s" % lbl_ if lbl_ == "lidar" else "B_boards"))
+    arms.append(("C_joint", True, True, edge_scale, None, "joint_init"))
     arms = [a_ for a_ in arms if a_[0] in arms_run]
-    for arm, ui, ub, es in arms:
+    ARM_SETS = {}
+    for arm, ui, ub, es, sets, init in arms:
         print("  == arm %s ==" % arm)
         am = abs_meas + [anchor_prior] if ub else []
+        cl_arm = clouds if sets is None else \
+            {k: v for lbl_ in sets for k, v in by_set.get(lbl_, {}).items()}
+        ARM_SETS[arm] = "+".join(set_labels if sets is None else sets) if ui else ""
         if arm == "A_icp":
             start = T_init if icp_init == "chained" else To_anch
             print("     (initialised from the %s)"
                   % ("chained ICP poses" if icp_init == "chained"
                      else "anchored odometry"))
+        elif arm.startswith("A_") or arm.startswith("C_") and arm != "C_joint":
+            src_init = init
+            start = (T_init if src_init == "chained" else
+                     To_anch if src_init == "odom" else ARMS.get(src_init, To_anch))
+            print("     (%s clouds; initialised from %s)"
+                  % ("+".join(sets), "the chained ICP poses" if src_init == "chained"
+                     else "the anchored odometry" if src_init == "odom"
+                     else "arm " + src_init if src_init in ARMS
+                     else "the anchored odometry"))
         elif arm.startswith("B_"):
             start = To_anch if b_init == "odom" else T_init
             print("     (initialised from the %s%s)"
@@ -1292,7 +1320,7 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
             print("     (initialised from %s)"
                   % (("arm " + j_init) if j_init in ARMS
                      else "the chained ICP poses"))
-        Ts = solve_graph(node_t, start.copy(), Z_rel, sig_rel, am, clouds, REF,
+        Ts = solve_graph(node_t, start.copy(), Z_rel, sig_rel, am, cl_arm, REF,
                          use_icp=ui, use_board=ub,
                          icp_pts=int(track.get("icp_pts", 400)),
                          iters=int(track.get("gn_iters", 12)), verbose=verbose,
@@ -1331,7 +1359,7 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
           "odometry - the measured drift it removed.")
     return dict(node_t=node_t, arms=ARMS, odom_only=To_anch, chained=T_init,
                 res_nodes=res_nodes, clouds=clouds, abs_meas=abs_meas,
-                edge_scale=edge_scale)
+                edge_scale=edge_scale, arm_clouds=ARM_SETS)
 
 
 # --------------------------------------------------------------------------- #
@@ -1373,8 +1401,9 @@ def collect_methods(results, rig):
             lbl = ("%s %s" % (nm, an)) if r.get("arms") else nm
             # say which clouds the map factors came from: "mobile_1_zed A_icp"
             # is ZED odometry + OUSTER clouds, not ZED depth
-            if r.get("arms") and an in ("A_icp", "C_joint") and r.get("cloud_source"):
-                lbl += " [%s clouds]" % r["cloud_source"]
+            ac = (r.get("arm_clouds") or {}).get(an)
+            if ac:
+                lbl += " [%s clouds]" % ac
             rest.append((lbl, r["ts"], aT, cols[i % len(cols)], ls[i % len(ls)]))
             i += 1
     # one reference, one odom-only curve (they are the same odometry); any
@@ -1944,7 +1973,8 @@ def main():
                                  chained_label=(None if "lidar" in srcs
                                                 else "depth ICP chained"),
                                  chain_ok=(True if "lidar" in srcs else chain_ok),
-                                 extra_chains=extra_chains)
+                                 extra_chains=extra_chains,
+                                 arm_clouds=g["arm_clouds"])
 
         elif kind == "cam_boards":
             rate = float(track.get("rate_hz", 10.0))

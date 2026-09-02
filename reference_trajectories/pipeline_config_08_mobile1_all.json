@@ -110,6 +110,7 @@
         "lidar_track": "mobile_1_lidar",
         "arms_run": [
           "B_boards",
+          "C_depth",
           "C_joint"
         ],
         "icp_sigma_lidar": 0.02,

@@ -161,7 +161,12 @@ One run, five curves, all against the lidar, into `reference_coop2_mobile1_all`:
 | pure ZED odom | `mobile_1_lidar odom only` | ZED odometry + session anchor |
 | ZED odom + boards | `mobile_1_zed B_boards` | ZED odometry + boards, nothing else |
 | ZED pcl ICP | `mobile_1_zed depth ICP chained` | ZED depth clouds + map, ZED odometry only as the seed |
+| ZED depth + boards | `mobile_1_zed C_depth [depth clouds]` | ZED odometry + boards + ZED depth clouds; no lidar anywhere, not even the break stamps |
 | joint | `mobile_1_zed C_joint [lidar+depth clouds]` | ZED odometry + boards + Ouster clouds (2 cm) + ZED depth clouds (5 cm) in one graph |
+
+Per-source arms available in `arms_run` when a track has both cloud sets:
+`A_lidar`, `A_depth` (odometry + that sensor's clouds), `C_lidar`, `C_depth`
+(the same plus boards).
 
 `cloud_source: "lidar+depth"` feeds both cloud sets into the graph with
 their own sigmas (`icp_sigma_lidar`, `icp_sigma_depth`); `arms_run` limits
