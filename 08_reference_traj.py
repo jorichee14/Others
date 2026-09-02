@@ -389,6 +389,8 @@ def icp_frame(P_body, T_init, ref, gates=(0.4, 0.2, 0.1), iters=5,
 # pose graph: odometry relative factors + absolute board-pose factors + a
 # session-anchor prior. Jacobians validated numerically (incl. jr_inv).
 # --------------------------------------------------------------------------- #
+BOARD_HUBER = 5.0         # whitened-sigma knee for board factors
+BOARD_OUTLIER = 25.0      # whitened sigma still gross AFTER convergence
 ICP_SIGMA = 0.02          # m; the map's own surface noise
 ICP_HUBER = 0.05
 GAUGE_W = 1e-2
@@ -396,7 +398,7 @@ GAUGE_W = 1e-2
 
 def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
                 use_icp=False, use_board=True, icp_pts=400, iters=12,
-                verbose=True):
+                verbose=True, _second_pass=False):
     """One graph, selectable factor sets (this is what makes the A/B/C arms an
     ablation instead of three pipelines):
       odometry relative factors        always
@@ -448,10 +450,17 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
                 Jb = np.block([[Rm.T, np.zeros((3, 3))],
                                [np.zeros((3, 3)), jr_inv(res[3:])]])
                 W = np.diag([1 / at] * 3 + [1 / ar] * 3)
-                B = W @ Jb
+                # Huber on the whitened residual: sightings are no longer
+                # pre-filtered against a drifting prediction, so one bad
+                # detection must not dominate. It CANNOT be a hard gate here -
+                # at iteration 0 every legitimate factor on a drifted track is
+                # hundreds of sigma out, and that is exactly the signal.
+                nz = float(np.linalg.norm(W @ res))
+                hw = 1.0 if nz <= BOARD_HUBER else math.sqrt(BOARD_HUBER / nz)
+                B = hw * (W @ Jb)
                 rows, cc = np.meshgrid(np.arange(6), np.arange(6), indexing="ij")
                 add(rows.ravel(), [6 * k + c for c in cc.ravel()], B.ravel(),
-                    list(W @ res))
+                    list(hw * (W @ res)))
         if use_icp:
             for k, P in sub.items():
                 Q = apply(Ts[k], P)
@@ -485,6 +494,27 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
                   % (it, float(rv @ rv), step * 1000))
         if step < 1e-5:
             break
+    # AFTER convergence a factor still grossly out is a mis-detection, not
+    # drift: the rest of the graph has already been pulled to the truth.
+    if use_board and abs_meas and not _second_pass:
+        keep, drop = [], []
+        for f in abs_meas:
+            k, Tm, at, ar = f
+            Rm = Tm[:3, :3]
+            res = np.r_[Rm.T @ (Ts[k][:3, 3] - Tm[:3, 3]),
+                        log_R(Rm.T @ Ts[k][:3, :3])]
+            nz = float(np.linalg.norm(
+                np.diag([1 / at] * 3 + [1 / ar] * 3) @ res))
+            (drop if nz > BOARD_OUTLIER else keep).append((f, nz))
+        if drop and len(keep) >= 2:
+            print("    rejected %d/%d board factor(s) still >%.0f sigma after "
+                  "convergence (worst %.0f sigma) - re-solving"
+                  % (len(drop), len(abs_meas), BOARD_OUTLIER,
+                     max(n for _, n in drop)))
+            return solve_graph(node_t, T_init, Z_rel, sig_rel,
+                               [f for f, _ in keep], clouds, ref, use_icp,
+                               use_board, icp_pts, iters, verbose,
+                               _second_pass=True)
     return Ts
 
 
@@ -631,31 +661,48 @@ def detect_boards_along(track, s, P, bmap, af, bag):
 
 
 def resolve_instances(sights, Ts_est, node_t, bmap, wanted, radius=2.0):
-    """Assign each sighting to the nearest surveyed instance in MAP, using the
-    anchored trajectory's prediction. -> [(node_idx, board_name, T_meas)]."""
-    out, dropped = [], 0
+    """Name each sighting's board.
+
+    The position test exists ONLY to tell instances of a SHARED design apart.
+    A design with a single surveyed instance has nothing to disambiguate, so it
+    is accepted regardless of how far the prediction lands. Gating it on the
+    prediction is self-defeating: the worse a track drifts, the fewer
+    corrections survive, so the drift is never removed. Measured on the coop
+    bag: 308 of 372 sightings discarded that way, leaving only the opening
+    dwell and a meaningless 4 cm 'correction'.
+
+    The prediction error is not noise either - for a single-instance board it
+    IS a drift measurement, so it is reported.
+    -> [(node_idx, board_name, T_map_b_pred, T_cb)]"""
+    out, dropped, n_noded, n_amb, pred_err = [], 0, 0, 0, []
     for t, dgn, T_cb in sights:
         k = int(np.argmin(np.abs(node_t - t)))
         if abs(node_t[k] - t) > 0.05:
-            dropped += 1; continue
+            n_noded += 1; dropped += 1; continue
         T_map_b = Ts_est[k] @ T_cb
-        best, bd = None, radius
-        for name in wanted:
-            if name not in bmap or bmap[name][1].get("design", name) != dgn:
-                continue
-            d = float(np.linalg.norm(bmap[name][0][:3, 3] - T_map_b[:3, 3]))
-            if d < bd:
-                best, bd = name, d
-        if best is None:
+        cands = [n for n in wanted
+                 if n in bmap and bmap[n][1].get("design", n) == dgn]
+        if not cands:
             dropped += 1; continue
+        d = {n: float(np.linalg.norm(bmap[n][0][:3, 3] - T_map_b[:3, 3]))
+             for n in cands}
+        order = sorted(cands, key=lambda n: d[n])
+        best = order[0]
+        if len(cands) > 1:
+            # ambiguous design: nearest must be close AND clearly nearest
+            if d[best] > radius or (d[order[1]] - d[best]) < radius:
+                n_amb += 1; dropped += 1; continue
+        pred_err.append(d[best])
         out.append((k, best, T_map_b, T_cb))
-    print("  %d sightings resolved to instances, %d dropped (no node / no "
-          "instance within %.1f m of the prediction)" % (len(out), dropped, radius))
-    if dropped > len(out):
-        print("  !! most sightings failed to resolve: the anchored trajectory "
-              "predicts board positions far from the survey. The usual cause "
-              "is a wrong/missing cam_extrinsic_xyzquat (body-vs-optical "
-              "odometry frame), not moved boards.")
+    print("  %d sightings resolved, %d dropped (%d no node within 50 ms, "
+          "%d ambiguous between instances of one design)"
+          % (len(out), dropped, n_noded, n_amb))
+    if pred_err:
+        pe = np.array(pred_err)
+        print("  prediction error at sightings: median %.2f m, max %.2f m "
+              "(how far the pre-graph trajectory sat from the survey - this is "
+              "the drift the boards are about to remove)"
+              % (np.median(pe), pe.max()))
     return out
 
 
