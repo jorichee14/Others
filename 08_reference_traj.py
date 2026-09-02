@@ -537,6 +537,7 @@ def main():
             vox = float(track.get("scan_voxel", 0.10))
             keep_dt = 1.0 / rate
             ts, Ts, RMS, NOBS = [], [], [], []
+            n_rej = 0
             t_last = -1e18; T_prev = None; t0w = time.time()
             use_deskew = bool(track.get("deskew", True))
             T_cl = X @ T_cam_lidar
