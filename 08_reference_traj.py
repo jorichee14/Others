@@ -1088,7 +1088,8 @@ def main():
             print("  arm A board resid and arm B map rms are the honest cells "
                   "(neither arm saw that data). C should match or beat both.")
             results[name] = dict(kind=kind, ts=node_t, Ts=ARMS["C_joint"],
-                                 frame="cam", arms=ARMS)
+                                 frame="cam", arms=ARMS, res_nodes=res_nodes,
+                                 bmap=bmap)
 
         elif kind == "cam_boards":
             rate = float(track.get("rate_hz", 10.0))
@@ -1134,7 +1135,9 @@ def main():
             write_tum(os.path.join(outd, "traj_%s_odom_only.tum" % name),
                       node_t, T_init)
             results[name] = dict(kind=kind, ts=node_t, Ts=Ts, frame="cam",
-                                 n_boards=len(res))
+                                 n_boards=len(res),
+                                 res_nodes=[(k, b, T_cb) for k, b, _, T_cb in res],
+                                 bmap=bmap)
         else:
             print("  ! unknown type '%s' - skipped" % kind)
 
@@ -1172,6 +1175,30 @@ def main():
                                % (gap.min() * 100, gap.max() * 100)))
             # the lidar track never used boards, so its own plane rms against
             # the map is an independent statement about it
+            # DECISIVE: score the lidar track on the camera track's board
+            # sightings. The lidar never used a board and the boards never saw
+            # the map, so this says which of (map+lidar) and (boards) is the
+            # odd one out - and it tests the T_lidar_camera CONVENTION at the
+            # same time, by trying both compositions.
+            rn = zed.get("res_nodes"); zbm = zed.get("bmap")
+            if rn and zbm:
+                st = np.array([zed["ts"][k] for k, _, _ in rn])
+                ok = (st >= lid["ts"][0]) & (st <= lid["ts"][-1])
+                if ok.sum() > 5:
+                    Tl_at = interp_traj(lid["ts"], lid["Ts"], st[ok])
+                    for lbl, X_lc in (("T_lidar_camera", T_lc),
+                                      ("inv(T_lidar_camera)", inv(T_lc))):
+                        e = [np.linalg.norm(
+                                (Tl_at[i] @ X_lc @ rn[j][2])[:3, 3]
+                                - zbm[rn[j][1]][0][:3, 3])
+                             for i, j in enumerate(np.flatnonzero(ok))]
+                        print("  lidar track vs the SAME board sightings, "
+                              "composed with %-19s median %8.2f m"
+                              % (lbl, float(np.median(e))))
+                    print("  -> if BOTH are metres, the map and the board survey "
+                          "are not in one frame (stage 03), not a trajectory "
+                          "problem; if one is centimetres, that is the correct "
+                          "extrinsic convention and the other track is at fault")
             print("  (lidar track plane rms %.2f cm against the map, board-free "
                   "- a track registering that well is not the one that moved "
                   "metres)" % (lid.get("rms", float("nan")) * 100))
