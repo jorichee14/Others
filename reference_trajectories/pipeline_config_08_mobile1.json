@@ -1,0 +1,54 @@
+{
+  "08_reference": {
+    "bag": "/home/wicoms-robot/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_merged",
+    "session_anchor": "map_stages_20260828_outputs/session_anchor.json",
+    "anchor_frame": "map_stages_20260828_outputs/anchor_frame.json",
+    "ref_map": "map_stages_20260828_outputs/map_final_20260828_nc_anchored.pcd",
+    "out_dir": "map_stages_20260828_outputs/reference_coop2_mobile1",
+    "target_voxel": 0.05,
+    "plane_voxel": 0.4,
+    "invert_T_lidar_camera": false,
+
+    "tracks": [
+      {
+        "name": "mobile_1_lidar",
+        "type": "lidar_icp",
+        "points_topic": "/mobile_1/ouster/points",
+        "odom_topic": "/mobile_1/zed/odom",
+        "anchor_cam": "zed",
+        "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
+        "rate_hz": 5.0,
+        "range_min": 0.7,
+        "range_max": 10.0,
+        "scan_voxel": 0.10,
+        "deskew": true,
+        "max_shift": 0.5,
+        "max_rot_deg": 5.0,
+        "keep_cloud_pts": 3000
+      },
+
+      {
+        "name": "mobile_1_zed",
+        "type": "arms",
+        "cloud_source": "lidar",
+        "lidar_track": "mobile_1_lidar",
+        "odom_topic": "/mobile_1/zed/odom",
+        "anchor_cam": "zed",
+        "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
+        "image_topic": "/mobile_1/zed/left/image_rect_color",
+        "camera_info_topic": "/mobile_1/zed/left/camera_info",
+        "rectified": true,
+        "boards": ["anchor", "anchor_b", "rs_anchor"],
+        "img_stride": 2,
+        "max_images": 0,
+        "instance_radius": 2.0,
+        "odom_sigma_t": 0.003,
+        "odom_sigma_r": 0.001,
+        "boards_init": "odom",
+        "joint_init": "A_icp",
+        "icp_pts": 400,
+        "gn_iters": 25
+      }
+    ]
+  }
+}
