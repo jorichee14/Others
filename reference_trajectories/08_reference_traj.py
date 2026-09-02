@@ -294,6 +294,19 @@ def tf_static_rot(bag, target, source):
     return None
 
 
+def read_odom_tum(path, child):
+    """A TUM file (t x y z qx qy qz qw) as the odometry: poses of `child` in
+    the file's own frame (e.g. RTAB-Map's map frame from run_rtabmap.py)."""
+    A = np.loadtxt(path)
+    if A.ndim == 1:
+        A = A[None]
+    ts = A[:, 0]; o = np.argsort(ts); A = A[o]; ts = ts[o]
+    Ts = np.array([Rt(Rot.from_quat(r[4:8]).as_matrix(), r[1:4]) for r in A])
+    print("  odom file %s: %d poses, %.1f s, path %.1f m, child '%s'"
+          % (path, len(ts), ts[-1] - ts[0], path_length(Ts), child))
+    return ts, Ts, child
+
+
 def read_odom(bag, topic):
     ts, Ts, child, parent = [], [], None, None
     for t, m in iter_topic(bag, topic):
@@ -2119,7 +2132,11 @@ def main():
             print("\n== %s (%s): disabled in config, skipped ==" % (name, kind))
             continue
         print("\n== %s (%s) ==" % (name, kind))
-        ot, oT, ochild = read_odom(bag, track["odom_topic"])
+        if track.get("odom_file"):
+            ot, oT, ochild = read_odom_tum(track["odom_file"],
+                                           track.get("odom_child", "?"))
+        else:
+            ot, oT, ochild = read_odom(bag, track["odom_topic"])
         sensor_odom = (ot, oT)                       # the platform's own tracker
         edge_scale_fn = None
         # odometry child frame -> the camera optical frame the anchor refers to
@@ -2508,9 +2525,10 @@ def main():
                                  chain_ok=(True if "lidar" in srcs else chain_ok),
                                  extra_chains=extra_chains,
                                  arm_clouds=g["arm_clouds"],
-                                 odom_label=("imu+vo odom only"
-                                             if track.get("odom_source") == "imu_vo"
-                                             else None))
+                                 odom_label=(track.get("odom_label") or
+                                             ("imu+vo odom only"
+                                              if track.get("odom_source") == "imu_vo"
+                                              else None)))
 
         elif kind == "pf":
             # camera-only localiser that survives a broken odometry:

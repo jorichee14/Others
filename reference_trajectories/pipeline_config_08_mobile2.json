@@ -236,6 +236,87 @@
         "board_sigma_m": 0.05,
         "board_sigma_deg": 2.0,
         "seed_rng": 0
+      },
+      {
+        "name": "mobile_2_rtab",
+        "type": "arms",
+        "enabled": false,
+        "cloud_source": "depth",
+        "odom_topic": "/mobile_2/visual_slam/tracking/odometry",
+        "anchor_cam": "realsense",
+        "cam_extrinsic_xyzquat": [
+          0.000308,
+          0.059191,
+          -0.000162,
+          0.499583,
+          -0.497446,
+          0.501716,
+          -0.501244
+        ],
+        "child_is_camera_link": true,
+        "depth_topic": "/mobile_2/depth/image_rect_raw",
+        "depth_info_topic": "/mobile_2/depth/camera_info",
+        "depth_extrinsic_xyzquat": [
+          0.05919025,
+          -9.9e-06,
+          -0.00040596,
+          -0.00296559,
+          0.00083214,
+          0.00130485,
+          0.99999441
+        ],
+        "image_topic": "/mobile_2/color/image_raw",
+        "camera_info_topic": "/mobile_2/color/camera_info",
+        "rectified": false,
+        "boards": [
+          "rs_anchor",
+          "anchor",
+          "anchor_b"
+        ],
+        "img_stride": 2,
+        "max_images": 0,
+        "instance_radius": 2.0,
+        "seed": "odom",
+        "rate_hz": 10.0,
+        "range_min": 0.4,
+        "range_max": 3.5,
+        "scan_voxel": 0.05,
+        "keep_cloud_pts": 4000,
+        "prior_beta": 0.1,
+        "min_obs": 1,
+        "gates": [
+          0.4,
+          0.2,
+          0.1
+        ],
+        "wide_gates": [
+          1.0,
+          0.5,
+          0.25,
+          0.1
+        ],
+        "max_shift": 0.3,
+        "max_rot_deg": 5.0,
+        "odom_sigma_t": 0.01,
+        "odom_sigma_r": 0.001,
+        "boards_init": "odom",
+        "joint_init": "B_boards",
+        "odom_jump_check": false,
+        "sighting_group_gap_s": 2.0,
+        "icp_pts": 400,
+        "gn_iters": 25,
+        "icp_init": "odom",
+        "cv_must_agree_with_odom": true,
+        "submap_window_s": 3.0,
+        "submap_max_pts": 20000,
+        "submap_stride": 1,
+        "odom_file": "rtab_out/rtabmap_mobile_2.tum",
+        "odom_child": "camera_link",
+        "odom_label": "rtabmap pose",
+        "arms_run": [
+          "B_boards",
+          "C_depth"
+        ]
       }
     ]
   }

@@ -243,3 +243,26 @@ Printed checks: gyro-vs-VO rotation per step (validates the IMU mounting
 rotation from data: median under 1 deg is consistent), and the shape of the
 new odometry against the platform tracker. Outputs `traj_<name>_imuvo_raw.tum`
 and the usual arms; on mobile_1 the lidar remains the reference.
+
+# RTAB-Map as the pose source (`run_rtabmap.py`)
+
+One script, ROS 2 + `rtabmap_ros` required, no other code:
+
+    python3 run_rtabmap.py map      --platform mobile_1 --bag <mapping bag> --db rtab_mobile_1.db
+    python3 run_rtabmap.py localize --platform mobile_1 --bag <coop bag>    --db rtab_mobile_1.db --out rtab_out
+    (same with --platform mobile_2)
+
+`map` builds the visual database from the mapping bag (RGB-D + IMU visual
+odometry, loop closures). `localize` replays a coop bag against it and
+writes `rtab_out/rtabmap_<platform>.tum`: the pose of the base frame
+(`zed_camera_link` / `camera_link`) in RTAB-Map's map frame, corrected by
+its relocalisations. Only images, depth, camera_info, IMU and /tf_static are
+played; the bag's /tf (the broken tracker) is not. `--rate 0.5` keeps
+rtabmap from dropping frames; `--markers` adds the boards' ArUco markers as
+landmarks (one dictionary at a time, 15 mm markers detect only within ~1 m).
+
+Evaluation: the `mobile_1_rtab` / `mobile_2_rtab` tracks (disabled until the
+file exists) read the .tum as `odom_file`; stage 08 anchors it on the
+session anchor exactly like any odometry, so RTAB-Map's map frame never
+needs to be aligned by hand, and compares it to the lidar in
+`paths_mobile_1.png` with boards applied on top (`B_boards`).
