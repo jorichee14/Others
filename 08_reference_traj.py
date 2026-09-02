@@ -723,9 +723,29 @@ def resolve_instances(sights, Ts_est, node_t, bmap, wanted, radius=2.0):
     if pred_err:
         pe = np.array(pred_err)
         print("  prediction error at sightings: median %.2f m, max %.2f m "
-              "(how far the pre-graph trajectory sat from the survey - this is "
-              "the drift the boards are about to remove)"
+              "(how far the pre-graph trajectory sat from the survey)"
               % (np.median(pe), pe.max()))
+        # PER BOARD. A single board sitting metres out while the others are
+        # centimetres is not drift - drift moves every board together. It means
+        # that board's sightings are being attributed to the wrong physical
+        # target, or its surveyed pose is wrong.
+        per = {}
+        for (_, b, _, _), e in zip(out, pred_err):
+            per.setdefault(b, []).append(e)
+        for b in sorted(per):
+            v = np.array(per[b])
+            print("      %-12s n=%4d  median %7.2f m  min %6.2f  max %6.2f"
+                  % (b, len(v), np.median(v), v.min(), v.max()))
+        if len(per) > 1:
+            meds = {b: float(np.median(v)) for b, v in per.items()}
+            lo, hi = min(meds.values()), max(meds.values())
+            if hi > 1.0 and hi > 5 * max(lo, 0.01):
+                print("      !! boards disagree by %.1f m about where this "
+                      "trajectory is. Drift moves them TOGETHER, so this is a "
+                      "board-identity or survey problem, not drift. Check "
+                      "whether the far board is really the one being seen "
+                      "(shared designs) and that its surveyed pose is right."
+                      % (hi - lo))
     return out
 
 
