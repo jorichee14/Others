@@ -761,7 +761,11 @@ def main():
                 if T_prev is None:
                     T_seed = T_map_origin @ T_ol @ X @ T_cam_lidar
                 else:
-                    T_seed = T_prev @ inv(T_ol_prev) @ T_ol
+                    # the odometry increment lives in the odom CHILD frame;
+                    # the state is the lidar frame, so it must be conjugated
+                    # by T_cl. Skipping this misdirects every step by the
+                    # body-vs-optical rotation and walks the track off.
+                    T_seed = T_prev @ (inv(T_cl) @ inv(T_ol_prev) @ T_ol @ T_cl)
                 T_i, nu, rms, nobs = icp_frame(Pb, T_seed, REF)
                 # one bad ICP basin must not poison the chain: a correction
                 # beyond max_shift/max_rot keeps the odometry-propagated seed
@@ -824,7 +828,8 @@ def main():
                 if T_prev is None:
                     T_seed = T_map_origin @ T_ol @ X @ Xd
                 else:
-                    T_seed = T_prev @ inv(T_ol_prev) @ T_ol
+                    Xdc = X @ Xd            # odom child -> depth frame
+                    T_seed = T_prev @ (inv(Xdc) @ inv(T_ol_prev) @ T_ol @ Xdc)
                 T_i, nu, rms, nobs = icp_frame(np.asarray(Pb, float), T_seed,
                                                REF, beta=beta)
                 d = float(np.linalg.norm(T_i[:3, 3] - T_seed[:3, 3]))
@@ -1081,7 +1086,7 @@ SAMPLE_CONFIG = r"""
       "points_topic": "/mobile_1/ouster/points",
       "odom_topic": "/mobile_1/zed/odom",
       "anchor_cam": "zed",
-      "cam_extrinsic_xyzquat": null,
+      "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
       "rate_hz": 5.0, "range_min": 0.7, "range_max": 15.0, "scan_voxel": 0.10 },
     { "name": "mobile_1_zed", "type": "arms",
       "odom_topic": "/mobile_1/zed/odom",
