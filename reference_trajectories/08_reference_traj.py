@@ -482,6 +482,7 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
         for k, P in (clouds or {}).items():
             sub[k] = np.asarray(subsample(P, icp_pts), float)
     lam, best_cost, Ts_best = 1e-8, np.inf, Ts.copy()
+    n_flat, step_prev = 0, np.inf
     for it in range(iters):
         I_, J_, V_, r_ = [], [], [], []
 
@@ -565,6 +566,14 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
             if lam > 1e8:
                 break
             continue
+        if it and abs(cost - best_cost) < 1e-4 * best_cost and step_prev < 1e-3:
+            n_flat += 1
+            if n_flat >= 3:
+                if verbose:
+                    print("    it%2d cost %.1f converged (cost flat)" % (it, cost))
+                break
+        else:
+            n_flat = 0
         best_cost, Ts_best = cost, Ts.copy()
         lam = max(lam * 0.1, 1e-10)
         Hn = (A.T @ A).tocsc()
@@ -579,6 +588,7 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
             step = max(step, float(np.linalg.norm(dk[:3])))
         if verbose:
             print("    it%2d cost %.1f max step %.2f mm" % (it, cost, step * 1000))
+        step_prev = step
         if step < 1e-5:
             break
     if np.isfinite(best_cost):
@@ -1511,9 +1521,10 @@ def main():
             dtr, drr = traj_gap(Ts, To_l)
             report_gap("odom - lidar", ts, dtr, drr, path_length(Ts))
             print("  (both start at the session anchor, so the gap at t=0 is "
-                  "the anchor-vs-map agreement; its growth is the odometry "
-                  "drift; a step change is an ICP basin jump - check the "
-                  "rejected count)")
+                  "the anchor-vs-map agreement; smooth growth is odometry "
+                  "drift; a step is a ZED tracking break - the per-step line "
+                  "above names its stamp; the chain itself is seeded from its "
+                  "own poses and only an 'unregistered' scan can move it)")
             results[name] = dict(kind=kind, ts=ts, Ts=Ts, Ts_cam=Ts_cam,
                                  odom_only=To_l, odom_only_cam=To_cam,
                                  clouds_cam=cl_cam,
@@ -1751,14 +1762,20 @@ def main():
             print("  gap over time:  " + "  ".join(
                 "t=%.0fs %.0fcm" % (tq[i] - tq[0], gap[i] * 100) for i in qs))
             rel = (gap.max() - gap.min()) / max(gap.max(), 1e-9)
-            print("  -> %s" % ("CONSTANT offset (%.0f%% variation): suspect "
-                               "T_lidar_camera, not the trajectories"
-                               % (100 * rel) if rel < 0.25 else
-                               "GROWING (%.0f cm -> %.0f cm): one track is "
-                               "drifting; the one WITHOUT absolute information "
-                               "over that stretch is the suspect - check the "
-                               "board-factor coverage line above"
-                               % (gap.min() * 100, gap.max() * 100)))
+            if gap.max() < 0.10:
+                verdict = ("AGREE to within %.0f cm everywhere: the two "
+                           "estimates of this body are consistent"
+                           % (gap.max() * 100))
+            elif rel < 0.25:
+                verdict = ("CONSTANT offset (%.0f%% variation): suspect "
+                           "T_lidar_camera, not the trajectories" % (100 * rel))
+            else:
+                verdict = ("GROWING (%.0f cm -> %.0f cm): one track is "
+                           "drifting; the one WITHOUT absolute information "
+                           "over that stretch is the suspect - check the "
+                           "board-factor coverage line above"
+                           % (gap.min() * 100, gap.max() * 100))
+            print("  -> %s" % verdict)
             # DECISIVE: score the lidar track on the camera track's board
             # sightings. The lidar never used a board and the boards never saw
             # the map, so this says which of (map+lidar) and (boards) is the
