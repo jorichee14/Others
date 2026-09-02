@@ -397,7 +397,7 @@ GAUGE_W = 1e-2
 
 
 def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
-                use_icp=False, use_board=True, icp_pts=400, iters=12,
+                use_icp=False, use_board=True, icp_pts=400, iters=25,
                 verbose=True, _second_pass=False):
     """One graph, selectable factor sets (this is what makes the A/B/C arms an
     ablation instead of three pipelines):
@@ -416,6 +416,7 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
             if len(P) > icp_pts:
                 P = P[np.linspace(0, len(P) - 1, icp_pts).astype(int)]
             sub[k] = np.asarray(P, float)
+    lam, best_cost, Ts_best = 1e-8, np.inf, Ts.copy()
     for it in range(iters):
         I_, J_, V_, r_ = [], [], [], []
 
@@ -482,7 +483,28 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
                     Jp.ravel(), list(r * ww))
         A = sparse.csr_matrix((V_, (I_, J_)), shape=(len(r_), 6 * n))
         rv = np.array(r_)
-        Hn = (A.T @ A).tocsc() + sparse.identity(6 * n, format="csc") * 1e-6
+        cost = float(rv @ rv)
+        # Levenberg-Marquardt. Point-to-plane correspondences are re-picked
+        # every iteration, so a Gauss-Newton step can land somewhere WORSE and
+        # the solver oscillates instead of converging. Reject such a step,
+        # damp harder, retry.
+        # tolerance: with correspondences re-picked each iteration the cost is
+        # not a strictly comparable objective, so small rises are noise. Only a
+        # clearly worse step is a real divergence.
+        if it and cost > best_cost * 1.05:
+            Ts = Ts_best.copy(); lam *= 10.0
+            if verbose:
+                print("    it%2d cost %.1f REJECTED (worse than %.1f), "
+                      "lambda -> %.1e" % (it, cost, best_cost, lam))
+            if lam > 1e8:
+                break
+            continue
+        best_cost, Ts_best = cost, Ts.copy()
+        lam = max(lam * 0.1, 1e-10)
+        Hn = (A.T @ A).tocsc()
+        d = Hn.diagonal()
+        Hn = Hn + sparse.diags(np.maximum(d, 1e-9) * lam) \
+            + sparse.identity(6 * n, format="csc") * 1e-9
         dx = spsolve(Hn, -(A.T @ rv))
         step = 0.0
         for k in range(n):
@@ -490,10 +512,11 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
             Ts[k] = Rt(Ts[k][:3, :3] @ exp_r(dk[3:]), Ts[k][:3, 3] + dk[:3])
             step = max(step, float(np.linalg.norm(dk[:3])))
         if verbose:
-            print("    it%2d cost %.1f max step %.2f mm"
-                  % (it, float(rv @ rv), step * 1000))
+            print("    it%2d cost %.1f max step %.2f mm" % (it, cost, step * 1000))
         if step < 1e-5:
             break
+    if np.isfinite(best_cost):
+        Ts = Ts_best
     # AFTER convergence a factor still grossly out is a mis-detection, not
     # drift: the rest of the graph has already been pulled to the truth.
     if use_board and abs_meas and not _second_pass:
@@ -937,12 +960,11 @@ def main():
             # State = the COLOR optical frame; depth clouds pre-transformed
             # through the color->depth extrinsic so every factor agrees.
             if not track.get("cam_extrinsic_xyzquat"):
-                raise SystemExit(
-                    "arms track '%s': cam_extrinsic_xyzquat is REQUIRED "
-                    "(odometry child '%s' -> color optical). Identity bent "
-                    "this bag by 8-9.6 m. Get it:\n  ros2 run tf2_ros "
-                    "tf2_echo %s camera_color_optical_frame"
-                    % (name, ochild, ochild))
+                print("  ! SKIPPING this track: cam_extrinsic_xyzquat is "
+                      "REQUIRED (odometry child '%s' -> optical). Identity "
+                      "bent this bag by 8-9.6 m. Get it:\n     ros2 run "
+                      "tf2_ros tf2_echo %s <optical frame>" % (ochild, ochild))
+                continue
             if REF is None:
                 REF = Reference(read_map_xyz(s["ref_map"]),
                                 voxel=float(s.get("target_voxel", 0.05)),
@@ -1191,7 +1213,7 @@ SAMPLE_CONFIG = r"""
       "rate_hz": 10.0, "img_stride": 2,
       "odom_sigma_t": 0.003, "odom_sigma_r": 0.001,
       "range_min": 0.4, "range_max": 5.0, "prior_beta": 0.10,
-      "max_shift": 0.3, "max_rot_deg": 5.0, "icp_pts": 400, "gn_iters": 12 },
+      "max_shift": 0.3, "max_rot_deg": 5.0, "icp_pts": 400, "gn_iters": 25 },
 
     { "name": "mobile_2", "type": "arms",
       "odom_topic": "/mobile_2/visual_slam/tracking/odometry",
@@ -1207,7 +1229,7 @@ SAMPLE_CONFIG = r"""
       "rate_hz": 10.0, "img_stride": 2,
       "odom_sigma_t": 0.003, "odom_sigma_r": 0.001,
       "range_min": 0.4, "range_max": 3.5, "prior_beta": 0.10,
-      "max_shift": 0.3, "max_rot_deg": 5.0, "icp_pts": 400, "gn_iters": 12 }
+      "max_shift": 0.3, "max_rot_deg": 5.0, "icp_pts": 400, "gn_iters": 25 }
   ]
 }
 """
