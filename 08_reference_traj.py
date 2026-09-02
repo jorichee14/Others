@@ -769,6 +769,75 @@ def resolve_instances(sights, Ts_est, node_t, bmap, wanted, radius=2.0):
     return out
 
 
+def avg_T(Ts):
+    """Average of SE(3) samples: translation by median (outlier-tolerant),
+    rotation by the SVD/Frobenius mean with a determinant correction."""
+    Ts = np.asarray(Ts)
+    t = np.median(Ts[:, :3, 3], axis=0)
+    U, _, Vt = np.linalg.svd(Ts[:, :3, :3].sum(axis=0))
+    R = U @ np.diag([1, 1, np.sign(np.linalg.det(U @ Vt))]) @ Vt
+    return Rt(R, t)
+
+
+def resurvey_boards(results, lid, T_lc, af, outd):
+    """Re-survey every board the LIDAR-equipped agent saw, in THIS bag.
+
+    A board that moved between the mapping session and this one makes its
+    surveyed pose stale, and every pose derived from it - including other
+    agents' session anchors - inherits the error. But the lidar track is an
+    independent, map-locked reference, so a board it sees can be re-surveyed
+    here: T_map_board = T_map_cam(lidar) @ T_cb, averaged over the sightings.
+    Writes anchor_frame_resurveyed.json; boards not seen are copied through
+    unchanged."""
+    est = {}
+    for r in results.values():
+        for k, bn, T_cb in (r.get("res_nodes") or []):
+            t = r["ts"][k]
+            if not (lid["ts"][0] <= t <= lid["ts"][-1]):
+                continue
+            Tm = interp_traj(lid["ts"], lid["Ts"], np.array([t]))[0] @ T_lc @ T_cb
+            est.setdefault(bn, []).append(Tm)
+    if not est:
+        return None
+    out = json.loads(json.dumps(af))
+    print("\n== in-session re-survey from the lidar track ==")
+    moved = []
+    for bn, Ts in sorted(est.items()):
+        if bn not in out.get("boards", {}):
+            continue
+        T = avg_T(Ts)
+        sc = float(np.median(np.linalg.norm(
+            np.asarray(Ts)[:, :3, 3] - T[:3, 3], axis=1)))
+        old_xyz = np.array(out["boards"][bn]["xyz"], float)
+        d = float(np.linalg.norm(T[:3, 3] - old_xyz))
+        print("  %-12s n=%4d  scatter %.3f m  |  survey %s -> in-session %s "
+              "(%.2f m)" % (bn, len(Ts), sc, np.round(old_xyz, 3).tolist(),
+                            np.round(T[:3, 3], 3).tolist(), d))
+        if sc > 0.10:
+            print("      scatter too large to trust - not updating this board")
+            continue
+        out["boards"][bn]["xyz"] = [round(float(v), 6) for v in T[:3, 3]]
+        out["boards"][bn]["qxyzw"] = [round(float(v), 6) for v in R_to_q(T[:3, :3])]
+        out["boards"][bn]["resurveyed"] = {
+            "source": "lidar track, in-session", "n_views": len(Ts),
+            "scatter_m": round(sc, 4), "moved_from_survey_m": round(d, 4)}
+        if d > 0.10:
+            moved.append((bn, d))
+    out["resurvey_note"] = ("boards re-derived from the lidar track in this "
+                            "bag; supersedes the mapping-session survey for "
+                            "boards that moved")
+    p = os.path.join(outd, "anchor_frame_resurveyed.json")
+    with open(p, "w") as f:
+        json.dump(out, f, indent=2)
+    print("  wrote %s" % p)
+    for bn, d in moved:
+        print("  !! '%s' moved %.2f m since the survey. EVERY pose derived "
+              "from it is stale - re-run stage 06 with the re-surveyed file "
+              "so the session anchors of agents that use this board are "
+              "recomputed, then re-run this stage." % (bn, d))
+    return p
+
+
 def save_paths_png(results, ref, bmap, outd, T_lc=None):
     """Two panels: the trajectories over the map in XY, and each camera
     track's distance from the lidar track over time. The first shows WHERE a
@@ -870,6 +939,10 @@ def main():
     outd = s.get("out_dir", "reference_out")
     os.makedirs(outd, exist_ok=True)
 
+    T_lidar_cam_ref = np.asarray(getattr(P.sensor, "T_lidar_camera", None)) \
+        if getattr(P.sensor, "T_lidar_camera", None) is not None else None
+    if T_lidar_cam_ref is not None and T_lidar_cam_ref.shape != (4, 4):
+        T_lidar_cam_ref = make_T_xyzq(np.asarray(T_lidar_cam_ref).ravel())
     sa = json.load(open(s["session_anchor"]))
     af = json.load(open(s["anchor_frame"]))
     bmap = {}
@@ -1405,8 +1478,14 @@ def main():
                   "between board sightings = ZED odometry drift the boards "
                   "could not reach.")
     try:
-        save_paths_png(results, REF, bmap, outd,
-                       getattr(P.sensor, "T_lidar_camera", None))
+        lid_r = next((r for r in results.values()
+                      if r["kind"] == "lidar_icp"), None)
+        if lid_r is not None and T_lidar_cam_ref is not None:
+            resurvey_boards(results, lid_r, T_lidar_cam_ref, af, outd)
+    except Exception as e:
+        print("\n(re-survey failed: %s: %s)" % (type(e).__name__, e))
+    try:
+        save_paths_png(results, REF, bmap, outd, T_lidar_cam_ref)
     except Exception as e:
         print("\n(path plot failed: %s: %s)" % (type(e).__name__, e))
     print("\ndone -> %s" % outd)
