@@ -115,6 +115,17 @@ assert np.median(e_l) < 0.03 and e_l.max() < 0.10, "lidar chain off (max %.2f m)
 assert e_o.max() > 0.3, "synthetic drift too small to test anything"
 assert n_rej == 0, "%d unregistered scans" % n_rej
 
+# ---------------- submap accumulation: 1 s windows of the same scans, stitched
+# with the (jumping) odometry, registered as one cloud each
+frames = [(ts[i], scan_at(i)[:3000]) for i in range(0, len(ts), 4)]
+sub = m.build_submaps(frames, ot, oT, T_cl_true, 1.0, 0.10, 20000)
+sts, sTs, _, _, _, s_rej, _ = m.chain_lidar(sub, ot, oT, T_map_origin, T_cl_true, REF,
+                                            dict(track_l, min_pts=500), log_every=0)
+es, _ = m.traj_gap(sTs, m.interp_traj(ts, L_true, sts))
+print("  submap chain vs truth: median %.1f cm max %.1f cm, %d unregistered"
+      % (np.median(es) * 100, es.max() * 100, s_rej))
+assert np.median(es) < 0.03, "submap chain off"
+
 # ---------------- boards: 2 instances of 'anchor' + 1 'rs_anchor'
 def board_T(xyz, yaw_deg):
     # board z-axis pointing INTO the room (toward the camera looking at it)

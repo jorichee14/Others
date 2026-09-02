@@ -915,6 +915,7 @@ def chain_icp(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100,
     rmax = float(track.get("range_max", 15.0))
     vox = float(track.get("scan_voxel", 0.10))
     keep_pts = int(track.get("keep_cloud_pts", 3000))
+    min_pts = int(track.get("min_pts", 2000))
     max_shift = float(track.get("max_shift", 0.5))
     max_rot = math.radians(float(track.get("max_rot_deg", 5.0)))
     use_deskew = bool(track.get("deskew", True))
@@ -935,7 +936,7 @@ def chain_icp(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100,
         rng = np.linalg.norm(xyz, axis=1)
         sel = (rng > rmin) & (rng < rmax)
         Pb, tsel = xyz[sel], (None if trel is None else trel[sel])
-        if len(Pb) < 2000:
+        if len(Pb) < min_pts:
             continue
         T_ol = interp_traj(ot, oT, np.array([t]))[0]
         # the two candidate seeds
@@ -1093,6 +1094,31 @@ def verify_odom_frames(ts, Ts, Ts_cam, ot, oT, T_cl, X, Q, ochild):
                           if dR < 5.0 else
                           "the data prefers a different extrinsic rotation: "
                           "cam_extrinsic_xyzquat is suspect"))
+
+
+def build_submaps(frames, ot, oT, T_cd, window_s, voxel, max_pts, stride=1):
+    """Local SLAM-style accumulation: every depth frame within +-window_s/2
+    of a centre frame is moved into the CENTRE frame with the odometry's
+    relative motion (conjugated into the depth frame by T_cd) and stacked.
+    A 3 s submap taken while the robot turns has seen several directions,
+    so registering it to the map constrains axes a single 87-deg frame
+    cannot. frames: [(t, P_depth)] -> yields (t_centre, P_submap, None),
+    the same shape chain_icp consumes."""
+    ts_ = np.array([f[0] for f in frames])
+    T_d = compose_all(interp_traj(ot, oT, ts_), T_cd)      # T_odom_depth
+    half = window_s / 2.0
+    n_fr, n_pt = [], []
+    for i in range(0, len(frames), max(1, int(stride))):
+        js = np.flatnonzero(np.abs(ts_ - ts_[i]) <= half)
+        Ti_inv = inv(T_d[i])
+        P = np.vstack([apply(Ti_inv @ T_d[j], frames[j][1]) for j in js])
+        P = voxel_centroid(np.asarray(P, np.float32), voxel)
+        n_fr.append(len(js)); n_pt.append(len(P))
+        yield ts_[i], subsample(P, max_pts).astype(np.float32), None
+    if n_fr:
+        print("  submaps: %d, %.1f frames and %.0f points each on average "
+              "(window %.1f s)" % (len(n_fr), np.mean(n_fr), np.mean(n_pt),
+                                   window_s))
 
 
 def report_chain_quality(ts, Q, outd, name, seed_mode="lidar"):
@@ -1974,21 +2000,41 @@ def main():
                 rmax = float(track.get("range_max", 3.5))
                 T_cd = X @ Xd                       # odom child -> DEPTH frame
 
-                def depth_scans():
-                    for t, m in iter_topic(bag, track["depth_topic"]):
-                        Pd = depth_to_cloud(img_depth(m), Kd, rmin=rmin, rmax=rmax)
-                        if len(Pd) >= 500:
-                            yield t, np.asarray(Pd, np.float32), None
+                # every depth frame at the requested rate, as a cloud in the
+                # DEPTH frame (kept in memory: ~70 MB for a 150 s run)
+                frate = float(track.get("rate_hz", 10.0))
+                fdt = (1.0 / frate) * 0.9 if frate > 0 else 0.0
+                frames, t_last_f = [], -1e18
+                for t, m in iter_topic(bag, track["depth_topic"]):
+                    if t - t_last_f < fdt:
+                        continue
+                    Pd = depth_to_cloud(img_depth(m), Kd, rmin=rmin, rmax=rmax)
+                    if len(Pd) >= 500:
+                        frames.append((t, np.asarray(Pd, np.float32)))
+                        t_last_f = t
+                print("  %d depth frames" % len(frames))
+                win = float(track.get("submap_window_s", 3.0))
                 # state = the DEPTH optical frame (the clouds' own frame)
                 dtrack = dict(track)
-                dtrack.setdefault("rate_hz", 10.0)
                 dtrack.setdefault("prior_beta", 0.10)
                 dtrack.setdefault("min_obs", 1)
                 dtrack.setdefault("max_shift", 0.3)
                 dtrack.setdefault("scan_voxel", 0.05)
+                dtrack.setdefault("min_pts", 500)
+                dtrack["rate_hz"] = 0                                   # already decimated
                 dtrack["range_min"] = 0.0; dtrack["range_max"] = 1e9   # gated already
+                if win > 0:
+                    print("  submap accumulation: frames within +-%.1f s stitched "
+                          "into the centre frame with the odometry, then "
+                          "registered as one cloud" % (win / 2))
+                    scans_d = build_submaps(frames, ot, oT, T_cd, win,
+                                            float(dtrack["scan_voxel"]),
+                                            int(track.get("submap_max_pts", 20000)),
+                                            int(track.get("submap_stride", 1)))
+                else:
+                    scans_d = ((t, P, None) for t, P in frames)
                 d_t, d_T, RMS, NOBS, d_cl, n_rej, Q = chain_icp(
-                    depth_scans(), ot, oT, T_map_origin, T_cd, REF, dtrack,
+                    scans_d, ot, oT, T_map_origin, T_cd, REF, dtrack,
                     log_every=200, default_seed="odom")
                 if len(d_t) == 0:
                     print("  ! SKIPPING: no usable depth frames"); continue
@@ -2029,7 +2075,9 @@ def main():
                 if "lidar" in srcs:
                     # the lidar chain stays the initialisation and reference;
                     # the depth chain is its own case in the figure and table
-                    extra_chains.append(("depth ICP chained", d_t, dep_T))
+                    extra_chains.append(("depth %sICP chained"
+                                         % ("submap " if win > 0 else ""),
+                                         d_t, dep_T))
                 else:
                     reg_t, reg_T, cl_l = d_t, dep_T, dep_cl
             sights = detect_boards_along(track, s, P, bmap, af, bag)

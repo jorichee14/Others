@@ -128,7 +128,7 @@
         "range_min": 0.4,
         "range_max": 3.5,
         "scan_voxel": 0.05,
-        "keep_cloud_pts": 3000,
+        "keep_cloud_pts": 4000,
         "prior_beta": 0.1,
         "min_obs": 1,
         "gates": [
@@ -153,7 +153,10 @@
         "icp_pts": 400,
         "gn_iters": 25,
         "icp_init": "odom",
-        "cv_must_agree_with_odom": true
+        "cv_must_agree_with_odom": true,
+        "submap_window_s": 3.0,
+        "submap_max_pts": 20000,
+        "submap_stride": 1
       }
     ]
   }

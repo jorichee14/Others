@@ -171,3 +171,17 @@ Per-source arms available in `arms_run` when a track has both cloud sets:
 `cloud_source: "lidar+depth"` feeds both cloud sets into the graph with
 their own sigmas (`icp_sigma_lidar`, `icp_sigma_depth`); `arms_run` limits
 the graph to B and C so the output has exactly these cases.
+
+# Depth submaps (`submap_window_s`, default 3.0)
+
+Single depth frames leave at least one axis unconstrained (100% of frames on
+this bag). The depth chain therefore no longer registers single frames: every
+frame within +-1.5 s of a centre frame is moved into the centre frame with
+the odometry's relative motion and stacked (`build_submaps`), and that
+submap is registered to the map, then used as the depth map factor in the
+graph. A submap taken while the robot turns has seen several directions and
+pins the axes a single frustum cannot. The odometry only has to be right
+over 3 s for the stitch to hold; a submap spanning a tracking break is
+internally inconsistent and shows up as an unregistered centre. Set
+`submap_window_s` to 0 for the old single-frame behaviour;
+`submap_max_pts` and `submap_stride` bound the cost.
