@@ -1360,13 +1360,13 @@ def main():
                     print("  where the LIDAR track places each board it saw:")
                     for bn in sorted({rn[j][1] for j in np.flatnonzero(ok)}):
                         js = [j for j in np.flatnonzero(ok) if rn[j][1] == bn]
-                        P = np.array([(Tl_at[i] @ T_lc @ rn[j][2])[:3, 3]
-                                      for i, j in enumerate(np.flatnonzero(ok))
-                                      if rn[j][1] == bn])
+                        Pb_ = np.array([(Tl_at[i] @ T_lc @ rn[j][2])[:3, 3]
+                                        for i, j in enumerate(np.flatnonzero(ok))
+                                        if rn[j][1] == bn])
                         rng_seen = np.array([np.linalg.norm(rn[j][2][:3, 3])
                                              for j in js])
-                        ctr = np.median(P, axis=0)
-                        spread = float(np.median(np.linalg.norm(P - ctr, axis=1)))
+                        ctr = np.median(Pb_, axis=0)
+                        spread = float(np.median(np.linalg.norm(Pb_ - ctr, axis=1)))
                         surv = zbm[bn][0][:3, 3]
                         print("      %-12s n=%4d  seen at %.2f m  |  lidar puts "
                               "it at %s (scatter %.2f m)"
@@ -1377,10 +1377,21 @@ def main():
                                  float(np.linalg.norm(ctr - surv))))
                         if spread < 0.5 and np.linalg.norm(ctr - surv) > 1.0:
                             print("      %-12s !! TIGHT cluster %.1f m from the "
-                                  "surveyed pose: a real board is there and it "
-                                  "is NOT the surveyed one - duplicate print of "
-                                  "this design, or that board's survey is wrong"
+                                  "surveyed pose: a real board IS there and it "
+                                  "is NOT the surveyed one."
                                   % ("", float(np.linalg.norm(ctr - surv))))
+                            print("      %-12s    Either a SECOND board of this "
+                                  "design exists (survey it, or drop '%s' from "
+                                  "this track's boards list), or the board MOVED "
+                                  "after the survey - and if it moved, every "
+                                  "session anchor derived from it is wrong too, "
+                                  "which reaches other agents." % ("", bn))
+                        elif spread < 0.5 and np.linalg.norm(ctr - surv) <= 0.2:
+                            print("      %-12s    OK: the lidar track, this "
+                                  "board's survey and the extrinsic convention "
+                                  "all agree to %.0f cm - the map frame and the "
+                                  "board frame ARE the same frame"
+                                  % ("", 100 * float(np.linalg.norm(ctr - surv))))
                         elif spread > 1.0:
                             print("      %-12s !! SCATTERED (%.1f m): the lidar "
                                   "track and these sightings are mutually "
