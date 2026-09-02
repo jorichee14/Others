@@ -6,18 +6,28 @@ Stage 06 measured where each camera STARTED (the opening dwell on its board).
 This stage turns whole trajectories into the map frame and corrects them with
 the absolute information each sensor can see:
 
-  arms        track (mobile_2): the three corrected trajectories from ONE
-              estimator sharing nodes, odometry factors and solver - arm A
-              (odometry + map point-to-plane factors re-linearised every
-              iteration, geometry only), arm B (odometry + board factors +
-              session-anchor prior), arm C (everything). Ends with the
-              ablation table whose off-diagonal cells are independent checks.
-              Supersedes running rgbd_icp + cam_boards separately for the
-              same agent. cam_extrinsic_xyzquat REQUIRED.
+  arms        track (any depth camera: mobile_1 ZED, mobile_2 RealSense):
+              three corrected trajectories from ONE estimator sharing nodes,
+              odometry factors and solver - arm A (odometry + map
+              point-to-plane factors, geometry only), arm B (odometry + board
+              factors + session-anchor prior), arm C (everything). Ends with
+              the ablation table whose off-diagonal cells are independent
+              checks. Supersedes running rgbd_icp + cam_boards separately for
+              the same agent. cam_extrinsic_xyzquat REQUIRED.
 
-  rgbd_icp    track (mobile_2 D455 depth): each depth frame is deprojected to a
-              point cloud (range-gated 0.4-3.5 m where D455 noise stays under
-              the map's own floor, flying pixels rejected at occlusion edges)
+              The chained ICP pass that precedes the graph registers every
+              cloud to the map with the odometry-propagated seed, exactly like
+              the lidar track. Only its POSES are initialisation-only: each was
+              seeded from the previous, so their errors are correlated and
+              feeding them in as fixed measurements lets the chain's own drift
+              count as evidence (measured: it out-voted the boards). The graph
+              re-registers the CLOUDS against the map at every iteration
+              instead, so the depth data constrains the solution more
+              thoroughly, not less.
+
+  rgbd_icp    track (depth only, no boards): each depth frame is deprojected to
+              a point cloud (range-gated, e.g. 0.4-3.5 m where D455 noise stays
+              under the map's own floor, flying pixels rejected at edges)
               and registered to the frozen map exactly like the lidar track -
               geometry only, no boards. The 87-deg frustum is far more
               degenerate than a 360-deg lidar (facing a flat wall constrains
@@ -32,7 +42,7 @@ the absolute information each sensor can see:
               absolute reference - boards are not used, so this track is
               fiducial-free by construction.
 
-  cam_boards  tracks (mobile_1 ZED, mobile_2 RealSense): the SLAM/odometry
+  cam_boards  track (boards only, no depth): the SLAM/odometry
               chain is anchored at the session-start pose and corrected by a
               pose graph whenever a board is sighted along the run. Between
               sightings the odometry carries the pose; at a sighting the board
@@ -42,7 +52,7 @@ the absolute information each sensor can see:
               sighting.
 
 Every track outputs a TUM trajectory in `map` plus per-sample quality, and the
-stage cross-checks mobile_1's two tracks against each other through
+stage cross-checks mobile_1's lidar track against its camera track through
 T_lidar_camera - two independent estimates of one rigid body, so their gap is
 an honest accuracy statement that needs no ground truth.
 
@@ -253,12 +263,12 @@ def deskew(P, trel, dT_scan, bins=32):
     return out
 
 
-def depth_to_cloud(d16, K, scale=0.001, rmin=0.4, rmax=3.5,
+def depth_to_cloud(z_m, K, rmin=0.4, rmax=3.5,
                    edge_jump=0.05, voxel=0.05, max_pts=8000):
-    """16UC1 depth image -> gated, edge-rejected, voxel-centroid cloud.
+    """Depth image in METRES -> gated, edge-rejected, voxel-centroid cloud.
     Flying pixels at occlusion boundaries are the #1 ICP bias source for
     stereo depth: they always lie BETWEEN two surfaces."""
-    z = d16.astype(np.float32) * scale
+    z = np.array(z_m, np.float32, copy=True)
     z[(z < rmin) | (z > rmax)] = 0
     zz = np.where(z > 0, z, np.nan)
     hi = ndimage.maximum_filter(np.nan_to_num(zz, nan=-1e3), size=3)
@@ -279,6 +289,20 @@ def depth_to_cloud(d16, K, scale=0.001, rmin=0.4, rmax=3.5,
 def img16(m):
     a = np.frombuffer(m.data, np.uint8)
     return a.view(np.uint16).reshape(m.height, m.step // 2)[:, :m.width]
+
+
+def img_depth(m):
+    """Depth image -> metres. D455 publishes 16UC1 millimetres; ZED publishes
+    32FC1 metres (with NaN/inf for invalid)."""
+    a = np.frombuffer(m.data, np.uint8)
+    if m.encoding in ("16UC1", "mono16"):
+        return a.view(np.uint16).reshape(m.height, m.step // 2)[:, :m.width] \
+            .astype(np.float32) * 0.001
+    if m.encoding == "32FC1":
+        z = a.view(np.float32).reshape(m.height, m.step // 4)[:, :m.width].copy()
+        z[~np.isfinite(z)] = 0
+        return z
+    raise SystemExit("unsupported depth encoding %r" % m.encoding)
 
 
 def read_map_xyz(path):
@@ -791,7 +815,7 @@ def main():
             for t, m in iter_topic(bag, track["depth_topic"]):
                 if t - t_last < keep_dt:
                     continue
-                Pb = depth_to_cloud(img16(m), Kd,
+                Pb = depth_to_cloud(img_depth(m), Kd,
                                     rmin=float(track.get("range_min", 0.4)),
                                     rmax=float(track.get("range_max", 3.5)))
                 if len(Pb) < 500:
@@ -852,7 +876,9 @@ def main():
             Xd = make_T_xyzq(track["depth_extrinsic_xyzquat"]) \
                 if track.get("depth_extrinsic_xyzquat") else np.eye(4)
             if not track.get("depth_extrinsic_xyzquat"):
-                print("  ! no depth_extrinsic_xyzquat: ~1.5 cm systematic on D455")
+                print("  (no depth_extrinsic_xyzquat: assuming depth is "
+                      "registered to the anchored optical frame - true for ZED "
+                      "depth_registered, ~1.5 cm off for raw D455 depth)")
             Kd = None
             for _, ci in iter_topic(bag, track["depth_info_topic"], limit=1):
                 Kd = np.array(ci.k).reshape(3, 3)
@@ -866,7 +892,7 @@ def main():
             for t, m in iter_topic(bag, track["depth_topic"]):
                 if t - t_last < keep_dt:
                     continue
-                Pd = depth_to_cloud(img16(m), Kd,
+                Pd = depth_to_cloud(img_depth(m), Kd,
                                     rmin=float(track.get("range_min", 0.4)),
                                     rmax=float(track.get("range_max", 3.5)))
                 if len(Pd) < 500:
@@ -1017,7 +1043,7 @@ def main():
     # -------- cross-check: two independent tracks of one rigid body -------- #
     lid = next((r for r in results.values() if r["kind"] == "lidar_icp"), None)
     zed = next((v for k, v in results.items()
-                if v["kind"] == "cam_boards" and "1" in k), None)
+                if v["kind"] in ("cam_boards", "arms") and "1" in k), None)
     if lid is not None and zed is not None:
         T_lc = P.sensor.T_lidar_camera
         tq = lid["ts"][(lid["ts"] >= zed["ts"][0]) & (lid["ts"] <= zed["ts"][-1])]
@@ -1057,12 +1083,21 @@ SAMPLE_CONFIG = r"""
       "anchor_cam": "zed",
       "cam_extrinsic_xyzquat": null,
       "rate_hz": 5.0, "range_min": 0.7, "range_max": 15.0, "scan_voxel": 0.10 },
-    { "name": "mobile_1_zed", "type": "cam_boards",
+    { "name": "mobile_1_zed", "type": "arms",
       "odom_topic": "/mobile_1/zed/odom",
+      "anchor_cam": "zed",
+      "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
+      "depth_topic": "/mobile_1/zed/depth/depth_registered",
+      "depth_info_topic": "/mobile_1/zed/depth/camera_info",
+      "depth_extrinsic_xyzquat": null,
       "image_topic": "/mobile_1/zed/left/image_rect_color",
       "camera_info_topic": "/mobile_1/zed/left/camera_info", "rectified": true,
-      "anchor_cam": "zed", "boards": ["anchor", "anchor_b"],
-      "rate_hz": 10.0, "img_stride": 2 },
+      "boards": ["anchor", "anchor_b"],
+      "rate_hz": 10.0, "img_stride": 2,
+      "odom_sigma_t": 0.003, "odom_sigma_r": 0.001,
+      "range_min": 0.4, "range_max": 5.0, "prior_beta": 0.10,
+      "max_shift": 0.3, "max_rot_deg": 5.0, "icp_pts": 400, "gn_iters": 12 },
+
     { "name": "mobile_2", "type": "arms",
       "odom_topic": "/mobile_2/visual_slam/tracking/odometry",
       "anchor_cam": "realsense",
