@@ -493,16 +493,34 @@ def eval_map_rms(Ts, clouds, ref, cap=300):
 # --------------------------------------------------------------------------- #
 def hand_eye(A_list, B_list):
     """Solve X in B X = X A (Park-Martin): A = camera motions, B = odometry-child
-    motions, X = T_child_cam. Validated exact on noiseless synthetic data."""
+    motions, X = T_child_cam.
+
+    Translation is only observable perpendicular to the rotation axes actually
+    exercised: a yaw-only trajectory (every indoor corridor run) leaves t along
+    the vertical NULL, and unguarded least-squares runs away with it - measured
+    7.2 m of phantom t_z on the coop bag. Null directions (singular value
+    < 10% of max) are projected out and t is set to 0 along them; the true
+    offset there is a few cm on any real rig, so 0 is the honest choice.
+    Returns (X, null_axes) - null_axes rows are the unobservable directions in
+    the child frame (empty when fully observable)."""
     a = np.array([log_R(A[:3, :3]) for A in A_list])
     b = np.array([log_R(B[:3, :3]) for B in B_list])
+    # Rotation-axis diversity gate: if every exercised rotation shares one axis
+    # (strict yaw-only motion), R_X itself is free about that axis and the
+    # solve returns garbage. Real indoor runs carry a little pitch/roll wobble
+    # which weakly pins it - quantify instead of hoping.
+    sv_a = np.linalg.svd(a, compute_uv=False)
+    axis_div = float(sv_a[1] / max(sv_a[0], 1e-12))
     U, _, Vt = np.linalg.svd(b.T @ a)
     Rx = U @ np.diag([1, 1, np.sign(np.linalg.det(U @ Vt))]) @ Vt
     M, r = [], []
     for A, B in zip(A_list, B_list):
         M.append(B[:3, :3] - np.eye(3)); r.append(Rx @ A[:3, 3] - B[:3, 3])
-    tx = np.linalg.lstsq(np.vstack(M), np.concatenate(r), rcond=None)[0]
-    return Rt(Rx, tx)
+    M = np.vstack(M); r = np.concatenate(r)
+    Um, sv, Vm = np.linalg.svd(M, full_matrices=False)
+    keep = sv > 0.1 * sv[0]
+    tx = (Vm[keep].T * (1.0 / sv[keep])) @ (Um[:, keep].T @ r)
+    return Rt(Rx, tx), Vm[~keep], axis_div
 
 
 def estimate_cam_extrinsic(ot, oT, cam_ts, cam_Ts, dt=0.5, min_rot=0.05):
@@ -521,11 +539,13 @@ def estimate_cam_extrinsic(ot, oT, cam_ts, cam_Ts, dt=0.5, min_rot=0.05):
             continue
         A.append(Ai); B.append(inv(To[i]) @ To[i + 1])
     if len(A) < 30:
-        return None, None
-    Xh = hand_eye(A, B)
+        return None, None, None
+    Xh, null_axes, axis_div = hand_eye(A, B)
+    if axis_div < 0.03:
+        return None, None, None       # rotation itself underdetermined: refuse
     res = [np.linalg.norm((inv(Xh) @ Bm @ Xh)[:3, 3] - Am[:3, 3])
            for Am, Bm in zip(A, B)]
-    return Xh, float(np.median(res))
+    return Xh, float(np.median(res)), null_axes
 
 
 def detect_boards_along(track, s, P, bmap, af, bag):
@@ -646,7 +666,12 @@ def main():
             if lid is not None:
                 camT = lid["Ts"] @ np.tile(P.sensor.T_lidar_camera,
                                            (len(lid["Ts"]), 1, 1))
-                X, he_res = estimate_cam_extrinsic(ot, oT, lid["ts"], camT)
+                X, he_res, null_axes = estimate_cam_extrinsic(ot, oT,
+                                                              lid["ts"], camT)
+                if X is None:
+                    print("  (hand-eye refused: this run's rotations share one "
+                          "axis, so the extrinsic is underdetermined - supply "
+                          "cam_extrinsic_xyzquat)")
                 if X is not None:
                     print("  hand-eye T_%s_cam from the lidar track: "
                           "t=%s rpy=%s deg (residual %.1f mm/step)"
@@ -654,6 +679,11 @@ def main():
                              np.round(Rot.from_matrix(X[:3, :3])
                                       .as_euler("xyz", degrees=True), 2).tolist(),
                              he_res * 1000))
+                    for ax in (null_axes if null_axes is not None else []):
+                        print("  (t along child-frame axis %s unobservable from "
+                              "this run's rotations - set to 0; supply "
+                              "cam_extrinsic_xyzquat for the few-cm truth)"
+                              % np.round(ax, 2).tolist())
         if X is None:
             X = np.eye(4)
             print("  !! no cam_extrinsic_xyzquat and no lidar track to "
