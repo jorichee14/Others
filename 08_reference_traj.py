@@ -769,6 +769,95 @@ def resolve_instances(sights, Ts_est, node_t, bmap, wanted, radius=2.0):
     return out
 
 
+def save_paths_png(results, ref, bmap, outd, T_lc=None):
+    """Two panels: the trajectories over the map in XY, and each camera
+    track's distance from the lidar track over time. The first shows WHERE a
+    track goes wrong, the second WHEN - a table of medians shows neither."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1, 2, figsize=(17, 7.5),
+                           gridspec_kw={"width_ratios": [1.35, 1]})
+
+    if ref is not None and len(ref.P):
+        P = ref.P[::max(1, len(ref.P) // 60000)]
+        ax[0].scatter(P[:, 0], P[:, 1], s=0.15, c="0.86", zorder=0,
+                      linewidths=0, label="reference map")
+    for nm, b in sorted(bmap.items()):
+        p = b[0][:3, 3]
+        ax[0].plot(p[0], p[1], "*", ms=17, mfc="gold", mec="k", mew=0.8, zorder=6)
+        ax[0].annotate(nm, (p[0], p[1]), fontsize=8, zorder=7,
+                       xytext=(6, 6), textcoords="offset points")
+
+    lid = next((r for r in results.values() if r["kind"] == "lidar_icp"), None)
+    curves = []
+    for nm, r in results.items():
+        if r["kind"] == "lidar_icp":
+            curves.append((nm, r["ts"], r["Ts"], "k", 2.4, "-"))
+        else:
+            for i, (an, aT) in enumerate(sorted((r.get("arms") or
+                                                 {nm: r["Ts"]}).items())):
+                # distinct dash patterns: arms that AGREE overlap exactly, and
+                # a solid curve hidden under another teaches nothing
+                curves.append(("%s %s" % (nm, an), r["ts"], aT,
+                               ["tab:red", "tab:green", "tab:blue",
+                                "tab:orange"][i % 4], 1.6,
+                               ["-", (0, (6, 3)), (0, (2, 2)), (0, (1, 3))][i % 4]))
+    for nm, ts, Ts, c, lw, *rest in curves:
+        ls = rest[0] if rest else "-"
+        ax[0].plot(Ts[:, 0, 3], Ts[:, 1, 3], ls=ls, color=c, lw=lw, label=nm,
+                   zorder=4, alpha=0.9)
+        ax[0].plot(Ts[0, 0, 3], Ts[0, 1, 3], "o", color=c, ms=7, mec="k",
+                   mew=0.7, zorder=5)
+
+    # where the LIDAR track puts each board it saw - the duplicate-board test,
+    # drawn: a cross far from its gold star means the seen board is not that one
+    if lid is not None and T_lc is not None:
+        for r in results.values():
+            for k, bn, T_cb in (r.get("res_nodes") or []):
+                t = r["ts"][k]
+                if not (lid["ts"][0] <= t <= lid["ts"][-1]):
+                    continue
+                Tm = interp_traj(lid["ts"], lid["Ts"],
+                                 np.array([t]))[0] @ T_lc @ T_cb
+                ax[0].plot(Tm[0, 3], Tm[1, 3], "x", color="tab:purple", ms=4,
+                           mew=0.8, zorder=8)
+        ax[0].plot([], [], "x", color="tab:purple", ms=6,
+                   label="board position implied by the lidar track")
+    ax[0].set_aspect("equal"); ax[0].grid(alpha=.3)
+    ax[0].set_xlabel("x [m]"); ax[0].set_ylabel("y [m]")
+    ax[0].set_title("trajectories in the map frame (o = session start)")
+    ax[0].legend(fontsize=7, loc="best")
+
+    if lid is not None:
+        for nm, ts, Ts, c, lw, *rest in curves:
+            if c == "k":
+                continue
+            tq = ts[(ts >= lid["ts"][0]) & (ts <= lid["ts"][-1])]
+            if len(tq) < 5:
+                continue
+            Tl = interp_traj(lid["ts"], lid["Ts"], tq) @ np.tile(
+                T_lc if T_lc is not None else np.eye(4), (len(tq), 1, 1))
+            d = np.linalg.norm(interp_traj(ts, Ts, tq)[:, :3, 3]
+                               - Tl[:, :3, 3], axis=1)
+            ax[1].plot(tq - lid["ts"][0], d, ls=(rest[0] if rest else "-"),
+                       color=c, lw=1.6, label=nm)
+        for r in results.values():
+            for k, bn, _ in (r.get("res_nodes") or []):
+                ax[1].axvline(r["ts"][k] - lid["ts"][0], color="gold",
+                              lw=0.4, alpha=0.35, zorder=0)
+        ax[1].plot([], [], color="gold", lw=2, label="board sighting")
+        ax[1].set_xlabel("t [s]"); ax[1].set_ylabel("distance from lidar track [m]")
+        ax[1].set_title("agreement with the lidar track over time")
+        ax[1].grid(alpha=.3); ax[1].legend(fontsize=7)
+    else:
+        ax[1].axis("off")
+        ax[1].text(.5, .5, "no lidar track to compare against", ha="center")
+    png = os.path.join(outd, "paths.png")
+    plt.tight_layout(); plt.savefig(png, dpi=130); plt.close()
+    print("\nwrote %s" % png)
+
+
 # --------------------------------------------------------------------------- #
 def main():
     cfg_path = sys.argv[1] if len(sys.argv) > 1 else "pipeline_config.json"
@@ -1304,6 +1393,11 @@ def main():
                   "one body. A constant offset = extrinsic error; growth "
                   "between board sightings = ZED odometry drift the boards "
                   "could not reach.")
+    try:
+        save_paths_png(results, REF, bmap, outd,
+                       getattr(P.sensor, "T_lidar_camera", None))
+    except Exception as e:
+        print("\n(path plot failed: %s: %s)" % (type(e).__name__, e))
     print("\ndone -> %s" % outd)
 
 
