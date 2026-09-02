@@ -479,8 +479,9 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
     es = np.ones(n - 1) if edge_scale is None else np.asarray(edge_scale, float)
     sub = {}
     if use_icp:
-        for k, P in (clouds or {}).items():
-            sub[k] = np.asarray(subsample(P, icp_pts), float)
+        for k, v in (clouds or {}).items():
+            P, sg = v if isinstance(v, tuple) else (v, ICP_SIGMA)
+            sub[k] = (np.asarray(subsample(P, icp_pts), float), float(sg))
     lam, best_cost, Ts_best = 1e-8, np.inf, Ts.copy()
     n_flat, step_prev = 0, np.inf
     n_rejected_same, last_rejected = 0, np.nan
@@ -531,7 +532,7 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
                 add(rows.ravel(), [6 * k + c for c in cc.ravel()], B.ravel(),
                     list(hw * (W @ res)))
         if use_icp:
-            for k, P in sub.items():
+            for k, (P, sg) in sub.items():
                 Q = apply(Ts[k], P)
                 c, nn, w, m = ref.plane_of(Q)
                 if m.sum() < 30:
@@ -543,7 +544,7 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
                     continue
                 c, nn, w, p, r = c[keep], nn[keep], w[keep], p[keep], r[keep]
                 ww = w * np.minimum(1.0, ICP_HUBER / np.maximum(np.abs(r), 1e-9)) \
-                    / ICP_SIGMA
+                    / sg
                 Jp = np.hstack([nn, np.cross(p, nn @ R)]) * ww[:, None]
                 rows, cc = np.meshgrid(np.arange(len(r)), np.arange(6),
                                        indexing="ij")
@@ -658,7 +659,8 @@ def eval_map_rms(Ts, clouds, ref, cap=300):
     """Point-to-plane rms at the given poses (evaluated, not optimised).
     Independent check for an arm that never used the map."""
     out = []
-    for k, P in clouds.items():
+    for k, v in clouds.items():
+        P = v[0] if isinstance(v, tuple) else v
         Q = apply(Ts[k], np.asarray(subsample(P, cap), float))
         c, nn, w, m = ref.plane_of(Q)
         if m.sum() < 30:
@@ -1147,22 +1149,41 @@ def report_drift_corrections(node_t, Ts, To_n, X, To_anch, sight_nodes, gap_s=2.
 
 def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
              wanted, track, REF, anchor_sig_t, src="depth", outd=None,
-             verbose=True):
+             verbose=True, cloud_sets=None):
     """The three-arm graph for one camera. State = the camera OPTICAL frame.
       reg_t/reg_T  chained-ICP camera poses (initialisation only)
       cl_l         one cloud per reg_t, already in the CAMERA frame
+      cloud_sets   optional [(stamps, clouds, sigma_m, label)] - SEVERAL
+                   range sensors feeding map factors into one graph (lidar
+                   clouds at 2 cm plus ZED depth clouds at 5 cm, say); when
+                   given, cl_l is ignored
       sights       [(t, design, T_cam_board)] from detect_boards_along
       X            T_child_cam; T_map_origin = T_map_odom
-    -> dict(node_t, arms{A_icp,B_boards,C_joint}, odom_only, chained,
-            res_nodes, clouds, abs_meas)"""
-    # nodes FIRST (registration stamps + exact sighting stamps), then resolve
-    # against a trajectory at those nodes - board factors land on their own
-    # stamps, never a neighbour 50 ms away
+      track["arms_run"]  subset of A_icp / B_boards / B_breaks / C_joint
+    -> dict(node_t, arms{...}, odom_only, chained, res_nodes, clouds,
+            abs_meas)"""
+    if cloud_sets is None:
+        cloud_sets = [(reg_t, cl_l, ICP_SIGMA, src)]
+    # nodes FIRST (registration stamps of every cloud set + exact sighting
+    # stamps), then resolve against a trajectory at those nodes - board
+    # factors land on their own stamps, never a neighbour 50 ms away
     st_extra = np.array(sorted({round(t, 6) for t, _, _ in sights}))
-    node_t = np.unique(np.round(np.r_[reg_t, st_extra], 6))
+    node_t = np.unique(np.round(np.concatenate(
+        [np.asarray(ts_, float) for ts_, _, _, _ in cloud_sets] + [st_extra]), 6))
     idx_of = {round(t, 6): i for i, t in enumerate(node_t)}
-    clouds = {idx_of[round(t, 6)]: c
-              for t, c in zip(np.round(reg_t, 6), cl_l)}
+    clouds = {}
+    for ts_, cls_, sg_, lbl_ in cloud_sets:
+        n_dup = 0
+        for t, c in zip(np.round(ts_, 6), cls_):
+            k = idx_of[round(t, 6)]
+            if k in clouds:          # two sensors on one stamp: concatenate
+                P0, s0 = clouds[k]
+                clouds[k] = (np.vstack([P0, c]), min(s0, sg_)); n_dup += 1
+            else:
+                clouds[k] = (c, float(sg_))
+        print("  map factors: %d %s clouds at sigma %.0f mm%s"
+              % (len(cls_), lbl_, sg_ * 1000,
+                 " (%d shared a stamp with another set)" % n_dup if n_dup else ""))
     To_n = interp_traj(ot, oT, node_t)
     # odometry increments, conjugated from the child frame into the camera
     Z_rel = np.array([inv(X) @ inv(To_n[i]) @ To_n[i + 1] @ X
@@ -1177,7 +1198,7 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     # jump over the neighbouring seconds. Only done for lidar clouds - a
     # depth chain is not reliable enough to indict the odometry.
     edge_scale = np.ones(len(node_t) - 1)
-    if src == "lidar" and bool(track.get("odom_jump_check", True)):
+    if "lidar" in src and bool(track.get("odom_jump_check", True)):
         jm = float(track.get("odom_jump_m", 0.05))
         jr = math.radians(float(track.get("odom_jump_deg", 2.0)))
         dd = [inv(inv(T_init[i]) @ T_init[i + 1]) @ Z_rel[i]
@@ -1199,7 +1220,7 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     # lidar clouds the chained lidar track is far better than the drifting
     # odometry for this (and its prediction error is then the lidar-vs-survey
     # agreement, an independent number)
-    if src == "lidar":
+    if "lidar" in src:
         pred_T, pred_label = T_init, "chained lidar track"
     else:
         pred_T, pred_label = To_anch, "anchored odometry"
@@ -1230,11 +1251,12 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     #      stretches (metres, beyond the 10 cm plane gate) into a graph that
     #      then cannot recover them.
     b_init = track.get("boards_init", "odom")
-    j_init = track.get("joint_init", "A_icp" if src == "lidar" else "B_boards")
+    j_init = track.get("joint_init", "A_icp" if "lidar" in src else "B_boards")
     # A from the chained poses only when the chain is a lidar: a narrow-FOV
     # depth chain that slid is a worse start than the odometry it was seeded
     # from (measured: 27 m off), and map factors cannot relocalise it.
-    icp_init = track.get("icp_init", "chained" if src == "lidar" else "odom")
+    icp_init = track.get("icp_init", "chained" if "lidar" in src else "odom")
+    arms_run = track.get("arms_run") or ["A_icp", "B_boards", "B_breaks", "C_joint"]
     ARMS = {}
     n_breaks = int((edge_scale > 1).sum())
     # B_boards is the pure "odometry + boards" pose graph: NOTHING from the
@@ -1249,6 +1271,7 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     if n_breaks:
         arms.append(("B_breaks", False, True, edge_scale))
     arms.append(("C_joint", True, True, edge_scale))
+    arms = [a_ for a_ in arms if a_[0] in arms_run]
     for arm, ui, ub, es in arms:
         print("  == arm %s ==" % arm)
         am = abs_meas + [anchor_prior] if ub else []
@@ -1291,10 +1314,11 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     print("  %-10s %22s %22s %20s %20s"
           % ("arm", "board resid (cm)", "map rms (cm)", "vs C (cm)",
              "vs odom (cm)"))
+    C_ref = ARMS.get("C_joint", list(ARMS.values())[-1])
     for arm, Ts in ARMS.items():
         br = eval_board_resid(Ts, res_nodes, bmap) * 100
         mr = eval_map_rms(Ts, clouds, REF) * 100
-        dv = np.linalg.norm(Ts[:, :3, 3] - ARMS["C_joint"][:, :3, 3], axis=1) * 100
+        dv = np.linalg.norm(Ts[:, :3, 3] - C_ref[:, :3, 3], axis=1) * 100
         do = np.linalg.norm(Ts[:, :3, 3] - To_anch[:, :3, 3], axis=1) * 100
         print("  %-10s %10.1f med %6.1f p95 %9.2f med %5.2f p95 "
               "%8.1f med %6.1f max %8.1f med %6.1f max"
@@ -1356,6 +1380,9 @@ def collect_methods(results, rig):
     # one reference, one odom-only curve (they are the same odometry); any
     # further geometry-only chain (e.g. the ZED depth chain of a rig that
     # also has a lidar) is drawn as an ordinary method against the reference
+    for nm, r in rs.items():
+        for lbl, ts, Ts in (r.get("extra_chains") or []):
+            ref.append(("%s %s" % (nm, lbl), ts, Ts, "k", "-"))
     extra = [(lbl, ts, Ts, cols[(i + j) % len(cols)], ls[(i + j) % len(ls)])
              for j, (lbl, ts, Ts, _, _) in enumerate(ref[1:])]
     ref = ref[:1]; odom = odom[:1]
@@ -1803,7 +1830,9 @@ def main():
                 continue
             REF = get_ref()
             src = track.get("cloud_source", "depth")
-            if src == "lidar":
+            srcs = src.split("+")
+            cloud_sets, extra_chains, chain_ok = [], [], True
+            if "lidar" in srcs:
                 lt = track.get("lidar_track") or next(
                     (k for k, r in results.items()
                      if r["kind"] == "lidar_icp" and rig_of(k) == rig_of(name)),
@@ -1817,10 +1846,13 @@ def main():
                 # chained lidar poses as CAMERA poses (T_map_cam = T_map_lidar
                 # @ T_lidar_camera); clouds already in the camera frame
                 reg_t, reg_T, cl_l = lid["ts"], lid["Ts_cam"], lid["clouds_cam"]
+                cloud_sets.append((reg_t, cl_l,
+                                   float(track.get("icp_sigma_lidar", 0.02)),
+                                   "lidar"))
                 print("  map factors from lidar track '%s': %d clouds "
                       "(camera frame), chained poses composed with "
                       "T_lidar_camera as initialisation" % (lt, len(cl_l)))
-            else:
+            if "depth" in srcs:
                 Xd = make_T_xyzq(track["depth_extrinsic_xyzquat"]) \
                     if track.get("depth_extrinsic_xyzquat") else np.eye(4)
                 if not track.get("depth_extrinsic_xyzquat"):
@@ -1870,7 +1902,7 @@ def main():
                 report_chain_quality(d_t, Q, outd, name + "_depth",
                                      track.get("seed", "odom"))
                 chain_ok = n_rej < 0.1 * len(d_t)
-                if not chain_ok:
+                if not chain_ok and "lidar" not in srcs:
                     print("  !! the depth chain lost %d%% of its frames: it is "
                           "NOT usable as this rig's reference. Arm A (odometry "
                           "+ map factors, started from the odometry) takes that "
@@ -1879,31 +1911,40 @@ def main():
                 # depth-frame poses -> COLOR optical frame (the state of the
                 # graph and of the anchor): T_map_color = T_map_depth @ inv(Xd);
                 # clouds likewise: P_color = Xd P_depth
-                reg_t = d_t
-                reg_T = compose_all(d_T, inv(Xd))
-                cl_l = [apply(Xd, c).astype(np.float32) for c in d_cl]
+                dep_T = compose_all(d_T, inv(Xd))
+                dep_cl = [apply(Xd, c).astype(np.float32) for c in d_cl]
+                cloud_sets.append((d_t, dep_cl,
+                                   float(track.get("icp_sigma_depth", 0.05)),
+                                   "depth"))
                 write_tum(os.path.join(outd, "traj_%s_depth_icp.tum" % name),
-                          reg_t, reg_T)
-                To_c = compose_all(np.tile(T_map_origin, (len(reg_t), 1, 1))
-                                   @ interp_traj(ot, oT, reg_t), X)
+                          d_t, dep_T)
+                To_c = compose_all(np.tile(T_map_origin, (len(d_t), 1, 1))
+                                   @ interp_traj(ot, oT, d_t), X)
                 print("  == depth ICP vs anchored odometry (color frame, %d "
-                      "stamps) ==" % len(reg_t))
-                dtr, drr = traj_gap(reg_T, To_c)
-                report_gap("odom - depth ICP", reg_t, dtr, drr, path_length(reg_T))
+                      "stamps) ==" % len(d_t))
+                dtr, drr = traj_gap(dep_T, To_c)
+                report_gap("odom - depth ICP", d_t, dtr, drr, path_length(dep_T))
+                if "lidar" in srcs:
+                    # the lidar chain stays the initialisation and reference;
+                    # the depth chain is its own case in the figure and table
+                    extra_chains.append(("depth ICP chained", d_t, dep_T))
+                else:
+                    reg_t, reg_T, cl_l = d_t, dep_T, dep_cl
             sights = detect_boards_along(track, s, P, bmap, af, bag)
             arec = arec_of(track)
             g = run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X,
                          T_map_origin, bmap, track.get("boards") or sorted(bmap),
                          track, REF, float(arec.get("std_mm", 10)) * 1e-3,
-                         src=src, outd=outd)
-            results[name] = dict(kind=kind, ts=g["node_t"],
-                                 Ts=g["arms"]["C_joint"], frame="cam",
+                         src=src, outd=outd, cloud_sets=cloud_sets)
+            final = g["arms"].get("C_joint", list(g["arms"].values())[-1])
+            results[name] = dict(kind=kind, ts=g["node_t"], Ts=final, frame="cam",
                                  arms=g["arms"], res_nodes=g["res_nodes"],
                                  bmap=bmap, odom_only=g["odom_only"],
                                  chained=g["chained"], cloud_source=src,
-                                 chained_label=(None if src == "lidar"
+                                 chained_label=(None if "lidar" in srcs
                                                 else "depth ICP chained"),
-                                 chain_ok=(True if src == "lidar" else chain_ok))
+                                 chain_ok=(True if "lidar" in srcs else chain_ok),
+                                 extra_chains=extra_chains)
 
         elif kind == "cam_boards":
             rate = float(track.get("rate_hz", 10.0))

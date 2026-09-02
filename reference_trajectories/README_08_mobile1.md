@@ -150,3 +150,19 @@ false because this ZED odometry breaks at 45-49 s and the constant-velocity
 fallback must be allowed to disagree with it there; `icp_init` is `chained`
 because a 95-degree-broken odometry is a worse start for arm A than the
 depth chain.
+
+# mobile_1, the five-case run (`pipeline_config_08_mobile1_all.json`)
+
+One run, five curves, all against the lidar, into `reference_coop2_mobile1_all`:
+
+| case | curve in `paths_mobile_1.png` | what it uses |
+|---|---|---|
+| lidar ICP | `mobile_1_lidar lidar ICP` (reference) | Ouster scans + map |
+| pure ZED odom | `mobile_1_lidar odom only` | ZED odometry + session anchor |
+| ZED odom + boards | `mobile_1_zed B_boards` | ZED odometry + boards, nothing else |
+| ZED pcl ICP | `mobile_1_zed depth ICP chained` | ZED depth clouds + map, ZED odometry only as the seed |
+| joint | `mobile_1_zed C_joint [lidar+depth clouds]` | ZED odometry + boards + Ouster clouds (2 cm) + ZED depth clouds (5 cm) in one graph |
+
+`cloud_source: "lidar+depth"` feeds both cloud sets into the graph with
+their own sigmas (`icp_sigma_lidar`, `icp_sigma_depth`); `arms_run` limits
+the graph to B and C so the output has exactly these cases.
