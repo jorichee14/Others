@@ -1631,6 +1631,171 @@ def _paths_figure(results, rig, methods, has_ref, ref, bmap, outd, T_lc):
     print("  wrote %s (%d methods: o = start, square = end)" % (png, len(methods)))
 
 
+# --------------------------------------------------------------------------- #
+# particle-filter localiser (the camera-only answer that does not depend on
+# the odometry never breaking): 2D multi-hypothesis over the map, depth as a
+# virtual scan scored on a likelihood field, odometry as the motion model,
+# boards as absolute fixes, augmented-MCL random injection for recovery.
+# --------------------------------------------------------------------------- #
+class Grid2D:
+    """Wall likelihood field from the anchored map: points in a height band
+    rasterised at `res`, distance transform, Gaussian likelihood."""
+    def __init__(self, P, slice_z, res=0.05, sigma=0.10, max_d=1.0, pad=2.0):
+        m = (P[:, 2] >= slice_z[0]) & (P[:, 2] <= slice_z[1])
+        Q = P[m, :2]
+        self.res = res
+        self.x0 = Q[:, 0].min() - pad; self.y0 = Q[:, 1].min() - pad
+        nx = int((Q[:, 0].max() + pad - self.x0) / res) + 1
+        ny = int((Q[:, 1].max() + pad - self.y0) / res) + 1
+        occ = np.zeros((ny, nx), bool)
+        ix = ((Q[:, 0] - self.x0) / res).astype(int)
+        iy = ((Q[:, 1] - self.y0) / res).astype(int)
+        occ[iy, ix] = True
+        self.dist = np.minimum(ndimage.distance_transform_edt(~occ) * res, max_d)
+        self.sigma = sigma; self.max_d = max_d
+        self.ny, self.nx = occ.shape
+        # candidate cells for random injection: near a wall but not in it
+        free = (self.dist > 0.25) & (self.dist < 2.0)
+        self.free_iy, self.free_ix = np.nonzero(free)
+        print("  likelihood field: %d x %d cells at %.2f m, %d wall cells, "
+              "%d candidate free cells (z band %s)"
+              % (nx, ny, res, int(occ.sum()), len(self.free_ix), list(slice_z)))
+
+    def lookup(self, x, y):
+        ix = np.clip(((x - self.x0) / self.res).astype(int), 0, self.nx - 1)
+        iy = np.clip(((y - self.y0) / self.res).astype(int), 0, self.ny - 1)
+        d = self.dist[iy, ix]
+        out = (x < self.x0) | (x >= self.x0 + self.nx * self.res) | \
+            (y < self.y0) | (y >= self.y0 + self.ny * self.res)
+        return np.where(out, self.max_d, d)
+
+    def random_poses(self, n, rng):
+        j = rng.integers(0, len(self.free_ix), n)
+        x = self.x0 + (self.free_ix[j] + rng.random(n)) * self.res
+        y = self.y0 + (self.free_iy[j] + rng.random(n)) * self.res
+        return np.column_stack([x, y, rng.uniform(-math.pi, math.pi, n)])
+
+
+def yaw_of(R):
+    return math.atan2(R[1, 0], R[0, 0])
+
+
+def level_parts(T):
+    """Split a pose into (yaw-only-level pose x,y,yaw) and the roll/pitch
+    rotation R_rp such that R = R_z(yaw) @ R_rp."""
+    yaw = yaw_of(T[:3, :3])
+    Rz = exp_r([0, 0, yaw])
+    return np.array([T[0, 3], T[1, 3], yaw]), Rz.T @ T[:3, :3]
+
+
+def pf_localise(frames, ot, oT, X, T_map_origin, board_meas, grid, prm, rng):
+    """frames: [(t, P_child (N,3) in the ODOMETRY CHILD frame)] at the
+    measurement rate. board_meas: {t: (x, y, yaw)} absolute fixes of the
+    LEVEL child frame in map. Returns per-frame (x, y, yaw), z/roll/pitch
+    from the anchored odometry, and a quality row per frame."""
+    N = int(prm.get("particles", 2000))
+    a = prm.get("alpha", [0.2, 0.2, 0.2, 0.2])          # odometry noise gains
+    n_pts = int(prm.get("scan_pts", 250))
+    z_rand = float(prm.get("z_rand", 0.10))
+    sig_b, sig_byaw = float(prm.get("board_sigma_m", 0.05)), math.radians(prm.get("board_sigma_deg", 2.0))
+    a_slow, a_fast = float(prm.get("alpha_slow", 0.001)), float(prm.get("alpha_fast", 0.1))
+    slice_z = prm["slice_z"]
+    ts_ = np.array([f[0] for f in frames])
+    T_ol = interp_traj(ot, oT, ts_)
+    # anchored odometry (level part) at frame 0 -> initial particles
+    T_mc0 = T_map_origin @ T_ol[0]
+    p0, _ = level_parts(T_mc0)
+    z_sensor = T_mc0[2, 3]
+    X_ = np.tile(p0, (N, 1)) + rng.normal(0, 1, (N, 3)) * [0.05, 0.05, math.radians(2)]
+    w = np.full(N, 1.0 / N)
+    w_slow = w_fast = 0.0
+    out, Q = [], []
+    prev_lvl, _ = level_parts(T_ol[0])
+    for i, (t, P_child) in enumerate(frames):
+        lvl, R_rp = level_parts(T_ol[i])
+        # ---- motion: odometry increment in the previous LEVEL body frame
+        if i:
+            d = lvl - prev_lvl
+            c, s = math.cos(prev_lvl[2]), math.sin(prev_lvl[2])
+            dx, dy = c * d[0] + s * d[1], -s * d[0] + c * d[1]
+            dyaw = (d[2] + math.pi) % (2 * math.pi) - math.pi
+            trans = math.hypot(dx, dy)
+            sd_t = a[0] * trans + a[1] * abs(dyaw) + 0.002
+            sd_r = a[2] * abs(dyaw) + a[3] * trans + math.radians(0.1)
+            ddx = dx + rng.normal(0, sd_t, N); ddy = dy + rng.normal(0, sd_t, N)
+            cy, sy = np.cos(X_[:, 2]), np.sin(X_[:, 2])
+            X_[:, 0] += cy * ddx - sy * ddy
+            X_[:, 1] += sy * ddx + cy * ddy
+            X_[:, 2] += dyaw + rng.normal(0, sd_r, N)
+        prev_lvl = lvl
+        # ---- measurement: depth points levelled, height-banded, subsampled
+        Pl = P_child @ R_rp.T
+        zmap = z_sensor + Pl[:, 2]
+        m = (zmap >= slice_z[0]) & (zmap <= slice_z[1])
+        S = subsample(Pl[m, :2], n_pts)
+        lik_mean = np.nan
+        if len(S) >= 30:
+            cy, sy = np.cos(X_[:, 2]), np.sin(X_[:, 2])
+            px = X_[:, 0:1] + cy[:, None] * S[:, 0] - sy[:, None] * S[:, 1]
+            py = X_[:, 1:2] + sy[:, None] * S[:, 0] + cy[:, None] * S[:, 1]
+            dd = grid.lookup(px.ravel(), py.ravel()).reshape(N, len(S))
+            lik = (1 - z_rand) * np.exp(-0.5 * (dd / grid.sigma) ** 2) + z_rand / grid.max_d
+            logw = np.log(lik).sum(1)
+            logw -= logw.max()
+            w = w * np.exp(logw); w /= w.sum()
+            lik_mean = float(np.mean(lik.mean(1)))
+        # ---- board fix: Gaussian reweight; if nothing is near it, relocalise
+        fixed = False
+        if t in board_meas:
+            bx, by, byaw = board_meas[t]
+            dyw = (X_[:, 2] - byaw + math.pi) % (2 * math.pi) - math.pi
+            lb = np.exp(-0.5 * (((X_[:, 0] - bx) ** 2 + (X_[:, 1] - by) ** 2) / sig_b ** 2
+                               + (dyw / sig_byaw) ** 2))
+            if lb.max() < 1e-6:
+                X_ = np.tile([bx, by, byaw], (N, 1)) + \
+                    rng.normal(0, 1, (N, 3)) * [sig_b, sig_b, sig_byaw]
+                w = np.full(N, 1.0 / N)
+            else:
+                w = w * lb; w /= w.sum()
+            fixed = True
+        # ---- augmented-MCL recovery + resampling
+        if np.isfinite(lik_mean):
+            w_slow += a_slow * (lik_mean - w_slow) if w_slow else 0.0
+            w_fast += a_fast * (lik_mean - w_fast) if w_fast else 0.0
+            if not w_slow:
+                w_slow = w_fast = lik_mean
+        p_inj = max(0.0, 1.0 - w_fast / max(w_slow, 1e-12)) if w_slow else 0.0
+        neff = 1.0 / np.sum(w ** 2)
+        if neff < 0.5 * N or fixed:
+            idx = rng.choice(N, N, p=w)
+            X_ = X_[idx].copy()
+            n_inj = int(p_inj * N)
+            if n_inj:
+                X_[rng.choice(N, n_inj, replace=False)] = grid.random_poses(n_inj, rng)
+            w = np.full(N, 1.0 / N)
+        # ---- estimate: weighted mean of the dominant cluster (cluster around
+        # the best-weighted particle to stay multi-modal-safe)
+        j = int(np.argmax(w))
+        near = (np.hypot(X_[:, 0] - X_[j, 0], X_[:, 1] - X_[j, 1]) < 0.5)
+        wn = w[near] / w[near].sum()
+        est = np.array([np.sum(wn * X_[near, 0]), np.sum(wn * X_[near, 1]),
+                        X_[j, 2] + np.sum(wn * ((X_[near, 2] - X_[j, 2] + math.pi)
+                                                % (2 * math.pi) - math.pi))])
+        spread = float(np.sqrt(np.sum(w * (np.hypot(X_[:, 0] - est[0], X_[:, 1] - est[1]) ** 2))))
+        out.append(est)
+        Q.append((t, lik_mean, spread, p_inj, fixed, float(near.mean())))
+        if (i + 1) % 200 == 0:
+            print("  %5d frames  spread %5.1f cm  lik %.2f  inject %.0f%%"
+                  % (i + 1, spread * 100, lik_mean if np.isfinite(lik_mean) else 0,
+                     100 * p_inj), flush=True)
+    # full poses: PF x,y,yaw + odometry roll/pitch, anchor z
+    Ts = []
+    for i, est in enumerate(out):
+        _, R_rp = level_parts(T_ol[i])
+        Ts.append(Rt(exp_r([0, 0, est[2]]) @ R_rp, [est[0], est[1], z_sensor]))
+    return np.array(Ts), Q
+
+
 def compare_rig(results, T_lc, outd):
     """One table per rig: every trajectory of that rigid body, in the CAMERA
     optical frame, sampled at the stamps of the rig's geometry-only reference
@@ -2096,6 +2261,75 @@ def main():
                                  chain_ok=(True if "lidar" in srcs else chain_ok),
                                  extra_chains=extra_chains,
                                  arm_clouds=g["arm_clouds"])
+
+        elif kind == "pf":
+            # camera-only localiser that survives a broken odometry:
+            # particle filter on the 2D map with depth as a virtual scan,
+            # odometry as the motion model, boards as absolute fixes,
+            # random injection for recovery. State = level odometry-child
+            # frame; output composed with X to the camera optical frame.
+            REF = get_ref()
+            rng = np.random.default_rng(int(track.get("seed_rng", 0)))
+            Xd = make_T_xyzq(track["depth_extrinsic_xyzquat"]) \
+                if track.get("depth_extrinsic_xyzquat") else np.eye(4)
+            Kd = None
+            for _, ci in iter_topic(bag, track["depth_info_topic"], limit=1):
+                Kd = np.array(ci.k).reshape(3, 3)
+            slice_z = track.get("slice_z", [-0.5, 1.2])
+            grid = Grid2D(REF.P, slice_z, res=float(track.get("grid_res", 0.05)),
+                          sigma=float(track.get("lf_sigma", 0.10)),
+                          max_d=float(track.get("lf_max_d", 1.0)))
+            frate = float(track.get("rate_hz", 10.0))
+            fdt = (1.0 / frate) * 0.9 if frate > 0 else 0.0
+            rmin = float(track.get("range_min", 0.4)); rmax = float(track.get("range_max", 5.0))
+            T_cd = X @ Xd
+            frames, t_last_f = [], -1e18
+            for t, m in iter_topic(bag, track["depth_topic"]):
+                if t - t_last_f < fdt:
+                    continue
+                Pd = depth_to_cloud(img_depth(m), Kd, rmin=rmin, rmax=rmax)
+                if len(Pd) >= 200:
+                    frames.append((t, apply(T_cd, Pd).astype(np.float32)))
+                    t_last_f = t
+            print("  %d depth frames (child frame)" % len(frames))
+            # boards: absolute fixes of the LEVEL child frame at the nearest frame
+            sights = detect_boards_along(track, s, P, bmap, af, bag)
+            ft = np.array([f[0] for f in frames])
+            To_f = compose_all(np.tile(T_map_origin, (len(ft), 1, 1))
+                               @ interp_traj(ot, oT, ft), X)
+            res = resolve_instances(sights, To_f, ft, bmap,
+                                    track.get("boards") or sorted(bmap),
+                                    float(track.get("instance_radius", 2.0)))
+            board_meas, res_nodes = {}, []
+            for k, bname, _, T_cb in res:
+                Tb, rec = bmap[bname]
+                T_mc = Tb @ inv(T_cb) @ inv(X)              # map -> child
+                lvl, _ = level_parts(T_mc)
+                board_meas[ft[k]] = lvl
+                res_nodes.append((k, bname, T_cb))
+            print("  %d board fixes at %d frames" % (len(res), len(board_meas)))
+            Ts_c, Q = pf_localise(frames, ot, oT, X, T_map_origin, board_meas,
+                                  grid, dict(track, slice_z=slice_z), rng)
+            Ts = compose_all(Ts_c, X)                     # camera optical frame
+            write_tum(os.path.join(outd, "traj_%s.tum" % name), ft, Ts)
+            To_anch = To_f
+            write_tum(os.path.join(outd, "traj_%s_odom_only.tum" % name), ft, To_anch)
+            sp = np.array([q[2] for q in Q]); inj = np.array([q[3] for q in Q])
+            print("  particle spread median %.1f cm p95 %.1f cm; recovery "
+                  "injection active on %d frames (%.0f%% of the run)"
+                  % (np.median(sp) * 100, np.percentile(sp, 95) * 100,
+                     int((inj > 0.01).sum()), 100 * np.mean(inj > 0.01)))
+            csv = os.path.join(outd, "quality_%s.csv" % name)
+            os.makedirs(outd, exist_ok=True)
+            with open(csv, "w") as f:
+                f.write("t,t_rel,lik_mean,spread_cm,inject_frac,board_fix,cluster_frac\n")
+                for (t, lk, s_, pi, fx, cf) in Q:
+                    f.write("%.6f,%.3f,%.4f,%.2f,%.3f,%d,%.3f\n"
+                            % (t, t - ft[0], lk if np.isfinite(lk) else -1, s_ * 100,
+                               pi, int(fx), cf))
+            print("  wrote %s" % csv)
+            results[name] = dict(kind=kind, ts=ft, Ts=Ts, frame="cam",
+                                 res_nodes=res_nodes, bmap=bmap, odom_only=To_anch)
 
         elif kind == "cam_boards":
             rate = float(track.get("rate_hz", 10.0))

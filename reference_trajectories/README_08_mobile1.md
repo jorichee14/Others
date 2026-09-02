@@ -191,3 +191,31 @@ odometry lost 612 of 1146 centres (the odometry jitters 3 cm per 0.1 s at
 the 95th percentile and breaks at 45-49 s), so the mobile_1 configs use
 `submap_window_s: 0`. The mobile_2 Isaac odometry (45 cm over 19 m, no
 breaks) is good enough to stitch and keeps 3.0.
+
+# `pf` track: the camera-only localiser (both platforms)
+
+A 2D particle filter over the map, the estimator that does not depend on the
+odometry never breaking:
+
+* map: points of the anchored cloud in the height band `slice_z` (map z,
+  default -0.5..1.2, i.e. walls at sensor height, no floor/ceiling)
+  rasterised at `grid_res`, distance-transformed into a likelihood field
+* particles: (x, y, yaw) of the LEVEL odometry-child frame; roll/pitch from
+  the odometry, z from the session anchor
+* motion model: the odometry increment between frames with noise `alpha`
+* measurement: each depth frame levelled, height-banded, `scan_pts` points
+  scored on the likelihood field (`lf_sigma`, `z_rand`)
+* boards: absolute (x, y, yaw) fixes with `board_sigma_m` / `board_sigma_deg`;
+  if no particle is near the fix the filter relocalises onto it
+* recovery: augmented MCL - when the measurement likelihood collapses,
+  a fraction of particles is re-drawn in free space near walls until a
+  hypothesis matches again
+* output: weighted mean of the cluster around the best particle, composed
+  with X into the camera optical frame; `quality_<name>.csv` has the
+  particle spread, mean likelihood, injection fraction and board-fix flag
+  per frame
+
+It is bounded (5-10 cm class), multi-modal in corridors, self-recovering
+after a break, and its accuracy is measured against the lidar on mobile_1
+like every other case. Between a break and the next distinctive geometry or
+board it reports a large spread rather than a confident wrong pose.

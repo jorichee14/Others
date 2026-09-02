@@ -181,6 +181,44 @@ print("\n  independent checks: arm A board resid %.1f cm (A never saw a board); 
       % (np.nanmedian(m.eval_board_resid(g["arms"]["A_icp"], g["res_nodes"], BM)) * 100,
          np.nanmedian(m.eval_map_rms(g["arms"]["B_boards"], g["clouds"], REF)) * 100))
 
+# ---------------- particle filter: depth-like frames (90 deg cone, 5 m) in the
+# BODY frame, the jumping odometry, the same board sightings as absolute fixes
+grid = m.Grid2D(MAP, [0.3, 2.2], res=0.05)
+pf_frames = []
+for i in range(0, len(ts), 2):                       # 10 Hz
+    Pm = MAP[rng.choice(len(MAP), 6000, replace=False)]
+    Pc = apply(inv(C_true[i]), Pm)                   # camera optical frame
+    ok = (Pc[:, 2] > 0.4) & (Pc[:, 2] < 5.0) & (np.abs(Pc[:, 0]) < Pc[:, 2]) & \
+         (np.abs(Pc[:, 1]) < 0.7 * Pc[:, 2])
+    Pb_ = apply(X, Pc[ok]) + rng.normal(0, 0.01, (ok.sum(), 3))   # body frame
+    pf_frames.append((ts[i], Pb_.astype(np.float32)))
+pft = np.array([f[0] for f in pf_frames])
+bm = {}
+for (st, dgn, T_cb) in sights:
+    k = int(np.argmin(np.abs(pft - st)))
+    if abs(pft[k] - st) > 0.03:
+        continue
+    name = [n for n, (Tb, r) in BM.items() if r["design"] == dgn and
+            np.linalg.norm((C_true[int(np.argmin(np.abs(ts - st)))] @ T_cb)[:3, 3] - Tb[:3, 3]) < 1.0]
+    if not name:
+        continue
+    T_mc = BM[name[0]][0] @ inv(T_cb) @ inv(X)
+    bm[pft[k]] = m.level_parts(T_mc)[0]
+print("\n== particle filter (%d frames, %d board fixes) ==" % (len(pf_frames), len(bm)))
+prm = dict(particles=1500, scan_pts=200, slice_z=[0.3, 2.2])
+Ts_pf_c, Qpf = m.pf_localise(pf_frames, ot, oT, X, T_map_origin, bm, grid, prm,
+                             np.random.default_rng(1))
+Ts_pf = m.compose_all(Ts_pf_c, X)
+ep, rp = m.traj_gap(Ts_pf, m.interp_traj(ts, C_true, pft))
+after = pft > 47.0
+print("  PF vs truth: median %.1f cm  p95 %.1f cm  max %.1f cm | after the jump: "
+      "median %.1f cm, max %.1f cm | yaw max %.1f deg"
+      % (np.median(ep) * 100, np.percentile(ep, 95) * 100, ep.max() * 100,
+         np.median(ep[after]) * 100, ep[after].max() * 100, math.degrees(rp.max())))
+assert np.median(ep) < 0.15, "PF median off"
+assert np.median(ep[after]) < 0.15, "PF did not recover after the jump"
+assert ep[-1] < 0.20, "PF final pose off"
+
 # ---------------- comparison table + plot through the real functions
 results = {"mobile_1_lidar": dict(kind="lidar_icp", ts=lts, Ts=lTs, Ts_cam=Ts_cam,
                                   odom_only=To_l, odom_only_cam=m.compose_all(To_l, T_lc),

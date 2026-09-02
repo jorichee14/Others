@@ -120,6 +120,60 @@
         "submap_window_s": 0.0,
         "submap_max_pts": 20000,
         "submap_stride": 1
+      },
+      {
+        "name": "mobile_1_pf",
+        "type": "pf",
+        "enabled": true,
+        "odom_topic": "/mobile_1/zed/odom",
+        "anchor_cam": "zed",
+        "cam_extrinsic_xyzquat": [
+          -0.01,
+          0.06,
+          0.015,
+          -0.5,
+          0.5,
+          -0.5,
+          0.5
+        ],
+        "depth_topic": "/mobile_1/zed/depth/depth_registered",
+        "depth_info_topic": "/mobile_1/zed/depth/camera_info",
+        "depth_extrinsic_xyzquat": null,
+        "image_topic": "/mobile_1/zed/left/image_rect_color",
+        "camera_info_topic": "/mobile_1/zed/left/camera_info",
+        "rectified": true,
+        "boards": [
+          "anchor",
+          "anchor_b",
+          "rs_anchor"
+        ],
+        "img_stride": 2,
+        "max_images": 0,
+        "instance_radius": 2.0,
+        "rate_hz": 10.0,
+        "range_min": 0.4,
+        "range_max": 5.0,
+        "slice_z": [
+          -0.5,
+          1.2
+        ],
+        "grid_res": 0.05,
+        "lf_sigma": 0.1,
+        "lf_max_d": 1.0,
+        "particles": 3000,
+        "scan_pts": 250,
+        "z_rand": 0.1,
+        "alpha": [
+          0.2,
+          0.2,
+          0.2,
+          0.2
+        ],
+        "alpha_slow": 0.001,
+        "alpha_fast": 0.1,
+        "board_sigma_m": 0.05,
+        "board_sigma_deg": 2.0,
+        "seed_rng": 0
       }
     ]
   }
