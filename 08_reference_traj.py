@@ -1035,6 +1035,30 @@ def main():
             t_last = -1e18; T_prev = None; t0w = time.time()
             use_deskew = bool(track.get("deskew", True))
             T_cl = X @ T_cam_lidar
+            # Optional: seed every scan from ANOTHER track's finished
+            # trajectory instead of chaining raw odometry. Scan-to-map ICP
+            # cannot tell a corridor from its twin - in a building that
+            # circles a stairwell it will lock onto the wrong one and report
+            # a small residual while metres out (observed: 2.7 cm rms, 6/6
+            # observability, ~9 m from where the boards put the robot). A
+            # board-anchored trajectory puts every scan in the right basin,
+            # and seeding each scan independently means no accumulation.
+            seed_ts = seed_Ts = None
+            if track.get("seed_from"):
+                nm2, _, arm2 = str(track["seed_from"]).partition(":")
+                r2 = results.get(nm2)
+                if r2 is None:
+                    print("  ! seed_from '%s': no finished track named '%s' "
+                          "(it must appear EARLIER in the tracks list)"
+                          % (track["seed_from"], nm2))
+                else:
+                    seed_Ts = (r2.get("arms") or {}).get(arm2) if arm2 else None
+                    if seed_Ts is None:
+                        seed_Ts = r2["Ts"]
+                    seed_ts = r2["ts"]
+                    print("  seeding every scan from '%s' (%d poses) - no "
+                          "chaining, so no accumulation" % (track["seed_from"],
+                                                            len(seed_ts)))
             for t, m in iter_topic(bag, track["points_topic"]):
                 if t - t_last < keep_dt:
                     continue
@@ -1052,7 +1076,11 @@ def main():
                 Pb = voxel_centroid(np.asarray(Pb, float), vox).astype(float)
                 # seed: previous solution advanced by odometry (scan 0: anchor)
                 T_ol = interp_traj(ot, oT, np.array([t]))[0]
-                if T_prev is None:
+                if seed_ts is not None and seed_ts[0] <= t <= seed_ts[-1]:
+                    # seed track's state is the camera optical frame
+                    T_seed = interp_traj(seed_ts, seed_Ts,
+                                         np.array([t]))[0] @ T_cam_lidar
+                elif T_prev is None:
                     T_seed = T_map_origin @ T_ol @ X @ T_cam_lidar
                 else:
                     # the odometry increment lives in the odom CHILD frame;
@@ -1492,23 +1520,17 @@ def main():
 
 
 SAMPLE_CONFIG = r"""
+Paste the block below into pipeline_config.json (it is valid JSON as-is).
+
 "08_reference": {
   "bag": "/path/to/mirc_dataset_coop2_20260828_merged",
   "session_anchor": "map_stages_20260828_outputs/session_anchor.json",
   "anchor_frame": "map_stages_20260828_outputs/anchor_frame.json",
-  "ref_map": "map_final_20260828_nc_anchored.pcd",  <- MUST be the ANCHORED cloud
-      (stage 03 output). It already is the denoised, dynamic-removed map; but
-      denoised.pcd itself lives in the pre-anchor GLIM frame and would put a
-      fixed R_align+offset error on every trajectory here.
+  "ref_map": "map_final_20260828_nc_anchored.pcd",
   "out_dir": "map_stages_20260828_outputs/reference_coop2",
-  "target_voxel": 0.05, "plane_voxel": 0.4,
+  "target_voxel": 0.05,
+  "plane_voxel": 0.4,
   "tracks": [
-    { "name": "mobile_1_lidar", "type": "lidar_icp",
-      "points_topic": "/mobile_1/ouster/points",
-      "odom_topic": "/mobile_1/zed/odom",
-      "anchor_cam": "zed",
-      "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
-      "rate_hz": 5.0, "range_min": 0.7, "range_max": 15.0, "scan_voxel": 0.10 },
     { "name": "mobile_1_zed", "type": "arms",
       "odom_topic": "/mobile_1/zed/odom",
       "anchor_cam": "zed",
@@ -1518,11 +1540,21 @@ SAMPLE_CONFIG = r"""
       "depth_extrinsic_xyzquat": null,
       "image_topic": "/mobile_1/zed/left/image_rect_color",
       "camera_info_topic": "/mobile_1/zed/left/camera_info", "rectified": true,
-      "boards": ["anchor", "anchor_b"],
+      "boards": ["anchor", "anchor_b", "rs_anchor"],
       "rate_hz": 10.0, "img_stride": 2,
       "odom_sigma_t": 0.003, "odom_sigma_r": 0.001,
-      "range_min": 0.4, "range_max": 5.0, "prior_beta": 0.10,
+      "range_min": 0.4, "range_max": 3.0, "prior_beta": 0.10,
       "max_shift": 0.3, "max_rot_deg": 5.0, "icp_pts": 400, "gn_iters": 25 },
+
+    { "name": "mobile_1_lidar", "type": "lidar_icp",
+      "points_topic": "/mobile_1/ouster/points",
+      "odom_topic": "/mobile_1/zed/odom",
+      "anchor_cam": "zed",
+      "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
+      "seed_from": "mobile_1_zed:B_boards",
+      "rate_hz": 10.0, "range_min": 0.7, "range_max": 15.0,
+      "scan_voxel": 0.10, "deskew": true,
+      "max_shift": 0.5, "max_rot_deg": 5.0 },
 
     { "name": "mobile_2", "type": "arms",
       "odom_topic": "/mobile_2/visual_slam/tracking/odometry",
@@ -1541,6 +1573,24 @@ SAMPLE_CONFIG = r"""
       "max_shift": 0.3, "max_rot_deg": 5.0, "icp_pts": 400, "gn_iters": 25 }
   ]
 }
+
+NOTES
+
+ref_map MUST be the ANCHORED cloud (stage 03 output). It already is the
+  denoised, dynamic-removed map. denoised.pcd itself lives in the pre-anchor
+  GLIM frame and would put a fixed R_align+offset error on every trajectory.
+
+seed_from initialises every scan of a lidar_icp track from another track's
+  finished trajectory (composed with T_cam_lidar), instead of chaining
+  odometry. Use it when the map is self-similar - parallel corridors around a
+  stairwell - because scan-to-map ICP cannot tell a corridor from its twin and
+  will settle into the wrong one with a small residual and full rank. The
+  seed source must appear EARLIER in this list, which is why the arms track
+  comes first here.
+
+cam_extrinsic_xyzquat is the odometry child frame -> the anchored optical
+  frame. Get it with: ros2 run tf2_ros tf2_echo <child_frame_id> <optical>
+  Leaving it wrong bends the whole track by metres.
 """
 
 if __name__ == "__main__":
