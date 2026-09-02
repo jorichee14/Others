@@ -1054,6 +1054,57 @@ def report_lidar_quality(ts, Q, outd, name, seed_mode="lidar"):
 
 
 
+def report_drift_corrections(node_t, Ts, To_n, X, To_anch, sight_nodes, gap_s=2.0):
+    """What the pose graph did between board sightings. Sightings are grouped
+    (gap > gap_s starts a new group). For every odometry-only stretch between
+    two groups, the pose the ODOMETRY would have carried from the last
+    corrected pose of the previous group is compared with the corrected pose
+    at re-acquisition: that difference is the drift the odometry accumulated
+    over the stretch, and the graph distributed exactly that correction back
+    over the stretch's nodes. Also printed per stretch: how far the corrected
+    trajectory moved from the anchored odometry (the applied correction)."""
+    ks = sorted(set(sight_nodes))
+    if not ks:
+        return
+    groups, cur = [], [ks[0]]
+    for k in ks[1:]:
+        if node_t[k] - node_t[cur[-1]] > gap_s:
+            groups.append(cur); cur = [k]
+        else:
+            cur.append(k)
+    groups.append(cur)
+    t0 = node_t[0]
+    print("  drift corrected at each board re-acquisition (%d sighting "
+          "group(s)):" % len(groups))
+    prev_end = 0                      # node 0 carries the session-anchor prior
+    for g in groups:
+        s = g[0]
+        if s <= prev_end:
+            prev_end = max(prev_end, g[-1]); continue
+        Z = inv(X) @ inv(To_n[prev_end]) @ To_n[s] @ X
+        T_pred = Ts[prev_end] @ Z
+        d = inv(T_pred) @ Ts[s]
+        dt_ = float(np.linalg.norm(d[:3, 3])); dr_ = float(np.linalg.norm(log_R(d[:3, :3])))
+        seg = slice(prev_end, s + 1)
+        corr = np.linalg.norm(Ts[seg, :3, 3] - To_anch[seg, :3, 3], axis=1)
+        plen = path_length(To_anch[seg]) if s - prev_end > 1 else 0.0
+        print("     t=%6.1f..%6.1f s (%5.1f s, %5.1f m of path, %4d nodes): "
+              "odometry drift at re-acquisition %6.1f cm / %5.1f deg -> "
+              "distributed over the stretch; applied correction vs anchored "
+              "odometry median %5.1f cm, max %5.1f cm"
+              % (node_t[prev_end] - t0, node_t[s] - t0, node_t[s] - node_t[prev_end],
+                 plen, s - prev_end, dt_ * 100, math.degrees(dr_),
+                 np.median(corr) * 100, corr.max() * 100))
+        prev_end = g[-1]
+    if prev_end < len(node_t) - 1:
+        seg = slice(prev_end, len(node_t))
+        corr = np.linalg.norm(Ts[seg, :3, 3] - To_anch[seg, :3, 3], axis=1)
+        print("     t=%6.1f..%6.1f s after the last sighting: odometry only, "
+              "no re-acquisition to measure the drift (correction vs anchored "
+              "odometry median %.1f cm)"
+              % (node_t[prev_end] - t0, node_t[-1] - t0, np.median(corr) * 100))
+
+
 def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
              wanted, track, REF, anchor_sig_t, src="depth", outd=None,
              verbose=True):
@@ -1141,18 +1192,31 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     b_init = track.get("boards_init", "odom")
     j_init = track.get("joint_init", "A_icp" if src == "lidar" else "B_boards")
     ARMS = {}
-    for arm, (ui, ub) in [("A_icp", (True, False)),
-                          ("B_boards", (False, True)),
-                          ("C_joint", (True, True))]:
+    n_breaks = int((edge_scale > 1).sum())
+    # B_boards is the pure "odometry + boards" pose graph: NOTHING from the
+    # lidar enters it, not even the break stamps - the ZED plus the boards is
+    # all it has, and its result is what that pair alone can deliver.
+    # B_breaks is the same graph with the lidar-detected break edges freed:
+    # the difference between the two is exactly the value of knowing WHERE
+    # the odometry broke. A_icp and C_joint use the freed edges (their map
+    # factors already sit on the lidar).
+    arms = [("A_icp", True, False, edge_scale),
+            ("B_boards", False, True, np.ones_like(edge_scale))]
+    if n_breaks:
+        arms.append(("B_breaks", False, True, edge_scale))
+    arms.append(("C_joint", True, True, edge_scale))
+    for arm, ui, ub, es in arms:
         print("  == arm %s ==" % arm)
         am = abs_meas + [anchor_prior] if ub else []
         if arm == "A_icp":
             start = T_init
-        elif arm == "B_boards":
+        elif arm.startswith("B_"):
             start = To_anch if b_init == "odom" else T_init
-            print("     (initialised from the %s)"
+            print("     (initialised from the %s%s)"
                   % ("anchored odometry" if b_init == "odom"
-                     else "chained ICP poses"))
+                     else "chained ICP poses",
+                     "; %d break edge(s) freed" % n_breaks
+                     if arm == "B_breaks" else "; no lidar information"))
         else:
             start = ARMS.get(j_init, T_init)
             print("     (initialised from %s)"
@@ -1162,11 +1226,15 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
                          use_icp=ui, use_board=ub,
                          icp_pts=int(track.get("icp_pts", 400)),
                          iters=int(track.get("gn_iters", 12)), verbose=verbose,
-                         edge_scale=edge_scale)
+                         edge_scale=es)
         ARMS[arm] = Ts
         if outd:
             write_tum(os.path.join(outd, "traj_%s_%s.tum" % (name, arm)),
                       node_t, Ts)
+        if arm.startswith("B_"):
+            report_drift_corrections(node_t, Ts, To_n, X, To_anch,
+                                     [k for k, _, _ in res_nodes],
+                                     float(track.get("sighting_group_gap_s", 2.0)))
     if outd:
         write_tum(os.path.join(outd, "traj_%s_odom_only.tum" % name),
                   node_t, To_anch)
@@ -1189,109 +1257,142 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
           "'vs odom' is the correction each arm applied to the anchored "
           "odometry - the measured drift it removed.")
     return dict(node_t=node_t, arms=ARMS, odom_only=To_anch, chained=T_init,
-                res_nodes=res_nodes, clouds=clouds, abs_meas=abs_meas)
+                res_nodes=res_nodes, clouds=clouds, abs_meas=abs_meas,
+                edge_scale=edge_scale)
 
 
 # --------------------------------------------------------------------------- #
-def save_paths_png(results, ref, bmap, outd, T_lc=None):
-    """Two panels: the trajectories over the map in XY, and each camera
-    track's distance from the lidar track over time. The first shows WHERE a
-    track goes wrong, the second WHEN - a table of medians shows neither."""
+def collect_methods(results):
+    """Every trajectory of every rig, in the camera optical frame:
+    [(label, ts, Ts, colour, linestyle)]. Lidar tracks are drawn as the
+    camera frame (Ts_cam) so all curves of a rig are the same point."""
+    cols = ["tab:red", "tab:green", "tab:blue", "tab:orange", "tab:purple",
+            "tab:brown", "tab:pink", "tab:cyan"]
+    ls = ["-", (0, (6, 3)), (0, (2, 2)), (0, (1, 3)), (0, (5, 1, 1, 1))]
+    out, i = [], 0
+    have_cam = any(r["kind"] != "lidar_icp" for r in results.values())
+    for nm, r in results.items():
+        if r["kind"] == "lidar_icp":
+            out.append((nm + " lidar ICP", r["ts"], r.get("Ts_cam", r["Ts"]),
+                        "k", "-"))
+            if not have_cam and r.get("odom_only_cam") is not None:
+                out.append((nm + " odom only", r["ts"], r["odom_only_cam"],
+                            "0.45", (0, (1, 2))))
+            continue
+        if r.get("odom_only") is not None:
+            out.append((nm + " odom only", r["ts"], r["odom_only"],
+                        "0.45", (0, (1, 2))))
+        arms = r.get("arms") or {nm: r["Ts"]}
+        for an, aT in sorted(arms.items()):
+            lbl = ("%s %s" % (nm, an)) if r.get("arms") else nm
+            out.append((lbl, r["ts"], aT, cols[i % len(cols)], ls[i % len(ls)]))
+            i += 1
+    return out
+
+
+def save_paths_png(results, ref, bmap, outd, T_lc=None, fname="paths.png"):
+    """One figure with everything done so far:
+      top-left   all trajectories over the map (overlay)
+      top-right  each camera track's distance from the lidar track over time
+      below      one panel PER METHOD over the map, the lidar track in light
+                 grey behind it, so overlapping curves cannot hide each other
+    Re-saved after every track, so the image exists even if a later track
+    fails."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(1, 2, figsize=(17, 7.5),
-                           gridspec_kw={"width_ratios": [1.35, 1]})
-
-    if ref is not None and len(ref.P):
-        P = ref.P[::max(1, len(ref.P) // 60000)]
-        ax[0].scatter(P[:, 0], P[:, 1], s=0.15, c="0.86", zorder=0,
-                      linewidths=0, label="reference map")
-    for nm, b in sorted(bmap.items()):
-        p = b[0][:3, 3]
-        ax[0].plot(p[0], p[1], "*", ms=17, mfc="gold", mec="k", mew=0.8, zorder=6)
-        ax[0].annotate(nm, (p[0], p[1]), fontsize=8, zorder=7,
-                       xytext=(6, 6), textcoords="offset points")
-
+    methods = collect_methods(results)
+    if not methods:
+        return
     lid = next((r for r in results.values() if r["kind"] == "lidar_icp"), None)
-    have_cam_track = any(r["kind"] != "lidar_icp" for r in results.values())
-    curves = []
-    for nm, r in results.items():
-        if r["kind"] == "lidar_icp":
-            # drawn as the CAMERA optical frame (Ts_cam) so every curve of a
-            # rig is the same physical point
-            curves.append((nm + " (lidar ICP)", r["ts"],
-                           r.get("Ts_cam", r["Ts"]), "k", 2.4, "-"))
-            if not have_cam_track and r.get("odom_only_cam") is not None:
-                curves.append((nm + " odom only (anchored)", r["ts"],
-                               r["odom_only_cam"], "0.45", 1.4, (0, (1, 2))))
-        else:
-            if r.get("odom_only") is not None:
-                # the uncorrected anchored odometry: what every correction
-                # is measured against
-                curves.append((nm + " odom only (anchored)", r["ts"],
-                               r["odom_only"], "0.45", 1.4, (0, (1, 2))))
-            for i, (an, aT) in enumerate(sorted((r.get("arms") or
-                                                 {nm: r["Ts"]}).items())):
-                # distinct dash patterns: arms that AGREE overlap exactly, and
-                # a solid curve hidden under another teaches nothing
-                curves.append(("%s %s" % (nm, an), r["ts"], aT,
-                               ["tab:red", "tab:green", "tab:blue",
-                                "tab:orange"][i % 4], 1.6,
-                               ["-", (0, (6, 3)), (0, (2, 2)), (0, (1, 3))][i % 4]))
-    for nm, ts, Ts, c, lw, *rest in curves:
-        ls = rest[0] if rest else "-"
-        ax[0].plot(Ts[:, 0, 3], Ts[:, 1, 3], ls=ls, color=c, lw=lw, label=nm,
-                   zorder=4, alpha=0.9)
-        ax[0].plot(Ts[0, 0, 3], Ts[0, 1, 3], "o", color=c, ms=7, mec="k",
-                   mew=0.7, zorder=5)
+    n_small = len(methods)
+    ncol = 3
+    nrow_small = int(math.ceil(n_small / ncol))
+    fig = plt.figure(figsize=(18, 7.5 + 5.2 * nrow_small))
+    gs = fig.add_gridspec(1 + nrow_small, ncol,
+                          height_ratios=[1.6] + [1.0] * nrow_small)
+    ax0 = fig.add_subplot(gs[0, :2]); ax1 = fig.add_subplot(gs[0, 2])
 
-    # where the LIDAR track puts each board it saw - the duplicate-board test,
-    # drawn: a cross far from its gold star means the seen board is not that one
+    def draw_map(ax):
+        if ref is not None and len(ref.P):
+            P = ref.P[::max(1, len(ref.P) // 60000)]
+            ax.scatter(P[:, 0], P[:, 1], s=0.15, c="0.86", zorder=0,
+                       linewidths=0)
+        for nm, b in sorted(bmap.items()):
+            p = b[0][:3, 3]
+            ax.plot(p[0], p[1], "*", ms=13, mfc="gold", mec="k", mew=0.6, zorder=6)
+            ax.annotate(nm, (p[0], p[1]), fontsize=7, zorder=7,
+                        xytext=(5, 5), textcoords="offset points")
+        ax.set_aspect("equal"); ax.grid(alpha=.3)
+
+    draw_map(ax0)
+    for nm, ts, Ts, c, l in methods:
+        ax0.plot(Ts[:, 0, 3], Ts[:, 1, 3], ls=l, color=c,
+                 lw=2.2 if c == "k" else 1.5, label=nm, zorder=4, alpha=0.9)
+        ax0.plot(Ts[0, 0, 3], Ts[0, 1, 3], "o", color=c, ms=6, mec="k", mew=0.6,
+                 zorder=5)
+    # where the LIDAR track puts each board it saw (duplicate-board test)
     if lid is not None and T_lc is not None:
         for r in results.values():
             for k, bn, T_cb in (r.get("res_nodes") or []):
                 t = r["ts"][k]
-                if not (lid["ts"][0] <= t <= lid["ts"][-1]):
-                    continue
-                Tm = interp_traj(lid["ts"], lid["Ts"],
-                                 np.array([t]))[0] @ T_lc @ T_cb
-                ax[0].plot(Tm[0, 3], Tm[1, 3], "x", color="tab:purple", ms=4,
-                           mew=0.8, zorder=8)
-        ax[0].plot([], [], "x", color="tab:purple", ms=6,
-                   label="board position implied by the lidar track")
-    ax[0].set_aspect("equal"); ax[0].grid(alpha=.3)
-    ax[0].set_xlabel("x [m]"); ax[0].set_ylabel("y [m]")
-    ax[0].set_title("trajectories in the map frame (o = session start)")
-    ax[0].legend(fontsize=7, loc="best")
+                if lid["ts"][0] <= t <= lid["ts"][-1]:
+                    Tm = interp_traj(lid["ts"], lid["Ts"], np.array([t]))[0] \
+                        @ T_lc @ T_cb
+                    ax0.plot(Tm[0, 3], Tm[1, 3], "x", color="tab:purple", ms=4,
+                             mew=0.8, zorder=8)
+        ax0.plot([], [], "x", color="tab:purple", ms=6,
+                 label="board position implied by the lidar track")
+    ax0.set_title("all methods, map frame, camera optical point (o = start)")
+    ax0.set_xlabel("x [m]"); ax0.set_ylabel("y [m]")
+    ax0.legend(fontsize=7, loc="best")
 
+    gaps = {}
     if lid is not None:
-        for nm, ts, Ts, c, lw, *rest in curves:
-            if c == "k":
-                continue
-            tq = ts[(ts >= lid["ts"][0]) & (ts <= lid["ts"][-1])]
+        ref_ts, ref_T = methods[0][1], methods[0][2]     # first entry = lidar
+        for nm, ts, Ts, c, l in methods[1:]:
+            tq = ref_ts[(ref_ts >= ts[0]) & (ref_ts <= ts[-1])]
             if len(tq) < 5:
                 continue
-            Tl = interp_traj(lid["ts"], lid["Ts"], tq) @ np.tile(
-                T_lc if T_lc is not None else np.eye(4), (len(tq), 1, 1))
             d = np.linalg.norm(interp_traj(ts, Ts, tq)[:, :3, 3]
-                               - Tl[:, :3, 3], axis=1)
-            ax[1].plot(tq - lid["ts"][0], d, ls=(rest[0] if rest else "-"),
-                       color=c, lw=1.6, label=nm)
+                               - interp_traj(ref_ts, ref_T, tq)[:, :3, 3], axis=1)
+            gaps[nm] = (tq, d)
+            ax1.plot(tq - ref_ts[0], d, ls=l, color=c, lw=1.4, label=nm)
         for r in results.values():
             for k, bn, _ in (r.get("res_nodes") or []):
-                ax[1].axvline(r["ts"][k] - lid["ts"][0], color="gold",
-                              lw=0.4, alpha=0.35, zorder=0)
-        ax[1].plot([], [], color="gold", lw=2, label="board sighting")
-        ax[1].set_xlabel("t [s]"); ax[1].set_ylabel("distance from lidar track [m]")
-        ax[1].set_title("agreement with the lidar track over time")
-        ax[1].grid(alpha=.3); ax[1].legend(fontsize=7)
+                ax1.axvline(r["ts"][k] - ref_ts[0], color="gold", lw=0.4,
+                            alpha=0.35, zorder=0)
+        ax1.plot([], [], color="gold", lw=2, label="board sighting")
+        ax1.set_xlabel("t [s]"); ax1.set_ylabel("distance from lidar track [m]")
+        ax1.set_title("agreement with the lidar track over time")
+        ax1.set_yscale("symlog", linthresh=0.1)
+        ax1.grid(alpha=.3, which="both"); ax1.legend(fontsize=7)
     else:
-        ax[1].axis("off")
-        ax[1].text(.5, .5, "no lidar track to compare against", ha="center")
-    png = os.path.join(outd, "paths.png")
-    plt.tight_layout(); plt.savefig(png, dpi=130); plt.close()
-    print("\nwrote %s" % png)
+        ax1.axis("off"); ax1.text(.5, .5, "no lidar track yet", ha="center")
+
+    for i, (nm, ts, Ts, c, l) in enumerate(methods):
+        ax = fig.add_subplot(gs[1 + i // ncol, i % ncol])
+        draw_map(ax)
+        if lid is not None and i > 0:
+            L = methods[0][2]
+            ax.plot(L[:, 0, 3], L[:, 1, 3], "-", color="0.55", lw=1.0, zorder=3,
+                    label="lidar ICP")
+        ax.plot(Ts[:, 0, 3], Ts[:, 1, 3], "-", color=c, lw=1.6, zorder=4, label=nm)
+        ax.plot(Ts[0, 0, 3], Ts[0, 1, 3], "o", color=c, ms=7, mec="k", mew=0.6,
+                zorder=5)
+        ax.plot(Ts[-1, 0, 3], Ts[-1, 1, 3], "s", color=c, ms=7, mec="k", mew=0.6,
+                zorder=5)
+        ttl = nm
+        if nm in gaps:
+            d = gaps[nm][1]
+            ttl += "\nvs lidar: median %.1f cm, p95 %.1f cm, max %.1f cm" % (
+                np.median(d) * 100, np.percentile(d, 95) * 100, d.max() * 100)
+        ax.set_title(ttl, fontsize=9)
+        ax.set_xlabel("x [m]"); ax.set_ylabel("y [m]")
+        ax.legend(fontsize=7, loc="best")
+    png = os.path.join(outd, fname)
+    plt.tight_layout(); plt.savefig(png, dpi=110); plt.close()
+    print("  wrote %s (%d methods: o = start, square = end)" % (png, len(methods)))
 
 
 def compare_rig(results, T_lc, outd):
@@ -1729,6 +1830,10 @@ def main():
                                  bmap=bmap, odom_only=T_init)
         else:
             print("  ! unknown type '%s' - skipped" % kind)
+        try:
+            save_paths_png(results, REF, bmap, outd, T_lc)
+        except Exception as e:
+            print("  (path plot failed: %s: %s)" % (type(e).__name__, e))
 
     # -------- cross-check: two independent tracks of one rigid body -------- #
     lid_name = next((k for k, r in results.items() if r["kind"] == "lidar_icp"),
@@ -1852,10 +1957,6 @@ def main():
             compare_rig(results, T_lc, outd)
     except Exception as e:
         print("\n(comparison table failed: %s: %s)" % (type(e).__name__, e))
-    try:
-        save_paths_png(results, REF, bmap, outd, T_lc)
-    except Exception as e:
-        print("\n(path plot failed: %s: %s)" % (type(e).__name__, e))
     print("\ndone -> %s" % outd)
 
 
@@ -1901,6 +2002,9 @@ SAMPLE_CONFIG = r"""
       "odom_sigma_t": 0.003, "odom_sigma_r": 0.001,
       "boards_init": "odom", "joint_init": "A_icp",
       "odom_jump_check": true, "odom_jump_m": 0.05, "odom_jump_deg": 2.0,
+          <- break stamps are used by A, C and the extra B_breaks arm only;
+             B_boards never sees anything from the lidar
+      "sighting_group_gap_s": 2.0,
       "icp_pts": 400, "gn_iters": 25 }
   ]
 }

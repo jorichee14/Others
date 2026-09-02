@@ -12,9 +12,10 @@
 |---|---|---|
 | 1 | `mobile_1_lidar` (`lidar_icp`) | every Ouster scan registered to the anchored map, board-free and (after scan 0) odometry-free: each scan is seeded from the lidar's own previous poses, the ZED increment is only a fallback seed, and a scan that fails both is retried with wide gates before being marked unregistered. `traj_mobile_1_lidar.tum` (lidar frame), `traj_mobile_1_lidar_in_cam.tum` (same track as the ZED left optical frame), `traj_mobile_1_lidar_odom_only.tum` (anchored ZED odom at the same stamps, lidar frame), `quality_mobile_1_lidar.csv/png` (per-scan plane rms, observable DOF, seed status, ZED step vs lidar step) |
 | 1b | printed | **lidar ICP vs ZED odom**: translation/rotation gap at the same stamps, gap over time, end gap as % of path, and the per-step disagreement with the stamps of every step over 5 cm or 2 deg. One big step is a ZED jump; a run of them is the ZED losing scale or tracking. |
-| 2 | `mobile_1_zed` (`arms`, `cloud_source: lidar`) | three trajectories of the ZED optical frame from one graph: `A_icp` (ZED odom + lidar map factors), `B_boards` (ZED odom + board sightings + session anchor, **started from the odometry** = "boards correct the ZED odom"), `C_joint` (lidar + boards + odom). Plus `traj_mobile_1_zed_odom_only.tum`. |
+| 2 | `mobile_1_zed` (`arms`, `cloud_source: lidar`) | trajectories of the ZED optical frame from one pose graph: `A_icp` (ZED odom + lidar map factors), `B_boards` (ZED odom + board sightings + session anchor, **started from the odometry, nothing from the lidar** = "boards correct the ZED odom"; the graph distributes the drift measured at each board re-acquisition back over the odometry-only stretch before it, and prints that drift and the applied correction per stretch), `B_breaks` (same graph, but the odometry edges where the ZED step disagrees with the lidar step are freed; only appears when such breaks exist; the difference to `B_boards` is the value of knowing where the ZED broke), `C_joint` (lidar + boards + odom). Plus `traj_mobile_1_zed_odom_only.tum`. |
 | 2b | printed | ablation table: board residual / map rms / vs C / vs odom per arm. A's board residual and B's map rms are the independent cells. |
-| 3 | printed | cross-check (lidar track scored on the ZED's board sightings, both `T_lidar_camera` conventions), then the rig comparison table: lidar ICP, odom only, A, B, C pairwise, all in the camera frame at the lidar stamps. `compare_mobile_1.csv` has the gap to the lidar track over time; `paths.png` draws everything. |
+| 3 | printed | cross-check (lidar track scored on the ZED's board sightings, both `T_lidar_camera` conventions), then the rig comparison table: lidar ICP, odom only, A, B, C pairwise, all in the camera frame at the lidar stamps. `compare_mobile_1.csv` has the gap to the lidar track over time. |
+| always | `paths.png` | re-saved after every track: overlay of all methods over the map, gap to the lidar track over time (log scale), and one panel per method with the lidar track in grey behind it, start = circle, end = square. It exists even if a later track fails. |
 
 The lidar clouds are reused for the graph (no second ICP pass). Only the
 clouds are re-registered inside the graph; the chained lidar POSES are
@@ -80,9 +81,12 @@ right. If the inverse wins, set `"invert_T_lidar_camera": true` and rerun.
   not follow it because it is seeded from itself). A constant offset from
   t=0: the anchor vs the map, or `X`. Unregistered scans are listed with
   their stamps; poses there are extrapolated, not measured.
-* **arm B vs odom** is the correction the boards applied. The
-  board-factor-coverage line says how much of the run the boards can reach;
-  outside it B is pure odometry.
+* **arm B's per-stretch lines** are the drift the odometry accumulated
+  between two sighting groups (measured at re-acquisition) and the
+  correction the graph distributed over that stretch. A stretch whose drift
+  is metres or tens of degrees over a few metres of path is a ZED tracking
+  break, not drift, and a pure odometry+boards graph can only smear it over
+  the stretch; `B_breaks` shows the same graph with the break located.
 * **lidar ICP vs arm B** (two estimates of one body, no shared information)
   is the honest accuracy statement. Constant offset = `T_lidar_camera` or `X`
   error; growth between sightings = ZED drift the boards could not reach.
