@@ -145,7 +145,7 @@
         "sighting_group_gap_s": 2.0,
         "icp_pts": 400,
         "gn_iters": 25,
-        "submap_window_s": 3.0,
+        "submap_window_s": 0.0,
         "submap_max_pts": 20000,
         "submap_stride": 1
       }

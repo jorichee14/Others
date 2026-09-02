@@ -117,7 +117,7 @@
         "icp_sigma_depth": 0.05,
         "odom_jump_m": 0.05,
         "odom_jump_deg": 2.0,
-        "submap_window_s": 3.0,
+        "submap_window_s": 0.0,
         "submap_max_pts": 20000,
         "submap_stride": 1
       }

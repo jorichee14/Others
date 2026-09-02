@@ -185,3 +185,9 @@ over 3 s for the stitch to hold; a submap spanning a tracking break is
 internally inconsistent and shows up as an unregistered centre. Set
 `submap_window_s` to 0 for the old single-frame behaviour;
 `submap_max_pts` and `submap_stride` bound the cost.
+
+Measured on the coop2 bag: 3 s submaps stitched with the mobile_1 ZED
+odometry lost 612 of 1146 centres (the odometry jitters 3 cm per 0.1 s at
+the 95th percentile and breaks at 45-49 s), so the mobile_1 configs use
+`submap_window_s: 0`. The mobile_2 Isaac odometry (45 cm over 19 m, no
+breaks) is good enough to stitch and keeps 3.0.
