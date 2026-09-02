@@ -133,3 +133,20 @@ used a board) is the honest accuracy number for the depth-only route.
 | `Xd` = `depth_extrinsic_xyzquat` | `T_color_depth` (pose of the depth frame in the color optical frame): depth clouds are moved into the color frame with it, and the depth chain's state (depth frame) is converted to the color frame with its inverse |
 | depth chain seed | `T_map_depth = T_map_odom @ T_odom_child(t) @ X @ Xd` at frame 0, then the odometry increment conjugated by `X @ Xd` |
 | anchor | stage-06 `realsense` `map_to_cam` (color optical frame) at the dwell end |
+
+# mobile_1 with ZED depth (`pipeline_config_08_mobile1_zeddepth.json`)
+
+The case where the ZED's own depth is the range sensor. Runs the lidar track
+(reference) and `mobile_1_zeddepth`: an `arms` track with
+`"cloud_source": "depth"` on `/mobile_1/zed/depth/depth_registered`
+(32FC1 metres, already registered to the left rectified camera, so
+`depth_extrinsic_xyzquat` is null), ZED odometry, boards. Outputs go to
+`reference_coop2_mobile1_zeddepth`; the frozen `mobile_1_zed` (lidar clouds)
+track stays disabled. In `paths_mobile_1.png` the ZED depth chain and its
+arms `[depth clouds]` are all measured against the lidar ICP.
+
+Settings that differ from mobile_2 and why: `cv_must_agree_with_odom` is
+false because this ZED odometry breaks at 45-49 s and the constant-velocity
+fallback must be allowed to disagree with it there; `icp_init` is `chained`
+because a 95-degree-broken odometry is a worse start for arm A than the
+depth chain.

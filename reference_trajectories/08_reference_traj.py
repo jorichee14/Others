@@ -1353,9 +1353,13 @@ def collect_methods(results, rig):
                 lbl += " [%s clouds]" % r["cloud_source"]
             rest.append((lbl, r["ts"], aT, cols[i % len(cols)], ls[i % len(ls)]))
             i += 1
-    # one reference, one odom-only curve (they are the same odometry)
+    # one reference, one odom-only curve (they are the same odometry); any
+    # further geometry-only chain (e.g. the ZED depth chain of a rig that
+    # also has a lidar) is drawn as an ordinary method against the reference
+    extra = [(lbl, ts, Ts, cols[(i + j) % len(cols)], ls[(i + j) % len(ls)])
+             for j, (lbl, ts, Ts, _, _) in enumerate(ref[1:])]
     ref = ref[:1]; odom = odom[:1]
-    return ref + odom + rest, bool(ref)
+    return ref + odom + extra + rest, bool(ref)
 
 
 def rigs_of(results):
