@@ -50,6 +50,91 @@ float64 offset_delta_seconds
 
 STRING = "string data\n"
 
+WIFI_STATUS = """std_msgs/Header header
+string   interface
+string   mac_address
+bool     up
+bool     associated
+string   essid
+string   bssid
+string   mode
+float64  frequency_ghz
+int32    channel
+float64  bit_rate_mbps
+float64  tx_power_dbm
+int32    link_quality
+int32    link_quality_max
+float64  link_quality_ratio
+float64  signal_dbm
+float64  signal_avg_dbm
+float64  noise_dbm
+float64  snr_db
+bool     noise_valid
+bool     snr_valid
+float64  rx_bitrate_mbps
+float64  tx_bitrate_mbps
+int32    rx_mcs
+int32    tx_mcs
+int32    rx_nss
+int32    tx_nss
+int32    rx_width_mhz
+int32    tx_width_mhz
+string   rx_phy_mode
+string   tx_phy_mode
+bool     tx_short_gi
+int64    tx_retries
+int64    tx_failed
+float64  expected_mbps
+int64    connected_time_s
+int64    sta_rx_bytes
+int64    sta_tx_bytes
+int64    sta_rx_packets
+int64    sta_tx_packets
+float64  channel_active_ms
+float64  channel_busy_ms
+float64  channel_busy_ratio
+int64    rx_invalid_nwid
+int64    rx_invalid_crypt
+int64    rx_invalid_frag
+int64    tx_excessive_retries
+int64    invalid_misc
+int64    missed_beacon
+uint64   rx_packets
+uint64   rx_bytes
+uint64   rx_errors
+uint64   rx_dropped
+uint64   rx_overruns
+uint64   rx_frame_errors
+uint64   tx_packets
+uint64   tx_bytes
+uint64   tx_errors
+uint64   tx_dropped
+uint64   tx_overruns
+uint64   tx_carrier_errors
+uint64   collisions
+""" + HEADER_DEF
+
+IPERF = """std_msgs/Header header
+string   server_address
+uint16   server_port
+string   protocol
+bool     reverse
+float64  duration_s
+bool     success
+string   error
+float64  bitrate_mbps
+uint64   bytes
+uint32   retransmits
+float64  rtt_ms_mean
+float64  rtt_ms_min
+float64  rtt_ms_max
+float64  jitter_ms
+uint64   lost_packets
+uint64   total_packets
+float64  lost_percent
+""" + HEADER_DEF
+
+
 IMU = """std_msgs/Header header
 geometry_msgs/Quaternion orientation
 float64[9] orientation_covariance
@@ -164,6 +249,102 @@ def main(out: Path) -> None:
                 }
                 log = t0 + int(t * 1e9) + 2_000_000 + int(off * 1e9) + rng.randint(0, 1_000_000)
                 w.write_message(topic, imu, msg, log_time=log, publish_time=log - 500_000)
+
+        # --- Wi-Fi link status ------------------------------------------------
+        # mobile_1 runs two radios on one topic (the dual-radio mode for rho);
+        # mobile_2 runs one. Radios are told apart by the `interface` field.
+        wifi = w.register_msgdef("wifi_monitor_msgs/msg/WifiLinkStatus", WIFI_STATUS)
+        iperf = w.register_msgdef("wifi_monitor_msgs/msg/IperfResult", IPERF)
+
+        radios = [
+            # topic, iface, mac, band GHz, channel, base RSSI, fade period s, phase, hz
+            ("/mobile_1/wifi/status", "wlx8876b9eae0ff", "88:76:b9:ea:e0:ff", 5.18, 36, -47.0, 38.0, 0.0, 4.9),
+            ("/mobile_1/wifi/status", "wlx00c0ca9a1b2c", "00:c0:ca:9a:1b:2c", 2.437, 6, -55.0, 41.0, 1.1, 4.9),
+            ("/mobile_2/wifi/status", "wlp2s0", "d8:3a:dd:11:22:33", 5.18, 36, -58.0, 33.0, 2.0, 4.6),
+        ]
+        for topic, iface, mac, ghz, chan, rssi0, fade_T, phase, hz in radios:
+            n = int(dur_s * hz)
+            tx_pkts = rx_pkts = tx_ret = tx_fail = 0
+            act_ms = busy_ms = 0.0
+            for i in range(n):
+                t = i / hz
+                ns = t0 + int(t * 1e9)
+                # slow fading plus a deep fade in the middle of the run
+                rssi = rssi0 + 7.0 * math.sin(2 * math.pi * t / fade_T + phase) + rng.gauss(0, 1.2)
+                if 70.0 < t < 88.0:
+                    rssi -= 14.0 if ghz > 3 else 6.0        # the 5 GHz radio suffers more
+                mcs = max(0, min(9, int((rssi + 82) / 4)))
+                width = 40 if ghz > 3 else 20
+                nss = 2 if ghz > 3 else 1
+                tx_rate = 6.5 * (mcs + 1) * nss * (width / 20.0)
+                # more retries when the link is weak
+                p_ret = min(0.6, max(0.01, (-rssi - 45) / 60.0))
+                d_pkts = int(rng.uniform(300, 900))
+                tx_pkts += d_pkts
+                rx_pkts += int(d_pkts * 1.6)
+                tx_ret += int(d_pkts * p_ret)
+                tx_fail += int(d_pkts * p_ret * 0.08)
+                d_act = 1000.0 / hz
+                act_ms += d_act
+                busy_ms += d_act * min(0.95, 0.15 + p_ret)
+                msg = {
+                    "header": {"stamp": stamp(ns), "frame_id": iface},
+                    "interface": iface, "mac_address": mac, "up": True, "associated": True,
+                    "essid": "BML", "bssid": "82:2a:a8:cb:d4:34", "mode": "Managed",
+                    "frequency_ghz": ghz, "channel": chan,
+                    "bit_rate_mbps": tx_rate, "tx_power_dbm": 12.0,
+                    "link_quality": int(max(0, min(70, 70 + (rssi + 40) * 1.4))), "link_quality_max": 70,
+                    "link_quality_ratio": max(0.0, min(1.0, (70 + (rssi + 40) * 1.4) / 70)),
+                    "signal_dbm": rssi, "signal_avg_dbm": rssi + rng.gauss(0, 0.4),
+                    "noise_dbm": float("nan"), "snr_db": float("nan"),
+                    "noise_valid": False, "snr_valid": False,
+                    "rx_bitrate_mbps": tx_rate * 0.85, "tx_bitrate_mbps": tx_rate,
+                    "rx_mcs": mcs, "tx_mcs": mcs, "rx_nss": nss, "tx_nss": nss,
+                    "rx_width_mhz": width, "tx_width_mhz": width,
+                    "rx_phy_mode": "VHT" if ghz > 3 else "HT", "tx_phy_mode": "VHT" if ghz > 3 else "HT",
+                    "tx_short_gi": True,
+                    "tx_retries": tx_ret, "tx_failed": tx_fail,
+                    "expected_mbps": tx_rate * 0.6, "connected_time_s": int(600 + t),
+                    "sta_rx_bytes": rx_pkts * 800, "sta_tx_bytes": tx_pkts * 700,
+                    "sta_rx_packets": rx_pkts, "sta_tx_packets": tx_pkts,
+                    "channel_active_ms": act_ms, "channel_busy_ms": busy_ms,
+                    "channel_busy_ratio": busy_ms / max(act_ms, 1e-9),
+                    "rx_invalid_nwid": 0, "rx_invalid_crypt": 0, "rx_invalid_frag": 0,
+                    "tx_excessive_retries": tx_fail, "invalid_misc": 0, "missed_beacon": 0,
+                    "rx_packets": rx_pkts, "rx_bytes": rx_pkts * 800, "rx_errors": 0, "rx_dropped": 0,
+                    "rx_overruns": 0, "rx_frame_errors": 0,
+                    "tx_packets": tx_pkts, "tx_bytes": tx_pkts * 700, "tx_errors": tx_fail,
+                    "tx_dropped": 0, "tx_overruns": 0, "tx_carrier_errors": 0, "collisions": 0,
+                }
+                log = ns + 1_500_000 + rng.randint(0, 500_000)
+                w.write_message(topic, wifi, msg, log_time=log, publish_time=log)
+
+        # --- iperf: periodic bursts to the fixed server, plus robot-to-robot ----
+        for topic, n_tests, base, r2r in [
+            ("/mobile_1/wifi/iperf", 10, 210.0, False),
+            ("/mobile_2/wifi/iperf", 4, 140.0, False),
+            ("/mobile_1/wifi/iperf_r2r", 10, 95.0, True),
+        ]:
+            for k in range(n_tests):
+                t = 6.0 + k * (dur_s - 12.0) / max(n_tests - 1, 1)
+                ns = t0 + int(t * 1e9)
+                deep = 70.0 < t < 88.0
+                mbps = base * (0.35 if deep else 1.0) * (1 + rng.gauss(0, 0.06))
+                msg = {
+                    "header": {"stamp": stamp(ns), "frame_id": "wifi"},
+                    "server_address": "192.168.1.50" if not r2r else "192.168.1.12",
+                    "server_port": 5201, "protocol": "TCP", "reverse": bool(k % 2),
+                    "duration_s": 2.0, "success": True, "error": "",
+                    "bitrate_mbps": mbps, "bytes": int(mbps * 1e6 / 8 * 2),
+                    "retransmits": int(abs(rng.gauss(0, 6)) * (4 if deep else 1)),
+                    "rtt_ms_mean": (14.0 if deep else 4.2) + abs(rng.gauss(0, 0.8)),
+                    "rtt_ms_min": 2.1, "rtt_ms_max": (40.0 if deep else 11.0),
+                    "jitter_ms": float("nan"), "lost_packets": 0, "total_packets": 0,
+                    "lost_percent": float("nan"),
+                }
+                log = ns + 2_000_000
+                w.write_message(topic, iperf, msg, log_time=log, publish_time=log)
+
         w.finish()
     print(f"wrote {out}")
 
