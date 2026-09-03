@@ -110,24 +110,37 @@ def cdr_header_stamp_ns(data: bytes) -> int | None:
     return sec * 1_000_000_000 + nsec
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("bag", type=Path)
-    ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--topics", nargs="*", default=None, help="explicit topic list (default: light preset)")
-    ap.add_argument("--include-heavy", action="store_true", help="also decode Image/PointCloud2/... topics")
-    ap.add_argument("--no-audit", action="store_true", help="skip the header-stamp audit over all topics")
-    ap.add_argument("--audit-max-per-topic", type=int, default=0, help="subsample audit rows per topic (0 = all)")
-    args = ap.parse_args()
+def extract(
+    bag: Path | str,
+    out: Path | str,
+    topics: list[str] | None = None,
+    include_heavy: bool = False,
+    audit: bool = True,
+    audit_max_per_topic: int = 0,
+) -> dict:
+    """Extract `bag` into per-topic Parquet files under `out`. Returns the metadata dict.
 
+    Input:
+        bag: path to the rosbag2 MCAP file
+        out: output directory (created if missing)
+        topics: explicit topic list; None = every topic except the heavy types
+        include_heavy: also decode Image / PointCloud2 / LaserScan / CameraInfo / Path / PacketMsg
+        audit: also write stamp_audit.parquet (header stamp vs log time for every header-bearing topic)
+        audit_max_per_topic: cap audit rows per topic (0 = all)
+    Output:
+        metadata dict (also written to <out>/metadata.json)
+    """
+    args = argparse.Namespace(
+        bag=Path(bag), out=Path(out), topics=topics, include_heavy=include_heavy,
+        no_audit=not audit, audit_max_per_topic=audit_max_per_topic,
+    )
     args.out.mkdir(parents=True, exist_ok=True)
 
     with open(args.bag, "rb") as f:
         reader = make_reader(f, decoder_factories=[DecoderFactory()])
         summary = reader.get_summary()
         if summary is None:
-            print("MCAP has no summary section; cannot list topics", file=sys.stderr)
-            return 1
+            raise RuntimeError("MCAP has no summary section; cannot list topics")
         channels = summary.channels
         schemas = summary.schemas
         stats = summary.statistics
@@ -216,6 +229,19 @@ def main() -> int:
         "stamp_audit": audit_file.name if audit_file else None,
     }
     (args.out / "metadata.json").write_text(json.dumps(meta, indent=2))
+    return meta
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("bag", type=Path)
+    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--topics", nargs="*", default=None, help="explicit topic list (default: light preset)")
+    ap.add_argument("--include-heavy", action="store_true", help="also decode Image/PointCloud2/... topics")
+    ap.add_argument("--no-audit", action="store_true", help="skip the header-stamp audit over all topics")
+    ap.add_argument("--audit-max-per-topic", type=int, default=0, help="subsample audit rows per topic (0 = all)")
+    args = ap.parse_args()
+    extract(args.bag, args.out, args.topics, args.include_heavy, not args.no_audit, args.audit_max_per_topic)
     return 0
 
 

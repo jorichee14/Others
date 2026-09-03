@@ -35,8 +35,9 @@ python analysis/extract_bag.py BAG.mcap --out extracts/coop2 \
 
 ## 2. NTP / temporal calibration
 
-Interactive: open `analysis/ntp_analysis.ipynb`, set `RUN` / `EXTRACTS` / `OUT` in the
-first cell, run all. The same analysis as a script:
+Interactive: open `analysis/ntp_analysis.ipynb` (keep it next to `extract_bag.py`, which it
+imports), set `RUN` and `BAG` in section 1.1, run all. Section 2 runs the extraction itself
+and skips it when the extracts already exist. The same analysis as a script:
 
 ```bash
 python analysis/ntp_analysis.py --extracts extracts/coop2 --out results/coop2/ntp --run coop2
