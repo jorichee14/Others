@@ -129,13 +129,43 @@ to 8 microseconds when the honest uncertainty is comparable to the value itself.
 
 ### 3.2 `delay` and `jitter` are always zero — *blocking for an error bar*
 
-Round-trip delay over Wi-Fi is never zero, so the monitor node is not populating
-these fields. The likely cause: it parses `chronyc tracking`, which reports offset,
-frequency, root delay and root dispersion — but **not** per-source delay or jitter.
-Those live in `chronyc sourcestats` and `chronyc ntpdata`.
+**What the fields are.** `delay` is the round-trip time of the NTP packet exchange:
+how long the request took to reach the server plus how long the reply took to come
+back, minus the server's own processing time. Over Wi-Fi this is typically 2–20 ms.
+`jitter` is how much that measurement scatters from poll to poll.
 
-Consequence: by §1.1 the offset error is bounded by half the round-trip delay, and
-without delay **we cannot state any uncertainty on the 0.22 ms figure.**
+**Zero is impossible.** A packet cannot travel to another machine and back in no
+time. Zero here is not a small measurement, it is the absence of one.
+
+**Why it happens.** The fields the monitor *does* populate map cleanly onto two
+specific chrony commands:
+
+| Field in `NtpStatus` | Comes from |
+|---|---|
+| `offset_seconds`, `root_delay`, `root_dispersion`, `frequency_error_ppm`, `leap_indicator`, `reference_time`, `sync_source` | `chronyc tracking` |
+| `stratum`, `poll_interval_seconds`, `reach_register` | `chronyc sources` |
+
+Neither of those commands reports **per-source** round-trip delay or jitter.
+`tracking` gives *root* delay — the accumulated delay up the whole chain to the
+reference clock — not the delay of this client's link to `mobile_1`. `sources` gives
+poll and reach but no timing. So the node declares `delay_seconds` and
+`jitter_seconds`, never finds a value for them, and they stay at their default 0.0.
+
+**It also violates the message's own convention.** `NtpStatus.msg` states that
+fields which could not be read are reported as NaN for floats and 0 for integers.
+`delay_seconds` and `jitter_seconds` are `float64`, so they should be **NaN**.
+Publishing 0.0 is worse than NaN: NaN says "unknown", 0.0 says "measured, and it
+was zero", and no downstream consumer can tell the difference. (`ntp_analysis.py`
+already omits the delay sentence when it sees NaN; with 0.0 it cannot.)
+
+**Why it matters.** By §1.1 the offset error is bounded by half the round-trip
+delay. Delay is therefore the only thing that puts an error bar on the 0.22 ms
+figure. Without it we can say the daemon *estimated* 0.22 ms, but not whether the
+truth is 0.22 ± 0.01 ms or 0.22 ± 3 ms — and with 6–17 ms delivery times over
+Wi-Fi (§2), the second is entirely plausible.
+
+There is a secondary reason to want it: delay over time is itself a Wi-Fi link
+measurement, and it will correlate with the RSSI and throughput analysis.
 
 ### 3.3 Topics stamped seconds behind the recorder — *open, needs identifying*
 
@@ -211,17 +241,27 @@ noisier, not better.
 
 ### 4.2 Populate `delay` and `jitter` — fixes §3.2
 
-Extend the NTP monitor node to read per-source statistics, not just `chronyc
-tracking`:
+Per-source timing lives in a third command that the monitor is not reading:
 
 ```bash
-chronyc -c sourcestats      # per-source std dev, skew
-chronyc -c ntpdata <source> # peer delay, peer dispersion, root delay
+chronyc -c ntpdata <mobile_1 address>   # "Peer delay" is the round-trip delay
+chronyc -c sourcestats                  # "Std Dev" serves as jitter
 ```
 
-(`-c` gives comma-separated output, which is easier to parse than the table.)
+The `-c` flag gives comma-separated output instead of the aligned table, which is
+far easier to parse reliably than column positions.
+
+Two changes to the monitor node:
+
+1. Read `ntpdata` (and `sourcestats`) in addition to `tracking` and `sources`, and
+   fill `delay_seconds` and `jitter_seconds` from them.
+2. Change the fallback for **every float field** from `0.0` to `float("nan")`, so
+   the message matches the convention its own definition states. Unknown must be
+   distinguishable from zero.
+
 With delay populated, the offset can be quoted with the ±delay/2 asymmetry bound
-from §1.1.
+from §1.1 — which is what turns a single number into a measurement with an error
+bar.
 
 ### 4.3 Record the configuration — fixes §3.6
 
