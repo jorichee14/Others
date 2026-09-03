@@ -1,0 +1,38 @@
+{
+  "09_publish": {
+    "output_bag": "map_stages_20260828_outputs/coop2_best_poses",
+    "map_frame": "map",
+    "write_tf": true,
+    "rate_hz": 0,
+    "robots": [
+      {
+        "name": "mobile_1",
+        "traj": "map_stages_20260828_outputs/reference_coop2_mobile1_all/traj_mobile_1_zed_C_joint.tum",
+        "cam_extrinsic_xyzquat": [
+          -0.01,
+          0.06,
+          0.015,
+          -0.5,
+          0.5,
+          -0.5,
+          0.5
+        ],
+        "body_frame": "zed_camera_link"
+      },
+      {
+        "name": "mobile_2",
+        "traj": "map_stages_20260828_outputs/reference_coop2_mobile2/traj_mobile_2_rs_C_joint.tum",
+        "cam_extrinsic_xyzquat": [
+          0.000308,
+          0.059191,
+          -0.000162,
+          0.499583,
+          -0.497446,
+          0.501716,
+          -0.501244
+        ],
+        "body_frame": "camera_link"
+      }
+    ]
+  }
+}

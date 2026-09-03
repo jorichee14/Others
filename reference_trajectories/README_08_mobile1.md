@@ -266,3 +266,23 @@ file exists) read the .tum as `odom_file`; stage 08 anchors it on the
 session anchor exactly like any odometry, so RTAB-Map's map frame never
 needs to be aligned by hand, and compares it to the lidar in
 `paths_mobile_1.png` with boards applied on top (`B_boards`).
+
+# Stage 09: best poses as a ROS 2 mcap bag (`09_publish_poses.py`)
+
+Paste the `09_publish` block of `pipeline_config_09_publish.json` into
+`pipeline_config.json` and run `python3 09_publish_poses.py pipeline_config.json`
+(`--dry` prints counts without ROS). It reads one stage-08 trajectory per
+robot (mobile_1: `traj_mobile_1_zed_C_joint.tum`, mobile_2:
+`traj_mobile_2_rs_C_joint.tum`), converts the camera optical pose to the
+robot body frame with the same extrinsic as stage 08, and writes
+`coop2_best_poses/` (mcap) with:
+
+| topic | type | frame_id | meaning |
+|---|---|---|---|
+| `/mobile_1/global_pose`, `/mobile_2/global_pose` | PoseStamped | `map` | body pose in the shared anchored map; starts at each trajectory's first pose |
+| `/mobile_1/local_pose`, `/mobile_2/local_pose` | PoseStamped | `mobile_1/start`, `mobile_2/start` | body pose relative to that robot's first pose (identity at t0) |
+| `/tf` | TFMessage | `map` -> `<robot>/<body_frame>` | for RViz |
+
+Stamps are the original bag stamps, so `ros2 bag play` of this bag next to
+the raw bag lines up. `rate_hz` decimates (0 = every pose). Needs rclpy,
+rosbag2_py and `ros-<distro>-rosbag2-storage-mcap`.
