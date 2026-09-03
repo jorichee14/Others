@@ -255,6 +255,13 @@ results2 = {"mobile_2_rs": dict(kind="arms", ts=g["node_t"], Ts=g["arms"]["C_joi
                                 cloud_source="depth", chained_label="depth ICP chained")}
 m.compare_rig(results2, None, outd)
 m.save_paths_png(results2, REF, BM, outd, None)
+# odometry declared the reference (mobile_2 style)
+results3 = {"mobile_3_rs": dict(results2["mobile_2_rs"], reference="odom")}
+meth, has_ref = m.collect_methods(results3, "mobile_3")
+assert has_ref and "odom only (reference)" in meth[0][0], meth[0][0]
+# depth frame check: clouds in the body frame at the true poses must fit with Xd = I
+fr = [(ts[i], apply(inv(X), pf_frames[j][1])) for j, i in enumerate(range(0, len(ts), 2))][:10]
+m.depth_frame_check(fr, ot, oT, T_map_origin, X, np.eye(4), REF, 4.0)
 assert os.path.exists(os.path.join(outd, "paths_mobile_2.png"))
 assert os.path.exists(os.path.join(outd, "compare_mobile_2.csv"))
 print("\nALL SYNTHETIC CHECKS PASSED")

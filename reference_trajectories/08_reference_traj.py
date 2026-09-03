@@ -1170,6 +1170,51 @@ def verify_odom_frames(ts, Ts, Ts_cam, ot, oT, T_cl, X, Q, ochild):
                           "cam_extrinsic_xyzquat is suspect"))
 
 
+def depth_frame_check(frames, ot, oT, T_map_origin, X, Xd, REF, dwell_s=4.0):
+    """Is the depth cloud in the frame the pipeline thinks it is? During the
+    opening dwell the anchored pose is known to centimetres and the robot is
+    still, so the first frames must fit the map AT that pose. Score the
+    plane rms there under three conventions of the depth extrinsic:
+    as configured, inverted, and identity. The one that fits is right; if
+    none fits within ~5 cm the camera extrinsic X (or the anchor) is off."""
+    t0 = frames[0][0]
+    sel = [f for f in frames if f[0] - t0 <= dwell_s][:10]
+    if len(sel) < 3:
+        return
+    out = []
+    for lbl, Xd_ in (("configured", Xd), ("inverted", inv(Xd)), ("identity", np.eye(4))):
+        rms, nmatch = [], []
+        for t, P in sel:
+            T_cam = T_map_origin @ interp_traj(ot, oT, np.array([t]))[0] @ X
+            Q = apply(T_cam @ Xd_, subsample(P, 3000).astype(float))
+            c, nn, w, m = REF.plane_of(Q)
+            if m.sum() < 30:
+                rms.append(np.nan); nmatch.append(0); continue
+            r = np.einsum("ij,ij->i", Q[m] - c, nn)
+            rms.append(float(np.sqrt(np.mean(np.minimum(np.abs(r), 0.3) ** 2))))
+            nmatch.append(float(m.mean()))
+        out.append((lbl, np.nanmedian(rms), np.mean(nmatch)))
+    print("  == depth frame check at the dwell (first %d frames, pose from the "
+          "anchor, no ICP) ==" % len(sel))
+    for lbl, r_, f_ in out:
+        print("     depth extrinsic %-11s plane rms %6.1f cm, %3.0f%% of points on "
+              "map cells" % (lbl, r_ * 100, 100 * f_))
+    best = min(out, key=lambda o: (np.nan_to_num(o[1], nan=9), -o[2]))
+    if best[0] != "configured" and np.nan_to_num(best[1], nan=9) < 0.7 * np.nan_to_num(out[0][1], nan=9):
+        print("     !! the '%s' convention fits clearly better than the configured "
+              "one: flip depth_extrinsic_xyzquat accordingly (and the derived "
+              "cam_extrinsic_xyzquat if it came from it)" % best[0])
+    elif np.nan_to_num(out[0][1], nan=9) > 0.08:
+        print("     !! even the best convention leaves %.0f cm rms at the anchored "
+              "pose: the cloud is not where the map is - suspect "
+              "cam_extrinsic_xyzquat (child frame), the depth units, or the "
+              "session anchor for this camera" % (np.nan_to_num(best[1], nan=9) * 100))
+    else:
+        print("     -> the depth cloud sits on the map at the anchored pose: the "
+              "frames are consistent; any later divergence of the chain is "
+              "registration, not a frame error")
+
+
 def build_submaps(frames, ot, oT, T_cd, window_s, voxel, max_pts, stride=1):
     """Local SLAM-style accumulation: every depth frame within +-window_s/2
     of a centre frame is moved into the CENTRE frame with the odometry's
@@ -1546,6 +1591,13 @@ def collect_methods(results, rig):
     ls = ["-", (0, (6, 3)), (0, (2, 2)), (0, (1, 3)), (0, (5, 1, 1, 1))]
     rs = {k: r for k, r in results.items() if rig_of(k) == rig}
     ref, odom, rest, i = [], [], [], 0
+    # a track can declare its (anchored) odometry the rig's reference - the
+    # right call when the platform's odometry is trustworthy and the depth
+    # chain is not (mobile_2: Isaac VSLAM vs a narrow-FOV D455 chain)
+    for nm, r in rs.items():
+        if r.get("reference") == "odom" and r.get("odom_only") is not None:
+            ref.append((nm + " odom only (reference)", r["ts"], r["odom_only"],
+                        "k", "-"))
     for nm, r in rs.items():
         if r["kind"] == "lidar_icp":
             ref.append((nm + " lidar ICP", r["ts"], r.get("Ts_cam", r["Ts"]),
@@ -1563,7 +1615,7 @@ def collect_methods(results, rig):
                 # this rig is arm A (odometry + map factors)
                 ref.append(("%s A_icp (reference: depth chain failed)" % nm,
                             r["ts"], r["arms"]["A_icp"], "k", "-"))
-        if r.get("odom_only") is not None:
+        if r.get("odom_only") is not None and r.get("reference") != "odom":
             odom.append((nm + " " + (r.get("odom_label") or "odom only"),
                          r["ts"], r["odom_only"], "0.45", (0, (1, 2))))
         arms = r.get("arms") or {nm: r["Ts"]}
@@ -2441,6 +2493,8 @@ def main():
                         frames.append((t, np.asarray(Pd, np.float32)))
                         t_last_f = t
                 print("  %d depth frames" % len(frames))
+                depth_frame_check(frames, ot, oT, T_map_origin, X, Xd, REF,
+                                  float(track.get("dwell_check_s", 4.0)))
                 win = float(track.get("submap_window_s", 3.0))
                 # state = the DEPTH optical frame (the clouds' own frame)
                 dtrack = dict(track)
@@ -2528,7 +2582,8 @@ def main():
                                  odom_label=(track.get("odom_label") or
                                              ("imu+vo odom only"
                                               if track.get("odom_source") == "imu_vo"
-                                              else None)))
+                                              else None)),
+                                 reference=track.get("reference"))
 
         elif kind == "pf":
             # camera-only localiser that survives a broken odometry:

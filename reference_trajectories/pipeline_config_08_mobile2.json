@@ -156,7 +156,9 @@
         "cv_must_agree_with_odom": true,
         "submap_window_s": 3.0,
         "submap_max_pts": 20000,
-        "submap_stride": 1
+        "submap_stride": 1,
+        "reference": "odom",
+        "dwell_check_s": 4.0
       }
     ]
   }
