@@ -1,74 +1,56 @@
 # Run characterization analysis
 
-Scripts that characterize one recorded run (a rosbag2 MCAP) for the dataset paper:
-temporal calibration (NTP) first; Wi-Fi, CSI and trajectory geometry follow the
-same extract-then-analyze pattern.
+One notebook per topic, each characterizing one recorded run (a rosbag2 MCAP) for
+the dataset paper. No ROS installation is needed: message definitions are read
+from the schemas embedded in the MCAP file.
 
-No ROS installation is required. Message definitions are read from the schemas
-embedded in the MCAP file.
-
-```bash
-pip install -r analysis/requirements.txt
+```
+analysis/
+├── extract_bag.py          shared: decodes the MCAP into per-topic Parquet tables
+├── ntp_analysis.ipynb      notebook 1: NTP / temporal calibration
+├── requirements.txt
+└── tests/
+    └── make_synthetic_bag.py   writes a small fake MCAP to try the notebook without the real bag
 ```
 
-## 1. Extract the light topics once
+`extract_bag.py` is a library the notebooks import (`from extract_bag import extract`).
+It can also be run from the command line to extract a bag once and share the small
+Parquet output instead of the multi-gigabyte bag:
 
 ```bash
-python analysis/extract_bag.py /path/to/mirc_dataset_coop2_20260828_completed_0.mcap --out extracts/coop2
+python analysis/extract_bag.py BAG.mcap --out extracts/coop2
 ```
 
-By default this decodes every topic except images, point clouds, laser scans,
-camera info, paths and raw Ouster packets, and writes one Parquet table per topic
-plus `stamp_audit.parquet`, which holds `header.stamp`, publish time and recorder
-log time for every message of every header-bearing topic (parsed from the raw
-CDR bytes, so it is cheap even for images). The whole output is small enough to
-commit or share.
+## Notebook 1: `ntp_analysis.ipynb`
 
-To extract only what the NTP analysis needs:
+Keep it in the same folder as `extract_bag.py`. Set `RUN` and `BAG` in section 1.1
+and run the cells in order.
+
+| Section | What it does |
+|---|---|
+| 1 Parameters | paths, thresholds, agent colors |
+| 2 Extract Bag | runs `extract()` once; skipped when `extracts/<run>/metadata.json` already exists |
+| 3 Load NTP Data | status, events, stamp audit, common time axis |
+| 4 NTP Roles | who is server, who are clients |
+| 5 Clock Offset | offset statistics per client, clock steps, offset / delay / jitter over time |
+| 6 Offset Distribution | ECDF of \|offset\| per client |
+| 7 NTP-Independent Check | header stamp − recorder log time per topic, shortest sensor period |
+| 8 Figure for the Paper | 3-panel figure, saved as PDF and PNG |
+| 9 Paper Text | the *Temporal Calibration* subsection with the numbers filled in |
+
+Outputs go to `results/<run>/ntp/`: `ntp_roles.csv`, `ntp_summary.csv`,
+`ntp_audit.csv`, `fig_ntp.pdf`, `fig_ntp.png`, `ntp_subsection.tex`.
+
+Panel (c) of the figure reads as follows. Every sensor is stamped in software on
+arrival, so header stamp minus recorder log time is transport latency plus the clock
+offset between that node and the recorder. The recorder's own topics sit slightly
+negative; a node whose topics sit systematically off them has a clock offset of that
+size, independently of what the NTP monitor reports.
+
+## Trying it without the real bag
 
 ```bash
-python analysis/extract_bag.py BAG.mcap --out extracts/coop2 \
-    --topics /infra_1/ntp/status /mobile_2/ntp/status /infra_1/ntp/events /mobile_2/ntp/events
+python analysis/tests/make_synthetic_bag.py mirc_dataset_coop2_20260828_completed_0.mcap
 ```
 
-(the stamp audit still runs over all topics; add `--no-audit` to skip it.)
-
-## 2. NTP / temporal calibration
-
-Interactive: open `analysis/ntp_analysis.ipynb` (keep it next to `extract_bag.py`, which it
-imports), set `RUN` and `BAG` in section 1.1, run all. Section 2 runs the extraction itself
-and skips it when the extracts already exist. The same analysis as a script:
-
-```bash
-python analysis/ntp_analysis.py --extracts extracts/coop2 --out results/coop2/ntp --run coop2
-```
-
-Both write the same outputs:
-
-Produces `ntp_roles.csv` (who is server, who are clients), `ntp_summary.csv`
-(offset mean / median / p95 / max, delay, jitter, stratum, reach, poll interval,
-clock steps per client), `ntp_audit.csv` (header stamp minus recorder log time per
-topic, plus each topic's median period), `ntp_summary.md`, a filled-in
-`ntp_subsection.tex` for the paper's *Temporal Calibration* subsection, and
-`fig_ntp.{pdf,png}`:
-
-- (a) client clock offset over time, clock steps in red, NTP events in yellow;
-- (b) ECDF of |offset| per client with the shortest sensor period marked;
-- (c) NTP-independent check: ECDF of header stamp minus recorder log time, one
-  line per topic, colored by node.
-
-Panel (c) reads as follows. In the recorder's own clock every message arrives
-after it was stamped, so its topics sit slightly negative (transport latency). A
-node whose topics sit systematically off the recorder's has a clock offset of that
-size relative to the recorder, independently of what the NTP monitor reports.
-
-## Tests
-
-`tests/make_synthetic_bag.py` writes a small MCAP with the dataset's NtpStatus
-schema so the pipeline can be exercised without the real bag:
-
-```bash
-python analysis/tests/make_synthetic_bag.py /tmp/synthetic.mcap
-python analysis/extract_bag.py /tmp/synthetic.mcap --out /tmp/extracts
-python analysis/ntp_analysis.py --extracts /tmp/extracts --out /tmp/results --run synthetic
-```
+then open the notebook with `BAG` pointing at that file.
