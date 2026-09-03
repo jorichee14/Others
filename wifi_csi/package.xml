@@ -8,6 +8,9 @@
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <!-- Time, for the kernel receive stamps. Arrives transitively via rclpy,
+       but relying on that would break the day it stops being transitive. -->
+  <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>wifi_csi_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
 
