@@ -1610,9 +1610,9 @@ def collect_methods(results, rig):
             if r.get("chain_ok", True):
                 ref.append(("%s %s" % (nm, r["chained_label"]), r["ts"],
                             r["chained"], "k", "-"))
-            elif "A_icp" in (r.get("arms") or {}):
-                # the chain lost most frames: the geometry-only reference of
-                # this rig is arm A (odometry + map factors)
+            elif "A_icp" in (r.get("arms") or {}) and not ref:
+                # the chain lost most frames and nothing else was declared
+                # the reference: arm A (odometry + map factors) takes the role
                 ref.append(("%s A_icp (reference: depth chain failed)" % nm,
                             r["ts"], r["arms"]["A_icp"], "k", "-"))
         if r.get("odom_only") is not None and r.get("reference") != "odom":
