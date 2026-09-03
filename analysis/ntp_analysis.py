@@ -94,6 +94,7 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=None, help="output folder (default: results/<run>/ntp)")
     ap.add_argument("--run", default="run")
     ap.add_argument("--force-extract", action="store_true", help="re-run the extraction even if it exists")
+    ap.add_argument("--server", default=None, help="agent name of the NTP server, e.g. mobile_1 (hostnames may be ambiguous)")
     ap.add_argument("--step-threshold-ms", type=float, default=1.0, help="|offset_delta| above this counts as a step")
     ap.add_argument("--sensor-period-ms", type=float, default=None, help="override the shortest sensor period")
     args = ap.parse_args()
@@ -144,7 +145,8 @@ def main() -> int:
     series = {}
     for (topic, role, host), g in ntp.groupby(["topic", "role", "hostname"]):
         g = g.sort_values("t_s")
-        key = f"{host} ({role})" if role != "client" else host
+        agent = node_of_topic(topic)
+        key = f"{agent} ({role})" if role != "client" else agent
         series[key] = g
         steps_flag = int(((g["clock_stepped"].astype(bool)) & (~g["clock_stepped"].astype(bool).shift(1, fill_value=False))).sum())
         steps_delta = int((g["offset_delta_ms"].abs() > args.step_threshold_ms).sum())
@@ -154,7 +156,8 @@ def main() -> int:
             {
                 "run": args.run,
                 "topic": topic,
-                "node": node_of_topic(topic),
+                "agent": agent,
+                "node": agent,
                 "role": role,
                 "hostname": host,
                 "sync_source": g["sync_source"].mode().iloc[0],
@@ -276,7 +279,7 @@ def main() -> int:
 
     # ---- 5. markdown + LaTeX -----------------------------------------------------
     md = [f"# NTP / temporal calibration — run `{args.run}`", "", "## Roles", "", roles.to_markdown(index=False), "", "## Client offset statistics (ms)", ""]
-    cols = ["hostname", "role", "sync_source", "stratum", "n", "offset_mean_ms", "offset_median_ms", "abs_offset_p95_ms", "abs_offset_max_ms", "delay_median_ms", "jitter_median_ms", "poll_interval_mode_s", "reach_min", "clock_steps_flagged", "clock_steps_by_delta"]
+    cols = ["agent", "hostname", "role", "sync_source", "stratum", "n", "offset_mean_ms", "offset_median_ms", "abs_offset_p95_ms", "abs_offset_max_ms", "delay_median_ms", "jitter_median_ms", "poll_interval_mode_s", "reach_min", "clock_steps_flagged", "clock_steps_by_delta"]
     md += [summary[cols].round(3).to_markdown(index=False), ""]
     if events is not None and len(events):
         md += ["## NTP events", ""]
@@ -290,21 +293,22 @@ def main() -> int:
     if sensor_period_ms:
         md += [f"Shortest sensor period in the bag: **{sensor_period_ms:.2f} ms** (`{fastest}`).", ""]
         for _, r in summary.iterrows():
-            md.append(f"- {r['hostname']}: max |offset| {r['abs_offset_max_ms']:.2f} ms = {r['abs_offset_max_ms'] / sensor_period_ms:.2f} × shortest period")
+            md.append(f"- {r['agent']}: max |offset| {r['abs_offset_max_ms']:.2f} ms = {r['abs_offset_max_ms'] / sensor_period_ms:.2f} × shortest period")
     (args.out / "ntp_summary.md").write_text("\n".join(md))
 
     def tt(s: str) -> str:
         return "\\texttt{" + str(s).replace("_", "\\_") + "}"
 
     clients = summary[summary["role"].str.contains("client")]
-    server = clients["sync_source"].mode().iloc[0] if len(clients) else "?"
+    server = args.server or (clients["sync_source"].mode().iloc[0] if len(clients) else "?")
+    hostnames = ", ".join(f"{tt(r['agent'])} = {tt(r['hostname'])}" for _, r in clients.iterrows())
     strata = ", ".join(str(s) for s in sorted(clients["stratum"].unique()))
     rate = ", ".join(f"{r:.1f}" for r in roles["rate_hz"])
     parts = []
     for _, r in clients.iterrows():
         delay = (f" with a median round-trip delay of {r['delay_median_ms']:.2f}\\,ms" if r["delay_median_ms"] > 0 else "")
         parts.append(
-            f"{tt(r['hostname'])} had a mean offset of {r['offset_mean_ms']:.2f}\\,ms "
+            f"{tt(r['agent'])} had a mean offset of {r['offset_mean_ms']:.2f}\\,ms "
             f"(mean $|\\cdot|$ {r['abs_offset_mean_ms']:.2f}\\,ms, 95th percentile {r['abs_offset_p95_ms']:.2f}\\,ms, "
             f"maximum {r['abs_offset_max_ms']:.2f}\\,ms){delay}"
             f" and {int(r['clock_steps_flagged'])} clock step{'s' if r['clock_steps_flagged'] != 1 else ''}"
@@ -338,7 +342,7 @@ def main() -> int:
     tex = f"""\\subsubsection{{NTP Synchronization}}
 All agents are synchronized over NTP on the shared wireless network.
 {tt(server)} acts as the NTP server and the other agents synchronize to it as
-stratum-{strata} clients; each client publishes its NTP state at about {rate}\\,Hz throughout every run.
+stratum-{strata} clients (host names as recorded: {hostnames}); each client publishes its NTP state at about {rate}\\,Hz throughout every run.
 Over run {tt(args.run)}, {'; '.join(parts)}.{poll_sentence}{audit_sentence}{bound_sentence}
 No sensor is hardware-triggered or hardware-timestamped: every message is stamped in software by
 its driver on arrival at the host, so the header stamps carry the NTP-aligned host clock plus the
