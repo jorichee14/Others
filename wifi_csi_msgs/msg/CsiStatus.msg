@@ -11,3 +11,7 @@ float32  frames_per_sec
 uint64   frames_total
 uint64   dropped_total
 string   mac_filter          # empty when unfiltered
+# Worst gap this window between a frame's kernel receive time and the node
+# getting to it. This is the latency the kernel timestamp keeps OUT of
+# header.stamp; a climbing value means the socket is backing up.
+float32  stamp_lag_sec

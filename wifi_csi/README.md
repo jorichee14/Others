@@ -122,11 +122,89 @@ phase downstream. Amplitude-only pipelines are unaffected.
   an idle channel yields nothing. Check with an unfiltered `tcpdump -i wlan0`.
 - **5 GHz only.** 2.4 GHz beacons are DSSS and produce no channel estimate.
 
+## Timestamps
+
+`header.stamp` is the **kernel's receive time** for that datagram, read from
+`SO_TIMESTAMPNS` ancillary data, not the time the node got round to it.
+
+This matters because `_drain` pulls a batch per timer tick. Stamping in
+userspace gives every frame in a batch the same instant regardless of when
+each actually arrived: measured, six frames spanning 20.9 ms collapsed to
+0.39 ms apart. The kernel stamp keeps the true spacing, and the drain period
+stops affecting accuracy at all — it only governs throughput.
+
+`CsiStatus.stamp_lag_sec` reports the worst gap that window between a frame's
+kernel stamp and the node reaching it. That is the latency being kept *out* of
+`header.stamp`; a climbing value means the socket is backing up.
+
+The stamp is `CLOCK_REALTIME`, the same base as ROS 2's default clock, so no
+conversion is needed — but it is only comparable across machines if their
+clocks agree. See below. It is also still downstream of the firmware's
+extract-and-inject path, so it is arrival at the Pi, not time on the air.
+
+## Clock sync over Ethernet
+
+Run the node on the Pi rather than forwarding raw datagrams elsewhere: the
+kernel stamp is taken at the Pi, and forwarding verbatim discards it, leaving
+the receiver to stamp after network transit. Cross-machine comparison then
+needs the clocks synced, and the Pi has no RTC — on boot it restores a stale
+on-disk time, so this is not optional.
+
+`chrony` over the wired link, with the wired host as master:
+
+```conf
+# master, /etc/chrony/chrony.conf
+allow 192.168.1.0/24
+local stratum 8            # serve time even with no upstream
+```
+
+```conf
+# Pi, /etc/chrony/chrony.conf
+server 192.168.1.50 iburst minpoll 0 maxpoll 4
+makestep 1.0 -1            # step at ANY time, not just the first few updates
+```
+
+`makestep 1.0 -1` is the part that matters with no RTC: the Pi boots far enough
+off that chrony would otherwise try to slew, taking hours to converge.
+
+```bash
+chronyc tracking     # 'System time' should settle well under 1 ms
+chronyc sources -v
+```
+
+Whether PTP is worth the extra setup depends on the NIC:
+
+```bash
+ethtool -T eth0      # hardware-transmit/hardware-receive => PTP buys sub-us
+```
+
+With software timestamping only, PTP's advantage over chrony narrows a lot.
+
+**Keep ROS 2 traffic off the measured channel.** DDS discovery is multicast and
+will happily use `wlan0` — putting the Pi's own traffic on the very channel you
+are measuring, from the Pi's own MAC. Pin it to the wired link:
+
+```bash
+# CycloneDDS
+export CYCLONEDDS_URI='<CycloneDDS><Domain><General>
+  <Interfaces><NetworkInterface name="eth0"/></Interfaces>
+</General></Domain></CycloneDDS>'
+```
+
+Fast DDS needs the equivalent interface whitelist in its XML profile. Either
+way, confirm with `sudo tcpdump -i wlan0 -n port 7400` that discovery is silent
+there.
+
 ## Forwarding over Ethernet instead of ROS 2
 
 `csi_forward` is the no-ROS path: it reads the same UDP dumps and re-sends each
 datagram **verbatim** to another host, so the far end parses it with the
 unmodified `parse_frame()` and no new format has to be agreed.
+
+Note the timestamp cost: the nexmon payload has no time field, so forwarding
+verbatim discards the kernel receive time and the far end can only stamp after
+network transit. Prefer running `csi_publisher` on the Pi when stamps matter;
+reach for this when the Pi must not run ROS 2, or when timing is not critical.
 
 ```bash
 # on the Pi — wired host on 192.168.1.50

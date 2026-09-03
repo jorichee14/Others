@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import socket
+import struct
 import subprocess
 import time
 
@@ -20,10 +21,18 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 
+from builtin_interfaces.msg import Time
+
 from wifi_csi_msgs.msg import CsiFrame, CsiStatus
 
 from .csi_parser import (DEFAULT_PORT, ParseError, decode_chanspec,
                          parse_frame, usable_slots)
+
+
+# Not exposed by Python's socket module, but stable Linux ABI values on the
+# architectures this runs on (x86-64, arm64). The cmsg type equals the sockopt.
+SO_TIMESTAMPNS = getattr(socket, "SO_TIMESTAMPNS", 35)
+SCM_TIMESTAMPNS = getattr(socket, "SCM_TIMESTAMPNS", 35)
 
 
 class CsiPublisher(Node):
@@ -82,6 +91,7 @@ class CsiPublisher(Node):
         self._calib_n = int(self.get_parameter("calib_frames").value)
         self._keep = None
         self._keep_for = 0
+        self._lag_max = 0.0
         self._window_start = time.monotonic()
         self._window_count = 0
         self._rate = 0.0
@@ -99,6 +109,26 @@ class CsiPublisher(Node):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 << 20)
+        # Ask the kernel to stamp each datagram as it lands. Without this the
+        # only available time is "when Python got to it", and _drain pulls a
+        # whole batch per tick: every frame in the batch would be stamped
+        # within microseconds of the others no matter how far apart they
+        # actually arrived. Measured, a 12.5 ms spread collapses to 0.1 ms.
+        self._stamp_from_kernel = False
+        try:
+            self.sock.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)
+            self._stamp_from_kernel = True
+        except OSError as exc:
+            self.get_logger().warning(
+                f"SO_TIMESTAMPNS unavailable ({exc}); stamping on receipt in "
+                "userspace, so frames drained in one tick share a timestamp")
+        # Sim time is not the wall clock the kernel stamps against, so mixing
+        # the two would be worse than the jitter it removes.
+        if self._stamp_from_kernel and self.get_parameter("use_sim_time").value:
+            self._stamp_from_kernel = False
+            self.get_logger().warning(
+                "use_sim_time is set; ignoring kernel receive timestamps")
+        self._anc_size = socket.CMSG_SPACE(16)
         self.sock.bind(("0.0.0.0", self.port))
         self.sock.setblocking(False)
 
@@ -189,11 +219,13 @@ class CsiPublisher(Node):
     def _drain(self) -> None:
         for _ in range(256):          # bounded so one timer tick can't stall
             try:
-                data, _ = self.sock.recvfrom(4096)
+                data, ancdata, _flags, _addr = self.sock.recvmsg(
+                    4096, self._anc_size)
             except BlockingIOError:
                 return
             except OSError:
                 return
+            stamp = self._rx_stamp(ancdata)
             try:
                 fr = parse_frame(data)
             except ParseError:
@@ -203,7 +235,7 @@ class CsiPublisher(Node):
                 continue
             if self.trim and self._keep is None:
                 self._collect_calibration(fr)
-            msg = self._to_msg(fr)
+            msg = self._to_msg(fr, stamp)
             self.pub.publish(msg)
             per_mac = self.pub_by_mac.get(fr.src_mac)
             if per_mac is not None:
@@ -211,9 +243,36 @@ class CsiPublisher(Node):
             self.n_frames += 1
             self._window_count += 1
 
-    def _to_msg(self, fr) -> CsiFrame:
+    def _rx_stamp(self, ancdata) -> Time | None:
+        """Kernel receive time for this datagram.
+
+        Taken when the packet hit the socket, so it does not depend on when
+        the drain timer next runs: a batch pulled in one tick keeps its true
+        spacing instead of collapsing onto a single instant. It still sits
+        downstream of the firmware's own extract-and-inject path, so it is the
+        arrival time at the Pi, not the instant the frame was on the air.
+        """
+        for level, ctype, cdata in ancdata:
+            if level == socket.SOL_SOCKET and ctype == SCM_TIMESTAMPNS:
+                # struct timespec: two longs, 8 bytes each on 64-bit and 4 on 32-bit
+                sec, nsec = struct.unpack("qq" if len(cdata) == 16 else "ll", cdata)
+                t = Time()
+                t.sec, t.nanosec = int(sec), int(nsec)
+                return t
+        return None
+
+    def _to_msg(self, fr, stamp: Time | None = None) -> CsiFrame:
         m = CsiFrame()
-        m.header.stamp = self.get_clock().now().to_msg()
+        now = self.get_clock().now()
+        if stamp is not None and self._stamp_from_kernel:
+            m.header.stamp = stamp
+            # How far behind the drain is running. This is the latency the
+            # kernel stamp removes from header.stamp; watching it is how you
+            # tell a backed-up socket from a quiet channel.
+            lag = now.nanoseconds * 1e-9 - (stamp.sec + stamp.nanosec * 1e-9)
+            self._lag_max = max(self._lag_max, lag)
+        else:
+            m.header.stamp = now.to_msg()
         m.header.frame_id = self.frame_id
         m.src_mac = fr.src_mac
         m.rssi = int(fr.rssi)
@@ -287,6 +346,8 @@ class CsiPublisher(Node):
         s.frames_total = int(self.n_frames)
         s.dropped_total = int(self.n_dropped)
         s.mac_filter = self.mac
+        s.stamp_lag_sec = float(self._lag_max)
+        self._lag_max = 0.0
         self.pub_status.publish(s)
 
         if self._rate == 0.0:
