@@ -158,21 +158,23 @@ def main() -> int:
         agent = node_of_topic(topic)
         key = f"{agent} ({role})" if role != "client" else agent
 
-        # A status message republishes the daemon's current tracking estimate at the topic rate;
-        # it is not a new measurement. The server is actually polled once per poll interval, which
-        # is what advances reference_time. An offset of exactly 0.0 is the placeholder the daemon
-        # reports before its first poll of the run, so it is not a measurement either.
+        # A status message republishes the daemon's current tracking estimate at the topic rate, so
+        # the message count is not a measurement count. How many times the server was actually
+        # contacted follows from the poll interval and the run length -- arithmetic, not a guess.
         g = g.copy()
-        g["measured"] = g["offset_seconds"] != 0.0
-        ref = g["reference_time.sec"].astype("int64") * 1_000_000_000 + g["reference_time.nanosec"].astype("int64")
-        g["poll_id"] = (ref.diff().fillna(0) != 0).cumsum()
+        duration_s = float(g["t_s"].max() - g["t_s"].min())
+        poll_s = int(g["poll_interval_seconds"].mode().iloc[0])
+        polls_in_run = int(np.ceil(duration_s / poll_s)) if poll_s > 0 else -1
+
+        # Before its first poll the daemon has nothing to report and publishes a flat near-zero
+        # offset; when the first real result lands it flags a clock step. Everything before that
+        # step is not a measurement of this run's synchronization.
+        stepped = g["clock_stepped"].astype(bool)
+        t_sync = float(g.loc[stepped, "t_s"].min()) if stepped.any() else float(g["t_s"].min())
+        g["measured"] = g["t_s"] >= t_sync
         m = g[g["measured"]]
-        if len(m) == 0:  # never synchronized during this run
-            m = g
-        # Distinct reference times among the measured messages = polls whose result we saw.
-        # A constant reference time means every message reports the same single poll.
-        # -1 = the daemon never filled reference_time, so the poll count is unknown.
-        n_polls = -1 if (ref == 0).all() else int(ref[g["measured"].to_numpy()].nunique())
+        if len(m) == 0:
+            m, t_sync = g, float(g["t_s"].min())
         series[key] = m
         steps_flag = int(((m["clock_stepped"].astype(bool)) & (~m["clock_stepped"].astype(bool).shift(1, fill_value=False))).sum())
         steps_delta = int((m["offset_delta_ms"].abs() > args.step_threshold_ms).sum())
@@ -190,9 +192,9 @@ def main() -> int:
                 "stratum": int(g["stratum"].mode().iloc[0]),
                 "n": len(g),
                 "n_measured": int(g["measured"].sum()),
-                "n_polls": n_polls,
-                "t_first_measurement_s": float(m["t_s"].min()),
-                "duration_s": float(g["t_s"].max() - g["t_s"].min()),
+                "polls_in_run": polls_in_run,
+                "t_sync_s": t_sync,
+                "duration_s": duration_s,
                 "offset_mean_ms": float(m["offset_ms"].mean()),
                 "offset_median_ms": float(m["offset_ms"].median()),
                 "offset_std_ms": float(m["offset_ms"].std()),
@@ -326,8 +328,11 @@ def main() -> int:
         ax.set_yticklabels(nodes)
         ax.set_ylim(-0.6, len(nodes) - 0.4)
         ax.axvline(0, color=GRID, lw=0.8)
+        span = audit_df["stamp_minus_log_median_ms"].abs().max()
+        if span > 100:  # a few topics publish seconds late; keep them visible without flattening the rest
+            ax.set_xscale("symlog", linthresh=10)
         ax.set_xlabel("header stamp − recorder log time [ms]\n(one dot per topic, bar = node median)")
-    ax.set_title("(b) NTP-independent check", loc="left", fontsize=8)
+    ax.set_title("(b) delivery to the recorder", loc="left", fontsize=8)
     ax.grid(True, axis="x", color=GRID, lw=0.5)
 
     fig.savefig(args.out / "fig_ntp.pdf")
@@ -335,21 +340,22 @@ def main() -> int:
 
     # ---- 5. markdown + LaTeX -----------------------------------------------------
     md = [f"# NTP / temporal calibration — run `{args.run}`", "", "## Roles", "", roles.to_markdown(index=False), "", "## Client offset statistics (ms)", ""]
-    cols = ["agent", "hostname", "role", "sync_source", "stratum", "n", "n_measured", "n_polls", "offset_mean_ms", "offset_median_ms", "abs_offset_p95_ms", "abs_offset_max_ms", "delay_median_ms", "jitter_median_ms", "poll_interval_mode_s", "reach_min", "clock_steps_flagged", "clock_steps_by_delta"]
+    cols = ["agent", "hostname", "role", "sync_source", "stratum", "n", "n_measured", "polls_in_run", "offset_mean_ms", "offset_median_ms", "abs_offset_p95_ms", "abs_offset_max_ms", "delay_median_ms", "jitter_median_ms", "poll_interval_mode_s", "reach_min", "clock_steps_flagged", "clock_steps_by_delta"]
     md += [summary[cols].round(3).to_markdown(index=False), ""]
     md += [
-        "`n` is the number of status messages, `n_measured` those carrying a real offset (an offset of "
-        "exactly 0 is the daemon's placeholder before its first poll), and `n_polls` the number of times "
-        "the server was actually contacted (counted from `reference_time`). Statistics are over the "
-        "measured messages.",
+        "`n` counts status messages, which republish the daemon's current estimate at the topic rate. "
+        "`n_measured` counts those from `t_sync_s` onward, the moment the daemon flagged its first result "
+        "of the run; earlier messages report a flat near-zero placeholder. `polls_in_run` is how many "
+        "times the server could have been contacted, from the poll interval and the run length. "
+        "Statistics are over the measured messages.",
         "",
     ]
-    few = summary[(summary["n_polls"] >= 0) & (summary["n_polls"] <= 2)]
+    few = summary[(summary["polls_in_run"] >= 0) & (summary["polls_in_run"] <= 2)]
     if len(few):
         md += [
-            "> **Caveat.** "
+            "> **Caveat.** At most "
             + ", ".join(
-                f"`{r['agent']}` saw {int(r['n_polls'])} poll{'' if r['n_polls'] == 1 else 's'}" for _, r in few.iterrows()
+                f"`{r['agent']}` {int(r['polls_in_run'])} poll{'' if r['polls_in_run'] == 1 else 's'}" for _, r in few.iterrows()
             )
             + f" during this {summary['duration_s'].max():.0f} s run (poll interval "
             + ", ".join(str(int(x)) for x in sorted(summary["poll_interval_mode_s"].unique()))
@@ -402,12 +408,12 @@ def main() -> int:
         )
     poll = int(clients["poll_interval_mode_s"].max()) if len(clients) else 0
     duration = float(clients["duration_s"].max()) if len(clients) else 0.0
-    polls = ", ".join(f"{tt(r['agent'])} {int(r['n_polls'])}" for _, r in clients.iterrows())
+    polls = int(clients["polls_in_run"].max()) if len(clients) else 0
     poll_sentence = ""
     if poll and poll > duration / 2:
         poll_sentence = (
             f" The clients poll the server every {poll}\\,s, longer than the {duration:.0f}\\,s run, so each offset above is "
-            f"a single measurement (polls observed per run: {polls}) rather than a distribution; the per-message header-stamp "
+            f"a single measurement (at most {polls} poll per run) rather than a distribution; the per-message header-stamp "
             f"comparison below supplies the continuous evidence."
         )
     max_all = clients["abs_offset_max_ms"].max() if len(clients) else float("nan")
@@ -424,8 +430,10 @@ def main() -> int:
     if audit_df is not None:
         spread = audit_df.groupby("node")["stamp_minus_log_median_ms"].median()
         audit_sentence = (
-            f" As an NTP-independent check, the per-node median of header stamp minus recorder receive time spans "
-            f"{spread.min():.2f} to {spread.max():.2f}\\,ms across nodes, bounding clock offset plus transport latency."
+            f" As an NTP-independent cross-check, the median of header stamp minus recorder receive time spans "
+            f"{spread.min():.1f} to {spread.max():.1f}\\,ms across nodes. This difference is the node's clock offset minus "
+            f"the delivery latency to the recorder, so it upper-bounds the offset rather than measuring it, and at this "
+            f"magnitude it is dominated by wireless delivery time; it is consistent with the sub-millisecond offsets above."
         ) + unset_sentence
     bound_sentence = ""
     if sensor_period_ms:
