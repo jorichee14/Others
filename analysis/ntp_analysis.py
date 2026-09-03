@@ -310,7 +310,10 @@ All agents are synchronized over NTP on the shared wireless network.
 {tt(server)} acts as the NTP server and the other agents synchronize to it as
 stratum-{strata} clients; each client publishes its NTP state at about {rate}\\,Hz throughout every run.
 Over run {tt(args.run)}, {'; '.join(parts)}.{audit_sentence}{bound_sentence}
-\\todo{{State whether any sensor is hardware-triggered or PTP-timestamped (Ouster, ZED).}}
+No sensor is hardware-triggered or hardware-timestamped: every message is stamped in software by
+its driver on arrival at the host, so the header stamps carry the NTP-aligned host clock plus the
+driver's arrival latency, and the offsets above bound clock disagreement between agents, not
+sensor exposure time.
 """
     (args.out / "ntp_subsection.tex").write_text(tex)
 
