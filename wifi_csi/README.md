@@ -118,6 +118,32 @@ phase downstream. Amplitude-only pipelines are unaffected.
   anything comparing two channels over time, drive fixed-rate traffic on both.
 - **`frame_control_filter` is a first-byte filter, not a MAC filter.** `0x88` is QoS
   Data; on a channel dominated by Block Acks (`0x94`) it rejects nearly everything.
+- **`rp_filter` silently eats every frame.** THE trap. The extractor injects its
+  dumps as UDP from a synthetic source, `10.10.10.10 -> 255.255.255.255`, and no
+  route back to that address exists. Reverse-path filtering therefore discards
+  them at the IP layer, before any socket. `tcpdump` still shows them, because it
+  taps at `AF_PACKET` upstream of the check — so the signature is packets visibly
+  streaming, the socket correctly bound, and nothing delivered. Confirmed by
+  probing a bare socket either side of the change: TIMEOUT at `rp_filter=2`,
+  `GOT 274 bytes from 10.10.10.10` at `0`.
+
+  `2` (loose) is not lenient enough: it still requires the source be reachable
+  via *some* interface, and this one is reachable via none.
+
+  ```bash
+  sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.wlan0.rp_filter
+  ```
+
+  The effective value is `max(all, <iface>)`, so `all` must be 0 too — you cannot
+  exempt `wlan0` alone. Put the wired link back explicitly rather than losing
+  reverse-path filtering everywhere:
+
+  ```
+  # /etc/sysctl.d/99-nexmon-csi.conf
+  net.ipv4.conf.all.rp_filter = 0
+  net.ipv4.conf.wlan0.rp_filter = 0
+  net.ipv4.conf.eth0.rp_filter = 1
+  ```
 - **Zero frames/s is often not a fault.** CSI is produced per received OFDM frame;
   an idle channel yields nothing. Check with an unfiltered `tcpdump -i wlan0`.
 - **NetworkManager and wpa_supplicant will retune the radio out from under you.**
@@ -151,6 +177,51 @@ phase downstream. Amplitude-only pipelines are unaffected.
   5500` shows a length you did not expect, the chip is not on the width you
   think it is.
 - **5 GHz only.** 2.4 GHz beacons are DSSS and produce no channel estimate.
+
+## Debugging zero frames/s
+
+Every cause below presents identically — arming reports success and nothing
+arrives — so bisect by layer rather than guessing. Each step rules out
+everything above it.
+
+1. **Is the chip on the channel you think, and does it stay there?**
+   ```bash
+   nexutil -Iwlan0 -k; sleep 5; nexutil -Iwlan0 -k
+   ```
+   Wrong channel, or a value that moves between the two reads, means
+   NetworkManager/wpa_supplicant is scanning. Nothing below matters until fixed.
+
+2. **Is the transmitter on that same channel?** `iw dev <iface> info` on the
+   transmitter, right now — the AP re-homes clients without warning, across
+   bands. A 2.4 GHz station can never be seen by a 5 GHz-armed chip.
+
+3. **Is it transmitting at all?** An idle station sends almost nothing. Run
+   `sudo ping -i 0.01 <gateway>` on it and keep it running while you test.
+
+4. **Is the extractor producing?**
+   ```bash
+   sudo tcpdump -i wlan0 -e -n udp port 5500 -c 10
+   ```
+   Look for source `4e:45:58:4d:4f:4e` — ASCII "NEXMON". Payload length gives
+   the bandwidth: 274 / 530 / 1042 for 20 / 40 / 80 MHz.
+
+5. **Do the packets reach a socket?** Stop the node first, since two listeners
+   on 5500 silently steal from each other:
+   ```bash
+   timeout 6 python3 -c "
+   import socket
+   s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+   s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+   s.bind(('0.0.0.0', 5500)); s.settimeout(5)
+   print(len(s.recvfrom(4096)[0]), 'bytes')"
+   ```
+   Packets in step 4 but a timeout here is `rp_filter` — see Gotchas.
+
+6. **Only now suspect the node.** Check `ss -ulpn | grep 5500` shows it owning
+   the port, and that `mac_filter` matches a MAC actually on the channel.
+   `mac_filter: ""` plus
+   `ros2 topic echo /csi_publisher/csi --field src_mac | sort | uniq -c`
+   tells you who is really there.
 
 ## Timestamps
 
