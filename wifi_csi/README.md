@@ -120,6 +120,36 @@ phase downstream. Amplitude-only pipelines are unaffected.
   Data; on a channel dominated by Block Acks (`0x94`) it rejects nearly everything.
 - **Zero frames/s is often not a fault.** CSI is produced per received OFDM frame;
   an idle channel yields nothing. Check with an unfiltered `tcpdump -i wlan0`.
+- **NetworkManager and wpa_supplicant will retune the radio out from under you.**
+  A scan hops channels, and every hop stomps the armed chanspec, so arming
+  reports success and the chip is elsewhere moments later. Observed: armed
+  `44/20`, `nexutil -k` reported channel 157. Diagnose by reading the chanspec
+  twice a few seconds apart — if it moves, nothing downstream can work:
+
+  ```bash
+  nexutil -Iwlan0 -k; sleep 5; nexutil -Iwlan0 -k
+  ```
+
+  Fix it permanently, since `nmcli dev set wlan0 managed no` does not survive a
+  reboot and the failure is silent:
+
+  ```
+  # /etc/NetworkManager/conf.d/99-nexmon.conf
+  [keyfile]
+  unmanaged-devices=interface-name:wlan0
+  ```
+
+  plus `systemctl disable --now wpa_supplicant`.
+- **The AP moves clients between channels, and capture dies silently when it
+  does.** Observed mid-session: a transmitter went from `149/80` to `44/20` on
+  its own, and `channel` in the config was suddenly wrong. Re-check the
+  transmitter with `iw dev <iface> info` immediately before arming, and pin the
+  router to a fixed channel and width rather than Auto. Prefer a non-DFS
+  channel — DFS can force a move on radar detection whatever you configure.
+- **Payload length tells you the bandwidth at a glance.** `18 + 4*N` bytes for
+  N slots: 274 for 20 MHz, 530 for 40, 1042 for 80. If `tcpdump -n udp port
+  5500` shows a length you did not expect, the chip is not on the width you
+  think it is.
 - **5 GHz only.** 2.4 GHz beacons are DSSS and produce no channel estimate.
 
 ## Timestamps

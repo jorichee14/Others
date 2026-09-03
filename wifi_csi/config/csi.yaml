@@ -4,7 +4,7 @@
     # Must match what the transmitters are actually using — check with
     # `iw dev <iface> info` on each of them. The chip tunes to ONE chanspec,
     # so every transmitter you want to capture has to share it.
-    channel: "149/80"
+    channel: "44/20"
     # Comma-separated source MACs of the transmitters you control. Each one
     # gets its own /mobileN/csi topic, numbered by position in this list.
     # Leave empty to capture from every device on the channel — useful for
