@@ -302,11 +302,21 @@ def main() -> int:
     rate = ", ".join(f"{r:.1f}" for r in roles["rate_hz"])
     parts = []
     for _, r in clients.iterrows():
+        delay = (f" with a median round-trip delay of {r['delay_median_ms']:.2f}\\,ms" if r["delay_median_ms"] > 0 else "")
         parts.append(
             f"{tt(r['hostname'])} had a mean offset of {r['offset_mean_ms']:.2f}\\,ms "
             f"(mean $|\\cdot|$ {r['abs_offset_mean_ms']:.2f}\\,ms, 95th percentile {r['abs_offset_p95_ms']:.2f}\\,ms, "
-            f"maximum {r['abs_offset_max_ms']:.2f}\\,ms) with a median round-trip delay of {r['delay_median_ms']:.2f}\\,ms "
-            f"and {int(r['clock_steps_flagged'])} clock step{'s' if r['clock_steps_flagged'] != 1 else ''}"
+            f"maximum {r['abs_offset_max_ms']:.2f}\\,ms){delay}"
+            f" and {int(r['clock_steps_flagged'])} clock step{'s' if r['clock_steps_flagged'] != 1 else ''}"
+        )
+    poll = int(clients["poll_interval_mode_s"].max()) if len(clients) else 0
+    duration = float(clients["duration_s"].max()) if len(clients) else 0.0
+    poll_sentence = ""
+    if poll and poll > duration / 2:
+        poll_sentence = (
+            f" The clients polled the server every {poll}\\,s, longer than the {duration:.0f}\\,s run, so the reported "
+            f"offset is the daemon's tracking estimate refreshed at most once per run rather than a continuous measurement; "
+            f"the header-stamp check below provides the continuous evidence."
         )
     max_all = clients["abs_offset_max_ms"].max() if len(clients) else float("nan")
     audit_sentence = ""
@@ -329,7 +339,7 @@ def main() -> int:
 All agents are synchronized over NTP on the shared wireless network.
 {tt(server)} acts as the NTP server and the other agents synchronize to it as
 stratum-{strata} clients; each client publishes its NTP state at about {rate}\\,Hz throughout every run.
-Over run {tt(args.run)}, {'; '.join(parts)}.{audit_sentence}{bound_sentence}
+Over run {tt(args.run)}, {'; '.join(parts)}.{poll_sentence}{audit_sentence}{bound_sentence}
 No sensor is hardware-triggered or hardware-timestamped: every message is stamped in software by
 its driver on arrival at the host, so the header stamps carry the NTP-aligned host clock plus the
 driver's arrival latency, and the offsets above bound clock disagreement between agents, not
