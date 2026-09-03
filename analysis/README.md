@@ -35,9 +35,14 @@ python analysis/extract_bag.py BAG.mcap --out extracts/coop2 \
 
 ## 2. NTP / temporal calibration
 
+Interactive: open `analysis/ntp_analysis.ipynb`, set `RUN` / `EXTRACTS` / `OUT` in the
+first cell, run all. The same analysis as a script:
+
 ```bash
 python analysis/ntp_analysis.py --extracts extracts/coop2 --out results/coop2/ntp --run coop2
 ```
+
+Both write the same outputs:
 
 Produces `ntp_roles.csv` (who is server, who are clients), `ntp_summary.csv`
 (offset mean / median / p95 / max, delay, jitter, stratum, reach, poll interval,
