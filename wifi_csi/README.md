@@ -122,6 +122,46 @@ phase downstream. Amplitude-only pipelines are unaffected.
   an idle channel yields nothing. Check with an unfiltered `tcpdump -i wlan0`.
 - **5 GHz only.** 2.4 GHz beacons are DSSS and produce no channel estimate.
 
+## Forwarding over Ethernet instead of ROS 2
+
+`csi_forward` is the no-ROS path: it reads the same UDP dumps and re-sends each
+datagram **verbatim** to another host, so the far end parses it with the
+unmodified `parse_frame()` and no new format has to be agreed.
+
+```bash
+# on the Pi — wired host on 192.168.1.50
+ros2 run wifi_csi csi_forward --dest 192.168.1.50:5500 \
+    --mac-filter 88:76:b9:ea:e0:ff,88:76:b9:ea:e1:01
+
+# or with no ROS 2 installed at all
+./wifi_csi/csi_forward.py --dest 192.168.1.50:5500 --mac-filter <macs>
+```
+
+`--split` sends the Nth MAC to destination port +N-1, mirroring `/mobileN`, so
+the receiver separates the transmitters by port without parsing anything.
+
+Receiving is just a socket:
+
+```python
+from wifi_csi.csi_parser import parse_frame
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("0.0.0.0", 5500))
+while True:
+    fr = parse_frame(s.recvfrom(4096)[0])
+    print(fr.src_mac, fr.rssi, fr.csi.shape)
+```
+
+It is stdlib-only on purpose: the MAC is at a fixed header offset, so filtering
+never decodes the 256 subcarriers it would immediately discard. That keeps the
+hot loop cheap and lets it run where there is no numpy and no ROS 2.
+
+Egress interface is chosen by the routing table, so a destination on the wired
+subnet already leaves by the wired link. `--src-ip` pins it without privileges;
+`--bind-dev eth0` forces it via `SO_BINDTODEVICE` but needs root.
+
+**Do not run `csi_forward` and `csi_publisher` together.** Both bind UDP 5500,
+and with `SO_REUSEADDR` the kernel gives each datagram to only one of them —
+they steal frames from each other with no error on either side.
+
 ## Several transmitters, one chip
 
 One radio can serve several transmitters, and that is the normal case: list them

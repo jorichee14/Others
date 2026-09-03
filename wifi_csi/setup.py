@@ -23,6 +23,7 @@ setup(
         'console_scripts': [
             'csi_publisher = wifi_csi.csi_publisher:main',
             'csi_monitor  = wifi_csi.csi_monitor:main',
+            'csi_forward  = wifi_csi.csi_forward:main',
         ],
     },
 )
