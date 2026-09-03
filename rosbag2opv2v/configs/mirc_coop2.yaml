@@ -1,0 +1,197 @@
+# Converter config for the MIRC cooperative recording
+#   mirc_dataset_coop2_20260828_completed_0.mcap
+#
+# Three agents share one metric world frame:
+#   id  1  mobile_1  Robot A  Ouster LiDAR + ZED stereo   -> ego (lowest id >= 0)
+#   id  2  mobile_2  Robot B  RealSense RGBD only         -> depth-derived cloud
+#   id -1  infra_1   RSU      fixed camera + mmWave radar -> radar cloud
+#
+# Things to check against your own recording before trusting the output
+# (`python -m rosbag2opv2v topics --bag <bag>` lists what is really in there,
+#  and the converter prints the static TF frames it found):
+#   * pose.frame  -- the frame each */global_pose describes (base_link here).
+#   * every extrinsic marked `source: tf` -- if the static TF path is missing
+#     the converter warns and falls back to the xyz/rpy_deg written next to it,
+#     which are placeholders, not measurements.
+#   * object.extent -- half [length, width, height] of each robot, in metres.
+#     These become the ground-truth boxes; measure them.
+#   * infra_1's world pose -- the infrastructure radar extrinsic is the one
+#     calibration item still open (DATASET_NOVELTY.md 4.2), so it is identity
+#     here and every infra frame is expressed in that placeholder frame.
+
+dataset:
+  name: mirc_coop2
+  sample_rate_hz: 10.0          # OPV2V's native rate; the Ouster runs at ~9.7 Hz
+  scenario_seconds: 30.0        # split the run into ~30 s scenario folders
+  timestamp_step: 2             # frame numbering step, as in OPV2V (000000, 000002, ...)
+  start_index: 0
+  splits:                       # scenarios are handed out in recording order
+    train: 3
+    validate: 1
+    test: 1
+  time_source: header           # use header.stamp, not the bag's log time
+  use_tf_static: true
+  tf_topics: ["/tf_static"]
+  pcd_binary: true
+  write_images: true
+  # The robots are the tracked targets, so each one is a ground-truth box in
+  # the *other* agents' yamls. OpenCOOD merges those dicts, which means the ego
+  # robot is a detection target too -- seen only by its partners, which is the
+  # cooperative case. Set this to false to keep the ego out of the labels.
+  include_ego_as_object: true
+  drop_incomplete_frames: true
+  min_frames_per_scenario: 20
+
+agents:
+  # ---------------------------------------------------------------- Robot A
+  - id: 1
+    name: mobile_1
+    role: cav
+    required: true
+    pose:
+      source: topic
+      topic: /mobile_1/global_pose
+      frame: base_link          # the frame global_pose refers to
+      max_gap: 0.2
+    lidar:
+      topic: /mobile_1/ouster/points
+      source: pointcloud
+      max_age: 0.1
+      required: true
+      intensity_field: intensity
+      intensity_normalize: percentile   # Ouster signal counts are not in [0, 1]
+      intensity_percentile: 99.0
+      min_range: 0.4            # drop returns off the robot's own body
+      max_range: 60.0
+      extrinsic:
+        source: tf              # base_link <- os_sensor from /tf_static
+        frame: os_sensor
+        xyz: [0.0, 0.0, 0.30]   # fallback only
+        rpy_deg: [0.0, 0.0, 0.0]
+      # Ego radars can be fused into the same cloud; off by default because
+      # mixing radar returns into a LiDAR sweep changes the detector's input
+      # distribution. Uncomment to build the radar+LiDAR variant.
+      # merge:
+      #   - topic: /mobile_1/radar1/radar/points_all
+      #     max_age: 0.15
+      #     required: false
+      #     intensity_field: intensity
+      #     extrinsic: {source: tf, frame: radar1}
+      #   - topic: /mobile_1/radar2/radar/points_all
+      #     max_age: 0.15
+      #     required: false
+      #     intensity_field: intensity
+      #     extrinsic: {source: tf, frame: radar2}
+    cameras:
+      - index: 0
+        image_topic: /mobile_1/zed/left/image_rect_color
+        info_topic: /mobile_1/zed/left/camera_info
+        max_age: 0.1
+        required: false
+        extrinsic:
+          source: tf
+          frame: zed_left_camera_optical_frame
+          xyz: [0.10, 0.06, 0.25]
+          rpy_deg: [-90.0, 0.0, -90.0]
+    object:
+      publish: true
+      extent: [0.35, 0.28, 0.35]   # half length/width/height -- MEASURE THESE
+      center: [0.0, 0.0, 0.35]     # box centre above the pose origin (world axes)
+      class_name: robot_a
+    extras:                        # time-joined telemetry, ignored by OpenCOOD
+      - key: wifi
+        topic: /mobile_1/wifi/status
+        max_age: 1.0
+      - key: ntp
+        topic: /infra_1/ntp/status
+        max_age: 2.0
+
+  # ---------------------------------------------------------------- Robot B
+  - id: 2
+    name: mobile_2
+    role: cav
+    required: true
+    pose:
+      source: topic
+      topic: /mobile_2/global_pose
+      frame: mobile_2_base_link
+      max_gap: 0.2
+    lidar:
+      # RGBD-only agent: the "LiDAR" cloud is back-projected from the depth image
+      topic: /mobile_2/depth/image_rect_raw
+      source: depth
+      info_topic: /mobile_2/depth/camera_info
+      depth_scale: 0.001          # RealSense 16UC1 is in millimetres
+      stride: 2                   # 1/4 of the pixels; plenty for a BEV detector
+      min_range: 0.3
+      max_range: 8.0
+      max_age: 0.1
+      required: true
+      to_body_frame: true         # rotate optical (z fwd) into x fwd / z up
+      extrinsic:
+        source: tf
+        frame: mobile_2_depth_optical_frame
+        xyz: [0.12, 0.0, 0.25]
+        rpy_deg: [-90.0, 0.0, -90.0]
+    cameras:
+      - index: 0
+        image_topic: /mobile_2/color/image_raw
+        info_topic: /mobile_2/color/camera_info
+        max_age: 0.1
+        required: false
+        extrinsic:
+          source: tf
+          frame: mobile_2_color_optical_frame
+          xyz: [0.12, 0.015, 0.25]
+          rpy_deg: [-90.0, 0.0, -90.0]
+    object:
+      publish: true
+      extent: [0.30, 0.25, 0.30]
+      center: [0.0, 0.0, 0.30]
+      class_name: robot_b
+    extras:
+      - key: wifi
+        topic: /mobile_2/wifi/status
+        max_age: 1.0
+
+  # ------------------------------------------------------------ RSU / infra
+  - id: -1                        # negative id: OpenCOOD never elects it ego
+    name: infra_1
+    role: rsu
+    required: false               # keep converting if the radar drops out
+    pose:
+      source: static
+      frame: infra_1_base
+      xyz: [0.0, 0.0, 0.0]        # TODO: infrastructure world pose (see 4.2)
+      rpy_deg: [0.0, 0.0, 0.0]
+    lidar:
+      topic: /infra_1/radar/points_all
+      source: pointcloud
+      max_age: 0.15               # the infra radar runs at ~8.6 Hz
+      required: true
+      intensity_field: intensity
+      intensity_normalize: percentile
+      min_range: 0.2
+      max_range: 25.0
+      extrinsic:
+        source: tf
+        frame: infra_1_radar
+        xyz: [0.0, 0.0, 2.50]
+        rpy_deg: [0.0, 20.0, 0.0]
+    cameras:
+      - index: 0
+        image_topic: /infra_1/image_raw
+        info_topic: /infra_1/camera_info
+        max_age: 0.15
+        required: false
+        extrinsic:
+          source: tf
+          frame: infra_1_camera_optical
+          xyz: [0.0, 0.0, 2.50]
+          rpy_deg: [-90.0, 0.0, -90.0]
+    object:
+      publish: false              # the infrastructure is not a tracked target
+    extras:
+      - key: ntp
+        topic: /infra_1/ntp/status
+        max_age: 2.0

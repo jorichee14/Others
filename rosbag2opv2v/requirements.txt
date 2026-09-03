@@ -1,0 +1,9 @@
+# Core conversion
+numpy>=1.21
+pyyaml>=5.4
+mcap>=1.0
+mcap-ros2-support>=0.5     # decodes ROS 2 CDR using the schemas embedded in the bag
+
+# Optional
+pillow>=9.0                # camera PNG export (dataset.write_images)
+open3d>=0.15               # only for verification against OpenCOOD's own reader
