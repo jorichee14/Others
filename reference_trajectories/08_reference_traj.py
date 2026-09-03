@@ -81,8 +81,21 @@ import math
 import time
 import numpy as np
 
-from pipeline_common import load_pipeline, R_to_q
+from pipeline_common import load_pipeline
 from pipeline_boards import Board, read_bag, pick_intrinsics
+
+# shared layer: every primitive below is defined once in mircpipe/ and used by
+# every stage and analysis (see MIGRATION.md)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mircpipe.se3 import (                                          # noqa: E402
+    Rt, inv, hat, log_R, exp_r, jr_inv, apply, compose_all, interp_traj,
+    make_T_xyzq, traj_gap, report_gap, path_length, subsample, decimate_idx,
+    se3_scale, yaw_of, level_parts, write_tum, q_of_R as R_to_q)
+from mircpipe.bag import (                                          # noqa: E402
+    iter_topic, topic_frame, read_odom, read_imu, tf_static_rot, pc2_xyzt,
+    img_gray, img_depth, read_map_xyz)
+from mircpipe.mapref import (                                       # noqa: E402
+    voxel_centroid, deskew, depth_to_cloud, Reference, icp_frame, Grid2D)
 
 # --------------------------------------------------------------------------- #
 # SE(3) helpers (validated: exact right-Jacobian inverse, not the small-angle
@@ -91,207 +104,14 @@ from pipeline_boards import Board, read_bag, pick_intrinsics
 # --------------------------------------------------------------------------- #
 from scipy.spatial.transform import Rotation as Rot
 from scipy.spatial import cKDTree
-from scipy import sparse, ndimage
+from scipy import sparse
 from scipy.sparse.linalg import spsolve
-
-
-def Rt(R, t):
-    T = np.eye(4); T[:3, :3] = R; T[:3, 3] = t; return T
-
-
-def inv(T):
-    R = T[:3, :3]; o = np.eye(4); o[:3, :3] = R.T; o[:3, 3] = -R.T @ T[:3, 3]; return o
-
-
-def hat(v):
-    x, y, z = v
-    return np.array([[0, -z, y], [z, 0, -x], [-y, x, 0]])
-
-
-def log_R(R):
-    return Rot.from_matrix(R).as_rotvec()
-
-
-def exp_r(w):
-    return Rot.from_rotvec(w).as_matrix()
-
-
-def jr_inv(w):
-    th = float(np.linalg.norm(w)); W = hat(w)
-    if th < 1e-6:
-        return np.eye(3) + 0.5 * W
-    a = 1.0 / th ** 2 - (1.0 + math.cos(th)) / (2.0 * th * math.sin(th))
-    return np.eye(3) + 0.5 * W + a * (W @ W)
-
-
-def apply(T, P):
-    return np.asarray(P) @ T[:3, :3].T + T[:3, 3]
-
-
-def compose_all(Ts, T_right):
-    """(N,4,4) @ (4,4) for every pose - e.g. lidar poses -> camera poses."""
-    return np.asarray(Ts) @ np.tile(T_right, (len(Ts), 1, 1))
-
-
-def interp_traj(ts, Ts, tq):
-    from scipy.spatial.transform import Slerp
-    tq = np.clip(tq, ts[0], ts[-1])
-    i = np.clip(np.searchsorted(ts, tq) - 1, 0, len(ts) - 2)
-    d = ts[i + 1] - ts[i]
-    a = np.where(d > 0, (tq - ts[i]) / np.where(d > 0, d, 1), 0.0)
-    sl = Slerp(ts, Rot.from_matrix(Ts[:, :3, :3]))
-    out = np.tile(np.eye(4), (len(tq), 1, 1))
-    out[:, :3, :3] = sl(tq).as_matrix()
-    out[:, :3, 3] = Ts[i, :3, 3] * (1 - a)[:, None] + Ts[i + 1, :3, 3] * a[:, None]
-    return out
-
-
-def write_tum(path, ts, Ts):
-    with open(path, "w") as f:
-        for t, T in zip(ts, Ts):
-            q = R_to_q(T[:3, :3])
-            f.write("%.9f %.6f %.6f %.6f %.9f %.9f %.9f %.9f\n"
-                    % (t, T[0, 3], T[1, 3], T[2, 3], q[0], q[1], q[2], q[3]))
-    print("  wrote %s (%d poses)" % (path, len(ts)))
-
-
-def make_T_xyzq(v):
-    return Rt(Rot.from_quat(v[3:7]).as_matrix(), np.asarray(v[0:3], float))
 
 
 def rig_of(track_name):
     """'mobile_1_lidar' -> 'mobile_1': tracks of one rigid body share it."""
     p = track_name.split("_")
     return "_".join(p[:2]) if len(p) >= 2 else track_name
-
-
-def traj_gap(Ta, Tb):
-    """Per-sample translation (m) and rotation (rad) gap of two pose arrays
-    given at the SAME stamps and expressed in the SAME body frame."""
-    dt = np.linalg.norm(Ta[:, :3, 3] - Tb[:, :3, 3], axis=1)
-    dr = np.array([np.linalg.norm(log_R(A[:3, :3].T @ B[:3, :3]))
-                   for A, B in zip(Ta, Tb)])
-    return dt, dr
-
-
-def report_gap(label, ts, dt, dr, path_len=None):
-    print("  %s: translation median %.1f cm  p95 %.1f cm  max %.1f cm | "
-          "rotation median %.2f deg  max %.2f deg  (%d stamps)"
-          % (label, np.median(dt) * 100, np.percentile(dt, 95) * 100,
-             dt.max() * 100, math.degrees(np.median(dr)),
-             math.degrees(dr.max()), len(dt)))
-    qs = np.linspace(0, len(ts) - 1, 6).astype(int)
-    print("     over time: " + "  ".join(
-        "t=%.0fs %.0fcm" % (ts[i] - ts[0], dt[i] * 100) for i in qs))
-    if path_len is not None and path_len > 1.0:
-        print("     end gap %.1f cm over %.1f m of path = %.2f%% of distance "
-              "travelled" % (dt[-1] * 100, path_len, 100 * dt[-1] / path_len))
-
-
-def path_length(Ts):
-    return float(np.sum(np.linalg.norm(np.diff(Ts[:, :3, 3], axis=0), axis=1)))
-
-
-# --------------------------------------------------------------------------- #
-# bag readers (odometry + point clouds; images go through pipeline_boards)
-# --------------------------------------------------------------------------- #
-def iter_topic(path, topic, stride=1, limit=None):
-    import rosbag2_py
-    from rclpy.serialization import deserialize_message
-    try:
-        from rosidl_runtime_py.utilities import get_message
-    except ImportError:
-        from rosidl_runtime_py.utility import get_message
-    r = rosbag2_py.SequentialReader()
-    r.open(rosbag2_py.StorageOptions(uri=str(path), storage_id="mcap"),
-           rosbag2_py.ConverterOptions("", ""))
-    types = {t.name: t.type for t in r.get_all_topics_and_types()}
-    if topic not in types:
-        raise KeyError("%s not in bag; have %s..." % (topic, sorted(types)[:8]))
-    cls = get_message(types[topic])
-    f = rosbag2_py.StorageFilter(); f.topics = [topic]; r.set_filter(f)
-    i = n = 0
-    while r.has_next():
-        _, data, t_bag = r.read_next()
-        if i % stride:
-            i += 1; continue
-        i += 1
-        m = deserialize_message(data, cls)
-        h = getattr(m, "header", None)
-        t = (h.stamp.sec + h.stamp.nanosec * 1e-9) if h is not None else t_bag * 1e-9
-        yield t, m
-        n += 1
-        if limit and n >= limit:
-            break
-
-
-def topic_frame(bag, topic):
-    """header.frame_id of the first message - the frame the data is IN."""
-    for _, m in iter_topic(bag, topic, limit=1):
-        h = getattr(m, "header", None)
-        return h.frame_id if h is not None else "?"
-    return "?"
-
-
-def img_gray(m):
-    """sensor_msgs/Image -> uint8 grayscale (mono8/bgr8/rgb8/bgra8/rgba8/16UC1)."""
-    a = np.frombuffer(m.data, np.uint8)
-    enc = m.encoding.lower()
-    if enc in ("mono8", "8uc1"):
-        return a.reshape(m.height, m.step)[:, :m.width].copy()
-    if enc in ("bgr8", "rgb8"):
-        im = a.reshape(m.height, m.step)[:, :m.width * 3].reshape(m.height, m.width, 3)
-        w = (0.114, 0.587, 0.299) if enc == "bgr8" else (0.299, 0.587, 0.114)
-        return (im[..., 0] * w[0] + im[..., 1] * w[1] + im[..., 2] * w[2]).astype(np.uint8)
-    if enc in ("bgra8", "rgba8"):
-        im = a.reshape(m.height, m.step)[:, :m.width * 4].reshape(m.height, m.width, 4)
-        w = (0.114, 0.587, 0.299) if enc == "bgra8" else (0.299, 0.587, 0.114)
-        return (im[..., 0] * w[0] + im[..., 1] * w[1] + im[..., 2] * w[2]).astype(np.uint8)
-    if enc in ("mono16", "16uc1"):
-        return (a.view(np.uint16).reshape(m.height, m.step // 2)[:, :m.width] >> 8).astype(np.uint8)
-    raise SystemExit("unsupported image encoding %r" % m.encoding)
-
-
-def read_imu(bag, topic):
-    ts, gyr, acc, frame = [], [], [], None
-    for t, m in iter_topic(bag, topic):
-        if frame is None:
-            frame = m.header.frame_id
-        ts.append(t)
-        gyr.append([m.angular_velocity.x, m.angular_velocity.y, m.angular_velocity.z])
-        acc.append([m.linear_acceleration.x, m.linear_acceleration.y, m.linear_acceleration.z])
-    if not ts:
-        raise SystemExit("no IMU on %s" % topic)
-    ts = np.array(ts); gyr = np.array(gyr); acc = np.array(acc)
-    print("  imu %s: %d samples, %.0f Hz, frame '%s'"
-          % (topic, len(ts), len(ts) / max(ts[-1] - ts[0], 1e-9), frame))
-    return ts, gyr, acc, frame
-
-
-def tf_static_rot(bag, target, source):
-    """Rotation R_target_source (maps source-frame vectors into target) from
-    /tf_static, chaining through intermediate frames. None if not connected."""
-    edges = {}
-    try:
-        for _, m in iter_topic(bag, "/tf_static"):
-            for tr in m.transforms:
-                q = tr.transform.rotation
-                R = Rot.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
-                p, c = tr.header.frame_id, tr.child_frame_id
-                edges.setdefault(p, []).append((c, R))          # R_p_c
-                edges.setdefault(c, []).append((p, R.T))        # R_c_p
-    except KeyError:
-        return None
-    # BFS from target to source accumulating R_target_x
-    seen = {target: np.eye(3)}; queue = [target]
-    while queue:
-        x = queue.pop(0)
-        if x == source:
-            return seen[x]
-        for y, R_xy in edges.get(x, []):
-            if y not in seen:
-                seen[y] = seen[x] @ R_xy; queue.append(y)
-    return None
 
 
 def read_odom_tum(path, child):
@@ -307,219 +127,8 @@ def read_odom_tum(path, child):
     return ts, Ts, child
 
 
-def read_odom(bag, topic):
-    ts, Ts, child, parent = [], [], None, None
-    for t, m in iter_topic(bag, topic):
-        p = m.pose.pose.position; o = m.pose.pose.orientation
-        if child is None:
-            child = getattr(m, "child_frame_id", "") or "?"
-            parent = m.header.frame_id or "?"
-        ts.append(t)
-        Ts.append(Rt(Rot.from_quat([o.x, o.y, o.z, o.w]).as_matrix(),
-                     np.array([p.x, p.y, p.z])))
-    if not ts:
-        raise SystemExit("no odometry on %s" % topic)
-    ts = np.array(ts); Ts = np.array(Ts)
-    print("  odom %s: %d poses, %.1f s, path %.1f m, frame '%s' -> "
-          "child_frame_id '%s'"
-          % (topic, len(ts), ts[-1] - ts[0], path_length(Ts), parent, child))
-    print("  (cam_extrinsic_xyzquat must be T_%s_<optical>: "
-          "ros2 run tf2_ros tf2_echo %s <optical frame>)" % (child, child))
-    return ts, Ts, child
-
-
 _DT = {1: np.int8, 2: np.uint8, 3: np.int16, 4: np.uint16,
        5: np.int32, 6: np.uint32, 7: np.float32, 8: np.float64}
-
-
-def pc2_xyzt(msg):
-    """-> (xyz float32 (N,3), t_rel seconds (N,) or None). Handles row padding."""
-    n = msg.width * msg.height
-    raw = np.frombuffer(msg.data, np.uint8)
-    if msg.row_step != msg.width * msg.point_step and msg.height > 1:
-        raw = raw.reshape(msg.height, msg.row_step)[:, :msg.width * msg.point_step]
-        raw = raw.reshape(-1)
-    buf = raw[:n * msg.point_step].reshape(n, msg.point_step)
-    off = {f.name: (f.offset, _DT[f.datatype]) for f in msg.fields}
-
-    def col(name):
-        o, dt = off[name]
-        return buf[:, o:o + np.dtype(dt).itemsize].copy().view(dt).ravel()
-
-    xyz = np.column_stack([col("x"), col("y"), col("z")]).astype(np.float32)
-    ok = np.isfinite(xyz).all(1) & (np.abs(xyz) < 1e4).all(1)
-    tr = None
-    for name in ("t", "time", "timestamp", "time_offset"):
-        if name in off:
-            tv = col(name).astype(np.float64)[ok]
-            if tv.max() > 1e6:          # nanoseconds
-                tv = tv * 1e-9
-            tr = tv - tv.min()
-            break
-    return xyz[ok], tr
-
-
-def voxel_centroid(P, v):
-    """Average of the points in each voxel (NOT the voxel centre - centres cost
-    2.4 cm of quantisation, measured)."""
-    q = np.floor(P / v).astype(np.int64)
-    q -= q.min(0)
-    key = (q[:, 0] << 40) | (q[:, 1] << 20) | q[:, 2]
-    o = np.argsort(key, kind="stable"); key = key[o]; Ps = P[o]
-    br = np.r_[0, np.flatnonzero(np.diff(key)) + 1, len(key)]
-    # float64 accumulator: a float32 cumsum over 1e5+ points loses millimetres
-    # to rounding by the last blocks (measured: 6 mm on a 2.6 m wall)
-    cs = np.vstack([np.zeros(3), np.cumsum(Ps.astype(np.float64), 0)])
-    return ((cs[br[1:]] - cs[br[:-1]]) / np.diff(br)[:, None]).astype(np.float32)
-
-
-def deskew(P, trel, dT_scan, bins=32):
-    """Constant-velocity deskew to the scan midpoint. dT_scan = lidar motion
-    over the scan (from odometry); each point is moved by the fractional
-    motion Exp((f - 0.5) * Log(dT_scan)) for its time fraction f."""
-    if trel is None or trel.max() <= 0:
-        return P
-    w = log_R(dT_scan[:3, :3]); v = dT_scan[:3, 3]
-    if np.linalg.norm(w) < 1e-5 and np.linalg.norm(v) < 1e-4:
-        return P
-    f = trel / trel.max()
-    out = P.copy()
-    for b in range(bins):
-        m = (f >= b / bins) & (f < (b + 1) / bins) if b < bins - 1 else (f >= b / bins)
-        if not m.any():
-            continue
-        a = (b + 0.5) / bins - 0.5
-        out[m] = P[m] @ exp_r(a * w).T + a * v
-    return out
-
-
-def depth_to_cloud(z_m, K, rmin=0.4, rmax=3.5,
-                   edge_jump=0.05, voxel=0.05, max_pts=8000):
-    """Depth image in METRES -> gated, edge-rejected, voxel-centroid cloud.
-    Flying pixels at occlusion boundaries are the #1 ICP bias source for
-    stereo depth: they always lie BETWEEN two surfaces."""
-    z = np.array(z_m, np.float32, copy=True)
-    z[(z < rmin) | (z > rmax)] = 0
-    zz = np.where(z > 0, z, np.nan)
-    hi = ndimage.maximum_filter(np.nan_to_num(zz, nan=-1e3), size=3)
-    lo = ndimage.minimum_filter(np.nan_to_num(zz, nan=1e3), size=3)
-    z[(hi - lo) > edge_jump] = 0
-    v, u = np.nonzero(z)
-    if len(u) < 500:
-        return np.zeros((0, 3), np.float32)
-    zc = z[v, u]
-    P = np.column_stack([(u - K[0, 2]) * zc / K[0, 0],
-                         (v - K[1, 2]) * zc / K[1, 1], zc])
-    P = voxel_centroid(P.astype(np.float32), voxel)
-    if len(P) > max_pts:
-        P = P[np.linspace(0, len(P) - 1, max_pts).astype(int)]
-    return P
-
-
-def subsample(P, n):
-    P = np.asarray(P)
-    if len(P) > n:
-        P = P[np.linspace(0, len(P) - 1, n).astype(int)]
-    return P
-
-
-def img16(m):
-    a = np.frombuffer(m.data, np.uint8)
-    return a.view(np.uint16).reshape(m.height, m.step // 2)[:, :m.width]
-
-
-def img_depth(m):
-    """Depth image -> metres. D455 publishes 16UC1 millimetres; ZED publishes
-    32FC1 metres (with NaN/inf for invalid)."""
-    a = np.frombuffer(m.data, np.uint8)
-    if m.encoding in ("16UC1", "mono16"):
-        return a.view(np.uint16).reshape(m.height, m.step // 2)[:, :m.width] \
-            .astype(np.float32) * 0.001
-    if m.encoding == "32FC1":
-        z = a.view(np.float32).reshape(m.height, m.step // 4)[:, :m.width].copy()
-        z[~np.isfinite(z)] = 0
-        return z
-    raise SystemExit("unsupported depth encoding %r" % m.encoding)
-
-
-def read_map_xyz(path):
-    import open3d as o3d
-    P = np.asarray(o3d.io.read_point_cloud(str(path)).points)
-    if len(P) == 0:
-        raise SystemExit("no points in %s" % path)
-    return P
-
-
-# --------------------------------------------------------------------------- #
-# frozen-map reference: KD-tree + local planes (soft planarity weight, matched
-# by voxel membership - both validated the hard way on the mapping sessions)
-# --------------------------------------------------------------------------- #
-class Reference:
-    def __init__(self, P, voxel=0.05, plane_voxel=0.4, planarity=1.0, min_pts=12):
-        self.P = voxel_centroid(np.asarray(P, float), voxel).astype(float)
-        self.pv = plane_voxel
-        self.origin = self.P.min(0)
-        q = self._vox(self.P)
-        key = (q[:, 0] << 40) | (q[:, 1] << 20) | q[:, 2]
-        o = np.argsort(key, kind="stable"); ks = key[o]; Ps = self.P[o]
-        br = np.r_[0, np.flatnonzero(np.diff(ks)) + 1, len(ks)]
-        C, N, W, kk = [], [], [], []
-        for a, b in zip(br[:-1], br[1:]):
-            if b - a < min_pts:
-                continue
-            X = Ps[a:b]; c = X.mean(0)
-            ev, V = np.linalg.eigh((X - c).T @ (X - c) / (b - a))
-            C.append(c); N.append(V[:, 0]); kk.append(ks[a])
-            W.append(1.0 - min((ev[0] / max(ev[1], 1e-12)) / planarity, 1.0))
-        self.C = np.array(C); self.N = np.array(N); self.W = np.array(W)
-        self.idx = {int(k): i for i, k in enumerate(kk)}
-        print("  reference map: %d pts, %d plane cells" % (len(self.P), len(self.C)))
-
-    def _vox(self, P):
-        return np.clip(np.floor((P - self.origin) / self.pv).astype(np.int64),
-                       0, (1 << 20) - 1)
-
-    def plane_of(self, Q):
-        q = self._vox(Q)
-        key = (q[:, 0] << 40) | (q[:, 1] << 20) | q[:, 2]
-        j = np.array([self.idx.get(int(k), -1) for k in key])
-        m = j >= 0
-        return self.C[j[m]], self.N[j[m]], self.W[j[m]], m
-
-
-def icp_frame(P_body, T_init, ref, gates=(0.4, 0.2, 0.1), iters=5,
-              huber=0.05, beta=0.02):
-    """Point-to-plane ICP of one scan against the frozen map.
-    Convention: t <- t + dt (world), R <- R exp(dphi) (body); Jacobian
-    [n, cross(p, n @ R)] verified against numerical differentiation."""
-    T = T_init.copy(); nu = 0; rms = np.nan; eig = np.zeros(6)
-    L = 1.0 / max(float(np.median(np.linalg.norm(P_body, axis=1))), 1e-3)
-    S = np.diag([1, 1, 1, L, L, L])
-    for gate in gates:
-        for _ in range(iters):
-            Q = apply(T, P_body)
-            c, n, w, m = ref.plane_of(Q)
-            if m.sum() < 100:
-                break
-            p = P_body[m]; R = T[:3, :3]
-            r = np.einsum("ij,ij->i", Q[m] - c, n)
-            keep = np.abs(r) < gate
-            if keep.sum() < 100:
-                break
-            c, n, w, p, r = c[keep], n[keep], w[keep], p[keep], r[keep]
-            ww = w * np.minimum(1.0, huber / np.maximum(np.abs(r), 1e-9))
-            J = np.hstack([n, np.cross(p, n @ R)])
-            Jw = J * ww[:, None]
-            H = J.T @ Jw; g = Jw.T @ r
-            d = -np.linalg.solve(H + beta * np.trace(H) / 6.0 * np.eye(6), g)
-            T = Rt(R @ exp_r(d[3:]), T[:3, 3] + d[:3])
-            nu = int(keep.sum())
-            rms = float(np.sqrt(np.mean(ww * r * r) / max(ww.mean(), 1e-9)))
-            ev = np.linalg.eigvalsh(S @ H @ S)
-            eig = ev / max(ev.max(), 1e-12)
-            if np.linalg.norm(d[:3]) < 1e-4 and np.linalg.norm(d[3:]) < 1e-5:
-                break
-    return T, nu, rms, int((eig > 0.02).sum())
 
 
 # --------------------------------------------------------------------------- #
@@ -941,22 +550,6 @@ def board_factors(res, bmap):
         abs_meas.append((k, T_meas, sig_t, sig_r))
         res_nodes.append((k, bname, T_cb))
     return abs_meas, res_nodes
-
-
-def decimate_idx(ts, rate):
-    """Indices of the first sample at or after every 1/rate mark."""
-    marks = np.arange(ts[0], ts[-1] + 1e-9, 1.0 / rate)
-    return np.unique(np.clip(np.searchsorted(ts, marks), 0, len(ts) - 1))
-
-
-
-# --------------------------------------------------------------------------- #
-# mobile_1 building blocks (pure functions of arrays, so they are testable
-# without a bag): the chained lidar ICP and the three-arm graph
-# --------------------------------------------------------------------------- #
-def se3_scale(D, s):
-    """Fraction s of the rigid motion D (constant-velocity extrapolation)."""
-    return Rt(exp_r(s * log_R(D[:3, :3])), s * D[:3, 3])
 
 
 def chain_icp(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100,
@@ -1902,63 +1495,6 @@ def build_imu_vo_odometry(bag, track, X, T_vo, ochild, outd, name):
     oT = compose_all(Ts_, inv(T_vo))                            # optical frame
     write_tum(os.path.join(outd, "traj_%s_imuvo_raw.tum" % name), ts_, oT)
     return ts_, oT, np.array(es), "imu+vo odom"
-
-
-# --------------------------------------------------------------------------- #
-# particle-filter localiser (the camera-only answer that does not depend on
-# the odometry never breaking): 2D multi-hypothesis over the map, depth as a
-# virtual scan scored on a likelihood field, odometry as the motion model,
-# boards as absolute fixes, augmented-MCL random injection for recovery.
-# --------------------------------------------------------------------------- #
-class Grid2D:
-    """Wall likelihood field from the anchored map: points in a height band
-    rasterised at `res`, distance transform, Gaussian likelihood."""
-    def __init__(self, P, slice_z, res=0.05, sigma=0.10, max_d=1.0, pad=2.0):
-        m = (P[:, 2] >= slice_z[0]) & (P[:, 2] <= slice_z[1])
-        Q = P[m, :2]
-        self.res = res
-        self.x0 = Q[:, 0].min() - pad; self.y0 = Q[:, 1].min() - pad
-        nx = int((Q[:, 0].max() + pad - self.x0) / res) + 1
-        ny = int((Q[:, 1].max() + pad - self.y0) / res) + 1
-        occ = np.zeros((ny, nx), bool)
-        ix = ((Q[:, 0] - self.x0) / res).astype(int)
-        iy = ((Q[:, 1] - self.y0) / res).astype(int)
-        occ[iy, ix] = True
-        self.dist = np.minimum(ndimage.distance_transform_edt(~occ) * res, max_d)
-        self.sigma = sigma; self.max_d = max_d
-        self.ny, self.nx = occ.shape
-        # candidate cells for random injection: near a wall but not in it
-        free = (self.dist > 0.25) & (self.dist < 2.0)
-        self.free_iy, self.free_ix = np.nonzero(free)
-        print("  likelihood field: %d x %d cells at %.2f m, %d wall cells, "
-              "%d candidate free cells (z band %s)"
-              % (nx, ny, res, int(occ.sum()), len(self.free_ix), list(slice_z)))
-
-    def lookup(self, x, y):
-        ix = np.clip(((x - self.x0) / self.res).astype(int), 0, self.nx - 1)
-        iy = np.clip(((y - self.y0) / self.res).astype(int), 0, self.ny - 1)
-        d = self.dist[iy, ix]
-        out = (x < self.x0) | (x >= self.x0 + self.nx * self.res) | \
-            (y < self.y0) | (y >= self.y0 + self.ny * self.res)
-        return np.where(out, self.max_d, d)
-
-    def random_poses(self, n, rng):
-        j = rng.integers(0, len(self.free_ix), n)
-        x = self.x0 + (self.free_ix[j] + rng.random(n)) * self.res
-        y = self.y0 + (self.free_iy[j] + rng.random(n)) * self.res
-        return np.column_stack([x, y, rng.uniform(-math.pi, math.pi, n)])
-
-
-def yaw_of(R):
-    return math.atan2(R[1, 0], R[0, 0])
-
-
-def level_parts(T):
-    """Split a pose into (yaw-only-level pose x,y,yaw) and the roll/pitch
-    rotation R_rp such that R = R_z(yaw) @ R_rp."""
-    yaw = yaw_of(T[:3, :3])
-    Rz = exp_r([0, 0, yaw])
-    return np.array([T[0, 3], T[1, 3], yaw]), Rz.T @ T[:3, :3]
 
 
 def pf_localise(frames, ot, oT, X, T_map_origin, board_meas, grid, prm, rng):

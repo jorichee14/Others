@@ -49,50 +49,24 @@ import sys
 import numpy as np
 from scipy.spatial.transform import Rotation as Rot
 
-
-def Rt(R, t):
-    T = np.eye(4); T[:3, :3] = R; T[:3, 3] = t; return T
-
-
-def inv(T):
-    R = T[:3, :3]; o = np.eye(4); o[:3, :3] = R.T; o[:3, 3] = -R.T @ T[:3, 3]; return o
-
-
-def make_T_xyzq(v):
-    return Rt(Rot.from_quat(v[3:7]).as_matrix(), np.asarray(v[0:3], float))
-
-
-def read_tum(path):
-    A = np.loadtxt(path)
-    if A.ndim == 1:
-        A = A[None]
-    A = A[np.argsort(A[:, 0])]
-    ts = A[:, 0]
-    Ts = np.array([Rt(Rot.from_quat(r[4:8]).as_matrix(), r[1:4]) for r in A])
-    return ts, Ts
-
-
-def decimate(ts, Ts, rate_hz):
-    if not rate_hz or rate_hz <= 0:
-        return ts, Ts
-    keep, t_last = [], -1e18
-    for i, t in enumerate(ts):
-        if t - t_last >= (1.0 / rate_hz) * 0.9:
-            keep.append(i); t_last = t
-    return ts[keep], Ts[keep]
+# shared layer (see MIGRATION.md)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mircpipe.se3 import (                                          # noqa: E402
+    Rt, inv, make_T_xyzq, read_tum, decimate_idx, path_length)
 
 
 def robot_poses(rb, rate_hz):
     """-> ts, T_map_body, T_start_body (the same poses relative to the first)."""
     ts, Tc = read_tum(rb["traj"])
-    ts, Tc = decimate(ts, Tc, rate_hz)
+    k = decimate_idx(ts, rate_hz)
+    ts, Tc = ts[k], Tc[k]
     X = make_T_xyzq(rb["cam_extrinsic_xyzquat"]) if rb.get("cam_extrinsic_xyzquat") \
         else np.eye(4)
     # camera optical -> body: T_map_body = T_map_cam @ inv(X)
     Tb = np.array([T @ inv(X) for T in Tc])
     T0 = Tb[0]
     Tl = np.array([inv(T0) @ T for T in Tb])
-    path = float(np.sum(np.linalg.norm(np.diff(Tb[:, :3, 3], axis=0), axis=1)))
+    path = path_length(Tb)
     print("  %s: %d poses, %.1f s, path %.1f m, body frame '%s'; start in map "
           "xyz=%s" % (rb["name"], len(ts), ts[-1] - ts[0], path, rb.get("body_frame", "?"),
                       np.round(T0[:3, 3], 3).tolist()))
