@@ -1,0 +1,25 @@
+/**/csi_publisher:
+  ros__parameters:
+    interface: wlan0
+    # Must match what the transmitters are actually using — check with
+    # `iw dev <iface> info` on each of them. The chip tunes to ONE chanspec,
+    # so every transmitter you want to capture has to share it.
+    channel: "149/80"
+    # Comma-separated source MACs of the transmitters you control. Each one
+    # gets its own /mobileN/csi topic, numbered by position in this list.
+    # Leave empty to capture from every device on the channel — useful for
+    # debugging, useless for data: mixed transmitters use different
+    # bandwidths and the profile smears.
+    mac_filter: "88:76:b9:ea:e0:ff,88:76:b9:ea:e1:01"
+    core_mask: 1
+    nss_mask: 1
+    # -b filters on the frame's FIRST BYTE, not the MAC. 0x88 = QoS Data. On a
+    # channel dominated by Block Acks (0x94) it rejects nearly everything.
+    frame_control_filter: ""
+    port: 5500
+    arm_on_start: true
+    arm_attempts: 5
+    trim: false
+    calib_frames: 300
+    frame_id: wlan0
+    status_period: 2.0
