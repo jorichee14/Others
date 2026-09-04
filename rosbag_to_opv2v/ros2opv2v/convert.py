@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -320,24 +321,14 @@ def reconcile_clocks(reader: BagReader, cfg: ConverterConfig, indexes,
                               "ntp_fields": meta}
 
     t0 = min((e.header_stamps[0] for e in indexes.values() if e.header_stamps), default=0)
+    t_end = max((e.header_stamps[-1] for e in indexes.values() if e.header_stamps), default=t0)
     report.clocks["_events"] = {}
     for host, topic in cfg.clock.events_topics.items():
         rows = events.get(topic, [])
-        report.clocks["_events"][host] = [
-            {"t_rel_s": round((stamp - t0) / 1e9, 3), "text": text} for stamp, text in rows]
-        alarming = [r for r in rows if any(k in r[1].lower() for k in
-                    ("step", "stepped", "unsync", "not synchronised", "not synchronized",
-                     "lost", "no source", "unreachable"))]
-        for stamp, text in alarming:
-            report.warnings.append(
-                f"clock: {host} daemon event at t={((stamp - t0) / 1e9):.1f} s: {text!r}. A "
-                f"clock step or a lost source mid-recording is a discontinuity in that "
-                f"host's stamps that no offset series will show; frames around it should "
-                f"be treated as unsynchronised.")
-        if rows and not alarming:
-            report.warnings.append(
-                f"clock: {host} logged {len(rows)} daemon event(s); none look like a step "
-                f"or a lost source (listed in conversion_report.json under clocks._events).")
+        parsed = [_parse_clock_event(stamp, text, t0) for stamp, text in rows]
+        report.clocks["_events"][host] = parsed
+        _classify_clock_events(host, parsed, (t_end - t0) / 1e9,
+                               cfg.clock.max_residual_ms, report)
 
     for host, entry in report.clocks.items():
         if host.startswith("_"):
@@ -369,6 +360,85 @@ def reconcile_clocks(reader: BagReader, cfg: ConverterConfig, indexes,
                 f"are used as recorded and any error appears as uniform latency on "
                 f"that agent.")
     return clocks
+
+
+_DELTA_RE = re.compile(r"delta\s*=\s*(-?\d+(?:\.\d+)?)\s*(ms|us|s)\b", re.I)
+_MONO_RE = re.compile(r"mono\s*=\s*(\d+(?:\.\d+)?)", re.I)
+_ALARM_WORDS = ("unsync", "not synchronised", "not synchronized", "lost", "no source",
+                "unreachable", "leap")
+
+
+def _parse_clock_event(stamp_ns: int, text: str, t0: int) -> dict:
+    """One daemon event line -> {t_rel_s, text, delta_ms?, mono_s?}."""
+    out = {"t_rel_s": round((stamp_ns - t0) / 1e9, 3), "text": text}
+    m = _DELTA_RE.search(text)
+    if m:
+        value, unit = float(m.group(1)), m.group(2).lower()
+        out["delta_ms"] = value * {"ms": 1.0, "us": 1e-3, "s": 1e3}[unit]
+    m = _MONO_RE.search(text)
+    if m:
+        out["mono_s"] = float(m.group(1))
+    return out
+
+
+def _classify_clock_events(host: str, parsed: List[dict], bag_span_s: float,
+                           max_residual_ms: float, report: ConversionReport) -> None:
+    """Decide which daemon events are worth a warning.
+
+    A monitor that logs every chrony adjustment as "STEP" produces ten of them
+    for sub-millisecond slews; those are the daemon doing its job, not a
+    discontinuity. What actually matters:
+
+    * MAGNITUDE. A step is only a step if it moved the clock by more than the
+      residual the frames already carry. Below max_residual_ms it is noise.
+    * WHEN IT HAPPENED. A transient-local (latched) events topic replays its
+      backlog the moment the recorder subscribes: N events all arriving within
+      a second of each other, whose own monotonic timestamps span far more than
+      the bag, are HISTORY, not events during the recording. std_msgs/String
+      has no header, so their stamps are the arrival time and cannot tell you
+      this; the `mono=` field can.
+    """
+    if not parsed:
+        return
+    arrivals = [e["t_rel_s"] for e in parsed]
+    monos = [e["mono_s"] for e in parsed if "mono_s" in e]
+    backlog = (len(parsed) >= 3
+               and max(arrivals) - min(arrivals) < 1.0
+               and len(monos) >= 3
+               and (max(monos) - min(monos)) > 2.0 * max(bag_span_s, 1.0))
+    if backlog:
+        report.warnings.append(
+            f"clock: {host} delivered {len(parsed)} daemon events within one second at "
+            f"t={min(arrivals):.1f} s whose own monotonic timestamps span "
+            f"{(max(monos) - min(monos)) / 60:.0f} minutes — a latched topic replaying its "
+            f"backlog at subscription time. They predate the recording; nothing stepped "
+            f"during it. Largest adjustment in the backlog: "
+            f"{max((abs(e.get('delta_ms', 0.0)) for e in parsed), default=0.0):.2f} ms.")
+        return
+    real_steps, routine, worded = [], [], []
+    for e in parsed:
+        text = e["text"].lower()
+        if "delta_ms" in e:
+            (real_steps if abs(e["delta_ms"]) > max_residual_ms else routine).append(e)
+        elif any(w in text for w in _ALARM_WORDS):
+            worded.append(e)
+        else:
+            routine.append(e)
+    for e in real_steps:
+        report.warnings.append(
+            f"clock: {host} clock STEPPED by {e['delta_ms']:+.1f} ms at t={e['t_rel_s']:.1f} s "
+            f"({e['text']!r}). That is a discontinuity in this host's stamps that no offset "
+            f"series shows; frames around it should be treated as unsynchronised.")
+    for e in worded:
+        report.warnings.append(
+            f"clock: {host} daemon event at t={e['t_rel_s']:.1f} s: {e['text']!r} — a lost "
+            f"or unreachable source means the clock was free-running from here.")
+    if routine and not real_steps and not worded:
+        biggest = max((abs(e.get("delta_ms", 0.0)) for e in routine), default=0.0)
+        report.warnings.append(
+            f"clock: {host} logged {len(routine)} routine daemon adjustment(s) during the "
+            f"recording, largest {biggest:.2f} ms — below clock.max_residual_ms="
+            f"{max_residual_ms:g}, so already covered by the per-frame residual.")
 
 
 def _bag_midpoint(indexes) -> int:
@@ -573,8 +643,8 @@ def _pose_statistics(cfg: ConverterConfig, frame_poses: Dict[str, dict],
     stats: Dict[str, dict] = {}
     t0 = frames[0].t_ns if frames else 0
     for agent in cfg.active_agents:
-        positions, jumps, jump_times = [], [], []
-        previous = None
+        positions, jumps, jump_times, jump_dts = [], [], [], []
+        previous, previous_t = None, None
         for frame in frames:
             entry = frame_poses[frame.key].get(agent.name)
             if entry is None:
@@ -584,7 +654,8 @@ def _pose_statistics(cfg: ConverterConfig, frame_poses: Dict[str, dict],
             if previous is not None:
                 jumps.append(float(np.linalg.norm(position - previous)))
                 jump_times.append((frame.t_ns - t0) / 1e9)
-            previous = position
+                jump_dts.append(max((frame.t_ns - previous_t) / 1e9, 1e-6))
+            previous, previous_t = position, frame.t_ns
         if not positions:
             continue
         positions = np.asarray(positions)
@@ -596,15 +667,26 @@ def _pose_statistics(cfg: ConverterConfig, frame_poses: Dict[str, dict],
             "extent_m": [round(float(v), 3)
                          for v in (positions.max(axis=0) - positions.min(axis=0))],
             "max_step_m": round(float(np.max(jumps)), 4) if jumps else 0.0,
-            # the three largest inter-frame steps and when they happened: a
-            # walking-speed cart moves ~0.1 m per 10 Hz frame, so a 0.26 m step
-            # is either a sprint or a pose discontinuity, and the time says which
-            "largest_steps": sorted(
-                ({"t_s": round(t, 1), "step_m": round(j, 3)} for j, t in zip(jumps, jump_times)),
-                key=lambda d: -d["step_m"])[:3],
+            # The three fastest inter-frame moves, as SPEED. A raw step is
+            # misleading: consecutive KEPT frames can be seconds apart when the
+            # frames between them were dropped, so a 0.26 m step over 1.9 s is a
+            # walk (0.14 m/s), not a jump. A real pose discontinuity is a large
+            # step over a normal frame interval. `gap` flags a dt well above the
+            # frame period, i.e. a step measured across dropped frames.
+            "largest_steps": _fastest_moves(jumps, jump_times, jump_dts),
             "z_span_m": round(float(positions[:, 2].max() - positions[:, 2].min()), 3),
         }
     return stats
+
+
+def _fastest_moves(steps, times, dts, keep: int = 3) -> List[dict]:
+    if not steps:
+        return []
+    nominal = float(np.median(dts))
+    rows = [{"t_s": round(t, 1), "step_m": round(j, 3), "dt_s": round(d, 3),
+             "speed_mps": round(j / d, 3), "gap": bool(d > 1.5 * nominal)}
+            for j, t, d in zip(steps, times, dts)]
+    return sorted(rows, key=lambda r: -r["speed_mps"])[:keep]
 
 
 def assign_scenarios(frames: List[Frame], cfg: ConverterConfig) -> List[Tuple[str, List[Frame]]]:

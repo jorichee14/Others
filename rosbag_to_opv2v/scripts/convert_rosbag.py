@@ -107,8 +107,11 @@ def print_report(report: ConversionReport, dry_run: bool = False) -> None:
         for name, entry in sorted(report.pose_stats.items()):
             steps = entry.get('largest_steps') or []
             if steps and steps[0]['step_m'] > 0.0:
-                print(f"  {name:<16} largest steps: " + ", ".join(
-                    f"{d['step_m']:.3f} m at t={d['t_s']:.1f}s" for d in steps)
+                print(f"  {name:<16} fastest moves: " + ", ".join(
+                    f"{d['speed_mps']:.2f} m/s at t={d['t_s']:.1f}s"
+                    + (f" ({d['step_m']:.2f} m over a {d['dt_s']:.1f} s gap)" if d['gap']
+                       else "")
+                    for d in steps)
                     + f"   (z span {entry.get('z_span_m', 0):.3f} m)")
 
     if report.points_per_agent:

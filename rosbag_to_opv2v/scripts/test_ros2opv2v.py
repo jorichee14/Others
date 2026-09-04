@@ -1721,6 +1721,65 @@ def test_mirc_config_verifies_rather_than_corrects():
     assert set(cfg['clock']['events_topics']) == {'infra_1', 'mobile_2'}
 
 
+# ----------------------------------------------------- daemon event reading
+# The first real dry run produced ten "STEP" warnings for infra_1, all at
+# t=4.2 s, all under 5 ms, with monotonic timestamps spanning 26 minutes: a
+# latched topic replaying chrony's routine adjustments from before the
+# recording. Warning about those is worse than silence — it teaches the reader
+# to ignore the warning that matters.
+
+def _events_report(parsed, bag_span_s=156.0, max_residual_ms=10.0):
+    from ros2opv2v.convert import ConversionReport, _classify_clock_events
+    report = ConversionReport()
+    _classify_clock_events('h', parsed, bag_span_s, max_residual_ms, report)
+    return report.warnings
+
+
+def test_clock_event_parser_reads_delta_and_mono():
+    from ros2opv2v.convert import _parse_clock_event
+    e = _parse_clock_event(4_200_000_000, 'STEP host=x delta=4.144ms mono=18326.509', 0)
+    assert e['t_rel_s'] == 4.2 and abs(e['delta_ms'] - 4.144) < 1e-9
+    assert abs(e['mono_s'] - 18326.509) < 1e-9
+    e = _parse_clock_event(0, 'STEP delta=-2us', 0)
+    assert abs(e['delta_ms'] + 0.002) < 1e-9
+
+
+def test_latched_backlog_is_recognised_not_alarmed():
+    parsed = [{'t_rel_s': 4.2, 'text': 'STEP delta=%.3fms mono=%.1f' % (d, m),
+               'delta_ms': d, 'mono_s': m}
+              for d, m in zip((0.35, 0.19, -0.31, 1.77, 4.14), (17418, 17675, 17806, 18065, 18326))]
+    warnings = _events_report(parsed)
+    assert len(warnings) == 1 and 'backlog' in warnings[0], warnings
+    assert 'STEPPED' not in warnings[0]
+
+
+def test_small_adjustments_during_the_run_are_routine():
+    parsed = [{'t_rel_s': 46.0, 'text': 'STEP delta=0.671ms mono=12010.5',
+               'delta_ms': 0.671, 'mono_s': 12010.5}]
+    warnings = _events_report(parsed)
+    assert len(warnings) == 1 and 'routine' in warnings[0], warnings
+
+
+def test_a_real_step_and_a_lost_source_still_alarm():
+    parsed = [{'t_rel_s': 46.0, 'text': 'STEP delta=250ms mono=12010.5',
+               'delta_ms': 250.0, 'mono_s': 12010.5},
+              {'t_rel_s': 80.0, 'text': 'source unreachable'}]
+    warnings = _events_report(parsed)
+    assert any('STEPPED by +250.0 ms' in w for w in warnings), warnings
+    assert any('unreachable' in w and 'free-running' in w for w in warnings), warnings
+
+
+def test_fastest_moves_flag_steps_across_dropped_frames():
+    """A 0.26 m step over 1.9 s of dropped frames is a walk, not a jump."""
+    from ros2opv2v.convert import _fastest_moves
+    rows = _fastest_moves(steps=[0.10, 0.26, 0.10], times=[1.0, 3.0, 3.1],
+                          dts=[0.1, 1.9, 0.1])
+    by_t = {r['t_s']: r for r in rows}
+    assert by_t[3.0]['gap'] is True and abs(by_t[3.0]['speed_mps'] - 0.137) < 1e-3, rows
+    assert by_t[1.0]['gap'] is False and abs(by_t[1.0]['speed_mps'] - 1.0) < 1e-9
+    assert rows[0]['t_s'] in (1.0, 3.1), 'ordered by speed, so the walk comes last'
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]
