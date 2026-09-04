@@ -9,7 +9,7 @@ next recording session.
 > correlation ρ cannot be measured. The adapters' driver does not implement
 > `iw survey dump`, so **channel occupancy is unavailable**. And the link never
 > degraded — median RSSI −39 dBm, zero Bad samples — so `coop2` is a **good-link
-> control condition**, not a test of connectivity-aware behaviour.
+> condition**, not a test of connectivity-aware behaviour.
 >
 > The measurement pipeline itself is sound — these are findings about the run and the
 > hardware, not bugs in the analysis.
@@ -107,20 +107,32 @@ will not fix it.
 separate resources or merely contend on a shared medium". The **retry** half of that
 sentence is supported; the **occupancy** half is not measurable with this hardware.
 
-### 3.3 The link never degraded — *blocks F1 and S2 for this run*
+### 3.3 RSSI varies, but performance never does — *blocks F1; limits S2*
 
-No sample below −52 dBm — the weakest reading is 18 dB clear of even a generous −70 dBm
-Bad threshold — with gigabit PHY rates throughout, no frame failing after retries, and
-zero Bad samples. Both robots stayed near the AP for the whole 156 s. (The exact span is
-`rssi_range_db` in `wifi_links.csv`.)
+Two distinct facts, and conflating them would misstate what this run supports.
 
-This is a legitimate and useful result — `coop2` is a **good-link control condition** —
-but the two benchmarks that need spatial variation cannot be demonstrated on it:
+**RSSI does vary.** The traces swing roughly 20 dB over the run as the robots move, with
+clear structure that tracks the path. So there is a real spatial signal here.
 
-- **F1**, connectivity-aware cooperative perception under a *measured* channel: there is
-  no channel variation to be aware of.
-- **S2**, connectivity mapping fused with scene geometry: a coverage map with no dead
-  zones and no sample near the noise floor has nothing to predict.
+**Performance does not.** Every one of those samples is in the strong regime — nothing
+below −52 dBm, 18 dB clear of even a generous −70 dBm Bad threshold. The PHY rate sits at
+its ceiling throughout, no frame fails after retries, and iperf goodput is steady. The
+link had roughly 20 dB of margin and the variation consumed none of it.
+
+Consequences differ per benchmark:
+
+- **F1**, connectivity-aware cooperative perception under a *measured* channel:
+  **not demonstrable**. The channel never constrained anything, so a link-aware policy and
+  a link-agnostic one behave identically. There is no accuracy-versus-cost curve to draw.
+- **S2**, connectivity mapping fused with scene geometry: **partially demonstrable**. An
+  RSSI coverage map over ~20 dB of dynamic range is buildable and can be validated on
+  held-out poses. What cannot be validated is **dead-zone prediction**, since there are no
+  dead zones, and that is the part of S2 that distinguishes it from ordinary radio mapping.
+
+The finding worth reporting in its own right: **in this environment, at these distances,
+20 dB of RSSI variation produced no measurable change in throughput or reliability.** That
+is a statement about link margin, and it is the reason a degraded run is needed rather
+than more runs like this one.
 
 ### 3.4 No pose join yet
 
@@ -177,12 +189,13 @@ to the per-run metadata.
 
 ### 5.1 For `coop2`
 
-> Both robots associated with the same access point on channel 149 (5 GHz). The link
-> was strong and stable throughout: median RSSI −39 dBm on both agents, minimum −52 dBm,
-> negotiated PHY rates of 1.2 and 1.1 Gbit/s, and no frames failing after retries. This
-> sequence therefore serves as a good-link control condition. The adapters' driver does
-> not implement channel-survey reporting, so channel occupancy is not available for this
-> sequence.
+> Both robots associated with the same access point on channel 149 (5 GHz). Received
+> signal strength varied by about 20 dB along the trajectories, but remained in the strong
+> regime throughout — median −39 dBm, minimum −52 dBm on both agents — so the negotiated
+> PHY rate stayed at its ceiling (1.2 and 1.1 Gbit/s) and no frame failed after retries.
+> This sequence therefore serves as a good-link control condition: it exhibits spatial RSSI
+> structure without any accompanying degradation in link performance. The adapters' driver
+> does not implement channel-survey reporting, so channel occupancy is not available.
 
 Do **not** report a ρ, a joint-loss fraction, or a channel-occupancy figure for this run.
 
