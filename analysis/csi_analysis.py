@@ -203,6 +203,32 @@ def motion_test(per_agent: dict, poses: dict, t0_ns: int, lag_s: float,
     return pd.concat(bins, ignore_index=True), pd.DataFrame(rows)
 
 
+def change_attribution(t_s: np.ndarray, rssi: np.ndarray, absH: np.ndarray):
+    """What does the frame-to-frame change depend on: time, or the receiver?
+
+    Correlation of |H| between consecutive frames, split two ways. By the
+    gap between the frames: a few milliseconds apart means the same burst,
+    tens of milliseconds means the next one. And by whether the reported
+    RSSI changed between them, which is the visible trace of the receiver
+    having re-set its gain. A channel cares about the gap and not about the
+    gain. A receiver artefact cares about the gain and not about the gap."""
+    r = frame_correlation(absH, 1)
+    if r.size == 0:
+        return None
+    dt_ms = np.diff(t_s) * 1e3
+    drssi = np.abs(np.diff(rssi.astype(float)))
+    d = pd.DataFrame({"r": r, "dt_ms": dt_ms, "drssi": drssi}).dropna()
+    d["gap"] = np.where(d["dt_ms"] < 3, "same burst (<3 ms)", np.where(
+        d["dt_ms"] < 30, "3-30 ms", "next burst (>30 ms)"))
+    d["gain"] = np.where(d["drssi"] == 0, "RSSI unchanged", "RSSI changed")
+    tab = d.pivot_table(index="gap", columns="gain", values="r", aggfunc="median")
+    cnt = d.pivot_table(index="gap", columns="gain", values="r", aggfunc="size")
+    order = [g for g in ["same burst (<3 ms)", "3-30 ms", "next burst (>30 ms)"] if g in tab.index]
+    tab, cnt = tab.reindex(order), cnt.reindex(order)
+    out = tab.round(2).astype(str) + "  (n=" + cnt.fillna(0).astype(int).astype(str) + ")"
+    return out.where(cnt > 20, "-")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bag", type=Path, default=None)
@@ -300,6 +326,7 @@ def main() -> int:
         tau = np.where(struct_db >= args.min_profile_db, tau, np.nan)
         K = rician_k(H)
         coh = temporal_coherence(H)
+        attribution = change_attribution(sub["t_s"].to_numpy(), sub["rssi"].to_numpy(), np.abs(H))
         amp_db = amplitude_db(H)                             # AGC out, shape kept
         sel_db = amp_db.std(axis=1)
 
@@ -313,6 +340,7 @@ def main() -> int:
             "profile_structure_db": struct_db,
         }))
         per_agent[agent] = dict(t=sub["t_s"].to_numpy(), amp_db=amp_db, idx=idx, absH=np.abs(H),
+                                attribution=attribution,
                                 band_lo=band_lo, band_span=band_span, static_ptp=static_ptp,
                                 bw=bw, eff_bw=eff_bw, dt_ns=dt_s * 1e9,
                                 sc_power_db=sc_power_db, sc_idx=idx_all, use=use)
@@ -617,6 +645,15 @@ def main() -> int:
            "to a radio, and it is the result to quote.", ""]
     if motion is not None:
         md += [motion.to_markdown(index=False), "", "See `fig_csi_motion.png`.", ""]
+    md += ["### What the frame-to-frame change depends on", "",
+           "Median correlation of |H| between consecutive frames, split by the time gap between "
+           "them and by whether the reported RSSI changed, the visible trace of the receiver "
+           "re-setting its gain. A channel falls with the gap and is indifferent to RSSI; a "
+           "receiver artefact falls when RSSI changed, whatever the gap.", ""]
+    for a in sorted(per_agent):
+        tab = per_agent[a]["attribution"]
+        if tab is not None:
+            md += [f"`{a}`", "", tab.to_markdown(), ""]
     else:
         md += ["> Motion test not run: no ground-truth pose topic matched "
                f"`*{args.pose_topic}.parquet` for any CSI agent.", ""]
@@ -680,6 +717,14 @@ automatic gain control, so both quantities are ratios and independent of it.{coa
           .round(3).to_string(index=False))
     print()
     print(stats.to_string(index=False))
+    print("\nwhat the frame-to-frame change depends on  (median corr of |H| between consecutive frames)")
+    for a in sorted(per_agent):
+        tab = per_agent[a]["attribution"]
+        if tab is None:
+            continue
+        print(f"  {a}")
+        print("    " + tab.to_string().replace("\n", "\n    "))
+    print("  a channel: falls with the gap, indifferent to RSSI.  a receiver artefact: falls when RSSI changed, whatever the gap.")
     print("\nmotion test: does the channel follow the robot?")
     if motion is not None:
         print(motion[["agent", "lag_frames", "spearman_rho", "change_still", "change_moving",
