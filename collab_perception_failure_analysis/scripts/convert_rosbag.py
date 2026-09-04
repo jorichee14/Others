@@ -54,11 +54,20 @@ def print_report(report: ConversionReport, dry_run: bool = False) -> None:
                   f"{entry.get('max_offset_ms', 0):>8.1f}ms")
 
     if report.pose_stats:
-        print("\nper-agent trajectory (in the shared world frame)")
+        print("\nper-agent trajectory (base frame, in the shared world frame)")
         print(f"  {'agent':<16} {'path m':>9} {'max step m':>11}  extent xyz (m)")
         for name, entry in sorted(report.pose_stats.items()):
             print(f"  {name:<16} {entry['path_length_m']:>9.2f} "
                   f"{entry['max_step_m']:>11.3f}  {entry['extent_m']}")
+        # The start pose is the one number that catches a pose source in the
+        # wrong frame: compare it with the published session anchor by eye
+        # even when pose.expected_start is not set.
+        for name, entry in sorted(report.pose_stats.items()):
+            line = f"  {name:<16} starts at {entry['start_m']}"
+            if 'expected_start_m' in entry:
+                line += (f"  (expected {entry['expected_start_m']}, "
+                         f"{entry['start_gap_m']:.3f} m off)")
+            print(line + f"  ends at {entry['end_m']}")
 
     if report.points_per_agent:
         print("\npoints per frame")

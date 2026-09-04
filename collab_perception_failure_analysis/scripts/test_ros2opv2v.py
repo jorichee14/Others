@@ -1592,6 +1592,64 @@ def test_mirc_config_is_ready_to_run():
         'this dataset is converted for manual annotation; no agent-derived boxes'
 
 
+# --------------------------------------------- the pose source's start frame
+# A trajectory republished at a body frame under the sensor has the same shape
+# and timing as the optical-frame one and sits a metre lower. It is the one
+# frame error the converter cannot detect from the poses alone, so the config
+# can declare where the base must start and the converter refuses otherwise.
+
+def test_expected_start_accepts_the_right_frame():
+    tmp = tempfile.mkdtemp(prefix='r2o_start_ok_')
+    try:
+        bag = os.path.join(tmp, 'b.mcap')
+        _write_synthetic_bag(bag, n_frames=6)
+        cfg = _synthetic_config(bag, os.path.join(tmp, 'out'))
+        for agent in cfg['agents']:
+            agent['object'] = {'emit': False}
+        ego = _agent(cfg, 'ego')
+        ego['pose']['expected_start'] = [0.0, 0.0, 0.0]   # ego odometry starts at origin
+        path = os.path.join(tmp, 'c.yaml')
+        with open(path, 'w') as handle:
+            yaml.safe_dump(cfg, handle)
+        report = convert(cfgmod.load_config(path), overwrite=True)
+        assert report.pose_stats['ego']['start_gap_m'] < 0.01, report.pose_stats['ego']
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_expected_start_refuses_a_pose_source_a_metre_low():
+    """The failure this exists for: same trajectory, republished 1.2 m lower."""
+    from ros2opv2v.convert import ConversionError
+    tmp = tempfile.mkdtemp(prefix='r2o_start_bad_')
+    try:
+        bag = os.path.join(tmp, 'b.mcap')
+        _write_synthetic_bag(bag, n_frames=6)
+        cfg = _synthetic_config(bag, os.path.join(tmp, 'out'))
+        for agent in cfg['agents']:
+            agent['object'] = {'emit': False}
+        ego = _agent(cfg, 'ego')
+        ego['pose']['expected_start'] = [0.0, 0.0, 1.2]   # the camera is up here
+        path = os.path.join(tmp, 'c.yaml')
+        with open(path, 'w') as handle:
+            yaml.safe_dump(cfg, handle)
+        try:
+            convert(cfgmod.load_config(path), overwrite=True)
+        except ConversionError as exc:
+            message = str(exc)
+            assert 'ego' in message and 'dz -1.20' in message, message
+            assert 'BODY frame' in message, 'a purely vertical gap must be diagnosed as such'
+        else:
+            raise AssertionError('a 1.2 m vertical mismatch must refuse to convert')
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_mirc_config_declares_the_published_anchors():
+    cfg = _mirc_config()
+    assert _agent(cfg, 'mobile_1')['pose']['expected_start'] == [0.697952, -0.062696, 0.193334]
+    assert _agent(cfg, 'mobile_2')['pose']['expected_start'] == [7.704074, -14.308017, 0.165040]
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

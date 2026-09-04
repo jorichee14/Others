@@ -179,6 +179,17 @@ class PoseConfig:
     static_pose: Optional[np.ndarray] = None                            # world <- base
     interpolation: str = "linear"  # 'linear' | 'nearest'
     max_gap_ms: float = 200.0
+    expected_start: Optional[List[float]] = None
+    """Where the BASE frame should be at the first frame, in the world frame
+    ([x, y, z] metres). Optional; when given, the converter refuses to run if the
+    resolved start is further than `expected_start_tolerance_m` away.
+
+    This is the one check that catches a pose source in the wrong frame. A pose
+    republished at a floor-level body frame instead of the camera looks exactly
+    like a valid trajectory — same shape, same timing — and sits a metre lower.
+    Nothing downstream would notice. A published session anchor is a number to
+    compare against, so use it."""
+    expected_start_tolerance_m: float = 0.25
 
     @staticmethod
     def parse(mapping: dict, ctx: str) -> "PoseConfig":
@@ -198,13 +209,20 @@ class PoseConfig:
         if "child_to_base" in mapping:
             child_to_base = _transform_from(mapping["child_to_base"],
                                             f"{ctx}.child_to_base")
+        expected = mapping.get("expected_start")
+        if expected is not None:
+            expected = [float(v) for v in expected]
+            if len(expected) != 3:
+                raise ConfigError(f"{ctx}.expected_start must be [x, y, z] in the world frame")
         return PoseConfig(
             source=source,
             topic=str(_get(mapping, "topic", ctx=ctx)),
             align=_transform_from(mapping.get("align"), f"{ctx}.align"),
             child_to_base=child_to_base,
             interpolation=interp,
-            max_gap_ms=float(mapping.get("max_gap_ms", 200.0)))
+            max_gap_ms=float(mapping.get("max_gap_ms", 200.0)),
+            expected_start=expected,
+            expected_start_tolerance_m=float(mapping.get("expected_start_tolerance_m", 0.25)))
 
 
 @dataclass

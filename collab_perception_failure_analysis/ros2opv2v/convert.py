@@ -466,7 +466,54 @@ def plan(reader: BagReader, cfg: ConverterConfig,
             "topic that does not span the bag (see the drop reasons above).")
 
     report.pose_stats = _pose_statistics(cfg, frame_poses, kept)
+    _check_expected_starts(cfg, report)
     return kept, tracks, frame_poses, table, clocks
+
+
+def _check_expected_starts(cfg: ConverterConfig, report: ConversionReport) -> None:
+    """Refuse a pose source that starts somewhere other than where the operator
+    said it would.
+
+    The typical way this fires: the trajectory was republished at a body frame
+    (a base_link on the floor under a sensor mast) while the config treats it as
+    the camera optical frame. Every extrinsic in the config is then measured from
+    the wrong point — a metre out vertically — and the dataset converts, validates
+    and looks fine.
+    """
+    bad = []
+    for agent in cfg.active_agents:
+        expected = agent.pose.expected_start
+        stats = report.pose_stats.get(agent.name)
+        if expected is None or stats is None:
+            continue
+        start = np.asarray(stats["start_m"], dtype=np.float64)
+        gap = start - np.asarray(expected, dtype=np.float64)
+        dist = float(np.linalg.norm(gap))
+        stats["expected_start_m"] = [round(float(v), 3) for v in expected]
+        stats["start_gap_m"] = round(dist, 3)
+        if dist > agent.pose.expected_start_tolerance_m:
+            bad.append((agent, start, expected, gap, dist))
+    if not bad:
+        return
+    lines = []
+    for agent, start, expected, gap, dist in bad:
+        lines.append(
+            f"  {agent.name}: base starts at {np.round(start, 3).tolist()} but "
+            f"pose.expected_start is {list(expected)} — {dist:.2f} m apart "
+            f"(dx {gap[0]:+.2f}, dy {gap[1]:+.2f}, dz {gap[2]:+.2f}). ")
+        if abs(gap[2]) > 0.5 and abs(gap[2]) > 3 * float(np.hypot(gap[0], gap[1])):
+            lines.append(
+                f"     Almost entirely vertical: the {agent.pose.topic!r} poses are "
+                f"most likely of a BODY frame under the sensor (a base_link at floor "
+                f"level), not the camera optical frame this config assumes. Either "
+                f"republish them at the optical frame, or set pose.child_to_base to "
+                f"the body -> optical transform and re-express every extrinsic from "
+                f"that body frame.")
+    raise ConversionError(
+        "pose source does not start where it should:\n" + "\n".join(lines) +
+        "\n\nThis is a frame check, not a precision check: a mismatch this size "
+        "means the poses and the extrinsics are measured from different points. "
+        "Fix the frame, or remove pose.expected_start if the anchor itself is wrong.")
 
 
 def _pose_statistics(cfg: ConverterConfig, frame_poses: Dict[str, dict],
@@ -494,6 +541,8 @@ def _pose_statistics(cfg: ConverterConfig, frame_poses: Dict[str, dict],
         positions = np.asarray(positions)
         stats[agent.name] = {
             "frames": int(positions.shape[0]),
+            "start_m": [round(float(v), 3) for v in positions[0]],
+            "end_m": [round(float(v), 3) for v in positions[-1]],
             "path_length_m": round(float(np.sum(jumps)), 3) if jumps else 0.0,
             "extent_m": [round(float(v), 3)
                          for v in (positions.max(axis=0) - positions.min(axis=0))],

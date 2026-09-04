@@ -9,7 +9,7 @@ python scripts/inspect_bag.py     --bag <bag> --emit-config configs/mine.yaml
 python scripts/convert_rosbag.py  --config configs/mine.yaml --dry-run
 python scripts/convert_rosbag.py  --config configs/mine.yaml
 python scripts/validate_opv2v.py  --root <out>/test --with-open3d
-python scripts/test_ros2opv2v.py                       # 64 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                       # 67 self-tests, no bag needed
 ```
 
 Dependencies: `numpy`, `pyyaml`, and `mcap` + `mcap-ros2-support` for `.mcap`
@@ -102,6 +102,14 @@ while any of them is `null` rather than guessing:
    * **Stamps.** Republished poses normally keep the original bag stamps, so
      they are still on their own host's clock and
      [clock reconciliation](#synchronisation) still applies unchanged.
+   * **Declare where it starts.** `pose.expected_start: [x, y, z]` makes the
+     converter refuse to run if the base's first resolved pose is further than
+     `expected_start_tolerance_m` (default 0.25) from it. This is the one check
+     that tells an optical-frame trajectory from the same trajectory republished
+     at a body frame under the sensor: identical shape, identical timing, a metre
+     lower, and nothing else downstream can tell them apart. A published session
+     anchor is a number to compare against; use it. The dry run prints each
+     agent's start pose either way.
 2. **`extrinsic` — where each sensor sits on its robot.** `base_link -> sensor`.
 3. **`object.extent` — the robots' physical half-dimensions**, if you want the
    agents themselves as pseudo-labels.

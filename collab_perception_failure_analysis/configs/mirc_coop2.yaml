@@ -124,6 +124,14 @@ agents:
       # a writer rather than published live. That is stage 09's output.)
       source: pose
       topic: /mobile_1/global_pose         # 2833 msgs, ~18.1 Hz average
+      # The published session anchor, map -> zed_left_camera_optical_frame at
+      # the opening dwell. The converter refuses to run if the first resolved
+      # pose is further than the tolerance from this. It is the check that tells
+      # "these poses are the optical frame" from "these poses are a body frame a
+      # metre below it" — the two trajectories have the same shape and timing,
+      # and nothing else downstream can tell them apart.
+      expected_start: [0.697952, -0.062696, 0.193334]
+      expected_start_tolerance_m: 0.25
       interpolation: linear
       # Stamps are the union of the lidar and image stamps of the stage-08
       # graph, so the spacing is irregular; 200 ms covers the gaps without
@@ -246,6 +254,9 @@ agents:
       # 03/06/08 rather than an operator's guess.
       source: pose
       topic: /mobile_2/global_pose         # 1811 msgs, ~11.6 Hz average
+      # map -> camera_color_optical_frame at the opening dwell, as published.
+      expected_start: [7.704074, -14.308017, 0.165040]
+      expected_start_tolerance_m: 0.25
       interpolation: linear
       max_gap_ms: 250
       align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
