@@ -235,11 +235,23 @@ class DeliveryStats:
 class HostClocks:
     """Every host's offset to the reference clock, and what survives correcting it."""
 
-    def __init__(self, reference_host: str):
+    def __init__(self, reference_host: str, apply_corrections: bool = False):
         self.reference_host = reference_host
         self.ntp: Dict[str, OffsetTrack] = {}
         self.delivery: Dict[str, DeliveryStats] = {}
         self.notes: List[str] = []
+        self.apply_corrections = apply_corrections
+        """False (the default) is VERIFY mode, and it is the default because on a
+        host running chrony or ntpd the system clock is *already* disciplined:
+        every header.stamp is on the corrected clock, and what the NTP status
+        topic reports is the residual the daemon believes remains. Applying that
+        residual again is at best redundant and, with the sign guessed, twice
+        wrong. So in verify mode nothing is shifted; the NTP offset and the
+        delivery floor are read as evidence that discipline held, reported, and
+        carried into every frame as the clock uncertainty.
+
+        True is CORRECT mode, for a bag whose hosts were NOT disciplined at
+        record time — the estimates are then applied as shifts."""
 
     # ------------------------------------------------------------- estimates
     def delivery_floor_correction_ns(self, host: str) -> Optional[int]:
@@ -251,8 +263,21 @@ class HostClocks:
             return None
         return me.floor_ns() - ref.floor_ns()
 
+    def estimate_ns(self, host: str, t_ns: int) -> Tuple[int, str]:
+        """The best estimate of ``(C_ref - C_host)`` at ``t_ns`` and where it came
+        from — what WOULD be added in correct mode, and what verify mode judges."""
+        return self._estimate(host, t_ns)
+
     def correction_ns(self, host: str, t_ns: int) -> Tuple[int, str]:
-        """``(correction, source)`` to add to a stamp from ``host`` at ``t_ns``."""
+        """``(correction, source)`` to add to a stamp from ``host`` at ``t_ns``.
+        Zero in verify mode — the stamps are already disciplined — with the
+        source tagged so a reader can tell "not applied" from "not known"."""
+        estimate, source = self._estimate(host, t_ns)
+        if self.apply_corrections or host == self.reference_host:
+            return estimate, source
+        return 0, "verify:" + source
+
+    def _estimate(self, host: str, t_ns: int) -> Tuple[int, str]:
         if host == self.reference_host:
             # Zero BY DEFINITION, not by measurement.  Nothing in the bag observes
             # the reference host's own error; whatever it has appears as an equal
@@ -269,25 +294,32 @@ class HostClocks:
         return 0, "UNKNOWN"
 
     def residual_ns(self, host: str) -> Tuple[float, str]:
-        """What the correction cannot remove, nanoseconds.
+        """The clock uncertainty a frame from ``host`` carries, nanoseconds.
 
-        NTP-corrected: half the offset series' 5..95 spread — what interpolating
-        between samples fails to track — floored by whatever estimation error the
-        daemon reports about itself.
+        Verify mode (stamps already disciplined, nothing applied): the residual
+        IS the daemon's reported offset — the p95 of its magnitude over the bag,
+        floored by its reported jitter. That is chrony's own statement of how far
+        the stamps may still be from true.
 
-        Delivery-floor-corrected: the smaller of the two links' floors, as a
-        **proxy** for the transit asymmetry the estimator cannot separate from the
-        offset.  It is a proxy and not a bound; a host in this branch should be
-        read as "this clock was never measured", and the fix is an NTP monitor on
-        that host, not a better proxy.
+        Correct mode, NTP applied: half the offset series' 5..95 spread — what
+        interpolating between samples fails to track — floored by the reported
+        jitter.
+
+        Delivery-floor only (no NTP on this host): the smaller of the two links'
+        floors, as a **proxy** for the transit asymmetry the estimator cannot
+        separate from the offset.  It is a proxy and not a bound; a host in this
+        branch should be read as "this clock was never measured", and the fix is
+        an NTP monitor on that host, not a better proxy.
         """
         if host == self.reference_host:
             return 0.0, "reference"
         track = self.ntp.get(host)
         if track is not None and len(track):
             stats = track.stats()
-            residual = max(0.5 * stats["spread_ms"],
-                           stats.get("reported_jitter_p95_ms", 0.0)) * 1e6
+            jitter = stats.get("reported_jitter_p95_ms", 0.0)
+            if not self.apply_corrections:
+                return max(stats["p95_abs_ms"], jitter) * 1e6, "ntp_reported_offset"
+            residual = max(0.5 * stats["spread_ms"], jitter) * 1e6
             return residual, "ntp_spread"
         me, ref = self.delivery.get(host), self.delivery.get(self.reference_host)
         floors = [d.floor_ns() for d in (me, ref) if d and d.samples]
@@ -302,7 +334,7 @@ class HostClocks:
         if track is None or not len(track) or estimate is None:
             return "unavailable", {}
         mid = (track.stamps[0] + track.stamps[-1]) // 2
-        ntp_correction, _ = self.correction_ns(host, mid)
+        ntp_correction, _ = self._estimate(host, mid)
         difference = ntp_correction - estimate
         verdict = "agree" if abs(difference) <= tolerance_ns else "DISAGREE"
         return verdict, {
@@ -316,12 +348,16 @@ class HostClocks:
         hosts = sorted(set(self.ntp) | set(self.delivery) | {self.reference_host})
         out: Dict[str, dict] = {}
         for host in hosts:
-            correction, source = self.correction_ns(host, t_ns)
+            estimate, source = self._estimate(host, t_ns)
+            applied, applied_source = self.correction_ns(host, t_ns)
             residual, residual_source = self.residual_ns(host)
             verdict, detail = self.cross_check(host, cross_check_tolerance_ns)
             entry = {
-                "correction_ms": round(correction / 1e6, 4),
-                "correction_source": source,
+                "mode": "correct" if self.apply_corrections else "verify",
+                "estimated_offset_ms": round(estimate / 1e6, 4),
+                "estimate_source": source,
+                "correction_ms": round(applied / 1e6, 4),
+                "correction_source": applied_source,
                 "residual_ms": round(residual / 1e6, 4),
                 "residual_source": residual_source,
                 "ntp_available": host in self.ntp,

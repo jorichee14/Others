@@ -9,7 +9,7 @@ embedded in the bag.
 
 ```bash
 pip install -r requirements.txt
-python scripts/test_ros2opv2v.py                                  # 67 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                                  # 71 self-tests, no bag needed
 
 python scripts/inspect_bag.py    --bag <bag> --emit-config configs/mine.yaml   # stage A: look first
 python scripts/convert_rosbag.py --config configs/mine.yaml --dry-run          # stage B: plan, write nothing
@@ -27,10 +27,12 @@ python scripts/validate_opv2v.py --root <output>/test                          #
 ## What it does that a plain converter does not
 
 - **Three robots means three clocks.** Per-host offsets are estimated from NTP
-  monitor topics and from the delivery floor (`log_time − header.stamp`), cross-
-  checked against each other, with the offset field's sign and unit decided from
-  the data rather than guessed. Pose tracks are corrected along with everything
-  else.
+  monitor topics and from the delivery floor (`log_time − header.stamp`) and
+  cross-checked against each other. By default nothing is shifted — a chrony-
+  disciplined stamp is already corrected, and the daemon's reported residual is
+  what gets carried into every frame — with a `correct` mode for hosts that were
+  not disciplined at record time. A clock step in the daemon's event log is
+  surfaced as the discontinuity it is.
 - **The residual is part of the data.** Every agent's frame yaml carries a
   `ros_sync` block: its signed skew from the frame time and the clock residual
   correction could not remove. The report carries a tightness curve and the

@@ -47,6 +47,13 @@ time:
 # every frame yaml. See docs/ROS2OPV2V.md §"Synchronisation".
 clock:
   enabled: true
+  # verify: the hosts run chrony, so every header.stamp is ALREADY on a
+  # disciplined clock and nothing is shifted. The NTP status topics are read as
+  # evidence — the residual each daemon itself reports — and that residual is
+  # carried into every frame. 'correct' would apply the estimates as shifts,
+  # which is only right for hosts that were NOT disciplined at record time.
+  mode: verify
+  max_residual_ms: 10
   # mobile_1 owns the Ouster and hence the frame grid, so its clock is the
   # timeline. Note what that means: its correction is zero BY DEFINITION, not by
   # measurement, and any error it carries appears as an equal and opposite error
@@ -55,10 +62,14 @@ clock:
   ntp_topics:
     infra_1: /infra_1/ntp/status         # 1234 msgs
     mobile_2: /mobile_2/ntp/status       # 1363 msgs
-    # mobile_1: NO NTP STATUS TOPIC IN THIS BAG. That is the dataset's largest
-    # open sync risk and the reason it is the reference host here: there is
-    # nothing to correct it against. Add the monitor node before the next
-    # recording — it is one topic and it removes the last unmeasured term.
+    # mobile_1: NO NTP STATUS TOPIC IN THIS BAG. It presumably runs chrony
+    # like the others, but nothing in the bag says how well; it is the
+    # reference host because there is nothing to judge it against. Add the
+    # monitor node before the next recording — one topic, and every host's
+    # discipline is then on record.
+  events_topics:                   # chrony event log: a STEP mid-run is a
+    infra_1: /infra_1/ntp/events   # discontinuity no offset series shows
+    mobile_2: /mobile_2/ntp/events
   offset_field: null             # null = resolve from the message, then check the
   offset_unit: null              # inferred unit against the delivery floor
   sign: auto                     # ntpq and chrony disagree; decided from the data

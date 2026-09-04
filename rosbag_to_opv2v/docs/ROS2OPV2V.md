@@ -11,7 +11,7 @@ python scripts/inspect_bag.py     --bag <bag> --emit-config configs/mine.yaml
 python scripts/convert_rosbag.py  --config configs/mine.yaml --dry-run
 python scripts/convert_rosbag.py  --config configs/mine.yaml
 python scripts/validate_opv2v.py  --root <out>/test --with-open3d
-python scripts/test_ros2opv2v.py                       # 67 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                       # 71 self-tests, no bag needed
 ```
 
 Dependencies: `numpy`, `pyyaml`, and `mcap` + `mcap-ros2-support` for `.mcap`
@@ -224,8 +224,22 @@ Each machine stamps with its own. An offset between two of them is invisible in
 the data — the frames still match inside tolerance, the geometry still looks
 right — while acting on one agent's every message as a uniform delay.
 
-Set `clock.enabled: true` and the converter estimates each host's offset three
-ways rather than assuming it away (`ros2opv2v/clock.py`):
+**Start from what the hosts already did.** On a fleet running chrony or ntpd the
+system clock is *already* disciplined, so every `header.stamp` is on the
+corrected clock, and what an NTP status topic reports is the residual the daemon
+believes remains — typically a millisecond or less on a wired reference, tens of
+milliseconds on flaky wifi. Applying that number again as a correction is
+redundant at best and, with the sign guessed, twice wrong. So the default,
+`clock.mode: verify`, **shifts nothing**: the NTP topics are read as evidence
+that discipline held, the daemon's reported residual is carried into every frame
+as `clock_residual_ms`, and the converter warns when that residual exceeds
+`clock.max_residual_ms` or when the daemon's event log shows a clock step or a
+lost source mid-recording (`clock.events_topics`). `clock.mode: correct` is for
+hosts that were *not* disciplined at record time; only then are the estimates
+applied as shifts.
+
+Either way, with `clock.enabled: true` each host's offset is estimated three ways
+rather than assumed away (`ros2opv2v/clock.py`):
 
 1. **NTP monitor topics** (`clock.ntp_topics`, host → topic). Direct, but
    self-reported and only present for the hosts that run the monitor.

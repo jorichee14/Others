@@ -335,8 +335,21 @@ class ClockConfig:
     whose agents ran on different machines — which is every real testbed.
     """
     enabled: bool = False
+    mode: str = "verify"
+    """'verify' (default): the hosts ran chrony/ntpd, so every header.stamp is
+    already on a disciplined clock. Nothing is shifted; the NTP status and the
+    delivery floor are evidence that discipline held, and the reported residual
+    is carried into every frame. 'correct': the hosts were NOT disciplined at
+    record time, so the estimated offsets are applied as shifts."""
     reference_host: Optional[str] = None    # defaults to the ego agent's host
     ntp_topics: Dict[str, str] = field(default_factory=dict)   # host -> topic
+    events_topics: Dict[str, str] = field(default_factory=dict)  # host -> std_msgs/String
+    """Daemon event logs (chrony's "System clock was stepped", source changes,
+    sync lost). Surfaced in the report because a clock STEP mid-recording is a
+    discontinuity no offset series will show you."""
+    max_residual_ms: float = 10.0
+    """Verify mode: warn when a host's reported offset exceeds this — the clock
+    was not as disciplined as assumed and the frames on that host carry it."""
     offset_field: Optional[str] = None      # e.g. 'offset'; None = resolve at runtime
     offset_unit: Optional[str] = None       # 's' | 'ms' | 'us' | 'ns'; None = infer
     sign: str = "auto"                      # 'auto' | '+1' | '-1'
@@ -355,10 +368,19 @@ class ClockConfig:
         topics = mapping.get("ntp_topics") or {}
         if not isinstance(topics, dict):
             raise ConfigError("clock.ntp_topics must be a mapping of host -> topic")
+        mode = str(mapping.get("mode", "verify")).lower()
+        if mode not in ("verify", "correct"):
+            raise ConfigError("clock.mode must be 'verify' or 'correct'")
+        events = mapping.get("events_topics") or {}
+        if not isinstance(events, dict):
+            raise ConfigError("clock.events_topics must be a mapping of host -> topic")
         return ClockConfig(
             enabled=bool(mapping.get("enabled", False)),
+            mode=mode,
             reference_host=mapping.get("reference_host"),
             ntp_topics={str(k): str(v) for k, v in topics.items()},
+            events_topics={str(k): str(v) for k, v in events.items()},
+            max_residual_ms=float(mapping.get("max_residual_ms", 10.0)),
             offset_field=mapping.get("offset_field"),
             offset_unit=(str(mapping["offset_unit"]).lower()
                          if mapping.get("offset_unit") else None),
@@ -453,7 +475,8 @@ class ConverterConfig:
                 if cam.camera_info_topic:
                     info.append(cam.camera_info_topic)
         dedup = lambda xs: sorted(set(xs))
-        ntp = list(self.clock.ntp_topics.values()) if self.clock.enabled else []
+        ntp = (list(self.clock.ntp_topics.values()) + list(self.clock.events_topics.values())
+               if self.clock.enabled else [])
         return {"pose": dedup(pose), "cloud": dedup(cloud),
                 "camera_info": dedup(info), "camera": dedup(camera),
                 "ntp": dedup(ntp)}

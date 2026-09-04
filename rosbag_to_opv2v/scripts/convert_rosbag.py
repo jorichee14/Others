@@ -53,6 +53,36 @@ def print_report(report: ConversionReport, dry_run: bool = False) -> None:
                   f"{entry.get('mean_offset_ms', 0):>8.1f}ms "
                   f"{entry.get('max_offset_ms', 0):>8.1f}ms")
 
+    clocks = {k: v for k, v in (report.clocks or {}).items() if not k.startswith("_")}
+    if clocks:
+        meta = report.clocks.get("_meta", {})
+        mode = next(iter(clocks.values())).get("mode", "?")
+        print(f"\nhost clocks  (mode: {mode}, reference: {meta.get('reference_host', '?')})")
+        if mode == "verify":
+            print("  stamps are taken as already disciplined (chrony/ntpd); nothing is "
+                  "shifted.\n  'ntp p95' is the residual the daemon itself reports; "
+                  "'floor Δ' is the\n  delivery-floor estimate of the same offset, "
+                  "independent of the daemon.")
+        print(f"  {'host':<12} {'ntp p95':>9} {'floor Δ':>9} {'agree?':>12} "
+              f"{'residual':>9}  carried per frame as")
+        for host, entry in sorted(clocks.items()):
+            ntp = entry.get("ntp", {})
+            p95 = f"{ntp['p95_abs_ms']:.2f}ms" if ntp else "—"
+            detail = entry.get("cross_check_detail", {})
+            floor = (f"{detail['delivery_floor_correction_ms']:+.1f}ms"
+                     if detail else "—")
+            print(f"  {host:<12} {p95:>9} {floor:>9} {entry['cross_check']:>12} "
+                  f"{entry['residual_ms']:>7.2f}ms  {entry['residual_source']}")
+        if mode == "correct":
+            for host, entry in sorted(clocks.items()):
+                print(f"  {host:<12} applied {entry['correction_ms']:+.2f} ms "
+                      f"({entry['correction_source']})")
+        for host, rows in (report.clocks.get("_events") or {}).items():
+            for row in rows[:8]:
+                print(f"  {host:<12} event t={row['t_rel_s']:>6.1f}s  {row['text']}")
+            if len(rows) > 8:
+                print(f"  {host:<12} ... {len(rows) - 8} more event(s) in the report json")
+
     if report.pose_stats:
         print("\nper-agent trajectory (base frame, in the shared world frame)")
         print(f"  {'agent':<16} {'path m':>9} {'max step m':>11}  extent xyz (m)")

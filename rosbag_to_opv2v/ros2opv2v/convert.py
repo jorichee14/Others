@@ -235,7 +235,7 @@ def reconcile_clocks(reader: BagReader, cfg: ConverterConfig, indexes,
         return None
 
     reference = cfg.clock.reference_host or ego_agent(cfg).clock_host
-    clocks = clockmod.HostClocks(reference)
+    clocks = clockmod.HostClocks(reference, apply_corrections=(cfg.clock.mode == "correct"))
 
     host_of_topic = {}
     for agent in cfg.active_agents:
@@ -253,10 +253,15 @@ def reconcile_clocks(reader: BagReader, cfg: ConverterConfig, indexes,
             stats.add(log - stamp)
 
     ntp_rows: Dict[str, list] = {}
-    topics = sorted(set(cfg.clock.ntp_topics.values()))
+    event_topics = set(cfg.clock.events_topics.values())
+    topics = sorted(set(cfg.clock.ntp_topics.values()) | event_topics)
+    events: Dict[str, list] = {}
     if topics:
         for topic, stamp, msg in reader.iter_messages(topics):
-            ntp_rows.setdefault(topic, []).append((stamp, msg))
+            if topic in event_topics:
+                events.setdefault(topic, []).append((stamp, str(getattr(msg, "data", msg))))
+            else:
+                ntp_rows.setdefault(topic, []).append((stamp, msg))
 
     meta: Dict[str, dict] = {}
     for host, topic in cfg.clock.ntp_topics.items():
@@ -295,7 +300,11 @@ def reconcile_clocks(reader: BagReader, cfg: ConverterConfig, indexes,
             f"clock: the NTP offset unit inferred from the message did not match the "
             f"delivery floor; offsets were rescaled by {scale:g}. Set "
             f"clock.offset_unit explicitly so this is a decision and not a rescue.")
-    if sign_detail.get("verdict", "").startswith("NEAR-TIE"):
+    # A near-tie on the sign only matters when the sign is about to be APPLIED.
+    # In verify mode a sub-millisecond offset is a well-disciplined clock, and
+    # "the two readings differ by less than the noise" is a description of
+    # exactly that, not a problem.
+    if sign_detail.get("verdict", "").startswith("NEAR-TIE") and cfg.clock.mode == "correct":
         report.warnings.append(
             f"clock: the NTP offset sign is a near-tie ({sign_detail}); the two "
             f"readings of the field disagree by less than the noise, so set "
@@ -308,22 +317,51 @@ def reconcile_clocks(reader: BagReader, cfg: ConverterConfig, indexes,
                               "unit_rescale": scale, "sign_detail": sign_detail,
                               "ntp_fields": meta}
 
+    t0 = min((e.header_stamps[0] for e in indexes.values() if e.header_stamps), default=0)
+    report.clocks["_events"] = {}
+    for host, topic in cfg.clock.events_topics.items():
+        rows = events.get(topic, [])
+        report.clocks["_events"][host] = [
+            {"t_rel_s": round((stamp - t0) / 1e9, 3), "text": text} for stamp, text in rows]
+        alarming = [r for r in rows if any(k in r[1].lower() for k in
+                    ("step", "stepped", "unsync", "not synchronised", "not synchronized",
+                     "lost", "no source", "unreachable"))]
+        for stamp, text in alarming:
+            report.warnings.append(
+                f"clock: {host} daemon event at t={((stamp - t0) / 1e9):.1f} s: {text!r}. A "
+                f"clock step or a lost source mid-recording is a discontinuity in that "
+                f"host's stamps that no offset series will show; frames around it should "
+                f"be treated as unsynchronised.")
+        if rows and not alarming:
+            report.warnings.append(
+                f"clock: {host} logged {len(rows)} daemon event(s); none look like a step "
+                f"or a lost source (listed in conversion_report.json under clocks._events).")
+
     for host, entry in report.clocks.items():
         if host.startswith("_"):
             continue
+        if cfg.clock.mode == "verify" and entry.get("ntp_available"):
+            offset = entry["ntp"]["p95_abs_ms"]
+            if offset > cfg.clock.max_residual_ms:
+                report.warnings.append(
+                    f"clock: {host}'s daemon reports a residual offset of {offset:.1f} ms "
+                    f"(p95) — larger than clock.max_residual_ms={cfg.clock.max_residual_ms}. "
+                    f"The stamps are disciplined, but not to the level assumed; every frame "
+                    f"from this host carries that as clock_residual_ms. If the host was "
+                    f"genuinely undisciplined, set clock.mode: correct.")
         if entry["cross_check"] == "DISAGREE":
             report.warnings.append(
                 f"clock: {host}'s NTP offset and its delivery floor disagree by "
                 f"{entry['cross_check_detail']['difference_ms']} ms. One of them is "
                 f"wrong; do not trust this dataset's cross-agent timing until it is "
                 f"resolved.")
-        elif entry["correction_source"] == "delivery_floor":
+        elif entry["estimate_source"] == "delivery_floor":
             report.warnings.append(
                 f"clock: {host} publishes no NTP status, so its offset is estimated "
                 f"from delivery floors alone (residual "
                 f"{entry['residual_ms']:.1f} ms, carried into every frame). Adding an "
                 f"NTP monitor on that host removes the last unmeasured term.")
-        elif entry["correction_source"] == "UNKNOWN":
+        elif entry["estimate_source"] == "UNKNOWN":
             report.warnings.append(
                 f"clock: {host}'s offset could not be estimated at all — its stamps "
                 f"are used as recorded and any error appears as uniform latency on "

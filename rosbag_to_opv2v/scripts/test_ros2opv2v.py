@@ -831,7 +831,7 @@ def test_offset_unit_is_inferred_conservatively():
 def test_delivery_floor_recovers_a_known_offset():
     """min(log - stamp) is transit + offset, so differencing two hosts cancels the
     recorder's clock and leaves the offset."""
-    clocks = clockmod.HostClocks('ego')
+    clocks = clockmod.HostClocks('ego', apply_corrections=True)
     for value in (2_000_000, 4_000_000, 10_000_000):
         clocks.delivery.setdefault('ego', clockmod.DeliveryStats('ego')).add(value)
     for value in (32_000_000, 34_000_000, 50_000_000):
@@ -845,7 +845,7 @@ def test_delivery_floor_recovers_a_known_offset():
 def test_ntp_sign_is_chosen_from_the_delivery_floor():
     """ntpq and chrony disagree about the sign of 'offset'. Guessing wrong doubles
     the error instead of removing it, so it is decided by the data."""
-    clocks = clockmod.HostClocks('ego')
+    clocks = clockmod.HostClocks('ego', apply_corrections=True)
     for value in (2_000_000, 4_000_000):
         clocks.delivery.setdefault('ego', clockmod.DeliveryStats('ego')).add(value)
     for value in (32_000_000, 34_000_000):
@@ -859,9 +859,9 @@ def test_ntp_sign_is_chosen_from_the_delivery_floor():
 
 
 def test_residual_is_the_offsets_spread_not_their_magnitude():
-    """A perfectly constant 30 ms offset leaves nothing behind once corrected;
-    calling it a 30 ms residual would be exactly backwards."""
-    clocks = clockmod.HostClocks('ego')
+    """CORRECT mode: a perfectly constant 30 ms offset leaves nothing behind once
+    applied; calling it a 30 ms residual would be exactly backwards."""
+    clocks = clockmod.HostClocks('ego', apply_corrections=True)
     clocks.ntp['two'] = clockmod.OffsetTrack([0, NS], [30_000_000] * 2).finish()
     residual, source = clocks.residual_ns('two')
     assert residual == 0.0 and source == 'ntp_spread', (residual, source)
@@ -1027,13 +1027,14 @@ def _multi_host_config(bag_path, out_root, clock_enabled, deskew=False):
 
 
 def _convert_multi_host(tmp, clock_enabled, deskew=False, offset_unit=None,
-                        **bag_kwargs):
+                        mode='correct', **bag_kwargs):
     bag = os.path.join(tmp, 'mh.mcap')
     if not os.path.exists(bag):
         _write_synthetic_bag(bag, n_frames=12, **bag_kwargs)
     out_root = os.path.join(tmp, 'out_clock' if clock_enabled else 'out_raw')
     config_path = os.path.join(tmp, 'cfg_%s.yaml' % ('clock' if clock_enabled else 'raw'))
     config = _multi_host_config(bag, out_root, clock_enabled, deskew)
+    config['clock']['mode'] = mode
     if offset_unit:
         config['clock']['offset_unit'] = offset_unit
     with open(config_path, 'w') as handle:
@@ -1648,6 +1649,76 @@ def test_mirc_config_declares_the_published_anchors():
     cfg = _mirc_config()
     assert _agent(cfg, 'mobile_1')['pose']['expected_start'] == [0.697952, -0.062696, 0.193334]
     assert _agent(cfg, 'mobile_2')['pose']['expected_start'] == [7.704074, -14.308017, 0.165040]
+
+
+# ------------------------------------------------ verify mode (the default)
+# On a host running chrony the system clock is already disciplined: every
+# header.stamp is on the corrected clock, and what the NTP status reports is the
+# residual the daemon believes remains. Applying that again would be redundant
+# at best and, with the sign guessed, twice wrong. So the default is to read the
+# NTP topics as evidence, shift nothing, and carry the reported residual.
+
+def test_verify_mode_shifts_nothing_and_carries_the_reported_offset():
+    clocks = clockmod.HostClocks('ego')                       # default: verify
+    assert clocks.apply_corrections is False
+    for value in (2_000_000, 4_000_000):
+        clocks.delivery.setdefault('ego', clockmod.DeliveryStats('ego')).add(value)
+    for value in (32_000_000, 34_000_000):
+        clocks.delivery.setdefault('two', clockmod.DeliveryStats('two')).add(value)
+    clocks.ntp['two'] = clockmod.OffsetTrack([0, NS], [-30_000_000] * 2).finish()
+    # the estimate is still made, and still cross-checked...
+    assert clocks.estimate_ns('two', 0) == (30_000_000, 'ntp')
+    assert clocks.cross_check('two', 20_000_000)[0] == 'agree'
+    # ...but nothing is applied, and the residual IS the daemon's reported offset
+    assert clocks.correction_ns('two', 0) == (0, 'verify:ntp')
+    residual, source = clocks.residual_ns('two')
+    assert residual == 30_000_000 and source == 'ntp_reported_offset', (residual, source)
+
+
+def test_verify_mode_end_to_end_leaves_stamps_alone_and_warns():
+    """Same bag as the correct-mode test: agent 2's daemon reports 50 ms. In
+    verify mode the frames keep their uncorrected skew (-35 ms), the 50 ms rides
+    along as clock_residual_ms, and the report says the residual is large."""
+    tmp = tempfile.mkdtemp(prefix='r2o_verify_')
+    try:
+        report, scenario = _convert_multi_host(
+            tmp, clock_enabled=True, mode='verify', two_clock_error_ns=-50_000_000,
+            transit_ns={'ego': 2_000_000, 'two': 8_000_000, 'infra': 2_000_000},
+            ntp_topic='/two/ntp')
+        host_b = report.clocks['host_b']
+        assert host_b['mode'] == 'verify'
+        assert host_b['correction_ms'] == 0.0, host_b
+        assert abs(host_b['estimated_offset_ms'] - 50.0) < 0.5, host_b
+        assert abs(host_b['residual_ms'] - 50.0) < 0.5, host_b
+        assert any('residual offset of 50.0 ms' in w for w in report.warnings), report.warnings
+        with open(os.path.join(scenario, '2', '000004.yaml')) as handle:
+            sync = yaml.safe_load(handle)['ros_sync']
+        assert abs(sync['cloud_dt_ms'] + 35.0) < 0.5, sync          # uncorrected
+        assert abs(sync['clock_residual_ms'] - 50.0) < 0.5, sync    # but declared
+        assert sync['clock_correction_source'] == 'verify:ntp', sync
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_verify_mode_is_quiet_when_the_daemons_agree():
+    """A well-disciplined fleet must produce no clock warnings at all."""
+    tmp = tempfile.mkdtemp(prefix='r2o_verify_ok_')
+    try:
+        report, _ = _convert_multi_host(
+            tmp, clock_enabled=True, mode='verify', two_clock_error_ns=-400_000,
+            transit_ns={'ego': 2_000_000, 'two': 2_000_000, 'infra': 2_000_000},
+            ntp_topic='/two/ntp')
+        clock_warnings = [w for w in report.warnings if w.startswith('clock:')]
+        assert not clock_warnings, clock_warnings
+        assert abs(report.clocks['host_b']['residual_ms'] - 0.4) < 0.05, report.clocks
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_mirc_config_verifies_rather_than_corrects():
+    cfg = _mirc_config()
+    assert cfg['clock']['mode'] == 'verify', cfg['clock']
+    assert set(cfg['clock']['events_topics']) == {'infra_1', 'mobile_2'}
 
 
 if __name__ == '__main__':
