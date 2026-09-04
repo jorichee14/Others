@@ -454,13 +454,16 @@ def main() -> int:
     t_max = float(status["t_s"].max())
     mapped = [lk for lk in links if lk in xy_of]
     ncol = max(len(mapped), 1)
-    fig = plt.figure(figsize=(4.0 * ncol + 0.4, 6.4), constrained_layout=True)
-    sf_map, sf_time = fig.subfigures(2, 1, height_ratios=[1.3, 1.0])
-    # a colour bar sits at the right edge of each map cell, so the columns need
-    # more air between them than the default or its ticks meet the next y-axis
-    # one shared colour bar at the right of the row, so every panel is on the
-    # same scale and colours compare across agents
-    gs = sf_map.add_gridspec(1, ncol + 1, width_ratios=[1.0] * ncol + [0.055], wspace=0.16)
+    # One shared colour bar at the right of the map row, so every panel is on the
+    # same scale. Explicit spacing rather than constrained_layout: with a nested
+    # sub-gridspec for the bar the layout engine bails out on some matplotlib
+    # versions ("axes sizes collapsed to zero") and silently falls back to
+    # defaults, which looks like the figure never changed.
+    fig = plt.figure(figsize=(4.0 * ncol + 1.2, 6.8))
+    gs = fig.add_gridspec(2, ncol + 1, height_ratios=[1.3, 1.0],
+                          width_ratios=[1.0] * ncol + [0.05],
+                          hspace=0.34, wspace=0.30,
+                          left=0.075, right=0.935, top=0.925, bottom=0.135)
 
     lo = float(np.floor(status["signal_dbm"].min() / 5) * 5)
     hi = float(np.ceil(status["signal_dbm"].max() / 5) * 5)
@@ -478,7 +481,7 @@ def main() -> int:
 
     sm = None
     for i, lk in enumerate(mapped):
-        ax = sf_map.add_subplot(gs[0, i])
+        ax = fig.add_subplot(gs[0, i])
         g = status[status["link"] == lk].sort_values("t_s")
         agent = g["agent"].iloc[0]
         xy, inside = xy_of[lk]
@@ -522,17 +525,13 @@ def main() -> int:
         ax.grid(True, color=GRID, lw=0.4)
 
     if sm is not None:
-        cax = sf_map.add_subplot(gs[0, ncol].subgridspec(3, 1, height_ratios=[0.2, 1, 0.06])[1])
-        cb = sf_map.colorbar(sm, cax=cax)
+        cax = fig.add_subplot(gs[0, ncol].subgridspec(3, 1, height_ratios=[0.16, 1, 0.05])[1])
+        cb = fig.colorbar(sm, cax=cax)
         cb.set_label("RSSI [dBm]", fontsize=7.5)
         cb.ax.tick_params(labelsize=7)
         cb.outline.set_visible(False)
 
-    # a dedicated (invisible) row for the legend: an "outside" legend is not
-    # allotted space inside a subfigure and lands on the axis labels
-    gs_t = sf_time.add_gridspec(2, 1, height_ratios=[1.0, 0.10], hspace=0.62)
-    ax = sf_time.add_subplot(gs_t[0])
-    lax = sf_time.add_subplot(gs_t[1]); lax.axis("off")
+    ax = fig.add_subplot(gs[1, :])
     start_h = plt.Line2D([], [], marker="o", ls="none", ms=7, mfc="white", mec=TEXT, mew=1.6)
     end_h = plt.Line2D([], [], marker="s", ls="none", ms=6.5, mfc=TEXT, mec="white", mew=1.2)
     map_h = [start_h, end_h] if mapped else []
@@ -560,13 +559,14 @@ def main() -> int:
         f"   (weakest sample {status['signal_dbm'].min() - args.bad_rssi_dbm:.0f} dB above the Bad threshold)"
     ax.set_title(f"({chr(97 + len(mapped))}) received signal strength over the run{margin}",
                  loc="left", fontsize=8)
-    lax.legend(h_ + map_h, l_ + map_l, frameon=False, fontsize=7,
-               ncol=len(l_ + map_l), loc="center", columnspacing=1.4,
-               handletextpad=0.5)
+    ax.legend(h_ + map_h, l_ + map_l, frameon=False, fontsize=7,
+              ncol=len(l_ + map_l), loc="upper center", bbox_to_anchor=(0.5, -0.16),
+              columnspacing=1.4, handletextpad=0.5)
     ax.grid(True, color=GRID, lw=0.5)
 
-    fig.savefig(out / "fig_wifi_link.pdf")
-    fig.savefig(out / "fig_wifi_link.png", dpi=200)
+    # bbox_inches="tight" so the legend below the axes is not clipped
+    fig.savefig(out / "fig_wifi_link.pdf", bbox_inches="tight")
+    fig.savefig(out / "fig_wifi_link.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
     if rho_series:
