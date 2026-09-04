@@ -61,15 +61,9 @@ NODE_ALIASES = {"mobile1": "mobile_1", "mobile2": "mobile_2"}
 # Links are the entities in these figures, so they get the categorical slots in a
 # fixed order; the order is by link label so a link keeps its colour across runs.
 LINK_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7"]
-# One sequential ramp per agent, light (weak) to dark (strong), each built on that
-# agent's categorical hue so a coverage panel is identifiable at a glance and the
-# two agents never share a scale.
-AGENT_RAMPS = {
-    "mobile_1": ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#2a78d6", "#1c5cab", "#104281"],
-    "mobile_2": ["#fce3d5", "#f9c3a4", "#f5a173", "#f08048", "#eb6834", "#c14e22", "#8f3714"],
-    "infra_1": ["#d6f2e6", "#a5e0c8", "#6ecfa8", "#33bd8a", "#1baf7a", "#12855b", "#0a5c3e"],
-}
-RAMP_FALLBACK = ["#e2def5", "#c3bcea", "#a297de", "#7f70cd", "#4a3aa7", "#372b7d", "#241d54"]
+# RSSI is a magnitude, so one hue, light (weak) to dark (strong) -- the same ramp
+# and the same limits in every coverage panel, so colours compare across agents.
+RSSI_RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#2a78d6", "#1c5cab", "#104281"]
 BAD_COLOR = "#e34948"
 TEXT, TEXT2, GRID = "#0b0b0b", "#52514e", "#e6e5e1"
 
@@ -464,35 +458,36 @@ def main() -> int:
     sf_map, sf_time = fig.subfigures(2, 1, height_ratios=[1.3, 1.0])
     # a colour bar sits at the right edge of each map cell, so the columns need
     # more air between them than the default or its ticks meet the next y-axis
-    gs = sf_map.add_gridspec(1, ncol, wspace=0.22)
+    # one shared colour bar at the right of the row, so every panel is on the
+    # same scale and colours compare across agents
+    gs = sf_map.add_gridspec(1, ncol + 1, width_ratios=[1.0] * ncol + [0.055], wspace=0.16)
 
     lo = float(np.floor(status["signal_dbm"].min() / 5) * 5)
     hi = float(np.ceil(status["signal_dbm"].max() / 5) * 5)
 
+    # One ramp, one scale, for every panel: colours are then comparable between
+    # agents. Trimmed to the pooled 2nd-98th percentile so a single outlying
+    # sample does not compress every trajectory into one end of the ramp.
+    cmap = matplotlib.colors.LinearSegmentedColormap.from_list("rssi", RSSI_RAMP)
+    all_v = np.concatenate([status[status["link"] == lk]["signal_dbm"].to_numpy()[xy_of[lk][1]]
+                            for lk in mapped]) if mapped else np.array([0.0])
+    v_lo, v_hi = np.percentile(all_v, [2, 98])
+    if v_hi - v_lo < 2.0:
+        mid = 0.5 * (v_lo + v_hi); v_lo, v_hi = mid - 1.0, mid + 1.0
+    norm = matplotlib.colors.Normalize(v_lo, v_hi)
+
+    sm = None
     for i, lk in enumerate(mapped):
-        sub_gs = gs[0, i].subgridspec(1, 2, width_ratios=[1, 0.05], wspace=0.06)
-        ax = sf_map.add_subplot(sub_gs[0])
+        ax = sf_map.add_subplot(gs[0, i])
         g = status[status["link"] == lk].sort_values("t_s")
         agent = g["agent"].iloc[0]
         xy, inside = xy_of[lk]
         v = g["signal_dbm"].to_numpy()[inside]
-        # Each panel is scaled to its OWN radio: a scale shared across agents
-        # compresses every trajectory into one end of the ramp and hides exactly
-        # the spatial structure the panel exists to show. The colours are not
-        # comparable between panels, which is why each carries its own bar and
-        # each agent gets its own hue.
-        v_lo, v_hi = np.percentile(v, [2, 98])
-        if v_hi - v_lo < 2.0:                     # a genuinely flat link
-            mid = 0.5 * (v_lo + v_hi); v_lo, v_hi = mid - 1.0, mid + 1.0
-        cmap = matplotlib.colors.LinearSegmentedColormap.from_list(
-            "rssi_" + agent, AGENT_RAMPS.get(agent, RAMP_FALLBACK))
-        norm = matplotlib.colors.Normalize(v_lo, v_hi)
 
         if map_xy is not None:
             ax.scatter(map_xy[:, 0], map_xy[:, 1], s=0.12, c="0.88", linewidths=0, zorder=0)
         pts = xy[inside].reshape(-1, 1, 2)
         seg = np.concatenate([pts[:-1], pts[1:]], axis=1)
-        sm = None
         for lw, col, z in ((5.4, "white", 2), (3.2, None, 3)):
             lc = matplotlib.collections.LineCollection(
                 seg, linewidths=lw, capstyle="round",
@@ -526,11 +521,11 @@ def main() -> int:
                      f"weakest {g['signal_dbm'].min():.0f} dBm", loc="left", fontsize=8)
         ax.grid(True, color=GRID, lw=0.4)
 
-        cax = sf_map.add_subplot(sub_gs[1].subgridspec(3, 1, height_ratios=[0.16, 1, 0.06])[1])
+    if sm is not None:
+        cax = sf_map.add_subplot(gs[0, ncol].subgridspec(3, 1, height_ratios=[0.2, 1, 0.06])[1])
         cb = sf_map.colorbar(sm, cax=cax)
-        # the unit sits above the bar; as a side label it runs into the next panel
-        cb.ax.set_title("dBm", fontsize=6.5, color=TEXT2, pad=3)
-        cb.ax.tick_params(labelsize=6.5)
+        cb.set_label("RSSI [dBm]", fontsize=7.5)
+        cb.ax.tick_params(labelsize=7)
         cb.outline.set_visible(False)
 
     # a dedicated (invisible) row for the legend: an "outside" legend is not
