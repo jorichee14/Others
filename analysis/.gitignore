@@ -1,3 +1,10 @@
+# Everything under here is regenerated from a bag by the scripts in this
+# folder. Parquet extracts and figures are large and run-specific, so they are
+# products, not sources -- rerun extract_bag.py rather than committing them.
+extracts/
+outputs/
+figures/
+*.parquet
+*.png
+*.pdf
 __pycache__/
-results/
-*.mcap

@@ -308,15 +308,37 @@ def selftest(path: Path, n_frames: int = 300):
     idx = np.array([i for i in range(raw) if not (i < 6 or i > 249 or abs(i - 128) < 3)])
     f = (idx - raw / 2) * (bw * 1e6 / raw)
     r = CsiRenderer()
+
+    def regime(blocked):
+        """Tap gains, delays, phases and Doppler for one propagation regime.
+
+        The phase of each tap is drawn ONCE and then advances slowly, because a
+        tap is a physical reflection: it persists across frames and only drifts
+        as the robot moves. Redrawing it every frame would make each frame an
+        independent sample, which is a model of receiver noise -- the waterfall
+        would show static rather than a channel, and the frame-to-frame
+        coherence that decides whether a real capture is usable would read zero
+        on synthetic data that is supposed to pass."""
+        a = [0.18 if blocked else 1.0] + [(0.55 if blocked else 0.22) * np.exp(-j / 2.4)
+                                          for j in range(1, 7)]
+        d = [0.0] + [(55e-9 if blocked else 18e-9) * j for j in range(1, 7)]
+        ph0 = rng.uniform(0, 2 * np.pi, len(a))
+        fd = rng.normal(0, 0.8, len(a))          # Hz, walking-pace Doppler
+        return np.array(a), np.array(d), ph0, fd
+
+    clear_r, blocked_r = regime(False), regime(True)
+    k_clear = None
     for k in range(n_frames):
         blocked = k > 200
-        taps = [(0.18 if blocked else 1.0, 0.0)]
-        for j in range(1, 7):
-            taps.append(((0.55 if blocked else 0.22) * np.exp(-j / 2.4),
-                         (55e-9 if blocked else 18e-9) * j))
-        H = sum(a * np.exp(-2j * np.pi * f * d + 1j * rng.uniform(0, 2 * np.pi)) for a, d in taps)
+        a, d, ph0, fd = blocked_r if blocked else clear_r
+        t = k / r.rate_hz if getattr(r, "rate_hz", 0) else k / 180.0
+        ph = ph0 + 2 * np.pi * fd * t
+        H = (a[None, :] * np.exp(1j * ph[None, :])
+             * np.exp(-2j * np.pi * f[:, None] * d[None, :])).sum(axis=1)
         H = H + (rng.normal(0, 0.02, f.size) + 1j * rng.normal(0, 0.02, f.size))
         r.push(H, idx, raw, bw, rssi=-62 if blocked else -45, src_mac="82:2a:a8:cb:d4:34")
+        if k == 200:
+            k_clear = r.meta["k_db"]
     img = r.render()
     if cv2 is not None:
         cv2.imwrite(str(path), img)
@@ -325,8 +347,12 @@ def selftest(path: Path, n_frames: int = 300):
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         plt.imsave(str(path), img[:, :, ::-1])
-    print(f"wrote {path}  ({img.shape[1]}x{img.shape[0]})  "
-          f"K {r.meta['k_db']:+.1f} dB, spread {r.meta['tau_ns']:.0f} ns")
+    print(f"wrote {path}  ({img.shape[1]}x{img.shape[0]})")
+    print(f"  K clear {k_clear:+.1f} dB -> blocked {r.meta['k_db']:+.1f} dB, "
+          f"spread {r.meta['tau_ns']:.0f} ns")
+    if not (k_clear is not None and k_clear > r.meta["k_db"] + 3):
+        print("  WARNING: K did not fall when the path was blocked; the "
+              "renderer or the synthetic channel is wrong.")
 
 
 if __name__ == "__main__":

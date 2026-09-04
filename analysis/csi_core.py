@@ -57,8 +57,38 @@ def profile_structure_db(P: np.ndarray) -> np.ndarray:
     return 10 * np.log10(np.maximum(P.max(axis=1), 1e-30) / np.maximum(med, 1e-30))
 
 
-def occupied_band(idx: np.ndarray, use: np.ndarray):
-    """(first_slot, span) of the contiguous block of slots that carry signal.
+def temporal_coherence(H: np.ndarray) -> float:
+    """Median correlation of |H| across subcarriers between consecutive frames.
+
+    This is the test for whether a CSI stream is a channel at all. A real
+    channel is a physical thing that changes slowly: at ~180 frames per second
+    with a robot walking pace, consecutive frames see almost the same multipath,
+    so the shape of |H| across frequency repeats and the correlation sits high
+    (typically > 0.8). Receiver noise, or an extractor emitting garbage for a
+    frame format it does not understand, produces an independent draw every
+    frame and a correlation near zero.
+
+    Every other metric here -- K, delay spread, selectivity -- will return a
+    number whether or not the input is a channel. This one says whether those
+    numbers mean anything."""
+    A = np.abs(np.atleast_2d(H)).astype(float)
+    if A.shape[0] < 2:
+        return float("nan")
+    A = A - A.mean(axis=1, keepdims=True)
+    num = (A[:-1] * A[1:]).sum(axis=1)
+    den = np.sqrt((A[:-1] ** 2).sum(axis=1) * (A[1:] ** 2).sum(axis=1))
+    r = num / np.where(den > 0, den, np.nan)
+    return float(np.nanmedian(r))
+
+
+def occupied_band(idx: np.ndarray, use: np.ndarray, max_gap: int = 12):
+    """(first_slot, span) of the block of slots that carry signal.
+
+    The longest RUN of usable slots, not simply the first to the last: a couple
+    of noisy slots passing the threshold at opposite ends of the window would
+    otherwise stretch the span across empty spectrum and overstate the occupied
+    bandwidth. Gaps up to `max_gap` are bridged, since pilot and DC nulls sit
+    inside a real transmission.
 
     The capture window and the transmitted bandwidth are not the same thing. A
     radio capturing at 80 MHz still sees a 20 MHz control frame -- an ack, say --
@@ -66,11 +96,15 @@ def occupied_band(idx: np.ndarray, use: np.ndarray):
     frame supports is set by the 20 MHz it actually occupies, not by the 80 MHz
     the capture was configured for. Taking the span from the data is the only way
     to get that right."""
-    occ = np.asarray(idx)[np.asarray(use, bool)]
+    occ = np.sort(np.asarray(idx)[np.asarray(use, bool)])
     if occ.size == 0:
         return 0, int(np.asarray(idx).max()) + 1
-    lo, hi = int(occ.min()), int(occ.max())
-    return lo, hi - lo + 1
+    brk = np.flatnonzero(np.diff(occ) > max_gap + 1)
+    starts = np.r_[0, brk + 1]
+    ends = np.r_[brk, occ.size - 1]
+    widths = occ[ends] - occ[starts] + 1
+    b = int(np.argmax(widths))
+    return int(occ[starts[b]]), int(widths[b])
 
 
 def effective_bandwidth_mhz(span_slots: int, declared_mhz: float, raw_slots: int) -> float:

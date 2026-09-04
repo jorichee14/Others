@@ -425,6 +425,8 @@ def main(out: Path) -> None:
                                   ("/mobile2/csi", "82:2a:a8:cb:d4:34", 1.7)]:
             hz = 171.0
             n = int(dur_s * hz)
+            ph0 = [2 * math.pi * rng.random() for _ in range(8)]
+            fd = [rng.uniform(-3.0, 3.0) for _ in range(8)]      # Hz of Doppler per tap
             for i in range(n):
                 t = i / hz
                 ns = t0 + int(t * 1e9)
@@ -435,9 +437,14 @@ def main(out: Path) -> None:
                     d = (18e-9 if not nlos else 55e-9) * k
                     a = (0.22 if not nlos else 0.55) * math.exp(-k / 2.4)
                     taps.append((a * (1 + 0.25 * math.sin(3 * t + k + phase)), d))
+                # each tap keeps its identity and drifts in phase at its own
+                # slow rate, so consecutive frames see almost the same channel --
+                # which is what makes the frame-to-frame coherence test mean
+                # something. Re-drawing the phase every frame would model noise,
+                # not a channel.
                 H = np.zeros(len(keep), dtype=np.complex128)
-                for a, d in taps:
-                    ph = 2 * math.pi * rng.random()
+                for j, (a, d) in enumerate(taps):
+                    ph = ph0[j] + 2 * math.pi * fd[j] * t
                     H += a * np.exp(-2j * math.pi * f_hz * d + 1j * ph)
                 H += (rng.gauss(0, 0.02) + 1j * rng.gauss(0, 0.02))
                 H *= 10 ** (rng.gauss(0, 0.8) / 20)       # AGC jitter, scale only

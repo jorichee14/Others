@@ -69,7 +69,8 @@ from common import (  # noqa: E402
 )
 from csi_core import (  # noqa: E402
     amplitude_db, delay_profile, effective_bandwidth_mhz, occupied_band,
-    profile_structure_db, rician_k, rms_delay_spread, usable_subcarriers,
+    profile_structure_db, rician_k, rms_delay_spread, temporal_coherence,
+    usable_subcarriers,
 )
 from extract_bag import extract  # noqa: E402
 
@@ -148,6 +149,10 @@ def main() -> int:
                     help="slots this far below the 90th-percentile slot power are guard/DC nulls")
     ap.add_argument("--min-profile-db", type=float, default=6.0,
                     help="peak-to-median a delay profile needs before its spread is reported")
+    ap.add_argument("--band-gap", type=int, default=12,
+                    help="null slots bridged when finding the occupied band")
+    ap.add_argument("--min-coherence", type=float, default=0.5,
+                    help="frame-to-frame |H| correlation below which the stream is not a channel")
     args = ap.parse_args()
 
     extracts = args.extracts or Path("extracts") / args.run
@@ -196,7 +201,7 @@ def main() -> int:
         use = usable_subcarriers(H_all, args.null_floor_db)
         H, idx = H_all[:, use], idx_all[use]
         n_sub, n_raw_cols = H.shape[1], H_all.shape[1]
-        band_lo, band_span = occupied_band(idx_all, use)
+        band_lo, band_span = occupied_band(idx_all, use, args.band_gap)
         eff_bw = effective_bandwidth_mhz(band_span, bw, raw_slots)
         sc_power_db = 10 * np.log10(np.maximum((np.abs(H_all) ** 2).mean(axis=0), 1e-30))
         sc_power_db -= np.percentile(sc_power_db[use], 90)
@@ -211,6 +216,7 @@ def main() -> int:
         # over sqrt(12). Refuse to report a number for those frames.
         tau = np.where(struct_db >= args.min_profile_db, tau, np.nan)
         K = rician_k(H)
+        coh = temporal_coherence(H)
         amp_db = amplitude_db(H)                             # AGC out, shape kept
         sel_db = amp_db.std(axis=1)
 
@@ -241,6 +247,7 @@ def main() -> int:
             "subcarriers_usable": n_sub,
             "nulls_dropped": n_raw_cols - n_sub,
             "trimmed_flag": bool(df["trimmed"].mode().iloc[0]),
+            "temporal_coherence": round(coh, 3),
             "profile_structure_median_db": float(np.nanmedian(struct_db)),
             "frames_with_flat_profile_pct": float(100 * np.mean(struct_db < args.min_profile_db)),
             "streams": "; ".join(f"core{c}/ss{s}" for c, s in streams),
@@ -424,6 +431,7 @@ def main() -> int:
     # ---- markdown ----------------------------------------------------------------
     coarse = inventory[inventory["occupied_bandwidth_mhz"] <= 25]
     nulls = inventory[inventory["nulls_dropped"] > 0]
+    incoh = inventory[inventory["temporal_coherence"] < args.min_coherence]
     flatf = inventory[inventory["frames_with_flat_profile_pct"] > 5]
     md = [f"# Wi-Fi CSI — run `{args.run}`", "",
           "One CSI frame is the complex channel response of one received 802.11 frame across "
@@ -433,6 +441,16 @@ def main() -> int:
           "own median, which removes the receiver's automatic gain control.", "",
           "## Capture inventory", "",
           inventory.round(2).to_markdown(index=False), ""]
+    if len(incoh):
+        md += ["> **This CSI does not behave like a channel.** "
+               + ", ".join(f"`{r.agent}` frame-to-frame |H| correlation "
+                           f"{r.temporal_coherence:.2f}" for r in incoh.itertuples())
+               + f", against a threshold of {args.min_coherence:.2f}. A real channel changes "
+               "slowly: at this frame rate consecutive frames should see almost the same "
+               "multipath and correlate above 0.8. A correlation near zero means each frame is "
+               "an independent draw -- receiver noise, or an extractor emitting nothing usable "
+               "for this frame format. **Every other number in this file is computed from that "
+               "input and should not be quoted until this is resolved.**", ""]
     if len(nulls):
         md += ["> **Guard and DC-null slots were present and have been excluded.** "
                + ", ".join(f"`{r.agent}` dropped {int(r.nulls_dropped)} of "
@@ -504,10 +522,14 @@ automatic gain control, so both quantities are ratios and independent of it.{coa
     (out / "csi_subsection.tex").write_text(tex)
 
     print(inventory[["agent", "frames", "rate_hz", "capture_bandwidth_mhz",
-                     "occupied_bandwidth_mhz", "occupied_slots", "subcarriers_in_message",
-                     "subcarriers_usable", "nulls_dropped", "trimmed_flag",
-                     "profile_structure_median_db", "frames_with_flat_profile_pct",
-                     "n_streams", "transmitters"]].round(2).to_string(index=False))
+                     "occupied_bandwidth_mhz", "occupied_slots", "subcarriers_usable",
+                     "temporal_coherence", "profile_structure_median_db",
+                     "frames_with_flat_profile_pct"]].round(2).to_string(index=False))
+    if len(incoh):
+        print("\n  ** frame-to-frame |H| correlation is "
+              + ", ".join(f"{r.temporal_coherence:.2f} ({r.agent})" for r in incoh.itertuples())
+              + f" -- below {args.min_coherence:.2f}, so this stream does not behave like a\n"
+              "     channel and none of the metrics above should be quoted. See csi_summary.md.")
     print()
     print(transmitters[["agent", "src_mac", "frame_type", "frames", "share", "rssi_median_dbm"]]
           .round(3).to_string(index=False))
