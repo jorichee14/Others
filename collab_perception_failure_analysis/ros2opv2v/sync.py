@@ -24,34 +24,63 @@ NS = 1_000_000_000
 
 
 class StampIndex:
-    """Sorted message stamps for one topic, with nearest-neighbour lookup."""
+    """Sorted message stamps for one topic, with nearest-neighbour lookup.
 
-    def __init__(self, stamps: Sequence[int]):
-        self.stamps: List[int] = sorted(int(s) for s in stamps)
+    Two stamps per message, not one, once cross-host clock correction is in play
+    (``ros2opv2v/clock.py``). ``stamps`` are on the *reference* clock and are what
+    frame matching compares; ``raw`` are the bag's own values and are what the
+    write pass must ask the reader for. Conflating them yields either a dataset
+    matched on uncorrected times or a write pass that selects nothing at all, and
+    both fail quietly, so they are kept side by side rather than derived.
+    """
+
+    def __init__(self, stamps: Sequence[int], raw: Optional[Sequence[int]] = None):
+        pairs = sorted(zip((int(s) for s in stamps),
+                           (int(r) for r in (raw if raw is not None else stamps))))
+        self.stamps: List[int] = [c for c, _ in pairs]
+        self.raw: List[int] = [r for _, r in pairs]
 
     def __len__(self) -> int:
         return len(self.stamps)
 
-    def nearest(self, t_ns: int, tolerance_ns: Optional[int] = None) -> Optional[int]:
-        """The stamp closest to ``t_ns``, or ``None`` if it is beyond tolerance."""
+    def _nearest_index(self, t_ns: int, tolerance_ns: Optional[int]) -> Optional[int]:
         if not self.stamps:
             return None
         pos = bisect_left(self.stamps, t_ns)
         candidates = []
         if pos < len(self.stamps):
-            candidates.append(self.stamps[pos])
+            candidates.append(pos)
         if pos > 0:
-            candidates.append(self.stamps[pos - 1])
-        best = min(candidates, key=lambda s: abs(s - t_ns))
-        if tolerance_ns is not None and abs(best - t_ns) > tolerance_ns:
+            candidates.append(pos - 1)
+        best = min(candidates, key=lambda i: abs(self.stamps[i] - t_ns))
+        if tolerance_ns is not None and abs(self.stamps[best] - t_ns) > tolerance_ns:
             return None
         return best
+
+    def nearest(self, t_ns: int, tolerance_ns: Optional[int] = None) -> Optional[int]:
+        """The corrected stamp closest to ``t_ns``, or ``None`` beyond tolerance."""
+        index = self._nearest_index(t_ns, tolerance_ns)
+        return None if index is None else self.stamps[index]
+
+    def nearest_pair(self, t_ns: int,
+                     tolerance_ns: Optional[int] = None) -> Optional[Tuple[int, int]]:
+        """``(corrected_stamp, raw_stamp)`` for the nearest message."""
+        index = self._nearest_index(t_ns, tolerance_ns)
+        return None if index is None else (self.stamps[index], self.raw[index])
 
     def rate_hz(self) -> float:
         if len(self.stamps) < 2:
             return 0.0
         span = (self.stamps[-1] - self.stamps[0]) / NS
         return (len(self.stamps) - 1) / span if span > 0 else 0.0
+
+    def half_period_ns(self) -> float:
+        """The best |skew| nearest-neighbour matching can ever achieve on this
+        stream. Half a publication period is a property of the *recording*: no
+        matching strategy improves on it, so a tolerance below it rejects frames
+        for a reason no amount of processing can fix."""
+        rate = self.rate_hz()
+        return 0.5 * NS / rate if rate > 0 else float("inf")
 
 
 class PoseTrack:
@@ -154,12 +183,27 @@ class PoseTrack:
 
 @dataclass
 class Frame:
-    """One OPV2V timestamp: which message each agent contributes."""
+    """One OPV2V timestamp: which message each agent contributes.
+
+    ``cloud_stamps`` hold the bag's own (raw) stamps, because the write pass
+    selects messages by them. ``skew_ns`` holds each contribution's signed
+    distance from ``t_ns`` **on the corrected timeline** — the quantity that says
+    how synchronous this frame actually is. It is carried into the frame yaml
+    rather than aggregated away: a converter that reports only a mean offset lets
+    an individual frame be arbitrarily stale without anyone downstream noticing.
+    """
     index: int
     t_ns: int
-    cloud_stamps: Dict[str, int] = field(default_factory=dict)     # agent name -> stamp
+    cloud_stamps: Dict[str, int] = field(default_factory=dict)     # agent name -> raw stamp
     camera_stamps: Dict[Tuple[str, int], int] = field(default_factory=dict)
+    skew_ns: Dict[str, int] = field(default_factory=dict)          # agent -> corrected - t_ns
+    camera_skew_ns: Dict[Tuple[str, int], int] = field(default_factory=dict)
     local_key: str = ""            # index within its scenario folder (set at write time)
+
+    def worst_skew_ns(self, agents: Optional[Sequence[str]] = None) -> int:
+        values = [abs(v) for name, v in self.skew_ns.items()
+                  if agents is None or name in agents]
+        return max(values) if values else 0
 
     @property
     def key(self) -> str:
@@ -224,14 +268,17 @@ def build_frame_table(times: Sequence[int],
 
     for t_ns in times[::max(1, stride)]:
         cloud_stamps: Dict[str, int] = {}
+        skews: Dict[str, int] = {}
         missing: List[str] = []
         for name, index in cloud_indices.items():
-            stamp = index.nearest(t_ns, tolerance_ns)
-            if stamp is None:
+            found = index.nearest_pair(t_ns, tolerance_ns)
+            if found is None:
                 if required.get(name, True):
                     missing.append(name)
                 continue
-            cloud_stamps[name] = stamp
+            corrected, raw = found
+            cloud_stamps[name] = raw
+            skews[name] = corrected - t_ns
 
         if missing:
             if drop_incomplete:
@@ -243,11 +290,14 @@ def build_frame_table(times: Sequence[int],
                 dropped["empty"] = dropped.get("empty", 0) + 1
                 continue
 
-        frame = Frame(index=len(frames), t_ns=int(t_ns), cloud_stamps=cloud_stamps)
+        frame = Frame(index=len(frames), t_ns=int(t_ns), cloud_stamps=cloud_stamps,
+                      skew_ns=skews)
         for (agent_name, slot), index in camera_indices.items():
-            stamp = index.nearest(t_ns, tolerance_ns)
-            if stamp is not None:
-                frame.camera_stamps[(agent_name, slot)] = stamp
+            found = index.nearest_pair(t_ns, tolerance_ns)
+            if found is not None:
+                corrected, raw = found
+                frame.camera_stamps[(agent_name, slot)] = raw
+                frame.camera_skew_ns[(agent_name, slot)] = corrected - t_ns
         frames.append(frame)
 
     return FrameTable(frames=frames, dropped=dropped, master=master,
@@ -274,7 +324,7 @@ def reuse_statistics(table: FrameTable) -> Dict[str, Dict[str, float]]:
             if stamp is None:
                 continue
             present += 1
-            offsets.append(abs(stamp - frame.t_ns) / 1e6)
+            offsets.append(abs(frame.skew_ns.get(name, stamp - frame.t_ns)) / 1e6)
             if stamp == seen:
                 reused += 1
             seen = stamp
@@ -285,3 +335,44 @@ def reuse_statistics(table: FrameTable) -> Dict[str, Dict[str, float]]:
             "max_offset_ms": float(np.max(offsets)) if offsets else 0.0,
         }
     return stats
+
+
+def tightness_curve(table: FrameTable, required: Sequence[str],
+                    clock_residual_ms: Optional[Dict[str, float]] = None,
+                    grid_ms: Sequence[float] = (5, 10, 15, 20, 25, 30, 40, 50, 60, 80, 100),
+                    ) -> Dict[str, object]:
+    """How many frames survive at each candidate synchronisation budget.
+
+    The right tolerance is a trade — how many frames am I willing to lose to halve
+    the residual asynchrony? — and it cannot be made without seeing both columns.
+    Reporting a single pass/fail against one hard-coded number hides the choice and
+    usually hides the fact that the chosen number was unreachable anyway.
+
+    ``clock_residual_ms`` adds each agent's un-correctable clock uncertainty to its
+    selection skew, so the budget is against the total error a frame carries rather
+    than the part that happens to be easy to measure.
+    """
+    residual = clock_residual_ms or {}
+    totals = []
+    for frame in table.frames:
+        worst = 0.0
+        for name in required:
+            if name not in frame.skew_ns:
+                worst = float("inf")
+                break
+            worst = max(worst, abs(frame.skew_ns[name]) / 1e6 + residual.get(name, 0.0))
+        totals.append(worst)
+    complete = [v for v in totals if v != float("inf")]
+    return {
+        "candidate_frames": len(table.frames),
+        "complete_frames": len(complete),
+        "worst_ms": {
+            "p50": round(sorted(complete)[len(complete) // 2], 3) if complete else None,
+            "max": round(max(complete), 3) if complete else None,
+        },
+        "curve": [{"budget_ms": float(g),
+                   "frames": sum(1 for v in complete if v <= g),
+                   "fraction": round(sum(1 for v in complete if v <= g) / len(table.frames), 4)
+                   if table.frames else 0.0}
+                  for g in grid_ms],
+    }

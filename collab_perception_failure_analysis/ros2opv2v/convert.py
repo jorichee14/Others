@@ -29,14 +29,17 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from . import clock as clockmod
 from . import labels
 from .bagreader import BagReader
 from .config import AgentConfig, ConverterConfig, ego_agent
 from .geometry import invert, matrix_to_opencood_pose, quat_to_matrix
 from .pointclouds import (apply_range_filter, cloud_from_depth_image,
-                          cloud_from_pointcloud2, camera_intrinsics, subsample)
+                          cloud_from_pointcloud2, camera_intrinsics, deskew_cloud,
+                          subsample)
 from .sync import (NS, Frame, FrameTable, PoseTrack, StampIndex,
-                   build_frame_table, frame_times, reuse_statistics)
+                   build_frame_table, frame_times, reuse_statistics,
+                   tightness_curve)
 from .writers import image_to_array, write_frame_yaml, write_pcd, write_png
 
 
@@ -56,6 +59,9 @@ class ConversionReport:
     points_per_agent: Dict[str, dict] = field(default_factory=dict)
     sync: Dict[str, dict] = field(default_factory=dict)
     pose_stats: Dict[str, dict] = field(default_factory=dict)
+    clocks: Dict[str, dict] = field(default_factory=dict)
+    tightness: Dict[str, object] = field(default_factory=dict)
+    deskew: Dict[str, dict] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     duration_s: float = 0.0
 
@@ -70,6 +76,9 @@ class ConversionReport:
             "points_per_agent": self.points_per_agent,
             "sync": self.sync,
             "pose_stats": self.pose_stats,
+            "clocks": self.clocks,
+            "tightness": self.tightness,
+            "deskew": self.deskew,
             "warnings": self.warnings,
             "duration_s": round(self.duration_s, 2),
         }
@@ -149,15 +158,28 @@ def _apply_ground_lift(cloud: np.ndarray, ground_lift: float) -> np.ndarray:
 # ------------------------------------------------------------------- the stages
 
 def load_pose_tracks(reader: BagReader, cfg: ConverterConfig,
-                     report: ConversionReport) -> Dict[str, PoseTrack]:
-    """Decode every pose topic once and keep the trajectories in memory."""
+                     report: ConversionReport,
+                     clocks: Optional[clockmod.HostClocks] = None) -> Dict[str, PoseTrack]:
+    """Decode every pose topic once and keep the trajectories in memory.
+
+    Pose stamps are clock-corrected like every other stamp. Leaving them raw would
+    be the subtlest form of the offset bug this converter exists to catch: the
+    frame table would match a corrected cloud against an uncorrected pose, so the
+    agent's data and the pose it is placed at would come from instants tens of
+    milliseconds apart — a rigid position error that no downstream check would
+    attribute to timing.
+    """
     topics = sorted({a.pose.topic for a in cfg.active_agents if a.pose.topic})
     tracks: Dict[str, PoseTrack] = {t: PoseTrack() for t in topics}
     if not topics:
         return tracks
 
+    host_of_topic = {a.pose.topic: a.clock_host for a in cfg.active_agents
+                     if a.pose.topic}
     for topic, stamp, msg in reader.iter_messages(topics):
         transform, speed = _pose_and_speed(msg)
+        if clocks is not None:
+            stamp = stamp + clocks.correction_ns(host_of_topic[topic], stamp)[0]
         tracks[topic].add(stamp, transform, speed)
 
     for topic, track in tracks.items():
@@ -198,9 +220,127 @@ def resolve_world_poses(cfg: ConverterConfig, tracks: Dict[str, PoseTrack],
     return out
 
 
+def reconcile_clocks(reader: BagReader, cfg: ConverterConfig, indexes,
+                     report: ConversionReport) -> Optional[clockmod.HostClocks]:
+    """Estimate every host's clock offset before a single frame is matched.
+
+    Returns ``None`` when reconciliation is off, in which case stamps are used as
+    recorded — correct for a single-host bag and quietly wrong for any other.
+
+    The delivery statistics come free from the index pass, which already collected
+    both ``header.stamp`` and ``log_time`` per message; NTP status topics are the
+    only extra decoding, and they are a few thousand small messages.
+    """
+    if not cfg.clock.enabled:
+        return None
+
+    reference = cfg.clock.reference_host or ego_agent(cfg).clock_host
+    clocks = clockmod.HostClocks(reference)
+
+    host_of_topic = {}
+    for agent in cfg.active_agents:
+        host_of_topic[agent.cloud.topic] = agent.clock_host
+        if agent.pose.topic:
+            host_of_topic[agent.pose.topic] = agent.clock_host
+        for camera in agent.cameras:
+            host_of_topic[camera.topic] = agent.clock_host
+    for topic, entry in indexes.items():
+        host = host_of_topic.get(topic)
+        if host is None or not entry.header_stamps or not entry.log_times:
+            continue
+        stats = clocks.delivery.setdefault(host, clockmod.DeliveryStats(host))
+        for stamp, log in zip(entry.header_stamps, entry.log_times):
+            stats.add(log - stamp)
+
+    ntp_rows: Dict[str, list] = {}
+    topics = sorted(set(cfg.clock.ntp_topics.values()))
+    if topics:
+        for topic, stamp, msg in reader.iter_messages(topics):
+            ntp_rows.setdefault(topic, []).append((stamp, msg))
+
+    meta: Dict[str, dict] = {}
+    for host, topic in cfg.clock.ntp_topics.items():
+        track, info = clockmod.build_offset_track(
+            ntp_rows.get(topic, []), offset_field=cfg.clock.offset_field,
+            offset_unit=cfg.clock.offset_unit, source=topic)
+        if track is None:
+            report.warnings.append(
+                f"clock: {host} NTP topic {topic!r} unusable ({info.get('reason')}); "
+                f"fields present: {info.get('fields')}. Set clock.offset_field to "
+                f"name the right one, or the host falls back to the delivery-floor "
+                f"estimate.")
+            continue
+        clocks.ntp[host] = track
+        meta[host] = info
+        if info["unit_confidence"] in ("low", "all_zero", "none", "ambiguous"):
+            report.warnings.append(
+                f"clock: {host} NTP offset unit could not be inferred with "
+                f"confidence ({info['unit_confidence']}). Set clock.offset_unit "
+                f"explicitly — reading milliseconds as seconds inflates the "
+                f"correction a thousandfold.")
+
+    if cfg.clock.sign == "auto":
+        # When the unit was declared in the config, only the sign is open; leaving
+        # the scale free would let the estimator override an explicit instruction.
+        scales = (1.0,) if cfg.clock.offset_unit else (1.0, 1e-3, 1e3)
+        sign, scale, sign_detail = clockmod.choose_form(clocks, scales=scales)
+    else:
+        sign, scale = float(cfg.clock.sign), 1.0
+        sign_detail = {"verdict": "sign forced by config"}
+    if sign * scale != 1.0:
+        for track in clocks.ntp.values():
+            track.scale(sign * scale)
+    if scale != 1.0:
+        report.warnings.append(
+            f"clock: the NTP offset unit inferred from the message did not match the "
+            f"delivery floor; offsets were rescaled by {scale:g}. Set "
+            f"clock.offset_unit explicitly so this is a decision and not a rescue.")
+    if sign_detail.get("verdict", "").startswith("NEAR-TIE"):
+        report.warnings.append(
+            f"clock: the NTP offset sign is a near-tie ({sign_detail}); the two "
+            f"readings of the field disagree by less than the noise, so set "
+            f"clock.sign explicitly rather than trusting this.")
+
+    tolerance_ns = int(cfg.clock.cross_check_tolerance_ms * 1e6)
+    midpoint = _bag_midpoint(indexes)
+    report.clocks = clocks.summary(midpoint, tolerance_ns)
+    report.clocks["_meta"] = {"reference_host": reference, "sign": sign,
+                              "unit_rescale": scale, "sign_detail": sign_detail,
+                              "ntp_fields": meta}
+
+    for host, entry in report.clocks.items():
+        if host.startswith("_"):
+            continue
+        if entry["cross_check"] == "DISAGREE":
+            report.warnings.append(
+                f"clock: {host}'s NTP offset and its delivery floor disagree by "
+                f"{entry['cross_check_detail']['difference_ms']} ms. One of them is "
+                f"wrong; do not trust this dataset's cross-agent timing until it is "
+                f"resolved.")
+        elif entry["correction_source"] == "delivery_floor":
+            report.warnings.append(
+                f"clock: {host} publishes no NTP status, so its offset is estimated "
+                f"from delivery floors alone (residual "
+                f"{entry['residual_ms']:.1f} ms, carried into every frame). Adding an "
+                f"NTP monitor on that host removes the last unmeasured term.")
+        elif entry["correction_source"] == "UNKNOWN":
+            report.warnings.append(
+                f"clock: {host}'s offset could not be estimated at all — its stamps "
+                f"are used as recorded and any error appears as uniform latency on "
+                f"that agent.")
+    return clocks
+
+
+def _bag_midpoint(indexes) -> int:
+    stamps = [s for entry in indexes.values() for s in (entry.header_stamps[:1] +
+                                                        entry.header_stamps[-1:])]
+    return (min(stamps) + max(stamps)) // 2 if stamps else 0
+
+
 def plan(reader: BagReader, cfg: ConverterConfig,
          report: ConversionReport) -> Tuple[List[Frame], Dict[str, PoseTrack],
-                                            Dict[str, dict], FrameTable]:
+                                            Dict[str, dict], FrameTable,
+                                            Optional[clockmod.HostClocks]]:
     """Index, synchronise and pose-resolve: everything before the first write."""
     available = reader.topics()
     wanted = cfg.topics()
@@ -223,13 +363,27 @@ def plan(reader: BagReader, cfg: ConverterConfig,
                 f"log time was used for those")
 
     source = cfg.time.stamp_source
-    cloud_indices = {a.name: StampIndex(indexes[a.cloud.topic].stamps(source))
+    clocks = reconcile_clocks(reader, cfg, indexes, report)
+    if clocks is not None and source == "log":
+        report.warnings.append(
+            "time.stamp_source is 'log' while clock reconciliation is on. log_time is "
+            "the recorder's clock at receipt and includes network transit, so it is "
+            "already on one clock and the corrections are meaningless for it — but it "
+            "also carries the transit delay into your frame times. Use 'header'.")
+
+    def _corrected(topic: str, host: str) -> StampIndex:
+        raw = indexes[topic].stamps(source)
+        if clocks is None:
+            return StampIndex(raw)
+        return StampIndex([t + clocks.correction_ns(host, t)[0] for t in raw], raw)
+
+    cloud_indices = {a.name: _corrected(a.cloud.topic, a.clock_host)
                      for a in cfg.active_agents}
     camera_indices = {}
     for agent in cfg.active_agents:
         for slot, camera in enumerate(agent.cameras):
-            camera_indices[(agent.name, slot)] = \
-                StampIndex(indexes[camera.topic].stamps(source))
+            camera_indices[(agent.name, slot)] = _corrected(camera.topic,
+                                                            agent.clock_host)
 
     master_name = cfg.time.master_agent or ego_agent(cfg).name
     master = cfg.agent_by_name(master_name)
@@ -254,10 +408,37 @@ def plan(reader: BagReader, cfg: ConverterConfig,
     report.frames_candidate = len(times[::max(1, cfg.output.frame_stride)])
     report.dropped = dict(table.dropped)
     report.sync = reuse_statistics(table)
-    for name, index in cloud_indices.items():
-        report.sync.setdefault(name, {})["source_rate_hz"] = round(index.rate_hz(), 3)
+    residuals: Dict[str, float] = {}
+    for agent in cfg.active_agents:
+        index = cloud_indices[agent.name]
+        entry = report.sync.setdefault(agent.name, {})
+        entry["source_rate_hz"] = round(index.rate_hz(), 3)
+        # Half a publication period: the tightest this stream can ever be matched,
+        # whatever the tolerance says. Reported per agent so a tolerance that is
+        # structurally unreachable is visible before the frames vanish.
+        entry["half_period_ms"] = round(index.half_period_ns() / 1e6, 3)
+        if clocks is not None:
+            residual, residual_source = clocks.residual_ns(agent.clock_host)
+            residuals[agent.name] = residual / 1e6
+            entry["clock_residual_ms"] = round(residual / 1e6, 4)
+            entry["clock_source"] = clocks.correction_ns(agent.clock_host, times[0])[1]
+    report.tightness = tightness_curve(
+        table, [a.name for a in cfg.active_agents if a.required], residuals)
+    worst_floor = max(((cloud_indices[a.name].half_period_ns() / 1e6, a.name)
+                       for a in cfg.active_agents if a.required),
+                      default=(0.0, None))
+    report.tightness["structural_floor_ms"] = round(worst_floor[0], 3)
+    report.tightness["structural_floor_agent"] = worst_floor[1]
+    if cfg.time.match_tolerance_ms < worst_floor[0]:
+        report.warnings.append(
+            f"time.match_tolerance_ms={cfg.time.match_tolerance_ms} is below the "
+            f"structural floor of {worst_floor[0]:.1f} ms set by "
+            f"{worst_floor[1]!r} at {cloud_indices[worst_floor[1]].rate_hz():.1f} Hz. "
+            f"Half a publication period is the best nearest-neighbour matching can "
+            f"do, so this tolerance drops frames for a reason no processing can fix — "
+            f"raise it, or record that stream faster.")
 
-    tracks = load_pose_tracks(reader, cfg, report)
+    tracks = load_pose_tracks(reader, cfg, report, clocks)
 
     kept: List[Frame] = []
     frame_poses: Dict[str, dict] = {}
@@ -285,7 +466,7 @@ def plan(reader: BagReader, cfg: ConverterConfig,
             "topic that does not span the bag (see the drop reasons above).")
 
     report.pose_stats = _pose_statistics(cfg, frame_poses, kept)
-    return kept, tracks, frame_poses, table
+    return kept, tracks, frame_poses, table, clocks
 
 
 def _pose_statistics(cfg: ConverterConfig, frame_poses: Dict[str, dict],
@@ -334,7 +515,8 @@ def assign_scenarios(frames: List[Frame], cfg: ConverterConfig) -> List[Tuple[st
 
 
 def write_frame_yamls(cfg: ConverterConfig, scenarios, frame_poses: Dict[str, dict],
-                      report: ConversionReport) -> Dict[str, str]:
+                      report: ConversionReport,
+                      clocks: Optional[clockmod.HostClocks] = None) -> Dict[str, str]:
     """Write every agent's per-frame yaml; returns frame key -> scenario dir."""
     agent_objects = {
         a.name: {"object_id": a.obj.object_id, "extent": a.obj.extent,
@@ -383,11 +565,51 @@ def write_frame_yamls(cfg: ConverterConfig, scenarios, frame_poses: Dict[str, di
                                                                     frame.t_ns))
                 params["ros_frame_stamp_ns"] = int(frame.t_ns)
                 params["source_agent"] = agent.name
+                params["ros_sync"] = _sync_block(cfg, agent, frame, clocks)
 
                 write_frame_yaml(
                     os.path.join(scenario_dir, str(agent.cav_id), f"{key}.yaml"),
                     params)
     return frame_dirs
+
+
+def _sync_block(cfg: ConverterConfig, agent: AgentConfig, frame: Frame,
+                clocks: Optional[clockmod.HostClocks]) -> dict:
+    """How synchronous this agent's contribution to this frame actually is.
+
+    Written per frame, not just aggregated into the conversion report, because an
+    aggregate mean hides exactly the case that matters: a handful of frames where
+    one agent's message is far older than the rest. Downstream, this block is what
+    lets an experiment exclude or stratify by realised asynchrony instead of
+    assuming it away — and this study's own results (100 ms of latency costing more
+    than 90% packet loss) are the reason that distinction is not academic.
+
+    ``clock_residual_ms`` is the part that correcting the host clocks could not
+    remove; ``total_ms`` is the sum, i.e. the honest bound on how stale this
+    agent's data is relative to the frame time.
+    """
+    skew_ms = frame.skew_ns.get(agent.name, 0) / 1e6
+    residual_ms, residual_source = (0.0, "disabled")
+    correction_source = "disabled"
+    if clocks is not None:
+        residual, residual_source = clocks.residual_ns(agent.clock_host)
+        residual_ms = residual / 1e6
+        correction_source = clocks.correction_ns(agent.clock_host, frame.t_ns)[1]
+    block = {
+        "host": agent.clock_host,
+        "cloud_dt_ms": round(skew_ms, 4),
+        "clock_residual_ms": round(residual_ms, 4),
+        "clock_correction_source": correction_source,
+        "clock_residual_source": residual_source,
+        "total_ms": round(abs(skew_ms) + residual_ms, 4),
+        "pose_interpolation": agent.pose.interpolation,
+    }
+    cameras = {f"camera{slot}": round(frame.camera_skew_ns[(agent.name, slot)] / 1e6, 4)
+               for slot in range(len(agent.cameras))
+               if (agent.name, slot) in frame.camera_skew_ns}
+    if cameras:
+        block["camera_dt_ms"] = cameras
+    return block
 
 
 def _camera_block(camera, world_from_base: np.ndarray, agent: AgentConfig,
@@ -411,6 +633,7 @@ def _camera_block(camera, world_from_base: np.ndarray, agent: AgentConfig,
 def write_clouds(reader: BagReader, cfg: ConverterConfig, frames: List[Frame],
                  frame_dirs: Dict[str, str], camera_infos: Dict[str, object],
                  report: ConversionReport,
+                 tracks: Optional[Dict[str, PoseTrack]] = None,
                  progress: Optional[Callable[[int, int], None]] = None) -> None:
     """The streaming write pass: decode only the selected messages."""
     # topic -> {stamp: [(agent, frame)]}, so one message can serve several frames
@@ -436,7 +659,8 @@ def write_clouds(reader: BagReader, cfg: ConverterConfig, frames: List[Frame],
             target_dir = os.path.join(frame_dirs[frame.key], str(agent.cav_id))
             key = getattr(frame, "local_key", frame.key)
             if slot < 0:
-                cloud = _build_cloud(agent, msg, camera_infos)
+                cloud = _build_cloud(agent, msg, camera_infos, tracks, frame, stamp,
+                                     report)
                 count = write_pcd(os.path.join(target_dir, f"{key}.pcd"), cloud)
                 totals[agent.name].append(count)
             else:
@@ -462,11 +686,19 @@ def write_clouds(reader: BagReader, cfg: ConverterConfig, frames: List[Frame],
                 f"cloud.range_filter and, for depth clouds, min/max_depth")
 
 
-def _build_cloud(agent: AgentConfig, msg, camera_infos: Dict[str, object]) -> np.ndarray:
+def _build_cloud(agent: AgentConfig, msg, camera_infos: Dict[str, object],
+                 tracks: Optional[Dict[str, PoseTrack]] = None,
+                 frame: Optional[Frame] = None, stamp_ns: Optional[int] = None,
+                 report: Optional[ConversionReport] = None) -> np.ndarray:
     """Message -> (N, 4) cloud in the agent's *sensor* frame, ready to write."""
     cloud_cfg = agent.cloud
     if cloud_cfg.kind == "pointcloud2":
-        cloud = cloud_from_pointcloud2(msg, cloud_cfg.intensity)
+        if cloud_cfg.deskew and tracks is not None and frame is not None:
+            cloud, offsets = cloud_from_pointcloud2(msg, cloud_cfg.intensity,
+                                                    cloud_cfg.point_time_field)
+            cloud = _deskew(agent, cloud, offsets, stamp_ns, frame, tracks, report)
+        else:
+            cloud = cloud_from_pointcloud2(msg, cloud_cfg.intensity)
     else:
         info = camera_infos.get(cloud_cfg.camera_info_topic)
         if info is None:
@@ -478,6 +710,48 @@ def _build_cloud(agent: AgentConfig, msg, camera_infos: Dict[str, object]) -> np
     cloud = apply_range_filter(cloud, cloud_cfg.range_filter)
     cloud = subsample(cloud, cloud_cfg.max_points)
     return _apply_ground_lift(cloud, cloud_cfg.ground_lift)
+
+
+def _deskew(agent: AgentConfig, cloud: np.ndarray, offsets, stamp_ns: Optional[int],
+            frame: Frame, tracks: Dict[str, PoseTrack],
+            report: Optional[ConversionReport]) -> np.ndarray:
+    """Motion-compensate one sweep to its frame's reference time.
+
+    The target time is the frame time, not the message stamp, so the correction
+    absorbs the agent's selection skew as well as the sweep's own duration: after
+    it, the cloud is what this sensor would have seen had it observed the whole
+    scene instantaneously at ``frame.t_ns``. The pose track is the agent's raw
+    odometry, so the operator-supplied ``align`` never enters and a wrong alignment
+    cannot corrupt the result.
+
+    A cloud whose pose track cannot cover the sweep is left alone and counted;
+    ``deskew.skipped`` in the conversion report says how often that happened, which
+    is the signal that a SLAM dropout overlaps the recording.
+    """
+    track = tracks.get(agent.pose.topic) if agent.pose.topic else None
+    stats = None if report is None else report.deskew.setdefault(
+        agent.name, {"applied": 0, "skipped": 0, "reasons": {}})
+    if track is None or agent.pose.source == "static":
+        if stats is not None:
+            stats["skipped"] += 1
+            stats["reasons"]["no pose track (static agent?)"] = \
+                stats["reasons"].get("no pose track (static agent?)", 0) + 1
+        return cloud
+    sensor_from_base = agent.pose.child_to_base @ agent.cloud.extrinsic
+    out, info = deskew_cloud(
+        cloud, offsets, int(stamp_ns if stamp_ns is not None else frame.t_ns),
+        int(frame.t_ns), track, sensor_from_base,
+        max_gap_ns=int(agent.pose.max_gap_ms * 1e6),
+        buckets=agent.cloud.deskew_buckets)
+    if stats is not None:
+        if info["applied"]:
+            stats["applied"] += 1
+            stats["sweep_span_ms"] = info["sweep_span_ms"]
+        else:
+            stats["skipped"] += 1
+            reason = info.get("reason", "unknown")
+            stats["reasons"][reason] = stats["reasons"].get(reason, 0) + 1
+    return out
 
 
 def load_camera_infos(reader: BagReader, cfg: ConverterConfig) -> Dict[str, object]:
@@ -504,7 +778,7 @@ def convert(cfg: ConverterConfig, overwrite: bool = False,
                               output=os.path.join(cfg.output.root, cfg.output.split))
 
     reader = BagReader(cfg.bag, cfg.time.stamp_source)
-    frames, tracks, frame_poses, table = plan(reader, cfg, report)
+    frames, tracks, frame_poses, table, clocks = plan(reader, cfg, report)
 
     scenarios = assign_scenarios(frames, cfg)
     report.scenarios = [name for name, _ in scenarios]
@@ -528,8 +802,8 @@ def convert(cfg: ConverterConfig, overwrite: bool = False,
                 fx, fy, cx, cy = camera_intrinsics(camera_infos[camera.camera_info_topic])
                 camera.intrinsic = [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]
 
-    frame_dirs = write_frame_yamls(cfg, scenarios, frame_poses, report)
-    write_clouds(reader, cfg, frames, frame_dirs, camera_infos, report, progress)
+    frame_dirs = write_frame_yamls(cfg, scenarios, frame_poses, report, clocks)
+    write_clouds(reader, cfg, frames, frame_dirs, camera_infos, report, tracks, progress)
 
     report.frames_written = len(frames)
     report.duration_s = time.time() - started

@@ -338,7 +338,8 @@ as the thing OPV2V geometry cannot supply.
   will read it).
 - **Done when:** the self-tests pass and a real bag converts into a tree that
   `validate_opv2v.py` accepts.
-- **Result (code):** `scripts/test_ros2opv2v.py` **29/29** in the dev container,
+- **Result (code):** `scripts/test_ros2opv2v.py` **29/29** at the time of 8.1 (50/50
+  after 8.1b) in the dev container,
   including an end-to-end conversion of a synthetic three-agent MCAP with
   hand-computed geometry (a collaborator 6 m ahead must land at x=+4.0 in the
   ego's lidar frame after a 2 m ego displacement, and does, to 1e-6). PCD round
@@ -348,6 +349,71 @@ as the thing OPV2V geometry cannot supply.
   error 1e-9) and at gimbal lock. Config for the MIRC bag prefilled from its
   metadata: `configs/mirc_coop2.yaml`. **Awaiting the operator-supplied geometry**
   (see 8.2) before it can run on the real recording.
+
+### Step 8.1b — Per-frame synchronisation  `✅ DONE (code)`
+- 8.1 answered "does every agent have *a* message near this frame time". This
+  step answers *how near*, and near to *what clock* — the question that decides
+  whether a converted dataset can be used to study timing at all. It matters more
+  here than usual: `results/ANALYSIS.md` finds 100 ms of collaborator latency more
+  damaging than 90% packet loss, and finds constant delay to be the shape a motion
+  model absorbs quietly. Un-modelled asynchrony in the dataset is therefore a
+  latency impairment sitting inside the baseline of a latency study.
+- **Three hosts, three clocks** (`ros2opv2v/clock.py`, `clock:` config block).
+  Each host's offset is estimated three ways and all three reported: the NTP
+  monitor topics, the delivery floor (`min(log_time − header.stamp)` is transit +
+  offset, so differencing two hosts cancels the recorder's clock), and the
+  cross-check between them — a `DISAGREE` beyond 20 ms is surfaced, never
+  averaged. The offset field's **sign** (`ntpq` and `chrony` disagree about its
+  direction; the wrong one doubles the error) and its **unit** (seconds vs
+  milliseconds, ambiguous at exactly the tens-of-ms scale a wifi fleet shows) are
+  both decided by asking which combination makes the corrected transit floors
+  agree across hosts. A rescale that contradicts the parsed unit is only taken
+  when it wins decisively; an explicit `clock.offset_unit` is never overridden.
+- **Found while writing the config: `mobile_1` publishes no NTP status topic**,
+  though `infra_1` and `mobile_2` both do. One of the bag's three clocks is
+  unmeasured. It is made the reference host (it owns the anchor LiDAR), which
+  makes its correction zero *by definition rather than by measurement* — any error
+  it carries appears as an equal and opposite error on both collaborators. Stated
+  in every conversion report and in `configs/mirc_coop2.yaml`;
+  `clock.require_measured` refuses to convert in that state for anyone who wants
+  the stricter contract. **One topic on the next recording removes the last
+  unquantified term in the budget.**
+- **The residual is in the data.** Every agent's frame yaml gains a `ros_sync`
+  block: signed skew from the frame time, the clock residual correction could not
+  remove, and their sum. An aggregate mean would hide the case that matters — a
+  handful of frames where one agent is far staler than the rest — and this study
+  needs to stratify on realised asynchrony rather than assume it away.
+- **The structural floor is reported, not discovered by frames vanishing.**
+  Nearest-neighbour matching cannot beat half a publication period, which for this
+  bag is **±47 ms**, set by `infra_1`'s 10.64 Hz camera. The conversion report
+  carries a tightness curve (frames retained at each budget from 5 to 100 ms) so
+  the tolerance is chosen from data, and a `match_tolerance_ms` below the floor is
+  warned about. `scripts/inspect_bag.py` prints the per-namespace delivery floor
+  before conversion, so a host tens of milliseconds adrift is visible in stage A.
+- **Sweep deskew** (`cloud.deskew` + `point_time_field`) removes 8.1's stated "no
+  motion compensation" limitation. A 10 Hz spinning sweep observes over ~103 ms —
+  the same order as the whole inter-agent budget — and its smear is
+  azimuth-dependent, so it does not average out. Points are moved to the *frame*
+  instant (absorbing selection skew as well as sweep duration) using the agent's
+  own odometry, so `align` cancels and a wrong alignment cannot corrupt it. A
+  sweep the pose track cannot cover is left untouched and counted, never
+  half-corrected.
+- **Done when:** the self-tests pass and the real bag's audit is recorded here.
+- **Result (code):** `scripts/test_ros2opv2v.py` **50/50** (was 29/29), including
+  end-to-end conversions of a synthetic three-host MCAP with injected ground
+  truth: agent 2's clock set 50 ms slow and transit set asymmetrically (2 ms vs
+  8 ms) is recovered as +50.0 ms by NTP and +56.0 ms by the delivery floor — the
+  6 ms gap being exactly the transit asymmetry the estimator cannot separate, and
+  inside the cross-check tolerance. The same bag converted with reconciliation
+  **off** yields frames whose yaml reports the −35 ms staleness rather than
+  looking clean. Deskew verified against hand-computed motion (5 m/s over a 90 ms
+  sweep: 0.45 m across the sweep, asserted against the half-bucket bound of
+  3.5 mm rather than a round tolerance) and shown to be invariant to `align`.
+- **Awaiting:** the same operator-supplied geometry as 8.2, plus one read of the
+  Ouster `timestamp_mode` and the RealSense `global_time_enabled` — if either
+  sensor is stamping on its own hardware clock rather than the host's, every
+  estimate above is measuring the wrong thing, and neither is checkable from
+  inside the bag.
 
 ### Step 8.2 — Shared world frame  `⬜ TODO — input needed`
 - mobile_1 (ZED odom), mobile_2 (Isaac VSLAM odom) and infra_1 (static, no pose
@@ -383,6 +449,7 @@ as the thing OPV2V geometry cannot supply.
 
 | Date | Step | Notes |
 |------|------|-------|
+| 2026-09-04 | 8.1b | **Per-frame synchronisation added to the converter.** 8.1 matched agents to frame times; this makes the *quality* of that match a first-class output rather than an assumption. `ros2opv2v/clock.py` reconciles the three hosts' clocks (NTP monitor topics, the delivery floor from `log_time - header.stamp`, and the cross-check between them), resolving the offset field's sign and unit from the data — both are unreadable from a custom `NtpStatus` schema, and the wrong sign doubles the error rather than removing it. **Found while writing the config: `mobile_1` publishes no NTP status topic** while `infra_1` and `mobile_2` do, so one of three clocks is unmeasured; it is made the reference host and the consequence (its error appears as an equal and opposite error on both collaborators) is stated in every report instead of absorbed. Every frame yaml now carries a `ros_sync` block with its signed skew and clock residual, and the conversion report carries a tightness curve plus the **structural floor of +-47 ms** set by `infra_1`'s 10.64 Hz camera — half a publication period is unbeatable, so a tolerance below it is now warned about rather than discovered when frames vanish. `inspect_bag.py` surfaces the per-namespace delivery floor in stage A. Sweep deskew (`cloud.deskew` + `point_time_field`) removes 8.1's stated no-motion-compensation limitation: a 10 Hz sweep spans ~103 ms, the same order as the whole inter-agent budget, and its smear is azimuth-dependent. Why this rigour and not more: `results/ANALYSIS.md` already showed 100 ms of latency to beat 90% packet loss, so an unmeasured 30 ms clock offset is a latency impairment hiding in the baseline of a latency study. Tests 29/29 -> **50/50**, including a synthetic three-host MCAP whose injected -50 ms clock error is recovered as +50.0 ms (NTP) and +56.0 ms (delivery floor, the 6 ms gap being the injected transit asymmetry), and the same bag converted uncorrected reporting the -35 ms staleness in its frame yamls. |
 | 2026-09-01 | 8.1 | **Bag -> OPV2V converter built** (`ros2opv2v/`, `docs/ROS2OPV2V.md`). Reads rosbag2 MCAP/`.db3` with no ROS install and **lazily**: the indexing pass pulls header stamps straight out of the CDR payload (`std_msgs/Header` sits at a fixed offset), so 350k messages are indexed without deserialising a single point cloud, and only the messages the frame table selects are ever decoded. Three conventions pinned by reading OpenCOOD at commit `31ba160` rather than by assumption: (1) **poses** — `x_to_world` is CARLA-handed, so instead of mirroring ROS data we solve for the `(roll, yaw, pitch)` that makes `x_to_world` reproduce our right-handed matrix exactly (surjective onto SO(3); verified to 1e-9 over 2000 rotations + gimbal lock). The emitted angles are therefore NOT comparable to OPV2V's yaml values, only the matrices they generate are. (2) **intensity** — OpenCOOD reads it from `pcd.colors[:, 0]`, so PCDs are written `FIELDS x y z rgb` with `r=g=b=round(i*255)`; round trip through the real `open3d` call verified (xyz exact, intensity ≤1/255). (3) **frames are complete or dropped** — `basedataset.py` indexes every agent with the *ego's* timestamp keys, so a partially-populated frame is a KeyError at training time, not a skipped sample. Heterogeneous agents supported because only one robot has a LiDAR: PointCloud2 passthrough, depth-image reprojection (optical→FLU), radar clouds with an intensity fallback. `ground_lift` shifts points down and the pose up by the same amount (world geometry provably unchanged) as the OPV2V height-prior mitigation. Config refuses null geometry rather than defaulting to identity — a wrong `align` produces a dataset that trains and is meaningless. 29/29 self-tests incl. an end-to-end conversion of a synthetic three-agent MCAP with hand-computed geometry. |
 | 2026-08-21 | 7.2 | **Arm A built: InCoP indoor benchmark under impairment, no training.** `commchannel/incop_channel.py` + `configs/matrix_incop.yaml`. **Correction:** `CommChannel` does NOT attach to InCoP — the hook (`retrieve_base_data`) is shared but `channel.py`'s body calls `reform_param` and `calc_dist_to_ego`, neither of which exists in the HEAL lineage. `IncopChannel` instead calls the stock loader twice and splices (`past = orig(idx-delay)` for sensing, `cur = orig(idx)` for `params['vehicles']` GT), so HEAL's json/hdf5 loading and InCoP's camera-extrinsic normalisation stay inside the dataset's own code path. Pose noise perturbs `lidar_pose` only (HEAL derives the clean transform from `lidar_pose_clean`); no COM_RANGE clamp needed. **Verified InCoP is 10 Hz** (`OS0_REV7_128ch10hz512res`, `rotation_rate_hz=10.0`), same as OPV2V, so latency/stale/loss/bandwidth levels transfer with identical physical meaning — only pose (rescaled 4x by object size, independently landing on InCoP's own `pos_std: 0.2`) and ghost geometry changed. Blockage deliberately not ported. Pre-registered prediction: the 100 ms floor-crossing should move ~an order of magnitude indoors; if it does not, latency damage is not displacement. |
 | 2026-08-21 | 7.1 | **InCoP port scaffolded (Arm B)** (`incop_port/`): run CGRF (`ours`) and Where2comm from [`jorichee14/incop_analysis`](https://github.com/jorichee14/incop_analysis) through the same impairment matrix, on OPV2V, LiDAR-only first. Port is smaller than expected — InCoP is HEAL→OpenCOOD lineage, `_find_encoder_class_isaac` falls back to the generic encoder lookup, `build_dataset` already accepts `dataset: opv2v`, modality assignment is optional, and `_run_fusion` passes an agent-stacked `(L,C,H,W)` tensor, so **no model code changes**: configs + one loss file. `commchannel/feature_hooks.py` gains a `HeterModelBevfusionHighresIsaac` entry covering all five of its fusion methods. **Blocked on the OPV2V train + validate splits** (only `test` on disk) — no OPV2V checkpoints exist for these methods, so training is unavoidable and the evaluate-pretrained-only rule (working rule 3) does not extend to this sub-project. Cross-codebase absolute AP is not comparable; mitigation is NPD + floor-crossing plus **CoBEVT as a calibration bridge** (it exists in both codebases — train it first). |

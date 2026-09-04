@@ -21,7 +21,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from .geometry import OPTICAL_TO_FLU, transform_points
+from .geometry import OPTICAL_TO_FLU, invert, transform_points
 
 # sensor_msgs/PointField datatype enum -> numpy dtype
 _PF_DTYPE = {
@@ -90,14 +90,21 @@ def pointcloud2_to_array(msg) -> np.ndarray:
     return np.frombuffer(buf, dtype=dtype, count=usable)
 
 
-def cloud_from_pointcloud2(msg, intensity_cfg) -> np.ndarray:
+def cloud_from_pointcloud2(msg, intensity_cfg, time_field: Optional[str] = None):
     """``sensor_msgs/PointCloud2`` -> (N, 4) ``[x, y, z, intensity]`` float32.
 
     Non-finite points (``is_dense == False`` clouds are full of them) are dropped.
+
+    With ``time_field`` set, returns ``(cloud, offsets_ns)`` instead: the per-point
+    acquisition offsets from the message stamp, filtered by the *same* mask as the
+    points. Recomputing that mask separately is how a deskew ends up applying the
+    wrong correction to the wrong points, so the two are produced together or not
+    at all. ``offsets_ns`` is ``None`` when the cloud carries no such field.
     """
     structured = pointcloud2_to_array(msg)
     if structured.size == 0:
-        return np.zeros((0, 4), dtype=np.float32)
+        empty = np.zeros((0, 4), dtype=np.float32)
+        return (empty, None) if time_field else empty
 
     names = structured.dtype.names
     for axis in ("x", "y", "z"):
@@ -111,12 +118,18 @@ def cloud_from_pointcloud2(msg, intensity_cfg) -> np.ndarray:
     intensity = extract_intensity(structured, intensity_cfg, xyz.shape[0])
 
     finite = np.isfinite(xyz).all(axis=1) & np.isfinite(intensity)
+    times = None
+    if time_field and time_field in names:
+        times = np.asarray(structured[time_field]).astype(np.float64)
+        finite &= np.isfinite(times)
     xyz, intensity = xyz[finite], intensity[finite]
+    if times is not None:
+        times = times[finite]
 
     out = np.empty((xyz.shape[0], 4), dtype=np.float32)
     out[:, :3] = xyz
     out[:, 3] = np.clip(intensity, 0.0, 1.0)
-    return out
+    return (out, times) if time_field else out
 
 
 def extract_intensity(structured: np.ndarray, cfg, n_points: int) -> np.ndarray:
@@ -251,3 +264,72 @@ def subsample(cloud: np.ndarray, max_points: int) -> np.ndarray:
         return cloud
     idx = np.linspace(0, cloud.shape[0] - 1, num=max_points).astype(np.int64)
     return cloud[idx]
+
+
+def deskew_cloud(cloud: np.ndarray, offsets_ns, stamp_ns: int, t_ref_ns: int,
+                 track, sensor_from_base: np.ndarray, max_gap_ns: int,
+                 buckets: int = 64):
+    """Move every point to where it would have been observed at ``t_ref_ns``.
+
+    ``docs/ROS2OPV2V.md`` used to list "no motion compensation" as a known
+    limitation, on the grounds that OPV2V does not need it. OPV2V does not need it
+    because its sweeps are simulated as instantaneous; a real 10 Hz spinning LiDAR
+    observes over a ~100 ms window, which is the same order as the whole
+    inter-agent synchronisation budget. Leaving it uncorrected means the ego's own
+    cloud is smeared by its own motion, and the smear is *azimuth-dependent*, so it
+    does not even look like noise.
+
+    Only relative motion matters here, so the operator-supplied ``align`` transform
+    cancels out and a wrong alignment cannot corrupt the deskew::
+
+        p_ref = inv(odom_T_sensor(t_ref)) @ odom_T_sensor(t) @ p
+
+    with ``odom_T_sensor(t) = track(t) @ sensor_from_base``.
+
+    Points are bucketed by time and one rigid transform is applied per bucket: over
+    a 100 ms sweep split 64 ways the bucketing residual is under 2 ms of ego motion
+    (sub-millimetre at robot speeds), while a pose lookup per point would cost one
+    per ~130,000 points.
+
+    Returns ``(cloud, info)``. When the pose track cannot cover the sweep the cloud
+    is returned **untouched** and ``info['applied']`` is False — a partially
+    corrected cloud is worse than an uncorrected one, because it is no longer
+    internally consistent.
+    """
+    if offsets_ns is None or cloud.shape[0] == 0:
+        return cloud, {"applied": False, "reason": "no per-point time field"}
+
+    times_ns = np.asarray(offsets_ns, dtype=np.float64) + float(stamp_ns)
+    lo, hi = float(times_ns.min()), float(times_ns.max())
+    span_ns = hi - lo
+    if span_ns <= 0:
+        # An instantaneous cloud still needs moving from its own stamp to the
+        # frame time; only the per-point spread is absent. One bucket does that.
+        buckets = 1
+
+    reference = track.lookup(int(t_ref_ns), mode="linear", max_gap_ns=max_gap_ns)
+    if reference is None:
+        return cloud, {"applied": False, "reason": "no pose at the frame time"}
+    odom_from_sensor_ref = reference[0] @ sensor_from_base
+    ref_inverse = invert(odom_from_sensor_ref)
+
+    edges = (np.linspace(lo, hi, buckets + 1) if span_ns > 0
+             else np.array([lo, lo + 1.0]))
+    index = np.clip(np.searchsorted(edges, times_ns, side="right") - 1, 0, buckets - 1)
+    out = cloud.copy()
+    used = 0
+    for b in range(buckets):
+        mask = index == b
+        if not np.any(mask):
+            continue
+        found = track.lookup(int(0.5 * (edges[b] + edges[b + 1])), mode="linear",
+                             max_gap_ns=max_gap_ns)
+        if found is None:
+            return cloud, {"applied": False, "reason": "pose gap inside the sweep"}
+        relative = ref_inverse @ (found[0] @ sensor_from_base)
+        out[mask, :3] = transform_points(cloud[mask, :3].astype(np.float64),
+                                         relative).astype(np.float32)
+        used += 1
+    return out, {"applied": True, "buckets": used,
+                 "sweep_span_ms": round(span_ns / 1e6, 3),
+                 "bucket_ms": round(span_ns / 1e6 / buckets, 4)}

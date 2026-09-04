@@ -9,7 +9,7 @@ python scripts/inspect_bag.py     --bag <bag> --emit-config configs/mine.yaml
 python scripts/convert_rosbag.py  --config configs/mine.yaml --dry-run
 python scripts/convert_rosbag.py  --config configs/mine.yaml
 python scripts/validate_opv2v.py  --root <out>/test --with-open3d
-python scripts/test_ros2opv2v.py                       # 29 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                       # 50 self-tests, no bag needed
 ```
 
 Dependencies: `numpy`, `pyyaml`, and `mcap` + `mcap-ros2-support` for `.mcap`
@@ -42,9 +42,24 @@ Each frame yaml carries what stock OpenCOOD actually reads —
 | `true_ego_pos`, `predicted_ego_pos`, `plan_trajectory` | present for format compatibility; stock OpenCOOD does not read them |
 | `camera0..3` | `cords` / `extrinsic` / `intrinsic`, written only when cameras are configured |
 
-— plus three provenance keys this converter adds (`ros_stamp_ns`,
-`ros_frame_stamp_ns`, `source_agent`). Extra keys are harmless: OpenCOOD loads
-the yaml into a dict and reads what it needs.
+— plus four provenance keys this converter adds (`ros_stamp_ns`,
+`ros_frame_stamp_ns`, `source_agent`, `ros_sync`). Extra keys are harmless:
+OpenCOOD loads the yaml into a dict and reads what it needs.
+
+`ros_sync` is how synchronous this agent's contribution to this frame actually
+is — see [Synchronisation](#synchronisation):
+
+```yaml
+ros_sync:
+  host: mobile_2
+  cloud_dt_ms: 15.2              # signed distance from the frame's reference time
+  clock_residual_ms: 0.2         # what correcting the host clocks could not remove
+  clock_correction_source: ntp   # ntp | delivery_floor | reference | UNKNOWN | disabled
+  clock_residual_source: ntp_spread
+  total_ms: 15.4                 # the honest bound on how stale this agent's data is
+  pose_interpolation: linear
+  camera_dt_ms: {camera0: -8.1}
+```
 
 ---
 
@@ -112,10 +127,15 @@ everything else is dropped, and the drop reasons are reported. Set
 agent's folder will have fewer files than the ego's, so keep it `false` only
 for an agent you have also disabled from the timestamp reference.
 
-Tolerance is the main knob. Compute it from your *slowest* topic: a source at
-`f` Hz can be up to `1/(2f)` off any grid. Below that, frames vanish in bulk;
-far above it, agents contribute stale data. The report's `reuse_rate` column
-shows when an agent is repeating messages because it is slower than the grid.
+Tolerance is the main knob, and it is bounded from below: a source at `f` Hz can
+be up to `1/(2f)` off any grid, so a tolerance under that drops frames for a
+reason no processing can fix. Rather than computing it by hand, read it off the
+conversion report's **tightness curve** (`report.tightness`), which lists frames
+retained at each budget from 5 ms to 100 ms alongside `structural_floor_ms` and
+the agent that sets it. Far above the floor, agents contribute stale data; the
+`reuse_rate` column shows when one is repeating messages because it is slower
+than the grid. See [Synchronisation](#synchronisation) for what the frames that
+survive actually cost.
 
 ### Ground lift
 
@@ -132,6 +152,113 @@ LiDAR presents a floor at `z ≈ -0.5` and a ceiling inside the range. Lifting b
 domain-shift mitigation, not a correction — report it when you report results.
 
 ---
+
+## Synchronisation
+
+The frame table above answers "does every agent have *a* message near this
+time". This section is about the harder question — *how near*, and near to
+*what clock* — because the answer decides whether a converted dataset can be
+used to study timing at all.
+
+Three properties of a multi-robot recording make the naive answer wrong, and
+this repository's own results are why they matter: `results/ANALYSIS.md` finds
+100 ms of collaborator latency more damaging to fusion than 90% packet loss, and
+finds that a *constant* delay is the shape a motion model absorbs quietly rather
+than flagging. Any un-modelled asynchrony in the dataset is therefore a latency
+impairment sitting inside the baseline of a latency study.
+
+### 1. Three hosts means three clocks
+
+Each machine stamps with its own. An offset between two of them is invisible in
+the data — the frames still match inside tolerance, the geometry still looks
+right — while acting on one agent's every message as a uniform delay.
+
+Set `clock.enabled: true` and the converter estimates each host's offset three
+ways rather than assuming it away (`ros2opv2v/clock.py`):
+
+1. **NTP monitor topics** (`clock.ntp_topics`, host → topic). Direct, but
+   self-reported and only present for the hosts that run the monitor.
+2. **The delivery floor.** rosbag2 records both `header.stamp` (sender clock) and
+   `log_time` (recorder clock at receipt), and their difference is transit plus
+   offset. Transit is non-negative, so `min(log − stamp)` approaches the link's
+   true floor and differencing two hosts cancels the recorder's clock entirely.
+   This is the **only** estimate available for a host with no NTP topic.
+3. **The disagreement between the two.** Beyond
+   `clock.cross_check_tolerance_ms` the conversion reports `DISAGREE` — one of
+   the two is wrong, and neither number should be believed until you know which.
+
+Two things about a custom `NtpStatus` message cannot be read off its field name,
+and both are decided from the data rather than guessed:
+
+* **Sign.** `ntpq` and `chrony` disagree about whether "offset" means
+  reference-minus-local or local-minus-reference. The wrong sign *doubles* the
+  error instead of removing it — strictly worse than not correcting at all.
+* **Unit.** Seconds or milliseconds, a factor of 1000 apart. The magnitude
+  usually settles it, but at the tens-of-milliseconds scale a wifi-connected
+  fleet actually shows, it genuinely does not.
+
+Both are resolved by asking which combination makes the corrected *transit*
+floors agree across hosts, since transit floors on one network are similar and
+clock offsets are not. A rescale that contradicts the parsed unit is only
+accepted when it wins decisively; otherwise the parse stands and the
+cross-check is left to flag the disagreement. Pin them with `clock.sign` and
+`clock.offset_unit` once you have read the schema — an explicit unit is treated
+as an instruction and is never overridden.
+
+**The reference host's correction is zero by definition, not by measurement.**
+Nothing in a bag observes its own clock error; whatever it has appears as an
+equal and opposite error on every other agent. If it also publishes no NTP
+status — as `mobile_1` does not, in the MIRC coop2 bag — the timeline is
+internally consistent and externally unanchored. That is fine for relative
+inter-agent work and not fine for comparing against anything recorded elsewhere.
+`clock.require_measured: true` refuses to convert in that state.
+
+Run `scripts/inspect_bag.py` first: it prints a per-namespace delivery floor, and
+namespaces whose floors sit tens of milliseconds apart are either on a much worse
+link or on a wrong clock. Either way, turn `clock:` on before trusting the
+output.
+
+### 2. Rate asymmetry sets a floor no tolerance can beat
+
+Nearest-neighbour matching cannot do better than **half a publication period**.
+In the MIRC coop2 bag the infrastructure camera runs at 10.6 Hz, so no frame
+requiring it can be tighter than ±47 ms, while `mobile_2`'s 27.5 Hz camera sits
+at ±18 ms. That is a property of the recording, not of the matching.
+
+The conversion report therefore carries a **tightness curve** — frames retained
+at each budget from 5 ms to 100 ms — plus `structural_floor_ms` and the agent
+that sets it. Pick the operating point off the curve; a
+`match_tolerance_ms` below the floor is warned about, because it drops frames
+for a reason no amount of processing can fix.
+
+Per-agent, `report.sync[agent]` carries `half_period_ms` (the floor),
+`clock_residual_ms` (what correction could not remove) and `reuse_rate` (how
+often that agent repeats a message because it is slower than the grid).
+
+### 3. A sweep is not an instant
+
+A 10 Hz spinning LiDAR observes over ~100 ms — the same order as the entire
+inter-agent budget — and the resulting smear is azimuth-dependent, so it does not
+average out. Set `cloud.point_time_field` (the Ouster's `t`, nanoseconds from the
+header stamp) and `cloud.deskew: true`, and every point is moved to where it
+would have been observed at the frame's reference instant.
+
+Deskewing targets the *frame time*, not the message stamp, so the correction
+absorbs the agent's selection skew as well as the sweep's own duration. Only
+relative motion matters, so the operator-supplied `align` transform cancels out
+and a wrong alignment cannot corrupt the result. Points are bucketed in time
+(`cloud.deskew_buckets`, default 64) and one rigid transform is applied per
+bucket; the residual is half a bucket of travel, ~3.5 mm at 5 m/s over a 90 ms
+sweep. A cloud whose pose track cannot cover the sweep is left **untouched** and
+counted in `report.deskew` — a partially corrected cloud is worse than an
+uncorrected one, because it is no longer internally consistent.
+
+### What this does not fix
+
+The residual is *reported*, not eliminated. A frame labelled with a 47 ms camera
+skew still has a 47 ms camera skew; what it no longer has is the ability to look
+clean. Use `ros_sync.total_ms` downstream to stratify or exclude, and quote the
+tightness curve alongside any timing result computed on converted data.
 
 ## Ground truth
 
@@ -181,12 +308,14 @@ To point OpenCOOD at the result, set `validate_dir` in the checkpoint's
 
 ## Known limitations
 
+* **Cameras are matched, never interpolated.** An image is a single exposure, so
+  its skew is bounded below by half its publication period and nothing removes it.
+  Only poses (and, through them, point clouds) can be brought to the frame time
+  exactly.
 * **Only the frame table is resumable-free** — a re-run redoes everything.
   Conversions are minutes, not hours, so there is no checkpointing.
 * **Depth clouds are not de-distorted.** The reprojection uses `k` (or `p`) from
   `CameraInfo` and assumes a rectified image, which `image_rect_raw` is.
-* **No motion compensation.** A LiDAR sweep is stamped once and treated as
-  instantaneous, exactly as OPV2V does. At walking speed the error is centimetres.
 * **Camera blocks are best-effort.** Stock OpenCOOD's LiDAR pipeline never reads
   them; they are written for camera-capable forks and for debugging.
 * **One RSU per dataset.** OpenCOOD relocates only the *first* negative id to the

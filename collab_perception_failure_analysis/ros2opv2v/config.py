@@ -97,6 +97,15 @@ class CloudConfig:
     max_points: int = 0            # 0 = keep all; else random-free uniform subsample
     ground_lift: float = 0.0       # see docs/ROS2OPV2V.md ("ground lift")
     min_points: int = 1            # frames below this are treated as missing
+    point_time_field: Optional[str] = None
+    """Per-point acquisition offset from the message stamp, e.g. the Ouster's ``t``
+    (nanoseconds). Present on most spinning LiDARs and on nothing else."""
+    deskew: bool = False
+    """Move every point to the frame's reference instant using the agent's own pose
+    track. Needs ``point_time_field``. A 10 Hz sweep observes over ~100 ms — the
+    same order as the whole inter-agent budget — and the resulting smear is
+    azimuth-dependent, so it does not average out."""
+    deskew_buckets: int = 64
 
     @staticmethod
     def parse(mapping: dict, ctx: str) -> "CloudConfig":
@@ -117,13 +126,27 @@ class CloudConfig:
             range_filter=mapping.get("range_filter"),
             max_points=int(mapping.get("max_points", 0)),
             ground_lift=float(mapping.get("ground_lift", 0.0)),
-            min_points=int(mapping.get("min_points", 1)))
+            min_points=int(mapping.get("min_points", 1)),
+            point_time_field=mapping.get("point_time_field"),
+            deskew=bool(mapping.get("deskew", False)),
+            deskew_buckets=int(mapping.get("deskew_buckets", 64)))
         if cfg.kind == "depth_image" and not cfg.camera_info_topic:
             raise ConfigError(f"{ctx}: depth_image clouds need a camera_info_topic")
         if cfg.range_filter is not None and len(cfg.range_filter) != 6:
             raise ConfigError(f"{ctx}.range_filter must be [xmin, ymin, zmin, xmax, ymax, zmax]")
         if cfg.pixel_stride < 1:
             raise ConfigError(f"{ctx}.pixel_stride must be >= 1")
+        if cfg.deskew and not cfg.point_time_field:
+            raise ConfigError(
+                f"{ctx}: deskew needs point_time_field (the per-point time offset "
+                f"field, 't' on an Ouster). Without it there is nothing to deskew "
+                f"against, and silently skipping the correction would leave a "
+                f"motion smear the config says was removed.")
+        if cfg.deskew and cfg.kind != "pointcloud2":
+            raise ConfigError(f"{ctx}: deskew applies to pointcloud2 clouds only "
+                              f"(a depth image is a single exposure, not a sweep)")
+        if cfg.deskew_buckets < 1:
+            raise ConfigError(f"{ctx}.deskew_buckets must be >= 1")
         return cfg
 
 
@@ -220,6 +243,18 @@ class AgentConfig:
     obj: ObjectConfig = field(default_factory=ObjectConfig)
     speed_source: Optional[str] = None   # odometry topic for ego_speed; defaults to pose topic
     required: bool = True          # a frame missing a required agent is dropped
+    host: Optional[str] = None     # clock domain; defaults to the agent's own name
+
+    @property
+    def clock_host(self) -> str:
+        """The machine whose clock stamps this agent's messages.
+
+        Defaults to the agent name because one robot is usually one host. Set it
+        explicitly when two agents share a machine — they then share an offset,
+        and estimating it twice from half the messages is worse than once from all
+        of them.
+        """
+        return self.host or self.name
 
     @staticmethod
     def parse(mapping: dict) -> "AgentConfig":
@@ -246,7 +281,49 @@ class AgentConfig:
                      for i, c in enumerate(mapping.get("cameras") or [])],
             obj=ObjectConfig.parse(mapping.get("object"), f"{ctx}.object"),
             speed_source=mapping.get("speed_source"),
-            required=bool(mapping.get("required", True)))
+            required=bool(mapping.get("required", True)),
+            host=mapping.get("host"))
+
+
+@dataclass
+class ClockConfig:
+    """Cross-host clock reconciliation (see ``ros2opv2v/clock.py``).
+
+    Off by default, because on a single-host recording there is nothing to
+    reconcile and a spurious correction is worse than none. Turn it on for any bag
+    whose agents ran on different machines — which is every real testbed.
+    """
+    enabled: bool = False
+    reference_host: Optional[str] = None    # defaults to the ego agent's host
+    ntp_topics: Dict[str, str] = field(default_factory=dict)   # host -> topic
+    offset_field: Optional[str] = None      # e.g. 'offset'; None = resolve at runtime
+    offset_unit: Optional[str] = None       # 's' | 'ms' | 'us' | 'ns'; None = infer
+    sign: str = "auto"                      # 'auto' | '+1' | '-1'
+    cross_check_tolerance_ms: float = 20.0
+    require_measured: bool = False
+    """Refuse to convert while any host's offset is unmeasured. Off by default so a
+    bag missing one NTP topic still converts — with the consequence reported in
+    every frame — but worth turning on for a dataset that will be published."""
+
+    @staticmethod
+    def parse(mapping: Optional[dict]) -> "ClockConfig":
+        mapping = mapping or {}
+        sign = str(mapping.get("sign", "auto")).lower()
+        if sign not in ("auto", "+1", "-1", "1"):
+            raise ConfigError("clock.sign must be auto, +1 or -1")
+        topics = mapping.get("ntp_topics") or {}
+        if not isinstance(topics, dict):
+            raise ConfigError("clock.ntp_topics must be a mapping of host -> topic")
+        return ClockConfig(
+            enabled=bool(mapping.get("enabled", False)),
+            reference_host=mapping.get("reference_host"),
+            ntp_topics={str(k): str(v) for k, v in topics.items()},
+            offset_field=mapping.get("offset_field"),
+            offset_unit=(str(mapping["offset_unit"]).lower()
+                         if mapping.get("offset_unit") else None),
+            sign=sign,
+            cross_check_tolerance_ms=float(mapping.get("cross_check_tolerance_ms", 20.0)),
+            require_measured=bool(mapping.get("require_measured", False)))
 
 
 @dataclass
@@ -306,6 +383,7 @@ class ConverterConfig:
     output: OutputConfig
     agents: List[AgentConfig]
     time: TimeConfig = field(default_factory=TimeConfig)
+    clock: ClockConfig = field(default_factory=ClockConfig)
     world_frame: str = "world"
 
     @property
@@ -334,8 +412,10 @@ class ConverterConfig:
                 if cam.camera_info_topic:
                     info.append(cam.camera_info_topic)
         dedup = lambda xs: sorted(set(xs))
+        ntp = list(self.clock.ntp_topics.values()) if self.clock.enabled else []
         return {"pose": dedup(pose), "cloud": dedup(cloud),
-                "camera_info": dedup(info), "camera": dedup(camera)}
+                "camera_info": dedup(info), "camera": dedup(camera),
+                "ntp": dedup(ntp)}
 
 
 def load_config(path: str) -> ConverterConfig:
@@ -354,6 +434,7 @@ def load_config(path: str) -> ConverterConfig:
         output=OutputConfig.parse(_get(raw, "output", ctx="config")),
         agents=agents,
         time=TimeConfig.parse(raw.get("time")),
+        clock=ClockConfig.parse(raw.get("clock")),
         world_frame=str((raw.get("world") or {}).get("frame_id", "world")))
 
     validate(cfg)
@@ -391,6 +472,26 @@ def validate(cfg: ConverterConfig) -> None:
     if not ego.required:
         raise ConfigError(f"config: agent {ego.name!r} is the ego (lowest cav id "
                           f"{ego.cav_id}) and cannot be optional")
+
+    if cfg.clock.enabled:
+        hosts = {a.clock_host for a in active}
+        reference = cfg.clock.reference_host or ego_agent(cfg).clock_host
+        if reference not in hosts:
+            raise ConfigError(
+                f"clock.reference_host={reference!r} is not a host of any enabled "
+                f"agent (hosts: {sorted(hosts)})")
+        unknown = set(cfg.clock.ntp_topics) - hosts
+        if unknown:
+            raise ConfigError(f"clock.ntp_topics names unknown hosts {sorted(unknown)}; "
+                              f"agent hosts are {sorted(hosts)}")
+        unmeasured = sorted(hosts - set(cfg.clock.ntp_topics) - {reference})
+        if unmeasured and cfg.clock.require_measured:
+            raise ConfigError(
+                f"clock.require_measured is set but these hosts publish no NTP status "
+                f"topic: {unmeasured}. Their offset would be estimated from delivery "
+                f"floors alone, whose error is the transit asymmetry between links. "
+                f"Add clock.ntp_topics entries, or clear require_measured and accept "
+                f"the residual that every frame will report.")
 
     master = cfg.time.master_agent
     if master is not None and master not in names:

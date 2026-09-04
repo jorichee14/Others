@@ -75,8 +75,9 @@ table selects are ever deserialised.
 | File | Role |
 |---|---|
 | `bagreader.py` | Lazy rosbag2 reading; the index pass pulls header stamps out of the raw CDR payload, so a 350k-message bag is indexed without decoding a point cloud |
-| `sync.py` | 10 Hz frame table (complete-or-dropped, because OpenCOOD indexes every agent by the ego's timestamp keys) + interpolated pose tracks |
-| `pointclouds.py` | PointCloud2 passthrough, depth-image reprojection, radar clouds — only one agent in a typical testbed has a LiDAR |
+| `sync.py` | 10 Hz frame table (complete-or-dropped, because OpenCOOD indexes every agent by the ego's timestamp keys) + interpolated pose tracks, with each frame's realised skew carried into its yaml |
+| `clock.py` | Three robots means three clocks. NTP monitors, the delivery floor (`log_time − header.stamp`), and the cross-check between them; offset sign and unit resolved from the data, never guessed |
+| `pointclouds.py` | PointCloud2 passthrough, depth-image reprojection, radar clouds — only one agent in a typical testbed has a LiDAR — and sweep deskew to the frame instant |
 | `geometry.py` | Solves poses into OpenCOOD's own `x_to_world` parameterisation, exactly rather than by convention-mirroring |
 | `writers.py` | PCD (intensity in the colour channel, the way OpenCOOD reads it), frame yaml, PNG |
 | `labels.py` | Agents-as-objects pseudo ground truth; hook for imported annotations |
@@ -85,12 +86,21 @@ table selects are ever deserialised.
 python scripts/inspect_bag.py    --bag <bag> --emit-config configs/mine.yaml
 python scripts/convert_rosbag.py --config configs/mine.yaml --dry-run
 python scripts/validate_opv2v.py --root <out>/test --with-open3d
-python scripts/test_ros2opv2v.py                      # 29 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                      # 50 self-tests, no bag needed
 ```
 
-Conventions, what the operator must supply (the shared world frame is not in the
-bag), and an honest account of what converted data can and cannot answer:
-[`docs/ROS2OPV2V.md`](docs/ROS2OPV2V.md).
+**On synchronisation.** A converted frame never hides how synchronous it is. Each
+agent's yaml carries a `ros_sync` block with its signed skew from the frame time and
+the clock residual that correction could not remove, and the conversion report
+carries a tightness curve (frames retained at each budget) plus the structural floor
+— half the slowest required stream's period, which no matching strategy beats. That
+matters here more than usual: this study's own result is that 100 ms of latency hurts
+fusion more than 90% packet loss, so an unmeasured clock offset between two robots is
+a latency impairment hiding inside the baseline.
+
+Conventions, the synchronisation protocol, what the operator must supply (the shared
+world frame is not in the bag), and an honest account of what converted data can and
+cannot answer: [`docs/ROS2OPV2V.md`](docs/ROS2OPV2V.md).
 
 ### `configs/matrix.yaml`
 The frozen experiment grid: methods × impairment families × severity levels × seeds.

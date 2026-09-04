@@ -37,6 +37,34 @@ time:
   start_offset_s: 0.0
   duration_s: 0.0                # 0 = whole bag; set e.g. 20 for a first pass
 
+# ---------------------------------------------------------------------- clocks
+# Three machines, three clocks. A constant offset between two of them is
+# invisible in the data and acts on one agent's every message as a uniform
+# latency — which results/ANALYSIS.md finds more damaging to fusion than 90%
+# packet loss. So the offsets are estimated (NTP where available, delivery floor
+# elsewhere, cross-checked against each other) and the residual is written into
+# every frame yaml. See docs/ROS2OPV2V.md §"Synchronisation".
+clock:
+  enabled: true
+  # mobile_1 owns the Ouster and hence the frame grid, so its clock is the
+  # timeline. Note what that means: its correction is zero BY DEFINITION, not by
+  # measurement, and any error it carries appears as an equal and opposite error
+  # on both collaborators.
+  reference_host: mobile_1
+  ntp_topics:
+    infra_1: /infra_1/ntp/status         # 1234 msgs
+    mobile_2: /mobile_2/ntp/status       # 1363 msgs
+    # mobile_1: NO NTP STATUS TOPIC IN THIS BAG. That is the dataset's largest
+    # open sync risk and the reason it is the reference host here: there is
+    # nothing to correct it against. Add the monitor node before the next
+    # recording — it is one topic and it removes the last unmeasured term.
+  offset_field: null             # null = resolve from the message, then check the
+  offset_unit: null              # inferred unit against the delivery floor
+  sign: auto                     # ntpq and chrony disagree; decided from the data
+  cross_check_tolerance_ms: 20
+  require_measured: false        # true would refuse to convert while mobile_1 is
+                                 # unmeasured; leave false and read the warnings
+
 world:
   frame_id: world
 
@@ -47,6 +75,7 @@ agents:
   - name: mobile_1
     id: 1
     role: cav
+    host: mobile_1
     enabled: true
     required: true
     pose:
@@ -72,6 +101,14 @@ agents:
         field: intensity                   # Ouster also offers 'reflectivity'
         scale: 0.0001                      # raw counts are O(1e3-1e4); clipped to 1
         default: 0.5
+      # A 10 Hz spinning sweep observes over ~103 ms — the same order as the whole
+      # inter-agent budget — and the smear is azimuth-dependent, so it does not
+      # average out. The Ouster's per-point `t` field (nanoseconds from the header
+      # stamp) makes the correction exact; every point is moved to the frame's
+      # reference instant using this agent's own odometry, so the `align` transform
+      # never enters and a wrong alignment cannot corrupt it.
+      point_time_field: t
+      deskew: true
       # A 128-beam sweep is ~130k points; OPV2V frames are ~80k. Capping keeps
       # preprocessing time comparable. Set 0 to keep everything.
       max_points: 100000
@@ -93,6 +130,7 @@ agents:
   - name: mobile_2
     id: 2
     role: cav
+    host: mobile_2
     enabled: true
     required: true
     pose:
@@ -138,6 +176,7 @@ agents:
   - name: mobile_1_zed
     id: 3
     role: cav
+    host: mobile_1                      # same machine as mobile_1: one clock, one offset
     enabled: true
     required: true
     pose:
@@ -171,6 +210,7 @@ agents:
   - name: infra_1
     id: -1
     role: rsu
+    host: infra_1
     enabled: true
     required: true
     pose:

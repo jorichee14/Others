@@ -107,7 +107,7 @@ def main() -> int:
         if args.dry_run:
             report = ConversionReport(bag=cfg.bag)
             reader = BagReader(cfg.bag, cfg.time.stamp_source)
-            frames, _, _, _ = plan(reader, cfg, report)
+            frames, _, _, _, _ = plan(reader, cfg, report)
             report.frames_written = len(frames)
             report.scenarios = [name for name, _ in assign_scenarios(frames, cfg)]
         else:
