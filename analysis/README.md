@@ -52,8 +52,15 @@ what the NTP monitor reports.
 ## Wi-Fi link quality
 
 ```bash
-python analysis/wifi_analysis.py --run coop2       # reuses extracts/coop2 from the NTP run
+python analysis/wifi_analysis.py --run coop2 \
+    --map map_stages_20260828_outputs/map_final_20260828_nc_anchored.pcd
 ```
+
+`--map` takes the **anchored** point cloud, drawn as the greyscale background of
+the coverage panels; without it the trajectories are drawn on their own. Link
+samples are placed by interpolating the `--pose-topic` (default `global_pose`)
+at each sample's timestamp, so the coverage map is in the same frame as the
+trajectories.
 
 Radios are separated by the `interface` field, so an agent publishing two radios on
 one topic is analysed as two links. Retry, failure and channel-occupancy rates are
@@ -71,7 +78,7 @@ Outputs in `results/coop2/wifi/`:
 | `wifi_rho.csv` | for an agent with two radios: each radio's Bad fraction, the measured joint-Bad fraction, what independent links would have given, and the conditional and phi correlations |
 | `wifi_summary.md` | the above as readable tables |
 | `wifi_subsection.tex` | a paragraph for the paper with the numbers filled in |
-| `fig_wifi_link.{pdf,png}` | RSSI, PHY rate with iperf goodput overlaid, TX failure rate, channel occupancy, on one time axis |
+| `fig_wifi_link.{pdf,png}` | one coverage panel per radio — the trajectory over the map, coloured by RSSI, with iperf test locations marked — above the RSSI time series for every radio. The other quantities (PHY rate, retries, occupancy) stay in the tables: a panel is spent only on something that varies |
 | `fig_wifi_rho.{pdf,png}` | the two radios' RSSI, their Bad intervals and the overlap, and measured vs independent joint-Bad |
 
 The Bad state is `not associated`, or RSSI at or below `--bad-rssi-dbm` (default −70),

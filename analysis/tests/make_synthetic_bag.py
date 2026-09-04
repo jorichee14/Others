@@ -135,6 +135,27 @@ float64  lost_percent
 """ + HEADER_DEF
 
 
+POSE = """std_msgs/Header header
+geometry_msgs/Pose pose
+""" + HEADER_DEF + """
+================================================================================
+MSG: geometry_msgs/Pose
+geometry_msgs/Point position
+geometry_msgs/Quaternion orientation
+================================================================================
+MSG: geometry_msgs/Point
+float64 x
+float64 y
+float64 z
+================================================================================
+MSG: geometry_msgs/Quaternion
+float64 x
+float64 y
+float64 z
+float64 w
+"""
+
+
 IMU = """std_msgs/Header header
 geometry_msgs/Quaternion orientation
 float64[9] orientation_covariance
@@ -344,6 +365,29 @@ def main(out: Path) -> None:
                 }
                 log = ns + 2_000_000
                 w.write_message(topic, iperf, msg, log_time=log, publish_time=log)
+
+
+        # --- ground-truth poses, so link samples can be placed on the map ---
+        pose = w.register_msgdef("geometry_msgs/msg/PoseStamped", POSE)
+        for topic, phase, r0 in [("/mobile_1/global_pose", 0.0, 7.0),
+                                 ("/mobile_2/global_pose", 2.1, 4.5)]:
+            hz = 18.0
+            n = int(dur_s * hz)
+            for i in range(n):
+                t = i / hz
+                ns = t0 + int(t * 1e9)
+                # a lap around the room, so RSSI has somewhere to vary
+                a = 2 * math.pi * t / 78.0 + phase
+                x = r0 * math.cos(a) + 1.5 * math.cos(3 * a)
+                y = 0.6 * r0 * math.sin(a) - 4.0 + 1.0 * math.sin(2 * a)
+                msg = {
+                    "header": {"stamp": stamp(ns), "frame_id": "map"},
+                    "pose": {"position": {"x": x, "y": y, "z": 0.35},
+                             "orientation": {"x": 0.0, "y": 0.0,
+                                             "z": math.sin(a / 2), "w": math.cos(a / 2)}},
+                }
+                log = ns + 1_000_000
+                w.write_message(topic, pose, msg, log_time=log, publish_time=log)
 
         w.finish()
     print(f"wrote {out}")

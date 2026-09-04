@@ -113,6 +113,81 @@ def band_of(ghz: float) -> str:
     return "6 GHz" if ghz > 5.9 else ("5 GHz" if ghz > 3 else "2.4 GHz")
 
 
+def read_pcd_xy(path: Path, max_pts: int = 120_000):
+    """Points of a .pcd as (N,2) xy for the figure background.
+
+    open3d if it is installed, otherwise a minimal reader for the ascii and
+    uncompressed-binary layouts the mapping pipeline writes."""
+    try:
+        import open3d as o3d  # noqa: PLC0415
+
+        P = np.asarray(o3d.io.read_point_cloud(str(path)).points)
+    except Exception:
+        P = _read_pcd_raw(path)
+    if P is None or not len(P):
+        return None
+    P = P[np.isfinite(P).all(1)]
+    if len(P) > max_pts:
+        P = P[np.linspace(0, len(P) - 1, max_pts).astype(int)]
+    return P[:, :2]
+
+
+def _read_pcd_raw(path: Path):
+    with open(path, "rb") as f:
+        fields, sizes, types, counts, npts, data = [], [], [], [], 0, None
+        while True:
+            line = f.readline()
+            if not line:
+                return None
+            tok = line.decode("ascii", "replace").split()
+            if not tok:
+                continue
+            key = tok[0].upper()
+            if key == "FIELDS":
+                fields = tok[1:]
+            elif key == "SIZE":
+                sizes = [int(x) for x in tok[1:]]
+            elif key == "TYPE":
+                types = tok[1:]
+            elif key == "COUNT":
+                counts = [int(x) for x in tok[1:]]
+            elif key == "POINTS":
+                npts = int(tok[1])
+            elif key == "DATA":
+                data = tok[1].lower()
+                break
+        if data == "binary_compressed":
+            return None  # lzf; open3d handles it, this reader does not
+        counts = counts or [1] * len(fields)
+        names, fmts = [], []
+        for fn, sz, ty, ct in zip(fields, sizes, types, counts):
+            dt = {"F": "f", "U": "u", "I": "i"}.get(ty.upper(), "u") + str(sz)
+            for c in range(ct):
+                names.append(fn if ct == 1 else f"{fn}_{c}")
+                fmts.append(dt)
+        if data == "ascii":
+            A = np.loadtxt(f, dtype=np.float64, max_rows=npts, ndmin=2)
+            idx = [names.index(k) for k in ("x", "y", "z") if k in names]
+            return A[:, idx] if len(idx) == 3 else None
+        arr = np.frombuffer(f.read(), dtype=np.dtype(list(zip(names, fmts))), count=npts)
+        return np.column_stack([arr["x"], arr["y"], arr["z"]]).astype(float)
+
+
+def load_poses(extracts: Path, suffix: str):
+    """{agent: (t_s_array, xy array)} from the PoseStamped ground-truth topics."""
+    out = {}
+    for f in sorted(glob.glob(str(extracts / f"*{suffix}.parquet"))):
+        topic = "/" + Path(f).stem.replace("__", "/")
+        df = pd.read_parquet(f)
+        if "pose.position.x" not in df.columns:
+            continue
+        out[node_of_topic(topic)] = (
+            df["log_time_ns"].to_numpy(),
+            df[["pose.position.x", "pose.position.y"]].to_numpy(float),
+        )
+    return out
+
+
 def load_glob(extracts: Path, pattern: str):
     frames = []
     for f in sorted(glob.glob(str(extracts / pattern))):
@@ -147,6 +222,8 @@ def main() -> int:
     ap.add_argument("--bad-rssi-dbm", type=float, default=-70.0, help="RSSI at or below which a link counts as Bad")
     ap.add_argument("--bad-failure-rate", type=float, default=0.05, help="TX failure rate above which a link counts as Bad")
     ap.add_argument("--rho-grid-ms", type=float, default=250.0, help="grid the radios are resampled onto to compare their states")
+    ap.add_argument("--map", type=Path, default=None, help="anchored .pcd drawn as the figure background")
+    ap.add_argument("--pose-topic", default="global_pose", help="pose topic suffix to place link samples with")
     args = ap.parse_args()
 
     extracts = args.extracts or Path("extracts") / args.run
@@ -343,109 +420,120 @@ def main() -> int:
         rho_df = pd.DataFrame(rho_rows)
         rho_df.to_csv(out / "wifi_rho.csv", index=False)
 
-    # ---- 7. figures ------------------------------------------------------------------
+    # ---- 7. figure -------------------------------------------------------------------
+    # Two questions, one panel each: WHERE the link is what it is (the coverage
+    # map the connectivity-mapping task needs) and WHEN it changed. Everything
+    # else -- PHY rate, retries, occupancy -- is in the tables; a panel is spent
+    # only on a quantity that varies.
+    poses = load_poses(extracts, args.pose_topic)
+    map_xy = read_pcd_xy(args.map) if args.map else None
+    if args.map and map_xy is None:
+        print(f"  (could not read {args.map} as a point cloud - background omitted)")
+
+    xy_of = {}
+    for lk, g in status.groupby("link"):
+        agent = g["agent"].iloc[0]
+        if agent not in poses:
+            continue
+        pt, pxy = poses[agent]
+        o = np.argsort(pt)
+        t = g["log_time_ns"].to_numpy()
+        inside = (t >= pt[o][0]) & (t <= pt[o][-1])
+        xy_of[lk] = (
+            np.column_stack([np.interp(t, pt[o], pxy[o, 0]), np.interp(t, pt[o], pxy[o, 1])]),
+            inside,
+        )
+    if poses and not xy_of:
+        print(f"  (no pose topic *{args.pose_topic} overlaps the link samples)")
+
     plt.rcParams.update({"font.size": 8, "axes.edgecolor": GRID, "axes.labelcolor": TEXT,
                          "xtick.color": TEXT2, "ytick.color": TEXT2, "text.color": TEXT})
     t_max = float(status["t_s"].max())
+    mapped = [lk for lk in links if lk in xy_of]
+    ncol = max(len(mapped), 1)
+    fig = plt.figure(figsize=(3.5 * ncol + 1.0, 5.9), constrained_layout=True)
+    # a dedicated narrow column for the colorbar, so it belongs to the map row
+    # instead of being stretched down the whole figure
+    gs = fig.add_gridspec(2, ncol + 1, height_ratios=[1.25, 1.0],
+                          width_ratios=[1.0] * ncol + [0.045])
 
-    def group_known(group: str) -> bool:
-        sub = avail[avail["group"] == group]
-        return bool(len(sub)) and sub["known_frac"].max() > 0.0
+    # RSSI is a magnitude, so one hue light (weak) to dark (strong); the line
+    # carries a surface-coloured casing so its palest segments stay visible
+    # against the grey map behind it.
+    cmap = matplotlib.colors.LinearSegmentedColormap.from_list(
+        "rssi", ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#2a78d6", "#1c5cab", "#104281"])
+    lo = float(np.floor(status["signal_dbm"].min() / 5) * 5)
+    hi = float(np.ceil(status["signal_dbm"].max() / 5) * 5)
+    norm = matplotlib.colors.Normalize(lo, hi)
 
-    panels = ["rssi", "rate"]
-    if group_known("station dump"):
-        panels.append("failures")
-    if group_known("channel survey"):
-        panels.append("occupancy")
-    fig, axes = plt.subplots(len(panels), 1, figsize=(7.16, 1.6 * len(panels) + 0.6),
-                             sharex=True, constrained_layout=True, squeeze=False)
-    axes = axes[:, 0]
-    at = {name: axes[i] for i, name in enumerate(panels)}
-    letter = {name: "(" + chr(ord("a") + i) + ")" for i, name in enumerate(panels)}
+    sm = None
+    for i, lk in enumerate(mapped):
+        ax = fig.add_subplot(gs[0, i])
+        g = status[status["link"] == lk].sort_values("t_s")
+        xy, inside = xy_of[lk]
+        if map_xy is not None:
+            ax.scatter(map_xy[:, 0], map_xy[:, 1], s=0.15, c="0.86", linewidths=0, zorder=0)
+        pts = xy[inside].reshape(-1, 1, 2)
+        seg = np.concatenate([pts[:-1], pts[1:]], axis=1)
+        v = g["signal_dbm"].to_numpy()[inside]
+        for lw, col, z in ((4.2, "white", 2), (2.4, None, 3)):
+            lc = matplotlib.collections.LineCollection(
+                seg, linewidths=lw, capstyle="round",
+                **({"colors": col} if col else {"cmap": cmap, "norm": norm}))
+            if col is None:
+                lc.set_array(v[:-1]); sm = lc
+            lc.set_zorder(z)
+            ax.add_collection(lc)
+        ax.plot(*xy[inside][0], "o", ms=6, mfc="white", mec=TEXT, mew=1.2, zorder=5)
+        ax.plot(*xy[inside][-1], "s", ms=6, mfc=TEXT, mec="white", mew=1.0, zorder=5)
+        if iperf_df is not None:
+            agent = g["agent"].iloc[0]
+            sub = iperf_df[(iperf_df["agent"] == agent) & iperf_df["success"].astype(bool)]
+            if len(sub) and agent in poses:
+                pt, pxy = poses[agent]; o = np.argsort(pt)
+                tq = (sub["t_s"].to_numpy() * 1e9 + t0_ns)
+                ax.plot(np.interp(tq, pt[o], pxy[o, 0]), np.interp(tq, pt[o], pxy[o, 1]),
+                        "o", ms=5, mfc="none", mec=TEXT, mew=1.0, zorder=6, label="iperf test")
+        ax.set_aspect("equal")
+        ax.set_xlabel("x [m]"); ax.set_ylabel("y [m]" if i == 0 else "")
+        ax.set_title(f"({chr(97 + i)}) {lk}\nmedian {g['signal_dbm'].median():.0f} dBm, "
+                     f"weakest {g['signal_dbm'].min():.0f} dBm", loc="left", fontsize=8)
+        ax.grid(True, color=GRID, lw=0.4)
+        ax.margins(0.06)
+    if sm is not None:
+        # inset vertically so the bar matches the plot boxes rather than the
+        # whole row, title space included
+        cax = fig.add_subplot(gs[0, ncol].subgridspec(3, 1, height_ratios=[0.14, 1, 0.06])[1])
+        cb = fig.colorbar(sm, cax=cax)
+        cb.set_label("RSSI [dBm]"); cb.outline.set_visible(False)
 
-    ax = at["rssi"]
+    ax = fig.add_subplot(gs[1, :])
     for lk in links:
-        g = status[status["link"] == lk]
-        ax.plot(g["t_s"], g["signal_dbm"], lw=1.1, color=color_of[lk], label=lk)
-    lo, hi = float(status["signal_dbm"].min()), float(status["signal_dbm"].max())
-    pad = max((hi - lo) * 0.12, 1.5)
-    legend_handles = list(ax.get_lines()[: len(links)])
-    legend_labels = list(links)
-    rssi_thr_drawn = args.bad_rssi_dbm >= lo - pad
-    if rssi_thr_drawn:
+        g = status[status["link"] == lk].sort_values("t_s")
+        ax.plot(g["t_s"], g["signal_dbm"], lw=1.2, color=color_of[lk], label=lk)
+    if args.bad_rssi_dbm >= lo - 2:
         ax.axhline(args.bad_rssi_dbm, color=BAD_COLOR, lw=0.8, ls="--")
-        ax.set_ylim(min(lo - pad, args.bad_rssi_dbm - pad), hi + pad)
-    else:
-        ax.set_ylim(lo - pad, hi + pad)
-    ax.set_ylabel("RSSI [dBm]")
-    margin = "" if rssi_thr_drawn else f"  (weakest sample {lo - args.bad_rssi_dbm:.0f} dB above the Bad threshold)"
-    ax.set_title(f"{letter['rssi']} received signal strength{margin}", loc="left", fontsize=8)
-    ax.grid(True, color=GRID, lw=0.5)
-
-    ax = at["rate"]
-    for lk in links:
-        g = status[status["link"] == lk]
-        ax.plot(g["t_s"], g["tx_bitrate_mbps"], lw=1.1, color=color_of[lk])
+        ax.text(0.995, args.bad_rssi_dbm, f" Bad ≤ {args.bad_rssi_dbm:.0f} dBm ",
+                transform=ax.get_yaxis_transform(), ha="right", va="center",
+                fontsize=6.5, color=BAD_COLOR,
+                bbox=dict(fc="white", ec="none", pad=1.0))
     if iperf_df is not None:
         for kind, mk in [("to server", "o"), ("robot-to-robot", "^")]:
             sub = iperf_df[(iperf_df["kind"] == kind) & iperf_df["success"].astype(bool)]
             if len(sub):
-                (h,) = ax.plot(sub["t_s"], sub["bitrate_mbps"], mk, ms=5, mfc="none", mec=TEXT, mew=1.1, ls="none")
-                legend_handles.append(h)
-                legend_labels.append(f"iperf, {kind}")
-    # PHY rate and goodput share a unit but can differ by a large factor on a fast link;
-    # a log axis keeps both legible and leaves the gap between them visible as an offset
-    vals = [status["tx_bitrate_mbps"]]
-    if iperf_df is not None and len(iperf_df):
-        vals.append(iperf_df.loc[iperf_df["success"].astype(bool), "bitrate_mbps"])
-    allv = pd.concat(vals).dropna()
-    allv = allv[allv > 0]
-    if len(allv) and allv.max() / allv.min() > 8:
-        ax.set_yscale("log")
-    ax.set_ylabel("rate [Mbit/s]")
-    ax.set_title(f"{letter['rate']} lines: negotiated PHY rate.  markers: measured iperf goodput",
+                ax.plot(sub["t_s"], np.full(len(sub), lo + 0.04 * (hi - lo)), mk,
+                        ms=4.5, mfc="none", mec=TEXT2, mew=0.9, ls="none",
+                        label=f"iperf, {kind}")
+    ax.set_xlim(0, t_max); ax.set_ylim(lo, hi)
+    ax.set_xlabel("time in run [s]"); ax.set_ylabel("RSSI [dBm]")
+    margin = "" if args.bad_rssi_dbm >= lo - 2 else \
+        f"   (weakest sample {status['signal_dbm'].min() - args.bad_rssi_dbm:.0f} dB above the Bad threshold)"
+    ax.set_title(f"({chr(97 + len(mapped))}) received signal strength over the run{margin}",
                  loc="left", fontsize=8)
-    ax.grid(True, color=GRID, lw=0.5, which="both")
+    ax.legend(frameon=False, fontsize=7, ncol=min(len(links) + 2, 5),
+              loc="upper center", bbox_to_anchor=(0.5, -0.22))
+    ax.grid(True, color=GRID, lw=0.5)
 
-    if "failures" in at:
-        ax = at["failures"]
-        for lk in links:
-            g = status[status["link"] == lk]
-            ax.plot(g["t_s"], g["tx_failure_rate"] * 100, lw=1.1, color=color_of[lk], label=lk)
-        fmax = float(status["tx_failure_rate"].max() * 100) if status["tx_failure_rate"].notna().any() else 0.0
-        note = ""
-        if fmax <= 0.0:
-            ax.set_ylim(-0.05, 1.0)
-            note = "  (no frame failed after retries anywhere in this run)"
-        elif fmax < args.bad_failure_rate * 100:
-            ax.set_ylim(-0.05 * fmax, fmax * 1.15)
-        else:
-            ax.axhline(args.bad_failure_rate * 100, color=BAD_COLOR, lw=0.8, ls="--")
-        ax.set_ylabel("TX failures [%]")
-        ax.set_title(f"{letter['failures']} frames that failed after all retries{note}", loc="left", fontsize=8)
-        ax.grid(True, color=GRID, lw=0.5)
-
-    if "occupancy" in at:
-        ax = at["occupancy"]
-        for lk in links:
-            g = status[status["link"] == lk]
-            ax.plot(g["t_s"], g["busy_ratio_inst"], lw=1.1, color=color_of[lk], label=lk)
-        ax.set_ylabel("channel busy")
-        ax.set_ylim(0, 1)
-        ax.set_title(f"{letter['occupancy']} channel occupancy", loc="left", fontsize=8)
-        ax.grid(True, color=GRID, lw=0.5)
-
-    axes[-1].set_xlabel("time in run [s]")
-
-    thr = plt.Line2D([], [], color=BAD_COLOR, lw=0.8, ls="--")
-    legend_handles.append(thr)
-    legend_labels.append(f"Bad: RSSI ≤ {args.bad_rssi_dbm:.0f} dBm or failures > {args.bad_failure_rate:.0%}"
-                         + ("" if rssi_thr_drawn else " (off scale)"))
-    fig.legend(legend_handles, legend_labels, frameon=False, fontsize=7,
-               ncol=min(len(legend_labels), 3), loc="outside upper center")
-
-    for a_ in axes:
-        a_.set_xlim(0, t_max)
     fig.savefig(out / "fig_wifi_link.pdf")
     fig.savefig(out / "fig_wifi_link.png", dpi=200)
     plt.close(fig)
