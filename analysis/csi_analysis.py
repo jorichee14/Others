@@ -419,8 +419,8 @@ def main() -> int:
         ax.axhline(-args.null_floor_db, color=BAD, lw=0.8, ls="--")
         ax.set_xlabel("subcarrier index"); ax.set_ylabel("mean power [dB]" if i == 0 else "")
         ax.set_title(f"({chr(97 + ncol + i)}) {a}: {int(p['use'].sum())} of {p['use'].size} slots "
-                     f"carry a subcarrier; fixed receiver shape across them spans "
-                     f"{p['static_ptp']:.0f} dB", loc="left", fontsize=8)
+                     f"carry a subcarrier, receiver shape {p['static_ptp']:.0f} dB",
+                     loc="left", fontsize=8)
         ax.grid(True, color=GRID, lw=0.5)
 
     ax = fig.add_subplot(gs[2, :])
