@@ -546,7 +546,29 @@ def main() -> int:
     else:
         md += ["No association, BSSID, ESSID or channel changes during the run: every radio stayed on one AP.", ""]
     if iperf_df is not None:
-        md += ["## iperf", "", iperf_df.round(2).to_markdown(index=False), ""]
+        ok = iperf_df[iperf_df["success"].astype(bool)]
+        by_dir = (ok.groupby(["kind", "direction"])
+                    .agg(tests=("bitrate_mbps", "size"),
+                         goodput_median_mbps=("bitrate_mbps", "median"),
+                         goodput_min_mbps=("bitrate_mbps", "min"),
+                         retransmits_median=("retransmits", "median"),
+                         rtt_mean_ms=("rtt_ms_mean", "median"),
+                         rtt_max_ms=("rtt_ms_max", "max"))
+                    .round(2).reset_index())
+        md += [
+            "## iperf",
+            "",
+            "Split by direction, because **uplink and downlink reliability are not measurable the same "
+            "way**. A station counts its own TX retries and failures, but cannot count retries on frames "
+            "sent *to* it: a lost downlink frame simply never arrives, and there is nothing to count. "
+            "`missed_beacon` is the only station-side downlink-loss indicator, and these reverse iperf "
+            "tests are the only direct downlink throughput measurement.",
+            "",
+            by_dir.to_markdown(index=False),
+            "",
+            iperf_df.round(2).to_markdown(index=False),
+            "",
+        ]
     if rho_df is not None:
         md += [
             "## Dual-radio correlation",
@@ -585,10 +607,19 @@ def main() -> int:
         ok = iperf_df[iperf_df["success"].astype(bool)]
         srv = ok[ok["kind"] == "to server"]
         r2r = ok[ok["kind"] == "robot-to-robot"]
-        iperf_sentence = (
-            f" Active throughput tests to the fixed server returned a median of {srv['bitrate_mbps'].median():.0f}\\,Mbit/s "
-            f"over {len(srv)} tests"
-        )
+        up = srv[srv["direction"] == "uplink"]
+        down = srv[srv["direction"] == "downlink"]
+        if len(up) and len(down):
+            iperf_sentence = (
+                f" Active throughput tests to the fixed server returned a median of "
+                f"{up['bitrate_mbps'].median():.0f}\\,Mbit/s uplink over {len(up)} tests and "
+                f"{down['bitrate_mbps'].median():.0f}\\,Mbit/s downlink over {len(down)} tests"
+            )
+        else:
+            iperf_sentence = (
+                f" Active throughput tests to the fixed server returned a median of "
+                f"{srv['bitrate_mbps'].median():.0f}\\,Mbit/s over {len(srv)} tests"
+            )
         if len(r2r):
             iperf_sentence += (
                 f", and robot-to-robot tests -- which traverse the access point in both directions -- "
@@ -621,9 +652,13 @@ def main() -> int:
         )
     derived_sentence = ""
     if "station dump" not in dead_groups:
+        beacons = int(summary["missed_beacon_total"].sum())
         derived_sentence = (
             " Retry and failure figures are differentiated from the driver's cumulative counters and are"
-            " therefore per-interval rates."
+            " therefore per-interval rates. They describe the uplink only: a station counts retries on the"
+            " frames it sends, but a frame lost on the downlink never arrives and cannot be counted, so"
+            f" downlink reliability is represented by missed beacons ({beacons} over the run) and by the"
+            " reverse-direction throughput tests."
         )
     tex = f"""\\subsubsection{{Wi-Fi Link Quality}}
 Both mobile agents associate with the same access point, so the link measured on each robot is its own

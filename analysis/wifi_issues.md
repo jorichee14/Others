@@ -37,7 +37,33 @@ station reassociates**. Reading them directly gives a run total; differencing th
 care gives large negative spikes at every reassociation. `wifi_analysis.py` differences
 them and discards the negative steps, so what it reports are per-interval rates.
 
-### 1.3 Field groups that can be absent
+### 1.3 Uplink and downlink are not measurable the same way
+
+In 802.11 the transmitter sends a frame and waits for an ACK; no ACK means it retransmits.
+So a retry counter belongs to **whoever is sending**. A station counts the retries and
+failures on the frames *it* sends — its uplink. It cannot count retries on frames sent
+*to* it, because a lost downlink frame simply never arrives and there is nothing to count.
+The AP knows that number; the station does not.
+
+That is why `WifiLinkStatus` carries `tx_retries` and `tx_failed` with no RX counterparts,
+and why the RX-side fields answer a different question:
+
+| Field | What it actually says |
+|---|---|
+| `rx_packets`, `rx_bytes` | what arrived — silent about what did not |
+| `rx_errors`, `rx_dropped`, `rx_overruns` | frames that arrived and were dropped **locally** — a host problem, not a channel one |
+| `rx_invalid_crypt`, `rx_invalid_frag` | decode failures; real but rare |
+| **`missed_beacon`** | the only station-side downlink-loss indicator, and it works only because beacons are periodic, so a gap is detectable |
+
+Downlink reliability therefore comes from two places: `missed_beacon`, and the
+**reverse-direction iperf tests** (`IperfResult.reverse`), which are the only direct
+downlink throughput measurement available on the robot. Both are reported.
+
+If downlink retry counts matter for a future analysis, they must be read **on the AP**,
+whose station dump lists per-client TX retries — that AP-side view is the mirror image of
+what the robots record.
+
+### 1.4 Field groups that can be absent
 
 `WifiLinkStatus` documents whole groups as NaN (floats) or −1 (integers) when the
 underlying query is denied or unsupported:

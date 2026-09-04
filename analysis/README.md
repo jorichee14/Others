@@ -66,7 +66,7 @@ Outputs in `results/coop2/wifi/`:
 |---|---|
 | `wifi_links.csv` | per radio: interface, MAC, ESSID/BSSID, band, channel, width, PHY mode, RSSI percentiles, PHY rate, MCS/NSS, retry and failure rates, channel occupancy, missed beacons |
 | `wifi_events.csv` | association, BSSID, ESSID and channel changes with their time in the run |
-| `wifi_iperf.csv` | one row per iperf test: goodput, retransmits, RTT, direction, and whether it was to the server or robot-to-robot |
+| `wifi_iperf.csv` | one row per iperf test: goodput, retransmits, RTT, direction, and whether it was to the server or robot-to-robot. Reported split by direction, because retry counters describe the uplink only — a station cannot count retries on frames sent *to* it, so reverse-direction tests and `missed_beacon` are the only downlink evidence |
 | `wifi_field_availability.csv` | per radio and field, the fraction of samples carrying a real value — `WifiLinkStatus` documents whole groups (station dump, channel survey) as NaN or −1 when the underlying `iw` query is denied, and a statistic over those would be an artefact |
 | `wifi_rho.csv` | for an agent with two radios: each radio's Bad fraction, the measured joint-Bad fraction, what independent links would have given, and the conditional and phi correlations |
 | `wifi_summary.md` | the above as readable tables |
