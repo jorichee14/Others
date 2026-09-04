@@ -67,6 +67,7 @@ Outputs in `results/coop2/wifi/`:
 | `wifi_links.csv` | per radio: interface, MAC, ESSID/BSSID, band, channel, width, PHY mode, RSSI percentiles, PHY rate, MCS/NSS, retry and failure rates, channel occupancy, missed beacons |
 | `wifi_events.csv` | association, BSSID, ESSID and channel changes with their time in the run |
 | `wifi_iperf.csv` | one row per iperf test: goodput, retransmits, RTT, direction, and whether it was to the server or robot-to-robot |
+| `wifi_field_availability.csv` | per radio and field, the fraction of samples carrying a real value — `WifiLinkStatus` documents whole groups (station dump, channel survey) as NaN or −1 when the underlying `iw` query is denied, and a statistic over those would be an artefact |
 | `wifi_rho.csv` | for an agent with two radios: each radio's Bad fraction, the measured joint-Bad fraction, what independent links would have given, and the conditional and phi correlations |
 | `wifi_summary.md` | the above as readable tables |
 | `wifi_subsection.tex` | a paragraph for the paper with the numbers filled in |
@@ -77,6 +78,10 @@ The Bad state is `not associated`, or RSSI at or below `--bad-rssi-dbm` (default
 or TX failure rate above `--bad-failure-rate` (default 0.05). Both thresholds are
 options because the right values depend on the deployment; whatever you choose is
 printed in the figure legend and stated in the summary.
+
+`wifi_rho.csv` and `fig_wifi_rho` are produced only when an agent actually has two radios,
+which the script determines from the `interface` field rather than from the topic's publisher
+count. Two publishers on one topic can equally mean the monitor node was restarted mid-run.
 
 Every link is agent → access point, since both robots associate with the same AP.
 The robot-to-robot iperf still traverses that AP and is reported as the two-hop path

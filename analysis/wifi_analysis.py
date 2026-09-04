@@ -42,6 +42,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from extract_bag import extract  # noqa: E402
 
+import warnings
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -49,12 +51,55 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+# A statistic over a field the adapter never reported is NaN, which is the right answer;
+# the field-availability table below says which fields those were, so the numpy warning
+# about it adds nothing.
+warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
+warnings.filterwarnings("ignore", message="All-NaN slice encountered", category=RuntimeWarning)
+
 NODE_ALIASES = {"mobile1": "mobile_1", "mobile2": "mobile_2"}
 # Links are the entities in these figures, so they get the categorical slots in a
 # fixed order; the order is by link label so a link keeps its colour across runs.
 LINK_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7"]
 BAD_COLOR = "#e34948"
 TEXT, TEXT2, GRID = "#0b0b0b", "#52514e", "#e6e5e1"
+
+
+# WifiLinkStatus documents whole groups of fields as unavailable when `iw station dump`
+# or `iw survey dump` is denied: floats come back NaN, several ints come back -1, strings
+# come back empty. Those must be reported as missing, not silently summarised as zero.
+FIELD_GROUPS = {
+    "association": ["essid", "bssid", "mode", "frequency_ghz", "channel", "bit_rate_mbps", "tx_power_dbm"],
+    "signal": ["link_quality", "link_quality_ratio", "signal_dbm", "signal_avg_dbm", "noise_dbm", "snr_db"],
+    "phy rate": ["rx_bitrate_mbps", "tx_bitrate_mbps", "rx_mcs", "tx_mcs", "rx_nss", "tx_nss",
+                 "rx_width_mhz", "tx_width_mhz", "rx_phy_mode", "tx_phy_mode"],
+    "station dump": ["tx_retries", "tx_failed", "expected_mbps", "connected_time_s",
+                     "sta_rx_bytes", "sta_tx_bytes", "sta_rx_packets", "sta_tx_packets"],
+    "channel survey": ["channel_active_ms", "channel_busy_ms", "channel_busy_ratio"],
+    "error counters": ["rx_invalid_nwid", "rx_invalid_crypt", "rx_invalid_frag",
+                       "tx_excessive_retries", "invalid_misc", "missed_beacon"],
+    "interface traffic": ["rx_packets", "rx_bytes", "rx_errors", "rx_dropped", "tx_packets",
+                          "tx_bytes", "tx_errors", "tx_dropped", "collisions"],
+}
+# fields whose documented "unknown" value is -1 rather than NaN
+SENTINEL_NEG1 = {
+    "channel", "rx_mcs", "tx_mcs", "rx_nss", "tx_nss", "rx_width_mhz", "tx_width_mhz",
+    "tx_retries", "tx_failed", "connected_time_s",
+    "sta_rx_bytes", "sta_tx_bytes", "sta_rx_packets", "sta_tx_packets",
+}
+
+
+def known_fraction(col: pd.Series, name: str) -> float:
+    """Fraction of samples in which this field carries a real value.
+
+    NaN means unknown for the float fields, -1 for the integer fields the message
+    definition documents that way, and "" for the string fields."""
+    if col.dtype == object or str(col.dtype).startswith("str"):
+        return float((col.astype(str).str.len() > 0).mean())
+    ok = col.notna()
+    if name in SENTINEL_NEG1:
+        ok &= col != -1
+    return float(ok.mean())
 
 
 def node_of_topic(topic: str) -> str:
@@ -204,6 +249,22 @@ def main() -> int:
         )
     summary = pd.DataFrame(rows).sort_values("link").reset_index(drop=True)
     summary.to_csv(out / "wifi_links.csv", index=False)
+
+    # ---- 3b. which fields the adapter actually reported ----------------------------
+    avail_rows = []
+    for lk, g in status.groupby("link"):
+        for group, fields in FIELD_GROUPS.items():
+            for f in fields:
+                if f not in g.columns:
+                    continue
+                avail_rows.append({"link": lk, "group": group, "field": f,
+                                   "known_frac": known_fraction(g[f], f)})
+    avail = pd.DataFrame(avail_rows)
+    avail.to_csv(out / "wifi_field_availability.csv", index=False)
+    group_avail = avail.pivot_table(index="group", columns="link", values="known_frac", aggfunc="mean")
+    missing = avail[avail["known_frac"] < 0.99]
+    # a group nobody reported at all -- the whole `iw` subcommand was unavailable
+    dead_groups = sorted({g for g, sub in avail.groupby("group") if sub["known_frac"].max() == 0.0})
 
     # ---- 4. association / roaming events -------------------------------------------
     ev = []
@@ -394,6 +455,15 @@ def main() -> int:
 
     # ---- 8. markdown ------------------------------------------------------------------
     md = [f"# Wi-Fi link quality — run `{args.run}`", ""]
+    if dead_groups:
+        md += [
+            "> **Not measured in this run.** The adapter reported nothing for: **"
+            + ", ".join(dead_groups)
+            + "**. `WifiLinkStatus` documents these groups as NaN or −1 when the underlying "
+            "`iw station dump` / `iw survey dump` is unavailable or denied, so any statistic over "
+            "them would be an artefact. They are excluded from the tables and figures below.",
+            "",
+        ]
     md += [
         f"All links are agent → access point. Bad state: not associated, or RSSI ≤ "
         f"{args.bad_rssi_dbm:.0f} dBm, or TX failure rate > {args.bad_failure_rate:.0%}.",
@@ -415,6 +485,18 @@ def main() -> int:
         + " — where it is zero the adapter never reported a noise floor, so RSSI is the only signal measure available.",
         "",
     ]
+    md += [
+        "## Field availability",
+        "",
+        "Fraction of samples in which each group of `WifiLinkStatus` fields carried a real value "
+        "(not NaN, not −1, not an empty string).",
+        "",
+        group_avail.round(3).to_markdown(),
+        "",
+    ]
+    if len(missing):
+        md += ["Fields below full availability:", "",
+               missing.sort_values(["known_frac", "link"]).round(3).to_markdown(index=False), ""]
     if events is not None and len(events):
         md += ["## Association and roaming events", "", events.to_markdown(index=False), ""]
     else:
@@ -479,15 +561,35 @@ def main() -> int:
             f"{pct(r['p_joint_measured'])}, against the {pct(r['p_joint_if_independent'])} that independent "
             f"links would have produced."
         )
+    # what the adapters actually reported decides which caveats belong in the paper
+    snr_frac = float(avail[avail["field"] == "snr_db"]["known_frac"].max()) if len(avail) else 0.0
+    noise_sentence = (
+        " The adapters report no noise floor, so RSSI rather than SNR is the signal measure throughout."
+        if snr_frac < 0.01 else ""
+    )
+    dead_sentence = ""
+    if dead_groups:
+        dead_sentence = (
+            f" The {' and '.join(dead_groups)} field group{'s' if len(dead_groups) != 1 else ''} "
+            f"{'were' if len(dead_groups) != 1 else 'was'} not reported by the adapters in this run "
+            f"(the message definition marks them unavailable when the underlying \\texttt{{iw}} query is "
+            f"denied), so no statistic is quoted over them."
+        )
+    derived_sentence = ""
+    if "station dump" not in dead_groups:
+        derived_sentence = (
+            " Retry and failure figures are differentiated from the driver's cumulative counters and are"
+            " therefore per-interval rates."
+        )
     tex = f"""\\subsubsection{{Wi-Fi Link Quality}}
 Both mobile agents associate with the same access point, so the link measured on each robot is its own
-uplink to that AP. {per_link}. {roam}{iperf_sentence}{rho_sentence}
-Retry, failure and channel-occupancy figures are differentiated from the driver's cumulative counters and
-are therefore per-interval rates. The adapters report no noise floor, so RSSI rather than SNR is the
-signal measure throughout.
+uplink to that AP. {per_link}. {roam}{iperf_sentence}{rho_sentence}{derived_sentence}{dead_sentence}{noise_sentence}
 """
     (out / "wifi_subsection.tex").write_text(tex)
 
+    if dead_groups:
+        print(f"\nNOT REPORTED by the adapter in this run: {', '.join(dead_groups)}"
+              f"\n  -> statistics over those fields are omitted; see wifi_field_availability.csv\n")
     print(summary[["link", "band", "channel", "n", "rate_hz", "rssi_median_dbm", "rssi_min_dbm",
                    "tx_phy_median_mbps", "tx_failure_rate_p95", "bad_frac"]].round(3).to_string(index=False))
     if rho_df is not None:
