@@ -43,10 +43,6 @@ any run is safe to interrupt.
 | `run_phase43.py` | Spatial decomposition: ego-visible vs occluded recall, ego-visible FP contamination | yes |
 | `run_phase5_tracking.py` | Kalman/Hungarian MOT under impairment (burstiness + staleness predictions) | yes |
 | `run_blockage_audit.py` | **Phase 6** — model-free test of whether i.i.d. loss is a valid assumption (see below) | no |
-| `inspect_bag.py` | **Phase 8** — what a rosbag2 recording contains: rates, clock skew, TF tree, config skeleton | no |
-| `convert_rosbag.py` | **Phase 8** — rosbag2 → OPV2V conversion (`--dry-run` plans without writing) | no |
-| `validate_opv2v.py` | **Phase 8** — checks a converted tree the way `basedataset.py` will read it | no |
-| `test_ros2opv2v.py` | 29 converter tests incl. an end-to-end synthetic-bag conversion | no |
 
 ### Phase 6 — geometry-conditioned loss (`commchannel/blockage.py`)
 
@@ -65,42 +61,14 @@ It adds one channel parameter (`blockage_p` = P(drop | chord blocked)), two swee
 families (`loss_blocked`, `loss_iid_matched`), and a `blocked` condition in the spatial
 decomposition.
 
-### `ros2opv2v/` — real testbed data
+### Real testbed data — `../rosbag_to_opv2v/`
 
-Converts a rosbag2 multi-agent recording into the OPV2V layout OpenCOOD reads, so a
-real testbed can go through the same code path as the simulated dataset. No ROS
-install and no GPU: MCAP/`.db3` are read directly, and only the messages the frame
-table selects are ever deserialised.
-
-| File | Role |
-|---|---|
-| `bagreader.py` | Lazy rosbag2 reading; the index pass pulls header stamps out of the raw CDR payload, so a 350k-message bag is indexed without decoding a point cloud |
-| `sync.py` | 10 Hz frame table (complete-or-dropped, because OpenCOOD indexes every agent by the ego's timestamp keys) + interpolated pose tracks, with each frame's realised skew carried into its yaml |
-| `clock.py` | Three robots means three clocks. NTP monitors, the delivery floor (`log_time − header.stamp`), and the cross-check between them; offset sign and unit resolved from the data, never guessed |
-| `pointclouds.py` | PointCloud2 passthrough, depth-image reprojection, radar clouds — only one agent in a typical testbed has a LiDAR — and sweep deskew to the frame instant |
-| `geometry.py` | Solves poses into OpenCOOD's own `x_to_world` parameterisation, exactly rather than by convention-mirroring |
-| `writers.py` | PCD (intensity in the colour channel, the way OpenCOOD reads it), frame yaml, PNG |
-| `labels.py` | Agents-as-objects pseudo ground truth; hook for imported annotations |
-
-```bash
-python scripts/inspect_bag.py    --bag <bag> --emit-config configs/mine.yaml
-python scripts/convert_rosbag.py --config configs/mine.yaml --dry-run
-python scripts/validate_opv2v.py --root <out>/test --with-open3d
-python scripts/test_ros2opv2v.py                      # 67 self-tests, no bag needed
-```
-
-**On synchronisation.** A converted frame never hides how synchronous it is. Each
-agent's yaml carries a `ros_sync` block with its signed skew from the frame time and
-the clock residual that correction could not remove, and the conversion report
-carries a tightness curve (frames retained at each budget) plus the structural floor
-— half the slowest required stream's period, which no matching strategy beats. That
-matters here more than usual: this study's own result is that 100 ms of latency hurts
-fusion more than 90% packet loss, so an unmeasured clock offset between two robots is
-a latency impairment hiding inside the baseline.
-
-Conventions, the synchronisation protocol, what the operator must supply (the shared
-world frame is not in the bag), and an honest account of what converted data can and
-cannot answer: [`docs/ROS2OPV2V.md`](docs/ROS2OPV2V.md).
+The bag-to-OPV2V converter (three hosts' clocks reconciled, per-frame skew written
+into every yaml, sweep deskew, refuse-don't-guess extrinsics) lives in its own
+project at the repo root: [`rosbag_to_opv2v/`](../rosbag_to_opv2v/). It depends on
+nothing here. The complete, runnable config for the MIRC coop2 recording is
+`../rosbag_to_opv2v/configs/mirc_coop2.yaml`, and the resulting dataset is what
+Phase 8 of this study consumes.
 
 ### `configs/matrix.yaml`
 The frozen experiment grid: methods × impairment families × severity levels × seeds.

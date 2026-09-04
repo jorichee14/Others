@@ -9,7 +9,8 @@ stamps with its own clock, and a constant offset between two of them is
 while one agent's every message is systematically early or late.
 
 That failure mode matters more here than the usual timestamp bookkeeping,
-because this repository's own results say so.  ``results/ANALYSIS.md`` finds
+because the study this converter feeds says so.  Its ``results/ANALYSIS.md``
+(in ``collab_perception_failure_analysis/``) finds
 100 ms of collaborator latency more damaging to fusion than 90% packet loss, and
 that a *constant* delay is precisely the shape of impairment a motion model
 absorbs quietly rather than flagging.  A 30 ms unnoticed clock offset is a 30 ms
@@ -204,7 +205,7 @@ class DeliveryStats:
     Two uses at once.  As a clock diagnostic only its **minimum** matters (transit
     floor plus offset).  As a physical measurement its **spread** is the point: it
     is the real one-way delivery latency of a real link carrying real perception
-    traffic, which is the empirical object that ``configs/matrix.yaml``'s
+    traffic, which is the empirical object that the study's ``configs/matrix.yaml``
     synthetic ``latency`` grid stands in for.
     """
 

@@ -322,7 +322,8 @@ def print_clock_summary(stats: dict, agents: dict) -> None:
 
     Frame matching can only be as good as the clocks underneath it, and a constant
     offset between two hosts does not show up as a matching failure — it shows up
-    as one agent being uniformly late, which is the impairment ``results/ANALYSIS.md``
+    as one agent being uniformly late, which is the impairment the perception study
+    (``collab_perception_failure_analysis/results/ANALYSIS.md``)
     finds most damaging. This table is the cheap early warning: on one network the
     transit floors should be similar, so a namespace whose floor sits far from the
     others is either on a much worse link or on a wrong clock, and either way it

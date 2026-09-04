@@ -40,7 +40,8 @@ time:
 # ---------------------------------------------------------------------- clocks
 # Three machines, three clocks. A constant offset between two of them is
 # invisible in the data and acts on one agent's every message as a uniform
-# latency — which results/ANALYSIS.md finds more damaging to fusion than 90%
+# latency — which the perception study (../collab_perception_failure_analysis/
+# results/ANALYSIS.md) finds more damaging to fusion than 90%
 # packet loss. So the offsets are estimated (NTP where available, delivery floor
 # elsewhere, cross-checked against each other) and the residual is written into
 # every frame yaml. See docs/ROS2OPV2V.md §"Synchronisation".

@@ -2,7 +2,9 @@
 
 Turns a multi-agent ROS 2 recording into the directory layout OpenCOOD reads, so
 a real testbed can be run through the same code path as the simulated OPV2V
-dataset used everywhere else in this study.
+dataset. Built for, and first used by, the collaborative-perception study in
+`../collab_perception_failure_analysis/`, but it depends on nothing there — only
+on `numpy`, `pyyaml` and the `mcap` readers.
 
 ```
 python scripts/inspect_bag.py     --bag <bag> --emit-config configs/mine.yaml
@@ -137,7 +139,7 @@ is then correct.
 The practical consequence: **do not compare these angle values numerically
 against OPV2V's own yaml files.** Only the matrices they generate are
 meaningful. Everything downstream (agent-to-ego projection, box corners,
-`commchannel`'s pose noise) is unaffected.
+the perception study's `commchannel` pose noise) is unaffected.
 
 ### Intensity travels in the colour channel
 
@@ -209,7 +211,8 @@ time". This section is about the harder question — *how near*, and near to
 used to study timing at all.
 
 Three properties of a multi-robot recording make the naive answer wrong, and
-this repository's own results are why they matter: `results/ANALYSIS.md` finds
+the study this converter feeds is why they matter:
+[`collab_perception_failure_analysis/results/ANALYSIS.md`](../../collab_perception_failure_analysis/results/ANALYSIS.md) finds
 100 ms of collaborator latency more damaging to fusion than 90% packet loss, and
 finds that a *constant* delay is the shape a motion model absorbs quietly rather
 than flagging. Any un-modelled asynchrony in the dataset is therefore a latency
@@ -372,7 +375,7 @@ What the conversion is genuinely good for, in this repo's terms:
 * **visual inspection** — do detections land on real structure, do the agents'
   clouds overlay each other correctly once projected into the ego frame? That is
   a direct test of the `align` transforms and of the whole conversion.
-* **a real-data arm for `commchannel/`** — the impairment instrument attaches to
+* **a real-data arm for the perception study's `commchannel/`** — the impairment instrument attaches to
   a *built OpenCOOD dataset*, so once a dataset loads, latency/loss/staleness
   apply to real messages with real inter-agent geometry.
 * **training**, if you go that way: emit `train`/`validate` splits and take
