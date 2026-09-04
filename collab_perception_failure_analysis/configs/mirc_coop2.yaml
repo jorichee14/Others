@@ -165,7 +165,16 @@ agents:
       #                 roll: -174.5848, pitch: -76.2388, yaw: -95.2193}
       #   radar2_link  {x: -0.053850, y: 0.046553, z: -0.112039,
       #                 roll: 160.0651, pitch: -86.7452, yaw: 24.8992}
-      ground_lift: 0.0                     # see docs/ROS2OPV2V.md before changing
+      # UNSET, and it needs one measurement nothing in the dataset supplies: the
+      # FLOOR's z in the map frame. Every z the dataset publishes is relative to
+      # the anchor board, not the ground — the two cart cameras sit at map
+      # z = +0.193 (ZED) and +0.165 (RealSense), 28 mm apart, so one lift value
+      # fits both, but where that is above the floor is not stated. Read it off
+      # the anchored map cloud (the dominant horizontal plane below the
+      # trajectories) and set ground_lift = 1.9 - (sensor height above floor),
+      # which is the height OPV2V's checkpoints were trained at. See
+      # docs/ROS2OPV2V.md; this is a domain-shift mitigation, not a correction.
+      ground_lift: 0.0
       min_points: 1
     cameras:
       - topic: /mobile_1/zed/left/image_rect_color
@@ -181,14 +190,28 @@ agents:
       # extrinsic buys, and it is why `extent` below reads as
       # [half-LENGTH, half-WIDTH, half-HEIGHT] the way you would expect.
       extrinsic: {x: 0, y: 0, z: 0, roll: 90, pitch: -90, yaw: 0}
-      # REQUIRED, and the only thing left in this file: HALF the robot's size.
-      # A platform 0.60 m long, 0.50 m wide and 0.50 m tall is [0.30, 0.25, 0.25].
+      # REQUIRED: HALF the size of the thing to be detected, in metres. A cart
+      # 0.60 m long, 0.50 m wide and 1.20 m tall is [0.30, 0.25, 0.60].
+      #
+      # DECIDE WHAT THE OBJECT IS FIRST. These platforms are pushcarts, so the
+      # returns the other agent actually sees are cart AND operator, moving
+      # together. Three defensible choices, and they are not equivalent:
+      #   cart only        the operator becomes an unlabelled object standing
+      #                    against a labelled one, so every detection of the
+      #                    person scores as a false positive
+      #   cart + operator  one larger box covering both; no phantom FPs, but the
+      #                    box is loose and the "object" is not a rigid body
+      #   cart only, and label the operators separately through
+      #                    labels.merge_external_labels (ids stay below 10000)
+      # Whichever you pick, it belongs in the write-up: it changes what precision
+      # means on this dataset, not just the numbers.
       extent: null
-      # Where the robot's CENTRE sits relative to the camera, in that body frame:
-      # [ahead, left, up] in metres. A camera on a mast 35 cm above the platform
-      # centre and 5 cm forward of it is [-0.05, 0.0, -0.35]. Leaving it at zero
-      # centres the box on the camera, which is wrong by however far the camera
-      # is from the middle of the robot.
+      # Where that object's CENTRE sits relative to the camera, in the body frame
+      # above: [ahead, left, up] in metres. On a pushcart the camera is usually
+      # near the top of a mast, so this is a large negative z — a camera 0.7 m
+      # above the middle of the cart is [0.0, 0.0, -0.70]. Leaving it at zero
+      # centres the box on the camera, which on a mast is metres of error in the
+      # vertical, not centimetres.
       center: [0.0, 0.0, 0.0]
 
   # ------------------------------------------------------------------ mobile_2
@@ -254,14 +277,28 @@ agents:
       # extrinsic buys, and it is why `extent` below reads as
       # [half-LENGTH, half-WIDTH, half-HEIGHT] the way you would expect.
       extrinsic: {x: 0, y: 0, z: 0, roll: 90, pitch: -90, yaw: 0}
-      # REQUIRED, and the only thing left in this file: HALF the robot's size.
-      # A platform 0.60 m long, 0.50 m wide and 0.50 m tall is [0.30, 0.25, 0.25].
+      # REQUIRED: HALF the size of the thing to be detected, in metres. A cart
+      # 0.60 m long, 0.50 m wide and 1.20 m tall is [0.30, 0.25, 0.60].
+      #
+      # DECIDE WHAT THE OBJECT IS FIRST. These platforms are pushcarts, so the
+      # returns the other agent actually sees are cart AND operator, moving
+      # together. Three defensible choices, and they are not equivalent:
+      #   cart only        the operator becomes an unlabelled object standing
+      #                    against a labelled one, so every detection of the
+      #                    person scores as a false positive
+      #   cart + operator  one larger box covering both; no phantom FPs, but the
+      #                    box is loose and the "object" is not a rigid body
+      #   cart only, and label the operators separately through
+      #                    labels.merge_external_labels (ids stay below 10000)
+      # Whichever you pick, it belongs in the write-up: it changes what precision
+      # means on this dataset, not just the numbers.
       extent: null
-      # Where the robot's CENTRE sits relative to the camera, in that body frame:
-      # [ahead, left, up] in metres. A camera on a mast 35 cm above the platform
-      # centre and 5 cm forward of it is [-0.05, 0.0, -0.35]. Leaving it at zero
-      # centres the box on the camera, which is wrong by however far the camera
-      # is from the middle of the robot.
+      # Where that object's CENTRE sits relative to the camera, in the body frame
+      # above: [ahead, left, up] in metres. On a pushcart the camera is usually
+      # near the top of a mast, so this is a large negative z — a camera 0.7 m
+      # above the middle of the cart is [0.0, 0.0, -0.70]. Leaving it at zero
+      # centres the box on the camera, which on a mast is metres of error in the
+      # vertical, not centimetres.
       center: [0.0, 0.0, 0.0]
 
   # ------------------------------------- mobile_1's ZED stereo cloud, as an agent

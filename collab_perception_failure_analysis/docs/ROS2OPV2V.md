@@ -174,10 +174,18 @@ apparent sensor height above the floor.
 
 This exists for one purpose: OPV2V's LiDAR sits ~1.9 m up on a car, and every
 pretrained checkpoint has learned that ground-plane prior along with a
-`cav_lidar_range` of `z ∈ [-3, 1]` *relative to the sensor*. A knee-high robot
-LiDAR presents a floor at `z ≈ -0.5` and a ceiling inside the range. Lifting by
-~1.4 m makes the geometry look more like what the checkpoint expects. It is a
-domain-shift mitigation, not a correction — report it when you report results.
+`cav_lidar_range` of `z ∈ [-3, 1]` *relative to the sensor*. A platform whose
+sensor sits lower presents its floor higher in that range and its ceiling inside
+it. Lifting by `1.9 − (sensor height above the floor)` makes the geometry look
+more like what the checkpoint expects. It is a domain-shift mitigation, not a
+correction — report it when you report results.
+
+**Measure the sensor height, do not assume it.** The gap is very different for a
+knee-high robot (~1.4 m of lift) and a pushcart with the sensors on a mast
+(~0.7 m or less), and it is not derivable from the poses: an anchored map frame
+puts z = 0 at whatever anchored it — the surveyed board, in the MIRC bag — not at
+the ground. Read the floor off the anchored map cloud (the dominant horizontal
+plane below the trajectories) and subtract.
 
 The lift is chosen against the *map's* z, which is meaningful here: the anchoring
 rotation is a pure yaw, so the shared frame keeps the mapping session's gravity
@@ -301,9 +309,18 @@ that the *other* agents should be able to detect. Set `object.emit: true` and an
 mirroring OPV2V, where a CAV's box comes from its collaborators' files).
 
 Be clear-eyed about what that is: **two or three boxes per frame, all of them
-robots**. It is a geometric sanity signal — do the agents see each other where
+agents**. It is a geometric sanity signal — do the agents see each other where
 the poses say they are? — not a detection benchmark. AP computed against it is
 dominated by two objects and is not comparable to any published OPV2V number.
+
+And decide what the object *is* before measuring it. A pose is attached to a
+sensor, not to a body, and the body around that sensor may not be the only thing
+generating returns: a pushed cart comes with an operator walking at it, a
+sensor mast comes with the tripod under it. Boxing only the sensor's own
+platform leaves whatever else moves with it unlabelled and directly adjacent, so
+every detection of it scores as a false positive. Boxing both makes a loose box
+around a non-rigid object. Neither is wrong; the choice changes what precision
+means on the dataset, so it belongs in the write-up rather than in a default.
 
 `extent` is **half**-dimensions — a platform 0.6 m long, 0.5 m wide and 0.5 m
 tall is `[0.30, 0.25, 0.25]` — and `center` is the offset from the frame's origin
