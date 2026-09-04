@@ -172,6 +172,10 @@ LiDAR presents a floor at `z ≈ -0.5` and a ceiling inside the range. Lifting b
 ~1.4 m makes the geometry look more like what the checkpoint expects. It is a
 domain-shift mitigation, not a correction — report it when you report results.
 
+The lift is chosen against the *map's* z, which is meaningful here: the anchoring
+rotation is a pure yaw, so the shared frame keeps the mapping session's gravity
+axis and `z` really is height.
+
 ---
 
 ## Synchronisation
@@ -321,6 +325,16 @@ What the conversion is genuinely good for, in this repo's terms:
 * **training**, if you go that way: emit `train`/`validate` splits and take
   `cav_lidar_range` and the anchor box sizes down to robot scale. Robot-sized
   anchors against car-sized priors is the first thing to change.
+
+The scale mismatch is worth quantifying rather than describing. In the MIRC
+coop2 bag the surveyed boards span roughly **8.5 m × 14.3 m** (16.6 m corner to
+corner), all within ~15 cm of one height — an indoor room. OPV2V's stock
+`cav_lidar_range` reaches ±140 m along x and ±40 m along y, so a stock
+configuration spends essentially its whole BEV grid on empty space, and a
+collaborator that is 10 m away here would be a near-neighbour there. Anything
+derived from the grid — voxel occupancy, the compression ratios in the bandwidth
+family, the ego-visible/occluded split in the spatial decomposition — is
+measuring the padding, not the scene, until the range is brought down.
 
 To point OpenCOOD at the result, set `validate_dir` in the checkpoint's
 `config.yaml` to `<root>/test` and run its `inference.py` with `--show_vis`.

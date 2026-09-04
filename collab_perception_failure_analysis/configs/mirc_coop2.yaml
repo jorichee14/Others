@@ -65,8 +65,37 @@ clock:
   require_measured: false        # true would refuse to convert while mobile_1 is
                                  # unmeasured; leave false and read the warnings
 
+# ------------------------------------------------------------- the world frame
+# Documentation only (the converter never reads this name), but say it
+# correctly: the shared frame is `map`, the one the offline pipeline anchored
+# every trajectory to, and it is DEFINED by the surveyed `anchor` board sitting
+# at its origin (anchor_frame.json: xyz [0,0,0], quaternion ~identity, and
+# R_align a pure 3.1 deg yaw, so map keeps the mapping session's gravity axis).
+#
+# From the same survey, the numbers that bound everything downstream:
+#
+#   anchor      origin, 214 views, std 6.9 mm. Its loop closure is 3.2 mm over
+#               526.9 s (ratio 0.17, not significant) -- so the frame these
+#               poses live in is repeatable to about 3 mm across the whole
+#               mapping session. That is the justification for treating
+#               `align: identity` as a measurement rather than a declaration.
+#   anchor_b    (8.033, -7.182, -0.102). SAME printed design as `anchor`, 10.8 m
+#               away. drift_warning is TRUE: 12.9 mm / 2.6 deg between its two
+#               sections at ratio 4.24 (significant), and its second section has
+#               only 5 views. Its quoted std of 2.0 mm is the spread WITHIN a
+#               section and understates it; 13 mm is the honest figure.
+#   rs_anchor   (8.460, -14.267, -0.056), a different design (DICT_5X5_50,
+#               25 mm squares). Only 1 of its 2 sections survived gating (the
+#               other had 2 views), std 15.0 mm, max 40 mm -- the loosest of the
+#               three.
+#
+# Scene scale: the boards span ~8.5 m x ~14.3 m (16.6 m corner to corner), all
+# within ~15 cm of one height. This is an indoor room, not a road, which is why
+# the pretrained OPV2V checkpoints' cav_lidar_range and anchor box sizes are the
+# first thing to change if you go anywhere near training -- see
+# docs/ROS2OPV2V.md.
 world:
-  frame_id: world
+  frame_id: map
 
 agents:
   # ------------------------------------------------------------------ mobile_1
@@ -254,9 +283,25 @@ agents:
     required: true
     pose:
       source: static
-      # REQUIRED: world <- the radar/infra base frame. This is the transform the
-      # whole cooperative geometry hangs on for this agent — it has no odometry
-      # to correct a bad guess.
+      # REQUIRED: map <- the RADAR frame (the convention chosen below is that
+      # world_pose IS the cloud sensor's pose, so the radar's extrinsic is
+      # identity and the camera's is measured from the radar).
+      #
+      # This is the transform the whole cooperative geometry hangs on for this
+      # agent: it is static, so there is no odometry to correct a bad guess and
+      # no board sighting later in the run to catch it. Two ways to get it:
+      #
+      #   * If the Arducam dwelled on a surveyed board at session start, stage
+      #     06 already solved its pose: session_anchor.json -> cameras.<name>.
+      #     map_to_cam is T_map_arducam for a STATIC unit, i.e. valid for the
+      #     whole bag, and world_pose is then that composed with the
+      #     radar<-camera calibration below.
+      #   * Otherwise survey the tripod against the same boards by hand.
+      #
+      # Sanity check once filled in: the three surveyed boards sit at
+      # (0, 0, 0), (8.03, -7.18, -0.10) and (8.46, -14.27, -0.06) in map, so a
+      # world_pose outside roughly x [-2, 11], y [-17, 3] is in the wrong frame,
+      # not merely imprecise.
       world_pose: null
     cloud:
       kind: pointcloud2
@@ -272,8 +317,26 @@ agents:
       # this agent contributes detections rather than geometry.
       min_points: 1
     cameras:
+      # Arducam: a plain mono/colour USB camera. Three consequences.
+      #
+      # 1. `image_raw` is RAW, not rectified. The converter's LiDAR path never
+      #    touches it, but anything projecting radar points into this image must
+      #    undistort with `d` from camera_info first -- an Arducam's distortion
+      #    is not negligible at the edges.
+      # 2. camera_info runs at 27.5 Hz while image_raw runs at 10.6 Hz. That
+      #    2.6x mismatch is the signature of a camera_info_manager republishing a
+      #    calibration file on its own timer, independent of the image stream, so
+      #    the two can carry DIFFERENT frame_ids. Check them with inspect_bag.py
+      #    before trusting the intrinsics: a mismatch means the info belongs to
+      #    another camera on the same host.
+      # 3. There is no depth here at all, so this agent contributes radar
+      #    detections plus an image -- never geometry from the camera.
       - topic: /infra_1/image_raw
         camera_info_topic: /infra_1/camera_info
+        # REQUIRED: radar -> Arducam optical (given the world_pose-is-the-radar
+        # convention above). This is what ../radar_camera_calibration produces;
+        # it is NOT in the bag -- /infra_1/radar/camera_info has zero messages,
+        # so the radar-to-image projection was never published.
         extrinsic: null
         optical_frame: true
     object:
