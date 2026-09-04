@@ -216,6 +216,24 @@ class FrameTable:
     dropped: Dict[str, int]        # reason -> count
     master: str
     tolerance_ns: int
+    dropped_at: List[Tuple[int, str]] = field(default_factory=list)   # (t_ns, reason)
+
+    def dropped_runs(self, max_gap_ns: int) -> List[dict]:
+        """Contiguous stretches of dropped candidates, per reason.
+
+        A count of dropped frames does not say whether a sensor blinked a few
+        hundred times or went away for fifteen seconds, and those are different
+        datasets: scattered drops are a small loss, one long outage is a hole in
+        the middle of a trajectory that any temporal model will feel."""
+        runs: List[dict] = []
+        for t_ns, reason in sorted(self.dropped_at):
+            last = runs[-1] if runs else None
+            if last and last["reason"] == reason and t_ns - last["end_ns"] <= max_gap_ns:
+                last["end_ns"] = t_ns
+                last["frames"] += 1
+            else:
+                runs.append({"reason": reason, "start_ns": t_ns, "end_ns": t_ns, "frames": 1})
+        return runs
 
     def __len__(self) -> int:
         return len(self.frames)
@@ -265,6 +283,7 @@ def build_frame_table(times: Sequence[int],
     camera_indices = camera_indices or {}
     frames: List[Frame] = []
     dropped: Dict[str, int] = {}
+    dropped_at: List[Tuple[int, str]] = []
 
     for t_ns in times[::max(1, stride)]:
         cloud_stamps: Dict[str, int] = {}
@@ -284,10 +303,12 @@ def build_frame_table(times: Sequence[int],
             if drop_incomplete:
                 key = "missing:" + ",".join(sorted(missing))
                 dropped[key] = dropped.get(key, 0) + 1
+                dropped_at.append((int(t_ns), key))
                 continue
             # Without drop_incomplete a frame is kept only if *some* agent has data.
             if not cloud_stamps:
                 dropped["empty"] = dropped.get("empty", 0) + 1
+                dropped_at.append((int(t_ns), "empty"))
                 continue
 
         frame = Frame(index=len(frames), t_ns=int(t_ns), cloud_stamps=cloud_stamps,
@@ -301,7 +322,7 @@ def build_frame_table(times: Sequence[int],
         frames.append(frame)
 
     return FrameTable(frames=frames, dropped=dropped, master=master,
-                      tolerance_ns=tolerance_ns)
+                      tolerance_ns=tolerance_ns, dropped_at=dropped_at)
 
 
 def reuse_statistics(table: FrameTable) -> Dict[str, Dict[str, float]]:

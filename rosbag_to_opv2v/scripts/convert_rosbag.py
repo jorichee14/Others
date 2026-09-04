@@ -41,6 +41,12 @@ def print_report(report: ConversionReport, dry_run: bool = False) -> None:
         print("\ndropped frames")
         for reason, count in sorted(report.dropped.items(), key=lambda kv: -kv[1]):
             print(f"  {count:>6}  {reason}")
+        runs = getattr(report, "dropped_runs", None) or []
+        if runs:
+            print("  contiguous outages of 3+ frames (scattered single drops not listed):")
+            for r in sorted(runs, key=lambda r: -r["frames"])[:12]:
+                print(f"    {r['frames']:>4} frames  t = {r['t_start_s']:>6.1f} .. "
+                      f"{r['t_end_s']:>6.1f} s   {r['reason']}")
 
     if report.sync:
         print("\nper-agent synchronisation")
@@ -98,6 +104,12 @@ def print_report(report: ConversionReport, dry_run: bool = False) -> None:
                 line += (f"  (expected {entry['expected_start_m']}, "
                          f"{entry['start_gap_m']:.3f} m off)")
             print(line + f"  ends at {entry['end_m']}")
+        for name, entry in sorted(report.pose_stats.items()):
+            steps = entry.get('largest_steps') or []
+            if steps and steps[0]['step_m'] > 0.0:
+                print(f"  {name:<16} largest steps: " + ", ".join(
+                    f"{d['step_m']:.3f} m at t={d['t_s']:.1f}s" for d in steps)
+                    + f"   (z span {entry.get('z_span_m', 0):.3f} m)")
 
     if report.points_per_agent:
         print("\npoints per frame")

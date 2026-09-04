@@ -56,6 +56,7 @@ class ConversionReport:
     frames_written: int = 0
     frames_candidate: int = 0
     dropped: Dict[str, int] = field(default_factory=dict)
+    dropped_runs: List[dict] = field(default_factory=list)
     points_per_agent: Dict[str, dict] = field(default_factory=dict)
     sync: Dict[str, dict] = field(default_factory=dict)
     pose_stats: Dict[str, dict] = field(default_factory=dict)
@@ -73,6 +74,7 @@ class ConversionReport:
             "frames_written": self.frames_written,
             "frames_candidate": self.frames_candidate,
             "dropped": self.dropped,
+            "dropped_runs": self.dropped_runs,
             "points_per_agent": self.points_per_agent,
             "sync": self.sync,
             "pose_stats": self.pose_stats,
@@ -445,6 +447,13 @@ def plan(reader: BagReader, cfg: ConverterConfig,
 
     report.frames_candidate = len(times[::max(1, cfg.output.frame_stride)])
     report.dropped = dict(table.dropped)
+    t0 = times[0]
+    period_ns = int(np.median(np.diff(times))) if len(times) > 1 else NS // 10
+    report.dropped_runs = [
+        {"reason": r["reason"], "frames": r["frames"],
+         "t_start_s": round((r["start_ns"] - t0) / 1e9, 1),
+         "t_end_s": round((r["end_ns"] - t0) / 1e9, 1)}
+        for r in table.dropped_runs(max_gap_ns=2 * period_ns) if r["frames"] >= 3]
     report.sync = reuse_statistics(table)
     residuals: Dict[str, float] = {}
     for agent in cfg.active_agents:
@@ -562,8 +571,9 @@ def _pose_statistics(cfg: ConverterConfig, frame_poses: Dict[str, dict],
     relocalised — worth seeing before trusting any cross-agent geometry.
     """
     stats: Dict[str, dict] = {}
+    t0 = frames[0].t_ns if frames else 0
     for agent in cfg.active_agents:
-        positions, jumps = [], []
+        positions, jumps, jump_times = [], [], []
         previous = None
         for frame in frames:
             entry = frame_poses[frame.key].get(agent.name)
@@ -573,6 +583,7 @@ def _pose_statistics(cfg: ConverterConfig, frame_poses: Dict[str, dict],
             positions.append(position)
             if previous is not None:
                 jumps.append(float(np.linalg.norm(position - previous)))
+                jump_times.append((frame.t_ns - t0) / 1e9)
             previous = position
         if not positions:
             continue
@@ -585,6 +596,13 @@ def _pose_statistics(cfg: ConverterConfig, frame_poses: Dict[str, dict],
             "extent_m": [round(float(v), 3)
                          for v in (positions.max(axis=0) - positions.min(axis=0))],
             "max_step_m": round(float(np.max(jumps)), 4) if jumps else 0.0,
+            # the three largest inter-frame steps and when they happened: a
+            # walking-speed cart moves ~0.1 m per 10 Hz frame, so a 0.26 m step
+            # is either a sprint or a pose discontinuity, and the time says which
+            "largest_steps": sorted(
+                ({"t_s": round(t, 1), "step_m": round(j, 3)} for j, t in zip(jumps, jump_times)),
+                key=lambda d: -d["step_m"])[:3],
+            "z_span_m": round(float(positions[:, 2].max() - positions[:, 2].min()), 3),
         }
     return stats
 

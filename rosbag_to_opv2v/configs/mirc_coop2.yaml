@@ -14,7 +14,7 @@
 #   4. drop --dry-run, then scripts/validate_opv2v.py
 # ============================================================================
 
-bag: ~/bags/mirc_dataset_coop2_20260828        # rosbag2 dir or the .mcap itself
+bag: ~/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_completed
 
 output:
   root: ~/cpfa/data/OPV2V_mirc
