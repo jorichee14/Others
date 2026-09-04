@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 
-def usable_subcarriers(H: np.ndarray, floor_db: float = 12.0) -> np.ndarray:
+def usable_subcarriers(H: np.ndarray, floor_db: float = 20.0) -> np.ndarray:
     """Boolean mask of the columns that carry a real subcarrier.
 
     An 802.11 OFDM symbol does not use every FFT slot: the band edges are guard
@@ -29,12 +29,20 @@ def usable_subcarriers(H: np.ndarray, floor_db: float = 12.0) -> np.ndarray:
     becomes bimodal -- a body of real subcarriers plus a spike near zero -- and
     that drives the 4th moment up, which makes the Rician estimator return 0
     (Rayleigh) for every frame however clean the channel is, and inflates the
-    frequency selectivity by tens of dB."""
+    frequency selectivity by tens of dB.
+
+    The reference is the 90th percentile of slot power, NOT the median. A 20 MHz
+    frame captured in an 80 MHz window fills a quarter of the slots, so the
+    median slot is itself a null and a median-referenced threshold keeps
+    everything. Averaging over many frames flattens per-subcarrier fading, so
+    real subcarriers sit within a few dB of that reference while nulls are tens
+    of dB below it."""
     p = (np.abs(np.atleast_2d(H)) ** 2).mean(axis=0)
     pos = p[p > 0]
     if pos.size == 0:
         return np.ones(p.size, bool)
-    return p > np.median(pos) * 10 ** (-floor_db / 10)
+    keep = p > np.percentile(pos, 90) * 10 ** (-floor_db / 10)
+    return keep if keep.sum() >= 8 else np.ones(p.size, bool)
 
 
 def profile_structure_db(P: np.ndarray) -> np.ndarray:
@@ -49,18 +57,46 @@ def profile_structure_db(P: np.ndarray) -> np.ndarray:
     return 10 * np.log10(np.maximum(P.max(axis=1), 1e-30) / np.maximum(med, 1e-30))
 
 
-def delay_profile(H: np.ndarray, idx: np.ndarray, raw_slots: int) -> np.ndarray:
+def occupied_band(idx: np.ndarray, use: np.ndarray):
+    """(first_slot, span) of the contiguous block of slots that carry signal.
+
+    The capture window and the transmitted bandwidth are not the same thing. A
+    radio capturing at 80 MHz still sees a 20 MHz control frame -- an ack, say --
+    filling only the primary quarter of the window, and the delay resolution that
+    frame supports is set by the 20 MHz it actually occupies, not by the 80 MHz
+    the capture was configured for. Taking the span from the data is the only way
+    to get that right."""
+    occ = np.asarray(idx)[np.asarray(use, bool)]
+    if occ.size == 0:
+        return 0, int(np.asarray(idx).max()) + 1
+    lo, hi = int(occ.min()), int(occ.max())
+    return lo, hi - lo + 1
+
+
+def effective_bandwidth_mhz(span_slots: int, declared_mhz: float, raw_slots: int) -> float:
+    """Bandwidth the frames actually occupy, from the span they fill."""
+    if raw_slots <= 0:
+        return float(declared_mhz)
+    return float(span_slots) * float(declared_mhz) / float(raw_slots)
+
+
+def delay_profile(H: np.ndarray, idx: np.ndarray, n_bins: int, offset: int = 0) -> np.ndarray:
     """Power delay profile per frame, each rolled so its strongest tap is first.
 
     H is (n_frames, n_subcarriers) complex, idx the raw firmware slot of each
-    column. The firmware's slot ordering is not recorded and the two plausible
+    column, and the transform runs over `n_bins` slots starting at `offset` --
+    pass the occupied band rather than the whole capture window, or the profile
+    is interpolated across empty spectrum and its taps are finer than anything
+    the frames can actually resolve.
+
+    The firmware's slot ordering is not recorded and the two plausible
     conventions differ by a half-window circular shift of the profile; a frame's
     own symbol-timing error shifts it further. Rolling each profile onto its own
     peak removes both, and turns the delay axis into excess delay past the
     strongest path -- which is what a delay spread should be measured over."""
     H = np.atleast_2d(H)
-    grid = np.zeros((H.shape[0], raw_slots), dtype=complex)
-    grid[:, np.clip(idx, 0, raw_slots - 1)] = H
+    grid = np.zeros((H.shape[0], n_bins), dtype=complex)
+    grid[:, np.clip(np.asarray(idx) - offset, 0, n_bins - 1)] = H
     P = np.abs(np.fft.ifft(grid, axis=1)) ** 2
     shift = -np.argmax(P, axis=1)
     r, c = np.ogrid[: P.shape[0], : P.shape[1]]

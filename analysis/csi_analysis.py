@@ -68,8 +68,8 @@ from common import (  # noqa: E402
     GRID, TEXT, TEXT2, AGENT_COLOR, color_for, load_poses, node_of_topic, read_pcd_xy,
 )
 from csi_core import (  # noqa: E402
-    amplitude_db, delay_profile, profile_structure_db, rician_k, rms_delay_spread,
-    usable_subcarriers,
+    amplitude_db, delay_profile, effective_bandwidth_mhz, occupied_band,
+    profile_structure_db, rician_k, rms_delay_spread, usable_subcarriers,
 )
 from extract_bag import extract  # noqa: E402
 
@@ -144,8 +144,8 @@ def main() -> int:
     ap.add_argument("--pose-topic", default="global_pose")
     ap.add_argument("--stride", type=int, default=1, help="use every Nth frame for the per-frame metrics")
     ap.add_argument("--smooth-s", type=float, default=1.0, help="window for the smoothed traces")
-    ap.add_argument("--null-floor-db", type=float, default=12.0,
-                    help="slots this far below the median slot power are guard/DC nulls")
+    ap.add_argument("--null-floor-db", type=float, default=20.0,
+                    help="slots this far below the 90th-percentile slot power are guard/DC nulls")
     ap.add_argument("--min-profile-db", type=float, default=6.0,
                     help="peak-to-median a delay profile needs before its spread is reported")
     args = ap.parse_args()
@@ -196,11 +196,15 @@ def main() -> int:
         use = usable_subcarriers(H_all, args.null_floor_db)
         H, idx = H_all[:, use], idx_all[use]
         n_sub, n_raw_cols = H.shape[1], H_all.shape[1]
+        band_lo, band_span = occupied_band(idx_all, use)
+        eff_bw = effective_bandwidth_mhz(band_span, bw, raw_slots)
         sc_power_db = 10 * np.log10(np.maximum((np.abs(H_all) ** 2).mean(axis=0), 1e-30))
-        sc_power_db -= np.median(sc_power_db[use])
-        dt_s = 1.0 / (bw * 1e6)                      # tap spacing of the delay profile
-        window = max(raw_slots // 4, 8)
-        P = delay_profile(H, idx, raw_slots)
+        sc_power_db -= np.percentile(sc_power_db[use], 90)
+        # tap spacing follows the bandwidth the frames OCCUPY, not the one the
+        # capture was configured for
+        dt_s = 1.0 / (eff_bw * 1e6)
+        window = max(band_span // 4, 8)
+        P = delay_profile(H, idx, band_span, band_lo)
         struct_db = profile_structure_db(P)
         tau = rms_delay_spread(P, dt_s, window)
         # A flat profile is noise, and its "delay spread" is the window width
@@ -220,13 +224,16 @@ def main() -> int:
             "profile_structure_db": struct_db,
         }))
         per_agent[agent] = dict(t=sub["t_s"].to_numpy(), amp_db=amp_db, idx=idx,
-                                bw=bw, dt_ns=dt_s * 1e9,
+                                bw=bw, eff_bw=eff_bw, dt_ns=dt_s * 1e9,
                                 sc_power_db=sc_power_db, sc_idx=idx_all, use=use)
 
         inv_rows.append({
             "run": args.run, "agent": agent, "topic": df["topic"].iloc[0],
             "frames": len(df), "rate_hz": (len(df) - 1) / max(dur, 1e-9), "duration_s": dur,
-            "channel": int(df["channel"].mode().iloc[0]), "bandwidth_mhz": bw,
+            "channel": int(df["channel"].mode().iloc[0]),
+            "capture_bandwidth_mhz": bw,
+            "occupied_bandwidth_mhz": round(eff_bw, 2),
+            "occupied_slots": band_span,
             "chanspec": f"0x{int(df['chanspec'].mode().iloc[0]):04x}",
             "chip_version": f"0x{int(df['chip_version'].mode().iloc[0]):04x}",
             "raw_slots": raw_slots,
@@ -291,8 +298,9 @@ def main() -> int:
         ax.set_xlabel("time in run [s]")
         ax.set_ylabel("subcarrier index" if i == 0 else "")
         ax.set_title(f"({chr(97 + i)}) {a}: channel amplitude\n"
-                     f"{p['bw']} MHz, {p['amp_db'].shape[1]} subcarriers, "
-                     f"{p['dt_ns']:.1f} ns tap spacing", loc="left", fontsize=8)
+                     f"{p['eff_bw']:.0f} MHz occupied of a {p['bw']} MHz capture, "
+                     f"{p['amp_db'].shape[1]} subcarriers, {p['dt_ns']:.0f} ns per tap",
+                     loc="left", fontsize=8)
     if im is not None:
         cax = fig.add_subplot(gs[0, ncol].subgridspec(3, 1, height_ratios=[0.16, 1, 0.05])[1])
         cb = fig.colorbar(im, cax=cax)
@@ -414,7 +422,7 @@ def main() -> int:
         plt.close(fig)
 
     # ---- markdown ----------------------------------------------------------------
-    coarse = inventory[inventory["bandwidth_mhz"] <= 20]
+    coarse = inventory[inventory["occupied_bandwidth_mhz"] <= 25]
     nulls = inventory[inventory["nulls_dropped"] > 0]
     flatf = inventory[inventory["frames_with_flat_profile_pct"] > 5]
     md = [f"# Wi-Fi CSI — run `{args.run}`", "",
@@ -445,7 +453,8 @@ def main() -> int:
     if len(coarse):
         md += ["> **Delay spread not quotable** for "
                + ", ".join(f"`{r.agent}`" for r in coarse.itertuples())
-               + f": at {int(coarse['bandwidth_mhz'].max())} MHz the delay profile's tap spacing is "
+               + f": the frames occupy only {coarse['occupied_bandwidth_mhz'].max():.0f} MHz, so the "
+               + "delay profile's tap spacing is "
                + f"{coarse['tap_spacing_ns'].max():.0f} ns, and indoor delay spreads are of that order. "
                "The K-factor and the frequency selectivity are unaffected.", ""]
     md += ["## Transmitters measured", "",
@@ -474,12 +483,16 @@ def main() -> int:
         for r in stats.itertuples())
     coarse_note = ""
     if len(coarse):
-        coarse_note = (f" At {int(coarse['bandwidth_mhz'].max())}\\,MHz the delay profile resolves "
-                       f"{coarse['tap_spacing_ns'].max():.0f}\\,ns per tap, so the delay-spread figures "
-                       f"are reported as indicative rather than calibrated.")
+        coarse_note = (f" The captured frames occupy only "
+                       f"{coarse['occupied_bandwidth_mhz'].max():.0f}\\,MHz of that window, so the delay "
+                       f"profile resolves {coarse['tap_spacing_ns'].max():.0f}\\,ns per tap -- the order of an "
+                       f"indoor delay spread itself -- and delay-spread figures are therefore not quoted "
+                       f"for this sequence.")
     tex = f"""\\subsubsection{{Wi-Fi Channel State Information}}
 Both mobile agents capture per-frame CSI with a Nexmon-patched radio at about
-{inventory['rate_hz'].median():.0f}\\,Hz, on channel {int(r0['channel'])} at {int(r0['bandwidth_mhz'])}\\,MHz,
+{inventory['rate_hz'].median():.0f}\\,Hz, on channel {int(r0['channel'])} in an
+{int(r0['capture_bandwidth_mhz'])}\\,MHz window of which the captured frames occupy
+{r0['occupied_bandwidth_mhz']:.0f}\\,MHz,
 of which {int(r0['subcarriers_usable'])} of {int(r0['subcarriers_in_message'])} FFT slots carry a
 subcarrier, the rest being guard bands and the DC null and excluded from every amplitude statistic. Frames from {len(macs)} transmitter{'s' if len(macs) != 1 else ''} are measured,
 so the source address identifies which path each measurement describes. From the channel amplitude we
@@ -490,7 +503,8 @@ automatic gain control, so both quantities are ratios and independent of it.{coa
 """
     (out / "csi_subsection.tex").write_text(tex)
 
-    print(inventory[["agent", "frames", "rate_hz", "bandwidth_mhz", "subcarriers_in_message",
+    print(inventory[["agent", "frames", "rate_hz", "capture_bandwidth_mhz",
+                     "occupied_bandwidth_mhz", "occupied_slots", "subcarriers_in_message",
                      "subcarriers_usable", "nulls_dropped", "trimmed_flag",
                      "profile_structure_median_db", "frames_with_flat_profile_pct",
                      "n_streams", "transmitters"]].round(2).to_string(index=False))

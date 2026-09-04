@@ -58,7 +58,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from csi_core import (  # noqa: E402
-    amplitude_db, colour_lut, delay_profile, quantise, rician_k, rms_delay_spread,
+    amplitude_db, colour_lut, delay_profile, effective_bandwidth_mhz, occupied_band,
+    quantise, rician_k, rms_delay_spread, usable_subcarriers,
 )
 
 try:
@@ -94,7 +95,21 @@ class CsiRenderer:
     def push(self, H, idx, raw_slots, bandwidth_mhz, rssi=None, src_mac=""):
         """Add one frame. H complex (n_sub,), idx its raw subcarrier slots."""
         H = np.asarray(H).reshape(1, -1)
-        amp = amplitude_db(H)[0]
+        idx = np.asarray(idx, int)
+        # Which slots carry signal, decided from a running average rather than
+        # one frame -- a single frame is too noisy to tell a guard band from a
+        # deep fade. Everything downstream uses only those slots, and the
+        # bandwidth they span rather than the one the capture was configured for.
+        self.acc = getattr(self, "acc", None)
+        pw = np.abs(H[0]) ** 2
+        self.acc = pw if self.acc is None or self.acc.size != pw.size else 0.98 * self.acc + 0.02 * pw
+        use = usable_subcarriers(self.acc.reshape(1, -1))
+        if use.sum() < 8:
+            use = np.ones_like(use)
+        Hu, idxu = H[:, use], idx[use]
+        band_lo, band_span = occupied_band(idx, use)
+        eff_bw = effective_bandwidth_mhz(band_span, bandwidth_mhz, raw_slots)
+        amp = amplitude_db(Hu)[0]
         if self.buf is None or self.buf.shape[1] != amp.size:
             self.buf = np.zeros((self.history, amp.size), dtype=np.float32)
             self.n_seen = 0
@@ -102,16 +117,17 @@ class CsiRenderer:
         self.buf[-1] = amp
         self.n_seen += 1
 
-        bw_hz = max(float(bandwidth_mhz), 1.0) * 1e6
-        P = delay_profile(H, np.asarray(idx, int), int(raw_slots))
-        window = max(int(raw_slots) // 4, 8)
+        bw_hz = max(eff_bw, 1.0) * 1e6
+        P = delay_profile(Hu, idxu, band_span, band_lo)
+        window = max(band_span // 4, 8)
         tau = rms_delay_spread(P, 1.0 / bw_hz, window)[0]
         self.meta = {
-            "amp": amp, "idx": np.asarray(idx, int),
+            "amp": amp, "idx": idxu,
             "pdp": P[0, :window], "tap_ns": 1e9 / bw_hz,
             "tau_ns": float(tau * 1e9) if np.isfinite(tau) else float("nan"),
-            "k_db": float(10 * np.log10(max(rician_k(H)[0], 1e-3))),
-            "rssi": rssi, "src_mac": src_mac, "bw": int(bandwidth_mhz),
+            "k_db": float(10 * np.log10(max(rician_k(Hu)[0], 1e-3))),
+            "rssi": rssi, "src_mac": src_mac,
+            "bw": int(bandwidth_mhz), "eff_bw": eff_bw, "n_use": int(use.sum()),
         }
 
     # -- drawing helpers (vectorised; a per-column Python loop cannot keep up) --
@@ -185,7 +201,8 @@ class CsiRenderer:
 
         # ---- header ----------------------------------------------------------
         rssi = "" if m["rssi"] is None else f"  RSSI {int(m['rssi'])} dBm"
-        self._text(img, f"{m['src_mac']}  {m['bw']} MHz{rssi}", (6, 15), INK, 0.42)
+        self._text(img, f"{m['src_mac']}  {m['eff_bw']:.0f}/{m['bw']} MHz  "
+                        f"{m['n_use']} sc{rssi}", (6, 15), INK, 0.42)
         tau = "n/a" if not np.isfinite(m["tau_ns"]) else f"{m['tau_ns']:.0f} ns"
         # K at the floor means the moment estimator found no dominant path at
         # all; printing the floor value as if it were a measurement would be a lie
