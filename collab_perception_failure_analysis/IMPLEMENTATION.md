@@ -333,7 +333,7 @@ stacks, WiFi link statistics and CSI) is the first chance to run the same code
 path on measured data — including a real radio, which `docs/BLOCKAGE.md` names
 as the thing OPV2V geometry cannot supply.
 
-### Step 8.1 — Bag -> OPV2V converter  `✅ DONE (code)`
+### Step 8.1 — Bag -> OPV2V converter  `✅ DONE`
 - `ros2opv2v/` converts a rosbag2 recording into the OPV2V layout OpenCOOD reads:
   lazy MCAP/`.db3` reading with no ROS install, a 10 Hz frame table that is
   complete-or-dropped (OpenCOOD indexes every agent by the ego's timestamp keys),
@@ -358,7 +358,7 @@ as the thing OPV2V geometry cannot supply.
   metadata: `configs/mirc_coop2.yaml`. **Awaiting the operator-supplied geometry**
   (see 8.2) before it can run on the real recording.
 
-### Step 8.1b — Per-frame synchronisation  `✅ DONE (code)`
+### Step 8.1b — Per-frame synchronisation  `✅ DONE`
 - 8.1 answered "does every agent have *a* message near this frame time". This
   step answers *how near*, and near to *what clock* — the question that decides
   whether a converted dataset can be used to study timing at all. It matters more
@@ -407,7 +407,13 @@ as the thing OPV2V geometry cannot supply.
   sweep the pose track cannot cover is left untouched and counted, never
   half-corrected.
 - **Done when:** the self-tests pass and the real bag's audit is recorded here.
-- **Result (code):** `scripts/test_ros2opv2v.py` **50/50** (was 29/29), including
+- **Result (real bag, 2026-09-04):** clocks disciplined to sub-millisecond on both
+  measured hosts — `infra_1` offset p95 0.23 ms (bound 4.9 ms), `mobile_2` 0.67 ms
+  (bound 3.4 ms), both stratum 5, 100% reachability, both agreeing with the
+  independent delivery-floor estimate (+2.1 / +7.7 ms, i.e. wifi transit). Nothing
+  stepped during the run. Structural floor ±47 ms held: `infra_1` mean skew
+  20 ms / max 80 ms, `mobile_2` 9 / 56 ms, ego 0 by construction.
+- **Result (code):** `scripts/test_ros2opv2v.py` **80/80** (was 29/29), including
   end-to-end conversions of a synthetic three-host MCAP with injected ground
   truth: agent 2's clock set 50 ms slow and transit set asymmetrically (2 ms vs
   8 ms) is recovered as +50.0 ms by NTP and +56.0 ms by the delivery floor — the
@@ -506,6 +512,18 @@ as the thing OPV2V geometry cannot supply.
   0.35 m centre offset puts the box exactly 0.35 m below the camera.
 - **Done when:** `convert_rosbag.py --dry-run` reports a full frame budget and
   `validate_opv2v.py` passes on the converted tree.
+- **Result (2026-09-04): converted and validated.** 1330 of 1516 frames, three
+  agents (ego `mobile_1`, `mobile_2`, RSU `infra_1`), 210 s wall time,
+  `validate_opv2v.py` **PASSED, 0 warnings** at `~/cpfa/data/OPV2V_mirc/test/
+  coop2_20260828/`. Inter-agent distance 3.5 / 12.0 / 17.8 m (min / mean / max)
+  — inside any `comm_range`, with the minimum at the moment the carts cross.
+  Points per frame: Ouster 41k (21k–49k), RealSense depth 54k (capped at 60k),
+  infra radar 49 (31–193) — the RSU is a detection source, not geometry, as
+  configured. The 186 dropped frames cluster in three windows (0–1.5, 120–125,
+  147–151.5 s) where the two remote agents fail together, i.e. the link or the
+  recorder. `mobile_1` starts 3 mm from its published optical anchor. No ground
+  truth by choice; manual annotation follows, folding in through
+  `labels.merge_external_labels`.
 
 ### Step 8.3 — What the converted data can answer  `⬜ TODO — blocked on 8.2`
 - The recording carries **no 3D annotations**, so the only free labels are the
@@ -529,6 +547,7 @@ as the thing OPV2V geometry cannot supply.
 
 | Date | Step | Notes |
 |------|------|-------|
+| 2026-09-04 | 8.1/8.2 ✅ | **The MIRC coop2 bag is an OPV2V dataset.** 1330 frames, three agents, `validate_opv2v.py` PASSED with 0 warnings, 210 s wall time. Clocks verified sub-millisecond on both measured hosts (0.23 / 0.67 ms, bounds 4.9 / 3.4 ms, stratum 5, 100% reach), nothing stepped during the run; `mobile_1` starts 3 mm from its published optical anchor; inter-agent distance 3.5–17.8 m with the carts crossing mid-run. Points per frame: Ouster ~41k, depth ~54k, infra radar ~49 (a detection source, not geometry). Dropped frames (12%) are three link/recorder outages, not sensor faults. Per-frame `ros_sync` carries each agent's realised skew and the daemon-reported clock residual. No labels by choice — manual annotation is next, returning through `merge_external_labels`. `ground_lift` stays 0 pending the floor's z in map. |
 | 2026-09-04 | 8.1b | **NtpStatus schema pinned; a resolver mistake corrected.** `ros2 interface show ntp_monitor_msgs/msg/NtpStatus`: all timing fields are float64 seconds. The name-based resolver had no `jitter_seconds` candidate and fell through to `root_dispersion` — the daemon's formal worst-case bound, several times the realised jitter — so the 4.90/3.39 ms 'residuals' in the first real dry run were the BOUND, not the error. Now: residual = max(offset p95, `jitter_seconds` p95) per frame; `root_dispersion` reported separately as the bound; and the schema's own health verdicts are read in verify mode — `synchronized`, `clock_stepped` + `offset_delta_seconds`, `reachability_percent`, `stratum`, `warnings[]` — each becoming a warning only when it says discipline did not hold. Config pins `offset_field: offset_seconds`, `offset_unit: s`. Tests 76/76 -> **80/80**. |
 | 2026-09-04 | 8.2 | **First real dry run on the coop2 bag, read.** 1330/1516 frames; clocks disciplined to sub-millisecond (`infra_1` p95 0.23 ms, `mobile_2` 0.67 ms, both agreeing with the delivery floor); `mobile_1` starts 3 mm from its published optical anchor, settling the frame question; the carts swap ends of the room and cross mid-run. Two report lines misled and were fixed: (1) ten `STEP` warnings for `infra_1` were a latched events topic replaying chrony's routine sub-5 ms adjustments from 26 minutes BEFORE the recording (all arriving at t=4.2 s, monotonic stamps spanning far more than the bag) — events are now parsed for `delta=`/`mono=`, backlog bursts are recognised as history, and only steps above `max_residual_ms` or a lost source alarm; (2) `mobile_2`'s '0.262 m largest step' at t=123.1 s sat inside a 2 s run of dropped frames — a walk at 0.14 m/s, not a jump — so steps are now reported as speed with the gap flagged. The 12% dropped frames cluster into three windows (0–1.5 s, 120–125 s, 147–151.5 s) where the two REMOTE agents fail together, i.e. the wifi/recorder, not the sensors. Tests 71/71 -> **76/76**. |
 | 2026-09-04 | 8.1b | **Clock handling corrected: verify, don't re-correct.** The hosts run chrony, so every `header.stamp` is ALREADY on a disciplined clock and the NTP status topic reports the residual the daemon believes remains — applying that again as a shift was redundant at best and, with the sign guessed, twice wrong. New default `clock.mode: verify` shifts nothing: the NTP offset and the delivery floor are read as evidence that discipline held, the daemon's own residual (p95 |offset|) is carried into every frame's `clock_residual_ms`, and warnings fire when it exceeds `max_residual_ms` (10 ms) or when the daemon event log (`/*/ntp/events`, now read) shows a step or a lost source mid-run — a discontinuity no offset series shows. `clock.mode: correct` keeps the old behaviour for hosts that were not disciplined at record time. The dry run now actually prints the clock table (it did not before; the numbers were only in the JSON). Tests 67/67 -> **71/71**: verify mode shifts nothing and carries the reported offset, the 50 ms bag warns in verify and corrects in correct, and a 0.4 ms fleet produces no clock warnings at all. |
