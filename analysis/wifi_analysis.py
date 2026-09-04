@@ -347,20 +347,34 @@ def main() -> int:
     plt.rcParams.update({"font.size": 8, "axes.edgecolor": GRID, "axes.labelcolor": TEXT,
                          "xtick.color": TEXT2, "ytick.color": TEXT2, "text.color": TEXT})
     t_max = float(status["t_s"].max())
-    fig, axes = plt.subplots(4, 1, figsize=(7.16, 6.4), sharex=True, constrained_layout=True)
 
-    ax = axes[0]
+    def group_known(group: str) -> bool:
+        sub = avail[avail["group"] == group]
+        return bool(len(sub)) and sub["known_frac"].max() > 0.0
+
+    panels = ["rssi", "rate"]
+    if group_known("station dump"):
+        panels.append("failures")
+    if group_known("channel survey"):
+        panels.append("occupancy")
+    fig, axes = plt.subplots(len(panels), 1, figsize=(7.16, 1.6 * len(panels) + 0.6),
+                             sharex=True, constrained_layout=True, squeeze=False)
+    axes = axes[:, 0]
+    at = {name: axes[i] for i, name in enumerate(panels)}
+    letter = {name: "(" + chr(ord("a") + i) + ")" for i, name in enumerate(panels)}
+
+    ax = at["rssi"]
     for lk in links:
         g = status[status["link"] == lk]
         ax.plot(g["t_s"], g["signal_dbm"], lw=1.1, color=color_of[lk], label=lk)
     ax.axhline(args.bad_rssi_dbm, color=BAD_COLOR, lw=0.8, ls="--")
     ax.set_ylabel("RSSI [dBm]")
-    ax.set_title("(a) received signal strength", loc="left", fontsize=8)
+    ax.set_title(f"{letter['rssi']} received signal strength", loc="left", fontsize=8)
     legend_handles = list(ax.get_lines()[: len(links)])
     legend_labels = list(links)
     ax.grid(True, color=GRID, lw=0.5)
 
-    ax = axes[1]
+    ax = at["rate"]
     for lk in links:
         g = status[status["link"] == lk]
         ax.plot(g["t_s"], g["tx_bitrate_mbps"], lw=1.1, color=color_of[lk])
@@ -372,27 +386,31 @@ def main() -> int:
                 legend_handles.append(h)
                 legend_labels.append(f"iperf, {kind}")
     ax.set_ylabel("rate [Mbit/s]")
-    ax.set_title("(b) lines: negotiated PHY rate.  markers: measured iperf goodput", loc="left", fontsize=8)
+    ax.set_title(f"{letter['rate']} lines: negotiated PHY rate.  markers: measured iperf goodput",
+                 loc="left", fontsize=8)
     ax.grid(True, color=GRID, lw=0.5)
 
-    ax = axes[2]
-    for lk in links:
-        g = status[status["link"] == lk]
-        ax.plot(g["t_s"], g["tx_failure_rate"] * 100, lw=1.1, color=color_of[lk], label=lk)
-    ax.axhline(args.bad_failure_rate * 100, color=BAD_COLOR, lw=0.8, ls="--")
-    ax.set_ylabel("TX failures [%]")
-    ax.set_title("(c) frames that failed after all retries", loc="left", fontsize=8)
-    ax.grid(True, color=GRID, lw=0.5)
+    if "failures" in at:
+        ax = at["failures"]
+        for lk in links:
+            g = status[status["link"] == lk]
+            ax.plot(g["t_s"], g["tx_failure_rate"] * 100, lw=1.1, color=color_of[lk], label=lk)
+        ax.axhline(args.bad_failure_rate * 100, color=BAD_COLOR, lw=0.8, ls="--")
+        ax.set_ylabel("TX failures [%]")
+        ax.set_title(f"{letter['failures']} frames that failed after all retries", loc="left", fontsize=8)
+        ax.grid(True, color=GRID, lw=0.5)
 
-    ax = axes[3]
-    for lk in links:
-        g = status[status["link"] == lk]
-        ax.plot(g["t_s"], g["busy_ratio_inst"], lw=1.1, color=color_of[lk], label=lk)
-    ax.set_ylabel("channel busy")
-    ax.set_ylim(0, 1)
-    ax.set_xlabel("time in run [s]")
-    ax.set_title("(d) channel occupancy", loc="left", fontsize=8)
-    ax.grid(True, color=GRID, lw=0.5)
+    if "occupancy" in at:
+        ax = at["occupancy"]
+        for lk in links:
+            g = status[status["link"] == lk]
+            ax.plot(g["t_s"], g["busy_ratio_inst"], lw=1.1, color=color_of[lk], label=lk)
+        ax.set_ylabel("channel busy")
+        ax.set_ylim(0, 1)
+        ax.set_title(f"{letter['occupancy']} channel occupancy", loc="left", fontsize=8)
+        ax.grid(True, color=GRID, lw=0.5)
+
+    axes[-1].set_xlabel("time in run [s]")
 
     thr = plt.Line2D([], [], color=BAD_COLOR, lw=0.8, ls="--")
     legend_handles.append(thr)
@@ -572,8 +590,8 @@ def main() -> int:
         dead_sentence = (
             f" The {' and '.join(dead_groups)} field group{'s' if len(dead_groups) != 1 else ''} "
             f"{'were' if len(dead_groups) != 1 else 'was'} not reported by the adapters in this run "
-            f"(the message definition marks them unavailable when the underlying \\texttt{{iw}} query is "
-            f"denied), so no statistic is quoted over them."
+            f"(the message definition marks them unavailable when the underlying \\texttt{{iw}} query is denied "
+            f"or unsupported by the adapter's driver), so no statistic is quoted over them."
         )
     derived_sentence = ""
     if "station dump" not in dead_groups:
