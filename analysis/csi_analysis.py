@@ -67,6 +67,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (  # noqa: E402
     GRID, TEXT, TEXT2, AGENT_COLOR, color_for, load_poses, node_of_topic, read_pcd_xy,
 )
+from csi_core import (  # noqa: E402
+    amplitude_db, delay_profile, rician_k, rms_delay_spread,
+)
 from extract_bag import extract  # noqa: E402
 
 import matplotlib
@@ -113,56 +116,6 @@ def stack_H(df: pd.DataFrame):
     im = np.stack(df.loc[keep, "csi_imag"].to_numpy())
     idx = np.asarray(df.loc[keep, "subcarrier_index"].iloc[0], dtype=int)
     return re.astype(np.float64) + 1j * im.astype(np.float64), idx, keep
-
-
-def delay_profile(H: np.ndarray, idx: np.ndarray, raw_slots: int):
-    """Power delay profile of every frame, aligned so the strongest tap is first.
-
-    The firmware's slot ordering (DC-centred or zero-first) is not recorded, and
-    the two differ by a half-window circular shift of the profile. Rolling each
-    profile to put its own peak at tap 0 makes every quantity below independent
-    of that convention, and turns the delay axis into excess delay past the
-    strongest path -- which is what a delay spread should be measured over."""
-    grid = np.zeros((H.shape[0], raw_slots), dtype=complex)
-    grid[:, np.clip(idx, 0, raw_slots - 1)] = H
-    h = np.fft.ifft(grid, axis=1)
-    P = np.abs(h) ** 2
-    shift = -np.argmax(P, axis=1)
-    r, c = np.ogrid[: P.shape[0], : P.shape[1]]
-    return P[r, (c - shift[:, None]) % P.shape[1]]
-
-
-def rms_delay_spread(P: np.ndarray, dt_s: float, window: int, floor_db: float = 20.0):
-    """RMS delay spread [s] over the taps after the strongest one.
-
-    Only the first `window` taps are considered (later taps are the profile
-    wrapping around) and only those within `floor_db` of the peak, so receiver
-    noise does not inflate the spread."""
-    Pw = P[:, :window].copy()
-    Pw[Pw < Pw.max(axis=1, keepdims=True) * 10 ** (-floor_db / 10)] = 0.0
-    tau = np.arange(window) * dt_s
-    tot = Pw.sum(axis=1)
-    ok = tot > 0
-    mean = np.where(ok, (Pw * tau).sum(axis=1) / np.where(ok, tot, 1), np.nan)
-    m2 = np.where(ok, (Pw * tau**2).sum(axis=1) / np.where(ok, tot, 1), np.nan)
-    return np.sqrt(np.maximum(m2 - mean**2, 0.0))
-
-
-def rician_k(H: np.ndarray):
-    """Rician K per frame from the 2nd and 4th moments of |H| across subcarriers.
-
-    K = sqrt(2 m2^2 - m4) / (m2 - sqrt(2 m2^2 - m4)), the standard moment
-    estimator; 2 m2^2 <= m4 means the amplitudes are Rayleigh, i.e. no dominant
-    path, reported as K = 0. Being a ratio of moments it is unaffected by AGC.
-    It treats subcarriers as independent fading samples, which holds only when
-    the delay spread is large against 1/bandwidth -- hence the smoothing in time
-    before anything is quoted."""
-    A2 = np.abs(H) ** 2
-    m2 = A2.mean(axis=1)
-    m4 = (A2**2).mean(axis=1)
-    root = np.sqrt(np.maximum(2 * m2**2 - m4, 0.0))
-    den = m2 - root
-    return np.where(den > 1e-18, root / np.where(den > 1e-18, den, 1), 0.0)
 
 
 def main() -> int:
@@ -225,8 +178,7 @@ def main() -> int:
         P = delay_profile(H, idx, raw_slots)
         tau = rms_delay_spread(P, dt_s, window)
         K = rician_k(H)
-        amp_db = 20 * np.log10(np.abs(H) + 1e-12)
-        amp_db -= np.median(amp_db, axis=1, keepdims=True)   # AGC out; shape kept
+        amp_db = amplitude_db(H)                             # AGC out, shape kept
         sel_db = amp_db.std(axis=1)
 
         frames.append(pd.DataFrame({

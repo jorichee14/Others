@@ -13,6 +13,8 @@ analysis/
 ├── wifi_analysis.py        Wi-Fi link quality and dual-radio correlation
 ├── wifi_issues.md          what the Wi-Fi suite measures, coop2 findings, fixes
 ├── csi_analysis.py         Wi-Fi CSI: multipath structure of the channel
+├── csi_core.py             shared CSI maths, numpy only (no pandas, no matplotlib)
+├── csi_image_node.py       ROS 2 node: one rendered image per CSI frame, live
 ├── requirements.txt
 └── tests/
     └── make_synthetic_bag.py   writes a small fake MCAP to try the scripts without the real bag
@@ -142,6 +144,44 @@ Outputs in `results/coop2/csi/`:
 | `csi_summary.md`, `csi_subsection.tex` | tables and a paragraph for the paper |
 | `fig_csi.{pdf,png}` | channel amplitude heat map per agent (diverging about each frame's median, so fades and peaks separate), then delay spread and K-factor over the run |
 | `fig_csi_map.{pdf,png}` | the trajectories coloured by K-factor — the same layout as the Wi-Fi coverage map, dark = better channel |
+
+## Live CSI view in ROS 2
+
+`csi_image_node.py` subscribes to a `CsiFrame` topic and publishes a rendered
+`sensor_msgs/Image` (and a JPEG `CompressedImage`) for **every frame**, so the
+channel can be watched in `rqt_image_view` while the robot drives.
+
+```bash
+python3 analysis/csi_image_node.py --ros-args \
+    -p input_topic:=/mobile1/csi -p publish_every_n:=4
+```
+
+One panel, three views of the same frame, plus a header with the source MAC,
+RSSI, Rician K and RMS delay spread:
+
+| View | What to watch for |
+|---|---|
+| waterfall | subcarrier against time. A clean channel bands smoothly; a blockage breaks it into deep, fast-moving notches — usually visible before RSSI has moved much |
+| \|H\| vs subcarrier | the current frame's frequency response, ±dB about its own median |
+| delay profile | rolled onto its strongest tap, so the axis is excess delay past the direct path. One tall tap = direct path dominates; a long tail = scatter |
+
+**Bandwidth.** CSI arrives at ~170 Hz and a 640×480 `bgr8` image is 920 kB, so
+one image per frame is roughly 150 MB/s. That is fine over shared memory on the
+robot and hopeless over Wi-Fi. The node prints the figure it is about to produce
+at startup. Raise `publish_every_n`, or set `publish_raw:=false` and subscribe to
+the `/compressed` topic.
+
+`cv2` is optional: without it the node still renders the waterfall and both
+plots, but drops the text overlay and the compressed topic.
+
+To check the layout without a robot:
+
+```bash
+python3 analysis/csi_image_node.py --selftest /tmp/csi.png
+```
+
+That renders the panel from a synthetic channel that switches from clear to
+blocked partway through, so the two signatures can be compared side by side.
 
 ## Extracting separately
 
