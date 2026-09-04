@@ -9,7 +9,7 @@ embedded in the bag.
 
 ```bash
 pip install -r requirements.txt
-python scripts/test_ros2opv2v.py                                  # 76 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                                  # 80 self-tests, no bag needed
 
 python scripts/inspect_bag.py    --bag <bag> --emit-config configs/mine.yaml   # stage A: look first
 python scripts/convert_rosbag.py --config configs/mine.yaml --dry-run          # stage B: plan, write nothing

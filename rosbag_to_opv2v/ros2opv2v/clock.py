@@ -61,9 +61,23 @@ OFFSET_FIELDS: Tuple[Tuple[str, Optional[float]], ...] = (
     ("time_offset", None), ("clock_offset", None), ("offset", None),
 )
 JITTER_FIELDS: Tuple[Tuple[str, Optional[float]], ...] = (
-    ("jitter_ms", 1e-3), ("jitter_sec", 1.0), ("jitter", None),
-    ("dispersion", None), ("root_dispersion", None), ("rms_ms", 1e-3),
+    ("jitter_ms", 1e-3), ("jitter_seconds", 1.0), ("jitter_sec", 1.0), ("jitter", None),
+    ("rms_ms", 1e-3),
 )
+# The daemon's formal worst-case error bound (root dispersion + half root
+# delay, in chrony terms). Much larger than the realised offset — several ms
+# against a fraction of one — so it is reported as the BOUND, not carried as
+# the residual: the residual says how far the stamps probably are, the bound
+# says how far they could be.
+BOUND_FIELDS: Tuple[Tuple[str, Optional[float]], ...] = (
+    ("root_dispersion_seconds", 1.0), ("root_dispersion", None), ("dispersion", None),
+    ("max_error_seconds", 1.0), ("max_error", None),
+)
+# Health flags a status message may carry. Read in verify mode: they are the
+# daemon saying, per sample, whether discipline actually held.
+HEALTH_FIELDS = ("synchronized", "clock_stepped", "offset_delta_seconds",
+                 "reachability_percent", "reach_register", "stratum", "sync_source",
+                 "leap_indicator", "warnings")
 
 # Below this, the parsed unit is already close enough to the delivery floor that
 # no rescale could matter, and "1000x smaller than nothing" is not evidence.
@@ -495,6 +509,13 @@ def build_offset_track(rows, offset_field=None, offset_unit=None,
     jitter = ([int(round(float(getattr(msg, jitter_name))
                          * (jitter_scale if jitter_scale is not None else scale) * NS))
                for _, msg in rows] if jitter_name else [])
+    bound_name, bound_scale = resolve_field(sample, BOUND_FIELDS)
+    bound_ms = None
+    if bound_name:
+        vals = sorted(abs(float(getattr(msg, bound_name))
+                          * (bound_scale if bound_scale is not None else scale))
+                      for _, msg in rows)
+        bound_ms = round(vals[min(len(vals) - 1, int(0.95 * len(vals)))] * 1e3, 4)
 
     track = OffsetTrack(
         stamps=[int(t) for t, _ in rows],
@@ -503,4 +524,53 @@ def build_offset_track(rows, offset_field=None, offset_unit=None,
         source=f"{source}.{name}",
         unit_confidence=confidence).finish()
     return track, {"field": name, "unit_scale": scale, "unit_confidence": confidence,
-                   "jitter_field": jitter_name}
+                   "jitter_field": jitter_name, "bound_field": bound_name,
+                   "bound_p95_ms": bound_ms, "health": status_health(rows)}
+
+
+def status_health(rows) -> dict:
+    """What the status messages say about whether discipline held.
+
+    Everything is optional — read with getattr so a status type that lacks a
+    field simply does not report it — but when present these are the daemon's
+    own per-sample verdicts, which no estimate from the outside can improve on:
+    ``synchronized`` false means free-running; ``clock_stepped`` with
+    ``offset_delta_seconds`` is a discontinuity WITH its size; reachability
+    below 100% means the source was dropping out.
+    """
+    out: dict = {"n": len(rows)}
+    if not rows:
+        return out
+    sample = rows[0][1]
+    have = {f for f in HEALTH_FIELDS if hasattr(sample, f)}
+    out["fields"] = sorted(have)
+    if "synchronized" in have:
+        unsynced = [t for t, m in rows if not bool(getattr(m, "synchronized"))]
+        out["unsynced_samples"] = len(unsynced)
+        out["unsynced_stamps_ns"] = unsynced[:20]
+    if "clock_stepped" in have:
+        steps = []
+        for t, m in rows:
+            if bool(getattr(m, "clock_stepped")):
+                delta = float(getattr(m, "offset_delta_seconds", 0.0)) \
+                    if "offset_delta_seconds" in have else float("nan")
+                steps.append({"stamp_ns": int(t), "delta_ms": delta * 1e3})
+        out["steps"] = steps
+    if "reachability_percent" in have:
+        reach = [int(getattr(m, "reachability_percent")) for _, m in rows]
+        out["reachability_min_pct"] = min(reach)
+        out["samples_below_full_reach"] = sum(1 for r in reach if r < 100)
+    if "stratum" in have:
+        out["strata"] = sorted({int(getattr(m, "stratum")) for _, m in rows})
+    if "sync_source" in have:
+        out["sync_sources"] = sorted({str(getattr(m, "sync_source")) for _, m in rows})
+    if "leap_indicator" in have:
+        leaps = sorted({str(getattr(m, "leap_indicator")) for _, m in rows})
+        out["leap_indicators"] = leaps
+    if "warnings" in have:
+        seen: dict = {}
+        for _, m in rows:
+            for w in list(getattr(m, "warnings") or []):
+                seen[str(w)] = seen.get(str(w), 0) + 1
+        out["daemon_warnings"] = seen
+    return out

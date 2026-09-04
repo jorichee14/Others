@@ -1780,6 +1780,84 @@ def test_fastest_moves_flag_steps_across_dropped_frames():
     assert rows[0]['t_s'] in (1.0, 3.1), 'ordered by speed, so the walk comes last'
 
 
+# -------------------------------------------------- the real NtpStatus schema
+# ntp_monitor_msgs/NtpStatus, as shown by `ros2 interface show`: every timing
+# field is float64 SECONDS, jitter is `jitter_seconds`, and the message carries
+# its own health verdicts. The first resolver pass had no `jitter_seconds`
+# candidate and fell through to `root_dispersion` — a formal worst-case bound
+# several times the realised jitter — and reported it as the residual.
+
+class _NtpStatus:
+    """A message shaped like the real schema, without ROS."""
+
+    def __init__(self, offset_s, jitter_s=0.0002, root_disp_s=0.005, synced=True,
+                 stepped=False, delta_s=0.0, reach=100, stratum=2, warnings=()):
+        self.role = "client"; self.hostname = "h"
+        self.synchronized = synced; self.sync_source = "10.0.0.1"
+        self.stratum_level = str(stratum); self.stratum = stratum
+        self.offset_seconds = offset_s; self.delay_seconds = 0.001
+        self.jitter_seconds = jitter_s; self.root_delay = 0.002
+        self.root_dispersion = root_disp_s; self.frequency_error_ppm = -3.1
+        self.poll_interval_seconds = 64; self.reach_register = 255 if reach == 100 else 127
+        self.reachability_percent = reach; self.connected_clients = -1
+        self.leap_indicator = "none"; self.warnings = list(warnings)
+        self.seq = 0; self.monotonic_seconds = 100.0
+        self.clock_stepped = stepped; self.offset_delta_seconds = delta_s
+
+
+def test_ntpstatus_fields_are_read_as_the_schema_says():
+    rows = [(i * NS, _NtpStatus(offset_s=0.0004)) for i in range(20)]
+    track, meta = clockmod.build_offset_track(rows, offset_field='offset_seconds',
+                                              offset_unit='s', source='/x/ntp/status')
+    assert meta['jitter_field'] == 'jitter_seconds', meta
+    assert meta['bound_field'] == 'root_dispersion', meta
+    assert abs(meta['bound_p95_ms'] - 5.0) < 1e-6, meta
+    stats = track.stats()
+    assert abs(stats['p95_abs_ms'] - 0.4) < 1e-6, stats
+    assert abs(stats['reported_jitter_p95_ms'] - 0.2) < 1e-6, stats
+    # verify-mode residual is the realised error, not the formal bound
+    clocks = clockmod.HostClocks('ref')
+    clocks.ntp['h'] = track
+    residual, source = clocks.residual_ns('h')
+    assert abs(residual / 1e6 - 0.4) < 1e-6 and source == 'ntp_reported_offset', (residual, source)
+
+
+def test_ntpstatus_health_flags_are_surfaced():
+    from ros2opv2v.convert import ConversionReport, _health_warnings
+    rows = [(i * NS, _NtpStatus(offset_s=0.0003)) for i in range(10)]
+    rows[3] = (3 * NS, _NtpStatus(offset_s=0.0003, synced=False, reach=50))
+    rows[7] = (7 * NS, _NtpStatus(offset_s=0.0003, stepped=True, delta_s=0.120,
+                                  warnings=('source switched',)))
+    _, meta = clockmod.build_offset_track(rows, offset_field='offset_seconds',
+                                          offset_unit='s')
+    health = meta['health']
+    assert health['unsynced_samples'] == 1 and health['reachability_min_pct'] == 50, health
+    assert len(health['steps']) == 1 and abs(health['steps'][0]['delta_ms'] - 120.0) < 1e-9
+    assert health['daemon_warnings'] == {'source switched': 1}
+    report = ConversionReport()
+    _health_warnings('h', health, 10.0, 0, report)
+    texts = "\n".join(report.warnings)
+    assert 'synchronized=false in 1 of 10' in texts, texts
+    assert 'clock_stepped with a +120.0 ms delta at t=7.0 s' in texts, texts
+    assert 'reachability dropped to 50%' in texts, texts
+    assert "daemon warning x1: 'source switched'" in texts, texts
+
+
+def test_ntpstatus_healthy_stream_is_quiet():
+    from ros2opv2v.convert import ConversionReport, _health_warnings
+    rows = [(i * NS, _NtpStatus(offset_s=0.0003)) for i in range(10)]
+    _, meta = clockmod.build_offset_track(rows, offset_field='offset_seconds', offset_unit='s')
+    report = ConversionReport()
+    _health_warnings('h', meta['health'], 10.0, 0, report)
+    assert report.warnings == [], report.warnings
+
+
+def test_mirc_config_pins_the_ntpstatus_fields():
+    cfg = _mirc_config()
+    assert cfg['clock']['offset_field'] == 'offset_seconds'
+    assert cfg['clock']['offset_unit'] == 's'
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

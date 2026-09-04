@@ -280,6 +280,8 @@ def reconcile_clocks(reader: BagReader, cfg: ConverterConfig, indexes,
             continue
         clocks.ntp[host] = track
         meta[host] = info
+        _health_warnings(host, info.get("health") or {}, cfg.clock.max_residual_ms,
+                         _bag_start_ns(indexes), report)
         if info["unit_confidence"] in ("low", "all_zero", "none", "ambiguous"):
             report.warnings.append(
                 f"clock: {host} NTP offset unit could not be inferred with "
@@ -439,6 +441,48 @@ def _classify_clock_events(host: str, parsed: List[dict], bag_span_s: float,
             f"clock: {host} logged {len(routine)} routine daemon adjustment(s) during the "
             f"recording, largest {biggest:.2f} ms — below clock.max_residual_ms="
             f"{max_residual_ms:g}, so already covered by the per-frame residual.")
+
+
+def _bag_start_ns(indexes) -> int:
+    return min((e.header_stamps[0] for e in indexes.values() if e.header_stamps), default=0)
+
+
+def _health_warnings(host: str, health: dict, max_residual_ms: float, t0_ns: int,
+                     report: ConversionReport) -> None:
+    """Turn the daemon's own per-sample verdicts into warnings, once each."""
+    n = health.get("n", 0)
+    if not n:
+        return
+    unsynced = health.get("unsynced_samples", 0)
+    if unsynced:
+        first = health.get("unsynced_stamps_ns") or [t0_ns]
+        report.warnings.append(
+            f"clock: {host} reported synchronized=false in {unsynced} of {n} status "
+            f"samples (first at t={((first[0] - t0_ns) / 1e9):.1f} s). While unsynchronised "
+            f"the clock is free-running and its stamps are not comparable to the other "
+            f"hosts' — frames in those stretches should be treated as unsynchronised.")
+    big = [s for s in (health.get("steps") or []) if abs(s["delta_ms"]) > max_residual_ms]
+    small = [s for s in (health.get("steps") or []) if abs(s["delta_ms"]) <= max_residual_ms]
+    for s in big:
+        report.warnings.append(
+            f"clock: {host} status flagged clock_stepped with a {s['delta_ms']:+.1f} ms "
+            f"delta at t={((s['stamp_ns'] - t0_ns) / 1e9):.1f} s — a discontinuity in this "
+            f"host's stamps larger than the per-frame residual covers.")
+    if small and not big:
+        report.warnings.append(
+            f"clock: {host} status flagged {len(small)} clock step(s), all "
+            f"≤ {max(abs(s['delta_ms']) for s in small):.2f} ms — routine, below "
+            f"clock.max_residual_ms={max_residual_ms:g}.")
+    reach = health.get("reachability_min_pct")
+    if reach is not None and reach < 100:
+        report.warnings.append(
+            f"clock: {host} reachability dropped to {reach}% "
+            f"({health.get('samples_below_full_reach', 0)} of {n} samples below 100%): the "
+            f"time source was intermittently unreachable; discipline coasted on the "
+            f"frequency estimate through those stretches.")
+    warns = health.get("daemon_warnings") or {}
+    for text, count in sorted(warns.items(), key=lambda kv: -kv[1])[:5]:
+        report.warnings.append(f"clock: {host} daemon warning x{count}: {text!r}")
 
 
 def _bag_midpoint(indexes) -> int:

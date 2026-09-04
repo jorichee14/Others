@@ -70,8 +70,12 @@ clock:
   events_topics:                   # chrony event log: a STEP mid-run is a
     infra_1: /infra_1/ntp/events   # discontinuity no offset series shows
     mobile_2: /mobile_2/ntp/events
-  offset_field: null             # null = resolve from the message, then check the
-  offset_unit: null              # inferred unit against the delivery floor
+  # Pinned from `ros2 interface show ntp_monitor_msgs/msg/NtpStatus`: all timing
+  # fields are float64 seconds. jitter_seconds is the realised jitter,
+  # root_dispersion the formal bound; synchronized / clock_stepped /
+  # offset_delta_seconds / reachability_percent are read as health.
+  offset_field: offset_seconds
+  offset_unit: s
   sign: auto                     # ntpq and chrony disagree; decided from the data
   cross_check_tolerance_ms: 20
   require_measured: false        # true would refuse to convert while mobile_1 is

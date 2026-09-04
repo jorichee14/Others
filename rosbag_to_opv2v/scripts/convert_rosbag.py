@@ -69,16 +69,29 @@ def print_report(report: ConversionReport, dry_run: bool = False) -> None:
                   "shifted.\n  'ntp p95' is the residual the daemon itself reports; "
                   "'floor Δ' is the\n  delivery-floor estimate of the same offset, "
                   "independent of the daemon.")
+        fields = meta.get("ntp_fields", {})
         print(f"  {'host':<12} {'ntp p95':>9} {'floor Δ':>9} {'agree?':>12} "
-              f"{'residual':>9}  carried per frame as")
+              f"{'residual':>9} {'bound':>8}  {'sync':>5} {'strat':>5} {'reach':>5}")
         for host, entry in sorted(clocks.items()):
             ntp = entry.get("ntp", {})
             p95 = f"{ntp['p95_abs_ms']:.2f}ms" if ntp else "—"
             detail = entry.get("cross_check_detail", {})
             floor = (f"{detail['delivery_floor_correction_ms']:+.1f}ms"
                      if detail else "—")
+            info = fields.get(host, {})
+            bound = (f"{info['bound_p95_ms']:.1f}ms"
+                     if info.get("bound_p95_ms") is not None else "—")
+            health = info.get("health") or {}
+            sync = ("ok" if health.get("unsynced_samples") == 0 else
+                    f"{health['unsynced_samples']}!" if health.get("unsynced_samples") else "—")
+            strat = ("/".join(str(x) for x in health["strata"])
+                     if health.get("strata") else "—")
+            reach = (f"{health['reachability_min_pct']}%"
+                     if health.get("reachability_min_pct") is not None else "—")
             print(f"  {host:<12} {p95:>9} {floor:>9} {entry['cross_check']:>12} "
-                  f"{entry['residual_ms']:>7.2f}ms  {entry['residual_source']}")
+                  f"{entry['residual_ms']:>7.2f}ms {bound:>8}  {sync:>5} {strat:>5} {reach:>5}")
+        print("  residual = max(daemon offset p95, jitter p95), carried per frame; "
+              "bound = the daemon's formal worst case (root dispersion)")
         if mode == "correct":
             for host, entry in sorted(clocks.items()):
                 print(f"  {host:<12} applied {entry['correction_ms']:+.2f} ms "
