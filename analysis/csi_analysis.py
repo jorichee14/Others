@@ -68,7 +68,8 @@ from common import (  # noqa: E402
     GRID, TEXT, TEXT2, AGENT_COLOR, color_for, load_poses, node_of_topic, read_pcd_xy,
 )
 from csi_core import (  # noqa: E402
-    amplitude_db, delay_profile, rician_k, rms_delay_spread,
+    amplitude_db, delay_profile, profile_structure_db, rician_k, rms_delay_spread,
+    usable_subcarriers,
 )
 from extract_bag import extract  # noqa: E402
 
@@ -80,6 +81,20 @@ import matplotlib.colors  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+
+BAD = "#e34948"
+
+
+def _runs(v):
+    """Contiguous runs in a sorted integer array, as (first, last) pairs."""
+    v = np.asarray(v)
+    if v.size == 0:
+        return []
+    brk = np.flatnonzero(np.diff(v) != 1)
+    starts = np.r_[0, brk + 1]
+    ends = np.r_[brk, v.size - 1]
+    return [(int(v[a]), int(v[b])) for a, b in zip(starts, ends)]
+
 
 # 802.11 frame control values the capture firmware reports
 FRAME_TYPES = {0x88: "QoS Data", 0x94: "Block Ack", 0x80: "Beacon", 0x08: "Data"}
@@ -129,6 +144,10 @@ def main() -> int:
     ap.add_argument("--pose-topic", default="global_pose")
     ap.add_argument("--stride", type=int, default=1, help="use every Nth frame for the per-frame metrics")
     ap.add_argument("--smooth-s", type=float, default=1.0, help="window for the smoothed traces")
+    ap.add_argument("--null-floor-db", type=float, default=12.0,
+                    help="slots this far below the median slot power are guard/DC nulls")
+    ap.add_argument("--min-profile-db", type=float, default=6.0,
+                    help="peak-to-median a delay profile needs before its spread is reported")
     args = ap.parse_args()
 
     extracts = args.extracts or Path("extracts") / args.run
@@ -170,13 +189,23 @@ def main() -> int:
 
         # ---- per-frame channel metrics ------------------------------------------
         sub = df.iloc[:: max(args.stride, 1)].reset_index(drop=True)
-        H, idx, keep = stack_H(sub)
+        H_all, idx_all, keep = stack_H(sub)
         sub = sub.loc[keep].reset_index(drop=True)
-        n_sub = H.shape[1]
+        # Guard and DC-null slots carry no signal; including them makes every
+        # amplitude statistic meaningless (see usable_subcarriers).
+        use = usable_subcarriers(H_all, args.null_floor_db)
+        H, idx = H_all[:, use], idx_all[use]
+        n_sub, n_raw_cols = H.shape[1], H_all.shape[1]
+        sc_power_db = 10 * np.log10(np.maximum((np.abs(H_all) ** 2).mean(axis=0), 1e-30))
+        sc_power_db -= np.median(sc_power_db[use])
         dt_s = 1.0 / (bw * 1e6)                      # tap spacing of the delay profile
         window = max(raw_slots // 4, 8)
         P = delay_profile(H, idx, raw_slots)
+        struct_db = profile_structure_db(P)
         tau = rms_delay_spread(P, dt_s, window)
+        # A flat profile is noise, and its "delay spread" is the window width
+        # over sqrt(12). Refuse to report a number for those frames.
+        tau = np.where(struct_db >= args.min_profile_db, tau, np.nan)
         K = rician_k(H)
         amp_db = amplitude_db(H)                             # AGC out, shape kept
         sel_db = amp_db.std(axis=1)
@@ -188,9 +217,11 @@ def main() -> int:
             "delay_spread_ns": tau * 1e9,
             "k_factor": K,
             "k_factor_db": 10 * np.log10(np.maximum(K, 1e-3)),
+            "profile_structure_db": struct_db,
         }))
         per_agent[agent] = dict(t=sub["t_s"].to_numpy(), amp_db=amp_db, idx=idx,
-                                bw=bw, dt_ns=dt_s * 1e9)
+                                bw=bw, dt_ns=dt_s * 1e9,
+                                sc_power_db=sc_power_db, sc_idx=idx_all, use=use)
 
         inv_rows.append({
             "run": args.run, "agent": agent, "topic": df["topic"].iloc[0],
@@ -198,8 +229,13 @@ def main() -> int:
             "channel": int(df["channel"].mode().iloc[0]), "bandwidth_mhz": bw,
             "chanspec": f"0x{int(df['chanspec'].mode().iloc[0]):04x}",
             "chip_version": f"0x{int(df['chip_version'].mode().iloc[0]):04x}",
-            "raw_slots": raw_slots, "subcarriers_kept": n_sub,
-            "trimmed": bool(df["trimmed"].mode().iloc[0]),
+            "raw_slots": raw_slots,
+            "subcarriers_in_message": n_raw_cols,
+            "subcarriers_usable": n_sub,
+            "nulls_dropped": n_raw_cols - n_sub,
+            "trimmed_flag": bool(df["trimmed"].mode().iloc[0]),
+            "profile_structure_median_db": float(np.nanmedian(struct_db)),
+            "frames_with_flat_profile_pct": float(100 * np.mean(struct_db < args.min_profile_db)),
             "streams": "; ".join(f"core{c}/ss{s}" for c, s in streams),
             "n_streams": len(streams),
             "transmitters": int(df["src_mac"].nunique()),
@@ -235,11 +271,11 @@ def main() -> int:
     agents = sorted(per_agent)
     ncol = len(agents)
     t_max = float(fr["t_s"].max())
-    fig = plt.figure(figsize=(4.2 * ncol + 1.0, 7.4))
-    gs = fig.add_gridspec(3, ncol + 1, height_ratios=[1.25, 1.0, 1.0],
+    fig = plt.figure(figsize=(4.2 * ncol + 1.0, 8.8))
+    gs = fig.add_gridspec(4, ncol + 1, height_ratios=[1.25, 0.55, 1.0, 1.0],
                           width_ratios=[1.0] * ncol + [0.05],
-                          hspace=0.42, wspace=0.26,
-                          left=0.075, right=0.93, top=0.93, bottom=0.09)
+                          hspace=0.50, wspace=0.26,
+                          left=0.075, right=0.93, top=0.94, bottom=0.075)
     amp_cmap = matplotlib.colors.LinearSegmentedColormap.from_list("amp", AMP_DIVERGING)
     # symmetric about 0 dB so the neutral midpoint really is "at the frame median"
     vabs = float(np.percentile(np.abs(np.concatenate(
@@ -264,7 +300,23 @@ def main() -> int:
         cb.ax.tick_params(labelsize=7)
         cb.outline.set_visible(False)
 
-    ax = fig.add_subplot(gs[1, :])
+    # which FFT slots actually carry a subcarrier -- the panel that says whether
+    # the guard bands and the DC null were left in
+    for i, a in enumerate(agents):
+        ax = fig.add_subplot(gs[1, i])
+        p = per_agent[a]
+        ax.plot(p["sc_idx"], p["sc_power_db"], lw=1.0, color=color_for(a))
+        dead = ~p["use"]
+        if dead.any():
+            for lo_i, hi_i in _runs(p["sc_idx"][dead]):
+                ax.axvspan(lo_i - 0.5, hi_i + 0.5, color=BAD, alpha=0.16, lw=0)
+        ax.axhline(-args.null_floor_db, color=BAD, lw=0.8, ls="--")
+        ax.set_xlabel("subcarrier index"); ax.set_ylabel("mean power [dB]" if i == 0 else "")
+        ax.set_title(f"({chr(97 + ncol + i)}) {a}: {int(p['use'].sum())} of {p['use'].size} slots "
+                     f"carry a subcarrier", loc="left", fontsize=8)
+        ax.grid(True, color=GRID, lw=0.5)
+
+    ax = fig.add_subplot(gs[2, :])
     for a in agents:
         g = fr[fr["agent"] == a]
         sm = smooth(g)
@@ -275,11 +327,15 @@ def main() -> int:
     ax.text(0.995, tap, f" one tap ({tap:.1f} ns) ", transform=ax.get_yaxis_transform(),
             ha="right", va="bottom", fontsize=6.5, color=TEXT2)
     ax.set_xlim(0, t_max); ax.set_ylabel("RMS delay spread [ns]")
-    ax.set_title(f"({chr(97 + ncol)}) multipath spread  (faint: per frame, bold: {args.smooth_s:.0f} s median)",
+    flat = float(inventory["frames_with_flat_profile_pct"].max())
+    flat_note = (f".  {flat:.0f}% of frames had too flat a profile to measure and are omitted"
+                 if flat > 0.5 else "")
+    ax.set_title(f"({chr(97 + 2 * ncol)}) multipath spread  "
+                 f"(faint: per frame, bold: {args.smooth_s:.0f} s median){flat_note}",
                  loc="left", fontsize=8)
     ax.legend(frameon=False, fontsize=7, ncol=len(agents)); ax.grid(True, color=GRID, lw=0.5)
 
-    ax = fig.add_subplot(gs[2, :])
+    ax = fig.add_subplot(gs[3, :])
     for a in agents:
         g = fr[fr["agent"] == a]
         sm = smooth(g)
@@ -294,7 +350,7 @@ def main() -> int:
     ax.set_ylabel("Rician K [dB]")
     floor_note = (f".  {100 * n_floor / len(fr):.0f}% of frames fall below the axis: no dominant path at all"
                   if n_floor else "")
-    ax.set_title(f"({chr(98 + ncol)}) dominant-path strength  "
+    ax.set_title(f"({chr(98 + 2 * ncol)}) dominant-path strength  "
                  f"(high = one strong path, low = diffuse){floor_note}",
                  loc="left", fontsize=8)
     ax.grid(True, color=GRID, lw=0.5)
@@ -359,6 +415,8 @@ def main() -> int:
 
     # ---- markdown ----------------------------------------------------------------
     coarse = inventory[inventory["bandwidth_mhz"] <= 20]
+    nulls = inventory[inventory["nulls_dropped"] > 0]
+    flatf = inventory[inventory["frames_with_flat_profile_pct"] > 5]
     md = [f"# Wi-Fi CSI — run `{args.run}`", "",
           "One CSI frame is the complex channel response of one received 802.11 frame across "
           "OFDM subcarriers. Everything below uses |H| and its delay profile only: the recorded "
@@ -367,6 +425,23 @@ def main() -> int:
           "own median, which removes the receiver's automatic gain control.", "",
           "## Capture inventory", "",
           inventory.round(2).to_markdown(index=False), ""]
+    if len(nulls):
+        md += ["> **Guard and DC-null slots were present and have been excluded.** "
+               + ", ".join(f"`{r.agent}` dropped {int(r.nulls_dropped)} of "
+                           f"{int(r.subcarriers_in_message)} slots" for r in nulls.itertuples())
+               + f" (`trimmed` flag says {nulls['trimmed_flag'].iloc[0]}). Those slots carry no "
+               "signal, so leaving them in makes the amplitude distribution bimodal: the 4th "
+               "moment rises, the Rician estimator returns 0 (Rayleigh) for every frame however "
+               "clean the channel, and the frequency selectivity is inflated by tens of dB. "
+               "Panels (c)/(d) of the figure show which slots were dropped.", ""]
+    if len(flatf):
+        md += ["> **Flat delay profiles.** "
+               + ", ".join(f"`{r.agent}` {r.frames_with_flat_profile_pct:.0f}% of frames"
+                           for r in flatf.itertuples())
+               + f" had a peak-to-median below {args.min_profile_db:.0f} dB, meaning the profile "
+               "carries no resolvable multipath structure. Their delay spread is not reported: a "
+               "flat profile would return the analysis window over sqrt(12), a number about the "
+               "measurement rather than the room.", ""]
     if len(coarse):
         md += ["> **Delay spread not quotable** for "
                + ", ".join(f"`{r.agent}`" for r in coarse.itertuples())
@@ -405,8 +480,8 @@ def main() -> int:
     tex = f"""\\subsubsection{{Wi-Fi Channel State Information}}
 Both mobile agents capture per-frame CSI with a Nexmon-patched radio at about
 {inventory['rate_hz'].median():.0f}\\,Hz, on channel {int(r0['channel'])} at {int(r0['bandwidth_mhz'])}\\,MHz,
-retaining {int(r0['subcarriers_kept'])} of {int(r0['raw_slots'])} subcarrier slots after the constant and
-DC-null slots are trimmed. Frames from {len(macs)} transmitter{'s' if len(macs) != 1 else ''} are measured,
+of which {int(r0['subcarriers_usable'])} of {int(r0['subcarriers_in_message'])} FFT slots carry a
+subcarrier, the rest being guard bands and the DC null and excluded from every amplitude statistic. Frames from {len(macs)} transmitter{'s' if len(macs) != 1 else ''} are measured,
 so the source address identifies which path each measurement describes. From the channel amplitude we
 report the Rician K-factor (the power of the dominant path relative to the diffuse component) and the RMS
 delay spread of the power delay profile: {per}. Recorded phase carries an unknown per-frame carrier and
@@ -415,8 +490,10 @@ automatic gain control, so both quantities are ratios and independent of it.{coa
 """
     (out / "csi_subsection.tex").write_text(tex)
 
-    print(inventory[["agent", "frames", "rate_hz", "channel", "bandwidth_mhz", "subcarriers_kept",
-                     "n_streams", "transmitters", "tap_spacing_ns"]].round(2).to_string(index=False))
+    print(inventory[["agent", "frames", "rate_hz", "bandwidth_mhz", "subcarriers_in_message",
+                     "subcarriers_usable", "nulls_dropped", "trimmed_flag",
+                     "profile_structure_median_db", "frames_with_flat_profile_pct",
+                     "n_streams", "transmitters"]].round(2).to_string(index=False))
     print()
     print(transmitters[["agent", "src_mac", "frame_type", "frames", "share", "rssi_median_dbm"]]
           .round(3).to_string(index=False))

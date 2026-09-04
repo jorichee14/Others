@@ -15,6 +15,40 @@ from __future__ import annotations
 import numpy as np
 
 
+def usable_subcarriers(H: np.ndarray, floor_db: float = 12.0) -> np.ndarray:
+    """Boolean mask of the columns that carry a real subcarrier.
+
+    An 802.11 OFDM symbol does not use every FFT slot: the band edges are guard
+    bands and the centre is a DC null, and at 80 MHz that is roughly 20 of 256
+    slots carrying no signal. Whether the publisher removed them is recorded in
+    `trimmed`, but the flag cannot be trusted over the data, so this decides
+    from the mean power per slot: anything more than `floor_db` below the median
+    slot is not carrying a subcarrier.
+
+    Leaving them in is not a cosmetic problem. The amplitude distribution
+    becomes bimodal -- a body of real subcarriers plus a spike near zero -- and
+    that drives the 4th moment up, which makes the Rician estimator return 0
+    (Rayleigh) for every frame however clean the channel is, and inflates the
+    frequency selectivity by tens of dB."""
+    p = (np.abs(np.atleast_2d(H)) ** 2).mean(axis=0)
+    pos = p[p > 0]
+    if pos.size == 0:
+        return np.ones(p.size, bool)
+    return p > np.median(pos) * 10 ** (-floor_db / 10)
+
+
+def profile_structure_db(P: np.ndarray) -> np.ndarray:
+    """Peak-to-median of each delay profile, in dB.
+
+    A real channel puts most of its energy in a few taps, so this is large. When
+    it approaches 0 dB the profile is flat -- noise, not multipath -- and any
+    delay spread computed from it is just the width of the analysis window
+    divided by sqrt(12), a number about the measurement rather than the room."""
+    P = np.atleast_2d(P)
+    med = np.median(P, axis=1)
+    return 10 * np.log10(np.maximum(P.max(axis=1), 1e-30) / np.maximum(med, 1e-30))
+
+
 def delay_profile(H: np.ndarray, idx: np.ndarray, raw_slots: int) -> np.ndarray:
     """Power delay profile per frame, each rolled so its strongest tap is first.
 
