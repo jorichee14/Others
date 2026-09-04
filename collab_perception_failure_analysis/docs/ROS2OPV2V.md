@@ -9,7 +9,7 @@ python scripts/inspect_bag.py     --bag <bag> --emit-config configs/mine.yaml
 python scripts/convert_rosbag.py  --config configs/mine.yaml --dry-run
 python scripts/convert_rosbag.py  --config configs/mine.yaml
 python scripts/validate_opv2v.py  --root <out>/test --with-open3d
-python scripts/test_ros2opv2v.py                       # 54 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                       # 58 self-tests, no bag needed
 ```
 
 Dependencies: `numpy`, `pyyaml`, and `mcap` + `mcap-ros2-support` for `.mcap`
@@ -92,6 +92,13 @@ while any of them is `null` rather than guessing:
      `extrinsic` under it is measured **from the camera**, not from `base_link`.
      `geometry.matrix_to_rpy_config` converts a calibration 4×4 into the config
      block so that re-expression is a command, not arithmetic by hand.
+   * **Turn `optical_frame` off on depth clouds.** That flag rotates a
+     reprojected cloud from the optical convention into ROS body (FLU), which is
+     right when the base is a `base_link` and pure error when the base is
+     already an optical frame and the extrinsic is optical→optical. It is the
+     worst kind of mistake this converter can make: the conversion succeeds, the
+     validator passes, and the agent is turned 90°. On the MIRC rig it displaces
+     a 3 m return by 4.2 m.
    * **Stamps.** Republished poses normally keep the original bag stamps, so
      they are still on their own host's clock and
      [clock reconciliation](#synchronisation) still applies unchanged.

@@ -1358,6 +1358,122 @@ def test_matrix_to_rpy_config_round_trips():
         assert np.allclose(make_transform(**matrix_to_rpy_config(T)), T, atol=1e-9)
 
 
+# ------------------------------------- the shipped MIRC config's provenance
+# Every extrinsic in configs/mirc_coop2.yaml was derived from transforms the
+# dataset publishes. Hand-editing one of them is a silent geometric error — the
+# conversion still succeeds and every cloud is in the wrong place — so the
+# derivation is pinned here rather than living only in a comment.
+
+MIRC_PUBLISHED = {
+    # name: (translation, quaternion xyzw) for "A -> B" = the pose of B in A
+    'map__arducam': ([-5.508181, -2.590753, 1.998232],
+                     [-0.374458, 0.769398, -0.461975, 0.233208]),
+    'oslidar__zedopt': ([-0.074928, -0.066971, -0.091627],
+                        [-0.497829, -0.498035, 0.501789, 0.502329]),
+    'coloropt__depthopt': ([0.059190, -0.000010, -0.000406],
+                           [-0.002966, 0.000832, 0.001305, 0.999994]),
+    'arducam__infra1': ([0.017773, -0.208023, -0.155788],
+                        [0.571431, 0.563856, 0.432969, -0.409965]),
+    'cameralink__coloropt': ([0.000308, 0.059191, -0.000162],
+                             [0.499583, -0.497446, 0.501716, -0.501244]),
+}
+
+
+def _published(name):
+    t, q = MIRC_PUBLISHED[name]
+    T = quat_to_matrix(*q)
+    T[:3, 3] = t
+    return T
+
+
+def _mirc_config():
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        'configs', 'mirc_coop2.yaml')
+    with open(path) as handle:
+        return yaml.safe_load(handle)
+
+
+def _agent(cfg, name):
+    return next(a for a in cfg['agents'] if a['name'] == name)
+
+
+def test_mirc_extrinsics_match_the_published_transforms():
+    """Each config extrinsic must reproduce the transform it claims to be."""
+    cfg = _mirc_config()
+    cases = [
+        # (agent, block, expected 4x4, why)
+        ('mobile_1', _agent(cfg, 'mobile_1')['cloud']['extrinsic'],
+         invert(_published('oslidar__zedopt')),
+         'the dataset publishes os_lidar -> ZED optical; the base is the camera, '
+         'so the config needs the inverse'),
+        ('mobile_2', _agent(cfg, 'mobile_2')['cloud']['extrinsic'],
+         _published('coloropt__depthopt'),
+         'colour optical -> depth optical, as published'),
+        ('infra_1', _agent(cfg, 'infra_1')['cloud']['extrinsic'],
+         _published('arducam__infra1'),
+         'arducam optical -> radar, as published'),
+        ('infra_1 world', _agent(cfg, 'infra_1')['pose']['world_pose'],
+         _published('map__arducam'),
+         'map -> arducam optical, as published'),
+    ]
+    for label, block, expected, why in cases:
+        assert block is not None, (label, 'still null')
+        got = make_transform(**block)
+        assert np.allclose(got, expected, atol=2e-5), (label, why, got, expected)
+
+
+def test_mirc_optical_frame_flags_match_the_optical_bases():
+    """Every agent's base is a camera optical frame, so a depth cloud must NOT be
+    rotated into ROS body convention on the way out.
+
+    `optical_frame: true` applies OPTICAL_TO_FLU to the reprojected points. With
+    an optical base and an optical->optical extrinsic that rotation is pure
+    error, and it is invisible: the conversion succeeds and the whole agent is
+    turned 90 degrees. On a 3 m return it displaces the point by 4.2 m.
+    """
+    from ros2opv2v.geometry import OPTICAL_TO_FLU
+    cfg = _mirc_config()
+    for name in ('mobile_2', 'mobile_1_zed'):
+        cloud = _agent(cfg, name)['cloud']
+        if cloud['kind'] != 'depth_image':
+            continue
+        assert cloud.get('optical_frame') is False, \
+            (name, 'depth cloud on an optical base must set optical_frame: false')
+    # and the magnitude of the mistake, so the assertion above has a stated cost
+    T = _published('coloropt__depthopt')
+    p3 = np.array([0.0, 0.0, 3.0, 1.0])
+    displaced = np.linalg.norm((T @ p3)[:3] - (T @ invert(OPTICAL_TO_FLU) @ p3)[:3])
+    assert displaced > 4.0, displaced
+
+
+def test_realsense_camera_link_is_the_depth_frame():
+    """camera_link -> colour -> depth must close on itself. It is the one
+    consistency check available between the two RealSense transforms, and it is
+    what licenses treating camera_link as the depth body frame."""
+    chain = _published('cameralink__coloropt') @ _published('coloropt__depthopt')
+    assert np.linalg.norm(chain[:3, 3]) < 1e-5, chain[:3, 3]
+
+
+def test_mirc_config_has_no_unresolved_geometry():
+    """The only value the dataset does not supply is the robots' physical size.
+    Everything else must be filled, so a null anywhere else is a regression."""
+    cfg = _mirc_config()
+    missing = []
+    for a in cfg['agents']:
+        if not a.get('enabled', True):
+            continue
+        if a['pose']['source'] == 'static' and a['pose'].get('world_pose') is None:
+            missing.append('%s.pose.world_pose' % a['name'])
+        if a['cloud'].get('extrinsic') is None:
+            missing.append('%s.cloud.extrinsic' % a['name'])
+        for i, cam in enumerate(a.get('cameras') or []):
+            if cam.get('extrinsic') is None:
+                missing.append('%s.cameras[%d].extrinsic' % (a['name'], i))
+        if a['pose']['source'] != 'static' and a['pose'].get('align') is None:
+            missing.append('%s.pose.align' % a['name'])
+    assert not missing, missing
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

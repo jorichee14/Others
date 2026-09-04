@@ -134,15 +134,13 @@ agents:
     cloud:
       kind: pointcloud2
       topic: /mobile_1/ouster/points       # 1516 msgs
-      # REQUIRED: ZED left optical -> Ouster. This is inv(T_lidar_camera) from
-      # calibration.json, since stage 08 uses T_lidar_camera as the pose of the
-      # CAMERA in the LIDAR frame. NOT base_link -> os_sensor any more: the base
-      # is the optical frame now. To fill it in without hand-converting:
-      #   python3 -c "import numpy as np, json; \
-      #     from ros2opv2v.geometry import invert, matrix_to_rpy_config; \
-      #     T=np.array(json.load(open('calibration.json'))['T_lidar_camera']); \
-      #     print(json.dumps(matrix_to_rpy_config(invert(T)), indent=1))"
-      extrinsic: null
+      # ZED left optical -> os_lidar. The dataset publishes the OTHER direction
+      # ("os_lidar -> zed_left_camera_optical_frame", t [-0.074928, -0.066971,
+      # -0.091627], q [-0.497829, -0.498035, 0.501789, 0.502329]), so this is
+      # its INVERSE — the base is the camera now, not the lidar. Re-derived and
+      # checked by test_mirc_extrinsics_match_the_published_transforms.
+      extrinsic: {x: 0.067064, y: -0.092192, z: -0.074147,
+                  roll: 2.2959, pitch: 89.5267, yaw: -87.6614}
       intensity:
         field: intensity                   # Ouster also offers 'reflectivity'
         scale: 0.0001                      # raw counts are O(1e3-1e4); clipped to 1
@@ -158,6 +156,15 @@ agents:
       # A 128-beam sweep is ~130k points; OPV2V frames are ~80k. Capping keeps
       # preprocessing time comparable. Set 0 to keep everything.
       max_points: 100000
+      # mobile_1 also carries two radars, rigid to the ZED and therefore
+      # measured directly from this agent's base. They are not exported (OPV2V
+      # gives one cloud per agent, and a radar agent here would sit at the same
+      # pose as this one — see the mobile_1_zed note below), but the extrinsics
+      # are recorded so they are not lost:
+      #   radar1_link  {x: 0.207505, y: 0.076150, z: -0.108883,
+      #                 roll: -174.5848, pitch: -76.2388, yaw: -95.2193}
+      #   radar2_link  {x: -0.053850, y: 0.046553, z: -0.112039,
+      #                 roll: 160.0651, pitch: -86.7452, yaw: 24.8992}
       ground_lift: 0.0                     # see docs/ROS2OPV2V.md before changing
       min_points: 1
     cameras:
@@ -201,22 +208,24 @@ agents:
       kind: depth_image
       topic: /mobile_2/depth/image_rect_raw            # 4300 msgs, ~27.5 Hz
       camera_info_topic: /mobile_2/depth/camera_info
-      # REQUIRED: colour optical -> depth frame. This is exactly stage 08's
-      # `depth_extrinsic_xyzquat` for this camera (it defines the same
-      # direction). ~1.5 cm of baseline on a D455 — small, systematic, and on
-      # every point if left at identity. From the xyzquat:
-      #   python3 -c "import numpy as np, json; \
-      #     from scipy.spatial.transform import Rotation as R; \
-      #     from ros2opv2v.geometry import matrix_to_rpy_config; \
-      #     v=[0.000308,0.059191,-0.000162,0.499583,-0.497446,0.501716,-0.501244]; \
-      #     T=np.eye(4); T[:3,:3]=R.from_quat(v[3:]).as_matrix(); T[:3,3]=v[:3]; \
-      #     print(json.dumps(matrix_to_rpy_config(T), indent=1))"
-      extrinsic: null
+      # Colour optical -> depth optical, exactly as published
+      # ("camera_color_optical_frame -> camera_depth_optical_frame"). The 59 mm
+      # colour-depth baseline is small, systematic, and on every point if left
+      # at identity. Cross-checked: camera_link -> colour -> depth closes to
+      # 1 um, confirming camera_link IS the depth frame.
+      extrinsic: {x: 0.059190, y: -0.000010, z: -0.000406,
+                  roll: -0.3398, pitch: 0.0958, yaw: 0.1493}
       depth_scale: 0.001                   # 16UC1 millimetres -> metres
       min_depth: 0.2
       max_depth: 10.0                      # D4xx stereo depth degrades past this
       pixel_stride: 2                      # 2 keeps ~1/4 of the pixels
-      optical_frame: true                  # depth is published optical (x right, y down)
+      # MUST be false here. `optical_frame: true` rotates the reprojected cloud
+      # from the optical convention into ROS body (FLU), which is what you want
+      # when the agent's base is a base_link. This agent's base is the COLOUR
+      # OPTICAL frame, and the extrinsic above is optical -> optical, so the
+      # rotation must not be applied — leaving it true mis-rotates every point
+      # of this agent by 90 deg while the conversion still succeeds.
+      optical_frame: false
       max_points: 60000
       ground_lift: 0.0
       min_points: 1
@@ -243,7 +252,11 @@ agents:
     id: 3
     role: cav
     host: mobile_1                      # same machine as mobile_1: one clock, one offset
-    enabled: true
+    # Off by default: the recorded scenario is two mobile platforms plus one
+    # static infrastructure node, and this fourth agent sits at the same pose as
+    # agent 1. Turn it on only for a stereo-vs-LiDAR comparison on identical
+    # trajectories, and read the caveat above before reporting anything from it.
+    enabled: false
     required: true
     pose:
       # Same rigid body as agent 1, so the same pose source and the same
@@ -255,16 +268,25 @@ agents:
       align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
       child_to_base: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
     cloud:
-      kind: pointcloud2
-      topic: /mobile_1/zed/point_cloud/cloud_registered      # 2288 msgs, ~14.7 Hz
-      # REQUIRED: base_link -> the frame this cloud is published in. Check the
-      # frame_id with inspect_bag.py first: "registered" clouds are sometimes
-      # published already in the odom/map frame, in which case this agent needs
-      # its own handling rather than a body-frame extrinsic.
-      extrinsic: null
+      # The depth IMAGE, not /mobile_1/zed/point_cloud/cloud_registered. Both
+      # carry the same stereo geometry, but the dataset states the depth is
+      # "aligned to the ZED RGB frame", which is exactly this agent's base, so
+      # the extrinsic is a known identity. The point cloud's frame_id is not
+      # stated and the ZED wrapper publishes it in either the optical or the NAV
+      # left_camera_frame depending on version — a 90 deg difference that
+      # nothing downstream would flag. Reprojecting the image avoids the guess.
+      kind: depth_image
+      topic: /mobile_1/zed/depth/depth_registered           # 2291 msgs, ~14.7 Hz
+      camera_info_topic: /mobile_1/zed/depth/camera_info
+      # Identity because "registered" means already in the base frame.
+      extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      optical_frame: false                 # base IS an optical frame (see mobile_2)
+      depth_scale: 1.0                     # 32FC1 metres; the scale is ignored
+      min_depth: 0.3
+      max_depth: 12.0
+      pixel_stride: 2
       intensity:
-        field: rgb                         # ZED clouds carry colour, not intensity
-        scale: 1.0
+        field: null                        # a depth reprojection carries no intensity
         default: 0.5
       max_points: 60000
       ground_lift: 0.0
@@ -287,26 +309,24 @@ agents:
       # world_pose IS the cloud sensor's pose, so the radar's extrinsic is
       # identity and the camera's is measured from the radar).
       #
-      # This is the transform the whole cooperative geometry hangs on for this
-      # agent: it is static, so there is no odometry to correct a bad guess and
-      # no board sighting later in the run to catch it. Two ways to get it:
+      # map -> arducam_optical_frame, as published. The unit is static, so this
+      # one pose holds for the whole bag, and this agent's base is the Arducam
+      # optical frame — the same convention as the two mobile agents, whose
+      # global_pose is also an optical frame.
       #
-      #   * If the Arducam dwelled on a surveyed board at session start, stage
-      #     06 already solved its pose: session_anchor.json -> cameras.<name>.
-      #     map_to_cam is T_map_arducam for a STATIC unit, i.e. valid for the
-      #     whole bag, and world_pose is then that composed with the
-      #     radar<-camera calibration below.
-      #   * Otherwise survey the tripod against the same boards by hand.
-      #
-      # Sanity check once filled in: the three surveyed boards sit at
-      # (0, 0, 0), (8.03, -7.18, -0.10) and (8.46, -14.27, -0.06) in map, so a
-      # world_pose outside roughly x [-2, 11], y [-17, 3] is in the wrong frame,
-      # not merely imprecise.
-      world_pose: null
+      # It sits at x = -5.5 m, i.e. OUTSIDE the box the three surveyed boards
+      # span (x 0..8.5, y 0..-14.3, z ~-0.2..-0.06). That is correct and not a
+      # frame error: the boards mark where the robots dwelled, the infrastructure
+      # camera looks at that area from outside it and from 2 m up.
+      world_pose: {x: -5.508181, y: -2.590753, z: 1.998232,
+                   roll: -117.6730, pitch: 0.7379, yaw: -127.6503}
     cloud:
       kind: pointcloud2
       topic: /infra_1/radar/points_all     # 1343 msgs, ~8.6 Hz
-      extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}  # world_pose is the sensor
+      # arducam optical -> infra1_link (the radar), as published. Not identity:
+      # the base is the camera, and the radar sits 26 cm from it.
+      extrinsic: {x: 0.017773, y: -0.208023, z: -0.155788,
+                  roll: 176.0934, pitch: -73.1656, yaw: 92.1354}
       intensity:
         field: intensity                   # radar clouds often carry snr/power instead
         scale: 1.0
@@ -333,11 +353,12 @@ agents:
       #    detections plus an image -- never geometry from the camera.
       - topic: /infra_1/image_raw
         camera_info_topic: /infra_1/camera_info
-        # REQUIRED: radar -> Arducam optical (given the world_pose-is-the-radar
-        # convention above). This is what ../radar_camera_calibration produces;
-        # it is NOT in the bag -- /infra_1/radar/camera_info has zero messages,
-        # so the radar-to-image projection was never published.
-        extrinsic: null
+        # Identity: this agent's base IS the Arducam optical frame. (The
+        # radar-to-image projection is still absent from the bag —
+        # /infra_1/radar/camera_info has zero messages — so projecting radar
+        # returns into this image needs the extrinsic above plus `d` from
+        # camera_info, or ../radar_camera_calibration.)
+        extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
         optical_frame: true
     object:
       emit: false                          # a tripod is not a detection target
