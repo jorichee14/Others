@@ -202,6 +202,20 @@ def stamp(ns: int) -> dict:
     return {"sec": ns // 1_000_000_000, "nanosec": ns % 1_000_000_000}
 
 
+# Both robots stop twice during the run. The pauses are what the motion test
+# needs: while a robot stands still its channel must stop changing, and while
+# it moves the channel must change at a rate that follows its speed.
+PAUSES = [(30.0, 45.0), (110.0, 125.0)]
+
+
+def moving_time(t: float) -> float:
+    """Seconds spent moving up to time t, i.e. time with the pauses removed."""
+    m = t
+    for a, b in PAUSES:
+        m -= max(0.0, min(t, b) - a)
+    return m
+
+
 def main(out: Path) -> None:
     rng = random.Random(0)
     t0 = 1_787_899_802_217_921_000
@@ -397,7 +411,7 @@ def main(out: Path) -> None:
                 t = i / hz
                 ns = t0 + int(t * 1e9)
                 # a lap around the room, so RSSI has somewhere to vary
-                a = 2 * math.pi * t / 78.0 + phase
+                a = 2 * math.pi * moving_time(t) / 78.0 + phase
                 x = r0 * math.cos(a) + 1.5 * math.cos(3 * a)
                 y = 0.6 * r0 * math.sin(a) - 4.0 + 1.0 * math.sin(2 * a)
                 msg = {
@@ -444,7 +458,10 @@ def main(out: Path) -> None:
                 # not a channel.
                 H = np.zeros(len(keep), dtype=np.complex128)
                 for j, (a, d) in enumerate(taps):
-                    ph = ph0[j] + 2 * math.pi * fd[j] * t
+                    # phase advances with distance travelled, not with time: a
+                    # tap's phase is set by the path length, so it freezes when
+                    # the robot stands still
+                    ph = ph0[j] + 2 * math.pi * fd[j] * moving_time(t)
                     H += a * np.exp(-2j * math.pi * f_hz * d + 1j * ph)
                 H += (rng.gauss(0, 0.02) + 1j * rng.gauss(0, 0.02))
                 H *= 10 ** (rng.gauss(0, 0.8) / 20)       # AGC jitter, scale only

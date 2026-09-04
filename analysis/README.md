@@ -134,16 +134,30 @@ offsets, and both are what the script uses.
 Indoor delay spreads are tens of nanoseconds, so at 20 MHz the number is one tap
 wide and the summary says it should not be quoted.
 
+**Two tests decide whether a run's CSI is usable at all**, and they are the
+first thing to read in `csi_summary.md`:
+
+| Test | Column / file | Pass |
+|---|---|---|
+| is it a channel? | `temporal_coherence` in `csi_inventory.csv` | consecutive frames correlate > 0.8; noise reads near 0 |
+| does it follow the robot? | `csi_motion_test.csv`, `fig_csi_motion.png` | change rate rises with ground-truth speed (ρ ≥ 0.3) and is at least 2× higher moving than still |
+
+Every other metric returns a number for noise as readily as for a channel, so
+none of them should be quoted for a run that fails the first test. The second
+is what ties the CSI to the robots rather than to a radio, and is the result
+worth reporting. It needs only the ground-truth pose topics.
+
 Outputs in `results/coop2/csi/`:
 
 | File | Contents |
 |---|---|
-| `csi_inventory.csv` | per agent: frame rate, channel, bandwidth, chanspec, chip, subcarriers kept of raw slots, MIMO streams, tap spacing |
+| `csi_inventory.csv` | per agent: frame rate, channel, capture and occupied bandwidth, usable subcarriers, temporal coherence, tap spacing |
 | `csi_transmitters.csv` | per source MAC and frame type: count, share, median RSSI, time span — which transmitter's channel each measurement describes |
 | `csi_frames.parquet` | per frame: selectivity, delay spread, K-factor, RSSI |
 | `csi_summary.md`, `csi_subsection.tex` | tables and a paragraph for the paper |
 | `fig_csi.{pdf,png}` | channel amplitude heat map per agent (diverging about each frame's median, so fades and peaks separate), then delay spread and K-factor over the run |
 | `fig_csi_map.{pdf,png}` | the trajectories coloured by K-factor — the same layout as the Wi-Fi coverage map, dark = better channel |
+| `csi_motion_test.csv`, `csi_motion_bins.csv`, `fig_csi_motion.{pdf,png}` | the motion test: verdict per agent, the 1 s bins behind it, and change rate against speed |
 
 ## Live CSI view in ROS 2
 

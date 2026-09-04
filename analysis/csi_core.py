@@ -57,6 +57,27 @@ def profile_structure_db(P: np.ndarray) -> np.ndarray:
     return 10 * np.log10(np.maximum(P.max(axis=1), 1e-30) / np.maximum(med, 1e-30))
 
 
+def frame_correlation(H: np.ndarray, lag: int = 1) -> np.ndarray:
+    """Correlation of |H| across subcarriers between frames `lag` apart.
+
+    One value per frame pair, so it can be lined up with ground truth. The
+    correlation between two frames falls as the transmitter moves between
+    them: at lag 1 a robot at walking pace moves a few millimetres and the
+    two frames are nearly identical, while over 0.1 s it moves several
+    centimetres -- a wavelength at 5 GHz -- and the fading pattern across
+    frequency has visibly changed. Which is what makes 1 - r at a fixed lag a
+    usable measure of how fast the channel is changing."""
+    A = np.abs(np.atleast_2d(H)).astype(float)
+    lag = max(int(lag), 1)
+    if A.shape[0] <= lag:
+        return np.zeros(0)
+    A = A - A.mean(axis=1, keepdims=True)
+    X, Y = A[:-lag], A[lag:]
+    num = (X * Y).sum(axis=1)
+    den = np.sqrt((X ** 2).sum(axis=1) * (Y ** 2).sum(axis=1))
+    return num / np.where(den > 0, den, np.nan)
+
+
 def temporal_coherence(H: np.ndarray) -> float:
     """Median correlation of |H| across subcarriers between consecutive frames.
 
@@ -71,14 +92,8 @@ def temporal_coherence(H: np.ndarray) -> float:
     Every other metric here -- K, delay spread, selectivity -- will return a
     number whether or not the input is a channel. This one says whether those
     numbers mean anything."""
-    A = np.abs(np.atleast_2d(H)).astype(float)
-    if A.shape[0] < 2:
-        return float("nan")
-    A = A - A.mean(axis=1, keepdims=True)
-    num = (A[:-1] * A[1:]).sum(axis=1)
-    den = np.sqrt((A[:-1] ** 2).sum(axis=1) * (A[1:] ** 2).sum(axis=1))
-    r = num / np.where(den > 0, den, np.nan)
-    return float(np.nanmedian(r))
+    r = frame_correlation(H, 1)
+    return float(np.nanmedian(r)) if r.size else float("nan")
 
 
 def occupied_band(idx: np.ndarray, use: np.ndarray, max_gap: int = 12):

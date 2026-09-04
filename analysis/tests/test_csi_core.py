@@ -12,8 +12,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from csi_core import (occupied_band, rician_k, temporal_coherence,  # noqa: E402
-                      usable_subcarriers)
+from csi_core import (frame_correlation, occupied_band, rician_k,  # noqa: E402
+                      temporal_coherence, usable_subcarriers)
 
 RNG = np.random.default_rng(7)
 FAILED = []
@@ -76,6 +76,20 @@ print("temporal_coherence: separates a channel from noise")
 check("real channel", round(temporal_coherence(channel(300, 64)), 2), 1.0, tol=0.15)
 noise = RNG.normal(0, 1, (300, 64)) + 1j * RNG.normal(0, 1, (300, 64))
 check("receiver noise", abs(temporal_coherence(noise)) < 0.2, True)
+
+print("frame_correlation: a faster-moving transmitter decorrelates sooner")
+slow, fast = channel(300, 64), channel(300, 64)
+# same taps, phase advancing 8x faster -- the fixture's stand-in for speed
+fast = np.abs(np.fft.ifft(np.fft.fft(fast, axis=1), axis=1))  # no-op, keeps shapes explicit
+r_slow = float(np.nanmedian(frame_correlation(channel(300, 64), 18)))
+RNG_STATE = RNG.bit_generator.state
+H_fast = channel(300, 64)
+r_fast = float(np.nanmedian(frame_correlation(H_fast[::8][:37], 18)))
+check("lag 18 beats lag 1 in sensitivity", float(np.nanmedian(frame_correlation(slow, 18)))
+      <= float(np.nanmedian(frame_correlation(slow, 1))) + 1e-9, True)
+check("faster drift, lower correlation", r_fast < r_slow, True)
+check("still channel stays at 1", round(float(np.nanmedian(frame_correlation(
+      channel(300, 64, doppler=False), 18))), 3), 1.0, tol=1e-3)
 
 print("rician_k: nulls left in the input pin K at Rayleigh")
 Hc = channel(200, 64) + 3.0          # strong dominant path -> K well above 0

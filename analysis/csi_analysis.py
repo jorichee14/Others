@@ -69,7 +69,7 @@ from common import (  # noqa: E402
 )
 from csi_core import (  # noqa: E402
     amplitude_db, delay_profile, effective_bandwidth_mhz, occupied_band,
-    profile_structure_db, rician_k, rms_delay_spread, temporal_coherence,
+    profile_structure_db, rician_k, rms_delay_spread, temporal_coherence, frame_correlation,
     usable_subcarriers,
 )
 from extract_bag import extract  # noqa: E402
@@ -134,6 +134,75 @@ def stack_H(df: pd.DataFrame):
     return re.astype(np.float64) + 1j * im.astype(np.float64), idx, keep
 
 
+def motion_test(per_agent: dict, poses: dict, t0_ns: int, lag_s: float,
+                still_mps: float, moving_mps: float, bin_s: float = 1.0):
+    """Does the channel change faster when the transmitting robot moves faster?
+
+    For each frame, 1 - correlation of |H| with the frame `lag_s` later, against
+    the robot's ground-truth speed at that moment, both reduced to medians over
+    `bin_s` bins so a single noisy frame cannot drive the result. A real
+    channel from a moving transmitter to a fixed receiver must change with the
+    transmitter: still robot, still channel. Noise has no relation to speed at
+    all. This is the one test that ties the CSI to the robots rather than
+    merely to a radio, and it needs nothing but the pose topics.
+
+    Returns (bins, verdicts): the binned samples, and one row per agent with
+    the Spearman rank correlation between change rate and speed plus the
+    median change rate while still and while moving."""
+    bins, rows = [], []
+    for agent, p in sorted(per_agent.items()):
+        if agent not in poses:
+            continue
+        t = p["t"]
+        dur = float(t[-1] - t[0])
+        lag = max(int(round(lag_s * (len(t) - 1) / max(dur, 1e-9))), 1)
+        r = frame_correlation(p["absH"], lag)
+        if r.size == 0:
+            continue
+        tm = 0.5 * (t[:-lag] + t[lag:])
+        pt, pxy = poses[agent]
+        o = np.argsort(pt)
+        pt, pxy = pt[o], pxy[o]
+        dt = np.diff(pt) / 1e9
+        ok = dt > 0
+        v = np.linalg.norm(np.diff(pxy, axis=0), axis=1)[ok] / dt[ok]
+        tv = (0.5 * (pt[:-1] + pt[1:]))[ok]
+        n = max(int(bin_s * len(v) / max((pt[-1] - pt[0]) / 1e9, 1e-9)), 1)
+        v = pd.Series(v).rolling(n, center=True, min_periods=1).median().to_numpy()
+        tq = tm * 1e9 + t0_ns
+        ins = (tq >= tv[0]) & (tq <= tv[-1])
+        if ins.sum() < 10:
+            continue
+        b = pd.DataFrame({"agent": agent, "t_s": tm[ins],
+                          "change": 1.0 - r[ins], "speed_mps": np.interp(tq[ins], tv, v)})
+        b["bin"] = np.floor(b["t_s"] / bin_s)
+        g = b.groupby("bin").agg(t_s=("t_s", "median"), change=("change", "median"),
+                                 speed_mps=("speed_mps", "median")).reset_index(drop=True)
+        g.insert(0, "agent", agent)
+        bins.append(g)
+        still = g[g["speed_mps"] < still_mps]["change"]
+        moving = g[g["speed_mps"] > moving_mps]["change"]
+        rho = float(g["change"].corr(g["speed_mps"], method="spearman")) if len(g) > 3 else np.nan
+        ratio = (float(moving.median() / still.median())
+                 if len(still) and len(moving) and still.median() > 0 else np.nan)
+        if len(still) < 3 or len(moving) < 3:
+            verdict = "inconclusive: robot never both still and moving for 3 s"
+        elif rho >= 0.3 and ratio >= 2.0:
+            verdict = "pass: channel follows the robot"
+        else:
+            verdict = "fail: channel does not follow the robot"
+        rows.append({"agent": agent, "lag_s": lag_s, "lag_frames": lag,
+                     "spearman_rho": round(rho, 3),
+                     "change_still": round(float(still.median()), 4) if len(still) else np.nan,
+                     "change_moving": round(float(moving.median()), 4) if len(moving) else np.nan,
+                     "ratio_moving_over_still": round(ratio, 2) if ratio == ratio else np.nan,
+                     "bins_still": int(len(still)), "bins_moving": int(len(moving)),
+                     "verdict": verdict})
+    if not rows:
+        return None, None
+    return pd.concat(bins, ignore_index=True), pd.DataFrame(rows)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bag", type=Path, default=None)
@@ -151,6 +220,11 @@ def main() -> int:
                     help="peak-to-median a delay profile needs before its spread is reported")
     ap.add_argument("--band-gap", type=int, default=12,
                     help="null slots bridged when finding the occupied band")
+    ap.add_argument("--lag-s", type=float, default=0.1,
+                    help="frame separation for the motion test; at walking pace the robot moves "
+                         "about a wavelength in this time")
+    ap.add_argument("--still-mps", type=float, default=0.05, help="below this the robot is still")
+    ap.add_argument("--moving-mps", type=float, default=0.15, help="above this it is moving")
     ap.add_argument("--min-coherence", type=float, default=0.5,
                     help="frame-to-frame |H| correlation below which the stream is not a channel")
     args = ap.parse_args()
@@ -229,7 +303,7 @@ def main() -> int:
             "k_factor_db": 10 * np.log10(np.maximum(K, 1e-3)),
             "profile_structure_db": struct_db,
         }))
-        per_agent[agent] = dict(t=sub["t_s"].to_numpy(), amp_db=amp_db, idx=idx,
+        per_agent[agent] = dict(t=sub["t_s"].to_numpy(), amp_db=amp_db, idx=idx, absH=np.abs(H),
                                 bw=bw, eff_bw=eff_bw, dt_ns=dt_s * 1e9,
                                 sc_power_db=sc_power_db, sc_idx=idx_all, use=use)
 
@@ -428,6 +502,36 @@ def main() -> int:
             fig.savefig(out / "fig_csi_map.png", dpi=200, bbox_inches="tight")
         plt.close(fig)
 
+    # ---- figure 3: does the channel follow the robot? ----------------------------
+    mbins, motion = motion_test(per_agent, poses, t0_ns, args.lag_s, args.still_mps, args.moving_mps)
+    if motion is not None:
+        motion.to_csv(out / "csi_motion_test.csv", index=False)
+        mbins.to_csv(out / "csi_motion_bins.csv", index=False)
+        fig, ax = plt.subplots(figsize=(4.6, 3.4))
+        fig.subplots_adjust(left=0.16, right=0.97, top=0.86, bottom=0.16)
+        for a in sorted(mbins["agent"].unique()):
+            g = mbins[mbins["agent"] == a]
+            ax.scatter(g["speed_mps"], g["change"], s=9, color=color_for(a), alpha=0.35,
+                       linewidths=0, label=None)
+            # median change per speed decile, the line the eye should follow
+            q = pd.qcut(g["speed_mps"], min(10, max(g["speed_mps"].nunique(), 1)), duplicates="drop")
+            m = g.groupby(q, observed=True).agg(speed_mps=("speed_mps", "median"),
+                                                change=("change", "median"))
+            row = motion[motion["agent"] == a].iloc[0]
+            ax.plot(m["speed_mps"], m["change"], "-o", ms=3.5, lw=1.6, color=color_for(a),
+                    label=f"{a}  ρ = {row['spearman_rho']:+.2f}")
+        ax.axvspan(0, args.still_mps, color=GRID, alpha=0.35, lw=0)
+        ax.text(args.still_mps / 2, ax.get_ylim()[1], "still", ha="center", va="top",
+                fontsize=6.5, color=TEXT2)
+        ax.set_xlabel("robot speed from ground truth [m/s]")
+        ax.set_ylabel(f"channel change over {args.lag_s * 1e3:.0f} ms\n1 − corr(|H|) between frames")
+        ax.set_title("does the channel follow the robot?  (1 s medians)", loc="left", fontsize=8)
+        ax.legend(frameon=False, fontsize=7, loc="upper left", bbox_to_anchor=(0.16, 1.0))
+        ax.grid(True, color=GRID, lw=0.5)
+        fig.savefig(out / "fig_csi_motion.pdf", bbox_inches="tight")
+        fig.savefig(out / "fig_csi_motion.png", dpi=200, bbox_inches="tight")
+        plt.close(fig)
+
     # ---- markdown ----------------------------------------------------------------
     coarse = inventory[inventory["occupied_bandwidth_mhz"] <= 25]
     nulls = inventory[inventory["nulls_dropped"] > 0]
@@ -475,6 +579,23 @@ def main() -> int:
                + "delay profile's tap spacing is "
                + f"{coarse['tap_spacing_ns'].max():.0f} ns, and indoor delay spreads are of that order. "
                "The K-factor and the frequency selectivity are unaffected.", ""]
+    md += ["## The two tests that decide whether this CSI is usable", "",
+           "1. **Is it a channel?** Frame-to-frame correlation of |H| (column "
+           "`temporal_coherence` above). A physical channel changes slowly, so consecutive "
+           "frames correlate above about 0.8; noise gives an independent draw per frame and "
+           "correlates near zero.", "",
+           "2. **Does it follow the robot?** The channel from a moving transmitter to a fixed "
+           "receiver must change faster when the transmitter moves faster and stop changing "
+           "when it stops. `change` is 1 − corr(|H|) between frames "
+           f"{args.lag_s * 1e3:.0f} ms apart; `speed` is from the ground-truth poses; both are "
+           "1 s medians. A pass needs a Spearman ρ ≥ 0.3 and at least twice the change rate "
+           "while moving as while still. This is what ties the CSI to the robots rather than "
+           "to a radio, and it is the result to quote.", ""]
+    if motion is not None:
+        md += [motion.to_markdown(index=False), "", "See `fig_csi_motion.png`.", ""]
+    else:
+        md += ["> Motion test not run: no ground-truth pose topic matched "
+               f"`*{args.pose_topic}.parquet` for any CSI agent.", ""]
     md += ["## Transmitters measured", "",
            "CSI is captured from whatever frames the radio receives, so the source MAC says whose "
            "channel is being measured. Frames from the access point measure the agent→AP path; "
@@ -535,8 +656,15 @@ automatic gain control, so both quantities are ratios and independent of it.{coa
           .round(3).to_string(index=False))
     print()
     print(stats.to_string(index=False))
+    print("\nmotion test: does the channel follow the robot?")
+    if motion is not None:
+        print(motion[["agent", "lag_frames", "spearman_rho", "change_still", "change_moving",
+                      "ratio_moving_over_still", "verdict"]].to_string(index=False))
+    else:
+        print(f"  not run: no *{args.pose_topic}.parquet for any CSI agent")
     print(f"\nwrote {out}/csi_summary.md, csi_subsection.tex, fig_csi.pdf/png"
-          + (", fig_csi_map.pdf/png" if placed else ""))
+          + (", fig_csi_map.pdf/png" if placed else "")
+          + (", fig_csi_motion.pdf/png, csi_motion_test.csv" if motion is not None else ""))
     return 0
 
 
