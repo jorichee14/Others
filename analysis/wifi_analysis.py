@@ -61,6 +61,15 @@ NODE_ALIASES = {"mobile1": "mobile_1", "mobile2": "mobile_2"}
 # Links are the entities in these figures, so they get the categorical slots in a
 # fixed order; the order is by link label so a link keeps its colour across runs.
 LINK_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7"]
+# One sequential ramp per agent, light (weak) to dark (strong), each built on that
+# agent's categorical hue so a coverage panel is identifiable at a glance and the
+# two agents never share a scale.
+AGENT_RAMPS = {
+    "mobile_1": ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#2a78d6", "#1c5cab", "#104281"],
+    "mobile_2": ["#fce3d5", "#f9c3a4", "#f5a173", "#f08048", "#eb6834", "#c14e22", "#8f3714"],
+    "infra_1": ["#d6f2e6", "#a5e0c8", "#6ecfa8", "#33bd8a", "#1baf7a", "#12855b", "#0a5c3e"],
+}
+RAMP_FALLBACK = ["#e2def5", "#c3bcea", "#a297de", "#7f70cd", "#4a3aa7", "#372b7d", "#241d54"]
 BAD_COLOR = "#e34948"
 TEXT, TEXT2, GRID = "#0b0b0b", "#52514e", "#e6e5e1"
 
@@ -451,63 +460,88 @@ def main() -> int:
     t_max = float(status["t_s"].max())
     mapped = [lk for lk in links if lk in xy_of]
     ncol = max(len(mapped), 1)
-    fig = plt.figure(figsize=(3.5 * ncol + 1.0, 5.9), constrained_layout=True)
-    # a dedicated narrow column for the colorbar, so it belongs to the map row
-    # instead of being stretched down the whole figure
-    gs = fig.add_gridspec(2, ncol + 1, height_ratios=[1.25, 1.0],
-                          width_ratios=[1.0] * ncol + [0.045])
+    fig = plt.figure(figsize=(4.0 * ncol + 0.4, 6.4), constrained_layout=True)
+    sf_map, sf_time = fig.subfigures(2, 1, height_ratios=[1.3, 1.0])
+    # a colour bar sits at the right edge of each map cell, so the columns need
+    # more air between them than the default or its ticks meet the next y-axis
+    gs = sf_map.add_gridspec(1, ncol, wspace=0.22)
 
-    # RSSI is a magnitude, so one hue light (weak) to dark (strong); the line
-    # carries a surface-coloured casing so its palest segments stay visible
-    # against the grey map behind it.
-    cmap = matplotlib.colors.LinearSegmentedColormap.from_list(
-        "rssi", ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#2a78d6", "#1c5cab", "#104281"])
     lo = float(np.floor(status["signal_dbm"].min() / 5) * 5)
     hi = float(np.ceil(status["signal_dbm"].max() / 5) * 5)
-    norm = matplotlib.colors.Normalize(lo, hi)
 
-    sm = None
     for i, lk in enumerate(mapped):
-        ax = fig.add_subplot(gs[0, i])
+        sub_gs = gs[0, i].subgridspec(1, 2, width_ratios=[1, 0.05], wspace=0.06)
+        ax = sf_map.add_subplot(sub_gs[0])
         g = status[status["link"] == lk].sort_values("t_s")
+        agent = g["agent"].iloc[0]
         xy, inside = xy_of[lk]
+        v = g["signal_dbm"].to_numpy()[inside]
+        # Each panel is scaled to its OWN radio: a scale shared across agents
+        # compresses every trajectory into one end of the ramp and hides exactly
+        # the spatial structure the panel exists to show. The colours are not
+        # comparable between panels, which is why each carries its own bar and
+        # each agent gets its own hue.
+        v_lo, v_hi = np.percentile(v, [2, 98])
+        if v_hi - v_lo < 2.0:                     # a genuinely flat link
+            mid = 0.5 * (v_lo + v_hi); v_lo, v_hi = mid - 1.0, mid + 1.0
+        cmap = matplotlib.colors.LinearSegmentedColormap.from_list(
+            "rssi_" + agent, AGENT_RAMPS.get(agent, RAMP_FALLBACK))
+        norm = matplotlib.colors.Normalize(v_lo, v_hi)
+
         if map_xy is not None:
-            ax.scatter(map_xy[:, 0], map_xy[:, 1], s=0.15, c="0.86", linewidths=0, zorder=0)
+            ax.scatter(map_xy[:, 0], map_xy[:, 1], s=0.12, c="0.88", linewidths=0, zorder=0)
         pts = xy[inside].reshape(-1, 1, 2)
         seg = np.concatenate([pts[:-1], pts[1:]], axis=1)
-        v = g["signal_dbm"].to_numpy()[inside]
-        for lw, col, z in ((4.2, "white", 2), (2.4, None, 3)):
+        sm = None
+        for lw, col, z in ((5.4, "white", 2), (3.2, None, 3)):
             lc = matplotlib.collections.LineCollection(
                 seg, linewidths=lw, capstyle="round",
                 **({"colors": col} if col else {"cmap": cmap, "norm": norm}))
             if col is None:
-                lc.set_array(v[:-1]); sm = lc
+                lc.set_array(np.clip(v[:-1], v_lo, v_hi)); sm = lc
             lc.set_zorder(z)
             ax.add_collection(lc)
-        ax.plot(*xy[inside][0], "o", ms=6, mfc="white", mec=TEXT, mew=1.2, zorder=5)
-        ax.plot(*xy[inside][-1], "s", ms=6, mfc=TEXT, mec="white", mew=1.0, zorder=5)
         if iperf_df is not None:
-            agent = g["agent"].iloc[0]
-            sub = iperf_df[(iperf_df["agent"] == agent) & iperf_df["success"].astype(bool)]
-            if len(sub) and agent in poses:
+            it = iperf_df[(iperf_df["agent"] == agent) & iperf_df["success"].astype(bool)]
+            if len(it) and agent in poses:
                 pt, pxy = poses[agent]; o = np.argsort(pt)
-                tq = (sub["t_s"].to_numpy() * 1e9 + t0_ns)
+                tq = it["t_s"].to_numpy() * 1e9 + t0_ns
                 ax.plot(np.interp(tq, pt[o], pxy[o, 0]), np.interp(tq, pt[o], pxy[o, 1]),
-                        "o", ms=5, mfc="none", mec=TEXT, mew=1.0, zorder=6, label="iperf test")
+                        "x", ms=5, mec=TEXT2, mew=1.1, ls="none", zorder=6)
+        # start and end, drawn large enough not to be mistaken for a test marker
+        ax.plot(*xy[inside][0], "o", ms=10, mfc="white", mec=TEXT, mew=1.8, zorder=7)
+        ax.plot(*xy[inside][0], "o", ms=2.6, mfc=TEXT, mec="none", zorder=8)
+        ax.plot(*xy[inside][-1], "s", ms=9, mfc=TEXT, mec="white", mew=1.6, zorder=7)
+
+        # zoom to the path: on a room-sized map a 15 m trajectory otherwise
+        # occupies a tenth of the panel and its colour gradient is unreadable
+        px, py = xy[inside][:, 0], xy[inside][:, 1]
+        cx, cy = (px.min() + px.max()) / 2, (py.min() + py.max()) / 2
+        half = max(px.max() - px.min(), py.max() - py.min()) / 2
+        half = max(half * 1.35, 2.5)
+        ax.set_xlim(cx - half, cx + half); ax.set_ylim(cy - half, cy + half)
         ax.set_aspect("equal")
         ax.set_xlabel("x [m]"); ax.set_ylabel("y [m]" if i == 0 else "")
         ax.set_title(f"({chr(97 + i)}) {lk}\nmedian {g['signal_dbm'].median():.0f} dBm, "
                      f"weakest {g['signal_dbm'].min():.0f} dBm", loc="left", fontsize=8)
         ax.grid(True, color=GRID, lw=0.4)
-        ax.margins(0.06)
-    if sm is not None:
-        # inset vertically so the bar matches the plot boxes rather than the
-        # whole row, title space included
-        cax = fig.add_subplot(gs[0, ncol].subgridspec(3, 1, height_ratios=[0.14, 1, 0.06])[1])
-        cb = fig.colorbar(sm, cax=cax)
-        cb.set_label("RSSI [dBm]"); cb.outline.set_visible(False)
 
-    ax = fig.add_subplot(gs[1, :])
+        cax = sf_map.add_subplot(sub_gs[1].subgridspec(3, 1, height_ratios=[0.16, 1, 0.06])[1])
+        cb = sf_map.colorbar(sm, cax=cax)
+        # the unit sits above the bar; as a side label it runs into the next panel
+        cb.ax.set_title("dBm", fontsize=6.5, color=TEXT2, pad=3)
+        cb.ax.tick_params(labelsize=6.5)
+        cb.outline.set_visible(False)
+
+    # a dedicated (invisible) row for the legend: an "outside" legend is not
+    # allotted space inside a subfigure and lands on the axis labels
+    gs_t = sf_time.add_gridspec(2, 1, height_ratios=[1.0, 0.10], hspace=0.62)
+    ax = sf_time.add_subplot(gs_t[0])
+    lax = sf_time.add_subplot(gs_t[1]); lax.axis("off")
+    start_h = plt.Line2D([], [], marker="o", ls="none", ms=7, mfc="white", mec=TEXT, mew=1.6)
+    end_h = plt.Line2D([], [], marker="s", ls="none", ms=6.5, mfc=TEXT, mec="white", mew=1.2)
+    map_h = [start_h, end_h] if mapped else []
+    map_l = ["start", "end"] if mapped else []
     for lk in links:
         g = status[status["link"] == lk].sort_values("t_s")
         ax.plot(g["t_s"], g["signal_dbm"], lw=1.2, color=color_of[lk], label=lk)
@@ -524,14 +558,16 @@ def main() -> int:
                 ax.plot(sub["t_s"], np.full(len(sub), lo + 0.04 * (hi - lo)), mk,
                         ms=4.5, mfc="none", mec=TEXT2, mew=0.9, ls="none",
                         label=f"iperf, {kind}")
+    h_, l_ = ax.get_legend_handles_labels()
     ax.set_xlim(0, t_max); ax.set_ylim(lo, hi)
     ax.set_xlabel("time in run [s]"); ax.set_ylabel("RSSI [dBm]")
     margin = "" if args.bad_rssi_dbm >= lo - 2 else \
         f"   (weakest sample {status['signal_dbm'].min() - args.bad_rssi_dbm:.0f} dB above the Bad threshold)"
     ax.set_title(f"({chr(97 + len(mapped))}) received signal strength over the run{margin}",
                  loc="left", fontsize=8)
-    ax.legend(frameon=False, fontsize=7, ncol=min(len(links) + 2, 5),
-              loc="upper center", bbox_to_anchor=(0.5, -0.22))
+    lax.legend(h_ + map_h, l_ + map_l, frameon=False, fontsize=7,
+               ncol=len(l_ + map_l), loc="center", columnspacing=1.4,
+               handletextpad=0.5)
     ax.grid(True, color=GRID, lw=0.5)
 
     fig.savefig(out / "fig_wifi_link.pdf")

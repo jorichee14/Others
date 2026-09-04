@@ -78,7 +78,15 @@ Outputs in `results/coop2/wifi/`:
 | `wifi_rho.csv` | for an agent with two radios: each radio's Bad fraction, the measured joint-Bad fraction, what independent links would have given, and the conditional and phi correlations |
 | `wifi_summary.md` | the above as readable tables |
 | `wifi_subsection.tex` | a paragraph for the paper with the numbers filled in |
-| `fig_wifi_link.{pdf,png}` | one coverage panel per radio — the trajectory over the map, coloured by RSSI, with iperf test locations marked — above the RSSI time series for every radio. The other quantities (PHY rate, retries, occupancy) stay in the tables: a panel is spent only on something that varies |
+| `fig_wifi_link.{pdf,png}` | one coverage panel per radio — the trajectory over the map, coloured by RSSI, start ○ and end ■ marked, iperf tests ✕ — above the RSSI time series for every radio. The other quantities (PHY rate, retries, occupancy) stay in the tables: a panel is spent only on something that varies |
+
+Each agent has its own colour ramp (blue for `mobile_1`, orange for `mobile_2`,
+green for `infra_1`) and **its own scale**, set to that radio's 2nd–98th
+percentile. A scale shared across agents pushes every trajectory into one end of
+the ramp and hides the spatial structure the panel exists to show; the cost is
+that colours are not comparable between panels, which is why each carries its own
+bar and the medians are printed in the titles. Panels are zoomed to the
+trajectory, not to the whole map.
 | `fig_wifi_rho.{pdf,png}` | the two radios' RSSI, their Bad intervals and the overlap, and measured vs independent joint-Bad |
 
 The Bad state is `not associated`, or RSSI at or below `--bad-rssi-dbm` (default −70),
