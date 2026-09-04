@@ -9,7 +9,7 @@ python scripts/inspect_bag.py     --bag <bag> --emit-config configs/mine.yaml
 python scripts/convert_rosbag.py  --config configs/mine.yaml --dry-run
 python scripts/convert_rosbag.py  --config configs/mine.yaml
 python scripts/validate_opv2v.py  --root <out>/test --with-open3d
-python scripts/test_ros2opv2v.py                       # 62 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                       # 64 self-tests, no bag needed
 ```
 
 Dependencies: `numpy`, `pyyaml`, and `mcap` + `mcap-ros2-support` for `.mcap`
@@ -334,6 +334,14 @@ half-length], and a box with its length and height swapped still looks like a
 box. `{roll: 90, pitch: -90, yaw: 0}` puts it in ROS body axes at the same
 point, so `extent` reads as [half-length, half-width, half-height] and `center`
 as [ahead, left, up].
+
+**Or emit nothing.** `object.emit: false` on every agent converts a dataset with
+no ground truth at all — the right setting when the labels are going to be drawn
+by hand afterwards, since agent-derived boxes would then be two extra objects
+nobody asked for. It is a supported state, not a degenerate one: the tree
+converts, `validate_opv2v.py` passes, and every frame keeps `ros_stamp_ns`,
+`ros_frame_stamp_ns` and `ros_sync`, so a box drawn later ties back to the exact
+source message and to how synchronous that frame was.
 
 Real labels plug in through `labels.merge_external_labels`, which takes
 `{id, location, extent, angle}` in the same world frame. Agent-derived ids are

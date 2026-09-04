@@ -1532,15 +1532,64 @@ def test_box_centre_offset_is_rotated_by_the_box_frame():
 
 
 def test_mirc_boxes_are_declared_in_body_axes():
-    """Both mobile agents must carry the optical->body box frame; without it the
-    extents they are waiting for would be read as [width, height, length]."""
+    """Both mobile agents must carry the optical->body box frame even while
+    `emit` is off.
+
+    The boxes are disabled because this dataset is being annotated by hand, but
+    the frame has to stay declared: someone turning `emit` back on later would
+    otherwise supply cart dimensions that get read as
+    [half-width, half-height, half-length], and a box with its length and height
+    swapped still looks like a box.
+    """
+    from ros2opv2v.geometry import OPTICAL_TO_FLU
     cfg = _mirc_config()
     for name in ('mobile_1', 'mobile_2'):
         obj = _agent(cfg, name)['object']
-        assert obj['emit'] is True, name
         got = make_transform(**obj['extrinsic'])
-        from ros2opv2v.geometry import OPTICAL_TO_FLU
         assert np.allclose(got, invert(OPTICAL_TO_FLU), atol=1e-9), (name, got)
+
+
+def test_converts_with_no_ground_truth_at_all():
+    """A dataset built for MANUAL annotation carries no boxes, and that has to be
+    a supported state rather than a degenerate one: it must convert, it must
+    validate, and every frame must keep enough provenance to tie a label drawn
+    later back to the exact source message."""
+    tmp = tempfile.mkdtemp(prefix='r2o_nogt_')
+    try:
+        bag = os.path.join(tmp, 'b.mcap')
+        _write_synthetic_bag(bag, n_frames=8)
+        cfg = _synthetic_config(bag, os.path.join(tmp, 'out'))
+        for agent in cfg['agents']:
+            agent['object'] = {'emit': False}
+        path = os.path.join(tmp, 'c.yaml')
+        with open(path, 'w') as handle:
+            yaml.safe_dump(cfg, handle)
+        report = convert(cfgmod.load_config(path), overwrite=True)
+        assert report.frames_written == 8, report.frames_written
+        with open(os.path.join(tmp, 'out', 'test', 'synthetic', '1',
+                               '000004.yaml')) as handle:
+            params = yaml.safe_load(handle)
+        assert params['vehicles'] == {}, params['vehicles']
+        for key in ('ros_stamp_ns', 'ros_frame_stamp_ns', 'ros_sync'):
+            assert key in params, (key, sorted(params))
+        # the pose is still there, so an annotation in map coordinates can be
+        # projected into any agent's frame afterwards
+        assert np.isfinite(params['lidar_pose']).all()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_mirc_config_is_ready_to_run():
+    """The shipped config must load with nothing left for an operator to supply."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        'configs', 'mirc_coop2.yaml')
+    cfg = cfgmod.load_config(path)                       # raises if anything is null
+    names = sorted(a.name for a in cfg.active_agents)
+    assert names == ['infra_1', 'mobile_1', 'mobile_2'], names
+    assert cfgmod.ego_agent(cfg).name == 'mobile_1'
+    assert cfg.clock.enabled and cfg.clock.reference_host == 'mobile_1'
+    assert all(not a.obj.emit for a in cfg.active_agents), \
+        'this dataset is converted for manual annotation; no agent-derived boxes'
 
 
 if __name__ == '__main__':

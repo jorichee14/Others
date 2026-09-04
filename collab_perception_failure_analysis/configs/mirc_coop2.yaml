@@ -184,7 +184,18 @@ agents:
         extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
         optical_frame: true
     object:
-      emit: true                           # mobile_1 is a labelled box for the others
+      # OFF: this dataset is being converted for MANUAL annotation, so it ships
+      # with no ground truth rather than with agent-derived boxes. The rest of
+      # this block is kept ready for the day it is turned back on -- see the
+      # pushcart note under `extent` before doing so, because the object these
+      # platforms present is not just the cart.
+      #
+      # Annotations produced later fold back in through
+      # `labels.merge_external_labels` ({id, location, extent, angle} in the map
+      # frame); ids below 10000 never collide with agent-derived ones. Each
+      # frame yaml already carries `ros_stamp_ns`, `ros_frame_stamp_ns` and
+      # `ros_sync`, so a label can be tied back to the exact source message.
+      emit: false
       # The box is described in a ROS body frame (x forward, y left, z up) sitting
       # at the camera, NOT in the camera's own optical axes — that is what this
       # extrinsic buys, and it is why `extent` below reads as
@@ -271,7 +282,18 @@ agents:
         extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
         optical_frame: true
     object:
-      emit: true                           # mobile_2 is a labelled box for the others
+      # OFF: this dataset is being converted for MANUAL annotation, so it ships
+      # with no ground truth rather than with agent-derived boxes. The rest of
+      # this block is kept ready for the day it is turned back on -- see the
+      # pushcart note under `extent` before doing so, because the object these
+      # platforms present is not just the cart.
+      #
+      # Annotations produced later fold back in through
+      # `labels.merge_external_labels` ({id, location, extent, angle} in the map
+      # frame); ids below 10000 never collide with agent-derived ones. Each
+      # frame yaml already carries `ros_stamp_ns`, `ros_frame_stamp_ns` and
+      # `ros_sync`, so a label can be tied back to the exact source message.
+      emit: false
       # The box is described in a ROS body frame (x forward, y left, z up) sitting
       # at the camera, NOT in the camera's own optical axes — that is what this
       # extrinsic buys, and it is why `extent` below reads as

@@ -469,22 +469,24 @@ as the thing OPV2V geometry cannot supply.
   extrinsic is a known identity. The agent is disabled by default: the recorded
   scenario is two mobile platforms plus one static node, and this fourth agent
   sits at agent 1's pose.
-- **Still needed: two measurements and one decision.** (1) The carts'
-  half-extents plus where the camera sits relative to the object's centre — on a
-  mast that is a large vertical offset, so leaving `center` at zero is metres of
-  error, not centimetres. (2) The FLOOR's z in the map frame, which nothing
-  supplied gives: every published z is relative to the anchor board, and the two
-  cart cameras sit at map z = +0.193 and +0.165 (28 mm apart, so one
-  `ground_lift` fits both) without that being a height above ground. Read it off
-  the anchored map cloud. (3) **The mobile agents are pushcarts**, so the object
-  the other agent sees is cart *and* operator: boxing only the cart makes every
-  detection of the person a false positive, boxing both makes a loose box round a
-  non-rigid object, and labelling the operators separately via
-  `merge_external_labels` is the third option. The choice changes what precision
-  means on this dataset and is recorded as a decision, not defaulted.
-  `load_config` fails on exactly the extents and nothing else; with placeholders
-  the config loads cleanly as three agents (ego `mobile_1`, RSU `infra_1`) with
-  clock reconciliation on.
+- **Nothing left to supply.** Labels will be drawn by hand after the dataset
+  exists, so `object.emit` is off on every agent and `configs/mirc_coop2.yaml`
+  now loads with no operator input outstanding: three agents (ego `mobile_1`,
+  RSU `infra_1`), clock reconciliation on. A no-ground-truth dataset is a
+  supported state, not a degenerate one — it converts, `validate_opv2v.py`
+  passes on it, and every frame keeps `ros_stamp_ns`, `ros_frame_stamp_ns` and
+  `ros_sync` so a box drawn later ties back to the exact source message and to
+  how synchronous that frame was. Asserted by
+  `test_converts_with_no_ground_truth_at_all` and
+  `test_mirc_config_is_ready_to_run`.
+- The dormant `object` block keeps its `extrinsic` (optical -> body box frame)
+  and the pushcart note, because turning `emit` back on without them would read
+  cart dimensions as [half-width, half-height, half-length] and leave the
+  cart-versus-cart-plus-operator choice unmade.
+- `ground_lift` stays 0 and is now documented as needing the FLOOR's z in map,
+  which nothing supplied gives: every published z is relative to the anchor
+  board. The two cart cameras sit at map z = +0.193 and +0.165 — 28 mm apart, so
+  one lift value fits both once that height is measured off the anchored cloud.
 - **`object.extrinsic` added so that measurement is askable.** With the base now
   a camera optical frame, `extent` would have meant [half-width, half-height,
   half-length] and `center` an offset in [right, down, forward] — a box with its
@@ -519,6 +521,7 @@ as the thing OPV2V geometry cannot supply.
 
 | Date | Step | Notes |
 |------|------|-------|
+| 2026-09-04 | 8.2 ✅ | **Config complete and runnable: no ground truth, by choice.** Labels will be drawn by hand after the dataset exists, so `object.emit` is off on every agent and `configs/mirc_coop2.yaml` loads with nothing outstanding — three agents, ego `mobile_1`, RSU `infra_1`, clock reconciliation on. Verified end to end that a no-GT dataset is a supported state and not a degenerate one: it converts, `validate_opv2v.py` passes with zero warnings, `vehicles` is `{}`, and every frame still carries `ros_stamp_ns`, `ros_frame_stamp_ns` and `ros_sync` so an annotation drawn later ties back to the exact source message and to that frame's realised asynchrony. The dormant `object` block keeps its optical->body box frame and the pushcart note, so turning `emit` back on cannot silently read cart dimensions as [half-width, half-height, half-length]. Tests 62/62 -> **64/64**, including one that loads the shipped config and fails if any operator input is ever left null again. |
 | 2026-09-04 | 8.2 | **The mobile agents are pushcarts, which changes the label question and the height assumption.** The object the other agent's lidar sees is cart AND operator moving together, so the pseudo-label is a real choice rather than a measurement: cart only (every detection of the person scores as a false positive), cart + operator (no phantom FPs, but a loose box round a non-rigid object), or cart only with the operators labelled separately through `merge_external_labels`. Recorded in the config and in `docs/ROS2OPV2V.md` as a decision that changes what precision means, not a default. Two consequences for geometry: `center` is a large vertical offset when the camera is on a mast (metres of error if left at zero, not centimetres), and the ground-lift guidance that assumed a knee-high robot (~1.4 m) is wrong for a cart (~0.7 m or less). Corrected to `1.9 - sensor height above floor`, with the point that the height must be MEASURED: an anchored map puts z = 0 at whatever anchored it -- here the surveyed board -- so the published camera heights of map z = +0.193 (ZED) and +0.165 (RealSense) are 28 mm apart, meaning one lift fits both, but say nothing about the floor. Read it off the anchored map cloud. |
 | 2026-09-04 | 8.2 | **`object.extrinsic`: describe the pseudo-label box in robot axes, not the sensor's.** Moving each agent's base to its camera optical frame made the one remaining operator input dangerous to ask for: `extent` would have meant [half-width, half-height, half-length] and `center` an offset in [right, down, forward], and a box with its length and height swapped still looks like a box, so a wrong answer would never surface. Added a base -> box-frame transform (identity by default, so every existing config is unchanged); `{roll: 90, pitch: -90, yaw: 0}` puts the box in ROS body axes at the same point, making `extent` [half-length, half-width, half-height] and `center` [ahead, left, up]. Pinned by four tests including one on `mobile_2`'s real published start pose, where a 0.35 m centre offset lands the box exactly 0.35 m below the camera. Also dropped the radar/camera_info remarks: `/infra_1/radar/points_all` is consumed as a point cloud and nothing in the converter reads a radar camera_info. Tests 58/58 -> **62/62**. |
 | 2026-09-04 | 8.2 ✅ | **Every extrinsic filled from the dataset description; the config is one measurement from running.** `configs/mirc_coop2.yaml` now carries `mobile_1` cloud = `inv(os_lidar -> ZED optical)`, `mobile_2` cloud = colour->depth optical as published, `infra_1` `world_pose` = `map -> arducam_optical_frame` with its radar at `arducam -> infra1_link`, and identity camera extrinsics throughout (each agent's base is its own camera's optical frame). Derivations are pinned by tests that fail on a hand-edit, and the RealSense pair is cross-checked by closing `camera_link -> colour -> depth` to 1 um, which is what licenses treating `camera_link` as the depth frame. **Two corrections the real numbers forced:** an earlier bounds check would have rejected the correct `infra_1` pose (the Arducam sits at x = -5.5 m, outside the boards' box, looking in from 2 m up -- the boards mark where the robots dwelled, not where infrastructure is mounted); and `optical_frame` must be FALSE on a depth cloud whose base is an optical frame, because the flag's optical->FLU rotation is pure error there and turns the agent 90 deg while the conversion still succeeds (measured: a 3 m return displaced by 4.2 m). `mobile_1_zed` moved from `cloud_registered` (frame_id unstated; the ZED wrapper picks optical or NAV by version -- a 90 deg coin flip) to `depth_registered`, which the dataset documents as aligned to the RGB frame, so its extrinsic is a known identity; it is disabled by default since the recorded scenario is three agents. Remaining: the robots' half-extents. Tests 54/54 -> **58/58**. |
