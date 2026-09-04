@@ -58,7 +58,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from csi_core import (  # noqa: E402
-    amplitude_db, colour_lut, delay_profile, effective_bandwidth_mhz, occupied_band,
+    amplitude_db, band_mask, colour_lut, delay_profile, effective_bandwidth_mhz, occupied_band,
     quantise, rician_k, rms_delay_spread, usable_subcarriers,
 )
 
@@ -106,9 +106,21 @@ class CsiRenderer:
         use = usable_subcarriers(self.acc.reshape(1, -1))
         if use.sum() < 8:
             use = np.ones_like(use)
-        Hu, idxu = H[:, use], idx[use]
         band_lo, band_span = occupied_band(idx, use)
+        use &= band_mask(idx, band_lo, band_span)
+        Hu, idxu = H[:, use], idx[use]
         eff_bw = effective_bandwidth_mhz(band_span, bandwidth_mhz, raw_slots)
+        # The receiver's fixed per-subcarrier shape, tracked as a slow average
+        # of log-amplitude (about 2000 frames, ~10 s), is divided out before
+        # anything is drawn or measured: it is not the room, and at 20 dB deep
+        # it would otherwise be all the waterfall shows.
+        la = 20 * np.log10(np.abs(Hu[0]) + 1e-12)
+        self.shape = getattr(self, "shape", None)
+        if self.shape is None or self.shape.size != la.size:
+            self.shape = la.copy()
+        else:
+            self.shape += (la - self.shape) / 2000.0
+        Hu = Hu / (10 ** (self.shape / 20))[None, :]
         amp = amplitude_db(Hu)[0]
         if self.buf is None or self.buf.shape[1] != amp.size:
             self.buf = np.zeros((self.history, amp.size), dtype=np.float32)
@@ -128,6 +140,7 @@ class CsiRenderer:
             "k_db": float(10 * np.log10(max(rician_k(Hu)[0], 1e-3))),
             "rssi": rssi, "src_mac": src_mac,
             "bw": int(bandwidth_mhz), "eff_bw": eff_bw, "n_use": int(use.sum()),
+            "shape_ptp_db": float(np.ptp(self.shape)),
         }
 
     # -- drawing helpers (vectorised; a per-column Python loop cannot keep up) --
@@ -202,7 +215,7 @@ class CsiRenderer:
         # ---- header ----------------------------------------------------------
         rssi = "" if m["rssi"] is None else f"  RSSI {int(m['rssi'])} dBm"
         self._text(img, f"{m['src_mac']}  {m['eff_bw']:.0f}/{m['bw']} MHz  "
-                        f"{m['n_use']} sc{rssi}", (6, 15), INK, 0.42)
+                        f"{m['n_use']} sc  shape {m['shape_ptp_db']:.0f} dB out{rssi}", (6, 15), INK, 0.42)
         tau = "n/a" if not np.isfinite(m["tau_ns"]) else f"{m['tau_ns']:.0f} ns"
         # K at the floor means the moment estimator found no dominant path at
         # all; printing the floor value as if it were a measurement would be a lie

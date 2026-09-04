@@ -70,7 +70,7 @@ from common import (  # noqa: E402
 from csi_core import (  # noqa: E402
     amplitude_db, delay_profile, effective_bandwidth_mhz, occupied_band,
     profile_structure_db, rician_k, rms_delay_spread, temporal_coherence, frame_correlation,
-    usable_subcarriers,
+    usable_subcarriers, band_mask, equalise_static,
 )
 from extract_bag import extract  # noqa: E402
 
@@ -273,12 +273,21 @@ def main() -> int:
         # Guard and DC-null slots carry no signal; including them makes every
         # amplitude statistic meaningless (see usable_subcarriers).
         use = usable_subcarriers(H_all, args.null_floor_db)
+        band_lo, band_span = occupied_band(idx_all, use, args.band_gap)
+        # only slots inside that band count: an isolated slot elsewhere in the
+        # window (the 80 MHz DC slot) passes the power test but is not the frame
+        use &= band_mask(idx_all, band_lo, band_span)
         H, idx = H_all[:, use], idx_all[use]
         n_sub, n_raw_cols = H.shape[1], H_all.shape[1]
-        band_lo, band_span = occupied_band(idx_all, use, args.band_gap)
         eff_bw = effective_bandwidth_mhz(band_span, bw, raw_slots)
         sc_power_db = 10 * np.log10(np.maximum((np.abs(H_all) ** 2).mean(axis=0), 1e-30))
         sc_power_db -= np.percentile(sc_power_db[use], 90)
+        # The receiver's own per-subcarrier gain -- filter roll-off, ripple,
+        # slots the firmware reports at a fixed level -- is removed before any
+        # metric runs. It is not the room and does not move with the robot, but
+        # it is often 20 dB deep and would otherwise dominate everything below.
+        H, static_db = equalise_static(H)
+        static_ptp = float(np.ptp(static_db))
         # tap spacing follows the bandwidth the frames OCCUPY, not the one the
         # capture was configured for
         dt_s = 1.0 / (eff_bw * 1e6)
@@ -304,6 +313,7 @@ def main() -> int:
             "profile_structure_db": struct_db,
         }))
         per_agent[agent] = dict(t=sub["t_s"].to_numpy(), amp_db=amp_db, idx=idx, absH=np.abs(H),
+                                band_lo=band_lo, band_span=band_span, static_ptp=static_ptp,
                                 bw=bw, eff_bw=eff_bw, dt_ns=dt_s * 1e9,
                                 sc_power_db=sc_power_db, sc_idx=idx_all, use=use)
 
@@ -321,6 +331,7 @@ def main() -> int:
             "subcarriers_usable": n_sub,
             "nulls_dropped": n_raw_cols - n_sub,
             "trimmed_flag": bool(df["trimmed"].mode().iloc[0]),
+            "static_shape_ptp_db": round(static_ptp, 1),
             "temporal_coherence": round(coh, 3),
             "profile_structure_median_db": float(np.nanmedian(struct_db)),
             "frames_with_flat_profile_pct": float(100 * np.mean(struct_db < args.min_profile_db)),
@@ -365,6 +376,7 @@ def main() -> int:
                           hspace=0.50, wspace=0.26,
                           left=0.075, right=0.93, top=0.94, bottom=0.075)
     amp_cmap = matplotlib.colors.LinearSegmentedColormap.from_list("amp", AMP_DIVERGING)
+    amp_cmap.set_bad("#f7f6f3")
     # symmetric about 0 dB so the neutral midpoint really is "at the frame median"
     vabs = float(np.percentile(np.abs(np.concatenate(
         [p["amp_db"].ravel() for p in per_agent.values()])), 98))
@@ -373,12 +385,17 @@ def main() -> int:
         ax = fig.add_subplot(gs[0, i])
         p = per_agent[a]
         step = max(len(p["t"]) // 1200, 1)          # one column per output pixel
-        im = ax.imshow(p["amp_db"][::step].T, aspect="auto", origin="lower", cmap=amp_cmap,
+        # rows are FFT slots of the occupied band; excluded slots stay blank
+        # rather than being stretched over, so the y axis is honest
+        grid = np.full((p["amp_db"].shape[0], p["band_span"]), np.nan, np.float32)
+        grid[:, p["idx"] - p["band_lo"]] = p["amp_db"]
+        im = ax.imshow(grid[::step].T, aspect="auto", origin="lower", cmap=amp_cmap,
                        vmin=-vabs, vmax=vabs,
-                       extent=[p["t"][0], p["t"][-1], p["idx"].min(), p["idx"].max()])
+                       extent=[p["t"][0], p["t"][-1],
+                               p["band_lo"] - 0.5, p["band_lo"] + p["band_span"] - 0.5])
         ax.set_xlabel("time in run [s]")
         ax.set_ylabel("subcarrier index" if i == 0 else "")
-        ax.set_title(f"({chr(97 + i)}) {a}: channel amplitude\n"
+        ax.set_title(f"({chr(97 + i)}) {a}: channel amplitude, receiver shape removed\n"
                      f"{p['eff_bw']:.0f} MHz occupied of a {p['bw']} MHz capture, "
                      f"{p['amp_db'].shape[1]} subcarriers, {p['dt_ns']:.0f} ns per tap",
                      loc="left", fontsize=8)
@@ -402,7 +419,8 @@ def main() -> int:
         ax.axhline(-args.null_floor_db, color=BAD, lw=0.8, ls="--")
         ax.set_xlabel("subcarrier index"); ax.set_ylabel("mean power [dB]" if i == 0 else "")
         ax.set_title(f"({chr(97 + ncol + i)}) {a}: {int(p['use'].sum())} of {p['use'].size} slots "
-                     f"carry a subcarrier", loc="left", fontsize=8)
+                     f"carry a subcarrier; fixed receiver shape across them spans "
+                     f"{p['static_ptp']:.0f} dB", loc="left", fontsize=8)
         ax.grid(True, color=GRID, lw=0.5)
 
     ax = fig.add_subplot(gs[2, :])
@@ -579,7 +597,13 @@ def main() -> int:
                + "delay profile's tap spacing is "
                + f"{coarse['tap_spacing_ns'].max():.0f} ns, and indoor delay spreads are of that order. "
                "The K-factor and the frequency selectivity are unaffected.", ""]
+    shp = ", ".join(f"`{r.agent}` {r.static_shape_ptp_db:.0f} dB" for r in inventory.itertuples())
     md += ["## The two tests that decide whether this CSI is usable", "",
+           "Before either test, the per-subcarrier gain that never changed over the run is "
+           f"divided out (its peak-to-peak: {shp}). That shape is the receiver -- filter "
+           "roll-off, gain ripple, slots reported at a fixed level -- not the room. Left in, it "
+           "passes the first test by itself, since a fixed pattern correlates perfectly with "
+           "itself, and it buries the variation the second test measures.", "",
            "1. **Is it a channel?** Frame-to-frame correlation of |H| (column "
            "`temporal_coherence` above). A physical channel changes slowly, so consecutive "
            "frames correlate above about 0.8; noise gives an independent draw per frame and "
@@ -644,7 +668,7 @@ automatic gain control, so both quantities are ratios and independent of it.{coa
 
     print(inventory[["agent", "frames", "rate_hz", "capture_bandwidth_mhz",
                      "occupied_bandwidth_mhz", "occupied_slots", "subcarriers_usable",
-                     "temporal_coherence", "profile_structure_median_db",
+                     "static_shape_ptp_db", "temporal_coherence", "profile_structure_median_db",
                      "frames_with_flat_profile_pct"]].round(2).to_string(index=False))
     if len(incoh):
         print("\n  ** frame-to-frame |H| correlation is "

@@ -435,6 +435,16 @@ def main(out: Path) -> None:
         keep = np.array([i for i in range(RAW)
                          if not (i < 6 or i > 249 or abs(i - 128) < 3)], dtype=np.int32)
         f_hz = (keep - RAW / 2) * (BW_HZ / RAW)
+        # The receiver's own per-subcarrier gain, which the real radio stamps on
+        # every frame: a +/-4 dB ripple, a 14 dB roll-off over the outer six
+        # slots at each band edge, and one slot the firmware reports 18 dB hot.
+        # None of it is the room and none of it moves; the analysis must
+        # divide it out or it dominates every across-subcarrier statistic.
+        edge = np.minimum(np.arange(len(keep)), np.arange(len(keep))[::-1])
+        shape_db = 4.0 * np.cos(2 * np.pi * np.arange(len(keep)) / 37.0) \
+            - 14.0 * np.clip((6 - edge) / 6.0, 0, 1)
+        shape_db[len(keep) // 3] += 18.0
+        rx_shape = 10 ** (shape_db / 20)
         for topic, mac, phase in [("/mobile1/csi", "82:2a:a8:cb:d4:34", 0.0),
                                   ("/mobile2/csi", "82:2a:a8:cb:d4:34", 1.7)]:
             hz = 171.0
@@ -464,6 +474,7 @@ def main(out: Path) -> None:
                     ph = ph0[j] + 2 * math.pi * fd[j] * moving_time(t)
                     H += a * np.exp(-2j * math.pi * f_hz * d + 1j * ph)
                 H += (rng.gauss(0, 0.02) + 1j * rng.gauss(0, 0.02))
+                H *= rx_shape                             # the receiver, not the room
                 H *= 10 ** (rng.gauss(0, 0.8) / 20)       # AGC jitter, scale only
                 msg = {
                     "header": {"stamp": stamp(ns), "frame_id": "wlan"},

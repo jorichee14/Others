@@ -12,8 +12,9 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from csi_core import (frame_correlation, occupied_band, rician_k,  # noqa: E402
-                      temporal_coherence, usable_subcarriers)
+from csi_core import (band_mask, equalise_static, frame_correlation,  # noqa: E402
+                      occupied_band, rician_k, temporal_coherence,
+                      usable_subcarriers)
 
 RNG = np.random.default_rng(7)
 FAILED = []
@@ -90,6 +91,26 @@ check("lag 18 beats lag 1 in sensitivity", float(np.nanmedian(frame_correlation(
 check("faster drift, lower correlation", r_fast < r_slow, True)
 check("still channel stays at 1", round(float(np.nanmedian(frame_correlation(
       channel(300, 64, doppler=False), 18))), 3), 1.0, tol=1e-3)
+
+print("equalise_static: a fixed receiver shape must not pass as a channel")
+# the coop2 signature: a few slots 20 dB off, identical in every frame
+shape = np.ones(64); shape[[3, 4, 58]] = 10.0; shape[[5, 59]] = 0.1
+noise_shaped = noise * shape[None, :]
+check("shaped noise passes the raw gate (0.5)", temporal_coherence(noise_shaped) > 0.5, True)
+check("...and fails after equalising", abs(temporal_coherence(equalise_static(noise_shaped)[0])) < 0.2, True)
+ch = channel(300, 64) + 3.0
+Hs, sdb = equalise_static(ch * shape[None, :])
+check("shape measured", round(float(np.ptp(sdb)), 1), 40.0, tol=0.5)
+check("channel survives equalising", temporal_coherence(Hs) > 0.9, True)
+check("K restored", float(np.median(rician_k(Hs))) > 1.0, True)
+check("K was pinned before", float(np.median(rician_k(ch * shape[None, :]))), 0.0)
+
+print("band_mask: an isolated hot slot outside the band is not the frame")
+idx = np.arange(256); use = np.zeros(256, bool); use[128:192] = True; use[0] = True
+lo, span = occupied_band(idx, use)
+check("band unaffected by it", (lo, span), (128, 64))
+check("slot 0 excluded", bool((use & band_mask(idx, lo, span))[0]), False)
+check("band kept", int((use & band_mask(idx, lo, span)).sum()), 64)
 
 print("rician_k: nulls left in the input pin K at Rayleigh")
 Hc = channel(200, 64) + 3.0          # strong dominant path -> K well above 0

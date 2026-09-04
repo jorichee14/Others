@@ -122,6 +122,46 @@ def occupied_band(idx: np.ndarray, use: np.ndarray, max_gap: int = 12):
     return int(occ[starts[b]]), int(widths[b])
 
 
+def band_mask(idx: np.ndarray, band_lo: int, band_span: int) -> np.ndarray:
+    """Slots inside the occupied band. An isolated slot elsewhere in the capture
+    window -- the 80 MHz DC slot is the usual one -- can pass the power test
+    while carrying no part of the frame, and one such slot with a fixed level
+    is enough to dominate every across-subcarrier statistic."""
+    idx = np.asarray(idx)
+    return (idx >= band_lo) & (idx < band_lo + band_span)
+
+
+def equalise_static(H: np.ndarray):
+    """Divide out the per-subcarrier gain that does not change over the run.
+
+    Returns (H_eq, static_db): H with each column divided by that column's
+    median |H| over time, and the removed shape in dB relative to its own
+    median.
+
+    What this removes is the receiver: the RX filter roll-off at the band
+    edges, the radio's per-subcarrier gain ripple, and any slot the firmware
+    reports at a fixed level. None of that is the room, and it does not change
+    when the robot moves, but it is often 20 dB deep -- far larger than the
+    fading it sits on top of -- with three consequences. The frame-to-frame
+    correlation reads 1.0 whether or not a channel is present, because a
+    fixed pattern correlates perfectly with itself. The Rician estimator sees
+    a bimodal amplitude distribution and returns Rayleigh for every frame.
+    And the change rate that the motion test measures is a percent or two
+    however fast the robot moves, since the pattern dwarfs the part that
+    varies. Equalising by the run median leaves only what moved.
+
+    The cost: a channel component that was itself constant over the whole
+    run is removed with the hardware. For a robot that drove for the run that
+    is nothing; for two fixed radios it is the entire channel, and the tests
+    downstream will then rightly report that nothing varied."""
+    H = np.atleast_2d(H)
+    med = np.median(np.abs(H), axis=0)
+    ok = med > 0
+    ref = np.median(med[ok]) if ok.any() else 1.0
+    static_db = np.where(ok, 20 * np.log10(np.where(ok, med, 1.0) / ref), 0.0)
+    return H / np.where(ok, med, 1.0)[None, :], static_db
+
+
 def effective_bandwidth_mhz(span_slots: int, declared_mhz: float, raw_slots: int) -> float:
     """Bandwidth the frames actually occupy, from the span they fill."""
     if raw_slots <= 0:
