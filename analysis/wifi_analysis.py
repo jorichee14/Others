@@ -367,11 +367,19 @@ def main() -> int:
     for lk in links:
         g = status[status["link"] == lk]
         ax.plot(g["t_s"], g["signal_dbm"], lw=1.1, color=color_of[lk], label=lk)
-    ax.axhline(args.bad_rssi_dbm, color=BAD_COLOR, lw=0.8, ls="--")
-    ax.set_ylabel("RSSI [dBm]")
-    ax.set_title(f"{letter['rssi']} received signal strength", loc="left", fontsize=8)
+    lo, hi = float(status["signal_dbm"].min()), float(status["signal_dbm"].max())
+    pad = max((hi - lo) * 0.12, 1.5)
     legend_handles = list(ax.get_lines()[: len(links)])
     legend_labels = list(links)
+    rssi_thr_drawn = args.bad_rssi_dbm >= lo - pad
+    if rssi_thr_drawn:
+        ax.axhline(args.bad_rssi_dbm, color=BAD_COLOR, lw=0.8, ls="--")
+        ax.set_ylim(min(lo - pad, args.bad_rssi_dbm - pad), hi + pad)
+    else:
+        ax.set_ylim(lo - pad, hi + pad)
+    ax.set_ylabel("RSSI [dBm]")
+    margin = "" if rssi_thr_drawn else f"  (weakest sample {lo - args.bad_rssi_dbm:.0f} dB above the Bad threshold)"
+    ax.set_title(f"{letter['rssi']} received signal strength{margin}", loc="left", fontsize=8)
     ax.grid(True, color=GRID, lw=0.5)
 
     ax = at["rate"]
@@ -385,19 +393,36 @@ def main() -> int:
                 (h,) = ax.plot(sub["t_s"], sub["bitrate_mbps"], mk, ms=5, mfc="none", mec=TEXT, mew=1.1, ls="none")
                 legend_handles.append(h)
                 legend_labels.append(f"iperf, {kind}")
+    # PHY rate and goodput share a unit but can differ by a large factor on a fast link;
+    # a log axis keeps both legible and leaves the gap between them visible as an offset
+    vals = [status["tx_bitrate_mbps"]]
+    if iperf_df is not None and len(iperf_df):
+        vals.append(iperf_df.loc[iperf_df["success"].astype(bool), "bitrate_mbps"])
+    allv = pd.concat(vals).dropna()
+    allv = allv[allv > 0]
+    if len(allv) and allv.max() / allv.min() > 8:
+        ax.set_yscale("log")
     ax.set_ylabel("rate [Mbit/s]")
     ax.set_title(f"{letter['rate']} lines: negotiated PHY rate.  markers: measured iperf goodput",
                  loc="left", fontsize=8)
-    ax.grid(True, color=GRID, lw=0.5)
+    ax.grid(True, color=GRID, lw=0.5, which="both")
 
     if "failures" in at:
         ax = at["failures"]
         for lk in links:
             g = status[status["link"] == lk]
             ax.plot(g["t_s"], g["tx_failure_rate"] * 100, lw=1.1, color=color_of[lk], label=lk)
-        ax.axhline(args.bad_failure_rate * 100, color=BAD_COLOR, lw=0.8, ls="--")
+        fmax = float(status["tx_failure_rate"].max() * 100) if status["tx_failure_rate"].notna().any() else 0.0
+        note = ""
+        if fmax <= 0.0:
+            ax.set_ylim(-0.05, 1.0)
+            note = "  (no frame failed after retries anywhere in this run)"
+        elif fmax < args.bad_failure_rate * 100:
+            ax.set_ylim(-0.05 * fmax, fmax * 1.15)
+        else:
+            ax.axhline(args.bad_failure_rate * 100, color=BAD_COLOR, lw=0.8, ls="--")
         ax.set_ylabel("TX failures [%]")
-        ax.set_title(f"{letter['failures']} frames that failed after all retries", loc="left", fontsize=8)
+        ax.set_title(f"{letter['failures']} frames that failed after all retries{note}", loc="left", fontsize=8)
         ax.grid(True, color=GRID, lw=0.5)
 
     if "occupancy" in at:
@@ -414,7 +439,8 @@ def main() -> int:
 
     thr = plt.Line2D([], [], color=BAD_COLOR, lw=0.8, ls="--")
     legend_handles.append(thr)
-    legend_labels.append(f"Bad: RSSI ≤ {args.bad_rssi_dbm:.0f} dBm or failures > {args.bad_failure_rate:.0%}")
+    legend_labels.append(f"Bad: RSSI ≤ {args.bad_rssi_dbm:.0f} dBm or failures > {args.bad_failure_rate:.0%}"
+                         + ("" if rssi_thr_drawn else " (off scale)"))
     fig.legend(legend_handles, legend_labels, frameon=False, fontsize=7,
                ncol=min(len(legend_labels), 3), loc="outside upper center")
 

@@ -10,6 +10,9 @@ next recording session.
 > `iw survey dump`, so **channel occupancy is unavailable**. And the link never
 > degraded — median RSSI −39 dBm, zero Bad samples — so `coop2` is a **good-link
 > control condition**, not a test of connectivity-aware behaviour.
+>
+> The measurement pipeline itself is sound — these are findings about the run and the
+> hardware, not bugs in the analysis.
 
 ---
 
@@ -106,17 +109,18 @@ sentence is supported; the **occupancy** half is not measurable with this hardwa
 
 ### 3.3 The link never degraded — *blocks F1 and S2 for this run*
 
-A 13 dB total RSSI range, no sample below −52 dBm, gigabit PHY rates throughout, and
-zero Bad samples at any sensible threshold. Both robots stayed near the AP for the whole
-156 s.
+No sample below −52 dBm — the weakest reading is 18 dB clear of even a generous −70 dBm
+Bad threshold — with gigabit PHY rates throughout, no frame failing after retries, and
+zero Bad samples. Both robots stayed near the AP for the whole 156 s. (The exact span is
+`rssi_range_db` in `wifi_links.csv`.)
 
 This is a legitimate and useful result — `coop2` is a **good-link control condition** —
 but the two benchmarks that need spatial variation cannot be demonstrated on it:
 
 - **F1**, connectivity-aware cooperative perception under a *measured* channel: there is
   no channel variation to be aware of.
-- **S2**, connectivity mapping fused with scene geometry: a coverage map over a 13 dB
-  range with no dead zones has nothing to predict.
+- **S2**, connectivity mapping fused with scene geometry: a coverage map with no dead
+  zones and no sample near the noise floor has nothing to predict.
 
 ### 3.4 No pose join yet
 
