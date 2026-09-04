@@ -1474,6 +1474,75 @@ def test_mirc_config_has_no_unresolved_geometry():
     assert not missing, missing
 
 
+# --------------------------------------------- describing the box sensibly
+# The agent-derived boxes are the only labels a bag can produce, and their frame
+# is whatever the pose source uses. With an optical base that is [right, down,
+# forward], where a box with its length and height swapped still looks like a
+# box — so `object.extrinsic` lets the operator describe the robot in ROS body
+# axes instead, and these tests pin what that composition actually does.
+
+def test_object_extrinsic_puts_the_box_in_body_axes():
+    from ros2opv2v.geometry import OPTICAL_TO_FLU
+    from ros2opv2v.labels import agent_box
+
+    # An optical frame at (2, 3, 1) looking along world +x, upright:
+    # optical z (forward) = world x, optical x (right) = world -y,
+    # optical y (down) = world -z.
+    world_from_base = np.identity(4)
+    world_from_base[:3, :3] = np.column_stack([[0, -1, 0], [0, 0, -1], [1, 0, 0]])
+    world_from_base[:3, 3] = [2.0, 3.0, 1.0]
+
+    box_frame = invert(OPTICAL_TO_FLU)          # optical -> FLU at the same point
+    composed = world_from_base @ box_frame
+    assert np.allclose(composed[:3, :3], np.identity(3), atol=1e-12), composed
+    # so in that frame x really is world-forward, y left, z up
+
+    extent = [0.30, 0.25, 0.25]                 # 0.6 x 0.5 x 0.5 m platform
+    centre = [-0.05, 0.0, -0.35]                # camera 35 cm up, 5 cm ahead
+    box = agent_box(world_from_base, extent, centre, box_frame)
+    assert np.allclose(box["location"], [1.95, 3.0, 0.65], atol=1e-12), box["location"]
+    assert box["extent"] == extent
+    # OpenCOOD reads `angle` back through x_to_world; that must be the box frame
+    assert np.allclose(x_to_world([0, 0, 0] + box["angle"])[:3, :3],
+                       np.identity(3), atol=1e-9), box["angle"]
+
+
+def test_object_extrinsic_defaults_to_the_base_frame():
+    """Omitting it must leave existing configs untouched."""
+    from ros2opv2v.labels import agent_box
+    world_from_base = make_transform(x=1.0, y=2.0, z=3.0, yaw=30.0)
+    a = agent_box(world_from_base, [0.3, 0.2, 0.1], [0.0, 0.0, 0.0])
+    b = agent_box(world_from_base, [0.3, 0.2, 0.1], [0.0, 0.0, 0.0], np.identity(4))
+    assert a == b, (a, b)
+    assert np.allclose(a["location"], [1.0, 2.0, 3.0])
+
+
+def test_box_centre_offset_is_rotated_by_the_box_frame():
+    """`center` must be read in the box frame, not the base frame — otherwise the
+    extrinsic would fix the axes of `extent` and silently leave `center` wrong."""
+    from ros2opv2v.geometry import OPTICAL_TO_FLU
+    from ros2opv2v.labels import agent_box
+    world_from_base = np.identity(4)            # optical axes aligned with world
+    up_in_body = agent_box(world_from_base, [0.3, 0.2, 0.1], [0.0, 0.0, 1.0],
+                           invert(OPTICAL_TO_FLU))
+    # +z in the body frame is 'up', which in an identity-posed OPTICAL base is
+    # world -y (optical y points down)
+    assert np.allclose(up_in_body["location"], [0.0, -1.0, 0.0], atol=1e-12), \
+        up_in_body["location"]
+
+
+def test_mirc_boxes_are_declared_in_body_axes():
+    """Both mobile agents must carry the optical->body box frame; without it the
+    extents they are waiting for would be read as [width, height, length]."""
+    cfg = _mirc_config()
+    for name in ('mobile_1', 'mobile_2'):
+        obj = _agent(cfg, name)['object']
+        assert obj['emit'] is True, name
+        got = make_transform(**obj['extrinsic'])
+        from ros2opv2v.geometry import OPTICAL_TO_FLU
+        assert np.allclose(got, invert(OPTICAL_TO_FLU), atol=1e-9), (name, got)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

@@ -31,11 +31,21 @@ import numpy as np
 from .geometry import matrix_to_opencood_pose
 
 
-def agent_box(world_from_base: np.ndarray, extent, center=(0.0, 0.0, 0.0)) -> dict:
-    """One ``vehicles`` entry for an agent at ``world_from_base``."""
+def agent_box(world_from_base: np.ndarray, extent, center=(0.0, 0.0, 0.0),
+              extrinsic: Optional[np.ndarray] = None) -> dict:
+    """One ``vehicles`` entry for an agent at ``world_from_base``.
+
+    ``extrinsic`` (base -> box frame) lets the box be described in a frame that
+    suits the robot rather than whichever frame the pose source happens to use.
+    Both ``extent`` and ``center`` are then read in that frame, and the box's
+    orientation is the composed pose — so a camera-optical base does not force
+    the operator to think in [right, down, forward].
+    """
+    world_from_box = (world_from_base if extrinsic is None
+                      else world_from_base @ np.asarray(extrinsic, dtype=np.float64))
     offset = np.asarray(center, dtype=np.float64)
-    location = (world_from_base @ np.append(offset, 1.0))[:3]
-    pose = matrix_to_opencood_pose(world_from_base)
+    location = (world_from_box @ np.append(offset, 1.0))[:3]
+    pose = matrix_to_opencood_pose(world_from_box)
     return {
         "angle": [pose[3], pose[4], pose[5]],
         "center": [0.0, 0.0, 0.0],
@@ -65,7 +75,8 @@ def vehicles_for_viewer(agent_poses: Dict[str, np.ndarray],
         if name == viewer and not include_self:
             continue
         vehicles[int(spec["object_id"])] = agent_box(
-            pose, spec["extent"], spec.get("center", (0.0, 0.0, 0.0)))
+            pose, spec["extent"], spec.get("center", (0.0, 0.0, 0.0)),
+            spec.get("extrinsic"))
     return vehicles
 
 

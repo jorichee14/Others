@@ -211,9 +211,25 @@ class PoseConfig:
 class ObjectConfig:
     """The agent's own 3D box, as seen by the *other* agents (pseudo ground truth)."""
     emit: bool = False
-    extent: Optional[List[float]] = None    # half-dims in base frame [dx, dy, dz]
+    extent: Optional[List[float]] = None    # half-dims in the BOX frame [dx, dy, dz]
     center: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     object_id: Optional[int] = None
+    extrinsic: np.ndarray = field(default_factory=lambda: np.identity(4))
+    """Agent base -> the frame the box is written in. Identity (the default)
+    means the box is expressed in the agent's own base frame.
+
+    It exists because the base is not always a convenient frame to describe a
+    robot in. When the pose source is a camera optical frame (x right, y down,
+    z forward), ``extent`` would otherwise mean [half-width, half-height,
+    half-length] and ``center`` would be an offset in those axes — easy to get
+    subtly wrong and impossible to spot afterwards, since a box with its length
+    and height swapped still looks like a box. Setting
+
+        extrinsic: {x: 0, y: 0, z: 0, roll: 90, pitch: -90, yaw: 0}
+
+    puts the box in a ROS body frame (x forward, y left, z up) co-located with
+    the camera, so ``extent`` is the familiar [half-length, half-width,
+    half-height] and ``center`` is [ahead, left, up] from the camera."""
 
     @staticmethod
     def parse(mapping: Optional[dict], ctx: str) -> "ObjectConfig":
@@ -222,9 +238,16 @@ class ObjectConfig:
             emit=bool(mapping.get("emit", False)),
             extent=mapping.get("extent"),
             center=list(mapping.get("center", [0.0, 0.0, 0.0])),
-            object_id=mapping.get("object_id"))
+            object_id=mapping.get("object_id"),
+            extrinsic=(_transform_from(mapping["extrinsic"], f"{ctx}.extrinsic")
+                       if "extrinsic" in mapping else np.identity(4)))
         if cfg.emit and (cfg.extent is None or len(cfg.extent) != 3):
-            raise ConfigError(f"{ctx}.extent must be [dx, dy, dz] half-dimensions in metres")
+            raise ConfigError(
+                f"{ctx}.extent must be [dx, dy, dz] HALF-dimensions in metres, in the "
+                f"frame {ctx}.extrinsic points at (its own base frame by default). A "
+                f"robot 0.6 m long, 0.5 m wide and 0.5 m tall is [0.3, 0.25, 0.25]. "
+                f"Set {ctx}.emit: false to convert without agent-derived labels — but "
+                f"then the dataset has no ground truth at all.")
         if len(cfg.center) != 3:
             raise ConfigError(f"{ctx}.center must be [x, y, z]")
         return cfg

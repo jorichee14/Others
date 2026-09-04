@@ -176,8 +176,20 @@ agents:
         optical_frame: true
     object:
       emit: true                           # mobile_1 is a labelled box for the others
-      extent: null                         # REQUIRED: [dx, dy, dz] HALF-dimensions (m)
-      center: [0.0, 0.0, 0.0]              # base origin -> box centre, base frame
+      # The box is described in a ROS body frame (x forward, y left, z up) sitting
+      # at the camera, NOT in the camera's own optical axes — that is what this
+      # extrinsic buys, and it is why `extent` below reads as
+      # [half-LENGTH, half-WIDTH, half-HEIGHT] the way you would expect.
+      extrinsic: {x: 0, y: 0, z: 0, roll: 90, pitch: -90, yaw: 0}
+      # REQUIRED, and the only thing left in this file: HALF the robot's size.
+      # A platform 0.60 m long, 0.50 m wide and 0.50 m tall is [0.30, 0.25, 0.25].
+      extent: null
+      # Where the robot's CENTRE sits relative to the camera, in that body frame:
+      # [ahead, left, up] in metres. A camera on a mast 35 cm above the platform
+      # centre and 5 cm forward of it is [-0.05, 0.0, -0.35]. Leaving it at zero
+      # centres the box on the camera, which is wrong by however far the camera
+      # is from the middle of the robot.
+      center: [0.0, 0.0, 0.0]
 
   # ------------------------------------------------------------------ mobile_2
   # No LiDAR: the RealSense depth image is reprojected into a cloud. Expect a
@@ -236,8 +248,20 @@ agents:
         extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
         optical_frame: true
     object:
-      emit: true
-      extent: null                         # REQUIRED: half-dimensions (m)
+      emit: true                           # mobile_2 is a labelled box for the others
+      # The box is described in a ROS body frame (x forward, y left, z up) sitting
+      # at the camera, NOT in the camera's own optical axes — that is what this
+      # extrinsic buys, and it is why `extent` below reads as
+      # [half-LENGTH, half-WIDTH, half-HEIGHT] the way you would expect.
+      extrinsic: {x: 0, y: 0, z: 0, roll: 90, pitch: -90, yaw: 0}
+      # REQUIRED, and the only thing left in this file: HALF the robot's size.
+      # A platform 0.60 m long, 0.50 m wide and 0.50 m tall is [0.30, 0.25, 0.25].
+      extent: null
+      # Where the robot's CENTRE sits relative to the camera, in that body frame:
+      # [ahead, left, up] in metres. A camera on a mast 35 cm above the platform
+      # centre and 5 cm forward of it is [-0.05, 0.0, -0.35]. Leaving it at zero
+      # centres the box on the camera, which is wrong by however far the camera
+      # is from the middle of the robot.
       center: [0.0, 0.0, 0.0]
 
   # ------------------------------------- mobile_1's ZED stereo cloud, as an agent
@@ -350,14 +374,12 @@ agents:
       #    before trusting the intrinsics: a mismatch means the info belongs to
       #    another camera on the same host.
       # 3. There is no depth here at all, so this agent contributes radar
-      #    detections plus an image -- never geometry from the camera.
+      #    detections plus an image -- never geometry from the camera. The radar
+      #    is consumed as a point cloud and needs no camera_info of its own
+      #    (/infra_1/radar/camera_info is empty, and nothing here reads it).
       - topic: /infra_1/image_raw
         camera_info_topic: /infra_1/camera_info
-        # Identity: this agent's base IS the Arducam optical frame. (The
-        # radar-to-image projection is still absent from the bag —
-        # /infra_1/radar/camera_info has zero messages — so projecting radar
-        # returns into this image needs the extrinsic above plus `d` from
-        # camera_info, or ../radar_camera_calibration.)
+        # Identity: this agent's base IS the Arducam optical frame.
         extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
         optical_frame: true
     object:

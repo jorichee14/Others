@@ -520,7 +520,7 @@ def write_frame_yamls(cfg: ConverterConfig, scenarios, frame_poses: Dict[str, di
     """Write every agent's per-frame yaml; returns frame key -> scenario dir."""
     agent_objects = {
         a.name: {"object_id": a.obj.object_id, "extent": a.obj.extent,
-                 "center": a.obj.center}
+                 "center": a.obj.center, "extrinsic": a.obj.extrinsic}
         for a in cfg.active_agents if a.obj.emit}
 
     split_root = os.path.join(cfg.output.root, cfg.output.split)

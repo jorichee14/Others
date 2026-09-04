@@ -9,7 +9,7 @@ python scripts/inspect_bag.py     --bag <bag> --emit-config configs/mine.yaml
 python scripts/convert_rosbag.py  --config configs/mine.yaml --dry-run
 python scripts/convert_rosbag.py  --config configs/mine.yaml
 python scripts/validate_opv2v.py  --root <out>/test --with-open3d
-python scripts/test_ros2opv2v.py                       # 58 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                       # 62 self-tests, no bag needed
 ```
 
 Dependencies: `numpy`, `pyyaml`, and `mcap` + `mcap-ros2-support` for `.mcap`
@@ -304,6 +304,19 @@ Be clear-eyed about what that is: **two or three boxes per frame, all of them
 robots**. It is a geometric sanity signal — do the agents see each other where
 the poses say they are? — not a detection benchmark. AP computed against it is
 dominated by two objects and is not comparable to any published OPV2V number.
+
+`extent` is **half**-dimensions — a platform 0.6 m long, 0.5 m wide and 0.5 m
+tall is `[0.30, 0.25, 0.25]` — and `center` is the offset from the frame's origin
+to the middle of the robot, which matters because the origin is a *sensor*, not
+the robot's centre.
+
+Both are read in the frame `object.extrinsic` points at (the agent's base by
+default). Set it when the base is awkward to describe a robot in: with a camera
+optical base, `extent` would otherwise mean [half-width, half-height,
+half-length], and a box with its length and height swapped still looks like a
+box. `{roll: 90, pitch: -90, yaw: 0}` puts it in ROS body axes at the same
+point, so `extent` reads as [half-length, half-width, half-height] and `center`
+as [ahead, left, up].
 
 Real labels plug in through `labels.merge_external_labels`, which takes
 `{id, location, extent, angle}` in the same world frame. Agent-derived ids are

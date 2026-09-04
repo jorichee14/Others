@@ -86,7 +86,7 @@ table selects are ever deserialised.
 python scripts/inspect_bag.py    --bag <bag> --emit-config configs/mine.yaml
 python scripts/convert_rosbag.py --config configs/mine.yaml --dry-run
 python scripts/validate_opv2v.py --root <out>/test --with-open3d
-python scripts/test_ros2opv2v.py                      # 58 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                      # 62 self-tests, no bag needed
 ```
 
 **On synchronisation.** A converted frame never hides how synchronous it is. Each
