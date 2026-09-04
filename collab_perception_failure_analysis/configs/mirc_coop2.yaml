@@ -79,24 +79,41 @@ agents:
     enabled: true
     required: true
     pose:
-      source: odometry
-      topic: /mobile_1/zed/odom            # 2292 msgs, ~14.7 Hz
+      # /mobile_1/global_pose is the offline pipeline's OUTPUT (stage 09), not
+      # the ZED's own tracker: the corrected trajectory in the anchored `map`
+      # frame. Two consequences, and they are the reason this config can run at
+      # all:
+      #   * it is already in the SHARED world frame, so align is a true
+      #     identity rather than a choice — every agent is in one frame because
+      #     the map anchoring put them there, not because we declared it.
+      #   * its pose is of the ZED LEFT OPTICAL frame, so child_to_base is
+      #     identity and this agent's `base` IS that optical frame. Every
+      #     `extrinsic` below is therefore measured FROM the ZED left optical
+      #     frame, not from a base_link.
+      # (Both global_pose topics carry an empty offered_qos_profiles in the bag
+      # metadata — the signature of messages written straight into the mcap by
+      # a writer rather than published live. That is stage 09's output.)
+      source: pose
+      topic: /mobile_1/global_pose         # 2833 msgs, ~18.1 Hz average
       interpolation: linear
+      # Stamps are the union of the lidar and image stamps of the stage-08
+      # graph, so the spacing is irregular; 200 ms covers the gaps without
+      # smoothing over a real dropout.
       max_gap_ms: 200
-      # REQUIRED: world <- the ZED odometry origin. This is one of the three
-      # transforms that put the agents in a common frame. Identity is only
-      # correct if you *choose* mobile_1's odom origin as the world origin —
-      # which is a perfectly good choice, and then the other two are measured
-      # relative to it.
       align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
-      # REQUIRED if the odometry's child_frame_id is not the robot base
-      # (inspect_bag.py prints it). ZED reports the camera frame, so this is
-      # usually camera -> base_link.
-      child_to_base: null
+      child_to_base: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
     cloud:
       kind: pointcloud2
       topic: /mobile_1/ouster/points       # 1516 msgs
-      extrinsic: null                      # REQUIRED: base_link -> os_sensor
+      # REQUIRED: ZED left optical -> Ouster. This is inv(T_lidar_camera) from
+      # calibration.json, since stage 08 uses T_lidar_camera as the pose of the
+      # CAMERA in the LIDAR frame. NOT base_link -> os_sensor any more: the base
+      # is the optical frame now. To fill it in without hand-converting:
+      #   python3 -c "import numpy as np, json; \
+      #     from ros2opv2v.geometry import invert, matrix_to_rpy_config; \
+      #     T=np.array(json.load(open('calibration.json'))['T_lidar_camera']); \
+      #     print(json.dumps(matrix_to_rpy_config(invert(T)), indent=1))"
+      extrinsic: null
       intensity:
         field: intensity                   # Ouster also offers 'reflectivity'
         scale: 0.0001                      # raw counts are O(1e3-1e4); clipped to 1
@@ -117,7 +134,9 @@ agents:
     cameras:
       - topic: /mobile_1/zed/left/image_rect_color
         camera_info_topic: /mobile_1/zed/left/camera_info
-        extrinsic: null                    # REQUIRED only if you export cameras
+        # Exactly identity, not an approximation: the pose source IS this
+        # camera's optical frame.
+        extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
         optical_frame: true
     object:
       emit: true                           # mobile_1 is a labelled box for the others
@@ -134,19 +153,36 @@ agents:
     enabled: true
     required: true
     pose:
-      source: odometry
-      topic: /mobile_2/visual_slam/tracking/odometry   # 4233 msgs, ~27 Hz
+      # As for mobile_1: the stage-09 corrected trajectory, already in the
+      # anchored `map` frame and already the pose of the RealSense COLOR
+      # OPTICAL frame. align and child_to_base are identity, and this agent's
+      # `base` is that colour optical frame.
+      #
+      # This is also what puts mobile_1 and mobile_2 in ONE world without a
+      # hand-measured inter-robot transform: both trajectories were anchored to
+      # the same surveyed map, so the alignment is a measurement from stages
+      # 03/06/08 rather than an operator's guess.
+      source: pose
+      topic: /mobile_2/global_pose         # 1811 msgs, ~11.6 Hz average
       interpolation: linear
-      max_gap_ms: 200
-      align: null                          # REQUIRED: world <- Isaac VSLAM origin
-      # REQUIRED: VSLAM child frame -> base_link. Delete this line entirely if
-      # the odometry already reports the robot base.
-      child_to_base: null
+      max_gap_ms: 250
+      align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      child_to_base: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
     cloud:
       kind: depth_image
       topic: /mobile_2/depth/image_rect_raw            # 4300 msgs, ~27.5 Hz
       camera_info_topic: /mobile_2/depth/camera_info
-      extrinsic: null                      # REQUIRED: base_link -> depth optical mount
+      # REQUIRED: colour optical -> depth frame. This is exactly stage 08's
+      # `depth_extrinsic_xyzquat` for this camera (it defines the same
+      # direction). ~1.5 cm of baseline on a D455 — small, systematic, and on
+      # every point if left at identity. From the xyzquat:
+      #   python3 -c "import numpy as np, json; \
+      #     from scipy.spatial.transform import Rotation as R; \
+      #     from ros2opv2v.geometry import matrix_to_rpy_config; \
+      #     v=[0.000308,0.059191,-0.000162,0.499583,-0.497446,0.501716,-0.501244]; \
+      #     T=np.eye(4); T[:3,:3]=R.from_quat(v[3:]).as_matrix(); T[:3,3]=v[:3]; \
+      #     print(json.dumps(matrix_to_rpy_config(T), indent=1))"
+      extrinsic: null
       depth_scale: 0.001                   # 16UC1 millimetres -> metres
       min_depth: 0.2
       max_depth: 10.0                      # D4xx stereo depth degrades past this
@@ -158,7 +194,8 @@ agents:
     cameras:
       - topic: /mobile_2/color/image_raw
         camera_info_topic: /mobile_2/color/camera_info
-        extrinsic: null
+        # Identity: the pose source IS this camera's optical frame.
+        extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
         optical_frame: true
     object:
       emit: true
@@ -180,12 +217,14 @@ agents:
     enabled: true
     required: true
     pose:
-      source: odometry
-      topic: /mobile_1/zed/odom
+      # Same rigid body as agent 1, so the same pose source and the same
+      # (identity) transforms. Its `base` is likewise the ZED left optical frame.
+      source: pose
+      topic: /mobile_1/global_pose
       interpolation: linear
       max_gap_ms: 200
-      align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}   # same frame as agent 1
-      child_to_base: null                  # REQUIRED: same value as agent 1
+      align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      child_to_base: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
     cloud:
       kind: pointcloud2
       topic: /mobile_1/zed/point_cloud/cloud_registered      # 2288 msgs, ~14.7 Hz

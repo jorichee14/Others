@@ -415,15 +415,38 @@ as the thing OPV2V geometry cannot supply.
   estimate above is measuring the wrong thing, and neither is checkable from
   inside the bag.
 
-### Step 8.2 — Shared world frame  `⬜ TODO — input needed`
+### Step 8.2 — Shared world frame  `✅ RESOLVED — the bag already carries one`
 - mobile_1 (ZED odom), mobile_2 (Isaac VSLAM odom) and infra_1 (static, no pose
   topic) each start at their own origin; OPV2V assumes one world. The converter
   refuses to run on a null `align`/`world_pose` rather than defaulting to
   identity, because a wrong alignment yields a dataset that loads and trains
   while being geometrically meaningless.
-- **Needed:** per-agent SE(3) into a common frame (project owner will supply),
-  each sensor's `base_link -> sensor` extrinsic, and the robots' half-extents if
-  the agents-as-objects pseudo-labels are wanted.
+- **Resolved without a hand-measured transform.** The bag already carries
+  `/mobile_1/global_pose` and `/mobile_2/global_pose` — the offline pipeline's
+  stage-09 output, i.e. each robot's corrected trajectory in the *anchored map
+  frame* (their empty `offered_qos_profiles` in the bag metadata is the
+  signature of messages written straight into the mcap rather than published
+  live). Both robots are therefore in one world because the map anchoring
+  measured it, not because an operator declared it, and `align` becomes a true
+  identity. `configs/mirc_coop2.yaml` now uses them (`source: pose`).
+- **These poses are of the camera OPTICAL frame, not a body frame.** So
+  `child_to_base` is identity and each agent's `base` IS its camera optical
+  frame — every sensor `extrinsic` under it is measured from the camera
+  (mobile_1's Ouster becomes `inv(T_lidar_camera)`; mobile_2's depth becomes
+  its `depth_extrinsic_xyzquat`; each camera's own extrinsic becomes exactly
+  identity). Verified end to end: `test_optical_frame_pose_source_matches_the
+  _odometry_route` converts one synthetic rig both ways — body-frame odometry
+  with the sensor on the body, and optical-frame `PoseStamped` with the sensor
+  re-expressed as `inv(X) @ Z` — and asserts every `lidar_pose` matches to
+  1e-6. Substituting the pose source without re-expressing the extrinsic puts
+  63 cm of silent error on the synthetic rig (measured by breaking the test).
+- `geometry.matrix_to_rpy_config` converts a calibration 4x4 into the config's
+  RPY block (round-trip asserted over 500 random rotations plus gimbal lock),
+  so that re-expression is a command rather than arithmetic by hand.
+- **Still needed:** each sensor's extrinsic **from its agent's camera optical
+  frame** (not `base_link`), `infra_1`'s static `world_pose` in the map frame,
+  and the robots' half-extents if the agents-as-objects pseudo-labels are
+  wanted. The inter-robot alignment is no longer on this list.
 - **Done when:** `convert_rosbag.py --dry-run` reports a full frame budget and
   `validate_opv2v.py` passes on the converted tree.
 
@@ -449,6 +472,7 @@ as the thing OPV2V geometry cannot supply.
 
 | Date | Step | Notes |
 |------|------|-------|
+| 2026-09-04 | 8.2 | **Shared world frame resolved from the bag itself; pose source switched to the anchored optical-frame trajectories.** `/mobile_1/global_pose` and `/mobile_2/global_pose` are the offline pipeline's stage-09 output — each robot's corrected trajectory in the anchored `map` frame — so `align` is a MEASURED identity (both robots share a frame because the map anchoring put them there) instead of the hand-measured inter-robot SE(3) that was blocking 8.2. Their poses are of the CAMERA OPTICAL frame, so `child_to_base` is identity and each agent's `base` is that optical frame: every sensor extrinsic is now measured from the camera (Ouster = `inv(T_lidar_camera)`, mobile_2 depth = its `depth_extrinsic_xyzquat`, each camera's own = exactly identity). The substitution is only safe if the extrinsics are re-expressed with it, so it is tested rather than reasoned about: one synthetic rig converted both ways (body odometry + sensor on the body vs optical `PoseStamped` + sensor as `inv(X) @ Z`) must give identical `lidar_pose` — it does to 1e-6, and dropping the re-expression puts 63 cm of silent error on the same rig. Added `geometry.matrix_to_rpy_config` (calibration 4x4 -> config RPY block, round-trip asserted over 500 random rotations and at gimbal lock) so operators convert extrinsics by command rather than by hand. Tests 51/51 -> **54/54**. Clock reconciliation is unaffected: republished poses keep the original per-host stamps. |
 | 2026-09-04 | 8.1b | **Per-frame synchronisation added to the converter.** 8.1 matched agents to frame times; this makes the *quality* of that match a first-class output rather than an assumption. `ros2opv2v/clock.py` reconciles the three hosts' clocks (NTP monitor topics, the delivery floor from `log_time - header.stamp`, and the cross-check between them), resolving the offset field's sign and unit from the data — both are unreadable from a custom `NtpStatus` schema, and the wrong sign doubles the error rather than removing it. **Found while writing the config: `mobile_1` publishes no NTP status topic** while `infra_1` and `mobile_2` do, so one of three clocks is unmeasured; it is made the reference host and the consequence (its error appears as an equal and opposite error on both collaborators) is stated in every report instead of absorbed. Every frame yaml now carries a `ros_sync` block with its signed skew and clock residual, and the conversion report carries a tightness curve plus the **structural floor of +-47 ms** set by `infra_1`'s 10.64 Hz camera — half a publication period is unbeatable, so a tolerance below it is now warned about rather than discovered when frames vanish. `inspect_bag.py` surfaces the per-namespace delivery floor in stage A. Sweep deskew (`cloud.deskew` + `point_time_field`) removes 8.1's stated no-motion-compensation limitation: a 10 Hz sweep spans ~103 ms, the same order as the whole inter-agent budget, and its smear is azimuth-dependent. Why this rigour and not more: `results/ANALYSIS.md` already showed 100 ms of latency to beat 90% packet loss, so an unmeasured 30 ms clock offset is a latency impairment hiding in the baseline of a latency study. Tests 29/29 -> **50/50**, including a synthetic three-host MCAP whose injected -50 ms clock error is recovered as +50.0 ms (NTP) and +56.0 ms (delivery floor, the 6 ms gap being the injected transit asymmetry), and the same bag converted uncorrected reporting the -35 ms staleness in its frame yamls. |
 | 2026-09-01 | 8.1 | **Bag -> OPV2V converter built** (`ros2opv2v/`, `docs/ROS2OPV2V.md`). Reads rosbag2 MCAP/`.db3` with no ROS install and **lazily**: the indexing pass pulls header stamps straight out of the CDR payload (`std_msgs/Header` sits at a fixed offset), so 350k messages are indexed without deserialising a single point cloud, and only the messages the frame table selects are ever decoded. Three conventions pinned by reading OpenCOOD at commit `31ba160` rather than by assumption: (1) **poses** — `x_to_world` is CARLA-handed, so instead of mirroring ROS data we solve for the `(roll, yaw, pitch)` that makes `x_to_world` reproduce our right-handed matrix exactly (surjective onto SO(3); verified to 1e-9 over 2000 rotations + gimbal lock). The emitted angles are therefore NOT comparable to OPV2V's yaml values, only the matrices they generate are. (2) **intensity** — OpenCOOD reads it from `pcd.colors[:, 0]`, so PCDs are written `FIELDS x y z rgb` with `r=g=b=round(i*255)`; round trip through the real `open3d` call verified (xyz exact, intensity ≤1/255). (3) **frames are complete or dropped** — `basedataset.py` indexes every agent with the *ego's* timestamp keys, so a partially-populated frame is a KeyError at training time, not a skipped sample. Heterogeneous agents supported because only one robot has a LiDAR: PointCloud2 passthrough, depth-image reprojection (optical→FLU), radar clouds with an intensity fallback. `ground_lift` shifts points down and the pose up by the same amount (world geometry provably unchanged) as the OPV2V height-prior mitigation. Config refuses null geometry rather than defaulting to identity — a wrong `align` produces a dataset that trains and is meaningless. 29/29 self-tests incl. an end-to-end conversion of a synthetic three-agent MCAP with hand-computed geometry. |
 | 2026-08-21 | 7.2 | **Arm A built: InCoP indoor benchmark under impairment, no training.** `commchannel/incop_channel.py` + `configs/matrix_incop.yaml`. **Correction:** `CommChannel` does NOT attach to InCoP — the hook (`retrieve_base_data`) is shared but `channel.py`'s body calls `reform_param` and `calc_dist_to_ego`, neither of which exists in the HEAL lineage. `IncopChannel` instead calls the stock loader twice and splices (`past = orig(idx-delay)` for sensing, `cur = orig(idx)` for `params['vehicles']` GT), so HEAL's json/hdf5 loading and InCoP's camera-extrinsic normalisation stay inside the dataset's own code path. Pose noise perturbs `lidar_pose` only (HEAL derives the clean transform from `lidar_pose_clean`); no COM_RANGE clamp needed. **Verified InCoP is 10 Hz** (`OS0_REV7_128ch10hz512res`, `rotation_rate_hz=10.0`), same as OPV2V, so latency/stale/loss/bandwidth levels transfer with identical physical meaning — only pose (rescaled 4x by object size, independently landing on InCoP's own `pos_std: 0.2`) and ghost geometry changed. Blockage deliberately not ported. Pre-registered prediction: the 100 ms floor-crossing should move ~an order of magnitude indoors; if it does not, latency damage is not displacement. |

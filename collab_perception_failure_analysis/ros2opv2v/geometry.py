@@ -23,6 +23,8 @@ matrices they generate are meaningful.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 EPS = 1e-9
@@ -99,6 +101,40 @@ def rpy_to_matrix(roll: float, pitch: float, yaw: float, degrees: bool = True) -
     ])
     out = np.identity(4)
     out[:3, :3] = rot
+    return out
+
+
+def matrix_to_rpy_config(matrix: np.ndarray, degrees: bool = True) -> dict:
+    """A 4x4 as the config's ``{x, y, z, roll, pitch, yaw}`` block — the inverse
+    of :func:`make_transform`.
+
+    Every ``extrinsic`` an operator must supply starts life as a 4x4 in a
+    calibration file, and hand-converting it is where a sign or an axis order
+    goes wrong silently. Note this is NOT the same triple as
+    :func:`matrix_to_opencood_pose`, which solves for CARLA's
+    ``(roll, yaw, pitch)`` parameterisation: config blocks are plain ROS RPY.
+
+        python3 -c "from ros2opv2v.geometry import matrix_to_rpy_config; \
+                    import numpy as np, json; \
+                    print(json.dumps(matrix_to_rpy_config(np.array(M))))"
+    """
+    rot = np.asarray(matrix, dtype=np.float64)[:3, :3]
+    # Rz(yaw) @ Ry(pitch) @ Rx(roll), so -sin(pitch) sits at [2, 0].
+    sp = float(np.clip(-rot[2, 0], -1.0, 1.0))
+    pitch = math.asin(sp)
+    if abs(sp) > 1.0 - 1e-9:                 # gimbal lock: roll and yaw merge
+        roll, yaw = math.atan2(-rot[1, 2], rot[1, 1]), 0.0
+    else:
+        roll = math.atan2(rot[2, 1], rot[2, 2])
+        yaw = math.atan2(rot[1, 0], rot[0, 0])
+    if degrees:
+        roll, pitch, yaw = math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
+    out = {"x": float(matrix[0, 3]), "y": float(matrix[1, 3]), "z": float(matrix[2, 3]),
+           "roll": roll, "pitch": pitch, "yaw": yaw}
+    check = rpy_to_matrix(out["roll"], out["pitch"], out["yaw"], degrees=degrees)
+    if not np.allclose(check[:3, :3], rot, atol=1e-8):
+        raise ValueError("matrix_to_rpy_config did not round-trip; the input is "
+                         "not a proper rotation matrix")
     return out
 
 

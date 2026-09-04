@@ -9,7 +9,7 @@ python scripts/inspect_bag.py     --bag <bag> --emit-config configs/mine.yaml
 python scripts/convert_rosbag.py  --config configs/mine.yaml --dry-run
 python scripts/convert_rosbag.py  --config configs/mine.yaml
 python scripts/validate_opv2v.py  --root <out>/test --with-open3d
-python scripts/test_ros2opv2v.py                       # 50 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                       # 54 self-tests, no bag needed
 ```
 
 Dependencies: `numpy`, `pyyaml`, and `mcap` + `mcap-ros2-support` for `.mcap`
@@ -74,6 +74,27 @@ while any of them is `null` rather than guessing:
    measured transform into it. A wrong `align` produces a dataset that loads,
    trains and evaluates while being geometrically meaningless — which is exactly
    why a null is an error and not a default.
+
+   **Unless the bag already carries poses in a shared world frame.** An offline
+   mapping pipeline that anchors every robot's trajectory to one surveyed map
+   republishes exactly that — in the MIRC coop2 bag, `/mobile_1/global_pose`
+   and `/mobile_2/global_pose` (`source: pose`). Point the agents at those and
+   `align` is a *measured* identity rather than a declared one: the robots share
+   a frame because the anchoring put them there. That removes the single largest
+   source of silent error in this conversion, so prefer it whenever the pipeline
+   that produced the bag can supply it. Two things to check first:
+
+   * **Which frame do those poses describe?** A pipeline whose state is the
+     camera optical frame publishes optical poses, even when the topic's `/tf`
+     names a body frame — the two differ by ~90°, and nothing downstream will
+     complain. When they are optical, set `child_to_base` to identity and
+     remember that the agent's `base` is now that optical frame: every
+     `extrinsic` under it is measured **from the camera**, not from `base_link`.
+     `geometry.matrix_to_rpy_config` converts a calibration 4×4 into the config
+     block so that re-expression is a command, not arithmetic by hand.
+   * **Stamps.** Republished poses normally keep the original bag stamps, so
+     they are still on their own host's clock and
+     [clock reconciliation](#synchronisation) still applies unchanged.
 2. **`extrinsic` — where each sensor sits on its robot.** `base_link -> sensor`.
 3. **`object.extent` — the robots' physical half-dimensions**, if you want the
    agents themselves as pseudo-labels.

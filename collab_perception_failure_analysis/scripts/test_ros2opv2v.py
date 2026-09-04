@@ -28,8 +28,9 @@ from ros2opv2v import config as cfgmod                            # noqa: E402
 from ros2opv2v.bagreader import stamp_from_cdr                    # noqa: E402
 from ros2opv2v.convert import convert                             # noqa: E402
 from ros2opv2v.geometry import (invert, make_transform,           # noqa: E402
-                                matrix_to_opencood_pose, quat_to_matrix,
-                                matrix_to_quat, transform_points, x_to_world)
+                                matrix_to_opencood_pose, matrix_to_rpy_config,
+                                quat_to_matrix, matrix_to_quat, transform_points,
+                                x_to_world)
 from ros2opv2v.labels import agent_box, vehicles_for_viewer       # noqa: E402
 from ros2opv2v.pointclouds import (cloud_from_depth_image,        # noqa: E402
                                    cloud_from_pointcloud2, pointcloud2_to_array)
@@ -411,7 +412,7 @@ def test_cdr_stamp_extraction():
 
 def _write_synthetic_bag(path, n_frames=12, two_clock_error_ns=0, transit_ns=None,
                          ntp_topic=None, ntp_offset_unit='s', ego_point_times=False,
-                         two_speed=0.0):
+                         two_speed=0.0, optical_pose_X=None):
     """Three agents on a 10 Hz grid with exactly known geometry.
 
     ego (agent 1) drives along +x; agent 2 sits 6 m ahead of the ego's start;
@@ -437,6 +438,10 @@ def _write_synthetic_bag(path, n_frames=12, two_clock_error_ns=0, transit_ns=Non
         needs and what a real spinning LiDAR always has.
     ``two_speed``           moves agent 2 along +y at this speed, so an error in
         *when* its pose is evaluated becomes a visible error in *where* it is.
+    ``optical_pose_X``      also publish ``/ego/pose`` as a PoseStamped of the
+        CAMERA OPTICAL frame, i.e. the odometry pose composed with this
+        ``T_child_cam``. That is the shape an offline pipeline republishes a
+        corrected trajectory in, and it has no twist and no child_frame_id.
     """
     transit_ns = transit_ns or {}
     from mcap_ros2.writer import Writer
@@ -550,6 +555,24 @@ def _write_synthetic_bag(path, n_frames=12, two_clock_error_ns=0, transit_ns=Non
         odom_schema = writer.register_msgdef('nav_msgs/msg/Odometry', odom_def)
         image_schema = writer.register_msgdef('sensor_msgs/msg/Image', image_def)
         info_schema = writer.register_msgdef('sensor_msgs/msg/CameraInfo', info_def)
+        pose_schema = None
+        if optical_pose_X is not None:
+            pose_def = (
+                'std_msgs/Header header\ngeometry_msgs/Pose pose\n'
+                '================================================================================'
+                '\nMSG: std_msgs/Header\nbuiltin_interfaces/Time stamp\nstring frame_id\n'
+                '================================================================================'
+                '\nMSG: builtin_interfaces/Time\n' + time_def +
+                '\n================================================================================'
+                '\nMSG: geometry_msgs/Pose\ngeometry_msgs/Point position\n'
+                'geometry_msgs/Quaternion orientation\n'
+                '================================================================================'
+                '\nMSG: geometry_msgs/Point\nfloat64 x\nfloat64 y\nfloat64 z\n'
+                '================================================================================'
+                '\nMSG: geometry_msgs/Quaternion\nfloat64 x\nfloat64 y\nfloat64 z\n'
+                'float64 w')
+            pose_schema = writer.register_msgdef('geometry_msgs/msg/PoseStamped',
+                                                 pose_def)
         ntp_schema = None
         if ntp_topic:
             ntp_def = ('std_msgs/Header header\nfloat64 offset\nfloat64 jitter\n'
@@ -579,6 +602,19 @@ def _write_synthetic_bag(path, n_frames=12, two_clock_error_ns=0, transit_ns=Non
                                  odom_msg(t, 'ego_odom', 'ego_base',
                                           (0.5 * i, 0.0, 0.0), 5.0),
                                  log_time=t + ego_transit, publish_time=t)
+            if pose_schema is not None:
+                T_oc = np.identity(4); T_oc[0, 3] = 0.5 * i
+                T_cam = T_oc @ optical_pose_X
+                q = matrix_to_quat(T_cam[:3, :3])
+                writer.write_message(
+                    '/ego/pose', pose_schema,
+                    {'header': header(t, 'map'),
+                     'pose': {'position': {'x': float(T_cam[0, 3]),
+                                           'y': float(T_cam[1, 3]),
+                                           'z': float(T_cam[2, 3])},
+                              'orientation': {'x': float(q[0]), 'y': float(q[1]),
+                                              'z': float(q[2]), 'w': float(q[3])}}},
+                    log_time=t + ego_transit, publish_time=t)
             # agent 2 publishes slightly off-grid: the synchroniser must match it
             t2_true = t + 15_000_000
             t2 = t2_true + int(two_clock_error_ns)     # what agent 2's clock says
@@ -1203,6 +1239,123 @@ def test_pose_tracks_are_clock_corrected_too():
         assert abs(y - 0.80) < 0.01, (y, 'pose evaluated on the wrong timeline')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ------------------------------------------- poses already in the world frame
+# An offline mapping pipeline republishes its corrected trajectory as a
+# PoseStamped in the anchored map frame, and the pose it publishes is often the
+# CAMERA OPTICAL frame rather than a body frame. Both facts change the config:
+# `align` becomes a true identity (the agents are in one world because the map
+# anchoring put them there, not because an operator declared it), and the
+# agent's `base` becomes that optical frame, so every sensor extrinsic is
+# measured from it.
+
+def test_posestamped_is_accepted_as_a_pose_source():
+    """PoseStamped has no twist and no child_frame_id. The extractor must take
+    it, and the speed must then be derived from motion rather than left at the
+    zero a missing twist would otherwise imply."""
+    from ros2opv2v.convert import _pose_and_speed, _fill_speed_from_motion
+
+    class _P:
+        pass
+
+    msg = _P(); msg.pose = _P()
+    msg.pose.position = _P(); msg.pose.orientation = _P()
+    msg.pose.position.x, msg.pose.position.y, msg.pose.position.z = 1.0, 2.0, 3.0
+    msg.pose.orientation.x = msg.pose.orientation.y = msg.pose.orientation.z = 0.0
+    msg.pose.orientation.w = 1.0
+    T, speed = _pose_and_speed(msg)
+    assert np.allclose(T[:3, 3], [1, 2, 3]) and speed == 0.0, (T, speed)
+
+    track = PoseTrack()
+    for k in range(4):
+        M = np.identity(4); M[0, 3] = 2.0 * k       # 2 m per 0.1 s = 20 m/s
+        track.add(int(k * NS // 10), M, 0.0)
+    track.finish()
+    assert _fill_speed_from_motion(track), 'a twistless pose source must get a derived speed'
+    assert abs(track.speeds[1] - 20.0) < 1e-6, track.speeds
+
+
+def test_optical_frame_pose_source_matches_the_odometry_route():
+    """The substitution itself, end to end.
+
+    Route A: odometry of a body frame, with `child_to_base` identity and the
+             sensor mounted at Z on that body.
+    Route B: a PoseStamped of the CAMERA OPTICAL frame (odometry composed with
+             X), `align` and `child_to_base` identity, and the same sensor
+             re-expressed from the optical frame as inv(X) @ Z.
+
+    Both describe the same physical rig, so every `lidar_pose` must agree. If
+    they do not, the optical-frame substitution is silently rotating the sensor
+    — which would not show up as a conversion failure, only as a dataset whose
+    clouds are consistently in the wrong place.
+    """
+    X = make_transform(x=0.02, y=-0.05, z=0.15, roll=-90.0, pitch=0.0, yaw=-90.0,
+                       degrees=True)                       # body -> optical
+    tmp = tempfile.mkdtemp(prefix='r2o_optical_')
+    try:
+        bag = os.path.join(tmp, 'optical.mcap')
+        _write_synthetic_bag(bag, n_frames=8, optical_pose_X=X)
+
+        def run(tag, mutate):
+            cfg = _synthetic_config(bag, os.path.join(tmp, 'out_' + tag))
+            cfg['agents'] = [a for a in cfg['agents'] if a['name'] == 'ego']
+            cfg['agents'][0]['object']['emit'] = False
+            mutate(cfg['agents'][0])
+            path = os.path.join(tmp, 'cfg_%s.yaml' % tag)
+            with open(path, 'w') as h:
+                yaml.safe_dump(cfg, h)
+            convert(cfgmod.load_config(path), overwrite=True)
+            out = []
+            for i in range(8):
+                f = os.path.join(tmp, 'out_' + tag, 'test', 'synthetic', '1',
+                                 '%06d.yaml' % i)
+                if os.path.exists(f):
+                    with open(f) as h:
+                        out.append(yaml.safe_load(h)['lidar_pose'])
+            return np.array(out)
+
+        Z = make_transform(z=0.5)                          # body -> sensor
+        opt_extrinsic = invert(X) @ Z                      # optical -> sensor
+        rpy = matrix_to_opencood_pose(opt_extrinsic)
+
+        A = run('body', lambda a: None)
+
+        def to_optical(a):
+            a['pose'] = {'source': 'pose', 'topic': '/ego/pose',
+                         'interpolation': 'linear', 'max_gap_ms': 200,
+                         'align': {'x': 0, 'y': 0, 'z': 0,
+                                   'roll': 0, 'pitch': 0, 'yaw': 0},
+                         'child_to_base': {'x': 0, 'y': 0, 'z': 0,
+                                           'roll': 0, 'pitch': 0, 'yaw': 0}}
+            # x_to_world's (roll, yaw, pitch) triple is not the config block's
+            # (roll, pitch, yaw), so go through the matrix rather than the name.
+            a['cloud']['extrinsic'] = matrix_to_rpy_config(opt_extrinsic)
+
+        B = run('optical', to_optical)
+        assert len(A) and len(A) == len(B), (len(A), len(B))
+        d = np.linalg.norm(A[:, :3] - B[:, :3], axis=1)
+        assert d.max() < 1e-6, (d.max(), A[0], B[0], rpy)
+        # and the orientations, through the matrices they generate
+        for pa, pb in zip(A, B):
+            assert np.allclose(x_to_world(pa), x_to_world(pb), atol=1e-9), (pa, pb)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_matrix_to_rpy_config_round_trips():
+    """Every operator-supplied extrinsic starts as a 4x4 in a calibration file;
+    hand-converting it to the config's RPY block is where a sign flips."""
+    rng = np.random.default_rng(3)
+    for _ in range(500):
+        T = make_transform(*rng.uniform(-2, 2, 3),
+                           *rng.uniform(-180, 180, 3), degrees=True)
+        back = make_transform(**matrix_to_rpy_config(T))
+        assert np.allclose(back, T, atol=1e-9), (T, back)
+    # gimbal lock (pitch = +-90) must still round-trip the MATRIX
+    for p_ in (90.0, -90.0):
+        T = make_transform(x=1.0, roll=25.0, pitch=p_, yaw=40.0)
+        assert np.allclose(make_transform(**matrix_to_rpy_config(T)), T, atol=1e-9)
 
 
 if __name__ == '__main__':
