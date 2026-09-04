@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import random
+import numpy as np
 import sys
 from pathlib import Path
 
@@ -156,6 +157,25 @@ float64 w
 """
 
 
+CSI = """std_msgs/Header header
+string     src_mac
+int8       rssi
+uint8      frame_control
+uint16     seq
+uint8      core
+uint8      spatial_stream
+uint16     chanspec
+uint16     chip_version
+uint16     channel
+uint16     bandwidth_mhz
+int32[]    subcarrier_index
+float32[]  csi_real
+float32[]  csi_imag
+bool       trimmed
+uint32     raw_slots
+""" + HEADER_DEF
+
+
 IMU = """std_msgs/Header header
 geometry_msgs/Quaternion orientation
 float64[9] orientation_covariance
@@ -252,8 +272,8 @@ def main(out: Path) -> None:
             ("/mobile_1/ouster/imu", "mobile_1", 100.0, 0.0, False),
             ("/mobile_2/imu", "mobile_2", 100.0, 0.0007, False),
             ("/infra_1/imu_fake", "infra_1", 20.0, 0.0002, False),
-            ("/mobile1/csi", "mobile_1", 170.0, 0.0, True),      # header.stamp never filled in
-            ("/mobile2/csi", "mobile_2", 170.0, 0.0007, False),  # namespace without the underscore
+            # header.stamp never filled in by this driver
+            ("/mobile_1/zed/imu/data", "mobile_1", 60.0, 0.0, True),
         ]:
             n = int(dur_s * hz)
             for i in range(n):
@@ -388,6 +408,53 @@ def main(out: Path) -> None:
                 }
                 log = ns + 1_000_000
                 w.write_message(topic, pose, msg, log_time=log, publish_time=log)
+
+
+        # --- Wi-Fi CSI ---------------------------------------------------------
+        # A synthetic multipath channel so the derived metrics can be checked
+        # against a known truth: a dominant (line-of-sight) tap plus scatterers.
+        # Between t=70 s and t=88 s the dominant tap is attenuated and the
+        # scatterers strengthened, which must show up as the K-factor falling
+        # and the RMS delay spread rising.
+        csi = w.register_msgdef("wifi_csi_msgs/msg/CsiFrame", CSI)
+        RAW, BW_HZ = 256, 80e6
+        keep = np.array([i for i in range(RAW)
+                         if not (i < 6 or i > 249 or abs(i - 128) < 3)], dtype=np.int32)
+        f_hz = (keep - RAW / 2) * (BW_HZ / RAW)
+        for topic, mac, phase in [("/mobile1/csi", "82:2a:a8:cb:d4:34", 0.0),
+                                  ("/mobile2/csi", "82:2a:a8:cb:d4:34", 1.7)]:
+            hz = 171.0
+            n = int(dur_s * hz)
+            for i in range(n):
+                t = i / hz
+                ns = t0 + int(t * 1e9)
+                nlos = 70.0 < t < 88.0
+                # dominant tap, then a few scatterers at longer delays
+                taps = [(1.0 if not nlos else 0.18, 0.0)]
+                for k in range(1, 7):
+                    d = (18e-9 if not nlos else 55e-9) * k
+                    a = (0.22 if not nlos else 0.55) * math.exp(-k / 2.4)
+                    taps.append((a * (1 + 0.25 * math.sin(3 * t + k + phase)), d))
+                H = np.zeros(len(keep), dtype=np.complex128)
+                for a, d in taps:
+                    ph = 2 * math.pi * rng.random()
+                    H += a * np.exp(-2j * math.pi * f_hz * d + 1j * ph)
+                H += (rng.gauss(0, 0.02) + 1j * rng.gauss(0, 0.02))
+                H *= 10 ** (rng.gauss(0, 0.8) / 20)       # AGC jitter, scale only
+                msg = {
+                    "header": {"stamp": stamp(ns), "frame_id": "wlan"},
+                    "src_mac": mac, "rssi": int(-45 if not nlos else -62),
+                    "frame_control": 0x88, "seq": i % 4096,
+                    "core": 0, "spatial_stream": 0,
+                    "chanspec": 0xe02a, "chip_version": 0x4366,
+                    "channel": 149, "bandwidth_mhz": 80,
+                    "subcarrier_index": keep.tolist(),
+                    "csi_real": H.real.astype(np.float32).tolist(),
+                    "csi_imag": H.imag.astype(np.float32).tolist(),
+                    "trimmed": True, "raw_slots": RAW,
+                }
+                log = ns + 800_000
+                w.write_message(topic, csi, msg, log_time=log, publish_time=log)
 
         w.finish()
     print(f"wrote {out}")

@@ -6,10 +6,13 @@ schemas embedded in the MCAP file.
 
 ```
 analysis/
+├── common.py               shared: agent naming, extraction loaders, pose join, map background
 ├── extract_bag.py          shared: decodes the MCAP into per-topic Parquet tables
 ├── ntp_analysis.py         NTP / temporal calibration
 ├── ntp_issues.md           NTP basics, what went wrong in coop2, and the fixes
 ├── wifi_analysis.py        Wi-Fi link quality and dual-radio correlation
+├── wifi_issues.md          what the Wi-Fi suite measures, coop2 findings, fixes
+├── csi_analysis.py         Wi-Fi CSI: multipath structure of the channel
 ├── requirements.txt
 └── tests/
     └── make_synthetic_bag.py   writes a small fake MCAP to try the scripts without the real bag
@@ -100,6 +103,45 @@ count. Two publishers on one topic can equally mean the monitor node was restart
 Every link is agent → access point, since both robots associate with the same AP.
 The robot-to-robot iperf still traverses that AP and is reported as the two-hop path
 it is, not as a direct link.
+
+## Wi-Fi CSI
+
+```bash
+python analysis/csi_analysis.py --run coop2 --map <anchored>.pcd
+```
+
+A `CsiFrame` is the complex channel response of **one received 802.11 frame**
+across OFDM subcarriers — where RSSI is one number, CSI is a vector across
+frequency. It measures the propagation environment, not link performance.
+
+Three quantities are derived, all of them ratios and so immune to the receiver's
+automatic gain control:
+
+| Quantity | What it says |
+|---|---|
+| frequency selectivity | spread of \|H\| across subcarriers in dB — flat means one dominant path, notched means multipath cancellation |
+| RMS delay spread | how far multipath energy is spread in time, from the power delay profile |
+| Rician K-factor | power of the dominant path against everything else — the signature of an unobstructed path |
+
+**Phase is not used.** Every frame carries an unknown carrier and sampling offset
+plus a random packet-detection delay, so recorded phase is meaningless across
+frames without sanitisation. Only \|H\| and the delay profile survive those
+offsets, and both are what the script uses.
+
+**Delay-spread resolution is 1/bandwidth**: 12.5 ns at 80 MHz, 50 ns at 20 MHz.
+Indoor delay spreads are tens of nanoseconds, so at 20 MHz the number is one tap
+wide and the summary says it should not be quoted.
+
+Outputs in `results/coop2/csi/`:
+
+| File | Contents |
+|---|---|
+| `csi_inventory.csv` | per agent: frame rate, channel, bandwidth, chanspec, chip, subcarriers kept of raw slots, MIMO streams, tap spacing |
+| `csi_transmitters.csv` | per source MAC and frame type: count, share, median RSSI, time span — which transmitter's channel each measurement describes |
+| `csi_frames.parquet` | per frame: selectivity, delay spread, K-factor, RSSI |
+| `csi_summary.md`, `csi_subsection.tex` | tables and a paragraph for the paper |
+| `fig_csi.{pdf,png}` | channel amplitude heat map per agent (diverging about each frame's median, so fades and peaks separate), then delay spread and K-factor over the run |
+| `fig_csi_map.{pdf,png}` | the trajectories coloured by K-factor — the same layout as the Wi-Fi coverage map, dark = better channel |
 
 ## Extracting separately
 
