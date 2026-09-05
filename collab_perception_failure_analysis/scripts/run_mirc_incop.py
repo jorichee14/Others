@@ -129,7 +129,7 @@ def labelled_gt_count(dataset_dir: str, class_name: str, gt_range) -> dict:
     import numpy as np
     lo = np.asarray([float(v) for v in gt_range[:3]], dtype=np.float64)
     hi = np.asarray([float(v) for v in gt_range[3:6]], dtype=np.float64)
-    total, frames, scenarios = 0, 0, {}
+    total, every, frames, scenarios = 0, 0, 0, {}
     for scenario in sorted(os.listdir(dataset_dir)):
         scenario_dir = os.path.join(dataset_dir, scenario)
         if not os.path.isdir(scenario_dir):
@@ -155,6 +155,7 @@ def labelled_gt_count(dataset_dir: str, class_name: str, gt_range) -> dict:
                 location = entry.get("location")
                 if location is None or len(location) < 3:
                     continue
+                every += 1
                 point = np.append(np.asarray(location[:3], dtype=np.float64), 1.0)
                 local = (world_to_ego @ point)[:3]
                 # Centre-in-range, the same gate OpenCOOD applies before scoring.
@@ -162,7 +163,38 @@ def labelled_gt_count(dataset_dir: str, class_name: str, gt_range) -> dict:
                     here += 1
         scenarios[scenario] = here
         total += here
-    return {"gt_labelled": total, "frames": frames, "per_scenario": scenarios}
+    # `gt_all` is every label of the class regardless of range. The gap between
+    # it and gt_labelled is not noise: these checkpoints carry the hospital
+    # scene's forward-only box, so an object the robot drove PAST is unscorable
+    # even though both sensors saw it. Reported so that limit is visible rather
+    # than quietly shrinking the denominator.
+    return {"gt_labelled": total, "gt_all": every, "frames": frames,
+            "per_scenario": scenarios}
+
+
+class TolerantLoader(yaml.SafeLoader):
+    """SafeLoader that skips tags it does not know instead of refusing the file.
+
+    InCoP serialises `noise_setting` as
+    `!!python/object/apply:collections.OrderedDict`, and SafeLoader rejects the
+    WHOLE document over that one field -- including `postprocess.gt_range`,
+    which is what we came for. Unknown tags become None here: nothing is
+    constructed and no code runs, so this stays as safe as safe_load, it just
+    does not throw away a config because of a field it was not asked about.
+    """
+
+
+TolerantLoader.add_multi_constructor("", lambda loader, suffix, node: None)
+
+
+def read_hypes(path: str):
+    """A checkpoint's config, or None if it genuinely cannot be read."""
+    try:
+        with open(path) as handle:
+            return yaml.load(handle, Loader=TolerantLoader) or {}
+    except Exception as error:
+        print("  ! could not read %s: %s" % (path, error))
+        return None
 
 
 def eval_range(model_dir: str):
@@ -176,10 +208,8 @@ def eval_range(model_dir: str):
     path = os.path.join(model_dir, "config.yaml")
     if not os.path.exists(path):
         return None
-    try:
-        with open(path) as handle:
-            hypes = yaml.safe_load(handle) or {}
-    except Exception:
+    hypes = read_hypes(path)
+    if hypes is None:
         return None
     found = ((hypes.get("postprocess") or {}).get("gt_range")
              or hypes.get("cav_lidar_range"))
@@ -472,9 +502,15 @@ def main() -> int:
               "counts uncorrected" % os.path.basename(plan[0][0]))
     else:
         labelled = labelled_gt_count(args.dataset, args.eval_class, gt_range)
-        print("%d %s label(s) inside %s across %d ego frame(s)\n"
-              % (labelled["gt_labelled"], args.eval_class,
+        print("%d of %d %s label(s) lie inside %s, across %d ego frame(s)"
+              % (labelled["gt_labelled"], labelled["gt_all"], args.eval_class,
                  [round(v, 1) for v in gt_range], labelled["frames"]))
+        outside = labelled["gt_all"] - labelled["gt_labelled"]
+        if outside:
+            print("%d label(s) fall outside it and can never be scored by these "
+                  "checkpoints.\n" % outside)
+        else:
+            print("")
 
     records = []
     for model_dir, fusion, video in plan:

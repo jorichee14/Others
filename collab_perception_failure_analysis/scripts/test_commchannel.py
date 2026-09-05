@@ -349,6 +349,37 @@ def test_labelled_gt_ignores_other_classes():
         shutil.rmtree(root)
 
 
+def test_eval_range_survives_a_python_tagged_config():
+    """InCoP serialises noise_setting as a python OrderedDict tag, and
+    yaml.safe_load refuses the WHOLE document over it -- including the range."""
+    import tempfile, shutil
+    root = tempfile.mkdtemp()
+    try:
+        with open(os.path.join(root, 'config.yaml'), 'w') as handle:
+            handle.write("cav_lidar_range: &id001\n- 0.0\n- -11.2\n- -1\n"
+                         "- 22.4\n- 11.2\n- 3\n"
+                         "noise_setting: !!python/object/apply:collections.OrderedDict\n"
+                         "- - - add_noise\n    - false\n"
+                         "postprocess:\n  gt_range: *id001\n")
+        assert rmi.eval_range(root) == [0.0, -11.2, -1.0, 22.4, 11.2, 3.0]
+    finally:
+        shutil.rmtree(root)
+
+
+def test_labelled_gt_reports_what_the_range_excludes():
+    """The hospital box is forward-only, so objects the robot drove past are
+    unscorable. That has to be visible, not folded into a smaller denominator."""
+    import tempfile, shutil
+    root = tempfile.mkdtemp()
+    try:
+        _mirc_tree(root, 1, [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+                   [[_chair(3.0, 1.0), _chair(-3.0, 1.0), _chair(3.0, 40.0)]])
+        got = rmi.labelled_gt_count(root, 'chair', [0.0, -11.2, -1, 22.4, 11.2, 3])
+        assert got['gt_labelled'] == 1 and got['gt_all'] == 3
+    finally:
+        shutil.rmtree(root)
+
+
 def test_ego_folder_moves_a_leading_negative_id_to_the_end():
     """OPV2V numbers its RSU -1 and OpenCOOD does not let it be ego."""
     import tempfile, shutil
