@@ -543,6 +543,9 @@ def main() -> int:
     parser.add_argument("--labels", default=None, help="labels json to read for --check/--list")
     parser.add_argument("--seed", action="append", default=None, metavar="X,Y[,Z]",
                         help="fit a box at this map position")
+    parser.add_argument("--obj-type", default="chair",
+                        help="class name written into each label; InCoP's loader "
+                             "reads it and defaults to potted_plant without one")
     parser.add_argument("--name", action="append", default=None,
                         help="name for the fitted object; repeat once per --seed")
     parser.add_argument("--id", type=int, default=None,
@@ -779,6 +782,7 @@ def main() -> int:
         if near:
             print("  ! %s stands within 0.25 m of %s (id %d) — two labels on one "
                   "object?" % (box["name"], near[0].get("name", "?"), near[0]["id"]))
+        box["obj_type"] = args.obj_type
         box["source"] = {"pcd": os.path.abspath(args.pcd),
                          "seed": [round(float(v), 3) for v in seed],
                          "cluster": cinfo, "ground_z": round(ground_z, 4),

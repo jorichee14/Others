@@ -99,10 +99,17 @@ def merge_external_labels(vehicles: dict, external: Optional[Iterable[dict]]) ->
         location = [float(v) for v in item["location"]]
         extent = [float(v) for v in item["extent"]]
         angle = [float(v) for v in item.get("angle", (0.0, 0.0, 0.0))]
-        vehicles[object_id] = {
+        entry = {
             "angle": angle,
             "center": [float(v) for v in item.get("center", (0.0, 0.0, 0.0))],
             "extent": extent,
             "location": location,
         }
+        # InCoP's isaacsim loader reads a class from obj_type/class_name and
+        # silently falls back to id 0 — `potted_plant` — when neither is present,
+        # so an unlabelled chair is not unclassified, it is confidently a plant.
+        obj_type = item.get("obj_type") or item.get("class_name")
+        if obj_type:
+            entry["obj_type"] = str(obj_type)
+        vehicles[object_id] = entry
     return vehicles

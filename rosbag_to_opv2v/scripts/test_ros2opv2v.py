@@ -2743,6 +2743,74 @@ def test_the_anchor_check_is_skipped_on_a_window_from_mid_bag():
     assert 'not checked' in report.warnings[-1]
 
 
+
+def test_obj_type_reaches_the_frame_yaml():
+    """InCoP's loader reads a class from obj_type and falls back to id 0 --
+    potted_plant -- without one, so an unlabelled chair is not unclassified, it
+    is confidently a plant."""
+    from ros2opv2v.labels import merge_external_labels
+    out = merge_external_labels({}, [
+        {"id": 1, "location": [3.1, -1.4, -0.24], "extent": [0.4, 0.37, 0.48],
+         "angle": [0.0, 158.2, 0.0], "obj_type": "chair"},
+        {"id": 2, "location": [4.4, -8.1, -0.28], "extent": [0.34, 0.3, 0.44],
+         "angle": [0.0, 2.0, 0.0]},
+    ])
+    assert out[1]["obj_type"] == "chair"
+    assert "obj_type" not in out[2], 'an unset class must not be invented'
+
+
+def test_incop_sidecars_cover_every_scenario_and_agent():
+    import importlib
+    sidecars = importlib.import_module('make_incop_sidecars')
+    tmp = tempfile.mkdtemp()
+    try:
+        for split, agents in (('train', ('0', '1')), ('validate', ('0', '1'))):
+            for agent in agents:
+                os.makedirs(os.path.join(tmp, split, 'case_0', agent))
+        found = sidecars.scenarios(tmp)
+        assert found == {'case_0': ['0', '1']}, found
+
+        # the same scenario with different agents in two splits cannot be
+        # described by one modality map, and silently picking one would put a
+        # KeyError deep inside the loader instead of here
+        os.makedirs(os.path.join(tmp, 'test', 'case_0', '2'))
+        try:
+            sidecars.scenarios(tmp)
+        except SystemExit as exc:
+            assert 'cannot cover both' in str(exc)
+        else:
+            raise AssertionError('mismatched agent sets must be refused')
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_incop_config_tracks_the_opv2v_one_where_it_matters():
+    """Two configs, one bag. Everything geometric must be identical; only the
+    packaging differs. A drift in an extrinsic between them would show up as a
+    difference between the OPV2V and InCoP arms that is not about the models."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base = cfgmod.load_config(os.path.join(root, 'configs', 'mirc_coop2.yaml'))
+    incop = cfgmod.load_config(os.path.join(root, 'configs', 'mirc_coop2_incop.yaml'))
+
+    assert base.bag == incop.bag
+    assert cfgmod.ego_agent(incop).name == 'mobile_2'
+    assert cfgmod.ego_agent(incop).cav_id == 0
+    assert sorted(a.cav_id for a in incop.active_agents) == [0, 1]
+    assert all(a.name != 'infra_1' for a in incop.active_agents)
+    assert incop.output.scenario_name == 'case_0'
+
+    for name in ('mobile_1', 'mobile_2'):
+        a = next(x for x in base.active_agents if x.name == name)
+        b = next(x for x in incop.active_agents if x.name == name)
+        assert np.allclose(a.cloud.extrinsic, b.cloud.extrinsic), name
+        assert np.allclose(a.cloud.frame_extrinsic(), b.cloud.frame_extrinsic()), name
+        assert a.cloud.optical_frame == b.cloud.optical_frame, name
+        assert np.allclose(a.pose.align, b.pose.align), name
+        assert len(a.cameras) == len(b.cameras), name
+        for ca, cb in zip(a.cameras, b.cameras):
+            assert np.allclose(ca.extrinsic, cb.extrinsic), name
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]
