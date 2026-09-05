@@ -15,8 +15,10 @@ simulated arms of this study cannot supply.
         --out results/mirc_incop
 
 `--video` additionally renders the ego-only vs fused comparison for the FIRST
-seed of each method, over the whole split. That pass is separate because
---video_compare_fusion runs the model twice per frame and disables metrics.
+seed of each method, over the whole split. Those passes are separate AND run
+after every measured run, because --video_compare_fusion runs the model twice
+per frame, rasterises four BEV panels per frame in Python, and produces no
+metrics at all. One of them can take longer than the entire numeric sweep.
 
 Nothing here is InCoP-specific beyond the CLI it shells out to; the results land
 in the same shape as run_phase1.py's so the OPV2V and MIRC tables can sit side
@@ -268,6 +270,11 @@ def main() -> int:
         handle.write(str(os.getpid()))
 
     plan = []
+    # Video passes go LAST, in their own list. They render every frame of the
+    # split through a Python BEV rasteriser and produce no metrics, so a single
+    # one can outlast every measured run put together. Interleaved, one method's
+    # video would sit between the next method's numbers and the operator.
+    videos = []
     for method in args.methods:
         found = checkpoints(args.incop_root, method, args.scene)
         if not found:
@@ -280,7 +287,8 @@ def main() -> int:
             for fusion in args.fusion:
                 plan.append((model_dir, fusion, False))
             if args.video and index == 0:
-                plan.append((model_dir, "intermediate", True))
+                videos.append((model_dir, "intermediate", True))
+    plan.extend(videos)
 
     if not plan:
         print("nothing to run", file=sys.stderr)
