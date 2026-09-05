@@ -215,3 +215,92 @@ the point of doing it in this order.
 | 9 | 7: second recording | a recording | — |
 
 Stages 0 through 6 need nothing that does not already exist.
+
+## Model inventory: what can be tested on coop2 today
+
+Everything in groups A through D runs zero-shot on the converted tree with
+weights that already exist. Nothing here needs training first. Each collaborative
+method runs in two fusion modes, `intermediate` (collaborative) and `no`
+(ego-only floor), so every row in A yields a pair and the gap between them is the
+quantity of interest.
+
+### A. InCoP fork, LiDAR + camera, collaborative
+
+Proven on this tree: CGRF produced chair mAP@0.3 = 0.298 on MIRC validate.
+
+| Method | Config key | What it is |
+|--------|-----------|------------|
+| CGRF | `ours` | InCoP's own method. Agents exchange COMPLEMENTARY features: the partner sends what the ego is missing rather than everything, guided by a learned bias term. The method the fork exists to demonstrate, and the row everything else is compared against. |
+| Where2comm | `where2comm` | Bandwidth-aware. Builds a spatial confidence map and transmits only perceptually critical regions, so most of the BEV grid is never sent. |
+| CoBEVT | `cobevt` | Cooperative BEV transformer, fused axial attention across agents and camera views. Also exists in stock OpenCOOD, which makes it the bridge row for Stage 3's cross-codebase gate. |
+| V2X-ViT | `v2xvit` | Transformer built for heterogeneous V2X: agents with different sensors attend to each other under multi-scale window attention. Explicitly designed for pose-error and latency robustness, so it is the prior favourite going into Stage 5. |
+| ERMVP | `ermvp` | Coarse-to-fine feature sampling with sparse consensus, targeting localisation error and agent heterogeneity at lower cost than full attention. |
+
+CGRF ablations, same cost per run, each isolating one mechanism:
+
+| Ablation | Question it answers |
+|----------|---------------------|
+| `clc_dense` | Dense collaboration instead of sparse selection. Is the sparsity buying accuracy, or only bandwidth? |
+| `ego_unmasked` | Ego-feature masking removed. Is the model leaning on the partner, or on its own features? |
+| `without_complementary_bias` | Drops the term CGRF is named for. The most direct test of the method's central claim. |
+| `ours_*_with_noise` | Same architecture trained with pose-noise augmentation. Trained-for-noise versus not, on the same axis Stage 5 sweeps. |
+
+Extra rows at no training cost: the office and warehouse pretrained checkpoints
+alongside hospital. Same architectures, different simulated source scene, which
+is a sim-to-real transfer axis obtained for free.
+
+### B. InCoP fork, single-agent baselines
+
+| Model | What it is |
+|-------|------------|
+| `m6_BEVFusion` | One agent, LiDAR + camera fused into BEV, no collaboration. The denominator: a collaborative method that does not beat it is not earning its bandwidth. |
+| `m7_DINOv3` | One agent, camera only, DINOv3 ViT backbone lifted to BEV. Isolates how much of the detection comes from images rather than LiDAR. |
+
+### C. InCoP fork, LiDAR only
+
+| Model | What it is |
+|-------|------------|
+| `m1_pointpillar_center_head_hospital` | PointPillars pillar encoder with an anchor-free centre head, single agent. The only LiDAR-only checkpoint in the fork, and therefore the sole point-cloud-only reference until something is trained. |
+
+### D. Stock OpenCOOD, OPV2V-pretrained, LiDAR only
+
+| Method | What it is |
+|--------|------------|
+| nocomm | Single agent, no fusion. Lower bound. |
+| late | Each agent detects independently; boxes merged and NMS'd. Minimal bandwidth, no shared representation. |
+| early | Raw clouds transformed into the ego frame, one detector. Accuracy upper bound, unusable bandwidth. |
+| AttFuse | OPV2V's own baseline: per-BEV-location self-attention over the stack of agent features. |
+| F-Cooper | Element-wise maxout across agent voxel features. The simplest intermediate fusion that works. |
+| V2VNet | Graph neural network over agents with spatially-aware message passing. |
+| CoAlign | Builds an agent-object pose graph and optimises it to correct relative pose error BEFORE fusing. The pose-robustness baseline. |
+| CoBEVT | As above, stock implementation. Half of the bridge gate. |
+| compression variants | The same methods with a channel bottleneck on transmitted features. A bandwidth axis, not separate methods. |
+
+All of group D is expected to score AP about 0.000 at every IoU. A car anchor
+(3.9 x 1.6 x 1.56 m) against a chair (0.75 x 0.68 x 0.92 m) has IoU about 0.06,
+so no anchor is ever assigned to a chair and the detector cannot emit a true
+positive by construction. Run the group once and report it as ONE car-to-chair
+transfer result, not nine failures. It never shares a table with group A.
+
+### Not available without training
+
+LiDAR-only versions of Where2comm, CoBEVT, V2X-ViT, ERMVP and CGRF. Every
+collaborative checkpoint in the fork is multimodal. A LiDAR-only collaborative
+comparison is Stage 2 work, not a zero-shot run.
+
+### Sweep shape
+
+Groups A, B and C are 5 methods + 3 ablations + 2 single-agent + 1 LiDAR-only =
+11 model rows, times 2 fusion modes, times 3 seeds, or about 66 runs of a few
+minutes each. Group D is one separate pass.
+
+The headline table is group A at `intermediate` against group A at `no`, AP@0.5,
+with 0.3 and 0.7 alongside and 0.7 flagged noisy per the ground rules.
+
+**Caveat that constrains what this table can claim.** In the completed CGRF run
+the `ego_only` GT subset had `gt_count: 0`: all 728 GT instances fell in
+`shared`. If that holds across the sweep, both carts see both chairs whenever
+either does, there is no partner-exclusive object for collaboration to recover,
+and the intermediate-versus-no gap measures fusion QUALITY rather than fusion
+COVERAGE. Confirm the per-subset counts from the sweep before writing the gap up
+as a collaboration lift.
