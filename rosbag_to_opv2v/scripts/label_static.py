@@ -18,7 +18,8 @@ anchoring and the synchronisation at once — which is what `--check` does.
     python3 scripts/label_static.py --pcd map.pcd --dataset ~/cpfa/data/OPV2V_mirc/test
 
     # 2. find candidate objects standing on the floor, so you can read off seeds
-    python3 scripts/label_static.py --pcd map.pcd --dataset <root>/test --propose
+    python3 scripts/label_static.py --pcd map.pcd --dataset <root>/test \\
+        --propose --map-image /tmp/coop2_top_down.png
 
     # 3. fit a box at a seed (a click position, or a proposal's centre)
     python3 scripts/label_static.py --pcd map.pcd --dataset <root>/test \
@@ -54,6 +55,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ros2opv2v.statics import (StaticsError, cluster_at, fit_box,      # noqa: E402
                                ground_level, points_in_box, read_pcd_xyz)
+from ros2opv2v.preview import Canvas, height_ramp                      # noqa: E402
 from ros2opv2v.geometry import x_to_world                              # noqa: E402
 from ros2opv2v.writers import read_pcd                                 # noqa: E402
 
@@ -155,8 +157,56 @@ def trajectory_roi(poses: Dict[str, List[dict]], margin: float) -> Optional[np.n
     return np.r_[allpts.min(axis=0) - margin, allpts.max(axis=0) + margin]
 
 
+class HeightMap(object):
+    """The map seen from above: per XY cell, how tall the tallest return is.
+
+    Everything downstream — the proposals and the picture — reads this one
+    structure, so what you are shown is exactly what was searched.
+    """
+
+    def __init__(self, cloud: np.ndarray, ground_z: float, cell: float,
+                 roi: Optional[np.ndarray] = None, floor_clearance: float = 0.05):
+        above = cloud[:, 2] - ground_z
+        keep = above > floor_clearance
+        if roi is not None:
+            keep &= ((cloud[:, 0] >= roi[0]) & (cloud[:, 0] <= roi[2])
+                     & (cloud[:, 1] >= roi[1]) & (cloud[:, 1] <= roi[3]))
+        pts, hgt = cloud[keep], above[keep]
+        self.cell, self.points = cell, len(pts)
+        if len(pts) < 200:
+            self.width = self.depth = 0
+            return
+        grid = np.floor(pts[:, :2] / cell).astype(np.int64)
+        self.origin = grid.min(axis=0)
+        grid -= self.origin
+        self.width = int(grid[:, 0].max()) + 1
+        self.depth = int(grid[:, 1].max()) + 1
+        flat = grid[:, 0] * self.depth + grid[:, 1]
+        self.top = np.zeros(self.width * self.depth, dtype=np.float64)
+        np.maximum.at(self.top, flat, hgt)
+        self.counts = np.bincount(flat, minlength=self.width * self.depth)
+
+    def empty(self) -> bool:
+        return self.width == 0
+
+    def cell_xy(self, flat_cells: np.ndarray) -> np.ndarray:
+        """Map-frame lower corner of each cell, in metres."""
+        cells = np.stack(np.divmod(flat_cells, self.depth), axis=1) + self.origin
+        return cells * self.cell
+
+    def bounds(self):
+        lo = self.origin * self.cell
+        hi = (self.origin + np.array([self.width, self.depth])) * self.cell
+        return float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1])
+
+    def as_image_grid(self) -> np.ndarray:
+        """(depth, width) — row = y index, column = x index, for rendering."""
+        return self.top.reshape(self.width, self.depth).T
+
+
 def propose(cloud: np.ndarray, ground_z: float, args,
-            roi: Optional[np.ndarray] = None) -> List[dict]:
+            roi: Optional[np.ndarray] = None,
+            hmap: Optional["HeightMap"] = None) -> List[dict]:
     """Candidate free-standing objects, so a seed can be read off rather than hunted.
 
     Not a detector, and it does not need to be — it turns "find two chairs in a
@@ -170,35 +220,36 @@ def propose(cloud: np.ndarray, ground_z: float, args,
     is a compact patch of cells of the right height surrounded by floor. A wall is
     a patch of cells that are TALLER than any chair, so it never enters the
     candidate mask at all.
+
+    What is left over after that exclusion is a wall's FRINGE: the cells along its
+    base where the beam only reached partway up, which are short and so look like
+    an object. A chair pushed against a wall touches structure too, so touching is
+    not the discriminator — how MUCH of the blob's outline is structure is. A wall
+    fringe is walled along most of its perimeter; a chair, even a chair against a
+    wall, is open on the other three sides. That fraction is `wall_contact`, and
+    it is what the list is sorted by.
     """
-    cell = args.cell
-    above = cloud[:, 2] - ground_z
-    keep = above > 0.05
-    if roi is not None:
-        keep &= ((cloud[:, 0] >= roi[0]) & (cloud[:, 0] <= roi[2])
-                 & (cloud[:, 1] >= roi[1]) & (cloud[:, 1] <= roi[3]))
-    pts, hgt = cloud[keep], above[keep]
-    if len(pts) < 200:
-        print("  only %d points above the floor in that area" % len(pts))
+    hmap = hmap or HeightMap(cloud, ground_z, args.cell, roi)
+    if hmap.empty():
+        print("  only %d points above the floor in that area" % hmap.points)
         return []
-
-    grid = np.floor(pts[:, :2] / cell).astype(np.int64)
-    origin = grid.min(axis=0)
-    grid -= origin
-    width, depth = grid[:, 0].max() + 1, grid[:, 1].max() + 1
-    flat = grid[:, 0] * depth + grid[:, 1]
-
-    height_map = np.zeros(width * depth, dtype=np.float64)
-    np.maximum.at(height_map, flat, hgt)
-    counts = np.bincount(flat, minlength=width * depth)
+    width, depth = hmap.width, hmap.depth
+    top, counts = hmap.top, hmap.counts
 
     # A cell belongs to a candidate object when its TALLEST point is inside the
     # object height band. A wall's cells are taller than max_height, so they are
     # excluded here rather than having to be filtered out of a merged cluster
     # afterwards.
-    candidate = ((height_map >= args.min_height) & (height_map <= args.max_height)
-                 & (counts >= 2))
-    tall = height_map > args.max_height
+    candidate = ((top >= args.min_height) & (top <= args.max_height) & (counts >= 2))
+    tall = top > args.max_height
+
+    def neighbours(flat_cell: int):
+        cx, cy = divmod(flat_cell, depth)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                nx, ny = cx + dx, cy + dy
+                if (0 <= nx < width and 0 <= ny < depth) and (dx or dy):
+                    yield nx * depth + ny
 
     proposals, seen = [], np.zeros(width * depth, dtype=bool)
     order = np.argsort(-np.where(candidate, counts, 0))
@@ -209,43 +260,91 @@ def propose(cloud: np.ndarray, ground_z: float, args,
             break
         stack, members = [int(start_cell)], []
         seen[start_cell] = True
-        touches_tall = False
         while stack:
             current = stack.pop()
             members.append(current)
-            cx, cy = divmod(current, depth)
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    nx, ny = cx + dx, cy + dy
-                    if not (0 <= nx < width and 0 <= ny < depth):
-                        continue
-                    nxt = nx * depth + ny
-                    if tall[nxt]:
-                        touches_tall = True
-                    elif candidate[nxt] and not seen[nxt]:
-                        seen[nxt] = True
-                        stack.append(nxt)
+            for nxt in neighbours(current):
+                if candidate[nxt] and not seen[nxt]:
+                    seen[nxt] = True
+                    stack.append(nxt)
         member_arr = np.array(members)
         n_points = int(counts[member_arr].sum())
         if n_points < args.min_points:
             continue
-        cells_xy = np.stack(np.divmod(member_arr, depth), axis=1) + origin
-        lo = cells_xy.min(axis=0) * cell
-        hi = (cells_xy.max(axis=0) + 1) * cell
+        cells_xy = hmap.cell_xy(member_arr)
+        lo = cells_xy.min(axis=0)
+        hi = cells_xy.max(axis=0) + hmap.cell
         span = hi - lo
         if max(span) > args.max_footprint or max(span) < args.min_footprint:
             continue
+
+        # The outline: every cell adjacent to the blob but not in it. How much of
+        # that outline is structure says whether this is furniture or a wall's foot.
+        inside = set(int(m) for m in members)
+        outline = set()
+        for member in members:
+            for nxt in neighbours(int(member)):
+                if int(nxt) not in inside:
+                    outline.add(int(nxt))
+        outline_arr = np.array(sorted(outline)) if outline else np.zeros(0, dtype=np.int64)
+        wall_contact = (float(tall[outline_arr].mean()) if len(outline_arr) else 0.0)
+
         proposals.append({
             "centre": [round(float(0.5 * (lo[0] + hi[0])), 3),
                        round(float(0.5 * (lo[1] + hi[1])), 3)],
             "points": n_points,
             "footprint_m": [round(float(span[0]), 2), round(float(span[1]), 2)],
-            "top_m": round(float(height_map[member_arr].max()), 2),
+            "top_m": round(float(top[member_arr].max()), 2),
             "cells": int(len(members)),
-            "against_structure": bool(touches_tall),
+            "wall_contact": round(wall_contact, 2),
+            "against_structure": bool(wall_contact > 0.0),
+            "extent_xy": [round(float(lo[0]), 3), round(float(lo[1]), 3),
+                          round(float(hi[0]), 3), round(float(hi[1]), 3)],
         })
-    proposals.sort(key=lambda p: -p["points"])
+    # Open on all sides first: that is what a chair standing in a room looks like,
+    # and it is the only ordering that puts furniture above wall feet.
+    proposals.sort(key=lambda p: (p["wall_contact"], -p["points"]))
     return proposals[:args.max_proposals]
+
+
+def render_map(path: str, hmap: "HeightMap", rows: List[dict], args,
+               poses: Optional[Dict[str, List[dict]]] = None) -> None:
+    """Draw the searched area from above with the proposals numbered on it.
+
+    The list can only describe a blob; this shows its shape, and the shape is how
+    a person tells a chair from the foot of a wall in one glance.
+    """
+    x0, y0, x1, y1 = hmap.bounds()
+    canvas = Canvas(x0, y0, x1, y1, hmap.cell, scale=args.map_scale)
+    grid = hmap.as_image_grid()[::-1]          # row 0 = highest y, as on screen
+
+    occupied = grid > 0.0
+    tall = grid > args.max_height
+    band = occupied & ~tall
+    canvas.blit_cells(band, height_ramp(np.clip(grid, 0, args.max_height),
+                                        0.0, args.max_height))
+    canvas.blit_cells(tall, np.broadcast_to(np.array([70, 70, 78], dtype=np.uint8),
+                                            grid.shape + (3,)))
+
+    for agent_id, frames in sorted((poses or {}).items()):
+        for frame in frames[::3]:
+            canvas.dot(frame["xyz"][0], frame["xyz"][1], (255, 255, 255), 0)
+
+    for index, row in enumerate(rows):
+        ex = row["extent_xy"]
+        colour = (220, 0, 0) if row["wall_contact"] <= 0.25 else (150, 60, 200)
+        canvas.box(ex[0] - hmap.cell, ex[1] - hmap.cell,
+                   ex[2] + hmap.cell, ex[3] + hmap.cell, colour)
+        canvas.text(ex[2] + 2 * hmap.cell, ex[3], str(index + 1), colour,
+                    size=max(1, args.map_scale // 2))
+
+    canvas.save(path)
+    print("\n  wrote %s  (%d x %d px, %.2f m per cell)"
+          % (path, canvas.cols, canvas.rows, hmap.cell))
+    print("    blue-green-orange = height above the floor, dark grey = taller than "
+          "%.2f m (structure)," % args.max_height)
+    print("    white dots = where the agents drove, red boxes = open on all sides, "
+          "purple = touching structure.")
 
 
 # -------------------------------------------------------------------- checks
@@ -337,6 +436,11 @@ def main() -> int:
                              "(the map usually covers far more building than one run)")
     parser.add_argument("--whole-map", action="store_true",
                         help="propose over the entire cloud, not just where the agents were")
+    parser.add_argument("--map-image", default=None, metavar="PATH.png",
+                        help="write a top-down picture of the searched area with the "
+                             "proposals numbered on it")
+    parser.add_argument("--map-scale", type=int, default=4,
+                        help="pixels per height-map cell in --map-image")
     parser.add_argument("--cell", type=float, default=0.10,
                         help="proposals: height-map cell size")
     parser.add_argument("--max-points", type=int, default=4000000)
@@ -390,15 +494,26 @@ def main() -> int:
         print("candidate free-standing objects, top between %.2f and %.2f m above the "
               "floor\n(anything taller is structure and is excluded, not clustered):"
               % (args.min_height, args.max_height))
-        rows = propose(cloud, ground_z, args, roi)
+        hmap = HeightMap(cloud, ground_z, args.cell, roi)
+        rows = propose(cloud, ground_z, args, roi, hmap)
         if not rows:
             print("  none — widen --min-footprint/--max-footprint or lower --min-points")
+        print("   #  seed              pts   footprint     top     walled")
         for i, row in enumerate(rows):
-            print("  %2d. seed %-16s %5d pts  footprint %-12s top %.2f m%s"
+            print("  %2d. %-16s %5d  %-12s  %.2f m  %3d%%%s"
                   % (i + 1, "%.2f,%.2f" % tuple(row["centre"]), row["points"],
                      "%.2f x %.2f" % tuple(row["footprint_m"]), row["top_m"],
-                     "   (against a wall or taller structure)"
-                     if row["against_structure"] else ""))
+                     int(round(100 * row["wall_contact"])),
+                     "" if row["wall_contact"] <= 0.25 else
+                     "   <- mostly wall foot" if row["wall_contact"] >= 0.5 else
+                     "   (against structure)"))
+        print("\n  'walled' is how much of the blob's outline is taller-than-%.2f m "
+              "structure." % args.max_height)
+        print("  A chair standing in the room reads 0%%; against a wall, up to ~30%%; "
+              "a wall's own")
+        print("  foot reads 50%% and up and is not furniture.")
+        if args.map_image and not hmap.empty():
+            render_map(args.map_image, hmap, rows, args, poses)
         print("\n  Pick the two chairs and fit them:")
         print("    --seed <x,y> --name chair_1 --out labels/coop2_statics.json")
 

@@ -2021,6 +2021,125 @@ def test_frame_check_does_not_fail_on_static_infrastructure():
     assert not label_static.verify_frame(cloud, {"1": shifted})
 
 
+
+def _room_cloud(rng):
+    """A 10 x 10 m room: a long wall along x = 5, one chair in the open, one
+    chair pushed against the wall. The wall is 2.5 m tall, the chairs 0.9 m."""
+    parts = [np.column_stack([rng.uniform(-5, 5, 40000), rng.uniform(-5, 5, 40000),
+                              np.full(40000, -0.66)])]                      # floor
+    wall_y = rng.uniform(-5, 5, 30000)
+    parts.append(np.column_stack([np.full(30000, 5.0) + rng.normal(0, 0.01, 30000),
+                                  wall_y, rng.uniform(-0.66, 1.84, 30000)]))
+    for cx, cy in ((0.0, 0.0), (4.75, 2.0)):                                # chairs
+        n = 4000
+        parts.append(np.column_stack([
+            cx + rng.uniform(-0.25, 0.25, n), cy + rng.uniform(-0.25, 0.25, n),
+            rng.uniform(-0.66, 0.24, n)]))
+    return np.vstack(parts)
+
+
+class _ProposeArgs(object):
+    cell = 0.10
+    min_height = 0.30
+    max_height = 1.30
+    min_footprint = 0.15
+    max_footprint = 1.50
+    min_points = 80
+    max_proposals = 25
+    map_scale = 3
+
+
+def test_propose_ranks_a_free_standing_chair_above_a_wall_foot():
+    """The wall is excluded by height, but its base cells survive the band and
+    look like objects. What separates them from furniture is how much of the
+    blob's outline is structure — a chair is open, a wall foot is not."""
+    import importlib
+    label_static = importlib.import_module('label_static')
+    cloud = _room_cloud(np.random.default_rng(3))
+    rows = label_static.propose(cloud, -0.66, _ProposeArgs())
+    assert rows, 'the chairs should be proposed'
+    first = rows[0]
+    assert abs(first['centre'][0]) < 0.25 and abs(first['centre'][1]) < 0.25, first
+    assert first['wall_contact'] == 0.0, first
+    assert 0.8 <= first['top_m'] <= 1.0, first
+    # nothing reported may be the wall itself: it is taller than the band
+    for row in rows:
+        assert max(row['footprint_m']) <= 1.50, row
+
+
+def test_propose_still_finds_a_chair_pushed_against_a_wall():
+    """Excluding structure must not exclude the furniture standing next to it."""
+    import importlib
+    label_static = importlib.import_module('label_static')
+    cloud = _room_cloud(np.random.default_rng(5))
+    rows = label_static.propose(cloud, -0.66, _ProposeArgs())
+    near_wall = [r for r in rows if abs(r['centre'][0] - 4.75) < 0.4
+                 and abs(r['centre'][1] - 2.0) < 0.4]
+    assert near_wall, 'the chair against the wall was lost with the wall'
+    assert near_wall[0]['wall_contact'] > 0.0, near_wall[0]
+    assert near_wall[0]['wall_contact'] < 0.5, (
+        'a chair touches structure on one side, not on most of its outline')
+
+
+def test_height_map_bounds_and_grid_line_up_with_the_cloud():
+    import importlib
+    label_static = importlib.import_module('label_static')
+    cloud = _room_cloud(np.random.default_rng(7))
+    hmap = label_static.HeightMap(cloud, -0.66, 0.10)
+    x0, y0, x1, y1 = hmap.bounds()
+    assert x0 <= 0.0 <= x1 and y0 <= 0.0 <= y1
+    grid = hmap.as_image_grid()
+    assert grid.shape == (hmap.depth, hmap.width)
+    # the wall column is the tallest thing in the picture
+    col = int((5.0 - x0) / 0.10)
+    assert grid[:, min(col, grid.shape[1] - 1)].max() > 2.0
+
+
+def test_png_writer_emits_a_file_a_decoder_accepts():
+    """No PIL on the robot, so the PNG is written by hand; it still has to be a
+    PNG — right magic, right dimensions, a decodable IDAT."""
+    import struct
+    import zlib
+    from ros2opv2v.preview import Canvas
+    tmp = tempfile.mkdtemp()
+    try:
+        path = os.path.join(tmp, 'map.png')
+        canvas = Canvas(0.0, 0.0, 3.0, 2.0, 0.1, scale=4)
+        canvas.box(1.0, 0.5, 2.0, 1.5, (220, 0, 0))
+        canvas.text(1.0, 1.4, '12', (0, 0, 0))
+        canvas.save(path)
+        blob = open(path, 'rb').read()
+        assert blob[:8] == b'\x89PNG\r\n\x1a\n'
+        width, height, depth, colour = struct.unpack('>IIBB', blob[16:26])
+        assert (width, height) == (120, 80), (width, height)
+        assert (depth, colour) == (8, 2)
+        idat = blob[blob.index(b'IDAT') + 4:]
+        raw = zlib.decompressobj().decompress(idat)
+        assert len(raw) >= height * (1 + width * 3)
+        # the drawn box really is red in the decoded pixels
+        rows = [raw[i * (1 + width * 3) + 1:(i + 1) * (1 + width * 3)] for i in range(height)]
+        assert any(b'\xdc\x00\x00' in row for row in rows), 'no red box in the image'
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_render_map_draws_the_searched_area_without_a_plotting_stack():
+    import importlib
+    label_static = importlib.import_module('label_static')
+    cloud = _room_cloud(np.random.default_rng(11))
+    args = _ProposeArgs()
+    hmap = label_static.HeightMap(cloud, -0.66, args.cell)
+    rows = label_static.propose(cloud, -0.66, args, None, hmap)
+    tmp = tempfile.mkdtemp()
+    try:
+        path = os.path.join(tmp, 'top_down.png')
+        poses = {'1': [{'xyz': [x, 0.0, 0.0]} for x in np.linspace(-4, 4, 20)]}
+        label_static.render_map(path, hmap, rows, args, poses)
+        assert os.path.getsize(path) > 200
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]
