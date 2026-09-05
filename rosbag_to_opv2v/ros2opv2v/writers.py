@@ -174,6 +174,49 @@ def write_png(path: str, image: np.ndarray) -> None:
         handle.write(chunk(b"IEND", b""))
 
 
+def resize_image(image: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Bilinear resize to an exact size, keeping the array dtype.
+
+    Exact rather than aspect-preserving on purpose. A lift-splat camera branch
+    resizes whatever it is given to the size ITS config declares, then corrects
+    the intrinsics by a single scalar — which is only the right correction if the
+    image really had the declared shape. Emitting the declared shape, with the
+    intrinsics scaled to match, is what makes that correction true.
+    """
+    source_h, source_w = image.shape[:2]
+    if (source_w, source_h) == (width, height):
+        return image
+    ys = (np.arange(height) + 0.5) * source_h / height - 0.5
+    xs = (np.arange(width) + 0.5) * source_w / width - 0.5
+    y0 = np.clip(np.floor(ys), 0, source_h - 1).astype(np.int64)
+    x0 = np.clip(np.floor(xs), 0, source_w - 1).astype(np.int64)
+    y1 = np.clip(y0 + 1, 0, source_h - 1)
+    x1 = np.clip(x0 + 1, 0, source_w - 1)
+    wy = np.clip(ys - y0, 0.0, 1.0)[:, None]
+    wx = np.clip(xs - x0, 0.0, 1.0)[None, :]
+    if image.ndim == 3:
+        wy, wx = wy[..., None], wx[..., None]
+    source = image.astype(np.float64)
+    top = source[y0][:, x0] * (1 - wx) + source[y0][:, x1] * wx
+    bottom = source[y1][:, x0] * (1 - wx) + source[y1][:, x1] * wx
+    blended = top * (1 - wy) + bottom * wy
+    return np.clip(np.rint(blended), 0, 255).astype(image.dtype)
+
+
+def scale_intrinsic(intrinsic, source_wh, target_wh):
+    """A 3x3 camera matrix for the same camera at a different image size."""
+    if not intrinsic:
+        return intrinsic
+    sx = float(target_wh[0]) / float(source_wh[0])
+    sy = float(target_wh[1]) / float(source_wh[1])
+    k = [[float(v) for v in row] for row in intrinsic]
+    k[0][0] *= sx
+    k[0][2] *= sx
+    k[1][1] *= sy
+    k[1][2] *= sy
+    return k
+
+
 def image_to_array(msg) -> Optional[np.ndarray]:
     """Decode a ``sensor_msgs/Image`` into a uint8 array suitable for PNG export."""
     encoding = str(msg.encoding).lower()

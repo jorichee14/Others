@@ -191,15 +191,34 @@ class CameraConfig:
     camera_info_topic: Optional[str] = None
     intrinsic: Optional[List[List[float]]] = None
     optical_frame: bool = True
+    output_size: Optional[List[int]] = None
+    source_size: Optional[List[int]] = None
+    """``[width, height]`` the camera actually publishes, filled from camera_info
+    at conversion time. Needed to scale the intrinsic to `output_size`."""
+    """``[width, height]`` every exported image is resized to, intrinsics scaled
+    to match.
+
+    A lift-splat camera branch resizes whatever it is handed to the size ITS
+    config declares, and then corrects the intrinsics by a single scalar — a
+    correction that is only true if the image really had the declared shape.
+    Handing it 1280x720 where it expects 1280x800 leaves the vertical focal
+    length 11% wrong, and 960x540 leaves it 48% wrong, with no error anywhere:
+    the model simply projects image features to the wrong places."""
 
     @staticmethod
     def parse(mapping: dict, ctx: str) -> "CameraConfig":
+        size = mapping.get("output_size")
+        if size is not None:
+            size = [int(v) for v in size]
+            if len(size) != 2 or size[0] <= 0 or size[1] <= 0:
+                raise ConfigError(f"{ctx}.output_size must be [width, height] in pixels")
         return CameraConfig(
             topic=str(_get(mapping, "topic", ctx=ctx)),
             extrinsic=_transform_from(mapping.get("extrinsic"), f"{ctx}.extrinsic"),
             camera_info_topic=mapping.get("camera_info_topic"),
             intrinsic=mapping.get("intrinsic"),
-            optical_frame=bool(mapping.get("optical_frame", True)))
+            optical_frame=bool(mapping.get("optical_frame", True)),
+            output_size=size)
 
 
 @dataclass

@@ -41,7 +41,8 @@ from .pointclouds import (apply_range_filter, cloud_from_depth_image,
 from .sync import (NS, Frame, FrameTable, PoseTrack, StampIndex,
                    build_frame_table, frame_times, reuse_statistics,
                    tightness_curve)
-from .writers import image_to_array, write_frame_yaml, write_pcd, write_png
+from .writers import (image_to_array, resize_image, scale_intrinsic,
+                      write_frame_yaml, write_pcd, write_png)
 
 
 class ConversionError(RuntimeError):
@@ -903,10 +904,16 @@ def _camera_block(camera, world_from_base: np.ndarray, agent: AgentConfig,
     lidar_pose = _sensor_pose(world_from_base, agent.cloud.frame_extrinsic(),
                               agent.cloud.ground_lift)
     camera_to_lidar = invert(lidar_pose) @ world_from_camera
+    # The intrinsic must describe the image as WRITTEN, not as received: a
+    # resized image with the source camera matrix is a camera that does not exist.
+    intrinsic = camera.intrinsic or [[0.0, 0.0, 0.0]] * 3
+    if camera.output_size and camera.intrinsic and camera.source_size:
+        intrinsic = scale_intrinsic(camera.intrinsic, camera.source_size,
+                                    camera.output_size)
     return {
         "cords": matrix_to_opencood_pose(world_from_camera),
         "extrinsic": [[float(v) for v in row] for row in camera_to_lidar],
-        "intrinsic": camera.intrinsic or [[0.0, 0.0, 0.0]] * 3,
+        "intrinsic": intrinsic,
     }
 
 
@@ -946,6 +953,10 @@ def write_clouds(reader: BagReader, cfg: ConverterConfig, frames: List[Frame],
             else:
                 image = image_to_array(msg)
                 if image is not None:
+                    camera = agent.cameras[slot]
+                    if camera.output_size:
+                        image = resize_image(image, camera.output_size[0],
+                                             camera.output_size[1])
                     write_png(os.path.join(target_dir, f"{key}_camera{slot}.png"), image)
             written += 1
             if progress and written % 200 == 0:
@@ -1081,9 +1092,24 @@ def convert(cfg: ConverterConfig, overwrite: bool = False,
     camera_infos = load_camera_infos(reader, cfg)
     for agent in cfg.active_agents:
         for slot, camera in enumerate(agent.cameras):
-            if camera.intrinsic is None and camera.camera_info_topic in camera_infos:
-                fx, fy, cx, cy = camera_intrinsics(camera_infos[camera.camera_info_topic])
+            info = camera_infos.get(camera.camera_info_topic)
+            if info is None:
+                continue
+            if camera.intrinsic is None:
+                fx, fy, cx, cy = camera_intrinsics(info)
                 camera.intrinsic = [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]
+            # The published size, so a resized export can carry a matching matrix.
+            width, height = int(getattr(info, "width", 0)), int(getattr(info, "height", 0))
+            if width and height:
+                camera.source_size = [width, height]
+                if camera.output_size and camera.output_size != camera.source_size:
+                    report.warnings.append(
+                        "%s %s: images resized %dx%d -> %dx%d and the intrinsic "
+                        "scaled with them. The model resizes to the size its own "
+                        "config declares and corrects the intrinsic by one scalar, "
+                        "which is only right when the image already has that shape."
+                        % (agent.name, camera.topic, width, height,
+                           camera.output_size[0], camera.output_size[1]))
 
     frame_dirs = write_frame_yamls(cfg, scenarios, frame_poses, report, clocks)
     write_clouds(reader, cfg, frames, frame_dirs, camera_infos, report, tracks, progress)

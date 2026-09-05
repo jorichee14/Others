@@ -226,6 +226,12 @@ agents:
     cameras:
       - topic: /mobile_1/zed/left/image_rect_color
         camera_info_topic: /mobile_1/zed/left/camera_info
+        # data_aug_conf declares H: 800, W: 1280. The camera branch resizes
+        # whatever it is handed to that shape and corrects the intrinsic by ONE
+        # scalar, so the correction is only true when the image already has it.
+        # 1280x720 leaves the vertical focal length 11% wrong, 960x540 leaves it
+        # 48% wrong, silently: features land in the wrong places and nothing errors.
+        output_size: [1280, 800]
         # Exactly identity, not an approximation: the pose source IS this
         # camera's optical frame.
         extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
@@ -336,6 +342,12 @@ agents:
     cameras:
       - topic: /mobile_2/color/image_raw
         camera_info_topic: /mobile_2/color/camera_info
+        # data_aug_conf declares H: 800, W: 1280. The camera branch resizes
+        # whatever it is handed to that shape and corrects the intrinsic by ONE
+        # scalar, so the correction is only true when the image already has it.
+        # 1280x720 leaves the vertical focal length 11% wrong, 960x540 leaves it
+        # 48% wrong, silently: features land in the wrong places and nothing errors.
+        output_size: [1280, 800]
         # Identity: the pose source IS this camera's optical frame.
         extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
         optical_frame: true
@@ -500,6 +512,12 @@ agents:
       #    (/infra_1/radar/camera_info is empty, and nothing here reads it).
       - topic: /infra_1/image_raw
         camera_info_topic: /infra_1/camera_info
+        # data_aug_conf declares H: 800, W: 1280. The camera branch resizes
+        # whatever it is handed to that shape and corrects the intrinsic by ONE
+        # scalar, so the correction is only true when the image already has it.
+        # 1280x720 leaves the vertical focal length 11% wrong, 960x540 leaves it
+        # 48% wrong, silently: features land in the wrong places and nothing errors.
+        output_size: [1280, 800]
         # Identity: this agent's base IS the Arducam optical frame.
         extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
         optical_frame: true

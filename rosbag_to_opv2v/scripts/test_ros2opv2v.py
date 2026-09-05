@@ -2933,6 +2933,49 @@ def test_dropping_tall_columns_leaves_a_free_standing_object_untouched():
     assert len(without_structure(chair, ground, 1.30, 0.10)) == len(chair)
 
 
+
+def test_resized_images_carry_a_matching_intrinsic():
+    """A lift-splat branch resizes whatever it is handed to the size ITS config
+    declares, then corrects the intrinsic by ONE scalar. That correction is only
+    true when the image already had the declared shape: 1280x720 into a config
+    expecting 1280x800 leaves the vertical focal length 11% wrong, and 960x540
+    leaves it 48% wrong, with nothing raised anywhere."""
+    from ros2opv2v.writers import resize_image, scale_intrinsic
+
+    rng = np.random.default_rng(73)
+    image = rng.integers(0, 256, size=(720, 1280, 3), dtype=np.uint8)
+    out = resize_image(image, 1280, 800)
+    assert out.shape == (800, 1280, 3) and out.dtype == np.uint8
+    assert np.allclose(resize_image(image, 1280, 720), image), 'a no-op must not resample'
+
+    # a corner stays a corner, and a flat image stays flat
+    flat = np.full((540, 960), 77, dtype=np.uint8)
+    assert (resize_image(flat, 1280, 800) == 77).all()
+
+    k = [[640.0, 0.0, 630.0], [0.0, 645.0, 350.0], [0.0, 0.0, 1.0]]
+    scaled = scale_intrinsic(k, [1280, 720], [1280, 800])
+    assert scaled[0][0] == 640.0 and scaled[0][2] == 630.0, 'width unchanged'
+    assert abs(scaled[1][1] - 645.0 * 800 / 720) < 1e-9
+    assert abs(scaled[1][2] - 350.0 * 800 / 720) < 1e-9
+
+    # the property that matters: after the model's uniform 0.65, a point at the
+    # principal point still maps to the principal point of the resized image
+    for source in ([1280, 720], [960, 540]):
+        s = scale_intrinsic(k, source, [1280, 800])
+        assert abs(s[0][2] / 1280 - k[0][2] / source[0]) < 1e-9
+        assert abs(s[1][2] / 800 - k[1][2] / source[1]) < 1e-9
+
+
+def test_the_incop_config_pins_every_camera_to_the_models_declared_size():
+    cfg = cfgmod.load_config(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'configs', 'mirc_coop2_incop.yaml'))
+    cameras = [(a.name, c) for a in cfg.active_agents for c in a.cameras]
+    assert cameras, 'the multimodal models need camera images'
+    for name, camera in cameras:
+        assert camera.output_size == [1280, 800], (name, camera.output_size)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]
