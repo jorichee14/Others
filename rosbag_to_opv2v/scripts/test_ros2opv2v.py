@@ -2811,6 +2811,19 @@ def test_incop_config_tracks_the_opv2v_one_where_it_matters():
             assert np.allclose(ca.extrinsic, cb.extrinsic), name
 
 
+
+def test_the_incop_output_path_selects_left_hand_visualisation():
+    """inference_isaac.py picks BEV handedness from the dataset PATH: left_hand
+    is true when it contains OPV2V, V2XSET or REAL_WORLD, and this data follows
+    that lidar convention. A path matching none of them mirrors every box in the
+    video while the metrics stay correct — right numbers, wrong picture."""
+    cfg = cfgmod.load_config(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'configs', 'mirc_coop2_incop.yaml'))
+    upper = cfg.output.root.upper()
+    assert any(key in upper for key in ('OPV2V', 'V2XSET', 'REAL_WORLD')), cfg.output.root
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

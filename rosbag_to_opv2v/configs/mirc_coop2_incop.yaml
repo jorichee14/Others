@@ -25,7 +25,13 @@
 bag: ~/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_completed
 
 output:
-  root: ~/workspaces/isaac_robotics_data/InCoP/mirc_coop2
+  # The name is load-bearing. inference_isaac.py decides BEV handedness from the
+  # dataset path: left_hand is true when it contains OPV2V, V2XSET or REAL_WORLD,
+  # and this data follows exactly that lidar convention. A directory called
+  # `mirc_coop2` matches none of them, so every box in the video would be
+  # mirrored — the numbers would be right and the picture wrong, which is the
+  # worst combination.
+  root: ~/workspaces/isaac_robotics_data/InCoP/mirc_coop2_real_world
   split: test                    # OpenCOOD reads validate_dir at inference
   scenario_name: case_0
   # The two chairs, labelled once in the map frame and written into every frame
