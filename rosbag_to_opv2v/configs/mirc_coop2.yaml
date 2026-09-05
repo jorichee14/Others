@@ -115,10 +115,12 @@ world:
 
 agents:
   # ------------------------------------------------------------------ mobile_1
-  # The only true LiDAR agent (Ouster, 1516 sweeps / 156 s = 9.7 Hz) and, with
-  # the lowest non-negative id, the one OpenCOOD will treat as ego.
+  # The only true LiDAR agent (Ouster, 1516 sweeps / 156 s = 9.7 Hz). It is NOT
+  # the ego: its 360 deg sweep sees both chairs on its own in ~95% of frames, so
+  # with it as ego collaboration has nothing to add and every impairment curve
+  # is flat. It is the partner whose returns the ego is missing.
   - name: mobile_1
-    id: 1
+    id: 2
     role: cav
     host: mobile_1
     enabled: true
@@ -252,8 +254,14 @@ agents:
   # ------------------------------------------------------------------ mobile_2
   # No LiDAR: the RealSense depth image is reprojected into a cloud. Expect a
   # ~87 deg horizontal FOV and a few metres of usable range, not a 360 deg sweep.
+  #
+  # THE EGO, by design: OpenCOOD takes the smallest non-negative id. Its narrow
+  # FOV sees the chairs in only ~33% of frames alone (label_static.py --check),
+  # so ego-only recall is ~0.33 and fusion with mobile_1's sweep lifts it
+  # toward 0.95. That gap is the collaboration signal the study measures; with
+  # the Ouster as ego there is no gap.
   - name: mobile_2
-    id: 2
+    id: 1
     role: cav
     host: mobile_2
     enabled: true
@@ -405,8 +413,9 @@ agents:
       emit: false                          # already labelled as agent 1
 
   # ------------------------------------------------------------------- infra_1
-  # Static roadside unit. The id must be negative: OpenCOOD sorts negative ids
-  # to the end of the agent list so an RSU is never chosen as ego.
+  # Static roadside unit. The id must be negative: OpenCOOD's basedataset sorts
+  # the folders and then moves a leading negative id to the end of the list, so
+  # an RSU is never chosen as ego (verified against basedataset.py on main).
   - name: infra_1
     id: -1
     role: rsu

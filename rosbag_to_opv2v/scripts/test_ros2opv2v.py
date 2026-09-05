@@ -1589,7 +1589,12 @@ def test_mirc_config_is_ready_to_run():
     cfg = cfgmod.load_config(path)                       # raises if anything is null
     names = sorted(a.name for a in cfg.active_agents)
     assert names == ['infra_1', 'mobile_1', 'mobile_2'], names
-    assert cfgmod.ego_agent(cfg).name == 'mobile_1'
+    # The ego is the narrow-FOV depth cart ON PURPOSE: the Ouster sees both chairs
+    # alone in ~95% of frames, so with it as ego there is no collaboration gap to
+    # measure. The clock reference stays the Ouster host: it is the frame master.
+    ego = cfgmod.ego_agent(cfg)
+    assert ego.name == 'mobile_2' and ego.cav_id == 1, (ego.name, ego.cav_id)
+    assert next(a for a in cfg.agents if a.name == 'mobile_1').cav_id == 2
     assert cfg.clock.enabled and cfg.clock.reference_host == 'mobile_1'
     assert all(not a.obj.emit for a in cfg.active_agents), \
         'this dataset is converted for manual annotation; no agent-derived boxes'
@@ -2516,11 +2521,12 @@ def _tiny_dataset(root, agents=('1', '2', '-1'), ego='1', frames=3):
     return scenario
 
 
-def test_validator_flags_an_rsu_that_would_be_read_as_the_ego():
-    """OpenCOOD's basedataset takes the first agent folder in lexicographic order
-    as the ego and does not read the `ego` flag. '-1' sorts before '1', so an RSU
-    named the OPV2V way silently becomes the ego and fusion is computed around a
-    sensor that may not reach the objects at all."""
+def test_validator_predicts_the_ego_opencood_will_actually_pick():
+    """OpenCOOD's basedataset (checked against main) sorts the agent folders,
+    moves a LEADING negative id to the end, and takes the first remaining folder
+    as ego; it never reads the `ego` flag. So '-1', '1', '2' with ego '1' is
+    fine, the same tree with ego '2' is a silent mis-assignment, and a second
+    negative id is a vehicle in OpenCOOD's eyes."""
     import importlib
     validate = importlib.import_module('validate_opv2v')
 
@@ -2528,30 +2534,27 @@ def test_validator_flags_an_rsu_that_would_be_read_as_the_ego():
         sample = 3
         read_pcd = False
         with_open3d = False
-        range = None
+        range = validate.DEFAULT_RANGE
 
-    tmp = tempfile.mkdtemp()
-    try:
-        root = os.path.join(tmp, 'test')
-        os.makedirs(root)
-        _tiny_dataset(root, agents=('1', '2', '-1'), ego='1')
-        findings = validate.Findings()
-        args = Args()
-        args.range = validate.DEFAULT_RANGE
-        validate.check_scenario(os.path.join(root, 'scen'), findings, args)
-        assert not findings.errors, findings.errors
-        assert any('sorts first' in w for w in findings.warnings), findings.warnings
+    def run(agents, ego):
+        tmp = tempfile.mkdtemp()
+        try:
+            root = os.path.join(tmp, 'test')
+            os.makedirs(root)
+            _tiny_dataset(root, agents=agents, ego=ego)
+            findings = validate.Findings()
+            validate.check_scenario(os.path.join(root, 'scen'), findings, Args())
+            assert not findings.errors, findings.errors
+            return findings.warnings
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
-        # rename the RSU so the ego sorts first and the warning goes away
-        root2 = os.path.join(tmp, 'test2')
-        os.makedirs(root2)
-        _tiny_dataset(root2, agents=('1', '2', '100'), ego='1')
-        clean = validate.Findings()
-        validate.check_scenario(os.path.join(root2, 'scen'), clean, args)
-        assert not clean.errors, clean.errors
-        assert not any('sorts first' in w for w in clean.warnings), clean.warnings
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+    # the conventional layout: RSU at -1, ego is the smallest non-negative id
+    assert not any('ego' in w for w in run(('1', '2', '-1'), ego='1'))
+    # the flag says 2 but OpenCOOD will take 1
+    assert any('OpenCOOD will take 1' in w for w in run(('1', '2', '-1'), ego='2'))
+    # two RSUs: only the first negative id is moved
+    assert any('negative ids' in w for w in run(('1', '-1', '-2'), ego='1'))
 
 
 def test_with_opencood_builds_the_real_dataset_and_reports_failures():

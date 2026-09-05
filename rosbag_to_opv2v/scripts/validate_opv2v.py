@@ -118,20 +118,25 @@ def check_scenario(scenario: str, findings: Findings, args) -> dict:
         findings.error(f"{name}: every agent id is negative — OpenCOOD would have "
                        f"no ego")
 
-    # OpenCOOD's basedataset takes the FIRST agent folder, in lexicographic order,
-    # as the ego — it does not read the `ego` flag we write. A roadside unit named
-    # "-1" sorts before "1" because '-' (0x2D) precedes '1' (0x31), so the RSU
-    # silently becomes the ego: fusion is then computed around a sensor that may
-    # not even reach the objects, and nothing errors.
+    # OpenCOOD's basedataset (verified on main) sorts the agent folders, moves a
+    # LEADING negative id to the end, and takes the first remaining folder as the
+    # ego. It never reads the `ego` flag we write. So the ego it will use is the
+    # smallest non-negative id — and that must be the agent this dataset means.
+    opencood_order = list(agents)
+    if int(opencood_order[0]) < 0:
+        opencood_order = opencood_order[1:] + [opencood_order[0]]
     declared = _declared_ego(scenario, agents, reference[0])
-    if declared is not None and agents[0] != declared:
+    if declared is not None and opencood_order[0] != declared:
         findings.warn(
-            f"{name}: the yaml marks agent {declared} as ego, but {agents[0]} sorts "
-            f"first. OpenCOOD's basedataset treats the first agent folder as the ego "
-            f"and ignores the flag, so it would fuse around {agents[0]}. Either rename "
-            f"the folders so {declared} sorts first (RSU ids of 100+ instead of "
-            f"negatives), or confirm your OpenCOOD fork honours the `ego` key "
-            f"(V2XSet's does; vanilla OpenCOOD does not).")
+            f"{name}: the yaml marks agent {declared} as ego, but OpenCOOD will take "
+            f"{opencood_order[0]} (smallest non-negative id after moving a leading RSU "
+            f"to the end). Give the intended ego the smallest non-negative id.")
+    negatives = [a for a in agents if int(a) < 0]
+    if len(negatives) > 1:
+        findings.warn(
+            f"{name}: {len(negatives)} negative ids {negatives}. OpenCOOD moves only "
+            f"the FIRST to the end, so {negatives[1]} would be read as a vehicle and "
+            f"could become the ego.")
 
     sample_keys = reference[::max(1, len(reference) // args.sample)][:args.sample]
     distances, box_counts, point_counts = [], [], defaultdict(list)

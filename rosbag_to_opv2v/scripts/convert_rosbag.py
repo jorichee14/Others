@@ -152,8 +152,14 @@ def main() -> int:
                         help="plan only: no pcd/yaml written")
     parser.add_argument("--bag", default=None, help="override config's bag path")
     parser.add_argument("--out", default=None, help="override config's output.root")
+    parser.add_argument("--start", type=float, default=None,
+                        help="override time.start_offset_s (seconds into the bag)")
     parser.add_argument("--duration", type=float, default=None,
                         help="override time.duration_s (seconds; 0 = whole bag)")
+    parser.add_argument("--split", default=None,
+                        help="override output.split (train / validate / test)")
+    parser.add_argument("--scenario-name", default=None,
+                        help="override output.scenario_name")
     parser.add_argument("--json", default=None, help="also write the report as json")
     args = parser.parse_args()
 
@@ -167,8 +173,14 @@ def main() -> int:
         cfg.bag = os.path.expanduser(args.bag)
     if args.out:
         cfg.output.root = os.path.expanduser(args.out)
+    if args.start is not None:
+        cfg.time.start_offset_s = args.start
     if args.duration is not None:
         cfg.time.duration_s = args.duration
+    if args.split:
+        cfg.output.split = args.split
+    if args.scenario_name:
+        cfg.output.scenario_name = args.scenario_name
 
     try:
         if args.dry_run:
