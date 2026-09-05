@@ -6,7 +6,12 @@ geometry, decision composition. Run:
     python scripts/test_commchannel.py
 """
 import os
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import importlib
+rmi = importlib.import_module('run_mirc_incop')
 
 import numpy as np
 
@@ -260,6 +265,127 @@ def test_blockage_composes_with_other_families():
     # unblocked link still receives the content impairments
     d2 = Schedule(cfg, tbl).decide(0, 1, 'cav2', False)
     assert not d2.drop and d2.delay_frames == 4 and d2.pose_noise is not None
+
+
+def _mirc_tree(root, frames, poses, boxes):
+    """A minimal OPV2V tree: one scenario, agents "0" (ego) and "1"."""
+    import yaml as _yaml
+    scenario = os.path.join(root, 'case_0')
+    for agent in ('0', '1'):
+        os.makedirs(os.path.join(scenario, agent), exist_ok=True)
+    for index in range(frames):
+        frame = {'lidar_pose': list(poses[index]),
+                 'vehicles': {str(i): dict(box) for i, box in enumerate(boxes[index])}}
+        for agent in ('0', '1'):
+            with open(os.path.join(scenario, agent, '%06d.yaml' % index), 'w') as handle:
+                _yaml.safe_dump(frame, handle)
+    return root
+
+
+def _chair(x, y, z=0.0):
+    return {'obj_type': 'chair', 'location': [x, y, z], 'angle': [0.0, 0.0, 0.0],
+            'extent': [0.4, 0.35, 0.5], 'center': [0.0, 0.0, 0.0]}
+
+
+def test_labelled_gt_counts_labels_not_coverage():
+    """The denominator is a property of the dataset, so it must not depend on
+    anything a model does -- the whole reason this function exists."""
+    import tempfile, shutil
+    root = tempfile.mkdtemp()
+    try:
+        # Two chairs, both in range, over three frames with the ego at the origin.
+        _mirc_tree(root, 3, [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]] * 3,
+                   [[_chair(3.0, 1.0), _chair(5.0, -2.0)]] * 3)
+        got = rmi.labelled_gt_count(root, 'chair', [0.0, -11.2, -1, 22.4, 11.2, 3])
+        assert got['gt_labelled'] == 6, got
+        assert got['frames'] == 3 and got['per_scenario'] == {'case_0': 6}
+    finally:
+        shutil.rmtree(root)
+
+
+def test_labelled_gt_applies_the_range_gate():
+    """Objects outside the scoring box are not ground truth for that scoring box.
+    The MIRC range is forward-only, so anything behind the ego drops out."""
+    import tempfile, shutil
+    root = tempfile.mkdtemp()
+    try:
+        _mirc_tree(root, 1, [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+                   [[_chair(3.0, 1.0),      # in front, kept
+                     _chair(-3.0, 1.0),     # behind the ego, x < 0
+                     _chair(3.0, 40.0),     # off to the side, |y| > 11.2
+                     _chair(30.0, 1.0)]])   # beyond 22.4 m
+        got = rmi.labelled_gt_count(root, 'chair', [0.0, -11.2, -1, 22.4, 11.2, 3])
+        assert got['gt_labelled'] == 1, got
+    finally:
+        shutil.rmtree(root)
+
+
+def test_labelled_gt_follows_the_ego_pose():
+    """Range is tested in the EGO frame, not the world frame: rotating the ego
+    180 degrees puts a chair that was ahead of it behind it."""
+    import tempfile, shutil
+    root = tempfile.mkdtemp()
+    try:
+        _mirc_tree(root, 2,
+                   [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 180.0, 0.0]],
+                   [[_chair(3.0, 0.0)], [_chair(3.0, 0.0)]])
+        got = rmi.labelled_gt_count(root, 'chair', [0.0, -11.2, -1, 22.4, 11.2, 3])
+        assert got['gt_labelled'] == 1, got
+    finally:
+        shutil.rmtree(root)
+
+
+def test_labelled_gt_ignores_other_classes():
+    import tempfile, shutil
+    root = tempfile.mkdtemp()
+    try:
+        other = dict(_chair(4.0, 0.0)); other['obj_type'] = 'potted_plant'
+        _mirc_tree(root, 1, [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+                   [[_chair(3.0, 0.0), other]])
+        got = rmi.labelled_gt_count(root, 'chair', [0.0, -11.2, -1, 22.4, 11.2, 3])
+        assert got['gt_labelled'] == 1, got
+    finally:
+        shutil.rmtree(root)
+
+
+def test_ego_folder_moves_a_leading_negative_id_to_the_end():
+    """OPV2V numbers its RSU -1 and OpenCOOD does not let it be ego."""
+    import tempfile, shutil
+    root = tempfile.mkdtemp()
+    try:
+        for name in ('-1', '0', '1'):
+            os.makedirs(os.path.join(root, name))
+        assert rmi.ego_folder(root) == '0'
+    finally:
+        shutil.rmtree(root)
+
+
+def test_corrected_recall_rescales_to_the_labelled_total():
+    """The evaluator divides by what the model covered; dividing the same match
+    count by the labelled total is the number a reader assumes they are given."""
+    metrics = {'gt_covered': 500.0, 'recall30': 0.400, 'recall50': 0.200}
+    got = rmi.corrected_recall(metrics, {'gt_labelled': 1000})
+    assert got['gt_labelled'] == 1000
+    assert got['coverage'] == 0.5
+    assert got['recall30_true'] == 0.2 and got['recall50_true'] == 0.1
+
+
+def test_corrected_recall_is_silent_without_a_labelled_total():
+    """No denominator is better than a guessed one."""
+    assert rmi.corrected_recall({'gt_covered': 500.0, 'recall30': 0.4}, None) == {}
+
+
+def test_class_metrics_names_the_covered_count_as_covered():
+    """It must never come back as `gt`: that name is what made a detector-
+    dependent number read as the size of the dataset."""
+    found = {'per_class_mAP': {'chair': {'mAP@0.3': 0.3, 'mAP@0.5': 0.1}},
+             'visibility_subset_metrics': {'subsets': {'shared': {
+                 'per_class': {'chair': {'gt_count': 728, 'recall@0.3': 0.4,
+                                         'ATE_mean': 0.2, 'ASE_mean': 0.3}}}}}}
+    got = rmi.class_metrics(found, 'chair')
+    assert got['gt_covered'] == 728 and 'gt' not in got
+    assert got['ap30'] == 0.3 and got['recall30'] == 0.4
 
 
 if __name__ == '__main__':

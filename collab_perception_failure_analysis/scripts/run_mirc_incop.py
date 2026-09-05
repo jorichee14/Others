@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import os
 import subprocess
 import sys
@@ -67,6 +68,126 @@ def newest_eval(model_dir: str, after: float):
     return best
 
 
+def x_to_world(pose) -> "np.ndarray":
+    """OpenCOOD's ``transformation_utils.x_to_world``, ``[x,y,z,roll,yaw,pitch]``
+    in degrees to a 4x4. Replicated rather than imported: this script shells out
+    to InCoP and is never run inside it, so it must not need OpenCOOD on the path.
+    """
+    import numpy as np
+    x, y, z, roll, yaw, pitch = [float(v) for v in pose[:6]]
+    c_y, s_y = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
+    c_r, s_r = math.cos(math.radians(roll)), math.sin(math.radians(roll))
+    c_p, s_p = math.cos(math.radians(pitch)), math.sin(math.radians(pitch))
+    m = np.identity(4)
+    m[0, 3], m[1, 3], m[2, 3] = x, y, z
+    m[0, 0] = c_p * c_y
+    m[0, 1] = c_y * s_p * s_r - s_y * c_r
+    m[0, 2] = -c_y * s_p * c_r - s_y * s_r
+    m[1, 0] = s_y * c_p
+    m[1, 1] = s_y * s_p * s_r + c_y * c_r
+    m[1, 2] = -s_y * s_p * c_r + c_y * s_r
+    m[2, 0] = s_p
+    m[2, 1] = -c_p * s_r
+    m[2, 2] = c_p * c_r
+    return m
+
+
+def ego_folder(scenario_dir: str):
+    """The agent OpenCOOD treats as ego: folders sorted, a LEADING negative id
+    moved to the end, then the first one taken. Verified against `basedataset.py`
+    on main; the negative-id rule exists because OPV2V numbers its RSU -1.
+    """
+    names = sorted(name for name in os.listdir(scenario_dir)
+                   if os.path.isdir(os.path.join(scenario_dir, name)))
+    if not names:
+        return None
+    if names[0].startswith("-"):
+        names = names[1:] + names[:1]
+    return names[0] if names else None
+
+
+def labelled_gt_count(dataset_dir: str, class_name: str, gt_range) -> dict:
+    """How many labels of one class actually lie in the evaluation range.
+
+    THE EVALUATOR'S OWN `gt_count` IS NOT THIS NUMBER. It comes from a
+    visibility-subset block that only counts objects some prediction landed on,
+    so it rises and falls with how many boxes the detector fires: on one MIRC
+    split it read 476, 620, 728 and 757 for the same two chairs, and even
+    disagreed between two fusion modes of a single checkpoint (476 vs 485). A
+    denominator that moves with the model is not a denominator -- recall
+    computed against it is `matched / what-the-model-covered`, which flatters
+    every model and cannot be compared across models at all.
+
+    So count the labels instead. Each frame's yaml holds `vehicles` in WORLD
+    coordinates plus the ego's `lidar_pose`; OpenCOOD scores in the ego lidar
+    frame and gates on `gt_range`, so do both here. Only the ego's yaml is read,
+    because that is the frame the evaluation happens in.
+
+    Returns a dict rather than an int so the caller can report the frame count
+    and the per-scenario split without walking the tree twice.
+    """
+    import numpy as np
+    lo = np.asarray([float(v) for v in gt_range[:3]], dtype=np.float64)
+    hi = np.asarray([float(v) for v in gt_range[3:6]], dtype=np.float64)
+    total, frames, scenarios = 0, 0, {}
+    for scenario in sorted(os.listdir(dataset_dir)):
+        scenario_dir = os.path.join(dataset_dir, scenario)
+        if not os.path.isdir(scenario_dir):
+            continue
+        ego = ego_folder(scenario_dir)
+        if ego is None:
+            continue
+        here = 0
+        for path in sorted(glob.glob(os.path.join(scenario_dir, ego, "*.yaml"))):
+            with open(path) as handle:
+                frame = yaml.safe_load(handle) or {}
+            pose = frame.get("lidar_pose")
+            if pose is None:
+                continue
+            frames += 1
+            world_to_ego = np.linalg.inv(x_to_world(pose))
+            for entry in (frame.get("vehicles") or {}).values():
+                if not isinstance(entry, dict):
+                    continue
+                kind = entry.get("obj_type") or entry.get("class_name")
+                if kind is not None and str(kind) != class_name:
+                    continue
+                location = entry.get("location")
+                if location is None or len(location) < 3:
+                    continue
+                point = np.append(np.asarray(location[:3], dtype=np.float64), 1.0)
+                local = (world_to_ego @ point)[:3]
+                # Centre-in-range, the same gate OpenCOOD applies before scoring.
+                if bool(np.all(local >= lo) and np.all(local <= hi)):
+                    here += 1
+        scenarios[scenario] = here
+        total += here
+    return {"gt_labelled": total, "frames": frames, "per_scenario": scenarios}
+
+
+def eval_range(model_dir: str):
+    """The range this checkpoint scores in, from its own config.
+
+    `postprocess.gt_range` is what the evaluator gates ground truth on; it falls
+    back to `cav_lidar_range`, which is the same list in every config seen so far.
+    Returns None when the config cannot be read, so the caller degrades to
+    reporting no corrected denominator rather than inventing one.
+    """
+    path = os.path.join(model_dir, "config.yaml")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as handle:
+            hypes = yaml.safe_load(handle) or {}
+    except Exception:
+        return None
+    found = ((hypes.get("postprocess") or {}).get("gt_range")
+             or hypes.get("cav_lidar_range"))
+    if isinstance(found, (list, tuple)) and len(found) >= 6:
+        return [float(v) for v in found[:6]]
+    return None
+
+
 def class_metrics(found: dict, class_name: str) -> dict:
     """Everything the unified summary says about one class.
 
@@ -101,7 +222,10 @@ def class_metrics(found: dict, class_name: str) -> dict:
             if isinstance(value, list):
                 stack.extend(v for v in value if isinstance(v, dict))
     if best:
-        for key, field in (("gt_count", "gt"), ("matched_tp_0.5m", "matched_0.5m"),
+        # "gt_covered", not "gt": this block counts only the objects a
+        # prediction landed on, so it moves with the detector. The honest
+        # denominator comes from labelled_gt_count().
+        for key, field in (("gt_count", "gt_covered"), ("matched_tp_0.5m", "matched_0.5m"),
                            ("recall@0.3", "recall30"), ("recall@0.5", "recall50"),
                            ("ATE_mean", "ate"), ("ASE_mean", "ase")):
             if best.get(key) is not None:
@@ -109,7 +233,7 @@ def class_metrics(found: dict, class_name: str) -> dict:
     return out
 
 
-def run_one(args, model_dir: str, fusion: str, video: bool):
+def run_one(args, model_dir: str, fusion: str, video: bool, labelled=None):
     command = [
         sys.executable, "opencood/tools/inference_isaac.py",
         "--model_dir", model_dir,
@@ -157,13 +281,50 @@ def run_one(args, model_dir: str, fusion: str, video: bool):
     record = {"model_dir": model_dir, "fusion": fusion, "eval_yaml": path,
               "eval_class": args.eval_class, "runtime_s": round(elapsed, 1)}
     record.update(metrics)
-    print("  %s AP@0.3/0.5/0.7 = %.3f / %.3f / %.3f | recall@0.3 %.3f | "
-          "ATE %.3f m ASE %.3f | gt %d (%.0fs)"
+    record.update(corrected_recall(metrics, labelled))
+    print("  %s AP@0.3/0.5/0.7 = %.3f / %.3f / %.3f | recall@0.3 %s | "
+          "ATE %.3f m ASE %.3f | gt %s (%.0fs)"
           % (args.eval_class, record.get("ap30", 0.0), record.get("ap50", 0.0),
-             record.get("ap70", 0.0), record.get("recall30", 0.0),
+             record.get("ap70", 0.0), _recall_text(record),
              record.get("ate", 0.0), record.get("ase", 0.0),
-             int(record.get("gt", 0)), elapsed))
+             _gt_text(record), elapsed))
     return record
+
+
+def corrected_recall(metrics: dict, labelled) -> dict:
+    """Recall against the labels, recovered from recall against coverage.
+
+    The evaluator reports `recall@k = matched@k / gt_covered`. Multiplying back
+    by `gt_covered` recovers the match count, which divided by the labelled
+    total is the recall a reader assumes they are being given. Both are kept:
+    the corrected number is the one to report, the raw one shows how much of
+    the split each model actually engaged with.
+    """
+    if not labelled or not labelled.get("gt_labelled"):
+        return {}
+    total = float(labelled["gt_labelled"])
+    covered = metrics.get("gt_covered")
+    out = {"gt_labelled": int(total),
+           "coverage": round(covered / total, 4) if covered else None}
+    if not covered:
+        return out
+    for key in ("recall30", "recall50"):
+        if metrics.get(key) is not None:
+            out[key + "_true"] = round(metrics[key] * covered / total, 4)
+    return out
+
+
+def _recall_text(record: dict) -> str:
+    if record.get("recall30_true") is not None:
+        return "%.3f (raw %.3f)" % (record["recall30_true"], record.get("recall30", 0.0))
+    return "%.3f" % record.get("recall30", 0.0)
+
+
+def _gt_text(record: dict) -> str:
+    if record.get("gt_labelled"):
+        return "%d labelled, %d covered" % (record["gt_labelled"],
+                                            int(record.get("gt_covered") or 0))
+    return "%d covered" % int(record.get("gt_covered") or 0)
 
 
 def summarise(records, methods, scene):
@@ -179,7 +340,8 @@ def summarise(records, methods, scene):
                    in os.path.basename(r["model_dir"])]
             entry = {"seeds": len(got)}
             for key in ("ap30", "ap50", "ap70", "recall30", "recall50",
-                        "ate", "ase", "gt", "matched_0.5m"):
+                        "recall30_true", "recall50_true", "coverage",
+                        "ate", "ase", "gt_covered", "gt_labelled", "matched_0.5m"):
                 values = [r[key] for r in got if key in r]
                 if values:
                     entry[key] = {"mean": round(sum(values) / len(values), 4),
@@ -192,21 +354,26 @@ def summarise(records, methods, scene):
 
 def markdown(rows):
     out = ["| method | seeds | AP@0.3 fused | AP@0.5 fused | AP@0.5 ego-only | lift | "
-           "recall@0.3 | ATE m | ASE |",
-           "|---|---|---|---|---|---|---|---|---|"]
+           "recall@0.3 | coverage | ATE m | ASE |",
+           "|---|---|---|---|---|---|---|---|---|---|"]
     for row in rows:
         fused, alone = row.get("intermediate", {}), row.get("no", {})
         if not fused.get("ap50"):
-            out.append("| %s | — | — | — | — | — | — | — | — |" % row["method"])
+            out.append("| %s | — | — | — | — | — | — | — | — | — |" % row["method"])
             continue
         floor = alone.get("ap50", {}).get("mean")
         lift = "" if floor is None else "%+.3f" % (fused["ap50"]["mean"] - floor)
-        out.append("| %s | %d | %.3f | %.3f (%.3f-%.3f) | %s | %s | %.3f | %.3f | %.3f |"
+        # recall30_true when the labelled denominator was available, because the
+        # raw one is a fraction of what the model itself covered.
+        recall = fused.get("recall30_true") or fused.get("recall30", {})
+        coverage = fused.get("coverage", {}).get("mean")
+        out.append("| %s | %d | %.3f | %.3f (%.3f-%.3f) | %s | %s | %.3f | %s | %.3f | %.3f |"
                    % (row["method"], fused["seeds"],
                       fused.get("ap30", {}).get("mean", 0.0),
                       fused["ap50"]["mean"], fused["ap50"]["min"], fused["ap50"]["max"],
                       "—" if floor is None else "%.3f" % floor, lift or "—",
-                      fused.get("recall30", {}).get("mean", 0.0),
+                      recall.get("mean", 0.0),
+                      "—" if coverage is None else "%.2f" % coverage,
                       fused.get("ate", {}).get("mean", 0.0),
                       fused.get("ase", {}).get("mean", 0.0)))
     return "\n".join(out)
@@ -295,9 +462,23 @@ def main() -> int:
         return 2
     print("\n%d run(s) planned\n" % len(plan))
 
+    # One honest denominator for the whole sweep. Counted once from the labels,
+    # in the range the checkpoints score in, and reused for every run -- the
+    # number of chairs in the split does not depend on which model is looking.
+    labelled = None
+    gt_range = eval_range(plan[0][0])
+    if gt_range is None:
+        print("! no gt_range in %s/config.yaml — reporting the evaluator's own "
+              "counts uncorrected" % os.path.basename(plan[0][0]))
+    else:
+        labelled = labelled_gt_count(args.dataset, args.eval_class, gt_range)
+        print("%d %s label(s) inside %s across %d ego frame(s)\n"
+              % (labelled["gt_labelled"], args.eval_class,
+                 [round(v, 1) for v in gt_range], labelled["frames"]))
+
     records = []
     for model_dir, fusion, video in plan:
-        record = run_one(args, model_dir, fusion, video)
+        record = run_one(args, model_dir, fusion, video, labelled)
         if record is None:
             continue
         records.append(record)
