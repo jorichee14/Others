@@ -55,7 +55,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ros2opv2v.statics import (StaticsError, cluster_at, fit_box,      # noqa: E402
                                footprint_corners, ground_level,
-                               points_in_box, read_pcd_xyz)
+                               points_in_box, read_pcd_xyz, seed_report)
 from ros2opv2v.preview import Canvas, height_ramp                      # noqa: E402
 from ros2opv2v.geometry import x_to_world                              # noqa: E402
 from ros2opv2v.writers import read_pcd                                 # noqa: E402
@@ -496,6 +496,10 @@ def main() -> int:
     parser.add_argument("--radius", type=float, default=1.2,
                         help="how far around the seed to look for the object")
     parser.add_argument("--cluster-voxel", type=float, default=0.06)
+    parser.add_argument("--cluster-floor", type=float, default=0.15,
+                        help="ignore returns within this of the floor when clustering: "
+                             "a real floor is centimetres thick and connects every "
+                             "object standing on it to every other one")
     parser.add_argument("--no-ground-extend", action="store_true",
                         help="do NOT extend the box down to the floor (a LiDAR sees a "
                              "chair's seat, not its legs, so the default extends)")
@@ -656,10 +660,35 @@ def main() -> int:
         # bridges the gap, and then the box swallows the building. Gating the
         # height costs nothing: the object is below the cap by definition.
         ceiling_z = (ground_z + args.ceiling) if args.ceiling else None
+        look = seed_report(cloud, seed, ground_z, radius=args.radius)
+        print("\nat seed %s (%.2f m above the floor), within %.1f m:"
+              % ("%.3f,%.3f,%.3f" % tuple(seed), look["seed_height_m"], args.radius))
+        if not look["points"]:
+            print("  nothing at all — the seed is not in this cloud")
+            return 3
+        print("  %d points, nearest %.3f m from the seed, tallest %.2f m above the floor"
+              % (look["points"], look["nearest_m"], look["tallest_m"]))
+        for lo, hi, count in look["bands"]:
+            if count:
+                bar = "#" * min(40, 1 + count // max(1, look["points"] // 40))
+                print("    %4.2f-%-5s m %6d  %s"
+                      % (lo, "inf" if hi > 100 else "%.2f" % hi, count, bar))
+        # A seed picked in one cloud and clustered in another is otherwise silent:
+        # the fill finds the floor, the box comes back floor-shaped, and nothing
+        # says the object was never here.
+        standing = sum(c for lo, _hi, c in look["bands"] if lo >= args.cluster_floor)
+        if standing < 20:
+            print("  ! only %d returns stand more than %.2f m off the floor here."
+                  % (standing, args.cluster_floor))
+            print("    Nothing is at this seed IN THIS FILE. If the coordinates came "
+                  "from a viewer,\n    check it was this same .pcd — a seed read off "
+                  "another cloud lands on bare floor.")
+            return 3
         try:
             cluster, cinfo = cluster_at(cloud, seed, radius=args.radius,
                                         voxel=args.cluster_voxel,
-                                        z_min=ground_z + 0.03, z_max=ceiling_z)
+                                        z_min=ground_z + args.cluster_floor,
+                                        z_max=ceiling_z)
         except StaticsError as exc:
             print("\n! %s" % exc)
             return 3
@@ -694,6 +723,10 @@ def main() -> int:
                   "%.2f) or --cluster-voxel (now %.2f)."
                   % (max(length, width), args.max_footprint, args.radius,
                      args.cluster_voxel))
+        if height < 0.25:
+            print("  ! %.2f m tall: that is a slab on the floor, not an object. The "
+                  "cluster ran\n    across the ground plane — raise --cluster-floor "
+                  "(now %.2f)." % (height, args.cluster_floor))
         if height > args.ceiling:
             print("  ! %.2f m tall: something overhead is in the cluster. "
                   "Lower --ceiling (now %.2f)." % (height, args.ceiling))

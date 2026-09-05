@@ -2274,6 +2274,68 @@ def test_seeding_a_chair_under_a_ceiling_does_not_swallow_the_ceiling():
     assert info["points_in_cluster"] < len(cloud)
 
 
+
+def _chair_on_a_floor(rng, cx=0.0, cy=0.0, ground=-0.66, with_chair=True):
+    """A thick, noisy floor — real floors are centimetres deep — and optionally a
+    chair standing on it."""
+    n = 40000
+    parts = [np.column_stack([cx + rng.uniform(-2, 2, n), cy + rng.uniform(-2, 2, n),
+                              ground + rng.uniform(0.0, 0.06, n)])]
+    if with_chair:
+        m = 4000
+        parts.append(np.column_stack([cx + rng.uniform(-0.25, 0.25, m),
+                                      cy + rng.uniform(-0.22, 0.22, m),
+                                      rng.uniform(ground, ground + 0.90, m)]))
+    return np.vstack(parts)
+
+
+def test_clustering_does_not_spread_across_a_thick_floor():
+    """A floor is not a plane, it is a slab centimetres deep with returns
+    throughout. Gate the cluster only 3 cm above the ground and the chair's legs
+    connect it to the whole floor, and the fitted box is the radius, 2.4 m
+    across and 10 cm tall."""
+    from ros2opv2v.statics import cluster_at, fit_box
+    ground = -0.66
+    cloud = _chair_on_a_floor(np.random.default_rng(29), ground=ground)
+    seed = np.array([0.0, 0.0, ground + 0.65])
+
+    grazing, _ = cluster_at(cloud, seed, radius=1.2, voxel=0.06, z_min=ground + 0.03)
+    flat = fit_box(grazing, ground_z=ground)
+    assert max(2 * flat["extent"][0], 2 * flat["extent"][1]) > 1.5, (
+        'the floor should swallow the cluster at a 3 cm gate')
+
+    gated, _ = cluster_at(cloud, seed, radius=1.2, voxel=0.06, z_min=ground + 0.15)
+    box = fit_box(gated, ground_z=ground)
+    assert max(2 * box["extent"][0], 2 * box["extent"][1]) < 0.7, box
+    assert 0.8 < 2 * box["extent"][2] < 1.0, box
+    assert abs(box["location"][0]) < 0.1 and abs(box["location"][1]) < 0.1, box
+
+
+def test_seed_report_says_when_the_object_is_not_in_this_cloud():
+    """The failure that produced a floor-shaped box: a seed read off one cloud
+    and clustered in another. The height profile at the seed shows it — an empty
+    column above the floor means the object is not in this file, and no amount
+    of tuning will fit a box to it."""
+    from ros2opv2v.statics import seed_report
+    ground = -0.66
+    rng = np.random.default_rng(31)
+    seed = np.array([0.0, 0.0, ground + 0.65])
+
+    here = seed_report(_chair_on_a_floor(rng, ground=ground), seed, ground)
+    standing = sum(c for lo, _hi, c in here["bands"] if lo >= 0.15)
+    assert standing > 500, here
+    assert here["tallest_m"] > 0.8
+    assert here["nearest_m"] < 0.1
+
+    missing = seed_report(_chair_on_a_floor(rng, ground=ground, with_chair=False),
+                          seed, ground)
+    assert missing["points"] > 0, 'the floor is still there'
+    assert sum(c for lo, _hi, c in missing["bands"] if lo >= 0.15) == 0, missing
+    assert missing["tallest_m"] < 0.15
+    assert missing["nearest_m"] > 0.5, 'the nearest return is a floor point below'
+    assert missing["seed_height_m"] == 0.65
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

@@ -192,6 +192,30 @@ def ground_level(points: np.ndarray, bin_m: float = 0.05,
 
 
 # ------------------------------------------------------------------ clustering
+def seed_report(points: np.ndarray, seed: np.ndarray, ground_z: float,
+                radius: float = 1.2) -> dict:
+    """What is actually standing at a seed, before anything is fitted to it.
+
+    A seed read off one cloud and clustered in another is silent: the fill finds
+    the floor, the box comes back floor-shaped, and nothing says the object was
+    never there. So look first — how far the nearest return is, and how the
+    returns near the seed are distributed in height. An empty column means the
+    object is not in THIS file, which no amount of tuning will fix.
+    """
+    seed = np.asarray(seed, dtype=np.float64).reshape(-1)
+    near = points[np.linalg.norm(points[:, :2] - seed[:2], axis=1) <= radius]
+    if not len(near):
+        return {"points": 0, "nearest_m": None, "bands": [], "tallest_m": None}
+    nearest = float(np.linalg.norm(near - seed, axis=1).min())
+    above = near[:, 2] - ground_z
+    edges = [0.0, 0.15, 0.30, 0.60, 0.90, 1.30, 2.00, 1e9]
+    bands = [(edges[i], edges[i + 1], int(((above >= edges[i]) & (above < edges[i + 1])).sum()))
+             for i in range(len(edges) - 1)]
+    return {"points": int(len(near)), "nearest_m": round(nearest, 3),
+            "bands": bands, "tallest_m": round(float(above.max()), 3),
+            "seed_height_m": round(float(seed[2] - ground_z), 3)}
+
+
 def cluster_at(points: np.ndarray, seed: np.ndarray, radius: float = 1.2,
                voxel: float = 0.06, z_min: Optional[float] = None,
                z_max: Optional[float] = None) -> Tuple[np.ndarray, dict]:
