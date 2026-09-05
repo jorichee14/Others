@@ -344,6 +344,16 @@ def fit_box(cluster: np.ndarray, ground_z: Optional[float] = None,
     }
 
 
+def footprint_corners(box: dict) -> np.ndarray:
+    """The four XY corners of a box's footprint, in cyclic order, for drawing.
+
+    box_corners returns all eight in sign order, where consecutive entries share
+    an x face — walking those as a polygon draws a bow tie, not a rectangle.
+    """
+    corners = box_corners(box)
+    return corners[[0, 2, 6, 4], :2]
+
+
 def box_corners(box: dict) -> np.ndarray:
     """The eight corners of a labelled box, map frame — for drawing and for tests."""
     yaw = math.radians(box["angle"][1])

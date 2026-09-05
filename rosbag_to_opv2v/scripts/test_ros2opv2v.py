@@ -2221,6 +2221,59 @@ def test_render_map_accepts_dataset_poses_as_they_are_loaded():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+
+def test_footprint_corners_walk_the_rectangle_not_a_bow_tie():
+    """box_corners is in sign order, where consecutive entries share an x face.
+    Walked as a polygon that draws two crossing triangles, so the footprint has
+    to be reordered before anything draws it."""
+    from ros2opv2v.statics import footprint_corners
+    box = {"location": [1.0, 2.0, 0.0], "extent": [0.5, 0.25, 0.45],
+           "angle": [0.0, 30.0, 0.0]}
+    corners = footprint_corners(box)
+    assert corners.shape == (4, 2)
+    sides = [float(np.linalg.norm(corners[(i + 1) % 4] - corners[i])) for i in range(4)]
+    assert np.allclose(sorted(sides), [0.5, 0.5, 1.0, 1.0]), sides
+    # opposite corners are the diagonals, so the walk is cyclic and not crossed
+    diag = float(np.linalg.norm(corners[2] - corners[0]))
+    assert abs(diag - math.hypot(1.0, 0.5)) < 1e-9, diag
+    # and the polygon is centred on the box
+    assert np.allclose(corners.mean(axis=0), [1.0, 2.0])
+
+
+def test_seeding_a_chair_under_a_ceiling_does_not_swallow_the_ceiling():
+    """A chair and the ceiling above it are separated by empty air, which the
+    flood fill cannot cross — until anything vertical beside the chair bridges
+    it, and then the cluster is the whole roof. Gating the cluster height keeps
+    the box on the furniture."""
+    from ros2opv2v.statics import cluster_at, fit_box
+    rng = np.random.default_rng(23)
+    ground = -0.66
+    chair = np.column_stack([rng.uniform(-0.25, 0.25, 3000),
+                             rng.uniform(-0.25, 0.25, 3000),
+                             rng.uniform(ground, ground + 0.90, 3000)])
+    pole = np.column_stack([rng.uniform(0.24, 0.30, 4000), rng.uniform(-0.03, 0.03, 4000),
+                            rng.uniform(ground, ground + 2.60, 4000)])
+    ceiling = np.column_stack([rng.uniform(-1.0, 1.0, 12000),
+                               rng.uniform(-1.0, 1.0, 12000),
+                               np.full(12000, ground + 2.60) + rng.normal(0, 0.01, 12000)])
+    cloud = np.vstack([chair, pole, ceiling])
+    seed = np.array([0.0, 0.0, ground + 0.5])
+
+    def footprint(box):
+        return max(2 * box["extent"][0], 2 * box["extent"][1])
+
+    loose, _ = cluster_at(cloud, seed, radius=1.2, voxel=0.06, z_min=ground + 0.03)
+    assert footprint(fit_box(loose, ground_z=ground)) > 1.5, (
+        'the pole should carry the cluster up into the ceiling')
+
+    gated, info = cluster_at(cloud, seed, radius=1.2, voxel=0.06,
+                             z_min=ground + 0.03, z_max=ground + 2.0)
+    box = fit_box(gated, ground_z=ground)
+    assert footprint(box) < 0.7, box
+    assert abs(box["location"][0]) < 0.35 and abs(box["location"][1]) < 0.35, box
+    assert info["points_in_cluster"] < len(cloud)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

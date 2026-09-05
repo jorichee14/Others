@@ -54,7 +54,8 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ros2opv2v.statics import (StaticsError, cluster_at, fit_box,      # noqa: E402
-                               ground_level, points_in_box, read_pcd_xyz)
+                               footprint_corners, ground_level,
+                               points_in_box, read_pcd_xyz)
 from ros2opv2v.preview import Canvas, height_ramp                      # noqa: E402
 from ros2opv2v.geometry import x_to_world                              # noqa: E402
 from ros2opv2v.writers import read_pcd                                 # noqa: E402
@@ -359,8 +360,29 @@ def propose(cloud: np.ndarray, ground_z: float, args,
     return proposals[:args.max_proposals]
 
 
+def render_seeds(path: str, cloud: np.ndarray, ground_z: float, labels: List[dict],
+                 args, poses: Optional[Dict[str, List[dict]]] = None) -> None:
+    """Draw the fitted footprints on the floor around them, so a fit can be seen.
+
+    A box printed as nine numbers is not checkable by eye. The same box drawn on
+    the map, with the returns it was fitted to underneath it, is: either the
+    outline sits on an object-shaped patch of floor or it obviously does not.
+    """
+    if not labels:
+        return
+    centres = np.array([label["location"][:2] for label in labels], dtype=np.float64)
+    pad = max(3.0, 2.0 * args.radius)
+    roi = np.r_[centres.min(axis=0) - pad, centres.max(axis=0) + pad]
+    hmap = HeightMap(cloud, ground_z, args.cell, roi, ceiling=args.ceiling)
+    if hmap.empty():
+        print("\n  ! nothing to draw around those seeds")
+        return
+    render_map(path, hmap, [], args, poses, labels=labels)
+
+
 def render_map(path: str, hmap: "HeightMap", rows: List[dict], args,
-               poses: Optional[Dict[str, List[dict]]] = None) -> None:
+               poses: Optional[Dict[str, List[dict]]] = None,
+               labels: Optional[List[dict]] = None) -> None:
     """Draw the searched area from above with the proposals numbered on it.
 
     The list can only describe a blob; this shows its shape, and the shape is how
@@ -391,13 +413,24 @@ def render_map(path: str, hmap: "HeightMap", rows: List[dict], args,
         canvas.text(ex[2] + 2 * hmap.cell, ex[3], str(index + 1), colour,
                     size=max(1, args.map_scale // 2))
 
+    for label in (labels or []):
+        corners = footprint_corners(label)
+        canvas.polygon(corners, (255, 40, 40))
+        canvas.text(float(corners[:, 0].max()) + 2 * hmap.cell,
+                    float(corners[:, 1].max()), str(label["id"]), (255, 40, 40),
+                    size=max(1, args.map_scale // 2))
+
     canvas.save(path)
     print("\n  wrote %s  (%d x %d px, %.2f m per cell)"
           % (path, canvas.cols, canvas.rows, hmap.cell))
     print("    blue-green-orange = height above the floor, dark grey = taller than "
           "%.2f m (structure)," % args.max_height)
-    print("    white dots = where the agents drove, red boxes = open on all sides, "
-          "purple = touching structure.")
+    if rows:
+        print("    white dots = where the agents drove, red boxes = open on all sides, "
+              "purple = touching structure.")
+    else:
+        print("    white dots = where the agents drove, red outlines = the fitted "
+              "boxes, numbered by id.")
 
 
 # -------------------------------------------------------------------- checks
@@ -454,9 +487,10 @@ def main() -> int:
                              "frame and to check labels against the real clouds")
     parser.add_argument("--out", default=None, help="labels json to write/append to")
     parser.add_argument("--labels", default=None, help="labels json to read for --check/--list")
-    parser.add_argument("--seed", default=None, metavar="X,Y[,Z]",
+    parser.add_argument("--seed", action="append", default=None, metavar="X,Y[,Z]",
                         help="fit a box at this map position")
-    parser.add_argument("--name", default=None, help="name for the fitted object")
+    parser.add_argument("--name", action="append", default=None,
+                        help="name for the fitted object; repeat once per --seed")
     parser.add_argument("--id", type=int, default=None,
                         help="object id (must stay below %d)" % RESERVED_MIN)
     parser.add_argument("--radius", type=float, default=1.2,
@@ -599,44 +633,76 @@ def main() -> int:
         print("    --seed <x,y> --name chair_1 --out labels/coop2_statics.json")
 
     seeds: List[np.ndarray] = []
-    if args.seed:
-        parts = [float(v) for v in args.seed.split(",")]
+    for text in (args.seed or []):
+        parts = [float(v) for v in text.replace(";", ",").split(",")]
         if len(parts) == 2:
             parts.append(ground_z + 0.5)
+        if len(parts) != 3:
+            print("\n! --seed wants X,Y or X,Y,Z — got %r" % text)
+            return 2
         seeds.append(np.array(parts, dtype=np.float64))
     if args.interactive:
         seeds.extend(pick_interactive(cloud))
+    names = list(args.name or [])
+    if names and len(names) not in (1, len(seeds)):
+        print("\n! %d --name for %d --seed: give one name each, or none"
+              % (len(names), len(seeds)))
+        return 2
 
-    for seed in seeds:
+    for index, seed in enumerate(seeds):
+        # The same cap the search uses. A chair standing under a ceiling, a beam
+        # or a shelf is only separated from it by empty air, and empty air is all
+        # the flood fill needs — until a pole, a cable tray or the wall behind it
+        # bridges the gap, and then the box swallows the building. Gating the
+        # height costs nothing: the object is below the cap by definition.
+        ceiling_z = (ground_z + args.ceiling) if args.ceiling else None
         try:
             cluster, cinfo = cluster_at(cloud, seed, radius=args.radius,
                                         voxel=args.cluster_voxel,
-                                        z_min=ground_z + 0.03)
+                                        z_min=ground_z + 0.03, z_max=ceiling_z)
         except StaticsError as exc:
             print("\n! %s" % exc)
             return 3
         box = fit_box(cluster, ground_z=ground_z,
                       sit_on_ground=not args.no_ground_extend)
         used = {label["id"] for label in labels}
-        box["id"] = args.id if args.id is not None else next(
-            i for i in range(1, RESERVED_MIN) if i not in used)
-        box["name"] = args.name or ("object_%d" % box["id"])
+        box["id"] = (args.id + index if args.id is not None else next(
+            i for i in range(1, RESERVED_MIN) if i not in used))
+        box["name"] = (names[index] if len(names) == len(seeds) else
+                       "%s_%d" % (names[0], index + 1) if names else
+                       "object_%d" % box["id"])
         box["source"] = {"pcd": os.path.abspath(args.pcd),
                          "seed": [round(float(v), 3) for v in seed],
-                         "cluster": cinfo, "ground_z": round(ground_z, 4)}
+                         "cluster": cinfo, "ground_z": round(ground_z, 4),
+                         "ceiling": args.ceiling}
+        width, length, height = (2 * box["extent"][1], 2 * box["extent"][0],
+                                 2 * box["extent"][2])
         print("\nfitted %s (id %d)" % (box["name"], box["id"]))
         print("  centre   %s   (map frame)" % box["location"])
         print("  extent   %s   = %.2f x %.2f x %.2f m"
-              % (box["extent"], 2 * box["extent"][0], 2 * box["extent"][1],
-                 2 * box["extent"][2]))
+              % (box["extent"], length, width, height))
         print("  yaw      %.1f deg" % box["angle"][1])
-        print("  fitted from %d points; %s"
-              % (box["fit"]["points"],
+        print("  fitted from %d points of %d within %.1f m; %s"
+              % (box["fit"]["points"], cinfo["points_in_radius"], args.radius,
                  "extended down to the floor" if box["fit"]["extended_to_ground"]
                  else "not extended (points already reach the floor)"))
+        # A merge with the wall or the floor shows up as a box that is not
+        # chair-shaped, and it shows up here rather than in the trained model.
+        if max(length, width) > args.max_footprint:
+            print("  ! %.2f m across, wider than --max-footprint %.2f: the cluster "
+                  "probably ran\n    into a wall or the floor. Shrink --radius (now "
+                  "%.2f) or --cluster-voxel (now %.2f)."
+                  % (max(length, width), args.max_footprint, args.radius,
+                     args.cluster_voxel))
+        if height > args.ceiling:
+            print("  ! %.2f m tall: something overhead is in the cluster. "
+                  "Lower --ceiling (now %.2f)." % (height, args.ceiling))
         if box["id"] >= RESERVED_MIN:
             print("  ! id >= %d collides with agent-derived boxes" % RESERVED_MIN)
         labels = [label for label in labels if label["id"] != box["id"]] + [box]
+
+    if seeds and args.map_image:
+        render_seeds(args.map_image, cloud, ground_z, labels, args, poses)
 
     if args.out and seeds:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

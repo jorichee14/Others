@@ -96,6 +96,21 @@ class Canvas(object):
         self.img[r0:r1 + 1, c0] = colour
         self.img[r0:r1 + 1, c1] = colour
 
+    def line(self, x0: float, y0: float, x1: float, y1: float, colour) -> None:
+        c0, r0 = self.px(x0, y0)
+        c1, r1 = self.px(x1, y1)
+        steps = max(abs(c1 - c0), abs(r1 - r0), 1) + 1
+        cols = np.linspace(c0, c1, steps).round().astype(int)
+        rows = np.linspace(r0, r1, steps).round().astype(int)
+        inside = ((cols >= 0) & (cols < self.cols) & (rows >= 0) & (rows < self.rows))
+        self.img[rows[inside], cols[inside]] = colour
+
+    def polygon(self, corners, colour) -> None:
+        corners = np.asarray(corners, dtype=np.float64)
+        for i in range(len(corners)):
+            a, b = corners[i], corners[(i + 1) % len(corners)]
+            self.line(a[0], a[1], b[0], b[1], colour)
+
     def text(self, x: float, y: float, label: str, colour, size: int = 2) -> None:
         col, row = self.px(x, y)
         for char in str(label):
