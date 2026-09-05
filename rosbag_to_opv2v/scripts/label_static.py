@@ -159,59 +159,90 @@ def propose(cloud: np.ndarray, ground_z: float, args,
             roi: Optional[np.ndarray] = None) -> List[dict]:
     """Candidate free-standing objects, so a seed can be read off rather than hunted.
 
-    Deliberately crude — everything in a height band above the floor, voxelised,
-    connected, filtered by footprint. It is not a detector and does not need to
-    be: it turns "find the chairs in a 16 m cloud" into "pick two rows from a
-    short list", and the operator decides which are real.
+    Not a detector, and it does not need to be — it turns "find two chairs in a
+    33 x 54 m cloud" into "pick two rows from a short list".
+
+    It works on a HEIGHT MAP rather than on the points directly, because
+    clustering the points in a height band does not separate a chair from the
+    wall behind it: connected components merge them, and the list fills up with
+    wall segments whose only common feature is that they are big. Per XY cell the
+    tallest point above the floor is what matters, and then a free-standing object
+    is a compact patch of cells of the right height surrounded by floor. A wall is
+    a patch of cells that are TALLER than any chair, so it never enters the
+    candidate mask at all.
     """
-    z_lo = ground_z + args.min_height
-    z_hi = ground_z + args.max_height
-    keep = (cloud[:, 2] > z_lo) & (cloud[:, 2] < z_hi)
+    cell = args.cell
+    above = cloud[:, 2] - ground_z
+    keep = above > 0.05
     if roi is not None:
         keep &= ((cloud[:, 0] >= roi[0]) & (cloud[:, 0] <= roi[2])
                  & (cloud[:, 1] >= roi[1]) & (cloud[:, 1] <= roi[3]))
-    band = cloud[keep]
-    if len(band) < 50:
-        print("no points in the %.2f..%.2f m band above the floor" % (args.min_height,
-                                                                     args.max_height))
+    pts, hgt = cloud[keep], above[keep]
+    if len(pts) < 200:
+        print("  only %d points above the floor in that area" % len(pts))
         return []
-    voxel = args.voxel
-    grid = np.floor(band[:, :2] / voxel).astype(np.int64)
-    grid -= grid.min(axis=0)
-    keys = (grid[:, 0].astype(np.int64) << 21) | grid[:, 1]
-    unique, inverse, counts = np.unique(keys, return_inverse=True, return_counts=True)
-    coords = np.stack([(unique >> 21) & 0x1FFFFF, unique & 0x1FFFFF], axis=1)
-    lookup = {int(k): i for i, k in enumerate(unique)}
 
-    seen = np.zeros(len(unique), dtype=bool)
-    proposals = []
-    for start in np.argsort(-counts):
-        if seen[start]:
+    grid = np.floor(pts[:, :2] / cell).astype(np.int64)
+    origin = grid.min(axis=0)
+    grid -= origin
+    width, depth = grid[:, 0].max() + 1, grid[:, 1].max() + 1
+    flat = grid[:, 0] * depth + grid[:, 1]
+
+    height_map = np.zeros(width * depth, dtype=np.float64)
+    np.maximum.at(height_map, flat, hgt)
+    counts = np.bincount(flat, minlength=width * depth)
+
+    # A cell belongs to a candidate object when its TALLEST point is inside the
+    # object height band. A wall's cells are taller than max_height, so they are
+    # excluded here rather than having to be filtered out of a merged cluster
+    # afterwards.
+    candidate = ((height_map >= args.min_height) & (height_map <= args.max_height)
+                 & (counts >= 2))
+    tall = height_map > args.max_height
+
+    proposals, seen = [], np.zeros(width * depth, dtype=bool)
+    order = np.argsort(-np.where(candidate, counts, 0))
+    for start_cell in order:
+        if not candidate[start_cell] or seen[start_cell]:
             continue
-        stack, members = [int(start)], []
-        seen[start] = True
+        if counts[start_cell] == 0:
+            break
+        stack, members = [int(start_cell)], []
+        seen[start_cell] = True
+        touches_tall = False
         while stack:
             current = stack.pop()
             members.append(current)
-            cx, cy = coords[current]
+            cx, cy = divmod(current, depth)
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
-                    nxt = lookup.get(int(((cx + dx) << 21) | (cy + dy)))
-                    if nxt is not None and not seen[nxt]:
+                    nx, ny = cx + dx, cy + dy
+                    if not (0 <= nx < width and 0 <= ny < depth):
+                        continue
+                    nxt = nx * depth + ny
+                    if tall[nxt]:
+                        touches_tall = True
+                    elif candidate[nxt] and not seen[nxt]:
                         seen[nxt] = True
                         stack.append(nxt)
-        mask = np.isin(inverse, members)
-        blob = band[mask]
-        if len(blob) < args.min_points:
+        member_arr = np.array(members)
+        n_points = int(counts[member_arr].sum())
+        if n_points < args.min_points:
             continue
-        span = blob[:, :2].max(axis=0) - blob[:, :2].min(axis=0)
+        cells_xy = np.stack(np.divmod(member_arr, depth), axis=1) + origin
+        lo = cells_xy.min(axis=0) * cell
+        hi = (cells_xy.max(axis=0) + 1) * cell
+        span = hi - lo
         if max(span) > args.max_footprint or max(span) < args.min_footprint:
             continue
         proposals.append({
-            "centre": [round(float(v), 3) for v in blob[:, :2].mean(axis=0)],
-            "points": int(len(blob)),
+            "centre": [round(float(0.5 * (lo[0] + hi[0])), 3),
+                       round(float(0.5 * (lo[1] + hi[1])), 3)],
+            "points": n_points,
             "footprint_m": [round(float(span[0]), 2), round(float(span[1]), 2)],
-            "top_m": round(float(blob[:, 2].max() - ground_z), 2),
+            "top_m": round(float(height_map[member_arr].max()), 2),
+            "cells": int(len(members)),
+            "against_structure": bool(touches_tall),
         })
     proposals.sort(key=lambda p: -p["points"])
     return proposals[:args.max_proposals]
@@ -290,9 +321,13 @@ def main() -> int:
     parser.add_argument("--check-margin", type=float, default=0.10)
     parser.add_argument("--interactive", action="store_true",
                         help="pick seeds by shift-click in an Open3D window")
-    parser.add_argument("--min-height", type=float, default=0.15,
-                        help="proposals: metres above the floor to start looking")
-    parser.add_argument("--max-height", type=float, default=1.60)
+    parser.add_argument("--min-height", type=float, default=0.30,
+                        help="proposals: an object's top must be at least this far "
+                             "above the floor")
+    parser.add_argument("--max-height", type=float, default=1.30,
+                        help="proposals: and no higher than this — anything taller is "
+                             "wall, door or column, and is excluded rather than "
+                             "clustered")
     parser.add_argument("--min-footprint", type=float, default=0.15)
     parser.add_argument("--max-footprint", type=float, default=1.50)
     parser.add_argument("--min-points", type=int, default=80)
@@ -302,7 +337,8 @@ def main() -> int:
                              "(the map usually covers far more building than one run)")
     parser.add_argument("--whole-map", action="store_true",
                         help="propose over the entire cloud, not just where the agents were")
-    parser.add_argument("--voxel", type=float, default=0.08)
+    parser.add_argument("--cell", type=float, default=0.10,
+                        help="proposals: height-map cell size")
     parser.add_argument("--max-points", type=int, default=4000000)
     args = parser.parse_args()
 
@@ -351,15 +387,18 @@ def main() -> int:
             print("\nsearching only where the agents were: x %.2f..%.2f  y %.2f..%.2f "
                   "(their path plus %.1f m). --whole-map searches the entire cloud."
                   % (roi[0], roi[2], roi[1], roi[3], args.roi_margin))
-        print("candidate free-standing objects between %.2f and %.2f m above the floor:"
+        print("candidate free-standing objects, top between %.2f and %.2f m above the "
+              "floor\n(anything taller is structure and is excluded, not clustered):"
               % (args.min_height, args.max_height))
         rows = propose(cloud, ground_z, args, roi)
         if not rows:
             print("  none — widen --min-footprint/--max-footprint or lower --min-points")
         for i, row in enumerate(rows):
-            print("  %2d. seed %-18s %5d pts  footprint %-12s top %.2f m above floor"
+            print("  %2d. seed %-16s %5d pts  footprint %-12s top %.2f m%s"
                   % (i + 1, "%.2f,%.2f" % tuple(row["centre"]), row["points"],
-                     "%.2f x %.2f" % tuple(row["footprint_m"]), row["top_m"]))
+                     "%.2f x %.2f" % tuple(row["footprint_m"]), row["top_m"],
+                     "   (against a wall or taller structure)"
+                     if row["against_structure"] else ""))
         print("\n  Pick the two chairs and fit them:")
         print("    --seed <x,y> --name chair_1 --out labels/coop2_statics.json")
 
