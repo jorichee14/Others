@@ -399,6 +399,9 @@ def test_ego_only_dir_zeroes_comm_range_and_keeps_everything_else():
         assert 'collections.OrderedDict' in text     # untouched
         assert os.path.islink(os.path.join(shadow, 'net_epoch15.pth'))
         assert rmi.eval_range(shadow) == [0.0, -11.2, -1.0, 22.4, 11.2, 3.0]
+        # inference runs with cwd = the InCoP root, so a relative path here
+        # resolves over there and the run dies on a missing config
+        assert os.path.isabs(shadow)
     finally:
         shutil.rmtree(src); shutil.rmtree(out)
 

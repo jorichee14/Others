@@ -76,7 +76,9 @@ def ego_only_model_dir(model_dir: str, out: str) -> str:
     fields nobody asked about.
     """
     name = os.path.basename(model_dir.rstrip("/"))
-    shadow = os.path.join(out, "ego_only", name)
+    # ABSOLUTE: inference runs with cwd set to the InCoP root, so a relative
+    # --model_dir would resolve over there and the run dies on a missing config.
+    shadow = os.path.abspath(os.path.join(out, "ego_only", name))
     os.makedirs(shadow, exist_ok=True)
     for path in glob.glob(os.path.join(model_dir, "net_epoch*.pth")):
         link = os.path.join(shadow, os.path.basename(path))
@@ -495,7 +497,7 @@ def main() -> int:
 
     args.incop_root = os.path.expanduser(args.incop_root)
     args.dataset = os.path.expanduser(args.dataset)
-    args.out = os.path.expanduser(args.out)
+    args.out = os.path.abspath(os.path.expanduser(args.out))
     if not os.path.isdir(args.dataset):
         print("no such dataset directory: %s" % args.dataset, file=sys.stderr)
         return 2
