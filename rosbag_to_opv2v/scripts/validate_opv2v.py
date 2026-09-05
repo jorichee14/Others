@@ -118,6 +118,21 @@ def check_scenario(scenario: str, findings: Findings, args) -> dict:
         findings.error(f"{name}: every agent id is negative — OpenCOOD would have "
                        f"no ego")
 
+    # OpenCOOD's basedataset takes the FIRST agent folder, in lexicographic order,
+    # as the ego — it does not read the `ego` flag we write. A roadside unit named
+    # "-1" sorts before "1" because '-' (0x2D) precedes '1' (0x31), so the RSU
+    # silently becomes the ego: fusion is then computed around a sensor that may
+    # not even reach the objects, and nothing errors.
+    declared = _declared_ego(scenario, agents, reference[0])
+    if declared is not None and agents[0] != declared:
+        findings.warn(
+            f"{name}: the yaml marks agent {declared} as ego, but {agents[0]} sorts "
+            f"first. OpenCOOD's basedataset treats the first agent folder as the ego "
+            f"and ignores the flag, so it would fuse around {agents[0]}. Either rename "
+            f"the folders so {declared} sorts first (RSU ids of 100+ instead of "
+            f"negatives), or confirm your OpenCOOD fork honours the `ego` key "
+            f"(V2XSet's does; vanilla OpenCOOD does not).")
+
     sample_keys = reference[::max(1, len(reference) // args.sample)][:args.sample]
     distances, box_counts, point_counts = [], [], defaultdict(list)
 
@@ -190,6 +205,20 @@ def check_scenario(scenario: str, findings: Findings, args) -> dict:
     return summary
 
 
+def _declared_ego(scenario: str, agents, key: str):
+    """The agent whose first frame carries `ego: true`, if any."""
+    for agent in agents:
+        path = os.path.join(scenario, agent, f"{key}.yaml")
+        try:
+            with open(path) as handle:
+                params = yaml.safe_load(handle) or {}
+        except OSError:
+            continue
+        if params.get("ego"):
+            return agent
+    return None
+
+
 def _read_cloud(path: str, use_open3d: bool) -> np.ndarray:
     if use_open3d:
         import open3d as o3d
@@ -215,16 +244,71 @@ def _boxes_in_range(vehicles: dict, lidar_pose, limits) -> int:
     return inside
 
 
-def check_with_opencood(root: str, findings: Findings) -> None:
-    """Instantiate OpenCOOD's own dataset over the tree — the definitive check."""
+def check_with_opencood(root: str, findings: Findings, config_path=None,
+                        samples: int = 3) -> None:
+    """Build OpenCOOD's own dataset over the tree and pull frames through it.
+
+    Every other check here re-implements what OpenCOOD is believed to do. This
+    one asks OpenCOOD, which is the only way to be sure — the loader's real
+    behaviour on ego selection, timestamp alignment, pose order and the pcd
+    reader is whatever the installed version does, not whatever its docs say.
+    """
     try:
         from opencood.data_utils.datasets.late_fusion_dataset import LateFusionDataset
         from opencood.hypes_yaml.yaml_utils import load_yaml as load_opencood_yaml
     except Exception as error:                          # noqa: BLE001
-        findings.warn(f"--with-opencood skipped: {error}")
+        findings.warn(f"--with-opencood skipped, OpenCOOD not importable here: {error}")
         return
-    findings.note("OpenCOOD import OK — point a model config's validate_dir at "
-                  f"{root} and run inference.py to exercise the full loader")
+
+    if not config_path:
+        findings.warn(
+            "--with-opencood needs --opencood-config pointing at the model hypes "
+            "yaml you intend to run (e.g. opencood/hypes_yaml/point_pillar_late_"
+            "fusion.yaml). Without it the preprocessor, anchors and lidar range "
+            "would be guesses, and a dataset that loads under guessed settings "
+            "proves nothing about the ones you will train with.")
+        return
+
+    try:
+        params = load_opencood_yaml(config_path)
+    except Exception as error:                          # noqa: BLE001
+        findings.error(f"--opencood-config {config_path} did not load: {error}")
+        return
+
+    # Point every directory key this version might read at OUR tree.
+    for key in ("root_dir", "validate_dir", "test_dir"):
+        params[key] = root
+
+    try:
+        dataset = LateFusionDataset(params, visualize=False, train=False)
+    except Exception as error:                          # noqa: BLE001
+        findings.error(f"OpenCOOD's LateFusionDataset refused this tree: "
+                       f"{type(error).__name__}: {error}")
+        return
+
+    count = len(dataset)
+    if not count:
+        findings.error("OpenCOOD built a dataset of length 0 over this tree — it "
+                       "found no usable frames")
+        return
+    findings.note(f"OpenCOOD LateFusionDataset built over {root}: {count} samples")
+
+    indices = sorted({0, count // 2, count - 1})[:max(1, samples)]
+    for index in indices:
+        try:
+            item = dataset[index]
+        except Exception as error:                      # noqa: BLE001
+            findings.error(f"OpenCOOD failed reading sample {index}: "
+                           f"{type(error).__name__}: {error}")
+            return
+        ego = item.get("ego", item) if isinstance(item, dict) else {}
+        gt = ego.get("object_bbx_mask")
+        if gt is not None and float(np.sum(np.asarray(gt))) == 0.0:
+            findings.warn(f"OpenCOOD sample {index} carries no GT boxes after its own "
+                          f"range filter — check the config's cav_lidar_range against "
+                          f"where the objects actually are")
+    findings.note(f"OpenCOOD read samples {indices} without error — the loader "
+                  f"accepts this dataset")
 
 
 def main() -> int:
@@ -238,6 +322,9 @@ def main() -> int:
                         help="read each sampled pcd with the built-in reader")
     parser.add_argument("--with-open3d", action="store_true",
                         help="read pcds through open3d, exactly as OpenCOOD does")
+    parser.add_argument("--opencood-config", default=None,
+                        help="OpenCOOD model hypes yaml to build the dataset with; "
+                             "its validate_dir is overridden to --root")
     parser.add_argument("--with-opencood", action="store_true",
                         help="also try importing OpenCOOD")
     parser.add_argument("--range", type=float, nargs=6, default=DEFAULT_RANGE,
@@ -265,7 +352,7 @@ def main() -> int:
               f"frames={summary['frames']}")
 
     if args.with_opencood:
-        check_with_opencood(root, findings)
+        check_with_opencood(root, findings, args.opencood_config)
 
     print(f"\ntotal frames: {total_frames}")
     for note in findings.notes:

@@ -2491,6 +2491,162 @@ def test_refitting_a_named_object_replaces_it_instead_of_duplicating():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+
+def _tiny_dataset(root, agents=('1', '2', '-1'), ego='1', frames=3):
+    """A minimal OPV2V tree, enough for the validator to read."""
+    from ros2opv2v.writers import write_pcd
+    scenario = os.path.join(root, 'scen')
+    for agent in agents:
+        folder = os.path.join(scenario, agent)
+        os.makedirs(folder)
+        for i in range(frames):
+            key = '%06d' % i
+            params = {
+                'ego': agent == ego,
+                'lidar_pose': [float(i), 0.0, 0.0, 0.0, 0.0, 0.0],
+                'ego_speed': 0.0,
+                'vehicles': {1: {'location': [3.0, -1.0, -0.2], 'center': [0, 0, 0],
+                                 'extent': [0.4, 0.37, 0.48], 'angle': [0.0, 158.2, 0.0]}},
+            }
+            with open(os.path.join(folder, key + '.yaml'), 'w') as handle:
+                yaml.safe_dump(params, handle)
+            pts = np.zeros((10, 4), dtype=np.float32)
+            pts[:, 0] = np.arange(10)
+            write_pcd(os.path.join(folder, key + '.pcd'), pts)
+    return scenario
+
+
+def test_validator_flags_an_rsu_that_would_be_read_as_the_ego():
+    """OpenCOOD's basedataset takes the first agent folder in lexicographic order
+    as the ego and does not read the `ego` flag. '-1' sorts before '1', so an RSU
+    named the OPV2V way silently becomes the ego and fusion is computed around a
+    sensor that may not reach the objects at all."""
+    import importlib
+    validate = importlib.import_module('validate_opv2v')
+
+    class Args:
+        sample = 3
+        read_pcd = False
+        with_open3d = False
+        range = None
+
+    tmp = tempfile.mkdtemp()
+    try:
+        root = os.path.join(tmp, 'test')
+        os.makedirs(root)
+        _tiny_dataset(root, agents=('1', '2', '-1'), ego='1')
+        findings = validate.Findings()
+        args = Args()
+        args.range = validate.DEFAULT_RANGE
+        validate.check_scenario(os.path.join(root, 'scen'), findings, args)
+        assert not findings.errors, findings.errors
+        assert any('sorts first' in w for w in findings.warnings), findings.warnings
+
+        # rename the RSU so the ego sorts first and the warning goes away
+        root2 = os.path.join(tmp, 'test2')
+        os.makedirs(root2)
+        _tiny_dataset(root2, agents=('1', '2', '100'), ego='1')
+        clean = validate.Findings()
+        validate.check_scenario(os.path.join(root2, 'scen'), clean, args)
+        assert not clean.errors, clean.errors
+        assert not any('sorts first' in w for w in clean.warnings), clean.warnings
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_with_opencood_builds_the_real_dataset_and_reports_failures():
+    """--with-opencood used to check only that the import worked, while calling
+    itself the definitive check. Stub OpenCOOD to prove it now constructs the
+    dataset, reads samples, and reports what the loader says rather than what we
+    believe it would say."""
+    import importlib
+    import types
+    validate = importlib.import_module('validate_opv2v')
+
+    built = {}
+
+    def install_stub(behaviour):
+        pkg = types.ModuleType('opencood')
+        data_utils = types.ModuleType('opencood.data_utils')
+        datasets = types.ModuleType('opencood.data_utils.datasets')
+        late = types.ModuleType('opencood.data_utils.datasets.late_fusion_dataset')
+        hypes = types.ModuleType('opencood.hypes_yaml')
+        yaml_utils = types.ModuleType('opencood.hypes_yaml.yaml_utils')
+
+        class LateFusionDataset(object):
+            def __init__(self, params, visualize, train):
+                built['params'] = params
+                if behaviour == 'refuse':
+                    raise KeyError('validate_dir')
+
+            def __len__(self):
+                return 0 if behaviour == 'empty' else 12
+
+            def __getitem__(self, index):
+                if behaviour == 'read_error':
+                    raise RuntimeError('bad pcd at %d' % index)
+                mask = np.zeros(10) if behaviour == 'no_gt' else np.ones(10)
+                return {'ego': {'object_bbx_mask': mask}}
+
+        late.LateFusionDataset = LateFusionDataset
+        yaml_utils.load_yaml = lambda path: {'train_params': {'max_cav': 5}}
+        for name, module in (('opencood', pkg), ('opencood.data_utils', data_utils),
+                             ('opencood.data_utils.datasets', datasets),
+                             ('opencood.data_utils.datasets.late_fusion_dataset', late),
+                             ('opencood.hypes_yaml', hypes),
+                             ('opencood.hypes_yaml.yaml_utils', yaml_utils)):
+            sys.modules[name] = module
+
+    def clear_stub():
+        for name in [n for n in sys.modules if n == 'opencood' or n.startswith('opencood.')]:
+            del sys.modules[name]
+
+    tmp = tempfile.mkdtemp()
+    try:
+        config = os.path.join(tmp, 'hypes.yaml')
+        open(config, 'w').write('{}\n')
+
+        install_stub('ok')
+        try:
+            findings = validate.Findings()
+            validate.check_with_opencood('/data/test', findings, config)
+            assert not findings.errors, findings.errors
+            assert any('12 samples' in n for n in findings.notes), findings.notes
+            assert any('accepts this dataset' in n for n in findings.notes), findings.notes
+            # the tree under test must be what got loaded, not the config's own dirs
+            assert built['params']['validate_dir'] == '/data/test'
+            assert built['params']['root_dir'] == '/data/test'
+
+            # no config: refuse to pretend, rather than guess the preprocessor
+            quiet = validate.Findings()
+            validate.check_with_opencood('/data/test', quiet, None)
+            assert not quiet.errors
+            assert any('--opencood-config' in w for w in quiet.warnings), quiet.warnings
+        finally:
+            clear_stub()
+
+        for behaviour, needle in (('refuse', 'refused this tree'),
+                                  ('empty', 'length 0'),
+                                  ('read_error', 'failed reading sample')):
+            install_stub(behaviour)
+            try:
+                findings = validate.Findings()
+                validate.check_with_opencood('/data/test', findings, config)
+                assert any(needle in e for e in findings.errors), (behaviour, findings.errors)
+            finally:
+                clear_stub()
+
+        install_stub('no_gt')
+        try:
+            findings = validate.Findings()
+            validate.check_with_opencood('/data/test', findings, config)
+            assert any('no GT boxes' in w for w in findings.warnings), findings.warnings
+        finally:
+            clear_stub()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]
