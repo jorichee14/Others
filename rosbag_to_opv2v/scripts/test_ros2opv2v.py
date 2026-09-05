@@ -2039,6 +2039,8 @@ def _room_cloud(rng):
 
 
 class _ProposeArgs(object):
+    ceiling = 2.0
+    max_wall_contact = 1.0
     cell = 0.10
     min_height = 0.30
     max_height = 1.30
@@ -2134,6 +2136,85 @@ def test_render_map_draws_the_searched_area_without_a_plotting_stack():
     try:
         path = os.path.join(tmp, 'top_down.png')
         poses = {'1': [{'xyz': [x, 0.0, 0.0]} for x in np.linspace(-4, 4, 20)]}
+        label_static.render_map(path, hmap, rows, args, poses)
+        assert os.path.getsize(path) > 200
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+
+def test_a_scanned_ceiling_hides_every_object_until_it_is_cut_off():
+    """The map is "tallest return per cell". A ceiling is the tallest return over
+    every cell of the floor it covers, so with it in the map the whole room reads
+    as structure and the chairs standing there are never proposed — not filtered
+    out, never seen. Capping the height restores them, and the wall stays
+    structure because it is still taller than the object band."""
+    import importlib
+    label_static = importlib.import_module('label_static')
+    rng = np.random.default_rng(13)
+    room = _room_cloud(rng)
+    ceiling = np.column_stack([rng.uniform(-5, 5, 30000), rng.uniform(-5, 5, 30000),
+                               np.full(30000, -0.66 + 2.60)])
+    roofed = np.vstack([room, ceiling])
+
+    args = _ProposeArgs()
+    args.ceiling = None
+    blind = label_static.propose(roofed, -0.66, args)
+    assert not blind, 'a scanned ceiling should swallow the whole floor'
+    blind_map = label_static.HeightMap(roofed, -0.66, 0.10, ceiling=None)
+    assert blind_map.structure_fraction(1.30) > 0.9
+
+    args.ceiling = 2.0
+    hmap = label_static.HeightMap(roofed, -0.66, 0.10, ceiling=2.0)
+    assert hmap.overhead > 0
+    assert hmap.structure_fraction(1.30) < 0.3
+    rows = label_static.propose(roofed, -0.66, args, None, hmap)
+    assert rows, 'the chairs are back once the ceiling is cut off'
+    assert abs(rows[0]['centre'][0]) < 0.25 and abs(rows[0]['centre'][1]) < 0.25
+    # the wall is still excluded: nothing proposed sits on it
+    assert all(row['centre'][0] < 4.9 for row in rows), rows
+
+
+def test_max_wall_contact_keeps_furniture_and_drops_wall_feet():
+    import importlib
+    label_static = importlib.import_module('label_static')
+    cloud = _room_cloud(np.random.default_rng(17))
+    args = _ProposeArgs()
+    args.max_wall_contact = 0.3
+    for row in label_static.propose(cloud, -0.66, args):
+        assert row['wall_contact'] <= 0.3, row
+
+
+def test_start_roi_is_the_box_between_where_the_agents_began():
+    import importlib
+    label_static = importlib.import_module('label_static')
+    poses = {
+        '1': [{'lidar_pose': [1.0, -2.0, 0, 0, 0, 0]}]
+             + [{'lidar_pose': [x, -2.0, 0, 0, 0, 0]} for x in np.linspace(1, 9, 20)],
+        '2': [{'lidar_pose': [5.0, -8.0, 0, 0, 0, 0]}]
+             + [{'lidar_pose': [5.0, y, 0, 0, 0, 0]} for y in np.linspace(-8, 0, 20)],
+        '-1': [{'lidar_pose': [-5.5, -2.6, 2.0, 0, 0, 0]}] * 5,   # static: not a corner
+    }
+    roi = label_static.start_roi(poses, 1.0)
+    assert np.allclose(roi, [0.0, -9.0, 6.0, -1.0]), roi
+    # the whole path reaches further, which is exactly the difference
+    whole = label_static.trajectory_roi(poses, 1.0)
+    assert whole[2] > roi[2]
+
+
+def test_render_map_accepts_dataset_poses_as_they_are_loaded():
+    """load_dataset_poses yields lidar_pose, not xyz — the picture must draw the
+    path from the same rows every other stage reads."""
+    import importlib
+    label_static = importlib.import_module('label_static')
+    cloud = _room_cloud(np.random.default_rng(19))
+    args = _ProposeArgs()
+    hmap = label_static.HeightMap(cloud, -0.66, args.cell, ceiling=args.ceiling)
+    rows = label_static.propose(cloud, -0.66, args, None, hmap)
+    poses = {'1': [{'lidar_pose': [x, 0.0, 0.1, 0, 0, 0]} for x in np.linspace(-4, 4, 20)]}
+    tmp = tempfile.mkdtemp()
+    try:
+        path = os.path.join(tmp, 'top_down.png')
         label_static.render_map(path, hmap, rows, args, poses)
         assert os.path.getsize(path) > 200
     finally:

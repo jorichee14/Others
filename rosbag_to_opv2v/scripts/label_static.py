@@ -157,6 +157,25 @@ def trajectory_roi(poses: Dict[str, List[dict]], margin: float) -> Optional[np.n
     return np.r_[allpts.min(axis=0) - margin, allpts.max(axis=0) + margin]
 
 
+def start_roi(poses: Dict[str, List[dict]], margin: float) -> Optional[np.ndarray]:
+    """The box spanned by the MOVING agents' first poses, expanded by `margin`.
+
+    A run that starts with the carts on opposite sides of the objects they are
+    there to observe makes those start points a tighter and more meaningful
+    bound than the whole driven path: the objects are between them by
+    construction, and the path wanders off to places they are not.
+    """
+    starts = []
+    for rows in poses.values():
+        track = np.array([r["lidar_pose"][:2] for r in rows], dtype=np.float64)
+        if float(np.linalg.norm(track.max(axis=0) - track.min(axis=0))) >= 0.5:
+            starts.append(track[0])
+    if len(starts) < 2:
+        return None
+    pts = np.array(starts)
+    return np.r_[pts.min(axis=0) - margin, pts.max(axis=0) + margin]
+
+
 class HeightMap(object):
     """The map seen from above: per XY cell, how tall the tallest return is.
 
@@ -165,14 +184,28 @@ class HeightMap(object):
     """
 
     def __init__(self, cloud: np.ndarray, ground_z: float, cell: float,
-                 roi: Optional[np.ndarray] = None, floor_clearance: float = 0.05):
+                 roi: Optional[np.ndarray] = None, floor_clearance: float = 0.05,
+                 ceiling: Optional[float] = None):
         above = cloud[:, 2] - ground_z
         keep = above > floor_clearance
         if roi is not None:
             keep &= ((cloud[:, 0] >= roi[0]) & (cloud[:, 0] <= roi[2])
                      & (cloud[:, 1] >= roi[1]) & (cloud[:, 1] <= roi[3]))
+        # Anything overhead — a ceiling, a beam, a pipe run, a mezzanine — is the
+        # tallest return over the cells beneath it, and "tallest per cell" is the
+        # whole definition of this map. Left in, a scanned ceiling makes every
+        # cell under it structure, and the furniture standing on that floor cannot
+        # be proposed at all: not filtered out, never seen. A wall is still taller
+        # than the object band once the ceiling is gone, so the cutoff costs
+        # nothing that the search needs.
+        self.overhead = 0
+        if ceiling is not None:
+            overhead = keep & (above > ceiling)
+            self.overhead = int(overhead.sum())
+            keep &= ~overhead
         pts, hgt = cloud[keep], above[keep]
         self.cell, self.points = cell, len(pts)
+        self.ceiling = ceiling
         if len(pts) < 200:
             self.width = self.depth = 0
             return
@@ -203,6 +236,22 @@ class HeightMap(object):
         """(depth, width) — row = y index, column = x index, for rendering."""
         return self.top.reshape(self.width, self.depth).T
 
+    def structure_fraction(self, max_height: float) -> float:
+        """Of the cells that saw anything, how many are taller than the band.
+
+        If nearly all of them are, the search has no floor left to find objects
+        on, and the cause is almost always something overhead rather than a room
+        made entirely of walls.
+
+        Counted over EVERY cell of the searched grid, not only the ones that got a
+        return. A bare floor gives no returns at all above the clearance, so
+        measuring against occupied cells alone would compare walls to walls and
+        report a room made mostly of open floor as mostly structure.
+        """
+        if not len(self.top):
+            return 0.0
+        return float((self.top > max_height).mean())
+
 
 def propose(cloud: np.ndarray, ground_z: float, args,
             roi: Optional[np.ndarray] = None,
@@ -229,7 +278,8 @@ def propose(cloud: np.ndarray, ground_z: float, args,
     wall, is open on the other three sides. That fraction is `wall_contact`, and
     it is what the list is sorted by.
     """
-    hmap = hmap or HeightMap(cloud, ground_z, args.cell, roi)
+    hmap = hmap or HeightMap(cloud, ground_z, args.cell, roi,
+                             ceiling=getattr(args, "ceiling", None))
     if hmap.empty():
         print("  only %d points above the floor in that area" % hmap.points)
         return []
@@ -303,6 +353,8 @@ def propose(cloud: np.ndarray, ground_z: float, args,
         })
     # Open on all sides first: that is what a chair standing in a room looks like,
     # and it is the only ordering that puts furniture above wall feet.
+    limit = getattr(args, "max_wall_contact", 1.0)
+    proposals = [p for p in proposals if p["wall_contact"] <= limit]
     proposals.sort(key=lambda p: (p["wall_contact"], -p["points"]))
     return proposals[:args.max_proposals]
 
@@ -326,9 +378,10 @@ def render_map(path: str, hmap: "HeightMap", rows: List[dict], args,
     canvas.blit_cells(tall, np.broadcast_to(np.array([70, 70, 78], dtype=np.uint8),
                                             grid.shape + (3,)))
 
-    for agent_id, frames in sorted((poses or {}).items()):
+    for _agent_id, frames in sorted((poses or {}).items()):
         for frame in frames[::3]:
-            canvas.dot(frame["xyz"][0], frame["xyz"][1], (255, 255, 255), 0)
+            pose = frame["lidar_pose"] if "lidar_pose" in frame else frame["xyz"]
+            canvas.dot(pose[0], pose[1], (255, 255, 255), 0)
 
     for index, row in enumerate(rows):
         ex = row["extent_xy"]
@@ -436,6 +489,16 @@ def main() -> int:
                              "(the map usually covers far more building than one run)")
     parser.add_argument("--whole-map", action="store_true",
                         help="propose over the entire cloud, not just where the agents were")
+    parser.add_argument("--ceiling", type=float, default=2.0,
+                        help="ignore returns more than this far above the floor: a "
+                             "scanned ceiling is the tallest thing over every cell "
+                             "beneath it and hides the furniture standing there")
+    parser.add_argument("--max-wall-contact", type=float, default=1.0,
+                        help="drop proposals whose outline is more than this "
+                             "fraction structure (0.3 keeps furniture only)")
+    parser.add_argument("--roi-from-start", action="store_true",
+                        help="search the box spanned by the agents' FIRST poses "
+                             "rather than their whole path")
     parser.add_argument("--map-image", default=None, metavar="PATH.png",
                         help="write a top-down picture of the searched area with the "
                              "proposals numbered on it")
@@ -486,15 +549,33 @@ def main() -> int:
                      label["extent"], label["angle"][1]))
 
     if args.propose:
-        roi = trajectory_roi(poses, args.roi_margin) if poses and not args.whole_map else None
+        roi, roi_kind = None, ""
+        if poses and not args.whole_map:
+            if args.roi_from_start:
+                roi, roi_kind = start_roi(poses, args.roi_margin), "started"
+            if roi is None:
+                roi, roi_kind = trajectory_roi(poses, args.roi_margin), "were"
         if roi is not None:
-            print("\nsearching only where the agents were: x %.2f..%.2f  y %.2f..%.2f "
-                  "(their path plus %.1f m). --whole-map searches the entire cloud."
-                  % (roi[0], roi[2], roi[1], roi[3], args.roi_margin))
+            print("\nsearching only where the agents %s: x %.2f..%.2f  y %.2f..%.2f "
+                  "(plus %.1f m). --whole-map searches the entire cloud."
+                  % (roi_kind, roi[0], roi[2], roi[1], roi[3], args.roi_margin))
         print("candidate free-standing objects, top between %.2f and %.2f m above the "
               "floor\n(anything taller is structure and is excluded, not clustered):"
               % (args.min_height, args.max_height))
-        hmap = HeightMap(cloud, ground_z, args.cell, roi)
+        hmap = HeightMap(cloud, ground_z, args.cell, roi, ceiling=args.ceiling)
+        if hmap.overhead:
+            print("ignored %d returns above %.2f m (--ceiling): overhead structure is "
+                  "the tallest\nthing over the floor it covers, and would hide "
+                  "everything standing on it."
+                  % (hmap.overhead, args.ceiling))
+        if not hmap.empty():
+            structure = hmap.structure_fraction(args.max_height)
+            print("%.0f%% of the mapped cells here are taller than %.2f m." %
+                  (100 * structure, args.max_height))
+            if structure > 0.6:
+                print("  ! that is most of the area. Free-standing objects need floor "
+                      "around them,\n    so lower --ceiling until this drops — "
+                      "something overhead is still in the map.")
         rows = propose(cloud, ground_z, args, roi, hmap)
         if not rows:
             print("  none — widen --min-footprint/--max-footprint or lower --min-points")
