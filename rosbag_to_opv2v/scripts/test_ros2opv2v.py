@@ -2336,6 +2336,56 @@ def test_seed_report_says_when_the_object_is_not_in_this_cloud():
     assert missing["seed_height_m"] == 0.65
 
 
+
+def test_probe_names_the_stage_that_still_has_the_furniture():
+    """A map pipeline leaves a directory of stages that all look alike and differ
+    in whether the furniture survived. Probing has to separate them by what
+    stands at the seeds, not by size or bounds — which are nearly identical."""
+    import importlib
+    import subprocess
+    label_static = importlib.import_module('label_static')
+    from ros2opv2v.writers import write_pcd
+    rng = np.random.default_rng(43)
+    ground = -0.659
+    n = 60000
+    floor = np.column_stack([rng.uniform(-6, 6, n), rng.uniform(-6, 6, n),
+                             ground + rng.uniform(0.0, 0.06, n)])
+
+    def chair(cx, cy, m=6000):
+        return np.column_stack([cx + rng.uniform(-0.26, 0.26, m),
+                                cy + rng.uniform(-0.22, 0.22, m),
+                                rng.uniform(ground, ground + 0.90, m)])
+
+    tmp = tempfile.mkdtemp()
+    try:
+        stages = os.path.join(tmp, 'stages')
+        os.makedirs(stages)
+        for name, arr in (('a_raw.pcd', np.vstack([floor, chair(1.0, -2.0), chair(3.5, 1.0)])),
+                          ('b_filtered.pcd', floor),
+                          ('c_anchored.pcd', np.vstack([floor, chair(1.0, -2.0)]))):
+            write_pcd(os.path.join(stages, name),
+                      np.column_stack([arr, np.zeros(len(arr))]).astype(np.float32))
+        script = os.path.join(os.path.dirname(os.path.abspath(label_static.__file__)),
+                              'label_static.py')
+        run = subprocess.run([sys.executable, script, '--pcd', stages,
+                              '--seed', '1.0,-2.0,-0.01', '--seed', '3.5,1.0,-0.01'],
+                             capture_output=True, text=True)
+        assert run.returncode == 0, run.stderr[-800:]
+        report = {}
+        current = None
+        for line in run.stdout.splitlines():
+            if line.endswith('.pcd'):
+                current = line.strip()
+                report[current] = []
+            elif current and line.strip().startswith('seed '):
+                report[current].append('OK' if line.rstrip().endswith('OK') else 'empty')
+        assert report['a_raw.pcd'] == ['OK', 'OK'], report
+        assert report['b_filtered.pcd'] == ['empty', 'empty'], report
+        assert report['c_anchored.pcd'] == ['OK', 'empty'], report
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

@@ -478,10 +478,64 @@ def check_labels(labels: List[dict], root: str, poses: Dict[str, List[dict]],
 
 
 # ---------------------------------------------------------------------- main
+def parse_seeds(raw: Optional[List[str]]) -> List[List[float]]:
+    """[x, y] or [x, y, z] per --seed; z stays absent so callers can supply it."""
+    out = []
+    for text in (raw or []):
+        parts = [float(v) for v in text.replace(";", ",").split(",")]
+        if len(parts) not in (2, 3):
+            raise SystemExit("--seed wants X,Y or X,Y,Z — got %r" % text)
+        out.append(parts)
+    return out
+
+
+def probe_clouds(paths: List[str], args) -> int:
+    """Which of these clouds actually contains the objects at the seeds?
+
+    A map pipeline leaves a directory of stages — raw, filtered, downsampled,
+    anchored — that all look alike and differ in exactly the way that matters
+    here: whether the furniture survived. Rather than guess, read each one and
+    say what is standing at the seeds.
+    """
+    seeds = parse_seeds(args.seed)
+    print("\nprobing %d clouds for %d seed(s). A cloud is usable when returns stand\n"
+          "well above the floor at every seed." % (len(paths), len(seeds)))
+    for path in paths:
+        try:
+            cloud = read_pcd_xyz(path, max_points=args.max_points)
+        except (StaticsError, OSError, ValueError) as exc:
+            print("\n%-52s  unreadable: %s" % (os.path.basename(path), exc))
+            continue
+        ground, _ginfo = ground_level(cloud)
+        lo, hi = cloud.min(axis=0), cloud.max(axis=0)
+        print("\n%s" % os.path.basename(path))
+        print("  %8d points   x %.2f..%.2f  y %.2f..%.2f   floor z = %.3f"
+              % (len(cloud), lo[0], hi[0], lo[1], hi[1], ground))
+        if not seeds:
+            continue
+        for index, parts in enumerate(seeds):
+            seed = np.array(parts if len(parts) == 3 else parts + [ground + 0.5])
+            look = seed_report(cloud, seed, ground, radius=args.radius)
+            if not look["points"]:
+                print("    seed %d  nothing within %.1f m" % (index + 1, args.radius))
+                continue
+            standing = sum(c for band_lo, _hi, c in look["bands"]
+                           if band_lo >= args.cluster_floor)
+            print("    seed %d  %6d standing above %.2f m, tallest %.2f m, nearest "
+                  "%.3f m   %s"
+                  % (index + 1, standing, args.cluster_floor, look["tallest_m"],
+                     look["nearest_m"], "OK" if standing >= 20 else "-- empty"))
+    print("\nRe-run with the single cloud that shows OK at both seeds.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--pcd", required=True, help="the run's accumulated map cloud")
+    parser.add_argument("--pcd", action="append", required=True,
+                        help="the run's accumulated map cloud. Repeat it, or give a "
+                             "directory, to probe several clouds for the seeds "
+                             "instead of fitting")
     parser.add_argument("--dataset", default=None,
                         help="converted dataset root (<out>/test) — used to verify the "
                              "frame and to check labels against the real clouds")
@@ -547,6 +601,18 @@ def main() -> int:
     parser.add_argument("--max-points", type=int, default=4000000)
     args = parser.parse_args()
 
+    clouds: List[str] = []
+    for entry in args.pcd:
+        if os.path.isdir(entry):
+            clouds.extend(sorted(glob.glob(os.path.join(entry, "*.pcd"))))
+        else:
+            clouds.append(entry)
+    if not clouds:
+        print("no .pcd found in %s" % ", ".join(args.pcd))
+        return 2
+    if len(clouds) > 1:
+        return probe_clouds(clouds, args)
+    args.pcd = clouds[0]
     cloud = read_pcd_xyz(args.pcd, max_points=args.max_points)
     poses = load_dataset_poses(args.dataset, limit=400) if args.dataset else {}
 
@@ -636,15 +702,9 @@ def main() -> int:
         print("\n  Pick the two chairs and fit them:")
         print("    --seed <x,y> --name chair_1 --out labels/coop2_statics.json")
 
-    seeds: List[np.ndarray] = []
-    for text in (args.seed or []):
-        parts = [float(v) for v in text.replace(";", ",").split(",")]
-        if len(parts) == 2:
-            parts.append(ground_z + 0.5)
-        if len(parts) != 3:
-            print("\n! --seed wants X,Y or X,Y,Z — got %r" % text)
-            return 2
-        seeds.append(np.array(parts, dtype=np.float64))
+    seeds: List[np.ndarray] = [
+        np.array(parts if len(parts) == 3 else parts + [ground_z + 0.5], dtype=np.float64)
+        for parts in parse_seeds(args.seed)]
     if args.interactive:
         seeds.extend(pick_interactive(cloud))
     names = list(args.name or [])
