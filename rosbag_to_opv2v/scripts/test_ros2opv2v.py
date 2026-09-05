@@ -2386,6 +2386,62 @@ def test_probe_names_the_stage_that_still_has_the_furniture():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+
+def _write_binary_pcd(path, xyz, rgb=True):
+    """A PCL-style binary PCD with x y z rgb, written by hand so a test can
+    truncate it."""
+    n = len(xyz)
+    fields = "x y z rgb" if rgb else "x y z"
+    size = "4 4 4 4" if rgb else "4 4 4"
+    kind = "F F F U" if rgb else "F F F"
+    header = (
+        "# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\n"
+        "FIELDS %s\nSIZE %s\nTYPE %s\nCOUNT %s\n"
+        "WIDTH %d\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS %d\nDATA binary\n"
+        % (fields, size, kind, " ".join(["1"] * (4 if rgb else 3)), n, n))
+    cols = [xyz[:, 0].astype("<f4"), xyz[:, 1].astype("<f4"), xyz[:, 2].astype("<f4")]
+    if rgb:
+        cols.append(np.zeros(n, dtype="<u4"))
+    body = np.empty(n, dtype=[(f, c.dtype) for f, c in
+                              zip(fields.split(), cols)])
+    for f, c in zip(fields.split(), cols):
+        body[f] = c
+    with open(path, "wb") as handle:
+        handle.write(header.encode("ascii"))
+        handle.write(body.tobytes())
+    return header
+
+
+def test_a_truncated_pcd_is_an_error_not_a_smaller_cloud():
+    """The failure this comes from: a file whose header declared 11.6 M points
+    while its payload held 1.19 M. Read silently, that is a map with 90% of its
+    contents missing — and a missing chair looks exactly like a chair that was
+    filtered out, so the operator hunts the wrong problem for hours."""
+    from ros2opv2v.statics import StaticsError, read_pcd_xyz
+    rng = np.random.default_rng(47)
+    xyz = rng.uniform(-5, 5, size=(5000, 3))
+    tmp = tempfile.mkdtemp()
+    try:
+        path = os.path.join(tmp, 'full.pcd')
+        _write_binary_pcd(path, xyz)
+        assert len(read_pcd_xyz(path)) == 5000
+
+        cut = os.path.join(tmp, 'cut.pcd')
+        blob = open(path, 'rb').read()
+        keep = blob.index(b'DATA binary\n') + len(b'DATA binary\n')
+        open(cut, 'wb').write(blob[:keep] + blob[keep:keep + 500 * 16])
+        try:
+            read_pcd_xyz(cut)
+        except StaticsError as exc:
+            message = str(exc)
+            assert '5000' in message and '500' in message, message
+            assert 'truncated' in message, message
+        else:
+            raise AssertionError('a truncated PCD must not read as a smaller cloud')
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

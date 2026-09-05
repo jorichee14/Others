@@ -113,12 +113,18 @@ def read_pcd_xyz(path: str, max_points: int = 0) -> np.ndarray:
         if axis not in fields:
             raise StaticsError(f"{path}: PCD has no '{axis}' field (has {fields})")
 
+    itemsize = sum(s * c for s, c in zip(sizes, counts))
+
     if layout == "ascii":
         rows = np.fromstring(body.decode("ascii", "replace").replace("nan", "nan"),
                              sep=" ") if False else np.array(
             [line.split() for line in body.decode("ascii", "replace").splitlines() if line.strip()],
             dtype=object)
         cols = {name: i for i, name in enumerate(fields)}
+        if len(rows) < n:
+            raise StaticsError(
+                f"{path}: header declares {n} points but only {len(rows)} rows follow "
+                f"— the file is truncated.")
         xyz = np.array([[float(r[cols["x"]]), float(r[cols["y"]]), float(r[cols["z"]])]
                         for r in rows[:n]], dtype=np.float64)
     else:
@@ -126,6 +132,14 @@ def read_pcd_xyz(path: str, max_points: int = 0) -> np.ndarray:
             if len(body) < 8:
                 raise StaticsError(f"{path}: truncated binary_compressed payload")
             compressed_size, uncompressed_size = struct.unpack_from("<II", body, 0)
+            if len(body) < 8 + compressed_size:
+                raise StaticsError(
+                    f"{path}: header declares {compressed_size} compressed bytes but "
+                    f"only {len(body) - 8} follow — the file is truncated.")
+            if uncompressed_size != itemsize * n:
+                raise StaticsError(
+                    f"{path}: binary_compressed block is {uncompressed_size} bytes, but "
+                    f"{n} points of {itemsize} bytes need {itemsize * n}.")
             blob = _lzf_decompress(body[8:8 + compressed_size], uncompressed_size)
             # binary_compressed is COLUMN-major: all x, then all y, ...
             xyz_cols, offset = {}, 0
@@ -146,7 +160,15 @@ def read_pcd_xyz(path: str, max_points: int = 0) -> np.ndarray:
                             else _PCD_NUMPY[(k.upper(), s)]
                             for k, s, c in zip(types, sizes, counts)],
             })
-            record = np.frombuffer(body, dtype=dtype, count=min(n, len(body) // dtype.itemsize))
+            available = len(body) // dtype.itemsize
+            if available < n:
+                raise StaticsError(
+                    f"{path}: header declares {n} points ({n * dtype.itemsize} bytes of "
+                    f"payload) but the file holds {available} ({len(body)} bytes). The "
+                    f"file is truncated — re-copy it. Reading it anyway would give you "
+                    f"{100.0 * available / n:.0f}% of the cloud with no warning, which "
+                    f"is how a missing object looks like a missing object.")
+            record = np.frombuffer(body, dtype=dtype, count=n)
             xyz = np.stack([record["x"].astype(np.float64).reshape(-1),
                             record["y"].astype(np.float64).reshape(-1),
                             record["z"].astype(np.float64).reshape(-1)], axis=1)
