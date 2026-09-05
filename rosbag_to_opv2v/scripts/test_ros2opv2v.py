@@ -2824,6 +2824,37 @@ def test_the_incop_output_path_selects_left_hand_visualisation():
     assert any(key in upper for key in ('OPV2V', 'V2XSET', 'REAL_WORLD')), cfg.output.root
 
 
+
+def test_camera_images_are_written_rgb_not_rgba():
+    """The ZED publishes bgra8. Carrying the alpha through gives a 4-channel PNG,
+    and every model that reads it normalises with a 3-channel mean and std, so it
+    dies with a tensor shape mismatch deep inside torchvision — which looks like
+    a model problem and is not one."""
+    from ros2opv2v.writers import image_to_array
+
+    class Msg:
+        def __init__(self, encoding, data, height, width, step):
+            self.encoding, self.data = encoding, data
+            self.height, self.width, self.step = height, width, step
+
+    height, width = 3, 4
+    rgba = np.zeros((height, width, 4), dtype=np.uint8)
+    rgba[..., 0], rgba[..., 1], rgba[..., 2], rgba[..., 3] = 10, 20, 30, 255
+
+    out = image_to_array(Msg('rgba8', rgba.tobytes(), height, width, width * 4))
+    assert out.shape == (height, width, 3), out.shape
+    assert out[0, 0].tolist() == [10, 20, 30]
+
+    bgra = rgba[:, :, [2, 1, 0, 3]]
+    out = image_to_array(Msg('bgra8', bgra.tobytes(), height, width, width * 4))
+    assert out.shape == (height, width, 3), out.shape
+    assert out[0, 0].tolist() == [10, 20, 30], 'bgra must come back as rgb'
+
+    rgb = np.dstack([np.full((height, width), v, np.uint8) for v in (10, 20, 30)])
+    out = image_to_array(Msg('rgb8', rgb.tobytes(), height, width, width * 3))
+    assert out.shape == (height, width, 3) and out[0, 0].tolist() == [10, 20, 30]
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

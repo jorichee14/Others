@@ -191,8 +191,12 @@ def image_to_array(msg) -> Optional[np.ndarray]:
         out = rows[:, :width * 3].reshape(height, width, 3)
         return out[:, :, ::-1] if encoding == "bgr8" else out
     if encoding in ("rgba8", "bgra8"):
+        # Alpha is dropped, not carried. A camera's alpha channel is a constant
+        # 255 padding byte, and every consumer of these images normalises with a
+        # three-channel mean and std — an RGBA tensor fails there with a shape
+        # mismatch four steps into a model, which reads as a model problem.
         out = rows[:, :width * 4].reshape(height, width, 4)
-        return out[:, :, [2, 1, 0, 3]] if encoding == "bgra8" else out
+        return out[:, :, [2, 1, 0]] if encoding == "bgra8" else out[:, :, :3]
     if encoding in ("mono8", "8uc1"):
         return rows[:, :width].reshape(height, width)
     if encoding in ("mono16", "16uc1"):
