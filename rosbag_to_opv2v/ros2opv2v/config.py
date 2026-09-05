@@ -424,6 +424,14 @@ class OutputConfig:
     frame_stride: int = 1
     include_self_in_vehicles: bool = False
     write_provenance: bool = True
+    labels_file: Optional[str] = None
+    """Static objects labelled once in the world frame (scripts/label_static.py).
+
+    A static object has one pose for the whole recording, so it is labelled once
+    and written into EVERY frame of EVERY agent, already projected — each frame's
+    pose is known, so the projection is exact and costs nothing. That is the
+    cheap way to get real ground truth out of a bag: two chairs are two boxes,
+    not 1330 x 2 hand-drawn ones."""
 
     @staticmethod
     def parse(mapping: dict) -> "OutputConfig":
@@ -434,9 +442,15 @@ class OutputConfig:
             frames_per_scenario=int(mapping.get("frames_per_scenario", 0)),
             frame_stride=int(mapping.get("frame_stride", 1)),
             include_self_in_vehicles=bool(mapping.get("include_self_in_vehicles", False)),
-            write_provenance=bool(mapping.get("write_provenance", True)))
+            write_provenance=bool(mapping.get("write_provenance", True)),
+            labels_file=(os.path.expanduser(str(mapping["labels_file"]))
+                         if mapping.get("labels_file") else None))
         if cfg.frame_stride < 1:
             raise ConfigError("output.frame_stride must be >= 1")
+        if cfg.labels_file and not os.path.exists(cfg.labels_file):
+            raise ConfigError(
+                f"output.labels_file {cfg.labels_file!r} does not exist. Create it with "
+                f"scripts/label_static.py, or remove the key to convert without labels.")
         return cfg
 
 

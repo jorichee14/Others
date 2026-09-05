@@ -11,7 +11,7 @@ python scripts/inspect_bag.py     --bag <bag> --emit-config configs/mine.yaml
 python scripts/convert_rosbag.py  --config configs/mine.yaml --dry-run
 python scripts/convert_rosbag.py  --config configs/mine.yaml
 python scripts/validate_opv2v.py  --root <out>/test --with-open3d
-python scripts/test_ros2opv2v.py                       # 80 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                       # 90 self-tests, no bag needed
 ```
 
 Dependencies: `numpy`, `pyyaml`, and `mcap` + `mcap-ros2-support` for `.mcap`
@@ -359,6 +359,55 @@ half-length], and a box with its length and height swapped still looks like a
 box. `{roll: 90, pitch: -90, yaw: 0}` puts it in ROS body axes at the same
 point, so `extent` reads as [half-length, half-width, half-height] and `center`
 as [ahead, left, up].
+
+### Static objects: label once, correct in every frame
+
+A chair does not move, so it has one pose for the whole recording. Label it once
+against the run's accumulated map cloud and the converter writes it into every
+frame of every agent, already projected — each frame's pose is known, so the
+projection is exact and free. Two chairs are two boxes, not 2 × 1330 hand-drawn
+ones.
+
+That is also *better* ground truth than an agent-derived box, not just cheaper.
+A box computed from an agent's own pose is right by construction and therefore
+tests nothing. A chair boxed against the map is an independent fact, so "do both
+agents' returns land inside it" becomes a real check on the extrinsics, the
+anchoring and the frame timing at once.
+
+```bash
+# 1. is the map cloud in the dataset's frame? never skip this
+python scripts/label_static.py --pcd map.pcd --dataset <root>/test
+
+# 2. list candidate free-standing objects, and read a seed off one
+python scripts/label_static.py --pcd map.pcd --dataset <root>/test --propose
+
+# 3. fit a box at that seed (--interactive picks by shift-click if open3d is there)
+python scripts/label_static.py --pcd map.pcd --dataset <root>/test \
+    --seed 3.4,-6.1 --name chair_1 --out labels/statics.json
+
+# 4. verify against the agents' real clouds, then set output.labels_file and reconvert
+python scripts/label_static.py --pcd map.pcd --dataset <root>/test \
+    --labels labels/statics.json --check
+```
+
+The box is fitted, not dragged: the seed only has to land *on* the object, and a
+minimum-area rectangle over the cluster's convex hull gives the yaw exactly. Roll
+and pitch are held at zero — a chair stands on the floor, and letting a fit tilt
+the box only lets sampling noise tilt it. The box is extended down to the
+detected floor by default, because a LiDAR sees a chair's seat and back and
+almost none of its legs, so a box fitted to the returns alone floats and every
+IoU against it is wrong the same way.
+
+Two things the tool checks that nothing else can:
+
+* **The frame.** A map cloud in the mapping pipeline's pre-anchor frame looks
+  equally plausible and puts every box metres out. The test that discriminates is
+  whether the *moving* agents' trajectories lie inside the cloud's footprint —
+  they drove through the room the cloud is of, so they must. A static
+  infrastructure node legitimately sits outside it and is not counted.
+* **The floor.** `ground_level` reports the dominant horizontal surface, which is
+  the number [`ground_lift`](#ground-lift) needs and that no pose can supply: an
+  anchored map puts z = 0 at whatever anchored it, not at the ground.
 
 **Or emit nothing.** `object.emit: false` on every agent converts a dataset with
 no ground truth at all — the right setting when the labels are going to be drawn

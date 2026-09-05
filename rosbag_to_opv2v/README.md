@@ -9,18 +9,19 @@ embedded in the bag.
 
 ```bash
 pip install -r requirements.txt
-python scripts/test_ros2opv2v.py                                  # 80 self-tests, no bag needed
+python scripts/test_ros2opv2v.py                                  # 90 self-tests, no bag needed
 
 python scripts/inspect_bag.py    --bag <bag> --emit-config configs/mine.yaml   # stage A: look first
 python scripts/convert_rosbag.py --config configs/mine.yaml --dry-run          # stage B: plan, write nothing
 python scripts/convert_rosbag.py --config configs/mine.yaml                    #          convert
 python scripts/validate_opv2v.py --root <output>/test                          # stage C: check it as OpenCOOD will read it
+python scripts/label_static.py   --pcd map.pcd --dataset <output>/test         # stage D: ground truth from the run's own map
 ```
 
 | | |
 |---|---|
 | `ros2opv2v/` | the converter: bag reading, cross-host clock reconciliation, frame synchronisation, cloud decoding + sweep deskew, pose parameterisation, writers |
-| `scripts/` | the three stages above, plus the self-tests |
+| `scripts/` | the stages above, plus `label_static.py` (label static objects once in the map frame) and the self-tests |
 | `configs/mirc_coop2.yaml` | a complete, runnable config for the MIRC coop2 recording (two pushcarts + one static infrastructure node) |
 | `docs/ROS2OPV2V.md` | the format, the synchronisation protocol, what the operator must supply, and what converted data can and cannot answer |
 

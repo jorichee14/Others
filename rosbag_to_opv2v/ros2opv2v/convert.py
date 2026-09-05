@@ -753,6 +753,7 @@ def write_frame_yamls(cfg: ConverterConfig, scenarios, frame_poses: Dict[str, di
         a.name: {"object_id": a.obj.object_id, "extent": a.obj.extent,
                  "center": a.obj.center, "extrinsic": a.obj.extrinsic}
         for a in cfg.active_agents if a.obj.emit}
+    statics = load_static_labels(cfg, report)
 
     split_root = os.path.join(cfg.output.root, cfg.output.split)
     frame_dirs: Dict[str, str] = {}
@@ -783,9 +784,11 @@ def write_frame_yamls(cfg: ConverterConfig, scenarios, frame_poses: Dict[str, di
                     "true_ego_pos": body_pose,
                     "predicted_ego_pos": body_pose,
                     "plan_trajectory": [],
-                    "vehicles": labels.vehicles_for_viewer(
-                        world_poses, agent_objects, viewer=agent.name,
-                        include_self=cfg.output.include_self_in_vehicles),
+                    "vehicles": labels.merge_external_labels(
+                        labels.vehicles_for_viewer(
+                            world_poses, agent_objects, viewer=agent.name,
+                            include_self=cfg.output.include_self_in_vehicles),
+                        statics),
                 }
                 for slot, camera in enumerate(agent.cameras):
                     params[f"camera{slot}"] = _camera_block(
@@ -802,6 +805,39 @@ def write_frame_yamls(cfg: ConverterConfig, scenarios, frame_poses: Dict[str, di
                     os.path.join(scenario_dir, str(agent.cav_id), f"{key}.yaml"),
                     params)
     return frame_dirs
+
+
+def load_static_labels(cfg: ConverterConfig, report: ConversionReport) -> List[dict]:
+    """Static world-frame objects, read once and written into every frame.
+
+    They are world-frame facts, so nothing here is per-frame: the same list goes
+    to every agent, and `labels.merge_external_labels` folds it into each
+    `vehicles` dict beside whatever agent-derived boxes exist.
+    """
+    path = cfg.output.labels_file
+    if not path:
+        return []
+    with open(path) as handle:
+        raw = json.load(handle)
+    if not isinstance(raw, list):
+        raise ConversionError(f"{path}: expected a list of label objects")
+    out = []
+    for item in raw:
+        missing = [k for k in ("id", "location", "extent") if k not in item]
+        if missing:
+            raise ConversionError(f"{path}: a label is missing {missing}")
+        out.append({"id": int(item["id"]), "location": [float(v) for v in item["location"]],
+                    "extent": [float(v) for v in item["extent"]],
+                    "angle": [float(v) for v in item.get("angle", (0.0, 0.0, 0.0))],
+                    "center": [float(v) for v in item.get("center", (0.0, 0.0, 0.0))]})
+    names = ", ".join(str(item.get("name", item["id"])) for item in raw)
+    report.warnings.append(
+        f"labels: {len(out)} static object(s) from {os.path.basename(path)} ({names}) "
+        f"written into every frame of every agent. They are world-frame boxes: verify "
+        f"them with `label_static.py --check` before trusting any number computed "
+        f"against them.")
+    return out
+
 
 
 def _sync_block(cfg: ConverterConfig, agent: AgentConfig, frame: Frame,

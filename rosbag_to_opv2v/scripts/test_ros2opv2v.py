@@ -14,6 +14,8 @@ must — so the whole pipeline is exercised end to end.
 
     python scripts/test_ros2opv2v.py
 """
+import json
+import math
 import os
 import shutil
 import sys
@@ -1856,6 +1858,167 @@ def test_mirc_config_pins_the_ntpstatus_fields():
     cfg = _mirc_config()
     assert cfg['clock']['offset_field'] == 'offset_seconds'
     assert cfg['clock']['offset_unit'] == 's'
+
+
+# ----------------------------------------------- static labels from the map
+# Two chairs that never move are two boxes, not 2 x 1330 hand-drawn ones. The
+# geometry has to be exact, because a box placed by hand IS the ground truth —
+# nothing downstream can correct it.
+
+def test_fit_box_recovers_a_known_oriented_box():
+    from ros2opv2v.statics import fit_box, points_in_box
+    rng = np.random.default_rng(0)
+    yaw = math.radians(30.0)
+    rot = np.array([[math.cos(yaw), -math.sin(yaw), 0.0],
+                    [math.sin(yaw), math.cos(yaw), 0.0], [0.0, 0.0, 1.0]])
+    local = (rng.random((4000, 3)) - 0.5) * np.array([0.6, 0.4, 0.9])
+    pts = local @ rot.T + np.array([3.0, -2.0, -0.55])
+    box = fit_box(pts)
+    assert np.allclose(box["location"], [3.0, -2.0, -0.55], atol=2e-3), box
+    assert np.allclose(box["extent"], [0.30, 0.20, 0.45], atol=2e-3), box
+    assert abs(box["angle"][1] - 30.0) < 0.1, box
+    assert points_in_box(pts, box).mean() > 0.99
+
+
+def test_fit_box_puts_the_long_axis_first_whatever_the_hull_edge():
+    """`extent` must read as [half-length, half-width, half-height] regardless of
+    which hull edge won the rotating-calipers search."""
+    from ros2opv2v.statics import fit_box
+    rng = np.random.default_rng(1)
+    for yaw_deg in (0.0, 37.0, 91.0, 175.0, -120.0):
+        yaw = math.radians(yaw_deg)
+        rot = np.array([[math.cos(yaw), -math.sin(yaw), 0.0],
+                        [math.sin(yaw), math.cos(yaw), 0.0], [0.0, 0.0, 1.0]])
+        pts = (rng.random((3000, 3)) - 0.5) * np.array([1.0, 0.4, 0.8]) @ rot.T
+        box = fit_box(pts)
+        assert box["extent"][0] >= box["extent"][1], (yaw_deg, box["extent"])
+        assert np.allclose(sorted(box["extent"][:2]), [0.2, 0.5], atol=5e-3), (yaw_deg, box)
+
+
+def test_fit_box_extends_to_the_floor():
+    """A LiDAR sees a chair's seat and back and almost none of its legs, so a box
+    fitted to the returns alone floats and every IoU against it is wrong the same
+    way."""
+    from ros2opv2v.statics import fit_box
+    rng = np.random.default_rng(2)
+    seat = rng.random((800, 3)) * np.array([0.5, 0.5, 0.1]) + np.array([0, 0, 0.45])
+    floating = fit_box(seat)
+    grounded = fit_box(seat, ground_z=0.0)
+    assert floating["fit"]["z_range"][0] > 0.4, floating
+    assert grounded["fit"]["z_range"][0] == 0.0 and grounded["fit"]["extended_to_ground"]
+    assert grounded["extent"][2] > floating["extent"][2] * 2
+
+
+def test_ground_level_finds_the_floor_not_the_ceiling():
+    from ros2opv2v.statics import ground_level
+    rng = np.random.default_rng(3)
+    floor = np.column_stack([rng.uniform(-5, 5, 8000), rng.uniform(-5, 5, 8000),
+                             rng.normal(-1.05, 0.01, 8000)])
+    ceiling = np.column_stack([rng.uniform(-5, 5, 12000), rng.uniform(-5, 5, 12000),
+                               rng.normal(1.60, 0.01, 12000)])
+    z, info = ground_level(np.vstack([floor, ceiling]))
+    assert abs(z + 1.05) < 0.05, (z, info)
+
+
+def test_cluster_at_picks_the_object_not_its_neighbour():
+    from ros2opv2v.statics import cluster_at
+    rng = np.random.default_rng(4)
+    a = rng.random((900, 3)) * np.array([0.4, 0.4, 0.8]) + np.array([0.0, 0.0, 0.05])
+    b = rng.random((900, 3)) * np.array([0.4, 0.4, 0.8]) + np.array([1.5, 0.0, 0.05])
+    cluster, info = cluster_at(np.vstack([a, b]), np.array([0.2, 0.2, 0.4]), radius=1.2)
+    assert info["points_in_cluster"] == 900, info
+    assert cluster[:, 0].max() < 0.5, 'the neighbour 1.5 m away must not join'
+
+
+def test_points_in_box_respects_yaw():
+    from ros2opv2v.statics import points_in_box
+    box = {"location": [0.0, 0.0, 0.0], "extent": [1.0, 0.2, 0.5], "angle": [0.0, 90.0, 0.0]}
+    # yawed 90 deg: the long axis now runs along world y
+    assert points_in_box(np.array([[0.0, 0.9, 0.0]]), box)[0]
+    assert not points_in_box(np.array([[0.9, 0.0, 0.0]]), box)[0]
+
+
+def test_static_labels_land_in_every_frame_of_every_agent():
+    """The point of static labels: one box in the file, correct in all frames."""
+    tmp = tempfile.mkdtemp(prefix='r2o_statics_')
+    try:
+        bag = os.path.join(tmp, 'b.mcap')
+        _write_synthetic_bag(bag, n_frames=8)
+        labels_path = os.path.join(tmp, 'statics.json')
+        with open(labels_path, 'w') as handle:
+            json.dump([{"id": 7, "name": "chair_1", "location": [2.0, 1.0, 0.4],
+                        "extent": [0.3, 0.3, 0.45], "angle": [0.0, 15.0, 0.0]}], handle)
+        cfg = _synthetic_config(bag, os.path.join(tmp, 'out'))
+        for agent in cfg['agents']:
+            agent['object'] = {'emit': False}
+        cfg['output']['labels_file'] = labels_path
+        path = os.path.join(tmp, 'c.yaml')
+        with open(path, 'w') as handle:
+            yaml.safe_dump(cfg, handle)
+        report = convert(cfgmod.load_config(path), overwrite=True)
+        assert any('static object' in w for w in report.warnings), report.warnings
+        for agent in ('1', '2', '-1'):
+            for key in ('000000', '000004', '000007'):
+                with open(os.path.join(tmp, 'out', 'test', 'synthetic', agent,
+                                       key + '.yaml')) as handle:
+                    vehicles = yaml.safe_load(handle)['vehicles']
+                assert set(vehicles) == {7}, (agent, key, vehicles)
+                assert np.allclose(vehicles[7]['location'], [2.0, 1.0, 0.4]), vehicles
+                assert abs(vehicles[7]['angle'][1] - 15.0) < 1e-9
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_static_labels_coexist_with_agent_boxes_and_reject_id_clashes():
+    from ros2opv2v.labels import merge_external_labels, vehicles_for_viewer
+    poses = {'ego': make_transform(x=1.0), 'two': make_transform(x=6.0)}
+    objects = {'two': {'object_id': 10002, 'extent': [0.3, 0.3, 0.3], 'center': [0, 0, 0]}}
+    vehicles = vehicles_for_viewer(poses, objects, viewer='ego')
+    merged = merge_external_labels(dict(vehicles), [
+        {"id": 7, "location": [2.0, 1.0, 0.4], "extent": [0.3, 0.3, 0.45]}])
+    assert set(merged) == {10002, 7}, merged
+    try:
+        merge_external_labels(dict(vehicles), [
+            {"id": 10002, "location": [0, 0, 0], "extent": [1, 1, 1]}])
+    except ValueError as exc:
+        assert 'collides' in str(exc)
+    else:
+        raise AssertionError('an id colliding with an agent box must be refused')
+
+
+def test_missing_labels_file_is_refused_at_config_load():
+    tmp = tempfile.mkdtemp(prefix='r2o_nolabels_')
+    try:
+        cfg = _synthetic_config('/nonexistent.mcap', os.path.join(tmp, 'out'))
+        cfg['output']['labels_file'] = os.path.join(tmp, 'not_there.json')
+        path = os.path.join(tmp, 'c.yaml')
+        with open(path, 'w') as handle:
+            yaml.safe_dump(cfg, handle)
+        try:
+            cfgmod.load_config(path)
+        except cfgmod.ConfigError as exc:
+            assert 'label_static.py' in str(exc), exc
+        else:
+            raise AssertionError('a missing labels_file must fail at load, not at write time')
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_frame_check_does_not_fail_on_static_infrastructure():
+    """A static node legitimately sits outside the mapped floor and looks into it
+    — the MIRC Arducam is 5.5 m outside it, 2 m up. Only a MOVING agent's
+    trajectory is evidence about the frame."""
+    import importlib
+    label_static = importlib.import_module('label_static')
+    rng = np.random.default_rng(0)
+    cloud = np.column_stack([rng.uniform(0, 8, 5000), rng.uniform(-14, 0, 5000),
+                             rng.normal(-1.0, 0.01, 5000)])
+    moving = [{"lidar_pose": [x, -x, 0.2, 0, 0, 0]} for x in np.linspace(0.5, 7.5, 40)]
+    static_outside = [{"lidar_pose": [-5.5, -2.6, 2.0, 0, 0, 0]}] * 40
+    assert label_static.verify_frame(cloud, {"1": moving, "-1": static_outside})
+    # but a moving agent outside it is a real frame error
+    shifted = [{"lidar_pose": [x + 100.0, -x, 0.2, 0, 0, 0]} for x in np.linspace(0.5, 7.5, 40)]
+    assert not label_static.verify_frame(cloud, {"1": shifted})
 
 
 if __name__ == '__main__':
