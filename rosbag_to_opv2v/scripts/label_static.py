@@ -134,7 +134,29 @@ def verify_frame(cloud: np.ndarray, poses: Dict[str, List[dict]]) -> bool:
 
 
 # ----------------------------------------------------------------- proposing
-def propose(cloud: np.ndarray, ground_z: float, args) -> List[dict]:
+def trajectory_roi(poses: Dict[str, List[dict]], margin: float) -> Optional[np.ndarray]:
+    """The area the MOVING agents covered, expanded by `margin`, as [xlo, ylo, xhi, yhi].
+
+    A mapping session usually covers far more of a building than one run does —
+    this map is 33 x 54 m while the carts moved through about 8 x 15 m of it. Only
+    objects the agents could actually observe can be ground truth for this
+    dataset, so proposals are restricted to their neighbourhood; furniture in
+    rooms nobody visited is noise in the list, and a box there would be a label
+    no agent can ever see.
+    """
+    tracks = []
+    for rows in poses.values():
+        track = np.array([r["lidar_pose"][:2] for r in rows], dtype=np.float64)
+        if float(np.linalg.norm(track.max(axis=0) - track.min(axis=0))) >= 0.5:
+            tracks.append(track)
+    if not tracks:
+        return None
+    allpts = np.vstack(tracks)
+    return np.r_[allpts.min(axis=0) - margin, allpts.max(axis=0) + margin]
+
+
+def propose(cloud: np.ndarray, ground_z: float, args,
+            roi: Optional[np.ndarray] = None) -> List[dict]:
     """Candidate free-standing objects, so a seed can be read off rather than hunted.
 
     Deliberately crude — everything in a height band above the floor, voxelised,
@@ -144,7 +166,11 @@ def propose(cloud: np.ndarray, ground_z: float, args) -> List[dict]:
     """
     z_lo = ground_z + args.min_height
     z_hi = ground_z + args.max_height
-    band = cloud[(cloud[:, 2] > z_lo) & (cloud[:, 2] < z_hi)]
+    keep = (cloud[:, 2] > z_lo) & (cloud[:, 2] < z_hi)
+    if roi is not None:
+        keep &= ((cloud[:, 0] >= roi[0]) & (cloud[:, 0] <= roi[2])
+                 & (cloud[:, 1] >= roi[1]) & (cloud[:, 1] <= roi[3]))
+    band = cloud[keep]
     if len(band) < 50:
         print("no points in the %.2f..%.2f m band above the floor" % (args.min_height,
                                                                      args.max_height))
@@ -271,6 +297,11 @@ def main() -> int:
     parser.add_argument("--max-footprint", type=float, default=1.50)
     parser.add_argument("--min-points", type=int, default=80)
     parser.add_argument("--max-proposals", type=int, default=25)
+    parser.add_argument("--roi-margin", type=float, default=3.0,
+                        help="proposals: metres around the agents' path to search "
+                             "(the map usually covers far more building than one run)")
+    parser.add_argument("--whole-map", action="store_true",
+                        help="propose over the entire cloud, not just where the agents were")
     parser.add_argument("--voxel", type=float, default=0.08)
     parser.add_argument("--max-points", type=int, default=4000000)
     args = parser.parse_args()
@@ -291,9 +322,17 @@ def main() -> int:
     ground_z, ginfo = ground_level(cloud)
     print("\nfloor       : z = %+.3f m in the map frame  (%s)" % (ground_z, ginfo["method"]))
     print("  The map's z origin is the surveyed anchor board, not the ground, so this is")
-    print("  also the number `cloud.ground_lift` needs: a sensor at map z = Z sits")
-    print("  %.2f m above the floor when Z = 0.19 (the carts' cameras)."
-          % (0.193 - ground_z))
+    print("  the number `cloud.ground_lift` needs, and nothing else in the dataset")
+    print("  supplies it.")
+    if poses:
+        for agent, rows in sorted(poses.items()):
+            sensor_z = float(np.median([r["lidar_pose"][2] for r in rows]))
+            height = sensor_z - ground_z
+            print("    agent %-4s sensor at map z %+.3f = %.2f m above the floor"
+                  "   -> ground_lift: %.2f  (1.9 - %.2f, to match OPV2V's car-roof prior)"
+                  % (agent, sensor_z, height, max(1.9 - height, 0.0), height))
+        print("    Set it per agent in the config only if you intend to run "
+              "OPV2V-pretrained\n    checkpoints; 0 is a valid, documented choice otherwise.")
 
     labels: List[dict] = []
     source = args.labels or args.out
@@ -307,9 +346,14 @@ def main() -> int:
                      label["extent"], label["angle"][1]))
 
     if args.propose:
-        print("\ncandidate free-standing objects between %.2f and %.2f m above the floor:"
+        roi = trajectory_roi(poses, args.roi_margin) if poses and not args.whole_map else None
+        if roi is not None:
+            print("\nsearching only where the agents were: x %.2f..%.2f  y %.2f..%.2f "
+                  "(their path plus %.1f m). --whole-map searches the entire cloud."
+                  % (roi[0], roi[2], roi[1], roi[3], args.roi_margin))
+        print("candidate free-standing objects between %.2f and %.2f m above the floor:"
               % (args.min_height, args.max_height))
-        rows = propose(cloud, ground_z, args)
+        rows = propose(cloud, ground_z, args, roi)
         if not rows:
             print("  none — widen --min-footprint/--max-footprint or lower --min-points")
         for i, row in enumerate(rows):
