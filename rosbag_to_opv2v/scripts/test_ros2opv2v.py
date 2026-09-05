@@ -2855,6 +2855,38 @@ def test_camera_images_are_written_rgb_not_rgba():
     assert out.shape == (height, width, 3) and out[0, 0].tolist() == [10, 20, 30]
 
 
+
+def test_a_frame_missing_its_camera_is_dropped_like_a_missing_cloud():
+    """Cameras were matched AFTER the completeness decision, so a frame could be
+    written with a cloud and a yaml but no image. Anything LiDAR-only loads it
+    happily; anything multimodal dies 278 frames into a run on a bare
+    FileNotFoundError, with nothing to say the dataset was built that way."""
+    from ros2opv2v.sync import StampIndex, build_frame_table
+
+    ns = 1_000_000_000
+    times = [i * ns // 10 for i in range(10)]          # 10 Hz grid
+    clouds = {'ego': StampIndex(times), 'partner': StampIndex(times)}
+
+    # the ego's camera drops out for frames 4 and 5
+    gap = [t for i, t in enumerate(times) if i not in (4, 5)]
+    cameras = {('ego', 0): StampIndex(gap), ('partner', 0): StampIndex(times)}
+
+    table = build_frame_table(times, clouds, {'ego': True, 'partner': True},
+                              ns // 40, 'ego', drop_incomplete=True,
+                              camera_indices=cameras)
+    assert len(table.frames) == 8, len(table.frames)
+    assert any('camera0' in key for key in table.dropped), table.dropped
+    # every surviving frame carries an image for every agent that has a camera
+    for frame in table.frames:
+        assert set(frame.camera_stamps) == {('ego', 0), ('partner', 0)}, frame.camera_stamps
+
+    # an OPTIONAL agent's missing camera must not drop the frame
+    table = build_frame_table(times, clouds, {'ego': False, 'partner': True},
+                              ns // 40, 'ego', drop_incomplete=True,
+                              camera_indices=cameras)
+    assert len(table.frames) == 10, len(table.frames)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

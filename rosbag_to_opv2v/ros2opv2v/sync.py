@@ -299,6 +299,20 @@ def build_frame_table(times: Sequence[int],
             cloud_stamps[name] = raw
             skews[name] = corrected - t_ns
 
+        # Cameras count towards completeness, not as an afterthought. A frame
+        # written with a cloud and a yaml but no image is loadable by anything
+        # LiDAR-only and fatal to anything multimodal, which reads it 278 frames
+        # into a run as a bare FileNotFoundError with no hint that the dataset
+        # was built that way on purpose.
+        camera_hits: Dict[Tuple[str, int], Tuple[int, int]] = {}
+        for (agent_name, slot), index in camera_indices.items():
+            found = index.nearest_pair(t_ns, tolerance_ns)
+            if found is None:
+                if required.get(agent_name, True):
+                    missing.append("%s:camera%d" % (agent_name, slot))
+                continue
+            camera_hits[(agent_name, slot)] = found
+
         if missing:
             if drop_incomplete:
                 key = "missing:" + ",".join(sorted(missing))
@@ -313,12 +327,9 @@ def build_frame_table(times: Sequence[int],
 
         frame = Frame(index=len(frames), t_ns=int(t_ns), cloud_stamps=cloud_stamps,
                       skew_ns=skews)
-        for (agent_name, slot), index in camera_indices.items():
-            found = index.nearest_pair(t_ns, tolerance_ns)
-            if found is not None:
-                corrected, raw = found
-                frame.camera_stamps[(agent_name, slot)] = raw
-                frame.camera_skew_ns[(agent_name, slot)] = corrected - t_ns
+        for (agent_name, slot), (corrected, raw) in camera_hits.items():
+            frame.camera_stamps[(agent_name, slot)] = raw
+            frame.camera_skew_ns[(agent_name, slot)] = corrected - t_ns
         frames.append(frame)
 
     return FrameTable(frames=frames, dropped=dropped, master=master,
