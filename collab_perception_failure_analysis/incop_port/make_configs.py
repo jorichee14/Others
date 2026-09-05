@@ -7,6 +7,10 @@ Two presets, because the study needs two arms and they must not drift apart:
                    agents, anchor-based head. Comparable to the seven OpenCOOD baselines.
                    Expensive: needs the OPV2V train+validate splits and ~12-20 h/model.
 
+  --preset mirc    the real MIRC coop2 recording in OPV2V layout, 40 x 40 m, 0.1 m
+                   voxels, chair-sized anchors, 3 agents, anchor head. One split: it is
+                   an EVALUATION scene, not a training set (see the split note below).
+
   --preset incop   InCoP's own indoor benchmark, 22.4 x 22.4 m, 0.1 m voxels, 7 indoor
                    classes, 2 robots, center head. Cheap: InCoP's own single-agent LiDAR
                    config already trains at batch_size 8 for 25 epochs, so this is a
@@ -66,6 +70,46 @@ PRESETS = {
         'nms': {'max_num': 100, 'nms_thresh': 0.15},
         'fixed_order': False,
         'splits': ('train', 'validate', 'test'),
+    },
+    'mirc': {
+        # The real MIRC coop2 recording, converted to OPV2V layout: two pushcarts and
+        # one roadside Arducam, 1330 frames, two static chairs as ground truth.
+        #
+        # It reads with the `opv2v` loader because the TREE is OPV2V — but nothing else
+        # about it is outdoor, and the OPV2V preset would measure nothing here. A
+        # 3.9 x 1.6 x 1.56 m car anchor centred on a 0.8 x 0.73 x 0.96 m chair has an
+        # IoU of about 0.06: below any positive threshold, so no anchor is ever assigned
+        # and the head cannot represent the object at all. At 0.4 m voxels the chair is
+        # under two pillars wide on top of that. Hence chair-sized anchors, 0.1 m voxels,
+        # and a range that covers a room rather than a highway.
+        'dataset': 'opv2v',
+        # Ego-frame metres. The carts stay within 17.8 m of each other and the chairs sit
+        # 3-18 m out, so +-20 m covers the scene with margin; 40 m / 0.1 m = 400 cells,
+        # 200 after the stride-2 feature map. z spans one pillar, floor (-0.97 m below
+        # the cart sensor) to well above a standing person.
+        'range': [-20.0, -20.0, -1.6, 20.0, 20.0, 1.6],
+        'voxel': [0.1, 0.1, 3.2],
+        'max_cav': 3,
+        'comm_range': 50,
+        'head': 'anchor_based',      # matches the seven OpenCOOD baselines
+        'classes': ['chair'],
+        # The mean of the two fitted chairs (0.80x0.73x0.96 and 0.67x0.60x0.87), rounded.
+        'anchor': {'l': 0.75, 'w': 0.68, 'h': 0.92},
+        'epochs': 25,
+        'batch_size': 4,
+        'lr_steps': [15, 20],
+        'layer_strides': [1, 2, 2],
+        'voxel_train': 60000, 'voxel_test': 120000,
+        # Small objects need a reachable positive threshold: OPV2V's 0.6 is tuned for a
+        # car anchor that overlaps a car well, and a 0.75 m anchor on a 0.8 m chair is
+        # far more sensitive to centre offset.
+        'target': {'pos_threshold': 0.40, 'neg_threshold': 0.25, 'score_threshold': 0.20},
+        'nms': {'max_num': 100, 'nms_thresh': 0.15},
+        'fixed_order': False,
+        # One recording, one split: there is no train/validate here, and pretending
+        # otherwise by slicing it would put near-duplicate frames (1.7 cm apart at
+        # 10 Hz) on both sides of the split.
+        'splits': ('test', 'test', 'test'),
     },
     'incop': {
         'dataset': 'isaacsim',

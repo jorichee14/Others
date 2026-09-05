@@ -96,6 +96,17 @@ def run_method(name, ckpt_dir, fusion, args):
     from opencood.utils import eval_utils
 
     hypes = yaml_utils.load_yaml(os.path.join(ckpt_dir, 'config.yaml'))
+    if args.validate_dir:
+        # Evaluate the SAME checkpoint on a different tree. Only the directory moves:
+        # the preprocessor, anchors and range stay the checkpoint's own, because a
+        # number compared against the published AP has to come from the config the
+        # weights were trained under.
+        target = os.path.expanduser(args.validate_dir)
+        if not os.path.isdir(target):
+            raise SystemExit('--validate-dir %s does not exist' % target)
+        for key in ('validate_dir', 'test_dir'):
+            hypes[key] = target
+        print('[%s] evaluating on %s' % (name, target))
 
     print('[%s] building dataset' % name)
     # visualize=True matches the stock inference.py code path validated in Phase 0.
@@ -205,6 +216,10 @@ def main():
     ap.add_argument('--max-frames', type=int, default=0,
                     help='evaluate only the first N frames (0 = all)')
     ap.add_argument('--num-workers', type=int, default=8)
+    ap.add_argument('--validate-dir', default=None,
+                    help="evaluate on this split directory instead of the one in each "
+                         "checkpoint's config.yaml (e.g. a converted real-bag dataset). "
+                         "Anchors, voxel size and lidar range stay the checkpoint's.")
     ap.add_argument('--force', action='store_true',
                     help='re-run methods whose JSON already exists')
     args = ap.parse_args()
