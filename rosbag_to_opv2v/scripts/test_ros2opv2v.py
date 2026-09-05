@@ -2442,6 +2442,55 @@ def test_a_truncated_pcd_is_an_error_not_a_smaller_cloud():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+
+def test_refitting_a_named_object_replaces_it_instead_of_duplicating():
+    """Re-running the same seeds with the same --out must leave two labels, not
+    four. A duplicate box is a phantom object in every frame of the dataset, and
+    a phantom scores as a miss against every detector that gets it right."""
+    import importlib
+    import subprocess
+    label_static = importlib.import_module('label_static')
+    from ros2opv2v.writers import write_pcd
+    rng = np.random.default_rng(53)
+    ground = -0.719
+    n = 60000
+    floor = np.column_stack([rng.uniform(-6, 6, n), rng.uniform(-6, 6, n),
+                             ground + rng.uniform(0.0, 0.06, n)])
+
+    def chair(cx, cy, m=6000):
+        return np.column_stack([cx + rng.uniform(-0.26, 0.26, m),
+                                cy + rng.uniform(-0.22, 0.22, m),
+                                rng.uniform(ground, ground + 0.90, m)])
+
+    tmp = tempfile.mkdtemp()
+    try:
+        pcd = os.path.join(tmp, 'map.pcd')
+        arr = np.vstack([floor, chair(1.0, -2.0), chair(3.5, 1.0)])
+        write_pcd(pcd, np.column_stack([arr, np.zeros(len(arr))]).astype(np.float32))
+        out = os.path.join(tmp, 'statics.json')
+        script = os.path.join(os.path.dirname(os.path.abspath(label_static.__file__)),
+                              'label_static.py')
+        argv = [sys.executable, script, '--pcd', pcd, '--out', out,
+                '--seed', '1.0,-2.0,-0.05', '--name', 'chair_1',
+                '--seed', '3.5,1.0,-0.05', '--name', 'chair_2']
+        for _ in range(3):
+            run = subprocess.run(argv, capture_output=True, text=True)
+            assert run.returncode == 0, run.stdout[-1500:] + run.stderr[-800:]
+        labels = json.load(open(out))
+        assert len(labels) == 2, [l['name'] for l in labels]
+        assert sorted(l['name'] for l in labels) == ['chair_1', 'chair_2']
+        assert sorted(l['id'] for l in labels) == [1, 2], labels
+        # a third, differently named object still gets its own id
+        run = subprocess.run(argv[:6] + ['--seed', '1.0,-2.0,-0.05', '--name', 'other'],
+                             capture_output=True, text=True)
+        assert run.returncode == 0, run.stderr[-800:]
+        labels = json.load(open(out))
+        assert len(labels) == 3, [l['name'] for l in labels]
+        assert 'within 0.25 m' in run.stdout, 'two labels on one object should be flagged'
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

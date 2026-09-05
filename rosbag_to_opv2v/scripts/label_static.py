@@ -754,12 +754,31 @@ def main() -> int:
             return 3
         box = fit_box(cluster, ground_z=ground_z,
                       sit_on_ground=not args.no_ground_extend)
+        name = (names[index] if len(names) == len(seeds) else
+                "%s_%d" % (names[0], index + 1) if names else None)
+        # A name is the object's identity across runs. Re-fitting chair_1 with a
+        # better seed must REPLACE chair_1, not stand a second box beside it —
+        # every duplicate becomes a phantom object in all 1330 frames, and it is
+        # a phantom that scores as a miss for every detector that gets it right.
+        prior = [label for label in labels if name and label.get("name") == name]
+        if prior:
+            print("  replacing %s (id %s) from a previous run"
+                  % (name, ", ".join(str(p["id"]) for p in prior)))
+            labels = [label for label in labels if label.get("name") != name]
         used = {label["id"] for label in labels}
-        box["id"] = (args.id + index if args.id is not None else next(
-            i for i in range(1, RESERVED_MIN) if i not in used))
-        box["name"] = (names[index] if len(names) == len(seeds) else
-                       "%s_%d" % (names[0], index + 1) if names else
-                       "object_%d" % box["id"])
+        if args.id is not None:
+            box["id"] = args.id + index
+        elif prior:
+            box["id"] = min(p["id"] for p in prior)
+        else:
+            box["id"] = next(i for i in range(1, RESERVED_MIN) if i not in used)
+        box["name"] = name or ("object_%d" % box["id"])
+        near = [label for label in labels
+                if float(np.linalg.norm(np.array(label["location"][:2])
+                                        - np.array(box["location"][:2]))) < 0.25]
+        if near:
+            print("  ! %s stands within 0.25 m of %s (id %d) — two labels on one "
+                  "object?" % (box["name"], near[0].get("name", "?"), near[0]["id"]))
         box["source"] = {"pcd": os.path.abspath(args.pcd),
                          "seed": [round(float(v), 3) for v in seed],
                          "cluster": cinfo, "ground_z": round(ground_z, 4),
