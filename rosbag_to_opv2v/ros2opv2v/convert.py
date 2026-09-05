@@ -641,6 +641,17 @@ def _check_expected_starts(cfg: ConverterConfig, report: ConversionReport) -> No
     the wrong point — a metre out vertically — and the dataset converts, validates
     and looks fine.
     """
+    # The anchor names where the agent stood at the START OF THE BAG. Convert a
+    # window from further in and the agent has legitimately driven away from it,
+    # so the check would reject a perfectly good slice — it reported 7 m on this
+    # dataset for a window at t = 40 s, which is simply how far the cart walked.
+    if cfg.time.start_offset_s > 0:
+        report.warnings.append(
+            "pose.expected_start not checked: this run starts %.1f s into the bag, "
+            "where the agents are no longer at their anchors. Convert from 0 to "
+            "check the frame." % cfg.time.start_offset_s)
+        return
+
     bad = []
     for agent in cfg.active_agents:
         expected = agent.pose.expected_start

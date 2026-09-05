@@ -2713,6 +2713,36 @@ def test_a_depth_agents_written_cloud_has_the_floor_below_it():
         'rotating the points must not move them in the world'
 
 
+
+def test_the_anchor_check_is_skipped_on_a_window_from_mid_bag():
+    """pose.expected_start names where an agent stood at the START of the bag.
+    Convert a window from further in and the agent has legitimately driven away,
+    so the check measures the drive, not the frame — it refused a good 6 s slice
+    at t=40 s over 7.00 m, which is how far that cart had walked."""
+    import importlib
+    convertmod = importlib.import_module('ros2opv2v.convert')
+    cfg = cfgmod.load_config(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'configs', 'mirc_coop2.yaml'))
+    report = convertmod.ConversionReport(bag=cfg.bag)
+    report.pose_stats = {a.name: {'start_m': [99.0, 99.0, 99.0]}
+                         for a in cfg.active_agents}
+
+    cfg.time.start_offset_s = 0.0
+    try:
+        convertmod._check_expected_starts(cfg, report)
+    except convertmod.ConversionError:
+        pass
+    else:
+        raise AssertionError('a wrong start at t=0 is a real frame error')
+
+    cfg.time.start_offset_s = 40.0
+    before = len(report.warnings)
+    convertmod._check_expected_starts(cfg, report)      # must not raise
+    assert len(report.warnings) == before + 1
+    assert 'not checked' in report.warnings[-1]
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]
