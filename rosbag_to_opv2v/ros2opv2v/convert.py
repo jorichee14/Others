@@ -835,15 +835,33 @@ def load_static_labels(cfg: ConverterConfig, report: ConversionReport) -> List[d
         raw = json.load(handle)
     if not isinstance(raw, list):
         raise ConversionError(f"{path}: expected a list of label objects")
-    out = []
+    out, unclassified = [], []
     for item in raw:
         missing = [k for k in ("id", "location", "extent") if k not in item]
         if missing:
             raise ConversionError(f"{path}: a label is missing {missing}")
-        out.append({"id": int(item["id"]), "location": [float(v) for v in item["location"]],
-                    "extent": [float(v) for v in item["extent"]],
-                    "angle": [float(v) for v in item.get("angle", (0.0, 0.0, 0.0))],
-                    "center": [float(v) for v in item.get("center", (0.0, 0.0, 0.0))]})
+        entry = {"id": int(item["id"]),
+                 "location": [float(v) for v in item["location"]],
+                 "extent": [float(v) for v in item["extent"]],
+                 "angle": [float(v) for v in item.get("angle", (0.0, 0.0, 0.0))],
+                 "center": [float(v) for v in item.get("center", (0.0, 0.0, 0.0))]}
+        # The class has to survive this rebuild. A reader that finds no class
+        # does not treat the object as unclassified — it falls back to class id
+        # 0, so a dataset of chairs is loaded as a dataset of whatever sits at
+        # index 0 and every chair prediction is scored against the wrong label.
+        obj_type = item.get("obj_type") or item.get("class_name")
+        if obj_type:
+            entry["obj_type"] = str(obj_type)
+        else:
+            unclassified.append(str(item.get("name", entry["id"])))
+        out.append(entry)
+    if unclassified:
+        report.warnings.append(
+            "labels: %d object(s) carry no obj_type (%s). A reader that finds no "
+            "class does not mark the object unclassified — it falls back to class "
+            "id 0, so these are scored as whatever sits at index 0 of its class "
+            "list, and every prediction of the RIGHT class counts as a miss."
+            % (len(unclassified), ", ".join(unclassified)))
     names = ", ".join(str(item.get("name", item["id"])) for item in raw)
     report.warnings.append(
         f"labels: {len(out)} static object(s) from {os.path.basename(path)} ({names}) "

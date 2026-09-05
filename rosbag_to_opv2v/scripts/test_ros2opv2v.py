@@ -2976,6 +2976,46 @@ def test_the_incop_config_pins_every_camera_to_the_models_declared_size():
         assert camera.output_size == [1280, 800], (name, camera.output_size)
 
 
+
+def test_the_label_class_survives_into_every_frame_yaml():
+    """The class has to reach the frame yaml, not just the labels file. A reader
+    that finds no class does not treat the object as unclassified — it falls
+    back to class id 0. On this dataset that made 730 chairs load as
+    potted_plant, so every chair prediction was scored against the wrong label
+    and the chair AP was undefined rather than bad."""
+    import importlib
+    convertmod = importlib.import_module('ros2opv2v.convert')
+    from ros2opv2v.labels import merge_external_labels
+
+    tmp = tempfile.mkdtemp()
+    try:
+        path = os.path.join(tmp, 'statics.json')
+        json.dump([
+            {"id": 1, "name": "chair_1", "location": [3.1, -1.4, -0.24],
+             "extent": [0.4, 0.37, 0.48], "angle": [0, 158.2, 0], "obj_type": "chair"},
+            {"id": 2, "name": "chair_2", "location": [4.4, -8.1, -0.28],
+             "extent": [0.34, 0.3, 0.44], "angle": [0, 2.0, 0]},
+        ], open(path, 'w'))
+
+        cfg = cfgmod.load_config(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'configs', 'mirc_coop2.yaml'))
+        cfg.output.labels_file = path
+        report = convertmod.ConversionReport(bag=cfg.bag)
+        loaded = convertmod.load_static_labels(cfg, report)
+
+        assert loaded[0]["obj_type"] == "chair", loaded[0]
+        assert "obj_type" not in loaded[1], 'an unset class must not be invented'
+        assert any('no obj_type' in w and 'chair_2' in w for w in report.warnings), \
+            report.warnings
+
+        vehicles = merge_external_labels({}, loaded)
+        assert vehicles[1]["obj_type"] == "chair"
+        assert "obj_type" not in vehicles[2]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]
