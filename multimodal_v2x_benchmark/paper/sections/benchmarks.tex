@@ -1,10 +1,16 @@
 % Benchmark section: dataset-benchmark framing, clean channel only.
-% Organising principle: every task is a collaborative-perception task, and every
-% cohort of baselines is split into LiDAR-only methods and multi-modal methods.
-% Communication impairment is deliberately OUT OF SCOPE here (see \S\ref{sec:outlook});
-% the only communication axis retained is the message size a method chooses to send,
-% which is a property of the method, not of a channel.
-% NOTE: \cite keys below are placeholders -- reconcile with the .bib before compiling.
+% Organising principles:
+%   (1) every task is a collaborative-perception task;
+%   (2) baselines are split into LiDAR-only and multi-modal blocks, never merged;
+%   (3) every baseline carries an ORIGIN tag -- [I] indoor, [O] outdoor, [S] simulation --
+%       because the platform here is indoor and most collaborative-perception methods
+%       are outdoor automotive by construction.
+% Sensor suite assumed: RGB-D camera, 3D LiDAR, TI IWR6843 mmWave radar (+ radio-link
+% measurements, if a CSI/RSSI logging path exists -- flagged where it matters).
+% Communication impairment is OUT OF SCOPE here; the only communication axis kept is
+% the message size a method natively sends.
+% NOTE: \cite keys are placeholders and venue/year attributions must be verified against
+% publisher records before submission.
 
 \section{Benchmark Tasks and Baselines}
 \label{sec:benchmarks}
@@ -12,273 +18,483 @@
 The benchmark poses five tasks on the dataset, all of them collaborative: in
 each, an \emph{ego} agent must produce an output in its own coordinate frame
 that it could not produce as well alone, given messages from the other agents
-present in the same scene. Tasks differ in what the output is (geometry, boxes,
-pose, identity) and in which modalities may be used to produce it.
+in the same scene. Tasks differ in what the output is (geometry, boxes, pose,
+identity) and in which modalities may be used to produce it.
 
-Two properties organise the whole section. First, every task is reported
-against a \textbf{single-agent reference} computed from the ego's own sensors
-with all messages withheld; the collaborative number is meaningful only next to
-it. Second, every cohort of baselines is reported in two blocks --- methods
-that consume \textbf{LiDAR only}, and \textbf{multi-modal} methods that consume
-camera, radar, or CSI in addition to (or instead of) LiDAR. The two blocks are
-never merged into one ranking: they have different input budgets, and mixing
-them hides whether a gain comes from collaboration or from an extra sensor.
+Three properties organise the section. First, every task is reported against a
+\textbf{single-agent reference} computed from the ego's own sensors with all
+messages withheld; the collaborative number is meaningful only next to it.
+Second, baselines are reported in two blocks --- \textbf{LiDAR-only} methods
+and \textbf{multi-modal} methods that also consume RGB-D or radar --- and the
+blocks are never merged into one ranking, because they have different input
+budgets and mixing them hides whether a gain comes from collaboration or from
+an extra sensor. Third, every baseline is tagged by \textbf{origin}: indoor
+[I], outdoor [O], or simulation-only [S].
 
-All results in this section are obtained under an \textbf{idealised channel}:
-messages are delivered complete, in order, and with zero delay. The dataset
-ships logged link measurements, but they are not used here; evaluation under
-the logged channel is a separate study and is discussed only in
-\S\ref{sec:outlook}.
+All results here are obtained under an \textbf{idealised channel}: messages
+arrive complete, in order, with zero delay. Evaluation under logged link
+conditions is a separate study (\S\ref{sec:outlook}).
+
+\subsection{Setting and Sensor Suite}
+\label{sec:bench:setting}
+
+The platform is an \textbf{indoor} multi-agent testbed. Each agent carries:
+
+\begin{itemize}
+  \item \textbf{RGB-D camera} --- registered colour and \emph{measured} depth.
+        This is not the same input as the monocular rigs that outdoor
+        camera-based collaborative methods assume: depth is observed, not
+        predicted, so the depth-distribution stage of a lift-splat frontend is
+        supervised or replaced outright. Every camera-branch baseline below is
+        specified in both variants (predicted depth / measured depth) so the
+        contribution of measured depth is separable.
+  \item \textbf{3D LiDAR} --- the reference geometry sensor and the input to
+        the LiDAR-only cohort.
+  \item \textbf{TI IWR6843 mmWave radar} --- a 60--64\,GHz short-range module
+        producing a \emph{sparse} point cloud (order $10^1$--$10^2$ points per
+        frame) plus range--Doppler. It is not an automotive 4D imaging radar,
+        so outdoor radar-fusion methods cannot be run as published; the
+        adaptation is stated per method in \S\ref{sec:bench:radar}.
+  \item \textbf{Radio-link measurements} (CSI/RSSI) --- required by the CSI
+        sub-protocol of T3 and by T5. These come from the communication radios,
+        not from a perception sensor.
+        \todo{Confirm a CSI/RSSI logging path exists on the testbed radios and
+        state the chipset, bandwidth, and per-packet logging rate; if it does
+        not, drop the CSI sub-protocol of T3 and re-scope T5 to RSSI and packet
+        metadata only.}
+\end{itemize}
+
+The indoor setting is not a cosmetic difference for the baselines. Outdoor
+collaborative detectors are parameterised for $\sim$100\,m ranges, $\sim$4\,m
+objects, and 0.4\,m voxels; indoors the objects are smaller than one outdoor
+voxel. Every outdoor-origin baseline is therefore re-parameterised (detection
+range, voxel size, anchor priors, communication range) and the re-parameterisation
+is reported with the method, so an outdoor method that underperforms is not
+mistaken for a method that was mis-tuned.
+\todo{Give the indoor re-parameterisation table: per method, the values changed
+from the published config and the rationale.}
 
 \subsection{Notation}
 \label{sec:bench:notation}
 
 A scene at time $t$ contains agents $\mathcal{A}_t$ with a designated ego
-$e \in \mathcal{A}_t$. Agent $i$ observes a LiDAR sweep $P^i_t$, camera images
-$\{I^{i,k}_t\}_{k=1}^{K}$, a radar return $R^i_t$ (point cloud and
-range--Doppler), and channel state $H^i_t$ (per-subcarrier CSI and RSSI) on its
-links, together with a pose $T^i_t \in SE(3)$ in the shared frame. A
-collaborative method is a map
+$e \in \mathcal{A}_t$. Agent $i$ observes a LiDAR sweep $P^i_t$, an RGB-D pair
+$(I^i_t, D^i_t)$, a radar return $R^i_t$ (sparse point cloud and
+range--Doppler), and link state $H^i_t$ (CSI/RSSI), with pose
+$T^i_t \in SE(3)$ in the shared frame. A collaborative method is a map
 \begin{equation}
   \hat{y}^e_t \;=\; F\Bigl(S^e_t,\; \bigl\{\,m^{i \to e}_t \,\bigr\}_{i \in \mathcal{A}_t \setminus \{e\}}\Bigr),
   \qquad
   m^{i \to e}_t \;=\; G\bigl(S^i_t,\, T^i_t,\, T^e_t\bigr),
 \end{equation}
 where $S^i_t$ is the subset of modalities the method admits, $G$ is its
-encoder, and $m^{i \to e}_t$ is the message, whose size $|m^{i \to e}_t|$ in
-bits per frame is measured and reported alongside accuracy for every method.
-Setting $\mathcal{A}_t = \{e\}$ gives the single-agent reference $\hat{y}^{e,\mathrm{solo}}_t$.
+encoder, and $m^{i \to e}_t$ is the message, whose size in bits per frame is
+measured and reported for every method. Setting $\mathcal{A}_t = \{e\}$ gives
+the single-agent reference $\hat{y}^{e,\mathrm{solo}}_t$.
 
 \subsection{Task Definitions}
 \label{sec:bench:tasks}
 
 \paragraph{T1 --- Cooperative point cloud reconstruction.}
-\emph{Input:} ego sweep $P^e_t$, messages from all collaborators, and relative
-poses. \emph{Output:} a point set $\hat{Q}^e_t \subset \mathbb{R}^3$ in the ego
-frame over a fixed evaluation volume $V$ (an $L \times W \times H$ box centred
-on the ego), optionally with per-point confidence.
+\emph{Input:} ego observation, messages from all collaborators, relative poses.
+\emph{Output:} a point set $\hat{Q}^e_t \subset \mathbb{R}^3$ in the ego frame
+over a fixed evaluation volume $V$, optionally with per-point confidence.
 \emph{Ground truth:} the union of all agents' sweeps in the window, registered
 into the ego frame with surveyed poses and voxel-deduplicated at resolution
-$\rho$, restricted to $V$. \emph{Why collaborative:} the target is the geometry
-the ego cannot see, so the single-agent reference is bounded away from the
-ground truth by construction; the task measures how much of that gap a method
-recovers.
+$\rho$, restricted to $V$. \emph{Why collaborative:} the target is geometry the
+ego cannot see, so the single-agent reference is bounded away from ground truth
+by construction; the task measures how much of that gap a method recovers.
 \todo{Fix $V$, $\rho$, and the registration tolerance; state whether dynamic
 objects are excluded from the reconstruction ground truth.}
 
 \paragraph{T2 --- Cooperative 3D object detection.}
-\emph{Input:} as T1. \emph{Output:} a set of oriented 3D boxes
-$\{(x,y,z,l,w,h,\theta,c,s)\}$ in the ego frame, with class $c$ and score $s$.
-\emph{Ground truth:} the union of all agents' annotations transformed into the
-ego frame, filtered to objects observed by at least one agent within the
-evaluation range --- the same ground truth is used for the collaborative and
-single-agent runs, so the reference is scored on objects the ego alone cannot
-see.
-\todo{State the evaluation range, the minimum-points-per-box visibility rule,
-and the class list.}
+\emph{Input:} as T1. \emph{Output:} oriented 3D boxes
+$\{(x,y,z,l,w,h,\theta,c,s)\}$ in the ego frame. \emph{Ground truth:} the union
+of all agents' annotations in the ego frame, filtered to objects observed by at
+least one agent within range --- the \emph{same} ground truth scores the
+collaborative and single-agent runs, so the reference is scored on objects the
+ego alone cannot see.
+\todo{State the indoor evaluation range, the minimum-points-per-box visibility
+rule, and the class list.}
 
 \paragraph{T3 --- Cross-modal localisation.}
-\emph{Input:} one query observation from a single modality --- a camera image
-$I^{i,k}_t$, a radar return $R^i_t$, or a CSI snapshot $H^i_t$ --- plus a
-reference representation of the environment (the ego's LiDAR BEV, or the
-prior map, depending on the sub-protocol). \emph{Output:} the pose of the
-querying agent, $\hat{T}^i_t$, as 3-DoF $(x, y, \psi)$ in the shared frame for
-the map-referenced sub-protocol and as relative pose
-$\hat{T}^{i \to e}_t$ for the ego-referenced one.
-\emph{Why collaborative:} relative pose is the input every fusion operator in
-T1, T2, and T4 depends on; this task measures the quality of that input in
-isolation, per modality, rather than assuming ground-truth extrinsics.
-\todo{Decide whether the CSI sub-protocol is evaluated per snapshot or per
-short window, and fix the window length.}
+\emph{Input:} one query observation from a single modality --- RGB-D frame,
+radar return, or CSI snapshot --- plus a reference representation (the ego's
+LiDAR BEV, or the prior map). \emph{Output:} 3-DoF pose $(x, y, \psi)$ in the
+shared frame for the map-referenced sub-protocol, relative pose
+$\hat{T}^{i \to e}_t$ for the ego-referenced one. \emph{Why collaborative:}
+relative pose is the input every fusion operator in T1, T2, and T4 depends on;
+this task measures the quality of that input in isolation, per modality,
+instead of assuming ground-truth extrinsics.
+\todo{Fix the CSI window length and decide per-snapshot vs.\ per-window
+evaluation.}
 
 \paragraph{T4 --- Communication-efficient collaborative perception.}
-\emph{Input:} as T2, plus a bit budget $B$ bits per frame per link.
-\emph{Output:} the T2 output produced under $|m^{i \to e}_t| \leq B$, together
-with the measured message size. A method is characterised not by a single
-number but by its \textbf{operating curve} over $B$, from the late-fusion
-regime (box lists, $10^2$--$10^3$ bits) to the early-fusion regime (raw points,
-$10^7$ bits). \emph{Why separate from T2:} T2 lets each method spend whatever
-it natively spends, which makes its ranking partly a bandwidth ranking; T4
-puts the cohort on a common budget axis.
-\todo{Fix the budget grid $B$ and the accounting rule (payload only vs.\ payload
+\emph{Input:} as T2, plus a bit budget $B$ per frame per link.
+\emph{Output:} the T2 output produced under $|m^{i \to e}_t| \leq B$, with the
+measured message size. A method is characterised by its \textbf{operating
+curve} over $B$, from the late-fusion regime (box lists) to the early-fusion
+regime (raw points). \emph{Why separate from T2:} T2 lets each method spend
+what it natively spends, so its ranking is partly a bandwidth ranking; T4 puts
+the cohort on a common budget axis.
+\todo{Fix the budget grid and the accounting rule (payload only vs.\ payload
 plus pose/metadata header).}
 
 \paragraph{T5 --- Agent fingerprinting.}
-\emph{Input:} a sequence of PHY-layer observations from one transmitter ---
-CSI magnitude/phase across subcarriers, RSSI, and per-packet metadata --- over
-a window of $W$ packets. \emph{Output:} an identity label over the $N$ enrolled
-agents, with an open-set reject option for transmitters not in the enrolment
-set. \emph{Why in a perception benchmark:} fusion operators weight messages by
+\emph{Input:} a window of $W$ PHY-layer observations from one transmitter
+(CSI magnitude/phase, RSSI, per-packet metadata). \emph{Output:} an identity
+label over $N$ enrolled agents with an open-set reject option.
+\emph{Why in a perception benchmark:} fusion operators weight messages by
 claimed identity and pose; fingerprinting establishes how well identity can be
-established from the physical layer alone, independent of any claim the message
-makes about itself.
-\todo{Fix $W$, $N$, the enrolment/query split, and whether the open-set
-negatives come from held-out devices or held-out environments.}
+recovered from the physical layer alone, independent of what the message claims
+about itself.
+\todo{Fix $W$, $N$, the enrolment/query split, and whether open-set negatives
+are held-out devices or held-out environments.}
 
 \subsection{Splits and Metrics}
 \label{sec:bench:splits}
 
 \paragraph{Protocols.}
-Two protocols are defined for every task.
-\emph{Within-environment (WE)}: train and test in the same environments, split
-by disjoint time segments with a guard interval of $\Delta$ seconds between
-segments so that no test frame shares a temporal neighbourhood with a training
-frame. \emph{Leave-one-environment-out (LOEO)}: train on all environments but
-one, test on the held-out one, repeated over environments; the reported number
-is the mean over folds with per-fold numbers in the appendix. LOEO is the
-headline protocol --- WE measures fit, LOEO measures transfer.
-\todo{Enumerate the environments, the frame counts per split, the guard
-interval $\Delta$, and the frame stride used at evaluation.}
+\emph{Within-environment (WE)}: same rooms in train and test, split by disjoint
+time segments with a guard interval $\Delta$ so no test frame shares a temporal
+neighbourhood with a training frame. \emph{Leave-one-environment-out (LOEO)}:
+train on all rooms but one, test on the held-out room, repeated over rooms;
+report the mean over folds with per-fold numbers in the appendix. LOEO is the
+headline protocol --- WE measures fit, LOEO measures transfer, and indoor scenes
+differ enough room-to-room that the gap is the interesting quantity.
+\todo{Enumerate the environments, frame counts per split, $\Delta$, and the
+evaluation frame stride.}
 
 \paragraph{Metrics.}
 \begin{itemize}
-  \item \textbf{T1:} Chamfer distance (symmetric, in metres) and F-score at
-        thresholds $\{0.1, 0.2, 0.5\}$\,m, computed inside $V$; plus
-        \emph{coverage of the ego-occluded region} --- F-score restricted to
-        the volume the ego alone does not observe, which is the part
-        collaboration exists to fill.
-  \item \textbf{T2:} AP at IoU $0.5$ and $0.7$ (BEV and 3D), reported overall
-        and split into ego-visible and ego-occluded zones.
-  \item \textbf{T3:} median and 90th-percentile position error (m) and heading
-        error (deg); recall at $\{0.5, 1, 2\}$\,m for the retrieval-style
-        camera and CSI sub-protocols; ATE over trajectories where the
-        sub-protocol is sequential.
-  \item \textbf{T4:} accuracy-vs-bandwidth curves (AP at IoU $0.7$ against
-        measured bits/frame, log axis) summarised by the area under the curve
-        over the budget grid, and by the smallest budget at which a method
-        stays within $1$ AP point of its unconstrained T2 score.
+  \item \textbf{T1:} symmetric Chamfer distance (m) and F-score at
+        $\{0.02, 0.05, 0.10\}$\,m (indoor-scale thresholds) inside $V$; plus
+        \emph{coverage of the ego-occluded region} --- F-score restricted to the
+        volume the ego alone does not observe.
+  \item \textbf{T2:} AP at IoU $0.5$ and $0.7$ (BEV and 3D), overall and split
+        into ego-visible and ego-occluded zones.
+  \item \textbf{T3:} median and p90 position (m) and heading (deg) error;
+        recall at $\{0.1, 0.25, 0.5\}$\,m for the retrieval-style RGB-D and CSI
+        sub-protocols; ATE where the sub-protocol is sequential.
+  \item \textbf{T4:} AP@0.7 vs.\ measured bits/frame (log axis), summarised by
+        area under the curve and by the smallest budget staying within $1$ AP
+        point of the unconstrained T2 score.
   \item \textbf{T5:} closed-set accuracy and macro-F1; open-set AUROC and
-        TPR at $1\%$ FPR.
+        TPR@1\%FPR.
 \end{itemize}
-Every task additionally reports the \textbf{single-agent reference} and the
-\textbf{collaboration gain} (collaborative minus reference) in the same units,
-and \textbf{bits/frame} for the message the method actually sends.
-\todo{State the number of seeds per cell and whether the reported number is
-mean or median across seeds; give the dispersion measure used in all tables.}
+Every task additionally reports the \textbf{single-agent reference}, the
+\textbf{collaboration gain}, and \textbf{bits/frame}.
+\todo{State seeds per cell, whether tables report mean or median, and the
+dispersion measure.}
 
 \subsection{Baselines}
 \label{sec:bench:baselines}
 
-Baselines are grouped by the modalities they consume. Within each group,
-methods are ordered by fusion stage --- \emph{early} (raw measurements),
-\emph{intermediate} (learned features), \emph{late} (task outputs) --- because
-stage determines both message size and where a collaborator's evidence enters
-the computation. All detectors in the LiDAR-only cohort share one backbone so
-that differences are attributable to the fusion operator rather than to the
-detector.
-\todo{Name the shared backbone and state, for each method, whether the
-checkpoint is retrained on this dataset or ported; give training schedules in
-the appendix.}
+Baselines are grouped by the modalities they consume and ordered by fusion
+stage within each group --- \emph{early} (raw measurements), \emph{intermediate}
+(learned features), \emph{late} (task outputs) --- because stage determines both
+message size and where a collaborator's evidence enters the computation. All
+detectors in the LiDAR-only cohort share one backbone, so differences are
+attributable to the fusion operator rather than the detector. Origin tags:
+[I]~indoor, [O]~outdoor, [S]~simulation-only.
+\todo{Name the shared backbone; state per method whether the checkpoint is
+trained here or ported, and give schedules in the appendix.}
 
 \subsubsection{Single-agent references}
-Per-modality, no messages exchanged: a LiDAR detector, a camera BEV detector,
-and a radar detector for T2; single-sweep accumulation for T1; per-modality
-regression/retrieval for T3.
-\todo{Cite and specify the reference detectors.}
+\label{sec:bench:solo}
+\begin{itemize}
+  \item \textbf{No-Comm LiDAR} --- the shared backbone on the ego sweep alone.
+        The floor for the LiDAR-only cohort and for T1/T2.
+  \item \textbf{No-Comm RGB-D} --- single-agent detection from the ego RGB-D
+        stream; the floor for the camera branch.
+  \item \textbf{No-Comm radar} --- single-agent detection from the ego IWR6843
+        return; expected to be weak, and reported precisely because it bounds
+        what the radar branch can contribute.
+  \item \textbf{Single-sweep accumulation} --- the ego's own sweeps integrated
+        over the window, as the T1 floor.
+\end{itemize}
 
 \subsubsection{LiDAR-only collaborative methods}
+\label{sec:bench:lidar}
+The V2X lineage below is outdoor by origin; all of it is re-parameterised for
+indoor ranges (\S\ref{sec:bench:setting}).
 \begin{itemize}
-  \item \textbf{Early fusion} --- transmit raw points, detect once over the
-        union \cite{cooper}. Upper bound on information, upper bound on
-        bandwidth.
-  \item \textbf{Late fusion} --- transmit boxes, merge by NMS. Lower bound on
-        bandwidth.
-  \item \textbf{Intermediate fusion} --- transmit BEV features:
-        attention-based \cite{opv2v,cobevt,v2xvit}, maxout \cite{fcooper},
-        graph message passing \cite{v2vnet,disconet},
-        alignment-corrected \cite{coalign}, and
-        selective/handshake \cite{where2comm}, which additionally exposes a
-        bandwidth knob and is therefore also a T4 baseline.
+  \item \textbf{Early fusion (Cooper)} \cite{cooper} [O] --- transmit raw
+        points, detect once over the union. Information upper bound, bandwidth
+        upper bound.
+  \item \textbf{Late fusion} [O/I] --- transmit boxes, merge by NMS. Bandwidth
+        lower bound.
+  \item \textbf{AttFuse (OPV2V)} \cite{opv2v} [O] --- per-cell single-head
+        self-attention over aligned BEV features.
+  \item \textbf{F-Cooper} \cite{fcooper} [O] --- element-wise maximum
+        ("maxout") over aligned feature maps; no capacity to discount a
+        contributor.
+  \item \textbf{V2VNet} \cite{v2vnet} [O] --- spatially-aware GNN with a
+        differentiable warp of neighbour features into the receiver frame.
+  \item \textbf{DiscoNet} \cite{disconet} [O/S] --- distillation from an
+        early-fusion teacher with matrix-valued edge weights.
+  \item \textbf{V2X-ViT} \cite{v2xvit} [O] --- heterogeneous multi-agent
+        transformer with agent-type and delay-aware attention.
+  \item \textbf{CoBEVT} \cite{cobevt} [O] --- fused axial attention (FAX) over
+        the stacked multi-agent BEV tensor; typically the strongest
+        clean-channel baseline, and the natural cross-codebase calibration
+        bridge because it is implemented in several frameworks.
+  \item \textbf{CoAlign} \cite{coalign} [O] --- agent-object pose-graph
+        optimisation before multi-scale attention-with-warp; the only baseline
+        with an explicit alignment defence, and therefore the one to beat in the
+        estimated-pose ablation.
+  \item \textbf{Where2comm} \cite{where2comm} [O] --- spatial confidence maps
+        select which BEV regions to transmit; exposes a bandwidth knob, so it is
+        also a T4 baseline.
+  \item \textbf{When2com / Who2com} \cite{when2com,who2com} [S] --- learned
+        handshake deciding \emph{when} and \emph{with whom} to communicate;
+        originally multi-agent RGB-D scene understanding in simulation rather
+        than automotive, which makes it one of the few non-automotive priors in
+        the cohort.
+  \item \textbf{How2comm / CodeFilling} \cite{how2comm,codefilling} [O]
+        \emph{(optional, efficiency-oriented)} --- pragmatic message selection
+        and codebook-based message compression; include if the T4 curve needs
+        stronger competition at low budgets.
+  \item \textbf{HEAL} \cite{heal} [O] --- open heterogeneous collaborative
+        perception framework; included both as a method and as the codebase
+        whose lineage the indoor baselines follow.
+  \item \textbf{InCoP} \cite{incop} [I] --- \emph{indoor} collaborative
+        perception benchmark and method (HEAL/OpenCOOD lineage), with its CGRF
+        fusion variant. The only baseline in the cohort designed for indoor
+        multi-agent geometry, and therefore the reference point for whether the
+        outdoor lineage transfers at all.
 \end{itemize}
-\todo{Fix the final list; cite each method at its original publication and note
-the implementation used.}
+\todo{Confirm the final list and freeze it before training; drop the optional
+entries if the schedule does not allow them, rather than reporting them
+half-tuned.}
 
 \subsubsection{Multi-modal collaborative methods}
+\label{sec:bench:multimodal}
 \begin{itemize}
-  \item \textbf{Camera-only cooperative} --- per-agent BEV lifting followed by
-        cross-agent fusion \cite{cobevt,coca3d}. Tests whether collaboration
-        recovers the depth that a single camera rig lacks.
-  \item \textbf{LiDAR${+}$camera} --- per-agent sensor fusion into a shared BEV
-        \cite{bevfusion} composed with each collaborative operator above.
-  \item \textbf{Heterogeneous agents} --- collaboration between agents with
-        \emph{different} sensor suites \cite{hmvit,heal}, which is the
-        configuration the dataset is built for and which the LiDAR-only cohort
-        cannot express.
-  \item \textbf{Radar-inclusive} --- LiDAR${+}$4D-radar and radar-only
-        cooperative detection \cite{v2xr}.
-  \item \textbf{RF/CSI} --- for T3 and T5 only: classical fingerprinting
-        ($k$-NN over CSI amplitude), AoA/ToF geometric estimation
-        \cite{spotfi}, and a learned CSI encoder.
+  \item \textbf{Camera-only cooperative} --- \textbf{CoCa3D} \cite{coca3d} [O]
+        (collaborative depth reasoning across agents) and the camera variant of
+        \textbf{CoBEVT} \cite{cobevt} [O], both built on lift-splat-shoot BEV
+        lifting \cite{lss}. Run in two variants: \emph{predicted depth} (as
+        published) and \emph{measured depth} (the RGB-D channel substituted for
+        the predicted depth distribution). The gap between the two is the
+        measured-depth contribution.
+  \item \textbf{RGB-D multi-agent scene understanding} ---
+        \textbf{When2com/Who2com} \cite{when2com,who2com} [S] and
+        \textbf{MASS}-style multi-agent BEV segmentation \cite{mass} [S/O], the
+        closest prior work that assumes depth-equipped agents rather than
+        automotive rigs.
+  \item \textbf{LiDAR${+}$camera per agent} --- \textbf{BEVFusion}
+        \cite{bevfusion} [O] as the per-agent frontend, composed with each
+        collaborative operator from \S\ref{sec:bench:lidar}. Cross-product is
+        reported for a fixed subset of operators, not all of them.
+  \item \textbf{Heterogeneous agents} --- \textbf{HM-ViT} \cite{hmvit} [O] and
+        \textbf{HEAL} \cite{heal} [O]: collaboration between agents carrying
+        \emph{different} sensor suites. This is the configuration the LiDAR-only
+        cohort cannot express and, given a mixed indoor fleet, the one closest
+        to the deployment the dataset represents.
+  \item \textbf{Radar-inclusive} --- see \S\ref{sec:bench:radar}.
 \end{itemize}
-\todo{Fix the final list; state which multi-modal baselines are ported and
-which are constructed here by composing a per-agent fusion frontend with an
-existing collaborative operator --- constructed baselines must be labelled as
-such in every table.}
+\todo{Freeze which (frontend $\times$ operator) pairs are run; label every
+composed baseline as constructed-here in all tables, distinct from ported
+methods.}
+
+\subsubsection{Radar baselines and the IWR6843 adaptation}
+\label{sec:bench:radar}
+Published cooperative radar work assumes 4D imaging radar with orders of
+magnitude more returns per frame than the IWR6843 provides. The cohort is
+therefore split into ported-with-caveat and native-sparse methods:
+\begin{itemize}
+  \item \textbf{V2X-R} \cite{v2xr} [O] --- LiDAR${+}$4D-radar cooperative
+        detection with diffusion-based radar denoising. Portable only if the
+        sparse indoor returns are accumulated over a window; report the
+        accumulation length, and report the method as adapted.
+  \item \textbf{RCooper} \cite{rcooper} [O] --- real roadside cooperative
+        perception; a data/protocol reference for multi-view cooperation rather
+        than a drop-in indoor method.
+  \item \textbf{Classical mmWave pipeline} [I] --- CFAR detection, DBSCAN
+        clustering, and constant-velocity tracking, as shipped by the sensor
+        vendor's demo stack. Weak but honest, and the correct floor for the
+        radar branch.
+  \item \textbf{milliEgo} \cite{milliego} [I] --- deep mmWave${+}$IMU odometry
+        on a single-chip radar; the indoor precedent that the IWR6843 class of
+        sensor supports pose estimation, used as a T3 radar baseline.
+  \item \textbf{RadarHD} \cite{radarhd} [I] --- single-chip mmWave to
+        LiDAR-like point cloud super-resolution; used as a T1 radar
+        reconstruction baseline and as an optional densifier in front of the
+        cooperative operators.
+  \item \textbf{milliMap} \cite{millimap} [I] --- indoor mmWave mapping with a
+        single-chip radar; the mapping-side indoor precedent for T1.
+\end{itemize}
+\todo{Decide whether radar enters the cooperative operators as its own agent
+stream or only as a per-agent fusion input; the two are different claims and
+should not be conflated in one table.}
+
+\subsubsection{Task-specific baselines (T1, T3, T5)}
+\label{sec:bench:taskspecific}
+
+\paragraph{T1 --- reconstruction.}
+\emph{Geometric:} pose-transform ${+}$ voxel merge (the trivial cooperative
+baseline); TSDF fusion via \textbf{Voxblox} \cite{voxblox} [I],
+\textbf{nvblox} \cite{nvblox} [I], or \textbf{VDBFusion} \cite{vdbfusion} [I].
+\emph{Learned RGB-D indoor:} \textbf{Atlas} \cite{atlas} [I],
+\textbf{NeuralRecon} \cite{neuralrecon} [I], \textbf{SimpleRecon}
+\cite{simplerecon} [I] --- single-agent by construction, run per agent and
+merged, which is exactly the late-fusion comparison for reconstruction.
+\emph{Collaborative occupancy:} \textbf{CoHFF} \cite{cohff} [O] as the
+collaborative semantic-occupancy counterpart.
+
+\paragraph{T3 --- localisation and registration.}
+\emph{LiDAR relative pose:} ICP/GICP, FPFH${+}$RANSAC, \textbf{TEASER++}
+\cite{teaser} [I/O]; learned \textbf{PREDATOR} \cite{predator} [I],
+\textbf{GeoTransformer} \cite{geotransformer} [I] (both benchmarked indoors on
+3DMatch/3DLoMatch, which matches this setting).
+\emph{RGB-D:} place recognition (\textbf{NetVLAD} \cite{netvlad} [O],
+\textbf{MixVPR} \cite{mixvpr} [O]); hierarchical localisation \textbf{hloc}
+with SuperPoint${+}$SuperGlue/LightGlue \cite{hloc,superglue} [I]; scene
+coordinate regression \textbf{DSAC*} \cite{dsacstar} [I] and \textbf{ACE}
+\cite{ace} [I]; RGB-D SLAM \textbf{ORB-SLAM3} \cite{orbslam3} [I] and
+\textbf{RTAB-Map} \cite{rtabmap} [I] for the sequential sub-protocol.
+\emph{Radar:} \textbf{milliEgo} \cite{milliego} [I]; sparse-return scan
+matching.
+\emph{CSI (conditional):} $k$-NN amplitude fingerprinting,
+\textbf{SpotFi} \cite{spotfi} [I] (AoA/ToF super-resolution), and a learned CSI
+encoder in the \textbf{DeepFi}/\textbf{CiFi} family \cite{deepfi} [I].
+\emph{Multi-robot collaborative SLAM} (system-level references for T1${+}$T3
+jointly): \textbf{Kimera-Multi} \cite{kimeramulti} [I/O],
+\textbf{Swarm-SLAM} \cite{swarmslam} [I/O], \textbf{DiSCo-SLAM}
+\cite{discoslam} [I], \textbf{COVINS} \cite{covins} [I].
+
+\paragraph{T5 --- fingerprinting.}
+Classical CSI/RSSI statistics with SVM or $k$-NN; deep RF fingerprinting on IQ
+or CSI, \textbf{ORACLE} \cite{oracle} [I] and \textbf{DeepRadioID}
+\cite{deepradioid} [I]; open-set handling via OpenMax or an energy-based reject
+score \cite{openmax} [--].
 
 \subsubsection{Baseline summary table}
-\todo{Table: one row per baseline; columns = modalities consumed, fusion stage,
-message content, nominal bits/frame, tasks it is evaluated on, source of the
-implementation. Group the rows into the three blocks above with
-\texttt{\textbackslash midrule} separators.}
+\label{sec:bench:table}
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}llllll@{}}
+\toprule
+Method & Org. & Modalities & Stage & Message & Tasks \\
+\midrule
+\multicolumn{6}{@{}l}{\emph{Single-agent references}} \\
+No-Comm LiDAR      & --- & L     & ---   & ---            & T1,T2 \\
+No-Comm RGB-D      & --- & C,D   & ---   & ---            & T1,T2,T3 \\
+No-Comm radar      & --- & R     & ---   & ---            & T2,T3 \\
+\midrule
+\multicolumn{6}{@{}l}{\emph{LiDAR-only collaborative}} \\
+Cooper             & O & L & early & raw points   & T1,T2,T4 \\
+Late fusion        & O & L & late  & boxes        & T2,T4 \\
+AttFuse            & O & L & inter & BEV feat.    & T2,T4 \\
+F-Cooper           & O & L & inter & BEV feat.    & T2,T4 \\
+V2VNet             & O & L & inter & BEV feat.    & T2,T4 \\
+DiscoNet           & O & L & inter & BEV feat.    & T2,T4 \\
+V2X-ViT            & O & L & inter & BEV feat.    & T2,T4 \\
+CoBEVT             & O & L & inter & BEV feat.    & T1,T2,T4 \\
+CoAlign            & O & L & inter & BEV feat.${+}$pose & T2,T3,T4 \\
+Where2comm         & O & L & inter & sparse feat. & T2,T4 \\
+When2com/Who2com   & S & L(C,D) & inter & feat.${+}$handshake & T2,T4 \\
+HEAL               & O & L & inter & aligned feat.& T2,T4 \\
+InCoP / CGRF       & I & L & inter & BEV feat.    & T1,T2,T4 \\
+\midrule
+\multicolumn{6}{@{}l}{\emph{Multi-modal collaborative}} \\
+CoCa3D             & O & C(,D) & inter & BEV feat.  & T1,T2 \\
+CoBEVT (cam.)      & O & C(,D) & inter & BEV feat.  & T2 \\
+BEVFusion${+}$op.  & O & L,C,D & inter & BEV feat.  & T2,T4 \\
+HM-ViT             & O & L,C   & inter & BEV feat.  & T2 \\
+HEAL (heterog.)    & O & L,C,R & inter & aligned feat. & T2 \\
+V2X-R (adapted)    & O & L,R   & inter & BEV feat.  & T2 \\
+mmWave classical   & I & R     & late  & clusters   & T2,T3 \\
+milliEgo           & I & R     & ---   & ---        & T3 \\
+RadarHD            & I & R     & early & dense pts. & T1 \\
+\bottomrule
+\end{tabular}
+\caption{Baselines. Org.\ = origin: [I] indoor, [O] outdoor, [S] simulation.
+Modalities: L LiDAR, C RGB, D depth, R radar. Parenthesised modalities mark the
+measured-depth variant. Task-specific reconstruction, localisation, and
+fingerprinting baselines (\S\ref{sec:bench:taskspecific}) are listed
+separately.}
+\label{tab:baselines}
+\end{table}
+
+\todo{Add a measured bits/frame column once the message sizes are metered, and
+a source column distinguishing ported checkpoints from baselines constructed
+here.}
 
 \subsection{Main Results}
 \label{sec:bench:results}
 
-Results are reported in two tables that are never merged: Table~A for the
-LiDAR-only cohort, Table~B for the multi-modal cohort. Each carries the
-single-agent reference for its own input budget as its first row, so that
-collaboration gain is read down a column rather than inferred across tables.
-Both are reported under LOEO, with WE in the appendix.
+Results appear in two tables that are never merged: Table~A for the LiDAR-only
+cohort, Table~B for the multi-modal cohort. Each carries the single-agent
+reference \emph{for its own input budget} as its first row, so collaboration
+gain is read down a column rather than inferred across tables. Both are
+reported under LOEO, with WE in the appendix. Outdoor-origin methods are marked
+in every table so that a transfer failure is legible as such.
 
-\todo{Table A (LiDAR-only, per task): single-agent reference, then early /
-intermediate / late fusion. Columns: T1 Chamfer $\downarrow$, T1 F@0.2
-$\uparrow$, T1 occluded-F $\uparrow$, T2 AP@0.5 / AP@0.7 $\uparrow$, T2
-occluded-zone AP $\uparrow$, bits/frame.}
+\todo{Table A (LiDAR-only): reference row, then early / intermediate / late.
+Columns: T1 Chamfer $\downarrow$, T1 F@0.05 $\uparrow$, T1 occluded-F
+$\uparrow$, T2 AP@0.5 / AP@0.7 $\uparrow$, T2 occluded-zone AP $\uparrow$,
+bits/frame.}
 
-\todo{Table B (multi-modal, same columns plus a modality column): camera-only,
-LiDAR${+}$camera, heterogeneous, radar-inclusive; T3 in its own table with
-per-modality rows (camera / radar / CSI) against the same targets.}
+\todo{Table B (multi-modal, same columns plus a modality column): camera-only
+(predicted vs.\ measured depth), LiDAR${+}$camera, heterogeneous,
+radar-inclusive. T3 in its own table with per-modality rows (RGB-D / radar /
+CSI).}
 
 \todo{Headline numbers to state in prose: (i) collaboration gain over the
-single-agent reference per cohort, and how much of it lands in the
-ego-occluded zone; (ii) whether adding a modality or adding an agent buys more,
-at matched bits/frame; (iii) the bandwidth at which the T4 curves cross.}
+single-agent reference per cohort, and how much lands in the ego-occluded zone;
+(ii) whether an extra modality or an extra agent buys more at matched
+bits/frame; (iii) how far the outdoor lineage falls short of the indoor-native
+baseline after re-parameterisation; (iv) where the T4 curves cross.}
 
 \subsection{Ablations}
 \label{sec:bench:ablations}
 
 \begin{enumerate}
-  \item \textbf{Modality on/off} (multi-modal cohort only): each modality
-        removed in turn, at fixed architecture and fixed number of agents.
-  \item \textbf{Number of cooperating agents}: $|\mathcal{A}_t| = 1, 2, 3, \dots$,
-        reported as a curve per cohort; establishes where the gain saturates.
+  \item \textbf{Modality on/off} (multi-modal cohort): each of RGB, depth, and
+        radar removed in turn at fixed architecture and agent count.
+  \item \textbf{Measured vs.\ predicted depth}: the RGB-D channel substituted
+        for the lift-splat depth distribution, isolating what the depth sensor
+        buys over monocular depth prediction.
+  \item \textbf{Number of cooperating agents}: $|\mathcal{A}_t| = 1, 2, 3, \dots$
+        as a curve per cohort; establishes where the gain saturates indoors.
   \item \textbf{Fusion stage at matched bandwidth}: early / intermediate / late
-        compared at equal bits/frame rather than at their native sizes, which
-        is the only comparison in which stage is the sole variable.
+        at equal bits/frame rather than at native sizes --- the only comparison
+        in which stage is the sole variable.
   \item \textbf{Pose source}: ground-truth extrinsics vs.\ poses estimated by
-        the T3 baselines --- quantifies how much of the reported collaborative
-        accuracy is contingent on perfect alignment.
-  \item \textbf{Sensor placement and range}: performance vs.\ inter-agent
-        distance and vs.\ relative viewpoint angle.
+        the T3 baselines; quantifies how much reported accuracy is contingent on
+        perfect alignment, and is where CoAlign should separate from the rest.
+  \item \textbf{Indoor re-parameterisation}: published outdoor configuration
+        vs.\ indoor-tuned configuration, on one representative method per
+        family --- evidence that outdoor methods were given a fair chance.
+  \item \textbf{Geometry}: performance vs.\ inter-agent distance and vs.\
+        relative viewpoint angle.
 \end{enumerate}
 \todo{Fix the agent-count grid and the matched-bandwidth operating point; state
-which ablations run on WE and which on LOEO.}
+which ablations run under WE and which under LOEO.}
 
 \subsection{Qualitative Results}
 \label{sec:bench:qualitative}
 
-\todo{Figure 1: cooperative vs.\ single-agent reconstruction of the same
-frame, side by side, with the ego-occluded region shaded in both --- the gap
-in the single-agent panel is the claim.}
+\todo{Figure 1: cooperative vs.\ single-agent reconstruction of the same frame,
+side by side, ego-occluded region shaded in both --- the gap in the
+single-agent panel is the claim.}
 
 \todo{Figure 2: a detection frame where collaboration recovers a fully occluded
 object, with each collaborator's contribution to the fused BEV shown
 separately.}
 
-\todo{Figure 3: LiDAR-only vs.\ multi-modal on the same frame, chosen so the
-extra modality is what makes the difference (e.g.\ a low-reflectivity object
-that the camera or radar branch recovers).}
+\todo{Figure 3: LiDAR-only vs.\ multi-modal on one frame chosen so the extra
+modality is decisive --- e.g.\ a specular or low-reflectivity surface the LiDAR
+misses and the RGB-D or radar branch recovers.}
 
-\todo{Figure 4: a failure case --- a frame where collaboration does not help or
-actively hurts (large relative pose error, poor viewpoint overlap, or a
-disagreeing collaborator) --- and a one-sentence diagnosis.}
+\todo{Figure 4: indoor-native vs.\ re-parameterised outdoor method on the same
+frame, showing the characteristic failure of outdoor tuning at indoor object
+scale.}
+
+\todo{Figure 5: a failure case --- large relative pose error, poor viewpoint
+overlap, or a disagreeing collaborator --- with a one-sentence diagnosis.}
