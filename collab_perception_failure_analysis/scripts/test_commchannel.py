@@ -380,6 +380,60 @@ def test_labelled_gt_reports_what_the_range_excludes():
         shutil.rmtree(root)
 
 
+def test_ego_only_dir_zeroes_comm_range_and_keeps_everything_else():
+    """The floor is made by putting the partner out of range, and the config is
+    edited by line, not re-dumped: these files carry python tags no safe dumper
+    reproduces, and losing noise_setting would change what the run does."""
+    import tempfile, shutil
+    src, out = tempfile.mkdtemp(), tempfile.mkdtemp()
+    try:
+        with open(os.path.join(src, 'config.yaml'), 'w') as h:
+            h.write("comm_range: 50\n"
+                    "noise_setting: !!python/object/apply:collections.OrderedDict\n"
+                    "- - - add_noise\n    - false\n"
+                    "postprocess:\n  gt_range: [0,-11.2,-1,22.4,11.2,3]\n")
+        open(os.path.join(src, 'net_epoch15.pth'), 'w').write('w')
+        shadow = rmi.ego_only_model_dir(src, out)
+        text = open(os.path.join(shadow, 'config.yaml')).read()
+        assert 'comm_range: 0' in text and 'comm_range: 50' not in text
+        assert 'collections.OrderedDict' in text     # untouched
+        assert os.path.islink(os.path.join(shadow, 'net_epoch15.pth'))
+        assert rmi.eval_range(shadow) == [0.0, -11.2, -1.0, 22.4, 11.2, 3.0]
+    finally:
+        shutil.rmtree(src); shutil.rmtree(out)
+
+
+def test_ego_only_dir_refuses_a_config_without_comm_range():
+    """Silently producing a shadow that still talks to the partner would give a
+    floor identical to the fused run -- exactly the bug this replaces."""
+    import tempfile, shutil
+    src, out = tempfile.mkdtemp(), tempfile.mkdtemp()
+    try:
+        open(os.path.join(src, 'config.yaml'), 'w').write("name: x\n")
+        try:
+            rmi.ego_only_model_dir(src, out)
+        except SystemExit:
+            return
+        raise AssertionError('expected SystemExit')
+    finally:
+        shutil.rmtree(src); shutil.rmtree(out)
+
+
+def test_labelled_gt_respects_the_sample_cap():
+    """A capped run is shown fewer frames, so it must be scored against fewer
+    labels."""
+    import tempfile, shutil
+    root = tempfile.mkdtemp()
+    try:
+        _mirc_tree(root, 4, [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]] * 4,
+                   [[_chair(3.0, 1.0)]] * 4)
+        rng = [0.0, -11.2, -1, 22.4, 11.2, 3]
+        assert rmi.labelled_gt_count(root, 'chair', rng)['gt_labelled'] == 4
+        assert rmi.labelled_gt_count(root, 'chair', rng, limit=2)['gt_labelled'] == 2
+    finally:
+        shutil.rmtree(root)
+
+
 def test_ego_folder_moves_a_leading_negative_id_to_the_end():
     """OPV2V numbers its RSU -1 and OpenCOOD does not let it be ego."""
     import tempfile, shutil

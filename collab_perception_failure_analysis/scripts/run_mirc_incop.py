@@ -32,13 +32,19 @@ import glob
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
 
 import yaml
 
-FUSION_MODES = ("intermediate", "no")     # with the partner; ego alone
+FUSION_MODES = ("intermediate", "no")     # the tool's own flag values
+# "no" is NOT an ego-only run -- see ego_only_model_dir(). It stays
+# selectable for comparison against the old numbers, but the default is
+# the one mode that means something on its own.
+DEFAULT_FUSION = ("intermediate",)
+EGO_ONLY = "ego_only"                    # our floor, via comm_range 0
 DEFAULT_METHODS = ("ours", "where2comm", "cobevt")
 
 
@@ -49,6 +55,41 @@ def checkpoints(incop_root: str, method: str, scene: str):
     # `_with_noise_` variants are a different model, not another seed of this one.
     return sorted(path for path in glob.glob(pattern)
                   if os.path.isdir(path) and "_with_noise_" not in os.path.basename(path))
+
+
+def ego_only_model_dir(model_dir: str, out: str) -> str:
+    """A shadow of `model_dir` whose config puts the partner out of range.
+
+    THE ONLY HONEST EGO-ONLY FLOOR AVAILABLE HERE. `--fusion_method no` does not
+    drop the partner: both modes reported `Communication: 158.951 KB/sample` to
+    the milligram and recall equal to three decimals, so the "ego-only" column
+    was the fused column computed twice and every lift came out 0.000.
+
+    What does work is the mechanism the tool's own video path uses -- it prints
+    `comm_range 50 -> 0 m` and then `record_len=[1]`, one agent in the sample.
+    The dataset keeps a CAV when its distance to the ego is within comm_range;
+    at 0 the ego survives (distance 0) and every partner is dropped.
+
+    The weights are symlinked and only `comm_range` is rewritten, by line
+    substitution rather than a yaml round-trip: these configs carry python tags
+    that no safe dumper reproduces, and re-emitting one would quietly change
+    fields nobody asked about.
+    """
+    name = os.path.basename(model_dir.rstrip("/"))
+    shadow = os.path.join(out, "ego_only", name)
+    os.makedirs(shadow, exist_ok=True)
+    for path in glob.glob(os.path.join(model_dir, "net_epoch*.pth")):
+        link = os.path.join(shadow, os.path.basename(path))
+        if not os.path.exists(link):
+            os.symlink(path, link)
+    text = open(os.path.join(model_dir, "config.yaml")).read()
+    text, count = re.subn(r"(?m)^comm_range:.*$", "comm_range: 0", text)
+    if count != 1:
+        raise SystemExit("expected one comm_range line in %s/config.yaml, found %d"
+                         % (name, count))
+    with open(os.path.join(shadow, "config.yaml"), "w") as handle:
+        handle.write(text)
+    return shadow
 
 
 def newest_eval(model_dir: str, after: float):
@@ -106,7 +147,8 @@ def ego_folder(scenario_dir: str):
     return names[0] if names else None
 
 
-def labelled_gt_count(dataset_dir: str, class_name: str, gt_range) -> dict:
+def labelled_gt_count(dataset_dir: str, class_name: str, gt_range,
+                      limit: int = 0) -> dict:
     """How many labels of one class actually lie in the evaluation range.
 
     THE EVALUATOR'S OWN `gt_count` IS NOT THIS NUMBER. It comes from a
@@ -138,7 +180,13 @@ def labelled_gt_count(dataset_dir: str, class_name: str, gt_range) -> dict:
         if ego is None:
             continue
         here = 0
-        for path in sorted(glob.glob(os.path.join(scenario_dir, ego, "*.yaml"))):
+        frame_paths = sorted(glob.glob(os.path.join(scenario_dir, ego, "*.yaml")))
+        # `--max-samples` caps how many frames each run sees, so the denominator
+        # has to be capped the same way or recall is measured against labels the
+        # run was never shown.
+        if limit:
+            frame_paths = frame_paths[:limit]
+        for path in frame_paths:
             with open(path) as handle:
                 frame = yaml.safe_load(handle) or {}
             pose = frame.get("lidar_pose")
@@ -268,7 +316,7 @@ def run_one(args, model_dir: str, fusion: str, video: bool, labelled=None):
         sys.executable, "opencood/tools/inference_isaac.py",
         "--model_dir", model_dir,
         "--checkpoint_mode", args.checkpoint_mode,
-        "--fusion_method", fusion,
+        "--fusion_method", "intermediate" if fusion == EGO_ONLY else fusion,
         "--eval_split", "val",
         "--eval_dataset_dir", args.dataset,
     ]
@@ -362,7 +410,7 @@ def summarise(records, methods, scene):
     rows = []
     for method in methods:
         row = {"method": method}
-        for fusion in FUSION_MODES:
+        for fusion in FUSION_MODES + (EGO_ONLY,):
             got = [r for r in records
                    if not r.get("failed") and not r.get("video")
                    and r["fusion"] == fusion
@@ -387,7 +435,10 @@ def markdown(rows):
            "recall@0.3 | coverage | ATE m | ASE |",
            "|---|---|---|---|---|---|---|---|---|---|"]
     for row in rows:
-        fused, alone = row.get("intermediate", {}), row.get("no", {})
+        # The real floor when it was measured; the tool's own "no" only as a
+        # fallback, and that one is known to duplicate the fused run.
+        fused = row.get("intermediate", {})
+        alone = row.get(EGO_ONLY) or row.get("no", {})
         if not fused.get("ap50"):
             out.append("| %s | — | — | — | — | — | — | — | — | — |" % row["method"])
             continue
@@ -427,8 +478,12 @@ def main() -> int:
                              "classes this scene does not contain")
     parser.add_argument("--seeds", type=int, default=0,
                         help="use only the first N seeds per method (0 = all)")
-    parser.add_argument("--fusion", nargs="*", default=list(FUSION_MODES),
+    parser.add_argument("--fusion", nargs="*", default=list(DEFAULT_FUSION),
                         choices=list(FUSION_MODES))
+    parser.add_argument("--ego-floor", action="store_true",
+                        help="also run each checkpoint with the partner out of "
+                             "communication range, which is the only ego-only "
+                             "baseline that actually drops the partner")
     parser.add_argument("--video", action="store_true",
                         help="also render the ego-only vs fused comparison for the "
                              "first seed of each method")
@@ -483,6 +538,9 @@ def main() -> int:
         for index, model_dir in enumerate(found):
             for fusion in args.fusion:
                 plan.append((model_dir, fusion, False))
+            if args.ego_floor:
+                plan.append((ego_only_model_dir(model_dir, args.out),
+                             EGO_ONLY, False))
             if args.video and index == 0:
                 videos.append((model_dir, "intermediate", True))
     plan.extend(videos)
@@ -501,7 +559,8 @@ def main() -> int:
         print("! no gt_range in %s/config.yaml — reporting the evaluator's own "
               "counts uncorrected" % os.path.basename(plan[0][0]))
     else:
-        labelled = labelled_gt_count(args.dataset, args.eval_class, gt_range)
+        labelled = labelled_gt_count(args.dataset, args.eval_class, gt_range,
+                                     limit=args.max_samples)
         print("%d of %d %s label(s) lie inside %s, across %d ego frame(s)"
               % (labelled["gt_labelled"], labelled["gt_all"], args.eval_class,
                  [round(v, 1) for v in gt_range], labelled["frames"]))
