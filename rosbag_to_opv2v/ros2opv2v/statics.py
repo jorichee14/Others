@@ -214,6 +214,32 @@ def ground_level(points: np.ndarray, bin_m: float = 0.05,
 
 
 # ------------------------------------------------------------------ clustering
+def without_structure(points: np.ndarray, ground_z: float, max_height: float,
+                      cell: float = 0.10) -> np.ndarray:
+    """Drop the points in XY columns that reach higher than an object can.
+
+    A chair pushed against a wall is one connected blob with that wall at any
+    voxel size, so no clustering tolerance separates them and no radius excludes
+    the wall without also clipping the chair. Their COLUMNS differ: the chair's
+    tops out below the object band, the wall's carries straight past it. Remove
+    the tall columns and the wall is gone while the chair is untouched.
+
+    The cost is stated rather than hidden: an object standing under a low beam,
+    a shelf or a doorframe loses the returns in those columns too. That is why
+    it is a flag and not unconditional.
+    """
+    if not len(points):
+        return points
+    above = points[:, 2] - ground_z
+    grid = np.floor(points[:, :2] / cell).astype(np.int64)
+    grid -= grid.min(axis=0)
+    depth = int(grid[:, 1].max()) + 1
+    flat = grid[:, 0] * depth + grid[:, 1]
+    tallest = np.zeros(int(flat.max()) + 1, dtype=np.float64)
+    np.maximum.at(tallest, flat, above)
+    return points[tallest[flat] <= max_height]
+
+
 def seed_report(points: np.ndarray, seed: np.ndarray, ground_z: float,
                 radius: float = 1.2) -> dict:
     """What is actually standing at a seed, before anything is fitted to it.

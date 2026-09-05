@@ -55,7 +55,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ros2opv2v.statics import (StaticsError, cluster_at, fit_box,      # noqa: E402
                                footprint_corners, ground_level,
-                               points_in_box, read_pcd_xyz, seed_report)
+                               points_in_box, read_pcd_xyz, seed_report,
+                               without_structure)
 from ros2opv2v.preview import Canvas, height_ramp                      # noqa: E402
 from ros2opv2v.geometry import x_to_world                              # noqa: E402
 from ros2opv2v.writers import read_pcd                                 # noqa: E402
@@ -553,6 +554,9 @@ def main() -> int:
     parser.add_argument("--radius", type=float, default=1.2,
                         help="how far around the seed to look for the object")
     parser.add_argument("--cluster-voxel", type=float, default=0.06)
+    parser.add_argument("--keep-structure", action="store_true",
+                        help="do not drop columns taller than --max-height before "
+                             "clustering; use when the object stands under a beam")
     parser.add_argument("--cluster-floor", type=float, default=0.15,
                         help="ignore returns within this of the floor when clustering: "
                              "a real floor is centimetres thick and connects every "
@@ -723,7 +727,17 @@ def main() -> int:
         # bridges the gap, and then the box swallows the building. Gating the
         # height costs nothing: the object is below the cap by definition.
         ceiling_z = (ground_z + args.ceiling) if args.ceiling else None
-        look = seed_report(cloud, seed, ground_z, radius=args.radius)
+        # A wall the seed stands against is connected to the object at every
+        # voxel size, so it has to go BEFORE clustering, not after — and before
+        # the seed report too, or the report describes points the fit will never
+        # see.
+        local = cloud
+        if not args.keep_structure:
+            local = without_structure(cloud, ground_z, args.max_height, args.cell)
+            print("\ndropped %d point(s) in columns taller than %.2f m (walls, "
+                  "ceilings, beams);\n--keep-structure disables it"
+                  % (len(cloud) - len(local), args.max_height))
+        look = seed_report(local, seed, ground_z, radius=args.radius)
         print("\nat seed %s (%.2f m above the floor), within %.1f m:"
               % ("%.3f,%.3f,%.3f" % tuple(seed), look["seed_height_m"], args.radius))
         if not look["points"]:
@@ -748,7 +762,7 @@ def main() -> int:
                   "another cloud lands on bare floor.")
             return 3
         try:
-            cluster, cinfo = cluster_at(cloud, seed, radius=args.radius,
+            cluster, cinfo = cluster_at(local, seed, radius=args.radius,
                                         voxel=args.cluster_voxel,
                                         z_min=ground_z + args.cluster_floor,
                                         z_max=ceiling_z)

@@ -2887,6 +2887,52 @@ def test_a_frame_missing_its_camera_is_dropped_like_a_missing_cloud():
     assert len(table.frames) == 10, len(table.frames)
 
 
+
+def test_a_chair_against_a_wall_is_separable_by_column_height_only():
+    """A chair touching a wall is ONE connected blob with it at every voxel size,
+    and no radius excludes the wall without clipping the chair. What differs is
+    the column: the chair's tops out below the object band, the wall's carries
+    past it. The real case measured 1.33 x 0.73 x 2.00 m — a slab of wall."""
+    from ros2opv2v.statics import cluster_at, fit_box, without_structure
+    rng = np.random.default_rng(67)
+    ground = -0.719
+    # a wall in the x = 0.0..0.1 slab, floor to 3.3 m
+    wall = np.column_stack([rng.uniform(0.0, 0.10, 30000), rng.uniform(-2, 2, 30000),
+                            rng.uniform(ground, ground + 3.3, 30000)])
+    # a chair standing against it, 0.10..0.75 in x
+    chair = np.column_stack([rng.uniform(0.10, 0.75, 8000),
+                             rng.uniform(-0.35, 0.35, 8000),
+                             rng.uniform(ground, ground + 0.90, 8000)])
+    floor = np.column_stack([rng.uniform(-1, 3, 20000), rng.uniform(-2, 2, 20000),
+                             ground + rng.uniform(0, 0.05, 20000)])
+    cloud = np.vstack([wall, chair, floor])
+    seed = np.array([0.45, 0.0, ground + 0.57])
+
+    def fit(points):
+        blob, _ = cluster_at(points, seed, radius=0.7, voxel=0.06,
+                             z_min=ground + 0.15, z_max=ground + 2.0)
+        return fit_box(blob, ground_z=ground)
+
+    swallowed = fit(cloud)
+    assert 2 * swallowed["extent"][2] > 1.8, 'the wall should reach the height gate'
+
+    kept = without_structure(cloud, ground, 1.30, 0.10)
+    assert len(kept) < len(cloud), 'the wall columns must be dropped'
+    box = fit(kept)
+    assert 2 * box["extent"][2] < 1.1, box
+    assert max(2 * box["extent"][0], 2 * box["extent"][1]) < 0.9, box
+    assert box["location"][0] > 0.15, 'the box must sit on the chair, not the wall'
+
+
+def test_dropping_tall_columns_leaves_a_free_standing_object_untouched():
+    from ros2opv2v.statics import without_structure
+    rng = np.random.default_rng(71)
+    ground = -0.66
+    chair = np.column_stack([rng.uniform(-0.3, 0.3, 4000), rng.uniform(-0.3, 0.3, 4000),
+                             rng.uniform(ground, ground + 0.9, 4000)])
+    assert len(without_structure(chair, ground, 1.30, 0.10)) == len(chair)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]
