@@ -1,0 +1,525 @@
+# MIRC coop2 -> InCoP's real-world layout (jorichee14/incop_analysis).
+#
+# Generated from mirc_coop2.yaml; keep them in step. Everything geometric is
+# identical — same bag, same poses, same extrinsics, same chairs. Only the
+# PACKAGING differs, and it differs because InCoP's isaacsim loader reads an
+# OPV2V tree with its own conventions:
+#
+#   * agents are folders "0" and "1", ego is "0". Their real_world config sets
+#     fixed_cav_order with fixed_ego_id: 0 and fixed_cav_ids_order: [0, 1], and
+#     max_cav: 2. So mobile_2 (the 87 deg depth cart) is 0 and mobile_1 (the
+#     Ouster) is 1 -- the ego is the agent that CANNOT see the chairs alone,
+#     which is the only arrangement where collaboration has anything to add.
+#
+#   * infra_1 is OFF. Their heter_modality_assign.json lists "0" and "1" only,
+#     and max_cav is 2. A 49-point radar would not survive the model's LiDAR
+#     branch anyway.
+#
+#   * one scenario folder, `case_0`, matching real_world_pilot.
+#
+# The model's cav_lidar_range is [0, -11.2, -1, 22.4, 11.2, 3]: FORWARD ONLY.
+# Anything behind the ego is outside the model's world by its own design, not by
+# an error here. Measured on the converted clouds, the ego reads x 0.76..5.77,
+# y -0.70..3.21, z -0.50..1.73 -- inside that box.
+
+bag: ~/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_completed
+
+output:
+  # The name is load-bearing. inference_isaac.py decides BEV handedness from the
+  # dataset path: left_hand is true when it contains OPV2V, V2XSET or REAL_WORLD,
+  # and this data follows exactly that lidar convention. A directory called
+  # `mirc_coop2` matches none of them, so every box in the video would be
+  # mirrored — the numbers would be right and the picture wrong, which is the
+  # worst combination.
+  root: ~/workspaces/isaac_robotics_data/InCoP/mirc_coop2_real_world
+  split: test                    # OpenCOOD reads validate_dir at inference
+  scenario_name: case_0
+  # The two chairs, labelled once in the map frame and written into every frame
+  # of both agents already projected. `obj_type: chair` matters: InCoP's loader
+  # falls back to class id 0 -- potted_plant -- when no class is given.
+  # Uncomment with your own path (it is machine-specific, and the converter
+  # refuses to start if it is wrong, which is the point):
+  # labels_file: ~/.../rosbag_to_opv2v/labels/coop2_statics.json
+  frames_per_scenario: 0         # 0 = one scenario for the whole 156 s
+  frame_stride: 1
+  include_self_in_vehicles: false
+  write_provenance: true
+
+time:
+  stamp_source: header           # sensor clocks; the bag carries NTP monitors
+  master_agent: mobile_1         # the frame grid = the Ouster's own cadence
+  rate_hz: 0                     # 0 = do not resample the master (9.7 Hz here)
+  # The slowest agent is the infrastructure radar at ~8.6 Hz (116 ms period), so
+  # its worst nearest-neighbour offset to a 9.7 Hz grid is ~58 ms. 80 ms leaves
+  # margin; tighten it to 40 and you will drop roughly half the frames.
+  match_tolerance_ms: 80
+  drop_incomplete_frames: true   # OpenCOOD indexes all agents by the ego's keys
+  start_offset_s: 0.0
+  duration_s: 0.0                # 0 = whole bag; set e.g. 20 for a first pass
+
+# ---------------------------------------------------------------------- clocks
+# Three machines, three clocks. A constant offset between two of them is
+# invisible in the data and acts on one agent's every message as a uniform
+# latency — which the perception study (../collab_perception_failure_analysis/
+# results/ANALYSIS.md) finds more damaging to fusion than 90%
+# packet loss. So the offsets are estimated (NTP where available, delivery floor
+# elsewhere, cross-checked against each other) and the residual is written into
+# every frame yaml. See docs/ROS2OPV2V.md §"Synchronisation".
+clock:
+  enabled: true
+  # verify: the hosts run chrony, so every header.stamp is ALREADY on a
+  # disciplined clock and nothing is shifted. The NTP status topics are read as
+  # evidence — the residual each daemon itself reports — and that residual is
+  # carried into every frame. 'correct' would apply the estimates as shifts,
+  # which is only right for hosts that were NOT disciplined at record time.
+  mode: verify
+  max_residual_ms: 10
+  # mobile_1 owns the Ouster and hence the frame grid, so its clock is the
+  # timeline. Note what that means: its correction is zero BY DEFINITION, not by
+  # measurement, and any error it carries appears as an equal and opposite error
+  # on both collaborators.
+  reference_host: mobile_1
+  ntp_topics:
+    # infra_1's topics are absent here because the agent is disabled for InCoP;
+    # its clock was verified sub-millisecond in the OPV2V conversion and nothing
+    # about that changes by packaging the same bag differently.
+    mobile_2: /mobile_2/ntp/status       # 1363 msgs
+    # mobile_1: NO NTP STATUS TOPIC IN THIS BAG. It presumably runs chrony
+    # like the others, but nothing in the bag says how well; it is the
+    # reference host because there is nothing to judge it against. Add the
+    # monitor node before the next recording — one topic, and every host's
+    # discipline is then on record.
+  events_topics:                   # chrony event log: a STEP mid-run is a
+    mobile_2: /mobile_2/ntp/events # discontinuity no offset series shows
+  # Pinned from `ros2 interface show ntp_monitor_msgs/msg/NtpStatus`: all timing
+  # fields are float64 seconds. jitter_seconds is the realised jitter,
+  # root_dispersion the formal bound; synchronized / clock_stepped /
+  # offset_delta_seconds / reachability_percent are read as health.
+  offset_field: offset_seconds
+  offset_unit: s
+  sign: auto                     # ntpq and chrony disagree; decided from the data
+  cross_check_tolerance_ms: 20
+  require_measured: false        # true would refuse to convert while mobile_1 is
+                                 # unmeasured; leave false and read the warnings
+
+# ------------------------------------------------------------- the world frame
+# Documentation only (the converter never reads this name), but say it
+# correctly: the shared frame is `map`, the one the offline pipeline anchored
+# every trajectory to, and it is DEFINED by the surveyed `anchor` board sitting
+# at its origin (anchor_frame.json: xyz [0,0,0], quaternion ~identity, and
+# R_align a pure 3.1 deg yaw, so map keeps the mapping session's gravity axis).
+#
+# From the same survey, the numbers that bound everything downstream:
+#
+#   anchor      origin, 214 views, std 6.9 mm. Its loop closure is 3.2 mm over
+#               526.9 s (ratio 0.17, not significant) -- so the frame these
+#               poses live in is repeatable to about 3 mm across the whole
+#               mapping session. That is the justification for treating
+#               `align: identity` as a measurement rather than a declaration.
+#   anchor_b    (8.033, -7.182, -0.102). SAME printed design as `anchor`, 10.8 m
+#               away. drift_warning is TRUE: 12.9 mm / 2.6 deg between its two
+#               sections at ratio 4.24 (significant), and its second section has
+#               only 5 views. Its quoted std of 2.0 mm is the spread WITHIN a
+#               section and understates it; 13 mm is the honest figure.
+#   rs_anchor   (8.460, -14.267, -0.056), a different design (DICT_5X5_50,
+#               25 mm squares). Only 1 of its 2 sections survived gating (the
+#               other had 2 views), std 15.0 mm, max 40 mm -- the loosest of the
+#               three.
+#
+# Scene scale: the boards span ~8.5 m x ~14.3 m (16.6 m corner to corner), all
+# within ~15 cm of one height. This is an indoor room, not a road, which is why
+# the pretrained OPV2V checkpoints' cav_lidar_range and anchor box sizes are the
+# first thing to change if you go anywhere near training -- see
+# docs/ROS2OPV2V.md.
+world:
+  frame_id: map
+
+agents:
+  # ------------------------------------------------------------------ mobile_1
+  # The only true LiDAR agent (Ouster, 1516 sweeps / 156 s = 9.7 Hz). It is NOT
+  # the ego: its 360 deg sweep sees both chairs on its own in ~95% of frames, so
+  # with it as ego collaboration has nothing to add and every impairment curve
+  # is flat. It is the partner whose returns the ego is missing.
+  - name: mobile_1
+    id: 1
+    role: cav
+    host: mobile_1
+    enabled: true
+    required: true
+    pose:
+      # /mobile_1/global_pose is the offline pipeline's OUTPUT (stage 09), not
+      # the ZED's own tracker: the corrected trajectory in the anchored `map`
+      # frame. Two consequences, and they are the reason this config can run at
+      # all:
+      #   * it is already in the SHARED world frame, so align is a true
+      #     identity rather than a choice — every agent is in one frame because
+      #     the map anchoring put them there, not because we declared it.
+      #   * its pose is of the ZED LEFT OPTICAL frame, so child_to_base is
+      #     identity and this agent's `base` IS that optical frame. Every
+      #     `extrinsic` below is therefore measured FROM the ZED left optical
+      #     frame, not from a base_link.
+      # (Both global_pose topics carry an empty offered_qos_profiles in the bag
+      # metadata — the signature of messages written straight into the mcap by
+      # a writer rather than published live. That is stage 09's output.)
+      source: pose
+      topic: /mobile_1/global_pose         # 2833 msgs, ~18.1 Hz average
+      # The published session anchor, map -> zed_left_camera_optical_frame at
+      # the opening dwell. The converter refuses to run if the first resolved
+      # pose is further than the tolerance from this. It is the check that tells
+      # "these poses are the optical frame" from "these poses are a body frame a
+      # metre below it" — the two trajectories have the same shape and timing,
+      # and nothing else downstream can tell them apart.
+      expected_start: [0.697952, -0.062696, 0.193334]
+      expected_start_tolerance_m: 0.25
+      interpolation: linear
+      # Stamps are the union of the lidar and image stamps of the stage-08
+      # graph, so the spacing is irregular; 200 ms covers the gaps without
+      # smoothing over a real dropout.
+      max_gap_ms: 200
+      align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      child_to_base: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+    cloud:
+      kind: pointcloud2
+      topic: /mobile_1/ouster/points       # 1516 msgs
+      # ZED left optical -> os_lidar. The dataset publishes the OTHER direction
+      # ("os_lidar -> zed_left_camera_optical_frame", t [-0.074928, -0.066971,
+      # -0.091627], q [-0.497829, -0.498035, 0.501789, 0.502329]), so this is
+      # its INVERSE — the base is the camera now, not the lidar. Re-derived and
+      # checked by test_mirc_extrinsics_match_the_published_transforms.
+      extrinsic: {x: 0.067064, y: -0.092192, z: -0.074147,
+                  roll: 2.2959, pitch: 89.5267, yaw: -87.6614}
+      intensity:
+        field: intensity                   # Ouster also offers 'reflectivity'
+        scale: 0.0001                      # raw counts are O(1e3-1e4); clipped to 1
+        default: 0.5
+      # A 10 Hz spinning sweep observes over ~103 ms — the same order as the whole
+      # inter-agent budget — and the smear is azimuth-dependent, so it does not
+      # average out. The Ouster's per-point `t` field (nanoseconds from the header
+      # stamp) makes the correction exact; every point is moved to the frame's
+      # reference instant using this agent's own odometry, so the `align` transform
+      # never enters and a wrong alignment cannot corrupt it.
+      point_time_field: t
+      deskew: true
+      # A 128-beam sweep is ~130k points; OPV2V frames are ~80k. Capping keeps
+      # preprocessing time comparable. Set 0 to keep everything.
+      max_points: 100000
+      # mobile_1 also carries two radars, rigid to the ZED and therefore
+      # measured directly from this agent's base. They are not exported (OPV2V
+      # gives one cloud per agent, and a radar agent here would sit at the same
+      # pose as this one — see the mobile_1_zed note below), but the extrinsics
+      # are recorded so they are not lost:
+      #   radar1_link  {x: 0.207505, y: 0.076150, z: -0.108883,
+      #                 roll: -174.5848, pitch: -76.2388, yaw: -95.2193}
+      #   radar2_link  {x: -0.053850, y: 0.046553, z: -0.112039,
+      #                 roll: 160.0651, pitch: -86.7452, yaw: 24.8992}
+      # UNSET, and it needs one measurement nothing in the dataset supplies: the
+      # FLOOR's z in the map frame. Every z the dataset publishes is relative to
+      # the anchor board, not the ground — the two cart cameras sit at map
+      # z = +0.193 (ZED) and +0.165 (RealSense), 28 mm apart, so one lift value
+      # fits both, but where that is above the floor is not stated. Read it off
+      # the anchored map cloud (the dominant horizontal plane below the
+      # trajectories) and set ground_lift = 1.9 - (sensor height above floor),
+      # which is the height OPV2V's checkpoints were trained at. See
+      # docs/ROS2OPV2V.md; this is a domain-shift mitigation, not a correction.
+      ground_lift: 0.0
+      min_points: 1
+    cameras:
+      - topic: /mobile_1/zed/left/image_rect_color
+        camera_info_topic: /mobile_1/zed/left/camera_info
+        # data_aug_conf declares H: 800, W: 1280. The camera branch resizes
+        # whatever it is handed to that shape and corrects the intrinsic by ONE
+        # scalar, so the correction is only true when the image already has it.
+        # 1280x720 leaves the vertical focal length 11% wrong, 960x540 leaves it
+        # 48% wrong, silently: features land in the wrong places and nothing errors.
+        output_size: [1280, 800]
+        # Exactly identity, not an approximation: the pose source IS this
+        # camera's optical frame.
+        extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+        optical_frame: true
+    object:
+      # OFF: this dataset is being converted for MANUAL annotation, so it ships
+      # with no ground truth rather than with agent-derived boxes. The rest of
+      # this block is kept ready for the day it is turned back on -- see the
+      # pushcart note under `extent` before doing so, because the object these
+      # platforms present is not just the cart.
+      #
+      # Annotations produced later fold back in through
+      # `labels.merge_external_labels` ({id, location, extent, angle} in the map
+      # frame); ids below 10000 never collide with agent-derived ones. Each
+      # frame yaml already carries `ros_stamp_ns`, `ros_frame_stamp_ns` and
+      # `ros_sync`, so a label can be tied back to the exact source message.
+      emit: false
+      # The box is described in a ROS body frame (x forward, y left, z up) sitting
+      # at the camera, NOT in the camera's own optical axes — that is what this
+      # extrinsic buys, and it is why `extent` below reads as
+      # [half-LENGTH, half-WIDTH, half-HEIGHT] the way you would expect.
+      extrinsic: {x: 0, y: 0, z: 0, roll: 90, pitch: -90, yaw: 0}
+      # REQUIRED: HALF the size of the thing to be detected, in metres. A cart
+      # 0.60 m long, 0.50 m wide and 1.20 m tall is [0.30, 0.25, 0.60].
+      #
+      # DECIDE WHAT THE OBJECT IS FIRST. These platforms are pushcarts, so the
+      # returns the other agent actually sees are cart AND operator, moving
+      # together. Three defensible choices, and they are not equivalent:
+      #   cart only        the operator becomes an unlabelled object standing
+      #                    against a labelled one, so every detection of the
+      #                    person scores as a false positive
+      #   cart + operator  one larger box covering both; no phantom FPs, but the
+      #                    box is loose and the "object" is not a rigid body
+      #   cart only, and label the operators separately through
+      #                    labels.merge_external_labels (ids stay below 10000)
+      # Whichever you pick, it belongs in the write-up: it changes what precision
+      # means on this dataset, not just the numbers.
+      extent: null
+      # Where that object's CENTRE sits relative to the camera, in the body frame
+      # above: [ahead, left, up] in metres. On a pushcart the camera is usually
+      # near the top of a mast, so this is a large negative z — a camera 0.7 m
+      # above the middle of the cart is [0.0, 0.0, -0.70]. Leaving it at zero
+      # centres the box on the camera, which on a mast is metres of error in the
+      # vertical, not centimetres.
+      center: [0.0, 0.0, 0.0]
+
+  # ------------------------------------------------------------------ mobile_2
+  # No LiDAR: the RealSense depth image is reprojected into a cloud. Expect a
+  # ~87 deg horizontal FOV and a few metres of usable range, not a 360 deg sweep.
+  #
+  # THE EGO, by design: OpenCOOD takes the smallest non-negative id. Its narrow
+  # FOV sees the chairs in only ~33% of frames alone (label_static.py --check),
+  # so ego-only recall is ~0.33 and fusion with mobile_1's sweep lifts it
+  # toward 0.95. That gap is the collaboration signal the study measures; with
+  # the Ouster as ego there is no gap.
+  - name: mobile_2
+    id: 0                        # ego: InCoP takes the smallest non-negative id
+    role: cav
+    host: mobile_2
+    enabled: true
+    required: true
+    pose:
+      # As for mobile_1: the stage-09 corrected trajectory, already in the
+      # anchored `map` frame and already the pose of the RealSense COLOR
+      # OPTICAL frame. align and child_to_base are identity, and this agent's
+      # `base` is that colour optical frame.
+      #
+      # This is also what puts mobile_1 and mobile_2 in ONE world without a
+      # hand-measured inter-robot transform: both trajectories were anchored to
+      # the same surveyed map, so the alignment is a measurement from stages
+      # 03/06/08 rather than an operator's guess.
+      source: pose
+      topic: /mobile_2/global_pose         # 1811 msgs, ~11.6 Hz average
+      # map -> camera_color_optical_frame at the opening dwell, as published.
+      expected_start: [7.704074, -14.308017, 0.165040]
+      expected_start_tolerance_m: 0.25
+      interpolation: linear
+      max_gap_ms: 250
+      align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      child_to_base: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+    cloud:
+      kind: depth_image
+      topic: /mobile_2/depth/image_rect_raw            # 4300 msgs, ~27.5 Hz
+      camera_info_topic: /mobile_2/depth/camera_info
+      # Colour optical -> depth optical, exactly as published
+      # ("camera_color_optical_frame -> camera_depth_optical_frame"). The 59 mm
+      # colour-depth baseline is small, systematic, and on every point if left
+      # at identity. Cross-checked: camera_link -> colour -> depth closes to
+      # 1 um, confirming camera_link IS the depth frame.
+      extrinsic: {x: 0.059190, y: -0.000010, z: -0.000406,
+                  roll: -0.3398, pitch: 0.0958, yaw: 0.1493}
+      depth_scale: 0.001                   # 16UC1 millimetres -> metres
+      min_depth: 0.2
+      max_depth: 10.0                      # D4xx stereo depth degrades past this
+      pixel_stride: 2                      # 2 keeps ~1/4 of the pixels
+      # TRUE, and the pose written beside the points carries the same rotation
+      # (CloudConfig.frame_extrinsic). Both halves matter and they are one
+      # switch, not two: the base here is the COLOUR OPTICAL frame and the
+      # extrinsic above is optical -> optical, so without this the cloud is
+      # written in optical axes — z forward, y down. Every BEV detector reads
+      # x forward and z up, so its ground plane would be the image plane. The
+      # cloud measured 0.65..8.74 m in z with nothing below zero, which is what
+      # a forward axis mislabelled as height looks like.
+      optical_frame: true
+      max_points: 60000
+      ground_lift: 0.0
+      min_points: 1
+    cameras:
+      - topic: /mobile_2/color/image_raw
+        camera_info_topic: /mobile_2/color/camera_info
+        # data_aug_conf declares H: 800, W: 1280. The camera branch resizes
+        # whatever it is handed to that shape and corrects the intrinsic by ONE
+        # scalar, so the correction is only true when the image already has it.
+        # 1280x720 leaves the vertical focal length 11% wrong, 960x540 leaves it
+        # 48% wrong, silently: features land in the wrong places and nothing errors.
+        output_size: [1280, 800]
+        # Identity: the pose source IS this camera's optical frame.
+        extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+        optical_frame: true
+    object:
+      # OFF: this dataset is being converted for MANUAL annotation, so it ships
+      # with no ground truth rather than with agent-derived boxes. The rest of
+      # this block is kept ready for the day it is turned back on -- see the
+      # pushcart note under `extent` before doing so, because the object these
+      # platforms present is not just the cart.
+      #
+      # Annotations produced later fold back in through
+      # `labels.merge_external_labels` ({id, location, extent, angle} in the map
+      # frame); ids below 10000 never collide with agent-derived ones. Each
+      # frame yaml already carries `ros_stamp_ns`, `ros_frame_stamp_ns` and
+      # `ros_sync`, so a label can be tied back to the exact source message.
+      emit: false
+      # The box is described in a ROS body frame (x forward, y left, z up) sitting
+      # at the camera, NOT in the camera's own optical axes — that is what this
+      # extrinsic buys, and it is why `extent` below reads as
+      # [half-LENGTH, half-WIDTH, half-HEIGHT] the way you would expect.
+      extrinsic: {x: 0, y: 0, z: 0, roll: 90, pitch: -90, yaw: 0}
+      # REQUIRED: HALF the size of the thing to be detected, in metres. A cart
+      # 0.60 m long, 0.50 m wide and 1.20 m tall is [0.30, 0.25, 0.60].
+      #
+      # DECIDE WHAT THE OBJECT IS FIRST. These platforms are pushcarts, so the
+      # returns the other agent actually sees are cart AND operator, moving
+      # together. Three defensible choices, and they are not equivalent:
+      #   cart only        the operator becomes an unlabelled object standing
+      #                    against a labelled one, so every detection of the
+      #                    person scores as a false positive
+      #   cart + operator  one larger box covering both; no phantom FPs, but the
+      #                    box is loose and the "object" is not a rigid body
+      #   cart only, and label the operators separately through
+      #                    labels.merge_external_labels (ids stay below 10000)
+      # Whichever you pick, it belongs in the write-up: it changes what precision
+      # means on this dataset, not just the numbers.
+      extent: null
+      # Where that object's CENTRE sits relative to the camera, in the body frame
+      # above: [ahead, left, up] in metres. On a pushcart the camera is usually
+      # near the top of a mast, so this is a large negative z — a camera 0.7 m
+      # above the middle of the cart is [0.0, 0.0, -0.70]. Leaving it at zero
+      # centres the box on the camera, which on a mast is metres of error in the
+      # vertical, not centimetres.
+      center: [0.0, 0.0, 0.0]
+
+  # ------------------------------------- mobile_1's ZED stereo cloud, as an agent
+  # OPV2V gives one cloud per agent folder, so a second sensor on the same robot
+  # has to become its own agent. It sits at (very nearly) the same pose as agent
+  # 1, which is not a configuration OPV2V-trained fusion has ever seen: two
+  # collaborators with a near-zero baseline contribute almost no new geometry,
+  # and any pose-based weighting sees a degenerate pair. Keep it for a
+  # stereo-vs-LiDAR comparison on identical trajectories; set `enabled: false`
+  # for a clean three-agent cooperative setup.
+  - name: mobile_1_zed
+    id: 3
+    role: cav
+    host: mobile_1                      # same machine as mobile_1: one clock, one offset
+    # Off by default: the recorded scenario is two mobile platforms plus one
+    # static infrastructure node, and this fourth agent sits at the same pose as
+    # agent 1. Turn it on only for a stereo-vs-LiDAR comparison on identical
+    # trajectories, and read the caveat above before reporting anything from it.
+    enabled: false
+    required: true
+    pose:
+      # Same rigid body as agent 1, so the same pose source and the same
+      # (identity) transforms. Its `base` is likewise the ZED left optical frame.
+      source: pose
+      topic: /mobile_1/global_pose
+      interpolation: linear
+      max_gap_ms: 200
+      align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      child_to_base: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+    cloud:
+      # The depth IMAGE, not /mobile_1/zed/point_cloud/cloud_registered. Both
+      # carry the same stereo geometry, but the dataset states the depth is
+      # "aligned to the ZED RGB frame", which is exactly this agent's base, so
+      # the extrinsic is a known identity. The point cloud's frame_id is not
+      # stated and the ZED wrapper publishes it in either the optical or the NAV
+      # left_camera_frame depending on version — a 90 deg difference that
+      # nothing downstream would flag. Reprojecting the image avoids the guess.
+      kind: depth_image
+      topic: /mobile_1/zed/depth/depth_registered           # 2291 msgs, ~14.7 Hz
+      camera_info_topic: /mobile_1/zed/depth/camera_info
+      # Identity because "registered" means already in the base frame.
+      extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      optical_frame: true                  # rotates points AND pose (see mobile_2)
+      depth_scale: 1.0                     # 32FC1 metres; the scale is ignored
+      min_depth: 0.3
+      max_depth: 12.0
+      pixel_stride: 2
+      intensity:
+        field: null                        # a depth reprojection carries no intensity
+        default: 0.5
+      max_points: 60000
+      ground_lift: 0.0
+      min_points: 1
+    object:
+      emit: false                          # already labelled as agent 1
+
+  # ------------------------------------------------------------------- infra_1
+  # Static roadside unit. The id must be negative: OpenCOOD's basedataset sorts
+  # the folders and then moves a leading negative id to the end of the list, so
+  # an RSU is never chosen as ego (verified against basedataset.py on main).
+  - name: infra_1
+    id: -1
+    role: rsu
+    host: infra_1
+    # OFF for InCoP: heter_modality_assign.json lists "0" and "1" only, and the
+    # real_world config's max_cav is 2. Kept declared so the two configs stay
+    # line-comparable.
+    enabled: false
+    required: true
+    pose:
+      source: static
+      # REQUIRED: map <- the RADAR frame (the convention chosen below is that
+      # world_pose IS the cloud sensor's pose, so the radar's extrinsic is
+      # identity and the camera's is measured from the radar).
+      #
+      # map -> arducam_optical_frame, as published. The unit is static, so this
+      # one pose holds for the whole bag, and this agent's base is the Arducam
+      # optical frame — the same convention as the two mobile agents, whose
+      # global_pose is also an optical frame.
+      #
+      # It sits at x = -5.5 m, i.e. OUTSIDE the box the three surveyed boards
+      # span (x 0..8.5, y 0..-14.3, z ~-0.2..-0.06). That is correct and not a
+      # frame error: the boards mark where the robots dwelled, the infrastructure
+      # camera looks at that area from outside it and from 2 m up.
+      world_pose: {x: -5.508181, y: -2.590753, z: 1.998232,
+                   roll: -117.6730, pitch: 0.7379, yaw: -127.6503}
+    cloud:
+      kind: pointcloud2
+      topic: /infra_1/radar/points_all     # 1343 msgs, ~8.6 Hz
+      # arducam optical -> infra1_link (the radar), as published. Not identity:
+      # the base is the camera, and the radar sits 26 cm from it.
+      extrinsic: {x: 0.017773, y: -0.208023, z: -0.155788,
+                  roll: 176.0934, pitch: -73.1656, yaw: 92.1354}
+      intensity:
+        field: intensity                   # radar clouds often carry snr/power instead
+        scale: 1.0
+        default: 0.4
+      ground_lift: 0.0
+      # A radar sweep is hundreds of points, not thousands. If frames come back
+      # near-empty, try /infra_1/radar/points_static (1344 msgs) or accept that
+      # this agent contributes detections rather than geometry.
+      min_points: 1
+    cameras:
+      # Arducam: a plain mono/colour USB camera. Three consequences.
+      #
+      # 1. `image_raw` is RAW, not rectified. The converter's LiDAR path never
+      #    touches it, but anything projecting radar points into this image must
+      #    undistort with `d` from camera_info first -- an Arducam's distortion
+      #    is not negligible at the edges.
+      # 2. camera_info runs at 27.5 Hz while image_raw runs at 10.6 Hz. That
+      #    2.6x mismatch is the signature of a camera_info_manager republishing a
+      #    calibration file on its own timer, independent of the image stream, so
+      #    the two can carry DIFFERENT frame_ids. Check them with inspect_bag.py
+      #    before trusting the intrinsics: a mismatch means the info belongs to
+      #    another camera on the same host.
+      # 3. There is no depth here at all, so this agent contributes radar
+      #    detections plus an image -- never geometry from the camera. The radar
+      #    is consumed as a point cloud and needs no camera_info of its own
+      #    (/infra_1/radar/camera_info is empty, and nothing here reads it).
+      - topic: /infra_1/image_raw
+        camera_info_topic: /infra_1/camera_info
+        # data_aug_conf declares H: 800, W: 1280. The camera branch resizes
+        # whatever it is handed to that shape and corrects the intrinsic by ONE
+        # scalar, so the correction is only true when the image already has it.
+        # 1280x720 leaves the vertical focal length 11% wrong, 960x540 leaves it
+        # 48% wrong, silently: features land in the wrong places and nothing errors.
+        output_size: [1280, 800]
+        # Identity: this agent's base IS the Arducam optical frame.
+        extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+        optical_frame: true
+    object:
+      emit: false                          # a tripod is not a detection target

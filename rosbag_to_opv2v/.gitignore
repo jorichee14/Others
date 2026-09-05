@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+# converted datasets and bags are never committed
+data/
+out/
+*.mcap
+*.db3
