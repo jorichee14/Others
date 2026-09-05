@@ -300,13 +300,15 @@ agents:
       min_depth: 0.2
       max_depth: 10.0                      # D4xx stereo depth degrades past this
       pixel_stride: 2                      # 2 keeps ~1/4 of the pixels
-      # MUST be false here. `optical_frame: true` rotates the reprojected cloud
-      # from the optical convention into ROS body (FLU), which is what you want
-      # when the agent's base is a base_link. This agent's base is the COLOUR
-      # OPTICAL frame, and the extrinsic above is optical -> optical, so the
-      # rotation must not be applied — leaving it true mis-rotates every point
-      # of this agent by 90 deg while the conversion still succeeds.
-      optical_frame: false
+      # TRUE, and the pose written beside the points carries the same rotation
+      # (CloudConfig.frame_extrinsic). Both halves matter and they are one
+      # switch, not two: the base here is the COLOUR OPTICAL frame and the
+      # extrinsic above is optical -> optical, so without this the cloud is
+      # written in optical axes — z forward, y down. Every BEV detector reads
+      # x forward and z up, so its ground plane would be the image plane. The
+      # cloud measured 0.65..8.74 m in z with nothing below zero, which is what
+      # a forward axis mislabelled as height looks like.
+      optical_frame: true
       max_points: 60000
       ground_lift: 0.0
       min_points: 1
@@ -398,7 +400,7 @@ agents:
       camera_info_topic: /mobile_1/zed/depth/camera_info
       # Identity because "registered" means already in the base frame.
       extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
-      optical_frame: false                 # base IS an optical frame (see mobile_2)
+      optical_frame: true                  # rotates points AND pose (see mobile_2)
       depth_scale: 1.0                     # 32FC1 metres; the scale is ignored
       min_depth: 0.3
       max_depth: 12.0

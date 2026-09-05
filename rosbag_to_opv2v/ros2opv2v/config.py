@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import yaml
 
-from .geometry import make_transform
+from .geometry import OPTICAL_TO_FLU, invert, make_transform
 
 
 class ConfigError(ValueError):
@@ -93,6 +93,28 @@ class CloudConfig:
     min_depth: float = 0.1
     pixel_stride: int = 2
     optical_frame: bool = True
+
+    def points_rotated_to_body(self) -> bool:
+        """Does the converter rotate this sensor's points into ROS body axes?
+
+        Exactly one case does: a depth image declared `optical_frame`. Anything
+        else is written in the frame it arrived in. Callers need this to keep the
+        WRITTEN pose and the WRITTEN points describing the same frame — rotate one
+        without the other and the dataset is self-inconsistent in a way that
+        validates cleanly and detects nothing.
+        """
+        return self.kind == "depth_image" and self.optical_frame
+
+    def frame_extrinsic(self) -> np.ndarray:
+        """base -> the frame the written points are actually expressed in.
+
+        `extrinsic` names the sensor's own frame. When the points are rotated to
+        body axes, the frame they land in is that sensor frame turned by the same
+        rotation, so the pose written beside them has to carry it too.
+        """
+        if not self.points_rotated_to_body():
+            return self.extrinsic
+        return self.extrinsic @ invert(OPTICAL_TO_FLU)
     range_filter: Optional[List[float]] = None   # sensor frame [xmin..zmax]
     max_points: int = 0            # 0 = keep all; else random-free uniform subsample
     ground_lift: float = 0.0       # see docs/ROS2OPV2V.md ("ground lift")
@@ -112,6 +134,17 @@ class CloudConfig:
         kind = str(_get(mapping, "kind", ctx=ctx)).lower()
         if kind not in ("pointcloud2", "depth_image"):
             raise ConfigError(f"{ctx}: cloud kind must be pointcloud2 or depth_image, got {kind!r}")
+        # `optical_frame` says the SENSOR emits optical-axes points, which is only
+        # ever true of a depth image: a PointCloud2 arrives in whatever frame its
+        # header names, and the converter never rewrites it. Left settable on a
+        # PointCloud2 it reads as a promise the converter does not keep — it was
+        # `true` on this dataset's Ouster, where it did nothing at all, which is
+        # exactly the kind of quiet lie that costs a day.
+        if kind == "pointcloud2" and "optical_frame" in mapping:
+            raise ConfigError(
+                f"{ctx}: optical_frame applies to depth_image clouds only. A "
+                f"PointCloud2 is used in the frame its header names; if that frame "
+                f"is optical, say so in `extrinsic` instead.")
         cfg = CloudConfig(
             kind=kind,
             topic=str(_get(mapping, "topic", ctx=ctx)),

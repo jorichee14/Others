@@ -1425,28 +1425,37 @@ def test_mirc_extrinsics_match_the_published_transforms():
         assert np.allclose(got, expected, atol=2e-5), (label, why, got, expected)
 
 
-def test_mirc_optical_frame_flags_match_the_optical_bases():
-    """Every agent's base is a camera optical frame, so a depth cloud must NOT be
-    rotated into ROS body convention on the way out.
+def test_mirc_depth_clouds_are_written_in_body_axes():
+    """Every agent's base is a camera optical frame, so a depth cloud is optical
+    on both sides of its extrinsic and nothing ever turns it.
 
-    `optical_frame: true` applies OPTICAL_TO_FLU to the reprojected points. With
-    an optical base and an optical->optical extrinsic that rotation is pure
-    error, and it is invisible: the conversion succeeds and the whole agent is
-    turned 90 degrees. On a 3 m return it displaces the point by 4.2 m.
+    That was once resolved by NOT rotating, which kept points and pose agreeing
+    with each other and disagreeing with every detector: the written cloud had
+    z forward and y down, so a BEV model's ground plane was the image plane.
+    The real dataset showed it plainly — the ego's cloud measured z 0.65..8.74 m
+    with nothing below zero, no floor anywhere. The fix rotates BOTH halves, so
+    the points are body-axes and the pose beside them says so.
     """
-    from ros2opv2v.geometry import OPTICAL_TO_FLU
     cfg = _mirc_config()
     for name in ('mobile_2', 'mobile_1_zed'):
         cloud = _agent(cfg, name)['cloud']
         if cloud['kind'] != 'depth_image':
             continue
-        assert cloud.get('optical_frame') is False, \
-            (name, 'depth cloud on an optical base must set optical_frame: false')
-    # and the magnitude of the mistake, so the assertion above has a stated cost
-    T = _published('coloropt__depthopt')
-    p3 = np.array([0.0, 0.0, 3.0, 1.0])
-    displaced = np.linalg.norm((T @ p3)[:3] - (T @ invert(OPTICAL_TO_FLU) @ p3)[:3])
-    assert displaced > 4.0, displaced
+        assert cloud.get('optical_frame') is True, \
+            (name, 'a depth cloud must be rotated into body axes for a BEV model')
+    # a PointCloud2 is used in its header's frame; the flag would be a promise
+    # the converter does not keep, and the Ouster carried it meaninglessly
+    for name in ('mobile_1', 'infra_1'):
+        cloud = _agent(cfg, name)['cloud']
+        assert cloud['kind'] == 'pointcloud2' and 'optical_frame' not in cloud, name
+
+    loaded = cfgmod.load_config(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'configs', 'mirc_coop2.yaml'))
+    ego = next(a for a in loaded.active_agents if a.name == 'mobile_2')
+    assert ego.cloud.points_rotated_to_body()
+    assert not np.allclose(ego.cloud.frame_extrinsic(), ego.cloud.extrinsic)
+
 
 
 def test_realsense_camera_link_is_the_depth_frame():
@@ -2648,6 +2657,60 @@ def test_with_opencood_builds_the_real_dataset_and_reports_failures():
             clear_stub()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+
+def test_rotating_a_depth_cloud_rotates_the_pose_written_beside_it():
+    """`optical_frame` has to move the points AND the frame they are declared
+    to be in. Moving only the points is self-consistent nowhere but validates
+    cleanly: the pcd is body-axes while lidar_pose describes an optical frame,
+    so every box projected through that pose lands 90 degrees out."""
+    from ros2opv2v.geometry import OPTICAL_TO_FLU, invert, make_transform
+    base = cfgmod.CloudConfig('depth_image', '/d', make_transform(
+        x=0.06, y=0.0, z=0.0, roll=0.0, pitch=0.0, yaw=0.0, degrees=True))
+
+    base.optical_frame = True
+    assert base.points_rotated_to_body()
+    assert np.allclose(base.frame_extrinsic(), base.extrinsic @ invert(OPTICAL_TO_FLU))
+
+    base.optical_frame = False
+    assert not base.points_rotated_to_body()
+    assert np.allclose(base.frame_extrinsic(), base.extrinsic)
+
+    # a PointCloud2 is used in the frame its header names, whatever the flag says
+    pc = cfgmod.CloudConfig('pointcloud2', '/p', np.identity(4))
+    pc.optical_frame = True
+    assert not pc.points_rotated_to_body()
+    assert np.allclose(pc.frame_extrinsic(), pc.extrinsic)
+
+
+def test_a_depth_agents_written_cloud_has_the_floor_below_it():
+    """The end-to-end property, stated the way the bug showed up in the data:
+    with a camera looking level at a room, the written cloud must put the floor
+    at negative z and what is ahead at positive x. In optical axes the forward
+    axis is z, which is what the real dataset showed (z 0.65..8.74, nothing
+    below zero) before the flag moved the pose too."""
+    from ros2opv2v.geometry import OPTICAL_TO_FLU, invert, transform_points
+    cloud = cfgmod.CloudConfig('depth_image', '/d', np.identity(4))
+    cloud.optical_frame = True
+
+    # points as a depth camera produces them: x right, y down, z forward.
+    # a floor 0.9 m below, 2..6 m ahead
+    rng = np.random.default_rng(61)
+    n = 2000
+    optical = np.column_stack([rng.uniform(-2, 2, n), np.full(n, 0.9),
+                               rng.uniform(2, 6, n)])
+    body = transform_points(optical, OPTICAL_TO_FLU)
+    assert body[:, 2].max() < -0.85, 'floor must sit below the sensor'
+    assert body[:, 0].min() > 1.9, 'what is ahead must be +x'
+
+    # and the declared frame turns by the same rotation, so world positions hold
+    world_from_base = np.identity(4)
+    world_from_sensor_points = world_from_base @ cloud.frame_extrinsic()
+    world_from_sensor_raw = world_from_base @ cloud.extrinsic
+    assert np.allclose(transform_points(body, world_from_sensor_points),
+                       transform_points(optical, world_from_sensor_raw), atol=1e-9), \
+        'rotating the points must not move them in the world'
 
 
 if __name__ == '__main__':

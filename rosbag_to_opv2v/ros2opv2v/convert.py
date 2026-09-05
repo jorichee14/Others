@@ -774,7 +774,9 @@ def write_frame_yamls(cfg: ConverterConfig, scenarios, frame_poses: Dict[str, di
                     continue
                 world_from_base, speed = entry
                 lidar_pose = matrix_to_opencood_pose(
-                    _sensor_pose(world_from_base, agent.cloud.extrinsic,
+                    # frame_extrinsic(), not extrinsic: when the points were
+                    # rotated to body axes the pose must carry the same rotation.
+                    _sensor_pose(world_from_base, agent.cloud.frame_extrinsic(),
                                  agent.cloud.ground_lift))
                 body_pose = matrix_to_opencood_pose(world_from_base)
 
@@ -887,7 +889,7 @@ def _camera_block(camera, world_from_base: np.ndarray, agent: AgentConfig,
     camera-capable forks and visual debugging have what they need.
     """
     world_from_camera = world_from_base @ camera.extrinsic
-    lidar_pose = _sensor_pose(world_from_base, agent.cloud.extrinsic,
+    lidar_pose = _sensor_pose(world_from_base, agent.cloud.frame_extrinsic(),
                               agent.cloud.ground_lift)
     camera_to_lidar = invert(lidar_pose) @ world_from_camera
     return {
@@ -1004,7 +1006,10 @@ def _deskew(agent: AgentConfig, cloud: np.ndarray, offsets, stamp_ns: Optional[i
             stats["reasons"]["no pose track (static agent?)"] = \
                 stats["reasons"].get("no pose track (static agent?)", 0) + 1
         return cloud
-    sensor_from_base = agent.pose.child_to_base @ agent.cloud.extrinsic
+    # Deskew runs AFTER any optical->body rotation, so the frame it corrects in
+    # is the frame the points are already in. Identical to `extrinsic` for a
+    # PointCloud2, which is the only kind that carries per-point times today.
+    sensor_from_base = agent.pose.child_to_base @ agent.cloud.frame_extrinsic()
     out, info = deskew_cloud(
         cloud, offsets, int(stamp_ns if stamp_ns is not None else frame.t_ns),
         int(frame.t_ns), track, sensor_from_base,
