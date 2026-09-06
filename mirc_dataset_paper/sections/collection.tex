@@ -173,6 +173,22 @@ quantifies how reliably a trajectory plan produces the condition for which it
 was written, which is precisely what a $\bullet/\circ$ grading~\cite{s3e}
 asserts without measuring.
 
+\paragraph{Use of the released quantities.}
+The per-frame quantities are keyed by (\texttt{t\_ns}, \texttt{node},
+\texttt{obj\_id}), so that any evaluation over the recordings can be joined to
+the condition under which each observation was made. They admit three uses.
+They serve as strata: accuracy is reported within bands of $\omega$, $r$,
+$\beta$, $C$, or link clearance rather than averaged over the mixture a
+recording happens to contain, and a missed object is separable into one the ego
+could not see and one it could see but for which it returned insufficient
+evidence. They serve as a join between sensing and communication: link state
+and perception need are expressed on a common clock, so the value of a
+transmission can be assessed at the frame at which it would have been made.
+And they serve as an objective: aspect angle, co-visibility, and clearance are
+quantities against which a viewpoint, transmission, or placement policy can be
+scored directly, so that candidate infrastructure positions and motion policies
+are evaluated against recorded trajectories rather than asserted.
+
 \paragraph{Standing parameters.}
 The geometric pipeline is frozen across sequences: $\tau = 0.5$; occupancy voxel
 \SI{10}{\centi\metre}; 200 rays per object, node, and frame; statistical outlier
