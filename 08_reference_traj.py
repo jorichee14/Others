@@ -563,6 +563,11 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
             P, sg = v if isinstance(v, tuple) else (v, ICP_SIGMA)
             sub[k] = (np.asarray(subsample(P, icp_pts), float), float(sg))
     lam, best_cost, Ts_best = 1e-8, np.inf, Ts.copy()
+    # best_cost/Ts_best = the last ACCEPTED iterate (the LM reference); the
+    # 5% tolerance lets that creep upward over many iterations, so the
+    # global minimum is tracked separately and is what gets returned
+    # (measured: 24359 -> 27386 over 18 accepted steps, returned the worse)
+    min_cost, Ts_min = np.inf, Ts.copy()
     n_flat, step_prev = 0, np.inf
     n_rejected_same, last_rejected = 0, np.nan
     for it in range(iters):
@@ -663,6 +668,8 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
         else:
             n_flat = 0
         best_cost, Ts_best = cost, Ts.copy()
+        if cost < min_cost:
+            min_cost, Ts_min = cost, Ts.copy()
         lam = max(lam * 0.3, 1e-10)
         Hn = (A.T @ A).tocsc()
         d = Hn.diagonal()
@@ -679,8 +686,11 @@ def solve_graph(node_t, T_init, Z_rel, sig_rel, abs_meas, clouds=None, ref=None,
         step_prev = step
         if step < 1e-5:
             break
-    if np.isfinite(best_cost):
-        Ts = Ts_best
+    if np.isfinite(min_cost):
+        if verbose and np.isfinite(best_cost) and best_cost > 1.02 * min_cost:
+            print("    (returning the minimum-cost iterate, %.1f, not the last "
+                  "accepted one, %.1f)" % (min_cost, best_cost))
+        Ts = Ts_min
     # AFTER convergence a factor still grossly out is a mis-detection, not
     # drift: the rest of the graph has already been pulled to the truth.
     if use_board and abs_meas and not _second_pass:
@@ -1045,7 +1055,7 @@ def chain_icp(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100,
     ts, Ts, RMS, NOBS, cl, Q = [], [], [], [], [], []
     n_rej = 0
     t_last = -1e18; T_prev = None; T_prev2 = None; t_prev = t_prev2 = None
-    T_ol_prev = None; t0w = time.time()
+    T_ol_prev = None; t0w = time.time(); prev_clean = False
     for t, xyz, trel in scans:
         if t - t_last < keep_dt:
             continue
@@ -1132,7 +1142,19 @@ def chain_icp(scans, ot, oT, T_map_origin, T_cl, REF, track, log_every=100,
         else:
             od_t = od_r = 0.0
         Q.append((t, rms, nobs, nu, shift, od_t, od_r, status))
-        T_prev2, t_prev2 = T_prev, t_prev
+        # Velocity for the next constant-velocity seed comes ONLY from two
+        # consecutive CLEANLY registered scans. After an unregistered scan
+        # the chain HOLDS its last pose (zero velocity) instead of
+        # extrapolating - a pure chain has no re-anchoring, and extrapolating
+        # a lost chain at constant velocity flew 416 m in 147 s (measured).
+        # A wide-gate rescue is a coarse fix, not a motion estimate: it does
+        # not define a velocity either.
+        clean = status in ("cv", "odom")
+        if clean and prev_clean:
+            T_prev2, t_prev2 = T_prev, t_prev
+        else:
+            T_prev2, t_prev2 = None, None
+        prev_clean = clean
         T_prev, t_prev, T_ol_prev = T_i, t, T_ol
         t_last = t
         ts.append(t); Ts.append(T_i); RMS.append(rms); NOBS.append(nobs)
@@ -1491,6 +1513,7 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     sig_icp = (float(track.get("icp_rel_sigma_t", 0.01)),
                float(track.get("icp_rel_sigma_r", 0.002)))
     es_icp = np.ones(len(node_t) - 1)
+    icp_chain_ok = True
     if chain_nobs is not None and len(chain_nobs) == len(reg_t):
         nb = np.asarray(chain_nobs)[np.clip(
             np.searchsorted(reg_t, node_t) - 1, 0, len(reg_t) - 1)]
@@ -1500,6 +1523,14 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
             print("  icp_boards: %d of %d chain edges touch an unregistered "
                   "scan - their relative sigma x%.0f (weakened, not freed)"
                   % (int(weak.sum()), len(weak), float(track.get("icp_fail_scale", 30.0))))
+        max_fail = float(track.get("icp_boards_max_fail", 0.3))
+        if weak.mean() > max_fail:
+            icp_chain_ok = False
+            print("  icp_boards SKIPPED: %.0f%% of the chain edges are "
+                  "extrapolations, not measurements (limit icp_boards_max_fail "
+                  "= %.0f%%). Relative factors made of a lost chain are noise "
+                  "with a sigma, and the boards cannot rescue %d nodes of them."
+                  % (100 * weak.mean(), 100 * max_fail, len(node_t)))
     # Odometry jumps (arms WITH map factors only). Each odometry increment is
     # compared with the increment of the chained trajectory over the same
     # edge. An edge that disagrees by more than odom_jump_m / odom_jump_deg is
@@ -1580,7 +1611,8 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
                          [lbl_], "odom_icp_%s" % lbl_ if lbl_ == "lidar"
                          else "odom_boards"))
     arms.append(("odom_icp_boards", True, True, "odom", edge_scale, None, j_init))
-    arms = [a_ for a_ in arms if a_[0] in arms_run]
+    arms = [a_ for a_ in arms if a_[0] in arms_run
+            and (a_[0] != "icp_boards" or icp_chain_ok)]
     ARMS, ARM_SETS = {}, {}
     for arm, ui, ub, rel, es, sets, init in arms:
         print("  == arm %s ==" % arm)
@@ -1786,6 +1818,11 @@ def _paths_figure(results, rig, methods, has_ref, ref, bmap, outd, T_lc):
             ax.annotate(nm, (p[0], p[1]), fontsize=7, zorder=7,
                         xytext=(5, 5), textcoords="offset points")
         ax.set_aspect("equal"); ax.grid(alpha=.3)
+        # the axes follow the MAP (plus a margin), never a curve: a chain that
+        # ran away 165 m must not shrink the building to a dot (measured)
+        if ref is not None and len(ref.P):
+            lo = ref.P[:, :2].min(0) - 2.0; hi = ref.P[:, :2].max(0) + 2.0
+            ax.set_xlim(lo[0], hi[0]); ax.set_ylim(lo[1], hi[1])
 
     draw_map(ax0)
     for nm, ts, Ts, c, l in methods:
@@ -1805,8 +1842,11 @@ def _paths_figure(results, rig, methods, has_ref, ref, bmap, outd, T_lc):
                              mew=0.8, zorder=8)
         ax0.plot([], [], "x", color="tab:purple", ms=6,
                  label="board position implied by the lidar track")
-    ax0.set_title("%s: all methods, map frame, camera optical point (o = start)"
-                  % rig)
+    if ref is not None and len(ref.P):
+        lo = ref.P[:, :2].min(0) - 2.0; hi = ref.P[:, :2].max(0) + 2.0
+        ax0.set_xlim(lo[0], hi[0]); ax0.set_ylim(lo[1], hi[1])
+    ax0.set_title("%s: all methods, map frame, camera optical point (o = start; "
+                  "axes follow the map, a curve that left it is clipped)" % rig)
     ax0.set_xlabel("x [m]"); ax0.set_ylabel("y [m]")
     ax0.legend(fontsize=7, loc="best")
 
@@ -1847,6 +1887,9 @@ def _paths_figure(results, rig, methods, has_ref, ref, bmap, outd, T_lc):
                 zorder=5)
         ax.plot(Ts[-1, 0, 3], Ts[-1, 1, 3], "s", color=c, ms=7, mec="k", mew=0.6,
                 zorder=5)
+        if ref is not None and len(ref.P):
+            lo = ref.P[:, :2].min(0) - 2.0; hi = ref.P[:, :2].max(0) + 2.0
+            ax.set_xlim(lo[0], hi[0]); ax.set_ylim(lo[1], hi[1])
         ttl = nm
         if nm in gaps:
             d = gaps[nm][1]
