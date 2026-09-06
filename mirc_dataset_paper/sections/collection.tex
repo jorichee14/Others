@@ -1,6 +1,6 @@
 %=======================================================================
 % Requires: booktabs, multirow, amsmath, amssymb, siunitx, todonotes
-% Bib keys: s3e, cumulti, deepsense6g, inscope  (see refs.bib)
+% Bib keys: s3e, cumulti, deepsense6g, inscope, opv2v, v2v4real, dairv2x
 %=======================================================================
 \section{Dataset Design and Collection}
 \label{sec:collection}
@@ -59,15 +59,29 @@ node as ego would reinstate that symmetry.
 \subsubsection{Trajectory Paradigms}
 \label{sec:paradigms}
 A paradigm specifies a trajectory geometry together with the collaboration
-condition that geometry is intended to induce. Paradigm-driven design is
-established practice: S3E~\cite{s3e} names four collaborative trajectory
-paradigms and grades each against loop-closure opportunity using filled and open
-circles, and CU-Multi~\cite{cumulti} treats inter-trajectory overlap as a
-controlled design variable. Neither releases a per-frame measurement of the
-condition the design produced: S3E's grading is an assertion about a run, and
-CU-Multi's overlap is obtained by re-running a single platform four times, so no
-instantaneous collaboration geometry exists to measure. We retain the vocabulary
-and replace the grading with measurement. Each paradigm is a predicate over
+condition that geometry is intended to induce. The vocabulary originates in
+multi-robot SLAM, where trajectory design is established practice:
+S3E~\cite{s3e} names four collaborative trajectory paradigms and grades each
+against loop-closure opportunity using filled and open circles, and
+CU-Multi~\cite{cumulti} treats inter-trajectory overlap as a controlled design
+variable. Collaborative perception datasets instead treat the relative geometry
+between collaborating agents as an emergent property of the recording. In
+vehicle-to-vehicle settings it follows from how the collecting vehicles happened
+to drive, whether simulated \cite{opv2v} or recorded on public roads
+\cite{v2v4real}; in vehicle-to-infrastructure settings, from sensor placement
+and the ego vehicle's approach \cite{dairv2x}. Per-frame poses are necessarily
+released, since feature warping depends on them, but the geometry they encode is
+never declared in advance, stratified across splits, or used as a reporting
+condition. Even where relative pose is deliberately diversified at collection
+time \cite{v2v4real}, it is marginalised at evaluation, and reported accuracy
+averages over whatever mixture of configurations a recording contained.
+
+Neither community, then, releases a per-frame measurement of the collaboration
+condition obtained: S3E's grading is an assertion about a run, CU-Multi's
+overlap is obtained by re-running a single platform four times, so no
+instantaneous geometry exists to measure, and perception datasets ship the
+ingredients without the condition. We retain the vocabulary of the former and
+supply the measurement neither provides. Each paradigm is a predicate over
 per-frame quantities computed from the map, the annotations, and the node poses,
 and released with the recordings.
 
