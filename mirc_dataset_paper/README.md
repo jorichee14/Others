@@ -6,18 +6,18 @@ results/discussion that support it.
 | File | Contents |
 |---|---|
 | `sections/related_work.tex` | §Related Work: trajectory design in multi-robot datasets, collaboration geometry in collaborative perception datasets, visibility/evidence as released attributes, joint sensing and communication, position of this work |
-| `sections/collection.tex` | §Dataset Design and Collection: environments, roles, paradigm predicates and table, use of the released quantities, standing parameters, descriptor format, release composition |
-| `sections/results.tex` | §Results: filled descriptor table, validation table, three findings |
+| `sections/characterization.tex` | §Dataset Design and Characterization: environments and roles, collaboration geometry (predicates, paradigm table, frozen parameters), sequence characterization with the filled descriptor, validation, findings, release composition |
 | `sections/discussion.tex` | §Discussion: what measurement buys, evidence-definition problem, threats to validity, next collection |
 
-Section order: Related Work → Dataset Design and Collection → Results →
+Section order: Related Work → Dataset Design and Characterization →
 Discussion. Positioning claims live only in Related Work; the method section
-points at it rather than restating it.
+points at it rather than restating it. Each quantity is defined immediately
+before it is reported, so definitions and measured values share one section.
 
 ## Packages assumed by the preamble
 
 `booktabs`, `amsmath`, `amssymb` (`\checkmark`), `siunitx`, `todonotes`
-(`\todo`, `\unsure` as already used in the draft). `results.tex` uses `table*`,
+(`\todo`, `\unsure` as already used in the draft). `characterization.tex` uses `table*`,
 so a two-column class is assumed; in a one-column class change it to `table`.
 
 ## Provenance of every number
