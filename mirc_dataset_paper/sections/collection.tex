@@ -1,6 +1,6 @@
 %=======================================================================
-% Requires: booktabs, multirow, amsmath, amssymb, siunitx, todonotes
-% Bib keys: s3e, cumulti, deepsense6g, inscope, opv2v, v2v4real, dairv2x
+% Requires: booktabs, amsmath, amssymb, siunitx, todonotes
+% Positioning against prior datasets is in Section~\ref{sec:related}.
 %=======================================================================
 \section{Dataset Design and Collection}
 \label{sec:collection}
@@ -20,11 +20,7 @@ an ego and a helper, whether that helper is infrastructure or a peer.
 the range beyond which $\mathrm{visible}(i)$ ceases to imply
 $\mathrm{observed}(i)$ (Eqs.~\eqref{eq:visible}--\eqref{eq:observed}).
 \textit{Radio propagation}: whether structure intervenes between a node and the
-access point, characterised by first-Fresnel-zone clearance. Prior
-sensing-and-communication datasets infer blockage from received power
-\cite{deepsense6g}; we compute clearance geometrically and validate it against
-measured RSSI (Section~\ref{sec:results}), so that link state is an independent
-label rather than a threshold on the signal it explains.
+access point, characterised by first-Fresnel-zone clearance.
 
 Each site is surveyed and mapped once as a dense point cloud, with all node
 poses expressed in a single anchored map frame, so that occlusion,
@@ -50,40 +46,19 @@ both ego assignments of the same recording are reported, which is the strongest
 form of this control obtainable from one run.
 
 Infrastructure nodes are never assigned the ego role, their function being the
-elevated, persistent vantage that no mobile node can sustain. Existing
-multi-robot and roadside datasets collaborate between sensors at a common
-height---$\Delta h = 0$ in S3E~\cite{s3e} and InScope~\cite{inscope}---so the
-elevation asymmetry is absent by construction, and assigning the infrastructure
-node as ego would reinstate that symmetry.
+elevated, persistent vantage that no mobile node can sustain. Since comparable
+datasets collaborate between sensors at a common height
+(Section~\ref{sec:related}), assigning the infrastructure node as ego would
+reinstate the symmetry this collection is designed to break.
 
 \subsubsection{Trajectory Paradigms}
 \label{sec:paradigms}
 A paradigm specifies a trajectory geometry together with the collaboration
-condition that geometry is intended to induce. Paradigm-driven datasets
-originate in multi-robot SLAM, where trajectory design is established practice:
-S3E~\cite{s3e} names four collaborative trajectory paradigms and grades each
-against loop-closure opportunity using filled and open circles, and
-CU-Multi~\cite{cumulti} treats inter-trajectory overlap as a controlled design
-variable. Collaborative perception datasets instead treat the relative geometry
-between collaborating agents as an emergent property of the recording. In
-vehicle-to-vehicle settings it follows from how the collecting vehicles happened
-to drive, whether simulated \cite{opv2v} or recorded on public roads
-\cite{v2v4real}; in vehicle-to-infrastructure settings, from sensor placement
-and the ego vehicle's approach \cite{dairv2x}. Per-frame poses are necessarily
-released, since feature warping depends on them, but the geometry they encode is
-never declared in advance, stratified across splits, or used as a reporting
-condition. Even where relative pose is deliberately diversified at collection
-time \cite{v2v4real}, it is marginalised at evaluation, and reported accuracy
-averages over whatever mixture of configurations a recording contained.
-
-Neither community, then, releases a per-frame measurement of the collaboration
-condition obtained: S3E's grading is an assertion about a run, CU-Multi's
-overlap is obtained by re-running a single platform four times, so no
-instantaneous geometry exists to measure, and perception datasets ship the
-ingredients without the condition. We retain the vocabulary of the former and
-supply the measurement neither provides. Each paradigm is a predicate over
-per-frame quantities computed from the map, the annotations, and the node poses,
-and released with the recordings.
+condition that geometry is intended to induce. The vocabulary is that of
+paradigm-driven multi-robot collection; what is added here is that each paradigm
+is a predicate over per-frame quantities, computed from the map, the
+annotations, and the node poses, and released with the recordings rather than
+asserted of a run.
 
 \paragraph{Per-observation predicates.}
 Consider one annotated object at one frame. Let $e$ denote the ego and $j$ range
@@ -104,17 +79,13 @@ $\tau = 0.5$,
 %
 Visibility is a geometric condition: an unobstructed line exists. Observation is
 an evidence condition: the sensor returned support sufficient for a detection,
-within the range at which that modality still returns anything. A node may
-remain visible and unobserved throughout a sequence, and
-Section~\ref{sec:results} shows this to be the dominant failure mode in the
-present data.
-
-Occlusion has been quantified on infrastructure sensors previously:
-InScope~\cite{inscope} reports an occlusion degree $\xi_D$ over roadside LiDAR,
-computed for a fixed vantage between sensors at common height and summarised per
-dataset rather than released per frame, and therefore unavailable for
-conditioning an evaluation. Here $\omega_i$ is defined per (frame, node, object)
-and released as a column.
+within the range at which that modality still returns anything. Both have
+single-agent precedent as annotation attributes and evaluation filters
+(Section~\ref{sec:related}); here they are computed for every node and kept
+distinct, so that an object the ego could not see remains separable from one it
+could see but for which it returned insufficient evidence. A node may remain
+visible and unobserved throughout a sequence, and Section~\ref{sec:results}
+shows this to be the dominant failure mode in the present data.
 
 A node $j \ne e$ is a \textit{helper} if $\mathrm{visible}(j)$, and the best
 helper $j^\star$ is that of lowest $\omega$. The aspect angle $\beta$ is
@@ -171,8 +142,7 @@ intent to be audited. Each run additionally records an
 \texttt{intended\_paradigm} in its metadata, and the agreement between intended
 and measured is the design check reported in Section~\ref{sec:results}. It
 quantifies how reliably a trajectory plan produces the condition for which it
-was written, which is precisely what a $\bullet/\circ$ grading~\cite{s3e}
-asserts without measuring.
+was written.
 
 \paragraph{Use of the released quantities.}
 The per-frame quantities are keyed by (\texttt{t\_ns}, \texttt{node},
@@ -208,58 +178,27 @@ for map noise and for fixed nodes appearing as mapped structure; they are stated
 because they affect the reported values, and a re-analysis against a
 survey-grade map should permit their removal.
 
-\paragraph{Per-sequence descriptor.}
-Table~\ref{tab:seq} gives the descriptor: one row per ego assignment, the
-design fields spanning both rows and the measured geometry reported separately
-for each. The geometry block summarises the distributions defined above---the
-median co-visibility fraction $C$, the median aspect angle $\beta$ to the
-infrastructure node, the proportion of observations at $\beta > 90^\circ$, and
-the count of occlusion episodes, an episode being a contiguous interval of
-$\neg\,\mathrm{visible}(e)$ on one object lasting at least \SI{0.5}{\second},
-with the number covered throughout by a helper given in parentheses. The rescue
-block reports the proportion of ego-in-FoV observations in which a partner
-supplies what the ego does not: \textit{occlusion rescue}, where the ego is
-blocked and a helper is not; \textit{range rescue}, where the ego holds an
-unobstructed line but returns insufficient evidence,
-$\mathrm{visible}(e) \wedge \neg\,\mathrm{observed}(e)$, while a helper
-observes; and \textit{Doppler rescue}, where the ego's radar is blind to the
-object's motion and another node's is not. The final block gives the fraction
-of frames on which the ego--AP link is obstructed or degraded, and the median
-number of annotated objects in view. Every sequence in the release is described
-in this form, with columns frozen so that sequences remain comparable as the
-release grows.
-
-\begin{table*}[t]
-\centering
-\caption{Per-sequence descriptor. Each sequence contributes one row per ego
-assignment: the left block records the design, the right blocks the measured
-collaboration geometry. Values shown are those of \texttt{coop2\_0828} and are
-interpreted in Section~\ref{sec:results}. $^\ast$ staged ego. Episodes are
-contiguous intervals of $\neg\,\mathrm{visible}(e)$ of at least
-\SI{0.5}{\second}, with the number covered by a helper in parentheses. $\beta$
-is measured to the infrastructure node. Range rescue is reported under RGB-D
-evidence. NLoS aggregates obstructed and degraded frames on the ego--AP link.
-An em-dash denotes a quantity undefined for the sequence, not a zero.}
-\label{tab:seq}
-\small
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{@{}lllllccccccccc@{}}
-\toprule
-\multicolumn{5}{c}{Design} & \multicolumn{4}{c}{Geometry} &
-\multicolumn{3}{c}{Rescue rate} & \multicolumn{2}{c}{Link, scene} \\
-\cmidrule(r){1-5}\cmidrule(lr){6-9}\cmidrule(lr){10-12}\cmidrule(l){13-14}
-Sequence & Site & Paradigm & Stress & Ego &
-$C$ & $\beta$ ($^\circ$) & $\beta > 90^\circ$ & Episodes &
-Occl. & Range & Dopp. &
-NLoS (\%) & Obj. \\
-\midrule
-\multirow{2}{*}{\texttt{coop2\_0828}} & \multirow{2}{*}{MIRC} &
-\multirow{2}{*}{co-observation} & \multirow{2}{*}{---} &
-\texttt{m1}$^\ast$ & 0.5 & 149 & 0.67 & 9 (6) & 0.10 & 0.29 & --- & 33 & 2 \\
- & & & & \texttt{m2} & 0.5 & 29 & 0.33 & 8 (5) & 0.02 & 0.39 & --- & 18 & 2 \\
-\bottomrule
-\end{tabular}
-\end{table*}
+\subsubsection{Per-Sequence Descriptor}
+\label{sec:descriptor}
+Each sequence is summarised by one row per ego assignment, in four blocks of
+frozen columns. The \textit{design} block records the sequence identifier, the
+site, the intended paradigm, any stress factor applied, and which node is ego.
+The \textit{geometry} block reports the median co-visibility fraction $C$, the
+median aspect angle $\beta$ to the infrastructure node, the proportion of
+observations at $\beta > 90^\circ$, and the count of occlusion episodes, an
+episode being a contiguous interval of $\neg\,\mathrm{visible}(e)$ on one object
+lasting at least \SI{0.5}{\second}, with the number covered throughout by a
+helper given in parentheses. The \textit{rescue} block reports the proportion of
+ego-in-FoV observations in which a partner supplies what the ego does not:
+\textit{occlusion rescue}, where the ego is blocked and a helper is not;
+\textit{range rescue}, where the ego holds an unobstructed line but returns
+insufficient evidence, $\mathrm{visible}(e) \wedge \neg\,\mathrm{observed}(e)$,
+while a helper observes; and \textit{Doppler rescue}, where the ego's radar is
+blind to the object's motion and another node's is not. The final block gives
+the fraction of frames on which the ego--AP link is obstructed or degraded, and
+the median number of annotated objects in view. A quantity undefined for a
+sequence is left empty rather than reported as zero. Section~\ref{sec:results}
+gives the descriptor for the present release.
 
 \subsection{Release Composition}
 \label{sec:conditions}

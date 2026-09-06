@@ -5,9 +5,14 @@ results/discussion that support it.
 
 | File | Contents |
 |---|---|
-| `sections/collection.tex` | §Dataset Design and Collection: environments, roles, trajectory paradigms (predicates + Table), standing parameters, inventory |
-| `sections/results.tex` | §Results: canonical sequence table, validation table, three findings |
+| `sections/related_work.tex` | §Related Work: trajectory design in multi-robot datasets, collaboration geometry in collaborative perception datasets, visibility/evidence as released attributes, joint sensing and communication, position of this work |
+| `sections/collection.tex` | §Dataset Design and Collection: environments, roles, paradigm predicates and table, use of the released quantities, standing parameters, descriptor format, release composition |
+| `sections/results.tex` | §Results: filled descriptor table, validation table, three findings |
 | `sections/discussion.tex` | §Discussion: what measurement buys, evidence-definition problem, threats to validity, next collection |
+
+Section order: Related Work → Dataset Design and Collection → Results →
+Discussion. Positioning claims live only in Related Work; the method section
+points at it rather than restating it.
 
 ## Packages assumed by the preamble
 

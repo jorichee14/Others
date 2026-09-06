@@ -1,0 +1,83 @@
+%=======================================================================
+% Requires: booktabs, amsmath, amssymb, siunitx
+% Bib keys: s3e, cumulti, opv2v, v2v4real, dairv2x, inscope, deepsense6g,
+%           kitti, nuscenes, waymo
+%=======================================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Trajectory Design in Multi-Robot Datasets}
+Paradigm-driven collection originates in multi-robot SLAM. S3E~\cite{s3e}
+names four collaborative trajectory paradigms and grades each against
+loop-closure opportunity using filled and open circles, and
+CU-Multi~\cite{cumulti} treats inter-trajectory overlap as a controlled design
+variable. In both, the geometry is deliberate, which is the property we retain.
+What neither supplies is a measurement of the condition the design produced:
+S3E's grading is an assertion about a run rather than a quantity attached to a
+frame, and CU-Multi's overlap is obtained by re-running a single platform four
+times, so the robots are never simultaneously present and no instantaneous
+collaboration geometry exists to measure. Both, moreover, collaborate between
+sensors at a common height, $\Delta h = 0$, so viewpoint asymmetry between an
+elevated and a ground-level vantage is absent by construction.
+
+\subsection{Collaboration Geometry in Collaborative Perception Datasets}
+Collaborative perception datasets treat the relative geometry between agents as
+an emergent property of the recording. In vehicle-to-vehicle settings it follows
+from how the collecting vehicles happened to drive, whether simulated
+\cite{opv2v} or recorded on public roads \cite{v2v4real}; in
+vehicle-to-infrastructure settings, from sensor placement and the ego vehicle's
+approach \cite{dairv2x}. Per-frame poses are necessarily released, since feature
+warping depends on them, so the relative placement of the agents is recoverable.
+What is absent is the condition itself: no field states whether the ego's view of
+a given object was blocked, whether a partner's was clear, or at what angle the
+two observed it, and in the recorded sets these cannot be reconstructed after the
+fact, no dense scene model accompanying the release. Splits are cut by town, road
+type, or scene, never by collaboration geometry. Even where relative pose is
+deliberately diversified at collection time \cite{v2v4real}, it is marginalised
+at evaluation: reported accuracy averages over whatever mixture of
+configurations a recording contained.
+
+Where geometry does enter this literature, it enters as a nuisance to be
+corrected rather than a condition to be reported. Pose error is modelled,
+injected, and compensated; the geometry that pose error perturbs is not itself an
+axis of the evaluation.
+
+\subsection{Visibility and Evidence as Released Attributes}
+Single-agent detection benchmarks do release condition attributes, and both
+halves of the formulation used here have precedent there. Geometric visibility
+appears as per-object occlusion and truncation flags~\cite{kitti} and as binned
+visibility attributes~\cite{nuscenes}. Evidence sufficiency appears as a
+filtering rule: annotations carry the count of sensor returns falling inside
+them, and objects below a threshold are excluded from scoring or assigned to a
+lower difficulty tier~\cite{nuscenes,waymo}. These benchmarks, however, compute
+both for a single ego and combine them into one difficulty label, which mixes
+occlusion, truncation, and a range proxy into a single tier. The distinction
+between an object the ego could not see and one it could see but returned too
+little evidence for is thereby lost, and it is that distinction, computed for
+every node rather than for one, that the present release keeps.
+
+Occlusion has also been quantified on infrastructure sensors: InScope
+\cite{inscope} reports an occlusion degree $\xi_D$ over roadside LiDAR. It is
+computed for a fixed roadside vantage, between sensors at a common height, and
+summarised per dataset rather than released per frame, so it characterises the
+dataset but cannot condition an evaluation within it.
+
+\subsection{Joint Sensing and Communication}
+Datasets combining sensing with communication measure blockage at scale, but
+infer it from received power itself~\cite{deepsense6g}, so the label and the
+signal it is meant to explain are not independent. Computing link state
+geometrically, as done here, permits the two to be compared: a geometric
+predicate derived from the map is validated against the measured RSSI it never
+saw (Section~\ref{sec:results}).
+
+\subsection{Position of This Work}
+Four properties of a dataset's collaboration geometry are independent: whether it
+is designed, whether it is described, whether it is measured per observation, and
+whether the measurement is released in a form that can condition an evaluation.
+Multi-robot datasets design and describe it; collaborative perception datasets do
+neither; infrastructure datasets measure one component and summarise it away;
+sensing-and-communication datasets measure the link but derive the label from the
+signal. This work designs the geometry, measures it per (frame, node, object),
+validates the measurement against independent signals, and releases it as
+columns alongside the recordings. The contribution is the axis and its
+validation, not scale: the release is smaller than every dataset named above.
