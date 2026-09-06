@@ -228,4 +228,18 @@ for mode in ("odom", "icp"):
         assert np.median(err[45:]) < 0.15, "odom-seeded chain must re-register after the gap"
 print("  OK: a lost chain is bounded; with odometry seeding it recovers after the gap")
 
+print("\n#### 7. the figure must not mix rigs' board sightings")
+two = {"mobile_1_lidar": dict(kind="lidar_icp", ts=node_t, Ts=g["arms"]["odom_icp_boards"], res_nodes=[]),
+       "mobile_1_zed": dict(kind="arms", ts=node_t, Ts=g["arms"]["odom_icp_boards"], arms=g["arms"],
+                            res_nodes=g["res_nodes"], odom_only=g["odom_only"], chained=g["chained"]),
+       "mobile_2_rs": dict(kind="arms", ts=node_t + 3.0, Ts=g["arms"]["odom_boards"], arms={},
+                           res_nodes=[(k, "b2", T) for k, _, T in g["res_nodes"][:5]],
+                           odom_only=g["odom_only"], chained=g["chained"])}
+s1 = s08.rig_sightings(two, "mobile_1"); s2 = s08.rig_sightings(two, "mobile_2")
+print("  mobile_1 sightings %d, mobile_2 sightings %d, overlap in time: %s"
+      % (len(s1), len(s2), "yes" if s2 and s2[0][0] <= node_t[-1] else "no"))
+assert len(s1) == len(g["res_nodes"]) and len(s2) == 5
+assert all(b in ("b1", "b2") for _, b, _ in s1) and not any(t in {x[0] for x in s2} for t, _, _ in s1)
+print("  OK: each rig's panel gets only its own sightings")
+
 print("\nALL TESTS PASSED")

@@ -1779,6 +1779,21 @@ def rigs_of(results):
     return sorted({rig_of(k) for k in results})
 
 
+def rig_sightings(results, rig):
+    """[(t, board, T_cam_board)] of THIS rig's tracks only. The figure and the
+    lidar-implied board positions must never mix rigs: both robots live in
+    one bag on one clock, so mobile_2's sightings fall inside mobile_1's
+    time span and would be drawn on its panel - and composed with its lidar
+    pose - as if mobile_1 had seen them (measured: it did exactly that)."""
+    out = []
+    for nm, r in results.items():
+        if rig_of(nm) != rig:
+            continue
+        for k, bn, T_cb in (r.get("res_nodes") or []):
+            out.append((float(r["ts"][k]), bn, T_cb))
+    return out
+
+
 def save_paths_png(results, ref, bmap, outd, T_lc=None):
     """One figure PER RIG (paths_<rig>.png) with everything done so far:
       top-left   all trajectories over the map (overlay)
@@ -1832,15 +1847,14 @@ def _paths_figure(results, rig, methods, has_ref, ref, bmap, outd, T_lc):
         ax0.plot(Ts[0, 0, 3], Ts[0, 1, 3], "o", color=c, ms=6, mec="k", mew=0.6,
                  zorder=5)
     # where the LIDAR track puts each board it saw (duplicate-board test)
+    sightings = rig_sightings(results, rig)
     if lid is not None and T_lc is not None:
-        for r in results.values():
-            for k, bn, T_cb in (r.get("res_nodes") or []):
-                t = r["ts"][k]
-                if lid["ts"][0] <= t <= lid["ts"][-1]:
-                    Tm = interp_traj(lid["ts"], lid["Ts"], np.array([t]))[0] \
-                        @ T_lc @ T_cb
-                    ax0.plot(Tm[0, 3], Tm[1, 3], "x", color="tab:purple", ms=4,
-                             mew=0.8, zorder=8)
+        for t, bn, T_cb in sightings:
+            if lid["ts"][0] <= t <= lid["ts"][-1]:
+                Tm = interp_traj(lid["ts"], lid["Ts"], np.array([t]))[0] \
+                    @ T_lc @ T_cb
+                ax0.plot(Tm[0, 3], Tm[1, 3], "x", color="tab:purple", ms=4,
+                         mew=0.8, zorder=8)
         ax0.plot([], [], "x", color="tab:purple", ms=6,
                  label="board position implied by the lidar track")
     if ref is not None and len(ref.P):
@@ -1863,10 +1877,9 @@ def _paths_figure(results, rig, methods, has_ref, ref, bmap, outd, T_lc):
                                - interp_traj(ref_ts, ref_T, tq)[:, :3, 3], axis=1)
             gaps[nm] = (tq, d)
             ax1.plot(tq - ref_ts[0], d, ls=l, color=c, lw=1.4, label=nm)
-        for r in results.values():
-            for k, bn, _ in (r.get("res_nodes") or []):
-                ax1.axvline(r["ts"][k] - ref_ts[0], color="gold", lw=0.4,
-                            alpha=0.35, zorder=0)
+        for t, bn, _ in sightings:
+            ax1.axvline(t - ref_ts[0], color="gold", lw=0.4, alpha=0.35,
+                        zorder=0)
         ax1.plot([], [], color="gold", lw=2, label="board sighting")
         ax1.set_xlabel("t [s]"); ax1.set_ylabel("distance from %s [m]" % ref_label)
         ax1.set_title("agreement with the reference over time")
