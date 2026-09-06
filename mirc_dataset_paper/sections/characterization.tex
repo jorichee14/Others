@@ -163,8 +163,10 @@ the range at which median in-box evidence falls to its floor, then fixed.}
 
 Each sequence is summarised by one row per ego assignment in four blocks of
 frozen columns (Table~\ref{tab:seq}). The \textit{design} block records what was
-declared before the run: sequence, site, intended paradigm, any stress factor,
-and which node is ego. The remaining blocks record what was measured. The
+declared before the run: sequence, site, intended paradigm, the stressor applied
+if any---low light, crowd, node outage, or induced packet loss, each a
+controlled departure from a baseline run of the same trajectory---and which
+node is ego. The remaining blocks record what was measured. The
 \textit{geometry} block gives the median $C$, the median $\beta$ to
 infrastructure, the proportion of observations at $\beta > 90^\circ$, and the
 count of occlusion episodes, an episode being a contiguous interval of
@@ -196,13 +198,13 @@ An em-dash denotes a quantity undefined for the sequence, not a zero.}
 \multicolumn{5}{c}{Design} & \multicolumn{4}{c}{Geometry} &
 \multicolumn{3}{c}{Rescue rate} & \multicolumn{2}{c}{Link, scene} \\
 \cmidrule(r){1-5}\cmidrule(lr){6-9}\cmidrule(lr){10-12}\cmidrule(l){13-14}
-Sequence & Site & Paradigm & Stress & Ego &
+Sequence & Site & Paradigm & Stressor & Ego &
 $C$ & $\beta$ ($^\circ$) & $\beta > 90^\circ$ & Episodes &
 Occl. & Range & Dopp. &
 NLoS (\%) & Obj. \\
 \midrule
 \multirow{2}{*}{\texttt{coop2\_0828}} & \multirow{2}{*}{MIRC} &
-\multirow{2}{*}{co-observation} & \multirow{2}{*}{---} &
+\multirow{2}{*}{co-observation} & \multirow{2}{*}{none} &
 \texttt{m1}$^\ast$ & 0.5 & 149 & 0.67 & 9 (6) & 0.10 & 0.29 & --- & 33 & 2 \\
  & & & & \texttt{m2} & 0.5 & 29 & 0.33 & 8 (5) & 0.02 & 0.39 & --- & 18 & 2 \\
 \bottomrule
@@ -217,6 +219,23 @@ co-observation in 74\,\% and 77\,\% of ego-in-FoV observations respectively;
 the remainder are occlusion, handover, and unstructured frames the plan did not
 call for and the labels record regardless. Doppler diversity is left empty: the
 predicate is undefined without moving targets, and the sequence contains none.
+
+The row is read as an instruction for how the sequence can be used. The rescue
+columns locate where collaboration is needed: range rescue at 0.29 and 0.39
+against occlusion rescue at 0.10 and 0.02 says that a fusion method evaluated
+here is tested mainly on frames where the ego sees the object but returns too
+little evidence, not on frames where it is blocked, so an occlusion-recovery
+claim should not be made from this sequence. The $\beta$ columns say which ego
+assignment tests what: with \texttt{mobile\_1} as ego the infrastructure is a
+complementary viewpoint on two frames in three, with \texttt{mobile\_2} on one
+in three, so the same recording supports a wide-baseline and a redundant-view
+evaluation depending on which node is scored. The NLoS column gives the
+fraction of frames---33\,\% and 18\,\%---on which a link-aware method can be
+evaluated under an obstructed channel, and $C = 0.5$ bounds what any late
+fusion could recover per frame. Episodes, with their durations, are the unit
+for tracking evaluation: nine and eight intervals of median \SI{18.8}{\second}
+during which the ego is blind and a helper either covers the whole interval or
+does not.
 
 Because the occlusion and link-state columns are geometric predictions from a
 map, each is checked against a measured signal that did not enter its
