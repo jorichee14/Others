@@ -3008,7 +3008,12 @@ SAMPLE_CONFIG = r"""
       "depth_info_topic": "/mobile_1/zed/depth/camera_info",
       "depth_extrinsic_xyzquat": null,
           <- ZED depth_registered is already in the left optical frame
-      "seed": "icp", "submap_window_s": 3.0,
+      "seed": "odom", "submap_window_s": 3.0,
+          <- depth chains are seeded from the odometry: pure seeding lost
+             62% of the ZED frames and 98% of the D455 frames in corridors
+             (a narrow frustum cannot re-find the map once lost). The seed
+             is an initial guess only - the map decides wherever it can, and
+             the DOF column says where it could not.
       "range_min": 0.4, "range_max": 3.0,
           <- ZED stereo depth error grows as z^2: ~19 cm at 5 m, so stop at 3
       "odom_topic": "/mobile_1/zed/odom",
@@ -3040,8 +3045,7 @@ SAMPLE_CONFIG = r"""
       "image_topic": "/mobile_2/color/image_raw",
       "camera_info_topic": "/mobile_2/color/camera_info", "rectified": false,
       "boards": ["rs_anchor", "anchor", "anchor_b"],
-      "seed": "icp",          <- pure depth chain; expect it to lose frames in
-                                 corridors - that IS the result for this rig
+      "seed": "odom",         <- see mobile_1_zed; pure seeding lost 98% here
       "submap_window_s": 3.0, <- +-1.5 s of odometry as LOCAL SHAPE only;
                                  0 removes the odometry from the chain
       "rate_hz": 10.0, "img_stride": 2,

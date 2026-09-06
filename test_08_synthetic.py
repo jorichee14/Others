@@ -164,4 +164,68 @@ fake["rig2_rs"]["chain_ok"] = True
 methods, has_ref = s08.collect_methods(fake, "rig2_rs")
 assert "depth ICP chained" in methods[0][0]
 print("  chain_ok=True -> reference is the chain: %r" % methods[0][0])
+print("\n#### 5. INDEPENDENCE: perturb one source, only the arms that consume it may move")
+def solve(bm, REFx, sights_x, seed_T=c_T, seed_ts=c_ts):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        return s08.run_arms("rig_cam", seed_ts, seed_T, cl, sights_x, ot, oT, X, T_map_origin, bm,
+                            ["b1", "b2"], trk, REFx, 0.003, src="depth", outd=None, verbose=False,
+                            chain_nobs=np.array(NOBS))
+base = solve(bmap, REF, sights)
+rows = lambda g: dict([("odom", g["odom_only"]), ("icp", g["chained"])] + list(g["arms"].items()))
+def moved(a, b):
+    return {k: float(np.max(np.linalg.norm(a[k][:, :3, 3] - b[k][:, :3, 3], axis=1)) * 100) for k in a}
+# (a) shift every surveyed board by 30 cm: only board consumers may move
+bmap_s = {k: (s08.Rt(T[:3, :3], T[:3, 3] + [0.3, 0, 0]), rec) for k, (T, rec) in bmap.items()}
+mv = moved(rows(base), rows(solve(bmap_s, REF, sights)))
+print("  boards shifted 30 cm -> max move per row (cm): " + ", ".join("%s %.1f" % kv for kv in mv.items()))
+for k in ("odom", "icp", "odom_icp"):
+    assert mv[k] == 0.0, "%s consumed the boards" % k
+for k in ("odom_boards", "icp_boards", "odom_icp_boards"):
+    assert mv[k] > 1.0, "%s did not respond to the boards" % k
+# (b) shift the MAP by 4 cm: only map consumers may move (the chain is an input here, so it stays)
+REF_s = s08.Reference(MAP + np.array([0.04, 0, 0]), voxel=0.05, plane_voxel=0.4)
+mv = moved(rows(base), rows(solve(bmap, REF_s, sights)))
+print("  map shifted 4 cm     -> max move per row (cm): " + ", ".join("%s %.1f" % kv for kv in mv.items()))
+for k in ("odom", "icp", "odom_boards", "icp_boards"):
+    assert mv[k] == 0.0, "%s consumed the map factors" % k
+for k in ("odom_icp", "odom_icp_boards"):
+    assert mv[k] > 0.5, "%s did not respond to the map" % k
+# (c) shift the ODOMETRY: an extra 2 cm/step drift. odom consumers move; the chain (pure) does not
+oT_d = [oT[0].copy()]
+for i in range(1, N):
+    Z = s08.inv(oT[i - 1]) @ oT[i]
+    oT_d.append(oT_d[-1] @ s08.Rt(Z[:3, :3], Z[:3, 3] + [0.02, 0, 0]))
+oT_save = oT.copy(); oT[:] = np.array(oT_d)
+try:
+    mv = moved(rows(base), rows(solve(bmap, REF, sights)))
+finally:
+    oT[:] = oT_save
+print("  odometry drifted     -> max move per row (cm): " + ", ".join("%s %.1f" % kv for kv in mv.items()))
+assert mv["icp"] == 0.0, "the chain row is an input and must not move"
+for k in ("odom", "odom_icp", "odom_boards", "odom_icp_boards"):
+    assert mv[k] > 1.0, "%s did not respond to the odometry" % k
+print("  OK: every row moves with exactly the sources it is declared to use")
+
+print("\n#### 6. odom-seeded chain: the hold-after-failure must bound a lost chain")
+# a scan that sees nothing (points far outside the map) in the middle of the run
+scans_bad = list(scans)
+for i in range(30, 45):
+    scans_bad[i] = (scans_bad[i][0], scans_bad[i][1] + np.array([50, 50, 0], np.float32), None)
+for mode in ("odom", "icp"):
+    trk2 = dict(seed=mode, rate_hz=0, range_min=0.3, range_max=200.0, scan_voxel=0.05,
+                min_pts=300, deskew=False, max_shift=0.5, max_rot_deg=5.0)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        b_ts, b_T, _, b_NOBS, _, b_rej, b_Q = s08.chain_icp(iter(scans_bad), ot, oT, T_map_origin,
+                                                          T_cl, REF, trk2, log_every=0)
+    err = np.linalg.norm(b_T[:, :3, 3] - truth[:, :3, 3], axis=1)
+    print("  seed=%-4s  unregistered %2d  err after the gap: median %.1f cm  max over run %.1f cm  path %.1f m"
+          % (mode, b_rej, np.median(err[45:]) * 100, err.max() * 100, s08.path_length(b_T)))
+    assert b_rej >= 10
+    assert s08.path_length(b_T) < 3 * s08.path_length(truth), "the chain ran away"
+    if mode == "odom":
+        assert np.median(err[45:]) < 0.15, "odom-seeded chain must re-register after the gap"
+print("  OK: a lost chain is bounded; with odometry seeding it recovers after the gap")
+
 print("\nALL TESTS PASSED")
