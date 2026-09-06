@@ -1,76 +1,132 @@
-# Stage 08 ablation - mobile_1 ZED (`arms` track)
+# Stage 08 ablation - final run (both agents)
 
 Three trajectories from ONE estimator over the same nodes; the arms differ only
 in which residual blocks are active.
 
-| arm | odometry | map ICP | board factors |
-|---|---|---|---|
-| `A_icp`    | yes | yes | no  |
-| `B_boards` | yes | no  | yes |
-| `C_joint`  | yes | yes | yes |
+| arm | odometry | map ICP | board factors | notes |
+|---|---|---|---|---|
+| `A_icp`    | yes | yes | no  | geometry only |
+| `B_boards` | yes | no  | yes | fiducial only |
+| `B_breaks` | yes | no  | yes | + tracking-break edges freed (mobile_1 only) |
+| `C_joint`  | yes | yes | yes | |
 
 Only the **off-diagonal** cells are held out: `A_icp` board resid and
-`B_boards` map rms. Everything else is training error.
+`B_*` map rms. Everything else is training error.
 
-## Run 1 - 92 board factors, C started from the odometry chain
-
-```
-arm              board resid (cm)        map rms (cm)          vs C (cm)
-A_icp             28.6 med   68.5 p95    6.66 med 11.54 p95     0.0 med   34.8 max
-B_boards           0.1 med    0.3 p95   15.72 med 19.17 p95   262.7 med  488.0 max
-C_joint            5.1 med   64.6 p95    6.35 med 11.54 p95     0.0 med    0.0 max
-```
-
-## Run 2 - 372 board factors (resolve_instances fixed), C still chain-started
+## mobile_1 (ZED + Ouster) - VALIDATED
 
 ```
-arm              board resid (cm)        map rms (cm)          vs C (cm)
-A_icp           1113.0 med 1154.0 p95    6.23 med 12.75 p95    25.0 med 1155.0 max
-B_boards           0.0 med    0.9 p95    7.17 med 13.76 p95   171.3 med  766.3 max
-C_joint            3.3 med   47.4 p95    5.40 med 12.95 p95     0.0 med    0.0 max
+arm          board resid (cm)     map rms (cm)      vs C (cm)      vs odom (cm)
+A_icp         1.1 med  1.9 p95   4.39 med  5.48    0.0 /   1.0    594.5 / 1074.9
+B_boards      0.0 med  1.0 p95  10.67 med 14.79    4.1 / 413.8    667.1 / 1074.4
+B_breaks      0.0 med  0.4 p95   9.35 med 13.38    3.4 / 495.0    360.4 / 1074.6
+C_joint       1.1 med  1.8 p95   4.39 med  5.48    0.0 /   0.0    594.5 / 1074.9
 ```
 
-## Run 3 - C initialised from arm B (current code)
+LiDAR track: 1516 scans, 0 unregistered, plane rms median 2.34 cm p95 2.53 cm,
+rank-deficient 0.1%. Seeded from the session anchor then its own constant-
+velocity prediction - zero scans seeded from odometry.
 
-1178 nodes, 372 board factors, 864 clouds.
+Three independent confirmations:
+
+1. Both boards land on their survey from the LiDAR track: `anchor` 0.02 m,
+   `rs_anchor` 0.01 m, scatter 0.00 m. (In earlier runs `rs_anchor` was 9.20 m
+   off - the trajectory moved, not the board.)
+2. Extrinsic convention settled by data: through `T_lidar_camera` the sightings
+   agree to 0.01 m; through `inv(T_lidar_camera)`, 1.39 m.
+3. Two independent estimates of one rigid body (LiDAR ICP vs ZED-with-LiDAR-
+   clouds) agree to 0.4 cm median / 1.2 cm p95 / 8.5 cm max, flat over 152 s.
+
+Drift removed, from arm B's own log:
 
 ```
-arm              board resid (cm)        map rms (cm)          vs C (cm)
-A_icp           1113.0 med 1154.0 p95    6.23 med 12.75 p95   648.8 med 1197.6 max
-B_boards           0.0 med    0.9 p95    7.17 med 13.76 p95    13.1 med   97.9 max
-C_joint            2.5 med    5.9 p95    5.88 med 11.41 p95     0.0 med    0.0 max
-
-arm A_icp      vs lidar: median 595.7 cm  p95 815.3 cm
-arm B_boards   vs lidar: median 466.9 cm  p95 882.9 cm
-arm C_joint    vs lidar: median 431.0 cm  p95 883.0 cm
+t = 15.6 .. 115.2 s (99.6 s, 24.2 m of path, 997 nodes)
+odometry drift at re-acquisition 1014.4 cm / 91.3 deg
+end gap 1055.4 cm over 25.9 m of path = 40.72% of distance travelled
 ```
 
-## What the boards buy
+`B_breaks` is the better board-only arm: freeing the 33 tracking-break edges
+takes the honest cell from 10.67 -> 9.35 cm and halves the applied correction
+(667 -> 360 cm), by not smearing a tracking jump over a 24 m stretch.
 
-1. **A gross error ICP cannot see.** Arm A: held-out board residual 1113 cm
-   median at 6.23 cm map rms. Geometry alone sits 11 m from the fiducial
-   position while reporting a 6 cm fit - a wrong-basin lock, on real data.
-2. **Agreement with unseen geometry.** Arm B: held-out map rms 7.17 cm vs
-   6.23 cm for the arm fit to the map. Boards recover map-consistent shape
-   they were never given.
-3. **More board evidence improves the held-out cell.** Run 1 -> 2 quadrupled
-   the board factors (92 -> 372); arm B map rms 15.72 -> 7.17 cm (-54%).
-4. **ICP still adds on top.** C vs B: map rms 7.17 -> 5.88 cm (-18%) for a
-   board resid cost of 0.0 -> 2.5 cm. The constraints trade off.
-5. **Initialisation is the dominant effect.** Run 2 -> 3 changed only C's
-   start pose: board resid p95 47.4 -> 5.9 cm, B<->C agreement 171.3 ->
-   13.1 cm. Boards choose the basin; ICP refines inside it but cannot find it.
+**Negative result: C is identical to A to two decimals.** For an agent with
+LiDAR, 372 board factors change the solution by at most 1 cm.
 
-## Caveats
+## mobile_2 (D455) - ONE ROOT-CAUSE DEFECT
 
-- A's board resid is NOT comparable between runs 1 and 2: run 1 evaluated
-  against 92 sightings near the session start, run 2 against 372 spanning the
-  whole session. The jump is metric coverage, not a regression.
-- The `vs lidar` rows compare against the LiDAR track BEFORE `seed_from` was
-  added, i.e. against the wrong-basin LiDAR trajectory. They are a record of
-  the disagreement that motivated `seed_mode`, not an accuracy result.
-- mobile_2 has never been run: its track is skipped for a missing
-  `cam_extrinsic_xyzquat` (`ros2 run tf2_ros tf2_echo camera_link
-  camera_color_optical_frame`).
-- The LiDAR track (`lidar_icp`) has no arms - it is geometry-only by
-  construction.
+```
+arm          board resid (cm)     map rms (cm)      vs C (cm)      vs odom (cm)
+A_icp        57.9 med 66.0 p95  15.93 med 21.98   48.7 / 62.3     0.3 /  3.6   <- did NOT converge
+B_boards      0.7 med  2.5 p95   9.48 med 13.44    9.4 / 25.5    54.4 / 65.8
+C_joint       4.9 med  6.7 p95   5.98 med 10.17    0.0 /  0.0    48.7 / 62.3
+```
+
+### Root cause: the depth cloud is 15 cm off the map at a pose containing no ICP
+
+```
+depth extrinsic configured   plane rms 15.7 cm,  82% of points on map cells
+depth extrinsic inverted     plane rms 14.9 cm,  86%
+depth extrinsic identity     plane rms 15.3 cm,  84%
+```
+
+All three conventions within 0.8 cm - a 59 mm extrinsic cannot make 15 cm, and
+swapping it changes nothing. NOT the extrinsic.
+
+### Corroboration: stages 06 and 08 disagree by 25 cm about this camera
+
+```
+rs_anchor  n=56  err med 0.25 m (min 0.22 max 0.26)  seen t=0..13 s
+```
+
+At t~0 the anchored odometry IS stage 06's session anchor, so 06 and 08 place
+the RealSense 25 cm apart from the same camera seeing the same board over
+overlapping time. The tight 0.22-0.26 m band is a systematic offset, not
+motion. Stage 06's 6.9 mm was PRECISION, not accuracy - the same trap as the
+old 9.20 m `rs_anchor` at 0.02 m scatter.
+
+At 0.75 m range a 0.25 m error is a ~33% range scale error, which points at
+intrinsics or marker geometry. Check, in order:
+
+1. Does 06 undistort the mobile_2 color images? The 08 track sets
+   `"rectified": false`; if 06 assumes rectified the board pose scales.
+2. Same `fx`? 08 reads `fx=645.6` from the bag CameraInfo. A calibration file
+   at another resolution is a direct range scale.
+3. Same marker/square length for `rs_anchor` in both configs.
+
+Diagnostic: print `||t||` of `T_board_cam` for `rs_anchor` from each stage at
+the same stamp. A ratio means scale; a constant means a frame.
+
+### Symptom: arm A did not converge
+
+Every LM step was rejected or made the cost worse; it ended at 23379.0 having
+started at 19282.9, and `vs odom` is 0.3 cm. Arm A here IS the anchored
+odometry with the map factors inert - its 57.9 cm board residual measures the
+odometry, not an ICP arm. Report it as non-converged, do not quote it as A.
+
+Follows from the root cause: 853/1434 frames unregistered (59%), 96.6%
+rank-deficient, no usable gradient.
+
+### But C_joint is genuinely the right answer for this agent
+
+C beats A on the board cell (57.9 -> 4.9 cm) and beats B on the map cell
+(9.48 -> 5.98 cm). It is the only arm acceptable in both held-out cells.
+
+**The joint arm matters exactly where the geometry is weak.** For the LiDAR
+agent C is redundant with A; for the narrow-FOV depth agent, geometry alone
+fails outright and only the joint solution passes both cells. That is the
+cooperative-perception claim, stated more precisely than "both is better".
+
+Caveat: C's 5.98 cm map rms is computed against clouds that are themselves
+15 cm off at a known pose. Fixing the root cause will move this number.
+
+## Open
+
+- The mobile_2 depth/anchor 15-25 cm offset (above). Blocks the mobile_2
+  reference.
+- mobile_1 ZED odometry: with the 33 flagged steps replaced by ICP increments,
+  2.52 m of divergence remains over 25.9 m - slow scale drift or a residual
+  frame error. Does not affect arms A or C (neither uses odometry for
+  position), but it bounds arm B inside the 99.6 s sighting gap, which is
+  where its p95 of 413.8 cm comes from.
+- Board coverage: mobile_1 has a 99.6 s / 24.2 m stretch with no board in view.
+  A placement fix, not an algorithm fix.
