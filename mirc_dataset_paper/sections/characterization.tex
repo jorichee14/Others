@@ -162,31 +162,32 @@ the range at which median in-box evidence falls to its floor, then fixed.}
 \label{sec:descriptor}
 
 Each sequence is summarised by one row per ego assignment in four blocks of
-frozen columns (Table~\ref{tab:seq}). The \textit{design} block records the
-sequence, site, intended paradigm, any stress factor, and which node is ego. The
-\textit{geometry} block reports the median $C$, the median $\beta$ to
+frozen columns (Table~\ref{tab:seq}). The \textit{design} block records what was
+declared before the run: sequence, site, intended paradigm, any stress factor,
+and which node is ego. The remaining blocks record what was measured. The
+\textit{geometry} block gives the median $C$, the median $\beta$ to
 infrastructure, the proportion of observations at $\beta > 90^\circ$, and the
 count of occlusion episodes, an episode being a contiguous interval of
-$\neg\,\mathrm{visible}(e)$ on one object lasting at least \SI{0.5}{\second}.
-The \textit{rescue} block reports the proportion of ego-in-FoV observations in
-which a partner supplies what the ego does not: \textit{occlusion rescue}, the
-ego blocked and a helper not; \textit{range rescue}, the ego holding an
-unobstructed line but returning insufficient evidence,
+$\neg\,\mathrm{visible}(e)$ on one object lasting at least \SI{0.5}{\second},
+with the number covered throughout by a helper in parentheses. The
+\textit{rescue} block gives the proportion of ego-in-FoV observations in which a
+partner supplies what the ego does not: \textit{occlusion rescue}, the ego
+blocked and a helper not; \textit{range rescue}, the ego holding an unobstructed
+line but returning insufficient evidence,
 $\mathrm{visible}(e) \wedge \neg\,\mathrm{observed}(e)$, while a helper
 observes; and \textit{Doppler rescue}, the ego's radar blind to motion another
 node's radar resolves. The final block gives the fraction of frames on which the
 ego--AP link is obstructed or degraded, and the median number of annotated
-objects in view.
+objects in view. A quantity undefined for a sequence is left empty rather than
+reported as zero.
 
 \begin{table*}[t]
 \centering
-\caption{Per-sequence descriptor for \texttt{coop2\_0828}, both ego assignments.
-$^\ast$ staged ego. Episodes carry in parentheses the number covered throughout
-by a helper; median episode duration \SI{18.8}{\second}. $\beta$ is measured to
-the infrastructure node, whose elevation offset is \SI{1.53}{\metre} (IQR
-\SIrange{1.52}{1.54}{\metre}) under both assignments. Range rescue is reported
-under RGB-D evidence. An em-dash denotes a quantity undefined for the sequence,
-not a zero.}
+\caption{Per-sequence descriptor, shown for \texttt{coop2\_0828} under both ego
+assignments. $^\ast$ staged ego. Median episode duration \SI{18.8}{\second};
+elevation offset to the infrastructure node \SI{1.53}{\metre} (IQR
+\SIrange{1.52}{1.54}{\metre}). Range rescue is reported under RGB-D evidence.
+An em-dash denotes a quantity undefined for the sequence, not a zero.}
 \label{tab:seq}
 \small
 \setlength{\tabcolsep}{4pt}
@@ -208,38 +209,31 @@ NLoS (\%) & Obj. \\
 \end{tabular}
 \end{table*}
 
-The run was planned as co-observation. Measured, it is co-observation in
-74\,\% of ego-in-FoV observations with \texttt{mobile\_1} as ego and 77\,\% with
-\texttt{mobile\_2}; the remainder are occlusion, handover, and unstructured
-frames that the plan did not call for and that the labels record regardless. A
-trajectory written for one condition delivered it in approximately three frames
-out of four, and the release identifies which frames were the fourth. Doppler
-diversity is left empty rather than reported as zero: the predicate is undefined
-in the absence of moving targets, and this sequence contains none.
+The present release contains one sequence, \texttt{coop2\_0828}: \num{733}
+synchronised frames over \SI{156}{\second} at the MIRC site, two mobile nodes
+and one infrastructure node, two annotated static objects, reported under both
+ego assignments. It was planned as co-observation and measures as
+co-observation in 74\,\% and 77\,\% of ego-in-FoV observations respectively;
+the remainder are occlusion, handover, and unstructured frames the plan did not
+call for and the labels record regardless. Doppler diversity is left empty: the
+predicate is undefined without moving targets, and the sequence contains none.
 
-\subsection{Validation of the Released Labels}
-\label{sec:results}
-
-The occlusion and link-state labels are geometric predictions derived from a
-map, and each is therefore checked against a measured signal that did not enter
-its computation (Table~\ref{tab:validation}). Predicted occlusion is negatively
-correlated with the evidence actually returned, on both of \texttt{mobile\_1}'s
-independent modalities and at comparable strength, which is the expected
-signature of a correct occlusion label against noisy sensors. Predicted link
-clearance is strongly positively correlated with measured RSSI on both mobile
-nodes, and the clearance-derived partition separates median RSSI by
-\SI{8}{\decibel} and \SI{11}{\decibel}: a purely geometric predicate reproducing
-a radio measurement that did not enter it.
+Because the occlusion and link-state columns are geometric predictions from a
+map, each is checked against a measured signal that did not enter its
+computation (Table~\ref{tab:validation}). Predicted occlusion is negatively
+correlated with the evidence returned on both of \texttt{mobile\_1}'s
+modalities; predicted link clearance is positively correlated with measured
+RSSI on both mobile nodes, and the clearance-derived partition separates median
+RSSI by \SI{8}{\decibel} and \SI{11}{\decibel}.
 
 \begin{table}[t]
 \centering
 \caption{Validation of the geometric labels against independent measurement;
 $\rho$ is the Spearman rank correlation over in-FoV observations.
 $^\dagger$ Uninformative rather than negative: \texttt{mobile\_2} exceeded
-$\tau$ in 2\,\% of its observations, leaving no variation to correlate against.
-Its evidence chain was validated instead along range, the axis that does vary
-for that node, confirming the expected collapse---\num{861} depth points within
-the box at \SI{2.4}{\metre}, none beyond \SI{7}{\metre}.}
+$\tau$ in 2\,\% of its observations, leaving no variation to correlate against;
+its evidence chain was validated along range instead (\num{861} depth points in
+the box at \SI{2.4}{\metre}, none beyond \SI{7}{\metre}).}
 \label{tab:validation}
 \small
 \begin{tabular}{@{}lll@{}}
@@ -253,123 +247,3 @@ Link clearance (\texttt{m2}) & measured RSSI & $\rho = +0.67$; LOS $-39$ vs NLOS
 \bottomrule
 \end{tabular}
 \end{table}
-
-\subsection{What the Measurement Shows}
-\label{sec:findings}
-
-\paragraph{Range, not occlusion, is the binding constraint.}
-The condition the collection was designed around is not the one that limits the
-team. Occlusion rescue occurs on 0.10 and 0.02 of ego-in-FoV observations,
-range rescue on 0.29 and 0.39; stratified by ego--object range, rescue rates are
-near zero below \SI{5}{\metre} and rise to \numrange{0.5}{0.7} beyond it. The
-mechanism appears directly in \texttt{mobile\_2}'s per-range statistics: across
-the \SIrange{2}{5}{\metre}, \SIrange{5}{10}{\metre}, and
-\SIrange{10}{15}{\metre} bins its fraction \textit{visible} remains at
-\numrange{0.96}{1.00} while its fraction \textit{observed} collapses
-\num{0.85} $\rightarrow$ \num{0.00} $\rightarrow$ \num{0.00}. The geometry
-admits sight of the object throughout; the sensor ceases to return it past the
-first bin. This is the separation of~\eqref{eq:visible}
-from~\eqref{eq:observed} doing work---a release reporting line-of-sight geometry
-alone would characterise this team as having near-complete coverage---and the
-effect was not staged, which makes it stronger evidence than the occlusion
-episodes that were.
-
-\paragraph{The choice of evidence source changes the rate by a factor of 36.}
-\texttt{mobile\_1}'s range-rescue rate is \num{0.008} under Ouster LiDAR returns
-and \num{0.29} under ZED stereo depth, for the same trajectory, scene, ray
-casts, annotations, and occlusion labels; only the definition of sufficient
-evidence changed, through the modality's floor and calibrated range cap. A
-collaboration rate reported without its evidence source is therefore not
-reproducible to better than a factor of tens, and rates computed under different
-sensing budgets are not comparable. Per-modality evidence counts are released
-per (frame, node, object) so that any such rate may be recomputed under a stated
-definition.
-
-\paragraph{Viewpoint complementarity is positional, not elevational.}
-The same infrastructure node, in the same pose, constitutes a complementary
-viewpoint for one mobile node and a redundant one for the other: with
-\texttt{mobile\_1} as ego the median aspect angle is $149^\circ$ and
-$\beta > 90^\circ$ on 67\,\% of frames, with \texttt{mobile\_2} as ego
-$29^\circ$ and 33\,\%. The elevation offset is identical in both cases; what
-differs is the ego's position relative to the infrastructure and the object.
-Height confers persistence and an unobstructed downward line, but not by itself
-the wide baseline from which fusion benefits. Reporting $\Delta h$, as
-infrastructure-augmented datasets conventionally do, does not characterise the
-collaboration geometry, whereas $\beta$ conditioned on the ego does.
-
-\subsection{Limitations and Next Collection}
-\label{sec:limitations}
-
-The limits of the present release are stated rather than deferred. Two annotated
-static objects make $C$ a three-valued quantity, and every rate derived from it
-correspondingly coarse; the occlusion claims rest on 9 and 8 episodes rather
-than on \num{733} frames, since frames within an episode are not independent.
-One \SI{156}{\second} run at one site is thin, and none of the values above
-should be read as site- or platform-general. Three paradigms are not exercised:
-Doppler diversity is undefined without motion and \texttt{mobile\_2} carries no
-radar, while a single infrastructure node leaves handover under-sampled and the
-wide-baseline tail of $\beta$ thinly populated. The link state on which
-paradigms 2 and 5 depend is computed, validated, and released per frame, but is
-not yet folded into the classifier. Reporting both ego assignments of one
-recording controls for platform but not for trajectory, the two nodes having
-driven different paths; the stronger control, paired repeats along one
-trajectory with a single factor varied, is not yet collected. Finally, the
-occupancy grid is built from a registered mobile-mapping cloud with
-\SI{4.9}{\percent} of its points removed as outliers and visible speckle
-remaining, which is why the density threshold and endpoint clearances exist;
-each is a workaround with a proper fix, and each affects the reported values.
-
-Four additions make every paradigm computable. Scripted moving participants are
-required for Doppler diversity to exist at all, and will not arise incidentally;
-full annotation of a declared bounded region turns $C$ from a three-valued
-quantity into a distribution; a second infrastructure node makes handover
-testable and, by varying node count at fixed elevation, separates the two
-factors the third finding shows to be confounded; and radar on \texttt{mobile\_2}
-admits both mobile nodes to any Doppler test. Denser link sampling, logged
-antenna extrinsics, and a survey-grade map improve the quality of claims already
-supported rather than enabling new ones.
-
-\subsection{Release Composition}
-\label{sec:conditions}
-
-Table~\ref{tab:inventory} inventories the present release. It comprises one
-sequence, and its scale is stated directly rather than as a frame count treated
-as a sample size: \num{733} synchronised frames over \SI{156}{\second} contain
-\num{9} and \num{8} occlusion episodes under the two ego assignments, and the
-episode is the unit at which occlusion claims are supported.
-
-\begin{table}[t]
-\centering
-\caption{Composition of the present release. Deliberate difficulty is induced by
-the protocol; incidental difficulty arose from the geometry without staging, and
-is reported separately because unstaged occurrences constitute the stronger
-evidence.}
-\label{tab:inventory}
-\small
-\begin{tabular}{@{}ll@{}}
-\toprule
-Sequences / sites & 1 / 1 (MIRC, indoor) \\
-Duration, frames & \SI{156}{\second}, \num{733} frames at \SI{5}{\hertz} \\
-Nodes & 2 mobile + 1 surveyed elevated infrastructure \\
-Ego assignments & 2 (both mobile nodes, same recording) \\
-Annotated objects & 2 static, single anchored map frame \\
-Modalities & LiDAR, stereo depth, RGB-D, radar (2 mobile + 1 infra), \\
-          & WiFi RSSI / CSI per frame, NTP offsets \\
-Released geometry & per-frame occlusion, visibility, evidence counts, $C$, $\beta$, \\
-          & Fresnel clearance and link state, occlusion episodes \\
-\midrule
-Deliberate difficulty & viewpoint-limited ego; \SI{1.53}{\metre} elevation offset; \\
-          & AP positioned behind structure \\
-Incidental difficulty & 9 / 8 occlusion episodes (median \SI{18.8}{\second}); \\
-          & obstructed link on 33\,\% / 18\,\% of frames \\
-\midrule
-Not captured & scripted motion (Doppler paradigm undefined); \\
-          & a second infrastructure node (handover under-sampled); \\
-          & radar on \texttt{mobile\_2}; low-light and dropout conditions \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\todo{Extend once the staged runs land: scripted participants, low-light repeat,
-node-outage repeat, and a bounded fully-annotated region. Report hours,
-distance, frames, and annotated instances for the full release.}
