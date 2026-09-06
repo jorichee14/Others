@@ -1666,6 +1666,7 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     for arm, Ts in rows:
         br = eval_board_resid(Ts, res_nodes, bmap) * 100
         mr, inl, dof = eval_map_stats(Ts, clouds, REF)
+        mr = mr * 100                                   # m -> cm, like the rest
         dv = np.linalg.norm(Ts[:, :3, 3] - joint[:, :3, 3], axis=1) * 100
         do = np.linalg.norm(Ts[:, :3, 3] - To_anch[:, :3, 3], axis=1) * 100
         print("  %-18s %8.1f med %6.1f p95 %8.2f med %5.2f p95 %5.0f%% %3.0f/6 "
