@@ -9,33 +9,11 @@ annotation file; no quantity is asserted from the collection plan.
 
 \subsection{Sequence Characterization}
 
-Table~\ref{tab:seq} is the canonical per-sequence row: one line per ego
-assignment, in the column order used for every future sequence.
-
-\begin{table*}[t]
-\centering
-\caption{Sequence characterization, both ego assignments.
-$^\ast$ staged ego. Occlusion episodes are contiguous runs of
-$\neg\,\mathrm{visible}(\text{ego})$ lasting $\ge \SI{0.5}{\second}$, with the
-number covered by a helper in parentheses; median episode duration
-\SI{18.8}{\second}. $\beta$ is measured to the infrastructure node; the
-elevation offset $\Delta h$ is \SI{1.53}{\metre} (IQR
-\SIrange{1.52}{1.54}{\metre}). Range rescue is reported under RGB-D evidence
-(see Finding~2). NLoS aggregates obstructed and degraded link frames on the
-ego--AP link.}
-\label{tab:seq}
-\small
-\begin{tabular}{@{}llllcccccccccc@{}}
-\toprule
-Sequence & Site & Paradigm & Stress & Ego & $C$ & $\beta$ ($^\circ$) &
-$\beta > 90^\circ$ & Occl.\ ep. & Occl.\ rescue & Range rescue & Dopp. &
-NLoS (\%) & Objects \\
-\midrule
-\texttt{coop2\_0828} & MIRC & co-observation & --- & \texttt{m1}$^\ast$ & 0.5 & 149 & 0.67 & 9 (6 \checkmark) & 0.10 & 0.29 & --- & 33 & 2 \\
-                     &      &                &     & \texttt{m2}          & 0.5 & 29  & 0.33 & 8 (5 \checkmark) & 0.02 & 0.39 & --- & 18 & 2 \\
-\bottomrule
-\end{tabular}
-\end{table*}
+Table~\ref{tab:seq}, introduced with the descriptor format in
+Section~\ref{sec:paradigms}, reports \texttt{coop2\_0828} under both ego
+assignments. Occlusion episodes have median duration \SI{18.8}{\second}, and
+the elevation offset to the infrastructure node is \SI{1.53}{\metre}
+(IQR \SIrange{1.52}{1.54}{\metre}) in both assignments.
 
 The run was planned as co-observation. Measured, it is co-observation in
 74\,\% of ego-in-FoV observations with \texttt{mobile\_1} as ego and 77\,\%

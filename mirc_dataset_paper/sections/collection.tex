@@ -137,24 +137,25 @@ $k \approx 1.5$.
 
 \begin{table}[t]
 \centering
-\caption{Trajectory paradigms. Evaluated in order; first match assigned.
+\caption{Trajectory paradigms, evaluated in order; the first match is assigned.
 $\tau = 0.5$; helper and $j^\star$ as defined in Section~\ref{sec:paradigms}.
-The status column states what the present release supports: \checkmark{}
-computed and released, $\circ$ computed but not folded into the classifier,
-$\times$ undefined in the absence of moving targets.}
+Superscripts state what the present release supports: $^{\checkmark}$ computed
+and released, $^{\circ}$ computed but not folded into the classifier,
+$^{\times}$ undefined in the absence of moving targets.}
 \label{tab:paradigms}
-\small
-\begin{tabular}{@{}clll@{}}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}cll@{}}
 \toprule
-\# & Paradigm & Condition & Status \\
+\# & Paradigm & Condition \\
 \midrule
-1 & Doppler diversity   & $\lVert v_o \rVert > 0.3 \;\wedge\; \lVert v_{r,e}\rVert < v_{\min} \;\wedge\; \max_j \lVert v_{r,j}\rVert \ge v_{\min}$ & $\times$ \\
-2 & Occlusion $\times$ link & $\neg\,\mathrm{visible}(e) \;\wedge\; \text{helper} \;\wedge\; \mathrm{clear}(e,j^\star) < 0.6$ & $\circ$ \\
-3 & Occlusion           & $\neg\,\mathrm{visible}(e) \;\wedge\; \text{helper}$ & \checkmark \\
-4 & Handover            & $\lvert \{ i : \mathrm{visible}(i) \} \rvert = 1$ & \checkmark \\
-5 & Link stress         & $\text{helper} \;\wedge\; \mathrm{clear}(e,j^\star) < 0.6$ & $\circ$ \\
-6 & Co-observation      & $\mathrm{visible}(e) \;\wedge\; \text{helper}$ & \checkmark \\
-7 & Unstructured        & none of the above & \checkmark \\
+1 & Doppler diversity$^{\times}$      & $\lVert v_o\rVert > 0.3 \;\wedge\; \lVert v_{r,e}\rVert < v_{\min} \le \max_j \lVert v_{r,j}\rVert$ \\
+2 & Occlusion $\times$ link$^{\circ}$ & $\neg\,\mathrm{visible}(e) \;\wedge\; \text{helper} \;\wedge\; \mathrm{clear}(e,j^\star) < 0.6$ \\
+3 & Occlusion$^{\checkmark}$          & $\neg\,\mathrm{visible}(e) \;\wedge\; \text{helper}$ \\
+4 & Handover$^{\checkmark}$           & $\lvert \{ i : \mathrm{visible}(i) \} \rvert = 1$ \\
+5 & Link stress$^{\circ}$             & $\text{helper} \;\wedge\; \mathrm{clear}(e,j^\star) < 0.6$ \\
+6 & Co-observation$^{\checkmark}$     & $\mathrm{visible}(e) \;\wedge\; \text{helper}$ \\
+7 & Unstructured$^{\checkmark}$       & none of the above \\
 \bottomrule
 \end{tabular}
 \end{table}
