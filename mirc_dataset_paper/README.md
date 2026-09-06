@@ -7,10 +7,8 @@ results/discussion that support it.
 |---|---|
 | `sections/related_work.tex` | §Related Work: trajectory design in multi-robot datasets, collaboration geometry in collaborative perception datasets, visibility/evidence as released attributes, joint sensing and communication, position of this work |
 | `sections/characterization.tex` | §Dataset Design and Characterization: environments and roles, collaboration geometry (predicates, paradigm table, frozen parameters), sequence characterization with the filled descriptor, validation, findings, release composition |
-| `sections/discussion.tex` | §Discussion: what measurement buys, evidence-definition problem, threats to validity, next collection |
 
-Section order: Related Work → Dataset Design and Characterization →
-Discussion. Positioning claims live only in Related Work; the method section
+Two sections: Related Work → Dataset Design and Characterization. Positioning claims live only in Related Work; the method section
 points at it rather than restating it. Each quantity is defined immediately
 before it is reported, so definitions and measured values share one section.
 

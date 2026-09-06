@@ -294,6 +294,38 @@ the wide baseline from which fusion benefits. Reporting $\Delta h$, as
 infrastructure-augmented datasets conventionally do, does not characterise the
 collaboration geometry, whereas $\beta$ conditioned on the ego does.
 
+\subsection{Limitations and Next Collection}
+\label{sec:limitations}
+
+The limits of the present release are stated rather than deferred. Two annotated
+static objects make $C$ a three-valued quantity, and every rate derived from it
+correspondingly coarse; the occlusion claims rest on 9 and 8 episodes rather
+than on \num{733} frames, since frames within an episode are not independent.
+One \SI{156}{\second} run at one site is thin, and none of the values above
+should be read as site- or platform-general. Three paradigms are not exercised:
+Doppler diversity is undefined without motion and \texttt{mobile\_2} carries no
+radar, while a single infrastructure node leaves handover under-sampled and the
+wide-baseline tail of $\beta$ thinly populated. The link state on which
+paradigms 2 and 5 depend is computed, validated, and released per frame, but is
+not yet folded into the classifier. Reporting both ego assignments of one
+recording controls for platform but not for trajectory, the two nodes having
+driven different paths; the stronger control, paired repeats along one
+trajectory with a single factor varied, is not yet collected. Finally, the
+occupancy grid is built from a registered mobile-mapping cloud with
+\SI{4.9}{\percent} of its points removed as outliers and visible speckle
+remaining, which is why the density threshold and endpoint clearances exist;
+each is a workaround with a proper fix, and each affects the reported values.
+
+Four additions make every paradigm computable. Scripted moving participants are
+required for Doppler diversity to exist at all, and will not arise incidentally;
+full annotation of a declared bounded region turns $C$ from a three-valued
+quantity into a distribution; a second infrastructure node makes handover
+testable and, by varying node count at fixed elevation, separates the two
+factors the third finding shows to be confounded; and radar on \texttt{mobile\_2}
+admits both mobile nodes to any Doppler test. Denser link sampling, logged
+antenna extrinsics, and a survey-grade map improve the quality of claims already
+supported rather than enabling new ones.
+
 \subsection{Release Composition}
 \label{sec:conditions}
 
