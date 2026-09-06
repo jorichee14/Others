@@ -1,31 +1,51 @@
 %=======================================================================
-% Requires: booktabs, amsmath, amssymb, siunitx (optional), todonotes
-% (\todo, \unsure) --- the macros already used in the draft.
+% Requires: booktabs, amsmath, amssymb, siunitx, todonotes (\todo, \unsure)
+% Bib keys used: s3e, cumulti, deepsense6g, inscope  (see refs.bib)
 %=======================================================================
 \section{Dataset Design and Collection}
 \label{sec:collection}
 
 \subsection{Environments}
+\label{sec:environments}
 % Indoor/outdoor sites chosen for viewpoint, appearance, and radio diversity.
 
-We conducted data collection at National Yang Ming Chiao Tung University (NYCU)
-Guangfu Campus, covering indoor and outdoor scenarios. Sites were chosen for
-three kinds of diversity: \emph{viewpoint} (whether an elevated, persistent
-vantage exists and how far it can be displaced from the mobile nodes),
-\emph{appearance} (illumination, texture, and clutter that stress the visual
-front ends), and \emph{radio propagation} (whether the structure between a node
-and the access point obstructs the first Fresnel zone).
+We collected data at National Yang Ming Chiao Tung University (NYCU) Guangfu
+Campus, across indoor and outdoor sites. Sites were selected so that the three
+factors governing collaborative perception vary across the release, and each is
+characterised by a quantity we measure rather than by a description:
 
-The sequence analysed in this paper was collected at the MIRC site: an indoor
-laboratory space with a single surveyed elevated camera--radar mast, a
-ceiling-mounted \SI{5.75}{\giga\hertz} access point, and static furniture that
-provides the occluding structure. The site is mapped once as a dense point
-cloud and every node is expressed in that single anchored map frame, so
-occlusion, co-visibility, and link geometry are all computed against the same
-geometry rather than against per-node local frames.
+\begin{itemize}
+\item \emph{Viewpoint.} Whether an elevated, persistent vantage exists, and how
+far it can be displaced from the mobile nodes \emph{in the ground plane}. What
+matters is the range of aspect angles $\beta$ a site can produce between an ego
+and a helper, not the mast height alone; Section~\ref{sec:results} shows the two
+are not interchangeable.
 
-\todo{Add a site-overview figure: map point cloud, surveyed infrastructure pose,
-AP position, and the two mobile trajectories overlaid.}
+\item \emph{Appearance.} Illumination, texture, and clutter density, which set
+how much evidence a node's front end returns at a given range---and therefore
+where the gap between \emph{visible} and \emph{observed} opens
+(Eqs.~\eqref{eq:visible}--\eqref{eq:observed}).
+
+\item \emph{Radio propagation.} Whether structure intervenes between a node and
+the access point. Indoor sites obstruct the first Fresnel zone at short range;
+outdoor sites hold clearance over longer links. Large-scale sensing-and-communication
+datasets infer blockage from received power itself
+\cite{deepsense6g}; we instead compute clearance geometrically from the map and
+validate it against measured RSSI (Section~\ref{sec:results}), so link state is
+an independent label rather than a threshold on the signal it is meant to
+explain.
+\end{itemize}
+
+Every site is surveyed and mapped once as a dense point cloud, and all nodes are
+expressed in that single anchored map frame, so occlusion, co-visibility, and
+link geometry are computed against one geometry rather than against per-node
+local frames. The sequence characterised in this paper was collected at the MIRC
+site: an indoor laboratory with a single surveyed elevated camera--radar mast, a
+\SI{5.75}{\giga\hertz} access point placed behind furniture, and static seating
+that provides the occluding structure.
+
+\todo{Site-overview figure: map cloud, surveyed infrastructure pose, AP
+position, and both mobile trajectories, one panel per site.}
 
 \subsection{Collection Protocol}
 
@@ -36,23 +56,33 @@ routed so that structure falls between it and the annotated objects) or by
 sensing budget (it carries the shorter-range depth sensor). The second mobile
 agent is the \textit{partner}. Ego assignment alternates across runs so that a
 reported condition is a property of the geometry rather than of a particular
-platform; for the single-sequence analysis of
-Section~\ref{sec:results} we report \emph{both} ego assignments of the same bag,
-which is the strongest available form of this control.
+platform; for the single-sequence analysis of Section~\ref{sec:results} we
+report \emph{both} ego assignments of the same bag, which is the strongest
+available form of this control.
+
 Infrastructure nodes are never ego. Their role is the elevated, persistent
-vantage that no mobile node can hold, and treating one as ego would collapse
-exactly the asymmetry the dataset is built to expose.
+vantage that no mobile node can hold. Existing multi-robot and infrastructure
+datasets collaborate between sensors at a common height---$\Delta h = 0$ in
+S3E~\cite{s3e} and in roadside sets such as InScope~\cite{inscope}---so the
+elevation asymmetry is absent by construction; treating our infrastructure node
+as ego would reintroduce exactly that symmetry and collapse the asymmetry this
+dataset is built to expose.
 
 \subsubsection{Trajectory Paradigms}
 \label{sec:paradigms}
 A paradigm specifies a trajectory geometry \emph{and} the collaboration
-condition that geometry is intended to induce. Existing multi-robot datasets
-describe this qualitatively---S3E, for instance, names four trajectory
-paradigms and grades them with filled and open circles against loop-closure
-opportunity. We keep the vocabulary but replace the grading with measurement:
-every paradigm is defined as a predicate over per-frame quantities that we
-compute from the map, the annotations, and the poses, and that we release
-alongside the bags.
+condition that geometry is intended to induce. Paradigm-driven trajectory
+design is established practice: S3E~\cite{s3e} names four collaborative
+trajectory paradigms and grades each against loop-closure opportunity with
+filled and open circles, and CU-Multi~\cite{cumulti} goes further by treating
+inter-trajectory overlap as a designed, controlled variable. Neither releases a
+per-frame measurement of what the design actually produced. S3E's grading is an
+assertion about a run; CU-Multi's overlap is controlled by re-running a single
+platform four times, so the robots are never simultaneously present and no
+instantaneous collaboration geometry exists to measure. We keep the vocabulary
+and replace the grading with measurement: every paradigm is defined as a
+predicate over per-frame quantities that we compute from the map, the
+annotations, and the poses, and that we release alongside the bags.
 
 \paragraph{Per-observation predicates.}
 Fix an annotated object and a frame. Let $e$ denote the ego node and $j$ range
@@ -71,6 +101,13 @@ on the node's primary modality). With an occlusion threshold $\tau = 0.5$,
 \label{eq:observed}
 \end{align}
 %
+Occlusion has been quantified on infrastructure sensors before:
+InScope~\cite{inscope} reports an occlusion degree $\xi_D$ over roadside LiDAR.
+That measure is computed for a fixed roadside vantage, between sensors at a
+common height, and is summarised per dataset rather than released per frame, so
+it cannot be used to condition an evaluation. Our $\omega_i$ is defined per
+(frame, node, object) and ships as a column.
+
 The distinction between~\eqref{eq:visible} and~\eqref{eq:observed} carries most
 of the analytical weight in this paper. \emph{Visible} is a geometric claim: an
 unobstructed line exists. \emph{Observed} is an evidence claim: the sensor
@@ -134,7 +171,7 @@ one word, and so that intent can be audited. Each run additionally records an
 \texttt{intended\_paradigm} in its metadata, and the agreement between intended
 and measured is the design check we report in Section~\ref{sec:results}: it
 says how reliably a trajectory plan produces the condition it was written to
-produce, which is precisely the quantity a qualitative $\bullet/\circ$ grading
+produce, which is precisely the quantity a $\bullet/\circ$ grading~\cite{s3e}
 asserts without measuring.
 
 \paragraph{Standing parameters.}
@@ -145,26 +182,25 @@ voxel counts as occupied only with $\ge 8$ points, and a ray is blocked only on
 2 consecutive occupied voxels; occluder hits within \SI{0.6}{\metre} of a
 sensor's own origin and occupancy within \SI{0.7}{\metre} of either link
 endpoint are ignored (both nodes and the access point are themselves present in
-the map); evidence floors of 1 LiDAR point, 50 depth points, and
-400\,px$^2$; analysis range caps of \SI{20}{\metre} (Ouster),
-\SI{4.5}{\metre} (ZED), \SI{5}{\metre} (RealSense), and \SI{20}{\metre}
-(infrastructure pixels), each calibrated empirically from the range at which
-the median evidence count falls to its floor; obstructed link below $0.6\,r_1$;
-carrier frequency read per frame from the WiFi status stream
-(\SI{5.75}{\giga\hertz}). Density thresholding, consecutive-hit testing, and
-endpoint clearance are workarounds for map noise and for fixed nodes being
-mapped as structure; they are recorded here because they change the numbers and
-a re-analysis with a survey-grade map should be able to drop them.
+the map); evidence floors of 1 LiDAR point, 50 depth points, and 400\,px$^2$;
+analysis range caps of \SI{20}{\metre} (Ouster), \SI{4.5}{\metre} (ZED),
+\SI{5}{\metre} (RealSense), and \SI{20}{\metre} (infrastructure pixels), each
+calibrated empirically from the range at which the median evidence count falls
+to its floor; obstructed link below $0.6\,r_1$; carrier frequency read per
+frame from the WiFi status stream (\SI{5.75}{\giga\hertz}). Density
+thresholding, consecutive-hit testing, and endpoint clearance are workarounds
+for map noise and for fixed nodes being mapped as structure; they are recorded
+here because they change the numbers and a re-analysis with a survey-grade map
+should be able to drop them.
 
 \subsection{Conditions Captured}
 \label{sec:conditions}
 
 Table~\ref{tab:inventory} inventories the current release. It is one sequence,
 and we state its scale plainly rather than reporting frame counts as if they
-were independent samples: \num{733} synchronised frames over
-\SI{156}{\second} contain \num{9} and \num{8} occlusion episodes under the two
-ego assignments, and the episode is the unit at which occlusion claims are
-supported.
+were independent samples: \num{733} synchronised frames over \SI{156}{\second}
+contain \num{9} and \num{8} occlusion episodes under the two ego assignments,
+and the episode is the unit at which occlusion claims are supported.
 
 \begin{table}[t]
 \centering
