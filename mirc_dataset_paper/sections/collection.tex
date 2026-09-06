@@ -209,11 +209,25 @@ because they affect the reported values, and a re-analysis against a
 survey-grade map should permit their removal.
 
 \paragraph{Per-sequence descriptor.}
-Table~\ref{tab:seq} gives the resulting descriptor: one row per ego assignment,
-with the design fields spanning both rows and the measured collaboration
-geometry reported separately for each. Every sequence in the release is
-described in this form, and the columns are frozen so that sequences remain
-comparable as the release grows.
+Table~\ref{tab:seq} gives the descriptor: one row per ego assignment, the
+design fields spanning both rows and the measured geometry reported separately
+for each. The geometry block summarises the distributions defined above---the
+median co-visibility fraction $C$, the median aspect angle $\beta$ to the
+infrastructure node, the proportion of observations at $\beta > 90^\circ$, and
+the count of occlusion episodes, an episode being a contiguous interval of
+$\neg\,\mathrm{visible}(e)$ on one object lasting at least \SI{0.5}{\second},
+with the number covered throughout by a helper given in parentheses. The rescue
+block reports the proportion of ego-in-FoV observations in which a partner
+supplies what the ego does not: \textit{occlusion rescue}, where the ego is
+blocked and a helper is not; \textit{range rescue}, where the ego holds an
+unobstructed line but returns insufficient evidence,
+$\mathrm{visible}(e) \wedge \neg\,\mathrm{observed}(e)$, while a helper
+observes; and \textit{Doppler rescue}, where the ego's radar is blind to the
+object's motion and another node's is not. The final block gives the fraction
+of frames on which the ego--AP link is obstructed or degraded, and the median
+number of annotated objects in view. Every sequence in the release is described
+in this form, with columns frozen so that sequences remain comparable as the
+release grows.
 
 \begin{table*}[t]
 \centering
