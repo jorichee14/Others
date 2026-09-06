@@ -1673,14 +1673,26 @@ def collect_methods(results, rig):
     # a track can declare its (anchored) odometry the rig's reference - the
     # right call when the platform's odometry is trustworthy and the depth
     # chain is not (mobile_2: Isaac VSLAM vs a narrow-FOV D455 chain)
+    # "reference": "lidar" on any track of the rig demands the lidar_icp
+    # track as the reference and refuses to run without one - no silent
+    # fallback to a depth chain or the odometry
+    lid_nm = next((k for k, r in rs.items() if r["kind"] == "lidar_icp"), None)
+    wants_lidar = [k for k, r in rs.items() if r.get("reference") == "lidar"]
+    if wants_lidar and lid_nm is None:
+        raise SystemExit("track(s) %s ask for \"reference\": \"lidar\" but rig "
+                         "'%s' has no lidar_icp track (it must come EARLIER in "
+                         "'tracks')" % (wants_lidar, rig))
+    if lid_nm is not None:
+        r = rs[lid_nm]
+        ref.append((lid_nm + " lidar ICP", r["ts"], r.get("Ts_cam", r["Ts"]),
+                    "k", "-"))
     for nm, r in rs.items():
-        if r.get("reference") == "odom" and r.get("odom_only") is not None:
+        if r.get("reference") == "odom" and r.get("odom_only") is not None \
+                and lid_nm is None:
             ref.append((nm + " odom only (reference)", r["ts"], r["odom_only"],
                         "k", "-"))
     for nm, r in rs.items():
         if r["kind"] == "lidar_icp":
-            ref.append((nm + " lidar ICP", r["ts"], r.get("Ts_cam", r["Ts"]),
-                        "k", "-"))
             if r.get("odom_only_cam") is not None:
                 odom.append((nm + " odom only", r["ts"], r["odom_only_cam"],
                              "0.45", (0, (1, 2))))
