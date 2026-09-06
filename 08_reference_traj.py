@@ -737,11 +737,12 @@ def report_factor_coverage(node_t, ks):
               "boards cannot see the stretch that drifts.")
 
 
-def eval_board_resid(Ts, res_nodes, bmap):
+def eval_board_resid(Ts, res_nodes, bmap, only=None):
     """Predicted vs surveyed board position at every sighting. Independent
-    accuracy check for an arm that never used boards."""
+    accuracy check for an arm that never used those boards.
+    only: restrict to these board names (the held-out set, or the fitted set)."""
     e = [np.linalg.norm((Ts[k] @ T_cb)[:3, 3] - bmap[b][0][:3, 3])
-         for k, b, T_cb in res_nodes]
+         for k, b, T_cb in res_nodes if only is None or b in only]
     return np.array(e) if e else np.array([np.nan])
 
 
@@ -968,20 +969,30 @@ def resolve_instances(sights, Ts_est, node_t, bmap, wanted, radius=2.0,
     return out
 
 
-def board_factors(res, bmap):
+def board_factors(res, bmap, holdout=()):
     """Resolved sightings -> absolute factors on the camera pose.
     Measured camera pose from the SURVEYED board: T_map_cam = T_map_board @
-    inv(T_cam_board). Sigma from the survey's own spread, floored at 1 cm."""
+    inv(T_cam_board). Sigma from the survey's own spread, floored at 1 cm.
+
+    holdout: board names whose sightings are RESOLVED and EVALUATED but never
+    become factors. This is what makes "do the boards help a track that is
+    already good" answerable: adding board factors makes the board residual
+    training error, so the only honest score left is a board the solve never
+    saw. Fit on `anchor`, test on `rs_anchor`.
+    -> abs_meas (fitted boards only), res_nodes (ALL sightings, for eval)"""
+    holdout = set(holdout or ())
     abs_meas, res_nodes = [], []
     for k, bname, T_map_b_pred, T_cb in res:
         Tb, rec = bmap[bname]
+        res_nodes.append((k, bname, T_cb))
+        if bname in holdout:
+            continue
         T_meas = Tb @ inv(T_cb)
         sig_t = math.hypot(float(rec.get("std_mm", 10)) * 1e-3, 0.010)
         lc = rec.get("loop_closure") or {}
         sig_t = max(sig_t, float(lc.get("mm", 0)) * 1e-3)
         sig_r = math.radians(max(float(lc.get("deg", 0.3)), 1.0))
         abs_meas.append((k, T_meas, sig_t, sig_r))
-        res_nodes.append((k, bname, T_cb))
     return abs_meas, res_nodes
 
 
@@ -1569,7 +1580,19 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
         pred_T, pred_label = To_anch, "anchored odometry"
     res = resolve_instances(sights, pred_T, node_t, bmap, wanted,
                             float(track.get("instance_radius", 2.0)), pred_label)
-    abs_meas, res_nodes = board_factors(res, bmap)
+    holdout = set(track.get("boards_holdout") or ())
+    abs_meas, res_nodes = board_factors(res, bmap, holdout)
+    seen_b = {b for _, b, _ in res_nodes}
+    fitted_b = seen_b - holdout
+    if holdout:
+        n_h = sum(1 for _, b, _ in res_nodes if b in holdout)
+        print("  HELD-OUT board(s) %s: %d of %d sightings are evaluation only, "
+              "never factors. The 'held-out board' column is then an honest "
+              "score for EVERY arm, including the ones that use boards."
+              % (sorted(holdout & seen_b), n_h, len(res_nodes)))
+        if not fitted_b:
+            print("  ! every sighted board is held out - no board factors at "
+                  "all; the *_boards arms degenerate to their non-board twins")
     anchor_prior = (0, To_anch[0], max(anchor_sig_t, 0.005), math.radians(1.0))
     print("  %d nodes, %d board factors, %d clouds"
           % (len(node_t), len(abs_meas), len(clouds)))
@@ -1660,18 +1683,24 @@ def run_arms(name, reg_t, reg_T, cl_l, sights, ot, oT, X, T_map_origin, bmap,
     rows = [("odom", To_anch), ("icp", T_init)] + list(ARMS.items())
     print("  == evaluation (state = the %s optical frame; map factors of the "
           "*_icp* arms use %s clouds) ==" % (name, src))
-    print("  %-18s %22s %20s %7s %5s %18s %18s"
-          % ("arm", "board resid (cm)", "map rms (cm)", "inlier", "DOF",
+    hd = "  %18s" % "HELD-OUT board (cm)" if holdout else ""
+    print("  %-18s %22s%s %20s %7s %5s %18s %18s"
+          % ("arm", "board resid (cm)", hd, "map rms (cm)", "inlier", "DOF",
              "vs joint (cm)", "vs odom (cm)"))
     for arm, Ts in rows:
-        br = eval_board_resid(Ts, res_nodes, bmap) * 100
+        br = eval_board_resid(Ts, res_nodes, bmap,
+                              fitted_b if holdout else None) * 100
+        bh = (eval_board_resid(Ts, res_nodes, bmap, holdout) * 100
+              if holdout else None)
         mr, inl, dof = eval_map_stats(Ts, clouds, REF)
         mr = mr * 100                                   # m -> cm, like the rest
         dv = np.linalg.norm(Ts[:, :3, 3] - joint[:, :3, 3], axis=1) * 100
         do = np.linalg.norm(Ts[:, :3, 3] - To_anch[:, :3, 3], axis=1) * 100
-        print("  %-18s %8.1f med %6.1f p95 %8.2f med %5.2f p95 %5.0f%% %3.0f/6 "
+        hv = ("  %8.1f med %6.1f p95" % (np.nanmedian(bh),
+                                          np.nanpercentile(bh, 95))) if holdout else ""
+        print("  %-18s %8.1f med %6.1f p95%s %8.2f med %5.2f p95 %5.0f%% %3.0f/6 "
               "%7.1f med %6.1f max %7.1f med %6.1f max"
-              % (arm, np.nanmedian(br), np.nanpercentile(br, 95),
+              % (arm, np.nanmedian(br), np.nanpercentile(br, 95), hv,
                  np.nanmedian(mr), np.nanpercentile(mr, 95),
                  100 * np.nanmean(inl), np.nanmedian(dof),
                  np.median(dv), dv.max(), np.median(do), do.max()))
@@ -3046,6 +3075,27 @@ SAMPLE_CONFIG = r"""
       "icp_pts": 400, "gn_iters": 25 },
           <- (odom_jump_check only applies with cloud_source "lidar": a depth
              chain is not trusted to indict the odometry)
+
+    { "name": "mobile_1_lidarboards", "type": "arms",
+          <- DO THE BOARDS HELP THE LIDAR? A second arms track on the same rig,
+             fed by the Ouster clouds of track 1, running only odom_icp
+             (lidar, no boards) and odom_icp_boards (lidar + boards). Adding
+             board factors makes the board residual training error, so one
+             board is HELD OUT: fitted on 'anchor', scored on 'rs_anchor'.
+             That column is honest for both arms and answers the question.
+             Note this track's arms are NOT independent of the lidar - keep
+             mobile_1_zed above as the independent one.
+      "cloud_source": "lidar", "lidar_track": "mobile_1_lidar",
+      "boards_holdout": ["rs_anchor"],
+      "arms_run": ["odom_icp", "odom_icp_boards"],
+      "odom_topic": "/mobile_1/zed/odom", "anchor_cam": "zed",
+      "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
+      "image_topic": "/mobile_1/zed/left/image_rect_color",
+      "camera_info_topic": "/mobile_1/zed/left/camera_info", "rectified": true,
+      "boards": ["anchor", "anchor_b", "rs_anchor"],
+      "icp_sigma_lidar": 0.02, "img_stride": 2,
+      "odom_jump_check": true, "odom_jump_m": 0.05, "odom_jump_deg": 2.0,
+      "icp_pts": 400, "gn_iters": 25 },
 
     { "name": "mobile_2_rs", "type": "arms",
       "cloud_source": "depth",

@@ -242,4 +242,46 @@ assert len(s1) == len(g["res_nodes"]) and len(s2) == 5
 assert all(b in ("b1", "b2") for _, b, _ in s1) and not any(t in {x[0] for x in s2} for t, _, _ in s1)
 print("  OK: each rig's panel gets only its own sightings")
 
+print("\n#### 8. HELD-OUT board: fit on b1, score on b2 - the boards must never leak")
+trk_h = dict(trk, boards_holdout=["b2"])
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    gh = s08.run_arms("rig_h", c_ts, c_T, cl, sights, ot, oT, X, T_map_origin, bmap, ["b1", "b2"],
+                      trk_h, REF, 0.003, src="lidar", outd=None, verbose=False,
+                      chain_nobs=np.array(NOBS))
+out_h = buf.getvalue()
+print("  " + [l.strip() for l in out_h.split("\n") if "HELD-OUT" in l][0][:110])
+# no factor may sit on a b2 sighting
+b2_nodes = {k for k, b, _ in gh["res_nodes"] if b == "b2"}
+b1_nodes = {k for k, b, _ in gh["res_nodes"] if b == "b1"}
+fac_nodes = {k for k, _, _, _ in gh["abs_meas"]}
+print("  b1 sightings %d, b2 sightings %d, board factors %d"
+      % (len(b1_nodes), len(b2_nodes), len(fac_nodes)))
+assert fac_nodes & b2_nodes == set(), "a held-out sighting became a factor"
+assert fac_nodes <= b1_nodes and fac_nodes, "factors must come from b1 only"
+# the held-out score is computable for every arm, and boards still help on it
+tr_h = s08.interp_traj(ts, truth, gh["node_t"])
+for nm, Ts in [("odom", gh["odom_only"])] + list(gh["arms"].items()):
+    b_fit = s08.eval_board_resid(Ts, gh["res_nodes"], bmap, {"b1"}) * 100
+    b_out = s08.eval_board_resid(Ts, gh["res_nodes"], bmap, {"b2"}) * 100
+    err = np.linalg.norm(Ts[:, :3, 3] - tr_h[:, :3, 3], axis=1) * 100
+    print("    %-16s fitted b1 %6.1f cm | HELD-OUT b2 %6.1f cm | vs truth %6.1f cm"
+          % (nm, np.nanmedian(b_fit), np.nanmedian(b_out), np.median(err)))
+# The holdout is genuinely unseen: for an arm that FITS boards, the fitted
+# score must be far better than the held-out one. (Whether fitting b1 helps
+# or hurts b2 is data-dependent - here it HURTS, 11.7 -> 45.3 cm, because
+# correcting one end of the loop bends the other end away. That is the
+# ramp-vs-step distribution problem, and seeing it is the point of the
+# held-out column.)
+for nm in ("odom_boards", "icp_boards", "odom_icp_boards"):
+    f = np.nanmedian(s08.eval_board_resid(gh["arms"][nm], gh["res_nodes"], bmap, {"b1"}))
+    h = np.nanmedian(s08.eval_board_resid(gh["arms"][nm], gh["res_nodes"], bmap, {"b2"}))
+    assert h > f, "%s: held-out score is not worse than the fitted one - leak?" % nm
+h_odom = np.nanmedian(s08.eval_board_resid(gh["odom_only"], gh["res_nodes"], bmap, {"b2"})) * 100
+h_brd = np.nanmedian(s08.eval_board_resid(gh["arms"]["odom_boards"], gh["res_nodes"], bmap, {"b2"})) * 100
+print("  OK: no b2 sighting became a factor; every board-fitting arm scores worse on b2 than on b1")
+print("  note: fitting b1 alone moved the held-out b2 score %.1f -> %.1f cm - correcting one end"
+      % (h_odom, h_brd))
+print("        of a loop bends the other end away. Exactly what the held-out column exists to show.")
+
 print("\nALL TESTS PASSED")
