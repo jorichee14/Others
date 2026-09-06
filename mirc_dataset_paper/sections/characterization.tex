@@ -108,38 +108,53 @@ $^{\times}$ undefined in the absence of moving targets.}
 \end{tabular}
 \end{table}
 
-Labels are descriptive rather than prescriptive: each is assigned per frame from
-measured metrics, not declared once per run, so a sequence intended as
-co-observation carries occlusion labels wherever the geometry produced them, and
-evaluation strata are cut by $\omega$, $\beta$, $r$, $C$, and clearance directly
-rather than by the label. Every run additionally records an
-\texttt{intended\_paradigm}, whose agreement with the measured distribution
-quantifies how reliably a trajectory plan produces the condition for which it
-was written. All quantities are keyed by (\texttt{t\_ns}, \texttt{node},
-\texttt{obj\_id}), so that an evaluation can be joined to the condition under
-which each observation was made: they serve as strata, accuracy being reported
-within bands rather than averaged over the mixture a recording happens to
-contain; as a join between sensing and communication, link state and perception
-need sharing a clock, so that the value of a transmission is assessable at the
-frame at which it would have been sent; and as an objective, $\beta$, $C$, and
-clearance being quantities against which a viewpoint, transmission, or placement
-policy can be scored directly.
+A label is assigned per frame from the measured metrics, not declared once for a
+run: a sequence intended as co-observation carries occlusion labels wherever the
+geometry produced them. Evaluation strata are therefore cut by $\omega$,
+$\beta$, $r$, $C$, and clearance directly, never by the label. Each run also
+records an \texttt{intended\_paradigm}, and comparing it against the measured
+distribution shows how reliably a trajectory plan produced the condition it was
+written for.
 
-The geometric pipeline is frozen across sequences: $\tau = 0.5$; occupancy voxel
-\SI{10}{\centi\metre}; 200 rays per object, node, and frame; statistical outlier
-removal at 20 neighbours and $2\sigma$; a voxel occupied only at $\ge 8$ points
-and a ray blocked only on two consecutive occupied voxels; occluder hits within
-\SI{0.6}{\metre} of a sensor origin and occupancy within \SI{0.7}{\metre} of
-either link endpoint disregarded, both nodes and the access point being
-themselves present in the map; evidence floors of 1 LiDAR point, 50 depth
-points, and 400\,px$^2$; range caps of \SI{20}{\metre} (Ouster),
-\SI{4.5}{\metre} (ZED), \SI{5}{\metre} (RealSense), and \SI{20}{\metre}
-(infrastructure pixels), each calibrated from the range at which median evidence
-falls to its floor; obstructed link below $0.6\,r_1$; and carrier frequency read
-per frame from the WiFi status stream. The density threshold, consecutive-hit
-test, and endpoint clearances are workarounds for map noise and for fixed nodes
-appearing as mapped structure; they are stated because they affect the reported
-values, and a survey-grade map should permit their removal.
+Table~\ref{tab:params} lists the pipeline parameters, frozen across sequences.
+Three are workarounds rather than choices: the density threshold and
+consecutive-hit test suppress speckle in the registered map, and the endpoint
+clearances exist because the nodes and the access point are themselves mapped as
+structure, so without them every link ray is blocked at its own endpoint. A
+survey-grade map should permit their removal.
+
+\begin{table}[t]
+\centering
+\caption{Pipeline parameters, frozen across sequences. Range caps are set from
+the range at which median in-box evidence falls to its floor, then fixed.}
+\label{tab:params}
+\footnotesize
+\begin{tabular}{@{}lll@{}}
+\toprule
+& Parameter & Value \\
+\midrule
+\multirow{5}{*}{Occlusion}
+  & threshold $\tau$              & 0.5 \\
+  & occupancy voxel               & \SI{10}{\centi\metre} \\
+  & rays per object, node, frame  & 200 \\
+  & outlier removal               & 20 neighbours, $2\sigma$ \\
+  & occupied voxel / blocked ray  & $\ge 8$ points / 2 consecutive \\
+\midrule
+\multirow{3}{*}{Evidence}
+  & floors                        & 1 LiDAR pt, 50 depth pts, 400\,px$^2$ \\
+  & range caps                    & 20 / 4.5 / 5 / \SI{20}{\metre} \\
+  &                               & (Ouster, ZED, RealSense, infra) \\
+\midrule
+\multirow{2}{*}{Link}
+  & obstructed below              & $0.6\,r_1$ \\
+  & carrier frequency             & \SI{5.75}{\giga\hertz}, read per frame \\
+\midrule
+\multirow{2}{*}{Workarounds}
+  & sensor self-clearance         & \SI{0.6}{\metre} \\
+  & link endpoint clearance       & \SI{0.7}{\metre} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{Sequence Characterization}
 \label{sec:descriptor}
