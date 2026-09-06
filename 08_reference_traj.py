@@ -1203,7 +1203,8 @@ def main():
                                  rms=float(np.nanmedian(RMS)))
 
         elif kind == "arms":
-            # mobile_2's three corrected trajectories from ONE estimator:
+            # three corrected trajectories from ONE estimator (run on any
+            # camera agent - mobile_1's ZED and mobile_2's D455 both use it):
             #   A_icp    odometry + relinearised map factors (geometry only)
             #   B_boards odometry + board factors + session-anchor prior
             #   C_joint  everything
