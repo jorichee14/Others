@@ -22,12 +22,14 @@ MOBILE_1 WORKFLOW (Ouster + ZED on one rigid body) - run these two tracks:
                  ZED-vs-lidar disagreement that separates a ZED jump (one big
                  step) from drift (a run of small ones).
 
-  2. arms        with "cloud_source": "lidar": the corrected trajectories of
+  2. arms        with "cloud_source": "depth": the corrected trajectories of
                  the ZED optical frame from ONE estimator (same nodes, same
-                 solver), named by their INGREDIENTS:
+                 solver), each camera correcting itself with its OWN depth
+                 clouds - nothing from the Ouster enters any arm. Named by
+                 their INGREDIENTS:
                    odom             anchored ZED odometry (no solve)
-                   icp              the chained lidar ICP track (no solve)
-                   odom_icp         ZED odom + lidar point-to-plane map factors
+                   icp              the chained ZED-depth ICP track (no solve)
+                   odom_icp         ZED odom + depth point-to-plane map factors
                    odom_boards      ZED odom + board factors + anchor prior
                                     ("board sightings correct the ZED odom")
                    icp_boards       ICP-chain relative factors + board factors
@@ -35,16 +37,16 @@ MOBILE_1 WORKFLOW (Ouster + ZED on one rigid body) - run these two tracks:
                    odom_icp_boards  everything
                  and the ablation table whose held-out cells are independent
                  checks (odom_icp never saw a board, odom_boards never saw the
-                 map). The lidar clouds and the chained-ICP poses come from
-                 track 1 (no second ICP pass); the CLOUDS are re-registered
-                 inside the graph, the chained POSES are initialisation only
-                 in odom_* arms (their errors are correlated, feeding them in
-                 as measurements lets the chain's drift out-vote the boards -
-                 measured) and relative factors in icp_boards only.
+                 map). "cloud_source": "lidar" would feed the Ouster clouds
+                 of track 1 into the map factors instead; then the lidar is
+                 no longer independent of the arms.
 
-  Then the stage prints one comparison table for the rig - all in the ZED
-  left optical frame, all at the lidar stamps - and writes paths_<rig>.png +
-  compare_<rig>.csv.
+  Then the stage scores EVERY arm against the lidar track (same rigid body
+  through T_lidar_camera) - the one external check none of the arms saw -
+  prints one comparison table for the rig, all in the ZED left optical frame
+  at the lidar stamps, and writes paths_<rig>.png + compare_<rig>.csv.
+  mobile_2 (D455) runs the same arms track with its own depth; it has no
+  lidar, so its board residual is its only external check.
 
 OTHER TRACK TYPES
   arms with "cloud_source": "depth" (default) - any depth camera (mobile_2
@@ -2942,7 +2944,18 @@ SAMPLE_CONFIG = r"""
       "keep_cloud_pts": 3000 },
 
     { "name": "mobile_1_zed", "type": "arms",
-      "cloud_source": "lidar", "lidar_track": "mobile_1_lidar",
+      "cloud_source": "depth",
+          <- the ZED corrects itself with its OWN depth clouds. Nothing from
+             the Ouster enters any arm; the lidar track above is only the
+             independent reference the cross-check scores every arm against.
+             ("lidar" would feed Ouster clouds into the map factors instead.)
+      "depth_topic": "/mobile_1/zed/depth/depth_registered",
+      "depth_info_topic": "/mobile_1/zed/depth/camera_info",
+      "depth_extrinsic_xyzquat": null,
+          <- ZED depth_registered is already in the left optical frame
+      "seed": "icp", "submap_window_s": 3.0,
+      "range_min": 0.4, "range_max": 3.0,
+          <- ZED stereo depth error grows as z^2: ~19 cm at 5 m, so stop at 3
       "odom_topic": "/mobile_1/zed/odom",
       "anchor_cam": "zed",
       "cam_extrinsic_xyzquat": [-0.010, 0.060, 0.015, -0.5, 0.5, -0.5, 0.5],
@@ -2955,12 +2968,10 @@ SAMPLE_CONFIG = r"""
           <- relative sigma of the ICP-chain factors in icp_boards
       "arms_run": ["odom_icp", "odom_boards", "icp_boards", "odom_icp_boards"],
           <- the table always also shows the raw 'odom' and 'icp' rows
-      "odom_jump_check": true, "odom_jump_m": 0.05, "odom_jump_deg": 2.0,
-          <- break edges are freed in the map-factor arms only; odom_boards
-             never sees anything from the lidar, and no boards-only arm has
-             freed edges (that opened a null space - the old B_breaks)
       "sighting_group_gap_s": 2.0,
       "icp_pts": 400, "gn_iters": 25 },
+          <- (odom_jump_check only applies with cloud_source "lidar": a depth
+             chain is not trusted to indict the odometry)
 
     { "name": "mobile_2_rs", "type": "arms",
       "cloud_source": "depth",
