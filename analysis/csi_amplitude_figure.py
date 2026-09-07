@@ -72,7 +72,7 @@ def main() -> int:
     plt.rcParams.update({"font.size": 8, "axes.edgecolor": GRID, "axes.labelcolor": TEXT,
                          "xtick.color": TEXT2, "ytick.color": TEXT2, "text.color": TEXT})
     n = len(panels)
-    fig = plt.figure(figsize=(4.2 * n + 1.0, 3.1))
+    fig = plt.figure(figsize=(4.6 * n + 1.0, 3.1))
     gs = fig.add_gridspec(1, n + 1, width_ratios=[1.0] * n + [0.05], wspace=0.24,
                           left=0.07, right=0.93, top=0.80, bottom=0.17)
     cmap = matplotlib.colors.LinearSegmentedColormap.from_list("amp", AMP_DIVERGING)
@@ -91,8 +91,8 @@ def main() -> int:
         ax.set_ylabel("FFT slot (subcarrier)" if i == 0 else "")
         ax.set_title(f"({chr(97 + i)}) {p['agent']}: {p['frame']} frames at {p['rate']:.0f} Hz, "
                      f"{len(p['idx'])} subcarriers\n"
-                     f"{p['eff_bw']:.0f} MHz occupied of a {p['bw']} MHz capture, "
-                     f"receiver shape of {p['shape_db']:.0f} dB removed",
+                     f"{p['eff_bw']:.0f} MHz of an {p['bw']} MHz capture, "
+                     f"{p['shape_db']:.0f} dB receiver shape removed",
                      loc="left", fontsize=8)
     cax = fig.add_subplot(gs[0, n])
     cb = fig.colorbar(im, cax=cax)
