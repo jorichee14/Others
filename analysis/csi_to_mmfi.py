@@ -55,7 +55,8 @@ def main() -> int:
 
     for agent in sorted(csi):
         df = csi[agent].sort_values("log_time_ns").reset_index(drop=True)
-        H_all, idx_all, keep = stack_H(df)
+        n_bag = len(df)
+        H_all, idx_all, keep = stack_H(df)   # frames with a different subcarrier layout are dropped
         df = df.loc[keep].reset_index(drop=True)
         use = usable_subcarriers(H_all, args.null_floor_db)
         lo, span = occupied_band(idx_all, use, args.band_gap)
@@ -75,7 +76,10 @@ def main() -> int:
             s = slice(k * args.packets, (k + 1) * args.packets)
             sio.savemat(agent_dir / f"frame{k + 1:03d}.mat",
                         {"CSIamp": amp[s].T[None, :, :],     # (1 antenna, subcarriers, packets)
-                         "CSIphase": pha[s].T[None, :, :]},
+                         "CSIphase": pha[s].T[None, :, :],
+                         # extra keys MM-Fi does not have; its loaders index by name and skip them
+                         "t_s": ((t_ns[s] - t0_ns) / 1e9)[None, :],
+                         "rssi_dbm": df["rssi"].to_numpy(float)[s][None, :]},
                         do_compression=True)
             tm = 0.5 * (t_ns[s][0] + t_ns[s][-1])
             row = {"frame": k + 1, "t_start_s": (t_ns[s][0] - t0_ns) / 1e9,
@@ -88,9 +92,12 @@ def main() -> int:
             rows.append(row)
         pd.DataFrame(rows).to_csv(agent_dir / "frames.csv", index=False)
         sio.savemat(agent_dir / "subcarriers.mat", {"fft_slot": idx_all[use][None, :]})
-        print(f"{agent}: {n_frames} frames of {args.packets} packets, "
-              f"CSIamp shape (1, {int(use.sum())}, {args.packets}), "
-              f"amplitude {amp.min():.0f} to {amp.max():.0f} dB -> {agent_dir}")
+        print(f"{agent}: {n_frames} frames of {args.packets} packets -> {agent_dir}")
+        print(f"  CSIamp shape (1, {int(use.sum())}, {args.packets}), "
+              f"amplitude {amp.min():.0f} to {amp.max():.0f} dB")
+        print(f"  not written: {n_bag - len(df)} packets with a different subcarrier layout, "
+              f"{len(df) - n_frames * args.packets} tail packets short of a frame, "
+              f"{H_all.shape[1] - int(use.sum())} of {H_all.shape[1]} slots per packet that carry no subcarrier")
     return 0
 
 
