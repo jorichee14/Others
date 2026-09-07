@@ -180,7 +180,9 @@ shaped (1 antenna, 56 subcarriers, 10 packets), amplitude as 20·log10 of the
 raw chip values and phase raw and wrapped, exactly as MM-Fi stores its
 (3, 114, 10) frames. `frames.csv` beside them gives each frame's time span,
 median RSSI and the ground-truth pose at its midpoint. Nothing is normalised
-or equalised, so MM-Fi preprocessing code applies unchanged.
+or equalised, so MM-Fi preprocessing code applies unchanged. The chip's gain
+control is left in, as in MM-Fi; per-packet RSSI is stored in each file so the
+level can be restored, and `--absolute` writes amplitude in dBm instead.
 
 ## Live CSI view in ROS 2
 
