@@ -251,6 +251,10 @@ def main() -> int:
                          "about a wavelength in this time")
     ap.add_argument("--still-mps", type=float, default=0.05, help="below this the robot is still")
     ap.add_argument("--moving-mps", type=float, default=0.15, help="above this it is moving")
+    ap.add_argument("--map-metric", choices=["rssi", "k"], default="rssi",
+                    help="what colours the trajectory on the map. rssi: the strength of the "
+                         "agent's frames at the CSI receiver, valid whatever state the CSI is "
+                         "in. k: Rician K, only meaningful once the motion test passes")
     ap.add_argument("--min-coherence", type=float, default=0.5,
                     help="frame-to-frame |H| correlation below which the stream is not a channel")
     args = ap.parse_args()
@@ -499,8 +503,12 @@ def main() -> int:
     map_xy = read_pcd_xy(args.map) if args.map else None
     placed = [a for a in agents if a in poses]
     if placed:
+        # RSSI by default: it is the receiver's own measurement of the frame and
+        # survives whatever the CSI is doing. K only once the tests pass.
+        col, label = (("rssi_dbm", "RSSI of the agent's frames at the CSI receiver [dBm]")
+                      if args.map_metric == "rssi" else ("k_factor_db", "Rician K [dB]"))
         cmap = matplotlib.colors.LinearSegmentedColormap.from_list("k", K_RAMP)
-        kv = fr[fr["agent"].isin(placed)]["k_factor_db"]
+        kv = fr[fr["agent"].isin(placed)][col]
         v_lo, v_hi = np.percentile(kv, [5, 95])
         norm = matplotlib.colors.Normalize(v_lo, v_hi)
         fig = plt.figure(figsize=(4.0 * len(placed) + 1.2, 4.4))
@@ -511,7 +519,7 @@ def main() -> int:
             ax = fig.add_subplot(gs[0, i])
             g = fr[fr["agent"] == a]
             n = max(int(args.smooth_s * len(g) / max(g["t_s"].max() - g["t_s"].min(), 1e-9)), 1)
-            kdb = g["k_factor_db"].rolling(n, center=True, min_periods=1).median().to_numpy()
+            kdb = g[col].rolling(n, center=True, min_periods=1).median().to_numpy()
             pt, pxy = poses[a]
             o = np.argsort(pt)
             tq = g["t_s"].to_numpy() * 1e9 + t0_ns
@@ -542,7 +550,7 @@ def main() -> int:
         if sm_ is not None:
             cax = fig.add_subplot(gs[0, len(placed)].subgridspec(3, 1, height_ratios=[0.12, 1, 0.05])[1])
             cb = fig.colorbar(sm_, cax=cax)
-            cb.set_label("Rician K [dB]", fontsize=7.5)
+            cb.set_label(label, fontsize=7.5)
             cb.ax.tick_params(labelsize=7); cb.outline.set_visible(False)
             fig.savefig(out / "fig_csi_map.pdf", bbox_inches="tight")
             fig.savefig(out / "fig_csi_map.png", dpi=200, bbox_inches="tight")

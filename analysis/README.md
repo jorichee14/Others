@@ -147,6 +147,12 @@ none of them should be quoted for a run that fails the first test. The second
 is what ties the CSI to the robots rather than to a radio, and is the result
 worth reporting. It needs only the ground-truth pose topics.
 
+**What to show for a run that fails the motion test.** Panels (a) and (b) of
+`fig_csi.png`, which describe the stream as recorded, and `fig_csi_map.png`,
+which is the receiver's own RSSI along each trajectory and does not depend on
+the CSI being a channel. Leave the delay-spread and K panels and the motion
+figure out of the paper for that run.
+
 Outputs in `results/coop2/csi/`:
 
 | File | Contents |
@@ -156,7 +162,7 @@ Outputs in `results/coop2/csi/`:
 | `csi_frames.parquet` | per frame: selectivity, delay spread, K-factor, RSSI |
 | `csi_summary.md`, `csi_subsection.tex` | tables and a paragraph for the paper |
 | `fig_csi.{pdf,png}` | channel amplitude heat map per agent (diverging about each frame's median, so fades and peaks separate), then delay spread and K-factor over the run |
-| `fig_csi_map.{pdf,png}` | the trajectories coloured by K-factor — the same layout as the Wi-Fi coverage map, dark = better channel |
+| `fig_csi_map.{pdf,png}` | the trajectories coloured by the RSSI of each agent's frames at the CSI receiver (uplink, 180 Hz) — the same layout as the Wi-Fi coverage map; `--map-metric k` colours by Rician K instead, for runs that pass the motion test |
 | `csi_motion_test.csv`, `csi_motion_bins.csv`, `fig_csi_motion.{pdf,png}` | the motion test: verdict per agent, the 1 s bins behind it, and change rate against speed |
 
 ## Live CSI view in ROS 2
