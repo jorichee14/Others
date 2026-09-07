@@ -14,6 +14,7 @@ analysis/
 ├── wifi_issues.md          what the Wi-Fi suite measures, coop2 findings, fixes
 ├── csi_analysis.py         Wi-Fi CSI: multipath structure of the channel
 ├── csi_amplitude_figure.py the amplitude heat maps alone, for the paper
+├── csi_to_mmfi.py          export the CSI in MM-Fi's per-frame .mat layout
 ├── csi_core.py             shared CSI maths, numpy only (no pandas, no matplotlib)
 ├── csi_image_node.py       ROS 2 node: one rendered image per CSI frame, live
 ├── requirements.txt
@@ -167,6 +168,19 @@ Outputs in `results/coop2/csi/`:
 | `fig_csi_lines.{pdf,png}` | from `csi_amplitude_figure.py --run coop2 --style lines`: the Intel-5300 style view, sampled frames' \|H\| across subcarriers overlaid per agent on an absolute dBm axis restored from each frame's RSSI, run median bold |
 | `fig_csi_map.{pdf,png}` | the trajectories coloured by the RSSI of each agent's frames at the CSI receiver (uplink, 180 Hz) — the same layout as the Wi-Fi coverage map; `--map-metric k` colours by Rician K instead, for runs that pass the motion test |
 | `csi_motion_test.csv`, `csi_motion_bins.csv`, `fig_csi_motion.{pdf,png}` | the motion test: verdict per agent, the 1 s bins behind it, and change rate against speed |
+
+## Export in MM-Fi's layout
+
+```bash
+python3 analysis/csi_to_mmfi.py --run coop2 --packets 10
+```
+
+Writes `results/coop2/mmfi/<agent>/frameNNN.mat` with `CSIamp` and `CSIphase`
+shaped (1 antenna, 56 subcarriers, 10 packets), amplitude as 20·log10 of the
+raw chip values and phase raw and wrapped, exactly as MM-Fi stores its
+(3, 114, 10) frames. `frames.csv` beside them gives each frame's time span,
+median RSSI and the ground-truth pose at its midpoint. Nothing is normalised
+or equalised, so MM-Fi preprocessing code applies unchanged.
 
 ## Live CSI view in ROS 2
 
