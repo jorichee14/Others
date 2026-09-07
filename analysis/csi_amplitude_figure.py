@@ -104,6 +104,8 @@ def main() -> int:
         # and, inside the band, drop the LO-leakage spike at the window centre and
         # the filter-skirt slots at the block edge: neither is a subcarrier
         use[use] &= ~band_outliers(H_all[:, use])
+        # the axis covers the slots actually drawn, not the band before trimming
+        lo, span = int(idx_all[use].min()), int(idx_all[use].max() - idx_all[use].min() + 1)
         H_raw = H_all[:, use]
         H, static_db = equalise_static(H_raw)
         dur = float(df["t_s"].max() - df["t_s"].min())

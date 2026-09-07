@@ -310,6 +310,8 @@ def main() -> int:
         # and, inside the band, drop the LO-leakage spike at the window centre and
         # the filter-skirt slots at the block edge: neither is a subcarrier
         use[use] &= ~band_outliers(H_all[:, use])
+        draw_lo = int(idx_all[use].min())
+        draw_span = int(idx_all[use].max() - draw_lo + 1)
         H, idx = H_all[:, use], idx_all[use]
         n_sub, n_raw_cols = H.shape[1], H_all.shape[1]
         eff_bw = effective_bandwidth_mhz(band_span, bw, raw_slots)
@@ -348,7 +350,7 @@ def main() -> int:
         }))
         per_agent[agent] = dict(t=sub["t_s"].to_numpy(), amp_db=amp_db, idx=idx, absH=np.abs(H),
                                 attribution=attribution,
-                                band_lo=band_lo, band_span=band_span, static_ptp=static_ptp,
+                                band_lo=draw_lo, band_span=draw_span, static_ptp=static_ptp,
                                 bw=bw, eff_bw=eff_bw, dt_ns=dt_s * 1e9,
                                 sc_power_db=sc_power_db, sc_idx=idx_all, use=use)
 
