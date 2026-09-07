@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from csi_core import (band_mask, equalise_static, frame_correlation,  # noqa: E402
+from csi_core import (band_mask, band_outliers, equalise_static, frame_correlation,  # noqa: E402
                       occupied_band, rician_k, temporal_coherence,
                       usable_subcarriers)
 
@@ -111,6 +111,17 @@ lo, span = occupied_band(idx, use)
 check("band unaffected by it", (lo, span), (128, 64))
 check("slot 0 excluded", bool((use & band_mask(idx, lo, span))[0]), False)
 check("band kept", int((use & band_mask(idx, lo, span)).sum()), 64)
+
+print("band_outliers: the LO spike and the filter skirt are not subcarriers")
+Hb = channel(200, 64) + 3.0
+Hb[:, 2] *= 10 ** (18 / 20)            # local-oscillator leakage, +18 dB, every frame
+Hb[:, 0] *= 10 ** (-14 / 20)           # filter skirt at the block edge
+Hb[:, 1] *= 10 ** (-12 / 20)
+bo = band_outliers(Hb)
+check("spike dropped", bool(bo[2]), True)
+check("skirt dropped", bool(bo[0] and bo[1]), True)
+check("nothing else dropped", int(bo.sum()), 3)
+check("shape without them is small", float(np.ptp(equalise_static(Hb[:, ~bo])[1])) < 8.0, True)
 
 print("rician_k: nulls left in the input pin K at Rayleigh")
 Hc = channel(200, 64) + 3.0          # strong dominant path -> K well above 0

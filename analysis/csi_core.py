@@ -131,6 +131,28 @@ def band_mask(idx: np.ndarray, band_lo: int, band_span: int) -> np.ndarray:
     return (idx >= band_lo) & (idx < band_lo + band_span)
 
 
+def band_outliers(H: np.ndarray, tol_db: float = 10.0) -> np.ndarray:
+    """Slots inside the band that are not subcarriers: True where the slot's
+    run-median |H| sits more than `tol_db` from the band's own median, in
+    either direction.
+
+    Two things get through the power test and the band test yet carry no
+    subcarrier. The capture window's centre slot carries the receiver's
+    local-oscillator leakage, a spike far ABOVE the band in every frame with
+    no fading on it. And the outermost slots of a 20 MHz block sit on the
+    transmit filter's skirt, a dozen dB below the band. Both are contiguous
+    with real subcarriers, so the band test keeps them, and both fool
+    everything downstream: the spike widens the "receiver shape" by 20 dB and
+    the skirt slots, being noise, look like violent fading once equalised."""
+    med = np.median(np.abs(np.atleast_2d(H)), axis=0)
+    ok = med > 0
+    if ok.sum() < 8:
+        return np.zeros(med.size, bool)
+    ref = np.median(med[ok])
+    dev = np.abs(20 * np.log10(np.where(ok, med, ref) / ref))
+    return (dev > tol_db) | ~ok
+
+
 def equalise_static(H: np.ndarray):
     """Divide out the per-subcarrier gain that does not change over the run.
 

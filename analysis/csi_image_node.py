@@ -58,7 +58,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from csi_core import (  # noqa: E402
-    amplitude_db, band_mask, colour_lut, delay_profile, effective_bandwidth_mhz, occupied_band,
+    amplitude_db, band_mask, band_outliers, colour_lut, delay_profile, effective_bandwidth_mhz, occupied_band,
     quantise, rician_k, rms_delay_spread, usable_subcarriers,
 )
 
@@ -108,6 +108,8 @@ class CsiRenderer:
             use = np.ones_like(use)
         band_lo, band_span = occupied_band(idx, use)
         use &= band_mask(idx, band_lo, band_span)
+        acc_sub = self.acc[use].reshape(1, -1)
+        use[use] &= ~band_outliers(np.sqrt(acc_sub))   # the average is a power
         Hu, idxu = H[:, use], idx[use]
         eff_bw = effective_bandwidth_mhz(band_span, bandwidth_mhz, raw_slots)
         # The receiver's fixed per-subcarrier shape, tracked as a slow average

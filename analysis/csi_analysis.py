@@ -70,7 +70,7 @@ from common import (  # noqa: E402
 from csi_core import (  # noqa: E402
     amplitude_db, delay_profile, effective_bandwidth_mhz, occupied_band,
     profile_structure_db, rician_k, rms_delay_spread, temporal_coherence, frame_correlation,
-    usable_subcarriers, band_mask, equalise_static,
+    usable_subcarriers, band_mask, band_outliers, equalise_static,
 )
 from extract_bag import extract  # noqa: E402
 
@@ -307,6 +307,9 @@ def main() -> int:
         # only slots inside that band count: an isolated slot elsewhere in the
         # window (the 80 MHz DC slot) passes the power test but is not the frame
         use &= band_mask(idx_all, band_lo, band_span)
+        # and, inside the band, drop the LO-leakage spike at the window centre and
+        # the filter-skirt slots at the block edge: neither is a subcarrier
+        use[use] &= ~band_outliers(H_all[:, use])
         H, idx = H_all[:, use], idx_all[use]
         n_sub, n_raw_cols = H.shape[1], H_all.shape[1]
         eff_bw = effective_bandwidth_mhz(band_span, bw, raw_slots)

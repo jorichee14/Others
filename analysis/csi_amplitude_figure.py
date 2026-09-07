@@ -8,8 +8,9 @@ Two conventional views of the same thing, and they claim nothing about the
 room. `heatmap`: amplitude per agent, subcarrier against time, with the
 receiver's fixed per-subcarrier shape divided out. `lines`: the Intel-5300
 style plot, every sampled frame's |H| across subcarriers overlaid, one colour
-per agent; the shape of the bundle is the receiver and its thickness is the
-fading, and the run median is drawn bold so the two can be told apart.
+per agent, on an absolute dBm axis restored from each frame's RSSI; the shape
+of the bundle is the receiver, its thickness the fading, its height the
+signal strength, and the run median is drawn bold.
 
 Reads the extraction made by csi_analysis.py (or extract_bag.py) and writes
 results/<run>/csi/fig_csi_amplitude.{pdf,png}.
@@ -29,23 +30,32 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import GRID, TEXT, TEXT2, color_for  # noqa: E402
 from csi_analysis import AMP_DIVERGING, FRAME_TYPES, load_csi, stack_H  # noqa: E402
-from csi_core import (amplitude_db, band_mask, effective_bandwidth_mhz,  # noqa: E402
-                      equalise_static, occupied_band, usable_subcarriers)
+from csi_core import (amplitude_db, band_mask, band_outliers,  # noqa: E402
+                      effective_bandwidth_mhz, equalise_static, occupied_band,
+                      usable_subcarriers)
 
 
 def lines_figure(panels, out: Path, n_lines: int) -> int:
-    """Every sampled frame's |H| across subcarriers, overlaid, one colour per agent."""
+    """Every sampled frame's |H| across subcarriers, overlaid, one colour per agent.
+
+    The y axis is absolute, in dBm per subcarrier, by the same trick the Intel
+    5300 tool uses: the chip's CSI comes out after automatic gain control, so
+    its raw level is the receiver's gain setting and not the channel, but the
+    frame's reported RSSI is the level the receiver saw. Scale each frame so
+    its mean subcarrier power equals its RSSI and the level is restored --
+    a weak frame sits low on the axis, a strong one high."""
     fig, ax = plt.subplots(figsize=(5.2, 3.4))
     fig.subplots_adjust(left=0.13, right=0.97, top=0.9, bottom=0.16)
     for p in panels:
-        pick = np.linspace(0, p["raw_db"].shape[0] - 1, min(n_lines, p["raw_db"].shape[0])).astype(int)
+        A = p["abs_db"]
+        pick = np.linspace(0, A.shape[0] - 1, min(n_lines, A.shape[0])).astype(int)
         c = color_for(p["agent"])
-        ax.plot(p["idx"], p["raw_db"][pick].T, color=c, lw=0.4, alpha=0.08)
-        ax.plot(p["idx"], np.median(p["raw_db"], axis=0), color=c, lw=1.8,
-                label=f"{p['agent']}  ({p['frame']}, {len(pick)} of {p['raw_db'].shape[0]} frames)")
+        ax.plot(p["idx"], A[pick].T, color=c, lw=0.4, alpha=0.08)
+        ax.plot(p["idx"], np.median(A, axis=0), color=c, lw=1.8,
+                label=f"{p['agent']}  ({p['frame']}, {len(pick)} of {A.shape[0]} frames)")
     ax.set_xlabel("FFT slot (subcarrier)")
-    ax.set_ylabel("|H| relative to frame median [dB]")
-    ax.set_title("CSI amplitude per frame; bold = run median (the receiver's shape)",
+    ax.set_ylabel("amplitude per subcarrier [dBm], scaled to frame RSSI")
+    ax.set_title("CSI amplitude per frame; bold = run median",
                  loc="left", fontsize=8)
     ax.legend(frameon=False, fontsize=7, loc="lower center")
     ax.grid(True, color=GRID, lw=0.5)
@@ -91,6 +101,9 @@ def main() -> int:
         use = usable_subcarriers(H_all, args.null_floor_db)
         lo, span = occupied_band(idx_all, use, args.band_gap)
         use &= band_mask(idx_all, lo, span)
+        # and, inside the band, drop the LO-leakage spike at the window centre and
+        # the filter-skirt slots at the block edge: neither is a subcarrier
+        use[use] &= ~band_outliers(H_all[:, use])
         H_raw = H_all[:, use]
         H, static_db = equalise_static(H_raw)
         dur = float(df["t_s"].max() - df["t_s"].min())
@@ -98,6 +111,9 @@ def main() -> int:
         panels.append(dict(
             agent=agent, t=sub["t_s"].to_numpy(), amp_db=amplitude_db(H), idx=idx_all[use],
             raw_db=amplitude_db(H_raw), static_db=static_db,
+            abs_db=(20 * np.log10(np.abs(H_raw) + 1e-12)
+                    - 10 * np.log10(np.maximum((np.abs(H_raw) ** 2).mean(axis=1, keepdims=True), 1e-24))
+                    + sub["rssi"].to_numpy(float)[:, None]),
             lo=lo, span=span, bw=bw, eff_bw=effective_bandwidth_mhz(span, bw, raw_slots),
             rate=(len(df) - 1) / max(dur, 1e-9), frame=FRAME_TYPES.get(fc, f"0x{fc:02x}"),
             shape_db=float(np.ptp(static_db))))
