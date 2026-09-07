@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """The one CSI figure for a run whose channel cannot be attributed to the robots.
 
-    python3 csi_amplitude_figure.py --run coop2
+    python3 csi_amplitude_figure.py --run coop2                 # heat map
+    python3 csi_amplitude_figure.py --run coop2 --style lines   # overlaid frames
 
-Channel amplitude per agent, subcarrier against time, with the receiver's
-fixed per-subcarrier shape divided out. It describes the stream as recorded:
-which frames, how much of the capture window they occupy, how many
-subcarriers, at what rate. It claims nothing about the room.
+Two conventional views of the same thing, and they claim nothing about the
+room. `heatmap`: amplitude per agent, subcarrier against time, with the
+receiver's fixed per-subcarrier shape divided out. `lines`: the Intel-5300
+style plot, every sampled frame's |H| across subcarriers overlaid, one colour
+per agent; the shape of the bundle is the receiver and its thickness is the
+fading, and the run median is drawn bold so the two can be told apart.
 
 Reads the extraction made by csi_analysis.py (or extract_bag.py) and writes
 results/<run>/csi/fig_csi_amplitude.{pdf,png}.
@@ -24,10 +27,36 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import GRID, TEXT, TEXT2  # noqa: E402
+from common import GRID, TEXT, TEXT2, color_for  # noqa: E402
 from csi_analysis import AMP_DIVERGING, FRAME_TYPES, load_csi, stack_H  # noqa: E402
 from csi_core import (amplitude_db, band_mask, effective_bandwidth_mhz,  # noqa: E402
                       equalise_static, occupied_band, usable_subcarriers)
+
+
+def lines_figure(panels, out: Path, n_lines: int) -> int:
+    """Every sampled frame's |H| across subcarriers, overlaid, one colour per agent."""
+    fig, ax = plt.subplots(figsize=(5.2, 3.4))
+    fig.subplots_adjust(left=0.13, right=0.97, top=0.9, bottom=0.16)
+    for p in panels:
+        pick = np.linspace(0, p["raw_db"].shape[0] - 1, min(n_lines, p["raw_db"].shape[0])).astype(int)
+        c = color_for(p["agent"])
+        ax.plot(p["idx"], p["raw_db"][pick].T, color=c, lw=0.4, alpha=0.08)
+        ax.plot(p["idx"], np.median(p["raw_db"], axis=0), color=c, lw=1.8,
+                label=f"{p['agent']}  ({p['frame']}, {len(pick)} of {p['raw_db'].shape[0]} frames)")
+    ax.set_xlabel("FFT slot (subcarrier)")
+    ax.set_ylabel("|H| relative to frame median [dB]")
+    ax.set_title("CSI amplitude per frame; bold = run median (the receiver's shape)",
+                 loc="left", fontsize=8)
+    ax.legend(frameon=False, fontsize=7, loc="lower center")
+    ax.grid(True, color=GRID, lw=0.5)
+    fig.savefig(out / "fig_csi_lines.pdf", bbox_inches="tight")
+    fig.savefig(out / "fig_csi_lines.png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    for p in panels:
+        print(f"{p['agent']}: receiver shape {float(np.ptp(p['static_db'])):.0f} dB peak to peak, "
+              f"fading spread about it {float(np.median(p['amp_db'].std(axis=1))):.1f} dB")
+    print(f"wrote {out}/fig_csi_lines.pdf/png")
+    return 0
 
 
 def main() -> int:
@@ -38,6 +67,8 @@ def main() -> int:
     ap.add_argument("--stride", type=int, default=1)
     ap.add_argument("--null-floor-db", type=float, default=20.0)
     ap.add_argument("--band-gap", type=int, default=12)
+    ap.add_argument("--style", choices=["heatmap", "lines"], default="heatmap")
+    ap.add_argument("--n-lines", type=int, default=400, help="frames overlaid in --style lines")
     args = ap.parse_args()
 
     extracts = args.extracts or Path("extracts") / args.run
@@ -60,11 +91,13 @@ def main() -> int:
         use = usable_subcarriers(H_all, args.null_floor_db)
         lo, span = occupied_band(idx_all, use, args.band_gap)
         use &= band_mask(idx_all, lo, span)
-        H, static_db = equalise_static(H_all[:, use])
+        H_raw = H_all[:, use]
+        H, static_db = equalise_static(H_raw)
         dur = float(df["t_s"].max() - df["t_s"].min())
         fc = int(df["frame_control"].mode().iloc[0])
         panels.append(dict(
             agent=agent, t=sub["t_s"].to_numpy(), amp_db=amplitude_db(H), idx=idx_all[use],
+            raw_db=amplitude_db(H_raw), static_db=static_db,
             lo=lo, span=span, bw=bw, eff_bw=effective_bandwidth_mhz(span, bw, raw_slots),
             rate=(len(df) - 1) / max(dur, 1e-9), frame=FRAME_TYPES.get(fc, f"0x{fc:02x}"),
             shape_db=float(np.ptp(static_db))))
@@ -72,6 +105,8 @@ def main() -> int:
     plt.rcParams.update({"font.size": 8, "axes.edgecolor": GRID, "axes.labelcolor": TEXT,
                          "xtick.color": TEXT2, "ytick.color": TEXT2, "text.color": TEXT})
     n = len(panels)
+    if args.style == "lines":
+        return lines_figure(panels, out, args.n_lines)
     fig = plt.figure(figsize=(4.6 * n + 1.0, 3.1))
     gs = fig.add_gridspec(1, n + 1, width_ratios=[1.0] * n + [0.05], wspace=0.24,
                           left=0.07, right=0.93, top=0.80, bottom=0.17)
