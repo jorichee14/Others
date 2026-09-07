@@ -505,10 +505,10 @@ def main() -> int:
     if placed:
         # RSSI by default: it is the receiver's own measurement of the frame and
         # survives whatever the CSI is doing. K only once the tests pass.
-        col, label = (("rssi_dbm", "RSSI of the agent's frames at the CSI receiver [dBm]")
-                      if args.map_metric == "rssi" else ("k_factor_db", "Rician K [dB]"))
+        metric, label = (("rssi_dbm", "RSSI of the agent's frames at the CSI receiver [dBm]")
+                         if args.map_metric == "rssi" else ("k_factor_db", "Rician K [dB]"))
         cmap = matplotlib.colors.LinearSegmentedColormap.from_list("k", K_RAMP)
-        kv = fr[fr["agent"].isin(placed)][col]
+        kv = fr[fr["agent"].isin(placed)][metric]
         v_lo, v_hi = np.percentile(kv, [5, 95])
         norm = matplotlib.colors.Normalize(v_lo, v_hi)
         fig = plt.figure(figsize=(4.0 * len(placed) + 1.2, 4.4))
@@ -519,7 +519,7 @@ def main() -> int:
             ax = fig.add_subplot(gs[0, i])
             g = fr[fr["agent"] == a]
             n = max(int(args.smooth_s * len(g) / max(g["t_s"].max() - g["t_s"].min(), 1e-9)), 1)
-            kdb = g[col].rolling(n, center=True, min_periods=1).median().to_numpy()
+            kdb = g[metric].rolling(n, center=True, min_periods=1).median().to_numpy()
             pt, pxy = poses[a]
             o = np.argsort(pt)
             tq = g["t_s"].to_numpy() * 1e9 + t0_ns
