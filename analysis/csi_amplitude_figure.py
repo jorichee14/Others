@@ -89,9 +89,10 @@ def main() -> int:
                        extent=[p["t"][0], p["t"][-1], p["lo"] - 0.5, p["lo"] + p["span"] - 0.5])
         ax.set_xlabel("time in run [s]")
         ax.set_ylabel("FFT slot (subcarrier)" if i == 0 else "")
-        ax.set_title(f"({chr(97 + i)}) {p['agent']}: {p['frame']} frames at {p['rate']:.0f} Hz\n"
+        ax.set_title(f"({chr(97 + i)}) {p['agent']}: {p['frame']} frames at {p['rate']:.0f} Hz, "
+                     f"{len(p['idx'])} subcarriers\n"
                      f"{p['eff_bw']:.0f} MHz occupied of a {p['bw']} MHz capture, "
-                     f"{len(p['idx'])} subcarriers, receiver shape of {p['shape_db']:.0f} dB removed",
+                     f"receiver shape of {p['shape_db']:.0f} dB removed",
                      loc="left", fontsize=8)
     cax = fig.add_subplot(gs[0, n])
     cb = fig.colorbar(im, cax=cax)
