@@ -249,7 +249,13 @@ def data_card(per_agent: dict, csi: dict, mbins, still_mps: float, moving_mps: f
         seq = df["seq"].to_numpy().astype(int)
         gaps = np.diff(seq) % 4096
         lost = int((gaps[gaps > 0] - 1).sum())
+        raw_db = 20 * np.log10(p["absH_raw"] + 1e-12)          # 20*log10 of the chip's integers
+        depth = raw_db.max(axis=1) - raw_db.min(axis=1)           # strongest minus weakest subcarrier
         row = {"agent": agent, "packets": len(df),
+               "raw_amp_db_p5": round(float(np.percentile(raw_db, 5)), 1),
+               "raw_amp_db_median": round(float(np.median(raw_db)), 1),
+               "raw_amp_db_p95": round(float(np.percentile(raw_db, 95)), 1),
+               "in_frame_fade_depth_db_median": round(float(np.median(depth)), 1),
                "interval_median_ms": round(float(np.median(dt_ms)), 2),
                "interval_p95_ms": round(float(np.percentile(dt_ms, 95)), 2),
                "packets_lost_pct": round(100 * lost / max(lost + len(df), 1), 2),
@@ -367,6 +373,7 @@ def main() -> int:
         # slots the firmware reports at a fixed level -- is removed before any
         # metric runs. It is not the room and does not move with the robot, but
         # it is often 20 dB deep and would otherwise dominate everything below.
+        absH_raw = np.abs(H)                      # the chip's integers, before any correction
         H, static_db = equalise_static(H)
         static_ptp = float(np.ptp(static_db))
         # tap spacing follows the bandwidth the frames OCCUPY, not the one the
@@ -395,6 +402,7 @@ def main() -> int:
             "profile_structure_db": struct_db,
         }))
         per_agent[agent] = dict(t=sub["t_s"].to_numpy(), amp_db=amp_db, idx=idx, absH=np.abs(H),
+                                absH_raw=absH_raw,
                                 attribution=attribution,
                                 band_lo=draw_lo, band_span=draw_span, static_ptp=static_ptp,
                                 bw=bw, eff_bw=eff_bw, dt_ns=dt_s * 1e9,
@@ -721,7 +729,9 @@ def main() -> int:
         md += ["> Motion test not run: no ground-truth pose topic matched "
                f"`*{args.pose_topic}.parquet` for any CSI agent.", ""]
     md += ["## Data card: the values CSI datasets report", "",
-           "Capture regularity, loss from sequence gaps, RSSI range, amplitude stability while "
+           "The raw amplitude scale (20·log10 of the chip's integers, gain control in, so comparable "
+           "only within one radio type), the depth of fading within a frame (strongest minus weakest "
+           "subcarrier), capture regularity, loss from sequence gaps, RSSI range, amplitude stability while "
            "still (per-subcarrier standard deviation over mean; the fingerprinting literature "
            "quotes the share of subcarriers under 10%), and the separability of still from "
            "moving seconds using the CSI alone (probability a moving second shows more change "
