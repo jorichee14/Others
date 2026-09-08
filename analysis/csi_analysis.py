@@ -175,6 +175,7 @@ def motion_test(per_agent: dict, poses: dict, t0_ns: int, lag_s: float,
             continue
         b = pd.DataFrame({"agent": agent, "t_s": tm[ins],
                           "change": 1.0 - r[ins], "speed_mps": np.interp(tq[ins], tv, v)})
+        p["speed_mps"] = np.interp(t * 1e9 + t0_ns, tv, v)   # per frame, for the data card
         b["bin"] = np.floor(b["t_s"] / bin_s)
         g = b.groupby("bin").agg(t_s=("t_s", "median"), change=("change", "median"),
                                  speed_mps=("speed_mps", "median")).reset_index(drop=True)
@@ -227,6 +228,51 @@ def change_attribution(t_s: np.ndarray, rssi: np.ndarray, absH: np.ndarray):
     tab, cnt = tab.reindex(order), cnt.reindex(order)
     out = tab.round(2).astype(str) + "  (n=" + cnt.fillna(0).astype(int).astype(str) + ")"
     return out.where(cnt > 20, "-")
+
+
+def data_card(per_agent: dict, csi: dict, mbins, still_mps: float, moving_mps: float):
+    """The numbers CSI dataset papers state about their CSI, one row per agent.
+
+    Capture regularity (inter-packet interval), packets lost (from 802.11
+    sequence gaps), the RSSI range, amplitude stability while the robot is
+    still (the standard deviation of each subcarrier across frames, as a
+    fraction of its mean -- the fingerprinting papers' "90% of subcarriers
+    under 10%"), and one downstream-task score: how separable still and moving
+    seconds are from the CSI alone, as the probability that a moving second
+    shows more change than a still one (a rank statistic, no threshold to
+    tune). None of it is a channel parameter, and that is the point: these are
+    the values other datasets report and can be compared against."""
+    rows = []
+    for agent, p in sorted(per_agent.items()):
+        df = csi[agent].sort_values("log_time_ns")
+        dt_ms = np.diff(df["log_time_ns"].to_numpy()) / 1e6
+        seq = df["seq"].to_numpy().astype(int)
+        gaps = np.diff(seq) % 4096
+        lost = int((gaps[gaps > 0] - 1).sum())
+        row = {"agent": agent, "packets": len(df),
+               "interval_median_ms": round(float(np.median(dt_ms)), 2),
+               "interval_p95_ms": round(float(np.percentile(dt_ms, 95)), 2),
+               "packets_lost_pct": round(100 * lost / max(lost + len(df), 1), 2),
+               "rssi_p5_dbm": float(df["rssi"].quantile(0.05)),
+               "rssi_median_dbm": float(df["rssi"].median()),
+               "rssi_p95_dbm": float(df["rssi"].quantile(0.95))}
+        if "speed_mps" in p:
+            still = p["speed_mps"] < still_mps
+            if still.sum() >= 50:
+                A = p["absH"][still]
+                cv = A.std(axis=0) / np.maximum(A.mean(axis=0), 1e-12)
+                row["still_frames"] = int(still.sum())
+                row["still_amp_cv_median"] = round(float(np.median(cv)), 3)
+                row["still_subcarriers_under_10pct"] = round(float(100 * np.mean(cv < 0.10)), 1)
+        if mbins is not None:
+            g = mbins[mbins["agent"] == agent]
+            a = g[g["speed_mps"] < still_mps]["change"].to_numpy()
+            b = g[g["speed_mps"] > moving_mps]["change"].to_numpy()
+            if len(a) >= 3 and len(b) >= 3:
+                auc = float((b[:, None] > a[None, :]).mean())
+                row["still_vs_moving_auc"] = round(auc, 3)
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def main() -> int:
@@ -591,6 +637,10 @@ def main() -> int:
         fig.savefig(out / "fig_csi_motion.png", dpi=200, bbox_inches="tight")
         plt.close(fig)
 
+    # ---- data card: the values CSI datasets report --------------------------------
+    card = data_card(per_agent, csi, mbins, args.still_mps, args.moving_mps)
+    card.to_csv(out / "csi_datacard.csv", index=False)
+
     # ---- markdown ----------------------------------------------------------------
     coarse = inventory[inventory["occupied_bandwidth_mhz"] <= 25]
     nulls = inventory[inventory["nulls_dropped"] > 0]
@@ -670,6 +720,13 @@ def main() -> int:
     else:
         md += ["> Motion test not run: no ground-truth pose topic matched "
                f"`*{args.pose_topic}.parquet` for any CSI agent.", ""]
+    md += ["## Data card: the values CSI datasets report", "",
+           "Capture regularity, loss from sequence gaps, RSSI range, amplitude stability while "
+           "still (per-subcarrier standard deviation over mean; the fingerprinting literature "
+           "quotes the share of subcarriers under 10%), and the separability of still from "
+           "moving seconds using the CSI alone (probability a moving second shows more change "
+           "than a still one; 0.5 is chance).", "",
+           card.to_markdown(index=False), ""]
     md += ["## Transmitters measured", "",
            "CSI is captured from whatever frames the radio receives, so the source MAC says whose "
            "channel is being measured. Frames from the access point measure the agent→AP path; "
@@ -738,6 +795,8 @@ automatic gain control, so both quantities are ratios and independent of it.{coa
         print(f"  {a}")
         print("    " + tab.to_string().replace("\n", "\n    "))
     print("  a channel: falls with the gap, indifferent to RSSI.  a receiver artefact: falls when RSSI changed, whatever the gap.")
+    print("\ndata card: the values CSI datasets report")
+    print(card.to_string(index=False))
     print("\nmotion test: does the channel follow the robot?")
     if motion is not None:
         print(motion[["agent", "lag_frames", "spearman_rho", "change_still", "change_moving",

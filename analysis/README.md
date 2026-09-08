@@ -167,6 +167,7 @@ Outputs in `results/coop2/csi/`:
 | `fig_csi_amplitude.{pdf,png}` | from `csi_amplitude_figure.py --run coop2`: the two heat maps alone, for a run whose channel cannot be attributed to the robots |
 | `fig_csi_lines.{pdf,png}` | from `csi_amplitude_figure.py --run coop2 --style lines`: the Intel-5300 style view, sampled frames' \|H\| across subcarriers overlaid per agent on an absolute dBm axis restored from each frame's RSSI, run median bold |
 | `fig_csi_map.{pdf,png}` | the trajectories coloured by the RSSI of each agent's frames at the CSI receiver (uplink, 180 Hz) — the same layout as the Wi-Fi coverage map; `--map-metric k` colours by Rician K instead, for runs that pass the motion test |
+| `csi_datacard.csv` | the values CSI dataset papers report: inter-packet interval, loss from sequence gaps, RSSI range, amplitude stability while still, still-vs-moving separability (AUC) |
 | `csi_motion_test.csv`, `csi_motion_bins.csv`, `fig_csi_motion.{pdf,png}` | the motion test: verdict per agent, the 1 s bins behind it, and change rate against speed |
 
 ## Export in MM-Fi's layout
