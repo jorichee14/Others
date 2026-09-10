@@ -35,7 +35,7 @@ from csi_core import (amplitude_db, band_mask, band_outliers,  # noqa: E402
                       usable_subcarriers)
 
 
-def lines_figure(panels, out: Path, n_lines: int) -> int:
+def lines_figure(panels, out: Path, n_lines: int, scale: str = "dbm") -> int:
     """Every sampled frame's |H| across subcarriers, overlaid, one colour per agent.
 
     The y axis is absolute, in dBm per subcarrier, by the same trick the Intel
@@ -47,14 +47,16 @@ def lines_figure(panels, out: Path, n_lines: int) -> int:
     fig, ax = plt.subplots(figsize=(5.2, 3.4))
     fig.subplots_adjust(left=0.13, right=0.97, top=0.9, bottom=0.16)
     for p in panels:
-        A = p["abs_db"]
+        A = {"dbm": p["abs_db"], "db": p["raw_db"], "linear": p["lin"]}[scale]
         pick = np.linspace(0, A.shape[0] - 1, min(n_lines, A.shape[0])).astype(int)
         c = color_for(p["agent"])
         ax.plot(p["idx"], A[pick].T, color=c, lw=0.4, alpha=0.08)
         ax.plot(p["idx"], np.median(A, axis=0), color=c, lw=1.8,
                 label=f"{p['agent']}  ({p['frame']}, {len(pick)} of {A.shape[0]} frames)")
     ax.set_xlabel("FFT slot (subcarrier)")
-    ax.set_ylabel("amplitude per subcarrier [dBm], scaled to frame RSSI")
+    ax.set_ylabel({"dbm": "amplitude per subcarrier [dBm], scaled to frame RSSI",
+                   "db": "|H| relative to frame median [dB]",
+                   "linear": "|H| / frame median (linear)"}[scale])
     ax.set_title("CSI amplitude per frame; bold = run median",
                  loc="left", fontsize=8)
     ax.legend(frameon=False, fontsize=7, loc="lower center")
@@ -79,6 +81,11 @@ def main() -> int:
     ap.add_argument("--band-gap", type=int, default=12)
     ap.add_argument("--style", choices=["heatmap", "lines"], default="heatmap")
     ap.add_argument("--n-lines", type=int, default=400, help="frames overlaid in --style lines")
+    ap.add_argument("--scale", choices=["dbm", "db", "linear"], default="dbm",
+                    help="y axis of --style lines. dbm: absolute, restored from each frame's RSSI. "
+                         "db: relative to the frame's median. linear: |H| over the frame's median, "
+                         "the live-viewer style; it hides the depth of the fades, so it is for a "
+                         "quick look, not for a channel figure")
     args = ap.parse_args()
 
     extracts = args.extracts or Path("extracts") / args.run
@@ -113,6 +120,7 @@ def main() -> int:
         panels.append(dict(
             agent=agent, t=sub["t_s"].to_numpy(), amp_db=amplitude_db(H), idx=idx_all[use],
             raw_db=amplitude_db(H_raw), static_db=static_db,
+            lin=np.abs(H_raw) / np.median(np.abs(H_raw), axis=1, keepdims=True),
             abs_db=(20 * np.log10(np.abs(H_raw) + 1e-12)
                     - 10 * np.log10(np.maximum((np.abs(H_raw) ** 2).mean(axis=1, keepdims=True), 1e-24))
                     + sub["rssi"].to_numpy(float)[:, None]),
@@ -124,7 +132,7 @@ def main() -> int:
                          "xtick.color": TEXT2, "ytick.color": TEXT2, "text.color": TEXT})
     n = len(panels)
     if args.style == "lines":
-        return lines_figure(panels, out, args.n_lines)
+        return lines_figure(panels, out, args.n_lines, args.scale)
     fig = plt.figure(figsize=(4.6 * n + 1.0, 3.1))
     gs = fig.add_gridspec(1, n + 1, width_ratios=[1.0] * n + [0.05], wspace=0.24,
                           left=0.07, right=0.93, top=0.80, bottom=0.17)
