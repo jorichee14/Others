@@ -307,6 +307,9 @@ def main() -> int:
                     help="what colours the trajectory on the map. rssi: the strength of the "
                          "agent's frames at the CSI receiver, valid whatever state the CSI is "
                          "in. k: Rician K, only meaningful once the motion test passes")
+    ap.add_argument("--frames", choices=["all", "blockack", "data"], default="all",
+                    help="keep only Block Acks (seq == 65535, 20 MHz) or only data frames; the two "
+                         "PPDU types have different bandwidth and gain and must not be mixed")
     ap.add_argument("--min-coherence", type=float, default=0.5,
                     help="frame-to-frame |H| correlation below which the stream is not a channel")
     args = ap.parse_args()
@@ -331,6 +334,16 @@ def main() -> int:
     per_agent = {}
     for agent in sorted(csi):
         df = csi[agent].sort_values("log_time_ns").reset_index(drop=True)
+        # Block Acks carry seq 65535 (SURVEY_NOTES 7.1); everything else is a data frame
+        is_ba = df["seq"].to_numpy().astype(int) == 65535
+        print(f"{agent}: {len(df)} frames, {int(is_ba.sum())} Block Acks, {int((~is_ba).sum())} data")
+        if args.frames == "blockack":
+            df = df[is_ba].reset_index(drop=True)
+        elif args.frames == "data":
+            df = df[~is_ba].reset_index(drop=True)
+        if len(df) < 10:
+            print(f"  skipped: fewer than 10 {args.frames} frames")
+            continue
         df["t_s"] = (df["log_time_ns"] - t0_ns) / 1e9
         dur = float(df["t_s"].max() - df["t_s"].min())
         bw = int(df["bandwidth_mhz"].mode().iloc[0])
@@ -433,6 +446,8 @@ def main() -> int:
             "frames_used": len(sub),
         })
 
+    if not per_agent:
+        raise SystemExit(f"no agent has enough {args.frames} frames; try --frames all")
     inventory = pd.DataFrame(inv_rows)
     transmitters = pd.DataFrame(tx_rows).sort_values(["agent", "frames"], ascending=[True, False])
     fr = pd.concat(frames, ignore_index=True)
