@@ -19,6 +19,12 @@ def _dbl(name: str) -> ParameterValue:
 def generate_launch_description() -> LaunchDescription:
     args = [
         DeclareLaunchArgument(
+            "namespace",
+            default_value="",
+            description="Namespace for this agent's topics, e.g. mobile_1, "
+            "mobile_2, infra_1. Empty = no namespace.",
+        ),
+        DeclareLaunchArgument(
             "target", default_value="192.168.233.142",
             description="Host to ping (usually the iperf3 server).",
         ),
@@ -33,6 +39,7 @@ def generate_launch_description() -> LaunchDescription:
 
     node = Node(
         package="comms",
+        namespace=LaunchConfiguration("namespace"),
         executable="ping_monitor_node",
         name="ping_monitor",
         output="screen",

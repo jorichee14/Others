@@ -20,6 +20,12 @@ def _dbl(name: str) -> ParameterValue:
 def generate_launch_description() -> LaunchDescription:
     args = [
         DeclareLaunchArgument(
+            "namespace",
+            default_value="",
+            description="Namespace for this agent's topics, e.g. mobile_1, "
+            "mobile_2, infra_1. Empty = no namespace.",
+        ),
+        DeclareLaunchArgument(
             "interface",
             default_value="",
             description="Wireless interface (empty = auto-detect first).",
@@ -49,6 +55,7 @@ def generate_launch_description() -> LaunchDescription:
 
     node = Node(
         package="comms",
+        namespace=LaunchConfiguration("namespace"),
         executable="wifi_monitor_node",
         name="wifi_monitor",
         output="screen",

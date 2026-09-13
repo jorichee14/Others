@@ -26,6 +26,13 @@ def generate_launch_description():
         default_value="1.0",
         description="Publish rate in Hz",
     )
+    namespace_arg = DeclareLaunchArgument(
+        "namespace",
+        default_value="",
+        description="Namespace for this agent's NTP topics, e.g. mobile_1, "
+        "mobile_2, infra_1. The node's topics are relative, so this gives "
+        "/mobile_2/ntp/client/status. Empty = /ntp/client/status.",
+    )
     count_clients_arg = DeclareLaunchArgument(
         "count_clients",
         default_value="true",
@@ -40,6 +47,7 @@ def generate_launch_description():
         package="comms",
         executable="ntp_client_node",
         name="ntp_client_node",
+        namespace=LaunchConfiguration("namespace"),
         parameters=[
             {"publish_rate": rate},
         ],
@@ -50,6 +58,7 @@ def generate_launch_description():
         package="comms",
         executable="ntp_server_node",
         name="ntp_server_node",
+        namespace=LaunchConfiguration("namespace"),
         parameters=[
             {"publish_rate": rate},
             {"count_clients": count_clients},
@@ -70,6 +79,7 @@ def generate_launch_description():
             mode_arg,
             rate_arg,
             count_clients_arg,
+            namespace_arg,
             OpaqueFunction(function=select_nodes),
         ]
     )

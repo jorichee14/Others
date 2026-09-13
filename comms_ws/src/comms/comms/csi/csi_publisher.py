@@ -41,6 +41,13 @@ class CsiPublisher(Node):
         self.declare_parameter("arm_attempts", 5)
         self.declare_parameter("trim", True)           # drop constant fields + DC
         self.declare_parameter("calib_frames", 300)    # batch size for finding them
+        # One topic per filtered transmitter. Comma-separated, positional against
+        # mac_filter: "mobile_1/csi,mobile_2/csi". A name WITHOUT a leading slash
+        # is relative to this node's namespace, so a capture node launched with
+        # namespace:=infra_1 publishes /infra_1/mobile_1/csi -- infra_1's view of
+        # mobile_1's channel. With a leading slash the name is used as given.
+        # Empty falls back to mobile1/csi, mobile2/csi ... by position.
+        self.declare_parameter("mac_topics", "")
         self.declare_parameter("frame_id", "wlan0")
         self.declare_parameter("status_period", 2.0)
 
@@ -67,10 +74,15 @@ class CsiPublisher(Node):
         # mac_filter, so each mobile can be subscribed or bagged on its own.
         # The combined ~/csi stream is still published for anything that wants
         # every frame in arrival order.
-        self.pub_by_mac = {
-            mac: self.create_publisher(CsiFrame, f"/mobile{i}/csi", qos)
-            for i, mac in enumerate(self.mac_list, start=1)
-        }
+        names = [t.strip() for t in g("mac_topics").split(",") if t.strip()]
+        self.pub_by_mac = {}
+        for i, mac in enumerate(self.mac_list, start=1):
+            topic = names[i - 1] if i <= len(names) else f"mobile{i}/csi"
+            self.pub_by_mac[mac] = self.create_publisher(CsiFrame, topic, qos)
+        if names and len(names) != len(self.mac_list):
+            self.get_logger().warn(
+                f"mac_topics has {len(names)} names for {len(self.mac_list)} MACs; "
+                "the rest fall back to mobileN/csi")
 
         self.n_frames = 0
         self.n_dropped = 0

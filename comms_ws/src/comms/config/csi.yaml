@@ -11,6 +11,12 @@
     # debugging, useless for data: mixed transmitters use different
     # bandwidths and the profile smears.
     mac_filter: "88:76:b9:ea:e0:ff,88:76:b9:ea:e1:01"
+    # One topic per MAC above, positional. No leading slash = relative to this
+    # node's namespace, so `csi.launch.py namespace:=infra_1` publishes
+    # /infra_1/mobile_1/csi and /infra_1/mobile_2/csi: infra_1's view of each
+    # robot's channel. Use a leading slash to pin absolute names instead.
+    # Empty falls back to mobile1/csi, mobile2/csi by position.
+    mac_topics: "mobile_1/csi,mobile_2/csi"
     core_mask: 1
     nss_mask: 1
     # -b filters on the frame's FIRST BYTE, not the MAC. 0x88 = QoS Data. On a

@@ -6,8 +6,8 @@ ROS 2 Humble node — publishes NTP client metrics for rosbag / distributed
 sensor network alignment.
 
 Topics published
-  /ntp/client/status   (comms_msgs/NtpStatus)  10 Hz default
-  /ntp/events          (std_msgs/String)              on clock-step only
+  <ns>/ntp/client/status   (comms_msgs/NtpStatus)  10 Hz default
+  <ns>/ntp/events          (std_msgs/String)              on clock-step only
 
 Parameters
   publish_rate   Hz for the fast publish timer  (default 10.0)
@@ -32,8 +32,11 @@ def _now(node: Node):
 
 class NtpClientNode(Node):
 
-    TOPIC = "/ntp/client/status"
-    EVENT_TOPIC = "/ntp/events"
+    # RELATIVE, so `namespace:=mobile_2` gives /mobile_2/ntp/client/status.
+    # Two robots on one domain would otherwise both publish the same
+    # absolute topic and their bags could not be told apart.
+    TOPIC = "ntp/client/status"
+    EVENT_TOPIC = "ntp/events"
 
     def __init__(self):
         super().__init__("ntp_client_node")

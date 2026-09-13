@@ -30,6 +30,12 @@ def _dbl(name: str) -> ParameterValue:
 def generate_launch_description() -> LaunchDescription:
     args = [
         DeclareLaunchArgument(
+            "namespace",
+            default_value="",
+            description="Namespace for this agent's topics, e.g. mobile_1, "
+            "mobile_2, infra_1. Empty = no namespace.",
+        ),
+        DeclareLaunchArgument(
             "server_address",
             default_value="192.168.233.142",
             description="iperf3 server IP/host (the static wired laptop).",
@@ -109,6 +115,7 @@ def generate_launch_description() -> LaunchDescription:
 
     node = Node(
         package="comms",
+        namespace=LaunchConfiguration("namespace"),
         executable="iperf_runner_node",
         name="iperf_runner",
         output="screen",

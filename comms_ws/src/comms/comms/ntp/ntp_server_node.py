@@ -6,9 +6,9 @@ ROS 2 Humble node — publishes NTP server metrics for rosbag / distributed
 sensor network alignment.
 
 Topics published
-  /ntp/server/status          (comms_msgs/NtpStatus)   1 Hz default
-  /ntp/clients/<ip>/status    (comms_msgs/NtpStatus)   1 Hz, one per client
-  /ntp/events                 (std_msgs/String)               on clock-step only
+  <ns>/ntp/server/status      (comms_msgs/NtpStatus)   1 Hz default
+  <ns>/ntp/clients/<ip>/status (comms_msgs/NtpStatus)   1 Hz, one per client
+  <ns>/ntp/events             (std_msgs/String)               on clock-step only
 
 Parameters
   publish_rate    Hz  (default 1.0 — server is reference, not sensor-aligned)
@@ -50,8 +50,8 @@ def _topic_token(name: str) -> str:
 
 class NtpServerNode(Node):
 
-    TOPIC       = "/ntp/server/status"
-    EVENT_TOPIC = "/ntp/events"
+    TOPIC       = "ntp/server/status"
+    EVENT_TOPIC = "ntp/events"
 
     def __init__(self):
         super().__init__("ntp_server_node")
@@ -116,7 +116,7 @@ class NtpServerNode(Node):
         """
         for client in parse_chronyc_clients():
             ip    = client["ip"]
-            topic = f"/ntp/clients/{_topic_token(ip)}/status"
+            topic = f"ntp/clients/{_topic_token(ip)}/status"
 
             if ip not in self._client_pubs:
                 self._client_pubs[ip] = self.create_publisher(

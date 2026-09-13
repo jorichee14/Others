@@ -1,14 +1,28 @@
-/ntp/client/status:
-  reliability: reliable
-  durability: transient_local
-/ntp/server/status:
-  reliability: reliable
-  durability: transient_local
-/ntp/events:
-  reliability: reliable
-  durability: transient_local
-# Per-client topics from server node follow the same QoS.
-# Add entries here if rosbag2 complains about specific IPs, e.g.:
-# /ntp/clients/192_168_1_10/status:
-#   reliability: reliable
-#   durability: transient_local
+# rosbag2 needs the publisher's QoS for TRANSIENT_LOCAL topics, and the keys
+# are EXACT topic names, so every namespace needs its own entry. The NTP nodes
+# publish relative topics now, so a node launched with namespace:=mobile_2
+# publishes /mobile_2/ntp/client/status.
+#
+# Unnamespaced (namespace:="")
+/ntp/client/status:   {reliability: reliable, durability: transient_local}
+/ntp/server/status:   {reliability: reliable, durability: transient_local}
+/ntp/events:          {reliability: reliable, durability: transient_local}
+
+# mobile_1 -- the NTP server
+/mobile_1/ntp/server/status: {reliability: reliable, durability: transient_local}
+/mobile_1/ntp/client/status: {reliability: reliable, durability: transient_local}
+/mobile_1/ntp/events:        {reliability: reliable, durability: transient_local}
+
+# mobile_2
+/mobile_2/ntp/client/status: {reliability: reliable, durability: transient_local}
+/mobile_2/ntp/events:        {reliability: reliable, durability: transient_local}
+
+# infra_1
+/infra_1/ntp/client/status:  {reliability: reliable, durability: transient_local}
+/infra_1/ntp/events:         {reliability: reliable, durability: transient_local}
+
+# Per-client topics from the server node are named after the client's address
+# or hostname, sanitised for ROS: 192.168.25.31 -> ip_192_168_25_31,
+# wicoms-robot1 -> wicoms_robot1. Add the ones you record, e.g.:
+# /mobile_1/ntp/clients/ip_192_168_25_31/status:
+#   {reliability: reliable, durability: transient_local}

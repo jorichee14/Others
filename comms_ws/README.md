@@ -86,18 +86,38 @@ ros2 run comms csi_monitor
 
 ## Recording a survey
 
-`/ntp/client/status` is TRANSIENT_LOCAL, so rosbag2 needs the QoS override:
+Every node takes `namespace:=`, and all topics are relative, so one agent's
+streams sit under one prefix:
+
+```bash
+ros2 launch comms ntp_monitor.launch.py  mode:=client namespace:=mobile_2
+ros2 launch comms wifi_monitor.launch.py namespace:=mobile_2
+ros2 launch comms iperf_runner.launch.py namespace:=mobile_2 server_address:=192.168.51.11
+ros2 launch comms ping_monitor.launch.py namespace:=mobile_2 server_address:=192.168.51.11
+ros2 launch comms csi.launch.py          namespace:=infra_1
+```
+
+giving `/mobile_2/ntp/client/status`, `/mobile_2/wifi/status`,
+`/mobile_2/wifi/iperf`, `/mobile_2/wifi/ping`, and for CSI the per-transmitter
+topics named in `mac_topics` (`/infra_1/mobile_1/csi`, `/infra_1/mobile_2/csi`).
+
+The NTP topics used to be absolute, so `namespace:=` did nothing and two robots
+on one domain published the same topic.
+
+`ntp/client/status` is TRANSIENT_LOCAL, so rosbag2 needs the QoS override, and
+its keys are exact topic names -- add an entry per namespace:
 
 ```bash
 ros2 bag record --qos-profile-overrides-path \
     src/comms/config/rosbag_qos_override.yaml \
-    /wifi/status /wifi/iperf /ntp/client/status /tf /tf_static /odom
+    /mobile_2/wifi/status /mobile_2/wifi/iperf /mobile_2/wifi/ping \
+    /mobile_2/ntp/client/status /tf /tf_static /odom
 ```
 
 Then correct the timestamps offline:
 
 ```bash
-python3 src/comms/scripts/ntp_bag_postprocess.py ./bag /wifi/iperf /ntp/client/status
+python3 src/comms/scripts/ntp_bag_postprocess.py ./bag /mobile_2/wifi/iperf /mobile_2/ntp/client/status
 ```
 
 ## Tests

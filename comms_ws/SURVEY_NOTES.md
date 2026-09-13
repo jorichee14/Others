@@ -190,7 +190,7 @@ document it as invalid.
 | `/wifi/iperf` continuous | 1 Hz | 1 m |
 | `/wifi/ping` | 1 Hz | 1 m |
 | `/wifi/iperf` periodic | ~0.09 Hz | 11 m |
-| `/ntp/client/status` | 10 Hz | — |
+| `<ns>/ntp/client/status` | 10 Hz | — |
 
 Throughput is the bottleneck by two orders of magnitude, not CSI. Periodic
 mode is stationary-only for this reason.
@@ -247,7 +247,9 @@ Publish raw with full `subcarrier_index` and reject by magnitude offline.
     trim: false
 ```
 
-MACs map to topics by list position: `/mobile1/csi`, `/mobile2/csi`.
+MACs map to topics by list position through `mac_topics`, which defaults to
+`mobile_1/csi,mobile_2/csi`. Relative, so `namespace:=infra_1` gives
+`/infra_1/mobile_1/csi` -- infra_1's view of mobile_1's channel.
 
 ---
 
@@ -262,10 +264,10 @@ Requirements:
 - Both robots on VHT, or their CSI isn't comparable
 - Both publishing `/ntp/client/status`, or the two bags can't be aligned
 
-`ntp_client_node` publishes to the **absolute** topic `/ntp/client/status`, so
-`namespace:=` does not separate them. Either drop the leading slash in the
-node's `TOPIC` constant, or use separate `ROS_DOMAIN_ID` per robot (which also
-keeps DDS discovery off the link being measured).
+**Fixed 13 Sep.** The NTP topics are relative now, so `namespace:=mobile_2`
+gives `/mobile_2/ntp/client/status` and the two robots no longer collide. A
+separate `ROS_DOMAIN_ID` per robot is still worth using, because it keeps DDS
+discovery traffic off the link being measured.
 
 Note bidirectional mode makes contention messy: the two robots flip direction
 independently, so up/up, up/down and down/down all get averaged together. For

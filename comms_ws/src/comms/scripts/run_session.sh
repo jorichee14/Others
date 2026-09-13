@@ -77,8 +77,8 @@ esac
 # single server serves one test at a time, and the second client queueing
 # behind the first would look like contention without being it.
 case "${ROBOT}" in
-    mobile_1) IFACE="wlx8876b9eae0ff"; PORT=5201; BURST_PORT=5600; CSI="/mobile1/csi" ;;
-    mobile_2) IFACE="wlx8876b9eae101"; PORT=5203; BURST_PORT=5601; CSI="/mobile2/csi" ;;
+    mobile_1) IFACE="wlx8876b9eae0ff"; PORT=5201; BURST_PORT=5600; CSI="/mobile_1/csi" ;;
+    mobile_2) IFACE="wlx8876b9eae101"; PORT=5203; BURST_PORT=5601; CSI="/mobile_2/csi" ;;
     *) echo "error: unknown robot '${ROBOT}'" >&2; exit 1 ;;
 esac
 
@@ -98,7 +98,7 @@ TOPICS=(
     "/${ROBOT}/wifi/iperf_down"
     "/${ROBOT}/wifi/ping"
     "/${ROBOT}/wifi/burst"
-    "/ntp/client/status"
+    "/${ROBOT}/ntp/client/status"
     "${CSI}"
     "/csi_publisher/status"
     "/tf" "/tf_static" "/odom" "/scan"
