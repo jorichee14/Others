@@ -171,7 +171,18 @@ def main() -> int:
         # step is not a measurement of this run's synchronization.
         stepped = g["clock_stepped"].astype(bool)
         t_sync = float(g.loc[stepped, "t_s"].min()) if stepped.any() else float(g["t_s"].min())
-        g["measured"] = g["t_s"] >= t_sync
+        v2 = "last_offset_seconds" in g.columns and "reference_time.sec" in g.columns
+        if v2:
+            # the v2 message carries chrony's Ref time, which changes only when a poll lands,
+            # and the offset MEASURED at that poll. One row per poll, offsets from the
+            # measurement rather than the steered estimate.
+            ref = g["reference_time.sec"].astype(np.int64) * 10**9 + g["reference_time.nanosec"].astype(np.int64)
+            g["measured"] = ref.ne(ref.shift(1, fill_value=-1))
+            g.loc[g["measured"], "offset_ms"] = g.loc[g["measured"], "last_offset_seconds"] * 1e3
+            offset_kind = "measured at each poll (chrony Last offset)"
+        else:
+            g["measured"] = g["t_s"] >= t_sync
+            offset_kind = "steered estimate (chrony System time), republished at the topic rate"
         m = g[g["measured"]]
         if len(m) == 0:
             m, t_sync = g, float(g["t_s"].min())
@@ -192,6 +203,10 @@ def main() -> int:
                 "stratum": int(g["stratum"].mode().iloc[0]),
                 "n": len(g),
                 "n_measured": int(g["measured"].sum()),
+                "offset_kind": offset_kind,
+                "skew_median_ppm": float(m["skew_ppm"].median()) if "skew_ppm" in m else np.nan,
+                "fit_samples_median": float(m["fit_samples"].median()) if "fit_samples" in m else np.nan,
+                "delay_is_upper_bound": bool(any("upper bound" in str(w) for w in warn)),
                 "polls_in_run": polls_in_run,
                 "t_sync_s": t_sync,
                 "duration_s": duration_s,
@@ -340,8 +355,12 @@ def main() -> int:
 
     # ---- 5. markdown + LaTeX -----------------------------------------------------
     md = [f"# NTP / temporal calibration — run `{args.run}`", "", "## Roles", "", roles.to_markdown(index=False), "", "## Client offset statistics (ms)", ""]
-    cols = ["agent", "hostname", "role", "sync_source", "stratum", "n", "n_measured", "polls_in_run", "offset_mean_ms", "offset_median_ms", "abs_offset_p95_ms", "abs_offset_max_ms", "delay_median_ms", "jitter_median_ms", "poll_interval_mode_s", "reach_min", "clock_steps_flagged", "clock_steps_by_delta"]
+    cols = ["agent", "hostname", "role", "sync_source", "stratum", "n", "n_measured", "polls_in_run", "offset_mean_ms", "offset_median_ms", "abs_offset_p95_ms", "abs_offset_max_ms", "delay_median_ms", "jitter_median_ms", "skew_median_ppm", "poll_interval_mode_s", "reach_min", "clock_steps_flagged", "clock_steps_by_delta"]
     md += [summary[cols].round(3).to_markdown(index=False), ""]
+    md += ["Offsets are " + "; ".join(f"`{r.agent}`: {r.offset_kind}" for r in summary.itertuples()) + ".", ""]
+    if summary["delay_is_upper_bound"].any():
+        md += ["> `delay_median_ms` is an **upper bound** (twice chrony's sources error term, which "
+               "includes upstream dispersion) where the monitor had no socket access to `chronyc ntpdata`.", ""]
     md += [
         "`n` counts status messages, which republish the daemon's current estimate at the topic rate. "
         "`n_measured` counts those from `t_sync_s` onward, the moment the daemon flagged its first result "

@@ -12,6 +12,7 @@ analysis/
 ├── ntp_issues.md           NTP basics, what went wrong in coop2, and the fixes
 ├── wifi_analysis.py        Wi-Fi link quality and dual-radio correlation
 ├── wifi_issues.md          what the Wi-Fi suite measures, coop2 findings, fixes
+├── ntp_stress.py           NTP under thermal, load, Wi-Fi and motion stress, with temperature
 ├── csi_analysis.py         Wi-Fi CSI: multipath structure of the channel
 ├── csi_amplitude_figure.py the amplitude heat maps alone, for the paper
 ├── csi_to_mmfi.py          export the CSI in MM-Fi's per-frame .mat layout
@@ -55,6 +56,32 @@ stamp minus recorder log time is transport latency plus the clock offset between
 node and the recorder. The recorder's own topics sit slightly negative; a node whose
 topics sit systematically off them has a clock offset of that size, independently of
 what the NTP monitor reports.
+
+## NTP stress test
+
+```bash
+# on each client, beside `ros2 bag record`, one file per stressor:
+./analysis/tools/ntp_side_log.sh mobile_2 thermal      # Ctrl-C when the phase ends
+# afterwards, bag + side logs in:
+python3 analysis/ntp_stress.py --run stress --bag stress.mcap --side-log 'stress/ntp_side_*.csv'
+```
+
+Joins the bag's `NtpStatus` polls (v2 layout: `last_offset_seconds`, `skew_ppm`,
+`fit_samples`, `reference_time` = chrony's Ref time; v1 bags fall back to
+changes in `offset_seconds`) with the side logs, which carry the SoC
+temperature and name the phase (`thermal`, `coldstart`, `wifiload`, `motion`,
+`idle`). Per agent and phase it reports temperature range, frequency change and
+its coefficient per degree, skew peak and settled value, the largest measured
+offset, poll count and interval, clock steps after warm-up, and a pass flag for
+each criterion (`--offset-limit-ms 1`, `--skew-limit-ppm 1`, `--poll-s 8`,
+`--warmup-s 60`). `fig_ntp_stress.png` stacks temperature, frequency, skew and
+offset per agent with the phases shaded. `tests/make_synthetic_stress.py`
+writes a run to try it on.
+
+`ntp_analysis.py` also reads the v2 fields: with them, offsets are the values
+measured at each poll and `n_measured` is the poll count; without them, they
+are chrony's steered estimate republished at the topic rate, and the summary
+says which.
 
 ## Wi-Fi link quality
 
