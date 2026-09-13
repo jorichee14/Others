@@ -158,7 +158,13 @@ def extract(
                 print(f"warning: topics not in bag: {missing}", file=sys.stderr)
         else:
             wanted = [t for t, ty in topic_type.items() if args.include_heavy or ty not in HEAVY_TYPES]
-        wanted = sorted(set(wanted))
+        # a channel whose schema was recorded empty (the message package was not
+        # sourced when the bag was written) cannot be decoded; say so and move on
+        undecodable = sorted({ch.topic for ch in channels.values() if not schemas[ch.schema_id].data})
+        skipped = [t for t in wanted if t in undecodable]
+        if skipped:
+            print(f"warning: no schema recorded, skipping: {skipped}", file=sys.stderr)
+        wanted = sorted(set(wanted) - set(undecodable))
 
         print(f"bag: {args.bag}")
         print(f"topics in bag: {len(topic_type)}; extracting {len(wanted)}")
