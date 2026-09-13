@@ -82,7 +82,10 @@ def test_chrony_delay_jitter_skew_from_the_right_commands(monkeypatch):
     m = _chrony(monkeypatch, NTPDATA_ROOT)
     assert m["delay_seconds"] == pytest.approx(0.000412345)   # ntpdata
     assert m["jitter_seconds"] == pytest.approx(0.000073)     # sourcestats
-    assert m["skew_ppm"] == pytest.approx(0.156)
+    # tracking's "Skew" (0.042), NOT sourcestats' per-source "Freq Skew"
+    # (0.156). Only the first bounds the wander of the system clock between
+    # polls, which is what the poll interval is chosen against.
+    assert m["skew_ppm"] == pytest.approx(0.042)
     assert m["fit_samples"] == 12
     assert not any("upper bound" in w for w in m["warnings"])
 
