@@ -107,3 +107,41 @@ def test_unprivileged_user_gets_bounded_delay_with_a_warning(monkeypatch):
     # everything else still arrives
     assert m["jitter_seconds"] == pytest.approx(0.000073)
     assert m["last_offset_seconds"] == pytest.approx(-0.000098765)
+
+
+# `chronyc clients` reports activity, not offsets (13 Sep: the 501 line crashed
+# the server node by becoming a topic called /ntp/clients/501/status)
+
+CLIENTS_HEADER = ("Hostname                      NTP   Drop Int IntL Last     Cmd   Drop Int  Last\n"
+                  "===============================================================================\n")
+CLIENTS_DENIED = CLIENTS_HEADER + "501 Not authorised\n"
+CLIENTS_REAL = CLIENTS_HEADER + (
+    "192.168.25.31                 120      0   3   -    5       0      0   -     -\n"
+    "wicoms-robot1                  88      0   7   -   12       0      0   -     -\n")
+
+
+def _clients(monkeypatch, out):
+    monkeypatch.setattr(p, "_run", lambda cmd: out if cmd[:2] == ["chronyc", "clients"] else "")
+
+
+def test_clients_status_line_is_not_a_client(monkeypatch):
+    _clients(monkeypatch, CLIENTS_DENIED)
+    assert p.parse_chronyc_clients() == []
+    assert p.get_connected_clients() == -1          # unknown, not zero and not one
+
+
+def test_clients_real_rows_give_activity_not_offsets(monkeypatch):
+    _clients(monkeypatch, CLIENTS_REAL)
+    c = p.parse_chronyc_clients()
+    assert [x["ip"] for x in c] == ["192.168.25.31", "wicoms-robot1"]
+    assert c[0]["poll_interval_seconds"] == 8       # Int column is log2 of the interval
+    assert c[1]["poll_interval_seconds"] == 128
+    assert c[0]["ntp_packets"] == 120 and c[0]["last_seen_seconds"] == 5
+    assert "offset_seconds" not in c[0]             # a server cannot measure it
+    assert p.get_connected_clients() == 2
+
+
+def test_clients_header_only_means_none_connected(monkeypatch):
+    _clients(monkeypatch, CLIENTS_HEADER)
+    assert p.parse_chronyc_clients() == []
+    assert p.get_connected_clients() == 0

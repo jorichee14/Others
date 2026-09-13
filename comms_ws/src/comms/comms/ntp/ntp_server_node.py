@@ -16,6 +16,7 @@ Parameters
   count_clients   bool, count connected NTP clients (default True)
 """
 
+import re
 import socket
 import time
 
@@ -35,6 +36,16 @@ from comms.ntp.ntp_parser import (
 
 def _now(node: Node):
     return node.get_clock().now().to_msg()
+
+
+def _topic_token(name: str) -> str:
+    """One ROS topic segment from an address or hostname.
+
+    A segment must match [A-Za-z_][A-Za-z0-9_]*, so dots, colons and hyphens
+    have to go and a leading digit needs a prefix: 192.168.25.31 becomes
+    ip_192_168_25_31, wicoms-robot1 becomes wicoms_robot1."""
+    t = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    return t if t[:1].isalpha() or t[:1] == "_" else "ip_" + t
 
 
 class NtpServerNode(Node):
@@ -105,8 +116,7 @@ class NtpServerNode(Node):
         """
         for client in parse_chronyc_clients():
             ip    = client["ip"]
-            safe  = ip.replace(".", "_").replace(":", "_")   # IPv4 and IPv6 safe
-            topic = f"/ntp/clients/{safe}/status"
+            topic = f"/ntp/clients/{_topic_token(ip)}/status"
 
             if ip not in self._client_pubs:
                 self._client_pubs[ip] = self.create_publisher(
@@ -114,18 +124,23 @@ class NtpServerNode(Node):
                 )
                 self.get_logger().info(f"New NTP client seen: {ip} -> {topic}")
 
+            # `chronyc clients` reports ACTIVITY, not clock error: packets,
+            # drops, the client's own poll interval and how long since it last
+            # asked. A server cannot know a client's offset, so those fields
+            # stay zero and the warning says why.
             msg = NtpStatus()
             msg.header.stamp    = _now(self)
             msg.header.frame_id = self._hostname
             msg.role            = "client_view_from_server"
             msg.hostname        = ip
-            msg.stratum         = client["stratum"]
-            msg.stratum_level   = str(client["stratum"])
-            msg.offset_seconds  = client["offset_seconds"]
-            msg.jitter_seconds  = client["jitter_seconds"]
-            msg.connected_clients = -1
-            msg.leap_indicator  = "no_warning"
-            msg.warnings        = []
+            msg.poll_interval_seconds = int(client["poll_interval_seconds"])
+            msg.connected_clients     = -1
+            msg.leap_indicator        = "no_warning"
+            msg.warnings              = [
+                f"activity only: {client['ntp_packets']} packets, "
+                f"{client['ntp_dropped']} dropped, last seen "
+                f"{client['last_seen_seconds']} s ago; a server cannot measure "
+                "a client's offset"]
             self._client_pubs[ip].publish(msg)
 
     # main publish callback

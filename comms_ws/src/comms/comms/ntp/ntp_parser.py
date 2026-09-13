@@ -275,30 +275,55 @@ def _parse_chronyc() -> Optional[dict]:
 # per-client view (server node only)
 
 def parse_chronyc_clients() -> list[dict]:
+    """One dict per machine currently polling this server, from `chronyc clients`.
+
+    What that command actually prints, per client:
+
+        Hostname            NTP   Drop Int IntL Last     Cmd   Drop Int  Last
+        192.168.25.31       120      0   7   -    5        0      0   -     -
+
+    NTP is packets received, Drop packets dropped, Int the log2 of the mean
+    polling interval that client is using, IntL the same over the last few
+    packets, Last seconds since the last packet. The remaining columns repeat
+    those for command requests.
+
+    There is NO offset or jitter here, and there cannot be: the server answers
+    requests, it never computes a client's clock error. The per-client view is
+    therefore evidence of ACTIVITY -- who is polling, how often, and how
+    recently -- not a second measurement of the offset. (An earlier version of
+    this parser read Int/IntL/Last as stratum/offset/jitter.)
+
+    Needs socket access; without it chronyc prints a "501 Not authorised"
+    status line, which is skipped rather than taken for a client called 501.
     """
-    Parse chronyc clients -v.  Returns one dict per connected client:
-      ip, stratum, offset_seconds, jitter_seconds
-    Returns [] if chronyc unavailable or no clients connected.
-    """
-    out = _run(["chronyc", "clients", "-v"])
+    out = _run(["chronyc", "clients"])
     clients = []
     for line in out.splitlines():
         parts = line.split()
-        if not parts:
+        if len(parts) < 6:
             continue
         first = parts[0]
-        # skip header / separator lines
-        if not (first[0].isdigit() or "." in first or ":" in first):
+        if re.fullmatch(r"\d{3}", first):          # a chronyc status code
             continue
-        try:
-            clients.append({
-                "ip":             first,
-                "stratum":        int(parts[3])          if len(parts) > 3 else 0,
-                "offset_seconds": float(parts[4]) / 1e9  if len(parts) > 4 else 0.0,
-                "jitter_seconds": float(parts[5]) / 1e9  if len(parts) > 5 else 0.0,
-            })
-        except (ValueError, IndexError):
+        if first.startswith("=") or first.lower() == "hostname":
             continue
+        if not (("." in first or ":" in first) or first[0].isalpha()):
+            continue
+
+        def num(tok, cast=int, default=-1):
+            try:
+                return cast(tok)
+            except ValueError:
+                return default
+
+        poll_log2 = num(parts[3])
+        clients.append({
+            "ip": first,
+            "ntp_packets": num(parts[1]),
+            "ntp_dropped": num(parts[2]),
+            "poll_interval_seconds": 2 ** poll_log2 if poll_log2 >= 0 else -1,
+            "last_seen_seconds": num(parts[5]),
+        })
     return clients
 
 

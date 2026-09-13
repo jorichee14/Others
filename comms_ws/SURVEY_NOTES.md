@@ -391,6 +391,27 @@ Tests in `test/test_ntp_parse.py` pin all of this against real chrony formats.
 The one-sample-per-run symptom was chrony's poll backoff, not the node:
 set `minpoll 3 maxpoll 3` (8 s) in `chrony.conf` on each client.
 
+## 12b. Per-client view: activity, not offsets (13 Sep)
+
+`chronyc clients` prints packets, drops, the client's own poll interval
+(`Int` is its log2) and seconds since last contact. It has **no offset or
+jitter column** -- a server answers requests, it never computes a client's
+clock error. The parser previously read `Int`/`IntL`/`Last` as
+stratum/offset/jitter, and took the `501 Not authorised` status line for a
+client called "501", which made the server node create the topic
+`/ntp/clients/501/status` and die on an invalid topic name.
+
+Now: status lines are skipped, `connected_clients` is -1 when the socket is
+not readable, topic segments are sanitised (`192.168.25.31` ->
+`ip_192_168_25_31`, `wicoms-robot1` -> `wicoms_robot1`), and the per-client
+message carries the activity counts in `warnings` with the poll interval in
+`poll_interval_seconds`. Use it to confirm both robots are polling at 8 s
+from the server's side; it is not a second measurement of the offset.
+
+`chronyc clients` and `chronyc ntpdata` both need socket access. Without it,
+delay is an upper bound and the client list is empty:
+`sudo usermod -aG _chrony $USER`, then re-login.
+
 ## 13. Open decisions
 
 1. **20 MHz or 80 MHz.** 80 recovers the VHT bandwidth loss and gives 256-slot
