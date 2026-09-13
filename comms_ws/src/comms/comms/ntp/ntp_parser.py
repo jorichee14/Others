@@ -292,8 +292,14 @@ def _parse_chronyc() -> Optional[dict]:
         try:
             metrics["jitter_seconds"]   = abs(_parse_secs(row[7]))
             metrics["fit_samples"]      = int(row[1])
-            metrics["skew_ppm"]         = float(row[5])
             metrics["fit_span_seconds"] = _parse_span(row[3])
+            # NOT skew_ppm. sourcestats' "Freq Skew" is the uncertainty of the
+            # frequency estimate for ONE source; tracking's "Skew" is the
+            # uncertainty of the frequency chrony is applying to the system
+            # clock, which is the one the wander bound needs (wander between
+            # polls = skew x poll interval). Overwriting it here replaced the
+            # system value with a per-source one that looks the same but is
+            # not: 0.061 ppm became 0.488 ppm on the server.
         except (ValueError, IndexError):
             pass
     elif rows:
