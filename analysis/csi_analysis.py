@@ -466,7 +466,8 @@ def main() -> int:
 
         inv_rows.append({
             "run": args.run, "agent": agent, "topic": df["topic"].iloc[0],
-            "frames": len(df), "rate_hz": (len(df) - 1) / max(dur, 1e-9), "duration_s": dur,
+            "frames": len(df), "frames_analysed": len(sub),
+            "rate_hz": (len(df) - 1) / max(dur, 1e-9), "duration_s": dur,
             "channel": int(df["channel"].mode().iloc[0]),
             "capture_bandwidth_mhz": bw,
             "occupied_bandwidth_mhz": round(eff_bw, 2),
@@ -844,7 +845,7 @@ automatic gain control, so both quantities are ratios and independent of it.{coa
 """
     (out / "csi_subsection.tex").write_text(tex)
 
-    print(inventory[["agent", "frames", "rate_hz", "capture_bandwidth_mhz",
+    print(inventory[["agent", "frames", "frames_analysed", "rate_hz", "capture_bandwidth_mhz",
                      "occupied_bandwidth_mhz", "occupied_slots", "subcarriers_usable",
                      "static_shape_ptp_db", "temporal_coherence", "profile_structure_median_db",
                      "frames_with_flat_profile_pct"]].round(2).to_string(index=False))
