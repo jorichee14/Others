@@ -1,0 +1,14 @@
+/ntp/client/status:
+  reliability: reliable
+  durability: transient_local
+/ntp/server/status:
+  reliability: reliable
+  durability: transient_local
+/ntp/events:
+  reliability: reliable
+  durability: transient_local
+# Per-client topics from server node follow the same QoS.
+# Add entries here if rosbag2 complains about specific IPs, e.g.:
+# /ntp/clients/192_168_1_10/status:
+#   reliability: reliable
+#   durability: transient_local

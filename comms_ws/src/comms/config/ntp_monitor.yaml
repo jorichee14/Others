@@ -1,0 +1,18 @@
+/**:
+  ros__parameters:
+    publish_rate: 10.0
+
+ntp_client_node:
+  ros__parameters:
+    # 10 Hz -- dense enough to interpolate across any sensor (LiDAR 20 Hz,
+    # camera 60 Hz, IMU 100-400 Hz). Daemon is still queried at 1 Hz internally.
+    publish_rate: 10.0
+    # hostname: my_robot   # uncomment to override auto-detection
+
+ntp_server_node:
+  ros__parameters:
+    # 1 Hz -- server is the reference, not sensor-aligned.
+    # Its offset changes very slowly (GPS/PPS disciplined).
+    publish_rate: 1.0
+    count_clients: true
+    # hostname: time_server

@@ -1,0 +1,42 @@
+# IperfResult.msg
+# One completed iperf3 measurement to a fixed server (the static, wired
+# laptop). Published per test so results can be time-joined to robot pose.
+
+std_msgs/Header header
+
+string   server_address     # iperf3 server IP/host
+uint16   server_port        # default 5201
+string   protocol           # "TCP" | "UDP"
+bool     reverse            # true => downlink (server -> robot); false => uplink
+float64  duration_s         # requested test duration
+
+bool     success            # false if iperf3 failed / server unreachable
+string   error              # error text when success is false, else ""
+
+# --- Throughput -------------------------------------------------------------
+float64  bitrate_mbps       # goodput at the receiver (Mbit/s), NaN if failed
+uint64   bytes              # total bytes transferred
+uint32   retransmits        # TCP retransmits (0 for UDP / when unreported)
+
+# --- TCP round-trip time (from the sender stats, Linux client) --------------
+# NaN when unavailable (UDP tests, or platform without RTT reporting).
+float64  rtt_ms_mean
+float64  rtt_ms_min
+float64  rtt_ms_max
+
+# --- UDP reliability (NaN / 0 for TCP tests) --------------------------------
+float64  jitter_ms
+uint64   lost_packets
+uint64   total_packets
+float64  lost_percent
+
+# --- Within-test variability (periodic mode) --------------------------------
+# iperf3 emits an interval report every second inside a test; the aggregate
+# above hides what happened within the window. A location averaging 184 Mbit/s
+# with a 144 Mbit/s second behaves very differently for deadline-constrained
+# traffic than one steady at 184. Empty in continuous mode, where every
+# message IS one interval.
+float32[] interval_mbps      # per-second goodput inside this test
+float64   bitrate_mbps_min   # min of interval_mbps (NaN if unavailable)
+float64   bitrate_mbps_max   # max of interval_mbps (NaN if unavailable)
+float64   bitrate_mbps_std   # population std of interval_mbps (NaN if <2)
