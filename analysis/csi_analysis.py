@@ -71,7 +71,7 @@ from common import (  # noqa: E402
 from csi_core import (  # noqa: E402
     amplitude_db, delay_profile, effective_bandwidth_mhz, occupied_band,
     profile_structure_db, rician_k, rms_delay_spread, temporal_coherence, frame_correlation,
-    usable_subcarriers, band_mask, band_outliers, equalise_static, equalise_by_gain,
+    usable_subcarriers, band_mask, band_outliers, equalise_static, equalise_by_gain, split_populations,
 )
 from extract_bag import extract  # noqa: E402
 
@@ -245,7 +245,7 @@ def data_card(per_agent: dict, csi: dict, mbins, still_mps: float, moving_mps: f
     the values other datasets report and can be compared against."""
     rows = []
     for agent, p in sorted(per_agent.items()):
-        df = csi[agent].sort_values("log_time_ns")
+        df = p["frames_df"]                                    # the frames that were analysed
         dt_ms = np.diff(df["log_time_ns"].to_numpy()) / 1e6
         # Block Acks carry no sequence number (the field reads 65535); loss can
         # only be counted on the frames that do, and only if that counter moves
@@ -321,6 +321,9 @@ def main() -> int:
     ap.add_argument("--frames", choices=["all", "blockack", "data"], default="all",
                     help="keep only Block Acks (seq == 65535, 20 MHz) or only data frames; the two "
                          "PPDU types have different bandwidth and gain and must not be mixed")
+    ap.add_argument("--population", choices=["all", "0", "1"], default="all",
+                    help="keep only one of the two frame populations found by shape (0 = the larger); "
+                         "see csi_populations.py")
     ap.add_argument("--equalise-by", choices=["rssi", "run"], default="rssi",
                     help="rssi: divide each frame by the receiver shape of its own gain state "
                          "(Nexmon's RSSI is the gain word); run: one shape for the whole run")
@@ -400,6 +403,18 @@ def main() -> int:
         use[use] &= ~band_outliers(H_all[:, use])
         draw_lo = int(idx_all[use].min())
         draw_span = int(idx_all[use].max() - draw_lo + 1)
+        # Two channels can take turns in one stream (a transmitter alternating
+        # antennas): each is stable, consecutive frames anti-correlate. Label
+        # the frames by shape and, if asked, keep one population.
+        pop, pop_c, pop_sep = split_populations(H_all[:, use])
+        pop_share = float((pop == 1).mean())
+        if args.population in ("0", "1"):
+            if pop_sep < 0.3:
+                print(f"{agent}: warning: populations are not distinct (separation {pop_sep:.2f}); "
+                      f"--population is cutting one channel in half")
+            m = pop == int(args.population)
+            sub, H_all, pop = sub.loc[m].reset_index(drop=True), H_all[m], pop[m]
+            print(f"{agent}: keeping population {args.population}: {int(m.sum())} of {len(m)} frames")
         H, idx = H_all[:, use], idx_all[use]
         n_sub, n_raw_cols = H.shape[1], H_all.shape[1]
         eff_bw = effective_bandwidth_mhz(band_span, bw, raw_slots)
@@ -443,7 +458,7 @@ def main() -> int:
             "profile_structure_db": struct_db,
         }))
         per_agent[agent] = dict(t=sub["t_s"].to_numpy(), amp_db=amp_db, idx=idx, absH=np.abs(H),
-                                absH_raw=absH_raw,
+                                absH_raw=absH_raw, frames_df=sub, population=pop,
                                 attribution=attribution,
                                 band_lo=draw_lo, band_span=draw_span, static_ptp=static_ptp,
                                 bw=bw, eff_bw=eff_bw, dt_ns=dt_s * 1e9,
@@ -465,6 +480,8 @@ def main() -> int:
             "trimmed_flag": bool(df["trimmed"].mode().iloc[0]),
             "static_shape_ptp_db": round(static_ptp, 1),
             "gain_state_shape_spread_db": round(float(gain_spread_db), 1),
+            "population_minority_share": round(pop_share, 3),
+            "population_separation": round(pop_sep, 2),
             "temporal_coherence": round(coh, 3),
             "profile_structure_median_db": float(np.nanmedian(struct_db)),
             "frames_with_flat_profile_pct": float(100 * np.mean(struct_db < args.min_profile_db)),

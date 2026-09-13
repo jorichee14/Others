@@ -26,21 +26,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from csi_core import band_mask, band_outliers, occupied_band, usable_subcarriers
+from csi_core import band_mask, band_outliers, occupied_band, split_populations, usable_subcarriers
 from csi_analysis import load_csi, stack_H
-
-
-def kmeans2(X: np.ndarray, iters: int = 30, seed: int = 0):
-    rng = np.random.default_rng(seed)
-    c = X[rng.choice(len(X), 2, replace=False)]
-    for _ in range(iters):
-        d = ((X[:, None, :] - c[None]) ** 2).sum(-1)
-        lab = d.argmin(1)
-        new = np.stack([X[lab == k].mean(0) if (lab == k).any() else c[k] for k in range(2)])
-        if np.allclose(new, c):
-            break
-        c = new
-    return lab, c
 
 
 def corr_rows(A: np.ndarray, B: np.ndarray) -> np.ndarray:
@@ -69,11 +56,7 @@ def main() -> int:
         use &= band_mask(idx_all, lo, span)
         use[use] &= ~band_outliers(H_all[:, use])
         A = np.abs(H_all[:, use])
-        L = 20 * np.log10(A + 1e-12)
-        L = L - L.mean(1, keepdims=True)                     # gain level out, shape kept
-        lab, cent = kmeans2(L)
-        if (lab == 0).sum() < (lab == 1).sum():              # cluster 0 = the larger one
-            lab, cent = 1 - lab, cent[::-1]
+        lab, cent, _ = split_populations(H_all[:, use])
         t = (df["log_time_ns"].to_numpy() - df["log_time_ns"].iloc[0]) / 1e9
         rssi = df["rssi"].to_numpy()
         seqcls = (df["seq"].to_numpy().astype(int) != 65535)

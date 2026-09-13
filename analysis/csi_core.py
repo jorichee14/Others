@@ -315,3 +315,35 @@ def quantise(v: np.ndarray, lo: float, hi: float, n: int = 256) -> np.ndarray:
     if hi <= lo:
         hi = lo + 1e-9
     return np.clip(((v - lo) / (hi - lo) * (n - 1)), 0, n - 1).astype(np.uint16)
+
+
+def split_populations(H: np.ndarray, iters: int = 30, seed: int = 0):
+    """Label each frame 0 or 1 by the shape of its normalised log-amplitude.
+
+    Two-means on 20log10|H| with the per-frame mean removed, so the gain level
+    plays no part. Label 0 is the larger cluster. Returns (labels, centres_db,
+    separation): separation is the median consecutive-frame correlation of |H|
+    within a cluster minus that across clusters -- near 0 for one channel that
+    k-means merely cut in half, large when two distinct channels alternate
+    (a transmitter switching antennas sends exactly that)."""
+    A = np.abs(np.atleast_2d(H)).astype(float)
+    L = 20 * np.log10(A + 1e-12)
+    L = L - L.mean(axis=1, keepdims=True)
+    rng = np.random.default_rng(seed)
+    c = L[rng.choice(len(L), 2, replace=False)]
+    lab = np.zeros(len(L), int)
+    for _ in range(iters):
+        d = ((L[:, None, :] - c[None]) ** 2).sum(-1)
+        lab = d.argmin(1)
+        new = np.stack([L[lab == k].mean(0) if (lab == k).any() else c[k] for k in range(2)])
+        if np.allclose(new, c):
+            break
+        c = new
+    if (lab == 1).sum() > (lab == 0).sum():
+        lab, c = 1 - lab, c[::-1]
+    r = frame_correlation(A, 1)
+    same = lab[:-1] == lab[1:]
+    sep = 0.0
+    if same.any() and (~same).any():
+        sep = float(np.nanmedian(r[same]) - np.nanmedian(r[~same]))
+    return lab, c, sep
