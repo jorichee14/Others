@@ -220,6 +220,7 @@ def main(out: Path) -> None:
     rng = random.Random(0)
     t0 = 1_787_899_802_217_921_000
     dur_s = 156.0
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
     with open(out, "wb") as f:
         w = Writer(f)
         ntp = w.register_msgdef("ntp_monitor_msgs/msg/NtpStatus", NTP_STATUS)
