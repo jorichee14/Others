@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import shutil
 import sys
 from pathlib import Path
 
@@ -70,7 +71,7 @@ from common import (  # noqa: E402
 from csi_core import (  # noqa: E402
     amplitude_db, delay_profile, effective_bandwidth_mhz, occupied_band,
     profile_structure_db, rician_k, rms_delay_spread, temporal_coherence, frame_correlation,
-    usable_subcarriers, band_mask, band_outliers, equalise_static,
+    usable_subcarriers, band_mask, band_outliers, equalise_static, equalise_by_gain,
 )
 from extract_bag import extract  # noqa: E402
 
@@ -249,9 +250,11 @@ def data_card(per_agent: dict, csi: dict, mbins, still_mps: float, moving_mps: f
         # Block Acks carry no sequence number (the field reads 65535); loss can
         # only be counted on the frames that do, and only if that counter moves
         seq = df["seq"].to_numpy().astype(int)
-        seq = seq[seq != 65535]
+        has_seq = seq != 65535
+        seq = seq[has_seq]
         gaps = np.diff(seq) % 4096
-        lost = int((gaps[gaps > 0] - 1).sum()) if len(seq) >= 100 and gaps.any() else None
+        # a Block Ack capture has no usable counter at all; leave the cell blank
+        lost = int((gaps[gaps > 0] - 1).sum()) if has_seq.mean() > 0.5 and len(seq) >= 100 and gaps.any() else None
         raw_db = 20 * np.log10(p["absH_raw"] + 1e-12)          # 20*log10 of the chip's integers
         depth = raw_db.max(axis=1) - raw_db.min(axis=1)           # strongest minus weakest subcarrier
         row = {"agent": agent, "packets": len(df),
@@ -292,6 +295,8 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--run", default="run")
     ap.add_argument("--force-extract", action="store_true")
+    ap.add_argument("--pose-bag", type=Path, default=None,
+                    help="second MCAP that holds the ground-truth pose topics when the CSI bag does not")
     ap.add_argument("--map", type=Path, default=None, help="anchored .pcd drawn as the map background")
     ap.add_argument("--pose-topic", default="global_pose",
                     help="topic tail(s) of the ground-truth pose, comma separated when agents differ, "
@@ -316,6 +321,9 @@ def main() -> int:
     ap.add_argument("--frames", choices=["all", "blockack", "data"], default="all",
                     help="keep only Block Acks (seq == 65535, 20 MHz) or only data frames; the two "
                          "PPDU types have different bandwidth and gain and must not be mixed")
+    ap.add_argument("--equalise-by", choices=["rssi", "run"], default="rssi",
+                    help="rssi: divide each frame by the receiver shape of its own gain state "
+                         "(Nexmon's RSSI is the gain word); run: one shape for the whole run")
     ap.add_argument("--min-coherence", type=float, default=0.5,
                     help="frame-to-frame |H| correlation below which the stream is not a channel")
     args = ap.parse_args()
@@ -330,6 +338,15 @@ def main() -> int:
         raise SystemExit(f"no extraction in {extracts}; pass --bag BAG.mcap to create it")
     else:
         print(f"using existing extraction in {extracts}")
+
+    if args.pose_bag is not None:
+        # the ground truth lives in a second bag: pull just the pose topics from
+        # it into a side folder and place them next to the CSI parquets
+        side = extracts / "pose_bag"
+        topics = [f"/{a}/{args.pose_topic}" for a in ("mobile_1", "mobile_2", "infra_1")]
+        extract(args.pose_bag, side, topics=topics, audit=False)
+        for f in side.glob(f"*{args.pose_topic.replace('/', '__')}.parquet"):
+            shutil.copy(f, extracts / f.name)
 
     csi = load_csi(extracts)
     if not csi:
@@ -393,7 +410,12 @@ def main() -> int:
         # metric runs. It is not the room and does not move with the robot, but
         # it is often 20 dB deep and would otherwise dominate everything below.
         absH_raw = np.abs(H)                      # the chip's integers, before any correction
-        H, static_db = equalise_static(H)
+        if args.equalise_by == "rssi":
+            # one receiver shape per gain state, keyed by the frame's RSSI word
+            H, static_db, gain_spread_db = equalise_by_gain(H, sub["rssi"].to_numpy())
+        else:
+            H, static_db = equalise_static(H)
+            gain_spread_db = np.nan
         static_ptp = float(np.ptp(static_db))
         # tap spacing follows the bandwidth the frames OCCUPY, not the one the
         # capture was configured for
@@ -442,6 +464,7 @@ def main() -> int:
             "nulls_dropped": n_raw_cols - n_sub,
             "trimmed_flag": bool(df["trimmed"].mode().iloc[0]),
             "static_shape_ptp_db": round(static_ptp, 1),
+            "gain_state_shape_spread_db": round(float(gain_spread_db), 1),
             "temporal_coherence": round(coh, 3),
             "profile_structure_median_db": float(np.nanmedian(struct_db)),
             "frames_with_flat_profile_pct": float(100 * np.mean(struct_db < args.min_profile_db)),

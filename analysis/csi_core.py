@@ -184,6 +184,46 @@ def equalise_static(H: np.ndarray):
     return H / np.where(ok, med, 1.0)[None, :], static_db
 
 
+def equalise_by_gain(H: np.ndarray, gain: np.ndarray, min_frames: int = 50):
+    """equalise_static, but with one shape per receiver gain state.
+
+    Returns (H_eq, static_db, spread_db): each frame divided by the median
+    |H| of the frames that share its gain word (the RSSI value on Nexmon,
+    which is derived from the gain the AGC picked for that frame); states
+    with fewer than `min_frames` frames fall back to the run shape.
+    `spread_db` is how far the per-state shapes differ from each other
+    (median over subcarriers of the peak-to-peak across states), i.e. how much
+    a gain step alone bends the spectrum.
+
+    Why: the receiver's per-subcarrier shape is not one curve but one curve
+    per gain setting. Divided by a single run median, frames in the minority
+    gain state keep a residual bend, and the correlation with the majority
+    state goes negative whenever the AGC steps -- which looks exactly like a
+    fast channel change and is not one."""
+    H = np.atleast_2d(H)
+    gain = np.asarray(gain).ravel()
+    H_run, static_db = equalise_static(H)
+    out = H_run.copy()
+    shapes = []
+    for g in np.unique(gain):
+        m = gain == g
+        if m.sum() < min_frames:
+            continue
+        med = np.median(np.abs(H[m]), axis=0)
+        ok = med > 0
+        ref = np.median(med[ok]) if ok.any() else 1.0
+        out[m] = H[m] / np.where(ok, med, 1.0)[None, :] * ref
+        shapes.append(np.where(ok, 20 * np.log10(np.where(ok, med, 1.0) / ref), 0.0))
+    if len(shapes) >= 2:
+        S = np.vstack(shapes)
+        spread_db = float(np.median(np.ptp(S, axis=0)))
+    else:
+        spread_db = 0.0
+    # keep the overall level comparable to the run-equalised version
+    lvl = np.median(np.abs(out[np.abs(out) > 0])) if np.any(np.abs(out) > 0) else 1.0
+    return out / lvl, static_db, spread_db
+
+
 def effective_bandwidth_mhz(span_slots: int, declared_mhz: float, raw_slots: int) -> float:
     """Bandwidth the frames actually occupy, from the span they fill."""
     if raw_slots <= 0:

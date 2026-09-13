@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from csi_core import (band_mask, band_outliers, equalise_static, frame_correlation,  # noqa: E402
+from csi_core import (band_mask, band_outliers, equalise_by_gain, equalise_static, frame_correlation,  # noqa: E402
                       occupied_band, rician_k, temporal_coherence,
                       usable_subcarriers)
 
@@ -130,6 +130,22 @@ Hpad = np.zeros((200, 256), complex)
 Hpad[:, 96:160] = Hc
 check("padded with nulls", float(np.median(rician_k(Hpad))), 0.0)
 check("nulls removed again", float(np.median(rician_k(Hpad[:, usable_subcarriers(Hpad)]))) > 1.0, True)
+
+print("equalise_by_gain: a receiver shape that differs per gain state must not read as a channel change")
+Hg = channel(400, 64)
+shape_a = 10 ** (RNG.normal(0, 2.0, 64) / 20)      # ~10 dB ripple in one gain state
+shape_b = 10 ** (RNG.normal(0, 2.0, 64) / 20)      # a different ripple in the other
+gain = np.where(np.arange(400) % 3 == 0, -50, -52) # the AGC toggles between two states
+Hobs = Hg * np.where(gain[:, None] == -50, shape_a, shape_b)
+r_run = np.nanmedian(frame_correlation(equalise_static(Hobs)[0]))
+r_gain = np.nanmedian(frame_correlation(equalise_by_gain(Hobs, gain)[0]))
+r_true = np.nanmedian(frame_correlation(Hg))
+check("run shape leaves the step in", bool(r_run < r_true - 0.1), True)
+check("per-state shape takes it out", bool(abs(r_gain - r_true) < 0.05), True)
+check("spread reported", bool(equalise_by_gain(Hobs, gain)[2] > 1.5), True)
+check("one state only: same as run", bool(np.allclose(
+    np.abs(equalise_by_gain(Hg, np.full(400, -50))[0]),
+    np.abs(equalise_static(Hg)[0]) / np.median(np.abs(equalise_static(Hg)[0])))), True)
 
 print()
 if FAILED:
