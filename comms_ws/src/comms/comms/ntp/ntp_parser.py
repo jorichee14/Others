@@ -47,6 +47,11 @@ def _parse_ntpq() -> Optional[dict]:
         "frequency_error_ppm": 0.0, "poll_interval_seconds": 0,
         "reach_register": 0, "reachability_percent": 0,
         "leap_indicator": "alarm", "warnings": [],
+        # Present with a zero default whatever the daemon reports, so a
+        # consumer can index them instead of guessing a fallback.
+        "last_offset_seconds": 0.0, "rms_offset_seconds": 0.0,
+        "residual_freq_ppm": 0.0, "skew_ppm": 0.0,
+        "update_interval_seconds": 0.0, "fit_samples": 0, "fit_span_seconds": 0.0,
     }
 
     for line in peers_out.splitlines():
@@ -141,6 +146,11 @@ def _parse_chronyc() -> Optional[dict]:
         "frequency_error_ppm": 0.0, "poll_interval_seconds": 0,
         "reach_register": 0, "reachability_percent": 0,
         "leap_indicator": "alarm", "warnings": [],
+        # Present with a zero default whatever the daemon reports, so a
+        # consumer can index them instead of guessing a fallback.
+        "last_offset_seconds": 0.0, "rms_offset_seconds": 0.0,
+        "residual_freq_ppm": 0.0, "skew_ppm": 0.0,
+        "update_interval_seconds": 0.0, "fit_samples": 0, "fit_span_seconds": 0.0,
     }
 
     kv: dict[str, str] = {}
@@ -225,6 +235,11 @@ def _parse_chronyc() -> Optional[dict]:
             metrics["reach_register"]        = reach_octal
             metrics["reachability_percent"]  = _reachability_percent(reach_octal)
             metrics["poll_interval_seconds"] = 2 ** int(parts[2])
+            # The selected source's name AS `sources` PRINTS IT. tracking's
+            # Reference ID may carry a reverse-DNS name for the same host
+            # (122-116-9-109.hinet-ip.hinet.net vs 122.116.9.109), and
+            # sourcestats agrees with sources, not with tracking.
+            metrics["_sources_name"] = parts[0]
             # "... -123us[ -156us] +/-   45ms": the +/- term is the error
             # bound, roughly half the round-trip delay plus dispersion. It
             # is readable without socket access, unlike ntpdata.
@@ -256,19 +271,36 @@ def _parse_chronyc() -> Optional[dict]:
         metrics["warnings"].append(
             "delay_seconds is an upper bound (2x sources error term): "
             "chronyc ntpdata needs socket access")
-    stats = _run(["chronyc", "sourcestats"])
     # Name/IP  NP NR Span Frequency FreqSkew Offset StdDev
+    stats = _run(["chronyc", "sourcestats"])
+    rows = []
     for line in stats.splitlines():
         parts = line.split()
-        if len(parts) >= 8 and metrics.get("sync_source") and parts[0] == metrics["sync_source"]:
+        if len(parts) >= 8 and not parts[0].startswith("=") and parts[0].lower() != "name/ip":
             try:
-                metrics["jitter_seconds"]  = abs(_parse_secs(parts[7]))
-                metrics["fit_samples"]     = int(parts[1])
-                metrics["skew_ppm"]        = float(parts[5])
-                metrics["fit_span_seconds"] = _parse_span(parts[3])
-            except (ValueError, IndexError):
-                pass
-            break
+                int(parts[1])
+            except ValueError:
+                continue            # the header's "NP" column, not a source row
+            rows.append(parts)
+    # Match on the name `sources` printed, then tracking's, then -- only when
+    # there is exactly one source, as on a client -- take the single row.
+    want = [n for n in (metrics.get("_sources_name"), metrics.get("sync_source")) if n]
+    row = next((r for r in rows if r[0] in want), None)
+    if row is None and len(rows) == 1:
+        row = rows[0]
+    if row is not None:
+        try:
+            metrics["jitter_seconds"]   = abs(_parse_secs(row[7]))
+            metrics["fit_samples"]      = int(row[1])
+            metrics["skew_ppm"]         = float(row[5])
+            metrics["fit_span_seconds"] = _parse_span(row[3])
+        except (ValueError, IndexError):
+            pass
+    elif rows:
+        metrics["warnings"].append(
+            f"sourcestats has {len(rows)} sources but none named "
+            f"{' or '.join(want) or '(unknown)'}; fit statistics unavailable")
+    metrics.pop("_sources_name", None)
     return metrics
 
 
@@ -370,6 +402,9 @@ def get_ntp_metrics() -> dict:
             "frequency_error_ppm": 0.0, "poll_interval_seconds": 0,
             "reach_register": 0, "reachability_percent": 0,
             "leap_indicator": "alarm",
+            "last_offset_seconds": 0.0, "rms_offset_seconds": 0.0,
+            "residual_freq_ppm": 0.0, "skew_ppm": 0.0,
+            "update_interval_seconds": 0.0, "fit_samples": 0, "fit_span_seconds": 0.0,
             "warnings": ["No NTP daemon found (tried chronyc and ntpq)"],
         }
     metrics["stratum_level"] = str(metrics["stratum"])
