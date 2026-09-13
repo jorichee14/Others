@@ -246,9 +246,12 @@ def data_card(per_agent: dict, csi: dict, mbins, still_mps: float, moving_mps: f
     for agent, p in sorted(per_agent.items()):
         df = csi[agent].sort_values("log_time_ns")
         dt_ms = np.diff(df["log_time_ns"].to_numpy()) / 1e6
+        # Block Acks carry no sequence number (the field reads 65535); loss can
+        # only be counted on the frames that do, and only if that counter moves
         seq = df["seq"].to_numpy().astype(int)
+        seq = seq[seq != 65535]
         gaps = np.diff(seq) % 4096
-        lost = int((gaps[gaps > 0] - 1).sum())
+        lost = int((gaps[gaps > 0] - 1).sum()) if len(seq) >= 100 and gaps.any() else None
         raw_db = 20 * np.log10(p["absH_raw"] + 1e-12)          # 20*log10 of the chip's integers
         depth = raw_db.max(axis=1) - raw_db.min(axis=1)           # strongest minus weakest subcarrier
         row = {"agent": agent, "packets": len(df),
@@ -258,7 +261,8 @@ def data_card(per_agent: dict, csi: dict, mbins, still_mps: float, moving_mps: f
                "in_frame_fade_depth_db_median": round(float(np.median(depth)), 1),
                "interval_median_ms": round(float(np.median(dt_ms)), 2),
                "interval_p95_ms": round(float(np.percentile(dt_ms, 95)), 2),
-               "packets_lost_pct": round(100 * lost / max(lost + len(df), 1), 2),
+               "packets_lost_pct": (round(100 * lost / max(lost + len(seq), 1), 2)
+                                    if lost is not None else np.nan),
                "rssi_p5_dbm": float(df["rssi"].quantile(0.05)),
                "rssi_median_dbm": float(df["rssi"].median()),
                "rssi_p95_dbm": float(df["rssi"].quantile(0.95))}
@@ -289,7 +293,9 @@ def main() -> int:
     ap.add_argument("--run", default="run")
     ap.add_argument("--force-extract", action="store_true")
     ap.add_argument("--map", type=Path, default=None, help="anchored .pcd drawn as the map background")
-    ap.add_argument("--pose-topic", default="global_pose")
+    ap.add_argument("--pose-topic", default="global_pose",
+                    help="topic tail(s) of the ground-truth pose, comma separated when agents differ, "
+                         "e.g. zed/pose,visual_slam/tracking/vo_pose")
     ap.add_argument("--stride", type=int, default=1, help="use every Nth frame for the per-frame metrics")
     ap.add_argument("--smooth-s", type=float, default=1.0, help="window for the smoothed traces")
     ap.add_argument("--null-floor-db", type=float, default=20.0,
@@ -336,7 +342,7 @@ def main() -> int:
         df = csi[agent].sort_values("log_time_ns").reset_index(drop=True)
         # Block Acks carry seq 65535 (SURVEY_NOTES 7.1); everything else is a data frame
         is_ba = df["seq"].to_numpy().astype(int) == 65535
-        print(f"{agent}: {len(df)} frames, {int(is_ba.sum())} Block Acks, {int((~is_ba).sum())} data")
+        print(f"{agent}: {len(df)} frames, seq 65535 (Block Ack) {int(is_ba.sum())}, other seq {int((~is_ba).sum())}")
         if args.frames == "blockack":
             df = df[is_ba].reset_index(drop=True)
         elif args.frames == "data":

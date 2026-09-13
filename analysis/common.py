@@ -98,17 +98,27 @@ def _read_pcd_raw(path: Path):
 
 
 def load_poses(extracts: Path, suffix: str):
-    """{agent: (t_s_array, xy array)} from the PoseStamped ground-truth topics."""
+    """{agent: (t_s_array, xy array)} from PoseStamped or Odometry topics.
+
+    `suffix` is one topic tail or several separated by commas, e.g.
+    "zed/pose,visual_slam/tracking/vo_pose" when the agents name their pose
+    topic differently; the first match per agent wins."""
     out = {}
-    for f in sorted(glob.glob(str(extracts / f"*{suffix}.parquet"))):
-        topic = "/" + Path(f).stem.replace("__", "/")
-        df = pd.read_parquet(f)
-        if "pose.position.x" not in df.columns:
-            continue
-        out[node_of_topic(topic)] = (
-            df["log_time_ns"].to_numpy(),
-            df[["pose.position.x", "pose.position.y"]].to_numpy(float),
-        )
+    for one in suffix.split(","):
+        one = one.strip().strip("/").replace("/", "__")
+        for f in sorted(glob.glob(str(extracts / f"*{one}.parquet"))):
+            topic = "/" + Path(f).stem.replace("__", "/")
+            agent = node_of_topic(topic)
+            if agent in out:
+                continue
+            df = pd.read_parquet(f)
+            if "pose.position.x" in df.columns:
+                cols = ["pose.position.x", "pose.position.y"]
+            elif "pose.pose.position.x" in df.columns:          # nav_msgs/Odometry
+                cols = ["pose.pose.position.x", "pose.pose.position.y"]
+            else:
+                continue
+            out[agent] = (df["log_time_ns"].to_numpy(), df[cols].to_numpy(float))
     return out
 
 
