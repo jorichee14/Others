@@ -33,6 +33,9 @@ builtin_interfaces/Time stamp
 string frame_id
 """
 
+# The field list is copied verbatim from the DEPLOYED comms_msgs/msg/NtpStatus.msg
+# (final_comms branch). A fixture that does not match the real message tests
+# the fixture, not the pipeline.
 NTP_STATUS_V2 = """std_msgs/Header header
 string role
 string hostname
@@ -60,6 +63,12 @@ uint64  seq
 float64 monotonic_seconds
 bool    clock_stepped
 float64 offset_delta_seconds
+float64 rms_offset_seconds       # tracking "RMS offset": typical recent measured offset
+float64 residual_freq_ppm        # tracking "Residual freq": what the last fit could not explain
+float64 update_interval_seconds  # tracking "Update interval": the actual poll spacing
+float64 fit_span_seconds         # sourcestats "Span": time covered by the fit's samples
+float64 temperature_c            # SoC temperature; the crystal's rate follows it (~0.1-1 ppm/degree)
+float64 cpu_load_1min            # /proc/loadavg, so a stress phase is visible in the same message
 """ + HEADER_DEF
 
 
@@ -82,9 +91,9 @@ def main(out_dir: Path) -> None:
     t0 = 1_789_270_000_000_000_000                       # ns, UTC epoch
     dur_s, poll_s, hz = 1500.0, 8, 10.0
     agents = {
-        # topic, agent, f0 ppm, sample noise s, delay s
-        "/mobile_2/ntp/status": ("mobile_2", -27.2, 120e-6, 0.0063),
-        "/infra_1/ntp/status":  ("infra_1",  +10.1,  25e-6, 0.0004),
+        # the topics a namespaced client node actually publishes
+        "/mobile_2/ntp/client/status": ("mobile_2", -27.2, 120e-6, 0.0063),
+        "/infra_1/ntp/client/status":  ("infra_1",  +10.1,  25e-6, 0.0004),
     }
     with open(out_dir / "stress.mcap", "wb") as f:
         w = Writer(f)
@@ -121,9 +130,17 @@ def main(out_dir: Path) -> None:
                     "fit_samples": min(64, 4 + int(t / poll_s)),
                     "poll_interval_seconds": poll_s, "reach_register": 0o377, "reachability_percent": 100,
                     "reference_time": stamp(ref_ns), "connected_clients": -1,
-                    "leap_indicator": "no_warning", "warnings": [],
+                    "leap_indicator": "no_warning",
+                    "warnings": ["delay_seconds is an upper bound (2x sources error term): "
+                                 "chronyc ntpdata needs socket access"],
                     "seq": i, "monotonic_seconds": t, "clock_stepped": stepped,
                     "offset_delta_seconds": sys_off - prev_off,
+                    "rms_offset_seconds": abs(last_off), "residual_freq_ppm": true_freq - fit_freq,
+                    "update_interval_seconds": float(poll_s),
+                    "fit_span_seconds": float(min(64, 4 + int(t / poll_s)) * poll_s),
+                    # carried IN the message now, so a stress run needs no side log
+                    "temperature_c": T,
+                    "cpu_load_1min": 3.8 if t < 600 else 0.4,
                 }
                 log = t0 + int(t * 1e9) + 2_000_000
                 w.write_message(topic, ntp, msg, log_time=log, publish_time=log - 500_000)

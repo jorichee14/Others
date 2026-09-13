@@ -79,7 +79,7 @@ def ecdf(x: np.ndarray):
 
 def load_ntp(extracts: Path):
     frames = []
-    for f in sorted(glob.glob(str(extracts / "*ntp__status.parquet"))):
+    for f in sorted(glob.glob(str(extracts / "*ntp__*status.parquet"))):
         df = pd.read_parquet(f)
         df["topic"] = "/" + Path(f).stem.replace("__", "/")
         frames.append(df)

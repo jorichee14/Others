@@ -42,9 +42,15 @@ PHASE_SHADE = {"thermal": "#f5a173", "cool": "#9ec5f4", "coldstart": "#c9b8e8",
 
 
 def load_bag_polls(extracts: Path):
-    """One row per chrony poll per agent, from the NtpStatus topics."""
+    """One row per chrony poll per agent, from the NtpStatus topics.
+
+    The glob is `*ntp__*status.parquet` because the topics are namespaced and
+    split by role: /mobile_2/ntp/client/status and /mobile_1/ntp/server/status
+    become mobile_2__ntp__client__status.parquet and
+    mobile_1__ntp__server__status.parquet. A pattern anchored on `ntp__status`
+    matches neither."""
     frames = []
-    for f in sorted(glob.glob(str(extracts / "*ntp__status.parquet"))):
+    for f in sorted(glob.glob(str(extracts / "*ntp__*status.parquet"))):
         df = pd.read_parquet(f)
         topic = "/" + Path(f).stem.replace("__", "/")
         agent = node_of_topic(topic)
@@ -77,6 +83,9 @@ def load_bag_polls(extracts: Path):
                 lambda w: any("upper bound" in str(x) for x in (w if w is not None else []))),
             "source": "bag", "layout": "v2" if v2 else "v1",
         })
+        # The monitor carries these now, so a stress run needs no side log.
+        for col in ("temperature_c", "cpu_load_1min"):
+            out[col] = p[col].to_numpy() if col in p.columns else np.nan
         frames.append(out)
     return pd.concat(frames, ignore_index=True) if frames else None
 
@@ -168,7 +177,9 @@ def main() -> int:
         s = side[(side["agent"] == a) & (side["phase"] == ph)] if side is not None else None
         if len(p) == 0 and (s is None or len(s) == 0):
             continue
-        temp = s["temp_c"].dropna() if s is not None else pd.Series(dtype=float)
+        # temperature from the message first, from a side log only if absent
+        temp = p["temperature_c"].dropna() if ("temperature_c" in p and p["temperature_c"].notna().any()) \
+            else (s["temp_c"].dropna() if s is not None else pd.Series(dtype=float))
         fq = p["freq_ppm"].dropna() if len(p) else (s["freq_ppm"].dropna() if s is not None else pd.Series(dtype=float))
         sk = p["skew_ppm"].dropna() if len(p) and p["skew_ppm"].notna().any() else (s["skew_ppm"].dropna() if s is not None else pd.Series(dtype=float))
         tail = sk.tail(10)
@@ -223,11 +234,13 @@ def main() -> int:
             if aa == a:
                 ax_t.text((lo + hi) / 2, 0.97, ph, transform=ax_t.get_xaxis_transform(),
                           ha="center", va="top", fontsize=7, color=TEXT2)
-        if s is not None and s["temp_c"].notna().any():
+        if "temperature_c" in p and p["temperature_c"].notna().any():
+            ax_t.plot(p["t_s"], p["temperature_c"], color=c, lw=1.4)
+        elif s is not None and s["temp_c"].notna().any():
             ax_t.plot(s["t_s"], s["temp_c"], color=c, lw=1.4)
         else:
-            ax_t.text(0.5, 0.5, "no temperature (no side log)", transform=ax_t.transAxes,
-                      ha="center", va="center", fontsize=7, color=TEXT2)
+            ax_t.text(0.5, 0.5, "no temperature in the message or a side log",
+                      transform=ax_t.transAxes, ha="center", va="center", fontsize=7, color=TEXT2)
         ax_t.set_ylabel("SoC temperature [°C]")
         ax_t.set_title(f"({chr(97 + j)}) {a}", loc="left", fontsize=8)
         ax_f.plot(p["t_s"], p["freq_ppm"], color=c, lw=1.4)
