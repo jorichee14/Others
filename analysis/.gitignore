@@ -8,3 +8,8 @@ figures/
 *.png
 *.pdf
 __pycache__/
+
+# the figure generators are source; their output is not
+!figures/
+figures/*
+!figures/framework.py
