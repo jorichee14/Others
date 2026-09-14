@@ -34,7 +34,8 @@ def node_of_topic(topic: str) -> str:
 
 
 def color_for(node: str) -> str:
-    return AGENT_COLOR.get(node, "#4a3aa7")
+    """'mobile_1' and 'mobile_1/A' share the agent's colour."""
+    return AGENT_COLOR.get(node.split("/")[0], "#4a3aa7")
 
 
 def read_pcd_xy(path: Path, max_pts: int = 120_000):

@@ -138,8 +138,18 @@ it is, not as a direct link.
 ## Wi-Fi CSI
 
 ```bash
-python analysis/csi_analysis.py --run coop2 --map <anchored>.pcd
+# coop2: robots transmit, one fixed Pi sniffs; poses live in the other bag
+python analysis/csi_analysis.py --run coop2 --moving-end tx \
+    --pose-bag <completed>.mcap --map <anchored>.pcd
+# after the switch (fixed transmitter, sniffer on the robot): same command, --moving-end rx
 ```
+
+The pipeline is direction-agnostic: the motion test always uses the pose of
+the agent whose topic the frames are on. Each stream is checked for two
+channels alternating frame by frame (a transmitter switching antennas — the
+RTL8852BU does this for control frames) and, when found, is reported as
+`agent/A` and `agent/B`; a single-antenna transmitter comes through whole
+(`--population auto`, see `csi_populations.csv`).
 
 A `CsiFrame` is the complex channel response of **one received 802.11 frame**
 across OFDM subcarriers — where RSSI is one number, CSI is a vector across

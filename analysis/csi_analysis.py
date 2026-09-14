@@ -135,6 +135,59 @@ def stack_H(df: pd.DataFrame):
     return re.astype(np.float64) + 1j * im.astype(np.float64), idx, keep
 
 
+def usable_mask(H_all: np.ndarray, idx_all: np.ndarray, null_floor_db: float, band_gap: int):
+    """Which FFT slots carry a subcarrier of the captured frames: inside the
+    occupied band, above the null floor, not the LO spike or a filter skirt."""
+    use = usable_subcarriers(H_all, null_floor_db)
+    band_lo, band_span = occupied_band(idx_all, use, band_gap)
+    use &= band_mask(idx_all, band_lo, band_span)
+    use[use] &= ~band_outliers(H_all[:, use])
+    return use, band_lo, band_span
+
+
+def label_populations(csi: dict, args):
+    """Split each agent's stream into the channels that alternate within it.
+
+    Returns ({agent or agent/A, agent/B: DataFrame}, report). A transmitter
+    that sends from two antennas in turn (the RTL8852BU does, for control
+    frames) puts two stable channels in one stream; analysed together they
+    look like noise. Frames are labelled by the shape of their normalised
+    amplitude (csi_core.split_populations); the stream is split only when
+    the two labels are really two channels (separation >= 0.3), so a
+    single-antenna transmitter after the direction switch comes through
+    unchanged."""
+    out, report = {}, []
+    for agent in sorted(csi):
+        df = csi[agent].sort_values("log_time_ns").reset_index(drop=True)
+        H_all, idx_all, keep = stack_H(df)
+        df = df.loc[keep].reset_index(drop=True)
+        use, _, _ = usable_mask(H_all, idx_all, args.null_floor_db, args.band_gap)
+        pop, _, sep = split_populations(H_all[:, use])
+        share = float((pop == 1).mean())
+        report.append({"agent": agent, "frames": len(df), "population_minority_share": round(share, 3),
+                       "population_separation": round(sep, 2)})
+        want = args.population
+        if want == "auto":
+            want = "split" if sep >= 0.3 else "all"
+        if want == "split":
+            if sep < 0.3:
+                print(f"{agent}: warning: populations are not distinct (separation {sep:.2f}); splitting anyway")
+            for k, name in ((0, "A"), (1, "B")):
+                out[f"{agent}/{name}"] = df[pop == k].reset_index(drop=True)
+            print(f"{agent}: two channels alternate (separation {sep:.2f}); "
+                  f"A {int((pop == 0).sum())} frames, B {int((pop == 1).sum())} frames")
+        elif want in ("0", "1"):
+            if sep < 0.3:
+                print(f"{agent}: warning: populations are not distinct (separation {sep:.2f}); "
+                      f"--population is cutting one channel in half")
+            out[agent] = df[pop == int(want)].reset_index(drop=True)
+            print(f"{agent}: keeping population {want}: {len(out[agent])} of {len(df)} frames")
+        else:
+            out[agent] = df
+            print(f"{agent}: kept whole (separation {sep:.2f}); all {len(df)} frames")
+    return out, pd.DataFrame(report)
+
+
 def motion_test(per_agent: dict, poses: dict, t0_ns: int, lag_s: float,
                 still_mps: float, moving_mps: float, bin_s: float = 1.0):
     """Does the channel change faster when the transmitting robot moves faster?
@@ -152,7 +205,7 @@ def motion_test(per_agent: dict, poses: dict, t0_ns: int, lag_s: float,
     median change rate while still and while moving."""
     bins, rows = [], []
     for agent, p in sorted(per_agent.items()):
-        if agent not in poses:
+        if agent.split("/")[0] not in poses:
             continue
         t = p["t"]
         dur = float(t[-1] - t[0])
@@ -161,7 +214,7 @@ def motion_test(per_agent: dict, poses: dict, t0_ns: int, lag_s: float,
         if r.size == 0:
             continue
         tm = 0.5 * (t[:-lag] + t[lag:])
-        pt, pxy = poses[agent]
+        pt, pxy = poses[agent.split("/")[0]]
         o = np.argsort(pt)
         pt, pxy = pt[o], pxy[o]
         dt = np.diff(pt) / 1e9
@@ -321,9 +374,12 @@ def main() -> int:
     ap.add_argument("--frames", choices=["all", "blockack", "data"], default="all",
                     help="keep only Block Acks (seq == 65535, 20 MHz) or only data frames; the two "
                          "PPDU types have different bandwidth and gain and must not be mixed")
-    ap.add_argument("--population", choices=["all", "0", "1"], default="all",
-                    help="keep only one of the two frame populations found by shape (0 = the larger); "
-                         "see csi_populations.py")
+    ap.add_argument("--population", choices=["auto", "split", "all", "0", "1"], default="auto",
+                    help="auto: split each stream into the channels that alternate in it (A, B) when "
+                         "there are two, else keep it whole; split/all force that; 0/1 keep one")
+    ap.add_argument("--moving-end", choices=["tx", "rx"], default="tx",
+                    help="which end of the link is on the robot: tx (robot transmits, fixed sniffer; "
+                         "coop2) or rx (fixed transmitter, sniffer on the robot)")
     ap.add_argument("--equalise-by", choices=["rssi", "run"], default="rssi",
                     help="rssi: divide each frame by the receiver shape of its own gain state "
                          "(Nexmon's RSSI is the gain word); run: one shape for the whole run")
@@ -355,21 +411,25 @@ def main() -> int:
     if not csi:
         raise SystemExit(f"no *csi.parquet in {extracts}")
     t0_ns = min(int(d["log_time_ns"].min()) for d in csi.values())
+    for agent in sorted(csi):
+        df = csi[agent]
+        # Block Acks carry seq 65535 (SURVEY_NOTES 7.1); everything else has a counter
+        is_ba = df["seq"].to_numpy().astype(int) == 65535
+        print(f"{agent}: {len(df)} frames, seq 65535 (Block Ack) {int(is_ba.sum())}, other seq {int((~is_ba).sum())}")
+        if args.frames == "blockack":
+            csi[agent] = df[is_ba].reset_index(drop=True)
+        elif args.frames == "data":
+            csi[agent] = df[~is_ba].reset_index(drop=True)
+    csi = {a: d for a, d in csi.items() if len(d) >= 10}
+    if not csi:
+        raise SystemExit(f"no agent has enough {args.frames} frames; try --frames all")
+    csi, populations = label_populations(csi, args)
+    populations.to_csv(out / "csi_populations.csv", index=False)
 
     inv_rows, tx_rows, frames = [], [], []
     per_agent = {}
     for agent in sorted(csi):
         df = csi[agent].sort_values("log_time_ns").reset_index(drop=True)
-        # Block Acks carry seq 65535 (SURVEY_NOTES 7.1); everything else is a data frame
-        is_ba = df["seq"].to_numpy().astype(int) == 65535
-        print(f"{agent}: {len(df)} frames, seq 65535 (Block Ack) {int(is_ba.sum())}, other seq {int((~is_ba).sum())}")
-        if args.frames == "blockack":
-            df = df[is_ba].reset_index(drop=True)
-        elif args.frames == "data":
-            df = df[~is_ba].reset_index(drop=True)
-        if len(df) < 10:
-            print(f"  skipped: fewer than 10 {args.frames} frames")
-            continue
         df["t_s"] = (df["log_time_ns"] - t0_ns) / 1e9
         dur = float(df["t_s"].max() - df["t_s"].min())
         bw = int(df["bandwidth_mhz"].mode().iloc[0])
@@ -393,28 +453,9 @@ def main() -> int:
         sub = sub.loc[keep].reset_index(drop=True)
         # Guard and DC-null slots carry no signal; including them makes every
         # amplitude statistic meaningless (see usable_subcarriers).
-        use = usable_subcarriers(H_all, args.null_floor_db)
-        band_lo, band_span = occupied_band(idx_all, use, args.band_gap)
-        # only slots inside that band count: an isolated slot elsewhere in the
-        # window (the 80 MHz DC slot) passes the power test but is not the frame
-        use &= band_mask(idx_all, band_lo, band_span)
-        # and, inside the band, drop the LO-leakage spike at the window centre and
-        # the filter-skirt slots at the block edge: neither is a subcarrier
-        use[use] &= ~band_outliers(H_all[:, use])
+        use, band_lo, band_span = usable_mask(H_all, idx_all, args.null_floor_db, args.band_gap)
         draw_lo = int(idx_all[use].min())
         draw_span = int(idx_all[use].max() - draw_lo + 1)
-        # Two channels can take turns in one stream (a transmitter alternating
-        # antennas): each is stable, consecutive frames anti-correlate. Label
-        # the frames by shape and, if asked, keep one population.
-        pop, pop_c, pop_sep = split_populations(H_all[:, use])
-        pop_share = float((pop == 1).mean())
-        if args.population in ("0", "1"):
-            if pop_sep < 0.3:
-                print(f"{agent}: warning: populations are not distinct (separation {pop_sep:.2f}); "
-                      f"--population is cutting one channel in half")
-            m = pop == int(args.population)
-            sub, H_all, pop = sub.loc[m].reset_index(drop=True), H_all[m], pop[m]
-            print(f"{agent}: keeping population {args.population}: {int(m.sum())} of {len(m)} frames")
         H, idx = H_all[:, use], idx_all[use]
         n_sub, n_raw_cols = H.shape[1], H_all.shape[1]
         eff_bw = effective_bandwidth_mhz(band_span, bw, raw_slots)
@@ -458,7 +499,7 @@ def main() -> int:
             "profile_structure_db": struct_db,
         }))
         per_agent[agent] = dict(t=sub["t_s"].to_numpy(), amp_db=amp_db, idx=idx, absH=np.abs(H),
-                                absH_raw=absH_raw, frames_df=sub, population=pop,
+                                absH_raw=absH_raw, frames_df=sub,
                                 attribution=attribution,
                                 band_lo=draw_lo, band_span=draw_span, static_ptp=static_ptp,
                                 bw=bw, eff_bw=eff_bw, dt_ns=dt_s * 1e9,
@@ -481,8 +522,7 @@ def main() -> int:
             "trimmed_flag": bool(df["trimmed"].mode().iloc[0]),
             "static_shape_ptp_db": round(static_ptp, 1),
             "gain_state_shape_spread_db": round(float(gain_spread_db), 1),
-            "population_minority_share": round(pop_share, 3),
-            "population_separation": round(pop_sep, 2),
+            "moving_end": args.moving_end,
             "temporal_coherence": round(coh, 3),
             "profile_structure_median_db": float(np.nanmedian(struct_db)),
             "frames_with_flat_profile_pct": float(100 * np.mean(struct_db < args.min_profile_db)),
@@ -493,8 +533,6 @@ def main() -> int:
             "frames_used": len(sub),
         })
 
-    if not per_agent:
-        raise SystemExit(f"no agent has enough {args.frames} frames; try --frames all")
     inventory = pd.DataFrame(inv_rows)
     transmitters = pd.DataFrame(tx_rows).sort_values(["agent", "frames"], ascending=[True, False])
     fr = pd.concat(frames, ignore_index=True)
@@ -622,7 +660,7 @@ def main() -> int:
     # ---- figure 2: where the channel is what it is ------------------------------
     poses = load_poses(extracts, args.pose_topic)
     map_xy = read_pcd_xy(args.map) if args.map else None
-    placed = [a for a in agents if a in poses]
+    placed = [a for a in agents if a.split("/")[0] in poses]
     if placed:
         # RSSI by default: it is the receiver's own measurement of the frame and
         # survives whatever the CSI is doing. K only once the tests pass.
@@ -641,7 +679,7 @@ def main() -> int:
             g = fr[fr["agent"] == a]
             n = max(int(args.smooth_s * len(g) / max(g["t_s"].max() - g["t_s"].min(), 1e-9)), 1)
             kdb = g[metric].rolling(n, center=True, min_periods=1).median().to_numpy()
-            pt, pxy = poses[a]
+            pt, pxy = poses[a.split("/")[0]]
             o = np.argsort(pt)
             tq = g["t_s"].to_numpy() * 1e9 + t0_ns
             ins = (tq >= pt[o][0]) & (tq <= pt[o][-1])
@@ -716,7 +754,15 @@ def main() -> int:
     nulls = inventory[inventory["nulls_dropped"] > 0]
     incoh = inventory[inventory["temporal_coherence"] < args.min_coherence]
     flatf = inventory[inventory["frames_with_flat_profile_pct"] > 5]
+    link_words = ("moving transmitter to a fixed receiver" if args.moving_end == "tx"
+                  else "fixed transmitter to a moving receiver")
+    n_split = int((populations["population_separation"] >= 0.3).sum()) if len(populations) else 0
+    pop_note = (f", and {n_split} of the {len(populations)} streams carry two channels that alternate "
+                "frame by frame (a transmitter switching antennas), reported separately as A and B"
+                if n_split else "")
     md = [f"# Wi-Fi CSI — run `{args.run}`", "",
+          f"The robot is the {'transmitting' if args.moving_end == 'tx' else 'receiving'} end of every "
+          f"link{pop_note}.", "",
           "One CSI frame is the complex channel response of one received 802.11 frame across "
           "OFDM subcarriers. Everything below uses |H| and its delay profile only: the recorded "
           "phase carries an unknown per-frame carrier/sampling offset and packet-detection delay, "
@@ -769,8 +815,8 @@ def main() -> int:
            "`temporal_coherence` above). A physical channel changes slowly, so consecutive "
            "frames correlate above about 0.8; noise gives an independent draw per frame and "
            "correlates near zero.", "",
-           "2. **Does it follow the robot?** The channel from a moving transmitter to a fixed "
-           "receiver must change faster when the transmitter moves faster and stop changing "
+           f"2. **Does it follow the robot?** The channel from a {link_words} "
+           "must change faster when the robot moves faster and stop changing "
            "when it stops. `change` is 1 − corr(|H|) between frames "
            f"{args.lag_s * 1e3:.0f} ms apart; `speed` is from the ground-truth poses; both are "
            "1 s medians. A pass needs a Spearman ρ ≥ 0.3 and at least twice the change rate "
@@ -837,7 +883,7 @@ Both mobile agents capture per-frame CSI with a Nexmon-patched radio at about
 {r0['occupied_bandwidth_mhz']:.0f}\\,MHz,
 of which {int(r0['subcarriers_usable'])} of {int(r0['subcarriers_in_message'])} FFT slots carry a
 subcarrier, the rest being guard bands and the DC null and excluded from every amplitude statistic. Frames from {len(macs)} transmitter{'s' if len(macs) != 1 else ''} are measured,
-so the source address identifies which path each measurement describes. From the channel amplitude we
+so the source address identifies which path each measurement describes; the robot is the {'transmitting' if args.moving_end == 'tx' else 'receiving'} end of every link{pop_note}. From the channel amplitude we
 report the Rician K-factor (the power of the dominant path relative to the diffuse component) and the RMS
 delay spread of the power delay profile: {per}. Recorded phase carries an unknown per-frame carrier and
 sampling offset and is therefore not used; amplitudes are normalised per frame to remove the receiver's
