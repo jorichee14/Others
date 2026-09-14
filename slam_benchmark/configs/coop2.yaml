@@ -1,0 +1,240 @@
+# ============================================================================
+# coop2_20260828 as a SLAM benchmark sequence.
+#
+# Every geometry number here is copied from ../rosbag_to_opv2v/configs/
+# mirc_coop2.yaml, which derived them from the recording's own published
+# transforms. Do not re-derive them by hand; if that file changes, change this
+# one in the same commit.
+#
+# What this config is FOR: telling the evaluator which frame each method's
+# output describes, what the reference is and how much it can be trusted, and
+# over what volume a map is scored. It does not run anything — see
+# configs/methods/*.yaml and scripts/run_method.py.
+# ============================================================================
+
+dataset:
+  name: coop2_20260828
+  bag: ~/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_completed
+  duration_s: 156.0
+  site: MIRC indoor laboratory, NYCU Guangfu campus
+  # The surveyed boards span ~8.5 m x ~14.3 m (16.6 m corner to corner) and all
+  # sit within ~15 cm of one height. This is a room, not a road: it sets the
+  # scale at which every threshold in `eval` below has to be chosen, and it is
+  # why the F-score thresholds are 2-10 cm rather than the 20-50 cm an outdoor
+  # SLAM paper would quote.
+  extent_m: {span_x: 8.5, span_y: 14.3, diagonal: 16.6}
+  world: {frame_id: map, gravity_axis: z}
+
+# ---------------------------------------------------------------- the reference
+#
+# READ THIS BEFORE QUOTING ANY ATE FROM THIS SEQUENCE.
+#
+# /mobile_*/global_pose is the OUTPUT OF AN OFFLINE MAPPING PIPELINE (stage 09:
+# the corrected trajectory, anchored to a surveyed map). It is not an external
+# measurement of where the robots were. Benchmarking a SLAM system against it
+# measures AGREEMENT WITH THAT PIPELINE. A method that agrees with it perfectly
+# has reproduced the pipeline, not the truth; a method that disagrees may be the
+# more accurate of the two and there is nothing in tier 1 that can tell.
+#
+# The independent evidence is the board survey, and it is what `uncertainty_m`
+# below is taken from — the WORST of the three boards, not the best, because a
+# claim has to survive the loosest anchor in the frame it is made in.
+reference:
+  kind: pipeline                 # pipeline | survey | external-tracker
+  provenance: >
+    Offline mapping pipeline stages 03/06/08/09; both mobile trajectories
+    anchored to one surveyed map, which is what puts them in a single frame
+    without a hand-measured inter-robot transform.
+  # 15 mm: rs_anchor's std. anchor itself is repeatable to ~3 mm (6.9 mm std,
+  # 3.2 mm loop closure over 526.9 s), anchor_b to ~13 mm honestly stated. Set
+  # this to 0.007 only for a claim restricted to the region near `anchor`.
+  uncertainty_m: 0.015
+  # Fill from the map cloud before running map metrics; see eval.volume.
+  map_cloud: null
+  agents:
+    mobile_1:
+      topic: /mobile_1/global_pose        # 2833 msgs, ~18.1 Hz, irregular grid
+      frame: zed_left_camera_optical_frame
+      expected_start: [0.697952, -0.062696, 0.193334]
+      max_gap_ms: 200
+    mobile_2:
+      topic: /mobile_2/global_pose        # 1811 msgs, ~11.6 Hz
+      frame: camera_color_optical_frame
+      expected_start: [7.704074, -14.308017, 0.165040]
+      max_gap_ms: 250
+  # Tier 2, the absolute check. `position` is the surveyed board origin in `map`;
+  # `window` is the interval the platform dwelled in front of it, which is NOT in
+  # the bag metadata and has to be read off the run once. Until a window is
+  # filled the anchor is skipped and the evaluator says so rather than scoring a
+  # tier it could not compute.
+  anchors:
+    - name: anchor
+      position: [0.0, 0.0, 0.0]
+      uncertainty_m: 0.007            # 6.9 mm std over 214 views; loop closure 3.2 mm
+      window: null
+      note: the map frame's origin, and the only anchor tight enough to resolve
+            a centimetre-scale difference between methods
+    - name: anchor_b
+      position: [8.033, -7.182, -0.102]
+      uncertainty_m: 0.013            # the honest figure: 12.9 mm / 2.6 deg between
+      window: null                    # its two sections (ratio 4.24, significant).
+      note: its quoted 2.0 mm is the spread WITHIN a section and understates it
+    - name: rs_anchor
+      position: [8.460, -14.267, -0.056]
+      uncertainty_m: 0.015            # std; max residual 40 mm, 1 of 2 sections gated
+      window: null
+      note: the loosest of the three; a residual under ~40 mm against this board
+            is not evidence of anything
+
+# ------------------------------------------------------------------- streams
+#
+# What a SLAM method can be fed. `reference_frame_from_sensor` is the transform
+# the evaluator right-multiplies out before comparing: it is `reference frame
+# <- sensor frame` on that agent, in the same sense as the `extrinsic:` blocks
+# of the converter config (`base_link -> sensor`). Leaving it wrong is the
+# single most effective way to produce a benchmark that runs and lies: on this
+# rig the Ouster's 13 cm lever arm and 90 deg rotation from the ZED optical
+# frame shows up as several centimetres of ATE that no alignment can absorb,
+# and it looks exactly like drift.
+streams:
+
+  mobile_1.ouster:
+    agent: mobile_1
+    modality: lidar
+    topic: /mobile_1/ouster/points        # 1516 msgs, 9.7 Hz, 128 beams, ~130k pts
+    sensor_frame: os_lidar
+    reference_frame_from_sensor: {x: 0.067064, y: -0.092192, z: -0.074147,
+                                  roll: 2.2959, pitch: 89.5267, yaw: -87.6614}
+    point_time_field: t                   # ns from the header stamp
+    deskew: true                          # a 103 ms sweep at walking pace is not an instant
+    rate_hz: 9.7
+    note: the only true LiDAR on the sequence. Everything in the LiDAR-only block
+          runs on this one stream, so that block compares METHODS; the
+          cross-modality comparison needs one method run on several streams.
+
+  mobile_1.zed_rgbd:
+    agent: mobile_1
+    modality: rgbd
+    depth_topic: /mobile_1/zed/depth/depth_registered     # 2291 msgs, 14.7 Hz, 32FC1 m
+    depth_info_topic: /mobile_1/zed/depth/camera_info
+    color_topic: /mobile_1/zed/left/image_rect_color
+    color_info_topic: /mobile_1/zed/left/camera_info
+    sensor_frame: zed_left_camera_optical_frame
+    # Identity, and measured rather than assumed: the reference pose IS this
+    # frame, and "registered" means the depth is already in it.
+    reference_frame_from_sensor: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+    depth_scale: 1.0
+    range_m: [0.3, 12.0]
+    rate_hz: 14.7
+    note: runs on the SAME trajectory as mobile_1.ouster. That is what makes the
+          LiDAR-vs-RGB-D comparison on this sequence clean — same platform, same
+          motion, same clock, one reference.
+
+  mobile_2.realsense_rgbd:
+    agent: mobile_2
+    modality: rgbd
+    depth_topic: /mobile_2/depth/image_rect_raw           # 4300 msgs, 27.5 Hz, 16UC1 mm
+    depth_info_topic: /mobile_2/depth/camera_info
+    color_topic: /mobile_2/color/image_raw
+    color_info_topic: /mobile_2/color/camera_info
+    sensor_frame: camera_depth_optical_frame
+    # colour optical <- depth optical, as published. 59 mm, systematic, on every
+    # point if left at identity.
+    reference_frame_from_sensor: {x: 0.059190, y: -0.000010, z: -0.000406,
+                                  roll: -0.3398, pitch: 0.0958, yaw: 0.1493}
+    depth_scale: 0.001
+    range_m: [0.2, 10.0]
+    rate_hz: 27.5
+    note: ~87 deg horizontal FoV and a few metres of usable range. A different
+          platform and a different route from mobile_1, so a result here is not
+          a like-for-like against mobile_1.zed_rgbd — use that pair for the
+          modality comparison and this one for the second-platform check.
+
+  mobile_1.radar1:
+    agent: mobile_1
+    modality: radar
+    topic: null                           # not exported by the converter; see note
+    sensor_frame: radar1_link
+    reference_frame_from_sensor: {x: 0.207505, y: 0.076150, z: -0.108883,
+                                  roll: -174.5848, pitch: -76.2388, yaw: -95.2193}
+    note: IWR6843, order 1e1-1e2 points per frame. Recorded here so the extrinsic
+          is not lost. It is NOT a SLAM input on this sequence — scan matching on
+          tens of points indoors is a research contribution, not a baseline, and
+          reporting a failed radar odometry run as a benchmark row would say more
+          about the scoping than about radar.
+
+  mobile_1.radar2:
+    agent: mobile_1
+    modality: radar
+    topic: null
+    sensor_frame: radar2_link
+    reference_frame_from_sensor: {x: -0.053850, y: 0.046553, z: -0.112039,
+                                  roll: 160.0651, pitch: -86.7452, yaw: 24.8992}
+
+  infra_1.radar:
+    agent: infra_1
+    modality: radar
+    topic: /infra_1/radar/points_all      # 1343 msgs, 8.6 Hz
+    sensor_frame: infra1_link
+    static_world_pose: {x: -5.508181, y: -2.590753, z: 1.998232,
+                        roll: -117.6730, pitch: 0.7379, yaw: -127.6503}
+    reference_frame_from_sensor: {x: 0.017773, y: -0.208023, z: -0.155788,
+                                  roll: 176.0934, pitch: -73.1656, yaw: 92.1354}
+    note: a STATIC agent, so it has no trajectory to estimate. Its value to this
+          benchmark is the opposite one — it is an external observer of the two
+          mobile platforms, from a surveyed pose, with a clock of its own. See
+          IMPLEMENTATION.md phase 4.
+
+  # The IMU decides which half of the method shortlist can run at all, and
+  # nothing consulted so far states whether this bag carries one. Resolve it
+  # before scheduling anything:
+  #     python3 ../rosbag_to_opv2v/scripts/inspect_bag.py --bag <bag> | grep -i imu
+  # Fill the topic and rate, or set `present: false` and drop the LIO block.
+  mobile_1.imu:
+    agent: mobile_1
+    modality: imu
+    present: null                         # REQUIRED before any LIO/VIO method runs
+    topic: null
+    rate_hz: null
+  mobile_2.imu:
+    agent: mobile_2
+    modality: imu
+    present: null
+    topic: null
+    rate_hz: null
+
+# ---------------------------------------------------------------- evaluation
+eval:
+  # Trajectory
+  alignment: se3                 # none | se3 | sim3 | yaw. se3 for metric sensors;
+                                 # sim3 only for a monocular entry, and then say so.
+  align_n_first: null            # e.g. 100 to anchor on the start and measure drift
+                                 # away from it rather than best-fitting the whole run
+  max_gap_s: 0.25                # a reference gap wider than this is a dropout, and
+                                 # queries inside it are dropped, not interpolated
+  rpe_deltas:
+    - {delta: 1.0, unit: m}      # the honest discriminator on a 16 m room: the
+    - {delta: 5.0, unit: m}      # reference is far more trustworthy over 1 m than
+    - {delta: 10.0, unit: s}     # over the whole sequence
+  revisit: {radius_m: 0.30, min_separation_s: 20.0}
+
+  # Map. Both of these are CHOICES that change the ranking, so both are stated in
+  # the write-up next to the numbers.
+  volume: {min: null, max: null}
+  # REQUIRED before map metrics. Take it from the anchored map cloud, not from
+  # the trajectories: a volume fitted to where the robots went scores every
+  # method only where it was already confident. A defensible choice is the
+  # axis-aligned box of the map cloud's occupied space, eroded by 0.25 m so
+  # boundary effects at the walls do not dominate completeness.
+  resolution_m: 0.02             # rho. Do not go below the reference map's own
+                                 # anchoring spread (3 mm best board, 15 mm worst) —
+                                 # below that this benchmark is measuring the survey.
+  truncate_m: 0.50               # distances beyond this are clamped AND the clamped
+                                 # fraction is reported; a mean over a 40%-truncated
+                                 # cloud is a coverage number wearing a distance's units
+  fscore_thresholds_m: [0.02, 0.05, 0.10]
+  map_frame: aligned             # aligned | raw. `aligned` applies the trajectory's
+                                 # own ATE alignment to the map first, so map quality
+                                 # is scored GIVEN re-localisation; `raw` includes the
+                                 # method's drift in the map score. Different
+                                 # experiments; report which.

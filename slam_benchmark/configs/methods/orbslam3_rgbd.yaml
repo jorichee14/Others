@@ -1,0 +1,32 @@
+name: orbslam3_rgbd
+family: visual_slam
+origin: "[I/O]"
+modality: [rgbd]
+needs_imu: false                # the RGB-D entry; the stereo-inertial one needs an IMU
+loop_closure: true
+outputs: [trajectory]           # sparse landmarks only — no map row
+reference_impl: https://github.com/UZ-SLAMLab/ORB_SLAM3
+image: slambench/orbslam3:humble
+
+streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
+
+params:
+  ORBextractor.nFeatures: 1200
+  ORBextractor.scaleFactor: 1.2
+  ORBextractor.nLevels: 8
+  ThDepth: 40.0
+  DepthMapFactor: null          # REQUIRED per stream: 1.0 for the ZED's 32FC1 metres,
+                                # 1000.0 for the RealSense's 16UC1 millimetres. Getting
+                                # this wrong scales the whole map by 1000 and the run
+                                # still completes.
+
+notes: |
+  Produces a sparse point cloud, not a reconstruction, so it is scored on
+  trajectory only. Reporting a Chamfer distance for a sparse landmark cloud
+  against a dense map would be a category error dressed as a number.
+
+  It is also the entry most likely to lose tracking: an indoor lab with a
+  pushcart-mounted camera at walking pace, turning in place, is the classic
+  failure case. A lost-tracking run is a result — record the fraction of frames
+  tracked beside the ATE, and never quote an ATE computed over the 40% of the
+  sequence a method managed to hold.

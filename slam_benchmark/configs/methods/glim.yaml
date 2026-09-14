@@ -1,0 +1,25 @@
+name: glim
+family: lidar_inertial_slam
+origin: "[O/I] used indoors and outdoors; the closest thing in the shortlist to
+         a modern general-purpose LIO-SLAM"
+modality: [lidar, imu]
+needs_imu: true
+loop_closure: true
+outputs: [trajectory, map]
+reference_impl: https://github.com/koide3/glim
+image: slambench/glim:humble
+
+streams: [mobile_1.ouster]
+imu_by_agent:
+  mobile_1: mobile_1.imu
+
+params:
+  voxel_resolution: 0.10
+  max_correspondence_distance: 0.5
+  enable_gpu: false             # CPU keeps the runtime column comparable
+  global_optimization: true
+
+notes: |
+  The pair (fast_lio2, glim) separates two things the LiDAR-only block otherwise
+  confounds: odometry accuracy and the value of global optimisation. Run both or
+  neither; one alone cannot make that separation.

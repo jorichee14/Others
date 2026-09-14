@@ -1,0 +1,258 @@
+"""Trajectory error: ATE, RPE, drift, and the absolute check.
+
+Three tiers, and a run is only reported with all three, because on coop2 the
+first tier alone cannot support an accuracy claim:
+
+  tier 1  ATE / RPE against the reference trajectory. The reference is the
+          offline mapping pipeline's own output (stage 09), so this is
+          AGREEMENT WITH THAT PIPELINE, not accuracy. It is still the most
+          discriminative number available, and it is the only one that exists
+          at every frame.
+  tier 2  the absolute check: the estimate's position at the surveyed-board
+          dwell frames against the board survey, which is independent evidence
+          with a stated uncertainty (3-15 mm on coop2). Sparse, but it is the
+          only tier whose error bar does not come from the thing being tested.
+  tier 3  self-consistency: revisit residual — how far apart the estimate puts
+          two passes over the same place. Needs no reference at all, so it is
+          the one tier that survives on a sequence with no ground truth.
+
+`report_uncertainty_m` is carried through every tier-1 result. A method whose
+ATE is below it has not been shown to be better than the reference; it has been
+shown to be indistinguishable from it.
+"""
+from __future__ import annotations
+
+import dataclasses
+
+import numpy as np
+
+from . import se3
+from .align import Alignment, fit
+from .trajectory import Trajectory
+
+__all__ = ["ErrorStats", "AteResult", "RpeResult", "ate", "rpe",
+           "absolute_check", "revisit_residual"]
+
+
+@dataclasses.dataclass
+class ErrorStats:
+    n: int
+    rmse: float
+    mean: float
+    median: float
+    p90: float
+    max: float
+
+    @staticmethod
+    def of(e: np.ndarray) -> "ErrorStats":
+        e = np.asarray(e, dtype=np.float64).reshape(-1)
+        if not len(e):
+            raise ValueError("no errors to summarise")
+        return ErrorStats(int(len(e)), float(np.sqrt(np.mean(e ** 2))), float(np.mean(e)),
+                          float(np.median(e)), float(np.percentile(e, 90)), float(np.max(e)))
+
+    def as_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass
+class AteResult:
+    trans: ErrorStats            # metres
+    rot: ErrorStats              # degrees
+    alignment: Alignment
+    n_ref: int
+    n_est: int
+    coverage: float              # fraction of estimate poses that found a reference
+    path_length_m: float
+    duration_s: float
+    drift_percent: float         # ATE RMSE as a percentage of path length
+    below_reference_uncertainty: bool | None = None
+
+    def as_dict(self) -> dict:
+        return {
+            "ate_trans_m": self.trans.as_dict(),
+            "ate_rot_deg": self.rot.as_dict(),
+            "alignment": {"mode": self.alignment.mode, "scale": self.alignment.scale,
+                          "scale_observed": self.alignment.scale_observed},
+            "n_ref": self.n_ref, "n_est": self.n_est, "coverage": self.coverage,
+            "path_length_m": self.path_length_m, "duration_s": self.duration_s,
+            "drift_percent": self.drift_percent,
+            "below_reference_uncertainty": self.below_reference_uncertainty,
+        }
+
+
+@dataclasses.dataclass
+class RpeResult:
+    delta: float
+    unit: str                    # "m" or "s"
+    trans: ErrorStats            # metres per delta
+    rot: ErrorStats              # degrees per delta
+    n_pairs: int
+
+    def as_dict(self) -> dict:
+        return {"delta": self.delta, "unit": self.unit, "n_pairs": self.n_pairs,
+                "rpe_trans_m": self.trans.as_dict(), "rpe_rot_deg": self.rot.as_dict()}
+
+
+def ate(est: Trajectory, ref: Trajectory, mode: str = "se3",
+        max_gap_s: float = 0.2, n_first: int | None = None,
+        reference_uncertainty_m: float | None = None) -> AteResult:
+    """Absolute trajectory error, reference interpolated onto the estimate's stamps.
+
+    This direction is deliberate: the estimate's stamps are the sensor's own,
+    and resampling the estimate would smooth exactly the high-frequency error a
+    tracking failure shows up as.
+    """
+    if len(est) < 3:
+        raise ValueError(f"{est.name or 'estimate'}: {len(est)} poses is not a trajectory")
+    n_est = len(est)
+    ref_i = ref.interpolate(est.stamps, max_gap_s=max_gap_s)
+    est_i = est.subset(np.searchsorted(est.stamps, ref_i.stamps))
+    if len(est_i) != len(ref_i):
+        raise ValueError("interpolation returned stamps not present in the estimate")
+
+    al = fit(est_i, ref_i, mode=mode, n_first=n_first)
+    est_a = al.apply(est_i)
+
+    e_t = np.linalg.norm(est_a.positions - ref_i.positions, axis=1)
+    e_r = np.array([np.degrees(se3.rotation_angle(
+        ref_i.poses[i][:3, :3].T @ est_a.poses[i][:3, :3])) for i in range(len(ref_i))])
+
+    L = est_a.path_length()
+    res = AteResult(
+        trans=ErrorStats.of(e_t), rot=ErrorStats.of(e_r), alignment=al,
+        n_ref=len(ref), n_est=n_est, coverage=len(ref_i) / n_est,
+        path_length_m=L, duration_s=est_a.duration,
+        drift_percent=float(100.0 * ErrorStats.of(e_t).rmse / L) if L > 1e-6 else float("nan"),
+    )
+    if reference_uncertainty_m is not None:
+        res.below_reference_uncertainty = bool(res.trans.rmse < reference_uncertainty_m)
+    return res
+
+
+def rpe(est: Trajectory, ref: Trajectory, delta: float, unit: str = "m",
+        max_gap_s: float = 0.2) -> RpeResult:
+    """Relative pose error over a fixed sub-path length or time.
+
+    Scored on *relative* motion, so it needs no alignment and is immune to the
+    reference's own global anchoring error. On a sequence whose ATE sits near
+    the reference's uncertainty, this is the metric that still separates
+    methods: the reference is far more trustworthy over 1 m than over 16 m.
+    """
+    if unit not in ("m", "s"):
+        raise ValueError(f"RPE unit {unit!r} must be 'm' or 's'")
+    ref_i = ref.interpolate(est.stamps, max_gap_s=max_gap_s)
+    est_i = est.subset(np.searchsorted(est.stamps, ref_i.stamps))
+
+    axis = est_i.arc_length() if unit == "m" else est_i.stamps - est_i.stamps[0]
+    j = np.searchsorted(axis, axis + delta, side="left")
+    pairs = [(i, int(j[i])) for i in range(len(axis)) if j[i] < len(axis)]
+    if not pairs:
+        raise ValueError(f"no pose pair spans {delta} {unit} "
+                         f"(the trajectory covers {axis[-1]:.2f} {unit})")
+
+    e_t, e_r = [], []
+    for a, b in pairs:
+        de = np.linalg.inv(est_i.poses[a]) @ est_i.poses[b]
+        dr = np.linalg.inv(ref_i.poses[a]) @ ref_i.poses[b]
+        E = np.linalg.inv(dr) @ de
+        e_t.append(np.linalg.norm(E[:3, 3]))
+        e_r.append(np.degrees(se3.rotation_angle(E)))
+    return RpeResult(delta, unit, ErrorStats.of(np.array(e_t)),
+                     ErrorStats.of(np.array(e_r)), len(pairs))
+
+
+def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
+                   ) -> list[dict]:
+    """Tier 2: the estimate against surveyed positions, in the estimate's own
+    aligned frame.
+
+    Each anchor is {name, position, uncertainty_m, window: [t0, t1]} — a
+    surveyed point and the interval during which the platform dwelled at a
+    stated offset from it. Returns one row per anchor with the residual and
+    whether it clears that anchor's own uncertainty, so an anchor too loose to
+    judge by (rs_anchor, at 15 mm std and 40 mm max) is visibly too loose
+    rather than silently averaged in with the good one.
+
+    The estimate must already be in the reference world frame — pass the output
+    of `Alignment.apply`, not the raw method output.
+    """
+    rows = []
+    for a in anchors:
+        t0, t1 = a["window"]
+        m = (est.stamps >= t0) & (est.stamps <= t1)
+        if not m.any():
+            rows.append({"anchor": a["name"], "n": 0, "residual_m": None,
+                         "uncertainty_m": a.get("uncertainty_m"),
+                         "verdict": "no estimate pose in the dwell window"})
+            continue
+        p = est.positions[m].mean(axis=0)
+        d = float(np.linalg.norm(p - np.asarray(a["position"], dtype=np.float64)))
+        u = a.get("uncertainty_m")
+        rows.append({
+            "anchor": a["name"], "n": int(m.sum()), "residual_m": d, "uncertainty_m": u,
+            "spread_m": float(np.linalg.norm(est.positions[m].std(axis=0))),
+            "verdict": ("indistinguishable from the survey" if u and d <= u
+                        else "resolved above the survey's uncertainty" if u
+                        else "no uncertainty declared for this anchor"),
+        })
+    return rows
+
+
+def revisit_residual(est: Trajectory, radius_m: float = 0.30,
+                     min_separation_s: float = 20.0) -> dict:
+    """Tier 3: how far the estimate drifts between two passes over one place.
+
+    A revisit is a pose pair close in space and far apart in time. With no
+    reference at all, the gap the estimate leaves between the two passes bounds
+    accumulated drift from below.
+
+    Two things this cannot do, and pretending otherwise turns a sampling
+    artefact into a drift number:
+
+      * The matched partner must be an INTERIOR closest approach — a strict
+        local minimum of distance inside the far window. A partner clamped at
+        the end of the trajectory is not a revisit; it is the trajectory running
+        out, and its "gap" is however far the last pose fell short. On a
+        single-lap route that alone produced tens of spurious pairs at 18 cm.
+      * Even an interior match is a pair of SAMPLES, not the same point. The gap
+        it reports has a floor at roughly the inter-pose spacing, which is
+        returned as `sampling_floor_m`; a residual at that scale is the sampling
+        grid, not drift.
+
+    Confirming a revisit properly means registering the two passes' sensor data
+    and reading the residual transform, which needs the clouds and not just the
+    poses. This function finds the candidates and bounds them; it does not close
+    the loop.
+    """
+    P, t = est.positions, est.stamps
+    floor = float(np.median(np.linalg.norm(np.diff(P, axis=0), axis=1))) if len(P) > 1 else 0.0
+    pairs, clamped = [], 0
+    for i in range(len(P)):
+        far_idx = np.nonzero(t > t[i] + min_separation_s)[0]
+        if len(far_idx) < 3:
+            continue
+        d = np.linalg.norm(P[far_idx] - P[i], axis=1)
+        k = int(np.argmin(d))
+        if k == 0 or k == len(d) - 1:
+            clamped += 1                       # the window ran out, not a revisit
+            continue
+        if d[k] < radius_m:
+            pairs.append((i, int(far_idx[k]), float(d[k])))
+    if not pairs:
+        return {"n_revisits": 0, "sampling_floor_m": floor, "n_clamped": clamped,
+                "note": f"no interior closest approach within {radius_m} m and "
+                        f"{min_separation_s} s apart. Either the route does not "
+                        f"revisit, in which case this tier is silent and loop "
+                        f"closure cannot be evaluated on this sequence at all, or "
+                        f"{clamped} candidate(s) were rejected as end-of-trajectory "
+                        f"clamping rather than counted as drift."}
+    d = np.array([p[2] for p in pairs])
+    stats = ErrorStats.of(d).as_dict()
+    return {"n_revisits": len(pairs), "residual_m": stats, "sampling_floor_m": floor,
+            "n_clamped": clamped,
+            "informative": bool(stats["median"] > 3 * floor),
+            "note": ("lower bound on drift, unconfirmed at scan level"
+                     if stats["median"] > 3 * floor else
+                     f"residual is within 3x the {floor*1e3:.0f} mm inter-pose "
+                     f"spacing — this is the sampling grid, not measured drift")}

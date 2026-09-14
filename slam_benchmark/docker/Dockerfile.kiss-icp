@@ -1,0 +1,12 @@
+FROM slambench/base:humble
+
+# Pinned to a commit, not a branch: a tag that moves is a manifest that lies.
+ARG KISS_ICP_REF=v1.0.0
+RUN pip3 install --no-cache-dir "kiss-icp==1.0.0" && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-kiss-icp || true && rm -rf /var/lib/apt/lists/*
+
+ENV SLAM_LAUNCH="ros2 launch kiss_icp odometry.launch.py \
+    topic:=${SLAM_CLOUD_TOPIC} use_sim_time:=true deskew:=true visualize:=false"
+ENV SLAM_POSE_TOPIC=/kiss/odometry
+ENV SLAM_MAP_TOPIC=/kiss/local_map
