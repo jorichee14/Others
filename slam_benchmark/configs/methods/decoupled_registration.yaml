@@ -15,7 +15,11 @@ params:
   # nothing is re-run, so this baseline costs one registration.
   source_runs: {mobile_1: kiss_icp, mobile_2: rtabmap_rgbd}
   # stage 2: one global registration between the two maps, then ICP.
-  global_registration: fpfh_ransac   # fpfh_ransac | teaser
+  # TEASER++, not FPFH+RANSAC. The precheck puts the two agents' path overlap at
+  # the low end, and a low inlier ratio is exactly where RANSAC degrades and
+  # TEASER++'s certifiable formulation does not. Keep fpfh_ransac only as the
+  # contrast row if you want to show that the choice mattered.
+  global_registration: teaser        # teaser | fpfh_ransac
   voxel_size: 0.10
   ransac_n: 4
   max_iterations: 100000

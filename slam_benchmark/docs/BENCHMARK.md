@@ -89,6 +89,10 @@ generalises off the platform.
 
 *Input:* as S1/S2. *Output:* a dense cloud in the method's world frame.
 *GT:* the anchored map cloud, cropped to the evaluation volume *V*, voxelised at ρ.
+*Normalisation:* every method's trajectory is fused through one common pipeline
+(VDBFusion TSDF at ρ) before scoring, so S3 measures trajectory quality expressed
+in geometry rather than the choice of map representation; a native map is a
+second column, not the primary one.
 *Why separate:* different ground truth, different metrics, and a different
 failure mode — a method can track well and map badly. Scored **only** against
 `reference_accumulation`, which accumulates raw sweeps along the reference
@@ -164,33 +168,117 @@ commit, `run.json` records the command, params, replay rate and host.
 
 ---
 
-## 5. Baselines
+## 5. Algorithms
 
-Grouped by what they consume. **Blocks are never merged into one ranking** — and
-which block a row lands in comes from the *stream* it ran on, not the method.
+Named systems, what each one tests, and why it is in this benchmark rather than
+another. Blocks are never merged into one ranking.
 
-| block | method | fusion / representation | loop closure | tasks |
-|---|---|---|---|---|
-| **LiDAR** | KISS-ICP | scan-to-model ICP, adaptive threshold | no | S1 S3 S4 |
-| | RTAB-Map (LiDAR) | ICP odometry + appearance graph | yes | S1 S3 |
-| | FAST-LIO2 | iterated-EKF LiDAR-inertial, ikd-Tree | no | S1 S3 *(I1)* |
-| | GLIM | LiDAR-inertial, factor graph | yes | **ablation only** — it is the reference's seed |
-| **RGB-D** | KISS-ICP (depth) | the **bridge**: same estimator as the LiDAR row | no | S2 S3 |
-| | ORB-SLAM3 (RGB-D) | sparse ORB + local BA + DBoW2 | yes | S2 |
-| | RTAB-Map (RGB-D) | appearance graph + dense map | yes | S2 S3 |
-| | BAD-SLAM | direct BA over surfels | yes | S2 S3 |
-| | DROID-SLAM | learned dense BA | yes | S2 |
-| **collaborative** | decoupled registration | per-agent SLAM → FPFH/RANSAC → ICP | no | S5 — the **floor** |
-| | Swarm-SLAM | decentralised, cross-modal loop closures | yes | S5 |
-| | oracle transform | true `T_ab` from the reference | — | S5 — the **ceiling** |
-| **references** | `reference_accumulation` | sweeps along the reference trajectory | — | S3 — the **ceiling** |
-| | `ego_only` | the S1/S2 run of the same stream | — | S6 — the **floor** |
+### S1 — LiDAR trajectory
 
-Every task has a floor and, where one exists, a ceiling. A method that does not
-beat its floor has not earned its complexity; a gap to the ceiling that the
-method does not close is the part of the problem still open.
+The Ouster is 128 beams at 9.7 Hz in a 16.6 m room, so **range is never the
+binding constraint here** — the two things that are, are sweep distortion during
+in-place rotation (a 103 ms sweep at pushcart turning rate smears azimuthally,
+and the smear does not average out) and geometric degeneracy against long flat
+lab walls. Methods are chosen to separate those.
 
----
+| method | what it tests | why on this data |
+|---|---|---|
+| **KISS-ICP** | scan matching alone, no IMU, no loop closure, no tuning | The anchor. Its published claim is to need no per-dataset tuning, so a poor indoor result is a *finding* rather than a config error. It deskews from the Ouster's per-point `t`. And it is the only entry that also runs on reprojected depth, which makes it the bridge to S2. |
+| **FAST-LIO2** | what an IMU buys | Iterated-EKF LiDAR-inertial on an ikd-Tree. The IMU matters here for a specific reason, not a generic one: it supplies the motion model that deskews the sweep during rotation, which is exactly where KISS-ICP's constant-velocity assumption is weakest. ⛔ I1, I5 |
+| **LIO-SAM** | what a *backend* buys, with the front end held fixed | Same inertial front end class, plus a factor graph with Scan Context loop closure. FAST-LIO2 vs LIO-SAM is the controlled odometry-vs-global-optimisation pair; FAST-LIO2 vs RTAB-Map is not, because the front ends differ too. This is the pair that replaces the one GLIM's circularity cost us. ⛔ I1 |
+| **RTAB-Map (ICP)** | loop closure *without* an IMU | The IMU-free half of the same question, and the pair for KISS-ICP on an identical stream. |
+| GLIM | — | **Ablation only.** It is the reference's seed; its errors are correlated with the reference's. Never a peer row. |
+
+*Optional:* **Point-LIO** treats returns as a stochastic process rather than a
+sweep, removing the sweep-time assumption entirely — the most principled answer
+to the rotation problem above. Add it if FAST-LIO2's deskew turns out to be the
+limiting factor. **MOLA-LO** is a current IMU-free alternative to KISS-ICP; run
+it only if KISS-ICP under-performs and you need to know whether that is the
+estimator or the scene.
+
+### S2 — no-LiDAR trajectory
+
+The centre of the benchmark, and the place to be concrete about what actually
+runs. Before any method: the RealSense sees 0.2–10 m through an 87° wedge in a
+room 16.6 m across, so **most of the room is out of range most of the time**.
+That, not the estimator, is the dominant effect, and every entry below is being
+asked how it copes with it.
+
+| method | what it tests | why on this data |
+|---|---|---|
+| **KISS-ICP** on reprojected depth | the sensor, with the estimator held fixed | The bridge. Its S1 and S2 rows differ *only* in the sensor, on the same rigid body and trajectory. Alone among the entries, it measures the LiDAR's worth rather than one system's response to losing it. |
+| **ORB-SLAM3 (RGB-D)** | the sparse-feature standard | Not because it will win, but because its failure modes are diagnostic: it loses tracking on low texture and fast rotation, and a pushcart turning in a lab produces both. Its `tracked_fraction` is a measurement of the *sequence*, not just of the method. |
+| **RTAB-Map (RGB-D)** | the practical workhorse | Appearance loop closure plus a dense map. It re-localises rather than dying, so it produces a number where ORB-SLAM3 may not — and it is the RGB-D entry that also enters S3. |
+| **BAD-SLAM** | representation vs sensor | Direct bundle adjustment over surfels, geometry and photometry jointly. If it closes most of the gap to S1, the RGB-D disadvantage was the *sparse representation*; if it does not, it was the sensor. That is the single most informative comparison in S2. GPU. |
+| **DROID-SLAM** | whether a learned front end changes the answer | Deep dense BA over learned flow. ORB-SLAM3's failures are supposed to be exactly what a learned front end removes. If they are, the classical field understates RGB-D and the track's conclusion changes. GPU, not real time — report that, do not hide it. |
+
+*Optional:* **MASt3R-SLAM** is the current foundation-model entry and is markedly
+better than DROID-SLAM on low-texture and wide-baseline cases; add it if
+DROID-SLAM is the strongest RGB-D row, to check whether the ceiling is higher
+still. **Skip the neural-implicit family** (NICE-SLAM, Co-SLAM, Point-SLAM)
+unless S3 specifically needs a neural mapping row: they are tuned on Replica and
+ScanNet with near-perfect depth and slow trajectories, their *tracking* is
+typically worse than ORB-SLAM3, and on real RealSense depth at walking pace they
+are fragile. Including one as a peer would misreport the state of the art.
+
+**Two practical gates before any of this runs.** The ZED publishes 32FC1
+**metres** and the RealSense 16UC1 **millimetres** — a factor of 1000, and every
+one of these systems completes either way, producing a map of a room a kilometre
+across. And the ZED's depth is `depth_registered`, already in the left colour
+frame, while the RealSense's sits 59 mm from colour. Both are declared per stream
+in `configs/coop2.yaml`; neither has a safe default.
+
+### S3 — map reconstruction
+
+**The map representation is normalised before scoring.** Each method's native
+output is a surfel cloud, an ikd-Tree, an accumulated sweep set or a TSDF, and
+comparing those directly measures the representation rather than the SLAM. So
+every method's *trajectory* is taken, the raw sensor data is fused through one
+common pipeline — **VDBFusion** (TSDF, fixed voxel ρ) — and that is what is
+scored. S3 then measures trajectory quality as expressed in geometry, with
+fusion held constant.
+
+The native map is reported as a **second, separate column** where one exists,
+because a method whose own representation beats the common fusion has a result
+worth stating — it just is not the same comparison.
+
+| entered in S3 | not entered | why not |
+|---|---|---|
+| KISS-ICP, FAST-LIO2, RTAB-Map (both), BAD-SLAM | ORB-SLAM3, DROID-SLAM | sparse landmarks and per-keyframe depth are not dense maps; scoring a Chamfer distance against one would be a category error dressed as a number |
+| `reference_accumulation` — the **ceiling** | | sweeps fused along the reference trajectory: what the sequence's own geometry supports given perfect poses |
+
+### S4 — sensor attribution
+
+**KISS-ICP only.** The bridge method is the only one whose LiDAR and RGB-D rows
+are comparable, so it is the only one whose crossover level means anything. One
+sweep per axis, ~12 runs, not 40.
+
+### S5 — collaborative
+
+For a **heterogeneous** pair — one LiDAR agent, one RGB-D agent — the off-the-shelf
+field is nearly empty, and saying so is part of the result.
+
+| method | what it tests | why on this data |
+|---|---|---|
+| **decoupled registration** | the floor | Each agent alone, then one offline registration. Use **TEASER++**, not FPFH+RANSAC: the precheck puts the two paths' overlap at the low end, and TEASER++ is certifiably robust at low inlier ratios where RANSAC degrades. Expect its error almost entirely in the *constant* term — one rigid transform cannot absorb either agent's drift, and that is the shape a joint method must beat in the *varying* term. |
+| **Swarm-SLAM** | the only real candidate | Decentralised, with LiDAR *and* RGB-D front ends and sparse inter-robot loop closures. It matches the recording's structure — two machines, two clocks — and it estimates the inter-agent transform rather than being handed it. Log the inter-robot match count: zero matches with a good relative pose means the frames happened to agree. |
+| **oracle transform** | the ceiling | The true `T_ab` from the reference. Caps every collaborative row, and separates "the merge was wrong" from "the partner had nothing to add from where it stood". |
+
+*Conditional:* **DiSCo-SLAM** is LiDAR-only, so `mobile_2` would enter as a
+reprojected depth cloud — run it only to test whether a Swarm-SLAM failure is
+the modality or the system. **Kimera-Multi** and **COVINS-G** are
+visual-inertial. ⛔ I1
+
+### S6 — infrastructure-anchored localization
+
+A task, so the algorithms are per stage.
+
+| stage | algorithm | why |
+|---|---|---|
+| detect, radar | **DBSCAN** per sweep, largest moving cluster | 10¹–10² points: expect a centroid, not a shape. Supplies bearing **and** range. |
+| detect, camera | **ArUco / ChArUco on the cart** | The recommendation that decides this task. Detecting a pushcart in a raw, distorted, 10.6 Hz Arducam stream is a research problem whose error would swamp the localization gain being measured. A printed board gives sub-pixel bearing, unambiguous identity, and an identity channel the radar cannot supply. One board per platform, next session. |
+| associate | nearest stamp, **after** clock reconciliation | `infra_1` is a third machine with a third clock. Skip this and every residual is a lag. |
+| fuse | **GTSAM pose graph**: `BetweenFactor<Pose3>` for ego odometry, `BearingFactor` / `BearingRangeFactor` to a landmark fixed at the surveyed pose | Smooths over sparse detections, degrades gracefully when they stop, and each factor carries its own covariance — so the node's pose σ (I9) enters the estimate rather than being ignored. An ESKF would also work and handles sparsity worse. |
 
 ## 6. Metrics
 
