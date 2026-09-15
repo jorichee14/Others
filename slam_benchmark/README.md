@@ -85,6 +85,72 @@ on that indoors is a research contribution, not a baseline, and a failed radar
 odometry row would describe the scoping rather than the sensor. The extrinsics
 are in `configs/coop2.yaml` so they are not lost.
 
+## Three further tracks
+
+`configs/tracks.yaml` defines them; each is built around a metric the
+single-agent table does not have, and each has a precondition that
+`scripts/precheck_tracks.py` answers from the reference trajectories alone —
+before any container starts.
+
+**A — sensor-constrained.** Not "which method wins on a weak sensor" but *where
+does the sensor stop supporting the task, and is the failure the method's or the
+geometry's*. coop2 can answer that properly because `mobile_1` carries the
+Ouster and the ZED on one rigid body, so constraint is applied as a **controlled
+ablation** of the Ouster — FoV, range, beams, rate, density (`configs/
+ablations.yaml`) — and every degraded cell has an exact paired control. Comparing
+`mobile_2` to `mobile_1` cannot do this: they differ in sensor *and* platform
+*and* route. `mobile_2` is still run, as the validation that the synthetic
+envelope predicts the real sensor.
+
+The instrument is `slambench/observability.py`: the point-to-plane information
+matrix of one scan, computed with no map, no reference and no estimator. Its
+weakest eigenvalue names the translation direction the observed surfaces do not
+constrain. That partitions every failure into *the geometry stopped constraining
+the pose* and *the geometry was fine and the method failed* — a distinction ATE
+cannot make, and the reason constrained-sensor results are usually
+unattributable. It reports **starved** separately from **degenerate**, because a
+sparse cloud defeats a normal estimator long before it defeats SLAM.
+
+**B — collaborative, two mobile agents.** The metric is not each agent's ATE. Two
+trajectories can each be excellent and useless together if the transform between
+them is wrong, and on coop2 the agents share a frame only because the reference's
+anchoring put them there — a collaborative system has to estimate it. So the
+headline is the error in `T_ab(t)`, which needs **no alignment at all**. It is
+then split into the fixed part (a map-merge or place-recognition failure) and the
+varying part (relative drift), because those have different fixes.
+
+Methods: **Swarm-SLAM** (decentralised, LiDAR and RGB-D front-ends — the one
+entry that takes this heterogeneous pair as it is) and **decoupled registration**
+(each agent alone, then one offline map registration). The second is not
+optional: it is the floor a joint system has to beat, and it still produces a
+number on the day cross-modal place recognition finds nothing.
+
+**C — infrastructure-anchored localization.** `infra_1` is static, surveyed, on
+its own clock, watching the room from 2 m up. Two uses: a benchmark task (ego +
+node at a known pose vs. ego alone — the interesting cell is the *constrained*
+agent, since a single static observer constrains bearing well and range poorly,
+close to complementary to a narrow-FoV depth camera), and instrumentation for
+every other track, being the only **continuous** evidence that comes from
+neither the reference nor the method.
+
+```bash
+python3 scripts/precheck_tracks.py --config configs/coop2.yaml \
+    --reference-dir runs/coop2_20260828/reference --cloud sample_scan.ply
+python3 scripts/eval_collab.py --config configs/coop2.yaml \
+    --method configs/methods/swarm_slam.yaml \
+    --run runs/coop2_20260828/swarm_slam \
+    --reference-dir runs/coop2_20260828/reference --solo <a single-agent run>
+```
+
+Two preconditions are live questions, not formalities. The agents start 16.3 m
+apart at opposite corners of a 16.6 m room, so **whether they ever shared a place
+at all** decides whether track B measures collaboration or each method's fallback
+— and if the answer is no, that is a finding about the *recording*, to fix by
+routing both platforms through one shared corridor next session rather than by
+widening the radius until the number looks acceptable. And the infrastructure
+node's own **pose uncertainty is stated nowhere**; until it is a number, track C
+reports improvement over ego-only and not an absolute accuracy.
+
 ## Which environment
 
 **Software.** ROS 2 Humble, one container per method, `--network none`, replay

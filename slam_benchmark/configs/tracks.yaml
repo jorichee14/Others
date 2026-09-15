@@ -1,0 +1,179 @@
+# ============================================================================
+# The three benchmark tracks on coop2, beyond the single-agent comparison in
+# README.md. `coop2.yaml` describes the SEQUENCE; this file describes what is
+# asked of it.
+#
+# Each track names the question, the cells, the metric, and — the part that is
+# usually left out — the precondition that decides whether the track can be run
+# on this recording at all. Run scripts/precheck_tracks.py FIRST: it answers
+# every precondition below from the reference trajectories alone, with no SLAM
+# system and no bag decoding, and two of them can come back "no".
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# TRACK A — sensor-constrained SLAM
+# ---------------------------------------------------------------------------
+# The question is NOT "which method wins on a weak sensor". It is: at what point
+# does the sensor stop supporting the task, and when it does, is that the
+# method's failure or the geometry's?
+#
+# coop2 can answer it properly because mobile_1 carries the Ouster and the ZED
+# on ONE rigid body. So constraint can be applied as a controlled ABLATION of
+# the Ouster, and every degraded cell has an exact paired control: same motion,
+# same scene, same clock, same reference poses. Running methods on mobile_2 and
+# comparing to mobile_1 cannot do this — those two differ in sensor AND platform
+# AND route, so a gap between them is unattributable.
+#
+# mobile_2 is still run, in its own right: it is the REAL constrained agent, and
+# its job here is to validate that the ablation's envelope actually predicts it.
+# An ablation cell tuned to the RealSense's FoV and range should land near the
+# RealSense's own result. If it does not, the ablation is missing something the
+# real sensor has (noise model, depth dropout at range, rolling shutter) and the
+# synthetic curve cannot be quoted on its own.
+sensor_constrained:
+  question: >
+    Where is the boundary between a sensor that supports SLAM and one that does
+    not, and is a failure at that boundary attributable to the method or to the
+    observability of the scene?
+  base_stream: mobile_1.ouster
+  control: full                      # the un-ablated cell, run in every sweep
+  validation_stream: mobile_2.realsense_rgbd
+  grid: ablations.yaml
+  methods: [kiss_icp, rtabmap_lidar]  # both IMU-free, so the sweep runs today
+  metrics:
+    - ate                            # tier 1, as everywhere else
+    - rpe                            # the discriminator once ATE saturates
+    - observability                  # per frame, from the ablated cloud ALONE
+    - tracked_fraction               # a lost-tracking run is a result, not a gap
+  # Observability is the point of the track and is computed BEFORE any method
+  # runs. It is a property of the cloud, so it partitions every failure into
+  # "the geometry stopped constraining the pose" and "the geometry was fine and
+  # the method failed" — a distinction ATE alone cannot make, and the reason a
+  # constrained-sensor result is usually unattributable.
+  report: >
+    One curve per method per axis, x = the constraint level, y = ATE, with the
+    fraction of frames below the degeneracy threshold shaded underneath. A
+    method's curve is only interpretable where that shading is thin.
+  precondition:
+    id: A1
+    check: >
+      The Ouster cloud must carry enough surface diversity at the tightest cell
+      that observability is non-degenerate for most frames. If an 87 deg / 10 m
+      crop is degenerate nearly everywhere, the track measures the room rather
+      than the sensor, and the ablation grid needs to stop earlier.
+    answered_by: scripts/precheck_tracks.py --track sensor_constrained
+
+# ---------------------------------------------------------------------------
+# TRACK B — collaborative SLAM, two mobile agents
+# ---------------------------------------------------------------------------
+# The metric is NOT each agent's ATE. Two trajectories can each be excellent and
+# still be useless together if the transform between them is wrong — and on
+# coop2 the agents share a frame ONLY because the pseudo ground truth's
+# anchoring put them there. A collaborative system has to estimate it.
+#
+# So the primary number is the error in T_ab(t), which needs no alignment and
+# borrows nothing from the reference but the answer. It is then split into the
+# fixed part (a map-merge / place-recognition failure) and the varying part (a
+# tracking failure), because those have different fixes and a single number
+# hides which one happened.
+collaborative:
+  question: >
+    Can two agents — one with a LiDAR, one with only a depth camera — establish
+    and hold a common frame, and what does the pair recover that neither has
+    alone?
+  agents: [mobile_1, mobile_2]
+  streams: {mobile_1: mobile_1.ouster, mobile_2: mobile_2.realsense_rgbd}
+  heterogeneous: true                # a LiDAR and an RGB-D camera, not two of a kind
+  methods: [swarm_slam, decoupled_registration]
+  metrics:
+    - relative_trajectory_error      # primary, gauge-free
+    - constant_vs_drift              # the decomposition
+    - place_overlap                  # context: was a merge even possible
+    - completeness_gain              # what the partner added to the map
+  # The single-agent runs from the main table ARE the reference for this track.
+  # A joint map that scores 0.80 where the ego alone scored 0.79 has not
+  # collaborated, whatever the absolute figure looks like, so no collaborative
+  # number is reported without its solo counterpart beside it.
+  solo_reference: {mobile_1: kiss_icp, mobile_2: rtabmap_rgbd}
+  precondition:
+    id: B1
+    check: >
+      The two agents must have occupied the same PLACE — not merely been
+      recording at the same time. Inter-robot loop closure needs shared observed
+      surface; two agents that never stand where the other stood share none, and
+      every collaborative method then reduces to its single-agent behaviour plus
+      a guess. The starts are 16.3 m apart, at opposite corners of a 16.6 m
+      room, so this is a live question and not a formality.
+    threshold: >
+      Report the fraction of mobile_2's path within the WEAKER sensor's range
+      (10 m, the RealSense's usable limit) of mobile_1's path. Below ~10%, the
+      track is not runnable on this sequence and that is a finding about the
+      recording — fix it by routing the two platforms through a shared corridor
+      in the next session, not by widening the radius until the number looks
+      acceptable.
+    answered_by: scripts/precheck_tracks.py --track collaborative
+
+# ---------------------------------------------------------------------------
+# TRACK C — infrastructure-anchored localization
+# ---------------------------------------------------------------------------
+# infra_1 is static, at a surveyed pose, with its own clock, watching the room
+# from 2 m up and from outside the area the boards span. That makes it the only
+# CONTINUOUS source of evidence on coop2 that comes from neither the pseudo
+# ground truth nor the method under test — the boards are independent but
+# sparse, and tier 3 is continuous but not independent.
+#
+# Two uses, and they are worth keeping separate because one is a benchmark task
+# and the other is instrumentation for every other track.
+infrastructure:
+  node: infra_1
+  world_pose_from: streams.infra_1.radar.static_world_pose
+  uses:
+    - id: C1
+      name: infrastructure-anchored localization (a benchmark task)
+      question: >
+        Given messages from a node at a known pose, how much better can an agent
+        localize than it can alone — and does that rescue the constrained agent?
+      input: ego stream + infra_1 detections + the node's surveyed pose
+      output: ego pose in the shared frame
+      baselines:
+        - ego_only                   # the floor; the same run as the main table
+        - ego_plus_infra_bearing     # camera detections only
+        - ego_plus_infra_bearing_range  # radar adds range along the line of sight
+      metric: ate, against the same pseudo ground truth
+      note: >
+        The interesting cell is the CONSTRAINED agent. A single static observer
+        constrains bearing well and range poorly, which is close to complementary
+        to what a narrow-FoV depth camera is bad at, so this is where an
+        infrastructure fix should pay most. Report it against the ego-only run of
+        the same stream or the gain is not readable.
+    - id: C2
+      name: external validation of every other track (instrumentation)
+      question: >
+        Does a method's trajectory predict where the surveyed node actually saw
+        the agent?
+      output: predicted-minus-observed bearing, and range where the radar supports it
+      note: >
+        Not a leaderboard row. It is the continuous independent check, and it is
+        the one tier that can catch an error the pseudo ground truth shares with
+        the method being scored. A bearing residual with a consistent sign is an
+        infrastructure pose or extrinsic error; a range residual growing with
+        distance is the agent drifting along the line of sight.
+  precondition:
+    id: C1a
+    check: >
+      The node's own pose uncertainty. coop2 states the surveyed pose to six
+      decimals and states no uncertainty for it anywhere — and an
+      infrastructure-anchored fix cannot be better than its anchor. Until this
+      is a number, C1 reports relative improvement over ego-only and NOT an
+      absolute accuracy, and C2's residuals carry an unknown bias.
+    status: UNRESOLVED
+  precondition_2:
+    id: C1b
+    check: >
+      The agents must actually be detectable from the node. The radar returns
+      order 1e1-1e2 points per frame and the Arducam image is RAW (distortion
+      not negligible at the edges), with camera_info published at 27.5 Hz
+      against a 10.6 Hz image stream — a mismatch that can mean the intrinsics
+      belong to a different camera on the same host. Verify the frame_ids with
+      inspect_bag.py before projecting anything.
+    status: UNRESOLVED

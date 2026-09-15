@@ -1,0 +1,42 @@
+name: decoupled_registration
+family: collaborative_baseline
+origin: "[-] not a published system: the obvious two-stage construction"
+modality: [lidar, rgbd]
+needs_imu: false
+loop_closure: false
+outputs: [trajectory, map]
+image: slambench/tools:humble
+
+track: collaborative
+streams: [mobile_1.ouster, mobile_2.realsense_rgbd]
+
+params:
+  # stage 1: each agent's single-agent result, taken from the main table —
+  # nothing is re-run, so this baseline costs one registration.
+  source_runs: {mobile_1: kiss_icp, mobile_2: rtabmap_rgbd}
+  # stage 2: one global registration between the two maps, then ICP.
+  global_registration: fpfh_ransac   # fpfh_ransac | teaser
+  voxel_size: 0.10
+  ransac_n: 4
+  max_iterations: 100000
+  icp_max_correspondence: 0.20
+
+notes: |
+  The late fusion of collaborative SLAM: run each agent alone, then register the
+  two maps offline, once. No online communication, no inter-robot loop closure,
+  no joint optimisation.
+
+  It is in the track for the same reason a single-agent reference is in every
+  other task — it is the floor a joint system has to beat, and it is the thing
+  that says whether the joint system is doing anything at all. A collaborative
+  method that does not beat one offline registration has not earned its
+  complexity on this sequence.
+
+  It also always runs, which matters here: it needs no cross-modal place
+  recognition, so it still produces a number on the day Swarm-SLAM finds zero
+  inter-robot matches — and the contrast between those two outcomes is itself
+  the finding.
+
+  Its failure mode is the informative one. A single rigid registration cannot
+  absorb either agent's drift, so its error decomposes almost entirely into the
+  CONSTANT term. A joint method that beats it should do so in the varying term.

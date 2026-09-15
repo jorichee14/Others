@@ -1,0 +1,39 @@
+name: infra_localization
+family: infrastructure_localization
+origin: "[-] a task with baselines, not an off-the-shelf system"
+modality: [rgbd, radar]
+needs_imu: false
+loop_closure: false
+outputs: [trajectory]
+image: slambench/tools:humble
+
+track: infrastructure
+streams: [mobile_2.realsense_rgbd, mobile_1.ouster]
+infra_stream: infra_1.radar
+infra_camera: /infra_1/image_raw
+
+params:
+  # Each variant is the SAME ego pipeline with one more source of evidence, so
+  # the difference between rows is the infrastructure and nothing else.
+  variants: [ego_only, ego_plus_infra_bearing, ego_plus_infra_bearing_range]
+  # The node's surveyed pose is in coop2.yaml. Its UNCERTAINTY is not stated
+  # anywhere, and a fix cannot be better than its anchor — so until it is a
+  # number this method reports improvement over ego_only and not an absolute.
+  infra_pose_sigma_m: null
+  infra_pose_sigma_deg: null
+  association_max_dt_s: 0.1
+  # The Arducam image is RAW. Anything projecting into it must undistort with
+  # `d` from camera_info first, and camera_info runs at 27.5 Hz against a
+  # 10.6 Hz image stream — check the two frame_ids match before trusting it.
+  undistort: true
+
+notes: |
+  The cell that matters is mobile_2 — the constrained agent. A single static
+  observer constrains bearing well and range poorly, which is close to
+  complementary to a narrow-FoV depth camera's weakness, so this is where an
+  infrastructure fix should pay most. Always report it against the ego_only run
+  of the same stream; an absolute number here is not readable.
+
+  mobile_1 is run too, as the control: the agent that already localizes well
+  should gain little, and if it gains a lot, the gain is coming from the
+  reference and not from the infrastructure.

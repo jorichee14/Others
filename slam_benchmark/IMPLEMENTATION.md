@@ -18,6 +18,9 @@ conclude, and a phase that depends on an unanswered one does not start.
 | I5 | **IMU↔LiDAR extrinsic**, if I1 is yes. | ⬜ open | Not published in the bag. A guessed one costs FAST-LIO2 more than KISS-ICP, so an unfavourable LIO result under a guess is not a result. |
 | I6 | **Does the route revisit?** | ⬜ open | If it does not, loop closure cannot be evaluated on this sequence and the RTAB-Map/GLIM entries measure only their odometry. Answer it from tier 3 on the reference trajectory itself — no method needed. |
 | I7 | **Which alignment the headline table uses** (`se3` vs `se3` anchored on the first N poses). | ⬜ open | Best-fit ATE and drift-from-a-fixed-start are different claims. Pick one for the headline, report the other in the appendix. |
+| I8 | **Did the two agents ever occupy the same place?** (track B precondition B1) | ⬜ open | Decides whether collaborative SLAM is runnable on this sequence at all. Answerable today from the reference trajectories with `precheck_tracks.py`. Starts are 16.3 m apart in a 16.6 m room. |
+| I9 | **`infra_1`'s pose uncertainty.** | ⬜ open | An infrastructure-anchored fix cannot be better than its anchor, and coop2 states the pose to six decimals with no uncertainty anywhere. Until it is a number, track C reports only relative improvement. |
+| I10 | **Does the Arducam's `camera_info` belong to the Arducam?** | ⬜ open | It publishes at 27.5 Hz against a 10.6 Hz image stream — the signature of a `camera_info_manager` on its own timer, which can carry a different `frame_id`. Verify before projecting anything into that image. |
 
 ## Phases
 
@@ -56,7 +59,30 @@ FAST-LIO2 and GLIM on `mobile_1.ouster`.
 and that goes in the write-up as a property of the recording.
 *Result:*
 
-### Phase 4 — the static observer ⬜
+### Phase 2b — track A, sensor-constrained ⬜
+The ablation sweep over `configs/ablations.yaml`, KISS-ICP and RTAB-Map (LiDAR),
+each cell reported with its per-frame degenerate fraction; then the validation
+that the `realsense_envelope` cell lands near the real `mobile_2` result.
+*Done when:* one curve per method per axis, with the observability floor shaded,
+and the synthetic-vs-real envelope check answered either way.
+*Blocks on:* A1 (run the precheck with a sample scan; a cell already degenerate
+there is an observability floor, not a method failure). Trajectory half needs
+nothing else.
+*Result:*
+
+### Phase 2c — track B, collaborative ⬜
+Swarm-SLAM and decoupled registration on the pair, scored on the inter-agent
+transform with the constant/varying split, plus the map gain against each
+agent's solo run.
+*Done when:* both methods have a relative-pose row, an inter-robot loop closure
+count, and a map gain read against the solo baseline.
+*Blocks on:* **B1 — did the agents ever share a place.** Answer it first with
+`precheck_tracks.py --track collaborative`; it needs no method and no bag
+decoding. Below ~10% overlap this phase does not run and the finding is about
+the recording.
+*Result:*
+
+### Phase 4 — the static observer (track C) ⬜
 `infra_1` is at a surveyed pose, watching the room, on its own clock. That makes
 it a source of evidence about the mobile agents' trajectories that is
 independent of both the pipeline and the boards — the only *continuous*
@@ -81,3 +107,4 @@ environment").
 | date | phase | what changed |
 |---|---|---|
 | 2026-09-14 | 0 | Evaluator, configs, container contract, docs. 32 self-tests + e2e smoke green. |
+| 2026-09-15 | 0 | Tracks A/B/C: observability, sensor ablation, collaborative and infrastructure metrics, precheck and collaborative evaluator. 59 self-tests green. Three defects caught by running the precheck on a fixture: bearings were computed in a body frame for a pose describing an optical one (a node 1.8 m above read the agents at +70 deg elevation); observability returned zeros for a starved normal estimate, indistinguishable from degenerate geometry, on exactly the density axis the track exists to measure; and the beam-decimation cells read as degenerate for the same reason until the voxel size was made to scale with density. |
