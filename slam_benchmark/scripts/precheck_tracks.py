@@ -123,8 +123,9 @@ def check_infrastructure(cfg, refs, tracks) -> dict:
 
 
 def check_sensor_constrained(cfg, tracks, cloud_path) -> dict:
-    _hdr("TRACK A — sensor-constrained: does the geometry survive the ablation?")
-    grid = yaml.safe_load((ROOT / "configs" / tracks["sensor_constrained"]["grid"]).read_text())
+    _hdr("TRACK A — no LiDAR: which property of the LiDAR does the gap need?")
+    grid = yaml.safe_load(
+        (ROOT / "configs" / tracks["no_lidar"]["attribution_grid"]).read_text())
     if not cloud_path:
         print(f"  {WARN}: needs one sample scan in the sensor frame to answer.\n"
               f"         Export any single Ouster sweep to .ply/.pcd and pass\n"
@@ -225,10 +226,10 @@ def main() -> int:
                                       for k, v in sorted(refs.items())))
 
     res = {}
-    want = ("sensor_constrained", "collaborative", "infrastructure") \
+    want = ("no_lidar", "collaborative", "infrastructure") \
         if args.track == "all" else (args.track,)
-    if "sensor_constrained" in want:
-        res["sensor_constrained"] = check_sensor_constrained(cfg, tracks, args.cloud)
+    if "no_lidar" in want:
+        res["no_lidar"] = check_sensor_constrained(cfg, tracks, args.cloud)
     if "collaborative" in want:
         res["collaborative"] = check_collaborative(cfg, refs, tracks)
     if "infrastructure" in want:

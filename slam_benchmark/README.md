@@ -93,24 +93,29 @@ single-agent table does not have, and each has a precondition that
 `scripts/precheck_tracks.py` answers from the reference trajectories alone —
 before any container starts.
 
-**A — sensor-constrained.** Not "which method wins on a weak sensor" but *where
-does the sensor stop supporting the task, and is the failure the method's or the
-geometry's*. coop2 can answer that properly because `mobile_1` carries the
-Ouster and the ZED on one rigid body, so constraint is applied as a **controlled
-ablation** of the Ouster — FoV, range, beams, rate, density (`configs/
-ablations.yaml`) — and every degraded cell has an exact paired control. Comparing
-`mobile_2` to `mobile_1` cannot do this: they differ in sensor *and* platform
-*and* route. `mobile_2` is still run, as the validation that the synthetic
-envelope predicts the real sensor.
+**A — SLAM without a LiDAR.** The constrained agent is one that carries a depth
+camera and nothing else. `mobile_1` carries the Ouster **and** the ZED on one
+rigid body, so the headline is `mobile_1.ouster` against `mobile_1.zed_rgbd`:
+one platform, one motion, one clock, one reference, and the only difference is
+whether the agent had a LiDAR. Almost no dataset offers that pair — the usual
+LiDAR-vs-RGB-D comparison is across datasets, or against *predicted* depth.
+`mobile_2` is the real LiDAR-free platform and checks the conclusion generalises
+off that one body.
 
-The instrument is `slambench/observability.py`: the point-to-plane information
-matrix of one scan, computed with no map, no reference and no estimator. Its
-weakest eigenvalue names the translation direction the observed surfaces do not
-constrain. That partitions every failure into *the geometry stopped constraining
-the pose* and *the geometry was fine and the method failed* — a distinction ATE
-cannot make, and the reason constrained-sensor results are usually
-unattributable. It reports **starved** separately from **degenerate**, because a
-sparse cloud defeats a normal estimator long before it defeats SLAM.
+KISS-ICP is the bridge, running on both sensors so its two rows differ in the
+sensor and nothing else; ORB-SLAM3, RTAB-Map, BAD-SLAM and DROID-SLAM are the
+RGB-D field. Nothing in the track needs an IMU, so it runs today in full.
+
+Two instruments, because an RGB-D agent fails two ways and only one is
+geometric: `slambench/observability.py` for what the 87° depth wedge stopped
+constraining, and ORB feature density for what the image stopped offering. A
+textureless wall at 2 m is geometrically fine and visually empty; a textured
+scene at 15 m is the opposite.
+
+The ablation grid (`configs/ablations.yaml`) is not the track — it is the
+attribution. Once the gap is measured, degrade the Ouster toward the depth
+camera's envelope until the bridge's result meets it, and the gap stops being a
+number and becomes *"68% of it was the field of view, not the range"*.
 
 **B — collaborative, two mobile agents.** The metric is not each agent's ATE. Two
 trajectories can each be excellent and useless together if the transform between

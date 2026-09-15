@@ -13,6 +13,7 @@ of the three can be blocked by a question that costs an afternoon to answer.
 | | what | cost | blocks |
 |---|---|---|---|
 | P0 | `precheck_tracks.py` on both reference trajectories + one sample scan | minutes | everything; it can close track B outright |
+| P0b | Confirm the ZED and RealSense depth scales (32FC1 metres vs 16UC1 mm) per stream | minutes | every RGB-D method in track A — a factor of 1000, and the run completes either way |
 | P1 | Export both references; run `reference_accumulation`; **look at the cloud** | ~1 h | every map metric in every track |
 | P2 | Resolve I1 (IMU present?) | minutes | the inertial arm of track A |
 | P3 | Resolve I2 (board dwell windows) | ~1 h | tier 2 everywhere — the only independent evidence |
@@ -23,78 +24,118 @@ before you spend a week on it.
 
 ---
 
-## Track A — sensor-constrained SLAM
+## Track A — SLAM without a LiDAR
 
 ### The question
 
-At what point does the sensor stop supporting the task, and when it does, is the
-failure the method's or the geometry's?
+What does an agent lose by having no LiDAR, which property of the LiDAR that
+loss is made of, and is a given failure the method's or the scene's?
+
+### Why coop2 can answer it cleanly
+
+`mobile_1` carries the Ouster **and** the ZED on one rigid body. So the headline
+comparison is `mobile_1.ouster` against `mobile_1.zed_rgbd`: one platform, one
+motion, one clock, one reference, and the only difference is whether the agent
+had a LiDAR. Almost no dataset offers that pair — the usual LiDAR-vs-RGB-D
+comparison is across datasets, or against *predicted* depth. Here the depth is
+measured and the trajectory is identical.
+
+`mobile_2` is the real LiDAR-free platform and checks that the conclusion
+generalises off that one body. It is also the agent tracks B and C are trying to
+rescue, so its number here is the baseline both of them are read against.
 
 ### Algorithms
 
 | role | algorithm | why this one | runs today |
 |---|---|---|---|
-| **primary** | **KISS-ICP** | Scan-to-model point-to-point ICP with an adaptive correspondence threshold and constant-velocity motion prediction. No IMU, no loop closure, no per-dataset tuning — so a degraded cell degrades for one reason, and the same estimator runs on every cell including the depth streams. | ✅ |
-| second | **RTAB-Map (LiDAR)** | Adds appearance/proximity loop closure over an ICP odometry front-end. Paired with KISS-ICP on the same cell it isolates **whether loop closure buys back what constraint takes away** — the single most useful pair in this track. | ✅ |
-| inertial arm | **FAST-LIO2** | Tightly-coupled iterated-EKF LiDAR-inertial with an ikd-Tree map. The scientifically interesting question in track A: *does an IMU restore the translation direction a narrow FoV stopped observing?* It should, and the observability metric predicts exactly where. | ⛔ I1, I5 |
-| instrument | **observability** (not SLAM) | Point-to-plane information matrix of one scan. Runs before any method, on every cell. | ✅ |
+| **bridge** | **KISS-ICP** on both sides | The only entry that runs on the Ouster *and* on the reprojected depth. Its two rows differ in the sensor and nothing else, so it — alone — measures the LiDAR's worth. Every other method varies estimator and modality at once. | ✅ |
+| sparse | **ORB-SLAM3 (RGB-D)** | The standard. Sparse ORB landmarks, local BA, DBoW2 loop closure. Its known failure modes — low texture, fast rotation — are exactly what a pushcart turning in a lab produces, so it sets the realistic floor. | ✅ |
+| dense, practical | **RTAB-Map (RGB-D)** | Appearance loop closure plus a dense map, so it is the only RGB-D entry that scores on the map metrics as well as the trajectory. | ✅ |
+| dense, ceiling | **BAD-SLAM** | Direct bundle adjustment over surfels, geometry and photometry jointly. Says how much of the RGB-D disadvantage is the *sparse representation* rather than the sensor. GPU. | ✅ |
+| learned | **DROID-SLAM** | Deep dense BA over learned flow. Answers whether ORB-SLAM3's failures survive a learned front-end — if they do not, the RGB-D gap is smaller than the classical field suggests and the track's conclusion changes. GPU, not real time. | ✅ |
+| control | KISS-ICP, RTAB-Map on `mobile_1.ouster` | Taken from the main table, not re-run. The ceiling. | ✅ |
 
-The inertial arm is the payoff of this track, not an optional extra. An IMU
-constrains the directions geometry does not, so the prediction is sharp and
-falsifiable: FAST-LIO2's ATE should stay flat across exactly the cells where
-KISS-ICP's degrades *and* observability says the free direction is one the IMU
-observes. If I1 comes back "no IMU", the track still runs — it just cannot make
-that claim, and the recording needs an IMU next time.
+Nothing here needs an IMU, so **this track runs today in full** — it does not
+wait on I1. If an IMU turns out to exist, add ORB-SLAM3 stereo-inertial as a
+second sparse row: it tests whether inertial sensing closes the gap that the
+missing LiDAR opened, which is the cheapest realistic fix for a LiDAR-free
+platform.
+
+### Two instruments, because there are two ways to fail
+
+A geometric observability metric cannot see a photometric failure. A textureless
+white wall at 2 m is geometrically well-conditioned and visually empty; a
+richly-textured scene at 15 m is the opposite. Report both per frame:
+
+- **geometric** — `slambench/observability.py`, the point-to-plane information
+  matrix of the depth cloud. Its weakest eigenvalue names the translation
+  direction the 87° wedge stopped constraining.
+- **photometric** — ORB feature count and spatial spread per frame. The standard
+  proxy, and the one that explains a tracking loss that geometry says should not
+  have happened.
+
+Together they partition every RGB-D failure into *the depth geometry went free*,
+*the image went blank*, and *neither — the method failed*. That third category
+is the only one that is a statement about the algorithm.
 
 ### Procedure
 
 ```
-# offline, no SLAM system, minutes
-for cell c in ablations.yaml:
-    for frame f in ouster_stream:
-        P    = ablate(cloud[f], c)                  # SENSOR frame, before any pose
-        o[f] = observability(P, voxel="auto")       # no map, no reference
-    deg[c]     = mean(o[f].degenerate())            # geometry stopped constraining
-    starved[c] = mean(o[f].starved())               # too sparse to judge — NOT the same
-    surfaces[c]= median(o[f].n_points)
+# 1. the headline: one estimator, two sensors, one platform
+for stream in (mobile_1.ouster, mobile_1.zed_rgbd):
+    traj = kiss_icp(stream)
+    ate[stream], rpe[stream], tracked[stream] = eval_run(...)
+gap = ate[mobile_1.zed_rgbd] - ate[mobile_1.ouster]      # the cost of no LiDAR
 
-# the sweep
-for cell c, method m:
-    traj, map = run(m, ablated_stream(c))
-    ate[c,m], rpe[c,m], tracked[c,m] = eval_run(...)
+# 2. the RGB-D field, on the same stream
+for m in (orbslam3_rgbd, rtabmap_rgbd, badslam, droid_slam):
+    run on mobile_1.zed_rgbd and on mobile_2.realsense_rgbd
 
-# the curve
-plot x = constraint level, y = ATE[c,m], one line per method per axis,
-     with deg[c] shaded underneath.
-     A method's line is only interpretable where the shading is thin.
+# 3. the instruments, per frame, before and independent of any method
+geo[f]  = observability(depth_cloud[f], voxel="auto")
+phot[f] = orb_feature_count_and_spread(image[f])
+
+# 4. attribution: what was the gap MADE of?
+#    degrade the Ouster toward the depth camera until the bridge's result meets it
+for axis in (fov, range, density):
+    for level in grid[axis]:
+        a = ate[kiss_icp on ablate(ouster, level)]
+        if a >= ate[mobile_1.zed_rgbd]:
+            crossover[axis] = level      # this much of the LiDAR was the difference
+            break
 ```
+
+Step 4 is what the ablation grid is for. It is not the track; it is the
+decomposition that turns "RGB-D was 3.2x worse" into "and 68% of that was the
+field of view, not the range".
 
 ### Plan
 
-1. **A0 — gate: precheck.** `precheck_tracks.py --track sensor_constrained --cloud <one sweep>`.
-   Cells already degenerate on a single scan are the observability floor. Either
-   stop the grid before them or report them as the floor — never as method failures.
-2. **A1 — gate: the harness is inert.** Run KISS-ICP on the `full` cell and check
-   it reproduces the main table's KISS-ICP number **exactly**. The ablation path
-   must be bitwise inert when it removes nothing; if it is not, every cell below
-   is measuring the harness. (Same discipline as `commchannel` in the sibling
-   study, and for the same reason.)
-3. **A2 — one axis at a time.** FoV, then range, then beams, then rate, then
-   density. Five sweeps × 2 methods × ~4 levels ≈ 40 runs plus controls.
-4. **A3 — the envelope validation.** Compare the `realsense_envelope` cell on
-   `mobile_1` against the real `mobile_2.realsense_rgbd` run. If they diverge,
-   the ablation is missing something the real sensor has — depth dropout at
-   range, a noise model, rolling shutter — and the synthetic curve must not be
-   quoted on its own. Report the gap either way; it is a result about how far
-   synthetic degradation can stand in for a real sensor.
-5. **A4 — the inertial arm**, if I1 is yes: FAST-LIO2 across the FoV axis only,
-   against the observability prediction.
+1. **A0 — gate: is the ZED depth usable over the run?** Its range is 0.3–12 m
+   against the Ouster's 20+, in an 87° wedge. If depth returns nothing over long
+   stretches, the comparison is against a sensor that was not working rather than
+   one that is weaker. `precheck_tracks.py --track no_lidar`.
+2. **A1 — the headline pair.** KISS-ICP on `mobile_1.ouster` and
+   `mobile_1.zed_rgbd`. Two runs. This is the number the whole track exists for,
+   and it is available on day one.
+3. **A2 — the RGB-D field.** Four methods × two streams. Report
+   `tracked_fraction` beside every ATE: an RGB-D method that loses tracking has
+   not scored badly, it has stopped, and an ATE over the 40% it held is not
+   comparable to one over 100%.
+4. **A3 — generalisation.** Does the `mobile_2` ordering match the
+   `mobile_1.zed_rgbd` ordering? If it does, the conclusion is about the sensor
+   class. If it does not, it is about the platform, and say so.
+5. **A4 — attribution.** The crossover sweep of step 4 above. One sweep per axis,
+   bridge method only — about 12 runs, not 40.
+6. **A5 — the runtime column.** KISS-ICP and ORB-SLAM3 run real time on a CPU;
+   DROID-SLAM does not, on a GPU. For a LiDAR-free platform — which is usually
+   LiDAR-free because of cost, power or weight — that column is part of the
+   result, not an appendix.
 
-**Deliverable.** One figure: ATE vs constraint level, per axis, with the
-observability floor shaded and the real `mobile_2` result marked as a point on
-the FoV/range axes.
-
----
+**Deliverable.** One table: the same estimator on both sensors of one platform,
+the RGB-D field beneath it, `mobile_2` beneath that, with tracked-fraction and
+runtime beside every row. Then one figure: the ablation level at which the
+LiDAR's result meets the depth camera's, per axis.
 
 ## Track B — collaborative SLAM, two mobile agents
 
@@ -255,7 +296,7 @@ rate beside each, plus the bearing/range residual plot that validates the node.
 ```
 P0 precheck ──┬─> B0 gate ──> B1 floor ──> B2 ceiling ──> B3 Swarm-SLAM ──> B4
               │
-              ├─> A0 gate ──> A1 inert ──> A2 sweep ──> A3 envelope ──> A4 (I1)
+              ├─> A0 gate ──> A1 pair ──> A2 field ──> A3 generalise ──> A4 attribution
               │                                  │
 P1 reference ─┴─> P3 boards ──> tier 2 live      └──────────> C4 crossover
               └─> P4 volume ──> map metrics           ↑
@@ -263,7 +304,9 @@ P1 reference ─┴─> P3 boards ──> tier 2 live      └──────
                   C0 (I9,I10) ──> C1 residual ──> C2 detect ──> C3 fusion
 ```
 
-Track A is the one that runs furthest on what exists today: no IMU needed, no
-second agent, no infrastructure detection. Start there while P3 and C0 are being
-resolved, and keep B0 as the first thing you run regardless — it is minutes, and
-it decides whether track B is a week of work or a sentence in the paper.
+Track A runs **in full** on what exists today: no entry in it needs an IMU, a
+second agent, or infrastructure detection. Its headline number — one estimator,
+two sensors, one platform — is two runs away. Start there while P3 and C0 are
+being resolved, and keep B0 as the first thing you run regardless: it is
+minutes, and it decides whether track B is a week of work or a sentence in the
+paper.

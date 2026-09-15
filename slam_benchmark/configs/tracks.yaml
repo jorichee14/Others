@@ -11,57 +11,71 @@
 # ============================================================================
 
 # ---------------------------------------------------------------------------
-# TRACK A — sensor-constrained SLAM
+# TRACK A — SLAM without a LiDAR
 # ---------------------------------------------------------------------------
-# The question is NOT "which method wins on a weak sensor". It is: at what point
-# does the sensor stop supporting the task, and when it does, is that the
-# method's failure or the geometry's?
+# The constrained agent is one that has NO LiDAR: it carries a depth camera and
+# nothing else. mobile_2 is that platform for real; mobile_1's ZED is that
+# platform's sensor on a body that also carries an Ouster.
 #
-# coop2 can answer it properly because mobile_1 carries the Ouster and the ZED
-# on ONE rigid body. So constraint can be applied as a controlled ABLATION of
-# the Ouster, and every degraded cell has an exact paired control: same motion,
-# same scene, same clock, same reference poses. Running methods on mobile_2 and
-# comparing to mobile_1 cannot do this — those two differ in sensor AND platform
-# AND route, so a gap between them is unattributable.
+# That second fact is what makes coop2 able to answer the question cleanly. The
+# headline comparison is mobile_1.ouster against mobile_1.zed_rgbd: ONE rigid
+# body, one motion, one clock, one reference, and the only thing that differs is
+# whether the agent had a LiDAR. Almost no dataset offers that pair — the usual
+# LiDAR-vs-RGB-D comparison is across datasets, or against PREDICTED depth. Here
+# the depth is measured and the trajectory is identical.
 #
-# mobile_2 is still run, in its own right: it is the REAL constrained agent, and
-# its job here is to validate that the ablation's envelope actually predicts it.
-# An ablation cell tuned to the RealSense's FoV and range should land near the
-# RealSense's own result. If it does not, the ablation is missing something the
-# real sensor has (noise model, depth dropout at range, rolling shutter) and the
-# synthetic curve cannot be quoted on its own.
-sensor_constrained:
+# mobile_2 is then the external check that the conclusion generalises off that
+# one platform, and it is the agent the collaborative and infrastructure tracks
+# are actually trying to rescue.
+#
+# The ablation grid (ablations.yaml) is NOT the track. It is the attribution
+# tool: once the gap is measured, degrade the Ouster toward the depth camera's
+# envelope — field of view, then range, then density — and find which property
+# of the LiDAR the gap was actually made of. A gap is a number; a gap decomposed
+# into "68% of it was the field of view" is a finding.
+no_lidar:
   question: >
-    Where is the boundary between a sensor that supports SLAM and one that does
-    not, and is a failure at that boundary attributable to the method or to the
-    observability of the scene?
-  base_stream: mobile_1.ouster
-  control: full                      # the un-ablated cell, run in every sweep
-  validation_stream: mobile_2.realsense_rgbd
-  grid: ablations.yaml
-  methods: [kiss_icp, rtabmap_lidar]  # both IMU-free, so the sweep runs today
+    What does an agent lose by having no LiDAR, which property of the LiDAR the
+    loss is made of, and is a failure the method's or the scene's?
+  headline_pair:
+    with_lidar: mobile_1.ouster
+    without_lidar: mobile_1.zed_rgbd          # SAME platform, same motion, same clock
+  generalisation_stream: mobile_2.realsense_rgbd   # the real LiDAR-free agent
+  attribution_grid: ablations.yaml            # the decomposition, not the track
+  methods:
+    # The bridge runs on BOTH sides of the headline pair, so its two rows differ
+    # only in the sensor. Every other method varies estimator and modality at
+    # once and cannot be read that way.
+    bridge: kiss_icp
+    rgbd: [orbslam3_rgbd, rtabmap_rgbd, badslam, droid_slam]
+    lidar_control: [kiss_icp, rtabmap_lidar]  # from the main table, not re-run
   metrics:
-    - ate                            # tier 1, as everywhere else
-    - rpe                            # the discriminator once ATE saturates
-    - observability                  # per frame, from the ablated cloud ALONE
-    - tracked_fraction               # a lost-tracking run is a result, not a gap
-  # Observability is the point of the track and is computed BEFORE any method
-  # runs. It is a property of the cloud, so it partitions every failure into
-  # "the geometry stopped constraining the pose" and "the geometry was fine and
-  # the method failed" — a distinction ATE alone cannot make, and the reason a
-  # constrained-sensor result is usually unattributable.
+    - ate
+    - rpe
+    - tracked_fraction               # an RGB-D method that loses tracking has not
+                                     # scored badly, it has stopped; report both
+    - observability                  # geometric: what the depth FoV stopped constraining
+    - feature_density                # photometric: what an RGB-D method needs and
+                                     # a geometric observability metric cannot see
+  # Two instruments, because an RGB-D method fails for two different reasons and
+  # only one of them is geometric. A textureless white wall inside the depth
+  # range is geometrically fine and photometrically empty; a well-textured scene
+  # beyond 10 m is the opposite. Reporting only one of these makes half the
+  # failures unattributable.
   report: >
-    One curve per method per axis, x = the constraint level, y = ATE, with the
-    fraction of frames below the degeneracy threshold shaded underneath. A
-    method's curve is only interpretable where that shading is thin.
+    The headline is one table: the same estimator (kiss_icp) on the Ouster and on
+    the ZED depth of the same platform, with the RGB-D field beside it and the
+    real mobile_2 agent below. Then the attribution: the ablation level at which
+    the Ouster's result meets the depth camera's, per axis.
   precondition:
     id: A1
     check: >
-      The Ouster cloud must carry enough surface diversity at the tightest cell
-      that observability is non-degenerate for most frames. If an 87 deg / 10 m
-      crop is degenerate nearly everywhere, the track measures the room rather
-      than the sensor, and the ablation grid needs to stop earlier.
-    answered_by: scripts/precheck_tracks.py --track sensor_constrained
+      The ZED depth stream must cover enough of the run to be comparable. Its
+      usable range is 0.3-12 m against the Ouster's 20+, and the reprojected
+      cloud is a 87-degree wedge; if the depth returns nothing over long stretches
+      of the route, the comparison is against a sensor that was not working
+      rather than against a sensor that is weaker.
+    answered_by: scripts/precheck_tracks.py --track no_lidar
 
 # ---------------------------------------------------------------------------
 # TRACK B — collaborative SLAM, two mobile agents
