@@ -24,6 +24,9 @@ conclude, and a phase that depends on an unanswered one does not start.
 
 ## Phases
 
+Per-track algorithms, procedures and gates are in `docs/TRACK_PLANS.md`;
+the phases below carry status only.
+
 ### Phase 0 — evaluator ✅
 Pure-Python evaluation layer with self-tests, plus an end-to-end smoke test on
 synthetic data.
