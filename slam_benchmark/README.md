@@ -87,8 +87,9 @@ are in `configs/coop2.yaml` so they are not lost.
 
 ## Three further tracks
 
-`configs/tracks.yaml` defines them and `docs/TRACK_PLANS.md` carries the
-algorithms, procedures and gates for each. Each is built around a metric the
+The full specification — tasks, protocol, baselines, metrics, reporting rules
+and limits — is `docs/BENCHMARK.md`. `configs/tracks.yaml` defines the tracks and
+`docs/TRACK_PLANS.md` carries the algorithms, procedures and gates for each. Each is built around a metric the
 single-agent table does not have, and each has a precondition that
 `scripts/precheck_tracks.py` answers from the reference trajectories alone —
 before any container starts.
