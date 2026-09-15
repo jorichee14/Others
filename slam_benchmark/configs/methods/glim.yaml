@@ -1,5 +1,18 @@
 name: glim
 family: lidar_inertial_slam
+# CORRELATED WITH THE REFERENCE ON coop2. GLIM is the SEED of the reference
+# pipeline, and stage 01a keeps the seed pose wherever it rejects a correction
+# (> 0.5 m or > 5 deg). So wherever GLIM was badly wrong the reference inherits
+# that error, and this row would agree with it for the wrong reason — its errors
+# are correlated with the reference's, which is the one thing a benchmark row
+# must not be.
+#
+# It is still worth running, as an ABLATION: seed vs. refined answers "what do
+# scan-to-map refinement and board anchoring add to the seed", which is a
+# question about the REFERENCE's quality, not about the methods. Its own block,
+# its own label, never in the peer ranking.
+enabled: false
+compare_as: ablation
 origin: "[O/I] used indoors and outdoors; the closest thing in the shortlist to
          a modern general-purpose LIO-SLAM"
 modality: [lidar, imu]
@@ -20,6 +33,13 @@ params:
   global_optimization: true
 
 notes: |
-  The pair (fast_lio2, glim) separates two things the LiDAR-only block otherwise
-  confounds: odometry accuracy and the value of global optimisation. Run both or
-  neither; one alone cannot make that separation.
+  Originally in the shortlist to separate odometry accuracy from the value of
+  global optimisation, paired against fast_lio2. That separation is still worth
+  having, but it can no longer be made with this entry: GLIM is the reference, so
+  its row would be measuring itself.
+
+  Make it with fast_lio2 vs rtabmap_lidar instead — one odometry-only and one
+  loop-closing, neither of them the reference — and read the GLIM ablation, if
+  run, only as "how much does offline processing and board anchoring add to this
+  estimator", which is a question about the REFERENCE's quality, not about the
+  methods.

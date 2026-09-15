@@ -37,6 +37,27 @@ params:
   initial_threshold: 0.5   # default 2.0 (adaptive after the first frames)
   max_points_per_voxel: 20
 
+# A SECOND ROLE, outside the benchmark: independent seed for the reference.
+#
+# Stage 01a re-initialises every scan from its seed and rejects corrections
+# beyond max_shift/max_rot, so the seed only has to land inside the ICP basin —
+# the refined trajectory should then be determined by the MAP, not by the seed.
+# That is a claim, and it is testable: run 01a from a KISS-ICP seed as well as
+# from the GLIM seed and compare the two refined trajectories. Agreement to
+# millimetres is the strongest cheap evidence available that the reference is a
+# property of the geometry rather than of the estimator that started it —
+# and it is the one check the per-round convergence table cannot make, because
+# both seeds converge, separately, by construction.
+#
+# Disagreement localises the problem: wherever the two refined trajectories
+# differ, one seed fell outside the basin and 01a silently kept it. Those are
+# exactly the poses to exclude from the reference, or to fix.
+#
+#     python3 01a_refine_poses.py cfg.json   # dataset.traj -> kiss_icp TUM
+#
+# This is not a benchmark row and does not go in the results table.
+seed_independence_check: true
+
 notes: |
   Odometry, not SLAM: no loop closure, no global map optimisation. That is a
   feature for this role — it makes it the drift floor every loop-closing method

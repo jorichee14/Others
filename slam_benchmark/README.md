@@ -125,14 +125,29 @@ end. That sequence costs one afternoon and it is the difference between
 
 ## Three things that decide whether any of this means anything
 
-**1. The reference is a SLAM result.** `/mobile_*/global_pose` is the offline
-mapping pipeline's stage-09 output. Scoring a SLAM system against it measures
-agreement with that pipeline. A method that matches it perfectly has reproduced
-it; a method that disagrees may be the better of the two and tier 1 cannot say.
-So every run is reported in three tiers — ATE/RPE against the pipeline, the
-independent check against the surveyed boards, and reference-free
-self-consistency — and the evaluator daggers any ATE that falls below the
-reference's own uncertainty rather than printing it as a win.
+**1. The reference is a pipeline, and its seed is GLIM.** GLIM supplies the seed
+trajectory; stage 01a then re-derives every pose by registering each scan into a
+frozen reference map, initialising from the *seed* rather than from the previous
+scan — which is why it is a reference and not another odometry result: error
+cannot accumulate along it. That construction is stronger than any single SLAM
+system in the shortlist, and it is why the shortlist is scored against it rather
+than the other way round.
+
+The consequence for the table is narrower than plain circularity. Stage 01a
+keeps the seed wherever it rejects a correction (> 0.5 m or > 5°), so the
+reference inherits GLIM's error exactly where GLIM was worst. A GLIM row would
+agree with the reference for the wrong reason — correlated errors — so it runs
+as an ablation ("what do refinement and anchoring add to the seed"), in its own
+block, never in the peer ranking. Every other method is scored normally.
+
+And the per-round convergence statistic is precision, not accuracy: a trajectory
+and a map can converge to a jointly wrong solution, which is what the Tikhonov
+damping toward the seed exists to bound in geometrically unobservable
+directions. Only the board survey bounds the accuracy. So every run is reported
+in three tiers — ATE/RPE against the pipeline, the independent check against the
+surveyed boards, and reference-free self-consistency — and the evaluator daggers
+any ATE below the reference's stated uncertainty rather than printing it as a
+win.
 
 **2. Tier 2 is currently silent.** The board positions are in the config; the
 *dwell windows* are not, because nothing in the bag states when each platform

@@ -41,10 +41,39 @@ dataset:
 # claim has to survive the loosest anchor in the frame it is made in.
 reference:
   kind: pipeline                 # pipeline | survey | external-tracker
+  produced_by: glim+scan_to_map  # NAME IT. What produced the reference decides
+                                 # which methods can be scored against it —
+                                 # see `correlated_with`.
   provenance: >
-    Offline mapping pipeline stages 03/06/08/09; both mobile trajectories
-    anchored to one surveyed map, which is what puts them in a single frame
-    without a hand-measured inter-robot transform.
+    GLIM (ros2) supplies the SEED trajectory only. Stage 01a then re-derives
+    every pose by registering each scan into a frozen reference map — the
+    survey-prior construction used by Newer College, Oxford Spires and ConSLAM,
+    with a self-built prior map rather than a survey-grade one. Two-stage ICP
+    (planarity-weighted local plane fits, then a nearest-neighbour polish),
+    Tikhonov damping toward the seed in geometrically unobservable directions,
+    and several rounds each rebuilding the reference map from the previous
+    round's poses. Stage 01 then builds the map from those refined poses, with
+    per-point deskew, free-space carving for dynamics, and anchoring to the
+    surveyed boards.
+
+    The property that makes this a REFERENCE rather than another SLAM result:
+    every scan is initialised from its seed pose, never from the previous
+    scan's refined pose, so error cannot accumulate along the trajectory. No
+    odometry system has that property, KISS-ICP included.
+  # NOT the same as circularity. The reference does not contain GLIM's
+  # trajectory — it contains GLIM's BASIN. Stage 01a rejects any correction
+  # beyond max_shift (0.5 m) / max_rot (5 deg) and keeps the seed, so wherever
+  # GLIM was wrong by more than that, the reference inherits the error and
+  # online GLIM would agree with it. Correlated errors, not identical ones.
+  # A GLIM row is therefore an ablation ("what do refinement and anchoring
+  # add"), never a peer row. Every other method is scored normally.
+  correlated_with: [glim]
+  # The convergence statistic stage 01a prints — median per-round correction
+  # falling to millimetres — is PRECISION, not accuracy: a trajectory and a map
+  # can converge to a consistent solution that is jointly wrong, which is
+  # exactly what the corridor-degenerate directions `prior_beta` exists to damp.
+  # Only the board survey bounds the accuracy, which is why uncertainty_m below
+  # is taken from it and not from the convergence table.
   # 15 mm: rs_anchor's std. anchor itself is repeatable to ~3 mm (6.9 mm std,
   # 3.2 mm loop closure over 526.9 s), anchor_b to ~13 mm honestly stated. Set
   # this to 0.007 only for a claim restricted to the region near `anchor`.
