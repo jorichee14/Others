@@ -82,7 +82,14 @@ reference:
   map_cloud: null
   agents:
     mobile_1:
-      topic: /mobile_1/global_pose        # 2833 msgs, ~18.1 Hz, irregular grid
+      # DISCREPANCY, unresolved: this file recorded 2833 msgs / ~18.1 Hz, but the
+      # recording's topic table reports 1516 msgs / 9.70 Hz -- exactly the count
+      # and rate of /mobile_1/ouster/points, i.e. one pose per LiDAR sweep, which
+      # is what a LiDAR-derived reference should look like. Probably this note is
+      # stale against an earlier export. It decides how densely the reference can
+      # be interpolated against a 14.7 Hz estimate, so settle it before quoting
+      # any ATE. See docs/MOBILE1_LIDARFREE_ODOMETRY.md, step P1.
+      topic: /mobile_1/global_pose        # 1516 msgs, 9.70 Hz (was: 2833, 18.1 Hz)
       frame: zed_left_camera_optical_frame
       expected_start: [0.697952, -0.062696, 0.193334]
       max_gap_ms: 200
@@ -214,23 +221,73 @@ streams:
           mobile platforms, from a surveyed pose, with a clock of its own. See
           IMPLEMENTATION.md phase 4.
 
-  # The IMU decides which half of the method shortlist can run at all, and
-  # nothing consulted so far states whether this bag carries one. Resolve it
-  # before scheduling anything:
-  #     python3 ../rosbag_to_opv2v/scripts/inspect_bag.py --bag <bag> | grep -i imu
-  # Fill the topic and rate, or set `present: false` and drop the LIO block.
+  # I1 RESOLVED from the recording's topic table: this bag carries THREE IMUs.
+  # mobile_1 has two, and which one a method may use is a scoping decision, not
+  # a hardware one -- see docs/MOBILE1_LIDARFREE_ODOMETRY.md Q2. The ZED's is
+  # the default for every visual-inertial entry: twice the rate, and rigid and
+  # factory-calibrated to the camera it is being fused with.
+  #
+  # What is still MISSING is the part that decides whether an inertial result
+  # means anything, and it is NOT filled in below because it is not recoverable
+  # from the topic table:
+  #   - the IMU<-sensor extrinsics (I5 for the LiDAR; Q4 for the camera). Only
+  #     3 messages on /tf_static for this whole rig -- verify what is in them
+  #     rather than assuming the ZED chain is.
+  #   - the noise model (white noise + random walk). Stated nowhere. Allan
+  #     variance off a static segment if the run has one; datasheet otherwise,
+  #     and then every tightly-coupled row says so beside its number.
   mobile_1.imu:
     agent: mobile_1
     modality: imu
-    present: null                         # REQUIRED before any LIO/VIO method runs
-    topic: null
-    rate_hz: null
+    present: true
+    topic: /mobile_1/zed/imu/data         # 30067 msgs, 192.4 Hz
+    rate_hz: 192.4
+    sensor_frame: zed_imu_link
+    extrinsic_from_camera: null           # REQUIRED before any tightly-coupled VIO
+    noise_model: null                     # REQUIRED; see above
+    magnetometer_topic: /mobile_1/zed/imu/mag   # 7596 msgs, 48.6 Hz
+    alternate:
+      # A separate ICM-20948 that lives in the LiDAR housing and returns no
+      # range data. Admissible as an IMU, but whether it is admissible under a
+      # "no LiDAR" constraint is the user's scoping call. Sensitivity ablation
+      # only -- never a headline row.
+      topic: /mobile_1/ouster/imu         # 15137 msgs, 96.9 Hz
+      rate_hz: 96.9
+      sensor_frame: os_imu
   mobile_2.imu:
     agent: mobile_2
     modality: imu
-    present: null
-    topic: null
-    rate_hz: null
+    present: true
+    topic: /mobile_2/imu                  # 28646 msgs, 183.3 Hz
+    rate_hz: 183.3
+    sensor_frame: null                    # not yet read off the bag
+    extrinsic_from_camera: null
+    noise_model: null
+
+  # ------------------------------------------------- already-recorded baselines
+  #
+  # The ZED SDK's own visual-inertial odometry is IN THE BAG. It costs nothing
+  # to score and it is the bar any open-source entry on this platform has to
+  # clear, so it is scored BEFORE any container is built. See
+  # docs/MOBILE1_LIDARFREE_ODOMETRY.md, step T0.
+  mobile_1.zed_sdk_odom:
+    agent: mobile_1
+    modality: rgbd_inertial
+    topic: /mobile_1/zed/odom             # 2292 msgs, 14.7 Hz
+    kind: recorded_baseline
+    loop_closure: false
+    sensor_frame: zed_left_camera_optical_frame
+    reference_frame_from_sensor: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+    note: closed-source. A row, not a method -- it cannot be ablated, so it sets
+          the bar without ever explaining it.
+  mobile_1.zed_sdk_pose:
+    agent: mobile_1
+    modality: rgbd_inertial
+    topic: /mobile_1/zed/pose             # 2200 msgs, 14.1 Hz
+    kind: recorded_baseline
+    loop_closure: true                    # spatial memory / area memory
+    sensor_frame: zed_left_camera_optical_frame
+    reference_frame_from_sensor: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
 
 # ---------------------------------------------------------------- evaluation
 eval:
