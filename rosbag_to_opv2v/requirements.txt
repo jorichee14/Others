@@ -1,0 +1,6 @@
+numpy
+pyyaml
+mcap
+mcap-ros2-support
+# rosbags        # only for .db3 (sqlite3) bags
+# open3d         # only for validate_opv2v.py --with-open3d

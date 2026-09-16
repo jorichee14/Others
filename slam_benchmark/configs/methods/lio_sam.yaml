@@ -1,0 +1,37 @@
+name: lio_sam
+family: lidar_inertial_slam
+origin: "[O]"
+modality: [lidar, imu]
+needs_imu: true
+loop_closure: true
+outputs: [trajectory, map]
+reference_impl: https://github.com/TixiaoShan/LIO-SAM
+image: slambench/lio-sam:humble
+
+streams: [mobile_1.ouster]
+imu_by_agent: {mobile_1: mobile_1.imu}
+
+params:
+  N_SCAN: 128
+  Horizon_SCAN: 1024
+  lidarMinRange: 0.3               # default 1.0 — indoors that discards the room
+  lidarMaxRange: 20.0              # default 1000.0
+  odometrySurfLeafSize: 0.10       # default 0.4
+  mappingCornerLeafSize: 0.10      # default 0.2
+  mappingSurfLeafSize: 0.20        # default 0.4
+  surroundingKeyframeSearchRadius: 10.0   # default 50.0
+  loopClosureEnableFlag: true
+  imuAccNoise: null                # measure from a stationary segment, do not
+  imuGyrNoise: null                # copy another rig's values
+  extrinsicTrans: null             # IMU <- LiDAR, not published in the bag
+  extrinsicRot: null
+
+notes: |
+  Exists to make ONE controlled comparison: FAST-LIO2 and LIO-SAM share the
+  inertial front-end class and differ in the backend — LIO-SAM adds a factor
+  graph with Scan Context loop closure, FAST-LIO2 has none. That pair isolates
+  global optimisation with the front end held fixed.
+
+  FAST-LIO2 against RTAB-Map would NOT isolate it: those differ in the front end
+  as well, so any gap is unattributable. This is the pair that replaces the one
+  GLIM's correlation with the reference cost us.

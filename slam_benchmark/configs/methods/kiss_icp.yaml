@@ -1,0 +1,69 @@
+# The anchor of this benchmark. Read configs/README.md before adding a method.
+name: kiss_icp
+family: lidar_odometry
+origin: "[O] outdoor/automotive by publication, but its claim is to need no
+         per-dataset tuning, which is what makes it usable indoors unchanged"
+modality: [lidar, rgbd]   # accepts both; the report block comes from the stream
+needs_imu: false
+loop_closure: false
+outputs: [trajectory, map]
+reference_impl: https://github.com/PRBonn/kiss-icp
+image: slambench/kiss-icp:humble
+
+# One method, several streams. This is the row that carries the cross-modality
+# comparison: the SAME estimator on the Ouster and on both depth streams, so a
+# difference between those rows is the sensor and not the algorithm. Every other
+# method in the shortlist varies estimator and modality at once.
+streams:
+  - mobile_1.ouster           # the LiDAR row
+  - mobile_1.zed_rgbd         # the SAME platform, the same motion, a depth camera
+  - mobile_2.realsense_rgbd   # the second platform's depth camera
+
+# The depth streams reach the estimator as reprojected clouds. The container is
+# responsible for that reprojection and must do it with the stream's own
+# camera_info and range limits, not with a default — the ZED's depth is 32FC1
+# metres and the RealSense's is 16UC1 millimetres, a factor of 1000 apart, and a
+# run with the wrong one completes and produces a map of a room 1000 m across.
+
+params:
+  # Indoor re-parameterisation. The published defaults are set for ~100 m
+  # automotive ranges; on a 16.6 m room they voxelise the scene away. Each value
+  # below is changed from the default and the default is named, so a poor result
+  # can be checked against the tuning rather than blamed on the method.
+  max_range: 20.0          # default 100.0
+  min_range: 0.3           # default 5.0 — a 5 m floor discards the whole room
+  voxel_size: 0.10         # default max_range/100 = 1.0 m
+  deskew: true             # the Ouster carries per-point t; use it
+  initial_threshold: 0.5   # default 2.0 (adaptive after the first frames)
+  max_points_per_voxel: 20
+
+# A SECOND ROLE, outside the benchmark: independent seed for the reference.
+#
+# Stage 01a re-initialises every scan from its seed and rejects corrections
+# beyond max_shift/max_rot, so the seed only has to land inside the ICP basin —
+# the refined trajectory should then be determined by the MAP, not by the seed.
+# That is a claim, and it is testable: run 01a from a KISS-ICP seed as well as
+# from the GLIM seed and compare the two refined trajectories. Agreement to
+# millimetres is the strongest cheap evidence available that the reference is a
+# property of the geometry rather than of the estimator that started it —
+# and it is the one check the per-round convergence table cannot make, because
+# both seeds converge, separately, by construction.
+#
+# Disagreement localises the problem: wherever the two refined trajectories
+# differ, one seed fell outside the basin and 01a silently kept it. Those are
+# exactly the poses to exclude from the reference, or to fix.
+#
+#     python3 01a_refine_poses.py cfg.json   # dataset.traj -> kiss_icp TUM
+#
+# This is not a benchmark row and does not go in the results table.
+seed_independence_check: true
+
+notes: |
+  Odometry, not SLAM: no loop closure, no global map optimisation. That is a
+  feature for this role — it makes it the drift floor every loop-closing method
+  has to beat, and its error is accumulation only, with no correction step to
+  explain away a good number.
+
+  Its output frame is the sensor frame it was given (os_lidar on mobile_1), NOT
+  a body frame. The evaluator right-multiplies the stream's
+  reference_frame_from_sensor out; do not pre-apply it in the container.

@@ -1,0 +1,10 @@
+FROM slambench/base:humble
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-rtabmap-ros \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set by the method config's params; the launch file differs between the LiDAR
+# and RGB-D entries, so both are here and the entrypoint picks on $SLAM_MODE.
+ENV SLAM_POSE_TOPIC=/rtabmap/odom
+ENV SLAM_MAP_TOPIC=/rtabmap/cloud_map
