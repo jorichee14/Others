@@ -13,63 +13,105 @@ get without its LiDAR*, so every sensor it still carries is in scope.
 
 ---
 
-## START HERE — the roster is a menu, not a plan
+## START HERE — the bar is measured, and it is 6 m
 
-**Do not run sixteen methods.** This document lists sixteen because each one
-answers a question *if you end up needing it*; running them all on a 156 s lap
-in a 16.6 m room produces a table most of whose rows the reference cannot tell
-apart. The list below is what to actually do.
+**`/mobile_1/zed/odom` lands ~6 m from the reference.** That is ~36% of the
+room's diagonal, so it is not drift — it is a failure. The cause is known and it
+is the room: **the walls are reflective, so the ZED's stereo depth drops out.**
 
-### Step 1, before choosing any method
+This is the single most important fact in this document and it **re-orders
+everything below**. The roster was written for a well-behaved depth camera. It
+is not one here.
 
-**Score `/mobile_1/zed/odom` against the LiDAR-refined trajectory.** One hour.
-No container, no build, no calibration, no GPU — the ZED SDK's own
-visual-inertial odometry is already in the bag.
+### What a 6 m bar changes
 
-That single number decides the whole project, and until it exists every method
-choice is a guess about a gap nobody has measured:
+**Good news first.** A 6 m bar means there is enormous room to improve and the
+reference can separate anything. The earlier worry — that methods would crowd
+the 15 mm uncertainty floor and be indistinguishable — is gone. Every row in
+this phase will be legible.
 
-| if the bar lands at | then |
-|---|---|
-| **~5 cm** | there is little to improve. The question becomes *can anything open-source match the firmware*, and most of this roster is pointless. |
-| **~50 cm** | the gap is real, you know its size, and you know what you are trying to close. |
+**Then the re-ordering.** Depth dropout is not a uniform handicap. It splits the
+roster by *how much each entry leans on depth*:
 
-### Step 2 — the core five, only if the gap is real
-
-| | method | answers |
+| leans on depth | entry | expect |
 |---|---|---|
-| 1 | `zed_sdk_odom` | the bar (done in step 1) |
-| 2 | `rtabmap_rgbd` | what open-source RGB-D does with no IMU |
-| 3 | `rtabmap_rgbd_imu` | what the IMU buys — **runs today, needs no calibration** |
-| 4 | `orbslam3_rgbd_inertial` | what *tight* coupling buys over loose |
-| 5 | `infra_anchored` | what an absolute anchor buys — the only entry that bounds drift rather than slowing it |
+| **totally** | `kiss_icp` (depth→cloud) | worst. It is pure depth geometry with no fallback. Now a *measurement of how bad the depth is*, not a contender. |
+| **heavily** | `rtabmap_rgbd`, `orbslam3_rgbd` | structurally handicapped. Their features need depth to be metric. |
+| **partly** | `rtabmap_rgbd_imu`, `orbslam3_rgbd_inertial` | the IMU **bridges** dropouts. This is exactly the failure inertial fusion exists for, so the IMU is worth far more here than in a well-lit room. |
+| **not at all** | `orbslam3_mono_inertial`, `mast3r_slam` | **promoted.** No depth dependence. MASt3R's learned prior predicts geometry on the reflective, textureless surfaces where stereo returns nothing — the case it is best at is the case this room produces. |
+| **not at all** | `radar_inertial_odometry`, `rgbd_inertial_radar` | **promoted, and the earlier prediction was wrong** — see below. |
+| **not at all** | `infra_anchored` | **promoted.** An external observer at a surveyed pose does not care what the agent's own sensors are doing. |
 
-Five rows, four differences, each one attributable to a single change. That is a
-result. Sixteen rows is a survey, and this sequence cannot support a survey.
+### A prediction in this document is now wrong, and it matters
 
-### Everything else is conditional — add it when a result demands it
+`rgbd_inertial_radar.yaml` says to expect *no whole-run gain*, on the grounds
+that "on a well-lit 156 s lab lap, vision does not fail much". **Reflective walls
+mean vision does fail, and probably a lot.** So:
 
-| entry | add it only when |
+* the vision-starved segments the radar claim was scoped to **exist on this
+  sequence** — the claim no longer needs a new recording to be testable;
+* the radar arm moves from *probably shows nothing* to *plausibly the thing that
+  rescues the run*, because mmWave does not care about optical reflectivity;
+* `slambench/observability.py` and the ORB-density instrument stop being
+  optional attribution and become the tools that **locate the failure**.
+
+### Step 1 — quantify the dropout before choosing anything
+
+Not "is the depth bad" but **"for how long at a stretch was it absent"**, because
+those break a tracker differently. A uniform 30% dropout is noise a system rides
+through; a four-second blackout is where the trajectory leaves the room and the
+6 m comes from.
+
+```bash
+python3 scripts/depth_health.py --bag <bag> \
+    --topic /mobile_1/zed/depth/depth_registered \
+    --range 0.3 12.0 --out runs/depth_health_mobile_1.csv
+```
+
+It reports the valid-depth fraction per frame, the starved stretches with their
+lengths and start times, and writes a CSV. **Cross the longest stretches against
+where the ZED odometry diverged.** If they coincide, the 6 m is explained and
+the ranking above is confirmed rather than assumed.
+
+Then read it:
+
+| result | consequence |
 |---|---|
-| `radar_inertial_odometry`, `rgbd_inertial_radar` | the core five leave a gap worth closing — and then claim it on the vision-starved segments, not whole-run |
-| `mast3r_slam` | you want a learned-vs-classical story and have the GPU |
-| `kiss_icp`, `orbslam3_rgbd`, `orbslam3_mono_inertial` | a core-five result needs explaining — they are attribution rows |
-| `swarm_slam_nolidar` + the 5b block | gate B0 passes **and** you want the common-frame question. It cannot rescue `mobile_1`: `mobile_2` is the weaker platform. |
-| `covins_g`, `rtabmap_ext_odom`, `zed_sdk_pose` | late, cheap, optional |
+| starved **< 10%**, uniform | depth is not the whole story; something else broke the ZED tracker too, and it is worth finding before building on it |
+| starved **> 20%**, episodic | the RGB-D arm is structurally handicapped. Run the promoted rows and report the RGB-D ones as the *measurement of the handicap* |
 
-Nothing is lost by not running these. The configs exist so that adding one is a
-command rather than a week.
+### Step 2 — the revised core five
 
-### The two things worth more than any method on this list
+Reordered by robustness to the failure that is actually present:
 
-Both are free, both are next-session, and both unlock more than any row above:
+| | method | why now |
+|---|---|---|
+| 1 | `rtabmap_rgbd_imu` | IMU bridges dropouts; runs **today**, no calibration |
+| 2 | `orbslam3_rgbd_inertial` | tight coupling pays most when one sensor is intermittent |
+| 3 | `mast3r_slam` | no depth dependence; a prior needs no texture — the reflective-wall case |
+| 4 | `radar_inertial_odometry` → `rgbd_inertial_radar` | immune to optical reflectivity |
+| 5 | `infra_anchored` | absolute, and immune to the agent's sensors entirely |
 
-1. **Record the right image.** One bandwidth setting. It restores stereo and
-   stereo-inertial — Kimera-Multi, VINS stereo, OpenVINS — which this recording
-   locks out entirely.
-2. **Leave the ZED on a desk overnight and log the IMU for 3 hours.** Nobody
-   needs to be present. It is a property of the unit, so it is measured once and
-   then serves every recording this lab ever makes.
+`rtabmap_rgbd`, `orbslam3_rgbd` and `kiss_icp` still run — as the rows that
+**quantify the depth handicap**, which is now a finding rather than a baseline.
+
+Also free, and worth an hour: score **`/mobile_1/zed/pose`** (the loop-closed
+topic). If spatial memory recovers much of the 6 m, that tells you how much of
+the failure is recoverable by loop closure alone, on the same data.
+
+### The 6 m is a better paper than 5 cm would have been
+
+A dataset where a depth camera fails on reflective indoor surfaces, and where
+inertial, radar and infrastructure evidence measurably rescue it, is a stronger
+contribution than one where RGB-D quietly works. The failure is the result.
+Report the dropout statistics beside every RGB-D row so the handicap is visible
+rather than inferred.
+
+### The two next-session items are unchanged and still worth more than any row
+
+1. **Record the right image** — one setting; restores the entire stereo family.
+2. **Log the ZED IMU overnight, 3 h** — measured once, serves every recording.
+   And now more urgent: the IMU carries far more weight in the revised plan.
 
 ---
 

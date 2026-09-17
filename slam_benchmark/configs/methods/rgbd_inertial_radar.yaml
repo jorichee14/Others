@@ -31,10 +31,17 @@ notes: |
   If it shows a gain worth chasing, the tight version becomes a justified piece
   of work rather than a speculative one.
 
-  THE HONEST EXPECTATION, WRITTEN BEFORE THE RUN. On a well-lit 156 s lab lap,
-  vision does not fail much — so this row will probably show NO whole-run ATE
-  gain over its tier-3 source. That is a real result and rule 8 says it is
-  reported with its number.
+  EXPECTATION REVISED 2026-09-17, AND THE REVISION IS THE POINT. This note used
+  to say that on a well-lit 156 s lab lap vision does not fail much, so expect no
+  whole-run gain. That was wrong about this room: the walls are REFLECTIVE, the
+  ZED's stereo depth drops out, and the recorded ZED odometry lands ~6 m from the
+  reference on a 16.6 m room. Vision fails here, measurably.
+
+  So this row moves from "probably shows nothing" to "plausibly the thing that
+  rescues the run". mmWave does not care about optical reflectivity, and radar
+  ego-velocity bounds exactly the quantity that runs away when a visual tracker
+  loses its depth. Quantify the dropout with scripts/depth_health.py first, so
+  any gain is attributed to the failure it repaired.
 
   Which is why the claim is made somewhere narrower and defensible. Radar
   ego-velocity bounds VELOCITY drift, and it can only pay where vision was
@@ -44,8 +51,7 @@ notes: |
   little to work with, and report this row's gain over its source ON THOSE
   SEGMENTS, beside the whole-run number and labelled as the narrower claim.
 
-  That is the difference between a finding this sequence can support and a
-  headline it cannot. If the instruments find no starved segments at all, then
-  coop2 cannot test this proposition, and the deliverable becomes a scoping
-  statement for a sequence that can: darker, faster, or with a stretch of blank
-  wall deliberately in shot.
+  The starved segments were the doubtful part of this plan and they are no
+  longer doubtful -- the reflective walls supply them. Report BOTH numbers
+  anyway: whole-run, and on the starved segments. The gap between the two is
+  what says whether radar repaired the failure or merely coincided with it.

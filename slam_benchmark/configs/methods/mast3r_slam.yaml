@@ -34,7 +34,13 @@ notes: |
   from a learned 3D prior. That pair is the question this phase is really about,
   posed at its extreme.
 
-  It also attacks the depth camera's ACTUAL failure mode rather than a generic
+  AND ON coop2 THAT STOPPED BEING HYPOTHETICAL. The room's walls are reflective,
+  the ZED's stereo depth drops out, and the recorded ZED odometry lands ~6 m from
+  the reference. So this row is no longer the speculative learned entry -- it is
+  one of the few that does not inherit the failure, and it should be run early
+  rather than last. Quantify the dropout with scripts/depth_health.py first.
+
+  It attacks the depth camera's ACTUAL failure mode rather than a generic
   one. The ZED stops at ~12 m, in an 87 degree wedge, and stereo depth degrades
   on textureless surfaces -- a blank lab wall at 3 m. MASt3R predicts geometry
   in exactly those regions, because a prior does not need texture to produce a
