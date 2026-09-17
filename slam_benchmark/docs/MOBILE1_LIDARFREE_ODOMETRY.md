@@ -101,98 +101,165 @@ being evaluated**, and it is answerable from the reference trajectory alone with
 
 ---
 
-## The methods
+## The methods — the final roster
 
-Five tiers. Each tier adds exactly one sensor to the tier above it, so a
-difference between adjacent tiers is attributable.
+Eleven entries. The test each one had to pass to be here: **it answers a question
+no other entry can**, and it forms a pair with something else in the list that
+isolates one variable. An entry that only adds a name to the table was cut — a
+benchmark of unrelated systems answers nothing, which is the same argument the
+main table uses to justify KISS-ICP as its bridge.
 
-### Tier 0 — free, already recorded
+| # | tier | method | input | coupling | LC | today |
+|---|---|---|---|---|---|---|
+| 1 | 0 | `zed_sdk_odom` | ZED VIO, recorded | closed | – | ✅ |
+| 2 | 0 | `zed_sdk_pose` | ZED VIO + spatial memory | closed | ✓ | ✅ |
+| 3 | 1 | `kiss_icp` | ZED depth → cloud | none | – | ✅ |
+| 4 | 2 | `rtabmap_rgbd` | RGB-D | none | ✓ | ✅ |
+| 5 | 2 | `orbslam3_rgbd` | RGB-D | none | ✓ | ✅ |
+| 6 | 3 | `rtabmap_rgbd_imu` | RGB-D + IMU gravity | loose | ✓ | ✅ |
+| 7 | 3 | `orbslam3_rgbd_inertial` | RGB-D + IMU | tight | ✓ | I13/I14 |
+| 8 | 3 | `orbslam3_mono_inertial` | colour + IMU | tight | ✓ | I13/I14 |
+| 9 | 3 | `rtabmap_ext_odom` | winner + LC + map | loose | ✓ | needs 1–8 |
+| 10 | 4 | `radar_inertial_odometry` | 2× radar Doppler + IMU | tight | – | field name/sign |
+| 11 | 4 | `rgbd_inertial_radar` | tier-3 winner + radar | loose | ✓ | needs 7–10 |
 
-| row | input | what it is |
+`openvins` is `status: deferred`, not in the roster. See the end of this section.
+
+### Why each one is here
+
+**1–2, the ZED SDK rows — because the incumbent has to be on the table.**
+"Better odometry" is a comparative claim and it needs something to be better
+than. This is the camera's own visual-inertial output, computed on the cart at
+record time, and an open-source entry that loses to the sensor's firmware has
+improved nothing. They cost no compute and no calibration. Their **pair** is a
+free loop-closure ablation on a system nobody had to build: same camera, same
+run, one feature toggled — which also answers I6 from the baselines alone. They
+stay out of the peer ranking because closed source cannot be ablated: they set
+the bar without ever explaining it.
+
+**3, KISS-ICP — because it separates the depth sensor from the camera.**
+It consumes the depth as a point cloud and ignores the image entirely, so it is
+the floor that says how much of any result belongs to the *range sensor* rather
+than to vision. It is also the bridge to the main benchmark: the same estimator
+already runs on `mobile_1.ouster`, so its two rows differ in the sensor and
+nothing else, and that is the only clean LiDAR-vs-depth number on the sequence.
+
+**4–5, the RGB-D field — because dense and sparse fail differently.**
+RTAB-Map carries appearance loop closure and a dense map, so it is the only
+tier-2 entry that scores on the map metrics at all. ORB-SLAM3 is the sparse
+standard, and its documented failure modes — low texture, fast rotation — are
+precisely what a pushcart turning in a lab produces, so it sets the realistic
+floor rather than an optimistic one. Two systems, because the RGB-D result
+should not rest on one implementation's tuning.
+
+**6, RTAB-Map + IMU gravity — because it separates "the IMU helped" from "tight
+coupling helped".** Those are two different claims that a single inertial row
+cannot distinguish, and that papers routinely conflate. A gravity constraint is
+a small, well-understood intervention: it bounds roll and pitch drift and does
+almost nothing for yaw or scale. Paired with #4 it gives the loosely-coupled
+answer to the same question #7 asks tightly. It also needs neither the
+camera↔IMU extrinsic nor the noise model, which is why it runs today and can
+carry the inertial headline while I13/I14 are open.
+
+**7–8, the ORB-SLAM3 inertial pair — because this is where the 2×2 closes.**
+Together with #5 they give three cells of a depth × IMU grid on *one codebase*,
+with identical parameters and identical calibration:
+
+| | no IMU | + IMU |
 |---|---|---|
-| `zed_sdk_odom` | ZED VIO | `/mobile_1/zed/odom`, no loop closure. The incumbent. |
-| `zed_sdk_pose` | ZED VIO + spatial memory | `/mobile_1/zed/pose`. What the closed-source system does with loop closure. |
+| **RGB-D** | `orbslam3_rgbd` (#5) | `orbslam3_rgbd_inertial` (#7) |
+| **mono** | not run — no scale at all | `orbslam3_mono_inertial` (#8) |
 
-Zero compute. Both are just TUM exports plus `eval_run.py`.
+`#7 − #5` is what the IMU buys. `#7 − #8` is what the depth buys. No mix of
+different systems can produce either subtraction, because each would vary the
+estimator at the same time. #8 costs nothing extra: same container, same
+parameters, one sensor mode changed.
 
-### Tier 1 — depth geometry only, no image, no IMU
+ORB-SLAM3 is the tight entry rather than something stronger on paper because
+the recording leaves no alternative — see *the thin field* below.
 
-| row | method | why |
+**9, RTAB-Map on external odometry — because it is probably the winner and it is
+nearly free.** RTAB-Map decouples odometry from mapping, so this row inherits
+whatever front-end won tiers 0–3 and adds loop closure, graph optimisation and a
+dense map on top. No new estimator, no new calibration. One reading rule: if its
+source is `zed_sdk_odom`, it measures what open-source loop closure adds to
+closed-source odometry — a real result, but not an open-source odometry result,
+so the source goes in the row label and never just the method name.
+
+**10, radar-inertial — because it fails for reasons vision does not.**
+It consumes ego-velocity, not geometry: `v_r = -d · v_radar` per static return,
+three non-collinear directions determine the body velocity, RANSAC rejects the
+movers, and the lever arm comes off with the IMU's own angular rate. Two radars
+~120° apart in yaw is close to what people deliberately build for this, since
+one unit observes the component across its boresight only weakly. Its ATE will
+be the worst in the table and that is not the point — velocity integrates, so
+heading error is unbounded and there is no loop closure here. Read it on short
+RPE and on velocity error against the reference's own differentiated velocity.
+
+**11, the fusion — because it is the actual proposition.** Loose on purpose: a
+velocity factor inside ORB-SLAM3 means modifying ORB-SLAM3, while a pose graph
+outside composes three things that already work, a week cheaper. If it pays,
+the tight version becomes justified work instead of speculative work.
+
+### The thin field, and why it is not a shortlisting failure
+
+Only the left image was recorded. That removes every stereo-inertial system —
+Kimera-VIO, MSCKF-VIO, VINS-Fusion stereo — and leaves **ORB-SLAM3's
+`IMU_RGBD` as the only well-maintained tightly-coupled RGB-D-inertial option**.
+The tier-3 tight slot is one system because the recording admits one, not
+because the search stopped early. That is a finding about the recording, and the
+fix is one bandwidth setting next session.
+
+`openvins` was in an earlier draft of this roster and was cut for two reasons.
+It varies the estimator *and* the sensor set against every RGB-D-inertial row at
+once, which is exactly the comparison this benchmark refuses. And the role first
+claimed for it was wrong: it was the hedge against an ORB-SLAM3 inertial-init
+failure on the grounds that it can initialise statically — but static init
+recovers gravity and the biases, **not scale**, and monocular scale needs
+translational excitation. On near-constant-velocity pushcart motion it is the
+first entry to fail, not the fallback. Its config is kept at
+`status: deferred` with the reversal condition: worth running as *stereo*-
+inertial once the right image exists, where it is metric without leaning on the
+IMU and the filter-versus-optimiser question finally becomes clean.
+
+BAD-SLAM and DROID-SLAM stay in track A's plan and out of this one. Both need a
+GPU and neither answers a question the eleven above leave open; the LiDAR-free
+question here is about sensor sets and coupling, not about dense or learned
+front-ends.
+
+### What is held, and by what
+
+Five of the eleven do not start yet, and `run_method.py` refuses them rather
+than defaulting — the existing `params`-null check already enforces rule 3 for
+exactly these values, so no new gate code was needed.
+
+| held | by | resolvable |
 |---|---|---|
-| `kiss_icp.zed_depth` | KISS-ICP on the reprojected depth cloud | The bridge from the main benchmark. Pure geometry: no photometry, no inertial. It is the floor, and it is the row that says how much of the result is the *depth sensor* rather than the camera. |
+| `orbslam3_rgbd_inertial`, `orbslam3_mono_inertial` | `IMU.T_b_c1` + the four noise terms | I13 today; I14 needs one overnight log |
+| `radar_inertial_odometry` | `doppler_field`, `doppler_sign`, noise terms | field name in minutes; sign off one known-motion segment |
+| `rtabmap_ext_odom`, `rgbd_inertial_radar` | `*_source` | not a value — a *result*. Held by design until 1–8 rank. |
 
-### Tier 2 — RGB-D, no IMU
-
-| row | method | why |
-|---|---|---|
-| `rtabmap_rgbd` | RTAB-Map RGB-D | Already configured in `configs/methods/rtabmap_rgbd.yaml`. F2M visual odometry + appearance loop closure + a dense map, so it is the only entry that also scores on the map metrics. The user named it, and it is the right primary. |
-| `orbslam3_rgbd` | ORB-SLAM3 RGB-D | Sparse landmarks, local BA, DBoW2. The standard, and its known failure modes — low texture, fast rotation — are exactly what a pushcart turning in a lab produces. |
-
-### Tier 3 — RGB-D + IMU. The actual candidates.
-
-This tier is what "better odometry by using SLAM techniques" most plausibly
-means, and it is newly unblocked by fact 1.
-
-| row | method | why |
-|---|---|---|
-| `orbslam3_rgbd_inertial` | ORB-SLAM3 RGB-D-inertial | Tightly coupled, with ORB-SLAM3's IMU initialisation. The main candidate. Its gap to `orbslam3_rgbd` **is** the IMU's worth, with the estimator held fixed. |
-| `openvins` | OpenVINS (MSCKF) | Filter-based rather than optimisation-based. Strong on short sequences, and it does not depend on a good IMU initialisation the way a batch VIO does — which matters on 156 s. |
-| `rtabmap_ext_odom` | RTAB-Map, fed an external VIO as its odometry source | RTAB-Map decouples odometry from mapping. Feeding it the best Tier-3 odometry and letting it do loop closure and the dense map is cheap, strong, and the most likely configuration to actually win. |
-
-`vins_fusion` is a reasonable fourth if the above disagree; it is not needed to
-answer the question.
-
-### Tier 4 — + radar. Gated, and the framing matters.
-
-**Radar is not a scan matcher here.** `configs/coop2.yaml` is right that ICP on
-10¹–10² points indoors is a research contribution rather than a baseline, and
-nothing in this plan changes that. What radar supplies is **ego-velocity from
-Doppler**: RANSAC + least squares over each sweep's (azimuth, elevation, radial
-velocity) triples gives a full 3D body velocity per sweep, which enters an
-estimator as a velocity factor. That is the standard technique and it is what
-radar-inertial odometry is built from.
-
-The rig is unusually well suited to it. A single radar conditions this poorly —
-the velocity component perpendicular to its boresight is weakly observed. There
-are **two** radars here, at yaw `-95.2°` and `+24.9°` (from `configs/coop2.yaml`),
-so roughly 120° apart, which is close to the configuration people deliberately
-build for this.
-
-| row | method | why |
-|---|---|---|
-| `rio` | radar ego-velocity + IMU | Vision-free. It cannot drift the way vision drifts because it fails for unrelated reasons, so it is the row that survives where the image does not. Expect poor absolute ATE and good *velocity* behaviour. |
-| `rgbd_inertial_radar` | Tier-3 winner + radar velocity factor | The integration. The claim being tested. |
-
-**Set the expectation honestly:** on a well-lit 156 s lab lap, vision probably
-does *not* fail much, so the radar row may show **no gain in whole-run ATE**.
-That is a real result, not a failed experiment, and reporting it as one is rule
-8 of `CLAUDE.md`. The way to make it a genuine test rather than a coin flip is
-to evaluate it where vision was actually weak: use the two per-frame instruments
-that already exist — `slambench/observability.py` for the geometric side and ORB
-feature density for the photometric one — to select the sub-segments where the
-camera was starved, and report the radar's gain **on those segments** alongside
-the whole-run number. That is a targeted claim the sequence can support, where
-the whole-run one probably cannot.
-
----
+The last row is the important distinction: those two are not blocked on missing
+information, they are blocked on the experiment not having run yet. Filling them
+early would mean choosing the winner before measuring it.
 
 ## The ablations
 
-Small and axis-at-a-time. Roughly 18 runs, not 40. The sensor-set axis is the
+Small and axis-at-a-time. Roughly 16 runs, not 40. The sensor-set axis is the
 headline; the rest are attribution.
 
 **A. Sensor set** (the headline ladder — this *is* tiers 0–4)
-`depth only → +image → +IMU → +radar`, and `radar+IMU` off to the side as the
-vision-free control.
+`depth only → +image → +IMU → +radar`, with `radar+IMU` off to the side as the
+vision-free control and `mono+IMU` as the no-depth control.
 
-**B. IMU source** — ZED IMU (192 Hz) vs Ouster IMU (97 Hz), same method.
-Tests sensitivity to IMU quality and rate. **Gated on Q2** — whether the Ouster's
-IMU is admissible under "don't use the LiDAR".
+**~~B. IMU source~~ — DROPPED.** The Ouster's IMU counts as using the LiDAR
+(Q2), so there is one admissible IMU and no axis to sweep.
 
 **C. Loop closure on/off** — RTAB-Map with `Rtabmap/LoopThr` at its default and
-at 1.0 (disabled). Isolates loop closure from the odometry front-end. **Only
-run if I6 says the route revisits**; otherwise the two rows are identical by
-construction and the cell is reported as not evaluable.
+at 1.0 (disabled). Isolates loop closure from the odometry front-end. **Only if
+I6 says the route revisits**; otherwise the two rows are identical by
+construction and the cell is reported as not evaluable. The `zed_sdk_odom` /
+`zed_sdk_pose` pair answers this for free before any container runs.
 
 **D. Depth max range** — `Vis/MaxDepth` at 3 / 5 / 8 / 12 m. The real-sensor
 analogue of the `r3`–`r20` axis already in `configs/ablations.yaml`, except
@@ -202,13 +269,11 @@ the real measured one, and if it does not, the synthetic curve must not be
 quoted alone.
 
 **E. Radar configuration** — `radar1` only / `radar2` only / both. Directly
-tests the two-radar conditioning claim above. Cheap, and it is the only cell
-that says whether the second radar earned its place on the cart.
+tests the two-radar conditioning claim. The cheapest cell in phase 6 and the
+only one that says whether the second unit earned its place on the cart.
 
 **F. Rate** — depth at 14.7 Hz vs decimated to 5 Hz. What a bandwidth-limited
 link would cost, which connects to the sibling collaborative-perception project.
-
----
 
 ## Evaluation
 
@@ -260,9 +325,11 @@ T0   Score /mobile_1/zed/odom and /mobile_1/zed/pose.             ~1 h
      THE BAR. Everything below is measured against it.
 T1   kiss_icp on reprojected ZED depth.                           1 run
 T2   rtabmap_rgbd, orbslam3_rgbd.                                 2 runs
-T3   orbslam3_rgbd_inertial, openvins, rtabmap_ext_odom.          3 runs
+T3a  rtabmap_rgbd_imu  [no unknowns -- runs with T2].            1 run
+T3b  orbslam3_rgbd_inertial, orbslam3_mono_inertial [I13/I14].    2 runs
+T3c  rtabmap_ext_odom  [needs the T0-T3b ranking].                1 run
 T4   rio, rgbd_inertial_radar  [gated on P0].                     2 runs
-AB   Ablations B-F on the tier winner only.                       ~10 runs
+AB   Ablations C-F on the tier winner only (B is dropped).        ~9 runs
 INS  Per-frame observability + ORB density; select the
      vision-starved segments; re-score T3 vs T4 on them.
 ```
@@ -408,14 +475,18 @@ Tier 3 splits by sensitivity, and only half of it is affected.
 
 | row | coupling | needs the noise model? |
 |---|---|---|
-| `rtabmap_ext_odom` | loose | no — runs today |
 | `zed_sdk_odom` / `zed_sdk_pose` | closed, already computed | no |
+| `rtabmap_rgbd_imu` | loose (gravity constraint) | **no — runs today, and carries the inertial headline** |
+| `rtabmap_ext_odom` | loose | no; held only on which source wins |
 | `orbslam3_rgbd_inertial` | tight | yes, and its *initialiser* especially |
-| `openvins` | tight | yes, but tolerates a static init |
+| `orbslam3_mono_inertial` | tight | yes, and it has no depth to fall back on |
 
 **So the ladder starts now.** The loosely-coupled rows carry the headline until
 the overnight log lands; the tight rows run in parallel, each labelled
-*datasheet-order noise*, and are re-run once the measurement exists. A tight row
+*datasheet-order noise*, and are re-run once the measurement exists.
+`rtabmap_rgbd_imu` is the row that makes this tolerable: a loosely-coupled
+inertial result that needs neither unknown, so the inertial claim is never
+hostage to the overnight log. A tight row
 that beats its loose sibling under inflated noise is a *real* result — it won
 despite a handicap. One that loses is not yet a result at all, and the table
 says so rather than ranking it.
