@@ -4,6 +4,7 @@ family: lidar_odometry
 origin: "[O] outdoor/automotive by publication, but its claim is to need no
          per-dataset tuning, which is what makes it usable indoors unchanged"
 modality: [lidar, rgbd]   # accepts both; the report block comes from the stream
+coupling: none            # no inertial input at all
 needs_imu: false
 loop_closure: false
 outputs: [trajectory, map]

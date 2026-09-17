@@ -2,6 +2,7 @@ name: orbslam3_rgbd
 family: visual_slam
 origin: "[I/O]"
 modality: [rgbd]
+coupling: none            # no inertial input at all
 needs_imu: false                # the RGB-D entry; the stereo-inertial one needs an IMU
 loop_closure: true
 outputs: [trajectory]           # sparse landmarks only — no map row
@@ -15,10 +16,13 @@ params:
   ORBextractor.scaleFactor: 1.2
   ORBextractor.nLevels: 8
   ThDepth: 40.0
-  DepthMapFactor: null          # REQUIRED per stream: 1.0 for the ZED's 32FC1 metres,
-                                # 1000.0 for the RealSense's 16UC1 millimetres. Getting
-                                # this wrong scales the whole map by 1000 and the run
-                                # still completes.
+  # DepthMapFactor is DERIVED, not declared: it is 1 / the stream's own
+  # `depth_scale` in configs/coop2.yaml (1.0 for the ZED's 32FC1 metres ->
+  # 1.0; 0.001 for the RealSense's 16UC1 millimetres -> 1000.0). Rule 4 — the
+  # number lives in the config that owns the stream and is not copied here,
+  # where the two could drift apart. Getting it wrong scales the map by 1000
+  # and the run still completes, which is why it is derived rather than typed.
+  DepthMapFactor: from_stream:depth_scale:inverse
 
 notes: |
   Produces a sparse point cloud, not a reconstruction, so it is scored on

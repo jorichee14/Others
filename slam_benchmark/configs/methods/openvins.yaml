@@ -1,0 +1,58 @@
+# Tier 3, off to the side. Uses LESS information than its neighbours, on
+# purpose, and is not a peer row.
+name: openvins
+family: visual_inertial_odometry
+origin: "[I/O]"
+modality: [rgbd]                # the STREAM is rgbd; this method consumes the
+                                # image and the IMU and IGNORES the depth
+coupling: tight
+needs_imu: true
+loop_closure: false             # MSCKF odometry, no global optimisation
+outputs: [trajectory]
+reference_impl: https://github.com/rpng/open_vins
+image: slambench/openvins:humble
+
+streams: [mobile_1.zed_rgbd]
+imu_by_agent:
+  mobile_1: mobile_1.imu
+
+params:
+  use_stereo: false             # FORCED: only the left image was recorded.
+                                # There is no /mobile_1/zed/right/* on this bag.
+  max_cameras: 1
+  num_pts: 200
+  fast_threshold: 15
+  grid_x: 5
+  grid_y: 3
+  # A filter, so it wants the noise model as much as ORB-SLAM3 does. I14.
+  gyroscope_noise_density: null
+  gyroscope_random_walk: null
+  accelerometer_noise_density: null
+  accelerometer_random_walk: null
+  T_imu_cam0: null              # I13
+
+notes: |
+  Its role is to answer ONE question the RGB-D rows cannot: does a filter handle
+  this motion better than a batch optimiser? ORB-SLAM3 initialises inertially by
+  solving a MAP problem that needs excitation; OpenVINS can initialise from a
+  STATIC period instead, which — if I15 finds the run starts stationary — makes
+  it the hedge against an ORB-SLAM3 init failure.
+
+  READ IT IN ITS OWN BLOCK, NOT AGAINST THE RGB-D ROWS. OpenVINS is a
+  monocular/stereo VIO and does not consume depth, and only the left image
+  exists on this bag, so here it is strictly MONOCULAR-inertial. That means its
+  SCALE comes from the IMU alone — and this is the worst motion for that.
+  Constant velocity makes scale and accelerometer bias weakly observable, and
+  unlike the RGB-D entries it has no depth to pin the metric down.
+
+  So the honest prediction is a scale error, and a large ATE that is mostly
+  scale rather than shape. Report an additional sim3-aligned ATE for this row
+  ALONE, labelled, next to its se3 number: the difference between the two is
+  how much of its error was scale, which is the finding. Do not put the sim3
+  number in the headline table, and do not let a good sim3 ATE here be read as
+  competitive with a metric method.
+
+  A note on what this row is NOT evidence about: if it loses badly, that is not
+  evidence that filters lose to optimisers, only that mono-inertial lost to
+  RGB-D-inertial on a sequence built for depth. The clean filter-vs-optimiser
+  comparison needs the right image, which is a next-session fix.

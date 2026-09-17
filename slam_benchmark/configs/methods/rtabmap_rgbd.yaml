@@ -2,6 +2,7 @@ name: rtabmap_rgbd
 family: rgbd_slam
 origin: "[I]"
 modality: [rgbd]
+coupling: none            # no inertial input at all
 needs_imu: false
 loop_closure: true
 outputs: [trajectory, map]

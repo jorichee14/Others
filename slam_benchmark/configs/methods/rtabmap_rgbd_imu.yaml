@@ -1,0 +1,46 @@
+# Tier 3, loosely coupled. The pragmatic favourite.
+name: rtabmap_rgbd_imu
+family: rgbd_slam
+origin: "[I]"
+modality: [rgbd]
+coupling: loose
+needs_imu: true
+loop_closure: true
+outputs: [trajectory, map]
+reference_impl: https://github.com/introlab/rtabmap_ros
+image: slambench/rtabmap:humble
+
+streams: [mobile_1.zed_rgbd]
+imu_by_agent:
+  mobile_1: mobile_1.imu
+
+params:
+  Vis/MinInliers: 15
+  Vis/MaxDepth: 8.0
+  RGBD/LinearUpdate: 0.05
+  RGBD/AngularUpdate: 0.05
+  Grid/3D: "true"
+  Grid/CellSize: 0.05
+  # The IMU enters as a GRAVITY constraint on the pose graph and as an
+  # orientation prior for the odometry's motion prediction. It does not enter a
+  # joint visual-inertial state, which is exactly why this row needs no noise
+  # model and no precise camera<->IMU extrinsic and can therefore run TODAY.
+  Optimizer/GravitySigma: 0.3
+  Mem/UseOdomGravity: "true"
+
+notes: |
+  Its pair with rtabmap_rgbd (identical but IMU-free) is the loosely-coupled
+  answer to the same question orbslam3_rgbd_inertial asks tightly. Running both
+  pairs is what separates "the IMU helped" from "tight coupling helped" — two
+  claims that a single inertial row cannot distinguish and that papers routinely
+  conflate.
+
+  A gravity constraint is a small intervention with a specific effect: it bounds
+  roll and pitch drift, and it does almost nothing for yaw or for scale. So
+  predict the shape of the win before measuring it — if this row improves
+  in-plane error substantially, something other than gravity is responsible and
+  it should be found rather than reported. Report z-drift separately from
+  in-plane, which is where the effect should actually appear.
+
+  The only tier-3 entry that also produces a dense map, so it is the one that
+  carries the map metrics for the whole LiDAR-free phase.
