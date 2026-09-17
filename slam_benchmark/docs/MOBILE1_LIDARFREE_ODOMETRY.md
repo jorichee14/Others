@@ -13,6 +13,66 @@ get without its LiDAR*, so every sensor it still carries is in scope.
 
 ---
 
+## START HERE — the roster is a menu, not a plan
+
+**Do not run sixteen methods.** This document lists sixteen because each one
+answers a question *if you end up needing it*; running them all on a 156 s lap
+in a 16.6 m room produces a table most of whose rows the reference cannot tell
+apart. The list below is what to actually do.
+
+### Step 1, before choosing any method
+
+**Score `/mobile_1/zed/odom` against the LiDAR-refined trajectory.** One hour.
+No container, no build, no calibration, no GPU — the ZED SDK's own
+visual-inertial odometry is already in the bag.
+
+That single number decides the whole project, and until it exists every method
+choice is a guess about a gap nobody has measured:
+
+| if the bar lands at | then |
+|---|---|
+| **~5 cm** | there is little to improve. The question becomes *can anything open-source match the firmware*, and most of this roster is pointless. |
+| **~50 cm** | the gap is real, you know its size, and you know what you are trying to close. |
+
+### Step 2 — the core five, only if the gap is real
+
+| | method | answers |
+|---|---|---|
+| 1 | `zed_sdk_odom` | the bar (done in step 1) |
+| 2 | `rtabmap_rgbd` | what open-source RGB-D does with no IMU |
+| 3 | `rtabmap_rgbd_imu` | what the IMU buys — **runs today, needs no calibration** |
+| 4 | `orbslam3_rgbd_inertial` | what *tight* coupling buys over loose |
+| 5 | `infra_anchored` | what an absolute anchor buys — the only entry that bounds drift rather than slowing it |
+
+Five rows, four differences, each one attributable to a single change. That is a
+result. Sixteen rows is a survey, and this sequence cannot support a survey.
+
+### Everything else is conditional — add it when a result demands it
+
+| entry | add it only when |
+|---|---|
+| `radar_inertial_odometry`, `rgbd_inertial_radar` | the core five leave a gap worth closing — and then claim it on the vision-starved segments, not whole-run |
+| `mast3r_slam` | you want a learned-vs-classical story and have the GPU |
+| `kiss_icp`, `orbslam3_rgbd`, `orbslam3_mono_inertial` | a core-five result needs explaining — they are attribution rows |
+| `swarm_slam_nolidar` + the 5b block | gate B0 passes **and** you want the common-frame question. It cannot rescue `mobile_1`: `mobile_2` is the weaker platform. |
+| `covins_g`, `rtabmap_ext_odom`, `zed_sdk_pose` | late, cheap, optional |
+
+Nothing is lost by not running these. The configs exist so that adding one is a
+command rather than a week.
+
+### The two things worth more than any method on this list
+
+Both are free, both are next-session, and both unlock more than any row above:
+
+1. **Record the right image.** One bandwidth setting. It restores stereo and
+   stereo-inertial — Kimera-Multi, VINS stereo, OpenVINS — which this recording
+   locks out entirely.
+2. **Leave the ZED on a desk overnight and log the IMU for 3 hours.** Nobody
+   needs to be present. It is a property of the unit, so it is measured once and
+   then serves every recording this lab ever makes.
+
+---
+
 ## Four facts from the bag metadata that set the plan
 
 These come from the recording's own topic table, and three of them are not yet
