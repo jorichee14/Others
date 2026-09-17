@@ -1,5 +1,28 @@
-# Tier 3, off to the side. Uses LESS information than its neighbours, on
-# purpose, and is not a peer row.
+# DEFERRED, 2026-09-17 -- not run in phase 6. Kept because the decision and its
+# reversal condition are worth recording; deleting it would lose both.
+#
+# WHY NOT. Two reasons, and the first is the one that matters.
+#
+# 1. It varies the estimator AND the sensor set against every RGB-D-inertial row
+#    at once, so a difference cannot be attributed to either. That is precisely
+#    the comparison the README refuses -- it is why KISS-ICP is the bridge -- and
+#    orbslam3_mono_inertial gets the mono-inertial number by varying the depth
+#    input ALONE, on the same codebase and the same calibration.
+# 2. The role first claimed for it here was wrong. It was put in as the hedge
+#    against an ORB-SLAM3 inertial-init failure, on the grounds that OpenVINS can
+#    initialise from a static period. Static init recovers gravity and the biases;
+#    it does NOT recover scale, and monocular scale needs translational
+#    excitation. On near-constant-velocity pushcart motion OpenVINS is therefore
+#    the FIRST entry to fail, not the fallback.
+#
+# WHEN IT BECOMES WORTH RUNNING: once the right image is recorded. As
+# STEREO-inertial it is metric without relying on the IMU for scale, it is a
+# strong entry on its own terms, and the filter-versus-optimiser question against
+# ORB-SLAM3 becomes clean because both sides would then see the same geometry.
+# That is a next-sequence entry, not a coop2 one.
+status: deferred
+deferred_reason: varies estimator and sensor at once; mono scale unobservable on
+                 this motion. Revisit when the right image exists.
 name: openvins
 family: visual_inertial_odometry
 origin: "[I/O]"
