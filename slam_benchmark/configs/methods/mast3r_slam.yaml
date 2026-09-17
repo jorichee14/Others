@@ -1,0 +1,62 @@
+# Tier 3. The learned entry, and the other half of the scale question.
+name: mast3r_slam
+family: learned_dense_slam
+origin: "[O] MASt3R's priors are trained on outdoor and object-centric data;
+         indoor lab is in distribution for 7-Scenes-like scenes but the ZED's
+         wide FoV and the pushcart's motion are not what it was tuned on"
+modality: [rgbd]                # the STREAM is rgbd; this row consumes the
+                                # COLOUR IMAGE ONLY. The depth is discarded --
+                                # and that is the experiment, again.
+coupling: none                  # no IMU. Geometry comes from a learned prior.
+needs_imu: false
+loop_closure: true              # retrieval-based, over the pointmap graph
+outputs: [trajectory, map]      # DENSE pointmaps, so it scores on map metrics
+reference_impl: https://github.com/rmurai0610/MASt3R-SLAM
+image: slambench/mast3r-slam:humble
+gpu: required
+
+streams: [mobile_1.zed_rgbd]
+
+params:
+  use_calib: true               # the ZED's camera_info is known and good; running
+                                # it uncalibrated is a different experiment
+  mode: monocular               # there is no other mode: it takes images
+  # Trained at a fixed input resolution. The resize is per stream and must be
+  # recorded because it changes the effective focal length the network sees --
+  # the same trap droid_slam.yaml already carries.
+  image_size: null
+
+notes: |
+  WHY IT IS HERE, AND IT IS NOT "BECAUSE IT IS NEW". It pairs with
+  orbslam3_mono_inertial to ask one sharp question: on a LiDAR-free platform,
+  where is scale and geometry best obtained from? Both rows are monocular and
+  neither sees the depth. One takes its geometry from an IMU; the other takes it
+  from a learned 3D prior. That pair is the question this phase is really about,
+  posed at its extreme.
+
+  It also attacks the depth camera's ACTUAL failure mode rather than a generic
+  one. The ZED stops at ~12 m, in an 87 degree wedge, and stereo depth degrades
+  on textureless surfaces -- a blank lab wall at 3 m. MASt3R predicts geometry
+  in exactly those regions, because a prior does not need texture to produce a
+  pointmap. So it is the one entry that could plausibly beat the depth sensor on
+  the sensor's own weakness, which makes a loss here as informative as a win.
+
+  SCALE: HANDLE IT EXPLICITLY OR THE ROW IS UNREADABLE. Monocular with learned
+  priors is not reliably metric -- the published evaluations are sim3-aligned.
+  Report this row TWICE and label both:
+    * sim3-aligned ATE, comparable to the paper's own numbers
+    * se3 ATE after fixing ONE global scale factor solved against the ZED depth
+      over the frames where depth is valid
+  The second is the useful one here, it costs a single least-squares fit, and it
+  converts the row into something the metric table can hold. The gap between the
+  two is the scale error, reported as its own number.
+
+  It supersedes droid_slam FOR THIS PHASE -- denser, newer, and better on low
+  texture, which is the failure this room will produce. droid_slam stays in
+  track A, where the question is about learned front-ends in general rather than
+  about this platform's scale.
+
+  GPU, and not real time on anything modest. The runtime column is part of the
+  result: a LiDAR-free platform is usually LiDAR-free because of cost, power or
+  weight, and an entry that needs a 4090 on the cart has answered a different
+  question from the one that was asked.

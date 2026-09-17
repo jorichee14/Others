@@ -11,6 +11,7 @@ reference on a different clock, a map scored against an empty volume.
 """
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import traceback
@@ -728,6 +729,42 @@ def test_predict_observation_rejects_an_unknown_frame():
         assert "'ros' or 'optical'" in str(e)
     else:
         raise AssertionError("an unknown axis convention was accepted")
+
+
+@test
+def test_preflight_catches_a_null_nested_in_params():
+    """Rule 3 has to hold one level down, not just at the top.
+
+    `source_runs: {mobile_1: null}` is a dict, so a flat `v is None` scan passes
+    it and the container starts on a value the config explicitly said could not
+    be guessed. That is the failure rule 3 exists to prevent, wearing one extra
+    level of indentation.
+
+    This drives the REAL preflight over the REAL configs, because the bug it
+    pins was in production code that a re-implementation of the walk would have
+    happily agreed with.
+    """
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(here)
+    spec = importlib.util.spec_from_file_location("_rm", os.path.join(here, "run_method.py"))
+    rm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rm)
+    from slambench.config import load_dataset, load_method
+
+    cfg = load_dataset(os.path.join(root, "configs", "coop2.yaml"))
+
+    m = load_method(os.path.join(root, "configs", "methods",
+                                 "decoupled_registration_nolidar.yaml"))
+    _, problems = rm.preflight(cfg, m, "mobile_1.zed_rgbd")
+    assert any("source_runs.mobile_1" in p for p in problems), (
+        "a null nested inside params was not caught: " + repr(problems))
+
+    # and the converse: a config with no nulls anywhere still starts, so the
+    # stricter walk did not simply block everything.
+    ok = load_method(os.path.join(root, "configs", "methods", "rtabmap_rgbd.yaml"))
+    _, none_expected = rm.preflight(cfg, ok, "mobile_1.zed_rgbd")
+    assert not none_expected, none_expected
 
 
 def main() -> int:

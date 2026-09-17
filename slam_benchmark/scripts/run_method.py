@@ -71,7 +71,26 @@ def preflight(cfg, mcfg, stream_key: str) -> tuple[dict, list[str]]:
         elif not imu.get("topic"):
             problems.append(f"streams.{key}.present is true but its topic is null")
 
-    nulls = [k for k, v in (mcfg.raw.get("params") or {}).items() if v is None]
+    def _nulls(obj, prefix=""):
+        """Null params, NESTED ONES INCLUDED.
+
+        A flat scan misses `source_runs: {mobile_1: null}` — a dict is not None,
+        so the top-level check passes it and the run starts on a value the
+        config explicitly said could not be guessed. That is the exact failure
+        rule 3 exists to prevent, wearing one extra level of indentation.
+        """
+        out = []
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                out += _nulls(v, f"{prefix}{k}." if not prefix else f"{prefix}{k}.")
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                out += _nulls(v, f"{prefix}{i}.")
+        elif obj is None:
+            out.append(prefix.rstrip("."))
+        return out
+
+    nulls = _nulls(mcfg.raw.get("params") or {})
     if nulls:
         problems.append(f"params left null in {mcfg.path.name}: {nulls}. Each is a value "
                         f"the config says cannot be guessed; a default here is a silent "

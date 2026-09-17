@@ -103,7 +103,7 @@ being evaluated**, and it is answerable from the reference trajectory alone with
 
 ## The methods — the final roster
 
-Eleven entries. The test each one had to pass to be here: **it answers a question
+Sixteen entries. The test each one had to pass to be here: **it answers a question
 no other entry can**, and it forms a pair with something else in the list that
 isolates one variable. An entry that only adds a name to the table was cut — a
 benchmark of unrelated systems answers nothing, which is the same argument the
@@ -119,9 +119,14 @@ main table uses to justify KISS-ICP as its bridge.
 | 6 | 3 | `rtabmap_rgbd_imu` | RGB-D + IMU gravity | loose | ✓ | ✅ |
 | 7 | 3 | `orbslam3_rgbd_inertial` | RGB-D + IMU | tight | ✓ | I13/I14 |
 | 8 | 3 | `orbslam3_mono_inertial` | colour + IMU | tight | ✓ | I13/I14 |
-| 9 | 3 | `rtabmap_ext_odom` | winner + LC + map | loose | ✓ | needs 1–8 |
-| 10 | 4 | `radar_inertial_odometry` | 2× radar Doppler + IMU | tight | – | field name/sign |
-| 11 | 4 | `rgbd_inertial_radar` | tier-3 winner + radar | loose | ✓ | needs 7–10 |
+| 9 | 3 | `mast3r_slam` | colour only, learned prior | none | ✓ | GPU + `image_size` |
+| 10 | 3 | `rtabmap_ext_odom` | winner + LC + map | loose | ✓ | needs 1–9 |
+| 11 | 4 | `radar_inertial_odometry` | 2× radar Doppler + IMU | tight | – | field name/sign |
+| 12 | 4 | `rgbd_inertial_radar` | tier-3 winner + radar | loose | ✓ | needs 7–11 |
+| 13 | **5a** | `infra_anchored` | winner + infra_1 factors | loose | – | needs 1–12, I9 |
+| 14 | 5b | `decoupled_registration_nolidar` | m1 ⊕ m2, offline merge | none | – | needs the winner |
+| 15 | 5b | `swarm_slam_nolidar` | m1.zed ⊕ m2.realsense | none | ✓ | ✅ (gate B0) |
+| 16 | 5b | `covins_g` | centralised, any VIO | loose | ✓ | conditional on 15 |
 
 `openvins` is `status: deferred`, not in the roster. See the end of this section.
 
@@ -178,6 +183,22 @@ parameters, one sensor mode changed.
 ORB-SLAM3 is the tight entry rather than something stronger on paper because
 the recording leaves no alternative — see *the thin field* below.
 
+**9, MASt3R-SLAM — because it is the other answer to the scale question.**
+It pairs with #8: both are monocular and neither sees the depth, but one takes
+its geometry from an IMU and the other from a learned 3D prior. That pair asks,
+at its extreme, where a LiDAR-free agent should get scale and geometry from.
+It also attacks the depth camera's *actual* weakness rather than a generic one —
+the ZED stops at ~12 m in an 87° wedge and degrades on textureless surfaces, and
+a prior needs no texture to produce a pointmap. So it is the one entry that
+could plausibly beat the depth sensor where the sensor is worst, which makes a
+loss here as informative as a win. Dense output, so unlike ORB-SLAM3 it also
+scores on the map metrics. It supersedes `droid_slam` for this phase;
+`droid_slam` stays in track A, where the question is about learned front-ends in
+general rather than about this platform's scale. **Report it twice** — sim3, and
+se3 after fixing one global scale against the ZED depth — because monocular with
+learned priors is not reliably metric and the gap between the two *is* the scale
+error.
+
 **9, RTAB-Map on external odometry — because it is probably the winner and it is
 nearly free.** RTAB-Map decouples odometry from mapping, so this row inherits
 whatever front-end won tiers 0–3 and adds loop closure, graph optimisation and a
@@ -201,13 +222,79 @@ velocity factor inside ORB-SLAM3 means modifying ORB-SLAM3, while a pose graph
 outside composes three things that already work, a week cheaper. If it pays,
 the tight version becomes justified work instead of speculative work.
 
+
+### Tier 5 — collaborative, and which half of it actually helps
+
+Two mechanisms, and they are not equally useful for *this* goal. Say which is
+which or the tier reads as decoration.
+
+**5a, `infra_anchored` — the one with an absolute mechanism.** `infra_1` is
+static, surveyed, on its own clock, watching the room from 2 m up. Every other
+entry in this phase is an odometry whose error grows without bound; a fixed
+observer at a *known* pose, seen periodically, is precisely the thing that stops
+it growing. Nothing else available to a LiDAR-free `mobile_1` is absolute.
+
+The geometry suits this agent unusually well. A single static observer
+constrains **bearing** well and **range** poorly — error along its line of sight
+is what it sees worst — and a narrow-FoV depth camera's weakness is close to
+complementary. The radar gives bearing *and* range; the Arducam gives bearing
+only; running both separates what the range measurement was worth.
+
+Note the role reversal: `mobile_1` was track C's *control*, the agent that
+already localizes well and should therefore gain little. Without its LiDAR it is
+no longer that agent, so here it is the subject.
+
+Two things to do before any fusion code exists, both free:
+- **The residual check (C2 before C1).** `predict_observation()` and
+  `observation_residual()` in `slambench/collab.py` already do it against the
+  reference, with no detector. A bearing residual with a *consistent sign* means
+  `infra_1`'s pose or extrinsic is wrong and nothing built on it is worth
+  building; a range residual *growing with distance* is the agent drifting along
+  the line of sight, which is what this row exists to catch. Pass
+  `axes="optical"` — `"ros"` returns plausible bearings wrong by 90°.
+- **The visibility gate.** Is `mobile_1` in view often enough? Answerable from
+  the reference trajectory and the surveyed pose alone. A variant scored on 12%
+  of frames is a different experiment from one on 90%, so detection rate goes
+  beside every ATE.
+
+**5b, the agent-to-agent rows — a different question, honestly labelled.**
+`mobile_2` is the **weaker** platform: a narrower-FoV RealSense, and no LiDAR
+either. You cannot anchor yourself to something drifting worse than you are, so
+these rows will not rescue `mobile_1`'s absolute accuracy and must not be read
+as if they might. What they *can* do is bound drift through co-observation — an
+inter-robot loop closure is a constraint, and joint optimisation distributes
+error across both trajectories — and answer whether two agents can hold a common
+frame at all, which is track B's question.
+
+One genuinely interesting consequence: **dropping `mobile_1`'s LiDAR makes
+collaboration easier.** Track B pairs the Ouster against a RealSense, so its
+inter-robot loop closures must match descriptors *across modalities* — the hard
+part, and the most likely source of zero matches. Here both agents are RGB-D and
+the matching problem is the ordinary one. That makes `swarm_slam_nolidar` a
+diagnostic for track B as well: if matching fires on this pair and not on the
+LiDAR pair, the cause is the modality gap and not the system — exactly the check
+B4 specifies, obtained for free.
+
+`decoupled_registration_nolidar` is the floor and is not optional: without it a
+joint result cannot be shown to be doing anything a single offline registration
+would not have done. `covins_g` is conditional on #15 firing — if decentralised
+matching finds nothing, a centralised back-end on the same descriptors will not
+either, and the two rows would report one failure twice.
+
+**Gate B0 can close all of 5b.** The agents start 16.3 m apart in a 16.6 m room.
+Below ~10% place overlap these rows do not run, and the finding is about the
+*recording* — fixed by routing both platforms through one shared corridor next
+session, not by widening the radius until the number looks acceptable.
+
 ### The thin field, and why it is not a shortlisting failure
 
 Only the left image was recorded. That removes every stereo-inertial system —
 Kimera-VIO, MSCKF-VIO, VINS-Fusion stereo — and leaves **ORB-SLAM3's
 `IMU_RGBD` as the only well-maintained tightly-coupled RGB-D-inertial option**.
 The tier-3 tight slot is one system because the recording admits one, not
-because the search stopped early. That is a finding about the recording, and the
+because the search stopped early. The same constraint reaches tier 5: **Kimera-Multi
+needs stereo and is out for the same reason**, which is worth recording because it
+is the obvious name to reach for there. That is a finding about the recording, and the
 fix is one bandwidth setting next session.
 
 `openvins` was in an earlier draft of this roster and was cut for two reasons.
@@ -237,7 +324,9 @@ exactly these values, so no new gate code was needed.
 |---|---|---|
 | `orbslam3_rgbd_inertial`, `orbslam3_mono_inertial` | `IMU.T_b_c1` + the four noise terms | I13 today; I14 needs one overnight log |
 | `radar_inertial_odometry` | `doppler_field`, `doppler_sign`, noise terms | field name in minutes; sign off one known-motion segment |
-| `rtabmap_ext_odom`, `rgbd_inertial_radar` | `*_source` | not a value — a *result*. Held by design until 1–8 rank. |
+| `mast3r_slam` | `image_size` + a GPU | today, once the resize is recorded |
+| `rtabmap_ext_odom`, `rgbd_inertial_radar`, `infra_anchored`, `decoupled_registration_nolidar`, `covins_g` | `*_source` / `ego_source` | not a value — a *result*. Held by design until the single-agent rows rank. |
+| `infra_anchored` (additionally) | `infra_pose_sigma_*` | I9. Until it is a number this row reports *improvement over ego-only*, never an absolute. |
 
 The last row is the important distinction: those two are not blocked on missing
 information, they are blocked on the experiment not having run yet. Filling them
@@ -321,6 +410,8 @@ P1   Reference .txt -> TUM in zed_left_camera_optical_frame.      ~1 h
      Resolve the 1516-vs-2833 discrepancy. Compute path length.
 P2   I6: revisit count on the reference alone.                    minutes
      Decides whether ablation C exists.
+P3   B0 place overlap (both reference TUMs) + infra_1 visibility.  minutes
+     Either can close tier 5's two halves before any work starts.
 T0   Score /mobile_1/zed/odom and /mobile_1/zed/pose.             ~1 h
      THE BAR. Everything below is measured against it.
 T1   kiss_icp on reprojected ZED depth.                           1 run
@@ -328,7 +419,12 @@ T2   rtabmap_rgbd, orbslam3_rgbd.                                 2 runs
 T3a  rtabmap_rgbd_imu  [no unknowns -- runs with T2].            1 run
 T3b  orbslam3_rgbd_inertial, orbslam3_mono_inertial [I13/I14].    2 runs
 T3c  rtabmap_ext_odom  [needs the T0-T3b ranking].                1 run
+T3d  mast3r_slam  [GPU; report sim3 AND depth-anchored se3].       1 run
 T4   rio, rgbd_inertial_radar  [gated on P0].                     2 runs
+T5a  infra_anchored: residual check FIRST, then 3 variants.       3 runs
+     The residual check needs no detector and no fusion code.
+T5b  decoupled_registration_nolidar (floor), swarm_slam_nolidar,
+     covins_g [conditional].                       2-3 runs, gate B0
 AB   Ablations C-F on the tier winner only (B is dropped).        ~9 runs
 INS  Per-frame observability + ORB density; select the
      vision-starved segments; re-score T3 vs T4 on them.

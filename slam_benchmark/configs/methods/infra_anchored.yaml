@@ -1,0 +1,72 @@
+# Tier 5a. The collaborative entry that actually helps mobile_1's ODOMETRY.
+name: infra_anchored
+family: infrastructure_anchored_odometry
+origin: "[-] a task with baselines, not an off-the-shelf system"
+modality: [rgbd]
+coupling: loose
+needs_imu: false                # the ego source supplies its own; this adds factors
+loop_closure: false             # not a loop closure — an ABSOLUTE anchor
+outputs: [trajectory]
+image: slambench/tools:humble
+
+track: infrastructure
+streams: [mobile_1.zed_rgbd]
+infra_stream: infra_1.radar               # 1343 msgs, 8.6 Hz — bearing AND range
+infra_camera: /infra_1/image_raw          # 1663 msgs, 10.6 Hz — bearing only
+
+params:
+  # The same ego pipeline with one more evidence source each time, so the
+  # difference between rows is the infrastructure and nothing else.
+  variants: [ego_only, ego_plus_bearing, ego_plus_bearing_range]
+  ego_source: null              # REQUIRED: the tier 0-4 winner's run directory.
+                                # A result, not a setting — see rtabmap_ext_odom.
+  association_max_dt_s: 0.1
+  undistort: true               # the Arducam image is RAW
+  # A fix cannot be better than its anchor, and coop2 states infra_1's pose to
+  # six decimals with no uncertainty anywhere. Until these are numbers this
+  # method reports IMPROVEMENT OVER ego_only and never an absolute accuracy.
+  infra_pose_sigma_m: null      # I9
+  infra_pose_sigma_deg: null    # I9
+
+notes: |
+  THIS IS THE COLLABORATIVE ROW WITH A MECHANISM. infra_1 is static, surveyed,
+  on its own clock, watching the room from 2 m up. That makes it the only
+  ABSOLUTE anchor available to a LiDAR-free mobile_1 — and absolute is the word
+  that matters, because every other entry in this phase is an odometry whose
+  error grows without bound. A static observer at a known pose, seen
+  periodically, is precisely the thing that stops it growing.
+
+  Contrast with the agent-to-agent rows (tier 5b): mobile_2 is the WEAKER
+  platform — a narrower-FoV RealSense, no LiDAR either — so it cannot anchor
+  mobile_1 absolutely. You cannot pin yourself to something drifting worse than
+  you are. Those rows answer a different question (can two agents hold a common
+  frame) and should not be read as odometry improvements for mobile_1.
+
+  GEOMETRY, AND WHY IT SUITS THIS PARTICULAR AGENT. A single static observer
+  constrains BEARING well and RANGE poorly — error along its line of sight is
+  what it sees worst. A narrow-FoV depth camera's weakness is close to
+  complementary, so the combination should pay here more than it would for a
+  LiDAR agent. The radar gives bearing AND range; the camera gives bearing only.
+  Running both variants separates what the extra range measurement was worth.
+
+  RUN C2 BEFORE C1 — the residual check before the fusion. predict_observation()
+  and observation_residual() in slambench/collab.py already do it, against the
+  reference trajectory, with no fusion code and no detector:
+    * a bearing residual with a CONSISTENT SIGN  -> infra_1's pose or extrinsic
+      is wrong, and nothing built on it is worth building yet
+    * a range residual GROWING WITH DISTANCE     -> the agent drifting along the
+      line of sight, which is the thing this row exists to catch
+  Pass axes="optical". infra_1's static_world_pose describes the Arducam OPTICAL
+  frame, and passing "ros" there returns a full set of finite, plausible
+  bearings that are wrong by 90 degrees.
+
+  GATE, AND IT IS FREE: is mobile_1 even in view often enough? Answerable from
+  the reference trajectory and the surveyed pose alone, before any detector
+  exists. A variant evaluated on 12% of frames is a different experiment from
+  one on 90%, so report detection rate beside every ATE.
+
+  mobile_1 was the CONTROL in track C — the agent that already localizes well,
+  which should gain little. Here it is the SUBJECT, because without its LiDAR it
+  is no longer the agent that localizes well. Same config, different reading,
+  and the phase 6 result is only interpretable against the ego_only row of the
+  same source.
