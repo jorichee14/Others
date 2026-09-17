@@ -1,5 +1,20 @@
 # mobile_1 odometry without the LiDAR
 
+> **GOAL CHANGED 2026-09-17 — read `docs/PSEUDO_GT.md` first.**
+>
+> The objective is **a pseudo ground truth for the sensor-constrained agent**,
+> not a better odometry for `mobile_1`. `mobile_1` is the *instrument*: it
+> carries a LiDAR and a depth camera on one body, so a LiDAR-free construction
+> can be built there and **certified against the held-out LiDAR**, then applied
+> to `mobile_2`, which has no LiDAR and therefore no reference at all.
+>
+> That changes what this document is. Its roster stops being competitors and
+> becomes **candidate backbones plus the ablation that prices each factor
+> class**; a pseudo-GT is *offline*, so batch optimisation, loop closure and
+> absolute anchors are all in scope where an online odometry could not use them.
+> The method notes below remain valid — read them as inputs to the construction
+> in `PSEUDO_GT.md`, not as a ranking to produce.
+
 A plan for estimating `mobile_1`'s trajectory from the **ZED (image + depth),
 the IMU, and the two radars** — and scoring it, with ATE, against the
 LiDAR-refined trajectory.
