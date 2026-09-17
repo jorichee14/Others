@@ -281,59 +281,173 @@ separately from the whole-run number and labelled as the narrower claim it is.
 
 ---
 
-## Open questions — these gate the work
+## Open questions — resolved 2026-09-17
 
-Four, and two of them are minutes.
+**Q1 — the `.txt` frame. ANSWERED: `zed_left_camera_optical_frame`.** The best
+available answer. It is the frame `configs/coop2.yaml` already declares for
+`mobile_1`'s reference and the frame `mobile_1.zed_rgbd` maps to with an
+identity extrinsic — so a ZED-based estimate is compared **with no transform at
+all**. No 13 cm lever arm, no 90° rotation, nothing for the evaluator to
+right-multiply out, and none of the silent-drift failure mode that a wrong one
+produces. Step P1 shrinks to a format conversion plus the `expected_start`
+check against `[0.697952, -0.062696, 0.193334]`.
 
-**Q1 — What frame and format is the `.txt` reference?** It decides whether the
-comparison is correct or silently 13 cm off. If it is TUM
-(`timestamp tx ty tz qx qy qz qw`) in `zed_left_camera_optical_frame`, it drops
-straight in. If it is the `os_lidar` frame — which "the refined trajectory using
-LiDAR" suggests — the evaluator must apply
-`{x: 0.067064, y: -0.092192, z: -0.074147, roll: 2.2959, pitch: 89.5267,
-yaw: -87.6614}` from `configs/coop2.yaml`. Skipping that is a systematic 13 cm
-lever arm plus a 90° rotation that **no alignment can absorb and that looks
-exactly like drift**. Also needed: whether its timestamps are on the bag clock.
+**Q2 — the Ouster IMU. ANSWERED: it counts as using the LiDAR, so it is
+excluded.** Consequences: every inertial row runs on the ZED IMU at 192.4 Hz,
+and **ablation B is dropped** — with one admissible IMU there is no source axis
+to sweep. Recorded in `configs/coop2.yaml` under `excluded:` so the choice is on
+the record as a decision rather than looking like an oversight later.
 
-**Q2 — Does the Ouster's IMU count as "using the LiDAR"?** It is a separate
-chip (an ICM-20948) that happens to sit in the LiDAR housing; it returns no
-range data. Strict reading says it is off-limits; a hardware reading says an
-IMU is an IMU. Either is defensible and it only affects ablation B — the ZED IMU
-carries the plan regardless, at twice the rate and factory-calibrated to the
-camera. Recommendation: **ZED IMU for every headline row**, Ouster IMU as a
-clearly-labelled sensitivity ablation, and if the answer is "off-limits", drop
-ablation B and say so.
+**Q3 — radar Doppler. ANSWERED: present. Tier 4 is live.** One implementation
+detail remains and it is not a gate: the *field name* has to be read off the bag
+before anything decodes it, since `velocity`, `doppler` and `v_r` are all in use
+across TI driver forks. `ros2opv2v/pointclouds.py` reads `x/y/z/intensity` only,
+so that field needs plumbing through.
 
-**Q3 — Do the radar clouds carry a Doppler field?** The hard gate on tier 4,
-and it is minutes to answer:
+---
 
-```bash
-python3 ../rosbag_to_opv2v/scripts/inspect_bag.py --bag <bag> \
-    | grep -A3 "radar1/radar/points_all"
+## Q4 — the ZED camera↔IMU extrinsic and noise model
+
+The remaining open item, and it splits cleanly: **the extrinsic is recoverable
+and probably already recorded; the noise model is not recoverable from this bag
+at all.** Neither blocks the ladder from starting.
+
+### Which camera this is
+
+Nothing in any of these repos records the model, so it is deduced from the topic
+table: **a ZED 2 or ZED 2i**. The discriminator is `/mobile_1/zed/imu/mag` — the
+ZED Mini and ZED X carry no magnetometer and the original ZED carries no IMU at
+all, so a magnetometer plus an IMU narrows it to those two. The rate
+corroborates: the ROS 2 wrapper's default sensor rate is 200 Hz and the observed
+192.4 Hz is that with a few drops. Confirm against the unit's serial before
+quoting it in a paper — the deduction is sound but it is still a deduction.
+
+It matters because both cameras ship with a **factory IMU↔camera calibration**,
+which is why the extrinsic half of this question is cheap.
+
+### The extrinsic — three routes, in order of preference
+
+1. **The ZED SDK, which is authoritative and does not depend on the bag.**
+   `getSensorsConfiguration().camera_imu_transform` returns it directly. A
+   five-line program against the camera, and the answer is the manufacturer's
+   own calibration.
+2. **`/usr/local/zed/settings/SN<serial>.conf`** — the factory calibration file
+   on whichever machine ran the camera. Same numbers, no camera needed.
+3. **`/tf_static`.** Three messages sounded alarming when this plan was written;
+   it is not. `tf2_msgs/TFMessage` carries an *array* of transforms, and there
+   are exactly three static publishers on this bag (`mobile_1`, `mobile_2`,
+   `infra_1`). One message per agent with the whole chain inside is the
+   expected shape, and the converter already recovered the Ouster and both
+   radar extrinsics from it — so the mobile_1 chain is certainly in there. The
+   only question is whether `zed_imu_link` was published with it.
+
+**The trap, whichever route.** The wrapper publishes `zed_imu_link` against
+`zed_camera_center`, and this benchmark's reference frame is
+`zed_left_camera_optical_frame`. The chain between them crosses the ROS-body
+(x forward, z up) to optical (z forward, y down) convention change. Get that
+rotation wrong and you get a transform that is plausible, silent and wrong —
+the same class of defect the track-C precheck already produced once, when
+bearings computed in a body frame for an optical pose put a node 1.8 m up at
++70° elevation. Verify the composed transform by checking that the IMU's
+gravity vector, rotated into the optical frame, points where the camera's own
+pitch says down is.
+
+**If the factory calibration turns out to be the weak link** — visible as a
+tightly-coupled row that underperforms its loosely-coupled sibling for no other
+reason — the fallback is a Kalibr re-calibration. That needs a target and a
+dedicated excitation recording, so it is a next-session item, not a fix for this
+bag.
+
+### The noise model — not recoverable here, and that is the answer
+
+Allan variance needs **hours** of static logging. The bias random-walk terms
+only emerge at cluster times of 10²–10³ s, which is why `allan_variance_ros` and
+`imu_utils` both ask for 2–3 hours minimum. **This recording is 156 seconds.**
+A static segment inside it, if one exists at all, bounds the *white noise*
+densities loosely and says nothing whatsoever about the random walks — and the
+random walks are what a tightly-coupled estimator uses to decide how fast to let
+the biases move.
+
+So: **do not try to extract it from coop2.** The fix costs one overnight and no
+effort — park the camera on a desk, record `/zed/imu/data` for 3+ hours, run
+`allan_variance_ros`. It is a property of the unit, not of the session, so it is
+measured once and then serves every recording this lab ever makes. That is the
+highest value-per-effort item in this whole plan and it can run tonight, in
+parallel with everything else, because it needs nobody present.
+
+**Until then, err high.** The asymmetry is known and it is not symmetric:
+
+| | effect on the estimator |
+|---|---|
+| noise **over**-stated | distrusts the IMU, degrades gracefully toward vision-only. Safe. |
+| noise **under**-stated | over-trusts the IMU, becomes over-confident, diverges. |
+
+Inflating is also standard practice independent of this problem: people inflate
+Allan-derived values 2–10× for real operation anyway, because a bench-static
+Allan curve under-represents in-motion vibration, temperature drift and
+scale-factor error.
+
+Order-of-magnitude starting points for a consumer MEMS IMU of this class —
+**a starting point to be replaced, explicitly not a measurement of this unit**:
+
+```
+gyroscope     noise density  ~1e-3 .. 3e-3   rad/s/sqrt(Hz)
+              random walk    ~1e-5 .. 1e-4   rad/s^2/sqrt(Hz)
+accelerometer noise density  ~1e-2 .. 3e-2   m/s^2/sqrt(Hz)
+              random walk    ~1e-4 .. 1e-3   m/s^3/sqrt(Hz)
 ```
 
-`inspect_bag.py` already dumps each cloud's field layout. If the fields are
-`x, y, z, velocity` (or `doppler`, `v_r`), tier 4 runs. If the TI driver
-published only `x, y, z, intensity` — which is a real possibility, and it is
-what `ros2opv2v/pointclouds.py` reads today — then **radar-inertial odometry is
-not available on this recording**, tier 4 closes, and that is a finding about
-the recording to fix in the next session rather than a gap to paper over. Do not
-build anything in tier 4 before this returns.
+Per rule 3 these stay `null` in `configs/coop2.yaml` — the loader refuses rather
+than defaults. Per rule 7 they live in the *method* config with their provenance
+named beside them, so a poor tightly-coupled result can be checked against the
+assumption instead of blamed on the method.
 
-**Q4 — The camera↔IMU extrinsic and the IMU noise model.** Every tightly-coupled
-method in tier 3 needs both, and a guessed extrinsic costs a tightly-coupled
-estimator far more than a loosely-coupled one — so an unfavourable
-`orbslam3_rgbd_inertial` result under a guess is not a result. This is **I5's
-analogue for the visual arm** and it inherits the same rule: refuse rather than
-default. Two concerns:
+### What this actually changes about the plan: not much
 
-- The extrinsic should be in `/tf_static`, but that topic carries only **3
-  messages** for this whole rig, which is very few. Check that
-  `zed_left_camera_optical_frame ← zed_imu_link` is actually among them before
-  assuming it is.
-- The noise parameters (gyro/accel white noise and random walk) are stated
-  nowhere. They are recoverable by Allan variance from a static segment —
-  *if the run contains one*. Check the first and last few seconds for one; if
-  there is none, use the ZED IMU's datasheet figures and **label every tier-3
-  row as using datasheet noise**, because that is a real caveat on a tightly
-  coupled result.
+Tier 3 splits by sensitivity, and only half of it is affected.
+
+| row | coupling | needs the noise model? |
+|---|---|---|
+| `rtabmap_ext_odom` | loose | no — runs today |
+| `zed_sdk_odom` / `zed_sdk_pose` | closed, already computed | no |
+| `orbslam3_rgbd_inertial` | tight | yes, and its *initialiser* especially |
+| `openvins` | tight | yes, but tolerates a static init |
+
+**So the ladder starts now.** The loosely-coupled rows carry the headline until
+the overnight log lands; the tight rows run in parallel, each labelled
+*datasheet-order noise*, and are re-run once the measurement exists. A tight row
+that beats its loose sibling under inflated noise is a *real* result — it won
+despite a handicap. One that loses is not yet a result at all, and the table
+says so rather than ranking it.
+
+### One risk that is not about the noise model at all
+
+**This trajectory is close to the degenerate case for visual-inertial
+initialisation.** A pushcart rolling flat across a lab floor at walking pace is
+near-constant-velocity with little rotation about any non-vertical axis, and
+constant velocity is exactly the motion that makes accelerometer bias and
+gravity direction weakly observable. RGB-D softens it — scale comes from the
+depth rather than from the IMU, which is the failure that kills monocular VIO
+here — but bias observability still suffers.
+
+The concrete prediction: **ORB-SLAM3's inertial initialisation may simply fail
+to converge, or converge to a bad gravity estimate, on this sequence**, and that
+would be a property of the *motion*, not of the noise model or the method.
+OpenVINS is the hedge, since it can initialise from a static period instead of
+requiring excitation.
+
+Two cheap things settle it, both free and both worth doing during P1:
+
+- **Check for a static segment at the start or end of the run**, from the
+  reference trajectory alone. It serves double duty: an OpenVINS static
+  initialisation, and a loose white-noise bound on the IMU.
+- **Compute the rotational excitation** over the run — the spread of angular
+  velocity about the two horizontal axes. If it is near zero throughout, say so
+  in the write-up *before* reporting any inertial row, because it predicts the
+  result rather than explaining it afterwards.
+
+If both come back poor, the recommendation for the next session is one sentence:
+**start each run with a few seconds of deliberate handheld excitation** — pitch
+and roll the cart, or lift and rock it — before setting off. It costs five
+seconds and it is the difference between an inertial arm that initialises and
+one that does not.

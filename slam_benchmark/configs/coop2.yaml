@@ -186,23 +186,38 @@ streams:
           a like-for-like against mobile_1.zed_rgbd — use that pair for the
           modality comparison and this one for the second-platform check.
 
+  # I12 RESOLVED 2026-09-17: the radar clouds DO carry a Doppler field, so these
+  # two are live inputs to phase 6 tier 4 and no longer extrinsic-preservation
+  # entries. The velocity field's NAME still has to be read off the bag before
+  # anything decodes it (`velocity`, `doppler` and `v_r` are all in use by
+  # different TI driver forks) -- ros2opv2v/pointclouds.py reads x/y/z/intensity
+  # only and will need the extra field plumbed through.
   mobile_1.radar1:
     agent: mobile_1
     modality: radar
-    topic: null                           # not exported by the converter; see note
+    topic: /mobile_1/radar1/radar/points_all    # 2470 msgs, 15.8 Hz
+    doppler: true
+    doppler_field: null                   # REQUIRED before decoding; see above
     sensor_frame: radar1_link
     reference_frame_from_sensor: {x: 0.207505, y: 0.076150, z: -0.108883,
                                   roll: -174.5848, pitch: -76.2388, yaw: -95.2193}
-    note: IWR6843, order 1e1-1e2 points per frame. Recorded here so the extrinsic
-          is not lost. It is NOT a SLAM input on this sequence — scan matching on
-          tens of points indoors is a research contribution, not a baseline, and
-          reporting a failed radar odometry run as a benchmark row would say more
-          about the scoping than about radar.
+    note: >
+      IWR6843, order 1e1-1e2 points per frame. Still NOT a scan-matching input:
+      ICP on tens of points indoors is a research contribution, not a baseline.
+      What the Doppler field buys instead is EGO-VELOCITY. RANSAC plus least
+      squares over each sweep's (azimuth, elevation, radial velocity) triples
+      returns a 3D body velocity, which enters an estimator as a velocity
+      factor rather than as geometry. radar1 and radar2 sit ~120 deg apart in
+      yaw, which conditions that solve far better than either alone, since a
+      single unit observes the component across its boresight only weakly.
+      Ablation E measures whether the second unit earned its place.
 
   mobile_1.radar2:
     agent: mobile_1
     modality: radar
-    topic: null
+    topic: /mobile_1/radar2/radar/points_all    # 2448 msgs, 15.7 Hz
+    doppler: true
+    doppler_field: null
     sensor_frame: radar2_link
     reference_frame_from_sensor: {x: -0.053850, y: 0.046553, z: -0.112039,
                                   roll: 160.0651, pitch: -86.7452, yaw: 24.8992}
@@ -243,17 +258,60 @@ streams:
     topic: /mobile_1/zed/imu/data         # 30067 msgs, 192.4 Hz
     rate_hz: 192.4
     sensor_frame: zed_imu_link
-    extrinsic_from_camera: null           # REQUIRED before any tightly-coupled VIO
-    noise_model: null                     # REQUIRED; see above
     magnetometer_topic: /mobile_1/zed/imu/mag   # 7596 msgs, 48.6 Hz
-    alternate:
-      # A separate ICM-20948 that lives in the LiDAR housing and returns no
-      # range data. Admissible as an IMU, but whether it is admissible under a
-      # "no LiDAR" constraint is the user's scoping call. Sensitivity ablation
-      # only -- never a headline row.
-      topic: /mobile_1/ouster/imu         # 15137 msgs, 96.9 Hz
-      rate_hz: 96.9
-      sensor_frame: os_imu
+
+    # The camera is a ZED 2 or ZED 2i, DEDUCED rather than read off a label:
+    # the magnetometer topic is the discriminator, since ZED Mini and ZED X
+    # carry no magnetometer and the original ZED carries no IMU at all. The
+    # 192.4 Hz corroborates it -- the wrapper's default sensor rate is 200 Hz,
+    # and 192.4 is that with a few drops. Confirm against the serial before
+    # quoting it; the deduction is sound but it is still a deduction.
+    model_inferred: zed_2_or_2i
+
+    # REQUIRED before any TIGHTLY-coupled VIO (orbslam3_rgbd_inertial, openvins).
+    # NOT required by the loosely-coupled rows, which is why the ladder runs
+    # today. Three independent routes, in order of preference:
+    #   1. the ZED SDK, which is authoritative and does not depend on the bag:
+    #        getSensorsConfiguration().camera_imu_transform
+    #   2. /usr/local/zed/settings/SN<serial>.conf, the factory calibration
+    #   3. /tf_static. Only 3 messages, but TFMessage carries an ARRAY and
+    #      there are exactly 3 static publishers here (mobile_1, mobile_2,
+    #      infra_1), so the chain is plausibly all inside one of them.
+    #
+    # Whichever route: the wrapper publishes zed_imu_link against
+    # zed_camera_center, and this benchmark's reference frame is
+    # zed_left_camera_optical_frame. The chain therefore crosses the ROS-body
+    # to optical convention change, and getting that rotation wrong yields a
+    # transform that is plausible, silent and wrong -- the same class of defect
+    # the precheck already caught once (see IMPLEMENTATION.md, 2026-09-15).
+    extrinsic_from_camera: null
+
+    # NOT RECOVERABLE FROM THIS BAG, and `null` rather than a guess per rule 3.
+    # Allan variance needs hours of static logging -- the bias random-walk terms
+    # only emerge at cluster times of 1e2-1e3 s -- and this recording is 156 s.
+    # A static segment inside it, if one exists, bounds the WHITE NOISE only and
+    # says nothing about the random walks.
+    #
+    # The fix is one overnight and no effort: park the camera on a desk, record
+    # /zed/imu/data for 3+ hours, run allan_variance_ros. It is a property of
+    # the unit, so it is measured once and serves every future recording.
+    #
+    # Until then the tightly-coupled rows carry order-of-magnitude values in
+    # their METHOD config (rule 7: declared once, provenance named beside it),
+    # never here. Err HIGH: over-stated noise makes an estimator distrust the
+    # IMU and degrade gracefully toward vision-only, while under-stated noise
+    # makes it over-trust the IMU and diverge. The asymmetry is not symmetric
+    # and the safe side is known.
+    noise_model: null
+
+    # EXCLUDED by scoping decision, 2026-09-17: the user's answer to Q2 is that
+    # the Ouster's IMU counts as using the LiDAR. It is therefore off-limits for
+    # this agent, the IMU-source ablation is dropped, and /mobile_1/ouster/imu
+    # (15137 msgs, 96.9 Hz, os_imu) is recorded here only so the exclusion is a
+    # decision on the record rather than an oversight.
+    excluded:
+      topic: /mobile_1/ouster/imu
+      reason: counts as using the LiDAR (user scoping decision)
   mobile_2.imu:
     agent: mobile_2
     modality: imu
