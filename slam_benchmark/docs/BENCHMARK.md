@@ -1,5 +1,7 @@
 # The coop2 SLAM benchmark
 
+> **Execution order lives in `docs/PLAN.md`** — start there; this document is detail it points into.
+
 A complete specification: what is asked, of what data, scored how, against which
 baselines, and what this recording can and cannot decide.
 

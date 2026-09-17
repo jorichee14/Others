@@ -1,3 +1,5 @@
+> Execution order and gates live in `docs/PLAN.md`; this file carries the argument.
+
 # Pseudo ground truth for a sensor-constrained agent
 
 The goal, restated: **`mobile_2` has no LiDAR, so there is no LiDAR-derived
@@ -206,20 +208,53 @@ backbone + IMU + radar + boards + infrastructure + inter-agent   <- the full con
 Six runs of the same optimiser with different factor sets. **This is the
 experiment**, and it is smaller than the sixteen-method survey it replaces.
 
-**V3 — characterise, do not just rank.** Report the error *distribution*, not one
-RMSE: percentiles, the worst stretch, and whether the error is where the depth
-dropped out. A pseudo-GT with a 5 cm median and a 2 m worst case is unusable for
-the thing pseudo-GT is used for, and an RMSE hides that.
+**V3 — characterise, do not just rank.** Three parts, and each fixes a way the
+transferred bound would otherwise be hollow.
+
+*(a) The distribution, with honest sample size.* Percentiles and the worst
+stretch, never one RMSE — a pseudo-GT with a 5 cm median and a 2 m worst case is
+unusable for what pseudo-GT is used for. And the error bar on those percentiles
+comes from a **block bootstrap over time segments**, not per-pose statistics:
+trajectory errors are heavily autocorrelated, so ~1516 poses are effectively a
+handful of independent failure episodes, and a per-pose bound would overstate
+confidence by an order of magnitude.
+
+*(b) The covariate model — what actually transfers.* Do not transfer a scalar
+("8 cm on mobile_1, so 8 cm on mobile_2"); the two platforms' inputs are not
+exchangeable and the claim would be unfounded. Fit error as a function of
+covariates **observable on both platforms**: depth-valid fraction, longest
+starved stretch (`scripts/depth_health.py` supplies both), anchor visibility
+fraction, inter-agent co-observation rate, time since the last absolute factor.
+Validate the fit leave-one-segment-out within mobile_1. The transferred object
+is this *function*; evaluating it at mobile_2's covariates is the prediction,
+and reporting mobile_2's covariates against mobile_1's observed range says
+whether that prediction is interpolation or extrapolation.
+
+*(c) Backbone consensus — the uncertainty that needs no reference.* Run the full
+construction on **three backbones chosen for independent failure modes** —
+geometric (`kiss_icp` on depth), feature-inertial (`orbslam3_rgbd_inertial` /
+`rtabmap_rgbd_imu`), learned-prior (`mast3r_slam`). Their spread through the
+same anchored graph is evidence about whether the solution is determined by the
+anchors and the geometry or by the estimator — and it is computable on
+`mobile_2`, where nothing else is. Diversity is the design requirement: three
+similar RGB-D systems would agree through a shared failure mode and the check
+would certify nothing. This is the project's own `seed_independence_check`
+(kiss_icp.yaml) applied one level down.
 
 **V4 — apply to `mobile_2` and quote the transferred bound.** Same construction,
 no LiDAR to check against, error bar from V3 with the platform-transfer
 assumption stated.
 
-**V5 — the independent check on `mobile_2`.** Not optional, because V4's bound is
-transferred rather than measured: `mobile_2`'s pseudo-GT must still be consistent
-with the board survey at its own dwell windows and with `infra_1`'s observations.
-Those are the only evidence about `mobile_2` that does not come from the
-construction itself.
+**V5 — the independent check on `mobile_2`, framed as a test of V4's
+prediction.** Not optional, because V4's bound is transferred rather than
+measured. `mobile_2`'s pseudo-GT must be consistent with the board survey at its
+own dwell windows and with `infra_1`'s observations — the only evidence about
+`mobile_2` that does not come from the construction itself. Run it as a
+falsification test, not a formality: V3(b) *predicts* the residual distribution
+at those checkpoints; V5 observes it. Consistent → the transfer is corroborated
+by independent evidence and the paper says "predicted X cm, corroborated by N
+independent residuals". Inconsistent → **the transfer failed, which is a result**
+— report it as one, with the covariate comparison that says why.
 
 ---
 

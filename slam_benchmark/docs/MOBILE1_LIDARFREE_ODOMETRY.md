@@ -1,5 +1,7 @@
 # mobile_1 odometry without the LiDAR
 
+> **Execution order lives in `docs/PLAN.md`** — start there; this document is detail it points into.
+
 > **GOAL CHANGED 2026-09-17 — read `docs/PSEUDO_GT.md` first.**
 >
 > The objective is **a pseudo ground truth for the sensor-constrained agent**,
