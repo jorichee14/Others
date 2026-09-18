@@ -16,6 +16,58 @@ Reference is in `zed_left_camera_optical_frame`, no transform needed.
 
 ---
 
+## The two roles of SLAM in this project — and the wall between them
+
+The same algorithms appear twice, in different jobs, and mixing the jobs makes
+the paper circular. This section is the wall.
+
+| | **Role A: ground-truth production** | **Role B: dataset benchmark** |
+|---|---|---|
+| purpose | produce the *released* reference trajectories | the tasks (B1–B5) users of the dataset compete on |
+| SLAM is | an **ingredient** — one frozen backbone inside the anchored graph | the **subject** — the baselines in the tables |
+| runs | stages 0–4, offline, once | after the GT is certified, scored against it |
+| method count | 3 backbones (consensus), 1 chosen and frozen | the roster menu, as many as B1 wants |
+
+**Per agent, the split is different, and this is the part to hold on to:**
+
+* **`mobile_1`** — its GT is the *LiDAR* pipeline. No camera, IMU or radar
+  method is inside it, so **every** such method is uncorrelated with the
+  reference and every one can be a benchmark row. That is why `mobile_1`'s
+  benchmark table is clean and rich, and why the certification experiment is
+  legal there at all.
+* **`mobile_2`** — its GT *is* the anchored construction, which contains one
+  camera backbone. So on `mobile_2`, SLAM is **first Role A, then Role B**:
+  build and freeze the construction, then score everything else against it.
+
+**The circularity rule, inherited and extended.** `configs/coop2.yaml` already
+refuses to rank GLIM against a GLIM-seeded reference (`correlated_with:
+[glim]`; GLIM runs as an ablation, never a peer row). The same rule extends one
+level down: **the backbone that feeds `mobile_2`'s pseudo-GT is excluded from
+`mobile_2`'s B1 peer table.** When that reference is released, its config
+declares `correlated_with: [<backbone>]` and the evaluator treats it exactly as
+it treats GLIM today. Its row may still be *printed* — daggered, in the
+ablation block — never ranked.
+
+**The escape hatch is measured, not argued.** The backbone-consensus check
+(stage 3c) quantifies how much the construction's output moves when the
+backbone is swapped. If it moves less than the GT's own certified error bar,
+the GT is *anchor-determined* — the correlation is demonstrably weak, the paper
+can say so with a number, and the daggered row becomes readable. If it moves
+more, the exclusion is doing real work and stays.
+
+**And the third role, which is neither.** Running the LiDAR-free construction
+on `mobile_1` against the held-out LiDAR is not GT production (the LiDAR GT
+already exists) and not a benchmark task (nothing competes) — it is **GT
+validation**, and its output is the error bar published *with* the `mobile_2`
+reference. It is the methods-section contribution that licenses Role A's
+product for Role B's use.
+
+So, in one line: **on `mobile_1` the SLAM work is benchmark; on `mobile_2` it
+is ground truth first and benchmark second, with the producer barred from the
+race it made the track for.**
+
+---
+
 ## Stage 0 — foundations. ~1 day + 1 unattended overnight. No containers.
 
 Everything here is hours or minutes, needs no method, and every later stage
