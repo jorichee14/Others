@@ -50,6 +50,11 @@ disagreement is the uncertainty estimate that works where no GT exists
 | `rtabmap_rgbd_imu` → `orbslam3_rgbd_inertial` once I13/I14 land | features + depth + IMU | low texture, low excitation |
 | `mast3r_slam` | image + learned prior | prior out of distribution |
 
+Exactly one entry per failure family — `splat_slam` shares the learned family
+with `mast3r_slam` (learned-flow tracking, image-only), so it may *replace*
+MASt3R in that slot but never sit beside it in the consensus: two learned
+entries agreeing through a shared prior would certify nothing.
+
 Run each on `mobile_1.zed_rgbd` (LiDAR held out) and on
 `mobile_2.realsense_rgbd`. Score vs the reference on `mobile_1`; hold the
 `mobile_2` runs for stages 3–4. Report tracked-fraction and the per-frame
@@ -106,6 +111,11 @@ predicted by these covariates" — with the fit quality shown.
 3. **The test:** `mobile_2`'s board-dwell and infra residuals must be
    consistent with the prediction. Consistent → corroborated. Not →
    the transfer failed, which is also a result and goes in the paper as one.
+3b. **The consumer test (optional, GPU):** train the same Gaussian-splat map
+   (`splat_slam`) from the pseudo-GT poses and from the reference poses on
+   `mobile_1`; the held-out-view rendering gap is what the pseudo-GT's error
+   costs a downstream user — utility, not geometry. On `mobile_2` the relative
+   version needs no reference: better poses render sharper.
 4. Write B1–B5 (task definitions below), the two reporting rules (every number
    in all tiers; every GT-adjacent number with an error bar), and the limits
    section with the next-session spec.
@@ -122,7 +132,9 @@ predicted by these covariates" — with the fit quality shown.
 | B4 | strong-to-weak inter-agent anchoring | 0.6 + V2e (report the gate either way) |
 | B5 | depth-dropout robustness, natural stressor | 0.2 + stage 3 covariate model |
 
-S1 (LiDAR trajectory) is a control row inside B1; S3 (maps) is an appendix.
+| B6 *(appendix, GPU)* | dense reconstruction + novel-view synthesis (`splat_slam`; reflective walls as the stressor Spires lacks) | stage 4.3b |
+
+S1 (LiDAR trajectory) is a control row inside B1; S3 (maps) folds into B6.
 
 ## Next recording session (fixed cost, huge return — schedule it now)
 
