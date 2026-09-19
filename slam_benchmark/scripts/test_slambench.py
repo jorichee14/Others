@@ -261,20 +261,65 @@ def test_association_failure_names_the_clock():
 
 
 @test
-def test_absolute_check_reports_verdict_per_anchor():
+def test_absolute_check_refuses_a_window_without_an_observation():
+    """A window alone measures the STANDOFF, not the error.
+
+    The platform parks a metre from a board and looks at it. Comparing its
+    position against the board's therefore returns ~1 m however good the
+    estimate is, and against a 7 mm survey sigma that reads as "resolved above
+    the survey's uncertainty" every time -- a confident number measuring
+    nothing. The previous version of this test asserted exactly that residual
+    (< 0.35 m on a 3 m circle), so it was pinning the defect in place.
+    """
     tr = circle_traj(200, radius=3.0)
-    anchors = [
-        {"name": "tight", "position": list(tr.positions[5]), "uncertainty_m": 0.007,
-         "window": [tr.stamps[0], tr.stamps[10]]},
-        {"name": "loose", "position": [100.0, 0.0, 0.0], "uncertainty_m": 0.015,
-         "window": [tr.stamps[0], tr.stamps[10]]},
+    rows = absolute_check(tr, [
+        {"name": "no_evidence", "position": list(tr.positions[5]),
+         "uncertainty_m": 0.007, "window": [tr.stamps[0], tr.stamps[10]]}])
+    assert rows[0]["residual_m"] is None, rows[0]
+    assert "REFUSED" in rows[0]["verdict"], rows[0]
+
+
+@test
+def test_absolute_check_scores_an_observed_board():
+    """With a board detection the residual is a real absolute error."""
+    t = np.arange(10, dtype=float)
+    poses = np.tile(np.eye(4), (10, 1, 1))
+    poses[:, 0, 3] = 0.72                      # parked 0.72 m from the board
+    est = Trajectory(t, poses)
+    board = {"name": "anchor", "position": [0.0, 0.0, 0.0],
+             "uncertainty_m": 0.007, "window": [0.0, 9.0]}
+    obs = [{"stamp": float(k), "p_board_cam": [-0.72, 0.0, 0.0]} for k in range(10)]
+
+    r = absolute_check(est, [dict(board, observations=obs)])[0]
+    assert r["residual_m"] < 1e-9 and r["source"] == "observed", r
+    assert r["verdict"].startswith("indistinguishable"), r
+
+    biased = poses.copy(); biased[:, 1, 3] = 0.03
+    r = absolute_check(Trajectory(t, biased), [dict(board, observations=obs)])[0]
+    assert abs(r["residual_m"] - 0.03) < 1e-9, r
+    assert r["verdict"].startswith("resolved"), r
+
+    # a surveyed standoff is the weaker substitute and must also work
+    r = absolute_check(est, [dict(board, standoff=[0.72, 0.0, 0.0])])[0]
+    assert r["residual_m"] < 1e-9 and r["source"] == "standoff", r
+
+    # observations outside the window are not counted
+    late = [{"stamp": 99.0, "p_board_cam": [-0.72, 0.0, 0.0]}]
+    r = absolute_check(est, [dict(board, observations=late)])[0]
+    assert r["n"] == 0 and r["residual_m"] is None, r
+
+
+@test
+def test_absolute_check_handles_a_missing_or_unreachable_window():
+    tr = circle_traj(200, radius=3.0)
+    rows = absolute_check(tr, [
+        {"name": "unset", "position": [0, 0, 0], "uncertainty_m": 0.01,
+         "window": None},
         {"name": "absent", "position": [0, 0, 0], "uncertainty_m": 0.01,
-         "window": [1e9, 1e9 + 1]},
-    ]
-    rows = absolute_check(tr, anchors)
-    assert rows[0]["residual_m"] < 0.35
-    assert rows[1]["verdict"].startswith("resolved")
-    assert rows[2]["n"] == 0 and rows[2]["residual_m"] is None
+         "window": [1e9, 1e9 + 1], "standoff": [0, 0, 0]},
+    ])
+    assert rows[0]["n"] == 0 and "no dwell window" in rows[0]["verdict"], rows[0]
+    assert rows[1]["n"] == 0 and rows[1]["residual_m"] is None, rows[1]
 
 
 @test

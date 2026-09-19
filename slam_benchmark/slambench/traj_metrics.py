@@ -164,34 +164,103 @@ def rpe(est: Trajectory, ref: Trajectory, delta: float, unit: str = "m",
 
 def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
                    ) -> list[dict]:
-    """Tier 2: the estimate against surveyed positions, in the estimate's own
-    aligned frame.
+    """Tier 2: the estimate against surveyed board positions, in its own aligned
+    frame.
 
-    Each anchor is {name, position, uncertainty_m, window: [t0, t1]} — a
-    surveyed point and the interval during which the platform dwelled at a
-    stated offset from it. Returns one row per anchor with the residual and
-    whether it clears that anchor's own uncertainty, so an anchor too loose to
-    judge by (rs_anchor, at 15 mm std and 40 mm max) is visibly too loose
-    rather than silently averaged in with the good one.
+    THE MEASUREMENT IS OF AN OBSERVATION, NOT OF PROXIMITY. The platform does
+    not stand ON a board; it stands a metre or so away LOOKING at it. So the
+    residual that means something is:
 
-    The estimate must already be in the reference world frame — pass the output
+        board position according to the estimate  =  est_pose(t) @ p_board_cam(t)
+        residual                                  =  || that  -  surveyed position ||
+
+    where `p_board_cam` is the board's position in the camera frame at time t,
+    which comes from detecting the board and solving PnP. That residual is a
+    true absolute error and is comparable against the survey's 3-15 mm sigma.
+
+    Each anchor is {name, position, uncertainty_m, window: [t0, t1]} plus ONE of:
+
+      observations: [{stamp, p_board_cam: [x, y, z]}, ...]
+          board detections, the real thing. Used when present.
+      standoff: [dx, dy, dz]
+          the platform's surveyed offset from the board during the dwell, if the
+          dwell was at a marked spot. A weaker substitute: it assumes the cart
+          was parked exactly there.
+
+    With NEITHER, this refuses. It used to compare the platform's mean position
+    directly against the board's, which is the standoff distance (~0.7 m on
+    coop2) wearing the units of an error, and it would have been declared
+    "resolved above the survey's uncertainty" against a 7 mm sigma every single
+    time -- a confident number that measures nothing. Rule 3: refuse rather
+    than default.
+
+    The estimate must already be in the reference world frame -- pass the output
     of `Alignment.apply`, not the raw method output.
     """
     rows = []
     for a in anchors:
-        t0, t1 = a["window"]
-        m = (est.stamps >= t0) & (est.stamps <= t1)
-        if not m.any():
-            rows.append({"anchor": a["name"], "n": 0, "residual_m": None,
-                         "uncertainty_m": a.get("uncertainty_m"),
-                         "verdict": "no estimate pose in the dwell window"})
+        name, u = a["name"], a.get("uncertainty_m")
+        pos = np.asarray(a["position"], dtype=np.float64)
+        window = a.get("window")
+        if window is None:
+            rows.append({"anchor": name, "n": 0, "residual_m": None,
+                         "uncertainty_m": u,
+                         "verdict": "no dwell window declared"})
             continue
-        p = est.positions[m].mean(axis=0)
-        d = float(np.linalg.norm(p - np.asarray(a["position"], dtype=np.float64)))
-        u = a.get("uncertainty_m")
+        t0, t1 = window
+        obs = a.get("observations")
+        standoff = a.get("standoff")
+
+        if obs:
+            # est_pose(t) @ p_board_cam(t), one estimate of the board per detection
+            est_pts = []
+            for o in obs:
+                t = float(o["stamp"])
+                if not (t0 <= t <= t1):
+                    continue
+                k = int(np.argmin(np.abs(est.stamps - t)))
+                if abs(est.stamps[k] - t) > 0.05:
+                    continue
+                T = est.poses[k]
+                est_pts.append(T[:3, :3] @ np.asarray(o["p_board_cam"],
+                                                      dtype=np.float64) + T[:3, 3])
+            if not est_pts:
+                rows.append({"anchor": name, "n": 0, "residual_m": None,
+                             "uncertainty_m": u,
+                             "verdict": "no board observation inside the window "
+                                        "matched an estimate pose"})
+                continue
+            est_pts = np.asarray(est_pts)
+            p = est_pts.mean(axis=0)
+            d = float(np.linalg.norm(p - pos))
+            spread = float(np.linalg.norm(est_pts.std(axis=0)))
+            source = "observed"
+        elif standoff is not None:
+            m = (est.stamps >= t0) & (est.stamps <= t1)
+            if not m.any():
+                rows.append({"anchor": name, "n": 0, "residual_m": None,
+                             "uncertainty_m": u,
+                             "verdict": "no estimate pose in the dwell window"})
+                continue
+            p = est.positions[m].mean(axis=0)
+            d = float(np.linalg.norm(p - (pos + np.asarray(standoff,
+                                                           dtype=np.float64))))
+            spread = float(np.linalg.norm(est.positions[m].std(axis=0)))
+            source = "standoff"
+        else:
+            rows.append({
+                "anchor": name, "n": 0, "residual_m": None, "uncertainty_m": u,
+                "verdict": "REFUSED: a window alone cannot make an absolute check. "
+                           "The platform stands off from the board, so comparing "
+                           "its position against the board's measures the standoff, "
+                           "not the error. Supply `observations` (board detections "
+                           "+ PnP) or a surveyed `standoff`."})
+            continue
+
+        n = len(est_pts) if obs else int(m.sum())
         rows.append({
-            "anchor": a["name"], "n": int(m.sum()), "residual_m": d, "uncertainty_m": u,
-            "spread_m": float(np.linalg.norm(est.positions[m].std(axis=0))),
+            "anchor": name, "n": n, "residual_m": d, "uncertainty_m": u,
+            "spread_m": spread, "source": source,
             "verdict": ("indistinguishable from the survey" if u and d <= u
                         else "resolved above the survey's uncertainty" if u
                         else "no uncertainty declared for this anchor"),

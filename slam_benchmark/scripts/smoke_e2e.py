@@ -93,8 +93,18 @@ def main() -> int:
     cfg["eval"]["volume"] = {"min": [-1.0, -15.0, -0.2], "max": [9.0, 1.0, 3.0]}
     cfg["eval"]["resolution_m"] = 0.05
     cfg["eval"]["map_frame"] = "raw"
+    # Tier 2 needs the board OBSERVED, not merely approached: a window alone
+    # measures the standoff (see absolute_check). Synthesise the detections the
+    # ChArUco+PnP step would produce -- the board's position in the camera frame
+    # at each pose -- so the smoke test exercises the path the real runs use.
+    board = ref.positions[10]
     cfg["reference"]["anchors"][0]["window"] = [float(ref.stamps[0]), float(ref.stamps[20])]
-    cfg["reference"]["anchors"][0]["position"] = ref.positions[10].tolist()
+    cfg["reference"]["anchors"][0]["position"] = board.tolist()
+    cfg["reference"]["anchors"][0]["observations"] = [
+        {"stamp": float(ref.stamps[k]),
+         "p_board_cam": (se3.invert(ref.poses[k])[:3, :3] @ board
+                         + se3.invert(ref.poses[k])[:3, 3]).tolist()}
+        for k in range(21)]
     (tmp / "smoke.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
 
     for name in ("method_good", "method_scaled"):

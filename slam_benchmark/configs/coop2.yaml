@@ -125,6 +125,21 @@ reference:
       window_candidates_unconfirmed: true
       note: the map frame's origin, and the only anchor tight enough to resolve
             a centimetre-scale difference between methods
+      # WINDOWS from scripts/board_visibility.py (2026-09-19): the board
+      # PROJECTED INTO THE CAMERA through the reference pose, so these are
+      # "in frame, close, and slow", not merely "nearby".
+      #   mobile_1: [1787899804.049, 1787899813.149]   # 92 poses, 0.72 m, t+0.2..9.3
+      #   mobile_2: [1787899920.037, 1787899932.277]   # 100 poses, 1.36 m, t+116.0..128.2
+      # Per-agent, so `window` is filled by the evaluator from the agent being
+      # scored -- see windows_by_agent below.
+      windows_by_agent:
+        mobile_1: [1787899804.049, 1787899813.149]
+        mobile_2: [1787899920.037, 1787899932.277]
+      # STILL REQUIRED before tier 2 produces a number: `observations`, the
+      # board's position in the camera frame per frame, from ChArUco detection
+      # + PnP. absolute_check REFUSES on a window alone, because the platform
+      # stands off from the board and comparing positions measures the standoff
+      # (~0.7 m here) rather than the error.
     - name: anchor_b
       position: [8.033, -7.182, -0.102]
       uncertainty_m: 0.013            # the honest figure: 12.9 mm / 2.6 deg between
@@ -133,6 +148,21 @@ reference:
       # So this board anchors mobile_2 only — mobile_1's graph gets two boards,
       # not three, and its tier-2 check is two points.
       note: its quoted 2.0 mm is the spread WITHIN a section and understates it
+      # WINDOWS from scripts/board_visibility.py (2026-09-19): the board
+      # PROJECTED INTO THE CAMERA through the reference pose, so these are
+      # "in frame, close, and slow", not merely "nearby".
+      #   mobile_1: [1787899851.951, 1787899855.651]   # 38 poses, 4.13 m, t+48.1..51.8 -- FAR; a board at 4 m is small in a 960x540 frame, so its PnP will be the weakest of the six
+      #   mobile_2: [1787899845.505, 1787899851.507]   # 61 poses, 0.84 m, t+41.5..47.5
+      # Per-agent, so `window` is filled by the evaluator from the agent being
+      # scored -- see windows_by_agent below.
+      windows_by_agent:
+        mobile_1: [1787899851.951, 1787899855.651]
+        mobile_2: [1787899845.505, 1787899851.507]
+      # STILL REQUIRED before tier 2 produces a number: `observations`, the
+      # board's position in the camera frame per frame, from ChArUco detection
+      # + PnP. absolute_check REFUSES on a window alone, because the platform
+      # stands off from the board and comparing positions measures the standoff
+      # (~0.7 m here) rather than the error.
     - name: rs_anchor
       position: [8.460, -14.267, -0.056]
       uncertainty_m: 0.015            # std; max residual 40 mm, 1 of 2 sections gated
@@ -142,6 +172,21 @@ reference:
       # run — which is also why place overlap came back 100%.
       note: the loosest of the three; a residual under ~40 mm against this board
             is not evidence of anything
+      # WINDOWS from scripts/board_visibility.py (2026-09-19): the board
+      # PROJECTED INTO THE CAMERA through the reference pose, so these are
+      # "in frame, close, and slow", not merely "nearby".
+      #   mobile_1: [1787899928.753, 1787899955.354]   # 267 poses, 0.75 m, t+124.9..151.5 (parked at the end)
+      #   mobile_2: [1787899810.489, 1787899821.794]   # 128 poses, 0.81 m, t+6.4..17.7
+      # Per-agent, so `window` is filled by the evaluator from the agent being
+      # scored -- see windows_by_agent below.
+      windows_by_agent:
+        mobile_1: [1787899928.753, 1787899955.354]
+        mobile_2: [1787899810.489, 1787899821.794]
+      # STILL REQUIRED before tier 2 produces a number: `observations`, the
+      # board's position in the camera frame per frame, from ChArUco detection
+      # + PnP. absolute_check REFUSES on a window alone, because the platform
+      # stands off from the board and comparing positions measures the standoff
+      # (~0.7 m here) rather than the error.
 
 # ------------------------------------------------------------------- streams
 #
