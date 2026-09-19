@@ -59,6 +59,17 @@ print(" ".join(to_args(json.loads(os.environ.get("SLAM_PARAMS") or "{}"), exclud
 echo "odometry : $ODOM_ARGS"
 echo "mapping  : $RTAB_ARGS"
 
+# NO odom_info. Measured across every run: with the mapping node dead the
+# odometry processes consecutive frames (period 67 ms, 72% kept); with it
+# alive, exactly every other frame (period 134 ms, 20-41% kept), at both replay
+# rates, with the bag delivering all 2291 frames and the callback's own cost at
+# p90 46 ms. The one thing the mapping node changes INSIDE the odometry node is
+# subscribe_odom_info: with a subscriber present, the odometry builds and
+# publishes the whole local feature map on every frame, in the hot path. It is
+# switched off. Gravity still reaches the graph: the mapping node subscribes to
+# the IMU itself, and Mem/UseOdomGravity (which would take gravity from
+# odom_info instead) is left at its published default, false.
+#
 # PROCESS EVERY FRAME, NOT THE MOST RECENT ONE. rgbd_odometry defaults to
 # always_process_most_recent_frame=true: the worker thread holds dataMutex_ for
 # the whole of processData() -- estimation plus publishing odom_info, a large
@@ -97,21 +108,9 @@ if [[ -n "${SLAM_IMU_TOPIC:-}" ]]; then
     # reach the IMU from $FRAME_ID, RTAB-Map must FAIL rather than fuse an
     # unrotated gravity vector, which would tilt the whole map by the mounting
     # angle and still complete.
-    # wait_imu_to_init is OFF, and that is the frame-drop fix. Measured: the bag
-    # delivers 2291 frames (witnessed by the recorder) and rgbd_odometry
-    # processes ~720. With wait_imu_to_init=true, OdometryROS::processData() line
-    # 553 PARKS any image whose stamp is ahead of the newest IMU sample received;
-    # the IMU callback later releases it to the worker thread, which holds
-    # dataMutex_ for the whole job, odom_info serialisation included; and every
-    # image that lands meanwhile fails lockTry() and is dropped -- silently
-    # unless the timing looks "flaky". Whether a frame gets parked is an
-    # ORDERING property of the recording, so the loss is the same at every
-    # replay rate, immune to always_process_most_recent_frame, and worse once
-    # the mapping node makes odom_info expensive. With the gate off the frame
-    # is processed inline with the IMU samples up to its stamp (lower_bound at
-    # line 564); gravity still enters, only the first frame's orientation is
-    # not IMU-initialised, and nothing is parked.
-    IMU_ARGS=(imu_topic:="$SLAM_IMU_TOPIC" wait_imu_to_init:=false)
+    # wait_imu_to_init stays ON. Turning it off (2026-09-19) did not touch the
+    # frame loss and made the tracking less stable: 4 resets instead of 2.
+    IMU_ARGS=(imu_topic:="$SLAM_IMU_TOPIC" wait_imu_to_init:=true)
     echo "imu      : $SLAM_IMU_TOPIC"
 else
     echo "imu      : none (the IMU-free half of the pair)"
@@ -127,6 +126,7 @@ exec ros2 launch rtabmap_launch rtabmap.launch.py \
     approx_sync:="$APPROX" ${INTERVAL[@]+"${INTERVAL[@]}"} \
     odom_always_process_most_recent_frame:=false \
     topic_queue_size:=50 sync_queue_size:=50 \
+    subscribe_odom_info:=false \
     publish_tf_odom:=false \
     publish_tf_map:=false \
     rtabmap_viz:=false rviz:=false \

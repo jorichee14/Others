@@ -84,6 +84,17 @@ class Recorder(Node):
         # This subscriber does nothing but count, so if it sees every frame the
         # loss is inside the method; if it sees the same third, the loss is in
         # replay or transport and no method parameter will touch it.
+        # And the nodes' OWN accounting. rtabmap_sync publishes, per node, how
+        # many synchronised sets it delivered and how many topics it dropped,
+        # on /diagnostics. The last status of each named node is kept and lands
+        # in timing.json, so "did the sync drop them or did the estimator" is
+        # read off the run rather than argued.
+        self.diagnostics = {}
+        try:
+            from diagnostic_msgs.msg import DiagnosticArray
+            self.create_subscription(DiagnosticArray, "/diagnostics", self.on_diag, 50)
+        except ImportError:
+            pass
         self.seen = 0
         if count_topic:
             from sensor_msgs.msg import Image
@@ -100,6 +111,15 @@ class Recorder(Node):
         # should be what has been computed. 50 poses is ~3 s at 14.9 Hz.
         if self.n % 50 == 0:
             self.fh.flush()
+
+    def on_diag(self, msg):
+        for st in msg.status:
+            lvl = st.level
+            self.diagnostics[st.name] = {
+                # DiagnosticStatus.level is a ROS `byte`: a 1-byte bytes object in rclpy
+                "level": lvl[0] if isinstance(lvl, (bytes, bytearray)) else int(lvl),
+                "message": st.message,
+                **{kv.key: kv.value for kv in st.values}}
 
     def on_witness(self, msg):
         self.seen += 1
@@ -152,6 +172,7 @@ class Recorder(Node):
         (self.out / "timing.json").write_text(json.dumps({
             "frames": n, "odometry_poses": self.n,
             "input_frames_witnessed": self.seen,
+            "diagnostics": self.diagnostics,
             "trajectory_source": source,
             "wall_s": time.time() - self.t0,
             "cpu_s": ru.ru_utime + ru.ru_stime,

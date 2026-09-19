@@ -61,7 +61,12 @@ params:
   # joint visual-inertial state, which is exactly why this row needs no noise
   # model and no precise camera<->IMU extrinsic and can therefore run TODAY.
   Optimizer/GravitySigma: 0.3
-  Mem/UseOdomGravity: "true"
+  # Published default false. It was "true" here, meaning gravity comes to the
+  # graph from the odometry's odom_info message; measured 2026-09-19, the
+  # odom_info subscription is what halves the odometry's frame rate, so it is
+  # off and the mapping node takes gravity from its own IMU subscription --
+  # the default path, and the same constraint.
+  Mem/UseOdomGravity: "false"
 
 notes: |
   Its pair with rtabmap_rgbd (identical but IMU-free) is the loosely-coupled
