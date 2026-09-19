@@ -43,6 +43,21 @@ if [[ "${SLAM_NEEDS_CLOUD:-0}" == "1" && "${SLAM_MODALITY:-}" == "rgbd" ]]; then
     echo "bridge   : $SLAM_DEPTH_TOPIC -> $CLOUD_TOPIC (scale $SLAM_DEPTH_SCALE)"
 fi
 
+# --- the camera<-IMU edge, when the bag's tf_static does not carry it.
+# One transform, from configs/coop2.yaml, published so the method's own
+# front-end can rotate the IMU into the camera frame. Without it RTAB-Map drops
+# every inertial sample and the row silently becomes its own IMU-free control.
+TF=""
+if [[ -n "${SLAM_IMU_TF:-}" ]]; then
+    read -r P C X Y Z QX QY QZ QW <<<"$SLAM_IMU_TF"
+    echo "imu tf   : $P -> $C  t=[$X $Y $Z]"
+    ros2 run tf2_ros static_transform_publisher \
+        --x "$X" --y "$Y" --z "$Z" --qx "$QX" --qy "$QY" --qz "$QZ" --qw "$QW" \
+        --frame-id "$P" --child-frame-id "$C" \
+        --ros-args -p use_sim_time:=true &
+    TF=$!
+fi
+
 python3 /opt/slambench/record_tum.py \
     --pose-topic "$SLAM_POSE_TOPIC" \
     --map-topic "${SLAM_MAP_TOPIC:-}" \
@@ -64,7 +79,7 @@ ros2 bag play /bag --clock -r "${SLAM_RATE:-1.0}" --topics ${SLAM_TOPICS//,/ }
 
 # The bag is done; give the method a moment to flush its last optimisation.
 sleep 10
-for pid in "$SLAM" "$BRIDGE" "$REC"; do
+for pid in "$SLAM" "$BRIDGE" "$TF" "$REC"; do
     [[ -n "$pid" ]] || continue
     kill -INT "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true

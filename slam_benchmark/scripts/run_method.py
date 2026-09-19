@@ -196,9 +196,26 @@ def main() -> int:
         cmd += ["-e", f"SLAM_RANGE_MIN={rng[0]}", "-e", f"SLAM_RANGE_MAX={rng[1]}"]
     if mcfg.needs_imu:
         imu_key = mcfg.raw.get("imu_by_agent", {}).get(info["agent"])
-        imu_topic = (cfg.raw.get("streams", {}).get(imu_key) or {}).get("topic")
-        if imu_topic:
-            cmd += ["-e", f"SLAM_IMU_TOPIC={imu_topic}"]
+        imu_stream = cfg.raw.get("streams", {}).get(imu_key) or {}
+        if imu_stream.get("topic"):
+            cmd += ["-e", f"SLAM_IMU_TOPIC={imu_stream['topic']}"]
+        # THE CAMERA<-IMU EDGE, BECAUSE THE BAG DOES NOT CARRY IT.
+        # Measured 2026-09-19: `zed_imu_link` is absent from the replayed
+        # tf_static, so RTAB-Map dropped every IMU sample and never initialised
+        # ("A valid TF between ... is required"). The transform is not lost --
+        # it is I13, resolved from the wrapper's own published TF and recorded
+        # in configs/coop2.yaml -- so the container publishes that one edge from
+        # the config instead of doing without the IMU.
+        #
+        # This is not the container transforming poses (rule 6). It is a SENSOR
+        # EXTRINSIC the front-end needs in order to fuse at all, it is the
+        # config's number rather than a derived one (rule 4), and it travels in
+        # run.json so any result can be checked against it.
+        ext = imu_stream.get("extrinsic_from_camera")
+        if isinstance(ext, dict) and ext.get("xyz") and ext.get("quat_xyzw"):
+            tf = [str(ext["parent"]), str(ext["child"])]
+            tf += [repr(float(v)) for v in list(ext["xyz"]) + list(ext["quat_xyzw"])]
+            cmd += ["-e", "SLAM_IMU_TF=" + " ".join(tf)]
     # `gpu: required` in the method config is a hardware claim, so it belongs on
     # the command rather than in the image: an image that always asks for a GPU
     # cannot be smoke-tested on a machine without one.

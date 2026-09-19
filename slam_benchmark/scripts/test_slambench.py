@@ -1012,6 +1012,91 @@ def test_no_image_script_sources_ros_with_u_active():
     assert checked >= 4, f"only found {checked} ROS sources; did the scripts move?"
 
 
+@test
+def test_tf_components_answer_the_lookup_question():
+    """tf resolves through any path in either direction, so 'can these two
+    frames be transformed' is exactly 'are they in one undirected component'."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from bag_probe import components
+    comps = components([("base", "cam"), ("cam", "cam_optical"), ("imu", "imu_child")])
+    assert [sorted(c) for c in comps] == [["base", "cam", "cam_optical"],
+                                          ["imu", "imu_child"]], comps
+    # direction must not matter: a child->parent edge connects just the same
+    assert len(components([("a", "b"), ("c", "b")])) == 1
+
+
+@test
+def test_signed_stamp_gap_distinguishes_jitter_from_interleaving():
+    """The MAGNITUDE against the frame period is the diagnostic. Jitter is a
+    small fraction of a period and an interval rejects its tail; a gap near half
+    a period means the closest available partner is half a frame of real motion
+    away, and no interval recovers a pairing that was never recorded."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from bag_probe import nearest_dt
+    period = 0.068                                   # 14.7 Hz, as recorded
+    depth = np.arange(20) * period
+
+    assert np.all(nearest_dt(depth.copy(), depth) == 0)          # identical stamps
+    jitter = depth + 0.004                                       # well inside a frame
+    assert np.allclose(nearest_dt(jitter, depth), 0.004)
+    assert np.median(np.abs(nearest_dt(jitter, depth))) < 0.4 * period
+
+    # Nearly half a period out: every colour frame sits close to midway between
+    # two depth frames, so the closest partner is still ~half a frame of real
+    # motion away. Magnitude catches it, and the sign is unambiguous here.
+    inter = depth + 0.45 * period
+    dt = nearest_dt(inter, depth)
+    assert np.median(np.abs(dt)) > 0.4 * period, dt
+    assert len(set(np.sign(dt[:-1]))) == 1, dt
+
+    # Put the offset ON the tie and add jitter, and the sign starts flipping --
+    # which is what the real bag showed. It is a symptom of sitting at the tie,
+    # not an independent fault, and the magnitude already caught it.
+    rng = np.random.default_rng(0)
+    straddling = depth + period / 2 + rng.normal(0, 0.004, len(depth))
+    flips = np.sign(nearest_dt(straddling, depth))
+    assert np.sum(np.diff(flips) != 0) >= 2, flips
+    assert np.median(np.abs(nearest_dt(straddling, depth))) > 0.4 * period
+
+
+@test
+def test_the_camera_imu_edge_is_supplied_when_the_bag_lacks_it():
+    """Measured 2026-09-19: zed_imu_link is absent from the replayed tf_static,
+    so RTAB-Map dropped every IMU sample and the inertial row would have become
+    its own IMU-free control while still producing a trajectory."""
+    import scripts.run_method as rm
+    from slambench.config import load_dataset, load_method
+    root = str(Path(__file__).resolve().parents[1])
+    cfg = load_dataset(os.path.join(root, "configs", "coop2.yaml"))
+    m = load_method(os.path.join(root, "configs", "methods", "rtabmap_rgbd_imu.yaml"))
+    ext = cfg.raw["streams"]["mobile_1.imu"]["extrinsic_from_camera"]
+
+    saved = sys.argv
+    try:
+        sys.argv = ["run_method.py", "--config", os.path.join(root, "configs", "coop2.yaml"),
+                    "--method", os.path.join(root, "configs", "methods", "rtabmap_rgbd_imu.yaml"),
+                    "--stream", "mobile_1.zed_rgbd",
+                    "--runs-root", tempfile.mkdtemp()]
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            assert rm.main() == 0
+        cmd = buf.getvalue()
+    finally:
+        sys.argv = saved
+
+    assert "SLAM_IMU_TF=" in cmd, cmd
+    line = cmd.split("SLAM_IMU_TF=", 1)[1].split("'")[0]
+    parent, child, *nums = line.split()
+    assert (parent, child) == (ext["parent"], ext["child"]), (parent, child)
+    # the NUMBERS must be the config's, not a rounded or re-derived copy (rule 4)
+    assert [float(v) for v in nums] == list(ext["xyz"]) + list(ext["quat_xyzw"]), nums
+
+    # and the IMU-free half of the pair is handed no transform at all
+    free = load_method(os.path.join(root, "configs", "methods", "rtabmap_rgbd.yaml"))
+    assert not free.needs_imu
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")
