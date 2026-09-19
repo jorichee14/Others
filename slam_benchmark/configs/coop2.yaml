@@ -185,11 +185,21 @@ reference:
         # rule had picked 1.36 m here (1.19 px/bit, undetectable); the
         # detectability gate moved it to the closest long window instead.
         mobile_2: [1787899935.511, 1787899942.213]
-      # STILL REQUIRED before tier 2 produces a number: `observations`, the
-      # board's position in the camera frame per frame, from ChArUco detection
-      # + PnP. absolute_check REFUSES on a window alone, because the platform
-      # stands off from the board and comparing positions measures the standoff
-      # (~0.7 m here) rather than the error.
+      # THE OBSERVATIONS EXIST ALREADY -- no detector run needed. The mapping
+      # pipeline emits per-frame board-derived camera poses in the map frame:
+      #   zed_cam_in_map.tum        112 rows @ 15.0 Hz, std 1.98 mm (mobile_1)
+      #   realsense_cam_in_map.tum   92 rows,           std 6.93 mm (mobile_2)
+      # Verified: the first rows sit 0.76 mm from the session anchor's fused
+      # pose, and their orientation agrees with /tf map->zed_left_optical to
+      # 1.21 deg. Point `observed_poses_by_agent` at them and tier 2 scores
+      # against the pipeline's OWN detections rather than a reimplementation of
+      # its board conventions -- which matters, given the +x/+z normal mixup
+      # that silently rejected every view on the first attempt.
+      #
+      # Paths are relative to this config. FILL THESE IN:
+      observed_poses_by_agent:
+        mobile_1: null    # .../map_stages_20260828_outputs/zed_cam_in_map.tum
+        mobile_2: null    # .../map_stages_20260828_outputs/realsense_cam_in_map.tum
     - name: anchor_b
       position: [8.033, -7.182, -0.102]
       uncertainty_m: 0.013            # the honest figure: 12.9 mm / 2.6 deg between
@@ -215,11 +225,21 @@ reference:
         # 61 ref poses, 0.84 m, 1.93 px/bit, facing. mobile_2's ONLY window
         # on this board -- only 3.4% of its run clears both gates here.
         mobile_2: [1787899845.505, 1787899851.507]
-      # STILL REQUIRED before tier 2 produces a number: `observations`, the
-      # board's position in the camera frame per frame, from ChArUco detection
-      # + PnP. absolute_check REFUSES on a window alone, because the platform
-      # stands off from the board and comparing positions measures the standoff
-      # (~0.7 m here) rather than the error.
+      # THE OBSERVATIONS EXIST ALREADY -- no detector run needed. The mapping
+      # pipeline emits per-frame board-derived camera poses in the map frame:
+      #   zed_cam_in_map.tum        112 rows @ 15.0 Hz, std 1.98 mm (mobile_1)
+      #   realsense_cam_in_map.tum   92 rows,           std 6.93 mm (mobile_2)
+      # Verified: the first rows sit 0.76 mm from the session anchor's fused
+      # pose, and their orientation agrees with /tf map->zed_left_optical to
+      # 1.21 deg. Point `observed_poses_by_agent` at them and tier 2 scores
+      # against the pipeline's OWN detections rather than a reimplementation of
+      # its board conventions -- which matters, given the +x/+z normal mixup
+      # that silently rejected every view on the first attempt.
+      #
+      # Paths are relative to this config. FILL THESE IN:
+      observed_poses_by_agent:
+        mobile_1: null    # .../map_stages_20260828_outputs/zed_cam_in_map.tum
+        mobile_2: null    # .../map_stages_20260828_outputs/realsense_cam_in_map.tum
     - name: rs_anchor
       position: [8.460, -14.267, -0.056]
       uncertainty_m: 0.015            # std; max residual 40 mm, 1 of 2 sections gated
@@ -249,11 +269,21 @@ reference:
         # just not static. Clamp only if the detector's reprojection degrades
         # after that point.
         mobile_2: [1787899810.489, 1787899821.794]
-      # STILL REQUIRED before tier 2 produces a number: `observations`, the
-      # board's position in the camera frame per frame, from ChArUco detection
-      # + PnP. absolute_check REFUSES on a window alone, because the platform
-      # stands off from the board and comparing positions measures the standoff
-      # (~0.7 m here) rather than the error.
+      # THE OBSERVATIONS EXIST ALREADY -- no detector run needed. The mapping
+      # pipeline emits per-frame board-derived camera poses in the map frame:
+      #   zed_cam_in_map.tum        112 rows @ 15.0 Hz, std 1.98 mm (mobile_1)
+      #   realsense_cam_in_map.tum   92 rows,           std 6.93 mm (mobile_2)
+      # Verified: the first rows sit 0.76 mm from the session anchor's fused
+      # pose, and their orientation agrees with /tf map->zed_left_optical to
+      # 1.21 deg. Point `observed_poses_by_agent` at them and tier 2 scores
+      # against the pipeline's OWN detections rather than a reimplementation of
+      # its board conventions -- which matters, given the +x/+z normal mixup
+      # that silently rejected every view on the first attempt.
+      #
+      # Paths are relative to this config. FILL THESE IN:
+      observed_poses_by_agent:
+        mobile_1: null    # .../map_stages_20260828_outputs/zed_cam_in_map.tum
+        mobile_2: null    # .../map_stages_20260828_outputs/realsense_cam_in_map.tum
 
 # ------------------------------------------------------------------- streams
 #

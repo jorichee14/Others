@@ -180,8 +180,17 @@ def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
 
     Each anchor is {name, position, uncertainty_m, window: [t0, t1]} plus ONE of:
 
+      observed_poses: Trajectory
+          camera poses in the MAP frame derived from board detection + PnP --
+          coop2's mapping pipeline already emits these (zed_cam_in_map.tum,
+          realsense_cam_in_map.tum: 112 and 92 per-frame rows at ~15 Hz, 1.98
+          and 6.93 mm std). PREFERRED, because it is the pipeline's own
+          detection rather than a reimplementation of its board conventions,
+          and because it carries orientation too. Residual is the position
+          difference at matched stamps, with the rotation reported beside it.
       observations: [{stamp, p_board_cam: [x, y, z]}, ...]
-          board detections, the real thing. Used when present.
+          board detections as a point in the camera frame. Equivalent, and what
+          a fresh detector run would produce.
       standoff: [dx, dy, dz]
           the platform's surveyed offset from the board during the dwell, if the
           dwell was at a marked spot. A weaker substitute: it assumes the cart
@@ -210,6 +219,42 @@ def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
         t0, t1 = window
         obs = a.get("observations")
         standoff = a.get("standoff")
+        oposes = a.get("observed_poses")
+
+        if oposes is not None and len(oposes):
+            m = (oposes.stamps >= t0) & (oposes.stamps <= t1)
+            if not m.any():
+                rows.append({"anchor": name, "n": 0, "residual_m": None,
+                             "uncertainty_m": u,
+                             "verdict": "no board-derived pose inside the window"})
+                continue
+            dp, dr = [], []
+            for k in np.flatnonzero(m):
+                t = float(oposes.stamps[k])
+                j = int(np.argmin(np.abs(est.stamps - t)))
+                if abs(est.stamps[j] - t) > 0.05:
+                    continue
+                dp.append(np.linalg.norm(est.positions[j] - oposes.positions[k]))
+                dr.append(np.degrees(se3.rotation_angle(
+                    est.poses[j][:3, :3].T @ oposes.poses[k][:3, :3])))
+            if not dp:
+                rows.append({"anchor": name, "n": 0, "residual_m": None,
+                             "uncertainty_m": u,
+                             "verdict": "board-derived poses in the window matched "
+                                        "no estimate pose within 50 ms"})
+                continue
+            dp = np.asarray(dp)
+            d = float(np.median(dp))
+            spread = float(dp.std())
+            rows.append({
+                "anchor": name, "n": len(dp), "residual_m": d, "uncertainty_m": u,
+                "spread_m": spread, "source": "observed_poses",
+                "residual_deg": float(np.median(dr)),
+                "verdict": ("indistinguishable from the survey" if u and d <= u
+                            else "resolved above the survey's uncertainty" if u
+                            else "no uncertainty declared for this anchor"),
+            })
+            continue
 
         if obs:
             # est_pose(t) @ p_board_cam(t), one estimate of the board per detection
@@ -253,8 +298,9 @@ def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
                 "verdict": "REFUSED: a window alone cannot make an absolute check. "
                            "The platform stands off from the board, so comparing "
                            "its position against the board's measures the standoff, "
-                           "not the error. Supply `observations` (board detections "
-                           "+ PnP) or a surveyed `standoff`."})
+                           "not the error. Supply `observed_poses` (the pipeline's "
+                           "*_cam_in_map.tum), `observations` (board detections + "
+                           "PnP) or a surveyed `standoff`."})
             continue
 
         n = len(est_pts) if obs else int(m.sum())

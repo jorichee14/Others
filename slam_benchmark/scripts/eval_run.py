@@ -104,12 +104,13 @@ def main() -> int:
                       for d in ev.get("rpe_deltas", [])]
 
         est_aligned = a.alignment.apply(est_ref)
-        anchors = cfg.anchors()
+        anchors = cfg.anchors(agent)
         out["absolute_check"] = (absolute_check(est_aligned, anchors) if anchors else
-                                 {"note": "no anchor has a dwell window; tier 2 is silent. "
-                                          "Fill reference.anchors[*].window in the dataset "
-                                          "config — without it no independent evidence "
-                                          "enters this benchmark at all."})
+                                 {"note": f"no anchor has a dwell window for {agent}; "
+                                          "tier 2 is silent. Fill "
+                                          "reference.anchors[*].windows_by_agent in the "
+                                          "dataset config — without it no independent "
+                                          "evidence enters this benchmark at all."})
         rv = ev.get("revisit", {})
         out["revisit"] = revisit_residual(est_aligned, rv.get("radius_m", 0.30),
                                           rv.get("min_separation_s", 20.0))

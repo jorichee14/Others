@@ -98,6 +98,12 @@ def main() -> int:
     # ChArUco+PnP step would produce -- the board's position in the camera frame
     # at each pose -- so the smoke test exercises the path the real runs use.
     board = ref.positions[10]
+    # windows are declared per agent now; clear the inherited real ones so the
+    # synthetic stamps are what gets resolved
+    for a in cfg["reference"]["anchors"]:
+        a.pop("windows_by_agent", None)
+        a.pop("observed_poses_by_agent", None)
+        a["window"] = None
     cfg["reference"]["anchors"][0]["window"] = [float(ref.stamps[0]), float(ref.stamps[20])]
     cfg["reference"]["anchors"][0]["position"] = board.tolist()
     cfg["reference"]["anchors"][0]["observations"] = [

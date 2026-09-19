@@ -73,11 +73,36 @@ class DatasetConfig:
                 f"run (tier-3 self-consistency), but not scored for ATE.")
         return a[agent]
 
-    def anchors(self) -> list[dict]:
+    def anchors(self, agent: str | None = None) -> list[dict]:
+        """Anchors usable for tier 2, resolved for one agent.
+
+        Windows and board observations are PER AGENT: the two platforms dwell
+        at different boards at different times, and on coop2 `mobile_1` cannot
+        use `anchor_b` at all (it never gets closer than 2.48 m, where the
+        15 mm markers are half a pixel per bit). So `windows_by_agent` and
+        `observed_poses_by_agent` are the declared form and this resolves them
+        down to the flat `window` / `observed_poses` absolute_check expects.
+
+        `observed_poses_by_agent` names a TUM of board-derived camera poses in
+        the map frame — coop2's mapping pipeline emits these directly. The file
+        is loaded here so absolute_check stays free of file I/O.
+        """
         out = []
         for a in self.reference.get("anchors", []):
+            a = dict(a)
+            if agent is not None:
+                wba = a.get("windows_by_agent")
+                if isinstance(wba, dict):
+                    a["window"] = wba.get(agent)
+                obp = a.get("observed_poses_by_agent")
+                if isinstance(obp, dict) and obp.get(agent):
+                    from .trajectory import load_tum
+                    path = Path(obp[agent])
+                    if not path.is_absolute():
+                        path = self.path.parent / path
+                    a["observed_poses"] = load_tum(path)
             if a.get("window") in (None, [None, None]):
-                continue          # dwell not yet timed; absolute_check would be silent
+                continue          # dwell not timed, or this board is unusable here
             out.append(a)
         return out
 
