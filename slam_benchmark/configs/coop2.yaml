@@ -181,11 +181,10 @@ reference:
         # end of the static dwell it fused 112 board views over at 1.98 mm).
         # 92 ref poses, 0.72 m, 1.90 px/bit, facing at 16.5 deg incidence.
         mobile_1: [1787899804.049, 1787899810.524]
-        # STALE -- chosen by the old "longest window" rule at 1.36 m, where
-        # a 15 mm marker is 1.19 px/bit: UNDETECTABLE. The mobile_2 run has
-        # closer windows (0.66-0.69 m, one with 161 poses). Re-run
-        # board_visibility.py for mobile_2 with --anchor-frame and replace.
-        mobile_2: null
+        # 161 ref poses, 0.66 m, 2.44 px/bit, facing. The old longest-window
+        # rule had picked 1.36 m here (1.19 px/bit, undetectable); the
+        # detectability gate moved it to the closest long window instead.
+        mobile_2: [1787899935.511, 1787899942.213]
       # STILL REQUIRED before tier 2 produces a number: `observations`, the
       # board's position in the camera frame per frame, from ChArUco detection
       # + PnP. absolute_check REFUSES on a window alone, because the platform
@@ -213,9 +212,9 @@ reference:
         # than 2.48 m, where a 15 mm marker spans 0.5 px/bit. Undetectable.
         # mobile_1 therefore has TWO usable boards, not three.
         mobile_1: null
-        # measured at 0.84 m / 1.92 px/bit -- detectable, but selected before
-        # the facing gate existed. Re-run to confirm.
-        mobile_2: [1787899845.505, 1787899851.507]   # PROVISIONAL
+        # 61 ref poses, 0.84 m, 1.93 px/bit, facing. mobile_2's ONLY window
+        # on this board -- only 3.4% of its run clears both gates here.
+        mobile_2: [1787899845.505, 1787899851.507]
       # STILL REQUIRED before tier 2 produces a number: `observations`, the
       # board's position in the camera frame per frame, from ChArUco detection
       # + PnP. absolute_check REFUSES on a window alone, because the platform
@@ -243,11 +242,13 @@ reference:
         # 267 ref poses, 0.75 m, 1.87 px/bit, facing. The longest and
         # closest window on either agent; the cart is parked here to the end.
         mobile_1: [1787899928.753, 1787899955.354]
-        # 0.81 m / 2.05 px/bit -- the only pair that cleared detectability
-        # outright. Selected before the facing gate; re-run to confirm.
-        # NOTE the pipeline's realsense departure_t is 1787899814.726, so the
-        # static portion ends ~7 s before this window does.
-        mobile_2: [1787899810.489, 1787899821.794]   # PROVISIONAL
+        # 128 ref poses, 0.81 m, 2.05 px/bit, facing. NOT clamped to the
+        # pipeline's realsense departure_t (1787899814.726): that marks the end
+        # of the STATIC dwell it fused 92 views over, and this window's later
+        # frames are still facing, in range and slow -- valid observations,
+        # just not static. Clamp only if the detector's reprojection degrades
+        # after that point.
+        mobile_2: [1787899810.489, 1787899821.794]
       # STILL REQUIRED before tier 2 produces a number: `observations`, the
       # board's position in the camera frame per frame, from ChArUco detection
       # + PnP. absolute_check REFUSES on a window alone, because the platform
