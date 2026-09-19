@@ -82,6 +82,11 @@ def main() -> int:                                             # pragma: no cove
     ap.add_argument("--bag-start", type=float, default=None,
                     help="the bag's first message time, as bag_probe prints it, so "
                          "dropped-frame times read as run time rather than offsets")
+    ap.add_argument("--odometry-tum", default=None,
+                    help="the run's odometry.tum. Its stamps say exactly WHERE frames are "
+                         "missing, which the log cannot: a frame the estimator never saw "
+                         "leaves no line. Periodic holes are one thing, a uniform trickle "
+                         "another, and the two have different fixes.")
     ap.add_argument("--expected-frames", type=int, default=None,
                     help="how many frames the STREAM carries (bag_probe prints it). "
                          "Without it the tracked fraction is of frames the estimator "
@@ -154,6 +159,43 @@ def main() -> int:                                             # pragma: no cove
         else:
             print("      VERDICT: the drops sit at the ends, which is the inertial "
                   "stream not covering the images. Report the shortened window.")
+
+    if args.odometry_tum:
+        stamps = np.array([float(l.split()[0]) for l in open(args.odometry_tum)
+                           if l.strip() and not l.startswith("#")])
+        if len(stamps) > 2:
+            d = np.diff(np.sort(stamps))
+            period = float(np.median(d))
+            holes = d > 1.5 * period
+            missing = int(np.sum(np.round(d[holes] / period) - 1))
+            t0 = args.bag_start or stamps.min()
+            rel = np.sort(stamps)[:-1][holes] - t0
+            print(f"\n  odometry.tum: {len(stamps)} poses, period {period * 1e3:.1f} ms, "
+                  f"{int(holes.sum())} holes hiding ~{missing} frames")
+            if holes.any():
+                sizes = np.round(d[holes] / period).astype(int)
+                print(f"      hole sizes (frames)      median {int(np.median(sizes))}, "
+                      f"max {int(sizes.max())}")
+                if len(rel) > 3:
+                    spacing = np.diff(rel)
+                    print(f"      spacing between holes    median {np.median(spacing):.2f} s, "
+                          f"p10 {np.percentile(spacing, 10):.2f} s, "
+                          f"p90 {np.percentile(spacing, 90):.2f} s")
+                span = float((stamps.max() - t0)) or 1.0
+                bins = np.histogram(rel, bins=10, range=(0.0, span))[0]
+                width = max(1, int(50 / max(bins.max(), 1)))
+                for i, n in enumerate(bins):
+                    lo, hi = i * span / 10, (i + 1) * span / 10
+                    print(f"      {lo:6.1f}-{hi:6.1f}s  {n:>4}  {'#' * min(n * width, 50)}")
+                if len(rel) > 3 and np.percentile(spacing, 90) / max(np.percentile(spacing, 10), 1e-6) < 2.5:
+                    print(f"      VERDICT: holes recur at a near-constant ~{np.median(spacing):.1f} s "
+                          f"interval. Something PERIODIC in the pipeline is starving the "
+                          f"estimator's input queue -- a 1 Hz mapping update that stalls the "
+                          f"process is the usual culprit; the fix is queue depth, not tuning.")
+                else:
+                    print("      VERDICT: holes are irregular. Look at the load or the transport "
+                          "(large images over DDS loopback inside a container with a small "
+                          "/dev/shm drop fragments silently) before the estimator.")
 
     print("\n  warnings seen")
     for name, pat in CAUSES.items():
