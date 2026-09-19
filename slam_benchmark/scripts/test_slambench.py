@@ -1284,6 +1284,23 @@ def test_a_loop_closing_method_is_scored_on_its_OPTIMISED_graph():
     meta = json.loads((out / "timing.json").read_text())
     assert meta["trajectory_source"] == "optimised_graph", meta
 
+    # The graph must already be ON DISK before finish() -- a container that is
+    # killed rather than asked to stop used to lose a completed run entirely.
+    out3 = Path(tempfile.mkdtemp())
+    rec3 = rt.Recorder.__new__(rt.Recorder)
+    rec3.out, rec3.n, rec3.t0, rec3.cloud, rec3.path = out3, 0, 0.0, None, None
+    rec3.fh = (out3 / "odometry.tum").open("w")
+    rec3.on_path(types.SimpleNamespace(poses=[stamped(i, i * 2.0) for i in range(4)]))
+    rows = [l.split() for l in (out3 / "trajectory.tum").read_text().splitlines()
+            if not l.startswith("#")]
+    assert [float(r[1]) for r in rows] == [0.0, 2.0, 4.0, 6.0], rows
+    assert not (out3 / "trajectory.tum.tmp").exists(), "left a temporary file behind"
+    # a later, better graph replaces it wholesale
+    rec3.on_path(types.SimpleNamespace(poses=[stamped(0, 99.0)]))
+    rows = [l for l in (out3 / "trajectory.tum").read_text().splitlines()
+            if not l.startswith("#")]
+    assert len(rows) == 1 and rows[0].split()[1] == "99.000000", rows
+
     # and with no graph the odometry IS the estimate -- both files, same content
     out2 = Path(tempfile.mkdtemp())
     rec2 = rt.Recorder.__new__(rt.Recorder)

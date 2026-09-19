@@ -74,7 +74,9 @@ class Recorder(Node):
     def on_pose(self, msg):
         self.fh.write(_row(msg.header, msg.pose))
         self.n += 1
-        if self.n % 200 == 0:
+        # Flushed often, for the same reason: what is on disk at any moment
+        # should be what has been computed. 50 poses is ~3 s at 14.9 Hz.
+        if self.n % 50 == 0:
             self.fh.flush()
 
     def on_path(self, msg):
@@ -82,6 +84,21 @@ class Recorder(Node):
         # so the last one is the method's final answer and the earlier ones are
         # snapshots of it mid-run.
         self.path = msg
+        # And WRITE IT NOW, rather than at finish(). A container that is killed
+        # rather than asked to stop -- a hung node, an out-of-memory, a Ctrl-C at
+        # the wrong second -- used to lose a completed 156 s run entirely, with
+        # every pose already computed and none of them on disk. Written through a
+        # temporary file and renamed, so a kill mid-write leaves the previous
+        # good graph rather than half of the new one.
+        self._write_path()
+
+    def _write_path(self):
+        tmp = self.out / "trajectory.tum.tmp"
+        with tmp.open("w") as f:
+            f.write(HEADER)
+            for ps in self.path.poses:
+                f.write(_row(ps.header, ps.pose))
+        tmp.replace(self.out / "trajectory.tum")
 
     def on_map(self, msg):
         self.cloud = msg                       # keep only the latest; that is the map
@@ -91,10 +108,7 @@ class Recorder(Node):
         odom = self.out / "odometry.tum"
         traj = self.out / "trajectory.tum"
         if self.path is not None and self.path.poses:
-            with traj.open("w") as f:
-                f.write(HEADER)
-                for ps in self.path.poses:
-                    f.write(_row(ps.header, ps.pose))
+            self._write_path()
             source, n = "optimised_graph", len(self.path.poses)
         else:
             # No graph: the odometry IS the estimate. Copied rather than moved so
