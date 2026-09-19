@@ -1476,6 +1476,31 @@ def test_recorder_subscribes_to_the_pose_topic_exactly_once():
         assert "SLAM_POSE_TYPE=" in text, f"{df} does not declare its pose type"
 
 
+@test
+def test_a_zeroed_pose_is_a_lost_frame_not_a_corrupt_file():
+    """RTAB-Map keeps publishing Odometry while lost, with the pose zeroed. Ten
+    such rows crashed the evaluator on a run that was 99.4% tracked. They are
+    skipped and counted, never silently dropped: a lost frame is a result."""
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "t.tum"
+        f.write_text("# h\n"
+                     "1.0 0 0 0 0 0 0 1\n"
+                     "2.0 0 0 0 0 0 0 0\n"          # lost
+                     "3.0 1 0 0 0 0 0 1\n"
+                     "4.0 0 0 0 0 0 0 0\n"          # lost
+                     "5.0 2 0 0 0 0 0 1\n")
+        t = load_tum(f)
+        assert len(t) == 3 and t.lost == 2, (len(t), t.lost)
+        assert list(t.stamps) == [1.0, 3.0, 5.0]
+        # every row lost is still an error, with the count in the message
+        f.write_text("1.0 0 0 0 0 0 0 0\n")
+        try:
+            load_tum(f)
+            raise AssertionError("an all-lost file loaded")
+        except ValueError as e:
+            assert "all lost" in str(e), e
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

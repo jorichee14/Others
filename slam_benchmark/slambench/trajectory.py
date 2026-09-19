@@ -28,6 +28,8 @@ class Trajectory:
     name: str = ""
     frame: str = ""             # what the poses describe, e.g. "os_lidar"
     world: str = ""             # what they are expressed in, e.g. "map"
+    lost: int = 0               # rows the source marked as "odometry lost" (a
+                                # zeroed pose); skipped at load, quoted beside ATE
 
     def __post_init__(self):
         self.stamps = np.asarray(self.stamps, dtype=np.float64).reshape(-1)
@@ -139,7 +141,7 @@ def _slerp(q0: np.ndarray, q1: np.ndarray, u: float) -> np.ndarray:
 
 
 def load_tum(path: str | Path, name: str = "", frame: str = "", world: str = "") -> Trajectory:
-    stamps, poses = [], []
+    stamps, poses, lost = [], [], 0
     for lineno, raw in enumerate(Path(path).read_text().splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -148,10 +150,19 @@ def load_tum(path: str | Path, name: str = "", frame: str = "", world: str = "")
         if len(parts) != 8:
             raise ValueError(f"{path}:{lineno}: expected 8 fields (TUM), got {len(parts)}")
         v = [float(p) for p in parts]
+        # A zero quaternion is not a corrupt row, it is RTAB-Map's convention
+        # for "odometry lost": the message is still published, with the pose
+        # zeroed. Ten such rows crashed the evaluator on a run that was 99.4%
+        # tracked. They are skipped and COUNTED -- a lost frame is a result
+        # (rule 8), and the count travels on the trajectory so it can be quoted
+        # beside the ATE rather than vanishing into a skipped line.
+        if np.linalg.norm(v[4:8]) < 1e-9:
+            lost += 1
+            continue
         stamps.append(v[0])
         poses.append(se3.pose_from_quat(v[1:4], v[4:8]))
     if not stamps:
-        raise ValueError(f"{path}: no poses")
+        raise ValueError(f"{path}: no poses" + (f" ({lost} rows, all lost)" if lost else ""))
     stamps = np.array(stamps)
     order = np.argsort(stamps, kind="stable")
     stamps, poses = stamps[order], [poses[i] for i in order]
@@ -159,7 +170,7 @@ def load_tum(path: str | Path, name: str = "", frame: str = "", world: str = "")
     # information; keep the first and say how many went.
     uniq = np.concatenate([[True], np.diff(stamps) > 0])
     return Trajectory(stamps[uniq], np.stack(poses)[uniq],
-                      name or Path(path).stem, frame, world)
+                      name or Path(path).stem, frame, world, lost=lost)
 
 
 def save_tum(traj: Trajectory, path: str | Path) -> None:

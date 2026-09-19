@@ -82,6 +82,7 @@ def main() -> int:
                                      cfg.agent_reference(agent).get("frame", ""))
         out["estimate"] = {
             "n_poses": len(est_raw), "duration_s": est_raw.duration,
+            "lost_poses": est_raw.lost,          # rows the method marked lost; beside the ATE, never dropped
             "path_length_m": est_raw.path_length(),
             "extrinsic_applied": True,
             "extrinsic_translation_m": float(np.linalg.norm(E[:3, 3])),
