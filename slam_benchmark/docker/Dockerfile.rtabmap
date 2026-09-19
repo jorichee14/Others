@@ -1,10 +1,15 @@
 FROM slambench/base:humble
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ros-humble-rtabmap-ros \
+        ros-humble-rtabmap-ros ros-humble-rtabmap-launch \
     && rm -rf /var/lib/apt/lists/*
 
-# Set by the method config's params; the launch file differs between the LiDAR
-# and RGB-D entries, so both are here and the entrypoint picks on $SLAM_MODE.
+COPY docker/rtabmap/launch.sh /opt/slambench/launch.sh
+RUN chmod +x /opt/slambench/launch.sh
+
+# Under rtabmap.launch.py's default namespace these are /rtabmap/odom and
+# /rtabmap/cloud_map; the latter needs Grid/3D true, which the method config sets.
 ENV SLAM_POSE_TOPIC=/rtabmap/odom
 ENV SLAM_MAP_TOPIC=/rtabmap/cloud_map
+# RTAB-Map takes the depth image directly. No cloud bridge.
+ENV SLAM_NEEDS_CLOUD=0

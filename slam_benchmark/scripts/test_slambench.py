@@ -812,6 +812,182 @@ def test_preflight_catches_a_null_nested_in_params():
     assert not none_expected, none_expected
 
 
+# ---------------------------------------------------------------- stage 1 rig
+#
+# The container-side helpers. None of them needs ROS, and each of them is a
+# place where a run completes and is silently wrong if the arithmetic slips.
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "docker" / "common"))
+
+
+@test
+def test_deproject_is_the_pinhole_model():
+    from depth_to_cloud import deproject
+    # a pixel AT the principal point lies on the boresight, at exactly z
+    img = np.zeros((5, 7), np.float32); img[2, 3] = 3.0
+    p = deproject(img, 100.0, 100.0, 3.0, 2.0)
+    assert p.shape == (1, 3) and np.allclose(p[0], [0, 0, 3]), p
+    # one pixel right of it, at depth z, is z/fx metres to the +x side
+    img = np.zeros((5, 7), np.float32); img[2, 4] = 3.0
+    p = deproject(img, 100.0, 100.0, 3.0, 2.0)
+    assert np.allclose(p[0], [0.03, 0, 3]), p
+
+
+@test
+def test_deproject_drops_invalid_instead_of_putting_it_at_the_origin():
+    from depth_to_cloud import deproject
+    img = np.full((4, 6), 2.0, np.float32)
+    img[0, 0] = 0.0          # ROS's "no return"
+    img[1, 1] = np.nan
+    img[2, 2] = 20.0         # past the stream's range
+    p = deproject(img, 100.0, 100.0, 3.0, 2.0, r_min=0.3, r_max=12.0)
+    assert len(p) == 24 - 3, len(p)
+    assert not np.any(np.all(p == 0, axis=1)), "an invalid pixel became a point at the camera"
+
+
+@test
+def test_deproject_strides_coordinates_with_the_image():
+    """Subsampling the image without subsampling the pixel coordinates is a
+    silent focal-length error -- the geometry stays plausible and the scale is
+    wrong by the stride."""
+    from depth_to_cloud import deproject
+    img = np.full((8, 8), 2.0, np.float32)
+    full = deproject(img, 100.0, 100.0, 3.5, 3.5, stride=1)
+    strided = deproject(img, 100.0, 100.0, 3.5, 3.5, stride=2)
+    assert len(strided) == 16
+    # every strided point must coincide with one of the full-resolution points
+    for q in strided:
+        assert np.min(np.linalg.norm(full - q, axis=1)) < 1e-6, q
+
+
+@test
+def test_depth_scale_mismatch_is_refused_not_corrected():
+    """kiss_icp.yaml: metres vs millimetres is a factor of 1000, and the wrong
+    one 'completes and produces a map of a room 1000 m across'."""
+    from depth_to_cloud import check_scale
+    assert check_scale("32FC1", 1.0) == 1.0
+    assert check_scale("16UC1", 0.001) == 0.001
+    for enc, scale in (("16UC1", 1.0), ("32FC1", 0.001), ("mono16", 0.001)):
+        try:
+            check_scale(enc, scale)
+            raise AssertionError(f"{enc} at scale {scale} was accepted")
+        except ValueError:
+            pass
+
+
+@test
+def test_params_split_between_rtabmap_and_ros_without_dropping_either():
+    from params_to_args import to_args, to_ros_params
+    params = {"Vis/MinInliers": 15, "Grid/3D": "true", "Optimizer/GravitySigma": 0.3,
+              "max_range": 20.0, "deskew": True}
+    rtab = to_args(params)
+    assert rtab == ["--Grid/3D", "true", "--Optimizer/GravitySigma", "0.3",
+                    "--Vis/MinInliers", "15"], rtab
+    ros = to_ros_params(params)
+    assert ros == ["-p", "deskew:=true", "-p", "max_range:=20.0"], ros
+    # every key ends up in exactly one of the two lists
+    assert len(rtab) // 2 + len(ros) // 2 == len(params)
+
+
+@test
+def test_booleans_survive_the_trip_to_rtabmap():
+    """RTAB-Map parses `True` as false. YAML hands us both `true` (bool) and
+    `"true"` (string, as Grid/3D is written) and both must come out lowercase."""
+    from params_to_args import to_args
+    assert to_args({"Grid/3D": True}) == ["--Grid/3D", "true"]
+    assert to_args({"Grid/3D": "true"}) == ["--Grid/3D", "true"]
+    assert to_args({"Grid/3D": "True"}) == ["--Grid/3D", "true"]
+    assert to_args({"Grid/3D": False}) == ["--Grid/3D", "false"]
+
+
+@test
+def test_row_padding_does_not_shear_the_image():
+    """A padded image reshaped by width alone comes out sheared, and a sheared
+    image still tracks -- badly, with nothing anywhere to say why."""
+    from bag_to_frames import to_rgb
+    rows = [bytes([10, 20, 30, 255, 11, 21, 31, 255, 12, 22, 32, 255]) + b"\x00" * 4,
+            bytes([40, 50, 60, 255, 41, 51, 61, 255, 42, 52, 62, 255]) + b"\x00" * 4]
+    img = to_rgb(b"".join(rows), 2, 3, "bgra8", step=16)
+    assert img.shape == (2, 3, 3)
+    assert img[0, 0].tolist() == [30, 20, 10]      # bgra -> rgb
+    assert img[1, 2].tolist() == [62, 52, 42]      # the padded row did not slide
+    try:
+        to_rgb(b"", 1, 1, "bayer_rggb8", 1)
+        raise AssertionError("an unknown encoding was decoded anyway")
+    except ValueError:
+        pass
+
+
+@test
+def test_restamp_inverts_the_fabricated_clock_exactly():
+    from restamp_tum import restamp
+    stamps = [1700000000.5 + i * 0.068 for i in range(100)]      # 14.7 Hz, as recorded
+    rows = restamp(["0.0 1 2 3 0 0 0 1", "1.0 4 5 6 0 0 0 1", "3.3 7 8 9 0 0 0 1"], stamps)
+    assert [r.split()[0] for r in rows] == [f"{stamps[i]:.9f}" for i in (0, 30, 99)]
+    assert rows[0].split()[1:] == ["1", "2", "3", "0", "0", "0", "1"], "pose columns moved"
+
+
+@test
+def test_restamp_refuses_rather_than_approximating():
+    """A resynchronisation that 'mostly works' is a time offset nobody finds."""
+    from restamp_tum import restamp
+    stamps = [1700000000.5 + i * 0.068 for i in range(100)]
+    for bad in (["0.017 1 2 3 0 0 0 1"],        # not an integer frame index
+                ["4.0 1 2 3 0 0 0 1"],          # past the frames the bag held
+                ["0.0 1 2 3"],                  # not a TUM row
+                ["# only a comment"]):          # nothing to restamp
+        try:
+            restamp(bad, stamps)
+            raise AssertionError(f"accepted {bad}")
+        except ValueError:
+            pass
+
+
+@test
+def test_an_inertial_method_is_actually_played_its_imu():
+    """The container sees exactly `ros2 bag play --topics <SLAM_TOPICS>`, so a
+    topic missing from that list is a sensor the method never receives. An
+    inertial row starved of its IMU still completes, and its number then reads
+    as 'the IMU did not help'."""
+    import scripts.run_method as rm
+    from slambench.config import load_dataset, load_method
+    root = str(Path(__file__).resolve().parents[1])
+    cfg = load_dataset(os.path.join(root, "configs", "coop2.yaml"))
+    m = load_method(os.path.join(root, "configs", "methods", "rtabmap_rgbd_imu.yaml"))
+
+    for stream, imu in (("mobile_1.zed_rgbd", "/mobile_1/zed/imu/data"),
+                        ("mobile_2.realsense_rgbd", "/mobile_2/imu")):
+        info, problems = rm.preflight(cfg, m, stream)
+        assert not problems, (stream, problems)
+        assert imu in info["topics"], (stream, info["topics"])
+        assert "/tf_static" in info["topics"], info["topics"]
+        # /tf carries the recording pipeline's own map->sensor estimate; replaying
+        # it would let a method read its answer off its input.
+        assert "/tf" not in info["topics"], info["topics"]
+
+    # and the IMU-free half of the pair is not handed one
+    free = load_method(os.path.join(root, "configs", "methods", "rtabmap_rgbd.yaml"))
+    info, _ = rm.preflight(cfg, free, "mobile_1.zed_rgbd")
+    assert not any("imu" in t for t in info["topics"]), info["topics"]
+
+
+@test
+def test_every_stage_1_backbone_passes_preflight_on_both_platforms():
+    """docs/PLAN.md stage 1: three backbones, two platforms, six runs. If any
+    cell refuses, stage 1 is blocked and the gate should say so here rather
+    than forty minutes into a replay."""
+    import scripts.run_method as rm
+    from slambench.config import load_dataset, load_method
+    root = str(Path(__file__).resolve().parents[1])
+    cfg = load_dataset(os.path.join(root, "configs", "coop2.yaml"))
+    for name in ("kiss_icp", "rtabmap_rgbd_imu", "mast3r_slam"):
+        m = load_method(os.path.join(root, "configs", "methods", f"{name}.yaml"))
+        for stream in ("mobile_1.zed_rgbd", "mobile_2.realsense_rgbd"):
+            assert stream in m.streams, f"{name} does not declare {stream}"
+            _, problems = rm.preflight(cfg, m, stream)
+            assert not problems, (name, stream, problems)
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

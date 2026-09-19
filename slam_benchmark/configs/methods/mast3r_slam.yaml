@@ -15,7 +15,7 @@ reference_impl: https://github.com/rmurai0610/MASt3R-SLAM
 image: slambench/mast3r-slam:humble
 gpu: required
 
-streams: [mobile_1.zed_rgbd]
+streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]   # stage 1, both platforms
 
 params:
   use_calib: true               # the ZED's camera_info is known and good; running
@@ -24,7 +24,17 @@ params:
   # Trained at a fixed input resolution. The resize is per stream and must be
   # recorded because it changes the effective focal length the network sees --
   # the same trap droid_slam.yaml already carries.
-  image_size: null
+  #
+  # RESOLVED 2026-09-19 by reading the implementation, not by choosing a value:
+  # `img_size` is a hard-coded attribute of MASt3R-SLAM's `MonocularDataset`
+  # (=512, the resolution its checkpoint is named for), and no CLI or config key
+  # exposes it. There is nothing to tune here; the number is recorded so the
+  # effective focal length is recoverable, and the container reconstructs it from
+  # the bag's own camera_info, which it writes out beside the frames.
+  image_size: 512               # not settable; MonocularDataset.img_size
+  subsample: 1                  # published default: every frame
+  img_downsample: 1             # published default
+  center_principle_point: true  # published default (base.yaml)
 
 notes: |
   WHY IT IS HERE, AND IT IS NOT "BECAUSE IT IS NEW". It pairs with

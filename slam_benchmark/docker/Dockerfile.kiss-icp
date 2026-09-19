@@ -1,12 +1,25 @@
 FROM slambench/base:humble
 
-# Pinned to a commit, not a branch: a tag that moves is a manifest that lies.
+# Pinned to a tag, not a branch: a tag that moves is a manifest that lies.
 ARG KISS_ICP_REF=v1.0.0
-RUN pip3 install --no-cache-dir "kiss-icp==1.0.0" && \
-    apt-get update && apt-get install -y --no-install-recommends \
-        ros-humble-kiss-icp || true && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libeigen3-dev libtbb-dev python3-colcon-common-extensions \
+        ros-humble-tf2-eigen ros-humble-nav-msgs ros-humble-sensor-msgs \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /opt/kiss_ws/src && cd /opt/kiss_ws/src && \
+    git clone --depth 1 --branch ${KISS_ICP_REF} https://github.com/PRBonn/kiss-icp.git && \
+    cd /opt/kiss_ws && \
+    source /opt/ros/humble/setup.bash && \
+    colcon build --base-paths src/kiss-icp/ros --cmake-args -DCMAKE_BUILD_TYPE=Release && \
+    rm -rf /opt/kiss_ws/build /opt/kiss_ws/log
 
-ENV SLAM_LAUNCH="ros2 launch kiss_icp odometry.launch.py \
-    topic:=${SLAM_CLOUD_TOPIC} use_sim_time:=true deskew:=true visualize:=false"
+COPY docker/kiss-icp/launch.sh /opt/slambench/launch.sh
+RUN chmod +x /opt/slambench/launch.sh
+
+# Only published when publish_debug_clouds is on, which launch.sh sets because
+# kiss_icp.yaml declares `outputs: [trajectory, map]`.
 ENV SLAM_POSE_TOPIC=/kiss/odometry
 ENV SLAM_MAP_TOPIC=/kiss/local_map
+# On a depth stream the entrypoint has to build the cloud; on mobile_1.ouster
+# SLAM_CLOUD_TOPIC comes straight from the stream and the bridge stays asleep.
+ENV SLAM_NEEDS_CLOUD=1

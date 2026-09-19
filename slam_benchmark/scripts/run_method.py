@@ -101,6 +101,30 @@ def preflight(cfg, mcfg, stream_key: str) -> tuple[dict, list[str]]:
     if not topics:
         problems.append(f"stream {stream_key} declares no topic (is it exported at all?)")
 
+    # The container is replayed with `ros2 bag play --topics <these>`, so this
+    # list is not documentation: it is the entire universe the method can see.
+    # Two things have to be added to it or the run completes on starved input,
+    # which is the failure mode that looks most like a result.
+    #
+    #   * the IMU, for any method that declared it needs one. The stream block
+    #     describes a camera; the inertial topic lives under its own stream key
+    #     and was checked above but never played.
+    #   * /tf_static, which carries the sensor extrinsics the method's own
+    #     front-end resolves internally (RTAB-Map will not start RGB-D odometry
+    #     without camera<-base).
+    #
+    # /tf is deliberately NOT added. The bag's dynamic tf carries map->sensor
+    # from the recording pipeline -- that is a pose estimate, and replaying it
+    # into a method that publishes its own odom->base is at best a tf conflict
+    # and at worst a method reading the answer off its input.
+    if mcfg.needs_imu:
+        key = mcfg.raw.get("imu_by_agent", {}).get(agent)
+        imu_topic = (cfg.raw.get("streams", {}).get(key) or {}).get("topic") if key else None
+        if imu_topic:
+            topics.append(imu_topic)
+
+    topics.append("/tf_static")
+
     return {"stream_key": stream_key, "stream": stream, "agent": agent,
             "topics": topics}, problems
 
@@ -145,6 +169,7 @@ def main() -> int:
                   "every number from this run carries the caveat.", file=sys.stderr)
             return 1
 
+    stream = info["stream"]
     cmd = [
         "docker", "run", "--rm", "--network", "none",
         "-v", f"{bag}:/bag:ro",
@@ -152,8 +177,34 @@ def main() -> int:
         "-e", f"SLAM_TOPICS={','.join(info['topics'])}",
         "-e", f"SLAM_RATE={args.rate}",
         "-e", f"SLAM_PARAMS={json.dumps(mcfg.raw.get('params') or {})}",
-        mcfg.raw.get("image", f"slambench/{mcfg.name}:humble"),
+        # The stream's own description, so the image never has to know which
+        # dataset it is looking at. Rule 6 in the other direction: the container
+        # does not transform poses, but it does have to PARSE its input, and the
+        # units and range of a depth image are properties of the stream.
+        "-e", f"SLAM_MODALITY={stream.get('modality', '')}",
     ]
+    for env, key in (("SLAM_DEPTH_TOPIC", "depth_topic"),
+                     ("SLAM_DEPTH_INFO_TOPIC", "depth_info_topic"),
+                     ("SLAM_COLOR_TOPIC", "color_topic"),
+                     ("SLAM_COLOR_INFO_TOPIC", "color_info_topic"),
+                     ("SLAM_CLOUD_TOPIC", "topic"),
+                     ("SLAM_DEPTH_SCALE", "depth_scale")):
+        if stream.get(key) is not None:
+            cmd += ["-e", f"{env}={stream[key]}"]
+    rng = stream.get("range_m")
+    if rng:
+        cmd += ["-e", f"SLAM_RANGE_MIN={rng[0]}", "-e", f"SLAM_RANGE_MAX={rng[1]}"]
+    if mcfg.needs_imu:
+        imu_key = mcfg.raw.get("imu_by_agent", {}).get(info["agent"])
+        imu_topic = (cfg.raw.get("streams", {}).get(imu_key) or {}).get("topic")
+        if imu_topic:
+            cmd += ["-e", f"SLAM_IMU_TOPIC={imu_topic}"]
+    # `gpu: required` in the method config is a hardware claim, so it belongs on
+    # the command rather than in the image: an image that always asks for a GPU
+    # cannot be smoke-tested on a machine without one.
+    if mcfg.raw.get("gpu") == "required":
+        cmd += ["--gpus", "all"]
+    cmd.append(mcfg.raw.get("image", f"slambench/{mcfg.name}:humble"))
 
     out.mkdir(parents=True, exist_ok=True)
     manifest = {

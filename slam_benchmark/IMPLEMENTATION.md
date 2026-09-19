@@ -106,6 +106,78 @@ to a continuous check that does not come from the thing being tested.
 *Result:*
 
 ### Phase 6 — pseudo ground truth for the sensor-constrained agent ⬜
+
+**STAGE 1 RIG BUILT (2026-09-19) — six cells, all six pass preflight.**
+`docs/PLAN.md` stage 1 is three backbones with independent failure modes, each
+on both platforms. The containers are now buildable and the harness feeds them
+correctly; nothing has been *run* — there is no Docker daemon in this
+environment, so execution is the user's step.
+
+| backbone | image | fails when | m1.zed_rgbd | m2.realsense_rgbd |
+|---|---|---|---|---|
+| `kiss_icp` | `slambench/kiss-icp:humble` | depth drops out | ✅ preflight | ✅ preflight |
+| `rtabmap_rgbd_imu` | `slambench/rtabmap:humble` | low texture, low excitation | ✅ preflight | ✅ preflight |
+| `mast3r_slam` | `slambench/mast3r-slam:humble` (GPU) | prior out of distribution | ✅ preflight | ✅ preflight |
+
+**Four defects found while wiring it, each of which produces a run that
+completes and is wrong — the class rule 3 exists for:**
+
+1. **An inertial method was never played its IMU.** `preflight` built
+   `SLAM_TOPICS` from the *stream's* `*_topic` keys only, and the container sees
+   exactly `ros2 bag play --topics $SLAM_TOPICS`. So `rtabmap_rgbd_imu` would
+   have run IMU-starved and its number would have read as "the IMU did not
+   help" — the precise claim the row exists to test. `/tf_static` was missing
+   too (RTAB-Map will not start RGB-D odometry without it). `/tf` is
+   deliberately still excluded: it carries the recording pipeline's own
+   `map→sensor` estimate, and replaying that into a method is at best a tf
+   conflict and at worst a method reading its answer off its input.
+   Regression test verified to fail when the fix is reverted.
+2. **`SLAM_LAUNCH` was expanded at image-build time.** A Dockerfile `ENV`
+   substitutes `${...}` when the image is built, so `Dockerfile.kiss-icp`'s
+   `topic:=${SLAM_CLOUD_TOPIC}` baked in the **empty string** and the node would
+   have started subscribed to nothing. Replaced by a per-image
+   `/opt/slambench/launch.sh`.
+3. **KISS-ICP's own launch file would have discarded this project's tuning.**
+   `odometry.launch.py` hard-codes `max_range=100`, `min_range=5`,
+   `voxel_size=1.0` and says in a comment that they are "not exposed through the
+   launch system" — the 100 m automotive defaults, on a 16.6 m room, while
+   `kiss_icp.yaml` claimed the indoor ones. A run tuned differently from its own
+   manifest is rule 7's exact failure. The node is now run directly and every
+   declared parameter is passed.
+4. **MASt3R-SLAM would have produced a trajectory on a fabricated clock.** Its
+   folder loader numbers frames `index / 30.0`; the recording is 14.7 Hz. Those
+   numbers are not times. `bag_to_frames.py` writes the real stamps out and
+   `restamp_tum.py` inverts the map exactly — or refuses, because a
+   resynchronisation that "mostly works" is a time offset nobody finds later.
+   (Naming the folder `tum` to reach its TUM loader was the tempting shortcut
+   and is worse: that loader applies hard-coded Freiburg intrinsics.)
+
+**Two things resolved by reading implementations rather than choosing values:**
+
+* `mast3r_slam.params.image_size` was `null` and blocked preflight. It is a
+  **hard-coded attribute** of MASt3R-SLAM's `MonocularDataset` (=512, the
+  resolution its checkpoint is named for) with no CLI or config key exposing it.
+  Recorded as 512 with that provenance; there was never a knob.
+* RTAB-Map's `frame_id` decides which frame the poses come out in. It is now
+  **read off the bag** — the first depth-image header — rather than declared, so
+  the container emits the sensor frame it was given and the evaluator applies
+  `reference_frame_from_sensor` exactly once. A `base_link` there would have
+  emitted body poses that look fine and are wrong by the camera's lever arm.
+
+**New container-side pieces, all self-tested without ROS, bag, GPU or network**
+(`scripts/test_slambench.py`, **73 passed**, 11 new): `depth_to_cloud.py` (the
+pinhole bridge that lets the geometry-only backbone eat a depth camera; refuses
+when the declared `depth_scale` contradicts the image encoding — metres vs
+millimetres is the factor of 1000 that "produces a map of a room 1000 m
+across"), `sniff_frame.py`, `params_to_args.py` (slash keys to RTAB-Map, plain
+keys to ROS; `Grid/3D: "True"` would have parsed as **false**),
+`bag_to_frames.py` (honours `step`, so a row-padded image does not come out
+sheared), `restamp_tum.py`.
+
+**Next, and it needs a machine with Docker:** build the four images, run the six
+cells, score the `mobile_1` pair against the reference. Gate: at least one
+backbone tracks ≥ 90% of the run on each platform.
+
 **T0 measured (2026-09-19), se3-aligned, translation channels:**
 | row | ATE RMSE | median | drift | scale | revisit |
 |---|---|---|---|---|---|
@@ -308,6 +380,7 @@ environment").
 | date | phase | what changed |
 |---|---|---|
 | 2026-09-14 | 0 | Evaluator, configs, container contract, docs. 32 self-tests + e2e smoke green. |
+| 2026-09-19 | 6 | **Stage 1 rig built; four completes-and-is-wrong defects caught.** An inertial method was never played its IMU (SLAM_TOPICS came from the stream's own keys only, and the container sees nothing else); `SLAM_LAUNCH` expanded at image-BUILD time so kiss-icp subscribed to the empty string; kiss-icp's launch file hard-codes the 100 m automotive tuning and would have silently overridden this project's indoor values; MASt3R-SLAM's folder loader fabricates `index/30.0` timestamps on a 14.7 Hz recording. Each fixed, each with a regression test — the IMU one verified to fail on revert. `mast3r_slam.image_size` resolved by reading the implementation (hard-coded 512, no knob exists), RTAB-Map's `frame_id` now sniffed off the first depth header rather than declared. All six stage-1 cells pass preflight; 73 self-tests green. Nothing run yet — no Docker here. |
 | 2026-09-19 | 6 | **Tier 2 closed without a detector run.** `zed_cam_in_map.tum` turned out to be **112 per-frame rows at 15.0 Hz**, not a single fused pose — board-derived camera poses in the map frame, sitting 0.76 mm from the session anchor's fused value with orientation agreeing with `/tf map→zed_left_optical` to 1.21°. So `absolute_check` gained an `observed_poses` mode that scores the estimate against the *pipeline's own detections*, which is strictly better than reimplementing its board conventions — a reimplementation that had already gone wrong once on the +x/+z normal. It reports a rotation residual beside the translation one, refuses on disjoint stamps, and the existing `observations`/`standoff`/refusal paths are unchanged. **`cfg.anchors()` is now per-agent**, resolving `windows_by_agent` and `observed_poses_by_agent`; `mobile_1` correctly yields 2 anchors and `mobile_2` 3. **Side finding that clears T0's mystery:** the board-derived orientation matching `/tf` to 1.21° means the reference's orientation convention is sound, so T0's 113–118° ATE rotation lives in the *estimates*, not the reference. |
 | 2026-09-19 | 6 | **All board windows measured; 5 of 6 agent×board pairs usable.** `mobile_2` gets all three boards — and the detectability gate earned its keep here: the old longest-window rule had picked `anchor` at 1.36 m (1.19 px/bit, undetectable) when the same board has a **161-pose window at 0.66 m** (2.44 px/bit); the gate moved it. `anchor_b` is `mobile_2`'s thinnest at 3.4% of the run clearing both gates, one 6 s window. `rs_anchor` deliberately **not** clamped to the pipeline's realsense `departure_t` — that marks the end of the *static* dwell it fused 92 views over, while the later frames are still facing, in range and slow, so they are valid observations that merely aren't static; clamp only if the detector's reprojection degrades past that point. (`mobile_1`'s `anchor` window *is* clamped, because there the overshoot ran past the dwell into motion.) |
 | 2026-09-19 | 6 | **`mobile_1` board windows final.** With facing fixed: `anchor` 39.5% facing → best window 92 poses at 0.72 m, 1.90 px/bit, **clamped to the pipeline's own `departure_t`** (1787899810.524 — end of the static dwell it fused 112 views over at 1.98 mm; my geometric window ran 2.6 s past it). `rs_anchor` 31.4% facing → 267 poses at 0.75 m, 1.87 px/bit, the best pair on either agent. **`anchor_b` confirmed dead for `mobile_1`**: in frame 23.9% of the run but never closer than 2.48 m, where a 15 mm marker is 0.5 px/bit. So `mobile_1` has two usable boards. `mobile_2`'s windows in the config are marked **stale/provisional** — they were picked by the old longest-window rule before the detectability and facing gates existed, and its `anchor` pick sits at 1.36 m (1.19 px/bit, undetectable) when closer windows with more poses exist. |
