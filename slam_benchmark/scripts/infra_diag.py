@@ -140,6 +140,7 @@ def main() -> int:
     T_map_cam = se3.pose_from_rpy(**st["static_world_pose"])
     T_cam_radar = se3.pose_from_rpy(**st["reference_frame_from_sensor"])
     trajs = {"mobile_1": load_tum(args.ref_m1), "mobile_2": load_tum(args.ref_m2)}
+    T_radar_pos = (T_map_cam @ T_cam_radar)[:3, 3]
 
     sweeps = []
     all_ranges = []
@@ -184,10 +185,16 @@ def main() -> int:
               f"p99.9 {q[3]:.2f}  MAX {r.max():.2f} m")
         print(f"  returns beyond 9 m: {np.mean(r > 9.0):.2%}   beyond 12 m: "
               f"{np.mean(r > 12.0):.2%}")
-        print("  If MAX plateaus below the room scale (7-18 m to the carts from"
-              " this corner),\n  the chirp config cannot see the carts and the"
-              " radar contributes NOTHING to\n  cross-room localization on this"
-              " recording — a hardware-config finding, not code.")
+        rmax = float(r.max())
+        print(f"  The ceiling is a DUTY CYCLE, not a veto: the node supplies an"
+              f" infra factor\n  only while an agent is within ~{rmax:.1f} m of it."
+              f" Fraction of each reference\n  trajectory inside that radius:")
+        for a, tr in trajs.items():
+            d = np.linalg.norm(tr.positions - T_radar_pos, axis=1)
+            print(f"    {a}: {np.mean(d <= rmax):6.1%} of poses within {rmax:.1f} m"
+                  f"   (median distance {np.median(d):5.2f} m, max {d.max():5.2f} m)")
+        print("  That fraction is what the +infra rung of the factor ladder can"
+              " act on;\n  quote it beside whatever that rung buys.")
 
     if args.tf_dump:
         print(f"\nTF QUATERNIONS touching the infra chain ({len(tf_hits)} found):")
@@ -244,10 +251,19 @@ def main() -> int:
         if rows:
             rows.sort()
             _, dt0, az0, rng0 = rows[0]
+            at0 = next((r for r in rows if abs(r[1]) < 1e-9), None)
             print(f"  {a}: best dt {dt0:+5.1f}s  (az med {az0:+.2f} deg, "
                   f"rng med {rng0:+.2f} m at that dt)")
-            if abs(dt0) >= args.dt_scan - 0.5:
-                print(f"    at the scan edge — rerun with a wider --dt-scan")
+            if at0 is not None:
+                gain = abs(at0[2]) - abs(az0)
+                worse_rng = abs(rng0) - abs(at0[3])
+                if abs(at0[2]) < 1.0 or gain < 0.5:
+                    print(f"    NOT SIGNIFICANT: az at dt=0 is already "
+                          f"{at0[2]:+.2f} deg; this scan is chasing noise."
+                          + (f" Range is {worse_rng:+.2f} m WORSE at the 'best'"
+                             f" dt, which settles it." if worse_rng > 0.05 else ""))
+                elif abs(dt0) >= args.dt_scan - 0.5:
+                    print(f"    at the scan edge — rerun with a wider --dt-scan")
 
     if args.dump:
         print(f"\nraw dump, {args.dump} sweeps (per agent: predicted, then every "

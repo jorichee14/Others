@@ -259,6 +259,23 @@ streams:
                         roll: -114.7303, pitch: 1.3671, yaw: -118.7566}
     # VERIFIED 2026-09-19 against the published quaternion
     # [0.571431, 0.563856, 0.432969, -0.409965] -- identical to 0.0000 deg.
+    #
+    # CHAIN VALIDATED end-to-end (infra_diag, corrected pose). Predicting where
+    # each cart should appear to this node and comparing against the radar's
+    # dynamic returns:
+    #   mobile_1  az med +0.28 deg (sd 3.64)  range med -0.12 m (sd 0.58)
+    #   mobile_2  az med +0.16 deg (sd 3.51)  range med +0.16 m (sd 0.53)
+    # and the nearest-return-to-predicted-range check is +-0.01 m on both, i.e.
+    # the carts ARE detected where predicted. The wrong pose hypotheses now
+    # produce the ~-6 m residual instead, which is the signature to want.
+    # No significant clock offset survives: bearing at dt=0 is already
+    # sub-degree and range is worse at the scan's nominal optimum.
+    #
+    # DUTY CYCLE, not a veto: the radar's demonstrated ceiling is 9.30 m
+    # (65058 returns; p99.9 = 9.30, 0.34% beyond 9 m, none beyond 12). The node
+    # supplies a factor only while an agent is inside that radius -- quote the
+    # in-range fraction beside whatever the +infra rung of the ladder buys.
+    max_range_measured_m: 9.30
     reference_frame_from_sensor: {x: 0.017773, y: -0.208023, z: -0.155788,
                                   roll: 176.0934, pitch: -73.1656, yaw: 92.1354}
     note: a STATIC agent, so it has no trajectory to estimate. Its value to this

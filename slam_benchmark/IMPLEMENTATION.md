@@ -139,7 +139,36 @@ orientation channels are frame-convention artifacts, not measurements — export
 compare body-frame orientations against an optical-frame reference. Translation
 columns only, until orientation conventions are reconciled.
 
-**INFRA RESOLVED (2026-09-19) — the config's mast pose was simply wrong.**
+**INFRA VALIDATED (2026-09-19) — residuals collapsed, chain is trustworthy.**
+Re-run on the corrected pose:
+
+| agent | az median | az sd | range median | range sd | rngNEAR |
+|---|---|---|---|---|---|
+| `mobile_1` | +0.28° | 3.64° | **−0.12 m** | 0.58 m | −0.01 m |
+| `mobile_2` | +0.16° | 3.51° | **+0.16 m** | 0.53 m | +0.01 m |
+
+From −5.5 m to ±0.15 m, and from ~9° to ~0.2°. `rngNEAR` ≈ ±0.01 m says the
+carts are detected exactly where predicted. The *wrong* pose hypotheses now
+carry the ~−6 m residual — the signature to want. **No significant clock offset
+survives**: bearing at dt=0 is already sub-degree, and range is *worse* at the
+scan's nominal optimum, so the scan was chasing noise (the tool now says so
+rather than advising a wider scan).
+
+**Radar ceiling is a duty cycle, not a veto.** 65 058 returns: p99.9 = 9.30 m,
+MAX 9.30 m, 0.34% beyond 9 m, **none beyond 12 m** — a hard chirp-config limit.
+With the corrected pose the carts sit 2–13.5 m out, so the node supplies a
+factor only while an agent is inside ~9.3 m. Association still found a usable
+detection in **305/328 and 313/328 sweeps (93%/95%)**, so the duty cycle is
+high. `infra_diag` now reports the in-range fraction of each reference
+trajectory; quote it beside whatever the `+infra` rung buys.
+
+**Bonus from the TF dump:** `/tf` carries `map → mobile_1/zed_left_camera_optical_frame`
+and `map → mobile_2/camera_color_optical_frame` **with quaternions** — start
+poses matching `expected_start` to 2–4 cm. These give the map→optical
+*orientation* convention directly, which is the lever for reconciling the
+113–118° ATE rotation artifact in T0.
+
+**Root cause — the config's mast pose was simply wrong.**
 The user supplied the published `map → arducam_optical_frame` quaternion. Against
 it the config's `static_world_pose` is **off by 5.84 m and 9.34°** — which is
 precisely the −5.5 m range and ~9° bearing residual phase0 measured against
@@ -243,6 +272,7 @@ environment").
 | date | phase | what changed |
 |---|---|---|
 | 2026-09-14 | 0 | Evaluator, configs, container contract, docs. 32 self-tests + e2e smoke green. |
+| 2026-09-19 | 6 | **Infra chain validated end-to-end.** Re-run on the corrected pose: range residual −5.5 m → **−0.12 m / +0.16 m**, bearing ~9° → **+0.28° / +0.16°**, and the nearest-return check at ±0.01 m confirms the carts are detected where predicted; the wrong hypotheses now carry the −6 m error. No clock offset survives (bearing at dt=0 already sub-degree, range worse at the scan optimum — tool updated to call that noise rather than advise a wider scan). The radar's 9.30 m ceiling (p99.9 = MAX, nothing past 12 m) is a **duty cycle** rather than a veto: 93%/95% of sweeps still associated, and `infra_diag` now reports each trajectory's in-range fraction so the `+infra` rung can be priced honestly. The TF dump also surfaced `map → *_optical_frame` quaternions for both agents (start poses matching `expected_start` to 2–4 cm) — the lever for reconciling T0's 113–118° rotation artifact. |
 | 2026-09-19 | 6 | **Infra resolved: the config's mast pose was wrong by 5.84 m / 9.34°**, exactly the residual phase0 measured on both agents. Fixed in both configs (rule 4, same commit); cam→radar verified identical to its quaternion. The detections were the carts; the range-envelope worry is closed and `+infra` is a live factor class. Retracted my round-2 "composed rotation is wrong" claim — that test compared radar-frame elevation against map-frame elevation, which differ legitimately for a tilted sensor. **Every `infra_1` number the converter emitted inherits the bad pose and must be regenerated**, including anything in the sibling perception study. |
 | 2026-09-19 | 6 | T0 scored and infra round 1 analysed (see phase 6 header table). infra_diag upgraded to v2 with the rngNEAR discriminator — verified both ways on synthetic data: cart-at-range found despite same-bearing near clutter (rngNEAR≈0 while the az-pick misleads), and a genuine geometry error shows in rngNEAR too. Per-agent clock scan added because the round-1 scan shifted both agents by one dt while each machine has its own clock — m1's bearing is already centred while m2's improves monotonically toward the scan edge. |
 | 2026-09-19 | 6 | Built `scripts/infra_diag.py` to chase the −5.4 m infra residual mechanically: it enumerates the four pose-direction hypotheses (node pose forward/inverted × cam→radar extrinsic forward/inverted), scores each against BOTH reference trajectories with a loose association, ranks them by how completely they fix both agents at once (a frame error is common to the agents; a per-agent fix is a coincidence), and if even the winner leaves a systematic residual, scans the clock offset before anyone blames the survey. The synthetic truth test caught a design flaw before the bag could: the planned ROS-vs-optical axes dimension is **unidentifiable** with point-cloud detections, because prediction and detection get the same relabelling and the residual cancels — planted-truth recovery kept picking an arbitrary axes label until the dimension was removed. All four pose conventions now recover exactly from planted synthetic truth. If nothing associates under any hypothesis, the script says the survey itself is the problem, which is a different and worse finding. |
