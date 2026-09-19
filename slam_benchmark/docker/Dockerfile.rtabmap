@@ -12,6 +12,7 @@ RUN chmod +x /opt/slambench/launch.sh
 # The INCREMENTAL estimate. Kept as odometry.tum -- it is the drift floor the
 # loop-closing row has to beat, and it costs nothing to record.
 ENV SLAM_POSE_TOPIC=/rtabmap/odom
+ENV SLAM_POSE_TYPE=nav_msgs/msg/Odometry
 # The OPTIMISED graph, which is what `loop_closure: true` in the method config
 # actually refers to. This one becomes trajectory.tum.
 ENV SLAM_PATH_TOPIC=/rtabmap/mapPath

@@ -48,7 +48,7 @@ class Recorder(Node):
     """
 
     def __init__(self, pose_topic: str, map_topic: str, out: Path,
-                 path_topic: str = ""):
+                 path_topic: str = "", pose_type: str = "nav_msgs/msg/Odometry"):
         super().__init__("slambench_recorder")
         # NOT declare_parameter("use_sim_time", ...) -- rclpy's Node constructor
         # already declared it (TimeSource.attach_node), so declaring it again
@@ -63,11 +63,17 @@ class Recorder(Node):
         self.cloud = None
         self.path = None
 
-        from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
-        from nav_msgs.msg import Odometry
+        # ONE subscription, of the type the image DECLARES. The original version
+        # subscribed three times -- Odometry, PoseStamped, PoseWithCovariance --
+        # so that whichever the method published would land. ROS 2 forbids two
+        # subscriptions on one topic with different types in one node, so the
+        # second create_subscription() threw and the recorder died on
+        # construction, on every run, from the first day. A method image knows
+        # what it publishes; it says so in SLAM_POSE_TYPE rather than having the
+        # recorder guess.
+        from rosidl_runtime_py.utilities import get_message
         qos = QoSProfile(depth=2000, reliability=ReliabilityPolicy.RELIABLE)
-        for mt in (Odometry, PoseStamped, PoseWithCovarianceStamped):
-            self.create_subscription(mt, pose_topic, self.on_pose, qos)
+        self.create_subscription(get_message(pose_type), pose_topic, self.on_pose, qos)
         if path_topic:
             from nav_msgs.msg import Path as PathMsg
             self.create_subscription(PathMsg, path_topic, self.on_path, 5)
@@ -159,6 +165,9 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
                     help="the OPTIMISED graph, if the method publishes one. It "
                          "becomes trajectory.tum and the odometry is kept beside it.")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--pose-type", default="nav_msgs/msg/Odometry",
+                    help="ROS message type on --pose-topic, e.g. nav_msgs/msg/Odometry "
+                         "or geometry_msgs/msg/PoseStamped. The image declares it.")
     args, ros_args = ap.parse_known_args(argv[1:])
     return args, [argv[0], *ros_args]
 
@@ -168,7 +177,8 @@ def main():
     args, ros_argv = parse(sys.argv)
 
     rclpy.init(args=ros_argv)
-    node = Recorder(args.pose_topic, args.map_topic, Path(args.out), args.path_topic)
+    node = Recorder(args.pose_topic, args.map_topic, Path(args.out), args.path_topic,
+                    args.pose_type)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

@@ -1422,6 +1422,42 @@ def test_recorder_hands_ros_args_to_rclpy_instead_of_rejecting_them():
     assert plain == ["record_tum.py"], plain
 
 
+@test
+def test_recorder_subscribes_to_the_pose_topic_exactly_once():
+    """ROS 2 forbids two subscriptions on one topic with different types in one
+    node. The original recorder subscribed three times -- Odometry, PoseStamped,
+    PoseWithCovariance -- so that whichever the method published would land, and
+    the second create_subscription() threw on every run from the first day."""
+    import ast as _ast
+    src = (Path(__file__).resolve().parents[1] / "docker" / "common" / "record_tum.py").read_text()
+    tree = _ast.parse(src)
+    pose_subs, in_loop = 0, 0
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.For, _ast.While)):
+            for inner in _ast.walk(node):
+                if (isinstance(inner, _ast.Call)
+                        and getattr(inner.func, "attr", "") == "create_subscription"):
+                    in_loop += 1
+        if (isinstance(node, _ast.Call)
+                and getattr(node.func, "attr", "") == "create_subscription"
+                and len(node.args) >= 2
+                and getattr(node.args[1], "id", "") == "pose_topic"):
+            pose_subs += 1
+    assert pose_subs == 1, f"{pose_subs} subscriptions on pose_topic"
+    assert in_loop == 0, "a subscription inside a loop is the three-types trick again"
+
+    # and the type is declared, not guessed: the image passes it through
+    rt = _import_record_tum()
+    args, _ = rt.parse(["x", "--pose-topic", "/t", "--out", "/o",
+                        "--pose-type", "geometry_msgs/msg/PoseStamped"])
+    assert args.pose_type == "geometry_msgs/msg/PoseStamped"
+    entry = (Path(__file__).resolve().parents[1] / "docker" / "common" / "entrypoint.sh").read_text()
+    assert "--pose-type" in entry and "SLAM_POSE_TYPE" in entry
+    for df in ("Dockerfile.rtabmap", "Dockerfile.kiss-icp"):
+        text = (Path(__file__).resolve().parents[1] / "docker" / df).read_text()
+        assert "SLAM_POSE_TYPE=" in text, f"{df} does not declare its pose type"
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")
