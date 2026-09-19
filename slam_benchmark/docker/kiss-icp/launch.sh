@@ -37,6 +37,13 @@ for a in to_ros_params(json.loads(os.environ.get("SLAM_PARAMS") or "{}"),
                        drop=tuple(sys.argv[1:])):
     print(a)' ${DROP[@]+"${DROP[@]}"})
 
+# publish_debug_clouds stays OFF. With it on, the node serialises its ENTIRE
+# local map (every voxel, up to max_points_per_voxel each) on every frame,
+# beside the current frame and keypoints -- the node's own source calls it
+# "a bit costly" -- and on a depth cloud at 15 Hz that cost exceeded the frame
+# budget: 155 poses out of 2288 frames on the first run that got this far.
+# The price is no map.ply from this image; kiss_icp.yaml declares
+# `outputs: [trajectory]` to match, so the missing map is declared, not found.
 # base_frame is deliberately NOT passed. The node's own default is the empty
 # string (OdometryServer.hpp: `std::string base_frame_{}`), which means "estimate
 # in the cloud's frame" -- rule 6, the container does not transform poses. It
@@ -47,5 +54,5 @@ exec ros2 run kiss_icp kiss_icp_node --ros-args \
     -r pointcloud_topic:="$SLAM_CLOUD_TOPIC" \
     -p use_sim_time:=true \
     -p publish_odom_tf:=false \
-    -p publish_debug_clouds:=true \
+    -p publish_debug_clouds:=false \
     "${PARAMS[@]}" ${OVERRIDE[@]+"${OVERRIDE[@]}"}

@@ -16,11 +16,12 @@ RUN mkdir -p /opt/kiss_ws/src && cd /opt/kiss_ws/src && \
 COPY docker/kiss-icp/launch.sh /opt/slambench/launch.sh
 RUN chmod +x /opt/slambench/launch.sh
 
-# Only published when publish_debug_clouds is on, which launch.sh sets because
-# kiss_icp.yaml declares `outputs: [trajectory, map]`.
+# No map topic: /kiss/local_map exists only under publish_debug_clouds, which
+# re-serialises the whole local map every frame and ran the node at ~1 Hz on a
+# 15 Hz depth stream (see launch.sh). kiss_icp.yaml declares outputs: [trajectory].
 ENV SLAM_POSE_TOPIC=/kiss/odometry
 ENV SLAM_POSE_TYPE=nav_msgs/msg/Odometry
-ENV SLAM_MAP_TOPIC=/kiss/local_map
+ENV SLAM_MAP_TOPIC=
 # On a depth stream the entrypoint has to build the cloud; on mobile_1.ouster
 # SLAM_CLOUD_TOPIC comes straight from the stream and the bridge stays asleep.
 ENV SLAM_NEEDS_CLOUD=1

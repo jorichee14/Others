@@ -7,7 +7,11 @@ modality: [lidar, rgbd]   # accepts both; the report block comes from the stream
 coupling: none            # no inertial input at all
 needs_imu: false
 loop_closure: false
-outputs: [trajectory, map]
+# No map. The ROS node only exposes its local map through publish_debug_clouds,
+# which publishes the whole map on every frame and cost more than registration
+# (155 of 2288 frames processed with it on). Trajectory only, declared here so
+# the evaluator's "no map.ply" is an expected absence, not a missing output.
+outputs: [trajectory]
 reference_impl: https://github.com/PRBonn/kiss-icp
 image: slambench/kiss-icp:humble
 

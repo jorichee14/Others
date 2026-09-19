@@ -1644,6 +1644,22 @@ def test_kiss_launch_passes_no_empty_valued_parameter():
     assert "base_frame" not in re.sub(r"#.*", "", text), "base_frame must not be passed"
 
 
+@test
+def test_kiss_launch_does_not_publish_debug_clouds():
+    """publish_debug_clouds re-serialises the whole local map every frame; on a
+    15 Hz depth stream it left 155 poses of 2288. Off, and the method declares
+    no map output so the absence is declared rather than discovered."""
+    import re
+    root = Path(__file__).resolve().parents[1]
+    text = re.sub(r"#.*", "", (root / "docker" / "kiss-icp" / "launch.sh").read_text())
+    assert "publish_debug_clouds:=false" in text
+    from slambench.config import load_method
+    m = load_method(root / "configs" / "methods" / "kiss_icp.yaml")
+    assert "map" not in m.outputs, m.outputs
+    df = (root / "docker" / "Dockerfile.kiss-icp").read_text()
+    assert re.search(r"^ENV SLAM_MAP_TOPIC=\s*$", df, flags=re.M), "kiss image must declare no map topic"
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")
