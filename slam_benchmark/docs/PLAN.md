@@ -213,6 +213,11 @@ S1 (LiDAR trajectory) is a control row inside B1; S3 (maps) folds into B6.
 2. Route both agents through one shared corridor (makes B4/V2e real)
 3. 5 s of deliberate excitation at each start (VI initialisation)
 4. NTP monitor on `mobile_1`; fiducials on the carts (track C's recommendation)
+5. **Stop the IMU last.** Measured 2026-09-19: `/mobile_1/zed/imu/data` spans
+   152.35 s against the image stream's 156.21 s, and a front-end that needs an
+   inertial sample newer than each frame drops every image past the IMU's last
+   one — ~58 frames here, at the end of the run. Start the inertial topics
+   first and stop them last, on every agent.
 
 ## Standing rules
 

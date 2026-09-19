@@ -1317,6 +1317,26 @@ def test_lost_tracking_is_measured_as_stretches_not_a_count():
     assert len(runs_of_zero(one_gap)) == 1
 
 
+@test
+def test_stream_coverage_is_measured_at_both_ends_not_by_span():
+    """Two spans side by side say nothing about alignment. A 152 s IMU and a
+    156 s image stream could overlap perfectly for 152 s or miss by 4 s at
+    either end, and only the ends distinguish them -- which matters because a
+    front-end that needs an inertial sample newer than each frame drops every
+    image past the IMU's last one."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from bag_probe import coverage_gap
+    img = np.arange(0.0, 156.0, 1 / 14.9)
+    imu = np.arange(0.0, 152.35, 1 / 201.0)          # same start, stops early
+    late, early = coverage_gap(imu, img)
+    assert abs(late) < 0.01 and 3.5 < early < 4.0, (late, early)
+    # identical coverage -> no gap at either end
+    assert all(abs(v) < 0.01 for v in coverage_gap(img.copy(), img))
+    # short at the head instead
+    late, early = coverage_gap(img[img > 5.0], img)
+    assert late > 4.9 and abs(early) < 0.1, (late, early)
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

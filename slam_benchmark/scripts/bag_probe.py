@@ -76,12 +76,27 @@ def nearest_dt(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return a - closer
 
 
-def describe(name: str, t: np.ndarray) -> str:
+def describe(name: str, t: np.ndarray, t0: float) -> str:
     if len(t) < 2:
         return f"  {name:<46} {len(t)} msgs"
     d = np.diff(np.sort(t))
     return (f"  {name:<46} {len(t):>6} msgs  {1.0 / np.median(d):6.2f} Hz  "
-            f"span {t.max() - t.min():7.2f} s")
+            f"[{t.min() - t0:+7.2f} .. {t.max() - t0:+7.2f}] s")
+
+
+def coverage_gap(inner: np.ndarray, outer: np.ndarray) -> tuple[float, float]:
+    """How far `inner` falls short of `outer` at each end, in seconds.
+
+    A stream that stops early is not a rounding detail for anything that GATES
+    on it. RTAB-Map with wait_imu_to_init requires an IMU sample newer than each
+    image, so every image past the IMU's last sample is dropped outright -- and
+    the error it prints names the symptom, not the cause. Two spans printed side
+    by side do not answer it either, because they say nothing about alignment;
+    only the ends do.
+    """
+    if len(inner) == 0 or len(outer) == 0:
+        return float("nan"), float("nan")
+    return float(inner.min() - outer.min()), float(outer.max() - inner.max())
 
 
 def main() -> int:                                                 # pragma: no cover
@@ -135,12 +150,30 @@ def main() -> int:                                                 # pragma: no 
         frames.setdefault(topic, h.frame_id)
 
     print(f"\n=== {args.stream}  ({agent})\n")
-    print("TOPICS")
+    t0 = min((min(v) for v in stamps.values() if v), default=0.0)
+    print(f"TOPICS   (times relative to the bag's first message, {t0:.3f})")
     for key, topic in wanted.items():
         if topic not in stamps:
             print(f"  {topic:<46} NOT IN BAG")
             continue
-        print(describe(topic, np.array(stamps[topic])) + f"   frame_id={frames.get(topic)}")
+        print(describe(topic, np.array(stamps[topic]), t0) + f"   frame_id={frames.get(topic)}")
+
+    # Does the IMU actually cover the images? Measured at both ends.
+    imu_t = np.array(stamps.get(wanted.get("imu_topic", ""), []))
+    img_t = np.array(stamps.get(stream.get("depth_topic", ""), []))
+    if len(imu_t) and len(img_t):
+        late, early = coverage_gap(imu_t, img_t)
+        print(f"\n  IMU vs images: starts {late:+.2f} s, ends {-early:+.2f} s "
+              f"relative to the image stream")
+        if early > 0.2:
+            print(f"  VERDICT: the IMU stops {early:.2f} s BEFORE the last image. Every image "
+                  f"past that point is dropped by any front-end that requires an inertial "
+                  f"sample newer than the frame — roughly {early * 14.9:.0f} frames here. It is "
+                  f"a property of the recording, not of the method: report the shortened "
+                  f"evaluation window rather than counting those frames as lost tracking.")
+        if late > 0.2:
+            print(f"  VERDICT: the IMU starts {late:.2f} s AFTER the first image, so the same "
+                  f"applies at the head of the run.")
 
     print(f"\nSTATIC TF — {len(edges)} edges, {len(components(edges))} disconnected tree(s)")
     for i, comp in enumerate(components(edges)):
