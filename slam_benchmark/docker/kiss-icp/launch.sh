@@ -3,8 +3,15 @@
 # LiDAR row; on a depth stream it is stage 1's first consensus backbone, fed by
 # the entrypoint's depth->cloud bridge.
 set -euo pipefail
+# Sourcing ROS under `set -u` kills the script before it starts: setup.bash reads
+# AMENT_TRACE_SETUP_FILES with no default, and an unbound variable under -u is a
+# fatal error. The strictness is wanted everywhere else -- an unset SLAM_* that
+# expands to nothing is exactly how a container runs on starved input -- so it is
+# lifted for the source and put straight back.
+set +u
 source /opt/ros/humble/setup.bash
 source /opt/kiss_ws/install/setup.bash
+set -u
 : "${SLAM_CLOUD_TOPIC:?no cloud topic: either the stream carries one or SLAM_NEEDS_CLOUD=1}"
 
 # THE LAUNCH FILE IS NOT USED, ON PURPOSE. kiss-icp's odometry.launch.py hard-codes

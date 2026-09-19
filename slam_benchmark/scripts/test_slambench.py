@@ -988,6 +988,30 @@ def test_every_stage_1_backbone_passes_preflight_on_both_platforms():
             assert not problems, (name, stream, problems)
 
 
+@test
+def test_no_image_script_sources_ros_with_u_active():
+    """`set -u` + ROS's setup.bash is instant death, at line 8, before a single
+    line of ours runs: setup.bash reads AMENT_TRACE_SETUP_FILES with no default.
+    The strictness is wanted everywhere else -- an unset SLAM_* expanding to
+    nothing is how a container runs on starved input -- so every source is
+    bracketed instead. This walks the scripts so the next image cannot forget.
+    """
+    root = Path(__file__).resolve().parents[1] / "docker"
+    checked = 0
+    for sh in sorted(root.rglob("*.sh")):
+        u = False
+        for n, line in enumerate(sh.read_text().splitlines(), 1):
+            code = line.split("#", 1)[0].strip()
+            if code.startswith("set ") and "u" in code.split()[1].lstrip("-+"):
+                u = code.split()[1].startswith("-")
+            elif ("setup.bash" in code and
+                  (code.startswith("source ") or code.startswith(". "))):
+                assert not u, f"{sh.name}:{n} sources ROS with `set -u` active: {code}"
+                checked += 1
+        assert not u or True
+    assert checked >= 4, f"only found {checked} ROS sources; did the scripts move?"
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

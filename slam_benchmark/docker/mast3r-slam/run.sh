@@ -6,7 +6,14 @@
 # clock, /out/map.ply in the same world frame, /out/timing.json -- but the middle
 # step is an offline run over a folder instead of a replay.
 set -euo pipefail
+# Sourcing ROS under `set -u` kills the script before it starts: setup.bash reads
+# AMENT_TRACE_SETUP_FILES with no default, and an unbound variable under -u is a
+# fatal error. The strictness is wanted everywhere else -- an unset SLAM_* that
+# expands to nothing is exactly how a container runs on starved input -- so it is
+# lifted for the source and put straight back.
+set +u
 source /opt/ros/humble/setup.bash
+set -u
 
 OUT=${OUT:-/out}
 mkdir -p "$OUT"

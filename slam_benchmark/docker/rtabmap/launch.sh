@@ -2,7 +2,14 @@
 # RTAB-Map RGB-D, with or without the IMU. Stage 1's feature+depth(+inertial)
 # backbone, and the only tier-3 entry that also produces a dense map.
 set -euo pipefail
+# Sourcing ROS under `set -u` kills the script before it starts: setup.bash reads
+# AMENT_TRACE_SETUP_FILES with no default, and an unbound variable under -u is a
+# fatal error. The strictness is wanted everywhere else -- an unset SLAM_* that
+# expands to nothing is exactly how a container runs on starved input -- so it is
+# lifted for the source and put straight back.
+set +u
 source /opt/ros/humble/setup.bash
+set -u
 : "${SLAM_DEPTH_TOPIC:?}" "${SLAM_COLOR_TOPIC:?}" "${SLAM_DEPTH_INFO_TOPIC:?}"
 
 # WHICH FRAME THE POSES COME OUT IN -- read off the bag, never assumed.
