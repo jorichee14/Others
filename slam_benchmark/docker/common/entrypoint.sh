@@ -65,6 +65,7 @@ python3 /opt/slambench/record_tum.py \
     --map-topic "${SLAM_MAP_TOPIC:-}" \
     --path-topic "${SLAM_PATH_TOPIC:-}" \
     --pose-type "${SLAM_POSE_TYPE:-nav_msgs/msg/Odometry}" \
+    --count-topic "${SLAM_DEPTH_TOPIC:-}" \
     --out "$OUT" \
     --ros-args -p use_sim_time:=true &
 REC=$!

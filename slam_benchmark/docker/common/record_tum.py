@@ -49,7 +49,8 @@ class Recorder(Node):
     """
 
     def __init__(self, pose_topic: str, map_topic: str, out: Path,
-                 path_topic: str = "", pose_type: str = "nav_msgs/msg/Odometry"):
+                 path_topic: str = "", pose_type: str = "nav_msgs/msg/Odometry",
+                 count_topic: str = ""):
         super().__init__("slambench_recorder")
         # NOT declare_parameter("use_sim_time", ...) -- rclpy's Node constructor
         # already declared it (TimeSource.attach_node), so declaring it again
@@ -78,6 +79,16 @@ class Recorder(Node):
         if path_topic:
             from nav_msgs.msg import Path as PathMsg
             self.create_subscription(PathMsg, path_topic, self.on_path, 5)
+        # A witness. When the estimator processes a third of the frames and its
+        # own log cannot say why, the question is whether the bag DELIVERED them.
+        # This subscriber does nothing but count, so if it sees every frame the
+        # loss is inside the method; if it sees the same third, the loss is in
+        # replay or transport and no method parameter will touch it.
+        self.seen = 0
+        if count_topic:
+            from sensor_msgs.msg import Image
+            self.create_subscription(Image, count_topic, self.on_witness,
+                                     QoSProfile(depth=100, reliability=ReliabilityPolicy.RELIABLE))
         if map_topic:
             from sensor_msgs.msg import PointCloud2
             self.create_subscription(PointCloud2, map_topic, self.on_map, 1)
@@ -89,6 +100,9 @@ class Recorder(Node):
         # should be what has been computed. 50 poses is ~3 s at 14.9 Hz.
         if self.n % 50 == 0:
             self.fh.flush()
+
+    def on_witness(self, msg):
+        self.seen += 1
 
     def on_path(self, msg):
         # Keep only the latest. Every republish is the whole graph re-optimised,
@@ -137,6 +151,7 @@ class Recorder(Node):
         ru = resource.getrusage(resource.RUSAGE_SELF)
         (self.out / "timing.json").write_text(json.dumps({
             "frames": n, "odometry_poses": self.n,
+            "input_frames_witnessed": self.seen,
             "trajectory_source": source,
             "wall_s": time.time() - self.t0,
             "cpu_s": ru.ru_utime + ru.ru_stime,
@@ -172,6 +187,9 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
                     help="the OPTIMISED graph, if the method publishes one. It "
                          "becomes trajectory.tum and the odometry is kept beside it.")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--count-topic", default="",
+                    help="an input image topic to count, as a witness to what the bag "
+                         "delivered. Reported as input_frames_witnessed.")
     ap.add_argument("--pose-type", default="nav_msgs/msg/Odometry",
                     help="ROS message type on --pose-topic, e.g. nav_msgs/msg/Odometry "
                          "or geometry_msgs/msg/PoseStamped. The image declares it.")
@@ -184,7 +202,7 @@ def main():
 
     rclpy.init(args=ros_argv)
     node = Recorder(args.pose_topic, args.map_topic, Path(args.out), args.path_topic,
-                    args.pose_type)
+                    args.pose_type, args.count_topic)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
