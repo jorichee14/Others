@@ -105,6 +105,38 @@ to a continuous check that does not come from the thing being tested.
 *Result:*
 
 ### Phase 6 — pseudo ground truth for the sensor-constrained agent ⬜
+**T0 measured (2026-09-19), se3-aligned, translation channels:**
+| row | ATE RMSE | median | drift | scale | revisit |
+|---|---|---|---|---|---|
+| `zed_sdk_odom` (m1) | **2.43 m** | 2.55 m | 8.55% | **1.091** | 139 mm |
+| `zed_sdk_pose` (m1) | 2.27 m | 2.34 m | 7.76% | 1.100 | 138 mm |
+| `cuvslam_odom` (m2) | **0.183 m** | 0.132 m | **0.73%** | 0.977 | 252 mm |
+
+Readings: the "6 m" is actually **2.4 m se3-aligned with a +9% scale error** —
+and the scale error vindicates the reflective-wall diagnosis under a corrected
+mechanism: specular surfaces produce *valid-looking but wrong* depth (virtual
+images behind the wall), which `depth_health`'s validity metric cannot see. Wrong
+depth inflates scale; missing depth was never the story. ZED's loop closure
+(`zed_pose`) recovers almost nothing (2.43→2.27 m), so the failure is in the
+odometry, not correctable by relocalisation. `cuvslam_odom` at 18 cm / 0.73%
+drift is excellent — **caveat: mobile_2's `global_pose` provenance is unknown; if
+that pipeline itself consumed cuVSLAM, the 18 cm is self-agreement, not
+corroboration. Establish provenance before celebrating.** All three ATE *rot*
+values sit at 113–118°, i.e. the ~120° body↔optical corner rotation: the
+orientation channels are frame-convention artifacts, not measurements — exporters
+compare body-frame orientations against an optical-frame reference. Translation
+columns only, until orientation conventions are reconciled.
+
+**Infra diagnosis round 1:** the DECLARED convention (`cam_fwd/ext_fwd`) wins
+and `mobile_1`'s bearing is essentially perfect (+0.11°) — the geometry chain is
+right in azimuth. The mystery narrows to: range −5.5 m systematic (flat under
+±2 s of clock shift), and `mobile_2` bearing +9° that improves toward the scan
+edge (its own clock offset vs infra, plausibly larger than ±2 s — the machines'
+NTP topics exist to check against). infra_diag v2 adds the `rngNEAR`
+discriminator (is *anything* returned at the predicted range on the right
+bearing? — separates association-grabs-near-clutter from genuine geometry
+error), a per-agent bearing-only clock scan, and a raw sweep dump.
+
 **Goal restated 2026-09-17.** The objective is a defensible pseudo-GT for
 `mobile_2`, which has no LiDAR and therefore no reference. `mobile_1` is the
 *instrument*, not the subject: it carries both sensors, so a LiDAR-free
@@ -174,6 +206,7 @@ environment").
 | date | phase | what changed |
 |---|---|---|
 | 2026-09-14 | 0 | Evaluator, configs, container contract, docs. 32 self-tests + e2e smoke green. |
+| 2026-09-19 | 6 | T0 scored and infra round 1 analysed (see phase 6 header table). infra_diag upgraded to v2 with the rngNEAR discriminator — verified both ways on synthetic data: cart-at-range found despite same-bearing near clutter (rngNEAR≈0 while the az-pick misleads), and a genuine geometry error shows in rngNEAR too. Per-agent clock scan added because the round-1 scan shifted both agents by one dt while each machine has its own clock — m1's bearing is already centred while m2's improves monotonically toward the scan edge. |
 | 2026-09-19 | 6 | Built `scripts/infra_diag.py` to chase the −5.4 m infra residual mechanically: it enumerates the four pose-direction hypotheses (node pose forward/inverted × cam→radar extrinsic forward/inverted), scores each against BOTH reference trajectories with a loose association, ranks them by how completely they fix both agents at once (a frame error is common to the agents; a per-agent fix is a coincidence), and if even the winner leaves a systematic residual, scans the clock offset before anyone blames the survey. The synthetic truth test caught a design flaw before the bag could: the planned ROS-vs-optical axes dimension is **unidentifiable** with point-cloud detections, because prediction and detection get the same relabelling and the residual cancels — planted-truth recovery kept picking an arbitrary axes label until the dimension was removed. All four pose conventions now recover exactly from planted synthetic truth. If nothing associates under any hypothesis, the script says the survey itself is the problem, which is a different and worse finding. |
 | 2026-09-19 | 6 | **I13 resolved.** The user pulled the wrapper's static TF on the cart: `zed_left_camera_frame→zed_imu_link`, t=[−0.0020, −0.0231, 0.0002] m, q_xyzw=[−0.008474, −0.000611, 0.007383, 0.999937]. That is a **1.290° per-unit misalignment** with a 23.1 mm lever arm — the exact magnitude that justified refusing a nominal transform (≈0.22 m/s² of gravity leaking on every rotation). Composed with tf_static's frame→optical rpy(−90,0,−90) into `IMU.T_b_c1` (imu←left-optical) and filled into both tightly-coupled configs; self-check passes (imu +z maps to optical −y, off-axis components ≈ the stated misalignment). Neither the bag's tf_static nor the `SN*.conf` carried it — the cart's live TF did, which is worth remembering as the recovery route. The tight rows are now held by **I14 alone** (four noise terms); the PyPI `pyzed` package turned out to be an impostor (3 kB, unrelated), so the SDK factory-noise route goes through `get_python_api.py` on a machine with the real SDK, or the overnight Allan log decides it. |
 | 2026-09-19 | 6 | **Phase 0 ran on the real bag.** Both references export and pass the start check (32.4 mm / 44.7 mm); the 1516-count is confirmed and the config's 2833 was stale; paths are 25.8 m / 24.7 m. **I2**: dwell candidates for every board measured and written into the config — `mobile_1` never visits `anchor_b`, so its graph gets two boards; the agents swap corners. **I8/B0: 100% place overlap, closest 0.00 m** — the inter-agent factor class is fully live. **I12 closed**: the Doppler field is named `doppler` on all three radars. **I13 inverted**: the ZED IMU chain is NOT in `/tf_static` — my earlier "3 messages is the expected shape, probably in there" was wrong, and worse, phase0's detector printed a false YES by matching `os_imu`; detector fixed to require zed+imu, verdict corrected to SDK/`SN*.conf`. **The depth-dropout hypothesis failed measurement**: ZED depth is median 85.5% valid with ZERO starved frames (RealSense 72.4%, also zero) — so the 6 m ZED odometry error CANNOT be explained by depth dropout, the RGB-D arm is not structurally handicapped, and the reflective-wall re-ordering weakens; the 6 m now needs a proper aligned score before any further diagnosis. **Infra chain AMBER**: visibility is fine (73%/56%) but the range residual is −5.4 m systematic on BOTH agents and bearing medians are +3.0°/+8.6° — something in the chain (node pose or extrinsic direction, the check's own frame math, or the third clock) is wrong, and no infra factor enters any graph until it is found; phase0's lenient bearing verdict tightened. **cuVSLAM first look**: path length within 0.5% of the mobile_2 reference — promising, unmeasured; registered as `configs/methods/cuvslam_odom.yaml` with the read-its-score caveats. Two more phase0 defects fixed from the run: tf_static duplicates now deduped. |

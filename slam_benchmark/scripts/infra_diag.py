@@ -63,24 +63,34 @@ def score(traj, T_map_radar, sweeps, dt=0.0, az_gate_deg=60.0):
     pred = predict_observation(traj, T_map_radar, axes="ros")   # common language;
     # the choice cancels between prediction and detection (see module docstring)
     ps, paz, prng = pred["stamps"], pred["azimuth_deg"], pred["range_m"]
-    az_res, rng_res = [], []
+    az_res, rng_res, rng_near = [], [], []
     for t, xyz in sweeps:
         i = int(np.argmin(np.abs(ps - (t + dt))))
         if abs(ps[i] - (t + dt)) > 0.15:
             continue
         det_az = np.degrees(np.arctan2(xyz[:, 1], xyz[:, 0]))   # ros: atan2(-right,fwd)
         d = np.abs(((det_az - paz[i]) + 180.0) % 360.0 - 180.0)
-        j = int(np.argmin(d))
-        if d[j] > az_gate_deg:
+        ingate = d <= az_gate_deg
+        if not ingate.any():
             continue
+        j = int(np.argmin(d))
         az_res.append(((det_az[j] - paz[i]) + 180.0) % 360.0 - 180.0)
         rng_res.append(float(np.linalg.norm(xyz[j]) - prng[i]))
+        # of everything on roughly the right bearing, the return CLOSEST to the
+        # predicted range: if this is ~0 while the az-best pick sits at -5 m,
+        # the cart is being detected at the right range and the az-pick is
+        # grabbing something nearer on the same bearing; if this too is -5 m,
+        # nothing returns at the predicted range at all and the error is
+        # geometric, not associative.
+        rr = np.linalg.norm(xyz[ingate], axis=1) - prng[i]
+        rng_near.append(float(rr[np.argmin(np.abs(rr))]))
     if len(az_res) < 10:
         return None
     return {"n": len(az_res),
             "az_med": float(np.median(az_res)),
             "az_spread": float(np.percentile(np.abs(az_res), 68)),
             "rng_med": float(np.median(rng_res)),
+            "rng_near_med": float(np.median(rng_near)),
             "rng_spread": float(np.percentile(np.abs(np.asarray(rng_res)
                                                      - np.median(rng_res)), 68))}
 
@@ -107,6 +117,8 @@ def main() -> int:
     ap.add_argument("--bag", required=True)
     ap.add_argument("--ref-m1", required=True)
     ap.add_argument("--ref-m2", required=True)
+    ap.add_argument("--dump", type=int, default=6,
+                    help="print N raw sweeps with predictions (0 = off)")
     ap.add_argument("--dt-scan", type=float, default=2.0,
                     help="clock-offset scan half-width, seconds")
     ap.add_argument("--out", default="runs/phase0")
@@ -138,12 +150,12 @@ def main() -> int:
                for name, T in combos.items()}
 
     print(f"{'hypothesis':28s} {'agent':9s} {'n':>4s} {'az med':>8s} {'az~sd':>7s} "
-          f"{'rng med':>8s} {'rng~sd':>7s}")
+          f"{'rng med':>8s} {'rngNEAR':>8s} {'rng~sd':>7s}")
     ranking = rank(results)
     for key, v in ranking:
         for a, s in v.items():
             print(f"{key:28s} {a:9s} {s['n']:4d} {s['az_med']:+8.2f} {s['az_spread']:7.2f} "
-                  f"{s['rng_med']:+8.2f} {s['rng_spread']:7.2f}")
+                  f"{s['rng_med']:+8.2f} {s['rng_near_med']:+8.2f} {s['rng_spread']:7.2f}")
     dropped = [k for k in results if k not in dict(ranking)]
     if dropped:
         print(f"(no usable association under: {', '.join(dropped)})")
@@ -159,17 +171,45 @@ def main() -> int:
     if ok:
         print("  residuals collapse for BOTH agents under this convention — "
               "adopt it, then re-run phase0's tight check for the publishable numbers.")
-    else:
-        print("  even the best convention leaves a systematic residual: "
-              f"{ {a: (round(s['az_med'],2), round(s['rng_med'],2)) for a,s in best.items()} }\n"
-              "  -> scan the clock offset before blaming the survey:")
-        for dt in np.arange(-args.dt_scan, args.dt_scan + 1e-9, 0.25):
-            v = {a: score(trajs[a], combos[best_key], sweeps, dt=float(dt))
-                 for a in trajs}
-            if all(v.values()):
-                m = " ".join(f"{a}: az {v[a]['az_med']:+6.2f} rng {v[a]['rng_med']:+6.2f}"
-                             for a in v)
-                print(f"    dt {dt:+5.2f}s   {m}")
+
+    # per-agent clock scan, BEARING ONLY (range is the suspect and cannot vote).
+    # Each machine has its own clock, so the offsets need not match.
+    print("\nper-agent clock scan on bearing (best convention, "
+          f"dt in ±{args.dt_scan:.0f}s):")
+    T_best = combos[best_key]
+    for a in trajs:
+        rows = []
+        for dt in np.arange(-args.dt_scan, args.dt_scan + 1e-9, 0.5):
+            v = score(trajs[a], T_best, sweeps, dt=float(dt))
+            if v:
+                rows.append((abs(v["az_med"]), float(dt), v["az_med"], v["rng_med"]))
+        if rows:
+            rows.sort()
+            _, dt0, az0, rng0 = rows[0]
+            print(f"  {a}: best dt {dt0:+5.1f}s  (az med {az0:+.2f} deg, "
+                  f"rng med {rng0:+.2f} m at that dt)")
+            if abs(dt0) >= args.dt_scan - 0.5:
+                print(f"    at the scan edge — rerun with a wider --dt-scan")
+
+    if args.dump:
+        print(f"\nraw dump, {args.dump} sweeps (per agent: predicted, then every "
+              "in-gate detection as az/rng):")
+        idx = np.linspace(0, len(sweeps) - 1, args.dump).astype(int)
+        for i in idx:
+            t, xyz = sweeps[i]
+            det_az = np.degrees(np.arctan2(xyz[:, 1], xyz[:, 0]))
+            det_rng = np.linalg.norm(xyz, axis=1)
+            print(f"  t={t:.2f}  ({len(xyz)} pts)")
+            for a in trajs:
+                pred = predict_observation(trajs[a], T_best, axes="ros")
+                k = int(np.argmin(np.abs(pred["stamps"] - t)))
+                if abs(pred["stamps"][k] - t) > 0.15:
+                    continue
+                print(f"    {a}: PRED az {pred['azimuth_deg'][k]:+7.2f}  "
+                      f"rng {pred['range_m'][k]:6.2f}  el {pred['elevation_deg'][k]:+6.2f}")
+            order = np.argsort(det_rng)
+            print("    DET  " + "  ".join(
+                f"[{det_az[o]:+.1f}\u00b0,{det_rng[o]:.2f}m]" for o in order[:8]))
     return 0
 
 
