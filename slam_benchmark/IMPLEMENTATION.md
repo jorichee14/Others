@@ -239,6 +239,22 @@ of tier 3 (`orbslam3_rgbd_inertial`, `openvins`) and nothing else — the loose
 rows and tiers 0-2 and 4 run today. The IMU-source ablation (B) is **dropped**:
 the Ouster's IMU counts as using the LiDAR, so there is one admissible IMU and
 no axis to sweep.
+*Phase 1 design note (2026-09-19):* asked why RTAB-Map isn't run without depth.
+It cannot be — its visual odometry needs depth or stereo, and there is no mono
+mode; depth-free RTAB-Map *is* `rtabmap_ext_odom`, riding someone else's
+odometry. But the question is the right one given T0's **+9.1% scale error**,
+and the roster already carries the depth-free answers: `mast3r_slam` (learned
+prior) and `orbslam3_mono_inertial` (scale from the IMU). What was missing is
+the measurement that decides whether depth should be used at all, so
+`scripts/depth_vs_lidar.py` now projects Ouster points into the ZED depth image
+on the same rigid body and fits `zed = a·lidar + b`. If `a ≈ 1.09` the depth
+carries T0's error and the construction should be built depth-free (or the
+depth rescaled); if `a ≈ 1.00` the depth is sound and the fault is the ZED's
+tracker. Per-range-band ratios separate a scale error from a constant offset.
+Verified on synthetic data: planted +9% scale and +5 cm offset both recover
+exactly, and the band table distinguishes them (scale is flat across bands,
+offset decays toward 1.0).
+
 *Roster:* 16 method configs, all loading and all validated against the streams
 they declare. Eight clear `run_method.py`'s preflight **today**
 (`zed_sdk_odom`, `zed_sdk_pose`, `kiss_icp`, `rtabmap_rgbd`, `orbslam3_rgbd`,
