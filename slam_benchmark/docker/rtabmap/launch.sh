@@ -97,7 +97,21 @@ if [[ -n "${SLAM_IMU_TOPIC:-}" ]]; then
     # reach the IMU from $FRAME_ID, RTAB-Map must FAIL rather than fuse an
     # unrotated gravity vector, which would tilt the whole map by the mounting
     # angle and still complete.
-    IMU_ARGS=(imu_topic:="$SLAM_IMU_TOPIC" wait_imu_to_init:=true)
+    # wait_imu_to_init is OFF, and that is the frame-drop fix. Measured: the bag
+    # delivers 2291 frames (witnessed by the recorder) and rgbd_odometry
+    # processes ~720. With wait_imu_to_init=true, OdometryROS::processData() line
+    # 553 PARKS any image whose stamp is ahead of the newest IMU sample received;
+    # the IMU callback later releases it to the worker thread, which holds
+    # dataMutex_ for the whole job, odom_info serialisation included; and every
+    # image that lands meanwhile fails lockTry() and is dropped -- silently
+    # unless the timing looks "flaky". Whether a frame gets parked is an
+    # ORDERING property of the recording, so the loss is the same at every
+    # replay rate, immune to always_process_most_recent_frame, and worse once
+    # the mapping node makes odom_info expensive. With the gate off the frame
+    # is processed inline with the IMU samples up to its stamp (lower_bound at
+    # line 564); gravity still enters, only the first frame's orientation is
+    # not IMU-initialised, and nothing is parked.
+    IMU_ARGS=(imu_topic:="$SLAM_IMU_TOPIC" wait_imu_to_init:=false)
     echo "imu      : $SLAM_IMU_TOPIC"
 else
     echo "imu      : none (the IMU-free half of the pair)"

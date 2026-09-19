@@ -1546,6 +1546,12 @@ def test_rtabmap_odometry_processes_every_frame_not_the_newest():
     launch = (Path(__file__).resolve().parents[1] / "docker" / "rtabmap" / "launch.sh").read_text()
     assert "odom_always_process_most_recent_frame:=false" in launch
     assert "sync_queue_size:=50" in launch and "topic_queue_size:=50" in launch
+    # The actual drop mechanism: wait_imu_to_init parks frames whose stamp is
+    # ahead of the newest IMU sample, and the parked frame's worker-thread
+    # processing races the next image into a silent lockTry() drop. The bag
+    # delivered 2291 frames; the node processed ~720 with it on.
+    assert "wait_imu_to_init:=false" in launch
+    assert "wait_imu_to_init:=true" not in launch
 
 
 def main() -> int:
