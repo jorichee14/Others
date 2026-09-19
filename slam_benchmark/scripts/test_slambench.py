@@ -1284,7 +1284,7 @@ def test_a_loop_closing_method_is_scored_on_its_OPTIMISED_graph():
 
     out = Path(tempfile.mkdtemp())
     rec = rt.Recorder.__new__(rt.Recorder)
-    rec.out, rec.n, rec.t0, rec.cloud = out, 0, 0.0, None
+    rec.out, rec.n, rec.t0, rec.cloud, rec.seen = out, 0, 0.0, None, 0
     rec.fh = (out / "odometry.tum").open("w")
     rec.fh.write(rt.HEADER)
     for i in range(3):                               # drifting odometry
@@ -1306,7 +1306,7 @@ def test_a_loop_closing_method_is_scored_on_its_OPTIMISED_graph():
     # killed rather than asked to stop used to lose a completed run entirely.
     out3 = Path(tempfile.mkdtemp())
     rec3 = rt.Recorder.__new__(rt.Recorder)
-    rec3.out, rec3.n, rec3.t0, rec3.cloud, rec3.path = out3, 0, 0.0, None, None
+    rec3.out, rec3.n, rec3.t0, rec3.cloud, rec3.path, rec3.seen = out3, 0, 0.0, None, None, 0
     rec3.fh = (out3 / "odometry.tum").open("w")
     rec3.on_path(types.SimpleNamespace(poses=[stamped(i, i * 2.0) for i in range(4)]))
     rows = [l.split() for l in (out3 / "trajectory.tum").read_text().splitlines()
@@ -1322,7 +1322,7 @@ def test_a_loop_closing_method_is_scored_on_its_OPTIMISED_graph():
     # and with no graph the odometry IS the estimate -- both files, same content
     out2 = Path(tempfile.mkdtemp())
     rec2 = rt.Recorder.__new__(rt.Recorder)
-    rec2.out, rec2.n, rec2.t0, rec2.cloud, rec2.path = out2, 0, 0.0, None, None
+    rec2.out, rec2.n, rec2.t0, rec2.cloud, rec2.path, rec2.seen = out2, 0, 0.0, None, None, 0
     rec2.fh = (out2 / "odometry.tum").open("w")
     rec2.fh.write(rt.HEADER)
     rec2.on_pose(stamped(0, 7.0))
