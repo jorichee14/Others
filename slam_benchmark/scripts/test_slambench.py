@@ -1501,6 +1501,42 @@ def test_a_zeroed_pose_is_a_lost_frame_not_a_corrupt_file():
             assert "all lost" in str(e), e
 
 
+@test
+def test_replay_rate_comes_from_the_method_config_and_is_recorded():
+    """An offline backbone replays at half speed because the machine cannot keep
+    up in real time; that is declared once in the method config (rule 7), lands
+    in the docker command, and is written to run.json so a mixed table is
+    visible. The CLI can still override it."""
+    import io, contextlib
+    import scripts.run_method as rm
+    root = str(Path(__file__).resolve().parents[1])
+
+    def run(extra):
+        saved = sys.argv
+        try:
+            sys.argv = ["run_method.py",
+                        "--config", os.path.join(root, "configs", "coop2.yaml"),
+                        "--method", os.path.join(root, "configs", "methods", "rtabmap_rgbd_imu.yaml"),
+                        "--stream", "mobile_1.zed_rgbd", "--runs-root", tempfile.mkdtemp()] + extra
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                assert rm.main() == 0
+            out = buf.getvalue()
+            manifest = json.loads(Path(out.split("manifest -> ", 1)[1].splitlines()[0]).read_text())
+            return out, manifest
+        finally:
+            sys.argv = saved
+
+    out, m = run([])
+    assert "SLAM_RATE=0.5" in out and m["replay_rate"] == 0.5, (m["replay_rate"])
+    out, m = run(["--rate", "1.0"])
+    assert "SLAM_RATE=1.0" in out and m["replay_rate"] == 1.0
+    # --dev mounts every script the image ships, post.sh included
+    out, _ = run(["--dev"])
+    assert "docker/rtabmap/post.sh:/opt/slambench/post.sh" in out, out[:300]
+    assert "docker/rtabmap/launch.sh:/opt/slambench/launch.sh" in out
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

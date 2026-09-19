@@ -141,5 +141,13 @@ ros2 bag play /bag --clock -r "${SLAM_RATE:-1.0}" --topics ${SLAM_TOPICS//,/ }
 sleep 10
 shutdown
 
+# An image may ship a post-run step -- typically exporting the final graph
+# from a database the method wrote, which is only consistent once it has
+# stopped. It runs after the recorder too, so it can replace what the live
+# capture produced and say so in timing.json.
+if [[ -x /opt/slambench/post.sh ]]; then
+    /opt/slambench/post.sh || echo "post.sh failed (non-fatal)" >&2
+fi
+
 test -s "$OUT/trajectory.tum" || { echo "no trajectory written" >&2; exit 3; }
 wc -l "$OUT/trajectory.tum"

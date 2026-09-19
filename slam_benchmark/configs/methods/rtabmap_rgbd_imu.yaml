@@ -10,6 +10,16 @@ outputs: [trajectory, map]
 reference_impl: https://github.com/introlab/rtabmap_ros
 image: slambench/rtabmap:humble
 
+# MEASURED 2026-09-19: at real-time replay this machine processes 72% of the
+# frames with the odometry node alone and 41% with the mapping node running --
+# every other frame, period 133.8 ms against a 67 ms stream. The holes are
+# irregular and scale with load, not with anything in the recording (colour,
+# depth and camera_info are stamped identically, 2288/2288). This row is an
+# OFFLINE backbone for a pseudo-GT: every frame matters and wall-clock does not,
+# so the bag is replayed at half speed. run.json records the rate, and the
+# runtime column for this row is meaningless by construction.
+replay_rate: 0.5              # harness default 1.0
+
 # Both platforms. docs/PLAN.md stage 1 runs each consensus backbone on
 # mobile_1.zed_rgbd (LiDAR held out, so it can be scored) and on
 # mobile_2.realsense_rgbd (no reference, so it is held for stages 3-4). The

@@ -154,9 +154,9 @@ def main() -> int:
                          "e.g. mobile_1.ouster")
     ap.add_argument("--runs-root", default="runs")
     ap.add_argument("--bag", default=None)
-    ap.add_argument("--rate", type=float, default=1.0,
-                    help="bag replay rate. Anything but 1.0 makes the runtime column "
-                         "meaningless and a dropped-frame difference a tuning artefact; "
+    ap.add_argument("--rate", type=float, default=None,
+                    help="bag replay rate. Defaults to the method config's `replay_rate`, "
+                         "else 1.0. Anything but 1.0 makes the runtime column meaningless; "
                          "the harness records it so a mixed table is visible.")
     ap.add_argument("--execute", action="store_true", help="actually start the container")
     ap.add_argument("--dev", action="store_true",
@@ -176,6 +176,8 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg, mcfg = load_dataset(args.config), load_method(args.method)
+    if args.rate is None:
+        args.rate = float(mcfg.raw.get("replay_rate", 1.0))
     try:
         info, problems = preflight(cfg, mcfg, args.stream)
     except ConfigError as e:
@@ -286,9 +288,7 @@ def main() -> int:
         # The method's own launch script lives under docker/<image>/, named
         # after the image tag: slambench/rtabmap:humble -> docker/rtabmap/.
         image = mcfg.raw.get("image", f"slambench/{mcfg.name}:humble")
-        launch = ROOT / "docker" / image.split("/", 1)[-1].split(":")[0] / "launch.sh"
-        if launch.exists():
-            mounts.append(launch)
+        mounts += sorted((ROOT / "docker" / image.split("/", 1)[-1].split(":")[0]).glob("*.sh"))
         for f in mounts:
             cmd[2:2] = ["-v", f"{f}:/opt/slambench/{f.name}:ro"]
     if args.shell:

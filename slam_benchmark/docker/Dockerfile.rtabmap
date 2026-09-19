@@ -5,7 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY docker/rtabmap/launch.sh /opt/slambench/launch.sh
-RUN chmod +x /opt/slambench/launch.sh
+COPY docker/rtabmap/post.sh   /opt/slambench/post.sh
+RUN chmod +x /opt/slambench/launch.sh /opt/slambench/post.sh
 
 # Under rtabmap.launch.py's default namespace these are /rtabmap/odom and
 # /rtabmap/cloud_map; the latter needs Grid/3D true, which the method config sets.
