@@ -63,6 +63,7 @@ fi
 python3 /opt/slambench/record_tum.py \
     --pose-topic "$SLAM_POSE_TOPIC" \
     --map-topic "${SLAM_MAP_TOPIC:-}" \
+    --path-topic "${SLAM_PATH_TOPIC:-}" \
     --out "$OUT" &
 REC=$!
 

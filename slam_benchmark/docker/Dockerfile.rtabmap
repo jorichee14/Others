@@ -9,7 +9,12 @@ RUN chmod +x /opt/slambench/launch.sh
 
 # Under rtabmap.launch.py's default namespace these are /rtabmap/odom and
 # /rtabmap/cloud_map; the latter needs Grid/3D true, which the method config sets.
+# The INCREMENTAL estimate. Kept as odometry.tum -- it is the drift floor the
+# loop-closing row has to beat, and it costs nothing to record.
 ENV SLAM_POSE_TOPIC=/rtabmap/odom
+# The OPTIMISED graph, which is what `loop_closure: true` in the method config
+# actually refers to. This one becomes trajectory.tum.
+ENV SLAM_PATH_TOPIC=/rtabmap/mapPath
 ENV SLAM_MAP_TOPIC=/rtabmap/cloud_map
 # RTAB-Map takes the depth image directly. No cloud bridge.
 ENV SLAM_NEEDS_CLOUD=0

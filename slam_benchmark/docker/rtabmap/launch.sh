@@ -71,8 +71,8 @@ exec ros2 launch rtabmap_launch rtabmap.launch.py \
     depth_topic:="$SLAM_DEPTH_TOPIC" \
     camera_info_topic:="$SLAM_COLOR_INFO_TOPIC" \
     approx_sync:="$APPROX" ${INTERVAL[@]+"${INTERVAL[@]}"} \
-    publish_tf_odom:=false \
-    publish_tf_map:=false \
+    publish_tf_odom:=true \
+    publish_tf_map:=true \
     rtabmap_viz:=false rviz:=false \
     database_path:=/out/rtabmap.db \
     rtabmap_args:="--delete_db_on_start $RTAB_ARGS" \

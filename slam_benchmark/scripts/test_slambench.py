@@ -11,6 +11,7 @@ reference on a different clock, a map scored against an empty volume.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -1201,6 +1202,98 @@ def test_an_inertial_row_without_its_extrinsic_is_refused():
     # mobile_1 has it (I13) and must still pass, so the gate is not blanket
     _, ok = rm.preflight(cfg, m, "mobile_1.zed_rgbd")
     assert not ok, ok
+
+
+def _import_record_tum():
+    """Import the recorder without ROS, by standing in for the three rclpy
+    symbols it touches at module scope. The formatting and the choice of which
+    trajectory to emit are plain Python and deserve testing on any machine."""
+    import types
+    stub = types.ModuleType("rclpy")
+    node = types.ModuleType("rclpy.node")
+    node.Node = object
+    qos = types.ModuleType("rclpy.qos")
+    qos.QoSProfile = lambda **kw: None
+    qos.ReliabilityPolicy = types.SimpleNamespace(RELIABLE=1)
+    saved = {k: sys.modules.get(k) for k in ("rclpy", "rclpy.node", "rclpy.qos")}
+    sys.modules.update({"rclpy": stub, "rclpy.node": node, "rclpy.qos": qos})
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "docker" / "common"))
+        import importlib
+        return importlib.import_module("record_tum")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+
+@test
+def test_tum_row_unwraps_the_nested_pose_and_keeps_the_stamp():
+    import types
+    rt = _import_record_tum()
+    h = types.SimpleNamespace(stamp=types.SimpleNamespace(sec=1700000000, nanosec=250000000))
+    inner = types.SimpleNamespace(position=types.SimpleNamespace(x=1.0, y=-2.0, z=0.5),
+                                  orientation=types.SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0))
+    bare = rt._row(h, inner)
+    # Odometry and PoseWithCovariance nest the pose one level down; a recorder
+    # that misses that writes the covariance block's address, not a position.
+    nested = rt._row(h, types.SimpleNamespace(pose=inner))
+    assert bare == nested, (bare, nested)
+    cols = bare.split()
+    assert cols[0] == "1700000000.250000000", cols[0]
+    assert [float(c) for c in cols[1:4]] == [1.0, -2.0, 0.5]
+
+
+@test
+def test_a_loop_closing_method_is_scored_on_its_OPTIMISED_graph():
+    """RTAB-Map publishes two different things. `/rtabmap/odom` is incremental
+    and never benefits from a closure; the optimised graph applies every closure
+    retroactively. Recording the first while the method config says
+    `loop_closure: true` puts a drift number in a row that claims to have none.
+    """
+    import types
+    rt = _import_record_tum()
+
+    def stamped(t, x):
+        return types.SimpleNamespace(
+            header=types.SimpleNamespace(
+                stamp=types.SimpleNamespace(sec=int(t), nanosec=0)),
+            pose=types.SimpleNamespace(
+                position=types.SimpleNamespace(x=x, y=0.0, z=0.0),
+                orientation=types.SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)))
+
+    out = Path(tempfile.mkdtemp())
+    rec = rt.Recorder.__new__(rt.Recorder)
+    rec.out, rec.n, rec.t0, rec.cloud = out, 0, 0.0, None
+    rec.fh = (out / "odometry.tum").open("w")
+    rec.fh.write(rt.HEADER)
+    for i in range(3):                               # drifting odometry
+        rec.on_pose(stamped(i, i * 1.5))
+    # the graph, re-optimised: same stamps, corrected positions
+    rec.path = types.SimpleNamespace(poses=[stamped(i, i * 1.0) for i in range(3)])
+    rec.finish()
+
+    traj = [l.split() for l in (out / "trajectory.tum").read_text().splitlines()
+            if not l.startswith("#")]
+    odom = [l.split() for l in (out / "odometry.tum").read_text().splitlines()
+            if not l.startswith("#")]
+    assert [float(r[1]) for r in traj] == [0.0, 1.0, 2.0], traj
+    assert [float(r[1]) for r in odom] == [0.0, 1.5, 3.0], odom
+    meta = json.loads((out / "timing.json").read_text())
+    assert meta["trajectory_source"] == "optimised_graph", meta
+
+    # and with no graph the odometry IS the estimate -- both files, same content
+    out2 = Path(tempfile.mkdtemp())
+    rec2 = rt.Recorder.__new__(rt.Recorder)
+    rec2.out, rec2.n, rec2.t0, rec2.cloud, rec2.path = out2, 0, 0.0, None, None
+    rec2.fh = (out2 / "odometry.tum").open("w")
+    rec2.fh.write(rt.HEADER)
+    rec2.on_pose(stamped(0, 7.0))
+    rec2.finish()
+    assert (out2 / "trajectory.tum").read_text() == (out2 / "odometry.tum").read_text()
+    assert json.loads((out2 / "timing.json").read_text())["trajectory_source"] == "odometry"
 
 
 def main() -> int:
