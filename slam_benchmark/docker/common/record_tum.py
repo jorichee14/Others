@@ -50,7 +50,11 @@ class Recorder(Node):
     def __init__(self, pose_topic: str, map_topic: str, out: Path,
                  path_topic: str = ""):
         super().__init__("slambench_recorder")
-        self.declare_parameter("use_sim_time", True)
+        # NOT declare_parameter("use_sim_time", ...) -- rclpy's Node constructor
+        # already declared it (TimeSource.attach_node), so declaring it again
+        # raises ParameterAlreadyDeclaredException and kills the node on
+        # construction. It also would not have worked: sim time is switched on by
+        # a parameter OVERRIDE at launch, which the entrypoint now passes.
         self.out = out
         self.n = 0
         self.t0 = time.time()

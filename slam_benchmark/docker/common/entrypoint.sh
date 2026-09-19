@@ -64,8 +64,23 @@ python3 /opt/slambench/record_tum.py \
     --pose-topic "$SLAM_POSE_TOPIC" \
     --map-topic "${SLAM_MAP_TOPIC:-}" \
     --path-topic "${SLAM_PATH_TOPIC:-}" \
-    --out "$OUT" &
+    --out "$OUT" \
+    --ros-args -p use_sim_time:=true &
 REC=$!
+
+# CHECK THAT IT IS ACTUALLY ALIVE. A backgrounded process that dies on its first
+# line leaves `&` perfectly happy, and the run then replays the whole bag into
+# nothing -- which is exactly what happened here: the recorder was raising
+# ParameterAlreadyDeclaredException on construction and every run produced a
+# database and no trajectory. Three minutes is far too long to find that out at
+# the end.
+sleep 3
+if ! kill -0 "$REC" 2>/dev/null || [[ ! -f "$OUT/odometry.tum" ]]; then
+    echo "the recorder did not start -- refusing to replay the bag into nothing" >&2
+    wait "$REC" 2>/dev/null || true
+    exit 4
+fi
+echo "recorder : up, writing to $OUT"
 
 # Each image ships its own launch script. It is a FILE and not an environment
 # variable on purpose: a Dockerfile `ENV` expands ${...} at BUILD time, so a

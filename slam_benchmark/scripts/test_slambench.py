@@ -1354,6 +1354,54 @@ def test_stream_coverage_is_measured_at_both_ends_not_by_span():
     assert late > 4.9 and abs(early) < 0.1, (late, early)
 
 
+@test
+def test_no_node_redeclares_use_sim_time():
+    """rclpy's Node constructor already declares `use_sim_time` (TimeSource
+    .attach_node), so declaring it again raises ParameterAlreadyDeclaredException
+    and kills the node on construction. Backgrounded with `&`, that failure is
+    invisible: every run replayed 156 s of bag into a dead recorder and produced
+    a database with no trajectory. Sim time is switched on by a parameter
+    OVERRIDE at launch instead, which the entrypoint must pass."""
+    import ast as _ast
+    common = Path(__file__).resolve().parents[1] / "docker" / "common"
+    for py in sorted(common.glob("*.py")):
+        # PARSED, not grepped. The fix leaves a comment explaining why the call
+        # is absent, and that comment naturally contains the call's own text --
+        # a substring check matches it and the test passes for the wrong reason,
+        # which is worse than not having the test.
+        for node in _ast.walk(_ast.parse(py.read_text())):
+            if not isinstance(node, _ast.Call):
+                continue
+            name = getattr(node.func, "attr", getattr(node.func, "id", ""))
+            if name != "declare_parameter" or not node.args:
+                continue
+            first = node.args[0]
+            assert not (isinstance(first, _ast.Constant)
+                        and first.value == "use_sim_time"), f"{py.name}:{node.lineno}"
+
+    entry = (common / "entrypoint.sh").read_text()
+    for node in ("record_tum.py", "depth_to_cloud.py"):
+        # Anchored to the INVOCATION. Both names also appear in error messages
+        # earlier in the file, and matching one of those checks nothing.
+        marker = f"python3 /opt/slambench/{node}"
+        assert marker in entry, f"{node} is never launched"
+        block = entry[entry.index(marker):].split("\n\n")[0]
+        assert "use_sim_time:=true" in block, f"{node} is launched on wall time"
+
+
+@test
+def test_the_entrypoint_refuses_to_replay_into_a_dead_recorder():
+    """A backgrounded process that dies on its first line leaves `&` perfectly
+    happy. Without a check the bag replays for three minutes and the failure is
+    only visible at the end, as an empty directory."""
+    entry = (Path(__file__).resolve().parents[1]
+             / "docker" / "common" / "entrypoint.sh").read_text()
+    check = entry[entry.index("REC=$!"):entry.index("ros2 bag play")]
+    assert 'kill -0 "$REC"' in check, "the recorder's liveness is never checked"
+    assert "odometry.tum" in check, "nothing checks that it opened its output"
+    assert "exit 4" in check, "a dead recorder does not stop the run"
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

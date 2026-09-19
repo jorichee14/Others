@@ -108,7 +108,11 @@ def _main() -> int:                                          # pragma: no cover
     class Bridge(Node):
         def __init__(self):
             super().__init__("depth_to_cloud")
-            self.declare_parameter("use_sim_time", True)
+            # NOT declare_parameter("use_sim_time", ...) -- rclpy's Node constructor
+        # already declared it (TimeSource.attach_node), so declaring it again
+        # raises ParameterAlreadyDeclaredException and kills the node on
+        # construction. It also would not have worked: sim time is switched on by
+        # a parameter OVERRIDE at launch, which the entrypoint now passes.
             self.K = None
             self.n = 0
             qos = QoSProfile(depth=20, reliability=ReliabilityPolicy.RELIABLE)
