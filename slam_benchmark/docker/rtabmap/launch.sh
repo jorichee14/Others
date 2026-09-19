@@ -59,6 +59,20 @@ print(" ".join(to_args(json.loads(os.environ.get("SLAM_PARAMS") or "{}"), exclud
 echo "odometry : $ODOM_ARGS"
 echo "mapping  : $RTAB_ARGS"
 
+# PROCESS EVERY FRAME, NOT THE MOST RECENT ONE. rgbd_odometry defaults to
+# always_process_most_recent_frame=true: the worker thread holds dataMutex_ for
+# the whole of processData() -- estimation plus publishing odom_info, a large
+# message built only when the mapping node subscribes -- and the image callback
+# does lockTry() and DROPS any frame that lands while it is held, with no log
+# line unless the timing looks "flaky". A real-time design: newest frame wins.
+# Measured: ~72% of frames kept with no mapping node, ~40% with one, identical
+# at 1.0x and 0.5x replay, callback p90 46 ms against a 134 ms period -- the
+# loss is the lock, not the compute. RTAB-Map's own warning text says what to do
+# for a bag: always_process_most_recent_frame:=false, so the callback processes
+# synchronously and the sync queue absorbs bursts. The queues are raised from 10
+# so a burst queues instead of overflowing the subscription. Harness plumbing,
+# not method tuning: the estimator's parameters are unchanged.
+#
 # EXACT vs APPROXIMATE, from the stream's measured stamp alignment rather than
 # a default. On mobile_1 colour and depth are stamped BYTE-IDENTICALLY (2288/2288
 # pairs), and feeding that to an approximate matcher is what paired frames a full
@@ -97,6 +111,8 @@ exec ros2 launch rtabmap_launch rtabmap.launch.py \
     depth_topic:="$SLAM_DEPTH_TOPIC" \
     camera_info_topic:="$SLAM_COLOR_INFO_TOPIC" \
     approx_sync:="$APPROX" ${INTERVAL[@]+"${INTERVAL[@]}"} \
+    odom_always_process_most_recent_frame:=false \
+    topic_queue_size:=50 sync_queue_size:=50 \
     publish_tf_odom:=false \
     publish_tf_map:=false \
     rtabmap_viz:=false rviz:=false \

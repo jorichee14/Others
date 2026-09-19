@@ -1537,6 +1537,17 @@ def test_replay_rate_comes_from_the_method_config_and_is_recorded():
     assert "docker/rtabmap/launch.sh:/opt/slambench/launch.sh" in out
 
 
+@test
+def test_rtabmap_odometry_processes_every_frame_not_the_newest():
+    """always_process_most_recent_frame=true drops any frame that arrives while
+    the worker holds dataMutex_, silently. Measured 72% kept alone and ~40% with
+    the mapping node subscribed to odom_info, identical at two replay rates.
+    An offline backbone must see every frame."""
+    launch = (Path(__file__).resolve().parents[1] / "docker" / "rtabmap" / "launch.sh").read_text()
+    assert "odom_always_process_most_recent_frame:=false" in launch
+    assert "sync_queue_size:=50" in launch and "topic_queue_size:=50" in launch
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")
