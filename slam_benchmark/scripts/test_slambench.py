@@ -1402,6 +1402,26 @@ def test_the_entrypoint_refuses_to_replay_into_a_dead_recorder():
     assert "exit 4" in check, "a dead recorder does not stop the run"
 
 
+@test
+def test_recorder_hands_ros_args_to_rclpy_instead_of_rejecting_them():
+    """The entrypoint appends `--ros-args -p use_sim_time:=true`, the only way
+    to put the node on the bag's clock. A plain parse_args() exits 2 on those,
+    which is a crash on the first line -- backgrounded, invisible, and the
+    second silent death of this recorder in one afternoon."""
+    rt = _import_record_tum()
+    argv = ["record_tum.py", "--pose-topic", "/rtabmap/odom", "--path-topic",
+            "/rtabmap/mapPath", "--out", "/out",
+            "--ros-args", "-p", "use_sim_time:=true"]
+    args, ros_argv = rt.parse(argv)
+    assert args.pose_topic == "/rtabmap/odom" and args.out == "/out"
+    assert args.path_topic == "/rtabmap/mapPath"
+    # everything ROS needs, in order, with argv[0] in front as rclpy expects
+    assert ros_argv == ["record_tum.py", "--ros-args", "-p", "use_sim_time:=true"], ros_argv
+    # and with no ROS flags at all, rclpy still gets a well-formed argv
+    _, plain = rt.parse(argv[:7])
+    assert plain == ["record_tum.py"], plain
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

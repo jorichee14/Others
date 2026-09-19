@@ -143,7 +143,15 @@ class Recorder(Node):
         path.write_bytes(header + np.ascontiguousarray(pts).tobytes())
 
 
-def main():
+def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
+    """Split OUR arguments from ROS's.
+
+    The entrypoint launches this with `--ros-args -p use_sim_time:=true` on the
+    end, because that override is the only way to put a node on the bag's
+    clock. argparse does not know those flags and `parse_args()` exits 2 on
+    them -- which is a crash on the first line, backgrounded, invisible. So the
+    unknown remainder is handed to rclpy.init instead of rejected.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--pose-topic", required=True)
     ap.add_argument("--map-topic", default="")
@@ -151,9 +159,15 @@ def main():
                     help="the OPTIMISED graph, if the method publishes one. It "
                          "becomes trajectory.tum and the odometry is kept beside it.")
     ap.add_argument("--out", required=True)
-    args = ap.parse_args()
+    args, ros_args = ap.parse_known_args(argv[1:])
+    return args, [argv[0], *ros_args]
 
-    rclpy.init()
+
+def main():
+    import sys
+    args, ros_argv = parse(sys.argv)
+
+    rclpy.init(args=ros_argv)
     node = Recorder(args.pose_topic, args.map_topic, Path(args.out), args.path_topic)
     try:
         rclpy.spin(node)
