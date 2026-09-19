@@ -77,16 +77,32 @@ test -x "$SLAM_LAUNCH_SCRIPT" || { echo "image ships no $SLAM_LAUNCH_SCRIPT" >&2
 "$SLAM_LAUNCH_SCRIPT" &
 SLAM=$!
 
+# Shut down in one place, so an INTERRUPTED run still yields what it computed.
+# `docker run` forwards Ctrl-C to PID 1, and without a trap bash dies on the spot:
+# the recorder never reaches its finish(), and three minutes of replay produce an
+# empty directory. A partial trajectory is a result (CLAUDE.md rule 8); nothing
+# at all is not.
+shutdown() {
+    for pid in "$SLAM" "$BRIDGE" ${TFS[@]+"${TFS[@]}"} "$REC"; do
+        [[ -n "$pid" ]] || continue
+        kill -INT "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    done
+}
+interrupted() {
+    echo "INTERRUPTED — flushing whatever has been computed so far" >&2
+    shutdown
+    touch "$OUT/INTERRUPTED"      # so no table ever quotes this run as complete
+    exit 130
+}
+trap interrupted INT TERM
+
 sleep 5   # let the method's nodes come up before the first message arrives
 ros2 bag play /bag --clock -r "${SLAM_RATE:-1.0}" --topics ${SLAM_TOPICS//,/ }
 
 # The bag is done; give the method a moment to flush its last optimisation.
 sleep 10
-for pid in "$SLAM" "$BRIDGE" ${TFS[@]+"${TFS[@]}"} "$REC"; do
-    [[ -n "$pid" ]] || continue
-    kill -INT "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-done
+shutdown
 
 test -s "$OUT/trajectory.tum" || { echo "no trajectory written" >&2; exit 3; }
 wc -l "$OUT/trajectory.tum"

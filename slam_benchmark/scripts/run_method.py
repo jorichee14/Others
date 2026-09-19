@@ -281,7 +281,16 @@ def main() -> int:
     print(manifest["command"])
     if args.execute:
         t0 = time.time()
-        rc = subprocess.run(cmd).returncode
+        # A Ctrl-C used to propagate straight out of here, so run.json was never
+        # written and the directory kept a STALE manifest from an earlier run --
+        # a run directory describing a different run is worse than an empty one.
+        try:
+            rc = subprocess.run(cmd).returncode
+        except KeyboardInterrupt:
+            rc, manifest["interrupted"] = 130, True
+            print("\ninterrupted — the container was asked to flush; "
+                  "check for an INTERRUPTED marker in the run directory",
+                  file=sys.stderr)
         manifest["wall_s"] = time.time() - t0
         manifest["returncode"] = rc
         manifest["finished_utc"] = datetime.now(timezone.utc).isoformat()

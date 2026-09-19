@@ -44,6 +44,13 @@ CAUSES = {
 # was never observed. The count belongs beside the ATE, not buried in a log.
 RESET = re.compile(r"Odometry automatically reset")
 
+# The dropped-frame message carries the BAG stamp of the frame it threw away, so
+# where the drops fall is measurable rather than arguable. Clustered at the ends
+# means the inertial stream simply does not cover the images and the evaluation
+# window is short; spread through the middle means frames are being lost at run
+# time, which is a harness problem and fixable.
+DROP_AT = re.compile(r"receive IMU newer than previous image/scan \((\d+\.\d+)\)")
+
 
 def runs_of_zero(q: np.ndarray) -> list[tuple[int, int]]:
     """Contiguous (start, length) stretches of quality 0.
@@ -72,6 +79,9 @@ def main() -> int:                                             # pragma: no cove
     ap.add_argument("--log", required=True)
     ap.add_argument("--rate", type=float, default=14.9,
                     help="frames per second, to turn frame indices into seconds")
+    ap.add_argument("--bag-start", type=float, default=None,
+                    help="the bag's first message time, as bag_probe prints it, so "
+                         "dropped-frame times read as run time rather than offsets")
     ap.add_argument("--expected-frames", type=int, default=None,
                     help="how many frames the STREAM carries (bag_probe prints it). "
                          "Without it the tracked fraction is of frames the estimator "
@@ -119,6 +129,31 @@ def main() -> int:                                             # pragma: no cove
         print(f"      from frame {start:>5} ({start / args.rate:7.1f} s)  "
               f"{length:>5} frames ({length / args.rate:6.1f} s)"
               f"{'   — never recovered' if start + length == len(q) else ''}")
+
+    drops = np.array([float(x) for x in DROP_AT.findall(text)])
+    if len(drops):
+        t0 = args.bag_start or drops.min()
+        rel = np.sort(drops) - t0
+        span = rel.max() if rel.max() > 0 else 1.0
+        bins = np.histogram(rel, bins=10, range=(0.0, span))[0]
+        print(f"\n  {len(drops)} frames dropped before reaching the estimator, "
+              f"spanning {rel.min():.1f}..{rel.max():.1f} s"
+              + ("" if args.bag_start else " (relative to the FIRST drop; pass "
+                 "--bag-start for absolute run time)"))
+        width = max(1, int(60 / max(bins.max(), 1)))
+        for i, n in enumerate(bins):
+            lo, hi = i * span / 10, (i + 1) * span / 10
+            print(f"      {lo:6.1f}-{hi:6.1f}s  {n:>5}  {'#' * min(n * width, 60)}")
+        ends = int(np.sum(rel < 2.0) + np.sum(rel > span - 4.0))
+        print(f"      at the ends (<2 s in, >4 s from the end): {ends} of {len(drops)}")
+        if ends < 0.5 * len(drops):
+            print("      VERDICT: most drops are in the MIDDLE of the run, so stream "
+                  "coverage does not explain them. Frames are being lost at run time — "
+                  "look at the inertial subscriber's queue depth before blaming the "
+                  "recording.")
+        else:
+            print("      VERDICT: the drops sit at the ends, which is the inertial "
+                  "stream not covering the images. Report the shortened window.")
 
     print("\n  warnings seen")
     for name, pat in CAUSES.items():
