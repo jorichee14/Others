@@ -117,7 +117,7 @@ scale 1.057 vs 408 / 1.43% / 1.064 for the front-end alone — the residual is a
 +5.7% scale bias that loop closure cannot touch, i.e. the depth. Getting there
 took one line (`qos:=1`; RTAB-Map's default subscriptions are best-effort under
 rmw_fastrtps and silently lost two thirds of the frames) and is recorded in
-`IMPLEMENTATION.md`. Remaining cells unchanged below.**
+`IMPLEMENTATION.md`. A second identical run scored 451 mm, and the front-end alone 408 vs 481 mm: RTAB-Map is not reproducible run to run, so this cell is reported as median [min, max] over five runs via `scripts/spread.py`, never one number. Remaining cells unchanged below.**
 
 **MEASURED 2026-09-19 — the grid is five cells and one named blocker, not six.**
 `scripts/bag_probe.py` on the bag: `/tf_static` carries **7 edges in 2

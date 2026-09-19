@@ -46,6 +46,7 @@ def main() -> int:
 
     cfg, mcfg = load_dataset(args.config), load_method(args.method)
     run = Path(args.run)
+    metrics_path = run / metrics_name(args.trajectory_file)
     ev = cfg.eval
     stream_key = args.stream
     stream = cfg.stream(stream_key)
@@ -74,7 +75,7 @@ def main() -> int:
     if not traj_file.exists():
         if "trajectory" in mcfg.outputs:
             out["status"] = f"no trajectory.tum in {run}"
-            write_json(out, run / "metrics.json")
+            write_json(out, metrics_path)
             print(f"error: {out['status']}", file=sys.stderr)
             return 1
         est_ref = None
@@ -151,9 +152,17 @@ def main() -> int:
         out["map"]["frame"] = ev.get("map_frame", "aligned")
         out["map_status"] = "ok"
 
-    write_json(out, run / "metrics.json")
+    write_json(out, metrics_path)
     _print(out)
     return 0
+
+
+def metrics_name(trajectory_file: str) -> str:
+    """`metrics.json` for the run's own trajectory.tum; scoring any other file in
+    the run directory (odometry.tum, the front-end alone) writes beside it, so
+    the graph's score is never overwritten by the front-end's."""
+    stem = Path(trajectory_file).stem
+    return "metrics.json" if trajectory_file == "trajectory.tum" else f"metrics_{stem}.json"
 
 
 def _print(out: dict) -> None:

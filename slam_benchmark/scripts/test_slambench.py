@@ -1588,6 +1588,50 @@ def test_every_run_keeps_its_own_directory():
     assert (cell / "latest").resolve() == manifests[1].parent.resolve()
 
 
+@test
+def test_spread_scores_every_run_and_refuses_a_spread_below_three():
+    """A cell is median [min, max] over N runs; two runs are two samples, not a
+    spread. Interrupted runs and runs with no trajectory are listed, not scored,
+    and `latest` (a symlink) is never scored twice."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from spread import score, summarise, run_dirs, KEYS, MIN_RUNS
+    cell = Path(tempfile.mkdtemp())
+    for i, val in enumerate((0.40, 0.45, 0.38)):
+        d = cell / f"r{i}"; d.mkdir()
+        (d / "trajectory.tum").write_text(f"{val}\n")
+    (cell / "r3").mkdir(); (cell / "r3" / "INTERRUPTED").write_text("")
+    (cell / "r4").mkdir()                                     # crashed before writing
+    (cell / "latest").symlink_to("r2")
+    assert [d.name for d in run_dirs(cell)] == ["r0", "r1", "r2", "r3", "r4"]
+
+    def scorer(path):
+        v = float(path.read_text())
+        return {"poses": 1, "lost": 0, "rmse_mm": v * 1e3, "p90_mm": v * 1.2e3,
+                "rot_deg": 5.0, "scale": 1.05, "drift_pct": 1.5}
+    scored, skipped = score(cell, "trajectory.tum", scorer)
+    assert [s["run"] for s in scored] == ["r0", "r1", "r2"]
+    assert skipped == [("r3", "interrupted"), ("r4", "no trajectory.tum")], skipped
+    summ = summarise(scored, KEYS)
+    assert summ["n"] == 3 and MIN_RUNS == 3
+    assert abs(summ["rmse_mm"]["median"] - 400.0) < 1e-9
+    assert abs(summ["rmse_mm"]["min"] - 380.0) < 1e-9 and abs(summ["rmse_mm"]["max"] - 450.0) < 1e-9
+    assert summarise(scored[:2], KEYS) is None
+    # the front-end alone is a different file: skipped when absent, scored when present
+    _, sk = score(cell, "odometry.tum", scorer)
+    assert all(why.startswith("no odometry.tum") or why == "interrupted" for _, why in sk)
+
+
+@test
+def test_scoring_the_front_end_does_not_overwrite_the_graph_score():
+    """`--trajectory-file odometry.tum` used to write the same metrics.json as
+    the graph's score; aggregate.py then read the front-end as the row."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from eval_run import metrics_name
+    assert metrics_name("trajectory.tum") == "metrics.json"
+    assert metrics_name("odometry.tum") == "metrics_odometry.json"
+    assert metrics_name("trajectory_mappath.tum") == "metrics_trajectory_mappath.json"
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

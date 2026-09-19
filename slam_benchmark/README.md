@@ -21,7 +21,12 @@ python3 scripts/run_method.py  --config configs/coop2.yaml \
     --method configs/methods/kiss_icp.yaml --stream mobile_1.ouster --execute
 python3 scripts/eval_run.py    --config configs/coop2.yaml \
     --method configs/methods/kiss_icp.yaml --stream mobile_1.ouster \
-    --run runs/coop2_20260828/kiss_icp/mobile_1.ouster \
+    --run runs/coop2_20260828/kiss_icp/mobile_1.ouster/latest \
+    --reference runs/coop2_20260828/reference/mobile_1.tum
+# a method that is not reproducible run to run (RTAB-Map) is a spread over N>=3 runs
+python3 scripts/spread.py      --config configs/coop2.yaml \
+    --method configs/methods/rtabmap_rgbd_imu.yaml --stream mobile_1.zed_rgbd \
+    --cell runs/coop2_20260828/rtabmap_rgbd_imu/mobile_1.zed_rgbd \
     --reference runs/coop2_20260828/reference/mobile_1.tum
 python3 scripts/aggregate.py   --runs runs/coop2_20260828 \
     --config configs/coop2.yaml --out results/coop2.md
