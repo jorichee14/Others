@@ -198,7 +198,23 @@ accumulated relative error, not a multiplier on every edge. That is the
 range-dependent ZED depth error (`depth_vs_lidar`: +6% at 1 m, −8% at 2 m)
 showing up exactly where predicted, and it is the number the depth-free rows
 (`orbslam3_mono_inertial`, `mast3r_slam`) and the board anchors exist to
-address. **The earlier 63.5 mm and 73.7 mm loop-closed figures are retracted as
+address. **sim3 (2026-09-19): 208 mm RMSE, median 154, p90 359, drift 0.82%, rot 4.38°.**
+Fitting the scale out removes 157 mm of the 365 — so the scale bias is *about
+half* the error, not all of it. The other half is shape, and two candidates are
+on the table, neither yet tested: (a) the depth error is range-*dependent*
+(+6% at 1 m, −8% at 2 m), which is a nonlinear distortion of the geometry, not
+a scalar, and sim3 cannot remove it; (b) the **4.38° orientation residual is
+unchanged between se3 and sim3** and RPE at 1 m carries 2.9° — RTAB-Map's
+gravity constraint (`Optimizer/GravitySigma`) assumes a ROS-convention base
+frame (z up), and this container runs it with `frame_id` = the *optical* frame
+(z forward, y down) so that the output obeys contract rule 1. If RTAB-Map
+extracts roll/pitch about the wrong axes, that is a few degrees of systematic
+orientation error and it would also explain some of the position shape. The
+test is one run with `frame_id:=zed_left_camera_frame` (in the bag's
+`tf_static`, rigidly attached) and the evaluator applying the fixed optical
+rotation — deferred until the other stage-1 cells have run once.
+
+**The earlier 63.5 mm and 73.7 mm loop-closed figures are retracted as
 partial-trajectory artefacts**: they scored the graph component reachable from
 node 1 — 34 and 28 poses of a run split into 3–4 sessions by resets — not the
 trajectory.
