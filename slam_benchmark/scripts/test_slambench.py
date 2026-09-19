@@ -1632,6 +1632,18 @@ def test_scoring_the_front_end_does_not_overwrite_the_graph_score():
     assert metrics_name("trajectory_mappath.tum") == "metrics_trajectory_mappath.json"
 
 
+@test
+def test_kiss_launch_passes_no_empty_valued_parameter():
+    """`-p base_frame:=` aborted kiss_icp_node before it subscribed: rcl cannot
+    parse a parameter override with an empty value. The node's default is
+    already the empty string, so the flag is simply not passed."""
+    import re
+    text = (Path(__file__).resolve().parents[1] / "docker" / "kiss-icp" / "launch.sh").read_text()
+    empties = re.findall(r'-p\s+\S+:=(?:""|\'\')?(?:\s|\\|$)', text, flags=re.M)
+    assert not empties, f"empty-valued -p override(s): {empties}"
+    assert "base_frame" not in re.sub(r"#.*", "", text), "base_frame must not be passed"
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

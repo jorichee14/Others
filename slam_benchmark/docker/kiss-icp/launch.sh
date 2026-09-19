@@ -37,11 +37,15 @@ for a in to_ros_params(json.loads(os.environ.get("SLAM_PARAMS") or "{}"),
                        drop=tuple(sys.argv[1:])):
     print(a)' ${DROP[@]+"${DROP[@]}"})
 
+# base_frame is deliberately NOT passed. The node's own default is the empty
+# string (OdometryServer.hpp: `std::string base_frame_{}`), which means "estimate
+# in the cloud's frame" -- rule 6, the container does not transform poses. It
+# cannot be passed explicitly: rcl refuses `-p base_frame:=` as unparseable and
+# the node aborts before subscribing to anything.
 set -x
 exec ros2 run kiss_icp kiss_icp_node --ros-args \
     -r pointcloud_topic:="$SLAM_CLOUD_TOPIC" \
     -p use_sim_time:=true \
-    -p base_frame:="" \
     -p publish_odom_tf:=false \
     -p publish_debug_clouds:=true \
     "${PARAMS[@]}" ${OVERRIDE[@]+"${OVERRIDE[@]}"}
