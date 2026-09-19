@@ -1,0 +1,86 @@
+# Tier 3, loosely coupled. The pragmatic favourite.
+name: rtabmap_rgbd_imu
+family: rgbd_slam
+origin: "[I]"
+modality: [rgbd]
+coupling: loose
+needs_imu: true
+loop_closure: true
+outputs: [trajectory, map]
+reference_impl: https://github.com/introlab/rtabmap_ros
+image: slambench/rtabmap:humble
+
+# MEASURED 2026-09-19: at real-time replay this machine processes 72% of the
+# frames with the odometry node alone and 41% with the mapping node running --
+# every other frame, period 133.8 ms against a 67 ms stream. The holes are
+# irregular and scale with load, not with anything in the recording (colour,
+# depth and camera_info are stamped identically, 2288/2288). This row is an
+# OFFLINE backbone for a pseudo-GT: every frame matters and wall-clock does not,
+# so the bag is replayed at half speed. run.json records the rate, and the
+# runtime column for this row is meaningless by construction.
+replay_rate: 0.5              # harness default 1.0
+
+# Both platforms. docs/PLAN.md stage 1 runs each consensus backbone on
+# mobile_1.zed_rgbd (LiDAR held out, so it can be scored) and on
+# mobile_2.realsense_rgbd (no reference, so it is held for stages 3-4). The
+# mobile_2 run is not a comparison row -- different platform, different route --
+# it is the candidate that the pseudo-GT construction will actually be built on.
+streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
+imu_by_agent:
+  mobile_1: mobile_1.imu
+  mobile_2: mobile_2.imu    # 183.3 Hz. Gravity only, as on mobile_1, so the
+                            # null extrinsic and null noise model do not block
+                            # it: RTAB-Map rotates the IMU through tf_static and
+                            # refuses if that chain is missing.
+
+params:
+  Vis/MinInliers: 15
+  # MEASURED 2026-09-19, and the reason this row scored 26.7% instead of ~100%.
+  # The run tracked cleanly for 12.7 s -- median 245 inliers, p05 95 -- then lost
+  # once and never came back: 510 consecutive frames registering against node -1
+  # with `fromWords = 0 fromImageEmpty = 1`, i.e. an empty frame-to-map model
+  # that nothing rebuilds. RTAB-Map's published default for this parameter is
+  # **0**, documented as "a value of 0 disables auto-reset", so ONE bad moment
+  # ends the run by design and every frame after it is lost for free.
+  #
+  # 8 frames is ~0.54 s at this stream's 14.9 Hz: long enough that a single
+  # blurred or occluded frame does not trigger a reset, short enough that the
+  # pose has not yet become fiction. A reset resumes from the last successfully
+  # computed pose with large covariance, so it is a DISCONTINUITY, not a repair:
+  # scripts/odom_health.py counts them and the count belongs beside this row's
+  # ATE. For a pseudo-GT backbone that trade is right -- the factor graph absorbs
+  # a discontinuity but cannot invent 34 s of missing trajectory.
+  Odom/ResetCountdown: 8   # published default 0 (= never auto-reset)
+  Vis/MaxDepth: 8.0
+  RGBD/LinearUpdate: 0.05
+  RGBD/AngularUpdate: 0.05
+  Grid/3D: "true"
+  Grid/CellSize: 0.05
+  # The IMU enters as a GRAVITY constraint on the pose graph and as an
+  # orientation prior for the odometry's motion prediction. It does not enter a
+  # joint visual-inertial state, which is exactly why this row needs no noise
+  # model and no precise camera<->IMU extrinsic and can therefore run TODAY.
+  Optimizer/GravitySigma: 0.3
+  # Published default false. It was "true" here, meaning gravity comes to the
+  # graph from the odometry's odom_info message; measured 2026-09-19, the
+  # odom_info subscription is what halves the odometry's frame rate, so it is
+  # off and the mapping node takes gravity from its own IMU subscription --
+  # the default path, and the same constraint.
+  Mem/UseOdomGravity: "false"
+
+notes: |
+  Its pair with rtabmap_rgbd (identical but IMU-free) is the loosely-coupled
+  answer to the same question orbslam3_rgbd_inertial asks tightly. Running both
+  pairs is what separates "the IMU helped" from "tight coupling helped" — two
+  claims that a single inertial row cannot distinguish and that papers routinely
+  conflate.
+
+  A gravity constraint is a small intervention with a specific effect: it bounds
+  roll and pitch drift, and it does almost nothing for yaw or for scale. So
+  predict the shape of the win before measuring it — if this row improves
+  in-plane error substantially, something other than gravity is responsible and
+  it should be found rather than reported. Report z-drift separately from
+  in-plane, which is where the effect should actually appear.
+
+  The only tier-3 entry that also produces a dense map, so it is the one that
+  carries the map metrics for the whole LiDAR-free phase.

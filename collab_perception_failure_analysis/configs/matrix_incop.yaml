@@ -1,0 +1,104 @@
+# Impairment matrix for the InCoP indoor benchmark (jorichee14/incop_analysis).
+#
+# Companion to matrix.yaml (OPV2V outdoor V2V). The pairing is the point: run the same
+# impairments on both and the difference is attributable to SCENE DYNAMICS rather than
+# to the channel, because the two benchmarks share a sampling rate.
+#
+# VERIFIED: InCoP's IsaacSim data is 10 Hz — OS0_REV7_128ch10hz512res with
+# rotation_rate_hz = 10.0 (IsaacSimGenScript/robot.py:437), and its video export runs at
+# fps 10. OPV2V is also 10 Hz. So one frame = 100 ms in BOTH, and every frame-indexed
+# level below transfers with identical physical meaning.
+#
+# WHAT TRANSFERS UNCHANGED, AND WHY
+#   latency, stale     frame counts at a shared 10 Hz -> identical milliseconds
+#   loss_iid, burst    dimensionless delivery rates
+#   bandwidth          bits are bits
+#   swap               a probability
+#
+# WHAT HAD TO BE RESCALED
+#   pose               see below — the only genuinely dataset-dependent axis
+#   ghosts             counts kept; the GEOMETRY is rescaled in code
+#                      (commchannel/incop_channel.py, INDOOR_GHOST_LWH) because a
+#                      4.5 x 1.9 x 1.6 m sedan is not a plausible false positive in a
+#                      hospital corridor whose anchors are 1 x 1 x 1 m
+#   loss_blocked       NOT PORTED. BlockageTable assumes OPV2V vehicle annotations and
+#                      outdoor chord geometry, and it was a negative result on OPV2V
+#                      (docs/BLOCKAGE.md). IncopChannel raises on it deliberately.
+#
+# THE PREDICTION THIS MATRIX EXISTS TO TEST
+#   On OPV2V, latency drove ALL SEVEN methods below the ego-only floor at 100 ms, and
+#   the damage was displacement rather than information loss (delta AP@0.5 vs delta
+#   AP@0.7 differed 4-9x). Displacement scales with object speed. Indoor ground robots
+#   and indoor objects move at ~1 m/s or not at all, against ~15-20 m/s on the highway.
+#   So the floor-crossing point should move by close to an order of magnitude — and if
+#   it does NOT, latency damage is not displacement and the OPV2V interpretation is
+#   wrong. Either outcome is a result. Pre-register before running.
+
+frame_stride: 3        # confirm against the actual InCoP test split length
+
+seeds: [0, 1, 2]
+
+scene: hospital        # hospital has full train/validate/test; office and warehouse
+                       # have pretrained configs; real_world evaluates on validate
+
+# InCoP's own five fusion methods plus its ablation. `no`/`late` give the floor tier —
+# the ego-only floor is what every floor-crossing claim is defined against, so it is not
+# optional here any more than it was on OPV2V.
+methods: [ours, where2comm, cobevt, v2xvit, ermvp, clc_dense, late]
+
+impairments:
+  # ---------------- delivery (unchanged from matrix.yaml) ----------------
+  latency:
+    param: latency_frames
+    levels: [1, 2, 4, 6, 8, 10]        # 100 ms .. 1 s, identical to OPV2V
+  loss_iid:
+    param: loss_p
+    levels: [0.1, 0.3, 0.5, 0.7, 0.9]
+  loss_burst:
+    param: ge_mean_loss
+    levels: [0.1, 0.3, 0.5, 0.7, 0.9]
+    p_bad_to_good: 0.3
+  bandwidth:
+    param: bandwidth_bits
+    levels: [16, 8, 4, 2, 1]
+
+  # ---------------- content ----------------
+  stale:
+    param: stale_period
+    levels: [2, 4, 8, 16, 32]          # unchanged: sawtooth age in frames
+
+  pose:
+    # RESCALED BY OBJECT SIZE, not by scene extent. Pose error breaks detection when the
+    # displacement it induces is large relative to the object being localised at the IoU
+    # threshold — so the right ratio is object size, not map size.
+    #   OPV2V vehicle anchor  3.9 x 1.6 x 1.56 m
+    #   InCoP indoor anchor   1.0 x 1.0 x 1.0 m      -> ~3.9x, rounded to 4x
+    # OPV2V levels [0.2, 0.4, 0.8, 1.6, 3.2] / 4 -> [0.05, 0.1, 0.2, 0.4, 0.8].
+    #
+    # Sanity check that this is the right ballpark: InCoP's own noise_setting uses
+    # pos_std 0.2 m, which lands exactly on level L2 here. The scaling was derived
+    # independently and agrees with what the authors already validate.
+    #
+    # (Scaling by scene extent instead — 281.6 / 22.4 = 12.6x — would give levels around
+    # 0.016-0.25 m, an order of magnitude tighter than InCoP's own noise setting. That is
+    # the wrong invariant for a detection metric. Recorded so the choice is auditable.)
+    param: pose_xyz_std
+    levels: [0.05, 0.1, 0.2, 0.4, 0.8]
+    # Yaw error displaces a point in proportion to its RANGE, and indoor range is ~12x
+    # shorter, so OPV2V's 2.0 deg/m would be near-invisible here. Anchored instead to
+    # InCoP's own noise_setting (pos_std 0.2 m paired with rot_std 2.0 deg): 2.0 deg at
+    # the 0.2 m level gives 10.0 deg/m.
+    yaw_deg_per_m: 10.0
+
+  ghosts:
+    # Counts unchanged for direct comparison; box geometry rescaled in code. NOTE when
+    # reporting: indoor scenes hold far fewer true objects than a highway scene, so N
+    # ghosts is a proportionally heavier contamination. Report ghosts-per-true-object
+    # alongside the raw level or the two benchmarks are not being compared fairly.
+    param: ghost_count
+    levels: [1, 2, 4, 8, 16]
+    ghost_p: 1.0
+
+  swap:
+    param: swap_p
+    levels: [0.1, 0.3, 0.5, 0.75, 1.0]

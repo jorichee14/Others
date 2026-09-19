@@ -1,0 +1,55 @@
+# Tier 5b. The agent-to-agent primary — and an EASIER problem than track B's.
+name: swarm_slam_nolidar
+family: collaborative_slam
+origin: "[O/I] decentralised multi-robot SLAM with an RGB-D front-end"
+modality: [rgbd]
+coupling: none
+needs_imu: false
+loop_closure: true                 # including INTER-ROBOT, which is the point
+outputs: [trajectory, map]
+reference_impl: https://github.com/lajoiepy/Swarm-SLAM
+image: slambench/swarm-slam:humble
+
+track: collaborative
+# THE DIFFERENCE FROM swarm_slam.yaml, and it is not cosmetic.
+streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
+agent_roles: {mobile_1: rgbd_frontend, mobile_2: rgbd_frontend}
+
+params:
+  nb_odom_edges: 50
+  max_nb_matched_frames: 10
+  detection_threshold: 0.7
+  log_inter_robot_matches: true
+  sensor_type_mobile_1: rgbd
+  sensor_type_mobile_2: rgbd
+
+notes: |
+  DROPPING THE LIDAR MAKES COLLABORATION EASIER, NOT HARDER. track B's
+  swarm_slam pairs mobile_1's Ouster against mobile_2's RealSense, so its
+  inter-robot loop closures have to match descriptors ACROSS modalities — the
+  hard part, and the thing most likely to return zero matches. Here both agents
+  are RGB-D, so place recognition is homogeneous and the matching problem is the
+  ordinary one.
+
+  That makes this row a diagnostic for track B as well as an entry here. If
+  inter-robot matching fires on this pair and not on the LiDAR pair, the cause
+  is the MODALITY GAP and not the system — which is exactly the check track B's
+  B4 specifies, obtained here for free.
+
+  WHAT IT CAN AND CANNOT DO FOR mobile_1. It can bound drift through
+  co-observation: a loop closure at a shared place is a constraint, and joint
+  optimisation distributes the error across both trajectories. It cannot anchor
+  mobile_1 absolutely, because mobile_2 is the weaker platform. So expect a
+  modest gain at best, and read the result primarily as an answer about the
+  COMMON FRAME rather than about mobile_1's odometry. The infrastructure row is
+  the one with an absolute mechanism.
+
+  Report the inter-robot loop closure count beside every number. Zero closures
+  with a good relative-pose error means the two frames happened to agree, not
+  that collaboration worked.
+
+  GATE: B0. The agents start 16.3 m apart in a 16.6 m room. Below ~10% place
+  overlap this row does not run, and the finding is about the RECORDING — fix it
+  by routing both platforms through one shared corridor next session, not by
+  widening the radius until the number looks acceptable. precheck_tracks.py
+  answers it from the two reference TUMs alone.

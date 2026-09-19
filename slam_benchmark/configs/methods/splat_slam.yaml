@@ -1,0 +1,63 @@
+# Reconstruction entry, and the pseudo-GT's downstream consumer. NOT a fourth
+# consensus backbone — see notes for why that placement would break the check.
+name: splat_slam
+family: gaussian_splatting_slam
+origin: "[O/I] evaluated on Replica/TUM/ScanNet; indoor is in distribution"
+modality: [rgbd]                # the STREAM; the RGB-only variant consumes the
+                                # colour image alone, proxy depth comes from its
+                                # own tracker
+coupling: none
+needs_imu: false
+loop_closure: true              # global BA + loop closure over the keyframe graph
+outputs: [trajectory, map]      # the map is a 3D Gaussian field: renderable,
+                                # so it scores on PSNR/SSIM/LPIPS as well as geometry
+reference_impl: https://github.com/eriksandstroem/Splat-SLAM   # RGB-only,
+                                # deformable 3DGS map over a learned-flow tracker
+image: slambench/splat-slam:cuda
+gpu: required
+status: conditional
+conditional_on: >
+  runs when the reconstruction task (B6) is scheduled, or as the learned-slot
+  REPLACEMENT if mast3r_slam proves impractical. Never beside mast3r_slam in
+  the backbone consensus.
+
+streams: [mobile_1.zed_rgbd]
+
+params:
+  mode: rgb                     # RGB-only: do not feed it the dropout-affected
+                                # depth. SplaTAM/RGB-D variants would inherit
+                                # exactly the failure this phase routes around.
+  image_size: null              # per-stream resize, recorded — same trap as
+                                # droid_slam / mast3r_slam
+
+notes: |
+  WHY IT IS NOT A CONSENSUS BACKBONE. The consensus check works only if its
+  members fail independently, and Splat-SLAM's tracking is a learned-flow
+  backbone with proxy depth — the same failure family as MASt3R-SLAM (learned,
+  image-only, GPU). Two learned entries agreeing through a shared prior would
+  certify nothing. Either may hold the learned slot; never both in the check.
+
+  ROLE 1 — the reconstruction task (B6). A Gaussian map is renderable, so it is
+  scored on held-out-view PSNR/SSIM/LPIPS as well as geometry against the
+  anchored map cloud. Oxford Spires is the precedent: their benchmark scores
+  radiance-field methods against survey-grade ground truth, and this room adds
+  the stressor theirs lacks — REFLECTIVE WALLS, where geometry is ambiguous but
+  view-dependent appearance (spherical harmonics) can still model the surface.
+  Whether splats render the reflections or hallucinate geometry behind them is
+  a finding about this scene either way.
+
+  ROLE 2 — the downstream certification instrument, and the reason this entry
+  earns a place in a pseudo-GT paper. Train the SAME splat map twice on
+  mobile_1: once from the pseudo-GT poses, once from the held-out LiDAR
+  reference poses. The held-out-view rendering gap between the two is what the
+  pseudo-GT's pose error COSTS A CONSUMER — the first certification number that
+  is about utility rather than geometry, and it is computable on mobile_2 too
+  (relative comparisons between constructions, no reference needed: better
+  poses render sharper, full stop).
+
+  RGB-only means sim3 scale handling, same rule as mast3r_slam: report sim3 and
+  depth-anchored se3, keep sim3 out of the metric headline.
+
+  Offline and slow, GPU required. Irrelevant as an objection here — the
+  pseudo-GT construction is offline by definition, and this entry never claims
+  a runtime column.

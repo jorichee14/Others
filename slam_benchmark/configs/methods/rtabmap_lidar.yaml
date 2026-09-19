@@ -1,0 +1,28 @@
+name: rtabmap_lidar
+family: lidar_slam
+origin: "[I] indoor by origin and by design — the one entry in the shortlist that
+         was not built for a road"
+modality: [lidar]
+needs_imu: false
+loop_closure: true
+outputs: [trajectory, map, occupancy]
+reference_impl: https://github.com/introlab/rtabmap_ros
+image: slambench/rtabmap:humble
+
+streams: [mobile_1.ouster]
+
+params:
+  Icp/VoxelSize: 0.05
+  Icp/MaxCorrespondenceDistance: 0.20
+  Icp/PointToPlane: "true"
+  Rtabmap/DetectionRate: 1.0
+  Mem/NotLinkedNodesKept: "false"
+  RGBD/ProximityBySpace: "true"
+  Reg/Strategy: 1               # ICP
+
+notes: |
+  Paired with kiss_icp on the same stream, this isolates loop closure without an
+  IMU: same sensor, same trajectory, one has a correction step and the other does
+  not. If the sequence turns out not to revisit (check with the tier-3 revisit
+  count before drawing a conclusion), the two will agree and that agreement is
+  the finding — a non-revisiting sequence cannot evaluate loop closure.

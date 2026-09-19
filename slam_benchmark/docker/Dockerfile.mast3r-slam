@@ -1,0 +1,54 @@
+# The learned backbone. Not a ROS node, so this image does not descend from
+# slambench/base -- it needs nvcc for MASt3R-SLAM's CUDA extension, and ROS is
+# installed on top of CUDA rather than the other way round. rosbag2 is still
+# required: the bag is the input, and unrolling it is step 1 of the run.
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+
+SHELL ["/bin/bash", "-lc"]
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl gnupg2 lsb-release ca-certificates git build-essential cmake python3-pip \
+    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+         -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/ros2.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-ros-base ros-humble-rosbag2-storage-mcap ros-humble-rosbag2-py \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir \
+        torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+RUN pip3 install --no-cache-dir numpy pillow pyyaml plyfile opencv-python-headless tqdm natsort
+
+# Pinned to a COMMIT. MASt3R-SLAM publishes no release tags, and a moving `main`
+# is a manifest that lies about what produced the number in the table.
+ARG MAST3R_SLAM_REF=e6f4e3d474fad0e11f561482012be864ba8c3f17
+# Build for the architectures this benchmark is likely to run on; set it
+# explicitly because the build host has no GPU to detect one from.
+ARG TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0"
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+RUN git clone --recursive https://github.com/rmurai0610/MASt3R-SLAM.git /opt/MASt3R-SLAM && \
+    cd /opt/MASt3R-SLAM && git checkout ${MAST3R_SLAM_REF} && \
+    git submodule update --init --recursive && \
+    pip3 install --no-cache-dir -e thirdparty/mast3r && \
+    pip3 install --no-cache-dir -e thirdparty/in3d && \
+    pip3 install --no-cache-dir --no-build-isolation -e .
+
+# Checkpoints are baked in, because the run happens with --network none. An image
+# that downloads its weights at run time is an image whose result cannot be
+# reproduced once the URL moves.
+RUN mkdir -p /opt/MASt3R-SLAM/checkpoints && cd /opt/MASt3R-SLAM/checkpoints && \
+    base=https://download.europe.naverlabs.com/ComputerVision/MASt3R && \
+    curl -fsSLO $base/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth && \
+    curl -fsSLO $base/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_trainingfree.pth && \
+    curl -fsSLO $base/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_codebook.pkl \
+    || curl -fsSLO $base/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_codebook.pkl
+
+COPY docker/common/bag_to_frames.py /opt/slambench/bag_to_frames.py
+COPY docker/common/restamp_tum.py   /opt/slambench/restamp_tum.py
+COPY docker/mast3r-slam/run.sh      /opt/slambench/run.sh
+RUN chmod +x /opt/slambench/run.sh && mkdir -p /work
+
+ENV SLAM_RATE=1.0
+ENTRYPOINT ["/opt/slambench/run.sh"]
