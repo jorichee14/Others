@@ -215,6 +215,13 @@ def main() -> int:
                          + [repr(float(v)) for v in list(t) + list(q)])
     cmd = [
         "docker", "run", "--rm", "--network", "none",
+        # Docker gives a container 64 MB of /dev/shm. With --network none the DDS
+        # layer has only shared memory and loopback, and three 1280x720 image
+        # topics at 15 Hz exceed a 64 MB segment many times over; the failure is
+        # silent -- messages are dropped, nothing is logged, and the estimator
+        # simply never sees ~a quarter of the frames. Not a tuning knob: the
+        # size of the pipe the bag flows through.
+        "--shm-size", "2g",
         "-v", f"{bag}:/bag:ro",
         "-v", f"{out.resolve()}:/out",
         "-e", f"SLAM_TOPICS={','.join(info['topics'])}",

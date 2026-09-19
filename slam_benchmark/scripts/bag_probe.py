@@ -198,6 +198,26 @@ def main() -> int:                                                 # pragma: no 
         else:
             print("  VERDICT: connected. A lookup between them will resolve.")
 
+    # Exact synchronisation is over THREE topics -- colour, depth and the
+    # colour camera_info -- and a set is silently dropped if any one of the
+    # three is missing at that stamp. The probe compared only the first two;
+    # ~26% of frames vanishing without a log line is exactly what a camera_info
+    # that misses one stamp in four would look like.
+    color, cinfo = stream.get("color_topic"), stream.get("color_info_topic")
+    if color in stamps and cinfo in stamps:
+        c, ci = np.array(stamps[color]), np.array(stamps[cinfo])
+        exact = len(set(np.round(c, 6)) & set(np.round(ci, 6)))
+        print(f"\nCOLOUR vs its CAMERA_INFO   ({len(c)} colour, {len(ci)} info)")
+        print(f"  colour frames with an exactly-stamped camera_info: {exact} / {len(c)}")
+        if exact < len(c):
+            print(f"  VERDICT: {len(c) - exact} colour frames have NO camera_info at their "
+                  f"stamp. Under exact sync each of those is dropped before the estimator "
+                  f"with no message. Either sync approximately with a tight interval, or "
+                  f"relay camera_info with the image's stamp.")
+        else:
+            print("  VERDICT: every colour frame has its camera_info. Exact sync is safe on "
+                  "this axis; if frames still vanish, look at the transport.")
+
     depth, color = stream.get("depth_topic"), stream.get("color_topic")
     if depth in stamps and color in stamps:
         d, c = np.array(stamps[depth]), np.array(stamps[color])
