@@ -39,6 +39,26 @@ dataset:
 # The independent evidence is the board survey, and it is what `uncertainty_m`
 # below is taken from — the WORST of the three boards, not the best, because a
 # claim has to survive the loosest anchor in the frame it is made in.
+#
+# BUT INDEPENDENCE IS PER AGENT, established 2026-09-19 from the mapping
+# pipeline's own config (08_reference.tracks):
+#
+#   mobile_1  published track `mobile_1_lidar`, type lidar_icp, NO boards field.
+#             Pure LiDAR registration into the frozen map. The boards therefore
+#             ARE independent evidence about mobile_1 — its reference never saw
+#             them. (The pipeline's own `mobile_1_lidarboards` track even holds
+#             out rs_anchor, which is the same instinct as this project's.)
+#
+#   mobile_2  published track `mobile_2_rs_odom_icp_boards` — the name is the
+#             recipe: cuVSLAM odometry + depth ICP + BOARD detections, boards
+#             [rs_anchor, anchor, anchor_b]. So the boards were CONSUMED to
+#             build mobile_2's reference and are NOT independent of it. Using
+#             them to check that reference is circular.
+#
+# Consequence for the pseudo-GT protocol: the falsification test on mobile_2
+# (docs/PSEUDO_GT.md V5) cannot lean on the boards. The evidence about mobile_2
+# that is genuinely independent of its reference is `infra_1` (nothing in the
+# pipeline uses it) and co-observation with mobile_1.
 reference:
   kind: pipeline                 # pipeline | survey | external-tracker
   produced_by: glim+scan_to_map  # NAME IT. What produced the reference decides
@@ -114,6 +134,20 @@ reference:
   # the bag metadata and has to be read off the run once. Until a window is
   # filled the anchor is skipped and the evaluator says so rather than scoring a
   # tier it could not compute.
+  # Board ORIENTATIONS (anchor_frame_coop2.json, board_axes "ros", origin
+  # "center"): +z is out of the board face, so the incidence angle to a camera
+  # is computable and `board_visibility.py --anchor-frame` uses it.
+  #   anchor    qxyzw [-0.005077,  0.002281,  0.000012, 0.999985]
+  #   anchor_b  qxyzw [-0.059071, -0.024090, -0.857719, 0.510146]
+  #   rs_anchor qxyzw [ 0.007510,  0.013642,  0.999879, 0.000177]
+  #
+  # DESIGNS (pipeline_config.json). These are SMALL boards, and size decides
+  # usable range far more sharply than field of view does:
+  #   anchor / anchor_b  9x7 squares @ 20 mm = 18.0 x 14.0 cm, 15 mm DICT_4X4_50
+  #   rs_anchor          9x7 squares @ 25 mm = 22.5 x 17.5 cm, 18 mm DICT_5X5_50
+  # At mobile_1's fx=544.9 a 15 mm marker spans 11.4 px at 0.72 m (which the
+  # pipeline detected, 112 views, std 1.98 mm) and 2.0 px at 4.13 m (which no
+  # detector will find). The pipeline's own tracks cap board use at 3.0-3.5 m.
   anchors:
     - name: anchor
       position: [0.0, 0.0, 0.0]
