@@ -82,12 +82,33 @@ SLAM=$!
 # the recorder never reaches its finish(), and three minutes of replay produce an
 # empty directory. A partial trajectory is a result (CLAUDE.md rule 8); nothing
 # at all is not.
-shutdown() {
-    for pid in "$SLAM" "$BRIDGE" ${TFS[@]+"${TFS[@]}"} "$REC"; do
-        [[ -n "$pid" ]] || continue
-        kill -INT "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
+# Ask a process to stop, then INSIST. `wait` with no bound is how a single node
+# that ignores SIGINT turns a completed 156 s replay into a run that never
+# returns -- the replay is done and the poses are computed by then, so the cost
+# of hanging here is the whole run for no reason.
+stop_pid() {
+    local pid=$1 limit=$2 waited=0
+    kill -INT "$pid" 2>/dev/null || return 0
+    while kill -0 "$pid" 2>/dev/null && (( waited < limit )); do
+        sleep 1; waited=$((waited + 1))
     done
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "pid $pid ignored SIGINT for ${limit}s — killing" >&2
+        kill -KILL "$pid" 2>/dev/null || true
+    fi
+    wait "$pid" 2>/dev/null || true
+}
+
+shutdown() {
+    # Order matters: the method first, so its final optimised graph is published
+    # while the recorder is still listening, and the recorder last so it can
+    # write it. The recorder gets the longest grace for the same reason -- it is
+    # the one process whose clean exit IS the deliverable.
+    for pid in "$SLAM" "$BRIDGE" ${TFS[@]+"${TFS[@]}"}; do
+        [[ -n "$pid" ]] && stop_pid "$pid" 20
+    done
+    [[ -n "$REC" ]] && stop_pid "$REC" 45
+    return 0
 }
 interrupted() {
     echo "INTERRUPTED — flushing whatever has been computed so far" >&2
