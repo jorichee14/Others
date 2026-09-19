@@ -112,6 +112,18 @@ to a continuous check that does not come from the thing being tested.
 | `zed_sdk_pose` (m1) | 2.27 m | 2.34 m | 7.76% | 1.100 | 138 mm |
 | `cuvslam_odom` (m2) | **0.183 m** | 0.132 m | **0.73%** | 0.977 | 252 mm |
 
+**Provenance answer (user, 2026-09-19): mobile_2's `global_pose` IS cuVSLAM** +
+anchoring. The 0.18 m row is therefore **self-agreement** and is daggered; what
+it actually measures is the anchoring step's own effect (−2.3% scale, ~18 cm
+shape). mobile_2's only independent evidence is boards + infra + co-observation
+with mobile_1 — the paper's motivating gap is now a recorded fact, not a
+suspicion. Corollary hypothesis for infra round 2: mobile_1's bearing residual
+is +0.11° against a LiDAR-grade reference while mobile_2's is +9° against the
+cuVSLAM-derived one — a systematic +9° at 6–8 m is ~1 m lateral, i.e. plausibly
+a **yaw error in mobile_2's anchoring** rather than (or on top of) a clock
+offset. infra_diag v2's per-agent scan separates them: a clock offset moves with
+dt, an anchoring yaw error does not.
+
 Readings: the "6 m" is actually **2.4 m se3-aligned with a +9% scale error** —
 and the scale error vindicates the reflective-wall diagnosis under a corrected
 mechanism: specular surfaces produce *valid-looking but wrong* depth (virtual

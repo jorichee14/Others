@@ -91,6 +91,20 @@ reference:
       expected_start: [0.697952, -0.062696, 0.193334]
       max_gap_ms: 200
     mobile_2:
+      # PROVENANCE ESTABLISHED 2026-09-19: this trajectory is DERIVED FROM
+      # cuVSLAM (Isaac ROS, stereo-IR + IMU) plus the pipeline's anchoring.
+      # It is an odometry product, not an independent reference. Consequences:
+      #   * scoring cuVSLAM against it is SELF-AGREEMENT. The measured
+      #     0.18 m / 0.73% / scale 0.977 do not state cuVSLAM's accuracy; they
+      #     state what the anchoring step changed (a -2.3% scale correction
+      #     and ~18 cm of shape adjustment).
+      #   * the ONLY independent evidence about mobile_2 is: the board dwells
+      #     (tier 2), the infra_1 observations (once that chain is validated),
+      #     and co-observation with mobile_1. This is the pseudo-GT project's
+      #     motivating gap, now confirmed rather than suspected.
+      #   * any method sharing cuVSLAM's sensors/front-end is correlated with
+      #     this reference — same rule as GLIM against the mobile_1 pipeline.
+      correlated_with: [cuvslam]
       topic: /mobile_2/global_pose        # 1811 msgs, ~11.6 Hz
       frame: camera_color_optical_frame
       expected_start: [7.704074, -14.308017, 0.165040]

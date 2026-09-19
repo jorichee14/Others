@@ -25,9 +25,17 @@ notes: |
   projector supplies texture where passive stereo has none. Do not transfer
   mobile_1's 6 m ZED verdict onto it; it is unmeasured until scored.
 
-  phase0's first look (2026-09-19): path length 24.78 m against the mobile_2
-  reference's 24.65 m — +0.5%. Shape-scale agreement that close is a strong
-  hint, not a result.
+  PROVENANCE RESOLVED 2026-09-19: mobile_2's /global_pose IS derived from this
+  cuVSLAM plus the pipeline's anchoring. So the measured T0 score (0.183 m RMSE,
+  0.73% drift, scale 0.977) is SELF-AGREEMENT, not accuracy — it measures what
+  the anchoring step changed: a -2.3% scale correction and ~18 cm of shape
+  adjustment. The row is daggered against that reference permanently.
+
+  What still counts for this method: the board dwells (tier 2) and, once the
+  chain is validated, the infra_1 residuals — the only evidence about mobile_2
+  that does not descend from cuVSLAM itself. Until those speak, cuVSLAM's
+  accuracy on this sequence is UNKNOWN, however good it looks against its own
+  anchored descendant.
 
   HOW TO READ ITS SCORE. mobile_2's /global_pose is itself the output of a
   pipeline with no LiDAR behind it — the very reference this project exists to
