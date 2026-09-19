@@ -76,6 +76,32 @@ unrolling the bag, running offline, and restamping the result.
 Every one of these has self-tests in `scripts/test_slambench.py` that run
 without ROS, a bag, a GPU or a network.
 
+## Debugging a run from inside
+
+```bash
+python3 scripts/run_method.py --config configs/coop2.yaml \
+    --method configs/methods/rtabmap_rgbd_imu.yaml \
+    --stream mobile_1.zed_rgbd --shell
+```
+
+Same mounts, same environment, bash instead of the entrypoint. Identical on
+purpose: a debugging shell that differs from the run teaches you about the
+shell. Inside, the run is four steps, and running them one at a time is how you
+find which one is lying:
+
+```bash
+source /opt/ros/humble/setup.bash
+python3 /opt/slambench/record_tum.py --pose-topic "$SLAM_POSE_TOPIC" \
+    --path-topic "$SLAM_PATH_TOPIC" --out /out --ros-args -p use_sim_time:=true &
+/opt/slambench/launch.sh &
+ros2 bag play /bag --clock --topics ${SLAM_TOPICS//,/ }
+```
+
+Start the recorder in the FOREGROUND the first time. Backgrounded with `&`, a
+node that dies on its first line is invisible, and the bag then replays into
+nothing for three minutes — which is exactly how a redeclared `use_sim_time`
+went unnoticed across half a dozen runs.
+
 ## Building
 
 ```bash

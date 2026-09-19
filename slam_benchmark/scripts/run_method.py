@@ -159,6 +159,11 @@ def main() -> int:
                          "meaningless and a dropped-frame difference a tuning artefact; "
                          "the harness records it so a mixed table is visible.")
     ap.add_argument("--execute", action="store_true", help="actually start the container")
+    ap.add_argument("--shell", action="store_true",
+                    help="drop into bash inside the container instead of running the "
+                         "entrypoint, with EXACTLY the same mounts and environment. For "
+                         "when a run misbehaves and the question is what the method sees, "
+                         "not what the harness thinks it sees.")
     ap.add_argument("--force", action="store_true",
                     help="run despite preflight problems. Recorded in the manifest and "
                          "printed on every table row that comes out of it.")
@@ -262,6 +267,11 @@ def main() -> int:
         cmd += ["-e", "SLAM_STATIC_TF=" + "\n".join(" ".join(e) for e in static_tf)]
     if mcfg.raw.get("gpu") == "required":
         cmd += ["--gpus", "all"]
+    if args.shell:
+        # -it for a terminal; --entrypoint bash replaces the run script. Everything
+        # else is byte-identical to the real run, which is the entire point: a
+        # debugging shell that differs from the run teaches you about the shell.
+        cmd[2:2] = ["-it", "--entrypoint", "bash"]
     cmd.append(mcfg.raw.get("image", f"slambench/{mcfg.name}:humble"))
 
     out.mkdir(parents=True, exist_ok=True)
@@ -279,6 +289,16 @@ def main() -> int:
     }
 
     print(manifest["command"])
+    if args.shell:
+        print("\ninside the container, the run is these four steps:\n"
+              "  source /opt/ros/humble/setup.bash\n"
+              "  python3 /opt/slambench/record_tum.py --pose-topic \"$SLAM_POSE_TOPIC\" "
+              "--path-topic \"$SLAM_PATH_TOPIC\" --out /out --ros-args -p use_sim_time:=true &\n"
+              "  /opt/slambench/launch.sh &\n"
+              "  ros2 bag play /bag --clock --topics ${SLAM_TOPICS//,/ }\n",
+              file=sys.stderr)
+        return subprocess.run(cmd).returncode
+
     if args.execute:
         t0 = time.time()
         # A Ctrl-C used to propagate straight out of here, so run.json was never
