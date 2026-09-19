@@ -82,14 +82,11 @@ reference:
   map_cloud: null
   agents:
     mobile_1:
-      # DISCREPANCY, unresolved: this file recorded 2833 msgs / ~18.1 Hz, but the
-      # recording's topic table reports 1516 msgs / 9.70 Hz -- exactly the count
-      # and rate of /mobile_1/ouster/points, i.e. one pose per LiDAR sweep, which
-      # is what a LiDAR-derived reference should look like. Probably this note is
-      # stale against an earlier export. It decides how densely the reference can
-      # be interpolated against a 14.7 Hz estimate, so settle it before quoting
-      # any ATE. See docs/MOBILE1_LIDARFREE_ODOMETRY.md, step P1.
-      topic: /mobile_1/global_pose        # 1516 msgs, 9.70 Hz (was: 2833, 18.1 Hz)
+      # RESOLVED by phase0 on the bag (2026-09-19): 1516 poses at 9.70 Hz — one
+      # per LiDAR sweep, as a LiDAR-derived reference should be. The 2833/18.1 Hz
+      # this file once carried was stale. Export measured: 151.5 s, 25.82 m of
+      # path, first pose 32.4 mm from the declared anchor (check passed).
+      topic: /mobile_1/global_pose        # 1516 msgs, 9.70 Hz, measured
       frame: zed_left_camera_optical_frame
       expected_start: [0.697952, -0.062696, 0.193334]
       max_gap_ms: 200
@@ -107,18 +104,28 @@ reference:
     - name: anchor
       position: [0.0, 0.0, 0.0]
       uncertainty_m: 0.007            # 6.9 mm std over 214 views; loop closure 3.2 mm
-      window: null
+      window: null                    # confirmed window; fill from the candidates below
+      # phase0 candidates (t+ seconds into each agent's reference; CONFIRM BY EYE):
+      #   mobile_1: [0.2, 6.5]                                  <- starts here
+      #   mobile_2: [84.3, 88.2], [92.9, 124.6], [133.3, 146.6] <- ends here
+      window_candidates_unconfirmed: true
       note: the map frame's origin, and the only anchor tight enough to resolve
             a centimetre-scale difference between methods
     - name: anchor_b
       position: [8.033, -7.182, -0.102]
       uncertainty_m: 0.013            # the honest figure: 12.9 mm / 2.6 deg between
       window: null                    # its two sections (ratio 4.24, significant).
+      # phase0 candidates: mobile_1 NEVER dwells here; mobile_2: [42.6, 50.0].
+      # So this board anchors mobile_2 only — mobile_1's graph gets two boards,
+      # not three, and its tier-2 check is two points.
       note: its quoted 2.0 mm is the spread WITHIN a section and understates it
     - name: rs_anchor
       position: [8.460, -14.267, -0.056]
       uncertainty_m: 0.015            # std; max residual 40 mm, 1 of 2 sections gated
       window: null
+      # phase0 candidates: mobile_1: [115.7, 151.5] (ends parked here);
+      # mobile_2: [0.0, 20.6] (starts here). The agents SWAP corners over the
+      # run — which is also why place overlap came back 100%.
       note: the loosest of the three; a residual under ~40 mm against this board
             is not evidence of anything
 
@@ -187,17 +194,16 @@ streams:
           modality comparison and this one for the second-platform check.
 
   # I12 RESOLVED 2026-09-17: the radar clouds DO carry a Doppler field, so these
-  # two are live inputs to phase 6 tier 4 and no longer extrinsic-preservation
-  # entries. The velocity field's NAME still has to be read off the bag before
-  # anything decodes it (`velocity`, `doppler` and `v_r` are all in use by
-  # different TI driver forks) -- ros2opv2v/pointclouds.py reads x/y/z/intensity
-  # only and will need the extra field plumbed through.
+  # two are live inputs to phase 6 tier 4. Field layout READ OFF THE BAG
+  # (phase0 2026-09-19): x,y,z,doppler,intensity — all float32, on all three
+  # radars. Only the SIGN convention remains open; resolve it against one
+  # known-motion segment before the ego-velocity front-end trusts it.
   mobile_1.radar1:
     agent: mobile_1
     modality: radar
     topic: /mobile_1/radar1/radar/points_all    # 2470 msgs, 15.8 Hz
     doppler: true
-    doppler_field: null                   # REQUIRED before decoding; see above
+    doppler_field: doppler                # measured off the bag, phase0 2026-09-19
     sensor_frame: radar1_link
     reference_frame_from_sensor: {x: 0.207505, y: 0.076150, z: -0.108883,
                                   roll: -174.5848, pitch: -76.2388, yaw: -95.2193}
@@ -217,7 +223,7 @@ streams:
     modality: radar
     topic: /mobile_1/radar2/radar/points_all    # 2448 msgs, 15.7 Hz
     doppler: true
-    doppler_field: null
+    doppler_field: doppler                # measured off the bag, phase0 2026-09-19
     sensor_frame: radar2_link
     reference_frame_from_sensor: {x: -0.053850, y: 0.046553, z: -0.112039,
                                   roll: 160.0651, pitch: -86.7452, yaw: 24.8992}

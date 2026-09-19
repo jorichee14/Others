@@ -208,6 +208,9 @@ def main() -> int:
                 infra_dyn.append((t, str(e)))
         elif topic == "/tf_static":
             for tr in msg.transforms:
+                key = (str(tr.header.frame_id), str(tr.child_frame_id))
+                if any((t["parent"], t["child"]) == key for t in tf_static):
+                    continue          # two latched publishers, one transform
                 tf_static.append({
                     "parent": str(tr.header.frame_id), "child": str(tr.child_frame_id),
                     "xyz": [tr.transform.translation.x, tr.transform.translation.y,
@@ -260,7 +263,12 @@ def main() -> int:
         print(f"  {tr['parent']:32s} -> {tr['child']:32s} "
               f"xyz=({tr['xyz'][0]:+.4f},{tr['xyz'][1]:+.4f},{tr['xyz'][2]:+.4f}) "
               f"rpy=({r:+.2f},{p_:+.2f},{y:+.2f})deg")
-    imu_chain = [t for t in tf_static if "imu" in t["child"].lower() or "imu" in t["parent"].lower()]
+    def _zed_imu(t):
+        # 'imu' alone is not enough: os_imu (the Ouster's, excluded) matched it
+        # on the real bag and produced a false YES. Caught by the first run.
+        return any("zed" in t[k].lower() and "imu" in t[k].lower()
+                   for k in ("parent", "child"))
+    imu_chain = [t for t in tf_static if _zed_imu(t)]
     print(f"  ZED IMU chain in tf_static: "
           f"{'YES — I13 recoverable from the bag' if imu_chain else 'NO — use the SDK or SN*.conf (I13)'}")
     report["tf_static"] = tf_static
@@ -304,7 +312,7 @@ def main() -> int:
             az = np.array(res_az); rng = np.array(res_rng)
             print(f"    bearing residual  median {np.median(az):+6.2f} deg  "
                   f"p10..p90 [{np.percentile(az,10):+.2f},{np.percentile(az,90):+.2f}]  "
-                  f"{'CONSISTENT SIGN — suspect infra pose/extrinsic' if abs(np.median(az)) > 2 and (np.sign(np.percentile(az,10)) == np.sign(np.percentile(az,90))) else 'sign mixed — ok'}")
+                  f"{'SYSTEMATIC OFFSET — suspect infra pose/extrinsic/clock' if abs(np.median(az)) > 2 else 'centred — ok'}")
             print(f"    range residual    median {np.median(rng):+6.2f} m   "
                   f"p10..p90 [{np.percentile(rng,10):+.2f},{np.percentile(rng,90):+.2f}]")
             report[f"infra/{agent}"] = {"visible_fraction": frac,

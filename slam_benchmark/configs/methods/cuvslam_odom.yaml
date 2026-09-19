@@ -1,0 +1,42 @@
+# Tier 0 for the CONSTRAINED agent. Already in the bag; nothing to run.
+name: cuvslam_odom
+family: recorded_baseline
+origin: "[I] closed-source (NVIDIA Isaac ROS cuVSLAM), run on the cart at record time"
+modality: [rgbd]
+uses_imu_internally: true
+coupling: closed
+needs_imu: false
+loop_closure: false             # tracking/odometry; the slam_path topic carries its LC arm
+outputs: [trajectory]
+reference_impl: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_visual_slam
+image: null
+kind: recorded_baseline
+source_topic: /mobile_2/visual_slam/tracking/odometry     # 4233 msgs, 28.9 Hz
+covariance_topic: /mobile_2/visual_slam/tracking/vo_pose_covariance
+
+streams: [mobile_2.realsense_rgbd]
+
+params: {}
+
+notes: |
+  mobile_2's incumbent, and a DIFFERENT KIND of incumbent from the ZED rows:
+  cuVSLAM here runs STEREO-inertial on the RealSense's infra1/infra2 IR pair —
+  the one rig on this recording with a genuine stereo baseline, and the IR
+  projector supplies texture where passive stereo has none. Do not transfer
+  mobile_1's 6 m ZED verdict onto it; it is unmeasured until scored.
+
+  phase0's first look (2026-09-19): path length 24.78 m against the mobile_2
+  reference's 24.65 m — +0.5%. Shape-scale agreement that close is a strong
+  hint, not a result.
+
+  HOW TO READ ITS SCORE. mobile_2's /global_pose is itself the output of a
+  pipeline with no LiDAR behind it — the very reference this project exists to
+  replace — so ATE against it is agreement between two unproven estimates. The
+  evidence that counts for this row is tier 2 (its boards: rs_anchor at the
+  start, anchor_b mid-run, anchor at the end) and the infra residuals, once
+  the infra chain itself checks out.
+
+  If it passes those, it is the leading BACKBONE candidate for mobile_2's
+  pseudo-GT construction: recorded, stereo-inertial, covariance-carrying —
+  and then, per the producer-exclusion rule, it leaves mobile_2's B1 peer
+  table and its row is daggered there.

@@ -32,6 +32,15 @@ get without its LiDAR*, so every sensor it still carries is in scope.
 
 ## START HERE — the bar is measured, and it is 6 m
 
+> **MEASURED 2026-09-19 — the mechanism below did not survive phase 0.**
+> `depth_health.py` on the real bag: ZED depth is median **85.5% valid** with
+> **zero** starved stretches (RealSense 72.4%, also zero). The 6 m ZED result
+> therefore **cannot be explained by depth dropout**, the RGB-D arm is *not*
+> structurally handicapped here, and the depth-leaning re-ordering below is
+> weakened accordingly. Next step is a properly aligned score of
+> `zed_odom` against the reference — until that exists, treat the 6 m as
+> unexplained, not as a reflectivity story.
+
 **`/mobile_1/zed/odom` lands ~6 m from the reference.** That is ~36% of the
 room's diagonal, so it is not drift — it is a failure. The cause is known and it
 is the room: **the walls are reflective, so the ZED's stereo depth drops out.**
