@@ -17,6 +17,22 @@ streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
 
 params:
   Vis/MinInliers: 15
+  # MEASURED 2026-09-19, and the reason this row scored 26.7% instead of ~100%.
+  # The run tracked cleanly for 12.7 s -- median 245 inliers, p05 95 -- then lost
+  # once and never came back: 510 consecutive frames registering against node -1
+  # with `fromWords = 0 fromImageEmpty = 1`, i.e. an empty frame-to-map model
+  # that nothing rebuilds. RTAB-Map's published default for this parameter is
+  # **0**, documented as "a value of 0 disables auto-reset", so ONE bad moment
+  # ends the run by design and every frame after it is lost for free.
+  #
+  # 8 frames is ~0.54 s at this stream's 14.9 Hz: long enough that a single
+  # blurred or occluded frame does not trigger a reset, short enough that the
+  # pose has not yet become fiction. A reset resumes from the last successfully
+  # computed pose with large covariance, so it is a DISCONTINUITY, not a repair:
+  # scripts/odom_health.py counts them and the count belongs beside this row's
+  # ATE. For a pseudo-GT backbone that trade is right -- the factor graph absorbs
+  # a discontinuity but cannot invent 34 s of missing trajectory.
+  Odom/ResetCountdown: 8   # published default 0 (= never auto-reset)
   Vis/MaxDepth: 8.0
   RGBD/LinearUpdate: 0.05
   RGBD/AngularUpdate: 0.05

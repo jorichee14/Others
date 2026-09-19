@@ -33,6 +33,11 @@ CAUSES = {
     "imu dropped before init": re.compile(r"Dropping imu data"),
 }
 
+# Not a warning -- a DISCONTINUITY. Each one resumes from the last good pose with
+# large covariance, so the trajectory continues but the motion across the reset
+# was never observed. The count belongs beside the ATE, not buried in a log.
+RESET = re.compile(r"Odometry automatically reset")
+
 
 def runs_of_zero(q: np.ndarray) -> list[tuple[int, int]]:
     """Contiguous (start, length) stretches of quality 0.
@@ -78,8 +83,24 @@ def main() -> int:                                             # pragma: no cove
         print(f"  inliers while tracking   median {int(np.median(good))}, "
               f"p05 {int(np.percentile(good, 5))}, min {int(good.min())}")
 
-    stretches = sorted(runs_of_zero(q), key=lambda s: -s[1])
-    print(f"  lost-tracking stretches  {len(stretches)}")
+    # How it did BEFORE anything went wrong, which a whole-run fraction hides:
+    # a run that is perfect for 12 s and then dead reads the same as one that is
+    # mediocre throughout.
+    zeros = runs_of_zero(q)
+    first_loss = min((s for s, _ in zeros if s > 0), default=len(q))
+    if first_loss < len(q):
+        head = q[:first_loss]
+        print(f"  before the first loss      {first_loss} frames "
+              f"({first_loss / args.rate:.1f} s), "
+              f"{100.0 * np.sum(head > 0) / max(len(head), 1):.1f}% tracked")
+
+    resets = len(RESET.findall(text))
+    print(f"  automatic resets           {resets}"
+          + ("   — each is an unobserved jump; report the count beside the ATE"
+             if resets else ""))
+
+    stretches = sorted(zeros, key=lambda s: -s[1])
+    print(f"  lost-tracking stretches    {len(stretches)}")
     for start, length in stretches[:5]:
         print(f"      from frame {start:>5} ({start / args.rate:7.1f} s)  "
               f"{length:>5} frames ({length / args.rate:6.1f} s)"
