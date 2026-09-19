@@ -31,6 +31,12 @@ CAUSES = {
     "tf: frame does not exist": re.compile(r"does not exist"),
     "sync: rgb/depth stamps far apart": re.compile(r"time difference between rgb and depth"),
     "imu dropped before init": re.compile(r"Dropping imu data"),
+    # NOT the same thing as losing tracking. The frame never reached the
+    # estimator at all, so it is missing from the denominator below rather than
+    # failing in the numerator -- and a tracked fraction that quietly shrinks its
+    # own denominator is the most flattering error a benchmark can make.
+    "image dropped: no newer IMU sample": re.compile(
+        r"We didn't receive IMU newer than previous image"),
 }
 
 # Not a warning -- a DISCONTINUITY. Each one resumes from the last good pose with
@@ -64,8 +70,12 @@ def main() -> int:                                             # pragma: no cove
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--log", required=True)
-    ap.add_argument("--rate", type=float, default=14.7,
+    ap.add_argument("--rate", type=float, default=14.9,
                     help="frames per second, to turn frame indices into seconds")
+    ap.add_argument("--expected-frames", type=int, default=None,
+                    help="how many frames the STREAM carries (bag_probe prints it). "
+                         "Without it the tracked fraction is of frames the estimator "
+                         "processed, which is not the same as the fraction of the run.")
     args = ap.parse_args()
 
     text = open(args.log, errors="replace").read()
@@ -77,7 +87,11 @@ def main() -> int:                                             # pragma: no cove
 
     tracked = int(np.sum(q > 0))
     print(f"\n{len(q)} odometry frames, {tracked} tracked "
-          f"({100.0 * tracked / len(q):.1f}%)")
+          f"({100.0 * tracked / len(q):.1f}% of frames PROCESSED)")
+    if args.expected_frames:
+        print(f"  of the whole run           {tracked}/{args.expected_frames} "
+              f"({100.0 * tracked / args.expected_frames:.1f}%) — "
+              f"{args.expected_frames - len(q)} frames never reached the estimator")
     if tracked:
         good = q[q > 0]
         print(f"  inliers while tracking   median {int(np.median(good))}, "
@@ -113,7 +127,15 @@ def main() -> int:                                             # pragma: no cove
             print(f"      {name:<42} {n}")
 
     # The gate, stated rather than implied.
-    frac = tracked / len(q)
+    # The gate is on the RUN, so it uses the run's frame count when one is known.
+    # Scoring against frames the estimator happened to accept would let a method
+    # pass by dropping the hard ones.
+    denominator = args.expected_frames or len(q)
+    frac = tracked / denominator
+    if not args.expected_frames:
+        print("\n  NOTE: --expected-frames not given, so the gate below is over "
+              "PROCESSED frames. A method that drops frames before the estimator "
+              "sees them scores better on that than it deserves.")
     if frac >= 0.90:
         print(f"\n  GATE: PASS — {frac * 100:.1f}% tracked, at or above the 90% "
               f"stage-1 bar.")
