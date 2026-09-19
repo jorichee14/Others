@@ -228,11 +228,10 @@ def main() -> int:
 
     # per-agent clock scan, BEARING ONLY (range is the suspect and cannot vote).
     # Each machine has its own clock, so the offsets need not match.
-    print("\nNOTE: an in-container self-consistency test (2026-09-19) showed the"
-          "\ncomposed ROTATION of this chain is wrong (predicted elevations 20-30 deg"
-          "\noff pure geometry) while the translation is right. Bearings and therefore"
-          "\nthe clock scan below are UNRELIABLE until the rotation is fixed from a"
-          "\nquaternion source; ranges are rotation-invariant and remain valid.")
+    print("\nNOTE: the -5.5 m residual this tool was built to chase was RESOLVED"
+          "\n2026-09-19 -- the config's mast pose was wrong by 5.84 m and 9.34 deg."
+          "\nBoth configs are corrected. A residual reappearing here now means a"
+          "\nNEW problem, not that one.")
     print("\nper-agent clock scan on bearing (best convention, "
           f"dt in ±{args.dt_scan:.0f}s):")
     T_best = combos[best_key]

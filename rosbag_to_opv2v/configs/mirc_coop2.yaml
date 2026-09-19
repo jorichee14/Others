@@ -435,17 +435,30 @@ agents:
       # optical frame — the same convention as the two mobile agents, whose
       # global_pose is also an optical frame.
       #
-      # It sits at x = -5.5 m, i.e. OUTSIDE the box the three surveyed boards
-      # span (x 0..8.5, y 0..-14.3, z ~-0.2..-0.06). That is correct and not a
-      # frame error: the boards mark where the robots dwelled, the infrastructure
-      # camera looks at that area from outside it and from 2 m up.
-      world_pose: {x: -5.508181, y: -2.590753, z: 1.998232,
-                   roll: -117.6730, pitch: 0.7379, yaw: -127.6503}
+      # CORRECTED 2026-09-19 from the published quaternion. The previous value
+      # here was WRONG by 5.84 m and 9.34 deg, and the comment that used to sit
+      # in this spot rationalised it: it argued that x = -5.5 m, outside the box
+      # the surveyed boards span, "is correct and not a frame error". The real
+      # pose is x = +0.183, INSIDE that box. The rationalisation was the tell --
+      # a number that needs an argument for why it looks wrong usually is.
+      #
+      # Measured consequence (slam_benchmark/scripts/infra_diag.py): predicting
+      # where the carts should appear to this node from the old pose gave ranges
+      # ~5 m too long for BOTH agents and bearings ~9 deg off -- which is exactly
+      # the 5.84 m / 9.34 deg the pose itself was wrong by.
+      #
+      # map -> arducam_optical_frame, quaternion xyzw
+      #   [-0.4233836964, 0.7279153638, -0.4589288866, 0.283319159]
+      world_pose: {x: 0.1832321194, y: -3.850593738, z: 1.684896384,
+                   roll: -114.7303, pitch: 1.3671, yaw: -118.7566}
     cloud:
       kind: pointcloud2
       topic: /infra_1/radar/points_all     # 1343 msgs, ~8.6 Hz
       # arducam optical -> infra1_link (the radar), as published. Not identity:
       # the base is the camera, and the radar sits 26 cm from it.
+      # VERIFIED 2026-09-19 against the published quaternion
+      # [0.571431, 0.563856, 0.432969, -0.409965]: identical to 0.0000 deg.
+      # This half was always right; only world_pose above was wrong.
       extrinsic: {x: 0.017773, y: -0.208023, z: -0.155788,
                   roll: 176.0934, pitch: -73.1656, yaw: 92.1354}
       intensity:

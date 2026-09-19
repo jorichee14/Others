@@ -139,22 +139,30 @@ orientation channels are frame-convention artifacts, not measurements — export
 compare body-frame orientations against an optical-frame reference. Translation
 columns only, until orientation conventions are reconciled.
 
-**Infra diagnosis round 2 (2026-09-19):** an in-container self-consistency test
-settled it — feed ground targets across the room through the declared composed
-transform and the predicted **elevations disagree with pure geometry by 20–30°**
-(rs corner: predicted −37.9° vs true −6.4°) while the radar's composed
-**position is right** ([−5.55, −2.58, 2.26]). So the composed **rotation is
-wrong** — an Euler order/direction mismatch between how the pipeline stated
-these rotations and how they are re-derived — and since **predicted range is
-rotation-invariant**, the 7–18 m predictions were correct all along, which means
-the detections at 2.5–7.5 m are **not the carts**. Two live explanations for
-what they are: the IWR6843's chirp config (typical indoor setups top out
-~8–10 m; the carts sit 7–18 m from that corner) or near-mast movers.
-Consequences: phase0's "visibility 73%/56%" is retracted (wide-gate clutter);
-all bearing/clock conclusions are suspended until the rotation is rebuilt from a
-**quaternion** source. infra_diag v3 adds the range-envelope histogram of
-`points_all` (does this radar ever see past 9 m at all?), a `/tf`+`/tf_static`
-quaternion dump for the infra chain, and detection elevations in the raw dump.
+**INFRA RESOLVED (2026-09-19) — the config's mast pose was simply wrong.**
+The user supplied the published `map → arducam_optical_frame` quaternion. Against
+it the config's `static_world_pose` is **off by 5.84 m and 9.34°** — which is
+precisely the −5.5 m range and ~9° bearing residual phase0 measured against
+*both* agents. Corrected in `configs/coop2.yaml` and, per rule 4, in
+`../rosbag_to_opv2v/configs/mirc_coop2.yaml` in the same commit:
+`[-5.508181, -2.590753, 1.998232] → [0.1832321194, -3.850593738, 1.684896384]`,
+rpy `(-117.6730, 0.7379, -127.6503) → (-114.7303, 1.3671, -118.7566)`.
+The cam→radar half **verified identical** to its published quaternion (0.0000°),
+so that half was always right.
+
+Consequences: the detections at 2.5–7.5 m **were the carts** all along — with the
+true pose, predicted ranges land at 2.1/4.3/4.2/8.8/13.5 m across the room. The
+radar's range envelope is **not** in question and the `+infra` factor class is
+**live**. My round-2 claim that "the composed rotation is wrong" is **retracted**:
+that test compared elevation in the *radar* frame against elevation in the *map*
+frame, which differ legitimately for a tilted sensor — an invalid test that
+pointed at the right chain for the wrong reason.
+
+**The tell, worth keeping:** the old value carried a comment in the converter
+config arguing that x = −5.5 m, *outside* the surveyed-board box, "is correct and
+not a frame error." The true x is +0.183, **inside** it. A number that needs an
+argument for why it looks wrong usually is wrong. Every `infra_1` number the
+converter has ever emitted inherits this error and needs regenerating.
 
 **Infra diagnosis round 1:** the DECLARED convention (`cam_fwd/ext_fwd`) wins
 and `mobile_1`'s bearing is essentially perfect (+0.11°) — the geometry chain is
@@ -235,6 +243,7 @@ environment").
 | date | phase | what changed |
 |---|---|---|
 | 2026-09-14 | 0 | Evaluator, configs, container contract, docs. 32 self-tests + e2e smoke green. |
+| 2026-09-19 | 6 | **Infra resolved: the config's mast pose was wrong by 5.84 m / 9.34°**, exactly the residual phase0 measured on both agents. Fixed in both configs (rule 4, same commit); cam→radar verified identical to its quaternion. The detections were the carts; the range-envelope worry is closed and `+infra` is a live factor class. Retracted my round-2 "composed rotation is wrong" claim — that test compared radar-frame elevation against map-frame elevation, which differ legitimately for a tilted sensor. **Every `infra_1` number the converter emitted inherits the bad pose and must be regenerated**, including anything in the sibling perception study. |
 | 2026-09-19 | 6 | T0 scored and infra round 1 analysed (see phase 6 header table). infra_diag upgraded to v2 with the rngNEAR discriminator — verified both ways on synthetic data: cart-at-range found despite same-bearing near clutter (rngNEAR≈0 while the az-pick misleads), and a genuine geometry error shows in rngNEAR too. Per-agent clock scan added because the round-1 scan shifted both agents by one dt while each machine has its own clock — m1's bearing is already centred while m2's improves monotonically toward the scan edge. |
 | 2026-09-19 | 6 | Built `scripts/infra_diag.py` to chase the −5.4 m infra residual mechanically: it enumerates the four pose-direction hypotheses (node pose forward/inverted × cam→radar extrinsic forward/inverted), scores each against BOTH reference trajectories with a loose association, ranks them by how completely they fix both agents at once (a frame error is common to the agents; a per-agent fix is a coincidence), and if even the winner leaves a systematic residual, scans the clock offset before anyone blames the survey. The synthetic truth test caught a design flaw before the bag could: the planned ROS-vs-optical axes dimension is **unidentifiable** with point-cloud detections, because prediction and detection get the same relabelling and the residual cancels — planted-truth recovery kept picking an arbitrary axes label until the dimension was removed. All four pose conventions now recover exactly from planted synthetic truth. If nothing associates under any hypothesis, the script says the survey itself is the problem, which is a different and worse finding. |
 | 2026-09-19 | 6 | **I13 resolved.** The user pulled the wrapper's static TF on the cart: `zed_left_camera_frame→zed_imu_link`, t=[−0.0020, −0.0231, 0.0002] m, q_xyzw=[−0.008474, −0.000611, 0.007383, 0.999937]. That is a **1.290° per-unit misalignment** with a 23.1 mm lever arm — the exact magnitude that justified refusing a nominal transform (≈0.22 m/s² of gravity leaking on every rotation). Composed with tf_static's frame→optical rpy(−90,0,−90) into `IMU.T_b_c1` (imu←left-optical) and filled into both tightly-coupled configs; self-check passes (imu +z maps to optical −y, off-axis components ≈ the stated misalignment). Neither the bag's tf_static nor the `SN*.conf` carried it — the cart's live TF did, which is worth remembering as the recovery route. The tight rows are now held by **I14 alone** (four noise terms); the PyPI `pyzed` package turned out to be an impostor (3 kB, unrelated), so the SDK factory-noise route goes through `get_python_api.py` on a machine with the real SDK, or the overnight Allan log decides it. |

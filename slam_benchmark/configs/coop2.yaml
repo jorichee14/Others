@@ -247,8 +247,18 @@ streams:
     modality: radar
     topic: /infra_1/radar/points_all      # 1343 msgs, 8.6 Hz
     sensor_frame: infra1_link
-    static_world_pose: {x: -5.508181, y: -2.590753, z: 1.998232,
-                        roll: -117.6730, pitch: 0.7379, yaw: -127.6503}
+    # CORRECTED 2026-09-19. Was {x: -5.508181, y: -2.590753, z: 1.998232,
+    # roll: -117.6730, pitch: 0.7379, yaw: -127.6503} -- wrong by 5.84 m and
+    # 9.34 deg, which IS the -5.5 m range and ~9 deg bearing residual phase0
+    # measured against both agents. Source: the published map ->
+    # arducam_optical_frame quaternion xyzw
+    #   [-0.4233836964, 0.7279153638, -0.4589288866, 0.283319159]
+    # Changed in the same commit as ../rosbag_to_opv2v/configs/mirc_coop2.yaml,
+    # per rule 4.
+    static_world_pose: {x: 0.1832321194, y: -3.850593738, z: 1.684896384,
+                        roll: -114.7303, pitch: 1.3671, yaw: -118.7566}
+    # VERIFIED 2026-09-19 against the published quaternion
+    # [0.571431, 0.563856, 0.432969, -0.409965] -- identical to 0.0000 deg.
     reference_frame_from_sensor: {x: 0.017773, y: -0.208023, z: -0.155788,
                                   roll: 176.0934, pitch: -73.1656, yaw: 92.1354}
     note: a STATIC agent, so it has no trajectory to estimate. Its value to this
