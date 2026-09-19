@@ -105,11 +105,16 @@ went unnoticed across half a dozen runs.
 ## Building
 
 ```bash
-docker build -f docker/Dockerfile.base        -t slambench/base:humble .
-docker build -f docker/Dockerfile.kiss-icp    -t slambench/kiss-icp:humble .
-docker build -f docker/Dockerfile.rtabmap     -t slambench/rtabmap:humble .
-docker build -f docker/Dockerfile.mast3r-slam -t slambench/mast3r-slam:humble .   # GPU, ~10 GB
+docker/build.sh          # base + kiss-icp + rtabmap, in order
+docker/build.sh --all    # also mast3r-slam (GPU, ~10 GB)
 ```
+
+**Always the script, never one image.** The method images are `FROM
+slambench/base:humble` and Docker snapshots the base's layers into them at
+build time — rebuilding the base changes *nothing* in an already-built method
+image, which keeps running the entrypoint and recorder it was built with. A
+recorder fix rebuilt into base alone was invisible to every rtabmap run for an
+afternoon.
 
 Pin every method to a commit in its Dockerfile, not to a branch. `run.json`
 records the image tag; the tag is only useful if it means one thing.
