@@ -167,16 +167,25 @@ reference:
       window_candidates_unconfirmed: true
       note: the map frame's origin, and the only anchor tight enough to resolve
             a centimetre-scale difference between methods
-      # WINDOWS from scripts/board_visibility.py (2026-09-19): the board
-      # PROJECTED INTO THE CAMERA through the reference pose, so these are
-      # "in frame, close, and slow", not merely "nearby".
+      # WINDOWS from scripts/board_visibility.py (2026-09-19), VALIDATED:
+      # the board projected into the camera through the reference pose and
+      # gated on four things at once -- in frame, facing (incidence to the
+      # board's +x normal), close enough that the ChArUco is detectable
+      # (px/bit), and slow. Not merely "nearby".
       #   mobile_1: [1787899804.049, 1787899813.149]   # 92 poses, 0.72 m, t+0.2..9.3
       #   mobile_2: [1787899920.037, 1787899932.277]   # 100 poses, 1.36 m, t+116.0..128.2
       # Per-agent, so `window` is filled by the evaluator from the agent being
       # scored -- see windows_by_agent below.
       windows_by_agent:
-        mobile_1: [1787899804.049, 1787899813.149]
-        mobile_2: [1787899920.037, 1787899932.277]
+        # clamped to the pipeline's own departure_t (1787899810.524,
+        # end of the static dwell it fused 112 board views over at 1.98 mm).
+        # 92 ref poses, 0.72 m, 1.90 px/bit, facing at 16.5 deg incidence.
+        mobile_1: [1787899804.049, 1787899810.524]
+        # STALE -- chosen by the old "longest window" rule at 1.36 m, where
+        # a 15 mm marker is 1.19 px/bit: UNDETECTABLE. The mobile_2 run has
+        # closer windows (0.66-0.69 m, one with 161 poses). Re-run
+        # board_visibility.py for mobile_2 with --anchor-frame and replace.
+        mobile_2: null
       # STILL REQUIRED before tier 2 produces a number: `observations`, the
       # board's position in the camera frame per frame, from ChArUco detection
       # + PnP. absolute_check REFUSES on a window alone, because the platform
@@ -190,16 +199,23 @@ reference:
       # So this board anchors mobile_2 only — mobile_1's graph gets two boards,
       # not three, and its tier-2 check is two points.
       note: its quoted 2.0 mm is the spread WITHIN a section and understates it
-      # WINDOWS from scripts/board_visibility.py (2026-09-19): the board
-      # PROJECTED INTO THE CAMERA through the reference pose, so these are
-      # "in frame, close, and slow", not merely "nearby".
+      # WINDOWS from scripts/board_visibility.py (2026-09-19), VALIDATED:
+      # the board projected into the camera through the reference pose and
+      # gated on four things at once -- in frame, facing (incidence to the
+      # board's +x normal), close enough that the ChArUco is detectable
+      # (px/bit), and slow. Not merely "nearby".
       #   mobile_1: [1787899851.951, 1787899855.651]   # 38 poses, 4.13 m, t+48.1..51.8 -- FAR; a board at 4 m is small in a 960x540 frame, so its PnP will be the weakest of the six
       #   mobile_2: [1787899845.505, 1787899851.507]   # 61 poses, 0.84 m, t+41.5..47.5
       # Per-agent, so `window` is filled by the evaluator from the agent being
       # scored -- see windows_by_agent below.
       windows_by_agent:
-        mobile_1: [1787899851.951, 1787899855.651]
-        mobile_2: [1787899845.505, 1787899851.507]
+        # mobile_1: NONE. In frame 23.9% of the run but never closer
+        # than 2.48 m, where a 15 mm marker spans 0.5 px/bit. Undetectable.
+        # mobile_1 therefore has TWO usable boards, not three.
+        mobile_1: null
+        # measured at 0.84 m / 1.92 px/bit -- detectable, but selected before
+        # the facing gate existed. Re-run to confirm.
+        mobile_2: [1787899845.505, 1787899851.507]   # PROVISIONAL
       # STILL REQUIRED before tier 2 produces a number: `observations`, the
       # board's position in the camera frame per frame, from ChArUco detection
       # + PnP. absolute_check REFUSES on a window alone, because the platform
@@ -214,16 +230,24 @@ reference:
       # run — which is also why place overlap came back 100%.
       note: the loosest of the three; a residual under ~40 mm against this board
             is not evidence of anything
-      # WINDOWS from scripts/board_visibility.py (2026-09-19): the board
-      # PROJECTED INTO THE CAMERA through the reference pose, so these are
-      # "in frame, close, and slow", not merely "nearby".
+      # WINDOWS from scripts/board_visibility.py (2026-09-19), VALIDATED:
+      # the board projected into the camera through the reference pose and
+      # gated on four things at once -- in frame, facing (incidence to the
+      # board's +x normal), close enough that the ChArUco is detectable
+      # (px/bit), and slow. Not merely "nearby".
       #   mobile_1: [1787899928.753, 1787899955.354]   # 267 poses, 0.75 m, t+124.9..151.5 (parked at the end)
       #   mobile_2: [1787899810.489, 1787899821.794]   # 128 poses, 0.81 m, t+6.4..17.7
       # Per-agent, so `window` is filled by the evaluator from the agent being
       # scored -- see windows_by_agent below.
       windows_by_agent:
+        # 267 ref poses, 0.75 m, 1.87 px/bit, facing. The longest and
+        # closest window on either agent; the cart is parked here to the end.
         mobile_1: [1787899928.753, 1787899955.354]
-        mobile_2: [1787899810.489, 1787899821.794]
+        # 0.81 m / 2.05 px/bit -- the only pair that cleared detectability
+        # outright. Selected before the facing gate; re-run to confirm.
+        # NOTE the pipeline's realsense departure_t is 1787899814.726, so the
+        # static portion ends ~7 s before this window does.
+        mobile_2: [1787899810.489, 1787899821.794]   # PROVISIONAL
       # STILL REQUIRED before tier 2 produces a number: `observations`, the
       # board's position in the camera frame per frame, from ChArUco detection
       # + PnP. absolute_check REFUSES on a window alone, because the platform
