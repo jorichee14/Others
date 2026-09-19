@@ -1558,6 +1558,36 @@ def test_rtabmap_odometry_processes_every_frame_not_the_newest():
     assert "qos:=1" in launch
 
 
+@test
+def test_every_run_keeps_its_own_directory():
+    """Two identical RTAB-Map runs scored 365 mm and 451 mm; the second erased
+    the first. A method whose answer varies between runs needs every run kept."""
+    import io, contextlib
+    import scripts.run_method as rm
+    root = str(Path(__file__).resolve().parents[1])
+    runs = tempfile.mkdtemp()
+    manifests = []
+    for _ in range(2):
+        saved = sys.argv
+        try:
+            sys.argv = ["run_method.py",
+                        "--config", os.path.join(root, "configs", "coop2.yaml"),
+                        "--method", os.path.join(root, "configs", "methods", "rtabmap_rgbd.yaml"),
+                        "--stream", "mobile_1.zed_rgbd", "--runs-root", runs]
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                assert rm.main() == 0
+            manifests.append(Path(buf.getvalue().split("manifest -> ", 1)[1].splitlines()[0]))
+        finally:
+            sys.argv = saved
+        import time as _t; _t.sleep(1.1)          # distinct second-resolution stamps
+    assert manifests[0].exists() and manifests[1].exists()
+    assert manifests[0].parent != manifests[1].parent, "the second run overwrote the first"
+    cell = manifests[0].parent.parent
+    assert (cell / "latest").is_symlink()
+    assert (cell / "latest").resolve() == manifests[1].parent.resolve()
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

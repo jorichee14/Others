@@ -184,7 +184,14 @@ def main() -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    out = Path(args.runs_root) / cfg.name / mcfg.name / args.stream
+    # One directory PER RUN, never overwritten. Two identical runs of RTAB-Map
+    # scored 365 mm and 451 mm; the second erased the first, so the odometry
+    # files that would have said whether the front-end or the graph moved were
+    # gone. A method whose answer varies between runs needs every run kept, and
+    # a spread reported beside the number (rule 8 in the other direction: a
+    # good number is not a result either, without its variance).
+    cell = Path(args.runs_root) / cfg.name / mcfg.name / args.stream
+    out = cell / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     bag = Path(args.bag or cfg.raw["dataset"]["bag"]).expanduser()
 
     if problems:
@@ -299,6 +306,10 @@ def main() -> int:
     cmd.append(mcfg.raw.get("image", f"slambench/{mcfg.name}:humble"))
 
     out.mkdir(parents=True, exist_ok=True)
+    latest = cell / "latest"
+    if latest.is_symlink() or latest.exists():
+        latest.unlink()
+    latest.symlink_to(out.name)
     manifest = {
         "dataset": cfg.name, "method": mcfg.name, "agent": info["agent"],
         "stream": info["stream_key"], "topics": info["topics"],

@@ -39,6 +39,9 @@ def main() -> int:
     ap.add_argument("--reference-map", default=None, help="override reference.map_cloud")
     ap.add_argument("--alignment", default=None, help="override eval.alignment")
     ap.add_argument("--skip-map", action="store_true")
+    ap.add_argument("--trajectory-file", default="trajectory.tum",
+                    help="which file in the run directory to score. odometry.tum is the "
+                         "front-end alone, recorded beside the graph on every run.")
     args = ap.parse_args()
 
     cfg, mcfg = load_dataset(args.config), load_method(args.method)
@@ -67,7 +70,7 @@ def main() -> int:
         out["run"] = json.loads(manifest.read_text())
 
     # ------------------------------------------------------------- trajectory
-    traj_file = run / "trajectory.tum"
+    traj_file = run / args.trajectory_file
     if not traj_file.exists():
         if "trajectory" in mcfg.outputs:
             out["status"] = f"no trajectory.tum in {run}"
