@@ -59,16 +59,16 @@ print(" ".join(to_args(json.loads(os.environ.get("SLAM_PARAMS") or "{}"), exclud
 echo "odometry : $ODOM_ARGS"
 echo "mapping  : $RTAB_ARGS"
 
-# NO odom_info. Measured across every run: with the mapping node dead the
-# odometry processes consecutive frames (period 67 ms, 72% kept); with it
-# alive, exactly every other frame (period 134 ms, 20-41% kept), at both replay
-# rates, with the bag delivering all 2291 frames and the callback's own cost at
-# p90 46 ms. The one thing the mapping node changes INSIDE the odometry node is
-# subscribe_odom_info: with a subscriber present, the odometry builds and
-# publishes the whole local feature map on every frame, in the hot path. It is
-# switched off. Gravity still reaches the graph: the mapping node subscribes to
-# the IMU itself, and Mem/UseOdomGravity (which would take gravity from
-# odom_info instead) is left at its published default, false.
+# RELIABLE SUBSCRIPTIONS (qos:=1). The frame loss, finally: the launch's
+# default qos:=0 is SYSTEM_DEFAULT, which rmw_fastrtps leaves at the DDS
+# default -- and the DDS default for a DataReader is BEST_EFFORT. Compatible
+# with the bag's RELIABLE writer, but with no retransmission: any sample lost
+# in flight is gone below the node, below the synchroniser, below its own
+# "Topics Dropped" counter (which read 0). The recorder's witness subscribes
+# RELIABLE and saw all 2291 frames while rgbd_odometry saw a third; the loss
+# was per-process, count-based, the same at every replay rate, and worse with
+# a second heavy reader. subscribe_odom_info stays off (it is not needed:
+# gravity reaches the graph through the mapping node's own IMU subscription).
 #
 # PROCESS EVERY FRAME, NOT THE MOST RECENT ONE. rgbd_odometry defaults to
 # always_process_most_recent_frame=true: the worker thread holds dataMutex_ for
@@ -127,6 +127,7 @@ exec ros2 launch rtabmap_launch rtabmap.launch.py \
     odom_always_process_most_recent_frame:=false \
     topic_queue_size:=50 sync_queue_size:=50 \
     subscribe_odom_info:=false \
+    qos:=1 \
     publish_tf_odom:=false \
     publish_tf_map:=false \
     rtabmap_viz:=false rviz:=false \

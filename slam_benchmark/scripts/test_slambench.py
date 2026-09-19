@@ -1551,7 +1551,11 @@ def test_rtabmap_odometry_processes_every_frame_not_the_newest():
     # processing races the next image into a silent lockTry() drop. The bag
     # delivered 2291 frames; the node processed ~720 with it on.
     assert "wait_imu_to_init:=true" in launch      # off made the tracking worse, not the drops better
-    assert "subscribe_odom_info:=false" in launch  # the one mapping->odometry coupling in the hot path
+    assert "subscribe_odom_info:=false" in launch
+    # THE frame-drop fix: qos:=0 is SYSTEM_DEFAULT, which rmw_fastrtps resolves
+    # to a BEST_EFFORT reader. The recorder's RELIABLE witness saw 2291 frames
+    # while the odometry saw a third, with its own drop counter at zero.
+    assert "qos:=1" in launch
 
 
 def main() -> int:
