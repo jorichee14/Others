@@ -185,6 +185,23 @@ backbone tracks ≥ 90% of the run on each platform.
 | `zed_sdk_pose` (m1) | 2.27 m | 2.34 m | 7.76% | 1.100 | 138 mm |
 | `cuvslam_odom` (m2) | **0.183 m** | 0.132 m | **0.73%** | 0.977 | 252 mm |
 | **`rtabmap_rgbd_imu` odometry-only (m1)** | **0.408 m** | 0.444 m | **1.43%** | **1.064** | 151 mm |
+| **`rtabmap_rgbd_imu` loop-closed graph (m1)** | **0.365 m** | 0.387 m | **1.52%** | **1.057** | 147 mm |
+
+**STAGE 1 GATE PASSED (2026-09-19): first LiDAR-free backbone on `mobile_1`.**
+2227/2288 frames processed (97.3%), period 67 ms, **0 resets**, one map session,
+95 optimised nodes exported from the database over 99% of the run. The
+loop-closed row scores **365 mm ATE, 1.52% drift, scale 1.057**, revisit 147 mm
+on 6 pairs — against 408 mm / 1.43% / 1.064 for the front-end alone. **Loop
+closure bought ~40 mm, not 340.** The error is not drift; it is a **global scale
+bias of +5.7%**, which loop closure cannot correct by construction — it fixes
+accumulated relative error, not a multiplier on every edge. That is the
+range-dependent ZED depth error (`depth_vs_lidar`: +6% at 1 m, −8% at 2 m)
+showing up exactly where predicted, and it is the number the depth-free rows
+(`orbslam3_mono_inertial`, `mast3r_slam`) and the board anchors exist to
+address. **The earlier 63.5 mm and 73.7 mm loop-closed figures are retracted as
+partial-trajectory artefacts**: they scored the graph component reachable from
+node 1 — 34 and 28 poses of a run split into 3–4 sessions by resets — not the
+trajectory.
 
 **First LiDAR-free backbone measured (2026-09-19), against the held-out LiDAR:**
 RTAB-Map's RGB-D+IMU front-end with **no loop closure** (the run whose mapping
@@ -392,6 +409,7 @@ environment").
 | date | phase | what changed |
 |---|---|---|
 | 2026-09-14 | 0 | Evaluator, configs, container contract, docs. 32 self-tests + e2e smoke green. |
+| 2026-09-19 | 6 | **`qos:=1` closed it: 2227/2288 frames (97.3%), 0 resets, 95 nodes, GATE PASS.** Loop-closed row on the whole run: **365 mm / 1.52% / scale 1.057**, essentially the front-end's 408 / 1.43 / 1.064 — loop closure buys ~40 mm because the error is a +5.7% scale bias, not drift. That is the depth-scale story from Phase 0 landing where predicted. The 63.5/73.7 mm figures from the reset-fragmented runs are retracted as partial-component artefacts. Still on `--dev`-mounted scripts: the images need `docker/build.sh` and one clean run for a reproducible manifest before the row goes in a table. |
 | 2026-09-19 | 6 | **The frame loss, with the node's own numbers.** `/diagnostics` recorded: `rgbd_odometry: Topics Dropped: 0`. The odometry believes it dropped nothing — it received ~674 synchronised sets and processed all of them — while the recorder's witness subscriber received **2291**. So the loss is below the node and below the synchroniser, per process. Cause: the launch's default **`qos:=0` is SYSTEM_DEFAULT**, which rmw_fastrtps leaves at the DDS default, and the DDS default for a DataReader is **BEST_EFFORT**: compatible with the bag's RELIABLE writer, but no retransmission — a sample lost in flight is simply gone. The witness asks for RELIABLE and sees everything. Per-process, count-based, rate-independent, worse with a second heavy reader, invisible to every RTAB-Map counter: every measurement of the day. Five wrong theories before it (`ResetCountdown` sessions aside — that one was right): CPU, `/dev/shm`, `always_process_most_recent_frame`, the parked-frame race, `odom_info`. `wait_imu_to_init:=false` is reverted (4 resets); `subscribe_odom_info:=false` stays (harmless, gravity comes from the mapping node's IMU subscription). Fix: `qos:=1`. |
 | 2026-09-19 | 6 | **The silent drops, for real this time — measured, not argued.** The recorder now witnesses the input: the bag delivered **2291** depth frames and `rgbd_odometry` processed **717**. So the loss is inside the node, and `always_process_most_recent_frame:=false` (confirmed forwarded — same launch line as the queue sizes that did arrive) changed nothing, so my `lockTry` story was wrong as stated. The mechanism is one line further in: `OdometryROS::processData()` line 553 **parks** any image whose stamp is ahead of the newest IMU sample received (`wait_imu_to_init=true` only); the IMU callback later releases it to the **worker thread**, which holds `dataMutex_` for the whole job, `odom_info` included, and every image landing meanwhile fails `lockTry()` and is dropped silently. Parking is an ORDERING property of the recording → identical at every replay rate, immune to the most-recent-frame flag, worse with the mapping node (longer lock). Fix: `wait_imu_to_init:=false` — frames process inline with the IMU up to their stamp, nothing is parked, no race. Gravity still enters; only the first frame's orientation is not IMU-initialised. |
 | 2026-09-19 | 6 | **Loop-closed row: 63.5 mm ATE / 0.56% drift / scale 1.018 / anchor 24.8 mm — on 34 poses.** Then the two remaining mysteries, both solved by reading rather than running. (1) **The silent drops are `always_process_most_recent_frame=true`** (rgbd_odometry default): the worker holds `dataMutex_` for all of `processData()` — estimation plus serialising `odom_info`, built only when the mapping node subscribes — and the image callback `lockTry()`s and drops any frame that lands meanwhile, no log line. Fits every number: 72% kept alone, ~40% with the mapping node, identical at 1.0× and 0.5× replay (callback p90 46 ms vs a 134 ms period, max 471 ms), QoS RELIABLE. RTAB-Map's own warning names the fix for bags: `always_process_most_recent_frame:=false`; queues raised 10→50. Harness plumbing, not method tuning. (2) **The 34 poses are one of three map sessions.** Each `Odom/ResetCountdown` reset publishes a large covariance, which starts a new map; `rtabmap-export` walks the component connected to node 1 (`getConnectedGraph(lower_bound(1))`), `--opt 2` the same, `--opt 3` all 77 nodes but unoptimised. The sessions were never linked by a cross-session closure. Expected to shrink with the drop fix: halving the frame rate doubles inter-frame motion, which is what lost tracking at 16.7 s and 47.7 s in the dropped runs versus 82 s at 72%. Resets (= sessions − 1) are the number to watch on the next run. |

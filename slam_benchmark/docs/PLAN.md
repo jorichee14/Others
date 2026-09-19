@@ -111,6 +111,14 @@ Run each on `mobile_1.zed_rgbd` (LiDAR held out) and on
 `mobile_2.realsense_rgbd`. Score vs the reference on `mobile_1`; hold the
 `mobile_2` runs for stages 3–4.
 
+**GATE PASSED 2026-09-19 on `rtabmap_rgbd_imu` × `mobile_1`: 97.3% of the run
+tracked, 0 resets, 95 optimised nodes. Loop-closed ATE 365 mm / drift 1.52% /
+scale 1.057 vs 408 / 1.43% / 1.064 for the front-end alone — the residual is a
++5.7% scale bias that loop closure cannot touch, i.e. the depth. Getting there
+took one line (`qos:=1`; RTAB-Map's default subscriptions are best-effort under
+rmw_fastrtps and silently lost two thirds of the frames) and is recorded in
+`IMPLEMENTATION.md`. Remaining cells unchanged below.**
+
 **MEASURED 2026-09-19 — the grid is five cells and one named blocker, not six.**
 `scripts/bag_probe.py` on the bag: `/tf_static` carries **7 edges in 2
 disconnected trees** — the ZED chain and the Ouster chain — and nothing else. No
