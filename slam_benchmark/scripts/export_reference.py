@@ -55,7 +55,10 @@ def main() -> int:
     reader = BagReader(str(Path(bag).expanduser()), stamp_source="header")
 
     stamps, poses = [], []
-    for topic, msg, stamp_ns in reader.iter_messages([ref["topic"]]):
+    # BagReader.iter_messages yields (topic, stamp_ns, msg) — in that order.
+    # This loop once unpacked it as (topic, msg, stamp_ns) and would have
+    # crashed on the first message; it had never met a real bag.
+    for topic, stamp_ns, msg in reader.iter_messages([ref["topic"]]):
         p = getattr(msg, "pose", msg)
         p = getattr(p, "pose", p)                    # PoseStamped or PoseWithCovarianceStamped
         t = [p.position.x, p.position.y, p.position.z]
