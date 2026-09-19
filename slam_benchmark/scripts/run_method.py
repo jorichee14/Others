@@ -159,6 +159,12 @@ def main() -> int:
                          "meaningless and a dropped-frame difference a tuning artefact; "
                          "the harness records it so a mixed table is visible.")
     ap.add_argument("--execute", action="store_true", help="actually start the container")
+    ap.add_argument("--dev", action="store_true",
+                    help="bind-mount docker/common/*.py and entrypoint.sh over the image's "
+                         "copies, so a fix to the harness scripts runs without a 7-minute "
+                         "rebuild. Recorded in run.json: the image tag no longer describes "
+                         "what ran, so a --dev run is for getting the harness right, not "
+                         "for a table.")
     ap.add_argument("--shell", action="store_true",
                     help="drop into bash inside the container instead of running the "
                          "entrypoint, with EXACTLY the same mounts and environment. For "
@@ -267,6 +273,10 @@ def main() -> int:
         cmd += ["-e", "SLAM_STATIC_TF=" + "\n".join(" ".join(e) for e in static_tf)]
     if mcfg.raw.get("gpu") == "required":
         cmd += ["--gpus", "all"]
+    if args.dev:
+        common = ROOT / "docker" / "common"
+        for f in sorted(common.glob("*.py")) + [common / "entrypoint.sh"]:
+            cmd[2:2] = ["-v", f"{f}:/opt/slambench/{f.name}:ro"]
     if args.shell:
         # -it for a terminal; --entrypoint bash replaces the run script. Everything
         # else is byte-identical to the real run, which is the entire point: a
@@ -283,6 +293,7 @@ def main() -> int:
         "command": " ".join(shlex.quote(c) for c in cmd),
         "started_utc": datetime.now(timezone.utc).isoformat(),
         "preflight_problems": problems,
+        "dev_scripts_mounted": bool(args.dev),
         "forced": bool(problems and args.force),
         "executed": bool(args.execute),
         "host": os.uname().nodename,

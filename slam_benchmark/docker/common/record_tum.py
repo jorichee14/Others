@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import resource
+import sys
 import time
 from pathlib import Path
 
@@ -126,7 +127,13 @@ class Recorder(Node):
             traj.write_text(odom.read_text())
             source, n = "odometry", self.n
         if self.cloud is not None:
-            self._write_ply(self.cloud, self.out / "map.ply")
+            try:
+                self._write_ply(self.cloud, self.out / "map.ply")
+            except Exception as e:                           # noqa: BLE001
+                # The map is a bonus; the trajectory is the deliverable and is
+                # already on disk. Do not let a missing sensor_msgs_py take
+                # timing.json down with it -- say so and carry on.
+                print(f"map.ply not written: {e}", file=sys.stderr)
         ru = resource.getrusage(resource.RUSAGE_SELF)
         (self.out / "timing.json").write_text(json.dumps({
             "frames": n, "odometry_poses": self.n,
@@ -173,7 +180,6 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
 
 
 def main():
-    import sys
     args, ros_argv = parse(sys.argv)
 
     rclpy.init(args=ros_argv)

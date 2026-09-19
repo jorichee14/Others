@@ -5,7 +5,7 @@ SHELL ["/bin/bash", "-lc"]
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip git build-essential cmake \
         ros-humble-rosbag2-storage-mcap \
-        ros-humble-tf2-ros ros-humble-tf2-py \
+        ros-humble-tf2-ros ros-humble-tf2-py ros-humble-sensor-msgs-py \
     && rm -rf /var/lib/apt/lists/*
 RUN pip3 install --no-cache-dir numpy
 

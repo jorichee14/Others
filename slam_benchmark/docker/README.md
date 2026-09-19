@@ -76,6 +76,19 @@ unrolling the bag, running offline, and restamping the result.
 Every one of these has self-tests in `scripts/test_slambench.py` that run
 without ROS, a bag, a GPU or a network.
 
+## Iterating on the harness scripts without rebuilding
+
+```bash
+python3 scripts/run_method.py ... --execute --dev
+```
+
+`--dev` bind-mounts `docker/common/*.py` and `entrypoint.sh` over the image's
+copies, so a fix to the recorder or the entrypoint runs immediately. The base
+image is `FROM` for every method image, so a one-line script fix otherwise
+costs a full rebuild of all of them. `run.json` records `dev_scripts_mounted`,
+because the image tag then no longer describes what ran: a `--dev` run is for
+getting the harness right, never for a table.
+
 ## Debugging a run from inside
 
 ```bash
