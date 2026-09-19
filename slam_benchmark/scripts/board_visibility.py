@@ -136,12 +136,33 @@ def main() -> int:
     normals = {}
     if args.anchor_frame:
         import json
-        af = json.load(open(args.anchor_frame))
-        for bname, b in af.get("boards", {}).items():
-            q = np.asarray(b["qxyzw"], dtype=np.float64)
-            R = se3.quat_to_rot(q / np.linalg.norm(q))
-            normals[bname] = R[:, 2]     # board_axes "ros": +z out of the board
-        print(f"board orientations loaded for {sorted(normals)}\n")
+        for path in args.anchor_frame.split(","):
+            af = json.load(open(path.strip()))
+            axes = af.get("board_axes", "ros")
+            # WHICH AXIS IS THE OUTWARD NORMAL is a convention, and getting it
+            # wrong rejects every view silently. Settled against ground truth:
+            # the pipeline detected `anchor` 112x (std 1.98 mm) from the ZED at
+            # map [0.698, -0.063, 0.193], and `rs_anchor` 92x from the RealSense.
+            # Dotting each board axis with the direction to the camera that DID
+            # see it gives +0.96 on +x for both boards, and only +0.27 on +z.
+            # So "ros" board axes put the normal on +x (x forward out of the
+            # face); an OpenCV-convention board would put it on +z.
+            col = 0 if axes == "ros" else 2
+            for bname, b in af.get("boards", {}).items():
+                if bname in normals:
+                    continue
+                q = np.asarray(b["qxyzw"], dtype=np.float64)
+                normals[bname] = se3.quat_to_rot(q / np.linalg.norm(q))[:, col]
+        missing = [a["name"] for a in cfg.raw["reference"]["anchors"]
+                   if a["name"] not in normals]
+        print(f"board normals ({'+x' if col == 0 else '+z'}, board_axes="
+              f"{axes!r}) loaded for {sorted(normals)}")
+        if missing:
+            print(f"  NO ORIENTATION for {missing} -- the facing test is skipped "
+                  f"for those.\n  anchor_frame_coop2.json carries only the boards "
+                  f"03_anchor used;\n  pass a comma-separated list to merge in the "
+                  f"rest (e.g. anchor_frame.json).")
+        print()
 
     v = np.zeros(len(traj))
     if len(traj) > 1:
@@ -205,9 +226,11 @@ def main() -> int:
                   f"t+{s-t0:.1f}..t+{e-t0:.1f} s into the run")
             print(f"  window: [{s:.3f}, {e:.3f}]")
 
-    print("\nCANDIDATES, not proof. Geometry cannot see the board's FACING "
-          "(coop2 surveys\nposition, not normal), nor occlusion or blur. To "
-          "settle those definitively,\nrun the ChArUco detector over "
+    print("\nCANDIDATES, not proof. What remains unmodelled is occlusion, motion "
+          "blur and\nexposure" + ("" if normals else ", plus the board FACING, "
+          "which needs --anchor-frame") + ". Running the detector settles those "
+          "AND returns the pose\nmeasurement tier 2 needs -- "
+          "run it over "
           f"{CAMERA_INFO[args.agent].replace('camera_info','image_rect_color' if args.agent=='mobile_1' else 'image_raw')} "
           "on these windows —\n../radar_camera_calibration/general_charuco.py "
           "already does the detection and\nPnP; a detected board is proof of "

@@ -134,9 +134,17 @@ reference:
   # the bag metadata and has to be read off the run once. Until a window is
   # filled the anchor is skipped and the evaluator says so rather than scoring a
   # tier it could not compute.
-  # Board ORIENTATIONS (anchor_frame_coop2.json, board_axes "ros", origin
-  # "center"): +z is out of the board face, so the incidence angle to a camera
-  # is computable and `board_visibility.py --anchor-frame` uses it.
+  # Board ORIENTATIONS (anchor_frame*.json, board_axes "ros", origin "center").
+  # THE OUTWARD NORMAL IS +X, NOT +Z, and getting that wrong rejects every view
+  # silently -- it did, on the first run. Settled against ground truth: the
+  # pipeline detected `anchor` 112 times (std 1.98 mm) from the ZED at map
+  # [0.698, -0.063, 0.193] and `rs_anchor` 92 times from the RealSense at
+  # [7.704, -14.308, 0.165]. Dotting each board axis against the direction to
+  # the camera that DID see it gives +0.96 on +x for both boards and only +0.27
+  # on +z. `board_visibility.py --anchor-frame` uses +x for board_axes "ros".
+  # NOTE anchor_frame_coop2.json carries only the boards 03_anchor used
+  # (anchor, rs_anchor); anchor_b's orientation is in the fuller anchor_frame
+  # json, and the script takes a comma-separated list to merge them.
   #   anchor    qxyzw [-0.005077,  0.002281,  0.000012, 0.999985]
   #   anchor_b  qxyzw [-0.059071, -0.024090, -0.857719, 0.510146]
   #   rs_anchor qxyzw [ 0.007510,  0.013642,  0.999879, 0.000177]
