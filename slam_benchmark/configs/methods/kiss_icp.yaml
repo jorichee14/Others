@@ -44,7 +44,13 @@ params:
   # can be checked against the tuning rather than blamed on the method.
   max_range: 20.0          # default 100.0
   min_range: 0.3           # default 5.0 — a 5 m floor discards the whole room
-  voxel_size: 0.10         # default max_range/100 = 1.0 m
+  # The published rule, max_range/100, applied to the declared max_range. This
+  # was 0.10 until 2026-09-19: on mobile_1.zed_rgbd at 0.10 the node stalled on
+  # 10% of frames for 5-65 s each, spread over the whole path and a third of
+  # them with the cart stationary -- ICP running to its iteration cap on depth
+  # noise (~0.16 m at 2 m) larger than the voxel. 566 of 2288 frames processed
+  # at replay 0.1. That run is kept under runs/ as the 0.10 result.
+  voxel_size: 0.20         # default max_range/100 = 1.0 m at the default range
   deskew: true             # the Ouster carries per-point t; use it
   initial_threshold: 0.5   # default 2.0 (adaptive after the first frames)
   max_points_per_voxel: 20
