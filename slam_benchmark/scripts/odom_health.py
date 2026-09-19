@@ -20,6 +20,10 @@ import sys
 import numpy as np
 
 QUALITY = re.compile(r"Odom:\s*quality=(\d+)")
+# The same line carries the callback's own cost and its lag behind the stamp.
+# A per-frame cost above the frame period is a drop mechanism that no replay
+# rate fixes: the callback cannot finish before the next frame lands.
+TIMING = re.compile(r"update time=(\d+\.\d+)s delay=(\d+\.\d+)s")
 # The warnings worth counting, because each one names a different cause and a
 # run usually has only one of them in quantity.
 CAUSES = {
@@ -77,6 +81,9 @@ def main() -> int:                                             # pragma: no cove
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--log", required=True)
+    ap.add_argument("--replay-rate", type=float, default=1.0,
+                    help="bag replay rate of the run (run.json records it), so the "
+                         "frame period in WALL time is known")
     ap.add_argument("--rate", type=float, default=14.9,
                     help="frames per second, to turn frame indices into seconds")
     ap.add_argument("--bag-start", type=float, default=None,
@@ -159,6 +166,27 @@ def main() -> int:                                             # pragma: no cove
         else:
             print("      VERDICT: the drops sit at the ends, which is the inertial "
                   "stream not covering the images. Report the shortened window.")
+
+    timing = np.array([(float(a), float(b)) for a, b in TIMING.findall(text)])
+    if len(timing):
+        upd, dly = timing[:, 0], timing[:, 1]
+        wall_period = 1.0 / args.rate / args.replay_rate
+        print(f"\n  per-frame cost (update time)  p50 {np.percentile(upd, 50) * 1e3:6.1f} ms  "
+              f"p90 {np.percentile(upd, 90) * 1e3:6.1f} ms  max {upd.max() * 1e3:6.1f} ms")
+        print(f"  lag behind stamp (delay)      p50 {np.percentile(dly, 50) * 1e3:6.1f} ms  "
+              f"p90 {np.percentile(dly, 90) * 1e3:6.1f} ms  max {dly.max() * 1e3:6.1f} ms")
+        print(f"  frame period at this replay   {wall_period * 1e3:6.1f} ms wall "
+              f"(stream {1000.0 / args.rate:.1f} ms x 1/{args.replay_rate})")
+        over = float(np.mean(upd > wall_period))
+        if over > 0.1:
+            print(f"      VERDICT: {over * 100:.0f}% of frames cost more than the frame period. "
+                  f"The callback cannot keep up and the sync queue sheds frames; slowing the "
+                  f"replay further would help only if the cost is in the estimator, not in "
+                  f"something it publishes per frame.")
+        elif np.percentile(upd, 90) < 0.5 * wall_period:
+            print(f"      VERDICT: the callback is well inside the frame period (p90 "
+                  f"{np.percentile(upd, 90) / wall_period * 100:.0f}% of it). Frames are not "
+                  f"being lost to compute time. The loss is upstream of the callback.")
 
     if args.odometry_tum:
         stamps = np.array([float(l.split()[0]) for l in open(args.odometry_tum)
