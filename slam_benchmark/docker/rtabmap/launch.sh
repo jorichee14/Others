@@ -33,6 +33,24 @@ from params_to_args import to_args
 print(" ".join(to_args(json.loads(os.environ.get("SLAM_PARAMS") or "{}"))))')
 echo "rtabmap  : $RTAB_ARGS"
 
+# EXACT vs APPROXIMATE, from the stream's measured stamp alignment rather than
+# a default. On mobile_1 colour and depth are stamped BYTE-IDENTICALLY (2288/2288
+# pairs), and feeding that to an approximate matcher is what paired frames a full
+# 67 ms period apart on the first run -- a whole frame of cart motion inside each
+# RGB-D pair. Exact sync cannot mispair; approximate sync can, even when a
+# perfect partner exists.
+INTERVAL=()
+case "${SLAM_SYNC:-approx}" in
+    exact)  APPROX=false; echo "sync     : EXACT (stamps are identical on this stream)" ;;
+    approx) APPROX=true
+            # Tight, because the measured jitter is microseconds. The interval's
+            # job is to REJECT a pairing when the real partner was dropped, not
+            # to absorb a systematic offset -- there is none to absorb.
+            INTERVAL=(approx_sync_max_interval:=0.005)
+            echo "sync     : approximate, max interval 5 ms" ;;
+    *)      echo "SLAM_SYNC=${SLAM_SYNC} is neither exact nor approx" >&2; exit 2 ;;
+esac
+
 IMU_ARGS=()
 if [[ -n "${SLAM_IMU_TOPIC:-}" ]]; then
     # always_check_imu_tf stays at its default: if the bag's tf_static does not
@@ -52,7 +70,7 @@ exec ros2 launch rtabmap_launch rtabmap.launch.py \
     rgb_topic:="$SLAM_COLOR_TOPIC" \
     depth_topic:="$SLAM_DEPTH_TOPIC" \
     camera_info_topic:="$SLAM_COLOR_INFO_TOPIC" \
-    approx_sync:=true \
+    approx_sync:="$APPROX" ${INTERVAL[@]+"${INTERVAL[@]}"} \
     publish_tf_odom:=false \
     publish_tf_map:=false \
     rtabmap_viz:=false rviz:=false \

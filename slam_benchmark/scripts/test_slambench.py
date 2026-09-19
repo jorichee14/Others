@@ -957,8 +957,10 @@ def test_an_inertial_method_is_actually_played_its_imu():
 
     for stream, imu in (("mobile_1.zed_rgbd", "/mobile_1/zed/imu/data"),
                         ("mobile_2.realsense_rgbd", "/mobile_2/imu")):
-        info, problems = rm.preflight(cfg, m, stream)
-        assert not problems, (stream, problems)
+        # mobile_2's inertial cell is blocked on its missing extrinsic (see
+        # test_an_inertial_row_without_its_extrinsic_is_refused); the topic
+        # assembly under test here happens either way.
+        info, _ = rm.preflight(cfg, m, stream)
         assert imu in info["topics"], (stream, info["topics"])
         assert "/tf_static" in info["topics"], info["topics"]
         # /tf carries the recording pipeline's own map->sensor estimate; replaying
@@ -972,20 +974,37 @@ def test_an_inertial_method_is_actually_played_its_imu():
 
 
 @test
-def test_every_stage_1_backbone_passes_preflight_on_both_platforms():
-    """docs/PLAN.md stage 1: three backbones, two platforms, six runs. If any
-    cell refuses, stage 1 is blocked and the gate should say so here rather
-    than forty minutes into a replay."""
+def test_the_stage_1_cells_are_runnable_or_blocked_for_a_recorded_reason():
+    """docs/PLAN.md stage 1: three backbones on two platforms.
+
+    Measured 2026-09-19, the grid is not six clean cells. mobile_2's inertial
+    RTAB-Map is blocked on an extrinsic the bag cannot supply, so that platform's
+    feature+depth backbone is the IMU-FREE half of the pair. Writing the real
+    grid down here means a cell that silently starts working -- or stops --
+    shows up as a test change rather than as a number in a table.
+    """
     import scripts.run_method as rm
     from slambench.config import load_dataset, load_method
     root = str(Path(__file__).resolve().parents[1])
     cfg = load_dataset(os.path.join(root, "configs", "coop2.yaml"))
-    for name in ("kiss_icp", "rtabmap_rgbd_imu", "mast3r_slam"):
+
+    runnable = [("kiss_icp", "mobile_1.zed_rgbd"),
+                ("kiss_icp", "mobile_2.realsense_rgbd"),
+                ("rtabmap_rgbd_imu", "mobile_1.zed_rgbd"),
+                ("rtabmap_rgbd", "mobile_2.realsense_rgbd"),
+                ("mast3r_slam", "mobile_1.zed_rgbd"),
+                ("mast3r_slam", "mobile_2.realsense_rgbd")]
+    for name, stream in runnable:
         m = load_method(os.path.join(root, "configs", "methods", f"{name}.yaml"))
-        for stream in ("mobile_1.zed_rgbd", "mobile_2.realsense_rgbd"):
-            assert stream in m.streams, f"{name} does not declare {stream}"
-            _, problems = rm.preflight(cfg, m, stream)
-            assert not problems, (name, stream, problems)
+        assert stream in m.streams, f"{name} does not declare {stream}"
+        _, problems = rm.preflight(cfg, m, stream)
+        assert not problems, (name, stream, problems)
+
+    blocked = [("rtabmap_rgbd_imu", "mobile_2.realsense_rgbd", "extrinsic_from_camera")]
+    for name, stream, why in blocked:
+        m = load_method(os.path.join(root, "configs", "methods", f"{name}.yaml"))
+        _, problems = rm.preflight(cfg, m, stream)
+        assert any(why in p for p in problems), (name, stream, problems)
 
 
 @test
@@ -1085,8 +1104,8 @@ def test_the_camera_imu_edge_is_supplied_when_the_bag_lacks_it():
     finally:
         sys.argv = saved
 
-    assert "SLAM_IMU_TF=" in cmd, cmd
-    line = cmd.split("SLAM_IMU_TF=", 1)[1].split("'")[0]
+    assert "SLAM_STATIC_TF=" in cmd, cmd
+    line = cmd.split("SLAM_STATIC_TF=", 1)[1].split("'")[0]
     parent, child, *nums = line.split()
     assert (parent, child) == (ext["parent"], ext["child"]), (parent, child)
     # the NUMBERS must be the config's, not a rounded or re-derived copy (rule 4)
@@ -1095,6 +1114,93 @@ def test_the_camera_imu_edge_is_supplied_when_the_bag_lacks_it():
     # and the IMU-free half of the pair is handed no transform at all
     free = load_method(os.path.join(root, "configs", "methods", "rtabmap_rgbd.yaml"))
     assert not free.needs_imu
+
+
+@test
+def test_sync_mode_comes_from_the_recording_not_a_default():
+    """mobile_1's colour and depth are stamped byte-identically (2288/2288) and
+    mobile_2's are 10 us apart (0/4295 exact). Feeding the first to an
+    approximate matcher is what paired frames a full 67 ms period apart on the
+    first container run -- a whole frame of cart motion inside each RGB-D pair."""
+    import io, contextlib
+    import scripts.run_method as rm
+    root = str(Path(__file__).resolve().parents[1])
+
+    def command(method, stream):
+        saved = sys.argv
+        try:
+            sys.argv = ["run_method.py",
+                        "--config", os.path.join(root, "configs", "coop2.yaml"),
+                        "--method", os.path.join(root, "configs", "methods", f"{method}.yaml"),
+                        "--stream", stream, "--runs-root", tempfile.mkdtemp()]
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                assert rm.main() == 0
+            return buf.getvalue()
+        finally:
+            sys.argv = saved
+
+    assert "SLAM_SYNC=exact" in command("rtabmap_rgbd", "mobile_1.zed_rgbd")
+    assert "SLAM_SYNC=approx" in command("rtabmap_rgbd", "mobile_2.realsense_rgbd")
+
+
+@test
+def test_the_colour_depth_edge_is_published_only_when_the_frames_differ():
+    """mobile_2's colour and depth sit in different optical frames and this
+    bag's tf_static carries no RealSense frames at all, so the 59 mm offset has
+    to come from the config or it lands on every point. On mobile_1 both images
+    carry one frame_id, and publishing an identity edge there would be noise."""
+    import io, contextlib
+    import scripts.run_method as rm
+    from slambench.config import load_dataset
+    root = str(Path(__file__).resolve().parents[1])
+    cfg = load_dataset(os.path.join(root, "configs", "coop2.yaml"))
+
+    def command(stream):
+        saved = sys.argv
+        try:
+            sys.argv = ["run_method.py",
+                        "--config", os.path.join(root, "configs", "coop2.yaml"),
+                        "--method", os.path.join(root, "configs", "methods", "rtabmap_rgbd.yaml"),
+                        "--stream", stream, "--runs-root", tempfile.mkdtemp()]
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                assert rm.main() == 0
+            return buf.getvalue()
+        finally:
+            sys.argv = saved
+
+    m1 = cfg.stream("mobile_1.zed_rgbd")
+    assert m1["color_frame"] == m1["sensor_frame"]
+    assert "SLAM_STATIC_TF" not in command("mobile_1.zed_rgbd")
+
+    m2 = cfg.stream("mobile_2.realsense_rgbd")
+    line = command("mobile_2.realsense_rgbd").split("SLAM_STATIC_TF=", 1)[1].split("'")[0]
+    parent, child, x, y, z, *q = line.split()
+    assert (parent, child) == (m2["color_frame"], m2["sensor_frame"]), (parent, child)
+    # the translation is the config's, not a re-derived one (rule 4)
+    ext = m2["reference_frame_from_sensor"]
+    assert abs(float(x) - ext["x"]) < 1e-9 and abs(float(y) - ext["y"]) < 1e-9
+    assert abs(np.linalg.norm([float(v) for v in q]) - 1.0) < 1e-9, q
+
+
+@test
+def test_an_inertial_row_without_its_extrinsic_is_refused():
+    """It would not fail. RTAB-Map logs "Dropping imu data!" and CONTINUES, so
+    the row lands in the table as evidence the IMU did not help, with no IMU in
+    it. mobile_2.imu.extrinsic_from_camera is null and the bag's tf_static
+    carries no inertial frames, so nothing can supply it at run time."""
+    import scripts.run_method as rm
+    from slambench.config import load_dataset, load_method
+    root = str(Path(__file__).resolve().parents[1])
+    cfg = load_dataset(os.path.join(root, "configs", "coop2.yaml"))
+    m = load_method(os.path.join(root, "configs", "methods", "rtabmap_rgbd_imu.yaml"))
+
+    _, problems = rm.preflight(cfg, m, "mobile_2.realsense_rgbd")
+    assert any("extrinsic_from_camera is null" in p for p in problems), problems
+    # mobile_1 has it (I13) and must still pass, so the gate is not blanket
+    _, ok = rm.preflight(cfg, m, "mobile_1.zed_rgbd")
+    assert not ok, ok
 
 
 def main() -> int:

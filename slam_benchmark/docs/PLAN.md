@@ -109,7 +109,26 @@ entries agreeing through a shared prior would certify nothing.
 
 Run each on `mobile_1.zed_rgbd` (LiDAR held out) and on
 `mobile_2.realsense_rgbd`. Score vs the reference on `mobile_1`; hold the
-`mobile_2` runs for stages 3–4. Report tracked-fraction and the per-frame
+`mobile_2` runs for stages 3–4.
+
+**MEASURED 2026-09-19 — the grid is five cells and one named blocker, not six.**
+`scripts/bag_probe.py` on the bag: `/tf_static` carries **7 edges in 2
+disconnected trees** — the ZED chain and the Ouster chain — and nothing else. No
+RealSense frames, no `infra_1` frames, and no `zed_imu_link`. Consequences:
+
+| cell | state |
+|---|---|
+| `kiss_icp` × both | runs |
+| `rtabmap_rgbd_imu` × `mobile_1` | runs — the camera↔IMU edge is I13, published into the container from the config |
+| `rtabmap_rgbd_imu` × `mobile_2` | **blocked**: `mobile_2.imu.extrinsic_from_camera` is null and the bag cannot supply it. Recover with `rs-enumerate-devices -c`, once, like I13 |
+| `rtabmap_rgbd` × `mobile_2` | runs — the IMU-free half of the pair carries that platform's feature+depth slot meanwhile |
+| `mast3r_slam` × both | runs |
+
+Two properties of the recording, both now in `configs/coop2.yaml` per stream:
+`mobile_1`'s colour and depth are stamped **byte-identically** (2288/2288), so
+that stream must be synchronised exactly — an approximate matcher paired its
+frames a full 67 ms period apart on the first run. `mobile_2`'s are 10 µs apart
+(0/4295 exact), so it needs approximate sync with a tight interval. Report tracked-fraction and the per-frame
 instruments (observability, ORB density) beside every ATE.
 
 **Deliverable:** the B1 table — SDK rows, three backbones, two platforms.

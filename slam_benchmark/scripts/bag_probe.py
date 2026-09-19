@@ -188,9 +188,16 @@ def main() -> int:                                                 # pragma: no 
                  f"INTERLEAVED, not merely jittered: no sync interval recovers a pairing "
                  f"that does not exist, and each pair carries that much real motion.")
         else:
-            v = (f"jitter well inside one frame. Keep approx_sync with "
-                 f"approx_sync_max_interval around {np.percentile(np.abs(dt), 95) * 2e3:.0f} ms "
-                 f"to reject the tail.")
+            # Floored: twice a p95 of ten microseconds rounds to "0 ms", and an
+            # interval of zero rejects every pair rather than only the bad ones.
+            # The interval's job is to reject a pairing whose real partner was
+            # DROPPED, so it has to sit well under one frame and well over the
+            # jitter -- not to track the jitter down to nothing.
+            interval = max(np.percentile(np.abs(dt), 95) * 2, 0.15 * period)
+            v = (f"jitter well inside one frame ({np.median(np.abs(dt)) * 1e3:.3f} ms "
+                 f"median). Keep approx_sync with approx_sync_max_interval around "
+                 f"{interval * 1e3:.0f} ms -- enough to reject a pair whose partner was "
+                 f"dropped, far too tight to absorb a real offset.")
         print(f"  VERDICT: {v}")
     return 0
 

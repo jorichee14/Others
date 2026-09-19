@@ -70,6 +70,21 @@ def preflight(cfg, mcfg, stream_key: str) -> tuple[dict, list[str]]:
                             f"The whole inertial family is out on this sequence.")
         elif not imu.get("topic"):
             problems.append(f"streams.{key}.present is true but its topic is null")
+        elif not (imu.get("extrinsic_from_camera") or {}):
+            # MEASURED 2026-09-19. The bag's tf_static carries 7 edges in 2
+            # disconnected trees -- the ZED chain and the Ouster chain -- and
+            # nothing else, so no inertial frame is recoverable from the
+            # recording. Without the extrinsic, RTAB-Map logs "Dropping imu
+            # data!" and then CONTINUES, emitting a trajectory: the row does not
+            # fail, it quietly becomes its own IMU-free control and lands in the
+            # table as evidence the IMU did not help.
+            problems.append(
+                f"{mcfg.name} needs an IMU and streams.{key}.extrinsic_from_camera is "
+                f"null. The bag's tf_static does not carry the inertial frames, so "
+                f"nothing supplies camera<-IMU at run time and the method will drop "
+                f"every sample WITHOUT failing. Recover it from the device "
+                f"(rs-enumerate-devices -c, or the ZED SDK's camera_imu_transform) "
+                f"as I13 was for mobile_1.")
 
     def _nulls(obj, prefix=""):
         """Null params, NESTED ONES INCLUDED.
@@ -170,6 +185,23 @@ def main() -> int:
             return 1
 
     stream = info["stream"]
+    # Static transforms the container has to publish because the bag does not
+    # carry them. Each is a number already in the dataset config (rule 4), each
+    # is a SENSOR EXTRINSIC the front-end needs in order to fuse at all rather
+    # than a transform of the output (rule 6), and each travels in run.json.
+    static_tf: list[list[str]] = []
+    color_frame, sensor_frame = stream.get("color_frame"), stream.get("sensor_frame")
+    if color_frame and sensor_frame and color_frame != sensor_frame:
+        # colour optical <- depth optical. An RGB-D front-end told to work in the
+        # depth frame still has to place the colour camera, and on this bag the
+        # RealSense frames are absent from tf_static entirely.
+        from slambench import se3
+        from slambench.config import extrinsic_matrix
+        T = extrinsic_matrix(stream["reference_frame_from_sensor"],
+                             f"{args.stream}.reference_frame_from_sensor")
+        t, q = se3.pose_to_quat(T)
+        static_tf.append([color_frame, sensor_frame]
+                         + [repr(float(v)) for v in list(t) + list(q)])
     cmd = [
         "docker", "run", "--rm", "--network", "none",
         "-v", f"{bag}:/bag:ro",
@@ -213,12 +245,21 @@ def main() -> int:
         # run.json so any result can be checked against it.
         ext = imu_stream.get("extrinsic_from_camera")
         if isinstance(ext, dict) and ext.get("xyz") and ext.get("quat_xyzw"):
-            tf = [str(ext["parent"]), str(ext["child"])]
-            tf += [repr(float(v)) for v in list(ext["xyz"]) + list(ext["quat_xyzw"])]
-            cmd += ["-e", "SLAM_IMU_TF=" + " ".join(tf)]
+            static_tf.append([str(ext["parent"]), str(ext["child"])]
+                             + [repr(float(v)) for v in
+                                list(ext["xyz"]) + list(ext["quat_xyzw"])])
     # `gpu: required` in the method config is a hardware claim, so it belongs on
     # the command rather than in the image: an image that always asks for a GPU
     # cannot be smoke-tested on a machine without one.
+    # Exact vs approximate synchronisation is a property of the RECORDING, not a
+    # tuning knob: measured per stream by scripts/bag_probe.py and declared in
+    # the dataset config. Getting it wrong is not a shrug -- an approximate
+    # matcher fed byte-identical stamps paired mobile_1's frames a full period
+    # apart on the first run.
+    if stream.get("stamps_exact") is not None:
+        cmd += ["-e", f"SLAM_SYNC={'exact' if stream['stamps_exact'] else 'approx'}"]
+    if static_tf:
+        cmd += ["-e", "SLAM_STATIC_TF=" + "\n".join(" ".join(e) for e in static_tf)]
     if mcfg.raw.get("gpu") == "required":
         cmd += ["--gpus", "all"]
     cmd.append(mcfg.raw.get("image", f"slambench/{mcfg.name}:humble"))

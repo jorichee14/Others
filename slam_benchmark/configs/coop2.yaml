@@ -330,6 +330,16 @@ streams:
     color_topic: /mobile_1/zed/left/image_rect_color
     color_info_topic: /mobile_1/zed/left/camera_info
     sensor_frame: zed_left_camera_optical_frame
+    color_frame: zed_left_camera_optical_frame   # bag_probe 2026-09-19: BOTH image
+                                # headers carry this, so colour<-depth is the
+                                # identity and no camera TF is needed.
+    # MEASURED 2026-09-19 (scripts/bag_probe.py): colour and depth stamps are
+    # BYTE-IDENTICAL, 2288/2288 pairs, |dt| max 0.00 ms. So this stream must be
+    # synchronised EXACTLY. Running it through an approximate synchroniser is
+    # not a harmless fallback: the first container run did, and the matcher
+    # paired frames one period apart (+/-67 ms against a 67.01 ms period), which
+    # puts a whole frame of cart motion between each colour image and its depth.
+    stamps_exact: true
     # Identity, and measured rather than assumed: the reference pose IS this
     # frame, and "registered" means the depth is already in it.
     reference_frame_from_sensor: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
@@ -348,6 +358,19 @@ streams:
     color_topic: /mobile_2/color/image_raw
     color_info_topic: /mobile_2/color/camera_info
     sensor_frame: camera_depth_optical_frame
+    color_frame: camera_color_optical_frame      # bag_probe 2026-09-19, off the
+                                # image headers. It DIFFERS from sensor_frame,
+                                # so an RGB-D front-end needs the edge below in
+                                # tf -- and this bag's tf_static carries no
+                                # RealSense frames at all (see the note on
+                                # tf_static coverage under mobile_2.imu).
+    # MEASURED 2026-09-19: 0/4295 exact matches, but |dt| median 0.01 ms and p95
+    # 0.01 ms against a 33.34 ms period -- ten microseconds, i.e. the two streams
+    # are stamped from the same capture and merely not bit-identical. Approximate
+    # sync with a tight interval is correct here; exact sync would match nothing.
+    # The 33.34 ms max is a handful of colour frames whose depth partner was
+    # dropped (4295 colour vs 4300 depth), not a systematic offset.
+    stamps_exact: false
     # colour optical <- depth optical, as published. 59 mm, systematic, on every
     # point if left at identity.
     reference_frame_from_sensor: {x: 0.059190, y: -0.000010, z: -0.000406,
@@ -469,8 +492,15 @@ streams:
     model_inferred: zed_2_or_2i
 
     # REQUIRED before any TIGHTLY-coupled VIO (orbslam3_rgbd_inertial, openvins).
-    # NOT required by the loosely-coupled rows, which is why the ladder runs
-    # today. Three independent routes, in order of preference:
+    # CORRECTED 2026-09-19: this block used to say it was "NOT required by the
+    # loosely-coupled rows, which is why the ladder runs today". The first real
+    # container run falsified that. RTAB-Map's rgbd_odometry refuses to
+    # initialise its gravity estimate without a camera<-IMU transform -- "Dropping
+    # imu data! A valid TF between zed_left_camera_optical_frame and zed_imu_link
+    # is required" -- and, crucially, it then CONTINUES and emits a trajectory.
+    # A loosely-coupled row missing this extrinsic does not fail; it silently
+    # becomes its own IMU-free control. So the extrinsic gates every inertial
+    # row, tight or loose, and preflight now refuses without it. Three independent routes, in order of preference:
     #   1. the ZED SDK, which is authoritative and does not depend on the bag:
     #        getSensorsConfiguration().camera_imu_transform
     #   2. /usr/local/zed/settings/SN<serial>.conf, the factory calibration
@@ -532,9 +562,23 @@ streams:
     agent: mobile_2
     modality: imu
     present: true
-    topic: /mobile_2/imu                  # 28646 msgs, 183.3 Hz
-    rate_hz: 183.3
-    sensor_frame: null                    # not yet read off the bag
+    topic: /mobile_2/imu                  # 28646 msgs, 199.9 Hz (bag_probe)
+    rate_hz: 199.9
+    sensor_frame: camera_imu_optical_frame   # bag_probe 2026-09-19, off the header
+    # STILL NULL, AND NOW IT BLOCKS A ROW RATHER THAN A FOOTNOTE.
+    #
+    # TF_STATIC COVERAGE, MEASURED 2026-09-19: the bag's /tf_static carries
+    # SEVEN edges in TWO disconnected trees -- the ZED chain (zed_camera_center,
+    # zed_camera_link, zed_{left,right}_camera_{frame,optical_frame}) and the
+    # Ouster chain (os_sensor, os_lidar, os_imu). That is all of it. There are
+    # no RealSense frames, no infra_1 frames, and -- see mobile_1.imu -- no
+    # zed_imu_link either. So NOTHING about mobile_2's geometry is recoverable
+    # from tf_static, and this extrinsic cannot be filled the way I13 was.
+    #
+    # Recover it from the device: `rs-enumerate-devices -c` prints the
+    # depth<-IMU extrinsic, or record /tf from a live realsense2_camera node
+    # with publish_tf enabled. It is a per-unit factory value, so it is measured
+    # once and serves every future recording, exactly like I13.
     extrinsic_from_camera: null
     noise_model: null
 

@@ -47,15 +47,17 @@ fi
 # One transform, from configs/coop2.yaml, published so the method's own
 # front-end can rotate the IMU into the camera frame. Without it RTAB-Map drops
 # every inertial sample and the row silently becomes its own IMU-free control.
-TF=""
-if [[ -n "${SLAM_IMU_TF:-}" ]]; then
-    read -r P C X Y Z QX QY QZ QW <<<"$SLAM_IMU_TF"
-    echo "imu tf   : $P -> $C  t=[$X $Y $Z]"
-    ros2 run tf2_ros static_transform_publisher \
-        --x "$X" --y "$Y" --z "$Z" --qx "$QX" --qy "$QY" --qz "$QZ" --qw "$QW" \
-        --frame-id "$P" --child-frame-id "$C" \
-        --ros-args -p use_sim_time:=true &
-    TF=$!
+TFS=()
+if [[ -n "${SLAM_STATIC_TF:-}" ]]; then
+    while read -r P C X Y Z QX QY QZ QW; do
+        [[ -n "$P" ]] || continue
+        echo "static tf: $P -> $C  t=[$X $Y $Z]"
+        ros2 run tf2_ros static_transform_publisher \
+            --x "$X" --y "$Y" --z "$Z" --qx "$QX" --qy "$QY" --qz "$QZ" --qw "$QW" \
+            --frame-id "$P" --child-frame-id "$C" \
+            --ros-args -p use_sim_time:=true &
+        TFS+=($!)
+    done <<<"$SLAM_STATIC_TF"
 fi
 
 python3 /opt/slambench/record_tum.py \
@@ -79,7 +81,7 @@ ros2 bag play /bag --clock -r "${SLAM_RATE:-1.0}" --topics ${SLAM_TOPICS//,/ }
 
 # The bag is done; give the method a moment to flush its last optimisation.
 sleep 10
-for pid in "$SLAM" "$BRIDGE" "$TF" "$REC"; do
+for pid in "$SLAM" "$BRIDGE" ${TFS[@]+"${TFS[@]}"} "$REC"; do
     [[ -n "$pid" ]] || continue
     kill -INT "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
