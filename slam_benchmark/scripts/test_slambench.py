@@ -891,6 +891,24 @@ def test_params_split_between_rtabmap_and_ros_without_dropping_either():
 
 
 @test
+def test_the_mapping_node_is_never_handed_an_odom_parameter():
+    """Measured: rtabmap_slam does not declare Odom/*, and in ROS 2 setting an
+    undeclared parameter throws -- the mapping node aborted at startup on
+    `--Odom/ResetCountdown 8` and the loop-closing row became odometry-only
+    with no error in the odometry log."""
+    from params_to_args import to_args
+    params = {"Odom/ResetCountdown": 8, "Vis/MinInliers": 15, "RGBD/LinearUpdate": 0.05}
+    mapping = to_args(params, exclude=("Odom/",))
+    assert "--Odom/ResetCountdown" not in mapping, mapping
+    assert "--Vis/MinInliers" in mapping and "--RGBD/LinearUpdate" in mapping
+    odometry = to_args(params)
+    assert "--Odom/ResetCountdown" in odometry
+    launch = (Path(__file__).resolve().parents[1] / "docker" / "rtabmap" / "launch.sh").read_text()
+    assert 'exclude=("Odom/",)' in launch, "launch.sh does not filter the mapping node's args"
+    assert 'odom_args:="$ODOM_ARGS"' in launch and 'rtabmap_args:="--delete_db_on_start $RTAB_ARGS"' in launch
+
+
+@test
 def test_booleans_survive_the_trip_to_rtabmap():
     """RTAB-Map parses `True` as false. YAML hands us both `true` (bool) and
     `"true"` (string, as Grid/3D is written) and both must come out lowercase."""

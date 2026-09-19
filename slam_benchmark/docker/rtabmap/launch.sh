@@ -41,16 +41,23 @@ set -u
 FRAME_ID=$(python3 /opt/slambench/sniff_frame.py --bag /bag --topic "$SLAM_DEPTH_TOPIC")
 echo "frame_id : $FRAME_ID  (from the first $SLAM_DEPTH_TOPIC header)"
 
-# Slash keys are RTAB-Map parameters. They go to BOTH nodes: the odometry node
-# owns Vis/* and Reg/*, the mapping node owns RGBD/*, Grid/* and Mem/*, and each
-# warns about the other's. One warning stream is cheaper than two params blocks
-# that can disagree.
-RTAB_ARGS=$(python3 -c '
+# Slash keys are RTAB-Map parameters. The ODOMETRY node accepts every group,
+# so it gets the whole block. The MAPPING node does not declare Odom/*, and an
+# undeclared parameter in ROS 2 is an exception, not a warning: it aborted at
+# startup on `--Odom/ResetCountdown 8` and the run quietly became odometry-only.
+# So the mapping node gets everything except Odom/*.
+ODOM_ARGS=$(python3 -c '
 import json, os, sys
 sys.path.insert(0, "/opt/slambench")
 from params_to_args import to_args
 print(" ".join(to_args(json.loads(os.environ.get("SLAM_PARAMS") or "{}"))))')
-echo "rtabmap  : $RTAB_ARGS"
+RTAB_ARGS=$(python3 -c '
+import json, os, sys
+sys.path.insert(0, "/opt/slambench")
+from params_to_args import to_args
+print(" ".join(to_args(json.loads(os.environ.get("SLAM_PARAMS") or "{}"), exclude=("Odom/",))))')
+echo "odometry : $ODOM_ARGS"
+echo "mapping  : $RTAB_ARGS"
 
 # EXACT vs APPROXIMATE, from the stream's measured stamp alignment rather than
 # a default. On mobile_1 colour and depth are stamped BYTE-IDENTICALLY (2288/2288
@@ -95,5 +102,5 @@ exec ros2 launch rtabmap_launch rtabmap.launch.py \
     rtabmap_viz:=false rviz:=false \
     database_path:=/out/rtabmap.db \
     rtabmap_args:="--delete_db_on_start $RTAB_ARGS" \
-    odom_args:="$RTAB_ARGS" \
+    odom_args:="$ODOM_ARGS" \
     ${IMU_ARGS[@]+"${IMU_ARGS[@]}"}

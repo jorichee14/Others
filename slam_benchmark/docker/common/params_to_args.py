@@ -16,10 +16,19 @@ import json
 import sys
 
 
-def to_args(params: dict) -> list[str]:
+def to_args(params: dict, exclude: tuple[str, ...] = ()) -> list[str]:
+    """`exclude` names parameter GROUPS a node must not be handed.
+
+    Measured 2026-09-19: the rtabmap mapping node does not declare the Odom/*
+    group, and ROS 2 makes an undeclared parameter a
+    ParameterNotDeclaredException -- so `--Odom/ResetCountdown 8` on the mapping
+    node's command line is not a warning, it is an abort at startup, and the row
+    silently becomes odometry-only. The odometry node accepts every group, so
+    only the mapping side needs the filter.
+    """
     out: list[str] = []
     for key in sorted(params):
-        if "/" not in key:
+        if "/" not in key or key.startswith(exclude):
             continue
         v = params[key]
         if isinstance(v, bool):

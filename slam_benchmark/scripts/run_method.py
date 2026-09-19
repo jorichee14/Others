@@ -282,7 +282,14 @@ def main() -> int:
         cmd += ["--gpus", "all"]
     if args.dev:
         common = ROOT / "docker" / "common"
-        for f in sorted(common.glob("*.py")) + [common / "entrypoint.sh"]:
+        mounts = sorted(common.glob("*.py")) + [common / "entrypoint.sh"]
+        # The method's own launch script lives under docker/<image>/, named
+        # after the image tag: slambench/rtabmap:humble -> docker/rtabmap/.
+        image = mcfg.raw.get("image", f"slambench/{mcfg.name}:humble")
+        launch = ROOT / "docker" / image.split("/", 1)[-1].split(":")[0] / "launch.sh"
+        if launch.exists():
+            mounts.append(launch)
+        for f in mounts:
             cmd[2:2] = ["-v", f"{f}:/opt/slambench/{f.name}:ro"]
     if args.shell:
         # -it for a terminal; --entrypoint bash replaces the run script. Everything
