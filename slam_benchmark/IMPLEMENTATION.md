@@ -139,6 +139,23 @@ orientation channels are frame-convention artifacts, not measurements — export
 compare body-frame orientations against an optical-frame reference. Translation
 columns only, until orientation conventions are reconciled.
 
+**Infra diagnosis round 2 (2026-09-19):** an in-container self-consistency test
+settled it — feed ground targets across the room through the declared composed
+transform and the predicted **elevations disagree with pure geometry by 20–30°**
+(rs corner: predicted −37.9° vs true −6.4°) while the radar's composed
+**position is right** ([−5.55, −2.58, 2.26]). So the composed **rotation is
+wrong** — an Euler order/direction mismatch between how the pipeline stated
+these rotations and how they are re-derived — and since **predicted range is
+rotation-invariant**, the 7–18 m predictions were correct all along, which means
+the detections at 2.5–7.5 m are **not the carts**. Two live explanations for
+what they are: the IWR6843's chirp config (typical indoor setups top out
+~8–10 m; the carts sit 7–18 m from that corner) or near-mast movers.
+Consequences: phase0's "visibility 73%/56%" is retracted (wide-gate clutter);
+all bearing/clock conclusions are suspended until the rotation is rebuilt from a
+**quaternion** source. infra_diag v3 adds the range-envelope histogram of
+`points_all` (does this radar ever see past 9 m at all?), a `/tf`+`/tf_static`
+quaternion dump for the infra chain, and detection elevations in the raw dump.
+
 **Infra diagnosis round 1:** the DECLARED convention (`cam_fwd/ext_fwd`) wins
 and `mobile_1`'s bearing is essentially perfect (+0.11°) — the geometry chain is
 right in azimuth. The mystery narrows to: range −5.5 m systematic (flat under

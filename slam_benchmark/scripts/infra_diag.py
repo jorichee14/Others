@@ -117,6 +117,13 @@ def main() -> int:
     ap.add_argument("--bag", required=True)
     ap.add_argument("--ref-m1", required=True)
     ap.add_argument("--ref-m2", required=True)
+    ap.add_argument("--tf-dump", action="store_true", default=True,
+                    help="scan /tf and /tf_static for transforms touching the "
+                         "infra chain and print their QUATERNIONS — the "
+                         "convention-proof source the rpy re-derivation is not")
+    ap.add_argument("--envelope", action="store_true", default=True,
+                    help="range histogram of /infra_1/radar/points_all — does "
+                         "this radar ever see past ~9 m at all?")
     ap.add_argument("--dump", type=int, default=6,
                     help="print N raw sweeps with predictions (0 = off)")
     ap.add_argument("--dt-scan", type=float, default=2.0,
@@ -135,15 +142,62 @@ def main() -> int:
     trajs = {"mobile_1": load_tum(args.ref_m1), "mobile_2": load_tum(args.ref_m2)}
 
     sweeps = []
+    all_ranges = []
+    tf_hits = []
+    topics = ["/infra_1/radar/points_dynamic"]
+    if args.envelope:
+        topics.append("/infra_1/radar/points_all")
+    if args.tf_dump:
+        topics += ["/tf", "/tf_static"]
+    KEY = ("infra", "arducam", "radar", "map")
     reader = BagReader(str(Path(args.bag).expanduser()), stamp_source="header")
-    for topic, stamp_ns, msg in reader.iter_messages(["/infra_1/radar/points_dynamic"]):
-        try:
-            xyz = xyz_of(msg)
-        except ValueError:
-            continue
-        if len(xyz):
-            sweeps.append((stamp_ns * 1e-9, xyz))
-    print(f"{len(sweeps)} dynamic sweeps with points\n")
+    for topic, stamp_ns, msg in reader.iter_messages(topics):
+        if topic == "/infra_1/radar/points_dynamic":
+            try:
+                xyz = xyz_of(msg)
+            except ValueError:
+                continue
+            if len(xyz):
+                sweeps.append((stamp_ns * 1e-9, xyz))
+        elif topic == "/infra_1/radar/points_all":
+            try:
+                all_ranges.append(np.linalg.norm(xyz_of(msg), axis=1))
+            except ValueError:
+                pass
+        else:
+            for tr in msg.transforms:
+                pair = (str(tr.header.frame_id), str(tr.child_frame_id))
+                if any(k in f.lower() for f in pair for k in KEY) and \
+                        not any(h[0] == pair for h in tf_hits):
+                    tf_hits.append((pair,
+                        [tr.transform.translation.x, tr.transform.translation.y,
+                         tr.transform.translation.z],
+                        [tr.transform.rotation.x, tr.transform.rotation.y,
+                         tr.transform.rotation.z, tr.transform.rotation.w]))
+    print(f"{len(sweeps)} dynamic sweeps with points")
+
+    if args.envelope and all_ranges:
+        r = np.concatenate(all_ranges)
+        q = np.percentile(r, [50, 90, 99, 99.9])
+        print(f"\nRANGE ENVELOPE, /infra_1/radar/points_all ({len(r)} returns):")
+        print(f"  median {q[0]:.2f}  p90 {q[1]:.2f}  p99 {q[2]:.2f}  "
+              f"p99.9 {q[3]:.2f}  MAX {r.max():.2f} m")
+        print(f"  returns beyond 9 m: {np.mean(r > 9.0):.2%}   beyond 12 m: "
+              f"{np.mean(r > 12.0):.2%}")
+        print("  If MAX plateaus below the room scale (7-18 m to the carts from"
+              " this corner),\n  the chirp config cannot see the carts and the"
+              " radar contributes NOTHING to\n  cross-room localization on this"
+              " recording — a hardware-config finding, not code.")
+
+    if args.tf_dump:
+        print(f"\nTF QUATERNIONS touching the infra chain ({len(tf_hits)} found):")
+        if not tf_hits:
+            print("  none on /tf or /tf_static — the transform exists only in "
+                  "the offline pipeline's files; get the quaternion from there.")
+        for pair, t, q in tf_hits:
+            print(f"  {pair[0]} -> {pair[1]}\n    t={np.round(t,4).tolist()}  "
+                  f"q_xyzw={np.round(q,6).tolist()}")
+    print()
 
     combos = candidate_transforms(T_map_cam, T_cam_radar)
     results = {name: {a: score(trajs[a], T, sweeps) for a in trajs}
@@ -174,6 +228,11 @@ def main() -> int:
 
     # per-agent clock scan, BEARING ONLY (range is the suspect and cannot vote).
     # Each machine has its own clock, so the offsets need not match.
+    print("\nNOTE: an in-container self-consistency test (2026-09-19) showed the"
+          "\ncomposed ROTATION of this chain is wrong (predicted elevations 20-30 deg"
+          "\noff pure geometry) while the translation is right. Bearings and therefore"
+          "\nthe clock scan below are UNRELIABLE until the rotation is fixed from a"
+          "\nquaternion source; ranges are rotation-invariant and remain valid.")
     print("\nper-agent clock scan on bearing (best convention, "
           f"dt in ±{args.dt_scan:.0f}s):")
     T_best = combos[best_key]
@@ -207,9 +266,11 @@ def main() -> int:
                     continue
                 print(f"    {a}: PRED az {pred['azimuth_deg'][k]:+7.2f}  "
                       f"rng {pred['range_m'][k]:6.2f}  el {pred['elevation_deg'][k]:+6.2f}")
+            det_el = np.degrees(np.arctan2(xyz[:, 2], np.hypot(xyz[:, 0], xyz[:, 1])))
             order = np.argsort(det_rng)
             print("    DET  " + "  ".join(
-                f"[{det_az[o]:+.1f}\u00b0,{det_rng[o]:.2f}m]" for o in order[:8]))
+                f"[{det_az[o]:+.1f}\u00b0,{det_rng[o]:.2f}m,el{det_el[o]:+.0f}\u00b0]"
+                for o in order[:8]))
     return 0
 
 
