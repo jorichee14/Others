@@ -27,7 +27,12 @@ params:
   ORBextractor.nLevels: 8
   IMU.Frequency: 192
 
-  IMU.T_b_c1: null              # I13, same value as the RGB-D-inertial row
+  IMU.T_b_c1:                   # imu <- left optical, same per-unit factory value
+                                # as the RGB-D-inertial row. See coop2.yaml.
+    - [-0.014774651, -0.001097222,  0.999890247,  0.002340261]
+    - [-0.999747365,  0.016956643, -0.014753933,  0.023029347]
+    - [-0.016938594, -0.999855624, -0.001347473,  0.000170957]
+    - [ 0.0,          0.0,          0.0,          1.0]
   IMU.NoiseGyro: null           # I14
   IMU.NoiseAcc: null
   IMU.GyroWalk: null

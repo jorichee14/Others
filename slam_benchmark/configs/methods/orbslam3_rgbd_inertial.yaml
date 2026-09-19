@@ -36,7 +36,14 @@ params:
   #   SN<serial>.conf, or from /tf_static. Mind the ROS-body to optical
   #   convention change between zed_camera_center and
   #   zed_left_camera_optical_frame.
-  IMU.T_b_c1: null
+  IMU.T_b_c1:                   # imu <- left optical. Composed from the wrapper's
+                                # per-unit factory TF (zed_left_camera_frame ->
+                                # zed_imu_link) and tf_static's frame->optical
+                                # rpy(-90,0,-90). See coop2.yaml mobile_1.imu.
+    - [-0.014774651, -0.001097222,  0.999890247,  0.002340261]
+    - [-0.999747365,  0.016956643, -0.014753933,  0.023029347]
+    - [-0.016938594, -0.999855624, -0.001347473,  0.000170957]
+    - [ 0.0,          0.0,          0.0,          1.0]
   # The four noise terms — I14. NOT recoverable from a 156 s bag: the random
   # walks only emerge in Allan variance at cluster times of 1e2-1e3 s. One
   # unattended 3 h static log settles them for every future recording.

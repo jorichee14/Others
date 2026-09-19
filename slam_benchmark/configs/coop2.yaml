@@ -290,7 +290,23 @@ streams:
     # to optical convention change, and getting that rotation wrong yields a
     # transform that is plausible, silent and wrong -- the same class of defect
     # the precheck already caught once (see IMPLEMENTATION.md, 2026-09-15).
-    extrinsic_from_camera: null
+    # I13 RESOLVED 2026-09-19. Source: the ZED wrapper's published static TF on
+    # the cart (per-unit factory calibration; the .conf file does NOT carry it).
+    #   zed_left_camera_frame -> zed_imu_link :
+    #     t = [-0.002000, -0.023061, 0.000217] m        (23.1 mm lever arm)
+    #     q_xyzw = [-0.00847435, -0.00061121, 0.00738261, 0.99993658]
+    #     total misalignment 1.290 deg (rpy -0.972, -0.063, +0.847)
+    # That 1.29 deg IS the per-unit part a nominal transform would have missed:
+    # ~g*sin(1.29 deg) = 0.22 m/s^2 of gravity leak on every rotation.
+    # Composed forms live in the tightly-coupled method configs (IMU.T_b_c1).
+    # Sanity-checked: imu +z maps to optical [-0.017, -1.000, -0.001] ~= -y = up.
+    # Remaining verification: the gravity check against a static SEGMENT of the
+    # run's own IMU stream, once one is identified.
+    extrinsic_from_camera:
+      parent: zed_left_camera_frame
+      child: zed_imu_link
+      xyz: [-0.002000, -0.023061, 0.000217]
+      quat_xyzw: [-0.00847435, -0.00061121, 0.00738261, 0.99993658]
 
     # NOT RECOVERABLE FROM THIS BAG, and `null` rather than a guess per rule 3.
     # Allan variance needs hours of static logging -- the bias random-walk terms
