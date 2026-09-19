@@ -1296,6 +1296,27 @@ def test_a_loop_closing_method_is_scored_on_its_OPTIMISED_graph():
     assert json.loads((out2 / "timing.json").read_text())["trajectory_source"] == "odometry"
 
 
+@test
+def test_lost_tracking_is_measured_as_stretches_not_a_count():
+    """Scattered zeros are frames a tracker rides through; one long stretch is
+    where the trajectory leaves the room. Same distinction depth_health.py draws
+    for the sensor, applied to the estimator."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from odom_health import runs_of_zero
+    q = np.array([5, 0, 7, 0, 0, 0, 9])
+    assert runs_of_zero(q) == [(1, 1), (3, 3)], runs_of_zero(q)
+    assert runs_of_zero(np.array([0, 0, 3])) == [(0, 2)]        # starts lost
+    assert runs_of_zero(np.array([3, 0, 0])) == [(1, 2)]        # never recovers
+    assert runs_of_zero(np.array([1, 2, 3])) == []
+    assert runs_of_zero(np.array([0, 0])) == [(0, 2)]
+    # the two shapes that a bare zero-count cannot tell apart
+    scattered = np.array([1, 0] * 10)
+    one_gap = np.array([1] * 10 + [0] * 10)
+    assert int(np.sum(scattered == 0)) == int(np.sum(one_gap == 0))
+    assert len(runs_of_zero(scattered)) == 10
+    assert len(runs_of_zero(one_gap)) == 1
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

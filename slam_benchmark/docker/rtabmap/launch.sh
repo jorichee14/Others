@@ -12,6 +12,25 @@ source /opt/ros/humble/setup.bash
 set -u
 : "${SLAM_DEPTH_TOPIC:?}" "${SLAM_COLOR_TOPIC:?}" "${SLAM_DEPTH_INFO_TOPIC:?}"
 
+# WHY THE ODOMETRY TRANSFORM IS NOT PUBLISHED, on the second attempt.
+#
+# I turned it on once, reasoning that nothing else publishes `odom` so there
+# could be no conflict. That was the wrong half of the edge to look at. A frame
+# in tf has exactly ONE parent, and the bag's tf_static already gives
+# zed_left_camera_optical_frame a parent: zed_left_camera_frame. Publishing
+# odom -> zed_left_camera_optical_frame RE-PARENTS it, which silently deletes
+# the static link -- and with it the only path from the camera to the IMU.
+#
+# The symptom is unmistakable once seen: "Lookup would require extrapolation
+# into the future ... looking up transform from [zed_imu_link] to
+# [zed_left_camera_optical_frame]". A lookup between two STATICALLY related
+# frames can never extrapolate. That it did proves the path was routing through
+# a dynamic edge that should not have been in it.
+#
+# The mapping node warns that it cannot look odom up in tf. That warning is
+# cosmetic here: it also subscribes to the odometry TOPIC, which is how it built
+# a 58-node map in the run before this one.
+#
 # WHICH FRAME THE POSES COME OUT IN -- read off the bag, never assumed.
 # RTAB-Map's frame_id is the body frame it expresses odometry in. Setting it to
 # the DEPTH IMAGE'S OWN optical frame makes that transform the identity, so the
@@ -71,8 +90,8 @@ exec ros2 launch rtabmap_launch rtabmap.launch.py \
     depth_topic:="$SLAM_DEPTH_TOPIC" \
     camera_info_topic:="$SLAM_COLOR_INFO_TOPIC" \
     approx_sync:="$APPROX" ${INTERVAL[@]+"${INTERVAL[@]}"} \
-    publish_tf_odom:=true \
-    publish_tf_map:=true \
+    publish_tf_odom:=false \
+    publish_tf_map:=false \
     rtabmap_viz:=false rviz:=false \
     database_path:=/out/rtabmap.db \
     rtabmap_args:="--delete_db_on_start $RTAB_ARGS" \
