@@ -255,6 +255,25 @@ Verified on synthetic data: planted +9% scale and +5 cm offset both recover
 exactly, and the band table distinguishes them (scale is flat across bands,
 offset decays toward 1.0).
 
+*Depth-vs-LiDAR, first run (2026-09-19) — and the tool's own verdict was
+wrong, twice over.* It printed "the depth is SOUND" from a median ratio of
+0.9862. Two problems. **(a) Sampling:** 744,922 of 744,972 pixel pairs landed
+in the 1–2 m band — essentially the floor ahead of the cart, seen by both
+sensors every frame — while `depth_health` puts the depth image's *median* at
+2.75 m. The pairing sampled one surface, not the sensor. Now stratified: capped
+per band per frame. **(b) The verdict itself:** the fit (`a=0.779, b=+0.282`)
+disagreed violently with the median (0.9862), and I first called that a
+lever-arm artefact. Wrong — 1→2 m is a factor of two and has ample lever arm.
+The disagreement is the **real finding**: the depth error is
+**range-dependent**, over-reading **+6% at 1 m** and under-reading **−8% at
+2 m**, and the median ratio sat near 1.0 only because it is the trend's value
+at the median sampled range. So *neither* hypothesis survives — the depth is
+not a clean +9% scale, and it is not sound. The verdict logic now names the
+range-dependent case explicitly (verified on synthetic data: it fires on a
+sloped error, stays quiet on a pure scale or a pure offset) and withholds any
+verdict while fewer than three bands have samples. **The ranges that dominate a
+trajectory scale error, 3–8 m, remain unmeasured.**
+
 *Roster:* 16 method configs, all loading and all validated against the streams
 they declare. Eight clear `run_method.py`'s preflight **today**
 (`zed_sdk_odom`, `zed_sdk_pose`, `kiss_icp`, `rtabmap_rgbd`, `orbslam3_rgbd`,
