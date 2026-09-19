@@ -97,10 +97,17 @@ class DatasetConfig:
                 obp = a.get("observed_poses_by_agent")
                 if isinstance(obp, dict) and obp.get(agent):
                     from .trajectory import load_tum
-                    path = Path(obp[agent])
+                    path = Path(obp[agent]).expanduser()
                     if not path.is_absolute():
                         path = self.path.parent / path
-                    a["observed_poses"] = load_tum(path)
+                    # A missing or unreadable file is a CONFIG problem, and it
+                    # must surface as one row of tier 2 saying so -- not as a
+                    # traceback out of the middle of a scoring run that has
+                    # already spent minutes on tiers 1 and 3.
+                    try:
+                        a["observed_poses"] = load_tum(path)
+                    except (OSError, ValueError) as e:
+                        a["observed_poses_error"] = f"{path}: {e}"
             if a.get("window") in (None, [None, None]):
                 continue          # dwell not timed, or this board is unusable here
             out.append(a)

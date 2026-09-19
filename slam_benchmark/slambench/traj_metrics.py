@@ -221,6 +221,14 @@ def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
         standoff = a.get("standoff")
         oposes = a.get("observed_poses")
 
+        if a.get("observed_poses_error"):
+            rows.append({"anchor": name, "n": 0, "residual_m": None,
+                         "uncertainty_m": u,
+                         "verdict": "observed_poses_by_agent names a file that "
+                                    "could not be read -- " +
+                                    str(a["observed_poses_error"])})
+            continue
+
         if oposes is not None and len(oposes):
             m = (oposes.stamps >= t0) & (oposes.stamps <= t1)
             if not m.any():

@@ -197,9 +197,12 @@ reference:
       # that silently rejected every view on the first attempt.
       #
       # Paths are relative to this config. FILL THESE IN:
+      # ASSIGNMENT MATTERS: session_anchor_coop2.json says cameras.zed.board ==
+      # "anchor", so zed_cam_in_map.tum is mobile_1's dwell HERE. The
+      # RealSense's file belongs to rs_anchor and is placed there, not here.
       observed_poses_by_agent:
-        mobile_1: null    # .../map_stages_20260828_outputs/zed_cam_in_map.tum
-        mobile_2: null    # .../map_stages_20260828_outputs/realsense_cam_in_map.tum
+        mobile_1: /home/wicoms-robot/workspaces/isaac_ros-dev/data/processed/map_stages_20260828/map_stages_20260828_outputs/zed_cam_in_map.tum
+        mobile_2: null    # the RealSense never dwelled at `anchor`
     - name: anchor_b
       position: [8.033, -7.182, -0.102]
       uncertainty_m: 0.013            # the honest figure: 12.9 mm / 2.6 deg between
@@ -237,9 +240,13 @@ reference:
       # that silently rejected every view on the first attempt.
       #
       # Paths are relative to this config. FILL THESE IN:
+      # Neither *_cam_in_map.tum covers this board: the pipeline anchored on
+      # `anchor` and `rs_anchor` only (03_anchor.boards_used). mobile_2's
+      # anchor_b window therefore has no observations and tier 2 refuses it --
+      # correctly -- until a detector run over its 6.00 s window supplies them.
       observed_poses_by_agent:
-        mobile_1: null    # .../map_stages_20260828_outputs/zed_cam_in_map.tum
-        mobile_2: null    # .../map_stages_20260828_outputs/realsense_cam_in_map.tum
+        mobile_1: null    # unusable anyway: 2.48 m, 0.5 px/bit
+        mobile_2: null    # needs a detector run over its 6.00 s window
     - name: rs_anchor
       position: [8.460, -14.267, -0.056]
       uncertainty_m: 0.015            # std; max residual 40 mm, 1 of 2 sections gated
@@ -281,9 +288,13 @@ reference:
       # that silently rejected every view on the first attempt.
       #
       # Paths are relative to this config. FILL THESE IN:
+      # session_anchor_coop2.json: cameras.realsense.board == "rs_anchor".
       observed_poses_by_agent:
-        mobile_1: null    # .../map_stages_20260828_outputs/zed_cam_in_map.tum
-        mobile_2: null    # .../map_stages_20260828_outputs/realsense_cam_in_map.tum
+        # mobile_1 dwells here t+124.9..151.5 (its best window, 267 poses), but
+        # the pipeline's board file covers only mobile_2's dwell at this board.
+        # A detector run would light up mobile_1's tier 2 here too.
+        mobile_1: null
+        mobile_2: /home/wicoms-robot/workspaces/isaac_ros-dev/data/processed/map_stages_20260828/map_stages_20260828_outputs/realsense_cam_in_map.tum
 
 # ------------------------------------------------------------------- streams
 #
