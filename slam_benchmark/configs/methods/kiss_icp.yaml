@@ -14,6 +14,13 @@ loop_closure: false
 outputs: [trajectory]
 reference_impl: https://github.com/PRBonn/kiss-icp
 image: slambench/kiss-icp:humble
+# Replay at a tenth of real time. Measured 2026-09-19 on the benchmark host with
+# the params below on mobile_1.zed_rgbd (110k-point clouds, 0.1 m voxels): the
+# node registers one frame per ~0.48 s wall, against a 67 ms frame period, and
+# its input subscription is best-effort, so at rate 1.0 it processed 325 of
+# 2288 frames. 0.1 gives 0.67 s per frame. Offline evaluation: runtime columns
+# are not comparable with rate-1.0 rows, and aggregate.py says so.
+replay_rate: 0.1              # harness default 1.0
 
 # One method, several streams. This is the row that carries the cross-modality
 # comparison: the SAME estimator on the Ouster and on both depth streams, so a
