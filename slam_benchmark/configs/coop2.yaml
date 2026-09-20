@@ -601,6 +601,17 @@ streams:
     rate_hz: 192.4
     sensor_frame: zed_imu_link
     magnetometer_topic: /mobile_1/zed/imu/mag   # 7596 msgs, 48.6 Hz
+    # Two independent reasons, and this is the asymmetry that decides whether
+    # the two agents' inertial rows are the same experiment. (a) The topic is
+    # `imu/data`, not `imu/data_raw`; the ZED wrapper follows the ROS
+    # convention where the former carries a FUSED orientation and the latter
+    # does not. (b) Every rtabmap_rgbd_imu run on this agent has initialised and
+    # produced gravity-constrained output with no "doesn't have orientation
+    # set" rejection, which mobile_2 emitted on literally every sample.
+    # CONSEQUENCE: mobile_1's orientation is the ZED SDK's own fusion, mobile_2's
+    # will be Madgwick run by us. Same constraint, different provenance -- so
+    # "the IMU helped" compares cleanly WITHIN an agent and not across the two.
+    orientation: vendor_fused
 
     # The camera is a ZED 2 or ZED 2i, DEDUCED rather than read off a label:
     # the magnetometer topic is the discriminator, since ZED Mini and ZED X
@@ -684,6 +695,15 @@ streams:
     topic: /mobile_2/imu                  # 28646 msgs, 199.9 Hz (bag_probe)
     rate_hz: 199.9
     sensor_frame: camera_imu_optical_frame   # bag_probe 2026-09-19, off the header
+    # MEASURED 2026-09-20 BY RUNNING IT: RTAB-Map rejected every sample with
+    # "IMU received doesn't have orientation set, it is ignored". The RealSense
+    # publishes raw gyro and accelerometer; the `orientation` quaternion is
+    # unset. That is not a fault -- it is what the device emits without a fusion
+    # step -- but RTAB-Map takes gravity from that quaternion and computes none
+    # itself, so with wait_imu_to_init on, the odometry never initialises and
+    # the mapping node starves reporting "Did not receive data since 5 seconds".
+    # One cause, two unrelated-looking errors.
+    orientation: absent
     # STILL NULL, AND NOW IT BLOCKS A ROW RATHER THAN A FOOTNOTE.
     #
     # TF_STATIC COVERAGE, MEASURED 2026-09-19: the bag's /tf_static carries

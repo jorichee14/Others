@@ -70,6 +70,21 @@ def preflight(cfg, mcfg, stream_key: str) -> tuple[dict, list[str]]:
                             f"The whole inertial family is out on this sequence.")
         elif not imu.get("topic"):
             problems.append(f"streams.{key}.present is true but its topic is null")
+        elif imu.get("orientation") is None:
+            problems.append(
+                f"streams.{key}.orientation is null. RTAB-Map and every other "
+                f"gravity-constrained method reads gravity off the message's "
+                f"`orientation` quaternion and computes none itself, so a raw "
+                f"gyro+accel stream is rejected sample by sample WITHOUT "
+                f"failing the run. Establish whether this topic carries an "
+                f"orientation before scheduling an inertial row on it.")
+        elif imu.get("orientation") == "absent" and not mcfg.raw.get(
+                "imu_orientation_filter"):
+            problems.append(
+                f"streams.{key}.orientation is absent and {mcfg.name} declares "
+                f"no imu_orientation_filter. The run would start, drop every "
+                f"IMU sample, and land in the table as an inertial row with no "
+                f"inertial data in it.")
         elif not (imu.get("extrinsic_from_camera") or {}):
             # MEASURED 2026-09-19. The bag's tf_static carries 7 edges in 2
             # disconnected trees -- the ZED chain and the Ouster chain -- and
@@ -281,6 +296,12 @@ def main() -> int:
         imu_stream = cfg.raw.get("streams", {}).get(imu_key) or {}
         if imu_stream.get("topic"):
             cmd += ["-e", f"SLAM_IMU_TOPIC={imu_stream['topic']}"]
+        # Inserted ONLY where the dataset says the stream carries no
+        # orientation, so the filter cannot quietly appear on an agent whose
+        # vendor already fused one and make the two rows different experiments.
+        filt = mcfg.raw.get("imu_orientation_filter")
+        if filt and imu_stream.get("orientation") == "absent":
+            cmd += ["-e", f"SLAM_IMU_ORIENTATION_FILTER={filt}"]
         # THE CAMERA<-IMU EDGE, BECAUSE THE BAG DOES NOT CARRY IT.
         # Measured 2026-09-19: `zed_imu_link` is absent from the replayed
         # tf_static, so RTAB-Map dropped every IMU sample and never initialised

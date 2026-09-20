@@ -46,9 +46,24 @@ streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
 imu_by_agent:
   mobile_1: mobile_1.imu
   mobile_2: mobile_2.imu    # 183.3 Hz. Gravity only, as on mobile_1, so the
-                            # null extrinsic and null noise model do not block
-                            # it: RTAB-Map rotates the IMU through tf_static and
-                            # refuses if that chain is missing.
+                            # noise model does not block it: RTAB-Map rotates
+                            # the IMU through tf_static and refuses if that
+                            # chain is missing.
+
+# RTAB-Map READS GRAVITY OFF THE MESSAGE'S `orientation` QUATERNION AND COMPUTES
+# NONE ITSELF. A raw gyro+accel stream is rejected sample by sample and, with
+# wait_imu_to_init on, the odometry never starts. mobile_1's ZED publishes a
+# vendor-fused orientation; mobile_2's RealSense does not (measured 2026-09-20,
+# see streams.*.imu.orientation). So this row names the filter it is willing to
+# have inserted, and the harness inserts it ONLY for a stream the dataset
+# declares has none. Naming it here rather than letting the container decide is
+# what keeps the two agents' rows honestly comparable: with this line in the
+# config, the table can say that mobile_2's gravity came from Madgwick and
+# mobile_1's from the ZED SDK.
+# Madgwick runs at its PUBLISHED DEFAULTS (gain 0.1, world_frame enu) except
+# use_mag, which must be false: these modules carry no magnetometer on the
+# united IMU topic and the node otherwise blocks waiting for /imu/mag.
+imu_orientation_filter: madgwick
 
 params:
   Vis/MinInliers: 15

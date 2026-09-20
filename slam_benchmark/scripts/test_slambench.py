@@ -1240,6 +1240,23 @@ def test_an_inertial_row_without_its_extrinsic_is_refused():
         assert any("extrinsic_from_camera is null" in p for p in problems), \
             (agent, problems)
 
+    # An IMU with no ORIENTATION is the same class of silent failure and cost a
+    # run to find: RTAB-Map reads gravity off that quaternion, rejects every
+    # sample without it, and the row lands in the table looking inertial.
+    unknown = copy.deepcopy(cfg)
+    unknown.raw["streams"]["mobile_2.imu"]["orientation"] = None
+    _, problems = rm.preflight(unknown, m, "mobile_2.realsense_rgbd")
+    assert any("orientation is null" in p for p in problems), problems
+
+    # Declared absent, and the method offers no filter -> refused. Declared
+    # absent with a filter (the real config) -> allowed, because the harness
+    # inserts one.
+    import copy as _c
+    nofilt = _c.deepcopy(m)
+    nofilt.raw.pop("imu_orientation_filter", None)
+    _, problems = rm.preflight(cfg, nofilt, "mobile_2.realsense_rgbd")
+    assert any("no imu_orientation_filter" in p for p in problems), problems
+
 
 def _import_record_tum():
     """Import the recorder without ROS, by standing in for the three rclpy

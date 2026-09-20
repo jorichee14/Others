@@ -109,7 +109,49 @@ case "${SLAM_SYNC:-approx}" in
     *)      echo "SLAM_SYNC=${SLAM_SYNC} is neither exact nor approx" >&2; exit 2 ;;
 esac
 
+# ORIENTATION, WITHOUT WHICH THE IMU IS NOT AN IMU AS FAR AS RTAB-MAP IS
+# CONCERNED. It takes gravity from the message's `orientation` quaternion and
+# computes nothing itself: a raw gyro+accel message is rejected sample by sample
+# ("IMU received doesn't have orientation set, it is ignored"), and because
+# wait_imu_to_init is on, the odometry never initialises, so the mapping node
+# starves and blames its input topics. One cause, two unrelated-looking errors.
+#
+# The ZED publishes a fused orientation from its own SDK. The RealSense in this
+# bag does not. Where the dataset config declares the orientation absent, the
+# harness sets SLAM_IMU_ORIENTATION_FILTER and we run Madgwick over the raw
+# topic and hand RTAB-Map the filtered one. Started here rather than assumed:
+# a filter that silently appears on every stream would make the two agents'
+# inertial rows different experiments without saying so.
+#
+# PARAMETERS ARE THE PUBLISHED DEFAULTS except use_mag, which must be false --
+# there is no magnetometer on these modules and leaving it true makes the node
+# wait for a /imu/mag that never arrives. gain stays at its default 0.1 and
+# world_frame at enu. Madgwick derives the world's up axis from the measured
+# accelerometer, so it is correct whatever the IMU's own axis convention is,
+# and RTAB-Map rotates the result into the camera frame through tf as before.
+FILTERED_IMU=""
+if [[ -n "${SLAM_IMU_TOPIC:-}" && -n "${SLAM_IMU_ORIENTATION_FILTER:-}" ]]; then
+    case "$SLAM_IMU_ORIENTATION_FILTER" in
+      madgwick)
+        FILTERED_IMU=/slambench/imu_with_orientation
+        echo "imu filt : madgwick, $SLAM_IMU_TOPIC -> $FILTERED_IMU "\
+             "(the raw stream carries no orientation)"
+        ros2 run imu_filter_madgwick imu_filter_madgwick_node --ros-args \
+            -p use_mag:=false -p use_sim_time:=true \
+            -r imu/data_raw:="$SLAM_IMU_TOPIC" \
+            -r imu/data:="$FILTERED_IMU" &
+        # The filter must be up before the bag starts, or the first seconds of
+        # inertial data are lost exactly when the odometry is trying to init.
+        sleep 3 ;;
+      *) echo "SLAM_IMU_ORIENTATION_FILTER=${SLAM_IMU_ORIENTATION_FILTER} is not a filter this image has" >&2
+         exit 2 ;;
+    esac
+fi
+
 IMU_ARGS=()
+if [[ -n "${FILTERED_IMU}" ]]; then
+    SLAM_IMU_TOPIC="$FILTERED_IMU"
+fi
 if [[ -n "${SLAM_IMU_TOPIC:-}" ]]; then
     # always_check_imu_tf stays at its default: if the bag's tf_static does not
     # reach the IMU from $FRAME_ID, RTAB-Map must FAIL rather than fuse an
