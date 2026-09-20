@@ -1986,6 +1986,19 @@ def test_board_table_collects_tier_two_across_methods():
     assert len(rows) == 3
     assert {r["method"] for r in rows} == {"rtabmap_rgbd_imu", "mast3r_slam", "kiss_icp"}
     assert collect(root, agent="mobile_1") and len(collect(root, agent="mobile_2")) == 1
+    # the front-end's score sits beside the graph's, and says which is which
+    write("rtabmap/m1/run2", {
+        "method": "rtabmap_rgbd_imu", "agent": "mobile_1", "stream": "s", "run_dir": "run2",
+        "anchor_alignment": {"mode": "se3", "independent": True},
+        "absolute_check": [{"anchor": "anchor", "n": 90, "residual_m": 0.496,
+                            "residual_deg": 5.8, "uncertainty_m": 0.007, "verdict": "x"}]})
+    (root / "rtabmap/m1/run2/metrics_odometry.json").write_text(
+        (root / "rtabmap/m1/run2/metrics.json").read_text())
+    rows = collect(root)
+    assert {r["from"] for r in rows} >= {"graph", "odometry"}
+    text = render(rows)
+    assert "odometry" in text and "graph" in text
+    rows = [r for r in rows if r["run"] != "run2"]
     text = render(rows)
     assert "147.0" in text and "91.0" in text
     assert "NOT independent" in text                  # the monocular row is marked

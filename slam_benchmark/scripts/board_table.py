@@ -36,10 +36,14 @@ def collect(runs_root: Path, agent: str | None = None) -> list[dict]:
         ac = m.get("absolute_check")
         if not isinstance(ac, list):
             continue
+        # WHICH trajectory: metrics.json is the method's own output (RTAB-Map's
+        # loop-closed graph), metrics_odometry.json the front-end alone. They
+        # score differently and appeared as unexplained duplicate rows.
+        src = "graph" if p.name == "metrics.json" else p.stem.replace("metrics_", "")
         aa = m.get("anchor_alignment") or {}
         for r in ac:
             rows.append({
-                "method": m.get("method"), "agent": m.get("agent"),
+                "method": m.get("method"), "agent": m.get("agent"), "from": src,
                 "stream": m.get("stream"), "run": Path(m.get("run_dir", "")).name,
                 "anchor": r.get("anchor"), "n": r.get("n", 0),
                 "residual_m": r.get("residual_m"), "residual_deg": r.get("residual_deg"),
@@ -65,9 +69,10 @@ def render(rows: list[dict]) -> str:
         return ("no absolute_check in any metrics.json under that root. Score a run "
                 "first (scripts/eval_run.py), and check that the dataset config "
                 "declares reference.anchors[*].windows_by_agent.")
-    out = [f"{'method':<18} {'agent':<9} {'anchor':<10} {'resid':>8} {'σ':>6} "
+    out = [f"{'method':<18} {'agent':<9} {'from':<9} {'anchor':<10} {'resid':>8} {'σ':>6} "
            f"{'n':>4} {'deg':>6} {'align':>5}  note"]
-    for r in sorted(rows, key=lambda r: (r["method"] or "", r["agent"] or "", r["anchor"] or "")):
+    for r in sorted(rows, key=lambda r: (r["method"] or "", r["agent"] or "",
+                                         r["anchor"] or "", r["from"])):
         note = []
         if r["stale"]:
             note.append("STALE: scored before the tier-2 fixes; re-run eval_run.py")
@@ -78,7 +83,8 @@ def render(rows: list[dict]) -> str:
         if not r["n"]:
             note.append(r["verdict"])
         deg = "—" if r["residual_deg"] is None else f"{r['residual_deg']:.2f}"
-        out.append(f"{r['method']:<18} {r['agent']:<9} {r['anchor'] or '—':<10} "
+        out.append(f"{r['method']:<18} {r['agent']:<9} {r['from']:<9} "
+                   f"{r['anchor'] or '—':<10} "
                    f"{_mm(r['residual_m']):>8} {_mm(r['uncertainty_m']):>6} "
                    f"{r['n']:>4} {deg:>6} {r['align']:>5}  {'; '.join(note)}")
     return "\n".join(out)
