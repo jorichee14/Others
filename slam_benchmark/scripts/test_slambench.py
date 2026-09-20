@@ -996,11 +996,14 @@ def test_an_inertial_method_is_actually_played_its_imu():
 def test_the_stage_1_cells_are_runnable_or_blocked_for_a_recorded_reason():
     """docs/PLAN.md stage 1: three backbones on two platforms.
 
-    Measured 2026-09-19, the grid is not six clean cells. mobile_2's inertial
-    RTAB-Map is blocked on an extrinsic the bag cannot supply, so that platform's
-    feature+depth backbone is the IMU-FREE half of the pair. Writing the real
-    grid down here means a cell that silently starts working -- or stops --
-    shows up as a test change rather than as a number in a table.
+    Measured 2026-09-19 the grid was not six clean cells: mobile_2's inertial
+    RTAB-Map was blocked on an extrinsic the bag cannot supply. UNBLOCKED
+    2026-09-20 -- the camera->IMU transform turned out to be a mechanical
+    constant fixed by design rather than a per-unit calibration, so it comes
+    from Intel's published D455 geometry composed with this unit's measured
+    colour extrinsic, and the cell is runnable. All seven cells now are.
+    Writing the real grid down here means a cell that silently starts working
+    -- or stops -- shows up as a test change rather than as a number in a table.
     """
     import scripts.run_method as rm
     from slambench.config import load_dataset, load_method
@@ -1011,6 +1014,7 @@ def test_the_stage_1_cells_are_runnable_or_blocked_for_a_recorded_reason():
                 ("kiss_icp", "mobile_2.realsense_rgbd"),
                 ("rtabmap_rgbd_imu", "mobile_1.zed_rgbd"),
                 ("rtabmap_rgbd", "mobile_2.realsense_rgbd"),
+                ("rtabmap_rgbd_imu", "mobile_2.realsense_rgbd"),
                 ("mast3r_slam", "mobile_1.zed_rgbd"),
                 ("mast3r_slam", "mobile_2.realsense_rgbd")]
     for name, stream in runnable:
@@ -1019,7 +1023,7 @@ def test_the_stage_1_cells_are_runnable_or_blocked_for_a_recorded_reason():
         _, problems = rm.preflight(cfg, m, stream)
         assert not problems, (name, stream, problems)
 
-    blocked = [("rtabmap_rgbd_imu", "mobile_2.realsense_rgbd", "extrinsic_from_camera")]
+    blocked: list[tuple[str, str, str]] = []      # none, as of 2026-09-20
     for name, stream, why in blocked:
         m = load_method(os.path.join(root, "configs", "methods", f"{name}.yaml"))
         _, problems = rm.preflight(cfg, m, stream)
@@ -1205,21 +1209,36 @@ def test_the_colour_depth_edge_is_published_only_when_the_frames_differ():
 
 @test
 def test_an_inertial_row_without_its_extrinsic_is_refused():
-    """It would not fail. RTAB-Map logs "Dropping imu data!" and CONTINUES, so
-    the row lands in the table as evidence the IMU did not help, with no IMU in
-    it. mobile_2.imu.extrinsic_from_camera is null and the bag's tf_static
-    carries no inertial frames, so nothing can supply it at run time."""
+    """It would not fail, which is why the gate exists. RTAB-Map logs "Dropping
+    imu data!" and CONTINUES, so the row lands in the table as evidence the IMU
+    did not help, with no IMU in it -- the silent-wrong-result failure rule 3 is
+    written against.
+
+    Both agents now DECLARE their extrinsic, so the gate is exercised by taking
+    one away rather than by relying on the config still having a hole in it. A
+    test that asserts today's gaps stops testing the mechanism the moment the
+    gap is filled, and this one already did once.
+    """
+    import copy
     import scripts.run_method as rm
     from slambench.config import load_dataset, load_method
     root = str(Path(__file__).resolve().parents[1])
     cfg = load_dataset(os.path.join(root, "configs", "coop2.yaml"))
     m = load_method(os.path.join(root, "configs", "methods", "rtabmap_rgbd_imu.yaml"))
 
-    _, problems = rm.preflight(cfg, m, "mobile_2.realsense_rgbd")
-    assert any("extrinsic_from_camera is null" in p for p in problems), problems
-    # mobile_1 has it (I13) and must still pass, so the gate is not blanket
-    _, ok = rm.preflight(cfg, m, "mobile_1.zed_rgbd")
-    assert not ok, ok
+    # as declared: both inertial cells pass
+    for stream in ("mobile_1.zed_rgbd", "mobile_2.realsense_rgbd"):
+        _, problems = rm.preflight(cfg, m, stream)
+        assert not problems, (stream, problems)
+
+    # with the extrinsic removed: refused, by name
+    for agent, stream in (("mobile_2", "mobile_2.realsense_rgbd"),
+                          ("mobile_1", "mobile_1.zed_rgbd")):
+        holed = copy.deepcopy(cfg)
+        holed.raw["streams"][f"{agent}.imu"]["extrinsic_from_camera"] = None
+        _, problems = rm.preflight(holed, m, stream)
+        assert any("extrinsic_from_camera is null" in p for p in problems), \
+            (agent, problems)
 
 
 def _import_record_tum():

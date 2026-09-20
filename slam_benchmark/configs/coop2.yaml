@@ -694,10 +694,16 @@ streams:
     # zed_imu_link either. So NOTHING about mobile_2's geometry is recoverable
     # from tf_static, and this extrinsic cannot be filled the way I13 was.
     #
-    # Recover it from the device: `rs-enumerate-devices -c` prints the
-    # depth<-IMU extrinsic, or record /tf from a live realsense2_camera node
-    # with publish_tf enabled. It is a per-unit factory value, so it is measured
-    # once and serves every future recording, exactly like I13.
+    # RETRACTED 2026-09-20: this block used to say the depth<-IMU extrinsic is
+    # "a per-unit factory value", and that is WRONG. librealsense's own
+    # doc/d435i.md states it plainly: "The depth<->IMU sensor extrinsic (rigid
+    # body transformation) is precalculated based on mechanical drawings and
+    # cannot be modified." What IS per-unit on these modules is the IMU
+    # INTRINSIC set -- bias, zero offset, covariance -- which ships
+    # uncalibrated and is what `rs-imu-calibration.py` writes to NVRAM. That
+    # distinction is the whole difference between this field, which is now
+    # filled from a published constant, and `noise_model` below, which still
+    # cannot be.
     #
     # 2026-09-20: THE DEVICE IS NOT ALWAYS TO HAND, AND THE ROTATION DOES NOT
     # NEED IT. The IMU is bolted to the imager, so both sensors observe the same
@@ -723,12 +729,56 @@ streams:
     # on a flat floor. Rotation about the two in-plane axes is therefore NOT
     # identified, and no amount of data from THIS sequence will identify it.
     # Not a defect in the method and not a tuning threshold to relax: it is the
-    # motion. The extrinsic must come off the device.
+    # motion.
     # CONSEQUENCE BEYOND THIS FIELD: any method that self-calibrates its
     # camera-IMU extrinsic online hits the same rank deficiency and will not
     # converge here. Declare the extrinsic to such a method; do not let it
     # solve for one.
-    extrinsic_from_camera: null
+    #
+    # FILLED 2026-09-20 from the mechanical constant, NOT from a guess. Because
+    # the extrinsic is fixed by design rather than calibrated per unit (see the
+    # retraction above), the value the device would report is the published one,
+    # and fetching the D455 adds nothing to this field. Composed as
+    #   camera_color_optical_frame <- camera_link <- camera_imu_optical_frame
+    # from two parts:
+    #   (a) camera_link -> IMU, the mechanical constant, from Intel's own
+    #       realsense2_description/urdf/_d455.urdf.xacro:
+    #         d455_imu_px -0.01602, d455_imu_py -0.03022, d455_imu_pz +0.0074
+    #       with the IMU link at rpy 0 0 0 to camera_link and the optical frame
+    #       at rpy -pi/2 0 -pi/2, as every RealSense optical frame is.
+    #   (b) camera_link -> camera_color_optical_frame, MEASURED ON THIS UNIT
+    #       (trans [0.000308, 0.059191, -0.000162], quat xyzw
+    #        [0.499583, -0.497446, 0.501716, -0.501244]). The depth<->colour
+    #       extrinsic IS per-unit calibrated, so this half uses the device's own
+    #       number and carries its 0.383 deg departure from nominal into the
+    #       result.
+    # THREE INDEPENDENT CHECKS, all passed:
+    #   * librealsense issue #7568 reports [-0.0302, 0.0074, 0.0160] read off a
+    #     real D455 bag; the URDF constant in optical axes negates to
+    #     [-0.03022, 0.0074, 0.01602] -- the same transform in the opposite
+    #     direction, agreeing to 0.03 mm.
+    #   * the URDF's depth->colour offset of 0.059 m matches this unit's
+    #     measured 0.059192 m to 0.19 mm, which is what confirms the part number
+    #     is right and this is a D455 and not a D435i.
+    #   * the nominal body->optical rotation sits 0.383 deg from this unit's
+    #     measured colour optical rotation, i.e. within per-unit calibration.
+    # THE LEVER ARM IS 91.2 mm, NOT A FEW MILLIMETRES. The colour imager and the
+    # IMU sit on OPPOSITE sides of camera_link -- colour +59 mm, IMU -30 mm
+    # along y -- so anything that treats them as co-located is 9 cm wrong.
+    extrinsic_from_camera:                  # camera_color_optical_frame <- camera_imu_optical_frame
+      x:  0.089403
+      y: -0.007426
+      z: -0.016432
+      roll:  -0.33964                       # deg
+      pitch:  0.095783
+      yaw:    0.149144
+      source: >-
+        realsense2_description _d455.urdf.xacro (mechanical constant, fixed by
+        design per librealsense doc/d435i.md) composed with this unit's measured
+        camera_link -> camera_color_optical_frame. Cross-checked against
+        librealsense issue #7568 to 0.03 mm.
+      independent_of_reference: true        # nothing here came from cuVSLAM
+      # What this does NOT cover: the per-unit IMU intrinsics. See noise_model.
     noise_model: null
 
   # ------------------------------------------------- already-recorded baselines
