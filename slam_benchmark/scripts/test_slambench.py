@@ -2071,6 +2071,41 @@ def test_scale_observed_points_at_the_estimate_and_says_which_way():
     assert "the estimate is" in ev and "too {'large' if ratio > 1 else 'small'}" in ev
 
 
+@test
+def test_rescore_plans_from_the_manifests_not_a_hand_written_list():
+    """Re-scoring by hand-maintained (method, stream) pairs went wrong three
+    times: a missing cell, a wrong reference, errors swallowed by a redirect.
+    The plan comes from run.json, covers odometry.tum beside trajectory.tum,
+    and names what it cannot score instead of skipping it quietly."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from rescore import plan
+    root = Path(tempfile.mkdtemp())
+    methods = root / "methods"; methods.mkdir()
+    (methods / "rtabmap_rgbd_imu.yaml").write_text("name: rtabmap_rgbd_imu\n")
+    refs = root / "ref"; refs.mkdir()
+    def run(sub, manifest, files):
+        d = root / "runs" / sub; d.mkdir(parents=True)
+        (d / "run.json").write_text(json.dumps(manifest))
+        for f, body in files.items():
+            (d / f).write_text(body)
+        return d
+    good = run("a", {"method": "rtabmap_rgbd_imu", "agent": "mobile_1",
+                     "stream": "mobile_1.zed_rgbd"},
+               {"trajectory.tum": "x\n", "odometry.tum": "y\n"})
+    run("b", {"method": "rtabmap_rgbd_imu", "agent": "mobile_1",
+              "stream": "mobile_1.zed_rgbd"}, {"trajectory.tum": ""})
+    run("c", {"method": "no_such_method", "agent": "mobile_1", "stream": "s"},
+        {"trajectory.tum": "x\n"})
+    run("d", {"agent": "mobile_1"}, {"trajectory.tum": "x\n"})
+    jobs = plan(root / "runs", refs, methods)
+    scored = [j for j in jobs if not j.get("skip")]
+    assert {j["traj"] for j in scored} == {"trajectory.tum", "odometry.tum"}
+    assert all(j["run"] == good for j in scored)
+    assert all(j["reference"] == refs / "mobile_1.tum" for j in scored)
+    skips = " ".join(j["skip"] for j in jobs if j.get("skip"))
+    assert "empty file" in skips and "no method config" in skips and "lacks method" in skips
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

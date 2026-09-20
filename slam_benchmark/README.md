@@ -28,6 +28,8 @@ python3 scripts/spread.py      --config configs/coop2.yaml \
     --method configs/methods/rtabmap_rgbd_imu.yaml --stream mobile_1.zed_rgbd \
     --cell runs/coop2_20260828/rtabmap_rgbd_imu/mobile_1.zed_rgbd \
     --reference runs/coop2_20260828/reference/mobile_1.tum
+# re-score every run on disk (seconds; do this whenever the evaluator changes)
+python3 scripts/rescore.py      --runs runs/coop2_20260828 --config configs/coop2.yaml
 # tier 2: the board residual per method -- the only error bar not from the reference
 python3 scripts/board_table.py  --runs runs/coop2_20260828
 python3 scripts/aggregate.py   --runs runs/coop2_20260828 \
