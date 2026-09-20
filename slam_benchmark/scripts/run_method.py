@@ -295,7 +295,8 @@ def main() -> int:
         # The method's own launch script lives under docker/<image>/, named
         # after the image tag: slambench/rtabmap:humble -> docker/rtabmap/.
         image = mcfg.raw.get("image", f"slambench/{mcfg.name}:humble")
-        mounts += sorted((ROOT / "docker" / image.split("/", 1)[-1].split(":")[0]).glob("*.sh"))
+        idir = ROOT / "docker" / image.split("/", 1)[-1].split(":")[0]
+        mounts += sorted(idir.glob("*.sh")) + sorted(idir.glob("*.py"))
         for f in mounts:
             cmd[2:2] = ["-v", f"{f}:/opt/slambench/{f.name}:ro"]
     if args.shell:

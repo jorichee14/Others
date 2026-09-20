@@ -1471,7 +1471,7 @@ def test_recorder_subscribes_to_the_pose_topic_exactly_once():
     assert args.pose_type == "geometry_msgs/msg/PoseStamped"
     entry = (Path(__file__).resolve().parents[1] / "docker" / "common" / "entrypoint.sh").read_text()
     assert "--pose-type" in entry and "SLAM_POSE_TYPE" in entry
-    for df in ("Dockerfile.rtabmap", "Dockerfile.kiss-icp"):
+    for df in ("Dockerfile.rtabmap",):                 # kiss-icp is offline: no recorder
         text = (Path(__file__).resolve().parents[1] / "docker" / df).read_text()
         assert "SLAM_POSE_TYPE=" in text, f"{df} does not declare its pose type"
 
@@ -1633,31 +1633,88 @@ def test_scoring_the_front_end_does_not_overwrite_the_graph_score():
 
 
 @test
-def test_kiss_launch_passes_no_empty_valued_parameter():
-    """`-p base_frame:=` aborted kiss_icp_node before it subscribed: rcl cannot
-    parse a parameter override with an empty value. The node's default is
-    already the empty string, so the flag is simply not passed."""
-    import re
-    text = (Path(__file__).resolve().parents[1] / "docker" / "kiss-icp" / "launch.sh").read_text()
-    empties = re.findall(r'-p\s+\S+:=(?:""|\'\')?(?:\s|\\|$)', text, flags=re.M)
-    assert not empties, f"empty-valued -p override(s): {empties}"
-    assert "base_frame" not in re.sub(r"#.*", "", text), "base_frame must not be passed"
+def test_kiss_offline_runner_refuses_unknown_params_and_overrides_deskew_on_depth():
+    """The library ignores a key it does not know; the manifest would then claim
+    a parameter the run never had. Unknown keys are refused. On a depth stream
+    deskew is forced off and reported, since a depth image has no per-point
+    time. voxel_size absent -> the library's own rule, max_range/100."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "docker" / "kiss-icp"))
+    import run_offline as ro
+
+    class NS:                                   # a KISSConfig-shaped stand-in
+        def __init__(self, **kw): self.__dict__.update(kw)
+    def cfg():
+        return NS(data=NS(max_range=100.0, min_range=5.0, deskew=False),
+                  mapping=NS(voxel_size=None, max_points_per_voxel=20),
+                  registration=NS(max_num_iterations=500, convergence_criterion=1e-4),
+                  adaptive_threshold=NS(fixed_threshold=None, initial_threshold=2.0, min_motion_th=0.1))
+    declared = {"max_range": 20.0, "min_range": 0.3, "voxel_size": 0.10, "deskew": True,
+                "initial_threshold": 0.5, "max_points_per_voxel": 20}
+    c = cfg(); ov = ro.apply_params(c, declared, "rgbd")
+    assert c.data.max_range == 20.0 and c.mapping.voxel_size == 0.10
+    assert c.adaptive_threshold.initial_threshold == 0.5
+    assert c.data.deskew is False and ov == {"deskew": False}
+    c = cfg(); ov = ro.apply_params(c, declared, "lidar")
+    assert c.data.deskew is True and ov == {}
+    c = cfg(); ro.apply_params(c, {"max_range": 20.0}, "lidar")
+    assert abs(c.mapping.voxel_size - 0.2) < 1e-12
+    try:
+        ro.apply_params(cfg(), {"voxel": 0.1}, "rgbd")
+        assert False, "unknown key accepted"
+    except SystemExit as e:
+        assert "voxel" in str(e)
+    # every key the method config declares is one the runner takes
+    import yaml
+    mp = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs" / "methods" / "kiss_icp.yaml").read_text())
+    assert set(mp["params"]) <= set(ro.PARAM_MAP), set(mp["params"]) - set(ro.PARAM_MAP)
 
 
 @test
-def test_kiss_launch_does_not_publish_debug_clouds():
-    """publish_debug_clouds re-serialises the whole local map every frame; on a
-    15 Hz depth stream it left 155 poses of 2288. Off, and the method declares
-    no map output so the absence is declared rather than discovered."""
-    import re
+def test_kiss_offline_runner_helpers():
+    """Stamps normalised to [0,1] for the deskew (mid-pose 0.5); the pose row
+    round-trips through the evaluator's loader; per-frame stats keep the stalls."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "docker" / "kiss-icp"))
+    import run_offline as ro
+    t = ro.normalise_stamps(np.array([10.0, 12.0, 14.0]))
+    assert np.allclose(t, [0.0, 0.5, 1.0])
+    assert np.allclose(ro.normalise_stamps(np.array([3.0, 3.0])), [0.5, 0.5])
+    assert ro.normalise_stamps(np.array([])).size == 0
+    T = se3.pose_from_rpy(1.0, -2.0, 0.5, 12.0, -34.0, 156.0)   # a big rotation, every branch
+    for R in (T, se3.pose_from_rpy(0, 0, 0, 170.0, 5.0, 0.0), se3.pose_from_rpy(0, 0, 0, 5.0, 170.0, 0.0),
+              se3.pose_from_rpy(0, 0, 0, 0.0, 5.0, 175.0)):
+        q = ro.quat_xyzw(R[:3, :3])
+        assert q[3] >= 0 and abs(np.linalg.norm(q) - 1) < 1e-12
+        assert np.allclose(se3.quat_to_rot(q), R[:3, :3], atol=1e-9), R
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "t.tum"
+        f.write_text("# h\n" + ro.pose_row(1700000000.5, T))
+        back = load_tum(f)
+    assert np.allclose(back.poses[0], T, atol=1e-5)
+    assert abs(back.stamps[0] - 1700000000.5) < 1e-6
+    st = ro.frame_stats([0.05] * 90 + [2.0] * 8 + [30.0, 65.0])
+    assert st["n"] == 100 and st["over_5s"] == 2 and st["over_1s"] == 10
+    assert abs(st["max"] - 65.0) < 1e-12 and abs(st["median"] - 0.05) < 1e-12
+    assert ro.frame_stats([]) == {"n": 0}
+
+
+@test
+def test_kiss_image_is_offline_and_dev_mounts_its_runner():
+    """No launch.sh, no pose topic: the image replaces the entrypoint like
+    MASt3R's does. --dev mounts docker/kiss-icp/*.py too, or a fix to the
+    runner would need a rebuild to be tested."""
     root = Path(__file__).resolve().parents[1]
-    text = re.sub(r"#.*", "", (root / "docker" / "kiss-icp" / "launch.sh").read_text())
-    assert "publish_debug_clouds:=false" in text
+    df = (root / "docker" / "Dockerfile.kiss-icp").read_text()
+    assert 'ENTRYPOINT ["/opt/slambench/run.sh"]' in df
+    assert "SLAM_POSE_TOPIC" not in df and "colcon" not in df
+    assert "KISS_ICP_REF=v1.0.0" in df
+    assert not (root / "docker" / "kiss-icp" / "launch.sh").exists()
+    assert (root / "docker" / "kiss-icp" / "run_offline.py").exists()
+    rm = (root / "scripts" / "run_method.py").read_text()
+    assert 'glob("*.py")' in rm.split("idir")[-1]
     from slambench.config import load_method
     m = load_method(root / "configs" / "methods" / "kiss_icp.yaml")
-    assert "map" not in m.outputs, m.outputs
-    df = (root / "docker" / "Dockerfile.kiss-icp").read_text()
-    assert re.search(r"^ENV SLAM_MAP_TOPIC=\s*$", df, flags=re.M), "kiss image must declare no map topic"
+    assert "replay_rate" not in m.raw, "an offline run has no replay rate"
+    assert m.outputs == ["trajectory", "map"]
 
 
 def main() -> int:

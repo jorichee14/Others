@@ -3,25 +3,22 @@ FROM slambench/base:humble
 # Pinned to a tag, not a branch: a tag that moves is a manifest that lies.
 ARG KISS_ICP_REF=v1.0.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libeigen3-dev libtbb-dev python3-colcon-common-extensions \
-        ros-humble-tf2-eigen ros-humble-nav-msgs ros-humble-sensor-msgs \
+        libeigen3-dev libtbb-dev ninja-build python3-dev \
     && rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /opt/kiss_ws/src && cd /opt/kiss_ws/src && \
-    git clone --depth 1 --branch ${KISS_ICP_REF} https://github.com/PRBonn/kiss-icp.git && \
-    cd /opt/kiss_ws && \
-    source /opt/ros/humble/setup.bash && \
-    colcon build --base-paths src/kiss-icp/ros --cmake-args -DCMAKE_BUILD_TYPE=Release && \
-    rm -rf /opt/kiss_ws/build /opt/kiss_ws/log
+# The Python package, not the ROS wrapper. It binds the same C++ core; the
+# difference is that run_offline.py hands it every frame from the bag in turn,
+# where the node's best-effort subscription dropped whatever arrived while a
+# slow frame was registering (155-566 of 2288 frames over four runs).
+RUN git clone --depth 1 --branch ${KISS_ICP_REF} https://github.com/PRBonn/kiss-icp.git /opt/kiss-icp && \
+    pip3 install --no-cache-dir /opt/kiss-icp/python plyfile && \
+    rm -rf /opt/kiss-icp/python/build
 
-COPY docker/kiss-icp/launch.sh /opt/slambench/launch.sh
-RUN chmod +x /opt/slambench/launch.sh
+COPY docker/kiss-icp/run_offline.py /opt/slambench/run_offline.py
+COPY docker/kiss-icp/run.sh         /opt/slambench/run.sh
+RUN chmod +x /opt/slambench/run.sh
 
-# No map topic: /kiss/local_map exists only under publish_debug_clouds, which
-# re-serialises the whole local map every frame and ran the node at ~1 Hz on a
-# 15 Hz depth stream (see launch.sh). kiss_icp.yaml declares outputs: [trajectory].
-ENV SLAM_POSE_TOPIC=/kiss/odometry
-ENV SLAM_POSE_TYPE=nav_msgs/msg/Odometry
-ENV SLAM_MAP_TOPIC=
-# On a depth stream the entrypoint has to build the cloud; on mobile_1.ouster
-# SLAM_CLOUD_TOPIC comes straight from the stream and the bridge stays asleep.
-ENV SLAM_NEEDS_CLOUD=1
+# Offline: no pose topic, no recorder, no bridge. The runner deprojects depth
+# itself with depth_to_cloud.deproject (same code, same stride) on rgbd and
+# reads PointCloud2 on lidar.
+ENV SLAM_NEEDS_CLOUD=0
+ENTRYPOINT ["/opt/slambench/run.sh"]

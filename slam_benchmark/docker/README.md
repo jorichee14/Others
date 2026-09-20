@@ -57,9 +57,15 @@ method started subscribed to nothing. That shipped once; this is the fix.
 An image also declares `SLAM_POSE_TOPIC` (required), `SLAM_MAP_TOPIC`, and
 `SLAM_NEEDS_CLOUD=1` if it wants the depth→cloud bridge below.
 
-A method that is **not a ROS node** — MASt3R-SLAM — replaces the entrypoint
-entirely with its own `run.sh` and meets the same three-file contract by
-unrolling the bag, running offline, and restamping the result.
+A method that is **not run as a ROS node** replaces the entrypoint entirely
+with its own `run.sh` and meets the same three-file contract offline. Two do:
+MASt3R-SLAM (not a ROS node at all: unroll the bag, run, restamp) and
+**KISS-ICP** (`docker/kiss-icp/run_offline.py`: read the bag, deproject each
+depth frame with the same `depth_to_cloud.deproject`, hand it to the library's
+Python API, write every pose). KISS-ICP's ROS node was tried first and dropped
+73-93% of the frames on the depth stream: single frames took up to a minute and
+its input subscription is best-effort. Offline, nothing is dropped, and the
+time each frame took is in `timing.json` as `frame_s`.
 
 ### Shared pieces, in `docker/common/`
 
@@ -82,8 +88,9 @@ without ROS, a bag, a GPU or a network.
 python3 scripts/run_method.py ... --execute --dev
 ```
 
-`--dev` bind-mounts `docker/common/*.py` and `entrypoint.sh` over the image's
-copies, so a fix to the recorder or the entrypoint runs immediately. The base
+`--dev` bind-mounts `docker/common/*.py`, `entrypoint.sh`, and the method's own
+`docker/<image>/*.sh` and `*.py` over the image's copies, so a fix to the
+recorder, the entrypoint or a runner runs immediately. The base
 image is `FROM` for every method image, so a one-line script fix otherwise
 costs a full rebuild of all of them. `run.json` records `dev_scripts_mounted`,
 because the image tag then no longer describes what ran: a `--dev` run is for

@@ -7,20 +7,16 @@ modality: [lidar, rgbd]   # accepts both; the report block comes from the stream
 coupling: none            # no inertial input at all
 needs_imu: false
 loop_closure: false
-# No map. The ROS node only exposes its local map through publish_debug_clouds,
-# which publishes the whole map on every frame and cost more than registration
-# (155 of 2288 frames processed with it on). Trajectory only, declared here so
-# the evaluator's "no map.ply" is an expected absence, not a missing output.
-outputs: [trajectory]
+# The map is the library's local map, written once at the end of the offline
+# run. (The ROS node could only expose it by re-publishing the whole map every
+# frame, which cost more than registration; that path is gone.)
+outputs: [trajectory, map]
 reference_impl: https://github.com/PRBonn/kiss-icp
 image: slambench/kiss-icp:humble
-# Replay at a tenth of real time. Measured 2026-09-19 on the benchmark host with
-# the params below on mobile_1.zed_rgbd (110k-point clouds, 0.1 m voxels): the
-# node registers one frame per ~0.48 s wall, against a 67 ms frame period, and
-# its input subscription is best-effort, so at rate 1.0 it processed 325 of
-# 2288 frames. 0.1 gives 0.67 s per frame. Offline evaluation: runtime columns
-# are not comparable with rate-1.0 rows, and aggregate.py says so.
-replay_rate: 0.1              # harness default 1.0
+# No replay: this image runs OFFLINE (docker/kiss-icp/run_offline.py), reading
+# the bag and registering every frame in turn. Four runs of the ROS node
+# processed 155-566 of 2288 frames -- single frames took 5-65 s and its
+# best-effort input dropped the rest -- and no replay rate covers a minute.
 
 # One method, several streams. This is the row that carries the cross-modality
 # comparison: the SAME estimator on the Ouster and on both depth streams, so a
@@ -44,13 +40,10 @@ params:
   # can be checked against the tuning rather than blamed on the method.
   max_range: 20.0          # default 100.0
   min_range: 0.3           # default 5.0 — a 5 m floor discards the whole room
-  # The published rule, max_range/100, applied to the declared max_range. This
-  # was 0.10 until 2026-09-19: on mobile_1.zed_rgbd at 0.10 the node stalled on
-  # 10% of frames for 5-65 s each, spread over the whole path and a third of
-  # them with the cart stationary -- ICP running to its iteration cap on depth
-  # noise (~0.16 m at 2 m) larger than the voxel. 566 of 2288 frames processed
-  # at replay 0.1. That run is kept under runs/ as the 0.10 result.
-  voxel_size: 0.20         # default max_range/100 = 1.0 m at the default range
+  voxel_size: 0.10         # default max_range/100 = 1.0 m at the default range
+  # 0.20 (the rule at the declared 20 m) was tried on 2026-09-19 against the
+  # node's frame loss and was WORSE (320 vs 566 of 2288): the loss was not the
+  # point count. Both runs are kept under runs/. 0.10 is the declared value.
   deskew: true             # the Ouster carries per-point t; use it
   initial_threshold: 0.5   # default 2.0 (adaptive after the first frames)
   max_points_per_voxel: 20
