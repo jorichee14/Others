@@ -1933,7 +1933,7 @@ def test_a_scale_free_method_gets_its_anchors_from_the_sim3_fit_and_says_so():
     assert m["metric_scale"] is False and m["poses"] == "keyframes"
     ev = (root / "scripts" / "eval_run.py").read_text()
     assert 'mcfg.raw.get("metric_scale", True)' in ev
-    assert 'mcfg.raw.get("poses") == "keyframes"' in ev
+    assert "interpolate=True" in ev, "the anchor check must not depend on a method declaring sparsity"
     # the two other RGB-D methods keep se3 and stay independent
     for name in ("rtabmap_rgbd.yaml", "kiss_icp.yaml"):
         r = yaml.safe_load((root / "configs" / "methods" / name).read_text())
@@ -1988,6 +1988,14 @@ def test_board_table_collects_tier_two_across_methods():
     assert "NOT independent" in text                  # the monocular row is marked
     assert "interpolated across 1.80 s" in text
     assert "no board-derived pose inside the window" in text
+    # a metrics.json from before the fixes is marked, not silently compared
+    write("old/m1/run1", {"method": "old_run", "agent": "mobile_1", "stream": "s",
+                          "run_dir": "run1",
+                          "absolute_check": [{"anchor": "anchor", "n": 62,
+                                              "residual_m": 0.499, "uncertainty_m": 0.007,
+                                              "verdict": "resolved"}]})
+    text = render(collect(root))
+    assert "STALE" in text and "re-run eval_run.py" in text
     assert "no absolute_check" in render([])
 
 

@@ -45,8 +45,12 @@ def collect(runs_root: Path, agent: str | None = None) -> list[dict]:
                 "residual_m": r.get("residual_m"), "residual_deg": r.get("residual_deg"),
                 "uncertainty_m": r.get("uncertainty_m"), "spread_m": r.get("spread_m"),
                 "interp_gap_s": r.get("interp_gap_s"),
-                "align": aa.get("mode", "?"),
+                "align": aa.get("mode", "stale"),
                 "independent": aa.get("independent", True),
+                # A metrics.json written before the tier-2 fixes carries no
+                # anchor_alignment block. Its residual was computed under the
+                # old rules and must not sit in a table beside the new ones.
+                "stale": not aa,
                 "verdict": r.get("verdict", ""),
             })
     return rows
@@ -65,6 +69,8 @@ def render(rows: list[dict]) -> str:
            f"{'n':>4} {'deg':>6} {'align':>5}  note"]
     for r in sorted(rows, key=lambda r: (r["method"] or "", r["agent"] or "", r["anchor"] or "")):
         note = []
+        if r["stale"]:
+            note.append("STALE: scored before the tier-2 fixes; re-run eval_run.py")
         if not r["independent"]:
             note.append("scale from reference: NOT independent")
         if r["interp_gap_s"]:

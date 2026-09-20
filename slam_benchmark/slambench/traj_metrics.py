@@ -271,7 +271,9 @@ def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
                              "verdict": f"board-derived poses in the window matched "
                                         f"no estimate pose within {max_dt_s*1e3:.0f} ms"
                                         + ("" if interpolate else
-                                           " (a keyframe trajectory needs interpolate)")})
+                                           " (a sparse trajectory needs interpolate)")
+                                        + ("; the window lies outside the estimate's span"
+                                           if interpolate else "")})
                 continue
             dp = np.asarray(dp)
             d = float(np.median(dp))

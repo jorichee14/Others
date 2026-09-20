@@ -21,9 +21,11 @@ image: slambench/mast3r-slam:humble
 # reference, which costs this row its independence at that tier. Declared here
 # so the evaluator does both automatically rather than by anyone remembering.
 metric_scale: false
-# main.py saves KEYFRAME poses only (38 over 156 s on mobile_1). The evaluator
-# associates by stamp, so a sparse trajectory is legal, but the anchor check
-# must evaluate between poses rather than demand one within 50 ms.
+# main.py saves KEYFRAME poses only (38 over 156 s on mobile_1, 151 on
+# mobile_2). The evaluator associates by stamp, so a sparse trajectory is
+# legal; the anchor check evaluates between poses and prints the gap. Recorded
+# here for the reader, not read by the evaluator — sparsity is a property of
+# the run (RTAB-Map's graph export is sparse too, its odometry is not).
 poses: keyframes
 gpu: required
 

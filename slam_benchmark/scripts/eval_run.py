@@ -133,10 +133,13 @@ def main() -> int:
                                           "is not independent evidence"}),
         }
         anchors = cfg.anchors(agent)
-        # A keyframe trajectory is evaluated between its poses; see absolute_check.
-        interp = mcfg.raw.get("poses") == "keyframes"
+        # Interpolation is decided by the TRAJECTORY, not the method: RTAB-Map's
+        # odometry is 2227 poses and its loop-closed graph export is 95 nodes,
+        # the same method either way. So the anchor check always evaluates
+        # between poses when it has to, and always reports the gap it worked
+        # across — the number is then judgeable instead of absent.
         out["absolute_check"] = (absolute_check(est_for_anchors, anchors,
-                                                interpolate=interp) if anchors else
+                                                interpolate=True) if anchors else
                                  {"note": f"no anchor has a dwell window for {agent}; "
                                           "tier 2 is silent. Fill "
                                           "reference.anchors[*].windows_by_agent in the "
