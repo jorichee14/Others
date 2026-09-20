@@ -55,9 +55,9 @@ sensor data.
 
 ## 1. Benchmark (paper task B1)
 
-Three backbones with independent failure modes, on both platforms. Every
-tier-1 number is quoted with its tier-2 companion, because ATE against a
-reference is agreement, not accuracy.
+Three backbones with independent failure modes, on both platforms, plus the
+inertial/IMU-free pair of one of them. Every tier-1 number is quoted with its
+tier-2 companion, because ATE against a reference is agreement, not accuracy.
 
 ### `mobile_1` — reference is LiDAR-derived, uncertainty 15 mm
 
@@ -286,7 +286,7 @@ for a specific measured reason:
 |---|---|
 | V1, V2c | measured, above |
 | V2b radar ego-velocity | feasible, not run |
-| V2a IMU preintegration | **blocked** — the factor's covariance needs an IMU noise model, and Allan variance requires hours of static logging against a 156 s recording |
+| V2a IMU preintegration | **blocked** — the factor's covariance needs an IMU noise model, and Allan variance requires hours of static logging against a 156 s recording. Note the ablation in §1: on this platform the IMU made RTAB-Map worse at every board, so the expected value of this rung is lower than it looked |
 | V2d infrastructure | **blocked** — `infra_1`'s pose is stated to six decimals with no uncertainty anywhere, and an anchored fix cannot be better than its anchor |
 | V2e inter-agent | **unavailable** — no simultaneous co-observation; the agents swap corners rather than share one |
 
