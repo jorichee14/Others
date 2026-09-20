@@ -2126,6 +2126,72 @@ def test_rescore_plans_from_the_manifests_not_a_hand_written_list():
     assert "unreadable run.json" in skips and "not an object" in skips
 
 
+@test
+def test_aggregate_writes_one_report_with_both_tiers_and_the_scale_the_right_way():
+    """One command has to produce the whole write-up, or the tables get copied
+    by hand and drift. Tier 1 must state the estimate's SIZE, not only the raw
+    scale that reads backwards; tier 2 must carry its caveats and must list the
+    anchors that produced nothing, because those are evidence not collected."""
+    import io, contextlib
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import aggregate
+    root = Path(tempfile.mkdtemp())
+    def write(sub, name, doc):
+        d = root / "runs" / sub; d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(json.dumps(doc))
+    def metrics(method, agent, scale, ate, anchors, **kw):
+        return {"dataset": "coop2_20260828", "method": method, "agent": agent,
+                "stream": f"{agent}.cam", "modality": ["rgbd"], "run_dir": f"{method}",
+                "reference_kind": "map_anchored", "reference_uncertainty_m": 0.03,
+                "status": "ok", "ate": {
+                    "ate_trans_m": {"rmse": ate, "median": ate, "p90": ate, "mean": ate,
+                                    "std": 0.0, "max": ate},
+                    "ate_rot_deg": {"rmse": 3.0, "median": 3.0, "p90": 3.0, "mean": 3.0,
+                                    "std": 0.0, "max": 3.0},
+                    "alignment": {"mode": "se3", "scale_observed": scale},
+                    "coverage": 1.0, "drift_percent": 1.0},
+                "rpe": [], "absolute_check": anchors, **kw}
+    write("a", "metrics.json", metrics(
+        "rtabmap_rgbd_imu", "mobile_1", 1.055, 0.381,
+        [{"anchor": "anchor", "n": 86, "residual_m": 0.437, "residual_deg": 3.45,
+          "uncertainty_m": 0.007, "interp_gap_s": 2.18, "verdict": "resolved"},
+         {"anchor": "rs_anchor", "n": 0, "residual_m": None, "uncertainty_m": 0.015,
+          "verdict": "REFUSED: a window alone cannot make an absolute check"}],
+        anchor_alignment={"mode": "se3", "independent": True}))
+    write("a", "metrics_odometry.json", metrics(
+        "rtabmap_rgbd_imu", "mobile_1", 1.06, 0.48,
+        [{"anchor": "anchor", "n": 86, "residual_m": 0.496, "residual_deg": 5.81,
+          "uncertainty_m": 0.007, "verdict": "resolved"}],
+        anchor_alignment={"mode": "se3", "independent": True}))
+    write("b", "metrics.json", metrics(
+        "mast3r_slam", "mobile_1", 0.729, 1.908,
+        [{"anchor": "anchor", "n": 86, "residual_m": 3.536, "residual_deg": 6.64,
+          "uncertainty_m": 0.007, "interp_gap_s": 4.92, "verdict": "resolved"}],
+        anchor_alignment={"mode": "sim3", "independent": False,
+                          "note": "scale taken from the reference"}))
+    out = root / "report.md"
+    saved = sys.argv
+    try:
+        sys.argv = ["aggregate.py", "--runs", str(root / "runs"),
+                    "--config", str(Path(__file__).resolve().parents[1] / "configs" / "coop2.yaml"),
+                    "--out", str(out)]
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert aggregate.main() == 0
+    finally:
+        sys.argv = saved
+    text = out.read_text()
+    # tier 1 states the size the unmistakable way round
+    assert "est. size" in text and "-5.2%" in text          # scale 1.055 -> 5.2% small
+    assert "+37.2%" in text                                  # scale 0.729 -> 37% large
+    assert "SMALLER than truth" in text
+    # tier 2 carries its caveats and distinguishes graph from front-end
+    assert "not independent" in text and "interpolated across 4.9 s" in text
+    assert "| graph |" in text and "| odometry |" in text
+    assert "believe this one" in text
+    # and the empty anchor is listed as evidence not collected
+    assert "Anchors that produced nothing" in text and "rs_anchor" in text
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

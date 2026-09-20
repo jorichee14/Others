@@ -56,22 +56,52 @@ def main() -> int:
 
     parts += ["## Trajectory", "", trajectory_table(runs, u), "", "## Map", "", map_table(runs)]
 
-    # Tier 2 rolls up across runs; it is the same anchors for all of them.
-    rows = [(r, a) for r in runs if isinstance(r.get("absolute_check"), list)
-            for a in r["absolute_check"] if a.get("residual_m") is not None]
-    if rows:
-        parts += ["", "## Absolute check (tier 2, independent)", "",
-                  "| method | agent | anchor | residual (mm) | survey σ (mm) | verdict |",
-                  "|---|---|---|---:|---:|---|"]
-        for r, a in sorted(rows, key=lambda x: x[1]["residual_m"]):
-            parts.append(f"| {r['method']} | {r['agent']} | {a['anchor']} "
-                         f"| {a['residual_m'] * 1e3:.1f} "
-                         f"| {(a.get('uncertainty_m') or 0) * 1e3:.0f} | {a['verdict']} |")
+    # ------------------------------------------------- tier 2, the honest tier
+    # Read from metrics*.json rather than the tier-1 `runs` list, so the
+    # front-end's rows sit beside the graph's and a row whose scale was
+    # borrowed from the reference is marked as what it is.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from board_table import collect                                   # noqa: E402
+    brows = collect(Path(args.runs))
+    scored = [r for r in brows if r.get("residual_m") is not None]
+    parts += ["", "## Absolute check (tier 2)", "",
+              "The only tier whose error bar does not come from the thing being "
+              "measured: a surveyed marker seen by the camera, against where the "
+              "estimate says the camera was. Where this disagrees with the "
+              "trajectory table, believe this one — and say so.", ""]
+    if scored:
+        parts += ["| method | agent | from | anchor | residual (mm) | survey σ (mm) "
+                  "| n | rot (deg) | caveat |",
+                  "|---|---|---|---|---:|---:|---:|---:|---|"]
+        for r in sorted(scored, key=lambda x: (x["agent"] or "", x["residual_m"])):
+            caveat = []
+            if not r["independent"]:
+                caveat.append("**scale from the reference: not independent**")
+            if r.get("interp_gap_s"):
+                caveat.append(f"interpolated across {r['interp_gap_s']:.1f} s")
+            if r.get("stale"):
+                caveat.append("**stale: re-run scripts/rescore.py**")
+            deg = "—" if r["residual_deg"] is None else f"{r['residual_deg']:.2f}"
+            parts.append(f"| {r['method']} | {r['agent']} | {r['from']} | {r['anchor']} "
+                         f"| {r['residual_m'] * 1e3:.1f} "
+                         f"| {(r.get('uncertainty_m') or 0) * 1e3:.0f} | {r['n']} "
+                         f"| {deg} | {'; '.join(caveat)} |")
     else:
-        parts += ["", "## Absolute check (tier 2, independent)", "",
-                  "_Silent: no anchor has a dwell window in the dataset config. "
-                  "Until one does, every number in this report is relative to a "
-                  "reference that was itself estimated._"]
+        parts += ["_Silent: no anchor produced a residual. Until one does, every "
+                  "number in this report is relative to a reference that was itself "
+                  "estimated._"]
+    empty = [r for r in brows if r.get("residual_m") is None]
+    if empty:
+        seen, lines = set(), []
+        for r in empty:
+            key = (r["agent"], r["anchor"], r["verdict"][:60])
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(f"- `{r['agent']}` / `{r['anchor']}`: {r['verdict']}")
+        parts += ["", "### Anchors that produced nothing", "",
+                  "Each is evidence not collected, and each is a config line or a "
+                  "detector run away.", ""] + lines
 
     text = "\n".join(parts) + "\n"
     if args.out:

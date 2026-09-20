@@ -34,20 +34,35 @@ def _blocks(runs: list[dict]) -> dict[str, list[dict]]:
     return out
 
 
+def _size(scale_observed) -> str:
+    """`scale_observed` multiplies the ESTIMATE to reach the reference, so it
+    reads backwards. This column is the estimate's size relative to truth:
+    +5% means the estimate is 5% too big. Both are printed because the raw
+    figure is the one in metrics.json, and the derived one is the one that
+    was misread for a day."""
+    if scale_observed in (None, 0):
+        return "—"
+    d = (1.0 / scale_observed - 1.0) * 100
+    if abs(d) < 0.5:
+        return "≈true"
+    return f"{d:+.1f}%"
+
+
 def trajectory_table(runs: list[dict], reference_uncertainty_m: float) -> str:
     lines, footnote = [], False
     for block, rows in sorted(_blocks(runs).items()):
         lines += [f"### {block}", "",
                   "| method | agent | stream | align | ATE RMSE (mm) | ATE p90 (mm) "
-                  "| rot RMSE (deg) | RPE 1 m (mm) | drift (%) | scale obs. | cov. |",
-                  "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|"]
+                  "| rot RMSE (deg) | RPE 1 m (mm) | drift (%) | scale obs. "
+                  "| est. size | cov. |",
+                  "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
         rows = sorted(rows, key=lambda r: (r.get("ate") or {}).get("ate_trans_m", {})
                       .get("rmse", float("inf")))
         for r in rows:
             a = r.get("ate")
             if not a:
                 lines.append(f"| {r['method']} | {r['agent']} | {r.get('stream','—')} "
-                             f"| — | _{r.get('status','no result')}_ |||||||")
+                             f"| — | _{r.get('status','no result')}_ ||||||||")
                 continue
             t = a["ate_trans_m"]
             mark = _DAGGER if a.get("below_reference_uncertainty") else ""
@@ -59,8 +74,12 @@ def trajectory_table(runs: list[dict], reference_uncertainty_m: float) -> str:
                 f"| {_fmt(t['p90'],1,1e3)} | {_fmt(a['ate_rot_deg']['rmse'],2)} "
                 f"| {_fmt((r1 or {}).get('rpe_trans_m',{}).get('rmse'),1,1e3)} "
                 f"| {_fmt(a['drift_percent'],2)} | {_fmt(a['alignment']['scale_observed'],4)} "
+                f"| {_size(a['alignment']['scale_observed'])} "
                 f"| {_fmt(a['coverage'],2)} |")
         lines.append("")
+    lines += ["_`scale obs.` multiplies the ESTIMATE to reach the reference, so a value "
+              "above 1 means the estimate is SMALLER than truth. `est. size` states the "
+              "same fact the other way round and is the one to quote._", ""]
     if footnote:
         lines += [f"{_DAGGER} ATE RMSE is below the reference trajectory's own stated "
                   f"uncertainty ({reference_uncertainty_m * 1e3:.0f} mm). The method is "
