@@ -2097,6 +2097,12 @@ def test_rescore_plans_from_the_manifests_not_a_hand_written_list():
     run("c", {"method": "no_such_method", "agent": "mobile_1", "stream": "s"},
         {"trajectory.tum": "x\n"})
     run("d", {"agent": "mobile_1"}, {"trajectory.tum": "x\n"})
+    # a killed run leaves a truncated manifest; it is one directory's problem
+    e = root / "runs" / "e"; e.mkdir(parents=True)
+    (e / "run.json").write_text("")
+    (e / "trajectory.tum").write_text("x\n")
+    g = root / "runs" / "g"; g.mkdir(parents=True)
+    (g / "run.json").write_text("[1, 2]")
     jobs = plan(root / "runs", refs, methods)
     scored = [j for j in jobs if not j.get("skip")]
     assert {j["traj"] for j in scored} == {"trajectory.tum", "odometry.tum"}
@@ -2104,6 +2110,7 @@ def test_rescore_plans_from_the_manifests_not_a_hand_written_list():
     assert all(j["reference"] == refs / "mobile_1.tum" for j in scored)
     skips = " ".join(j["skip"] for j in jobs if j.get("skip"))
     assert "empty file" in skips and "no method config" in skips and "lacks method" in skips
+    assert "unreadable run.json" in skips and "not an object" in skips
 
 
 def main() -> int:

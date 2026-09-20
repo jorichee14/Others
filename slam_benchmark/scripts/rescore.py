@@ -30,8 +30,18 @@ def plan(runs_root: Path, reference_dir: Path, methods_dir: Path) -> list[dict]:
     """One entry per (run directory, trajectory file), from the manifests."""
     jobs = []
     for manifest in sorted(runs_root.rglob("run.json")):
-        m = json.loads(manifest.read_text())
         d = manifest.parent
+        # An interrupted or killed run can leave a truncated manifest. That is
+        # one directory's problem; crashing the planner on it hides every
+        # other run, which is the whole failure this script exists to avoid.
+        try:
+            m = json.loads(manifest.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            jobs.append({"run": d, "skip": f"unreadable run.json ({e})"})
+            continue
+        if not isinstance(m, dict):
+            jobs.append({"run": d, "skip": f"run.json is {type(m).__name__}, not an object"})
+            continue
         method, agent, stream = m.get("method"), m.get("agent"), m.get("stream")
         if not (method and agent and stream):
             jobs.append({"run": d, "skip": f"run.json lacks method/agent/stream"})
