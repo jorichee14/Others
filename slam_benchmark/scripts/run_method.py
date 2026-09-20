@@ -177,7 +177,11 @@ def main() -> int:
 
     cfg, mcfg = load_dataset(args.config), load_method(args.method)
     if args.rate is None:
-        args.rate = float(mcfg.raw.get("replay_rate", 1.0))
+        # Per stream first: the rate is a throughput statement about THIS
+        # machine on THIS stream's frame rate, and one method sees 15 Hz on the
+        # ZED and 27.5 Hz on the RealSense.
+        by_stream = mcfg.raw.get("replay_rate_by_stream", {}) or {}
+        args.rate = float(by_stream.get(args.stream, mcfg.raw.get("replay_rate", 1.0)))
     try:
         info, problems = preflight(cfg, mcfg, args.stream)
     except ConfigError as e:

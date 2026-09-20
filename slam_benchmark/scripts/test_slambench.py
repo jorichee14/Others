@@ -1841,6 +1841,30 @@ def test_rtabmap_on_the_realsense_registers_depth_and_declares_the_colour_frame(
     assert 'FRAME_ID="$SLAM_FRAME_ID"' in launch
 
 
+@test
+def test_replay_rate_can_be_declared_per_stream():
+    """One method, two frame rates: the RealSense delivers 27.5 Hz to the same
+    front-end the ZED feeds at 15 Hz. The rate is per stream where declared,
+    the method's rate otherwise, and run.json records what was used."""
+    import io, contextlib
+    import scripts.run_method as rm
+    root = Path(__file__).resolve().parents[1]
+    def rate_for(stream):
+        saved = sys.argv; buf = io.StringIO()
+        try:
+            sys.argv = ["run_method.py", "--config", str(root / "configs" / "coop2.yaml"),
+                        "--method", str(root / "configs" / "methods" / "rtabmap_rgbd.yaml"),
+                        "--stream", stream, "--runs-root", tempfile.mkdtemp()]
+            with contextlib.redirect_stdout(buf):
+                assert rm.main() == 0
+        finally:
+            sys.argv = saved
+        text = buf.getvalue()
+        return json.loads(Path(text.split("manifest -> ", 1)[1].splitlines()[0]).read_text())["replay_rate"]
+    assert rate_for("mobile_2.realsense_rgbd") == 0.25
+    assert rate_for("mobile_1.zed_rgbd") == 0.5
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

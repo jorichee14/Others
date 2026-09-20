@@ -30,6 +30,12 @@ extrinsic_by_stream:
 # so the bag is replayed at half speed. run.json records the rate, and the
 # runtime column for this row is meaningless by construction.
 replay_rate: 0.5              # harness default 1.0
+# MEASURED 2026-09-20 on mobile_2.realsense_rgbd at 0.5: odometry update time
+# ~70 ms against a 73 ms replayed period (27.5 Hz stream, twice the ZED's), and
+# 3384 of 4300 frames processed. Same per-frame cost, twice the frames: the
+# rate above was measured for the 15 Hz ZED. Quarter speed here.
+replay_rate_by_stream:
+  mobile_2.realsense_rgbd: 0.25
 
 # Both platforms. docs/PLAN.md stage 1 runs each consensus backbone on
 # mobile_1.zed_rgbd (LiDAR held out, so it can be scored) and on
