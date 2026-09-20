@@ -2428,8 +2428,12 @@ def test_every_candidate_board_axis_convention_is_a_rotation_about_the_normal():
     assert "minMarkerPerimeterRate" in src and "adaptiveThreshWinSizeMax" in src
     assert "CORNER_REFINE_SUBPIX" in src
     assert "--window" in src, "a declared window can be too wide for a fresh run"
-    # charuco corner interpolation is homography-based, so a distorted image
-    # must be undistorted BEFORE detection, not corrected afterwards in PnP
+    # charuco corner interpolation is homography-based, so distortion has to
+    # be handled at or before interpolation -- never only in PnP. All three
+    # ways are available and the default is the one that touches no pixels.
+    assert 'choices=("corners", "image", "pnp")' in src
+    assert 'default="corners"' in src
+    assert "cameraMatrix=K, distCoeffs=D" in src, "the interpolation must get the camera"
     assert "cv2.undistort(gray" in src
     assert src.index("cv2.undistort(gray") < src.index("corners, ids = detect(gray)")
     assert "min_ambiguity_ratio" in src

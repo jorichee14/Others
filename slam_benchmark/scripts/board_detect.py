@@ -136,7 +136,7 @@ def object_points(squares, square_m: float, origin: str, axes: str) -> np.ndarra
     return to_board_frame(pts, squares, square_m, origin, axes)
 
 
-def charuco_board(b: dict, cv2):
+def charuco_board(b: dict, cv2, K=None, D=None):
     """(board, dictionary, detect) across the 4.7 ArUco rewrite.
 
     4.5 has `CharucoBoard_create` + `detectMarkers` + `interpolateCornersCharuco`;
@@ -179,6 +179,8 @@ def charuco_board(b: dict, cv2):
     if hasattr(cv2.aruco, "CharucoDetector"):                      # >= 4.7
         board = cv2.aruco.CharucoBoard((sx, sy), sl, ml, adict)
         cp = cv2.aruco.CharucoParameters()
+        if K is not None:
+            cp.cameraMatrix, cp.distCoeffs = K, D
         det = cv2.aruco.CharucoDetector(board, cp,
                                         tune(cv2.aruco.DetectorParameters()))
 
@@ -200,7 +202,15 @@ def charuco_board(b: dict, cv2):
                     gray, board, mc, mids, rej, parameters=params)
             if mids is None or not len(mids):
                 return None, None
-            n, cc, cids = cv2.aruco.interpolateCornersCharuco(mc, mids, gray, board)
+            # K/D here, not only in PnP: the interpolation fits a HOMOGRAPHY
+            # through the markers to place the chessboard corners, and a
+            # homography cannot represent distortion. Given the camera it
+            # accounts for it -- without resampling the image, which blurs the
+            # very corners the pose is made of.
+            n, cc, cids = (cv2.aruco.interpolateCornersCharuco(
+                               mc, mids, gray, board, cameraMatrix=K, distCoeffs=D)
+                           if K is not None else
+                           cv2.aruco.interpolateCornersCharuco(mc, mids, gray, board))
             if not n or cids is None or not len(cids):
                 return None, None
             return cc, cids
@@ -306,10 +316,14 @@ def main() -> int:                                           # pragma: no cover
                     help="overrides the board's declared min_corners")
     ap.add_argument("--max-reproj-px", type=float, default=None)
     ap.add_argument("--min-ambiguity-ratio", type=float, default=None)
-    ap.add_argument("--no-undistort", action="store_true",
-                    help="leave an unrectified image alone and hand the distortion "
-                         "to PnP instead. Worse: the charuco corner interpolation is "
-                         "homography-based and is already bent by then.")
+    ap.add_argument("--distortion", choices=("corners", "image", "pnp"),
+                    default="corners",
+                    help="how an UNRECTIFIED image is handled. `corners` (default): "
+                         "give the camera to the charuco interpolation and to PnP, "
+                         "touching no pixels. `image`: undistort each frame first, "
+                         "which resamples and blurs the corners. `pnp`: correct only "
+                         "in PnP, leaving the homography-interpolated corners bent. "
+                         "Measured on rs_anchor/mobile_2: pnp 34.2 mm, image 21.2 mm.")
     ap.add_argument("--window", type=float, nargs=2, default=None,
                     metavar=("T0", "T1"),
                     help="override the declared dwell window. The rs_anchor window "
@@ -379,17 +393,12 @@ def main() -> int:                                           # pragma: no cover
     T_map_board = board_to_map(anchor["position"], anchor["orientation"])
     obj = object_points(b["squares"], float(b["square_m"]),
                         b.get("origin", "center"), b.get("axes", "ros"))
-    board, adict, detect, raw = charuco_board(b, cv2)
-    obj_cv = to_board_frame(raw, b["squares"], float(b["square_m"]),
-                            b.get("origin", "center"), b.get("axes", "ros"))
-    # The board object and the analytic construction must agree, or one of the
-    # two is wrong about this version's corner layout and every pose is wrong.
-    if obj_cv.shape != obj.shape or not np.allclose(np.sort(obj_cv, axis=0),
-                                                    np.sort(obj, axis=0), atol=1e-9):
-        raise SystemExit(f"opencv {cv2.__version__} lays this board out differently "
-                         f"from configs/coop2.yaml ({obj_cv.shape} vs {obj.shape}); "
-                         f"refusing to guess which is right")
-    obj = obj_cv                     # the board object's ordering, which the ids index
+    # The board object is built once camera_info has arrived, because the
+    # charuco interpolation may need the camera. `obj` is replaced there by the
+    # board object's own corner list -- whose ORDERING the charuco ids index --
+    # after checking it against the analytic one; a mismatch refuses rather
+    # than guessing which opencv version is right.
+    board = detect = None
 
     img_topic, info_topic = CAMERA[args.agent]
     import rosbag2_py
@@ -436,15 +445,31 @@ def main() -> int:                                           # pragma: no cover
                 # distortion argument afterwards can undo that. It showed as
                 # 0.83 px reprojection and a 34 mm pose bias, against 0.20 px
                 # and 6 mm on the already-rectified ZED.
-                undistort = bool(np.any(np.abs(raw_dist) > 1e-9)) and not args.no_undistort
-                dist = np.zeros(5)
+                distorted = bool(np.any(np.abs(raw_dist) > 1e-9))
+                undistort = distorted and args.distortion == "image"
+                # `corners` and `pnp` both hand the coefficients to PnP; only
+                # `corners` also hands them to the interpolation.
+                dist = np.zeros(5) if undistort else raw_dist
+                interp_K = K if (distorted and args.distortion == "corners") else None
+                board, adict, detect, raw = charuco_board(
+                    b, cv2, interp_K, raw_dist if interp_K is not None else None)
+                obj_cv = to_board_frame(raw, b["squares"], float(b["square_m"]),
+                                        b.get("origin", "center"), b.get("axes", "ros"))
+                if obj_cv.shape != obj.shape or not np.allclose(
+                        np.sort(obj_cv, axis=0), np.sort(obj, axis=0), atol=1e-9):
+                    raise SystemExit(
+                        f"opencv {cv2.__version__} lays this board out differently "
+                        f"from configs/coop2.yaml ({obj_cv.shape} vs {obj.shape}); "
+                        f"refusing to guess which is right")
+                obj = obj_cv
                 print(f"intrinsics {K[0,0]:.1f} {K[1,1]:.1f} {K[0,2]:.1f} {K[1,2]:.1f}"
                       f"  distortion {'zeroed (rectified topic)' if rect else list(np.round(raw_dist, 5))}"
                       f"  model {getattr(msg, 'distortion_model', '?')}"
-                      + ("  -> undistorting each image" if undistort else ""))
+                      + (f"  -> distortion handled in: {args.distortion}"
+                         if distorted else ""))
             continue
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        if not (window[0] <= t <= window[1]) or K is None:
+        if not (window[0] <= t <= window[1]) or detect is None:
             continue
         tried += 1
         gray = cv2.cvtColor(to_rgb(bytes(msg.data), msg.height, msg.width,
