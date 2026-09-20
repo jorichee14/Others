@@ -243,9 +243,20 @@ def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
         if oposes is not None and len(oposes):
             m = (oposes.stamps >= t0) & (oposes.stamps <= t1)
             if not m.any():
+                # Say BOTH spans. mobile_2's window missed its detections by
+                # 100 ms and the bare message sent nobody to the cause, so the
+                # only agent with no reference of its own scored nothing at the
+                # only tier that could have spoken for it.
                 rows.append({"anchor": name, "n": 0, "residual_m": None,
                              "uncertainty_m": u,
-                             "verdict": "no board-derived pose inside the window"})
+                             "observed_span": [float(oposes.stamps[0]),
+                                               float(oposes.stamps[-1])],
+                             "window": [float(t0), float(t1)],
+                             "verdict": f"no board-derived pose inside the window: the "
+                                        f"detections span {oposes.stamps[0]:.3f}.."
+                                        f"{oposes.stamps[-1]:.3f} and the window is "
+                                        f"{t0:.3f}..{t1:.3f} — they do not overlap, so "
+                                        f"one of the two is wrong in the dataset config"})
                 continue
             dp, dr, gaps = [], [], []
             for k in np.flatnonzero(m):

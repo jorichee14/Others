@@ -269,13 +269,18 @@ reference:
         # 267 ref poses, 0.75 m, 1.87 px/bit, facing. The longest and
         # closest window on either agent; the cart is parked here to the end.
         mobile_1: [1787899928.753, 1787899955.354]
-        # 128 ref poses, 0.81 m, 2.05 px/bit, facing. NOT clamped to the
-        # pipeline's realsense departure_t (1787899814.726): that marks the end
-        # of the STATIC dwell it fused 92 views over, and this window's later
-        # frames are still facing, in range and slow -- valid observations,
-        # just not static. Clamp only if the detector's reprojection degrades
-        # after that point.
-        mobile_2: [1787899810.489, 1787899821.794]
+        # WIDENED 2026-09-20, and the old window scored NOTHING. It was
+        # [1787899810.489, 1787899821.794] -- phase0's facing-and-in-range
+        # dwell, derived from the reference TRAJECTORY. The pipeline's own
+        # board detections (realsense_cam_in_map.tum, 92 rows) span
+        # 1787899804.053 .. 1787899810.389 and so fell entirely OUTSIDE it, by
+        # 100 ms: tier 2 for this agent was empty for want of a tenth of a
+        # second. The two are adjacent, not contradictory -- the pipeline fused
+        # its static views first, then the cart shifted and stayed facing --
+        # so the window is the union. absolute_check intersects it with the
+        # detections, which are the evidence, so widening admits observations
+        # and invents none.
+        mobile_2: [1787899804.053, 1787899821.794]
       # THE OBSERVATIONS EXIST ALREADY -- no detector run needed. The mapping
       # pipeline emits per-frame board-derived camera poses in the map frame:
       #   zed_cam_in_map.tum        112 rows @ 15.0 Hz, std 1.98 mm (mobile_1)

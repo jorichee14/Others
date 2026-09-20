@@ -2019,6 +2019,39 @@ def test_a_missing_trajectory_names_itself_and_the_tool_that_makes_it():
     assert "export_reference.py" in msg, msg
 
 
+@test
+def test_a_window_that_misses_its_detections_says_both_spans():
+    """mobile_2's rs_anchor window began 100 ms after its 92 board detections
+    ended, so the one agent with no reference of its own scored nothing at the
+    only tier that could speak for it -- under a message that named neither
+    span."""
+    board = circle_traj(20, t0=1787899804.053, rate=15.0)
+    a = [{"name": "rs_anchor", "position": [0, 0, 0], "uncertainty_m": 0.015,
+          "window": [1787899810.489, 1787899821.794], "observed_poses": board}]
+    r = absolute_check(circle_traj(100, t0=1787899800.0), a, interpolate=True)[0]
+    assert r["n"] == 0
+    assert "do not overlap" in r["verdict"], r["verdict"]
+    assert "1787899804.053" in r["verdict"] and "1787899810.489" in r["verdict"]
+    assert r["observed_span"][0] == 1787899804.053 and r["window"][0] == 1787899810.489
+    # and the shipped config no longer has that gap
+    import yaml
+    cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs" / "coop2.yaml").read_text())
+    for anch in cfg["reference"]["anchors"]:
+        obp = anch.get("observed_poses_by_agent") or {}
+        wins = anch.get("windows_by_agent") or {}
+        for agent, path in obp.items():
+            if not path or not wins.get(agent):
+                continue
+            f = Path(path)
+            if not f.exists():          # the file lives on the robot, not here
+                continue
+            t = np.loadtxt(f, comments="#")[:, 0]
+            w = wins[agent]
+            assert ((t >= w[0]) & (t <= w[1])).any(), (
+                f"{anch['name']}/{agent}: window {w} misses detections "
+                f"{t[0]:.3f}..{t[-1]:.3f}")
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")
