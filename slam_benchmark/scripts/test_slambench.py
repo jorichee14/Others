@@ -2255,6 +2255,76 @@ def test_plot_runs_draws_the_scored_trajectory_and_nothing_else():
     assert "pip3 install matplotlib" in src          # names the fix, does not traceback
 
 
+@test
+def test_board_detect_geometry_and_the_frame_convention_that_bit_once():
+    """The outward normal here is +x, not OpenCV's +z, and getting it wrong
+    rejects every view in silence -- it already did once in the mapping
+    pipeline. Geometry, frame mapping and pose composition are checked here;
+    only the detection itself needs opencv and a bag."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from board_detect import object_points, board_to_map, compare, OPENCV_TO_ROS
+
+    # 9x7 squares -> 8x6 = 48 inner corners, spanning 7 and 5 square pitches
+    pts = object_points([9, 7], 0.020, "center", "opencv")
+    assert pts.shape == (48, 3) and np.allclose(pts[:, 2], 0)
+    assert abs(np.ptp(pts[:, 0]) - 7 * 0.020) < 1e-12
+    assert abs(np.ptp(pts[:, 1]) - 5 * 0.020) < 1e-12
+    # `origin: center` puts the board's centre at the frame origin
+    assert abs(pts[:, 0].mean() + pts[:, 1].mean()) < 1e-12
+    corner = object_points([9, 7], 0.020, "corner", "opencv")
+    assert corner[:, 0].min() > 0 and corner[:, 1].min() > 0
+
+    # ros axes: the board is planar in x, i.e. +x IS the normal
+    ros = object_points([9, 7], 0.020, "center", "ros")
+    assert np.allclose(ros[:, 0], 0), "in ros axes the board must be flat in x"
+    assert abs(np.ptp(ros[:, 1]) - 7 * 0.020) < 1e-12
+    assert abs(np.ptp(ros[:, 2]) - 5 * 0.020) < 1e-12
+    # the mapping is a rotation, so it preserves the board's shape exactly
+    assert abs(np.linalg.det(OPENCV_TO_ROS) - 1.0) < 1e-12
+    assert np.allclose(OPENCV_TO_ROS @ OPENCV_TO_ROS.T, np.eye(3))
+    d0 = np.linalg.norm(pts[0] - pts[1])
+    assert abs(np.linalg.norm(ros[0] - ros[1]) - d0) < 1e-12
+
+    for axes in ("nonsense",):
+        try:
+            object_points([9, 7], 0.02, "center", axes); assert False
+        except ValueError as e:
+            assert "axes" in str(e)
+    try:
+        object_points([9, 7], 0.02, "middle", "ros"); assert False
+    except ValueError as e:
+        assert "origin" in str(e)
+
+    # board_to_map: the declared position and quaternion, nothing else
+    T = board_to_map([8.46, -14.267, -0.056], [0.00751, 0.013642, 0.999879, 0.000177])
+    assert np.allclose(T[:3, 3], [8.46, -14.267, -0.056])
+    assert abs(np.linalg.det(T[:3, :3]) - 1.0) < 1e-9
+
+    # compare(): the verdict that must pass before a new file is written
+    a = circle_traj(50, t0=1787899804.0, rate=15.0)
+    b = Trajectory(a.stamps.copy(), a.poses.copy(), "b")
+    v = compare(a, b)
+    assert v["matched"] == 50 and v["pos_median_mm"] < 1e-6
+    b.poses[:, 0, 3] += 0.002                       # 2 mm, the board's own scatter
+    v = compare(a, b)
+    assert abs(v["pos_median_mm"] - 2.0) < 1e-6
+    far = Trajectory(a.stamps + 1e5, a.poses, "far")
+    assert compare(a, far)["matched"] == 0
+
+    # every anchor now declares its geometry, so the detector reads numbers
+    import yaml
+    cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs" / "coop2.yaml").read_text())
+    for a in cfg["reference"]["anchors"]:
+        assert len(a["orientation"]) == 4, a["name"]
+        assert abs(np.linalg.norm(a["orientation"]) - 1.0) < 1e-5, a["name"]
+        bd = a["board"]
+        assert bd["marker_m"] < bd["square_m"], a["name"]
+        assert bd["axes"] == "ros" and bd["origin"] == "center"
+        assert bd["dictionary"].startswith("DICT_")
+    src = (Path(__file__).resolve().parents[1] / "scripts" / "board_detect.py").read_text()
+    assert "--validate-against" in src and "opencv-contrib-python" in src
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

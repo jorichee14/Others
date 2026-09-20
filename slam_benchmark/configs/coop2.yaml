@@ -159,6 +159,18 @@ reference:
   anchors:
     - name: anchor
       position: [0.0, 0.0, 0.0]
+      # BOARD GEOMETRY, promoted 2026-09-20 from the comments above so a
+      # detector reads declared numbers rather than prose (rule 4). Design
+      # from pipeline_config.json; orientation from anchor_frame*.json, the
+      # same values board_visibility.py validated against ground truth.
+      orientation: [-0.005077, 0.002281, 0.000012, 0.999985]   # qxyzw, map <- board
+      board:
+        squares: [9, 7]
+        square_m: 0.020
+        marker_m: 0.015
+        dictionary: DICT_4X4_50
+        axes: ros          # +x is the OUTWARD NORMAL, not +z
+        origin: center
       uncertainty_m: 0.007            # 6.9 mm std over 214 views; loop closure 3.2 mm
       window: null                    # confirmed window; fill from the candidates below
       # phase0 candidates (t+ seconds into each agent's reference; CONFIRM BY EYE):
@@ -205,6 +217,14 @@ reference:
         mobile_2: null    # the RealSense never dwelled at `anchor`
     - name: anchor_b
       position: [8.033, -7.182, -0.102]
+      orientation: [-0.059071, -0.024090, -0.857719, 0.510146]   # qxyzw, map <- board
+      board:
+        squares: [9, 7]
+        square_m: 0.020
+        marker_m: 0.015
+        dictionary: DICT_4X4_50
+        axes: ros
+        origin: center
       uncertainty_m: 0.013            # the honest figure: 12.9 mm / 2.6 deg between
       window: null                    # its two sections (ratio 4.24, significant).
       # phase0 candidates: mobile_1 NEVER dwells here; mobile_2: [42.6, 50.0].
@@ -249,6 +269,14 @@ reference:
         mobile_2: null    # needs a detector run over its 6.00 s window
     - name: rs_anchor
       position: [8.460, -14.267, -0.056]
+      orientation: [0.007510, 0.013642, 0.999879, 0.000177]   # qxyzw, map <- board
+      board:
+        squares: [9, 7]
+        square_m: 0.025
+        marker_m: 0.018
+        dictionary: DICT_5X5_50
+        axes: ros
+        origin: center
       uncertainty_m: 0.015            # std; max residual 40 mm, 1 of 2 sections gated
       window: null
       # phase0 candidates: mobile_1: [115.7, 151.5] (ends parked here);
