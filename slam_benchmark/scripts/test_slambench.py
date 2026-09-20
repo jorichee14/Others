@@ -2565,5 +2565,240 @@ def main() -> int:
     return 1 if FAIL else 0
 
 
+
+# ------------------------------------------------------------------ the graph
+def _planted(N=600, seed=1):
+    """A yawing cart on a loop, ~14.7 Hz, and a drifting backbone of it."""
+    from slambench.graph import so3_exp
+    rng = np.random.default_rng(seed)
+    dt = 40.0 / N
+    stamps = 1.7e9 + np.arange(N) * dt
+    R, t, truth = np.eye(3), np.zeros(3), []
+    for k in range(N):
+        T = np.eye(4); T[:3, :3] = R; T[:3, 3] = t; truth.append(T)
+        w = np.array([0.0, 0.0, 0.25 * np.sin(0.05 * k * dt) + 0.02])
+        R = R @ so3_exp(w[None] * dt)[0]; t = t + R @ np.array([0.17, 0.0, 0.0]) * dt
+    truth = np.stack(truth)
+    sig_t, sig_r = 0.004, np.radians(0.05)
+    bb = [truth[0]]
+    for k in range(1, N):
+        n = np.eye(4); n[:3, :3] = so3_exp(rng.normal(0, sig_r, (1, 3)))[0]
+        n[:3, 3] = rng.normal(0, sig_t, 3)
+        bb.append(bb[-1] @ np.linalg.inv(truth[k - 1]) @ truth[k] @ n)
+    return stamps, truth, np.stack(bb), sig_t, sig_r, rng
+
+
+def _observe(truth, stamps, lo, hi, rng, hz=15.0, st=0.007, sr=np.radians(0.5)):
+    from slambench.graph import so3_exp
+    ts = np.arange(lo, hi, 1.0 / hz); P = []
+    for s in ts:
+        k = min(max(np.searchsorted(stamps, s), 1), len(stamps) - 1)
+        u = (s - stamps[k - 1]) / (stamps[k] - stamps[k - 1])
+        T = truth[k - 1].copy(); T[:3, 3] = (1 - u) * truth[k - 1][:3, 3] + u * truth[k][:3, 3]
+        n = np.eye(4); n[:3, :3] = so3_exp(rng.normal(0, sr, (1, 3)))[0]; n[:3, 3] = rng.normal(0, st, 3)
+        P.append(T @ n)
+    return ts, np.stack(P)
+
+
+@test
+def test_graph_so3_exp_log_round_trip():
+    from slambench.graph import so3_exp, so3_log
+    rng = np.random.default_rng(0)
+    d = rng.normal(size=(40, 3)); d /= np.linalg.norm(d, axis=1, keepdims=True)
+    phi = np.concatenate([rng.normal(0, 1e-9, (5, 3)), rng.normal(0, 0.3, (40, 3)),
+                          d * rng.uniform(2.0, 3.1, (40, 1))])       # to 178 deg, below pi
+    assert np.linalg.norm(so3_log(so3_exp(phi)) - phi, axis=1).max() < 1e-9
+
+
+@test
+def test_graph_v1_reproduces_the_backbone_exactly():
+    """The wiring gate from docs/STAGE2_GRAPH.md s7: with odometry factors and
+    nothing else, the graph is the backbone. It must not move it."""
+    from slambench.graph import solve, odometry_factors, gauge_prior
+    stamps, truth, bb, sig_t, sig_r, _ = _planted()
+    out, rep = solve(bb, odometry_factors(bb, stamps, sig_t, sig_r).extend(gauge_prior(bb)))
+    assert np.linalg.norm(out[:, :3, 3] - bb[:, :3, 3], axis=1).max() < 1e-9, rep
+    assert rep.converged and rep.iterations <= 2, rep
+
+
+@test
+def test_graph_anchors_pull_drift_out_and_scale_with_odometry_noise():
+    """Two anchor windows bridging a drifting chain. The residual mid-run error
+    is the odometry bridge and must scale with the odometry noise; inside a
+    window it must sit at the anchor's own scatter. A fixed threshold would
+    only test the planted numbers."""
+    from slambench.graph import solve, odometry_factors, anchor_factors
+    stamps, truth, bb, sig_t, sig_r, rng = _planted()
+    tA, pA = _observe(truth, stamps, stamps[0] + 0.5, stamps[0] + 4.0, rng)
+    tB, pB = _observe(truth, stamps, stamps[-1] - 6.0, stamps[-1] - 0.5, rng)
+    fa, ia = anchor_factors(pA, tA, stamps, 0.007, np.radians(1.0), "a")
+    fb, ib = anchor_factors(pB, tB, stamps, 0.015, np.radians(1.0), "b")
+    assert ia["factors"] > 10 and ib["factors"] > 10, (ia, ib)
+    out, rep = solve(bb, odometry_factors(bb, stamps, sig_t, sig_r).extend(fa).extend(fb))
+    e = np.linalg.norm(out[:, :3, 3] - truth[:, :3, 3], axis=1)
+    drift = np.linalg.norm(bb[:, :3, 3] - truth[:, :3, 3], axis=1)
+    # the graph must beat the backbone almost everywhere; the only poses where
+    # it may not are the first few, where the backbone has not drifted yet and
+    # the anchor's 7 mm scatter is the larger of the two
+    assert np.mean(e < drift) > 0.8, np.mean(e < drift)
+    assert np.median(e) < 0.6 * np.median(drift), (np.median(e), np.median(drift))
+    inA = (stamps >= tA[0]) & (stamps <= tA[-1])
+    assert np.median(e[inA]) < 0.02, np.median(e[inA])
+    assert rep.final_rms["prior"] < 1.5 and rep.final_rms["between"] < 1.5, rep.final_rms
+    # 10x quieter odometry, sigmas declared to match -> error drops accordingly
+    _, _, bbq, _, _, _ = _planted(seed=1)          # same seed: same truth
+    from slambench.graph import so3_exp
+    bbq = [truth[0]]
+    for k in range(1, len(truth)):
+        n = np.eye(4); n[:3, :3] = so3_exp(rng.normal(0, sig_r / 10, (1, 3)))[0]
+        n[:3, 3] = rng.normal(0, sig_t / 10, 3)
+        bbq.append(bbq[-1] @ np.linalg.inv(truth[k - 1]) @ truth[k] @ n)
+    bbq = np.stack(bbq)
+    outq, _ = solve(bbq, odometry_factors(bbq, stamps, sig_t / 10, sig_r / 10).extend(fa).extend(fb))
+    eq = np.linalg.norm(outq[:, :3, 3] - truth[:, :3, 3], axis=1)
+    assert np.median(eq) < 0.4 * np.median(e), (np.median(eq), np.median(e))
+
+
+@test
+def test_graph_reset_edge_is_a_hinge():
+    """A backbone jump across a stamp gap is a RESET: the motion there was
+    never observed. Inflating that one edge lets the anchors on either side
+    place the two halves; leaving it at full weight drags the whole chain."""
+    from slambench.graph import solve, odometry_factors, anchor_factors, reset_edges, so3_exp
+    stamps, truth, bb, sig_t, sig_r, rng = _planted()
+    tA, pA = _observe(truth, stamps, stamps[0] + 0.5, stamps[0] + 4.0, rng)
+    tB, pB = _observe(truth, stamps, stamps[-1] - 6.0, stamps[-1] - 0.5, rng)
+    fa, _ = anchor_factors(pA, tA, stamps, 0.007, np.radians(1.0), "a")
+    fb, _ = anchor_factors(pB, tB, stamps, 0.015, np.radians(1.0), "b")
+    k0 = 300
+    jump = np.eye(4); jump[:3, :3] = so3_exp(np.array([[0, 0, np.radians(20)]]))[0]
+    jump[:3, 3] = [0.5, -0.3, 0.0]
+    bb2 = bb.copy(); bb2[k0:] = np.einsum("ij,njk->nik", jump, bb2[k0:])
+    st2 = stamps.copy(); st2[k0:] += 0.6
+    assert list(reset_edges(st2)) == [k0 - 1]
+    hinge, _ = solve(bb2, odometry_factors(bb2, st2, sig_t, sig_r).extend(fa).extend(fb))
+    rigid, _ = solve(bb2, odometry_factors(bb2, st2, sig_t, sig_r, reset_inflate=1.0)
+                     .extend(fa).extend(fb))
+    # the mechanism, not a global ratio: across the reset edge the hinged solve
+    # must recover the TRUE relative motion (undoing the 0.5 m jump), while the
+    # rigid solve is forced to keep the jump there
+    rel_true = np.linalg.inv(truth[k0 - 1]) @ truth[k0]
+    rel_h = np.linalg.inv(hinge[k0 - 1]) @ hinge[k0]
+    rel_r = np.linalg.inv(rigid[k0 - 1]) @ rigid[k0]
+    eh = np.linalg.norm(rel_h[:3, 3] - rel_true[:3, 3])
+    er = np.linalg.norm(rel_r[:3, 3] - rel_true[:3, 3])
+    assert eh < 0.3 * er, (eh, er)
+
+
+@test
+def test_graph_refuses_a_free_gauge():
+    from slambench.graph import solve, odometry_factors
+    stamps, truth, bb, sig_t, sig_r, _ = _planted(N=50)
+    try:
+        solve(bb, odometry_factors(bb, stamps, sig_t, sig_r))
+    except ValueError as e:
+        assert "gauge" in str(e)
+    else:
+        raise AssertionError("a graph with no prior must refuse, not return a singular solve")
+
+
+@test
+def test_build_pseudo_gt_end_to_end_through_the_real_evaluator():
+    """The CLI, not the library: fabricate a reference, a drifted backbone run
+    and two board windows, then run scripts/build_pseudo_gt.py for v1 and v2c
+    and score both with scripts/eval_run.py. v1 must be the backbone to the
+    bit; v2c, scored UNALIGNED in the map frame, must beat the backbone's
+    se3-aligned ATE and sit at the boards' scatter where it consumed them.
+    A CLI that has never been executed is a CLI with a typo in it -- four runs
+    on 2026-09-20 were lost to exactly that class of fault."""
+    import json, subprocess, tempfile
+    import yaml
+    from slambench import Trajectory, save_tum, load_tum, se3
+    from slambench.graph import so3_exp
+    rng = np.random.default_rng(5)
+    tmp = Path(tempfile.mkdtemp(prefix="slambench-pgt-"))
+    runs = tmp / "runs" / "e2e"; boards = tmp / "boards"; boards.mkdir(parents=True)
+    n, rate, t0 = 900, 14.7, 1000.0
+    th = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    P = np.stack([se3.pose_from_rpy(4 + 3 * np.cos(a), -7 + 5.5 * np.sin(a), 0.19, 0, 0,
+                                    np.degrees(np.arctan2(5.5 * np.cos(a), -3 * np.sin(a))))
+                  for a in th])
+    stamps = t0 + np.arange(n) / rate
+    save_tum(Trajectory(stamps, P, "ref", frame="zed_left_camera_optical_frame", world="map"),
+             runs / "reference" / "mobile_1.tum")
+    sig_t, sig_r = 0.006, np.radians(0.1)
+    bb = [se3.pose_from_rpy(-2.0, 3.0, 0.0, 0, 0, 25.0) @ P[0]]
+    for k in range(1, n):
+        nz = np.eye(4); nz[:3, :3] = so3_exp(rng.normal(0, sig_r, (1, 3)))[0]
+        nz[:3, 3] = rng.normal(0, sig_t, 3)
+        bb.append(bb[-1] @ np.linalg.inv(P[k - 1]) @ P[k] @ nz)
+    bb = np.stack(bb)
+    run = runs / "rtabmap_rgbd_imu" / "mobile_1.zed_rgbd" / "run01"; run.mkdir(parents=True)
+    save_tum(Trajectory(stamps, bb, "bb"), run / "odometry.tum")
+    save_tum(Trajectory(stamps, bb, "bb"), run / "trajectory.tum")
+    (run / "run.json").write_text(json.dumps({"dataset": "e2e", "method": "rtabmap_rgbd_imu",
+                                              "agent": "mobile_1", "stream": "mobile_1.zed_rgbd"}))
+
+    def observe(lo, hi, st):
+        ts = np.arange(lo, hi, 1 / 15.0); out = []
+        for s_ in ts:
+            k = min(max(np.searchsorted(stamps, s_), 1), n - 1)
+            u = (s_ - stamps[k - 1]) / (stamps[k] - stamps[k - 1])
+            T = P[k - 1].copy(); T[:3, 3] = (1 - u) * P[k - 1][:3, 3] + u * P[k][:3, 3]
+            nz = np.eye(4); nz[:3, :3] = so3_exp(rng.normal(0, np.radians(0.5), (1, 3)))[0]
+            nz[:3, 3] = rng.normal(0, st, 3); out.append(T @ nz)
+        return Trajectory(ts, np.stack(out), "board")
+    wA, wB = [t0 + 0.5, t0 + 5.5], [float(stamps[-1] - 6.0), float(stamps[-1] - 0.5)]
+    save_tum(observe(*wA, 0.007), boards / "anchor.tum")
+    save_tum(observe(*wB, 0.015), boards / "rs_anchor.tum")
+
+    root = Path(__file__).resolve().parents[1]
+    cfg = yaml.safe_load((root / "configs" / "coop2.yaml").read_text())
+    cfg["dataset"]["name"] = "e2e"
+    for a in cfg["reference"]["anchors"]:
+        a.pop("observations", None); a["window"] = None
+        a["windows_by_agent"] = {"mobile_1": None, "mobile_2": None}
+        a["observed_poses_by_agent"] = {"mobile_1": None, "mobile_2": None}
+    by = {a["name"]: a for a in cfg["reference"]["anchors"]}
+    by["anchor"]["windows_by_agent"]["mobile_1"] = wA
+    by["anchor"]["observed_poses_by_agent"]["mobile_1"] = str(boards / "anchor.tum")
+    by["rs_anchor"]["windows_by_agent"]["mobile_1"] = wB
+    by["rs_anchor"]["observed_poses_by_agent"]["mobile_1"] = str(boards / "rs_anchor.tum")
+    (tmp / "e2e.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    ref = str(runs / "reference" / "mobile_1.tum")
+
+    def build(rung):
+        r = subprocess.run([sys.executable, str(root / "scripts" / "build_pseudo_gt.py"),
+                            "--config", str(tmp / "e2e.yaml"), "--run", str(run), "--rung", rung,
+                            "--runs-root", str(tmp / "runs"),
+                            "--sigma-t", str(sig_t), "--sigma-r", str(np.degrees(sig_r))],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-800:] + r.stderr[-800:]
+        return runs / f"pseudo_gt_{rung}" / "mobile_1.zed_rgbd" / "latest"
+
+    def ev(method, d, traj="trajectory.tum"):
+        r = subprocess.run([sys.executable, str(root / "scripts" / "eval_run.py"),
+                            "--config", str(tmp / "e2e.yaml"),
+                            "--method", str(root / "configs" / "methods" / f"{method}.yaml"),
+                            "--stream", "mobile_1.zed_rgbd", "--run", str(d), "--reference", ref,
+                            "--trajectory-file", traj, "--skip-map"], capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-800:] + r.stderr[-800:]
+        name = "metrics.json" if traj == "trajectory.tum" else f"metrics_{Path(traj).stem}.json"
+        return json.loads((d / name).read_text())
+
+    d1 = build("v1")
+    v1 = load_tum(d1 / "trajectory.tum")
+    assert np.abs(v1.poses - bb).max() < 1e-6, "v1 moved the backbone"
+    m_bb = ev("rtabmap_rgbd_imu", run, "odometry.tum")
+    m_v2 = ev("pseudo_gt_v2c", build("v2c"))
+    assert m_v2["ate"]["alignment"]["mode"] == "none", m_v2["ate"]["alignment"]
+    assert m_bb["ate"]["alignment"]["mode"] == "se3"
+    ate_bb = m_bb["ate"]["ate_trans_m"]["rmse"]; ate_v2 = m_v2["ate"]["ate_trans_m"]["rmse"]
+    assert ate_v2 < ate_bb, (ate_v2, ate_bb)
+    for row in m_v2["absolute_check"]:
+        assert row["residual_m"] is not None and row["residual_m"] < 0.03, row
+    run_json = json.loads((d1 / "run.json").read_text())
+    assert run_json["method"] == "pseudo_gt_v1" and "construction" in run_json
+
 if __name__ == "__main__":
     raise SystemExit(main())

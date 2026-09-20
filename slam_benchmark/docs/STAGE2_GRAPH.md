@@ -61,9 +61,25 @@ continuously, so nothing needs to carry the trajectory between measurements.
 We have absolute pose in **four windows totalling ~30 s of 150**. The backbone
 is what spans the other 120 s; the IMU alone would not survive it.
 
-Covariance: from the front-end's own reported covariance where it exists, else
-fitted from the RPE-1m statistics already measured in tier 1. **Declared in
-the config, never tuned per run** (rule 7).
+Covariance: **derived from the run's own RPE at 1 m** — per-edge σ = RMSE₁ₘ /
+√(edges per metre), treating per-edge errors as independent
+(`build_pseudo_gt.py --rung`; override with `--sigma-t/--sigma-r`). Two
+honest caveats, both recorded in `run.json`: the RPE was scored against the
+LiDAR, so this is a *reference-informed weight*, not an independent
+measurement; and on synthetic data with planted 4 mm / 0.05° per edge the
+derivation returned **6.4 mm / 0.09°** — a 1.6–1.8× over-estimate, because a
+1 m RPE also carries rotation compounded into translation and the model
+charges all of it to translation white noise. It loosens the odometry, so the
+anchors pull somewhat harder than they should. Check the sensitivity (×0.5,
+×2) before quoting any number that leans on it. Edges that cross a stamp gap
+wider than 3× the median period are RTAB-Map resets and get ×100 σ: the chain
+stays connected, the edge carries almost no weight.
+
+Implemented: `slambench/graph.py`. Chain of between factors plus single-pose
+priors → block-tridiagonal normal equations → exact O(N) block Thomas solve,
+pure numpy. Jacobians numerical, on gathered endpoints (batching the
+perturbation in place folds the j-Jacobian into the i-Jacobian and makes the
+system singular — found the hard way, 2026-09-20).
 
 ### 2.2 Board anchor factor — `r_B`
 
@@ -182,10 +198,10 @@ axis degeneracy, and the guard that matters is the one already in
 
 | rung | factors on | status |
 |---|---|---|
-| **V1** backbone only | `r_O` | **ready** — the no-anchor floor |
+| **V1** backbone only | `r_O` | **built and gated on synthetic** — reproduces its input exactly; awaiting the real run |
 | **V2a** + IMU | `r_O + r_I` | **blocked** — noise model (§2.3) |
 | **V2b** + radar ego-velocity | `r_O + r_V` | feasible; radar1/radar2 at 15.8 Hz, Doppler confirmed (I12), sign convention open. mobile_1 only |
-| **V2c** + board anchors | `r_O + r_B` | **ready** — 4 pairs, detector at 8 mm |
+| **V2c** + board anchors | `r_O + r_B` | **built and gated on synthetic** — 4 real pairs, detector at 8 mm; awaiting the real run |
 | **V2d** + infrastructure | `r_O + r_B + r_N` | **blocked** — I9: `infra_1`'s pose has no stated uncertainty anywhere in the dataset, and an anchored fix cannot be better than its anchor |
 | **V2e** + inter-agent | all | **unavailable** — needs simultaneous co-observation; the agents swap corners rather than share one. `docs/PLAN.md`'s next-session list already says to route them through a shared corridor |
 
@@ -199,8 +215,38 @@ paper's business (rule 8).
 ## 7. Certification
 
 V1 and V2c are both run on **mobile_1** and scored against the held-out LiDAR
-reference — the instrument that never feeds the construction. Two numbers
-matter:
+reference — the instrument that never feeds the construction.
+
+**Scoring rule, and it is not optional:** a V2c row is scored **unaligned**
+(`alignment: none`, declared in `configs/methods/pseudo_gt_v2c.yaml`). Its
+poses are in the surveyed map frame, placed by the boards; an se3 fit to the
+LiDAR before scoring would remove exactly the placement the anchors provide
+and re-use the reference doing it. V1 is in the backbone's own frame and is
+aligned like any backbone. So the comparison the paper makes is: *the
+construction's error in the map frame, with no use of the LiDAR*, against
+*the backbone's error after an oracle fit to the LiDAR*. If the first beats
+the second, the pseudo-GT stands on its own.
+
+**Measured on synthetic data, 2026-09-20** (planted 4 mm / 0.05° per edge,
+boards 7 / 15 mm, 0.5°, 150 s at 14.7 Hz, through the real `eval_run.py`):
+
+| row | ATE | tier 2 |
+|---|---|---|
+| backbone, se3-aligned | 92.9 mm / 2.08° | 187 / 118 mm |
+| **V1** | **92.9 mm / 2.08°** — identical, the gate passes | same |
+| **V2c**, unaligned | **79.2 mm / 1.66°** | 8.9 / 20.6 mm (consumed: self-agreement) |
+| V2c, `rs_anchor` held out, unaligned | 373 mm | 8.9 mm at `anchor`, **405 mm at `rs_anchor`** |
+
+Two things the last row says. A tier-2 residual at a *consumed* board is the
+board's own scatter, not evidence; only a held-out board and the LiDAR are
+independent (`--hold-out`). And **one board is worth nothing beyond fixing
+the gauge**: with a single window the far end of the run drifts the full
+150 s (405 mm), and under se3 alignment that row's ATE was indistinguishable
+from the backbone's. Two boards at opposite ends of the route is the minimum
+that buys anything. That is the shape of the claim for `mobile_2`, which has
+exactly two.
+
+Two numbers matter:
 
 1. **V1 must roughly reproduce the backbone's own error.** If it does not, the
    graph is wired wrong and nothing downstream is trustworthy. This is the

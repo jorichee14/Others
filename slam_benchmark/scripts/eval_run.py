@@ -99,7 +99,14 @@ def main() -> int:
         span = (min(ref.stamps[-1], est_raw.stamps[-1]) - max(ref.stamps[0], est_raw.stamps[0]))
         out["estimate"]["sequence_fraction"] = float(max(0.0, span) / max(ref.duration, 1e-9))
 
-        mode = args.alignment or ev.get("alignment", "se3")
+        # Precedence: command line, then the METHOD, then the dataset default.
+        # A method may declare its own alignment because the frame its poses
+        # live in is a property of the method: the construction's v2c rung is
+        # anchored to the surveyed map and must be scored UNALIGNED, or an se3
+        # fit to the reference quietly hands it back the thing it is being
+        # measured against. Its v1 rung is in the backbone's own frame and
+        # must be aligned. Both are declared in configs/methods/pseudo_gt_*.
+        mode = args.alignment or mcfg.raw.get("alignment") or ev.get("alignment", "se3")
         a = ate(est_ref, ref, mode=mode, max_gap_s=ev.get("max_gap_s", 0.25),
                 n_first=ev.get("align_n_first"),
                 reference_uncertainty_m=cfg.reference_uncertainty_m())

@@ -192,6 +192,14 @@ reference:
         max_reproj_px: 1.5
         min_ambiguity_ratio: 1.5
       uncertainty_m: 0.007            # 6.9 mm std over 214 views; loop closure 3.2 mm
+      # ROTATION, declared 2026-09-20 for the construction's anchor factors
+      # (docs/STAGE2_GRAPH.md s2.2), which weight orientation and position
+      # separately. Provenance: the detector's rotation scatter against the
+      # mapping pipeline's own detections is 0.52-0.66 deg (board_detect.py
+      # --validate-against, both cameras), and the pipeline's orientation agrees
+      # with /tf to 1.21 deg. 1.0 deg is the rounded-up detector figure; it is a
+      # per-observation sigma, not a claim about the survey.
+      uncertainty_deg: 1.0
       window: null                    # confirmed window; fill from the candidates below
       # phase0 candidates (t+ seconds into each agent's reference; CONFIRM BY EYE):
       #   mobile_1: [0.2, 6.5]                                  <- starts here
@@ -263,6 +271,14 @@ reference:
         max_reproj_px: 1.5
         min_ambiguity_ratio: 1.5
       uncertainty_m: 0.013            # the honest figure: 12.9 mm / 2.6 deg between
+      # ROTATION, declared 2026-09-20 for the construction's anchor factors
+      # (docs/STAGE2_GRAPH.md s2.2), which weight orientation and position
+      # separately. Provenance: the detector's rotation scatter against the
+      # mapping pipeline's own detections is 0.52-0.66 deg (board_detect.py
+      # --validate-against, both cameras), and the pipeline's orientation agrees
+      # with /tf to 1.21 deg. 1.0 deg is the rounded-up detector figure; it is a
+      # per-observation sigma, not a claim about the survey.
+      uncertainty_deg: 1.0
       window: null                    # its two sections (ratio 4.24, significant).
       # phase0 candidates: mobile_1 NEVER dwells here; mobile_2: [42.6, 50.0].
       # So this board could anchor mobile_2 only — and after the 2026-09-20
@@ -349,6 +365,14 @@ reference:
         max_reproj_px: 1.5
         min_ambiguity_ratio: 3.0
       uncertainty_m: 0.015            # std; max residual 40 mm, 1 of 2 sections gated
+      # ROTATION, declared 2026-09-20 for the construction's anchor factors
+      # (docs/STAGE2_GRAPH.md s2.2), which weight orientation and position
+      # separately. Provenance: the detector's rotation scatter against the
+      # mapping pipeline's own detections is 0.52-0.66 deg (board_detect.py
+      # --validate-against, both cameras), and the pipeline's orientation agrees
+      # with /tf to 1.21 deg. 1.0 deg is the rounded-up detector figure; it is a
+      # per-observation sigma, not a claim about the survey.
+      uncertainty_deg: 1.0
       window: null
       # phase0 candidates: mobile_1: [115.7, 151.5] (ends parked here);
       # mobile_2: [0.0, 20.6] (starts here). The agents SWAP corners over the
