@@ -300,6 +300,20 @@ exactly V1's value, because one board transports the trajectory rigidly
 without bending it. The full build bends it — that bending is where the 12 cm
 comes from, and local smoothness is what it costs.
 
+**`mobile_2`, measured 2026-09-20.** Coverage: leading 0.0 s, trailing 8.5 s,
+interior gap 125.1 s — no lever, and the trailing stretch moved 29 mm against
+142 mm in the anchored part. `mobile_1` is 0 / 0 / 118.2 s. Both agents are
+long bridges held at both ends, not levers, so the construction transfers.
+
+V1 reproduces its backbone (129.9 mm, tier 2 39.1 / 94.9 identical). V2c
+scores **277.9 mm unaligned** against V1's 129.9 mm se3-fitted to the
+reference — and that is **disagreement with cuVSLAM, not error**. `mobile_2`'s
+reference is cuVSLAM-derived and the RGB-D backbone shares its sensors and
+front-end, so 129.9 mm is agreement between two correlated estimates. The
+construction moved toward the survey; on `mobile_1` that same move was
+verified right by a held-out LiDAR. Pricing it needs backbone consensus, not
+the reference.
+
 Two numbers matter:
 
 1. **V1 must roughly reproduce the backbone's own error.** If it does not, the
