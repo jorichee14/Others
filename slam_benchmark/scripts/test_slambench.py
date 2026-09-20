@@ -2325,6 +2325,39 @@ def test_board_detect_geometry_and_the_frame_convention_that_bit_once():
     assert "--validate-against" in src and "opencv-contrib-python" in src
 
 
+@test
+def test_board_detect_gates_the_two_boards_that_carry_the_same_markers():
+    """`anchor` and `anchor_b` are the same design with the same dictionary and
+    the same id_offset, so the image cannot tell them apart: a run aimed at one
+    can solve the other and write a confident pose 11 m away. The reference
+    says where the robot was, so that is the gate. A mirrored PnP solution
+    fails it too."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from board_detect import sanity_gate
+    ref = circle_traj(100, radius=3.0, t0=1787899804.0, rate=15.0)
+    t = float(ref.stamps[50])
+    here = np.eye(4); here[:3, 3] = ref.positions[50] + np.array([0.02, 0.0, 0.0])
+    ok, d = sanity_gate(here, t, ref, 0.5)
+    assert ok and abs(d - 0.02) < 1e-9
+    # the other board, 11 m away, is what this exists to catch
+    there = np.eye(4); there[:3, 3] = ref.positions[50] + np.array([8.0, -7.2, 0.0])
+    ok, d = sanity_gate(there, t, ref, 0.5)
+    assert not ok and d > 10
+    # a stamp the reference does not cover cannot be gated, and is kept
+    ok, d = sanity_gate(here, t + 1e5, ref, 0.5)
+    assert ok and np.isnan(d)
+
+    # the config states the collision, and the script refuses without --reference
+    import yaml
+    cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs" / "coop2.yaml").read_text())
+    by = {a["name"]: a["board"] for a in cfg["reference"]["anchors"]}
+    key = lambda b: (b["dictionary"], b.get("id_offset", 0))
+    assert key(by["anchor"]) == key(by["anchor_b"]), "the collision this guards is gone?"
+    assert key(by["rs_anchor"]) != key(by["anchor"])
+    src = (Path(__file__).resolve().parents[1] / "scripts" / "board_detect.py").read_text()
+    assert "so a solved pose can be checked against where the robot actually was" in src
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

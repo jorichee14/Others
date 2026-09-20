@@ -169,6 +169,12 @@ reference:
         square_m: 0.020
         marker_m: 0.015
         dictionary: DICT_4X4_50
+        id_offset: 0        # anchor_frame json, schema 2
+        # ⚠ `anchor` AND `anchor_b` ARE THE SAME MARKERS: same design, same
+        # DICT_4X4_50, id_offset 0 on both. Nothing in the image distinguishes
+        # them, so a detector aimed at one can silently solve the other and
+        # write confident wrong poses. scripts/board_detect.py therefore gates
+        # every solved pose against the reference trajectory at that stamp.
         axes: ros          # +x is the OUTWARD NORMAL, not +z
         origin: center
       uncertainty_m: 0.007            # 6.9 mm std over 214 views; loop closure 3.2 mm
@@ -223,6 +229,7 @@ reference:
         square_m: 0.020
         marker_m: 0.015
         dictionary: DICT_4X4_50
+        id_offset: 0        # anchor_frame json, schema 2
         axes: ros
         origin: center
       uncertainty_m: 0.013            # the honest figure: 12.9 mm / 2.6 deg between
@@ -275,6 +282,7 @@ reference:
         square_m: 0.025
         marker_m: 0.018
         dictionary: DICT_5X5_50
+        id_offset: 0        # anchor_frame json, schema 2
         axes: ros
         origin: center
       uncertainty_m: 0.015            # std; max residual 40 mm, 1 of 2 sections gated

@@ -97,6 +97,30 @@ def camera_in_map(rvec, tvec, T_map_board) -> np.ndarray:
     return T_map_board @ se3.invert(T_cam_board)
 
 
+def sanity_gate(T_map_cam: np.ndarray, t: float, ref: Trajectory,
+                max_pos_m: float, max_dt_s: float = 0.05):
+    """Is this pose anywhere near where the robot actually was?
+
+    `anchor` and `anchor_b` are the SAME board design with the SAME marker ids
+    (DICT_4X4_50, id_offset 0 on both), so nothing in the image distinguishes
+    them: a run aimed at one can solve the other and produce a confident pose
+    tens of metres away. A mirrored PnP solution looks the same from here.
+    Either way the reference says where the camera was to a few centimetres,
+    so a detection that disagrees with it by more than `max_pos_m` is the
+    wrong board or the wrong solution, and is dropped with its distance
+    reported rather than silently kept.
+
+    Returns (ok, distance_m). A stamp the reference does not cover cannot be
+    gated, and is kept -- the reference's absence is not evidence against a
+    detection.
+    """
+    j = int(np.argmin(np.abs(ref.stamps - t)))
+    if abs(ref.stamps[j] - t) > max_dt_s:
+        return True, float("nan")
+    d = float(np.linalg.norm(T_map_cam[:3, 3] - ref.positions[j]))
+    return d <= max_pos_m, d
+
+
 def compare(got: Trajectory, ref: Trajectory, max_dt_s: float = 0.02) -> dict:
     """Detections against the pipeline's, on matched stamps. The verdict this
     script exists to print before anyone trusts a new file."""
@@ -129,6 +153,13 @@ def main() -> int:                                           # pragma: no cover
     ap.add_argument("--min-corners", type=int, default=6,
                     help="inner corners needed before a view is used at all")
     ap.add_argument("--max-reproj-px", type=float, default=1.5)
+    ap.add_argument("--reference", default=None,
+                    help="the agent's reference TUM. Used ONLY to reject a pose that "
+                         "cannot be where the robot was -- see sanity_gate. Required "
+                         "for a board whose markers are shared with another.")
+    ap.add_argument("--max-offset-m", type=float, default=0.5,
+                    help="how far a detection may sit from the reference before it is "
+                         "treated as the wrong board or a mirrored solution")
     args = ap.parse_args()
 
     try:
@@ -157,6 +188,16 @@ def main() -> int:                                           # pragma: no cover
                          f"whole bag would be a fishing expedition, not a measurement")
 
     b = anchor["board"]
+    shared = [a["name"] for a in cfg.reference.get("anchors", [])
+              if a.get("board") and a["name"] != args.anchor
+              and a["board"].get("dictionary") == b.get("dictionary")
+              and a["board"].get("id_offset", 0) == b.get("id_offset", 0)]
+    ref_traj = load_tum(args.reference, name=f"reference/{args.agent}") if args.reference else None
+    if shared and ref_traj is None:
+        raise SystemExit(
+            f"{args.anchor!r} carries the same markers as {shared} (same dictionary, "
+            f"same id_offset), so the image cannot tell them apart. Pass --reference "
+            f"so a solved pose can be checked against where the robot actually was.")
     T_map_board = board_to_map(anchor["position"], anchor["orientation"])
     obj = object_points(b["squares"], float(b["square_m"]),
                         b.get("origin", "center"), b.get("axes", "ros"))
@@ -180,7 +221,7 @@ def main() -> int:                                           # pragma: no cover
     cls = {t: get_message(types[t]) for t in (img_topic, info_topic)}
 
     K = dist = None
-    stamps, poses, tried, detected = [], [], 0, 0
+    stamps, poses, tried, detected, rejected = [], [], 0, 0, []
     while reader.has_next():
         topic, data, _ = reader.read_next()
         msg = deserialize_message(data, cls[topic])
@@ -210,12 +251,25 @@ def main() -> int:                                           # pragma: no cover
             (proj.reshape(-1, 2) - corners.reshape(-1, 2)) ** 2, axis=1))))
         if err > args.max_reproj_px:
             continue
+        T_map_cam = camera_in_map(rvec, tvec, T_map_board)
+        if ref_traj is not None:
+            ok, d = sanity_gate(T_map_cam, t, ref_traj, args.max_offset_m)
+            if not ok:
+                rejected.append(d)
+                continue
         detected += 1
         stamps.append(t)
-        poses.append(camera_in_map(rvec, tvec, T_map_board))
+        poses.append(T_map_cam)
 
     print(f"{detected} of {tried} frames in the window gave a pose "
           f"(>= {args.min_corners} corners, reprojection <= {args.max_reproj_px} px)")
+    if rejected:
+        print(f"{len(rejected)} solved poses REJECTED for sitting "
+              f"{np.median(rejected):.2f} m (median) from the reference, over the "
+              f"{args.max_offset_m} m gate"
+              + (f" -- {args.anchor} shares its markers with {shared}, so these are "
+                 f"very likely the other board" if shared else
+                 " -- likely mirrored PnP solutions"))
     if not stamps:
         print("no detection: the board was in frame by the reference's reckoning but "
               "the detector found nothing. Occlusion, blur or exposure -- the three "
