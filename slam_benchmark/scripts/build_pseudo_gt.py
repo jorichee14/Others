@@ -40,8 +40,8 @@ sys.path.insert(0, str(ROOT))
 
 from slambench.align import fit                                              # noqa: E402
 from slambench.config import load_dataset, load_method, to_reference_frame  # noqa: E402
-from slambench.graph import (anchor_factors, gauge_prior, odometry_factors,  # noqa: E402
-                             reset_edges, solve)
+from slambench.graph import (anchor_coverage, anchor_factors, gauge_prior,  # noqa: E402
+                             move_by_region, odometry_factors, reset_edges, solve)
 from slambench.trajectory import Trajectory, load_tum, save_tum             # noqa: E402
 
 
@@ -226,6 +226,55 @@ def main() -> int:
     moved = np.linalg.norm(out_poses[:, :3, 3] - poses0[:, :3, 3], axis=1)
     construction["moved_from_initial_mm"] = {"median": float(np.median(moved) * 1e3),
                                              "max": float(moved.max() * 1e3)}
+
+    # WHERE the anchors are, and where the trajectory moved. The single median
+    # above cannot tell a well-conditioned solve from a lever: mobile_1's
+    # boards BRACKET its run and the whole thing shifts together, while
+    # anchor-only moved 7.26 m almost entirely in the stretch with nothing
+    # behind it. A run whose anchors sit at one end reports a modest median and
+    # a swinging tail. So the tail is measured, not assumed.
+    anchored = factors.p_i[[t.startswith("anchor/") for t in factors.p_tag]] \
+        if len(factors.p_i) else np.zeros(0, dtype=int)
+    if len(anchored):
+        cov = anchor_coverage(est.stamps, anchored, est.positions)
+        reg = move_by_region(est.stamps, anchored, moved)
+        construction["anchor_coverage"] = cov
+        construction["move_by_region_mm"] = reg
+        print(f"coverage : anchors t+{cov['first_anchor_s']:.1f}..{cov['last_anchor_s']:.1f} "
+              f"of {cov['span_s']:.1f} s  |  unanchored: leading {cov['leading_s']:.1f} s, "
+              f"trailing {cov['trailing_s']:.1f} s, widest interior gap "
+              f"{cov['max_interior_gap_s']:.1f} s")
+        if reg:
+            print("move     : " + ",  ".join(
+                f"{k} {v['median_mm']:.0f} mm (n={v['poses']}, max {v['max_mm']:.0f})"
+                for k, v in reg.items()))
+        # THE WARNING IS ON THE GEOMETRY, NOT ON THE MOVE. An earlier version
+        # flagged an end that moved 3x the anchored middle; on a planted lever
+        # that ratio came out at 1.97 and the warning stayed silent while the
+        # tail error was several times worse. The move conflates the global
+        # placement shift (which is the same everywhere) with local
+        # deformation, so it is printed as evidence and not thresholded.
+        # What reliably predicts the risk is that a stretch at an END has no
+        # anchor beyond it and is carried by the odometry chain alone.
+        LEVER_PATH_FRAC = 0.15            # of the run's path length
+        for end in ("leading", "trailing"):
+            frac = cov.get(f"{end}_path_m", 0.0) / max(cov.get("path_m", 0.0), 1e-9)
+            if frac <= LEVER_PATH_FRAC:
+                continue
+            e = reg.get(end) or {}
+            print(f"WARNING  : LEVER at the {end} end. {cov[end + '_s']:.1f} s and "
+                  f"{cov[f'{end}_path_m']:.1f} m of path ({100 * frac:.0f}% of the run) "
+                  f"has NO anchor beyond it, so it is held by the odometry chain alone and "
+                  f"its error grows with distance from the nearest board"
+                  + (f"; it moved {e['median_mm']:.0f} mm median ({e['max_mm']:.0f} max) "
+                     f"in this solve" if e else "") +
+                  ". Do not quote one error figure across this stretch and the anchored one, "
+                  "and do not read a small whitened residual here as accuracy -- nothing "
+                  "measured this stretch.")
+            construction.setdefault("levers", []).append(
+                {"end": end, "unanchored_s": cov[end + "_s"],
+                 "unanchored_path_m": cov[f"{end}_path_m"], "path_fraction": frac,
+                 "move_median_mm": e.get("median_mm")})
     print(f"solve    : {rep.iterations} it, converged={rep.converged}, cost "
           f"{rep.initial_cost:.3e} -> {rep.final_cost:.3e}, whitened rms "
           + ", ".join(f"{k} {v:.2f}" for k, v in rep.final_rms.items()))

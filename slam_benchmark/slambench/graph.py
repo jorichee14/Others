@@ -39,7 +39,8 @@ import dataclasses
 import numpy as np
 
 __all__ = ["so3_exp", "so3_log", "Factors", "SolveReport", "solve",
-           "odometry_factors", "anchor_factors", "gauge_prior", "reset_edges"]
+           "odometry_factors", "anchor_factors", "gauge_prior", "reset_edges",
+           "anchor_coverage", "move_by_region"]
 
 
 # ----------------------------------------------------------------- SO(3), batched
@@ -342,6 +343,75 @@ def solve(poses0: np.ndarray, f: Factors, max_iter: int = 50, lam0: float = 1e-4
 
 
 # -------------------------------------------------------------------- builders
+def anchor_coverage(stamps: np.ndarray, anchored_idx: np.ndarray,
+                    positions: np.ndarray | None = None) -> dict:
+    """Where the anchors are in TIME, which is what conditions this graph.
+
+    Board COUNT is not the quantity that matters; the mobile_1 sweep settled
+    that (2026-09-20). Two boards bracketing a run hold it at both ends and the
+    middle is bridged. The same two boards both near one end leave a LEVER:
+    the far stretch is held only through the odometry chain, a rotation inside
+    the nearest board's own sigma becomes metres of displacement out there, and
+    the solve reports convergence with near-zero residuals while the tail
+    swings. Holding out `rs_anchor` on mobile_1 did exactly that -- 7.26 m.
+
+    So the three numbers are: how long the run goes before its FIRST anchor,
+    how long it goes after its LAST, and the widest interior gap. The first two
+    are levers, the third is a bridge, and they are not the same risk.
+    """
+    stamps = np.asarray(stamps, dtype=np.float64)
+    a = np.sort(np.unique(np.asarray(anchored_idx, dtype=int)))
+    if not len(a) or len(stamps) < 2:
+        return {"anchored_poses": 0, "leading_s": float(stamps[-1] - stamps[0])
+                if len(stamps) > 1 else 0.0, "trailing_s": 0.0,
+                "max_interior_gap_s": 0.0, "regions": {}}
+    ta = stamps[a]
+    gaps = np.diff(ta)
+    out = {
+        "anchored_poses": int(len(a)),
+        "span_s": float(stamps[-1] - stamps[0]),
+        "first_anchor_s": float(ta[0] - stamps[0]),
+        "last_anchor_s": float(ta[-1] - stamps[0]),
+        "leading_s": float(ta[0] - stamps[0]),
+        "trailing_s": float(stamps[-1] - ta[-1]),
+        "max_interior_gap_s": float(gaps.max()) if len(gaps) else 0.0,
+    }
+    # Seconds are the wrong unit on their own: a parked robot accumulates no
+    # drift. Metres of unanchored PATH is what the odometry has to carry.
+    if positions is not None:
+        pos = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
+        step = np.concatenate([[0.0], np.linalg.norm(np.diff(pos, axis=0), axis=1)])
+        arc = np.cumsum(step)
+        out["path_m"] = float(arc[-1])
+        out["leading_path_m"] = float(arc[a[0]])
+        out["trailing_path_m"] = float(arc[-1] - arc[a[-1]])
+    return out
+
+
+def move_by_region(stamps: np.ndarray, anchored_idx: np.ndarray,
+                   moved_m: np.ndarray) -> dict:
+    """Median move in the leading / anchored / trailing stretches.
+
+    A well-conditioned solve moves all three by a similar amount -- the whole
+    trajectory shifts into the map frame together. A lever moves the
+    unanchored end by a multiple of the anchored middle, and THAT ratio is the
+    diagnostic, not the absolute number.
+    """
+    stamps = np.asarray(stamps, dtype=np.float64)
+    moved_m = np.asarray(moved_m, dtype=np.float64)
+    a = np.sort(np.unique(np.asarray(anchored_idx, dtype=int)))
+    if not len(a):
+        return {}
+    lo, hi = stamps[a[0]], stamps[a[-1]]
+    out = {}
+    for name, m in (("leading", stamps < lo), ("anchored", (stamps >= lo) & (stamps <= hi)),
+                    ("trailing", stamps > hi)):
+        if m.any():
+            out[name] = {"poses": int(m.sum()), "median_mm": float(np.median(moved_m[m]) * 1e3),
+                         "max_mm": float(moved_m[m].max() * 1e3)}
+    return out
+
+
 def reset_edges(stamps: np.ndarray, gap_factor: float = 3.0) -> np.ndarray:
     """Indices i where the edge i -> i+1 crosses a stamp gap wider than
     `gap_factor` x the median period.

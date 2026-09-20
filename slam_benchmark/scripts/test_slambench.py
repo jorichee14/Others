@@ -2800,5 +2800,64 @@ def test_build_pseudo_gt_end_to_end_through_the_real_evaluator():
     run_json = json.loads((d1 / "run.json").read_text())
     assert run_json["method"] == "pseudo_gt_v1" and "construction" in run_json
 
+
+@test
+def test_graph_anchor_coverage_distinguishes_a_bracket_from_a_lever():
+    """Board COUNT does not condition this graph; coverage in TIME does.
+
+    Two boards bracketing a run hold both ends. The same two boards near one
+    end leave the far stretch on the odometry chain alone, where a rotation
+    inside the nearest board's sigma becomes metres -- measured at 7.26 m on
+    real data (2026-09-20) while every convergence check passed. mobile_1's
+    boards bracket its run; mobile_2's do not, so this has to be a measurement
+    rather than a reading of the config by eye.
+    """
+    from slambench.graph import (anchor_coverage, anchor_factors, move_by_region,
+                                 odometry_factors, solve)
+    stamps, truth, bb, sig_t, sig_r, rng = _planted()
+    span = stamps[-1] - stamps[0]
+
+    # BRACKET: one window at each end
+    a1, p1 = _observe(truth, stamps, stamps[0] + 0.5, stamps[0] + 4.0, rng)
+    b1, q1 = _observe(truth, stamps, stamps[-1] - 6.0, stamps[-1] - 0.5, rng)
+    # LEVER: both windows in the first third
+    a2, p2 = _observe(truth, stamps, stamps[0] + 0.5, stamps[0] + 4.0, rng)
+    b2, q2 = _observe(truth, stamps, stamps[0] + 8.0, stamps[0] + 12.0, rng)
+
+    out = {}
+    for name, (ta, pa, tb, pb) in (("bracket", (a1, p1, b1, q1)),
+                                   ("lever", (a2, p2, b2, q2))):
+        fa, _ = anchor_factors(pa, ta, stamps, 0.007, np.radians(1.0), "a")
+        fb, _ = anchor_factors(pb, tb, stamps, 0.015, np.radians(1.0), "b")
+        f = odometry_factors(bb, stamps, sig_t, sig_r).extend(fa).extend(fb)
+        poses, _ = solve(bb, f)
+        moved = np.linalg.norm(poses[:, :3, 3] - bb[:, :3, 3], axis=1)
+        cov = anchor_coverage(stamps, f.p_i, bb[:, :3, 3])
+        reg = move_by_region(stamps, f.p_i, moved)
+        out[name] = (cov, reg, poses)
+
+    cov_b, reg_b, pose_b = out["bracket"]
+    cov_l, reg_l, pose_l = out["lever"]
+
+    # the coverage numbers alone separate them, before anything is solved
+    assert cov_b["trailing_s"] < 0.05 * span, cov_b
+    assert cov_l["trailing_s"] > 0.5 * span, cov_l
+
+    # the warning fires on PATH left unanchored at an end, which is the
+    # quantity that predicts the risk. The MOVE does not: on this planted lever
+    # the tail/anchored move ratio is under 2 while the tail error is several
+    # times worse, which is why the build no longer thresholds it.
+    frac_l = cov_l["trailing_path_m"] / cov_l["path_m"]
+    frac_b = cov_b["trailing_path_m"] / cov_b["path_m"]
+    assert frac_l > 0.15 and frac_b <= 0.15, (frac_l, frac_b)
+    assert reg_l["trailing"]["median_mm"] / max(reg_l["anchored"]["median_mm"], 1e-9) < 3.0, reg_l
+
+    # the consequence that matters: the bracketed build is accurate at the far
+    # end and the lever is not, even though both solves converge
+    tail = stamps > stamps[0] + 0.66 * span
+    e_b = np.linalg.norm(pose_b[tail, :3, 3] - truth[tail, :3, 3], axis=1)
+    e_l = np.linalg.norm(pose_l[tail, :3, 3] - truth[tail, :3, 3], axis=1)
+    assert np.median(e_l) > 3.0 * np.median(e_b), (np.median(e_l), np.median(e_b))
+
 if __name__ == "__main__":
     raise SystemExit(main())
