@@ -34,7 +34,11 @@ Robots that do not carry one are evaluated against nothing, or against another
 SLAM system, which is not evaluation. State the four contributions.
 
 ### 2. Related work
-Three families, and the sentence that separates this from each:
+**`RELATED_WORK.md` carries the full check (2026-09-20) and its caveats.** Two
+papers must be read in full before this section is written: **PALoc** (TMech
+2024), the closest on certified uncertainty, and **Marker-Constrained
+Pose-Graph Correction** (arXiv 2608.16281, **August 2026**), the closest on the
+method itself. Four families, and the sentence that separates this from each:
 * **MoCap-fusion GT estimators** (EuRoC 2016, Vicon2GT 2020, Kalibr MoCap
   branch, MoCap2GT RA-L 2026) — make an *already instrumented* trajectory more
   accurate. Absolute pose at 100 Hz, continuously. Cannot run at all where
@@ -43,6 +47,13 @@ Three families, and the sentence that separates this from each:
   Hilti) — the evaluated platform carries the LiDAR.
 * **Pseudo-GT from a stronger SLAM** (e.g. PIN-SLAM on KITTI 11-21) — asserts
   the substitute is good enough rather than certifying it.
+* **Surveyed-anchor pose-graph correction** (Marker-Constrained Pose-Graph
+  Correction, 2026) — the nearest neighbour. Surveyed markers, pose-graph
+  correction, RTAB-Map, held-out marker evaluation. Differs in purpose
+  (georeferencing, not a benchmarking reference), in what is held out (a marker,
+  not a whole reference sensor), in having no transfer, and in anchoring with
+  ONE marker at a time — which is the lever configuration measured here at
+  7.26 m.
 
 ### 3. Problem and theory
 `THEORY_AND_VALIDATION.md` §1-2. Error must not accumulate; three mechanisms
