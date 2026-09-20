@@ -1748,6 +1748,8 @@ def test_mast3r_image_upgrades_setuptools_and_builds_without_isolation():
     assert r.returncode == 0, r.stderr
     out = src.read_text()
     assert "has_cuda = True" in out and "compute_90,code=compute_90" in out and "sm_89" in out
+    # the full opencv-python links libGL; the image proves the imports it ships
+    assert "libgl1" in df and 'import cv2, torch, mast3r_slam_backends' in df
     src.write_text("has_cuda = something_else\n")
     r = subprocess.run([sys.executable, str(patch), str(src)], capture_output=True, text=True)
     assert r.returncode != 0 and "not what this patch was written for" in r.stderr
