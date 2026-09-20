@@ -65,11 +65,44 @@ reference is agreement, not accuracy.
 |---|---:|---:|---:|---:|
 | `rtabmap_rgbd_imu`, front-end | 372–481 mm | 5.8–7.1° | 467–577 mm (`anchor`), 350–548 mm (`rs_anchor`) | 99% |
 | `rtabmap_rgbd_imu`, loop-closed graph | 366–451 mm | 3.4–4.7° | 421–499 mm (`anchor`) | **78%** |
+| `rtabmap_rgbd` (IMU-free), graph | 323 mm | 4.08° | **375 mm** (`anchor`), **336 mm** (`rs_anchor`, front-end) | **74%** |
 | `mast3r_slam` | 1908 mm | 1.91° | 3536 mm | **64%** |
 | `kiss_icp` | 2.2–6.7 m | 28–165° | 3.3–9.5 m | 99–100% |
 
 **The two tiers agree on magnitude and on ranking.** That corroborates the
 reference and is what licenses `mobile_1` as the instrument for §2.
+
+### The IMU ablation, on one robot — and it goes the other way
+
+`rtabmap_rgbd` and `rtabmap_rgbd_imu` are the same system with the inertial
+input switched off and on, run on the same bag over the same route. Compare
+them **at the boards, not by ATE**: the IMU-free run's graph covers 74% of the
+sequence against 78–99% for the inertial ones, so their ATEs are not the same
+measurement — but the board residuals are evaluated over identical dwell
+windows with identical counts (n = 86 at `anchor`, n = 353 at `rs_anchor`),
+which makes them directly comparable.
+
+| comparison | IMU **off** | IMU **on** (5 runs) |
+|---|---:|---:|
+| front-end, `anchor` | **422.4 mm** / 6.37° | 466.8–577.0 mm / 4.41–7.08° |
+| front-end, `rs_anchor` | **335.6 mm** / **1.48°** | 350.3–547.9 mm / 3.77–25.40° |
+| graph, `anchor` | **375.4 mm** / **2.17°** | 421.4–499.3 mm / 3.45–4.69° |
+
+**The IMU-free run is better in position than all five inertial runs, in all
+three comparisons, and better in rotation than all five in two of the three.**
+
+This contradicts an earlier claim in this project that *an IMU roughly halves
+orientation error at a surveyed marker* — **retracted**. That claim rested on
+comparing `mobile_1` (inertial) against `mobile_2` (not), which is a
+comparison across two different robots, routes, cameras and references. The
+within-platform ablation reverses it.
+
+Two honest limits. It is one IMU-free run against five inertial ones, though
+it wins every individual comparison rather than winning on average. And the
+mechanism is **not established**: RTAB-Map's IMU enters as a gravity
+constraint (`Optimizer/GravitySigma 0.3`), which would plausibly hurt if the
+ZED's fused orientation or its declared extrinsic carries a small bias, but
+that is a hypothesis and this recording has not tested it.
 
 `mast3r_slam` recovers shape but not size: its estimate is **37.1% too
 large**, and removing the scale by a sim3 fit drops the ATE from 1908 mm to
