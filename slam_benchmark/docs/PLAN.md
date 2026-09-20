@@ -158,6 +158,11 @@ V2d + infrastructure bearing/range      [needs 0.5]
 V2e + inter-agent (mobile_1 co-observation)  [needs 0.6 pass]
 ```
 
+**The graph itself is specified in `docs/STAGE2_GRAPH.md`** — states,
+factors, residuals, covariance sources, and which rungs coop2 can actually
+price (two, plus one plausible; three are blocked or unavailable, each for a
+measured reason). Read it before writing any of this.
+
 Each run certified against the held-out LiDAR on `mobile_1`. The radar
 ego-velocity front-end is ~100 lines of numpy (RANSAC over Doppler triples),
 tested on synthetic sweeps first; the infra fusion reuses `slambench/collab.py`.
