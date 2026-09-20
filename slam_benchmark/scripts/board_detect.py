@@ -435,20 +435,16 @@ def main() -> int:                                           # pragma: no cover
               + (f" -- {args.anchor} shares its markers with {shared}, so these are "
                  f"very likely the other board" if shared else
                  " -- likely mirrored PnP solutions"))
-    if not stamps:
-        print("no detection: the board was in frame by the reference's reckoning but "
-              "the detector found nothing. Occlusion, blur or exposure -- the three "
-              "things board_visibility.py says it cannot settle.", file=sys.stderr)
-        return 1
-    traj = Trajectory(np.array(stamps), np.stack(poses),
-                      f"{args.agent}/{args.anchor}", frame="camera", world="map")
-
     if args.solve_axes:
         if not args.validate_against:
             raise SystemExit("--solve-axes needs --validate-against: it is scored "
                              "against the pipeline's own detections, not guessed")
         truth = load_tum(args.validate_against)
-        print("\ncandidate board-axis conventions, scored against the pipeline:")
+        print(f"\n{len(solved)} raw detections available. The sanity gate is NOT "
+              f"applied here: it compares a pose against the reference, and a pose "
+              f"is only meaningful once the convention is known -- which is what "
+              f"this is for.")
+        print("candidate board-axis conventions, scored against the pipeline:")
         best = None
         for name, M in AXES_CANDIDATES.items():
             pts = to_board_frame(raw, b["squares"], float(b["square_m"]),
@@ -479,6 +475,15 @@ def main() -> int:                                           # pragma: no cover
                   f"block for every anchor and re-run the validation before "
                   f"writing any new file.")
         return 0
+
+
+    if not stamps:
+        print("no detection: the board was in frame by the reference's reckoning but "
+              "the detector found nothing. Occlusion, blur or exposure -- the three "
+              "things board_visibility.py says it cannot settle.", file=sys.stderr)
+        return 1
+    traj = Trajectory(np.array(stamps), np.stack(poses),
+                      f"{args.agent}/{args.anchor}", frame="camera", world="map")
 
     if args.validate_against:
         v = compare(traj, load_tum(args.validate_against))

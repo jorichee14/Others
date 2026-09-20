@@ -2368,6 +2368,10 @@ def test_board_detect_gates_the_two_boards_that_carry_the_same_markers():
     assert "interpolateCornersCharuco" in src and "getChessboardCorners" in src
     assert "refusing to guess which is right" in src
     assert "--solve-axes" in src and "arguing about conventions is slower" in src
+    # the convention search must come BEFORE any gate that presumes a
+    # convention, or it never runs on the day it is needed
+    assert src.index("if args.solve_axes:") < src.index("if not stamps:")
+    assert src.index("solved.append(") < src.index("sanity_gate(T_map_cam, t, ref_traj")
 
 
 @test
@@ -2393,13 +2397,21 @@ def test_every_candidate_board_axis_convention_is_a_rotation_about_the_normal():
         pts = object_points([9, 7], 0.020, "center", name)
         assert np.allclose(pts[:, 0], 0, atol=1e-12), f"{name} is not flat in x"
         seen.append(pts)
-    # all four are genuinely different layouts, and 180 is the flip that a
-    # 179.96 deg residual points at
+    # All eight are genuinely different LAYOUTS, and eight is the complete set:
+    # the board points are (u, v, 0), so only the first two columns of the
+    # mapping act on them, and a column pair that keeps the board flat in x is
+    # one of {+-y, +-z} x the perpendicular in that plane -- four spins for
+    # each of the two chiralities. A mirrored layout is not a rotation of the
+    # other, which is why searching only one chirality could not have found
+    # the answer.
+    assert len(seen) == 8
     for i in range(len(seen)):
         for j in range(i + 1, len(seen)):
             assert not np.allclose(seen[i], seen[j]), (i, j)
-    assert np.allclose(AXES_CANDIDATES["ros+180"] @ np.array([0, 1.0, 0]),
-                       -AXES_CANDIDATES["ros+0"] @ np.array([0, 1.0, 0]), atol=1e-12)
+    a = object_points([9, 7], 0.020, "center", "ros+0")
+    b = object_points([9, 7], 0.020, "center", "rosflip+0")
+    assert np.allclose(a[:, 1], -b[:, 1]) and np.allclose(a[:, 2], b[:, 2]), \
+        "the two chiralities must differ by a mirror, not a spin"
     src = (Path(__file__).resolve().parents[1] / "scripts" / "board_detect.py").read_text()
     # mobile_2's topic is image_raw: the distortion must come from camera_info
     assert 'rect = "rect" in img_topic' in src
