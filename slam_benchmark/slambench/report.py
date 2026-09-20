@@ -16,6 +16,8 @@ from pathlib import Path
 __all__ = ["trajectory_table", "map_table", "write_json", "load_runs"]
 
 _DAGGER = "†"
+_SHORT = "⚠"          # the estimate stops before the reference does
+_SHORT_AT = 0.95     # below this much of the reference span, say so
 
 
 def _fmt(v, nd=3, scale=1.0):
@@ -48,14 +50,31 @@ def _size(scale_observed) -> str:
     return f"{d:+.1f}%"
 
 
+
+def _span(a: dict) -> str:
+    """Estimate duration as a share of the reference's.
+
+    Written as a percentage because the useful reading is "this row covers
+    82% of the run and the one above it covers all of it", not a ratio.
+    Older metrics.json files predate the field and get an em dash rather
+    than a fabricated 100%.
+    """
+    f = a.get("span_fraction")
+    if f is None:
+        d, rd = a.get("duration_s"), a.get("ref_duration_s")
+        if not d or not rd:
+            return "—"
+        f = d / rd
+    return f"{f * 100:.0f}%" + (_SHORT if f < _SHORT_AT else "")
+
 def trajectory_table(runs: list[dict], reference_uncertainty_m: float) -> str:
     lines, footnote = [], False
     for block, rows in sorted(_blocks(runs).items()):
         lines += [f"### {block}", "",
                   "| method | agent | stream | align | ATE RMSE (mm) | ATE p90 (mm) "
                   "| rot RMSE (deg) | RPE 1 m (mm) | drift (%) | scale obs. "
-                  "| est. size | cov. |",
-                  "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+                  "| est. size | cov. | span |",
+                  "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
         rows = sorted(rows, key=lambda r: (r.get("ate") or {}).get("ate_trans_m", {})
                       .get("rmse", float("inf")))
         for r in rows:
@@ -75,11 +94,17 @@ def trajectory_table(runs: list[dict], reference_uncertainty_m: float) -> str:
                 f"| {_fmt((r1 or {}).get('rpe_trans_m',{}).get('rmse'),1,1e3)} "
                 f"| {_fmt(a['drift_percent'],2)} | {_fmt(a['alignment']['scale_observed'],4)} "
                 f"| {_size(a['alignment']['scale_observed'])} "
-                f"| {_fmt(a['coverage'],2)} |")
+                f"| {_fmt(a['coverage'],2)} | {_span(a)} |")
         lines.append("")
     lines += ["_`scale obs.` multiplies the ESTIMATE to reach the reference, so a value "
               "above 1 means the estimate is SMALLER than truth. `est. size` states the "
-              "same fact the other way round and is the one to quote._", ""]
+              "same fact the other way round and is the one to quote._", "",
+              "_`span` is how much of the reference's duration the estimate covers. "
+              "`cov.` cannot tell you this — it asks what fraction of the ESTIMATE "
+              "found a reference, which stays near 1.00 for an estimate that simply "
+              f"stops early. A row marked {_SHORT} is scored over less of the run than "
+              "the rows beside it, and its ATE is not comparable to theirs without "
+              "saying so._", ""]
     if footnote:
         lines += [f"{_DAGGER} ATE RMSE is below the reference trajectory's own stated "
                   f"uncertainty ({reference_uncertainty_m * 1e3:.0f} mm). The method is "

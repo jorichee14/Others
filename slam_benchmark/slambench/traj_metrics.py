@@ -67,6 +67,14 @@ class AteResult:
     duration_s: float
     drift_percent: float         # ATE RMSE as a percentage of path length
     below_reference_uncertainty: bool | None = None
+    # The reference's own duration, so a reader can see that an estimate covers
+    # less of the run than the row beside it. `coverage` cannot show this: it
+    # asks what fraction of the ESTIMATE found a reference, which is ~1.0 for an
+    # estimate that simply stops early. On coop2 this is not hypothetical --
+    # RTAB-Map's loop-closed graph adds a node on MOTION, so the 27 s the cart
+    # spends parked at `rs_anchor` produces no nodes at all, and every graph row
+    # is scored over a shorter run than the odometry row printed next to it.
+    ref_duration_s: float | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -78,7 +86,16 @@ class AteResult:
             "path_length_m": self.path_length_m, "duration_s": self.duration_s,
             "drift_percent": self.drift_percent,
             "below_reference_uncertainty": self.below_reference_uncertainty,
+            "ref_duration_s": self.ref_duration_s,
+            "span_fraction": self.span_fraction,
         }
+
+    @property
+    def span_fraction(self) -> float | None:
+        """How much of the reference's span the estimate covers, 0..1."""
+        if not self.ref_duration_s:
+            return None
+        return float(self.duration_s / self.ref_duration_s)
 
 
 @dataclasses.dataclass
@@ -124,6 +141,7 @@ def ate(est: Trajectory, ref: Trajectory, mode: str = "se3",
         n_ref=len(ref), n_est=n_est, coverage=len(ref_i) / n_est,
         path_length_m=L, duration_s=est_a.duration,
         drift_percent=float(100.0 * ErrorStats.of(e_t).rmse / L) if L > 1e-6 else float("nan"),
+        ref_duration_s=float(ref.duration),
     )
     if reference_uncertainty_m is not None:
         res.below_reference_uncertainty = bool(res.trans.rmse < reference_uncertainty_m)

@@ -393,6 +393,17 @@ reference:
       #
       # Paths are relative to this config. FILL THESE IN:
       # session_anchor_coop2.json: cameras.realsense.board == "rs_anchor".
+      # MEASURED 2026-09-20: RTAB-Map's LOOP-CLOSED GRAPH CANNOT REACH THIS
+      # WINDOW ON mobile_1, and no config change will fix that. Every graph
+      # trajectory.tum ends 1787899928.08..928.75; this window starts at
+      # 1787899928.753. The last graph node and the start of the parked dwell
+      # are the same instant within 3 ms, because RTAB-Map adds a node on
+      # MOTION and the cart does not move again. The board is only ever seen
+      # while stationary, so a graph output has no pose here by construction.
+      # The dense odometry runs to 1787899955.48 and scores normally.
+      # CONSEQUENCE beyond this anchor: mobile_1 graph rows are scored over
+      # ~124 s and odometry rows over ~151 s. The report's `span` column says
+      # which. MASt3R stops earlier still, at 1787899916.90.
       observed_poses_by_agent:
         # mobile_1 dwells here t+124.9..151.5 (its best window, 267 poses), but
         # the pipeline's board file covers only mobile_2's dwell at this board.
