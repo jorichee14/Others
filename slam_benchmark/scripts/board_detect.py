@@ -306,6 +306,10 @@ def main() -> int:                                           # pragma: no cover
                     help="overrides the board's declared min_corners")
     ap.add_argument("--max-reproj-px", type=float, default=None)
     ap.add_argument("--min-ambiguity-ratio", type=float, default=None)
+    ap.add_argument("--no-undistort", action="store_true",
+                    help="leave an unrectified image alone and hand the distortion "
+                         "to PnP instead. Worse: the charuco corner interpolation is "
+                         "homography-based and is already bent by then.")
     ap.add_argument("--window", type=float, nargs=2, default=None,
                     metavar=("T0", "T1"),
                     help="override the declared dwell window. The rs_anchor window "
@@ -401,7 +405,8 @@ def main() -> int:                                           # pragma: no cover
     reader.set_filter(rosbag2_py.StorageFilter(topics=[img_topic, info_topic]))
     cls = {t: get_message(types[t]) for t in (img_topic, info_topic)}
 
-    K = dist = None
+    K = dist = raw_dist = None
+    undistort = False
     stamps, poses, tried, detected, rejected = [], [], 0, 0, []
     from collections import Counter
     why, n_corners, reproj, solved, ratios = Counter(), [], [], [], []
@@ -422,9 +427,21 @@ def main() -> int:                                           # pragma: no cover
                     print(f"{img_topic} says rectified but camera_info carries "
                           f"non-zero distortion {d[:5]}; using it anyway",
                           file=sys.stderr)
-                dist = np.zeros(5) if rect else (d if len(d) else np.zeros(5))
+                raw_dist = np.zeros(5) if rect else (d if len(d) else np.zeros(5))
+                # UNDISTORT THE IMAGE, do not merely pass the coefficients to
+                # PnP. ChArUco corner interpolation fits a HOMOGRAPHY through
+                # the detected markers, and a homography cannot represent lens
+                # distortion: on the unrectified RealSense the interpolated
+                # corners come out bent before PnP ever sees them, and no
+                # distortion argument afterwards can undo that. It showed as
+                # 0.83 px reprojection and a 34 mm pose bias, against 0.20 px
+                # and 6 mm on the already-rectified ZED.
+                undistort = bool(np.any(np.abs(raw_dist) > 1e-9)) and not args.no_undistort
+                dist = np.zeros(5)
                 print(f"intrinsics {K[0,0]:.1f} {K[1,1]:.1f} {K[0,2]:.1f} {K[1,2]:.1f}"
-                      f"  distortion {'zeroed (rectified topic)' if rect else list(np.round(dist, 5))}")
+                      f"  distortion {'zeroed (rectified topic)' if rect else list(np.round(raw_dist, 5))}"
+                      f"  model {getattr(msg, 'distortion_model', '?')}"
+                      + ("  -> undistorting each image" if undistort else ""))
             continue
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         if not (window[0] <= t <= window[1]) or K is None:
@@ -432,6 +449,11 @@ def main() -> int:                                           # pragma: no cover
         tried += 1
         gray = cv2.cvtColor(to_rgb(bytes(msg.data), msg.height, msg.width,
                                    msg.encoding, msg.step), cv2.COLOR_RGB2GRAY)
+        if undistort:
+            # same K on purpose: the corners land where an ideal pinhole with
+            # these intrinsics would have put them, so PnP uses K with no
+            # distortion and every stage downstream is in one frame.
+            gray = cv2.undistort(gray, K, raw_dist, None, K)
         corners, ids = detect(gray)
         # Count WHERE frames are lost. "7 of 521" says nothing; "500 saw no
         # marker at all" and "500 saw five corners" want different fixes.

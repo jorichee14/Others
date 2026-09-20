@@ -2428,6 +2428,10 @@ def test_every_candidate_board_axis_convention_is_a_rotation_about_the_normal():
     assert "minMarkerPerimeterRate" in src and "adaptiveThreshWinSizeMax" in src
     assert "CORNER_REFINE_SUBPIX" in src
     assert "--window" in src, "a declared window can be too wide for a fresh run"
+    # charuco corner interpolation is homography-based, so a distorted image
+    # must be undistorted BEFORE detection, not corrected afterwards in PnP
+    assert "cv2.undistort(gray" in src
+    assert src.index("cv2.undistort(gray") < src.index("corners, ids = detect(gray)")
     assert "min_ambiguity_ratio" in src
     import yaml
     cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs" / "coop2.yaml").read_text())
