@@ -141,6 +141,44 @@ RTK-SLAM citation supersedes it.
 
 ---
 
+## HortiMulti / Poly-TagSLAM — the closest certification, found on the third pass
+
+[arXiv 2603.20150]. Generates GT by fusing **LiDAR-inertial odometry with
+AprilTag detections** in a factor graph, and validates it by **leave-one-out
+cross-validation over 35 total-station-surveyed landmarks**: optimise with the
+remaining N-1 as tight priors, predict the held-out one, record the 3D error.
+**5.9 cm mean / 6.6 cm RMSE.**
+
+So leave-one-out certification of a fiducial-anchored ground truth is
+published. It must be cited, and it is the direct comparison for any
+certification claim here.
+
+**Two differences, and the second is the contribution.**
+
+1. **Their backbone is LiDAR-inertial** — the platform carries the reference
+   modality. The subject platform here does not.
+2. **Their 35 landmarks are all the same kind.** Every AprilTag fails for the
+   same reasons: range, incidence, blur, lighting, and any systematic bias in
+   how the tags were surveyed or how the detector behaves. **Leave-one-out over
+   homogeneous landmarks cannot see a failure common to all of them** — each
+   held-out tag is predicted well and the trajectory is wrong together.
+
+That second point is this project's own backbone-consensus rule, applied one
+level up: *three similar RGB-D systems would agree through a shared failure
+mode and certify nothing.* The rule was written for backbones; it applies to
+absolute sources identically, and nobody appears to have applied it there.
+
+**The honest framing:** you cannot always survey 35 landmarks. You can usually
+arrange three different **ways of being seen** — a fiducial, a static observer,
+a peer robot, a prior map — that fail for unrelated reasons. Diversity of kind
+substitutes for count of instance, and it certifies something count cannot.
+
+Also found: *Factor Graph-Based Ground Truth Trajectory Estimation by Fusing
+Robotic Total Station and Inertial Measurements* (IEEE 2025) — one absolute
+source plus IMU, same family.
+
+---
+
 ## Papers to cite, not contest
 
 | paper | why it is in §2 |

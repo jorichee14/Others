@@ -10,10 +10,19 @@ Trajectory References from Sparse Surveyed Anchors*
 **Venue.** RA-L or ICRA/IROS. MoCap2GT is RA-L Feb 2026 and must be cited; this
 is adjacent to it, not competing with it.
 
-**The one-sentence claim.** A trajectory reference can be built for a platform
-carrying no reference sensor, from surveyed anchors visible for a *fraction* of
-the run, and its error can be certified on an instrumented twin and transferred
-with a stated model.
+**The one-sentence claim.** **Certifiable ground truth for a platform carrying
+no reference sensor, by fusing heterogeneous absolute sources with independent
+failure modes, certified by leave-one-SOURCE-out cross-validation** and by a
+coverage law calibrated on an instrumented twin.
+
+**Why KINDS of source and not COUNT of landmark.** HortiMulti / Poly-TagSLAM
+(2026) certifies a fiducial-anchored GT by leave-one-out over 35 surveyed
+AprilTags, at 5.9 cm. Homogeneous landmarks cannot reveal a failure common to
+all of them -- a survey offset, a detector bias -- and their platform carries
+the reference modality. Sources that fail for unrelated reasons can, and you
+cannot always survey 35 landmarks but you can usually arrange three different
+ways of being seen. This is the project's own backbone-consensus rule applied
+one level up.
 
 **The one number.** Construction gain **0.60** — 199.3 mm in the surveyed map
 frame with no ground truth used, against 331.3 mm for the same trajectory fitted
