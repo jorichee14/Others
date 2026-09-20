@@ -32,6 +32,9 @@ python3 scripts/spread.py      --config configs/coop2.yaml \
 python3 scripts/rescore.py      --runs runs/coop2_20260828 --config configs/coop2.yaml
 # tier 2: the board residual per method -- the only error bar not from the reference
 python3 scripts/board_table.py  --runs runs/coop2_20260828
+# figures: trajectories on the map, and error against time
+python3 scripts/plot_runs.py    --runs runs/coop2_20260828 --config configs/coop2.yaml \
+    --agent mobile_1 --reference runs/reference/mobile_1.tum --out results/figs
 # THE REPORT: both tiers, the caveats, and the anchors that produced nothing
 python3 scripts/aggregate.py   --runs runs/coop2_20260828 \
     --config configs/coop2.yaml --out results/coop2.md

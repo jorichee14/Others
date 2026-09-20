@@ -2192,6 +2192,69 @@ def test_aggregate_writes_one_report_with_both_tiers_and_the_scale_the_right_way
     assert "Anchors that produced nothing" in text and "rs_anchor" in text
 
 
+@test
+def test_plot_runs_draws_the_scored_trajectory_and_nothing_else():
+    """A figure that disagrees with the table beside it is worse than no
+    figure, so the extrinsic and the alignment come out of the run's own
+    metrics.json. Pure parts tested here; matplotlib is only the rendering."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from plot_runs import pick_runs, place, error_curve, dwell_windows
+    ref = circle_traj(200, radius=3.0)
+
+    # place(): identity is a no-op, and the stored scale is applied
+    assert np.allclose(place(ref, np.eye(4), np.eye(4), 1.0).poses, ref.poses)
+    assert np.allclose(place(ref, np.eye(4), np.eye(4), 2.0).positions,
+                       ref.positions * 2.0)
+    T = se3.pose_from_rpy(1.0, 2.0, 0.0, 0.0, 0.0, 30.0)
+    moved = place(ref, np.eye(4), T, 1.0)
+    assert np.allclose(moved.poses[0], T @ ref.poses[0])
+
+    # error_curve(): honest about what it could compare
+    est = Trajectory(ref.stamps, ref.poses.copy(), "e"); est.poses[:, 0, 3] += 0.25
+    t, d = error_curve(est, ref)
+    assert len(t) == 200 and abs(np.median(d) - 0.25) < 1e-9
+    sparse = Trajectory(ref.stamps[::20], ref.poses[::20], "s")
+    assert len(error_curve(sparse, ref)[0]) == 10          # a keyframe row still plots
+    disjoint = Trajectory(ref.stamps + 1e6, ref.poses, "f")
+    assert len(error_curve(disjoint, ref)[0]) == 0          # no silent extrapolation
+
+    # pick_runs(): newest per cell by default, every run on request, and a run
+    # that was never scored does not appear
+    root = Path(tempfile.mkdtemp())
+    def write(sub, doc, name="metrics.json"):
+        d = root / sub; d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(json.dumps(doc))
+    def doc(method, run, ate, agent="mobile_1", **kw):
+        return {"method": method, "agent": agent, "stream": "s",
+                "run_dir": str(root / run), "ate": {"ate_trans_m": {"rmse": ate}},
+                "_alignment_T": np.eye(4).tolist(), "_alignment_scale": 1.0, **kw}
+    write("20260919T140047Z", doc("rtabmap_rgbd_imu", "20260919T140047Z", 0.44))
+    write("20260919T141314Z", doc("rtabmap_rgbd_imu", "20260919T141314Z", 0.39))
+    write("20260919T141314Z", doc("rtabmap_rgbd_imu", "20260919T141314Z", 0.48),
+          name="metrics_odometry.json")
+    write("mast3r", doc("mast3r_slam", "mast3r", 1.91))
+    write("other", doc("kiss_icp", "other", 2.2, agent="mobile_2"))
+    write("unscored", {"method": "x", "agent": "mobile_1", "run_dir": "u"})
+    got = pick_runs(root, "mobile_1")
+    assert [g["method"] for g in got] == ["rtabmap_rgbd_imu", "mast3r_slam"]  # by ATE
+    assert got[0]["run"].name == "20260919T141314Z", "not the newest run"
+    assert all(g["from"] == "graph" for g in got)
+    assert len(pick_runs(root, "mobile_1", newest_only=False)) == 3
+    assert len(pick_runs(root, "mobile_1", include=("metrics.json", "metrics_odometry.json"))) == 3
+    assert len(pick_runs(root, "mobile_2")) == 1
+
+    # dwell_windows(): what the config declares, per agent, and empty is legal
+    from slambench.config import load_dataset
+    cfg = load_dataset(Path(__file__).resolve().parents[1] / "configs" / "coop2.yaml")
+    w1 = dwell_windows(cfg, "mobile_1")
+    w2 = dwell_windows(cfg, "mobile_2")
+    assert {n for _, _, n in w1} == {"anchor", "rs_anchor"}        # never anchor_b
+    assert {n for _, _, n in w2} == {"anchor", "anchor_b", "rs_anchor"}
+    assert all(a < b for a, b, _ in w1 + w2)
+    src = (Path(__file__).resolve().parents[1] / "scripts" / "plot_runs.py").read_text()
+    assert "pip3 install matplotlib" in src          # names the fix, does not traceback
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")
