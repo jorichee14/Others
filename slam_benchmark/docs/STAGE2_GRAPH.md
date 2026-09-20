@@ -237,7 +237,18 @@ boards 7 / 15 mm, 0.5°, 150 s at 14.7 Hz, through the real `eval_run.py`):
 | **V2c**, unaligned | **79.2 mm / 1.66°** | 8.9 / 20.6 mm (consumed: self-agreement) |
 | V2c, `rs_anchor` held out, unaligned | 373 mm | 8.9 mm at `anchor`, **405 mm at `rs_anchor`** |
 
-Two things the last row says. A tier-2 residual at a *consumed* board is the
+**And on REAL data the same test is far harsher.** Holding out `rs_anchor`
+leaves `anchor` alone, 86 observations in a 6.5 s window at one end of a 152 s
+run: the solve converges, whitened residuals fall to 0.01 / 0.08, and the
+trajectory moves **7.3 m median / 9.4 m max**. Near-zero residuals with a large
+move mean the system is under-determined, not that the fit is good;
+`build_pseudo_gt.py` warns on that conjunction. `rs_anchor` alone (378
+observations over 26.6 s) moved 178 mm and behaved. **What conditions this
+graph is anchor coverage in TIME, not the number of boards** — which is the
+sharpest thing this sweep says about `mobile_2`, whose two windows are 6.5 s
+and 12 s.
+
+Two things the earlier synthetic row says. A tier-2 residual at a *consumed* board is the
 board's own scatter, not evidence; only a held-out board and the LiDAR are
 independent (`--hold-out`). And **one board is worth nothing beyond fixing
 the gauge**: with a single window the far end of the run drifts the full

@@ -231,10 +231,38 @@ def main() -> int:
           + ", ".join(f"{k} {v:.2f}" for k, v in rep.final_rms.items()))
     print(f"moved    : median {np.median(moved) * 1e3:.1f} mm, max {moved.max() * 1e3:.1f} mm "
           f"from the initial placement")
+    # THE TWO WAYS THIS SOLVE LIES, and they point in opposite directions.
+    #
+    # rms >> 1: the declared sigmas are tighter than the data, i.e. the model is
+    # wrong somewhere and the solver is being forced.
+    #
+    # rms << 1 WITH A LARGE MOVE: the opposite and far more dangerous case. The
+    # residuals are a fraction of their sigma because the problem is
+    # UNDER-CONSTRAINED -- there is a family of solutions that all fit, and the
+    # solver returned one of them. Measured 2026-09-20: holding out rs_anchor
+    # leaves only `anchor`, 86 observations in a 6.5 s window at one end of a
+    # 152 s run; the trajectory pivots about that cluster and travels 7.3 m
+    # median / 9.4 m max while the cost falls to 4.7 and every convergence
+    # check passes. A chain anchored at one end is a lever, and a rotation
+    # inside the board's own 1 deg sigma is metres of displacement 25 m away.
+    # This is exactly the "completes, validates, and is geometrically wrong"
+    # failure rule 3 exists for, so it is called out on stdout rather than left
+    # for a reader of the table to infer.
     for k, v in rep.final_rms.items():
         if v > 2.0:
-            print(f"WARNING  : whitened {k} rms {v:.2f} > 2: the declared sigmas do not "
-                  f"describe this data. Do not quote the result before understanding why.")
+            print(f"WARNING  : whitened {k} rms {v:.2f} > 2: the declared sigmas are "
+                  f"tighter than this data. Do not quote the result before "
+                  f"understanding why.")
+    weak = [k for k, v in rep.final_rms.items() if v < 0.2]
+    big = float(np.median(moved)) > 1.0
+    if weak and big:
+        print(f"WARNING  : UNDER-CONSTRAINED. whitened rms {dict((k, round(rep.final_rms[k], 3)) for k in weak)} "
+              f"is far below 1 AND the solve moved {np.median(moved) * 1e3:.0f} mm median "
+              f"({moved.max() * 1e3:.0f} max). A near-zero cost with a large move means a "
+              f"family of solutions fits, not that this one is right. Check the anchor "
+              f"coverage: a single cluster in a short window pins one end and lets the "
+              f"rest pivot.")
+        construction["under_constrained"] = True
 
     # ------------------------------------------------------------------ write
     name = f"pseudo_gt_{args.rung}"
