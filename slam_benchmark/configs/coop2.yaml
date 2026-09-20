@@ -698,6 +698,22 @@ streams:
     # depth<-IMU extrinsic, or record /tf from a live realsense2_camera node
     # with publish_tf enabled. It is a per-unit factory value, so it is measured
     # once and serves every future recording, exactly like I13.
+    #
+    # 2026-09-20: THE DEVICE IS NOT ALWAYS TO HAND, AND THE ROTATION DOES NOT
+    # NEED IT. The IMU is bolted to the imager, so both sensors observe the same
+    # rotation of the same rigid body: omega_cam = R @ omega_imu at every
+    # instant. `scripts/imu_extrinsic.py` fits that R over the whole run
+    # (Wahba/SVD), searches the clock offset rather than assuming it, and
+    # REFUSES when the motion is too planar to identify all three axes. It
+    # recovers a planted rotation to 0.0009 deg on synthetic data.
+    # Two limits, both stated by the script itself:
+    #   * The TRANSLATION stays null. Its observability lives in the
+    #     accelerometer's centripetal and tangential terms, which at indoor cart
+    #     rates sit under the noise floor. It still needs the device.
+    #   * mobile_2's reference is cuVSLAM-derived and cuVSLAM already fuses THIS
+    #     IMU, so the fit returns the extrinsic the RECORDING used. That makes
+    #     the benchmark self-consistent; it is not an independent check of the
+    #     factory calibration. Read the residual.
     extrinsic_from_camera: null
     noise_model: null
 
