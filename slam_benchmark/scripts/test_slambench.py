@@ -2264,8 +2264,15 @@ def test_board_detect_geometry_and_the_frame_convention_that_bit_once():
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
     from board_detect import object_points, board_to_map, compare, OPENCV_TO_ROS
 
+    from board_detect import to_board_frame
     # 9x7 squares -> 8x6 = 48 inner corners, spanning 7 and 5 square pitches
     pts = object_points([9, 7], 0.020, "center", "opencv")
+    # the same corners handed in from an opencv board object land identically
+    raw = np.array([[((k % 8) + 1) * 0.020, ((k // 8) + 1) * 0.020, 0.0]
+                    for k in range(48)])
+    assert np.allclose(to_board_frame(raw, [9, 7], 0.020, "center", "opencv"), pts)
+    assert np.allclose(to_board_frame(raw, [9, 7], 0.020, "center", "ros"),
+                       object_points([9, 7], 0.020, "center", "ros"))
     assert pts.shape == (48, 3) and np.allclose(pts[:, 2], 0)
     assert abs(np.ptp(pts[:, 0]) - 7 * 0.020) < 1e-12
     assert abs(np.ptp(pts[:, 1]) - 5 * 0.020) < 1e-12
@@ -2356,6 +2363,10 @@ def test_board_detect_gates_the_two_boards_that_carry_the_same_markers():
     assert key(by["rs_anchor"]) != key(by["anchor"])
     src = (Path(__file__).resolve().parents[1] / "scripts" / "board_detect.py").read_text()
     assert "so a solved pose can be checked against where the robot actually was" in src
+    # both aruco APIs are supported: the robot is on 4.5.4, a newer host will not be
+    assert "CharucoBoard_create" in src and "CharucoDetector" in src
+    assert "interpolateCornersCharuco" in src and "getChessboardCorners" in src
+    assert "refusing to guess which is right" in src
 
 
 def main() -> int:

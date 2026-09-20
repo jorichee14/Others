@@ -63,18 +63,17 @@ def board_to_map(position, orientation_xyzw) -> np.ndarray:
     return T
 
 
-def object_points(squares, square_m: float, origin: str, axes: str) -> np.ndarray:
-    """The ChArUco inner corners in the BOARD frame, in OpenCV corner order.
+def to_board_frame(corners_opencv: np.ndarray, squares, square_m: float,
+                   origin: str, axes: str) -> np.ndarray:
+    """OpenCV's chessboard corners -> the BOARD frame this dataset declares.
 
-    A 9x7-square board has 8x6 inner corners. OpenCV numbers them row-major
-    from the corner it calls the origin; `origin: center` shifts them so the
-    board's centre is the frame origin, which is where the survey put it.
+    The corner LIST comes from the OpenCV board object, so its ordering matches
+    the charuco ids exactly and cannot drift from whatever that version does.
+    Only the frame is changed here: `origin: center` puts the board's centre at
+    the origin, where the survey put it, and `axes: ros` turns OpenCV's plane
+    (normal +z) into this dataset's (normal +x).
     """
-    nx, ny = int(squares[0]) - 1, int(squares[1]) - 1
-    u, v = np.meshgrid(np.arange(nx), np.arange(ny))
-    pts = np.stack([(u.ravel() + 1) * square_m,
-                    (v.ravel() + 1) * square_m,
-                    np.zeros(nx * ny)], axis=1)
+    pts = np.asarray(corners_opencv, dtype=np.float64).reshape(-1, 3).copy()
     if origin == "center":
         pts[:, 0] -= squares[0] * square_m / 2.0
         pts[:, 1] -= squares[1] * square_m / 2.0
@@ -85,6 +84,58 @@ def object_points(squares, square_m: float, origin: str, axes: str) -> np.ndarra
     if axes == "opencv":
         return pts
     raise ValueError(f"board axes {axes!r}: expected 'ros' or 'opencv'")
+
+
+def object_points(squares, square_m: float, origin: str, axes: str) -> np.ndarray:
+    """The inner corners analytically, for tests and for checking the board
+    object agrees. A 9x7-square board has 8x6 of them, row-major."""
+    nx, ny = int(squares[0]) - 1, int(squares[1]) - 1
+    u, v = np.meshgrid(np.arange(nx), np.arange(ny))
+    pts = np.stack([(u.ravel() + 1) * square_m,
+                    (v.ravel() + 1) * square_m,
+                    np.zeros(nx * ny)], axis=1)
+    return to_board_frame(pts, squares, square_m, origin, axes)
+
+
+def charuco_board(b: dict, cv2):
+    """(board, dictionary, detect) across the 4.7 ArUco rewrite.
+
+    4.5 has `CharucoBoard_create` + `detectMarkers` + `interpolateCornersCharuco`;
+    4.7 replaced them with `CharucoBoard` + `CharucoDetector`. The robot runs
+    4.5.4 and a newer machine will not, so both are supported rather than one
+    being pinned -- a detector that only runs in one place is not reproducible.
+    """
+    sx, sy = int(b["squares"][0]), int(b["squares"][1])
+    sl, ml = float(b["square_m"]), float(b["marker_m"])
+    dict_id = getattr(cv2.aruco, b["dictionary"])
+    if hasattr(cv2.aruco, "getPredefinedDictionary"):
+        adict = cv2.aruco.getPredefinedDictionary(dict_id)
+    else:
+        adict = cv2.aruco.Dictionary_get(dict_id)
+
+    if hasattr(cv2.aruco, "CharucoDetector"):                      # >= 4.7
+        board = cv2.aruco.CharucoBoard((sx, sy), sl, ml, adict)
+        det = cv2.aruco.CharucoDetector(board)
+
+        def detect(gray):
+            corners, ids, _, _ = det.detectBoard(gray)
+            return (None, None) if ids is None or not len(ids) else (corners, ids)
+    else:                                                          # 4.5 / 4.6
+        board = cv2.aruco.CharucoBoard_create(sx, sy, sl, ml, adict)
+        params = cv2.aruco.DetectorParameters_create()
+
+        def detect(gray):
+            mc, mids, _ = cv2.aruco.detectMarkers(gray, adict, parameters=params)
+            if mids is None or not len(mids):
+                return None, None
+            n, cc, cids = cv2.aruco.interpolateCornersCharuco(mc, mids, gray, board)
+            if not n or cids is None or not len(cids):
+                return None, None
+            return cc, cids
+
+    raw = (board.getChessboardCorners() if hasattr(board, "getChessboardCorners")
+           else np.asarray(board.chessboardCorners))
+    return board, adict, detect, np.asarray(raw, dtype=np.float64).reshape(-1, 3)
 
 
 def camera_in_map(rvec, tvec, T_map_board) -> np.ndarray:
@@ -201,10 +252,17 @@ def main() -> int:                                           # pragma: no cover
     T_map_board = board_to_map(anchor["position"], anchor["orientation"])
     obj = object_points(b["squares"], float(b["square_m"]),
                         b.get("origin", "center"), b.get("axes", "ros"))
-    adict = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, b["dictionary"]))
-    board = cv2.aruco.CharucoBoard((int(b["squares"][0]), int(b["squares"][1])),
-                                   float(b["square_m"]), float(b["marker_m"]), adict)
-    detector = cv2.aruco.CharucoDetector(board)
+    board, adict, detect, raw = charuco_board(b, cv2)
+    obj_cv = to_board_frame(raw, b["squares"], float(b["square_m"]),
+                            b.get("origin", "center"), b.get("axes", "ros"))
+    # The board object and the analytic construction must agree, or one of the
+    # two is wrong about this version's corner layout and every pose is wrong.
+    if obj_cv.shape != obj.shape or not np.allclose(np.sort(obj_cv, axis=0),
+                                                    np.sort(obj, axis=0), atol=1e-9):
+        raise SystemExit(f"opencv {cv2.__version__} lays this board out differently "
+                         f"from configs/coop2.yaml ({obj_cv.shape} vs {obj.shape}); "
+                         f"refusing to guess which is right")
+    obj = obj_cv                     # the board object's ordering, which the ids index
 
     img_topic, info_topic = CAMERA[args.agent]
     import rosbag2_py
@@ -239,7 +297,7 @@ def main() -> int:                                           # pragma: no cover
         tried += 1
         gray = cv2.cvtColor(to_rgb(bytes(msg.data), msg.height, msg.width,
                                    msg.encoding, msg.step), cv2.COLOR_RGB2GRAY)
-        corners, ids, _, _ = detector.detectBoard(gray)
+        corners, ids = detect(gray)
         if ids is None or len(ids) < args.min_corners:
             continue
         ok, rvec, tvec = cv2.solvePnP(obj[ids.ravel()], corners.reshape(-1, 2),
