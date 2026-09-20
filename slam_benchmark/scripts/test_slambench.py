@@ -1999,6 +1999,21 @@ def test_board_table_collects_tier_two_across_methods():
     assert "no absolute_check" in render([])
 
 
+@test
+def test_a_missing_trajectory_names_itself_and_the_tool_that_makes_it():
+    """runs/reference/mobile_2.tum was never exported; the loader raised a bare
+    FileNotFoundError from inside a rescore loop, so an entire agent was absent
+    from the tier-2 table with nothing saying why."""
+    missing = Path(tempfile.mkdtemp()) / "mobile_2.tum"
+    try:
+        load_tum(missing, name="reference/mobile_2")
+        assert False, "a missing file loaded"
+    except FileNotFoundError as e:
+        msg = str(e)
+    assert "mobile_2.tum" in msg and "reference/mobile_2" in msg
+    assert "export_reference.py" in msg, msg
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

@@ -141,8 +141,20 @@ def _slerp(q0: np.ndarray, q1: np.ndarray, u: float) -> np.ndarray:
 
 
 def load_tum(path: str | Path, name: str = "", frame: str = "", world: str = "") -> Trajectory:
+    # A missing file is a SETUP problem and has to say so. A bare
+    # FileNotFoundError traceback out of the middle of a scoring loop is how
+    # `runs/reference/mobile_2.tum` went unexported and unnoticed while a whole
+    # agent's rows were quietly absent from the tier-2 table.
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(
+            f"no trajectory at {p}"
+            + (f" (wanted as {name})" if name else "")
+            + ". A reference is produced by scripts/export_reference.py "
+              "--config <dataset> --agent <agent> --out <path>; a run's own "
+              "output is written by the container.")
     stamps, poses, lost = [], [], 0
-    for lineno, raw in enumerate(Path(path).read_text().splitlines(), start=1):
+    for lineno, raw in enumerate(p.read_text().splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
