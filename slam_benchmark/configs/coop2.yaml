@@ -714,6 +714,20 @@ streams:
     #     IMU, so the fit returns the extrinsic the RECORDING used. That makes
     #     the benchmark self-consistent; it is not an independent check of the
     #     factory calibration. Read the residual.
+    #
+    # RUN 2026-09-20, AND IT REFUSED. Over 1016 intervals at +4 ms clock offset
+    # the correlation matrix has singular values 44.238 / 0.014 / 0.005 -- the
+    # weakest axis carries 0.03% of the strongest. Cumulative rotation per
+    # camera axis is [140, 1094, 101] deg: the cart yaws about the optical y
+    # axis and does essentially nothing else, because it is a wheeled platform
+    # on a flat floor. Rotation about the two in-plane axes is therefore NOT
+    # identified, and no amount of data from THIS sequence will identify it.
+    # Not a defect in the method and not a tuning threshold to relax: it is the
+    # motion. The extrinsic must come off the device.
+    # CONSEQUENCE BEYOND THIS FIELD: any method that self-calibrates its
+    # camera-IMU extrinsic online hits the same rank deficiency and will not
+    # converge here. Declare the extrinsic to such a method; do not let it
+    # solve for one.
     extrinsic_from_camera: null
     noise_model: null
 

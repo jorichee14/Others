@@ -188,6 +188,31 @@ def main() -> int:                                                 # pragma: no 
           f"  cumulative rotation per camera axis, deg: "
           f"[{total[0]:.0f}, {total[1]:.0f}, {total[2]:.0f}]")
 
+    # Linear excitation, from the REFERENCE alone -- no IMU, no attitude
+    # estimate, no bias. Monocular visual-inertial scale is observable only
+    # through acceleration; constant-velocity travel is the textbook degenerate
+    # case, and a cart pushed at walking pace on a flat floor is exactly that
+    # motion. This gates Stage 2's monocular VI rungs independently of whether
+    # the extrinsic is ever recovered, so it is reported even when the fit is
+    # about to refuse.
+    dts = np.diff(traj.stamps)
+    good = (dts > 1e-3) & (dts <= max_gap)
+    vel = np.diff(traj.positions, axis=0)[good] / dts[good][:, None]
+    vt = 0.5 * (traj.stamps[:-1] + traj.stamps[1:])[good]
+    dvt = np.diff(vt)
+    acc = np.linalg.norm(np.diff(vel, axis=0)[dvt > 1e-3]
+                         / dvt[dvt > 1e-3][:, None], axis=1)
+    spd = np.linalg.norm(vel, axis=1)
+    print(f"\nLINEAR EXCITATION (I15, the half that decides monocular VI scale)\n"
+          f"  speed m/s : median {np.median(spd):.3f}, p90 "
+          f"{np.percentile(spd, 90):.3f}, max {spd.max():.3f}\n"
+          f"  |accel| m/s^2: median {np.median(acc):.3f}, p90 "
+          f"{np.percentile(acc, 90):.3f} -- against gravity at 9.81, so the "
+          f"specific force is {100 * np.median(acc) / 9.81:.1f}% signal\n"
+          f"  Read this before declaring a monocular VI rung: scale rides on "
+          f"acceleration, and gravity dominating by this margin is the "
+          f"degenerate case, not a comfortable one.")
+
     keep = speed > MIN_RATE_DEG_S
     mids, wc, edges = mids[keep], wc[keep], edges[keep]
     if len(wc) < 100:
