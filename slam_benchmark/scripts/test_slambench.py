@@ -1730,7 +1730,7 @@ def test_mast3r_image_upgrades_setuptools_and_builds_without_isolation():
     import re
     df = (Path(__file__).resolve().parents[1] / "docker" / "Dockerfile.mast3r-slam").read_text()
     up = df.index("pip3 install --no-cache-dir -U pip setuptools wheel")
-    assert up < df.index("thirdparty/mast3r"), "setuptools must be upgraded before the source installs"
+    assert up < df.index("-e thirdparty/mast3r"), "setuptools must be upgraded before the source installs"
     installs = re.findall(r"pip3 install [^\n]*-e (thirdparty/mast3r|thirdparty/in3d|\.)", df)
     assert sorted(installs) == [".", "thirdparty/in3d", "thirdparty/mast3r"], installs
     for line in re.findall(r"pip3 install [^\n]*-e [^\n]*", df):
