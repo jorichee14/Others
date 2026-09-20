@@ -100,8 +100,11 @@ def main() -> int:
             seen.add(key)
             lines.append(f"- `{r['agent']}` / `{r['anchor']}`: {r['verdict']}")
         parts += ["", "### Anchors that produced nothing", "",
-                  "Each is evidence not collected, and each is a config line or a "
-                  "detector run away.", ""] + lines
+                  "Read the reason before assuming any of these is work waiting "
+                  "to be done. Some are: a null path or an untimed window is one "
+                  "config line. Others are settled — a board below the camera's "
+                  "resolving power, or an estimate that stops before the dwell "
+                  "begins — and no run will change them.", ""] + lines
 
     text = "\n".join(parts) + "\n"
     if args.out:
