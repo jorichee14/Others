@@ -172,7 +172,8 @@ downstream is trustworthy.
 
 | agent | V1 ATE | backbone | board residuals |
 |---|---:|---:|---|
-| `mobile_1` | 372 / 377 / 411 mm | 372–481 mm | **identical to the digit** |
+| `mobile_1`, inertial backbones | 372 / 377 / 411 mm | 372–481 mm | **identical to the digit** |
+| `mobile_1`, IMU-free backbone | 331 mm | — | **identical to the digit** |
 | `mobile_2` | 130 mm | 135 mm | **identical to the digit** |
 
 Tier 2 matches its source exactly — 350.3 / 3.77°, 409.1 / 9.06°, 466.8 /
@@ -191,10 +192,22 @@ any backbone.
 | `mobile_1` | **199 / 228 / 254 / 254 / 291 mm** | 372 / 377 / 411 mm | 3.1–4.9° vs 4.5–7.2° | 132–176 vs 91–96 mm |
 | `mobile_2` | 278 mm | 130 mm | 4.50° | 212 vs 177 mm |
 
-**On `mobile_1`: 254 mm in the map frame with no use of the reference, against
-377 mm for the same trajectory after being fitted to the reference.** The
-anchors buy ~12 cm *and* remove the need for an oracle alignment. A pseudo-GT
-that must be fitted to ground truth before it scores well is not a pseudo-GT.
+**The cleanest comparison available — one backbone, one run, both covering
+100% of the sequence:**
+
+| | ATE | alignment | rot | RPE 1 m |
+|---|---:|---|---:|---:|
+| V1 | 331.3 mm | se3 fit **to the LiDAR** | 4.29° | 91.3 mm |
+| **V2c** | **199.3 mm** | **none — map frame** | **3.45°** | 149.8 mm |
+
+**199 mm using no ground truth at all, against 331 mm for the same trajectory
+after being fitted to ground truth — a 40% reduction while using strictly
+less information.** Rotation improves too. A pseudo-GT that must be fitted to
+ground truth before it scores well is not a pseudo-GT; this one is not fitted
+to anything.
+
+Across all five backbones the same pattern holds: V2c 199–291 mm unaligned
+against V1 331–411 mm aligned.
 
 ### Backbone quality propagates; the anchors do not erase it
 
