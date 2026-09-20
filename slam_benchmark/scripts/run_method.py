@@ -85,6 +85,20 @@ def preflight(cfg, mcfg, stream_key: str) -> tuple[dict, list[str]]:
                 f"no imu_orientation_filter. The run would start, drop every "
                 f"IMU sample, and land in the table as an inertial row with no "
                 f"inertial data in it.")
+        elif (lambda e: isinstance(e, dict) and e and not (
+                {"parent", "child", "xyz", "quat_xyzw"} <= set(e)))(
+                imu.get("extrinsic_from_camera")):
+            # A MALFORMED extrinsic is worse than a null one: null refuses, and
+            # this used to sail through on truthiness alone, publish no tf edge,
+            # and leave rgbd_odometry waiting for a transform forever while the
+            # mapping node reported "Did not receive data" and blamed its
+            # topics. Cost a full run to find. Check the keys the emitter reads.
+            problems.append(
+                f"streams.{key}.extrinsic_from_camera is missing "
+                f"{sorted({'parent', 'child', 'xyz', 'quat_xyzw'} - set(imu['extrinsic_from_camera']))}. "
+                f"It is published as a static tf edge, so it needs the same "
+                f"parent/child/xyz/quat_xyzw shape as the other IMU extrinsics "
+                f"-- NOT reference_frame_from_sensor's x/y/z/roll/pitch/yaw.")
         elif not (imu.get("extrinsic_from_camera") or {}):
             # MEASURED 2026-09-19. The bag's tf_static carries 7 edges in 2
             # disconnected trees -- the ZED chain and the Ouster chain -- and

@@ -1257,6 +1257,27 @@ def test_an_inertial_row_without_its_extrinsic_is_refused():
     _, problems = rm.preflight(cfg, nofilt, "mobile_2.realsense_rgbd")
     assert any("no imu_orientation_filter" in p for p in problems), problems
 
+    # A MALFORMED extrinsic must refuse too, and this is the one that got
+    # through: written in reference_frame_from_sensor's x/y/z/roll/pitch/yaw
+    # shape it is a non-empty dict, so a truthiness check passed it, no tf edge
+    # was published, and rgbd_odometry waited forever for a transform while the
+    # mapping node blamed its input topics. A run's worth of wall clock.
+    for agent, stream in (("mobile_2", "mobile_2.realsense_rgbd"),
+                          ("mobile_1", "mobile_1.zed_rgbd")):
+        wrong = copy.deepcopy(cfg)
+        wrong.raw["streams"][f"{agent}.imu"]["extrinsic_from_camera"] = {
+            "x": 0.089, "y": -0.007, "z": -0.016,
+            "roll": -0.34, "pitch": 0.10, "yaw": 0.15}
+        _, problems = rm.preflight(wrong, m, stream)
+        assert any("extrinsic_from_camera is missing" in p for p in problems), \
+            (agent, problems)
+
+    # and the real config's shape is the one the emitter reads
+    for agent in ("mobile_1", "mobile_2"):
+        ext = cfg.raw["streams"][f"{agent}.imu"]["extrinsic_from_camera"]
+        assert {"parent", "child", "xyz", "quat_xyzw"} <= set(ext), (agent, ext)
+        assert len(ext["xyz"]) == 3 and len(ext["quat_xyzw"]) == 4, (agent, ext)
+
 
 def _import_record_tum():
     """Import the recorder without ROS, by standing in for the three rclpy

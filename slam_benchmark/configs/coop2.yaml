@@ -785,13 +785,19 @@ streams:
     # THE LEVER ARM IS 91.2 mm, NOT A FEW MILLIMETRES. The colour imager and the
     # IMU sit on OPPOSITE sides of camera_link -- colour +59 mm, IMU -30 mm
     # along y -- so anything that treats them as co-located is 9 cm wrong.
-    extrinsic_from_camera:                  # camera_color_optical_frame <- camera_imu_optical_frame
-      x:  0.089403
-      y: -0.007426
-      z: -0.016432
-      roll:  -0.33964                       # deg
-      pitch:  0.095783
-      yaw:    0.149144
+    # SCHEMA MATTERS AND I GOT IT WRONG ONCE. This field is consumed by
+    # run_method.py, which publishes it as a static TF edge and needs
+    # parent/child/xyz/quat_xyzw -- the same shape as mobile_1.imu above. Written
+    # in `reference_frame_from_sensor`'s {x,y,z,roll,pitch,yaw} shape instead, it
+    # passed preflight (which only asked whether the dict was non-empty), emitted
+    # NO tf edge, and rgbd_odometry sat waiting for a camera<-IMU transform that
+    # never arrived while the mapping node blamed its input topics. Preflight now
+    # checks the keys.
+    extrinsic_from_camera:
+      parent: camera_color_optical_frame
+      child: camera_imu_optical_frame
+      xyz: [0.089403, -0.007426, -0.016432]
+      quat_xyzw: [-0.002965, 0.000832, 0.001304, 0.999994]
       source: >-
         realsense2_description _d455.urdf.xacro (mechanical constant, fixed by
         design per librealsense doc/d435i.md) composed with this unit's measured
