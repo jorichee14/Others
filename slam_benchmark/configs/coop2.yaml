@@ -177,6 +177,13 @@ reference:
         # every solved pose against the reference trajectory at that stamp.
         axes: ros          # +x is the OUTWARD NORMAL, not +z
         origin: center
+        # DETECTION GATES, from the mapping pipeline's own pipeline_config.json
+        # (03_anchor.boards). A planar board always yields TWO PnP solutions;
+        # min_ambiguity_ratio rejects a view where they are too alike to
+        # choose between, which is how a flipped pose gets in looking clean.
+        min_corners: 8
+        max_reproj_px: 1.5
+        min_ambiguity_ratio: 1.5
       uncertainty_m: 0.007            # 6.9 mm std over 214 views; loop closure 3.2 mm
       window: null                    # confirmed window; fill from the candidates below
       # phase0 candidates (t+ seconds into each agent's reference; CONFIRM BY EYE):
@@ -232,6 +239,13 @@ reference:
         id_offset: 0        # anchor_frame json, schema 2
         axes: ros
         origin: center
+        # DETECTION GATES, from the mapping pipeline's own pipeline_config.json
+        # (03_anchor.boards). A planar board always yields TWO PnP solutions;
+        # min_ambiguity_ratio rejects a view where they are too alike to
+        # choose between, which is how a flipped pose gets in looking clean.
+        min_corners: 8
+        max_reproj_px: 1.5
+        min_ambiguity_ratio: 1.5
       uncertainty_m: 0.013            # the honest figure: 12.9 mm / 2.6 deg between
       window: null                    # its two sections (ratio 4.24, significant).
       # phase0 candidates: mobile_1 NEVER dwells here; mobile_2: [42.6, 50.0].
@@ -285,6 +299,13 @@ reference:
         id_offset: 0        # anchor_frame json, schema 2
         axes: ros
         origin: center
+        # DETECTION GATES, from the mapping pipeline's own pipeline_config.json
+        # (03_anchor.boards). A planar board always yields TWO PnP solutions;
+        # min_ambiguity_ratio rejects a view where they are too alike to
+        # choose between, which is how a flipped pose gets in looking clean.
+        min_corners: 8
+        max_reproj_px: 1.5
+        min_ambiguity_ratio: 3.0
       uncertainty_m: 0.015            # std; max residual 40 mm, 1 of 2 sections gated
       window: null
       # phase0 candidates: mobile_1: [115.7, 151.5] (ends parked here);

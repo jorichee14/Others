@@ -2378,8 +2378,14 @@ def test_every_candidate_board_axis_convention_is_a_rotation_about_the_normal():
     the search is over the wrong set."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
     from board_detect import AXES_CANDIDATES, OPENCV_TO_ROS, object_points
-    assert set(AXES_CANDIDATES) == {"ros+0", "ros+90", "ros+180", "ros+270"}
+    assert len(AXES_CANDIDATES) == 8, "both normal directions must be searched"
     assert np.allclose(AXES_CANDIDATES["ros+0"], OPENCV_TO_ROS)
+    # The pipeline's own stage 03 states it: ros x is the OUTWARD normal, into
+    # the room, while opencv z goes INTO the board. So x_ros = -z_opencv, and
+    # the first guess -- which had it positive -- scored 179.96 deg.
+    assert np.allclose(OPENCV_TO_ROS @ np.array([0, 0, 1.0]), [-1, 0, 0])
+    assert np.allclose(OPENCV_TO_ROS @ np.array([1.0, 0, 0]), [0, 1, 0])   # y = left
+    assert np.allclose(OPENCV_TO_ROS @ np.array([0, 1.0, 0]), [0, 0, -1])  # z = up
     seen = []
     for name, M in AXES_CANDIDATES.items():
         assert abs(np.linalg.det(M) - 1.0) < 1e-12, name
@@ -2398,6 +2404,47 @@ def test_every_candidate_board_axis_convention_is_a_rotation_about_the_normal():
     # mobile_2's topic is image_raw: the distortion must come from camera_info
     assert 'rect = "rect" in img_topic' in src
     assert "np.array(msg.d" in src, "distortion must be read, not assumed zero"
+    # a planar board has two PnP solutions; the pipeline gates on their ratio
+    assert "solvePnPGeneric" in src and "SOLVEPNP_IPPE" in src
+    assert "min_ambiguity_ratio" in src
+    import yaml
+    cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs" / "coop2.yaml").read_text())
+    for a in cfg["reference"]["anchors"]:
+        bd = a["board"]
+        assert bd["min_corners"] == 8, a["name"]
+        assert bd["max_reproj_px"] == 1.5, a["name"]
+        assert bd["min_ambiguity_ratio"] >= 1.5, a["name"]
+    rs = next(a for a in cfg["reference"]["anchors"] if a["name"] == "rs_anchor")
+    assert rs["board"]["min_ambiguity_ratio"] == 3.0, "rs_anchor is the strict one"
+
+
+@test
+def test_solve_view_prefers_the_better_planar_solution_and_reports_the_margin():
+    """A planar target always admits two poses. Taking the better one without
+    asking HOW MUCH better is how a flipped pose lands in a file looking
+    clean, so the ratio is returned and gated."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from board_detect import solve_view
+
+    class FakeCV:                      # no opencv here; the selection is the logic
+        SOLVEPNP_IPPE = 1
+        def solvePnPGeneric(self, obj, img, K, d, flags=None):
+            return 2, ["rA", "rB"], ["tA", "tB"], np.array([[0.9], [0.3]])
+    r, t, e, ratio = solve_view(None, None, None, None, FakeCV())
+    assert (r, t) == ("rB", "tB"), "the LOWER reprojection must win"
+    assert abs(e - 0.3) < 1e-12 and abs(ratio - 3.0) < 1e-9
+
+    class OneSolution(FakeCV):
+        def solvePnPGeneric(self, obj, img, K, d, flags=None):
+            return 1, ["rA"], ["tA"], np.array([[0.4]])
+    _, _, _, ratio = solve_view(None, None, None, None, OneSolution())
+    assert ratio == float("inf"), "one solution is unambiguous, not ambiguous"
+
+    class NoSolution(FakeCV):
+        def solvePnPGeneric(self, obj, img, K, d, flags=None):
+            return 0, [], [], np.zeros((0, 1))
+    r, _, _, ratio = solve_view(None, None, None, None, NoSolution())
+    assert r is None and ratio == 0.0
 
 
 def main() -> int:

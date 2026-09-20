@@ -50,20 +50,34 @@ CAMERA = {"mobile_1": ("/mobile_1/zed/left/image_rect_color",
 # frame: +x out of the board, +y to the board's left, +z up, which is the ROS
 # body convention applied to a plane. Written once, checked against the
 # pipeline's own detections by --validate-against rather than by argument.
-OPENCV_TO_ROS = np.array([[0.0, 0.0, 1.0],
-                          [-1.0, 0.0, 0.0],
+# The dataset's `axes: ros`, as stage 03 of the mapping pipeline prints it:
+#   ROS    x = the OUTWARD normal, into the room;  y = left;  z = up
+#   OpenCV x = along columns (right);  y = DOWN;   z = INTO the board
+# So the outward normal is -z_opencv, not +z. A board facing the room shows
+# the camera its own left as the camera's right, hence y_ros = +x_opencv, and
+# z_ros = -y_opencv because OpenCV's y points down. That is a right-handed
+# frame; the version with the normal reversed is not the same board.
+OPENCV_TO_ROS = np.array([[0.0, 0.0, -1.0],
+                          [1.0, 0.0, 0.0],
                           [0.0, -1.0, 0.0]])
+# The first guess had the normal the other way and scored 179.96 deg against
+# the pipeline's own detections -- which is why the convention is now SOLVED
+# (--solve-axes) over BOTH normal directions and all four spins about it,
+# rather than argued from a docstring.
+OPENCV_TO_ROS_FLIPPED = np.array([[0.0, 0.0, 1.0],
+                                  [-1.0, 0.0, 0.0],
+                                  [0.0, -1.0, 0.0]])
 
-# The four ways to put OpenCV's plane on a +x normal: the one above, and it
-# turned a further 90, 180 or 270 degrees about that normal. The first guess
-# was 179.96 degrees from the pipeline's own detections, which is why this is
-# now SOLVED against them (--solve-axes) instead of argued about.
+
 def _spin_x(deg: float) -> np.ndarray:
     c, s_ = np.cos(np.radians(deg)), np.sin(np.radians(deg))
     return np.array([[1.0, 0.0, 0.0], [0.0, c, -s_], [0.0, s_, c]])
 
 
-AXES_CANDIDATES = {f"ros+{d}": _spin_x(d) @ OPENCV_TO_ROS for d in (0, 90, 180, 270)}
+AXES_CANDIDATES = {}
+for _tag, _base in (("ros", OPENCV_TO_ROS), ("rosflip", OPENCV_TO_ROS_FLIPPED)):
+    for _d in (0, 90, 180, 270):
+        AXES_CANDIDATES[f"{_tag}+{_d}"] = _spin_x(_d) @ _base
 
 
 def board_to_map(position, orientation_xyzw) -> np.ndarray:
@@ -152,6 +166,35 @@ def charuco_board(b: dict, cv2):
     return board, adict, detect, np.asarray(raw, dtype=np.float64).reshape(-1, 3)
 
 
+def solve_view(obj, img, K, dist, cv2):
+    """PnP for a PLANAR target: the best pose, its reprojection, and how much
+    better it is than the runner-up.
+
+    A planar board always admits two solutions. Taking the better one without
+    asking how much better is how a flipped pose gets into a file looking
+    perfectly clean -- so the ratio of the two reprojection errors is returned
+    and gated on, exactly as the mapping pipeline's `min_ambiguity_ratio`
+    does. Infinite ratio means only one solution was offered.
+    """
+    if hasattr(cv2, "solvePnPGeneric"):
+        n, rvecs, tvecs, errs = cv2.solvePnPGeneric(
+            obj, img, K, dist, flags=cv2.SOLVEPNP_IPPE)
+        if not n:
+            return None, None, float("inf"), 0.0
+        e = np.asarray(errs, dtype=np.float64).ravel()
+        order = np.argsort(e)
+        best = int(order[0])
+        ratio = float(e[order[1]] / max(e[best], 1e-9)) if n > 1 else float("inf")
+        return rvecs[best], tvecs[best], float(e[best]), ratio
+    ok, rvec, tvec = cv2.solvePnP(obj, img, K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
+    if not ok:
+        return None, None, float("inf"), 0.0
+    proj, _ = cv2.projectPoints(obj, rvec, tvec, K, dist)
+    err = float(np.sqrt(np.mean(np.sum(
+        (proj.reshape(-1, 2) - img.reshape(-1, 2)) ** 2, axis=1))))
+    return rvec, tvec, err, float("inf")
+
+
 def camera_in_map(rvec, tvec, T_map_board) -> np.ndarray:
     """PnP gives `board -> camera`. The output wants `map <- camera`."""
     import cv2
@@ -215,9 +258,10 @@ def main() -> int:                                           # pragma: no cover
     ap.add_argument("--out", default=None)
     ap.add_argument("--validate-against", default=None,
                     help="a pipeline-produced *_cam_in_map.tum for this same pair")
-    ap.add_argument("--min-corners", type=int, default=6,
-                    help="inner corners needed before a view is used at all")
-    ap.add_argument("--max-reproj-px", type=float, default=1.5)
+    ap.add_argument("--min-corners", type=int, default=None,
+                    help="overrides the board's declared min_corners")
+    ap.add_argument("--max-reproj-px", type=float, default=None)
+    ap.add_argument("--min-ambiguity-ratio", type=float, default=None)
     ap.add_argument("--reference", default=None,
                     help="the agent's reference TUM. Used ONLY to reject a pose that "
                          "cannot be where the robot was -- see sanity_gate. Required "
@@ -258,6 +302,12 @@ def main() -> int:                                           # pragma: no cover
                          f"whole bag would be a fishing expedition, not a measurement")
 
     b = anchor["board"]
+    # The gates are the mapping pipeline's own, carried in the dataset config.
+    min_corners = args.min_corners or int(b.get("min_corners", 8))
+    max_reproj = args.max_reproj_px or float(b.get("max_reproj_px", 1.5))
+    min_ratio = args.min_ambiguity_ratio or float(b.get("min_ambiguity_ratio", 1.0))
+    print(f"gates: >= {min_corners} corners, reprojection <= {max_reproj} px, "
+          f"ambiguity ratio >= {min_ratio}")
     shared = [a["name"] for a in cfg.reference.get("anchors", [])
               if a.get("board") and a["name"] != args.anchor
               and a["board"].get("dictionary") == b.get("dictionary")
@@ -300,7 +350,7 @@ def main() -> int:                                           # pragma: no cover
     K = dist = None
     stamps, poses, tried, detected, rejected = [], [], 0, 0, []
     from collections import Counter
-    why, n_corners, reproj, solved = Counter(), [], [], []
+    why, n_corners, reproj, solved, ratios = Counter(), [], [], [], []
     while reader.has_next():
         topic, data, _ = reader.read_next()
         msg = deserialize_message(data, cls[topic])
@@ -335,20 +385,21 @@ def main() -> int:                                           # pragma: no cover
             why["no corners"] += 1
             continue
         n_corners.append(len(ids))
-        if len(ids) < args.min_corners:
-            why[f"< {args.min_corners} corners"] += 1
+        if len(ids) < min_corners:
+            why[f"< {min_corners} corners"] += 1
             continue
-        ok, rvec, tvec = cv2.solvePnP(obj[ids.ravel()], corners.reshape(-1, 2),
-                                      K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
-        if not ok:
+        rvec, tvec, err, ratio = solve_view(obj[ids.ravel()],
+                                            corners.reshape(-1, 2), K, dist, cv2)
+        if rvec is None:
             why["solvePnP failed"] += 1
             continue
-        proj, _ = cv2.projectPoints(obj[ids.ravel()], rvec, tvec, K, dist)
-        err = float(np.sqrt(np.mean(np.sum(
-            (proj.reshape(-1, 2) - corners.reshape(-1, 2)) ** 2, axis=1))))
+        ratios.append(ratio)
+        if ratio < min_ratio:
+            why[f"ambiguity ratio < {min_ratio}"] += 1
+            continue
         reproj.append(err)
-        if err > args.max_reproj_px:
-            why[f"reprojection > {args.max_reproj_px} px"] += 1
+        if err > max_reproj:
+            why[f"reprojection > {max_reproj} px"] += 1
             continue
         solved.append(((corners, ids), t))
         T_map_cam = camera_in_map(rvec, tvec, T_map_board)
@@ -362,12 +413,18 @@ def main() -> int:                                           # pragma: no cover
         poses.append(T_map_cam)
 
     print(f"{detected} of {tried} frames in the window gave a pose "
-          f"(>= {args.min_corners} corners, reprojection <= {args.max_reproj_px} px)")
+          f"(>= {min_corners} corners, reprojection <= {max_reproj} px)")
     for reason, n in why.most_common():
         print(f"  {n:5d} frames lost: {reason}")
     if n_corners:
         print(f"  corners per frame that saw any: median {int(np.median(n_corners))}, "
               f"max {max(n_corners)} of {len(obj)}")
+    if ratios:
+        finite = [r for r in ratios if np.isfinite(r)]
+        print(f"  ambiguity ratio: median "
+              f"{np.median(finite):.2f}" if finite else "  ambiguity: single solution",
+              end="")
+        print(f" over {len(ratios)} solved views")
     if reproj:
         print(f"  reprojection of solved frames: median {np.median(reproj):.2f} px, "
               f"p90 {np.percentile(reproj, 90):.2f} px")
@@ -398,11 +455,11 @@ def main() -> int:                                           # pragma: no cover
                                  b.get("origin", "center"), "opencv") @ M.T
             poses_n = []
             for rv, tv in solved:
-                ok2, rvec2, tvec2 = cv2.solvePnP(pts[np.asarray(rv[1]).ravel()],
-                                                 np.asarray(rv[0]).reshape(-1, 2),
-                                                 K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
-                if ok2:
-                    poses_n.append((tv, camera_in_map(rvec2, tvec2, T_map_board)))
+                r2, t2, _e, _r = solve_view(pts[np.asarray(rv[1]).ravel()],
+                                            np.asarray(rv[0]).reshape(-1, 2),
+                                            K, dist, cv2)
+                if r2 is not None:
+                    poses_n.append((tv, camera_in_map(r2, t2, T_map_board)))
             if not poses_n:
                 continue
             cand = Trajectory(np.array([t for t, _ in poses_n]),
