@@ -152,19 +152,52 @@ def charuco_board(b: dict, cv2):
     else:
         adict = cv2.aruco.Dictionary_get(dict_id)
 
+    def tune(params):
+        """Defaults are set for large, sharp markers. These boards span 11-15 px
+        per marker, i.e. about 2 pixels per bit, so every default that assumes
+        a comfortable marker works against them. Each change below is aimed at
+        that regime and at nothing else."""
+        # a small marker is a small fraction of the frame
+        params.minMarkerPerimeterRate = 0.01
+        # sweep more thresholds: the boards are lit unevenly and one window
+        # size will not binarise both a bright and a shadowed corner
+        params.adaptiveThreshWinSizeMin = 3
+        params.adaptiveThreshWinSizeMax = 43
+        params.adaptiveThreshWinSizeStep = 4
+        # at 2 px per bit the sampled cell is tiny; take more of it and demand
+        # less contrast before calling a bit set
+        params.perspectiveRemovePixelPerCell = 8
+        params.perspectiveRemoveIgnoredMarginPerCell = 0.1
+        params.maxErroneousBitsInBorderRate = 0.5
+        params.errorCorrectionRate = 0.8
+        # sub-pixel corners: the reprojection is already 0.2 px, and the corner
+        # positions are what the pose is made of
+        if hasattr(cv2.aruco, "CORNER_REFINE_SUBPIX"):
+            params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        return params
+
     if hasattr(cv2.aruco, "CharucoDetector"):                      # >= 4.7
         board = cv2.aruco.CharucoBoard((sx, sy), sl, ml, adict)
-        det = cv2.aruco.CharucoDetector(board)
+        cp = cv2.aruco.CharucoParameters()
+        det = cv2.aruco.CharucoDetector(board, cp,
+                                        tune(cv2.aruco.DetectorParameters()))
 
         def detect(gray):
             corners, ids, _, _ = det.detectBoard(gray)
             return (None, None) if ids is None or not len(ids) else (corners, ids)
     else:                                                          # 4.5 / 4.6
         board = cv2.aruco.CharucoBoard_create(sx, sy, sl, ml, adict)
-        params = cv2.aruco.DetectorParameters_create()
+        params = tune(cv2.aruco.DetectorParameters_create())
 
         def detect(gray):
-            mc, mids, _ = cv2.aruco.detectMarkers(gray, adict, parameters=params)
+            mc, mids, rej = cv2.aruco.detectMarkers(gray, adict, parameters=params)
+            # A marker whose ID failed to decode is still a quadrilateral in
+            # `rej`. The board says where its markers must be, so most of those
+            # can be recovered -- which matters when the median frame is
+            # finding one corner out of 48.
+            if hasattr(cv2.aruco, "refineDetectedMarkers"):
+                mc, mids, rej, _ = cv2.aruco.refineDetectedMarkers(
+                    gray, board, mc, mids, rej, parameters=params)
             if mids is None or not len(mids):
                 return None, None
             n, cc, cids = cv2.aruco.interpolateCornersCharuco(mc, mids, gray, board)
@@ -273,6 +306,13 @@ def main() -> int:                                           # pragma: no cover
                     help="overrides the board's declared min_corners")
     ap.add_argument("--max-reproj-px", type=float, default=None)
     ap.add_argument("--min-ambiguity-ratio", type=float, default=None)
+    ap.add_argument("--window", type=float, nargs=2, default=None,
+                    metavar=("T0", "T1"),
+                    help="override the declared dwell window. The rs_anchor window "
+                         "for mobile_2 was WIDENED to the union with the pipeline's "
+                         "detections so tier 2 could intersect them; for a fresh "
+                         "detector run that union carries ~330 frames where the board "
+                         "is too far to read, and they drown the rate.")
     ap.add_argument("--reference", default=None,
                     help="the agent's reference TUM. Used ONLY to reject a pose that "
                          "cannot be where the robot was -- see sanity_gate. Required "
@@ -306,7 +346,10 @@ def main() -> int:                                           # pragma: no cover
         if not anchor.get(k):
             raise SystemExit(f"anchor {args.anchor!r} declares no {k}; a detector "
                              f"cannot be run on a board whose geometry is not stated")
-    window = (anchor.get("windows_by_agent") or {}).get(args.agent)
+    window = args.window or (anchor.get("windows_by_agent") or {}).get(args.agent)
+    if args.window:
+        print(f"window overridden: {window[0]:.3f} .. {window[1]:.3f} "
+              f"({window[1] - window[0]:.1f} s)")
     if not window:
         raise SystemExit(f"anchor {args.anchor!r} declares no window for {args.agent}: "
                          f"this agent never dwelled there, and a detector run over the "

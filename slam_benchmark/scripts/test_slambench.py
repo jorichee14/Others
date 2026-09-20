@@ -2423,6 +2423,11 @@ def test_every_candidate_board_axis_convention_is_a_rotation_about_the_normal():
     assert "np.array(msg.d" in src, "distortion must be read, not assumed zero"
     # a planar board has two PnP solutions; the pipeline gates on their ratio
     assert "solvePnPGeneric" in src and "SOLVEPNP_IPPE" in src
+    # these boards run at ~2 px per bit; every detector default assumes more
+    assert "refineDetectedMarkers" in src, "undecoded markers must be recovered"
+    assert "minMarkerPerimeterRate" in src and "adaptiveThreshWinSizeMax" in src
+    assert "CORNER_REFINE_SUBPIX" in src
+    assert "--window" in src, "a declared window can be too wide for a fresh run"
     assert "min_ambiguity_ratio" in src
     import yaml
     cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs" / "coop2.yaml").read_text())
