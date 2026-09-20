@@ -270,6 +270,36 @@ The anchors buy ~12 cm *and* remove the oracle alignment. They cost local
 smoothness: RPE at 1 m goes 94 → 154 mm, because the trajectory is bent to
 satisfy global constraints. Report both.
 
+**CERTIFIED 2026-09-20.** Four backbone runs, plus a sigma sweep and both
+leave-one-board-out builds, on `mobile_1`:
+
+| variant | ATE | RPE 1 m | moved | independent evidence |
+|---|---|---|---|---|
+| V1 (odometry only), se3 **to the LiDAR** | 372 / 377 / 411 mm | 91–96 mm | 0 | boards 350–549 mm |
+| **V2c** (both boards), **unaligned** | **228 / 254 / 254 / 291 mm** | 132–176 mm | 336–512 mm | **LiDAR ATE** |
+| V2c, σ ×0.5 | 290.4 mm | 175 mm | 340 mm | — |
+| V2c, σ ×2 | 290.1 mm | 178 mm | 332 mm | — |
+| V2c, `anchor` only | 1163 mm | 94 mm | **7261 mm** ⚠ | `rs_anchor` 1719 mm |
+| V2c, `rs_anchor` only | 771 mm | 95 mm | 178 mm | `anchor` 1201 mm |
+
+Three readings.
+
+**The sigma model does not carry the result.** A 4× range of declared per-edge
+sigma moves the ATE by 1.1 mm (290.4 / 291.2 / 290.1 on one run). So the fact
+that the sigmas are derived from an RPE scored against the LiDAR does not make
+the LiDAR ATE circular — that ATE is independent certification.
+
+**Leave-one-board-out cannot certify a two-board construction.** With n=2,
+holding one out leaves a lever, and the 1201 / 1719 mm independent residuals
+measure the *one-board* construction rather than the shipped one. This is a
+property of having two boards, not a defect to fix, and it is why the LiDAR is
+the certification of record.
+
+**The RPE column is the mechanism.** Both single-board builds sit at 94 mm,
+exactly V1's value, because one board transports the trajectory rigidly
+without bending it. The full build bends it — that bending is where the 12 cm
+comes from, and local smoothness is what it costs.
+
 Two numbers matter:
 
 1. **V1 must roughly reproduce the backbone's own error.** If it does not, the
