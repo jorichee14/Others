@@ -38,8 +38,15 @@ set -u
 # reference_frame_from_sensor exactly once (container contract rule 1). Setting
 # it to a base_link instead would emit body poses that look fine and are wrong by
 # the camera's lever arm.
-FRAME_ID=$(python3 /opt/slambench/sniff_frame.py --bag /bag --topic "$SLAM_DEPTH_TOPIC")
-echo "frame_id : $FRAME_ID  (from the first $SLAM_DEPTH_TOPIC header)"
+if [[ -n "${SLAM_FRAME_ID:-}" ]]; then
+    # The entrypoint registered the depth into the colour camera; the depth the
+    # method reads is not in the bag, and its frame is the colour frame.
+    FRAME_ID="$SLAM_FRAME_ID"
+    echo "frame_id : $FRAME_ID  (registered depth: the colour camera's frame)"
+else
+    FRAME_ID=$(python3 /opt/slambench/sniff_frame.py --bag /bag --topic "$SLAM_DEPTH_TOPIC")
+    echo "frame_id : $FRAME_ID  (from the first $SLAM_DEPTH_TOPIC header)"
+fi
 
 # Slash keys are RTAB-Map parameters. The ODOMETRY node accepts every group,
 # so it gets the whole block. The MAPPING node does not declare Odom/*, and an

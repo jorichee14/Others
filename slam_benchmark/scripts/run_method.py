@@ -222,6 +222,22 @@ def main() -> int:
         t, q = se3.pose_to_quat(T)
         static_tf.append([color_frame, sensor_frame]
                          + [repr(float(v)) for v in list(t) + list(q)])
+        color_from_depth = " ".join(repr(float(v)) for v in list(t) + list(q))
+    else:
+        color_from_depth = None
+    # A method that consumes colour+depth as ONE image pair (RTAB-Map) needs the
+    # depth registered into the colour camera. The RealSense in this bag is not,
+    # and rgbd_odometry aborts on the size check (1280x720 vs 640x480). The
+    # entrypoint registers it when the method declares the need and the frames
+    # differ; the method's poses are then in the colour frame, which the method
+    # config must declare with `extrinsic_by_stream` for that stream.
+    register_depth = bool(mcfg.raw.get("depth_registered_to_color") == "required"
+                          and color_from_depth is not None)
+    if register_depth and args.stream not in mcfg.raw.get("extrinsic_by_stream", {}):
+        print(f"{mcfg.name} will work in {color_frame} on {args.stream} (registered depth) "
+              f"but declares no extrinsic_by_stream.{args.stream}; the evaluator would apply "
+              f"the depth-frame extrinsic to colour-frame poses. Declare it.", file=sys.stderr)
+        return 1
     cmd = [
         "docker", "run", "--rm", "--network", "none",
         # Docker gives a container 64 MB of /dev/shm. With --network none the DDS
@@ -253,6 +269,9 @@ def main() -> int:
     rng = stream.get("range_m")
     if rng:
         cmd += ["-e", f"SLAM_RANGE_MIN={rng[0]}", "-e", f"SLAM_RANGE_MAX={rng[1]}"]
+    if register_depth:
+        cmd += ["-e", "SLAM_DEPTH_REGISTER=1", "-e", f"SLAM_COLOR_FRAME={color_frame}",
+                "-e", f"SLAM_COLOR_FROM_DEPTH={color_from_depth}"]
     if mcfg.needs_imu:
         imu_key = mcfg.raw.get("imu_by_agent", {}).get(info["agent"])
         imu_stream = cfg.raw.get("streams", {}).get(imu_key) or {}
@@ -320,6 +339,8 @@ def main() -> int:
         "started_utc": datetime.now(timezone.utc).isoformat(),
         "preflight_problems": problems,
         "dev_scripts_mounted": bool(args.dev),
+        "depth_registered_in_container": register_depth,
+        "pose_frame": color_frame if register_depth else stream.get("sensor_frame"),
         "forced": bool(problems and args.force),
         "executed": bool(args.execute),
         "host": os.uname().nodename,

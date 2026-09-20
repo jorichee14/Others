@@ -43,6 +43,32 @@ if [[ "${SLAM_NEEDS_CLOUD:-0}" == "1" && "${SLAM_MODALITY:-}" == "rgbd" ]]; then
     echo "bridge   : $SLAM_DEPTH_TOPIC -> $CLOUD_TOPIC (scale $SLAM_DEPTH_SCALE)"
 fi
 
+# --- depth registered into the colour camera, for the RGB-D front-ends.
+# RTAB-Map takes one colour + one depth image and needs the depth in the colour
+# camera at the colour aspect ratio; this bag's RealSense publishes 640x480
+# depth in the depth frame beside 1280x720 colour, and rgbd_odometry aborts on
+# the size check. run_method.py sets SLAM_DEPTH_REGISTER=1 when the method
+# declares it needs registered depth and the stream's frames differ. The
+# method then reads the bridge's output and works in the COLOUR frame; the
+# recorder's witness still counts the bag's own depth topic.
+REG=""
+if [[ "${SLAM_DEPTH_REGISTER:-0}" == "1" ]]; then
+    : "${SLAM_DEPTH_TOPIC:?}" "${SLAM_DEPTH_INFO_TOPIC:?}" "${SLAM_COLOR_INFO_TOPIC:?}"
+    : "${SLAM_COLOR_FRAME:?registration needs the colour frame name}"
+    : "${SLAM_COLOR_FROM_DEPTH:?registration needs the colour<-depth extrinsic}"
+    : "${SLAM_DEPTH_SCALE:?the stream must declare depth_scale}"
+    export DEPTH_TOPIC="$SLAM_DEPTH_TOPIC" DEPTH_INFO_TOPIC="$SLAM_DEPTH_INFO_TOPIC"
+    export COLOR_INFO_TOPIC="$SLAM_COLOR_INFO_TOPIC" COLOR_FRAME="$SLAM_COLOR_FRAME"
+    export COLOR_FROM_DEPTH="$SLAM_COLOR_FROM_DEPTH" DEPTH_SCALE="$SLAM_DEPTH_SCALE"
+    export REGISTERED_TOPIC="/slambench/depth_registered"
+    python3 /opt/slambench/register_depth.py --ros-args -p use_sim_time:=true &
+    REG=$!
+    export SLAM_WITNESS_TOPIC="$SLAM_DEPTH_TOPIC"
+    export SLAM_DEPTH_TOPIC="$REGISTERED_TOPIC"
+    export SLAM_FRAME_ID="$SLAM_COLOR_FRAME"
+    echo "register : depth -> $REGISTERED_TOPIC in $SLAM_COLOR_FRAME (poses will be in the colour frame)"
+fi
+
 # --- the camera<-IMU edge, when the bag's tf_static does not carry it.
 # One transform, from configs/coop2.yaml, published so the method's own
 # front-end can rotate the IMU into the camera frame. Without it RTAB-Map drops
@@ -65,7 +91,7 @@ python3 /opt/slambench/record_tum.py \
     --map-topic "${SLAM_MAP_TOPIC:-}" \
     --path-topic "${SLAM_PATH_TOPIC:-}" \
     --pose-type "${SLAM_POSE_TYPE:-nav_msgs/msg/Odometry}" \
-    --count-topic "${SLAM_DEPTH_TOPIC:-}" \
+    --count-topic "${SLAM_WITNESS_TOPIC:-${SLAM_DEPTH_TOPIC:-}}" \
     --out "$OUT" \
     --ros-args -p use_sim_time:=true &
 REC=$!
@@ -121,7 +147,7 @@ shutdown() {
     # while the recorder is still listening, and the recorder last so it can
     # write it. The recorder gets the longest grace for the same reason -- it is
     # the one process whose clean exit IS the deliverable.
-    for pid in "$SLAM" "$BRIDGE" ${TFS[@]+"${TFS[@]}"}; do
+    for pid in "$SLAM" "$BRIDGE" "$REG" ${TFS[@]+"${TFS[@]}"}; do
         [[ -n "$pid" ]] && stop_pid "$pid" 20
     done
     [[ -n "$REC" ]] && stop_pid "$REC" 45

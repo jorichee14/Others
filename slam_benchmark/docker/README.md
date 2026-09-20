@@ -73,6 +73,7 @@ time each frame took is in `timing.json` as `frame_s`.
 |---|---|
 | `entrypoint.sh` | replay + record + shutdown |
 | `record_tum.py` | pose topic → `trajectory.tum`, map topic → `map.ply` |
+| `register_depth.py` | depth image → depth registered into the **colour** camera at colour/2 resolution, for RGB-D front-ends that take one image pair (RTAB-Map). Started when the method declares `depth_registered_to_color: required` and the stream's colour and depth frames differ (the RealSense here; the ZED is already registered). The method's poses are then in the colour frame, and the method config declares that with `extrinsic_by_stream` |
 | `depth_to_cloud.py` | depth image → `PointCloud2`, for geometry-only estimators on a camera. Checks the declared `depth_scale` against the image encoding and **refuses** on a mismatch |
 | `sniff_frame.py` | the `frame_id` off the first message of a topic, read from the bag, never assumed |
 | `params_to_args.py` | `$SLAM_PARAMS` → RTAB-Map `--Group/Name value` and ROS `-p key:=value` |

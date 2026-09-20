@@ -1737,6 +1737,103 @@ def test_mast3r_image_upgrades_setuptools_and_builds_without_isolation():
         assert "--no-build-isolation" in line, line
 
 
+@test
+def test_register_depth_moves_points_into_the_colour_camera_nearest_wins():
+    """Identity cameras: the output is the input. A colour camera 10 cm to the
+    +x of the depth camera sees a 2 m plane shifted by fx*0.1/2 = 25 px. Two
+    points on one output pixel: the nearer one survives. Half resolution
+    scales the colour intrinsics by exactly 1/2, as RTAB-Map does."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "docker" / "common"))
+    from register_depth import register, output_shape, quat_to_rot
+    K = (500.0, 500.0, 320.0, 240.0)
+    d = np.full((480, 640), 2.0, np.float32)
+    out = register(d, K, K, np.eye(4), (480, 640), 1)
+    assert np.allclose(out, 2.0)
+    T = np.eye(4); T[0, 3] = 0.1
+    out = register(d, K, K, T, (480, 640), 1)
+    cols = np.nonzero(out[240] > 0)[0]
+    assert cols[0] == 25 and cols[-1] == 639, (cols[0], cols[-1])
+    assert (out[:, :25] == 0).all()                      # no depth there; holes stay 0
+    # occlusion: a near pixel and a far pixel that project to the same place
+    d2 = np.zeros((480, 640), np.float32)
+    d2[240, 320] = 1.0                                   # at the centre, 1 m
+    d2[240, 330] = 2.0                                   # 10 px right, 2 m: x = 10*2/500 = 0.04 m
+    # move the colour camera so the 2 m point lands on the centre pixel too:
+    # u = fx*(x + tx)/z + cx -> tx = -0.04 puts the 2 m point at u=320; the 1 m
+    # point then lands at u = 500*(-0.04)/1 + 320 = 300.
+    T2 = np.eye(4); T2[0, 3] = -0.04
+    out = register(d2, K, K, T2, (480, 640), 1)
+    assert abs(out[240, 320] - 2.0) < 1e-6 and abs(out[240, 300] - 1.0) < 1e-6
+    # now put both on one pixel: a second 1 m point at u where 1 m maps to 320
+    d3 = d2.copy(); d3[240, 340] = 1.0                   # x = 20*1/500 = 0.04 -> u = 320 after tx
+    out = register(d3, K, K, T2, (480, 640), 1)
+    assert abs(out[240, 320] - 1.0) < 1e-6, "the nearer point must win the z-buffer"
+    h = register(d, K, K, np.eye(4), output_shape((480, 640), 2), 2)
+    assert h.shape == (240, 320) and (h > 0).mean() == 1.0
+    try:
+        output_shape((720, 1280), 7); assert False
+    except ValueError:
+        pass
+    assert np.allclose(quat_to_rot(0, 0, 0, 1), np.eye(3))
+    assert np.allclose(quat_to_rot(0, 0, np.sin(np.pi / 4), np.cos(np.pi / 4)),
+                       se3.pose_from_rpy(0, 0, 0, 0, 0, 90.0)[:3, :3])
+
+
+@test
+def test_rtabmap_on_the_realsense_registers_depth_and_declares_the_colour_frame():
+    """The RealSense depth is not registered to its colour image; the ZED's is.
+    run_method passes the registration only where the frames differ, records
+    the pose frame, and refuses when the method has not declared the identity
+    extrinsic for that stream -- the evaluator would otherwise move colour-frame
+    poses by the depth-frame lever arm."""
+    import io, contextlib, yaml
+    import scripts.run_method as rm
+    root = Path(__file__).resolve().parents[1]
+    def run(method, stream):
+        saved = sys.argv; buf = io.StringIO()
+        try:
+            sys.argv = ["run_method.py", "--config", str(root / "configs" / "coop2.yaml"),
+                        "--method", str(method), "--stream", stream, "--runs-root", tempfile.mkdtemp()]
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                rc = rm.main()
+        finally:
+            sys.argv = saved
+        text = buf.getvalue()
+        m = None
+        if "manifest -> " in text:
+            m = json.loads(Path(text.split("manifest -> ", 1)[1].splitlines()[0]).read_text())
+        return rc, text, m
+    rc, text, m = run(root / "configs" / "methods" / "rtabmap_rgbd.yaml", "mobile_2.realsense_rgbd")
+    assert rc == 0, text
+    assert "SLAM_DEPTH_REGISTER=1" in m["command"] and "SLAM_COLOR_FRAME=camera_color_optical_frame" in m["command"]
+    assert "SLAM_COLOR_FROM_DEPTH=" in m["command"]
+    assert m["depth_registered_in_container"] is True and m["pose_frame"] == "camera_color_optical_frame"
+    rc, text, m = run(root / "configs" / "methods" / "rtabmap_rgbd.yaml", "mobile_1.zed_rgbd")
+    assert rc == 0 and "SLAM_DEPTH_REGISTER" not in m["command"]
+    assert m["depth_registered_in_container"] is False and m["pose_frame"] == "zed_left_camera_optical_frame"
+    # a method that needs registration but has not declared where its poses end up
+    raw = yaml.safe_load((root / "configs" / "methods" / "rtabmap_rgbd.yaml").read_text())
+    del raw["extrinsic_by_stream"]
+    bad = Path(tempfile.mkdtemp()) / "rtabmap_rgbd.yaml"
+    bad.write_text(yaml.safe_dump(raw))
+    rc, text, _ = run(bad, "mobile_2.realsense_rgbd")
+    assert rc == 1 and "extrinsic_by_stream" in text, text
+    # and the evaluator will apply the identity, not the 59 mm depth->colour edge
+    from slambench.config import load_dataset, load_method
+    cfg = load_dataset(root / "configs" / "coop2.yaml")
+    E = load_method(root / "configs" / "methods" / "rtabmap_rgbd.yaml").sensor_extrinsic(cfg, "mobile_2.realsense_rgbd")
+    assert np.allclose(E, np.eye(4))
+    E = load_method(root / "configs" / "methods" / "kiss_icp.yaml").sensor_extrinsic(cfg, "mobile_2.realsense_rgbd")
+    assert abs(E[0, 3] - 0.059190) < 1e-9                # kiss reads the raw depth: still the depth frame
+    # the entrypoint stops the bridge and counts the bag's depth, not the bridge's
+    entry = (root / "docker" / "common" / "entrypoint.sh").read_text()
+    assert 'register_depth.py' in entry and '"$REG"' in entry
+    assert 'SLAM_WITNESS_TOPIC' in entry
+    assert "register_depth.py" in (root / "docker" / "Dockerfile.base").read_text()
+    launch = (root / "docker" / "rtabmap" / "launch.sh").read_text()
+    assert 'FRAME_ID="$SLAM_FRAME_ID"' in launch
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

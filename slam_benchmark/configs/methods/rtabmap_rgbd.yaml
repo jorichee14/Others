@@ -8,6 +8,17 @@ loop_closure: true
 outputs: [trajectory, map]
 reference_impl: https://github.com/introlab/rtabmap_ros
 image: slambench/rtabmap:humble
+# RTAB-Map takes colour and depth as ONE image pair: the depth must be in the
+# colour camera at the colour aspect ratio (rgbd_odometry aborts otherwise, as
+# it did on mobile_2: rgb 1280x720, depth 640x480, different optical frames).
+# The ZED publishes depth already registered to its left image; the RealSense
+# in this bag does not, so the container registers it (register_depth.py) and
+# the poses on that stream are in camera_color_optical_frame -- which is also
+# the mobile_2 reference frame, hence the identity below. Declared here so the
+# evaluator never applies the depth-frame extrinsic to colour-frame poses.
+depth_registered_to_color: required
+extrinsic_by_stream:
+  mobile_2.realsense_rgbd: {x: 0.0, y: 0.0, z: 0.0, roll: 0.0, pitch: 0.0, yaw: 0.0}
 
 # MEASURED 2026-09-19: at real-time replay this machine processes 72% of the
 # frames with the odometry node alone and 41% with the mapping node running --
