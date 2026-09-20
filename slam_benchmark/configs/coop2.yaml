@@ -678,8 +678,14 @@ streams:
     # ~g*sin(1.29 deg) = 0.22 m/s^2 of gravity leak on every rotation.
     # Composed forms live in the tightly-coupled method configs (IMU.T_b_c1).
     # Sanity-checked: imu +z maps to optical [-0.017, -1.000, -0.001] ~= -y = up.
-    # Remaining verification: the gravity check against a static SEGMENT of the
-    # run's own IMU stream, once one is identified.
+    # Remaining verification: `scripts/gravity_check.py --agent mobile_1`. It
+    # compares three `up` directions in this IMU's own frame -- the fused
+    # orientation's, the accelerometer's on segments the REFERENCE says the
+    # body did not move in, and the one this extrinsic carries down from the
+    # anchored map's vertical. That splits a tilted gravity constraint between
+    # the fusion and this transform, which is the open question behind
+    # mobile_1's inertial row scoring WORSE than its IMU-free control. The
+    # check is blind to a rotation about gravity itself; say so when quoting it.
     extrinsic_from_camera:
       parent: zed_left_camera_frame
       child: zed_imu_link

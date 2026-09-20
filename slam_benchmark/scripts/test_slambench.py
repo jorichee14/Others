@@ -2893,5 +2893,183 @@ def test_reset_heuristic_declines_on_an_irregular_keyframe_stream():
     assert not r["applies"] and "not regularly sampled" in r["why"], r
     assert len(reset_edges(kf)) == 0, "the heuristic must decline, not free the chain"
 
+
+@test
+def test_gravity_chain_crosses_the_optical_convention_the_right_way():
+    """The ZED declares its IMU against the BODY frame; the reference is OPTICAL.
+
+    Getting that rotation backwards produces a transform that is plausible,
+    silent and wrong -- the failure class this harness exists to catch. The
+    config records the check that settles it: IMU +z must land on optical -y,
+    because -y is up in an optical frame. It is asserted here against the
+    config's own declared extrinsic rather than a fixture, so a future edit to
+    that block has to keep satisfying it.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from gravity_check import R_BODY_FROM_OPTICAL, ref_from_imu
+    from slambench import load_dataset
+
+    cfg = load_dataset(Path(__file__).resolve().parents[1] / "configs/coop2.yaml")
+    R_ref_imu, chain = ref_from_imu(cfg, "mobile_1")
+    assert "convention change applied" in chain, chain
+    z_in_optical = R_ref_imu @ np.array([0.0, 0.0, 1.0])
+    assert z_in_optical[1] < -0.99, z_in_optical      # -y, i.e. up
+    assert abs(z_in_optical[0]) < 0.05 and abs(z_in_optical[2]) < 0.05, z_in_optical
+
+    # mobile_2 declares optical <- optical, so NO convention change may be
+    # applied. Same function, and the difference has to come from the config.
+    R2, chain2 = ref_from_imu(cfg, "mobile_2")
+    assert "declared directly" in chain2, chain2
+    assert se3.rotation_angle(R2) < np.radians(1.0), np.degrees(se3.rotation_angle(R2))
+
+    # and the convention matrix is a rotation, not a reflection
+    assert np.allclose(R_BODY_FROM_OPTICAL @ R_BODY_FROM_OPTICAL.T, np.eye(3))
+    assert np.isclose(np.linalg.det(R_BODY_FROM_OPTICAL), 1.0)
+
+
+@test
+def test_gravity_check_refuses_a_chain_it_would_have_to_guess():
+    """Rule 3 at the one place it would be tempting to compose and hope."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from gravity_check import ref_from_imu
+
+    class Cfg:
+        def __init__(self, raw):
+            self.raw = raw
+
+    good = {"parent": "cam_frame", "child": "imu", "xyz": [0, 0, 0],
+            "quat_xyzw": [0, 0, 0, 1]}
+    base = {"reference": {"agents": {"a": {"frame": "cam_optical_frame"}}},
+            "streams": {"a.imu": {"extrinsic_from_camera": good}}}
+    assert ref_from_imu(Cfg(base), "a")[0].shape == (3, 3)
+
+    for broken, why in [
+        (None, "null"),
+        ({"parent": "cam_frame", "child": "imu"}, "missing keys"),
+        (dict(good, parent="some_other_link"), "unrelated parent"),
+    ]:
+        raw = {"reference": base["reference"],
+               "streams": {"a.imu": {"extrinsic_from_camera": broken}}}
+        try:
+            ref_from_imu(Cfg(raw), "a")
+        except SystemExit:
+            continue
+        raise AssertionError(f"accepted a {why} extrinsic instead of refusing")
+
+
+@test
+def test_static_detection_is_blind_to_the_motion_that_matters_without_the_trajectory():
+    """A perpendicular acceleration tilts `up` a lot and lengthens `a` barely.
+
+    1.5 m/s^2 sideways is an 8.7 deg tilt in the direction being measured and a
+    0.11 m/s^2 change in |a| -- inside any tolerance loose enough to pass a real
+    accelerometer. The first version of static_runs accepted it as rest, which
+    is how this test came to exist. The inertial tests alone therefore cannot
+    establish rest; the reference trajectory can, and does.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from gravity_check import G, angles_deg, static_runs, unit
+
+    t = np.arange(0, 6.0, 1 / 200.0)
+    acc = np.tile([0.0, 0.0, G], (len(t), 1))
+    gyro = np.zeros((len(t), 3))
+    pos = np.zeros((len(t), 3))
+
+    turn = (t >= 1.0) & (t < 2.0)          # |a| = g, gyro large
+    gyro[turn] = [0.0, 0.0, 0.6]
+    side = (t >= 3.0) & (t < 4.0)          # gyro 0, |a| almost unchanged
+    acc[side] = [1.5, 0.0, G]
+    pos[side] = np.outer(0.5 * 1.5 * (t[side] - 3.0) ** 2, [1.0, 0.0, 0.0])
+    pos[t >= 4.0] = pos[side][-1]
+
+    # the magnitude test on its own does NOT see it, and the tilt it hides is
+    # an order of magnitude larger than anything this check is looking for
+    assert abs(np.linalg.norm(acc[side][0]) - G) < 0.15
+    hidden = angles_deg(unit(acc[side][:1]), np.array([[0.0, 0.0, 1.0]]))[0]
+    assert hidden > 8.0, hidden
+
+    covered = np.zeros(len(t), bool)
+    for i, j in static_runs(acc, gyro, t, min_s=0.5):
+        covered[i:j] = True
+    assert not covered[turn].any(), "a steady turn was accepted as rest"
+    assert covered[side].any(), ("this documents the BLINDNESS: without the "
+                                 "trajectory the inertial tests pass it")
+
+    covered = np.zeros(len(t), bool)
+    for i, j in static_runs(acc, gyro, t, positions=pos, min_s=0.5):
+        covered[i:j] = True
+    assert not covered[side].any(), "the trajectory must reject it"
+    assert covered[(t > 0.1) & (t < 0.9)].all(), "genuine rest was rejected"
+    assert covered[(t > 4.3) & (t < 5.9)].all(), "rest AFTER the manoeuvre was rejected"
+    # and it backs off HALF A WINDOW either side of the motion rather than
+    # right up to it: the sample at 2.9 s is still, but the window around it
+    # reaches into the manoeuvre, and a rest test that shaves the margin is
+    # the one that reads gravity off a body already moving.
+    assert not covered[(t > 2.9) & (t < 3.0)].any()
+    assert not covered[(t > 4.0) & (t < 4.2)].any()
+
+    # a short crossing is not a segment, however still it looks
+    blip_g = np.zeros((len(t), 3))
+    blip_g[:] = [0.0, 0.5, 0.0]
+    blip_g[(t >= 5.0) & (t < 5.1)] = 0.0
+    assert static_runs(acc, blip_g, t, positions=pos, min_s=0.5) == []
+
+    # and the angle a tilt of known size produces is that tilt
+    a = unit(np.tile([0.0, 0.0, 1.0], (3, 1)))
+    b = unit(np.array([[np.sin(np.radians(d)), 0.0, np.cos(np.radians(d))]
+                       for d in (0.0, 1.29, 7.0)]))
+    assert np.allclose(angles_deg(a, b), [0.0, 1.29, 7.0], atol=1e-6)
+
+
+@test
+def test_gravity_sees_only_the_part_of_an_error_perpendicular_to_gravity():
+    """What the reported angle IS, stated exactly rather than approximately.
+
+    A misdeclared extrinsic R_err shows up as the angle between `down` and
+    R_err^T `down`, which is the full misdeclaration ONLY when its axis is
+    perpendicular to gravity and is ZERO when the axis is gravity itself. The
+    first version of this test asserted the full angle at every attitude and
+    failed by 0.01 deg -- small enough to have been waved through as numerics,
+    and it was not numerics. It matters for reading the output: a clean 0.0
+    deg here does not mean the extrinsic is right, it means the part of it
+    this check can see is right.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from gravity_check import angles_deg
+
+    up = np.array([0.0, 0.0, 1.0])
+    tilt = 3.4
+
+    # axis PERPENDICULAR to gravity-in-the-IMU-frame: the full tilt, exactly
+    R_ref_imu = np.eye(3)
+    for R_map_ref in (np.eye(3), se3.rpy_to_rot(0.0, 0.0, 137.0)):
+        R_map_imu = R_map_ref @ R_ref_imu
+        u = R_map_imu.T @ up
+        for R_err in (se3.rpy_to_rot(tilt, 0, 0), se3.rpy_to_rot(0, tilt, 0)):
+            got = angles_deg((R_map_imu @ R_err).T @ up, u)
+            assert abs(got - tilt) < 1e-9, (got, tilt)
+
+    # axis ALONG gravity: invisible, and that is the honest limit of the check
+    got = angles_deg((np.eye(3) @ se3.rpy_to_rot(0, 0, 12.0)).T @ up, up)
+    assert got < 1e-9, got
+
+    # in between, bounded by the misdeclaration and never exceeding it
+    rng = np.random.default_rng(11)
+    for _ in range(200):
+        axis = rng.normal(size=3)
+        axis /= np.linalg.norm(axis)
+        R_err = se3.quat_to_rot(np.concatenate(
+            [axis * np.sin(np.radians(tilt) / 2), [np.cos(np.radians(tilt) / 2)]]))
+        R_map_imu = se3.rpy_to_rot(*rng.normal(0, 30, 3))
+        u = R_map_imu.T @ up
+        got = angles_deg((R_map_imu @ R_err).T @ up, u)
+        assert got <= tilt + 1e-9, (got, tilt)
+        # exactly the perpendicular part: 2*asin(sin(tilt/2)*|axis x down|)
+        perp = np.linalg.norm(np.cross(axis, u))
+        want = np.degrees(2 * np.arcsin(np.clip(
+            np.sin(np.radians(tilt) / 2) * perp, -1, 1)))
+        assert abs(got - want) < 1e-9, (got, want)
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
