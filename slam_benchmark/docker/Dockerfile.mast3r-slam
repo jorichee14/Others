@@ -25,6 +25,14 @@ RUN pip3 install --no-cache-dir -U pip setuptools wheel
 RUN pip3 install --no-cache-dir \
         torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
 RUN pip3 install --no-cache-dir numpy pillow pyyaml plyfile opencv-python-headless tqdm natsort
+# thirdparty/in3d depends on `imgui @ file://.../thirdparty/pyimgui`, a git
+# checkout of pyimgui that carries only the Cython .pyx sources: imgui/core.cpp
+# and core.h are GENERATED, and without Cython its setup.py silently falls back
+# to compiling the .cpp files that are not there ("fatal error: core.h: No such
+# file or directory"). pyimgui lists Cython in its build-system requires, which
+# --no-build-isolation (needed below, see there) tells pip to ignore. So it is
+# installed here, at pyimgui's own pin.
+RUN pip3 install --no-cache-dir "Cython>=0.24,<0.30"
 
 # Pinned to a COMMIT. MASt3R-SLAM publishes no release tags, and a moving `main`
 # is a manifest that lies about what produced the number in the table.
@@ -41,7 +49,8 @@ RUN git clone --recursive https://github.com/rmurai0610/MASt3R-SLAM.git /opt/MAS
     pip3 install --no-cache-dir --no-build-isolation -e .
 # --no-build-isolation on all three: the curope CUDA extension imports torch in
 # its setup.py, and an isolated build environment does not have the torch that
-# was installed above.
+# was installed above. The price is that every build-system requirement of every
+# vendored package must already be installed -- Cython for pyimgui, above.
 
 # Checkpoints are baked in, because the run happens with --network none. An image
 # that downloads its weights at run time is an image whose result cannot be

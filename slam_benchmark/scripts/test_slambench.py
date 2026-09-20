@@ -1735,6 +1735,13 @@ def test_mast3r_image_upgrades_setuptools_and_builds_without_isolation():
     assert sorted(installs) == [".", "thirdparty/in3d", "thirdparty/mast3r"], installs
     for line in re.findall(r"pip3 install [^\n]*-e [^\n]*", df):
         assert "--no-build-isolation" in line, line
+    # in3d pulls the vendored pyimgui from a git checkout that holds only .pyx
+    # sources; without Cython its setup.py compiles against a core.h that was
+    # never generated. --no-build-isolation skips pyimgui's own build requires,
+    # so Cython must be installed by hand, before in3d, at pyimgui's pin.
+    cy = re.search(r'pip3 install [^\n]*"Cython>=0.24,<0.30"', df)
+    assert cy, "Cython must be installed at pyimgui's pin (>=0.24,<0.30)"
+    assert cy.start() < df.index("-e thirdparty/in3d"), "Cython must precede the in3d install"
 
 
 @test
