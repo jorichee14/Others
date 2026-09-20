@@ -80,9 +80,14 @@ RUN mkdir -p /opt/MASt3R-SLAM/checkpoints && cd /opt/MASt3R-SLAM/checkpoints && 
 # "libGL.so.1: cannot open shared object file" on the first run. The runtime
 # libraries it needs are added HERE, after the 20-minute compile and the
 # checkpoint download, so those layers stay cached.
-RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
+# libusb: mast3r_slam/dataloader.py imports pyrealsense2 unconditionally, even
+# for a folder of images. check_imports.py then imports every module main.py
+# imports, so the next missing library fails here rather than after the bag
+# has been unrolled.
+COPY docker/mast3r-slam/check_imports.py /opt/slambench/check_imports.py
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libusb-1.0-0 \
     && rm -rf /var/lib/apt/lists/* \
-    && python3 -c "import cv2, torch, mast3r_slam_backends; print('cv2', cv2.__version__, 'torch', torch.__version__)"
+    && cd /opt/MASt3R-SLAM && python3 /opt/slambench/check_imports.py main.py
 
 COPY docker/common/bag_to_frames.py /opt/slambench/bag_to_frames.py
 COPY docker/common/restamp_tum.py   /opt/slambench/restamp_tum.py

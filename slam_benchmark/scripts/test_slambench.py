@@ -1749,7 +1749,16 @@ def test_mast3r_image_upgrades_setuptools_and_builds_without_isolation():
     out = src.read_text()
     assert "has_cuda = True" in out and "compute_90,code=compute_90" in out and "sm_89" in out
     # the full opencv-python links libGL; the image proves the imports it ships
-    assert "libgl1" in df and 'import cv2, torch, mast3r_slam_backends' in df
+    assert "libgl1" in df and "libusb-1.0-0" in df and "check_imports.py main.py" in df
+    # the checker walks a file's imports and names every one that fails
+    chk = Path(__file__).resolve().parents[1] / "docker" / "mast3r-slam" / "check_imports.py"
+    f = Path(tempfile.mkdtemp()) / "main.py"
+    f.write_text("import json\nfrom pathlib import Path\nimport no_such_module_xyz\n")
+    r = subprocess.run([sys.executable, str(chk), str(f)], capture_output=True, text=True)
+    assert r.returncode != 0 and "no_such_module_xyz" in r.stderr, r.stderr
+    f.write_text("import json\nfrom pathlib import Path\n")
+    r = subprocess.run([sys.executable, str(chk), str(f)], capture_output=True, text=True)
+    assert r.returncode == 0 and "2 imports ok" in r.stdout, r.stdout + r.stderr
     src.write_text("has_cuda = something_else\n")
     r = subprocess.run([sys.executable, str(patch), str(src)], capture_output=True, text=True)
     assert r.returncode != 0 and "not what this patch was written for" in r.stderr
