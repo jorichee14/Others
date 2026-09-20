@@ -38,6 +38,16 @@ from prose gave 412 mm and 1449 mm.
 **The reference trajectories, against the boards directly**: `mobile_1`
 0.88° / 10.0 mm, `mobile_2` 1.38° / 54.0 mm.
 
+**Does the route revisit?** Yes, on both agents — 280 interior closest
+approaches on `mobile_1` and 140 on `mobile_2`, each within 0.30 m and at
+least 20 s apart, measured on the *references* so it is a property of the
+route. Loop closure is therefore evaluable here, and RTAB-Map's graph rows
+are not odometry under another name. The separations themselves (medians 133
+and 256 mm) are **not** a drift bound: they are censored by the 0.30 m search
+radius, and a hand-pushed cart failing to retrace its line is
+indistinguishable from reference drift without registering the two passes'
+sensor data.
+
 **Board coverage.** Four of six board × agent pairs carry observations:
 `anchor` and `rs_anchor` on both agents. `anchor_b` carries none — see §4.
 
