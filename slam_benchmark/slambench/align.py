@@ -41,7 +41,27 @@ class Alignment:
     mode: str
     T: np.ndarray              # 4x4, ref <- est (rotation and translation only)
     scale: float               # applied scale (1.0 unless mode == "sim3")
+    # THE SCALE THAT MULTIPLIES THE **ESTIMATE** TO MATCH THE REFERENCE:
+    # `ref ~ scale * R @ est + t`. The direction is the opposite of how it
+    # reads, and it was reported backwards for a day.
+    #   scale_observed > 1  ->  the estimate is SMALLER than the reference
+    #   scale_observed < 1  ->  the estimate is LARGER  than the reference
+    # Use `size_ratio` / `size_note()` rather than inverting it by hand.
     scale_observed: float      # the scale Umeyama found, whether or not applied
+
+    @property
+    def size_ratio(self) -> float:
+        """The estimate's size as a fraction of the reference's: 1.05 means the
+        estimate is 5% too big."""
+        return 1.0 / self.scale_observed if self.scale_observed else float("nan")
+
+    def size_note(self) -> str:
+        """One clause a reader cannot invert."""
+        r = self.size_ratio
+        if abs(r - 1.0) < 0.005:
+            return "estimate is within 0.5% of the reference's size"
+        return (f"estimate is {abs(r - 1.0) * 100:.1f}% too "
+                f"{'large' if r > 1 else 'small'}")
 
     def apply(self, traj: Trajectory) -> Trajectory:
         poses = traj.poses.copy()

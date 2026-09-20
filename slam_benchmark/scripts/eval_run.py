@@ -201,8 +201,12 @@ def _print(out: dict) -> None:
         t = a["ate_trans_m"]
         print(f"  ATE  RMSE {t['rmse']*1e3:8.1f} mm   median {t['median']*1e3:8.1f} mm"
               f"   p90 {t['p90']*1e3:8.1f} mm   rot {a['ate_rot_deg']['rmse']:.2f} deg")
+        sc = a["alignment"]["scale_observed"]
+        ratio = 1.0 / sc if sc else float("nan")
+        note = ("within 0.5% of the reference's size" if abs(ratio - 1) < 0.005 else
+                f"{abs(ratio - 1) * 100:.1f}% too {'large' if ratio > 1 else 'small'}")
         print(f"       align={a['alignment']['mode']} "
-              f"scale_observed={a['alignment']['scale_observed']:.4f} "
+              f"scale_observed={sc:.4f} (the estimate is {note}) "
               f"coverage={a['coverage']:.2f} drift={a['drift_percent']:.2f}%")
         if a.get("below_reference_uncertainty"):
             print(f"       NOTE: below the reference's own uncertainty "

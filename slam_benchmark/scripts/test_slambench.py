@@ -1950,8 +1950,6 @@ def test_a_scale_free_method_gets_its_anchors_from_the_sim3_fit_and_says_so():
     a_se3 = ate(small, ref, mode="se3")
     a_sim3 = ate(small, ref, mode="sim3")
     assert a_se3.trans.rmse > 0.5 and a_sim3.trans.rmse < 1e-6
-    assert abs(a_sim3.alignment.scale_observed - 1 / 0.729) < 1e-6 or \
-           abs(a_sim3.alignment.scale_observed - 0.729) < 1e-6
 
 
 @test
@@ -2050,6 +2048,27 @@ def test_a_window_that_misses_its_detections_says_both_spans():
             assert ((t >= w[0]) & (t <= w[1])).any(), (
                 f"{anch['name']}/{agent}: window {w} misses detections "
                 f"{t[0]:.3f}..{t[-1]:.3f}")
+
+
+@test
+def test_scale_observed_points_at_the_estimate_and_says_which_way():
+    """`ref ~ s * R @ est + t`, so s > 1 means the ESTIMATE IS SMALLER. That is
+    the opposite of how it reads, and it was misreported for a day: RTAB-Map's
+    1.055 on the ZED was called "5.5% too large" when the estimate is 5.2% too
+    SMALL, and MASt3R's 0.729 was called "27% small" when it is 37% too LARGE.
+    Pinned here in both directions, with the plain-language clause."""
+    ref = circle_traj(200, radius=3.0)
+    for f, word in ((0.5, "small"), (0.729, "small"), (1.37, "large"), (2.0, "large")):
+        est = Trajectory(ref.stamps, ref.poses.copy(), "e")
+        est.poses[:, :3, 3] *= f
+        al = ate(est, ref, mode="se3").alignment
+        assert abs(al.scale_observed - 1.0 / f) < 1e-9, (f, al.scale_observed)
+        assert abs(al.size_ratio - f) < 1e-9
+        assert word in al.size_note(), (f, al.size_note())
+    est = Trajectory(ref.stamps, ref.poses.copy(), "e")
+    assert "within 0.5%" in ate(est, ref, mode="se3").alignment.size_note()
+    ev = (Path(__file__).resolve().parents[1] / "scripts" / "eval_run.py").read_text()
+    assert "the estimate is" in ev and "too {'large' if ratio > 1 else 'small'}" in ev
 
 
 def main() -> int:
