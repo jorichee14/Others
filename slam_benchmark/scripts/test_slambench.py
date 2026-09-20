@@ -1735,6 +1735,22 @@ def test_mast3r_image_upgrades_setuptools_and_builds_without_isolation():
     assert sorted(installs) == [".", "thirdparty/in3d", "thirdparty/mast3r"], installs
     for line in re.findall(r"pip3 install [^\n]*-e [^\n]*", df):
         assert "--no-build-isolation" in line, line
+    # setup.py asks torch for a GPU at build time; patched before the install
+    assert df.index("patch_setup.py setup.py") < df.index("-e thirdparty/mast3r")
+    assert "PIP_CONSTRAINT=" in df and df.index("PIP_CONSTRAINT=") < df.index("torch==")
+    # the patch itself refuses a source it was not written for, and does its two edits
+    patch = Path(__file__).resolve().parents[1] / "docker" / "mast3r-slam" / "patch_setup.py"
+    src = Path(tempfile.mkdtemp()) / "setup.py"
+    src.write_text('has_cuda = torch.cuda.is_available()\n'
+                   '        "-gencode=arch=compute_86,code=sm_86",\n')
+    import subprocess
+    r = subprocess.run([sys.executable, str(patch), str(src)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = src.read_text()
+    assert "has_cuda = True" in out and "compute_90,code=compute_90" in out and "sm_89" in out
+    src.write_text("has_cuda = something_else\n")
+    r = subprocess.run([sys.executable, str(patch), str(src)], capture_output=True, text=True)
+    assert r.returncode != 0 and "not what this patch was written for" in r.stderr
     # in3d pulls the vendored pyimgui from a git checkout that holds only .pyx
     # sources; without Cython its setup.py compiles against a core.h that was
     # never generated. --no-build-isolation skips pyimgui's own build requires,

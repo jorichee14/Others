@@ -22,6 +22,14 @@ http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.
 # "relative path can't be expressed as a file URI". Modern setuptools passes an
 # absolute path. Upgraded first, so the pinned source builds as upstream expects.
 RUN pip3 install --no-cache-dir -U pip setuptools wheel
+# One numpy for the whole image. thirdparty/in3d pins numpy 1.26, and the
+# unpinned installs before it had pulled OpenCV 5 and plyfile 1.1 built for
+# numpy 2 -- pip printed the conflict and carried on, and `import cv2` would
+# have failed at run time. A constraints file makes every pip call in this
+# image resolve against numpy<2, including the vendored packages' own deps.
+RUN printf 'numpy<2\nopencv-python<4.11\nopencv-python-headless<4.11\nplyfile<1.1\n' \
+        > /opt/pip-constraints.txt
+ENV PIP_CONSTRAINT=/opt/pip-constraints.txt
 RUN pip3 install --no-cache-dir \
         torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
 RUN pip3 install --no-cache-dir numpy pillow pyyaml plyfile opencv-python-headless tqdm natsort
@@ -41,15 +49,20 @@ ARG MAST3R_SLAM_REF=e6f4e3d474fad0e11f561482012be864ba8c3f17
 # explicitly because the build host has no GPU to detect one from.
 ARG TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0"
 ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+COPY docker/mast3r-slam/patch_setup.py /opt/slambench/patch_setup.py
 RUN git clone --recursive https://github.com/rmurai0610/MASt3R-SLAM.git /opt/MASt3R-SLAM && \
     cd /opt/MASt3R-SLAM && git checkout ${MAST3R_SLAM_REF} && \
     git submodule update --init --recursive && \
+    python3 /opt/slambench/patch_setup.py setup.py && \
     pip3 install --no-cache-dir --no-build-isolation -e thirdparty/mast3r && \
     pip3 install --no-cache-dir --no-build-isolation -e thirdparty/in3d && \
     pip3 install --no-cache-dir --no-build-isolation -e .
 # --no-build-isolation on all three: the curope CUDA extension imports torch in
 # its setup.py, and an isolated build environment does not have the torch that
-# was installed above. The price is that every build-system requirement of every
+# was installed above. setup.py is patched first (patch_setup.py): it asks
+# torch for a GPU to decide whether to compile the CUDA backend, and `docker
+# build` never has one; and its gencode list stops at sm_86. The price of no
+# isolation is that every build-system requirement of every
 # vendored package must already be installed -- Cython for pyimgui, above.
 
 # Checkpoints are baked in, because the run happens with --network none. An image
