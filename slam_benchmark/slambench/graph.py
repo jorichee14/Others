@@ -40,7 +40,7 @@ import numpy as np
 
 __all__ = ["so3_exp", "so3_log", "Factors", "SolveReport", "solve",
            "odometry_factors", "anchor_factors", "gauge_prior", "reset_edges",
-           "anchor_coverage", "move_by_region"]
+           "anchor_coverage", "move_by_region", "sampling_regularity"]
 
 
 # ----------------------------------------------------------------- SO(3), batched
@@ -412,7 +412,8 @@ def move_by_region(stamps: np.ndarray, anchored_idx: np.ndarray,
     return out
 
 
-def reset_edges(stamps: np.ndarray, gap_factor: float = 3.0) -> np.ndarray:
+def reset_edges(stamps: np.ndarray, gap_factor: float = 3.0,
+                max_fraction: float = 0.10) -> np.ndarray:
     """Indices i where the edge i -> i+1 crosses a stamp gap wider than
     `gap_factor` x the median period.
 
@@ -421,11 +422,46 @@ def reset_edges(stamps: np.ndarray, gap_factor: float = 3.0) -> np.ndarray:
     observed and the relative pose the file implies there is fiction. The log
     line that names the reset is not kept with the run; the hole in the stamps
     is, and it is the same event.
+
+    THIS ONLY MEANS ANYTHING ON A REGULARLY SAMPLED STREAM, and the guard
+    below is not a nicety. A keyframing method emits poses when the VIEW
+    changes, so irregular spacing is its normal behaviour and carries no
+    information about tracking loss. Run on `mast3r_slam`'s 151 keyframes the
+    heuristic flagged 65 of 150 edges (2026-09-20); at x100 sigma that is 43%
+    of the chain set nearly free, and the solve duly drove its residuals to
+    zero because the system had stopped being determined by the data. A
+    flagged fraction above `max_fraction` is not a run full of resets, it is
+    the heuristic being applied where it does not belong, so none are returned
+    and the caller is expected to say so.
     """
     dt = np.diff(np.asarray(stamps, dtype=np.float64))
     if len(dt) < 3:
         return np.zeros(0, dtype=int)
-    return np.flatnonzero(dt > gap_factor * np.median(dt))
+    idx = np.flatnonzero(dt > gap_factor * np.median(dt))
+    return idx if len(idx) <= max_fraction * len(dt) else np.zeros(0, dtype=int)
+
+
+def sampling_regularity(stamps: np.ndarray, gap_factor: float = 3.0) -> dict:
+    """How uniform the pose stream is, and what the reset heuristic would say.
+
+    Returned so a build can report that it DECLINED to treat gaps as resets,
+    rather than silently either freeing half the chain or ignoring real ones.
+    """
+    dt = np.diff(np.asarray(stamps, dtype=np.float64))
+    if len(dt) < 3:
+        return {"n_edges": int(len(dt)), "applies": False,
+                "why": "fewer than 4 poses"}
+    med = float(np.median(dt))
+    flagged = int((dt > gap_factor * med).sum())
+    frac = flagged / len(dt)
+    return {"n_edges": int(len(dt)), "median_period_s": med,
+            "period_iqr_s": float(np.percentile(dt, 75) - np.percentile(dt, 25)),
+            "flagged": flagged, "flagged_fraction": float(frac),
+            "applies": bool(frac <= 0.10),
+            "why": "" if frac <= 0.10 else
+                   (f"{100 * frac:.0f}% of edges exceed {gap_factor}x the median period, "
+                    f"so the stream is not regularly sampled and a wide gap says nothing "
+                    f"about tracking loss -- no edge is treated as a reset")}
 
 
 def odometry_factors(poses: np.ndarray, stamps: np.ndarray, sigma_t: float, sigma_r: float,

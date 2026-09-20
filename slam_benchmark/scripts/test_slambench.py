@@ -2859,5 +2859,39 @@ def test_graph_anchor_coverage_distinguishes_a_bracket_from_a_lever():
     e_l = np.linalg.norm(pose_l[tail, :3, 3] - truth[tail, :3, 3], axis=1)
     assert np.median(e_l) > 3.0 * np.median(e_b), (np.median(e_l), np.median(e_b))
 
+
+@test
+def test_reset_heuristic_declines_on_an_irregular_keyframe_stream():
+    """A gap means "tracking was lost" only on a fixed-rate stream.
+
+    Measured 2026-09-20: on mast3r_slam's 151 keyframes the heuristic flagged
+    65 of 150 edges, and at x100 sigma that freed 43% of the chain -- the
+    solve then drove its whitened residuals to 0.00 because the system had
+    stopped being determined by the data. A keyframing method emits a pose
+    when the VIEW changes, so irregular spacing is normal and says nothing
+    about tracking. Above 10% flagged the heuristic declines entirely.
+    """
+    from slambench.graph import reset_edges, sampling_regularity
+    rng = np.random.default_rng(4)
+
+    # fixed-rate stream with three genuine holes -> flagged and kept
+    dt = np.full(400, 1 / 14.7)
+    dt[[50, 180, 300]] = 0.8
+    reg_stamps = 1000.0 + np.concatenate([[0.0], np.cumsum(dt)])
+    assert list(reset_edges(reg_stamps)) == [50, 180, 300], reset_edges(reg_stamps)
+    assert sampling_regularity(reg_stamps)["applies"]
+
+    # keyframe stream: BURSTY, which is what mast3r_slam produces -- clusters
+    # while the view changes fast, then long quiet stretches. A uniform spread
+    # over a wide range does NOT reproduce it (the median lands mid-range and
+    # nothing reaches 3x); the skew is what makes the heuristic misfire.
+    per = np.where(rng.random(150) < 0.6, rng.uniform(0.08, 0.30, 150),
+                   rng.uniform(1.5, 3.0, 150))
+    kf = 1000.0 + np.cumsum(per)
+    r = sampling_regularity(kf)
+    assert r["flagged_fraction"] > 0.10, r
+    assert not r["applies"] and "not regularly sampled" in r["why"], r
+    assert len(reset_edges(kf)) == 0, "the heuristic must decline, not free the chain"
+
 if __name__ == "__main__":
     raise SystemExit(main())

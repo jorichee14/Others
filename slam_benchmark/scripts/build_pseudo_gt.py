@@ -41,7 +41,8 @@ sys.path.insert(0, str(ROOT))
 from slambench.align import fit                                              # noqa: E402
 from slambench.config import load_dataset, load_method, to_reference_frame  # noqa: E402
 from slambench.graph import (anchor_coverage, anchor_factors, gauge_prior,  # noqa: E402
-                             move_by_region, odometry_factors, reset_edges, solve)
+                             move_by_region, odometry_factors, reset_edges,
+                             sampling_regularity, solve)
 from slambench.trajectory import Trajectory, load_tum, save_tum             # noqa: E402
 
 
@@ -147,12 +148,19 @@ def main() -> int:
     factors = odometry_factors(est.poses, est.stamps, sigma_t, sigma_r,
                                args.reset_gap_factor, args.reset_inflate)
     resets = reset_edges(est.stamps, args.reset_gap_factor)
+    reg = sampling_regularity(est.stamps, args.reset_gap_factor)
     print(f"odometry : {len(factors.b_i)} between factors, {len(resets)} reset edges "
           f"(x{args.reset_inflate:g} sigma)")
+    if not reg["applies"]:
+        print(f"NOTE     : {reg['why']}. This stream's poses are "
+              f"{reg['median_period_s']:.2f} s apart on median with an IQR of "
+              f"{reg['period_iqr_s']:.2f} s -- a keyframing method, not a fixed-rate "
+              f"front-end.")
 
     construction = {
         "rung": args.rung, "source_run": str(run), "source_file": args.source,
         "backbone_method": method, "n_poses": N, "sigma": sig,
+        "sampling": reg,
         "reset_edges": {"count": int(len(resets)), "gap_factor": args.reset_gap_factor,
                         "inflate": args.reset_inflate,
                         "stamps": [float(est.stamps[i]) for i in resets]},
