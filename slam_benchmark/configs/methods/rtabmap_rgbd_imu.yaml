@@ -70,9 +70,16 @@ imu_by_agent:
 # what keeps the two agents' rows honestly comparable: with this line in the
 # config, the table can say that mobile_2's gravity came from Madgwick and
 # mobile_1's from the ZED SDK.
-# Madgwick runs at its PUBLISHED DEFAULTS (gain 0.1, world_frame enu) except
-# use_mag, which must be false: these modules carry no magnetometer on the
-# united IMU topic and the node otherwise blocks waiting for /imu/mag.
+# Madgwick runs at its PUBLISHED DEFAULTS (gain 0.1) except three, each named:
+#   use_mag     false  -- no magnetometer on the united IMU topic; the node
+#                         otherwise blocks waiting for /imu/mag
+#   publish_tf  false  -- published default TRUE. Left at it, the filter
+#                         publishes fixed_frame -> the IMU frame, re-parents
+#                         camera_imu_optical_frame and deletes the static
+#                         camera->IMU edge, so rgbd_odometry never initialises.
+#                         This is what broke the fourth mobile_2 attempt.
+#   world_frame enu    -- stated rather than inherited, since this default has
+#                         changed across releases of the node.
 imu_orientation_filter: madgwick
 
 params:

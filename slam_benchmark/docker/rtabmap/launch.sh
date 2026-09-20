@@ -136,8 +136,19 @@ if [[ -n "${SLAM_IMU_TOPIC:-}" && -n "${SLAM_IMU_ORIENTATION_FILTER:-}" ]]; then
         FILTERED_IMU=/slambench/imu_with_orientation
         echo "imu filt : madgwick, $SLAM_IMU_TOPIC -> $FILTERED_IMU "\
              "(the raw stream carries no orientation)"
+        # publish_tf:=false IS THE WHOLE RUN. Its published default is TRUE, and
+        # a filter left at that default publishes fixed_frame -> the IMU frame,
+        # which RE-PARENTS camera_imu_optical_frame and so silently deletes the
+        # static camera->IMU edge the harness publishes from the config. With
+        # always_check_imu_tf on, rgbd_odometry then cannot resolve camera<->IMU
+        # and never initialises, while the mapping node starves and blames its
+        # input topics. That is the SAME failure documented at the top of this
+        # file for publish_tf_odom, and it cost a fourth run on mobile_2 before
+        # anyone connected the two. A frame has exactly one parent.
         ros2 run imu_filter_madgwick imu_filter_madgwick_node --ros-args \
             -p use_mag:=false -p use_sim_time:=true \
+            -p publish_tf:=false \
+            -p world_frame:=enu \
             -r imu/data_raw:="$SLAM_IMU_TOPIC" \
             -r imu/data:="$FILTERED_IMU" &
         # The filter must be up before the bag starts, or the first seconds of
