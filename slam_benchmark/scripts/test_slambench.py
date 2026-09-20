@@ -1923,21 +1923,26 @@ def test_anchor_check_evaluates_a_keyframe_trajectory_between_its_poses():
 
 @test
 def test_a_scale_free_method_gets_its_anchors_from_the_sim3_fit_and_says_so():
-    """A monocular estimate placed by an se3 fit is a scale model of the room;
-    its distance to a surveyed board is the scale error in metres, against a
-    7 mm survey. The anchor check uses sim3 for such a method and marks the row
-    as not independent, because the scale then came from the reference."""
-    import io, contextlib, yaml
+    """The machinery, not any one method: a row declaring `metric_scale: false`
+    is placed by an se3 fit as a scale model of the room, and its distance to a
+    surveyed board is the scale error in metres against a 7 mm survey. Such a
+    row gets sim3 anchors and is marked not independent. NOTE mast3r_slam is
+    NOT such a row -- it runs the *_metric.pth checkpoint and its scale is a
+    measurement (1.0144 on mobile_2, 0.729 on mobile_1), not a free parameter."""
+    import yaml
     root = Path(__file__).resolve().parents[1]
-    m = yaml.safe_load((root / "configs" / "methods" / "mast3r_slam.yaml").read_text())
-    assert m["metric_scale"] is False and m["poses"] == "keyframes"
     ev = (root / "scripts" / "eval_run.py").read_text()
     assert 'mcfg.raw.get("metric_scale", True)' in ev
     assert "interpolate=True" in ev, "the anchor check must not depend on a method declaring sparsity"
-    # the two other RGB-D methods keep se3 and stay independent
-    for name in ("rtabmap_rgbd.yaml", "kiss_icp.yaml"):
-        r = yaml.safe_load((root / "configs" / "methods" / name).read_text())
-        assert r.get("metric_scale", True) is True, name
+    # every shipped method claims metric scale; none may claim otherwise silently
+    for f in sorted((root / "configs" / "methods").glob("*.yaml")):
+        r = yaml.safe_load(f.read_text()) or {}
+        assert r.get("metric_scale", True) is True, (
+            f"{f.name} declares metric_scale: false -- if that is right, say WHY "
+            f"in the file, and check it is not a metric checkpoint like "
+            f"mast3r_slam's *_metric.pth")
+    df = (root / "docker" / "Dockerfile.mast3r-slam").read_text()
+    assert "_metric.pth" in df, "the mast3r image must fetch the metric checkpoint"
     # a 27%-small estimate: se3 leaves metres of anchor residual, sim3 removes it
     ref = circle_traj(200, radius=3.0)
     small = Trajectory(ref.stamps, np.array([se3.pose_from_rpy(*(p[:3, 3] * 0.729),

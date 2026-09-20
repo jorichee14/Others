@@ -13,14 +13,20 @@ loop_closure: true              # retrieval-based, over the pointmap graph
 outputs: [trajectory, map]      # DENSE pointmaps, so it scores on map metrics
 reference_impl: https://github.com/rmurai0610/MASt3R-SLAM
 image: slambench/mast3r-slam:humble
-# MEASURED 2026-09-20 on mobile_1: scale 0.729, i.e. the trajectory is a 27%
-# scale model of the room. That is not a defect -- a single camera cannot
-# recover size, only shape -- but it decides how this row may be scored:
-# se3 ATE is meaningless for it (1.91 m, almost all of it the scale), sim3 is
-# the result (85 mm), and the tier-2 anchor check has to borrow scale from the
-# reference, which costs this row its independence at that tier. Declared here
-# so the evaluator does both automatically rather than by anyone remembering.
-metric_scale: false
+# THIS ROW HAS METRIC SCALE, AND THE EARLIER `metric_scale: false` HERE WAS
+# WRONG. The image is built on the *_metric.pth checkpoint: MASt3R's metric
+# variant predicts pointmaps in METRES, so this is not classical monocular
+# SLAM with a free scale factor. The measurements say so too -- an arbitrary
+# scale would land anywhere, and mobile_2 came back at 1.0144:
+#
+#   mobile_2 (RealSense)  scale 1.0144   se3 ATE 120 mm   <- within 1.4%
+#   mobile_1 (ZED)        scale 0.729    se3 ATE 1.91 m   <- 27% SHORT
+#
+# So se3 IS this row's result, the 27% on mobile_1 is a real failure of the
+# learned metric prior on that camera rather than an absent capability, and
+# sim3 (85 mm on mobile_1) is the shape-only diagnostic that separates the
+# scale failure from the tracking. The scale column carries the finding.
+metric_scale: true
 # main.py saves KEYFRAME poses only (38 over 156 s on mobile_1, 151 on
 # mobile_2). The evaluator associates by stamp, so a sparse trajectory is
 # legal; the anchor check evaluates between poses and prints the gap. Recorded
