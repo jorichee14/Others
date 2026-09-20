@@ -54,6 +54,17 @@ OPENCV_TO_ROS = np.array([[0.0, 0.0, 1.0],
                           [-1.0, 0.0, 0.0],
                           [0.0, -1.0, 0.0]])
 
+# The four ways to put OpenCV's plane on a +x normal: the one above, and it
+# turned a further 90, 180 or 270 degrees about that normal. The first guess
+# was 179.96 degrees from the pipeline's own detections, which is why this is
+# now SOLVED against them (--solve-axes) instead of argued about.
+def _spin_x(deg: float) -> np.ndarray:
+    c, s_ = np.cos(np.radians(deg)), np.sin(np.radians(deg))
+    return np.array([[1.0, 0.0, 0.0], [0.0, c, -s_], [0.0, s_, c]])
+
+
+AXES_CANDIDATES = {f"ros+{d}": _spin_x(d) @ OPENCV_TO_ROS for d in (0, 90, 180, 270)}
+
 
 def board_to_map(position, orientation_xyzw) -> np.ndarray:
     """4x4 `map <- board`, from the two numbers the dataset config declares."""
@@ -79,11 +90,14 @@ def to_board_frame(corners_opencv: np.ndarray, squares, square_m: float,
         pts[:, 1] -= squares[1] * square_m / 2.0
     elif origin != "corner":
         raise ValueError(f"board origin {origin!r}: expected 'center' or 'corner'")
-    if axes == "ros":
-        return pts @ OPENCV_TO_ROS.T
     if axes == "opencv":
         return pts
-    raise ValueError(f"board axes {axes!r}: expected 'ros' or 'opencv'")
+    if axes in AXES_CANDIDATES:
+        return pts @ AXES_CANDIDATES[axes].T
+    if axes == "ros":
+        return pts @ OPENCV_TO_ROS.T
+    raise ValueError(f"board axes {axes!r}: expected 'opencv', 'ros' or one of "
+                     f"{sorted(AXES_CANDIDATES)}")
 
 
 def object_points(squares, square_m: float, origin: str, axes: str) -> np.ndarray:
@@ -208,6 +222,11 @@ def main() -> int:                                           # pragma: no cover
                     help="the agent's reference TUM. Used ONLY to reject a pose that "
                          "cannot be where the robot was -- see sanity_gate. Required "
                          "for a board whose markers are shared with another.")
+    ap.add_argument("--solve-axes", action="store_true",
+                    help="with --validate-against: score EVERY candidate board-axis "
+                         "convention against the pipeline's own detections and print "
+                         "which one is right. The first guess was 179.96 deg out, and "
+                         "arguing about conventions is slower than measuring them.")
     ap.add_argument("--max-offset-m", type=float, default=0.5,
                     help="how far a detection may sit from the reference before it is "
                          "treated as the wrong board or a mirrored solution")
@@ -280,16 +299,28 @@ def main() -> int:                                           # pragma: no cover
 
     K = dist = None
     stamps, poses, tried, detected, rejected = [], [], 0, 0, []
+    from collections import Counter
+    why, n_corners, reproj, solved = Counter(), [], [], []
     while reader.has_next():
         topic, data, _ = reader.read_next()
         msg = deserialize_message(data, cls[topic])
         if topic == info_topic:
             if K is None:
                 K = np.array(msg.k, dtype=np.float64).reshape(3, 3)
-                # *_rect_* / aligned images: the distortion is already out, and
-                # applying the plumb-bob a second time would bend every corner.
-                dist = np.zeros(5)
-                print(f"intrinsics {K[0,0]:.1f} {K[1,1]:.1f} {K[0,2]:.1f} {K[1,2]:.1f}")
+                # NOT assumed zero. mobile_1's topic is `*_rect_*` and its
+                # distortion really is out; mobile_2's is `image_raw` and is
+                # NOT rectified, and zeroing it there bends every corner by a
+                # few pixels -- which is the difference between a detection and
+                # a rejection on a marker that spans 14 px.
+                d = np.array(msg.d, dtype=np.float64).ravel()
+                rect = "rect" in img_topic
+                if rect and np.any(np.abs(d) > 1e-9):
+                    print(f"{img_topic} says rectified but camera_info carries "
+                          f"non-zero distortion {d[:5]}; using it anyway",
+                          file=sys.stderr)
+                dist = np.zeros(5) if rect else (d if len(d) else np.zeros(5))
+                print(f"intrinsics {K[0,0]:.1f} {K[1,1]:.1f} {K[0,2]:.1f} {K[1,2]:.1f}"
+                      f"  distortion {'zeroed (rectified topic)' if rect else list(np.round(dist, 5))}")
             continue
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         if not (window[0] <= t <= window[1]) or K is None:
@@ -298,17 +329,28 @@ def main() -> int:                                           # pragma: no cover
         gray = cv2.cvtColor(to_rgb(bytes(msg.data), msg.height, msg.width,
                                    msg.encoding, msg.step), cv2.COLOR_RGB2GRAY)
         corners, ids = detect(gray)
-        if ids is None or len(ids) < args.min_corners:
+        # Count WHERE frames are lost. "7 of 521" says nothing; "500 saw no
+        # marker at all" and "500 saw five corners" want different fixes.
+        if ids is None:
+            why["no corners"] += 1
+            continue
+        n_corners.append(len(ids))
+        if len(ids) < args.min_corners:
+            why[f"< {args.min_corners} corners"] += 1
             continue
         ok, rvec, tvec = cv2.solvePnP(obj[ids.ravel()], corners.reshape(-1, 2),
                                       K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
         if not ok:
+            why["solvePnP failed"] += 1
             continue
         proj, _ = cv2.projectPoints(obj[ids.ravel()], rvec, tvec, K, dist)
         err = float(np.sqrt(np.mean(np.sum(
             (proj.reshape(-1, 2) - corners.reshape(-1, 2)) ** 2, axis=1))))
+        reproj.append(err)
         if err > args.max_reproj_px:
+            why[f"reprojection > {args.max_reproj_px} px"] += 1
             continue
+        solved.append(((corners, ids), t))
         T_map_cam = camera_in_map(rvec, tvec, T_map_board)
         if ref_traj is not None:
             ok, d = sanity_gate(T_map_cam, t, ref_traj, args.max_offset_m)
@@ -321,6 +363,14 @@ def main() -> int:                                           # pragma: no cover
 
     print(f"{detected} of {tried} frames in the window gave a pose "
           f"(>= {args.min_corners} corners, reprojection <= {args.max_reproj_px} px)")
+    for reason, n in why.most_common():
+        print(f"  {n:5d} frames lost: {reason}")
+    if n_corners:
+        print(f"  corners per frame that saw any: median {int(np.median(n_corners))}, "
+              f"max {max(n_corners)} of {len(obj)}")
+    if reproj:
+        print(f"  reprojection of solved frames: median {np.median(reproj):.2f} px, "
+              f"p90 {np.percentile(reproj, 90):.2f} px")
     if rejected:
         print(f"{len(rejected)} solved poses REJECTED for sitting "
               f"{np.median(rejected):.2f} m (median) from the reference, over the "
@@ -335,6 +385,43 @@ def main() -> int:                                           # pragma: no cover
         return 1
     traj = Trajectory(np.array(stamps), np.stack(poses),
                       f"{args.agent}/{args.anchor}", frame="camera", world="map")
+
+    if args.solve_axes:
+        if not args.validate_against:
+            raise SystemExit("--solve-axes needs --validate-against: it is scored "
+                             "against the pipeline's own detections, not guessed")
+        truth = load_tum(args.validate_against)
+        print("\ncandidate board-axis conventions, scored against the pipeline:")
+        best = None
+        for name, M in AXES_CANDIDATES.items():
+            pts = to_board_frame(raw, b["squares"], float(b["square_m"]),
+                                 b.get("origin", "center"), "opencv") @ M.T
+            poses_n = []
+            for rv, tv in solved:
+                ok2, rvec2, tvec2 = cv2.solvePnP(pts[np.asarray(rv[1]).ravel()],
+                                                 np.asarray(rv[0]).reshape(-1, 2),
+                                                 K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
+                if ok2:
+                    poses_n.append((tv, camera_in_map(rvec2, tvec2, T_map_board)))
+            if not poses_n:
+                continue
+            cand = Trajectory(np.array([t for t, _ in poses_n]),
+                              np.stack([P for _, P in poses_n]), name)
+            v = compare(cand, truth)
+            if not v["matched"]:
+                print(f"  {name:<8} no matched stamp")
+                continue
+            print(f"  {name:<8} position median {v['pos_median_mm']:8.1f} mm   "
+                  f"rotation median {v['rot_median_deg']:7.2f} deg   n={v['matched']}")
+            if best is None or v["pos_median_mm"] < best[1]["pos_median_mm"]:
+                best = (name, v)
+        if best:
+            n, v = best
+            print(f"\n-> `axes: {n}` wins at {v['pos_median_mm']:.1f} mm / "
+                  f"{v['rot_median_deg']:.2f} deg. Put that in coop2.yaml's board "
+                  f"block for every anchor and re-run the validation before "
+                  f"writing any new file.")
+        return 0
 
     if args.validate_against:
         v = compare(traj, load_tum(args.validate_against))

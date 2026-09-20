@@ -2367,6 +2367,37 @@ def test_board_detect_gates_the_two_boards_that_carry_the_same_markers():
     assert "CharucoBoard_create" in src and "CharucoDetector" in src
     assert "interpolateCornersCharuco" in src and "getChessboardCorners" in src
     assert "refusing to guess which is right" in src
+    assert "--solve-axes" in src and "arguing about conventions is slower" in src
+
+
+@test
+def test_every_candidate_board_axis_convention_is_a_rotation_about_the_normal():
+    """The first guess was 179.96 deg from the pipeline's own detections, so
+    the convention is solved rather than argued. All four candidates must keep
+    the board flat in x -- they differ only by a spin about its normal -- or
+    the search is over the wrong set."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from board_detect import AXES_CANDIDATES, OPENCV_TO_ROS, object_points
+    assert set(AXES_CANDIDATES) == {"ros+0", "ros+90", "ros+180", "ros+270"}
+    assert np.allclose(AXES_CANDIDATES["ros+0"], OPENCV_TO_ROS)
+    seen = []
+    for name, M in AXES_CANDIDATES.items():
+        assert abs(np.linalg.det(M) - 1.0) < 1e-12, name
+        assert np.allclose(M @ M.T, np.eye(3), atol=1e-12), name
+        pts = object_points([9, 7], 0.020, "center", name)
+        assert np.allclose(pts[:, 0], 0, atol=1e-12), f"{name} is not flat in x"
+        seen.append(pts)
+    # all four are genuinely different layouts, and 180 is the flip that a
+    # 179.96 deg residual points at
+    for i in range(len(seen)):
+        for j in range(i + 1, len(seen)):
+            assert not np.allclose(seen[i], seen[j]), (i, j)
+    assert np.allclose(AXES_CANDIDATES["ros+180"] @ np.array([0, 1.0, 0]),
+                       -AXES_CANDIDATES["ros+0"] @ np.array([0, 1.0, 0]), atol=1e-12)
+    src = (Path(__file__).resolve().parents[1] / "scripts" / "board_detect.py").read_text()
+    # mobile_2's topic is image_raw: the distortion must come from camera_info
+    assert 'rect = "rect" in img_topic' in src
+    assert "np.array(msg.d" in src, "distortion must be read, not assumed zero"
 
 
 def main() -> int:
