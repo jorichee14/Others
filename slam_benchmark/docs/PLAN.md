@@ -1,5 +1,8 @@
 # THE PLAN — read this file only
 
+> Measured results, with their caveats and the reporting rules they impose:
+> **`docs/RESULTS.md`**. This file is what to do; that file is what came out.
+
 One goal, five stages, each with a gate. Everything else in `docs/` is detail
 this file points into. When this plan and another document disagree, this file
 wins and the other document gets fixed.
