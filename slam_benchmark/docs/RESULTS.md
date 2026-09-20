@@ -88,21 +88,49 @@ which makes them directly comparable.
 | front-end, `rs_anchor` | **335.6 mm** / **1.48°** | 350.3–547.9 mm / 3.77–25.40° |
 | graph, `anchor` | **375.4 mm** / **2.17°** | 421.4–499.3 mm / 3.45–4.69° |
 
-**The IMU-free run is better in position than all five inertial runs, in all
-three comparisons, and better in rotation than all five in two of the three.**
+**On `mobile_1` the IMU-free run is better in position than all five inertial
+runs, in all three comparisons, and better in rotation than all five in two
+of the three.**
 
 This contradicts an earlier claim in this project that *an IMU roughly halves
 orientation error at a surveyed marker* — **retracted**. That claim rested on
 comparing `mobile_1` (inertial) against `mobile_2` (not), which is a
-comparison across two different robots, routes, cameras and references. The
-within-platform ablation reverses it.
+comparison across two different robots, routes, cameras and references.
 
-Two honest limits. It is one IMU-free run against five inertial ones, though
-it wins every individual comparison rather than winning on average. And the
-mechanism is **not established**: RTAB-Map's IMU enters as a gravity
-constraint (`Optimizer/GravitySigma 0.3`), which would plausibly hurt if the
-ZED's fused orientation or its declared extrinsic carries a small bias, but
-that is a hypothesis and this recording has not tested it.
+### The same ablation on `mobile_2` does NOT replicate it
+
+Run on the second platform — different camera, different IMU, and an
+orientation *we* computed with a Madgwick filter rather than a vendor's
+fusion. Same windows, same counts (n = 190, n = 85), 97% span both ways:
+
+| comparison | IMU **off** (2 runs) | IMU **on** | |
+|---|---:|---:|---|
+| front-end, `anchor` | **39 / 51 mm** / 3.88–4.06° | 82.5 mm / **2.95°** | IMU worse in position |
+| front-end, `rs_anchor` | 95 / 118 mm / 7.43–8.37° | **77.0 mm** / 7.53° | IMU better in position |
+| graph, `anchor` | **55 / 87 mm** / 2.24–3.27° | 96.0 mm / 2.44° | IMU worse in position |
+| graph, `rs_anchor` | 94 / 123 mm / 7.30–7.40° | **86.9 mm** / **3.60°** | IMU better in both |
+
+**Mixed, not a reversal.** Position is worse at one board and better at the
+other; rotation is equal or better everywhere.
+
+**So "the IMU hurts" is a `mobile_1` result, not a property of the method.**
+That matters for what it points at: RTAB-Map's IMU enters only as a gravity
+constraint (`Optimizer/GravitySigma 0.3`), and the two platforms differ in
+where that gravity comes from — the ZED SDK's own fused orientation on
+`mobile_1`, a Madgwick filter over raw gyro and accelerometer on `mobile_2`.
+A small bias in the ZED's fusion or in its declared camera↔IMU extrinsic
+would produce exactly this asymmetry. **Still a hypothesis**; the test is to
+compare the IMU-derived gravity direction against the surveyed map's vertical,
+which the data already in hand supports.
+
+One mechanism the `mobile_2` numbers do support: at `rs_anchor` — the *first*
+17.7 s of that run — the IMU halves the graph's rotation residual, **7.30–7.40°
+down to 3.60°**. That window was previously flagged as an initialisation
+transient, and bounding attitude during initialisation is precisely what a
+gravity constraint is for.
+
+Limits: five inertial runs against one IMU-free on `mobile_1`; one against two
+on `mobile_2`.
 
 `mast3r_slam` recovers shape but not size: its estimate is **37.1% too
 large**, and removing the scale by a sim3 fit drops the ATE from 1908 mm to
@@ -119,8 +147,8 @@ residuals confirm the failure independently of the reference.
 | `rtabmap_rgbd`, front-end | — | **39 / 51 mm** | 95 / 118 mm | — |
 | `rtabmap_rgbd`, graph | 135 / 149 mm | 55 / 87 mm | 94 / 123 mm | 97 / 95% |
 | `mast3r_slam` | **120 mm** | 61 mm | 201 mm | **89%** |
+| `rtabmap_rgbd_imu`, front-end | 151 mm | 82.5 mm | **77.0 mm** | 97% |
 | `kiss_icp` | 5008 mm | 2639 mm | 7379 mm | 100% |
-| `rtabmap_rgbd_imu` | no result — see §4 | | | |
 
 **Two findings here, and both are about the benchmark rather than the methods.**
 
