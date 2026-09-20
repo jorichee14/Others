@@ -1709,7 +1709,8 @@ def test_kiss_image_is_offline_and_dev_mounts_its_runner():
     assert "KISS_ICP_REF=v1.0.0" in df
     # the backend is pinned with the source: v1.0.0's pyproject fails under
     # scikit-build-core >= 0.8 (cmake.minimum-version was renamed)
-    assert '"scikit-build-core<0.8"' in df and "--no-build-isolation" in df
+    assert '"scikit-build-core[pyproject]<0.8"' in df and "--no-build-isolation" in df
+    assert "import pyproject_metadata" in df          # proven before the compile starts
     assert not (root / "docker" / "kiss-icp" / "launch.sh").exists()
     assert (root / "docker" / "kiss-icp" / "run_offline.py").exists()
     rm = (root / "scripts" / "run_method.py").read_text()

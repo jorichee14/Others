@@ -14,7 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # `cmake.version`). With build isolation pip fetches the newest backend and the
 # pinned source fails to build; so the backend is installed first, at the
 # version the tag was written against, and the build runs without isolation.
-RUN pip3 install --no-cache-dir "scikit-build-core<0.8" pybind11 && \
+# `[pyproject]`: in the 0.7 series pyproject-metadata is an extra the backend
+# would have requested at build time under isolation; without isolation nobody
+# asks, and the metadata step dies on the import. The import is checked here.
+RUN pip3 install --no-cache-dir "scikit-build-core[pyproject]<0.8" pybind11 && \
+    python3 -c "import pyproject_metadata, scikit_build_core, pybind11" && \
     git clone --depth 1 --branch ${KISS_ICP_REF} https://github.com/PRBonn/kiss-icp.git /opt/kiss-icp && \
     pip3 install --no-cache-dir --no-build-isolation /opt/kiss-icp/python plyfile && \
     rm -rf /opt/kiss-icp/python/build
