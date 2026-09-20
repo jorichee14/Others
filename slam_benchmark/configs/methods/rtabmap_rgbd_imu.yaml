@@ -43,6 +43,16 @@ replay_rate_by_stream:
 # mobile_2 run is not a comparison row -- different platform, different route --
 # it is the candidate that the pseudo-GT construction will actually be built on.
 streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
+# mobile_2.realsense_rgbd: DROPPED 2026-09-20 AS A STAGE 1 FAILURE, rule 8.
+# Four attempts. Each found a fault that let the run complete with no inertial
+# data in it -- extrinsic null, then no orientation on the raw RealSense IMU
+# (Madgwick added), then the extrinsic written in the wrong schema so no tf
+# edge was published -- and after all three were fixed the odometry still never
+# initialised. It stays declared so the harness keeps checking its preflight,
+# but it is not on the critical path (IMPLEMENTATION.md) and is not attempted
+# again until B2 lands. The table row reads: no result, four attempts, reasons
+# above.
+
 imu_by_agent:
   mobile_1: mobile_1.imu
   mobile_2: mobile_2.imu    # 183.3 Hz. Gravity only, as on mobile_1, so the

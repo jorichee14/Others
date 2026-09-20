@@ -28,6 +28,40 @@ conclude, and a phase that depends on an unanswered one does not start.
 | I9 | **`infra_1`'s pose uncertainty.** | ⬜ open | An infrastructure-anchored fix cannot be better than its anchor, and coop2 states the pose to six decimals with no uncertainty anywhere. Until it is a number, track C reports only relative improvement. |
 | I10 | **Does the Arducam's `camera_info` belong to the Arducam?** | ⬜ open | It publishes at 27.5 Hz against a 10.6 Hz image stream — the signature of a `camera_info_manager` on its own timer, which can carry a different `frame_id`. Verify before projecting anything into that image. |
 
+## Critical path (set 2026-09-20)
+
+One deliverable decides the paper: **B2, a certified pseudo ground truth for
+`mobile_2`**. Everything below either feeds it or waits for it. When a task
+does not appear in this table it is not being worked on, whatever the log
+says about it.
+
+| step | what | gate / deliverable | status |
+|---|---|---|---|
+| 1 | **V1** — factor graph, backbone odometry factors only, `mobile_1`, covariance inflated at RTAB-Map's reset edges (`odom_health.py` already finds them) | reproduces the backbone's own LiDAR-scored error (366–451 mm). Much better = reference leaking in; much worse = covariances wrong | ⬜ next |
+| 2 | **V2c** — add board anchor factors, same runs | V2c − V1 in centimetres: the B2 table | ⬜ |
+| 3 | **certification** — error vs observables that exist without a reference (dropout fraction, longest starved stretch, anchor visibility, time since last anchor), leave-one-segment-out | the function that transfers | ⬜ |
+| 4 | **transfer** — freeze, run on `mobile_2`, predict its error, test against its board residuals | corroborated or failed; both are results | ⬜ |
+
+Design: `docs/STAGE2_GRAPH.md`. Inputs are all in hand — backbone
+(2227 poses, 99% span), 439 board detections on two boards, the held-out
+LiDAR reference, and the same backbone + boards on `mobile_2`. The one
+missing thing is the construction itself.
+
+**Set aside, with reasons** — none of these feed the construction:
+
+| item | decision | why |
+|---|---|---|
+| `rtabmap_rgbd_imu` × `mobile_2` | **dropped**, recorded as a Stage 1 failure | four attempts, three distinct silent-success faults found and fixed (null extrinsic, absent orientation, malformed extrinsic), a fourth starvation unexplained. A Stage 1 benchmark row; V2a is blocked on the IMU noise model regardless |
+| `rtabmap_rgbd` × `mobile_1` | deferred | completes the B1 IMU ablation on one robot. One command when B1 is written up |
+| I6 (route revisit) | deferred | decides how RTAB-Map's loop-closure rows are *reported*, not what the construction does |
+| IMU noise model / V2a | deferred | needs an overnight static log of the D455 |
+| radar ego-velocity / V2b | deferred | plausible rung, after V2c lands |
+| infrastructure / V2d | blocked | I9: `infra_1` has no stated pose uncertainty |
+| inter-agent / V2e | unavailable | no simultaneous co-observation on coop2 |
+
+If B2 lands, each of these is a paragraph. If it does not, none of them
+matter.
+
 ## Phases
 
 The benchmark specification is `docs/BENCHMARK.md` (tasks S1-S6, protocol,
@@ -442,6 +476,7 @@ environment").
 | date | phase | what changed |
 |---|---|---|
 | 2026-09-14 | 0 | Evaluator, configs, container contract, docs. 32 self-tests + e2e smoke green. |
+| 2026-09-20 | 6 | **Scope reset: one critical path, everything else set aside by name.** The day went into a Stage 1 benchmark cell (`rtabmap_rgbd_imu` × `mobile_2`) that does not feed the construction: four attempts, three distinct faults found and fixed, and a fourth starvation still unexplained. None of it moves B2. A *Critical path* section now sits above the phases: four steps — V1, V2c, certification, transfer — each with its gate, and a second table naming what is dropped, deferred, blocked or unavailable and why. **Retraction**: I said the odometry-covariance recording had to land before any further Stage 1 run or the runs were wasted. Wrong — `odom_health.py` already finds RTAB-Map's automatic resets from the log, so the covariance can be inflated on exactly those edges from data in hand. No re-run, no prerequisite; V1 starts now. The mobile_2 inertial cell is dropped rather than attempted a fifth time and goes in the table as a failure with its reasons (rule 8). |
 | 2026-09-20 | 8 | **Stage 2's graph is specified, deliberately as the literature's and not as something new: `docs/STAGE2_GRAPH.md`.** Prompted by MoCap2GT (RA-L Feb 2026), which is the same architecture with a motion-capture system where we have surveyed boards — states per keyframe `[p, v, q, b_a, b_g]`, absolute-pose factors, IMU preintegration, bias random walk, batch MLE. **The structural difference is one factor**: they have absolute pose at 100 Hz continuously and need nothing to carry the trajectory between measurements; we have it in four windows totalling ~30 s of 150, so a BACKBONE ODOMETRY factor spans the other 120 s. That is the whole problem, and it is why their estimator does not transfer unchanged. Three of their design choices are adopted outright — cubic B-spline interpolation of the absolute measurement instead of linear (our tier-2 rows already carry `interpolated across 2.4 s` caveats), the time offset as B-spline control points rather than a constant (they measure >2 ms/min clock drift on consumer IMUs, which over our 150 s is ~5 ms, the same size as the +4 ms offset `imu_extrinsic.py` measured), and windowed degeneracy rejection. Two are deliberately NOT: the camera↔IMU extrinsic stays **declared** rather than estimated, because we have it as a mechanical constant and the motion cannot identify it anyway, and gravity alignment is not estimated because the surveyed `map` frame is already gravity-aligned. **Corroboration worth recording**: `scripts/imu_extrinsic.py` turns out to be their equation 9 — the same hand-eye SVD — and their Fig. 4 reports the same rank failure under insufficient rotational excitation. Our refusal is a published result, not a quirk. **The rung audit is the uncomfortable part**: of six rungs, V1 and V2c are ready, V2b is plausible, and V2a / V2d / V2e are blocked or unavailable — noise model, I9, and the absence of simultaneous co-observation. Two rungs, reported as two, with three measured reasons. **Novelty stated precisely in §8**: the estimator is four papers deep and claiming it invites them as prior art; what is new is the regime (sparse intermittent anchors, no MoCap volume), the error model that transfers, the falsifiable transfer to an agent with no reference, and multi-agent anchoring. MoCap2GT must be cited. |
 | 2026-09-20 | 7 | **The IMU ablation has been running on two different robots, and the user caught it.** `rtabmap_rgbd_imu` exists only on **mobile_1** (5 runs); its IMU-free pair `rtabmap_rgbd` exists only on **mobile_2** (2 runs). Neither agent has both halves, so the standing claim that *an IMU roughly halves orientation error at a surveyed marker* rests on a comparison ACROSS PLATFORMS — different camera, different route, different reference. Meanwhile `rtabmap_rgbd` has declared `mobile_1.zed_rgbd` all along and has simply never been run there: no extrinsic, no orientation filter, no new machinery, one command. I spent four attempts completing the pair on mobile_2 — the harder agent, whose reference is cuVSLAM-derived and whose two tiers disagree on ranking — while the same pair sat one command away on the agent with a LiDAR-derived reference, two boards, and tiers that agree. **The grid test is why this survived**: its `runnable` list was hand-written, so it asserted only the cells someone remembered. It now derives the declared set from the method configs and fails if any cell is neither runnable, blocked, nor explicitly out of scope. The same check immediately found a second hole, `kiss_icp`×`mobile_1.ouster`, which is deliberately out of this grid — stage 1 is LiDAR-free and the Ouster is the instrument the reference is built from — and is now listed with that reason instead of being invisible. 115 self-tests green. |
 | 2026-09-20 | 7 | **Madgwick fixed the orientation and the run STILL starved — because I wrote the extrinsic in the wrong schema and nothing checked.** The `doesn't have orientation set` rejections are gone, so the filter works; `rgbd_odometry` nonetheless never published and the mapping node repeated `"Did not receive data since 5 seconds"` for the whole run. Cause: `run_method.py` publishes `extrinsic_from_camera` as a static tf edge and reads `parent`/`child`/`xyz`/`quat_xyzw` — the shape `mobile_1.imu` has always used. I wrote mobile_2's in `reference_frame_from_sensor`'s `x/y/z/roll/pitch/yaw` shape instead, inferring the format from a neighbouring field rather than reading the consumer. **A non-empty dict, so the preflight gate's truthiness check passed it**, the emitter's `if ext.get("xyz")` was false, no edge was published, and with `always_check_imu_tf` on, the odometry waited forever for a camera↔IMU transform while the mapping node blamed its input topics. Rewritten in the right shape, and preflight now checks the KEYS the emitter reads, because a malformed extrinsic is strictly worse than a null one: null refuses loudly, this sailed through and cost a full run. **That is the third silent-success failure on this one cell** — null extrinsic, absent orientation, malformed extrinsic — each of which produced a run that started, completed and contained no inertial data. Tests now cover all three, and the real config's shape is asserted against the emitter's own key set so the two cannot drift again. 115 self-tests green. |
