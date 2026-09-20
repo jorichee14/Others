@@ -77,8 +77,13 @@ three failures that look like success and the check that catches each.
 certification battery.
 **6.2 Does the theory hold?** Error against time-to-nearest-anchor on
 `mobile_1`, measured against the §3 prediction.
-**6.3 GT ablation on public datasets.** The coverage sweep, and lever vs bridge
-controlled on identical data.
+**6.3 Masked-reference validation on public datasets.** The established
+protocol -- RTK-SLAM (arXiv 2604.07151) masks the GNSS stream while keeping the
+dense reference for scoring -- applied to fiducial anchors, with **coverage as
+the swept variable**. Keep a windowed fraction of a dataset's own ground truth
+as pseudo-anchors, hide the rest, score against what was hidden. Sweep 100% ->
+2% for the coverage law; move the windows from both ends to one end for lever
+vs bridge on identical data. Claim the use, not the protocol.
 **6.4 Transfer.** `mobile_2`, with the independent checks and the
 platform-transfer assumption stated.
 

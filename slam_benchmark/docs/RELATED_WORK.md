@@ -17,7 +17,7 @@ are flagged.
 | 2. a **certified** error figure that never uses the reference | **contested** | PALoc reports uncertainty for prior-map GT. Different kind of uncertainty — see below |
 | 3. **transfer** to an uninstrumented agent | **survives** | nothing found that fits an error model on an instrumented twin and evaluates it elsewhere |
 | 4. dataset-design rules from measured failures | **survives, and strengthened** | the closest method uses a *single* anchor at a time, which is exactly the lever this project measured at 7.26 m |
-| — GT-ablation validation protocol (§6.3) | **survives**, with outside precedent | no SLAM-side hit. The same idea is established in medical image segmentation (SparseGT, Penn) — cite it as precedent rather than claiming the idea outright |
+| — GT-ablation validation protocol (§6.3) | **NOT novel — and that is good news** | **CORRECTED on a second search.** The established terms are *masking* and *simulated outage*, not "ablation". RTK-SLAM (arXiv 2604.07151) masks the GNSS stream while keeping the dense reference for scoring — the identical protocol. Cite it; claim the USE, not the protocol |
 
 ---
 
@@ -94,6 +94,53 @@ both ends, difference 4 weakens.
 
 ---
 
+## The §6.3 protocol has a direct precedent — correction to the first pass
+
+The first search for this used the phrasing *"ablate ground truth"* and found
+nothing on the SLAM side. That was a search failure, not an absence. The
+established vocabulary is **masking** and **simulated outage**, and the
+protocol is published:
+
+**RTK-SLAM dataset** (arXiv 2604.07151), *Absolute Accuracy Evaluation in
+GNSS-Degraded Environments*: outages are *"simulated by masking the GNSS
+measurement stream while the IMU stream continues, with masking keeping the
+continuous RTK reference available for every outage"*, which makes the protocol
+exactly reproducible. Mask the absolute-measurement stream, keep the dense
+reference for scoring. They mask GNSS; §6.3 masks board sightings. Same
+structure, same purpose.
+
+**Two further findings in that paper land on choices already made here:**
+
+* *"SE(3)-aligned ATE can underestimate absolute global errors by up to 76%."*
+  Independent support for scoring V2c **unaligned**, which is otherwise the
+  most unconventional-looking decision in the evaluation.
+* They report **three distinct error regimes as GNSS availability degrades** —
+  the coverage sweep of §6.3, run with real degradation rather than masking.
+
+**Anchor theory has its own literature too.** *Anchor selection for SLAM based
+on graph topology* (UTS) describes anchors as introducing *"zero-uncertainty
+loop closures between the anchors and the origin"*, which is precisely why one
+anchor transports a chain rigidly and two bracket it. So **where to place
+anchors is an established question**, and claim 4 is a contribution to a topic
+that already exists rather than an observation nobody asked for.
+
+**Princeton365** reports pseudo-GT *"accurate to approximately 20 cm,
+sufficiently accurate to measure keyframe errors larger than 50 cm"* — a
+published precedent that a ~20 cm pseudo-GT is a legitimate instrument, at the
+same order as the 199 mm here. It answers "what is 20 cm good for" with a
+citation instead of an argument.
+
+**What to claim, then.** Not the protocol. **The use:** nobody has swept anchor
+coverage to measure the accuracy law, and nobody has used masking to certify a
+GT-generation method for a platform that carries no reference at all. A
+protocol with a precedent is one a reviewer accepts without argument, which is
+a better position than owning it.
+
+SparseGT (Penn, medical imaging) stays as a cross-domain footnote at most; the
+RTK-SLAM citation supersedes it.
+
+---
+
 ## Papers to cite, not contest
 
 | paper | why it is in §2 |
@@ -105,7 +152,9 @@ both ends, difference 4 weakens.
 | **Newer College**, **Oxford Spires**, **ConSLAM**, **Hilti** | the survey-prior family; the evaluated platform carries the LiDAR |
 | **Boxi** (arXiv 2504.18500) | sensor-suite design decisions against algorithmic performance; supports claim 4's framing |
 | **"Look Ma, No Ground Truth!"** (arXiv 2412.01116) | GT-free tuning of SfM/VSLAM — the right neighbour for the tier-C self-consistency arguments |
-| **SparseGT** (Penn, medical imaging) | outside precedent for the GT-ablation protocol. Cite it; do not claim the idea as new in general, only as new here |
+| **RTK-SLAM** (arXiv 2604.07151) | **the §6.3 protocol's direct precedent** — GNSS masking with the dense reference retained. Also supports unaligned scoring (SE(3) alignment underestimates global error by up to 76%) |
+| **Princeton365** | a ~20 cm pseudo-GT used as a legitimate instrument; the precedent for what this accuracy class is good for |
+| *Anchor selection for SLAM based on graph topology* (UTS) | anchors as zero-uncertainty loop closures to the origin; establishes anchor PLACEMENT as a recognised question |
 
 ---
 
@@ -132,8 +181,9 @@ ablation protocol consumes. Check it before finalising the dataset list.
 
 No hit for: ground truth generated for an agent that lacks the reference
 modality; an error model fitted on one platform and evaluated on another;
-validating a GT-generation method by ablating existing ground truth; or
-multi-agent anchoring for GT production.
+sweeping anchor coverage to measure the accuracy law; or multi-agent anchoring
+for GT production. (The masking protocol itself DOES have a precedent — see
+above. That claim was withdrawn on the second search.)
 
 **Read that carefully.** Absence in a search is weak evidence — arXiv was
 blocked, the searches were English-language and keyword-driven, and the nearest
