@@ -339,14 +339,18 @@ def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
             spread = float(np.linalg.norm(est.positions[m].std(axis=0)))
             source = "standoff"
         else:
+            why = a.get("observations_impossible")
             rows.append({
                 "anchor": name, "n": 0, "residual_m": None, "uncertainty_m": u,
-                "verdict": "REFUSED: a window alone cannot make an absolute check. "
-                           "The platform stands off from the board, so comparing "
-                           "its position against the board's measures the standoff, "
-                           "not the error. Supply `observed_poses` (the pipeline's "
-                           "*_cam_in_map.tum), `observations` (board detections + "
-                           "PnP) or a surveyed `standoff`."})
+                "verdict": (f"NO EVIDENCE POSSIBLE HERE: {why} This board cannot "
+                            f"enter tier 2 for this agent; it is not waiting on a "
+                            f"detector run." if why else
+                            "REFUSED: a window alone cannot make an absolute check. "
+                            "The platform stands off from the board, so comparing "
+                            "its position against the board's measures the standoff, "
+                            "not the error. Supply `observed_poses` (the pipeline's "
+                            "*_cam_in_map.tum), `observations` (board detections + "
+                            "PnP) or a surveyed `standoff`.")})
             continue
 
         n = len(est_pts) if obs else int(m.sum())

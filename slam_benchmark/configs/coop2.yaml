@@ -317,6 +317,19 @@ reference:
         # CONSEQUENCE: anchor_b contributes to NEITHER agent's tier 2. coop2
         # has three surveyed boards and both robots get two.
         mobile_2: null
+      # The dwell window above is REAL -- the board is in frame, facing and
+      # close -- so the evaluator rightly keeps the row. But its default
+      # refusal text tells the reader to supply observations, and that work has
+      # been done and cannot succeed. Declared here so the table says so.
+      observations_impossible_by_agent:
+        mobile_1: >-
+          never closer than 2.48 m, where a 15 mm marker spans 0.5 px per bit.
+        mobile_2: >-
+          detector run 2026-09-20 returned 0 of 179 frames (178 saw no corners
+          at all, median 2 of 48). At its only range, 0.84 m, this board's
+          15 mm markers span ~1.9 px per bit in the RealSense's 848x480 colour
+          frame -- below what the detector resolves, while the identical board
+          design at `anchor` reads 44 of 48 from the same camera.
     - name: rs_anchor
       position: [8.460, -14.267, -0.056]
       orientation: [0.007510, 0.013642, 0.999879, 0.000177]   # qxyzw, map <- board

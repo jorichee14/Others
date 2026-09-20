@@ -94,6 +94,13 @@ class DatasetConfig:
                 wba = a.get("windows_by_agent")
                 if isinstance(wba, dict):
                     a["window"] = wba.get(agent)
+                # A board that a detector run has PROVED unreadable for this
+                # agent is a different state from one nobody has looked at,
+                # and the refusal text must not send the reader to do work
+                # that has already been done and failed (rule 8).
+                imp = a.get("observations_impossible_by_agent")
+                if isinstance(imp, dict) and imp.get(agent):
+                    a["observations_impossible"] = imp[agent]
                 obp = a.get("observed_poses_by_agent")
                 if isinstance(obp, dict) and obp.get(agent):
                     from .trajectory import load_tum
