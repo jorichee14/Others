@@ -188,13 +188,31 @@ any backbone.
 
 | agent | V2c (unaligned) | V1 (fitted **to** the reference) | rot | RPE 1 m |
 |---|---:|---:|---:|---:|
-| `mobile_1` | **228 / 254 / 254 / 291 mm** | 372 / 377 / 411 mm | 3.1–4.9° vs 4.5–7.2° | 132–176 vs 91–96 mm |
+| `mobile_1` | **199 / 228 / 254 / 254 / 291 mm** | 372 / 377 / 411 mm | 3.1–4.9° vs 4.5–7.2° | 132–176 vs 91–96 mm |
 | `mobile_2` | 278 mm | 130 mm | 4.50° | 212 vs 177 mm |
 
 **On `mobile_1`: 254 mm in the map frame with no use of the reference, against
 377 mm for the same trajectory after being fitted to the reference.** The
 anchors buy ~12 cm *and* remove the need for an oracle alignment. A pseudo-GT
 that must be fitted to ground truth before it scores well is not a pseudo-GT.
+
+### Backbone quality propagates; the anchors do not erase it
+
+The five `mobile_1` constructions come from five different backbone runs, and
+the best of them, **199.3 mm**, is built from the **IMU-free** backbone — the
+same one that beat all five inertial runs at the boards in §1. It also needed
+the least correction: **186 mm** median move against 336–512 mm for the
+others.
+
+| backbone | its own board residual | its V2c | move |
+|---|---:|---:|---:|
+| `rtabmap_rgbd` (IMU-free) | 422 / 336 mm | **199.3 mm** | **186 mm** |
+| `rtabmap_rgbd_imu` ×4 | 467–577 / 350–548 mm | 228–291 mm | 336–512 mm |
+
+So the answer to "do the anchors dominate?" is **no**. A better front-end
+yields a better construction, and it is visible in both the result and the
+distance the solve had to carry the trajectory. That matters for the transfer:
+`mobile_2`'s construction is only as good as the one dense front-end it has.
 
 **The trade is real and belongs beside the headline.** RPE at 1 m worsens from
 ~94 to ~154 mm: the anchors bend the trajectory to satisfy global constraints,
