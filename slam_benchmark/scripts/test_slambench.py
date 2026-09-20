@@ -1892,6 +1892,105 @@ def test_replay_rate_can_be_declared_per_stream():
     assert rate_for("mobile_1.zed_rgbd") == 0.5
 
 
+@test
+def test_anchor_check_evaluates_a_keyframe_trajectory_between_its_poses():
+    """MASt3R emits 38 poses over 156 s. A board-derived pose at 15 Hz lands
+    within 50 ms of one about never, so every anchor row came back empty and
+    the sparse method scored nothing at the only independent tier. With
+    interpolate it is evaluated between poses, and the row says how far the
+    nearest real pose was."""
+    # board poses offset from the keyframe grid, as a real 15 Hz detector is
+    dense = circle_traj(400, radius=3.0, t0=100.0, rate=40.0)          # 25 ms apart
+    sparse = Trajectory(dense.stamps[::40], dense.poses[::40], "kf")   # 1 s apart
+    k = np.array([i for i in range(20, 360, 7) if 5 <= i % 40 <= 35])  # never near one
+    board = Trajectory(dense.stamps[k] + 0.003, dense.poses[k], "board")
+    anchor = [{"name": "a", "position": [0, 0, 0], "uncertainty_m": 0.007,
+               "window": [float(board.stamps[0]), float(board.stamps[-1])],
+               "observed_poses": board}]
+    rows = absolute_check(sparse, anchor)
+    assert rows[0]["n"] == 0 and "interpolate" in rows[0]["verdict"], rows[0]
+    rows = absolute_check(sparse, anchor, interpolate=True)
+    r = rows[0]
+    assert r["n"] >= 15, r
+    assert r["interp_gap_s"] > 0.05, r          # it says the gap it worked across
+    # a chord across a 1 s arc is not the arc: real, bounded by the sagitta
+    # r(1-cos(18 deg)) = 147 mm for this circle, and the row prints the gap
+    assert 0.0 < r["residual_m"] < 0.16, r
+    # a DENSE estimate still matches exactly and reports no interpolation
+    r2 = absolute_check(dense, anchor, interpolate=True)[0]
+    assert r2["residual_m"] < 1e-6 and "interp_gap_s" not in r2, r2
+
+
+@test
+def test_a_scale_free_method_gets_its_anchors_from_the_sim3_fit_and_says_so():
+    """A monocular estimate placed by an se3 fit is a scale model of the room;
+    its distance to a surveyed board is the scale error in metres, against a
+    7 mm survey. The anchor check uses sim3 for such a method and marks the row
+    as not independent, because the scale then came from the reference."""
+    import io, contextlib, yaml
+    root = Path(__file__).resolve().parents[1]
+    m = yaml.safe_load((root / "configs" / "methods" / "mast3r_slam.yaml").read_text())
+    assert m["metric_scale"] is False and m["poses"] == "keyframes"
+    ev = (root / "scripts" / "eval_run.py").read_text()
+    assert 'mcfg.raw.get("metric_scale", True)' in ev
+    assert 'mcfg.raw.get("poses") == "keyframes"' in ev
+    # the two other RGB-D methods keep se3 and stay independent
+    for name in ("rtabmap_rgbd.yaml", "kiss_icp.yaml"):
+        r = yaml.safe_load((root / "configs" / "methods" / name).read_text())
+        assert r.get("metric_scale", True) is True, name
+    # a 27%-small estimate: se3 leaves metres of anchor residual, sim3 removes it
+    ref = circle_traj(200, radius=3.0)
+    small = Trajectory(ref.stamps, np.array([se3.pose_from_rpy(*(p[:3, 3] * 0.729),
+                                                               0, 0, 0) for p in ref.poses]), "s")
+    a_se3 = ate(small, ref, mode="se3")
+    a_sim3 = ate(small, ref, mode="sim3")
+    assert a_se3.trans.rmse > 0.5 and a_sim3.trans.rmse < 1e-6
+    assert abs(a_sim3.alignment.scale_observed - 1 / 0.729) < 1e-6 or \
+           abs(a_sim3.alignment.scale_observed - 0.729) < 1e-6
+
+
+@test
+def test_board_table_collects_tier_two_across_methods():
+    """The board residual is the only number here whose error bar is not the
+    reference's own. It has to be readable per method, and a row whose scale
+    came from the reference has to be marked, or it reads as independent."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from board_table import collect, render
+    root = Path(tempfile.mkdtemp())
+    def write(sub, doc):
+        d = root / sub; d.mkdir(parents=True)
+        (d / "metrics.json").write_text(json.dumps(doc))
+    write("rtabmap/m1/run1", {
+        "method": "rtabmap_rgbd_imu", "agent": "mobile_1", "stream": "s", "run_dir": "run1",
+        "anchor_alignment": {"mode": "se3", "independent": True},
+        "absolute_check": [{"anchor": "anchor", "n": 90, "residual_m": 0.147,
+                            "residual_deg": 1.2, "uncertainty_m": 0.007,
+                            "verdict": "resolved above the survey's uncertainty"}]})
+    write("mast3r/m1/run1", {
+        "method": "mast3r_slam", "agent": "mobile_1", "stream": "s", "run_dir": "run1",
+        "anchor_alignment": {"mode": "sim3", "independent": False,
+                             "note": "scale taken from the reference"},
+        "absolute_check": [{"anchor": "anchor", "n": 12, "residual_m": 0.091,
+                            "residual_deg": 0.9, "uncertainty_m": 0.007,
+                            "interp_gap_s": 1.8, "verdict": "resolved"}]})
+    write("kiss/m2/run1", {
+        "method": "kiss_icp", "agent": "mobile_2", "stream": "s", "run_dir": "run1",
+        "anchor_alignment": {"mode": "se3", "independent": True},
+        "absolute_check": [{"anchor": "rs_anchor", "n": 0, "residual_m": None,
+                            "uncertainty_m": 0.015,
+                            "verdict": "no board-derived pose inside the window"}]})
+    rows = collect(root)
+    assert len(rows) == 3
+    assert {r["method"] for r in rows} == {"rtabmap_rgbd_imu", "mast3r_slam", "kiss_icp"}
+    assert collect(root, agent="mobile_1") and len(collect(root, agent="mobile_2")) == 1
+    text = render(rows)
+    assert "147.0" in text and "91.0" in text
+    assert "NOT independent" in text                  # the monocular row is marked
+    assert "interpolated across 1.80 s" in text
+    assert "no board-derived pose inside the window" in text
+    assert "no absolute_check" in render([])
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")

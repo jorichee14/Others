@@ -163,6 +163,7 @@ def rpe(est: Trajectory, ref: Trajectory, delta: float, unit: str = "m",
 
 
 def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
+                   max_dt_s: float = 0.05, interpolate: bool = False,
                    ) -> list[dict]:
     """Tier 2: the estimate against surveyed board positions, in its own aligned
     frame.
@@ -205,6 +206,16 @@ def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
 
     The estimate must already be in the reference world frame -- pass the output
     of `Alignment.apply`, not the raw method output.
+
+    `max_dt_s` / `interpolate` exist for a KEYFRAME trajectory. MASt3R-SLAM
+    emits ~38 poses over 156 s, so a board-derived pose at 15 Hz almost never
+    lands within 50 ms of one and every anchor row came back empty -- a sparse
+    method silently scoring nothing at the only independent tier. With
+    `interpolate`, the estimate is evaluated BETWEEN its poses at the board's
+    stamp, and each row reports `interp_gap_s`, the median distance to the
+    nearest real pose, so the reader can judge how much of the residual is the
+    interpolation. Straight-line between keyframes seconds apart is an
+    approximation, and it is named in the row rather than hidden.
     """
     rows = []
     for a in anchors:
@@ -236,32 +247,46 @@ def absolute_check(est: Trajectory, anchors: list[dict], radius_m: float = 0.5,
                              "uncertainty_m": u,
                              "verdict": "no board-derived pose inside the window"})
                 continue
-            dp, dr = [], []
+            dp, dr, gaps = [], [], []
             for k in np.flatnonzero(m):
                 t = float(oposes.stamps[k])
                 j = int(np.argmin(np.abs(est.stamps - t)))
-                if abs(est.stamps[j] - t) > 0.05:
+                gap = float(abs(est.stamps[j] - t))
+                if gap <= max_dt_s:
+                    P = est.poses[j]
+                elif interpolate and est.stamps[0] <= t <= est.stamps[-1]:
+                    got = est.interpolate(np.array([t]), max_gap_s=np.inf)
+                    if not len(got):
+                        continue
+                    P = got.poses[0]
+                else:
                     continue
-                dp.append(np.linalg.norm(est.positions[j] - oposes.positions[k]))
+                gaps.append(gap)
+                dp.append(np.linalg.norm(P[:3, 3] - oposes.positions[k]))
                 dr.append(np.degrees(se3.rotation_angle(
-                    est.poses[j][:3, :3].T @ oposes.poses[k][:3, :3])))
+                    P[:3, :3].T @ oposes.poses[k][:3, :3])))
             if not dp:
                 rows.append({"anchor": name, "n": 0, "residual_m": None,
                              "uncertainty_m": u,
-                             "verdict": "board-derived poses in the window matched "
-                                        "no estimate pose within 50 ms"})
+                             "verdict": f"board-derived poses in the window matched "
+                                        f"no estimate pose within {max_dt_s*1e3:.0f} ms"
+                                        + ("" if interpolate else
+                                           " (a keyframe trajectory needs interpolate)")})
                 continue
             dp = np.asarray(dp)
             d = float(np.median(dp))
             spread = float(dp.std())
-            rows.append({
+            row = {
                 "anchor": name, "n": len(dp), "residual_m": d, "uncertainty_m": u,
                 "spread_m": spread, "source": "observed_poses",
                 "residual_deg": float(np.median(dr)),
                 "verdict": ("indistinguishable from the survey" if u and d <= u
                             else "resolved above the survey's uncertainty" if u
                             else "no uncertainty declared for this anchor"),
-            })
+            }
+            if interpolate and max(gaps) > max_dt_s:
+                row["interp_gap_s"] = float(np.median(gaps))
+            rows.append(row)
             continue
 
         if obs:

@@ -109,8 +109,34 @@ def main() -> int:
                       for d in ev.get("rpe_deltas", [])]
 
         est_aligned = a.alignment.apply(est_ref)
+        # TIER 2 NEEDS A METRICALLY CORRECT ESTIMATE. A method that declares
+        # `metric_scale: false` (monocular: it recovers shape, not size) placed
+        # in the world by an se3 fit is a scale model of the room, and its
+        # distance to a surveyed board is the scale error wearing the units of
+        # an absolute error -- metres, for a 7 mm survey. So the anchor check
+        # for such a method is run on the sim3 fit, and the row says that the
+        # scale came from the REFERENCE: tier 2 is then no longer independent
+        # evidence for that method, which is the honest thing to print.
+        metric = mcfg.raw.get("metric_scale", True)
+        anchor_mode = mode
+        est_for_anchors = est_aligned
+        if not metric and mode != "sim3":
+            a_s = ate(est_ref, ref, mode="sim3", max_gap_s=ev.get("max_gap_s", 0.25),
+                      n_first=ev.get("align_n_first"),
+                      reference_uncertainty_m=cfg.reference_uncertainty_m())
+            est_for_anchors = a_s.alignment.apply(est_ref)
+            anchor_mode = "sim3"
+        out["anchor_alignment"] = {
+            "mode": anchor_mode, "method_has_metric_scale": bool(metric),
+            "independent": bool(metric),
+            **({} if metric else {"note": "scale taken from the reference; this row "
+                                          "is not independent evidence"}),
+        }
         anchors = cfg.anchors(agent)
-        out["absolute_check"] = (absolute_check(est_aligned, anchors) if anchors else
+        # A keyframe trajectory is evaluated between its poses; see absolute_check.
+        interp = mcfg.raw.get("poses") == "keyframes"
+        out["absolute_check"] = (absolute_check(est_for_anchors, anchors,
+                                                interpolate=interp) if anchors else
                                  {"note": f"no anchor has a dwell window for {agent}; "
                                           "tier 2 is silent. Fill "
                                           "reference.anchors[*].windows_by_agent in the "
@@ -185,10 +211,21 @@ def _print(out: dict) -> None:
               f"{r['rpe_rot_deg']['rmse']:.3f} deg   ({r['n_pairs']} pairs)")
     ac = out.get("absolute_check")
     if isinstance(ac, list):
+        aa = out.get("anchor_alignment") or {}
         for row in ac:
             d = row.get("residual_m")
+            extra = ""
+            if row.get("n"):
+                extra = f" (n={row['n']}"
+                if row.get("residual_deg") is not None:
+                    extra += f", {row['residual_deg']:.2f} deg"
+                if row.get("interp_gap_s"):
+                    extra += f", interpolated, median gap {row['interp_gap_s']:.2f} s"
+                extra += ")"
             print(f"  ANCHOR {row['anchor']:<10s} "
-                  f"{'—' if d is None else f'{d*1e3:6.1f} mm'}   {row['verdict']}")
+                  f"{'—' if d is None else f'{d*1e3:6.1f} mm'}   {row['verdict']}{extra}")
+        if ac and not aa.get("independent", True):
+            print(f"       anchors aligned {aa['mode']}: {aa['note']}")
     elif ac:
         print(f"  ANCHOR {ac['note']}")
     rv = out.get("revisit", {})
