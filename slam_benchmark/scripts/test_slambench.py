@@ -1013,6 +1013,7 @@ def test_the_stage_1_cells_are_runnable_or_blocked_for_a_recorded_reason():
     runnable = [("kiss_icp", "mobile_1.zed_rgbd"),
                 ("kiss_icp", "mobile_2.realsense_rgbd"),
                 ("rtabmap_rgbd_imu", "mobile_1.zed_rgbd"),
+                ("rtabmap_rgbd", "mobile_1.zed_rgbd"),
                 ("rtabmap_rgbd", "mobile_2.realsense_rgbd"),
                 ("rtabmap_rgbd_imu", "mobile_2.realsense_rgbd"),
                 ("mast3r_slam", "mobile_1.zed_rgbd"),
@@ -1024,6 +1025,29 @@ def test_the_stage_1_cells_are_runnable_or_blocked_for_a_recorded_reason():
         assert not problems, (name, stream, problems)
 
     blocked: list[tuple[str, str, str]] = []      # none, as of 2026-09-20
+    # EVERY declared cell must appear above. The list was hand-written and
+    # missed rtabmap_rgbd x mobile_1 for weeks, which is the IMU-FREE half of
+    # the only inertial ablation on the agent with a corroborated reference --
+    # so "the IMU helped" was resting on a comparison across two different
+    # robots. A grid written out by hand quietly loses the cell nobody ran.
+    # Declared by a method but deliberately OUT of this grid, which is stage 1
+    # and stage 1 is LiDAR-free. mobile_1's Ouster is the instrument the
+    # reference is built from, so running a method on it here would score a
+    # method against its own input. It belongs to the separate LiDAR-only block,
+    # not to this one, and it is listed rather than silently skipped.
+    out_of_scope = {("kiss_icp", "mobile_1.ouster")}
+
+    declared = {(n, st)
+                for n in ("kiss_icp", "rtabmap_rgbd", "rtabmap_rgbd_imu",
+                          "mast3r_slam")
+                for st in load_method(
+                    os.path.join(root, "configs", "methods", f"{n}.yaml")).streams}
+    accounted = set(runnable) | {b[:2] for b in blocked} | out_of_scope
+    assert declared == accounted, (
+        "cells declared by a method config but absent from this test: "
+        f"{sorted(declared - accounted)}; listed here but not declared by any "
+        f"method: {sorted(accounted - declared)}")
+
     for name, stream, why in blocked:
         m = load_method(os.path.join(root, "configs", "methods", f"{name}.yaml"))
         _, problems = rm.preflight(cfg, m, stream)
