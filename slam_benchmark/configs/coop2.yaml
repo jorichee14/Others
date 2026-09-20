@@ -234,7 +234,16 @@ reference:
       # RealSense's file belongs to rs_anchor and is placed there, not here.
       observed_poses_by_agent:
         mobile_1: /home/wicoms-robot/workspaces/isaac_ros-dev/data/processed/map_stages_20260828/map_stages_20260828_outputs/zed_cam_in_map.tum
-        mobile_2: null    # the RealSense never dwelled at `anchor`
+        # DETECTOR RUN 2026-09-20. The line here used to read "the RealSense
+        # never dwelled at `anchor`" -- that was read off the PIPELINE's board
+        # assignment (session_anchor_coop2.json binds the RealSense to
+        # rs_anchor), not off the imagery, and it is wrong. Running
+        # board_detect.py over mobile_2's own window on this board returned
+        # 190 of 191 frames, median 44 of 48 corners, ambiguity ratio 4.73,
+        # reprojection 0.29 px -- cleaner than any other board/agent pair.
+        # The pipeline did not use this dwell; that is not the same as the
+        # dwell not existing.
+        mobile_2: ../runs/boards/mobile_2_anchor.tum
     - name: anchor_b
       position: [8.033, -7.182, -0.102]
       orientation: [-0.059071, -0.024090, -0.857719, 0.510146]   # qxyzw, map <- board
@@ -256,8 +265,9 @@ reference:
       uncertainty_m: 0.013            # the honest figure: 12.9 mm / 2.6 deg between
       window: null                    # its two sections (ratio 4.24, significant).
       # phase0 candidates: mobile_1 NEVER dwells here; mobile_2: [42.6, 50.0].
-      # So this board anchors mobile_2 only — mobile_1's graph gets two boards,
-      # not three, and its tier-2 check is two points.
+      # So this board could anchor mobile_2 only — and after the 2026-09-20
+      # detector run (below) it anchors NEITHER. Both robots' tier 2 rests on
+      # `anchor` and `rs_anchor`: two boards each, not three.
       note: its quoted 2.0 mm is the spread WITHIN a section and understates it
       # WINDOWS from scripts/board_visibility.py (2026-09-19), VALIDATED:
       # the board projected into the camera through the reference pose and
@@ -289,12 +299,24 @@ reference:
       #
       # Paths are relative to this config. FILL THESE IN:
       # Neither *_cam_in_map.tum covers this board: the pipeline anchored on
-      # `anchor` and `rs_anchor` only (03_anchor.boards_used). mobile_2's
-      # anchor_b window therefore has no observations and tier 2 refuses it --
-      # correctly -- until a detector run over its 6.00 s window supplies them.
+      # `anchor` and `rs_anchor` only (03_anchor.boards_used). A detector run
+      # over mobile_2's 6.00 s window was made on 2026-09-20 to supply them and
+      # returned nothing -- see below. This board stays out of tier 2.
       observed_poses_by_agent:
         mobile_1: null    # unusable anyway: 2.48 m, 0.5 px/bit
-        mobile_2: null    # needs a detector run over its 6.00 s window
+        # DETECTOR RUN 2026-09-20: ATTEMPTED AND FAILED, and the failure is the
+        # result (rule 8). 0 of 179 frames produced a pose; 178 of them found
+        # NO ChArUco corners at all and the median over the window was 2 of 48.
+        # This is not a tuning miss -- the same detector, same parameters, same
+        # camera, same session returns 44/48 corners on `anchor` (identical
+        # board design) and the 25 mm `rs_anchor` resolves from the ZED at
+        # 48/48. What differs here is scale: 15 mm markers at 0.84 m in the
+        # RealSense's 848x480 colour frame is ~1.9 px per bit, at the edge
+        # board_visibility.py already flagged. The board is below this camera's
+        # resolving power at the only range it is ever seen from.
+        # CONSEQUENCE: anchor_b contributes to NEITHER agent's tier 2. coop2
+        # has three surveyed boards and both robots get two.
+        mobile_2: null
     - name: rs_anchor
       position: [8.460, -14.267, -0.056]
       orientation: [0.007510, 0.013642, 0.999879, 0.000177]   # qxyzw, map <- board
@@ -361,8 +383,12 @@ reference:
       observed_poses_by_agent:
         # mobile_1 dwells here t+124.9..151.5 (its best window, 267 poses), but
         # the pipeline's board file covers only mobile_2's dwell at this board.
-        # A detector run would light up mobile_1's tier 2 here too.
-        mobile_1: null
+        # DETECTOR RUN 2026-09-20: it did. 353 of 384 frames, median 48 of 48
+        # corners, ambiguity ratio 3.38, reprojection 0.42 px. The 31 frames
+        # that were dropped went to this board's own min_ambiguity_ratio of
+        # 3.0 -- the gate doing its job on the views where the board is most
+        # nearly fronto-parallel, not a detector failure.
+        mobile_1: ../runs/boards/mobile_1_rs_anchor.tum
         mobile_2: /home/wicoms-robot/workspaces/isaac_ros-dev/data/processed/map_stages_20260828/map_stages_20260828_outputs/realsense_cam_in_map.tum
 
 # ------------------------------------------------------------------- streams
