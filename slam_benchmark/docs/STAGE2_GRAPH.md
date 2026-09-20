@@ -246,6 +246,19 @@ from the backbone's. Two boards at opposite ends of the route is the minimum
 that buys anything. That is the shape of the claim for `mobile_2`, which has
 exactly two.
 
+**MEASURED ON REAL DATA, 2026-09-20** — `mobile_1`, four backbone runs, the
+held-out LiDAR scoring and never feeding:
+
+| row | ATE vs LiDAR | alignment | RPE 1 m | tier 2 |
+|---|---|---|---|---|
+| backbone (`odometry.tum`) | 372–481 mm | se3 **to the LiDAR** | ~94 mm | 350–549 mm |
+| **V1** | **372 / 377 / 411 mm** | se3 **to the LiDAR** | ~94 mm | identical to the backbone, to the digit |
+| **V2c** | **228 / 254 / 254 / 291 mm** | **none** | ~154 mm | 0.7 / 3.8–4.7 mm (consumed: self-agreement) |
+
+The anchors buy ~12 cm *and* remove the oracle alignment. They cost local
+smoothness: RPE at 1 m goes 94 → 154 mm, because the trajectory is bent to
+satisfy global constraints. Report both.
+
 Two numbers matter:
 
 1. **V1 must roughly reproduce the backbone's own error.** If it does not, the

@@ -238,8 +238,17 @@ def main() -> int:
 
     # ------------------------------------------------------------------ write
     name = f"pseudo_gt_{args.rung}"
-    out_dir = Path(args.runs_root) / cfg.name / name / stream_key / \
-        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # One directory per build, never overwritten (same rule as run_method.py).
+    # The stamp is one-second resolution and a v1 build takes well under a
+    # second, so a loop over four backbone runs collides -- it did, on the
+    # fourth, 2026-09-20. Suffix rather than overwrite: a directory describing
+    # a different build is worse than an extra one.
+    cell = Path(args.runs_root) / cfg.name / name / stream_key
+    base = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out_dir, n_try = cell / base, 0
+    while out_dir.exists():
+        n_try += 1
+        out_dir = cell / f"{base}-{n_try}"
     out_dir.mkdir(parents=True, exist_ok=False)
     save_tum(Trajectory(est.stamps, out_poses, name=f"{name}/{stream_key}",
                         frame=ref_frame, world=construction["frame"]), out_dir / "trajectory.tum")
