@@ -3071,5 +3071,105 @@ def test_gravity_sees_only_the_part_of_an_error_perpendicular_to_gravity():
         assert abs(got - want) < 1e-9, (got, want)
 
 
+
+@test
+def test_block_bootstrap_is_wider_than_the_naive_one_on_correlated_error():
+    """The whole reason blocks exist, asserted rather than asserted-in-prose.
+
+    Trajectory error is autocorrelated: 30 cm off at t=70.0 s is 30 cm off at
+    t=70.1 s, and those are one measurement. Resampling POSES pretends they
+    are two and returns an interval too narrow by roughly the square root of
+    the poses per episode. Plant a series with a known correlation time and
+    check the block interval is substantially wider than the per-pose one --
+    if it is not, the blocks are not doing anything and the interval is a lie
+    with extra steps.
+    """
+    from slambench.blockstats import block_bootstrap, correlation_time
+
+    rng = np.random.default_rng(3)
+    t = np.arange(0.0, 150.0, 0.1)
+    # AR(1) with a ~5 s correlation time, shifted positive like a distance
+    a = np.exp(-0.1 / 5.0)
+    x = np.zeros(len(t))
+    for k in range(1, len(t)):
+        x[k] = a * x[k - 1] + rng.normal(0, 1)
+    e = np.abs(x) * 0.05 + 0.15
+
+    tau = correlation_time(t, e)
+    assert 2.0 < tau < 15.0, tau              # recovers the planted scale
+
+    wide = block_bootstrap(t, e, block_s=2 * tau, statistics=("median",), n_boot=400)
+    narrow = block_bootstrap(t, e, block_s=0.1, statistics=("median",), n_boot=400)
+    w = np.diff(wide["ci"]["median"])[0]
+    n = np.diff(narrow["ci"]["median"])[0]
+    assert w > 3.0 * n, (w, n, "blocks must widen the interval on correlated data")
+
+    # on INDEPENDENT data the two agree: the widening is a property of the
+    # correlation, not of the block machinery inflating everything it touches
+    ind = np.abs(rng.normal(0, 1, len(t))) * 0.05 + 0.15
+    wi = np.diff(block_bootstrap(t, ind, block_s=2.0, statistics=("median",),
+                                 n_boot=400)["ci"]["median"])[0]
+    ni = np.diff(block_bootstrap(t, ind, block_s=0.1, statistics=("median",),
+                                 n_boot=400)["ci"]["median"])[0]
+    assert wi < 2.0 * ni, (wi, ni)
+
+
+@test
+def test_error_distribution_separates_two_runs_with_the_same_rmse():
+    """The reason a single RMSE is not a claim.
+
+    A uniform 20 cm error and a mostly-5 cm error with one bad stretch can
+    carry the SAME rmse and are not the same pseudo-GT: the second is unusable
+    exactly where a user needs it. Construct both to the same rmse and check
+    the percentiles and the worst-stretch separate them.
+    """
+    from slambench.blockstats import describe
+
+    t = np.arange(0.0, 150.0, 0.1)
+    flat = np.full(len(t), 0.20)
+
+    spiky = np.full(len(t), 0.05)
+    bad = (t > 60.0) & (t < 75.0)
+    # solve for the spike height that matches flat's rmse exactly
+    h = np.sqrt((np.mean(flat ** 2) - np.mean(spiky[~bad] ** 2) * (~bad).mean())
+                / bad.mean())
+    spiky[bad] = h
+
+    a, b = describe(t, flat, n_boot=200), describe(t, spiky, n_boot=200)
+    assert abs(a.rmse - b.rmse) < 1e-9, (a.rmse, b.rmse)      # same number
+
+    assert b.percentiles[50] < 0.5 * a.percentiles[50], "median must separate them"
+    assert b.percentiles[99] > 2.0 * a.percentiles[99], "the tail must separate them"
+    assert b.worst_window["median"] > 3.0 * a.worst_window["median"]
+    assert 59.0 < b.worst_window["start_s"] < 76.0, b.worst_window
+    assert any("not describing this" in w for w in b.warnings), b.warnings
+    assert not any("not describing this" in w for w in a.warnings), a.warnings
+
+
+@test
+def test_distribution_says_how_few_independent_episodes_it_has():
+    """An interval from five blocks is a statement about five things.
+
+    A monotone drift is ONE episode however many poses sample it, and the
+    honest report of that is a correlation time equal to the run, not a tight
+    interval. Both cases must be warned about rather than printed bare.
+    """
+    from slambench.blockstats import correlation_time, describe
+
+    t = np.arange(0.0, 150.0, 0.1)
+    drift = 0.001 * t                                   # never decorrelates
+    assert correlation_time(t, drift) >= 0.2 * (t[-1] - t[0])
+    d = describe(t, drift, n_boot=200)
+    assert d.effective_n < 10, d.effective_n
+    assert any("independent episodes" in w for w in d.warnings), d.warnings
+
+    # a genuinely choppy series has many episodes and no such warning
+    rng = np.random.default_rng(7)
+    chop = np.abs(rng.normal(0, 1, len(t))) * 0.05 + 0.15
+    d2 = describe(t, chop, n_boot=200)
+    assert d2.effective_n > 50, d2.effective_n
+    assert not any("independent episodes" in w for w in d2.warnings), d2.warnings
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
