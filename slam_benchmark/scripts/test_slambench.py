@@ -2382,14 +2382,15 @@ def test_every_candidate_board_axis_convention_is_a_rotation_about_the_normal():
     the search is over the wrong set."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
     from board_detect import AXES_CANDIDATES, OPENCV_TO_ROS, object_points
-    assert len(AXES_CANDIDATES) == 8, "both normal directions must be searched"
+    assert len(AXES_CANDIDATES) == 8, "both chiralities must be searched"
     assert np.allclose(AXES_CANDIDATES["ros+0"], OPENCV_TO_ROS)
-    # The pipeline's own stage 03 states it: ros x is the OUTWARD normal, into
-    # the room, while opencv z goes INTO the board. So x_ros = -z_opencv, and
-    # the first guess -- which had it positive -- scored 179.96 deg.
-    assert np.allclose(OPENCV_TO_ROS @ np.array([0, 0, 1.0]), [-1, 0, 0])
-    assert np.allclose(OPENCV_TO_ROS @ np.array([1.0, 0, 0]), [0, 1, 0])   # y = left
-    assert np.allclose(OPENCV_TO_ROS @ np.array([0, 1.0, 0]), [0, 0, -1])  # z = up
+    # MEASURED against the mapping pipeline's own detections: 6.0 mm / 0.52 deg
+    # for this mapping, against 288 mm for the next best. It is the cyclic
+    # permutation x_board = z_opencv, y_board = x_opencv, z_board = y_opencv.
+    # Two earlier guesses read from prose were 412 mm and 1449 mm out.
+    assert np.allclose(OPENCV_TO_ROS @ np.array([0, 0, 1.0]), [1, 0, 0])
+    assert np.allclose(OPENCV_TO_ROS @ np.array([1.0, 0, 0]), [0, 1, 0])
+    assert np.allclose(OPENCV_TO_ROS @ np.array([0, 1.0, 0]), [0, 0, 1])
     seen = []
     for name, M in AXES_CANDIDATES.items():
         assert abs(np.linalg.det(M) - 1.0) < 1e-12, name
@@ -2409,9 +2410,13 @@ def test_every_candidate_board_axis_convention_is_a_rotation_about_the_normal():
         for j in range(i + 1, len(seen)):
             assert not np.allclose(seen[i], seen[j]), (i, j)
     a = object_points([9, 7], 0.020, "center", "ros+0")
-    b = object_points([9, 7], 0.020, "center", "rosflip+0")
+    b = object_points([9, 7], 0.020, "center", "rosmirror+0")
     assert np.allclose(a[:, 1], -b[:, 1]) and np.allclose(a[:, 2], b[:, 2]), \
-        "the two chiralities must differ by a mirror, not a spin"
+        "the two chiralities must differ by a mirror of the layout, not a spin"
+    # ...while both stay PROPER rotations: a board frame with det -1 would
+    # report a left-handed orientation that no physical board has
+    for name, M in AXES_CANDIDATES.items():
+        assert np.allclose(M @ M.T, np.eye(3), atol=1e-12), name
     src = (Path(__file__).resolve().parents[1] / "scripts" / "board_detect.py").read_text()
     # mobile_2's topic is image_raw: the distortion must come from camera_info
     assert 'rect = "rect" in img_topic' in src

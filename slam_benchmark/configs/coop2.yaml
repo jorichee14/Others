@@ -175,7 +175,14 @@ reference:
         # them, so a detector aimed at one can silently solve the other and
         # write confident wrong poses. scripts/board_detect.py therefore gates
         # every solved pose against the reference trajectory at that stamp.
-        axes: ros          # +x is the OUTWARD NORMAL, not +z
+        # MEASURED 2026-09-20 by scripts/board_detect.py --solve-axes, which
+        # re-solved 90 detections of `anchor` under all eight possible planar
+        # conventions and scored each against the mapping pipeline's own
+        # zed_cam_in_map.tum: this one gave 6.0 mm / 0.52 deg against that
+        # board's 6.86 mm survey scatter, and the runner-up 288 mm. Two
+        # earlier values read from prose were 412 mm and 1449 mm out, so it
+        # is measured here rather than described.
+        axes: ros          # x_board = z_opencv, y = x_opencv, z = y_opencv
         origin: center
         # DETECTION GATES, from the mapping pipeline's own pipeline_config.json
         # (03_anchor.boards). A planar board always yields TWO PnP solutions;
@@ -237,7 +244,7 @@ reference:
         marker_m: 0.015
         dictionary: DICT_4X4_50
         id_offset: 0        # anchor_frame json, schema 2
-        axes: ros
+        axes: ros          # as above, measured
         origin: center
         # DETECTION GATES, from the mapping pipeline's own pipeline_config.json
         # (03_anchor.boards). A planar board always yields TWO PnP solutions;
@@ -297,7 +304,7 @@ reference:
         marker_m: 0.018
         dictionary: DICT_5X5_50
         id_offset: 0        # anchor_frame json, schema 2
-        axes: ros
+        axes: ros          # as above, measured
         origin: center
         # DETECTION GATES, from the mapping pipeline's own pipeline_config.json
         # (03_anchor.boards). A planar board always yields TWO PnP solutions;

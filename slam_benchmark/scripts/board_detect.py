@@ -50,23 +50,26 @@ CAMERA = {"mobile_1": ("/mobile_1/zed/left/image_rect_color",
 # frame: +x out of the board, +y to the board's left, +z up, which is the ROS
 # body convention applied to a plane. Written once, checked against the
 # pipeline's own detections by --validate-against rather than by argument.
-# The dataset's `axes: ros`, as stage 03 of the mapping pipeline prints it:
-#   ROS    x = the OUTWARD normal, into the room;  y = left;  z = up
-#   OpenCV x = along columns (right);  y = DOWN;   z = INTO the board
-# So the outward normal is -z_opencv, not +z. A board facing the room shows
-# the camera its own left as the camera's right, hence y_ros = +x_opencv, and
-# z_ros = -y_opencv because OpenCV's y points down. That is a right-handed
-# frame; the version with the normal reversed is not the same board.
-OPENCV_TO_ROS = np.array([[0.0, 0.0, -1.0],
+# MEASURED, not derived. `--solve-axes` re-solved 90 detections of `anchor`
+# under all eight possible planar conventions and scored each against the
+# mapping pipeline's own zed_cam_in_map.tum:
+#
+#     ros+0      1448.6 mm   179.84 deg        rosflip+0      412.3 mm  179.94 deg
+#     ros+90     1441.6 mm   179.77 deg        rosflip+90     295.0 mm   90.03 deg
+#     ros+180    1399.9 mm   179.57 deg    ->  rosflip+180      6.0 mm    0.52 deg
+#     ros+270    1407.2 mm   179.66 deg        rosflip+270    288.1 mm   89.97 deg
+#
+# 6.0 mm against that board's own 6.86 mm survey scatter, with the runner-up
+# 288 mm away: decisive. The winner is the cyclic permutation below --
+# x_board = z_opencv, y_board = x_opencv, z_board = y_opencv.
+#
+# TWO EARLIER GUESSES WERE WRONG, both from reading prose. The first read
+# OpenCV's z as the outward normal with y flipped (412 mm, 179.9 deg); the
+# second, from stage 03's own docstring, flipped the normal instead (1449 mm).
+# Conventions are cheap to measure and expensive to argue about.
+OPENCV_TO_ROS = np.array([[0.0, 0.0, 1.0],
                           [1.0, 0.0, 0.0],
-                          [0.0, -1.0, 0.0]])
-# The first guess had the normal the other way and scored 179.96 deg against
-# the pipeline's own detections -- which is why the convention is now SOLVED
-# (--solve-axes) over BOTH normal directions and all four spins about it,
-# rather than argued from a docstring.
-OPENCV_TO_ROS_FLIPPED = np.array([[0.0, 0.0, 1.0],
-                                  [-1.0, 0.0, 0.0],
-                                  [0.0, -1.0, 0.0]])
+                          [0.0, 1.0, 0.0]])
 
 
 def _spin_x(deg: float) -> np.ndarray:
@@ -74,8 +77,16 @@ def _spin_x(deg: float) -> np.ndarray:
     return np.array([[1.0, 0.0, 0.0], [0.0, c, -s_], [0.0, s_, c]])
 
 
+# The other chirality, kept so --solve-axes still searches the COMPLETE set:
+# eight layouts, four spins in each of two mirror images. It has to remain a
+# PROPER rotation -- a board frame with det -1 would report a left-handed
+# orientation that no physical board has -- so the in-plane axis and the
+# NORMAL are both flipped. That flips the 2-D corner layout while keeping
+# det +1, which is exactly the pair of possibilities a planar target leaves.
+_MIRROR = OPENCV_TO_ROS @ np.diag([-1.0, 1.0, -1.0])
+
 AXES_CANDIDATES = {}
-for _tag, _base in (("ros", OPENCV_TO_ROS), ("rosflip", OPENCV_TO_ROS_FLIPPED)):
+for _tag, _base in (("ros", OPENCV_TO_ROS), ("rosmirror", _MIRROR)):
     for _d in (0, 90, 180, 270):
         AXES_CANDIDATES[f"{_tag}+{_d}"] = _spin_x(_d) @ _base
 
