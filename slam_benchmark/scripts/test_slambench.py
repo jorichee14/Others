@@ -1721,6 +1721,22 @@ def test_kiss_image_is_offline_and_dev_mounts_its_runner():
     assert m.outputs == ["trajectory", "map"]
 
 
+@test
+def test_mast3r_image_upgrades_setuptools_and_builds_without_isolation():
+    """thirdparty/mast3r/setup.py needs an absolute __file__ (setuptools >= 61);
+    the curope CUDA extension imports torch at build time, which an isolated
+    build environment does not have. Both are one line in the Dockerfile and
+    both cost a 20-minute build to discover."""
+    import re
+    df = (Path(__file__).resolve().parents[1] / "docker" / "Dockerfile.mast3r-slam").read_text()
+    up = df.index("pip3 install --no-cache-dir -U pip setuptools wheel")
+    assert up < df.index("thirdparty/mast3r"), "setuptools must be upgraded before the source installs"
+    installs = re.findall(r"pip3 install [^\n]*-e (thirdparty/mast3r|thirdparty/in3d|\.)", df)
+    assert sorted(installs) == [".", "thirdparty/in3d", "thirdparty/mast3r"], installs
+    for line in re.findall(r"pip3 install [^\n]*-e [^\n]*", df):
+        assert "--no-build-isolation" in line, line
+
+
 def main() -> int:
     for name, err, tb in FAIL:
         print(f"FAIL {name}: {err}\n{tb}")
