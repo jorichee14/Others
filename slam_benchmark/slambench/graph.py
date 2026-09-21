@@ -113,39 +113,104 @@ class Factors:
     b_t: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 3)))
     b_sigma: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 6)))
     b_tag: list = dataclasses.field(default_factory=list)
+    # Huber scale per factor, on the WHITENED residual norm. inf = plain
+    # least squares, which is what a single trusted source wants. With several
+    # absolute sources the outliers become real -- a flipped PnP solution, a
+    # mis-associated radar return, an ICP basin error -- and an unkerneled
+    # outlier pulls quadratically.
+    b_huber: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros(0))
     # prior factors: pose i, measured absolute pose in the world frame
     p_i: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros(0, dtype=int))
     p_R: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 3, 3)))
     p_t: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 3)))
     p_sigma: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 6)))
     p_tag: list = dataclasses.field(default_factory=list)
+    # SOURCE KIND per prior, e.g. "board", "visloc", "infra", "peer", "map".
+    # Not the same as the tag, which names the instance ("board/anchor"):
+    # leave-one-SOURCE-out holds out a kind, because a bias shared by every
+    # instance of one kind is exactly what leave-one-instance-out cannot see.
+    p_src: list = dataclasses.field(default_factory=list)
+    p_huber: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros(0))
 
-    def add_between(self, i, R, t, sigma, tag=""):
+    def add_between(self, i, R, t, sigma, tag="", huber=np.inf):
         self.b_i = np.append(self.b_i, int(i))
         self.b_R = np.concatenate([self.b_R, np.asarray(R).reshape(1, 3, 3)])
         self.b_t = np.concatenate([self.b_t, np.asarray(t).reshape(1, 3)])
         self.b_sigma = np.concatenate([self.b_sigma, np.asarray(sigma).reshape(1, 6)])
         self.b_tag.append(tag)
+        self.b_huber = np.append(self.b_huber, float(huber))
 
-    def add_prior(self, i, R, t, sigma, tag=""):
+    def add_prior(self, i, R, t, sigma, tag="", src="", huber=np.inf):
         self.p_i = np.append(self.p_i, int(i))
         self.p_R = np.concatenate([self.p_R, np.asarray(R).reshape(1, 3, 3)])
         self.p_t = np.concatenate([self.p_t, np.asarray(t).reshape(1, 3)])
         self.p_sigma = np.concatenate([self.p_sigma, np.asarray(sigma).reshape(1, 6)])
         self.p_tag.append(tag)
+        self.p_src.append(src or (tag.split("/")[0] if tag else ""))
+        self.p_huber = np.append(self.p_huber, float(huber))
+
+    def __post_init__(self):
+        """Backfill the columns added after the first version of this class.
+
+        Factors built positionally by older callers (and by `odometry_factors`,
+        which assigns the arrays directly) arrive without `*_huber` or `p_src`.
+        Defaulting them here rather than at every use site keeps one definition
+        of "no kernel declared" instead of several."""
+        if len(self.b_huber) != len(self.b_i):
+            self.b_huber = np.full(len(self.b_i), np.inf)
+        if len(self.p_huber) != len(self.p_i):
+            self.p_huber = np.full(len(self.p_i), np.inf)
+        if len(self.p_src) != len(self.p_i):
+            self.p_src = [t.split("/")[0] if t else "" for t in self.p_tag] \
+                if len(self.p_tag) == len(self.p_i) else [""] * len(self.p_i)
+
+    def sources(self) -> list:
+        """The distinct absolute source KINDS present, in first-seen order."""
+        out = []
+        for k in self.p_src:
+            if k and k not in out:
+                out.append(k)
+        return out
+
+    def without(self, src: str) -> "Factors":
+        """A copy with every prior of source kind `src` removed.
+
+        This is leave-one-source-out. The odometry is untouched: holding out a
+        source must change what anchors the trajectory, not what shapes it."""
+        keep = np.array([k != src for k in self.p_src], dtype=bool)
+        return Factors(
+            self.b_i, self.b_R, self.b_t, self.b_sigma, list(self.b_tag), self.b_huber,
+            self.p_i[keep], self.p_R[keep], self.p_t[keep], self.p_sigma[keep],
+            [t for t, k in zip(self.p_tag, keep) if k],
+            [t for t, k in zip(self.p_src, keep) if k],
+            self.p_huber[keep])
+
+    def only(self, src: str) -> "Factors":
+        """A copy with ONLY the priors of source kind `src`, and no between
+        factors. Used to evaluate a held-out source's residuals at a solution
+        it did not contribute to."""
+        keep = np.array([k == src for k in self.p_src], dtype=bool)
+        return Factors(
+            p_i=self.p_i[keep], p_R=self.p_R[keep], p_t=self.p_t[keep],
+            p_sigma=self.p_sigma[keep],
+            p_tag=[t for t, k in zip(self.p_tag, keep) if k],
+            p_src=[t for t, k in zip(self.p_src, keep) if k],
+            p_huber=self.p_huber[keep])
 
     def extend(self, other: "Factors") -> "Factors":
         return Factors(
             np.concatenate([self.b_i, other.b_i]), np.concatenate([self.b_R, other.b_R]),
             np.concatenate([self.b_t, other.b_t]), np.concatenate([self.b_sigma, other.b_sigma]),
-            self.b_tag + other.b_tag,
+            self.b_tag + other.b_tag, np.concatenate([self.b_huber, other.b_huber]),
             np.concatenate([self.p_i, other.p_i]), np.concatenate([self.p_R, other.p_R]),
             np.concatenate([self.p_t, other.p_t]), np.concatenate([self.p_sigma, other.p_sigma]),
-            self.p_tag + other.p_tag)
+            self.p_tag + other.p_tag, self.p_src + other.p_src,
+            np.concatenate([self.p_huber, other.p_huber]))
 
     def counts(self) -> dict:
         from collections import Counter
-        return {"between": dict(Counter(self.b_tag)), "prior": dict(Counter(self.p_tag))}
+        return {"between": dict(Counter(self.b_tag)), "prior": dict(Counter(self.p_tag)),
+                "by_source": dict(Counter(k for k in self.p_src if k))}
 
 
 def _between_residual_g(Ri, ti, Rj, tj, mR, mt) -> np.ndarray:
@@ -219,17 +284,52 @@ class SolveReport:
         return dataclasses.asdict(self)
 
 
+def huber_weight(rw: np.ndarray, c: np.ndarray) -> np.ndarray:
+    """IRLS weight per factor for a Huber kernel on the WHITENED residual.
+
+    `rw` is (K,6) whitened residuals, `c` the (K,) scale. Returns (K,) weights
+    w = min(1, c/s) with s the residual norm. Applying sqrt(w) to both the
+    whitened Jacobian rows and the whitened residual turns the next
+    Gauss-Newton step into the Huber step exactly -- standard IRLS, and the
+    reason the kernel costs no change to the solver below.
+
+    c = inf gives w = 1 everywhere, i.e. plain least squares. That is the right
+    default for a single trusted source; with several sources the outliers are
+    real and an unkerneled one pulls quadratically.
+    """
+    s = np.linalg.norm(rw, axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        w = np.where(s > c, np.divide(c, s, out=np.ones_like(s), where=s > 0), 1.0)
+    return np.clip(np.nan_to_num(w, nan=1.0, posinf=1.0), 0.0, 1.0)
+
+
+def _robust_cost(rw: np.ndarray, c: np.ndarray) -> float:
+    """Huber loss summed over factors: s^2 below the scale, 2*c*s - c^2 above.
+
+    The solver accepts a step only when THIS drops, so it must be the same
+    objective the weights linearise -- using the plain sum of squares here
+    while weighting the step would let an outlier veto a good step."""
+    s = np.linalg.norm(rw, axis=1)
+    quad = np.minimum(s, c)
+    return float(np.sum(quad ** 2 + 2.0 * quad * np.maximum(s - c, 0.0)))
+
+
 def _cost(R, t, f: Factors) -> tuple[float, dict]:
     parts = {}
     total = 0.0
     if len(f.b_i):
         rb = _between_residual(R, t, f) / f.b_sigma
         parts["between"] = float(np.sqrt(np.mean(rb ** 2)))
-        total += float(np.sum(rb ** 2))
+        total += _robust_cost(rb, f.b_huber)
     if len(f.p_i):
         rp = _prior_residual(R, t, f) / f.p_sigma
         parts["prior"] = float(np.sqrt(np.mean(rp ** 2)))
-        total += float(np.sum(rp ** 2))
+        total += _robust_cost(rp, f.p_huber)
+        # per SOURCE KIND, because one source can be satisfied while another is
+        # abused and a single pooled number hides exactly that.
+        for k in f.sources():
+            m = np.array([x == k for x in f.p_src], dtype=bool)
+            parts[f"prior/{k}"] = float(np.sqrt(np.mean(rp[m] ** 2)))
     return total, parts
 
 
@@ -283,6 +383,7 @@ def solve(poses0: np.ndarray, f: Factors, max_iter: int = 50, lam0: float = 1e-4
         if len(f.b_i):
             rb = _between_residual(R, t, f)
             W = 1.0 / f.b_sigma                                   # (K,6)
+            W = W * np.sqrt(huber_weight(rb * W, f.b_huber))[:, None]
             Ri, ti, Rj, tj = R[f.b_i], t[f.b_i], R[f.b_i + 1], t[f.b_i + 1]
             Ji = _jac_wrt(lambda Rg, tg: _between_residual_g(Rg, tg, Rj, tj, f.b_R, f.b_t), Ri, ti)
             Jj = _jac_wrt(lambda Rg, tg: _between_residual_g(Ri, ti, Rg, tg, f.b_R, f.b_t), Rj, tj)
@@ -296,6 +397,7 @@ def solve(poses0: np.ndarray, f: Factors, max_iter: int = 50, lam0: float = 1e-4
         if len(f.p_i):
             rp = _prior_residual(R, t, f)
             W = 1.0 / f.p_sigma
+            W = W * np.sqrt(huber_weight(rp * W, f.p_huber))[:, None]
             Rp_, tp_ = R[f.p_i], t[f.p_i]
             Jp = _jac_wrt(lambda Rg, tg: _prior_residual_g(Rg, tg, f.p_R, f.p_t), Rp_, tp_)
             JpW = Jp * W[:, :, None]
