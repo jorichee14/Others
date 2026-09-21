@@ -1,0 +1,81 @@
+# Tier 3, tightly coupled. The primary candidate, and the only well-maintained
+# RGB-D-inertial option this recording admits.
+name: orbslam3_rgbd_inertial
+family: visual_inertial_slam
+origin: "[I/O]"
+modality: [rgbd]
+coupling: tight
+needs_imu: true
+loop_closure: true
+outputs: [trajectory]
+reference_impl: https://github.com/UZ-SLAMLab/ORB_SLAM3   # System::IMU_RGBD
+image: slambench/orbslam3:humble
+
+streams: [mobile_1.zed_rgbd]
+imu_by_agent:
+  mobile_1: mobile_1.imu
+
+params:
+  ORBextractor.nFeatures: 1200
+  ORBextractor.scaleFactor: 1.2
+  ORBextractor.nLevels: 8
+  ThDepth: 40.0
+  DepthMapFactor: 1.0           # the ZED's depth_registered is 32FC1 METRES.
+                                # 1000.0 here scales the room by 1000 and the
+                                # run still completes.
+  IMU.Frequency: 192            # /mobile_1/zed/imu/data, measured off the bag
+
+  # --------------------------------------------------------------- BLOCKING
+  # Every value below is null on purpose and run_method.py refuses to start
+  # while any of them is (see its `nulls` check). That refusal IS the design:
+  # rule 3, and a tightly-coupled run under guessed calibration is an expensive
+  # wrong answer that looks like a result in a table.
+  #
+  # IMU.T_b_c1 — body(IMU) <- camera. I13. Recover it from the SDK
+  #   (getSensorsConfiguration().camera_imu_transform), from the factory
+  #   SN<serial>.conf, or from /tf_static. Mind the ROS-body to optical
+  #   convention change between zed_camera_center and
+  #   zed_left_camera_optical_frame.
+  IMU.T_b_c1:                   # imu <- left optical. Composed from the wrapper's
+                                # per-unit factory TF (zed_left_camera_frame ->
+                                # zed_imu_link) and tf_static's frame->optical
+                                # rpy(-90,0,-90). See coop2.yaml mobile_1.imu.
+    - [-0.014774651, -0.001097222,  0.999890247,  0.002340261]
+    - [-0.999747365,  0.016956643, -0.014753933,  0.023029347]
+    - [-0.016938594, -0.999855624, -0.001347473,  0.000170957]
+    - [ 0.0,          0.0,          0.0,          1.0]
+  # The four noise terms — I14. NOT recoverable from a 156 s bag: the random
+  # walks only emerge in Allan variance at cluster times of 1e2-1e3 s. One
+  # unattended 3 h static log settles them for every future recording.
+  # When filling them as an interim, ERR HIGH: over-stated noise makes the
+  # estimator distrust the IMU and degrade toward vision-only, while
+  # under-stated noise makes it over-trust and diverge.
+  IMU.NoiseGyro: null           # rad/s/sqrt(Hz)  — order 1e-3 .. 3e-3
+  IMU.NoiseAcc: null            # m/s^2/sqrt(Hz)  — order 1e-2 .. 3e-2
+  IMU.GyroWalk: null            # rad/s^2/sqrt(Hz) — order 1e-5 .. 1e-4
+  IMU.AccWalk: null             # m/s^3/sqrt(Hz)  — order 1e-4 .. 1e-3
+
+notes: |
+  Its gap to orbslam3_rgbd IS the IMU's worth with the estimator held fixed.
+  That pair is the cleanest inertial comparison phase 6 can draw, which is why
+  ORB-SLAM3 is the primary here rather than a stronger-on-paper system.
+
+  EXPECT INITIALISATION TROUBLE, and expect it for a reason that is not this
+  method's fault. ORB-SLAM3's inertial initialiser solves a MAP problem for
+  gravity, scale and the biases, and it needs excitation to do it. A pushcart
+  rolling flat across a lab floor at walking pace is near-constant-velocity
+  with little rotation about any horizontal axis — close to the degenerate case,
+  where accelerometer bias and gravity direction are weakly observable. RGB-D
+  softens it, because scale comes from the depth rather than from the IMU (that
+  is the failure that would kill a monocular entry outright), but bias
+  observability still suffers.
+
+  So answer I15 BEFORE reading this row: if the rotational excitation is near
+  zero throughout, a failed or badly-converged initialisation is a property of
+  the MOTION and the write-up says so in advance. That is a prediction, not an
+  excuse made afterwards. Report the initialisation outcome and the frame at
+  which it completed beside the ATE — an ATE over the portion after a late
+  init is not comparable to one over the whole run.
+
+  Sparse landmarks only, so trajectory-only scoring. A Chamfer distance against
+  a dense map would be a category error with units on it.

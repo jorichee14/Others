@@ -1,0 +1,34 @@
+name: badslam
+family: rgbd_slam
+origin: "[I] indoor RGB-D by origin — built and evaluated at exactly this scale"
+modality: [rgbd]
+needs_imu: false
+loop_closure: true
+outputs: [trajectory, map]
+reference_impl: https://github.com/ETH3D/badslam
+image: slambench/badslam:humble
+
+track: no_lidar
+streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
+
+params:
+  # Direct bundle adjustment over a surfel map, optimising geometry AND
+  # photometry jointly. Indoor re-parameterisation as elsewhere: defaults named.
+  max_depth: 8.0                 # default 3.0 — this room is 16.6 m across
+  keyframe_interval: 10
+  num_scales: 4
+  sparsification: 4
+  # Per stream, and not interchangeable: the ZED publishes 32FC1 metres, the
+  # RealSense 16UC1 millimetres. A factor of 1000, and the run completes either
+  # way — with a map of a room a kilometre across.
+  depth_scaling: null
+
+notes: |
+  The accuracy ceiling for classical dense RGB-D on this track. Where ORB-SLAM3
+  keeps a few hundred sparse landmarks, this optimises the surfels directly, so
+  it is the entry that says how much of the RGB-D disadvantage is the sparse
+  representation rather than the sensor.
+
+  Needs a GPU. If that is not available, ElasticFusion fills the same role with
+  a weaker optimiser; say which was run, because they are not interchangeable
+  in the argument above.

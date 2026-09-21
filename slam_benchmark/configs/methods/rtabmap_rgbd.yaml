@@ -1,0 +1,72 @@
+name: rtabmap_rgbd
+family: rgbd_slam
+origin: "[I]"
+modality: [rgbd]
+coupling: none            # no inertial input at all
+needs_imu: false
+loop_closure: true
+outputs: [trajectory, map]
+reference_impl: https://github.com/introlab/rtabmap_ros
+image: slambench/rtabmap:humble
+# RTAB-Map takes colour and depth as ONE image pair: the depth must be in the
+# colour camera at the colour aspect ratio (rgbd_odometry aborts otherwise, as
+# it did on mobile_2: rgb 1280x720, depth 640x480, different optical frames).
+# The ZED publishes depth already registered to its left image; the RealSense
+# in this bag does not, so the container registers it (register_depth.py) and
+# the poses on that stream are in camera_color_optical_frame -- which is also
+# the mobile_2 reference frame, hence the identity below. Declared here so the
+# evaluator never applies the depth-frame extrinsic to colour-frame poses.
+depth_registered_to_color: required
+extrinsic_by_stream:
+  mobile_2.realsense_rgbd: {x: 0.0, y: 0.0, z: 0.0, roll: 0.0, pitch: 0.0, yaw: 0.0}
+
+# MEASURED 2026-09-19: at real-time replay this machine processes 72% of the
+# frames with the odometry node alone and 41% with the mapping node running --
+# every other frame, period 133.8 ms against a 67 ms stream. The holes are
+# irregular and scale with load, not with anything in the recording (colour,
+# depth and camera_info are stamped identically, 2288/2288). This row is an
+# OFFLINE backbone for a pseudo-GT: every frame matters and wall-clock does not,
+# so the bag is replayed at half speed. run.json records the rate, and the
+# runtime column for this row is meaningless by construction.
+replay_rate: 0.5              # harness default 1.0
+# MEASURED 2026-09-20 on mobile_2.realsense_rgbd at 0.5: odometry update time
+# ~70 ms against a 73 ms replayed period (27.5 Hz stream, twice the ZED's), and
+# 3384 of 4300 frames processed. Same per-frame cost, twice the frames: the
+# rate above was measured for the 15 Hz ZED. Quarter speed here.
+replay_rate_by_stream:
+  mobile_2.realsense_rgbd: 0.25
+
+# The only method in the shortlist that runs unchanged on all three geometry
+# streams, so it carries the modality comparison from the other side: where
+# kiss_icp holds the estimator fixed across sensors at the odometry level,
+# rtabmap holds a full SLAM system fixed across sensors.
+streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
+
+params:
+  Vis/MinInliers: 15
+  # MEASURED 2026-09-19, and the reason this row scored 26.7% instead of ~100%.
+  # The run tracked cleanly for 12.7 s -- median 245 inliers, p05 95 -- then lost
+  # once and never came back: 510 consecutive frames registering against node -1
+  # with `fromWords = 0 fromImageEmpty = 1`, i.e. an empty frame-to-map model
+  # that nothing rebuilds. RTAB-Map's published default for this parameter is
+  # **0**, documented as "a value of 0 disables auto-reset", so ONE bad moment
+  # ends the run by design and every frame after it is lost for free.
+  #
+  # 8 frames is ~0.54 s at this stream's 14.9 Hz: long enough that a single
+  # blurred or occluded frame does not trigger a reset, short enough that the
+  # pose has not yet become fiction. A reset resumes from the last successfully
+  # computed pose with large covariance, so it is a DISCONTINUITY, not a repair:
+  # scripts/odom_health.py counts them and the count belongs beside this row's
+  # ATE. For a pseudo-GT backbone that trade is right -- the factor graph absorbs
+  # a discontinuity but cannot invent 34 s of missing trajectory.
+  Odom/ResetCountdown: 8   # published default 0 (= never auto-reset)
+  Vis/MaxDepth: 8.0
+  RGBD/LinearUpdate: 0.05
+  RGBD/AngularUpdate: 0.05
+  Grid/3D: "true"
+  Grid/CellSize: 0.05
+
+notes: |
+  Depth here is MEASURED, not predicted. That is worth stating with the result:
+  most of the RGB-D-vs-LiDAR literature compares a predicted-depth pipeline
+  against LiDAR, and this sequence does not.

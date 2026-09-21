@@ -1,0 +1,899 @@
+# ============================================================================
+# coop2_20260828 as a SLAM benchmark sequence.
+#
+# Every geometry number here is copied from ../rosbag_to_opv2v/configs/
+# mirc_coop2.yaml, which derived them from the recording's own published
+# transforms. Do not re-derive them by hand; if that file changes, change this
+# one in the same commit.
+#
+# What this config is FOR: telling the evaluator which frame each method's
+# output describes, what the reference is and how much it can be trusted, and
+# over what volume a map is scored. It does not run anything — see
+# configs/methods/*.yaml and scripts/run_method.py.
+# ============================================================================
+
+dataset:
+  name: coop2_20260828
+  bag: ~/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_completed
+  duration_s: 156.0
+  site: MIRC indoor laboratory, NYCU Guangfu campus
+  # The surveyed boards span ~8.5 m x ~14.3 m (16.6 m corner to corner) and all
+  # sit within ~15 cm of one height. This is a room, not a road: it sets the
+  # scale at which every threshold in `eval` below has to be chosen, and it is
+  # why the F-score thresholds are 2-10 cm rather than the 20-50 cm an outdoor
+  # SLAM paper would quote.
+  extent_m: {span_x: 8.5, span_y: 14.3, diagonal: 16.6}
+  world: {frame_id: map, gravity_axis: z}
+
+# ---------------------------------------------------------------- the reference
+#
+# READ THIS BEFORE QUOTING ANY ATE FROM THIS SEQUENCE.
+#
+# /mobile_*/global_pose is the OUTPUT OF AN OFFLINE MAPPING PIPELINE (stage 09:
+# the corrected trajectory, anchored to a surveyed map). It is not an external
+# measurement of where the robots were. Benchmarking a SLAM system against it
+# measures AGREEMENT WITH THAT PIPELINE. A method that agrees with it perfectly
+# has reproduced the pipeline, not the truth; a method that disagrees may be the
+# more accurate of the two and there is nothing in tier 1 that can tell.
+#
+# The independent evidence is the board survey, and it is what `uncertainty_m`
+# below is taken from — the WORST of the three boards, not the best, because a
+# claim has to survive the loosest anchor in the frame it is made in.
+#
+# BUT INDEPENDENCE IS PER AGENT, established 2026-09-19 from the mapping
+# pipeline's own config (08_reference.tracks):
+#
+#   mobile_1  published track `mobile_1_lidar`, type lidar_icp, NO boards field.
+#             Pure LiDAR registration into the frozen map. The boards therefore
+#             ARE independent evidence about mobile_1 — its reference never saw
+#             them. (The pipeline's own `mobile_1_lidarboards` track even holds
+#             out rs_anchor, which is the same instinct as this project's.)
+#
+#   mobile_2  published track `mobile_2_rs_odom_icp_boards` — the name is the
+#             recipe: cuVSLAM odometry + depth ICP + BOARD detections, boards
+#             [rs_anchor, anchor, anchor_b]. So the boards were CONSUMED to
+#             build mobile_2's reference and are NOT independent of it. Using
+#             them to check that reference is circular.
+#
+# Consequence for the pseudo-GT protocol: the falsification test on mobile_2
+# (docs/PSEUDO_GT.md V5) cannot lean on the boards. The evidence about mobile_2
+# that is genuinely independent of its reference is `infra_1` (nothing in the
+# pipeline uses it) and co-observation with mobile_1.
+reference:
+  kind: pipeline                 # pipeline | survey | external-tracker
+  produced_by: glim+scan_to_map  # NAME IT. What produced the reference decides
+                                 # which methods can be scored against it —
+                                 # see `correlated_with`.
+  provenance: >
+    GLIM (ros2) supplies the SEED trajectory only. Stage 01a then re-derives
+    every pose by registering each scan into a frozen reference map — the
+    survey-prior construction used by Newer College, Oxford Spires and ConSLAM,
+    with a self-built prior map rather than a survey-grade one. Two-stage ICP
+    (planarity-weighted local plane fits, then a nearest-neighbour polish),
+    Tikhonov damping toward the seed in geometrically unobservable directions,
+    and several rounds each rebuilding the reference map from the previous
+    round's poses. Stage 01 then builds the map from those refined poses, with
+    per-point deskew, free-space carving for dynamics, and anchoring to the
+    surveyed boards.
+
+    The property that makes this a REFERENCE rather than another SLAM result:
+    every scan is initialised from its seed pose, never from the previous
+    scan's refined pose, so error cannot accumulate along the trajectory. No
+    odometry system has that property, KISS-ICP included.
+  # NOT the same as circularity. The reference does not contain GLIM's
+  # trajectory — it contains GLIM's BASIN. Stage 01a rejects any correction
+  # beyond max_shift (0.5 m) / max_rot (5 deg) and keeps the seed, so wherever
+  # GLIM was wrong by more than that, the reference inherits the error and
+  # online GLIM would agree with it. Correlated errors, not identical ones.
+  # A GLIM row is therefore an ablation ("what do refinement and anchoring
+  # add"), never a peer row. Every other method is scored normally.
+  correlated_with: [glim]
+  # The convergence statistic stage 01a prints — median per-round correction
+  # falling to millimetres — is PRECISION, not accuracy: a trajectory and a map
+  # can converge to a consistent solution that is jointly wrong, which is
+  # exactly what the corridor-degenerate directions `prior_beta` exists to damp.
+  # Only the board survey bounds the accuracy, which is why uncertainty_m below
+  # is taken from it and not from the convergence table.
+  # 15 mm: rs_anchor's std. anchor itself is repeatable to ~3 mm (6.9 mm std,
+  # 3.2 mm loop closure over 526.9 s), anchor_b to ~13 mm honestly stated. Set
+  # this to 0.007 only for a claim restricted to the region near `anchor`.
+  uncertainty_m: 0.015
+  # Fill from the map cloud before running map metrics; see eval.volume.
+  map_cloud: null
+  agents:
+    mobile_1:
+      # RESOLVED by phase0 on the bag (2026-09-19): 1516 poses at 9.70 Hz — one
+      # per LiDAR sweep, as a LiDAR-derived reference should be. The 2833/18.1 Hz
+      # this file once carried was stale. Export measured: 151.5 s, 25.82 m of
+      # path, first pose 32.4 mm from the declared anchor (check passed).
+      topic: /mobile_1/global_pose        # 1516 msgs, 9.70 Hz, measured
+      frame: zed_left_camera_optical_frame
+      expected_start: [0.697952, -0.062696, 0.193334]
+      max_gap_ms: 200
+    mobile_2:
+      # PROVENANCE ESTABLISHED 2026-09-19: this trajectory is DERIVED FROM
+      # cuVSLAM (Isaac ROS, stereo-IR + IMU) plus the pipeline's anchoring.
+      # It is an odometry product, not an independent reference. Consequences:
+      #   * scoring cuVSLAM against it is SELF-AGREEMENT. The measured
+      #     0.18 m / 0.73% / scale 0.977 do not state cuVSLAM's accuracy; they
+      #     state what the anchoring step changed (a -2.3% scale correction
+      #     and ~18 cm of shape adjustment).
+      #   * the ONLY independent evidence about mobile_2 is: the board dwells
+      #     (tier 2), the infra_1 observations (once that chain is validated),
+      #     and co-observation with mobile_1. This is the pseudo-GT project's
+      #     motivating gap, now confirmed rather than suspected.
+      #   * any method sharing cuVSLAM's sensors/front-end is correlated with
+      #     this reference — same rule as GLIM against the mobile_1 pipeline.
+      correlated_with: [cuvslam]
+      topic: /mobile_2/global_pose        # 1811 msgs, ~11.6 Hz
+      frame: camera_color_optical_frame
+      expected_start: [7.704074, -14.308017, 0.165040]
+      max_gap_ms: 250
+  # Tier 2, the absolute check. `position` is the surveyed board origin in `map`;
+  # `window` is the interval the platform dwelled in front of it, which is NOT in
+  # the bag metadata and has to be read off the run once. Until a window is
+  # filled the anchor is skipped and the evaluator says so rather than scoring a
+  # tier it could not compute.
+  # Board ORIENTATIONS (anchor_frame*.json, board_axes "ros", origin "center").
+  # THE OUTWARD NORMAL IS +X, NOT +Z, and getting that wrong rejects every view
+  # silently -- it did, on the first run. Settled against ground truth: the
+  # pipeline detected `anchor` 112 times (std 1.98 mm) from the ZED at map
+  # [0.698, -0.063, 0.193] and `rs_anchor` 92 times from the RealSense at
+  # [7.704, -14.308, 0.165]. Dotting each board axis against the direction to
+  # the camera that DID see it gives +0.96 on +x for both boards and only +0.27
+  # on +z. `board_visibility.py --anchor-frame` uses +x for board_axes "ros".
+  # NOTE anchor_frame_coop2.json carries only the boards 03_anchor used
+  # (anchor, rs_anchor); anchor_b's orientation is in the fuller anchor_frame
+  # json, and the script takes a comma-separated list to merge them.
+  #   anchor    qxyzw [-0.005077,  0.002281,  0.000012, 0.999985]
+  #   anchor_b  qxyzw [-0.059071, -0.024090, -0.857719, 0.510146]
+  #   rs_anchor qxyzw [ 0.007510,  0.013642,  0.999879, 0.000177]
+  #
+  # DESIGNS (pipeline_config.json). These are SMALL boards, and size decides
+  # usable range far more sharply than field of view does:
+  #   anchor / anchor_b  9x7 squares @ 20 mm = 18.0 x 14.0 cm, 15 mm DICT_4X4_50
+  #   rs_anchor          9x7 squares @ 25 mm = 22.5 x 17.5 cm, 18 mm DICT_5X5_50
+  # At mobile_1's fx=544.9 a 15 mm marker spans 11.4 px at 0.72 m (which the
+  # pipeline detected, 112 views, std 1.98 mm) and 2.0 px at 4.13 m (which no
+  # detector will find). The pipeline's own tracks cap board use at 3.0-3.5 m.
+  anchors:
+    - name: anchor
+      position: [0.0, 0.0, 0.0]
+      # BOARD GEOMETRY, promoted 2026-09-20 from the comments above so a
+      # detector reads declared numbers rather than prose (rule 4). Design
+      # from pipeline_config.json; orientation from anchor_frame*.json, the
+      # same values board_visibility.py validated against ground truth.
+      orientation: [-0.005077, 0.002281, 0.000012, 0.999985]   # qxyzw, map <- board
+      board:
+        squares: [9, 7]
+        square_m: 0.020
+        marker_m: 0.015
+        dictionary: DICT_4X4_50
+        id_offset: 0        # anchor_frame json, schema 2
+        # ⚠ `anchor` AND `anchor_b` ARE THE SAME MARKERS: same design, same
+        # DICT_4X4_50, id_offset 0 on both. Nothing in the image distinguishes
+        # them, so a detector aimed at one can silently solve the other and
+        # write confident wrong poses. scripts/board_detect.py therefore gates
+        # every solved pose against the reference trajectory at that stamp.
+        # MEASURED 2026-09-20 by scripts/board_detect.py --solve-axes, which
+        # re-solved 90 detections of `anchor` under all eight possible planar
+        # conventions and scored each against the mapping pipeline's own
+        # zed_cam_in_map.tum: this one gave 6.0 mm / 0.52 deg against that
+        # board's 6.86 mm survey scatter, and the runner-up 288 mm. Two
+        # earlier values read from prose were 412 mm and 1449 mm out, so it
+        # is measured here rather than described.
+        axes: ros          # x_board = z_opencv, y = x_opencv, z = y_opencv
+        origin: center
+        # DETECTION GATES, from the mapping pipeline's own pipeline_config.json
+        # (03_anchor.boards). A planar board always yields TWO PnP solutions;
+        # min_ambiguity_ratio rejects a view where they are too alike to
+        # choose between, which is how a flipped pose gets in looking clean.
+        min_corners: 8
+        max_reproj_px: 1.5
+        min_ambiguity_ratio: 1.5
+      uncertainty_m: 0.007            # 6.9 mm std over 214 views; loop closure 3.2 mm
+      # ROTATION, declared 2026-09-20 for the construction's anchor factors
+      # (docs/STAGE2_GRAPH.md s2.2), which weight orientation and position
+      # separately. Provenance: the detector's rotation scatter against the
+      # mapping pipeline's own detections is 0.52-0.66 deg (board_detect.py
+      # --validate-against, both cameras), and the pipeline's orientation agrees
+      # with /tf to 1.21 deg. 1.0 deg is the rounded-up detector figure; it is a
+      # per-observation sigma, not a claim about the survey.
+      uncertainty_deg: 1.0
+      window: null                    # confirmed window; fill from the candidates below
+      # phase0 candidates (t+ seconds into each agent's reference; CONFIRM BY EYE):
+      #   mobile_1: [0.2, 6.5]                                  <- starts here
+      #   mobile_2: [84.3, 88.2], [92.9, 124.6], [133.3, 146.6] <- ends here
+      window_candidates_unconfirmed: true
+      note: the map frame's origin, and the only anchor tight enough to resolve
+            a centimetre-scale difference between methods
+      # WINDOWS from scripts/board_visibility.py (2026-09-19), VALIDATED:
+      # the board projected into the camera through the reference pose and
+      # gated on four things at once -- in frame, facing (incidence to the
+      # board's +x normal), close enough that the ChArUco is detectable
+      # (px/bit), and slow. Not merely "nearby".
+      #   mobile_1: [1787899804.049, 1787899813.149]   # 92 poses, 0.72 m, t+0.2..9.3
+      #   mobile_2: [1787899920.037, 1787899932.277]   # 100 poses, 1.36 m, t+116.0..128.2
+      # Per-agent, so `window` is filled by the evaluator from the agent being
+      # scored -- see windows_by_agent below.
+      windows_by_agent:
+        # clamped to the pipeline's own departure_t (1787899810.524,
+        # end of the static dwell it fused 112 board views over at 1.98 mm).
+        # 92 ref poses, 0.72 m, 1.90 px/bit, facing at 16.5 deg incidence.
+        mobile_1: [1787899804.049, 1787899810.524]
+        # 161 ref poses, 0.66 m, 2.44 px/bit, facing. The old longest-window
+        # rule had picked 1.36 m here (1.19 px/bit, undetectable); the
+        # detectability gate moved it to the closest long window instead.
+        mobile_2: [1787899935.511, 1787899942.213]
+      # THE OBSERVATIONS EXIST ALREADY -- no detector run needed. The mapping
+      # pipeline emits per-frame board-derived camera poses in the map frame:
+      #   zed_cam_in_map.tum        112 rows @ 15.0 Hz, std 1.98 mm (mobile_1)
+      #   realsense_cam_in_map.tum   92 rows,           std 6.93 mm (mobile_2)
+      # Verified: the first rows sit 0.76 mm from the session anchor's fused
+      # pose, and their orientation agrees with /tf map->zed_left_optical to
+      # 1.21 deg. Point `observed_poses_by_agent` at them and tier 2 scores
+      # against the pipeline's OWN detections rather than a reimplementation of
+      # its board conventions -- which matters, given the +x/+z normal mixup
+      # that silently rejected every view on the first attempt.
+      #
+      # Paths are relative to this config. FILL THESE IN:
+      # ASSIGNMENT MATTERS: session_anchor_coop2.json says cameras.zed.board ==
+      # "anchor", so zed_cam_in_map.tum is mobile_1's dwell HERE. The
+      # RealSense's file belongs to rs_anchor and is placed there, not here.
+      observed_poses_by_agent:
+        mobile_1: /home/wicoms-robot/workspaces/isaac_ros-dev/data/processed/map_stages_20260828/map_stages_20260828_outputs/zed_cam_in_map.tum
+        # DETECTOR RUN 2026-09-20. The line here used to read "the RealSense
+        # never dwelled at `anchor`" -- that was read off the PIPELINE's board
+        # assignment (session_anchor_coop2.json binds the RealSense to
+        # rs_anchor), not off the imagery, and it is wrong. Running
+        # board_detect.py over mobile_2's own window on this board returned
+        # 190 of 191 frames, median 44 of 48 corners, ambiguity ratio 4.73,
+        # reprojection 0.29 px -- cleaner than any other board/agent pair.
+        # The pipeline did not use this dwell; that is not the same as the
+        # dwell not existing.
+        mobile_2: ../runs/boards/mobile_2_anchor.tum
+    - name: anchor_b
+      position: [8.033, -7.182, -0.102]
+      orientation: [-0.059071, -0.024090, -0.857719, 0.510146]   # qxyzw, map <- board
+      board:
+        squares: [9, 7]
+        square_m: 0.020
+        marker_m: 0.015
+        dictionary: DICT_4X4_50
+        id_offset: 0        # anchor_frame json, schema 2
+        axes: ros          # as above, measured
+        origin: center
+        # DETECTION GATES, from the mapping pipeline's own pipeline_config.json
+        # (03_anchor.boards). A planar board always yields TWO PnP solutions;
+        # min_ambiguity_ratio rejects a view where they are too alike to
+        # choose between, which is how a flipped pose gets in looking clean.
+        min_corners: 8
+        max_reproj_px: 1.5
+        min_ambiguity_ratio: 1.5
+      uncertainty_m: 0.013            # the honest figure: 12.9 mm / 2.6 deg between
+      # ROTATION, declared 2026-09-20 for the construction's anchor factors
+      # (docs/STAGE2_GRAPH.md s2.2), which weight orientation and position
+      # separately. Provenance: the detector's rotation scatter against the
+      # mapping pipeline's own detections is 0.52-0.66 deg (board_detect.py
+      # --validate-against, both cameras), and the pipeline's orientation agrees
+      # with /tf to 1.21 deg. 1.0 deg is the rounded-up detector figure; it is a
+      # per-observation sigma, not a claim about the survey.
+      uncertainty_deg: 1.0
+      window: null                    # its two sections (ratio 4.24, significant).
+      # phase0 candidates: mobile_1 NEVER dwells here; mobile_2: [42.6, 50.0].
+      # So this board could anchor mobile_2 only — and after the 2026-09-20
+      # detector run (below) it anchors NEITHER. Both robots' tier 2 rests on
+      # `anchor` and `rs_anchor`: two boards each, not three.
+      note: its quoted 2.0 mm is the spread WITHIN a section and understates it
+      # WINDOWS from scripts/board_visibility.py (2026-09-19), VALIDATED:
+      # the board projected into the camera through the reference pose and
+      # gated on four things at once -- in frame, facing (incidence to the
+      # board's +x normal), close enough that the ChArUco is detectable
+      # (px/bit), and slow. Not merely "nearby".
+      #   mobile_1: [1787899851.951, 1787899855.651]   # 38 poses, 4.13 m, t+48.1..51.8 -- FAR; a board at 4 m is small in a 960x540 frame, so its PnP will be the weakest of the six
+      #   mobile_2: [1787899845.505, 1787899851.507]   # 61 poses, 0.84 m, t+41.5..47.5
+      # Per-agent, so `window` is filled by the evaluator from the agent being
+      # scored -- see windows_by_agent below.
+      windows_by_agent:
+        # mobile_1: NONE. In frame 23.9% of the run but never closer
+        # than 2.48 m, where a 15 mm marker spans 0.5 px/bit. Undetectable.
+        # mobile_1 therefore has TWO usable boards, not three.
+        mobile_1: null
+        # 61 ref poses, 0.84 m, 1.93 px/bit, facing. mobile_2's ONLY window
+        # on this board -- only 3.4% of its run clears both gates here.
+        mobile_2: [1787899845.505, 1787899851.507]
+      # THE OBSERVATIONS EXIST ALREADY -- no detector run needed. The mapping
+      # pipeline emits per-frame board-derived camera poses in the map frame:
+      #   zed_cam_in_map.tum        112 rows @ 15.0 Hz, std 1.98 mm (mobile_1)
+      #   realsense_cam_in_map.tum   92 rows,           std 6.93 mm (mobile_2)
+      # Verified: the first rows sit 0.76 mm from the session anchor's fused
+      # pose, and their orientation agrees with /tf map->zed_left_optical to
+      # 1.21 deg. Point `observed_poses_by_agent` at them and tier 2 scores
+      # against the pipeline's OWN detections rather than a reimplementation of
+      # its board conventions -- which matters, given the +x/+z normal mixup
+      # that silently rejected every view on the first attempt.
+      #
+      # Paths are relative to this config. FILL THESE IN:
+      # Neither *_cam_in_map.tum covers this board: the pipeline anchored on
+      # `anchor` and `rs_anchor` only (03_anchor.boards_used). A detector run
+      # over mobile_2's 6.00 s window was made on 2026-09-20 to supply them and
+      # returned nothing -- see below. This board stays out of tier 2.
+      observed_poses_by_agent:
+        mobile_1: null    # unusable anyway: 2.48 m, 0.5 px/bit
+        # DETECTOR RUN 2026-09-20: ATTEMPTED AND FAILED, and the failure is the
+        # result (rule 8). 0 of 179 frames produced a pose; 178 of them found
+        # NO ChArUco corners at all and the median over the window was 2 of 48.
+        # This is not a tuning miss -- the same detector, same parameters, same
+        # camera, same session returns 44/48 corners on `anchor` (identical
+        # board design) and the 25 mm `rs_anchor` resolves from the ZED at
+        # 48/48. What differs here is scale: 15 mm markers at 0.84 m in the
+        # RealSense's 848x480 colour frame is ~1.9 px per bit, at the edge
+        # board_visibility.py already flagged. The board is below this camera's
+        # resolving power at the only range it is ever seen from.
+        # CONSEQUENCE: anchor_b contributes to NEITHER agent's tier 2. coop2
+        # has three surveyed boards and both robots get two.
+        mobile_2: null
+      # The dwell window above is REAL -- the board is in frame, facing and
+      # close -- so the evaluator rightly keeps the row. But its default
+      # refusal text tells the reader to supply observations, and that work has
+      # been done and cannot succeed. Declared here so the table says so.
+      observations_impossible_by_agent:
+        mobile_1: >-
+          never closer than 2.48 m, where a 15 mm marker spans 0.5 px per bit.
+        mobile_2: >-
+          detector run 2026-09-20 returned 0 of 179 frames (178 saw no corners
+          at all, median 2 of 48). At its only range, 0.84 m, this board's
+          15 mm markers span ~1.9 px per bit in the RealSense's 848x480 colour
+          frame -- below what the detector resolves, while the identical board
+          design at `anchor` reads 44 of 48 from the same camera.
+    - name: rs_anchor
+      position: [8.460, -14.267, -0.056]
+      orientation: [0.007510, 0.013642, 0.999879, 0.000177]   # qxyzw, map <- board
+      board:
+        squares: [9, 7]
+        square_m: 0.025
+        marker_m: 0.018
+        dictionary: DICT_5X5_50
+        id_offset: 0        # anchor_frame json, schema 2
+        axes: ros          # as above, measured
+        origin: center
+        # DETECTION GATES, from the mapping pipeline's own pipeline_config.json
+        # (03_anchor.boards). A planar board always yields TWO PnP solutions;
+        # min_ambiguity_ratio rejects a view where they are too alike to
+        # choose between, which is how a flipped pose gets in looking clean.
+        min_corners: 8
+        max_reproj_px: 1.5
+        min_ambiguity_ratio: 3.0
+      uncertainty_m: 0.015            # std; max residual 40 mm, 1 of 2 sections gated
+      # ROTATION, declared 2026-09-20 for the construction's anchor factors
+      # (docs/STAGE2_GRAPH.md s2.2), which weight orientation and position
+      # separately. Provenance: the detector's rotation scatter against the
+      # mapping pipeline's own detections is 0.52-0.66 deg (board_detect.py
+      # --validate-against, both cameras), and the pipeline's orientation agrees
+      # with /tf to 1.21 deg. 1.0 deg is the rounded-up detector figure; it is a
+      # per-observation sigma, not a claim about the survey.
+      uncertainty_deg: 1.0
+      window: null
+      # phase0 candidates: mobile_1: [115.7, 151.5] (ends parked here);
+      # mobile_2: [0.0, 20.6] (starts here). The agents SWAP corners over the
+      # run — which is also why place overlap came back 100%.
+      note: the loosest of the three; a residual under ~40 mm against this board
+            is not evidence of anything
+      # WINDOWS from scripts/board_visibility.py (2026-09-19), VALIDATED:
+      # the board projected into the camera through the reference pose and
+      # gated on four things at once -- in frame, facing (incidence to the
+      # board's +x normal), close enough that the ChArUco is detectable
+      # (px/bit), and slow. Not merely "nearby".
+      #   mobile_1: [1787899928.753, 1787899955.354]   # 267 poses, 0.75 m, t+124.9..151.5 (parked at the end)
+      #   mobile_2: [1787899810.489, 1787899821.794]   # 128 poses, 0.81 m, t+6.4..17.7
+      # Per-agent, so `window` is filled by the evaluator from the agent being
+      # scored -- see windows_by_agent below.
+      windows_by_agent:
+        # 267 ref poses, 0.75 m, 1.87 px/bit, facing. The longest and
+        # closest window on either agent; the cart is parked here to the end.
+        mobile_1: [1787899928.753, 1787899955.354]
+        # WIDENED 2026-09-20, and the old window scored NOTHING. It was
+        # [1787899810.489, 1787899821.794] -- phase0's facing-and-in-range
+        # dwell, derived from the reference TRAJECTORY. The pipeline's own
+        # board detections (realsense_cam_in_map.tum, 92 rows) span
+        # 1787899804.053 .. 1787899810.389 and so fell entirely OUTSIDE it, by
+        # 100 ms: tier 2 for this agent was empty for want of a tenth of a
+        # second. The two are adjacent, not contradictory -- the pipeline fused
+        # its static views first, then the cart shifted and stayed facing --
+        # so the window is the union. absolute_check intersects it with the
+        # detections, which are the evidence, so widening admits observations
+        # and invents none.
+        mobile_2: [1787899804.053, 1787899821.794]
+      # THE OBSERVATIONS EXIST ALREADY -- no detector run needed. The mapping
+      # pipeline emits per-frame board-derived camera poses in the map frame:
+      #   zed_cam_in_map.tum        112 rows @ 15.0 Hz, std 1.98 mm (mobile_1)
+      #   realsense_cam_in_map.tum   92 rows,           std 6.93 mm (mobile_2)
+      # Verified: the first rows sit 0.76 mm from the session anchor's fused
+      # pose, and their orientation agrees with /tf map->zed_left_optical to
+      # 1.21 deg. Point `observed_poses_by_agent` at them and tier 2 scores
+      # against the pipeline's OWN detections rather than a reimplementation of
+      # its board conventions -- which matters, given the +x/+z normal mixup
+      # that silently rejected every view on the first attempt.
+      #
+      # Paths are relative to this config. FILL THESE IN:
+      # session_anchor_coop2.json: cameras.realsense.board == "rs_anchor".
+      # MEASURED 2026-09-20: RTAB-Map's LOOP-CLOSED GRAPH CANNOT REACH THIS
+      # WINDOW ON mobile_1, and no config change will fix that. Every graph
+      # trajectory.tum ends 1787899928.08..928.75; this window starts at
+      # 1787899928.753. The last graph node and the start of the parked dwell
+      # are the same instant within 3 ms, because RTAB-Map adds a node on
+      # MOTION and the cart does not move again. The board is only ever seen
+      # while stationary, so a graph output has no pose here by construction.
+      # The dense odometry runs to 1787899955.48 and scores normally.
+      # CONSEQUENCE beyond this anchor: mobile_1 graph rows are scored over
+      # ~124 s and odometry rows over ~151 s. The report's `span` column says
+      # which. MASt3R stops earlier still, at 1787899916.90.
+      observed_poses_by_agent:
+        # mobile_1 dwells here t+124.9..151.5 (its best window, 267 poses), but
+        # the pipeline's board file covers only mobile_2's dwell at this board.
+        # DETECTOR RUN 2026-09-20: it did. 353 of 384 frames, median 48 of 48
+        # corners, ambiguity ratio 3.38, reprojection 0.42 px. The 31 frames
+        # that were dropped went to this board's own min_ambiguity_ratio of
+        # 3.0 -- the gate doing its job on the views where the board is most
+        # nearly fronto-parallel, not a detector failure.
+        mobile_1: ../runs/boards/mobile_1_rs_anchor.tum
+        mobile_2: /home/wicoms-robot/workspaces/isaac_ros-dev/data/processed/map_stages_20260828/map_stages_20260828_outputs/realsense_cam_in_map.tum
+
+# ------------------------------------------------------------------- streams
+#
+# What a SLAM method can be fed. `reference_frame_from_sensor` is the transform
+# the evaluator right-multiplies out before comparing: it is `reference frame
+# <- sensor frame` on that agent, in the same sense as the `extrinsic:` blocks
+# of the converter config (`base_link -> sensor`). Leaving it wrong is the
+# single most effective way to produce a benchmark that runs and lies: on this
+# rig the Ouster's 13 cm lever arm and 90 deg rotation from the ZED optical
+# frame shows up as several centimetres of ATE that no alignment can absorb,
+# and it looks exactly like drift.
+streams:
+
+  mobile_1.ouster:
+    agent: mobile_1
+    modality: lidar
+    topic: /mobile_1/ouster/points        # 1516 msgs, 9.7 Hz, 128 beams, ~130k pts
+    sensor_frame: os_lidar
+    reference_frame_from_sensor: {x: 0.067064, y: -0.092192, z: -0.074147,
+                                  roll: 2.2959, pitch: 89.5267, yaw: -87.6614}
+    point_time_field: t                   # ns from the header stamp
+    deskew: true                          # a 103 ms sweep at walking pace is not an instant
+    rate_hz: 9.7
+    note: the only true LiDAR on the sequence. Everything in the LiDAR-only block
+          runs on this one stream, so that block compares METHODS; the
+          cross-modality comparison needs one method run on several streams.
+
+  mobile_1.zed_rgbd:
+    agent: mobile_1
+    modality: rgbd
+    depth_topic: /mobile_1/zed/depth/depth_registered     # 2291 msgs, 14.7 Hz, 32FC1 m
+    depth_info_topic: /mobile_1/zed/depth/camera_info
+    color_topic: /mobile_1/zed/left/image_rect_color
+    color_info_topic: /mobile_1/zed/left/camera_info
+    sensor_frame: zed_left_camera_optical_frame
+    color_frame: zed_left_camera_optical_frame   # bag_probe 2026-09-19: BOTH image
+                                # headers carry this, so colour<-depth is the
+                                # identity and no camera TF is needed.
+    # MEASURED 2026-09-19 (scripts/bag_probe.py): colour and depth stamps are
+    # BYTE-IDENTICAL, 2288/2288 pairs, |dt| max 0.00 ms. So this stream must be
+    # synchronised EXACTLY. Running it through an approximate synchroniser is
+    # not a harmless fallback: the first container run did, and the matcher
+    # paired frames one period apart (+/-67 ms against a 67.01 ms period), which
+    # puts a whole frame of cart motion between each colour image and its depth.
+    stamps_exact: true
+    # Identity, and measured rather than assumed: the reference pose IS this
+    # frame, and "registered" means the depth is already in it.
+    reference_frame_from_sensor: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+    depth_scale: 1.0
+    range_m: [0.3, 12.0]
+    rate_hz: 14.7
+    note: runs on the SAME trajectory as mobile_1.ouster. That is what makes the
+          LiDAR-vs-RGB-D comparison on this sequence clean — same platform, same
+          motion, same clock, one reference.
+
+  mobile_2.realsense_rgbd:
+    agent: mobile_2
+    modality: rgbd
+    depth_topic: /mobile_2/depth/image_rect_raw           # 4300 msgs, 27.5 Hz, 16UC1 mm
+    depth_info_topic: /mobile_2/depth/camera_info
+    color_topic: /mobile_2/color/image_raw
+    color_info_topic: /mobile_2/color/camera_info
+    sensor_frame: camera_depth_optical_frame
+    color_frame: camera_color_optical_frame      # bag_probe 2026-09-19, off the
+                                # image headers. It DIFFERS from sensor_frame,
+                                # so an RGB-D front-end needs the edge below in
+                                # tf -- and this bag's tf_static carries no
+                                # RealSense frames at all (see the note on
+                                # tf_static coverage under mobile_2.imu).
+    # MEASURED 2026-09-19: 0/4295 exact matches, but |dt| median 0.01 ms and p95
+    # 0.01 ms against a 33.34 ms period -- ten microseconds, i.e. the two streams
+    # are stamped from the same capture and merely not bit-identical. Approximate
+    # sync with a tight interval is correct here; exact sync would match nothing.
+    # The 33.34 ms max is a handful of colour frames whose depth partner was
+    # dropped (4295 colour vs 4300 depth), not a systematic offset.
+    stamps_exact: false
+    # colour optical <- depth optical, as published. 59 mm, systematic, on every
+    # point if left at identity.
+    reference_frame_from_sensor: {x: 0.059190, y: -0.000010, z: -0.000406,
+                                  roll: -0.3398, pitch: 0.0958, yaw: 0.1493}
+    depth_scale: 0.001
+    range_m: [0.2, 10.0]
+    rate_hz: 27.5
+    note: ~87 deg horizontal FoV and a few metres of usable range. A different
+          platform and a different route from mobile_1, so a result here is not
+          a like-for-like against mobile_1.zed_rgbd — use that pair for the
+          modality comparison and this one for the second-platform check.
+
+  # I12 RESOLVED 2026-09-17: the radar clouds DO carry a Doppler field, so these
+  # two are live inputs to phase 6 tier 4. Field layout READ OFF THE BAG
+  # (phase0 2026-09-19): x,y,z,doppler,intensity — all float32, on all three
+  # radars. Only the SIGN convention remains open; resolve it against one
+  # known-motion segment before the ego-velocity front-end trusts it.
+  mobile_1.radar1:
+    agent: mobile_1
+    modality: radar
+    topic: /mobile_1/radar1/radar/points_all    # 2470 msgs, 15.8 Hz
+    doppler: true
+    doppler_field: doppler                # measured off the bag, phase0 2026-09-19
+    sensor_frame: radar1_link
+    reference_frame_from_sensor: {x: 0.207505, y: 0.076150, z: -0.108883,
+                                  roll: -174.5848, pitch: -76.2388, yaw: -95.2193}
+    note: >
+      IWR6843, order 1e1-1e2 points per frame. Still NOT a scan-matching input:
+      ICP on tens of points indoors is a research contribution, not a baseline.
+      What the Doppler field buys instead is EGO-VELOCITY. RANSAC plus least
+      squares over each sweep's (azimuth, elevation, radial velocity) triples
+      returns a 3D body velocity, which enters an estimator as a velocity
+      factor rather than as geometry. radar1 and radar2 sit ~120 deg apart in
+      yaw, which conditions that solve far better than either alone, since a
+      single unit observes the component across its boresight only weakly.
+      Ablation E measures whether the second unit earned its place.
+
+  mobile_1.radar2:
+    agent: mobile_1
+    modality: radar
+    topic: /mobile_1/radar2/radar/points_all    # 2448 msgs, 15.7 Hz
+    doppler: true
+    doppler_field: doppler                # measured off the bag, phase0 2026-09-19
+    sensor_frame: radar2_link
+    reference_frame_from_sensor: {x: -0.053850, y: 0.046553, z: -0.112039,
+                                  roll: 160.0651, pitch: -86.7452, yaw: 24.8992}
+
+  infra_1.radar:
+    agent: infra_1
+    modality: radar
+    topic: /infra_1/radar/points_all      # 1343 msgs, 8.6 Hz
+    sensor_frame: infra1_link
+    # CORRECTED 2026-09-19. Was {x: -5.508181, y: -2.590753, z: 1.998232,
+    # roll: -117.6730, pitch: 0.7379, yaw: -127.6503} -- wrong by 5.84 m and
+    # 9.34 deg, which IS the -5.5 m range and ~9 deg bearing residual phase0
+    # measured against both agents. Source: the published map ->
+    # arducam_optical_frame quaternion xyzw
+    #   [-0.4233836964, 0.7279153638, -0.4589288866, 0.283319159]
+    # Changed in the same commit as ../rosbag_to_opv2v/configs/mirc_coop2.yaml,
+    # per rule 4.
+    static_world_pose: {x: 0.1832321194, y: -3.850593738, z: 1.684896384,
+                        roll: -114.7303, pitch: 1.3671, yaw: -118.7566}
+    # VERIFIED 2026-09-19 against the published quaternion
+    # [0.571431, 0.563856, 0.432969, -0.409965] -- identical to 0.0000 deg.
+    #
+    # CHAIN VALIDATED end-to-end (infra_diag, corrected pose). Predicting where
+    # each cart should appear to this node and comparing against the radar's
+    # dynamic returns:
+    #   mobile_1  az med +0.28 deg (sd 3.64)  range med -0.12 m (sd 0.58)
+    #   mobile_2  az med +0.16 deg (sd 3.51)  range med +0.16 m (sd 0.53)
+    # and the nearest-return-to-predicted-range check is +-0.01 m on both, i.e.
+    # the carts ARE detected where predicted. The wrong pose hypotheses now
+    # produce the ~-6 m residual instead, which is the signature to want.
+    # No significant clock offset survives: bearing at dt=0 is already
+    # sub-degree and range is worse at the scan's nominal optimum.
+    #
+    # DUTY CYCLE, not a veto: the radar's demonstrated ceiling is 9.30 m
+    # (65058 returns; p99.9 = 9.30, 0.34% beyond 9 m, none beyond 12). The node
+    # supplies a factor only while an agent is inside that radius -- quote the
+    # in-range fraction beside whatever the +infra rung of the ladder buys.
+    max_range_measured_m: 9.30
+    reference_frame_from_sensor: {x: 0.017773, y: -0.208023, z: -0.155788,
+                                  roll: 176.0934, pitch: -73.1656, yaw: 92.1354}
+    note: a STATIC agent, so it has no trajectory to estimate. Its value to this
+          benchmark is the opposite one — it is an external observer of the two
+          mobile platforms, from a surveyed pose, with a clock of its own. See
+          IMPLEMENTATION.md phase 4.
+
+  # I1 RESOLVED from the recording's topic table: this bag carries THREE IMUs.
+  # mobile_1 has two, and which one a method may use is a scoping decision, not
+  # a hardware one -- see docs/MOBILE1_LIDARFREE_ODOMETRY.md Q2. The ZED's is
+  # the default for every visual-inertial entry: twice the rate, and rigid and
+  # factory-calibrated to the camera it is being fused with.
+  #
+  # What is still MISSING is the part that decides whether an inertial result
+  # means anything, and it is NOT filled in below because it is not recoverable
+  # from the topic table:
+  #   - the IMU<-sensor extrinsics (I5 for the LiDAR; Q4 for the camera). Only
+  #     3 messages on /tf_static for this whole rig -- verify what is in them
+  #     rather than assuming the ZED chain is.
+  #   - the noise model (white noise + random walk). Stated nowhere. Allan
+  #     variance off a static segment if the run has one; datasheet otherwise,
+  #     and then every tightly-coupled row says so beside its number.
+  mobile_1.imu:
+    agent: mobile_1
+    modality: imu
+    present: true
+    topic: /mobile_1/zed/imu/data         # 30067 msgs, 192.4 Hz
+    rate_hz: 192.4
+    sensor_frame: zed_imu_link
+    magnetometer_topic: /mobile_1/zed/imu/mag   # 7596 msgs, 48.6 Hz
+    # Two independent reasons, and this is the asymmetry that decides whether
+    # the two agents' inertial rows are the same experiment. (a) The topic is
+    # `imu/data`, not `imu/data_raw`; the ZED wrapper follows the ROS
+    # convention where the former carries a FUSED orientation and the latter
+    # does not. (b) Every rtabmap_rgbd_imu run on this agent has initialised and
+    # produced gravity-constrained output with no "doesn't have orientation
+    # set" rejection, which mobile_2 emitted on literally every sample.
+    # CONSEQUENCE: mobile_1's orientation is the ZED SDK's own fusion, mobile_2's
+    # will be Madgwick run by us. Same constraint, different provenance -- so
+    # "the IMU helped" compares cleanly WITHIN an agent and not across the two.
+    orientation: vendor_fused
+
+    # The camera is a ZED 2 or ZED 2i, DEDUCED rather than read off a label:
+    # the magnetometer topic is the discriminator, since ZED Mini and ZED X
+    # carry no magnetometer and the original ZED carries no IMU at all. The
+    # 192.4 Hz corroborates it -- the wrapper's default sensor rate is 200 Hz,
+    # and 192.4 is that with a few drops. Confirm against the serial before
+    # quoting it; the deduction is sound but it is still a deduction.
+    model_inferred: zed_2_or_2i
+
+    # REQUIRED before any TIGHTLY-coupled VIO (orbslam3_rgbd_inertial, openvins).
+    # CORRECTED 2026-09-19: this block used to say it was "NOT required by the
+    # loosely-coupled rows, which is why the ladder runs today". The first real
+    # container run falsified that. RTAB-Map's rgbd_odometry refuses to
+    # initialise its gravity estimate without a camera<-IMU transform -- "Dropping
+    # imu data! A valid TF between zed_left_camera_optical_frame and zed_imu_link
+    # is required" -- and, crucially, it then CONTINUES and emits a trajectory.
+    # A loosely-coupled row missing this extrinsic does not fail; it silently
+    # becomes its own IMU-free control. So the extrinsic gates every inertial
+    # row, tight or loose, and preflight now refuses without it. Three independent routes, in order of preference:
+    #   1. the ZED SDK, which is authoritative and does not depend on the bag:
+    #        getSensorsConfiguration().camera_imu_transform
+    #   2. /usr/local/zed/settings/SN<serial>.conf, the factory calibration
+    #   3. /tf_static. Only 3 messages, but TFMessage carries an ARRAY and
+    #      there are exactly 3 static publishers here (mobile_1, mobile_2,
+    #      infra_1), so the chain is plausibly all inside one of them.
+    #
+    # Whichever route: the wrapper publishes zed_imu_link against
+    # zed_camera_center, and this benchmark's reference frame is
+    # zed_left_camera_optical_frame. The chain therefore crosses the ROS-body
+    # to optical convention change, and getting that rotation wrong yields a
+    # transform that is plausible, silent and wrong -- the same class of defect
+    # the precheck already caught once (see IMPLEMENTATION.md, 2026-09-15).
+    # I13 RESOLVED 2026-09-19. Source: the ZED wrapper's published static TF on
+    # the cart (per-unit factory calibration; the .conf file does NOT carry it).
+    #   zed_left_camera_frame -> zed_imu_link :
+    #     t = [-0.002000, -0.023061, 0.000217] m        (23.1 mm lever arm)
+    #     q_xyzw = [-0.00847435, -0.00061121, 0.00738261, 0.99993658]
+    #     total misalignment 1.290 deg (rpy -0.972, -0.063, +0.847)
+    # That 1.29 deg IS the per-unit part a nominal transform would have missed:
+    # ~g*sin(1.29 deg) = 0.22 m/s^2 of gravity leak on every rotation.
+    # Composed forms live in the tightly-coupled method configs (IMU.T_b_c1).
+    # Sanity-checked: imu +z maps to optical [-0.017, -1.000, -0.001] ~= -y = up.
+    # Remaining verification: `scripts/gravity_check.py --agent mobile_1`. It
+    # compares three `up` directions in this IMU's own frame -- the fused
+    # orientation's, the accelerometer's on segments the REFERENCE says the
+    # body did not move in, and the one this extrinsic carries down from the
+    # anchored map's vertical. That splits a tilted gravity constraint between
+    # the fusion and this transform, which is the open question behind
+    # mobile_1's inertial row scoring WORSE than its IMU-free control. The
+    # check is blind to a rotation about gravity itself; say so when quoting it.
+    extrinsic_from_camera:
+      parent: zed_left_camera_frame
+      child: zed_imu_link
+      xyz: [-0.002000, -0.023061, 0.000217]
+      quat_xyzw: [-0.00847435, -0.00061121, 0.00738261, 0.99993658]
+
+    # NOT RECOVERABLE FROM THIS BAG, and `null` rather than a guess per rule 3.
+    # Allan variance needs hours of static logging -- the bias random-walk terms
+    # only emerge at cluster times of 1e2-1e3 s -- and this recording is 156 s.
+    # A static segment inside it, if one exists, bounds the WHITE NOISE only and
+    # says nothing about the random walks.
+    #
+    # The fix is one overnight and no effort: park the camera on a desk, record
+    # /zed/imu/data for 3+ hours, run allan_variance_ros. It is a property of
+    # the unit, so it is measured once and serves every future recording.
+    #
+    # Until then the tightly-coupled rows carry order-of-magnitude values in
+    # their METHOD config (rule 7: declared once, provenance named beside it),
+    # never here. Err HIGH: over-stated noise makes an estimator distrust the
+    # IMU and degrade gracefully toward vision-only, while under-stated noise
+    # makes it over-trust the IMU and diverge. The asymmetry is not symmetric
+    # and the safe side is known.
+    noise_model: null
+
+    # EXCLUDED by scoping decision, 2026-09-17: the user's answer to Q2 is that
+    # the Ouster's IMU counts as using the LiDAR. It is therefore off-limits for
+    # this agent, the IMU-source ablation is dropped, and /mobile_1/ouster/imu
+    # (15137 msgs, 96.9 Hz, os_imu) is recorded here only so the exclusion is a
+    # decision on the record rather than an oversight.
+    excluded:
+      topic: /mobile_1/ouster/imu
+      reason: counts as using the LiDAR (user scoping decision)
+  mobile_2.imu:
+    agent: mobile_2
+    modality: imu
+    present: true
+    topic: /mobile_2/imu                  # 28646 msgs, 199.9 Hz (bag_probe)
+    rate_hz: 199.9
+    sensor_frame: camera_imu_optical_frame   # bag_probe 2026-09-19, off the header
+    # MEASURED 2026-09-20 BY RUNNING IT: RTAB-Map rejected every sample with
+    # "IMU received doesn't have orientation set, it is ignored". The RealSense
+    # publishes raw gyro and accelerometer; the `orientation` quaternion is
+    # unset. That is not a fault -- it is what the device emits without a fusion
+    # step -- but RTAB-Map takes gravity from that quaternion and computes none
+    # itself, so with wait_imu_to_init on, the odometry never initialises and
+    # the mapping node starves reporting "Did not receive data since 5 seconds".
+    # One cause, two unrelated-looking errors.
+    orientation: absent
+    # STILL NULL, AND NOW IT BLOCKS A ROW RATHER THAN A FOOTNOTE.
+    #
+    # TF_STATIC COVERAGE, MEASURED 2026-09-19: the bag's /tf_static carries
+    # SEVEN edges in TWO disconnected trees -- the ZED chain (zed_camera_center,
+    # zed_camera_link, zed_{left,right}_camera_{frame,optical_frame}) and the
+    # Ouster chain (os_sensor, os_lidar, os_imu). That is all of it. There are
+    # no RealSense frames, no infra_1 frames, and -- see mobile_1.imu -- no
+    # zed_imu_link either. So NOTHING about mobile_2's geometry is recoverable
+    # from tf_static, and this extrinsic cannot be filled the way I13 was.
+    #
+    # RETRACTED 2026-09-20: this block used to say the depth<-IMU extrinsic is
+    # "a per-unit factory value", and that is WRONG. librealsense's own
+    # doc/d435i.md states it plainly: "The depth<->IMU sensor extrinsic (rigid
+    # body transformation) is precalculated based on mechanical drawings and
+    # cannot be modified." What IS per-unit on these modules is the IMU
+    # INTRINSIC set -- bias, zero offset, covariance -- which ships
+    # uncalibrated and is what `rs-imu-calibration.py` writes to NVRAM. That
+    # distinction is the whole difference between this field, which is now
+    # filled from a published constant, and `noise_model` below, which still
+    # cannot be.
+    #
+    # 2026-09-20: THE DEVICE IS NOT ALWAYS TO HAND, AND THE ROTATION DOES NOT
+    # NEED IT. The IMU is bolted to the imager, so both sensors observe the same
+    # rotation of the same rigid body: omega_cam = R @ omega_imu at every
+    # instant. `scripts/imu_extrinsic.py` fits that R over the whole run
+    # (Wahba/SVD), searches the clock offset rather than assuming it, and
+    # REFUSES when the motion is too planar to identify all three axes. It
+    # recovers a planted rotation to 0.0009 deg on synthetic data.
+    # Two limits, both stated by the script itself:
+    #   * The TRANSLATION stays null. Its observability lives in the
+    #     accelerometer's centripetal and tangential terms, which at indoor cart
+    #     rates sit under the noise floor. It still needs the device.
+    #   * mobile_2's reference is cuVSLAM-derived and cuVSLAM already fuses THIS
+    #     IMU, so the fit returns the extrinsic the RECORDING used. That makes
+    #     the benchmark self-consistent; it is not an independent check of the
+    #     factory calibration. Read the residual.
+    #
+    # RUN 2026-09-20, AND IT REFUSED. Over 1016 intervals at +4 ms clock offset
+    # the correlation matrix has singular values 44.238 / 0.014 / 0.005 -- the
+    # weakest axis carries 0.03% of the strongest. Cumulative rotation per
+    # camera axis is [140, 1094, 101] deg: the cart yaws about the optical y
+    # axis and does essentially nothing else, because it is a wheeled platform
+    # on a flat floor. Rotation about the two in-plane axes is therefore NOT
+    # identified, and no amount of data from THIS sequence will identify it.
+    # Not a defect in the method and not a tuning threshold to relax: it is the
+    # motion.
+    # CONSEQUENCE BEYOND THIS FIELD: any method that self-calibrates its
+    # camera-IMU extrinsic online hits the same rank deficiency and will not
+    # converge here. Declare the extrinsic to such a method; do not let it
+    # solve for one.
+    #
+    # FILLED 2026-09-20 from the mechanical constant, NOT from a guess. Because
+    # the extrinsic is fixed by design rather than calibrated per unit (see the
+    # retraction above), the value the device would report is the published one,
+    # and fetching the D455 adds nothing to this field. Composed as
+    #   camera_color_optical_frame <- camera_link <- camera_imu_optical_frame
+    # from two parts:
+    #   (a) camera_link -> IMU, the mechanical constant, from Intel's own
+    #       realsense2_description/urdf/_d455.urdf.xacro:
+    #         d455_imu_px -0.01602, d455_imu_py -0.03022, d455_imu_pz +0.0074
+    #       with the IMU link at rpy 0 0 0 to camera_link and the optical frame
+    #       at rpy -pi/2 0 -pi/2, as every RealSense optical frame is.
+    #   (b) camera_link -> camera_color_optical_frame, MEASURED ON THIS UNIT
+    #       (trans [0.000308, 0.059191, -0.000162], quat xyzw
+    #        [0.499583, -0.497446, 0.501716, -0.501244]). The depth<->colour
+    #       extrinsic IS per-unit calibrated, so this half uses the device's own
+    #       number and carries its 0.383 deg departure from nominal into the
+    #       result.
+    # THREE INDEPENDENT CHECKS, all passed:
+    #   * librealsense issue #7568 reports [-0.0302, 0.0074, 0.0160] read off a
+    #     real D455 bag; the URDF constant in optical axes negates to
+    #     [-0.03022, 0.0074, 0.01602] -- the same transform in the opposite
+    #     direction, agreeing to 0.03 mm.
+    #   * the URDF's depth->colour offset of 0.059 m matches this unit's
+    #     measured 0.059192 m to 0.19 mm, which is what confirms the part number
+    #     is right and this is a D455 and not a D435i.
+    #   * the nominal body->optical rotation sits 0.383 deg from this unit's
+    #     measured colour optical rotation, i.e. within per-unit calibration.
+    # THE LEVER ARM IS 91.2 mm, NOT A FEW MILLIMETRES. The colour imager and the
+    # IMU sit on OPPOSITE sides of camera_link -- colour +59 mm, IMU -30 mm
+    # along y -- so anything that treats them as co-located is 9 cm wrong.
+    # SCHEMA MATTERS AND I GOT IT WRONG ONCE. This field is consumed by
+    # run_method.py, which publishes it as a static TF edge and needs
+    # parent/child/xyz/quat_xyzw -- the same shape as mobile_1.imu above. Written
+    # in `reference_frame_from_sensor`'s {x,y,z,roll,pitch,yaw} shape instead, it
+    # passed preflight (which only asked whether the dict was non-empty), emitted
+    # NO tf edge, and rgbd_odometry sat waiting for a camera<-IMU transform that
+    # never arrived while the mapping node blamed its input topics. Preflight now
+    # checks the keys.
+    extrinsic_from_camera:
+      parent: camera_color_optical_frame
+      child: camera_imu_optical_frame
+      xyz: [0.089403, -0.007426, -0.016432]
+      quat_xyzw: [-0.002965, 0.000832, 0.001304, 0.999994]
+      source: >-
+        realsense2_description _d455.urdf.xacro (mechanical constant, fixed by
+        design per librealsense doc/d435i.md) composed with this unit's measured
+        camera_link -> camera_color_optical_frame. Cross-checked against
+        librealsense issue #7568 to 0.03 mm.
+      independent_of_reference: true        # nothing here came from cuVSLAM
+      # What this does NOT cover: the per-unit IMU intrinsics. See noise_model.
+    noise_model: null
+
+  # ------------------------------------------------- already-recorded baselines
+  #
+  # The ZED SDK's own visual-inertial odometry is IN THE BAG. It costs nothing
+  # to score and it is the bar any open-source entry on this platform has to
+  # clear, so it is scored BEFORE any container is built. See
+  # docs/MOBILE1_LIDARFREE_ODOMETRY.md, step T0.
+  mobile_1.zed_sdk_odom:
+    agent: mobile_1
+    modality: rgbd_inertial
+    topic: /mobile_1/zed/odom             # 2292 msgs, 14.7 Hz
+    kind: recorded_baseline
+    loop_closure: false
+    sensor_frame: zed_left_camera_optical_frame
+    reference_frame_from_sensor: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+    note: closed-source. A row, not a method -- it cannot be ablated, so it sets
+          the bar without ever explaining it.
+  mobile_1.zed_sdk_pose:
+    agent: mobile_1
+    modality: rgbd_inertial
+    topic: /mobile_1/zed/pose             # 2200 msgs, 14.1 Hz
+    kind: recorded_baseline
+    loop_closure: true                    # spatial memory / area memory
+    sensor_frame: zed_left_camera_optical_frame
+    reference_frame_from_sensor: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+
+# ---------------------------------------------------------------- evaluation
+eval:
+  # Trajectory
+  alignment: se3                 # none | se3 | sim3 | yaw. se3 for metric sensors;
+                                 # sim3 only for a monocular entry, and then say so.
+  align_n_first: null            # e.g. 100 to anchor on the start and measure drift
+                                 # away from it rather than best-fitting the whole run
+  max_gap_s: 0.25                # a reference gap wider than this is a dropout, and
+                                 # queries inside it are dropped, not interpolated
+  rpe_deltas:
+    - {delta: 1.0, unit: m}      # the honest discriminator on a 16 m room: the
+    - {delta: 5.0, unit: m}      # reference is far more trustworthy over 1 m than
+    - {delta: 10.0, unit: s}     # over the whole sequence
+  revisit: {radius_m: 0.30, min_separation_s: 20.0}
+
+  # Map. Both of these are CHOICES that change the ranking, so both are stated in
+  # the write-up next to the numbers.
+  volume: {min: null, max: null}
+  # REQUIRED before map metrics. Take it from the anchored map cloud, not from
+  # the trajectories: a volume fitted to where the robots went scores every
+  # method only where it was already confident. A defensible choice is the
+  # axis-aligned box of the map cloud's occupied space, eroded by 0.25 m so
+  # boundary effects at the walls do not dominate completeness.
+  resolution_m: 0.02             # rho. Do not go below the reference map's own
+                                 # anchoring spread (3 mm best board, 15 mm worst) —
+                                 # below that this benchmark is measuring the survey.
+  truncate_m: 0.50               # distances beyond this are clamped AND the clamped
+                                 # fraction is reported; a mean over a 40%-truncated
+                                 # cloud is a coverage number wearing a distance's units
+  fscore_thresholds_m: [0.02, 0.05, 0.10]
+  map_frame: aligned             # aligned | raw. `aligned` applies the trajectory's
+                                 # own ATE alignment to the map first, so map quality
+                                 # is scored GIVEN re-localisation; `raw` includes the
+                                 # method's drift in the map score. Different
+                                 # experiments; report which.

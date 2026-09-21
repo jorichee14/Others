@@ -1,0 +1,43 @@
+# Tier 0. Not a method — a row. It is already in the bag.
+name: zed_sdk_odom
+family: recorded_baseline
+origin: "[I] closed-source, shipped with the camera"
+modality: [rgbd]                # the STREAM it is associated with. It DID use
+                                # the IMU internally -- see uses_imu_internally --
+                                # but we supply nothing, so it consumes no imu
+                                # stream and must not claim an inertial modality
+                                # the evaluator would then try to match.
+uses_imu_internally: true       # the manufacturer's, with their extrinsic and
+                                # their tuning. Not ours, and not ablatable.
+coupling: closed
+needs_imu: false                # it used one; WE do not supply it
+loop_closure: false             # pure odometry: no spatial memory on this topic
+outputs: [trajectory]
+reference_impl: https://www.stereolabs.com/docs/positional-tracking
+image: null                     # nothing to run. This is a topic export.
+kind: recorded_baseline
+source_topic: /mobile_1/zed/odom          # 2292 msgs, 14.7 Hz
+
+streams: [mobile_1.zed_rgbd]
+
+params: {}
+
+notes: |
+  THE BAR. The ZED SDK's own visual-inertial odometry, computed on the cart at
+  record time and recorded. It costs no compute, needs no container and no
+  calibration, and it is what "better odometry" has to beat — an open-source
+  entry that loses to the sensor's own firmware has not improved anything.
+
+  Score it FIRST, before any image is built. If it lands near the reference, the
+  useful question changes from "can we do better" to "can anything open-source
+  match this", and phase 6 is re-pointed rather than run as written.
+
+  Two limits, both of which keep it out of the peer ranking:
+  * Closed source, so it cannot be ablated. It sets the bar without ever
+    explaining it, and no sensor-set row can be derived from it.
+  * Its internal IMU handling, extrinsic and tuning are the manufacturer's. A
+    gap between this and an open-source inertial row is therefore not clean
+    evidence about coupling or estimator design.
+
+  Its frame is zed_left_camera_optical_frame, which IS the reference frame, so
+  the comparison needs no transform at all.

@@ -1,0 +1,98 @@
+# Tier 3. The learned entry, and the other half of the scale question.
+name: mast3r_slam
+family: learned_dense_slam
+origin: "[O] MASt3R's priors are trained on outdoor and object-centric data;
+         indoor lab is in distribution for 7-Scenes-like scenes but the ZED's
+         wide FoV and the pushcart's motion are not what it was tuned on"
+modality: [rgbd]                # the STREAM is rgbd; this row consumes the
+                                # COLOUR IMAGE ONLY. The depth is discarded --
+                                # and that is the experiment, again.
+coupling: none                  # no IMU. Geometry comes from a learned prior.
+needs_imu: false
+loop_closure: true              # retrieval-based, over the pointmap graph
+outputs: [trajectory, map]      # DENSE pointmaps, so it scores on map metrics
+reference_impl: https://github.com/rmurai0610/MASt3R-SLAM
+image: slambench/mast3r-slam:humble
+# THIS ROW HAS METRIC SCALE, AND THE EARLIER `metric_scale: false` HERE WAS
+# WRONG. The image is built on the *_metric.pth checkpoint: MASt3R's metric
+# variant predicts pointmaps in METRES, so this is not classical monocular
+# SLAM with a free scale factor. The measurements say so too -- an arbitrary
+# scale would land anywhere, and mobile_2 came back at 1.0144:
+#
+#   mobile_2 (RealSense)  scale 1.0144   se3 ATE 120 mm   <- within 1.4%
+#   mobile_1 (ZED)        scale 0.729    se3 ATE 1.91 m   <- 27% SHORT
+#
+# So se3 IS this row's result, the 27% on mobile_1 is a real failure of the
+# learned metric prior on that camera rather than an absent capability, and
+# sim3 (85 mm on mobile_1) is the shape-only diagnostic that separates the
+# scale failure from the tracking. The scale column carries the finding.
+metric_scale: true
+# main.py saves KEYFRAME poses only (38 over 156 s on mobile_1, 151 on
+# mobile_2). The evaluator associates by stamp, so a sparse trajectory is
+# legal; the anchor check evaluates between poses and prints the gap. Recorded
+# here for the reader, not read by the evaluator — sparsity is a property of
+# the run (RTAB-Map's graph export is sparse too, its odometry is not).
+poses: keyframes
+gpu: required
+
+streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]   # stage 1, both platforms
+
+params:
+  use_calib: true               # the ZED's camera_info is known and good; running
+                                # it uncalibrated is a different experiment
+  mode: monocular               # there is no other mode: it takes images
+  # Trained at a fixed input resolution. The resize is per stream and must be
+  # recorded because it changes the effective focal length the network sees --
+  # the same trap droid_slam.yaml already carries.
+  #
+  # RESOLVED 2026-09-19 by reading the implementation, not by choosing a value:
+  # `img_size` is a hard-coded attribute of MASt3R-SLAM's `MonocularDataset`
+  # (=512, the resolution its checkpoint is named for), and no CLI or config key
+  # exposes it. There is nothing to tune here; the number is recorded so the
+  # effective focal length is recoverable, and the container reconstructs it from
+  # the bag's own camera_info, which it writes out beside the frames.
+  image_size: 512               # not settable; MonocularDataset.img_size
+  subsample: 1                  # published default: every frame
+  img_downsample: 1             # published default
+  center_principle_point: true  # published default (base.yaml)
+
+notes: |
+  WHY IT IS HERE, AND IT IS NOT "BECAUSE IT IS NEW". It pairs with
+  orbslam3_mono_inertial to ask one sharp question: on a LiDAR-free platform,
+  where is scale and geometry best obtained from? Both rows are monocular and
+  neither sees the depth. One takes its geometry from an IMU; the other takes it
+  from a learned 3D prior. That pair is the question this phase is really about,
+  posed at its extreme.
+
+  AND ON coop2 THAT STOPPED BEING HYPOTHETICAL. The room's walls are reflective,
+  the ZED's stereo depth drops out, and the recorded ZED odometry lands ~6 m from
+  the reference. So this row is no longer the speculative learned entry -- it is
+  one of the few that does not inherit the failure, and it should be run early
+  rather than last. Quantify the dropout with scripts/depth_health.py first.
+
+  It attacks the depth camera's ACTUAL failure mode rather than a generic
+  one. The ZED stops at ~12 m, in an 87 degree wedge, and stereo depth degrades
+  on textureless surfaces -- a blank lab wall at 3 m. MASt3R predicts geometry
+  in exactly those regions, because a prior does not need texture to produce a
+  pointmap. So it is the one entry that could plausibly beat the depth sensor on
+  the sensor's own weakness, which makes a loss here as informative as a win.
+
+  SCALE: HANDLE IT EXPLICITLY OR THE ROW IS UNREADABLE. Monocular with learned
+  priors is not reliably metric -- the published evaluations are sim3-aligned.
+  Report this row TWICE and label both:
+    * sim3-aligned ATE, comparable to the paper's own numbers
+    * se3 ATE after fixing ONE global scale factor solved against the ZED depth
+      over the frames where depth is valid
+  The second is the useful one here, it costs a single least-squares fit, and it
+  converts the row into something the metric table can hold. The gap between the
+  two is the scale error, reported as its own number.
+
+  It supersedes droid_slam FOR THIS PHASE -- denser, newer, and better on low
+  texture, which is the failure this room will produce. droid_slam stays in
+  track A, where the question is about learned front-ends in general rather than
+  about this platform's scale.
+
+  GPU, and not real time on anything modest. The runtime column is part of the
+  result: a LiDAR-free platform is usually LiDAR-free because of cost, power or
+  weight, and an entry that needs a 4090 on the cart has answered a different
+  question from the one that was asked.

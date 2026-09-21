@@ -1,0 +1,44 @@
+# Tier 3, loosely coupled. The likeliest winner, and the cheapest to build.
+name: rtabmap_ext_odom
+family: rgbd_slam
+origin: "[I]"
+modality: [rgbd]
+coupling: loose
+needs_imu: true
+loop_closure: true
+outputs: [trajectory, map]
+reference_impl: https://github.com/introlab/rtabmap_ros
+image: slambench/rtabmap:humble
+
+streams: [mobile_1.zed_rgbd]
+imu_by_agent:
+  mobile_1: mobile_1.imu
+
+params:
+  Vis/MinInliers: 15
+  Vis/MaxDepth: 8.0
+  RGBD/LinearUpdate: 0.05
+  RGBD/AngularUpdate: 0.05
+  Grid/3D: "true"
+  Grid/CellSize: 0.05
+  Optimizer/GravitySigma: 0.3
+  # RTAB-Map's odometry is replaceable. Point it at the best odometry available
+  # and it contributes appearance loop closure, graph optimisation and the dense
+  # map on top. `null` because WHICH source is a result, not a setting: it is
+  # whatever won tier 0-3 on this sequence.
+  odom_source: null             # REQUIRED: the winning odometry's run directory
+
+notes: |
+  Architecturally the strongest cheap configuration on this platform, and worth
+  stating why: RTAB-Map decouples odometry from mapping, so this row inherits
+  the best front-end phase 6 found and adds the three things a pure odometry
+  cannot do. It needs no new estimator and no calibration beyond what its
+  source already used.
+
+  It is also the row that carries the headline while I13/I14 are open, since
+  nothing in it depends on the camera<->IMU extrinsic or the IMU noise model.
+
+  Read it honestly: if `odom_source` is zed_sdk_odom, this measures what
+  open-source loop closure adds to closed-source odometry — a real and useful
+  result, but not an open-source odometry result, and the table must not let it
+  be read as one. Name the source in the row label, never just the method.

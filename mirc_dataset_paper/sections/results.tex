@@ -1,0 +1,58 @@
+%=======================================================================
+% Requires: amsmath, siunitx. Refers to tab:seq, eq:visible, eq:observed.
+%=======================================================================
+\section{Results}
+\label{sec:findings}
+
+Three observations follow from Table~\ref{tab:seq}, each of a kind an aggregate
+metric cannot produce.
+
+\paragraph{Range, not occlusion, is the binding constraint.}
+The condition the collection was designed around is not the one that limits the
+team. Occlusion rescue occurs on 0.10 and 0.02 of ego-in-FoV observations,
+range rescue on 0.29 and 0.39. Stratified by ego--object range, rescue rates are
+near zero below \SI{5}{\metre} and rise to \numrange{0.5}{0.7} beyond it, and
+the mechanism is visible in \texttt{mobile\_2}'s per-range statistics: across
+the \SIrange{2}{5}{\metre}, \SIrange{5}{10}{\metre}, and
+\SIrange{10}{15}{\metre} bins its fraction \textit{visible} stays at
+\numrange{0.96}{1.00} while its fraction \textit{observed} collapses from
+\num{0.85} to \num{0.00}. The geometry admits sight of the object throughout;
+the sensor stops returning it past the first bin. A release reporting
+line-of-sight geometry alone would characterise this team as having
+near-complete coverage. The effect was not staged, which makes it stronger
+evidence than the occlusion episodes that were.
+
+\paragraph{The evidence definition changes the rate by a factor of 36.}
+\texttt{mobile\_1}'s range-rescue rate is \num{0.008} under Ouster LiDAR returns
+and \num{0.29} under ZED stereo depth, for the same trajectory, scene, ray
+casts, annotations, and occlusion labels; only the floor and the calibrated
+range cap in~\eqref{eq:observed} changed. A collaboration rate reported without
+its evidence source is therefore not reproducible to better than a factor of
+tens, and rates computed under different sensing budgets are not comparable.
+The per-modality evidence counts are released per (frame, node, object) so that
+any such rate can be recomputed under a stated definition.
+
+\paragraph{Viewpoint complementarity is positional, not elevational.}
+The same infrastructure node, in the same pose, is a complementary viewpoint
+for one mobile node and a redundant one for the other: median $\beta$ of
+$149^\circ$ with $\beta > 90^\circ$ on 67\,\% of frames when \texttt{mobile\_1}
+is ego, $29^\circ$ and 33\,\% when \texttt{mobile\_2} is. The elevation offset
+is identical in both cases; what differs is where the ego stood relative to the
+infrastructure and the object. Height confers persistence and an unobstructed
+downward line, but not by itself the wide baseline from which fusion benefits.
+Reporting $\Delta h$, as infrastructure-augmented datasets conventionally do,
+does not characterise the collaboration geometry; $\beta$ conditioned on the
+ego does.
+
+\paragraph{Limits of the present evidence.}
+Two annotated static objects make $C$ a three-valued quantity and every rate
+derived from it coarse; the occlusion claims rest on 9 and 8 episodes, not on
+\num{733} frames, since frames within an episode are not independent; and one
+\SI{156}{\second} run at one site supports no site- or platform-general claim.
+Doppler diversity is undefined without motion, handover is under-sampled with
+one infrastructure node, and the link-state paradigms are computed but not yet
+folded into the classifier. Both ego assignments of one recording control for
+platform but not trajectory; paired repeats with a single factor varied are the
+stronger control and are not yet collected. The additions that make every
+paradigm computable are scripted moving participants, full annotation of a
+bounded region, a second infrastructure node, and radar on \texttt{mobile\_2}.
