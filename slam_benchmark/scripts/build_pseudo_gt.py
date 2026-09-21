@@ -346,6 +346,10 @@ def main() -> int:
     }
     (out_dir / "run.json").write_text(json.dumps(run_json, indent=2, default=_json_default))
     (out_dir / "graph.json").write_text(json.dumps(construction, indent=2, default=_json_default))
+    # The factors travel with the result so scripts/nees_check.py can build the
+    # covariance of the graph that was ACTUALLY solved. Rebuilding them from
+    # graph.json would give something similar with no way to detect divergence.
+    factors.save(out_dir / "factors.npz")
     latest = out_dir.parent / "latest"
     if latest.is_symlink() or latest.exists():
         latest.unlink()

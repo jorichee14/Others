@@ -207,6 +207,29 @@ class Factors:
             self.p_tag + other.p_tag, self.p_src + other.p_src,
             np.concatenate([self.p_huber, other.p_huber]))
 
+    def save(self, path) -> None:
+        """Persist every column beside the solve that used them.
+
+        The NEES check needs the covariance of the graph that was ACTUALLY
+        solved. Rebuilding the factors from `graph.json` would reconstruct
+        something similar and there would be no way to tell if it had
+        diverged -- a covariance has no units to sanity-check. So the factors
+        travel with the result."""
+        np.savez_compressed(
+            str(path), b_i=self.b_i, b_R=self.b_R, b_t=self.b_t, b_sigma=self.b_sigma,
+            b_huber=self.b_huber, b_tag=np.array(self.b_tag, dtype=object),
+            p_i=self.p_i, p_R=self.p_R, p_t=self.p_t, p_sigma=self.p_sigma,
+            p_huber=self.p_huber, p_tag=np.array(self.p_tag, dtype=object),
+            p_src=np.array(self.p_src, dtype=object))
+
+    @staticmethod
+    def load(path) -> "Factors":
+        z = np.load(str(path), allow_pickle=True)
+        return Factors(
+            z["b_i"], z["b_R"], z["b_t"], z["b_sigma"], list(z["b_tag"]), z["b_huber"],
+            z["p_i"], z["p_R"], z["p_t"], z["p_sigma"], list(z["p_tag"]),
+            list(z["p_src"]), z["p_huber"])
+
     def counts(self) -> dict:
         from collections import Counter
         return {"between": dict(Counter(self.b_tag)), "prior": dict(Counter(self.p_tag)),
@@ -314,7 +337,27 @@ def _robust_cost(rw: np.ndarray, c: np.ndarray) -> float:
     return float(np.sum(quad ** 2 + 2.0 * quad * np.maximum(s - c, 0.0)))
 
 
+def _check_columns(f: Factors) -> None:
+    """Every columnar field must have one entry per factor.
+
+    A builder that assigns `b_i` directly after construction bypasses
+    `__post_init__`, so the huber and source columns stay empty and the first
+    thing to notice is a broadcast error deep in the weighting. Caught here,
+    where the message can name the field.
+    """
+    for name, col, ref in (("b_huber", f.b_huber, f.b_i), ("p_huber", f.p_huber, f.p_i),
+                           ("p_src", f.p_src, f.p_i), ("b_tag", f.b_tag, f.b_i),
+                           ("p_tag", f.p_tag, f.p_i)):
+        if len(col) != len(ref):
+            raise ValueError(
+                f"Factors.{name} has {len(col)} entries for {len(ref)} factors. A builder "
+                f"assigned the index column directly and left this one behind; set it "
+                f"there rather than defaulting it here, so the factor's weight is always "
+                f"the builder's declared choice.")
+
+
 def _cost(R, t, f: Factors) -> tuple[float, dict]:
+    _check_columns(f)
     parts = {}
     total = 0.0
     if len(f.b_i):
@@ -442,6 +485,115 @@ def solve(poses0: np.ndarray, f: Factors, max_iter: int = 50, lam0: float = 1e-4
     out[:, :3, :3] = R; out[:, :3, 3] = t
     return out, SolveReport(it, converged, cost0, cost, rms0, rms1, max_step_m, max_step_deg,
                             N, int(len(f.b_i)), int(len(f.p_i)), lam)
+
+
+
+def _block_tridiag_inv_diag(D: np.ndarray, U: np.ndarray) -> np.ndarray:
+    """Diagonal blocks of H^-1 for H block-tridiagonal, in O(N).
+
+    The full inverse is DENSE and (6N)^2 is 81 million entries at N=1500, but
+    the per-pose marginal covariance is only its diagonal blocks, and those
+    come from two Schur recursions:
+
+        A_1 = D_1,   A_k = D_k - U_{k-1}^T A_{k-1}^-1 U_{k-1}      (forward)
+        B_N = D_N,   B_k = D_k - U_k B_{k+1}^-1 U_k^T              (backward)
+        Sigma_kk = (A_k + B_k - D_k)^-1
+
+    A_k carries everything to the left of pose k and B_k everything to the
+    right, so the marginal is conditioned on the WHOLE graph rather than on a
+    local window -- which matters here, because a pose in the middle of a
+    125 s bridge gets its information from anchors at both ends and a
+    one-sided recursion would report it as far more uncertain than it is.
+    """
+    N = len(D)
+    A = np.empty_like(D); B = np.empty_like(D)
+    A[0] = D[0]
+    for k in range(1, N):
+        A[k] = D[k] - U[k - 1].T @ np.linalg.solve(A[k - 1], U[k - 1])
+    B[N - 1] = D[N - 1]
+    for k in range(N - 2, -1, -1):
+        B[k] = D[k] - U[k] @ np.linalg.solve(B[k + 1], U[k].T)
+    out = np.empty_like(D)
+    for k in range(N):
+        out[k] = np.linalg.inv(A[k] + B[k] - D[k])
+    return out
+
+
+def marginal_covariances(poses: np.ndarray, f: Factors) -> np.ndarray:
+    """(N,6,6) per-pose marginal covariance of the solution, ordered [t, r].
+
+    This is what the estimator CLAIMS about itself: precision conditional on
+    the declared sigmas and on the model being right. It cannot see a
+    mis-declared extrinsic, a wrong board convention, or a biased anchor --
+    which is exactly why `scripts/nees_check.py` exists to test it against an
+    error measured with a source held OUT of the fit.
+
+    Built at the given solution, with the same robust weights the solve used:
+    a factor the kernel down-weighted contributed less information, and
+    pretending otherwise would report a covariance the solve never had.
+    """
+    _check_columns(f)
+    poses = np.asarray(poses, dtype=np.float64).reshape(-1, 4, 4)
+    N = len(poses)
+    R, t = poses[:, :3, :3], poses[:, :3, 3]
+    D = np.zeros((N, 6, 6)); U = np.zeros((max(N - 1, 0), 6, 6))
+
+    if len(f.b_i):
+        rb = _between_residual(R, t, f)
+        W = 1.0 / f.b_sigma
+        W = W * np.sqrt(huber_weight(rb * W, f.b_huber))[:, None]
+        Ri, ti = R[f.b_i], t[f.b_i]
+        Rj, tj = R[f.b_i + 1], t[f.b_i + 1]
+        Ji = _jac_wrt(lambda Rg, tg: _between_residual_g(Rg, tg, Rj, tj, f.b_R, f.b_t), Ri, ti)
+        Jj = _jac_wrt(lambda Rg, tg: _between_residual_g(Ri, ti, Rg, tg, f.b_R, f.b_t), Rj, tj)
+        JiW = Ji * W[:, :, None]; JjW = Jj * W[:, :, None]
+        np.add.at(D, f.b_i, np.einsum("kri,krj->kij", JiW, JiW))
+        np.add.at(D, f.b_i + 1, np.einsum("kri,krj->kij", JjW, JjW))
+        np.add.at(U, f.b_i, np.einsum("kri,krj->kij", JiW, JjW))
+    if len(f.p_i):
+        rp = _prior_residual(R, t, f)
+        W = 1.0 / f.p_sigma
+        W = W * np.sqrt(huber_weight(rp * W, f.p_huber))[:, None]
+        Jp = _jac_wrt(lambda Rg, tg: _prior_residual_g(Rg, tg, f.p_R, f.p_t), R[f.p_i], t[f.p_i])
+        JpW = Jp * W[:, :, None]
+        np.add.at(D, f.p_i, np.einsum("kri,krj->kij", JpW, JpW))
+
+    if len(f.p_i) == 0:
+        raise ValueError("no prior factor: the gauge is free, so there is no marginal "
+                         "covariance in the world frame -- only a relative one. Fix the "
+                         "gauge before asking what the poses are uncertain BY.")
+    return _block_tridiag_inv_diag(D, U)
+
+
+def nees(errors: np.ndarray, cov: np.ndarray) -> dict:
+    """Normalised estimation error squared, per sample and pooled.
+
+    NEES = e^T Sigma^-1 e for a d-dimensional error, which under a correct
+    model has mean d. Reported divided by d so that **1.0 is correct**,
+    above 1 is OVERCONFIDENT (the error bar is too small, whatever the
+    trajectory's quality) and below 1 conservative.
+
+    This is the test the GT literature does not run: PALoc propagates a
+    covariance, LaMAR inverts its refinement Hessian, the CRLB work computes
+    the bound analytically -- and each is precision conditional on the noise
+    model. NEES against an error measured with a HELD-OUT source is what says
+    whether that model was right.
+    """
+    e = np.asarray(errors, dtype=np.float64)
+    C = np.asarray(cov, dtype=np.float64)
+    d = e.shape[1]
+    v = np.einsum("ki,kij,kj->k", e, np.linalg.inv(C), e) / d
+    n = len(v)
+    # 95% interval on the MEAN of n chi2_d/d samples, normal approximation:
+    # var(chi2_d/d) = 2/d, so the mean has sd sqrt(2/(d*n)).
+    half = 1.96 * np.sqrt(2.0 / (d * max(n, 1)))
+    mean = float(np.mean(v))
+    return {"d": int(d), "n": n, "nees_mean": mean, "nees_median": float(np.median(v)),
+            "ci95_of_consistent": [1.0 - half, 1.0 + half],
+            "consistent": bool(abs(mean - 1.0) <= half),
+            "verdict": ("consistent" if abs(mean - 1.0) <= half
+                        else ("OVERCONFIDENT" if mean > 1.0 else "conservative")),
+            "inflate_sigma_by": float(np.sqrt(mean)), "per_sample": v}
 
 
 # -------------------------------------------------------------------- builders
@@ -594,6 +746,7 @@ def odometry_factors(poses: np.ndarray, stamps: np.ndarray, sigma_t: float, sigm
     f.b_tag = ["odom"] * (N - 1)
     for k in resets:
         f.b_tag[k] = "odom/reset"
+    f.b_huber = np.full(N - 1, np.inf)          # see Factors.b_huber
     return f
 
 
@@ -610,7 +763,8 @@ def gauge_prior(poses: np.ndarray, k: int = 0, sigma_t: float = 1e-4,
 
 def anchor_factors(observed_poses: np.ndarray, observed_stamps: np.ndarray,
                    keyframe_stamps: np.ndarray, sigma_t: float, sigma_r: float,
-                   name: str, max_gap_s: float = 0.2, window=None) -> tuple[Factors, dict]:
+                   name: str, max_gap_s: float = 0.2, window=None,
+                   huber: float = np.inf) -> tuple[Factors, dict]:
     """Prior factors from board-derived camera poses, interpolated onto the
     keyframes they bracket.
 
@@ -643,5 +797,7 @@ def anchor_factors(observed_poses: np.ndarray, observed_stamps: np.ndarray,
     f.p_t = at.poses[:, :3, 3].copy()
     f.p_sigma = np.tile([sigma_t] * 3 + [sigma_r] * 3, (len(at), 1)).astype(np.float64)
     f.p_tag = [f"anchor/{name}"] * len(at)
+    f.p_src = ["board"] * len(at)               # the KIND; the tag names the instance
+    f.p_huber = np.full(len(at), huber)
     info["factors"] = int(len(at))
     return f, info

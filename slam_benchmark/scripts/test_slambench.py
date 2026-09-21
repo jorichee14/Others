@@ -3183,5 +3183,111 @@ def test_distribution_says_how_few_independent_episodes_it_has():
     assert not any("independent episodes" in w for w in d2.warnings), d2.warnings
 
 
+
+@test
+def test_block_tridiagonal_inverse_diagonal_is_exact():
+    """The O(N) recursion must equal the dense inverse, not approximate it.
+
+    A one-sided recursion, or forgetting that A_k and B_k both already contain
+    D_k, gives a covariance that looks plausible and is wrong -- and nothing
+    downstream could tell, because a covariance has no units to sanity-check
+    against. Compared here against an explicit inverse on a small system.
+    """
+    from slambench.graph import _block_tridiag_inv_diag
+
+    rng = np.random.default_rng(5)
+    N, b = 7, 6
+    U = rng.normal(size=(N - 1, b, b)) * 0.3
+    D = np.zeros((N, b, b))
+    for k in range(N):                      # diagonally dominant -> SPD
+        M = rng.normal(size=(b, b))
+        D[k] = M @ M.T + (b + 4) * np.eye(b)
+
+    H = np.zeros((N * b, N * b))
+    for k in range(N):
+        H[k*b:(k+1)*b, k*b:(k+1)*b] = D[k]
+    for k in range(N - 1):
+        H[k*b:(k+1)*b, (k+1)*b:(k+2)*b] = U[k]
+        H[(k+1)*b:(k+2)*b, k*b:(k+1)*b] = U[k].T
+    assert np.all(np.linalg.eigvalsh(H) > 0)
+
+    dense = np.linalg.inv(H)
+    got = _block_tridiag_inv_diag(D, U)
+    for k in range(N):
+        want = dense[k*b:(k+1)*b, k*b:(k+1)*b]
+        assert np.allclose(got[k], want, atol=1e-9), (k, np.abs(got[k] - want).max())
+
+
+@test
+def test_marginal_covariance_grows_into_the_gap_and_shrinks_at_the_anchors():
+    """The covariance must show the bridge, or it is not describing this graph.
+
+    A pose inside an anchored dwell should be uncertain by about the anchor's
+    own sigma; a pose at the midpoint of a long unanchored gap by much more.
+    If the two come out alike, the recursion is not propagating information
+    along the chain and every NEES computed from it is meaningless.
+    """
+    from slambench.graph import marginal_covariances, odometry_factors
+
+    n = 300
+    stamps = 1000.0 + np.arange(n) / 10.0
+    poses = np.tile(np.eye(4), (n, 1, 1))
+    poses[:, 0, 3] = np.linspace(0, 30.0, n)
+
+    f = odometry_factors(poses, stamps, 0.01, np.radians(0.2))
+    sig = [0.008] * 3 + [np.radians(1.0)] * 3
+    for k in list(range(0, 10)) + list(range(n - 10, n)):     # dwells at both ends
+        f.add_prior(k, poses[k, :3, :3], poses[k, :3, 3], sig, "board/end", "board")
+
+    C = marginal_covariances(poses, f)
+    sd = np.sqrt(np.einsum("kii->ki", C)[:, :3].sum(axis=1))   # translation sd
+
+    anchored, mid = sd[5], sd[n // 2]
+    assert anchored < 0.02, anchored          # pinned to about the anchor sigma
+    assert mid > 5.0 * anchored, (mid, anchored)
+    assert sd.argmax() == np.clip(sd.argmax(), n // 2 - 25, n // 2 + 25), \
+        "the worst pose must be the GAP MIDPOINT, which is what a bridge means"
+
+    # and a LEVER is worse than a bridge over the same unanchored span: drop
+    # the far dwell and the far end becomes unbounded rather than pinned
+    g = odometry_factors(poses, stamps, 0.01, np.radians(0.2))
+    for k in range(0, 10):
+        g.add_prior(k, poses[k, :3, :3], poses[k, :3, 3], sig, "board/end", "board")
+    sd_lever = np.sqrt(np.einsum("kii->ki", marginal_covariances(poses, g))[:, :3].sum(axis=1))
+    assert sd_lever[-1] > 3.0 * sd.max(), (sd_lever[-1], sd.max())
+    assert sd_lever.argmax() == n - 1, "a lever is worst at the FREE END"
+
+
+@test
+def test_nees_recovers_a_planted_overconfidence():
+    """NEES must read the factor the covariance was wrong by, not just its sign.
+
+    Draw errors from k^2 * Sigma and test them against Sigma: NEES should come
+    back at k^2 and `inflate_sigma_by` at k. That is what makes the statistic
+    actionable -- an overconfident source is downweighted by exactly the amount
+    it overclaimed, rather than by a guess.
+    """
+    from slambench.graph import nees
+
+    rng = np.random.default_rng(12)
+    n, d = 4000, 3
+    A = rng.normal(size=(d, d))
+    S = A @ A.T + d * np.eye(d)
+    L = np.linalg.cholesky(S)
+
+    for k in (1.0, 2.0, 0.5):
+        e = (L @ rng.normal(size=(d, n)) * k).T
+        r = nees(e, np.tile(S, (n, 1, 1)))
+        assert abs(r["nees_mean"] - k ** 2) < 0.12 * k ** 2, (k, r["nees_mean"])
+        assert abs(r["inflate_sigma_by"] - k) < 0.06 * k, (k, r["inflate_sigma_by"])
+
+    # the consistency band must ACCEPT a correct model and REJECT a 2x one
+    e = (L @ rng.normal(size=(d, n))).T
+    assert nees(e, np.tile(S, (n, 1, 1)))["consistent"]
+    e2 = (L @ rng.normal(size=(d, n)) * 2.0).T
+    r2 = nees(e2, np.tile(S, (n, 1, 1)))
+    assert not r2["consistent"] and r2["verdict"] == "OVERCONFIDENT", r2["verdict"]
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
