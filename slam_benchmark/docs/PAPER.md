@@ -10,10 +10,21 @@ Trajectory References from Sparse Surveyed Anchors*
 **Venue.** RA-L or ICRA/IROS. MoCap2GT is RA-L Feb 2026 and must be cited; this
 is adjacent to it, not competing with it.
 
-**The one-sentence claim.** **Certifiable ground truth for a platform carrying
-no reference sensor, by fusing heterogeneous absolute sources with independent
-failure modes, certified by leave-one-SOURCE-out cross-validation** and by a
-coverage law calibrated on an instrumented twin.
+**The one-sentence claim.** **Ground-truth pipelines validate themselves with
+their own covariance and self-consistent checks; we certify one against
+evidence that does not descend from its reference model**, by
+leave-one-SOURCE-out with a consistency test, on a twin whose reference sensor
+is held out.
+
+**NARROWED 2026-09-21 after reading LaMAR in full.** *GT for a platform
+carrying no reference sensor* is **taken** (LaMAR, ECCV 2022, at scale, open
+source). LaMAR also has calibrated per-pose covariance, propagated anisotropic
+covariances, Geman-McClure under GNC, and an explicit reply to Brachmann. What
+it does not have is any **external** evidence: §4.4 validates by inverting the
+refinement Hessian and by rendering the same mesh the poses were fitted to. Its
+reply to Brachmann -- that careful fusion and uncertainty propagation reduce
+the bias -- is therefore an ARGUMENT that has never been MEASURED. Surveyed
+fiducials, metrically independent of the scan, are what measures it.
 
 **Why KINDS of source and not COUNT of landmark.** HortiMulti / Poly-TagSLAM
 (2026) certifies a fiducial-anchored GT by leave-one-out over 35 surveyed

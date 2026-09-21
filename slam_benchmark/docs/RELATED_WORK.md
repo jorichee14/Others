@@ -179,6 +179,88 @@ source plus IMU, same family.
 
 ---
 
+## LaMAR (ECCV 2022) — READ IN FULL 2026-09-21, and it costs three claims
+
+arXiv 2210.10770. GT for HoloLens and phones — devices carrying no reference
+sensor — by registering their streams against NavVis laser scans. Open source.
+**The closest prior work by a distance, and four of my earlier verdicts about
+it were wrong.**
+
+**Their pipeline (§4.1-4.3), accurately:** a reference model built by pairwise
+image+ICP registration of scan sessions and a pose-graph global alignment; then
+per-sequence: retrieval + local features lifted to 3D through the mesh → P3P
+in LO-RANSAC; a **voting** rigid alignment that rejects confident-but-wrong
+localizations; a pose graph over tracker relative poses + absolute localization
+priors, robustified with **Geman-McClure under Graduated Non-Convexity**;
+**guided localization** re-mining pairs by the mesh-based visual-overlap score;
+then bundle adjustment with reprojection errors, lidar-sampled 3D points
+carrying a prior; then a joint cross-sequence refinement. Ceres.
+
+**RETRACTED, each from my own earlier notes:**
+
+1. *"Nobody has closed the loop on Brachmann."* They cite Brachmann [8] in §4.4
+   and answer it directly.
+2. *"No per-pose uncertainty."* They invert the Hessian of the refinement and
+   calibrate it by empirical keypoint noise (sigma = 1.33 px), report its
+   spatial distribution, and **filter on it** — keeping poses correct within
+   10 cm at 99.7% confidence (sigma_t <= 3.33 cm), discarding 0.8% of frames.
+3. *"Isotropic / no degeneracy handling."* Absolute-term covariance is
+   propagated from the localization refinement, relative from the odometry
+   pipeline. Fig. 4 shows they observe the degeneracy directly: *"translation
+   uncertainties are larger in long corridors and outdoor spaces."*
+4. *"One absolute source kind."* Overstated. They fuse visual + inertial +
+   lidar structure. The precise statement is **one ABSOLUTE source (the lidar
+   reference model) and several RELATIVE ones**.
+
+**WHAT SURVIVES, and it is now a single sharp thing.** Their validation (§4.4)
+is exactly two things, both internal:
+
+* the inverted Hessian — precision conditional on the model, and they say so:
+  *"We do not claim that our GT is perfect but analyzing the optimization
+  uncertainties sheds light on its degree of accuracy."*
+* rendering the mesh at the estimated poses and checking pixel alignment — but
+  **the poses were fitted to that mesh**. Alignment is near-guaranteed once the
+  fit converges, and it cannot reveal a distortion of the mesh, because the
+  render and the poses share it.
+
+**No external evidence enters §4.4 anywhere.** So their reply to Brachmann is an
+ARGUMENT, not a MEASUREMENT: *"Careful design and propagation of uncertainties
+reduces the bias towards one of the sensors."* The residual bias is never
+measured against anything independent, because nothing in the pipeline fails to
+descend from the reference model.
+
+**The gap, stated precisely:** LaMAR argues that fusing enough complementary
+sensors and propagating uncertainty carefully removes the pseudo-GT bias
+Brachmann identified. That argument has never been tested, because testing it
+needs evidence that does not descend from the reference model. Surveyed
+fiducials are such evidence. The experiment is: run the pipeline, then measure
+its residual at fiducials it never saw. Consistent confirms their argument for
+the first time; inconsistent finds a bias the field's own uncertainty cannot
+see.
+
+**Consequences.** Claim 1 (GT for a platform with no reference sensor) is
+**taken** — LaMAR did it in 2022, at scale. Claim 3 (the coverage law) is
+**weakened**: Fig. 4 is that phenomenon, mapped empirically; a predictive model
+in transferable quantities is still distinct but thin, and should be a section
+rather than a contribution. **Claims 2 and 5 — certification against evidence
+that does not descend from the reference, by leave-one-source-out — are the
+paper.** Adopt their pipeline rather than competing with it: Geman-McClure+GNC
+beats the Huber implemented here, their covariance propagation is more careful,
+and guided localization is the bridge-filler this construction lacks.
+
+Also note Brachmann et al., ICCV 2021, arXiv 2109.00524 — *On the Limits of
+Pseudo Ground Truth in Visual Camera Re-localisation*. Shows the reference
+algorithm's choice biases rankings toward its own family, overturning in their
+data the beliefs that scene-coordinate regression beats feature methods and
+that RGB-D beats RGB. **This project measured the same effect independently**:
+on `mobile_2`, whose reference is cuVSLAM-derived, ATE ranks the image-based
+method first (120 < 135 mm) while the surveyed boards rank it second by a
+factor of two (201 vs 94-123 mm at `rs_anchor`). That is Brachmann's effect in
+trajectory benchmarking rather than relocalisation, and it is the pilot result
+for the experiment above.
+
+---
+
 ## Papers to cite, not contest
 
 | paper | why it is in §2 |
