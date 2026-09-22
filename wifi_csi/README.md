@@ -6,8 +6,13 @@ by hand on a Pi 4B / Ubuntu 22.04 with a BCM43455c0 running 7.45.189
 
 ```
 wifi_csi_msgs/   CsiFrame, CsiStatus
-wifi_csi/        csi_publisher (arms + publishes), csi_monitor (CLI summary)
+wifi_csi/        csi_publisher (arms + publishes), csi_monitor (CLI summary),
+                 csi_forward (relay over a wired link, no ROS 2)
 ```
+
+**Bringing up a bench from cold: see [RUNBOOK.md](RUNBOOK.md).** It covers the
+one-time host setup (rp_filter, NetworkManager, chrony, router) and the
+per-session sequence, labelled by which machine each command belongs on.
 
 ## Build
 
