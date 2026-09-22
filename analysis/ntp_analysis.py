@@ -99,7 +99,7 @@ def load_events(extracts: Path):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--bag", type=Path, default=None, help="MCAP file; extracted into extracts/<run>/ unless that exists")
+    ap.add_argument("--bag", type=Path, default=None, help="rosbag2 directory or .mcap / .db3 file; extracted into extracts/<run>/ unless that exists")
     ap.add_argument("--extracts", type=Path, default=None, help="existing extraction folder (default: extracts/<run>)")
     ap.add_argument("--out", type=Path, default=None, help="output folder (default: results/<run>/ntp)")
     ap.add_argument("--run", default="run")
@@ -115,7 +115,7 @@ def main() -> int:
     if args.bag is not None and (args.force_extract or not (extracts / "metadata.json").exists()):
         extract(args.bag, extracts)
     elif not (extracts / "metadata.json").exists():
-        raise SystemExit(f"no extraction in {extracts}; pass --bag BAG.mcap to create it")
+        raise SystemExit(f"no extraction in {extracts}; pass --bag BAG (.mcap or .db3) to create it")
     else:
         print(f"using existing extraction in {extracts}")
     args.extracts = extracts

@@ -1,8 +1,18 @@
 # Run characterization analysis
 
-One script per topic, each characterizing one recorded run (a rosbag2 MCAP) for the
-dataset paper. No ROS installation is needed: message definitions are read from the
-schemas embedded in the MCAP file.
+One script per topic, each characterizing one recorded run (a rosbag2) for the
+dataset paper. Both storage formats are read, given either as the bag directory or
+as a single file: **MCAP** (`.mcap`) needs no ROS -- message definitions come from
+the schemas embedded in the file -- while **SQLite3** (`.db3`, the rosbag2 default
+on Humble) stores only the *name* of each type, so it needs the message packages
+importable (source the workspace that defines `comms_msgs`, or the affected topics
+are reported and skipped).
+
+Record MCAP where you can (`ros2 bag record --storage mcap`). A `.db3` is only as
+readable as the packages you still have sourced, and it keeps one timestamp per
+message, so `publish_time_ns` equals `log_time_ns` there and transport latency
+cannot be measured; `metadata.json` records `storage` and `publish_time_is_log_time`
+so an analysis reads that as absent rather than as a measured zero.
 
 ```
 analysis/
@@ -20,7 +30,8 @@ analysis/
 ├── csi_image_node.py       ROS 2 node: one rendered image per CSI frame, live
 ├── requirements.txt
 └── tests/
-    └── make_synthetic_bag.py   writes a small fake MCAP to try the scripts without the real bag
+    ├── make_synthetic_bag.py   writes a small fake MCAP to try the scripts without the real bag
+    └── test_extract_bag.py     checks .db3 and .mcap extract to identical tables
 ```
 
 All analysis scripts share one extraction: run any of them with `--bag` once and the
@@ -268,6 +279,17 @@ and share the small Parquet folder instead of the bag:
 ```bash
 python analysis/extract_bag.py BAG.mcap --out extracts/coop2
 python analysis/ntp_analysis.py --extracts extracts/coop2 --run coop2
+```
+
+This also splits the ROS dependency usefully for a `.db3` run: extraction needs
+`rclpy` but no matplotlib, so it runs in the robot's ROS-sourced Python, while the
+analysis needs matplotlib but no ROS and runs anywhere.
+
+```bash
+# on the robot, ROS sourced
+python analysis/extract_bag.py ~/csi_check --out extracts/csi_check
+# anywhere else
+python analysis/csi_analysis.py --extracts extracts/csi_check --run csi_check
 ```
 
 ## Trying it without the real bag

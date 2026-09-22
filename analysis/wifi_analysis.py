@@ -143,7 +143,7 @@ def main() -> int:
     if args.bag is not None and (args.force_extract or not (extracts / "metadata.json").exists()):
         extract(args.bag, extracts)
     elif not (extracts / "metadata.json").exists():
-        raise SystemExit(f"no extraction in {extracts}; pass --bag BAG.mcap to create it")
+        raise SystemExit(f"no extraction in {extracts}; pass --bag BAG (.mcap or .db3) to create it")
     else:
         print(f"using existing extraction in {extracts}")
 
