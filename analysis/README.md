@@ -1,11 +1,25 @@
 # Run characterization analysis
 
-Scripts that characterize one recorded run (a rosbag2 MCAP) for the dataset paper:
+Scripts that characterize one recorded run (a rosbag2) for the dataset paper:
 temporal calibration (NTP) first; Wi-Fi, CSI and trajectory geometry follow the
 same extract-then-analyze pattern.
 
-No ROS installation is required. Message definitions are read from the schemas
-embedded in the MCAP file.
+Both rosbag2 storage formats are read, given either as the bag directory or as a
+single file:
+
+- **MCAP** (`.mcap`) needs no ROS installation -- message definitions are read
+  from the schemas embedded in the file.
+- **SQLite3** (`.db3`, the rosbag2 default on Humble) stores only the *name* of
+  each message type, so decoding needs the message packages importable: source
+  your ROS workspace (including `comms_msgs`) first, or the affected topics are
+  reported and skipped.
+
+Record MCAP where you can (`ros2 bag record --storage mcap`). A `.db3` is only as
+readable as the packages you still have sourced, which is how a bag recorded
+today becomes undecodable later; and it keeps one timestamp per message, so
+`publish_time_ns` equals `log_time_ns` there and transport latency cannot be
+measured. `metadata.json` records `storage` and `publish_time_is_log_time` so an
+analysis can tell the two apart.
 
 ```bash
 pip install -r analysis/requirements.txt
@@ -71,4 +85,13 @@ schema so the pipeline can be exercised without the real bag:
 python analysis/tests/make_synthetic_bag.py /tmp/synthetic.mcap
 python analysis/extract_bag.py /tmp/synthetic.mcap --out /tmp/extracts
 python analysis/ntp_analysis.py --extracts /tmp/extracts --out /tmp/results --run synthetic
+```
+
+`tests/test_extract_bag.py` checks that the same messages extract to the same
+Parquet whichever storage carried them -- the two decoders name fields
+differently, so this is what keeps a `.db3` run from silently renaming every
+column. It needs no ROS:
+
+```bash
+python analysis/tests/test_extract_bag.py
 ```
