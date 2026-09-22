@@ -46,6 +46,11 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
 
     csi = load_csi(extracts)
+    if not csi:
+        raise SystemExit(
+            f"no CSI in {extracts}. If the extraction warned that comms_msgs was not "
+            "importable, source the workspace that builds it and extract again."
+        )
     fig, axes = plt.subplots(len(csi), 2, figsize=(12, 3.2 * len(csi)), squeeze=False)
     for row, agent in enumerate(sorted(csi)):
         df = csi[agent].sort_values("log_time_ns").reset_index(drop=True)

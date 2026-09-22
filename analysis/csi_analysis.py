@@ -409,7 +409,10 @@ def main() -> int:
 
     csi = load_csi(extracts)
     if not csi:
-        raise SystemExit(f"no *csi.parquet in {extracts}")
+        raise SystemExit(
+            f"no *csi.parquet in {extracts}. If the extraction warned that comms_msgs "
+            "was not importable, source the workspace that builds it and extract again."
+        )
     t0_ns = min(int(d["log_time_ns"].min()) for d in csi.values())
     for agent in sorted(csi):
         df = csi[agent]
