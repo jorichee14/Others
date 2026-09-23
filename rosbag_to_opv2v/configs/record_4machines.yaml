@@ -1,0 +1,101 @@
+# ============================================================================
+# One recording config for all four machines.
+#
+# Every machine runs the SAME command against this file and records only its
+# own sensors, to its own disk (so no point cloud crosses the WiFi):
+#
+#   python3 scripts/record.py --config configs/record_4machines.yaml --machine mobile_1
+#   python3 scripts/record.py --config configs/record_4machines.yaml --machine mobile_2
+#   python3 scripts/record.py --config configs/record_4machines.yaml --machine infra_1
+#   python3 scripts/record.py --config configs/record_4machines.yaml --machine infra_2
+#
+# Add --dry-run to print the `ros2 bag record` command without running it.
+# Afterwards, copy the four bags to one host and merge them into one:
+#
+#   python3 scripts/record.py --config configs/record_4machines.yaml --merge <dir holding the 4 bags>
+#
+# Topic names are the ones in the coop2_20260828 recording (mirc_coop2.yaml).
+# infra_2 is assumed to be a copy of infra_1 (camera + radar); change its list
+# if its hardware differs.
+# ============================================================================
+
+session:
+  name: mirc_dataset            # bag dir = <output_root>/<name>_<YYYYmmdd_HHMMSS>_<machine>
+  output_root: ~/workspaces/isaac_ros-dev/data/raw
+  ros_domain_id: 0              # must match on all four machines
+
+record:
+  storage: mcap                 # same format as the coop2 bag
+  max_bag_size_gb: 4            # split files; 0 = no split
+  max_cache_size_mb: 512        # bigger cache = fewer drops on image/cloud bursts
+  compression: none             # none | zstd — zstd costs CPU on the Jetsons
+
+# Applied to every machine. /tf_static is latched, so the recorder must
+# subscribe transient_local or it misses the publishers that started first.
+common_topics:
+  - /tf_static
+
+qos_overrides:
+  /tf_static:
+    history: keep_all
+    reliability: reliable
+    durability: transient_local
+
+machines:
+  mobile_1:                     # pushcart: ZED + Ouster + 2 radars
+    topics:
+      - /tf                     # recorded here only, so the merged bag has one copy
+      - /mobile_1/zed/left/image_rect_color
+      - /mobile_1/zed/left/camera_info
+      - /mobile_1/zed/right/image_rect_color   # NEW: coop2 had left only, which blocked stereo VIO
+      - /mobile_1/zed/right/camera_info
+      - /mobile_1/zed/depth/depth_registered
+      - /mobile_1/zed/depth/camera_info
+      - /mobile_1/zed/point_cloud/cloud_registered
+      - /mobile_1/zed/imu/data
+      - /mobile_1/zed/imu/mag
+      - /mobile_1/zed/odom
+      - /mobile_1/zed/pose
+      - /mobile_1/ouster/points
+      - /mobile_1/ouster/imu
+      - /mobile_1/radar1/radar/points_all
+      - /mobile_1/radar2/radar/points_all
+      - /mobile_1/global_pose
+      - /mobile_1/ntp/status    # was missing in coop2 — start ntp_monitor here too
+      - /mobile_1/ntp/events
+
+  mobile_2:                     # pushcart: RealSense + cuVSLAM
+    topics:
+      - /mobile_2/color/image_raw
+      - /mobile_2/color/camera_info
+      - /mobile_2/depth/image_rect_raw
+      - /mobile_2/depth/camera_info
+      - /mobile_2/imu
+      - /mobile_2/visual_slam/tracking/odometry
+      - /mobile_2/visual_slam/tracking/vo_pose
+      - /mobile_2/visual_slam/tracking/vo_pose_covariance
+      - /mobile_2/global_pose
+      - /mobile_2/ntp/status
+      - /mobile_2/ntp/events
+
+  infra_1:                      # static node: camera + radar
+    topics:
+      - /infra_1/image_raw
+      - /infra_1/camera_info
+      - /infra_1/radar/points_all
+      - /infra_1/radar/points_dynamic
+      - /infra_1/radar/points_static
+      - /infra_1/radar/camera_info
+      - /infra_1/ntp/status
+      - /infra_1/ntp/events
+
+  infra_2:                      # static node: assumed same as infra_1
+    topics:
+      - /infra_2/image_raw
+      - /infra_2/camera_info
+      - /infra_2/radar/points_all
+      - /infra_2/radar/points_dynamic
+      - /infra_2/radar/points_static
+      - /infra_2/radar/camera_info
+      - /infra_2/ntp/status
+      - /infra_2/ntp/events
