@@ -33,6 +33,30 @@ def node_of_topic(topic: str) -> str:
     return NODE_ALIASES.get(node, node)
 
 
+def link_of_topic(topic: str) -> tuple[str, str]:
+    """(receiver, transmitter) from a CSI topic name.
+
+    A CSI topic is one RECEIVER's view of one TRANSMITTER's channel, and the
+    capture node names it <receiver namespace>/<transmitter>/csi:
+
+        /mobile_1_sniffer/infra_1/csi  ->  ('mobile_1_sniffer', 'infra_1')
+        /infra_1/csi                   ->  ('',                 'infra_1')
+
+    An unnamespaced capture records no receiver, which is fine with one sniffer
+    and ambiguous with two -- hence the namespace. Taking the FIRST segment
+    instead (as node_of_topic does) collapses every stream from one namespaced
+    sniffer onto the same name, which loses a channel silently.
+    """
+    parts = [p for p in topic.strip("/").split("/") if p]
+    if parts and parts[-1] == "csi":
+        parts = parts[:-1]
+    if not parts:
+        return "", ""
+    tx = NODE_ALIASES.get(parts[-1], parts[-1])
+    rx = "/".join(parts[:-1])
+    return NODE_ALIASES.get(rx, rx), tx
+
+
 def color_for(node: str) -> str:
     """'mobile_1' and 'mobile_1/A' share the agent's colour."""
     return AGENT_COLOR.get(node.split("/")[0], "#4a3aa7")

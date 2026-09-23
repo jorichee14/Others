@@ -66,7 +66,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (  # noqa: E402
-    GRID, TEXT, TEXT2, AGENT_COLOR, color_for, load_poses, node_of_topic, read_pcd_xy,
+    GRID, TEXT, TEXT2, AGENT_COLOR, color_for, link_of_topic, load_poses, node_of_topic, read_pcd_xy,
 )
 from csi_core import (  # noqa: E402
     amplitude_db, delay_profile, effective_bandwidth_mhz, occupied_band,
@@ -110,13 +110,29 @@ AMP_DIVERGING = ["#104281", "#2a78d6", "#9ec5f4", "#f0efec", "#f5a173", "#e34948
 
 
 def load_csi(extracts: Path):
-    """{agent: DataFrame} from the per-topic CSI tables."""
-    out = {}
+    """{transmitter: DataFrame} from the per-topic CSI tables.
+
+    A CSI topic is one receiver's view of one transmitter, named
+    <receiver>/<transmitter>/csi. The key is the TRANSMITTER, because that is
+    what every metric here describes and what the agent colours and pose
+    lookups are keyed on. When two receivers capture the same transmitter the
+    key becomes '<receiver>/<transmitter>' for all of them, so nothing is
+    silently overwritten; each frame also carries its 'rx' either way.
+    """
+    rows = []
     for f in sorted(glob.glob(str(extracts / "*csi.parquet"))):
         topic = "/" + Path(f).stem.replace("__", "/")
+        rx, tx = link_of_topic(topic)
         df = pd.read_parquet(f)
         df["topic"] = topic
-        out[node_of_topic(topic)] = df
+        df["rx"] = rx
+        rows.append((rx, tx, df))
+
+    seen = [tx for _, tx, _ in rows]
+    collide = {tx for tx in seen if seen.count(tx) > 1}
+    out = {}
+    for rx, tx, df in rows:
+        out[f"{rx}/{tx}" if tx in collide and rx else tx] = df
     return out
 
 
