@@ -1,0 +1,62 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page { size: A4; margin: 14mm 16mm; }
+body { font-family: Helvetica, Arial, sans-serif; font-size: 10.2pt; line-height: 1.32; color:#111; margin:0; }
+h1 { font-size: 13pt; margin: 0 0 2px 0; }
+h2 { font-size: 10pt; margin: 6px 0 1px 0; }
+p { margin: 0 0 2px 0; text-align: justify; }
+.page2 { page-break-before: always; }
+.page2 h2 { font-size: 12pt; margin-bottom: 10px; }
+svg { width: 100%; height: auto; }
+</style></head><body><h1>HW1 Individual Term Project Proposal</h1>
+<p><strong>Emerging Technologies and Applied Innovation, Fall 2026</strong></p>
+<h2>1. Project Title</h2>
+<p>UWB-Anchored Player Identity for Video Tracking: Keeping Names on Players Through Crossings and Occlusions</p>
+<h2>2. Primary Project Platform</h2>
+<p>LocusConnect - Spatial Intelligence</p>
+<h2>3. Problem and Target User</h2>
+<p>Coaches and match analysts at university and amateur clubs review video to see what each player did. Automatic video trackers follow players well until two of them cross or one is hidden behind another; then the tracker often hands the wrong identity to the wrong person. A full match produces dozens of these identity switches, and an analyst repairs them by hand, hours per match, so it is rarely done for training sessions at all. UWB tags already know exactly who each player is, but that identity never reaches the video where coaches actually look.</p>
+<h2>4. Proposed Project Idea</h2>
+<p>Input: a fixed camera feed of the pitch and the live LocusConnect UWB stream (tag ID, x, y, timestamp). Processing: (1) a one-time calibration that recovers the camera pose in the UWB frame from a single tag walked through the field of view, plus the clock offset between the two systems; (2) an off-the-shelf person detector and tracker on the video; (3) every frame, each tag position is projected into the image and matched to a detection with a gated assignment that tolerates UWB noise and short detection gaps. Output: the video with a persistent name label on every tagged player, a per-player track in pixel and pitch coordinates, and a log of the identity switches avoided.</p>
+<h2>5. Technology and Data Required</h2>
+<p>OpenCV for camera calibration and PnP pose estimation; YOLO and ByteTrack for detection and tracking; Python with a Kalman smoother and Hungarian assignment for association. These fit because the core work is geometry and integration, not model training. Data: synchronized video and UWB logs of three to six tagged people in a gym or field, including staged crossings, plus manual identity labels for evaluation. This data does not exist yet and will be recorded in two sessions with the course's LocusConnect system and one camera. Access to raw tag positions from LocusConnect will be confirmed in the first weeks.</p>
+<h2>6. Final Prototype / Live Demo</h2>
+<p>At the end of the semester, I will be able to demonstrate that, with four tagged people repeatedly crossing paths in front of a live camera, the prototype shows each person with a persistent name label that survives crossings and brief occlusions. A toggle switches the UWB fusion off: labels begin swapping after crossings, and switching it back on restores the correct names within a frame. A side panel shows the current assignment and a live count of identity switches in both modes. If live UWB access is unavailable, the same pipeline runs on a recorded synchronized session.</p>
+<h2>7. How Will You Know It Works?</h2>
+<p>Primary metric: identity switches per minute on a labelled test session, video-only tracker versus fused tracker. Target: at least 90 percent fewer switches, and zero on staged two-person crossings. Secondary metrics: association accuracy, the fraction of frames in which each label sits on the correct person, above 95 percent against manual labels; calibration reprojection error below 15 pixels at 1080p; end-to-end latency below 100 ms per frame so the demo runs live. The baseline is the unmodified ByteTrack output on the same footage.</p>
+<h2>8. Why Should This Project Be Selected?</h2>
+<p>It solves a concrete problem analysts pay for in hours today, and it brings LocusConnect data into the video where coaches look. The scope is feasible: one camera, a few tags, off-the-shelf detectors. The hard parts, calibration, synchronization, and robust association, are real engineering with measurable results. The demo is immediate and easy to judge. Once identity is stable, per-player clips and statistics follow directly.</p>
+<h2>9. Your Expected Contribution</h2>
+<p>I have built radar-camera extrinsic calibration with ChArUco targets, SLAM evaluation pipelines, and robust state estimators in Python and ROS. I can lead calibration, synchronization, and association. I want to learn real-time multi-object video tracking and re-identification.</p>
+<div class="page2">
+<h2>System Diagram (optional page)</h2>
+<svg viewBox="0 0 760 445" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" font-size="12">
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#333"/></marker></defs>
+<style>.b{fill:#f4f6f8;stroke:#333;stroke-width:1.2;rx:6}.o{fill:#fff7e0;stroke:#b8860b;stroke-width:1.2;rx:6}.g{fill:#e8f4ea;stroke:#2e7d32;stroke-width:1.2;rx:6}.t{fill:#111}.s{fill:#555;font-size:10.5px}</style>
+<!-- inputs -->
+<rect class="b" x="20" y="40" width="170" height="60"/><text class="t" x="105" y="63" text-anchor="middle" font-weight="bold">Fixed camera</text><text class="s" x="105" y="82" text-anchor="middle">1080p video, 30 fps</text>
+<rect class="b" x="20" y="250" width="170" height="60"/><text class="t" x="105" y="273" text-anchor="middle" font-weight="bold">LocusConnect UWB</text><text class="s" x="105" y="292" text-anchor="middle">tag ID, x, y, timestamp</text>
+<!-- calibration (one time) -->
+<rect class="o" x="240" y="140" width="190" height="70"/><text class="t" x="335" y="163" text-anchor="middle" font-weight="bold">One-time calibration</text><text class="s" x="335" y="181" text-anchor="middle">walk one tag in view</text><text class="s" x="335" y="196" text-anchor="middle">PnP camera pose + clock offset</text>
+<!-- video pipeline -->
+<rect class="b" x="240" y="40" width="190" height="60"/><text class="t" x="335" y="63" text-anchor="middle" font-weight="bold">Detector + tracker</text><text class="s" x="335" y="82" text-anchor="middle">YOLO, ByteTrack: boxes, track IDs</text>
+<!-- uwb pipeline -->
+<rect class="b" x="240" y="250" width="190" height="60"/><text class="t" x="335" y="273" text-anchor="middle" font-weight="bold">Smooth + project</text><text class="s" x="335" y="292" text-anchor="middle">Kalman, tag position to pixels</text>
+<!-- association -->
+<rect class="g" x="480" y="140" width="190" height="70"/><text class="t" x="575" y="163" text-anchor="middle" font-weight="bold">Gated association</text><text class="s" x="575" y="181" text-anchor="middle">Hungarian on reprojection distance</text><text class="s" x="575" y="196" text-anchor="middle">short-gap memory, merged-box handling</text>
+<!-- outputs -->
+<rect class="g" x="480" y="330" width="190" height="70"/><text class="t" x="575" y="353" text-anchor="middle" font-weight="bold">Outputs</text><text class="s" x="575" y="371" text-anchor="middle">video with persistent name labels</text><text class="s" x="575" y="386" text-anchor="middle">per-player tracks, ID-switch count</text>
+<!-- arrows -->
+<path d="M190,70 L240,70" stroke="#333" stroke-width="1.2" marker-end="url(#a)"/>
+<path d="M190,280 L240,280" stroke="#333" stroke-width="1.2" marker-end="url(#a)"/>
+<path d="M105,100 L105,175 L240,175" stroke="#b8860b" stroke-width="1.2" fill="none" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<path d="M105,250 L105,175" stroke="#b8860b" stroke-width="1.2" fill="none" stroke-dasharray="4 3"/>
+<path d="M335,210 L335,250" stroke="#b8860b" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<path d="M430,70 L575,70 L575,140" stroke="#333" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
+<path d="M430,280 L575,280 L575,210" stroke="#333" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
+<path d="M620,210 L620,330" stroke="#2e7d32" stroke-width="1.2" marker-end="url(#a)"/>
+<text class="s" x="520" y="58">boxes + track IDs</text>
+<text class="s" x="440" y="300">tag pixels + IDs</text>
+<text class="s" x="628" y="275">names on boxes</text>
+<text class="s" x="20" y="432">Dashed: one-time setup. Solid: per frame. Demo toggle disables the association block, leaving tracker IDs only.</text>
+</svg>
+</div></body></html>
