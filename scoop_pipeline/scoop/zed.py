@@ -32,6 +32,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -180,10 +181,18 @@ def restamp_bag(recorded, out_dir, remap: Optional[Dict[str, str]] = None,
         raise BagError(f"no message in {recorded} has a header stamp")
 
     moved: Dict[str, int] = {}
+    total = sum(f.stat().st_size for f in Path(recorded).glob("*.mcap")) or 1
+    log(f"    restamping {total / 1e9:.1f} GB -> {out_dir}")
 
     def records():
         nonlocal offset
+        done, shown = 0, time.monotonic()
         for _, sc, ch, msg in bag.iter_mcap_records(reader):
+            done += len(msg.data)
+            if time.monotonic() - shown >= 30:
+                shown = time.monotonic()
+                log(f"    restamped {done / 1e9:.1f} of {total / 1e9:.1f} GB "
+                    f"({100 * done / total:.0f}%)")
             schema = schema_of(sc, ch)
             st = _stamp(schema, msg.data)
             if st:
