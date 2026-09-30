@@ -26,7 +26,7 @@ warnings.simplefilter("ignore", FutureWarning)
 
 from rosbags.typesys import Stores, get_typestore, get_types_from_msg  # noqa: E402
 
-from scoop import bag, ouster, replay, retime, rosmsg                  # noqa: E402
+from scoop import bag, ouster, recording, replay, retime, rosmsg       # noqa: E402
 
 TS = get_typestore(Stores.ROS2_HUMBLE)
 TS.register(get_types_from_msg("uint8[] buf", "ouster_sensor_msgs/msg/PacketMsg"))
@@ -443,6 +443,121 @@ def test_retime_decoded_bag():
     # output lands on the capture clock the fit describes
     first = cm.host_ns(int(frames[0]["ts"][0]))
     assert abs(first - truth_host_ns(int(frames[0]["ts"][0]), s0)) < 100_000
+
+
+FAKE_GLIM = """#!/usr/bin/env bash
+# stands in for run_glim.sh: <bag> <config> <dump>
+[ -n "$FAKE_GLIM_FAIL" ] && { echo partial > "$3/half.txt"; exit 3; }
+echo "$1" > "$3/bag_used.txt"
+echo "1 0 0 0 0 0 0 1" > "$3/traj_lidar.txt"
+"""
+
+
+class RawTree:
+    """data/raw/20260924/mapping_A/mobile_1/<packets bag>/ + a non-packets bag."""
+
+    def __init__(self):
+        self.root = tempfile.mkdtemp()
+        _, packets, *_ = Fixture.get()
+        self.raw = os.path.join(self.root, "data", "raw", "20260924", "mapping_A", "mobile_1")
+        b = os.path.join(self.raw, "mirc_survey_mobile_1")
+        os.makedirs(b)
+        shutil.copy(packets, os.path.join(b, "mirc_survey_mobile_1_0.mcap"))
+        yaml_ = __import__("yaml")
+        yaml_.safe_dump({"rosbag2_bagfile_information": {
+            "version": 5, "storage_identifier": "mcap",
+            "relative_file_paths": ["mirc_survey_mobile_1_0.mcap"]}},
+            open(os.path.join(b, "metadata.yaml"), "w"))
+        from scoop.bagwrite import BagWriter                 # a bag without packets
+        with BagWriter(os.path.join(self.raw, "other_bag")) as w:
+            w.write("/x", rosmsg.string("hi"), 1)
+        open(os.path.join(self.raw, "camera.svo2"), "w").write("svo")
+        self.glim = os.path.join(self.root, "fake_glim.sh")
+        open(self.glim, "w").write(FAKE_GLIM)
+        os.chmod(self.glim, 0o755)
+        # SDK 1.0 cannot parse the synthetic metadata JSON (see default_info)
+        self._saved = ouster.sensor_info
+        ouster.sensor_info = lambda src: meta()
+
+    def listing(self):
+        return sorted((os.path.relpath(os.path.join(d, f), self.raw), os.path.getmtime(os.path.join(d, f)))
+                      for d, _, fs in os.walk(self.raw) for f in fs)
+
+    def close(self):
+        ouster.sensor_info = self._saved
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+def _settings():
+    s = recording.load_settings()
+    s["ouster"]["remap"] = ["/zed/zed_node/imu/data:=/mobile_1/zed/imu/data"]
+    return s
+
+
+def test_recording_layout():
+    t = RawTree()
+    try:
+        rec = recording.find_recording(t.raw)
+        assert rec.bag.name == "mirc_survey_mobile_1"          # the packets bag, not other_bag
+        assert str(rec.work).endswith(os.path.join("data", "work", "20260924", "mapping_A", "mobile_1"))
+        assert rec.status() == {"decoded": False, "retimed": False, "glim": False}
+        try:
+            recording.find_recording(os.path.join(t.root, "data"))
+        except bag.BagError:
+            pass
+        else:
+            raise AssertionError("a folder not below raw/ must be refused")
+    finally:
+        t.close()
+
+
+def test_process_recording_steps_skip_redo_fail():
+    t = RawTree()
+    try:
+        before = t.listing()
+        rec = recording.find_recording(t.raw)
+        logs = []
+        st = recording.process(rec, _settings(), glim_script=t.glim, log=logs.append)
+        assert st == {"decoded": True, "retimed": True, "glim": True}, st
+        w = rec.work
+        assert sorted(os.listdir(w)) == ["clock.json", "decoded", "glim", "process.yaml", "retimed"]
+        assert os.path.isfile(os.path.join(w, "decoded", "decoded_0.mcap"))
+        assert os.path.isfile(os.path.join(w, "retimed", "retimed_0.mcap"))
+        used = open(os.path.join(w, "glim", "bag_used.txt")).read().strip()
+        assert used == os.path.join(str(w), "retimed"), used   # GLIM got the retimed bag
+        cm = ouster.ClockMap.load(os.path.join(w, "clock.json"))
+        assert abs(cm.drift_ppm - DRIFT * 1e6) < 2.0
+        topics = bag.open_bag(os.path.join(w, "retimed")).topics()
+        assert "/mobile_1/zed/imu/data" in topics and "/mobile_1/ouster/points" in topics
+        assert t.listing() == before, "raw/ must never be written to"
+
+        mt = os.path.getmtime(os.path.join(w, "decoded", "decoded_0.mcap"))
+        logs = []
+        recording.process(rec, _settings(), glim_script=t.glim, log=logs.append)
+        assert sum(l.startswith("[skip]") for l in logs) == 3, logs
+        assert os.path.getmtime(os.path.join(w, "decoded", "decoded_0.mcap")) == mt
+
+        logs = []
+        recording.process(rec, _settings(), redo="retimed", glim_script=t.glim, log=logs.append)
+        ran = [l.split()[2] for l in logs if l.startswith("[run ]")]
+        assert ran == ["retimed", "glim"], logs
+
+        os.environ["FAKE_GLIM_FAIL"] = "1"
+        try:
+            recording.process(rec, _settings(), redo="glim", glim_script=t.glim, log=quiet)
+        except bag.BagError:
+            pass
+        else:
+            raise AssertionError("a failed GLIM run must raise")
+        finally:
+            del os.environ["FAKE_GLIM_FAIL"]
+        assert not os.path.exists(os.path.join(w, "glim")), "a failed step must not look done"
+        assert os.path.isfile(os.path.join(w, ".partial", "glim", "half.txt"))
+        assert rec.status() == {"decoded": True, "retimed": True, "glim": False}
+        recording.process(rec, _settings(), glim_script=t.glim, log=quiet)
+        assert rec.status()["glim"] and not os.path.exists(os.path.join(w, ".partial"))
+    finally:
+        t.close()
 
 
 if __name__ == "__main__":

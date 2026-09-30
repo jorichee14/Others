@@ -1,0 +1,21 @@
+# How one robot recording is processed: raw bag -> decoded -> retimed -> GLIM.
+# Used by scripts/process_recording.py; a copy of what was used is written
+# next to the outputs (work/.../process.yaml).
+
+ouster:
+  packets_ns: /ouster              # where the recording has lidar_packets, imu_packets, metadata
+  out_ns: /mobile_1/ouster         # where the decoded bag puts points, imu, metadata
+  driver_min_range: 1.30           # m, the replay's min_range
+  driver_max_range: 1000.0
+  frame: lidar                     # os_lidar, the replay's default point_cloud_frame
+  imu: true
+  remap:                           # copied byte for byte, as the replay launch did
+    - /ouster/metadata:=/mobile_1/ouster/metadata
+    - /ouster/imu_packets:=/mobile_1/ouster/imu_packets
+    - /ouster/lidar_packets:=/mobile_1/ouster/lidar_packets
+    - /zed/zed_node/imu/data:=/mobile_1/zed/imu/data
+    - /zed/zed_node/imu/mag:=/mobile_1/zed/imu/mag
+
+glim:
+  config: ~/workspaces/isaac_ros-dev/glim_config   # $GLIM_CONFIG overrides
+  image: koide3/glim_ros2:humble-mcap

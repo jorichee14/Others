@@ -13,8 +13,11 @@ scoop/               library: everything reusable lives here
   ouster.py          Ouster packets -> frames / IMU / scans, clock fit, ouster_ros layout
   replay.py          the replay step: packets bag -> points bag, with remaps
   retime.py          sensor time -> capture time (retime_bag.py without ROS)
+  recording.py       one recording: raw bag -> decoded -> retimed -> GLIM, fixed layout
+configs/recording.yaml  settings for processing a recording (topics, remaps, GLIM config)
 environment.yml      conda env for all offline processing
 scripts/             command lines only: argument parsing around scoop/
+  process_recording.py  raw recording -> decoded, retimed, glim (the usual entry point)
   decode_ouster.py   packets bag -> points bag (replaces the ouster_ros replay)
   retime.py          points bag -> retimed bag (same arguments as retime_bag.py)
   run_glim.sh        GLIM (docker) on a bag, dump next to the bag, owned by you
@@ -88,6 +91,34 @@ On a synthetic uncompressed MCAP of 128x1024 Ouster scans (48-byte points,
 6.3 MB each): 67 msg/s for the scripts' decode + extract + range gate, 235
 msg/s for `iter_scans` with the same gate, file reading included. Reading
 alone runs at ~630 msg/s, so that's the upper limit for a single process.
+
+## Processing a recording
+
+```
+python scripts/process_recording.py ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A/mobile_1
+```
+
+reads the raw recording and writes everything derived to the mirrored folder
+below `data/work/`, always under the same names:
+
+```
+data/raw/20260924/mapping_A/mobile_1/      as recorded; never written to
+    mirc_dataset_survey_1_mapping_20260924_mobile_1/   (the packets bag)
+    *.svo2
+data/work/20260924/mapping_A/mobile_1/
+    decoded/       1  packets -> points bag, sensor time
+    retimed/       2  capture time; the GLIM input
+    glim/          3  GLIM dump: traj_lidar.txt, map
+    clock.json        the clock fit (drift, residual, packets) for the paper
+    process.yaml      the settings the steps ran with
+```
+
+Settings come from `configs/recording.yaml` (`--settings` for another file).
+Steps already done are skipped. `--redo retimed` redoes retimed and glim;
+`--until retimed` stops before GLIM; `--status` shows what is done. A step is
+built in `.partial/<step>/` and only moved into place when it succeeded, so a
+step folder is always complete. Steps 1-2 run in the `scoop` env, step 3
+starts docker (`scripts/run_glim.sh`).
 
 ## Ouster packets: decode, then retime
 
