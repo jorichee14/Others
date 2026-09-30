@@ -1,0 +1,83 @@
+\begin{table*}[!t]
+\caption{Multi-Agent and Sensing--Communication Datasets Compared on
+Link Measurement, Trajectory Design, and Ground Truth}
+\label{tab:comparison}
+\begin{center}
+\renewcommand{\arraystretch}{1.15}
+\setlength{\tabcolsep}{2pt}
+\scriptsize
+\begin{tabularx}{\textwidth}{@{}l*{7}{c}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\toprule
+\multirow{2}{*}{\textbf{Dataset}}
+ & \multirow{2}{*}{\shortstack{\textbf{Agents}\\\textbf{(mob./inf.)}}}
+ & \multicolumn{5}{c}{\textbf{Sensing}}
+ & \multirow{2}{*}{\textbf{Indoor}}
+ & \multirow{2}{*}{\shortstack[l]{\textbf{Measured}\\\textbf{link}}}
+ & \multirow{2}{*}{\shortstack[l]{\textbf{Trajectory}\\\textbf{paradigms}}}
+ & \multirow{2}{*}{\shortstack[l]{\textbf{Indoor}\\\textbf{ground truth}}}
+ & \multirow{2}{*}{\textbf{Baselines}} \\
+\cmidrule(lr){3-7}
+ & & \textbf{LiDAR} & \textbf{RGB} & \textbf{Depth} & \textbf{IMU} & \textbf{Radar}
+ & & & & & \\
+\midrule
+\multicolumn{12}{@{}l}{\textit{Collaborative SLAM}} \\
+S3E \cite{s3e}
+ & 3/0 & \cmark & \cmark & \xmark & \cmark & \xmark & \cmark
+ & --- & Concentric, intersecting, curve, rays & MoCap (short); endpoints elsewhere & C-SLAM \\
+Kimera-Multi \cite{kimeramulti}
+ & 8/0 & \cmark & \cmark & \cmark & \cmark & \xmark & \cmark
+ & --- & Concurrent, overlapping & Total-station-assisted SLAM & C-SLAM \\
+CoPeD \cite{coped}
+ & 5/0 & \cmark & \cmark & \cmark & \cmark & \xmark & \cmark
+ & --- & Air--ground overlap & Estimator pose only & C-SLAM, detection \\
+CU-Multi \cite{cumulti}
+ & 1$\times$4/0 & \cmark & \cmark & \cmark & \cmark & \xmark & \xmark
+ & --- & Controlled overlap & Outdoor (RTK) & C-SLAM, place recognition \\
+Planetary C-SLAM \cite{planetary_cslam}
+ & 3/0 & \cmark & \xmark & \xmark & \cmark & \xmark & \xmark
+ & Throughput, RTT (1\,Hz) & Concurrent, overlapping & Outdoor (RTK) & C-SLAM \\
+\midrule
+\multicolumn{12}{@{}l}{\textit{Collaborative perception / V2X}} \\
+OPV2V \cite{opv2v}
+ & $N$/0 & \cmark & \cmark & \xmark & \xmark & \xmark & \xmark
+ & --- (sim.) & --- & Simulator pose & Detection \\
+V2V4Real \cite{v2v4real}
+ & 2/0 & \cmark & \cmark & \xmark & \cmark & \xmark & \xmark
+ & --- & --- & Outdoor (RTK) & Detection, tracking \\
+DAIR-V2X \cite{dairv2x}
+ & 1/1 & \cmark & \cmark & \xmark & \xmark & \xmark & \xmark
+ & --- & --- & Outdoor (RTK) & Detection \\
+UrbanIng-V2X \cite{urbaningv2x}
+ & 2/3 & \cmark & \cmark & \xmark & \xmark & \xmark & \xmark
+ & --- & Multi-intersection & Outdoor & Detection \\
+V2X-ReaLO \cite{v2xrealo}
+ & 2/2 & \cmark & \cmark & \xmark & \xmark & \xmark & \xmark
+ & Live Wi-Fi latency & --- & Outdoor (RTK) & Detection (online) \\
+CooperScene \cite{cooperscene}
+ & 3/1 & \cmark & \cmark & \xmark & \xmark & \xmark & \xmark
+ & C-V2X RTT, throughput, loss, jitter & --- & Outdoor (RTK) & Detection \\
+\midrule
+\multicolumn{12}{@{}l}{\textit{Sensing--communication}} \\
+DeepSense 6G \cite{deepsense6g}
+ & 1/1 & \cmark & \cmark & \xmark & \xmark & \cmark & \xmark
+ & Beam power$^\dagger$ & --- & Outdoor (RTK) & Beam, blockage prediction \\
+DICHASUS \cite{dichasus}
+ & 1/1 & \xmark & \xmark & \xmark & \xmark & \xmark & \cmark
+ & CSI & --- & Total station & CSI localization \\
+DeepMIMO \cite{deepmimo}
+ & $N$/1 & \xmark & \xmark & \xmark & \xmark & \xmark & \cmark
+ & --- (ray-traced CSI) & --- & Ray-tracer grid & Beam prediction, channel estimation \\
+Multimodal-Wireless \cite{mmwireless}
+ & 3--4/1 & \cmark & \cmark & \cmark & \cmark & \cmark & \xmark
+ & --- (ray-traced CSI) & --- & Ray-tracer pose & Beam prediction, detection \\
+\midrule
+\textbf{Ours}
+ & 3/2 & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark
+ & CSI$^\ddagger$, RSSI, MCS, retries, goodput, RTT, clock offset & Concurrent, intersection, rendezvous & SLAM map + registration + map-posed fiducials & C-SLAM, detection, link-loss prediction \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\vspace{2pt}
+{\scriptsize $^\dagger$Beam-sweep received power over a codebook, not full channel state information.\quad
+$^\ddagger$Single-antenna Wi-Fi CSI (BCM43455c0, 80\,MHz), not phase-coherent across nodes.}
+\end{table*}

@@ -1,0 +1,20 @@
+\begin{table}[t]
+\centering
+\caption{Clock synchronization across all sequences (server:
+\texttt{mobile\_1}). RMS offset per sequence, summarized as median and
+maximum over sequences.
+\unsure{Values from a single live pass; update once all sequences are processed.}}
+\label{tab:ntp}
+\footnotesize
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+& \multicolumn{2}{c}{RMS offset} & & & \\
+\cmidrule(lr){2-3}
+Client & Median & Max & Jitter (med.) & Path delay (med.) & Steps \\
+\midrule
+\texttt{mobile\_2} & \SI{10.9}{\micro\second} & \SI{10.9}{\micro\second} & \SI{227}{\micro\second} & \SI{4.2}{\milli\second}  & 0 \\
+\texttt{infra\_1}  & \SI{42.5}{\micro\second} & \SI{42.5}{\micro\second} & \SI{175}{\micro\second} & \SI{4.1}{\milli\second}  & 0 \\
+\texttt{sniffer}   & \SI{28.7}{\micro\second} & \SI{28.7}{\micro\second} & \SI{619}{\micro\second} & \SI{15.6}{\milli\second} & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}

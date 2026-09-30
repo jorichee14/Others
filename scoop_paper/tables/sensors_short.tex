@@ -1,0 +1,22 @@
+\begin{table*}[!t]
+\caption{Per-Agent Sensor Specifications}
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\setlength{\tabcolsep}{4pt}
+\scriptsize
+\begin{tabular}{@{}p{2.0cm} p{2.6cm} p{5.6cm} p{1.9cm} p{2.1cm} p{1.5cm}@{}}
+\toprule
+\textbf{Equipment} & \textbf{Model Type} & \textbf{Characteristics} & \textbf{Resolution} & \textbf{FoV} & \textbf{Rate} \\
+\midrule
+\multicolumn{6}{@{}l}{\textit{Mobile Agents}} \\
+LiDAR & Ouster OS0-64 & w/ interface box (50 m range) & 1024 $\times$ 64 & 90$^\circ$ vert. & 10 Hz \\
+Stereo Camera & ZED 2i & RGB stereo, baseline 120 mm & 1920 $\times$ 1080 & 110$^\circ$ $\times$ 70$^\circ$ & 30 Hz \\
+RGBD & RealSense D455 & RGB, global shutter & 1280 $\times$ 800 & 90$^\circ$ $\times$ 65$^\circ$ & 30 Hz \\
+ & & IMU 6-axis, barometer, magnetometer & -- & -- & 400 Hz \\
+Computer &  MIC-713-OX4B2 & Advantech (NVIDIA Jetson AGX Orin) & -- & -- & -- \\
+
+\bottomrule
+\end{tabular}
+\end{center}
+\label{tab:sensors}
+\end{table*}

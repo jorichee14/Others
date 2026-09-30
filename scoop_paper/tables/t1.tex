@@ -1,0 +1,19 @@
+\begin{table}[t]
+\centering
+\caption{T1 baselines.}
+\label{tab:t1}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}llll@{}}
+\toprule
+Baseline & Sensor & Exchange & Map \\
+\midrule
+Swarm-SLAM   & LiDAR, RGB-D  & Rendezvous  & Geometric \\
+DiSCo-SLAM   & LiDAR         & Continuous  & Geometric \\
+COVINS-G     & Stereo        & Centralised & Geometric \\
+Kimera-Multi & Stereo, RGB-D & Continuous  & Semantic, local labels \\
+Hydra-Multi  & Stereo, RGB-D & Centralised & Semantic, exchanged \\
+\bottomrule
+\end{tabular}}
+\end{table}
