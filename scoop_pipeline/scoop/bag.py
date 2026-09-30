@@ -52,7 +52,7 @@ except ImportError:                         # sibling checkout, no install
     from ros2opv2v.pointclouds import pointcloud2_to_array
 
 __all__ = ["BagError", "BagReader", "Scan", "Frame", "TopicSchema", "open_bag",
-           "topic_schemas",
+           "topic_schemas", "iter_mcap_records",
            "detect_points_topic", "nearest_pose", "iter_scans", "iter_images",
            "parse_pointcloud2", "parse_image"]
 
@@ -76,6 +76,20 @@ class TopicSchema(NamedTuple):
     encoding: str                  # schema encoding, e.g. ros2msg
     data: bytes                    # the definition text
     message_encoding: str          # e.g. cdr
+
+
+def iter_mcap_records(reader: BagReader, topics=None):
+    """``(file_index, schema, channel, message)`` for every message, file by
+    file, in log-time order within a file -- the full MCAP records (sequence,
+    publish time, channel metadata), for copying a bag exactly."""
+    if reader.storage != "mcap":
+        raise BagError(f"{reader.path} is {reader.storage}, not MCAP")
+    from mcap.reader import make_reader
+    for i, f in enumerate(reader.files):
+        with open(f, "rb") as fh:
+            for sc, ch, msg in make_reader(fh).iter_messages(topics=topics,
+                                                             log_time_order=True):
+                yield i, sc, ch, msg
 
 
 def topic_schemas(reader: BagReader) -> Dict[str, TopicSchema]:

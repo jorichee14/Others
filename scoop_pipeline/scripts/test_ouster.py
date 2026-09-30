@@ -26,7 +26,7 @@ warnings.simplefilter("ignore", FutureWarning)
 
 from rosbags.typesys import Stores, get_typestore, get_types_from_msg  # noqa: E402
 
-from scoop import bag, ouster, replay                                  # noqa: E402
+from scoop import bag, ouster, replay, retime, rosmsg                  # noqa: E402
 
 TS = get_typestore(Stores.ROS2_HUMBLE)
 TS.register(get_types_from_msg("uint8[] buf", "ouster_sensor_msgs/msg/PacketMsg"))
@@ -49,14 +49,13 @@ def check(name, fn):
         traceback.print_exc()
 
 
-def make_bag(path, n_frames=100, dead_cols=None, seed=0):
+def make_bag(path, n_frames=100, dead_cols=None, seed=0, s0=1000 * 10**9):
     """Returns (info, frames): the truth the decoder is checked against."""
     from mcap.writer import CompressionType, Writer
     rng = np.random.default_rng(seed)
     info = default_info()
     pf = ouster._packet_format(info)
     W = info.w
-    s0 = 1000 * 10**9                                     # sensor clock, ns
     frames = []
     packets = []                                           # (host ns, bytes)
     for k in range(n_frames):
@@ -401,6 +400,49 @@ def test_parse_remaps():
         except (ValueError, bag.BagError):
             continue
         raise AssertionError(bad)
+
+
+def test_header_stamp_in_bytes():
+    m = rosmsg.imu(1_700_000_000_000_000_123, "imu", [0, 0, 9.8], [0, 0, 1])
+    b = rosmsg.serialize(m)
+    assert retime.header_stamp_ns(b) == 1_700_000_000_000_000_123
+    b2 = retime.with_header_stamp(b, 1_700_000_005_000_000_007)
+    m2 = TS.deserialize_cdr(b2, "sensor_msgs/msg/Imu")
+    assert (m2.header.stamp.sec, m2.header.stamp.nanosec) == (1_700_000_005, 7)
+    assert b2[12:] == b[12:]                               # nothing else touched
+
+
+def test_retime_decoded_bag():
+    out, p, frames, s0 = _decoded("remapped", remap=REMAP)
+    dst = os.path.join(Fixture.get()[0], "retimed")
+    if not os.path.exists(dst):
+        retime.retime_bag(p, out, dst, NS, "/mobile_1/ouster", metadata=meta(), log=quiet)
+    cm = ouster.fit_clock(bag.open_bag(p), NS, metadata=meta(), log=quiet)
+    src = {ch.topic: [] for _, _, ch, _ in bag.iter_mcap_records(bag.open_bag(out))}
+    for _, _, ch, m in bag.iter_mcap_records(bag.open_bag(out)):
+        src[ch.topic].append(m)
+    got = {t: [] for t in src}
+    for _, _, ch, m in bag.iter_mcap_records(bag.open_bag(dst)):
+        got[ch.topic].append(m)
+    # points / imu: stamp mapped by the clock fit, log = publish = new stamp
+    for t in ("/mobile_1/ouster/points", "/mobile_1/ouster/imu"):
+        assert len(got[t]) == len(src[t])
+        for a, b in zip(src[t], got[t]):
+            new = cm.host_ns(retime.header_stamp_ns(a.data))
+            assert retime.header_stamp_ns(b.data) == new == b.log_time == b.publish_time
+            assert bytes(b.data)[12:] == bytes(a.data)[12:]
+    # everything else: bytes untouched, times shifted by one constant
+    shifts = set()
+    for t in ("/mobile_1/zed/imu/data", "/mobile_1/ouster/lidar_packets"):
+        for a, b in zip(src[t], got[t]):
+            assert bytes(a.data) == bytes(b.data)
+            shifts.add(b.log_time - a.log_time)
+    assert len(shifts) == 1, shifts
+    logs = [m.log_time for _, _, _, m in bag.iter_mcap_records(bag.open_bag(dst))]
+    assert logs == sorted(logs)
+    # output lands on the capture clock the fit describes
+    first = cm.host_ns(int(frames[0]["ts"][0]))
+    assert abs(first - truth_host_ns(int(frames[0]["ts"][0]), s0)) < 100_000
 
 
 if __name__ == "__main__":

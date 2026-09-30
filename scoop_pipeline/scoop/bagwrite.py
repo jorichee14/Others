@@ -31,7 +31,11 @@ __all__ = ["BagWriter"]
 
 
 class BagWriter:
-    def __init__(self, out_dir, library: str = "scoop"):
+    def __init__(self, out_dir, library: str = "scoop", metadata_template=None):
+        """``metadata_template``: another bag's metadata.yaml (path or dict).
+        Its structure -- version, QoS profiles, topic order -- is kept and
+        only the contents (files, counts, times) are rewritten, the way
+        ``retime_bag.py`` did."""
         from mcap.writer import CompressionType, Writer
         self.dir = Path(out_dir)
         self.dir.mkdir(parents=True, exist_ok=False)      # never overwrite a bag
@@ -46,13 +50,18 @@ class BagWriter:
         self.t_max: Optional[int] = None
         self.n = 0
         self._closed = False
+        if metadata_template is not None and not isinstance(metadata_template, dict):
+            with open(metadata_template) as fh:
+                metadata_template = yaml.safe_load(fh)
+        self._template = metadata_template
 
     # -- channels ------------------------------------------------------------
-    def _channel(self, topic: str, schema: TopicSchema) -> int:
+    def _channel(self, topic: str, schema: TopicSchema, metadata=None) -> int:
         ch = self._channels.get(topic)
         if ch is None:
             sid = self._w.register_schema(schema.name, schema.encoding, schema.data)
-            ch = self._w.register_channel(topic, schema.message_encoding, sid)
+            ch = self._w.register_channel(topic, schema.message_encoding, sid,
+                                          metadata=dict(metadata or {}))
             self._channels[topic] = ch
             self.types[topic] = schema.name
             self.counts[topic] = 0
@@ -61,10 +70,13 @@ class BagWriter:
                              f"{self.types[topic]} topic")
         return ch
 
-    def _add(self, ch: int, topic: str, data: bytes, log_ns: int):
+    def _add(self, ch: int, topic: str, data: bytes, log_ns: int,
+             publish_ns: Optional[int] = None, sequence: Optional[int] = None):
         log_ns = int(log_ns)
-        self._w.add_message(ch, log_time=log_ns, publish_time=log_ns, data=data,
-                            sequence=self.counts[topic])
+        self._w.add_message(ch, log_time=log_ns,
+                            publish_time=log_ns if publish_ns is None else int(publish_ns),
+                            data=data,
+                            sequence=self.counts[topic] if sequence is None else int(sequence))
         self.counts[topic] += 1
         self.n += 1
         self.t_min = log_ns if self.t_min is None else min(self.t_min, log_ns)
@@ -80,9 +92,14 @@ class BagWriter:
             schema = TopicSchema(name, "", b"", "")
         self._add(self._channel(topic, schema), topic, rosmsg.serialize(msg), log_ns)
 
-    def write_raw(self, topic: str, schema: TopicSchema, payload: bytes, log_ns: int):
-        """Serialized bytes, copied verbatim under ``topic``."""
-        self._add(self._channel(topic, schema), topic, bytes(payload), log_ns)
+    def write_raw(self, topic: str, schema: TopicSchema, payload: bytes, log_ns: int,
+                  publish_ns: Optional[int] = None, sequence: Optional[int] = None,
+                  channel_metadata=None):
+        """Serialized bytes, copied verbatim under ``topic``. ``publish_ns``,
+        ``sequence`` and ``channel_metadata`` default to the log time, a
+        running count and none; pass the source's to copy a record exactly."""
+        self._add(self._channel(topic, schema, channel_metadata), topic, bytes(payload),
+                  log_ns, publish_ns, sequence)
 
     # -- closing -------------------------------------------------------------
     def close(self) -> Path:
@@ -92,6 +109,32 @@ class BagWriter:
         self._w.finish()
         self._fh.close()
         t0, t1 = int(self.t_min or 0), int(self.t_max or 0)
+        if self._template is not None:
+            meta = self._template
+            info = meta["rosbag2_bagfile_information"]
+            info["relative_file_paths"] = [self.name]
+            info["message_count"] = self.n
+            info["starting_time"] = {"nanoseconds_since_epoch": t0}
+            info["duration"] = {"nanoseconds": t1 - t0}
+            listed = set()
+            for te in info.get("topics_with_message_count", []):
+                name = te.get("topic_metadata", {}).get("name")
+                te["message_count"] = self.counts.get(name, 0)
+                listed.add(name)
+            for t in self._channels:
+                if t not in listed:
+                    info.setdefault("topics_with_message_count", []).append(
+                        {"topic_metadata": {"name": t, "type": self.types[t],
+                                            "serialization_format": "cdr",
+                                            "offered_qos_profiles": ""},
+                         "message_count": self.counts[t]})
+            info["files"] = [{"path": self.name,
+                              "starting_time": {"nanoseconds_since_epoch": t0},
+                              "duration": {"nanoseconds": t1 - t0},
+                              "message_count": self.n}]
+            with open(self.dir / "metadata.yaml", "w") as fh:
+                yaml.safe_dump(meta, fh, sort_keys=False)
+            return self.dir
         meta = {"rosbag2_bagfile_information": {
             "version": 5,
             "storage_identifier": "mcap",

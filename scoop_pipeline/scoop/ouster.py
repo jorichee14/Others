@@ -189,8 +189,11 @@ class ClockMap:
         return self.slope * 1e6
 
     def host_ns(self, sensor_ns: int) -> int:
-        """retime_bag's sensor_to_host_ns, on an integer ns sensor stamp."""
-        t = sensor_ns * 1e-9
+        """retime_bag's sensor_to_host_ns. The sensor time goes through the
+        same float as there -- header sec + nanosec * 1e-9 -- so a stamp maps
+        to the same nanosecond whichever of the two computes it."""
+        sec, nsec = divmod(int(sensor_ns), 1_000_000_000)
+        t = sec + nsec * 1e-9
         return int(round((t + self.offset_s + self.slope * (t - self.s0)) * 1e9))
 
     @classmethod

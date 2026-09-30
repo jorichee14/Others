@@ -12,9 +12,11 @@ scoop/               library: everything reusable lives here
   rosmsg.py          building ROS messages: header, PointCloud2 (from a dtype), Imu, String
   ouster.py          Ouster packets -> frames / IMU / scans, clock fit, ouster_ros layout
   replay.py          the replay step: packets bag -> points bag, with remaps
+  retime.py          sensor time -> capture time (retime_bag.py without ROS)
 environment.yml      conda env for all offline processing
 scripts/             command lines only: argument parsing around scoop/
   decode_ouster.py   packets bag -> points bag (replaces the ouster_ros replay)
+  retime.py          points bag -> retimed bag (same arguments as retime_bag.py)
   bag_check.py       verify + time the fast decoder on a real bag
   ouster_check.py    verify packet decoding against a replayed/retimed bag
   env_check.py       is this environment ready?
@@ -89,21 +91,27 @@ alone runs at ~630 msg/s, so that's the upper limit for a single process.
 ## Ouster packets: decode, then retime
 
 ```
-original bag (<ns>/lidar_packets, imu_packets, metadata)
-   |  python scripts/decode_ouster.py <original> <decoded>        conda env scoop
+original bag (<ns>/lidar_packets, imu_packets, metadata, other topics)
+   |  python scripts/decode_ouster.py <original> <decoded> [--remap ...]
    v
-decoded bag, sensor time (<out-ns>/points, imu, metadata)
-   |  python3 retime_bag.py <original> <decoded> <retimed>        ROS terminal
+decoded bag, sensor time (<out-ns>/points, imu, metadata + remapped topics)
+   |  python scripts/retime.py <original> <decoded> <retimed> /ouster /mobile_1/ouster
    v
 retimed bag -> GLIM
 ```
+
+Both steps run in the `scoop` env. `scripts/retime.py` does what
+`retime_bag.py` does, with the same arguments; it rewrites the header stamp in
+the message bytes instead of going through rclpy, so it needs no ROS. On
+synthetic bags (sensor clock from boot and PTP) its output equals
+`retime_bag.py`'s message for message -- topic, log and publish time,
+sequence, bytes -- and metadata.yaml is identical.
 
 `decode_ouster.py` replaces `ros2 launch ouster_ros replay.launch.xml` +
 `ros2 bag record`: same topics, same organized cloud layout (x y z intensity
 t reflectivity ring ambient range), IMU in m/s^2 and rad/s, stamps in sensor
 time, `metadata.yaml` included, without waiting for real time. `retime_bag.py`
-runs on its output unchanged (checked on a synthetic bag: its stamps equal
-`scoop.ouster.fit_clock`'s to the nanosecond).
+also still runs on its output unchanged.
 
 ```
 python scripts/decode_ouster.py <original bag> <decoded bag dir> \

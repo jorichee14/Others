@@ -19,9 +19,9 @@ byte under its new name. Your replay launch's remaps are:
     --remap /zed/zed_node/imu/data:=/mobile_1/zed/imu/data
     --remap /zed/zed_node/imu/mag:=/mobile_1/zed/imu/mag
 
-Next step, unchanged, in a ROS terminal:
+Next step, in the same env (or retime_bag.py in a ROS terminal, same result):
 
-    python3 retime_bag.py <packets_bag> <out_bag_dir> <retimed_dir> /ouster /mobile_1/ouster
+    python3 scripts/retime.py <packets_bag> <out_bag_dir> <retimed_dir> /ouster /mobile_1/ouster
 """
 import argparse
 import os
@@ -59,7 +59,7 @@ def main():
                                  imu=not a.no_imu, remap=remap, limit=a.limit)
     except ValueError as e:
         sys.exit(f"error: {e}")
-    print(f"\nnext (ROS terminal):  python3 retime_bag.py {a.packets_bag} "
+    print(f"\nnext:  python scripts/retime.py {a.packets_bag} "
           f"{a.out_bag_dir} <retimed_out_dir> {a.packets_ns} {a.out_ns}")
 
 
