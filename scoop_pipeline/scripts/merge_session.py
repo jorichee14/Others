@@ -3,7 +3,8 @@
 
     python scoop_pipeline/scripts/merge_session.py <raw pass folder>
         [--check] [--allow-missing] [--out DIR] [--name NAME]
-        [--compression zstd|none] [--record configs/record.yaml]
+        [--compression zstd|none] [--mode mapping|survey|coop|contention]
+        [--record configs/record.yaml]
         [--settings configs/recording.yaml] [--work-root DIR]
 
 <raw pass folder> holds one folder per machine, e.g.
@@ -12,6 +13,8 @@
 For every machine (configs/record.yaml) it lists the topics its bags must
 have -- processed bags where they exist (mobile_1: retimed + ZED), raw ones
 otherwise -- and flags MISSING and EMPTY ones, like record.sh's preflight.
+What a pass mode does not record is left out (record.yaml's check section;
+the mode comes from the pass folder's name, e.g. mapping_A, or --mode).
 --check stops there. Otherwise, if nothing is missing (or --allow-missing),
 all bags are merged in log-time order into
     data/work/<date>/<pass>/<prefix>_<pass>_..._<date>_merged/
@@ -53,6 +56,7 @@ def main():
     ap.add_argument("--name", default=None, help="merged bag name without _merged "
                     "(default: from the bag names)")
     ap.add_argument("--compression", default="zstd", choices=["zstd", "none"])
+    ap.add_argument("--mode", default=None, help="pass mode (default: from the folder name)")
     ap.add_argument("--record", default=None, help="default: configs/record.yaml")
     ap.add_argument("--settings", default=None, help="default: configs/recording.yaml")
     ap.add_argument("--work-root", default=None)
@@ -60,7 +64,12 @@ def main():
     try:
         plan = session.RecordPlan(a.record)
         settings = recording.load_settings(a.settings)
-        units = session.find_units(a.raw_dir, plan, settings, a.work_root)
+        raw = recording.Path(a.raw_dir).expanduser().resolve()
+        mode = a.mode or plan.mode_of(raw.name, *(p.parent.name for p in raw.rglob("metadata.yaml")))
+        if mode is not None and mode not in plan.modes:
+            raise ValueError(f"--mode {mode}: record.yaml has {list(plan.modes)}")
+        print(f"mode: {mode or 'unknown (no mode name in the folder or bag names)'}")
+        units = session.find_units(raw, plan, settings, a.work_root, mode)
         bad = []
         for u in units:
             print(f"\n{u.machine}  ({'processed' if u.processed else 'raw'}: "

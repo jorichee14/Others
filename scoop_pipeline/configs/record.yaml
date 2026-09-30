@@ -41,6 +41,19 @@ defaults:
 # on replay far more subtly than a missing transform does.
 tf_recorded_by: mobile_1
 
+# What the pipeline's check expects (scripts/merge_session.py; record.sh does
+# not read this): every machine's topics below, minus what a mode does not
+# record. The mode comes from the pass folder's name (mapping_A -> mapping),
+# else the bags' names; --mode sets it. Patterns as in a shell (*).
+check:
+  skip: [/tf, /tf_static]          # not recorded in any mode
+  modes:
+    mapping:                       # LiDAR + ZED: no link or time-base measurements
+      skip: ["/*/wifi/*", "/*/ntp/*"]
+    survey: {}
+    coop: {}
+    contention: {}
+
 machines:
 
   # ------------------------------------------------------------------ mobile_1

@@ -22,6 +22,7 @@ the decoded ones -- see :func:`processed_topics`), else its raw bags.
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,7 +40,8 @@ DEFAULT_PLAN = recording.ROOT / "configs" / "record.yaml"
 
 
 class RecordPlan:
-    """``record.yaml``: which topics each machine records."""
+    """``record.yaml``: which topics each machine records, and (its ``check``
+    section) which of them a pass mode does not."""
 
     def __init__(self, path=None):
         self.path = Path(path or DEFAULT_PLAN).expanduser()
@@ -49,13 +51,32 @@ class RecordPlan:
             m: list((spec or {}).get("topics") or [])
             for m, spec in (doc.get("machines") or {}).items()}
         self.tf_recorded_by = doc.get("tf_recorded_by")
+        chk = doc.get("check") or {}
+        self.skip: List[str] = list(chk.get("skip") or [])
+        self.modes: Dict[str, List[str]] = {
+            m: list((spec or {}).get("skip") or []) for m, spec in (chk.get("modes") or {}).items()}
 
-    def topics(self, machine: str) -> List[str]:
-        """What ``record.sh <machine>`` records, /tf and /tf_static included."""
+    def mode_of(self, *names: str) -> Optional[str]:
+        """The first mode named as a word in ``names`` (the pass folder first,
+        then bag names): mapping_A -> mapping, ..._coop_... -> coop."""
+        for name in names:
+            words = re.split(r"[_\W]+", name.lower())
+            for m in self.modes:
+                if m.lower() in words:
+                    return m
+        return None
+
+    def skipped(self, topic: str, mode: Optional[str] = None) -> bool:
+        pats = self.skip + (self.modes.get(mode, []) if mode else [])
+        return any(fnmatch.fnmatchcase(topic, p) for p in pats)
+
+    def topics(self, machine: str, mode: Optional[str] = None) -> List[str]:
+        """What ``record.sh <machine>`` records (/tf and /tf_static on the
+        tf machine), minus what the check skips in ``mode``."""
         t = list(self.machines[machine])
         if machine == self.tf_recorded_by:
             t += ["/tf", "/tf_static"]
-        return t
+        return [x for x in t if not self.skipped(x, mode)]
 
     def machine_of(self, bag_name: str) -> Optional[str]:
         """The machine a bag belongs to, from its name's end."""
@@ -133,8 +154,9 @@ def _bag_folders(folder: Path) -> List[Path]:
 
 
 def find_units(session_raw, plan: RecordPlan, settings: dict,
-               work_root=None, log=print) -> List[Unit]:
-    """Every machine's bags below ``session_raw`` (a pass folder in raw/)."""
+               work_root=None, mode: Optional[str] = None, log=print) -> List[Unit]:
+    """Every machine's bags below ``session_raw`` (a pass folder in raw/),
+    checked for the topics of ``mode`` (see :meth:`RecordPlan.mode_of`)."""
     session_raw = Path(session_raw).expanduser().resolve()
     bag_dirs = [p.parent for p in session_raw.rglob("metadata.yaml")]
     folders = sorted({b.parent for b in bag_dirs})          # the folders holding bags
@@ -149,15 +171,15 @@ def find_units(session_raw, plan: RecordPlan, settings: dict,
                 continue
             by_machine.setdefault(m, []).append(b)
         for m, bags in by_machine.items():
-            units.append(_unit(m, folder, bags, plan, settings, work_root))
+            units.append(_unit(m, folder, bags, plan, settings, work_root, mode))
     if not units:
         raise BagError(f"no bags of any machine in {plan.path.name} below {session_raw}")
     return units
 
 
-def _unit(machine, folder, raw_bags, plan, settings, work_root) -> Unit:
+def _unit(machine, folder, raw_bags, plan, settings, work_root, mode) -> Unit:
     """Processed bags if the folder's recording was processed, else raw."""
-    expected = plan.topics(machine)
+    expected = plan.topics(machine, mode)
     try:
         rec = recording.find_recording(folder, work_root,
                                        settings["ouster"].get("packets_ns", "/ouster"),

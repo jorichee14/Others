@@ -28,10 +28,14 @@ T0 = 1_790_218_481 * S
 P = "mirc_dataset_mapping_A_20260924"
 LATCHED = "- history: 1\n  depth: 1\n  reliability: 1\n  durability: 1\n"
 
-PLAN = {"tf_recorded_by": "mobile_1", "machines": {
+PLAN = {"tf_recorded_by": "mobile_1",
+        "check": {"skip": ["/tf_static"],
+                  "modes": {"mapping": {"skip": ["/*/wifi/*"]}, "coop": {}}},
+        "machines": {
     "mobile_1": {"topics": ["/ouster/lidar_packets", "/ouster/imu_packets", "/ouster/metadata",
                             "/zed/zed_node/imu/data", "/mobile_1/diagnostics"]},
-    "mobile_2": {"topics": ["/mobile_2/imu", "/mobile_2/color/image_raw"]},
+    "mobile_2": {"topics": ["/mobile_2/imu", "/mobile_2/color/image_raw",
+                            "/mobile_2/wifi/ping"]},                 # no wifi when mapping
     "infra_1": {"topics": ["/infra_1/radar/points_all"]},
     "mobile_1/sniffer": {"topics": ["/mobile_1/sniffer/infra_1/csi"]}}}
 
@@ -114,13 +118,36 @@ def test_machine_of():
     assert p.machine_of(f"{P}_mobile_1_sniffer") == "mobile_1/sniffer"
     assert p.machine_of(f"{P}_mobile_12") is None
     assert p.machine_of(f"{P}_infra_1") == "infra_1"
-    assert "/tf" in p.topics("mobile_1") and "/tf" not in p.topics("mobile_2")
+    assert "/tf" not in p.topics("mobile_1")                     # never recorded (check.skip)
+
+
+def test_modes():
+    t = Pass()
+    try:
+        p = t.plan
+        assert p.mode_of("mapping_A") == "mapping"
+        assert p.mode_of("run3", f"{P}_coop_2_mobile_1") == "coop"
+        assert p.mode_of("unmapped_B") is None                   # a word, not a substring
+        assert "/tf" in p.topics("mobile_1") and "/tf_static" not in p.topics("mobile_1")
+        assert "/mobile_2/wifi/ping" not in p.topics("mobile_2", "mapping")
+        assert "/mobile_2/wifi/ping" in p.topics("mobile_2", "coop")
+        u = {x.machine: x for x in session.find_units(t.raw, p, t.settings(), mode="coop",
+                                                      log=quiet)}
+        assert u["mobile_2"].check().missing == ["/mobile_2/imu", "/mobile_2/wifi/ping"]
+        real = session.RecordPlan(os.path.join(ROOT, "configs", "record.yaml"))
+        m1 = real.topics("mobile_1", "mapping")
+        assert "/tf" not in m1 and "/mobile_1/wifi/status" not in m1 and \
+            "/mobile_1/ntp/events" not in m1 and "/ouster/lidar_packets" in m1
+        assert "/mobile_1/wifi/status" in real.topics("mobile_1", "survey")
+    finally:
+        t.close()
 
 
 def test_processed_topics():
     t = Pass()
     try:
-        u = {x.machine: x for x in session.find_units(t.raw, t.plan, t.settings(), log=quiet)}
+        u = {x.machine: x for x in session.find_units(t.raw, t.plan, t.settings(),
+                                                      mode="mapping", log=quiet)}
         m1 = u["mobile_1"]
         assert m1.processed
         assert [b.name for b in m1.bags] == [f"{P}_mobile_1_retimed", "cam_zed", "cam_zed_right"]
