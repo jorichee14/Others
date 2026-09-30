@@ -246,7 +246,9 @@ ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i svo_path:=<svo>
 ros2 bag record <zed.topics>          stopped when the wrapper logs "SVO reached the end"
 ```
 
-then restamped (`scoop/zed.py`): log time = header stamp (the SVO's capture
+recorded in 4 GiB pieces, then restamped (`scoop/zed.py`) piece by piece,
+each deleted once read, so the disk needs about one copy of the bag, not two:
+log time = header stamp (the SVO's capture
 time, the recording PC's clock, as in the raw bag), topics renamed
 `/zed/zed_node/...` -> `/mobile_1/zed/...`, QoS kept. The result is on the
 same timeline as the retimed bag. The wrapper runs with the robot's own
@@ -255,8 +257,10 @@ HD1080 at 15 Hz, NEURAL_PLUS depth, 0.3-10 m, ...), so the replay matches the
 live settings; the SVO keys above go on top of it, then `params`. Topics,
 camera model and these files are the `zed` section of
 `configs/recording.yaml`; the default topics are
-the paper's `mobile_1/zed` topics (`tables/topics.tex`) minus the IMU, which
-the raw bag already has. The wrapper log and the parameters used are kept in
+the paper's `mobile_1/zed` topics (`tables/topics.tex`) plus the right camera,
+minus the IMU, which the raw bag already has; about 100 GB for an 18-minute
+recording (images and depth are stored uncompressed, 960x540 at 15 Hz). The
+point cloud is left out: it is depth + left camera_info, ~145 GB more. The wrapper log and the parameters used are kept in
 `<out>/zed_logs/`.
 
 Where to run: in any terminal. When `ros2` + `zed_wrapper` are not installed

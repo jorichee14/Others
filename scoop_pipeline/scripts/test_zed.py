@@ -53,11 +53,11 @@ def check(name, fn):
         traceback.print_exc()
 
 
-def write_recording(out, topics=(IMAGE, INFO, DEPTH, STATUS)):
+def write_recording(out, topics=(IMAGE, INFO, DEPTH, STATUS), frames=range(N)):
     """What `ros2 bag record` leaves after the replay: header stamps are the
     SVO's, log times the replay's (twice real time, per-topic latency)."""
     items = []
-    for i in range(N):
+    for i in frames:
         stamp, sent = S0 + i * FRAME, W0 + i * FRAME // 2
         for t in topics:
             if t == STATUS:                                   # no header
@@ -165,6 +165,35 @@ def test_restamp_bag():
             pass
         else:
             raise AssertionError("depth arrives 150 ms late: a 50 ms window must fail")
+    finally:
+        shutil.rmtree(d)
+
+
+def test_restamp_consumes_a_split_recording():
+    """Recorded in pieces: each piece is deleted once read, and the result is
+    the same as from one file."""
+    d = tempfile.mkdtemp()
+    try:
+        rec, out = os.path.join(d, "rec"), os.path.join(d, "out")
+        os.makedirs(rec)
+        names = []
+        for k, frames in enumerate((range(0, 25), range(25, 45), range(45, N))):
+            write_recording(os.path.join(d, f"p{k}"), frames=frames)
+            names.append(f"rec_{k}.mcap")
+            shutil.move(os.path.join(d, f"p{k}", f"p{k}_0.mcap"), os.path.join(rec, names[-1]))
+        meta = yaml.safe_load(open(os.path.join(d, "p0", "metadata.yaml")))
+        meta["rosbag2_bagfile_information"]["relative_file_paths"] = names
+        yaml.safe_dump(meta, open(os.path.join(rec, "metadata.yaml"), "w"))
+        seen = []
+
+        def spy(msg):                               # which pieces still exist, at each log line
+            seen.append([n for n in names if os.path.exists(os.path.join(rec, n))])
+        remap = zed.prefix_remap([IMAGE, INFO, DEPTH, STATUS], "/zed/zed_node", "/mobile_1/zed")
+        zed.restamp_bag(rec, out, remap, consume=True, log=spy)
+        tp = _check_restamped(out, remap)
+        assert tp[remap[IMAGE]].count == N
+        assert not [n for n in names if os.path.exists(os.path.join(rec, n))], "pieces left"
+        assert seen[0] == names, seen                # all there when it starts
     finally:
         shutil.rmtree(d)
 

@@ -124,7 +124,9 @@ trap 'exit 130' INT TERM
 echo "svo:    $SVO"
 echo "out:    $OUT"
 echo "topics: $*"
-"${SIGDFL[@]}" ros2 bag record -s mcap --max-cache-size $((512 * 1024 * 1024)) -o "$OUT" "$@" \
+# in pieces of $ZED_SPLIT_BYTES (4 GiB), so the restamp can delete each one once read
+"${SIGDFL[@]}" ros2 bag record -s mcap --max-cache-size $((512 * 1024 * 1024)) \
+    --max-bag-size "${ZED_SPLIT_BYTES:-4294967296}" -o "$OUT" "$@" \
     </dev/null >"$LOGS/record.log" 2>&1 &
 REC=$!
 for _ in $(seq 30); do                 # until the recorder listens

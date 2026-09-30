@@ -153,10 +153,15 @@ def _stamp(schema: TopicSchema, data) -> int:
 
 
 def restamp_bag(recorded, out_dir, remap: Optional[Dict[str, str]] = None,
-                reorder_s: float = REORDER_S, log=print) -> RestampResult:
+                reorder_s: float = REORDER_S, consume: bool = False,
+                log=print) -> RestampResult:
     """``recorded`` (header stamps = capture time, log times = replay time)
     -> ``out_dir`` with log and publish time = header stamp, topics renamed
-    by ``remap``. See the module docstring."""
+    by ``remap``. See the module docstring.
+
+    ``consume`` deletes each file of a split recording once it has been read,
+    so the disk holds about one copy instead of two (the recording is gone
+    afterwards, also when this fails)."""
     reader = bag.open_bag(recorded)
     have = reader.topics().keys()
     remap = {k: v for k, v in (remap or {}).items() if k in have}
@@ -184,10 +189,16 @@ def restamp_bag(recorded, out_dir, remap: Optional[Dict[str, str]] = None,
     total = sum(f.stat().st_size for f in Path(recorded).glob("*.mcap")) or 1
     log(f"    restamping {total / 1e9:.1f} GB -> {out_dir}")
 
+    files = list(reader.files)
+
     def records():
         nonlocal offset
         done, shown = 0, time.monotonic()
-        for _, sc, ch, msg in bag.iter_mcap_records(reader):
+        current = None
+        for i, sc, ch, msg in bag.iter_mcap_records(reader):
+            if consume and current is not None and i != current:
+                os.remove(files[current])        # read to the end and closed
+            current = i
             done += len(msg.data)
             if time.monotonic() - shown >= 30:
                 shown = time.monotonic()
@@ -203,6 +214,8 @@ def restamp_bag(recorded, out_dir, remap: Optional[Dict[str, str]] = None,
                 moved[copies[ch.topic]] = moved.get(copies[ch.topic], 0) + 1
             yield (log_ns, copies[ch.topic], schema, pub_ns, msg.sequence,
                    dict(ch.metadata), msg.data)
+        if consume and current is not None:
+            os.remove(files[current])
 
     with BagWriter(out_dir, library="scoop.zed") as w:
         for src, dst in copies.items():
@@ -229,10 +242,12 @@ def svo_to_bag(svo, out_dir, topics: List[str], remap: Optional[Dict[str, str]] 
     ``wrapper_config``: the zed_wrapper config files to replay with (see
     :func:`wrapper_params`).
 
-    The replay is recorded into ``<out_dir>.record`` first and restamped into
-    ``out_dir``; the wrapper logs and the parameters used end up in
-    ``out_dir/zed_logs/``. The intermediate recording is deleted unless
-    ``keep_record``; after a failure it is left for a look."""
+    The replay is recorded into ``<out_dir>.record`` in pieces
+    (``run_zed.sh``, $ZED_SPLIT_BYTES, 4 GiB) and restamped into ``out_dir``,
+    each piece deleted once read, so the disk needs about one copy of the
+    bag plus a piece, not two copies. ``keep_record`` keeps the recording
+    instead. The wrapper logs and the parameters used end up in
+    ``out_dir/zed_logs/``."""
     out_dir = Path(out_dir)
     record_dir = out_dir.with_name(out_dir.name + ".record")
     params_file = out_dir.with_name(out_dir.name + ".params.yaml")
@@ -247,7 +262,7 @@ def svo_to_bag(svo, out_dir, topics: List[str], remap: Optional[Dict[str, str]] 
     missing = sorted(set(topics) - set(bag.open_bag(record_dir).topics()))
     if missing:
         log(f"    WARNING: never published, so not in the bag: {missing}")
-    res = restamp_bag(record_dir, out_dir, remap, reorder_s, log)
+    res = restamp_bag(record_dir, out_dir, remap, reorder_s, consume=not keep_record, log=log)
     logs = out_dir / "zed_logs"
     if (record_dir / "zed_logs").is_dir():
         shutil.move(str(record_dir / "zed_logs"), str(logs))
