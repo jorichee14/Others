@@ -1,0 +1,20 @@
+# Site 1. Relative paths are below data_root.
+#
+#   raw/site_1/mapping_A/            the mapping-session bag (rosbag2 dir)
+#   raw/site_1/mapping_A/traj_lidar.txt   its GLIM trajectory (TUM)
+#   raw/site_1/mapping_B/            the second, independent mapping pass
+
+passes:
+  A:
+    bag: raw/site_1/mapping_A
+    traj: raw/site_1/mapping_A/traj_lidar.txt
+  B:
+    bag: raw/site_1/mapping_B
+    traj: raw/site_1/mapping_B/traj_lidar.txt
+
+stages:
+  s04_cut:
+    floor: null                    # pick from the z histogram (notebook)
+    ceil: null
+  s05_anchor:
+    anchor_board: null             # null = first board seen

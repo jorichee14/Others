@@ -1,0 +1,52 @@
+# SCooP pipeline defaults: the parameters frozen across sites and sequences.
+# A site file (configs/sites/<site>.yaml) overlays this; keep it to what
+# genuinely differs per site. Each stage's block below is hashed into its
+# stamp.json, so changing a value re-runs that stage and what depends on it.
+
+data_root: ~/scoop_data            # $SCOOP_DATA overrides
+reference_pass: A                  # the mapping pass that becomes the reference
+
+# Filled in Phase 1 from pipeline_config.json + calibration.json.
+sensor: {}                         # topics, extrinsics, intrinsics
+build_map: {}                      # shared by s01_seed_map and s03_final_map
+boards: {}                         # board registry for s05_anchor
+
+stages:
+  s02_refine:                      # 01a defaults, verbatim
+    target_voxel: 0.05
+    scan_voxel: 0.10
+    max_corr: [0.4, 0.2, 0.1]
+    iters_per_gate: 5
+    huber: 0.05
+    min_corr: 200
+    max_shift: 0.50
+    max_rot_deg: 5.0
+    rounds: 2
+    plane_voxel: 0.4
+    plane_iters: 8
+    prior_beta: 0.05
+    plane_huber: 0.10
+    planarity: 1.0
+    points_topic: ""
+
+  s04_cut:                         # 02 defaults; floor/ceil are per site
+    axis: z
+    bins: 100
+    floor: null
+    ceil: null
+    voxel: 0.0
+
+  s05_anchor:                      # 03 defaults, verbatim
+    detect_period: 0.20
+    section_gap: 3.0
+    min_section_samples: 4
+    assoc_radius: 0.40
+    group_gap_factor: 2.5
+    tf_max_gap: 0.2
+    board_axes: opencv
+    board_origin: corner
+    fuse:
+      max_reproj_px: 1.0
+      max_std_mm: 20.0
+      max_section_disagree_mm: 50.0
+      max_section_disagree_deg: 1.0
