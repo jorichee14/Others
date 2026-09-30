@@ -3,4 +3,5 @@ pyyaml
 mcap
 mcap-ros2-support
 opencv-python-headless   # images
+ouster-sdk               # Ouster lidar_packets (scoop/ouster.py)
 # rosbags               # .db3 bags, and scripts/test_bag.py
