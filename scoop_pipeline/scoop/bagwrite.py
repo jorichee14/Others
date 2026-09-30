@@ -19,15 +19,16 @@ Messages should arrive in log-time order, as a recorder writes them.
 """
 from __future__ import annotations
 
+import heapq
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 
 import yaml
 
 from . import rosmsg
 from .bag import TopicSchema
 
-__all__ = ["BagWriter"]
+__all__ = ["BagWriter", "write_in_order"]
 
 
 class BagWriter:
@@ -171,3 +172,32 @@ class BagWriter:
     def __exit__(self, *exc):
         self.close()
         return False
+
+
+def write_in_order(w: BagWriter, records: Iterable, reorder_s: float) -> None:
+    """Write ``records`` -- ``(log_ns, topic, schema, publish_ns, sequence,
+    channel_metadata, payload)`` that are out of log-time order by at most
+    ``reorder_s`` -- in non-decreasing log-time order, through a bounded
+    reorder buffer. Raises if a record arrives later than that."""
+    horizon = int(reorder_s * 1e9)
+    heap = []
+    watermark = -1
+    last = -1
+
+    def emit(item):
+        nonlocal last
+        log_ns, _, topic, schema, pub, seq, meta, data = item
+        if log_ns < last:
+            raise ValueError(f"reorder window {reorder_s} s too small: "
+                             f"{topic} would go back in time")
+        last = log_ns
+        w.write_raw(topic, schema, data, log_ns, publish_ns=pub, sequence=seq,
+                    channel_metadata=meta)
+
+    for i, (log_ns, topic, schema, pub, seq, meta, data) in enumerate(records):
+        heapq.heappush(heap, (log_ns, i, topic, schema, pub, seq, meta, data))
+        watermark = max(watermark, log_ns)
+        while heap and heap[0][0] <= watermark - horizon:
+            emit(heapq.heappop(heap))
+    while heap:
+        emit(heapq.heappop(heap))

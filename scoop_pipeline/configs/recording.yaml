@@ -1,4 +1,5 @@
-# How one robot recording is processed: raw bag -> decoded -> retimed -> GLIM.
+# How one robot recording is processed: raw bag -> decoded -> retimed -> GLIM,
+# and the ZED SVO2 next to it -> a bag on the same clock.
 # Used by scripts/process_recording.py; a copy of what was used is written
 # next to the outputs (work/.../process.yaml).
 
@@ -21,3 +22,22 @@ ouster:
 glim:
   config: ~/workspaces/isaac_ros-dev/glim_config   # $GLIM_CONFIG overrides
   image: koide3/glim_ros2:humble-mcap
+
+zed:                               # the .svo2 in the raw folder -> <svo name>_zed/
+  camera_model: zed2i
+  rename: [/zed/zed_node, /mobile_1/zed]   # topic prefix, as in the raw bag
+  topics:                          # the paper's mobile_1/zed topics (tables/topics.tex);
+    - /zed/zed_node/left/image_rect_color   # imu/data and imu/mag are already in the raw bag
+    - /zed/zed_node/left/camera_info
+    - /zed/zed_node/depth/depth_registered
+    - /zed/zed_node/depth/camera_info
+    - /zed/zed_node/odom
+    - /zed/zed_node/pose
+    - /zed/zed_node/path_map
+    - /zed/zed_node/path_odom
+    # more the wrapper publishes, e.g.:
+    # - /zed/zed_node/right/image_rect_color
+    # - /zed/zed_node/right/camera_info
+    # - /zed/zed_node/point_cloud/cloud_registered
+  realtime: false                  # false: every SVO frame, as fast as the GPU goes
+  params: {}                       # other wrapper parameters, e.g. {depth: {depth_mode: NEURAL}}

@@ -13,19 +13,23 @@ scoop/               library: everything reusable lives here
   ouster.py          Ouster packets -> frames / IMU / scans, clock fit, ouster_ros layout
   replay.py          the replay step: packets bag -> points bag, with remaps
   retime.py          sensor time -> capture time (retime_bag.py without ROS)
-  recording.py       one recording: raw bag -> decoded -> retimed -> GLIM, fixed layout
+  zed.py             ZED SVO2 -> bag on capture time (wrapper replay + restamp)
+  recording.py       one recording: raw bag -> decoded -> retimed -> GLIM, SVO -> zed
 configs/recording.yaml  settings for processing a recording (topics, remaps, GLIM config)
 environment.yml      conda env for all offline processing
 scripts/             command lines only: argument parsing around scoop/
-  process_recording.py  raw recording -> decoded, retimed, glim (the usual entry point)
+  process_recording.py  raw recording -> decoded, retimed, glim, zed (the usual entry point)
   decode_ouster.py   packets bag -> points bag (replaces the ouster_ros replay)
   retime.py          points bag -> retimed bag (same arguments as retime_bag.py)
   run_glim.sh        GLIM (docker) on a bag, dump next to the bag, owned by you
+  svo_to_bag.py      one SVO2 -> bag on capture time (the zed step alone)
+  run_zed.sh         ZED wrapper replay + ros2 bag record (here or in the isaac_ros container)
   bag_check.py       verify + time the fast decoder on a real bag
   ouster_check.py    verify packet decoding against a replayed/retimed bag
   env_check.py       is this environment ready?
   test_bag.py        self-tests: reading, writing, messages (no bag needed)
   test_ouster.py     self-tests: packets, clock, replay, remaps (needs ouster-sdk)
+  test_zed.py        self-tests: restamp, run_zed.sh with a fake ros2 and docker
 ```
 
 ## Environment
@@ -109,6 +113,7 @@ data/work/20260924/mapping_A/mobile_1/
     mirc_dataset_survey_1_mapping_20260924_mobile_1_decoded/   1  points bag, sensor time
     mirc_dataset_survey_1_mapping_20260924_mobile_1_retimed/   2  capture time; the GLIM input
     glim/          3  GLIM dump: traj_lidar.txt, map
+    <svo name>_zed/   4  the SVO2 as a bag, capture time (zed_logs/ inside)
     clock.json        the clock fit (drift, residual, packets) for the paper
     process.yaml      the settings the steps ran with
 ```
@@ -116,11 +121,13 @@ data/work/20260924/mapping_A/mobile_1/
 Settings come from `configs/recording.yaml` (`--settings` for another file).
 The two bags are named `<original bag>_decoded` and `<original bag>_retimed`
 (the .mcap inside too), so a copied bag still says where it came from.
-Steps already done are skipped. `--redo retimed` redoes retimed and glim;
+Steps already done are skipped. `--redo X` redoes X and the steps built from
+it: `--redo retimed` redoes retimed and glim, `--redo zed` only zed.
 `--until retimed` stops before GLIM; `--status` shows what is done. A step is
 built in `.partial/<step>/` and only moved into place when it succeeded, so a
 step folder is always complete. Steps 1-2 run in the `scoop` env, step 3
-starts docker (`scripts/run_glim.sh`).
+starts docker (`scripts/run_glim.sh`), step 4 needs the ZED wrapper
+(below).
 
 ## Ouster packets: decode, then retime
 
@@ -218,3 +225,37 @@ It prints the clock fit (compare with `retime_bag.py`'s output), the decode
 speed as a multiple of real time, and per scan: stamp difference, point
 count, max xyz difference in both frames, and max per-point time difference.
 It ends with `MATCH in the <frame> frame` or `NO MATCH`.
+
+## ZED SVO2 -> bag
+
+Step 4 of `process_recording.py`, or alone:
+
+```
+python scripts/svo_to_bag.py <file.svo2> <out bag dir>
+```
+
+Reading an SVO2 needs the ZED SDK, so the SVO is played through the ZED ROS 2
+wrapper and recorded (`scripts/run_zed.sh`):
+
+```
+ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i svo_path:=<svo>
+    + svo.use_svo_timestamps: true, svo.svo_loop: false, svo.svo_realtime: false
+ros2 bag record <zed.topics>          stopped when the wrapper logs "SVO reached the end"
+```
+
+then restamped (`scoop/zed.py`): log time = header stamp (the SVO's capture
+time, the recording PC's clock, as in the raw bag), topics renamed
+`/zed/zed_node/...` -> `/mobile_1/zed/...`, QoS kept. The result is on the
+same timeline as the retimed bag. Topics, camera model and extra wrapper
+parameters are the `zed` section of `configs/recording.yaml`; the defaults are
+the paper's `mobile_1/zed` topics (`tables/topics.tex`) minus the IMU, which
+the raw bag already has. The wrapper log and the parameters used are kept in
+`<out>/zed_logs/`.
+
+Where to run: in any terminal. When `ros2` + `zed_wrapper` are not installed
+there, `run_zed.sh` runs itself in the running isaac_ros container
+(`ZED_CONTAINER`, default `isaac_ros_dev-x86_64-container`) with `docker exec`;
+`~/workspaces/isaac_ros-dev` (`ISAAC_ROS_WS`) is `/workspaces/isaac_ros-dev`
+in there, so the SVO and the output must be below it (data/raw and data/work
+are). Start the container first (`run_dev.sh`).
+

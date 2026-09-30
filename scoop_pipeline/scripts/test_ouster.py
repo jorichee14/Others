@@ -574,7 +574,9 @@ def test_recording_layout():
         rec = recording.find_recording(t.raw)
         assert rec.bag.name == "mirc_survey_mobile_1"          # the packets bag, not other_bag
         assert str(rec.work).endswith(os.path.join("data", "work", "20260924", "mapping_A", "mobile_1"))
-        assert rec.status() == {"decoded": False, "retimed": False, "glim": False}
+        assert rec.svo.name == "camera.svo2"
+        assert rec.step("zed").name == "camera_zed"
+        assert rec.status() == {"decoded": False, "retimed": False, "glim": False, "zed": False}
         try:
             recording.find_recording(os.path.join(t.root, "data"))
         except bag.BagError:
@@ -591,8 +593,9 @@ def test_process_recording_steps_skip_redo_fail():
         before = t.listing()
         rec = recording.find_recording(t.raw)
         logs = []
-        st = recording.process(rec, _settings(), glim_script=t.glim, log=logs.append)
-        assert st == {"decoded": True, "retimed": True, "glim": True}, st
+        st = recording.process(rec, _settings(), until="glim", glim_script=t.glim,
+                               log=logs.append)
+        assert st == {"decoded": True, "retimed": True, "glim": True, "zed": False}, st
         w = rec.work
         B = "mirc_survey_mobile_1"
         assert sorted(os.listdir(w)) == sorted(["clock.json", f"{B}_decoded", "glim",
@@ -609,18 +612,20 @@ def test_process_recording_steps_skip_redo_fail():
 
         mt = os.path.getmtime(os.path.join(w, f"{B}_decoded", f"{B}_decoded_0.mcap"))
         logs = []
-        recording.process(rec, _settings(), glim_script=t.glim, log=logs.append)
+        recording.process(rec, _settings(), until="glim", glim_script=t.glim, log=logs.append)
         assert sum(l.startswith("[skip]") for l in logs) == 3, logs
         assert os.path.getmtime(os.path.join(w, f"{B}_decoded", f"{B}_decoded_0.mcap")) == mt
 
         logs = []
-        recording.process(rec, _settings(), redo="retimed", glim_script=t.glim, log=logs.append)
+        recording.process(rec, _settings(), until="glim", redo="retimed", glim_script=t.glim,
+                          log=logs.append)
         ran = [l.split()[2] for l in logs if l.startswith("[run ]")]
         assert ran == ["retimed", "glim"], logs
 
         os.environ["FAKE_GLIM_FAIL"] = "1"
         try:
-            recording.process(rec, _settings(), redo="glim", glim_script=t.glim, log=quiet)
+            recording.process(rec, _settings(), until="glim", redo="glim", glim_script=t.glim,
+                              log=quiet)
         except bag.BagError:
             pass
         else:
@@ -629,8 +634,8 @@ def test_process_recording_steps_skip_redo_fail():
             del os.environ["FAKE_GLIM_FAIL"]
         assert not os.path.exists(os.path.join(w, "glim")), "a failed step must not look done"
         assert os.path.isfile(os.path.join(w, ".partial", "glim", "half.txt"))
-        assert rec.status() == {"decoded": True, "retimed": True, "glim": False}
-        recording.process(rec, _settings(), glim_script=t.glim, log=quiet)
+        assert rec.status() == {"decoded": True, "retimed": True, "glim": False, "zed": False}
+        recording.process(rec, _settings(), until="glim", glim_script=t.glim, log=quiet)
         assert rec.status()["glim"] and not os.path.exists(os.path.join(w, ".partial"))
     finally:
         t.close()

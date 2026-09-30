@@ -23,7 +23,6 @@ else is the same procedure:
 """
 from __future__ import annotations
 
-import heapq
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,7 +32,7 @@ import numpy as np
 
 from . import bag, ouster
 from .bag import BagError, TopicSchema
-from .bagwrite import BagWriter
+from .bagwrite import BagWriter, write_in_order
 
 __all__ = ["REORDER_S", "header_stamp_ns", "with_header_stamp", "replay_shift_ns",
            "retime_bag", "RetimeResult"]
@@ -107,23 +106,8 @@ def retime_bag(packets_bag, sensortime_bag, out_dir, packets_ns: str = "/ouster"
 
     template = Path(sensortime_bag) / "metadata.yaml"
     retimed = {t: 0 for t in retime}
-    horizon_ns = int(reorder_s * 1e9)
-    heap = []
-    tiebreak = 0
-    watermark = -1
-    last = [-1]
 
-    with BagWriter(out_dir, library="scoop.retime",
-                   metadata_template=template if template.exists() else None) as w:
-
-        def emit(item):
-            log_time, _, topic, schema, pub, seq, meta, data = item
-            if log_time < last[0]:
-                raise BagError("reorder window too small: output would go back in time")
-            last[0] = log_time
-            w.write_raw(topic, schema, data, log_time, publish_ns=pub, sequence=seq,
-                        channel_metadata=meta)
-
+    def records():
         for _, sc, ch, msg in bag.iter_mcap_records(reader):
             data = msg.data
             if ch.topic in retimed:
@@ -135,14 +119,15 @@ def retime_bag(packets_bag, sensortime_bag, out_dir, packets_ns: str = "/ouster"
                 log_time = msg.log_time + delta
                 pub_time = msg.publish_time + delta
             schema = TopicSchema(sc.name, sc.encoding, bytes(sc.data), ch.message_encoding)
-            heapq.heappush(heap, (log_time, tiebreak, ch.topic, schema, pub_time,
-                                  msg.sequence, dict(ch.metadata), data))
-            tiebreak += 1
-            watermark = max(watermark, log_time)
-            while heap and heap[0][0] <= watermark - horizon_ns:
-                emit(heapq.heappop(heap))
-        while heap:
-            emit(heapq.heappop(heap))
+            yield (log_time, ch.topic, schema, pub_time, msg.sequence,
+                   dict(ch.metadata), data)
+
+    with BagWriter(out_dir, library="scoop.retime",
+                   metadata_template=template if template.exists() else None) as w:
+        try:
+            write_in_order(w, records(), reorder_s)
+        except ValueError as e:
+            raise BagError(str(e)) from None
 
     res = RetimeResult(w.dir, clock, delta, retimed, dict(w.counts),
                        int(w.t_min or 0), int(w.t_max or 0))

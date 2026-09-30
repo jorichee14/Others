@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-One robot recording, from its raw bag to a GLIM trajectory, with every output
-at a fixed place.
+One robot recording, from its raw bag to a GLIM trajectory and its ZED SVO to
+a bag, with every output at a fixed place.
 
     data/raw/<rel>/                       as recorded -- only ever read
         <bag folder>/ (metadata.yaml + *.mcap), *.svo2, ...
@@ -9,10 +9,11 @@ at a fixed place.
         <bag>_decoded/  1  packets -> points, sensor time    (scoop.replay)
         <bag>_retimed/  2  sensor -> capture time            (scoop.retime)
         glim/           3  GLIM dump: traj_lidar.txt, map    (scripts/run_glim.sh)
+        <svo>_zed/      4  the SVO2 as a bag, capture time   (scoop.zed)
         clock.json         the clock fit of step 2 (drift, residual, ...)
         process.yaml       the settings the steps ran with
 
-``<bag>`` is the original bag's folder name, so a derived bag says which
+``<bag>`` is the original bag's folder name (``<svo>`` the SVO's file name), so a derived bag says which
 recording it came from wherever it is copied. ``<rel>`` is the recording's
 path below ``raw/`` (e.g. 20260924/mapping_A/
 mobile_1), so raw and work mirror each other and nothing derived is ever
@@ -20,7 +21,8 @@ written into ``raw/``.
 
 A step writes into ``.partial/<its folder name>/`` and is moved into place only when it
 succeeded, so a folder with a step's name is always complete. A step whose
-output exists is skipped; ``redo`` deletes it and every later step.
+output exists is skipped; ``redo`` deletes it and the steps built from it
+(``LATER``): decoded -> retimed -> glim; zed stands alone.
 """
 from __future__ import annotations
 
@@ -33,12 +35,14 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from . import bag, replay, retime
+from . import bag, replay, retime, zed
 from .bag import BagError
 
-__all__ = ["STEPS", "Recording", "find_recording", "load_settings", "process"]
+__all__ = ["STEPS", "LATER", "Recording", "find_recording", "load_settings", "zed_args",
+           "process"]
 
-STEPS = ["decoded", "retimed", "glim"]
+STEPS = ["decoded", "retimed", "glim", "zed"]
+LATER = {"decoded": ["retimed", "glim"], "retimed": ["glim"], "glim": [], "zed": []}
 ROOT = Path(__file__).resolve().parents[1]                 # scoop_pipeline/
 DEFAULT_SETTINGS = ROOT / "configs" / "recording.yaml"
 
@@ -48,13 +52,19 @@ class Recording:
     raw: Path                       # data/raw/<rel>
     bag: Path                       # the original rosbag2 folder inside it
     work: Path                      # data/work/<rel>
+    svo: Optional[Path] = None      # the ZED .svo2 inside raw, if there is one
 
     def step(self, name: str) -> Path:
-        """Output folder of a step: bags are named after the original bag
-        (``<bag>_decoded``, ``<bag>_retimed``), the GLIM dump is ``glim``."""
+        """Output folder of a step: bags are named after their original
+        (``<bag>_decoded``, ``<bag>_retimed``, ``<svo>_zed``), the GLIM dump
+        is ``glim``."""
         if name not in STEPS:
             raise ValueError(f"unknown step {name!r}; steps: {STEPS}")
-        return self.work / (name if name == "glim" else f"{self.bag.name}_{name}")
+        if name == "glim":
+            return self.work / "glim"
+        if name == "zed":
+            return self.work / (f"{self.svo.stem}_zed" if self.svo else "zed")
+        return self.work / f"{self.bag.name}_{name}"
 
     @property
     def clock_json(self) -> Path:
@@ -66,8 +76,10 @@ class Recording:
             return (p / "traj_lidar.txt").is_file()
         return (p / "metadata.yaml").is_file()
 
-    def status(self) -> Dict[str, bool]:
-        return {s: self.done(s) for s in STEPS}
+    def status(self) -> Dict[str, Optional[bool]]:
+        """Step -> done; None for zed when the recording has no SVO."""
+        return {s: None if s == "zed" and self.svo is None else self.done(s)
+                for s in STEPS}
 
 
 def _bag_folders(folder: Path) -> List[Path]:
@@ -99,7 +111,7 @@ def find_recording(raw_dir, work_root=None, packets_ns: str = "/ouster") -> Reco
     if len(candidates) > 1:
         raise BagError(f"several bags with {topic} in {raw_dir}: "
                        f"{[b.name for b in candidates]}")
-    return Recording(raw_dir, candidates[0], work)
+    return Recording(raw_dir, candidates[0], work, zed.find_svo(raw_dir))
 
 
 def load_settings(path=None) -> dict:
@@ -107,9 +119,19 @@ def load_settings(path=None) -> dict:
         s = yaml.safe_load(fh) or {}
     s.setdefault("ouster", {})
     s.setdefault("glim", {})
+    s.setdefault("zed", {})
     if os.environ.get("GLIM_CONFIG"):
         s["glim"]["config"] = os.environ["GLIM_CONFIG"]
     return s
+
+
+def zed_args(z: dict) -> dict:
+    """The ``zed`` settings as :func:`scoop.zed.svo_to_bag` arguments."""
+    topics = list(z.get("topics") or [])
+    rename = z.get("rename")
+    remap = zed.prefix_remap(topics, *rename) if rename else {}
+    return dict(topics=topics, remap=remap, camera_model=z.get("camera_model", "zed2i"),
+                params=z.get("params") or {}, realtime=bool(z.get("realtime", False)))
 
 
 def _clear(p: Path):
@@ -131,15 +153,15 @@ def _publish(tmp: Path, final: Path):
 
 def process(rec: Recording, settings: dict, until: Optional[str] = None,
             redo: Optional[str] = None, glim_script: Optional[Path] = None,
-            log=print) -> Dict[str, bool]:
+            zed_script: Optional[Path] = None, log=print) -> Dict[str, Optional[bool]]:
     """Run the steps of ``rec`` that are not done yet, up to ``until``.
-    ``redo`` first removes that step's output and every later one."""
+    ``redo`` first removes that step's output and the ones built from it."""
     for name in (until, redo):
         if name is not None and name not in STEPS:
             raise ValueError(f"unknown step {name!r}; steps: {STEPS}")
     last = STEPS.index(until) if until else len(STEPS) - 1
     if redo:
-        for s in STEPS[STEPS.index(redo):]:
+        for s in [redo] + LATER[redo]:
             _clear(rec.step(s))
             if s == "retimed":
                 _clear(rec.clock_json)
@@ -153,10 +175,15 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
     for s in STEPS[:last + 1]:
         final = rec.step(s)
         tmp = rec.work / ".partial" / final.name   # same name, so the .mcap inside is too
+        if s == "zed" and rec.svo is None:
+            log(f"[skip] zed: no .svo2 in {rec.raw}")
+            continue
         if rec.done(s):
             log(f"[skip] {s}: done ({final})")
             continue
-        _clear(tmp)
+        for p in (tmp, tmp.with_name(tmp.name + ".record"),
+                  tmp.with_name(tmp.name + ".params.yaml")):
+            _clear(p)                            # leftovers of a failed run
         tmp.parent.mkdir(parents=True, exist_ok=True)
         log(f"[run ] {s} -> {final}")
         if s == "decoded":
@@ -187,6 +214,9 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
             if code != 0 or not (tmp / "traj_lidar.txt").is_file():
                 raise BagError(f"GLIM did not produce {tmp / 'traj_lidar.txt'} "
                                f"(exit {code}); the partial run is left in {tmp}")
+        elif s == "zed":
+            zed.svo_to_bag(rec.svo, tmp, script=zed_script, log=log,
+                           **zed_args(settings["zed"]))
         _publish(tmp, final)
         log(f"[done] {s}")
     return rec.status()
