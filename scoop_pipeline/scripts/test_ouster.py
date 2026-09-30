@@ -12,6 +12,7 @@ per-point time, in the destaggered row-major order.
 """
 import os
 import shutil
+import struct
 import sys
 import tempfile
 import traceback
@@ -20,6 +21,7 @@ import warnings
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 warnings.simplefilter("ignore", FutureWarning)
 
 from rosbags.typesys import Stores, get_typestore, get_types_from_msg  # noqa: E402
@@ -33,6 +35,7 @@ NS = "/ouster"
 OFFSET = 1_700_000_000.25        # host - sensor at s0, seconds
 DRIFT = 20e-6                     # 20 ppm
 FAILED = []
+IMU_TRUTH = {}
 
 
 def check(name, fn):
@@ -86,6 +89,17 @@ def make_bag(path, n_frames=100, dead_cols=None, seed=0):
                 h_ns = max(h_ns, packets[-1][0] + 1)
             packets.append((h_ns, buf))
 
+    imu = []                                               # (host ns, bytes, truth)
+    for i in range(n_frames * 10):                         # 100 Hz
+        g_ns = s0 + i * 10_000_000 + 3_000
+        la = (0.01 * (i % 7), -0.02, 1.0)                  # g
+        av = (1.5, -2.0, 0.25 * (i % 5))                   # deg/s
+        b = struct.pack("<QQQffffff", g_ns - 5_000, g_ns - 1_000, g_ns, *la, *av)
+        sec = g_ns * 1e-9
+        h = int(round((sec + OFFSET + DRIFT * (sec - s0 * 1e-9) + 50e-6) * 1e9))
+        imu.append((h, b, (g_ns, la, av)))
+    IMU_TRUTH[path] = [x[2] for x in imu]
+
     PM = TS.types["ouster_sensor_msgs/msg/PacketMsg"]
     Str = TS.types["std_msgs/msg/String"]
     with open(path, "wb") as fh:
@@ -95,13 +109,15 @@ def make_bag(path, n_frames=100, dead_cols=None, seed=0):
         sp = w.register_schema("ouster_sensor_msgs/msg/PacketMsg", "ros2msg", b"uint8[] buf")
         cm = w.register_channel(f"{NS}/metadata", "cdr", sm)
         cp = w.register_channel(f"{NS}/lidar_packets", "cdr", sp)
+        ci = w.register_channel(f"{NS}/imu_packets", "cdr", sp)
         meta = bytes(TS.serialize_cdr(Str(data=info.to_json_string()), "std_msgs/msg/String"))
         t0 = min(h for h, _ in packets) - 10**6
         w.add_message(cm, log_time=t0, publish_time=t0, data=meta)
-        for i, (h, b) in enumerate(packets):
+        allp = [(h, cp, b) for h, b in packets] + [(h, ci, b) for h, b, _ in imu]
+        for i, (h, ch, b) in enumerate(sorted(allp, key=lambda x: x[0])):
             data = bytes(TS.serialize_cdr(PM(buf=np.frombuffer(b, np.uint8).copy()),
                                           "ouster_sensor_msgs/msg/PacketMsg"))
-            w.add_message(cp, log_time=h, publish_time=h, data=data, sequence=i)
+            w.add_message(ch, log_time=h, publish_time=h, data=data, sequence=i)
         w.finish()
     return info, frames, s0
 
@@ -248,6 +264,80 @@ def test_clock_save_load():
         assert ouster.ClockMap.identity().host_ns(123456789) == 123456789
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def _decoded(tag="dec"):
+    import decode_ouster
+    d, p, info, frames, s0 = Fixture.get()
+    out = os.path.join(d, tag)
+    if not os.path.exists(out):
+        decode_ouster.decode(p, out, NS, "/mobile_1/ouster", driver_min_range=1.30,
+                             metadata=meta(), log=quiet)
+    return out, p, frames, s0
+
+
+def test_decoded_bag_points_match_decoder():
+    out, p, frames, _ = _decoded()
+    r = bag.open_bag(out)                                  # via metadata.yaml
+    tp = r.topics()
+    assert tp["/mobile_1/ouster/points"].count == len(frames) - 1, tp
+    got = list(bag.iter_scans(r, "/mobile_1/ouster/points", with_time=True, log=quiet))
+    ref = list(ouster.iter_ouster_scans(bag.open_bag(p), NS, metadata=meta(),
+                                        driver_min_range=1.30))
+    assert len(got) == len(ref)
+    for g, e in zip(got, ref):
+        assert g.stamp_ns == e.stamp_ns                    # sensor time, first valid column
+        np.testing.assert_array_equal(g.xyz, e.xyz)
+        np.testing.assert_allclose(g.t, e.t, atol=1e-9)
+
+
+def test_decoded_bag_layout_and_imu():
+    out, p, frames, _ = _decoded()
+    r = bag.open_bag(out)
+    H, W = meta().h, meta().w
+    msg = None
+    for topic, _, payload, decode in r.iter_raw(["/mobile_1/ouster/points"]):
+        msg = decode(payload)                               # generic ROS 2 decoder
+        break
+    assert (msg.height, msg.width, msg.point_step) == (H, W, 48)
+    assert [f.name for f in msg.fields] == ["x", "y", "z", "intensity", "t",
+                                            "reflectivity", "ring", "ambient", "range"]
+    a = np.frombuffer(bytes(msg.data), __import__("decode_ouster").POINT_DTYPE)
+    assert np.array_equal(a["ring"].reshape(H, W)[:, 0], np.arange(H))
+    nan = ~np.isfinite(a["x"])
+    assert np.all((a["range"][~nan] >= 1300)), "a kept point is below min_range"
+    assert msg.header.frame_id == "os_lidar"
+
+    truth = IMU_TRUTH[p]
+    imus = [decode(pl) for _, _, pl, decode in r.iter_raw(["/mobile_1/ouster/imu"])]
+    assert len(imus) == len(truth), (len(imus), len(truth))
+    for m, (g_ns, la, av) in zip(imus, truth):
+        assert m.header.stamp.sec * 10**9 + m.header.stamp.nanosec == g_ns
+        np.testing.assert_allclose([m.linear_acceleration.x, m.linear_acceleration.y,
+                                    m.linear_acceleration.z],
+                                   np.array(la, np.float32) * 9.80665, rtol=1e-6)
+        np.testing.assert_allclose([m.angular_velocity.x, m.angular_velocity.y,
+                                    m.angular_velocity.z],
+                                   np.radians(np.array(av, np.float32)), rtol=1e-6)
+        assert m.header.frame_id == "os_imu"
+    meta_msgs = list(r.iter_raw(["/mobile_1/ouster/metadata"]))
+    assert len(meta_msgs) == 1
+
+
+def test_decoded_bag_metadata_yaml_for_retime():
+    import yaml
+    out, *_ = _decoded()
+    info = yaml.safe_load(open(os.path.join(out, "metadata.yaml")))["rosbag2_bagfile_information"]
+    for k in ("relative_file_paths", "message_count", "starting_time", "duration",
+              "topics_with_message_count", "files", "storage_identifier"):
+        assert k in info, k                                # the keys retime_bag.py rewrites
+    names = {t["topic_metadata"]["name"] for t in info["topics_with_message_count"]}
+    assert names == {"/mobile_1/ouster/points", "/mobile_1/ouster/imu",
+                     "/mobile_1/ouster/metadata"}, names
+    total = sum(t["message_count"] for t in info["topics_with_message_count"])
+    assert total == info["message_count"]
+    logs = [lt for _, lt, _, _ in bag.open_bag(out).iter_raw()]
+    assert logs == sorted(logs), "log times must be non-decreasing"
 
 
 if __name__ == "__main__":

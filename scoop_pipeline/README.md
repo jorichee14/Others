@@ -16,6 +16,7 @@ scripts/
   test_ouster.py  self-tests for packet decoding (needs ouster-sdk)
   bag_check.py    verify + time the fast decoder on a real bag
   ouster_check.py verify packet decoding against a replayed/retimed bag
+  decode_ouster.py packets bag -> points bag (replaces the ouster_ros replay)
 ```
 
 ## Environment
@@ -82,7 +83,33 @@ On a synthetic uncompressed MCAP of 128x1024 Ouster scans (48-byte points,
 msg/s for `iter_scans` with the same gate, file reading included. Reading
 alone runs at ~630 msg/s, so that's the upper limit for a single process.
 
-## Ouster packets (`scoop/ouster.py`)
+## Ouster packets: decode, then retime
+
+```
+original bag (<ns>/lidar_packets, imu_packets, metadata)
+   |  python scripts/decode_ouster.py <original> <decoded>        conda env scoop
+   v
+decoded bag, sensor time (<out-ns>/points, imu, metadata)
+   |  python3 retime_bag.py <original> <decoded> <retimed>        ROS terminal
+   v
+retimed bag -> GLIM
+```
+
+`decode_ouster.py` replaces `ros2 launch ouster_ros replay.launch.xml` +
+`ros2 bag record`: same topics, same organized cloud layout (x y z intensity
+t reflectivity ring ambient range), IMU in m/s^2 and rad/s, stamps in sensor
+time, `metadata.yaml` included, without waiting for real time. `retime_bag.py`
+runs on its output unchanged (checked on a synthetic bag: its stamps equal
+`scoop.ouster.fit_clock`'s to the nanosecond).
+
+```
+python scripts/decode_ouster.py <original bag> <decoded bag dir> \
+    --packets-ns /ouster --out-ns /mobile_1/ouster --driver-min-range 1.30
+```
+
+`--limit 200` stops after 200 scans, for a quick look.
+
+## Ouster packets in Python (`scoop/ouster.py`)
 
 The mapping bags record the Ouster as `<ns>/lidar_packets` + `<ns>/metadata`.
 Instead of `ros2 launch ouster_ros replay.launch.xml` (real time) followed by

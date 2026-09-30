@@ -52,8 +52,8 @@ import numpy as np
 
 from .bag import BagError, BagReader, Scan, Select, _Cdr, _Unsupported
 
-__all__ = ["ClockMap", "read_metadata", "sensor_info", "fit_clock",
-           "iter_ouster_scans", "sdk"]
+__all__ = ["ClockMap", "OusterFrame", "ImuSample", "read_metadata", "sensor_info",
+           "fit_clock", "iter_ouster", "iter_ouster_scans", "sdk"]
 
 WINDOW_S = 2.0                      # retime_bag.WINDOW_S
 
@@ -264,63 +264,113 @@ def fit_clock(reader: BagReader, ns: str = "/ouster", window_s: float = WINDOW_S
 # --------------------------------------------------------------------------- #
 # scans
 # --------------------------------------------------------------------------- #
-def iter_ouster_scans(reader: BagReader, ns: str = "/ouster",
-                      clock: Optional[ClockMap] = None,
-                      select: Optional[Select] = None, frame: str = "lidar",
-                      driver_min_range: float = 0.0,
-                      driver_max_range: float = np.inf,
-                      min_range: float = 0.0, max_range: float = np.inf,
-                      with_time: bool = True, min_points: int = 1,
-                      metadata=None,
-                      stats: Optional[dict] = None) -> Iterator[Scan]:
-    """Decode ``<ns>/lidar_packets`` into :class:`Scan` objects.
+STANDARD_G = 9.80665                 # ouster_ros: accel is reported in g
 
-    ``clock`` maps sensor time to host capture time (:func:`fit_clock`); None
-    keeps sensor time. ``select(stamp_ns)`` runs on the mapped frame stamp
-    before the frame is projected to xyz. ``driver_*_range`` gate the RANGE
-    field (the driver's own filter); ``min_range``/``max_range`` then gate the
-    xyz norm exactly like :func:`scoop.bag.iter_scans`.
 
-    Like the driver, a frame is emitted when the next frame's first packet
-    arrives, so the bag's last frame is never produced."""
+@dataclass
+class OusterFrame:
+    """One scan as the driver publishes it: organized H x W, destaggered."""
+    stamp_ns: int                  # frame time, mapped through the clock
+    sensor_ns: int                 # frame time on the sensor clock
+    log_ns: int                    # receive time of the packet that closed it
+    frame_id: int
+    key: object                    # what select() returned
+    xyz: np.ndarray                # (H,W,3) float32, NaN where not valid
+    valid: np.ndarray              # (H,W) bool: a return inside the driver range
+    t_ns: np.ndarray               # (H,W) uint32, point time - frame time
+    fields: dict                   # (H,W) channel images: range, signal, ...
+
+
+@dataclass
+class ImuSample:
+    stamp_ns: int                  # gyro timestamp, mapped through the clock
+    sensor_ns: int
+    log_ns: int
+    accel: np.ndarray              # (3,) m/s^2
+    gyro: np.ndarray               # (3,) rad/s
+
+
+def _lut_info(S, src, info, frame):
+    if frame == "sensor":
+        return info
+    # a second SensorInfo from the sensor's own JSON, so the intrinsics are
+    # exactly the bag's; only the lidar->sensor transform is dropped
+    li = S.SensorInfo(src if isinstance(src, str) else info.to_json_string())
+    li.format.udp_profile_lidar = info.format.udp_profile_lidar
+    li.lidar_to_sensor_transform = np.eye(4)
+    return li
+
+
+def iter_ouster(reader: BagReader, ns: str = "/ouster",
+                clock: Optional[ClockMap] = None, select: Optional[Select] = None,
+                frame: str = "lidar", driver_min_range: float = 0.0,
+                driver_max_range: float = np.inf, imu: bool = False,
+                fields: bool = False, metadata=None,
+                stats: Optional[dict] = None) -> Iterator[object]:
+    """Everything the driver would publish, in recording order:
+    :class:`OusterFrame` per lidar frame and, with ``imu=True``,
+    :class:`ImuSample` per IMU packet.
+
+    Frame rules (ouster_ros, sensor-time mode):
+      * stamp = first NON-ZERO column timestamp, mapped by ``clock``
+        (None keeps sensor time, as a replay without timestamp_mode does);
+      * point time = its column timestamp - stamp (0 for dead columns);
+      * xyz from the SDK lookup table on the staggered range, destaggered;
+      * outside [driver_min_range, driver_max_range] (RANGE field) or no
+        return -> not valid, xyz NaN;
+      * a frame is emitted when the next frame's first packet arrives, so the
+        bag's last frame is never produced.
+    IMU rules: stamp = gyro timestamp mapped by ``clock``; accel in g * 9.80665,
+    gyro in deg/s * pi/180; LEGACY IMU profile (one sample per packet).
+
+    ``select(stamp_ns)`` runs before a frame is projected; ``fields=True`` also
+    carries signal / reflectivity / near_ir images (for writing a bag)."""
     if frame not in ("lidar", "sensor"):
         raise ValueError("frame must be 'lidar' or 'sensor'")
     S = sdk()
     clock = clock or ClockMap.identity()
     src = metadata or read_metadata(reader, ns)
     info = sensor_info(src)
-    lut_info = info
-    if frame == "lidar":
-        # a second SensorInfo from the sensor's own JSON, so the intrinsics are
-        # exactly the bag's; only the lidar->sensor transform is dropped
-        lut_info = S.SensorInfo(src if isinstance(src, str) else info.to_json_string())
-        lut_info.format.udp_profile_lidar = info.format.udp_profile_lidar
-        lut_info.lidar_to_sensor_transform = np.eye(4)
+    pf = _packet_format(info)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        lut = S.XYZLut(lut_info)
+        lut = S.XYZLut(_lut_info(S, src, info, frame))
         batcher = S.Batcher(info)
-    rng_field = S.ChanField.RANGE
+    CF = S.ChanField
+    extra = [("signal", "SIGNAL"), ("reflectivity", "REFLECTIVITY"), ("near_ir", "NEAR_IR")]
     st = stats if stats is not None else {}
-    for k in ("packets", "frames", "selected", "empty"):
+    for k in ("packets", "frames", "selected", "imu"):
         st.setdefault(k, 0)
     lo_mm = float(driver_min_range) * 1000.0
     hi_mm = float(driver_max_range) * 1000.0
-    lo2 = float(min_range) ** 2
-    hi2 = float(max_range) ** 2 if np.isfinite(max_range) else np.inf
+    lidar_topic, imu_topic = f"{ns}/lidar_packets", f"{ns}/imu_packets"
+    topics = [lidar_topic] + ([imu_topic] if imu else [])
+    if imu and imu_topic not in reader.topics():
+        raise BagError(f"{imu_topic} not in the bag")
+    if imu and int(getattr(pf, "imu_measurements_per_packet", 0) or 0) > 1:
+        raise BagError("IMU packets carry several measurements (non-LEGACY IMU "
+                       "profile); only the LEGACY layout is decoded")
 
     cur = _new_frame(info)
-    for _, _, payload, _ in reader.iter_raw([f"{ns}/lidar_packets"]):
-        st["packets"] += 1
+    for topic, log_ns, payload, _ in reader.iter_raw(topics):
         try:
             buf = _packet_buf(payload)
         except _Unsupported:
             continue
+        if topic == imu_topic:
+            g_ns = int(pf.imu_gyro_ts(buf))
+            st["imu"] += 1
+            yield ImuSample(
+                clock.host_ns(g_ns), g_ns, log_ns,
+                np.array([pf.imu_la_x(buf), pf.imu_la_y(buf), pf.imu_la_z(buf)]) * STANDARD_G,
+                np.radians([pf.imu_av_x(buf), pf.imu_av_y(buf), pf.imu_av_z(buf)]))
+            continue
+
+        st["packets"] += 1
         if not batcher(_make_packet(buf, info), cur):
             continue
         done, cur = cur, _new_frame(info)
         st["frames"] += 1
-
         ts = np.asarray(done.timestamp, np.uint64)
         nz = np.flatnonzero(ts)
         if nz.size == 0:
@@ -332,20 +382,51 @@ def iter_ouster_scans(reader: BagReader, ns: str = "/ouster",
             continue
         st["selected"] += 1
 
-        rng = np.asarray(done.field(rng_field))
-        xyz = S.destagger(info, np.ascontiguousarray(lut(rng)))
+        rng = np.asarray(done.field(CF.RANGE))
         r = S.destagger(info, np.ascontiguousarray(rng))
-        keep = (r > 0) & (r >= lo_mm) & (r <= hi_mm)
-        xyz = np.asarray(xyz, np.float32).reshape(-1, 3)
-        keep = keep.reshape(-1)
-        d2 = np.einsum("ij,ij->i", xyz, xyz)
+        valid = (r > 0) & (r >= lo_mm) & (r <= hi_mm)
+        xyz = np.asarray(S.destagger(info, np.ascontiguousarray(lut(rng))), np.float32)
+        xyz[~valid] = np.nan
+        col = np.where(ts > frame_ts, ts - np.uint64(frame_ts), np.uint64(0))
+        t = S.destagger(info, np.ascontiguousarray(np.broadcast_to(col, rng.shape)))
+        chans = {"range": r}
+        if fields:
+            have = set(str(f) for f in done.fields)
+            for name, cf in extra:
+                if cf in have:
+                    chans[name] = S.destagger(info, np.ascontiguousarray(
+                        np.asarray(done.field(getattr(CF, cf)))))
+        yield OusterFrame(stamp, frame_ts, log_ns, int(done.frame_id), key, xyz,
+                          valid, t.astype(np.uint32), chans)
+
+
+def iter_ouster_scans(reader: BagReader, ns: str = "/ouster",
+                      clock: Optional[ClockMap] = None,
+                      select: Optional[Select] = None, frame: str = "lidar",
+                      driver_min_range: float = 0.0,
+                      driver_max_range: float = np.inf,
+                      min_range: float = 0.0, max_range: float = np.inf,
+                      with_time: bool = True, min_points: int = 1,
+                      metadata=None,
+                      stats: Optional[dict] = None) -> Iterator[Scan]:
+    """:func:`iter_ouster` as :class:`scoop.bag.Scan` objects -- the valid
+    points only, in the cloud's row-major order -- so a stage reads a packets
+    bag exactly like a points bag. ``min_range``/``max_range`` gate the xyz
+    norm like :func:`scoop.bag.iter_scans`."""
+    st = stats if stats is not None else {}
+    st.setdefault("empty", 0)
+    lo2 = float(min_range) ** 2
+    hi2 = float(max_range) ** 2 if np.isfinite(max_range) else np.inf
+    for f in iter_ouster(reader, ns, clock=clock, select=select, frame=frame,
+                         driver_min_range=driver_min_range,
+                         driver_max_range=driver_max_range,
+                         metadata=metadata, stats=st):
+        xyz = f.xyz.reshape(-1, 3)
+        keep = f.valid.reshape(-1).copy()
+        d2 = np.einsum("ij,ij->i", np.nan_to_num(xyz), np.nan_to_num(xyz))
         keep &= (d2 > lo2) & (d2 < hi2)
         if int(keep.sum()) < max(1, int(min_points)):
             st["empty"] += 1
             continue
-        t = None
-        if with_time:
-            col = np.where(ts > frame_ts, ts - np.uint64(frame_ts), np.uint64(0))
-            tt = np.broadcast_to(col, rng.shape)
-            t = S.destagger(info, np.ascontiguousarray(tt)).reshape(-1)[keep] * 1e-9
-        yield Scan(stamp, key, xyz[keep], t)
+        t = f.t_ns.reshape(-1)[keep] * 1e-9 if with_time else None
+        yield Scan(f.stamp_ns, f.key, xyz[keep], t)
