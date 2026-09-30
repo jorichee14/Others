@@ -26,7 +26,7 @@ warnings.simplefilter("ignore", FutureWarning)
 
 from rosbags.typesys import Stores, get_typestore, get_types_from_msg  # noqa: E402
 
-from scoop import bag, ouster                                          # noqa: E402
+from scoop import bag, ouster, replay                                  # noqa: E402
 
 TS = get_typestore(Stores.ROS2_HUMBLE)
 TS.register(get_types_from_msg("uint8[] buf", "ouster_sensor_msgs/msg/PacketMsg"))
@@ -36,6 +36,7 @@ OFFSET = 1_700_000_000.25        # host - sensor at s0, seconds
 DRIFT = 20e-6                     # 20 ppm
 FAILED = []
 IMU_TRUTH = {}
+ZED_COUNT = {}
 
 
 def check(name, fn):
@@ -99,6 +100,22 @@ def make_bag(path, n_frames=100, dead_cols=None, seed=0):
         h = int(round((sec + OFFSET + DRIFT * (sec - s0 * 1e-9) + 50e-6) * 1e9))
         imu.append((h, b, (g_ns, la, av)))
     IMU_TRUTH[path] = [x[2] for x in imu]
+    ZED_COUNT[path] = n_frames * 5
+
+    zed = []                                               # a topic that is only copied
+    Imu = TS.types["sensor_msgs/msg/Imu"]
+    for i in range(n_frames * 5):                          # 50 Hz
+        h = int(round((s0 * 1e-9 + OFFSET + i * 0.02 + 0.001) * 1e9))
+        m = Imu(header=TS.types["std_msgs/msg/Header"](
+                    stamp=TS.types["builtin_interfaces/msg/Time"](sec=h // 10**9, nanosec=h % 10**9),
+                    frame_id="zed_imu_link"),
+                orientation=TS.types["geometry_msgs/msg/Quaternion"](x=0.0, y=0.0, z=0.0, w=1.0),
+                orientation_covariance=np.zeros(9),
+                angular_velocity=TS.types["geometry_msgs/msg/Vector3"](x=0.0, y=0.0, z=float(i)),
+                angular_velocity_covariance=np.zeros(9),
+                linear_acceleration=TS.types["geometry_msgs/msg/Vector3"](x=0.0, y=0.0, z=9.8),
+                linear_acceleration_covariance=np.zeros(9))
+        zed.append((h, bytes(TS.serialize_cdr(m, "sensor_msgs/msg/Imu"))))
 
     PM = TS.types["ouster_sensor_msgs/msg/PacketMsg"]
     Str = TS.types["std_msgs/msg/String"]
@@ -110,13 +127,18 @@ def make_bag(path, n_frames=100, dead_cols=None, seed=0):
         cm = w.register_channel(f"{NS}/metadata", "cdr", sm)
         cp = w.register_channel(f"{NS}/lidar_packets", "cdr", sp)
         ci = w.register_channel(f"{NS}/imu_packets", "cdr", sp)
+        text, _ = TS.generate_msgdef("sensor_msgs/msg/Imu", ros_version=2)
+        cz = w.register_channel("/zed/zed_node/imu/data", "cdr",
+                                w.register_schema("sensor_msgs/msg/Imu", "ros2msg", text.encode()))
         meta = bytes(TS.serialize_cdr(Str(data=info.to_json_string()), "std_msgs/msg/String"))
         t0 = min(h for h, _ in packets) - 10**6
         w.add_message(cm, log_time=t0, publish_time=t0, data=meta)
-        allp = [(h, cp, b) for h, b in packets] + [(h, ci, b) for h, b, _ in imu]
-        for i, (h, ch, b) in enumerate(sorted(allp, key=lambda x: x[0])):
-            data = bytes(TS.serialize_cdr(PM(buf=np.frombuffer(b, np.uint8).copy()),
+        def pkt(b):
+            return bytes(TS.serialize_cdr(PM(buf=np.frombuffer(b, np.uint8).copy()),
                                           "ouster_sensor_msgs/msg/PacketMsg"))
+        allm = ([(h, cp, pkt(b)) for h, b in packets] + [(h, ci, pkt(b)) for h, b, _ in imu]
+                + [(h, cz, d) for h, d in zed])
+        for i, (h, ch, data) in enumerate(sorted(allm, key=lambda x: x[0])):
             w.add_message(ch, log_time=h, publish_time=h, data=data, sequence=i)
         w.finish()
     return info, frames, s0
@@ -266,13 +288,12 @@ def test_clock_save_load():
         shutil.rmtree(d, ignore_errors=True)
 
 
-def _decoded(tag="dec"):
-    import decode_ouster
+def _decoded(tag="dec", remap=None):
     d, p, info, frames, s0 = Fixture.get()
     out = os.path.join(d, tag)
     if not os.path.exists(out):
-        decode_ouster.decode(p, out, NS, "/mobile_1/ouster", driver_min_range=1.30,
-                             metadata=meta(), log=quiet)
+        replay.decode_ouster_bag(p, out, NS, "/mobile_1/ouster", driver_min_range=1.30,
+                                 metadata=meta(), remap=remap, log=quiet)
     return out, p, frames, s0
 
 
@@ -302,7 +323,7 @@ def test_decoded_bag_layout_and_imu():
     assert (msg.height, msg.width, msg.point_step) == (H, W, 48)
     assert [f.name for f in msg.fields] == ["x", "y", "z", "intensity", "t",
                                             "reflectivity", "ring", "ambient", "range"]
-    a = np.frombuffer(bytes(msg.data), __import__("decode_ouster").POINT_DTYPE)
+    a = np.frombuffer(bytes(msg.data), ouster.ROS_POINT_DTYPE)
     assert np.array_equal(a["ring"].reshape(H, W)[:, 0], np.arange(H))
     nan = ~np.isfinite(a["x"])
     assert np.all((a["range"][~nan] >= 1300)), "a kept point is below min_range"
@@ -338,6 +359,48 @@ def test_decoded_bag_metadata_yaml_for_retime():
     assert total == info["message_count"]
     logs = [lt for _, lt, _, _ in bag.open_bag(out).iter_raw()]
     assert logs == sorted(logs), "log times must be non-decreasing"
+
+
+REMAP = {"/ouster/metadata": "/mobile_1/ouster/metadata",
+         "/ouster/lidar_packets": "/mobile_1/ouster/lidar_packets",
+         "/zed/zed_node/imu/data": "/mobile_1/zed/imu/data"}
+
+
+def test_remap_copies_topics_verbatim():
+    out, p, frames, _ = _decoded("remapped", remap=REMAP)
+    r = bag.open_bag(out)
+    tp = r.topics()
+    src = bag.open_bag(p)
+    for s_topic, d_topic in REMAP.items():
+        a = [(lt, bytes(pl)) for _, lt, pl, _ in src.iter_raw([s_topic])]
+        b = [(lt, bytes(pl)) for _, lt, pl, _ in r.iter_raw([d_topic])]
+        assert a == b, (s_topic, len(a), len(b))             # same bytes, same times
+        assert tp[d_topic].msgtype == src.topics()[s_topic].msgtype
+    assert tp["/mobile_1/zed/imu/data"].count == ZED_COUNT[p]
+    assert tp["/mobile_1/ouster/points"].count == len(frames) - 1   # still decoded
+    assert tp["/mobile_1/ouster/metadata"].count == 1                # copied, not doubled
+    m = next(dec(pl) for _, _, pl, dec in r.iter_raw(["/mobile_1/zed/imu/data"]))
+    assert m.linear_acceleration.z == 9.8                            # decodes as sensor_msgs/Imu
+    logs = [lt for _, lt, _, _ in r.iter_raw()]
+    assert logs == sorted(logs)
+
+
+def test_parse_remaps():
+    assert replay.parse_remaps(["/a:=/b", " /c := /c "]) == {"/a": "/b", "/c": "/c"}
+    for bad in (["/a=/b"], ["a:=/b"], ["/a:=/b", "/a:=/c"], ["/a:=/x", "/b:=/x"]):
+        try:
+            replay.parse_remaps(bad)
+        except ValueError:
+            continue
+        raise AssertionError(bad)
+    _, p, _, _, _ = Fixture.get()
+    for bad in ({"/zed/zed_node/imu/data": "/mobile_1/ouster/points"}, {"/nope": "/x"}):
+        try:
+            replay.decode_ouster_bag(p, os.path.join(Fixture.get()[0], "bad"), NS,
+                                     metadata=meta(), remap=bad, log=quiet)
+        except (ValueError, bag.BagError):
+            continue
+        raise AssertionError(bad)
 
 
 if __name__ == "__main__":

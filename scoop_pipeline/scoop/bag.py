@@ -39,7 +39,7 @@ import struct
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterator, Optional, Tuple
+from typing import Callable, Dict, Iterator, NamedTuple, Optional, Tuple
 
 import numpy as np
 
@@ -51,7 +51,8 @@ except ImportError:                         # sibling checkout, no install
     from ros2opv2v.bagreader import BagError, BagReader, stamp_from_cdr
     from ros2opv2v.pointclouds import pointcloud2_to_array
 
-__all__ = ["BagError", "BagReader", "Scan", "Frame", "open_bag",
+__all__ = ["BagError", "BagReader", "Scan", "Frame", "TopicSchema", "open_bag",
+           "topic_schemas",
            "detect_points_topic", "nearest_pose", "iter_scans", "iter_images",
            "parse_pointcloud2", "parse_image"]
 
@@ -67,6 +68,35 @@ _T_NAMES = ("t", "time", "timestamp", "time_offset", "point_time", "ts")
 def open_bag(path) -> BagReader:
     """A reader on a rosbag2 directory, split set, or single .mcap/.db3."""
     return BagReader(str(Path(path).expanduser()), stamp_source="header")
+
+
+class TopicSchema(NamedTuple):
+    """How a topic's messages are defined and encoded in an MCAP file."""
+    name: str                      # e.g. sensor_msgs/msg/Imu
+    encoding: str                  # schema encoding, e.g. ros2msg
+    data: bytes                    # the definition text
+    message_encoding: str          # e.g. cdr
+
+
+def topic_schemas(reader: BagReader) -> Dict[str, TopicSchema]:
+    """topic -> :class:`TopicSchema`, read from the MCAP summaries (nothing is
+    decoded). With it a topic can be copied into another bag byte for byte,
+    custom message types included (:meth:`scoop.bagwrite.BagWriter.write_raw`)."""
+    if reader.storage != "mcap":
+        raise BagError(f"topic schemas need an MCAP bag ({reader.path} is {reader.storage})")
+    from mcap.reader import make_reader
+    out: Dict[str, TopicSchema] = {}
+    for f in reader.files:
+        with open(f, "rb") as fh:
+            summ = make_reader(fh).get_summary()
+        if summ is None:
+            raise BagError(f"{f}: no summary section (run `mcap recover`)")
+        for ch in summ.channels.values():
+            sc = summ.schemas.get(ch.schema_id)
+            if sc is not None and ch.topic not in out:
+                out[ch.topic] = TopicSchema(sc.name, sc.encoding, bytes(sc.data),
+                                            ch.message_encoding)
+    return out
 
 
 # --------------------------------------------------------------------------- #

@@ -52,8 +52,9 @@ import numpy as np
 
 from .bag import BagError, BagReader, Scan, Select, _Cdr, _Unsupported
 
-__all__ = ["ClockMap", "OusterFrame", "ImuSample", "read_metadata", "sensor_info",
-           "fit_clock", "iter_ouster", "iter_ouster_scans", "sdk"]
+__all__ = ["ClockMap", "OusterFrame", "ImuSample", "RawMessage", "read_metadata",
+           "sensor_info", "fit_clock", "iter_ouster", "iter_ouster_scans", "sdk",
+           "ROS_POINT_DTYPE", "ros_points"]
 
 WINDOW_S = 2.0                      # retime_bag.WINDOW_S
 
@@ -290,6 +291,14 @@ class ImuSample:
     gyro: np.ndarray               # (3,) rad/s
 
 
+@dataclass
+class RawMessage:
+    """A message of a pass-through topic, untouched (for copying/remapping)."""
+    topic: str
+    log_ns: int
+    payload: bytes
+
+
 def _lut_info(S, src, info, frame):
     if frame == "sensor":
         return info
@@ -305,7 +314,7 @@ def iter_ouster(reader: BagReader, ns: str = "/ouster",
                 clock: Optional[ClockMap] = None, select: Optional[Select] = None,
                 frame: str = "lidar", driver_min_range: float = 0.0,
                 driver_max_range: float = np.inf, imu: bool = False,
-                fields: bool = False, metadata=None,
+                fields: bool = False, metadata=None, passthrough=(),
                 stats: Optional[dict] = None) -> Iterator[object]:
     """Everything the driver would publish, in recording order:
     :class:`OusterFrame` per lidar frame and, with ``imu=True``,
@@ -324,7 +333,9 @@ def iter_ouster(reader: BagReader, ns: str = "/ouster",
     gyro in deg/s * pi/180; LEGACY IMU profile (one sample per packet).
 
     ``select(stamp_ns)`` runs before a frame is projected; ``fields=True`` also
-    carries signal / reflectivity / near_ir images (for writing a bag)."""
+    carries signal / reflectivity / near_ir images (for writing a bag).
+    Topics in ``passthrough`` come out as :class:`RawMessage`, interleaved in
+    recording order (a packet topic listed there is still decoded too)."""
     if frame not in ("lidar", "sensor"):
         raise ValueError("frame must be 'lidar' or 'sensor'")
     S = sdk()
@@ -344,7 +355,11 @@ def iter_ouster(reader: BagReader, ns: str = "/ouster",
     lo_mm = float(driver_min_range) * 1000.0
     hi_mm = float(driver_max_range) * 1000.0
     lidar_topic, imu_topic = f"{ns}/lidar_packets", f"{ns}/imu_packets"
-    topics = [lidar_topic] + ([imu_topic] if imu else [])
+    passthrough = set(passthrough)
+    topics = sorted(set([lidar_topic] + ([imu_topic] if imu else [])) | passthrough)
+    missing = [t for t in passthrough if t not in reader.topics()]
+    if missing:
+        raise BagError(f"pass-through topics not in the bag: {missing}")
     if imu and imu_topic not in reader.topics():
         raise BagError(f"{imu_topic} not in the bag")
     if imu and int(getattr(pf, "imu_measurements_per_packet", 0) or 0) > 1:
@@ -353,6 +368,10 @@ def iter_ouster(reader: BagReader, ns: str = "/ouster",
 
     cur = _new_frame(info)
     for topic, log_ns, payload, _ in reader.iter_raw(topics):
+        if topic in passthrough:
+            yield RawMessage(topic, log_ns, payload)
+            if topic not in (lidar_topic, imu_topic) or (topic == imu_topic and not imu):
+                continue
         try:
             buf = _packet_buf(payload)
         except _Unsupported:
@@ -430,3 +449,37 @@ def iter_ouster_scans(reader: BagReader, ns: str = "/ouster",
             continue
         t = f.t_ns.reshape(-1)[keep] * 1e-9 if with_time else None
         yield Scan(f.stamp_ns, f.key, xyz[keep], t)
+
+
+# --------------------------------------------------------------------------- #
+# ouster_ros message conventions (what its replay publishes)
+# --------------------------------------------------------------------------- #
+# point_type "original" (ouster_ros::Point): PCL point4d padding after z,
+# 16-byte aligned to 48 bytes.
+ROS_POINT_DTYPE = np.dtype({
+    "names": ["x", "y", "z", "intensity", "t", "reflectivity", "ring", "ambient", "range"],
+    "formats": ["<f4", "<f4", "<f4", "<f4", "<u4", "<u2", "<u2", "<u2", "<u4"],
+    "offsets": [0, 4, 8, 16, 20, 24, 26, 28, 32],
+    "itemsize": 48})
+ROS_FRAME_ID = {"lidar": "os_lidar", "sensor": "os_sensor"}
+ROS_IMU_FRAME_ID = "os_imu"
+ROS_IMU_ACCEL_COV = 0.01            # ouster_ros's fixed IMU covariances
+ROS_IMU_GYRO_COV = 6e-4
+
+
+def ros_points(f: OusterFrame) -> np.ndarray:
+    """An :class:`OusterFrame` as ouster_ros's organized cloud: H*W records
+    of :data:`ROS_POINT_DTYPE`, row-major, invalid points NaN. intensity is
+    SIGNAL, ambient is NEAR_IR, ring is the beam (row) index."""
+    H, W = f.valid.shape
+    a = np.zeros(H * W, ROS_POINT_DTYPE)
+    xyz = f.xyz.reshape(-1, 3)
+    a["x"], a["y"], a["z"] = xyz[:, 0], xyz[:, 1], xyz[:, 2]
+    a["t"] = f.t_ns.reshape(-1)
+    a["range"] = f.fields["range"].reshape(-1)
+    for dst, src in (("intensity", "signal"), ("reflectivity", "reflectivity"),
+                     ("ambient", "near_ir")):
+        if src in f.fields:
+            a[dst] = f.fields[src].reshape(-1)
+    a["ring"] = np.repeat(np.arange(H, dtype=np.uint16), W)
+    return a

@@ -6,17 +6,20 @@ files. Code lives here; bags, intermediates and the release tree live outside
 git (see the plan in the paper's Release Structure section).
 
 ```
-scoop/          library imported by every stage
-  bag.py        bag decoding: the only module that opens a bag
-  ouster.py     Ouster lidar_packets -> scans offline (no ROS replay)
-environment.yml   conda env for all offline processing
-scripts/
-  env_check.py    is this environment ready?
-  test_bag.py     self-tests (no bag needed)
-  test_ouster.py  self-tests for packet decoding (needs ouster-sdk)
-  bag_check.py    verify + time the fast decoder on a real bag
-  ouster_check.py verify packet decoding against a replayed/retimed bag
-  decode_ouster.py packets bag -> points bag (replaces the ouster_ros replay)
+scoop/               library: everything reusable lives here
+  bag.py             reading bags: scans, images, topic schemas (the only reader)
+  bagwrite.py        writing bags: BagWriter (MCAP + metadata.yaml), write / write_raw
+  rosmsg.py          building ROS messages: header, PointCloud2 (from a dtype), Imu, String
+  ouster.py          Ouster packets -> frames / IMU / scans, clock fit, ouster_ros layout
+  replay.py          the replay step: packets bag -> points bag, with remaps
+environment.yml      conda env for all offline processing
+scripts/             command lines only: argument parsing around scoop/
+  decode_ouster.py   packets bag -> points bag (replaces the ouster_ros replay)
+  bag_check.py       verify + time the fast decoder on a real bag
+  ouster_check.py    verify packet decoding against a replayed/retimed bag
+  env_check.py       is this environment ready?
+  test_bag.py        self-tests: reading, writing, messages (no bag needed)
+  test_ouster.py     self-tests: packets, clock, replay, remaps (needs ouster-sdk)
 ```
 
 ## Environment
@@ -107,7 +110,27 @@ python scripts/decode_ouster.py <original bag> <decoded bag dir> \
     --packets-ns /ouster --out-ns /mobile_1/ouster --driver-min-range 1.30
 ```
 
-`--limit 200` stops after 200 scans, for a quick look.
+`--limit 200` stops after 200 scans, for a quick look. `--remap SRC:=DST`
+copies a topic of the original bag into the output under a new name, byte for
+byte (what `ros2 bag play --remap` did in the replay launch). The replay
+launch's set:
+
+```
+    --remap /ouster/metadata:=/mobile_1/ouster/metadata \
+    --remap /ouster/imu_packets:=/mobile_1/ouster/imu_packets \
+    --remap /ouster/lidar_packets:=/mobile_1/ouster/lidar_packets \
+    --remap /zed/zed_node/imu/data:=/mobile_1/zed/imu/data \
+    --remap /zed/zed_node/imu/mag:=/mobile_1/zed/imu/mag
+```
+
+From Python (a later pipeline stage calls the same function):
+
+```python
+from scoop import replay
+replay.decode_ouster_bag(original, out_dir, packets_ns="/ouster", out_ns="/mobile_1/ouster",
+                         driver_min_range=1.30,
+                         remap=replay.parse_remaps(["/zed/zed_node/imu/data:=/mobile_1/zed/imu/data"]))
+```
 
 ## Ouster packets in Python (`scoop/ouster.py`)
 

@@ -369,6 +369,80 @@ def _eq(a, b):
     assert a == b, (a, b)
 
 
+# --------------------------------------------------------------------------- #
+# writing: rosmsg + bagwrite
+# --------------------------------------------------------------------------- #
+def test_point_fields_from_dtype():
+    from scoop import rosmsg
+    dt = np.dtype({"names": ["x", "y", "z", "t", "ring"],
+                   "formats": ["<f4", "<f4", "<f4", "<u4", "<u2"],
+                   "offsets": [0, 4, 8, 16, 20], "itemsize": 24})
+    assert rosmsg.point_fields(dt) == [("x", 0, 7), ("y", 4, 7), ("z", 8, 7),
+                                       ("t", 16, 6), ("ring", 20, 4)]
+    for bad in (np.dtype([("x", ">f4")]), np.dtype([("x", "<f4", (3,))]),
+                np.dtype([("x", "<c8")])):
+        try:
+            rosmsg.point_fields(bad)
+        except ValueError:
+            continue
+        raise AssertionError(bad)
+
+
+def test_bagwriter_roundtrip_and_copy():
+    from scoop import rosmsg
+    from scoop.bagwrite import BagWriter
+    tmp = tempfile.mkdtemp()
+    try:
+        # a source bag with one topic to copy
+        src_dir = os.path.join(tmp, "src")
+        with BagWriter(src_dir) as w:
+            for k in range(3):
+                w.write("/zed/imu", rosmsg.imu(10 * NS + k, "imu", [0, 0, 9.8], [0, 0, k],
+                                               accel_cov=0.1), 10 * NS + k)
+        src = bag.open_bag(src_dir)                              # via metadata.yaml
+        schemas = bag.topic_schemas(src)
+        assert schemas["/zed/imu"].name == "sensor_msgs/msg/Imu"
+
+        dt = np.dtype({"names": ["x", "y", "z", "t"], "formats": ["<f4"] * 3 + ["<u4"],
+                       "offsets": [0, 4, 8, 12], "itemsize": 16})
+        pts = np.zeros(6, dt)
+        pts["x"] = np.arange(1, 7)
+        pts["t"] = np.arange(6) * 10_000_000                     # 0..50 ms, a sweep
+        out_dir = os.path.join(tmp, "out")
+        with BagWriter(out_dir) as w:
+            w.write("/meta", rosmsg.string("hello"), 10 * NS)
+            w.write("/pts", rosmsg.pointcloud2(pts, 10 * NS + 5, "lidar", height=2, width=3),
+                    10 * NS + 5)
+            for _, lt, pl, _ in src.iter_raw(["/zed/imu"]):
+                w.write_raw("/copied/imu", schemas["/zed/imu"], pl, lt)
+        r = bag.open_bag(out_dir)
+        tp = r.topics()
+        assert {t: (i.msgtype, i.count) for t, i in tp.items()} == {
+            "/meta": ("std_msgs/msg/String", 1),
+            "/pts": ("sensor_msgs/msg/PointCloud2", 1),
+            "/copied/imu": ("sensor_msgs/msg/Imu", 3)}
+        scan = next(bag.iter_scans(r, "/pts", with_time=True, log=lambda *_: None))
+        np.testing.assert_array_equal(scan.xyz[:, 0], np.arange(1, 7))
+        np.testing.assert_allclose(scan.t, np.arange(6) * 0.01)
+        assert scan.stamp_ns == 10 * NS + 5
+        a = [bytes(pl) for _, _, pl, _ in src.iter_raw(["/zed/imu"])]
+        b = [bytes(pl) for _, _, pl, _ in r.iter_raw(["/copied/imu"])]
+        assert a == b
+        m = next(d(pl) for _, _, pl, d in r.iter_raw(["/copied/imu"]))
+        assert m.linear_acceleration.z == 9.8 and m.orientation_covariance[0] == -1.0
+        import yaml
+        meta = yaml.safe_load(open(os.path.join(out_dir, "metadata.yaml")))
+        assert meta["rosbag2_bagfile_information"]["message_count"] == 5
+        try:
+            BagWriter(out_dir)
+        except FileExistsError:
+            pass
+        else:
+            raise AssertionError("an existing bag must never be overwritten")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]
