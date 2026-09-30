@@ -1,0 +1,6 @@
+numpy
+pyyaml
+mcap
+mcap-ros2-support
+opencv-python-headless   # images
+# rosbags               # .db3 bags, and scripts/test_bag.py
