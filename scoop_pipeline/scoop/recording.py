@@ -21,8 +21,10 @@ written into ``raw/``.
 
 A step writes into ``.partial/<its folder name>/`` and is moved into place only when it
 succeeded, so a folder with a step's name is always complete. A step whose
-output exists is skipped; ``redo`` deletes it and the steps built from it
-(``LATER``): decoded -> retimed -> glim; zed stands alone.
+output exists is skipped, and so is one whose outputs are only inputs to
+steps that are all done (decoded can be deleted once retimed and glim exist;
+``until`` that step builds it again). ``redo`` deletes a step and the steps
+built from it (``LATER``): decoded -> retimed -> glim; zed stands alone.
 """
 from __future__ import annotations
 
@@ -182,6 +184,9 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
             continue
         if rec.done(s):
             log(f"[skip] {s}: done ({final})")
+            continue
+        if s != until and LATER[s] and all(rec.done(x) for x in LATER[s]):
+            log(f"[skip] {s}: not needed, {' and '.join(LATER[s])} done")   # e.g. deleted
             continue
         for p in (tmp, tmp.with_name(tmp.name + ".record"),
                   tmp.with_name(tmp.name + ".params.yaml")):

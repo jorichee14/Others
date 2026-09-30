@@ -124,7 +124,9 @@ The two bags are named `<original bag>_decoded` and `<original bag>_retimed`
 (the .mcap inside too), so a copied bag still says where it came from.
 Steps already done are skipped. `--redo X` redoes X and the steps built from
 it: `--redo retimed` redoes retimed and glim, `--redo zed` only zed.
-`--until retimed` stops before GLIM; `--status` shows what is done. A step is
+`--until retimed` stops before GLIM; `--status` shows what is done. The
+decoded bag may be deleted once retimed and glim exist: it is then skipped
+("not needed"), and rebuilt only when retimed is redone. A step is
 built in `.partial/<step>/` and only moved into place when it succeeded, so a
 step folder is always complete. Steps 1-2 run in the `scoop` env, step 3
 starts docker (`scripts/run_glim.sh`), step 4 needs the ZED wrapper

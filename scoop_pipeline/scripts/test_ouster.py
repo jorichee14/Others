@@ -637,6 +637,20 @@ def test_process_recording_steps_skip_redo_fail():
         assert rec.status() == {"decoded": True, "retimed": True, "glim": False, "zed": False}
         recording.process(rec, _settings(), until="glim", glim_script=t.glim, log=quiet)
         assert rec.status()["glim"] and not os.path.exists(os.path.join(w, ".partial"))
+
+        shutil.rmtree(rec.step("decoded"))                  # deleted to save space
+        logs = []
+        recording.process(rec, _settings(), until="glim", glim_script=t.glim, log=logs.append)
+        assert not [l for l in logs if l.startswith("[run ]")], logs
+        assert any("decoded: not needed" in l for l in logs), logs
+        recording.process(rec, _settings(), until="decoded", log=quiet)   # wanted back
+        assert rec.done("decoded")
+        shutil.rmtree(rec.step("decoded"))
+        logs = []
+        recording.process(rec, _settings(), until="glim", redo="retimed", glim_script=t.glim,
+                          log=logs.append)
+        ran = [l.split()[2] for l in logs if l.startswith("[run ]")]
+        assert ran == ["decoded", "retimed", "glim"], logs  # retimed needs it again
     finally:
         t.close()
 
