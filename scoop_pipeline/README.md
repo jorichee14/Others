@@ -17,6 +17,7 @@ environment.yml      conda env for all offline processing
 scripts/             command lines only: argument parsing around scoop/
   decode_ouster.py   packets bag -> points bag (replaces the ouster_ros replay)
   retime.py          points bag -> retimed bag (same arguments as retime_bag.py)
+  run_glim.sh        GLIM (docker) on a bag, dump next to the bag, owned by you
   bag_check.py       verify + time the fast decoder on a real bag
   ouster_check.py    verify packet decoding against a replayed/retimed bag
   env_check.py       is this environment ready?
@@ -97,7 +98,10 @@ original bag (<ns>/lidar_packets, imu_packets, metadata, other topics)
 decoded bag, sensor time (<out-ns>/points, imu, metadata + remapped topics)
    |  python scripts/retime.py <original> <decoded> <retimed> /ouster /mobile_1/ouster
    v
-retimed bag -> GLIM
+retimed bag
+   |  scripts/run_glim.sh <retimed>                                 docker
+   v
+<folder of the bag>/glim_dump/traj_lidar.txt  -> stage 01
 ```
 
 Both steps run in the `scoop` env. `scripts/retime.py` does what
