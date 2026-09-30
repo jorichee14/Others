@@ -2,56 +2,15 @@
 
 Processing for the SCooP dataset (`../scoop_paper`): per-site reference maps
 and fiducial boards, then per-sequence reference poses, geometry and release
-files. Code lives here; bags, intermediates and the release tree live under
-`data_root` (see [PLAN.md](PLAN.md)).
+files. Code lives here; bags, intermediates and the release tree live outside
+git (see the plan in the paper's Release Structure section).
 
 ```
-run.py              status / run / stages
-PLAN.md             phases, stages, gates
-configs/            defaults.yaml + sites/<site>.yaml
-stages/             one script per stage, run(ctx)  (Phase 1 onwards)
-scoop/
-  bag.py            bag decoding: the only module that opens a bag
-  traj.py           TUM I/O, nearest pose, interpolation, quaternions
-  config.py         merged config, per-stage view + hash
-  layout.py         raw/ work/ release/ paths, units
-  stamp.py          stamp.json: what produced an output, is it current
-  stages.py         the stage list (inputs, outputs, config sections)
-  runner.py         runs what is stale, one process per stage
-  stage_main.py     entry point of a stage process, builds ctx
+scoop/          library imported by every stage
+  bag.py        bag decoding: the only module that opens a bag
 scripts/
-  test_bag.py       self-tests, bag decoding (no bag needed)
-  test_pipeline.py  self-tests, traj/config/layout/stamp/runner
-  bag_check.py      verify + time the fast decoder on a real bag
-```
-
-## Running
-
-```
-export SCOOP_DATA=/path/to/scoop_data
-python3 run.py stages
-python3 run.py status site_1
-python3 run.py run site_1 --dry-run
-python3 run.py run site_1/mapping_A --until s02_refine
-python3 run.py run site_1 --from s03_final_map
-```
-
-A stage is current when its `stamp.json` exists and its config block, script
-and inputs are unchanged. Editing `stages.s02_refine` in the config re-runs
-s02 and whatever reads its output, and nothing else. Each stage runs in its own
-process, so memory is freed between stages; output goes to the terminal and
-to `work/.../<stage>/log.txt`.
-
-## Writing a stage
-
-`stages/<level>/<name>.py`:
-
-```python
-def run(ctx):
-    p = ctx.params                      # cfg["stages"][name]
-    bag_path = ctx.inputs["bag"]        # resolved from scoop/stages.py
-    ...
-    ctx.outputs["map"]                  # write here; parent dirs exist
+  test_bag.py   self-tests (no bag needed)
+  bag_check.py  verify + time the fast decoder on a real bag
 ```
 
 ## Bag decoding (`scoop/bag.py`)
