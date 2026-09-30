@@ -140,6 +140,8 @@ def test_modes():
         assert "/tf" in m1 and "/mobile_1/wifi/status" not in m1 and \
             "/mobile_1/ntp/events" not in m1 and "/ouster/lidar_packets" in m1
         assert "/mobile_1/wifi/status" in real.topics("mobile_1", "survey")
+        assert "/mobile_1/diagnostics" not in m1
+        assert "/mobile_1/diagnostics" in real.topics("mobile_1", "survey")
     finally:
         t.close()
 

@@ -292,7 +292,7 @@ A pass folder holds one folder per machine (`mobile_1/`, `mobile_2/`,
 robots' own file -- says what it must contain, like `record.sh`'s preflight:
 every topic listed must be there and not empty (`MISSING`, `EMPTY`),
 except what the pass mode does not record (`check:` in `record.yaml`:
-mapping has no wifi/iperf/ntp; the mode comes from the pass
+mapping has no wifi/iperf/ntp/diagnostics; the mode comes from the pass
 folder's name, `--mode` sets it). A
 machine contributes its processed bags where they exist -- mobile_1: the
 retimed bag and the ZED bags, checked for the recorded topics renamed plus

@@ -49,7 +49,7 @@ check:
   skip: []                         # not recorded in any mode
   modes:
     mapping:                       # LiDAR + ZED: no link or time-base measurements
-      skip: ["/*/wifi/*", "/*/ntp/*"]
+      skip: ["/*/wifi/*", "/*/ntp/*", "/*/diagnostics"]   # diagnostics come with ntp
     survey: {}
     coop: {}
     contention: {}
