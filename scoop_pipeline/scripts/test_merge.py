@@ -119,7 +119,7 @@ def test_machine_of():
     assert p.machine_of(f"{P}_mobile_12") is None
     assert p.machine_of(f"{P}_infra_1") == "infra_1"
     assert "/tf" in p.topics("mobile_1", "survey") and "/tf" not in p.topics("mobile_2")
-    assert "/tf" not in p.topics("mobile_1", "mapping")          # mapping records no tf
+    assert "/tf" in p.topics("mobile_1", "mapping")
 
 
 def test_modes():
@@ -137,7 +137,7 @@ def test_modes():
         assert u["mobile_2"].check().missing == ["/mobile_2/imu", "/mobile_2/wifi/ping"]
         real = session.RecordPlan(os.path.join(ROOT, "configs", "record.yaml"))
         m1 = real.topics("mobile_1", "mapping")
-        assert "/tf" not in m1 and "/mobile_1/wifi/status" not in m1 and \
+        assert "/tf" in m1 and "/mobile_1/wifi/status" not in m1 and \
             "/mobile_1/ntp/events" not in m1 and "/ouster/lidar_packets" in m1
         assert "/mobile_1/wifi/status" in real.topics("mobile_1", "survey")
     finally:

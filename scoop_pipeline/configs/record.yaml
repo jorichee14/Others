@@ -48,8 +48,8 @@ tf_recorded_by: mobile_1
 check:
   skip: []                         # not recorded in any mode
   modes:
-    mapping:                       # LiDAR + ZED: no link or time-base measurements, no tf
-      skip: ["/*/wifi/*", "/*/ntp/*", /tf, /tf_static]
+    mapping:                       # LiDAR + ZED: no link or time-base measurements
+      skip: ["/*/wifi/*", "/*/ntp/*"]
     survey: {}
     coop: {}
     contention: {}
