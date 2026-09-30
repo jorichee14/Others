@@ -48,20 +48,30 @@ Engineering, National Yang Ming Chiao Tung University, Hsinchu, Taiwan
 \maketitle
 
 \begin{abstract}
-\unsure{Cooperative robotic systems must jointly solve perception, sensing, and
-communication, yet existing datasets capture at most two of these layers at
-once. We present SCooP, a multi-agent, multi-view, multi-sensor dataset that
-spans all three: synchronized camera, radar, LiDAR, and RTK-GNSS sensing;
-cooperative perception annotations; and measured, replayable wireless channel
-traces. Each platform is spatially calibrated and temporally aligned, enabling
-tasks across single-agent and collaborative scenarios and modalities. We
-provide ground-truth poses, TSDF reconstruction supervision, RSSI channel
-traces, and object annotations, together with benchmarks for cooperative
-perception under clean and actual channels, point cloud reconstruction, and
-cross-modal localization. \todo{One sentence with the headline result, e.g.
-``Cooperative perception improves mAP by X points over single-agent, and the
-logged channel reduces this gain by Y.''} The dataset and development kit are
-publicly available at \todo{URL/DOI}.}
+Collaborative SLAM and collaborative perception depend on a wireless link
+between agents, yet the datasets used to evaluate them either assume the link
+is ideal or simulate it, and none of them records it indoors, where
+cooperation is most needed and where GNSS-based ground truth is unavailable.
+Two questions therefore remain open: how much accuracy a real indoor link
+costs a collaborating team, and how much of that cost could be anticipated
+from the geometry the team already maps. We present SCooP, an indoor
+multi-robot dataset recorded by two mobile agents and three infrastructure
+agents at three sites over multiple sessions. Each frame carries synchronized
+LiDAR, camera, IMU, and mmWave radar data together with the measured state of
+the wireless link between every pair of agents, including throughput,
+latency, and channel state information. All agents are placed in one metric
+frame per site by registration against a SLAM-derived reference map that is
+validated by a second mapping pass, held-out fiducial boards, and
+laser-rangefinder control distances; 3D boxes, per-point labels, and rendered
+masks are expressed in the same frame. For every frame, node, and object the
+release reports occlusion, co-visibility, viewpoint diversity, and Fresnel
+clearance of the link, computed from the map and independent of the measured
+signal. A benchmark runs collaborative SLAM and collaborative perception
+baselines on the same frames under an ideal channel, a synthetic channel, and
+the logged channel, and reports the accuracy the real link costs and the
+share of that cost predictable from map geometry alone. \todo{One sentence
+with the headline result.} The dataset and development kit are available at
+\todo{URL/DOI}.
 \end{abstract}
 
 \begin{IEEEkeywords}
