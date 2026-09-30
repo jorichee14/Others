@@ -170,6 +170,16 @@ def _clear(p: Path):
         p.unlink()
 
 
+def _zed_outputs(rec: Recording, bags) -> List[Path]:
+    """The zed step's bags, also those of an earlier bags setting
+    (<svo>_zed_right after going back to one bag)."""
+    out = [rec.zed_bag(n) for n in bags]
+    if rec.svo is not None:
+        out += [p for p in rec.work.glob(f"{rec.svo.stem}_zed_*")
+                if p.is_dir() and (p / "metadata.yaml").is_file() and p not in out]
+    return out
+
+
 def _clear_leftovers(tmp: Path):
     """Remove what a failed run left in .partial/ for this output."""
     for p in (tmp, tmp.with_name(tmp.name + ".record"),
@@ -201,7 +211,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
     rec.zed_bags = tuple(bags)
     if redo:
         for s in [redo] + LATER[redo]:
-            for p in ([rec.zed_bag(n) for n in bags] if s == "zed" else [rec.step(s)]):
+            for p in (_zed_outputs(rec, bags) if s == "zed" else [rec.step(s)]):
                 _clear(p)
             if s == "retimed":
                 _clear(rec.clock_json)

@@ -89,9 +89,9 @@ def test_prefix_remap_and_settings():
     assert got == {IMAGE: "/mobile_1/zed/left/image_rect_color"}, got
     z = recording.load_settings()["zed"]
     bags = recording.zed_bags(z)
-    assert list(bags) == ["zed", "zed_right"], bags
-    assert "/zed/zed_node/right/image_rect_color" in bags["zed_right"]
-    assert not set(bags["zed"]) & set(bags["zed_right"])
+    assert list(bags) == ["zed"], bags                          # one replay
+    assert "/zed/zed_node/right/image_rect_color" in bags["zed"]
+    assert "/zed/zed_node/left/image_rect_color" in bags["zed"]
     assert recording.zed_bags({"topics": [IMAGE]}) == {"zed": [IMAGE]}
     args = recording.zed_args(z)
     assert args["camera_model"] == "zed2i" and not args["realtime"]
@@ -483,6 +483,11 @@ def test_process_recording_zed_step():
         assert ran == ["zed"], logs                       # zed alone, nothing upstream
         assert sum("topics" in l and l.strip().startswith("run1_mobile_1_zed") for l in logs) == 2
         assert os.path.getmtime(os.path.join(rec.step("retimed"), "metadata.yaml")) == mt
+
+        settings["zed"]["bags"] = {"zed": [IMAGE, INFO, DEPTH, STATUS, RIGHT]}   # back to one
+        recording.process(rec, settings, redo="zed", log=quiet)
+        assert not os.path.exists(right), "--redo zed must remove the old zed_right bag"
+        assert "/mobile_1/zed/right/image_rect_color" in bag.open_bag(left).topics()
     finally:
         fake.close()
         shutil.rmtree(root)

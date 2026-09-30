@@ -123,8 +123,7 @@ data/work/20260924/mapping_A/mobile_1/
     mirc_dataset_survey_1_mapping_20260924_mobile_1_decoded/   1  points bag, sensor time
     mirc_dataset_survey_1_mapping_20260924_mobile_1_retimed/   2  capture time; the GLIM input
     glim/          3  GLIM dump: traj_lidar.txt, map
-    <svo name>_zed/        4  the SVO2 as bags, capture time (zed_logs/ inside):
-    <svo name>_zed_right/     left + depth + pose, and the right camera
+    <svo name>_zed/        4  the SVO2 as a bag, capture time (zed_logs/ inside)
     clock.json        the clock fit (drift, residual, packets) for the paper
     process.yaml      the settings the steps ran with
 ```
@@ -266,12 +265,11 @@ wrapper config (`configs/zed/common_stereo.yaml`, `configs/zed/zed2i.yaml`:
 HD1080 at 15 Hz, NEURAL_PLUS depth, 0.3-10 m, ...), so the replay matches the
 live settings; the SVO keys above go on top of it, then `params`. Topics,
 camera model and these files are the `zed` section of
-`configs/recording.yaml`. `zed.bags` lists one bag per replay: `zed` has
-the paper's `mobile_1/zed` topics (`tables/topics.tex`: left image, depth,
-odom, pose, paths; the IMU is already in the raw bag), `zed_right` the right
-camera. Left, right and depth in one replay made the recorder fall behind,
-so each bag gets its own replay (the SVO is played twice). About 67 + 36 GB
-for an 18-minute recording (960x540 at 15 Hz, stored uncompressed). The
+`configs/recording.yaml`. `zed.bags` lists one bag per replay; by default
+one, `zed`, with the paper's `mobile_1/zed` topics (`tables/topics.tex`: left
+image, depth, odom, pose, paths; the IMU is already in the raw bag) and the
+right camera. About 100 GB for an 18-minute recording (960x540 at 15 Hz,
+stored uncompressed). The
 point cloud is left out: it is depth + left camera_info, ~145 GB more.
 `svo_to_bag.py --bag zed_right` makes one of them alone. The wrapper log and the parameters used are kept in
 `<out>/zed_logs/`.
