@@ -210,6 +210,29 @@ def test_restamp_consumes_a_split_recording():
         shutil.rmtree(d)
 
 
+def test_topic_timing():
+    """Evenly spaced frames, one gap, one frame repeated under a new stamp."""
+    from scoop import timing
+    d = tempfile.mkdtemp()
+    try:
+        out = os.path.join(d, "b")
+        with BagWriter(out) as w:
+            k = 0
+            for i in range(N):
+                if i == 30:
+                    continue                                   # a dropped frame: one gap
+                val = 1.0 * (i - 1 if i == 40 else i)          # frame 40 repeats frame 39
+                stamp = S0 + i * FRAME
+                w.write(IMAGE, rosmsg.imu(stamp, "cam", [val, 0, 0], [0, 0, 0]), stamp + MS)
+        t, = timing.topic_timing(out, [IMAGE])
+        assert t.n == N - 1 and t.repeats == 1, (t.n, t.repeats)
+        text = t.summary()
+        assert "gaps > 1.5x median: 1" in text and "132 ms" in text, text
+        assert "median 66.0" in text and "log - stamp ms: median 1.0" in text, text
+    finally:
+        shutil.rmtree(d)
+
+
 FAKE_ROS2 = r"""#!/usr/bin/env bash
 case "$1 $2" in
     "pkg prefix") [ "$3" = zed_wrapper ] && { echo /opt/fake; exit 0; }; exit 1 ;;

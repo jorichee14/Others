@@ -18,6 +18,7 @@ scoop/               library: everything reusable lives here
   session.py         one pass: every machine's bags, checked against record.yaml
   merge.py           several bags -> one, in log-time order (zstd optional)
   tftree.py          calibrated transforms added to a bag's TF tree (one parent per frame)
+  timing.py          how evenly a topic is spaced: intervals, gaps, repeated frames
 configs/recording.yaml  settings for processing a recording (topics, remaps, GLIM config)
 configs/zed/         the robot's zed_wrapper config, used to replay SVOs
 configs/record.yaml  what each machine records (the robots' record.yaml)
@@ -30,6 +31,7 @@ scripts/             command lines only: argument parsing around scoop/
   run_glim.sh        GLIM (docker) on a bag, dump next to the bag, owned by you
   svo_to_bag.py      one SVO2 -> bag on capture time (the zed step alone)
   merge_session.py   check a pass's bags against record.yaml, merge them into one
+  topic_timing.py    intervals, gaps and repeated frames of topics in a bag
   run_zed.sh         ZED wrapper replay + ros2 bag record (here or in the isaac_ros container)
   bag_check.py       verify + time the fast decoder on a real bag
   ouster_check.py    verify packet decoding against a replayed/retimed bag
