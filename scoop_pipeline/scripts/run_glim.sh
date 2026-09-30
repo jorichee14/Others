@@ -13,7 +13,7 @@
 set -euo pipefail
 
 if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-    sed -n '2,13p' "$0"; exit 1
+    sed -n '2,12p' "$0"; exit 1
 fi
 BAG=$(realpath "$1")
 CONFIG=$(realpath "${2:-$HOME/workspaces/isaac_ros-dev/glim_config}")
