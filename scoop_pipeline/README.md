@@ -15,8 +15,11 @@ scoop/               library: everything reusable lives here
   retime.py          sensor time -> capture time (retime_bag.py without ROS)
   zed.py             ZED SVO2 -> bag on capture time (wrapper replay + restamp)
   recording.py       one recording: raw bag -> decoded -> retimed -> GLIM, SVO -> zed
+  session.py         one pass: every machine's bags, checked against record.yaml
+  merge.py           several bags -> one, in log-time order (zstd optional)
 configs/recording.yaml  settings for processing a recording (topics, remaps, GLIM config)
 configs/zed/         the robot's zed_wrapper config, used to replay SVOs
+configs/record.yaml  what each machine records (the robots' record.yaml)
 environment.yml      conda env for all offline processing
 scripts/             command lines only: argument parsing around scoop/
   process_recording.py  raw recording -> decoded, retimed, glim, zed (the usual entry point)
@@ -24,6 +27,7 @@ scripts/             command lines only: argument parsing around scoop/
   retime.py          points bag -> retimed bag (same arguments as retime_bag.py)
   run_glim.sh        GLIM (docker) on a bag, dump next to the bag, owned by you
   svo_to_bag.py      one SVO2 -> bag on capture time (the zed step alone)
+  merge_session.py   check a pass's bags against record.yaml, merge them into one
   run_zed.sh         ZED wrapper replay + ros2 bag record (here or in the isaac_ros container)
   bag_check.py       verify + time the fast decoder on a real bag
   ouster_check.py    verify packet decoding against a replayed/retimed bag
@@ -31,6 +35,7 @@ scripts/             command lines only: argument parsing around scoop/
   test_bag.py        self-tests: reading, writing, messages (no bag needed)
   test_ouster.py     self-tests: packets, clock, replay, remaps (needs ouster-sdk)
   test_zed.py        self-tests: restamp, run_zed.sh with a fake ros2 and docker
+  test_merge.py      self-tests: machines, topic check, merge
 ```
 
 ## Environment
@@ -273,4 +278,30 @@ there, `run_zed.sh` runs itself in the running isaac_ros container
 `~/workspaces/isaac_ros-dev` (`ISAAC_ROS_WS`) is `/workspaces/isaac_ros-dev`
 in there, so the SVO and the output must be below it (data/raw and data/work
 are). Start the container first (`run_dev.sh`).
+
+## Checking and merging a pass
+
+```
+python scoop_pipeline/scripts/merge_session.py ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A --check
+python scoop_pipeline/scripts/merge_session.py ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A
+```
+
+A pass folder holds one folder per machine (`mobile_1/`, `mobile_2/`,
+`infra_1/`, ...). Each bag's machine comes from its name
+(`..._<machine>`, `_r2` repeats included) and `configs/record.yaml` -- the
+robots' own file -- says what it must contain, like `record.sh`'s preflight:
+every topic listed must be there and not empty (`MISSING`, `EMPTY`). A
+machine contributes its processed bags where they exist -- mobile_1: the
+retimed bag and the ZED bags, checked for the recorded topics renamed plus
+the decoded ones -- and its raw bags otherwise. A new machine (mobile_2,
+infra_N) needs only its entry in `record.yaml` and its folder in the pass.
+
+`--check` stops after the check. Otherwise, if nothing is missing (or with
+`--allow-missing`), every bag is merged in log-time order -- what
+`ros2 bag convert` with `all_topics: true` did, without ROS -- into
+`data/work/<date>/<pass>/<prefix>_<pass>_..._<date>_merged/`, byte for byte,
+QoS kept, and checked again. It is zstd-compressed inside the MCAP by default
+(`ros2 bag play`, GLIM and scoop read it as is), so a pass of raw images
+fits next to its inputs; it stops and removes the partial bag before the
+disk fills. `--out` puts it on another drive, `--name` names it.
 

@@ -1,0 +1,162 @@
+# What each machine records (the robots' record.yaml, used by record.sh).
+# The pipeline reads it to check that every bag has what it should
+# (scripts/merge_session.py). Add a machine here and its bags are checked
+# and merged like the others.
+#
+# The four agents are separate hosts, so each writes its own bag and they are
+# aligned offline by timestamp -- which is why every machine records its own
+# ntp topics: without them there is no evidence the clocks agreed during a run.
+#
+#   mobile_1        admin@mobile1        LiDAR + ZED + radar, iperf server
+#   mobile_2        mic-713@ubuntu       RealSense + Isaac VSLAM
+#   infra_1         wicoms-robot2        fixed CSI transmitter (Pi)
+#   mobile_1/sniffer wicoms-robot1       nexmon CSI receiver (Pi)
+#
+# Usage:  ./record.sh <machine> <pass>
+#   ./record.sh mobile_1 survey_1
+
+defaults:
+  storage: mcap                 # embeds message definitions; .db3 stores only
+                                # the type NAME, so replay needs the workspace
+  max_bag_size: 2147483648      # 2 GiB per file
+  compression_mode: none        # zstd costs CPU the Jetsons need for VSLAM
+  qos_overrides: rosbag_qos_override.yaml
+  # Bag name: <prefix>_<pass>_[<site>_]<YYYYMMDD>_<machine>
+  # A repeat of the same pass on the same day gets _r2, _r3, ... rather than
+  # failing after the robot is already in position. BAG_NAME= overrides it all.
+  prefix: mirc_dataset
+  site: ""                      # e.g. lab, corridor_b -- omit or "" to skip
+  # Everything a machine produces lands here: rosbags and, on mobile_1, the
+  # ZED .svo. Same folder means one `rsync` per machine after a pass, and no
+  # chance of a bag and its svo drifting apart. Machines may override it --
+  # the Pis have no /workspaces.
+  # {label} is the third argument to record.sh; {pass} {site} {date} {machine}
+  # also work. The folder (and its parents) is created if absent.
+  #   ./record.sh mobile_1 survey_1 lab_run3
+  #     -> /workspaces/Dataset/lab_run3/mirc_dataset_survey_1_lab_run3_20260923_mobile_1
+  out_dir: /workspaces/isaac_ros-dev/Dataset
+
+# Exactly one machine records /tf and /tf_static. Two recorders produce a bag
+# with duplicated transforms at slightly different times, which breaks lookups
+# on replay far more subtly than a missing transform does.
+tf_recorded_by: mobile_1
+
+machines:
+
+  # ------------------------------------------------------------------ mobile_1
+  # The surveying robot: all mapping sensors, plus the iperf server end.
+  mobile_1:
+    topics:
+      # --- LiDAR
+      # The driver runs with proc_mask:='RAW', so it publishes ONLY packets --
+      # there is no /ouster/points, /ouster/scan or /ouster/imu to record.
+      # Packets + metadata is the better dataset choice anyway: smaller, and
+      # replayable through any future driver version to regenerate clouds.
+      # metadata is mandatory here, not optional: without it the packets cannot
+      # be decoded at all.
+      - /ouster/lidar_packets
+      - /ouster/imu_packets
+      - /ouster/metadata          # TRANSIENT_LOCAL, see qos overrides
+      # --- ZED
+      # Images/depth are not here: the ZED records its own .svo via
+      # /zed/zed_node/start_svo_rec. Keep the svo filename in step with the bag.
+      - /zed/zed_node/imu/data
+      - /zed/zed_node/imu/mag
+      # --- radar (both under the mobile_1 namespace)
+      - /mobile_1/radar1/radar/points_all
+      - /mobile_1/radar2/radar/points_all
+      # --- link measurements
+      - /mobile_1/wifi/iperf_up
+      - /mobile_1/wifi/iperf_down
+      - /mobile_1/wifi/status
+      - /mobile_1/wifi/ping
+      # --- time base
+      # mobile_1 is the NTP server for the rig, so it publishes server status,
+      # not client status like the other three.
+      - /mobile_1/ntp/server/status
+      - /mobile_1/ntp/events
+      # --- health
+      - /mobile_1/diagnostics
+
+  # ------------------------------------------------------------------ mobile_2
+  # Second agent: stereo + depth + Isaac VSLAM. Parked as an anchor during
+  # survey passes, driven during coop passes.
+  mobile_2:
+    topics:
+      # --- stereo infra pair (the pair VSLAM actually tracks on)
+      - /mobile_2/infra1/image_rect_raw
+      - /mobile_2/infra1/camera_info
+      - /mobile_2/infra2/image_rect_raw
+      - /mobile_2/infra2/camera_info
+      # --- colour + depth
+      - /mobile_2/color/image_raw
+      - /mobile_2/color/camera_info
+      - /mobile_2/depth/image_rect_raw
+      - /mobile_2/depth/camera_info
+      # --- IMU and extrinsics
+      - /mobile_2/imu
+      - /mobile_2/extrinsics/depth_to_infra1    # TRANSIENT_LOCAL
+      - /mobile_2/extrinsics/depth_to_infra2    # TRANSIENT_LOCAL
+      # --- VSLAM
+      #- /mobile_2/visual_slam/status
+      #- /mobile_2/visual_slam/tracking/odometry
+      #- /mobile_2/visual_slam/tracking/vo_pose
+      #- /mobile_2/visual_slam/tracking/vo_pose_covariance
+      #- /mobile_2/visual_slam/tracking/slam_path
+      #- /mobile_2/visual_slam/tracking/vo_path
+      # --- link measurements
+      - /mobile_2/wifi/iperf_up
+      - /mobile_2/wifi/iperf_down
+      - /mobile_2/wifi/status
+      - /mobile_2/wifi/ping
+      # --- time base
+      - /mobile_2/ntp/client/status
+      - /mobile_2/ntp/events
+      # --- health
+      - /mobile_2/diagnostics
+
+  # ------------------------------------------------------------------- infra_1
+  # Fixed node: a 1x1 Pi that both TRANSMITS (so the sniffer has PPDUs to
+  # estimate a channel from) and SENSES (Arducam + IWR6843 radar, both static).
+  # Its ping topic is what proves it was transmitting during the pass.
+  #
+  # Camera data rate: 960x600 yuv422_yuy2 is 1.15 MB/frame, 34.6 MB/s at 30 fps
+  # -- 125 GB/hour of raw Image. Record the compressed stream instead unless a
+  # pass specifically needs raw; see `image_raw` below.
+  infra_1:
+    out_dir: ~/workspaces/Dataset          # no /workspaces on the Pis
+    topics:
+      # --- camera (v4l2_camera_node, namespace infra_1)
+      - /infra_1/image_raw/compressed
+      - /infra_1/camera_info
+      - /arducam/board_pose
+      # - /infra_1/image_raw          # raw: 34.6 MB/s, enable deliberately
+      # --- radar (radar_node_direct, namespace infra_1, frame infra1_link)
+      - /infra_1/radar/points_all
+      # --- link measurements
+      - /infra_1/wifi/ping
+      - /infra_1/wifi/status
+      - /infra_1/wifi/iperf_up
+      - /infra_1/wifi/iperf_down
+      # --- time base
+      - /infra_1/ntp/client/status
+      - /infra_1/ntp/events
+      # --- health
+      - /infra_1/diagnostics
+
+  # ----------------------------------------------------------- mobile_1/sniffer
+  # nexmon CSI receiver. One topic per transmitter; the namespace is the
+  # RECEIVER, so a second sniffer would not collide on these names.
+  # Record every frame type -- frame_control is in the message, so control and
+  # management frames are filtered out at analysis time, not here.
+  # Recorded locally: this host is on ASUS_70 (2.4 GHz) and the AP does not
+  # bridge DDS multicast to the 5 GHz band, so its topics are not visible
+  # elsewhere. Alignment is by timestamp; chrony holds it to ~29 us RMS.
+  mobile_1/sniffer:
+    out_dir: ~/workspaces/Dataset
+    topics:
+      - /mobile_1/sniffer/infra_1/csi
+      - /mobile_1/sniffer/mobile_2/csi
+      - /mobile_1/sniffer/csi_publisher/status
+      - /mobile_1/sniffer/ntp/client/status
+      - /mobile_1/sniffer/ntp/events

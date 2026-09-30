@@ -41,7 +41,7 @@ import yaml
 from . import bag, replay, retime, zed
 from .bag import BagError
 
-__all__ = ["STEPS", "LATER", "Recording", "find_recording", "load_settings", "zed_bags",
+__all__ = ["STEPS", "LATER", "Recording", "work_dir_for", "find_recording", "load_settings", "zed_bags",
            "zed_args", "process"]
 
 STEPS = ["decoded", "retimed", "glim", "zed"]
@@ -97,12 +97,9 @@ def _bag_folders(folder: Path) -> List[Path]:
                   if p.is_dir() and (p / "metadata.yaml").is_file())
 
 
-def find_recording(raw_dir, work_root=None, packets_ns: str = "/ouster",
-                   zed_bags=("zed",)) -> Recording:
-    """The recording in ``raw_dir`` (a folder below ``.../raw/``). Its bag is
-    the rosbag2 folder inside that carries ``<packets_ns>/lidar_packets``.
-    ``work_root`` defaults to the ``work`` folder next to ``raw``;
-    ``zed_bags`` are the names of the zed step's bags (:func:`zed_bags`)."""
+def work_dir_for(raw_dir, work_root=None) -> Path:
+    """The folder below ``work/`` that mirrors ``raw_dir`` (a folder below
+    ``.../raw/``); ``work_root`` replaces that ``work`` folder."""
     raw_dir = Path(raw_dir).expanduser().resolve()
     if not raw_dir.is_dir():
         raise BagError(f"{raw_dir} is not a folder")
@@ -111,8 +108,18 @@ def find_recording(raw_dir, work_root=None, packets_ns: str = "/ouster",
         raise BagError(f"{raw_dir} is not below a 'raw' folder; pass work_root")
     i = len(parts) - 1 - parts[::-1].index("raw")          # the last 'raw'
     rel = Path(*parts[i + 1:]) if i + 1 < len(parts) else Path()
-    work = (Path(work_root).expanduser().resolve() if work_root
+    return (Path(work_root).expanduser().resolve() if work_root
             else Path(*parts[:i]) / "work") / rel
+
+
+def find_recording(raw_dir, work_root=None, packets_ns: str = "/ouster",
+                   zed_bags=("zed",)) -> Recording:
+    """The recording in ``raw_dir`` (a folder below ``.../raw/``). Its bag is
+    the rosbag2 folder inside that carries ``<packets_ns>/lidar_packets``.
+    ``work_root`` defaults to the ``work`` folder next to ``raw``;
+    ``zed_bags`` are the names of the zed step's bags (:func:`zed_bags`)."""
+    raw_dir = Path(raw_dir).expanduser().resolve()
+    work = work_dir_for(raw_dir, work_root)
 
     topic = f"{packets_ns}/lidar_packets"
     candidates = [b for b in _bag_folders(raw_dir)

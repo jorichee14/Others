@@ -32,17 +32,25 @@ __all__ = ["BagWriter", "write_in_order"]
 
 
 class BagWriter:
-    def __init__(self, out_dir, library: str = "scoop", metadata_template=None):
+    def __init__(self, out_dir, library: str = "scoop", metadata_template=None,
+                 compression: str = "none"):
         """``metadata_template``: another bag's metadata.yaml (path or dict).
         Its structure -- version, QoS profiles, topic order -- is kept and
         only the contents (files, counts, times) are rewritten, the way
-        ``retime_bag.py`` did."""
+        ``retime_bag.py`` did. ``compression``: "none", "zstd" or "lz4",
+        MCAP chunk compression (what ``ros2 bag record
+        --storage-preset-profile zstd_fast`` writes; every MCAP reader
+        undoes it, so metadata.yaml does not mention it)."""
         from mcap.writer import CompressionType, Writer
+        kinds = {"none": CompressionType.NONE, "zstd": CompressionType.ZSTD,
+                 "lz4": CompressionType.LZ4}
+        if compression not in kinds:
+            raise ValueError(f"compression {compression!r}: one of {list(kinds)}")
         self.dir = Path(out_dir)
         self.dir.mkdir(parents=True, exist_ok=False)      # never overwrite a bag
         self.name = f"{self.dir.name}_0.mcap"
         self._fh = open(self.dir / self.name, "wb")
-        self._w = Writer(self._fh, compression=CompressionType.NONE)
+        self._w = Writer(self._fh, compression=kinds[compression])
         self._w.start(profile="ros2", library=library)
         self._channels: Dict[str, int] = {}
         self.types: Dict[str, str] = {}
