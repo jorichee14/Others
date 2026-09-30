@@ -184,13 +184,18 @@ def test_restamp_consumes_a_split_recording():
         rec, out = os.path.join(d, "rec"), os.path.join(d, "out")
         os.makedirs(rec)
         names = []
-        for k, frames in enumerate((range(0, 25), range(25, 45), range(45, N))):
+        for k, frames in enumerate(range(i, i + 5) for i in range(0, N, 5)):   # 12 pieces
             write_recording(os.path.join(d, f"p{k}"), frames=frames)
             names.append(f"rec_{k}.mcap")
             shutil.move(os.path.join(d, f"p{k}", f"p{k}_0.mcap"), os.path.join(rec, names[-1]))
         meta = yaml.safe_load(open(os.path.join(d, "p0", "metadata.yaml")))
         meta["rosbag2_bagfile_information"]["relative_file_paths"] = names
         yaml.safe_dump(meta, open(os.path.join(rec, "metadata.yaml"), "w"))
+        # read in the recorder's order, _2 before _10 (not sorted as text)
+        assert [os.path.basename(f) for f in bag.open_bag(rec).files] == names
+        os.rename(os.path.join(rec, "metadata.yaml"), os.path.join(d, "meta.yaml"))
+        assert [os.path.basename(f) for f in bag.open_bag(rec).files] == names   # no metadata
+        os.rename(os.path.join(d, "meta.yaml"), os.path.join(rec, "metadata.yaml"))
         seen = []
 
         def spy(msg):                               # which pieces still exist, at each log line

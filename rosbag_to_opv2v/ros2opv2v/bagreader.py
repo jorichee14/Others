@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import struct
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple
@@ -56,6 +57,12 @@ class BagError(RuntimeError):
     pass
 
 
+def _natural_key(path: str):
+    """Sort key putting split files in order: bag_2.mcap before bag_10.mcap
+    (a plain sort gives _0, _1, _10, _11, ..., _2)."""
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", path)]
+
+
 def resolve_bag_files(path: str) -> Tuple[List[str], str]:
     """Resolve a bag path to ``(files, storage)`` where storage is mcap or sqlite3.
 
@@ -85,12 +92,12 @@ def resolve_bag_files(path: str) -> Tuple[List[str], str]:
         if files:
             if storage not in ("mcap", "sqlite3"):
                 storage = "mcap" if files[0].endswith(".mcap") else "sqlite3"
-            return sorted(files), storage
+            return files, storage          # the recorder's order: _0, _1, ..., _10
 
-    mcaps = sorted(glob.glob(os.path.join(path, "*.mcap")))
+    mcaps = sorted(glob.glob(os.path.join(path, "*.mcap")), key=_natural_key)
     if mcaps:
         return mcaps, "mcap"
-    db3s = sorted(glob.glob(os.path.join(path, "*.db3")))
+    db3s = sorted(glob.glob(os.path.join(path, "*.db3")), key=_natural_key)
     if db3s:
         return db3s, "sqlite3"
     raise BagError(f"no .mcap or .db3 files found under {path}")
