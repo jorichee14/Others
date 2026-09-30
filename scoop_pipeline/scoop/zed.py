@@ -122,8 +122,14 @@ def record_svo(svo, record_dir, topics: List[str], params_file, camera_model: st
         raise ValueError("no ZED topics to record")
     env = dict(os.environ, ZED_CAMERA_MODEL=camera_model)
     log(f"    recording {len(topics)} topics from {Path(svo).name} ({camera_model})")
-    code = subprocess.call([str(script), str(svo), str(record_dir), str(params_file),
-                            *topics], env=env)
+    proc = subprocess.Popen([str(script), str(svo), str(record_dir), str(params_file),
+                             *topics], env=env)
+    try:
+        code = proc.wait()
+    except KeyboardInterrupt:                # the script got Ctrl+C too: let it clean up
+        log("    stopping the ZED replay ...")
+        proc.wait()
+        raise
     if code != 0 or not (Path(record_dir) / "metadata.yaml").is_file():
         raise BagError(f"the ZED recording failed (exit {code}); "
                        f"what was recorded is left in {record_dir}")

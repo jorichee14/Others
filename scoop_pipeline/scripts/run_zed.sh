@@ -52,11 +52,31 @@ if [ -z "${ZED_IN_CONTAINER:-}" ]; then
         docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" \
             || die "no ros2 + zed_wrapper here and container $CONTAINER is not running; start it or set ZED_CONTAINER"
         C_SVO=$(inside "$SVO"); C_OUT=$(inside "$OUT"); C_PARAMS=$(inside "$PARAMS")
+        PIDFILE="$(dirname "$OUT")/.$(basename "$OUT").pid"; C_PIDFILE=$(inside "$PIDFILE")
+        rm -f "$PIDFILE"
         echo "run_zed: running in container $CONTAINER"
-        exec docker exec -i -e ZED_IN_CONTAINER=1 -e ZED_CAMERA_MODEL="$MODEL" \
+        docker exec -i -e ZED_IN_CONTAINER=1 -e ZED_CAMERA_MODEL="$MODEL" \
             -e ZED_ROS_SETUP="${ZED_ROS_SETUP:-}" -e ZED_WS="$CONT_WS" \
-            -e ZED_OWNER="$(id -u):$(id -g)" \
-            "$CONTAINER" bash -s -- "$C_SVO" "$C_OUT" "$C_PARAMS" "$@" < "$0"
+            -e ZED_OWNER="$(id -u):$(id -g)" -e ZED_PIDFILE="$C_PIDFILE" \
+            "$CONTAINER" bash -s -- "$C_SVO" "$C_OUT" "$C_PARAMS" "$@" < "$0" &
+        DX=$!
+        # Ctrl+C does not reach processes started by docker exec: stop the
+        # replay in there ourselves, and wait until it has cleaned up.
+        stop_inside() {
+            trap '' INT TERM
+            if [ -f "$PIDFILE" ]; then
+                echo "run_zed: stopping the replay in $CONTAINER ..."
+                docker exec "$CONTAINER" bash -c "p=\$(cat '$C_PIDFILE'); kill -TERM \$p 2>/dev/null;
+                    while kill -0 \$p 2>/dev/null; do sleep 1; done" || true
+            fi
+            wait "$DX" 2>/dev/null || true
+            rm -f "$PIDFILE"
+            exit 130
+        }
+        trap stop_inside INT TERM
+        code=0; wait "$DX" || code=$?
+        rm -f "$PIDFILE"
+        exit "$code"
     fi
 fi
 
@@ -77,6 +97,7 @@ else set -m; SIGDFL=(); fi
 
 LOGS=$(mktemp -d)
 REC=""; ZED=""
+[ -n "${ZED_PIDFILE:-}" ] && echo $$ > "$ZED_PIDFILE"      # so the host can stop us
 stop() {                               # SIGINT, then wait (at most $2 s) for it to exit
     local pid=$1 t=0
     [ -n "$pid" ] || return 0
@@ -94,6 +115,8 @@ finish() {
     fi
     if [ -n "${ZED_OWNER:-}" ] && [ -e "$OUT" ]; then chown -R "$ZED_OWNER" "$OUT" || true; fi
     rm -rf "$LOGS"
+    [ -n "${ZED_PIDFILE:-}" ] && rm -f "$ZED_PIDFILE"
+    return 0
 }
 trap finish EXIT
 trap 'exit 130' INT TERM

@@ -204,7 +204,8 @@ print("[zed_node]: opening the SVO", flush=True)
 time.sleep(0.5)
 if os.environ.get("FAKE_ZED_FAIL"):
     print("[zed_node]: CUDA error", flush=True); sys.exit(1)
-print("[WARN] [zed_node]: SVO reached the end.", flush=True)
+if not os.environ.get("FAKE_ZED_HANG"):                  # a long SVO: never ends here
+    print("[WARN] [zed_node]: SVO reached the end.", flush=True)
 try:
     while True:
         time.sleep(0.1)
@@ -291,8 +292,58 @@ while [ "$1" = -i ] || [ "$1" = -e ]; do
 done
 echo "$1" > "$FAKE_DIR/container.txt"; shift
 echo "$@" > "$FAKE_DIR/docker_args.txt"
-exec env "${envs[@]}" PATH="$FAKE_DIR:/usr/bin:/bin" "$@"
+# a container: its own session, so the host's Ctrl+C does not reach it
+exec setsid env "${envs[@]}" PATH="$FAKE_DIR:/usr/bin:/bin" "$@"
 """
+
+
+def _container_env(d):
+    host_bin = os.path.join(d, "host_bin")                     # docker, but no ros2
+    os.makedirs(host_bin)
+    p = os.path.join(host_bin, "docker")
+    open(p, "w").write(FAKE_DOCKER)
+    os.chmod(p, 0o755)
+    ws = os.path.join(d, "isaac_ros-dev")
+    os.makedirs(os.path.join(ws, "data", "raw"))
+    os.symlink(ws, os.path.join(d, "container_ws"))            # the container's mount
+    os.environ.update(PATH=host_bin + os.pathsep + "/usr/bin:/bin", ISAAC_ROS_WS=ws,
+                      ZED_CONTAINER_WS=os.path.join(d, "container_ws"))
+    return ws
+
+
+def test_ctrl_c_stops_the_replay_in_the_container():
+    import signal
+    import subprocess
+    import time
+    fake, d = FakeRos(), tempfile.mkdtemp()
+    try:
+        ws = _container_env(d)
+        os.environ["FAKE_ZED_HANG"] = "1"
+        svo = os.path.join(ws, "data", "raw", "run1.svo2")
+        open(svo, "w").write("svo")
+        params = os.path.join(ws, "data", "params.yaml")
+        open(params, "w").write("x: 1\n")
+        out = os.path.join(ws, "data", "work", "run1_zed.record")
+        pidfile = os.path.join(ws, "data", "work", ".run1_zed.record.pid")
+        p = subprocess.Popen([os.path.join(ROOT, "scripts", "run_zed.sh"), svo, out, params,
+                              IMAGE, INFO], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        t0 = time.time()
+        while not (os.path.exists(pidfile) and os.path.exists(os.path.join(fake.dir,
+                                                                           "launch_args.txt"))):
+            assert time.time() - t0 < 30, "the replay did not start"
+            time.sleep(0.2)
+        time.sleep(1)
+        os.killpg(p.pid, signal.SIGINT)                          # Ctrl+C in the terminal
+        assert p.wait(timeout=60) == 130
+        left = subprocess.run(["pgrep", "-f", fake.dir], capture_output=True, text=True).stdout
+        assert not left.strip(), "still running in the 'container': " + left
+        assert not os.path.exists(pidfile)
+        assert os.path.isfile(os.path.join(out, "zed_logs", "zed.log")), \
+            "the recorder must have been stopped cleanly, logs kept"
+    finally:
+        fake.close()
+        shutil.rmtree(d)
 
 
 def test_run_zed_in_container():
@@ -300,18 +351,9 @@ def test_run_zed_in_container():
     paths translated to the container's view of the workspace."""
     fake, d = FakeRos(), tempfile.mkdtemp()
     try:
-        host_bin = os.path.join(d, "host_bin")                 # docker, but no ros2
-        os.makedirs(host_bin)
-        p = os.path.join(host_bin, "docker")
-        open(p, "w").write(FAKE_DOCKER)
-        os.chmod(p, 0o755)
-        ws = os.path.join(d, "isaac_ros-dev")
-        os.makedirs(os.path.join(ws, "data", "raw"))
-        os.symlink(ws, os.path.join(d, "container_ws"))        # the container's mount
+        ws = _container_env(d)
         svo = os.path.join(ws, "data", "raw", "run1.svo2")
         open(svo, "w").write("svo")
-        os.environ.update(PATH=host_bin + os.pathsep + "/usr/bin:/bin", ISAAC_ROS_WS=ws,
-                          ZED_CONTAINER_WS=os.path.join(d, "container_ws"))
         out = os.path.join(ws, "data", "work", "run1_zed")
         zed.svo_to_bag(svo, out, log=quiet, **_settings())
         assert fake.read("container.txt").strip() == "isaac_ros_dev-x86_64-container"
