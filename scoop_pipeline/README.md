@@ -9,12 +9,39 @@ git (see the plan in the paper's Release Structure section).
 scoop/          library imported by every stage
   bag.py        bag decoding: the only module that opens a bag
   ouster.py     Ouster lidar_packets -> scans offline (no ROS replay)
+environment.yml   conda env for all offline processing
 scripts/
+  env_check.py    is this environment ready?
   test_bag.py     self-tests (no bag needed)
   test_ouster.py  self-tests for packet decoding (needs ouster-sdk)
   bag_check.py    verify + time the fast decoder on a real bag
   ouster_check.py verify packet decoding against a replayed/retimed bag
 ```
+
+## Environment
+
+Two environments, each for its own kind of work:
+
+| | conda env `scoop` (`environment.yml`) | ROS 2 install |
+|---|---|---|
+| for | decoding, Ouster packets, map building, refinement, boards, evaluation, figures | recording, `ouster_ros` replay, GLIM, `ros2 bag convert` (merge.yaml), `retime_bag.py` |
+| Python | 3.11 from conda | the system's (3.10 on Humble) |
+
+```
+cd scoop_pipeline
+conda env create -f environment.yml
+conda activate scoop
+python scripts/env_check.py        # versions, cv2.aruco, open3d, Ouster SDK, GPU
+python scripts/test_bag.py && python scripts/test_ouster.py
+```
+
+After `environment.yml` changes: `conda env update -f environment.yml --prune`.
+For CUDA 11 machines, swap `cupy-cuda12x` for `cupy-cuda11x` first
+(`nvidia-smi` shows the version); without a GPU, stage 01 runs on the CPU.
+
+Keep them in separate terminals: `source /opt/ros/<distro>/setup.bash` puts
+ROS's Python packages on `PYTHONPATH`, where they shadow the env's.
+`env_check.py` warns when that has happened.
 
 ## Bag decoding (`scoop/bag.py`)
 

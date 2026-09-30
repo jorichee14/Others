@@ -1,0 +1,44 @@
+# The offline processing environment: decoding, Ouster packets, map building,
+# pose refinement, boards, evaluation, paper figures. No ROS in here.
+#
+#   conda env create -f environment.yml        # first time
+#   conda env update -f environment.yml --prune  # after this file changes
+#   conda activate scoop
+#   python scripts/env_check.py
+#
+# ROS-only steps (recording, ouster_ros replay, GLIM, `ros2 bag convert`,
+# retime_bag.py) stay in the ROS 2 install. Do not `source /opt/ros/...` in a
+# shell where this env is active: ROS puts its own Python packages on
+# PYTHONPATH and they shadow the ones here.
+#
+# Tested together on Python 3.11: numpy 2.2, scipy 1.17, open3d 0.20,
+# opencv-contrib 5.0 (cv2.aruco), ouster-sdk 1.0.1, mcap 1.5, rosbags 0.9.
+name: scoop
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy>=1.26,<2.3        # the range open3d / ouster-sdk / rosbags were tested in
+  - scipy
+  - pyyaml
+  - pandas
+  - matplotlib
+  - jupyterlab
+  - ipykernel
+  # system libraries open3d loads at import; a desktop has them already,
+  # a headless server or container does not
+  - libegl
+  - libgl
+  - libusb
+  - pip:
+      - open3d                          # clouds, voxel filters, normals, ICP
+      - opencv-contrib-python-headless  # images + cv2.aruco (ChArUco boards)
+      - ouster-sdk                      # lidar_packets -> scans (scoop/ouster.py)
+      - mcap                            # MCAP bags without ROS
+      - mcap-ros2-support
+      - rosbags                         # .db3 bags, CDR for tests
+      # GPU (optional; stage 01 falls back to the CPU without it). Match the
+      # CUDA major version `nvidia-smi` reports: cupy-cuda11x for CUDA 11.
+      - cupy-cuda12x
+      - nvidia-cuda-nvrtc-cu12

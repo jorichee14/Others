@@ -1,7 +1,8 @@
+# pip install -r requirements.txt for a plain venv; environment.yml is the full setup
 numpy
 pyyaml
 mcap
 mcap-ros2-support
-opencv-python-headless   # images
+opencv-contrib-python-headless   # images + cv2.aruco; never alongside another opencv-* package
 ouster-sdk               # Ouster lidar_packets (scoop/ouster.py)
 # rosbags               # .db3 bags, and scripts/test_bag.py
