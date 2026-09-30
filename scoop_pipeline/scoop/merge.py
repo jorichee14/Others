@@ -51,9 +51,11 @@ class MergeResult:
     t_max: int = 0
 
 
-def _stream(b: Path, reader, total: List[int]):
+def _stream(b: Path, reader, total: List[int], skip=()):
     for _, sc, ch, msg in bag.iter_mcap_records(reader):
         total[0] += len(msg.data)
+        if ch.topic in skip:
+            continue
         yield (msg.log_time, ch.topic,
                TopicSchema(sc.name, sc.encoding, bytes(sc.data), ch.message_encoding),
                msg.publish_time, msg.sequence, dict(ch.metadata), msg.data)
@@ -62,8 +64,14 @@ def _stream(b: Path, reader, total: List[int]):
 def merge_bags(inputs, out_dir, compression: str = "zstd",
                min_free_gb: float = MIN_FREE_GB, static_tf=(), log=print) -> MergeResult:
     """Merge the rosbag2 folders ``inputs`` into ``out_dir`` (must not exist).
-    ``static_tf``: ``[(parent, child, t, q)]`` added as one /tf_static
-    message at the start (see :func:`scoop.tftree.attach`)."""
+    ``static_tf``: ``[(parent, child, t, q)]`` added to /tf_static (see
+    :func:`scoop.tftree.attach`).
+
+    /tf_static is written as ONE message at the start holding every static
+    transform of the inputs (the latest one per child frame) plus
+    ``static_tf``, as tf2's StaticTransformBroadcaster does: a latched topic
+    replays only its last message to a late subscriber (rviz, tf2_echo), so
+    with several messages all but one set of transforms would go missing."""
     inputs = [Path(b) for b in inputs]
     readers = [bag.open_bag(b) for b in inputs]
     sources: Dict[str, List[str]] = {}
@@ -83,18 +91,39 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
         f"({compression})")
 
     done = [0]
-    streams = [_stream(b, r, done) for b, r in zip(inputs, readers)]
-    if static_tf:
-        name = "tf2_msgs/msg/TFMessage"
-        if types.get("/tf_static", name) != name:
-            raise BagError(f"/tf_static is {types['/tf_static']} in {sources['/tf_static'][0]}, "
-                           f"not {name}; cannot add static transforms to it")
+    name = "tf2_msgs/msg/TFMessage"
+    combine = "/tf_static" in types or bool(static_tf)
+    if combine and types.get("/tf_static", name) != name:
+        raise BagError(f"/tf_static is {types['/tf_static']} in {sources['/tf_static'][0]}, "
+                       f"not {name}")
+    streams = [_stream(b, r, done, skip={"/tf_static"} if combine else ())
+               for b, r in zip(inputs, readers)]
+    if combine:
+        ts = rosmsg.typestore()
         t0 = min(r.time_range()[0] for r in readers)
+        by_child: Dict[str, object] = {}
+        n_in = 0
+        for r in readers:
+            if "/tf_static" not in r.topics():
+                continue
+            for _, _, _, msg in bag.iter_mcap_records(r, ["/tf_static"]):
+                n_in += 1
+                for tr in ts.deserialize_cdr(msg.data, name).transforms:
+                    old = by_child.get(tr.child_frame_id)
+                    if old is not None and old.header.frame_id != tr.header.frame_id:
+                        raise BagError(f"/tf_static gives {tr.child_frame_id} two parents: "
+                                       f"{old.header.frame_id} and {tr.header.frame_id}")
+                    by_child[tr.child_frame_id] = tr
+        for tr in rosmsg.tf_message(static_tf, t0).transforms:
+            if tr.child_frame_id in by_child:
+                raise BagError(f"{tr.child_frame_id} already has a parent in /tf_static")
+            by_child[tr.child_frame_id] = tr
+            log(f"    /tf_static += {tr.header.frame_id} -> {tr.child_frame_id}")
+        msg = rosmsg.msg_type(name)(transforms=list(by_child.values()))
         schema = TopicSchema(name, "ros2msg", rosmsg.msgdef(name).encode(), "cdr")
-        data = rosmsg.serialize(rosmsg.tf_message(static_tf, t0))
-        streams.insert(0, iter([(t0, "/tf_static", schema, t0, 0, {}, data)]))
-        for p, c, _, _ in static_tf:
-            log(f"    /tf_static += {p} -> {c}")
+        streams.insert(0, iter([(t0, "/tf_static", schema, t0, 0, {}, rosmsg.serialize(msg))]))
+        log(f"    /tf_static: {n_in} messages + {len(static_tf)} added -> one message with "
+            f"{len(by_child)} transforms")
     out_dir = Path(out_dir)
 
     def watched(records):
@@ -116,8 +145,8 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
                 for t, q in bag.topic_qos(r).items():
                     if q and not w.qos.get(t):
                         w.set_qos(t, q)
-            if static_tf and not w.qos.get("/tf_static"):
-                w.set_qos("/tf_static", LATCHED)          # transient local, as tf2 expects
+            if combine:
+                w.set_qos("/tf_static", LATCHED)          # keep last 1, transient local: tf2's
             merged = heapq.merge(*streams, key=lambda rec: rec[0])
             write_in_order(w, watched(merged), reorder_s=2.0)   # tolerance for raw bags
     except ValueError as e:                  # an input out of log-time order, a type clash

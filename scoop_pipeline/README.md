@@ -311,8 +311,12 @@ fits next to its inputs; it stops and removes the partial bag before the
 disk fills. `--out` puts it on another drive, `--name` names it.
 
 The merge also adds the calibrated transforms of `configs/static_tf.yaml`
-(e.g. `os_lidar -> zed_left_camera_optical_frame`) to `/tf_static`, as one
-message at the start of the bag. A frame has one parent in TF, and the ZED's
+(e.g. `os_lidar -> zed_left_camera_optical_frame`) to `/tf_static`. All
+static transforms -- the inputs' (Ouster, ZED) and these -- go into ONE
+latched `/tf_static` message at the start of the bag, as tf2's static
+broadcaster does: `ros2 bag play` replays only the last message of a latched
+topic to a late subscriber (rviz, tf2_echo), so separate messages would lose
+all but one set of transforms. A frame has one parent in TF, and the ZED's
 optical frame already has one (its camera chain), so the merge then adds the
 same geometry as `zed_left_camera_optical_frame -> os_sensor` (the root of the
 Ouster tree), composed through `os_sensor -> os_lidar`: looking up

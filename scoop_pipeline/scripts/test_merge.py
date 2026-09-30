@@ -186,6 +186,7 @@ def test_merge_bags():
         for b in inputs:
             for tp, info in bag.open_bag(b).topics().items():
                 want[tp] = want.get(tp, 0) + info.count
+        want["/tf_static"] = 1                                   # combined into one message
         assert res.counts == want, (res.counts, want)
         r = bag.open_bag(out)
         logs = [m.log_time for _, _, _, m in bag.iter_mcap_records(r)]
@@ -195,7 +196,7 @@ def test_merge_bags():
         assert a
         b = [bytes(m.data) for _, _, _, m in bag.iter_mcap_records(r, ["/tf"])]
         assert a == b                                            # byte for byte
-        assert bag.topic_qos(r)["/tf_static"] == LATCHED
+        assert "durability: 1" in bag.topic_qos(r)["/tf_static"]   # latched
         with open(os.path.join(out, f"merged_0.mcap"), "rb") as fh:
             from mcap.reader import make_reader
             chunks = make_reader(fh).get_summary().chunk_indexes
@@ -288,10 +289,20 @@ def test_merge_adds_static_tf():
                          log=quiet)
         r = bag.open_bag(out)
         msgs = [(lt, dec(pl)) for _, lt, pl, dec in r.iter_raw(["/tf_static"])]
-        assert len(msgs) == 2 and msgs[0][0] == T0            # ours first, at the start
-        tr = msgs[0][1].transforms[0]
-        assert (tr.header.frame_id, tr.child_frame_id) == ("zed_left_camera_optical_frame",
-                                                           "os_sensor")
+        assert len(msgs) == 1 and msgs[0][0] == T0            # ONE message, at the start
+        pairs = {(tr.header.frame_id, tr.child_frame_id) for tr in msgs[0][1].transforms}
+        assert pairs == {("os_sensor", "os_lidar"),           # the inputs' static transforms
+                         ("zed_camera_link", "zed_left_camera_frame"),
+                         ("zed_left_camera_frame", "zed_left_camera_optical_frame"),
+                         ("zed_left_camera_optical_frame", "os_sensor")}, pairs   # + ours
+        # two static messages in the inputs (Ouster's and the ZED's) -> still one
+        with BagWriter(os.path.join(d, "second")) as w:
+            w.write("/tf_static", rosmsg.tf_message([("os_sensor", "os_imu", [0, 0, 0.03],
+                                                      [0, 0, 0, 1])], T0 + 2), T0 + 2)
+        out3 = os.path.join(d, "m3b")
+        merge.merge_bags([os.path.join(d, "b"), os.path.join(d, "second")], out3, log=quiet)
+        m3 = [dec(pl) for _, _, pl, dec in bag.open_bag(out3).iter_raw(["/tf_static"])]
+        assert len(m3) == 1 and len(m3[0].transforms) == 4, m3
         edges = tftree.tf_edges([out])                          # the merged tree
         assert edges["os_sensor"].parent == "zed_left_camera_optical_frame"
         T = np.linalg.inv(edges["os_sensor"].T @ edges["os_lidar"].T)
