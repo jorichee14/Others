@@ -5,7 +5,8 @@
 #   scripts/run_glim.sh <bag_dir> [config_dir] [dump_dir]
 #
 #   bag_dir     the retimed bag, e.g. .../20260924/mapping_A/mobile_1/retimed_full
-#   config_dir  GLIM config folder (default: ~/workspaces/isaac_ros-dev/glim_config)
+#   config_dir  GLIM config folder (default: $GLIM_CONFIG if set,
+#               else ~/workspaces/isaac_ros-dev/glim_config)
 #   dump_dir    where GLIM's dump goes (default: <folder of the bag>/glim_dump);
 #               must be new or empty, so an earlier run is never overwritten
 #
@@ -13,10 +14,10 @@
 set -euo pipefail
 
 if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-    sed -n '2,12p' "$0"; exit 1
+    sed -n '2,13p' "$0"; exit 1
 fi
 BAG=$(realpath "$1")
-CONFIG=$(realpath "${2:-$HOME/workspaces/isaac_ros-dev/glim_config}")
+CONFIG=$(realpath "${2:-${GLIM_CONFIG:-$HOME/workspaces/isaac_ros-dev/glim_config}}")
 DUMP=$(realpath -m "${3:-$(dirname "$BAG")/glim_dump}")
 IMAGE=${GLIM_IMAGE:-koide3/glim_ros2:humble-mcap}
 
