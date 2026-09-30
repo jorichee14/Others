@@ -45,7 +45,7 @@ def check(name, fn):
         traceback.print_exc()
 
 
-def make_bag(path, n_frames=60, dead_cols=None, seed=0):
+def make_bag(path, n_frames=100, dead_cols=None, seed=0):
     """Returns (info, frames): the truth the decoder is checked against."""
     from mcap.writer import CompressionType, Writer
     rng = np.random.default_rng(seed)

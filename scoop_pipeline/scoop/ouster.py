@@ -243,11 +243,13 @@ def fit_clock(reader: BagReader, ns: str = "/ouster", window_s: float = WINDOW_S
     coef = np.polyfit(xs, ys, 1)
     res = ys - np.polyval(coef, xs)
     keep = res < np.percentile(res, 80)
-    if keep.sum() < 2:
-        # retime_bag would fit a line through ONE point here: slope undefined
+    if len(xs) < 4 or keep.sum() < 2:
+        # With 3 windows the top-20% cut leaves 1 or 2 points depending on
+        # float rounding, i.e. the fit is decided by noise. retime_bag has the
+        # same weakness on such short bags; a mapping bag is minutes long.
         raise BagError(f"only {len(xs)} windows of {window_s:g} s "
                        f"({s[-1] - s[0]:.1f} s of packets); the clock fit needs "
-                       f"at least {int(np.ceil(3 * window_s))} s")
+                       f"at least 4 windows (> {int(np.ceil(3 * window_s))} s)")
     coef = np.polyfit(xs[keep], ys[keep], 1)
     resid = ys[keep] - np.polyval(coef, xs[keep])
 
