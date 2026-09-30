@@ -9,7 +9,8 @@ a bag, with every output at a fixed place.
         <bag>_decoded/  1  packets -> points, sensor time    (scoop.replay)
         <bag>_retimed/  2  sensor -> capture time            (scoop.retime)
         glim/           3  GLIM dump: traj_lidar.txt, map    (scripts/run_glim.sh)
-        <svo>_zed/      4  the SVO2 as a bag, capture time   (scoop.zed)
+        <svo>_zed/      4  the SVO2 as bags, capture time    (scoop.zed)
+        <svo>_zed_right/   one replay per bag (settings zed.bags)
         clock.json         the clock fit of step 2 (drift, residual, ...)
         process.yaml       the settings the steps ran with
 
@@ -33,15 +34,15 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 
 from . import bag, replay, retime, zed
 from .bag import BagError
 
-__all__ = ["STEPS", "LATER", "Recording", "find_recording", "load_settings", "zed_args",
-           "process"]
+__all__ = ["STEPS", "LATER", "Recording", "find_recording", "load_settings", "zed_bags",
+           "zed_args", "process"]
 
 STEPS = ["decoded", "retimed", "glim", "zed"]
 LATER = {"decoded": ["retimed", "glim"], "retimed": ["glim"], "glim": [], "zed": []}
@@ -55,24 +56,31 @@ class Recording:
     bag: Path                       # the original rosbag2 folder inside it
     work: Path                      # data/work/<rel>
     svo: Optional[Path] = None      # the ZED .svo2 inside raw, if there is one
+    zed_bags: Tuple[str, ...] = ("zed",)   # the zed step's bags (settings zed.bags)
 
     def step(self, name: str) -> Path:
         """Output folder of a step: bags are named after their original
         (``<bag>_decoded``, ``<bag>_retimed``, ``<svo>_zed``), the GLIM dump
-        is ``glim``."""
+        is ``glim``. For zed, the first of its bags (:meth:`zed_bag`)."""
         if name not in STEPS:
             raise ValueError(f"unknown step {name!r}; steps: {STEPS}")
         if name == "glim":
             return self.work / "glim"
         if name == "zed":
-            return self.work / (f"{self.svo.stem}_zed" if self.svo else "zed")
+            return self.zed_bag(self.zed_bags[0])
         return self.work / f"{self.bag.name}_{name}"
+
+    def zed_bag(self, name: str) -> Path:
+        """``<svo>_<name>``, e.g. ``<svo>_zed``, ``<svo>_zed_right``."""
+        return self.work / (f"{self.svo.stem}_{name}" if self.svo else name)
 
     @property
     def clock_json(self) -> Path:
         return self.work / "clock.json"
 
     def done(self, name: str) -> bool:
+        if name == "zed":
+            return all((self.zed_bag(n) / "metadata.yaml").is_file() for n in self.zed_bags)
         p = self.step(name)
         if name == "glim":
             return (p / "traj_lidar.txt").is_file()
@@ -89,10 +97,12 @@ def _bag_folders(folder: Path) -> List[Path]:
                   if p.is_dir() and (p / "metadata.yaml").is_file())
 
 
-def find_recording(raw_dir, work_root=None, packets_ns: str = "/ouster") -> Recording:
+def find_recording(raw_dir, work_root=None, packets_ns: str = "/ouster",
+                   zed_bags=("zed",)) -> Recording:
     """The recording in ``raw_dir`` (a folder below ``.../raw/``). Its bag is
     the rosbag2 folder inside that carries ``<packets_ns>/lidar_packets``.
-    ``work_root`` defaults to the ``work`` folder next to ``raw``."""
+    ``work_root`` defaults to the ``work`` folder next to ``raw``;
+    ``zed_bags`` are the names of the zed step's bags (:func:`zed_bags`)."""
     raw_dir = Path(raw_dir).expanduser().resolve()
     if not raw_dir.is_dir():
         raise BagError(f"{raw_dir} is not a folder")
@@ -113,7 +123,7 @@ def find_recording(raw_dir, work_root=None, packets_ns: str = "/ouster") -> Reco
     if len(candidates) > 1:
         raise BagError(f"several bags with {topic} in {raw_dir}: "
                        f"{[b.name for b in candidates]}")
-    return Recording(raw_dir, candidates[0], work, zed.find_svo(raw_dir))
+    return Recording(raw_dir, candidates[0], work, zed.find_svo(raw_dir), tuple(zed_bags))
 
 
 def load_settings(path=None) -> dict:
@@ -127,9 +137,17 @@ def load_settings(path=None) -> dict:
     return s
 
 
-def zed_args(z: dict) -> dict:
-    """The ``zed`` settings as :func:`scoop.zed.svo_to_bag` arguments."""
-    topics = list(z.get("topics") or [])
+def zed_bags(z: dict) -> Dict[str, List[str]]:
+    """Bag name -> topics, one ZED replay per bag: the ``zed.bags`` setting
+    (or ``zed.topics`` as a single bag ``zed``)."""
+    bags = z.get("bags") or {"zed": z.get("topics") or []}
+    return {str(k): list(v or []) for k, v in bags.items()}
+
+
+def zed_args(z: dict, topics: Optional[List[str]] = None) -> dict:
+    """The ``zed`` settings as :func:`scoop.zed.svo_to_bag` arguments, for
+    ``topics`` (default: the first bag's)."""
+    topics = list(topics if topics is not None else next(iter(zed_bags(z).values())))
     rename = z.get("rename")
     remap = zed.prefix_remap(topics, *rename) if rename else {}
     configs = [ROOT / Path(c).expanduser() for c in z.get("wrapper_config") or ()]
@@ -143,6 +161,14 @@ def _clear(p: Path):
         shutil.rmtree(p)
     elif p.exists():
         p.unlink()
+
+
+def _clear_leftovers(tmp: Path):
+    """Remove what a failed run left in .partial/ for this output."""
+    for p in (tmp, tmp.with_name(tmp.name + ".record"),
+              tmp.with_name(tmp.name + ".params.yaml")):
+        _clear(p)
+    tmp.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _publish(tmp: Path, final: Path):
@@ -164,9 +190,12 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
         if name is not None and name not in STEPS:
             raise ValueError(f"unknown step {name!r}; steps: {STEPS}")
     last = STEPS.index(until) if until else len(STEPS) - 1
+    bags = zed_bags(settings["zed"])
+    rec.zed_bags = tuple(bags)
     if redo:
         for s in [redo] + LATER[redo]:
-            _clear(rec.step(s))
+            for p in ([rec.zed_bag(n) for n in bags] if s == "zed" else [rec.step(s)]):
+                _clear(p)
             if s == "retimed":
                 _clear(rec.clock_json)
     rec.work.mkdir(parents=True, exist_ok=True)
@@ -188,10 +217,22 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
         if s != until and LATER[s] and all(rec.done(x) for x in LATER[s]):
             log(f"[skip] {s}: not needed, {' and '.join(LATER[s])} done")   # e.g. deleted
             continue
-        for p in (tmp, tmp.with_name(tmp.name + ".record"),
-                  tmp.with_name(tmp.name + ".params.yaml")):
-            _clear(p)                            # leftovers of a failed run
-        tmp.parent.mkdir(parents=True, exist_ok=True)
+        if s == "zed":                           # one replay per bag, each published alone
+            log(f"[run ] zed -> {', '.join(rec.zed_bag(n).name for n in bags)}")
+            for name, topics in bags.items():
+                fb = rec.zed_bag(name)
+                if (fb / "metadata.yaml").is_file():
+                    log(f"    {fb.name}: done")
+                    continue
+                tb = rec.work / ".partial" / fb.name
+                _clear_leftovers(tb)
+                log(f"    {fb.name}: {len(topics)} topics")
+                zed.svo_to_bag(rec.svo, tb, script=zed_script, log=log,
+                               **zed_args(settings["zed"], topics))
+                _publish(tb, fb)
+            log("[done] zed")
+            continue
+        _clear_leftovers(tmp)
         log(f"[run ] {s} -> {final}")
         if s == "decoded":
             replay.decode_ouster_bag(
@@ -221,9 +262,6 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
             if code != 0 or not (tmp / "traj_lidar.txt").is_file():
                 raise BagError(f"GLIM did not produce {tmp / 'traj_lidar.txt'} "
                                f"(exit {code}); the partial run is left in {tmp}")
-        elif s == "zed":
-            zed.svo_to_bag(rec.svo, tmp, script=zed_script, log=log,
-                           **zed_args(settings["zed"]))
         _publish(tmp, final)
         log(f"[done] {s}")
     return rec.status()

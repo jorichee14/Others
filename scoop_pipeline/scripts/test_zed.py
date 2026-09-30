@@ -35,7 +35,8 @@ IMAGE, INFO, DEPTH, STATUS = ("/zed/zed_node/left/image_rect_color",
                               "/zed/zed_node/left/camera_info",
                               "/zed/zed_node/depth/depth_registered",
                               "/zed/zed_node/pose/status")
-LATENCY = {IMAGE: 2 * MS, INFO: 3 * MS, DEPTH: 150 * MS}     # replay -> recorder
+RIGHT = "/zed/zed_node/right/image_rect_color"
+LATENCY = {IMAGE: 2 * MS, INFO: 3 * MS, DEPTH: 150 * MS, RIGHT: 4 * MS}   # replay -> recorder
 LATCHED = "- history: 3\n  depth: 0\n  reliability: 1\n  durability: 1\n"
 
 
@@ -86,7 +87,13 @@ def test_has_header():
 def test_prefix_remap_and_settings():
     got = zed.prefix_remap([IMAGE, "/zed/zed_nodeX/a", "/tf"], "/zed/zed_node/", "/mobile_1/zed")
     assert got == {IMAGE: "/mobile_1/zed/left/image_rect_color"}, got
-    args = recording.zed_args(recording.load_settings()["zed"])
+    z = recording.load_settings()["zed"]
+    bags = recording.zed_bags(z)
+    assert list(bags) == ["zed", "zed_right"], bags
+    assert "/zed/zed_node/right/image_rect_color" in bags["zed_right"]
+    assert not set(bags["zed"]) & set(bags["zed_right"])
+    assert recording.zed_bags({"topics": [IMAGE]}) == {"zed": [IMAGE]}
+    args = recording.zed_args(z)
     assert args["camera_model"] == "zed2i" and not args["realtime"]
     assert all(v.startswith("/mobile_1/zed/") for v in args["remap"].values())
     assert set(args["remap"]) == set(args["topics"])
@@ -421,19 +428,32 @@ def test_process_recording_zed_step():
         os.makedirs(rec.step("glim"))
         open(os.path.join(rec.step("glim"), "traj_lidar.txt"), "w").write("x")
         settings = recording.load_settings()
-        settings["zed"]["topics"] = [IMAGE, INFO, DEPTH, STATUS]
+        settings["zed"]["bags"] = {"zed": [IMAGE, INFO, DEPTH, STATUS], "zed_right": [RIGHT]}
         logs = []
         st = recording.process(rec, settings, log=logs.append)
         assert st == {"decoded": True, "retimed": True, "glim": True, "zed": True}, st
-        assert rec.step("zed").name == "run1_mobile_1_zed"
-        tp = bag.open_bag(rec.step("zed")).topics()
-        assert "/mobile_1/zed/left/image_rect_color" in tp, list(tp)
+        left, right = rec.zed_bag("zed"), rec.zed_bag("zed_right")
+        assert (left.name, right.name) == ("run1_mobile_1_zed", "run1_mobile_1_zed_right")
+        tp = bag.open_bag(left).topics()                  # one replay per bag
+        assert "/mobile_1/zed/left/image_rect_color" in tp and \
+            "/mobile_1/zed/right/image_rect_color" not in tp, list(tp)
+        assert list(bag.open_bag(right).topics()) == ["/mobile_1/zed/right/image_rect_color"]
         assert not os.path.exists(os.path.join(work, ".partial"))
+
+        shutil.rmtree(right)                              # e.g. its replay failed
+        mt = os.path.getmtime(os.path.join(left, "metadata.yaml"))
+        logs = []
+        recording.process(rec, settings, log=logs.append)
+        assert any(l.strip() == "run1_mobile_1_zed: done" for l in logs), logs
+        assert os.path.getmtime(os.path.join(left, "metadata.yaml")) == mt
+        assert rec.done("zed")
+
         mt = os.path.getmtime(os.path.join(rec.step("retimed"), "metadata.yaml"))
         logs = []
         recording.process(rec, settings, redo="zed", log=logs.append)
         ran = [l.split()[2] for l in logs if l.startswith("[run ]")]
         assert ran == ["zed"], logs                       # zed alone, nothing upstream
+        assert sum("topics" in l and l.strip().startswith("run1_mobile_1_zed") for l in logs) == 2
         assert os.path.getmtime(os.path.join(rec.step("retimed"), "metadata.yaml")) == mt
     finally:
         fake.close()

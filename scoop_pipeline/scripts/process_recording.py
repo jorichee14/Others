@@ -9,7 +9,8 @@ ZED SVO2 next to it -> a bag on the same clock.
 <raw recording folder> is a folder below data/raw/, e.g.
     ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A/mobile_1
 Outputs go to the mirrored folder below data/work/ with fixed names:
-    <bag>_decoded/  <bag>_retimed/  glim/  <svo>_zed/  clock.json  process.yaml
+    <bag>_decoded/  <bag>_retimed/  glim/  <svo>_zed/  <svo>_zed_right/
+    clock.json  process.yaml
 Steps already done are skipped; --redo X runs X and the steps built from it
 again (decoded -> retimed -> glim; zed on its own). The GLIM step starts
 docker (scripts/run_glim.sh); the zed step needs the ZED wrapper, here or in
@@ -45,7 +46,8 @@ def main():
     try:
         settings = recording.load_settings(a.settings)
         rec = recording.find_recording(a.raw_dir, a.work_root,
-                                       settings["ouster"].get("packets_ns", "/ouster"))
+                                       settings["ouster"].get("packets_ns", "/ouster"),
+                                       recording.zed_bags(settings["zed"]))
         print(f"raw bag: {rec.bag}\nwork:    {rec.work}")
         if a.status:
             for s, ok in rec.status().items():

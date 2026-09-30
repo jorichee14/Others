@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """ZED SVO2 -> rosbag2 on the capture clock, through the ZED ROS 2 wrapper.
 
-    python3 scripts/svo_to_bag.py <svo> <out_bag_dir>
+    python3 scripts/svo_to_bag.py <svo> <out_bag_dir> [--bag zed_right]
         [--settings configs/recording.yaml] [--keep-record]
 
-Topics, their new names, the camera model and wrapper parameters come from
-the `zed` section of the settings. The wrapper plays the SVO with its own
+Records one of the bags of the `zed.bags` setting (default: the first) --
+its topics, their new names, the camera model and wrapper parameters come
+from the `zed` section of the settings. The wrapper plays the SVO with its own
 timestamps and `ros2 bag record` records it (scripts/run_zed.sh, which uses
 the isaac_ros container when ROS is not installed here); the recording is
 then restamped to capture time and renamed (scoop/zed.py).
@@ -28,12 +29,18 @@ def main():
     ap.add_argument("svo")
     ap.add_argument("out")
     ap.add_argument("--settings", default=None, help="default: configs/recording.yaml")
+    ap.add_argument("--bag", default=None, help="which of zed.bags (default: the first)")
     ap.add_argument("--keep-record", action="store_true",
                     help="keep the raw recording (<out>.record) after restamping")
     a = ap.parse_args()
     try:
         z = recording.load_settings(a.settings)["zed"]
-        zed.svo_to_bag(a.svo, a.out, keep_record=a.keep_record, **recording.zed_args(z))
+        bags = recording.zed_bags(z)
+        name = a.bag or next(iter(bags))
+        if name not in bags:
+            raise ValueError(f"--bag {name}: zed.bags has {list(bags)}")
+        zed.svo_to_bag(a.svo, a.out, keep_record=a.keep_record,
+                       **recording.zed_args(z, bags[name]))
     except (BagError, ValueError) as e:
         sys.exit(f"error: {e}")
 
