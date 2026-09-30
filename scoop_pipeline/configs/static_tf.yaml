@@ -8,3 +8,11 @@ transforms:
     child: zed_left_camera_optical_frame
     translation: [-0.074928, -0.066971, -0.091627]      # |t| = 0.135 m
     rotation_xyzw: [-0.497829, -0.498035, 0.501789, 0.502329]
+  - parent: zed_left_camera_optical_frame
+    child: radar1_link
+    translation: [0.207505, 0.076150, -0.108883]         # |t| = 0.246 m
+    rotation_xyzw: [-0.551338, 0.560743, -0.443155, -0.430356]
+  - parent: zed_left_camera_optical_frame
+    child: radar2_link                                    # MP#1, rigid to the ZED
+    translation: [-0.053850, 0.046553, -0.112039]        # |t| = 0.133 m
+    rotation_xyzw: [0.724722, 0.038269, 0.687594, -0.022953]
