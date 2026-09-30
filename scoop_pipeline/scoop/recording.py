@@ -6,17 +6,19 @@ at a fixed place.
     data/raw/<rel>/                       as recorded -- only ever read
         <bag folder>/ (metadata.yaml + *.mcap), *.svo2, ...
     data/work/<rel>/                      everything derived from it
-        decoded/        1  packets -> points, sensor time    (scoop.replay)
-        retimed/        2  sensor -> capture time            (scoop.retime)
+        <bag>_decoded/  1  packets -> points, sensor time    (scoop.replay)
+        <bag>_retimed/  2  sensor -> capture time            (scoop.retime)
         glim/           3  GLIM dump: traj_lidar.txt, map    (scripts/run_glim.sh)
         clock.json         the clock fit of step 2 (drift, residual, ...)
         process.yaml       the settings the steps ran with
 
-``<rel>`` is the recording's path below ``raw/`` (e.g. 20260924/mapping_A/
+``<bag>`` is the original bag's folder name, so a derived bag says which
+recording it came from wherever it is copied. ``<rel>`` is the recording's
+path below ``raw/`` (e.g. 20260924/mapping_A/
 mobile_1), so raw and work mirror each other and nothing derived is ever
 written into ``raw/``.
 
-A step writes into ``.partial/<step>/`` and is moved into place only when it
+A step writes into ``.partial/<its folder name>/`` and is moved into place only when it
 succeeded, so a folder with a step's name is always complete. A step whose
 output exists is skipped; ``redo`` deletes it and every later step.
 """
@@ -48,7 +50,11 @@ class Recording:
     work: Path                      # data/work/<rel>
 
     def step(self, name: str) -> Path:
-        return self.work / name
+        """Output folder of a step: bags are named after the original bag
+        (``<bag>_decoded``, ``<bag>_retimed``), the GLIM dump is ``glim``."""
+        if name not in STEPS:
+            raise ValueError(f"unknown step {name!r}; steps: {STEPS}")
+        return self.work / (name if name == "glim" else f"{self.bag.name}_{name}")
 
     @property
     def clock_json(self) -> Path:
@@ -145,7 +151,8 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
     packets_ns = o.get("packets_ns", "/ouster")
     out_ns = o.get("out_ns", "/mobile_1/ouster")
     for s in STEPS[:last + 1]:
-        final, tmp = rec.step(s), rec.work / ".partial" / s
+        final = rec.step(s)
+        tmp = rec.work / ".partial" / final.name   # same name, so the .mcap inside is too
         if rec.done(s):
             log(f"[skip] {s}: done ({final})")
             continue

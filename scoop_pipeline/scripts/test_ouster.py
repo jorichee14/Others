@@ -520,22 +520,24 @@ def test_process_recording_steps_skip_redo_fail():
         st = recording.process(rec, _settings(), glim_script=t.glim, log=logs.append)
         assert st == {"decoded": True, "retimed": True, "glim": True}, st
         w = rec.work
-        assert sorted(os.listdir(w)) == ["clock.json", "decoded", "glim", "process.yaml", "retimed"]
-        assert os.path.isfile(os.path.join(w, "decoded", "decoded_0.mcap"))
-        assert os.path.isfile(os.path.join(w, "retimed", "retimed_0.mcap"))
+        B = "mirc_survey_mobile_1"
+        assert sorted(os.listdir(w)) == sorted(["clock.json", f"{B}_decoded", "glim",
+                                                "process.yaml", f"{B}_retimed"]), os.listdir(w)
+        assert os.path.isfile(os.path.join(w, f"{B}_decoded", f"{B}_decoded_0.mcap"))
+        assert os.path.isfile(os.path.join(w, f"{B}_retimed", f"{B}_retimed_0.mcap"))
         used = open(os.path.join(w, "glim", "bag_used.txt")).read().strip()
-        assert used == os.path.join(str(w), "retimed"), used   # GLIM got the retimed bag
+        assert used == os.path.join(str(w), f"{B}_retimed"), used   # GLIM got the retimed bag
         cm = ouster.ClockMap.load(os.path.join(w, "clock.json"))
         assert abs(cm.drift_ppm - DRIFT * 1e6) < 2.0
-        topics = bag.open_bag(os.path.join(w, "retimed")).topics()
+        topics = bag.open_bag(os.path.join(w, f"{B}_retimed")).topics()
         assert "/mobile_1/zed/imu/data" in topics and "/mobile_1/ouster/points" in topics
         assert t.listing() == before, "raw/ must never be written to"
 
-        mt = os.path.getmtime(os.path.join(w, "decoded", "decoded_0.mcap"))
+        mt = os.path.getmtime(os.path.join(w, f"{B}_decoded", f"{B}_decoded_0.mcap"))
         logs = []
         recording.process(rec, _settings(), glim_script=t.glim, log=logs.append)
         assert sum(l.startswith("[skip]") for l in logs) == 3, logs
-        assert os.path.getmtime(os.path.join(w, "decoded", "decoded_0.mcap")) == mt
+        assert os.path.getmtime(os.path.join(w, f"{B}_decoded", f"{B}_decoded_0.mcap")) == mt
 
         logs = []
         recording.process(rec, _settings(), redo="retimed", glim_script=t.glim, log=logs.append)

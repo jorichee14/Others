@@ -106,14 +106,16 @@ data/raw/20260924/mapping_A/mobile_1/      as recorded; never written to
     mirc_dataset_survey_1_mapping_20260924_mobile_1/   (the packets bag)
     *.svo2
 data/work/20260924/mapping_A/mobile_1/
-    decoded/       1  packets -> points bag, sensor time
-    retimed/       2  capture time; the GLIM input
+    mirc_dataset_survey_1_mapping_20260924_mobile_1_decoded/   1  points bag, sensor time
+    mirc_dataset_survey_1_mapping_20260924_mobile_1_retimed/   2  capture time; the GLIM input
     glim/          3  GLIM dump: traj_lidar.txt, map
     clock.json        the clock fit (drift, residual, packets) for the paper
     process.yaml      the settings the steps ran with
 ```
 
 Settings come from `configs/recording.yaml` (`--settings` for another file).
+The two bags are named `<original bag>_decoded` and `<original bag>_retimed`
+(the .mcap inside too), so a copied bag still says where it came from.
 Steps already done are skipped. `--redo retimed` redoes retimed and glim;
 `--until retimed` stops before GLIM; `--status` shows what is done. A step is
 built in `.partial/<step>/` and only moved into place when it succeeded, so a

@@ -8,7 +8,7 @@
 <raw recording folder> is a folder below data/raw/, e.g.
     ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A/mobile_1
 Outputs go to the mirrored folder below data/work/ with fixed names:
-    decoded/  retimed/  glim/  clock.json  process.yaml
+    <bag>_decoded/  <bag>_retimed/  glim/  clock.json  process.yaml
 Steps already done are skipped; --redo X runs X and everything after it
 again. The GLIM step starts docker (scripts/run_glim.sh). The work is in
 scoop/recording.py.
