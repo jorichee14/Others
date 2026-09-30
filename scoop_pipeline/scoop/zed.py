@@ -44,7 +44,7 @@ from .bagwrite import BagWriter, write_in_order
 from .retime import header_stamp_ns
 
 __all__ = ["REORDER_S", "SVO_PARAMS", "find_svo", "has_header", "prefix_remap",
-           "wrapper_params", "record_svo", "restamp_bag", "svo_to_bag", "RestampResult"]
+           "load_wrapper_config", "wrapper_params", "record_svo", "restamp_bag", "svo_to_bag", "RestampResult"]
 
 REORDER_S = 5.0          # replay latency differs per topic (depth, point cloud)
 SVO_PARAMS = {"use_svo_timestamps": True, "svo_loop": False}
@@ -89,11 +89,27 @@ def _merge(a: dict, b: dict) -> dict:
     return out
 
 
-def wrapper_params(params: Optional[dict] = None, realtime: bool = False) -> dict:
-    """The wrapper's ``ros_params_override_path`` file: SVO timestamps, no
-    loop, every frame (``realtime`` False), plus ``params`` (nested, e.g.
-    ``{"depth": {"depth_mode": "NEURAL"}}``)."""
-    ros = _merge({"svo": {**SVO_PARAMS, "svo_realtime": bool(realtime)}}, params or {})
+def load_wrapper_config(paths) -> dict:
+    """The ``ros__parameters`` of zed_wrapper config files (e.g. the robot's
+    common_stereo.yaml and zed2i.yaml), merged in order."""
+    out: dict = {}
+    for p in paths or ():
+        with open(Path(p).expanduser()) as fh:
+            doc = yaml.safe_load(fh) or {}
+        for node in doc.values():                 # "/**" or a node name
+            out = _merge(out, (node or {}).get("ros__parameters", {}))
+    return out
+
+
+def wrapper_params(params: Optional[dict] = None, realtime: bool = False,
+                   base: Optional[dict] = None) -> dict:
+    """The wrapper's ``ros_params_override_path`` file: ``base`` (the robot's
+    wrapper config, :func:`load_wrapper_config`), then SVO timestamps, no
+    loop, every frame (``realtime`` False), then ``params`` (nested, e.g.
+    ``{"depth": {"depth_mode": "NEURAL"}}``). The SVO keys always win over
+    ``base``, since the restamp relies on them."""
+    ros = _merge(base or {}, {"svo": {**SVO_PARAMS, "svo_realtime": bool(realtime)}})
+    ros = _merge(ros, params or {})
     return {"/**": {"ros__parameters": ros}}
 
 
@@ -191,9 +207,12 @@ def restamp_bag(recorded, out_dir, remap: Optional[Dict[str, str]] = None,
 
 def svo_to_bag(svo, out_dir, topics: List[str], remap: Optional[Dict[str, str]] = None,
                camera_model: str = "zed2i", params: Optional[dict] = None,
-               realtime: bool = False, reorder_s: float = REORDER_S, script=None,
+               realtime: bool = False, wrapper_config=(),
+               reorder_s: float = REORDER_S, script=None,
                keep_record: bool = False, log=print) -> RestampResult:
     """SVO -> rosbag2 folder ``out_dir`` (must not exist), on capture time.
+    ``wrapper_config``: the zed_wrapper config files to replay with (see
+    :func:`wrapper_params`).
 
     The replay is recorded into ``<out_dir>.record`` first and restamped into
     ``out_dir``; the wrapper logs and the parameters used end up in
@@ -207,7 +226,8 @@ def svo_to_bag(svo, out_dir, topics: List[str], remap: Optional[Dict[str, str]] 
             raise BagError(f"{p} exists; remove it first")
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     with open(params_file, "w") as fh:
-        yaml.safe_dump(wrapper_params(params, realtime), fh, sort_keys=False)
+        yaml.safe_dump(wrapper_params(params, realtime, load_wrapper_config(wrapper_config)),
+                       fh, sort_keys=False)
     record_svo(svo, record_dir, topics, params_file, camera_model, script, log)
     missing = sorted(set(topics) - set(bag.open_bag(record_dir).topics()))
     if missing:

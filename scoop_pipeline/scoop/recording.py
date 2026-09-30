@@ -130,8 +130,10 @@ def zed_args(z: dict) -> dict:
     topics = list(z.get("topics") or [])
     rename = z.get("rename")
     remap = zed.prefix_remap(topics, *rename) if rename else {}
+    configs = [ROOT / Path(c).expanduser() for c in z.get("wrapper_config") or ()]
     return dict(topics=topics, remap=remap, camera_model=z.get("camera_model", "zed2i"),
-                params=z.get("params") or {}, realtime=bool(z.get("realtime", False)))
+                params=z.get("params") or {}, realtime=bool(z.get("realtime", False)),
+                wrapper_config=configs)
 
 
 def _clear(p: Path):

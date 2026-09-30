@@ -16,6 +16,7 @@ scoop/               library: everything reusable lives here
   zed.py             ZED SVO2 -> bag on capture time (wrapper replay + restamp)
   recording.py       one recording: raw bag -> decoded -> retimed -> GLIM, SVO -> zed
 configs/recording.yaml  settings for processing a recording (topics, remaps, GLIM config)
+configs/zed/         the robot's zed_wrapper config, used to replay SVOs
 environment.yml      conda env for all offline processing
 scripts/             command lines only: argument parsing around scoop/
   process_recording.py  raw recording -> decoded, retimed, glim, zed (the usual entry point)
@@ -246,8 +247,12 @@ ros2 bag record <zed.topics>          stopped when the wrapper logs "SVO reached
 then restamped (`scoop/zed.py`): log time = header stamp (the SVO's capture
 time, the recording PC's clock, as in the raw bag), topics renamed
 `/zed/zed_node/...` -> `/mobile_1/zed/...`, QoS kept. The result is on the
-same timeline as the retimed bag. Topics, camera model and extra wrapper
-parameters are the `zed` section of `configs/recording.yaml`; the defaults are
+same timeline as the retimed bag. The wrapper runs with the robot's own
+wrapper config (`configs/zed/common_stereo.yaml`, `configs/zed/zed2i.yaml`:
+HD1080 at 15 Hz, NEURAL_PLUS depth, 0.3-10 m, ...), so the replay matches the
+live settings; the SVO keys above go on top of it, then `params`. Topics,
+camera model and these files are the `zed` section of
+`configs/recording.yaml`; the default topics are
 the paper's `mobile_1/zed` topics (`tables/topics.tex`) minus the IMU, which
 the raw bag already has. The wrapper log and the parameters used are kept in
 `<out>/zed_logs/`.

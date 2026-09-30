@@ -95,6 +95,16 @@ def test_prefix_remap_and_settings():
     assert ros["svo"] == {"use_svo_timestamps": True, "svo_loop": False,
                           "svo_realtime": False, "replay_rate": 0.5}, ros
     assert ros["depth"] == {"depth_mode": "NEURAL"}
+    # the robot's wrapper config, then the SVO keys, then params
+    base = zed.load_wrapper_config(args["wrapper_config"])
+    assert base["general"]["grab_frame_rate"] == 15 and base["general"]["pub_frame_rate"] == 30.0
+    assert base["depth"]["depth_mode"] == "NEURAL_PLUS" and base["depth"]["max_depth"] == 10.0
+    assert base["pos_tracking"]["map_frame"] == "map_zed"
+    base["svo"]["use_svo_timestamps"] = False              # must not win over the step's
+    ros = zed.wrapper_params({"depth": {"max_depth": 20.0}}, base=base)["/**"]["ros__parameters"]
+    assert ros["svo"]["use_svo_timestamps"] is True and ros["svo"]["play_from_frame"] == 0
+    assert ros["depth"]["max_depth"] == 20.0 and ros["depth"]["depth_mode"] == "NEURAL_PLUS"
+    assert ros["general"]["grab_resolution"] == "HD1080"
 
 
 def test_find_svo():
@@ -229,6 +239,7 @@ class FakeRos:
 
 def _settings():
     return recording.zed_args({"camera_model": "zed2i",
+                               "wrapper_config": recording.load_settings()["zed"]["wrapper_config"],
                                "rename": ["/zed/zed_node", "/mobile_1/zed"],
                                "topics": [IMAGE, INFO, DEPTH, STATUS, "/zed/zed_node/odom"],
                                "params": {"depth": {"depth_mode": "NEURAL"}}})
@@ -246,7 +257,9 @@ def test_svo_to_bag_through_run_zed():
         assert "camera_model:=zed2i" in args and f"svo_path:={svo}" in args, args
         seen = yaml.safe_load(fake.read("params_seen.yaml"))["/**"]["ros__parameters"]
         assert seen["svo"]["use_svo_timestamps"] and not seen["svo"]["svo_loop"], seen
-        assert seen["depth"]["depth_mode"] == "NEURAL"
+        assert seen["depth"]["depth_mode"] == "NEURAL"             # params over the config
+        assert seen["depth"]["max_depth"] == 10.0                  # from zed2i.yaml
+        assert seen["general"]["pub_downscale_factor"] == 2.0      # from common_stereo.yaml
         assert fake.read("recorder_topics.txt").splitlines() == _settings()["topics"]
         _check_restamped(out, _settings()["remap"])
         assert sorted(os.listdir(os.path.join(out, "zed_logs"))) == \
