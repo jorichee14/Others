@@ -126,9 +126,9 @@ starts docker (`scripts/run_glim.sh`).
 
 ```
 original bag (<ns>/lidar_packets, imu_packets, metadata, other topics)
-   |  python scripts/decode_ouster.py <original> <decoded> [--remap ...]
+   |  python scripts/decode_ouster.py <original> <decoded> [--copy-all] [--remap ...]
    v
-decoded bag, sensor time (<out-ns>/points, imu, metadata + remapped topics)
+decoded bag, sensor time (<out-ns>/points, imu, metadata + copied topics)
    |  python scripts/retime.py <original> <decoded> <retimed> /ouster /mobile_1/ouster
    v
 retimed bag
@@ -167,6 +167,14 @@ launch's set:
     --remap /zed/zed_node/imu/data:=/mobile_1/zed/imu/data \
     --remap /zed/zed_node/imu/mag:=/mobile_1/zed/imu/mag
 ```
+
+`--copy-all` copies every other topic of the original too (tf, tf_static,
+radar, ntp, ...) under its own name, unless a `--remap` renames it;
+`--exclude TOPIC` leaves one out. Copied topics keep their QoS from the
+original metadata.yaml, so /tf_static stays latched when the bag is played.
+Retime passes them all on (times shifted by the same constant as the replay),
+so the retimed bag holds the whole recording. `configs/recording.yaml` has
+`copy_all: true`.
 
 From Python (a later pipeline stage calls the same function):
 

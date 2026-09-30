@@ -445,6 +445,80 @@ def test_retime_decoded_bag():
     assert abs(first - truth_host_ns(int(frames[0]["ts"][0]), s0)) < 100_000
 
 
+LATCHED = "- history: 3\n  depth: 0\n  reliability: 1\n  durability: 1\n"
+
+
+def _packets_folder():
+    """The fixture bag as a rosbag2 folder whose metadata.yaml has QoS."""
+    d, p, *_ = Fixture.get()
+    b = os.path.join(d, "packets_folder")
+    if not os.path.exists(b):
+        import yaml
+        os.makedirs(b)
+        shutil.copy(p, os.path.join(b, "packets_folder_0.mcap"))
+        tp = bag.open_bag(p).topics()
+        yaml.safe_dump({"rosbag2_bagfile_information": {
+            "version": 5, "storage_identifier": "mcap",
+            "relative_file_paths": ["packets_folder_0.mcap"],
+            "topics_with_message_count": [
+                {"topic_metadata": {"name": t, "type": tp[t].msgtype,
+                                    "serialization_format": "cdr",
+                                    "offered_qos_profiles": LATCHED if t == f"{NS}/metadata"
+                                    else f"qos of {t}\n"},
+                 "message_count": tp[t].count} for t in tp]}},
+            open(os.path.join(b, "metadata.yaml"), "w"))
+    return b
+
+
+def test_copy_all_carries_every_topic_through_decode_and_retime():
+    import yaml
+    d, _, _, frames, _ = Fixture.get()
+    src_bag = _packets_folder()
+    out, dst = os.path.join(d, "all_decoded"), os.path.join(d, "all_retimed")
+    remap = {"/zed/zed_node/imu/data": "/mobile_1/zed/imu/data"}
+    replay.decode_ouster_bag(src_bag, out, NS, "/mobile_1/ouster", driver_min_range=1.30,
+                             metadata=meta(), remap=remap, copy_all=True, log=quiet)
+    retime.retime_bag(src_bag, out, dst, NS, "/mobile_1/ouster", metadata=meta(), log=quiet)
+    src = bag.open_bag(src_bag)
+    for folder in (out, dst):
+        r = bag.open_bag(folder)
+        tp = r.topics()
+        for s_topic, info in src.topics().items():
+            d_topic = remap.get(s_topic, s_topic)
+            assert tp[d_topic].count == info.count, (folder, s_topic)
+            a = [bytes(pl) for _, _, pl, _ in src.iter_raw([s_topic])]
+            b = [bytes(pl) for _, _, pl, _ in r.iter_raw([d_topic])]
+            assert a == b, (folder, s_topic)                 # byte for byte
+        assert tp["/mobile_1/ouster/points"].count == len(frames) - 1
+        qos = bag.topic_qos(r)
+        assert qos[f"{NS}/metadata"] == LATCHED, folder      # latched stays latched
+        assert qos["/mobile_1/zed/imu/data"] == "qos of /zed/zed_node/imu/data\n"
+        info = yaml.safe_load(open(os.path.join(folder, "metadata.yaml")))
+        info = info["rosbag2_bagfile_information"]
+        assert sum(t["message_count"] for t in info["topics_with_message_count"]) \
+            == info["message_count"]
+
+
+def test_plan_copies():
+    topics = ["/a", "/b", "/tf", "/ouster/metadata"]
+    assert replay.plan_copies(topics, {"/a": "/x"}) == {"/a": "/x"}
+    assert replay.plan_copies(topics, {"/a": "/x"}, copy_all=True, exclude=["/b"]) == \
+        {"/a": "/x", "/tf": "/tf", "/ouster/metadata": "/ouster/metadata"}
+    for kw in (dict(remap={"/nope": "/x"}), dict(remap={}, exclude=["/nope"])):
+        try:
+            replay.plan_copies(topics, copy_all=True, **kw)
+        except bag.BagError:
+            continue
+        raise AssertionError(kw)
+    for kw in (dict(remap={"/a": "/p"}, decoded=["/p"]),        # onto a decoded topic
+               dict(remap={"/a": "/b"}, copy_all=True)):         # /a and /b both -> /b
+        try:
+            replay.plan_copies(topics, **kw)
+        except ValueError:
+            continue
+        raise AssertionError(kw)
+
+
 FAKE_GLIM = """#!/usr/bin/env bash
 # stands in for run_glim.sh: <bag> <config> <dump>
 [ -n "$FAKE_GLIM_FAIL" ] && { echo partial > "$3/half.txt"; exit 3; }

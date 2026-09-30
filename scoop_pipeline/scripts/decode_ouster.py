@@ -48,6 +48,10 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="stop after N scans (for a test)")
     ap.add_argument("--remap", action="append", default=[], metavar="SRC:=DST",
                     help="copy topic SRC of the original bag into the output as DST")
+    ap.add_argument("--copy-all", action="store_true",
+                    help="copy every other topic of the original bag too")
+    ap.add_argument("--exclude", action="append", default=[], metavar="TOPIC",
+                    help="leave this topic out of the copy")
     a = ap.parse_args()
     if os.path.exists(a.out_bag_dir):
         sys.exit(f"{a.out_bag_dir} exists; pick a new output folder")
@@ -56,8 +60,9 @@ def main():
         replay.decode_ouster_bag(a.packets_bag, a.out_bag_dir, packets_ns=a.packets_ns,
                                  out_ns=a.out_ns, driver_min_range=a.driver_min_range,
                                  driver_max_range=a.driver_max_range, frame=a.frame,
-                                 imu=not a.no_imu, remap=remap, limit=a.limit)
-    except ValueError as e:
+                                 imu=not a.no_imu, remap=remap, copy_all=a.copy_all,
+                                 exclude=a.exclude, limit=a.limit)
+    except (ValueError, replay.bag.BagError) as e:
         sys.exit(f"error: {e}")
     print(f"\nnext:  python scripts/retime.py {a.packets_bag} "
           f"{a.out_bag_dir} <retimed_out_dir> {a.packets_ns} {a.out_ns}")

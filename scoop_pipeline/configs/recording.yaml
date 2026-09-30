@@ -9,7 +9,9 @@ ouster:
   driver_max_range: 1000.0
   frame: lidar                     # os_lidar, the replay's default point_cloud_frame
   imu: true
-  remap:                           # copied byte for byte, as the replay launch did
+  copy_all: true                   # copy EVERY other topic too (tf, tf_static, radar, ntp, ...)
+  exclude: []                      # topics to leave out of the copy
+  remap:                           # renamed while copied, as the replay launch did
     - /ouster/metadata:=/mobile_1/ouster/metadata
     - /ouster/imu_packets:=/mobile_1/ouster/imu_packets
     - /ouster/lidar_packets:=/mobile_1/ouster/lidar_packets

@@ -52,7 +52,7 @@ except ImportError:                         # sibling checkout, no install
     from ros2opv2v.pointclouds import pointcloud2_to_array
 
 __all__ = ["BagError", "BagReader", "Scan", "Frame", "TopicSchema", "open_bag",
-           "topic_schemas", "iter_mcap_records",
+           "topic_schemas", "topic_qos", "iter_mcap_records",
            "detect_points_topic", "nearest_pose", "iter_scans", "iter_images",
            "parse_pointcloud2", "parse_image"]
 
@@ -76,6 +76,24 @@ class TopicSchema(NamedTuple):
     encoding: str                  # schema encoding, e.g. ros2msg
     data: bytes                    # the definition text
     message_encoding: str          # e.g. cdr
+
+
+def topic_qos(reader: BagReader) -> Dict[str, str]:
+    """topic -> ``offered_qos_profiles`` from the bag's metadata.yaml ('' when
+    the bag has none). Carried over when a topic is copied, so e.g.
+    /tf_static stays transient-local (latched) when the copy is played."""
+    import yaml
+    meta = Path(reader.path) / "metadata.yaml"
+    if not meta.is_file():
+        return {}
+    with open(meta) as fh:
+        info = (yaml.safe_load(fh) or {}).get("rosbag2_bagfile_information", {})
+    out = {}
+    for te in info.get("topics_with_message_count", []) or []:
+        tm = te.get("topic_metadata", {})
+        if tm.get("name"):
+            out[tm["name"]] = tm.get("offered_qos_profiles", "") or ""
+    return out
 
 
 def iter_mcap_records(reader: BagReader, topics=None):

@@ -165,7 +165,9 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
                 driver_min_range=float(o.get("driver_min_range", 0.0)),
                 driver_max_range=float(o.get("driver_max_range", 1000.0)),
                 frame=o.get("frame", "lidar"), imu=bool(o.get("imu", True)),
-                remap=replay.parse_remaps(o.get("remap")), log=log)
+                remap=replay.parse_remaps(o.get("remap")),
+                copy_all=bool(o.get("copy_all", False)), exclude=o.get("exclude") or (),
+                log=log)
         elif s == "retimed":
             res = retime.retime_bag(rec.bag, rec.step("decoded"), tmp,
                                     packets_ns=packets_ns, points_ns=out_ns, log=log)

@@ -45,6 +45,7 @@ class BagWriter:
         self._w.start(profile="ros2", library=library)
         self._channels: Dict[str, int] = {}
         self.types: Dict[str, str] = {}
+        self.qos: Dict[str, str] = {}             # topic -> offered_qos_profiles
         self.counts: Dict[str, int] = {}
         self.t_min: Optional[int] = None
         self.t_max: Optional[int] = None
@@ -92,6 +93,11 @@ class BagWriter:
             schema = TopicSchema(name, "", b"", "")
         self._add(self._channel(topic, schema), topic, rosmsg.serialize(msg), log_ns)
 
+    def set_qos(self, topic: str, profiles: str):
+        """The topic's ``offered_qos_profiles`` for metadata.yaml, as the
+        source bag had it (``scoop.bag.topic_qos``)."""
+        self.qos[topic] = profiles or ""
+
     def write_raw(self, topic: str, schema: TopicSchema, payload: bytes, log_ns: int,
                   publish_ns: Optional[int] = None, sequence: Optional[int] = None,
                   channel_metadata=None):
@@ -120,13 +126,15 @@ class BagWriter:
             for te in info.get("topics_with_message_count", []):
                 name = te.get("topic_metadata", {}).get("name")
                 te["message_count"] = self.counts.get(name, 0)
+                if self.qos.get(name):
+                    te["topic_metadata"]["offered_qos_profiles"] = self.qos[name]
                 listed.add(name)
             for t in self._channels:
                 if t not in listed:
                     info.setdefault("topics_with_message_count", []).append(
                         {"topic_metadata": {"name": t, "type": self.types[t],
                                             "serialization_format": "cdr",
-                                            "offered_qos_profiles": ""},
+                                            "offered_qos_profiles": self.qos.get(t, "")},
                          "message_count": self.counts[t]})
             info["files"] = [{"path": self.name,
                               "starting_time": {"nanoseconds_since_epoch": t0},
@@ -144,7 +152,7 @@ class BagWriter:
             "topics_with_message_count": [
                 {"topic_metadata": {"name": t, "type": self.types[t],
                                     "serialization_format": "cdr",
-                                    "offered_qos_profiles": ""},
+                                    "offered_qos_profiles": self.qos.get(t, "")},
                  "message_count": self.counts[t]} for t in self._channels],
             "compression_format": "",
             "compression_mode": "",
