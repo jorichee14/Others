@@ -118,7 +118,8 @@ def test_machine_of():
     assert p.machine_of(f"{P}_mobile_1_sniffer") == "mobile_1/sniffer"
     assert p.machine_of(f"{P}_mobile_12") is None
     assert p.machine_of(f"{P}_infra_1") == "infra_1"
-    assert "/tf" not in p.topics("mobile_1")                     # never recorded (check.skip)
+    assert "/tf" in p.topics("mobile_1", "survey") and "/tf" not in p.topics("mobile_2")
+    assert "/tf" not in p.topics("mobile_1", "mapping")          # mapping records no tf
 
 
 def test_modes():

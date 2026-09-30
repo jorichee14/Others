@@ -46,10 +46,10 @@ tf_recorded_by: mobile_1
 # record. The mode comes from the pass folder's name (mapping_A -> mapping),
 # else the bags' names; --mode sets it. Patterns as in a shell (*).
 check:
-  skip: [/tf, /tf_static]          # not recorded in any mode
+  skip: []                         # not recorded in any mode
   modes:
-    mapping:                       # LiDAR + ZED: no link or time-base measurements
-      skip: ["/*/wifi/*", "/*/ntp/*"]
+    mapping:                       # LiDAR + ZED: no link or time-base measurements, no tf
+      skip: ["/*/wifi/*", "/*/ntp/*", /tf, /tf_static]
     survey: {}
     coop: {}
     contention: {}
