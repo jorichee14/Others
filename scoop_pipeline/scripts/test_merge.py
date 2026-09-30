@@ -19,7 +19,9 @@ import yaml
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from scoop import bag, merge, recording, rosmsg, session            # noqa: E402
+import numpy as np                                                  # noqa: E402
+
+from scoop import bag, merge, recording, rosmsg, session, tftree    # noqa: E402
 from scoop.bagwrite import BagWriter                                # noqa: E402
 
 FAILED = []
@@ -61,7 +63,10 @@ def write_bag(path, topics, n=20, t0=T0, step=S // 10, qos=None):
             w.set_qos(t, q)
         for i in range(n):
             for k, t in enumerate(topics):
-                w.write(t, rosmsg.string(f"{t} {i}"), t0 + i * step + k)
+                ts = t0 + i * step + k
+                msg = (rosmsg.tf_message([("base", f"{t[1:]}_child", [0, 0, 0], [0, 0, 0, 1])], ts)
+                       if t in ("/tf", "/tf_static") else rosmsg.string(f"{t} {i}"))
+                w.write(t, msg, ts)
 
 
 class Pass:
@@ -214,6 +219,99 @@ def test_merge_bags():
         assert not os.path.exists(os.path.join(t.root, "full")), "partial bag left behind"
     finally:
         t.close()
+
+
+CAL = tftree.Calibration("os_lidar", "zed_left_camera_optical_frame",
+                         [-0.074928, -0.066971, -0.091627],
+                         [-0.497829, -0.498035, 0.501789, 0.502329])
+OPTICAL_Q = [-0.5, 0.5, -0.5, 0.5]
+
+
+def _tree_bag(path):
+    """/tf_static: os_sensor->os_lidar, the ZED's camera chain; /tf: odom."""
+    with BagWriter(path) as w:
+        w.write("/tf_static", rosmsg.tf_message([
+            ("os_sensor", "os_lidar", [0, 0, 0.036], [0, 0, 1, 0]),
+            ("zed_camera_link", "zed_left_camera_frame", [0, 0.06, 0], [0, 0, 0, 1]),
+            ("zed_left_camera_frame", "zed_left_camera_optical_frame", [0, 0, 0], OPTICAL_Q)],
+            T0), T0)
+        for i in range(10):
+            w.write("/tf", rosmsg.tf_message([("map_zed", "odom_zed", [0, 0, 0], [0, 0, 0, 1]),
+                                              ("odom_zed", "zed_camera_link", [i, 0, 0],
+                                               [0, 0, 0, 1])], T0 + i * S), T0 + i * S)
+
+
+def test_tf_math_and_attach():
+    M = tftree.matrix(CAL.translation, CAL.rotation_xyzw)
+    t, q = tftree.to_tq(M)
+    assert np.allclose(t, CAL.translation) and np.allclose(np.abs(q), np.abs(CAL.rotation_xyzw),
+                                                             atol=1e-5)
+    np.testing.assert_allclose(tftree.matrix(t, q), M, atol=1e-9)
+    # a child without a parent: added as given
+    pub, notes = tftree.attach([CAL], {})
+    assert [(p, c) for p, c, _, _ in pub] == [("os_lidar", "zed_left_camera_optical_frame")]
+    d = tempfile.mkdtemp()
+    try:
+        _tree_bag(os.path.join(d, "b"))
+        edges = tftree.tf_edges([os.path.join(d, "b")])
+        assert edges["os_lidar"].parent == "os_sensor" and edges["os_lidar"].static
+        assert edges["zed_camera_link"].parent == "odom_zed" and not edges["zed_camera_link"].static
+        # the optical frame has a parent: the Ouster tree is hung below it instead
+        pub, notes = tftree.attach([CAL], edges)
+        assert [(p, c) for p, c, _, _ in pub] == [("zed_left_camera_optical_frame", "os_sensor")]
+        assert "already has a parent" in notes[0]
+        T_opt_sensor = tftree.matrix(pub[0][2], pub[0][3])
+        T_sensor_lidar = edges["os_lidar"].T
+        T_lidar_opt = np.linalg.inv(T_opt_sensor @ T_sensor_lidar)   # a TF lookup, by hand
+        np.testing.assert_allclose(T_lidar_opt, M, atol=1e-9)        # = the calibration
+        edges2 = dict(edges)
+        edges2["os_sensor"] = tftree.Edge("zed_left_camera_optical_frame", "os_sensor", True,
+                                          T_opt_sensor)
+        try:
+            tftree.attach([CAL], edges2)                           # already connected
+        except bag.BagError:
+            pass
+        else:
+            raise AssertionError("a calibration inside one tree must be refused (loop)")
+    finally:
+        shutil.rmtree(d)
+
+
+def test_merge_adds_static_tf():
+    d = tempfile.mkdtemp()
+    try:
+        write_bag(os.path.join(d, "a"), ["/x"], t0=T0 + 5)
+        _tree_bag(os.path.join(d, "b"))
+        pub, _ = tftree.attach([CAL], tftree.tf_edges([os.path.join(d, "b")]))
+        out = os.path.join(d, "m")
+        merge.merge_bags([os.path.join(d, "a"), os.path.join(d, "b")], out, static_tf=pub,
+                         log=quiet)
+        r = bag.open_bag(out)
+        msgs = [(lt, dec(pl)) for _, lt, pl, dec in r.iter_raw(["/tf_static"])]
+        assert len(msgs) == 2 and msgs[0][0] == T0            # ours first, at the start
+        tr = msgs[0][1].transforms[0]
+        assert (tr.header.frame_id, tr.child_frame_id) == ("zed_left_camera_optical_frame",
+                                                           "os_sensor")
+        edges = tftree.tf_edges([out])                          # the merged tree
+        assert edges["os_sensor"].parent == "zed_left_camera_optical_frame"
+        T = np.linalg.inv(edges["os_sensor"].T @ edges["os_lidar"].T)
+        np.testing.assert_allclose(T, tftree.matrix(CAL.translation, CAL.rotation_xyzw),
+                                   atol=1e-6)                   # float64 through CDR
+        write_bag(os.path.join(d, "s"), ["/x"])                  # /tf_static of another type
+        with BagWriter(os.path.join(d, "odd")) as w:
+            w.write("/tf_static", rosmsg.string("not tf"), T0)
+        try:
+            merge.merge_bags([os.path.join(d, "odd")], os.path.join(d, "m3"), static_tf=pub,
+                             log=quiet)
+        except bag.BagError as e:
+            assert "TFMessage" in str(e), e
+        else:
+            raise AssertionError("a /tf_static that is not TFMessage must be refused")
+        out2 = os.path.join(d, "m2")                            # no /tf_static in the inputs
+        merge.merge_bags([os.path.join(d, "a")], out2, static_tf=pub, log=quiet)
+        assert "durability: 1" in bag.topic_qos(bag.open_bag(out2))["/tf_static"]
+    finally:
+        shutil.rmtree(d)
 
 
 def _cli(t, *args):

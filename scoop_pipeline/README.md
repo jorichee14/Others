@@ -17,9 +17,11 @@ scoop/               library: everything reusable lives here
   recording.py       one recording: raw bag -> decoded -> retimed -> GLIM, SVO -> zed
   session.py         one pass: every machine's bags, checked against record.yaml
   merge.py           several bags -> one, in log-time order (zstd optional)
+  tftree.py          calibrated transforms added to a bag's TF tree (one parent per frame)
 configs/recording.yaml  settings for processing a recording (topics, remaps, GLIM config)
 configs/zed/         the robot's zed_wrapper config, used to replay SVOs
 configs/record.yaml  what each machine records (the robots' record.yaml)
+configs/static_tf.yaml  calibrated transforms the merge adds to /tf_static
 environment.yml      conda env for all offline processing
 scripts/             command lines only: argument parsing around scoop/
   process_recording.py  raw recording -> decoded, retimed, glim, zed (the usual entry point)
@@ -307,4 +309,13 @@ QoS kept, and checked again. It is zstd-compressed inside the MCAP by default
 (`ros2 bag play`, GLIM and scoop read it as is), so a pass of raw images
 fits next to its inputs; it stops and removes the partial bag before the
 disk fills. `--out` puts it on another drive, `--name` names it.
+
+The merge also adds the calibrated transforms of `configs/static_tf.yaml`
+(e.g. `os_lidar -> zed_left_camera_optical_frame`) to `/tf_static`, as one
+message at the start of the bag. A frame has one parent in TF, and the ZED's
+optical frame already has one (its camera chain), so the merge then adds the
+same geometry as `zed_left_camera_optical_frame -> os_sensor` (the root of the
+Ouster tree), composed through `os_sensor -> os_lidar`: looking up
+`os_lidar -> zed_left_camera_optical_frame` gives exactly the calibration.
+It prints what it added; `--static-tf ''` adds nothing.
 

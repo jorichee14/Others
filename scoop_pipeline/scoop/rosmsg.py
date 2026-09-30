@@ -13,7 +13,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-__all__ = ["typestore", "msg_type", "msgdef", "serialize", "header",
+__all__ = ["typestore", "msg_type", "msgdef", "serialize", "header", "tf_message",
            "point_fields", "pointcloud2", "imu", "string"]
 
 # numpy (kind, bytes) -> sensor_msgs/PointField datatype
@@ -118,3 +118,18 @@ def imu(stamp_ns: int, frame_id: str, accel: Iterable[float], gyro: Iterable[flo
 
 def string(text: str):
     return msg_type("std_msgs/msg/String")(data=text)
+
+
+def tf_message(transforms, stamp_ns: int):
+    """tf2_msgs/TFMessage of ``(parent, child, translation xyz, rotation xyzw)``."""
+    T = msg_type
+    out = []
+    for parent, child, t, q in transforms:
+        out.append(T("geometry_msgs/msg/TransformStamped")(
+            header=header(stamp_ns, parent), child_frame_id=child,
+            transform=T("geometry_msgs/msg/Transform")(
+                translation=T("geometry_msgs/msg/Vector3")(x=float(t[0]), y=float(t[1]), z=float(t[2])),
+                rotation=T("geometry_msgs/msg/Quaternion")(x=float(q[0]), y=float(q[1]),
+                                                           z=float(q[2]), w=float(q[3])))))
+    return T("tf2_msgs/msg/TFMessage")(transforms=out)
+

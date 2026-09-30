@@ -25,13 +25,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
 
-from . import bag
+from . import bag, rosmsg
 from .bag import BagError, TopicSchema
 from .bagwrite import BagWriter, write_in_order
 
 __all__ = ["merge_bags", "MergeResult", "bag_bytes"]
 
 MIN_FREE_GB = 10.0        # stop before the disk is fuller than this
+LATCHED = ("- history: 1\n  depth: 1\n  reliability: 1\n  durability: 1\n  deadline:\n"
+           "    sec: 9223372036\n    nsec: 854775807\n  lifespan:\n    sec: 9223372036\n"
+           "    nsec: 854775807\n  liveliness: 1\n  liveliness_lease_duration:\n"
+           "    sec: 9223372036\n    nsec: 854775807\n  avoid_ros_namespace_conventions: false")
 
 
 def bag_bytes(bag_dir) -> int:
@@ -56,8 +60,10 @@ def _stream(b: Path, reader, total: List[int]):
 
 
 def merge_bags(inputs, out_dir, compression: str = "zstd",
-               min_free_gb: float = MIN_FREE_GB, log=print) -> MergeResult:
-    """Merge the rosbag2 folders ``inputs`` into ``out_dir`` (must not exist)."""
+               min_free_gb: float = MIN_FREE_GB, static_tf=(), log=print) -> MergeResult:
+    """Merge the rosbag2 folders ``inputs`` into ``out_dir`` (must not exist).
+    ``static_tf``: ``[(parent, child, t, q)]`` added as one /tf_static
+    message at the start (see :func:`scoop.tftree.attach`)."""
     inputs = [Path(b) for b in inputs]
     readers = [bag.open_bag(b) for b in inputs]
     sources: Dict[str, List[str]] = {}
@@ -78,6 +84,17 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
 
     done = [0]
     streams = [_stream(b, r, done) for b, r in zip(inputs, readers)]
+    if static_tf:
+        name = "tf2_msgs/msg/TFMessage"
+        if types.get("/tf_static", name) != name:
+            raise BagError(f"/tf_static is {types['/tf_static']} in {sources['/tf_static'][0]}, "
+                           f"not {name}; cannot add static transforms to it")
+        t0 = min(r.time_range()[0] for r in readers)
+        schema = TopicSchema(name, "ros2msg", rosmsg.msgdef(name).encode(), "cdr")
+        data = rosmsg.serialize(rosmsg.tf_message(static_tf, t0))
+        streams.insert(0, iter([(t0, "/tf_static", schema, t0, 0, {}, data)]))
+        for p, c, _, _ in static_tf:
+            log(f"    /tf_static += {p} -> {c}")
     out_dir = Path(out_dir)
 
     def watched(records):
@@ -99,11 +116,13 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
                 for t, q in bag.topic_qos(r).items():
                     if q and not w.qos.get(t):
                         w.set_qos(t, q)
+            if static_tf and not w.qos.get("/tf_static"):
+                w.set_qos("/tf_static", LATCHED)          # transient local, as tf2 expects
             merged = heapq.merge(*streams, key=lambda rec: rec[0])
             write_in_order(w, watched(merged), reorder_s=2.0)   # tolerance for raw bags
-    except ValueError as e:                  # an input out of log-time order
+    except ValueError as e:                  # an input out of log-time order, a type clash
         shutil.rmtree(out_dir, ignore_errors=True)
-        raise BagError(f"{e}: an input bag is not in log-time order") from None
+        raise BagError(str(e)) from None
     except BaseException:
         shutil.rmtree(out_dir, ignore_errors=True)
         raise

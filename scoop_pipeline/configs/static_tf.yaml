@@ -1,0 +1,10 @@
+# Calibrated transforms the merge adds to /tf_static (scripts/merge_session.py).
+# pose of `child` in `parent`: translation in m, rotation as a quaternion xyzw.
+# If `child` already has a parent in the bags' TF tree (the ZED optical frame
+# does), the merge adds the same geometry as `child` -> <root of parent's tree>
+# instead, so every frame keeps one parent (scoop/tftree.py).
+transforms:
+  - parent: os_lidar
+    child: zed_left_camera_optical_frame
+    translation: [-0.074928, -0.066971, -0.091627]      # |t| = 0.135 m
+    rotation_xyzw: [-0.497829, -0.498035, 0.501789, 0.502329]

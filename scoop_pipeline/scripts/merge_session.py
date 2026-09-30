@@ -4,7 +4,7 @@
     python scoop_pipeline/scripts/merge_session.py <raw pass folder>
         [--check] [--allow-missing] [--out DIR] [--name NAME]
         [--compression zstd|none] [--mode mapping|survey|coop|contention]
-        [--record configs/record.yaml]
+        [--record configs/record.yaml] [--static-tf configs/static_tf.yaml]
         [--settings configs/recording.yaml] [--work-root DIR]
 
 <raw pass folder> holds one folder per machine, e.g.
@@ -19,7 +19,8 @@ the mode comes from the pass folder's name, e.g. mapping_A, or --mode).
 all bags are merged in log-time order into
     data/work/<date>/<pass>/<prefix>_<pass>_..._<date>_merged/
 (--out puts it elsewhere, e.g. another drive), zstd-compressed inside the
-MCAP by default, and the merged bag is checked the same way.
+MCAP by default, and the merged bag is checked the same way. The calibrated
+transforms of configs/static_tf.yaml are added to its /tf_static.
 """
 import argparse
 import os
@@ -30,7 +31,7 @@ import warnings
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 warnings.simplefilter("ignore", FutureWarning)
 
-from scoop import merge, recording, session                          # noqa: E402
+from scoop import merge, recording, session, tftree                  # noqa: E402
 from scoop.bag import BagError                                      # noqa: E402
 
 
@@ -58,6 +59,8 @@ def main():
     ap.add_argument("--compression", default="zstd", choices=["zstd", "none"])
     ap.add_argument("--mode", default=None, help="pass mode (default: from the folder name)")
     ap.add_argument("--record", default=None, help="default: configs/record.yaml")
+    ap.add_argument("--static-tf", default=str(recording.ROOT / "configs" / "static_tf.yaml"),
+                    help="calibrated transforms to add to /tf_static ('' for none)")
     ap.add_argument("--settings", default=None, help="default: configs/recording.yaml")
     ap.add_argument("--work-root", default=None)
     a = ap.parse_args()
@@ -95,6 +98,16 @@ def main():
         if final.exists():
             sys.exit(f"{final} exists; remove it to merge again")
         inputs = [b for u in units for b in u.bags]
+        static_tf = []
+        if a.static_tf:
+            import yaml
+            with open(os.path.expanduser(a.static_tf)) as fh:
+                cals = tftree.load_calibrations(yaml.safe_load(fh))
+            if cals:
+                static_tf, notes = tftree.attach(cals, tftree.tf_edges(inputs))
+                print("\nstatic transforms:")
+                for n in notes:
+                    print(f"    {n}")
         need = sum(merge.bag_bytes(b) for b in inputs) / 1e9
         final.parent.mkdir(parents=True, exist_ok=True)
         free = shutil.disk_usage(final.parent).free / 1e9
@@ -104,7 +117,7 @@ def main():
         tmp = final.parent / ".partial" / name
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.parent.mkdir(parents=True, exist_ok=True)
-        merge.merge_bags(inputs, tmp, compression=a.compression)
+        merge.merge_bags(inputs, tmp, compression=a.compression, static_tf=static_tf)
         os.replace(tmp, final)
         try:
             tmp.parent.rmdir()
