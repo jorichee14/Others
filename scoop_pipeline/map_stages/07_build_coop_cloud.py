@@ -29,7 +29,7 @@ Options worth knowing:
                           stretch before people walked through (cleaner chairs)
     --voxel               output resolution (m); 0.03 is plenty for box fitting
     --range-max           drop returns beyond this (far corridor noise)
-    --keep-quality        only use scans whose stage-08 quality row says nobs=6
+    --keep-quality        only use scans stage 08 registered (quality csv status ok)
                           (needs quality_<name>.csv next to the tum)
 """
 import argparse, os, sys, csv
@@ -202,7 +202,7 @@ def main():
             good_t = []
             with open(qcsv) as f:
                 for r in csv.DictReader(f):
-                    if int(r["nobs"]) >= 6 and not r["seed_status"].startswith("fail"):
+                    if r.get("status") == "ok":
                         good_t.append(float(r["t"]))
             good_t = np.array(sorted(good_t))
             print(f"quality gate: {len(good_t)} clean scans from {qcsv}")

@@ -316,7 +316,7 @@ class Reference:
             w, V = np.linalg.eigh(Q.T @ Q / (b - a))
             if w[1] <= 0:
                 continue
-            ratio = np.sqrt(w[0]) / np.sqrt(w[1])
+            ratio = np.sqrt(max(w[0], 0.0)) / np.sqrt(w[1])   # w[0] can be -1e-18 on a flat cell
             cw = 1.0 - min(ratio / planarity, 1.0)
             if cw <= 0.02:                    # a corner or clutter, no plane
                 continue

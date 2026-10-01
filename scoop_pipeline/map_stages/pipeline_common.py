@@ -639,11 +639,10 @@ class Pipeline:
         return self.outp(self.cfg.get("08_reference", {}).get("out_dir", "reference_{tag}"))
 
     def lidar_track_traj(self, suffix=""):
-        """Stage 08's LiDAR-ICP trajectory (T_map_lidar, TUM) of the first
-        lidar_icp track; suffix "_in_cam" for the camera optical frame."""
-        tr = next((t for t in self.cfg.get("08_reference", {}).get("tracks", [])
-                   if t.get("type") == "lidar_icp" and t.get("enabled", True)), None)
-        name = tr["name"] if tr else "%s_lidar" % self.machine
+        """Stage 08's LiDAR trajectory (T_map_lidar, TUM): traj_<name>.tum in
+        reference_dir(), name = 08_reference.name or <machine>_lidar; suffix
+        "_in_cam" for the camera optical frame."""
+        name = (self.cfg.get("08_reference") or {}).get("name") or "%s_lidar" % self.machine
         return os.path.join(self.reference_dir(), "traj_%s%s.tum" % (name, suffix))
 
     def infra_yaml(self, name, camera=None):
