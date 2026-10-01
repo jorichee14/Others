@@ -9,7 +9,8 @@ Each camera entry now declares a "source":
       T_map_child   = T_N_world @ T_world_child
       Needs the mapping bag's trajectory and the ZED->child extrinsic YAML saved
       during the mapping session, kept in data/raw/<date>/<pass>/infra_cameras/
-      (a bare "extrinsic_yaml" name is looked up there). Used for the arducam.
+      <camera>/ next to its recordings (a bare "extrinsic_yaml" name is looked up
+      there, then in infra_cameras/). Used for the arducam.
 
   "source": "board"            (NEW)
       T_map_child = T_map_board @ inv(T_cam_board)
@@ -83,7 +84,7 @@ def camera_from_yaml(cam, ctx):
     print("  extrinsic: %s" % ypath)
     if not os.path.exists(ypath):
         print("  ! not found -> skipped. Put the yaml saved during the mapping session "
-              "there (data/raw/<date>/<pass>/infra_cameras/)")
+              "there (data/raw/<date>/<pass>/infra_cameras/<camera>/)")
         return None
     info = parse_extrinsic_yaml(ypath)
     ext, stamp, pim_zed = info["ext"], info["stamp"], info["pose_in_map_zed"]

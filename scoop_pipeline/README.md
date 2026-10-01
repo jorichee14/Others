@@ -138,8 +138,9 @@ below `data/work/`, always under the same names:
 data/raw/20260924/mapping_A/mobile_1/      as recorded; never written to
     mirc_dataset_survey_1_mapping_20260924_mobile_1/   (the packets bag)
     *.svo2
-data/raw/20260924/mapping_A/infra_cameras/  extrinsic_<camera>.yaml saved during the
-                                           session (map stage 04 reads them here)
+data/raw/20260924/mapping_A/infra_cameras/<camera>/   one folder per infra camera:
+    its recordings + extrinsic_<camera>.yaml saved during the session (map stage 04
+    reads the yaml here)
 data/work/20260924/mapping_A/mobile_1/
     mirc_dataset_survey_1_mapping_20260924_mobile_1_decoded/   1  points bag, sensor time
     mirc_dataset_survey_1_mapping_20260924_mobile_1_retimed/   2  capture time; the GLIM input
