@@ -605,9 +605,10 @@ class Pipeline:
 
     def ref_file(self, kind):
         """A file of the reference pass (dataset.reference_pass), in its
-        processed folder: 'map' -> mapping/denoised_<tag>.pcd (the map its
-        scans are localized in), 'anchor' -> frames/anchor_frame.json (its
-        board-anchored map frame)."""
+        processed folder: 'map' -> mapping/denoised_<tag>.pcd (GLIM frame),
+        'anchored_map' -> mapping/map_final_<tag>_anchored.pcd (03's output,
+        the map a run is localized in), 'anchor' -> frames/anchor_frame.json
+        (its board-anchored map frame)."""
         if not self.reference:
             raise SystemExit("dataset.reference_pass is not set")
         root = os.path.dirname(os.path.dirname(os.path.normpath(self.out_dir)))
@@ -619,9 +620,31 @@ class Pipeline:
         d = os.path.join(root, date, pas)
         if kind == "map":
             return os.path.join(d, "mapping", "denoised_%s_%s.pcd" % (pas, date))
+        if kind == "anchored_map":
+            return os.path.join(d, "mapping", "map_final_%s_%s_anchored.pcd" % (pas, date))
         if kind == "anchor":
             return os.path.join(d, "frames", "anchor_frame.json")
         raise ValueError(kind)
+
+    def anchor_frame(self, name="anchor_frame.json"):
+        """This pass's anchor_frame.json, or the reference pass's for a run
+        (dataset.reference_pass) that has none of its own."""
+        p = self.outp(name)
+        if self.reference and not os.path.exists(p):
+            return self.ref_file("anchor")
+        return p
+
+    def reference_dir(self):
+        """Stage 08's output folder: odometry/reference_<tag>/."""
+        return self.outp(self.cfg.get("08_reference", {}).get("out_dir", "reference_{tag}"))
+
+    def lidar_track_traj(self, suffix=""):
+        """Stage 08's LiDAR-ICP trajectory (T_map_lidar, TUM) of the first
+        lidar_icp track; suffix "_in_cam" for the camera optical frame."""
+        tr = next((t for t in self.cfg.get("08_reference", {}).get("tracks", [])
+                   if t.get("type") == "lidar_icp" and t.get("enabled", True)), None)
+        name = tr["name"] if tr else "%s_lidar" % self.machine
+        return os.path.join(self.reference_dir(), "traj_%s%s.tum" % (name, suffix))
 
     def infra_yaml(self, name, camera=None):
         """An infra camera's extrinsic yaml from the mapping session: a bare
@@ -662,6 +685,42 @@ class Pipeline:
         return s
 
 
-def load_pipeline(path="pipeline_config.json"):
+def _merge(base, over):
+    """`over` on top of `base`: dicts merged key by key; lists of named dicts
+    (tracks, sensors, robots, cameras) merged by "name" -- an entry overrides
+    the base entry of that name, {"name": n, "enabled": false} switches it
+    off, a new name is added; anything else is replaced."""
+    if isinstance(base, dict) and isinstance(over, dict):
+        out = dict(base)
+        for k, v in over.items():
+            out[k] = _merge(base[k], v) if k in base else v
+        return out
+    named = (isinstance(base, list) and isinstance(over, list) and over
+             and all(isinstance(x, dict) and "name" in x for x in base + over))
+    if named:
+        out = [dict(x) for x in base]
+        idx = {x["name"]: i for i, x in enumerate(out)}
+        for x in over:
+            if x["name"] in idx:
+                out[idx[x["name"]]] = _merge(out[idx[x["name"]]], x)
+            else:
+                out.append(dict(x))
+        return out
+    return over
+
+
+def load_config(path):
+    """A pipeline config; "extends": "<other config>" (relative to this one)
+    starts from that one, so a run's config holds only what differs."""
     cfg = json.load(open(path))
+    parent = cfg.pop("extends", None)
+    if parent:
+        parent = os.path.join(os.path.dirname(os.path.abspath(path)),
+                              os.path.expanduser(parent))
+        cfg = _merge(load_config(parent), cfg)
+    return cfg
+
+
+def load_pipeline(path="pipeline_config.json"):
+    cfg = load_config(path)
     return Pipeline(cfg, os.path.dirname(os.path.abspath(path)))

@@ -1,0 +1,15 @@
+{
+  "extends": "pipeline_config.json",
+  "_note": "survey_1: a run localized in mapping_A's anchored map; mobile_2 was parked (no camera), so its sensor, track and robot are off",
+  "dataset": {
+    "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/survey_1/mirc_dataset_survey_1_20260924_merged",
+    "traj": null,
+    "machine": "mobile_1",
+    "reference_pass": "mapping_A"
+  },
+  "04_build_cameras": {"cameras": [{"name": "realsense", "enabled": false}]},
+  "06_init": {"sensors": [{"name": "realsense", "enabled": false}]},
+  "08_reference": {"tracks": [{"name": "mobile_2_rs", "enabled": false},
+                              {"name": "mobile_1_lidarboards", "enabled": false}]},
+  "09_publish": {"robots": [{"name": "mobile_2", "enabled": false}]}
+}

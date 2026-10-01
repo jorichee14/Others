@@ -38,6 +38,11 @@ map_stages/          map from LiDAR + GLIM poses (01_build_map.py, 01a_refine_po
                      calibration read from the bag (camera_info + /tf_static); outputs in
                      data/processed/<date>/<pass>/{mapping,odometry/<machine>,frames,bags,comms};
                      datasets/<machine>/<format>_<depth>_<pass>_<date> from datasets/
+                     mapping pass: 01 map, 01a refine, 03 anchor, 02 view copy, 04/05 cameras+TF;
+                     a run in that map (pipeline_config_<run>.json: "extends" the mapping
+                     config, dataset.reference_pass): 06 start pose from the board dwell,
+                     08 per-scan LiDAR ICP to the anchored map, 07 run cloud, 04 cameras,
+                     09 poses bag
 datasets/            bags -> datasets for other tools
   mcap_convert.py    replica (RGB + lidar depth), mcd, mcgs (standalone)
 analysis/            measuring results; reads outputs, writes nothing back

@@ -147,13 +147,13 @@
   },
   "05_emit_tfs": {
     "input": "cameras_in_map.yaml",
-    "bag_anchor": "bag_anchor.json"
+    "bag_anchor": "session_anchor.json"
   },
  "06_init": {
-  "bag": "/home/wicoms-robot/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_completed",
+  "_note": "runs: bag = dataset.bag; anchor_frame = the reference pass's when this pass has none; outputs in frames/",
   "anchor_frame": "anchor_frame.json",
-  "output": "session_anchor_coop2.json",
-  "script_out": "publish_map_tfs_mapping.sh",
+  "output": "session_anchor.json",
+  "script_out": "publish_session_tfs.sh",
   "map_frame": "map",
 
   "img_stride": 1,
@@ -186,21 +186,16 @@
   ]
 },
 "07_build": {
-  "bag":   "/home/wicoms-robot/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_merged",
-  "traj":  "map_stages_20260828_outputs/reference_coop2_all/traj_mobile_1_lidar.tum",
-  "out":   "map_stages_20260828_outputs/coop2_in_ref.pcd",
+  "_note": "bag = dataset.bag; traj = 08's LiDAR-ICP track; out = mapping/cloud_in_ref_<tag>.pcd",
   "topic": "/mobile_1/ouster/points",
   "voxel": 0.03, "range_min": 0.7, "range_max": 25.0,
-  "t_start": 0, "t_end": 42,
+  "t_start": null, "t_end": null,
   "min_count": 2, "keep_quality": true
 },
 
 "08_reference": {
-    "bag": "/home/wicoms-robot/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_merged",
-    "session_anchor": "map_stages_20260828_outputs/session_anchor_coop2.json",
-    "anchor_frame": "map_stages_20260828_outputs/anchor_frame.json",
-    "ref_map": "map_stages_20260828_outputs/map_final_20260828_nc_anchored_v0.pcd",
-    "out_dir": "map_stages_20260828_outputs/reference_coop2_all",
+    "_note": "bag = dataset.bag; session_anchor = 06's output; anchor_frame + ref_map = the reference pass's (its map_final_<tag>_anchored.pcd), else this pass's",
+    "out_dir": "reference_{tag}",
     "target_voxel": 0.05,
     "plane_voxel": 0.4,
     "invert_T_lidar_camera": false,
@@ -446,16 +441,16 @@
   },
 
  "09_publish": {
-  "output_bag": "map_stages_20260828_outputs/coop2_best_poses",
+  "output_bag": "{tag}_best_poses",
   "map_frame": "map",
   "write_tf": true,
   "rate_hz": 0,
   "robots": [
     { "name": "mobile_1",
-      "traj": "map_stages_20260828_outputs/reference_coop2_all/traj_mobile_1_lidar_in_cam.tum",
+      "traj": "traj_mobile_1_lidar_in_cam.tum",
       "optical_frame": "zed_left_camera_optical_frame" },
     { "name": "mobile_2",
-      "traj": "map_stages_20260828_outputs/reference_coop2_all/traj_mobile_2_rs_odom_icp_boards.tum",
+      "traj": "traj_mobile_2_rs_odom_icp_boards.tum",
       "optical_frame": "camera_color_optical_frame" }
   ]
 }

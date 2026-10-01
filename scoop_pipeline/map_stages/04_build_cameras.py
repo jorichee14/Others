@@ -204,13 +204,15 @@ def main():
     S = P.sensor
     s = P.stage("04_build_cameras")
 
-    if P.reference and not os.path.exists(s["anchor_frame"]):
-        # a run localized in another pass's map: its poses are in that pass's
-        # world, so its cameras go into that pass's anchored map frame
-        s["anchor_frame"] = P.ref_file("anchor")
+    s["anchor_frame"] = P.anchor_frame(os.path.basename(s["anchor_frame"]))
     af = json.load(open(s["anchor_frame"]))
     T_N_world = np.array(af["T_N_world"], float)
     map_frame = af.get("map_frame", s.get("map_frame", "map"))
+    if P.reference:
+        # a run (dataset.reference_pass): its poses are stage 08's LiDAR-ICP
+        # track, registered to the reference pass's ANCHORED map -- already in
+        # map, so no GLIM-world -> map step
+        T_N_world = np.eye(4)
 
     ctx = {"map_frame": map_frame,
            "T_N_world": T_N_world,
@@ -218,22 +220,27 @@ def main():
            "boards": boards_in_map(af, P.cfg),
            "board_cfgs": P.cfg.get("boards", {}),
            "default_bag": P.dataset["bag"],
-           "T_map_mapzed": load_T_map_mapzed(af, s),
+           # map_zed is the ZED's own map of ONE session: the reference pass's
+           # map -> map_zed does not hold for a run, so no ChArUco delta there
+           "T_map_mapzed": None if P.reference else load_T_map_mapzed(af, s),
            "T_lidar_cam": S.T_lidar_camera,
            "tr_t": None, "tr_T": None}
 
     print("anchor_frame: %s  (map_frame='%s')" % (s["anchor_frame"], map_frame))
     print("boards in map: %s" % ", ".join(sorted(ctx["boards"])) or "(none)")
 
+    cameras = [c for c in s["cameras"] if c.get("enabled", True)]
     needs_traj = any(c.get("source", "extrinsic_yaml") == "extrinsic_yaml"
-                     for c in s["cameras"])
+                     for c in cameras)
     if needs_traj:
-        ctx["tr_t"], ctx["tr_T"] = load_traj(P.outp(P.dataset["traj"]))
-        print("traj: %d poses [%.3f, %.3f]"
-              % (len(ctx["tr_t"]), ctx["tr_t"][0], ctx["tr_t"][-1]))
+        traj = P.lidar_track_traj() if P.reference else P.outp(P.dataset["traj"])
+        ctx["tr_t"], ctx["tr_T"] = load_traj(traj)
+        print("traj: %s, %d poses [%.3f, %.3f]%s"
+              % (traj, len(ctx["tr_t"]), ctx["tr_t"][0], ctx["tr_t"][-1],
+                 " (stage 08, in map)" if P.reference else ""))
 
     out = []
-    for cam in s["cameras"]:
+    for cam in cameras:
         src = cam.get("source", "extrinsic_yaml")
         print("\n== %s (%s) ==  source: %s" % (cam["name"], cam["child_frame"], src))
         if src == "extrinsic_yaml":
