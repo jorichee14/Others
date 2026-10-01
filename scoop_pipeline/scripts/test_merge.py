@@ -325,6 +325,51 @@ def test_merge_adds_static_tf():
         shutil.rmtree(d)
 
 
+def test_select_topics():
+    av = ["/a/x", "/a/y", "/b/x", "/tf"]
+    assert merge.select_topics(av) == sorted(av)
+    assert merge.select_topics(av, ["/a/*", "/tf"]) == ["/a/x", "/a/y", "/tf"]
+    assert merge.select_topics(av, ["/a/*"], ["*/y"]) == ["/a/x"]
+    for inc, exc in ((["/nope"], []), ([], ["*"])):
+        try:
+            merge.select_topics(av, inc, exc)
+        except bag.BagError:
+            continue
+        raise AssertionError((inc, exc))
+
+
+def test_merge_bags_cli():
+    d = tempfile.mkdtemp()
+    try:
+        a, b = os.path.join(d, "a"), os.path.join(d, "b")
+        write_bag(a, ["/cam/left", "/cam/right", "/tf_static"], t0=T0)
+        write_bag(b, ["/lidar/points", "/radar/points", "/tf"], t0=T0 + 3)
+        cli = [sys.executable, os.path.join(ROOT, "scripts", "merge_bags.py"), a, b]
+        r = subprocess.run(cli + ["--list"], capture_output=True, text=True)
+        assert r.returncode == 0 and "/radar/points" in r.stdout and "  6  " in r.stdout, r.stdout
+        out = os.path.join(d, "ab")
+        r = subprocess.run(cli + ["-o", out, "--topics", "/cam/*", "/lidar/points", "/tf_static",
+                                  "--exclude", "*/right"], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        tp = bag.open_bag(out).topics()
+        assert sorted(tp) == ["/cam/left", "/lidar/points", "/tf_static"], sorted(tp)
+        assert tp["/cam/left"].count == 20 and tp["/tf_static"].count == 1
+        logs = [m.log_time for _, _, _, m in bag.iter_mcap_records(bag.open_bag(out))]
+        assert logs == sorted(logs)
+        out2 = os.path.join(d, "picked")                           # --pick: numbers + a pattern
+        r = subprocess.run(cli + ["-o", out2, "--pick"], input="1-2, /radar/*\n",
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        assert sorted(bag.open_bag(out2).topics()) == ["/cam/left", "/cam/right", "/radar/points"]
+        r = subprocess.run(cli + ["-o", out2, "--topics", "/x"], capture_output=True, text=True)
+        assert r.returncode != 0 and "exists" in r.stderr          # never overwritten
+        r = subprocess.run(cli + ["-o", os.path.join(d, "c"), "--topics", "/typo"],
+                           capture_output=True, text=True)
+        assert r.returncode != 0 and "matches no topic" in r.stderr, r.stderr
+    finally:
+        shutil.rmtree(d)
+
+
 def _cli(t, *args):
     return subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "merge_session.py"),
                            t.raw, "--record", t.plan_path, *args],

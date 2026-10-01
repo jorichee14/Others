@@ -32,6 +32,7 @@ scripts/             command lines only: argument parsing around scoop/
   svo_to_bag.py      one SVO2 -> bag on capture time (the zed step alone)
   merge_session.py   check a pass's bags against record.yaml, merge them into one
   topic_timing.py    intervals, gaps and repeated frames of topics in a bag
+  merge_bags.py      any bags -> one, with the topics you choose (--list, --topics, --pick)
   run_zed.sh         ZED wrapper replay + ros2 bag record (here or in the isaac_ros container)
   bag_check.py       verify + time the fast decoder on a real bag
   ouster_check.py    verify packet decoding against a replayed/retimed bag
@@ -324,4 +325,19 @@ same geometry as `zed_left_camera_optical_frame -> os_sensor` (the root of the
 Ouster tree), composed through `os_sensor -> os_lidar`: looking up
 `os_lidar -> zed_left_camera_optical_frame` gives exactly the calibration.
 It prints what it added; `--static-tf ''` adds nothing.
+
+## Merging chosen topics of any bags
+
+```
+python scoop_pipeline/scripts/merge_bags.py <bag> <bag> [...] --list
+python scoop_pipeline/scripts/merge_bags.py <bag> <bag> [...] -o <out> --topics '/mobile_1/zed/left/*' /tf /tf_static
+python scoop_pipeline/scripts/merge_bags.py <bag> <bag> [...] -o <out> --pick
+```
+
+`--list` shows every topic (type, messages, which bags). `--topics` keeps
+the ones matching (shell patterns; quote them), `--exclude` drops some,
+`--pick` asks with a numbered list (`1,3,5-8`, `all` or patterns). Same merge
+as `merge_session.py`: log-time order, byte for byte, QoS kept, one latched
+`/tf_static`, zstd unless `--compression none`; `--static-tf` adds
+calibrations. Only the chosen topics are read.
 
