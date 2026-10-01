@@ -409,7 +409,17 @@ Replica: `results/frameNNNNNN.jpg` + `depthNNNNNN.png` (uint16, metres = value /
 6553.5 as Replica, so 0-10 m; `--depth-scale 1000` for mm), `traj.txt`
 (camera-to-world, OpenCV axes), `splatam_data_config.yaml`, `report.txt`.
 MCD: `<seq>_merged.bag` (ROS1), `groundtruth/pose_inW.csv`, `gt_tum.txt`,
-`calibration.yaml`, `camera.yaml` / `imu.yaml` / `lidar.yaml`.
+`calibration.yaml`, `camera.yaml` / `imu.yaml` / `lidar.yaml`. Clouds are as in
+MCD's Ouster bags: `ring` uint8, no return = (0, 0, 0).
+
+Gaussian-LIC2 (Coco-LIC front end + Gaussian-LIC) runs on the MCD bag; the MCD
+run also writes its configs (`lic2:` in the config; `lic2: false` for none):
+`lic2/cocolic/ct_odometry_<seq>.yaml` + `lic2/cocolic/<seq>/` (copy into
+`Coco-LIC/config/`) and `lic2/gaussian_lic/<seq>.yaml` (into
+`Gaussian-LIC/config/`). Then `roslaunch gaussian_lic mcd.launch
+config_path:=config/<seq>.yaml` and `roslaunch cocolic odometry.launch
+config_path:=/config/ct_odometry_<seq>.yaml bag_path:=<the bag>`. The IMU is
+`yaml.imu` (the Ouster IMU); the bag must start at rest (static IMU init).
 
 Poses: `--pose-tum` takes a TUM trajectory (the refined one, of the LiDAR
 frame; `--tum-frame` says otherwise), chained to the camera (replica) or the

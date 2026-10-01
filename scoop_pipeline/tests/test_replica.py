@@ -71,9 +71,10 @@ CLOUD = np.dtype({"names": ["x", "y", "z", "t"], "formats": ["<f4", "<f4", "<f4"
                   "offsets": [0, 4, 8, 16], "itemsize": 32})
 
 
-def scan(t_ns, rows=48, cols=200):
+def scan(t_ns, rows=48, cols=200, lic=False):
     """One organized cloud in the lidar frame: columns swept over 100 ms,
-    each point where its ray hits the scene at the point's own time."""
+    each point where its ray hits the scene at the point's own time.
+    lic: in the ouster_ros layout (ring uint16) with NaN for every 7th point."""
     az = np.linspace(np.deg2rad(55), np.deg2rad(-55), cols)          # left to right
     el = np.linspace(np.deg2rad(35), np.deg2rad(-35), rows)
     a = np.zeros(rows * cols, CLOUD)
@@ -86,10 +87,18 @@ def scan(t_ns, rows=48, cols=200):
         k = np.arange(rows) * cols + j
         a["x"][k], a["y"][k], a["z"][k] = p_l.T
         a["t"][k] = int(dt * S)
+    if lic:
+        from scoop import ouster
+        b = np.zeros(len(a), ouster.ROS_POINT_DTYPE)
+        for k in "xyzt":
+            b[k] = a[k]
+        b["ring"] = np.repeat(np.arange(rows), cols)
+        b["x"][::7] = np.nan
+        a = b
     return rosmsg.pointcloud2(a, t_ns, LIDAR, height=rows, width=cols)
 
 
-def write_bag(path, right=False):
+def write_bag(path, right=False, lic=False):
     T = rosmsg.msg_type
     recs = []
     info = T("sensor_msgs/msg/CameraInfo")(
@@ -112,7 +121,17 @@ def write_bag(path, right=False):
                 orientation=T("geometry_msgs/msg/Quaternion")(x=0.0, y=0.0, z=0.0, w=1.0)))))
     for k in range(int(DURATION * 10)):                           # lidar, 10 Hz
         t = T0 + k * S // 10 + 3_000_000
-        recs.append((t + 100_000_000, "/points", scan(t)))
+        recs.append((t + 100_000_000, "/points", scan(t, lic=lic)))
+    for k in range(int(DURATION * 100) + 1 if lic else 0):       # imu in the lidar, 100 Hz
+        t = T0 + k * S // 100
+        V = T("geometry_msgs/msg/Vector3")
+        recs.append((t, "/imu", T("sensor_msgs/msg/Imu")(
+            header=rosmsg.header(t, LIDAR),
+            orientation=T("geometry_msgs/msg/Quaternion")(x=0.0, y=0.0, z=0.0, w=1.0),
+            orientation_covariance=np.zeros(9), angular_velocity=V(x=0.0, y=0.0, z=0.0),
+            angular_velocity_covariance=np.zeros(9),
+            linear_acceleration=V(x=0.0, y=0.0, z=9.81),
+            linear_acceleration_covariance=np.zeros(9))))
     img = np.full((H, W, 3), 128, np.uint8)
     for k in range(int(DURATION * 15)):                           # images, 15 Hz
         t = T0 + 20_000_000 + k * S // 15
@@ -391,6 +410,76 @@ def test_pack_cloud_and_small_mcd(tmp):
         for conn, t, raw in r.messages():
             stamps.setdefault(conn.topic, []).append(t)
     assert stamps["/cam/image"] == stamps["/cam/depth"], "depth not on the kept images"
+
+
+def test_lic2_clouds_and_configs(tmp):
+    """Gaussian-LIC2 (Coco-LIC) needs ring as uint8 and no NaN points, plus its
+    configs: lidar.yaml with the cloud's rows x columns, a ct_odometry yaml
+    pointing at the merged bag, a Gaussian-LIC yaml with the intrinsics."""
+    import yaml
+    from scoop import ouster
+    a = np.zeros(6, ouster.ROS_POINT_DTYPE)
+    a["x"], a["y"], a["z"] = np.arange(6), -np.arange(6), 0.5
+    a["x"][2] = np.nan
+    a["t"], a["ring"], a["range"] = np.arange(6) * 1000, [0, 1, 2, 0, 1, 2], 7000
+    fields, step, data = mc.pack_cloud(rosmsg.pointcloud2(a, T0, LIDAR, height=2, width=3),
+                                       {"ring": "uint8"}, nan_to_zero=True)
+    f = {n: (o, d) for n, o, d, _ in fields}
+    assert f["ring"][1] == 2 and step == 29, (fields, step)
+    dt = np.dtype({"names": list(f), "offsets": [v[0] for v in f.values()],
+                   "formats": ["<" + mc._PF_DTYPE[v[1]] for v in f.values()], "itemsize": step})
+    b = np.frombuffer(data.tobytes(), dt)
+    assert np.array_equal(b["ring"], a["ring"]) and np.array_equal(b["t"], a["t"])
+    assert b["x"][2] == b["y"][2] == b["z"][2] == 0 and np.isfinite(b["x"]).all()
+    assert b["y"][3] == -3 and b["range"][5] == 7000
+    try:
+        from rosbags.rosbag1 import Reader
+    except ImportError:
+        print("    (rosbags not installed: MCD part skipped)")
+        return
+    bag = os.path.join(tmp, "bag")
+    write_bag(bag, lic=True)
+    ply, tum = write_map_and_tum(tmp)
+    cfg = {"sequence": "lic", "compress": "none",
+           "pose": {"tum": tum, "tum_frame": LIDAR, "frame": CAM, "rate_hz": 10},
+           "yaml": {"imu": "imu", "camera": "cam"},
+           "sensors": {
+               "cam": {"type": "image", "topic": "/image", "info": "/info",
+                       "out_topic": "/cam/image", "is_body": True},
+               "imu": {"type": "imu", "topic": "/imu", "out_topic": "/os/imu",
+                       "tf_frame": "auto"},
+               "lidar": {"type": "pointcloud", "topic": "/points", "out_topic": "/os/points",
+                         "tf_frame": "auto", "cast": {"ring": "uint8"}, "nan_to_zero": True}}}
+    out = os.path.join(tmp, "lic")
+    res = mc.to_mcd(bag, out, cfg)
+    assert res["messages"]["imu"] == 201 and not res["missing_extrinsics"], res
+    with Reader(res["bags"][0]) as r:
+        conn = next(c for c in r.connections if c.topic == "/os/points")
+        from rosbags.typesys import Stores, get_typestore
+        m = get_typestore(Stores.ROS1_NOETIC).deserialize_ros1(
+            next(raw for c, _, raw in r.messages([conn])), conn.msgtype)
+    assert {fl.name: fl.datatype for fl in m.fields}["ring"] == 2 and m.is_dense
+    pts = mc.cloud_points(m)[0]
+    assert len(pts) < m.width * m.height, "NaN points not zeroed"
+
+    def load(path):
+        return yaml.safe_load(open(path).read().replace("%YAML:1.0", ""))
+    coco = os.path.join(out, "lic2", "cocolic")
+    odo = load(os.path.join(coco, "ct_odometry_lic.yaml"))
+    assert odo["bag_path"] == os.path.abspath(res["bags"][0]) and odo["if_3dgs"]
+    assert odo["lidar_yaml"] == "/lic/lidar.yaml" and not odo["is_evo_viral"]
+    lid = load(os.path.join(coco, "lic", "lidar.yaml"))
+    assert lid["VLP16"]["N_SCAN"] == 48 and lid["VLP16"]["Horizon_SCAN"] == 200, lid["VLP16"]
+    assert lid["lidar0"]["topic"] == "/os/points" and lid["num_lidars"] == 1
+    assert np.allclose(lid["lidar0"]["Extrinsics"]["Trans"], 0), "imu is in the lidar frame"
+    cam = load(os.path.join(coco, "lic", "camera.yaml"))
+    Tic = np.eye(4)
+    Tic[:3, :3] = np.reshape(cam["CameraExtrinsics"]["Rot"], (3, 3))
+    Tic[:3, 3] = cam["CameraExtrinsics"]["Trans"]
+    assert np.allclose(Tic, np.linalg.inv(T_CL), atol=1e-9), "camera.yaml is not T_imu_cam"
+    assert load(os.path.join(coco, "lic", "imu.yaml"))["imu_topic"] == "/os/imu"
+    gl = load(os.path.join(out, "lic2", "gaussian_lic", "lic.yaml"))
+    assert (gl["width"], gl["height"], gl["fx"], gl["cx"]) == (W, H, FX, CX), gl
 
 
 def test_mcgs_poses_from_tum(tmp):

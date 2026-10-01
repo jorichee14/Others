@@ -1303,6 +1303,12 @@ pose:
   frame: zed_left_camera_optical_frame       # global_pose IS the ZED left optical pose
   sample_at: ouster                          # MCD: one GT row per lidar scan (else rate_hz: 10)
 
+lic2:                        # Gaussian-LIC2 configs in lic2/ (Coco-LIC + Gaussian-LIC); false = none
+  lidar_skip: 10             # Coco-LIC -> Gaussian-LIC: every Nth lidar point
+  select_every_k_frame: 5    # Gaussian-LIC: every kth image is a training view
+  max_depth: 20
+  # imu_noise: {gyr_n: 2.618e-3, gyr_w: 2.66e-5, acc_n: 2.256e-2, acc_w: 4.33e-4}
+
 yaml:                        # camera.yaml / imu.yaml / lidar.yaml (MCD style, sensor -> IMU)
   imu: ouster_imu            # the IMU the extrinsics are relative to (factory-calibrated, see /mobile_1/ouster/metadata)
   camera: zed_left
@@ -1338,6 +1344,8 @@ sensors:
   ouster:
     type: pointcloud
     pack: true                               # drop the padding between point fields
+    cast: {ring: uint8}                      # as MCD's Ouster bags (Coco-LIC reads uint8)
+    nan_to_zero: true                        # no return = (0, 0, 0), as MCD's bags
     topic: /mobile_1/ouster/points
     out_topic: /os_cloud_node/points         # MCD topic name
     bag: ouster
@@ -1351,6 +1359,124 @@ sensors:
     out_topic: /os_cloud_node/imu            # MCD topic name
     bag: ouster
     tf_frame: auto          # os_imu, reached via os_lidar (ouster extrinsic above)
+"""
+
+# Gaussian-LIC2 (Coco-LIC + Gaussian-LIC) templates, from Coco-LIC's
+# config/viral (an Ouster dataset) and Gaussian-LIC's config/mcd.yaml.
+COCO_LIDAR_TAIL = """
+### FeatureExtraction ###
+VLP16:  # any spinning lidar (Ouster here); N_SCAN x Horizon_SCAN = cloud height x width
+    N_SCAN: {n_scan}
+    Horizon_SCAN: {horizon}
+    edge_threshold: 1.0
+    surf_threshold: 0.1
+    odometry_surface_leaf_size: 0.4
+    min_distance: 1.0
+    max_distance: 200.0
+
+### Odometry ###
+use_corner_feature: false
+current_scan_param:
+    corner_leaf_size: 0.2
+    surface_leaf_size: 0.4
+    edge_min_valid_num: 10
+    surf_min_valid_num: 100
+    correspondence_downsample: 2
+keyframe_strategy:
+    angle_degree: 10
+    dist_meter: 1.0
+    time_second: 10
+map_param:
+    keyframe_search_radius: 50.0
+    keyframe_search_time: 10.0
+    keyframe_density: 2
+    cloud_reserved_time: -1  # [s]
+"""
+
+# Ouster IMU (InvenSense ICM-20948): datasheet gyro 0.015 deg/s/rtHz and accel
+# 230 ug/rtHz, x10 as usual for a continuous-time / VIO estimator; random
+# walks as Coco-LIC's VIRAL config. lic2.imu_noise overrides any of them.
+LIC2_IMU_NOISE = {"gyr_n": 2.618e-03, "gyr_w": 2.66e-05, "acc_n": 2.256e-02, "acc_w": 4.33e-04}
+
+COCO_ODOMETRY = """\
+# Coco-LIC config for {seq}, written by mcap_convert.py
+# copy lic2/cocolic/* into Coco-LIC/config/, then
+#   roslaunch cocolic odometry.launch config_path:=/config/ct_odometry_{seq}.yaml
+odometry_mode: 1  # LIO = 0, LICO = 1
+
+lidar_yaml: /{seq}/lidar.yaml
+imu_yaml: /{seq}/imu.yaml
+camera_yaml: /{seq}/camera.yaml
+
+bag_path: {bag}
+bag_start: 0.
+bag_durr: -1
+
+
+### SplineParams ###
+t_add: 0.1  # [s] trajectory is updated every delta_t seconds, no adjustment needed
+distance0: 0.03  # [s] the time duration corresponding to the first 4 control points
+non_uniform: true  # true for non-uniform b-spline, false for uniform b-spline
+division_coarse: 1  # uniform: control points per delta_t, a non-zero integer
+
+
+### OptimizationParams ###
+t_begin_add_cam: 5.0  # [s] visual constraints are added this long after initialization
+lidar_iter: 2
+use_lidar_scale: true  # scale the lidar weight
+lidar_weight: 500.0
+image_weight: 4.0
+# imu: {imu}
+gyroscope_noise_density: {gyr_n:.6g}
+gyroscope_random_walk: {gyr_w:.6g}
+accelerometer_noise_density: {acc_n:.6g}
+accelerometer_random_walk: {acc_w:.6g}
+
+
+### EvalutaionParams ###
+is_evo_viral: false
+
+
+### Gaussian-LIC ###
+if_3dgs: true  # send data to the back-end for incremental Gaussian mapping
+lidar_skip: {lidar_skip}  # downsample: randomly select a LiDAR point every [lidar_skip] points
+"""
+
+GLIC_CONFIG = """\
+width: {w}
+height: {h}
+fx: {fx!r}
+fy: {fy!r}
+cx: {cx!r}
+cy: {cy!r}
+
+select_every_k_frame: {k}
+depth_completion: true
+patch_size: 10
+max_depth: {max_depth}
+
+sh_degree: 3
+white_background: false  # no adjustment needed
+random_background: false  # no adjustment needed
+convert_SHs_python: false  # no adjustment needed
+compute_cov3D_python: false  # no adjustment needed
+lambda_erank: 0  # no adjustment needed
+scaling_scale: 1  # the larger value tends to yield less Gaussians
+
+position_lr: 0.00016
+feature_lr: 0.0025  # the larger value tends to yield better performance
+opacity_lr: 0.05
+scaling_lr: 0.005  # the larger value tends to yield less Gaussians
+rotation_lr: 0.001
+lambda_dssim: 0.2
+optimize_depth: true
+lambda_depth: 0.005
+iteration_decay: false
+
+apply_exposure: false
+exposure_lr: 0.001
+skybox_points_num: 0  # 100000
+skybox_radius: 1000
 """
 
 MSGTYPE = {"image": "sensor_msgs/msg/Image", "depth": "sensor_msgs/msg/Image",
@@ -1452,25 +1578,51 @@ def resolve_extrinsic(name, s, body_frame, edges, done, paths):
 _PF_SIZE = {1: 1, 2: 1, 3: 2, 4: 2, 5: 4, 6: 4, 7: 4, 8: 8}
 
 
-def pack_cloud(msg):
+_PF_NAME = {"int8": 1, "uint8": 2, "int16": 3, "uint16": 4, "int32": 5, "uint32": 6,
+            "float32": 7, "float64": 8}
+
+
+def pack_cloud(msg, cast=None, nan_to_zero=False):
     """A PointCloud2's points with the padding between fields removed (the
     ouster_ros layout pads 30 bytes of fields to 48): (fields as (name,
     offset, datatype, count), point_step, data bytes). Same fields, same
-    values, same order of points; organized clouds stay organized."""
+    order of points; organized clouds stay organized.
+    cast: {field: "uint8" | ...} stores those fields as another type (MCD's
+    Ouster bags and Coco-LIC have ring as uint8; ouster_ros 2 writes uint16).
+    nan_to_zero: points with a NaN coordinate become (0, 0, 0), the way MCD's
+    bags mark no return (Coco-LIC drops points near the origin, not NaN)."""
+    cast = {k: _PF_NAME[v] if isinstance(v, str) else int(v) for k, v in (cast or {}).items()}
     fs = sorted(msg.fields, key=lambda f: f.offset)
     new, off = [], 0
     for f in fs:
-        new.append((f.name, off, f.datatype, f.count))
-        off += _PF_SIZE[f.datatype] * f.count
+        d = cast.get(f.name, f.datatype)
+        new.append((f.name, off, d, f.count))
+        off += _PF_SIZE[d] * f.count
     w, h, ps = msg.width, msg.height, msg.point_step
     raw = np.frombuffer(bytes(msg.data), np.uint8)
-    if off == ps:
+    changed = any(d != f.datatype for (_, _, d, _), f in zip(new, fs))
+    if off == ps and not changed and not nan_to_zero:
         return new, ps, raw
     src = raw[: h * msg.row_step].reshape(h, msg.row_step)[:, : w * ps].reshape(-1, ps)
     dst = np.empty((len(src), off), np.uint8)
     for (_, o, d, c), f in zip(new, fs):
-        n = _PF_SIZE[d] * c
-        dst[:, o:o + n] = src[:, f.offset:f.offset + n]
+        n = _PF_SIZE[f.datatype] * c
+        col = np.ascontiguousarray(src[:, f.offset:f.offset + n])
+        if d != f.datatype:
+            v = col.view("<" + _PF_DTYPE[f.datatype])
+            info = np.iinfo(_PF_DTYPE[d]) if _PF_DTYPE[d][0] in "iu" else None
+            if info is not None:
+                v = np.clip(v, info.min, info.max)
+            col = v.astype("<" + _PF_DTYPE[d]).view(np.uint8).reshape(len(src), -1)
+        dst[:, o:o + _PF_SIZE[d] * c] = col
+    if nan_to_zero:
+        xyz = [(o, d) for n_, o, d, _ in new if n_ in ("x", "y", "z")]
+        if len(xyz) == 3 and all(d in (7, 8) for _, d in xyz):
+            vals = [np.ascontiguousarray(dst[:, o:o + _PF_SIZE[d]]).view("<" + _PF_DTYPE[d])[:, 0]
+                    for o, d in xyz]
+            bad = ~(np.isfinite(vals[0]) & np.isfinite(vals[1]) & np.isfinite(vals[2]))
+            for o, d in xyz:
+                dst[bad, o:o + _PF_SIZE[d]] = 0
     return new, off, dst.reshape(-1)
 
 
@@ -1538,14 +1690,15 @@ class _Ros1Writer:
         else:  # pointcloud
             fields, step, data = ([(f.name, f.offset, f.datatype, f.count) for f in msg.fields],
                                   msg.point_step, np.frombuffer(bytes(msg.data), np.uint8))
-            if s.get("pack", True):
-                fields, step, data = pack_cloud(msg)
+            if s.get("pack", True) or s.get("cast") or s.get("nan_to_zero"):
+                fields, step, data = pack_cloud(msg, s.get("cast"), s.get("nan_to_zero", False))
             out = self.PC2(
                 header=self.header(t, frame, topic), height=msg.height, width=msg.width,
                 fields=[self.PField(name=n, offset=o, datatype=d, count=c)
                         for n, o, d, c in fields],
                 is_bigendian=bool(msg.is_bigendian), point_step=step,
-                row_step=step * msg.width, data=data, is_dense=bool(msg.is_dense))
+                row_step=step * msg.width, data=data,
+                is_dense=bool(msg.is_dense or s.get("nan_to_zero")))
         return self.ts.serialize_ros1(out, MSGTYPE[typ])
 
 
@@ -1703,10 +1856,12 @@ def _write_mcd_calibration(out, seq, body_frame, sensors, done, how, paths):
     log.info("  calibration.yaml")
 
 
-def _write_mcd_sensor_yamls(out, cfg, sensors, done, paths):
-    """camera.yaml / imu.yaml / lidar.yaml (OpenCV %YAML:1.0, MCD/CLIC style).
-    Extrinsics are sensor -> IMU, relative to the IMU chosen by `yaml.imu`."""
+def _write_mcd_sensor_yamls(out, cfg, sensors, done, paths, seq=None, lic2_bag=None):
+    """camera.yaml / imu.yaml / lidar.yaml (OpenCV %YAML:1.0, MCD/CLIC/Coco-LIC
+    style). Extrinsics are sensor -> IMU, relative to the IMU chosen by
+    `yaml.imu`. lic2_bag: also write the Gaussian-LIC2 configs for that bag."""
     ycfg = cfg.get("yaml") or {}
+    K = None
 
     def pick(kind, preferred):
         for n in [preferred] + [n for n, s in sensors.items() if s["type"] == kind]:
@@ -1769,11 +1924,48 @@ def _write_mcd_sensor_yamls(out, cfg, sensors, done, paths):
                          + block("Extrinsics", done[n], f"lidar to imu ({imu}_T_{n})", "    "))
         parts.append(f"num_lidars: {len(lidars)}\nlidar_timestamp_end: "
                      f"{str(bool(ycfg.get('lidar_timestamp_end', False))).lower()}\n")
+        first = first_msg(paths, sensors[lidars[0]]["topic"])
+        rows, cols = (first.height, first.width) if first is not None else (0, 0)
+        if rows <= 1:
+            log.warning(f"  lidar.yaml: {sensors[lidars[0]]['topic']} is not an organized "
+                        "cloud; set VLP16.N_SCAN / Horizon_SCAN by hand")
+        parts.append(COCO_LIDAR_TAIL.format(n_scan=rows, horizon=cols))
         with open(os.path.join(out, "lidar.yaml"), "w") as f:
             f.write("".join(parts))
         written.append("lidar.yaml")
-        log.info(f"  lidar.yaml ({', '.join(lidars)})")
+        log.info(f"  lidar.yaml ({', '.join(lidars)}, {rows} x {cols})")
+    if lic2_bag and cam and lidars and "camera.yaml" in written:
+        written += _write_lic2_configs(out, cfg, seq, lic2_bag, imu, K)
     return written
+
+
+def _write_lic2_configs(out, cfg, seq, bag_path, imu, K):
+    """Gaussian-LIC2 = Coco-LIC (front end, reads the ROS 1 bag) + Gaussian-LIC
+    (Gaussian mapping). Writes, next to the MCD files:
+      lic2/cocolic/ct_odometry_<seq>.yaml  -> Coco-LIC/config/
+      lic2/cocolic/<seq>/{camera,imu,lidar}.yaml  -> Coco-LIC/config/<seq>/
+      lic2/gaussian_lic/<seq>.yaml        -> Gaussian-LIC/config/"""
+    import shutil
+    lc = cfg.get("lic2") or {}
+    noise = lc.get("imu_noise") or {}
+    noise = {k: float(noise.get(k, v)) for k, v in LIC2_IMU_NOISE.items()}
+    coco = os.path.join(out, "lic2", "cocolic")
+    os.makedirs(os.path.join(coco, seq), exist_ok=True)
+    for y in ("camera.yaml", "imu.yaml", "lidar.yaml"):
+        shutil.copyfile(os.path.join(out, y), os.path.join(coco, seq, y))
+    with open(os.path.join(coco, f"ct_odometry_{seq}.yaml"), "w") as f:
+        f.write(COCO_ODOMETRY.format(
+            seq=seq, bag=os.path.abspath(bag_path), imu=imu,
+            lidar_skip=int(lc.get("lidar_skip", 10)), **noise))
+    gl = os.path.join(out, "lic2", "gaussian_lic")
+    os.makedirs(gl, exist_ok=True)
+    with open(os.path.join(gl, f"{seq}.yaml"), "w") as f:
+        f.write(GLIC_CONFIG.format(
+            w=K.width, h=K.height, fx=float(K.fx), fy=float(K.fy), cx=float(K.cx),
+            cy=float(K.cy), k=int(lc.get("select_every_k_frame", 5)),
+            max_depth=lc.get("max_depth", 20)))
+    log.info(f"  lic2/: Coco-LIC ct_odometry_{seq}.yaml + {seq}/, Gaussian-LIC {seq}.yaml")
+    return [f"lic2/cocolic/ct_odometry_{seq}.yaml", f"lic2/gaussian_lic/{seq}.yaml"]
 
 
 def to_mcd(bag, out, config=None, *, pose_tum=None, tum_frame=None, depth_source=None,
@@ -1898,7 +2090,12 @@ def to_mcd(bag, out, config=None, *, pose_tum=None, tum_frame=None, depth_source
     files, counts, stamps = _write_mcd_bags(paths, out, seq, cfg, sensors, generated)
     n_gt = _write_mcd_groundtruth(out, pose_cfg, interp, stamps)
     _write_mcd_calibration(out, seq, body_frame, sensors, done, how, paths)
-    yamls = _write_mcd_sensor_yamls(out, cfg, sensors, done, paths)
+    lic2 = cfg.get("lic2", {}) is not False
+    merged = [f for f in files if f.endswith("_merged.bag")]
+    if lic2 and not merged:
+        log.warning("  lic2/ skipped: Coco-LIC reads one bag, set merged: true")
+    yamls = _write_mcd_sensor_yamls(out, cfg, sensors, done, paths, seq,
+                                    merged[0] if lic2 and merged else None)
     missing = [n for n in sensors if done[n] is None]
     if missing:
         log.warning(f"\n  extrinsic missing for: {', '.join(missing)} — their T is null "
