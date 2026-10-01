@@ -8,9 +8,10 @@ does every step here), so the merge is exact: a k-way merge, no reordering
 window to fall out of. Messages are copied byte for byte with their schema,
 sequence, publish time and channel metadata; each topic keeps its input's QoS.
 
-The output can be zstd-compressed inside the MCAP (every MCAP reader --
-``ros2 bag play``, GLIM, scoop.bag -- undoes it), which is what makes a pass
-of uncompressed images fit next to its inputs. Writing stops, and the partial
+The output is zstd-compressed inside the MCAP by default (lossless; every
+MCAP reader -- ``ros2 bag play``, GLIM, scoop.bag -- undoes it), which is
+what makes a pass of raw images fit next to its inputs; "none" writes it
+uncompressed. Writing stops, and the partial
 bag is removed, before the disk fills up.
 
     from scoop import merge
@@ -134,7 +135,7 @@ def _stream(b: Path, reader, total: List[int], topics, skip=(), rewrite=None):
                msg.publish_time, msg.sequence, dict(ch.metadata), data)
 
 
-def merge_bags(inputs, out_dir, compression: str = "none",
+def merge_bags(inputs, out_dir, compression: str = "zstd",
                min_free_gb: float = MIN_FREE_GB, static_tf=(),
                topics: Optional[Iterable[str]] = None,
                source: Optional[Dict[str, int]] = None, drop_tf=None, extra_tf=(),

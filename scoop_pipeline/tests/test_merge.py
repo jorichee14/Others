@@ -198,14 +198,14 @@ def test_merge_bags():
         assert a == b                                            # byte for byte
         assert "durability: 1" in bag.topic_qos(r)["/tf_static"]   # latched
         from mcap.reader import make_reader
-        with open(os.path.join(out, "merged_0.mcap"), "rb") as fh:       # default: none
-            chunks = make_reader(fh).get_summary().chunk_indexes
-            assert chunks and all(c.compression == "" for c in chunks)
-        outz = os.path.join(t.root, "mz")
-        merge.merge_bags(inputs, outz, compression="zstd", log=quiet)
-        with open(os.path.join(outz, "mz_0.mcap"), "rb") as fh:
+        with open(os.path.join(out, "merged_0.mcap"), "rb") as fh:       # default: zstd
             chunks = make_reader(fh).get_summary().chunk_indexes
             assert chunks and all(c.compression == "zstd" for c in chunks)
+        outz = os.path.join(t.root, "mz")
+        merge.merge_bags(inputs, outz, compression="none", log=quiet)
+        with open(os.path.join(outz, "mz_0.mcap"), "rb") as fh:
+            chunks = make_reader(fh).get_summary().chunk_indexes
+            assert chunks and all(c.compression == "" for c in chunks)
         assert bag.open_bag(outz).topics()["/tf"].count == want["/tf"]   # reads back the same
 
         with BagWriter(os.path.join(t.root, "clash2")) as w:

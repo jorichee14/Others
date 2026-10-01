@@ -3,7 +3,7 @@
 
     python scoop_pipeline/processing/merge_session.py <raw pass folder>
         [--check] [--allow-missing] [--out DIR] [--name NAME]
-        [--compression none|zstd] [--mode mapping|survey|coop|contention]
+        [--compression zstd|none] [--mode mapping|survey|coop|contention]
         [--record configs/record.yaml] [--static-tf configs/static_tf.yaml]
         [--settings configs/recording.yaml] [--work-root DIR]
 
@@ -18,8 +18,8 @@ the mode comes from the pass folder's name, e.g. mapping_A, or --mode).
 --check stops there. Otherwise, if nothing is missing (or --allow-missing),
 all bags are merged in log-time order into
     data/work/<date>/<pass>/<prefix>_<pass>_..._<date>_merged/
-(--out puts it elsewhere, e.g. another drive), uncompressed unless
---compression zstd (refused when it would not fit), and the merged bag is
+(--out puts it elsewhere, e.g. another drive), zstd-compressed
+(lossless; --compression none when an uncompressed merge fits), and the merged bag is
 checked the same way. The calibrated
 transforms of configs/static_tf.yaml are added to its /tf_static.
 """
@@ -57,8 +57,8 @@ def main():
                     "(default: the pass folder below data/work)")
     ap.add_argument("--name", default=None, help="merged bag name without _merged "
                     "(default: from the bag names)")
-    ap.add_argument("--compression", default="none", choices=["none", "zstd"],
-                    help="zstd: smaller, slower to write and read (default none)")
+    ap.add_argument("--compression", default="zstd", choices=["zstd", "none"],
+                    help="zstd (default): lossless, about half the size; none: faster")
     ap.add_argument("--mode", default=None, help="pass mode (default: from the folder name)")
     ap.add_argument("--record", default=None, help="default: configs/record.yaml")
     ap.add_argument("--static-tf", default=str(recording.ROOT / "configs" / "static_tf.yaml"),
@@ -115,7 +115,7 @@ def main():
         free = shutil.disk_usage(final.parent).free / 1e9
         print(f"\ninputs {need:.0f} GB, {free:.0f} GB free at {final.parent}")
         if a.compression == "none" and free < need + merge.MIN_FREE_GB:
-            sys.exit("not enough space uncompressed; use --compression zstd or --out")
+            sys.exit("not enough space uncompressed; leave --compression at zstd or use --out")
         tmp = final.parent / ".partial" / name
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.parent.mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,7 @@
         [--drop PARENT->CHILD ...]
         [--add PARENT CHILD x y z qx qy qz qw]... [--add-file configs/static_tf.yaml]
         [--odom-tum FILE | --odom-topic TOPIC] [--odom-frame FRAME] [--odom-parent FRAME]
-        [--compression none|zstd]
+        [--compression zstd|none]
 
 --show         print the TF tree (/tf_static, and the first 30 s of /tf) and stop
 --drop         remove edges from /tf and /tf_static (shell patterns), e.g. the
@@ -57,8 +57,8 @@ def main():
     g.add_argument("--odom-topic", help="new odometry: Odometry/PoseStamped topic")
     ap.add_argument("--odom-frame", help="the frame the odometry poses are of")
     ap.add_argument("--odom-parent", help="the odometry's world frame")
-    ap.add_argument("--compression", default="none", choices=["none", "zstd"],
-                    help="zstd: smaller, slower to write and read (default none)")
+    ap.add_argument("--compression", default="zstd", choices=["zstd", "none"],
+                    help="zstd (default): lossless, about half the size; none: faster")
     a = ap.parse_args()
     try:
         if a.show:

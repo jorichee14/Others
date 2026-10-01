@@ -89,7 +89,7 @@ def scan(t_ns, rows=48, cols=200):
     return rosmsg.pointcloud2(a, t_ns, LIDAR, height=rows, width=cols)
 
 
-def write_bag(path):
+def write_bag(path, right=False):
     T = rosmsg.msg_type
     recs = []
     info = T("sensor_msgs/msg/CameraInfo")(
@@ -100,7 +100,9 @@ def write_bag(path):
         roi=T("sensor_msgs/msg/RegionOfInterest")(x_offset=0, y_offset=0, height=0,
                                                   width=0, do_rectify=False))
     q = mc.T_to_xyzq(T_CL)
-    recs.append((T0, "/tf_static", rosmsg.tf_message([(CAM, LIDAR, q[:3], q[3:])], T0)))
+    tfs = [(CAM, LIDAR, q[:3], q[3:])] + ([(CAM, "cam_right", [0.12, 0, 0], [0, 0, 0, 1])]
+                                          if right else [])
+    recs.append((T0, "/tf_static", rosmsg.tf_message(tfs, T0)))
     for k in range(int(DURATION * 100) + 1):                     # poses, 100 Hz
         t = T0 + k * S // 100
         P = cam_pose(t)
@@ -116,6 +118,16 @@ def write_bag(path):
         t = T0 + 20_000_000 + k * S // 15
         info.header = rosmsg.header(t, CAM)
         recs.append((t, "/info", info))
+        if right:
+            rinfo = T("sensor_msgs/msg/CameraInfo")(
+                header=rosmsg.header(t, "cam_right"), height=H, width=W,
+                distortion_model="plumb_bob", d=np.zeros(5), k=info.k, r=info.r,
+                p=np.array([FX, 0, CX, -FX * 0.12, 0, FX, CY, 0, 0, 0, 1.0, 0]),
+                binning_x=0, binning_y=0, roi=info.roi)
+            recs.append((t, "/rinfo", rinfo))
+            recs.append((t, "/right", T("sensor_msgs/msg/Image")(
+                header=rosmsg.header(t, "cam_right"), height=H, width=W, encoding="rgb8",
+                is_bigendian=0, step=W * 3, data=img.reshape(-1))))
         recs.append((t, "/image", T("sensor_msgs/msg/Image")(
             header=rosmsg.header(t, CAM), height=H, width=W, encoding="rgb8",
             is_bigendian=0, step=W * 3, data=img.reshape(-1))))
@@ -379,6 +391,23 @@ def test_pack_cloud_and_small_mcd(tmp):
         for conn, t, raw in r.messages():
             stamps.setdefault(conn.topic, []).append(t)
     assert stamps["/cam/image"] == stamps["/cam/depth"], "depth not on the kept images"
+
+
+def test_mcgs_poses_from_tum(tmp):
+    bag = os.path.join(tmp, "stereo")
+    write_bag(bag, right=True)
+    _, tum = write_map_and_tum(tmp)
+    out = os.path.join(tmp, "mcgs")
+    res = mc.to_mcgs(bag, out, left="/image", right="/right", left_info="/info",
+                     right_info="/rinfo", pose_tum=tum, lidar="/points")
+    assert res["pairs"] == 30 and abs(res["baseline_m"] - 0.12) < 1e-9, res
+    gt = np.loadtxt(os.path.join(out, "gt_poses.txt"))
+    assert len(gt) == 30
+    # the left camera's true pose: identity rotation, x = SPEED * t
+    t = np.round(gt[:, 0] * S).astype(np.int64)
+    assert np.allclose(gt[:, 1], SPEED * (t - T0) * 1e-9, atol=1e-5), gt[:3]
+    assert np.allclose(gt[:, 2:4], 0, atol=1e-5) and np.allclose(np.abs(gt[:, 7]), 1, atol=1e-6)
+    assert len(os.listdir(os.path.join(out, "left"))) == 30 == len(os.listdir(os.path.join(out, "right")))
 
 
 def main():

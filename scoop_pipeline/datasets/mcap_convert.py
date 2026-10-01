@@ -1917,7 +1917,8 @@ def to_mcgs(bag, out, *,
             right="/mobile_1/zed/right/image_rect_color",
             left_info="/mobile_1/zed/left/camera_info",
             right_info="/mobile_1/zed/right/camera_info",
-            pose="/mobile_1/global_pose", pose_bag=None,
+            pose="/mobile_1/global_pose", pose_bag=None, pose_tum=None, tum_frame=None,
+            lidar="/mobile_1/ouster/points",
             sync_tol_ms=10.0, every=1, max_frames=0, jpeg_quality=95):
     """Rectified stereo sequence for MCGS-SLAM.
 
@@ -1926,6 +1927,9 @@ def to_mcgs(bag, out, *,
     left_info, right_info their CameraInfo; the baseline comes from the right P
                           (cross-checked against /tf_static when the frames are there)
     pose, pose_bag        pose topic of the LEFT camera in world (written to gt_poses.txt)
+    pose_tum, tum_frame   poses from a TUM file instead (e.g. traj_lidar_refined.txt), of
+                          tum_frame (default: the frame of `lidar`), chained to the left
+                          camera through /tf_static
     sync_tol_ms           max left/right stamp difference (capped at 19 ms: MCGS asserts < 20)
     every, max_frames     keep every Nth pair / stop after N pairs (0 = all)
     jpeg_quality          JPEG quality
@@ -1963,8 +1967,19 @@ def to_mcgs(bag, out, *,
     if distort:
         log.info("  note: non-zero distortion; written to calib.yml so MCGS undistorts")
 
-    interp = _pose_source(paths, pose_bag, pose)
-    log.info(f"  {len(interp)} poses on {pose} (taken as the LEFT camera pose)")
+    interp = _pose_source(paths, pose_bag, pose, pose_tum)
+    T_bc = np.eye(4)
+    if pose_tum:
+        body = tum_frame
+        if body is None:
+            m = first_msg(paths, lidar)
+            if m is None:
+                raise ConvertError(f"pose_tum: give tum_frame; no messages on {lidar}")
+            body = m.header.frame_id.lstrip("/")
+        T_bc = camera_extrinsic(edges, lf, body_frame=body)
+        log.info(f"  {len(interp)} poses of {body}, chained to the left camera {lf}")
+    else:
+        log.info(f"  {len(interp)} poses on {pose} (taken as the LEFT camera pose)")
 
     ldir, rdir = os.path.join(out, "left"), os.path.join(out, "right")
     for d in (ldir, rdir):
@@ -1986,7 +2001,7 @@ def to_mcgs(bag, out, *,
         kept += 1
         T = interp.at(lt)
         if T is not None:
-            gt.append(tum_line(lt, T))
+            gt.append(tum_line(lt, T @ T_bc))
         if kept % 500 == 0:
             log.info(f"  {kept} pairs")
         if max_frames and kept >= max_frames:
@@ -2212,6 +2227,7 @@ def _cli():
         else:
             to_mcgs(a.bag, a.out, left=a.color, right=a.right, left_info=a.info,
                     right_info=a.right_info, pose=a.pose, pose_bag=a.pose_bag,
+                    pose_tum=a.pose_tum, tum_frame=a.tum_frame, lidar=a.lidar,
                     sync_tol_ms=a.sync_tol_ms, every=a.every, max_frames=a.max_frames,
                     jpeg_quality=a.jpeg_quality)
     except ConvertError as e:

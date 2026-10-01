@@ -33,11 +33,11 @@ __all__ = ["BagWriter", "write_in_order"]
 
 class BagWriter:
     def __init__(self, out_dir, library: str = "scoop", metadata_template=None,
-                 compression: str = "none"):
+                 compression: str = "zstd"):
         """``metadata_template``: another bag's metadata.yaml (path or dict).
         Its structure -- version, QoS profiles, topic order -- is kept and
         only the contents (files, counts, times) are rewritten, the way
-        ``retime_bag.py`` did. ``compression``: "none", "zstd" or "lz4",
+        ``retime_bag.py`` did. ``compression``: "zstd" (default), "lz4" or "none",
         MCAP chunk compression (what ``ros2 bag record
         --storage-preset-profile zstd_fast`` writes; every MCAP reader
         undoes it, so metadata.yaml does not mention it)."""

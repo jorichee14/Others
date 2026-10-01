@@ -5,7 +5,7 @@
     python scoop_pipeline/processing/merge_bags.py <bag> <bag> ... -o <out bag>
         [--topics PATTERN ...] [--exclude PATTERN ...] [--pick]
         [--source PATTERN=N ...] [--keep-duplicates]
-        [--compression none|zstd]
+        [--compression zstd|none]
 
 --list         show every topic of the bags (type, messages, which bags) and stop
 --topics       keep only these topics; shell patterns work: '/mobile_1/zed/*'
@@ -19,8 +19,8 @@
 -o             the merged bag folder (must not exist)
 
 Messages are copied byte for byte in log-time order, QoS kept; all static
-transforms go into one latched /tf_static message; uncompressed unless
---compression zstd. To change TF (calibrations, dropped edges, a new odometry) use
+transforms go into one latched /tf_static message; zstd-compressed (lossless)
+unless --compression none. To change TF (calibrations, dropped edges, a new odometry) use
 tf_edit.py on the result. Quote patterns so the shell leaves the * alone. The work is in
 scoop/merge.py.
 
@@ -81,8 +81,8 @@ def main():
                     help="take matching topics only from bag N (1 = first bag)")
     ap.add_argument("--keep-duplicates", action="store_true",
                     help="keep a topic from every bag that has it")
-    ap.add_argument("--compression", default="none", choices=["none", "zstd"],
-                    help="zstd: smaller, slower to write and read (default none)")
+    ap.add_argument("--compression", default="zstd", choices=["zstd", "none"],
+                    help="zstd (default): lossless, about half the size; none: faster")
     a = ap.parse_args()
     try:
         topics = merge.list_topics(a.bags)

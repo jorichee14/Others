@@ -16,7 +16,7 @@ scoop/               library: everything reusable lives here
   zed.py             ZED SVO2 -> bag on capture time (wrapper replay + restamp)
   recording.py       one recording: raw bag -> decoded -> retimed -> GLIM, SVO -> zed
   session.py         one pass: every machine's bags, checked against record.yaml
-  merge.py           several bags -> one, in log-time order (zstd optional)
+  merge.py           several bags -> one, in log-time order (zstd by default)
   tftree.py          calibrated transforms added to a bag's TF tree (one parent per frame)
   timing.py          how evenly a topic is spaced: intervals, gaps, repeated frames
 configs/recording.yaml  settings for processing a recording (topics, remaps, GLIM config)
@@ -326,10 +326,11 @@ infra_N) needs only its entry in `record.yaml` and its folder in the pass.
 `--allow-missing`), every bag is merged in log-time order -- what
 `ros2 bag convert` with `all_topics: true` did, without ROS -- into
 `data/work/<date>/<pass>/<prefix>_<pass>_..._<date>_merged/`, byte for byte,
-QoS kept, and checked again. `--compression zstd` compresses inside the MCAP
-(`ros2 bag play`, GLIM and scoop read it as is; about half the size for a
-pass of raw images) when an uncompressed merge would not fit; it stops and
-removes the partial bag before the disk fills. `--out` puts it on another drive, `--name` names it.
+QoS kept, and checked again. Every bag the pipeline writes (decoded, retimed,
+ZED, merged, tf_edit / merge_bags output) is zstd-compressed inside the MCAP:
+lossless, `ros2 bag play`, GLIM and scoop read it as is, about half the size
+for a pass of raw images; `--compression none` writes it uncompressed. It
+stops and removes the partial bag before the disk fills. `--out` puts it on another drive, `--name` names it.
 
 The merge also adds the calibrated transforms of `configs/static_tf.yaml`
 (e.g. `os_lidar -> zed_left_camera_optical_frame`) to `/tf_static`. All
@@ -359,7 +360,7 @@ topic that is in more than one bag is refused (every message would be there
 twice) unless `--source PATTERN=N` takes it from bag N (the Nth on the command
 line) or `--keep-duplicates` keeps all. Same merge
 as `merge_session.py`: log-time order, byte for byte, QoS kept, one latched
-`/tf_static`, uncompressed unless `--compression zstd`; `--static-tf` adds
+`/tf_static`, zstd-compressed unless `--compression none`; `--static-tf` adds
 calibrations. Only the chosen topics are read.
 
 ## TF: showing and changing it
