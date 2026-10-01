@@ -141,6 +141,25 @@ def header_stamp_ns(msg, fallback_ns: int) -> int:
     return value if value > 0 else int(fallback_ns)
 
 
+def _mcap_summary(file_path, handle):
+    """The MCAP summary section, or BagError naming the file when it is missing
+    or unreadable (a recording not closed cleanly, or a copy cut short)."""
+    from mcap.reader import make_reader
+    try:
+        summary = make_reader(handle).get_summary()
+    except Exception as e:                         # truncated / corrupt end of file
+        raise BagError(
+            f"{file_path}: its summary section cannot be read ({type(e).__name__}: "
+            f"{str(e)[:120]}) -- the recording was not closed cleanly or the file is "
+            f"incomplete (check its size against the source). Rebuild it with "
+            f"`mcap recover {os.path.basename(str(file_path))} -o recovered.mcap`.") from e
+    if summary is None:
+        raise BagError(
+            f"{file_path}: no summary section -- the recording was not "
+            f"closed cleanly. Rebuild the index with `mcap recover`.")
+    return summary
+
+
 class BagReader:
     """Uniform, lazily-decoding read access to a rosbag2 recording."""
 
@@ -161,14 +180,9 @@ class BagReader:
 
         topics: Dict[str, TopicInfo] = {}
         if self.storage == "mcap":
-            from mcap.reader import make_reader
             for file_path in self.files:
                 with open(file_path, "rb") as handle:
-                    summary = make_reader(handle).get_summary()
-                    if summary is None:
-                        raise BagError(
-                            f"{file_path}: no summary section — the recording was not "
-                            f"closed cleanly. Rebuild the index with `mcap recover`.")
+                    summary = _mcap_summary(file_path, handle)
                     counts = getattr(summary.statistics, "channel_message_counts", {}) \
                         if summary.statistics else {}
                     for channel_id, channel in summary.channels.items():
@@ -193,12 +207,11 @@ class BagReader:
     def time_range(self) -> Tuple[int, int]:
         """``(start_ns, end_ns)`` log-time span of the recording."""
         if self.storage == "mcap":
-            from mcap.reader import make_reader
             starts, ends = [], []
             for file_path in self.files:
                 with open(file_path, "rb") as handle:
-                    summary = make_reader(handle).get_summary()
-                    stats = summary.statistics if summary else None
+                    summary = _mcap_summary(file_path, handle)
+                    stats = summary.statistics
                     if stats and stats.message_start_time:
                         starts.append(int(stats.message_start_time))
                         ends.append(int(stats.message_end_time))
