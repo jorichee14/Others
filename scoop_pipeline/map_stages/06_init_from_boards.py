@@ -373,6 +373,13 @@ def main():
     # A sensor that omits its topics inherits them from P.sensor (the ZED block
     # in calibration.json), so the ZED entry stays a two-liner.
     S = P.sensor
+    # a run in another pass's map: its start from the LiDAR first (lidar_reloc;
+    # refuses when a check fails), the board dwell below then only checks it
+    rcfg = s.get("relocalize") or {}
+    reloc = None
+    if rcfg.get("enabled", bool(P.reference)):
+        from lidar_reloc import relocalize
+        reloc = relocalize(P, S.T_lidar_camera)
     sensors = [x for x in s["sensors"] if x.get("enabled", True)]
     off = [x["name"] for x in s["sensors"] if not x.get("enabled", True)]
     if off:
@@ -518,7 +525,7 @@ def main():
                  T_map_origin[:3, 3].round(6).tolist(),
                  R_to_q(T_map_origin[:3, :3]).round(6).tolist()))
 
-    if not results and not cam_results:
+    if not results and not cam_results and reloc is None:
         raise SystemExit("\nno sensor could be localised into %s." % map_frame)
 
     out = {"map_frame": map_frame, "bag": str(s["bag"]),
@@ -804,6 +811,43 @@ def main():
             out["bridges"][name]["board_to_origin"] = T_record(
                 bmap[r["board"]][1].get("frame", r["board"]), origin,
                 r["T_board_origin"])
+
+    if reloc is not None:
+        # the camera 08 anchors on gets the LiDAR start pose; its board dwell
+        # (if seen) stays alongside as <cam>_board and is the check
+        from lidar_reloc import board_check
+        ac = reloc["anchor_cam"]
+        sens = next((x for x in s["sensors"] if x["name"] == ac), {})
+        cf = sens.get("tf_child_frame") or "%s_pose" % ac
+        rec = {"mode": "lidar_reloc", "cam_frame": sens.get("cam_frame", "?"),
+               "tf_child_frame": cf, "dwell_t_end": reloc["t0"],
+               "map_to_cam": T_record(map_frame, cf, reloc["T_map_cam0"]),
+               "map_to_lidar": T_record(map_frame, "lidar", reloc["T_map_lidar0"]),
+               "map_to_glim_world": T_record(map_frame, "glim_world", reloc["T_map_glim"]),
+               "run_traj": reloc["run_traj"], "ref_map": reloc["ref_map"],
+               "look": reloc["look"],
+               "checks": {k: (round(v, 4) if isinstance(v, float) else v)
+                          for k, v in reloc["checks"].items()}}
+        if ac in cam_results:
+            bc = board_check(reloc, cam_results[ac]["hits"], S.T_lidar_camera)
+            if bc is not None:
+                lim_cm = float(rcfg.get("board_max_cm", 5.0))
+                lim_deg = float(rcfg.get("board_max_deg", 2.0))
+                print("\n  [board]  the %s board dwell (%d sightings, not used in the fit) vs the "
+                      "LiDAR start: median %.1f cm / %.2f deg  (max %.0f cm / %.1f deg)"
+                      % (ac, bc[2], bc[0], bc[1], lim_cm, lim_deg))
+                rec["checks"].update(board_cm=round(bc[0], 2), board_deg=round(bc[1], 3),
+                                     board_n=bc[2])
+                if bc[0] > lim_cm or bc[1] > lim_deg:
+                    raise SystemExit("relocalize: the board dwell disagrees with the LiDAR "
+                                     "start -- refused (open %s to look)" % reloc["look"])
+        else:
+            print("\n  [board]  no %s board dwell in this run: the board check is skipped" % ac)
+        if ac in cam_out:
+            cam_out[ac + "_board"] = cam_out.pop(ac)
+        cam_out[ac] = rec
+        print("\n  session anchor '%s' = the LiDAR start (map->%s xyz=%s); "
+              "every check passed" % (ac, cf, np.round(reloc["T_map_cam0"][:3, 3], 4).tolist()))
 
     with open(s["output"], "w") as f:
         json.dump(out, f, indent=2)
