@@ -224,6 +224,93 @@ def test_bag_files_in_recording_order(tmp):
     assert got == list(reversed(names)), got
 
 
+def write_map_and_tum(tmp, step=0.02):
+    """The scene as a map cloud (binary PLY, `step` m apart) and the lidar's
+    true poses as a TUM file -- what 01 / 01a produce for a real pass."""
+    g = np.arange(-5.0, 7.0, step)
+    h = np.arange(-4.0, 4.0, step)
+    X, Y = np.meshgrid(g, h)
+    wall = np.c_[X.ravel(), Y.ravel(), np.full(X.size, 5.0)]
+    q = np.arange(-PLATE, PLATE, step / 2)
+    X, Y = np.meshgrid(q, q)
+    plate = np.c_[X.ravel(), Y.ravel(), np.full(X.size, 2.0)]
+    P = np.vstack([wall, plate]).astype(np.float32)
+    ply = os.path.join(tmp, "map.ply")
+    with open(ply, "wb") as f:
+        f.write(f"ply\nformat binary_little_endian 1.0\nelement vertex {len(P)}\n"
+                "property float x\nproperty float y\nproperty float z\nend_header\n".encode())
+        f.write(P.tobytes())
+    tum = os.path.join(tmp, "traj_lidar.txt")
+    rows = []
+    for k in range(int(DURATION * 100) + 1):
+        t = T0 + k * S // 100
+        T = cam_pose(t) @ T_CL
+        rows.append([t * 1e-9] + mc.T_to_xyzq(T))
+    np.savetxt(tum, np.array(rows), fmt="%.9f")
+    return ply, tum
+
+
+def test_map_depth_matches_scene(tmp):
+    bag = os.path.join(tmp, "bag")
+    write_bag(bag)
+    ply, tum = write_map_and_tum(tmp)
+    res = mc.to_replica(bag, os.path.join(tmp, "map"), color="/image", info="/info",
+                        lidar="/points", pose_tum=tum, depth_source="map", map=ply,
+                        map_voxel=0.02, gpu=False)
+    assert res["depth_source"] == "map" and res["frames"] >= 25, res
+    ok, fill, _ = check_frames(os.path.join(tmp, "map"), max_err=0.03)
+    assert ok > 0.99, f"only {ok:.3f} of map depth pixels within 3 cm"
+    assert fill > 0.95, f"map depth fills only {fill:.2f} of the image"
+    # the poses came from the TUM file of the lidar, chained to the camera
+    traj = np.loadtxt(os.path.join(tmp, "map", "traj.txt")).reshape(-1, 4, 4)
+    assert np.allclose(traj[:, :3, :3], np.eye(3), atol=1e-6)
+
+
+def test_mcd_depth_from_map_and_lidar(tmp):
+    try:
+        from rosbags.rosbag1 import Reader
+        from rosbags.typesys import Stores, get_typestore
+    except ImportError:
+        print("    (rosbags not installed: skipped)")
+        return
+    bag = os.path.join(tmp, "bag")
+    write_bag(bag)
+    ply, tum = write_map_and_tum(tmp)
+    cfg = {"sequence": "syn", "merged": True,
+           "pose": {"tum": tum, "tum_frame": LIDAR, "frame": CAM, "rate_hz": 10},
+           "sensors": {
+               "cam": {"type": "image", "topic": "/image", "info": "/info",
+                       "out_topic": "/cam/image", "is_body": True},
+               "depth": {"type": "depth", "source": "map", "camera": "cam",
+                         "out_topic": "/cam/depth", "min": 0.2, "max": 10.0},
+               "lidar": {"type": "pointcloud", "topic": "/points", "out_topic": "/os/points",
+                         "tf_frame": "auto"}}}
+    ts = get_typestore(Stores.ROS1_NOETIC)
+    for src, need in (("map", 0.95), ("lidar", 0.15)):
+        out = os.path.join(tmp, f"mcd_{src}")
+        res = mc.to_mcd(bag, out, cfg, depth_source=src, map=ply, map_voxel=0.02, gpu=False)
+        assert res["messages"]["depth"] == res["messages"]["cam"] == 30, res["messages"]
+        assert res["groundtruth_rows"] > 15 and not res["missing_extrinsics"], res
+        good = total = 0
+        fills = []
+        with Reader(res["bags"][0]) as r:
+            assert {c.topic for c in r.connections} == {"/cam/image", "/cam/depth", "/os/points"}
+            last = -1
+            for conn, t, raw in r.messages():
+                assert t >= last, "bag not in time order"
+                last = t
+                if conn.topic != "/cam/depth":
+                    continue
+                m = ts.deserialize_ros1(raw, conn.msgtype)
+                d = np.frombuffer(bytes(m.data), np.uint16).reshape(m.height, m.width) / 1000.0
+                valid = d > 0
+                good += int((np.abs(d - true_depth(t))[valid] < 0.05).sum())
+                total += int(valid.sum())
+                fills.append(valid.mean())
+        assert good / total > 0.99, f"{src}: {good / total:.3f} of depth within 5 cm"
+        assert np.mean(fills) > need, f"{src}: fill {np.mean(fills):.2f}"
+
+
 def main():
     logging.basicConfig(level=logging.WARNING)
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

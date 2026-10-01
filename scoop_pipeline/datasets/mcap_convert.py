@@ -13,8 +13,10 @@ replica   RGB-D sequence for SplaTAM / NICE-SLAM / Point-SLAM / GradSLAM
             <out>/report.txt                 sanity statistics
           Depth comes from the LiDAR by default (--depth-source lidar): the scans
           nearest each image are moved into the camera at the image time (through
-          the poses, point by point) and projected; 0 = no point. --depth-source zed
-          uses the ZED depth image instead.
+          the poses, point by point) and projected; 0 = no point. --depth-source map
+          renders the built map (--map) instead, dense, as surfels; --depth-source
+          zed uses the ZED depth image. --pose-tum takes the poses from a TUM file
+          (the refined trajectory, of the LiDAR frame) instead of a pose topic.
 
 mcd       MCD dataset layout (mcdviral.github.io), sensors described by a config
             <out>/<seq>_merged.bag           ROS1 bag, all sensors, MCD topic names
@@ -33,7 +35,11 @@ Command line
     python3 mcap_convert.py <bag dir | .mcap> <out dir> --format replica --pose-is-camera
     python3 mcap_convert.py <bag dir | .mcap> <out dir> --format replica --pose-is-camera \\
         --lidar-scans 5                                   # denser lidar depth
+    python3 mcap_convert.py <bag dir | .mcap> <out dir> --format replica \\
+        --pose-tum traj_lidar_refined.txt --depth-source map --map denoised_<tag>.pcd
     python3 mcap_convert.py <bag dir | .mcap> <out dir> --format mcd [--config my.yaml]
+    python3 mcap_convert.py <bag dir | .mcap> <out dir> --format mcd \\
+        --pose-tum traj_lidar_refined.txt [--depth-source lidar|map --map denoised_<tag>.pcd]
     python3 mcap_convert.py <bag dir | .mcap> <out dir> --format mcgs
     python3 mcap_convert.py <bag dir | .mcap> --inspect        # intrinsics, frames, topics
 
@@ -66,6 +72,7 @@ Do not save this file as mcap.py — it would hide the 'mcap' package it imports
 
 import argparse
 import glob
+import heapq
 import logging
 import os
 import re
@@ -74,6 +81,7 @@ from collections import deque, namedtuple
 
 import numpy as np
 import cv2
+from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation, Slerp
 
 if os.path.splitext(os.path.basename(__file__))[0] in ("mcap", "mcap_ros2"):
@@ -461,6 +469,19 @@ class PoseInterp:
         obj.frames = frames
         return obj
 
+    @classmethod
+    def from_tum(cls, path, **kw):
+        """A TUM file: 't x y z qx qy qz qw' per line (seconds), e.g. GLIM's
+        traj_lidar.txt or 01a's traj_lidar_refined.txt."""
+        a = np.loadtxt(os.path.expanduser(path), comments="#", ndmin=2)
+        if a.shape[1] < 8 or not len(a):
+            raise ConvertError(f"{path}: not a TUM trajectory (t x y z qx qy qz qw)")
+        ts = np.round(a[:, 0] * 1e9).astype(np.int64)
+        o = np.argsort(ts)
+        ts, a = ts[o], a[o]
+        keep = np.concatenate([[True], np.diff(ts) > 0])
+        return cls(ts[keep], a[keep, 1:4], a[keep, 4:8], **kw)
+
     def __len__(self):
         return len(self.ts)
 
@@ -490,6 +511,25 @@ class PoseInterp:
         return T
 
 
+class FramePoses:
+    """A pose stream of one frame re-expressed for another rigidly attached to
+    it: at(t) = base.at(t) @ T (T = pose of the new frame in the old one)."""
+
+    def __init__(self, base, T):
+        self.base, self.T = base, T
+        self.ts, self.max_gap, self.frames = base.ts, base.max_gap, base.frames
+
+    def __len__(self):
+        return len(self.base)
+
+    def dt_to_nearest(self, t_ns):
+        return self.base.dt_to_nearest(t_ns)
+
+    def at(self, t_ns, max_extrap_s=0.0):
+        T = self.base.at(t_ns, max_extrap_s)
+        return None if T is None else T @ self.T
+
+
 def tum_line(t_ns, T):
     """'t x y z qx qy qz qw' (seconds, metres) for one pose."""
     q = Rotation.from_matrix(T[:3, :3]).as_quat()
@@ -502,7 +542,10 @@ def write_tum(path, lines):
         f.write("\n".join(lines) + "\n")
 
 
-def _pose_source(paths, pose_bag, topic):
+def _pose_source(paths, pose_bag, topic, pose_tum=None):
+    if pose_tum:
+        log.info(f"  poses from {pose_tum}")
+        return PoseInterp.from_tum(pose_tum)
     pose_paths = _paths(pose_bag) if pose_bag else paths
     if pose_bag:
         log.info(f"  poses from {pose_bag}")
@@ -703,6 +746,260 @@ def _lidar_extrinsic(paths, edges, cam_frame, lidar, extrinsic=None):
 
 
 # =========================================================================== #
+# 6b. Depth rendered from a map
+# =========================================================================== #
+
+def _array_module(gpu=True):
+    """cupy when asked for and working, else numpy."""
+    if not gpu:
+        return np
+    # CuPy's CUB kernels compile against the system CUDA headers, which may be
+    # another CUDA major than the wheel (see 01_build_map); its own kernels do not
+    os.environ.setdefault("CUPY_ACCELERATORS", "")
+    try:
+        import cupy as cp
+        a = cp.arange(1 << 16, dtype=cp.int64)
+        float(cp.sort(a[::-1])[:3].sum() + (cp.eye(3, dtype=cp.float32) @ cp.ones(
+            3, dtype=cp.float32)).sum() + cp.flatnonzero(a < 5).size)
+        return cp
+    except Exception as e:
+        log.info(f"  map depth on the CPU (no usable GPU: {type(e).__name__})")
+        return np
+
+
+_PLY_T = {"float": "f4", "float32": "f4", "double": "f8", "float64": "f8", "uchar": "u1",
+          "uint8": "u1", "char": "i1", "int8": "i1", "ushort": "u2", "uint16": "u2",
+          "short": "i2", "int16": "i2", "uint": "u4", "uint32": "u4", "int": "i4",
+          "int32": "i4"}
+_PCD_T = {("F", 4): "f4", ("F", 8): "f8", ("U", 1): "u1", ("U", 2): "u2", ("U", 4): "u4",
+          ("I", 1): "i1", ("I", 2): "i2", ("I", 4): "i4"}
+
+
+def read_cloud(path):
+    """xyz (float64 Nx3) of a .ply or .pcd, ascii or binary, without open3d."""
+    with open(path, "rb") as f:
+        head = f.read(1 << 16)
+    low = path.lower()
+    if low.endswith(".ply"):
+        end = head.find(b"end_header")
+        if end < 0:
+            raise ConvertError(f"{path}: no end_header, not a PLY")
+        off = head.index(b"\n", end) + 1
+        lines = head[:end].decode("ascii", "replace").splitlines()
+        fmt = next(l.split()[1] for l in lines if l.startswith("format"))
+        n, props, in_vertex = 0, [], False
+        for l in lines:
+            w = l.split()
+            if w[:1] == ["element"]:
+                in_vertex = w[1] == "vertex"
+                n = int(w[2]) if in_vertex else n
+            elif w[:1] == ["property"] and in_vertex:
+                if w[1] == "list":
+                    raise ConvertError(f"{path}: list properties in the vertex element")
+                props.append((w[2], _PLY_T[w[1]]))
+        names = [q[0] for q in props]
+        if fmt == "ascii":
+            a = np.loadtxt(path, skiprows=head[:off].count(b"\n"), max_rows=n, ndmin=2)
+            return a[:, [names.index(k) for k in "xyz"]].astype(np.float64)
+        e = "<" if fmt == "binary_little_endian" else ">"
+        a = np.fromfile(path, dtype=np.dtype([(k, e + t) for k, t in props]), count=n,
+                        offset=off)
+    elif low.endswith(".pcd"):
+        hdr, off = {}, 0
+        for line in head.split(b"\n"):
+            off += len(line) + 1
+            w = line.decode("ascii", "replace").split()
+            if w and not w[0].startswith("#"):
+                hdr[w[0].upper()] = w[1:]
+            if w[:1] == ["DATA"]:
+                break
+        names = hdr["FIELDS"]
+        cnt = [int(c) for c in hdr.get("COUNT", ["1"] * len(names))]
+        n = int(hdr["POINTS"][0])
+        if hdr["DATA"][0] == "ascii":
+            a = np.loadtxt(path, skiprows=head[:off].count(b"\n"), max_rows=n, ndmin=2)
+            col = np.cumsum([0] + cnt)
+            return a[:, [col[names.index(k)] for k in "xyz"]].astype(np.float64)
+        if hdr["DATA"][0] != "binary":
+            raise ConvertError(f"{path}: PCD DATA {hdr['DATA'][0]} needs open3d")
+        dt = [(k, "<" + _PCD_T[(t, int(z))], (c,) if c > 1 else ())
+              for k, t, z, c in zip(names, hdr["TYPE"], hdr["SIZE"], cnt)]
+        a = np.fromfile(path, dtype=np.dtype(dt), count=n, offset=off)
+    else:
+        raise ConvertError(f"{path}: expected .ply or .pcd")
+    return np.stack([a["x"], a["y"], a["z"]], 1).astype(np.float64)
+
+
+def _voxel_centroids(P, voxel):
+    k = np.floor(P / voxel).astype(np.int64) + (1 << 20)
+    key = (k[:, 0] << 42) | (k[:, 1] << 21) | k[:, 2]
+    _, inv, cnt = np.unique(key, return_inverse=True, return_counts=True)
+    return np.stack([np.bincount(inv, P[:, i]) for i in range(3)], 1) / cnt[:, None]
+
+
+def _pca_normals(P, k=12, chunk=200_000):
+    tree = cKDTree(P)
+    N = np.empty_like(P)
+    for a in range(0, len(P), chunk):
+        _, idx = tree.query(P[a:a + chunk], k=min(k, len(P)))
+        Q = P[idx] - P[idx].mean(1, keepdims=True)
+        N[a:a + chunk] = np.linalg.eigh(np.einsum("nki,nkj->nij", Q, Q))[1][:, :, 0]
+    return N
+
+
+def load_map(path, voxel=0.02):
+    """A map cloud -> (points, normals) float32 Nx3, downsampled to `voxel`
+    (centroids) with normals from the local neighbourhood. open3d when
+    installed (fast), else numpy/scipy."""
+    path = os.path.expanduser(path)
+    if not os.path.exists(path):
+        raise ConvertError(f"map not found: {path}")
+    try:
+        import open3d as o3d
+    except ImportError:
+        o3d = None
+    if o3d is not None:
+        pc = o3d.io.read_point_cloud(path)
+        n0 = len(pc.points)
+        if not n0:
+            raise ConvertError(f"{path}: no points")
+        if voxel > 0:
+            pc = pc.voxel_down_sample(voxel)
+        pc.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(
+            radius=max(4 * voxel, 0.05), max_nn=16))
+        P, N = np.asarray(pc.points), np.asarray(pc.normals)
+    else:
+        P = read_cloud(path)
+        n0 = len(P)
+        if voxel > 0:
+            P = _voxel_centroids(P, voxel)
+        N = _pca_normals(P)
+    log.info(f"  map {path}: {n0} points -> {len(P)} at {voxel} m, normals estimated")
+    return P.astype(np.float32), N.astype(np.float32)
+
+
+class MapDepth:
+    """Depth images rendered from a point map as surfels: every map point is a
+    disc of radius splat x voxel on its local plane (its normal), a pixel's
+    depth is where its ray meets the nearest disc. That is exact on slanted
+    surfaces (a floor seen at a grazing angle), closes the gaps between
+    points, and the nearest disc hides what is behind it.
+
+    The map must be in the world frame of the poses used (the trajectory it
+    was built from). Things that moved are not in a map with them removed."""
+
+    def __init__(self, pts, nrm, K, voxel, dmin=0.2, dmax=10.0, splat=1.0, max_px=24,
+                 gpu=True, cell=2.0):
+        self.xp = xp = _array_module(gpu)
+        self.K, self.dmin, self.dmax = K, max(float(dmin), 1e-3), float(dmax)
+        self.rho = float(splat) * float(voxel)
+        self.max_px = int(max_px)
+        self.budget = 15_000_000 if xp is not np else 6_000_000   # candidates per batch
+        if xp is np:                    # cull by coarse cells; the GPU just transforms all
+            k = np.floor(pts / cell).astype(np.int64) + (1 << 20)
+            key = (k[:, 0] << 42) | (k[:, 1] << 21) | k[:, 2]
+            o = np.argsort(key, kind="stable")
+            ks = key[o]
+            self.start = np.flatnonzero(np.r_[True, ks[1:] != ks[:-1]])
+            self.count = np.diff(np.r_[self.start, len(ks)])
+            self.P, self.N = pts[o], nrm[o]
+            lo, hi = (np.minimum.reduceat(self.P, self.start),
+                      np.maximum.reduceat(self.P, self.start))
+            self.cen, self.rad = 0.5 * (lo + hi), 0.5 * np.linalg.norm(hi - lo, axis=1)
+        else:
+            self.P, self.N = xp.asarray(pts, xp.float32), xp.asarray(nrm, xp.float32)
+
+    def _visible_cells(self, R, t):
+        K = self.K
+        C = (self.cen - t) @ R
+        r = self.rad
+        ok = (C[:, 2] > -r) & (C[:, 2] - r < self.dmax + self.rho)
+        for a, b, c in ((K.cx / K.fx, 0, 1), ((K.width - K.cx) / K.fx, 0, -1),
+                        (K.cy / K.fy, 1, 1), ((K.height - K.cy) / K.fy, 1, -1)):
+            n = np.zeros(3)
+            n[b], n[2] = c, a                      # inward normal of a side plane
+            ok &= (C @ n) / np.linalg.norm(n) > -r
+        bi = np.flatnonzero(ok)
+        if not len(bi):
+            return None
+        return np.concatenate([np.arange(s, s + c) for s, c in
+                               zip(self.start[bi], self.count[bi])])
+
+    def render(self, T_wc):
+        """HxW float32 depth in metres (0 = no surface) for camera-to-world T_wc."""
+        xp, K, rho = self.xp, self.K, self.rho
+        W, H = int(K.width), int(K.height)
+        R, t = np.asarray(T_wc[:3, :3], np.float64), np.asarray(T_wc[:3, 3], np.float64)
+        if xp is np:
+            idx = self._visible_cells(R, t)
+            if idx is None:
+                return np.zeros((H, W), np.float32)
+            P, N = self.P[idx], self.N[idx]
+        else:
+            P, N = self.P, self.N
+        Rd, td = xp.asarray(R, xp.float32), xp.asarray(t, xp.float32)
+        fx, fy, cx, cy = (float(v) for v in K.k4)
+        keys = []
+        step = 4_000_000
+        for a in range(0, len(P), step):
+            Pc = (P[a:a + step] - td) @ Rd                # world -> camera
+            z = Pc[:, 2]
+            m = (z > self.dmin) & (z < self.dmax + rho)
+            Pc, Nc, z = Pc[m], N[a:a + step][m] @ Rd, z[m]
+            u0, v0 = fx * Pc[:, 0] / z + cx, fy * Pc[:, 1] / z + cy
+            r = xp.clip(xp.ceil(fx * rho / z), 1, self.max_px).astype(xp.int32)
+            m = (u0 > -r - 1) & (u0 < W + r) & (v0 > -r - 1) & (v0 < H + r)
+            Pc, Nc, u0, v0, r = Pc[m], Nc[m], xp.rint(u0[m]), xp.rint(v0[m]), r[m]
+            npd = (Nc * Pc).sum(1)
+            for rv in [int(x) for x in _host(xp.unique(r))]:
+                sel = xp.flatnonzero(r == rv)
+                g = xp.arange(-rv, rv + 1, dtype=xp.float32)
+                du, dv = (x.reshape(-1) for x in xp.meshgrid(g, g))
+                rows = max(1, self.budget // len(du))
+                for b in range(0, len(sel), rows):
+                    s_ = sel[b:b + rows]
+                    uc, vc = u0[s_, None] + du, v0[s_, None] + dv
+                    rx, ry = (uc - cx) / fx, (vc - cy) / fy
+                    p, n = Pc[s_], Nc[s_]
+                    nd = n[:, 0:1] * rx + n[:, 1:2] * ry + n[:, 2:3]
+                    zh = npd[s_, None] / xp.where(xp.abs(nd) > 1e-6, nd, xp.nan)
+                    d2 = ((rx * zh - p[:, 0:1]) ** 2 + (ry * zh - p[:, 1:2]) ** 2
+                          + (zh - p[:, 2:3]) ** 2)
+                    ok = ((uc >= 0) & (uc < W) & (vc >= 0) & (vc < H) & (d2 <= rho * rho)
+                          & (zh > self.dmin) & (zh <= self.dmax))
+                    pix = (vc[ok].astype(xp.int64) * W + uc[ok].astype(xp.int64))
+                    keys.append((pix << 32) | (zh[ok] * 1e4).astype(xp.int64))
+        D = xp.zeros(H * W, xp.float32)
+        if keys:
+            k = xp.sort(xp.concatenate(keys))             # by pixel, nearest first
+            pix = k >> 32
+            first = xp.concatenate([xp.ones(1, bool), pix[1:] != pix[:-1]])
+            D[pix[first]] = (k[first] & 0xFFFFFFFF).astype(xp.float32) * 1e-4
+        return _host(D.reshape(H, W))
+
+
+def _host(a):
+    """A cupy array -> numpy (numpy arrays pass through)."""
+    return a.get() if hasattr(a, "get") and not isinstance(a, np.ndarray) else np.asarray(a)
+
+
+def iter_map_depth(paths, color, cam_pose, renderer):
+    """Colour images with depth rendered from the map at the camera pose of
+    each: (t_ns, colour msg, depth()) like iter_lidar_depth."""
+    for m in read(paths, [color]):
+        msg = m.ros_msg
+        t = stamp_ns(msg)
+
+        def depth(t=t):
+            T = cam_pose(t)
+            if T is None:
+                return None
+            D = renderer.render(T)
+            return (D, D > 0) if (D > 0).any() else None
+        yield t, msg, depth
+
+
+# =========================================================================== #
 # 7. Converter: Replica (SplaTAM, NICE-SLAM, Point-SLAM, GradSLAM)
 # =========================================================================== #
 
@@ -711,11 +1008,12 @@ def to_replica(bag, out, *,
                depth="/mobile_1/zed/depth/depth_registered",
                info="/mobile_1/zed/left/camera_info",
                pose="/mobile_1/global_pose",
-               pose_bag=None,
+               pose_bag=None, pose_tum=None,
                pose_is_camera=False, body_frame=None, extrinsic=None, cam_frame=None,
                depth_source="lidar", lidar="/mobile_1/ouster/points", lidar_scans=1,
                lidar_max_dt_ms=100.0, lidar_extrinsic=None,
                occlusion_px=7, occlusion_margin=0.1,
+               map=None, map_voxel=0.02, splat=1.0, max_splat_px=24, gpu=True,
                sync_tol_ms=10.0, max_pose_dt_ms=0.0,
                depth_scale=1000.0, depth_input_scale=0.001,
                depth_min=0.2, depth_max=10.0,
@@ -725,11 +1023,20 @@ def to_replica(bag, out, *,
     bag, out           recording (.mcap or bag dir, or list of .mcap) / output dir
     color, info        colour image and its CameraInfo
     pose, pose_bag     pose topic (PoseStamped/Odometry), optionally from another bag
+    pose_tum           poses from a TUM file instead (e.g. traj_lidar_refined.txt);
+                       body_frame then defaults to the frame_id of `lidar` (the
+                       frame GLIM / 01a trajectories are of)
     pose_is_camera / body_frame / extrinsic
-                       how to get the camera pose from `pose` (exactly one, see
+                       how to get the camera pose from the poses (exactly one, see
                        camera_extrinsic()); cam_frame defaults to the colour frame_id
     depth_source       "lidar": depth projected from `lidar` (PointCloud2) into the
-                       colour camera; "zed": the `depth` image (aligned to colour)
+                       colour camera; "map": rendered from the map cloud `map`
+                       (MapDepth; give the trajectory the map was built from as
+                       pose_tum); "zed": the `depth` image (aligned to colour)
+    map, map_voxel     [map] the map (.pcd/.ply) and the voxel it is rendered at
+    splat, max_splat_px
+                       [map] surfel radius in voxels, and its cap in pixels
+    gpu                [map] render on the GPU when cupy works
     lidar_scans        scans rendered into each frame (nearest in time; >1 = denser,
                        each moved to the image time through the poses)
     lidar_max_dt_ms    drop a frame when no scan is this close to it
@@ -746,8 +1053,10 @@ def to_replica(bag, out, *,
     jpeg_quality       colour JPEG quality
     Returns a dict with frames, candidates, dropped counts, intrinsics, path length.
     """
-    if depth_source not in ("lidar", "zed"):
-        raise ConvertError(f"depth_source must be lidar or zed, got {depth_source!r}")
+    if depth_source not in ("lidar", "map", "zed"):
+        raise ConvertError(f"depth_source must be lidar, map or zed, got {depth_source!r}")
+    if depth_source == "map" and not map:
+        raise ConvertError("depth_source map needs the map cloud (--map)")
     paths = _paths(bag)
     res_dir = os.path.join(out, "results")
     os.makedirs(res_dir, exist_ok=True)
@@ -763,7 +1072,7 @@ def to_replica(bag, out, *,
     log.info(f"  {K.width}x{K.height}  fx={K.fx:.3f} fy={K.fy:.3f} "
              f"cx={K.cx:.3f} cy={K.cy:.3f}")
 
-    interp = _pose_source(paths, pose_bag, pose)
+    interp = _pose_source(paths, pose_bag, pose, pose_tum)
     log.info(f"  {len(interp)} poses, frames seen: {sorted(interp.frames)}, "
              f"max gap {interp.max_gap*1e3:.0f} ms")
     if pose_bag:   # separate pose bag: the classic place for a clock mismatch
@@ -783,14 +1092,32 @@ def to_replica(bag, out, *,
         m = first_msg(paths, color)
         cam_frame = m.header.frame_id.lstrip("/") if m is not None else None
     log.info(f"  colour image frame_id: {cam_frame}")
+    if pose_tum and body_frame is None and extrinsic is None and not pose_is_camera:
+        m = first_msg(paths, lidar)
+        if m is None:
+            raise ConvertError(f"pose_tum: say which frame its poses are of (body_frame); "
+                               f"no messages on {lidar} to take it from")
+        body_frame = m.header.frame_id.lstrip("/")
+        log.info(f"  {pose_tum} taken as poses of {body_frame} (the {lidar} frame)")
     T_bc = camera_extrinsic(edges, cam_frame, body_frame, extrinsic, pose_is_camera)
 
-    if depth_source == "lidar":
-        T_cl = _lidar_extrinsic(paths, edges, cam_frame, lidar, lidar_extrinsic)
+    def cam_pose(t_ns):
+        T = interp.at(t_ns)
+        return None if T is None else T @ T_bc
 
-        def cam_pose(t_ns):
-            T = interp.at(t_ns)
-            return None if T is None else T @ T_bc
+    if depth_source == "map":
+        if not pose_tum:
+            log.warning("  depth from a map: the poses must be in the map's frame -- give "
+                        "the trajectory the map was built from (pose_tum)")
+        pts, nrm = load_map(map, map_voxel)
+        renderer = MapDepth(pts, nrm, K, map_voxel, depth_min, depth_max, splat,
+                            max_splat_px, gpu)
+        del pts, nrm
+        frames = iter_map_depth(paths, color, cam_pose, renderer)
+        src = (f"map {map} at {map_voxel} m, surfels of {splat} voxel"
+               f"{' on the GPU' if renderer.xp is not np else ''}")
+    elif depth_source == "lidar":
+        T_cl = _lidar_extrinsic(paths, edges, cam_frame, lidar, lidar_extrinsic)
         frames = iter_lidar_depth(paths, color, lidar, T_cl, cam_pose, K,
                                   n_scans=max(1, int(lidar_scans)),
                                   max_dt_s=lidar_max_dt_ms * 1e-3, dmin=depth_min,
@@ -843,8 +1170,8 @@ def to_replica(bag, out, *,
         if max_frames and len(traj) >= max_frames:
             break
     if not traj:
-        what = "colour images with lidar depth" if depth_source == "lidar" \
-            else "synchronised colour/depth pairs"
+        what = (f"colour images with {depth_source} depth" if depth_source != "zed"
+                else "synchronised colour/depth pairs")
         raise ConvertError(f"no {what} with a valid pose")
 
     with open(os.path.join(out, "traj.txt"), "w") as f:
@@ -862,14 +1189,16 @@ def to_replica(bag, out, *,
     pd = np.asarray(pose_dt) * 1e3 if pose_dt else np.zeros(1)
     report = (
         f"frames written      : {len(traj)}\n"
-        + (f"colour images       : {n}\n" if depth_source == "lidar"
+        + (f"colour images       : {n}\n" if depth_source != "zed"
            else f"pairs found         : {n}\n") +
         f"dropped (no pose)   : {skipped_pose}\n"
         f"dropped (pose dt)   : {skipped_dt}"
         + (f"  (gate {max_pose_dt_ms:.0f} ms)\n" if gate > 0 else "  (gate off)\n")
         + (f"dropped (no lidar) : {skipped_depth}  (no scan within "
            f"{lidar_max_dt_ms:.0f} ms, or no point in view)\n"
-           if depth_source == "lidar" else "") +
+           if depth_source == "lidar" else
+           f"dropped (no map)   : {skipped_depth}  (nothing of the map in view)\n"
+           if depth_source == "map" else "") +
         f"depth source        : {src}\n"
         f"pose dt of kept     : median {np.median(pd):.1f} ms, "
         f"p95 {np.percentile(pd, 95):.1f} ms, max {pd.max():.1f} ms\n"
@@ -911,6 +1240,11 @@ DEFAULT_MCD_CONFIG = """\
 #   frame         : the frame the given extrinsic refers to; if the messages are stamped
 #                   in another frame, the link between them is chained from /tf_static
 # Sensor types: image (encoding rgb8|mono8), depth (input_scale, min, max), imu, pointcloud
+# A depth sensor's `source`: topic (its `topic`, e.g. the ZED depth), lidar (the LiDAR
+# projected into `camera`, `scans` per frame) or map (rendered from `map` at `voxel` m);
+# lidar/map depth is made for every image of `camera` (default: its same_as).
+# pose: `topic` (PoseStamped/Odometry), or `tum` (a TUM file, e.g. 01a's
+# traj_lidar_refined.txt) of the frame `tum_frame`, chained to `frame` via /tf_static.
 
 sequence: coop2_mobile_1
 compress: false            # true = bz2 like the released MCD bags (slower)
@@ -937,11 +1271,14 @@ sensors:
 
   zed_depth:                                 # registered to the left RGB
     type: depth
+    source: lidar                            # topic = the ZED depth below; lidar; map
     topic: /mobile_1/zed/depth/depth_registered
     info: /mobile_1/zed/depth/camera_info
     out_topic: /zed/depth/image_raw          # 16UC1 millimetres
     bag: zed
     same_as: zed_left
+    min: 0.2
+    max: 10.0
 
   zed_imu:
     type: imu
@@ -982,10 +1319,12 @@ def load_mcd_config(config=None):
         with open(config) as f:
             cfg, src = yaml.safe_load(f), config
     pose_cfg, sensors = cfg.get("pose") or {}, cfg.get("sensors") or {}
-    if "topic" not in pose_cfg or "frame" not in pose_cfg or not sensors:
-        raise ConvertError("config needs pose.topic, pose.frame and at least one sensor")
+    if not ("topic" in pose_cfg or "tum" in pose_cfg) or "frame" not in pose_cfg or not sensors:
+        raise ConvertError("config needs pose.topic (or pose.tum), pose.frame and at "
+                           "least one sensor")
     for name, s in sensors.items():
-        for k in ("type", "topic", "out_topic"):
+        made = s.get("type") == "depth" and s.get("source") in ("lidar", "map")
+        for k in ("type", "out_topic") + (() if made else ("topic",)):
             if k not in s:
                 raise ConvertError(f"sensor '{name}' needs '{k}'")
         if s["type"] not in MSGTYPE:
@@ -1133,7 +1472,10 @@ class _Ros1Writer:
         return self.ts.serialize_ros1(out, MSGTYPE[typ])
 
 
-def _write_mcd_bags(paths, out, seq, cfg, sensors):
+def _write_mcd_bags(paths, out, seq, cfg, sensors, generated=None):
+    """generated: {sensor: iterator of (t_ns, colour msg, depth())} for depth
+    made from the lidar or the map, merged in by time."""
+    generated = generated or {}
     rw = _Ros1Writer()
     bags = {}
     for name, s in sensors.items():
@@ -1148,18 +1490,44 @@ def _write_mcd_bags(paths, out, seq, cfg, sensors):
         if cfg.get("compress"):
             w.set_compression(rw.Writer.CompressionFormat.BZ2)
         w.open()
-        by_topic = {}
+        by_topic, made = {}, {}
         for name in names:
             s = sensors[name]
             conn = w.add_connection(s["out_topic"], MSGTYPE[s["type"]], typestore=rw.ts)
-            by_topic.setdefault(s["topic"], []).append((name, conn))
+            if name in generated:
+                made[name] = conn
+            else:
+                by_topic.setdefault(s["topic"], []).append((name, conn))
             counts[name], stamps[name] = 0, []
-        for m in read(paths, list(by_topic)):
-            msg, t = m.ros_msg, stamp_ns(m.ros_msg)
-            for name, conn in by_topic[m.channel.topic]:
-                w.write(conn, t, rw.convert(sensors[name], name, msg, t))
+
+        def recorded():
+            if by_topic:
+                for m in read(paths, list(by_topic)):
+                    yield stamp_ns(m.ros_msg), 0, m
+
+        def rendered(name):
+            for t, _, depth in generated[name]:
+                got = depth()
+                if got is not None:
+                    yield t, 1, (name, got[0])
+
+        for t, kind, item in heapq.merge(recorded(), *(rendered(n) for n in made),
+                                         key=lambda x: x[0]):
+            if kind == 0:
+                for name, conn in by_topic[item.channel.topic]:
+                    w.write(conn, t, rw.convert(sensors[name], name, item.ros_msg, t))
+                    counts[name] += 1
+                    stamps[name].append(t)
+            else:
+                name, D = item
+                s = sensors[name]
+                img = rw.image(t, np.clip(np.round(D * 1000.0), 0, 65535).astype(np.uint16),
+                               "16UC1", s.get("out_frame", name), s["out_topic"])
+                w.write(made[name], t, rw.ts.serialize_ros1(img, MSGTYPE["depth"]))
                 counts[name] += 1
                 stamps[name].append(t)
+                if counts[name] % 1000 == 0:
+                    log.info(f"  {name}: {counts[name]} depth frames")
         w.close()
         files.append(p)
         log.info(f"  {p}: " + ", ".join(f"{n} {counts[n]}" for n in names))
@@ -1299,38 +1667,118 @@ def _write_mcd_sensor_yamls(out, cfg, sensors, done, paths):
     return written
 
 
-def to_mcd(bag, out, config=None):
+def to_mcd(bag, out, config=None, *, pose_tum=None, tum_frame=None, depth_source=None,
+           map=None, map_voxel=None, lidar=None, lidar_scans=None, splat=1.0, gpu=True):
     """MCD dataset layout.
 
     bag, out   recording (.mcap or bag dir, or list of .mcap) / output dir
     config     None = built-in mobile_1 config (DEFAULT_MCD_CONFIG), a yaml path,
                or a dict with the same structure. Top-level keys:
-                 sequence, compress, merged, pose{topic, frame, sample_at|rate_hz, bag},
+                 sequence, compress, merged,
+                 pose{topic | tum + tum_frame, frame, sample_at|rate_hz, bag},
                  yaml{imu, camera, lidar_timestamp_end}, sensors{name: {...}}
+    The keyword arguments override the config: pose_tum / tum_frame the pose
+    source, depth_source (topic | lidar | map) / map / map_voxel / lidar /
+    lidar_scans every depth sensor.
     Returns a dict with bags, message counts, ground-truth rows, missing extrinsics.
     """
     paths = _paths(bag)
     cfg = load_mcd_config(config)
-    pose_cfg, sensors = cfg["pose"], cfg["sensors"]
+    pose_cfg = dict(cfg["pose"])
+    sensors = {k: dict(v) for k, v in cfg["sensors"].items()}
     seq = cfg.get("sequence") or os.path.basename(os.path.normpath(out))
     body_frame = pose_cfg["frame"]
     os.makedirs(out, exist_ok=True)
 
+    def lidar_topic():
+        t = lidar or next((v["topic"] for v in sensors.values()
+                           if v["type"] == "pointcloud"), None)
+        if t is None:
+            raise ConvertError("no pointcloud sensor in the config and no lidar topic given")
+        return t
+
     log.info("pass 1: poses / tf_static / extrinsics")
-    interp = _pose_source(paths, pose_cfg.get("bag"), pose_cfg["topic"])
-    log.info(f"  {len(interp)} poses on {pose_cfg['topic']} (body = {body_frame}), "
-             f"max gap {interp.max_gap*1e3:.0f} ms")
     edges = build_tf_static(paths)
     if edges:
         log.info(f"  tf_static frames: {sorted({f for e in edges for f in e})}")
+    tum = pose_tum or pose_cfg.get("tum")
+    if tum:
+        base = PoseInterp.from_tum(tum)
+        tf = tum_frame or pose_cfg.get("tum_frame")
+        if not tf:
+            m = first_msg(paths, lidar_topic())
+            tf = m.header.frame_id.lstrip("/") if m is not None else None
+        T = lookup_static(edges, tf, body_frame) if tf else None
+        if T is None:
+            raise ConvertError(f"{tum}: no /tf_static link from its frame {tf!r} to the body "
+                               f"frame {body_frame}; give pose.tum_frame / --tum-frame")
+        interp = FramePoses(base, T)
+        log.info(f"  {len(base)} poses from {tum} ({tf}), chained to {body_frame}: "
+                 f"t={np.round(T[:3, 3], 4).tolist()} m")
+    else:
+        interp = _pose_source(paths, pose_cfg.get("bag"), pose_cfg["topic"])
+        log.info(f"  {len(interp)} poses on {pose_cfg['topic']} (body = {body_frame}), "
+                 f"max gap {interp.max_gap*1e3:.0f} ms")
+    # depth made from the lidar or the map is made for every image of its
+    # camera: it takes the camera's topic, intrinsics and (if it has none) extrinsic
+    made = {}
+    for name, s in sensors.items():
+        src = depth_source or s.get("source", "topic")
+        if s["type"] != "depth" or src in ("topic", "zed"):
+            continue
+        if src not in ("lidar", "map"):
+            raise ConvertError(f"sensor '{name}': source {src!r} (topic | lidar | map)")
+        cam = s.get("camera") or s.get("same_as")
+        if cam not in sensors or sensors[cam]["type"] != "image" or not sensors[cam].get("info"):
+            raise ConvertError(f"depth sensor '{name}' from {src} needs camera: <an image "
+                               "sensor with info>")
+        s["topic"], s["info"] = sensors[cam]["topic"], sensors[cam]["info"]
+        made[name] = (src, cam)
     done, how = {}, {}
     for name, s in sensors.items():
         done[name], how[name] = resolve_extrinsic(name, s, body_frame, edges, done, paths)
+        if done[name] is None and name in made and done.get(made[name][1]) is not None:
+            done[name], how[name] = done[made[name][1]], f"same as {made[name][1]}"
         flag = "" if done[name] is not None else "  <-- MISSING, T left empty"
         log.info(f"  {name:<14} {how[name]}{flag}")
 
+    generated, renderers = {}, {}
+    for name, (src, cam) in made.items():
+        s = sensors[name]
+        if done.get(cam) is None:
+            raise ConvertError(f"depth sensor '{name}': camera '{cam}' has no extrinsic")
+        info, img = first_msg(paths, s["info"]), first_msg(paths, s["topic"])
+        if info is None or img is None:
+            raise ConvertError(f"depth sensor '{name}': no messages on {s['topic']} / {s['info']}")
+        K = intrinsics_from_info(info)
+        dmin, dmax = float(s.get("min", 0.2)), float(s.get("max", 10.0))
+        T_bc = done[cam]
+
+        def cam_pose(t_ns, T_bc=T_bc):
+            T = interp.at(t_ns)
+            return None if T is None else T @ T_bc
+        if src == "lidar":
+            lt = lidar or s.get("lidar") or lidar_topic()
+            T_cl = _lidar_extrinsic(paths, edges, img.header.frame_id.lstrip("/"), lt)
+            n = int(lidar_scans or s.get("scans", 1))
+            generated[name] = iter_lidar_depth(paths, s["topic"], lt, T_cl, cam_pose, K,
+                                               n_scans=n, dmin=dmin, dmax=dmax)
+            how[name] += f"; depth from {lt}, {n} scan(s) per {cam} image"
+        else:
+            mp = map or s.get("map")
+            if not mp:
+                raise ConvertError(f"depth sensor '{name}' from the map needs map (--map)")
+            vx = float(map_voxel or s.get("voxel", 0.02))
+            key = (mp, vx, K.k4, K.width, K.height, dmin, dmax)
+            if key not in renderers:
+                pts, nrm = load_map(mp, vx)
+                renderers[key] = MapDepth(pts, nrm, K, vx, dmin, dmax, splat, gpu=gpu)
+            generated[name] = iter_map_depth(paths, s["topic"], cam_pose, renderers[key])
+            how[name] += f"; depth rendered from {mp} at {vx} m for every {cam} image"
+        log.info(f"  {name:<14} {how[name]}")
+
     log.info("pass 2: writing bags")
-    files, counts, stamps = _write_mcd_bags(paths, out, seq, cfg, sensors)
+    files, counts, stamps = _write_mcd_bags(paths, out, seq, cfg, sensors, generated)
     n_gt = _write_mcd_groundtruth(out, pose_cfg, interp, stamps)
     _write_mcd_calibration(out, seq, body_frame, sensors, done, how, paths)
     yamls = _write_mcd_sensor_yamls(out, cfg, sensors, done, paths)
@@ -1533,6 +1981,12 @@ def _cli():
     g.add_argument("--pose", default="/mobile_1/global_pose", help="pose topic")
     g.add_argument("--pose-bag", default=None,
                    help="read --pose from this bag instead (same clock as the images)")
+    g.add_argument("--pose-tum", default=None,
+                   help="poses from a TUM file instead (e.g. traj_lidar_refined.txt); "
+                        "replica, mcd")
+    g.add_argument("--tum-frame", default=None,
+                   help="the frame the --pose-tum poses are of (default: the frame of "
+                        "--lidar, which GLIM / 01a trajectories are)")
 
     g = ap.add_argument_group("camera pose (replica: exactly one)")
     g.add_argument("--pose-is-camera", action="store_true",
@@ -1545,10 +1999,17 @@ def _cli():
     g.add_argument("--cam-frame", default=None,
                    help="camera optical frame (default: frame_id of --color)")
 
-    g = ap.add_argument_group("depth from the lidar (replica)")
-    g.add_argument("--depth-source", choices=["lidar", "zed"], default="lidar",
-                   help="lidar: project --lidar into the colour camera (default); "
-                        "zed: the --depth image")
+    g = ap.add_argument_group("depth (replica; mcd: overrides the config's depth sensors)")
+    g.add_argument("--depth-source", choices=["lidar", "map", "zed"], default=None,
+                   help="lidar: project --lidar into the colour camera (replica default); "
+                        "map: render the --map cloud; zed: the --depth image")
+    g.add_argument("--map", default=None,
+                   help="[map] the map cloud (.pcd/.ply), in the frame of --pose-tum")
+    g.add_argument("--map-voxel", type=float, default=0.02,
+                   help="[map] voxel the map is rendered at (m)")
+    g.add_argument("--splat", type=float, default=1.0,
+                   help="[map] surfel radius in voxels (bigger closes more holes)")
+    g.add_argument("--cpu", action="store_true", help="[map] render on the CPU")
     g.add_argument("--lidar", default="/mobile_1/ouster/points", help="PointCloud2 topic")
     g.add_argument("--lidar-scans", type=int, default=1,
                    help="scans rendered into each frame, nearest in time (more = denser)")
@@ -1594,9 +2055,12 @@ def _cli():
             ap.error("output directory required")
         if a.format == "replica":
             to_replica(a.bag, a.out, color=a.color, depth=a.depth, info=a.info,
-                       pose=a.pose, pose_bag=a.pose_bag, pose_is_camera=a.pose_is_camera,
-                       body_frame=a.body_frame, extrinsic=a.extrinsic, cam_frame=a.cam_frame,
-                       depth_source=a.depth_source, lidar=a.lidar,
+                       pose=a.pose, pose_bag=a.pose_bag, pose_tum=a.pose_tum,
+                       pose_is_camera=a.pose_is_camera,
+                       body_frame=a.body_frame or a.tum_frame, extrinsic=a.extrinsic,
+                       cam_frame=a.cam_frame, depth_source=a.depth_source or "lidar",
+                       map=a.map, map_voxel=a.map_voxel, splat=a.splat, gpu=not a.cpu,
+                       lidar=a.lidar,
                        lidar_scans=a.lidar_scans, lidar_max_dt_ms=a.lidar_max_dt_ms,
                        lidar_extrinsic=a.lidar_extrinsic, occlusion_px=a.occlusion_px,
                        occlusion_margin=a.occlusion_margin,
@@ -1605,7 +2069,12 @@ def _cli():
                        depth_min=a.depth_min, depth_max=a.depth_max, every=a.every,
                        max_frames=a.max_frames, jpeg_quality=a.jpeg_quality)
         elif a.format == "mcd":
-            to_mcd(a.bag, a.out, config=a.config)
+            to_mcd(a.bag, a.out, config=a.config, pose_tum=a.pose_tum, tum_frame=a.tum_frame,
+                   depth_source=a.depth_source, map=a.map,
+                   map_voxel=a.map_voxel if a.depth_source == "map" or a.map else None,
+                   lidar=None if a.lidar == "/mobile_1/ouster/points" else a.lidar,
+                   lidar_scans=a.lidar_scans if a.lidar_scans != 1 else None,
+                   splat=a.splat, gpu=not a.cpu)
         else:
             to_mcgs(a.bag, a.out, left=a.color, right=a.right, left_info=a.info,
                     right_info=a.right_info, pose=a.pose, pose_bag=a.pose_bag,

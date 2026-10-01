@@ -383,25 +383,41 @@ as `<parent> -> <root of the tree>`, composed through the static chain, so the
 lookups give exactly what was given. The result is a new bag with every other
 topic copied; all static transforms in one latched /tf_static.
 
-## Datasets: Replica with lidar depth (`datasets/mcap_convert.py`)
+## Datasets: Replica and MCD (`datasets/mcap_convert.py`)
 
 ```
-python scoop_pipeline/datasets/mcap_convert.py <bag> <out> --format replica --pose-is-camera
-python scoop_pipeline/datasets/mcap_convert.py <bag> <out> --format replica --pose-is-camera \
-    --lidar-scans 5
-python scoop_pipeline/datasets/mcap_convert.py <bag> --inspect
+B=<merged bag>  P=<data>/processed/<date>/<pass>
+python scoop_pipeline/datasets/mcap_convert.py $B $P/datasets/replica_map --format replica \
+    --pose-tum $P/odometry/mobile_1/traj_lidar_refined.txt \
+    --depth-source map --map $P/mapping/denoised_<pass>_<date>.pcd
+python scoop_pipeline/datasets/mcap_convert.py $B $P/datasets/replica_lidar --format replica \
+    --pose-tum $P/odometry/mobile_1/traj_lidar_refined.txt --lidar-scans 5
+python scoop_pipeline/datasets/mcap_convert.py $B $P/datasets/mcd --format mcd \
+    --pose-tum $P/odometry/mobile_1/traj_lidar_refined.txt --depth-source map --map ...
+python scoop_pipeline/datasets/mcap_convert.py $B --inspect
 ```
 
-Writes `results/frameNNNNNN.jpg` + `depthNNNNNN.png` (uint16 mm), `traj.txt`
-(camera-to-world, OpenCV axes), `splatam_data_config.yaml` and `report.txt`.
-The depth is the lidar (`--lidar /mobile_1/ouster/points`) seen from the
-colour camera: the `--lidar-scans` scans nearest each image (default 1),
-every point moved to the image time through the poses at its own time (the
-Ouster `t` field), projected with the colour camera_info, nearest point per
-pixel, 0 where there is none. The lidar-camera transform is chained from
-`/tf_static` (`--lidar-extrinsic` overrides it), so the bag needs the
-`os_lidar -> zed_left_camera_optical_frame` calibration (merge_bags /
-tf_edit.py `--add-file`). `--occlusion-px` / `--occlusion-margin` drop lidar
-points the camera cannot see (wall behind a nearer object). `--depth-source
-zed` uses the ZED depth image instead. The file is standalone (no scoop
-imports); `--format mcd` and `mcgs` are unchanged.
+Replica: `results/frameNNNNNN.jpg` + `depthNNNNNN.png` (uint16 mm), `traj.txt`
+(camera-to-world, OpenCV axes), `splatam_data_config.yaml`, `report.txt`.
+MCD: `<seq>_merged.bag` (ROS1), `groundtruth/pose_inW.csv`, `gt_tum.txt`,
+`calibration.yaml`, `camera.yaml` / `imu.yaml` / `lidar.yaml`.
+
+Poses: `--pose-tum` takes a TUM trajectory (the refined one, of the LiDAR
+frame; `--tum-frame` says otherwise), chained to the camera (replica) or the
+MCD body frame through the bag's `/tf_static`; without it, the `--pose` topic.
+
+Depth (`--depth-source`; for MCD it replaces the config's depth sensors):
+- `lidar` (replica default): the `--lidar-scans` scans nearest each image,
+  every point moved to the image time through the poses at its own time,
+  projected with the colour camera_info, nearest point per pixel, 0 where
+  there is none; `--occlusion-px` / `--occlusion-margin` drop points the camera
+  cannot see. Sparse.
+- `map`: rendered from the built map (`--map`, at `--map-voxel`, 2 cm) as
+  surfels -- each map point a disc on its local plane, the pixel's depth where
+  its ray meets the nearest disc: dense, exact on slanted surfaces, edges
+  about one voxel wide. The map is in the frame of the trajectory it was built
+  from, so give that trajectory as `--pose-tum`. Moving things are not in the
+  map (01 removed them). On the GPU when cupy works (`--cpu` to stay off it).
+- `zed`: the ZED depth image.
+
+The file is standalone (no scoop imports).
