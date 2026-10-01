@@ -128,12 +128,14 @@ def write_bag(path):
 def check_frames(out, max_err=0.05):
     """Fraction of rendered pixels within max_err of the true depth, mean fill."""
     traj = np.loadtxt(os.path.join(out, "traj.txt")).reshape(-1, 4, 4)
+    cfg = open(os.path.join(out, "splatam_data_config.yaml")).read()
+    scale = float(cfg.split("png_depth_scale:")[1].split()[0])
     good = total = 0
     fills = []
     for i, T in enumerate(traj):
         t = T0 + int(round(T[0, 3] / SPEED * S))
         d = cv2.imread(os.path.join(out, "results", f"depth{i:06d}.png"),
-                       cv2.IMREAD_UNCHANGED).astype(float) / 1000.0
+                       cv2.IMREAD_UNCHANGED).astype(float) / scale
         m = d > 0
         good += int((np.abs(d - true_depth(t))[m] < max_err).sum())
         total += int(m.sum())
@@ -168,6 +170,7 @@ def test_lidar_depth_matches_scene(tmp):
     assert np.allclose(traj[:, :3, :3], np.eye(3)) and np.all(np.diff(traj[:, 0, 3]) > 0)
     cfg = open(os.path.join(tmp, "one", "splatam_data_config.yaml")).read()
     assert "fx: 100.000000" in cfg and "image_width: 160" in cfg
+    assert "png_depth_scale: 6553.5" in cfg, "Replica's depth scale by default"
 
 
 def test_missing_extrinsic_is_an_error(tmp):

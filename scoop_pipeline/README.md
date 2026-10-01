@@ -397,7 +397,8 @@ python scoop_pipeline/datasets/mcap_convert.py $B $P/datasets/mcd --format mcd \
 python scoop_pipeline/datasets/mcap_convert.py $B --inspect
 ```
 
-Replica: `results/frameNNNNNN.jpg` + `depthNNNNNN.png` (uint16 mm), `traj.txt`
+Replica: `results/frameNNNNNN.jpg` + `depthNNNNNN.png` (uint16, metres = value /
+6553.5 as Replica, so 0-10 m; `--depth-scale 1000` for mm), `traj.txt`
 (camera-to-world, OpenCV axes), `splatam_data_config.yaml`, `report.txt`.
 MCD: `<seq>_merged.bag` (ROS1), `groundtruth/pose_inW.csv`, `gt_tum.txt`,
 `calibration.yaml`, `camera.yaml` / `imu.yaml` / `lidar.yaml`.

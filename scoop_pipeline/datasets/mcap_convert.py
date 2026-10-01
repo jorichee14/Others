@@ -7,6 +7,7 @@ Output formats
 replica   RGB-D sequence for SplaTAM / NICE-SLAM / Point-SLAM / GradSLAM
             <out>/results/frame000000.jpg    colour (JPEG)
             <out>/results/depth000000.png    uint16 depth, metres = pixel / png_depth_scale
+                                             (6553.5 as Replica: 0..65535 = 0..10 m)
             <out>/traj.txt                   camera-to-world 4x4 per frame (row-major,
                                              OpenCV axes: x right, y down, z forward)
             <out>/splatam_data_config.yaml   drop-in SplaTAM data config
@@ -1015,7 +1016,7 @@ def to_replica(bag, out, *,
                occlusion_px=7, occlusion_margin=0.1,
                map=None, map_voxel=0.02, splat=1.0, max_splat_px=24, gpu=True,
                sync_tol_ms=10.0, max_pose_dt_ms=0.0,
-               depth_scale=1000.0, depth_input_scale=0.001,
+               depth_scale=6553.5, depth_input_scale=0.001,
                depth_min=0.2, depth_max=10.0,
                every=1, max_frames=0, jpeg_quality=95):
     """Replica-style RGB-D sequence.
@@ -1046,7 +1047,8 @@ def to_replica(bag, out, *,
                        hidden-point filter of project_depth() (occlusion_px 0 = off)
     sync_tol_ms        [zed] max colour/depth stamp difference for a pair
     max_pose_dt_ms     keep a frame only within this of a real pose sample (0 = off)
-    depth_scale        PNG units per metre (1000 = mm)
+    depth_scale        PNG units per metre: 6553.5 as Replica (uint16 0..65535 =
+                       0..10 m, 0.15 mm steps); 1000 = mm (up to 65.5 m)
     depth_input_scale  [zed] metres per unit of integer input depth (0.001 = mm)
     depth_min/max      metres; outside -> 0 (invalid)
     every, max_frames  keep every Nth image / stop after N frames (0 = all)
@@ -1055,6 +1057,10 @@ def to_replica(bag, out, *,
     """
     if depth_source not in ("lidar", "map", "zed"):
         raise ConvertError(f"depth_source must be lidar, map or zed, got {depth_source!r}")
+    if depth_max * depth_scale > 65535.5:
+        log.warning(f"  depth_max {depth_max} m does not fit a uint16 PNG at {depth_scale} "
+                    f"units/m (max {65535 / depth_scale:.2f} m): farther depth is clipped "
+                    f"to that. Lower --depth-scale (1000 = mm) or --depth-max")
     if depth_source == "map" and not map:
         raise ConvertError("depth_source map needs the map cloud (--map)")
     paths = _paths(bag)
@@ -2034,7 +2040,8 @@ def _cli():
     g.add_argument("--jpeg-quality", type=int, default=95)
 
     g = ap.add_argument_group("depth (replica)")
-    g.add_argument("--depth-scale", type=float, default=1000.0, help="PNG units per metre")
+    g.add_argument("--depth-scale", type=float, default=6553.5,
+                   help="PNG units per metre: 6553.5 as Replica (0-10 m), 1000 = mm")
     g.add_argument("--depth-input-scale", type=float, default=0.001,
                    help="[zed] metres per unit of integer input depth")
     g.add_argument("--depth-min", type=float, default=0.2)
