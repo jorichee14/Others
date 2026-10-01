@@ -36,7 +36,8 @@ processing/          raw recordings -> processed bags (command lines around scoo
   tf_edit.py         show or change a bag's TF: drop edges, add transforms, new odometry
 map_stages/          map from LiDAR + GLIM poses (01_build_map.py, 01a_refine_poses.py, ...);
                      calibration read from the bag (camera_info + /tf_static); outputs in
-                     data/processed/<date>/<pass>/{mapping,odometry/<machine>,frames,bags,comms}
+                     data/processed/<date>/<pass>/{mapping,odometry/<machine>,frames,bags,comms};
+                     datasets/<machine>/<format>_<depth>_<pass>_<date> from datasets/
 datasets/            bags -> datasets for other tools
   mcap_convert.py    replica (RGB + lidar depth), mcd, mcgs (standalone)
 analysis/            measuring results; reads outputs, writes nothing back
@@ -387,15 +388,21 @@ topic copied; all static transforms in one latched /tf_static.
 
 ```
 B=<merged bag>  P=<data>/processed/<date>/<pass>
-python scoop_pipeline/datasets/mcap_convert.py $B $P/datasets/replica_map --format replica \
+python scoop_pipeline/datasets/mcap_convert.py $B --format replica \
     --pose-tum $P/odometry/mobile_1/traj_lidar_refined.txt \
     --depth-source map --map $P/mapping/denoised_<pass>_<date>.pcd
-python scoop_pipeline/datasets/mcap_convert.py $B $P/datasets/replica_lidar --format replica \
-    --pose-tum $P/odometry/mobile_1/traj_lidar_refined.txt --lidar-scans 5
-python scoop_pipeline/datasets/mcap_convert.py $B $P/datasets/mcd --format mcd \
-    --pose-tum $P/odometry/mobile_1/traj_lidar_refined.txt --depth-source map --map ...
+python scoop_pipeline/datasets/mcap_convert.py $B --format mcd \
+    --pose-tum $P/odometry/mobile_1/traj_lidar_refined.txt \
+    --depth-source map --map $P/mapping/denoised_<pass>_<date>.pcd
 python scoop_pipeline/datasets/mcap_convert.py $B --inspect
 ```
+
+Without an output folder, a dataset goes to
+`processed/<date>/<pass>/datasets/<machine>/<format>[_<depth>]_<pass>_<date>/`
+(`replica_map_mapping_A_20260924`, `replica_lidar_...`, `mcd_map_...`,
+`mcgs_...`), the machine from the colour topic; an MCD sequence is
+`<pass>_<date>` (`mapping_A_20260924_merged.bag`). The files inside keep the
+names their format requires.
 
 Replica: `results/frameNNNNNN.jpg` + `depthNNNNNN.png` (uint16, metres = value /
 6553.5 as Replica, so 0-10 m; `--depth-scale 1000` for mm), `traj.txt`

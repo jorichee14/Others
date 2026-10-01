@@ -314,6 +314,32 @@ def test_mcd_depth_from_map_and_lidar(tmp):
         assert np.mean(fills) > need, f"{src}: fill {np.mean(fills):.2f}"
 
 
+def test_dataset_naming(tmp):
+    bag = os.path.join(tmp, "data", "work", "20260924", "mapping_A",
+                       "mirc_dataset_survey_1_mapping_20260924_merged")
+    assert mc.pass_of(bag) == ("20260924", "mapping_A")
+    assert mc.pass_of(os.path.join(tmp, "bag")) is None
+    d = mc.dataset_dir(bag, "replica", "map", "mobile_1")
+    assert d == os.path.join(tmp, "data", "processed", "20260924", "mapping_A", "datasets",
+                             "mobile_1", "replica_map_mapping_A_20260924"), d
+    assert mc.dataset_dir(bag, "mcgs").endswith(os.path.join("mobile_1",
+                                                             "mcgs_mapping_A_20260924"))
+    try:
+        mc.dataset_dir(os.path.join(tmp, "bag"), "mcd", "map")
+        raise AssertionError("no error outside data/<work>/<date>/<pass>")
+    except mc.ConvertError:
+        pass
+    # MCD names its bags <pass>_<date>_merged.bag when the bag tells the pass
+    real = os.path.join(tmp, "data", "work", "20260924", "mapping_A", "merged")
+    write_bag(real)
+    ply, tum = write_map_and_tum(tmp)
+    cfg = {"pose": {"tum": tum, "tum_frame": LIDAR, "frame": CAM, "rate_hz": 10},
+           "sensors": {"cam": {"type": "image", "topic": "/image", "info": "/info",
+                               "out_topic": "/cam/image", "is_body": True}}}
+    res = mc.to_mcd(real, os.path.join(tmp, "mcd_out"), cfg)
+    assert os.path.basename(res["bags"][0]) == "mapping_A_20260924_merged.bag", res["bags"]
+
+
 def main():
     logging.basicConfig(level=logging.WARNING)
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

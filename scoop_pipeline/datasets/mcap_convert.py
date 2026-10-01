@@ -111,6 +111,8 @@ __all__ = [
     "build_tf_static", "lookup_static", "tf_fixed_edges", "camera_extrinsic",
     # poses
     "load_poses", "PoseInterp", "tum_line", "write_tum",
+    # naming
+    "pass_of", "dataset_dir", "topic_machine",
     # mcd building blocks
     "DEFAULT_MCD_CONFIG", "load_mcd_config", "resolve_extrinsic",
 ]
@@ -551,6 +553,43 @@ def _pose_source(paths, pose_bag, topic, pose_tum=None):
     if pose_bag:
         log.info(f"  poses from {pose_bag}")
     return PoseInterp.from_topic(pose_paths, topic)
+
+
+# =========================================================================== #
+# 5b. Naming: where a dataset goes
+# =========================================================================== #
+
+def pass_of(bag):
+    """(date, pass) of a bag below data/{raw,work,processed}/<date>/<pass>/...,
+    or None. The tag <pass>_<date> names the pass's outputs (as the map
+    stages name their clouds)."""
+    p = bag[0] if isinstance(bag, (list, tuple)) else bag
+    parts = os.path.abspath(os.path.expanduser(p)).split(os.sep)
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] in ("raw", "work", "processed") and len(parts) > i + 3:
+            return parts[i + 1], parts[i + 2]
+    return None
+
+
+def topic_machine(topic):
+    """'/mobile_1/zed/left/image_rect_color' -> 'mobile_1'."""
+    return topic.strip("/").split("/")[0]
+
+
+def dataset_dir(bag, fmt, depth=None, machine="mobile_1"):
+    """data/processed/<date>/<pass>/datasets/<machine>/<fmt>[_<depth>]_<pass>_<date>
+    for a bag below data/{raw,work}/<date>/<pass>/ -- e.g.
+    .../datasets/mobile_1/replica_map_mapping_A_20260924."""
+    dp = pass_of(bag)
+    if dp is None:
+        raise ConvertError(f"{bag} is not below data/{{raw,work}}/<date>/<pass>/: "
+                           "give the output folder")
+    date, pas = dp
+    p = os.path.abspath(os.path.expanduser(bag[0] if isinstance(bag, (list, tuple)) else bag))
+    root = p[:p.rindex(os.sep + date + os.sep + pas)]
+    root = root[:root.rindex(os.sep)]                       # .../data
+    name = "_".join(x for x in (fmt, depth, pas, date) if x)
+    return os.path.join(root, "processed", date, pas, "datasets", machine, name)
 
 
 # =========================================================================== #
@@ -1252,7 +1291,8 @@ DEFAULT_MCD_CONFIG = """\
 # pose: `topic` (PoseStamped/Odometry), or `tum` (a TUM file, e.g. 01a's
 # traj_lidar_refined.txt) of the frame `tum_frame`, chained to `frame` via /tf_static.
 
-# sequence: <name>        # bags are <sequence>_merged.bag; default: the output folder's name
+# sequence: <name>        # bags are <sequence>_merged.bag; default: <pass>_<date> of the
+#                          # bag (data/work/<date>/<pass>/...), else the output folder's name
 compress: false            # true = bz2 like the released MCD bags (slower)
 merged: true               # one <seq>_merged.bag like MCD; false = one bag per "bag:" name
 
@@ -1692,7 +1732,9 @@ def to_mcd(bag, out, config=None, *, pose_tum=None, tum_frame=None, depth_source
     cfg = load_mcd_config(config)
     pose_cfg = dict(cfg["pose"])
     sensors = {k: dict(v) for k, v in cfg["sensors"].items()}
-    seq = cfg.get("sequence") or os.path.basename(os.path.normpath(out))
+    dp = pass_of(bag) or pass_of(paths[0])
+    seq = (cfg.get("sequence") or (f"{dp[1]}_{dp[0]}" if dp else None)
+           or os.path.basename(os.path.normpath(out)))
     body_frame = pose_cfg["frame"]
     os.makedirs(out, exist_ok=True)
 
@@ -1967,7 +2009,9 @@ def _cli():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("bag", help=".mcap file or rosbag2 directory")
-    ap.add_argument("out", nargs="?", help="output directory")
+    ap.add_argument("out", nargs="?",
+                    help="output directory (default: data/processed/<date>/<pass>/datasets/"
+                         "<machine>/<format>[_<depth>]_<pass>_<date>, from the bag's place)")
     ap.add_argument("--format", choices=sorted(FORMATS), default="replica")
     ap.add_argument("--inspect", "--list-frames", dest="inspect", action="store_true",
                     help="print topics, intrinsics and frame names, then exit")
@@ -2059,7 +2103,17 @@ def _cli():
             inspect_bag(a.bag, info=a.info, color=a.color, pose=a.pose)
             return
         if not a.out:
-            ap.error("output directory required")
+            depth = None
+            if a.format == "replica":
+                depth = a.depth_source or "lidar"
+            elif a.format == "mcd":
+                srcs = [v.get("source", "topic") for v in
+                        (load_mcd_config(a.config)["sensors"] or {}).values()
+                        if v.get("type") == "depth"]
+                depth = a.depth_source or (srcs[0] if srcs else None)
+                depth = {"topic": "zed"}.get(depth, depth)
+            a.out = dataset_dir(a.bag, a.format, depth, topic_machine(a.color))
+            log.info(f"output: {a.out}")
         if a.format == "replica":
             to_replica(a.bag, a.out, color=a.color, depth=a.depth, info=a.info,
                        pose=a.pose, pose_bag=a.pose_bag, pose_tum=a.pose_tum,

@@ -503,6 +503,7 @@ def lookup_static(edges, src, dst):
 #   bags/               bags written by the stages (09's best-poses bag)
 #   frames/             anchors, camera poses, TF scripts: anchor_frame.json, ...
 #   comms/              wifi / iperf / ntp results (no stage writes here yet)
+#   datasets/<machine>/ <format>_<depth>_<pass>_<date> (datasets/mcap_convert.py)
 ROUTES = (
     (("traj*", "*.tum"), "odometry/{machine}"),
     (("reference_*",), "odometry"),
