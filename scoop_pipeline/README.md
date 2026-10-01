@@ -330,7 +330,7 @@ infra_N) needs only its entry in `record.yaml` and its folder in the pass.
 `--check` stops after the check. Otherwise, if nothing is missing (or with
 `--allow-missing`), every bag is merged in log-time order -- what
 `ros2 bag convert` with `all_topics: true` did, without ROS -- into
-`data/work/<date>/<pass>/<prefix>_<pass>_..._<date>_merged/`, byte for byte,
+`data/work/<date>/<pass>/<prefix>_<pass>_<date>_merged/` (named from the folders, not the bags' own labels; prefix from `record.yaml`), byte for byte,
 QoS kept, and checked again. Every bag the pipeline writes (decoded, retimed,
 ZED, merged, tf_edit / merge_bags output) is zstd-compressed inside the MCAP:
 lossless, `ros2 bag play`, GLIM and scoop read it as is, about half the size

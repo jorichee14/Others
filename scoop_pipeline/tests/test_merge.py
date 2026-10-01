@@ -171,6 +171,9 @@ def test_processed_topics():
         assert c.missing == ["/mobile_2/imu"] and not c.ok
         assert u["infra_1"].check().ok                          # found by name, _r2 and all
         assert session.session_name(list(u.values()), t.plan) == P
+        # from the folders: the bags' own labels do not matter
+        assert session.session_name(list(u.values()), t.plan, t.raw) == \
+            "mirc_dataset_mapping_A_20260924"
     finally:
         t.close()
 

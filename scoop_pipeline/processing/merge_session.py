@@ -59,7 +59,7 @@ def main():
     ap.add_argument("--out", default=None, help="folder for the merged bag "
                     "(default: the pass folder below data/work)")
     ap.add_argument("--name", default=None, help="merged bag name without _merged "
-                    "(default: from the bag names)")
+                    "(default: <prefix>_<pass>_<date> from the folders)")
     ap.add_argument("--compression", default="zstd", choices=["zstd", "none"],
                     help="zstd (default): lossless, about half the size; none: faster")
     ap.add_argument("--mode", default=None, help="pass mode (default: from the folder name)")
@@ -96,7 +96,7 @@ def main():
         if bad and not a.allow_missing:
             sys.exit("not merged; fix the bags or pass --allow-missing")
 
-        name = f"{a.name or session.session_name(units, plan)}_merged"
+        name = f"{a.name or session.session_name(units, plan, raw)}_merged"
         out_root = (os.path.expanduser(a.out) if a.out
                     else recording.work_dir_for(a.raw_dir, a.work_root))
         final = recording.Path(out_root) / name

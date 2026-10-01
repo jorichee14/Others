@@ -9,7 +9,7 @@ that they hold what the machines were told to record.
         infra_1/    ...
     data/work/<date>/<pass>/
         mobile_1/   <bag>_retimed/  <svo>_zed/  <svo>_zed_right/  (process_recording.py)
-        <prefix>_<pass>_..._<date>_merged/                        (merge_session.py)
+        <prefix>_<pass>_<date>_merged/       (merge_session.py; from the folders)
 
 What a machine records is ``configs/record.yaml`` -- the robots' own file,
 which ``record.sh`` reads. A machine's bags are found by their name
@@ -51,6 +51,7 @@ class RecordPlan:
             m: list((spec or {}).get("topics") or [])
             for m, spec in (doc.get("machines") or {}).items()}
         self.tf_recorded_by = doc.get("tf_recorded_by")
+        self.prefix = str((doc.get("defaults") or {}).get("prefix") or "mirc_dataset")
         chk = doc.get("check") or {}
         self.skip: List[str] = list(chk.get("skip") or [])
         self.modes: Dict[str, List[str]] = {
@@ -225,8 +226,16 @@ def _unit(machine, folder, raw_bags, plan, settings, work_root, mode) -> Unit:
     return Unit(machine, folder, list(raw_bags), expected, False, raw_bags, plan.may_be_empty)
 
 
-def session_name(units: List[Unit], plan: RecordPlan) -> str:
-    """``<prefix>_<pass>_..._<date>``: the bags' names without the machine."""
+def session_name(units: List[Unit], plan: RecordPlan, session_raw=None) -> str:
+    """``<prefix>_<pass>_<date>`` from the pass folder (raw/<date>/<pass>/), so
+    the merged bag's name does not depend on how each machine labelled its
+    bag (run1 / run / ru1). Without the folder: the bags' names without the
+    machine, the most common one."""
+    if session_raw is not None:
+        p = Path(session_raw).expanduser().resolve()
+        date = p.parent.name
+        return (f"{plan.prefix}_{p.name}_{date}" if re.fullmatch(r"\d{8}", date)
+                else f"{plan.prefix}_{p.name}")
     stems = []
     for u in units:
         for b in u.raw_bags:
