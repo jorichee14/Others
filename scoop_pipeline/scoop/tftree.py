@@ -33,7 +33,8 @@ from . import bag, rosmsg
 from .bag import BagError
 
 __all__ = ["Edge", "Calibration", "matrix", "to_tq", "tf_edges", "attach", "load_calibrations",
-           "edge_matcher", "read_tum", "read_pose_topic", "odom_transforms"]
+           "edge_matcher", "read_tum", "read_pose_topic", "odom_transforms", "plan_edits",
+           "format_tree", "TFEdits"]
 
 TFMSG = "tf2_msgs/msg/TFMessage"
 
@@ -242,4 +243,68 @@ def odom_transforms(poses, body: str, parent: str, edges: Dict[str, Edge]):
         t, q = to_tq(T_pb @ inv)
         out.append((t_ns, parent, root, t, q))
     return out
+
+
+@dataclass
+class TFEdits:
+    """What to change in a bag's TF (for :func:`scoop.merge.merge_bags`)."""
+    drop: Optional[object] = None                # f(parent, child) -> True to remove
+    static_tf: List = None                       # [(parent, child, t, q)] for /tf_static
+    extra_tf: List = None                        # [(t_ns, parent, child, t, q)] for /tf
+    notes: List[str] = None
+    edges: Dict[str, Edge] = None                # the tree afterwards (static part exact)
+
+
+def plan_edits(bags, drop=(), calibrations=(), odom=None) -> TFEdits:
+    """Drop edges (``drop``: PARENT->CHILD patterns), add static transforms
+    (``calibrations``: :class:`Calibration`, re-rooted as needed), and put in
+    a new odometry (``odom`` = (poses, body frame, parent frame), see
+    :func:`odom_transforms`), in that order, against the bags' TF tree."""
+    edges = tf_edges(bags)
+    notes: List[str] = []
+    dropf = edge_matcher(drop) if drop else None
+    if dropf:
+        gone = [f"{e.parent} -> {c}" for c, e in edges.items() if dropf(e.parent, c)]
+        if not gone:
+            raise BagError(f"drop {' '.join(drop)}: matches no TF edge")
+        notes.append("dropped " + ", ".join(gone))
+        edges = {c: e for c, e in edges.items() if not dropf(e.parent, c)}
+    static_tf: List = []
+    if calibrations:
+        static_tf, more = attach(list(calibrations), edges)
+        notes += more
+        for p, c, t, q in static_tf:
+            edges[c] = Edge(p, c, True, matrix(t, q))
+    extra_tf: List = []
+    if odom is not None:
+        poses, body, parent = odom
+        extra_tf = odom_transforms(poses, body, parent, edges)
+        root = extra_tf[0][2]
+        notes.append(f"odometry {parent} -> {root}, {len(extra_tf)} poses "
+                     f"(so {parent} -> {body} is the trajectory)")
+        edges[root] = Edge(parent, root, False)
+    return TFEdits(dropf, static_tf, extra_tf, notes, edges)
+
+
+def format_tree(edges: Dict[str, Edge]) -> str:
+    """The tree as text, roots first: static edges ``──``, dynamic ``~~``."""
+    kids: Dict[str, List[str]] = {}
+    for c, e in edges.items():
+        kids.setdefault(e.parent, []).append(c)
+    roots = sorted({e.parent for e in edges.values()} - set(edges))
+    lines: List[str] = []
+
+    def walk(f, prefix, last, first):
+        if first:
+            lines.append(f)
+        else:
+            e = edges[f]
+            lines.append(f"{prefix}{'└' if last else '├'}{'──' if e.static else '~~'} {f}")
+        ch = sorted(kids.get(f, []))
+        for i, c in enumerate(ch):
+            walk(c, prefix + ("" if first else ("   " if last else "│  ")), i == len(ch) - 1,
+                 False)
+    for r in roots:
+        walk(r, "", True, True)
+    return "\n".join(lines) + "\n(── static, ~~ /tf)"
 

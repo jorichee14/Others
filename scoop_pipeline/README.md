@@ -32,6 +32,7 @@ scripts/             command lines only: argument parsing around scoop/
   svo_to_bag.py      one SVO2 -> bag on capture time (the zed step alone)
   merge_session.py   check a pass's bags against record.yaml, merge them into one
   topic_timing.py    intervals, gaps and repeated frames of topics in a bag
+  tf_edit.py         show or change a bag's TF: drop edges, add transforms, new odometry
   merge_bags.py      any bags -> one, with the topics you choose (--list, --topics, --pick)
   run_zed.sh         ZED wrapper replay + ros2 bag record (here or in the isaac_ros container)
   bag_check.py       verify + time the fast decoder on a real bag
@@ -344,18 +345,24 @@ as `merge_session.py`: log-time order, byte for byte, QoS kept, one latched
 `/tf_static`, zstd unless `--compression none`; `--static-tf` adds
 calibrations. Only the chosen topics are read.
 
-### Replacing the odometry in TF
+## TF: showing and changing it
 
 ```
-python scoop_pipeline/scripts/merge_bags.py <bags...> -o <out> \
-    --drop-tf 'map_zed->odom_zed' 'odom_zed->*' \
+python scoop_pipeline/scripts/tf_edit.py <bag> --show
+python scoop_pipeline/scripts/tf_edit.py <bag> -o <out> \
+    --drop 'map_zed->odom_zed' 'odom_zed->*' \
+    --add os_lidar radar3_link 0.1 0 0.2 0 0 0 1 \
+    --add-file scoop_pipeline/configs/static_tf.yaml \
     --odom-tum <glim>/traj_lidar.txt --odom-frame os_lidar --odom-parent map
 ```
 
-`--drop-tf` removes TF edges (here the ZED's `map_zed -> odom_zed ->
-zed_camera_link`), leaving the sensor tree with its own root. `--odom-tum`
-(a TUM file, e.g. GLIM's `traj_lidar.txt`) or `--odom-topic` (Odometry /
-PoseStamped) adds a new odometry: poses of `--odom-frame` in `--odom-parent`,
-published as `/tf` `<parent> -> <root of the tree>` (composed through the
-static chain), so `tf2_echo <parent> <frame>` gives the trajectory exactly.
-
+`--show` prints the tree (static edges `──`, /tf edges `~~`). `--drop`
+removes edges from /tf and /tf_static (shell patterns). `--add PARENT CHILD x
+y z qx qy qz qw` (what `tf2_echo PARENT CHILD` prints) and `--add-file` add
+static transforms. `--odom-tum` (a TUM file, e.g. GLIM's `traj_lidar.txt`) or
+`--odom-topic` (Odometry / PoseStamped) put in a new odometry: poses of
+`--odom-frame` in `--odom-parent`. A frame keeps one parent: a transform whose
+child already has one is added the other way round, and the odometry goes in
+as `<parent> -> <root of the tree>`, composed through the static chain, so the
+lookups give exactly what was given. The result is a new bag with every other
+topic copied; all static transforms in one latched /tf_static.

@@ -395,17 +395,17 @@ def test_merge_bags_cli():
         shutil.rmtree(d)
 
 
-def test_replace_odometry():
-    """Drop the ZED odometry edges, hang the tree on a new trajectory of
-    os_lidar: map -> os_lidar must give the trajectory."""
+def test_tf_edit():
+    """tf_edit.py: show the tree, add static transforms, drop the ZED
+    odometry and hang the tree on a new trajectory of os_lidar."""
     d = tempfile.mkdtemp()
     try:
         b = os.path.join(d, "b")
         _tree_bag(b)
-        cal = os.path.join(d, "cal.yaml")
-        yaml.safe_dump({"transforms": [{"parent": CAL.parent, "child": CAL.child,
-                                        "translation": CAL.translation,
-                                        "rotation_xyzw": CAL.rotation_xyzw}]}, open(cal, "w"))
+        tool = [sys.executable, os.path.join(ROOT, "scripts", "tf_edit.py")]
+        r = subprocess.run(tool + [b, "--show"], capture_output=True, text=True)
+        assert r.returncode == 0 and "~~ odom_zed" in r.stdout and "── os_lidar" in r.stdout, \
+            r.stdout
         rng = np.random.default_rng(0)
         poses = []
         with open(os.path.join(d, "traj.txt"), "w") as fh:
@@ -417,16 +417,22 @@ def test_replace_odometry():
                 fh.write(f"{ts:.9f} {t[0]} {t[1]} {t[2]} {q[0]} {q[1]} {q[2]} {q[3]}\n")
                 poses.append(tftree.matrix(t, q))
         out = os.path.join(d, "m")
-        cli = [sys.executable, os.path.join(ROOT, "scripts", "merge_bags.py"), b, "-o", out,
-               "--static-tf", cal, "--drop-tf", "map_zed->odom_zed", "odom_zed->*",
-               "--odom-tum", os.path.join(d, "traj.txt"), "--odom-frame", "os_lidar",
-               "--odom-parent", "map"]
+        add = ["--add", CAL.parent, CAL.child] + [str(v) for v in CAL.translation] + \
+              [str(v) for v in CAL.rotation_xyzw]
+        cli = tool + [b, "-o", out] + add + ["--drop", "map_zed->odom_zed", "odom_zed->*",
+                                             "--odom-tum", os.path.join(d, "traj.txt"),
+                                             "--odom-frame", "os_lidar", "--odom-parent", "map"]
         r = subprocess.run(cli, capture_output=True, text=True)
         assert r.returncode == 0, (r.stdout, r.stderr)
+        assert "~~ zed_camera_link" in r.stdout and "odom_zed" not in r.stdout.split(
+            "TF tree of the new bag:")[1], r.stdout
         edges = tftree.tf_edges([out], seconds=1e6)
-        assert "odom_zed" not in edges and edges["zed_camera_link"].parent == "map", \
-            {c: e.parent for c, e in edges.items()}
+        assert "odom_zed" not in edges and edges["zed_camera_link"].parent == "map"
         T_link_lidar = tftree._static_pose("zed_camera_link", "os_lidar", edges)
+        T_lidar_opt = np.linalg.inv(tftree._static_pose("zed_camera_link", "os_lidar", edges)) \
+            @ tftree._static_pose("zed_camera_link", "zed_left_camera_optical_frame", edges)
+        np.testing.assert_allclose(T_lidar_opt, tftree.matrix(CAL.translation, CAL.rotation_xyzw),
+                                   atol=1e-6)                     # the calibration, exactly
         ts = rosmsg.typestore()
         got = []
         for _, _, payload, _ in bag.open_bag(out).iter_raw(["/tf"]):
@@ -437,13 +443,17 @@ def test_replace_odometry():
         assert len(got) == 5
         for T_map_link, want in zip(got, poses):
             np.testing.assert_allclose(T_map_link @ T_link_lidar, want, atol=1e-6)
-        r = subprocess.run(cli[:7] + ["-o", os.path.join(d, "m2"), "--odom-tum",
-                                      os.path.join(d, "traj.txt"), "--odom-frame", "os_lidar",
-                                      "--odom-parent", "map"], capture_output=True, text=True)
-        assert r.returncode != 0 and "not static" in r.stderr, r.stderr   # old odom still there
-        r = subprocess.run(cli[:5] + ["-o", os.path.join(d, "m3"), "--drop-tf", "nope->x"],
+        assert bag.open_bag(out).topics()["/tf_static"].count == 1
+        # the odometry while the old one is still attached: refused
+        r = subprocess.run(tool + [b, "-o", os.path.join(d, "m2")] + add +
+                           ["--odom-tum", os.path.join(d, "traj.txt"), "--odom-frame",
+                            "os_lidar", "--odom-parent", "map"], capture_output=True, text=True)
+        assert r.returncode != 0 and "not static" in r.stderr, r.stderr
+        r = subprocess.run(tool + [b, "-o", os.path.join(d, "m3"), "--drop", "nope->x"],
                            capture_output=True, text=True)
         assert r.returncode != 0 and "matches no TF edge" in r.stderr
+        r = subprocess.run(tool + [b, "-o", os.path.join(d, "m4")], capture_output=True, text=True)
+        assert r.returncode != 0 and "nothing to change" in r.stderr
     finally:
         shutil.rmtree(d)
 
