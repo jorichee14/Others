@@ -254,7 +254,8 @@ class Board(object):
         objp = self.obj[np.asarray(cid).flatten()]
         imgp = np.asarray(cc, dtype=np.float64).reshape(-1, 1, 2)
         rvec, tvec, ratio = _solve_pnp(objp, imgp, K, D)
-        if rvec is None:
+        # a degenerate PnP can return NaN, which passes every > / < gate below
+        if rvec is None or not (np.isfinite(rvec).all() and np.isfinite(tvec).all()):
             self.reject["pnp_fail"] += 1
             return None
         if ratio < self.min_ambiguity:
@@ -264,7 +265,7 @@ class Board(object):
         # true RMS pixel error: norm is sqrt(sum of squares) over 2N elements
         reproj = float(cv2.norm(imgp, proj.reshape(-1, 1, 2), cv2.NORM_L2)
                        / np.sqrt(len(proj)))
-        if reproj > self.max_reproj:
+        if not reproj <= self.max_reproj:                  # also NaN
             self.reject["reproj"] += 1
             return None
         T = np.eye(4)
