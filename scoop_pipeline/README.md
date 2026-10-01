@@ -316,7 +316,9 @@ A pass folder holds one folder per machine (`mobile_1/`, `mobile_2/`,
 `infra_1/`, ...). Each bag's machine comes from its name
 (`..._<machine>`, `_r2` repeats included) and `configs/record.yaml` -- the
 robots' own file -- says what it must contain, like `record.sh`'s preflight:
-every topic listed must be there and not empty (`MISSING`, `EMPTY`),
+every topic listed must be there and not empty (`MISSING`, `EMPTY`; a topic
+in `check.may_be_empty`, like `/*/ntp/events`, which publishes only on a clock
+step, must be there but may have no messages: `ok/none`),
 except what the pass mode does not record (`check:` in `record.yaml`:
 mapping has no wifi/iperf/ntp/diagnostics; the mode comes from the pass
 folder's name, `--mode` sets it). A

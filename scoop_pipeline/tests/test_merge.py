@@ -175,6 +175,34 @@ def test_processed_topics():
         t.close()
 
 
+def test_may_be_empty():
+    """A topic in check.may_be_empty may have no messages; any other empty
+    topic still fails, and a missing one still fails."""
+    from scoop.bagwrite import TopicSchema
+    root = tempfile.mkdtemp()
+    try:
+        b = os.path.join(root, "b")
+        with BagWriter(b) as w:
+            w.write("/mobile_1/wifi/ping", rosmsg.string("x"), T0)
+            name = "std_msgs/msg/String"
+            for t in ("/mobile_1/ntp/events", "/mobile_1/radar1/points"):   # no messages
+                w._channel(t, TopicSchema(name, "ros2msg", rosmsg.msgdef(name).encode(), "cdr"))
+        exp = ["/mobile_1/wifi/ping", "/mobile_1/ntp/events", "/mobile_1/radar1/points",
+               "/mobile_1/sniffer/ntp/events"]
+        c = session.check_topics([b], exp, ["/*/ntp/events"])
+        assert c.counts["/mobile_1/ntp/events"] == 0, c.counts
+        assert c.quiet == ["/mobile_1/ntp/events"], c
+        assert c.empty == ["/mobile_1/radar1/points"], c
+        assert c.missing == ["/mobile_1/sniffer/ntp/events"] and not c.ok, c
+        c = session.check_topics([b], exp[:2], ["/*/ntp/events"])
+        assert c.ok and c.quiet == ["/mobile_1/ntp/events"], c
+        assert not session.check_topics([b], exp[:2]).ok          # without the allowance
+        real = session.RecordPlan(os.path.join(ROOT, "configs", "record.yaml"))
+        assert "/*/ntp/events" in real.may_be_empty
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_merge_bags():
     t = Pass()
     try:

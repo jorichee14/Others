@@ -39,7 +39,10 @@ from scoop.bag import BagError                                      # noqa: E402
 def show(check, indent="    "):
     w = max([len(t) for t in check.counts] + [20])
     for t in sorted(set(check.counts) - set(check.extra)):
-        print(f"{indent}{'ok' if check.counts[t] else 'EMPTY':8s}{t:{w}s} {check.counts[t]:9d}")
+        tag = "ok" if check.counts[t] else ("ok/none" if t in check.quiet else "EMPTY")
+        print(f"{indent}{tag:8s}{t:{w}s} {check.counts[t]:9d}")
+    if check.quiet:
+        print(f"{indent}(ok/none: no messages, allowed by check.may_be_empty in record.yaml)")
     for t in check.missing:
         print(f"{indent}{'MISSING':8s}{t}")
     if check.extra:

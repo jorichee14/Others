@@ -55,6 +55,8 @@ class RecordPlan:
         self.skip: List[str] = list(chk.get("skip") or [])
         self.modes: Dict[str, List[str]] = {
             m: list((spec or {}).get("skip") or []) for m, spec in (chk.get("modes") or {}).items()}
+        # recorded, but publishing only when something happens: no messages is fine
+        self.may_be_empty: List[str] = list(chk.get("may_be_empty") or [])
 
     def mode_of(self, *names: str) -> Optional[str]:
         """The first mode named as a word in ``names`` (the pass folder first,
@@ -93,6 +95,7 @@ class TopicCheck:
     missing: List[str]                     # expected, not in any bag
     empty: List[str]                       # expected, there, no messages
     extra: List[str]                       # in a bag, not expected
+    quiet: List[str] = field(default_factory=list)   # no messages, allowed (may_be_empty)
 
     @property
     def ok(self) -> bool:
@@ -108,23 +111,28 @@ class Unit:
     expected: List[str]                    # topics those bags must have
     processed: bool = False
     raw_bags: List[Path] = field(default_factory=list)
+    may_be_empty: List[str] = field(default_factory=list)
 
     def check(self) -> TopicCheck:
-        return check_topics(self.bags, self.expected)
+        return check_topics(self.bags, self.expected, self.may_be_empty)
 
 
-def check_topics(bags, expected) -> TopicCheck:
+def check_topics(bags, expected, may_be_empty=()) -> TopicCheck:
     """Which of ``expected`` are missing or empty in ``bags`` (counts from
-    each bag's metadata.yaml / MCAP summary; nothing is read)."""
+    each bag's metadata.yaml / MCAP summary; nothing is read). A topic
+    matching ``may_be_empty`` must be there but may have no messages."""
     counts: Dict[str, int] = {}
     for b in bags:
         for t, info in bag.open_bag(b).topics().items():
             counts[t] = counts.get(t, 0) + int(info.count)
     exp = list(dict.fromkeys(expected))
+    zero = [t for t in exp if t in counts and counts[t] == 0]
+    quiet = [t for t in zero if any(fnmatch.fnmatchcase(t, p) for p in may_be_empty)]
     return TopicCheck(counts,
                       missing=[t for t in exp if t not in counts],
-                      empty=[t for t in exp if t in counts and counts[t] == 0],
-                      extra=sorted(set(counts) - set(exp)))
+                      empty=[t for t in zero if t not in quiet],
+                      extra=sorted(set(counts) - set(exp)),
+                      quiet=quiet)
 
 
 def processed_topics(raw_topics: List[str], settings: dict,
@@ -193,8 +201,9 @@ def _unit(machine, folder, raw_bags, plan, settings, work_root, mode) -> Unit:
                      if (rec.zed_bag(n) / "metadata.yaml").is_file()]
         others = [b for b in raw_bags if b != rec.bag]          # other bags there, as is
         return Unit(machine, folder, bags + others,
-                    processed_topics(expected, settings, rec), True, raw_bags)
-    return Unit(machine, folder, list(raw_bags), expected, False, raw_bags)
+                    processed_topics(expected, settings, rec), True, raw_bags,
+                    plan.may_be_empty)
+    return Unit(machine, folder, list(raw_bags), expected, False, raw_bags, plan.may_be_empty)
 
 
 def session_name(units: List[Unit], plan: RecordPlan) -> str:
