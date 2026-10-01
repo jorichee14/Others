@@ -53,7 +53,7 @@ DEFAULT_SETTINGS = ROOT / "configs" / "recording.yaml"
 @dataclass
 class Recording:
     raw: Path                       # data/raw/<rel>
-    bag: Path                       # the original rosbag2 folder inside it
+    bag: Optional[Path]             # the Ouster packets bag inside it (None: SVO only)
     work: Path                      # data/work/<rel>
     svo: Optional[Path] = None      # the ZED .svo2 inside raw, if there is one
     zed_bags: Tuple[str, ...] = ("zed",)   # the zed step's bags (settings zed.bags)
@@ -68,6 +68,8 @@ class Recording:
             return self.work / "glim"
         if name == "zed":
             return self.zed_bag(self.zed_bags[0])
+        if self.bag is None:
+            raise BagError(f"no Ouster packets bag in {self.raw}: no {name} step")
         return self.work / f"{self.bag.name}_{name}"
 
     def zed_bag(self, name: str) -> Path:
@@ -78,7 +80,13 @@ class Recording:
     def clock_json(self) -> Path:
         return self.work / "clock.json"
 
+    def has(self, name: str) -> bool:
+        """Whether the recording has what the step needs (packets bag, SVO)."""
+        return self.svo is not None if name == "zed" else self.bag is not None
+
     def done(self, name: str) -> bool:
+        if not self.has(name):
+            return False
         if name == "zed":
             return all((self.zed_bag(n) / "metadata.yaml").is_file() for n in self.zed_bags)
         p = self.step(name)
@@ -87,9 +95,9 @@ class Recording:
         return (p / "metadata.yaml").is_file()
 
     def status(self) -> Dict[str, Optional[bool]]:
-        """Step -> done; None for zed when the recording has no SVO."""
-        return {s: None if s == "zed" and self.svo is None else self.done(s)
-                for s in STEPS}
+        """Step -> done; None where the recording lacks what the step needs
+        (zed without an SVO, the Ouster steps without a packets bag)."""
+        return {s: self.done(s) if self.has(s) else None for s in STEPS}
 
 
 def _bag_folders(folder: Path) -> List[Path]:
@@ -124,13 +132,16 @@ def find_recording(raw_dir, work_root=None, packets_ns: str = "/ouster",
     topic = f"{packets_ns}/lidar_packets"
     candidates = [b for b in _bag_folders(raw_dir)
                   if topic in bag.open_bag(b).topics()]
-    if not candidates:
-        raise BagError(f"no bag with {topic} in {raw_dir} "
-                       f"(bag folders: {[b.name for b in _bag_folders(raw_dir)]})")
+    svo = zed.find_svo(raw_dir)
+    if not candidates and svo is None:
+        raise BagError(f"no bag with {topic} and no .svo2 in {raw_dir} "
+                       f"(bag folders: {[b.name for b in _bag_folders(raw_dir)]}, "
+                       f"files: {sorted(p.name for p in raw_dir.iterdir() if p.is_file())})")
     if len(candidates) > 1:
         raise BagError(f"several bags with {topic} in {raw_dir}: "
                        f"{[b.name for b in candidates]}")
-    return Recording(raw_dir, candidates[0], work, zed.find_svo(raw_dir), tuple(zed_bags))
+    return Recording(raw_dir, candidates[0] if candidates else None, work, svo,
+                     tuple(zed_bags))
 
 
 def load_settings(path=None) -> dict:
@@ -200,10 +211,12 @@ def _publish(tmp: Path, final: Path):
 
 def process(rec: Recording, settings: dict, until: Optional[str] = None,
             redo: Optional[str] = None, glim_script: Optional[Path] = None,
-            zed_script: Optional[Path] = None, log=print) -> Dict[str, Optional[bool]]:
-    """Run the steps of ``rec`` that are not done yet, up to ``until``.
-    ``redo`` first removes that step's output and the ones built from it."""
-    for name in (until, redo):
+            zed_script: Optional[Path] = None, only: Optional[str] = None,
+            log=print) -> Dict[str, Optional[bool]]:
+    """Run the steps of ``rec`` that are not done yet, up to ``until`` (or
+    just ``only``). ``redo`` first removes that step's output and the ones
+    built from it."""
+    for name in (until, redo, only):
         if name is not None and name not in STEPS:
             raise ValueError(f"unknown step {name!r}; steps: {STEPS}")
     last = STEPS.index(until) if until else len(STEPS) - 1
@@ -211,6 +224,8 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
     rec.zed_bags = tuple(bags)
     if redo:
         for s in [redo] + LATER[redo]:
+            if not rec.has(s):
+                continue
             for p in (_zed_outputs(rec, bags) if s == "zed" else [rec.step(s)]):
                 _clear(p)
             if s == "retimed":
@@ -222,16 +237,17 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
     o = settings["ouster"]
     packets_ns = o.get("packets_ns", "/ouster")
     out_ns = o.get("out_ns", "/mobile_1/ouster")
-    for s in STEPS[:last + 1]:
+    for s in ([only] if only else STEPS[:last + 1]):
+        if not rec.has(s):
+            log(f"[skip] {s}: " + (f"no .svo2 in {rec.raw}" if s == "zed" else
+                                   f"no {packets_ns}/lidar_packets bag in {rec.raw}"))
+            continue
         final = rec.step(s)
         tmp = rec.work / ".partial" / final.name   # same name, so the .mcap inside is too
-        if s == "zed" and rec.svo is None:
-            log(f"[skip] zed: no .svo2 in {rec.raw}")
-            continue
         if rec.done(s):
             log(f"[skip] {s}: done ({final})")
             continue
-        if s != until and LATER[s] and all(rec.done(x) for x in LATER[s]):
+        if not only and s != until and LATER[s] and all(rec.done(x) for x in LATER[s]):
             log(f"[skip] {s}: not needed, {' and '.join(LATER[s])} done")   # e.g. deleted
             continue
         if s == "zed":                           # one replay per bag, each published alone

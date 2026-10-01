@@ -493,6 +493,39 @@ def test_process_recording_zed_step():
         shutil.rmtree(root)
 
 
+def test_svo_only_recording():
+    """A folder with an SVO and no Ouster packets bag (e.g. coop2): the zed
+    step runs, the Ouster steps are skipped, --only runs one step."""
+    fake, root = FakeRos(), tempfile.mkdtemp()
+    try:
+        raw = os.path.join(root, "data", "raw", "20260828", "coop2")
+        os.makedirs(raw)
+        open(os.path.join(raw, "coop2_mobile_1.svo2"), "w").write("svo")
+        rec = recording.find_recording(raw)
+        assert rec.bag is None and rec.svo.name == "coop2_mobile_1.svo2"
+        assert rec.status() == {"decoded": None, "retimed": None, "glim": None, "zed": False}
+        settings = recording.load_settings()
+        settings["zed"]["bags"] = {"zed": [IMAGE, INFO, DEPTH, RIGHT]}
+        logs = []
+        st = recording.process(rec, settings, redo="zed", log=logs.append)
+        assert st["zed"] is True and st["decoded"] is None, st
+        assert any("[skip] decoded: no /ouster/lidar_packets bag" in l for l in logs), logs
+        logs = []
+        recording.process(rec, settings, redo="zed", only="zed", log=logs.append)
+        ran = [l.split()[2] for l in logs if l.startswith("[run ]")]
+        assert ran == ["zed"] and not any("decoded" in l for l in logs), logs
+        os.remove(os.path.join(raw, "coop2_mobile_1.svo2"))
+        try:
+            recording.find_recording(raw)
+        except bag.BagError as e:
+            assert "no .svo2" in str(e), e
+        else:
+            raise AssertionError("a folder with neither a packets bag nor an SVO must be refused")
+    finally:
+        fake.close()
+        shutil.rmtree(root)
+
+
 if __name__ == "__main__":
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

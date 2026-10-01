@@ -131,7 +131,9 @@ data/work/20260924/mapping_A/mobile_1/
 Settings come from `configs/recording.yaml` (`--settings` for another file).
 The two bags are named `<original bag>_decoded` and `<original bag>_retimed`
 (the .mcap inside too), so a copied bag still says where it came from.
-Steps already done are skipped. `--redo X` redoes X and the steps built from
+A folder with an SVO but no Ouster packets bag (e.g. an older recording)
+does the zed step alone; `--only X` runs just step X. Steps already done are
+skipped. `--redo X` redoes X and the steps built from
 it: `--redo retimed` redoes retimed and glim, `--redo zed` only zed.
 `--until retimed` stops before GLIM; `--status` shows what is done. The
 decoded bag may be deleted once retimed and glim exist: it is then skipped
