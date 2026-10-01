@@ -435,6 +435,7 @@ def main():
 
     results = {}
     cam_results = {}
+    lo_results = {}          # "lidar_odom" sensors: every opening sighting via GLIM
     cam_out = {}
     lines = []
     for sensor in sensors:
@@ -478,6 +479,19 @@ def main():
         mode = sensor.get("source", "auto")
         if mode == "auto":
             mode = "origin" if (has_pose or has_tf) else "camera"
+        if mode == "lidar_odom":
+            # every sighting, moving or parked; combined after the loop through
+            # the run's LiDAR odometry (board_views.py)
+            hits, seen, _ = localise_camera_only(sensor, board, T_map_board, T_fix,
+                                                 frames, K, D, dwell_only=False)
+            print("  board sightings %d (all kept: the views are combined through "
+                  "the LiDAR odometry)" % seen)
+            if not hits:
+                print("  ! the board was never detected on %s" % sensor["image_topic"])
+                continue
+            lo_results[name] = {"sensor": sensor, "board": bname, "hits": hits,
+                                "t_img0": frames[0][0]}
+            continue
         if mode == "camera":
             if origin and need_tf:
                 print("  ! no SLAM origin available for '%s': frame '%s' is not in "
@@ -526,7 +540,7 @@ def main():
                  T_map_origin[:3, 3].round(6).tolist(),
                  R_to_q(T_map_origin[:3, :3]).round(6).tolist()))
 
-    if not results and not cam_results and reloc is None:
+    if not results and not cam_results and not lo_results and reloc is None:
         raise SystemExit("\nno sensor could be localised into %s." % map_frame)
 
     out = {"map_frame": map_frame, "bag": str(s["bag"]),
@@ -736,6 +750,86 @@ def main():
                             q[0], q[1], q[2], q[3]))
         cam_out[name]["trajectory_tum"] = tum
         print("  wrote %s (%d poses)" % (tum, len(hits)))
+
+    # ---- lidar_odom sensors: all opening views, through the LiDAR odometry ---- #
+    if lo_results:
+        from board_views import views_through_odom, cam_at
+        from pipeline_common import load_traj
+        T_lc = np.asarray(S.T_lidar_camera, float)
+        for name, lr in lo_results.items():
+            sensor = lr["sensor"]
+            run_traj = os.path.expanduser(sensor.get("run_traj") or os.path.join(
+                os.path.dirname(os.path.normpath(s["bag"])), P.machine, "glim",
+                "traj_lidar.txt"))
+            tr_t, tr_T = load_traj(run_traj)
+            tr_t, tr_T = np.asarray(tr_t), np.asarray(tr_T)
+            gap = float(sensor.get("section_gap", s.get("section_gap", 3.0)))
+            r = views_through_odom(lr["hits"], tr_t, tr_T, T_lc, gap,
+                                   int(sensor.get("min_views", 5)))
+            print("\n=== %s: start from every opening view of board '%s', through the "
+                  "LiDAR odometry ===" % (name, lr["board"]))
+            print("  run trajectory: %s (%d poses)" % (run_traj, len(tr_t)))
+            if r is None:
+                print("  ! fewer than %d sightings in one section inside the trajectory "
+                      "-> not localised" % int(sensor.get("min_views", 5)))
+                continue
+            print("  opening section: %d sightings over %.1f s (t=%.2f..%.2f s into the "
+                  "camera stream); %d sightings before the trajectory starts left out; "
+                  "%d section(s) in all"
+                  % (r["n_views"], r["t_last"] - r["t_first"], r["t_first"] - lr["t_img0"],
+                     r["t_last"] - lr["t_img0"], r["n_before_traj"], r["n_sections"]))
+            print("  views: camera moved %.2f m, viewing directions span %.1f deg, "
+                  "range %.2f..%.2f m"
+                  % (r["camera_moved_m"], r["view_angle_deg"], r["range_m"][0], r["range_m"][1]))
+            print("  per-view estimates of the camera at the first view: %d/%d kept, std %.1f mm, "
+                  "max %.1f mm / %.2f deg, median residual %.1f mm / %.2f deg"
+                  % (r["n_used"], r["n_views"], r["std_mm"], r["max_mm"], r["max_deg"],
+                     r["median_res_mm"], r["median_res_deg"]))
+            # per-view estimates of the CAMERA carry the board's angle error
+            # times the viewing range (2 deg at 1.5 m = 5 cm), so the gate is
+            # for gross errors; the mean over the views is far tighter
+            max_std = float(sensor.get("max_std_mm", 100.0))
+            if r["std_mm"] > max_std:
+                print("  ! scatter %.1f mm exceeds max_std_mm=%.1f -> not localised "
+                      "(views disagree: a bad board pose, or the odometry slipped)"
+                      % (r["std_mm"], max_std))
+                continue
+            # the parked part alone (what dwell_only keeps), for comparison
+            hits = sorted(lr["hits"], key=lambda h: h["t"])
+            Pb = np.array([h["T_board_cam"][:3, 3] for h in hits])
+            ref = np.median(Pb[:min(5, len(Pb))], axis=0)
+            tol_m = float(sensor.get("static_tol_mm", s.get("static_tol_mm", 50.0))) * 1e-3
+            moved = np.flatnonzero(np.linalg.norm(Pb - ref, axis=1) > tol_m)
+            dwell = hits[:int(moved[0])] if len(moved) else hits
+            dwell = [h for h in dwell if tr_t[0] <= h["t"] <= tr_t[-1]]
+            if len(dwell) >= 3:
+                Td, _ = avg_T([h["T_map_cam"] for h in dwell])
+                Tl = cam_at(r, tr_t, tr_T, T_lc, float(np.mean([h["t"] for h in dwell])))
+                print("  parked part alone (%d sightings, what a dwell would use) vs all "
+                      "views: %.1f cm / %.2f deg"
+                      % (len(dwell), np.linalg.norm(Td[:3, 3] - Tl[:3, 3]) * 100,
+                         ang_deg(Td[:3, :3], Tl[:3, :3])))
+            t0 = r["t_first"]
+            T_cam0 = cam_at(r, tr_t, tr_T, T_lc, t0)
+            cf = sensor.get("tf_child_frame") or ("%s_pose" % name)
+            cam_out[name] = {"mode": "lidar_odom", "board": lr["board"],
+                             "cam_frame": sensor["cam_frame"], "tf_child_frame": cf,
+                             "dwell_t_end": t0, "run_traj": run_traj,
+                             "n_views": r["n_views"], "n_used": r["n_used"],
+                             "std_mm": round(r["std_mm"], 2), "max_mm": round(r["max_mm"], 2),
+                             "max_deg": round(r["max_deg"], 3),
+                             "view_angle_deg": round(r["view_angle_deg"], 1),
+                             "camera_moved_m": round(r["camera_moved_m"], 3),
+                             "map_to_cam": T_record(map_frame, cf, T_cam0),
+                             "map_to_glim_world": T_record(map_frame, "glim_world",
+                                                           r["T_map_glim"])}
+            print("  -> %s in map at the first view (t=%.3f): xyz=%s qxyzw=%s"
+                  % (name, t0, T_cam0[:3, 3].round(4).tolist(),
+                     R_to_q(T_cam0[:3, :3]).round(6).tolist()))
+            lines.append(("[%s -> %s]  (%s at its first board view, from %d views combined "
+                          "through the LiDAR odometry, std %.1f mm)"
+                          % (map_frame, cf, name, r["n_views"], r["std_mm"]),
+                          stp(map_frame, cf, T_cam0), True))
 
     # --------- origin-mode sensors, relative to their anchor board --------- #
     if results:

@@ -8,7 +8,8 @@
     "reference_pass": "mapping_A"
   },
   "04_build_cameras": {"cameras": [{"name": "realsense", "enabled": false}]},
-  "06_init": {"sensors": [{"name": "realsense", "enabled": false}]},
+  "06_init": {"sensors": [{"name": "zed", "source": "lidar_odom"},
+                          {"name": "realsense", "enabled": false}]},
   "08_reference": {"tracks": [{"name": "mobile_2_rs", "enabled": false},
                               {"name": "mobile_1_lidarboards", "enabled": false}]},
   "09_publish": {"robots": [{"name": "mobile_2", "enabled": false}]}

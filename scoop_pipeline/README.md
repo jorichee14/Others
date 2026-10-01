@@ -40,8 +40,10 @@ map_stages/          map from LiDAR + GLIM poses (01_build_map.py, 01a_refine_po
                      datasets/<machine>/<format>_<depth>_<pass>_<date> from datasets/
                      mapping pass: 01 map, 01a refine, 03 anchor, 02 view copy, 04/05 cameras+TF;
                      a run in that map (pipeline_config_<run>.json: "extends" the mapping
-                     config, dataset.reference_pass): 06 start pose from the anchor-board
-                     dwell (optional: 06_init.relocalize, LiDAR relocalization, lidar_reloc.py),
+                     config, dataset.reference_pass): 06 start pose from the anchor board --
+                     "source": "lidar_odom" combines every opening view, parked or moving,
+                     through the run's GLIM trajectory (board_views.py); optional:
+                     06_init.relocalize, LiDAR relocalization (lidar_reloc.py),
                      08 per-scan LiDAR ICP to the anchored map, 07 run cloud, 04 cameras,
                      09 poses bag
 datasets/            bags -> datasets for other tools
