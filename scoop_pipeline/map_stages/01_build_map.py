@@ -178,6 +178,14 @@ def init_gpu(want):
     """Bring up CuPy if requested and available. Returns True when live."""
     if not want:
         return False
+    # CuPy's CUB reductions are compiled at run time against the CUDA headers
+    # of the system toolkit (CUDA_PATH, else /usr/local/cuda). When that is a
+    # different CUDA major than the CuPy wheel -- /usr/local/cuda-13.0 next to
+    # cupy-cuda12x -- they do not compile. Without CUB, CuPy uses its own
+    # reduction and scan kernels, which need only the headers it ships. Read
+    # at import, so it is set before CuPy is imported; export
+    # CUPY_ACCELERATORS=cub to use CUB with a matching toolkit.
+    os.environ.setdefault("CUPY_ACCELERATORS", "")
     try:
         import cupy as cp
         if cp.cuda.runtime.getDeviceCount() == 0:
@@ -203,6 +211,10 @@ def init_gpu(want):
         msg = str(e)
         print(f"[gpu] requested but unavailable ({type(e).__name__}: {msg})"
               f" -> running on CPU")
+        if "CompileException" in type(e).__name__ or "nvrtc_error" in msg.lower():
+            print("[gpu] CuPy could not compile a kernel; usually the CUDA "
+                  "headers it found (CUDA_PATH, /usr/local/cuda) are a different "
+                  "CUDA major than the cupy-cudaNNx wheel")
         missing = [w for k, w in _CUDA_WHEELS.items() if k in msg.lower()]
         if missing:
             print("[gpu] a CUDA library CuPy needs is not installed. Install the "
@@ -229,6 +241,12 @@ def _gpu_smoke_test(cp):
     # placement (p @ R.T) is where that used to surface
     R = cp.eye(3, dtype=cp.float32)
     c += (b @ R.T).sum() + cp.einsum("nij,nj->ni", cp.stack([R] * 4), b).sum()
+    # large-array reductions, scans and unique take other kernels than the
+    # small ones above (CUB ones when it is enabled); carving and the voxel
+    # accumulators run exactly these
+    big = cp.arange(1 << 20, dtype=cp.int64)
+    c += float(bool((big > 5).any())) + float(cp.cumsum(big.astype(cp.float64))[-1])
+    c += float(cp.unique(big % 1000).size) + float(cp.flatnonzero(big < 3).size)
     float(c)                                   # forces a device sync
 
 
