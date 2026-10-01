@@ -340,6 +340,47 @@ def test_dataset_naming(tmp):
     assert os.path.basename(res["bags"][0]) == "mapping_A_20260924_merged.bag", res["bags"]
 
 
+def test_pack_cloud_and_small_mcd(tmp):
+    from scoop import ouster
+    a = np.zeros(6, ouster.ROS_POINT_DTYPE)
+    a["x"], a["y"], a["z"] = np.arange(6), -np.arange(6), 0.5
+    a["t"], a["ring"], a["range"], a["intensity"] = np.arange(6) * 1000, 3, 7000, 12.5
+    msg = rosmsg.pointcloud2(a, T0, LIDAR, height=2, width=3)
+    fields, step, data = mc.pack_cloud(msg)
+    assert msg.point_step == 48 and step == 30, (msg.point_step, step)
+    packed = np.frombuffer(data.tobytes(), np.dtype({
+        "names": [f[0] for f in fields], "offsets": [f[1] for f in fields],
+        "formats": [ouster.ROS_POINT_DTYPE.fields[f[0]][0] for f in fields], "itemsize": step}))
+    for k in ouster.ROS_POINT_DTYPE.names:
+        assert np.array_equal(packed[k], a[k]), k
+    try:
+        from rosbags.rosbag1 import Reader
+        import lz4                                                # noqa: F401
+    except ImportError:
+        print("    (rosbags / lz4 not installed: MCD part skipped)")
+        return
+    bag = os.path.join(tmp, "bag")
+    write_bag(bag)
+    ply, tum = write_map_and_tum(tmp)
+    cfg = {"sequence": "small", "compress": "lz4",
+           "pose": {"tum": tum, "tum_frame": LIDAR, "frame": CAM, "rate_hz": 10},
+           "sensors": {
+               "cam": {"type": "image", "topic": "/image", "info": "/info",
+                       "out_topic": "/cam/image", "is_body": True},
+               "depth": {"type": "depth", "source": "map", "camera": "cam",
+                         "out_topic": "/cam/depth"},
+               "lidar": {"type": "pointcloud", "topic": "/points", "out_topic": "/os/points",
+                         "tf_frame": "auto"}}}
+    res = mc.to_mcd(bag, os.path.join(tmp, "small"), cfg, map=ply, gpu=False, every=2)
+    n = res["messages"]
+    assert n["cam"] == n["depth"] == 15 and n["lidar"] == 20, n
+    stamps = {}
+    with Reader(res["bags"][0]) as r:
+        for conn, t, raw in r.messages():
+            stamps.setdefault(conn.topic, []).append(t)
+    assert stamps["/cam/image"] == stamps["/cam/depth"], "depth not on the kept images"
+
+
 def main():
     logging.basicConfig(level=logging.WARNING)
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

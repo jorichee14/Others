@@ -1293,7 +1293,9 @@ DEFAULT_MCD_CONFIG = """\
 
 # sequence: <name>        # bags are <sequence>_merged.bag; default: <pass>_<date> of the
 #                          # bag (data/work/<date>/<pass>/...), else the output folder's name
-compress: false            # true = bz2 like the released MCD bags (slower)
+compress: lz4              # chunk compression: none | lz4 (fast) | bz2 (as the released
+                           # MCD bags, slower and smaller)
+every: 1                   # images and depth: keep every Nth (the other sensors all)
 merged: true               # one <seq>_merged.bag like MCD; false = one bag per "bag:" name
 
 pose:
@@ -1335,6 +1337,7 @@ sensors:
 
   ouster:
     type: pointcloud
+    pack: true                               # drop the padding between point fields
     topic: /mobile_1/ouster/points
     out_topic: /os_cloud_node/points         # MCD topic name
     bag: ouster
@@ -1446,6 +1449,31 @@ def resolve_extrinsic(name, s, body_frame, edges, done, paths):
     return T, how
 
 
+_PF_SIZE = {1: 1, 2: 1, 3: 2, 4: 2, 5: 4, 6: 4, 7: 4, 8: 8}
+
+
+def pack_cloud(msg):
+    """A PointCloud2's points with the padding between fields removed (the
+    ouster_ros layout pads 30 bytes of fields to 48): (fields as (name,
+    offset, datatype, count), point_step, data bytes). Same fields, same
+    values, same order of points; organized clouds stay organized."""
+    fs = sorted(msg.fields, key=lambda f: f.offset)
+    new, off = [], 0
+    for f in fs:
+        new.append((f.name, off, f.datatype, f.count))
+        off += _PF_SIZE[f.datatype] * f.count
+    w, h, ps = msg.width, msg.height, msg.point_step
+    raw = np.frombuffer(bytes(msg.data), np.uint8)
+    if off == ps:
+        return new, ps, raw
+    src = raw[: h * msg.row_step].reshape(h, msg.row_step)[:, : w * ps].reshape(-1, ps)
+    dst = np.empty((len(src), off), np.uint8)
+    for (_, o, d, c), f in zip(new, fs):
+        n = _PF_SIZE[d] * c
+        dst[:, o:o + n] = src[:, f.offset:f.offset + n]
+    return new, off, dst.reshape(-1)
+
+
 class _Ros1Writer:
     """ROS 2 messages -> ROS 1 messages for the MCD bags (rosbags typestore)."""
 
@@ -1508,13 +1536,16 @@ class _Ros1Writer:
                 linear_acceleration_covariance=np.asarray(msg.linear_acceleration_covariance,
                                                           np.float64))
         else:  # pointcloud
+            fields, step, data = ([(f.name, f.offset, f.datatype, f.count) for f in msg.fields],
+                                  msg.point_step, np.frombuffer(bytes(msg.data), np.uint8))
+            if s.get("pack", True):
+                fields, step, data = pack_cloud(msg)
             out = self.PC2(
                 header=self.header(t, frame, topic), height=msg.height, width=msg.width,
-                fields=[self.PField(name=f.name, offset=f.offset, datatype=f.datatype,
-                                    count=f.count) for f in msg.fields],
-                is_bigendian=bool(msg.is_bigendian), point_step=msg.point_step,
-                row_step=msg.row_step, data=np.frombuffer(bytes(msg.data), np.uint8),
-                is_dense=bool(msg.is_dense))
+                fields=[self.PField(name=n, offset=o, datatype=d, count=c)
+                        for n, o, d, c in fields],
+                is_bigendian=bool(msg.is_bigendian), point_step=step,
+                row_step=step * msg.width, data=data, is_dense=bool(msg.is_dense))
         return self.ts.serialize_ros1(out, MSGTYPE[typ])
 
 
@@ -1533,8 +1564,12 @@ def _write_mcd_bags(paths, out, seq, cfg, sensors, generated=None):
         if os.path.exists(p):
             os.remove(p)
         w = rw.Writer(p)
-        if cfg.get("compress"):
-            w.set_compression(rw.Writer.CompressionFormat.BZ2)
+        comp = {True: "bz2", False: "none", None: "none"}.get(cfg.get("compress"),
+                                                               cfg.get("compress"))
+        if comp not in ("none", "lz4", "bz2"):
+            raise ConvertError(f"compress: {comp!r} (none | lz4 | bz2)")
+        if comp != "none":
+            w.set_compression(getattr(rw.Writer.CompressionFormat, comp.upper()))
         w.open()
         by_topic, made = {}, {}
         for name in names:
@@ -1546,6 +1581,15 @@ def _write_mcd_bags(paths, out, seq, cfg, sensors, generated=None):
                 by_topic.setdefault(s["topic"], []).append((name, conn))
             counts[name], stamps[name] = 0, []
 
+        every = max(1, int(cfg.get("every", 1)))      # images and depth: every Nth
+        seen = {}
+
+        def keep(name):
+            if sensors[name]["type"] not in ("image", "depth") or every == 1:
+                return True
+            seen[name] = seen.get(name, -1) + 1
+            return seen[name] % every == 0
+
         def recorded():
             if by_topic:
                 for m in read(paths, list(by_topic)):
@@ -1553,28 +1597,47 @@ def _write_mcd_bags(paths, out, seq, cfg, sensors, generated=None):
 
         def rendered(name):
             for t, _, depth in generated[name]:
+                if not keep(name):                        # same images as the camera
+                    continue
                 got = depth()
                 if got is not None:
                     yield t, 1, (name, got[0])
 
-        for t, kind, item in heapq.merge(recorded(), *(rendered(n) for n in made),
-                                         key=lambda x: x[0]):
-            if kind == 0:
-                for name, conn in by_topic[item.channel.topic]:
-                    w.write(conn, t, rw.convert(sensors[name], name, item.ros_msg, t))
+        try:
+            for t, kind, item in heapq.merge(recorded(), *(rendered(n) for n in made),
+                                             key=lambda x: x[0]):
+                if kind == 0:
+                    for name, conn in by_topic[item.channel.topic]:
+                        if not keep(name):
+                            continue
+                        w.write(conn, t, rw.convert(sensors[name], name, item.ros_msg, t))
+                        counts[name] += 1
+                        stamps[name].append(t)
+                else:
+                    name, D = item
+                    s = sensors[name]
+                    img = rw.image(t, np.clip(np.round(D * 1000.0), 0, 65535).astype(np.uint16),
+                                   "16UC1", s.get("out_frame", name), s["out_topic"])
+                    w.write(made[name], t, rw.ts.serialize_ros1(img, MSGTYPE["depth"]))
                     counts[name] += 1
                     stamps[name].append(t)
-            else:
-                name, D = item
-                s = sensors[name]
-                img = rw.image(t, np.clip(np.round(D * 1000.0), 0, 65535).astype(np.uint16),
-                               "16UC1", s.get("out_frame", name), s["out_topic"])
-                w.write(made[name], t, rw.ts.serialize_ros1(img, MSGTYPE["depth"]))
-                counts[name] += 1
-                stamps[name].append(t)
-                if counts[name] % 1000 == 0:
-                    log.info(f"  {name}: {counts[name]} depth frames")
-        w.close()
+                    if counts[name] % 1000 == 0:
+                        log.info(f"  {name}: {counts[name]} depth frames, bag "
+                                 f"{os.path.getsize(p) / 2**30:.1f} GiB")
+            w.close()
+        except BaseException as e:                        # a half bag is no bag
+            try:
+                w.close()
+            except Exception:
+                pass
+            if os.path.exists(p):
+                os.remove(p)
+            if isinstance(e, OSError) and e.errno == 28:
+                raise ConvertError(
+                    f"no space left for {p} (removed). Write elsewhere (the output folder "
+                    "argument), or make it smaller: --compress lz4, --every N for the "
+                    "images and depth; clouds are already packed") from e
+            raise
         files.append(p)
         log.info(f"  {p}: " + ", ".join(f"{n} {counts[n]}" for n in names))
         for n in names:
@@ -1714,7 +1777,8 @@ def _write_mcd_sensor_yamls(out, cfg, sensors, done, paths):
 
 
 def to_mcd(bag, out, config=None, *, pose_tum=None, tum_frame=None, depth_source=None,
-           map=None, map_voxel=None, lidar=None, lidar_scans=None, splat=1.0, gpu=True):
+           map=None, map_voxel=None, lidar=None, lidar_scans=None, splat=1.0, gpu=True,
+           compress=None, every=None):
     """MCD dataset layout.
 
     bag, out   recording (.mcap or bag dir, or list of .mcap) / output dir
@@ -1723,13 +1787,18 @@ def to_mcd(bag, out, config=None, *, pose_tum=None, tum_frame=None, depth_source
                  sequence, compress, merged,
                  pose{topic | tum + tum_frame, frame, sample_at|rate_hz, bag},
                  yaml{imu, camera, lidar_timestamp_end}, sensors{name: {...}}
+    compress (none | lz4 | bz2) and every (images and depth) override the config's.
     The keyword arguments override the config: pose_tum / tum_frame the pose
     source, depth_source (topic | lidar | map) / map / map_voxel / lidar /
     lidar_scans every depth sensor.
     Returns a dict with bags, message counts, ground-truth rows, missing extrinsics.
     """
     paths = _paths(bag)
-    cfg = load_mcd_config(config)
+    cfg = dict(load_mcd_config(config))
+    if compress is not None:
+        cfg["compress"] = compress
+    if every is not None:
+        cfg["every"] = every
     pose_cfg = dict(cfg["pose"])
     sensors = {k: dict(v) for k, v in cfg["sensors"].items()}
     dp = pass_of(bag) or pass_of(paths[0])
@@ -2094,6 +2163,8 @@ def _cli():
     g = ap.add_argument_group("mcd")
     g.add_argument("--config", default=None,
                    help="sensor config yaml (default: built-in mobile_1, DEFAULT_MCD_CONFIG)")
+    g.add_argument("--compress", choices=["none", "lz4", "bz2"], default=None,
+                   help="ROS1 bag chunk compression (default: the config's, built-in lz4)")
     a = ap.parse_args()
 
     logging.basicConfig(level=logging.WARNING if a.quiet else logging.INFO,
@@ -2130,7 +2201,9 @@ def _cli():
                        depth_min=a.depth_min, depth_max=a.depth_max, every=a.every,
                        max_frames=a.max_frames, jpeg_quality=a.jpeg_quality)
         elif a.format == "mcd":
-            to_mcd(a.bag, a.out, config=a.config, pose_tum=a.pose_tum, tum_frame=a.tum_frame,
+            to_mcd(a.bag, a.out, config=a.config, compress=a.compress,
+                   every=a.every if a.every != 1 else None,
+                   pose_tum=a.pose_tum, tum_frame=a.tum_frame,
                    depth_source=a.depth_source, map=a.map,
                    map_voxel=a.map_voxel if a.depth_source == "map" or a.map else None,
                    lidar=None if a.lidar == "/mobile_1/ouster/points" else a.lidar,
