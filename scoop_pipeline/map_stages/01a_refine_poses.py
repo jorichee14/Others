@@ -23,6 +23,9 @@ refined pose, so errors cannot accumulate along the trajectory. A registration
 that wants to move a scan further than max_shift / max_rot is rejected and the
 seed pose is kept -- one bad ICP basin can never drag the trajectory with it.
 
+Outputs go to <processed>/odometry/<machine>/ and the round-1 map is read from
+<processed>/mapping/ (data/processed/<date>/<pass>/, pipeline_common.ROUTES).
+
 Multiple rounds are done in-process: round 1 registers against the map implied
 by the seed poses (or, better, the pipeline's denoised.pcd, which has already
 had dynamic objects and outliers removed), and each later round rebuilds the
@@ -45,7 +48,6 @@ Config block (all optional, under "01a_refine"):
   "output":         "traj_lidar_refined.txt"
 """
 import argparse
-import json
 import os
 import sys
 import time
@@ -56,6 +58,8 @@ import open3d as o3d
 from scipy.spatial import cKDTree
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
+
+from pipeline_common import load_pipeline
 
 TS = get_typestore(Stores.ROS2_HUMBLE)
 
@@ -463,8 +467,9 @@ def main():
     ap.add_argument("--rounds", type=int, default=None)
     args = ap.parse_args()
 
-    cfg_all = json.load(open(args.config))
-    ds = cfg_all["dataset"]
+    P = load_pipeline(args.config)
+    cfg_all = P.cfg
+    ds = P.dataset
     s = cfg_all["01_build_map"]
     c = dict(map="denoised.pcd", target_voxel=0.05, scan_voxel=0.10,
              max_corr=[0.4, 0.2, 0.1], iters_per_gate=5, huber=0.05,
@@ -475,11 +480,12 @@ def main():
     c.update(cfg_all.get("01a_refine", {}))
     if args.rounds is not None:
         c["rounds"] = args.rounds
-    out_dir = ds["out_dir"]
     bag = ds["bag"]
+    print(P.describe())
 
-    times, T_seed = load_traj(ds["traj"])
-    print(f"seed trajectory: {ds['traj']}  ({len(times)} poses)")
+    seed = P.outp(ds["traj"])
+    times, T_seed = load_traj(seed)
+    print(f"seed trajectory: {seed}  ({len(times)} poses)")
     topic = detect_points_topic(bag, c["points_topic"], len(times))
     print(f"points topic: {topic}")
 
@@ -487,7 +493,7 @@ def main():
     history = []
     for rnd in range(1, int(c["rounds"]) + 1):
         print(f"\n=== round {rnd}/{c['rounds']} ===")
-        map_path = os.path.join(out_dir, c["map"]) if c["map"] else ""
+        map_path = P.outp(c["map"]) if c["map"] else ""
         if rnd == 1 and map_path and os.path.exists(map_path):
             print(f"[ref] loading {map_path}")
             pc = o3d.io.read_point_cloud(map_path)
@@ -566,11 +572,11 @@ def main():
         del ref
 
         base, ext = os.path.splitext(c["output"])
-        out_r = os.path.join(out_dir, f"{base}_r{rnd}{ext}")
+        out_r = P.outp(f"{base}_r{rnd}{ext}")
         write_traj(out_r, times, T_cur)
-        out = os.path.join(out_dir, c["output"])
+        out = P.outp(c["output"])
         write_traj(out, times, T_cur)
-        print(f"    wrote {out_r} (and {c['output']})")
+        print(f"    wrote {out_r} (and {out})")
 
     print("\n=== convergence (report this) ===")
     print(f"{'round':>6} | {'median corr':>12} | {'p95 corr':>10} | "
@@ -579,8 +585,9 @@ def main():
         print(f"{r:6d} | {m:9.2f} cm | {p:7.2f} cm | {res:13.2f} cm")
     print("\nA round that moves poses by a few millimetres means the "
           "trajectory and the map are self-consistent.")
-    print(f"\nnext: set dataset.traj to {c['output']}, delete "
-          f"merged/static/denoised/colored .pcd, re-run 01_build_map.py, "
+    print(f"\nnext: set dataset.traj to \"{c['output']}\" (found in "
+          f"{P.folder_for(c['output'])}), delete merged/static/denoised/colored .pcd "
+          f"in {P.folder_for('merged.pcd')}, re-run 01_build_map.py, "
           f"then map_quality.py")
 
 

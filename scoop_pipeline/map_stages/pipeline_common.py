@@ -20,6 +20,7 @@ CHANGES vs the previous revision
 """
 import os
 import json
+from fnmatch import fnmatch
 import numpy as np
 
 
@@ -335,14 +336,60 @@ def lookup_static(edges, src, dst):
     return None
 
 
+# ------------------------------ output layout -----------------------------
+# Outputs go to data/processed/<date>/<pass>/, mirroring data/raw and
+# data/work, split by what they are. A bare file name is placed by the first
+# pattern it matches; {machine} is the robot whose LiDAR the map stages use.
+#   mapping/            clouds: merged, static, denoised, colored, map_final, cut, ...
+#   odometry/<machine>/ trajectories: traj_lidar_refined*.txt, *.tum
+#   odometry/           reference tracks (08) of every robot
+#   bags/               bags written by the stages (09's best-poses bag)
+#   frames/             anchors, camera poses, TF scripts: anchor_frame.json, ...
+#   comms/              wifi / iperf / ntp results (no stage writes here yet)
+ROUTES = (
+    (("traj*", "*.tum"), "odometry/{machine}"),
+    (("reference_*",), "odometry"),
+    (("*.pcd", "*.ply", "objects*"), "mapping"),
+    (("*.mcap", "*_poses", "*_bag"), "bags"),
+    (("*",), "frames"),
+)
+
+
+def processed_dir_for(path):
+    """data/{raw,work,processed}/<date>/<pass>/... -> data/processed/<date>/<pass>.
+    The path is not resolved, so a data folder reached through a symlink stays
+    where it is."""
+    parts = os.path.abspath(os.path.expanduser(path)).split(os.sep)
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] in ("raw", "work", "processed") and len(parts) > i + 3:
+            return os.sep.join(parts[:i] + ["processed", parts[i + 1], parts[i + 2]])
+    raise SystemExit("%s is not below data/{raw,work}/<date>/<pass>/, so the "
+                     "processed folder cannot be derived from it; set "
+                     "dataset.processed (or dataset.out_dir for one flat folder)" % path)
+
+
+def topic_machine(topic):
+    """'/mobile_1/ouster/points' -> 'mobile_1'."""
+    return topic.strip("/").split("/")[0]
+
+
 class Pipeline:
     def __init__(self, cfg, cfg_dir):
         self.cfg = cfg
         self.cfg_dir = cfg_dir
-        self.dataset = cfg["dataset"]
-        self.out_dir = self.dataset["out_dir"]
-        self._sensor = None
+        d = self.dataset = dict(cfg["dataset"])
+        for k in ("bag", "traj", "calib_json", "out_dir", "processed"):
+            if isinstance(d.get(k), str) and d[k]:
+                d[k] = os.path.expanduser(d[k])
+        self.machine = d.get("machine") or topic_machine(
+            d.get("points_topic") or DEFAULT_TOPICS["points_topic"])
+        if d.get("out_dir"):                 # the old layout: one flat folder
+            self.out_dir, self.routed = d["out_dir"], False
+        else:
+            self.out_dir = d.get("processed") or processed_dir_for(d["bag"])
+            self.routed = True
         os.makedirs(self.out_dir, exist_ok=True)
+        self._sensor = None
 
     @property
     def sensor(self):
@@ -360,14 +407,32 @@ class Pipeline:
             print(self._sensor.describe())
         return self._sensor
 
+    def folder_for(self, name):
+        """The folder a bare output name belongs in (see ROUTES)."""
+        if not self.routed:
+            return self.out_dir
+        for pats, sub in ROUTES:
+            if any(fnmatch(name, p) for p in pats):
+                return os.path.join(self.out_dir, sub.format(machine=self.machine))
+        return self.out_dir
+
     def outp(self, name):
-        """Resolve a bare filename against out_dir (absolute/with-dir passes through)."""
+        """A bare file name -> its place in the layout (folder created); a path
+        with a folder in it (absolute, ~/..., or relative) is used as given."""
         if os.path.isabs(name) or os.path.dirname(name):
-            return name
-        return os.path.join(self.out_dir, name)
+            return os.path.expanduser(name)
+        d = self.folder_for(name)
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, name)
+
+    def describe(self):
+        if not self.routed:
+            return "outputs -> %s/" % self.out_dir
+        return ("outputs -> %s/  (mapping/, odometry/%s/, frames/, bags/)"
+                % (self.out_dir, self.machine))
 
     def stage(self, key):
-        """Return this stage's dict with any *file* fields resolved against out_dir."""
+        """Return this stage's dict with any *file* fields resolved against the layout."""
         s = dict(self.cfg[key])
         for k in ("input", "output", "frame_out", "anchor_frame", "script_out"):
             if k in s and isinstance(s[k], str):

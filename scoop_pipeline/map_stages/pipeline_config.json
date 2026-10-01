@@ -1,8 +1,8 @@
 {
   "dataset": {
-    "bag": "/home/wicoms-robot/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_mapping2_20260828_merged",
-    "traj": "map_stages_20260828_outputs/traj_lidar_refined_r3.txt",
-    "out_dir": "map_stages_20260828_outputs"
+    "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping_A/mirc_dataset_mapping_A_20260924_merged",
+    "traj": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping_A/mobile_1/glim/traj_lidar.txt",
+    "machine": "mobile_1"
   },
    "boards": {
     "anchor": {

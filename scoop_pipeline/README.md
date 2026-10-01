@@ -35,7 +35,8 @@ scripts/             command lines only: argument parsing around scoop/
   tf_edit.py         show or change a bag's TF: drop edges, add transforms, new odometry
   merge_bags.py      any bags -> one, with the topics you choose (--list, --topics, --pick)
   ../map_stages/      map from LiDAR + GLIM poses (01_build_map.py, 01a_refine_poses.py, ...);
-                     calibration read from the bag (camera_info + /tf_static)
+                     calibration read from the bag (camera_info + /tf_static); outputs in
+                     data/processed/<date>/<pass>/{mapping,odometry/<machine>,frames,bags,comms}
   mcap_convert.py    bag -> SLAM datasets: replica (RGB + lidar depth), mcd, mcgs (standalone)
   run_zed.sh         ZED wrapper replay + ros2 bag record (here or in the isaac_ros container)
   bag_check.py       verify + time the fast decoder on a real bag

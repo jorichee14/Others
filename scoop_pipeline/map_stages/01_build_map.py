@@ -10,7 +10,8 @@ Everything (paths, voxels, toggles, topics) comes from pipeline_config.json;
 the intrinsics, image size and T_lidar_camera come from the bag (left
 camera_info + /tf_static), or from dataset.calib_json when it is set.
 
-Intermediate stages are written to out_dir so a re-run can resume from merge:
+Intermediate stages are written to <processed>/mapping/ (data/processed/<date>/
+<pass>/, see pipeline_common.ROUTES) so a re-run can resume from merge:
   merged.pcd  [static.pcd]  denoised.pcd  colored.pcd  [flattened.pcd]  [anchored.pcd]
 
 DYNAMIC-OBJECT REMOVAL (moving people / vehicles), stage [1b], optional.
@@ -1308,7 +1309,8 @@ def main():
     s = P.stage("01_build_map")
     init_gpu(s.get("gpu", True))
     P.traj = load_traj_cached(P)
-    print(f"loaded {len(P.traj[0])} GLIM poses; outputs -> {P.out_dir}/")
+    print(f"loaded {len(P.traj[0])} GLIM poses from {P.outp(P.dataset['traj'])}")
+    print(P.describe())
 
     rd = s.get("remove_dynamic", {})
     rd_on = bool(rd.get("enable", False))
@@ -1376,7 +1378,7 @@ def main():
 
 def load_traj_cached(P):
     from pipeline_common import load_traj
-    return load_traj(P.dataset["traj"])
+    return load_traj(P.outp(P.dataset["traj"]))
 
 
 if __name__ == "__main__":
