@@ -33,7 +33,12 @@ reference map from the poses the previous round produced. The per-round
 correction statistics printed at the end are the convergence evidence: when
 round N moves the poses by millimetres, the trajectory and the map agree.
 
-  python3 01a_refine_poses.py [pipeline_config.json] [--rounds N]
+  python3 01a_refine_poses.py [pipeline_config.json] [--rounds N] [--restart]
+
+Rounds already written (traj_lidar_refined_r1.txt, _r2, ...) are not redone:
+--rounds 3 after a 2-round run does round 3 only, starting from _r2's poses
+(and the convergence table includes the earlier rounds, kept in
+traj_lidar_refined_rounds.json). --restart starts again from round 1.
 
 Config block (all optional, under "01a_refine"):
   "map":            denoised_<tag>.pcd, what 01 wrote  # reference for round 1; "" = build it
@@ -50,6 +55,7 @@ Config block (all optional, under "01a_refine"):
   "deskew_bins":    01_build_map.deskew_bins  # the trajectory of the current round
 """
 import argparse
+import json
 import os
 import sys
 import time
@@ -464,10 +470,78 @@ def build_reference(bag, topic, times, T, cfg, s):
     return pts
 
 
+def resume_point(P, base, times):
+    """(k, poses) of the last round written so far -- traj_lidar_refined_r1,
+    _r2, ... in a row -- or None. Its stamps must be the seed's: a file
+    from another seed trajectory is not continued."""
+    k, path = 0, None
+    while os.path.exists(P.outp(f"{base[0]}_r{k + 1}{base[1]}")):
+        k += 1
+        path = P.outp(f"{base[0]}_r{k}{base[1]}")
+    if not k:
+        return None
+    t, T = load_traj(path)
+    if len(t) != len(times) or not np.allclose(t, times, atol=1e-6):
+        raise SystemExit(f"{path} has other stamps than the seed trajectory "
+                         f"({len(t)} vs {len(times)} poses): it was refined from "
+                         f"another seed. --restart starts again from this seed")
+    return k, T
+
+
+def rounds_from_files(P, base, T_seed, k, known):
+    """Correction statistics of rounds 1..k rebuilt from the trajectories:
+    how far each round moved the poses it refined (poses it left alone,
+    rejected or without a scan, are equal in both files and not counted).
+    The residual is not in the files: nan."""
+    have = {int(r[0]): tuple(r) for r in known}
+    prev, out = T_seed, []
+    for r in range(1, k + 1):
+        _, T = load_traj(P.outp(f"{base[0]}_r{r}{base[1]}"))
+        if r in have:
+            out.append(have[r])
+        else:
+            d = np.linalg.norm(T[:, :3, 3] - prev[:, :3, 3], axis=1)
+            d = d[d > 2e-6] * 100            # files keep 1e-6 m
+            out.append((r, float(np.median(d)) if d.size else 0.0,
+                        float(np.percentile(d, 95)) if d.size else 0.0, float("nan")))
+        prev = T
+    return out
+
+
+def load_rounds(path):
+    """Per-round statistics of earlier runs (for the convergence table)."""
+    try:
+        with open(path) as f:
+            return json.load(f)["rounds"]
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+def save_rounds(path, history, seed):
+    with open(path, "w") as f:
+        json.dump({"seed": seed, "columns": ["round", "median_corr_cm", "p95_corr_cm",
+                                             "median_residual_cm"],
+                   "rounds": [list(r) for r in history]}, f, indent=1)
+
+
+def print_convergence(history):
+    print("\n=== convergence (report this) ===")
+    print(f"{'round':>6} | {'median corr':>12} | {'p95 corr':>10} | "
+          f"{'median residual':>16}")
+    for r, m, p, res in history:
+        rs = f"{res:13.2f} cm" if np.isfinite(res) else f"{'n/a':>16}"
+        print(f"{r:6d} | {m:9.2f} cm | {p:7.2f} cm | {rs}")
+    print("\nA round that moves poses by a few millimetres means the "
+          "trajectory and the map are self-consistent.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("config", nargs="?", default="pipeline_config.json")
-    ap.add_argument("--rounds", type=int, default=None)
+    ap.add_argument("--rounds", type=int, default=None,
+                    help="rounds in total; rounds already written are not redone")
+    ap.add_argument("--restart", action="store_true",
+                    help="start again from round 1 instead of continuing")
     args = ap.parse_args()
 
     P = load_pipeline(args.config)
@@ -497,7 +571,24 @@ def main():
 
     T_cur = T_seed.copy()
     history = []
-    for rnd in range(1, int(c["rounds"]) + 1):
+    first, base = 1, os.path.splitext(c["output"])
+    log_path = P.outp(f"{base[0]}_rounds.json")
+    if not args.restart:
+        done = resume_point(P, base, times)
+        if done:
+            k, T_cur = done
+            history = [tuple(r) for r in load_rounds(log_path) if r[0] <= k]
+            if len(history) < k:     # rounds from before the statistics were kept
+                history = rounds_from_files(P, base, T_seed, k, history)
+            if k >= int(c["rounds"]):
+                print(f"\n{k} rounds already done ({P.outp(f'{base[0]}_r{k}{base[1]}')}); "
+                      f"--rounds {k + 1} continues, --restart starts again")
+                print_convergence(history)
+                return
+            first = k + 1
+            print(f"\ncontinuing after round {k}: poses from "
+                  f"{P.outp(f'{base[0]}_r{k}{base[1]}')}")
+    for rnd in range(first, int(c["rounds"]) + 1):
         print(f"\n=== round {rnd}/{c['rounds']} ===")
         map_path = P.outp(c["map"]) if c["map"] else ""
         if rnd == 1 and map_path and os.path.exists(map_path):
@@ -578,20 +669,14 @@ def main():
         T_cur = T_new
         del ref
 
-        base, ext = os.path.splitext(c["output"])
-        out_r = P.outp(f"{base}_r{rnd}{ext}")
+        out_r = P.outp(f"{base[0]}_r{rnd}{base[1]}")
         write_traj(out_r, times, T_cur)
         out = P.outp(c["output"])
         write_traj(out, times, T_cur)
+        save_rounds(log_path, history, seed)
         print(f"    wrote {out_r} (and {out})")
 
-    print("\n=== convergence (report this) ===")
-    print(f"{'round':>6} | {'median corr':>12} | {'p95 corr':>10} | "
-          f"{'median residual':>16}")
-    for r, m, p, res in history:
-        print(f"{r:6d} | {m:9.2f} cm | {p:7.2f} cm | {res:13.2f} cm")
-    print("\nA round that moves poses by a few millimetres means the "
-          "trajectory and the map are self-consistent.")
+    print_convergence(history)
     print(f"\nnext: set dataset.traj to \"{c['output']}\" (found in "
           f"{P.folder_for(c['output'])}), delete "
           f"{', '.join(P.pcd(b) for b in ('merged', 'static', 'denoised', 'colored'))} "
