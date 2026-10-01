@@ -77,8 +77,9 @@
   },
 
   "02_cut": {
-    "input": "map_final_{tag}.pcd",
-    "output": "map_final_{tag}_nc.pcd",
+    "_note": "viewing copy only: run after 03, ceiling cut; nothing downstream reads it",
+    "input": "map_final_{tag}_anchored.pcd",
+    "output": "map_final_{tag}_anchored_noceil.pcd",
     "axis": "z",
     "floor": null,
     "ceil": null,
@@ -86,8 +87,8 @@
     "bins": 100
   },
   "03_anchor": {
-    "input": "map_final_{tag}_nc.pcd",
-    "output": "map_final_{tag}_nc_anchored.pcd",
+    "input": "map_final_{tag}.pcd",
+    "output": "map_final_{tag}_anchored.pcd",
     "frame_out": "anchor_frame.json",
     "skip_cloud": false,
 
