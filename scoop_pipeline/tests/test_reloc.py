@@ -181,7 +181,7 @@ def build(tmp, boxes):
                                  "image_topic": "/mobile_1/zed/left/image_rect_color",
                                  "camera_info_topic": "/mobile_1/zed/left/camera_info",
                                  "rectified": True}],
-                    "relocalize": {"window_s": 3.0, "check_after_s": 14.0, "tries": 6}}},
+                    "relocalize": {"enabled": True, "window_s": 3.0, "check_after_s": 14.0}}},
         open(cfg, "w"))
     return cfg, data, T_lc
 

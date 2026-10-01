@@ -373,11 +373,12 @@ def main():
     # A sensor that omits its topics inherits them from P.sensor (the ZED block
     # in calibration.json), so the ZED entry stays a two-liner.
     S = P.sensor
-    # a run in another pass's map: its start from the LiDAR first (lidar_reloc;
-    # refuses when a check fails), the board dwell below then only checks it
+    # optional ("relocalize": {"enabled": true}): the start from the LiDAR
+    # (lidar_reloc; refuses when a check fails), the board dwell then checks it.
+    # Off by default: the start comes from the board dwell, as always.
     rcfg = s.get("relocalize") or {}
     reloc = None
-    if rcfg.get("enabled", bool(P.reference)):
+    if rcfg.get("enabled", False):
         from lidar_reloc import relocalize
         reloc = relocalize(P, S.T_lidar_camera)
     sensors = [x for x in s["sensors"] if x.get("enabled", True)]

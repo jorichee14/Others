@@ -33,7 +33,7 @@ Then it is CHECKED, and refused if a check fails:
               (grey) around the start, for a viewer.
 
 Config: "06_init": {"relocalize": {...}}, all optional:
-  "enabled":       true with dataset.reference_pass
+  "enabled":       false (the start comes from the board dwell unless this is on)
   "anchor_cam":    "zed"        # the camera entry 08 anchors on
   "run_traj":      <work>/<date>/<pass>/<machine>/glim/traj_lidar.txt
   "map":           the reference pass's map_final_<tag>_anchored.pcd
