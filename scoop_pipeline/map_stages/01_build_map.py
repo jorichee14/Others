@@ -96,7 +96,8 @@ from pathlib import Path
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
-from pipeline_common import load_pipeline
+from pipeline_common import (load_pipeline, pc2_xyzt, pc2_xyz,  # noqa: F401
+                             traj_quats, interp_poses)
 
 TS = get_typestore(Stores.ROS2_HUMBLE)
 
@@ -353,140 +354,6 @@ def unpack_voxels(keys):
     return m.stack([(keys >> (2 * _VOX_BITS)) & mask,
                     (keys >> _VOX_BITS) & mask,
                     keys & mask], axis=1) - _VOX_OFF
-
-
-# ---- per-point timestamps ---------------------------------------------------
-# ROS PointField datatype enum -> numpy
-_PF_DT = {1: np.int8, 2: np.uint8, 3: np.int16, 4: np.uint16,
-          5: np.int32, 6: np.uint32, 7: np.float32, 8: np.float64}
-# per-point time field, in the order drivers commonly name it
-_T_NAMES = ("t", "time", "timestamp", "time_offset", "point_time", "ts")
-_T_INFO = {}          # detected once, then reused (and printed once)
-
-
-def pc2_xyzt(msg):
-    """(N,3) xyz plus (N,) per-point time in SECONDS RELATIVE to the frame
-    stamp, or None when the cloud carries no usable time field.
-
-    Handles both conventions: relative offsets (Ouster 't', uint32 ns) and
-    absolute per-point stamps (float64 s). The scale is detected from the data
-    rather than trusted from config -- a wrong guess is silent, it just
-    produces a differently-shaped smear."""
-    off = {f.name: (f.offset, f.datatype) for f in msg.fields}
-    raw = np.frombuffer(bytes(msg.data), np.uint8).reshape(-1, msg.point_step)
-
-    def col(name):
-        o, dt = off[name]
-        t = _PF_DT[dt]
-        w = np.dtype(t).itemsize
-        return raw[:, o:o + w].copy().view(t).ravel()
-
-    xyz = np.stack([col("x").astype(np.float32),
-                    col("y").astype(np.float32),
-                    col("z").astype(np.float32)], 1)
-
-    name = next((n for n in _T_NAMES if n in off), None)
-    if name is None:
-        if "scale" not in _T_INFO:
-            _T_INFO.update(scale=0.0, absolute=False, field=None)
-            print(f"    [deskew] no per-point time field (fields: "
-                  f"{sorted(off)}) -> deskew DISABLED")
-        return xyz, None
-
-    tt = col(name).astype(np.float64)
-    if "scale" not in _T_INFO:
-        # a LiDAR sweep is 50-200 ms; pick the scale that lands the span there
-        span = float(tt.max() - tt.min())
-        sc = 0.0
-        if span > 0:
-            for cand in (1e-9, 1e-6, 1e-3, 1.0):
-                if 0.005 < span * cand < 1.0:
-                    sc = cand
-                    break
-        _T_INFO.update(scale=sc, field=name,
-                       absolute=bool(sc and tt.min() * sc > 1e6))
-        if sc:
-            print(f"    [deskew] time field '{name}', scale {sc:g}, "
-                  f"{'absolute' if _T_INFO['absolute'] else 'relative'}, "
-                  f"sweep {span * sc * 1e3:.1f} ms")
-        else:
-            print(f"    [deskew] time field '{name}' has an unusable span "
-                  f"({span:g}) -> deskew DISABLED")
-    if not _T_INFO["scale"]:
-        return xyz, None
-    tt = tt * _T_INFO["scale"]
-    if _T_INFO["absolute"]:
-        tt = tt - (msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9)
-    return xyz, tt.astype(np.float64)
-
-
-def pc2_xyz(msg):
-    """Geometry only, for callers that do not need the point times."""
-    return pc2_xyzt(msg)[0]
-
-
-def traj_quats(tr_T):
-    """(M,4) xyzw quaternions for the trajectory rotations, computed once."""
-    R = tr_T[:, :3, :3]
-    m00, m11, m22 = R[:, 0, 0], R[:, 1, 1], R[:, 2, 2]
-    tr = m00 + m11 + m22
-    q = np.zeros((len(R), 4))
-    b0 = tr > 0
-    b1 = (~b0) & (m00 >= m11) & (m00 >= m22)
-    b2 = (~b0) & (~b1) & (m11 >= m22)
-    b3 = ~(b0 | b1 | b2)
-    if b0.any():
-        s = np.sqrt(np.maximum(1e-12, tr[b0] + 1.0)) * 2
-        q[b0] = np.stack([(R[b0, 2, 1] - R[b0, 1, 2]) / s,
-                          (R[b0, 0, 2] - R[b0, 2, 0]) / s,
-                          (R[b0, 1, 0] - R[b0, 0, 1]) / s, 0.25 * s], 1)
-    for b, (i, j, k) in ((b1, (0, 1, 2)), (b2, (1, 2, 0)), (b3, (2, 0, 1))):
-        if not b.any():
-            continue
-        s = np.sqrt(np.maximum(1e-12,
-                               1.0 + R[b, i, i] - R[b, j, j] - R[b, k, k])) * 2
-        qq = np.empty((int(b.sum()), 4))
-        qq[:, i] = 0.25 * s
-        qq[:, j] = (R[b, j, i] + R[b, i, j]) / s
-        qq[:, k] = (R[b, k, i] + R[b, i, k]) / s
-        qq[:, 3] = (R[b, k, j] - R[b, j, k]) / s
-        q[b] = qq
-    return q / np.linalg.norm(q, axis=1, keepdims=True)
-
-
-def quats_to_R(q):
-    """(K,4) xyzw -> (K,3,3)."""
-    x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-    return np.stack([
-        1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
-        2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
-        2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)
-    ], 1).reshape(-1, 3, 3)
-
-
-def interp_poses(tr_t, tr_T, tr_q, times):
-    """Trajectory poses at arbitrary `times`: (K,3,3) rotations, (K,3)
-    translations. Slerp on rotation, linear on translation, clamped at the
-    ends. Vectorised over K, so a whole scan's bins cost one call."""
-    j = np.clip(np.searchsorted(tr_t, times), 1, len(tr_t) - 1)
-    t0, t1 = tr_t[j - 1], tr_t[j]
-    u = np.clip((times - t0) / np.maximum(t1 - t0, 1e-9), 0.0, 1.0)
-    q0 = tr_q[j - 1].copy()
-    q1 = tr_q[j].copy()
-    d = np.sum(q0 * q1, 1)
-    q1[d < 0] *= -1.0                        # shortest arc
-    d = np.abs(d)
-    q = q0 + u[:, None] * (q1 - q0)          # lerp; exact enough when parallel
-    slow = d <= 0.9995
-    if slow.any():
-        th = np.arccos(np.clip(d[slow], -1.0, 1.0))[:, None]
-        us = u[slow][:, None]
-        q[slow] = (np.sin((1 - us) * th) * q0[slow]
-                   + np.sin(us * th) * q1[slow]) / np.sin(th)
-    q /= np.linalg.norm(q, axis=1, keepdims=True)
-    p = tr_T[j - 1][:, :3, 3] + u[:, None] * (tr_T[j][:, :3, 3]
-                                              - tr_T[j - 1][:, :3, 3])
-    return quats_to_R(q), p
 
 
 def decode_img(msg):

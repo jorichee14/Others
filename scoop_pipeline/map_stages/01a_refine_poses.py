@@ -46,6 +46,8 @@ Config block (all optional, under "01a_refine"):
   "max_shift":      0.50    # reject a correction larger than this (m)
   "max_rot_deg":    5.0
   "output":         "traj_lidar_refined.txt"
+  "deskew":         01_build_map.deskew   # per-point motion compensation, through
+  "deskew_bins":    01_build_map.deskew_bins  # the trajectory of the current round
 """
 import argparse
 import os
@@ -59,26 +61,9 @@ from scipy.spatial import cKDTree
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
-from pipeline_common import load_pipeline
+from pipeline_common import load_pipeline, pc2_xyzt, traj_quats, deskew_to_pose
 
 TS = get_typestore(Stores.ROS2_HUMBLE)
-
-_PF_DT = {1: np.int8, 2: np.uint8, 3: np.int16, 4: np.uint16,
-          5: np.int32, 6: np.uint32, 7: np.float32, 8: np.float64}
-
-
-def pc2_xyz(msg):
-    off = {f.name: (f.offset, f.datatype) for f in msg.fields}
-    raw = np.frombuffer(bytes(msg.data), np.uint8).reshape(-1, msg.point_step)
-
-    def col(name):
-        o, dt = off[name]
-        t = _PF_DT[dt]
-        w = np.dtype(t).itemsize
-        return raw[:, o:o + w].copy().view(t).ravel()
-
-    return np.stack([col("x"), col("y"), col("z")], 1).astype(np.float64)
-
 
 def load_traj(path):
     """TUM file -> (times, (N,4,4) poses). Same format the pipeline writes."""
@@ -134,8 +119,17 @@ def nearest_idx(tr_t, t):
     return i if (tr_t[i] - t) < (t - tr_t[i - 1]) else i - 1
 
 
-def iter_scans(bag, topic, tr_t, tol, lo, hi):
-    """Yield (pose_index, sensor-frame points) for every associated scan."""
+def iter_scans(bag, topic, tr_t, tol, lo, hi, tr_T=None, deskew=False, nb=100):
+    """Yield (pose_index, points) for every associated scan, in the sensor
+    frame of that pose.
+
+    deskew (with tr_T, the trajectory of this round): each point is moved
+    from the sensor frame at its own time (cloud stamp + its 't') into the
+    frame of pose j through the trajectory, T_j^-1 T(t + dt) p -- the same
+    placement as 01_build_map's deskew -- so a rigid registration of the
+    scan is not fitting a sweep smeared by the motion during it."""
+    tr_q = traj_quats(tr_T) if deskew and tr_T is not None else None
+    told = [False]
     with AnyReader([Path(bag)], default_typestore=TS) as r:
         conns = [c for c in r.connections
                  if c.topic == topic and "PointCloud2" in c.msgtype]
@@ -148,13 +142,21 @@ def iter_scans(bag, topic, tr_t, tol, lo, hi):
             j = nearest_idx(tr_t, t)
             if abs(tr_t[j] - t) > tol:
                 continue
-            p = pc2_xyz(msg)
+            p, dt = pc2_xyzt(msg)
+            p = p.astype(np.float64)
             keep = np.isfinite(p).all(1)
             d = np.linalg.norm(p, axis=1)
             keep &= (d > lo) & (d < hi)
             if keep.sum() < 100:
                 continue
-            yield j, p[keep]
+            p = p[keep]
+            if tr_q is not None and dt is not None:
+                p = deskew_to_pose(p, dt[keep], t, j, tr_t, tr_T, tr_q, nb)
+                if not told[0]:
+                    told[0] = True
+                    print(f"    [deskew] ON, {nb} bins (points into the frame of "
+                          f"their scan's pose, through this round's trajectory)")
+            yield j, p
 
 
 def detect_points_topic(bag, override="", n_poses=0):
@@ -450,7 +452,8 @@ def build_reference(bag, topic, times, T, cfg, s):
     acc = VoxelAvg(cfg["target_voxel"])
     n = 0
     for j, p in iter_scans(bag, topic, times, s["time_tol"],
-                           s["lidar_min"], s["lidar_max"]):
+                           s["lidar_min"], s["lidar_max"], T, cfg["deskew"],
+                           cfg["deskew_bins"]):
         acc.add(p @ T[j][:3, :3].T + T[j][:3, 3])
         n += 1
         if n % 1000 == 0:
@@ -477,6 +480,9 @@ def main():
              plane_voxel=0.4, plane_iters=8, prior_beta=0.05,
              plane_huber=0.10, planarity=1.0,
              points_topic="", output="traj_lidar_refined.txt")
+    # deskew as 01_build_map does, so the map and the scans registered to it
+    # place points the same way (01a_refine.deskew overrides)
+    c.update(deskew=bool(s.get("deskew", True)), deskew_bins=max(2, int(s.get("deskew_bins", 100))))
     c.update(cfg_all.get("01a_refine", {}))
     if args.rounds is not None:
         c["rounds"] = args.rounds
@@ -515,7 +521,8 @@ def main():
         n_done = n_rej = n_thin = 0
         max_rot = np.deg2rad(float(c["max_rot_deg"]))
         for j, p in iter_scans(bag, topic, times, s["time_tol"],
-                               s["lidar_min"], s["lidar_max"]):
+                               s["lidar_min"], s["lidar_max"], T_cur, c["deskew"],
+                               c["deskew_bins"]):
             pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(p))
             p_ds = np.asarray(pc.voxel_down_sample(c["scan_voxel"]).points)
             del pc
