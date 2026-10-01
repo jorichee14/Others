@@ -1,0 +1,462 @@
+{
+  "dataset": {
+    "bag": "/home/wicoms-robot/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_mapping2_20260828_merged",
+    "traj": "map_stages_20260828_outputs/traj_lidar_refined_r3.txt",
+    "out_dir": "map_stages_20260828_outputs"
+  },
+   "boards": {
+    "anchor": {
+      "frame": "board",
+      "squares_x": 9, "squares_y": 7,
+      "square_len": 0.02, "marker_len": 0.015,
+      "dictionary": "DICT_4X4_50",
+      "instances": 2,
+      "instance_names": ["anchor", "anchor_b"],
+      "min_corners": 8, "max_reproj": 1.5, "min_ambiguity_ratio": 1.5
+    },
+    "rs_anchor": {
+      "frame": "board_rs",
+      "squares_x": 9,
+      "squares_y": 7,
+      "square_len": 0.025,
+      "marker_len": 0.018,
+      "dictionary": "DICT_5X5_50",
+      "min_corners": 8,
+      "max_reproj": 1.5,
+      "min_ambiguity_ratio": 3.0
+    }
+  },
+  "01_build_map": {
+    "output": "map_final_20260828.pcd",
+    "time_tol": 0.04,
+    "deskew": false,
+    "scan_voxel": 0.01,
+    "final_voxel": 0.01,
+    "lidar_min": 0.3,
+    "lidar_max": 15.0,
+    "flush_every": 200,
+    "denoise":  { "enable": true, "nb": 30, "std": 3.0 },
+     "colorize": { "enable": true, "img_stride": 1, "max_range": 10.0,
+              "voxel": 0.00, "drop_gray": false },
+    "flatten":  { "enable": false, "dist": 0.04, "min": 8000, "max_planes": 40 },
+
+   "remove_dynamic": {
+  "enable": true, "voxel": 0.15, "min_span_s": 1.0, "min_hits": 2, "save": true,
+  "carve": { "enable": true, "ray_stride": 4, "scan_stride": 2,
+             "max_range": 10.0, "grazing_margin": 0.03,
+             "min_free": 5, "free_ratio": 1.0 }
+},
+
+   "detect_objects": {
+  "enable": false,
+  "model": "yolo11n-seg.pt",
+  "device": "cuda:0",
+  "conf": 0.25,
+  "iou": 0.5,
+  "imgsz": 640,
+  "img_stride": 3,
+  "voxel": 0.05,
+  "max_range": 8.0,
+  "classes": [],
+  "exclude": ["person"],
+  "bbox_shrink": 0.12,
+  "mask_erode": 1,
+  "depth_band": 1.0,
+  "min_pixels": 40,
+  "min_votes": 3,
+  "min_ratio": 0.08,
+  "cluster": { "eps": 0.15, "min_points": 30, "min_pts_keep": 60 },
+  "structure_veto": {
+    "enable": true, "voxel": 0.08, "plane_dist": 0.06,
+    "min_area": 10.0, "max_planes": 25,
+    "flush_tol": 0.03, "min_protrusion": 0.03
+  },
+  "save_layers": true, "save_per_object": false,
+  "inventory": "objects_inventory.yaml"
+},
+    "anchor_camera_start": false
+  },
+
+  "02_cut": {
+    "input": "map_final_20260828.pcd",
+    "output": "map_final_20260828_nc.pcd",
+    "axis": "z",
+    "floor": -0.99,
+    "ceil": 2.39,
+    "voxel": 0.05,
+    "bins": 100
+  },
+  "03_anchor": {
+    "input": "map_final_20260828_nc.pcd",
+    "output": "map_final_20260828_nc_anchored.pcd",
+    "frame_out": "anchor_frame.json",
+    "skip_cloud": false,
+
+    "boards_used": ["anchor", "rs_anchor"],
+    "anchor_board": null,
+    "board_axes": "ros",
+    "board_origin": "center",
+    "detect_period": 0.20,
+    "section_gap": 3.0,
+    "min_section_samples": 4,
+    "assoc_radius": 0.40,
+    "group_gap_factor": 2.5,
+
+    "fuse": {
+      "max_reproj_px": 1.0,
+      "max_std_mm": 20.0,
+      "max_section_disagree_mm": 50.0,
+      "max_section_disagree_deg": 1.0
+    },
+
+    "time_tol": 0.1,
+    "tf_max_gap": 0.2,
+    "max_images": 0,
+    "rectified": true,
+    "map_frame": "map",
+    "mapzed_frame": "map_zed",
+    "zed_map_frame": "map_zed",
+    "cam_frame": "zed_left_camera_optical_frame"
+  },
+  "04_build_cameras": {
+    "anchor_frame": "map_stages_20260828_outputs/anchor_frame.json",
+    "output": "cameras_in_map.yaml",
+    "map_frame": "map",
+    "time_tol": 0.1,
+    "cameras": [
+      {
+        "name": "realsense",
+        "source": "board",
+        "child_frame": "camera_color_optical_frame",
+        "board": "rs_anchor",
+        "bag": "/home/wicoms-robot/workspaces/isaac_ros-dev/20260828/mirc_dataset_mapping2_20260828_merged",
+        "image_topic": "/camera/color/image_raw",
+        "camera_info_topic": "/camera/color/camera_info",
+        "rectified": false,
+        "detect_target": 20,
+        "static_tol_mm": 20.0,
+        "img_stride": 1
+      },
+      {
+        "name": "arducam",
+        "source": "extrinsic_yaml",
+        "child_frame": "arducam_optical_frame",
+        "extrinsic_yaml": "extrinsic_arducam.yaml"
+      }
+    ]
+  },
+  "05_emit_tfs": {
+    "input": "cameras_in_map.yaml",
+    "bag_anchor": "bag_anchor.json"
+  },
+ "06_init": {
+  "bag": "/home/wicoms-robot/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_completed",
+  "anchor_frame": "anchor_frame.json",
+  "output": "session_anchor_coop2.json",
+  "script_out": "publish_map_tfs_mapping.sh",
+  "map_frame": "map",
+
+  "img_stride": 1,
+  "max_images": 0,
+  "static_tol_mm": 50.0,
+  "moving_pose": "first",
+
+  "sensors": [
+
+    {
+  "name": "zed",
+  "board": "anchor",
+  "source": "camera",
+  "cam_frame": "zed_left_camera_optical_frame",
+  "tf_child_frame": "zed_pose",
+  "image_topic": "/mobile_1/zed/left/image_rect_color",
+  "camera_info_topic": "/mobile_1/zed/left/camera_info",
+  "rectified": true
+  },
+   {
+   "name": "realsense",
+   "board": "rs_anchor",
+   "source": "camera",
+   "cam_frame": "camera_color_optical_frame",
+   "tf_child_frame": "rs_pose",
+   "image_topic": "/mobile_2/color/image_raw",
+     "camera_info_topic": "/mobile_2/color/camera_info",
+      "rectified": false
+    }
+  ]
+},
+"07_build": {
+  "bag":   "/home/wicoms-robot/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_merged",
+  "traj":  "map_stages_20260828_outputs/reference_coop2_all/traj_mobile_1_lidar.tum",
+  "out":   "map_stages_20260828_outputs/coop2_in_ref.pcd",
+  "topic": "/mobile_1/ouster/points",
+  "voxel": 0.03, "range_min": 0.7, "range_max": 25.0,
+  "t_start": 0, "t_end": 42,
+  "min_count": 2, "keep_quality": true
+},
+
+"08_reference": {
+    "bag": "/home/wicoms-robot/workspaces/isaac_ros-dev/data/raw/20260828/mirc_dataset_coop2_20260828_merged",
+    "session_anchor": "map_stages_20260828_outputs/session_anchor_coop2.json",
+    "anchor_frame": "map_stages_20260828_outputs/anchor_frame.json",
+    "ref_map": "map_stages_20260828_outputs/map_final_20260828_nc_anchored_v0.pcd",
+    "out_dir": "map_stages_20260828_outputs/reference_coop2_all",
+    "target_voxel": 0.05,
+    "plane_voxel": 0.4,
+    "invert_T_lidar_camera": false,
+    "tracks": [
+      {
+        "name": "mobile_1_lidar",
+        "type": "lidar_icp",
+        "enabled": true,
+        "points_topic": "/mobile_1/ouster/points",
+        "odom_topic": "/mobile_1/zed/odom",
+        "anchor_cam": "zed",
+        "cam_extrinsic_xyzquat": [
+          -0.01,
+          0.06,
+          0.015,
+          -0.5,
+          0.5,
+          -0.5,
+          0.5
+        ],
+        "seed": "icp",
+        "rate_hz": 10.0,
+        "range_min": 0.7,
+        "range_max": 10.0,
+        "scan_voxel": 0.1,
+        "deskew": true,
+        "gates": [
+          0.4,
+          0.2,
+          0.1
+        ],
+        "wide_gates": [
+          1.0,
+          0.5,
+          0.25,
+          0.1
+        ],
+        "max_shift": 0.5,
+        "max_rot_deg": 5.0,
+        "keep_cloud_pts": 3000
+      },
+      {
+        "name": "mobile_1_zed",
+        "type": "arms",
+        "enabled": true,
+        "reference": "lidar",
+        "cloud_source": "depth",
+        "odom_topic": "/mobile_1/zed/odom",
+        "anchor_cam": "zed",
+        "cam_extrinsic_xyzquat": [
+          -0.01,
+          0.06,
+          0.015,
+          -0.5,
+          0.5,
+          -0.5,
+          0.5
+        ],
+        "depth_topic": "/mobile_1/zed/depth/depth_registered",
+        "depth_info_topic": "/mobile_1/zed/depth/camera_info",
+        "depth_extrinsic_xyzquat": null,
+        "image_topic": "/mobile_1/zed/left/image_rect_color",
+        "camera_info_topic": "/mobile_1/zed/left/camera_info",
+        "rectified": true,
+        "boards": [
+          "anchor",
+          "anchor_b",
+          "rs_anchor"
+        ],
+        "img_stride": 2,
+        "max_images": 0,
+        "instance_radius": 2.0,
+        "seed": "odom",
+        "rate_hz": 10.0,
+        "range_min": 0.4,
+        "range_max": 3.0,
+        "scan_voxel": 0.05,
+        "keep_cloud_pts": 4000,
+        "prior_beta": 0.1,
+        "min_obs": 1,
+        "gates": [
+          0.4,
+          0.2,
+          0.1
+        ],
+        "wide_gates": [
+          1.0,
+          0.5,
+          0.25,
+          0.1
+        ],
+        "max_shift": 0.3,
+        "max_rot_deg": 5.0,
+        "submap_window_s": 3.0,
+        "submap_max_pts": 20000,
+        "submap_stride": 1,
+        "dwell_check_s": 4.0,
+        "odom_sigma_t": 0.003,
+        "odom_sigma_r": 0.001,
+        "icp_rel_sigma_t": 0.01,
+        "icp_rel_sigma_r": 0.002,
+        "icp_boards_max_fail": 0.3,
+        "arms_run": [
+          "odom_icp",
+          "odom_boards",
+          "icp_boards",
+          "odom_icp_boards"
+        ],
+        "sighting_group_gap_s": 2.0,
+        "icp_pts": 400,
+        "gn_iters": 25
+      },
+      {
+        "name": "mobile_1_lidarboards",
+        "type": "arms",
+        "enabled": true,
+        "cloud_source": "lidar",
+        "odom_topic": "/mobile_1/zed/odom",
+        "anchor_cam": "zed",
+        "cam_extrinsic_xyzquat": [
+          -0.01,
+          0.06,
+          0.015,
+          -0.5,
+          0.5,
+          -0.5,
+          0.5
+        ],
+        "image_topic": "/mobile_1/zed/left/image_rect_color",
+        "camera_info_topic": "/mobile_1/zed/left/camera_info",
+        "rectified": true,
+        "boards": [
+          "anchor",
+          "anchor_b",
+          "rs_anchor"
+        ],
+        "img_stride": 2,
+        "max_images": 0,
+        "instance_radius": 2.0,
+        "rate_hz": 10.0,
+        "range_min": 0.4,
+        "range_max": 3.0,
+        "odom_sigma_t": 0.003,
+        "odom_sigma_r": 0.001,
+        "icp_rel_sigma_t": 0.01,
+        "icp_rel_sigma_r": 0.002,
+        "icp_boards_max_fail": 0.3,
+        "arms_run": [
+          "odom_icp",
+          "odom_icp_boards"
+        ],
+        "sighting_group_gap_s": 2.0,
+        "icp_pts": 400,
+        "gn_iters": 25,
+        "lidar_track": "mobile_1_lidar",
+        "boards_holdout": [
+          "rs_anchor"
+        ],
+        "icp_sigma_lidar": 0.02,
+        "odom_jump_check": true,
+        "odom_jump_m": 0.05,
+        "odom_jump_deg": 2.0
+      },
+      {
+        "name": "mobile_2_rs",
+        "type": "arms",
+        "enabled": true,
+        "cloud_source": "depth",
+        "odom_topic": "/mobile_2/visual_slam/tracking/odometry",
+        "anchor_cam": "realsense",
+        "cam_extrinsic_xyzquat": [
+          0.000308,
+          0.059191,
+          -0.000162,
+          0.499583,
+          -0.497446,
+          0.501716,
+          -0.501244
+        ],
+        "depth_topic": "/mobile_2/depth/image_rect_raw",
+        "depth_info_topic": "/mobile_2/depth/camera_info",
+        "depth_extrinsic_xyzquat": [
+          0.05919025,
+          -9.9e-06,
+          -0.00040596,
+          -0.00296559,
+          0.00083214,
+          0.00130485,
+          0.99999441
+        ],
+        "image_topic": "/mobile_2/color/image_raw",
+        "camera_info_topic": "/mobile_2/color/camera_info",
+        "rectified": false,
+        "boards": [
+          "rs_anchor",
+          "anchor",
+          "anchor_b"
+        ],
+        "img_stride": 2,
+        "max_images": 0,
+        "instance_radius": 2.0,
+        "seed": "odom",
+        "rate_hz": 10.0,
+        "range_min": 0.4,
+        "range_max": 3.5,
+        "scan_voxel": 0.05,
+        "keep_cloud_pts": 4000,
+        "prior_beta": 0.1,
+        "min_obs": 1,
+        "gates": [
+          0.4,
+          0.2,
+          0.1
+        ],
+        "wide_gates": [
+          1.0,
+          0.5,
+          0.25,
+          0.1
+        ],
+        "max_shift": 0.3,
+        "max_rot_deg": 5.0,
+        "submap_window_s": 3.0,
+        "submap_max_pts": 20000,
+        "submap_stride": 1,
+        "dwell_check_s": 4.0,
+        "odom_sigma_t": 0.003,
+        "odom_sigma_r": 0.001,
+        "icp_rel_sigma_t": 0.01,
+        "icp_rel_sigma_r": 0.002,
+        "icp_boards_max_fail": 0.3,
+        "arms_run": [
+          "odom_icp",
+          "odom_boards",
+          "icp_boards",
+          "odom_icp_boards"
+        ],
+        "sighting_group_gap_s": 2.0,
+        "icp_pts": 400,
+        "gn_iters": 25
+      }
+    ]
+  },
+
+ "09_publish": {
+  "output_bag": "map_stages_20260828_outputs/coop2_best_poses",
+  "map_frame": "map",
+  "write_tf": true,
+  "rate_hz": 0,
+  "robots": [
+    { "name": "mobile_1",
+      "traj": "map_stages_20260828_outputs/reference_coop2_all/traj_mobile_1_lidar_in_cam.tum",
+      "optical_frame": "zed_left_camera_optical_frame" },
+    { "name": "mobile_2",
+      "traj": "map_stages_20260828_outputs/reference_coop2_all/traj_mobile_2_rs_odom_icp_boards.tum",
+      "optical_frame": "camera_color_optical_frame" }
+  ]
+}
+}
