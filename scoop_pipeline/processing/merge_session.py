@@ -129,7 +129,11 @@ def main():
         except OSError:
             pass
         print(f"\nmerged bag: {final}")
-        c = session.check_topics([final], [t for u in units for t in u.expected])
+        # a may_be_empty topic that never had a message is not in the merged
+        # bag (a topic is written with its first message): the recordings
+        # having it is enough, as in the check before the merge
+        c = session.check_topics([final], [t for u in units for t in u.expected],
+                                 plan.may_be_empty, [b for u in units for b in u.raw_bags])
         show(c)
         if not c.ok:
             print("\nMISSING or EMPTY topics in the merged bag")
