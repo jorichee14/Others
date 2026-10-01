@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check scoop.bag against the generic decoder on a REAL bag, and time both.
 
-    python3 scripts/bag_check.py <bag> [--points /ouster/points]
+    python3 checks/bag_check.py <bag> [--points /ouster/points]
                                  [--image /zed/.../image_rect_color]
                                  [--check 50] [--time 300]
 

@@ -2,7 +2,7 @@
 """Process one robot recording: raw bag -> decoded -> retimed -> GLIM, and the
 ZED SVO2 next to it -> a bag on the same clock.
 
-    python scripts/process_recording.py <raw recording folder>
+    python processing/process_recording.py <raw recording folder>
         [--until decoded|retimed|glim|zed] [--redo decoded|retimed|glim|zed]
         [--only decoded|retimed|glim|zed]
         [--settings configs/recording.yaml] [--work-root <dir>] [--status]
@@ -15,8 +15,8 @@ Outputs go to the mirrored folder below data/work/ with fixed names:
 A folder with only an SVO (no Ouster packets bag) does the zed step alone.
 --only X runs just X. Steps already done are skipped; --redo X runs X and the steps built from it
 again (decoded -> retimed -> glim; zed on its own). The GLIM step starts
-docker (scripts/run_glim.sh); the zed step needs the ZED wrapper, here or in
-the isaac_ros container (scripts/run_zed.sh). The work is in
+docker (processing/run_glim.sh); the zed step needs the ZED wrapper, here or in
+the isaac_ros container (processing/run_zed.sh). The work is in
 scoop/recording.py.
 """
 import argparse

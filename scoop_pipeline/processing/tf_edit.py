@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Show or change the TF (/tf and /tf_static) of a bag.
 
-    python scoop_pipeline/scripts/tf_edit.py <bag> --show
-    python scoop_pipeline/scripts/tf_edit.py <bag> -o <out bag>
+    python scoop_pipeline/processing/tf_edit.py <bag> --show
+    python scoop_pipeline/processing/tf_edit.py <bag> -o <out bag>
         [--drop PARENT->CHILD ...]
         [--add PARENT CHILD x y z qx qy qz qw]... [--add-file configs/static_tf.yaml]
         [--odom-tum FILE | --odom-topic TOPIC] [--odom-frame FRAME] [--odom-parent FRAME]

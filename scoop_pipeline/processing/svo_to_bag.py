@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """ZED SVO2 -> rosbag2 on the capture clock, through the ZED ROS 2 wrapper.
 
-    python3 scripts/svo_to_bag.py <svo> <out_bag_dir> [--bag zed_right]
+    python3 processing/svo_to_bag.py <svo> <out_bag_dir> [--bag zed_right]
         [--settings configs/recording.yaml] [--keep-record]
 
 Records one of the bags of the `zed.bags` setting (default: the first) --
 its topics, their new names, the camera model and wrapper parameters come
 from the `zed` section of the settings. The wrapper plays the SVO with its own
-timestamps and `ros2 bag record` records it (scripts/run_zed.sh, which uses
+timestamps and `ros2 bag record` records it (processing/run_zed.sh, which uses
 the isaac_ros container when ROS is not installed here); the recording is
 then restamped to capture time and renamed (scoop/zed.py).
 """

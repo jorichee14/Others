@@ -1,4 +1,4 @@
-# Calibrated transforms the merge adds to /tf_static (scripts/merge_session.py).
+# Calibrated transforms the merge adds to /tf_static (processing/merge_session.py).
 # pose of `child` in `parent`: translation in m, rotation as a quaternion xyzw.
 # If `child` already has a parent in the bags' TF tree (the ZED optical frame
 # does), the merge adds the same geometry as `child` -> <root of parent's tree>

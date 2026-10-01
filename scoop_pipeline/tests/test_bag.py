@@ -7,7 +7,7 @@ parser bug cannot hide behind a matching encoder bug. The last tests write a
 synthetic MCAP and read it back through the full iterator, including the
 generic-decoder fallback.
 
-    python scripts/test_bag.py
+    python tests/test_bag.py
 """
 import os
 import shutil

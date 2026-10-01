@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ouster packets bag -> points bag, offline. Replaces the replay step.
 
-    python3 scripts/decode_ouster.py <packets_bag> <out_bag_dir>
+    python3 processing/decode_ouster.py <packets_bag> <out_bag_dir>
         [--packets-ns /ouster] [--out-ns /mobile_1/ouster]
         [--driver-min-range 1.30] [--driver-max-range 1000]
         [--frame lidar|sensor] [--no-imu] [--limit N]
@@ -21,7 +21,7 @@ byte under its new name. Your replay launch's remaps are:
 
 Next step, in the same env (or retime_bag.py in a ROS terminal, same result):
 
-    python3 scripts/retime.py <packets_bag> <out_bag_dir> <retimed_dir> /ouster /mobile_1/ouster
+    python3 processing/retime.py <packets_bag> <out_bag_dir> <retimed_dir> /ouster /mobile_1/ouster
 """
 import argparse
 import os
@@ -64,7 +64,7 @@ def main():
                                  exclude=a.exclude, limit=a.limit)
     except (ValueError, replay.bag.BagError) as e:
         sys.exit(f"error: {e}")
-    print(f"\nnext:  python scripts/retime.py {a.packets_bag} "
+    print(f"\nnext:  python processing/retime.py {a.packets_bag} "
           f"{a.out_bag_dir} <retimed_out_dir> {a.packets_ns} {a.out_ns}")
 
 

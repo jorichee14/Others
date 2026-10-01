@@ -596,7 +596,7 @@ def main():
           f"{P.folder_for(c['output'])}), delete "
           f"{', '.join(P.pcd(b) for b in ('merged', 'static', 'denoised', 'colored'))} "
           f"in {P.folder_for('x.pcd')}, re-run 01_build_map.py, "
-          f"then map_quality.py")
+          f"then analysis/mapping/map_quality.py {P.outp(P.pcd('denoised'))}")
 
 
 if __name__ == "__main__":

@@ -24,29 +24,36 @@ configs/zed/         the robot's zed_wrapper config, used to replay SVOs
 configs/record.yaml  what each machine records (the robots' record.yaml)
 configs/static_tf.yaml  calibrated transforms the merge adds to /tf_static
 environment.yml      conda env for all offline processing
-scripts/             command lines only: argument parsing around scoop/
+processing/          raw recordings -> processed bags (command lines around scoop/)
   process_recording.py  raw recording -> decoded, retimed, glim, zed (the usual entry point)
   decode_ouster.py   packets bag -> points bag (replaces the ouster_ros replay)
   retime.py          points bag -> retimed bag (same arguments as retime_bag.py)
   run_glim.sh        GLIM (docker) on a bag, dump next to the bag, owned by you
   svo_to_bag.py      one SVO2 -> bag on capture time (the zed step alone)
+  run_zed.sh         ZED wrapper replay + ros2 bag record (here or in the isaac_ros container)
   merge_session.py   check a pass's bags against record.yaml, merge them into one
-  topic_timing.py    intervals, gaps and repeated frames of topics in a bag
-  tf_edit.py         show or change a bag's TF: drop edges, add transforms, new odometry
   merge_bags.py      any bags -> one, with the topics you choose (--list, --topics, --pick)
-  ../map_stages/      map from LiDAR + GLIM poses (01_build_map.py, 01a_refine_poses.py, ...);
+  tf_edit.py         show or change a bag's TF: drop edges, add transforms, new odometry
+map_stages/          map from LiDAR + GLIM poses (01_build_map.py, 01a_refine_poses.py, ...);
                      calibration read from the bag (camera_info + /tf_static); outputs in
                      data/processed/<date>/<pass>/{mapping,odometry/<machine>,frames,bags,comms}
-  mcap_convert.py    bag -> SLAM datasets: replica (RGB + lidar depth), mcd, mcgs (standalone)
-  run_zed.sh         ZED wrapper replay + ros2 bag record (here or in the isaac_ros container)
+datasets/            bags -> datasets for other tools
+  mcap_convert.py    replica (RGB + lidar depth), mcd, mcgs (standalone)
+analysis/            measuring results; reads outputs, writes nothing back
+  mapping/map_quality.py  surface thickness of a map cloud (noise / pose error / smear)
+  odom/              trajectories (nothing yet)
+  comms/             wifi / iperf / ntp (nothing yet)
+  bags/topic_timing.py    intervals, gaps and repeated frames of topics in a bag
+checks/              is the environment / the decoder right? (against real bags)
+  env_check.py       is this environment ready?
   bag_check.py       verify + time the fast decoder on a real bag
   ouster_check.py    verify packet decoding against a replayed/retimed bag
-  env_check.py       is this environment ready?
-  test_bag.py        self-tests: reading, writing, messages (no bag needed)
-  test_ouster.py     self-tests: packets, clock, replay, remaps (needs ouster-sdk)
-  test_zed.py        self-tests: restamp, run_zed.sh with a fake ros2 and docker
-  test_merge.py      self-tests: machines, topic check, merge
-  test_replica.py    self-tests: replica with lidar depth on a synthetic scene
+tests/               self-tests, no real bag needed
+  test_bag.py        reading, writing, messages
+  test_ouster.py     packets, clock, replay, remaps (needs ouster-sdk)
+  test_zed.py        restamp, run_zed.sh with a fake ros2 and docker
+  test_merge.py      machines, topic check, merge, tf_edit
+  test_replica.py    replica with lidar depth on a synthetic scene
 ```
 
 ## Environment
@@ -62,8 +69,8 @@ Two environments, each for its own kind of work:
 cd scoop_pipeline
 conda env create -f environment.yml
 conda activate scoop
-python scripts/env_check.py        # versions, cv2.aruco, open3d, Ouster SDK, GPU
-python scripts/test_bag.py && python scripts/test_ouster.py
+python checks/env_check.py        # versions, cv2.aruco, open3d, Ouster SDK, GPU
+python tests/test_bag.py && python tests/test_ouster.py
 ```
 
 After `environment.yml` changes: `conda env update -f environment.yml --prune`.
@@ -102,8 +109,8 @@ for fr in bag.iter_images(reader, image_topic, mode="gray", period=0.2):
 Before using it on a new sensor or driver version:
 
 ```
-python3 scripts/test_bag.py
-python3 scripts/bag_check.py <bag> [--points /ouster/points] [--image <topic>]
+python3 tests/test_bag.py
+python3 checks/bag_check.py <bag> [--points /ouster/points] [--image <topic>]
 ```
 
 `bag_check.py` compares the fast path with the generic decoder field by field
@@ -116,7 +123,7 @@ alone runs at ~630 msg/s, so that's the upper limit for a single process.
 ## Processing a recording
 
 ```
-python scripts/process_recording.py ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A/mobile_1
+python processing/process_recording.py ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A/mobile_1
 ```
 
 reads the raw recording and writes everything derived to the mirrored folder
@@ -147,25 +154,25 @@ decoded bag may be deleted once retimed and glim exist: it is then skipped
 ("not needed"), and rebuilt only when retimed is redone. A step is
 built in `.partial/<step>/` and only moved into place when it succeeded, so a
 step folder is always complete. Steps 1-2 run in the `scoop` env, step 3
-starts docker (`scripts/run_glim.sh`), step 4 needs the ZED wrapper
+starts docker (`processing/run_glim.sh`), step 4 needs the ZED wrapper
 (below).
 
 ## Ouster packets: decode, then retime
 
 ```
 original bag (<ns>/lidar_packets, imu_packets, metadata, other topics)
-   |  python scripts/decode_ouster.py <original> <decoded> [--copy-all] [--remap ...]
+   |  python processing/decode_ouster.py <original> <decoded> [--copy-all] [--remap ...]
    v
 decoded bag, sensor time (<out-ns>/points, imu, metadata + copied topics)
-   |  python scripts/retime.py <original> <decoded> <retimed> /ouster /mobile_1/ouster
+   |  python processing/retime.py <original> <decoded> <retimed> /ouster /mobile_1/ouster
    v
 retimed bag
-   |  scripts/run_glim.sh <retimed>                                 docker
+   |  processing/run_glim.sh <retimed>                                 docker
    v
 <folder of the bag>/glim_dump/traj_lidar.txt  -> stage 01
 ```
 
-Both steps run in the `scoop` env. `scripts/retime.py` does what
+Both steps run in the `scoop` env. `processing/retime.py` does what
 `retime_bag.py` does, with the same arguments; it rewrites the header stamp in
 the message bytes instead of going through rclpy, so it needs no ROS. On
 synthetic bags (sensor clock from boot and PTP) its output equals
@@ -179,7 +186,7 @@ time, `metadata.yaml` included, without waiting for real time. `retime_bag.py`
 also still runs on its output unchanged.
 
 ```
-python scripts/decode_ouster.py <original bag> <decoded bag dir> \
+python processing/decode_ouster.py <original bag> <decoded bag dir> \
     --packets-ns /ouster --out-ns /mobile_1/ouster --driver-min-range 1.30
 ```
 
@@ -238,7 +245,7 @@ for scan in ouster.iter_ouster_scans(reader, "/ouster", clock=clock,
 Which conventions the replayed clouds used is checked, not assumed:
 
 ```
-python3 scripts/ouster_check.py <packets_bag> --points-bag <retimed bag> \
+python3 checks/ouster_check.py <packets_bag> --points-bag <retimed bag> \
     [--packets-ns /ouster] [--points-ns /mobile_1/ouster] [--driver-min-range 1.30]
 ```
 
@@ -252,11 +259,11 @@ It ends with `MATCH in the <frame> frame` or `NO MATCH`.
 Step 4 of `process_recording.py`, or alone:
 
 ```
-python scripts/svo_to_bag.py <file.svo2> <out bag dir>
+python processing/svo_to_bag.py <file.svo2> <out bag dir>
 ```
 
 Reading an SVO2 needs the ZED SDK, so the SVO is played through the ZED ROS 2
-wrapper and recorded (`scripts/run_zed.sh`):
+wrapper and recorded (`processing/run_zed.sh`):
 
 ```
 ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i svo_path:=<svo>
@@ -293,8 +300,8 @@ are). Start the container first (`run_dev.sh`).
 ## Checking and merging a pass
 
 ```
-python scoop_pipeline/scripts/merge_session.py ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A --check
-python scoop_pipeline/scripts/merge_session.py ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A
+python scoop_pipeline/processing/merge_session.py ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A --check
+python scoop_pipeline/processing/merge_session.py ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A
 ```
 
 A pass folder holds one folder per machine (`mobile_1/`, `mobile_2/`,
@@ -335,9 +342,9 @@ It prints what it added; `--static-tf ''` adds nothing.
 ## Merging chosen topics of any bags
 
 ```
-python scoop_pipeline/scripts/merge_bags.py <bag> <bag> [...] --list
-python scoop_pipeline/scripts/merge_bags.py <bag> <bag> [...] -o <out> --topics '/mobile_1/zed/left/*' /tf /tf_static
-python scoop_pipeline/scripts/merge_bags.py <bag> <bag> [...] -o <out> --pick
+python scoop_pipeline/processing/merge_bags.py <bag> <bag> [...] --list
+python scoop_pipeline/processing/merge_bags.py <bag> <bag> [...] -o <out> --topics '/mobile_1/zed/left/*' /tf /tf_static
+python scoop_pipeline/processing/merge_bags.py <bag> <bag> [...] -o <out> --pick
 ```
 
 `--list` shows every topic (type, messages, which bags). `--topics` keeps
@@ -353,8 +360,8 @@ calibrations. Only the chosen topics are read.
 ## TF: showing and changing it
 
 ```
-python scoop_pipeline/scripts/tf_edit.py <bag> --show
-python scoop_pipeline/scripts/tf_edit.py <bag> -o <out> \
+python scoop_pipeline/processing/tf_edit.py <bag> --show
+python scoop_pipeline/processing/tf_edit.py <bag> -o <out> \
     --drop 'map_zed->odom_zed' 'odom_zed->*' \
     --add os_lidar radar3_link 0.1 0 0.2 0 0 0 1 \
     --add-file scoop_pipeline/configs/static_tf.yaml \
@@ -372,13 +379,13 @@ as `<parent> -> <root of the tree>`, composed through the static chain, so the
 lookups give exactly what was given. The result is a new bag with every other
 topic copied; all static transforms in one latched /tf_static.
 
-## Datasets: Replica with lidar depth (`scripts/mcap_convert.py`)
+## Datasets: Replica with lidar depth (`datasets/mcap_convert.py`)
 
 ```
-python scoop_pipeline/scripts/mcap_convert.py <bag> <out> --format replica --pose-is-camera
-python scoop_pipeline/scripts/mcap_convert.py <bag> <out> --format replica --pose-is-camera \
+python scoop_pipeline/datasets/mcap_convert.py <bag> <out> --format replica --pose-is-camera
+python scoop_pipeline/datasets/mcap_convert.py <bag> <out> --format replica --pose-is-camera \
     --lidar-scans 5
-python scoop_pipeline/scripts/mcap_convert.py <bag> --inspect
+python scoop_pipeline/datasets/mcap_convert.py <bag> --inspect
 ```
 
 Writes `results/frameNNNNNN.jpg` + `depthNNNNNN.png` (uint16 mm), `traj.txt`

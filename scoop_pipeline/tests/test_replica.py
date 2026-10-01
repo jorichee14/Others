@@ -7,7 +7,7 @@ away in front of a wall 5 m away; a lidar 10 cm to its left (rotated, as an
 Ouster is) scans at 10 Hz with per-point times. The depth rendered at each
 image time is compared with the true depth.
 
-    python scripts/test_replica.py
+    python tests/test_replica.py
 """
 import logging
 import os
@@ -21,7 +21,7 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "scripts"))
+sys.path.insert(0, os.path.join(ROOT, "datasets"))
 
 import cv2                                                          # noqa: E402
 import mcap_convert as mc                                           # noqa: E402

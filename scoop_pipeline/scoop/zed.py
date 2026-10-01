@@ -3,7 +3,7 @@
 ZED SVO2 -> rosbag2, on the capture clock.
 
 Reading an SVO2 needs the ZED SDK, which comes with the ZED ROS 2 wrapper, so
-the SVO is played through the wrapper and recorded (``scripts/run_zed.sh``,
+the SVO is played through the wrapper and recorded (``processing/run_zed.sh``,
 where ROS + zed_wrapper are: this machine or the isaac_ros container):
 
     ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i svo_path:=<svo>
@@ -49,7 +49,7 @@ __all__ = ["REORDER_S", "SVO_PARAMS", "find_svo", "has_header", "prefix_remap",
 
 REORDER_S = 5.0          # replay latency differs per topic (depth, point cloud)
 SVO_PARAMS = {"use_svo_timestamps": True, "svo_loop": False}
-RUN_ZED = Path(__file__).resolve().parents[1] / "scripts" / "run_zed.sh"
+RUN_ZED = Path(__file__).resolve().parents[1] / "processing" / "run_zed.sh"
 HEADER_TYPES = {"Header", "std_msgs/Header", "std_msgs/msg/Header"}
 
 
@@ -117,7 +117,7 @@ def wrapper_params(params: Optional[dict] = None, realtime: bool = False,
 def record_svo(svo, record_dir, topics: List[str], params_file, camera_model: str = "zed2i",
                script=None, log=print) -> Path:
     """Play ``svo`` through the ZED wrapper and record ``topics`` into
-    ``record_dir`` (a new rosbag2 folder), via ``scripts/run_zed.sh``."""
+    ``record_dir`` (a new rosbag2 folder), via ``processing/run_zed.sh``."""
     script = Path(script or RUN_ZED)
     if not topics:
         raise ValueError("no ZED topics to record")

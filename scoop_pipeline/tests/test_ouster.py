@@ -8,7 +8,7 @@ positive receive jitter. Then checks the clock fit recovers that mapping and
 that every decoded point sits where the geometry says, with the right
 per-point time, in the destaggered row-major order.
 
-    python scripts/test_ouster.py
+    python tests/test_ouster.py
 """
 import os
 import shutil

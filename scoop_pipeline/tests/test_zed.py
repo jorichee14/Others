@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Self-tests for scoop.zed and scripts/run_zed.sh. No ZED SDK, no ROS, no GPU.
+"""Self-tests for scoop.zed and processing/run_zed.sh. No ZED SDK, no ROS, no GPU.
 
 A fake `ros2` stands in for the recorder and the ZED wrapper: its recorder
 writes a bag like `ros2 bag record` would after an SVO replay at twice real
@@ -7,7 +7,7 @@ time -- header stamps = capture time, log times = replay time, depth arriving
 later than the image -- and its launch says "SVO reached the end." and waits
 for Ctrl+C. The real run_zed.sh drives both.
 
-    python scripts/test_zed.py
+    python tests/test_zed.py
 """
 import os
 import shutil
@@ -389,7 +389,7 @@ def test_ctrl_c_stops_the_replay_in_the_container():
         open(params, "w").write("x: 1\n")
         out = os.path.join(ws, "data", "work", "run1_zed.record")
         pidfile = os.path.join(ws, "data", "work", ".run1_zed.record.pid")
-        p = subprocess.Popen([os.path.join(ROOT, "scripts", "run_zed.sh"), svo, out, params,
+        p = subprocess.Popen([os.path.join(ROOT, "processing", "run_zed.sh"), svo, out, params,
                               IMAGE, INFO], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         t0 = time.time()

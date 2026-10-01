@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Merge two or more rosbag2 bags into one, with the topics you choose.
 
-    python scoop_pipeline/scripts/merge_bags.py <bag> <bag> [<bag> ...] --list
-    python scoop_pipeline/scripts/merge_bags.py <bag> <bag> ... -o <out bag>
+    python scoop_pipeline/processing/merge_bags.py <bag> <bag> [<bag> ...] --list
+    python scoop_pipeline/processing/merge_bags.py <bag> <bag> ... -o <out bag>
         [--topics PATTERN ...] [--exclude PATTERN ...] [--pick]
         [--source PATTERN=N ...] [--keep-duplicates]
         [--compression none|zstd]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sensor-time points bag -> host capture time. retime_bag.py without ROS.
 
-    python3 scripts/retime.py <packets_bag> <sensortime_bag> <out_bag>
+    python3 processing/retime.py <packets_bag> <sensortime_bag> <out_bag>
                               [packets_ns] [points_ns]
 
 Same arguments and result as retime_bag.py (packets_ns defaults to /ouster,
@@ -10,7 +10,7 @@ stamps are rewritten in the message bytes, so rclpy is not needed. The work
 is in scoop/retime.py.
 
     <packets_bag>     the ORIGINAL recording (lidar packets -> clock fit)
-    <sensortime_bag>  the decoded bag (scripts/decode_ouster.py) or a replay
+    <sensortime_bag>  the decoded bag (processing/decode_ouster.py) or a replay
     <out_bag>         new folder for the retimed bag
 """
 import os

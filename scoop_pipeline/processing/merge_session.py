@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check a pass's bags against record.yaml, then merge them into one.
 
-    python scoop_pipeline/scripts/merge_session.py <raw pass folder>
+    python scoop_pipeline/processing/merge_session.py <raw pass folder>
         [--check] [--allow-missing] [--out DIR] [--name NAME]
         [--compression none|zstd] [--mode mapping|survey|coop|contention]
         [--record configs/record.yaml] [--static-tf configs/static_tf.yaml]

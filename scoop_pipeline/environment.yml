@@ -4,7 +4,7 @@
 #   conda env create -f environment.yml        # first time
 #   conda env update -f environment.yml --prune  # after this file changes
 #   conda activate scoop
-#   python scripts/env_check.py
+#   python checks/env_check.py
 #
 # ROS-only steps (recording, ouster_ros replay, GLIM, `ros2 bag convert`,
 # retime_bag.py) stay in the ROS 2 install. Do not `source /opt/ros/...` in a

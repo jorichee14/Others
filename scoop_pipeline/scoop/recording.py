@@ -8,7 +8,7 @@ a bag, with every output at a fixed place.
     data/work/<rel>/                      everything derived from it
         <bag>_decoded/  1  packets -> points, sensor time    (scoop.replay)
         <bag>_retimed/  2  sensor -> capture time            (scoop.retime)
-        glim/           3  GLIM dump: traj_lidar.txt, map    (scripts/run_glim.sh)
+        glim/           3  GLIM dump: traj_lidar.txt, map    (processing/run_glim.sh)
         <svo>_zed/      4  the SVO2 as bags, capture time    (scoop.zed)
         <svo>_zed_right/   one replay per bag (settings zed.bags)
         clock.json         the clock fit of step 2 (drift, residual, ...)
@@ -283,7 +283,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
             log(f"    clock fit -> {rec.clock_json}")
         elif s == "glim":
             g = settings["glim"]
-            script = glim_script or ROOT / "scripts" / "run_glim.sh"
+            script = glim_script or ROOT / "processing" / "run_glim.sh"
             env = dict(os.environ)
             if g.get("image"):
                 env["GLIM_IMAGE"] = str(g["image"])

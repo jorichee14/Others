@@ -33,7 +33,7 @@ with one pass over the ORIGINAL packets bag:
    so a stage does not care whether its bag holds packets or clouds.
 
 Which of these conventions the replayed clouds actually followed is checked,
-not assumed: ``scripts/ouster_check.py`` decodes a packets bag both ways and
+not assumed: ``checks/ouster_check.py`` decodes a packets bag both ways and
 compares scan by scan against a replayed (and retimed) points bag.
 
 Requires ``ouster-sdk``. Written against 1.0 (LidarFrame / FrameBatcher);

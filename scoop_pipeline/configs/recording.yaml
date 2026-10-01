@@ -1,6 +1,6 @@
 # How one robot recording is processed: raw bag -> decoded -> retimed -> GLIM,
 # and the ZED SVO2 next to it -> a bag on the same clock.
-# Used by scripts/process_recording.py; a copy of what was used is written
+# Used by processing/process_recording.py; a copy of what was used is written
 # next to the outputs (work/.../process.yaml).
 
 ouster:

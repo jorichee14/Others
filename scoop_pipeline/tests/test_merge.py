@@ -5,7 +5,7 @@ merge of a pass). No ROS, no real bags.
 A synthetic pass: mobile_1 processed (retimed + two ZED bags in data/work),
 mobile_2 raw with a topic missing, infra_1 raw and a repeat (_r2).
 
-    python scripts/test_merge.py
+    python tests/test_merge.py
 """
 import os
 import shutil
@@ -350,7 +350,7 @@ def test_merge_bags_cli():
         a, b = os.path.join(d, "a"), os.path.join(d, "b")
         write_bag(a, ["/cam/left", "/cam/right", "/tf_static"], t0=T0)
         write_bag(b, ["/lidar/points", "/radar/points", "/tf"], t0=T0 + 3)
-        cli = [sys.executable, os.path.join(ROOT, "scripts", "merge_bags.py"), a, b]
+        cli = [sys.executable, os.path.join(ROOT, "processing", "merge_bags.py"), a, b]
         r = subprocess.run(cli + ["--list"], capture_output=True, text=True)
         assert r.returncode == 0 and "/radar/points" in r.stdout and "  6  " in r.stdout, r.stdout
         out = os.path.join(d, "ab")
@@ -369,7 +369,7 @@ def test_merge_bags_cli():
         assert sorted(bag.open_bag(out2).topics()) == ["/cam/left", "/cam/right", "/radar/points"]
         # a topic in both bags: refused, unless --source picks the bag
         write_bag(os.path.join(d, "c2"), ["/cam/left", "/cam/right2"], t0=T0 + 7)
-        cli2 = [sys.executable, os.path.join(ROOT, "scripts", "merge_bags.py"), a,
+        cli2 = [sys.executable, os.path.join(ROOT, "processing", "merge_bags.py"), a,
                 os.path.join(d, "c2")]
         r = subprocess.run(cli2 + ["-o", os.path.join(d, "dup"), "--topics", "/cam/*"],
                            capture_output=True, text=True)
@@ -408,7 +408,7 @@ def test_tf_edit():
     try:
         b = os.path.join(d, "b")
         _tree_bag(b)
-        tool = [sys.executable, os.path.join(ROOT, "scripts", "tf_edit.py")]
+        tool = [sys.executable, os.path.join(ROOT, "processing", "tf_edit.py")]
         r = subprocess.run(tool + [b, "--show"], capture_output=True, text=True)
         assert r.returncode == 0 and "~~ odom_zed" in r.stdout and "── os_lidar" in r.stdout, \
             r.stdout
@@ -465,7 +465,7 @@ def test_tf_edit():
 
 
 def _cli(t, *args):
-    return subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "merge_session.py"),
+    return subprocess.run([sys.executable, os.path.join(ROOT, "processing", "merge_session.py"),
                            t.raw, "--record", t.plan_path, *args],
                           capture_output=True, text=True, env=dict(os.environ))
 

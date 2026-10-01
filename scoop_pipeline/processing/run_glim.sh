@@ -2,7 +2,7 @@
 # Run GLIM (koide3/glim_ros2 docker image) offline on one bag, with its output
 # written next to the bag and owned by you afterwards (no sudo needed).
 #
-#   scripts/run_glim.sh <bag_dir> [config_dir] [dump_dir]
+#   processing/run_glim.sh <bag_dir> [config_dir] [dump_dir]
 #
 #   bag_dir     the retimed bag, e.g. .../20260924/mapping_A/mobile_1/retimed_full
 #   config_dir  GLIM config folder (default: $GLIM_CONFIG if set,

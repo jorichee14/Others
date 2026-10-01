@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Play an SVO/SVO2 through the ZED ROS 2 wrapper and record it:
 #
-#   scripts/run_zed.sh <svo> <out_bag> <params.yaml> <topic>...
+#   processing/run_zed.sh <svo> <out_bag> <params.yaml> <topic>...
 #
 #   svo          the .svo2 file
 #   out_bag      rosbag2 folder to create (must not exist)

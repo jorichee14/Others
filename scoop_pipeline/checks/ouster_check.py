@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check offline Ouster packet decoding against the replayed point clouds.
 
-    python3 scripts/ouster_check.py <packets_bag> [--points-bag <bag>]
+    python3 checks/ouster_check.py <packets_bag> [--points-bag <bag>]
         [--packets-ns /ouster] [--points-ns /mobile_1/ouster]
         [--driver-min-range 1.30] [--n 50] [--save-clock clock.json]
 
