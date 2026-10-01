@@ -5,6 +5,8 @@
     python scoop_pipeline/scripts/merge_bags.py <bag> <bag> ... -o <out bag>
         [--topics PATTERN ...] [--exclude PATTERN ...] [--pick]
         [--source PATTERN=N ...] [--keep-duplicates]
+        [--drop-tf PARENT->CHILD ...]
+        [--odom-tum FILE | --odom-topic TOPIC] [--odom-frame FRAME] [--odom-parent FRAME]
         [--compression zstd|none] [--static-tf configs/static_tf.yaml]
 
 --list         show every topic of the bags (type, messages, which bags) and stop
@@ -17,6 +19,15 @@
                in several bags is refused unless --source picks one (or
                --keep-duplicates keeps them all)
 -o             the merged bag folder (must not exist)
+--drop-tf      remove TF edges, e.g. the ZED's odometry:
+               'map_zed->odom_zed' 'odom_zed->*'
+--odom-tum     a new odometry as TF: a TUM trajectory (GLIM's traj_lidar.txt)
+--odom-topic   ... or an Odometry/PoseStamped topic of the bags
+--odom-frame   the frame those poses are of (os_lidar for traj_lidar.txt;
+               a topic's child_frame_id by default)
+--odom-parent  the world frame name (a topic's header.frame_id by default)
+               The poses are published as <parent> -> <root of the frame's
+               tree>, so looking up <parent> -> <frame> gives them exactly.
 
 Messages are copied byte for byte in log-time order, QoS kept; all static
 transforms go into one latched /tf_static message; zstd inside the MCAP by
@@ -82,6 +93,13 @@ def main():
                     help="keep a topic from every bag that has it")
     ap.add_argument("--compression", default="zstd", choices=["zstd", "none"])
     ap.add_argument("--static-tf", default="", help="calibrations to add to /tf_static")
+    ap.add_argument("--drop-tf", nargs="+", default=[], metavar="PARENT->CHILD",
+                    help="remove these TF edges (shell patterns)")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--odom-tum", help="new odometry: TUM trajectory file")
+    g.add_argument("--odom-topic", help="new odometry: Odometry/PoseStamped topic")
+    ap.add_argument("--odom-frame", help="the frame the odometry poses are of")
+    ap.add_argument("--odom-parent", help="the odometry's world frame")
     a = ap.parse_args()
     try:
         topics = merge.list_topics(a.bags)
@@ -118,17 +136,42 @@ def main():
         for t in keep:
             frm = names_[source[t]] if t in source else ", ".join(topics[t][2])
             print(f"    {t}  (from {frm})")
-        static_tf = []
+        static_tf, extra_tf = [], []
+        drop = tftree.edge_matcher(a.drop_tf) if a.drop_tf else None
+        if a.static_tf or drop or a.odom_tum or a.odom_topic:
+            edges = tftree.tf_edges(a.bags)
+            if drop:
+                gone = [f"{e.parent} -> {c}" for c, e in edges.items() if drop(e.parent, c)]
+                if not gone:
+                    raise BagError(f"--drop-tf {' '.join(a.drop_tf)}: matches no TF edge")
+                print("    tf: dropping " + ", ".join(gone))
+                edges = {c: e for c, e in edges.items() if not drop(e.parent, c)}
         if a.static_tf:
             import yaml
             with open(os.path.expanduser(a.static_tf)) as fh:
                 cals = tftree.load_calibrations(yaml.safe_load(fh))
             if cals:
-                static_tf, notes = tftree.attach(cals, tftree.tf_edges(a.bags))
+                static_tf, notes = tftree.attach(cals, edges)
                 for n in notes:
                     print(f"    tf: {n}")
+                for p_, c_, t_, q_ in static_tf:
+                    edges[c_] = tftree.Edge(p_, c_, True, tftree.matrix(t_, q_))
+        if a.odom_tum or a.odom_topic:
+            if a.odom_tum:
+                poses, parent, body = tftree.read_tum(a.odom_tum), a.odom_parent, a.odom_frame
+                if not parent or not body:
+                    raise BagError("--odom-tum needs --odom-frame and --odom-parent")
+            else:
+                poses, parent, body = tftree.read_pose_topic(a.bags, a.odom_topic)
+                parent, body = a.odom_parent or parent, a.odom_frame or body
+                if not body:
+                    raise BagError(f"{a.odom_topic} has no child_frame_id: pass --odom-frame")
+            extra_tf = tftree.odom_transforms(poses, body, parent, edges)
+            print(f"    tf: new odometry {parent} -> {extra_tf[0][2]} ({len(extra_tf)} poses, "
+                  f"so {parent} -> {body} is the trajectory)")
         res = merge.merge_bags(a.bags, a.out, compression=a.compression,
-                               static_tf=static_tf, topics=keep, source=source)
+                               static_tf=static_tf, topics=keep, source=source,
+                               drop_tf=drop, extra_tf=extra_tf)
         print("\n".join(f"    {t:45s} {n:9d}" for t, n in sorted(res.counts.items())))
     except (BagError, ValueError) as e:
         sys.exit(f"error: {e}")

@@ -117,25 +117,35 @@ def select_topics(available: Iterable[str], include=(), exclude=()) -> List[str]
     return keep
 
 
-def _stream(b: Path, reader, total: List[int], topics, skip=()):
+def _stream(b: Path, reader, total: List[int], topics, skip=(), rewrite=None):
     if not topics:
         return
     for _, sc, ch, msg in bag.iter_mcap_records(reader, list(topics)):
         total[0] += 1
         if ch.topic in skip:
             continue
+        data = msg.data
+        if rewrite and ch.topic in rewrite:
+            data = rewrite[ch.topic](data)
+            if data is None:                          # nothing left in it
+                continue
         yield (msg.log_time, ch.topic,
                TopicSchema(sc.name, sc.encoding, bytes(sc.data), ch.message_encoding),
-               msg.publish_time, msg.sequence, dict(ch.metadata), msg.data)
+               msg.publish_time, msg.sequence, dict(ch.metadata), data)
 
 
 def merge_bags(inputs, out_dir, compression: str = "zstd",
                min_free_gb: float = MIN_FREE_GB, static_tf=(),
                topics: Optional[Iterable[str]] = None,
-               source: Optional[Dict[str, int]] = None, log=print) -> MergeResult:
+               source: Optional[Dict[str, int]] = None, drop_tf=None, extra_tf=(),
+               log=print) -> MergeResult:
     """Merge the rosbag2 folders ``inputs`` into ``out_dir`` (must not exist);
     ``topics`` limits it to those (default: all, see :func:`select_topics`),
     ``source`` = {topic: index into inputs} takes a topic from that bag only.
+    ``drop_tf(parent, child)`` -> True removes that edge from /tf and
+    /tf_static (:func:`scoop.tftree.edge_matcher`); ``extra_tf`` =
+    ``[(t_ns, parent, child, t, q)]`` adds /tf transforms, e.g. a new
+    odometry (:func:`scoop.tftree.odom_transforms`).
     ``static_tf``: ``[(parent, child, t, q)]`` added to /tf_static (see
     :func:`scoop.tftree.attach`).
 
@@ -173,8 +183,31 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
     if combine and types.get("/tf_static", name) != name:
         raise BagError(f"/tf_static is {types['/tf_static']} in {sources['/tf_static'][0]}, "
                        f"not {name}")
-    streams = [_stream(b, r, done, ts_, skip={"/tf_static"} if combine else ())
-               for b, r, ts_ in zip(inputs, readers, sel)]
+    dropped = {"n": 0}
+    rewrite = None
+    if drop_tf is not None:
+        tsx = rosmsg.typestore()
+
+        def strip_tf(data):
+            m = tsx.deserialize_cdr(data, name)
+            keep = [tr for tr in m.transforms
+                    if not drop_tf(tr.header.frame_id, tr.child_frame_id)]
+            dropped["n"] += len(m.transforms) - len(keep)
+            if not keep:
+                return None
+            if len(keep) == len(m.transforms):
+                return data
+            return rosmsg.serialize(rosmsg.msg_type(name)(transforms=keep))
+        rewrite = {"/tf": strip_tf}
+    streams = [_stream(b, r, done, ts_, skip={"/tf_static"} if combine else (),
+                       rewrite=rewrite) for b, r, ts_ in zip(inputs, readers, sel)]
+    if extra_tf:
+        sch = TopicSchema(name, "ros2msg", rosmsg.msgdef(name).encode(), "cdr")
+        streams.append(iter(sorted(
+            (t_ns, "/tf", sch, t_ns, 0, {},
+             rosmsg.serialize(rosmsg.tf_message([(p, c, t, q)], t_ns)))
+            for t_ns, p, c, t, q in extra_tf)))
+        log(f"    /tf += {len(extra_tf)} transforms {extra_tf[0][1]} -> {extra_tf[0][2]}")
     if combine:
         ts = rosmsg.typestore()
         t0 = min(r.time_range()[0] for r in readers)
@@ -186,6 +219,9 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
             for _, _, _, msg in bag.iter_mcap_records(r, ["/tf_static"]):
                 n_in += 1
                 for tr in ts.deserialize_cdr(msg.data, name).transforms:
+                    if drop_tf is not None and drop_tf(tr.header.frame_id, tr.child_frame_id):
+                        dropped["n"] += 1
+                        continue
                     old = by_child.get(tr.child_frame_id)
                     if old is not None and old.header.frame_id != tr.header.frame_id:
                         raise BagError(f"/tf_static gives {tr.child_frame_id} two parents: "
@@ -232,6 +268,8 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
     except BaseException:
         shutil.rmtree(out_dir, ignore_errors=True)
         raise
+    if drop_tf is not None:
+        log(f"    dropped {dropped['n']} transforms (--drop-tf)")
     res = MergeResult(w.dir, dict(w.counts), sources, int(w.t_min or 0), int(w.t_max or 0))
     log(f"wrote {w.n} messages, {bag_bytes(out_dir) / 1e9:.1f} GB -> {w.dir} "
         f"({(res.t_max - res.t_min) * 1e-9:.1f} s)")

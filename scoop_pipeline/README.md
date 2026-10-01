@@ -344,3 +344,18 @@ as `merge_session.py`: log-time order, byte for byte, QoS kept, one latched
 `/tf_static`, zstd unless `--compression none`; `--static-tf` adds
 calibrations. Only the chosen topics are read.
 
+### Replacing the odometry in TF
+
+```
+python scoop_pipeline/scripts/merge_bags.py <bags...> -o <out> \
+    --drop-tf 'map_zed->odom_zed' 'odom_zed->*' \
+    --odom-tum <glim>/traj_lidar.txt --odom-frame os_lidar --odom-parent map
+```
+
+`--drop-tf` removes TF edges (here the ZED's `map_zed -> odom_zed ->
+zed_camera_link`), leaving the sensor tree with its own root. `--odom-tum`
+(a TUM file, e.g. GLIM's `traj_lidar.txt`) or `--odom-topic` (Odometry /
+PoseStamped) adds a new odometry: poses of `--odom-frame` in `--odom-parent`,
+published as `/tf` `<parent> -> <root of the tree>` (composed through the
+static chain), so `tf2_echo <parent> <frame>` gives the trajectory exactly.
+

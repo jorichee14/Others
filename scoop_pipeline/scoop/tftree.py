@@ -13,9 +13,17 @@ exactly the calibration.
 
     edges = tftree.tf_edges(bags)                       # what the bags publish
     publish, notes = tftree.attach(calibrations, edges)
+
+Replacing the odometry works the same way: :func:`edge_matcher` drops edges
+(the ZED's map_zed -> odom_zed -> zed_camera_link), and :func:`odom_transforms`
+turns a new trajectory -- poses of a body frame such as os_lidar, from a
+topic (:func:`read_pose_topic`) or a TUM file (:func:`read_tum`) -- into
+/tf transforms world -> <root of the body's tree>, so looking up
+world -> body gives exactly the trajectory.
 """
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -24,7 +32,8 @@ import numpy as np
 from . import bag, rosmsg
 from .bag import BagError
 
-__all__ = ["Edge", "Calibration", "matrix", "to_tq", "tf_edges", "attach", "load_calibrations"]
+__all__ = ["Edge", "Calibration", "matrix", "to_tq", "tf_edges", "attach", "load_calibrations",
+           "edge_matcher", "read_tum", "read_pose_topic", "odom_transforms"]
 
 TFMSG = "tf2_msgs/msg/TFMessage"
 
@@ -159,3 +168,78 @@ def attach(cals: List[Calibration], edges: Dict[str, Edge]):
         out.append((add[0], add[1], t, q))
         edges[add[1]] = Edge(add[0], add[1], True, add[2])
     return out, notes
+
+
+def edge_matcher(patterns):
+    """``["map_zed->odom_zed", "odom_zed->*"]`` -> f(parent, child) -> drop?
+    (shell patterns on either side)."""
+    pairs = []
+    for p in patterns or ():
+        if "->" not in p:
+            raise ValueError(f"--drop-tf {p}: expected PARENT->CHILD")
+        a, b = (x.strip() for x in p.split("->", 1))
+        pairs.append((a, b))
+
+    def drop(parent: str, child: str) -> bool:
+        return any(fnmatch.fnmatchcase(parent, a) and fnmatch.fnmatchcase(child, b)
+                   for a, b in pairs)
+    return drop
+
+
+def read_tum(path) -> List[Tuple[int, np.ndarray]]:
+    """TUM trajectory (``t tx ty tz qx qy qz qw`` per line, t in s) ->
+    ``[(t_ns, 4x4)]``; GLIM's traj_lidar.txt is one."""
+    out = []
+    with open(path) as fh:
+        for n, line in enumerate(fh, 1):
+            v = line.split("#", 1)[0].split()
+            if not v:
+                continue
+            if len(v) != 8:
+                raise BagError(f"{path}:{n}: expected 8 numbers (t tx ty tz qx qy qz qw)")
+            f = [float(x) for x in v]
+            out.append((int(round(f[0] * 1e9)), matrix(f[1:4], f[4:8])))
+    if not out:
+        raise BagError(f"{path}: no poses")
+    return out
+
+
+def read_pose_topic(bags, topic: str):
+    """Poses of a topic (nav_msgs/Odometry, geometry_msgs/PoseStamped or
+    PoseWithCovarianceStamped) -> ``([(stamp_ns, 4x4)], parent frame, child
+    frame or None)``."""
+    for b in bags:
+        r = bag.open_bag(b)
+        if topic not in r.topics():
+            continue
+        out, parent, child = [], None, None
+        for _, _, payload, decode in r.iter_raw([topic]):
+            m = decode(payload)
+            pose = m.pose.pose if hasattr(m.pose, "pose") else m.pose
+            st = m.header.stamp.sec * 1_000_000_000 + m.header.stamp.nanosec
+            p, q = pose.position, pose.orientation
+            out.append((st, matrix([p.x, p.y, p.z], [q.x, q.y, q.z, q.w])))
+            parent = parent or m.header.frame_id
+            child = child or getattr(m, "child_frame_id", None) or None
+        return out, parent, child
+    raise BagError(f"{topic} is in none of the bags")
+
+
+def odom_transforms(poses, body: str, parent: str, edges: Dict[str, Edge]):
+    """Poses of ``body`` in ``parent`` -> ``[(t_ns, parent, root, t, q)]``, the
+    /tf transforms parent -> root of body's tree (through its static edges),
+    so a lookup parent -> body gives the poses."""
+    root = _root(body, edges)
+    if _root(parent, edges) == root:
+        raise BagError(f"{parent} is already in {body}'s tree (root {root}); drop the "
+                       f"old odometry edges first (--drop-tf)")
+    if parent in edges:
+        raise BagError(f"{parent} already has a parent ({edges[parent].parent})")
+    T_rb = _static_pose(root, body, edges)
+    inv = np.linalg.inv(T_rb)
+    out = []
+    for t_ns, T_pb in poses:
+        t, q = to_tq(T_pb @ inv)
+        out.append((t_ns, parent, root, t, q))
+    return out
+

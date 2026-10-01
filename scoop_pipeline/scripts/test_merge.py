@@ -395,6 +395,59 @@ def test_merge_bags_cli():
         shutil.rmtree(d)
 
 
+def test_replace_odometry():
+    """Drop the ZED odometry edges, hang the tree on a new trajectory of
+    os_lidar: map -> os_lidar must give the trajectory."""
+    d = tempfile.mkdtemp()
+    try:
+        b = os.path.join(d, "b")
+        _tree_bag(b)
+        cal = os.path.join(d, "cal.yaml")
+        yaml.safe_dump({"transforms": [{"parent": CAL.parent, "child": CAL.child,
+                                        "translation": CAL.translation,
+                                        "rotation_xyzw": CAL.rotation_xyzw}]}, open(cal, "w"))
+        rng = np.random.default_rng(0)
+        poses = []
+        with open(os.path.join(d, "traj.txt"), "w") as fh:
+            for i in range(5):
+                t = rng.normal(size=3)
+                q = rng.normal(size=4)
+                q /= np.linalg.norm(q)
+                ts = (T0 + i * S + S // 2) * 1e-9
+                fh.write(f"{ts:.9f} {t[0]} {t[1]} {t[2]} {q[0]} {q[1]} {q[2]} {q[3]}\n")
+                poses.append(tftree.matrix(t, q))
+        out = os.path.join(d, "m")
+        cli = [sys.executable, os.path.join(ROOT, "scripts", "merge_bags.py"), b, "-o", out,
+               "--static-tf", cal, "--drop-tf", "map_zed->odom_zed", "odom_zed->*",
+               "--odom-tum", os.path.join(d, "traj.txt"), "--odom-frame", "os_lidar",
+               "--odom-parent", "map"]
+        r = subprocess.run(cli, capture_output=True, text=True)
+        assert r.returncode == 0, (r.stdout, r.stderr)
+        edges = tftree.tf_edges([out], seconds=1e6)
+        assert "odom_zed" not in edges and edges["zed_camera_link"].parent == "map", \
+            {c: e.parent for c, e in edges.items()}
+        T_link_lidar = tftree._static_pose("zed_camera_link", "os_lidar", edges)
+        ts = rosmsg.typestore()
+        got = []
+        for _, _, payload, _ in bag.open_bag(out).iter_raw(["/tf"]):
+            for tr in ts.deserialize_cdr(bytes(payload), "tf2_msgs/msg/TFMessage").transforms:
+                assert tr.header.frame_id == "map", tr.header.frame_id   # ZED odom gone
+                v, q = tr.transform.translation, tr.transform.rotation
+                got.append(tftree.matrix([v.x, v.y, v.z], [q.x, q.y, q.z, q.w]))
+        assert len(got) == 5
+        for T_map_link, want in zip(got, poses):
+            np.testing.assert_allclose(T_map_link @ T_link_lidar, want, atol=1e-6)
+        r = subprocess.run(cli[:7] + ["-o", os.path.join(d, "m2"), "--odom-tum",
+                                      os.path.join(d, "traj.txt"), "--odom-frame", "os_lidar",
+                                      "--odom-parent", "map"], capture_output=True, text=True)
+        assert r.returncode != 0 and "not static" in r.stderr, r.stderr   # old odom still there
+        r = subprocess.run(cli[:5] + ["-o", os.path.join(d, "m3"), "--drop-tf", "nope->x"],
+                           capture_output=True, text=True)
+        assert r.returncode != 0 and "matches no TF edge" in r.stderr
+    finally:
+        shutil.rmtree(d)
+
+
 def _cli(t, *args):
     return subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "merge_session.py"),
                            t.raw, "--record", t.plan_path, *args],
