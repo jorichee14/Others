@@ -388,6 +388,10 @@ class Pipeline:
         else:
             self.out_dir = d.get("processed") or processed_dir_for(d["bag"])
             self.routed = True
+        # names the outputs: <pass>_<date> from data/processed/<date>/<pass>,
+        # or dataset.name; none for the old flat folder
+        date, pas = os.path.normpath(self.out_dir).split(os.sep)[-2:]
+        self.tag = d.get("name") or ("%s_%s" % (pas, date) if self.routed else "")
         os.makedirs(self.out_dir, exist_ok=True)
         self._sensor = None
 
@@ -416,9 +420,18 @@ class Pipeline:
                 return os.path.join(self.out_dir, sub.format(machine=self.machine))
         return self.out_dir
 
+    def pcd(self, base):
+        """The name of one of the stages' clouds: 'denoised' ->
+        denoised_<tag>.pcd (denoised.pcd when there is no tag)."""
+        return "%s_%s.pcd" % (base, self.tag) if self.tag else base + ".pcd"
+
     def outp(self, name):
         """A bare file name -> its place in the layout (folder created); a path
-        with a folder in it (absolute, ~/..., or relative) is used as given."""
+        with a folder in it (absolute, ~/..., or relative) is used as given.
+        {tag} in a name becomes the pass tag (map_final_{tag}.pcd)."""
+        if "{tag}" in name:
+            name = name.replace("{tag}", self.tag) if self.tag else \
+                name.replace("_{tag}", "").replace("{tag}", "")
         if os.path.isabs(name) or os.path.dirname(name):
             return os.path.expanduser(name)
         d = self.folder_for(name)
@@ -428,8 +441,8 @@ class Pipeline:
     def describe(self):
         if not self.routed:
             return "outputs -> %s/" % self.out_dir
-        return ("outputs -> %s/  (mapping/, odometry/%s/, frames/, bags/)"
-                % (self.out_dir, self.machine))
+        return ("outputs -> %s/  (mapping/, odometry/%s/, frames/, bags/), "
+                "named *_%s" % (self.out_dir, self.machine, self.tag))
 
     def stage(self, key):
         """Return this stage's dict with any *file* fields resolved against the layout."""

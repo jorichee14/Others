@@ -12,7 +12,10 @@ camera_info + /tf_static), or from dataset.calib_json when it is set.
 
 Intermediate stages are written to <processed>/mapping/ (data/processed/<date>/
 <pass>/, see pipeline_common.ROUTES) so a re-run can resume from merge:
-  merged.pcd  [static.pcd]  denoised.pcd  colored.pcd  [flattened.pcd]  [anchored.pcd]
+  merged_<tag>.pcd  [static_<tag>.pcd]  denoised_<tag>.pcd  colored_<tag>.pcd
+  [flattened_<tag>.pcd]  [anchored_<tag>.pcd]  ->  map_final_<tag>.pcd
+<tag> is <pass>_<date> (dataset.name overrides); 01_build_map.output, when set,
+names the final cloud instead ("{tag}" in it is filled in).
 
 DYNAMIC-OBJECT REMOVAL (moving people / vehicles), stage [1b], optional.
 Two complementary tests, combined per voxel of a global decision grid:
@@ -1317,48 +1320,48 @@ def main():
 
     # Resume from the furthest completed stage on disk. Delete a stage's .pcd
     # to force it (and everything after) to recompute.
-    denoised_p = P.outp("denoised.pcd")
-    static_p = P.outp("static.pcd")
-    merged_p = P.outp("merged.pcd")
+    denoised_p = P.outp(P.pcd("denoised"))
+    static_p = P.outp(P.pcd("static"))
+    merged_p = P.outp(P.pcd("merged"))
     dyn = None
     carver = None
 
     if s["denoise"]["enable"] and os.path.exists(denoised_p):
-        print("[resume] loading existing denoised.pcd (delete to redo denoise/merge)")
+        print(f"[resume] loading existing {denoised_p} (delete to redo denoise/merge)")
         pcd = o3d.io.read_point_cloud(denoised_p)
         print(f"    {len(pcd.points)} pts")
     elif rd_on and os.path.exists(static_p):
-        print("[resume] loading existing static.pcd (delete to redo dynamic/merge)")
+        print(f"[resume] loading existing {static_p} (delete to redo dynamic/merge)")
         pcd = o3d.io.read_point_cloud(static_p)
         print(f"    {len(pcd.points)} pts")
         if s["denoise"]["enable"]:
             pcd = denoise(s, pcd)
-            save(P, pcd, "denoised.pcd")
+            save(P, pcd, P.pcd("denoised"))
     else:
         if os.path.exists(merged_p):
-            print("[resume] loading existing merged.pcd (delete to rebuild)")
+            print(f"[resume] loading existing {merged_p} (delete to rebuild)")
             pcd = o3d.io.read_point_cloud(merged_p)
             print(f"    {len(pcd.points)} pts")
         else:
             if rd_on:
                 dyn = DynStats(rd.get("voxel", 0.15))
                 carver = make_carver(rd, s)
-            pcd = merge(P, S, s, dyn, carver); save(P, pcd, "merged.pcd")
+            pcd = merge(P, S, s, dyn, carver); save(P, pcd, P.pcd("merged"))
 
         if rd_on:
             pcd = remove_dynamic(P, S, s, pcd, dyn, carver)
             if rd.get("save", True):
-                save(P, pcd, "static.pcd")
+                save(P, pcd, P.pcd("static"))
 
         if s["denoise"]["enable"]:
             pcd = denoise(s, pcd)
-            save(P, pcd, "denoised.pcd")
+            save(P, pcd, P.pcd("denoised"))
 
     if s["colorize"]["enable"]:
-        pcd = colorize(P, S, s, pcd); save(P, pcd, "colored.pcd")
+        pcd = colorize(P, S, s, pcd); save(P, pcd, P.pcd("colored"))
 
     if s["flatten"]["enable"]:
-        pcd = flatten(s, pcd); save(P, pcd, "flattened.pcd")
+        pcd = flatten(s, pcd); save(P, pcd, P.pcd("flattened"))
 
     shift = np.zeros(3)
     if s["anchor_camera_start"]:
@@ -1369,9 +1372,9 @@ def main():
         pcd.translate(shift)
         print(f"    shift {shift.round(3)}  (NOTE: stage 03 must know this via "
               f"01_build_map.anchor_camera_start)")
-        save(P, pcd, "anchored.pcd")
+        save(P, pcd, P.pcd("anchored"))
 
-    final = P.outp(s["output"])
+    final = P.outp(s.get("output") or P.pcd("map_final"))
     o3d.io.write_point_cloud(final, pcd)
     print(f"DONE -> {final}  ({len(pcd.points)} points)")
 

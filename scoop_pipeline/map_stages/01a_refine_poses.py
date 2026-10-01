@@ -36,7 +36,7 @@ round N moves the poses by millimetres, the trajectory and the map agree.
   python3 01a_refine_poses.py [pipeline_config.json] [--rounds N]
 
 Config block (all optional, under "01a_refine"):
-  "map":            "denoised.pcd"  # reference for round 1; "" = build it
+  "map":            denoised_<tag>.pcd, what 01 wrote  # reference for round 1; "" = build it
   "target_voxel":   0.05    # reference map resolution (m)
   "scan_voxel":     0.10    # per-scan downsample before ICP (m)
   "max_corr":       [0.4, 0.2, 0.1]   # coarse-to-fine correspondence gates
@@ -471,7 +471,7 @@ def main():
     cfg_all = P.cfg
     ds = P.dataset
     s = cfg_all["01_build_map"]
-    c = dict(map="denoised.pcd", target_voxel=0.05, scan_voxel=0.10,
+    c = dict(map=P.pcd("denoised"), target_voxel=0.05, scan_voxel=0.10,
              max_corr=[0.4, 0.2, 0.1], iters_per_gate=5, huber=0.05,
              min_corr=200, max_shift=0.50, max_rot_deg=5.0, rounds=2,
              plane_voxel=0.4, plane_iters=8, prior_beta=0.05,
@@ -586,8 +586,9 @@ def main():
     print("\nA round that moves poses by a few millimetres means the "
           "trajectory and the map are self-consistent.")
     print(f"\nnext: set dataset.traj to \"{c['output']}\" (found in "
-          f"{P.folder_for(c['output'])}), delete merged/static/denoised/colored .pcd "
-          f"in {P.folder_for('merged.pcd')}, re-run 01_build_map.py, "
+          f"{P.folder_for(c['output'])}), delete "
+          f"{', '.join(P.pcd(b) for b in ('merged', 'static', 'denoised', 'colored'))} "
+          f"in {P.folder_for('x.pcd')}, re-run 01_build_map.py, "
           f"then map_quality.py")
 
 

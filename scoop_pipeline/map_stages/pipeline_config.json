@@ -1,6 +1,6 @@
 {
   "dataset": {
-    "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping_A/mirc_dataset_mapping_A_20260924_merged",
+    "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping_A/mirc_dataset_survey_1_mapping_A_20260924_merged",
     "traj": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping_A/mobile_1/glim/traj_lidar.txt",
     "machine": "mobile_1"
   },
@@ -27,7 +27,6 @@
     }
   },
   "01_build_map": {
-    "output": "map_final_20260828.pcd",
     "time_tol": 0.04,
     "deskew": false,
     "scan_voxel": 0.01,
@@ -78,8 +77,8 @@
   },
 
   "02_cut": {
-    "input": "map_final_20260828.pcd",
-    "output": "map_final_20260828_nc.pcd",
+    "input": "map_final_{tag}.pcd",
+    "output": "map_final_{tag}_nc.pcd",
     "axis": "z",
     "floor": -0.99,
     "ceil": 2.39,
@@ -87,8 +86,8 @@
     "bins": 100
   },
   "03_anchor": {
-    "input": "map_final_20260828_nc.pcd",
-    "output": "map_final_20260828_nc_anchored.pcd",
+    "input": "map_final_{tag}_nc.pcd",
+    "output": "map_final_{tag}_nc_anchored.pcd",
     "frame_out": "anchor_frame.json",
     "skip_cloud": false,
 
