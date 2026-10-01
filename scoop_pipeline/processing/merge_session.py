@@ -46,7 +46,9 @@ def show(check, indent="    "):
     for t in check.missing:
         print(f"{indent}{'MISSING':8s}{t}")
     if check.extra:
-        print(f"{indent}also there (not in record.yaml): {', '.join(check.extra)}")
+        print(f"{indent}also there (not in record.yaml, merged too):")
+        for t in check.extra:
+            print(f"{indent}  {t:{w}s} {check.counts[t]:9d}")
 
 
 def main():
