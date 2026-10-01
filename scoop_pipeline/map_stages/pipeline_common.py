@@ -551,6 +551,10 @@ class Pipeline:
         date, pas = os.path.normpath(self.out_dir).split(os.sep)[-2:]
         self.tag = d.get("name") or ("%s_%s" % (pas, date) if self.routed else "")
         os.makedirs(self.out_dir, exist_ok=True)
+        # files recorded during the session, next to its raw data:
+        # data/raw/<date>/<pass>/ (infra_cameras/ holds the camera extrinsic yamls)
+        self.raw_dir = (os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.normpath(self.out_dir)))), "raw", date, pas) if self.routed else None)
         self._sensor = None
 
     @property
@@ -596,6 +600,18 @@ class Pipeline:
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, name)
 
+    def infra_yaml(self, name):
+        """An infra camera's extrinsic yaml from the mapping session: a bare
+        name is looked up in data/raw/<date>/<pass>/infra_cameras/, then in
+        frames/ (where older runs kept it); a path is used as given. When it is
+        in neither, the infra_cameras/ path is returned, so the message says
+        where to put it."""
+        if os.path.isabs(name) or os.path.dirname(name):
+            return os.path.expanduser(name)
+        cands = ([os.path.join(self.raw_dir, "infra_cameras", name)] if self.raw_dir else []) \
+            + [os.path.join(self.folder_for(name), name)]
+        return next((c for c in cands if os.path.exists(c)), cands[0])
+
     def describe(self):
         if not self.routed:
             return "outputs -> %s/" % self.out_dir
@@ -613,7 +629,7 @@ class Pipeline:
             for c in s["cameras"]:
                 c = dict(c)
                 if isinstance(c.get("extrinsic_yaml"), str):
-                    c["extrinsic_yaml"] = self.outp(c["extrinsic_yaml"])
+                    c["extrinsic_yaml"] = self.infra_yaml(c["extrinsic_yaml"])
                 out.append(c)
             s["cameras"] = out
         return s

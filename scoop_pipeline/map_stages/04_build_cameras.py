@@ -7,8 +7,9 @@ Each camera entry now declares a "source":
   "source": "extrinsic_yaml"   (default, unchanged behaviour)
       T_world_child = T_world_lidar(stamp) @ T_lidar_camera @ T_zedleft_child
       T_map_child   = T_N_world @ T_world_child
-      Needs the mapping bag's trajectory, the ZED->child extrinsic YAML, and
-      calibration.json. Used for the arducam.
+      Needs the mapping bag's trajectory and the ZED->child extrinsic YAML saved
+      during the mapping session, kept in data/raw/<date>/<pass>/infra_cameras/
+      (a bare "extrinsic_yaml" name is looked up there). Used for the arducam.
 
   "source": "board"            (NEW)
       T_map_child = T_map_board @ inv(T_cam_board)
@@ -30,6 +31,7 @@ Each camera entry now declares a "source":
 
   python3 04_build_cameras.py [pipeline_config.json]
 """
+import os
 import sys
 import json
 import numpy as np
@@ -79,6 +81,10 @@ def boards_in_map(af, cfg):
 def camera_from_yaml(cam, ctx):
     name = cam["name"]; child = cam["child_frame"]; ypath = cam["extrinsic_yaml"]
     print("  extrinsic: %s" % ypath)
+    if not os.path.exists(ypath):
+        print("  ! not found -> skipped. Put the yaml saved during the mapping session "
+              "there (data/raw/<date>/<pass>/infra_cameras/)")
+        return None
     info = parse_extrinsic_yaml(ypath)
     ext, stamp, pim_zed = info["ext"], info["stamp"], info["pose_in_map_zed"]
     if ext is None or stamp is None:
