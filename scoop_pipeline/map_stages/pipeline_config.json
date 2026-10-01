@@ -1,7 +1,7 @@
 {
   "dataset": {
-    "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping_A/mirc_dataset_survey_1_mapping_A_20260924_merged",
-    "traj": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping_A/mobile_1/glim/traj_lidar.txt",
+    "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping_A/mirc_dataset_survey_1_mapping_20260924_merged",
+    "traj": "traj_lidar_refined.txt",
     "machine": "mobile_1"
   },
    "boards": {
@@ -28,7 +28,7 @@
   },
   "01_build_map": {
     "time_tol": 0.04,
-    "deskew": false,
+    "deskew": true,
     "scan_voxel": 0.01,
     "final_voxel": 0.01,
     "lidar_min": 0.3,
@@ -80,8 +80,8 @@
     "input": "map_final_{tag}.pcd",
     "output": "map_final_{tag}_nc.pcd",
     "axis": "z",
-    "floor": -0.99,
-    "ceil": 2.39,
+    "floor": null,
+    "ceil": null,
     "voxel": 0.05,
     "bins": 100
   },
@@ -118,7 +118,7 @@
     "cam_frame": "zed_left_camera_optical_frame"
   },
   "04_build_cameras": {
-    "anchor_frame": "map_stages_20260828_outputs/anchor_frame.json",
+    "anchor_frame": "anchor_frame.json",
     "output": "cameras_in_map.yaml",
     "map_frame": "map",
     "time_tol": 0.1,
