@@ -136,7 +136,20 @@ def main():
               "with +y down, since OpenCV 4.6)" % board_origin)
     HEAD = 0 if board_axes == "ros" else 2   # which board axis defines map +x
 
-    tr_t, tr_T = load_traj(P.outp(P.dataset["traj"]))
+    run = bool(P.reference)
+    if run:
+        # a run (dataset.reference_pass): its trajectory is stage 08's LiDAR-ICP
+        # track, registered to the reference pass's anchored map -- already in
+        # map, so the boards are measured IN that frame: no re-anchoring, no
+        # cloud, and they go to their own file next to the reference's
+        traj = P.lidar_track_traj()
+        print("run in %s's map: trajectory = stage 08's LiDAR track %s (already in map); "
+              "boards measured in that frame, nothing re-anchored" % (P.reference, traj))
+        if os.path.basename(s["frame_out"]) == "anchor_frame.json":
+            s["frame_out"] = P.outp("boards_{tag}.json")
+    else:
+        traj = P.outp(P.dataset["traj"])
+    tr_t, tr_T = load_traj(traj)
     T_lidar_cam = S.T_lidar_camera
     t0, t1 = float(tr_t[0]), float(tr_t[-1])
     print("trajectory: %d poses, %.1f s\n" % (len(tr_t), t1 - t0))
@@ -320,6 +333,8 @@ def main():
     T_N_world = np.eye(4)
     T_N_world[:3, :3] = R_align
     T_N_world[:3, 3] = -R_align @ board_pos_world
+    if run:
+        T_N_world = np.eye(4)            # the trajectory is already in map
     for inst in instances:
         for sec in inst["sections"]:
             sec["T_map"] = T_N_world @ sec["T_world"]
@@ -336,7 +351,7 @@ def main():
     board_pos_in = board_pos_world - (cam0 if input_anchored else 0.0)
 
     pcd_done = False
-    if s.get("skip_cloud", False):
+    if s.get("skip_cloud", False) or run:
         print("\nskip_cloud: board poses only, no cloud read or written")
     else:
         pcd = o3d.io.read_point_cloud(s["input"])

@@ -131,7 +131,9 @@ def camera_from_board(cam, ctx):
               "-> skipped" % bname)
         return None
     T_map_board, brec = ctx["boards"][bname]
-    B = Board(bname, ctx["board_cfgs"][bname])
+    design = brec.get("design", bname)
+    B = Board(design, ctx["board_cfgs"][design])
+    T_fix = B.frame_fix(ctx["board_axes"], ctx["board_origin"])
     print("  %s" % B.describe())
     print("  board pose in map: %s (%s, %d views, std %.1f mm)"
           % (np.round(T_map_board[:3, 3], 4).tolist(), brec.get("method", "?"),
@@ -161,7 +163,7 @@ def camera_from_board(cam, ctx):
         d = B.detect(gray, K, D)
         if d is None:
             continue
-        poses.append((T_map_board @ np.linalg.inv(d.T), d.reproj, st, d.n))
+        poses.append((T_map_board @ np.linalg.inv(d.T @ T_fix), d.reproj, st, d.n))
     if not poses:
         print("  ! board '%s' never detected in %d frames of %s" % (bname, len(frames), itopic))
         return None
@@ -218,6 +220,10 @@ def main():
            "T_N_world": T_N_world,
            "tol": float(s.get("time_tol", 0.10)),
            "boards": boards_in_map(af, P.cfg),
+           # 03's board frame convention: a detection is converted to it before
+           # it meets a board pose from 03, as 03 and 06 do
+           "board_axes": af.get("board_axes", "opencv"),
+           "board_origin": af.get("board_origin", "corner"),
            "board_cfgs": P.cfg.get("boards", {}),
            "default_bag": P.dataset["bag"],
            # map_zed is the ZED's own map of ONE session: the reference pass's
@@ -226,6 +232,23 @@ def main():
            "T_lidar_cam": S.T_lidar_camera,
            "tr_t": None, "tr_T": None}
 
+    if P.reference:
+        # boards this run measured (03 on the run: boards_<tag>.json): the ones
+        # the reference lacks are added; the ones it has are compared with it
+        rb_path = P.outp("boards_{tag}.json")
+        if os.path.exists(rb_path):
+            run_boards = boards_in_map(json.load(open(rb_path)), P.cfg)
+            for name, (T, rec) in sorted(run_boards.items()):
+                if name in ctx["boards"]:
+                    Tr = ctx["boards"][name][0]
+                    print("board '%s': this run measures it %.1f mm / %.2f deg from the "
+                          "reference's pose (kept)" % (name, np.linalg.norm(
+                              T[:3, 3] - Tr[:3, 3]) * 1000, ang_deg(T[:3, :3], Tr[:3, :3])))
+                else:
+                    ctx["boards"][name] = (T, rec)
+                    print("board '%s': from this run (%s)" % (name, rb_path))
+        else:
+            print("(no %s: run 03 on this run to place boards the reference lacks)" % rb_path)
     print("anchor_frame: %s  (map_frame='%s')" % (s["anchor_frame"], map_frame))
     print("boards in map: %s" % ", ".join(sorted(ctx["boards"])) or "(none)")
 

@@ -44,8 +44,9 @@ map_stages/          map from LiDAR + GLIM poses (01_build_map.py, 01a_refine_po
                      "source": "lidar_odom" combines every opening view, parked or moving,
                      through the run's GLIM trajectory (board_views.py); optional:
                      06_init.relocalize, LiDAR relocalization (lidar_reloc.py),
-                     08 per-scan LiDAR ICP to the anchored map, 07 run cloud, 04 cameras,
-                     09 poses bag
+                     08 per-scan LiDAR ICP, 03 on the run places every board it sees in
+                     map (boards_<tag>.json, nothing re-anchored), 04 infra cameras,
+                     07 run cloud, 09 poses bag
 datasets/            bags -> datasets for other tools
   mcap_convert.py    replica (RGB + lidar depth), mcd, mcgs (standalone)
 analysis/            measuring results; reads outputs, writes nothing back
