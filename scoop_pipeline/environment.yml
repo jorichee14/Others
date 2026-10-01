@@ -42,3 +42,4 @@ dependencies:
       # CUDA major version `nvidia-smi` reports: cupy-cuda11x for CUDA 11.
       - cupy-cuda12x
       - nvidia-cuda-nvrtc-cu12
+      - nvidia-cublas-cu12             # matmul / einsum (map_stages)

@@ -142,20 +142,36 @@ def preload_cuda_libs():
     except Exception:
         pass
     roots.append(os.path.dirname(os.path.dirname(np.__file__)))
-    n = 0
-    seen = set()
+    todo = {}
     for r in dict.fromkeys(roots):
         for so in glob.glob(os.path.join(r, "nvidia", "*", "lib", "lib*.so*")):
             base = os.path.basename(so)
-            if base in seen or not any(w.lower() in base.lower() for w in want):
-                continue
+            if base not in todo and any(w.lower() in base.lower() for w in want):
+                todo[base] = so
+    # several passes: a library loads only after the ones it links against
+    # (libcublas needs libcublasLt), and glob order is arbitrary
+    n = 0
+    while todo:
+        done = []
+        for base, so in todo.items():
             try:
                 ctypes.CDLL(so, mode=ctypes.RTLD_GLOBAL)
-                seen.add(base)
-                n += 1
+                done.append(base)
             except OSError:
                 pass
+        if not done:
+            break
+        for base in done:
+            del todo[base]
+        n += len(done)
     return n
+
+
+# the pip wheel that carries each CUDA library CuPy loads
+_CUDA_WHEELS = {"nvrtc": "nvidia-cuda-nvrtc-cu12", "cublas": "nvidia-cublas-cu12",
+                "cufft": "nvidia-cufft-cu12", "curand": "nvidia-curand-cu12",
+                "cusolver": "nvidia-cusolver-cu12", "cusparse": "nvidia-cusparse-cu12",
+                "nvjitlink": "nvidia-nvjitlink-cu12"}
 
 
 def init_gpu(want):
@@ -187,10 +203,12 @@ def init_gpu(want):
         msg = str(e)
         print(f"[gpu] requested but unavailable ({type(e).__name__}: {msg})"
               f" -> running on CPU")
-        if "nvrtc" in msg.lower():
-            print("[gpu] CuPy JIT-compiles kernels and needs NVRTC. Install "
-                  "the matching runtime wheel:\n"
-                  "        pip install nvidia-cuda-nvrtc-cu12   # or -cu11")
+        missing = [w for k, w in _CUDA_WHEELS.items() if k in msg.lower()]
+        if missing:
+            print("[gpu] a CUDA library CuPy needs is not installed. Install the "
+                  "runtime wheels (CUDA 12; -cu11 for CUDA 11):\n"
+                  "        pip install " + " ".join(dict.fromkeys(
+                      missing + ["nvidia-cuda-nvrtc-cu12", "nvidia-cublas-cu12"])))
         return False
 
 
@@ -206,6 +224,11 @@ def _gpu_smoke_test(cp):
     a = cp.full((4, 3), 7, cp.uint8)
     b = cp.arange(12, dtype=cp.float32).reshape(4, 3)
     c = (a.astype(cp.float32) * b).sum() + cp.argsort(b[:, 0]).sum()
+    # matmul and einsum go through cuBLAS, a separate library that a CuPy
+    # install can lack while everything above works -- merge's first scan
+    # placement (p @ R.T) is where that used to surface
+    R = cp.eye(3, dtype=cp.float32)
+    c += (b @ R.T).sum() + cp.einsum("nij,nj->ni", cp.stack([R] * 4), b).sum()
     float(c)                                   # forces a device sync
 
 
