@@ -41,6 +41,8 @@ datasets/            bags -> datasets for other tools
   mcap_convert.py    replica (RGB + lidar depth), mcd, mcgs (standalone)
 analysis/            measuring results; reads outputs, writes nothing back
   mapping/map_quality.py  surface thickness of a map cloud (noise / pose error / smear)
+  mapping/scan_consistency.py  why walls are thick: noise floor, timing offset,
+                     deskew, drift -- from ~200 scans of the bag + trajectory
   odom/              trajectories (nothing yet)
   comms/             wifi / iperf / ntp (nothing yet)
   bags/topic_timing.py    intervals, gaps and repeated frames of topics in a bag
@@ -54,6 +56,8 @@ tests/               self-tests, no real bag needed
   test_zed.py        restamp, run_zed.sh with a fake ros2 and docker
   test_merge.py      machines, topic check, merge, tf_edit
   test_replica.py    replica with lidar depth on a synthetic scene
+  test_scan_consistency.py  scan_consistency on synthetic sweeps: true, time-
+                     shifted, drifting, broken deskew
 ```
 
 ## Environment
