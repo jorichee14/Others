@@ -378,9 +378,14 @@ def test_merge_bags_cli():
         left = [m.log_time for _, _, _, m in bag.iter_mcap_records(bag.open_bag(out3),
                                                                    ["/cam/left"])]
         assert left[0] == T0 + 7                                  # from bag 2, not bag 1
+        out4 = os.path.join(d, "all_cam_from_2")              # /cam/right is only in bag 1
+        r = subprocess.run(cli2 + ["-o", out4, "--topics", "/cam/*", "--source", "/cam/*=2"],
+                           capture_output=True, text=True)
+        assert r.returncode == 0 and "/cam/right is not in c2" in r.stdout, (r.stdout, r.stderr)
+        assert sorted(bag.open_bag(out4).topics()) == ["/cam/left", "/cam/right", "/cam/right2"]
         r = subprocess.run(cli2 + ["-o", os.path.join(d, "x"), "--topics", "/cam/*",
                                    "--source", "/cam/right=2"], capture_output=True, text=True)
-        assert r.returncode != 0 and "is not in c2" in r.stderr, r.stderr
+        assert r.returncode != 0 and "no chosen topic matching it is in c2" in r.stderr, r.stderr
         r = subprocess.run(cli + ["-o", out2, "--topics", "/x"], capture_output=True, text=True)
         assert r.returncode != 0 and "exists" in r.stderr          # never overwritten
         r = subprocess.run(cli + ["-o", os.path.join(d, "c"), "--topics", "/typo"],

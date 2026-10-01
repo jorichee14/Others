@@ -53,21 +53,26 @@ class MergeResult:
     t_max: int = 0
 
 
-def resolve_sources(inputs, topics: Iterable[str], rules) -> Dict[str, int]:
+def resolve_sources(inputs, topics: Iterable[str], rules, log=print) -> Dict[str, int]:
     """``rules`` = [(pattern, bag index)] -> {topic: bag index} for the
-    ``topics`` that match; a rule must point at a bag that has the topic."""
+    ``topics`` that match and that bag has. A matched topic the bag does not
+    have comes from wherever it is (noted); a rule whose bag has none of its
+    topics is an error (wrong N, most likely)."""
     names = [set(bag.open_bag(b).topics()) for b in inputs]
     out: Dict[str, int] = {}
     for pat, i in rules:
         if not 0 <= i < len(inputs):
             raise BagError(f"--source {pat}={i + 1}: there are {len(inputs)} bags")
         hit = [t for t in topics if fnmatch.fnmatchcase(t, pat)]
-        if not hit:
-            raise BagError(f"--source {pat}: matches no chosen topic")
+        here = [t for t in hit if t in names[i]]
+        if not here:
+            raise BagError(f"--source {pat}={i + 1}: no chosen topic matching it is in "
+                           f"{Path(inputs[i]).name}")
         for t in hit:
-            if t not in names[i]:
-                raise BagError(f"--source {pat}={i + 1}: {t} is not in {Path(inputs[i]).name}")
-            out[t] = i
+            if t in names[i]:
+                out[t] = i
+            else:
+                log(f"note: {t} is not in {Path(inputs[i]).name}; taken from where it is")
     return out
 
 
