@@ -54,7 +54,10 @@ check:
   modes:
     mapping:                       # LiDAR + ZED: no link or time-base measurements
       skip: ["/*/wifi/*", "/*/ntp/*", "/*/diagnostics"]   # diagnostics come with ntp
-    survey: {}
+    survey:                        # mobile_2 is parked as an anchor: link + time base only
+      skip: ["/mobile_2/infra1/*", "/mobile_2/infra2/*", "/mobile_2/color/*",
+             "/mobile_2/depth/*", "/mobile_2/imu", "/mobile_2/extrinsics/*",
+             "/mobile_2/wifi/iperf_*"]
     coop: {}
     contention: {}
 
