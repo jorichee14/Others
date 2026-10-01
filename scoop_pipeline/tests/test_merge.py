@@ -197,6 +197,15 @@ def test_may_be_empty():
         c = session.check_topics([b], exp[:2], ["/*/ntp/events"])
         assert c.ok and c.quiet == ["/mobile_1/ntp/events"], c
         assert not session.check_topics([b], exp[:2]).ok          # without the allowance
+        # processed bags never get the topic (written with its first message):
+        # the raw recording having it, with no messages, is enough
+        pb = os.path.join(root, "processed")
+        write_bag(pb, ["/mobile_1/wifi/ping"], n=2)
+        c = session.check_topics([pb], exp[:2], ["/*/ntp/events"], raw_bags=[b])
+        assert c.ok and c.quiet == ["/mobile_1/ntp/events"], c
+        assert not session.check_topics([pb], exp[:2], ["/*/ntp/events"]).ok   # no raw
+        c = session.check_topics([pb], exp[:3], ["/*/ntp/events"], raw_bags=[b])
+        assert c.missing == ["/mobile_1/radar1/points"], c        # not allowed: still missing
         real = session.RecordPlan(os.path.join(ROOT, "configs", "record.yaml"))
         assert "/*/ntp/events" in real.may_be_empty
     finally:

@@ -114,22 +114,41 @@ class Unit:
     may_be_empty: List[str] = field(default_factory=list)
 
     def check(self) -> TopicCheck:
-        return check_topics(self.bags, self.expected, self.may_be_empty)
+        return check_topics(self.bags, self.expected, self.may_be_empty,
+                            self.raw_bags if self.processed else ())
 
 
-def check_topics(bags, expected, may_be_empty=()) -> TopicCheck:
-    """Which of ``expected`` are missing or empty in ``bags`` (counts from
-    each bag's metadata.yaml / MCAP summary; nothing is read). A topic
-    matching ``may_be_empty`` must be there but may have no messages."""
+def _counts(bags) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for b in bags:
         for t, info in bag.open_bag(b).topics().items():
             counts[t] = counts.get(t, 0) + int(info.count)
+    return counts
+
+
+def check_topics(bags, expected, may_be_empty=(), raw_bags=()) -> TopicCheck:
+    """Which of ``expected`` are missing or empty in ``bags`` (counts from
+    each bag's metadata.yaml / MCAP summary; nothing is read). A topic
+    matching ``may_be_empty`` must be there but may have no messages; one
+    that never had a message is not in the processed bags at all (a topic is
+    written with its first message), so for those it is enough that the raw
+    recording (``raw_bags``) has it."""
+    counts = _counts(bags)
     exp = list(dict.fromkeys(expected))
+
+    def allowed(t):
+        return any(fnmatch.fnmatchcase(t, p) for p in may_be_empty)
     zero = [t for t in exp if t in counts and counts[t] == 0]
-    quiet = [t for t in zero if any(fnmatch.fnmatchcase(t, p) for p in may_be_empty)]
+    quiet = [t for t in zero if allowed(t)]
+    absent = [t for t in exp if t not in counts]
+    if raw_bags and any(allowed(t) for t in absent):
+        raw = _counts(raw_bags)
+        for t in [t for t in absent if allowed(t) and raw.get(t) == 0]:
+            absent.remove(t)
+            quiet.append(t)
+            counts[t] = 0
     return TopicCheck(counts,
-                      missing=[t for t in exp if t not in counts],
+                      missing=absent,
                       empty=[t for t in zero if t not in quiet],
                       extra=sorted(set(counts) - set(exp)),
                       quiet=quiet)
