@@ -309,10 +309,10 @@ infra_N) needs only its entry in `record.yaml` and its folder in the pass.
 `--allow-missing`), every bag is merged in log-time order -- what
 `ros2 bag convert` with `all_topics: true` did, without ROS -- into
 `data/work/<date>/<pass>/<prefix>_<pass>_..._<date>_merged/`, byte for byte,
-QoS kept, and checked again. It is zstd-compressed inside the MCAP by default
-(`ros2 bag play`, GLIM and scoop read it as is), so a pass of raw images
-fits next to its inputs; it stops and removes the partial bag before the
-disk fills. `--out` puts it on another drive, `--name` names it.
+QoS kept, and checked again. `--compression zstd` compresses inside the MCAP
+(`ros2 bag play`, GLIM and scoop read it as is; about half the size for a
+pass of raw images) when an uncompressed merge would not fit; it stops and
+removes the partial bag before the disk fills. `--out` puts it on another drive, `--name` names it.
 
 The merge also adds the calibrated transforms of `configs/static_tf.yaml`
 (e.g. `os_lidar -> zed_left_camera_optical_frame`) to `/tf_static`. All
@@ -342,7 +342,7 @@ topic that is in more than one bag is refused (every message would be there
 twice) unless `--source PATTERN=N` takes it from bag N (the Nth on the command
 line) or `--keep-duplicates` keeps all. Same merge
 as `merge_session.py`: log-time order, byte for byte, QoS kept, one latched
-`/tf_static`, zstd unless `--compression none`; `--static-tf` adds
+`/tf_static`, uncompressed unless `--compression zstd`; `--static-tf` adds
 calibrations. Only the chosen topics are read.
 
 ## TF: showing and changing it

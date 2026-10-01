@@ -3,7 +3,7 @@
 
     python scoop_pipeline/scripts/merge_session.py <raw pass folder>
         [--check] [--allow-missing] [--out DIR] [--name NAME]
-        [--compression zstd|none] [--mode mapping|survey|coop|contention]
+        [--compression none|zstd] [--mode mapping|survey|coop|contention]
         [--record configs/record.yaml] [--static-tf configs/static_tf.yaml]
         [--settings configs/recording.yaml] [--work-root DIR]
 
@@ -18,8 +18,9 @@ the mode comes from the pass folder's name, e.g. mapping_A, or --mode).
 --check stops there. Otherwise, if nothing is missing (or --allow-missing),
 all bags are merged in log-time order into
     data/work/<date>/<pass>/<prefix>_<pass>_..._<date>_merged/
-(--out puts it elsewhere, e.g. another drive), zstd-compressed inside the
-MCAP by default, and the merged bag is checked the same way. The calibrated
+(--out puts it elsewhere, e.g. another drive), uncompressed unless
+--compression zstd (refused when it would not fit), and the merged bag is
+checked the same way. The calibrated
 transforms of configs/static_tf.yaml are added to its /tf_static.
 """
 import argparse
@@ -56,7 +57,8 @@ def main():
                     "(default: the pass folder below data/work)")
     ap.add_argument("--name", default=None, help="merged bag name without _merged "
                     "(default: from the bag names)")
-    ap.add_argument("--compression", default="zstd", choices=["zstd", "none"])
+    ap.add_argument("--compression", default="none", choices=["none", "zstd"],
+                    help="zstd: smaller, slower to write and read (default none)")
     ap.add_argument("--mode", default=None, help="pass mode (default: from the folder name)")
     ap.add_argument("--record", default=None, help="default: configs/record.yaml")
     ap.add_argument("--static-tf", default=str(recording.ROOT / "configs" / "static_tf.yaml"),

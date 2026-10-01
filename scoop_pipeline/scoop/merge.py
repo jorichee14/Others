@@ -134,7 +134,7 @@ def _stream(b: Path, reader, total: List[int], topics, skip=(), rewrite=None):
                msg.publish_time, msg.sequence, dict(ch.metadata), data)
 
 
-def merge_bags(inputs, out_dir, compression: str = "zstd",
+def merge_bags(inputs, out_dir, compression: str = "none",
                min_free_gb: float = MIN_FREE_GB, static_tf=(),
                topics: Optional[Iterable[str]] = None,
                source: Optional[Dict[str, int]] = None, drop_tf=None, extra_tf=(),
