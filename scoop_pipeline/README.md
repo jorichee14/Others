@@ -34,6 +34,7 @@ scripts/             command lines only: argument parsing around scoop/
   topic_timing.py    intervals, gaps and repeated frames of topics in a bag
   tf_edit.py         show or change a bag's TF: drop edges, add transforms, new odometry
   merge_bags.py      any bags -> one, with the topics you choose (--list, --topics, --pick)
+  mcap_convert.py    bag -> SLAM datasets: replica (RGB + lidar depth), mcd, mcgs (standalone)
   run_zed.sh         ZED wrapper replay + ros2 bag record (here or in the isaac_ros container)
   bag_check.py       verify + time the fast decoder on a real bag
   ouster_check.py    verify packet decoding against a replayed/retimed bag
@@ -42,6 +43,7 @@ scripts/             command lines only: argument parsing around scoop/
   test_ouster.py     self-tests: packets, clock, replay, remaps (needs ouster-sdk)
   test_zed.py        self-tests: restamp, run_zed.sh with a fake ros2 and docker
   test_merge.py      self-tests: machines, topic check, merge
+  test_replica.py    self-tests: replica with lidar depth on a synthetic scene
 ```
 
 ## Environment
@@ -366,3 +368,26 @@ child already has one is added the other way round, and the odometry goes in
 as `<parent> -> <root of the tree>`, composed through the static chain, so the
 lookups give exactly what was given. The result is a new bag with every other
 topic copied; all static transforms in one latched /tf_static.
+
+## Datasets: Replica with lidar depth (`scripts/mcap_convert.py`)
+
+```
+python scoop_pipeline/scripts/mcap_convert.py <bag> <out> --format replica --pose-is-camera
+python scoop_pipeline/scripts/mcap_convert.py <bag> <out> --format replica --pose-is-camera \
+    --lidar-scans 5
+python scoop_pipeline/scripts/mcap_convert.py <bag> --inspect
+```
+
+Writes `results/frameNNNNNN.jpg` + `depthNNNNNN.png` (uint16 mm), `traj.txt`
+(camera-to-world, OpenCV axes), `splatam_data_config.yaml` and `report.txt`.
+The depth is the lidar (`--lidar /mobile_1/ouster/points`) seen from the
+colour camera: the `--lidar-scans` scans nearest each image (default 1),
+every point moved to the image time through the poses at its own time (the
+Ouster `t` field), projected with the colour camera_info, nearest point per
+pixel, 0 where there is none. The lidar-camera transform is chained from
+`/tf_static` (`--lidar-extrinsic` overrides it), so the bag needs the
+`os_lidar -> zed_left_camera_optical_frame` calibration (merge_bags /
+tf_edit.py `--add-file`). `--occlusion-px` / `--occlusion-margin` drop lidar
+points the camera cannot see (wall behind a nearer object). `--depth-source
+zed` uses the ZED depth image instead. The file is standalone (no scoop
+imports); `--format mcd` and `mcgs` are unchanged.
