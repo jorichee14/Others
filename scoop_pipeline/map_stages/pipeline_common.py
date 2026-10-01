@@ -555,6 +555,9 @@ class Pipeline:
         # data/raw/<date>/<pass>/ (infra_cameras/ holds the camera extrinsic yamls)
         self.raw_dir = (os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.normpath(self.out_dir)))), "raw", date, pas) if self.routed else None)
+        # a run localized in another pass's map (08_localize): dataset.reference_pass
+        # is that pass ("mapping_A", same date, or "<date>/<pass>")
+        self.reference = d.get("reference_pass") or None
         self._sensor = None
 
     @property
@@ -599,6 +602,26 @@ class Pipeline:
         d = self.folder_for(name)
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, name)
+
+    def ref_file(self, kind):
+        """A file of the reference pass (dataset.reference_pass), in its
+        processed folder: 'map' -> mapping/denoised_<tag>.pcd (the map its
+        scans are localized in), 'anchor' -> frames/anchor_frame.json (its
+        board-anchored map frame)."""
+        if not self.reference:
+            raise SystemExit("dataset.reference_pass is not set")
+        root = os.path.dirname(os.path.dirname(os.path.normpath(self.out_dir)))
+        ref = self.reference.strip("/")
+        if "/" not in ref:
+            ref = os.path.join(os.path.basename(os.path.dirname(
+                os.path.normpath(self.out_dir))), ref)
+        date, pas = ref.split("/")[-2:]
+        d = os.path.join(root, date, pas)
+        if kind == "map":
+            return os.path.join(d, "mapping", "denoised_%s_%s.pcd" % (pas, date))
+        if kind == "anchor":
+            return os.path.join(d, "frames", "anchor_frame.json")
+        raise ValueError(kind)
 
     def infra_yaml(self, name, camera=None):
         """An infra camera's extrinsic yaml from the mapping session: a bare

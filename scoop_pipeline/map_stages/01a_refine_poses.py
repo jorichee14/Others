@@ -53,6 +53,13 @@ Config block (all optional, under "01a_refine"):
   "output":         "traj_lidar_refined.txt"
   "deskew":         01_build_map.deskew   # per-point motion compensation, through
   "deskew_bins":    01_build_map.deskew_bins  # the trajectory of the current round
+  "freeze_map":     false   # every round registers to "map" (not rebuilt from the
+                            # run's poses); default true with dataset.reference_pass,
+                            # whose denoised map is then the default "map"
+
+A run localized in another pass's map (dataset.reference_pass): 08_localize.py
+aligns its GLIM trajectory to that map (traj_lidar_seed.txt), and this stage,
+seeded from it, registers every scan to the frozen reference map.
 """
 import argparse
 import json
@@ -558,6 +565,14 @@ def main():
     # place points the same way (01a_refine.deskew overrides)
     c.update(deskew=bool(s.get("deskew", True)), deskew_bins=max(2, int(s.get("deskew_bins", 100))))
     c.update(cfg_all.get("01a_refine", {}))
+    # a run localized in another pass's map (dataset.reference_pass, after
+    # 08_localize.py): every round registers to that map, frozen, so the poses
+    # come out in its frame instead of drifting to a map of the run's own
+    if P.reference:
+        if "map" not in cfg_all.get("01a_refine", {}):
+            c["map"] = P.ref_file("map")
+        c.setdefault("freeze_map", True)
+    freeze = bool(c.get("freeze_map", False))
     if args.rounds is not None:
         c["rounds"] = args.rounds
     bag = ds["bag"]
@@ -591,7 +606,9 @@ def main():
     for rnd in range(first, int(c["rounds"]) + 1):
         print(f"\n=== round {rnd}/{c['rounds']} ===")
         map_path = P.outp(c["map"]) if c["map"] else ""
-        if rnd == 1 and map_path and os.path.exists(map_path):
+        if freeze and not (map_path and os.path.exists(map_path)):
+            raise SystemExit(f"freeze_map: reference map {map_path!r} not found")
+        if (rnd == 1 or freeze) and map_path and os.path.exists(map_path):
             print(f"[ref] loading {map_path}")
             pc = o3d.io.read_point_cloud(map_path)
             print(f"    {len(pc.points)} pts -> downsampling to "
@@ -677,6 +694,9 @@ def main():
         print(f"    wrote {out_r} (and {out})")
 
     print_convergence(history)
+    if freeze:
+        print(f"\nposes of this run in the frame of {map_path} -> {P.outp(c['output'])}")
+        return
     print(f"\nnext: set dataset.traj to \"{c['output']}\" (found in "
           f"{P.folder_for(c['output'])}), delete "
           f"{', '.join(P.pcd(b) for b in ('merged', 'static', 'denoised', 'colored'))} "

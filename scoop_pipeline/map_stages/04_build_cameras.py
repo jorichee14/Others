@@ -204,6 +204,10 @@ def main():
     S = P.sensor
     s = P.stage("04_build_cameras")
 
+    if P.reference and not os.path.exists(s["anchor_frame"]):
+        # a run localized in another pass's map: its poses are in that pass's
+        # world, so its cameras go into that pass's anchored map frame
+        s["anchor_frame"] = P.ref_file("anchor")
     af = json.load(open(s["anchor_frame"]))
     T_N_world = np.array(af["T_N_world"], float)
     map_frame = af.get("map_frame", s.get("map_frame", "map"))
