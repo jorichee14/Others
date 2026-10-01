@@ -361,6 +361,26 @@ def test_merge_bags_cli():
                            capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         assert sorted(bag.open_bag(out2).topics()) == ["/cam/left", "/cam/right", "/radar/points"]
+        # a topic in both bags: refused, unless --source picks the bag
+        write_bag(os.path.join(d, "c2"), ["/cam/left", "/cam/right2"], t0=T0 + 7)
+        cli2 = [sys.executable, os.path.join(ROOT, "scripts", "merge_bags.py"), a,
+                os.path.join(d, "c2")]
+        r = subprocess.run(cli2 + ["-o", os.path.join(d, "dup"), "--topics", "/cam/*"],
+                           capture_output=True, text=True)
+        assert r.returncode != 0 and "/cam/left: a, c2" in r.stderr, r.stderr
+        out3 = os.path.join(d, "src")
+        r = subprocess.run(cli2 + ["-o", out3, "--topics", "/cam/*", "--source", "/cam/left=2"],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        tp3 = bag.open_bag(out3).topics()
+        assert tp3["/cam/left"].count == 20 and sorted(tp3) == ["/cam/left", "/cam/right",
+                                                                "/cam/right2"]
+        left = [m.log_time for _, _, _, m in bag.iter_mcap_records(bag.open_bag(out3),
+                                                                   ["/cam/left"])]
+        assert left[0] == T0 + 7                                  # from bag 2, not bag 1
+        r = subprocess.run(cli2 + ["-o", os.path.join(d, "x"), "--topics", "/cam/*",
+                                   "--source", "/cam/right=2"], capture_output=True, text=True)
+        assert r.returncode != 0 and "is not in c2" in r.stderr, r.stderr
         r = subprocess.run(cli + ["-o", out2, "--topics", "/x"], capture_output=True, text=True)
         assert r.returncode != 0 and "exists" in r.stderr          # never overwritten
         r = subprocess.run(cli + ["-o", os.path.join(d, "c"), "--topics", "/typo"],

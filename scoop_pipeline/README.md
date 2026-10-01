@@ -336,7 +336,10 @@ python scoop_pipeline/scripts/merge_bags.py <bag> <bag> [...] -o <out> --pick
 
 `--list` shows every topic (type, messages, which bags). `--topics` keeps
 the ones matching (shell patterns; quote them), `--exclude` drops some,
-`--pick` asks with a numbered list (`1,3,5-8`, `all` or patterns). Same merge
+`--pick` asks with a numbered list (`1,3,5-8`, `all` or patterns). A chosen
+topic that is in more than one bag is refused (every message would be there
+twice) unless `--source PATTERN=N` takes it from bag N (the Nth on the command
+line) or `--keep-duplicates` keeps all. Same merge
 as `merge_session.py`: log-time order, byte for byte, QoS kept, one latched
 `/tf_static`, zstd unless `--compression none`; `--static-tf` adds
 calibrations. Only the chosen topics are read.

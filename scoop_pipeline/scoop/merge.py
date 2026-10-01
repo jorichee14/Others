@@ -30,7 +30,8 @@ from . import bag, rosmsg
 from .bag import BagError, TopicSchema
 from .bagwrite import BagWriter, write_in_order
 
-__all__ = ["merge_bags", "MergeResult", "bag_bytes", "select_topics", "list_topics"]
+__all__ = ["merge_bags", "MergeResult", "bag_bytes", "select_topics", "list_topics",
+           "resolve_sources", "duplicated"]
 
 MIN_FREE_GB = 10.0        # stop before the disk is fuller than this
 LATCHED = ("- history: 1\n  depth: 1\n  reliability: 1\n  durability: 1\n  deadline:\n"
@@ -50,6 +51,37 @@ class MergeResult:
     sources: Dict[str, List[str]] = field(default_factory=dict)   # topic -> input bags
     t_min: int = 0
     t_max: int = 0
+
+
+def resolve_sources(inputs, topics: Iterable[str], rules) -> Dict[str, int]:
+    """``rules`` = [(pattern, bag index)] -> {topic: bag index} for the
+    ``topics`` that match; a rule must point at a bag that has the topic."""
+    names = [set(bag.open_bag(b).topics()) for b in inputs]
+    out: Dict[str, int] = {}
+    for pat, i in rules:
+        if not 0 <= i < len(inputs):
+            raise BagError(f"--source {pat}={i + 1}: there are {len(inputs)} bags")
+        hit = [t for t in topics if fnmatch.fnmatchcase(t, pat)]
+        if not hit:
+            raise BagError(f"--source {pat}: matches no chosen topic")
+        for t in hit:
+            if t not in names[i]:
+                raise BagError(f"--source {pat}={i + 1}: {t} is not in {Path(inputs[i]).name}")
+            out[t] = i
+    return out
+
+
+def duplicated(inputs, topics: Iterable[str], source: Dict[str, int]) -> Dict[str, List[str]]:
+    """Chosen topics that more than one bag would contribute."""
+    names = [set(bag.open_bag(b).topics()) for b in inputs]
+    out = {}
+    for t in topics:
+        if t in source:
+            continue
+        bags = [Path(b).name for b, n in zip(inputs, names) if t in n]
+        if len(bags) > 1:
+            out[t] = bags
+    return out
 
 
 def list_topics(inputs) -> Dict[str, List]:
@@ -94,9 +126,11 @@ def _stream(b: Path, reader, total: List[int], topics, skip=()):
 
 def merge_bags(inputs, out_dir, compression: str = "zstd",
                min_free_gb: float = MIN_FREE_GB, static_tf=(),
-               topics: Optional[Iterable[str]] = None, log=print) -> MergeResult:
+               topics: Optional[Iterable[str]] = None,
+               source: Optional[Dict[str, int]] = None, log=print) -> MergeResult:
     """Merge the rosbag2 folders ``inputs`` into ``out_dir`` (must not exist);
-    ``topics`` limits it to those (default: all, see :func:`select_topics`).
+    ``topics`` limits it to those (default: all, see :func:`select_topics`),
+    ``source`` = {topic: index into inputs} takes a topic from that bag only.
     ``static_tf``: ``[(parent, child, t, q)]`` added to /tf_static (see
     :func:`scoop.tftree.attach`).
 
@@ -110,7 +144,9 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
     sources: Dict[str, List[str]] = {}
     types: Dict[str, str] = {}
     wanted = None if topics is None else set(topics)
-    sel = [[t for t in r.topics() if wanted is None or t in wanted] for r in readers]
+    source = dict(source or {})
+    sel = [[t for t in r.topics() if (wanted is None or t in wanted)
+            and source.get(t, i) == i] for i, r in enumerate(readers)]
     n_total = sum(int(r.topics()[t].count) for r, ts_ in zip(readers, sel) for t in ts_) or 1
     for b, r, ts_ in zip(inputs, readers, sel):
         for t in ts_:

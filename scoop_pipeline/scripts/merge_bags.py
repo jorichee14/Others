@@ -4,6 +4,7 @@
     python scoop_pipeline/scripts/merge_bags.py <bag> <bag> [<bag> ...] --list
     python scoop_pipeline/scripts/merge_bags.py <bag> <bag> ... -o <out bag>
         [--topics PATTERN ...] [--exclude PATTERN ...] [--pick]
+        [--source PATTERN=N ...] [--keep-duplicates]
         [--compression zstd|none] [--static-tf configs/static_tf.yaml]
 
 --list         show every topic of the bags (type, messages, which bags) and stop
@@ -11,6 +12,10 @@
 --exclude      leave these out (applied after --topics)
 --pick         choose from a numbered list instead: 1,3,5-8 or all
                (patterns work there too)
+--source       take matching topics only from bag N (N = position on the
+               command line, from 1): '/mobile_1/zed/*=2'. A chosen topic
+               in several bags is refused unless --source picks one (or
+               --keep-duplicates keeps them all)
 -o             the merged bag folder (must not exist)
 
 Messages are copied byte for byte in log-time order, QoS kept; all static
@@ -33,7 +38,10 @@ from scoop import merge, tftree                                     # noqa: E402
 from scoop.bag import BagError                                      # noqa: E402
 
 
-def show(topics):
+def show(topics, bags):
+    for i, b in enumerate(bags, 1):
+        print(f"  bag {i}: {os.path.basename(os.path.normpath(b))}")
+    print()
     w = max(len(t) for t in topics)
     for i, (t, (typ, n, bags)) in enumerate(topics.items(), 1):
         print(f"  {i:3d}  {t:{w}s}  {n:9d}  {typ:35s}  {', '.join(bags)}")
@@ -68,13 +76,17 @@ def main():
     ap.add_argument("--topics", nargs="+", default=[], metavar="PATTERN")
     ap.add_argument("--exclude", nargs="+", default=[], metavar="PATTERN")
     ap.add_argument("--pick", action="store_true", help="choose topics from a list")
+    ap.add_argument("--source", nargs="+", default=[], metavar="PATTERN=N",
+                    help="take matching topics only from bag N (1 = first bag)")
+    ap.add_argument("--keep-duplicates", action="store_true",
+                    help="keep a topic from every bag that has it")
     ap.add_argument("--compression", default="zstd", choices=["zstd", "none"])
     ap.add_argument("--static-tf", default="", help="calibrations to add to /tf_static")
     a = ap.parse_args()
     try:
         topics = merge.list_topics(a.bags)
         if a.list:
-            show(topics)
+            show(topics, a.bags)
             return
         if not a.out:
             sys.exit("error: -o <out bag> is needed (or --list)")
@@ -82,15 +94,30 @@ def main():
             sys.exit(f"error: {a.out} exists")
         names = list(topics)
         if a.pick:
-            show(topics)
+            show(topics, a.bags)
             keep = parse_pick(input("\ntopics to merge (e.g. 1,3,5-8, all, or patterns): "),
                               names)
             keep = merge.select_topics(keep, exclude=a.exclude)
         else:
             keep = merge.select_topics(names, a.topics, a.exclude)
+        rules = []
+        for r in a.source:
+            pat, _, n = r.rpartition("=")
+            if not pat or not n.isdigit():
+                raise BagError(f"--source {r}: expected PATTERN=N")
+            rules.append((pat, int(n) - 1))
+        source = merge.resolve_sources(a.bags, keep, rules)
+        dup = merge.duplicated(a.bags, keep, source)
+        if dup and not a.keep_duplicates:
+            lines = "\n".join(f"    {t}: {', '.join(b)}" for t, b in dup.items())
+            raise BagError(f"these topics are in more than one bag, so every message "
+                           f"would be there twice:\n{lines}\n"
+                           f"pick one with --source PATTERN=N (or --keep-duplicates)")
+        names_ = [os.path.basename(os.path.normpath(b)) for b in a.bags]
         print(f"\nmerging {len(keep)} of {len(names)} topics:")
         for t in keep:
-            print(f"    {t}  ({topics[t][1]} msgs)")
+            frm = names_[source[t]] if t in source else ", ".join(topics[t][2])
+            print(f"    {t}  (from {frm})")
         static_tf = []
         if a.static_tf:
             import yaml
@@ -101,7 +128,7 @@ def main():
                 for n in notes:
                     print(f"    tf: {n}")
         res = merge.merge_bags(a.bags, a.out, compression=a.compression,
-                               static_tf=static_tf, topics=keep)
+                               static_tf=static_tf, topics=keep, source=source)
         print("\n".join(f"    {t:45s} {n:9d}" for t, n in sorted(res.counts.items())))
     except (BagError, ValueError) as e:
         sys.exit(f"error: {e}")
