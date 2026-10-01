@@ -1232,7 +1232,7 @@ def to_replica(bag, out, *,
 # =========================================================================== #
 
 DEFAULT_MCD_CONFIG = """\
-# MCD-style config for mirc_dataset_coop2 — mobile_1 (ZED + Ouster)
+# MCD-style config for mobile_1 (ZED + Ouster)
 #
 #   python3 mcap_convert.py <bag dir> out/coop2_mobile_1 --format mcd
 #
@@ -1252,7 +1252,7 @@ DEFAULT_MCD_CONFIG = """\
 # pose: `topic` (PoseStamped/Odometry), or `tum` (a TUM file, e.g. 01a's
 # traj_lidar_refined.txt) of the frame `tum_frame`, chained to `frame` via /tf_static.
 
-sequence: coop2_mobile_1
+# sequence: <name>        # bags are <sequence>_merged.bag; default: the output folder's name
 compress: false            # true = bz2 like the released MCD bags (slower)
 merged: true               # one <seq>_merged.bag like MCD; false = one bag per "bag:" name
 
