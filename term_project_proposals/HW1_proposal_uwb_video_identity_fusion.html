@@ -1,6 +1,6 @@
 <!doctype html><html><head><meta charset="utf-8"><style>
 @page { size: A4; margin: 14mm 16mm; }
-body { font-family: Helvetica, Arial, sans-serif; font-size: 10.0pt; line-height: 1.32; color:#111; margin:0; }
+body { font-family: Helvetica, Arial, sans-serif; font-size: 9.8pt; line-height: 1.32; color:#111; margin:0; }
 h1 { font-size: 13pt; margin: 0 0 2px 0; }
 h2 { font-size: 11pt; margin: 8px 0 2px 0; }
 p { margin: 0 0 3px 0; text-align: justify; }
@@ -10,57 +10,67 @@ svg { width: 100%; height: auto; }
 </style></head><body><h1>HW1 Individual Term Project Proposal</h1>
 <p><strong>Emerging Technologies and Applied Innovation, Fall 2026</strong></p>
 <h2>1. Project Title</h2>
-<p>Self-Calibrating UWB-to-Video Fusion: Persistent Player Identity and Jump Clips from Any Camera</p>
+<p>Self-Calibrating Multi-Camera UWB-to-Video Fusion: Persistent Player Identity from Any Phone Cameras</p>
 <h2>2. Primary Project Platform</h2>
 <p>LocusConnect - Spatial Intelligence</p>
 <h2>3. Problem and Target User</h2>
-<p>Coaches and analysts at university and club teams review video to judge what each player did, but video trackers lose identity at crossings: the best published trackers still leave about 2,600 identity switches on SportsMOT. Analysts fix these by hand, hours per match, so training sessions go unanalysed. The LocusConnect UWB stream keeps every player's identity and 3D position through those occlusions, yet commercial tools only align such telemetry to video in time, by a manual sync point. Projecting identity onto players in the frame needs a surveyed, fixed camera, so it never happens at sessions filmed from a phone.</p>
+<p>Coaches and analysts at university and club teams review video to judge what each player did, but video trackers lose identity at crossings: the best published trackers still leave about 2,600 identity switches on SportsMOT. Analysts fix these by hand, hours per match, so training sessions go unanalysed. The LocusConnect UWB stream keeps every player's identity and 3D position through those occlusions, yet commercial tools only align such telemetry to video in time, by a manual sync point. Projecting identity onto players in the frame needs a surveyed, fixed camera, so it never happens at sessions filmed from phones.</p>
 <h2>4. Proposed Project Idea</h2>
-<p>Input: video from any camera and the live Locus RTLS 3D stream (tag ID, x, y, z, timestamp). Processing: (1) markerless self-calibration during the first minute of free play, jointly estimating camera pose, focal length, and the camera-to-UWB clock offset by matching detected hip keypoints to 3D tag trajectories, with RANSAC over unknown tag-to-person correspondences; (2) per frame, each tag's 3D position is projected into the image and matched to a detection by gated assignment, so identity survives crossings; (3) as a stretch extension, the Z-axis stream flags jumps above a noise-derived threshold. Output: video with persistent name labels on every tagged player; if the stretch goal is reached, an auto-cut clip of each jump with height overlaid.</p>
+<p>Input: video from two or more uncalibrated phones and the live Locus RTLS 3D stream (tag ID, x, y, z, timestamp). Processing: (1) each camera self-calibrates to the UWB frame in the first minute of free play, jointly estimating pose, focal length, and clock offset from detected hip keypoints and 3D tag trajectories with RANSAC over unknown tag-to-person correspondences; the shared UWB frame links cameras, so no overlap or mutual calibration is needed; (2) per frame, each tag's 3D position is projected into every view and matched to a detection by gated assignment, so identity stays consistent across cameras; (3) as a stretch, Z-axis jump flags. Output: every view with persistent name labels, plus per-player clips following the least-occluded camera.</p>
 <h2>5. Technology and Data Required</h2>
-<p>OpenCV for PnP and joint refinement of pose, focal length, and time offset; YOLO-pose and ByteTrack for keypoints and tracks; Python with Hungarian assignment and a Kalman smoother. The work is 3D geometry, estimation, and integration. Data: synchronized phone video and Locus RTLS 3D logs of three to six tagged people in a gym, with staged crossings and jumps, plus manual identity and jump labels. Not yet existing; recorded in two sessions on the course's LocusConnect installation through its MQTT or WebSocket API, confirmed in week one. A ChArUco marker calibration serves as the reference for the self-calibration metrics.</p>
+<p>OpenCV for PnP and joint refinement of pose, focal length, and time offset per camera; YOLO-pose and ByteTrack for keypoints and tracks; Python with Hungarian assignment and a Kalman smoother. The work is 3D geometry, estimation, and integration. Data: two-phone video and Locus RTLS 3D logs of three to six tagged people in a gym, with staged crossings, plus manual identity labels. Not yet existing; recorded in two sessions on the course's LocusConnect installation through its MQTT or WebSocket API, confirmed in week one. A ChArUco marker calibration of each camera serves as the reference for the self-calibration metrics.</p>
 <h2>6. Final Prototype / Live Demo</h2>
-<p>At the end of the semester, I will be able to demonstrate that a phone camera on a tripod at an arbitrary spot calibrates itself within one minute of four tagged people moving freely, with reprojection error converging on screen. After that, each person carries a persistent name label through repeated crossings; toggling fusion off makes labels swap, toggling it on restores them within a frame. If the stretch goal is reached, a clip appears within seconds of a jump showing it with its height overlaid. If live UWB access fails, the same pipeline runs on a recorded synchronized session.</p>
+<p>At the end of the semester, I will be able to demonstrate that two phones on tripods at arbitrary spots each calibrate themselves within one minute of four tagged people moving freely, with reprojection error converging on screen. Then each person carries the same name label in both views through repeated crossings; when a player is hidden in one view, the label persists in the other and the per-player clip switches to that camera. Toggling fusion off makes labels swap, toggling it on restores them within a frame. If live UWB access fails, the pipeline runs on a recorded session.</p>
 <h2>7. How Will You Know It Works?</h2>
-<p>Identity: ID switches per minute, ByteTrack alone versus fused, on a labelled session; target 90 percent fewer, and zero on staged crossings; per-frame label accuracy above 95 percent. Calibration: self-calibrated pose versus the marker reference, target rotation error below 1 degree, translation below 20 cm, reprojection below 15 pixels, convergence within 60 seconds, time offset within 20 ms. Jumps (stretch): measured UWB vertical noise (published LPS validations report 17 to 21 cm) sets the threshold; precision and recall above 0.9 for jumps above it, against video labels. Latency below 100 ms per frame.</p>
+<p>Identity: ID switches per minute, ByteTrack alone versus fused, per view, on a labelled session; target 90 percent fewer, zero on staged crossings, and 100 percent cross-camera label agreement; per-frame label accuracy above 95 percent. Calibration, per camera: self-calibrated pose versus the marker reference, rotation error below 1 degree, translation below 20 cm, reprojection below 15 pixels, convergence within 60 seconds, time offset within 20 ms. Cross-check: hip keypoints triangulated from the two self-calibrated cameras within 25 cm of UWB positions. Jumps (stretch): precision and recall above 0.9 against video labels. Latency below 100 ms per frame.</p>
 <h2>8. Why Should This Project Be Selected?</h2>
-<p>Identity is the measured bottleneck of sports video tracking, and no published method calibrates an arbitrary camera to UWB from several tagged players with unknown correspondences; that piece combines established methods, so it fits a semester. Practical value for LocusConnect is direct: every coach already films training on a phone, and this puts tag identity into that footage. Stable identity then unlocks per-player clips and statistics.</p>
+<p>Identity is the measured bottleneck of sports video tracking, and no published method calibrates arbitrary cameras to UWB from several tagged players with unknown correspondences; because the UWB frame links the cameras, the method combines established parts and fits a semester. Practical value for LocusConnect is direct: coaches already film training on phones, and this puts tag identity into that footage from any number of them. Stable cross-camera identity then unlocks per-player clips and statistics.</p>
 <h2>9. Your Expected Contribution</h2>
-<p>I work in Python with OpenCV and ROS on multi-sensor robotics data, including camera calibration and sensor time synchronization. I will own the calibration and association pipeline, the data-collection sessions, and the evaluation. I want to develop real-time multi-object tracking and pose-based video analytics.</p><div class="page2">
+<p>I work in Python with OpenCV and ROS on multi-sensor robotics data, including camera calibration and sensor time synchronization. I will own the calibration and association pipeline, the data-collection sessions, and the evaluation. I want to develop real-time multi-object tracking and pose-based video analytics.</p>
+<div class="page2">
 <h2>System Diagram (optional page)</h2>
-<svg viewBox="0 0 760 500" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" font-size="12">
+<svg viewBox="0 0 760 530" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" font-size="12">
 <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#333"/></marker></defs>
 <style>.b{fill:#f4f6f8;stroke:#333;stroke-width:1.2;rx:6}.o{fill:#fff7e0;stroke:#b8860b;stroke-width:1.2;rx:6}.g{fill:#e8f4ea;stroke:#2e7d32;stroke-width:1.2;rx:6}.t{fill:#111}.s{fill:#555;font-size:10.5px}</style>
-<!-- inputs -->
-<rect class="b" x="20" y="40" width="170" height="64"/><text class="t" x="105" y="62" text-anchor="middle" font-weight="bold">Any camera</text><text class="s" x="105" y="80" text-anchor="middle">phone on tripod, no survey,</text><text class="s" x="105" y="94" text-anchor="middle">no calibration target</text>
-<rect class="b" x="20" y="300" width="170" height="64"/><text class="t" x="105" y="322" text-anchor="middle" font-weight="bold">Locus RTLS 3D engine</text><text class="s" x="105" y="340" text-anchor="middle">per tag: ID, x, y, z, timestamp</text><text class="s" x="105" y="354" text-anchor="middle">(edge server, MQTT/WebSocket)</text>
-<!-- video pipeline -->
-<rect class="b" x="240" y="40" width="190" height="64"/><text class="t" x="335" y="62" text-anchor="middle" font-weight="bold">Pose detector + tracker</text><text class="s" x="335" y="80" text-anchor="middle">YOLO-pose, ByteTrack:</text><text class="s" x="335" y="94" text-anchor="middle">hip keypoints, boxes, track IDs</text>
-<!-- self calibration -->
-<rect class="o" x="240" y="160" width="190" height="84"/><text class="t" x="335" y="182" text-anchor="middle" font-weight="bold">Markerless self-calibration</text><text class="s" x="335" y="200" text-anchor="middle">first minute of free play</text><text class="s" x="335" y="214" text-anchor="middle">RANSAC over tag-to-track pairs</text><text class="s" x="335" y="228" text-anchor="middle">solves pose, focal length, clock offset</text>
-<!-- uwb pipeline -->
-<rect class="b" x="240" y="300" width="190" height="64"/><text class="t" x="335" y="322" text-anchor="middle" font-weight="bold">Smooth + 3D projection</text><text class="s" x="335" y="340" text-anchor="middle">Kalman on (x, y, z), then project</text><text class="s" x="335" y="354" text-anchor="middle">to pixels with calibrated pose</text>
+<!-- cameras -->
+<rect class="b" x="20" y="30" width="170" height="56"/><text class="t" x="105" y="52" text-anchor="middle" font-weight="bold">Phone camera 1</text><text class="s" x="105" y="70" text-anchor="middle">tripod, arbitrary spot, no survey</text>
+<rect class="b" x="20" y="110" width="170" height="56"/><text class="t" x="105" y="132" text-anchor="middle" font-weight="bold">Phone camera 2 ... N</text><text class="s" x="105" y="150" text-anchor="middle">no overlap required</text>
+<!-- uwb -->
+<rect class="b" x="20" y="330" width="170" height="64"/><text class="t" x="105" y="352" text-anchor="middle" font-weight="bold">Locus RTLS 3D engine</text><text class="s" x="105" y="370" text-anchor="middle">per tag: ID, x, y, z, timestamp</text><text class="s" x="105" y="384" text-anchor="middle">(edge server, MQTT/WebSocket)</text>
+<!-- per-camera pipeline (stacked cards) -->
+<rect class="b" x="231" y="36" width="220" height="130" fill="#e9ecef" stroke="#999"/>
+<rect class="b" x="225" y="30" width="220" height="130"/>
+<text class="t" x="335" y="50" text-anchor="middle" font-weight="bold">Per camera</text>
+<text class="s" x="335" y="68" text-anchor="middle">YOLO-pose + ByteTrack:</text><text class="s" x="335" y="82" text-anchor="middle">hip keypoints, boxes, track IDs</text>
+<line x1="237" y1="92" x2="433" y2="92" stroke="#bbb"/>
+<text class="t" x="335" y="110" text-anchor="middle" font-weight="bold" fill="#8a6500">Self-calibration to UWB frame</text>
+<text class="s" x="335" y="126" text-anchor="middle">first minute of play, RANSAC over tag-track</text><text class="s" x="335" y="140" text-anchor="middle">pairs: pose, focal length, clock offset</text>
+<text class="s" x="335" y="154" text-anchor="middle">reference: ChArUco calibration</text>
+<!-- shared frame -->
+<rect class="o" x="240" y="330" width="190" height="64"/><text class="t" x="335" y="352" text-anchor="middle" font-weight="bold">Shared UWB world frame</text><text class="s" x="335" y="370" text-anchor="middle">Kalman on (x, y, z); links all cameras,</text><text class="s" x="335" y="384" text-anchor="middle">no camera-to-camera calibration</text>
 <!-- association -->
-<rect class="g" x="480" y="160" width="190" height="84"/><text class="t" x="575" y="182" text-anchor="middle" font-weight="bold">Gated association</text><text class="s" x="575" y="200" text-anchor="middle">Hungarian on reprojection distance</text><text class="s" x="575" y="214" text-anchor="middle">short-gap memory,</text><text class="s" x="575" y="228" text-anchor="middle">merged-box handling</text>
-<!-- jump detector -->
-<rect class="b" x="480" y="300" width="190" height="64"/><text class="t" x="575" y="322" text-anchor="middle" font-weight="bold">Z-axis jump detector (stretch)</text><text class="s" x="575" y="340" text-anchor="middle">height, flight time from z(t)</text><text class="s" x="575" y="354" text-anchor="middle">threshold above measured z noise</text>
+<rect class="g" x="480" y="30" width="190" height="84"/><text class="t" x="575" y="52" text-anchor="middle" font-weight="bold">Gated association, per view</text><text class="s" x="575" y="70" text-anchor="middle">project each tag into every view,</text><text class="s" x="575" y="84" text-anchor="middle">Hungarian on reprojection distance,</text><text class="s" x="575" y="98" text-anchor="middle">same tag ID in all views</text>
+<!-- view selection -->
+<rect class="b" x="480" y="200" width="190" height="64"/><text class="t" x="575" y="222" text-anchor="middle" font-weight="bold">Best-view selection</text><text class="s" x="575" y="240" text-anchor="middle">per player, least-occluded camera</text><text class="s" x="575" y="254" text-anchor="middle">by gate residual and box overlap</text>
+<!-- jump stretch -->
+<rect class="b" x="480" y="330" width="190" height="56" stroke-dasharray="5 3"/><text class="t" x="575" y="352" text-anchor="middle" font-weight="bold">Z-axis jump flags (stretch)</text><text class="s" x="575" y="370" text-anchor="middle">threshold above measured z noise</text>
 <!-- outputs -->
-<rect class="g" x="480" y="410" width="190" height="64"/><text class="t" x="575" y="432" text-anchor="middle" font-weight="bold">Outputs</text><text class="s" x="575" y="450" text-anchor="middle">video with persistent name labels</text><text class="s" x="575" y="464" text-anchor="middle">jump clips with height (stretch)</text>
+<rect class="g" x="480" y="430" width="190" height="64"/><text class="t" x="575" y="452" text-anchor="middle" font-weight="bold">Outputs</text><text class="s" x="575" y="470" text-anchor="middle">every view with persistent name labels</text><text class="s" x="575" y="484" text-anchor="middle">per-player clips across cameras</text>
 <!-- arrows -->
-<path d="M190,72 L240,72" stroke="#333" stroke-width="1.2" marker-end="url(#a)"/>
-<path d="M190,332 L240,332" stroke="#333" stroke-width="1.2" marker-end="url(#a)"/>
-<path d="M335,104 L335,160" stroke="#b8860b" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a)"/>
-<path d="M335,300 L335,244" stroke="#b8860b" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a)"/>
-<path d="M430,72 L575,72 L575,160" stroke="#333" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
-<path d="M430,332 L455,332 L455,202 L480,202" stroke="#333" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
-<path d="M430,350 L480,350" stroke="#333" stroke-width="1.2" marker-end="url(#a)"/>
-<path d="M575,244 L575,300" stroke="#2e7d32" stroke-width="1.2" marker-end="url(#a)"/>
-<path d="M575,364 L575,410" stroke="#2e7d32" stroke-width="1.2" marker-end="url(#a)"/>
-<text class="s" x="440" y="62">keypoints + track IDs</text>
-<text class="s" x="345" y="135">keypoint tracks</text>
-<text class="s" x="345" y="290">3D tag tracks</text>
-<text class="s" x="585" y="275">names on boxes</text>
-<text class="s" x="585" y="390">named jump events</text>
-<text class="s" x="20" y="490">Dashed: one-time setup (calibration outputs the camera pose and clock offset used by the projection block). Solid: per frame.</text>
+<path d="M190,58 L225,58" stroke="#333" stroke-width="1.2" marker-end="url(#a)"/>
+<path d="M190,138 L225,138" stroke="#333" stroke-width="1.2" marker-end="url(#a)"/>
+<path d="M190,362 L240,362" stroke="#333" stroke-width="1.2" marker-end="url(#a)"/>
+<path d="M335,330 L335,160" stroke="#b8860b" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<path d="M445,72 L480,72" stroke="#333" stroke-width="1.2" marker-end="url(#a)"/>
+<path d="M430,362 L455,362 L455,100 L480,100" stroke="#333" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
+<path d="M430,375 L480,375" stroke="#333" stroke-width="1.2" stroke-dasharray="5 3" marker-end="url(#a)"/>
+<path d="M575,114 L575,200" stroke="#2e7d32" stroke-width="1.2" marker-end="url(#a)"/>
+<path d="M575,264 L575,430" stroke="#2e7d32" stroke-width="1.2" marker-end="url(#a)"/>
+<path d="M575,386 L575,430" stroke="#333" stroke-width="1.2" stroke-dasharray="5 3"/>
+<text class="s" x="449" y="64">tracks</text>
+<text class="s" x="345" y="250">3D tag tracks</text>
+<text class="s" x="585" y="160">names on boxes, all views</text>
+<text class="s" x="585" y="300">one view per player</text>
+<text class="s" x="20" y="508">Dashed gold: one-time setup per camera. Solid: per frame. Dashed grey: stretch goal.</text><text class="s" x="20" y="522">Cross-check: hip keypoints triangulated from two self-calibrated cameras must land on the UWB positions.</text>
 </svg>
 </div></body></html>
