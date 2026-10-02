@@ -58,8 +58,10 @@ check:
                                    # its colour camera, which sights the board that places it
       skip: ["/mobile_2/infra1/*", "/mobile_2/infra2/*",
              "/mobile_2/depth/*", "/mobile_2/imu", "/mobile_2/extrinsics/*",
-             "/mobile_2/wifi/iperf_*"]
-    coop: {}
+             "/mobile_2/wifi/iperf_*",
+             "/infra_*/wifi/iperf_*"]  # the infra nodes run iperf in contention only
+    coop:
+      skip: ["/infra_*/wifi/iperf_*"]
     contention: {}
 
 machines:
@@ -142,16 +144,15 @@ machines:
   # Its ping topic is what proves it was transmitting during the pass.
   #
   # Camera data rate: 960x600 yuv422_yuy2 is 1.15 MB/frame, 34.6 MB/s at 30 fps
-  # -- 125 GB/hour of raw Image. Record the compressed stream instead unless a
-  # pass specifically needs raw; see `image_raw` below.
+  # -- 125 GB/hour of raw Image. Recorded raw; the compressed stream is not.
+  # iperf runs on the infra nodes in contention passes only (check.modes).
   infra_1:
     out_dir: ~/workspaces/Dataset          # no /workspaces on the Pis
     topics:
       # --- camera (v4l2_camera_node, namespace infra_1)
-      - /infra_1/image_raw/compressed
+      - /infra_1/image_raw            # raw: 34.6 MB/s (the compressed stream is not recorded)
       - /infra_1/camera_info
       - /arducam/board_pose
-      # - /infra_1/image_raw          # raw: 34.6 MB/s, enable deliberately
       # --- radar (radar_node_direct, namespace infra_1, frame infra1_link)
       - /infra_1/radar/points_all
       # --- link measurements
