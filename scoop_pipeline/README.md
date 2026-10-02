@@ -366,14 +366,16 @@ leaves it out; `--check` prints the tree without merging):
 
 ```
 map
-├── map_zed                 03: the ZED's map at the start board
-│  └~~ odom_zed             the ZED's own topics, as recorded
-├~~ zed_camera_link         mobile_1 on its LiDAR trajectory (08's in a run, 01a's
-│  └── ... ZED, os_sensor,  through T_N_world in a mapping pass); replaces the
-│      radars               ZED's odom_zed ~~ zed_camera_link
+├── map_zed                 mobile_1's origin, 03: the ZED's map at the start board
+│  ├~~ odom_zed             the ZED's own topics, as recorded
+│  └~~ zed_camera_link      mobile_1 on its LiDAR trajectory (08's in a run, 01a's
+│     └── ... ZED, os_sensor, radars   through T_N_world in a mapping pass);
+│                           replaces the ZED's odom_zed ~~ zed_camera_link
+├── map_realsense           mobile_2's origin (04 camera "origin_frame")
+│  └── camera_link          parked: where 04 placed it
 ├── board, board_b, ...     03's boards
-├── arducam_optical_frame   04 (its ChArUco pose under map_zed is dropped)
-└── camera_link             04's RealSense, so map -> camera_color_optical_frame is its pose
+└── arducam_optical_frame   04 (its ChArUco pose under map_zed is dropped)
+   └── infra1_link          the radar, configs/static_tf.yaml
 ```
 
 ## Merging chosen topics of any bags

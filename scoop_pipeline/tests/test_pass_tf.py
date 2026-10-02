@@ -8,9 +8,10 @@ static camera chain, os_sensor hung below the ZED optical frame by
 static_tf.yaml, the arducam's ChArUco pose under map_zed (infra_1), and the
 RealSense's own tree from camera_link (mobile_2).
 
-  run (survey_1, in mapping_A's map): map ~~ mobile_1 from 08's in-camera
-      trajectory, map -> map_zed from boards_<tag>.json, the boards of the
-      reference and of the run, arducam and RealSense from 04;
+  run (survey_1, in mapping_A's map): map -> map_zed (mobile_1's origin)
+      from boards_<tag>.json, map_zed ~~ mobile_1 from 08's in-camera
+      trajectory, the boards of the reference and of the run, arducam from 04,
+      map -> map_realsense (mobile_2's origin) -> camera_link from 04;
   mapping pass (mapping_A): mobile_1 from the refined LiDAR trajectory
       through T_N_world, in the points' frame;
   09 on a bag merged before the map stages: the same tree in its bag, with
@@ -154,8 +155,9 @@ def outputs(data):
 
 
 def configs(stages, data):
-    base = {"03_anchor": {}, "04_build_cameras": {"output": "cameras_in_map.yaml",
-                                                  "cameras": []},
+    base = {"03_anchor": {}, "04_build_cameras": {
+        "output": "cameras_in_map.yaml",
+        "cameras": [{"name": "realsense", "origin_frame": "map_realsense"}]},
             "08_reference": {"name": "mobile_1_lidar"},
             "09_publish": {"robots": [{"name": "mobile_1",
                                        "traj": "traj_mobile_1_lidar_in_cam.tum",
@@ -239,8 +241,13 @@ def main():
         close(tree.lookup("map", "board_rs", t), rotz(10, (-24.4, 2.2, 0.1)), "run: board_rs", f)
         if tree.lookup("map_zed", "odom_zed", t) is None:
             f.append("run: map_zed ~~ odom_zed (the ZED's own topics) is gone")
-        if after["zed_camera_link"].parent != "map":
+        if after["zed_camera_link"].parent != "map_zed":
             f.append("run: zed_camera_link hangs from %s" % after["zed_camera_link"].parent)
+        if after["camera_link"].parent != "map_realsense" or \
+                after["map_realsense"].parent != "map":
+            f.append("run: camera_link hangs from %s" % after["camera_link"].parent)
+        close(tree.lookup("map", "map_realsense", t),
+              T_RS @ np.linalg.inv(RS_CHAIN[0][2] @ RS_CHAIN[1][2]), "run: map_realsense", f)
 
         tree, after = merged_tree(inputs, os.path.join(stages, "pipeline_config.json"),
                                   os.path.join(tmp, "map_merged"), static_yaml)

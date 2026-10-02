@@ -17,8 +17,9 @@ For every robot in the "09_publish" block the chosen stage-08 trajectory
   /tf, /tf_static        the complete TF tree ("full_tf": true, the default):
                          the dataset bag's own TF with configs/static_tf.yaml
                          and the pipeline outputs put in (map_stages/pass_tf.py:
-                         map at the root, mobile_1 on this trajectory, map_zed,
-                         boards, infra cameras and infra1_link). Play it next to
+                         map at the root, each mobile platform under its origin
+                         frame (map_zed, map_realsense), mobile_1 on this
+                         trajectory, boards, infra cameras and infra1_link). Play it next to
                          the dataset bag with that bag's TF moved aside:
                            ros2 bag play <merged> --clock \
                                --remap /tf:=/tf_recorded /tf_static:=/tf_static_recorded

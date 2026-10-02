@@ -128,6 +128,7 @@
         "name": "realsense",
         "source": "board",
         "child_frame": "camera_color_optical_frame",
+        "origin_frame": "map_realsense",
         "board": "rs_anchor",
         "bag": "/home/wicoms-robot/workspaces/isaac_ros-dev/20260828/mirc_dataset_mapping2_20260828_merged",
         "image_topic": "/camera/color/image_raw",
