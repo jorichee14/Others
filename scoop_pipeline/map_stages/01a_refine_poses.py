@@ -381,6 +381,33 @@ def _apply(T, w_, t_, c):
     return th, np.linalg.norm(t_)
 
 
+def _prior(T, T0):
+    """The pose's offset from its seed, as (rotation vector, translation)."""
+    drot = T[:3, :3] @ T0[:3, :3].T
+    ang = np.arccos(np.clip((np.trace(drot) - 1) / 2, -1, 1))
+    axis = np.zeros(3)
+    if ang > 1e-9:
+        axis = np.array([drot[2, 1] - drot[1, 2],
+                         drot[0, 2] - drot[2, 0],
+                         drot[1, 0] - drot[0, 1]]) / (2 * np.sin(ang)) * ang
+    return np.concatenate([axis, T[:3, 3] - T0[:3, 3]])
+
+
+def constraint(ref, pts_local, T, gate):
+    """How well the map pins this scan's translation, at pose T: the matched
+    map normals' scatter matrix sum(n n^T) / N. Its eigenvalues share 1
+    between the three directions (a box room ~1/3 each; a corridor of walls
+    and floor ~0 along it). -> (weakest direction in map, its share, N)."""
+    p = pts_local @ T[:3, :3].T + T[:3, 3]
+    d, idx = ref.tree.query(p, workers=-1, distance_upper_bound=float(gate))
+    ok = np.isfinite(d)
+    if ok.sum() < 3:
+        return np.full(3, np.nan), float("nan"), int(ok.sum())
+    n = ref.nrm[idx[ok]]
+    w, V = np.linalg.eigh(n.T @ n / len(n))
+    return V[:, 0], float(max(w[0], 0.0)), int(ok.sum())
+
+
 def register(ref, pts_local, T0, cfg):
     """Two-stage ICP of one scan against the reference map.
 
@@ -413,14 +440,7 @@ def register(ref, pts_local, T0, cfg):
             r = np.einsum("ij,ij->i", pw - ref.pcen[i[ok]], n)
             if it == 0:
                 r0 = float(np.sqrt(np.mean(r ** 2)))
-            drot = T[:3, :3] @ T0[:3, :3].T
-            ang = np.arccos(np.clip((np.trace(drot) - 1) / 2, -1, 1))
-            axis = np.zeros(3)
-            if ang > 1e-9:
-                axis = np.array([drot[2, 1] - drot[1, 2],
-                                 drot[0, 2] - drot[2, 0],
-                                 drot[1, 0] - drot[0, 1]]) / (2 * np.sin(ang)) * ang
-            prior = np.concatenate([axis, T[:3, 3] - T0[:3, 3]])
+            prior = _prior(T, T0)
             sol = _solve(pw, c, n, r, ph, prior,
                          float(cfg.get("prior_beta", 0.05)),
                          cw=ref.pw[i[ok]])
@@ -443,7 +463,10 @@ def register(ref, pts_local, T0, cfg):
             pw = p[ok]
             n = ref.nrm[idx[ok]]
             r = np.einsum("ij,ij->i", pw - ref.pts[idx[ok]], n)
-            sol = _solve(pw, c, n, r, huber)
+            # nn_prior_beta > 0 (08) anchors this stage to the seed as well, in
+            # the directions the geometry leaves open; 0 (01a) leaves it free
+            nb = float(cfg.get("nn_prior_beta", 0.0))
+            sol = _solve(pw, c, n, r, huber, _prior(T, T0) if nb > 0 else None, nb)
             if sol is None:
                 break
             th, tn = _apply(T, sol[0], sol[1], c)

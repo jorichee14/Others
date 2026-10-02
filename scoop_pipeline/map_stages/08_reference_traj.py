@@ -11,7 +11,9 @@ reference pass's FROZEN anchored map.
             seed pose (never the previous scan's result, so errors cannot
             accumulate) and is registered to the map by 01a's ICP: planes
             fitted over plane_voxel cells first, then nearest-neighbour
-            point-to-plane. A correction larger than max_shift / max_rot_deg,
+            point-to-plane, both anchored to the seed (prior_beta) where the
+            map leaves a direction open, so a corridor scan cannot slide
+            along it on noise. A correction larger than max_shift / max_rot_deg,
             or a scan with fewer than min_corr correspondences, keeps its seed.
   rounds    round 2 on deskews with the previous round's poses; the map never
             changes. The per-round corrections are the convergence evidence.
@@ -20,7 +22,14 @@ Outputs (odometry/reference_<tag>/):
   traj_<name>.tum         T_map_lidar per scan (03, 04, 07 read it)
   traj_<name>_in_cam.tum  the camera optical frame (T_lidar_camera), for 09
   quality_<name>.csv      per scan: t, status (ok / seed_kept_far / seed_kept_thin
-                          / no_scan), correspondences, residual, correction
+                          / no_scan), correspondences, residual, correction, the
+                          direction the map pins least (weak_x/y/z, in map), its
+                          share of the constraint (box room ~0.33, corridor ~0), the
+                          seed's share of the result along it, seed_held (>= 0.5)
+  seed_held_<name>.csv    runs of seed-held scans: when, where, how long, the open
+                          direction, and how far the GLIM seed is off along it at
+                          the run's edges (the map's correction of the constrained
+                          scans either side): inside, the error runs between them
   summary_<name>.json     the numbers below
 
 Config "08_reference" (all optional):
@@ -33,6 +42,7 @@ Config "08_reference" (all optional):
   "max_corr": [0.4, 0.2, 0.1], "iters_per_gate": 5, "huber": 0.05,
   "plane_iters": 8, "plane_huber": 0.10, "prior_beta": 0.05, "planarity": 1.0,
   "min_corr": 200, "max_shift": 0.5, "max_rot_deg": 5.0,
+  "seed_held_at": 0.5, "segment_gap_s": 1.0,
   "deskew": 01_build_map.deskew, "deskew_bins": 01_build_map.deskew_bins
 
   python3 08_reference_traj.py pipeline_config_<run>.json
@@ -54,7 +64,8 @@ A = importlib.import_module("01a_refine_poses")
 DEFAULTS = dict(rounds=2, target_voxel=0.05, scan_voxel=0.10, plane_voxel=0.4,
                 max_corr=[0.4, 0.2, 0.1], iters_per_gate=5, huber=0.05, plane_iters=8,
                 plane_huber=0.10, prior_beta=0.05, planarity=1.0, min_corr=200,
-                max_shift=0.5, max_rot_deg=5.0, anchor_cam="zed", points_topic="")
+                max_shift=0.5, max_rot_deg=5.0, anchor_cam="zed", points_topic="",
+                seed_held_at=0.5, segment_gap_s=1.0)
 
 
 def pose_at(tr_t, tr_T, t):
@@ -93,6 +104,8 @@ def register_round(ref, bag, topic, times, T_cur, c, s01):
         pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(p))
         p_ds = np.asarray(pc.voxel_down_sample(c["scan_voxel"]).points)
         T_j, n_corr, rms, _, _ = A.register(ref, p_ds, T_cur[j].copy(), c)
+        T_fit = T_j if np.isfinite(T_j).all() else T_cur[j]
+        v, share, _ = A.constraint(ref, p_ds, T_fit, float(c["max_corr"][-1]))
         d = float(np.linalg.norm(T_j[:3, 3] - T_cur[j][:3, 3]))
         dR = T_j[:3, :3] @ T_cur[j][:3, :3].T
         ang = float(np.arccos(np.clip((np.trace(dR) - 1) / 2, -1, 1)))
@@ -105,12 +118,60 @@ def register_round(ref, bag, topic, times, T_cur, c, s01):
         else:
             status = "ok"
             T_new[j] = T_j
-        rows[j] = (status, n_corr, rms, d, np.degrees(ang))
+        # the seed's share of the result along the weakest direction: the
+        # prior adds beta/3 of the data's total weight in every direction,
+        # the map adds `share` of it along v
+        k = float(c["prior_beta"]) / 3.0
+        seed_share = k / (k + share) if np.isfinite(share) else 1.0
+        rows[j] = (status, n_corr, rms, d, np.degrees(ang), v, share, seed_share)
         n += 1
         if n % 1000 == 0:
             ok = sum(1 for r in rows.values() if r[0] == "ok")
             print("    %d scans (%d registered) %.0f s" % (n, ok, time.time() - t0), flush=True)
     return T_new, rows
+
+
+def held_segments(times, T_fin, T_seed, rows, held_at, gap_s):
+    """Runs of seed-held scans (gaps up to gap_s s bridged). For each: where,
+    how long, its open direction, and how far the GLIM seed is off along it at
+    the run's two edges -- the map's correction (final - seed) along that
+    direction at the constrained scans just before and just after. Inside the
+    run the seed holds that direction, so its error there goes from the one
+    edge value to the other."""
+    held = sorted(j for j, r in rows.items() if r[7] >= held_at)
+    good = np.array(sorted(j for j, r in rows.items() if r[7] < held_at and r[0] == "ok"))
+    corr = T_fin[:, :3, 3] - T_seed[:, :3, 3]
+    runs, cur = [], []
+    for j in held:
+        if cur and times[j] - times[cur[-1]] > gap_s:
+            runs.append(cur)
+            cur = []
+        cur.append(j)
+    if cur:
+        runs.append(cur)
+    out = []
+    for r in runs:
+        V = np.array([rows[j][5] for j in r if np.isfinite(rows[j][5]).all()])
+        if len(V):
+            V = V * np.sign(V @ V[0])[:, None]          # one sign for +-v
+            w = V.mean(0)
+            w = w / max(np.linalg.norm(w), 1e-12)
+        else:
+            w = np.full(3, np.nan)
+        before = good[good < r[0]]
+        after = good[good > r[-1]]
+        ok_w = np.isfinite(w).all()
+        off0 = float(corr[before[-1]] @ w) * 100 if len(before) and ok_w else float("nan")
+        off1 = float(corr[after[0]] @ w) * 100 if len(after) and ok_w else float("nan")
+        P = T_fin[r, :3, 3]
+        out.append({"t0": float(times[r[0]]), "t1": float(times[r[-1]]), "n": len(r),
+                    "path_m": float(np.sum(np.linalg.norm(np.diff(P, axis=0), axis=1))),
+                    "xyz": P.mean(0), "weak": w,
+                    "seed_share": float(np.median([rows[j][7] for j in r])),
+                    "off_before_cm": off0, "off_after_cm": off1,
+                    "off_cm": float(np.nanmax(np.abs([off0, off1])))
+                    if np.isfinite([off0, off1]).any() else float("nan")})
+    return out
 
 
 def main():
@@ -121,6 +182,8 @@ def main():
     c.update(deskew=bool(s01.get("deskew", True)),
              deskew_bins=max(2, int(s01.get("deskew_bins", 100))))
     c.update(P.cfg.get("08_reference") or {})
+    # both ICP stages anchored to the seed where the map leaves a direction open
+    c.setdefault("nn_prior_beta", c["prior_beta"])
     name = c.get("name") or "%s_lidar" % P.machine
     bag = os.path.expanduser(c.get("bag") or P.dataset["bag"])
     run_traj = os.path.expanduser(c.get("run_traj") or os.path.join(
@@ -180,13 +243,36 @@ def main():
     p_cam = os.path.join(outd, "traj_%s_in_cam.tum" % name)
     A.write_traj(p_lidar, times, T_cur)
     A.write_traj(p_cam, times, np.einsum("nij,jk->nik", T_cur, T_lc))
+    held_at = float(c["seed_held_at"])
+    nan3 = np.full(3, np.nan)
     with open(os.path.join(outd, "quality_%s.csv" % name), "w") as f:
-        f.write("t,status,n_corr,residual_cm,last_correction_cm,last_correction_deg\n")
+        f.write("t,status,n_corr,residual_cm,last_correction_cm,last_correction_deg,"
+                "weak_x,weak_y,weak_z,weak_share,seed_share,seed_held\n")
         for i, t in enumerate(times):
-            st, nc, rms, dd, da = rows.get(i, ("no_scan", 0, np.nan, np.nan, np.nan))
-            f.write("%.9f,%s,%d,%.3f,%.3f,%.4f\n" % (t, st, nc, rms * 100, dd * 100, da))
+            st, nc, rms, dd, da, v, sh, ss = rows.get(
+                i, ("no_scan", 0, np.nan, np.nan, np.nan, nan3, np.nan, 1.0))
+            f.write("%.9f,%s,%d,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.3f,%d\n"
+                    % (t, st, nc, rms * 100, dd * 100, da, v[0], v[1], v[2], sh, ss,
+                       int(ss >= held_at)))
+    segs = held_segments(times, T_cur, T_seed, rows, held_at, float(c["segment_gap_s"]))
+    with open(os.path.join(outd, "seed_held_%s.csv" % name), "w") as f:
+        f.write("t_start,t_end,duration_s,scans,path_m,x,y,z,weak_x,weak_y,weak_z,"
+                "median_seed_share,seed_off_before_cm,seed_off_after_cm,seed_off_max_cm\n")
+        for g in segs:
+            f.write("%.3f,%.3f,%.2f,%d,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f\n"
+                    % (g["t0"], g["t1"], g["t1"] - g["t0"], g["n"], g["path_m"], *g["xyz"],
+                       *g["weak"], g["seed_share"], g["off_before_cm"], g["off_after_cm"],
+                       g["off_cm"]))
     total = np.linalg.norm(T_cur[:, :3, 3] - T_seed[:, :3, 3], axis=1) * 100
+    n_held = sum(1 for r in rows.values() if r[7] >= held_at)
+    summary_held = {"seed_held_at": held_at, "scans": n_held,
+                    "fraction": n_held / max(len(rows), 1),
+                    "segments": len(segs),
+                    "seconds": float(sum(g["t1"] - g["t0"] for g in segs)),
+                    "max_seed_off_cm": float(np.nanmax(
+                        [g["off_cm"] for g in segs])) if segs else 0.0}
     summary = {"name": name, "bag": bag, "run_traj": run_traj, "ref_map": ref_map,
+               "seed_held": summary_held,
                "session_anchor": sa_path, "anchor_cam": c["anchor_cam"], "anchor_mode": mode,
                "t_anchor": t_a, "T_map_glim_seed": T_map_glim.tolist(), "rounds": history,
                "registered_last_round": history[-1]["registered"], "poses": len(times),
@@ -204,7 +290,25 @@ def main():
     print("GLIM seed -> final: median %.1f cm, p95 %.1f cm, max %.1f cm (how far the map "
           "moved the run's own odometry)" % (np.median(total), np.percentile(total, 95),
                                               total.max()))
-    print("wrote %s\n      %s\n      quality_%s.csv, summary_%s.json" % (p_lidar, p_cam, name, name))
+    print("\nscans where the map leaves a direction open and the GLIM seed holds it "
+          "(seed share >= %.0f %%): %d of %d (%.1f %%), in %d segment(s), %.1f s in all"
+          % (held_at * 100, n_held, len(rows), 100 * summary_held["fraction"], len(segs),
+             summary_held["seconds"]))
+    long_ = sorted(segs, key=lambda g: -(g["t1"] - g["t0"]))[:10]
+    if long_:
+        print("  longest (seed off = how far GLIM is off along the open direction at the "
+              "segment's edges; inside, the error runs from one to the other):")
+        print("    %8s %7s %6s %7s  %-22s %-20s %s"
+              % ("start s", "dur s", "scans", "path m", "where (map xyz)", "open direction",
+                 "seed off before / after"))
+        fmt = lambda v: "%.1f" % v if np.isfinite(v) else "n/a"           # noqa: E731
+        for g in long_:
+            print("    %8.1f %7.1f %6d %7.1f  %-22s %-20s %s / %s cm"
+                  % (g["t0"] - times[0], g["t1"] - g["t0"], g["n"], g["path_m"],
+                     str(np.round(g["xyz"], 1).tolist()), str(np.round(g["weak"], 2).tolist()),
+                     fmt(g["off_before_cm"]), fmt(g["off_after_cm"])))
+    print("wrote %s\n      %s\n      quality_%s.csv, seed_held_%s.csv, summary_%s.json"
+          % (p_lidar, p_cam, name, name, name))
 
 
 if __name__ == "__main__":
