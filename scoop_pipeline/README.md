@@ -53,7 +53,7 @@ analysis/            measuring results; reads outputs, writes nothing back
   mapping/map_quality.py  surface thickness of a map cloud (noise / pose error / smear)
   mapping/scan_consistency.py  why walls are thick: noise floor, timing offset,
                      deskew, drift -- from ~200 scans of the bag + trajectory
-  odom/              trajectories (nothing yet)
+  odom/zed_vs_lidar.py    drift of the ZED's own tracking (map_zed) against the LiDAR trajectory
   comms/             wifi / iperf / ntp (nothing yet)
   bags/topic_timing.py    intervals, gaps and repeated frames of topics in a bag
 checks/              is the environment / the decoder right? (against real bags)
