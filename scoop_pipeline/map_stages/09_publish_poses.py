@@ -14,7 +14,18 @@ For every robot in the "09_publish" block the chosen stage-08 trajectory
                          the robot's own start pose is the origin, so the
                          first message is the identity - an odometry-like
                          frame that does not drift
-  /tf                    map -> <robot>/<optical_frame> (optional, for RViz)
+  /tf, /tf_static        the complete TF tree ("full_tf": true, the default):
+                         the dataset bag's own TF with configs/static_tf.yaml
+                         and the pipeline outputs put in (map_stages/pass_tf.py:
+                         map at the root, mobile_1 on this trajectory, map_zed,
+                         boards, infra cameras and infra1_link). Play it next to
+                         the dataset bag with that bag's TF moved aside:
+                           ros2 bag play <merged> --clock \
+                               --remap /tf:=/tf_recorded /tf_static:=/tf_static_recorded
+                           ros2 bag play <this bag>
+                         A merge done after the map stages carries the same tree
+                         itself. "full_tf": false: only
+                         map -> <robot>/<optical_frame> on /tf ("write_tf").
 
 The optical frame is the frame the images and depth are expressed in, so a
 consumer can project through global_pose directly with the camera intrinsics.
@@ -28,7 +39,8 @@ the raw bag.
     python3 09_publish_poses.py pipeline_config.json --dry  # counts only
 
 No ROS install needed: the bag is written by scoop.bagwrite (MCAP +
-metadata.yaml, as `ros2 bag record` leaves it), like the merge.
+metadata.yaml, as `ros2 bag record` leaves it), like the merge. With full_tf
+the dataset bag's /tf is read through, which takes a few minutes on a big bag.
 
 CONFIG
 "09_publish": {
@@ -131,6 +143,43 @@ def robot_poses(rb, rate_hz):
     return ts, Tb, Tl
 
 
+def full_tf(P, s):
+    """The complete tree against the dataset bag's TF: configs/static_tf.yaml
+    (the calibrations the bag does not have yet), then the pipeline outputs
+    (pass_tf.plan). -> (static [(parent, child, t, q)], drop f(parent, child)
+    or None, /tf [(t_ns, parent, child, t, q)]), or None when the bag has the
+    tree already (merged after the map stages)."""
+    import yaml
+    from scoop import tftree
+    import pass_tf
+    bag = P.dataset["bag"]
+    print("TF of %s ..." % bag)
+    edges = tftree.tf_edges([bag])
+    st = []
+    cal_path = s.get("static_tf") or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "static_tf.yaml")
+    with open(os.path.expanduser(cal_path)) as fh:
+        cals = tftree.load_calibrations(yaml.safe_load(fh))
+    frames = set(edges) | {e.parent for e in edges.values()}
+    if s.get("map_frame", "map") in frames:
+        return None                                     # merged after the map stages
+    for c in cals:
+        if c.parent in frames and c.child in frames and \
+                tftree._root(c.parent, edges) == tftree._root(c.child, edges):
+            continue                                    # the merge put it in already
+        add, notes = tftree.attach([c], edges)
+        for p, ch, t, q in add:
+            edges[ch] = tftree.Edge(p, ch, True, tftree.matrix(t, q))
+            frames |= {p, ch}
+        st += add
+        for n in notes:
+            print("    %s  (configs/static_tf.yaml)" % n)
+    drop, more, extra, after = pass_tf.plan(P, edges, [bag])
+    print(tftree.format_tree(after))
+    return (st + more, tftree.edge_matcher(["%s->%s" % d for d in drop]) if drop else None,
+            extra)
+
+
 def main():
     cfg_path = next((a for a in sys.argv[1:] if not a.startswith("--")), "pipeline_config.json")
     dry = "--dry" in sys.argv
@@ -167,6 +216,7 @@ def main():
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from scoop import rosmsg
+    from scoop.bag import TopicSchema
     from scoop.bagwrite import BagWriter
 
     out = s["output_bag"]
@@ -176,6 +226,11 @@ def main():
     for rb, ts, Tb, Tl in robots:
         for nm in ("global_pose", "local_pose"):
             topics.append("/%s/%s" % (rb["name"], nm))
+    full = bool(s.get("full_tf", True))
+    if full and not os.path.exists(P.dataset["bag"]):
+        print("  (no dataset bag %s: map -> <robot>/<optical_frame> only)" % P.dataset["bag"])
+        full = False
+    write_tf = write_tf and not full
 
     # interleave all robots by time so the bag plays in order
     events = []
@@ -183,24 +238,48 @@ def main():
         for i, t in enumerate(ts):
             events.append((t, rb, Tb[i], Tl[i]))
     events.sort(key=lambda e: e[0])
-    n = 0
-    with BagWriter(out) as w:
+
+    def messages():
         for t, rb, Tm, Tloc in events:
             t_ns = int(round(t * 1e9))
             qm = Rot.from_matrix(Tm[:3, :3]).as_quat()
             ql = Rot.from_matrix(Tloc[:3, :3]).as_quat()
-            w.write("/%s/global_pose" % rb["name"],
-                    rosmsg.pose_stamped(t_ns, map_frame, Tm[:3, 3], qm), t_ns)
-            w.write("/%s/local_pose" % rb["name"],
-                    rosmsg.pose_stamped(t_ns, "%s/start" % rb["name"], Tloc[:3, 3], ql), t_ns)
-            n += 2
+            yield t_ns, "/%s/global_pose" % rb["name"], \
+                rosmsg.pose_stamped(t_ns, map_frame, Tm[:3, 3], qm)
+            yield t_ns, "/%s/local_pose" % rb["name"], \
+                rosmsg.pose_stamped(t_ns, "%s/start" % rb["name"], Tloc[:3, 3], ql)
             if write_tf:
-                w.write("/tf", rosmsg.tf_message(
-                    [(map_frame, "%s/%s" % (rb["name"], rb["_frame"]), Tm[:3, 3], qm)], t_ns),
-                    t_ns)
+                yield t_ns, "/tf", rosmsg.tf_message(
+                    [(map_frame, "%s/%s" % (rb["name"], rb["_frame"]), Tm[:3, 3], qm)], t_ns)
+
+    parts = full_tf(P, s) if full else None
+    if full and parts is None:
+        print("  the dataset bag has the complete TF already: poses only")
+        full = False
+    if full:
+        from scoop import merge
+        st, drop_tf, extra = parts
+        ps = "geometry_msgs/msg/PoseStamped"
+        sch = TopicSchema(ps, "ros2msg", rosmsg.msgdef(ps).encode(), "cdr")
+        seq = {}
+
+        def records():
+            for t_ns, tp, m in messages():
+                seq[tp] = seq.get(tp, -1) + 1
+                yield t_ns, tp, sch, t_ns, seq[tp], {}, rosmsg.serialize(m)
+        res = merge.merge_bags([P.dataset["bag"]], out, topics=["/tf", "/tf_static"],
+                               static_tf=st, drop_tf=drop_tf, extra_tf=extra,
+                               extra_records=records())
+        n = sum(res.counts.values())
+        topics += ["/tf_static"]
+    else:
+        n = 0
+        with BagWriter(out) as w:
+            for t_ns, tp, m in messages():
+                w.write(tp, m, t_ns)
                 n += 1
     print("wrote %s: %d messages on %s%s" % (out, n, ", ".join(topics),
-                                            ", /tf" if write_tf else ""))
+                                            ", /tf" if write_tf or full else ""))
     print("  global_pose: camera optical frame in '%s' (unless publish_body_frame); "
           "local_pose: the same frame relative to the robot's first pose "
           "(frame '<robot>/start')" % map_frame)

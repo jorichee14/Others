@@ -12,7 +12,9 @@ RealSense's own tree from camera_link (mobile_2).
       trajectory, map -> map_zed from boards_<tag>.json, the boards of the
       reference and of the run, arducam and RealSense from 04;
   mapping pass (mapping_A): mobile_1 from the refined LiDAR trajectory
-      through T_N_world, in the points' frame.
+      through T_N_world, in the points' frame;
+  09 on a bag merged before the map stages: the same tree in its bag, with
+      the calibration the bag lacks (infra1_link) from static_tf.yaml.
 
 Every lookup in the merged bag must give the pipeline's poses, and every
 frame one parent.
@@ -76,6 +78,7 @@ T_MAP_MAPZED = rotz(12.0, (0.6, -0.1, 0.2))
 T_ARDU = rotz(150, (-2.8, 15.0, 1.7)) @ rotz(-100, axis=(1, 0, 0))
 T_RS = rotz(-40, (-24.4, 1.4, 0.3)) @ rotz(-95, axis=(1, 0, 0))
 T_N_WORLD = rotz(137, (6.3, -2.1, 0.15))
+T_RADAR = rotz(30, (0.017773, -0.208023, -0.155788), axis=(1, 1, 0))   # arducam -> infra1_link
 
 
 def tf_static(w, items, t_ns):
@@ -153,7 +156,10 @@ def outputs(data):
 def configs(stages, data):
     base = {"03_anchor": {}, "04_build_cameras": {"output": "cameras_in_map.yaml",
                                                   "cameras": []},
-            "08_reference": {"name": "mobile_1_lidar"}}
+            "08_reference": {"name": "mobile_1_lidar"},
+            "09_publish": {"robots": [{"name": "mobile_1",
+                                       "traj": "traj_mobile_1_lidar_in_cam.tum",
+                                       "optical_frame": "zed_left_camera_optical_frame"}]}}
     work = os.path.join(data, "work", "20260101")
     json.dump(dict(base, dataset={"bag": os.path.join(work, "mapping_A", "x_merged"),
                                   "traj": "traj_lidar_refined.txt", "machine": "mobile_1"}),
@@ -200,7 +206,9 @@ def main():
         T_cam_sensor = outputs(data)
         open(static_yaml, "w").write(
             "transforms:\n  - {parent: zed_left_camera_optical_frame, child: os_sensor, "
-            "translation: %s, rotation_xyzw: %s}\n" % tuple(map(json.dumps, tq(T_cam_sensor))))
+            "translation: %s, rotation_xyzw: %s}\n" % tuple(map(json.dumps, tq(T_cam_sensor)))
+            + "  - {parent: arducam_optical_frame, child: infra1_link, translation: %s, "
+            "rotation_xyzw: %s}\n" % tuple(map(json.dumps, tq(T_RADAR))))
         configs(stages, data)
         raw_run = os.path.join(data, "raw", "20260101", "survey_1")
         raw_map = os.path.join(data, "raw", "20260101", "mapping_A")
@@ -224,6 +232,7 @@ def main():
         t = T0 + 5
         close(tree.lookup("map", "map_zed", t), T_MAP_MAPZED, "run: map_zed", f)
         close(tree.lookup("map", "arducam_optical_frame", t), T_ARDU, "run: arducam", f)
+        close(tree.lookup("map", "infra1_link", t), T_ARDU @ T_RADAR, "run: infra1_link", f)
         close(tree.lookup("map", "camera_color_optical_frame", t), T_RS, "run: realsense", f)
         close(tree.lookup("map", "board", t), np.eye(4), "run: board (reference's)", f)
         close(tree.lookup("map", "board_b", t), rotz(45, (-7.2, 12.6, 0.03)), "run: board_b", f)
@@ -241,6 +250,39 @@ def main():
             close(tree.lookup("map", "zed_left_camera_optical_frame", T0 + t), true_cam(t),
                   "mapping: ZED at %.1f s" % t, f)
         close(tree.lookup("map", "map_zed", T0 + 5), rotz(77), "mapping: map_zed", f)
+
+        # 09 on a bag merged before the map stages (only os_sensor in from static_tf.yaml)
+        from scoop import merge, bag as sbag
+        import yaml
+        cfg = os.path.join(stages, "pipeline_config_survey_1.json")
+        c = json.load(open(cfg))
+        c["09_publish"] = {"static_tf": static_yaml}
+        json.dump(c, open(cfg, "w"))
+        old = os.path.join(data, "work", "20260101", "survey_1", "x_merged")
+        cal = tftree.load_calibrations(yaml.safe_load(open(static_yaml)))[:1]
+        merge.merge_bags(inputs, old, static_tf=tftree.attach(cal, tftree.tf_edges(inputs))[0],
+                         log=lambda *_: None)
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "09_publish_poses.py"),
+                            cfg], capture_output=True, text=True)
+        print(r.stdout[-1500:])
+        if r.returncode:
+            f.append("09: " + r.stdout[-1000:] + r.stderr[-1500:])
+        else:
+            b09 = os.path.join(data, "processed", "20260101", "survey_1", "bags",
+                               "survey_1_20260101_best_poses")
+            tp = sbag.open_bag(b09).topics()
+            if sorted(tp) != ["/mobile_1/global_pose", "/mobile_1/local_pose", "/tf", "/tf_static"]:
+                f.append("09 topics: %s" % sorted(tp))
+            tftree.tf_edges([b09])
+            tree = read_tf_and_info(b09, [], want_tf=True, verbose=False)[1]
+            for t in stamps[::9]:
+                close(tree.lookup("map", "os_sensor", T0 + t), true_cam(t) @ T_cam_sensor,
+                      "09: os_sensor at %.1f s" % t, f)
+            close(tree.lookup("map", "infra1_link", T0 + 5), T_ARDU @ T_RADAR, "09: infra1_link", f)
+            close(tree.lookup("map", "camera_color_optical_frame", T0 + 5), T_RS, "09: realsense", f)
+            close(tree.lookup("map", "board_b", T0 + 5), rotz(45, (-7.2, 12.6, 0.03)), "09: board_b", f)
+            if tree.lookup("map_zed", "odom_zed", T0 + 5) is None:
+                f.append("09: the bag's map_zed ~~ odom_zed is missing")
 
         # the CLI: the check prints the tree from the outputs it finds
         cli = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "pass_tf.py"),

@@ -139,7 +139,7 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
                min_free_gb: float = MIN_FREE_GB, static_tf=(),
                topics: Optional[Iterable[str]] = None,
                source: Optional[Dict[str, int]] = None, drop_tf=None, extra_tf=(),
-               log=print) -> MergeResult:
+               extra_records=(), log=print) -> MergeResult:
     """Merge the rosbag2 folders ``inputs`` into ``out_dir`` (must not exist);
     ``topics`` limits it to those (default: all, see :func:`select_topics`),
     ``source`` = {topic: index into inputs} takes a topic from that bag only.
@@ -148,7 +148,9 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
     ``[(t_ns, parent, child, t, q)]`` adds /tf transforms, e.g. a new
     odometry (:func:`scoop.tftree.odom_transforms`).
     ``static_tf``: ``[(parent, child, t, q)]`` added to /tf_static (see
-    :func:`scoop.tftree.attach`).
+    :func:`scoop.tftree.attach`). ``extra_records``: more messages, in log-time
+    order, as ``(log_ns, topic, TopicSchema, publish_ns, sequence, {}, data)``
+    (e.g. 09's poses next to a bag's TF).
 
     /tf_static is written as ONE message at the start holding every static
     transform of the inputs (the latest one per child frame) plus
@@ -209,6 +211,8 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
              rosmsg.serialize(rosmsg.tf_message([(p, c, t, q)], t_ns)))
             for t_ns, p, c, t, q in extra_tf)))
         log(f"    /tf += {len(extra_tf)} transforms {extra_tf[0][1]} -> {extra_tf[0][2]}")
+    if extra_records:
+        streams.append(iter(extra_records))
     if combine:
         ts = rosmsg.typestore()
         t0 = min(r.time_range()[0] for r in readers)
