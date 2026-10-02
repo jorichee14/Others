@@ -12,11 +12,11 @@ LocusConnect - Spatial Intelligence
 
 ## 3. Problem and Target User
 
-Coaches and analysts at university and club teams review video to judge what each player did, but video trackers lose identity at crossings: the best published trackers still leave about 2,600 identity switches on SportsMOT, and SoccerNet association accuracy stays near 60 percent even with perfect detections. The LocusConnect UWB stream keeps every player's identity and 3D position through those occlusions, yet commercial tools only align such telemetry to video in time, by a manual sync point. Projecting identity onto players in the frame needs a surveyed, fixed camera, so it never happens at training sessions filmed from a phone.
+Coaches and analysts at university and club teams review video to judge what each player did, but video trackers lose identity at crossings: the best published trackers still leave about 2,600 identity switches on SportsMOT. Analysts fix these by hand, hours per match, so training sessions go unanalysed. The LocusConnect UWB stream keeps every player's identity and 3D position through those occlusions, yet commercial tools only align such telemetry to video in time, by a manual sync point. Projecting identity onto players in the frame needs a surveyed, fixed camera, so it never happens at sessions filmed from a phone.
 
 ## 4. Proposed Project Idea
 
-Input: video from any camera, and the live 3D stream from the Locus RTLS engine (tag ID, x, y, z, timestamp). Processing: (1) markerless self-calibration during the first minute of free play, jointly estimating camera pose, focal length, and the camera-to-UWB clock offset by matching detected hip keypoints to the 3D tag trajectories, with RANSAC over the unknown tag-to-person correspondences; (2) per frame, each tag's 3D position is projected into the image and matched to a detection by gated assignment, so identity survives crossings and occlusions; (3) the Z-axis stream flags jumps above a threshold set from measured vertical noise. Output: video with persistent name labels on every tagged player, plus an auto-cut clip of each jump with height overlaid.
+Input: video from any camera and the live Locus RTLS 3D stream (tag ID, x, y, z, timestamp). Processing: (1) markerless self-calibration during the first minute of free play, jointly estimating camera pose, focal length, and the camera-to-UWB clock offset by matching detected hip keypoints to 3D tag trajectories, with RANSAC over unknown tag-to-person correspondences; (2) per frame, each tag's 3D position is projected into the image and matched to a detection by gated assignment, so identity survives crossings; (3) as a stretch extension, the Z-axis stream flags jumps above a noise-derived threshold. Output: video with persistent name labels on every tagged player; if the stretch goal is reached, an auto-cut clip of each jump with height overlaid.
 
 ## 5. Technology and Data Required
 
@@ -24,15 +24,15 @@ OpenCV for PnP and joint refinement of pose, focal length, and time offset; YOLO
 
 ## 6. Final Prototype / Live Demo
 
-At the end of the semester, I will be able to demonstrate that a phone camera on a tripod at an arbitrary spot calibrates itself within one minute of four tagged people moving freely, with reprojection error shown converging on screen. After that, each person carries a persistent name label through repeated crossings; toggling fusion off makes labels swap, toggling it on restores them within a frame. When someone jumps, a clip appears within seconds showing the jump with its height overlaid. If live UWB access fails, the same pipeline runs on a recorded synchronized session.
+At the end of the semester, I will be able to demonstrate that a phone camera on a tripod at an arbitrary spot calibrates itself within one minute of four tagged people moving freely, with reprojection error converging on screen. After that, each person carries a persistent name label through repeated crossings; toggling fusion off makes labels swap, toggling it on restores them within a frame. If the stretch goal is reached, a clip appears within seconds of a jump showing it with its height overlaid. If live UWB access fails, the same pipeline runs on a recorded synchronized session.
 
 ## 7. How Will You Know It Works?
 
-Identity: ID switches per minute, ByteTrack alone versus fused, on a labelled session; target 90 percent fewer, and zero on staged crossings; per-frame label accuracy above 95 percent. Calibration: self-calibrated pose versus the marker reference, target rotation error below 1 degree, translation below 20 cm, reprojection below 15 pixels, convergence within 60 seconds, time offset within 20 ms. Jumps: measured UWB vertical noise (published LPS validations report 17 to 21 cm) sets the threshold; precision and recall above 0.9 for jumps above it, against video labels. Latency below 100 ms per frame.
+Identity: ID switches per minute, ByteTrack alone versus fused, on a labelled session; target 90 percent fewer, and zero on staged crossings; per-frame label accuracy above 95 percent. Calibration: self-calibrated pose versus the marker reference, target rotation error below 1 degree, translation below 20 cm, reprojection below 15 pixels, convergence within 60 seconds, time offset within 20 ms. Jumps (stretch): measured UWB vertical noise (published LPS validations report 17 to 21 cm) sets the threshold; precision and recall above 0.9 for jumps above it, against video labels. Latency below 100 ms per frame.
 
 ## 8. Why Should This Project Be Selected?
 
-Identity is the measured bottleneck of sports video tracking, and radio identity has been shown to remove it, yet only one published sports system fuses UWB with video, using four fixed cameras. Existing calibration work solves pose and time offset from a single tracked target; none jointly solves pose, focal length, and clock offset from several tagged players with unknown correspondences. That piece combines established methods, so it fits a semester.
+Identity is the measured bottleneck of sports video tracking, and no published method calibrates an arbitrary camera to UWB from several tagged players with unknown correspondences; that piece combines established methods, so it fits a semester. Practical value for LocusConnect is direct: every coach already films training on a phone, and this puts tag identity into that footage. Stable identity then unlocks per-player clips and statistics.
 
 ## 9. Your Expected Contribution
 
