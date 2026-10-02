@@ -36,4 +36,4 @@ Identity is the measured bottleneck of sports video tracking, and radio identity
 
 ## 9. Your Expected Contribution
 
-[What can you contribute now, and what capability do you want to develop? Max. 50 words.]
+I work in Python with OpenCV and ROS on multi-sensor robotics data, including camera calibration and sensor time synchronization. I will own the calibration and association pipeline, the data-collection sessions, and the evaluation. I want to develop real-time multi-object tracking and pose-based video analytics.
