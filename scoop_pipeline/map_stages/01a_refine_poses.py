@@ -67,7 +67,8 @@ from scipy.spatial import cKDTree
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
-from pipeline_common import load_pipeline, pc2_xyzt, traj_quats, deskew_to_pose
+from pipeline_common import (load_pipeline, traj_quats, iter_scans,   # noqa: F401
+                             nearest_idx)
 
 TS = get_typestore(Stores.ROS2_HUMBLE)
 
@@ -114,55 +115,6 @@ def write_traj(path, times, T):
     q /= np.linalg.norm(q, axis=1, keepdims=True)
     out = np.column_stack([times, T[:, :3, 3], q])
     np.savetxt(path, out, fmt="%.9f %.6f %.6f %.6f %.9f %.9f %.9f %.9f")
-
-
-def nearest_idx(tr_t, t):
-    i = int(np.searchsorted(tr_t, t))
-    if i <= 0:
-        return 0
-    if i >= len(tr_t):
-        return len(tr_t) - 1
-    return i if (tr_t[i] - t) < (t - tr_t[i - 1]) else i - 1
-
-
-def iter_scans(bag, topic, tr_t, tol, lo, hi, tr_T=None, deskew=False, nb=100):
-    """Yield (pose_index, points) for every associated scan, in the sensor
-    frame of that pose.
-
-    deskew (with tr_T, the trajectory of this round): each point is moved
-    from the sensor frame at its own time (cloud stamp + its 't') into the
-    frame of pose j through the trajectory, T_j^-1 T(t + dt) p -- the same
-    placement as 01_build_map's deskew -- so a rigid registration of the
-    scan is not fitting a sweep smeared by the motion during it."""
-    tr_q = traj_quats(tr_T) if deskew and tr_T is not None else None
-    told = [False]
-    with AnyReader([Path(bag)], default_typestore=TS) as r:
-        conns = [c for c in r.connections
-                 if c.topic == topic and "PointCloud2" in c.msgtype]
-        if not conns:
-            have = sorted({c.topic for c in r.connections})
-            raise SystemExit(f"topic {topic!r} not in bag; available: {have}")
-        for conn, _, raw in r.messages(connections=conns):
-            msg = r.deserialize(raw, conn.msgtype)
-            t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            j = nearest_idx(tr_t, t)
-            if abs(tr_t[j] - t) > tol:
-                continue
-            p, dt = pc2_xyzt(msg)
-            p = p.astype(np.float64)
-            keep = np.isfinite(p).all(1)
-            d = np.linalg.norm(p, axis=1)
-            keep &= (d > lo) & (d < hi)
-            if keep.sum() < 100:
-                continue
-            p = p[keep]
-            if tr_q is not None and dt is not None:
-                p = deskew_to_pose(p, dt[keep], t, j, tr_t, tr_T, tr_q, nb)
-                if not told[0]:
-                    told[0] = True
-                    print(f"    [deskew] ON, {nb} bins (points into the frame of "
-                          f"their scan's pose, through this round's trajectory)")
-            yield j, p
 
 
 def detect_points_topic(bag, override="", n_poses=0):

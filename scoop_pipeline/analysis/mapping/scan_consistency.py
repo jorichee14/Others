@@ -39,7 +39,7 @@ from scipy.spatial import cKDTree
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "map_stages"))
 
-from pipeline_common import (DEFAULT_TOPICS, interp_poses, load_pipeline,  # noqa: E402
+from pipeline_common import (DEFAULT_TOPICS, deskew_to_world, load_pipeline,  # noqa: E402
                              load_traj, pc2_xyzt, traj_quats)
 
 R = 0.25            # patch radius (m), as map_quality.py
@@ -62,19 +62,11 @@ def turn_rate_and_speed(tr_t, tr_T):
 
 def place(scan, tr_t, tr_T, tr_q, deskew, nb, shift=0.0):
     """World points of one scan; the trajectory's stamps moved by `shift` s.
-    deskew: every point through the pose at its own time (in `nb` slices of
-    the sweep), as 01_build_map does; else the whole scan through the pose
-    at the cloud stamp."""
+    deskew: every point through the pose at its own time, as the map stages
+    do (pipeline_common.deskew_to_world); else the whole scan through the
+    pose at the cloud stamp."""
     t, p, dt = scan
-    ts = tr_t + shift
-    if not deskew or dt is None or dt.max() - dt.min() < 1e-4:
-        Rb, tb = interp_poses(ts, tr_T, tr_q, np.array([t]))
-        return p @ Rb[0].T + tb[0]
-    lo, hi = float(dt.min()), float(dt.max())
-    edges = np.linspace(lo, hi, nb + 1)
-    Rb, tb = interp_poses(ts, tr_T, tr_q, t + 0.5 * (edges[:-1] + edges[1:]))
-    i = np.clip(((dt - lo) / (hi - lo) * nb).astype(np.int64), 0, nb - 1)
-    return np.einsum("nij,nj->ni", Rb[i], p) + tb[i]
+    return deskew_to_world(p, dt if deskew else None, t, tr_t, tr_T, tr_q, nb, shift)
 
 
 def patches(P, centers, owner=None):

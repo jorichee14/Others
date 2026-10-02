@@ -97,7 +97,7 @@ from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
 from pipeline_common import (load_pipeline, pc2_xyzt, pc2_xyz,  # noqa: F401
-                             traj_quats, interp_poses)
+                             traj_quats, interp_poses, deskew_bins)
 
 TS = get_typestore(Stores.ROS2_HUMBLE)
 
@@ -440,15 +440,13 @@ def iter_world_scans(P, S, s):
                 yield place_rigid(p, tr_T[j], t)
                 continue
             dt = dt[keep]
-            t_lo = float(dt.min()); t_hi = float(dt.max())
-            if t_hi - t_lo < 1e-4:            # single-shot cloud, nothing to do
+            if float(dt.max() - dt.min()) < 1e-4:    # single-shot cloud, nothing to do
                 yield place_rigid(p, tr_T[j], t)
                 continue
-            edges = np.linspace(t_lo, t_hi, nb + 1)
-            Rb, tb = interp_poses(tr_t, tr_T, tr_q,
-                                  t + 0.5 * (edges[:-1] + edges[1:]))
-            idx = np.clip(((dt - t_lo) / (t_hi - t_lo) * nb).astype(np.int32),
-                          0, nb - 1)
+            # the pipeline's one deskew (pipeline_common.deskew_bins); the
+            # placement itself stays on the device
+            Rb, tb, idx = deskew_bins(dt, t, tr_t, tr_T, tr_q, nb)
+            idx = idx.astype(np.int32)
             if not announced[0]:
                 announced[0] = True
                 print(f"    [deskew] ON, {nb} bins; sensor moved "

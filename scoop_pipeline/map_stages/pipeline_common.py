@@ -229,28 +229,108 @@ def interp_poses(tr_t, tr_T, tr_q, times):
                                               - tr_T[j - 1][:, :3, 3])
     return quats_to_R(q), p
 
-def deskew_to_pose(p, dt, t, j, tr_t, tr_T, tr_q, nb=100):
-    """One scan's points into the sensor frame of trajectory pose j.
+def deskew_bins(dt, t, tr_t, tr_T, tr_q, nb=100, shift=0.0):
+    """The one deskew of the pipeline: a sweep cut into `nb` time slices,
+    each point through the trajectory pose at its slice's centre.
 
-    p (N,3) is in the sensor frame AT EACH POINT'S OWN TIME t + dt (seconds,
-    dt per point after the cloud stamp t). Each point goes through the
-    trajectory pose at its time and back through pose j:
+    dt (N,) are the points' times after the cloud stamp t (s); the
+    trajectory's stamps may be moved by `shift` s. -> (Rb (B,3,3), tb (B,3),
+    idx (N,)): point i's world position is Rb[idx[i]] @ p_i + tb[idx[i]].
+    100 slices over 100 ms leave 1 ms, about a millimetre at walking speed.
+    A single-shot cloud (no spread in dt) gets one pose."""
+    ts = tr_t + shift if shift else tr_t
+    lo, hi = float(dt.min()), float(dt.max())
+    if hi - lo < 1e-4:
+        Rb, tb = interp_poses(ts, tr_T, tr_q, np.array([t + lo]))
+        return Rb, tb, np.zeros(len(dt), np.int64)
+    edges = np.linspace(lo, hi, nb + 1)
+    Rb, tb = interp_poses(ts, tr_T, tr_q, t + 0.5 * (edges[:-1] + edges[1:]))
+    idx = np.clip(((dt - lo) / (hi - lo) * nb).astype(np.int64), 0, nb - 1)
+    return Rb, tb, idx
+
+
+def deskew_to_world(p, dt, t, tr_t, tr_T, tr_q, nb=100, shift=0.0):
+    """One scan's points in the world: deskewed (deskew_bins) when the point
+    times dt are given, else the whole scan through the pose at its stamp."""
+    if dt is None:
+        ts = tr_t + shift if shift else tr_t
+        Rb, tb = interp_poses(ts, tr_T, tr_q, np.array([t]))
+        return p @ Rb[0].T + tb[0]
+    Rb, tb, idx = deskew_bins(dt, t, tr_t, tr_T, tr_q, nb, shift)
+    return np.einsum("nij,nj->ni", Rb[idx], p) + tb[idx]
+
+
+def deskew_to_pose(p, dt, t, j, tr_t, tr_T, tr_q, nb=100):
+    """One scan's points into the sensor frame of trajectory pose j: each
+    point through the pose at its own time and back through pose j,
         p_j = T_j^-1 T(t + dt) p
-    with T(.) interpolated (interp_poses) at the centre of `nb` slices of the
-    sweep -- what 01_build_map places in the world, expressed in the frame a
-    rigid registration of the scan then solves for."""
-    t_lo, t_hi = float(dt.min()), float(dt.max())
-    if t_hi - t_lo < 1e-4:
-        Rb, tb = interp_poses(tr_t, tr_T, tr_q, np.array([t + t_lo]))
-        idx = np.zeros(len(p), np.int64)
-    else:
-        edges = np.linspace(t_lo, t_hi, nb + 1)
-        Rb, tb = interp_poses(tr_t, tr_T, tr_q, t + 0.5 * (edges[:-1] + edges[1:]))
-        idx = np.clip(((dt - t_lo) / (t_hi - t_lo) * nb).astype(np.int64), 0, nb - 1)
+    (deskew_bins) -- what a rigid registration of the scan then solves for."""
+    Rb, tb, idx = deskew_bins(dt, t, tr_t, tr_T, tr_q, nb)
     Rj, tj = tr_T[j][:3, :3], tr_T[j][:3, 3]
     Rr = np.einsum("ji,bjk->bik", Rj, Rb)          # Rj^T Rb
     tr = (tb - tj) @ Rj                             # Rj^T (tb - tj), as rows
     return np.einsum("nij,nj->ni", Rr[idx], p) + tr[idx]
+
+
+def nearest_idx(tr_t, t):
+    """Index of the trajectory stamp nearest t."""
+    i = int(np.searchsorted(tr_t, t))
+    if i <= 0:
+        return 0
+    if i >= len(tr_t):
+        return len(tr_t) - 1
+    return i if (tr_t[i] - t) < (t - tr_t[i - 1]) else i - 1
+
+
+def iter_scans(bag, topic, tr_t, tol, lo, hi, tr_T=None, deskew=False, nb=100,
+               frame="pose", min_points=100, verbose=True):
+    """Every scan of `topic` with a trajectory pose within `tol` s of its
+    stamp: yields (pose index j, points), points in range (lo, hi) m.
+
+    frame "pose": in the sensor frame of pose j (deskew_to_pose with deskew,
+                  else as recorded) -- for registration
+    frame "world": in the world through the trajectory (deskew_to_world: each
+                  point at its own time with deskew, else the scan through the
+                  pose at its stamp) -- for building clouds
+    Both need tr_T for deskew; "world" always does."""
+    from pathlib import Path
+    from rosbags.highlevel import AnyReader
+    from rosbags.typesys import Stores, get_typestore
+    if frame not in ("pose", "world"):
+        raise ValueError(frame)
+    tr_q = traj_quats(tr_T) if tr_T is not None else None
+    if (deskew or frame == "world") and tr_q is None:
+        raise ValueError("iter_scans: deskew / frame='world' need tr_T")
+    told = [False]
+    with AnyReader([Path(bag)], default_typestore=get_typestore(Stores.ROS2_HUMBLE)) as r:
+        conns = [c for c in r.connections if c.topic == topic and "PointCloud2" in c.msgtype]
+        if not conns:
+            have = sorted({c.topic for c in r.connections})
+            raise SystemExit(f"topic {topic!r} not in bag; available: {have}")
+        for conn, _, raw in r.messages(connections=conns):
+            msg = r.deserialize(raw, conn.msgtype)
+            t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            j = nearest_idx(tr_t, t)
+            if abs(tr_t[j] - t) > tol:
+                continue
+            p, dt = pc2_xyzt(msg)
+            p = p.astype(np.float64)
+            d = np.linalg.norm(p, axis=1)
+            keep = np.isfinite(p).all(1) & (d > lo) & (d < hi)
+            if keep.sum() < min_points:
+                continue
+            p = p[keep]
+            dt = dt[keep] if (deskew and dt is not None) else None
+            if verbose and not told[0] and deskew:
+                told[0] = True
+                print(f"    [deskew] {'ON, %d bins' % nb if dt is not None else 'no point times: OFF'}"
+                      f" (each point through the trajectory at its own time)")
+            if frame == "world":
+                yield j, deskew_to_world(p, dt, t, tr_t, tr_T, tr_q, nb)
+            elif dt is not None:
+                yield j, deskew_to_pose(p, dt, t, j, tr_t, tr_T, tr_q, nb)
+            else:
+                yield j, p
 
 
 # ------------------------- trajectory / extrinsics ----------------------
