@@ -107,6 +107,8 @@ def write_bags(raw):
     i1 = os.path.join(raw, "infra_1", "i1")
     os.makedirs(os.path.dirname(i1))
     with BagWriter(i1) as w:
+        # infra_1 starts recording a minute before mobile_1's ZED publishes /tf
+        w.write("/infra_1/diagnostics", rosmsg.string("up"), int((T0 - 60) * S))
         tf_static(w, [("map_zed", "arducam_optical_frame", rotz(5, (9, 9, 9)))], int(T0 * S))
     m2 = os.path.join(raw, "mobile_2", "m2")
     os.makedirs(os.path.dirname(m2))
@@ -290,6 +292,13 @@ def main():
             close(tree.lookup("map", "board_b", T0 + 5), rotz(45, (-7.2, 12.6, 0.03)), "09: board_b", f)
             if tree.lookup("map_zed", "odom_zed", T0 + 5) is None:
                 f.append("09: the bag's map_zed ~~ odom_zed is missing")
+            ts_ = rosmsg.typestore()
+            par = set()
+            for _, _, pl, dec in sbag.open_bag(b09).iter_raw(["/tf"]):
+                par |= {tr.header.frame_id for tr in dec(pl).transforms
+                        if tr.child_frame_id == "zed_camera_link"}
+            if par != {"map_zed"}:
+                f.append("09: zed_camera_link's parents on /tf: %s" % sorted(par))
 
         # the CLI: the check prints the tree from the outputs it finds
         cli = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "pass_tf.py"),

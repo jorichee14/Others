@@ -188,6 +188,11 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
                        f"not {name}")
     dropped = {"n": 0}
     rewrite = None
+    # a frame extra_tf moves is moved by it alone: the inputs' /tf into it goes
+    owned = {c for _, _, c, _, _ in extra_tf}
+    if owned:
+        given = drop_tf
+        drop_tf = (lambda p, c: c in owned or (given is not None and given(p, c)))  # noqa: E731
     if drop_tf is not None:
         tsx = rosmsg.typestore()
 

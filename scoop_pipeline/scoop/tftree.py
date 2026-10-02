@@ -87,7 +87,9 @@ def load_calibrations(doc: dict) -> List[Calibration]:
 
 def tf_edges(bags: Iterable, seconds: float = 30.0) -> Dict[str, Edge]:
     """child -> Edge, from every /tf_static message and the first
-    ``seconds`` of /tf of each bag (dynamic edges repeat all the time)."""
+    ``seconds`` of /tf of each bag, counted from its first /tf message
+    (dynamic edges repeat all the time; a merged bag can start well before
+    its /tf does)."""
     from mcap.reader import make_reader
     ts = rosmsg.typestore()
     edges: Dict[str, Edge] = {}
@@ -100,12 +102,14 @@ def tf_edges(bags: Iterable, seconds: float = 30.0) -> Dict[str, Edge]:
             for f in r.files:
                 with open(f, "rb") as fh:
                     rd = make_reader(fh)
-                    summ = rd.get_summary()
-                    t0 = summ.statistics.message_start_time if summ and summ.statistics else 0
-                    end = None if static else t0 + int(seconds * 1e9)
-                    for sc, _, msg in rd.iter_messages(topics=[topic], end_time=end):
+                    end = None
+                    for sc, _, msg in rd.iter_messages(topics=[topic]):
                         if sc is None or sc.name != TFMSG:
                             break                             # not a TF topic after all
+                        if not static:
+                            end = end or msg.log_time + int(seconds * 1e9)
+                            if msg.log_time > end:
+                                break
                         for tr in ts.deserialize_cdr(msg.data, TFMSG).transforms:
                             p, c = tr.header.frame_id.lstrip("/"), tr.child_frame_id.lstrip("/")
                             old = edges.get(c)
