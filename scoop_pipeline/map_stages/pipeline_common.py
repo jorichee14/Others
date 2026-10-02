@@ -338,8 +338,14 @@ def dump_cameras_yaml(path, map_frame, calib_used, cameras):
         lines.append("  - name: %s" % c["name"])
         lines.append("    parent_frame: %s" % c.get("parent_frame", map_frame))
         lines.append("    child_frame: %s" % c["child_frame"])
+        lines.append("    source: %s" % c.get("source", "?"))
         lines.append("    stamp: %.9f" % c["stamp"])
-        lines.append("    traj_gap_s: %.6f" % c["traj_gap_s"])
+        if "traj_gap_s" in c:                       # extrinsic_yaml cameras
+            lines.append("    traj_gap_s: %.6f" % c["traj_gap_s"])
+        for k in ("board", "n_detections", "spread_std_mm", "spread_max_mm",
+                  "spread_max_deg", "mean_reproj_px"):  # board cameras
+            if k in c:
+                lines.append("    %s: %s" % (k, c[k]))
         lines.append("    translation: %s" % _fmt_list(c["translation"]))
         lines.append("    quaternion_xyzw: %s" % _fmt_list(c["quaternion_xyzw"]))
         if "zed_pose_in_map_translation" in c:

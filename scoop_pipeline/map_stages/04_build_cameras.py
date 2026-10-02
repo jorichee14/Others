@@ -237,7 +237,13 @@ def main():
         # the reference lacks are added; the ones it has are compared with it
         rb_path = P.outp("boards_{tag}.json")
         if os.path.exists(rb_path):
-            run_boards = boards_in_map(json.load(open(rb_path)), P.cfg)
+            rb = json.load(open(rb_path))
+            run_boards = boards_in_map(rb, P.cfg)
+            # map_zed is this session's ZED map: 03 on the run measured it
+            ctx["T_map_mapzed"] = load_T_map_mapzed(rb, {})
+            if ctx["T_map_mapzed"] is not None:
+                print("map -> map_zed of this session from %s (for the ChArUco check)"
+                      % rb_path)
             for name, (T, rec) in sorted(run_boards.items()):
                 if name in ctx["boards"]:
                     Tr = ctx["boards"][name][0]

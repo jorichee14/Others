@@ -539,15 +539,16 @@ def main():
         if inst.get("fused") is None:
             continue
         is_anchor = inst is anchor
-        # the anchor stays pinned to section 0 so `board` is exactly the origin
-        Tc = T_map_boardA if is_anchor else inst["fused"]
+        # the anchor stays pinned to section 0 so `board` is exactly the origin;
+        # a run measures every board in the reference's map, the anchor too
+        Tc = T_map_boardA if is_anchor and not run else inst["fused"]
         b = inst["board"]
         rec = {"frame": b.frame_for(inst["name"], is_anchor),
                "design": inst["design"],
                "is_anchor": is_anchor,
                "xyz": Tc[:3, 3].round(6).tolist(),
                "qxyzw": R_to_q(Tc[:3, :3]).round(6).tolist(),
-               "method": "anchor_section0" if is_anchor else "fused_sections",
+               "method": "anchor_section0" if is_anchor and not run else "fused_sections",
                "n_sections": len(inst["sections"]),
                "n_sections_used": len(inst["good"]),
                "n_views": int(sum(sec["n"] for sec in inst["good"])),
