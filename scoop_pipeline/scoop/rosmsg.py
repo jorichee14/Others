@@ -14,7 +14,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 __all__ = ["typestore", "msg_type", "msgdef", "serialize", "header", "tf_message",
-           "point_fields", "pointcloud2", "imu", "string"]
+           "point_fields", "pointcloud2", "imu", "string", "pose_stamped"]
 
 # numpy (kind, bytes) -> sensor_msgs/PointField datatype
 _PF_CODE = {("i", 1): 1, ("u", 1): 2, ("i", 2): 3, ("u", 2): 4,
@@ -133,3 +133,14 @@ def tf_message(transforms, stamp_ns: int):
                                                            z=float(q[2]), w=float(q[3])))))
     return T("tf2_msgs/msg/TFMessage")(transforms=out)
 
+
+
+def pose_stamped(stamp_ns: int, frame_id: str, t, q):
+    """geometry_msgs/PoseStamped from translation xyz and rotation xyzw."""
+    T = msg_type
+    return T("geometry_msgs/msg/PoseStamped")(
+        header=header(stamp_ns, frame_id),
+        pose=T("geometry_msgs/msg/Pose")(
+            position=T("geometry_msgs/msg/Point")(x=float(t[0]), y=float(t[1]), z=float(t[2])),
+            orientation=T("geometry_msgs/msg/Quaternion")(x=float(q[0]), y=float(q[1]),
+                                                          z=float(q[2]), w=float(q[3]))))

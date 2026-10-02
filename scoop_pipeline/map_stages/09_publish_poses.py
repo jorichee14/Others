@@ -25,10 +25,10 @@ Timestamps are the original bag stamps, so the output can be played next to
 the raw bag.
 
     python3 09_publish_poses.py [pipeline_config.json]      # writes the bag
-    python3 09_publish_poses.py pipeline_config.json --dry  # counts only, no ROS needed
+    python3 09_publish_poses.py pipeline_config.json --dry  # counts only
 
-Needs ROS 2 (rclpy, rosbag2_py, geometry_msgs, tf2_msgs) and the mcap
-storage plugin (ros-<distro>-rosbag2-storage-mcap).
+No ROS install needed: the bag is written by scoop.bagwrite (MCAP +
+metadata.yaml, as `ros2 bag record` leaves it), like the merge.
 
 CONFIG
 "09_publish": {
@@ -165,44 +165,17 @@ def main():
             len(robots), sum(len(r[1]) * (3 if write_tf else 2) for r in robots)))
         return
 
-    import rosbag2_py
-    from rclpy.serialization import serialize_message
-    from rclpy.time import Time
-    from geometry_msgs.msg import PoseStamped, TransformStamped
-    from tf2_msgs.msg import TFMessage
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from scoop import rosmsg
+    from scoop.bagwrite import BagWriter
 
     out = s["output_bag"]
     if os.path.isdir(out):
         shutil.rmtree(out)
-    w = rosbag2_py.SequentialWriter()
-    w.open(rosbag2_py.StorageOptions(uri=out, storage_id="mcap"),
-           rosbag2_py.ConverterOptions("", ""))
     topics = []
     for rb, ts, Tb, Tl in robots:
         for nm in ("global_pose", "local_pose"):
             topics.append("/%s/%s" % (rb["name"], nm))
-    for tp in topics:
-        w.create_topic(rosbag2_py.TopicMetadata(
-            name=tp, type="geometry_msgs/msg/PoseStamped", serialization_format="cdr"))
-    if write_tf:
-        w.create_topic(rosbag2_py.TopicMetadata(
-            name="/tf", type="tf2_msgs/msg/TFMessage", serialization_format="cdr"))
-
-    def stamp(t):
-        sec = int(t); nsec = int(round((t - sec) * 1e9))
-        if nsec >= 1_000_000_000:
-            sec += 1; nsec -= 1_000_000_000
-        return sec, nsec
-
-    def pose_msg(t, T, frame):
-        m = PoseStamped()
-        m.header.stamp.sec, m.header.stamp.nanosec = stamp(t)
-        m.header.frame_id = frame
-        q = Rot.from_matrix(T[:3, :3]).as_quat()
-        m.pose.position.x, m.pose.position.y, m.pose.position.z = map(float, T[:3, 3])
-        m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z, \
-            m.pose.orientation.w = map(float, q)
-        return m
 
     # interleave all robots by time so the bag plays in order
     events = []
@@ -211,27 +184,21 @@ def main():
             events.append((t, rb, Tb[i], Tl[i]))
     events.sort(key=lambda e: e[0])
     n = 0
-    for t, rb, Tm, Tloc in events:
-        t_ns = int(round(t * 1e9))
-        w.write("/%s/global_pose" % rb["name"],
-                serialize_message(pose_msg(t, Tm, map_frame)), t_ns)
-        w.write("/%s/local_pose" % rb["name"],
-                serialize_message(pose_msg(t, Tloc, "%s/start" % rb["name"])), t_ns)
-        n += 2
-        if write_tf:
-            tfm = TFMessage(); tr = TransformStamped()
-            tr.header.stamp.sec, tr.header.stamp.nanosec = stamp(t)
-            tr.header.frame_id = map_frame
-            tr.child_frame_id = "%s/%s" % (rb["name"], rb["_frame"])
-            q = Rot.from_matrix(Tm[:3, :3]).as_quat()
-            tr.transform.translation.x, tr.transform.translation.y, \
-                tr.transform.translation.z = map(float, Tm[:3, 3])
-            tr.transform.rotation.x, tr.transform.rotation.y, tr.transform.rotation.z, \
-                tr.transform.rotation.w = map(float, q)
-            tfm.transforms.append(tr)
-            w.write("/tf", serialize_message(tfm), t_ns)
-            n += 1
-    del w
+    with BagWriter(out) as w:
+        for t, rb, Tm, Tloc in events:
+            t_ns = int(round(t * 1e9))
+            qm = Rot.from_matrix(Tm[:3, :3]).as_quat()
+            ql = Rot.from_matrix(Tloc[:3, :3]).as_quat()
+            w.write("/%s/global_pose" % rb["name"],
+                    rosmsg.pose_stamped(t_ns, map_frame, Tm[:3, 3], qm), t_ns)
+            w.write("/%s/local_pose" % rb["name"],
+                    rosmsg.pose_stamped(t_ns, "%s/start" % rb["name"], Tloc[:3, 3], ql), t_ns)
+            n += 2
+            if write_tf:
+                w.write("/tf", rosmsg.tf_message(
+                    [(map_frame, "%s/%s" % (rb["name"], rb["_frame"]), Tm[:3, 3], qm)], t_ns),
+                    t_ns)
+                n += 1
     print("wrote %s: %d messages on %s%s" % (out, n, ", ".join(topics),
                                             ", /tf" if write_tf else ""))
     print("  global_pose: camera optical frame in '%s' (unless publish_body_frame); "

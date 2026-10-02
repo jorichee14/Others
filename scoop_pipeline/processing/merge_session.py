@@ -5,6 +5,7 @@
         [--check] [--allow-missing] [--out DIR] [--name NAME]
         [--compression zstd|none] [--mode mapping|survey|coop|contention]
         [--record configs/record.yaml] [--static-tf configs/static_tf.yaml]
+        [--pipeline-config map_stages/pipeline_config_<pass>.json | --no-pipeline-tf]
         [--settings configs/recording.yaml] [--work-root DIR]
 
 <raw pass folder> holds one folder per machine, e.g.
@@ -22,6 +23,13 @@ all bags are merged in log-time order into
 (lossless; --compression none when an uncompressed merge fits), and the merged bag is
 checked the same way. The calibrated
 transforms of configs/static_tf.yaml are added to its /tf_static.
+
+Once the map stages have run on the pass, merging again gives the complete
+TF tree (map_stages/pass_tf.py): map at the root; mobile_1 on its LiDAR
+trajectory in place of the ZED's tracking; map_zed, the boards and the
+infra/parked cameras (04) placed in map. The pipeline config is the one in
+map_stages/ whose dataset is this pass (--pipeline-config to pick another,
+--no-pipeline-tf for the bags' TF only).
 """
 import argparse
 import os
@@ -34,6 +42,10 @@ warnings.simplefilter("ignore", FutureWarning)
 
 from scoop import merge, recording, session, tftree                  # noqa: E402
 from scoop.bag import BagError                                      # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "map_stages"))
+import pass_tf                                                      # noqa: E402
 
 
 def show(check, indent="    "):
@@ -68,6 +80,11 @@ def main():
     ap.add_argument("--record", default=None, help="default: configs/record.yaml")
     ap.add_argument("--static-tf", default=str(recording.ROOT / "configs" / "static_tf.yaml"),
                     help="calibrated transforms to add to /tf_static ('' for none)")
+    ap.add_argument("--pipeline-config", default=None,
+                    help="map stages config of this pass for the complete TF "
+                         "(default: the one in map_stages/ whose dataset is this pass)")
+    ap.add_argument("--no-pipeline-tf", action="store_true",
+                    help="only the bags' TF and static_tf.yaml")
     ap.add_argument("--settings", default=None, help="default: configs/recording.yaml")
     ap.add_argument("--work-root", default=None)
     a = ap.parse_args()
@@ -93,6 +110,30 @@ def main():
             print(f"\nno bags for: {', '.join(missing)}")
         if bad:
             print(f"\nMISSING or EMPTY topics on: {', '.join(bad)}")
+        inputs = [b for u in units for b in u.bags]
+        static_tf, drop_tf, extra_tf = [], None, []
+        edges = tftree.tf_edges(inputs)
+        if a.static_tf:
+            import yaml
+            with open(os.path.expanduser(a.static_tf)) as fh:
+                cals = tftree.load_calibrations(yaml.safe_load(fh))
+            if cals:
+                static_tf, notes = tftree.attach(cals, edges)
+                print("\nstatic transforms:")
+                for n in notes:
+                    print(f"    {n}")
+                for p, c, t, q in static_tf:
+                    edges[c] = tftree.Edge(p, c, True, tftree.matrix(t, q))
+        cfg = None if a.no_pipeline_tf else (a.pipeline_config or pass_tf.find_config(raw))
+        if cfg:
+            print(f"\nTF from the pipeline outputs ({os.path.basename(cfg)}):")
+            drop, more, extra_tf, edges = pass_tf.plan(pass_tf.load_pipeline(cfg), edges, inputs)
+            static_tf += more
+            if drop:
+                drop_tf = tftree.edge_matcher([f"{p}->{c}" for p, c in drop])
+            print(tftree.format_tree(edges))
+        elif not a.no_pipeline_tf:
+            print("\n(no map_stages config for this pass: the bags' TF only)")
         if a.check:
             return
         if bad and not a.allow_missing:
@@ -104,17 +145,6 @@ def main():
         final = recording.Path(out_root) / name
         if final.exists():
             sys.exit(f"{final} exists; remove it to merge again")
-        inputs = [b for u in units for b in u.bags]
-        static_tf = []
-        if a.static_tf:
-            import yaml
-            with open(os.path.expanduser(a.static_tf)) as fh:
-                cals = tftree.load_calibrations(yaml.safe_load(fh))
-            if cals:
-                static_tf, notes = tftree.attach(cals, tftree.tf_edges(inputs))
-                print("\nstatic transforms:")
-                for n in notes:
-                    print(f"    {n}")
         need = sum(merge.bag_bytes(b) for b in inputs) / 1e9
         final.parent.mkdir(parents=True, exist_ok=True)
         free = shutil.disk_usage(final.parent).free / 1e9
@@ -124,7 +154,8 @@ def main():
         tmp = final.parent / ".partial" / name
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.parent.mkdir(parents=True, exist_ok=True)
-        merge.merge_bags(inputs, tmp, compression=a.compression, static_tf=static_tf)
+        merge.merge_bags(inputs, tmp, compression=a.compression, static_tf=static_tf,
+                         drop_tf=drop_tf, extra_tf=extra_tf)
         os.replace(tmp, final)
         try:
             tmp.parent.rmdir()

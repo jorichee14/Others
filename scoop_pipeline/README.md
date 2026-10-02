@@ -359,6 +359,23 @@ Ouster tree), composed through `os_sensor -> os_lidar`: looking up
 `os_lidar -> zed_left_camera_optical_frame` gives exactly the calibration.
 It prints what it added; `--static-tf ''` adds nothing.
 
+Once the map stages have run on the pass, merging it again gives the complete
+TF tree (`map_stages/pass_tf.py`), taken from the config in `map_stages/` whose
+dataset is that pass (`--pipeline-config` picks another, `--no-pipeline-tf`
+leaves it out; `--check` prints the tree without merging):
+
+```
+map
+├── map_zed                 03: the ZED's map at the start board
+│  └~~ odom_zed             the ZED's own topics, as recorded
+├~~ zed_camera_link         mobile_1 on its LiDAR trajectory (08's in a run, 01a's
+│  └── ... ZED, os_sensor,  through T_N_world in a mapping pass); replaces the
+│      radars               ZED's odom_zed ~~ zed_camera_link
+├── board, board_b, ...     03's boards
+├── arducam_optical_frame   04 (its ChArUco pose under map_zed is dropped)
+└── camera_link             04's RealSense, so map -> camera_color_optical_frame is its pose
+```
+
 ## Merging chosen topics of any bags
 
 ```
