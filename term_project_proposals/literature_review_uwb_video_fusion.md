@@ -78,7 +78,7 @@ Patents showing the sports use case is recognised but closed:
 
 Why identity is the bottleneck in sports video tracking:
 
-16. Cui et al. "SportsMOT." ICCV 2023. ByteTrack leaves 3089 ID switches and 71.4 IDF1 on the test set; the best reported tracker (Deep-EIoU, WACVW 2024) still leaves 2659. [fetched README, numbers from snippet]
+16. Cui et al. "SportsMOT." ICCV 2023. Test-set table in the authors' MixSort README [fetched, verified]: ByteTrack 64.1 HOTA, 71.4 IDF1, 3089 IDs; OC-SORT 2728 IDs; MixSort-Byte 2472 IDs; MixSort-OC 2781 IDs. A third-party snippet gives Deep-EIoU (WACVW 2024) 2659 IDs, unverified.
 17. Cioppa et al. "SoccerNet-Tracking." CVPRW 2022. With ground-truth detections, association accuracy stays near 60, so identity, not detection, is the weak link. [fetched README]
 18. Scott et al. "SoccerTrack." CVPRW 2022. Uses STATSports GNSS at 10 Hz (0.22 m error) as the per-player identity reference for video, the same role UWB plays in the proposal. [snippet]
 19. Van Zandycke et al. "DeepSportradar player re-identification." ACM MMSports 2022. Basketball re-ID baseline 72.7 mAP; jersey numbers visible in only a fraction of crops. [fetched README]
@@ -125,6 +125,6 @@ Gap and risk. No paper detects jumps from UWB z-position alone in basketball or 
 
 1. Reword the problem sentence as proposed in section 1. The defensible claim is about spatial projection from an uncalibrated camera, not about absence of video integration.
 2. Either source the heart-rate field from the device or API documentation, or remove heart rate from sections 3, 4, and 6. The jump clip still works with height alone.
-3. Cite the identity bottleneck with numbers: thousands of ID switches on SportsMOT even for the best trackers, and association accuracy near 60 on SoccerNet with perfect detections.
+3. Cite the identity bottleneck with numbers: ByteTrack leaves 3,089 ID switches on the SportsMOT test set (verified from the authors' README) and the best tracker in that table still leaves 2,472; association accuracy near 60 on SoccerNet with perfect detections (snippet only).
 4. Position the calibration piece against Herttuainen 2017, Opt-in Camera 2024, and Yang and Bar-Shalom 2026, and name the new combination: pose plus focal length plus clock offset from UWB tracks and pose keypoints with unknown correspondences.
 5. State the Z-axis error (17 to 21 cm) as a limitation and set the jump threshold accordingly.

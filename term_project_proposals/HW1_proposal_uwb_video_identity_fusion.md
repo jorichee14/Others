@@ -12,7 +12,7 @@ LocusConnect - Spatial Intelligence
 
 ## 3. Problem and Target User
 
-Coaches and analysts at university and club teams review video to judge what each player did, but video trackers lose identity at crossings: the best published trackers still leave about 2,600 identity switches on SportsMOT. Analysts fix these by hand, hours per match, so training sessions go unanalysed. The LocusConnect UWB stream keeps every player's identity and 3D position through those occlusions, yet commercial tools only align such telemetry to video in time, by a manual sync point. Projecting identity onto players in the frame needs a surveyed, fixed camera, so it never happens at sessions filmed from phones.
+Coaches and analysts at university and club teams review video to judge what each player did, but video trackers lose identity at crossings: ByteTrack, our baseline, leaves 3,089 identity switches on the SportsMOT test set. Analysts fix these by hand, hours per match, so training sessions go unanalysed. The LocusConnect UWB stream keeps every player's identity and 3D position through those occlusions, yet commercial tools only align such telemetry to video in time, by a manual sync point. Projecting identity onto players in the frame needs a surveyed, fixed camera, so it never happens at sessions filmed from phones.
 
 ## 4. Proposed Project Idea
 
@@ -28,7 +28,7 @@ At the end of the semester, I will be able to demonstrate that two phones on tri
 
 ## 7. How Will You Know It Works?
 
-Identity: ID switches per minute, ByteTrack alone versus fused, per view, on a labelled session; target 90 percent fewer, zero on staged crossings, and 100 percent cross-camera label agreement; per-frame label accuracy above 95 percent. Calibration, per camera: self-calibrated pose versus the marker reference, rotation error below 1 degree, translation below 20 cm, reprojection below 15 pixels, convergence within 60 seconds, time offset within 20 ms. Cross-check: hip keypoints triangulated from the two self-calibrated cameras within 25 cm of UWB positions. Jumps (stretch): precision and recall above 0.9 against video labels. Latency below 100 ms per frame.
+Identity: ID switches per minute, ByteTrack versus fused, per view, on a labelled session; target 90 percent fewer, zero on staged crossings, 100 percent cross-camera agreement; per-frame label accuracy above 95 percent. Calibration, per camera, against the marker reference: rotation error below 1 degree, translation below 20 cm, reprojection below 15 pixels, convergence within 60 seconds, clock offset within 20 ms, estimated per camera so phones need no shared clock. Cross-check: hip keypoints triangulated from two self-calibrated cameras within 25 cm of UWB positions. Jumps (stretch): precision and recall above 0.9 against video labels. Latency below 100 ms per frame.
 
 ## 8. Why Should This Project Be Selected?
 
@@ -36,4 +36,4 @@ Identity is the measured bottleneck of sports video tracking, and no published m
 
 ## 9. Your Expected Contribution
 
-I work in Python with OpenCV and ROS on multi-sensor robotics data, including camera calibration and sensor time synchronization. I will own the calibration and association pipeline, the data-collection sessions, and the evaluation. I want to develop real-time multi-object tracking and pose-based video analytics.
+I work in Python with OpenCV and ROS on multi-sensor robotics data, including camera calibration and synchronization. I will implement the RANSAC calibration solver and per-view association, run both recording sessions, and build the evaluation against the marker reference. I want to develop real-time multi-object tracking and pose-based video analytics.
