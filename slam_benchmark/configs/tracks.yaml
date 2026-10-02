@@ -1,0 +1,193 @@
+# ============================================================================
+# The three benchmark tracks on coop2, beyond the single-agent comparison in
+# README.md. `coop2.yaml` describes the SEQUENCE; this file describes what is
+# asked of it.
+#
+# Each track names the question, the cells, the metric, and — the part that is
+# usually left out — the precondition that decides whether the track can be run
+# on this recording at all. Run scripts/precheck_tracks.py FIRST: it answers
+# every precondition below from the reference trajectories alone, with no SLAM
+# system and no bag decoding, and two of them can come back "no".
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# TRACK A — SLAM without a LiDAR
+# ---------------------------------------------------------------------------
+# The constrained agent is one that has NO LiDAR: it carries a depth camera and
+# nothing else. mobile_2 is that platform for real; mobile_1's ZED is that
+# platform's sensor on a body that also carries an Ouster.
+#
+# That second fact is what makes coop2 able to answer the question cleanly. The
+# headline comparison is mobile_1.ouster against mobile_1.zed_rgbd: ONE rigid
+# body, one motion, one clock, one reference, and the only thing that differs is
+# whether the agent had a LiDAR. Almost no dataset offers that pair — the usual
+# LiDAR-vs-RGB-D comparison is across datasets, or against PREDICTED depth. Here
+# the depth is measured and the trajectory is identical.
+#
+# mobile_2 is then the external check that the conclusion generalises off that
+# one platform, and it is the agent the collaborative and infrastructure tracks
+# are actually trying to rescue.
+#
+# The ablation grid (ablations.yaml) is NOT the track. It is the attribution
+# tool: once the gap is measured, degrade the Ouster toward the depth camera's
+# envelope — field of view, then range, then density — and find which property
+# of the LiDAR the gap was actually made of. A gap is a number; a gap decomposed
+# into "68% of it was the field of view" is a finding.
+no_lidar:
+  question: >
+    What does an agent lose by having no LiDAR, which property of the LiDAR the
+    loss is made of, and is a failure the method's or the scene's?
+  headline_pair:
+    with_lidar: mobile_1.ouster
+    without_lidar: mobile_1.zed_rgbd          # SAME platform, same motion, same clock
+  generalisation_stream: mobile_2.realsense_rgbd   # the real LiDAR-free agent
+  attribution_grid: ablations.yaml            # the decomposition, not the track
+  methods:
+    # The bridge runs on BOTH sides of the headline pair, so its two rows differ
+    # only in the sensor. Every other method varies estimator and modality at
+    # once and cannot be read that way.
+    bridge: kiss_icp
+    rgbd: [orbslam3_rgbd, rtabmap_rgbd, badslam, droid_slam]
+    lidar_control: [kiss_icp, rtabmap_lidar]  # from the main table, not re-run
+  metrics:
+    - ate
+    - rpe
+    - tracked_fraction               # an RGB-D method that loses tracking has not
+                                     # scored badly, it has stopped; report both
+    - observability                  # geometric: what the depth FoV stopped constraining
+    - feature_density                # photometric: what an RGB-D method needs and
+                                     # a geometric observability metric cannot see
+  # Two instruments, because an RGB-D method fails for two different reasons and
+  # only one of them is geometric. A textureless white wall inside the depth
+  # range is geometrically fine and photometrically empty; a well-textured scene
+  # beyond 10 m is the opposite. Reporting only one of these makes half the
+  # failures unattributable.
+  report: >
+    The headline is one table: the same estimator (kiss_icp) on the Ouster and on
+    the ZED depth of the same platform, with the RGB-D field beside it and the
+    real mobile_2 agent below. Then the attribution: the ablation level at which
+    the Ouster's result meets the depth camera's, per axis.
+  precondition:
+    id: A1
+    check: >
+      The ZED depth stream must cover enough of the run to be comparable. Its
+      usable range is 0.3-12 m against the Ouster's 20+, and the reprojected
+      cloud is a 87-degree wedge; if the depth returns nothing over long stretches
+      of the route, the comparison is against a sensor that was not working
+      rather than against a sensor that is weaker.
+    answered_by: scripts/precheck_tracks.py --track no_lidar
+
+# ---------------------------------------------------------------------------
+# TRACK B — collaborative SLAM, two mobile agents
+# ---------------------------------------------------------------------------
+# The metric is NOT each agent's ATE. Two trajectories can each be excellent and
+# still be useless together if the transform between them is wrong — and on
+# coop2 the agents share a frame ONLY because the pseudo ground truth's
+# anchoring put them there. A collaborative system has to estimate it.
+#
+# So the primary number is the error in T_ab(t), which needs no alignment and
+# borrows nothing from the reference but the answer. It is then split into the
+# fixed part (a map-merge / place-recognition failure) and the varying part (a
+# tracking failure), because those have different fixes and a single number
+# hides which one happened.
+collaborative:
+  question: >
+    Can two agents — one with a LiDAR, one with only a depth camera — establish
+    and hold a common frame, and what does the pair recover that neither has
+    alone?
+  agents: [mobile_1, mobile_2]
+  streams: {mobile_1: mobile_1.ouster, mobile_2: mobile_2.realsense_rgbd}
+  heterogeneous: true                # a LiDAR and an RGB-D camera, not two of a kind
+  methods: [swarm_slam, decoupled_registration]
+  metrics:
+    - relative_trajectory_error      # primary, gauge-free
+    - constant_vs_drift              # the decomposition
+    - place_overlap                  # context: was a merge even possible
+    - completeness_gain              # what the partner added to the map
+  # The single-agent runs from the main table ARE the reference for this track.
+  # A joint map that scores 0.80 where the ego alone scored 0.79 has not
+  # collaborated, whatever the absolute figure looks like, so no collaborative
+  # number is reported without its solo counterpart beside it.
+  solo_reference: {mobile_1: kiss_icp, mobile_2: rtabmap_rgbd}
+  precondition:
+    id: B1
+    check: >
+      The two agents must have occupied the same PLACE — not merely been
+      recording at the same time. Inter-robot loop closure needs shared observed
+      surface; two agents that never stand where the other stood share none, and
+      every collaborative method then reduces to its single-agent behaviour plus
+      a guess. The starts are 16.3 m apart, at opposite corners of a 16.6 m
+      room, so this is a live question and not a formality.
+    threshold: >
+      Report the fraction of mobile_2's path within the WEAKER sensor's range
+      (10 m, the RealSense's usable limit) of mobile_1's path. Below ~10%, the
+      track is not runnable on this sequence and that is a finding about the
+      recording — fix it by routing the two platforms through a shared corridor
+      in the next session, not by widening the radius until the number looks
+      acceptable.
+    answered_by: scripts/precheck_tracks.py --track collaborative
+
+# ---------------------------------------------------------------------------
+# TRACK C — infrastructure-anchored localization
+# ---------------------------------------------------------------------------
+# infra_1 is static, at a surveyed pose, with its own clock, watching the room
+# from 2 m up and from outside the area the boards span. That makes it the only
+# CONTINUOUS source of evidence on coop2 that comes from neither the pseudo
+# ground truth nor the method under test — the boards are independent but
+# sparse, and tier 3 is continuous but not independent.
+#
+# Two uses, and they are worth keeping separate because one is a benchmark task
+# and the other is instrumentation for every other track.
+infrastructure:
+  node: infra_1
+  world_pose_from: streams.infra_1.radar.static_world_pose
+  uses:
+    - id: C1
+      name: infrastructure-anchored localization (a benchmark task)
+      question: >
+        Given messages from a node at a known pose, how much better can an agent
+        localize than it can alone — and does that rescue the constrained agent?
+      input: ego stream + infra_1 detections + the node's surveyed pose
+      output: ego pose in the shared frame
+      baselines:
+        - ego_only                   # the floor; the same run as the main table
+        - ego_plus_infra_bearing     # camera detections only
+        - ego_plus_infra_bearing_range  # radar adds range along the line of sight
+      metric: ate, against the same pseudo ground truth
+      note: >
+        The interesting cell is the CONSTRAINED agent. A single static observer
+        constrains bearing well and range poorly, which is close to complementary
+        to what a narrow-FoV depth camera is bad at, so this is where an
+        infrastructure fix should pay most. Report it against the ego-only run of
+        the same stream or the gain is not readable.
+    - id: C2
+      name: external validation of every other track (instrumentation)
+      question: >
+        Does a method's trajectory predict where the surveyed node actually saw
+        the agent?
+      output: predicted-minus-observed bearing, and range where the radar supports it
+      note: >
+        Not a leaderboard row. It is the continuous independent check, and it is
+        the one tier that can catch an error the pseudo ground truth shares with
+        the method being scored. A bearing residual with a consistent sign is an
+        infrastructure pose or extrinsic error; a range residual growing with
+        distance is the agent drifting along the line of sight.
+  precondition:
+    id: C1a
+    check: >
+      The node's own pose uncertainty. coop2 states the surveyed pose to six
+      decimals and states no uncertainty for it anywhere — and an
+      infrastructure-anchored fix cannot be better than its anchor. Until this
+      is a number, C1 reports relative improvement over ego-only and NOT an
+      absolute accuracy, and C2's residuals carry an unknown bias.
+    status: UNRESOLVED
+  precondition_2:
+    id: C1b
+    check: >
+      The agents must actually be detectable from the node. The radar returns
+      order 1e1-1e2 points per frame and the Arducam image is RAW (distortion
+      not negligible at the edges), with camera_info published at 27.5 Hz
+      against a 10.6 Hz image stream — a mismatch that can mean the intrinsics
+      belong to a different camera on the same host. Verify the frame_ids with
+      inspect_bag.py before projecting anything.
+    status: UNRESOLVED

@@ -1,0 +1,74 @@
+# Tier 4. The vision-free arm. Not an accuracy candidate — a robustness one.
+name: radar_inertial_odometry
+family: radar_inertial_odometry
+origin: "[O] the published work is automotive/UAV; indoors is unproven"
+modality: [radar]
+coupling: tight
+needs_imu: true
+loop_closure: false
+outputs: [trajectory]
+reference_impl: https://github.com/christopherdoer/rio     # ekf-rio / x-rio
+image: slambench/rio:humble
+
+streams: [mobile_1.radar1, mobile_1.radar2]
+imu_by_agent:
+  mobile_1: mobile_1.imu
+
+params:
+  # --- the ego-velocity front-end (REVE, reimplemented; see notes)
+  ransac_iterations: 128
+  ransac_inlier_threshold_mps: 0.10
+  min_inliers: 5                # below this the sweep yields no velocity, and
+                                # that is reported as a dropout, not smoothed over
+  min_points_per_sweep: 8       # 3 is the algebraic minimum; 8 leaves margin for
+                                # the moving-target rejection to have something left
+  azimuth_spread_min_deg: 30.0  # REFUSE a sweep whose returns are collinear in
+                                # bearing: the solve is rank-deficient and the
+                                # velocity it returns is confident and wrong
+  use_both_radars: true         # ablation E toggles this
+
+  doppler_field: null           # I12's remainder: the field NAME. `velocity`,
+                                # `doppler` and `v_r` are all in use across TI
+                                # driver forks, and pointclouds.py reads
+                                # x/y/z/intensity only.
+  doppler_sign: null            # REQUIRED and NOT guessable: whether positive
+                                # radial velocity means approaching or receding.
+                                # Getting it wrong yields a trajectory that runs
+                                # BACKWARDS at the right speed. Resolve it against
+                                # one known-motion segment of the reference.
+  gyroscope_noise_density: null # I14
+  gyroscope_random_walk: null
+  accelerometer_noise_density: null
+  accelerometer_random_walk: null
+
+notes: |
+  WHAT THIS CONSUMES. Not geometry. ICP on tens of points indoors is a research
+  contribution, not a baseline, and this row does not attempt it. It consumes
+  EGO-VELOCITY: for a static target at unit direction d in the radar frame, the
+  measured radial velocity is v_r = -d . v_radar, so three non-collinear
+  directions determine v_radar, and RANSAC over the sweep rejects the moving
+  targets that violate the model. The lever arm comes off with the IMU's own
+  angular rate: v_body = v_radar - omega x r, using the extrinsic already in
+  configs/coop2.yaml.
+
+  BUILD THE FRONT-END, DO NOT PORT THE BACK-END. ekf-rio/x-rio is ROS 1, and
+  porting it is more work than it is worth here. The ego-velocity estimator is
+  the part that matters and it is on the order of a hundred lines of numpy —
+  well-specified, testable against synthetic sweeps with no bag, and it drops
+  straight into slambench's existing pure-Python style. Feed its output as a
+  velocity factor into the same GTSAM pose graph track C's fusion stage
+  specifies, rather than building a second estimator.
+
+  TWO RADARS IS THE POINT. A single unit observes the velocity component across
+  its boresight only weakly, so its solve is ill-conditioned in one direction.
+  radar1 and radar2 sit at yaw -95.2 and +24.9 degrees, ~120 apart, which is
+  close to what people deliberately build for this. Ablation E (radar1 / radar2
+  / both) is the cheapest cell in phase 6 and the only one that says whether the
+  second unit earned its place on the cart.
+
+  EXPECT A POOR ABSOLUTE ATE AND DO NOT CALL THAT A FAILURE. Velocity integrates
+  to position, so heading error accumulates without bound and there is no loop
+  closure here to correct it. The number this row exists to produce is not ATE:
+  it is RPE over short deltas, and velocity error against the reference's own
+  differentiated velocity. Quote those first. An ATE is reported for
+  completeness and is expected to be the worst in the table.

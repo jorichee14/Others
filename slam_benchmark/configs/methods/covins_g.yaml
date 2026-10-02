@@ -1,0 +1,51 @@
+# Tier 5b, conditional. The centralised counterpart, unblocked by I1.
+name: covins_g
+family: collaborative_visual_slam
+origin: "[O/I] evaluated on EuRoC and TUM; indoor handheld/MAV rather than cart"
+modality: [rgbd]                 # consumes IMAGES + the ego VIO's poses
+coupling: loose                  # agent-agnostic front-end: that IS the design
+needs_imu: true
+loop_closure: true               # inter-agent, in a centralised back-end
+outputs: [trajectory, map]
+reference_impl: https://github.com/VIS4ROB-lab/covins
+image: slambench/covins:humble
+status: conditional
+conditional_on: >
+  run only if swarm_slam_nolidar's inter-robot matching fires. If decentralised
+  matching finds nothing, a centralised back-end on the same descriptors will
+  not either, and the two rows would report one failure twice.
+
+track: collaborative
+streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
+
+params:
+  # COVINS-G's contribution is that the back-end does not care which VIO ran on
+  # the agent — it consumes poses plus images. So it inherits the phase 6 winner
+  # on mobile_1 rather than imposing a front-end, the same logic as
+  # rtabmap_ext_odom.
+  frontend_mobile_1: null        # REQUIRED: the tier 0-4 winner
+  frontend_mobile_2: null        # REQUIRED: mobile_2's best from the main table
+  placerec_covisibility_consistency: 3
+  max_kfs_per_agent: 1000
+
+notes: |
+  WHY A SECOND COLLABORATIVE ROW AT ALL. Swarm-SLAM is DECENTRALISED — per-agent
+  front-ends exchanging sparse descriptors, distributed optimisation. COVINS-G
+  is CENTRALISED — a server holding the joint map. That axis is a real question
+  for a two-agent rig on two machines with two clocks, and it is the axis the
+  sibling collaborative-perception project cares about, since a centralised
+  back-end assumes a link that the wifi and iperf topics on this bag can
+  actually characterise.
+
+  I1 UNBLOCKED IT. The track B plan listed COVINS-G as blocked on the IMU
+  question; the bag carries IMUs on both agents (192.4 Hz on mobile_1,
+  183.3 Hz on mobile_2), so it can run.
+
+  KIMERA-MULTI CANNOT, AND THE REASON IS WORTH RECORDING: it needs STEREO, and
+  only the left ZED image was recorded. Same constraint that thinned tier 3.
+  It is the obvious name to reach for here and it is out for a recording reason,
+  not a scoping one — one bandwidth setting next session brings it into range.
+
+  Conditional on purpose. Two collaborative systems is one more than this
+  sequence can probably support, and running it after Swarm-SLAM means it either
+  adds the centralised/decentralised contrast or is correctly skipped.

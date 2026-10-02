@@ -1,0 +1,8 @@
+numpy
+pyyaml
+# The evaluator needs nothing else. Deliberately: a comparison harness that is
+# slow to install is a harness people work around.
+#
+# open3d         # optional, for looking at a map cloud; nothing here imports it
+# rosbags        # only needed by export_reference.py for .db3 (sqlite3) bags;
+#                # .mcap is handled by rosbag_to_opv2v's reader

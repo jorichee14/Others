@@ -1,0 +1,75 @@
+# Tier 3. The mono-inertial datapoint, chosen over a second SYSTEM so that the
+# comparison varies one input and not two.
+name: orbslam3_mono_inertial
+family: visual_inertial_slam
+origin: "[I/O]"
+modality: [rgbd]                # the STREAM is rgbd; this row consumes the
+                                # COLOUR image and the IMU and discards the
+                                # depth. That discarding is the experiment.
+coupling: tight
+needs_imu: true
+loop_closure: true
+outputs: [trajectory]
+reference_impl: https://github.com/UZ-SLAMLab/ORB_SLAM3   # System::IMU_MONOCULAR
+image: slambench/orbslam3:humble          # the SAME image as the RGB-D rows
+
+streams: [mobile_1.zed_rgbd]
+imu_by_agent:
+  mobile_1: mobile_1.imu
+
+params:
+  # Byte-identical to orbslam3_rgbd_inertial except for the sensor mode. That is
+  # the whole point: rule 7 says no method is tuned per run, and here it is
+  # doing double duty — an identical configuration means the difference between
+  # these two rows is the depth input and nothing else.
+  ORBextractor.nFeatures: 1200
+  ORBextractor.scaleFactor: 1.2
+  ORBextractor.nLevels: 8
+  IMU.Frequency: 192
+
+  IMU.T_b_c1:                   # imu <- left optical, same per-unit factory value
+                                # as the RGB-D-inertial row. See coop2.yaml.
+    - [-0.014774651, -0.001097222,  0.999890247,  0.002340261]
+    - [-0.999747365,  0.016956643, -0.014753933,  0.023029347]
+    - [-0.016938594, -0.999855624, -0.001347473,  0.000170957]
+    - [ 0.0,          0.0,          0.0,          1.0]
+  IMU.NoiseGyro: null           # I14
+  IMU.NoiseAcc: null
+  IMU.GyroWalk: null
+  IMU.AccWalk: null
+
+notes: |
+  WHY THIS AND NOT A SECOND SYSTEM. The slot wants a mono-inertial number, and
+  the obvious way to get one is to add another VIO. That is the mistake this
+  benchmark is built to avoid: the README's reason for making KISS-ICP the
+  bridge is that any comparison varying estimator and sensor in one step cannot
+  attribute the difference to either. A different system against
+  orbslam3_rgbd_inertial varies both. THIS varies the depth alone.
+
+  So the pair is the measurement:
+
+      orbslam3_rgbd_inertial  -  orbslam3_mono_inertial  =  what the depth buys
+
+  and it costs nothing extra to obtain, because it is the same container, the
+  same parameters and the same calibration with one sensor mode changed.
+
+  Together with the IMU-free pair (orbslam3_rgbd) that gives a 2x2 on one
+  codebase -- depth on/off crossed with IMU on/off -- which is the cleanest
+  attribution phase 6 can produce and is not available from any mix of
+  different systems.
+
+  EXPECT SCALE TROUBLE, AND EXPECT IT TO BE THE FINDING. Monocular-inertial
+  takes its metric scale from the IMU alone, and scale is only observable under
+  translational excitation. A pushcart at near-constant velocity supplies
+  little, so this row is predicted to carry a large scale error. Report a
+  sim3-aligned ATE beside its se3 one for THIS ROW ONLY, labelled: the
+  difference between the two is how much of the error was scale rather than
+  shape, and that quantity -- not the ATE -- is what the row exists to produce.
+  Keep the sim3 number out of the headline table so a good one is never read as
+  competitive with a metric method.
+
+  It is also the direct test of I15. If scale recovery fails here while the
+  RGB-D-inertial row initialises fine, the excitation was too low for inertial
+  scale but sufficient for bias and gravity given depth -- a precise statement
+  about the recording, and the argument for the five seconds of deliberate
+  excitation the next session should start with.

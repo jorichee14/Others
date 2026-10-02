@@ -1,0 +1,41 @@
+# Tier 5b floor. Mandatory: without it a joint result cannot be shown to be
+# doing anything at all.
+name: decoupled_registration_nolidar
+family: collaborative_baseline
+origin: "[-] not a published system: the obvious two-stage construction"
+modality: [rgbd]
+coupling: none
+needs_imu: false
+loop_closure: false
+outputs: [trajectory, map]
+image: slambench/tools:humble
+
+track: collaborative
+streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
+
+params:
+  # stage 1: each agent's single-agent result, taken from the phase 6 table for
+  # mobile_1 and from the main table for mobile_2. Nothing is re-run, so this
+  # baseline costs one registration.
+  source_runs: {mobile_1: null, mobile_2: rtabmap_rgbd}   # mobile_1 = the winner
+  # stage 2: one global registration between the two maps, then ICP. TEASER++
+  # rather than FPFH+RANSAC because the path overlap is expected at the low end,
+  # and a low inlier ratio is exactly where RANSAC degrades.
+  global_registration: teaser
+  voxel_size: 0.10
+  icp_max_correspondence: 0.20
+
+notes: |
+  The late fusion of collaborative SLAM: each agent alone, then one offline map
+  registration. No communication, no inter-robot loop closure, no joint
+  optimisation.
+
+  It is not optional and it is not a formality. Without it, swarm_slam_nolidar
+  has no floor and a "collaborative" number cannot be shown to be doing anything
+  a single offline registration would not have done for free. It also still
+  produces a number on the day cross-agent place recognition finds nothing.
+
+  Expect its error to sit almost entirely in the CONSTANT term of the gauge-free
+  relative-pose split — a single rigid transform cannot absorb either agent's
+  drift. That is the shape a joint method has to beat in the VARYING term, and
+  saying so in advance is what makes the comparison readable.

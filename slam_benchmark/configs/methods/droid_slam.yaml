@@ -1,0 +1,39 @@
+name: droid_slam
+family: learned_visual_slam
+origin: "[O/I] trained on synthetic sequences, evaluated on both"
+modality: [rgbd]
+needs_imu: false
+loop_closure: true
+outputs: [trajectory]              # sparse/dense depth per keyframe, not a fused map
+reference_impl: https://github.com/princeton-vl/DROID-SLAM
+image: slambench/droid-slam:humble
+
+track: no_lidar
+streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
+
+params:
+  mode: rgbd                     # also runs monocular; rgbd is the fair cell here
+  filter_thresh: 2.4
+  keyframe_thresh: 4.0
+  frontend_window: 25
+  frontend_thresh: 16.0
+  backend_thresh: 22.0
+  stereo: false
+  # Trained with a fixed input resolution; the ZED and RealSense differ, so the
+  # resize is per stream and must be recorded — it changes the effective focal
+  # length the network sees.
+  image_size: null
+
+notes: |
+  Deep dense bundle adjustment over learned optical flow. It is in the track to
+  answer one question the classical entries cannot: ORB-SLAM3's failures on a
+  pushcart are low texture and fast rotation, and a learned front-end is
+  supposed to be exactly where those stop mattering. If it is, the RGB-D
+  disadvantage is smaller than the classical field suggests and the track's
+  conclusion changes.
+
+  Two honesty requirements. It needs a GPU and is far from real time at this
+  resolution, so it does not belong in the same runtime column as KISS-ICP —
+  report it, do not hide it. And it was trained on synthetic data: a strong
+  result here is partly a statement about how close this room is to its training
+  distribution, which is a caveat the classical entries do not carry.

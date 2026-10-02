@@ -1,0 +1,59 @@
+# The sensor-constraint grid for track A. One axis at a time, then two
+# combinations chosen to sit on the real constrained agent's envelope.
+#
+# Every cell is a deterministic function of the Ouster cloud (see
+# slambench/ablate.py), applied in the SENSOR frame before any pose. Each names
+# the real device it imitates, because a level with no device behind it is a
+# number on an axis rather than a finding.
+#
+# `full` is not optional. It is the paired control for every other cell and the
+# only thing that makes a difference attributable to the ablation rather than to
+# the run.
+
+base_stream: mobile_1.ouster
+seed: 0
+
+# The Ouster's cloud arrives in os_lidar, a ROS body frame: x forward, z up.
+# Passing optical axes here would crop a wedge out of the wrong axis and still
+# return a perfectly plausible cloud.
+frame: {forward: [1, 0, 0], up: [0, 0, 1]}
+
+cells:
+  - {name: full}                                    # the control
+
+  # --- field of view: what a 360 deg sweep buys over a camera's wedge
+  - {name: fov180, hfov_deg: 180.0}                 # a forward-facing 2D-ish scanner
+  - {name: fov120, hfov_deg: 120.0}
+  - {name: fov87,  hfov_deg: 87.0}                  # = the RealSense D4xx HFoV
+
+  # --- range: the axis a depth camera is actually limited by
+  - {name: r20, max_range_m: 20.0}
+  - {name: r10, max_range_m: 10.0}                  # = the D4xx's usable limit
+  - {name: r5,  max_range_m: 5.0}
+  - {name: r3,  max_range_m: 3.0}
+
+  # --- beams: the cheap-LiDAR axis
+  - {name: b64, beams: 64, total_beams: 128}
+  - {name: b32, beams: 32, total_beams: 128}
+  - {name: b16, beams: 16, total_beams: 128}        # a 16-beam puck
+
+  # --- rate: low-power, or a bandwidth-limited link
+  - {name: hz5, rate_hz: 5.0}
+  - {name: hz2, rate_hz: 2.0}
+
+  # --- density: toward radar sparsity. The last cell is ~1e2 points per frame,
+  #     which is the IWR6843's order -- included to show WHERE radar SLAM sits
+  #     on this curve rather than to claim a radar baseline.
+  - {name: d10, density: 0.1}
+  - {name: d01, density: 0.01}
+  - {name: d001, density: 0.001}
+
+  # --- the two combinations that matter: the RealSense's envelope, imposed on
+  #     the LiDAR. If the method's result here does not land near its result on
+  #     the real mobile_2 stream, the ablation is missing something the real
+  #     sensor has -- depth dropout, a noise model, rolling shutter -- and the
+  #     synthetic curve must not be quoted on its own.
+  - {name: realsense_envelope, hfov_deg: 87.0, vfov_deg: 58.0, max_range_m: 10.0,
+     min_range_m: 0.2}
+  - {name: realsense_envelope_rate, hfov_deg: 87.0, vfov_deg: 58.0,
+     max_range_m: 10.0, min_range_m: 0.2, rate_hz: 5.0}

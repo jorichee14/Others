@@ -1,0 +1,22 @@
+# Shared base: ROS 2 Humble, bag replay, and the pieces every method image uses.
+FROM ros:humble-ros-base
+
+SHELL ["/bin/bash", "-lc"]
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-pip git build-essential cmake \
+        ros-humble-rosbag2-storage-mcap \
+        ros-humble-tf2-ros ros-humble-tf2-py ros-humble-sensor-msgs-py \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip3 install --no-cache-dir numpy
+
+COPY docker/common/record_tum.py      /opt/slambench/record_tum.py
+COPY docker/common/depth_to_cloud.py  /opt/slambench/depth_to_cloud.py
+COPY docker/common/register_depth.py /opt/slambench/register_depth.py
+COPY docker/common/sniff_frame.py     /opt/slambench/sniff_frame.py
+COPY docker/common/params_to_args.py  /opt/slambench/params_to_args.py
+COPY docker/common/entrypoint.sh      /opt/slambench/entrypoint.sh
+RUN chmod +x /opt/slambench/entrypoint.sh
+ENV PYTHONPATH=/opt/slambench:${PYTHONPATH}
+
+ENV SLAM_RATE=1.0
+ENTRYPOINT ["/opt/slambench/entrypoint.sh"]
