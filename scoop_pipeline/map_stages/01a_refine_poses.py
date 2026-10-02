@@ -368,6 +368,33 @@ def _solve(pw, c, n, r, huber, prior=None, beta=0.0, cw=None):
     return x[:3], x[3:]
 
 
+def _solve_open(pw, c, n, r, huber, prior, beta):
+    """_solve with the seed prior only in the OPEN directions: per block
+    (rotation, translation), along the eigenvectors whose data weight is under
+    the prior's, beta * trace / 3 -- where the seed would hold at least half.
+    Directions the map pins get no prior, so they converge to the map with no
+    pull toward the seed (a uniform prior would leave ~beta/3 of every
+    correction undone each round)."""
+    w = np.minimum(1.0, huber / np.maximum(np.abs(r), 1e-9))
+    A = np.hstack([np.cross(pw - c, n), n])
+    Aw = A * w[:, None]
+    H = Aw.T @ A
+    g = -Aw.T @ r
+    for b in (slice(0, 3), slice(3, 6)):
+        Hb = H[b, b]
+        lam = beta * np.trace(Hb) / 3.0
+        ev, V = np.linalg.eigh(Hb)
+        for e, v in zip(ev, V.T):
+            if e < lam:
+                H[b, b] += lam * np.outer(v, v)
+                g[b] -= lam * v * (v @ prior[b])
+    try:
+        x = np.linalg.solve(H + 1e-9 * np.eye(6), g)
+    except np.linalg.LinAlgError:
+        return None
+    return x[:3], x[3:]
+
+
 def _apply(T, w_, t_, c):
     th = np.linalg.norm(w_)
     if th < 1e-12:
@@ -466,7 +493,8 @@ def register(ref, pts_local, T0, cfg):
             # nn_prior_beta > 0 (08) anchors this stage to the seed as well, in
             # the directions the geometry leaves open; 0 (01a) leaves it free
             nb = float(cfg.get("nn_prior_beta", 0.0))
-            sol = _solve(pw, c, n, r, huber, _prior(T, T0) if nb > 0 else None, nb)
+            sol = (_solve_open(pw, c, n, r, huber, _prior(T, T0), nb) if nb > 0
+                   else _solve(pw, c, n, r, huber))
             if sol is None:
                 break
             th, tn = _apply(T, sol[0], sol[1], c)
