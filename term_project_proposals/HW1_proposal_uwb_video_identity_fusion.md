@@ -36,4 +36,4 @@ Identity is the measured bottleneck of sports video tracking, and radio identity
 
 ## 9. Your Expected Contribution
 
-I have built radar-camera extrinsic calibration with ChArUco targets, SLAM evaluation pipelines, and robust state estimators in Python and ROS. I can lead calibration, synchronization, and association. I want to learn real-time multi-object tracking and pose-based video analytics.
+I have built radar-camera extrinsic calibration with ChArUco targets in OpenCV, multi-sensor ROS 2 recording with cross-host clock reconciliation for a multi-robot dataset, SLAM benchmarking in Docker, and PyTorch V2X perception evaluation. I can lead calibration, synchronization, and association. I want to learn real-time multi-object tracking and pose-based video analytics.
