@@ -16,3 +16,7 @@ transforms:
     child: radar2_link                                    # MP#1, rigid to the ZED
     translation: [-0.053850, 0.046553, -0.112039]        # |t| = 0.133 m
     rotation_xyzw: [0.724722, 0.038269, 0.687594, -0.022953]
+  - parent: arducam_optical_frame
+    child: infra1_link                                    # infra_1's radar
+    translation: [0.017773, -0.208023, -0.155788]        # |t| = 0.260 m
+    rotation_xyzw: [0.571431, 0.563856, 0.432969, -0.409965]
