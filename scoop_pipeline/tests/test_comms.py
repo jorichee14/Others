@@ -158,13 +158,13 @@ def main():
         if r.returncode:
             raise AssertionError(r.stdout[-1500:] + r.stderr[-2500:])
 
-        ping = rows(os.path.join(out, "ping.csv"))
+        ping = rows(os.path.join(out, "wifi", "ping.csv"))
         if len(ping) != 200:
             f.append("ping rows: %d" % len(ping))
-        ntp = rows(os.path.join(out, "ntp.csv"))
+        ntp = rows(os.path.join(out, "ntp", "ntp.csv"))
         if len(ntp) != 40 or ntp[0]["warnings"] != "a | b" or "reference_time" not in ntp[0]:
             f.append("ntp: %d rows, columns %s" % (len(ntp), list(ntp[0])))
-        ip = rows(os.path.join(out, "iperf.csv"))
+        ip = rows(os.path.join(out, "wifi", "iperf.csv"))
         if len(ip) != 10 or not any(x["interval_mbps"] == "190;210" for x in ip):
             f.append("iperf rows / interval_mbps: %d %s" % (len(ip), ip[0].get("interval_mbps")))
         s = json.load(open(os.path.join(out, "summary.json")))
@@ -180,10 +180,10 @@ def main():
         w1 = s["wifi"]["mobile_1"]
         if w1["roams"] != 1 or w1["signal_dbm"]["min"] != -62.0:
             f.append("wifi summary: %s" % w1)
-        csi = rows(os.path.join(out, "csi.csv"))
+        csi = rows(os.path.join(out, "csi", "csi.csv"))
         if len(csi) != 400:
             f.append("csi rows: %d" % len(csi))
-        z = np.load(os.path.join(out, "csi_infra_1_to_mobile_1_sniffer.npz"))
+        z = np.load(os.path.join(out, "csi", "csi_infra_1_to_mobile_1_sniffer.npz"))
         if z["H"].shape != (200, 242) or len(z["t"]) != 200 or "csi_real" in z.files:
             f.append("csi npz: %s" % {k: z[k].shape for k in z.files})
         else:

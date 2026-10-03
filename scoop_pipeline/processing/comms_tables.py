@@ -6,11 +6,11 @@ ping, iperf and CSI.
         [--out DIR] [--frames configs/comms.yaml] [--no-positions]
 
 writes to data/processed/<date>/<pass>/comms/ (--out for elsewhere):
-    ntp.csv  wifi.csv  ping.csv  iperf.csv  csi.csv  csi_status.csv
+    ntp/ntp.csv  wifi/{wifi,ping,iperf}.csv  csi/{csi,csi_status}.csv
                        one row per message, every machine (a `machine` column;
                        CSI also `peer`, the transmitter); t = header stamp
                        (that machine's clock), t_log = when the bag logged it
-    csi_<tx>_to_<rx>.npz   a CSI link, one row per packet: t, t_log, subcarrier (K,)
+    csi/csi_<tx>_to_<rx>.npz   a CSI link, one row per packet: t, t_log, subcarrier (K,)
                        signed, H (N, K) complex on the occupied subcarriers
                        (+-2..+-122 at 80 MHz: no DC, no guards), amp_db, phase
                        (its linear part across subcarriers removed); csi.csv

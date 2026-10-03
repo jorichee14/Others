@@ -60,6 +60,8 @@ analysis/            measuring results; reads outputs, writes nothing back
                      deskew, drift -- from ~200 scans of the bag + trajectory
   odom/zed_vs_lidar.py    drift of the ZED's own tracking (map_zed) against the LiDAR trajectory
   comms/             link analyses on processing/comms_tables.py's tables
+  comms/ntp_analysis.py   clock agreement: offsets at polls, error bounds, steps,
+                     frequency vs temperature, worst case between machines
   bags/topic_timing.py    intervals, gaps and repeated frames of topics in a bag
   bags/show_topics.py     what topics hold: type, count, definition, first messages
 checks/              is the environment / the decoder right? (against real bags)
@@ -74,6 +76,7 @@ tests/               self-tests, no real bag needed
   test_pass_tf.py    the complete TF tree of a pass (merge, 10)
   test_run_pass.py   run_pass.py: status, 10 + finalize, a mapping pass's order
   test_comms.py      comms tables: every message, summary numbers, positions
+  test_ntp_analysis.py  ntp_analysis on a synthetic ntp.csv with known events
   test_replica.py    replica with lidar depth on a synthetic scene
   test_scan_consistency.py  scan_consistency on synthetic sweeps: true, time-
                      shifted, drifting, broken deskew
@@ -172,7 +175,7 @@ it, `--only S` runs S alone, `--until S` stops after S.
 | 09_cloud | run: `09_build_coop_cloud.py`, the run's cloud in the map | `mapping/cloud_in_ref_<tag>.pcd` |
 | 10_poses | `10_publish_poses.py`: poses + the complete TF | `bags/<tag>_best_poses` |
 | finalize | the merged bag again, with 10's /tf, /tf_static and poses in it | the merged bag, in place |
-| comms | `processing/comms_tables.py`: NTP, Wi-Fi, ping, iperf, CSI with positions | `comms/*.csv`, `csi_*.npz`, `summary.json` |
+| comms | `processing/comms_tables.py`: NTP, Wi-Fi, ping, iperf, CSI with positions | `comms/{ntp,wifi,csi}/`, `comms/summary.json` |
 
 The map stages need the pass's config in `map_stages/`: `pipeline_config.json`
 for the mapping pass, and for a run `pipeline_config_<run>.json` with

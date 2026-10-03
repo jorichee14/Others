@@ -191,6 +191,11 @@ def extract_from(reader_iter, topics: Dict[str, str]) -> Dict[str, Table]:
     return tables
 
 
+# a kind's folder below comms/: ntp/, wifi/ (link status, ping, iperf), csi/
+FOLDER = {"ntp": "ntp", "wifi": "wifi", "ping": "wifi", "iperf": "wifi",
+          "csi": "csi", "csi_status": "csi"}
+
+
 # 802.11 (HT/VHT) subcarriers that carry data or pilots, |k| from..to, per
 # channel width; the rest of the FFT is guard band and DC
 OCCUPIED = {20: (1, 28), 40: (2, 58), 80: (2, 122), 160: (2, 250)}
@@ -266,7 +271,8 @@ def _csi_arrays(tb, log):
 
 
 def write(tables: Dict[str, Table], out_dir, log=print) -> List[str]:
-    """<kind>.csv per table, rows in time order per machine. CSI: per link
+    """<folder>/<kind>.csv per table (FOLDER: ntp/, wifi/, csi/), rows in time
+    order per machine. CSI: per link
     csi_<tx>_to_<rx>.npz with t, t_log and, from the raw slots, subcarrier
     (K,), H (N, K complex), amp_db and phase (N, K); any other array field
     stacked (rows x values) when the lengths agree, else concatenated with
@@ -276,7 +282,9 @@ def write(tables: Dict[str, Table], out_dir, log=print) -> List[str]:
     derived = _csi_arrays(tables["csi"], log) if "csi" in tables else {}
     for kind, tb in sorted(tables.items()):
         rows = sorted(tb.rows, key=lambda r: (r["machine"], r["peer"], r["t_log"]))
-        p = os.path.join(out_dir, f"{kind}.csv")
+        sub = os.path.join(out_dir, FOLDER.get(kind, kind))
+        os.makedirs(sub, exist_ok=True)
+        p = os.path.join(sub, f"{kind}.csv")
         with open(p, "w", newline="") as fh:
             w = csv.DictWriter(fh, fieldnames=tb.columns, extrasaction="ignore")
             w.writeheader()
@@ -298,7 +306,7 @@ def write(tables: Dict[str, Table], out_dir, log=print) -> List[str]:
                 else:
                     out[k] = np.concatenate(seq)
                     out[k + "_offsets"] = np.cumsum([0] + [len(a) for a in seq])
-            p = os.path.join(out_dir, f"csi_{link}.npz")
+            p = os.path.join(sub, f"csi_{link}.npz")
             np.savez_compressed(p, **out)
             written.append(p)
             log(f"    {p}: {len(d['t'])} packets, "
