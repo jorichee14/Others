@@ -76,8 +76,8 @@
     "anchor_camera_start": false
   },
 
-  "02_cut": {
-    "_note": "viewing copy only: run after 03, ceiling cut; nothing downstream reads it",
+  "06_cut": {
+    "_note": "viewing copy only: run after 05, ceiling cut; nothing downstream reads it",
     "input": "map_final_{tag}_anchored.pcd",
     "output": "map_final_{tag}_anchored_noceil.pcd",
     "axis": "z",
@@ -86,7 +86,7 @@
     "voxel": 0.05,
     "bins": 100
   },
-  "03_anchor": {
+  "05_anchor": {
     "input": "map_final_{tag}.pcd",
     "output": "map_final_{tag}_anchored.pcd",
     "frame_out": "anchor_frame.json",
@@ -118,7 +118,7 @@
     "zed_map_frame": "map_zed",
     "cam_frame": "zed_left_camera_optical_frame"
   },
-  "04_build_cameras": {
+  "07_build_cameras": {
     "anchor_frame": "anchor_frame.json",
     "output": "cameras_in_map.yaml",
     "map_frame": "map",
@@ -146,11 +146,11 @@
       }
     ]
   },
-  "05_emit_tfs": {
+  "08_emit_tfs": {
     "input": "cameras_in_map.yaml",
     "bag_anchor": "session_anchor.json"
   },
- "06_init": {
+ "03_init": {
   "_note": "runs: bag = dataset.bag; anchor_frame = the reference pass's when this pass has none; outputs in frames/",
   "anchor_frame": "anchor_frame.json",
   "output": "session_anchor.json",
@@ -186,16 +186,16 @@
     }
   ]
 },
-"07_build": {
-  "_note": "bag = dataset.bag; traj = 08's LiDAR-ICP track; out = mapping/cloud_in_ref_<tag>.pcd",
+"09_build": {
+  "_note": "bag = dataset.bag; traj = 04's LiDAR-ICP track; out = mapping/cloud_in_ref_<tag>.pcd",
   "topic": "/mobile_1/ouster/points",
   "voxel": 0.03, "range_min": 0.7, "range_max": 25.0,
   "t_start": null, "t_end": null,
   "min_count": 2, "keep_quality": true
 },
 
-"08_reference": {
-    "_note": "every scan of the run registered to the anchored map, seeded by GLIM placed with 06's session anchor; ref_map = the reference pass's (or this pass's) map_final_<tag>_anchored.pcd",
+"04_reference": {
+    "_note": "every scan of the run registered to the anchored map, seeded by GLIM placed with 03's session anchor; ref_map = the reference pass's (or this pass's) map_final_<tag>_anchored.pcd",
     "name": "mobile_1_lidar",
     "points_topic": "/mobile_1/ouster/points",
     "anchor_cam": "zed",
@@ -206,7 +206,7 @@
     "max_shift": 0.5, "max_rot_deg": 5.0
   },
 
- "09_publish": {
+ "10_publish": {
   "output_bag": "{tag}_best_poses",
   "map_frame": "map",
   "write_tf": true,

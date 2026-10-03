@@ -9,12 +9,12 @@ static_tf.yaml, the arducam's ChArUco pose under map_zed (infra_1), and the
 RealSense's own tree from camera_link (mobile_2).
 
   run (survey_1, in mapping_A's map): map -> map_zed (mobile_1's origin)
-      from boards_<tag>.json, map_zed ~~ mobile_1 from 08's in-camera
-      trajectory, the boards of the reference and of the run, arducam from 04,
-      map -> map_realsense (mobile_2's origin) -> camera_link from 04;
+      from boards_<tag>.json, map_zed ~~ mobile_1 from 04's in-camera
+      trajectory, the boards of the reference and of the run, arducam from 07,
+      map -> map_realsense (mobile_2's origin) -> camera_link from 07;
   mapping pass (mapping_A): mobile_1 from the refined LiDAR trajectory
       through T_N_world, in the points' frame;
-  09 on a bag merged before the map stages: the same tree in its bag, with
+  10 on a bag merged before the map stages: the same tree in its bag, with
       the calibration the bag lacks (infra1_link) from static_tf.yaml.
 
 Every lookup in the merged bag must give the pipeline's poses, and every
@@ -157,12 +157,12 @@ def outputs(data):
 
 
 def configs(stages, data):
-    base = {"03_anchor": {}, "04_build_cameras": {
+    base = {"05_anchor": {}, "07_build_cameras": {
         "output": "cameras_in_map.yaml",
         "cameras": [{"name": "realsense", "board": "rs_anchor",
                      "origin_frame": "map_realsense"}]},
-            "08_reference": {"name": "mobile_1_lidar"},
-            "09_publish": {"robots": [{"name": "mobile_1",
+            "04_reference": {"name": "mobile_1_lidar"},
+            "10_publish": {"robots": [{"name": "mobile_1",
                                        "traj": "traj_mobile_1_lidar_in_cam.tum",
                                        "optical_frame": "zed_left_camera_optical_frame"}]}}
     work = os.path.join(data, "work", "20260101")
@@ -310,40 +310,40 @@ def main():
                   "mapping: ZED at %.1f s" % t, f)
         close(tree.lookup("map", "map_zed", T0 + 5), rotz(77), "mapping: map_zed", f)
 
-        # 09 on a bag merged before the map stages (only os_sensor in from static_tf.yaml)
+        # 10 on a bag merged before the map stages (only os_sensor in from static_tf.yaml)
         from scoop import merge, bag as sbag
         import yaml
         cfg = os.path.join(stages, "pipeline_config_survey_1.json")
         c = json.load(open(cfg))
-        c["09_publish"] = {"static_tf": static_yaml}
+        c["10_publish"] = {"static_tf": static_yaml}
         json.dump(c, open(cfg, "w"))
         old = os.path.join(data, "work", "20260101", "survey_1", "x_merged")
         cal = tftree.load_calibrations(yaml.safe_load(open(static_yaml)))[:1]
         merge.merge_bags(inputs, old, static_tf=tftree.attach(cal, tftree.tf_edges(inputs))[0],
                          log=lambda *_: None)
-        r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "09_publish_poses.py"),
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "10_publish_poses.py"),
                             cfg], capture_output=True, text=True)
         print(r.stdout[-1500:])
         if r.returncode:
-            f.append("09: " + r.stdout[-1000:] + r.stderr[-1500:])
+            f.append("10: " + r.stdout[-1000:] + r.stderr[-1500:])
         else:
             b09 = os.path.join(data, "processed", "20260101", "survey_1", "bags",
                                "survey_1_20260101_best_poses")
-            f += check09(b09, stamps, T_cam_sensor, "09")
-            # the merged bag with 09's TF and poses put in, as merge_bags.py --source
-            # does; 09 again on it must give the same tree, not a second one
+            f += check09(b09, stamps, T_cam_sensor, "10")
+            # the merged bag with 10's TF and poses put in, as merge_bags.py --source
+            # does; 10 again on it must give the same tree, not a second one
             both = os.path.join(tmp, "both")
             merge.merge_bags([old, b09], both, log=lambda *_: None,
                              source={"/tf": 1, "/tf_static": 1})
             shutil.rmtree(old)
             os.rename(both, old)
             r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages",
-                                                             "09_publish_poses.py"), cfg],
+                                                             "10_publish_poses.py"), cfg],
                                capture_output=True, text=True)
             if r.returncode:
-                f.append("09 again: " + r.stdout[-1000:] + r.stderr[-1500:])
+                f.append("10 again: " + r.stdout[-1000:] + r.stderr[-1500:])
             else:
-                f += check09(b09, stamps, T_cam_sensor, "09 again")
+                f += check09(b09, stamps, T_cam_sensor, "10 again")
 
         # the CLI: the check prints the tree from the outputs it finds
         cli = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "pass_tf.py"),

@@ -260,7 +260,7 @@ def test_bag_files_in_recording_order(tmp):
 
 def write_map_and_tum(tmp, step=0.02):
     """The scene as a map cloud (binary PLY, `step` m apart) and the lidar's
-    true poses as a TUM file -- what 01 / 01a produce for a real pass."""
+    true poses as a TUM file -- what 01 / 02 produce for a real pass."""
     g = np.arange(-5.0, 7.0, step)
     h = np.arange(-4.0, 4.0, step)
     X, Y = np.meshgrid(g, h)

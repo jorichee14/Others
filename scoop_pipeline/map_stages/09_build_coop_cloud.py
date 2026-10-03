@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
-STAGE 07 - build a coop run's cloud in the REFERENCE map frame.
+STAGE 09 - build a coop run's cloud in the REFERENCE map frame.
 
-Accumulates the run's Ouster scans into one cloud using stage 08's LiDAR-ICP
-poses. (Stage 08 must therefore run first; this stage consumes its lidar track.)
+Accumulates the run's Ouster scans into one cloud using stage 04's LiDAR-ICP
+poses. (Stage 04 must therefore run first; this stage consumes its lidar track.)
 
-The poses come from stage 08's LiDAR-ICP track (traj_<name>_lidar.tum), which is
+The poses come from stage 04's LiDAR-ICP track (traj_<name>_lidar.tum), which is
 already registered to the reference cloud. So the output is in that frame by
-construction: no GLIM, no stage 03, no second anchoring. It contains whatever
+construction: no GLIM, no stage 05, no second anchoring. It contains whatever
 was in the room during the run — the chairs the mapping cloud lacks — and is
 what label_static.py should be pointed at.
 
-    python3 07_build_coop_cloud.py \
+    python3 09_build_coop_cloud.py \
         --bag  ../../raw/20260828/mirc_dataset_coop2_20260828_completed \
         --traj map_stages_20260828_outputs/reference_coop2_all/traj_mobile_1_lidar.tum \
         --out  map_stages_20260828_outputs/coop2_in_ref.pcd
 
-Or from pipeline_config.json (block "07_build", sample at the bottom):
+Or from pipeline_config.json (block "09_build", sample at the bottom):
 
-    python3 07_build_coop_cloud.py pipeline_config.json
+    python3 09_build_coop_cloud.py pipeline_config.json
 
 Then:
     python3 scripts/label_static.py --pcd map_stages_20260828_outputs/coop2_in_ref.pcd \
@@ -29,9 +29,9 @@ Options worth knowing:
                           stretch before people walked through (cleaner chairs)
     --voxel               output resolution (m); 0.03 is plenty for box fitting
     --range-max           drop returns beyond this (far corridor noise)
-    --keep-quality        only use scans stage 08 registered (quality csv status ok)
+    --keep-quality        only use scans stage 04 registered (quality csv status ok)
     --no-deskew           one pose per scan (default: every point through the
-                          trajectory at its own time, as 01 / 01a / 08 do)
+                          trajectory at its own time, as 01 / 02 / 04 do)
                           (needs quality_<name>.csv next to the tum)
 """
 import argparse, os, sys, csv
@@ -85,7 +85,7 @@ class VoxelAccum:
 
 # ------------------------------------------------------------------ main
 SAMPLE_CONFIG = """
-"07_build": {
+"09_build": {
   "bag":   "/path/to/mirc_dataset_coop2_20260828_completed",
   "traj":  "map_stages_20260828_outputs/reference_coop2_all/traj_mobile_1_lidar.tum",
   "out":   "map_stages_20260828_outputs/coop2_in_ref.pcd",
@@ -103,11 +103,11 @@ def main():
     if argv and not argv[0].startswith("-") and argv[0].endswith(".json"):
         from pipeline_common import load_pipeline
         P = load_pipeline(argv[0])
-        blk = P.cfg.get("07_build")
+        blk = P.cfg.get("09_build")
         if blk is None:
-            sys.exit("add a '07_build' block to %s (sample at the bottom of this file)" % argv[0])
+            sys.exit("add a '09_build' block to %s (sample at the bottom of this file)" % argv[0])
         cfg_defaults = {k: v for k, v in blk.items()}
-        # processed layout: this pass's merged bag, stage 08's LiDAR-ICP track,
+        # processed layout: this pass's merged bag, stage 04's LiDAR-ICP track,
         # the cloud into mapping/ (cloud_in_ref_<tag>.pcd)
         cfg_defaults["bag"] = os.path.expanduser(cfg_defaults.get("bag") or P.dataset["bag"])
         cfg_defaults["traj"] = (P.outp(cfg_defaults["traj"]) if cfg_defaults.get("traj")
@@ -121,7 +121,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bag", required="bag" not in cfg_defaults)
     ap.add_argument("--traj", required="traj" not in cfg_defaults,
-                    help="stage-08 traj_<name>_lidar.tum (T_map_lidar)")
+                    help="stage-04 traj_<name>_lidar.tum (T_map_lidar)")
     ap.add_argument("--out", required="out" not in cfg_defaults)
     ap.add_argument("--topic", default="/mobile_1/ouster/points")
     ap.add_argument("--voxel", type=float, default=0.03)
@@ -193,12 +193,12 @@ def main():
             print(f"  {n_used} scans  t={rel:.1f}s", flush=True)
     out = acc.points(args.min_count)
     write_pcd(args.out, out)
-    print(f"used {n_used} scans (skipped {n_skip_q} not registered by 08; scans more than "
+    print(f"used {n_used} scans (skipped {n_skip_q} not registered by 04; scans more than "
           f"{args.max_gap_ms:.0f} ms from a trajectory pose are not read)")
     print(f"wrote {args.out}: {len(out)} points at {args.voxel} m voxel, "
           f"x {out[:,0].min():.2f}..{out[:,0].max():.2f}  y {out[:,1].min():.2f}..{out[:,1].max():.2f}")
     print("this cloud is in the same frame as the trajectory it was built from — "
-          "the reference map frame if that is what stage 08 registered to.")
+          "the reference map frame if that is what stage 04 registered to.")
 
 
 if __name__ == "__main__":

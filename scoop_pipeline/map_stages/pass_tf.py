@@ -8,26 +8,26 @@ Every mobile platform hangs from its own origin frame, fixed below the board
 it started at (map ── board ── map_zed, map ── board_rs ── map_realsense):
 
   board ── map_zed          mobile_1's origin: the ZED's map of this session
-                            (03: T_map_mapzed in anchor_frame.json, or
+                            (05: T_map_mapzed in anchor_frame.json, or
                             boards_<tag>.json for a run); map_zed ~~ odom_zed
                             stays as recorded, so the ZED's own topics show in map
      map_zed ~~ zed_camera_link
-                            mobile_1 from the LiDAR trajectory (a run: 08's
-                            traj_<name>_in_cam.tum; a mapping pass: 01a's refined
-                            trajectory through 03's T_N_world), replacing the
+                            mobile_1 from the LiDAR trajectory (a run: 04's
+                            traj_<name>_in_cam.tum; a mapping pass: 02's refined
+                            trajectory through 05's T_N_world), replacing the
                             ZED's odom_zed ~~ zed_camera_link: the ZED's tracking
                             is not trusted. Its whole tree (ZED, os_sensor,
                             radars) follows. (Without T_map_mapzed: map ~~
                             zed_camera_link.)
-  board_rs ── map_realsense mobile_2's origin (04's camera "origin_frame", below
-                            its "board"): at its place from 04 while it is parked
+  board_rs ── map_realsense mobile_2's origin (07's camera "origin_frame", below
+                            its "board"): at its place from 07 while it is parked
      map_realsense ── camera_link
-  map ── <board frames>     03's boards (the reference pass's, plus the ones only
+  map ── <board frames>     05's boards (the reference pass's, plus the ones only
                             a run measured)
-  map ── <camera tree>      04's cameras_in_map.yaml (arducam, RealSense): the
+  map ── <camera tree>      07's cameras_in_map.yaml (arducam, RealSense): the
                             root of each camera's tree is hung under map (or
                             under its "origin_frame") so that map -> child_frame
-                            is 04's pose. An edge from map_zed
+                            is 07's pose. An edge from map_zed
                             into a camera (the arducam's ChArUco pose, in the
                             ZED's drifting map) is dropped first.
 
@@ -112,7 +112,7 @@ def plan(P, edges, bags, log=print):
     extra /tf [(t_ns, parent, child, t, q)], edges afterwards), against the
     bags' tree `edges` (child -> tftree.Edge, the calibrations already in)."""
     edges = dict(edges)
-    s03 = P.cfg.get("03_anchor", {})
+    s03 = P.cfg.get("05_anchor", {})
     mapf = s03.get("map_frame", "map")
     mapzed = s03.get("mapzed_frame", "map_zed")
     cam = s03.get("cam_frame", "zed_left_camera_optical_frame")
@@ -145,12 +145,12 @@ def plan(P, edges, bags, log=print):
     for n, rec in (run.get("boards") or {}).items():
         boards.setdefault(n, rec)
     bframe = {n: rec.get("frame") or n for n, rec in boards.items()}
-    s04 = P.cfg.get("04_build_cameras") or {}
+    s04 = P.cfg.get("07_build_cameras") or {}
     cfg_cams = {c["name"]: c for c in s04.get("cameras", [])}
     origins = {c.get("origin_frame") for c in cfg_cams.values()} - {None}
 
     # -- a bag that carries this tree already (merged after the map stages, or
-    # 09's): what was put in below map, the boards and the parked origins goes,
+    # 10's): what was put in below map, the boards and the parked origins goes,
     # and is put in again from the outputs as they are now
     old = [(e.parent, c) for c, e in edges.items()
            if e.parent == mapf or e.parent in set(bframe.values()) | origins]
@@ -165,7 +165,7 @@ def plan(P, edges, bags, log=print):
         if fr in edges or fr in frames:
             continue
         T_board[n] = _T(rec)
-        add_static(mapf, fr, T_board[n], "03: board '%s'" % n)
+        add_static(mapf, fr, T_board[n], "05: board '%s'" % n)
 
     def under_board(name, child, T_map_child, why):
         """child fixed in map, below board `name` when it is placed."""
@@ -184,7 +184,7 @@ def plan(P, edges, bags, log=print):
         body, T_left = cam, None
     else:
         traj = P.outp(P.dataset["traj"]) if P.dataset.get("traj") else None
-        pts = (P.cfg.get("08_reference") or {}).get("points_topic") \
+        pts = (P.cfg.get("04_reference") or {}).get("points_topic") \
             or P.dataset.get("points_topic") or DEFAULT_TOPICS["points_topic"]
         body = _frame_id(bags, pts)
         T_left = np.array(af["T_N_world"], float) if "T_N_world" in af else None
@@ -206,10 +206,10 @@ def plan(P, edges, bags, log=print):
         log("    (no LiDAR trajectory %s: mobile_1 stays on the ZED's tracking)" % traj)
     if T_mz is not None:
         start = session.get("anchor_board") or af.get("anchor_board") or "anchor"
-        under_board(start, mapzed, T_mz, "mobile_1's origin, 03: the ZED's map at the start board")
+        under_board(start, mapzed, T_mz, "mobile_1's origin, 05: the ZED's map at the start board")
 
-    # -- infra / parked cameras from 04
-    cy = P.stage("04_build_cameras")["output"] if "04_build_cameras" in P.cfg else None
+    # -- infra / parked cameras from 07
+    cy = P.stage("07_build_cameras")["output"] if "07_build_cameras" in P.cfg else None
     if cy and os.path.exists(cy):
         _, cams = load_cameras_yaml(cy)
         for c in cams:
@@ -217,20 +217,20 @@ def plan(P, edges, bags, log=print):
             T = make_T(c["translation"], c["quaternion_xyzw"])
             e = edges.get(child)
             if e is not None and e.parent == mapzed:
-                drop_edge(mapzed, child, "its pose in the ZED's map; 04's replaces it")
+                drop_edge(mapzed, child, "its pose in the ZED's map; 07's replaces it")
             root = tftree._root(child, edges) if child in edges else child
             if root == mapf:
-                log("    (%s is already below %s: 04's %s skipped)" % (child, mapf, c["name"]))
+                log("    (%s is already below %s: 07's %s skipped)" % (child, mapf, c["name"]))
                 continue
             try:
                 T_rc = tftree._static_pose(root, child, edges)
             except scoop_bag.BagError:
-                log("    (%s moves in the bags: 04's static pose of %s skipped)"
+                log("    (%s moves in the bags: 07's static pose of %s skipped)"
                     % (child, c["name"]))
                 continue
             T_root = T @ np.linalg.inv(T_rc)
-            why = ("04: %s, so %s -> %s is its pose" % (c["name"], mapf, child)
-                   if root != child else "04: %s" % c["name"])
+            why = ("07: %s, so %s -> %s is its pose" % (c["name"], mapf, child)
+                   if root != child else "07: %s" % c["name"])
             cc = cfg_cams.get(c["name"], {})
             og = cc.get("origin_frame")
             if og and og not in frames and og not in edges:

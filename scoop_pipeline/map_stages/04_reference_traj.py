@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-STAGE 08 - a run's LiDAR trajectory in map: every scan registered to the
+STAGE 04 - a run's LiDAR trajectory in map: every scan registered to the
 reference pass's FROZEN anchored map.
 
-  seed      the run's GLIM trajectory (its own world), placed in map by 06's
+  seed      the run's GLIM trajectory (its own world), placed in map by 03's
             session anchor: T_map_glim = T_map_cam(t_a) @ inv(T_glim_lidar(t_a)
             @ T_lidar_cam), t_a = the anchor's time. Nothing else -- no camera
             odometry.
   per scan  each scan, deskewed through the current poses, starts from ITS OWN
             seed pose (never the previous scan's result, so errors cannot
-            accumulate) and is registered to the map by 01a's ICP: planes
+            accumulate) and is registered to the map by 02's ICP: planes
             fitted over plane_voxel cells first, then nearest-neighbour
             point-to-plane, both anchored to the seed (prior_beta) where the
             map leaves a direction open, so a corridor scan cannot slide
@@ -19,8 +19,8 @@ reference pass's FROZEN anchored map.
             changes. The per-round corrections are the convergence evidence.
 
 Outputs (odometry/reference_<tag>/):
-  traj_<name>.tum         T_map_lidar per scan (03, 04, 07 read it)
-  traj_<name>_in_cam.tum  the camera optical frame (T_lidar_camera), for 09
+  traj_<name>.tum         T_map_lidar per scan (03, 04, 09 read it)
+  traj_<name>_in_cam.tum  the camera optical frame (T_lidar_camera), for 10
   quality_<name>.csv      per scan: t, status (ok / seed_kept_far / seed_kept_thin
                           / no_scan), correspondences, residual, correction, the
                           direction the map pins least (weak_x/y/z, in map), its
@@ -32,7 +32,7 @@ Outputs (odometry/reference_<tag>/):
                           scans either side): inside, the error runs between them
   summary_<name>.json     the numbers below
 
-Config "08_reference" (all optional):
+Config "04_reference" (all optional):
   "name":        "<machine>_lidar"
   "points_topic": the LiDAR cloud topic (default: detected)
   "run_traj":    <work>/<date>/<pass>/<machine>/glim/traj_lidar.txt
@@ -45,7 +45,7 @@ Config "08_reference" (all optional):
   "seed_held_at": 0.5, "segment_gap_s": 1.0,
   "deskew": 01_build_map.deskew, "deskew_bins": 01_build_map.deskew_bins
 
-  python3 08_reference_traj.py pipeline_config_<run>.json
+  python3 04_reference_traj.py pipeline_config_<run>.json
 """
 import importlib
 import json
@@ -59,7 +59,7 @@ import open3d as o3d
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pipeline_common import load_pipeline, make_T, traj_quats, interp_poses   # noqa: E402
 
-A = importlib.import_module("01a_refine_poses")
+A = importlib.import_module("02_refine_poses")
 
 DEFAULTS = dict(rounds=2, target_voxel=0.05, scan_voxel=0.10, plane_voxel=0.4,
                 max_corr=[0.4, 0.2, 0.1], iters_per_gate=5, huber=0.05, plane_iters=8,
@@ -76,11 +76,11 @@ def pose_at(tr_t, tr_T, t):
 
 
 def seed_from_anchor(sa_path, cam, tr_t, tr_T, T_lc):
-    """map <- GLIM world from 06's session anchor of camera `cam`."""
+    """map <- GLIM world from 03's session anchor of camera `cam`."""
     sa = json.load(open(sa_path))
     cams = sa.get("cameras", {})
     if cam not in cams or "map_to_cam" not in cams[cam]:
-        raise SystemExit("%s has no camera '%s' (have %s): run 06 first"
+        raise SystemExit("%s has no camera '%s' (have %s): run 03 first"
                          % (sa_path, cam, sorted(cams)))
     rec = cams[cam]
     T_map_cam = make_T(rec["map_to_cam"]["xyz"], rec["map_to_cam"]["qxyzw"])
@@ -181,7 +181,7 @@ def main():
     c = dict(DEFAULTS)
     c.update(deskew=bool(s01.get("deskew", True)),
              deskew_bins=max(2, int(s01.get("deskew_bins", 100))))
-    c.update(P.cfg.get("08_reference") or {})
+    c.update(P.cfg.get("04_reference") or {})
     # both ICP stages anchored to the seed where the map leaves a direction open
     c.setdefault("nn_prior_beta", c["prior_beta"])
     name = c.get("name") or "%s_lidar" % P.machine
@@ -206,7 +206,7 @@ def main():
     times, T_glim = A.load_traj(run_traj)
     T_map_glim, t_a, mode = seed_from_anchor(sa_path, c["anchor_cam"], times, T_glim, T_lc)
     T_seed = np.einsum("ij,njk->nik", T_map_glim, T_glim)
-    print("\nseed: %d GLIM poses (%.1f s) placed in map by 06's '%s' anchor (%s) at t=%.3f"
+    print("\nseed: %d GLIM poses (%.1f s) placed in map by 03's '%s' anchor (%s) at t=%.3f"
           % (len(times), times[-1] - times[0], c["anchor_cam"], mode, t_a))
     topic = A.detect_points_topic(bag, c["points_topic"], len(times))
 

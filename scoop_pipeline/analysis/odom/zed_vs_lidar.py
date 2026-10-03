@@ -4,9 +4,9 @@ How far the ZED's own tracking (its map frame, map_zed, from the bag's /tf)
 drifts from the LiDAR trajectory over a run, both as the ZED left optical
 frame in `map`.
 
-  ZED:   T_map_mapzed @ T_mapzed_cam(t)        (map -> map_zed from 03:
+  ZED:   T_map_mapzed @ T_mapzed_cam(t)        (map -> map_zed from 05:
                                                measured at the run's start)
-  LiDAR: stage 08's traj_<name>_in_cam.tum (a run), or 01a's refined
+  LiDAR: stage 04's traj_<name>_in_cam.tum (a run), or 02's refined
          trajectory @ T_lidar_camera (a mapping pass)
 
 Both start together (map -> map_zed is fixed at the start board), so the gap
@@ -47,11 +47,11 @@ def main():
     ap.add_argument("--at", type=float, nargs="*", default=[],
                     help="stamps (s) to report as well, e.g. an extrinsic yaml's stamp")
     ap.add_argument("--every", type=float, default=60.0, help="table spacing (s)")
-    ap.add_argument("--zed-map", default=None, help="default: 03_anchor.zed_map_frame")
+    ap.add_argument("--zed-map", default=None, help="default: 05_anchor.zed_map_frame")
     a = ap.parse_args()
 
     P = load_pipeline(a.config)
-    s03 = P.cfg.get("03_anchor", {})
+    s03 = P.cfg.get("05_anchor", {})
     zed_map = a.zed_map or s03.get("zed_map_frame", "map_zed")
     cam = s03.get("cam_frame", "zed_left_camera_optical_frame")
     T_lc = np.asarray(P.sensor.T_lidar_camera, float)
@@ -73,7 +73,7 @@ def main():
         v = af["map_to_mapzed_xyzquat"]
         T_map_mz = make_T(v[:3], v[3:])
     else:
-        raise SystemExit("%s has no map -> map_zed (re-run 03)" % frames)
+        raise SystemExit("%s has no map -> map_zed (re-run 05)" % frames)
     print("LiDAR trajectory (camera frame, in map): %s" % traj)
     print("map -> %s: %s" % (zed_map, frames))
     print("reading /tf of %s ..." % P.dataset["bag"])

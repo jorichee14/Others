@@ -27,7 +27,7 @@ transforms of configs/static_tf.yaml are added to its /tf_static.
 Once the map stages have run on the pass, merging again gives the complete
 TF tree (map_stages/pass_tf.py): map at the root; mobile_1 on its LiDAR
 trajectory in place of the ZED's tracking; map_zed, the boards and the
-infra/parked cameras (04) placed in map. The pipeline config is the one in
+infra/parked cameras (07) placed in map. The pipeline config is the one in
 map_stages/ whose dataset is this pass (--pipeline-config to pick another,
 --no-pipeline-tf for the bags' TF only).
 """

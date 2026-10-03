@@ -585,8 +585,8 @@ def lookup_static(edges, src, dst):
 # pattern it matches; {machine} is the robot whose LiDAR the map stages use.
 #   mapping/            clouds: merged, static, denoised, colored, map_final, cut, ...
 #   odometry/<machine>/ trajectories: traj_lidar_refined*.txt, *.tum
-#   odometry/           reference tracks (08) of every robot
-#   bags/               bags written by the stages (09's best-poses bag)
+#   odometry/           reference tracks (04) of every robot
+#   bags/               bags written by the stages (10's best-poses bag)
 #   frames/             anchors, camera poses, TF scripts: anchor_frame.json, ...
 #   comms/              wifi / iperf / ntp results (no stage writes here yet)
 #   datasets/<machine>/ <format>_<depth>_<pass>_<date> (datasets/mcap_convert.py)
@@ -692,7 +692,7 @@ class Pipeline:
     def ref_file(self, kind):
         """A file of the reference pass (dataset.reference_pass), in its
         processed folder: 'map' -> mapping/denoised_<tag>.pcd (GLIM frame),
-        'anchored_map' -> mapping/map_final_<tag>_anchored.pcd (03's output,
+        'anchored_map' -> mapping/map_final_<tag>_anchored.pcd (05's output,
         the map a run is localized in), 'anchor' -> frames/anchor_frame.json
         (its board-anchored map frame)."""
         if not self.reference:
@@ -720,15 +720,31 @@ class Pipeline:
             return self.ref_file("anchor")
         return p
 
+    def glim_traj(self):
+        """The run's own GLIM trajectory: <work>/<date>/<pass>/<machine>/glim/
+        traj_lidar.txt, next to the merged bag (process_recording.py writes it)."""
+        return os.path.join(os.path.dirname(os.path.normpath(self.dataset["bag"])),
+                            self.machine, "glim", "traj_lidar.txt")
+
+    def seed_traj(self):
+        """The trajectory a mapping pass starts from (01 --seed, 02's seed):
+        02_refine.seed when set (a bare name is in odometry/<machine>/), else
+        odometry/<machine>/traj_lidar.txt when there, else GLIM's own file."""
+        name = (self.cfg.get("02_refine") or {}).get("seed")
+        if name:
+            return self.outp(name)
+        local = self.outp("traj_lidar.txt")
+        return local if os.path.exists(local) else self.glim_traj()
+
     def reference_dir(self):
-        """Stage 08's output folder: odometry/reference_<tag>/."""
-        return self.outp(self.cfg.get("08_reference", {}).get("out_dir", "reference_{tag}"))
+        """Stage 04's output folder: odometry/reference_<tag>/."""
+        return self.outp(self.cfg.get("04_reference", {}).get("out_dir", "reference_{tag}"))
 
     def lidar_track_traj(self, suffix=""):
-        """Stage 08's LiDAR trajectory (T_map_lidar, TUM): traj_<name>.tum in
-        reference_dir(), name = 08_reference.name or <machine>_lidar; suffix
+        """Stage 04's LiDAR trajectory (T_map_lidar, TUM): traj_<name>.tum in
+        reference_dir(), name = 04_reference.name or <machine>_lidar; suffix
         "_in_cam" for the camera optical frame."""
-        name = (self.cfg.get("08_reference") or {}).get("name") or "%s_lidar" % self.machine
+        name = (self.cfg.get("04_reference") or {}).get("name") or "%s_lidar" % self.machine
         return os.path.join(self.reference_dir(), "traj_%s%s.tum" % (name, suffix))
 
     def infra_yaml(self, name, camera=None):
@@ -794,10 +810,21 @@ def _merge(base, over):
     return over
 
 
+# stage blocks under the numbers they had before the stages were put in run order
+OLD_KEYS = {"01a_refine": "02_refine", "06_init": "03_init", "08_reference": "04_reference",
+            "03_anchor": "05_anchor", "02_cut": "06_cut", "04_build_cameras": "07_build_cameras",
+            "05_emit_tfs": "08_emit_tfs", "07_build": "09_build", "09_publish": "10_publish"}
+
+
 def load_config(path):
     """A pipeline config; "extends": "<other config>" (relative to this one)
-    starts from that one, so a run's config holds only what differs."""
+    starts from that one, so a run's config holds only what differs. A block
+    under its old stage number (OLD_KEYS) is read as the new one."""
     cfg = json.load(open(path))
+    for k in [k for k in cfg if k in OLD_KEYS]:
+        if OLD_KEYS[k] in cfg:
+            raise SystemExit("%s has both %s and %s (its old name)" % (path, OLD_KEYS[k], k))
+        cfg[OLD_KEYS[k]] = cfg.pop(k)
     parent = cfg.pop("extends", None)
     if parent:
         parent = os.path.join(os.path.dirname(os.path.abspath(path)),

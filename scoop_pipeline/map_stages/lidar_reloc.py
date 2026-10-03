@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 LiDAR relocalization of a run's start in a reference pass's anchored map,
-with the checks that say whether to trust it. Called by 06_init_from_boards.py
-for a run (dataset.reference_pass); 08 then seeds from it.
+with the checks that say whether to trust it. Called by 03_init_from_boards.py
+for a run (dataset.reference_pass); 04 then seeds from it.
 
 GLIM starts every run in its own world, so the run and the reference map
 differ by one rigid transform, T_map_glim. It is found from the LiDAR alone:
@@ -10,7 +10,7 @@ differ by one rigid transform, T_map_glim. It is found from the LiDAR alone:
   1. window: the scans of the first `window_s` seconds of the GLIM trajectory,
      deskewed and placed through their GLIM poses (locally exact), as one
      cloud in the GLIM world;
-  2. global: both frames are gravity-aligned (GLIM's; 03 keeps z), so the
+  2. global: both frames are gravity-aligned (GLIM's; 05 keeps z), so the
      search is over yaw and x/y: the wall band (0.2-2.5 m above each cloud's
      floor) of the window, turned through every yaw_step_deg, is correlated
      (FFT) with the map's wall band on a grid_m grid; z from the two floors;
@@ -27,14 +27,14 @@ Then it is CHECKED, and refused if a check fails:
               the window off the map (a symmetric building fits two ways);
   repeat      a second window, check_after_s later, relocalized on its own,
               must agree with the first carried forward by GLIM;
-  board       (06, after this) the ZED's anchor-board dwell -- not used in
+  board       (03, after this) the ZED's anchor-board dwell -- not used in
               the fit -- must agree with the LiDAR start pose;
   look        mapping/reloc_check_<tag>.ply: the window (red) on the map
               (grey) around the start, for a viewer.
 
-Config: "06_init": {"relocalize": {...}}, all optional:
+Config: "03_init": {"relocalize": {...}}, all optional:
   "enabled":       false (the start comes from the board dwell unless this is on)
-  "anchor_cam":    "zed"        # the camera entry 08 anchors on
+  "anchor_cam":    "zed"        # the camera entry 04 anchors on
   "run_traj":      <work>/<date>/<pass>/<machine>/glim/traj_lidar.txt
   "map":           the reference pass's map_final_<tag>_anchored.pcd
   "window_s":      5.0,  "check_after_s": 60.0
@@ -105,7 +105,7 @@ def _icp(src, tgt, T0, voxel):
 
 def window_cloud(bag, topic, tr_t, tr_T, s01, t_from, t_to):
     """Deskewed scans with GLIM pose times in [t_from, t_to], in the GLIM world."""
-    a = importlib.import_module("01a_refine_poses")
+    a = importlib.import_module("02_refine_poses")
     pts, n = [], 0
     for j, p in a.iter_scans(bag, topic, tr_t, s01["time_tol"], s01["lidar_min"],
                              s01["lidar_max"], tr_T, bool(s01.get("deskew", True)),
@@ -251,22 +251,22 @@ def relocalize(P, T_lidar_cam=None):
     """-> dict: t0, T_map_glim, T_map_lidar0 (and T_map_cam0 with T_lidar_cam),
     the run trajectory, and every check's numbers. SystemExit when a check fails."""
     o3d, REG = _o3d()
-    a = importlib.import_module("01a_refine_poses")
+    a = importlib.import_module("02_refine_poses")
     c = dict(DEFAULTS)
-    c.update((P.cfg.get("06_init") or {}).get("relocalize") or {})
+    c.update((P.cfg.get("03_init") or {}).get("relocalize") or {})
     s01 = P.cfg["01_build_map"]
     bag = os.path.expanduser(P.dataset["bag"])
     run_traj = os.path.expanduser(c.get("run_traj") or os.path.join(
         os.path.dirname(os.path.normpath(bag)), P.machine, "glim", "traj_lidar.txt"))
     ref_map = os.path.expanduser(c.get("map") or (P.ref_file("anchored_map") if P.reference
                                                   else P.outp("map_final_{tag}_anchored.pcd")))
-    for f, what in ((run_traj, "run trajectory (06_init.relocalize.run_traj)"),
-                    (ref_map, "anchored reference map (06_init.relocalize.map)")):
+    for f, what in ((run_traj, "run trajectory (03_init.relocalize.run_traj)"),
+                    (ref_map, "anchored reference map (03_init.relocalize.map)")):
         if not os.path.exists(f):
             raise SystemExit("relocalize: %s not found: %s" % (what, f))
     tr_t, tr_T = a.load_traj(run_traj)
     tr_q = traj_quats(tr_T)
-    topic = a.detect_points_topic(bag, P.cfg.get("01a_refine", {}).get("points_topic", ""),
+    topic = a.detect_points_topic(bag, P.cfg.get("02_refine", {}).get("points_topic", ""),
                                   len(tr_t))
     print("\n=== LiDAR relocalization in the reference map ===")
     print("  run trajectory: %s (%d poses, %.1f s)" % (run_traj, len(tr_t), tr_t[-1] - tr_t[0]))
@@ -370,7 +370,7 @@ def relocalize(P, T_lidar_cam=None):
 
 
 def board_check(r, hits, T_lidar_cam):
-    """The board dwell (06's camera-mode hits) against the LiDAR start pose at
+    """The board dwell (03's camera-mode hits) against the LiDAR start pose at
     the same times: -> (cm, deg, n). Neither enters the other."""
     tr_t, tr_T, tr_q = r["tr"]
     d_t, d_r = [], []

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-STAGE 02 - cut floor & ceiling from the map by height.
+STAGE 06 - cut floor & ceiling from the map by height.
 
 Pipeline use (reads floor/ceil/voxel from config):
-    python3 02_cut.py [pipeline_config.json]
+    python3 06_cut.py [pipeline_config.json]
 
 Pick-your-bounds use (prints a z-histogram, changes nothing):
-    python3 02_cut.py [pipeline_config.json] --analyze
-  Read off the floor/ceiling peaks, put them in 02_cut.{floor,ceil}, re-run.
+    python3 06_cut.py [pipeline_config.json] --analyze
+  Read off the floor/ceiling peaks, put them in 06_cut.{floor,ceil}, re-run.
 
 If floor and ceil are both null in the config, the cut can't run: the script
 prints the histogram and exits non-zero so the pipeline stops for you to choose.
@@ -47,7 +47,7 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     cfg_path = args[0] if args else "pipeline_config.json"
     P = load_pipeline(cfg_path)
-    s = P.stage("02_cut")
+    s = P.stage("06_cut")
 
     ai = {"x": 0, "y": 1, "z": 2}[s.get("axis", "z")]
     pcd = o3d.io.read_point_cloud(s["input"])
@@ -73,7 +73,7 @@ def main():
         return
 
     if floor is None and ceil is None and (not voxel or voxel <= 0):
-        raise SystemExit("\nno floor/ceil/voxel set in 02_cut -> nothing to do. "
+        raise SystemExit("\nno floor/ceil/voxel set in 06_cut -> nothing to do. "
                          "Run with --analyze, pick bounds, put them in the config.")
 
     if floor is not None or ceil is not None:

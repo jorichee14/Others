@@ -1,16 +1,16 @@
 {
   "extends": "pipeline_config.json",
-  "_note": "survey_1 in mapping_A's map: 06 (ZED board views via GLIM) -> 08 (LiDAR ICP to the anchored map) -> 03 (boards from this run: boards_<tag>.json) -> 04 (arducam from its yaml, mobile_2's RealSense from rs_anchor). mobile_2 was parked: placed once by 04, no trajectory.",
+  "_note": "survey_1 in mapping_A's map: 03 (ZED board views via GLIM) -> 04 (LiDAR ICP to the anchored map) -> 05 (boards from this run: boards_<tag>.json) -> 07 (arducam from its yaml, mobile_2's RealSense from rs_anchor). mobile_2 was parked: placed once by 07, no trajectory.",
   "dataset": {
     "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/survey_1/mirc_dataset_survey_1_20260924_merged",
     "traj": null,
     "machine": "mobile_1",
     "reference_pass": "mapping_A"
   },
-  "04_build_cameras": {"cameras": [{"name": "realsense", "bag": null,
+  "07_build_cameras": {"cameras": [{"name": "realsense", "bag": null,
                                     "image_topic": "/mobile_2/color/image_raw",
                                     "camera_info_topic": "/mobile_2/color/camera_info",
                                     "rectified": false, "detect_target": 200}]},
-  "06_init": {"sensors": [{"name": "zed", "source": "lidar_odom"},
+  "03_init": {"sensors": [{"name": "zed", "source": "lidar_odom"},
                           {"name": "realsense", "enabled": false}]}
 }

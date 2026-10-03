@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-STAGE 09 - publish the best pose per robot as a ROS 2 mcap bag.
+STAGE 10 - publish the best pose per robot as a ROS 2 mcap bag.
 
-For every robot in the "09_publish" block the chosen stage-08 trajectory
+For every robot in the "10_publish" block the chosen stage-04 trajectory (a
+mapping pass: its refined trajectory through 05's T_N_world, written by
+mapping_track() under the same names)
 (TUM, camera OPTICAL frame in `map`) is written AS the camera optical frame:
 
   /<robot>/global_pose   geometry_msgs/PoseStamped, frame_id "map"
@@ -39,15 +41,15 @@ here; set "publish_body_frame": true on a robot to get the old behaviour.
 Timestamps are the original bag stamps, so the output can be played next to
 the raw bag.
 
-    python3 09_publish_poses.py [pipeline_config.json]      # writes the bag
-    python3 09_publish_poses.py pipeline_config.json --dry  # counts only
+    python3 10_publish_poses.py [pipeline_config.json]      # writes the bag
+    python3 10_publish_poses.py pipeline_config.json --dry  # counts only
 
 No ROS install needed: the bag is written by scoop.bagwrite (MCAP +
 metadata.yaml, as `ros2 bag record` leaves it), like the merge. With full_tf
 the dataset bag's /tf is read through, which takes a few minutes on a big bag.
 
 CONFIG
-"09_publish": {
+"10_publish": {
   "output_bag": "map_stages_20260828_outputs/coop2_best_poses",   <- a directory; mcap inside
   "map_frame": "map",
   "write_tf": true,
@@ -59,11 +61,11 @@ CONFIG
     { "name": "mobile_2",
       "traj": "map_stages_20260828_outputs/reference_coop2_all/traj_mobile_2_rs_odom_icp_boards.tum",
       "optical_frame": "camera_color_optical_frame" }
-    <- the trajectories are the optical frame already (stage 08 state); they
+    <- the trajectories are the optical frame already (stage 04 state); they
        are published unchanged. Only if a consumer needs the odometry BODY
        frame instead, add to that robot:
          "publish_body_frame": true,
-         "cam_extrinsic_xyzquat": [...],   (T_body_cam, as in stage 08)
+         "cam_extrinsic_xyzquat": [...],   (T_body_cam, as in stage 04)
          "body_frame": "zed_camera_link"
   ]
 }
@@ -111,7 +113,7 @@ def decimate(ts, Ts, rate_hz):
 def robot_poses(rb, rate_hz):
     """-> ts, T_map_target, T_start_target (the same poses relative to the first).
 
-    Stage 08 writes the trajectory of the camera OPTICAL frame in `map` and
+    Stage 04 writes the trajectory of the camera OPTICAL frame in `map` and
     that is what gets published: T_map_target = T_map_cam, no transform.
 
     Only with "publish_body_frame": true is the pose moved to the odometry
@@ -145,6 +147,33 @@ def robot_poses(rb, rate_hz):
           "xyz=%s" % (rb["name"], len(ts), ts[-1] - ts[0], path, frame, what,
                       np.round(T0[:3, 3], 3).tolist()))
     return ts, Tb, Tl
+
+
+def mapping_track(P):
+    """A mapping pass has no 04: its robot's track in map, as 04 writes a run's
+    (traj_<name>.tum and traj_<name>_in_cam.tum in odometry/reference_<tag>/),
+    is the refined trajectory (dataset.traj, GLIM's world) through 05's
+    T_N_world. Written when missing or older than its inputs; -> the _in_cam
+    path, or None without those inputs."""
+    import importlib
+    import json
+    from pipeline_common import load_traj
+    src, af = P.outp(P.dataset.get("traj") or ""), P.anchor_frame()
+    if not (P.dataset.get("traj") and os.path.exists(src) and os.path.exists(af)):
+        return None
+    p_l, p_c = P.lidar_track_traj(), P.lidar_track_traj("_in_cam")
+    if os.path.exists(p_c) and os.path.getmtime(p_c) >= max(os.path.getmtime(src),
+                                                             os.path.getmtime(af)):
+        return p_c
+    T_N = np.array(json.load(open(af))["T_N_world"], float)
+    times, T = load_traj(src)
+    T_map = np.einsum("ij,njk->nik", T_N, T)
+    W = importlib.import_module("02_refine_poses")
+    os.makedirs(os.path.dirname(p_c), exist_ok=True)
+    W.write_traj(p_l, times, T_map)
+    W.write_traj(p_c, times, np.einsum("nij,jk->nik", T_map, P.sensor.T_lidar_camera))
+    print("  %s: %s through T_N_world (%d poses)" % (p_c, src, len(times)))
+    return p_c
 
 
 def full_tf(P, s):
@@ -188,17 +217,19 @@ def main():
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from pipeline_common import load_pipeline
     P = load_pipeline(cfg_path)
-    s = P.cfg.get("09_publish")
+    s = P.cfg.get("10_publish")
     if s is None:
-        raise SystemExit("add a '09_publish' block to %s (sample in this file)" % cfg_path)
+        raise SystemExit("add a '10_publish' block to %s (sample in this file)" % cfg_path)
     s = dict(s)
     # processed layout: the bag into bags/ (<tag>_best_poses); a bare traj
-    # name is a stage-08 output in odometry/reference_<tag>/
+    # name is a stage-04 output in odometry/reference_<tag>/
     s["output_bag"] = P.outp(s.get("output_bag") or "{tag}_best_poses")
     print(P.describe())
     map_frame = s.get("map_frame", "map")
     rate_hz = float(s.get("rate_hz", 0) or 0)
     write_tf = bool(s.get("write_tf", True))
+    if not P.reference:
+        mapping_track(P)
     robots = []
     for rb in s["robots"]:
         if not rb.get("enabled", True):

@@ -34,19 +34,22 @@ processing/          raw recordings -> processed bags (command lines around scoo
   merge_session.py   check a pass's bags against record.yaml, merge them into one
   merge_bags.py      any bags -> one, with the topics you choose (--list, --topics, --pick)
   tf_edit.py         show or change a bag's TF: drop edges, add transforms, new odometry
-map_stages/          map from LiDAR + GLIM poses (01_build_map.py, 01a_refine_poses.py, ...);
+run_pass.py          one pass from raw to processed, every step in order (below)
+map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
+                     (01_build_map.py, 02_refine_poses.py, ...);
                      calibration read from the bag (camera_info + /tf_static); outputs in
                      data/processed/<date>/<pass>/{mapping,odometry/<machine>,frames,bags,comms};
                      datasets/<machine>/<format>_<depth>_<pass>_<date> from datasets/
-                     mapping pass: 01 map, 01a refine, 03 anchor, 02 view copy, 04/05 cameras+TF;
+                     mapping pass: 01 --seed map from GLIM, 02 refine, 01 final map,
+                     05 anchor, 06 view copy, 07/08 cameras+TF, 10 poses;
                      a run in that map (pipeline_config_<run>.json: "extends" the mapping
-                     config, dataset.reference_pass): 06 start pose from the anchor board --
+                     config, dataset.reference_pass): 03 start pose from the anchor board --
                      "source": "lidar_odom" combines every opening view, parked or moving,
                      through the run's GLIM trajectory (board_views.py); optional:
-                     06_init.relocalize, LiDAR relocalization (lidar_reloc.py),
-                     08 per-scan LiDAR ICP, 03 on the run places every board it sees in
-                     map (boards_<tag>.json, nothing re-anchored), 04 infra cameras,
-                     07 run cloud, 09 poses bag
+                     03_init.relocalize, LiDAR relocalization (lidar_reloc.py),
+                     04 per-scan LiDAR ICP, 05 on the run places every board it sees in
+                     map (boards_<tag>.json, nothing re-anchored), 07 infra cameras,
+                     09 run cloud, 10 poses bag
 datasets/            bags -> datasets for other tools
   mcap_convert.py    replica (RGB + lidar depth), mcd, mcgs (standalone)
 analysis/            measuring results; reads outputs, writes nothing back
@@ -65,6 +68,8 @@ tests/               self-tests, no real bag needed
   test_ouster.py     packets, clock, replay, remaps (needs ouster-sdk)
   test_zed.py        restamp, run_zed.sh with a fake ros2 and docker
   test_merge.py      machines, topic check, merge, tf_edit
+  test_pass_tf.py    the complete TF tree of a pass (merge, 10)
+  test_run_pass.py   run_pass.py: status, 10 + finalize, a mapping pass's order
   test_replica.py    replica with lidar depth on a synthetic scene
   test_scan_consistency.py  scan_consistency on synthetic sweeps: true, time-
                      shifted, drifting, broken deskew
@@ -134,6 +139,46 @@ On a synthetic uncompressed MCAP of 128x1024 Ouster scans (48-byte points,
 msg/s for `iter_scans` with the same gate, file reading included. Reading
 alone runs at ~630 msg/s, so that's the upper limit for a single process.
 
+## A pass from raw to processed (`run_pass.py`)
+
+```
+cd ~/workspaces/Others && git pull
+python3 scoop_pipeline/run_pass.py ~/workspaces/isaac_ros-dev/data/raw/20260924/survey_1 --status
+python3 scoop_pipeline/run_pass.py ~/workspaces/isaac_ros-dev/data/raw/20260924/survey_1
+```
+
+runs every step of the pass in order and skips the ones whose output is there
+already, so the same command picks up where it stopped. `--status` shows what
+is done, `--dry` prints the commands, `--from S` redoes S and everything after
+it, `--only S` runs S alone, `--until S` stops after S.
+
+| step | what | output |
+|---|---|---|
+| process | `process_recording.py` per machine folder with an Ouster bag or SVO2 | `work/<date>/<pass>/<machine>/` |
+| merge | `merge_session.py`: check against record.yaml, merge | `work/<date>/<pass>/<prefix>_<pass>_<date>_merged` |
+| 01_seed | mapping pass: `01_build_map.py --seed`, the map from GLIM's poses | `mapping/denoised_seed_<tag>.pcd` |
+| 02_refine | mapping pass: `02_refine_poses.py`, every scan registered to it | `odometry/<machine>/traj_lidar_refined.txt` |
+| 01_map | mapping pass: `01_build_map.py`, the final map from the refined poses | `mapping/map_final_<tag>.pcd` |
+| 03_init | run: `03_init_from_boards.py`, start pose from the anchor board | `frames/session_anchor.json` |
+| 04_reference | run: `04_reference_traj.py`, every scan registered to the anchored map | `odometry/reference_<tag>/` |
+| 05_anchor | `05_anchor.py`: the boards (mapping pass: and the anchored map) | `frames/anchor_frame.json`, `boards_<tag>.json` |
+| 06_cut | mapping pass, only when `06_cut` has floor/ceil: viewing copy | `mapping/*_noceil.pcd` |
+| 07_cameras | `07_build_cameras.py`: infra / parked cameras in map | `frames/cameras_in_map.yaml` |
+| 08_tfs | `08_emit_tfs.py` | `frames/publish_tfs_<tag>.sh` |
+| 09_cloud | run: `09_build_coop_cloud.py`, the run's cloud in the map | `mapping/cloud_in_ref_<tag>.pcd` |
+| 10_poses | `10_publish_poses.py`: poses + the complete TF | `bags/<tag>_best_poses` |
+| finalize | the merged bag again, with 10's /tf, /tf_static and poses in it | the merged bag, in place |
+
+The map stages need the pass's config in `map_stages/`: `pipeline_config.json`
+for the mapping pass, and for a run `pipeline_config_<run>.json` with
+`"extends": "pipeline_config.json"` and `dataset.reference_pass` (e.g.
+`pipeline_config_survey_1.json`); `--config` names another. Once the merged
+bag exists, processing is not redone, so the decoded/retimed/ZED bags may be
+deleted (keep `glim/`: 01_seed, 02 and 03 read GLIM's trajectory). finalize
+needs as much free space as the merged bag takes. A config written before the
+stages were renumbered still works: a block under its old number ("08_reference")
+is read as the new one ("04_reference").
+
 ## Processing a recording
 
 ```
@@ -148,7 +193,7 @@ data/raw/20260924/mapping_A/mobile_1/      as recorded; never written to
     mirc_dataset_survey_1_mapping_20260924_mobile_1/   (the packets bag)
     *.svo2
 data/raw/20260924/mapping_A/infra_cameras/<camera>/   one folder per infra camera:
-    its recordings + extrinsic_<camera>.yaml saved during the session (map stage 04
+    its recordings + extrinsic_<camera>.yaml saved during the session (map stage 07
     reads the yaml here)
 data/work/20260924/mapping_A/mobile_1/
     mirc_dataset_survey_1_mapping_20260924_mobile_1_decoded/   1  points bag, sensor time
@@ -366,17 +411,17 @@ leaves it out; `--check` prints the tree without merging):
 
 ```
 map
-├── board                   03's start board
-│  └── map_zed              mobile_1's origin, 03: the ZED's map at the start board
+├── board                   05's start board
+│  └── map_zed              mobile_1's origin, 05: the ZED's map at the start board
 │     ├~~ odom_zed          the ZED's own topics, as recorded
-│     └~~ zed_camera_link   mobile_1 on its LiDAR trajectory (08's in a run, 01a's
+│     └~~ zed_camera_link   mobile_1 on its LiDAR trajectory (04's in a run, 02's
 │        └── ... ZED, os_sensor, radars   through T_N_world in a mapping pass);
 │                           replaces the ZED's odom_zed ~~ zed_camera_link
-├── board_rs                03's RealSense board
-│  └── map_realsense        mobile_2's origin (04 camera "origin_frame", below its "board")
-│     └── camera_link       parked: where 04 placed it
-├── board_anchor_b, ...     03's other boards
-└── arducam_optical_frame   04 (its ChArUco pose under map_zed is dropped)
+├── board_rs                05's RealSense board
+│  └── map_realsense        mobile_2's origin (07 camera "origin_frame", below its "board")
+│     └── camera_link       parked: where 07 placed it
+├── board_anchor_b, ...     05's other boards
+└── arducam_optical_frame   07 (its ChArUco pose under map_zed is dropped)
    └── infra1_link          the radar, configs/static_tf.yaml
 ```
 

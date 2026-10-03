@@ -2,7 +2,7 @@
 """
 A run's start in map from EVERY board sighting of its opening, moving or not.
 
-Each sighting i of a board whose pose in map is known (stage 03) gives the
+Each sighting i of a board whose pose in map is known (stage 05) gives the
 camera in map, T_map_cam_i = T_map_board @ inv(T_cam_board_i). The run's own
 LiDAR odometry (its GLIM trajectory, mm-accurate over seconds) says where the
 camera was in the GLIM world at the same instant, T_glim_cam(t_i) =
@@ -19,7 +19,7 @@ frame (depth along the view, the board's tilt), views from other angles have
 other errors, and the mean over them cancels what averaging one view cannot.
 The scatter of the per-view estimates is the check.
 
-Used by 06_init_from_boards.py ("source": "lidar_odom" on a camera sensor).
+Used by 03_init_from_boards.py ("source": "lidar_odom" on a camera sensor).
 """
 import numpy as np
 
@@ -39,7 +39,7 @@ def _ang(R):
 
 
 def views_through_odom(hits, tr_t, tr_T, T_lidar_cam, section_gap=3.0, min_views=5):
-    """hits: 06's board sightings ({t, T_map_cam, T_board_cam, n, reproj}).
+    """hits: 03's board sightings ({t, T_map_cam, T_board_cam, n, reproj}).
     -> dict with T_map_glim and the numbers that say whether to trust it,
     or None when the opening has fewer than min_views sightings with a pose."""
     tr_q = traj_quats(tr_T)
