@@ -38,6 +38,10 @@ Steps (a step whose output is there already is skipped):
 --status  what is done, and stop      --dry     print the commands, run nothing
 --from S  run S and every step after it, done or not
 --until S stop after S                --only S  run S alone, done or not
+A map stage whose block in the pipeline config has "enabled": false is not run
+(e.g. a coop run: "05_anchor": {"enabled": false}, the boards as the mapping
+pass placed them).
+
 --config  the pipeline config (default: the one in map_stages/ whose dataset is
           this pass, e.g. pipeline_config_survey_1.json; a run needs its own,
           "extends": "pipeline_config.json" with dataset.reference_pass)
@@ -59,6 +63,11 @@ sys.path.insert(0, STAGES)
 
 MAPPING = ["01_seed", "02_refine", "01_map"]
 RUN = ["03_init", "04_reference"]
+# each map stage's block in the pipeline config
+BLOCK = {"01_seed": "01_build_map", "02_refine": "02_refine", "01_map": "01_build_map",
+         "03_init": "03_init", "04_reference": "04_reference", "05_anchor": "05_anchor",
+         "06_cut": "06_cut", "07_cameras": "07_build_cameras", "08_tfs": "08_emit_tfs",
+         "09_cloud": "09_build", "10_poses": "10_publish"}
 ORDER = (["process", "merge"] + MAPPING + RUN
          + ["05_anchor", "06_cut", "07_cameras", "08_tfs", "09_cloud", "10_poses", "finalize",
             "comms", "csi_clean"])
@@ -154,6 +163,9 @@ def plan_steps(raw, cfg):
     applies.update({"05_anchor": True, "06_cut": not run and (cut.get("floor") is not None
                                                              or cut.get("ceil") is not None),
                     "07_cameras": True, "08_tfs": True, "09_cloud": run, "10_poses": True})
+    for s_, k in BLOCK.items():                      # "enabled": false in its block: not run
+        if blk(k).get("enabled", True) is False:
+            applies[s_] = False
     cmds = {
         "01_seed": [py(st("01_build_map.py"), cfg, "--seed")],
         "02_refine": [py(st("02_refine_poses.py"), cfg)],

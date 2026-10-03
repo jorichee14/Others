@@ -7,7 +7,8 @@
   mapping   --dry: 01 --seed, 02, 01, 05, ... in that order, no 03/04/09;
   mapping   10's track for a mapping pass: the refined trajectory in map, as
             the camera optical frame;
-  configs   a block under its old stage number is read as the new one.
+  configs   a block under its old stage number is read as the new one;
+            a stage whose block has "enabled": false is not run.
 
     python scoop_pipeline/tests/test_run_pass.py
 """
@@ -75,6 +76,15 @@ def main():
             line = next((ln for ln in out.splitlines() if ln.strip().startswith(step + " ")), "")
             if line.split()[1:2] != [state]:
                 f.append("run --status: %s is %r, not %s" % (step, line, state))
+        c = json.load(open(cfg))
+        c["05_anchor"] = {"enabled": False}
+        off = cfg[:-5] + "_off.json"
+        json.dump(c, open(off, "w"))
+        rc, out = runner(raw, "--config", off, "--status")
+        line = next((ln for ln in out.splitlines() if ln.strip().startswith("05_anchor ")), "")
+        if line.split()[1:2] != ["-"]:
+            f.append("\"enabled\": false: 05_anchor is %r, not -" % line)
+        os.remove(off)
         rc, out = runner(raw, "--config", cfg, "--only", "10_poses")
         if rc:
             f.append("--only 10_poses: " + out[-1500:])
