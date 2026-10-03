@@ -59,6 +59,7 @@ analysis/            measuring results; reads outputs, writes nothing back
   odom/zed_vs_lidar.py    drift of the ZED's own tracking (map_zed) against the LiDAR trajectory
   comms/             wifi / iperf / ntp (nothing yet)
   bags/topic_timing.py    intervals, gaps and repeated frames of topics in a bag
+  bags/show_topics.py     what topics hold: type, count, definition, first messages
 checks/              is the environment / the decoder right? (against real bags)
   env_check.py       is this environment ready?
   bag_check.py       verify + time the fast decoder on a real bag
