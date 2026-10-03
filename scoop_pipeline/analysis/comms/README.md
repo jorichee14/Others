@@ -15,3 +15,5 @@ position in map.
     csi_analysis.py <processed pass>   the CSI links: capture, frame types and the subcarriers
                                        they fill, path loss, delay spread, coherence vs speed
                                        (comms/csi/csi_report.json and plots)
+    csi_view.py <processed pass>       pictures of the clean CSI per link: amplitude, phase and
+                                       delay profile over time, snapshots (comms/csi/view/)

@@ -69,6 +69,8 @@ analysis/            measuring results; reads outputs, writes nothing back
                      the robot's path and the parked nodes (comms/maps/)
   comms/csi_analysis.py   CSI links: capture, frame types and their subcarriers, path
                      loss, delay spread, coherence vs speed, RSSI on the map
+  comms/csi_view.py       pictures of the clean CSI: amplitude, phase, delay profile
+                     over time, snapshots by link length (comms/csi/view/)
   bags/topic_timing.py    intervals, gaps and repeated frames of topics in a bag
   bags/show_topics.py     what topics hold: type, count, definition, first messages
 checks/              is the environment / the decoder right? (against real bags)
@@ -87,6 +89,7 @@ tests/               self-tests, no real bag needed
   test_wifi_analysis.py  wifi_analysis: seq wrap, late replies, contention, goodput vs RSSI
   test_comms_map.py  comms_map: figures written, grid cells hold their samples' median
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
+  test_csi_view.py   csi_view: delay profile puts the paths at their delays; figures
   test_replica.py    replica with lidar depth on a synthetic scene
   test_scan_consistency.py  scan_consistency on synthetic sweeps: true, time-
                      shifted, drifting, broken deskew
