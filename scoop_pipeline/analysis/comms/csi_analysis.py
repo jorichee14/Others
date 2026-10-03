@@ -36,6 +36,7 @@ import json
 import math
 import os
 import sys
+import warnings
 
 import numpy as np
 
@@ -83,9 +84,11 @@ def stats(a):
 
 
 def seq_coverage(seq):
-    """Share of QoS data frames caught: 12-bit sequence numbers in time order,
-    a step of k (1..2047) means k - 1 frames in between were missed; 0 is a
-    retry; a larger step a break (not counted)."""
+    """How the QoS data frames' 12-bit sequence numbers step between captured
+    frames. CSI is one per PPDU; an A-MPDU carries many MPDUs, each with its
+    own seq, and each TID counts on its own, so a step of k is not k - 1
+    missed frames unless the transmitter sends one MPDU per PPDU on one TID.
+    The share caught is given only then (median step 1)."""
     s = np.asarray(seq, float)
     s = s[np.isfinite(s)].astype(int) % 4096
     if len(s) < 2:
@@ -94,8 +97,11 @@ def seq_coverage(seq):
     step = d[(d >= 1) & (d < 2048)]
     if not len(step):
         return None
-    return {"caught_percent": 100 * float(len(step) / step.sum()), "retries": int((d == 0).sum()),
-            "breaks": int((d >= 2048).sum())}
+    out = {"median_step": float(np.median(step)), "step_1_percent": 100 * float(np.mean(step == 1)),
+           "retries": int((d == 0).sum()), "breaks": int((d >= 2048).sum())}
+    if out["median_step"] == 1:
+        out["caught_percent"] = 100 * float(len(step) / step.sum())
+    return out
 
 
 def occupancy(amp_db, sub):
@@ -394,6 +400,7 @@ def main():
     ap.add_argument("--grid", type=float, default=0.5)
     ap.add_argument("--no-plots", action="store_true")
     a = ap.parse_args()
+    warnings.simplefilter("ignore", RuntimeWarning)          # empty seconds in the timelines
     root = os.path.dirname(os.path.dirname(HERE))
     sys.path.insert(0, root)
     sys.path.insert(0, os.path.join(root, "map_stages"))
@@ -425,11 +432,14 @@ def main():
     print("\ncapture:")
     print("  %-32s %8s %7s %7s %9s %10s %12s" % ("link", "packets", "rate Hz", "gaps>1s",
                                                 "longest", "at s", "QoS caught"))
+    print("  (QoS caught: only when the data frames' seq steps by 1 per captured frame; "
+          "else the median step, as A-MPDUs and TIDs make it no capture rate)")
     for n, r in report.items():
-        q = r["qos_data_capture"]
+        q = r["qos_data_capture"] or {}
         print("  %-32s %8d %7.1f %7d %8.2fs %10.0f %11s" % (
             n, r["packets"], r["rate_hz"], r["gaps_over_1s"], r["longest_gap_s"] or 0,
-            r["longest_gap_at_s"] or 0, "%.1f%%" % q["caught_percent"] if q else "-"))
+            r["longest_gap_at_s"] or 0, "%.1f%%" % q["caught_percent"] if "caught_percent" in q
+            else ("seq step %g" % q["median_step"] if q else "-")))
     print("\nframe types (active = subcarriers within 20 dB of the strongest; VHT 80 MHz fills 242):")
     for n, r in report.items():
         for k, v in r["frames"].items():
