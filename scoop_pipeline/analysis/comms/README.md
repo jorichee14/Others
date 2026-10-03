@@ -10,3 +10,5 @@ position in map.
     wifi_analysis.py <processed pass>  the links: RSSI, PHY rates, ping per ICMP seq, iperf,
                                        contention (comms/wifi/wifi_report.json, wifi_timeline.png,
                                        wifi_map.png)
+    comms_map.py <processed pass>      the RF map: NTP, RSSI, ping, iperf on the map's top view
+                                       with the robot's path and the parked nodes (comms/maps/)

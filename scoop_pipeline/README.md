@@ -64,6 +64,8 @@ analysis/            measuring results; reads outputs, writes nothing back
                      frequency vs temperature, worst case between machines
   comms/wifi_analysis.py  links: RSSI, PHY rates, ping loss per ICMP seq, iperf,
                      ping during iperf vs not, RSSI along the path
+  comms/comms_map.py      RF map: NTP, RSSI, ping, iperf on the map's top view with
+                     the robot's path and the parked nodes (comms/maps/)
   bags/topic_timing.py    intervals, gaps and repeated frames of topics in a bag
   bags/show_topics.py     what topics hold: type, count, definition, first messages
 checks/              is the environment / the decoder right? (against real bags)
@@ -80,6 +82,7 @@ tests/               self-tests, no real bag needed
   test_comms.py      comms tables: every message, summary numbers, positions
   test_ntp_analysis.py  ntp_analysis on a synthetic ntp.csv with known events
   test_wifi_analysis.py  wifi_analysis: seq wrap, late replies, contention, goodput vs RSSI
+  test_comms_map.py  comms_map: figures written, grid cells hold their samples' median
   test_replica.py    replica with lidar depth on a synthetic scene
   test_scan_consistency.py  scan_consistency on synthetic sweeps: true, time-
                      shifted, drifting, broken deskew
