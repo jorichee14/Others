@@ -30,6 +30,8 @@ Steps (a step whose output is there already is skipped):
     10_poses      10_publish_poses.py        bags/<tag>_best_poses: poses + complete TF
     finalize      the merged bag again, with 10's /tf, /tf_static and poses in it
                   (built next to it, then put in its place)
+    comms         processing/comms_tables.py: NTP, Wi-Fi, ping, iperf, CSI tables with
+                  each machine's position (processed/<date>/<pass>/comms/)
 
 --status  what is done, and stop      --dry     print the commands, run nothing
 --from S  run S and every step after it, done or not
@@ -56,7 +58,8 @@ sys.path.insert(0, STAGES)
 MAPPING = ["01_seed", "02_refine", "01_map"]
 RUN = ["03_init", "04_reference"]
 ORDER = (["process", "merge"] + MAPPING + RUN
-         + ["05_anchor", "06_cut", "07_cameras", "08_tfs", "09_cloud", "10_poses", "finalize"])
+         + ["05_anchor", "06_cut", "07_cameras", "08_tfs", "09_cloud", "10_poses", "finalize",
+            "comms"])
 
 
 def py(script, *args):
@@ -119,6 +122,8 @@ def plan_steps(raw, cfg):
     steps.append(("merge", mb is not None, have, mb or "no bags below %s" % raw,
                   [py(os.path.join(ROOT, "processing", "merge_session.py"), raw)]))
     if not cfg:
+        if mb:
+            steps.append(comms_step(mb, None))
         return steps, None
     P = pass_tf.load_pipeline(cfg)
     run = bool(P.reference)
@@ -169,7 +174,17 @@ def plan_steps(raw, cfg):
         print("note: dataset.bag of %s is %s; the merge writes %s" % (cfg, db, mb))
     steps.append(("finalize", True, lambda: finalized(db, out["10_poses"]), db,
                   lambda dry: finalize(db, out["10_poses"], dry)))
+    steps.append(comms_step(db, cfg))
     return steps, P
+
+
+def comms_step(bag, cfg):
+    """NTP, Wi-Fi, ping, iperf, CSI tables (processed/<date>/<pass>/comms/)."""
+    from pipeline_common import processed_dir_for
+    summ = os.path.join(processed_dir_for(bag), "comms", "summary.json")
+    cmd = py(os.path.join(ROOT, "processing", "comms_tables.py"), bag)
+    return ("comms", True, os.path.exists(summ), os.path.dirname(summ),
+            [cmd + (["--config", cfg] if cfg else [])])
 
 
 def finalized(merged, poses):

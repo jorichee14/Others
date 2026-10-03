@@ -1,0 +1,9 @@
+# Where each machine is, as a frame of the pass's TF tree: processing/comms_tables.py
+# gives every row the position of its machine's frame in map (x, y, z), and a CSI
+# packet the length of its link (distance_m). The robot that moves is placed by
+# the pass's trajectory, the others by the static tree (map -> board -> ...).
+frames:
+  mobile_1: zed_camera_link
+  mobile_1/sniffer: zed_camera_link      # the Pi rides on mobile_1
+  mobile_2: camera_link
+  infra_1: infra1_link
