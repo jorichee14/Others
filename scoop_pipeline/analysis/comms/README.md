@@ -12,3 +12,6 @@ position in map.
                                        wifi_map.png)
     comms_map.py <processed pass>      the RF map: NTP, RSSI, ping, iperf on the map's top view
                                        with the robot's path and the parked nodes (comms/maps/)
+    csi_analysis.py <processed pass>   the CSI links: capture, frame types and the subcarriers
+                                       they fill, path loss, delay spread, coherence vs speed
+                                       (comms/csi/csi_report.json and plots)
