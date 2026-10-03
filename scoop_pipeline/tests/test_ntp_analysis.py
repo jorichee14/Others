@@ -46,7 +46,7 @@ def write(path):
             rows.append({"machine": m, "peer": "", "topic": f"/{m}/ntp/client/status",
                          "t": t, "t_log": t + 0.01, "frame_id": m, "role": "client" if m != "mobile_1"
                          else "server", "hostname": m, "synchronized": 1,
-                         "sync_source": "mobile1" if m != "mobile_1" else "LOCAL", "stratum": 9,
+                         "sync_source": "mobile1" if m != "mobile_1" else "7F7F0101", "stratum": 9,
                          "offset_seconds": 0.0, "last_offset_seconds": last,
                          "jitter_seconds": 5e-4, "root_delay": 0.004, "root_dispersion": 0.0005,
                          "frequency_error_ppm": (20 + 0.5 * (temp - 50)) if m == "mobile_1/sniffer"
@@ -95,6 +95,11 @@ def main():
         fv = M["mobile_1/sniffer"]["frequency_vs_temperature"]
         if abs(fv["ppm_per_degC"] - 0.5) > 1e-6 or fv["correlation"] < 0.999:
             f.append("frequency vs temperature: %s" % fv)
+        if not M["mobile_1"]["local_reference"] or M["mobile_1"]["reach_below_100_spans"]:
+            f.append("mobile_1 local reference: %s" % M["mobile_1"]["local_reference"])
+        pm = rep["pairwise_measured_ms"]["max"]
+        if abs(pm["infra_1 ~ mobile_2"] - 0.16) > 1e-6 or abs(pm["infra_1 ~ mobile_1"] - 0.1) > 1e-6:
+            f.append("pairwise measured: %s" % pm)
         pw = rep["pairwise_bound_ms"]["max"]
         if abs(pw["infra_1 ~ mobile_2"] - 5.0) > 1e-6 or abs(pw["infra_1 ~ mobile_1"] - 2.5) > 1e-6:
             f.append("pairwise: %s" % pw)

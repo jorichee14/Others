@@ -33,6 +33,9 @@ import sys
 import numpy as np
 
 
+LOCAL = {"7F7F0101", "LOCAL", "127.127.1.1", "LOCL"}
+
+
 def load(path):
     if os.path.isdir(path):
         for c in (os.path.join(path, "comms", "ntp", "ntp.csv"), os.path.join(path, "ntp", "ntp.csv"),
@@ -104,13 +107,16 @@ def machine_report(rows):
         rep["publisher_restarts"] = int(np.sum(d < 0))
     sync = col(rows, "synchronized", bool)
     rep["synchronized_percent"] = 100 * float(np.nanmean(sync))
-    rep["sources"] = sorted({r.get("sync_source", "") for r in rows})
+    rep["sources"] = sorted({r.get("sync_source", "") or "(none)" for r in rows})
+    # chrony's local clock (127.127.1.1, shown as 7F7F0101 or LOCAL): the machine
+    # is its own reference; it has no server to reach or to be offset from
+    rep["local_reference"] = all(s_ in LOCAL for s_ in rep["sources"] if s_ != "(none)")
     rep["stratum"] = sorted({r.get("stratum", "") for r in rows})
     leap = sorted({r.get("leap_indicator", "") for r in rows} - {"no_warning", ""})
     if leap:
         rep["leap_indicator"] = leap
     reach = col(rows, "reachability_percent")
-    low = np.isfinite(reach) & (reach < 100)
+    low = np.isfinite(reach) & (reach < 100) & (not rep["local_reference"])
     rep["reach_below_100_percent_of_time"] = 100 * float(np.mean(low))
     rep["reach_below_100_spans"] = [{"from_s": float(a), "to_s": float(b)} for a, b in spans(t, low)]
 
@@ -148,9 +154,10 @@ def machine_report(rows):
     return rep, t, meas, new, bound, f, T
 
 
-def pairwise(reports, reference):
-    """Worst-case disagreement of two clocks: each client is bounded against
-    the reference; two clients by the sum of their bounds."""
+def pairwise(reports, reference, key="error_bound_ms"):
+    """Disagreement of two clocks: each client against the reference, two
+    clients by the sum of theirs (key: the strict bound, or the offsets
+    measured at the polls)."""
     names = sorted(reports)
     out = {}
     for q in ("p95", "max"):
@@ -159,8 +166,8 @@ def pairwise(reports, reference):
             for b in names:
                 if a >= b:
                     continue
-                ba = 0.0 if a == reference else (reports[a]["error_bound_ms"] or {}).get(q, math.nan)
-                bb = 0.0 if b == reference else (reports[b]["error_bound_ms"] or {}).get(q, math.nan)
+                ba = 0.0 if a == reference else (reports[a][key] or {}).get(q, math.nan)
+                bb = 0.0 if b == reference else (reports[b][key] or {}).get(q, math.nan)
                 tab[f"{a} ~ {b}"] = ba + bb
         out[q] = tab
     return out
@@ -226,7 +233,9 @@ def main():
         reports[m], series[m] = rep, (t, meas, new, bound, f, T)
     t0 = min(r["t_start"] for r in reports.values())
     pw = pairwise(reports, a.reference)
-    report = {"source": path, "reference": a.reference, "machines": reports, "pairwise_bound_ms": pw}
+    pm = pairwise(reports, a.reference, "measured_offset_ms")
+    report = {"source": path, "reference": a.reference, "machines": reports,
+              "pairwise_bound_ms": pw, "pairwise_measured_ms": pm}
     with open(os.path.join(out_dir, "ntp_report.json"), "w") as fh:
         json.dump(report, fh, indent=2)
 
@@ -260,18 +269,26 @@ def main():
             notes.append(f"{m}: {r['lost_messages']} status messages missing (seq)")
         if r["synchronized_percent"] < 100:
             notes.append(f"{m}: unsynchronized {100 - r['synchronized_percent']:.1f}% of the time")
-        if len(r["sources"]) > 1:
+        if r["local_reference"]:
+            notes.append(f"{m}: its own local clock is the reference ({', '.join(r['sources'])}): "
+                         f"the others follow it, nothing is checked against it")
+        if len([x for x in r["sources"] if x != "(none)"]) > 1:
             notes.append(f"{m}: source changed: {', '.join(r['sources'])}")
     if notes:
         print("\nevents:")
         for n in notes:
             print("  " + n)
-    print(f"\nworst-case clock disagreement between machines (bounds added; {a.reference} is "
-          f"the reference, its own bound against its upstream not counted), ms:")
+    print(f"\nclock disagreement between machines, ms ({a.reference} is the reference; two "
+          f"clients add up):\n  measured = |offset| at the polls; bound = chrony's maximum error, "
+          f"which takes half the root delay as possible path asymmetry")
+    print("  %-34s %10s %10s %10s %10s" % ("", "meas p95", "meas max", "bound p95", "bound max"))
     for pair in pw["max"]:
-        print(f"  {pair:34s} p95 {pw['p95'][pair]:7.3f}   max {pw['max'][pair]:7.3f}")
+        print(f"  {pair:34s} {pm['p95'][pair]:10.3f} {pm['max'][pair]:10.3f} "
+              f"{pw['p95'][pair]:10.3f} {pw['max'][pair]:10.3f}")
     worst = max(pw["max"].values()) if pw["max"] else math.nan
-    print(f"\nlargest: {worst:.3f} ms (a 30 Hz camera frame is 33 ms, a 10 Hz scan 100 ms)")
+    wm = max(pm["max"].values()) if pm["max"] else math.nan
+    print(f"\nlargest: measured {wm:.3f} ms, bound {worst:.3f} ms "
+          f"(a 30 Hz camera frame is 33 ms, a 10 Hz scan 100 ms)")
     if not a.no_plots:
         for p in plots(series, out_dir, t0):
             print(f"  {p}")
