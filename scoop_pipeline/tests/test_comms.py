@@ -3,8 +3,10 @@
 
 A pass like survey_1 (tests/test_pass_tf.py's scene, merged with its complete
 TF) gets the robots' comms topics, with their own message types as the bag
-carries them: NtpStatus, PingStat, IperfResult, WifiLinkStatus, and a CSI
-type. Every table must hold every message, the summary the numbers put in
+carries them: NtpStatus, PingStat, IperfResult, WifiLinkStatus, CsiFrame
+(an 80 MHz nexmon dump: 256 raw slots, junk on DC and the guards) and
+CsiStatus. CSI must come out on the 242 occupied subcarriers with the
+amplitude and the phase put in (its linear part removed). Every table must hold every message, the summary the numbers put in
 (ping loss, iperf medians, clock steps, RSSI), each row its machine's
 position in map, and a CSI packet the length of its link.
 
@@ -41,9 +43,25 @@ DEFS = {
     "float32[] interval_mbps\n",
     "comms_msgs/msg/WifiLinkStatus": "std_msgs/Header header\nstring interface\nstring bssid\n"
     "int32 channel\nfloat64 signal_dbm\nfloat64 tx_bitrate_mbps\nfloat64 rx_bitrate_mbps\n",
-    "csi_msgs/msg/Csi": "std_msgs/Header header\nstring tx_mac\nint32 rssi\nuint16 channel\n"
-    "int16[] csi_real\nint16[] csi_imag\n",
+    "comms_msgs/msg/CsiFrame": "std_msgs/Header header\nstring src_mac\nint8 rssi\n"
+    "uint8 frame_control\nuint16 seq\nuint8 core\nuint8 spatial_stream\nuint16 chanspec\n"
+    "uint16 chip_version\nuint16 channel\nuint16 bandwidth_mhz\nint32[] subcarrier_index\n"
+    "float32[] csi_real\nfloat32[] csi_imag\nbool trimmed\nuint32 raw_slots\n",
+    "comms_msgs/msg/CsiStatus": "std_msgs/Header header\nstring interface\nbool monitor_mode\n"
+    "uint16 chanspec\nuint16 channel\nuint16 bandwidth_mhz\nstring firmware\n"
+    "float32 frames_per_sec\nuint64 frames_total\nuint64 dropped_total\nstring mac_filter\n",
 }
+SLOTS = np.arange(256)
+SUB = np.where(SLOTS < 128, SLOTS, SLOTS - 256)
+
+
+def csi_slots(i):
+    """80 MHz nexmon dump: amplitude 100 and a linear phase on the occupied
+    subcarriers (+-2..+-122), junk on DC and the guards, as the 43455 gives."""
+    H = 100 * np.exp(1j * (0.05 * SUB + 0.3 + 0.01 * i))
+    junk = (np.abs(SUB) < 2) | (np.abs(SUB) > 122)
+    H[junk] = -32640 - 18944j
+    return H.real.astype(np.float32), H.imag.astype(np.float32)
 
 
 def comms_bag(path, t0, dur):
@@ -85,11 +103,19 @@ def comms_bag(path, t0, dur):
             protocol="TCP", reverse=False, success=i != 1, error="" if i != 1 else "refused",
             bitrate_mbps=100.0 if i != 1 else float("nan"), interval_mbps=np.zeros(0, np.float32))))
     for i, t in enumerate(np.arange(t0, t0 + dur, 0.05)):             # CSI 20 Hz per link
+        re, im = csi_slots(i)
         for tx in ("infra_1", "mobile_2"):
-            out.append((t, f"/mobile_1/sniffer/{tx}/csi", "csi_msgs/msg/Csi", M(
-                "csi_msgs/msg/Csi", header=H(t, "pi1"), tx_mac=tx, rssi=-50, channel=149,
-                csi_real=np.arange(64, dtype=np.int16) + i % 7,
-                csi_imag=-np.arange(64, dtype=np.int16))))
+            out.append((t, f"/mobile_1/sniffer/{tx}/csi", "comms_msgs/msg/CsiFrame", M(
+                "comms_msgs/msg/CsiFrame", header=H(t, "wlan0"), src_mac=tx, rssi=-74,
+                frame_control=148 if i % 2 else 136, seq=i, core=0, spatial_stream=0,
+                chanspec=57499, chip_version=101, channel=149, bandwidth_mhz=80,
+                subcarrier_index=SLOTS.astype(np.int32), csi_real=re, csi_imag=im,
+                trimmed=False, raw_slots=256)))
+    for t in np.arange(t0, t0 + dur, 2.0):
+        out.append((t, "/mobile_1/sniffer/csi_publisher/status", "comms_msgs/msg/CsiStatus", M(
+            "comms_msgs/msg/CsiStatus", header=H(t, "wlan0"), interface="wlan0", monitor_mode=True,
+            chanspec=57499, channel=149, bandwidth_mhz=80, firmware="nexmon", frames_per_sec=400.0,
+            frames_total=100, dropped_total=0, mac_filter="")))
     out.sort(key=lambda x: x[0])
     with BagWriter(path) as w:
         for t, topic, typ, msg in out:
@@ -158,8 +184,23 @@ def main():
         if len(csi) != 400:
             f.append("csi rows: %d" % len(csi))
         z = np.load(os.path.join(out, "csi_infra_1_to_mobile_1_sniffer.npz"))
-        if z["csi_real"].shape != (200, 64) or len(z["t"]) != 200:
+        if z["H"].shape != (200, 242) or len(z["t"]) != 200 or "csi_real" in z.files:
             f.append("csi npz: %s" % {k: z[k].shape for k in z.files})
+        else:
+            sub = z["subcarrier"]
+            if sub[0] != -122 or sub[-1] != 122 or 0 in sub or 1 in sub or -1 in sub:
+                f.append("csi subcarriers: %s .. %s" % (sub[:3], sub[-3:]))
+            if np.abs(z["amp_db"] - 40).max() > 1e-3 or np.abs(z["phase"]).max() > 1e-3:
+                f.append("csi amp / phase: %.4f dB, %.5f rad" % (np.abs(z["amp_db"] - 40).max(),
+                                                                  np.abs(z["phase"]).max()))
+            if np.abs(np.angle(z["H"][0, sub == 10][0]) - (0.5 + 0.3)) > 1e-4:
+                f.append("csi H at subcarrier 10: %s" % z["H"][0, sub == 10])
+        if abs(float(csi[0]["csi_power_db"]) - 40) > 1e-3 or csi[0]["n_subcarriers"] != "242":
+            f.append("csi columns: %s" % {k: csi[0][k] for k in ("csi_power_db", "n_subcarriers")})
+        sc = s["csi"]["mobile_1/sniffer <- infra_1"]
+        if sc["frame_control"] != {"136": 100, "148": 100} or \
+                s["csi_status"]["mobile_1/sniffer"]["frames_per_sec"]["median"] != 400.0:
+            f.append("csi summary: %s / %s" % (sc, s.get("csi_status")))
 
         # positions: mobile_1 moves with its trajectory, the others are fixed
         T_link_cam = T.CHAIN[0][2] @ T.CHAIN[1][2] @ T.CHAIN[2][2]

@@ -10,7 +10,11 @@ writes to data/processed/<date>/<pass>/comms/ (--out for elsewhere):
                        one row per message, every machine (a `machine` column;
                        CSI also `peer`, the transmitter); t = header stamp
                        (that machine's clock), t_log = when the bag logged it
-    csi_<tx>_to_<rx>.npz   the CSI arrays of a link, one row per packet, + t
+    csi_<tx>_to_<rx>.npz   a CSI link, one row per packet: t, t_log, subcarrier (K,)
+                       signed, H (N, K) complex on the occupied subcarriers
+                       (+-2..+-122 at 80 MHz: no DC, no guards), amp_db, phase
+                       (its linear part across subcarriers removed); csi.csv
+                       has csi_power_db and csi_amp_spread_db per packet
     summary.json       per machine / link: NTP offset and steps, ping loss and
                        RTT, iperf throughput up / down, RSSI and PHY rates, CSI rate
 With the pass's pipeline config (found in map_stages/ like run_pass.py does)
@@ -144,9 +148,15 @@ def _short(kind, v):
                 f"channel {', '.join(v['channels'])}, roams {v['roams']}")
     if kind == "csi":
         d = v.get("distance_m")
+        fc = ", ".join("0x%02x x%d" % (int(k), n) for k, n in v.get("frame_control", {}).items()
+                       if k not in ("None", ""))
         return (f"{v['messages']} packets, {v['rate_hz'] or 0:.1f} Hz, longest gap "
-                f"{v['longest_gap_s'] or 0:.2f} s" + (f", distance {f(d, 'min')}-{f(d, 'max')} m"
-                                                       if d else ""))
+                f"{v['longest_gap_s'] or 0:.2f} s, RSSI median {f(v.get('rssi_dbm'))} dBm"
+                + (f", distance {f(d, 'min')}-{f(d, 'max')} m" if d else "")
+                + (f"; frames {fc}" if fc else ""))
+    if kind == "csi_status":
+        return (f"{v['messages']} msgs, {f(v.get('frames_per_sec'))} frames/s, monitor mode "
+                f"{v.get('monitor_mode_percent', 0):.0f}%, dropped {v.get('dropped_total')}")
     return f"{v['messages']} messages"
 
 

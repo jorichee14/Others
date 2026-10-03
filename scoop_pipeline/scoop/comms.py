@@ -29,7 +29,7 @@ import numpy as np
 from . import bag as scoop_bag
 
 __all__ = ["KINDS", "kind_of", "ends_of", "flatten", "Table", "extract", "write",
-           "summary", "Positions"]
+           "summary", "Positions", "csi_complex", "csi_features", "OCCUPIED"]
 
 KINDS = {"comms_msgs/msg/NtpStatus": "ntp", "comms_msgs/msg/PingStat": "ping",
          "comms_msgs/msg/IperfResult": "iperf", "comms_msgs/msg/WifiLinkStatus": "wifi"}
@@ -182,7 +182,7 @@ def extract_from(reader_iter, topics: Dict[str, str]) -> Dict[str, Table]:
         tb = tables.setdefault(kind, Table(kind, columns=list(FIRST)))
         tb.add(row)
         if ar:
-            link = "%s_to_%s" % (peer, machine.replace("/", "_"))
+            link = _link(row)
             d = tb.arrays.setdefault(link, {"t": [], "t_log": []})
             d["t"].append(row["t"])
             d["t_log"].append(row["t_log"])
@@ -191,12 +191,89 @@ def extract_from(reader_iter, topics: Dict[str, str]) -> Dict[str, Table]:
     return tables
 
 
+# 802.11 (HT/VHT) subcarriers that carry data or pilots, |k| from..to, per
+# channel width; the rest of the FFT is guard band and DC
+OCCUPIED = {20: (1, 28), 40: (2, 58), 80: (2, 122), 160: (2, 250)}
+
+
+def csi_complex(index, real, imag, bandwidth_mhz):
+    """Nexmon CSI (raw firmware slots, one row per packet) -> (subcarrier
+    (K,) signed and sorted, H (N, K) complex64), the occupied subcarriers
+    only. A slot k of the N-point FFT is subcarrier k (k < N/2) or k - N."""
+    nfft = 64 * int(bandwidth_mhz) // 20
+    lo, hi = OCCUPIED[int(bandwidth_mhz)]
+    sub = np.arange(-hi, hi + 1)
+    sub = sub[np.abs(sub) >= lo]
+    col = {k: i for i, k in enumerate(sub)}
+    H = np.full((len(real), len(sub)), np.nan + 1j * np.nan, np.complex64)
+    same = all(len(x) == len(index[0]) and np.array_equal(x, index[0]) for x in index)
+    rows = [np.arange(len(real))] if same else [[i] for i in range(len(real))]
+    for r in rows:
+        idx = np.asarray(index[r[0]])
+        k = np.where(idx < nfft // 2, idx, idx - nfft)
+        keep = np.array([kk in col for kk in k])
+        cols = np.array([col[kk] for kk in k[keep]], int)
+        re = np.stack([real[i] for i in r])[:, keep]
+        im = np.stack([imag[i] for i in r])[:, keep]
+        H[np.ix_(np.asarray(r), cols)] = re + 1j * im
+    return sub, H
+
+
+def csi_features(sub, H):
+    """Per subcarrier: amplitude (dB of the raw units) and the phase with
+    its linear part across subcarriers removed (the timing offset's slope
+    and the common phase), what stays being the channel's. Per packet: mean
+    power (dB), spread of the amplitude across subcarriers (dB)."""
+    a = np.abs(H)
+    amp_db = 20 * np.log10(np.maximum(a, 1e-6)).astype(np.float32)
+    amp_db[~np.isfinite(a)] = np.nan
+    ph = np.unwrap(np.nan_to_num(np.angle(H)), axis=1)
+    A = np.stack([sub, np.ones_like(sub)], 1).astype(float)
+    coef, *_ = np.linalg.lstsq(A, ph.T, rcond=None)
+    phase = (ph - (A @ coef).T).astype(np.float32)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        power_db = 10 * np.log10(np.nanmean(a ** 2, axis=1))
+    return amp_db, phase, power_db, np.nanstd(amp_db, axis=1)
+
+
+def _link(row):
+    return "%s_to_%s" % (row["peer"], row["machine"].replace("/", "_"))
+
+
+def _csi_arrays(tb, log):
+    """CSI links: H, amplitude, phase per subcarrier; power / spread per row."""
+    out = {}
+    for link, d in tb.arrays.items():
+        if not {"subcarrier_index", "csi_real", "csi_imag"} <= set(d):
+            continue
+        rows = [r for r in tb.rows if _link(r) == link]
+        bws = [int(r.get("bandwidth_mhz") or 0) for r in rows]
+        bw = max(set(bws), key=bws.count)
+        if bw not in OCCUPIED:
+            log(f"    ({link}: bandwidth {bw} MHz unknown; raw arrays kept only)")
+            continue
+        sub, H = csi_complex(d["subcarrier_index"], d["csi_real"], d["csi_imag"], bw)
+        amp_db, phase, power_db, spread = csi_features(sub, H)
+        for r, pw, sp in zip(rows, power_db, spread):
+            r["csi_power_db"], r["csi_amp_spread_db"] = float(pw), float(sp)
+            r["n_subcarriers"] = len(sub)
+        for c in ("csi_power_db", "csi_amp_spread_db", "n_subcarriers"):
+            if c not in tb.columns:
+                tb.columns.append(c)
+        out[link] = {"subcarrier": sub, "H": H, "amp_db": amp_db, "phase": phase,
+                     "bandwidth_mhz": np.array(bw)}
+    return out
+
+
 def write(tables: Dict[str, Table], out_dir, log=print) -> List[str]:
-    """<kind>.csv per table, rows in time order per machine; csi_<link>.npz
-    with every array field stacked (rows x values) when the lengths agree,
-    else concatenated with '<name>_offsets'."""
+    """<kind>.csv per table, rows in time order per machine. CSI: per link
+    csi_<tx>_to_<rx>.npz with t, t_log and, from the raw slots, subcarrier
+    (K,), H (N, K complex), amp_db and phase (N, K); any other array field
+    stacked (rows x values) when the lengths agree, else concatenated with
+    '<name>_offsets'."""
     os.makedirs(out_dir, exist_ok=True)
     written = []
+    derived = _csi_arrays(tables["csi"], log) if "csi" in tables else {}
     for kind, tb in sorted(tables.items()):
         rows = sorted(tb.rows, key=lambda r: (r["machine"], r["peer"], r["t_log"]))
         p = os.path.join(out_dir, f"{kind}.csv")
@@ -208,8 +285,10 @@ def write(tables: Dict[str, Table], out_dir, log=print) -> List[str]:
         written.append(p)
         log(f"    {p}: {len(rows)} rows, {len(tb.columns)} columns")
         for link, d in sorted(tb.arrays.items()):
-            out = {}
+            out = dict(derived.get(link, {}))
             for k, seq in d.items():
+                if out and k in ("subcarrier_index", "csi_real", "csi_imag"):
+                    continue                            # in H, on the subcarriers that count
                 if k in ("t", "t_log"):
                     out[k] = np.asarray(seq, float)
                     continue
@@ -273,6 +352,11 @@ def summary(tables: Dict[str, Table]) -> dict:
                     ok = [r for r, v in zip(sel, tb.col("success", sel)) if v == 1.0]
                     s[direction] = {"tests": len(sel), "failed": len(sel) - len(ok),
                                     "mbps": _stats(tb.col("bitrate_mbps", ok))}
+            elif kind == "csi_status":
+                s["frames_per_sec"] = _stats(tb.col("frames_per_sec", rows))
+                s["monitor_mode_percent"] = 100 * float(np.nanmean(tb.col("monitor_mode", rows)))
+                dr = tb.col("dropped_total", rows)
+                s["dropped_total"] = float(np.nanmax(dr)) if np.isfinite(dr).any() else None
             elif kind == "wifi":
                 s["signal_dbm"] = _stats(tb.col("signal_dbm", rows))
                 s["tx_bitrate_mbps"] = _stats(tb.col("tx_bitrate_mbps", rows))
@@ -282,12 +366,24 @@ def summary(tables: Dict[str, Table]) -> dict:
                 s["roams"] = int(sum(a != b for a, b in zip(bss, bss[1:])))
                 s["channels"] = sorted({str(r.get("channel")) for r in rows})
             elif kind == "csi":
+                s["rssi_dbm"] = _stats(tb.col("rssi", rows))
+                if "csi_power_db" in tb.columns:
+                    s["csi_power_db"] = _stats(tb.col("csi_power_db", rows))
+                s["frame_control"] = {str(k): v for k, v in sorted(
+                    _counts(r.get("frame_control") for r in rows).items())}
                 tt = np.sort(t[np.isfinite(t)])
                 s["rate_hz"] = float((len(tt) - 1) / (tt[-1] - tt[0])) if len(tt) > 1 and tt[-1] > tt[0] else None
                 s["longest_gap_s"] = float(np.diff(tt).max()) if len(tt) > 1 else None
             if "distance_m" in tb.columns:
                 s["distance_m"] = _stats(tb.col("distance_m", rows))
             res[machine + (" <- " + peer if peer else "")] = s
+    return out
+
+
+def _counts(xs):
+    out = {}
+    for x in xs:
+        out[x] = out.get(x, 0) + 1
     return out
 
 
