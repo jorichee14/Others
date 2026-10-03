@@ -7,9 +7,9 @@ subcarrier).
         [--grid 0.5] [--no-plots]
 
 Per link (transmitter -> sniffer):
-  capture     packets, rate, gaps, frame types (802.11 frame control), and for
-              QoS data frames the share the sniffer caught, from their 12-bit
-              sequence numbers (steps of 1 = consecutive, more = missed)
+  capture     packets, rate, gaps, frame types (802.11 frame control), QoS
+              data frames per second; how their sequence numbers step (report
+              only: several counters, so no share caught follows from them)
   occupancy   which subcarriers each frame type fills (median amplitude per
               subcarrier against the strongest): a VHT 80 MHz frame fills
               +-2..+-122; a legacy frame sent as a 20 MHz duplicate (control
@@ -100,7 +100,9 @@ def seq_coverage(seq):
     (step 1 = consecutive, k = k - 1 frames not seen). CSI is one per PPDU
     and an A-MPDU carries several MPDUs, each with its own number, and each
     TID counts on its own: the share caught is given when the median step is
-    1, else the median step."""
+    1, else the median step. Frames also come from more than one counter
+    (TIDs, group-addressed frames), so no share caught is derived from them:
+    only how they step (in the report)."""
     s = seq_numbers(seq)
     if len(s) < 2:
         return None
@@ -110,8 +112,6 @@ def seq_coverage(seq):
         return None
     out = {"median_step": float(np.median(step)), "step_1_percent": 100 * float(np.mean(step == 1)),
            "retries": int((d == 0).sum()), "breaks": int((d >= 2048).sum())}
-    if out["median_step"] == 1:
-        out["caught_percent"] = 100 * float(len(step) / step.sum())
     return out
 
 
@@ -458,15 +458,12 @@ def main():
 
     print("\ncapture:")
     print("  %-32s %8s %7s %7s %9s %10s %12s" % ("link", "packets", "rate Hz", "gaps>1s",
-                                                "longest", "at s", "QoS caught"))
-    print("  (QoS caught: only when the data frames' seq steps by 1 per captured frame; "
-          "else the median step, as A-MPDUs and TIDs make it no capture rate)")
+                                                "longest", "at s", "data/s"))
     for n, r in report.items():
-        q = r["qos_data_capture"] or {}
-        print("  %-32s %8d %7.1f %7d %8.2fs %10.0f %11s" % (
+        nd = r["frames"].get("0x88 QoS Data", {}).get("packets", 0)
+        print("  %-32s %8d %7.1f %7d %8.2fs %10.0f %12.1f" % (
             n, r["packets"], r["rate_hz"], r["gaps_over_1s"], r["longest_gap_s"] or 0,
-            r["longest_gap_at_s"] or 0, "%.1f%%" % q["caught_percent"] if "caught_percent" in q
-            else ("seq step %g" % q["median_step"] if q else "-")))
+            r["longest_gap_at_s"] or 0, nd / max(r["duration_s"], 1e-9)))
     print("\nframe types (active = subcarriers within 20 dB of the strongest; VHT 80 MHz fills 242):")
     for n, r in report.items():
         for k, v in r["frames"].items():

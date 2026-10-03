@@ -88,7 +88,7 @@ def main():
         if fr["0x88 QoS Data"]["active_subcarriers"] != 242 or fr["0x94 Block Ack"]["active_subcarriers"] != 208:
             f.append("occupancy: %s" % {k: v["active_subcarriers"] for k, v in fr.items()})
         q = rep["qos_data_capture"]
-        if abs(q.get("caught_percent", 0) - 80.0) > 1.0 or q["median_step"] != 1:  # 4 in 5 steps
+        if q["median_step"] != 1 or abs(q["step_1_percent"] - 75.0) > 1.0:   # 3 steps of 1 in 4
             f.append("capture: %s" % q)
         pl = rep["path_loss_rssi"]
         if abs(pl["exponent"] - 2.5) > 0.05 or abs(pl["spread_db"] - 1.0) > 0.1:
