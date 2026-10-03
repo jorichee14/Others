@@ -1,0 +1,16 @@
+{
+  "extends": "pipeline_config.json",
+  "_note": "coop_2 in mapping_A's map, as survey_1: 03 (ZED board views via GLIM) -> 04 (LiDAR ICP to the anchored map) -> 05 (boards from this run) -> 07 (arducam from its yaml; mobile_2's RealSense from rs_anchor while it stands at the start: map_realsense) -> 09 (the run's cloud). mobile_2 drives in coop but its VSLAM was not recorded: it has no trajectory yet, only its start.",
+  "dataset": {
+    "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/coop_2/mirc_dataset_coop_2_20260924_merged",
+    "traj": null,
+    "machine": "mobile_1",
+    "reference_pass": "mapping_A"
+  },
+  "07_build_cameras": {"cameras": [{"name": "realsense", "bag": null,
+                                    "image_topic": "/mobile_2/color/image_raw",
+                                    "camera_info_topic": "/mobile_2/color/camera_info",
+                                    "rectified": false, "detect_target": 30}]},
+  "03_init": {"sensors": [{"name": "zed", "source": "lidar_odom"},
+                          {"name": "realsense", "enabled": false}]}
+}
