@@ -62,6 +62,8 @@ analysis/            measuring results; reads outputs, writes nothing back
   comms/             link analyses on processing/comms_tables.py's tables
   comms/ntp_analysis.py   clock agreement: offsets at polls, error bounds, steps,
                      frequency vs temperature, worst case between machines
+  comms/wifi_analysis.py  links: RSSI, PHY rates, ping loss per ICMP seq, iperf,
+                     ping during iperf vs not, RSSI along the path
   bags/topic_timing.py    intervals, gaps and repeated frames of topics in a bag
   bags/show_topics.py     what topics hold: type, count, definition, first messages
 checks/              is the environment / the decoder right? (against real bags)
@@ -77,6 +79,7 @@ tests/               self-tests, no real bag needed
   test_run_pass.py   run_pass.py: status, 10 + finalize, a mapping pass's order
   test_comms.py      comms tables: every message, summary numbers, positions
   test_ntp_analysis.py  ntp_analysis on a synthetic ntp.csv with known events
+  test_wifi_analysis.py  wifi_analysis: seq wrap, late replies, contention, goodput vs RSSI
   test_replica.py    replica with lidar depth on a synthetic scene
   test_scan_consistency.py  scan_consistency on synthetic sweeps: true, time-
                      shifted, drifting, broken deskew
