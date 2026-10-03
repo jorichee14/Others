@@ -4,9 +4,10 @@ The complete TF tree of a pass, from the pipeline's outputs, for the merge
 (processing/merge_session.py adds it when a pipeline config's dataset is
 that pass).
 
-Every mobile platform hangs from its own origin frame, fixed in map:
+Every mobile platform hangs from its own origin frame, fixed below the board
+it started at (map ── board ── map_zed, map ── board_rs ── map_realsense):
 
-  map ── map_zed            mobile_1's origin: the ZED's map of this session
+  board ── map_zed          mobile_1's origin: the ZED's map of this session
                             (03: T_map_mapzed in anchor_frame.json, or
                             boards_<tag>.json for a run); map_zed ~~ odom_zed
                             stays as recorded, so the ZED's own topics show in map
@@ -18,8 +19,9 @@ Every mobile platform hangs from its own origin frame, fixed in map:
                             is not trusted. Its whole tree (ZED, os_sensor,
                             radars) follows. (Without T_map_mapzed: map ~~
                             zed_camera_link.)
-  map ── map_realsense      mobile_2's origin (04's camera "origin_frame"): at
-     map_realsense ── camera_link   its place from 04 while it is parked
+  board_rs ── map_realsense mobile_2's origin (04's camera "origin_frame", below
+                            its "board"): at its place from 04 while it is parked
+     map_realsense ── camera_link
   map ── <board frames>     03's boards (the reference pass's, plus the ones only
                             a run measured)
   map ── <camera tree>      04's cameras_in_map.yaml (arducam, RealSense): the
@@ -139,8 +141,41 @@ def plan(P, edges, bags, log=print):
     session = run if P.reference else af
     if not af:
         log("    (no %s: no boards, map_zed or mapping trajectory)" % af_path)
+    boards = dict((af.get("boards") or {}))
+    for n, rec in (run.get("boards") or {}).items():
+        boards.setdefault(n, rec)
+    bframe = {n: rec.get("frame") or n for n, rec in boards.items()}
+    s04 = P.cfg.get("04_build_cameras") or {}
+    cfg_cams = {c["name"]: c for c in s04.get("cameras", [])}
+    origins = {c.get("origin_frame") for c in cfg_cams.values()} - {None}
 
-    # -- mobile_1: its origin map_zed fixed in map, the trajectory below it
+    # -- a bag that carries this tree already (merged after the map stages, or
+    # 09's): what was put in below map, the boards and the parked origins goes,
+    # and is put in again from the outputs as they are now
+    old = [(e.parent, c) for c, e in edges.items()
+           if e.parent == mapf or e.parent in set(bframe.values()) | origins]
+    for p_, c in old:
+        drop_edge(p_, c, "put in again from the pipeline outputs")
+    frames = set(edges) | {e.parent for e in edges.values()}
+
+    # -- boards, fixed in map
+    T_board = {}
+    for n, rec in sorted(boards.items()):
+        fr = bframe[n]
+        if fr in edges or fr in frames:
+            continue
+        T_board[n] = _T(rec)
+        add_static(mapf, fr, T_board[n], "03: board '%s'" % n)
+
+    def under_board(name, child, T_map_child, why):
+        """child fixed in map, below board `name` when it is placed."""
+        if name in T_board:
+            add_static(bframe[name], child, np.linalg.inv(T_board[name]) @ T_map_child,
+                       why + "; below board '%s'" % name)
+        else:
+            add_static(mapf, child, T_map_child, why)
+
+    # -- mobile_1: its origin map_zed below the start board, the trajectory below it
     T_mz = session.get("T_map_mapzed")
     T_mz = np.array(T_mz, float) if T_mz is not None and mapzed not in edges else None
     origin = mapzed if T_mz is not None else mapf
@@ -158,7 +193,7 @@ def plan(P, edges, bags, log=print):
     if traj and os.path.exists(traj):
         oe = _odom_edge(body, edges)
         if oe:
-            drop_edge(oe[0], oe[1], "the ZED's own tracking; the LiDAR trajectory replaces it")
+            drop_edge(oe[0], oe[1], "the old odometry; the LiDAR trajectory replaces it")
         if T_mz is not None:                            # poses in map -> in map_zed
             T_left = np.linalg.inv(T_mz) @ (np.eye(4) if T_left is None else T_left)
         poses = _load_poses(traj, T_left)
@@ -170,24 +205,13 @@ def plan(P, edges, bags, log=print):
     else:
         log("    (no LiDAR trajectory %s: mobile_1 stays on the ZED's tracking)" % traj)
     if T_mz is not None:
-        add_static(mapf, mapzed, T_mz, "mobile_1's origin, 03: the ZED's map at the start board")
-
-    # -- boards
-    boards = dict((af.get("boards") or {}))
-    for n, rec in (run.get("boards") or {}).items():
-        boards.setdefault(n, rec)
-    for n, rec in sorted(boards.items()):
-        fr = rec.get("frame") or n
-        if fr in edges or fr in frames:
-            continue
-        add_static(mapf, fr, _T(rec), "03: board '%s'" % n)
+        start = session.get("anchor_board") or af.get("anchor_board") or "anchor"
+        under_board(start, mapzed, T_mz, "mobile_1's origin, 03: the ZED's map at the start board")
 
     # -- infra / parked cameras from 04
     cy = P.stage("04_build_cameras")["output"] if "04_build_cameras" in P.cfg else None
     if cy and os.path.exists(cy):
         _, cams = load_cameras_yaml(cy)
-        origins = {c["name"]: c.get("origin_frame")
-                   for c in P.cfg["04_build_cameras"].get("cameras", [])}
         for c in cams:
             child = c["child_frame"]
             T = make_T(c["translation"], c["quaternion_xyzw"])
@@ -207,10 +231,11 @@ def plan(P, edges, bags, log=print):
             T_root = T @ np.linalg.inv(T_rc)
             why = ("04: %s, so %s -> %s is its pose" % (c["name"], mapf, child)
                    if root != child else "04: %s" % c["name"])
-            og = origins.get(c["name"])
+            cc = cfg_cams.get(c["name"], {})
+            og = cc.get("origin_frame")
             if og and og not in frames and og not in edges:
-                add_static(mapf, og, T_root, "%s's origin, where it is parked; %s"
-                           % (c["name"], why))
+                under_board(cc.get("board"), og, T_root,
+                            "%s's origin, where it is parked; %s" % (c["name"], why))
                 add_static(og, root, np.eye(4), "parked")
             else:
                 add_static(mapf, root, T_root, why)

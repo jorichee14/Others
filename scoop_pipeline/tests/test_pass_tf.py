@@ -159,7 +159,8 @@ def outputs(data):
 def configs(stages, data):
     base = {"03_anchor": {}, "04_build_cameras": {
         "output": "cameras_in_map.yaml",
-        "cameras": [{"name": "realsense", "origin_frame": "map_realsense"}]},
+        "cameras": [{"name": "realsense", "board": "rs_anchor",
+                     "origin_frame": "map_realsense"}]},
             "08_reference": {"name": "mobile_1_lidar"},
             "09_publish": {"robots": [{"name": "mobile_1",
                                        "traj": "traj_mobile_1_lidar_in_cam.tum",
@@ -197,6 +198,52 @@ def close(A, B, what, f, mm=0.5, deg=0.02):
     a = np.degrees(np.arccos(np.clip((np.trace(A[:3, :3].T @ B[:3, :3]) - 1) / 2, -1, 1)))
     if d > mm or a > deg:
         f.append("%s: off by %.2f mm / %.3f deg" % (what, d, a))
+
+
+def check09(b09, stamps, T_cam_sensor, what):
+    from scoop import bag as sbag
+    f = []
+    tp = sbag.open_bag(b09).topics()
+    if sorted(tp) != ["/mobile_1/global_pose", "/mobile_1/local_pose", "/tf", "/tf_static"]:
+        f.append("%s topics: %s" % (what, sorted(tp)))
+    after = tftree.tf_edges([b09])                     # one parent per frame, or raises
+    tree = read_tf_and_info(b09, [], want_tf=True, verbose=False)[1]
+    for t in stamps[::9]:
+        close(tree.lookup("map", "os_sensor", T0 + t), true_cam(t) @ T_cam_sensor,
+              "%s: os_sensor at %.1f s" % (what, t), f)
+    close(tree.lookup("map", "infra1_link", T0 + 5), T_ARDU @ T_RADAR, what + ": infra1_link", f)
+    close(tree.lookup("map", "camera_color_optical_frame", T0 + 5), T_RS, what + ": realsense", f)
+    close(tree.lookup("map", "board_b", T0 + 5), rotz(45, (-7.2, 12.6, 0.03)),
+          what + ": board_b", f)
+    close(tree.lookup("map", "map_zed", T0 + 5), T_MAP_MAPZED, what + ": map_zed", f)
+    if tree.lookup("map_zed", "odom_zed", T0 + 5) is None:
+        f.append(what + ": the bag's map_zed ~~ odom_zed is missing")
+    if after["map_zed"].parent != "board" or after["map_realsense"].parent != "board_rs":
+        f.append("%s: origins below %s / %s" % (what, after["map_zed"].parent,
+                                                 after["map_realsense"].parent))
+    par = set()
+    for _, _, pl, dec in sbag.open_bag(b09).iter_raw(["/tf"]):
+        par |= {tr.header.frame_id for tr in dec(pl).transforms
+                if tr.child_frame_id == "zed_camera_link"}
+    if par != {"map_zed"}:
+        f.append("%s: zed_camera_link's parents on /tf: %s" % (what, sorted(par)))
+    # local_pose: zed_camera_link (the frame carrying the ZED, LiDAR, radars) in map_zed
+    T_link_cam = CHAIN[0][2] @ CHAIN[1][2] @ CHAIN[2][2]
+    n = 0
+    for _, _, pl, dec in sbag.open_bag(b09).iter_raw(["/mobile_1/local_pose"]):
+        m = dec(pl)
+        t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9 - T0
+        if m.header.frame_id != "map_zed":
+            f.append("%s: local_pose in %s" % (what, m.header.frame_id))
+            break
+        p, q = m.pose.position, m.pose.orientation
+        close(tftree.matrix([p.x, p.y, p.z], [q.x, q.y, q.z, q.w]),
+              np.linalg.inv(T_MAP_MAPZED) @ true_cam(t) @ np.linalg.inv(T_link_cam),
+              "%s: local_pose at %.1f s" % (what, t), f)
+        n += 1
+    if n != len(stamps):
+        f.append("%s: %d local poses" % (what, n))
+    return f
 
 
 def main():
@@ -245,9 +292,12 @@ def main():
             f.append("run: map_zed ~~ odom_zed (the ZED's own topics) is gone")
         if after["zed_camera_link"].parent != "map_zed":
             f.append("run: zed_camera_link hangs from %s" % after["zed_camera_link"].parent)
+        if after["map_zed"].parent != "board":
+            f.append("run: map_zed hangs from %s, not the start board" % after["map_zed"].parent)
         if after["camera_link"].parent != "map_realsense" or \
-                after["map_realsense"].parent != "map":
-            f.append("run: camera_link hangs from %s" % after["camera_link"].parent)
+                after["map_realsense"].parent != "board_rs":
+            f.append("run: camera_link / map_realsense hang from %s / %s"
+                     % (after["camera_link"].parent, after["map_realsense"].parent))
         close(tree.lookup("map", "map_realsense", t),
               T_RS @ np.linalg.inv(RS_CHAIN[0][2] @ RS_CHAIN[1][2]), "run: map_realsense", f)
 
@@ -279,26 +329,21 @@ def main():
         else:
             b09 = os.path.join(data, "processed", "20260101", "survey_1", "bags",
                                "survey_1_20260101_best_poses")
-            tp = sbag.open_bag(b09).topics()
-            if sorted(tp) != ["/mobile_1/global_pose", "/mobile_1/local_pose", "/tf", "/tf_static"]:
-                f.append("09 topics: %s" % sorted(tp))
-            tftree.tf_edges([b09])
-            tree = read_tf_and_info(b09, [], want_tf=True, verbose=False)[1]
-            for t in stamps[::9]:
-                close(tree.lookup("map", "os_sensor", T0 + t), true_cam(t) @ T_cam_sensor,
-                      "09: os_sensor at %.1f s" % t, f)
-            close(tree.lookup("map", "infra1_link", T0 + 5), T_ARDU @ T_RADAR, "09: infra1_link", f)
-            close(tree.lookup("map", "camera_color_optical_frame", T0 + 5), T_RS, "09: realsense", f)
-            close(tree.lookup("map", "board_b", T0 + 5), rotz(45, (-7.2, 12.6, 0.03)), "09: board_b", f)
-            if tree.lookup("map_zed", "odom_zed", T0 + 5) is None:
-                f.append("09: the bag's map_zed ~~ odom_zed is missing")
-            ts_ = rosmsg.typestore()
-            par = set()
-            for _, _, pl, dec in sbag.open_bag(b09).iter_raw(["/tf"]):
-                par |= {tr.header.frame_id for tr in dec(pl).transforms
-                        if tr.child_frame_id == "zed_camera_link"}
-            if par != {"map_zed"}:
-                f.append("09: zed_camera_link's parents on /tf: %s" % sorted(par))
+            f += check09(b09, stamps, T_cam_sensor, "09")
+            # the merged bag with 09's TF and poses put in, as merge_bags.py --source
+            # does; 09 again on it must give the same tree, not a second one
+            both = os.path.join(tmp, "both")
+            merge.merge_bags([old, b09], both, log=lambda *_: None,
+                             source={"/tf": 1, "/tf_static": 1})
+            shutil.rmtree(old)
+            os.rename(both, old)
+            r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages",
+                                                             "09_publish_poses.py"), cfg],
+                               capture_output=True, text=True)
+            if r.returncode:
+                f.append("09 again: " + r.stdout[-1000:] + r.stderr[-1500:])
+            else:
+                f += check09(b09, stamps, T_cam_sensor, "09 again")
 
         # the CLI: the check prints the tree from the outputs it finds
         cli = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "pass_tf.py"),

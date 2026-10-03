@@ -10,10 +10,13 @@ For every robot in the "09_publish" block the chosen stage-08 trajectory
                          z forward) in the anchored map frame shared by all
                          robots: zed_left_camera_optical_frame for mobile_1,
                          camera_color_optical_frame for mobile_2
-  /<robot>/local_pose    geometry_msgs/PoseStamped, frame_id "<robot>/start"
-                         the robot's own start pose is the origin, so the
-                         first message is the identity - an odometry-like
-                         frame that does not drift
+  /<robot>/local_pose    geometry_msgs/PoseStamped: with the complete TF, the
+                         pose of the frame that carries the robot's sensors
+                         (the root of its tree: zed_camera_link -> ZED,
+                         os_sensor, radars) in the robot's origin frame
+                         (map_zed), i.e. the TF edge map_zed ~~ zed_camera_link;
+                         without it, the optical frame relative to its first
+                         pose, frame_id "<robot>/start"
   /tf, /tf_static        the complete TF tree ("full_tf": true, the default):
                          the dataset bag's own TF with configs/static_tf.yaml
                          and the pipeline outputs put in (map_stages/pass_tf.py:
@@ -148,8 +151,8 @@ def full_tf(P, s):
     """The complete tree against the dataset bag's TF: configs/static_tf.yaml
     (the calibrations the bag does not have yet), then the pipeline outputs
     (pass_tf.plan). -> (static [(parent, child, t, q)], drop f(parent, child)
-    or None, /tf [(t_ns, parent, child, t, q)]), or None when the bag has the
-    tree already (merged after the map stages)."""
+    or None, /tf [(t_ns, parent, child, t, q)]). A bag that has the tree
+    already gets it put in again from the outputs as they are now."""
     import yaml
     from scoop import tftree
     import pass_tf
@@ -162,8 +165,6 @@ def full_tf(P, s):
     with open(os.path.expanduser(cal_path)) as fh:
         cals = tftree.load_calibrations(yaml.safe_load(fh))
     frames = set(edges) | {e.parent for e in edges.values()}
-    if s.get("map_frame", "map") in frames:
-        return None                                     # merged after the map stages
     for c in cals:
         if c.parent in frames and c.child in frames and \
                 tftree._root(c.parent, edges) == tftree._root(c.child, edges):
@@ -233,6 +234,10 @@ def main():
         full = False
     write_tf = write_tf and not full
 
+    parts = full_tf(P, s) if full else None
+    # local_pose of the robot the tree moves: the TF edge origin ~~ sensor root
+    local = {t_ns: (p, c, t, q) for t_ns, p, c, t, q in (parts[2] if parts else [])}
+
     # interleave all robots by time so the bag plays in order
     events = []
     for rb, ts, Tb, Tl in robots:
@@ -247,16 +252,16 @@ def main():
             ql = Rot.from_matrix(Tloc[:3, :3]).as_quat()
             yield t_ns, "/%s/global_pose" % rb["name"], \
                 rosmsg.pose_stamped(t_ns, map_frame, Tm[:3, 3], qm)
-            yield t_ns, "/%s/local_pose" % rb["name"], \
-                rosmsg.pose_stamped(t_ns, "%s/start" % rb["name"], Tloc[:3, 3], ql)
+            if rb["name"] == P.machine and t_ns in local:
+                p, c, t_, q_ = local[t_ns]
+                yield t_ns, "/%s/local_pose" % rb["name"], rosmsg.pose_stamped(t_ns, p, t_, q_)
+            else:
+                yield t_ns, "/%s/local_pose" % rb["name"], \
+                    rosmsg.pose_stamped(t_ns, "%s/start" % rb["name"], Tloc[:3, 3], ql)
             if write_tf:
                 yield t_ns, "/tf", rosmsg.tf_message(
                     [(map_frame, "%s/%s" % (rb["name"], rb["_frame"]), Tm[:3, 3], qm)], t_ns)
 
-    parts = full_tf(P, s) if full else None
-    if full and parts is None:
-        print("  the dataset bag has the complete TF already: poses only")
-        full = False
     if full:
         from scoop import merge
         st, drop_tf, extra = parts
@@ -281,9 +286,13 @@ def main():
                 n += 1
     print("wrote %s: %d messages on %s%s" % (out, n, ", ".join(topics),
                                             ", /tf" if write_tf or full else ""))
-    print("  global_pose: camera optical frame in '%s' (unless publish_body_frame); "
-          "local_pose: the same frame relative to the robot's first pose "
-          "(frame '<robot>/start')" % map_frame)
+    print("  global_pose: camera optical frame in '%s' (unless publish_body_frame)" % map_frame)
+    if local:
+        p, c = next(iter(local.values()))[:2]
+        print("  local_pose of %s: %s in %s (the TF edge)" % (P.machine, c, p))
+    else:
+        print("  local_pose: the optical frame relative to the robot's first pose "
+              "(frame '<robot>/start')")
 
 
 if __name__ == "__main__":
