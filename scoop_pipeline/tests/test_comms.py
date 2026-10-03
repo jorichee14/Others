@@ -227,6 +227,34 @@ def main():
                 f.append("csi distance at %.2f s: %s vs %.3f" % (t, x["distance_m"], want))
         if not any(x.get("distance_m") for x in csi):
             f.append("csi: no distance_m")
+
+        # the clean export: data frames, no pilots, H scaled to RSSI, full poses
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "processing", "csi_clean.py"),
+                            os.path.join(data, "processed", "20260101", "survey_1"), "--comms", out,
+                            "--config", os.path.join(stages, "pipeline_config_survey_1.json")],
+                           capture_output=True, text=True)
+        print(r.stdout[-1200:])
+        if r.returncode:
+            raise AssertionError("csi_clean: " + r.stdout[-1000:] + r.stderr[-2000:])
+        c = np.load(os.path.join(out, "csi", "csi_infra_1_to_mobile_1_sniffer_clean.npz"))
+        sub = c["subcarrier"]
+        if c["H"].shape != (100, 234) or np.isin(np.abs(sub), (11, 39, 75, 103)).any():
+            f.append("clean: %s, pilots in: %s" % (c["H"].shape, np.isin(np.abs(sub), (11, 39, 75, 103)).any()))
+        pw = 10 * np.log10(np.mean(np.abs(c["H_rssi"]) ** 2, axis=1))
+        if np.abs(pw - c["rssi_dbm"]).max() > 1e-3 or np.abs(c["amp_db"] - 40).max() > 1e-3:
+            f.append("clean: H_rssi power %s vs rssi %s" % (pw[:3], c["rssi_dbm"][:3]))
+        if not os.path.exists(os.path.join(out, "csi", "csi_clean_README.txt")):
+            f.append("clean: no README")
+        for i in range(0, 100, 23):
+            t = c["t"][i] - T.T0
+            want = T.true_cam(t) @ np.linalg.inv(T_link_cam)
+            if np.abs(c["rx_pose"][i] - want).max() > 2e-3:
+                f.append("clean: rx_pose at %.2f s off by %.4f" % (t, np.abs(c["rx_pose"][i] - want).max()))
+            if np.abs(c["tx_pose"][i] - T.T_ARDU @ T.T_RADAR).max() > 1e-4:
+                f.append("clean: tx_pose off")
+        dd = np.linalg.norm(c["rx_pose"][:, :3, 3] - (T.T_ARDU @ T.T_RADAR)[:3, 3], axis=1)
+        if np.abs(dd - c["distance_m"]).max() > 1e-6 or str(c["tx_frame"]) != "infra1_link":
+            f.append("clean: distance / frames")
     except AssertionError as e:
         f.append(str(e))
     finally:

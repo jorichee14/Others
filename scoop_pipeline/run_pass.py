@@ -32,6 +32,8 @@ Steps (a step whose output is there already is skipped):
                   (built next to it, then put in its place)
     comms         processing/comms_tables.py: NTP, Wi-Fi, ping, iperf, CSI tables with
                   each machine's position (processed/<date>/<pass>/comms/)
+    csi_clean     processing/csi_clean.py: per link, QoS data frames without pilots,
+                  H and H scaled to RSSI, both ends' poses (comms/csi/*_clean.npz)
 
 --status  what is done, and stop      --dry     print the commands, run nothing
 --from S  run S and every step after it, done or not
@@ -59,7 +61,7 @@ MAPPING = ["01_seed", "02_refine", "01_map"]
 RUN = ["03_init", "04_reference"]
 ORDER = (["process", "merge"] + MAPPING + RUN
          + ["05_anchor", "06_cut", "07_cameras", "08_tfs", "09_cloud", "10_poses", "finalize",
-            "comms"])
+            "comms", "csi_clean"])
 
 
 def py(script, *args):
@@ -124,6 +126,7 @@ def plan_steps(raw, cfg):
     if not cfg:
         if mb:
             steps.append(comms_step(mb, None))
+            steps.append(csi_clean_step(mb, None))
         return steps, None
     P = pass_tf.load_pipeline(cfg)
     run = bool(P.reference)
@@ -175,7 +178,18 @@ def plan_steps(raw, cfg):
     steps.append(("finalize", True, lambda: finalized(db, out["10_poses"]), db,
                   lambda dry: finalize(db, out["10_poses"], dry)))
     steps.append(comms_step(db, cfg))
+    steps.append(csi_clean_step(db, cfg))
     return steps, P
+
+
+def csi_clean_step(bag, cfg):
+    """CSI for use: data frames, no pilots, H scaled to RSSI, poses."""
+    from pipeline_common import processed_dir_for
+    proc = processed_dir_for(bag)
+    done = os.path.join(proc, "comms", "csi", "csi_clean_summary.json")
+    cmd = py(os.path.join(ROOT, "processing", "csi_clean.py"), proc)
+    return ("csi_clean", True, os.path.exists(done), os.path.dirname(done),
+            [cmd + (["--config", cfg] if cfg else [])])
 
 
 def comms_step(bag, cfg):

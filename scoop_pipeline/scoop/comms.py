@@ -434,6 +434,35 @@ class Positions:
         self._cache[frame] = fn
         return fn
 
+    def pose_of(self, frame) -> Optional[Callable]:
+        """t -> (N, 4, 4) pose of `frame` in map (rotation slerped along the
+        trajectory for the moving robot), or None where it is not placed."""
+        top, T_top_f, moving = self._top(frame)
+        if not moving and top == self.map:
+            return lambda t: np.broadcast_to(T_top_f, (len(np.atleast_1d(t)), 4, 4)).copy()  # noqa: E731
+        if not (moving and self.traj_t is not None and self.body is not None):
+            return None
+        btop, T_top_b, _ = self._top(self.body)
+        if btop != top:
+            return None
+        from scipy.spatial.transform import Rotation, Slerp
+        T_b_f = np.linalg.inv(T_top_b) @ T_top_f
+        t0, T = self.traj_t, self.traj_T
+        slerp = Slerp(t0, Rotation.from_matrix(T[:, :3, :3]))
+
+        def at(t):
+            t = np.atleast_1d(np.asarray(t, float))
+            out = np.full((len(t), 4, 4), np.nan)
+            ok = (t >= t0[0]) & (t <= t0[-1])
+            if ok.any():
+                M = np.tile(np.eye(4), (int(ok.sum()), 1, 1))
+                M[:, :3, :3] = slerp(t[ok]).as_matrix()
+                for k in range(3):
+                    M[:, k, 3] = np.interp(t[ok], t0, T[:, k, 3])
+                out[ok] = M @ T_b_f
+            return out
+        return at
+
     def _moving(self, T_b_f):
         t0, T = self.traj_t, self.traj_T
         P = np.einsum("nij,j->ni", T[:, :3, :], np.append(T_b_f[:3, 3], 1.0))

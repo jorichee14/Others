@@ -35,6 +35,7 @@ processing/          raw recordings -> processed bags (command lines around scoo
   merge_session.py   check a pass's bags against record.yaml, merge them into one
   merge_bags.py      any bags -> one, with the topics you choose (--list, --topics, --pick)
   comms_tables.py    NTP / Wi-Fi / ping / iperf / CSI -> tables + positions (comms/)
+  csi_clean.py       CSI for use: data frames, no pilots, H scaled to RSSI, poses
   tf_edit.py         show or change a bag's TF: drop edges, add transforms, new odometry
 run_pass.py          one pass from raw to processed, every step in order (below)
 map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
@@ -185,6 +186,7 @@ it, `--only S` runs S alone, `--until S` stops after S.
 | 10_poses | `10_publish_poses.py`: poses + the complete TF | `bags/<tag>_best_poses` |
 | finalize | the merged bag again, with 10's /tf, /tf_static and poses in it | the merged bag, in place |
 | comms | `processing/comms_tables.py`: NTP, Wi-Fi, ping, iperf, CSI with positions | `comms/{ntp,wifi,csi}/`, `comms/summary.json` |
+| csi_clean | `processing/csi_clean.py`: QoS data frames, no pilots, H scaled to RSSI, both ends' poses | `comms/csi/csi_<link>_clean.npz` + README |
 
 The map stages need the pass's config in `map_stages/`: `pipeline_config.json`
 for the mapping pass, and for a run `pipeline_config_<run>.json` with
