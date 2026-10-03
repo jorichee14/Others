@@ -65,7 +65,7 @@ def main():
             rows.append({"machine": "mobile_1/sniffer", "peer": "infra_1",
                          "topic": "/mobile_1/sniffer/infra_1/csi", "t": t[i], "t_log": t[i] + 0.004,
                          "rssi": -30 - 25 * np.log10(d) + rng.normal(0, 1.0),
-                         "frame_control": int(fc[i]), "seq": seq % 4096 if fc[i] == 0x88 else 65535,
+                         "frame_control": int(fc[i]), "seq": (seq % 4096) << 4 if fc[i] == 0x88 else 65535,   # Sequence Control
                          "x": d, "y": 0.0, "distance_m": d})
         amp_db, phase, power, spread = comms.csi_features(sub, H)
         for r, p in zip(rows, power):

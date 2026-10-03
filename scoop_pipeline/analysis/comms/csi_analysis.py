@@ -24,8 +24,9 @@ Per link (transmitter -> sniffer):
               (inverse FFT of H, data frames, taps within 20 dB of the
               strongest; 80 MHz: 12.5 ns per tap)
   coherence   correlation of the CSI amplitude between consecutive frames of
-              one type (< 0.1 s apart) against the robot's speed: how fast
-              the channel changes as it moves
+              one type (< 0.1 s apart), over its data subcarriers (no pilots:
+              +-11, +-39, +-75, +-103 at 80 MHz), against the robot's speed:
+              how fast the channel changes as it moves
 
 Writes comms/csi/csi_report.json and csi_timeline.png, csi_occupancy.png,
 csi_pathloss.png, csi_coherence.png, csi_amplitude_<link>.png, csi_map.png.
@@ -83,14 +84,24 @@ def stats(a):
             "p95": float(np.percentile(a, 95)), "min": float(a.min()), "max": float(a.max())}
 
 
-def seq_coverage(seq):
-    """How the QoS data frames' 12-bit sequence numbers step between captured
-    frames. CSI is one per PPDU; an A-MPDU carries many MPDUs, each with its
-    own seq, and each TID counts on its own, so a step of k is not k - 1
-    missed frames unless the transmitter sends one MPDU per PPDU on one TID.
-    The share caught is given only then (median step 1)."""
+def seq_numbers(seq):
+    """nexmon's seq is the frame's 16-bit Sequence Control: the 12-bit
+    sequence number above a 4-bit fragment number. -> the sequence numbers
+    (as they are, when the values are not of that form)."""
     s = np.asarray(seq, float)
-    s = s[np.isfinite(s)].astype(int) % 4096
+    s = s[np.isfinite(s)].astype(int)
+    if len(s) and np.mean(s % 16 == 0) > 0.9 and s.max() > 4095:
+        return (s >> 4) & 0xFFF
+    return s % 4096
+
+
+def seq_coverage(seq):
+    """How the QoS data frames' sequence numbers step between captured frames
+    (step 1 = consecutive, k = k - 1 frames not seen). CSI is one per PPDU
+    and an A-MPDU carries several MPDUs, each with its own number, and each
+    TID counts on its own: the share caught is given when the median step is
+    1, else the median step."""
+    s = seq_numbers(seq)
     if len(s) < 2:
         return None
     d = np.diff(s) % 4096
@@ -102,6 +113,16 @@ def seq_coverage(seq):
     if out["median_step"] == 1:
         out["caught_percent"] = 100 * float(len(step) / step.sum())
     return out
+
+
+# VHT pilot subcarriers per channel width: known symbols, sent at their own
+# level (some transmitters boost them), so they are no channel samples
+PILOTS = {20: (7, 21), 40: (11, 25, 53), 80: (11, 39, 75, 103), 160: (25, 53, 89, 117)}
+
+
+def pilot_mask(sub, bw=80):
+    p = set(PILOTS.get(int(bw), ()))
+    return np.array([abs(int(k)) in p for k in sub])
 
 
 def occupancy(amp_db, sub):
@@ -202,10 +223,12 @@ def link_report(name, rows, z, log=print):
     rep["longest_gap_at_s"] = float(tt[int(np.argmax(gaps))] - tt[0]) if len(gaps) else None
     rep["frames"] = {}
     masks = {}
+    bw = int(z["bandwidth_mhz"]) if "bandwidth_mhz" in z.files else 80
+    pil = pilot_mask(sub, bw)
     for f in sorted(set(fc)):
         m = fc == f
         rel, active = occupancy(amp[m], sub)
-        masks[f] = rel > -20
+        masks[f] = (rel > -20) & ~pil                    # coherence over data subcarriers
         rep["frames"]["0x%02x %s" % (f, fc_name(f))] = {
             "packets": int(m.sum()), "share_percent": 100 * float(m.mean()),
             "active_subcarriers": active, "rssi_dbm": stats(rows["rssi"][m]),
@@ -281,10 +304,14 @@ def plots(out, links, t0, proc, grid_m):
         for f in sorted(set(s["fc"])):
             rel, active = occupancy(s["amp"][s["fc"] == f], s["sub"])
             ax.plot(s["sub"], rel, lw=0.8, label="0x%02x %s (%d active)" % (f, fc_name(f), active))
+        for k in PILOTS[80]:
+            for sg in (-1, 1):
+                ax.axvline(sg * k, color="0.85", lw=0.6, zorder=0)
         ax.axhline(-20, color="0.6", lw=0.5, ls="--")
         ax.set_title(n, fontsize=9)
         ax.set_xlabel("subcarrier")
         ax.set_ylabel("median amplitude, dB below the strongest")
+        ax.set_title(n + "  (grey lines: VHT80 pilots)", fontsize=9)
         ax.legend(fontsize=7)
     fig.tight_layout()
     files.append(os.path.join(out, "csi_occupancy.png"))
