@@ -338,6 +338,10 @@ def main():
         af = json.load(open(s["anchor_frame"]))
     except (FileNotFoundError, OSError):
         af = {}
+    for n, rec in P.extra_boards().items():          # dataset.boards_from
+        if n not in (af.get("boards") or {}):
+            af.setdefault("boards", {})[n] = rec
+            print("board '%s' from %s" % (n, rec["source"]))
     bmap = boards_in_map(af, s)
     if not bmap:
         raise SystemExit("no board poses in map. Re-run 05_anchor.py so "
@@ -674,6 +678,7 @@ def main():
                              "dwell_only": cr["dwell_only"],
                              "departure_t": cr["departure_t"],
                              "n_views": len(hits), "std_mm": round(sp[0], 2),
+                             "dwell_t0": hits[0]["t"], "dwell_t_end": hits[-1]["t"],
                              "map_to_cam": T_record(map_frame, cf, T),
                              "board_to_cam": T_record(bframe, cf, Tb)}
         else:

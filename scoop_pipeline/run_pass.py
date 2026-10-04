@@ -13,6 +13,8 @@ Steps (a step whose output is there already is skipped):
     process       processing/process_recording.py on every machine folder with an
                   Ouster packets bag or an SVO2: decoded, retimed, GLIM, ZED bags
     merge         processing/merge_session.py: check against record.yaml, merge
+    vslam         processing/vslam.py: a robot's odometry by cuVSLAM from its stereo +
+                  IMU in the merged bag (only with a "vslam" block: mobile_2 in coop)
   work -> processed (map_stages/, the pipeline config of this pass)
     mapping pass (no dataset.reference_pass):
     01_seed       01_build_map.py --seed     map from the GLIM poses (02's reference)
@@ -21,6 +23,7 @@ Steps (a step whose output is there already is skipped):
     a run in a mapping pass's map (dataset.reference_pass):
     03_init       03_init_from_boards.py     start pose from the anchor board
     04_reference  04_reference_traj.py       every scan registered to the anchored map
+                                             (and 04's "tracks": mobile_2's depth frames)
     both:
     05_anchor     05_anchor.py               boards; a mapping pass: the anchored map
     06_cut        06_cut.py                  viewing copy, only when 06_cut has floor/ceil
@@ -68,7 +71,7 @@ BLOCK = {"01_seed": "01_build_map", "02_refine": "02_refine", "01_map": "01_buil
          "03_init": "03_init", "04_reference": "04_reference", "05_anchor": "05_anchor",
          "06_cut": "06_cut", "07_cameras": "07_build_cameras", "08_tfs": "08_emit_tfs",
          "09_cloud": "09_build", "10_poses": "10_publish"}
-ORDER = (["process", "merge"] + MAPPING + RUN
+ORDER = (["process", "merge", "vslam"] + MAPPING + RUN
          + ["05_anchor", "06_cut", "07_cameras", "08_tfs", "09_cloud", "10_poses", "finalize",
             "comms", "csi_clean"])
 
@@ -181,6 +184,15 @@ def plan_steps(raw, cfg):
     }
     done = {k: bool(v) and os.path.exists(v) for k, v in out.items()}
     done["01_seed"] = done["01_seed"] or done["02_refine"]       # only 02 reads it
+    tracks = [t for t in blk("04_reference").get("tracks") or [] if t.get("enabled", True)]
+    done["04_reference"] = done["04_reference"] and all(
+        os.path.exists(os.path.join(P.reference_dir(), "traj_%s.tum" % t["name"])) for t in tracks)
+    if "vslam" in P.cfg and P.cfg["vslam"].get("enabled", True):
+        sys.path.insert(0, os.path.join(ROOT, "processing"))
+        import vslam
+        vt = vslam.traj_path(P)
+        steps.append(("vslam", True, os.path.exists(vt), vt,
+                      [py(os.path.join(ROOT, "processing", "vslam.py"), cfg)]))
     for s in MAPPING + RUN + ["05_anchor", "06_cut", "07_cameras", "08_tfs", "09_cloud",
                               "10_poses"]:
         steps.append((s, applies[s], done[s], out[s], cmds[s]))

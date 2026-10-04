@@ -15,7 +15,10 @@ RealSense's own tree from camera_link (mobile_2).
   mapping pass (mapping_A): mobile_1 from the refined LiDAR trajectory
       through T_N_world, in the points' frame;
   10 on a bag merged before the map stages: the same tree in its bag, with
-      the calibration the bag lacks (infra1_link) from static_tf.yaml.
+      the calibration the bag lacks (infra1_link) from static_tf.yaml;
+  coop (coop_1): mobile_2 driving, from 04's track (camera_link in map), its
+      origin map_realsense at the first pose below a board only survey_1
+      measured (dataset.boards_from).
 
 Every lookup in the merged bag must give the pipeline's poses, and every
 frame one parent.
@@ -173,6 +176,34 @@ def configs(stages, data):
                "dataset": {"bag": os.path.join(work, "survey_1", "x_merged"), "traj": None,
                            "reference_pass": "mapping_A"}},
               open(os.path.join(stages, "pipeline_config_survey_1.json"), "w"))
+
+
+def coop(data, stages):
+    """coop_1: mobile_2 moves (04's track mobile_2_depth, camera_link in map),
+    its origin below board_b, a board only survey_1 measured (boards_from)."""
+    od = os.path.join(data, "processed", "20260101", "coop_1", "odometry",
+                      "reference_coop_1_20260101")
+    os.makedirs(od)
+    with open(os.path.join(od, "traj_mobile_2_depth.tum"), "w") as f:
+        for t in np.arange(0.0, 10.0, 0.1):
+            p, q = tq(true_rs(t))
+            f.write("%.9f %s %s\n" % (T0 + t, " ".join(map(str, p)), " ".join(map(str, q))))
+    cfg = os.path.join(stages, "pipeline_config_coop_1.json")
+    json.dump({"extends": "pipeline_config.json",
+               "dataset": {"bag": os.path.join(data, "work", "20260101", "coop_1", "x_merged"),
+                           "traj": None, "reference_pass": "mapping_A",
+                           "boards_from": ["survey_1"]},
+               "07_build_cameras": {"enabled": False},
+               "04_reference": {"tracks": [{"name": "mobile_2_depth", "body_frame": "camera_link",
+                                            "origin_frame": "map_realsense",
+                                            "board": "anchor_b"}]}},
+              open(cfg, "w"))
+    return cfg
+
+
+def true_rs(t):
+    """mobile_2's camera_link in map, driving."""
+    return rotz(10 + 6 * t, (-24.0 + 0.4 * t, 2.0 + 0.1 * t * t, 0.2))
 
 
 def merged_tree(inputs, cfg, out, static_yaml):
@@ -344,6 +375,23 @@ def main():
                 f.append("10 again: " + r.stdout[-1000:] + r.stderr[-1500:])
             else:
                 f += check09(b09, stamps, T_cam_sensor, "10 again")
+
+        # coop: mobile_2 moves on its own track, below a board from survey_1
+        tree, after = merged_tree(inputs, coop(data, stages), os.path.join(tmp, "coop_merged"),
+                                  static_yaml)
+        T_link_col = RS_CHAIN[0][2] @ RS_CHAIN[1][2]
+        for t in stamps[::7]:
+            close(tree.lookup("map", "camera_link", T0 + t), true_rs(t),
+                  "coop: mobile_2 at %.1f s" % t, f)
+            close(tree.lookup("map", "camera_color_optical_frame", T0 + t),
+                  true_rs(t) @ T_link_col, "coop: realsense at %.1f s" % t, f)
+        if after["camera_link"].parent != "map_realsense" or \
+                after["map_realsense"].parent != "board_b":
+            f.append("coop: camera_link / map_realsense hang from %s / %s"
+                     % (after["camera_link"].parent, after["map_realsense"].parent))
+        close(tree.lookup("map", "map_realsense", T0 + 5), true_rs(0), "coop: map_realsense", f)
+        close(tree.lookup("map", "board_b", T0 + 5), rotz(45, (-7.2, 12.6, 0.03)),
+              "coop: board_b from survey_1", f)
 
         # the CLI: the check prints the tree from the outputs it finds
         cli = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "pass_tf.py"),

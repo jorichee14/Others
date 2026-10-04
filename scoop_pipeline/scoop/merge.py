@@ -212,9 +212,9 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
     if extra_tf:
         sch = TopicSchema(name, "ros2msg", rosmsg.msgdef(name).encode(), "cdr")
         streams.append(iter(sorted(
-            (t_ns, "/tf", sch, t_ns, 0, {},
-             rosmsg.serialize(rosmsg.tf_message([(p, c, t, q)], t_ns)))
-            for t_ns, p, c, t, q in extra_tf)))
+            ((t_ns, "/tf", sch, t_ns, 0, {},
+              rosmsg.serialize(rosmsg.tf_message([(p, c, t, q)], t_ns)))
+             for t_ns, p, c, t, q in extra_tf), key=lambda r: r[0])))
         log(f"    /tf += {len(extra_tf)} transforms {extra_tf[0][1]} -> {extra_tf[0][2]}")
     if extra_records:
         streams.append(iter(extra_records))

@@ -44,8 +44,11 @@ Config "04_reference" (all optional):
   "min_corr": 200, "max_shift": 0.5, "max_rot_deg": 5.0,
   "seed_held_at": 0.5, "segment_gap_s": 1.0,
   "deskew": 01_build_map.deskew, "deskew_bins": 01_build_map.deskew_bins
+  "tracks":      more robots, each registered to the same map from its own odometry
+                 (map_stages/depth_track.py: a depth camera, e.g. mobile_2's RealSense)
 
-  python3 04_reference_traj.py pipeline_config_<run>.json
+  python3 04_reference_traj.py pipeline_config_<run>.json [--track NAME]
+      --track NAME   only that entry of "tracks" (the LiDAR track as it is)
 """
 import importlib
 import json
@@ -175,7 +178,13 @@ def held_segments(times, T_fin, T_seed, rows, held_at, gap_s):
 
 
 def main():
-    cfg_path = sys.argv[1] if len(sys.argv) > 1 else "pipeline_config.json"
+    args = [a for a in sys.argv[1:]]
+    only = None
+    if "--track" in args:
+        i = args.index("--track")
+        only = args[i + 1]
+        del args[i:i + 2]
+    cfg_path = args[0] if args else "pipeline_config.json"
     P = load_pipeline(cfg_path)
     s01 = P.cfg["01_build_map"]
     c = dict(DEFAULTS)
@@ -202,6 +211,14 @@ def main():
         if not os.path.exists(f):
             raise SystemExit("not found: %s" % f)
 
+    tracks = [t for t in (c.get("tracks") or []) if t.get("enabled", True)]
+    if only is not None:
+        tracks = [t for t in tracks if t["name"] == only]
+        if not tracks:
+            raise SystemExit("no track %r in 04_reference.tracks" % only)
+        run_tracks(P, tracks, c, load_reference(ref_map, c), outd)
+        return
+
     T_lc = np.asarray(P.sensor.T_lidar_camera, float)
     times, T_glim = A.load_traj(run_traj)
     T_map_glim, t_a, mode = seed_from_anchor(sa_path, c["anchor_cam"], times, T_glim, T_lc)
@@ -210,13 +227,7 @@ def main():
           % (len(times), times[-1] - times[0], c["anchor_cam"], mode, t_a))
     topic = A.detect_points_topic(bag, c["points_topic"], len(times))
 
-    print("\n[ref] %s" % ref_map)
-    pc = o3d.io.read_point_cloud(ref_map)
-    print("    %d pts -> %.2f m voxels" % (len(pc.points), float(c["target_voxel"])))
-    pts = np.asarray(pc.voxel_down_sample(float(c["target_voxel"])).points)
-    del pc
-    ref = A.Reference(pts, plane_voxel=float(c["plane_voxel"]), planarity=float(c["planarity"]))
-    del pts
+    ref = load_reference(ref_map, c)
 
     T_cur, history, rows = T_seed.copy(), [], {}
     for rnd in range(1, int(c["rounds"]) + 1):
@@ -309,6 +320,28 @@ def main():
                      fmt(g["off_before_cm"]), fmt(g["off_after_cm"])))
     print("wrote %s\n      %s\n      quality_%s.csv, seed_held_%s.csv, summary_%s.json"
           % (p_lidar, p_cam, name, name, name))
+    if tracks:
+        run_tracks(P, tracks, c, ref, outd)
+
+
+def load_reference(ref_map, c):
+    print("\n[ref] %s" % ref_map)
+    pc = o3d.io.read_point_cloud(ref_map)
+    print("    %d pts -> %.2f m voxels" % (len(pc.points), float(c["target_voxel"])))
+    pts = np.asarray(pc.voxel_down_sample(float(c["target_voxel"])).points)
+    del pc
+    return A.Reference(pts, plane_voxel=float(c["plane_voxel"]), planarity=float(c["planarity"]))
+
+
+def run_tracks(P, tracks, c, ref, outd):
+    """The other robots of "tracks", each against the same frozen map."""
+    import depth_track
+    base = {k: v for k, v in c.items() if k != "tracks"}
+    for tr in tracks:
+        kind = tr.get("kind", "depth")
+        if kind != "depth":
+            raise SystemExit("track %s: unknown kind %r (depth)" % (tr.get("name"), kind))
+        depth_track.run(P, tr, base, ref, outd)
 
 
 if __name__ == "__main__":

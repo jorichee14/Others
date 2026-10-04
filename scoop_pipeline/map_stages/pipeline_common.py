@@ -712,6 +712,25 @@ class Pipeline:
             return os.path.join(d, "frames", "anchor_frame.json")
         raise ValueError(kind)
 
+    def extra_boards(self):
+        """Boards the reference pass lacks, as other passes measured them
+        (dataset.boards_from: ["survey_1", ...], same date or "<date>/<pass>";
+        05 on that run: frames/boards_<tag>.json). The boards do not move, so a
+        board another run measured holds here: {name: record}, the first pass
+        listed wins."""
+        out = {}
+        root = os.path.dirname(os.path.dirname(os.path.normpath(self.out_dir)))
+        here = os.path.basename(os.path.dirname(os.path.normpath(self.out_dir)))
+        for ref in self.dataset.get("boards_from") or []:
+            ref = ref.strip("/")
+            date, pas = (ref.split("/")[-2:] if "/" in ref else (here, ref))
+            path = os.path.join(root, date, pas, "frames", "boards_%s_%s.json" % (pas, date))
+            if not os.path.exists(path):
+                raise SystemExit("dataset.boards_from: no %s (run 05 on %s)" % (path, pas))
+            for n, rec in (json.load(open(path)).get("boards") or {}).items():
+                out.setdefault(n, dict(rec, source=path))
+        return out
+
     def anchor_frame(self, name="anchor_frame.json"):
         """This pass's anchor_frame.json, or the reference pass's for a run
         (dataset.reference_pass) that has none of its own."""

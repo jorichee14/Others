@@ -17,8 +17,10 @@ mapping_track() under the same names)
                          (the root of its tree: zed_camera_link -> ZED,
                          os_sensor, radars) in the robot's origin frame
                          (map_zed), i.e. the TF edge map_zed ~~ zed_camera_link;
-                         without it, the optical frame relative to its first
-                         pose, frame_id "<robot>/start"
+                         mobile_2 (a robot with "local_frame", e.g. camera_link):
+                         the TF edge map_realsense ~~ camera_link; without it,
+                         the optical frame relative to its first pose,
+                         frame_id "<robot>/start"
   /tf, /tf_static        the complete TF tree ("full_tf": true, the default):
                          the dataset bag's own TF with configs/static_tf.yaml
                          and the pipeline outputs put in (map_stages/pass_tf.py:
@@ -266,8 +268,15 @@ def main():
     write_tf = write_tf and not full
 
     parts = full_tf(P, s) if full else None
-    # local_pose of the robot the tree moves: the TF edge origin ~~ sensor root
-    local = {t_ns: (p, c, t, q) for t_ns, p, c, t, q in (parts[2] if parts else [])}
+    # local_pose of each robot the tree moves: the TF edge origin ~~ sensor root
+    # (the robot's "local_frame"; the dataset's machine: the first one the plan moves)
+    by_root = {}
+    for t_ns, p, c, t, q in (parts[2] if parts else []):
+        by_root.setdefault(c, {})[t_ns] = (p, c, t, q)
+    first = parts[2][0][2] if parts and parts[2] else None
+    local = {rb["name"]: by_root.get(rb.get("local_frame") or
+                                     (first if rb["name"] == P.machine else None), {})
+             for rb, *_ in robots}
 
     # interleave all robots by time so the bag plays in order
     events = []
@@ -283,8 +292,8 @@ def main():
             ql = Rot.from_matrix(Tloc[:3, :3]).as_quat()
             yield t_ns, "/%s/global_pose" % rb["name"], \
                 rosmsg.pose_stamped(t_ns, map_frame, Tm[:3, 3], qm)
-            if rb["name"] == P.machine and t_ns in local:
-                p, c, t_, q_ = local[t_ns]
+            if t_ns in local[rb["name"]]:
+                p, c, t_, q_ = local[rb["name"]][t_ns]
                 yield t_ns, "/%s/local_pose" % rb["name"], rosmsg.pose_stamped(t_ns, p, t_, q_)
             else:
                 yield t_ns, "/%s/local_pose" % rb["name"], \
@@ -318,12 +327,13 @@ def main():
     print("wrote %s: %d messages on %s%s" % (out, n, ", ".join(topics),
                                             ", /tf" if write_tf or full else ""))
     print("  global_pose: camera optical frame in '%s' (unless publish_body_frame)" % map_frame)
-    if local:
-        p, c = next(iter(local.values()))[:2]
-        print("  local_pose of %s: %s in %s (the TF edge)" % (P.machine, c, p))
-    else:
-        print("  local_pose: the optical frame relative to the robot's first pose "
-              "(frame '<robot>/start')")
+    for name, lp in local.items():
+        if lp:
+            p, c = next(iter(lp.values()))[:2]
+            print("  local_pose of %s: %s in %s (the TF edge)" % (name, c, p))
+        else:
+            print("  local_pose of %s: the optical frame relative to its first pose "
+                  "(frame '%s/start')" % (name, name))
 
 
 if __name__ == "__main__":

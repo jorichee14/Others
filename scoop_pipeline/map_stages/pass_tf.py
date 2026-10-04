@@ -22,6 +22,9 @@ it started at (map ── board ── map_zed, map ── board_rs ── map_r
   board_rs ── map_realsense mobile_2's origin (07's camera "origin_frame", below
                             its "board"): at its place from 07 while it is parked
      map_realsense ── camera_link
+  <board> ── <origin>       a robot with a track of its own (04 "tracks", e.g.
+     <origin> ~~ <body>     mobile_2_depth in coop: map_realsense below rs_anchor's
+                            board_rs at its first pose, camera_link moving below it)
   map ── <board frames>     05's boards (the reference pass's, plus the ones only
                             a run measured)
   map ── <camera tree>      07's cameras_in_map.yaml (arducam, RealSense): the
@@ -144,6 +147,8 @@ def plan(P, edges, bags, log=print):
     boards = dict((af.get("boards") or {}))
     for n, rec in (run.get("boards") or {}).items():
         boards.setdefault(n, rec)
+    for n, rec in P.extra_boards().items():            # dataset.boards_from
+        boards.setdefault(n, rec)
     bframe = {n: rec.get("frame") or n for n, rec in boards.items()}
     s04 = P.cfg.get("07_build_cameras") or {}
     cfg_cams = {c["name"]: c for c in s04.get("cameras", [])}
@@ -208,8 +213,38 @@ def plan(P, edges, bags, log=print):
         start = session.get("anchor_board") or af.get("anchor_board") or "anchor"
         under_board(start, mapzed, T_mz, "mobile_1's origin, 05: the ZED's map at the start board")
 
+    # -- the other robots with a track of their own (04 "tracks"): the origin
+    # frame at the first pose, below the start board; the track below it
+    for tr in (P.cfg.get("04_reference") or {}).get("tracks") or []:
+        if not tr.get("enabled", True):
+            continue
+        body, og = tr.get("body_frame", "camera_link"), tr.get("origin_frame")
+        traj = os.path.join(P.reference_dir(), "traj_%s.tum" % tr["name"])
+        if not og or not os.path.exists(traj):
+            log("    (no %s%s: %s not placed)" % (traj, "" if og else " / origin_frame",
+                                                 tr["name"]))
+            continue
+        if body not in edges and body not in frames:
+            log("    (%s not in the bags: %s not placed)" % (body, tr["name"]))
+            continue
+        oe = _odom_edge(body, edges)
+        if oe:
+            drop_edge(oe[0], oe[1], "the old odometry; %s replaces it" % tr["name"])
+        poses = _load_poses(traj)
+        T_og = poses[0][1]
+        inv0 = np.linalg.inv(T_og)
+        more = tftree.odom_transforms([(t, inv0 @ T) for t, T in poses], body, og, edges)
+        root = more[0][2]
+        edges[root] = tftree.Edge(og, root, False)
+        extra = extra + more
+        log("    %s ~~ %s  (%d poses of %s from %s)"
+            % (og, root, len(more), body, os.path.relpath(traj, P.out_dir)))
+        under_board(tr.get("board"), og, T_og, "%s's origin: its first pose" % tr["name"])
+        frames |= {og}
+
     # -- infra / parked cameras from 07
-    cy = P.stage("07_build_cameras")["output"] if "07_build_cameras" in P.cfg else None
+    cy = P.stage("07_build_cameras")["output"] if "07_build_cameras" in P.cfg and \
+        P.cfg["07_build_cameras"].get("enabled", True) else None
     if cy and os.path.exists(cy):
         _, cams = load_cameras_yaml(cy)
         for c in cams:

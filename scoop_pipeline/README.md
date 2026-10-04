@@ -176,11 +176,12 @@ it, `--only S` runs S alone, `--until S` stops after S.
 |---|---|---|
 | process | `process_recording.py` per machine folder with an Ouster bag or SVO2 | `work/<date>/<pass>/<machine>/` |
 | merge | `merge_session.py`: check against record.yaml, merge | `work/<date>/<pass>/<prefix>_<pass>_<date>_merged` |
+| vslam | only with a `"vslam"` block (coop: mobile_2 drives, its VSLAM was not recorded): `processing/vslam.py`, cuVSLAM offline on its stereo + IMU, in the isaac_ros container | `work/<date>/<pass>/<machine>/vslam/traj_vslam.txt` |
 | 01_seed | mapping pass: `01_build_map.py --seed`, the map from GLIM's poses | `mapping/denoised_seed_<tag>.pcd` |
 | 02_refine | mapping pass: `02_refine_poses.py`, every scan registered to it | `odometry/<machine>/traj_lidar_refined.txt` |
 | 01_map | mapping pass: `01_build_map.py`, the final map from the refined poses | `mapping/map_final_<tag>.pcd` |
 | 03_init | run: `03_init_from_boards.py`, start pose from the anchor board | `frames/session_anchor.json` |
-| 04_reference | run: `04_reference_traj.py`, every scan registered to the anchored map | `odometry/reference_<tag>/` |
+| 04_reference | run: `04_reference_traj.py`, every scan registered to the anchored map; its `"tracks"` (`map_stages/depth_track.py`): another robot's depth frames registered to it from its own odometry | `odometry/reference_<tag>/` |
 | 05_anchor | `05_anchor.py`: the boards (mapping pass: and the anchored map) | `frames/anchor_frame.json`, `boards_<tag>.json` |
 | 06_cut | mapping pass, only when `06_cut` has floor/ceil: viewing copy | `mapping/*_noceil.pcd` |
 | 07_cameras | `07_build_cameras.py`: infra / parked cameras in map | `frames/cameras_in_map.yaml` |
@@ -199,7 +200,18 @@ bag exists, processing is not redone, so the decoded/retimed/ZED bags may be
 deleted (keep `glim/`: 01_seed, 02 and 03 read GLIM's trajectory). finalize
 needs as much free space as the merged bag takes. A config written before the
 stages were renumbered still works: a block under its old number ("08_reference")
-is read as the new one ("04_reference").
+is read as the new one ("04_reference"). A stage whose block has `"enabled": false`
+is not run.
+
+A coop run (`pipeline_config_coop_2.json`) has both robots moving. mobile_1 is
+as in a survey run. mobile_2: `vslam` gives its odometry; 03 places its colour
+camera at `rs_anchor` in the opening dwell, with the board's pose from the pass
+that measured it (`dataset.boards_from: ["survey_1"]`; boards do not move); 04's
+track `mobile_2_depth` registers every depth frame to the anchored map, the
+odometry as the seed, carried by the last registered frame's correction. The
+tree gets `board_rs ── map_realsense` (its first pose) `~~ camera_link`, and 10
+publishes `/mobile_2/global_pose` and `/mobile_2/local_pose`. No infra cameras
+(07/08) or boards re-measured (05) in coop.
 
 ## Processing a recording
 

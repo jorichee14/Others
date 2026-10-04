@@ -1,18 +1,24 @@
 {
   "extends": "pipeline_config.json",
-  "_note": "coop_2 in mapping_A's map. The boards are where mapping_A placed them (no 05: not measured again). 03: the ZED's start from the anchor board via GLIM -> 04 (LiDAR ICP to the anchored map) -> 07 (mobile_2's RealSense from rs_anchor while it stands at the start: map_realsense; no arducam in coop) -> 09 (the run's cloud). mobile_2 drives in coop but its VSLAM was not recorded: it has no trajectory yet, only its start.",
+  "_note": "coop_2 in mapping_A's map. The boards keep the poses mapping_A and survey_1 measured (no 05; rs_anchor from survey_1: dataset.boards_from). mobile_1: 03 (ZED at the anchor board, through GLIM) -> 04 (LiDAR ICP to the anchored map). mobile_2 drives and its VSLAM was not recorded: vslam (cuVSLAM offline on its stereo + IMU) -> 03 (its colour camera at rs_anchor in the opening dwell) -> 04's track mobile_2_depth (every depth frame to the anchored map). No infra camera placement (07/08) in coop.",
   "dataset": {
     "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/coop_2/mirc_dataset_coop_2_20260924_merged",
     "traj": null,
     "machine": "mobile_1",
-    "reference_pass": "mapping_A"
+    "reference_pass": "mapping_A",
+    "boards_from": ["survey_1"]
   },
-  "05_anchor": {"enabled": false},
-  "07_build_cameras": {"cameras": [{"name": "realsense", "bag": null,
-                                    "image_topic": "/mobile_2/color/image_raw",
-                                    "camera_info_topic": "/mobile_2/color/camera_info",
-                                    "rectified": false, "detect_target": 30},
-                                   {"name": "arducam", "enabled": false}]},
+  "vslam": {"machine": "mobile_2"},
   "03_init": {"sensors": [{"name": "zed", "source": "lidar_odom"},
-                          {"name": "realsense", "enabled": false}]}
+                          {"name": "realsense", "source": "camera", "dwell_only": true}]},
+  "04_reference": {"tracks": [{"name": "mobile_2_depth", "machine": "mobile_2",
+                               "body_frame": "camera_link", "origin_frame": "map_realsense",
+                               "board": "rs_anchor", "anchor_cam": "realsense"}]},
+  "05_anchor": {"enabled": false},
+  "07_build_cameras": {"enabled": false},
+  "08_emit_tfs": {"enabled": false},
+  "10_publish": {"robots": [{"name": "mobile_2",
+                             "traj": "traj_mobile_2_depth_in_cam.tum",
+                             "optical_frame": "camera_color_optical_frame",
+                             "local_frame": "camera_link"}]}
 }
