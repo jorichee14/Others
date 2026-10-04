@@ -18,8 +18,9 @@ anchor, and every depth frame registered to the room's map.
     _in_cam file be the colour optical frame through the bag's /tf_static,
     and the summary say how far the odometry drifted.
 
-Also fill_back (the track run backwards from a frame placed again) on its
-own, and processing/vslam.py: its odometry recording -> TUM, and the launch file
+Also fill_back (the track run backwards from a frame placed again) and board
+fixes (a lost track placed again from a board sighting, the depth frame
+picking between two copies of a design) on their own, and processing/vslam.py: its odometry recording -> TUM, and the launch file
 it writes compiles.
 
     python scoop_pipeline/tests/test_depth_track.py
@@ -196,7 +197,7 @@ def main():
                    "01_build_map": {},
                    "04_reference": {"name": "mobile_1_lidar", "out_dir": "reference_{tag}",
                                     "tracks": [{"name": "mobile_2_depth", "machine": "mobile_2",
-                                                "range": [0.3, 6.0]}]}},
+                                                "range": [0.3, 6.0], "board_fixes": False}]}},
                   open(cfg, "w"))
         r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "04_reference_traj.py"),
                             cfg, "--track", "mobile_2_depth"], capture_output=True, text=True)
@@ -282,6 +283,35 @@ def main():
         print("fill_back: %d frames placed, max %.2f cm" % (nb, max(eb) if eb else -1))
         if nb != 15 or max(eb) > 3.0:
             f.append("fill_back: %d of 15 frames, %s cm" % (nb, eb))
+
+        # board fixes: lost after a blackout (no depth, no odometry), a board
+        # sighting with two copies of its design (the true one, one 3 m off)
+        # places the frame at once, the depth frame picking the copy; and a
+        # track 0.5 m off where a board is seen is reset to it
+        tf = np.arange(0.0, 8.0, 2 / 15)
+        sc = []
+        for t in tf:
+            p = D.backproject(raycast(truth(t) @ T_LINK_DEPTH), K, 0.001, 0.3, 6.0, 4)
+            q = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(p @ T_LINK_DEPTH[:3, :3].T))
+            sc.append(np.asarray(q.voxel_down_sample(0.05).points))
+        keep = (tf < 2.0) | (tf > 5.0)                           # 3 s without frames
+        tf2 = tf[keep]
+        sc2 = [x for x, k in zip(sc, keep) if k]
+        jb = int(np.flatnonzero(tf2 > 5.0)[0])
+        wrong = rotz(0, (3.0, 0, 0)) @ truth(tf2[jb])
+        fx = {jb: [("anchor_b", wrong), ("anchor", truth(tf2[jb]) @ rotz(1.0, (0.03, 0.02, 0)))]}
+        cc2 = dict(cc, bridge_s=2.0)
+        T0b = truth(tf2[0])
+        To, rw, ev = D.first_round(A, refm, sc2, tf2, np.tile(np.eye(4), (len(tf2), 1, 1)),
+                                   np.where(tf2 < 2.0, 0, -1), T0b, 0, cc2,
+                                   log=print, fixes=fx)
+        eb = [np.linalg.norm(To[i][:3, 3] - truth(tf2[i])[:3, 3]) * 100 for i in range(jb, len(tf2))
+              if np.isfinite(To[i]).all()]
+        print("board fix: %s; after it %d of %d frames, max %.2f cm"
+              % ([e for e in ev if e.get("board")], len(eb), len(tf2) - jb, max(eb) if eb else -1))
+        if not any(e.get("board") == "anchor" and "since_s" in e for e in ev) \
+                or len(eb) < len(tf2) - jb - 2 or np.median(eb) > 0.5 or max(eb) > 5.0:
+            f.append("board fix: %s, %s" % (ev, eb))
 
         # processing/vslam.py: the odometry recording -> TUM; the launch file it writes
         sys.path.insert(0, os.path.join(ROOT, "processing"))

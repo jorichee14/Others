@@ -52,6 +52,14 @@ Stage 04 runs it for each entry of "04_reference" "tracks":
             most hyp_ratio of it, is taken -- a wrong place stops fitting as the
             robot moves on; while two keep fitting alike (a corridor), for 2x,
             4x hyp_s. Not found: the frames wait for the next try.
+  boards    every board sighting of the colour camera (board_image_topic, every
+            board_stride-th image, within board_max_range and board_max_reproj)
+            is a fix: the body in map from the board's pose (the reference
+            pass's, dataset.boards_from's). A frame within board_tol_s of one
+            is placed from it when the track is lost, or when the track is
+            more than board_reset_m from it; a design with several copies
+            (anchor / anchor_b) gives one candidate per copy, the depth frame
+            picks. Track - board is reported (the residual).
   back      from every frame placed again after a loss, the track runs
             backwards in time over the frames before it, until it meets a
             placed frame or is lost.
@@ -87,7 +95,10 @@ DEFAULTS = dict(depth_topic="/mobile_2/depth/image_rect_raw",
                 search_voxel=0.10, fit_m=0.05, min_fit=0.6, rival_ratio=2.0, rival_gap=0.05,
                 candidates=8, bridge_s=2.0, predict_s=0.5, track_min_fit=0.5,
                 hyp_tol=0.1, hyp_max=6, hyp_s=8.0, hyp_min_frames=20, hyp_min_ok=0.7,
-                hyp_ratio=0.8)
+                hyp_ratio=0.8, board_fixes=True, board_image_topic="/mobile_2/color/image_raw",
+                board_info_topic="/mobile_2/color/camera_info", board_rectified=False,
+                board_stride=2, board_max_range=2.5, board_max_reproj=1.0, board_tol_s=0.1,
+                board_reset_m=0.3)
 
 
 def rel_pose(edges, a, b):
@@ -332,7 +343,87 @@ def track_ahead(A, ref, scans, times, T_odom, piece, j, T_first, t_end, c):
     return tk, out, tried, placed, score
 
 
-def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print):
+def board_fixes(P, c, bag, T_bc, cache, log=print):
+    """Every board sighting of the colour camera -> [(t, board, T_map_body,
+    range, reproj)], one entry per copy of the design seen. Cached in `cache`."""
+    import pipeline_boards as PB
+    key = "%s|%s|%d|%.2f|%.2f" % (bag, c["board_image_topic"], int(c["board_stride"]),
+                                  float(c["board_max_range"]), float(c["board_max_reproj"]))
+    if os.path.exists(cache):
+        d = json.load(open(cache))
+        if d.get("key") == key:
+            return [(f["t"], f["board"], np.array(f["T"]), f["range"], f["reproj"])
+                    for f in d["fixes"]]
+    af = json.load(open(P.anchor_frame()))
+    recs = dict(af.get("boards") or {})
+    for n, r in P.extra_boards().items():
+        recs.setdefault(n, r)
+    axes, origin = af.get("board_axes", "opencv"), af.get("board_origin", "corner")
+    reg = P.cfg.get("boards", {})
+    by_design = {}
+    for n, r in recs.items():
+        by_design.setdefault(r.get("design", n), []).append((n, PB.T_from_record(r)))
+    designs = {d: PB.Board(d, reg[d]) for d in by_design if d in reg}
+    infos, _, _ = PB.read_tf_and_info(bag, [c["board_info_topic"]], want_tf=False, verbose=False)
+    K, D, _ = PB.pick_intrinsics(infos, c["board_info_topic"], bool(c["board_rectified"]))
+    T_cb = np.linalg.inv(T_bc)
+    out, n_img, t0 = [], 0, time.time()
+    log("board sightings on %s (every %d-th image; boards %s) ..."
+        % (c["board_image_topic"], int(c["board_stride"]),
+           ", ".join("%s: %s" % (d, "/".join(n for n, _ in v)) for d, v in by_design.items())))
+    for st, gray in PB.iter_images(bag, c["board_image_topic"], stride=int(c["board_stride"])):
+        n_img += 1
+        for dn, B in designs.items():
+            det = B.detect(gray, K, D)
+            if det is None or det.reproj > float(c["board_max_reproj"]):
+                continue
+            T_cam_board = det.T @ B.frame_fix(axes, origin)
+            rng = float(np.linalg.norm(T_cam_board[:3, 3]))
+            if rng > float(c["board_max_range"]):
+                continue
+            T_board_cam = np.linalg.inv(T_cam_board)
+            for name, T_map_board in by_design[dn]:
+                out.append((st, name, T_map_board @ T_board_cam @ T_cb, rng, float(det.reproj)))
+        if n_img % 2000 == 0:
+            log("    %d images, %d sightings (%.0f s)" % (n_img, len(out), time.time() - t0))
+    json.dump({"key": key, "fixes": [{"t": t, "board": b, "T": T.tolist(), "range": r,
+                                      "reproj": e} for t, b, T, r, e in out]},
+              open(cache, "w"))
+    return out
+
+
+def fix_lookup(fixes, times, tol):
+    """depth frame index -> [T_map_body candidates] from the sightings within tol."""
+    out = {}
+    if not fixes:
+        return out
+    ft = np.array([f[0] for f in fixes])
+    for i, t in enumerate(times):
+        k = np.flatnonzero(np.abs(ft - t) <= tol)
+        if len(k):
+            # the nearest sighting of each board
+            best = {}
+            for kk in k:
+                b = fixes[kk][1]
+                if b not in best or abs(ft[kk] - t) < abs(ft[best[b]] - t):
+                    best[b] = kk
+            out[i] = [(fixes[kk][1], fixes[kk][2]) for kk in best.values()]
+    return out
+
+
+def from_board(A, ref, scan, cands, c):
+    """The best-fitting of the board's candidate poses for this frame, polished
+    on the map -> (T, row, board) or None."""
+    best = None
+    for b, Tb in cands:
+        T, status, row, share = step(A, ref, scan, Tb, c)
+        if status == "ok" and row[3] <= float(c["board_reset_m"]) and \
+                (best is None or share > best[3]):
+            best = (T, row, b, share)
+    return best[:3] if best else None
+
+
+def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, fixes=None):
     """Round 1, frame by frame. A frame starts from the odometry (carried by
     the last placed frame's correction) where the odometry runs unbroken
     since that frame; else from the last placed pose moved on at the same
@@ -355,6 +446,26 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print):
             T0, src = C0 @ T_odom[j], "odom"
         else:
             T0, src = tk.seed(j, times, T_odom, piece, c)
+        cands = (fixes or {}).get(j)
+        if cands and tk.last is not None and (T0 is None or min(
+                np.linalg.norm(T0[:3, 3] - Tb[:3, 3]) for _, Tb in cands) > float(c["board_reset_m"])):
+            hit = from_board(A, ref, scans[j], cands, c)
+            if hit is not None:                      # a board says where: placed (again) from it
+                T_b, row, b = hit
+                if T0 is None:
+                    events.append({"t": float(times[j]), "since_s": float(times[j] - times[tk.last[0]]),
+                                   "found": True, "board": b})
+                    log("    placed again at %.1f s from board '%s' (%.1f s since the last pose)"
+                        % (times[j] - times[0], b, times[j] - times[tk.last[0]]))
+                else:
+                    log("    reset at %.1f s by board '%s': the track was %.2f m off it"
+                        % (times[j] - times[0], b, np.linalg.norm(T0[:3, 3] - T_b[:3, 3])))
+                    events.append({"t": float(times[j]), "reset_m": float(np.linalg.norm(
+                        T0[:3, 3] - T_b[:3, 3])), "found": True, "board": b})
+                T_out[j], rows[j] = T_b, row
+                tk.placed(j, T_b, T_odom, piece)
+                j += 1
+                continue
         if T0 is None:                               # lost for bridge_s: search
             since = times[j] - times[tk.last[0]]
             Tp = tk.prev[1] if tk.prev else None
@@ -546,13 +657,25 @@ def run(P, tr, base, ref, outd):
     ia = int(np.clip(np.searchsorted(o_t, t_a), 0, len(o_t) - 1))
     piece0 = int(pc_o[ia])
 
+    fixes, fix_at = [], {}
+    if c["board_fixes"]:
+        fixes = board_fixes(P, c, bag, T_bc, os.path.join(outd, "board_fixes_%s.json" % name))
+        fix_at = fix_lookup(fixes, times, float(c["board_tol_s"]))
+        per = {}
+        for f in fixes:
+            per.setdefault(f[1], []).append(f[0])
+        print("    %d board sightings (%s), %d depth frames with one"
+              % (len(fixes), ", ".join("%s: %d, %.0f-%.0f s" % (b, len(v), min(v) - times[0],
+                                                               max(v) - times[0])
+                                       for b, v in sorted(per.items())), len(fix_at)))
+
     history, rows, events, T_cur = [], [], [], None
     for rnd in range(1, int(c["rounds"]) + 1):
         print("\n=== %s round %d/%d: every depth frame to the frozen map ===" % (name, rnd, int(c["rounds"])))
         t0 = time.time()
         if rnd == 1:
             T_cur, rows, events = first_round(A, ref, scans, times, T_odom, piece, T_map_odom,
-                                              piece0, c)
+                                              piece0, c, fixes=fix_at)
         else:
             idx = np.flatnonzero(np.isfinite(T_cur).all(axis=(1, 2)))
             T_p, r_p = register_frames(A, ref, [scans[k] for k in idx], T_cur[idx], c, False)
@@ -579,6 +702,14 @@ def run(P, tr, base, ref, outd):
                         "median_residual_cm": float(np.median(res)) if len(res) else None})
 
     placed = np.isfinite(T_cur).all(axis=(1, 2))
+    # track - board, where a board was seen (the nearest copy of the design)
+    resid = []
+    for jj, cands in fix_at.items():
+        if placed[jj]:
+            resid.append(min(np.linalg.norm(T_cur[jj][:3, 3] - Tb[:3, 3]) for _, Tb in cands) * 100)
+    if resid:
+        print("  track - board sightings: median %.1f cm, p95 %.1f cm, max %.1f cm over %d frames"
+              % (np.median(resid), np.percentile(resid, 95), max(resid), len(resid)))
     p_body = os.path.join(outd, "traj_%s.tum" % name)
     p_cam = os.path.join(outd, "traj_%s_in_cam.tum" % name)
     A.write_traj(p_body, times[placed], T_cur[placed])
@@ -597,6 +728,11 @@ def run(P, tr, base, ref, outd):
                "t_anchor": t_a, "T_map_odom_seed": T_map_odom.tolist(), "rounds": history,
                "registered_last_round": history[-1]["registered"], "frames": len(times),
                "poses": int(placed.sum()), "odometry_pieces": n_br + 1, "refind": events,
+               "board_sightings": len(fixes),
+               "track_minus_board_cm": {"frames": len(resid),
+                                        "median": float(np.median(resid)) if resid else None,
+                                        "p95": float(np.percentile(resid, 95)) if resid else None,
+                                        "max": float(max(resid)) if resid else None},
                "longest_unplaced_s": float(gaps.max()) if len(gaps) else None,
                "anchored_piece_seed_to_final_cm": {"median": float(np.median(drift)),
                                                    "p95": float(np.percentile(drift, 95)),
