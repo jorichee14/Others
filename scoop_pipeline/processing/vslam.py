@@ -15,7 +15,7 @@ RealSense D435i, as isaac_ros_visual_slam's RealSense example):
             "base_frame": "camera_link",
             "camera_optical_frames": ["camera_infra1_optical_frame", "camera_infra2_optical_frame"],
             "imu_frame": "camera_gyro_optical_frame",
-            "enable_imu_fusion": true, "rate": 1.0,
+            "enable_imu_fusion": false, "rate": 1.0,
             "params": {...}}        # any other cuVSLAM parameter
 
 Writes data/work/<date>/<pass>/<machine>/vslam/:
@@ -50,7 +50,7 @@ DEFAULTS = {
     "base_frame": "camera_link",
     "camera_optical_frames": ["camera_infra1_optical_frame", "camera_infra2_optical_frame"],
     "imu_frame": "camera_gyro_optical_frame",
-    "enable_imu_fusion": True,
+    "enable_imu_fusion": False,
     "rate": 1.0,
     "params": {},
 }
@@ -96,21 +96,23 @@ def traj_path(P, machine=None):
 
 
 def node_params(c):
-    """cuVSLAM parameters; both the 3.x names and the 2.x ones (input_*), a
-    node ignores the ones it does not declare."""
-    left, right = c["camera_optical_frames"]
-    p = {"use_sim_time": True, "num_cameras": 2, "rectified_images": True,
-         "enable_image_denoising": False, "denoise_input_images": False,
+    """cuVSLAM's parameters, as the launch the robot's own replay uses
+    (isaac_ros_visual_slam 3.x): stereo infra pair, no IMU fusion, a jitter
+    threshold that lets dropped frames pass (300 ms: the D435i drops some, and
+    a tight threshold makes cuVSLAM lose track at each), no GXF memory pool."""
+    p = {"use_sim_time": True,
+         "enable_image_denoising": False,
+         "rectified_images": True,
          "enable_imu_fusion": bool(c["enable_imu_fusion"]),
-         "image_jitter_threshold_ms": 34.0,
-         "base_frame": c["base_frame"], "input_base_frame": c["base_frame"],
-         "imu_frame": c["imu_frame"], "input_imu_frame": c["imu_frame"],
-         "camera_optical_frames": list(c["camera_optical_frames"]),
-         "input_left_camera_frame": left, "input_right_camera_frame": right,
+         "image_jitter_threshold_ms": 300.0,
          "map_frame": "map_vslam", "odom_frame": "odom_vslam",
-         "publish_odom_to_base_tf": True, "publish_map_to_odom_tf": True,
+         "base_frame": c["base_frame"],
+         "publish_map_to_odom_tf": True, "publish_odom_to_base_tf": True,
+         "imu_frame": c["imu_frame"],
          "enable_slam_visualization": False, "enable_landmarks_view": False,
-         "enable_observations_view": False}
+         "enable_observations_view": False,
+         "camera_optical_frames": list(c["camera_optical_frames"]),
+         "use_vslam_gxf_memory_pool": False, "disable_gxf_memory_pool": True}
     p.update(IMU_NOISE)
     p.update(c.get("params") or {})
     return p
@@ -120,8 +122,6 @@ def remaps(c):
     (i0, i1), (c0, c1) = c["images"], c["camera_infos"]
     return [("visual_slam/image_0", i0), ("visual_slam/camera_info_0", c0),
             ("visual_slam/image_1", i1), ("visual_slam/camera_info_1", c1),
-            ("stereo_camera/left/image", i0), ("stereo_camera/left/camera_info", c0),
-            ("stereo_camera/right/image", i1), ("stereo_camera/right/camera_info", c1),
             ("visual_slam/imu", c["imu"])]
 
 
