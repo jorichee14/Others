@@ -57,6 +57,7 @@ if [ -z "${VSLAM_IN_CONTAINER:-}" ]; then
         rm -f "$PIDFILE"
         echo "run_vslam: running in container $CONTAINER"
         docker exec -i -e VSLAM_IN_CONTAINER=1 -e VSLAM_ROS_SETUP="${VSLAM_ROS_SETUP:-}" \
+            -e PYTHONDONTWRITEBYTECODE=1 \
             -e VSLAM_WS="$CONT_WS" -e VSLAM_OWNER="$(id -u):$(id -g)" \
             -e VSLAM_PIDFILE="$C_PIDFILE" \
             "$CONTAINER" bash -s -- "$C_BAG" "$C_OUT" "$C_LAUNCH" "$RATE" "$@" < "$0" &
@@ -112,7 +113,10 @@ finish() {
     else
         tail -n 30 "$LOGS"/*.log >&2 2>/dev/null || true
     fi
-    if [ -n "${VSLAM_OWNER:-}" ] && [ -e "$OUT" ]; then chown -R "$VSLAM_OWNER" "$OUT" || true; fi
+    if [ -n "${VSLAM_OWNER:-}" ]; then               # all it wrote, the launch's folder too
+        chown -R "$VSLAM_OWNER" "$(dirname "$LAUNCH")" 2>/dev/null || true
+        [ -e "$OUT" ] && chown -R "$VSLAM_OWNER" "$OUT" || true
+    fi
     rm -rf "$LOGS"
     [ -n "${VSLAM_PIDFILE:-}" ] && rm -f "$VSLAM_PIDFILE"
     return 0
