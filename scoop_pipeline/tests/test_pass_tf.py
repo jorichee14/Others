@@ -9,13 +9,16 @@ static_tf.yaml, the arducam's ChArUco pose under map_zed (infra_1), and the
 RealSense's own tree from camera_link (mobile_2).
 
   run (survey_1, in mapping_A's map): map -> map_zed (mobile_1's origin)
-      from boards_<tag>.json, map_zed ~~ mobile_1 from 08's in-camera
-      trajectory, the boards of the reference and of the run, arducam from 04,
-      map -> map_realsense (mobile_2's origin) -> camera_link from 04;
+      from boards_<tag>.json, map_zed ~~ mobile_1 from 04's in-camera
+      trajectory, the boards of the reference and of the run, arducam from 07,
+      map -> map_realsense (mobile_2's origin) -> camera_link from 07;
   mapping pass (mapping_A): mobile_1 from the refined LiDAR trajectory
       through T_N_world, in the points' frame;
-  09 on a bag merged before the map stages: the same tree in its bag, with
-      the calibration the bag lacks (infra1_link) from static_tf.yaml.
+  10 on a bag merged before the map stages: the same tree in its bag, with
+      the calibration the bag lacks (infra1_link) from static_tf.yaml;
+  coop (coop_1): mobile_2 driving, from 04's track (camera_link in map), its
+      origin map_realsense at the first pose below a board only survey_1
+      measured (dataset.boards_from).
 
 Every lookup in the merged bag must give the pipeline's poses, and every
 frame one parent.
@@ -157,11 +160,12 @@ def outputs(data):
 
 
 def configs(stages, data):
-    base = {"03_anchor": {}, "04_build_cameras": {
+    base = {"05_anchor": {}, "07_build_cameras": {
         "output": "cameras_in_map.yaml",
-        "cameras": [{"name": "realsense", "origin_frame": "map_realsense"}]},
-            "08_reference": {"name": "mobile_1_lidar"},
-            "09_publish": {"robots": [{"name": "mobile_1",
+        "cameras": [{"name": "realsense", "board": "rs_anchor",
+                     "origin_frame": "map_realsense"}]},
+            "04_reference": {"name": "mobile_1_lidar"},
+            "10_publish": {"robots": [{"name": "mobile_1",
                                        "traj": "traj_mobile_1_lidar_in_cam.tum",
                                        "optical_frame": "zed_left_camera_optical_frame"}]}}
     work = os.path.join(data, "work", "20260101")
@@ -172,6 +176,34 @@ def configs(stages, data):
                "dataset": {"bag": os.path.join(work, "survey_1", "x_merged"), "traj": None,
                            "reference_pass": "mapping_A"}},
               open(os.path.join(stages, "pipeline_config_survey_1.json"), "w"))
+
+
+def coop(data, stages):
+    """coop_1: mobile_2 moves (04's track mobile_2_depth, camera_link in map),
+    its origin below board_b, a board only survey_1 measured (boards_from)."""
+    od = os.path.join(data, "processed", "20260101", "coop_1", "odometry",
+                      "reference_coop_1_20260101")
+    os.makedirs(od)
+    with open(os.path.join(od, "traj_mobile_2_depth.tum"), "w") as f:
+        for t in np.arange(0.0, 10.0, 0.1):
+            p, q = tq(true_rs(t))
+            f.write("%.9f %s %s\n" % (T0 + t, " ".join(map(str, p)), " ".join(map(str, q))))
+    cfg = os.path.join(stages, "pipeline_config_coop_1.json")
+    json.dump({"extends": "pipeline_config.json",
+               "dataset": {"bag": os.path.join(data, "work", "20260101", "coop_1", "x_merged"),
+                           "traj": None, "reference_pass": "mapping_A",
+                           "boards_from": ["survey_1"]},
+               "07_build_cameras": {"enabled": False},
+               "04_reference": {"tracks": [{"name": "mobile_2_depth", "body_frame": "camera_link",
+                                            "origin_frame": "map_realsense",
+                                            "board": "anchor_b"}]}},
+              open(cfg, "w"))
+    return cfg
+
+
+def true_rs(t):
+    """mobile_2's camera_link in map, driving."""
+    return rotz(10 + 6 * t, (-24.0 + 0.4 * t, 2.0 + 0.1 * t * t, 0.2))
 
 
 def merged_tree(inputs, cfg, out, static_yaml):
@@ -197,6 +229,52 @@ def close(A, B, what, f, mm=0.5, deg=0.02):
     a = np.degrees(np.arccos(np.clip((np.trace(A[:3, :3].T @ B[:3, :3]) - 1) / 2, -1, 1)))
     if d > mm or a > deg:
         f.append("%s: off by %.2f mm / %.3f deg" % (what, d, a))
+
+
+def check09(b09, stamps, T_cam_sensor, what):
+    from scoop import bag as sbag
+    f = []
+    tp = sbag.open_bag(b09).topics()
+    if sorted(tp) != ["/mobile_1/global_pose", "/mobile_1/local_pose", "/tf", "/tf_static"]:
+        f.append("%s topics: %s" % (what, sorted(tp)))
+    after = tftree.tf_edges([b09])                     # one parent per frame, or raises
+    tree = read_tf_and_info(b09, [], want_tf=True, verbose=False)[1]
+    for t in stamps[::9]:
+        close(tree.lookup("map", "os_sensor", T0 + t), true_cam(t) @ T_cam_sensor,
+              "%s: os_sensor at %.1f s" % (what, t), f)
+    close(tree.lookup("map", "infra1_link", T0 + 5), T_ARDU @ T_RADAR, what + ": infra1_link", f)
+    close(tree.lookup("map", "camera_color_optical_frame", T0 + 5), T_RS, what + ": realsense", f)
+    close(tree.lookup("map", "board_b", T0 + 5), rotz(45, (-7.2, 12.6, 0.03)),
+          what + ": board_b", f)
+    close(tree.lookup("map", "map_zed", T0 + 5), T_MAP_MAPZED, what + ": map_zed", f)
+    if tree.lookup("map_zed", "odom_zed", T0 + 5) is None:
+        f.append(what + ": the bag's map_zed ~~ odom_zed is missing")
+    if after["map_zed"].parent != "board" or after["map_realsense"].parent != "board_rs":
+        f.append("%s: origins below %s / %s" % (what, after["map_zed"].parent,
+                                                 after["map_realsense"].parent))
+    par = set()
+    for _, _, pl, dec in sbag.open_bag(b09).iter_raw(["/tf"]):
+        par |= {tr.header.frame_id for tr in dec(pl).transforms
+                if tr.child_frame_id == "zed_camera_link"}
+    if par != {"map_zed"}:
+        f.append("%s: zed_camera_link's parents on /tf: %s" % (what, sorted(par)))
+    # local_pose: zed_camera_link (the frame carrying the ZED, LiDAR, radars) in map_zed
+    T_link_cam = CHAIN[0][2] @ CHAIN[1][2] @ CHAIN[2][2]
+    n = 0
+    for _, _, pl, dec in sbag.open_bag(b09).iter_raw(["/mobile_1/local_pose"]):
+        m = dec(pl)
+        t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9 - T0
+        if m.header.frame_id != "map_zed":
+            f.append("%s: local_pose in %s" % (what, m.header.frame_id))
+            break
+        p, q = m.pose.position, m.pose.orientation
+        close(tftree.matrix([p.x, p.y, p.z], [q.x, q.y, q.z, q.w]),
+              np.linalg.inv(T_MAP_MAPZED) @ true_cam(t) @ np.linalg.inv(T_link_cam),
+              "%s: local_pose at %.1f s" % (what, t), f)
+        n += 1
+    if n != len(stamps):
+        f.append("%s: %d local poses" % (what, n))
+    return f
 
 
 def main():
@@ -245,9 +323,12 @@ def main():
             f.append("run: map_zed ~~ odom_zed (the ZED's own topics) is gone")
         if after["zed_camera_link"].parent != "map_zed":
             f.append("run: zed_camera_link hangs from %s" % after["zed_camera_link"].parent)
+        if after["map_zed"].parent != "board":
+            f.append("run: map_zed hangs from %s, not the start board" % after["map_zed"].parent)
         if after["camera_link"].parent != "map_realsense" or \
-                after["map_realsense"].parent != "map":
-            f.append("run: camera_link hangs from %s" % after["camera_link"].parent)
+                after["map_realsense"].parent != "board_rs":
+            f.append("run: camera_link / map_realsense hang from %s / %s"
+                     % (after["camera_link"].parent, after["map_realsense"].parent))
         close(tree.lookup("map", "map_realsense", t),
               T_RS @ np.linalg.inv(RS_CHAIN[0][2] @ RS_CHAIN[1][2]), "run: map_realsense", f)
 
@@ -260,45 +341,57 @@ def main():
                   "mapping: ZED at %.1f s" % t, f)
         close(tree.lookup("map", "map_zed", T0 + 5), rotz(77), "mapping: map_zed", f)
 
-        # 09 on a bag merged before the map stages (only os_sensor in from static_tf.yaml)
+        # 10 on a bag merged before the map stages (only os_sensor in from static_tf.yaml)
         from scoop import merge, bag as sbag
         import yaml
         cfg = os.path.join(stages, "pipeline_config_survey_1.json")
         c = json.load(open(cfg))
-        c["09_publish"] = {"static_tf": static_yaml}
+        c["10_publish"] = {"static_tf": static_yaml}
         json.dump(c, open(cfg, "w"))
         old = os.path.join(data, "work", "20260101", "survey_1", "x_merged")
         cal = tftree.load_calibrations(yaml.safe_load(open(static_yaml)))[:1]
         merge.merge_bags(inputs, old, static_tf=tftree.attach(cal, tftree.tf_edges(inputs))[0],
                          log=lambda *_: None)
-        r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "09_publish_poses.py"),
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "10_publish_poses.py"),
                             cfg], capture_output=True, text=True)
         print(r.stdout[-1500:])
         if r.returncode:
-            f.append("09: " + r.stdout[-1000:] + r.stderr[-1500:])
+            f.append("10: " + r.stdout[-1000:] + r.stderr[-1500:])
         else:
             b09 = os.path.join(data, "processed", "20260101", "survey_1", "bags",
                                "survey_1_20260101_best_poses")
-            tp = sbag.open_bag(b09).topics()
-            if sorted(tp) != ["/mobile_1/global_pose", "/mobile_1/local_pose", "/tf", "/tf_static"]:
-                f.append("09 topics: %s" % sorted(tp))
-            tftree.tf_edges([b09])
-            tree = read_tf_and_info(b09, [], want_tf=True, verbose=False)[1]
-            for t in stamps[::9]:
-                close(tree.lookup("map", "os_sensor", T0 + t), true_cam(t) @ T_cam_sensor,
-                      "09: os_sensor at %.1f s" % t, f)
-            close(tree.lookup("map", "infra1_link", T0 + 5), T_ARDU @ T_RADAR, "09: infra1_link", f)
-            close(tree.lookup("map", "camera_color_optical_frame", T0 + 5), T_RS, "09: realsense", f)
-            close(tree.lookup("map", "board_b", T0 + 5), rotz(45, (-7.2, 12.6, 0.03)), "09: board_b", f)
-            if tree.lookup("map_zed", "odom_zed", T0 + 5) is None:
-                f.append("09: the bag's map_zed ~~ odom_zed is missing")
-            ts_ = rosmsg.typestore()
-            par = set()
-            for _, _, pl, dec in sbag.open_bag(b09).iter_raw(["/tf"]):
-                par |= {tr.header.frame_id for tr in dec(pl).transforms
-                        if tr.child_frame_id == "zed_camera_link"}
-            if par != {"map_zed"}:
-                f.append("09: zed_camera_link's parents on /tf: %s" % sorted(par))
+            f += check09(b09, stamps, T_cam_sensor, "10")
+            # the merged bag with 10's TF and poses put in, as merge_bags.py --source
+            # does; 10 again on it must give the same tree, not a second one
+            both = os.path.join(tmp, "both")
+            merge.merge_bags([old, b09], both, log=lambda *_: None,
+                             source={"/tf": 1, "/tf_static": 1})
+            shutil.rmtree(old)
+            os.rename(both, old)
+            r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages",
+                                                             "10_publish_poses.py"), cfg],
+                               capture_output=True, text=True)
+            if r.returncode:
+                f.append("10 again: " + r.stdout[-1000:] + r.stderr[-1500:])
+            else:
+                f += check09(b09, stamps, T_cam_sensor, "10 again")
+
+        # coop: mobile_2 moves on its own track, below a board from survey_1
+        tree, after = merged_tree(inputs, coop(data, stages), os.path.join(tmp, "coop_merged"),
+                                  static_yaml)
+        T_link_col = RS_CHAIN[0][2] @ RS_CHAIN[1][2]
+        for t in stamps[::7]:
+            close(tree.lookup("map", "camera_link", T0 + t), true_rs(t),
+                  "coop: mobile_2 at %.1f s" % t, f)
+            close(tree.lookup("map", "camera_color_optical_frame", T0 + t),
+                  true_rs(t) @ T_link_col, "coop: realsense at %.1f s" % t, f)
+        if after["camera_link"].parent != "map_realsense" or \
+                after["map_realsense"].parent != "board_b":
+            f.append("coop: camera_link / map_realsense hang from %s / %s"
+                     % (after["camera_link"].parent, after["map_realsense"].parent))
+        close(tree.lookup("map", "map_realsense", T0 + 5), true_rs(0), "coop: map_realsense", f)
+        close(tree.lookup("map", "board_b", T0 + 5), rotz(45, (-7.2, 12.6, 0.03)),
+              "coop: board_b from survey_1", f)
 
         # the CLI: the check prints the tree from the outputs it finds
         cli = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "pass_tf.py"),

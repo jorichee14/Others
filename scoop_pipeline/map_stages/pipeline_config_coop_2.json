@@ -1,0 +1,24 @@
+{
+  "extends": "pipeline_config.json",
+  "_note": "coop_2 in mapping_A's map. The boards keep the poses mapping_A and survey_1 measured (no 05; rs_anchor from survey_1: dataset.boards_from). mobile_1: 03 (ZED at the anchor board, through GLIM) -> 04 (LiDAR ICP to the anchored map). mobile_2 drives and its VSLAM was not recorded: vslam (cuVSLAM offline on its stereo + IMU) -> 03 (its colour camera at rs_anchor in the opening dwell) -> 04's track mobile_2_depth (every depth frame to the anchored map). No infra camera placement (07/08) in coop.",
+  "dataset": {
+    "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/coop_2/mirc_dataset_coop_2_20260924_merged",
+    "traj": null,
+    "machine": "mobile_1",
+    "reference_pass": "mapping_A",
+    "boards_from": ["survey_1"]
+  },
+  "vslam": {"machine": "mobile_2"},
+  "03_init": {"sensors": [{"name": "zed", "source": "lidar_odom"},
+                          {"name": "realsense", "source": "camera", "dwell_only": true}]},
+  "04_reference": {"tracks": [{"name": "mobile_2_depth", "machine": "mobile_2",
+                               "body_frame": "camera_link", "origin_frame": "map_realsense",
+                               "board": "rs_anchor", "anchor_cam": "realsense"}]},
+  "05_anchor": {"enabled": false},
+  "07_build_cameras": {"enabled": false},
+  "08_emit_tfs": {"enabled": false},
+  "10_publish": {"robots": [{"name": "mobile_2",
+                             "traj": "traj_mobile_2_depth_in_cam.tum",
+                             "optical_frame": "camera_color_optical_frame",
+                             "local_frame": "camera_link"}]}
+}

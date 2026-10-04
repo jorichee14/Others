@@ -150,7 +150,7 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
     ``static_tf``: ``[(parent, child, t, q)]`` added to /tf_static (see
     :func:`scoop.tftree.attach`). ``extra_records``: more messages, in log-time
     order, as ``(log_ns, topic, TopicSchema, publish_ns, sequence, {}, data)``
-    (e.g. 09's poses next to a bag's TF).
+    (e.g. 10's poses next to a bag's TF).
 
     /tf_static is written as ONE message at the start holding every static
     transform of the inputs (the latest one per child frame) plus
@@ -212,9 +212,9 @@ def merge_bags(inputs, out_dir, compression: str = "zstd",
     if extra_tf:
         sch = TopicSchema(name, "ros2msg", rosmsg.msgdef(name).encode(), "cdr")
         streams.append(iter(sorted(
-            (t_ns, "/tf", sch, t_ns, 0, {},
-             rosmsg.serialize(rosmsg.tf_message([(p, c, t, q)], t_ns)))
-            for t_ns, p, c, t, q in extra_tf)))
+            ((t_ns, "/tf", sch, t_ns, 0, {},
+              rosmsg.serialize(rosmsg.tf_message([(p, c, t, q)], t_ns)))
+             for t_ns, p, c, t, q in extra_tf), key=lambda r: r[0])))
         log(f"    /tf += {len(extra_tf)} transforms {extra_tf[0][1]} -> {extra_tf[0][2]}")
     if extra_records:
         streams.append(iter(extra_records))

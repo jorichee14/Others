@@ -152,7 +152,6 @@ machines:
       # --- camera (v4l2_camera_node, namespace infra_1)
       - /infra_1/image_raw            # raw: 34.6 MB/s (the compressed stream is not recorded)
       - /infra_1/camera_info
-      - /arducam/board_pose
       # --- radar (radar_node_direct, namespace infra_1, frame infra1_link)
       - /infra_1/radar/points_all
       # --- link measurements

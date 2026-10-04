@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-STAGE 06 - localise every SLAM origin in a NEW bag into `map`, from the board
+STAGE 03 - localise every SLAM origin in a NEW bag into `map`, from the board
 each sensor can see.
 
 `map -> board` is FIXED (the boards do not move). `<slam origin> -> board` is
@@ -8,10 +8,10 @@ run-specific, because a SLAM origin lands somewhere new every recording. So for
 each sensor, from THIS bag:
 
     T_origin_board = T_origin_cam(t) @ T_cam_board(t)     (averaged; board is static)
-    T_map_origin   = T_map_board @ inv(T_origin_board)    (T_map_board fixed, from 03)
+    T_map_origin   = T_map_board @ inv(T_origin_board)    (T_map_board fixed, from 05)
 
 The ZED anchors off the small 4x4 anchor board. The RealSense anchors off the
-big 5x5 board -- which is why stage 03 had to place that board in map first.
+big 5x5 board -- which is why stage 05 had to place that board in map first.
 
 CAMERA-MODE SENSORS MEASURE THE OPENING DWELL ONLY (dwell_only, default true)
 -----------------------------------------------------------------------------
@@ -30,7 +30,7 @@ BOARD FRAME CONVENTION  (read this before touching anything)
 ------------------------------------------------------------
 solvePnP returns the board in OpenCV's native frame: origin at the TOP-left
 corner (since OpenCV 4.6), x along the columns, y DOWN, z INTO the board.
-Stage 03 may report its board poses in a different frame -- typically
+Stage 05 may report its board poses in a different frame -- typically
 board_axes="ros" (x = outward normal, y = left, z = up) with
 board_origin="center". Both are rigid corrections applied to T_cam_board.
 
@@ -38,7 +38,7 @@ This stage reads `board_axes` / `board_origin` straight out of anchor_frame.json
 and applies the SAME correction to its own detections. If it did not, every
 T_map_origin here would be wrong by that fixed rotation and offset -- and wrong
 in a way that still looks like a believable extrinsic, which is the worst kind
-of wrong. Do not hardcode the convention in this file; let 03's export drive it.
+of wrong. Do not hardcode the convention in this file; let 05's export drive it.
 
 TF SINGLE-PARENT RULE
 ---------------------
@@ -78,7 +78,7 @@ and `origin_frame` becomes whatever frame_id the odometry itself is published
 in. T_origin_cam(t) is then built as T_origin_child(t) @ T_child_cam instead of
 a TF chain lookup. Everything downstream is identical either way.
 
-  python3 06_init_from_boards.py [pipeline_config.json]
+  python3 03_init_from_boards.py [pipeline_config.json]
 """
 import os
 import sys
@@ -102,8 +102,8 @@ def get_stage(P, *names):
 
 
 def boards_in_map(af, s):
-    """{name: (T_map_board, record)}. Prefers stage 03's export; config can
-    override. Names are stage-03 INSTANCE names; record["design"] is the
+    """{name: (T_map_board, record)}. Prefers stage 05's export; config can
+    override. Names are stage-05 INSTANCE names; record["design"] is the
     registry entry to build the detector from."""
     out = {}
     for name, rec in (af.get("boards") or {}).items():
@@ -241,7 +241,7 @@ def localise(sensor, board, T_map_board, T_fix, imgs, K, D, tree, s,
         if d is None:
             continue
         seen += 1
-        # SAME frame convention stage 03 exported in -- see the module docstring
+        # SAME frame convention stage 05 exported in -- see the module docstring
         T_cam_board = d.T @ T_fix
         if pose_topic:
             T_origin_child = ps.lookup(st, pose_gap)
@@ -322,7 +322,7 @@ def localise(sensor, board, T_map_board, T_fix, imgs, K, D, tree, s,
 def main():
     cfg_path = sys.argv[1] if len(sys.argv) > 1 else "pipeline_config.json"
     P = load_pipeline(cfg_path)
-    key, s = get_stage(P, "06_init", "06_init_zed")
+    key, s = get_stage(P, "03_init", "06_init_zed")
     # processed layout: this pass's merged bag, the anchor frame of the pass
     # whose map this is (dataset.reference_pass for a run), outputs in frames/
     s["bag"] = os.path.expanduser(s.get("bag") or P.dataset["bag"])
@@ -338,22 +338,26 @@ def main():
         af = json.load(open(s["anchor_frame"]))
     except (FileNotFoundError, OSError):
         af = {}
+    for n, rec in P.extra_boards().items():          # dataset.boards_from
+        if n not in (af.get("boards") or {}):
+            af.setdefault("boards", {})[n] = rec
+            print("board '%s' from %s" % (n, rec["source"]))
     bmap = boards_in_map(af, s)
     if not bmap:
-        raise SystemExit("no board poses in map. Re-run 03_anchor.py so "
+        raise SystemExit("no board poses in map. Re-run 05_anchor.py so "
                          "anchor_frame.json carries a 'boards' block, or set "
                          "%s.boards_in_map in the config." % key)
 
-    # frame convention -- must match whatever 03 exported, see module docstring
+    # frame convention -- must match whatever 05 exported, see module docstring
     axes = af.get("board_axes")
     borig = af.get("board_origin")
     if axes is None or borig is None:
         axes = axes or "opencv"
         borig = borig or "corner"
         print("! anchor_frame.json predates the board_axes/board_origin export; "
-              "assuming '%s'/'%s'. If stage 03 was run with a different "
+              "assuming '%s'/'%s'. If stage 05 was run with a different "
               "convention every pose below will be wrong by a fixed rotation "
-              "and offset. Re-run 03 to be sure." % (axes, borig))
+              "and offset. Re-run 05 to be sure." % (axes, borig))
     print("board frame convention: axes=%s origin=%s (from anchor_frame.json)"
           % (axes, borig))
 
@@ -452,7 +456,7 @@ def main():
                   % (bname, ", ".join(sorted(bmap))))
             continue
         T_map_board, brec = bmap[bname]
-        # stage 03 keys boards by INSTANCE; the detector is built from the DESIGN
+        # stage 05 keys boards by INSTANCE; the detector is built from the DESIGN
         design = brec.get("design", bname)
         if design not in board_cfgs:
             print("  ! design '%s' (for board '%s') not in the top-level 'boards' "
@@ -581,7 +585,7 @@ def main():
 
         attach_to="map"   (default) pins the camera straight to map.
         attach_to="board" chains through the board anchor that is already
-                          published above. Identical numbers, but if stage 03 is
+                          published above. Identical numbers, but if stage 05 is
                           ever re-run and the board pose shifts, a board-attached
                           camera follows automatically while a map-attached one
                           silently goes stale.
@@ -601,7 +605,7 @@ def main():
                  stp(map_frame, cf, T_map_cam)),
                 ("board",
                  "[%s -> %s]  %s  (same pose; reaches %s through the board "
-                 "anchor above, and follows it if stage 03 is re-run)"
+                 "anchor above, and follows it if stage 05 is re-run)"
                  % (bframe, cf, hdr, map_frame),
                  stp(bframe, cf, T_board_cam))]
         for mode, h, body in both:
@@ -674,6 +678,7 @@ def main():
                              "dwell_only": cr["dwell_only"],
                              "departure_t": cr["departure_t"],
                              "n_views": len(hits), "std_mm": round(sp[0], 2),
+                             "dwell_t0": hits[0]["t"], "dwell_t_end": hits[-1]["t"],
                              "map_to_cam": T_record(map_frame, cf, T),
                              "board_to_cam": T_record(bframe, cf, Tb)}
         else:
@@ -860,7 +865,7 @@ def main():
                        @ b["T"] @ b["T_board_origin"])
                 mm = float(np.linalg.norm(expect[:3, 3] - got[:3, 3]) * 1000)
                 print("  cross-check %s<->%s board geometry: %.1f mm / %.3f deg vs "
-                      "stage 03%s" % (a["board"], b["board"], mm,
+                      "stage 05%s" % (a["board"], b["board"], mm,
                                       ang_deg(expect[:3, :3], got[:3, :3]),
                                       "" if mm < 50 else "   ! large -- one of the "
                                       "two board poses is suspect"))
@@ -908,7 +913,7 @@ def main():
                 r["T_board_origin"])
 
     if reloc is not None:
-        # the camera 08 anchors on gets the LiDAR start pose; its board dwell
+        # the camera 04 anchors on gets the LiDAR start pose; its board dwell
         # (if seen) stays alongside as <cam>_board and is the check
         from lidar_reloc import board_check
         ac = reloc["anchor_cam"]
@@ -959,7 +964,7 @@ def main():
     script = s.get("script_out")
     if script:
         with open(script, "w") as f:
-            f.write("#!/usr/bin/env bash\n# generated by 06_init_from_boards.py\n"
+            f.write("#!/usr/bin/env bash\n# generated by 03_init_from_boards.py\n"
                     "# bag: %s\nset -e\n\n" % s["bag"])
             for hdr, body, active in lines:
                 body = body.replace("  ros2", "ros2")

@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-"""Self-test for map_stages/07_build_coop_cloud.py through the shared,
+"""Self-test for map_stages/09_build_coop_cloud.py through the shared,
 deskewed scan reader (pipeline_common.iter_scans, frame="world").
 
 The scene and the sweeping lidar are tests/test_scan_consistency.py's: a
 16 x 12 x 3 m room, a robot driving a square loop with turns on the spot at
 45 deg/s, a 48 x 768 lidar sweeping over 100 ms with per-point times. With
-the true trajectory, 07 with deskew must put the walls as thin as the range
+the true trajectory, 09 with deskew must put the walls as thin as the range
 noise; without deskew the turns smear them.
 
     python scoop_pipeline/tests/test_build_cloud.py
@@ -52,7 +52,7 @@ def wall_thickness(P):
 
 
 def run07(bag, traj, out, *extra):
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "07_build_coop_cloud.py"),
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "09_build_coop_cloud.py"),
                         "--bag", bag, "--traj", traj, "--out", out,
                         "--topic", "/mobile_1/ouster/points", "--voxel", "0.01",
                         "--min-count", "1", "--range-min", "0.3", *extra],

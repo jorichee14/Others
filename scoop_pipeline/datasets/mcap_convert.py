@@ -475,7 +475,7 @@ class PoseInterp:
     @classmethod
     def from_tum(cls, path, **kw):
         """A TUM file: 't x y z qx qy qz qw' per line (seconds), e.g. GLIM's
-        traj_lidar.txt or 01a's traj_lidar_refined.txt."""
+        traj_lidar.txt or 02's traj_lidar_refined.txt."""
         a = np.loadtxt(os.path.expanduser(path), comments="#", ndmin=2)
         if a.shape[1] < 8 or not len(a):
             raise ConvertError(f"{path}: not a TUM trajectory (t x y z qx qy qz qw)")
@@ -1065,7 +1065,7 @@ def to_replica(bag, out, *,
     pose, pose_bag     pose topic (PoseStamped/Odometry), optionally from another bag
     pose_tum           poses from a TUM file instead (e.g. traj_lidar_refined.txt);
                        body_frame then defaults to the frame_id of `lidar` (the
-                       frame GLIM / 01a trajectories are of)
+                       frame GLIM / 02 trajectories are of)
     pose_is_camera / body_frame / extrinsic
                        how to get the camera pose from the poses (exactly one, see
                        camera_extrinsic()); cam_frame defaults to the colour frame_id
@@ -1288,7 +1288,7 @@ DEFAULT_MCD_CONFIG = """\
 # A depth sensor's `source`: topic (its `topic`, e.g. the ZED depth), lidar (the LiDAR
 # projected into `camera`, `scans` per frame) or map (rendered from `map` at `voxel` m);
 # lidar/map depth is made for every image of `camera` (default: its same_as).
-# pose: `topic` (PoseStamped/Odometry), or `tum` (a TUM file, e.g. 01a's
+# pose: `topic` (PoseStamped/Odometry), or `tum` (a TUM file, e.g. 02's
 # traj_lidar_refined.txt) of the frame `tum_frame`, chained to `frame` via /tf_static.
 
 # sequence: <name>        # bags are <sequence>_merged.bag; default: <pass>_<date> of the
@@ -2317,7 +2317,7 @@ def _cli():
                         "replica, mcd")
     g.add_argument("--tum-frame", default=None,
                    help="the frame the --pose-tum poses are of (default: the frame of "
-                        "--lidar, which GLIM / 01a trajectories are)")
+                        "--lidar, which GLIM / 02 trajectories are)")
 
     g = ap.add_argument_group("camera pose (replica: exactly one)")
     g.add_argument("--pose-is-camera", action="store_true",

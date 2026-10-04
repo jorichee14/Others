@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-STAGE 03 - locate EVERY anchor board placed during the mapping run, express
+STAGE 05 - locate EVERY anchor board placed during the mapping run, express
 them all in one `map` frame, anchor the cloud to the first board, and measure
 GLIM drift wherever a board was revisited.
 
@@ -30,8 +30,8 @@ GLIM drift wherever a board was revisited.
       and does not shift when a later sighting is added.
 
   (5) FUSION.  Per instance the sections are gated (reprojection, scatter,
-      sample count) and inverse-variance fused into the canonical pose that 04
-      and 06 consume.  If accepted sections still disagree by more than the
+      sample count) and inverse-variance fused into the canonical pose that 07
+      and 03 consume.  If accepted sections still disagree by more than the
       configured tolerance the board is written anyway, WARNED about, and
       stamped with drift_spanned_mm so downstream knows the uncertainty.
       The anchor board's canonical pose stays pinned to section 0 by
@@ -49,7 +49,7 @@ GLIM drift wherever a board was revisited.
       The result is drift as a function of position along the run instead of a
       single end-to-end number.
 
-  python3 03_anchor.py [pipeline_config.json]
+  python3 05_anchor.py [pipeline_config.json]
 """
 import os
 import sys
@@ -99,7 +99,7 @@ def main():
     cfg_path = sys.argv[1] if len(sys.argv) > 1 else "pipeline_config.json"
     P = load_pipeline(cfg_path)
     S = P.sensor
-    s = P.stage("03_anchor")
+    s = P.stage("05_anchor")
 
     detect_period = float(s.get("detect_period", 0.20))
     section_gap = float(s.get("section_gap", 3.0))
@@ -130,7 +130,7 @@ def main():
     else:
         print("board frame: OpenCV native -- x along columns, y DOWN, z INTO the "
               "board; map +x points INTO the anchor board's wall, so the scene "
-              "sits at negative x. Set 03_anchor.board_axes to \"ros\" to flip this.")
+              "sits at negative x. Set 05_anchor.board_axes to \"ros\" to flip this.")
     if board_origin != "corner":
         print("board origin: %s (native OpenCV origin is the TOP-left corner "
               "with +y down, since OpenCV 4.6)" % board_origin)
@@ -138,12 +138,12 @@ def main():
 
     run = bool(P.reference)
     if run:
-        # a run (dataset.reference_pass): its trajectory is stage 08's LiDAR-ICP
+        # a run (dataset.reference_pass): its trajectory is stage 04's LiDAR-ICP
         # track, registered to the reference pass's anchored map -- already in
         # map, so the boards are measured IN that frame: no re-anchoring, no
         # cloud, and they go to their own file next to the reference's
         traj = P.lidar_track_traj()
-        print("run in %s's map: trajectory = stage 08's LiDAR track %s (already in map); "
+        print("run in %s's map: trajectory = stage 04's LiDAR track %s (already in map); "
               "boards measured in that frame, nothing re-anchored" % (P.reference, traj))
         if os.path.basename(s["frame_out"]) == "anchor_frame.json":
             s["frame_out"] = P.outp("boards_{tag}.json")
@@ -589,7 +589,7 @@ def main():
     frame_out = {"schema": 2,
                  "map_frame": s["map_frame"],
                  # every board pose below is in this convention. A consumer that
-                 # detects a board itself (06) MUST apply the same frame_fix or
+                 # detects a board itself (03) MUST apply the same frame_fix or
                  # its poses will disagree with these by a fixed rotation.
                  "board_axes": board_axes,
                  "board_origin": board_origin,

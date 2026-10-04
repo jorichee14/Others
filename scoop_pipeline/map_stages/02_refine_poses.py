@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-STAGE 01a - re-derive the trajectory by registering every scan to the MAP.
+STAGE 02 - re-derive the trajectory by registering every scan to the MAP.
 
   bag (/ouster/points) + seed traj  ->  reference map  ->  per-scan ICP
   ->  traj_lidar_refined.txt
@@ -33,15 +33,18 @@ reference map from the poses the previous round produced. The per-round
 correction statistics printed at the end are the convergence evidence: when
 round N moves the poses by millimetres, the trajectory and the map agree.
 
-  python3 01a_refine_poses.py [pipeline_config.json] [--rounds N] [--restart]
+  python3 02_refine_poses.py [pipeline_config.json] [--rounds N] [--restart]
 
 Rounds already written (traj_lidar_refined_r1.txt, _r2, ...) are not redone:
 --rounds 3 after a 2-round run does round 3 only, starting from _r2's poses
 (and the convergence table includes the earlier rounds, kept in
 traj_lidar_refined_rounds.json). --restart starts again from round 1.
 
-Config block (all optional, under "01a_refine"):
-  "map":            denoised_<tag>.pcd, what 01 wrote  # reference for round 1; "" = build it
+Config block (all optional, under "02_refine"):
+  "seed":           the trajectory to refine; default odometry/<machine>/traj_lidar.txt,
+                    else GLIM's own <work>/.../<machine>/glim/traj_lidar.txt
+  "map":            denoised_seed_<tag>.pcd (01 --seed), else denoised_<tag>.pcd
+                    # reference for round 1; "" = build it
   "target_voxel":   0.05    # reference map resolution (m)
   "scan_voxel":     0.10    # per-scan downsample before ICP (m)
   "max_corr":       [0.4, 0.2, 0.1]   # coarse-to-fine correspondence gates
@@ -147,7 +150,7 @@ def detect_points_topic(bag, override="", n_poses=0):
     print(f"    PointCloud2 topics in bag: "
           f"{[f'{t} ({n})' for t, n in cands]}")
     print(f"    -> using {topic!r} ({dict(cands)[topic]} msgs vs "
-          f"{n_poses} poses); set 01a_refine.points_topic to override")
+          f"{n_poses} poses); set 02_refine.points_topic to override")
     return topic
 
 
@@ -442,8 +445,8 @@ def register(ref, pts_local, T0, cfg):
             pw = p[ok]
             n = ref.nrm[idx[ok]]
             r = np.einsum("ij,ij->i", pw - ref.pts[idx[ok]], n)
-            # nn_prior_beta > 0 (08) anchors this stage to the seed as well, in
-            # the directions the geometry leaves open; 0 (01a) leaves it free
+            # nn_prior_beta > 0 (04) anchors this stage to the seed as well, in
+            # the directions the geometry leaves open; 0 (02) leaves it free
             nb = float(cfg.get("nn_prior_beta", 0.0))
             sol = (_solve_open(pw, c, n, r, huber, _prior(T, T0), nb) if nb > 0
                    else _solve(pw, c, n, r, huber))
@@ -551,22 +554,25 @@ def main():
     cfg_all = P.cfg
     ds = P.dataset
     s = cfg_all["01_build_map"]
-    c = dict(map=P.pcd("denoised"), target_voxel=0.05, scan_voxel=0.10,
+    # the first-round map: 01 --seed's, else 01's denoised cloud
+    seed_map = "denoised_seed_%s.pcd" % P.tag if P.tag else "denoised_seed.pcd"
+    c = dict(map=seed_map if os.path.exists(P.outp(seed_map)) else P.pcd("denoised"),
+             target_voxel=0.05, scan_voxel=0.10,
              max_corr=[0.4, 0.2, 0.1], iters_per_gate=5, huber=0.05,
              min_corr=200, max_shift=0.50, max_rot_deg=5.0, rounds=2,
              plane_voxel=0.4, plane_iters=8, prior_beta=0.05,
              plane_huber=0.10, planarity=1.0,
              points_topic="", output="traj_lidar_refined.txt")
     # deskew as 01_build_map does, so the map and the scans registered to it
-    # place points the same way (01a_refine.deskew overrides)
+    # place points the same way (02_refine.deskew overrides)
     c.update(deskew=bool(s.get("deskew", True)), deskew_bins=max(2, int(s.get("deskew_bins", 100))))
-    c.update(cfg_all.get("01a_refine", {}))
+    c.update(cfg_all.get("02_refine", {}))
     if args.rounds is not None:
         c["rounds"] = args.rounds
     bag = ds["bag"]
     print(P.describe())
 
-    seed = P.outp(ds["traj"])
+    seed = P.seed_traj()
     times, T_seed = load_traj(seed)
     print(f"seed trajectory: {seed}  ({len(times)} poses)")
     topic = detect_points_topic(bag, c["points_topic"], len(times))
@@ -649,7 +655,7 @@ def main():
                 f"correspondences, {n_rej} were rejected).\n"
                 f"  - wrong points topic? currently {topic!r}\n"
                 f"  - seed poses not aligned with the reference map?\n"
-                f"  - try a larger first entry in 01a_refine.max_corr")
+                f"  - try a larger first entry in 02_refine.max_corr")
         sh = np.array(shifts) * 100
         ro = np.array(rots)
         rr = np.array([r for r in rms_all if np.isfinite(r)]) * 100

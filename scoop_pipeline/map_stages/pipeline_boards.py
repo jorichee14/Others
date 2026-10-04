@@ -276,7 +276,7 @@ class Board(object):
 
     def detect(self, gray, K, D):
         """Single best sighting in the whole image, or None.  Kept for callers
-        (06_init) that assume at most one copy of the board is in frame."""
+        (03_init) that assume at most one copy of the board is in frame."""
         cc, cid = self.corners_full(gray)
         return self.pose_from_corners(cc, cid, K, D)
 
@@ -799,7 +799,7 @@ def iter_images(bag, image_topic, detect_period=0.0, max_images=0, stride=1):
 
 def read_bag(bag, image_topics=(), info_topics=(), want_tf=True, stride=1,
              max_images=0, tf_max_gap=0.2, verbose=True):
-    """Back-compat buffering reader (used by 06_init).  Prefer iter_images for
+    """Back-compat buffering reader (used by 03_init).  Prefer iter_images for
     anything that walks a full mapping bag."""
     image_topics = [t for t in image_topics if t]
     infos, tree, available = read_tf_and_info(bag, info_topics, want_tf,
@@ -849,7 +849,7 @@ def board_registry(cfg):
 
 
 def boards_from_config(cfg, stage, anchor_key="board", extra_key="extra_boards"):
-    """Legacy accessor: (anchor_design, [extra_designs]).  Kept for 06_init."""
+    """Legacy accessor: (anchor_design, [extra_designs]).  Kept for 03_init."""
     reg = cfg.get("boards", {})
     spec = stage.get(anchor_key, "anchor")
     if isinstance(spec, dict):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-STAGE 04 - place each camera in the board-origin `map` frame.
+STAGE 07 - place each camera in the board-origin `map` frame.
 
 Each camera entry now declares a "source":
 
@@ -14,7 +14,7 @@ Each camera entry now declares a "source":
 
   "source": "board"            (NEW)
       T_map_child = T_map_board @ inv(T_cam_board)
-      The camera PnPs a board whose pose in map stage 03 already exported, and
+      The camera PnPs a board whose pose in map stage 05 already exported, and
       that is the whole computation: no trajectory, no time tolerance, no
       T_lidar_camera, no ZED->child extrinsic. Because it needs nothing from the
       mapping run, the images may come from ANY bag -- which is the point for
@@ -25,12 +25,12 @@ Each camera entry now declares a "source":
       what comes out is directly map -> camera_color_optical_frame. Do not route
       it through the camera link frame.
 
-      A moving camera must NOT have its pose averaged, so 04 computes the pose
+      A moving camera must NOT have its pose averaged, so 07 computes the pose
       per frame, measures the scatter, and only averages if the camera was
       actually static during the sighting; otherwise it takes the single
       lowest-reprojection frame and says so.
 
-  python3 04_build_cameras.py [pipeline_config.json]
+  python3 07_build_cameras.py [pipeline_config.json]
 """
 import os
 import sys
@@ -109,7 +109,7 @@ def camera_from_yaml(cam, ctx):
         if T_map_mapzed is None:
             print("  ! ChArUco reference present but no map<->map_zed transform "
                   "known -> delta not computed (set map_to_mapzed_xyzquat, or "
-                  "re-run 03 so anchor_frame.json carries T_map_mapzed).")
+                  "re-run 05 so anchor_frame.json carries T_map_mapzed).")
         else:
             # The reference lives in map_zed; map and map_zed differ by a large
             # yaw, so it must be lifted into map BEFORE differencing.
@@ -127,7 +127,7 @@ def camera_from_board(cam, ctx):
     name = cam["name"]; child = cam["child_frame"]
     bname = cam["board"]
     if bname not in ctx["boards"]:
-        print("  ! board '%s' has no pose in map (stage 03 did not export it) "
+        print("  ! board '%s' has no pose in map (stage 05 did not export it) "
               "-> skipped" % bname)
         return None
     T_map_board, brec = ctx["boards"][bname]
@@ -204,14 +204,14 @@ def main():
     cfg_path = sys.argv[1] if len(sys.argv) > 1 else "pipeline_config.json"
     P = load_pipeline(cfg_path)
     S = P.sensor
-    s = P.stage("04_build_cameras")
+    s = P.stage("07_build_cameras")
 
     s["anchor_frame"] = P.anchor_frame(os.path.basename(s["anchor_frame"]))
     af = json.load(open(s["anchor_frame"]))
     T_N_world = np.array(af["T_N_world"], float)
     map_frame = af.get("map_frame", s.get("map_frame", "map"))
     if P.reference:
-        # a run (dataset.reference_pass): its poses are stage 08's LiDAR-ICP
+        # a run (dataset.reference_pass): its poses are stage 04's LiDAR-ICP
         # track, registered to the reference pass's ANCHORED map -- already in
         # map, so no GLIM-world -> map step
         T_N_world = np.eye(4)
@@ -220,8 +220,8 @@ def main():
            "T_N_world": T_N_world,
            "tol": float(s.get("time_tol", 0.10)),
            "boards": boards_in_map(af, P.cfg),
-           # 03's board frame convention: a detection is converted to it before
-           # it meets a board pose from 03, as 03 and 06 do
+           # 05's board frame convention: a detection is converted to it before
+           # it meets a board pose from 05, as 05 and 03 do
            "board_axes": af.get("board_axes", "opencv"),
            "board_origin": af.get("board_origin", "corner"),
            "board_cfgs": P.cfg.get("boards", {}),
@@ -233,13 +233,13 @@ def main():
            "tr_t": None, "tr_T": None}
 
     if P.reference:
-        # boards this run measured (03 on the run: boards_<tag>.json): the ones
+        # boards this run measured (05 on the run: boards_<tag>.json): the ones
         # the reference lacks are added; the ones it has are compared with it
         rb_path = P.outp("boards_{tag}.json")
         if os.path.exists(rb_path):
             rb = json.load(open(rb_path))
             run_boards = boards_in_map(rb, P.cfg)
-            # map_zed is this session's ZED map: 03 on the run measured it
+            # map_zed is this session's ZED map: 05 on the run measured it
             ctx["T_map_mapzed"] = load_T_map_mapzed(rb, {})
             if ctx["T_map_mapzed"] is not None:
                 print("map -> map_zed of this session from %s (for the ChArUco check)"
@@ -254,7 +254,7 @@ def main():
                     ctx["boards"][name] = (T, rec)
                     print("board '%s': from this run (%s)" % (name, rb_path))
         else:
-            print("(no %s: run 03 on this run to place boards the reference lacks)" % rb_path)
+            print("(no %s: run 05 on this run to place boards the reference lacks)" % rb_path)
     print("anchor_frame: %s  (map_frame='%s')" % (s["anchor_frame"], map_frame))
     print("boards in map: %s" % ", ".join(sorted(ctx["boards"])) or "(none)")
 
@@ -266,7 +266,7 @@ def main():
         ctx["tr_t"], ctx["tr_T"] = load_traj(traj)
         print("traj: %s, %d poses [%.3f, %.3f]%s"
               % (traj, len(ctx["tr_t"]), ctx["tr_t"][0], ctx["tr_t"][-1],
-                 " (stage 08, in map)" if P.reference else ""))
+                 " (stage 04, in map)" if P.reference else ""))
 
     out = []
     for cam in cameras:

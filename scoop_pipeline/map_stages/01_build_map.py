@@ -2,6 +2,11 @@
 """
 STAGE 01 - build the map cloud from LiDAR scans placed by GLIM poses.
 
+A mapping pass runs it twice: `--seed` first, on the seed (GLIM) trajectory
+up to the denoised cloud (denoised_seed_<tag>.pcd, the map 02 refines
+against), then without it on dataset.traj (02's traj_lidar_refined.txt) for
+the final map.
+
   bag (/ouster/points) + traj_lidar.txt  ->  merge -> [remove dynamic]
   -> denoise -> colorize -> [flatten] -> [anchor to camera start]
   -> map_final.pcd
@@ -1212,13 +1217,25 @@ def save(P, pcd, name):
 
 
 def main():
-    cfg_path = sys.argv[1] if len(sys.argv) > 1 else "pipeline_config.json"
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    cfg_path = args[0] if args else "pipeline_config.json"
+    seed = "--seed" in sys.argv
     P = load_pipeline(cfg_path)
     S = P.sensor
     s = P.stage("01_build_map")
     init_gpu(s.get("gpu", True))
-    P.traj = load_traj_cached(P)
-    print(f"loaded {len(P.traj[0])} GLIM poses from {P.outp(P.dataset['traj'])}")
+    if seed:
+        # the map 02 registers to on its first round: the seed (GLIM) poses,
+        # up to denoise, under its own names (denoised_seed_<tag>.pcd)
+        from pipeline_common import load_traj
+        path = P.seed_traj()
+        P.traj = load_traj(path)
+        tag = P.tag
+        P.pcd = lambda base: "%s_seed_%s.pcd" % (base, tag) if tag else base + "_seed.pcd"
+        print(f"--seed: {len(P.traj[0])} poses from {path} -> {P.pcd('denoised')}")
+    else:
+        P.traj = load_traj_cached(P)
+        print(f"loaded {len(P.traj[0])} poses from {P.outp(P.dataset['traj'])}")
     print(P.describe())
 
     rd = s.get("remove_dynamic", {})
@@ -1263,6 +1280,10 @@ def main():
             pcd = denoise(s, pcd)
             save(P, pcd, P.pcd("denoised"))
 
+    if seed:
+        print(f"DONE (--seed) -> {P.outp(P.pcd('denoised'))}: 02's first-round map")
+        return
+
     if s["colorize"]["enable"]:
         pcd = colorize(P, S, s, pcd); save(P, pcd, P.pcd("colored"))
 
@@ -1276,7 +1297,7 @@ def main():
         cam0 = (tr_T[0] @ S.T_lidar_camera)[:3, 3]
         shift = -cam0
         pcd.translate(shift)
-        print(f"    shift {shift.round(3)}  (NOTE: stage 03 must know this via "
+        print(f"    shift {shift.round(3)}  (NOTE: stage 05 must know this via "
               f"01_build_map.anchor_camera_start)")
         save(P, pcd, P.pcd("anchored"))
 

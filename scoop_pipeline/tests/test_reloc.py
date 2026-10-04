@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Self-test for map_stages/lidar_reloc.py through 06_init_from_boards.py.
+"""Self-test for map_stages/lidar_reloc.py through 03_init_from_boards.py.
 
 A 20 x 14 x 3.5 m room with five boxes placed so that no rotation maps it
 onto itself. The reference pass (mapping_A) has the room's surfaces as its
@@ -8,9 +8,9 @@ ellipse, scanned by a 32 x 360 lidar at 10 Hz (ray-cast, so walls behind the
 boxes are hidden). Its GLIM trajectory is in its own world: the map moved by
 6.3 m and turned 137 deg. Two cases:
 
-  room with boxes   06 must find the start pose (cm / tenth of a degree of
+  room with boxes   03 must find the start pose (cm / tenth of a degree of
                     the truth) and pass the fit, unique and repeat checks;
-  bare room         symmetric under a half turn: 06 must refuse.
+  bare room         symmetric under a half turn: 03 must refuse.
 
     python scoop_pipeline/tests/test_reloc.py
 """
@@ -174,7 +174,7 @@ def build(tmp, boxes):
                               "max_reproj": 1.5, "min_ambiguity_ratio": 1.5}},
         "01_build_map": {"time_tol": 0.04, "lidar_min": 0.3, "lidar_max": 30.0,
                          "deskew": False},
-        "06_init": {"anchor_frame": "anchor_frame.json", "output": "session_anchor.json",
+        "03_init": {"anchor_frame": "anchor_frame.json", "output": "session_anchor.json",
                     "map_frame": "map",
                     "sensors": [{"name": "zed", "board": "anchor", "source": "camera",
                                  "cam_frame": "zed_left_camera_optical_frame",
@@ -187,7 +187,7 @@ def build(tmp, boxes):
 
 
 def run06(cfg):
-    return subprocess.run([sys.executable, os.path.join(STAGES, "06_init_from_boards.py"), cfg],
+    return subprocess.run([sys.executable, os.path.join(STAGES, "03_init_from_boards.py"), cfg],
                           capture_output=True, text=True, cwd=STAGES)
 
 
@@ -220,7 +220,7 @@ def main():
         out = run06(cfg)
         print(out.stdout[-4000:])
         if out.returncode:
-            failed.append("room with boxes: 06 failed\n" + out.stdout[-1500:] + out.stderr[-2000:])
+            failed.append("room with boxes: 03 failed\n" + out.stdout[-1500:] + out.stderr[-2000:])
         else:
             sa = json.load(open(os.path.join(data, "processed", "20260101", "survey_1",
                                              "frames", "session_anchor.json")))
