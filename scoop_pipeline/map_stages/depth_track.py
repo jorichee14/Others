@@ -60,6 +60,14 @@ Stage 04 runs it for each entry of "04_reference" "tracks":
             more than board_reset_m from it; a design with several copies
             (anchor / anchor_b) gives one candidate per copy, the depth frame
             picks. Track - board is reported (the residual).
+  lidar     mobile_1's LiDAR sees mobile_2 (map_stages/lidar_sightings.py:
+            robot-sized clusters off the map in mobile_2's height band, around
+            its camera height): when lost, the search is centred on a candidate
+            within reach (lidar_search_m, the best fit there taken); when tied
+            candidate places are tracked on, the one whose path runs through
+            candidates (lidar_near_m) wins -- lidar_min_support poses, every
+            other one at most half as many. Never on its own: a candidate only
+            chooses among places the depth frames fit.
   back      from every frame placed again after a loss, the track runs
             backwards in time over the frames before it, until it meets a
             placed frame or is lost.
@@ -98,7 +106,8 @@ DEFAULTS = dict(depth_topic="/mobile_2/depth/image_rect_raw",
                 hyp_ratio=0.8, board_fixes=True, board_image_topic="/mobile_2/color/image_raw",
                 board_info_topic="/mobile_2/color/camera_info", board_rectified=False,
                 board_stride=2, board_max_range=2.5, board_max_reproj=1.0, board_tol_s=0.1,
-                board_reset_m=0.3)
+                board_reset_m=0.3, lidar_sightings=True, lidar={}, lidar_near_m=0.5,
+                lidar_tol_s=0.15, lidar_search_m=0.6, lidar_min_support=5)
 
 
 def rel_pose(edges, a, b):
@@ -423,7 +432,8 @@ def from_board(A, ref, scan, cands, c):
     return best[:3] if best else None
 
 
-def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, fixes=None):
+def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, fixes=None,
+                sight=None):
     """Round 1, frame by frame. A frame starts from the odometry (carried by
     the last placed frame's correction) where the odometry runs unbroken
     since that frame; else from the last placed pose moved on at the same
@@ -475,7 +485,29 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, f
             yaw = min(180.0, 20.0 + float(c["yaw_rate_max"]) * since)
             k, T, fit, rival, cands, how = j + 1, None, 0.0, 0.0, [], ""
             k_prev = None
-            for wl in (win, 2 * win, 4 * win):
+            if sight is not None:                    # mobile_1's LiDAR sees a robot within reach
+                cc = sight.at(times[j], 0.3)
+                if len(cc):
+                    dd = np.linalg.norm(cc - centre[:2, 3], axis=1)
+                    for q in np.argsort(dd)[:3]:
+                        if dd[q] > radius:
+                            break
+                        cen = centre.copy()
+                        cen[:2, 3] = cc[q]
+                        Tq, fq, rq, cq = refind(A, ref, scans[j], cen, float(c["lidar_search_m"]),
+                                                180.0, c)
+                        if Tq is None and cq and cq[0][0] >= float(c["min_fit"]):
+                            Tq = cq[0][1]
+                        if Tq is not None and np.linalg.norm(Tq[:2, 3] - cc[q]) <= \
+                                float(c["lidar_search_m"]):
+                            events.append({"t": float(times[j]), "since_s": float(since),
+                                           "found": True, "lidar": cc[q].tolist(), "fit": cq[0][0]})
+                            log("    placed again at %.1f s at a robot mobile_1's LiDAR sees "
+                                "(%.1f, %.1f), %.1f s since the last pose; fit %.2f"
+                                % (times[j] - times[0], cc[q][0], cc[q][1], since, cq[0][0]))
+                            T = Tq
+                            break
+            for wl in (win, 2 * win, 4 * win) if T is None else ():
                 k, stack = j, []
                 inv0 = np.linalg.inv(T_odom[j])
                 while k < n and times[k] - times[j] <= wl and \
@@ -491,7 +523,9 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, f
                     break
             ev = {"t": float(times[j]), "since_s": float(since), "radius_m": radius,
                   "yaw_deg": yaw, "fit": fit, "rival": rival, "found": False}
-            if T is not None:
+            if T is not None and events and events[-1].get("lidar") and events[-1]["t"] == float(times[j]):
+                T0, src = T, "refind"                # placed from the LiDAR candidate (logged)
+            elif T is not None:
                 T0, src, how = T, "refind", "placed"
             else:
                 # several places fit: track each on; the one that keeps fitting wins
@@ -520,6 +554,21 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, f
                     if times[res[0][0].last[0]] < times[j] + hs * float(c["hyp_s"]) - 1.0:
                         break                        # they did not get that far: no use going on
                     hyps = [r[1][j][0] for r in res if j in r[1]]
+                if len(res) > 1 and sight is not None and res[1][4] > float(c["hyp_ratio"]) * res[0][4]:
+                    # tied on the depth frames: the one whose path runs through
+                    # robots mobile_1's LiDAR sees, if one does clearly
+                    sup = []
+                    for r in res:
+                        ks = sorted(r[1])[::3]
+                        sup.append(sight.support(times[ks], np.array([r[1][kk][0][:3, 3] for kk in ks]),
+                                                 float(c["lidar_near_m"]), float(c["lidar_tol_s"])))
+                    o = np.argsort(sup)[::-1]
+                    if sup[o[0]] >= int(c["lidar_min_support"]) and \
+                            sup[o[1]] <= 0.5 * sup[o[0]] and res[o[0]][3] / max(res[o[0]][2], 1) >= \
+                            float(c["hyp_min_ok"]):
+                        log("    tie at %.1f s broken by mobile_1's LiDAR: %d poses on a robot it "
+                            "sees, the next %d" % (times[j] - times[0], sup[o[0]], sup[o[1]]))
+                        res = [res[o[0]]]
                 if res:
                     b0 = res[0]
                     s2 = res[1][4] if len(res) > 1 else 0.0
@@ -544,11 +593,12 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, f
                           "of its score)" % (len(res), b0[3], b0[2], 100 * s2 / max(b0[4], 1e-9))
                 else:
                     how = "not found"
-            ev["found"] = T is not None
-            events.append(ev)
-            log("    re-find at %.1f s (%.1f s since the last pose, +-%.1f m / +-%.0f deg): "
-                "fit %.2f, rival %.2f -> %s" % (times[j] - times[0], since, radius, yaw, fit,
-                                                rival, how))
+            if not (src == "refind" and not how):
+                ev["found"] = T is not None
+                events.append(ev)
+                log("    re-find at %.1f s (%.1f s since the last pose, +-%.1f m / +-%.0f deg): "
+                    "fit %.2f, rival %.2f -> %s" % (times[j] - times[0], since, radius, yaw, fit,
+                                                    rival, how))
             if T is None:
                 j = max(k, j + 1)
                 continue
@@ -669,13 +719,26 @@ def run(P, tr, base, ref, outd):
                                                                max(v) - times[0])
                                        for b, v in sorted(per.items())), len(fix_at)))
 
+    sight = None
+    if c["lidar_sightings"]:
+        import lidar_sightings as LS
+        ia0 = int(np.flatnonzero(piece == piece0)[0]) if (piece == piece0).any() else 0
+        z_cam = float(T_seed[ia0][2, 3])
+        lc = dict(LS.DEFAULTS, z_lo=z_cam - 0.35, z_hi=z_cam + 0.10)
+        lc.update(c.get("lidar") or {})
+        scans_l = LS.detect(P, ref, lc, os.path.join(outd, "lidar_sightings_%s.json" % name))
+        sight = LS.Sightings(scans_l)
+        nc = sum(len(x[1]) for x in scans_l)
+        print("    mobile_1's LiDAR: %d scans, %d robot-sized clusters off the map at %.2f-%.2f m"
+              % (len(scans_l), nc, lc["z_lo"], lc["z_hi"]))
+
     history, rows, events, T_cur = [], [], [], None
     for rnd in range(1, int(c["rounds"]) + 1):
         print("\n=== %s round %d/%d: every depth frame to the frozen map ===" % (name, rnd, int(c["rounds"])))
         t0 = time.time()
         if rnd == 1:
             T_cur, rows, events = first_round(A, ref, scans, times, T_odom, piece, T_map_odom,
-                                              piece0, c, fixes=fix_at)
+                                              piece0, c, fixes=fix_at, sight=sight)
         else:
             idx = np.flatnonzero(np.isfinite(T_cur).all(axis=(1, 2)))
             T_p, r_p = register_frames(A, ref, [scans[k] for k in idx], T_cur[idx], c, False)
@@ -710,6 +773,17 @@ def run(P, tr, base, ref, outd):
     if resid:
         print("  track - board sightings: median %.1f cm, p95 %.1f cm, max %.1f cm over %d frames"
               % (np.median(resid), np.percentile(resid, 95), max(resid), len(resid)))
+    lid = []
+    if sight is not None:
+        for jj in np.flatnonzero(placed)[::3]:
+            cc = sight.at(times[jj], float(c["lidar_tol_s"]))
+            if len(cc):
+                dmin = float(np.min(np.linalg.norm(cc - T_cur[jj][:2, 3], axis=1)))
+                if dmin <= 1.0:
+                    lid.append(dmin * 100)
+        if lid:
+            print("  track - nearest LiDAR candidate (within 1 m): median %.1f cm, p95 %.1f cm "
+                  "over %d frames" % (np.median(lid), np.percentile(lid, 95), len(lid)))
     p_body = os.path.join(outd, "traj_%s.tum" % name)
     p_cam = os.path.join(outd, "traj_%s_in_cam.tum" % name)
     A.write_traj(p_body, times[placed], T_cur[placed])
