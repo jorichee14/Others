@@ -60,6 +60,7 @@ checks/              is the environment / the decoder right? (against real bags)
   env_check.py       is this environment ready?
   bag_check.py       verify + time the fast decoder on a real bag
   ouster_check.py    verify packet decoding against a replayed/retimed bag
+  replica_check.py   does a replica dataset fit itself (depth vs image, depth vs poses)
 tests/               self-tests, no real bag needed
   test_bag.py        reading, writing, messages
   test_ouster.py     packets, clock, replay, remaps (needs ouster-sdk)
@@ -441,6 +442,14 @@ names their format requires.
 Replica: `results/frameNNNNNN.jpg` + `depthNNNNNN.png` (uint16, metres = value /
 6553.5 as Replica, so 0-10 m; `--depth-scale 1000` for mm), `traj.txt`
 (camera-to-world, OpenCV axes), `splatam_data_config.yaml`, `report.txt`.
+Before a SLAM run, `python checks/replica_check.py <dataset>`: it checks the
+config against the files, scores how well the depth edges sit on the colour
+image (against the mirrored depth as chance) and how well the poses move one
+frame's depth onto the next, and writes `<dataset>/check/frameNNNNNN.png`
+(colour | depth | depth edges on the colour). Depth that does not fit the
+image means the pose the depth was rendered at is not the image's pose (a
+clock offset between images and trajectory, or the wrong extrinsic); no SLAM
+config recovers from that.
 MCD: `<seq>_merged.bag` (ROS1), `groundtruth/pose_inW.csv`, `gt_tum.txt`,
 `calibration.yaml`, `camera.yaml` / `imu.yaml` / `lidar.yaml`. Clouds are as in
 MCD's Ouster bags: `ring` uint8, no return = (0, 0, 0).
