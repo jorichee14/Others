@@ -7,8 +7,9 @@ anchor, and every depth frame registered to the room's map.
   * the depth images are ray-cast from the true camera_link poses (a room with
     a pillar and furniture), so the map explains every pixel;
   * the odometry seed drifts ~12 cm by 5.5 s; then tracking is lost for
-    1.5 s (no odometry) and at 10 s it resets (1.2 m / 30 deg jump): each
-    new piece must be found in the map again (two re-finds);
+    1.5 s (no odometry) and at 10 s it resets (1.2 m / 30 deg jump): the
+    depth frames carry the track through both on the map; then 2.5 s without
+    depth frames or odometry: the robot must be searched for and found again;
   * the track must come back to the truth (median 0.5 cm, p95 2 cm; where
     the camera sees one wall and the floor, the seed holds the direction
     along the wall, carried by the last registered frame: max 4 cm), its
@@ -82,6 +83,7 @@ def odom(t):
 
 
 GAP = (5.5, 7.0)                       # tracking lost: no odometry
+BLACKOUT = (12.0, 14.5)                # no depth frames and no odometry: found again by search
 
 
 def odom_broken(t):
@@ -131,6 +133,8 @@ def write_bag(path, times):
             st.append(("camera_link", child, t, q))
         w.write("/tf_static", rosmsg.tf_message(st, int(T0 * 1e9)), int(T0 * 1e9))
         for t in times:
+            if BLACKOUT[0] < t < BLACKOUT[1]:
+                continue
             ns = int(round((T0 + t) * 1e9))
             img = raycast(truth(t) @ T_LINK_DEPTH)
             w.write("/mobile_2/depth/camera_info", T("sensor_msgs/msg/CameraInfo")(
@@ -170,7 +174,7 @@ def main():
         o3d.io.write_point_cloud(os.path.join(ref, "map_final_mapping_A_20260101_anchored.pcd"), pc)
         vt = os.path.join(work, "mobile_2", "vslam")
         os.makedirs(vt)
-        to = [t for t in times if not GAP[0] < t < GAP[1]]
+        to = [t for t in times if not GAP[0] < t < GAP[1] and not BLACKOUT[0] < t < BLACKOUT[1]]
         write_tum(os.path.join(vt, "traj_vslam.txt"), to, [odom_broken(t) for t in to])
         os.makedirs(os.path.join(work, "mobile_1", "glim"))
         write_tum(os.path.join(work, "mobile_1", "glim", "traj_lidar.txt"), times[:2],
@@ -222,7 +226,7 @@ def main():
             if s["anchored_piece_seed_to_final_cm"]["at_end"] < 6:
                 f.append("summary: odometry drift at the end %.1f cm (expected ~12 cm)"
                          % s["anchored_piece_seed_to_final_cm"]["at_end"])
-            if s["odometry_pieces"] != 3 or sum(e["found"] for e in s["refind"]) < 2:
+            if s["odometry_pieces"] != 4 or not any(e["found"] for e in s["refind"]):
                 f.append("summary: %d pieces, re-finds %s" % (s["odometry_pieces"], s["refind"]))
         # processing/vslam.py: the odometry recording -> TUM; the launch file it writes
         sys.path.insert(0, os.path.join(ROOT, "processing"))
