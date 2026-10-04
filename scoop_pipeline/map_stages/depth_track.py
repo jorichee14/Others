@@ -50,7 +50,11 @@ Stage 04 runs it for each entry of "04_reference" "tracks":
             (hypotheses): the one placing at least hyp_min_frames frames, at
             least hyp_min_ok of those it tried, with every other one scoring at
             most hyp_ratio of it, is taken -- a wrong place stops fitting as the
-            robot moves on. Not found: the frames wait for the next try.
+            robot moves on; while two keep fitting alike (a corridor), for 2x,
+            4x hyp_s. Not found: the frames wait for the next try.
+  back      from every frame placed again after a loss, the track runs
+            backwards in time over the frames before it, until it meets a
+            placed frame or is lost.
   rounds    round 2 starts from round 1's poses; the map never changes.
 
 Outputs (odometry/reference_<tag>/), at the depth frames' stamps:
@@ -383,22 +387,28 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print):
                 hyps = [Tc for f, Tc in cands
                         if f >= float(c["min_fit"]) and f >= fit - float(c["hyp_tol"])]
                 hyps = hyps[:int(c["hyp_max"])]
-                res = []
-                for Th in hyps:
-                    res.append(track_ahead(A, ref, scans, times, T_odom, piece, j, Th,
-                                           times[j] + float(c["hyp_s"]), c))
-                res.sort(key=lambda r: -r[4])
-                # hypotheses that tracked onto the same place are one
-                uniq = []
-                for r in res:
-                    if r[0].last is None:
-                        continue
-                    Tl = r[0].last[1]
-                    if all(np.linalg.norm(Tl[:3, 3] - u[0].last[1][:3, 3]) > 0.3 or
-                           np.degrees(np.arccos(np.clip((np.trace(Tl[:3, :3] @ u[0].last[1][:3, :3].T)
-                                                         - 1) / 2, -1, 1))) > 10 for u in uniq):
-                        uniq.append(r)
-                res = uniq
+                # tracked on for hyp_s; while two keep fitting alike (a corridor:
+                # shifted along it, the view is the same), for 2x, 4x as long
+                for hs in (1, 2, 4):
+                    res = [track_ahead(A, ref, scans, times, T_odom, piece, j, Th,
+                                       times[j] + hs * float(c["hyp_s"]), c) for Th in hyps]
+                    res.sort(key=lambda r: -r[4])
+                    uniq = []                        # tracked onto the same place: one
+                    for r in res:
+                        if r[0].last is None:
+                            continue
+                        Tl = r[0].last[1]
+                        if all(np.linalg.norm(Tl[:3, 3] - u[0].last[1][:3, 3]) > 0.3 or
+                               np.degrees(np.arccos(np.clip((np.trace(
+                                   Tl[:3, :3] @ u[0].last[1][:3, :3].T) - 1) / 2, -1, 1))) > 10
+                               for u in uniq):
+                            uniq.append(r)
+                    res = uniq
+                    if len(res) < 2 or res[1][4] <= float(c["hyp_ratio"]) * res[0][4]:
+                        break                        # one left, or one clearly ahead
+                    if times[res[0][0].last[0]] < times[j] + hs * float(c["hyp_s"]) - 1.0:
+                        break                        # they did not get that far: no use going on
+                    hyps = [r[1][j][0] for r in res if j in r[1]]
                 if res:
                     b0 = res[0]
                     s2 = res[1][4] if len(res) > 1 else 0.0
@@ -440,7 +450,41 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print):
             T_out[j] = T0
             rows[j] = row
         j += 1
+    filled = fill_back(A, ref, scans, times, T_odom, piece, T_out, rows, c)
+    if filled:
+        log("    tracked back from where the robot was found again: %d more frames placed" % filled)
     return T_out, rows, events
+
+
+def fill_back(A, ref, scans, times, T_odom, piece, T_out, rows, c):
+    """From every placed frame whose predecessor is not, the track run
+    backwards in time (the same tracking, time reversed) until it meets a
+    placed frame or is lost. -> how many frames it placed."""
+    n = len(scans)
+    nt = -times
+    placed = np.isfinite(T_out).all(axis=(1, 2))
+    count = 0
+    for j in range(n - 1, 0, -1):
+        if not placed[j] or placed[j - 1]:
+            continue
+        tk = Tracker()
+        tk.last = (j, T_out[j])
+        if j + 1 < n and placed[j + 1]:
+            tk.prev = (j + 1, T_out[j + 1])
+        if piece[j] >= 0:
+            tk.C, tk.cur = T_out[j] @ np.linalg.inv(T_odom[j]), piece[j]
+        k = j - 1
+        while k >= 0 and not placed[k]:
+            T0, src = tk.seed(k, nt, T_odom, piece, c)
+            if T0 is None:
+                break
+            T_k, status, row, _ = step(A, ref, scans[k], T0, c)
+            if status == "ok":
+                T_out[k], rows[k], placed[k] = T_k, row, True
+                tk.placed(k, T_k, T_odom, piece)
+                count += 1
+            k -= 1
+    return count
 
 
 def run(P, tr, base, ref, outd):

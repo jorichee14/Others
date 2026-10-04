@@ -18,7 +18,8 @@ anchor, and every depth frame registered to the room's map.
     _in_cam file be the colour optical frame through the bag's /tf_static,
     and the summary say how far the odometry drifted.
 
-Also processing/vslam.py: its odometry recording -> TUM, and the launch file
+Also fill_back (the track run backwards from a frame placed again) on its
+own, and processing/vslam.py: its odometry recording -> TUM, and the launch file
 it writes compiles.
 
     python scoop_pipeline/tests/test_depth_track.py
@@ -252,6 +253,35 @@ def main():
             if not hy or not (ts > T0 + 14.6).any() or max(e) > 4.0:
                 f.append("hypotheses: %d frames, max %.2f cm, re-finds %s"
                          % (len(ts), max(e), s["refind"]))
+
+        # fill_back: frames 5..19 unplaced, the frames after them placed: the
+        # track run backwards fills them
+        import importlib
+        import depth_track as D
+        A = importlib.import_module("02_refine_poses")
+        R04 = importlib.import_module("04_reference_traj")
+        cc = dict(R04.DEFAULTS)
+        cc.update(D.DEFAULTS)
+        cc.update(range=[0.3, 6.0], nn_prior_beta=cc["prior_beta"])
+        pcr = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(room_points()))
+        refm = A.Reference(np.asarray(pcr.voxel_down_sample(0.05).points), plane_voxel=0.4,
+                           planarity=1.0)
+        tb = np.arange(2.0, 6.0, 2 / 15)
+        scans_b = []
+        for t in tb:
+            p = D.backproject(raycast(truth(t) @ T_LINK_DEPTH), K, 0.001, 0.3, 6.0, 4)
+            q = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(p @ T_LINK_DEPTH[:3, :3].T))
+            scans_b.append(np.asarray(q.voxel_down_sample(0.05).points))
+        Tb_out = np.array([truth(t) for t in tb])
+        Tb_out[5:20] = np.nan
+        rows_b = [("ok", 0, 0, 0, 0)] * len(tb)
+        nb = D.fill_back(A, refm, scans_b, tb, np.tile(np.eye(4), (len(tb), 1, 1)),
+                         np.full(len(tb), -1), Tb_out, rows_b, cc)
+        eb = [np.linalg.norm(Tb_out[i][:3, 3] - truth(tb[i])[:3, 3]) * 100 for i in range(5, 20)
+              if np.isfinite(Tb_out[i]).all()]
+        print("fill_back: %d frames placed, max %.2f cm" % (nb, max(eb) if eb else -1))
+        if nb != 15 or max(eb) > 3.0:
+            f.append("fill_back: %d of 15 frames, %s cm" % (nb, eb))
 
         # processing/vslam.py: the odometry recording -> TUM; the launch file it writes
         sys.path.insert(0, os.path.join(ROOT, "processing"))
