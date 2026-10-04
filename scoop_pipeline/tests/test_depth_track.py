@@ -5,8 +5,10 @@ per second, about an origin 5 m away), placed at the start by a session
 anchor, and every depth frame registered to the room's map.
 
   * the depth images are ray-cast from the true camera_link poses (a room with
-    a pillar), so the map explains every pixel;
-  * the odometry seed is off by ~45 cm / 2.4 deg at the end;
+    a pillar and furniture), so the map explains every pixel;
+  * the odometry seed drifts ~12 cm by 5.5 s; then tracking is lost for
+    1.5 s (no odometry) and at 10 s it resets (1.2 m / 30 deg jump): each
+    new piece must be found in the map again (two re-finds);
   * the track must come back to the truth (median 0.5 cm, p95 2 cm; where
     the camera sees one wall and the floor, the seed holds the direction
     along the wall, carried by the last registered frame: max 4 cm), its
@@ -39,7 +41,12 @@ T0 = 1_790_000_000.0
 # walls mid-cell of 04's 0.4 m plane grid, as a real map's thick walls are
 # somewhere in their cells (a wall on a cell boundary has planes on one side only)
 ROOM = (np.array([-3.0, -2.2, -0.2]), np.array([3.0, 2.2, 2.6]))
-PILLAR = (np.array([0.6, -1.0, -0.2]), np.array([1.0, -0.2, 2.6]))
+BOXES = [(np.array(a, float), np.array(b, float)) for a, b in (   # furniture: a room
+    ((0.6, -1.0, -0.2), (1.0, -0.2, 2.6)),                          # that is not a plain box
+    ((-2.6, 1.4, -0.2), (-1.8, 1.8, 0.6)),
+    ((1.8, 1.0, -0.2), (2.2, 1.8, 1.4)),
+    ((-1.0, -2.2, -0.2), (-0.2, -1.8, 1.0)),
+    ((-3.0, -1.4, 0.6), (-2.6, -0.6, 1.8)))]
 W, H, F = 160, 120, 120.0
 K = np.array([[F, 0, W / 2], [0, F, H / 2], [0, 0, 1]])
 R_LINK_OPT = np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]], float)   # optical in camera_link
@@ -74,6 +81,14 @@ def odom(t):
     return rotz(0.15 * t, (0.015 * t, -0.008 * t, 0)) @ rotz(70, (5, -2, 0.1)) @ truth(t)
 
 
+GAP = (5.5, 7.0)                       # tracking lost: no odometry
+
+
+def odom_broken(t):
+    """As cuVSLAM gives it: a reset at 10 s."""
+    return (rotz(30, (1.2, -0.5, 0)) if t >= 10.0 else np.eye(4)) @ odom(t)
+
+
 def raycast(T_map_depth):
     v, u = np.mgrid[0:H, 0:W]
     d = np.stack([(u - K[0, 2]) / F, (v - K[1, 2]) / F, np.ones_like(u, float)], -1)
@@ -83,18 +98,19 @@ def raycast(T_map_depth):
     with np.errstate(divide="ignore", invalid="ignore"):
         t_room = np.min(np.where(d > 0, (hi - o) / d, np.where(d < 0, (lo - o) / d, np.inf)),
                         axis=1)
-        a, b = (PILLAR[0] - o) / d, (PILLAR[1] - o) / d
-        tn = np.max(np.minimum(a, b), axis=1)
-        tf = np.min(np.maximum(a, b), axis=1)
-    hit = (tn <= tf) & (tn > 0)
-    t = np.where(hit & (tn < t_room), tn, t_room)
+        t = t_room
+        for blo, bhi in BOXES:
+            a, b = (blo - o) / d, (bhi - o) / d
+            tn = np.max(np.minimum(a, b), axis=1)
+            tf = np.min(np.maximum(a, b), axis=1)
+            t = np.where((tn <= tf) & (tn > 0) & (tn < t), tn, t)
     z = (t * 1.0).reshape(H, W)                     # optical z of a ray with d_z = 1
     return np.round(np.nan_to_num(z, nan=0.0, posinf=0.0) * 1000).astype(np.uint16)
 
 
 def room_points(step=0.03):
     pts = []
-    for lo, hi, inside in (ROOM + (True,), PILLAR + (False,)):
+    for lo, hi in [ROOM] + BOXES:
         for ax in range(3):
             for side in (lo[ax], hi[ax]):
                 o = [i for i in range(3) if i != ax]
@@ -154,7 +170,8 @@ def main():
         o3d.io.write_point_cloud(os.path.join(ref, "map_final_mapping_A_20260101_anchored.pcd"), pc)
         vt = os.path.join(work, "mobile_2", "vslam")
         os.makedirs(vt)
-        write_tum(os.path.join(vt, "traj_vslam.txt"), times, [odom(t) for t in times])
+        to = [t for t in times if not GAP[0] < t < GAP[1]]
+        write_tum(os.path.join(vt, "traj_vslam.txt"), to, [odom_broken(t) for t in to])
         os.makedirs(os.path.join(work, "mobile_1", "glim"))
         write_tum(os.path.join(work, "mobile_1", "glim", "traj_lidar.txt"), times[:2],
                   [np.eye(4)] * 2)
@@ -193,7 +210,7 @@ def main():
                 e_c.append(np.linalg.norm(C[:3, 3] - (G @ T_LINK_COLOR)[:3, 3]) * 100)
             print("track vs truth: %.2f cm / %.3f deg median, %.2f cm / %.3f deg max over %d frames"
                   % (np.median(e_t), np.median(e_r), max(e_t), max(e_r), len(ts)))
-            if len(ts) < 0.4 * len(times):
+            if len(ts) < 0.35 * len(times) or not (ts > T0 + 10.5).any():
                 f.append("only %d of %d frames in the track" % (len(ts), len(times)))
             if np.median(e_t) > 0.5 or np.percentile(e_t, 95) > 2.0 or max(e_t) > 4.0 \
                     or max(e_r) > 0.3:
@@ -202,9 +219,11 @@ def main():
             if max(e_c) > 4.0:
                 f.append("_in_cam off: %.2f cm" % max(e_c))
             s = json.load(open(os.path.join(od, "summary_mobile_2_depth.json")))
-            if s["seed_to_final_cm"]["at_end"] < 25:
-                f.append("summary: odometry drift at the end %.1f cm (expected ~45 cm)"
-                         % s["seed_to_final_cm"]["at_end"])
+            if s["anchored_piece_seed_to_final_cm"]["at_end"] < 6:
+                f.append("summary: odometry drift at the end %.1f cm (expected ~12 cm)"
+                         % s["anchored_piece_seed_to_final_cm"]["at_end"])
+            if s["odometry_pieces"] != 3 or sum(e["found"] for e in s["refind"]) < 2:
+                f.append("summary: %d pieces, re-finds %s" % (s["odometry_pieces"], s["refind"]))
         # processing/vslam.py: the odometry recording -> TUM; the launch file it writes
         sys.path.insert(0, os.path.join(ROOT, "processing"))
         import vslam
