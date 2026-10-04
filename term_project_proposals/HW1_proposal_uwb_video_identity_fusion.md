@@ -20,7 +20,7 @@ Input: two or more uncalibrated phones and the live Locus RTLS 3D stream (tag ID
 
 ## 5. Technology and Data Required
 
-OpenCV for PnP and joint refinement of pose, focal length, and time offset per camera; YOLO-pose on the phones and ByteTrack on the server; Python with Hungarian assignment and a Kalman smoother. The work is 3D geometry, estimation, and edge integration. Data: two-phone video and Locus RTLS 3D logs of three to six tagged people in a gym, with staged crossings and occlusions, plus manual identity labels. Not yet existing; recorded in two sessions on the course's LocusConnect installation through its MQTT or WebSocket API, confirmed in week one. A ChArUco marker calibration per camera is the reference.
+OpenCV for PnP and joint refinement of pose, focal length, and time offset per camera; YOLO-pose on the phones and ByteTrack on the server; Python with Hungarian assignment and a Kalman smoother. Data: two-phone video and Locus RTLS 3D logs of three to six tagged people in a gym, with staged crossings and occlusions, plus manual identity labels. Not yet existing; recorded in two sessions on the course's LocusConnect installation through its MQTT or WebSocket API, confirmed in week one. Reference without a target: PnP on court-line intersections of known size, registered to UWB by a tag on four corners.
 
 ## 6. Final Prototype / Live Demo
 
@@ -28,7 +28,7 @@ At the end of the semester, I will be able to demonstrate that two phones on tri
 
 ## 7. How Will You Know It Works?
 
-Identity: ID switches per minute, ByteTrack versus fused, per view on a labelled session; target 90 percent fewer, zero on staged crossings, full cross-camera agreement. Switching: fraction of frames a player is unoccluded in the selected view, above 95 percent versus best single camera; handover within a frame. Calibration per camera, against the marker reference: rotation below 1 degree, translation below 20 cm, reprojection below 15 pixels, convergence within 60 seconds, clock offset within 20 ms, no shared phone clock. Fog: phone uplink over 95 percent below 720p video; edge latency under 100 ms per frame versus cloud round trip.
+Identity: ID switches per minute, ByteTrack versus fused, per view on a labelled session; target 90 percent fewer, zero on staged crossings, full cross-camera agreement. Switching: fraction of frames a player is unoccluded in the selected view, above 95 percent versus best single camera; handover within a frame. Calibration per camera, against the court-line reference: rotation below 1 degree, translation below 20 cm, reprojection below 15 pixels, convergence within 60 seconds, clock offset within 20 ms, no shared phone clock. Fog: phone uplink over 95 percent below 720p video; edge latency under 100 ms per frame versus cloud round trip.
 
 ## 8. Why Should This Project Be Selected?
 
