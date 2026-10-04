@@ -7,9 +7,12 @@ reference pass's FROZEN anchored map.
             session anchor: T_map_glim = T_map_cam(t_a) @ inv(T_glim_lidar(t_a)
             @ T_lidar_cam), t_a = the anchor's time. Nothing else -- no camera
             odometry.
-  per scan  each scan, deskewed through the current poses, starts from ITS OWN
-            seed pose (never the previous scan's result, so errors cannot
-            accumulate) and is registered to the map by 02's ICP: planes
+  per scan  each scan, deskewed through the current poses, starts from its own
+            seed pose moved by the correction of the last scan that fit well
+            (round 1, "carry": GLIM's drift is smooth, so the start is close
+            even where GLIM is far off; a scan fitting clearly worse than the
+            run's typical one, carry_fit, passes nothing on) and is registered
+            to the map by 02's ICP on its own: planes
             fitted over plane_voxel cells first, then nearest-neighbour
             point-to-plane, both anchored to the seed (prior_beta) where the
             map leaves a direction open, so a corridor scan cannot slide
@@ -17,12 +20,17 @@ reference pass's FROZEN anchored map.
             or a scan with fewer than min_corr correspondences, keeps its seed.
   rounds    round 2 on deskews with the previous round's poses; the map never
             changes. The per-round corrections are the convergence evidence.
+            A scan a round could not register starts the next one from the
+            correction of the registered scans either side (interpolated in
+            time) on its own seed -- GLIM drifting past max_shift is caught
+            there; after the last round that is its pose.
 
 Outputs (odometry/reference_<tag>/):
   traj_<name>.tum         T_map_lidar per scan (03, 04, 09 read it)
   traj_<name>_in_cam.tum  the camera optical frame (T_lidar_camera), for 10
-  quality_<name>.csv      per scan: t, status (ok / seed_kept_far / seed_kept_thin
-                          / no_scan), correspondences, residual, correction, the
+  quality_<name>.csv      per scan: t, status (ok / interpolated: not registered in
+                          the last round, the correction of the registered scans
+                          either side on its GLIM seed / no_scan), correspondences, residual, correction, the
                           direction the map pins least (weak_x/y/z, in map), its
                           share of the constraint (box room ~0.33, corridor ~0), the
                           seed's share of the result along it, seed_held (>= 0.5)
@@ -41,7 +49,7 @@ Config "04_reference" (all optional):
   "rounds": 2, "target_voxel": 0.05, "scan_voxel": 0.10, "plane_voxel": 0.4,
   "max_corr": [0.4, 0.2, 0.1], "iters_per_gate": 5, "huber": 0.05,
   "plane_iters": 8, "plane_huber": 0.10, "prior_beta": 0.05, "planarity": 1.0,
-  "min_corr": 200, "max_shift": 0.5, "max_rot_deg": 5.0,
+  "min_corr": 200, "max_shift": 0.5, "max_rot_deg": 5.0, "carry": true, "carry_fit": 0.85,
   "seed_held_at": 0.5, "segment_gap_s": 1.0,
   "deskew": 01_build_map.deskew, "deskew_bins": 01_build_map.deskew_bins
   "tracks":      more robots, each registered to the same map from its own odometry
@@ -68,7 +76,7 @@ DEFAULTS = dict(rounds=2, target_voxel=0.05, scan_voxel=0.10, plane_voxel=0.4,
                 max_corr=[0.4, 0.2, 0.1], iters_per_gate=5, huber=0.05, plane_iters=8,
                 plane_huber=0.10, prior_beta=0.05, planarity=1.0, min_corr=200,
                 max_shift=0.5, max_rot_deg=5.0, anchor_cam="zed", points_topic="",
-                seed_held_at=0.5, segment_gap_s=1.0)
+                seed_held_at=0.5, segment_gap_s=1.0, carry=True, carry_fit=0.85)
 
 
 def pose_at(tr_t, tr_T, t):
@@ -95,22 +103,30 @@ def seed_from_anchor(sa_path, cam, tr_t, tr_T, T_lc):
     return T, t_a, rec.get("mode", "?")
 
 
-def register_round(ref, bag, topic, times, T_cur, c, s01):
-    """One pass over the scans -> (new poses, per-scan rows, stats)."""
+def register_round(ref, bag, topic, times, T_cur, c, s01, carry=False):
+    """One pass over the scans -> (new poses, per-scan rows, stats). With
+    `carry`, each scan starts from its seed moved by the correction of the
+    last scan that fit well (its share of points on the map at least
+    carry_fit x the running median): GLIM's drift is smooth, so a scan starts
+    close even where GLIM is metres off. Each scan is still registered to the
+    frozen map on its own."""
     T_new = T_cur.copy()
     rows = {}
     max_rot = np.deg2rad(float(c["max_rot_deg"]))
     t0 = time.time()
     n = 0
+    C = np.eye(4)
+    fits = []
     for j, p in A.iter_scans(bag, topic, times, s01["time_tol"], s01["lidar_min"],
                              s01["lidar_max"], T_cur, c["deskew"], c["deskew_bins"]):
         pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(p))
         p_ds = np.asarray(pc.voxel_down_sample(c["scan_voxel"]).points)
-        T_j, n_corr, rms, _, _ = A.register(ref, p_ds, T_cur[j].copy(), c)
-        T_fit = T_j if np.isfinite(T_j).all() else T_cur[j]
+        T0 = C @ T_cur[j] if carry else T_cur[j]
+        T_j, n_corr, rms, _, _ = A.register(ref, p_ds, T0.copy(), c)
+        T_fit = T_j if np.isfinite(T_j).all() else T0
         v, share, _ = A.constraint(ref, p_ds, T_fit, float(c["max_corr"][-1]))
-        d = float(np.linalg.norm(T_j[:3, 3] - T_cur[j][:3, 3]))
-        dR = T_j[:3, :3] @ T_cur[j][:3, :3].T
+        d = float(np.linalg.norm(T_j[:3, 3] - T0[:3, 3]))
+        dR = T_j[:3, :3] @ T0[:3, :3].T
         ang = float(np.arccos(np.clip((np.trace(dR) - 1) / 2, -1, 1)))
         if not np.isfinite(T_j).all():
             status, d, ang = "seed_kept_thin", float("nan"), float("nan")
@@ -121,6 +137,12 @@ def register_round(ref, bag, topic, times, T_cur, c, s01):
         else:
             status = "ok"
             T_new[j] = T_j
+            fit = n_corr / max(len(p_ds), 1)
+            if carry and (len(fits) < 20 or fit >= float(c["carry_fit"]) * np.median(fits[-500:])):
+                C = T_j @ np.linalg.inv(T_cur[j])
+            fits.append(fit)
+        if status != "ok" and carry:
+            T_new[j] = T0
         # the seed's share of the result along the weakest direction: the
         # prior adds beta/3 of the data's total weight in every direction,
         # the map adds `share` of it along v
@@ -132,6 +154,24 @@ def register_round(ref, bag, topic, times, T_cur, c, s01):
             ok = sum(1 for r in rows.values() if r[0] == "ok")
             print("    %d scans (%d registered) %.0f s" % (n, ok, time.time() - t0), flush=True)
     return T_new, rows
+
+
+def reseed(times, T, T_seed, rows):
+    """Scans not registered (their correction over max_shift / max_rot, or too
+    few correspondences) -> the map's correction of the registered scans
+    either side, interpolated in time, on their own seed: where GLIM drifted
+    past max_shift its neighbours say by how much. -> (poses, how many)."""
+    ok = np.array(sorted(i for i, r in rows.items() if r[0] == "ok"))
+    bad = np.array(sorted(i for i, r in rows.items() if r[0] != "ok"))
+    if len(bad) == 0 or len(ok) < 2:
+        return T, 0
+    C = np.einsum("nij,njk->nik", T[ok], np.linalg.inv(T_seed[ok]))
+    R, p = interp_poses(times[ok], C, traj_quats(C), times[bad])
+    Ci = np.tile(np.eye(4), (len(bad), 1, 1))
+    Ci[:, :3, :3], Ci[:, :3, 3] = R, p
+    T = T.copy()
+    T[bad] = np.einsum("nij,njk->nik", Ci, T_seed[bad])
+    return T, len(bad)
 
 
 def held_segments(times, T_fin, T_seed, rows, held_at, gap_s):
@@ -232,7 +272,8 @@ def main():
     T_cur, history, rows = T_seed.copy(), [], {}
     for rnd in range(1, int(c["rounds"]) + 1):
         print("\n=== round %d/%d: every scan to the frozen map ===" % (rnd, int(c["rounds"])))
-        T_new, rows = register_round(ref, bag, topic, times, T_cur, c, s01)
+        T_new, rows = register_round(ref, bag, topic, times, T_cur, c, s01,
+                                     carry=bool(c["carry"]) and rnd == 1)
         moved = [i for i, r in rows.items() if r[0] == "ok"]
         d = np.linalg.norm(T_new[moved, :3, 3] - T_cur[moved, :3, 3], axis=1) * 100
         res = np.array([rows[i][2] for i in moved if np.isfinite(rows[i][2])]) * 100
@@ -247,7 +288,17 @@ def main():
                         "median_corr_cm": float(np.median(d)),
                         "p95_corr_cm": float(np.percentile(d, 95)),
                         "median_residual_cm": float(np.median(res))})
-        T_cur = T_new
+        # the scans it could not register: their neighbours' correction, for
+        # the next round to start from (after the last: as their pose)
+        T_cur, n_re = reseed(times, T_new, T_seed, rows)
+        if n_re:
+            print("  %d scans not registered: given the correction of the registered scans "
+                  "either side (interpolated in time)%s"
+                  % (n_re, ", for the next round" if rnd < int(c["rounds"]) else
+                     " as their pose (status 'interpolated')"))
+    for j, r in rows.items():
+        if r[0] != "ok":
+            rows[j] = ("interpolated",) + tuple(r[1:])
 
     # ---- outputs
     p_lidar = os.path.join(outd, "traj_%s.tum" % name)

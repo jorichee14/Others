@@ -8,7 +8,9 @@ boxes; the run's GLIM world is the map turned 137 deg and moved 6.3 m). The
 session anchor is the true camera pose at the start moved 4 cm and turned
 0.6 deg -- a start that is close but not exact, as from the board -- and the
 GLIM trajectory drifts 0.5 deg / 6 cm over the run. 04 must bring every scan
-back to its true pose.
+back to its true pose. Again with GLIM 0.85 m off in the middle of the run,
+past max_shift (0.5 m): those scans start round 2 from the correction of the
+registered scans either side.
 
     python scoop_pipeline/tests/test_reference_traj.py
 """
@@ -116,71 +118,82 @@ def corridor_case(tmp):
         R.ROOM, R.BOXES, R.true_pose, R.DUR = saved
 
 
+def room_case(tmp, drift, label, rounds=2):
+    """The room with boxes, GLIM drifting by drift(t) -> failures."""
+    failed = []
+    cfg, data, T_lc = R.build(os.path.join(tmp, label), R.BOXES)
+    glim = os.path.join(data, "work", "20260101", "survey_1", "mobile_1", "glim",
+                        "traj_lidar.txt")
+    stamps = np.arange(0.05, R.DUR, 0.1)
+    T_run_map = np.linalg.inv(R.T_MAP_RUN)
+    R.write_tum(glim, R.T0 + stamps, [T_run_map @ drift(t) @ R.true_pose(t) for t in stamps])
+    # 03's session anchor: the camera at the start, 4 cm / 0.6 deg off
+    t_a = R.T0 + 0.05
+    T_cam = R.rotz(0.6, (0.03, -0.0265, 0.0)) @ R.true_pose(0.05) @ T_lc
+    from scipy.spatial.transform import Rotation
+    fr = os.path.join(data, "processed", "20260101", "survey_1", "frames")
+    os.makedirs(fr, exist_ok=True)
+    json.dump({"cameras": {"zed": {
+        "mode": "lidar_odom", "dwell_t_end": t_a,
+        "map_to_cam": {"xyz": T_cam[:3, 3].tolist(),
+                       "qxyzw": Rotation.from_matrix(T_cam[:3, :3]).as_quat().tolist()}}}},
+        open(os.path.join(fr, "session_anchor.json"), "w"))
+    c = json.load(open(cfg))
+    c["04_reference"] = {"name": "mobile_1_lidar", "points_topic": "/mobile_1/ouster/points",
+                         "anchor_cam": "zed", "rounds": rounds}
+    json.dump(c, open(cfg, "w"))
+    out = subprocess.run([sys.executable, os.path.join(STAGES, "04_reference_traj.py"), cfg],
+                         capture_output=True, text=True, cwd=STAGES)
+    print(out.stdout[-2500:])
+    if out.returncode:
+        raise AssertionError(out.stdout[-1500:] + out.stderr[-2000:])
+    od = os.path.join(data, "processed", "20260101", "survey_1", "odometry",
+                      "reference_survey_1_20260101")
+    d = np.loadtxt(os.path.join(od, "traj_mobile_1_lidar.tum"))
+    pe, re = [], []
+    for row in d:
+        G = R.true_pose(row[0] - R.T0)
+        T = np.eye(4)
+        T[:3, :3] = Rotation.from_quat(row[4:8]).as_matrix()
+        T[:3, 3] = row[1:4]
+        pe.append(np.linalg.norm(T[:3, 3] - G[:3, 3]) * 100)
+        re.append(np.degrees(np.arccos(np.clip((np.trace(T[:3, :3].T @ G[:3, :3]) - 1) / 2,
+                                               -1, 1))))
+    pe, re = np.array(pe), np.array(re)
+    print(f"{label}: 04 vs truth: median {np.median(pe):.2f} cm, p95 {np.percentile(pe, 95):.2f} "
+          f"cm, max {pe.max():.2f} cm | rotation median {np.median(re):.3f} deg, "
+          f"max {re.max():.3f} deg")
+    if not (np.median(pe) < 0.5 and np.percentile(pe, 95) < 1.0 and np.median(re) < 0.05):
+        failed.append(f"{label}: poses off: {np.median(pe):.2f} / {np.percentile(pe, 95):.2f} cm, "
+                      f"{np.median(re):.3f} deg")
+    cam = np.loadtxt(os.path.join(od, "traj_mobile_1_lidar_in_cam.tum"))
+    if len(cam) != len(d):
+        failed.append(f"{label}: in_cam trajectory has another length")
+    q = open(os.path.join(od, "quality_mobile_1_lidar.csv")).read().splitlines()
+    ok = sum(1 for ln in q[1:] if ",ok," in ln)
+    print(f"{label}: quality: {ok}/{len(q) - 1} scans registered")
+    if ok < 0.95 * (len(q) - 1):
+        failed.append(f"{label}: only {ok} of {len(q) - 1} scans registered")
+    held = sum(1 for ln in q[1:] if ln.endswith(",1"))
+    print(f"{label}: {held} seed-held scans")
+    if held > 0.02 * (len(q) - 1):
+        failed.append(f"{label}: {held} scans seed-held")
+    return failed
+
+
 def main():
     tmp = tempfile.mkdtemp()
     failed = []
     try:
         failed += corridor_case(tmp)
-        cfg, data, T_lc = R.build(os.path.join(tmp, "run"), R.BOXES)
         # GLIM with drift: the run's own odometry is close, not exact
-        glim = os.path.join(data, "work", "20260101", "survey_1", "mobile_1", "glim",
-                            "traj_lidar.txt")
-        stamps = np.arange(0.05, R.DUR, 0.1)
-        T_run_map = np.linalg.inv(R.T_MAP_RUN)
-        R.write_tum(glim, R.T0 + stamps,
-                    [T_run_map @ R.rotz(0.5 * t / R.DUR, (0.06 * t / R.DUR, 0, 0))
-                     @ R.true_pose(t) for t in stamps])
-        # 03's session anchor: the camera at the start, 4 cm / 0.6 deg off
-        t_a = R.T0 + 0.05
-        T_cam = R.rotz(0.6, (0.03, -0.0265, 0.0)) @ R.true_pose(0.05) @ T_lc
-        from scipy.spatial.transform import Rotation
-        fr = os.path.join(data, "processed", "20260101", "survey_1", "frames")
-        os.makedirs(fr, exist_ok=True)
-        json.dump({"cameras": {"zed": {
-            "mode": "lidar_odom", "dwell_t_end": t_a,
-            "map_to_cam": {"xyz": T_cam[:3, 3].tolist(),
-                           "qxyzw": Rotation.from_matrix(T_cam[:3, :3]).as_quat().tolist()}}}},
-            open(os.path.join(fr, "session_anchor.json"), "w"))
-        c = json.load(open(cfg))
-        c["04_reference"] = {"name": "mobile_1_lidar", "points_topic": "/mobile_1/ouster/points",
-                             "anchor_cam": "zed", "rounds": 2}
-        json.dump(c, open(cfg, "w"))
-        out = subprocess.run([sys.executable, os.path.join(STAGES, "04_reference_traj.py"), cfg],
-                             capture_output=True, text=True, cwd=STAGES)
-        print(out.stdout[-2500:])
-        if out.returncode:
-            raise AssertionError(out.stdout[-1500:] + out.stderr[-2000:])
-        od = os.path.join(data, "processed", "20260101", "survey_1", "odometry",
-                          "reference_survey_1_20260101")
-        d = np.loadtxt(os.path.join(od, "traj_mobile_1_lidar.tum"))
-        pe, re = [], []
-        for row in d:
-            G = R.true_pose(row[0] - R.T0)
-            T = np.eye(4)
-            T[:3, :3] = Rotation.from_quat(row[4:8]).as_matrix()
-            T[:3, 3] = row[1:4]
-            pe.append(np.linalg.norm(T[:3, 3] - G[:3, 3]) * 100)
-            re.append(np.degrees(np.arccos(np.clip((np.trace(T[:3, :3].T @ G[:3, :3]) - 1) / 2,
-                                                   -1, 1))))
-        pe, re = np.array(pe), np.array(re)
-        print(f"04 vs truth: median {np.median(pe):.2f} cm, p95 {np.percentile(pe, 95):.2f} cm, "
-              f"max {pe.max():.2f} cm | rotation median {np.median(re):.3f} deg, "
-              f"max {re.max():.3f} deg")
-        if not (np.median(pe) < 0.5 and np.percentile(pe, 95) < 1.0 and np.median(re) < 0.05):
-            failed.append(f"poses off: {np.median(pe):.2f} / {np.percentile(pe, 95):.2f} cm, "
-                          f"{np.median(re):.3f} deg")
-        cam = np.loadtxt(os.path.join(od, "traj_mobile_1_lidar_in_cam.tum"))
-        if len(cam) != len(d):
-            failed.append("in_cam trajectory has another length")
-        q = open(os.path.join(od, "quality_mobile_1_lidar.csv")).read().splitlines()
-        ok = sum(1 for ln in q[1:] if ",ok," in ln)
-        print(f"quality: {ok}/{len(q) - 1} scans registered")
-        if ok < 0.95 * (len(q) - 1):
-            failed.append(f"only {ok} of {len(q) - 1} scans registered")
-        held = sum(1 for ln in q[1:] if ln.endswith(",1"))
-        print(f"room with boxes: {held} seed-held scans")
-        if held > 0.02 * (len(q) - 1):
-            failed.append(f"room with boxes: {held} scans seed-held")
+        failed += room_case(tmp, lambda t: R.rotz(0.5 * t / R.DUR, (0.06 * t / R.DUR, 0, 0)), "room")
+        # GLIM drifting past max_shift (0.8 m in the middle third): the scans
+        # past 0.5 m are not registered in round 1 and start round 2 from their
+        # neighbours' correction
+        ramp = lambda t: float(np.clip((t / R.DUR - 0.3) / 0.3, 0, 1))      # noqa: E731
+        failed += room_case(tmp, lambda t: R.rotz(0.0, (0.8 * ramp(t), 0.3 * ramp(t), 0)),
+                            "room, GLIM 0.85 m off")
     except AssertionError as e:
         failed.append(str(e)[-2500:])
     finally:
