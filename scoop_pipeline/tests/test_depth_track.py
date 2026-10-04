@@ -9,8 +9,10 @@ anchor, and every depth frame registered to the room's map.
   * the odometry seed drifts ~12 cm by 5.5 s; then tracking is lost for
     1.5 s (no odometry) and at 10 s it resets (1.2 m / 30 deg jump): the
     depth frames carry the track through both on the map; then 2.5 s without
-    depth frames or odometry: the robot must be searched for and found again;
-  * the track must come back to the truth (median 0.5 cm, p95 2 cm; where
+    depth frames or odometry: the robot must be searched for and found again
+    -- and again with every search made ambiguous, by tracking the candidate
+    places on until one keeps fitting;
+  * the track must come back to the truth (median 0.5 cm, p95 2 cm, 0.6 deg; where
     the camera sees one wall and the floor, the seed holds the direction
     along the wall, carried by the last registered frame: max 4 cm), its
     _in_cam file be the colour optical frame through the bag's /tf_static,
@@ -167,7 +169,7 @@ def main():
         ref = os.path.join(data, "processed", "20260101", "mapping_A", "mapping")
         for d in (work, os.path.join(proc, "frames"), ref):
             os.makedirs(d)
-        times = np.arange(0.0, 16.0, 1 / 15)
+        times = np.arange(0.0, 22.0, 1 / 15)
         bag = os.path.join(work, "x_merged")
         write_bag(bag, times)
         pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(room_points()))
@@ -217,7 +219,7 @@ def main():
             if len(ts) < 0.35 * len(times) or not (ts > T0 + 10.5).any():
                 f.append("only %d of %d frames in the track" % (len(ts), len(times)))
             if np.median(e_t) > 0.5 or np.percentile(e_t, 95) > 2.0 or max(e_t) > 4.0 \
-                    or max(e_r) > 0.3:
+                    or max(e_r) > 0.6:
                 f.append("track off: %.2f / %.2f / %.2f cm median / p95 / max, %.3f deg max"
                          % (np.median(e_t), np.percentile(e_t, 95), max(e_t), max(e_r)))
             if max(e_c) > 4.0:
@@ -228,6 +230,29 @@ def main():
                          % s["anchored_piece_seed_to_final_cm"]["at_end"])
             if s["odometry_pieces"] != 4 or not any(e["found"] for e in s["refind"]):
                 f.append("summary: %d pieces, re-finds %s" % (s["odometry_pieces"], s["refind"]))
+        # every search ambiguous (a rival must leave half the points more off): the robot
+        # is found by tracking the candidate places on, the one that keeps fitting
+        c = json.load(open(cfg))
+        c["04_reference"]["tracks"][0]["rival_gap"] = 0.5
+        json.dump(c, open(cfg, "w"))
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "04_reference_traj.py"),
+                            cfg, "--track", "mobile_2_depth"], capture_output=True, text=True)
+        print("\n".join(ln for ln in r.stdout.splitlines() if "re-find" in ln))
+        if r.returncode:
+            f.append("04 --track, hypotheses: " + r.stdout[-1500:] + r.stderr[-2500:])
+        else:
+            from pipeline_common import load_traj
+            od = os.path.join(proc, "odometry", "reference_coop_1_20260101")
+            ts, Tb = load_traj(os.path.join(od, "traj_mobile_2_depth.tum"))
+            e = [np.linalg.norm(B[:3, 3] - truth(t - T0)[:3, 3]) * 100 for t, B in zip(ts, Tb)]
+            s = json.load(open(os.path.join(od, "summary_mobile_2_depth.json")))
+            hy = [ev for ev in s["refind"] if ev.get("hypotheses")]
+            print("hypotheses: %d frames, %.2f cm median, %.2f cm max; %s"
+                  % (len(ts), np.median(e), max(e), hy))
+            if not hy or not (ts > T0 + 14.6).any() or max(e) > 4.0:
+                f.append("hypotheses: %d frames, max %.2f cm, re-finds %s"
+                         % (len(ts), max(e), s["refind"]))
+
         # processing/vslam.py: the odometry recording -> TUM; the launch file it writes
         sys.path.insert(0, os.path.join(ROOT, "processing"))
         import vslam

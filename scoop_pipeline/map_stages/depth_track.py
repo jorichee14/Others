@@ -45,8 +45,12 @@ Stage 04 runs it for each entry of "04_reference" "tracks":
             of points on the map, the best candidates polished by ICP; taken
             when the share within fit_m is at least min_fit and every distinct
             pose (0.3 m / 10 deg away) leaves rival_ratio x as many points off
-            the map, and rival_gap more (as lidar_reloc). Not found: the frames
-            wait for the next try.
+            the map, and rival_gap more (as lidar_reloc). When several places
+            fit (within hyp_tol of the best), each is tracked on for hyp_s
+            (hypotheses): the one placing at least hyp_min_frames frames, at
+            least hyp_min_ok of those it tried, with every other one scoring at
+            most hyp_ratio of it, is taken -- a wrong place stops fitting as the
+            robot moves on. Not found: the frames wait for the next try.
   rounds    round 2 starts from round 1's poses; the map never changes.
 
 Outputs (odometry/reference_<tag>/), at the depth frames' stamps:
@@ -77,7 +81,9 @@ DEFAULTS = dict(depth_topic="/mobile_2/depth/image_rect_raw",
                 gap_s=0.3, jump_m=0.15, jump_deg=10.0, window_s=2.0,
                 speed_max=0.8, yaw_rate_max=60.0, search_step=0.2, yaw_step_deg=6.0,
                 search_voxel=0.10, fit_m=0.05, min_fit=0.6, rival_ratio=2.0, rival_gap=0.05,
-                candidates=8, bridge_s=2.0, predict_s=0.5, track_min_fit=0.5)
+                candidates=8, bridge_s=2.0, predict_s=0.5, track_min_fit=0.5,
+                hyp_tol=0.1, hyp_max=6, hyp_s=8.0, hyp_min_frames=20, hyp_min_ok=0.7,
+                hyp_ratio=0.8)
 
 
 def rel_pose(edges, a, b):
@@ -223,7 +229,7 @@ def refind(A, ref, pts, T_guess, radius, yaw, c):
                               distance_upper_bound=float(c["fit_m"]))
         res.append((float(np.isfinite(d).mean()), T))
     if not res:
-        return None, 0.0, 0.0, len(picks)
+        return None, 0.0, 0.0, []
     res.sort(key=lambda x: -x[0])
     fit, T = res[0]
     rival = 0.0
@@ -235,23 +241,91 @@ def refind(A, ref, pts, T_guess, radius, yaw, c):
     off, off_r = 1.0 - fit, 1.0 - rival              # as lidar_reloc: a distinct pose must
     ok = fit >= float(c["min_fit"]) and off_r >= float(c["rival_ratio"]) * off \
         and off_r - off >= float(c["rival_gap"])     # leave clearly more of the window off
-    return (T if ok else None), fit, rival, len(picks)
+    return (T if ok else None), fit, rival, res
 
 
-def predict(T_out, times, j, last_j, prev_j, c):
-    """Where frame j is: the last placed pose moved on by the motion between
-    the two last placed frames (constant velocity, at most predict_s ahead)."""
+def predict(T_last, T_prev, dt0, dt, c):
+    """The last placed pose moved on by the motion between the two last placed
+    frames (dt0 apart), dt ahead (constant velocity, at most predict_s)."""
     from scipy.spatial.transform import Rotation
-    T_last = T_out[last_j]
-    if prev_j is None or times[last_j] - times[prev_j] > 1.0:
+    if T_prev is None or dt0 > 1.0 or dt0 <= 0:
         return T_last.copy()
-    dt0 = times[last_j] - times[prev_j]
-    s = min(times[j] - times[last_j], float(c["predict_s"])) / max(dt0, 1e-6)
-    D = np.linalg.inv(T_out[prev_j]) @ T_last
+    s = min(dt, float(c["predict_s"])) / dt0
+    D = np.linalg.inv(T_prev) @ T_last
     M = np.eye(4)
     M[:3, :3] = Rotation.from_rotvec(Rotation.from_matrix(D[:3, :3]).as_rotvec() * s).as_matrix()
     M[:3, 3] = D[:3, 3] * s
     return T_last @ M
+
+
+def step(A, ref, scan, T0, c):
+    """One frame to the map from T0 -> (T, status, row)."""
+    T_j, n_corr, rms, _, _ = A.register(ref, scan, T0.copy(), c)
+    ok_T = np.isfinite(T_j).all()
+    d = float(np.linalg.norm(T_j[:3, 3] - T0[:3, 3])) if ok_T else float("nan")
+    dR = T_j[:3, :3] @ T0[:3, :3].T if ok_T else np.eye(3)
+    ang = float(np.arccos(np.clip((np.trace(dR) - 1) / 2, -1, 1))) if ok_T else float("nan")
+    share = n_corr / max(len(scan), 1)
+    if not ok_T or n_corr < int(c["min_corr"]) or share < float(c["track_min_fit"]):
+        status = "seed_kept_thin"
+    elif d > float(c["max_shift"]) or ang > np.deg2rad(float(c["max_rot_deg"])):
+        status = "seed_kept_far"
+    else:
+        status = "ok"
+    return T_j, status, (status, n_corr, rms, d, np.degrees(ang)), share
+
+
+class Tracker:
+    """Where the track stands: the two last placed frames, the odometry's
+    correction while its piece runs."""
+    def __init__(self):
+        self.last = self.prev = None                 # (index, pose)
+        self.C = self.cur = None
+
+    def seed(self, j, times, T_odom, piece, c):
+        """(T0, source) for frame j, or (None, None) when lost."""
+        since = times[j] - times[self.last[0]]
+        if piece[j] >= 0 and piece[j] == self.cur and self.C is not None:
+            return self.C @ T_odom[j], "odom"
+        if since <= float(c["bridge_s"]):
+            Tp = self.prev[1] if self.prev else None
+            dt0 = times[self.last[0]] - times[self.prev[0]] if self.prev else 0.0
+            return predict(self.last[1], Tp, dt0, since, c), "track"
+        return None, None
+
+    def placed(self, j, T, T_odom, piece):
+        self.prev, self.last = self.last, (j, T)
+        if piece[j] >= 0:
+            self.C, self.cur = T @ np.linalg.inv(T_odom[j]), piece[j]
+        else:
+            self.C = self.cur = None
+
+
+def track_ahead(A, ref, scans, times, T_odom, piece, j, T_first, t_end, c):
+    """A hypothesis: frame j at T_first, tracked on until t_end or until lost.
+    -> (tracker, {k: (pose, row)}, frames tried, frames placed, summed share)."""
+    tk = Tracker()
+    out = {}
+    T_j, status, row, share = step(A, ref, scans[j], T_first, c)
+    if status != "ok":
+        return tk, out, 1, 0, 0.0
+    tk.placed(j, T_j, T_odom, piece)
+    out[j] = (T_j, row)
+    tried, placed, score = 1, 1, share
+    k = j + 1
+    while k < len(scans) and times[k] <= t_end:
+        T0, src = tk.seed(k, times, T_odom, piece, c)
+        if T0 is None:
+            break                                    # lost: this hypothesis ends here
+        T_k, status, row, share = step(A, ref, scans[k], T0, c)
+        tried += 1
+        if status == "ok":
+            tk.placed(k, T_k, T_odom, piece)
+            out[k] = (T_k, row)
+            placed += 1
+            score += share
+        k += 1
+    return tk, out, tried, placed, score
 
 
 def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print):
@@ -259,81 +333,112 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print):
     the last placed frame's correction) where the odometry runs unbroken
     since that frame; else from the last placed pose moved on at the same
     velocity (tracked on the map through the odometry's breaks); after
-    bridge_s without a placed frame, it is searched for (refind).
-    -> (poses (nan where unplaced), rows, re-find log)."""
+    bridge_s without a placed frame, it is searched for (refind), and when
+    several places fit, each is tracked on for hyp_s and the one that keeps
+    fitting is taken. -> (poses (nan where unplaced), rows, re-find log)."""
     n = len(scans)
     T_out = np.full((n, 4, 4), np.nan)
     rows = [("unplaced", 0, np.nan, np.nan, np.nan)] * n
-    max_rot = np.deg2rad(float(c["max_rot_deg"]))
-    C, cur = None, None
-    last_j = prev_j = None
+    tk = Tracker()
     events = []
     win = float(c["window_s"])
     j = 0
     while j < n:
-        if last_j is None:                           # the start: the anchored piece
+        if tk.last is None:                          # the start: the anchored piece
             if piece[j] != piece0:
                 j += 1
                 continue
             T0, src = C0 @ T_odom[j], "odom"
         else:
-            since = times[j] - times[last_j]
-            if piece[j] >= 0 and piece[j] == cur and C is not None:
-                T0, src = C @ T_odom[j], "odom"
-            elif since <= float(c["bridge_s"]):
-                T0, src = predict(T_out, times, j, last_j, prev_j, c), "track"
-            else:                                    # lost for bridge_s: search
-                centre = predict(T_out, times, j, last_j, prev_j, c)
-                radius = min(4.0, 0.3 + float(c["speed_max"]) * since)
-                yaw = min(180.0, 20.0 + float(c["yaw_rate_max"]) * since)
-                k_prev, k, T, fit, rival = None, j + 1, None, 0.0, 0.0
-                for wl in (win, 2 * win, 4 * win):
-                    k, stack = j, []
-                    inv0 = np.linalg.inv(T_odom[j])
-                    while k < n and times[k] - times[j] <= wl and \
-                            (k == j or (piece[j] >= 0 and piece[k] == piece[j])):
-                        M = inv0 @ T_odom[k]
-                        stack.append(scans[k] @ M[:3, :3].T + M[:3, 3])
-                        k += 1
-                    if k == k_prev:
-                        break
-                    k_prev = k
-                    T, fit, rival, _ = refind(A, ref, np.vstack(stack), centre, radius, yaw, c)
-                    log("    re-find at %.1f s (%.1f s since the last pose, +-%.1f m / +-%.0f deg, "
-                        "%.0f s window): fit %.2f, rival %.2f -> %s"
-                        % (times[j] - times[0], since, radius, yaw, times[k - 1] - times[j], fit,
-                           rival, "placed" if T is not None else "not found"))
-                    if T is not None or fit < float(c["min_fit"]):
-                        break
-                events.append({"t": float(times[j]), "since_s": float(since), "radius_m": radius,
-                               "yaw_deg": yaw, "fit": fit, "rival": rival, "found": T is not None})
-                if T is None:
-                    j = max(k, j + 1)
-                    continue
-                T0, src = T, "refind"
-        T_j, n_corr, rms, _, _ = A.register(ref, scans[j], T0.copy(), c)
-        ok_T = np.isfinite(T_j).all()
-        d = float(np.linalg.norm(T_j[:3, 3] - T0[:3, 3])) if ok_T else float("nan")
-        dR = T_j[:3, :3] @ T0[:3, :3].T if ok_T else np.eye(3)
-        ang = float(np.arccos(np.clip((np.trace(dR) - 1) / 2, -1, 1))) if ok_T else float("nan")
-        share = n_corr / max(len(scans[j]), 1)
-        if not ok_T or n_corr < int(c["min_corr"]) or share < float(c["track_min_fit"]):
-            status = "seed_kept_thin"
-        elif d > float(c["max_shift"]) or ang > max_rot:
-            status = "seed_kept_far"
-        else:
-            status = "ok"
+            T0, src = tk.seed(j, times, T_odom, piece, c)
+        if T0 is None:                               # lost for bridge_s: search
+            since = times[j] - times[tk.last[0]]
+            Tp = tk.prev[1] if tk.prev else None
+            dt0 = times[tk.last[0]] - times[tk.prev[0]] if tk.prev else 0.0
+            centre = predict(tk.last[1], Tp, dt0, since, c)
+            radius = min(4.0, 0.3 + float(c["speed_max"]) * since)
+            yaw = min(180.0, 20.0 + float(c["yaw_rate_max"]) * since)
+            k, T, fit, rival, cands, how = j + 1, None, 0.0, 0.0, [], ""
+            k_prev = None
+            for wl in (win, 2 * win, 4 * win):
+                k, stack = j, []
+                inv0 = np.linalg.inv(T_odom[j])
+                while k < n and times[k] - times[j] <= wl and \
+                        (k == j or (piece[j] >= 0 and piece[k] == piece[j])):
+                    M = inv0 @ T_odom[k]
+                    stack.append(scans[k] @ M[:3, :3].T + M[:3, 3])
+                    k += 1
+                if k == k_prev:
+                    break
+                k_prev = k
+                T, fit, rival, cands = refind(A, ref, np.vstack(stack), centre, radius, yaw, c)
+                if T is not None or fit < float(c["min_fit"]):
+                    break
+            ev = {"t": float(times[j]), "since_s": float(since), "radius_m": radius,
+                  "yaw_deg": yaw, "fit": fit, "rival": rival, "found": False}
+            if T is not None:
+                T0, src, how = T, "refind", "placed"
+            else:
+                # several places fit: track each on; the one that keeps fitting wins
+                hyps = [Tc for f, Tc in cands
+                        if f >= float(c["min_fit"]) and f >= fit - float(c["hyp_tol"])]
+                hyps = hyps[:int(c["hyp_max"])]
+                res = []
+                for Th in hyps:
+                    res.append(track_ahead(A, ref, scans, times, T_odom, piece, j, Th,
+                                           times[j] + float(c["hyp_s"]), c))
+                res.sort(key=lambda r: -r[4])
+                # hypotheses that tracked onto the same place are one
+                uniq = []
+                for r in res:
+                    if r[0].last is None:
+                        continue
+                    Tl = r[0].last[1]
+                    if all(np.linalg.norm(Tl[:3, 3] - u[0].last[1][:3, 3]) > 0.3 or
+                           np.degrees(np.arccos(np.clip((np.trace(Tl[:3, :3] @ u[0].last[1][:3, :3].T)
+                                                         - 1) / 2, -1, 1))) > 10 for u in uniq):
+                        uniq.append(r)
+                res = uniq
+                if res:
+                    b0 = res[0]
+                    s2 = res[1][4] if len(res) > 1 else 0.0
+                    ok_frac = b0[3] / max(b0[2], 1)
+                    span = (max(b0[1]) - j) if b0[1] else 0
+                    if b0[3] >= int(c["hyp_min_frames"]) and ok_frac >= float(c["hyp_min_ok"]) \
+                            and s2 <= float(c["hyp_ratio"]) * b0[4]:
+                        for kk, (Tk, row) in b0[1].items():
+                            T_out[kk], rows[kk] = Tk, row
+                        tk = b0[0]
+                        how = "placed after tracking %d hypotheses: %d of %d frames fit (%.0f s), " \
+                              "next best %.0f%% of its score" % (
+                                  len(res), b0[3], b0[2], times[j + span] - times[j],
+                                  100 * s2 / max(b0[4], 1e-9))
+                        ev.update(found=True, hypotheses=len(res), placed=b0[3])
+                        events.append(ev)
+                        log("    re-find at %.1f s (%.1f s since the last pose): %s"
+                            % (times[j] - times[0], since, how))
+                        j = tk.last[0] + 1
+                        continue
+                    how = "not found (%d hypotheses: best %d of %d frames fit, next best %.0f%% " \
+                          "of its score)" % (len(res), b0[3], b0[2], 100 * s2 / max(b0[4], 1e-9))
+                else:
+                    how = "not found"
+            ev["found"] = T is not None
+            events.append(ev)
+            log("    re-find at %.1f s (%.1f s since the last pose, +-%.1f m / +-%.0f deg): "
+                "fit %.2f, rival %.2f -> %s" % (times[j] - times[0], since, radius, yaw, fit,
+                                                rival, how))
+            if T is None:
+                j = max(k, j + 1)
+                continue
+        T_j, status, row, _ = step(A, ref, scans[j], T0, c)
         if status == "ok":
             T_out[j] = T_j
-            prev_j, last_j = last_j, j
-            if piece[j] >= 0:
-                C, cur = T_j @ np.linalg.inv(T_odom[j]), piece[j]
-            else:
-                C, cur = None, None
-            rows[j] = (status, n_corr, rms, d, np.degrees(ang))
+            tk.placed(j, T_j, T_odom, piece)
+            rows[j] = row
         elif src == "odom":                          # the odometry's pose, as a stopgap
             T_out[j] = T0
-            rows[j] = (status, n_corr, rms, d, np.degrees(ang))
+            rows[j] = row
         j += 1
     return T_out, rows, events
 
