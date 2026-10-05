@@ -6,10 +6,11 @@ anchor, and every depth frame registered to the room's map.
 
   * the depth images are ray-cast from the true camera_link poses (a room with
     a pillar and furniture), so the map explains every pixel;
-  * the odometry seed drifts ~12 cm by 5.5 s; then tracking is lost for
-    1.5 s (no odometry) and at 10 s it resets (1.2 m / 30 deg jump): the
-    depth frames carry the track through both on the map; then 2.5 s without
-    depth frames or odometry: the robot must be searched for and found again
+  * the odometry seed drifts ~12 cm by 5.5 s; then 1.5 s without odometry
+    (a camera dropout: the odometry carries over it, no break) and at 10 s it
+    resets (1.2 m / 30 deg jump): the depth frames carry the track through it
+    on the map; then 2.5 s without depth frames or odometry, after which the
+    odometry has reset again (3.6 m away): the robot must be searched for and found again
     -- and again with every search made ambiguous, by tracking the candidate
     places on until one keeps fitting;
   * the track must come back to the truth (median 0.5 cm, p95 2 cm, 0.6 deg; where
@@ -93,8 +94,9 @@ BLACKOUT = (12.0, 14.5)                # no depth frames and no odometry: found 
 
 
 def odom_broken(t):
-    """As cuVSLAM gives it: a reset at 10 s."""
-    return (rotz(30, (1.2, -0.5, 0)) if t >= 10.0 else np.eye(4)) @ odom(t)
+    """As cuVSLAM gives it: a reset at 10 s, another after the blackout."""
+    T = (rotz(30, (1.2, -0.5, 0)) if t >= 10.0 else np.eye(4)) @ odom(t)
+    return (rotz(-40, (3.0, 2.0, 0)) @ T) if t >= BLACKOUT[1] else T
 
 
 def raycast(T_map_depth):
@@ -233,7 +235,7 @@ def main():
             if s["anchored_piece_seed_to_final_cm"]["at_end"] < 6:
                 f.append("summary: odometry drift at the end %.1f cm (expected ~12 cm)"
                          % s["anchored_piece_seed_to_final_cm"]["at_end"])
-            if s["odometry_pieces"] != 4 or not any(e["found"] for e in s["refind"]):
+            if s["odometry_pieces"] != 3 or not any(e["found"] for e in s["refind"]):
                 f.append("summary: %d pieces, re-finds %s" % (s["odometry_pieces"], s["refind"]))
         # every search ambiguous (a rival must leave half the points more off): the robot
         # is found by tracking the candidate places on, the one that keeps fitting

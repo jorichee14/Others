@@ -19,10 +19,13 @@ Stage 04 runs it for each entry of "04_reference" "tracks":
 
   seed      the odometry (its own world), placed in map by 03's session anchor
             of `anchor_cam` (the board dwell at the start), as 04 places GLIM
-  pieces    the odometry is cut where it breaks: no odometry for over gap_s
-            (tracking lost) or a step over jump_m / jump_deg between two poses
-            (a reset). Within a piece it is locally right; between pieces the
-            relation is unknown.
+  pieces    the odometry is cut where it breaks: a step between two poses the
+            robot cannot have made in the time between them (over jump_m +
+            speed_max x dt, or jump_deg + yaw_rate_max x dt: a reset), or no
+            odometry for over gap_max_s. A shorter dropout (the camera's) is
+            no break: cuVSLAM, with the IMU, carries the robot over it. Within
+            a piece it is locally right; between pieces the relation is
+            unknown.
   per frame each depth frame (every frame_stride-th), back-projected every
             pixel_step-th pixel within range, in the body frame, is registered
             to the map from
@@ -72,9 +75,10 @@ Stage 04 runs it for each entry of "04_reference" "tracks":
             candidates (lidar_near_m) wins -- lidar_min_support poses, every
             other one at most half as many. Never on its own: a candidate only
             chooses among places the depth frames fit.
-  back      from every frame placed again after a loss, the track runs
-            backwards in time over the frames before it, until it meets a
-            placed frame or is lost.
+  back      from every frame placed again after a loss (or after frames that
+            only kept the odometry's pose), the track runs backwards in time
+            over the frames before it, until it meets a frame the map took or
+            is lost; it replaces the odometry's poses where the map takes it.
   rounds    round 2 starts from round 1's poses; the map never changes.
 
 Outputs (odometry/reference_<tag>/), at the depth frames' stamps:
@@ -102,7 +106,7 @@ DEFAULTS = dict(depth_topic="/mobile_2/depth/image_rect_raw",
                 machine="mobile_2", depth_scale=0.001, range=[0.3, 4.0], pixel_step=4,
                 frame_stride=2, scan_voxel=0.05, max_corr=[0.2, 0.1, 0.05], min_corr=300,
                 max_shift=0.5, max_rot_deg=5.0, rounds=2, time_tol=0.05, carry=True,
-                gap_s=0.3, jump_m=0.15, jump_deg=10.0, window_s=2.0,
+                gap_max_s=15.0, jump_m=0.15, jump_deg=10.0, window_s=2.0,
                 speed_max=0.8, yaw_rate_max=60.0, search_step=0.2, yaw_step_deg=6.0,
                 search_voxel=0.10, fit_m=0.05, min_fit=0.6, rival_ratio=2.0, rival_gap=0.05,
                 candidates=8, bridge_s=2.0, predict_s=0.5, track_min_fit=0.5,
@@ -200,12 +204,15 @@ def register_frames(A, ref, scans, T_cur, c, carry):
 
 
 def pieces(o_t, o_T, c):
-    """Piece index per odometry pose: a new piece after a gap or a jump."""
+    """Piece index per odometry pose: a new piece after a step the robot cannot
+    have made in the time (a reset), or a gap over gap_max_s."""
     dt = np.diff(o_t)
     step = np.linalg.norm(np.diff(o_T[:, :3, 3], axis=0), axis=1)
     R = np.einsum("nji,njk->nik", o_T[:-1, :3, :3], o_T[1:, :3, :3])
     ang = np.degrees(np.arccos(np.clip((np.trace(R, axis1=1, axis2=2) - 1) / 2, -1, 1)))
-    brk = (dt > float(c["gap_s"])) | (step > float(c["jump_m"])) | (ang > float(c["jump_deg"]))
+    brk = (dt > float(c["gap_max_s"])) | \
+        (step > float(c["jump_m"]) + float(c["speed_max"]) * dt) | \
+        (ang > float(c["jump_deg"]) + float(c["yaw_rate_max"]) * dt)
     return np.concatenate([[0], np.cumsum(brk)])
 
 
@@ -635,10 +642,12 @@ def fill_back(A, ref, scans, times, T_odom, piece, T_out, rows, c, fixes=None):
     """From every placed frame whose predecessor is not, the track run
     backwards in time (the same tracking, time reversed) until it meets a
     placed frame, is lost, or a board it sees says elsewhere (off_board).
+    Placed: registered to the map; a frame that only kept the odometry's pose
+    (the map did not take it) is placed over when the track back registers it.
     -> how many frames it placed."""
     n = len(scans)
     nt = -times
-    placed = np.isfinite(T_out).all(axis=(1, 2))
+    placed = np.isfinite(T_out).all(axis=(1, 2)) & np.array([r[0] == "ok" for r in rows])
     count = 0
     for j in range(n - 1, 0, -1):
         if not placed[j] or placed[j - 1]:
@@ -712,10 +721,11 @@ def run(P, tr, base, ref, outd):
     inside = (pc_o[i - 1] == pc_o[i]) & (times >= o_t[0]) & (times <= o_t[-1])
     piece = np.where(inside, pc_o[i - 1], -1)
     n_br = int(pc_o[-1])
-    print("    odometry in %d piece(s) (%d break(s): gaps over %.1f s or jumps over %.2f m / "
-          "%.0f deg); %d frames inside breaks, tracked on the map alone"
-          % (n_br + 1, n_br, float(c["gap_s"]), float(c["jump_m"]), float(c["jump_deg"]),
-             int((~inside).sum())))
+    print("    odometry in %d piece(s) (%d break(s): a step over %.2f m + %.1f m/s, %.0f deg + "
+          "%.0f deg/s, or no odometry for over %.0f s); %d frames inside breaks, tracked on the "
+          "map alone" % (n_br + 1, n_br, float(c["jump_m"]), float(c["speed_max"]),
+                         float(c["jump_deg"]), float(c["yaw_rate_max"]), float(c["gap_max_s"]),
+                         int((~inside).sum())))
     Rq, pq = interp_poses(o_t, o_T, traj_quats(o_T), times)
     T_odom = np.tile(np.eye(4), (len(times), 1, 1))
     T_odom[:, :3, :3], T_odom[:, :3, 3] = Rq, pq
