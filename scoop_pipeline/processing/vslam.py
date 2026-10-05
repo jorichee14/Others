@@ -3,7 +3,11 @@
 the merged pass bag, through Isaac ROS cuVSLAM (processing/run_vslam.sh, here
 or in the isaac_ros container), for a robot whose VSLAM was not recorded.
 
-    python scoop_pipeline/processing/vslam.py <pipeline config> [--redo] [--rate R]
+    python scoop_pipeline/processing/vslam.py <pipeline config> [--redo] [--rate R] [--imu]
+
+--imu turns IMU fusion on for this run (the config's enable_imu_fusion
+otherwise); --rate plays the bag slower (0.5: half speed), so the replay
+itself drops no frames.
 
 The "vslam" block of the pipeline config says what to play (defaults: mobile_2's
 RealSense D435i, as isaac_ros_visual_slam's RealSense example):
@@ -177,15 +181,18 @@ def main():
     ap.add_argument("config")
     ap.add_argument("--redo", action="store_true", help="run cuVSLAM again")
     ap.add_argument("--rate", type=float, default=None, help="ros2 bag play --rate")
+    ap.add_argument("--imu", action="store_true", help="IMU fusion on (gyro + accel)")
     a = ap.parse_args()
     from pipeline_common import load_pipeline
     P = load_pipeline(a.config)
     c = settings(P)
+    if a.imu:
+        c["enable_imu_fusion"] = True
     bag = os.path.expanduser(P.dataset["bag"])
     out = out_dir(P, c["machine"])
     rec = os.path.join(out, "odometry")
     traj = traj_path(P, c["machine"])
-    print("bag:  %s\nout:  %s" % (bag, out))
+    print("bag:  %s\nout:  %s\nIMU fusion: %s" % (bag, out, "on" if c["enable_imu_fusion"] else "off"))
     if a.redo and os.path.isdir(out):
         shutil.rmtree(out)
     if not os.path.isfile(os.path.join(rec, "metadata.yaml")):

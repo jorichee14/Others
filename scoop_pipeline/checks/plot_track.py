@@ -2,12 +2,15 @@
 """A robot's track on the map, and where it has no pose.
 
     python scoop_pipeline/checks/plot_track.py <pipeline config> [--track mobile_2_depth]
-        [--other mobile_1_lidar] [--gap 1.0]
+        [--other mobile_1_lidar] [--gap 1.0] [--no-vslam]
 
 Top: the floor plan (the reference map's walls), the track (04's
 traj_<track>.tum) coloured by time, each stretch without a pose as a dashed
 line from the last pose before it to the first after it (labelled with its
-start and length), the other robot's track in grey, the boards.
+start and length), the other robot's track in grey, the boards, and the raw
+cuVSLAM odometry (processing/vslam.py's traj_vslam.txt) in purple, put on the
+map at the track's first pose (the board seed) and never corrected after:
+where it and the track part, one of them is wrong. Time marks every 50 s on both.
 Bottom: the timeline -- when the track has a pose, when not.
 Writes odometry/reference_<tag>/track_<track>.png and lists the stretches.
 """
@@ -25,6 +28,7 @@ sys.path.insert(0, os.path.join(ROOT, "map_stages"))
 
 MISSING = "#d9653b"          # the stretches without a pose
 OTHER = "#9a9a9a"            # the other robot
+VSLAM = "#8a4fbf"            # raw cuVSLAM, placed at the start
 
 
 def main():
@@ -34,6 +38,7 @@ def main():
     ap.add_argument("--track", default="mobile_2_depth")
     ap.add_argument("--other", default="mobile_1_lidar")
     ap.add_argument("--gap", type=float, default=1.0, help="a stretch without a pose: over this many s")
+    ap.add_argument("--no-vslam", action="store_true", help="leave the raw cuVSLAM path out")
     a = ap.parse_args()
     import matplotlib
     matplotlib.use("Agg")
@@ -52,6 +57,19 @@ def main():
     t0 = min([t2[0]] + ([t1[0]] if len(t1) else []))
     xy = T2[:, :2, 3]
 
+    # raw cuVSLAM, put on the map at the track's first pose
+    tv, Vm = np.zeros(0), None
+    if not a.no_vslam and P.cfg.get("vslam"):
+        sys.path.insert(0, os.path.join(ROOT, "processing"))
+        import vslam
+        pv = vslam.traj_path(P)
+        if os.path.exists(pv):
+            tv, V = A.load_traj(pv)
+            k = int(np.argmin(np.abs(tv - t2[0])))
+            Vm = np.einsum("ij,njk->nik", T2[0] @ np.linalg.inv(V[k]), V)
+            print("raw cuVSLAM %s: %d poses, placed at the track's first pose (%.2f s apart)"
+                  % (pv, len(tv), abs(tv[k] - t2[0])))
+
     # the floor plan: map points 0.3-1.6 m above the floor under the track's start
     ref_map = P.ref_file("anchored_map") if P.reference else P.outp("map_final_{tag}_anchored.pcd")
     M = np.asarray(o3d.io.read_point_cloud(ref_map).voxel_down_sample(0.05).points)
@@ -63,7 +81,7 @@ def main():
         h, e = np.histogram(z, bins=np.arange(z.min(), z.max() + 0.1, 0.05))
         floor = float(e[np.argmax(h)] + 0.025)
     W = M[(M[:, 2] > floor + 0.3) & (M[:, 2] < floor + 1.6)]
-    allxy = np.vstack([xy] + ([T1[:, :2, 3]] if len(t1) else []))
+    allxy = np.vstack([xy] + ([T1[:, :2, 3]] if len(t1) else []) + ([Vm[:, :2, 3]] if len(tv) else []))
     lo, hi = allxy.min(0) - 3.0, allxy.max(0) + 3.0
     W = W[(W[:, 0] > lo[0]) & (W[:, 0] < hi[0]) & (W[:, 1] > lo[1]) & (W[:, 1] < hi[1])]
 
@@ -87,6 +105,21 @@ def main():
     if len(t1):
         ax.plot(T1[:, 0, 3], T1[:, 1, 3], color=OTHER, lw=1.0, alpha=0.8, zorder=1,
                 label=a.other.replace("_lidar", "") + " (for reference)")
+    if len(tv):
+        vxy = Vm[:, :2, 3]
+        vc = np.r_[0, np.flatnonzero(np.diff(tv) > a.gap) + 1, len(tv)]
+        for k, (s0, s1) in enumerate(zip(vc[:-1], vc[1:])):
+            ax.plot(vxy[s0:s1, 0], vxy[s0:s1, 1], color=VSLAM, lw=1.2, alpha=0.85, zorder=2,
+                    label="raw cuVSLAM, placed at the start" if k == 0 else None)
+    # time marks every 50 s on the track and on raw cuVSLAM
+    for tt, pts, col in [(t2, xy, "#1f3d7a")] + ([(tv, Vm[:, :2, 3], VSLAM)] if len(tv) else []):
+        for m in np.arange(50.0, tt[-1] - t0, 50.0):
+            k = int(np.argmin(np.abs(tt - t0 - m)))
+            if abs(tt[k] - t0 - m) > 2.0:
+                continue
+            ax.plot(*pts[k], "o", ms=3.5, color=col, zorder=6)
+            ax.annotate("%.0f" % m, pts[k], fontsize=7, color=col, xytext=(3, 3),
+                        textcoords="offset points", zorder=6)
     # the track, cut at the gaps, coloured by time
     cut = np.r_[0, gi + 1, len(t2)]
     norm = plt.Normalize(0, t2[-1] - t0)
