@@ -261,6 +261,27 @@ def main():
                 f.append("hypotheses: %d frames, max %.2f cm, re-finds %s"
                          % (len(ts), max(e), s["refind"]))
 
+        # the same as one pose graph: every frame gets a pose, on the truth
+        c = json.load(open(cfg))
+        c["04_reference"]["tracks"][0].update(method="pgo", rival_gap=0.05)
+        json.dump(c, open(cfg, "w"))
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "04_reference_traj.py"),
+                            cfg, "--track", "mobile_2_depth"], capture_output=True, text=True)
+        print("\n".join(ln for ln in r.stdout.splitlines() if "pose graph" in ln or "map " in ln
+                        or "residuals" in ln or "odometry +" in ln or "across breaks" in ln))
+        if r.returncode:
+            f.append("04 --track, pose graph: " + r.stdout[-1500:] + r.stderr[-2500:])
+        else:
+            ts, Tb = load_traj(os.path.join(od, "traj_mobile_2_depth.tum"))
+            e = [np.linalg.norm(B[:3, 3] - truth(t - T0)[:3, 3]) * 100 for t, B in zip(ts, Tb)]
+            print("pose graph: %d frames, %.2f cm median, %.2f cm p95, %.2f cm max"
+                  % (len(ts), np.median(e), np.percentile(e, 95), max(e)))
+            if len(ts) < 146 or np.median(e) > 1.0 or max(e) > 5.0:
+                f.append("pose graph: %d frames, %.2f cm median, %.2f cm max"
+                         % (len(ts), np.median(e), max(e)))
+        c["04_reference"]["tracks"][0].pop("method")
+        json.dump(c, open(cfg, "w"))
+
         # fill_back: frames 5..19 unplaced, the frames after them placed: the
         # track run backwards fills them
         import importlib

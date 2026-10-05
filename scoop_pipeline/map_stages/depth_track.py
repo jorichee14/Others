@@ -816,6 +816,7 @@ def run(P, tr, base, ref, outd):
     Rq, pq = interp_poses(o_t, o_T, traj_quats(o_T), times)
     T_odom = np.tile(np.eye(4), (len(times), 1, 1))
     T_odom[:, :3, :3], T_odom[:, :3, 3] = Rq, pq
+    T_odom_all = T_odom.copy()                      # over breaks too (the pose graph's)
     T_odom[piece < 0] = np.eye(4)
     T_seed = np.einsum("ij,njk->nik", T_map_odom, T_odom)
     ia = int(np.clip(np.searchsorted(o_t, t_a), 0, len(o_t) - 1))
@@ -857,7 +858,15 @@ def run(P, tr, base, ref, outd):
               % (len(scans_l), nc, lc["z_lo"], lc["z_hi"]))
 
     history, rows, events, T_cur = [], [], [], None
-    for rnd in range(1, int(c["rounds"]) + 1):
+    pgo = c.get("method", "track") == "pgo"
+    if pgo:                                          # one pose graph (depth_pgo.py)
+        import depth_pgo
+        print("\n=== %s: pose graph over every depth frame, anchored to the frozen map ===" % name)
+        k_a = int(np.argmin(np.abs(times - t_a)))
+        T_cur, rows, history = depth_pgo.run_pgo(
+            A, ref, scans, times, T_odom_all, piece, o_t, pc_o, c["_dropout"],
+            T_map_odom @ T_odom_all[k_a], k_a, fix_at, c, refind, from_board, step)
+    for rnd in (range(1, int(c["rounds"]) + 1) if not pgo else ()):
         print("\n=== %s round %d/%d: every depth frame to the frozen map ===" % (name, rnd, int(c["rounds"])))
         t0 = time.time()
         if rnd == 1:
@@ -953,7 +962,9 @@ def run(P, tr, base, ref, outd):
                                                    "at_end": float(drift[-1])}}
     json.dump(summary, open(os.path.join(outd, "summary_%s.json" % name), "w"), indent=2)
     print("\n=== %s ===" % name)
-    print("round | registered | median corr | p95 corr | median residual")
+    print("round | registered | median corr | p95 corr | median residual"
+          + ("   (pose graph: registered = map fixes, corr = how far the stage moved the poses)"
+             if pgo else ""))
     for h in history:
         print("%5d | %5d/%-5d | %8.2f cm | %5.2f cm | %8s cm"
               % (h["round"], h["registered"], h["frames"], h["median_corr_cm"], h["p95_corr_cm"],
