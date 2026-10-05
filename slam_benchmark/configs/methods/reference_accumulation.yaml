@@ -1,0 +1,26 @@
+name: reference_accumulation
+family: baseline
+origin: "[-] not a SLAM system"
+modality: [lidar]
+needs_imu: false
+loop_closure: false
+outputs: [map]
+image: slambench/tools:humble
+
+streams: [mobile_1.ouster]
+
+params:
+  voxel_size: 0.02
+  deskew: true
+
+notes: |
+  Not a method. It accumulates the raw sweeps using the REFERENCE trajectory, so
+  its map is what the sequence's own geometry supports given perfect poses.
+
+  Two things it is for. It is the ceiling for every map row: a method cannot be
+  blamed for a surface no sensor on the platform ever saw, and completeness is
+  only interpretable against this. And it is the check that the reference, the
+  extrinsics and the deskew are mutually consistent — if this cloud is smeared,
+  the fault is in the reference or the calibration and nothing measured against
+  it means anything yet. Run it FIRST, look at it, and do not schedule a single
+  method until it is sharp.

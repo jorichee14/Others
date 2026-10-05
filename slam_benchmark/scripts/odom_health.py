@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Tracked fraction and where it broke, read off a run's console log.
+
+`docs/PLAN.md` stage 1 gates on "at least one backbone tracks >= 90% of the run
+on each platform", and rule 8 says a failure is a result with its number beside
+it. Both need the same thing: not "it failed" but WHEN, for HOW LONG, and with
+what warning on the way in.
+
+RTAB-Map prints an `Odom: quality=N` line per frame, where N is the inlier count
+and 0 means the frame was not registered at all. That series is the measurement.
+
+    python3 scripts/odom_health.py --log /tmp/rtabmap-m1.log
+"""
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+
+import numpy as np
+
+QUALITY = re.compile(r"Odom:\s*quality=(\d+)")
+# The same line carries the callback's own cost and its lag behind the stamp.
+# A per-frame cost above the frame period is a drop mechanism that no replay
+# rate fixes: the callback cannot finish before the next frame lands.
+TIMING = re.compile(r"update time=(\d+\.\d+)s delay=(\d+\.\d+)s")
+# The warnings worth counting, because each one names a different cause and a
+# run usually has only one of them in quantity.
+CAUSES = {
+    "lost: too few inliers": re.compile(r"Not enough inliers"),
+    "lost: no correspondences": re.compile(r"Missing correspondences"),
+    "lost: guess projected outside the image": re.compile(r"All projected points are outside"),
+    "tf: imu unavailable at msg time": re.compile(r"Could not transform IMU msg"),
+    "tf: extrapolation into the future": re.compile(r"require extrapolation into the future"),
+    "tf: frame does not exist": re.compile(r"does not exist"),
+    "sync: rgb/depth stamps far apart": re.compile(r"time difference between rgb and depth"),
+    "imu dropped before init": re.compile(r"Dropping imu data"),
+    # NOT the same thing as losing tracking. The frame never reached the
+    # estimator at all, so it is missing from the denominator below rather than
+    # failing in the numerator -- and a tracked fraction that quietly shrinks its
+    # own denominator is the most flattering error a benchmark can make.
+    "image dropped: no newer IMU sample": re.compile(
+        r"We didn't receive IMU newer than previous image"),
+}
+
+# Not a warning -- a DISCONTINUITY. Each one resumes from the last good pose with
+# large covariance, so the trajectory continues but the motion across the reset
+# was never observed. The count belongs beside the ATE, not buried in a log.
+RESET = re.compile(r"Odometry automatically reset")
+
+# The dropped-frame message carries the BAG stamp of the frame it threw away, so
+# where the drops fall is measurable rather than arguable. Clustered at the ends
+# means the inertial stream simply does not cover the images and the evaluation
+# window is short; spread through the middle means frames are being lost at run
+# time, which is a harness problem and fixable.
+DROP_AT = re.compile(r"receive IMU newer than previous image/scan \((\d+\.\d+)\)")
+
+
+def runs_of_zero(q: np.ndarray) -> list[tuple[int, int]]:
+    """Contiguous (start, length) stretches of quality 0.
+
+    Stretches, not a count, because they break a tracker differently: scattered
+    zeros are frames a system rides through, while one long stretch is where the
+    trajectory leaves the room. Same reasoning as depth_health.py's starved
+    stretches, applied to the estimator instead of the sensor.
+    """
+    out: list[tuple[int, int]] = []
+    start = None
+    for i, v in enumerate(q):
+        if v == 0 and start is None:
+            start = i
+        elif v != 0 and start is not None:
+            out.append((start, i - start))
+            start = None
+    if start is not None:
+        out.append((start, len(q) - start))
+    return out
+
+
+def main() -> int:                                             # pragma: no cover
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--log", required=True)
+    ap.add_argument("--replay-rate", type=float, default=1.0,
+                    help="bag replay rate of the run (run.json records it), so the "
+                         "frame period in WALL time is known")
+    ap.add_argument("--rate", type=float, default=14.9,
+                    help="frames per second, to turn frame indices into seconds")
+    ap.add_argument("--bag-start", type=float, default=None,
+                    help="the bag's first message time, as bag_probe prints it, so "
+                         "dropped-frame times read as run time rather than offsets")
+    ap.add_argument("--odometry-tum", default=None,
+                    help="the run's odometry.tum. Its stamps say exactly WHERE frames are "
+                         "missing, which the log cannot: a frame the estimator never saw "
+                         "leaves no line. Periodic holes are one thing, a uniform trickle "
+                         "another, and the two have different fixes.")
+    ap.add_argument("--expected-frames", type=int, default=None,
+                    help="how many frames the STREAM carries (bag_probe prints it). "
+                         "Without it the tracked fraction is of frames the estimator "
+                         "processed, which is not the same as the fraction of the run.")
+    args = ap.parse_args()
+
+    text = open(args.log, errors="replace").read()
+    q = np.array([int(m) for m in QUALITY.findall(text)])
+    if len(q) == 0:
+        print("no `Odom: quality=` lines in this log — either the method is not "
+              "RTAB-Map or odometry never started", file=sys.stderr)
+        return 2
+
+    tracked = int(np.sum(q > 0))
+    print(f"\n{len(q)} odometry frames, {tracked} tracked "
+          f"({100.0 * tracked / len(q):.1f}% of frames PROCESSED)")
+    if args.expected_frames:
+        print(f"  of the whole run           {tracked}/{args.expected_frames} "
+              f"({100.0 * tracked / args.expected_frames:.1f}%) — "
+              f"{args.expected_frames - len(q)} frames never reached the estimator")
+    if tracked:
+        good = q[q > 0]
+        print(f"  inliers while tracking   median {int(np.median(good))}, "
+              f"p05 {int(np.percentile(good, 5))}, min {int(good.min())}")
+
+    # How it did BEFORE anything went wrong, which a whole-run fraction hides:
+    # a run that is perfect for 12 s and then dead reads the same as one that is
+    # mediocre throughout.
+    zeros = runs_of_zero(q)
+    first_loss = min((s for s, _ in zeros if s > 0), default=len(q))
+    if first_loss < len(q):
+        head = q[:first_loss]
+        print(f"  before the first loss      {first_loss} frames "
+              f"({first_loss / args.rate:.1f} s), "
+              f"{100.0 * np.sum(head > 0) / max(len(head), 1):.1f}% tracked")
+
+    resets = len(RESET.findall(text))
+    print(f"  automatic resets           {resets}"
+          + ("   — each is an unobserved jump; report the count beside the ATE"
+             if resets else ""))
+
+    stretches = sorted(zeros, key=lambda s: -s[1])
+    print(f"  lost-tracking stretches    {len(stretches)}")
+    for start, length in stretches[:5]:
+        print(f"      from frame {start:>5} ({start / args.rate:7.1f} s)  "
+              f"{length:>5} frames ({length / args.rate:6.1f} s)"
+              f"{'   — never recovered' if start + length == len(q) else ''}")
+
+    drops = np.array([float(x) for x in DROP_AT.findall(text)])
+    if len(drops):
+        t0 = args.bag_start or drops.min()
+        rel = np.sort(drops) - t0
+        span = rel.max() if rel.max() > 0 else 1.0
+        bins = np.histogram(rel, bins=10, range=(0.0, span))[0]
+        print(f"\n  {len(drops)} frames dropped before reaching the estimator, "
+              f"spanning {rel.min():.1f}..{rel.max():.1f} s"
+              + ("" if args.bag_start else " (relative to the FIRST drop; pass "
+                 "--bag-start for absolute run time)"))
+        width = max(1, int(60 / max(bins.max(), 1)))
+        for i, n in enumerate(bins):
+            lo, hi = i * span / 10, (i + 1) * span / 10
+            print(f"      {lo:6.1f}-{hi:6.1f}s  {n:>5}  {'#' * min(n * width, 60)}")
+        ends = int(np.sum(rel < 2.0) + np.sum(rel > span - 4.0))
+        print(f"      at the ends (<2 s in, >4 s from the end): {ends} of {len(drops)}")
+        if ends < 0.5 * len(drops):
+            print("      VERDICT: most drops are in the MIDDLE of the run, so stream "
+                  "coverage does not explain them. Frames are being lost at run time — "
+                  "look at the inertial subscriber's queue depth before blaming the "
+                  "recording.")
+        else:
+            print("      VERDICT: the drops sit at the ends, which is the inertial "
+                  "stream not covering the images. Report the shortened window.")
+
+    timing = np.array([(float(a), float(b)) for a, b in TIMING.findall(text)])
+    if len(timing):
+        upd, dly = timing[:, 0], timing[:, 1]
+        wall_period = 1.0 / args.rate / args.replay_rate
+        print(f"\n  per-frame cost (update time)  p50 {np.percentile(upd, 50) * 1e3:6.1f} ms  "
+              f"p90 {np.percentile(upd, 90) * 1e3:6.1f} ms  max {upd.max() * 1e3:6.1f} ms")
+        print(f"  lag behind stamp (delay)      p50 {np.percentile(dly, 50) * 1e3:6.1f} ms  "
+              f"p90 {np.percentile(dly, 90) * 1e3:6.1f} ms  max {dly.max() * 1e3:6.1f} ms")
+        print(f"  frame period at this replay   {wall_period * 1e3:6.1f} ms wall "
+              f"(stream {1000.0 / args.rate:.1f} ms x 1/{args.replay_rate})")
+        over = float(np.mean(upd > wall_period))
+        if over > 0.1:
+            print(f"      VERDICT: {over * 100:.0f}% of frames cost more than the frame period. "
+                  f"The callback cannot keep up and the sync queue sheds frames; slowing the "
+                  f"replay further would help only if the cost is in the estimator, not in "
+                  f"something it publishes per frame.")
+        elif np.percentile(upd, 90) < 0.5 * wall_period:
+            print(f"      VERDICT: the callback is well inside the frame period (p90 "
+                  f"{np.percentile(upd, 90) / wall_period * 100:.0f}% of it). Frames are not "
+                  f"being lost to compute time. The loss is upstream of the callback.")
+
+    if args.odometry_tum:
+        stamps = np.array([float(l.split()[0]) for l in open(args.odometry_tum)
+                           if l.strip() and not l.startswith("#")])
+        if len(stamps) > 2:
+            d = np.diff(np.sort(stamps))
+            period = float(np.median(d))
+            holes = d > 1.5 * period
+            missing = int(np.sum(np.round(d[holes] / period) - 1))
+            t0 = args.bag_start or stamps.min()
+            rel = np.sort(stamps)[:-1][holes] - t0
+            print(f"\n  odometry.tum: {len(stamps)} poses, period {period * 1e3:.1f} ms, "
+                  f"{int(holes.sum())} holes hiding ~{missing} frames")
+            if holes.any():
+                sizes = np.round(d[holes] / period).astype(int)
+                print(f"      hole sizes (frames)      median {int(np.median(sizes))}, "
+                      f"max {int(sizes.max())}")
+                if len(rel) > 3:
+                    spacing = np.diff(rel)
+                    print(f"      spacing between holes    median {np.median(spacing):.2f} s, "
+                          f"p10 {np.percentile(spacing, 10):.2f} s, "
+                          f"p90 {np.percentile(spacing, 90):.2f} s")
+                span = float((stamps.max() - t0)) or 1.0
+                bins = np.histogram(rel, bins=10, range=(0.0, span))[0]
+                width = max(1, int(50 / max(bins.max(), 1)))
+                for i, n in enumerate(bins):
+                    lo, hi = i * span / 10, (i + 1) * span / 10
+                    print(f"      {lo:6.1f}-{hi:6.1f}s  {n:>4}  {'#' * min(n * width, 50)}")
+                if len(rel) > 3 and np.percentile(spacing, 90) / max(np.percentile(spacing, 10), 1e-6) < 2.5:
+                    print(f"      VERDICT: holes recur at a near-constant ~{np.median(spacing):.1f} s "
+                          f"interval. Something PERIODIC in the pipeline is starving the "
+                          f"estimator's input queue -- a 1 Hz mapping update that stalls the "
+                          f"process is the usual culprit; the fix is queue depth, not tuning.")
+                else:
+                    print("      VERDICT: holes are irregular. Look at the load or the transport "
+                          "(large images over DDS loopback inside a container with a small "
+                          "/dev/shm drop fragments silently) before the estimator.")
+
+    print("\n  warnings seen")
+    for name, pat in CAUSES.items():
+        n = len(pat.findall(text))
+        if n:
+            print(f"      {name:<42} {n}")
+
+    # The gate, stated rather than implied.
+    # The gate is on the RUN, so it uses the run's frame count when one is known.
+    # Scoring against frames the estimator happened to accept would let a method
+    # pass by dropping the hard ones.
+    denominator = args.expected_frames or len(q)
+    frac = tracked / denominator
+    if not args.expected_frames:
+        print("\n  NOTE: --expected-frames not given, so the gate below is over "
+              "PROCESSED frames. A method that drops frames before the estimator "
+              "sees them scores better on that than it deserves.")
+    if frac >= 0.90:
+        print(f"\n  GATE: PASS — {frac * 100:.1f}% tracked, at or above the 90% "
+              f"stage-1 bar.")
+    else:
+        worst = stretches[0] if stretches else (0, 0)
+        print(f"\n  GATE: FAIL — {frac * 100:.1f}% tracked. The longest gap starts at "
+              f"{worst[0] / args.rate:.1f} s and runs {worst[1] / args.rate:.1f} s. "
+              f"Per rule 8 that is a result: report it with the number, and read the "
+              f"warning counts above for which cause dominates before changing anything.")
+    return 0
+
+
+if __name__ == "__main__":                                     # pragma: no cover
+    raise SystemExit(main())

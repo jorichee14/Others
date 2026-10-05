@@ -1,0 +1,36 @@
+# Tier 0. The same system with its loop closure switched on.
+name: zed_sdk_pose
+family: recorded_baseline
+origin: "[I] closed-source, shipped with the camera"
+modality: [rgbd]                # the STREAM it is associated with. It DID use
+                                # the IMU internally -- see uses_imu_internally --
+                                # but we supply nothing, so it consumes no imu
+                                # stream and must not claim an inertial modality
+                                # the evaluator would then try to match.
+uses_imu_internally: true       # the manufacturer's, with their extrinsic and
+                                # their tuning. Not ours, and not ablatable.
+coupling: closed
+needs_imu: false
+loop_closure: true              # spatial / area memory
+outputs: [trajectory]
+reference_impl: https://www.stereolabs.com/docs/positional-tracking
+image: null
+kind: recorded_baseline
+source_topic: /mobile_1/zed/pose          # 2200 msgs, 14.1 Hz
+
+streams: [mobile_1.zed_rgbd]
+
+params: {}
+
+notes: |
+  Paired with zed_sdk_odom, this is a free loop-closure ablation on a system
+  nobody had to build: same camera, same run, same firmware, one feature
+  toggled. If the two agree to within the reference's noise, the route did not
+  revisit and I6 is answered from the baselines alone — which would also mean
+  RTAB-Map's appearance loop closure has nothing to fire on and its row is
+  measuring odometry.
+
+  92 fewer messages than zed/odom (2200 vs 2292). Worth a look rather than an
+  assumption: a pose topic that starts late is the signature of a tracker that
+  needed frames to initialise, and if so, that is the ZED's own answer to the
+  excitation question I15 asks.

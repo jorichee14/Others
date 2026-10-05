@@ -1,0 +1,41 @@
+name: fast_lio2
+family: lidar_inertial_odometry
+origin: "[O]"
+modality: [lidar, imu]
+needs_imu: true                 # refuses to run until streams.*.imu.present is resolved
+loop_closure: false
+outputs: [trajectory, map]
+reference_impl: https://github.com/hku-mars/FAST_LIO
+image: slambench/fast-lio2:humble
+
+streams: [mobile_1.ouster]
+imu_by_agent:
+  mobile_1: mobile_1.imu
+
+params:
+  lid_type: 3                   # ouster
+  scan_line: 128
+  blind: 0.3                    # default 4.0 m, which indoors is most of the room
+  cube_side_length: 50.0        # default 2000.0
+  det_range: 20.0               # default 100.0
+  filter_size_surf: 0.10        # default 0.5
+  filter_size_map: 0.10         # default 0.5
+  point_filter_num: 1           # default 3; the room is small, keep the returns
+  # Both of these are per-IMU and neither is in the bag. Measure them from a
+  # stationary segment (Allan variance, or the simple stationary-variance
+  # estimate) rather than copying a value from another rig's config.
+  gyr_cov: null
+  acc_cov: null
+  extrinsic_T_imu_lidar: null   # REQUIRED: IMU <- LiDAR. Not published in the bag.
+  extrinsic_R_imu_lidar: null
+
+notes: |
+  Only runs if the recording carries an IMU. If it does not, this whole family
+  (FAST-LIO2, Point-LIO, GLIM, LIO-SAM, and every VIO entry) is out, the
+  shortlist collapses to the IMU-free block, and that is a finding about the
+  RECORDING to fix before the next one, not a gap to paper over by feeding a
+  synthetic IMU.
+
+  The extrinsic between the IMU and the Ouster is a calibration this dataset does
+  not supply. A wrong one costs FAST-LIO2 more than it costs KISS-ICP, so an
+  unfavourable result here with a guessed extrinsic is not a result.

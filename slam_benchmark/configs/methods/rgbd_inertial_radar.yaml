@@ -1,0 +1,57 @@
+# Tier 4. The integration, and the claim phase 6 is actually testing.
+name: rgbd_inertial_radar
+family: fusion
+origin: "[O] the combination is not standard; that is the contribution"
+modality: [rgbd]
+coupling: loose
+needs_imu: true
+loop_closure: true              # inherited from the visual source
+outputs: [trajectory, map]
+reference_impl: null            # assembled here from GTSAM factors; no upstream
+image: slambench/fusion:humble
+
+streams: [mobile_1.zed_rgbd]
+imu_by_agent:
+  mobile_1: mobile_1.imu
+
+params:
+  # Pose graph: the visual system's relative poses as between-factors, IMU
+  # preintegration between them, radar ego-velocity as unary velocity factors on
+  # the navigation state. Same architecture as track C's fusion stage — reuse
+  # it rather than writing a second one.
+  visual_source: null           # REQUIRED: the tier-3 winner's run directory
+  radar_source: null            # REQUIRED: radar_inertial_odometry's velocity series
+  velocity_factor_sigma_mps: 0.15
+  optimiser: isam2
+
+notes: |
+  LOOSE ON PURPOSE. Adding a velocity factor inside ORB-SLAM3 means modifying
+  ORB-SLAM3; doing it in a pose graph outside means composing three things that
+  already work. The loose version is a week cheaper and it answers the question.
+  If it shows a gain worth chasing, the tight version becomes a justified piece
+  of work rather than a speculative one.
+
+  EXPECTATION REVISED 2026-09-17, AND THE REVISION IS THE POINT. This note used
+  to say that on a well-lit 156 s lab lap vision does not fail much, so expect no
+  whole-run gain. That was wrong about this room: the walls are REFLECTIVE, the
+  ZED's stereo depth drops out, and the recorded ZED odometry lands ~6 m from the
+  reference on a 16.6 m room. Vision fails here, measurably.
+
+  So this row moves from "probably shows nothing" to "plausibly the thing that
+  rescues the run". mmWave does not care about optical reflectivity, and radar
+  ego-velocity bounds exactly the quantity that runs away when a visual tracker
+  loses its depth. Quantify the dropout with scripts/depth_health.py first, so
+  any gain is attributed to the failure it repaired.
+
+  Which is why the claim is made somewhere narrower and defensible. Radar
+  ego-velocity bounds VELOCITY drift, and it can only pay where vision was
+  actually starved. Use the two per-frame instruments that already exist —
+  slambench/observability.py for the geometric side, ORB feature count and
+  spread for the photometric one — to select the frames where the camera had
+  little to work with, and report this row's gain over its source ON THOSE
+  SEGMENTS, beside the whole-run number and labelled as the narrower claim.
+
+  The starved segments were the doubtful part of this plan and they are no
+  longer doubtful -- the reflective walls supply them. Report BOTH numbers
+  anyway: whole-run, and on the starved segments. The gap between the two is
+  what says whether radar repaired the failure or merely coincided with it.

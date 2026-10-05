@@ -1,0 +1,7 @@
+runs/
+results/
+*.ply
+*.pcd
+*.tum
+__pycache__/
+*.pyc

@@ -1,0 +1,30 @@
+# NOT A SLAM METHOD. The construction's rung v1 (docs/STAGE2_GRAPH.md), written
+# by scripts/build_pseudo_gt.py from an existing backbone run. This file exists
+# so the OUTPUT can be scored by the same evaluator, in the same tables, with
+# the same tiers as every backbone -- rule 5 applies to the pseudo-GT harder
+# than to anything else in the repo.
+name: pseudo_gt_v1
+family: construction
+origin: "[this repo]"
+modality: [rgbd]
+coupling: none
+needs_imu: false
+loop_closure: false
+outputs: [trajectory]
+metric_scale: true
+# backbone odometry factors only. The no-anchor floor, and the wiring gate: it
+# must reproduce the backbone it was given.
+streams: [mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
+# build_pseudo_gt.py re-expresses the backbone in the agent's reference frame
+# BEFORE building the graph (so the board observations, which are in that
+# frame, can be compared), and writes the result in that frame. Identity here,
+# on purpose, and the evaluator applies it exactly once (rule 6).
+extrinsic_by_stream:
+  mobile_1.zed_rgbd:        {x: 0.0, y: 0.0, z: 0.0, roll: 0.0, pitch: 0.0, yaw: 0.0}
+  mobile_2.realsense_rgbd:  {x: 0.0, y: 0.0, z: 0.0, roll: 0.0, pitch: 0.0, yaw: 0.0}
+notes: |
+  Every number from this row carries run.json's "construction" block: which
+  backbone run it was built from, the odometry sigmas and where they came
+  from, which boards were consumed and which held out. A tier-2 residual
+  against a CONSUMED board is self-agreement, not evidence; only a held-out
+  board and the LiDAR reference are independent here.

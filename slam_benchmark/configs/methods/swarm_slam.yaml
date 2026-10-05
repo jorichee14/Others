@@ -1,0 +1,43 @@
+name: swarm_slam
+family: collaborative_slam
+origin: "[O/I] decentralised multi-robot SLAM; front-ends for LiDAR, stereo and
+         RGB-D, which is why it is the one entry that can take this pair as it is"
+modality: [lidar, rgbd]
+needs_imu: false
+loop_closure: true                 # including INTER-ROBOT, which is the point
+outputs: [trajectory, map]
+reference_impl: https://github.com/lajoiepy/Swarm-SLAM
+image: slambench/swarm-slam:humble
+
+track: collaborative
+# Heterogeneous by construction: agent 1 feeds the LiDAR front-end, agent 2 the
+# RGB-D one, and the inter-robot loop closures have to be found ACROSS them.
+# That cross-modal descriptor match is the hard part and the reason this is the
+# interesting row rather than a formality.
+streams: [mobile_1.ouster, mobile_2.realsense_rgbd]
+agent_roles: {mobile_1: lidar_frontend, mobile_2: rgbd_frontend}
+
+params:
+  # Indoor re-parameterisation, same discipline as the single-agent configs:
+  # every value that moved from the published default names the default.
+  nb_odom_edges: 50
+  max_nb_matched_frames: 10
+  detection_threshold: 0.7
+  # Place recognition across a LiDAR and a depth camera is the assumption this
+  # whole row rests on. If it does not fire, the result is not "Swarm-SLAM is
+  # bad" — it is "no inter-robot loop closure was found", which is a different
+  # sentence and must be reported as one. Log the count.
+  log_inter_robot_matches: true
+  sensor_type_mobile_1: lidar
+  sensor_type_mobile_2: rgbd
+
+notes: |
+  Decentralised: each agent runs its own front-end and the two exchange sparse
+  descriptors. That matches the recording (two independent machines, two clocks)
+  far better than a centralised backend would, and it means the inter-robot
+  transform is ESTIMATED rather than supplied — which is the only way the
+  relative-pose metric means anything.
+
+  Report the inter-robot loop closure count beside every number. Zero closures
+  with a good relative-pose error would mean the two frames happened to agree,
+  not that the collaboration worked.

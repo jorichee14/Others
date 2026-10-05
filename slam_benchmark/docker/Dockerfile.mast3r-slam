@@ -1,0 +1,98 @@
+# The learned backbone. Not a ROS node, so this image does not descend from
+# slambench/base -- it needs nvcc for MASt3R-SLAM's CUDA extension, and ROS is
+# installed on top of CUDA rather than the other way round. rosbag2 is still
+# required: the bag is the input, and unrolling it is step 1 of the run.
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+
+SHELL ["/bin/bash", "-lc"]
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl gnupg2 lsb-release ca-certificates git build-essential cmake python3-pip \
+    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+         -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/ros2.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-ros-base ros-humble-rosbag2-storage-mcap ros-humble-rosbag2-py \
+    && rm -rf /var/lib/apt/lists/*
+
+# Ubuntu 22.04's pip 22 / setuptools 59 run setup.py with a RELATIVE __file__;
+# thirdparty/mast3r/setup.py derives file:// URIs from it and dies with
+# "relative path can't be expressed as a file URI". Modern setuptools passes an
+# absolute path. Upgraded first, so the pinned source builds as upstream expects.
+RUN pip3 install --no-cache-dir -U pip setuptools wheel
+# One numpy for the whole image. thirdparty/in3d pins numpy 1.26, and the
+# unpinned installs before it had pulled OpenCV 5 and plyfile 1.1 built for
+# numpy 2 -- pip printed the conflict and carried on, and `import cv2` would
+# have failed at run time. A constraints file makes every pip call in this
+# image resolve against numpy<2, including the vendored packages' own deps.
+RUN printf 'numpy<2\nopencv-python<4.11\nopencv-python-headless<4.11\nplyfile<1.1\n' \
+        > /opt/pip-constraints.txt
+ENV PIP_CONSTRAINT=/opt/pip-constraints.txt
+RUN pip3 install --no-cache-dir \
+        torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+RUN pip3 install --no-cache-dir numpy pillow pyyaml plyfile opencv-python-headless tqdm natsort
+# thirdparty/in3d depends on `imgui @ file://.../thirdparty/pyimgui`, a git
+# checkout of pyimgui that carries only the Cython .pyx sources: imgui/core.cpp
+# and core.h are GENERATED, and without Cython its setup.py silently falls back
+# to compiling the .cpp files that are not there ("fatal error: core.h: No such
+# file or directory"). pyimgui lists Cython in its build-system requires, which
+# --no-build-isolation (needed below, see there) tells pip to ignore. So it is
+# installed here, at pyimgui's own pin.
+RUN pip3 install --no-cache-dir "Cython>=0.24,<0.30"
+
+# Pinned to a COMMIT. MASt3R-SLAM publishes no release tags, and a moving `main`
+# is a manifest that lies about what produced the number in the table.
+ARG MAST3R_SLAM_REF=e6f4e3d474fad0e11f561482012be864ba8c3f17
+# Build for the architectures this benchmark is likely to run on; set it
+# explicitly because the build host has no GPU to detect one from.
+ARG TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0"
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+COPY docker/mast3r-slam/patch_setup.py /opt/slambench/patch_setup.py
+RUN git clone --recursive https://github.com/rmurai0610/MASt3R-SLAM.git /opt/MASt3R-SLAM && \
+    cd /opt/MASt3R-SLAM && git checkout ${MAST3R_SLAM_REF} && \
+    git submodule update --init --recursive && \
+    python3 /opt/slambench/patch_setup.py setup.py && \
+    pip3 install --no-cache-dir --no-build-isolation -e thirdparty/mast3r && \
+    pip3 install --no-cache-dir --no-build-isolation -e thirdparty/in3d && \
+    pip3 install --no-cache-dir --no-build-isolation -e .
+# --no-build-isolation on all three: the curope CUDA extension imports torch in
+# its setup.py, and an isolated build environment does not have the torch that
+# was installed above. setup.py is patched first (patch_setup.py): it asks
+# torch for a GPU to decide whether to compile the CUDA backend, and `docker
+# build` never has one; and its gencode list stops at sm_86. The price of no
+# isolation is that every build-system requirement of every
+# vendored package must already be installed -- Cython for pyimgui, above.
+
+# Checkpoints are baked in, because the run happens with --network none. An image
+# that downloads its weights at run time is an image whose result cannot be
+# reproduced once the URL moves.
+RUN mkdir -p /opt/MASt3R-SLAM/checkpoints && cd /opt/MASt3R-SLAM/checkpoints && \
+    base=https://download.europe.naverlabs.com/ComputerVision/MASt3R && \
+    curl -fsSLO $base/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth && \
+    curl -fsSLO $base/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_trainingfree.pth && \
+    curl -fsSLO $base/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_codebook.pkl \
+    || curl -fsSLO $base/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_codebook.pkl
+
+# thirdparty/mast3r's setup.py requires the full `opencv-python`, not the
+# headless build, and that one links libGL: `import cv2` died with
+# "libGL.so.1: cannot open shared object file" on the first run. The runtime
+# libraries it needs are added HERE, after the 20-minute compile and the
+# checkpoint download, so those layers stay cached.
+# libusb: mast3r_slam/dataloader.py imports pyrealsense2 unconditionally, even
+# for a folder of images. check_imports.py then imports every module main.py
+# imports, so the next missing library fails here rather than after the bag
+# has been unrolled.
+COPY docker/mast3r-slam/check_imports.py /opt/slambench/check_imports.py
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libusb-1.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && cd /opt/MASt3R-SLAM && python3 /opt/slambench/check_imports.py main.py
+
+COPY docker/common/bag_to_frames.py /opt/slambench/bag_to_frames.py
+COPY docker/common/restamp_tum.py   /opt/slambench/restamp_tum.py
+COPY docker/mast3r-slam/run.sh      /opt/slambench/run.sh
+RUN chmod +x /opt/slambench/run.sh && mkdir -p /work
+
+ENV SLAM_RATE=1.0
+ENTRYPOINT ["/opt/slambench/run.sh"]

@@ -1,0 +1,35 @@
+name: vdbfusion
+family: fusion
+origin: "[-] not a SLAM system: the common map pipeline"
+modality: [lidar, rgbd]
+needs_imu: false
+loop_closure: false
+outputs: [map]
+reference_impl: https://github.com/PRBonn/vdbfusion
+image: slambench/tools:humble
+
+streams: [mobile_1.ouster, mobile_1.zed_rgbd, mobile_2.realsense_rgbd]
+
+params:
+  voxel_size: 0.02                 # = eval.resolution_m; the map's own floor
+  sdf_trunc: 0.10
+  space_carving: false             # ON would delete thin structure the reference
+                                   # map keeps, and S3 would score that as a miss
+  min_weight: 2.0
+
+notes: |
+  Not a method and not a baseline. It is the NORMALISER for S3.
+
+  Methods emit maps in incomparable representations — surfels, an ikd-Tree, an
+  accumulated sweep set, a TSDF at whatever voxel the author chose. Scoring those
+  against one reference measures the representation at least as much as the SLAM.
+  So S3 takes each method's TRAJECTORY, fuses the raw sensor data through this
+  one pipeline at a fixed voxel, and scores that: trajectory quality expressed in
+  geometry, with fusion held constant.
+
+  A method's native map is still reported, as a second column. A native map that
+  beats the common fusion is a real result about that representation — it is just
+  not the comparison S3's primary column is making.
+
+  `voxel_size` is tied to eval.resolution_m and must not drift from it: fusing at
+  5 cm and scoring F@2cm measures the fusion grid.

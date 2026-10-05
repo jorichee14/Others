@@ -1,0 +1,31 @@
+FROM slambench/base:humble
+
+# imu-filter-madgwick is here because RTAB-Map needs an ORIENTATION on the IMU
+# message and will not compute one. Its CoreWrapper rejects every sample with
+# "IMU received doesn't have orientation set, it is ignored", and with
+# wait_imu_to_init the odometry then never starts, so the mapping node starves
+# and reports "Did not receive data since 5 seconds" -- one root cause wearing
+# two error messages. The ZED publishes a vendor-fused orientation; the
+# RealSense in this bag publishes raw gyro and accelerometer only. The filter
+# is started ONLY for a stream the config declares has no orientation.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-rtabmap-ros ros-humble-rtabmap-launch \
+        ros-humble-imu-filter-madgwick \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/rtabmap/launch.sh /opt/slambench/launch.sh
+COPY docker/rtabmap/post.sh   /opt/slambench/post.sh
+RUN chmod +x /opt/slambench/launch.sh /opt/slambench/post.sh
+
+# Under rtabmap.launch.py's default namespace these are /rtabmap/odom and
+# /rtabmap/cloud_map; the latter needs Grid/3D true, which the method config sets.
+# The INCREMENTAL estimate. Kept as odometry.tum -- it is the drift floor the
+# loop-closing row has to beat, and it costs nothing to record.
+ENV SLAM_POSE_TOPIC=/rtabmap/odom
+ENV SLAM_POSE_TYPE=nav_msgs/msg/Odometry
+# The OPTIMISED graph, which is what `loop_closure: true` in the method config
+# actually refers to. This one becomes trajectory.tum.
+ENV SLAM_PATH_TOPIC=/rtabmap/mapPath
+ENV SLAM_MAP_TOPIC=/rtabmap/cloud_map
+# RTAB-Map takes the depth image directly. No cloud bridge.
+ENV SLAM_NEEDS_CLOUD=0

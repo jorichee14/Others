@@ -1,0 +1,34 @@
+FROM slambench/base:humble
+
+# Pinned to a tag, not a branch: a tag that moves is a manifest that lies.
+ARG KISS_ICP_REF=v1.0.0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libeigen3-dev libtbb-dev ninja-build python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+# The Python package, not the ROS wrapper. It binds the same C++ core; the
+# difference is that run_offline.py hands it every frame from the bag in turn,
+# where the node's best-effort subscription dropped whatever arrived while a
+# slow frame was registering (155-566 of 2288 frames over four runs).
+# The build backend is pinned too: v1.0.0's pyproject writes
+# `cmake.minimum-version`, which scikit-build-core >= 0.8 rejects (renamed to
+# `cmake.version`). With build isolation pip fetches the newest backend and the
+# pinned source fails to build; so the backend is installed first, at the
+# version the tag was written against, and the build runs without isolation.
+# `[pyproject]`: in the 0.7 series pyproject-metadata is an extra the backend
+# would have requested at build time under isolation; without isolation nobody
+# asks, and the metadata step dies on the import. The import is checked here.
+RUN pip3 install --no-cache-dir "scikit-build-core[pyproject]<0.8" pybind11 && \
+    python3 -c "import pyproject_metadata, scikit_build_core, pybind11" && \
+    git clone --depth 1 --branch ${KISS_ICP_REF} https://github.com/PRBonn/kiss-icp.git /opt/kiss-icp && \
+    pip3 install --no-cache-dir --no-build-isolation /opt/kiss-icp/python plyfile && \
+    rm -rf /opt/kiss-icp/python/build
+
+COPY docker/kiss-icp/run_offline.py /opt/slambench/run_offline.py
+COPY docker/kiss-icp/run.sh         /opt/slambench/run.sh
+RUN chmod +x /opt/slambench/run.sh
+
+# Offline: no pose topic, no recorder, no bridge. The runner deprojects depth
+# itself with depth_to_cloud.deproject (same code, same stride) on rgbd and
+# reads PointCloud2 on lidar.
+ENV SLAM_NEEDS_CLOUD=0
+ENTRYPOINT ["/opt/slambench/run.sh"]

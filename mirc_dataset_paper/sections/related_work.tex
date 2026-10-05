@@ -1,0 +1,59 @@
+%=======================================================================
+% Bib keys: s3e, cumulti, opv2v, v2v4real, dairv2x, kitti, nuscenes, waymo,
+%           inscope, deepsense6g
+%=======================================================================
+\subsection{Collaboration Geometry in Multi-Agent Datasets}
+\label{sec:related}
+
+A collaborative-perception benchmark reports accuracy obtained under a
+collaboration geometry---which nodes could see an object, how well, and from
+what relative viewpoint---yet that geometry is seldom a released quantity.
+Datasets differ along two axes: whether the geometry is deliberate, and whether
+it is measured per observation or merely described. \emph{Paradigm-driven
+multi-robot collection} makes it deliberate: S3E~\cite{s3e} names four
+collaborative trajectory paradigms and grades each against loop-closure
+opportunity with filled and open circles, and CU-Multi~\cite{cumulti} treats
+inter-trajectory overlap as a controlled variable. The grading, however, is an
+assertion about a run rather than a quantity attached to a frame, and the
+overlap is obtained by re-running one platform four times, so no instantaneous
+geometry exists to measure; both, moreover, collaborate between sensors at a
+common height, leaving the elevated-to-ground asymmetry absent by construction.
+\emph{Collaborative perception datasets} make it emergent: relative geometry
+follows from how the collecting vehicles happened to drive, whether simulated
+\cite{opv2v} or recorded on public roads \cite{v2v4real}, or from sensor
+placement and the ego's approach at an instrumented site \cite{dairv2x}.
+Per-frame poses are necessarily released, feature warping depending on them, so
+relative placement is recoverable; what is absent is the condition itself---no
+field states whether the ego's view of an object was blocked, whether a
+partner's was clear, or at what angle the two observed it, and in the recorded
+sets no dense scene model accompanies the release from which to reconstruct it.
+Splits are cut by town, road type, or scene, never by geometry, and where
+geometry does enter it enters as a nuisance to be corrected: pose error is
+modelled, injected, and compensated, while the geometry that error perturbs is
+not itself an axis of evaluation. \emph{Single-agent benchmarks} come closest to
+releasing the condition---occlusion and truncation flags \cite{kitti}, binned
+visibility \cite{nuscenes}, and per-annotation return counts that exclude
+objects from scoring or assign them to a lower difficulty tier
+\cite{nuscenes,waymo}---but compute them for one ego and collapse them into a
+single tier mixing occlusion, truncation, and a range proxy, so that an object
+the ego could not see is no longer distinguishable from one it could see but
+returned too little evidence for. Measured collaboration geometry itself appears
+only in reduced form: an occlusion degree over roadside LiDAR at a fixed vantage
+between sensors of common height, summarised per dataset rather than per frame
+\cite{inscope}; or blockage measured at scale but inferred from received power
+\cite{deepsense6g}, so that the label and the signal it explains are not
+independent.
+
+The field thus faces a trade: geometry that is deliberate is described rather
+than measured, and geometry that is measured is computed for a single ego,
+summarised away, or derived from the very signal it is meant to explain. Our
+dataset breaks this trade. Trajectory paradigms make the geometry deliberate;
+occlusion, visibility and evidence sufficiency kept distinct, aspect angle,
+co-visibility, and Fresnel clearance are then measured per (frame, node,
+object); each label is validated against a measurement that did not enter its
+computation---sensor returns within the annotated box for occlusion, RSSI for
+link state; and all of it is released as columns keyed to the recordings, so
+that an evaluation can be conditioned on the situation that produced it. To our
+knowledge, no existing collaborative dataset provides this combination. The
+contribution is the axis and its validation rather than scale: the release is
+smaller than every dataset named above.
