@@ -4,8 +4,10 @@ tracks) and 1.5-15 m apart, mobile_1's scan in map, and around mobile_2's
 pose: the points the reference map does not have (no height band, no
 clustering) -- how many, at what height, how far from mobile_2's camera --
 and whether the map stands between them (the share of the line of sight that
-passes through mapped surfaces). Also the floor under mobile_2 (the densest
-layer of map points below its camera).
+passes through mapped surfaces); and the nearest robot-height cluster of them
+within 4 m, as an offset from the track (steady over time: that is mobile_2,
+and the track is off by it). Also the floor under mobile_2 (the densest layer
+of map points below its camera).
 
     python scoop_pipeline/checks/lidar_sees_robot.py <pipeline config> [--samples 40]
 """
@@ -48,10 +50,15 @@ def main():
     c0 = T2[0][:3, 3]
     near = np.linalg.norm(M[:, :2] - c0[:2], axis=1) < 1.5
     z = M[near & (M[:, 2] < c0[2]) & (M[:, 2] > c0[2] - 3.0), 2]
+    floor = c0[2] - 0.8
     if len(z):
         h, e = np.histogram(z, bins=np.arange(z.min(), z.max() + 0.05, 0.05))
+        floor = float(e[np.argmax(h)] + 0.025)
         print("mobile_2's camera at z=%.2f; map points below it within 1.5 m: densest layer "
-              "z=%.2f (%d pts), lowest %.2f" % (c0[2], e[np.argmax(h)] + 0.025, h.max(), z.min()))
+              "z=%.2f (%d pts), lowest %.2f" % (c0[2], floor, h.max(), z.min()))
+    import lidar_sightings as LS
+    band = dict(LS.DEFAULTS, z_lo=floor + 0.05, z_hi=c0[2] + 0.3, max_size_m=1.5, min_points=5)
+    print("robot height band for the clusters: %.2f..%.2f m" % (band["z_lo"], band["z_hi"]))
 
     # times both are placed and 1.5-15 m apart
     want = []
@@ -69,9 +76,11 @@ def main():
     by_i = {p[1]: p for p in pick}
     s01 = P.cfg.get("01_build_map", {})
     bag = os.path.expanduser(P.dataset["bag"])
-    print("\n%8s %6s %7s %8s %15s %10s %8s" % ("t s", "dist m", "offmap", "near2 n", "z range", "nearest m",
-                                              "blocked"))
-    rows = []
+    print("\n%8s %6s %7s %8s %15s %10s %8s   %s" % ("t s", "dist m", "offmap", "near2 n", "z range",
+                                                   "nearest m", "blocked",
+                                                   "nearest robot-height cluster within 4 m: "
+                                                   "dx, dy from the track (n)"))
+    rows, offs = [], []
     t0 = t2[0] - 21.0
     for j1, W in iter_scans(bag, "/mobile_1/ouster/points", t1, float(s01.get("time_tol", 0.04)),
                             0.8, 25.0, T1, bool(s01.get("deskew", True)),
@@ -90,16 +99,29 @@ def main():
         L = o + s * (np.r_[p2[:2], p2[2]] - o)
         ld, _ = tree.query(L, distance_upper_bound=0.1)
         blocked = float(np.isfinite(ld).mean())
+        cl = LS.clusters(off[r <= 4.0], band)
+        cs = "-"
+        if cl:
+            k = int(np.argmin([np.hypot(x - p2[0], y - p2[1]) for x, y, _ in cl]))
+            x, y, nn = cl[k]
+            cs = "%+.2f, %+.2f  (%d)" % (x - p2[0], y - p2[1], nn)
+            offs.append((t - t0, x - p2[0], y - p2[1]))
         rows.append((len(nb), blocked))
-        print("%8.1f %6.1f %7d %8d %15s %10s %7.0f%%"
+        print("%8.1f %6.1f %7d %8d %15s %10s %7.0f%%   %s"
               % (t - t0, d, len(off), len(nb),
                  "%.2f..%.2f" % (nb[:, 2].min(), nb[:, 2].max()) if len(nb) else "-",
-                 "%.2f" % r.min() if len(r) else "-", 100 * blocked))
+                 "%.2f" % r.min() if len(r) else "-", 100 * blocked, cs))
         if not by_i:
             break
     n = np.array([r[0] for r in rows])
     b = np.array([r[1] for r in rows])
-    print("\noff-map points within %.1f m of mobile_2: in %d of %d scans (median %d); line of "
+    if offs:
+        O = np.array(offs)
+        print("\nnearest robot-height cluster: in %d of %d scans, offset from the track median "
+              "(%+.2f, %+.2f) m, spread %.2f m -- steady means it is mobile_2 and the track is off by it"
+              % (len(O), len(rows), np.median(O[:, 1]), np.median(O[:, 2]),
+                 float(np.median(np.hypot(O[:, 1] - np.median(O[:, 1]), O[:, 2] - np.median(O[:, 2]))))))
+    print("off-map points within %.1f m of mobile_2: in %d of %d scans (median %d); line of "
           "sight through the map in %d of them" % (a.radius, int((n > 0).sum()), len(n),
                                                    int(np.median(n)), int((b > 0.05).sum())))
 
