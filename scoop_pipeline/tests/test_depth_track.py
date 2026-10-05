@@ -304,6 +304,12 @@ def main():
             print("dropout, odometry %.0f m off after it: %s, %s, %.2f cm" % (shift, src, r[1], e10))
             if src != want or r[1] != "ok" or e10 > 3.0:
                 f.append("dropout %.0f m: %s %s %.2f cm (want %s)" % (shift, src, r[1], e10, want))
+            n_ok, tried, fit = D.gap_check(A, refm, scans_b, tb, To, pc_d, 10, tk.C, cd)
+            take = n_ok >= cd["hyp_min_ok"] * tried and fit >= cd["gap_min_fit"]
+            print("  over 2 s of frames: %d of %d on the map, %.0f%% of their points -> %s"
+                  % (n_ok, tried, 100 * fit, "taken" if take else "not taken"))
+            if take != (shift == 0.0):
+                f.append("gap_check %.0f m: %d of %d, %.2f" % (shift, n_ok, tried, fit))
 
         # a board seen at frame 12 puts the robot 3 m away: tracking back stops
         # there, and a hypothesis through it is dropped (one through the
