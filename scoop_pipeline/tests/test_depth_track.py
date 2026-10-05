@@ -287,6 +287,28 @@ def main():
         if nb != 15 or max(eb) > 3.0:
             f.append("fill_back: %d of 15 frames, %s cm" % (nb, eb))
 
+        # a board seen at frame 12 puts the robot 3 m away: tracking back stops
+        # there, and a hypothesis through it is dropped (one through the
+        # board's place is kept)
+        far = truth(tb[12]).copy()
+        far[0, 3] += 3.0
+        fx = {12: [("anchor", far)]}
+        Tb_out = np.array([truth(t) for t in tb])
+        Tb_out[5:20] = np.nan
+        nb = D.fill_back(A, refm, scans_b, tb, np.tile(np.eye(4), (len(tb), 1, 1)),
+                         np.full(len(tb), -1), Tb_out, rows_b, cc, fx)
+        if nb != 7 or np.isfinite(Tb_out[12]).all():
+            f.append("fill_back with a board elsewhere: %d frames placed (want 7: 13..19)" % nb)
+        h_bad = D.track_ahead(A, refm, scans_b, tb, np.tile(np.eye(4), (len(tb), 1, 1)),
+                              np.full(len(tb), -1), 5, truth(tb[5]), tb[25], cc, fx)
+        h_ok = D.track_ahead(A, refm, scans_b, tb, np.tile(np.eye(4), (len(tb), 1, 1)),
+                             np.full(len(tb), -1), 5, truth(tb[5]), tb[25], cc,
+                             {12: [("anchor", truth(tb[12]))]})
+        print("hypothesis through a board elsewhere: %d placed; through the board: %d placed"
+              % (h_bad[3], h_ok[3]))
+        if h_bad[1] or h_bad[3] or h_ok[3] < 15:
+            f.append("board veto on hypotheses: %d / %d placed" % (h_bad[3], h_ok[3]))
+
         # board fixes: lost after a blackout (no depth, no odometry), a board
         # sighting with two copies of its design (the true one, one 3 m off)
         # places the frame at once, the depth frame picking the copy; and a

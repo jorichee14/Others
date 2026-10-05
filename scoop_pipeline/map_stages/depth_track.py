@@ -59,7 +59,10 @@ Stage 04 runs it for each entry of "04_reference" "tracks":
             is placed from it when the track is lost, or when the track is
             more than board_reset_m from it; a design with several copies
             (anchor / anchor_b) gives one candidate per copy, the depth frame
-            picks. Track - board is reported (the residual).
+            picks. A hypothesis (re-find) that puts the robot more than
+            board_veto_m from every copy of a board it sees is dropped, and
+            tracking back stops there: those frames are the board's. Track -
+            board is reported (the residual).
   lidar     mobile_1's LiDAR sees mobile_2 (map_stages/lidar_sightings.py:
             robot-sized clusters off the map in mobile_2's height band, around
             its floor-to-camera height): when lost, the search is centred on a
@@ -107,7 +110,7 @@ DEFAULTS = dict(depth_topic="/mobile_2/depth/image_rect_raw",
                 hyp_ratio=0.8, board_fixes=True, board_image_topic="/mobile_2/color/image_raw",
                 board_info_topic="/mobile_2/color/camera_info", board_rectified=False,
                 board_stride=2, board_max_range=2.5, board_max_reproj=1.0, board_tol_s=0.1,
-                board_reset_m=0.3, lidar_sightings=True, lidar={}, lidar_near_m=1.0,
+                board_reset_m=0.3, board_veto_m=1.0, lidar_sightings=True, lidar={}, lidar_near_m=1.0,
                 lidar_tol_s=0.15, lidar_search_m=0.8, lidar_min_support=5)
 
 
@@ -326,13 +329,22 @@ class Tracker:
             self.C = self.cur = None
 
 
-def track_ahead(A, ref, scans, times, T_odom, piece, j, T_first, t_end, c):
+def off_board(T, cands, c):
+    """A board seen at this frame puts the body more than board_veto_m from T
+    (from every copy of its design)."""
+    return bool(cands) and min(np.linalg.norm(T[:3, 3] - Tb[:3, 3]) for _, Tb in cands) > \
+        float(c["board_veto_m"])
+
+
+def track_ahead(A, ref, scans, times, T_odom, piece, j, T_first, t_end, c, fixes=None):
     """A hypothesis: frame j at T_first, tracked on until t_end or until lost.
-    -> (tracker, {k: (pose, row)}, frames tried, frames placed, summed share)."""
+    -> (tracker, {k: (pose, row)}, frames tried, frames placed, summed share);
+    no poses when a board it sees says it is elsewhere (off_board)."""
     tk = Tracker()
     out = {}
+    fixes = fixes or {}
     T_j, status, row, share = step(A, ref, scans[j], T_first, c)
-    if status != "ok":
+    if status != "ok" or off_board(T_j, fixes.get(j), c):
         return tk, out, 1, 0, 0.0
     tk.placed(j, T_j, T_odom, piece)
     out[j] = (T_j, row)
@@ -344,6 +356,8 @@ def track_ahead(A, ref, scans, times, T_odom, piece, j, T_first, t_end, c):
             break                                    # lost: this hypothesis ends here
         T_k, status, row, share = step(A, ref, scans[k], T0, c)
         tried += 1
+        if off_board(T_k if status == "ok" else T0, fixes.get(k), c):
+            return Tracker(), {}, tried, 0, 0.0      # a board says elsewhere: wrong place
         if status == "ok":
             tk.placed(k, T_k, T_odom, piece)
             out[k] = (T_k, row)
@@ -536,7 +550,7 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, f
                 # shifted along it, the view is the same), for 2x, 4x as long
                 for hs in (1, 2, 4):
                     res = [track_ahead(A, ref, scans, times, T_odom, piece, j, Th,
-                                       times[j] + hs * float(c["hyp_s"]), c) for Th in hyps]
+                                       times[j] + hs * float(c["hyp_s"]), c, fixes) for Th in hyps]
                     res.sort(key=lambda r: -r[4])
                     uniq = []                        # tracked onto the same place: one
                     for r in res:
@@ -611,16 +625,17 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, f
             T_out[j] = T0
             rows[j] = row
         j += 1
-    filled = fill_back(A, ref, scans, times, T_odom, piece, T_out, rows, c)
+    filled = fill_back(A, ref, scans, times, T_odom, piece, T_out, rows, c, fixes)
     if filled:
         log("    tracked back from where the robot was found again: %d more frames placed" % filled)
     return T_out, rows, events
 
 
-def fill_back(A, ref, scans, times, T_odom, piece, T_out, rows, c):
+def fill_back(A, ref, scans, times, T_odom, piece, T_out, rows, c, fixes=None):
     """From every placed frame whose predecessor is not, the track run
     backwards in time (the same tracking, time reversed) until it meets a
-    placed frame or is lost. -> how many frames it placed."""
+    placed frame, is lost, or a board it sees says elsewhere (off_board).
+    -> how many frames it placed."""
     n = len(scans)
     nt = -times
     placed = np.isfinite(T_out).all(axis=(1, 2))
@@ -640,6 +655,8 @@ def fill_back(A, ref, scans, times, T_odom, piece, T_out, rows, c):
             if T0 is None:
                 break
             T_k, status, row, _ = step(A, ref, scans[k], T0, c)
+            if off_board(T_k if status == "ok" else T0, (fixes or {}).get(k), c):
+                break                                # a board says elsewhere
             if status == "ok":
                 T_out[k], rows[k], placed[k] = T_k, row, True
                 tk.placed(k, T_k, T_odom, piece)
