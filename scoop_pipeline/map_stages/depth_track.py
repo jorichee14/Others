@@ -726,9 +726,13 @@ def run(P, tr, base, ref, outd):
         z_cam = float(T_seed[ia0][2, 3])
         # the floor under mobile_2's start, from the map: its body is from just
         # above it to just above its camera
-        near = np.linalg.norm(ref.pts[:, :2] - T_seed[ia0][:2, 3], axis=1) < 1.0
-        zz = ref.pts[near & (ref.pts[:, 2] < z_cam), 2]
-        floor = float(np.percentile(zz, 2)) if len(zz) > 50 else z_cam - 0.4
+        near = np.linalg.norm(ref.pts[:, :2] - T_seed[ia0][:2, 3], axis=1) < 1.5
+        zz = ref.pts[near & (ref.pts[:, 2] < z_cam) & (ref.pts[:, 2] > z_cam - 3.0), 2]
+        if len(zz) > 50:                             # the densest 5 cm layer: the floor
+            h, e = np.histogram(zz, bins=np.arange(zz.min(), zz.max() + 0.05, 0.05))
+            floor = float(e[np.argmax(h)] + 0.025)
+        else:
+            floor = z_cam - 0.4
         print("    floor under mobile_2's start %.2f m, its camera %.2f m" % (floor, z_cam))
         lc = dict(LS.DEFAULTS, z_lo=floor + 0.08, z_hi=z_cam + 0.15)
         lc.update(c.get("lidar") or {})
