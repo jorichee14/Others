@@ -19,13 +19,18 @@ Stage 04 runs it for each entry of "04_reference" "tracks":
 
   seed      the odometry (its own world), placed in map by 03's session anchor
             of `anchor_cam` (the board dwell at the start), as 04 places GLIM
-  pieces    the odometry is cut where it breaks: a step between two poses the
-            robot cannot have made in the time between them (over jump_m +
-            speed_max x dt, or jump_deg + yaw_rate_max x dt: a reset), or no
-            odometry for over gap_max_s. A shorter dropout (the camera's) is
-            no break: cuVSLAM, with the IMU, carries the robot over it. Within
-            a piece it is locally right; between pieces the relation is
-            unknown.
+  pieces    the odometry is cut where it breaks: no odometry for over gap_s
+            (a camera dropout) or a step over jump_m / jump_deg between two
+            poses. Within a piece it is locally right. Over a dropout of at
+            most gap_max_s whose step the robot could have made (jump_m +
+            speed_max x dt, jump_deg + yaw_rate_max x dt) the odometry runs on
+            in the same frame, but what it did during the dropout (the IMU
+            alone) may be wrong: from the first frame after it the track is
+            run on for gap_check_s at the pose the odometry carries it to, and
+            taken only where the map takes those frames there (on average
+            gap_min_fit of their points on it: a floor and walls along the way
+            fit anywhere, the rest does not); else the robot is tracked /
+            searched for as after any break.
   per frame each depth frame (every frame_stride-th), back-projected every
             pixel_step-th pixel within range, in the body frame, is registered
             to the map from
@@ -106,7 +111,7 @@ DEFAULTS = dict(depth_topic="/mobile_2/depth/image_rect_raw",
                 machine="mobile_2", depth_scale=0.001, range=[0.3, 4.0], pixel_step=4,
                 frame_stride=2, scan_voxel=0.05, max_corr=[0.2, 0.1, 0.05], min_corr=300,
                 max_shift=0.5, max_rot_deg=5.0, rounds=2, time_tol=0.05, carry=True,
-                gap_max_s=15.0, jump_m=0.15, jump_deg=10.0, window_s=2.0,
+                gap_s=0.3, gap_max_s=15.0, gap_check_s=2.0, gap_min_fit=0.9, jump_m=0.15, jump_deg=10.0, window_s=2.0,
                 speed_max=0.8, yaw_rate_max=60.0, search_step=0.2, yaw_step_deg=6.0,
                 search_voxel=0.10, fit_m=0.05, min_fit=0.6, rival_ratio=2.0, rival_gap=0.05,
                 candidates=8, bridge_s=2.0, predict_s=0.5, track_min_fit=0.5,
@@ -204,16 +209,30 @@ def register_frames(A, ref, scans, T_cur, c, carry):
 
 
 def pieces(o_t, o_T, c):
-    """Piece index per odometry pose: a new piece after a step the robot cannot
-    have made in the time (a reset), or a gap over gap_max_s."""
+    """Piece index per odometry pose: a new piece after a gap or a jump."""
+    dt, step, ang = _steps(o_t, o_T)
+    brk = (dt > float(c["gap_s"])) | (step > float(c["jump_m"])) | (ang > float(c["jump_deg"]))
+    return np.concatenate([[0], np.cumsum(brk)])
+
+
+def _steps(o_t, o_T):
     dt = np.diff(o_t)
     step = np.linalg.norm(np.diff(o_T[:, :3, 3], axis=0), axis=1)
     R = np.einsum("nji,njk->nik", o_T[:-1, :3, :3], o_T[1:, :3, :3])
     ang = np.degrees(np.arccos(np.clip((np.trace(R, axis1=1, axis2=2) - 1) / 2, -1, 1)))
-    brk = (dt > float(c["gap_max_s"])) | \
-        (step > float(c["jump_m"]) + float(c["speed_max"]) * dt) | \
-        (ang > float(c["jump_deg"]) + float(c["yaw_rate_max"]) * dt)
-    return np.concatenate([[0], np.cumsum(brk)])
+    return dt, step, ang
+
+
+def dropouts(o_t, o_T, pc, c):
+    """Per piece: the break into it is a dropout the odometry runs on over
+    (at most gap_max_s, a step the robot could have made in the time)."""
+    dt, step, ang = _steps(o_t, o_T)
+    soft = np.zeros(int(pc[-1]) + 1, bool)
+    for i in np.flatnonzero(np.diff(pc) > 0):
+        soft[pc[i + 1]] = dt[i] > float(c["gap_s"]) and dt[i] <= float(c["gap_max_s"]) and \
+            step[i] <= float(c["jump_m"]) + float(c["speed_max"]) * dt[i] and \
+            ang[i] <= float(c["jump_deg"]) + float(c["yaw_rate_max"]) * dt[i]
+    return soft
 
 
 def rotz(deg):
@@ -317,11 +336,20 @@ class Tracker:
         self.last = self.prev = None                 # (index, pose)
         self.C = self.cur = None
 
-    def seed(self, j, times, T_odom, piece, c):
-        """(T0, source) for frame j, or (None, None) when lost."""
+    def seed(self, j, times, T_odom, piece, c, carry_gap=True):
+        """(T0, source) for frame j, or (None, None) when lost. Over a dropout
+        (c["_dropout"], see dropouts) first the odometry carried on
+        ("odom_gap": take it only where the map takes the frame; else ask
+        again with carry_gap=False)."""
         since = times[j] - times[self.last[0]]
         if piece[j] >= 0 and piece[j] == self.cur and self.C is not None:
             return self.C @ T_odom[j], "odom"
+        soft = c.get("_dropout")
+        if carry_gap and soft is not None and piece[j] >= 0 and self.cur is not None and \
+                self.C is not None and abs(since) <= float(c["gap_max_s"]):
+            lo, hi = sorted((int(self.cur), int(piece[j])))
+            if soft[lo + 1:hi + 1].all():
+                return self.C @ T_odom[j], "odom_gap"
         if since <= float(c["bridge_s"]):
             Tp = self.prev[1] if self.prev else None
             dt0 = times[self.last[0]] - times[self.prev[0]] if self.prev else 0.0
@@ -334,6 +362,21 @@ class Tracker:
             self.C, self.cur = T @ np.linalg.inv(T_odom[j]), piece[j]
         else:
             self.C = self.cur = None
+
+
+def seed_step(A, ref, scan, tk, k, times, T_odom, piece, c):
+    """tk.seed and the frame registered from it; over a dropout the odometry's
+    pose is kept only where the map takes the frame. -> (T0, src, step's
+    result) or (None, None, None) when lost."""
+    T0, src = tk.seed(k, times, T_odom, piece, c)
+    if src == "odom_gap":
+        r = step(A, ref, scan, T0, c)
+        if r[1] == "ok" and r[3] >= float(c["gap_min_fit"]):
+            return T0, src, r
+        T0, src = tk.seed(k, times, T_odom, piece, c, carry_gap=False)
+    if T0 is None:
+        return None, None, None
+    return T0, src, step(A, ref, scan, T0, c)
 
 
 def off_board(T, cands, c):
@@ -358,10 +401,10 @@ def track_ahead(A, ref, scans, times, T_odom, piece, j, T_first, t_end, c, fixes
     tried, placed, score = 1, 1, share
     k = j + 1
     while k < len(scans) and times[k] <= t_end:
-        T0, src = tk.seed(k, times, T_odom, piece, c)
+        T0, src, r = seed_step(A, ref, scans[k], tk, k, times, T_odom, piece, c)
         if T0 is None:
             break                                    # lost: this hypothesis ends here
-        T_k, status, row, share = step(A, ref, scans[k], T0, c)
+        T_k, status, row, share = r
         tried += 1
         if off_board(T_k if status == "ok" else T0, fixes.get(k), c):
             return Tracker(), {}, tried, 0, 0.0      # a board says elsewhere: wrong place
@@ -468,6 +511,7 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, f
     rows = [("unplaced", 0, np.nan, np.nan, np.nan)] * n
     tk = Tracker()
     events = []
+    gap_told = set()
     win = float(c["window_s"])
     j = 0
     while j < n:
@@ -478,6 +522,27 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, f
             T0, src = C0 @ T_odom[j], "odom"
         else:
             T0, src = tk.seed(j, times, T_odom, piece, c)
+        if src == "odom_gap" and int(piece[j]) in gap_told:
+            T0, src = tk.seed(j, times, T_odom, piece, c, carry_gap=False)
+        if src == "odom_gap":                        # over a dropout: where the odometry says?
+            gap_at, gap_len = times[tk.last[0]] - times[0], times[j] - times[tk.last[0]]
+            tkh, out, tried, n_ok, score = track_ahead(A, ref, scans, times, T_odom, piece, j, T0,
+                                                       times[j] + float(c["gap_check_s"]), c, fixes)
+            fit = score / max(n_ok, 1)
+            if n_ok and n_ok >= float(c["hyp_min_ok"]) * tried and fit >= float(c["gap_min_fit"]):
+                log("    over the dropout at %.1f s (%.1f s): the odometry's pose taken (%d of %d "
+                    "frames on the map after it, %.0f%% of their points)"
+                    % (gap_at, gap_len, n_ok, tried, 100 * fit))
+                for kk, (Tk, row) in out.items():
+                    T_out[kk], rows[kk] = Tk, row
+                tk = tkh
+                j = tk.last[0] + 1
+                continue
+            gap_told.add(int(piece[j]))
+            log("    over the dropout at %.1f s (%.1f s): the odometry's pose NOT taken (%d of %d "
+                "frames on the map after it, %.0f%% of their points) -- what it did without "
+                "images is wrong; tracked / searched for" % (gap_at, gap_len, n_ok, tried, 100 * fit))
+            T0, src = tk.seed(j, times, T_odom, piece, c, carry_gap=False)
         cands = (fixes or {}).get(j)
         if cands and tk.last is not None and (T0 is None or min(
                 np.linalg.norm(T0[:3, 3] - Tb[:3, 3]) for _, Tb in cands) > float(c["board_reset_m"])):
@@ -660,10 +725,10 @@ def fill_back(A, ref, scans, times, T_odom, piece, T_out, rows, c, fixes=None):
             tk.C, tk.cur = T_out[j] @ np.linalg.inv(T_odom[j]), piece[j]
         k = j - 1
         while k >= 0 and not placed[k]:
-            T0, src = tk.seed(k, nt, T_odom, piece, c)
+            T0, src, r = seed_step(A, ref, scans[k], tk, k, nt, T_odom, piece, c)
             if T0 is None:
                 break
-            T_k, status, row, _ = step(A, ref, scans[k], T0, c)
+            T_k, status, row, _ = r
             if off_board(T_k if status == "ok" else T0, (fixes or {}).get(k), c):
                 break                                # a board says elsewhere
             if status == "ok":
@@ -717,15 +782,16 @@ def run(P, tr, base, ref, outd):
     # the odometry's pieces; a frame inside a break has none (piece -1): it
     # is tracked on the map from the frames before it
     pc_o = pieces(o_t, o_T, c)
+    c["_dropout"] = dropouts(o_t, o_T, pc_o, c)
     i = np.clip(np.searchsorted(o_t, times), 1, len(o_t) - 1)
     inside = (pc_o[i - 1] == pc_o[i]) & (times >= o_t[0]) & (times <= o_t[-1])
     piece = np.where(inside, pc_o[i - 1], -1)
     n_br = int(pc_o[-1])
-    print("    odometry in %d piece(s) (%d break(s): a step over %.2f m + %.1f m/s, %.0f deg + "
-          "%.0f deg/s, or no odometry for over %.0f s); %d frames inside breaks, tracked on the "
-          "map alone" % (n_br + 1, n_br, float(c["jump_m"]), float(c["speed_max"]),
-                         float(c["jump_deg"]), float(c["yaw_rate_max"]), float(c["gap_max_s"]),
-                         int((~inside).sum())))
+    print("    odometry in %d piece(s) (%d break(s): gaps over %.1f s or jumps over %.2f m / "
+          "%.0f deg; %d of them dropouts it runs on over, taken after them where the map "
+          "agrees); %d frames inside breaks, tracked on the map alone"
+          % (n_br + 1, n_br, float(c["gap_s"]), float(c["jump_m"]), float(c["jump_deg"]),
+             int(c["_dropout"].sum()), int((~inside).sum())))
     Rq, pq = interp_poses(o_t, o_T, traj_quats(o_T), times)
     T_odom = np.tile(np.eye(4), (len(times), 1, 1))
     T_odom[:, :3, :3], T_odom[:, :3, 3] = Rq, pq

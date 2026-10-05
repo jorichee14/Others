@@ -7,7 +7,8 @@ anchor, and every depth frame registered to the room's map.
   * the depth images are ray-cast from the true camera_link poses (a room with
     a pillar and furniture), so the map explains every pixel;
   * the odometry seed drifts ~12 cm by 5.5 s; then 1.5 s without odometry
-    (a camera dropout: the odometry carries over it, no break) and at 10 s it
+    (a camera dropout: the odometry runs on over it, taken where the map
+    agrees) and at 10 s it
     resets (1.2 m / 30 deg jump): the depth frames carry the track through it
     on the map; then 2.5 s without depth frames or odometry, after which the
     odometry has reset again (3.6 m away): the robot must be searched for and found again
@@ -235,7 +236,7 @@ def main():
             if s["anchored_piece_seed_to_final_cm"]["at_end"] < 6:
                 f.append("summary: odometry drift at the end %.1f cm (expected ~12 cm)"
                          % s["anchored_piece_seed_to_final_cm"]["at_end"])
-            if s["odometry_pieces"] != 3 or not any(e["found"] for e in s["refind"]):
+            if s["odometry_pieces"] != 4 or not any(e["found"] for e in s["refind"]):
                 f.append("summary: %d pieces, re-finds %s" % (s["odometry_pieces"], s["refind"]))
         # every search ambiguous (a rival must leave half the points more off): the robot
         # is found by tracking the candidate places on, the one that keeps fitting
@@ -288,6 +289,21 @@ def main():
         print("fill_back: %d frames placed, max %.2f cm" % (nb, max(eb) if eb else -1))
         if nb != 15 or max(eb) > 3.0:
             f.append("fill_back: %d of 15 frames, %s cm" % (nb, eb))
+
+        # over a dropout (frames 9 -> 10) the odometry is taken where the map
+        # agrees; where it carried the robot 3 m wrong (the IMU alone), not
+        cd = dict(cc, _dropout=np.array([False, True]))
+        pc_d = np.where(np.arange(len(tb)) < 10, 0, 1)
+        for shift, want in ((0.0, "odom_gap"), (3.0, "track")):
+            To = np.array([truth(t) for t in tb])
+            To[10:, 0, 3] += shift
+            tk = D.Tracker()
+            tk.placed(9, truth(tb[9]), To, pc_d)
+            _, src, r = D.seed_step(A, refm, scans_b[10], tk, 10, tb, To, pc_d, cd)
+            e10 = np.linalg.norm(r[0][:3, 3] - truth(tb[10])[:3, 3]) * 100
+            print("dropout, odometry %.0f m off after it: %s, %s, %.2f cm" % (shift, src, r[1], e10))
+            if src != want or r[1] != "ok" or e10 > 3.0:
+                f.append("dropout %.0f m: %s %s %.2f cm (want %s)" % (shift, src, r[1], e10, want))
 
         # a board seen at frame 12 puts the robot 3 m away: tracking back stops
         # there, and a hypothesis through it is dropped (one through the
