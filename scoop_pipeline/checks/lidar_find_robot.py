@@ -49,7 +49,7 @@ def main():
     cam = sa["cameras"]["realsense"]["map_to_cam"]["xyz"]
     near = np.linalg.norm(M[:, :2] - np.array(cam[:2]), axis=1) < 1.5
     z = M[near & (M[:, 2] < cam[2]) & (M[:, 2] > cam[2] - 3.0), 2]
-    h, e = np.histogram(z, bins=np.arange(z.min(), z.max() + 0.05, 0.05))
+    h, e = np.histogram(z, bins=np.arange(z.min(), z.max() + 0.1, 0.05))
     floor = float(e[np.argmax(h)] + 0.025)
     band = dict(LS.DEFAULTS, z_lo=floor + 0.05, z_hi=cam[2] + a.top, max_size_m=1.5,
                 min_points=a.min_points)

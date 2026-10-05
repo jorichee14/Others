@@ -729,7 +729,7 @@ def run(P, tr, base, ref, outd):
         near = np.linalg.norm(ref.pts[:, :2] - T_seed[ia0][:2, 3], axis=1) < 1.5
         zz = ref.pts[near & (ref.pts[:, 2] < z_cam) & (ref.pts[:, 2] > z_cam - 3.0), 2]
         if len(zz) > 50:                             # the densest 5 cm layer: the floor
-            h, e = np.histogram(zz, bins=np.arange(zz.min(), zz.max() + 0.05, 0.05))
+            h, e = np.histogram(zz, bins=np.arange(zz.min(), zz.max() + 0.1, 0.05))
             floor = float(e[np.argmax(h)] + 0.025)
         else:
             floor = z_cam - 0.4

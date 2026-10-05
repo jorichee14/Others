@@ -52,7 +52,7 @@ def main():
     z = M[near & (M[:, 2] < c0[2]) & (M[:, 2] > c0[2] - 3.0), 2]
     floor = c0[2] - 0.8
     if len(z):
-        h, e = np.histogram(z, bins=np.arange(z.min(), z.max() + 0.05, 0.05))
+        h, e = np.histogram(z, bins=np.arange(z.min(), z.max() + 0.1, 0.05))
         floor = float(e[np.argmax(h)] + 0.025)
         print("mobile_2's camera at z=%.2f; map points below it within 1.5 m: densest layer "
               "z=%.2f (%d pts), lowest %.2f" % (c0[2], floor, h.max(), z.min()))
