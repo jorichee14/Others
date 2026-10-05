@@ -2,7 +2,7 @@
 """A robot's track on the map, and where it has no pose.
 
     python scoop_pipeline/checks/plot_track.py <pipeline config> [--track mobile_2_depth]
-        [--other mobile_1_lidar] [--gap 1.0] [--no-vslam]
+        [--other mobile_1_lidar] [--gap 1.0] [--no-vslam] [--vslam traj_vslam.txt]
 
 Top: the floor plan (the reference map's walls), the track (04's
 traj_<track>.tum) coloured by time, each stretch without a pose as a dashed
@@ -39,6 +39,8 @@ def main():
     ap.add_argument("--other", default="mobile_1_lidar")
     ap.add_argument("--gap", type=float, default=1.0, help="a stretch without a pose: over this many s")
     ap.add_argument("--no-vslam", action="store_true", help="leave the raw cuVSLAM path out")
+    ap.add_argument("--vslam", default=None,
+                    help="another cuVSLAM run's traj_vslam.txt (e.g. <machine>/vslam_prev/)")
     a = ap.parse_args()
     import matplotlib
     matplotlib.use("Agg")
@@ -62,7 +64,7 @@ def main():
     if not a.no_vslam and P.cfg.get("vslam"):
         sys.path.insert(0, os.path.join(ROOT, "processing"))
         import vslam
-        pv = vslam.traj_path(P)
+        pv = os.path.expanduser(a.vslam) if a.vslam else vslam.traj_path(P)
         if os.path.exists(pv):
             tv, V = A.load_traj(pv)
             k = int(np.argmin(np.abs(tv - t2[0])))
@@ -181,7 +183,9 @@ def main():
     for sp in ("top", "right", "left"):
         tx.spines[sp].set_visible(False)
 
-    out = os.path.join(od, "track_%s.png" % a.track)
+    tag = ("_" + os.path.basename(os.path.dirname(os.path.abspath(os.path.expanduser(a.vslam))))
+           if a.vslam else "")             # another run: its own png (track_<track>_vslam_prev.png)
+    out = os.path.join(od, "track_%s%s.png" % (a.track, tag))
     fig.savefig(out, dpi=140, bbox_inches="tight")
     print("wrote %s" % out)
     print("stretches without a pose (over %.1f s):" % a.gap)

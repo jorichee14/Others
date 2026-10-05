@@ -3,11 +3,14 @@
 the merged pass bag, through Isaac ROS cuVSLAM (processing/run_vslam.sh, here
 or in the isaac_ros container), for a robot whose VSLAM was not recorded.
 
-    python scoop_pipeline/processing/vslam.py <pipeline config> [--redo] [--rate R] [--imu]
+    python scoop_pipeline/processing/vslam.py <pipeline config> [--redo] [--rate R] [--imu] [--ground]
 
 --imu turns IMU fusion on for this run (the config's enable_imu_fusion
-otherwise); --rate plays the bag slower (0.5: half speed), so the replay
-itself drops no frames.
+otherwise); --ground keeps the pose on the ground plane (a ground robot:
+cuVSLAM's enable_ground_constraint_in_odometry / _in_slam), which holds the
+IMU's drift through a camera dropout to the floor's plane; --rate plays the
+bag slower (0.5: half speed), so the replay itself drops no frames. --redo
+keeps the run before it as <machine>/vslam_prev/ (replacing an older one).
 
 The "vslam" block of the pipeline config says what to play (defaults: mobile_2's
 RealSense D435i, as isaac_ros_visual_slam's RealSense example):
@@ -182,19 +185,29 @@ def main():
     ap.add_argument("--redo", action="store_true", help="run cuVSLAM again")
     ap.add_argument("--rate", type=float, default=None, help="ros2 bag play --rate")
     ap.add_argument("--imu", action="store_true", help="IMU fusion on (gyro + accel)")
+    ap.add_argument("--ground", action="store_true", help="pose kept on the ground plane")
     a = ap.parse_args()
     from pipeline_common import load_pipeline
     P = load_pipeline(a.config)
     c = settings(P)
     if a.imu:
         c["enable_imu_fusion"] = True
+    if a.ground:
+        c["params"] = dict(c.get("params") or {}, enable_ground_constraint_in_odometry=True,
+                           enable_ground_constraint_in_slam=True)
     bag = os.path.expanduser(P.dataset["bag"])
     out = out_dir(P, c["machine"])
     rec = os.path.join(out, "odometry")
     traj = traj_path(P, c["machine"])
-    print("bag:  %s\nout:  %s\nIMU fusion: %s" % (bag, out, "on" if c["enable_imu_fusion"] else "off"))
+    ground = bool((c.get("params") or {}).get("enable_ground_constraint_in_odometry"))
+    print("bag:  %s\nout:  %s\nIMU fusion: %s, ground constraint: %s"
+          % (bag, out, "on" if c["enable_imu_fusion"] else "off", "on" if ground else "off"))
     if a.redo and os.path.isdir(out):
-        shutil.rmtree(out)
+        prev = out + "_prev"
+        if os.path.isdir(prev):
+            shutil.rmtree(prev)
+        shutil.move(out, prev)
+        print("the run before: kept as %s" % prev)
     if not os.path.isfile(os.path.join(rec, "metadata.yaml")):
         check(bag, c)
         part = os.path.join(os.path.dirname(out), ".partial", "vslam")
