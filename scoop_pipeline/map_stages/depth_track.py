@@ -62,8 +62,9 @@ Stage 04 runs it for each entry of "04_reference" "tracks":
             picks. Track - board is reported (the residual).
   lidar     mobile_1's LiDAR sees mobile_2 (map_stages/lidar_sightings.py:
             robot-sized clusters off the map in mobile_2's height band, around
-            its camera height): when lost, the search is centred on a candidate
-            within reach (lidar_search_m, the best fit there taken); when tied
+            its floor-to-camera height): when lost, the search is centred on a
+            candidate within reach (speed_max x the time since the last pose;
+            lidar_search_m around it, taken when unambiguous there); when tied
             candidate places are tracked on, the one whose path runs through
             candidates (lidar_near_m) wins -- lidar_min_support poses, every
             other one at most half as many. Never on its own: a candidate only
@@ -106,8 +107,8 @@ DEFAULTS = dict(depth_topic="/mobile_2/depth/image_rect_raw",
                 hyp_ratio=0.8, board_fixes=True, board_image_topic="/mobile_2/color/image_raw",
                 board_info_topic="/mobile_2/color/camera_info", board_rectified=False,
                 board_stride=2, board_max_range=2.5, board_max_reproj=1.0, board_tol_s=0.1,
-                board_reset_m=0.3, lidar_sightings=True, lidar={}, lidar_near_m=0.5,
-                lidar_tol_s=0.15, lidar_search_m=0.6, lidar_min_support=5)
+                board_reset_m=0.3, lidar_sightings=True, lidar={}, lidar_near_m=1.0,
+                lidar_tol_s=0.15, lidar_search_m=0.8, lidar_min_support=5)
 
 
 def rel_pose(edges, a, b):
@@ -489,15 +490,14 @@ def first_round(A, ref, scans, times, T_odom, piece, C0, piece0, c, log=print, f
                 cc = sight.at(times[j], 0.3)
                 if len(cc):
                     dd = np.linalg.norm(cc - centre[:2, 3], axis=1)
-                    for q in np.argsort(dd)[:3]:
-                        if dd[q] > radius:
+                    reach = 0.3 + float(c["speed_max"]) * since     # no cap: candidates are few
+                    for q in np.argsort(dd)[:5]:
+                        if dd[q] > reach:
                             break
                         cen = centre.copy()
                         cen[:2, 3] = cc[q]
                         Tq, fq, rq, cq = refind(A, ref, scans[j], cen, float(c["lidar_search_m"]),
-                                                180.0, c)
-                        if Tq is None and cq and cq[0][0] >= float(c["min_fit"]):
-                            Tq = cq[0][1]
+                                                180.0, c)       # unambiguous there, or not taken
                         if Tq is not None and np.linalg.norm(Tq[:2, 3] - cc[q]) <= \
                                 float(c["lidar_search_m"]):
                             events.append({"t": float(times[j]), "since_s": float(since),
@@ -724,7 +724,13 @@ def run(P, tr, base, ref, outd):
         import lidar_sightings as LS
         ia0 = int(np.flatnonzero(piece == piece0)[0]) if (piece == piece0).any() else 0
         z_cam = float(T_seed[ia0][2, 3])
-        lc = dict(LS.DEFAULTS, z_lo=z_cam - 0.35, z_hi=z_cam + 0.10)
+        # the floor under mobile_2's start, from the map: its body is from just
+        # above it to just above its camera
+        near = np.linalg.norm(ref.pts[:, :2] - T_seed[ia0][:2, 3], axis=1) < 1.0
+        zz = ref.pts[near & (ref.pts[:, 2] < z_cam), 2]
+        floor = float(np.percentile(zz, 2)) if len(zz) > 50 else z_cam - 0.4
+        print("    floor under mobile_2's start %.2f m, its camera %.2f m" % (floor, z_cam))
+        lc = dict(LS.DEFAULTS, z_lo=floor + 0.08, z_hi=z_cam + 0.15)
         lc.update(c.get("lidar") or {})
         scans_l = LS.detect(P, ref, lc, os.path.join(outd, "lidar_sightings_%s.json" % name))
         sight = LS.Sightings(scans_l)
@@ -773,17 +779,32 @@ def run(P, tr, base, ref, outd):
     if resid:
         print("  track - board sightings: median %.1f cm, p95 %.1f cm, max %.1f cm over %d frames"
               % (np.median(resid), np.percentile(resid, 95), max(resid), len(resid)))
-    lid = []
+    lid, seen, looked = [], 0, 0
     if sight is not None:
+        # where mobile_2 is placed and mobile_1 1.5-15 m from it: how often does
+        # mobile_1's LiDAR show a candidate within 1 m, and how far off
+        m1 = os.path.join(P.reference_dir(), "traj_%s.tum" % ((c.get("lidar") or {}).get(
+            "lidar_track", "mobile_1_lidar")))
+        t1, T1 = A.load_traj(m1) if os.path.exists(m1) else (np.zeros(0), None)
         for jj in np.flatnonzero(placed)[::3]:
+            if len(t1):
+                i1 = int(np.argmin(np.abs(t1 - times[jj])))
+                dist = float(np.linalg.norm(T1[i1][:2, 3] - T_cur[jj][:2, 3]))
+                if abs(t1[i1] - times[jj]) > 0.2 or not 1.5 <= dist <= 15.0:
+                    continue
+            looked += 1
             cc = sight.at(times[jj], float(c["lidar_tol_s"]))
             if len(cc):
                 dmin = float(np.min(np.linalg.norm(cc - T_cur[jj][:2, 3], axis=1)))
                 if dmin <= 1.0:
+                    seen += 1
                     lid.append(dmin * 100)
-        if lid:
-            print("  track - nearest LiDAR candidate (within 1 m): median %.1f cm, p95 %.1f cm "
-                  "over %d frames" % (np.median(lid), np.percentile(lid, 95), len(lid)))
+        if looked:
+            print("  mobile_1's LiDAR, where mobile_2 is placed 1.5-15 m from it: a candidate within "
+                  "1 m in %d of %d frames (%.0f %%)%s" % (
+                      seen, looked, 100.0 * seen / looked,
+                      ", %.0f cm off (median), %.0f cm (p95)" % (np.median(lid), np.percentile(lid, 95))
+                      if lid else ""))
     p_body = os.path.join(outd, "traj_%s.tum" % name)
     p_cam = os.path.join(outd, "traj_%s_in_cam.tum" % name)
     A.write_traj(p_body, times[placed], T_cur[placed])

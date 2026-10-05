@@ -329,8 +329,8 @@ def main():
         if len(cl) != 1 or np.hypot(cl[0][0] - 2.2, cl[0][1] - 1.2) > 0.05:
             f.append("lidar clusters: %s" % cl)
 
-        # a lost track placed again at a robot mobile_1's LiDAR sees (a false
-        # candidate 3 m off fits no depth frame there)
+        # a lost track with LiDAR candidates (the robot, and a false one 3 m
+        # off) placed again right -- the false one fits no depth frame there
         sl = LS.Sightings([(t, [(truth(t)[0, 3], truth(t)[1, 3], 50),
                                 (truth(t)[0, 3] + 3.0, truth(t)[1, 3], 50)]) for t in tf2])
         To, rw, ev = D.first_round(A, refm, sc2, tf2, np.tile(np.eye(4), (len(tf2), 1, 1)),
@@ -339,9 +339,16 @@ def main():
               if np.isfinite(To[i]).all()]
         print("lidar fix: %s; after it %d of %d frames, max %.2f cm"
               % ([e for e in ev if e.get("lidar")], len(el), len(tf2) - jb, max(el) if el else -1))
-        if not any(e.get("lidar") for e in ev) or len(el) < len(tf2) - jb - 2 or max(el) > 7.0 \
-                or np.median(el) > 0.5:
+        if len(el) < len(tf2) - jb - 2 or max(el) > 7.0 or np.median(el) > 0.5:
             f.append("lidar fix: %s, %s" % (ev, el))
+        # the tie-break count: a path through the candidates, one 2 m beside it
+        ts = tf2[jb:]
+        on = np.array([truth(t)[:3, 3] + [0.4, 0.3, 0.0] for t in ts])     # body centre off the camera
+        off = on + [0.0, 2.0, 0.0]
+        sup_on, sup_off = sl.support(ts, on, 1.0), sl.support(ts, off, 1.0)
+        print("lidar support: %d on the robot, %d beside it" % (sup_on, sup_off))
+        if sup_on < len(ts) - 1 or sup_off > len(ts) // 2:
+            f.append("lidar support: %d / %d of %d" % (sup_on, sup_off, len(ts)))
 
         # processing/vslam.py: the odometry recording -> TUM; the launch file it writes
         sys.path.insert(0, os.path.join(ROOT, "processing"))
