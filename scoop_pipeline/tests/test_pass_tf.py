@@ -18,7 +18,9 @@ RealSense's own tree from camera_link (mobile_2).
       the calibration the bag lacks (infra1_link) from static_tf.yaml;
   coop (coop_1): mobile_2 driving, from 04's track (camera_link in map), its
       origin map_realsense at the first pose below a board only survey_1
-      measured (dataset.boards_from).
+      measured (dataset.boards_from); no 05, so mobile_1's origin map_zed is
+      placed where the ZED's own tracking puts the camera at the LiDAR
+      trajectory's first pose, below the start board.
 
 Every lookup in the merged bag must give the pipeline's poses, and every
 frame one parent.
@@ -187,6 +189,10 @@ def coop(data, stages):
     with open(os.path.join(od, "traj_mobile_2_depth.tum"), "w") as f:
         for t in np.arange(0.0, 10.0, 0.1):
             p, q = tq(true_rs(t))
+            f.write("%.9f %s %s\n" % (T0 + t, " ".join(map(str, p)), " ".join(map(str, q))))
+    with open(os.path.join(od, "traj_mobile_1_lidar_in_cam.tum"), "w") as f:
+        for t in np.arange(0.0, 10.0, 0.1):                  # mobile_1's 04 track (the camera)
+            p, q = tq(true_cam(t))
             f.write("%.9f %s %s\n" % (T0 + t, " ".join(map(str, p)), " ".join(map(str, q))))
     cfg = os.path.join(stages, "pipeline_config_coop_1.json")
     json.dump({"extends": "pipeline_config.json",
@@ -392,6 +398,22 @@ def main():
         close(tree.lookup("map", "map_realsense", T0 + 5), true_rs(0), "coop: map_realsense", f)
         close(tree.lookup("map", "board_b", T0 + 5), rotz(45, (-7.2, 12.6, 0.03)),
               "coop: board_b from survey_1", f)
+        # mobile_1 without 05: map_zed where the ZED's (wrong by 1 m / 20 deg)
+        # tracking agrees with the LiDAR track at its start, below the start board;
+        # the LiDAR track carries mobile_1, the ZED's map_zed ~~ odom_zed stays
+        for t in stamps[::7]:
+            close(tree.lookup("map", "zed_left_camera_optical_frame", T0 + t), true_cam(t),
+                  "coop: mobile_1 at %.1f s" % t, f)
+        close(tree.lookup("map", "map_zed", T0 + 5),
+              np.linalg.inv(rotz(20, (1.0, 0, 0))) @ T_MAP_MAPZED, "coop: map_zed", f)
+        if tree.lookup("map_zed", "odom_zed", T0 + 5) is None:
+            f.append("coop: map_zed ~~ odom_zed is missing")
+        if after["map_zed"].parent != "board" or after["zed_camera_link"].parent != "map_zed":
+            f.append("coop: map_zed / zed_camera_link hang from %s / %s"
+                     % (after["map_zed"].parent, after["zed_camera_link"].parent))
+        roots = {tftree._root(c, after) for c in after}
+        if roots != {"map"}:
+            f.append("coop: the tree has more than one root: %s" % sorted(roots))
 
         # the CLI: the check prints the tree from the outputs it finds
         cli = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "pass_tf.py"),
