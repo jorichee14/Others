@@ -59,7 +59,27 @@ def positions(bag, cfg, log=print):
             log(f"    moving robot: {len(traj_t)} poses of {body} from {p}")
         else:
             log(f"    (no {p}: the moving robot gets no position)")
-    return comms.Positions(edges, traj_t, traj_T, body)
+    return comms.Positions(edges, traj_t, traj_T, body,
+                           tracks=other_tracks(P, log) if cfg else None)
+
+
+def other_tracks(P, log=print):
+    """04's other robots' tracks (04_reference "tracks", e.g. mobile_2_depth in a
+    coop run): [(t, T_map_body, body_frame)]."""
+    from pipeline_common import load_traj
+    out = []
+    for tr in (P.cfg.get("04_reference") or {}).get("tracks") or []:
+        if not tr.get("enabled", True):
+            continue
+        p = os.path.join(P.reference_dir(), "traj_%s.tum" % tr["name"])
+        if os.path.exists(p):
+            t, T = load_traj(p)
+            body = tr.get("body_frame", "camera_link")
+            out.append((t, T, body))
+            log(f"    moving robot: {len(t)} poses of {body} from {p}")
+        else:
+            log(f"    (no {p}: {tr['name']} gets no position)")
+    return out
 
 
 def add_positions(tables, pos, frames, log=print):

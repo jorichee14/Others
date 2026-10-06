@@ -255,6 +255,29 @@ def main():
         dd = np.linalg.norm(c["rx_pose"][:, :3, 3] - (T.T_ARDU @ T.T_RADAR)[:3, 3], axis=1)
         if np.abs(dd - c["distance_m"]).max() > 1e-6 or str(c["tx_frame"]) != "infra1_link":
             f.append("clean: distance / frames")
+        # two robots moving (coop): each frame through its own robot's track
+        from scoop import tftree as tt, comms
+        E = tt.Edge
+        Ta = np.eye(4)
+        Ta[:3, 3] = (0.1, 0, 0.2)
+        edges = {"zed_camera_link": E("map", "zed_camera_link", False),
+                 "zed_left_camera_optical_frame": E("zed_camera_link",
+                                                    "zed_left_camera_optical_frame", True, Ta),
+                 "map_realsense": E("map", "map_realsense", True, np.eye(4)),
+                 "camera_link": E("map_realsense", "camera_link", False)}
+        tt_ = np.array([0.0, 1.0, 2.0])
+        T1 = np.tile(np.eye(4), (3, 1, 1))
+        T1[:, 0, 3] = (0, 1, 2)                       # mobile_1's camera along x
+        T2 = np.tile(np.eye(4), (3, 1, 1))
+        T2[:, 1, 3] = (5, 6, 7)                       # mobile_2 along y
+        pos = comms.Positions(edges, tt_, T1, "zed_left_camera_optical_frame",
+                              tracks=[(tt_, T2, "camera_link")])
+        p1 = pos.of("zed_camera_link")(np.array([0.5]))[0]
+        p2 = pos.of("camera_link")(np.array([1.5]))[0]
+        if np.abs(p1 - (0.4, 0, -0.2)).max() > 1e-9 or np.abs(p2 - (0, 6.5, 0)).max() > 1e-9:
+            f.append("positions, two robots moving: %s %s" % (p1, p2))
+        if np.abs(pos.pose_of("camera_link")(np.array([1.0]))[0][:3, 3] - (0, 6, 0)).max() > 1e-9:
+            f.append("pose_of, the second robot")
     except AssertionError as e:
         f.append(str(e))
     finally:

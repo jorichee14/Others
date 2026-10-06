@@ -401,13 +401,18 @@ def _scale(st, k):
 
 class Positions:
     """Where a frame was in `map` at time t: fixed frames from the static
-    tree, the moving robot's frames through its trajectory (T_map_body at the
-    trajectory's stamps, body somewhere in the same moving subtree)."""
+    tree, a moving robot's frames through its trajectory (T_map_body at the
+    trajectory's stamps, body somewhere in the same moving subtree). Several
+    robots may move (`tracks`: [(t, T, body)], e.g. mobile_1's LiDAR track and
+    mobile_2's depth track in a coop run); traj_t / traj_T / body is one."""
 
-    def __init__(self, edges, traj_t=None, traj_T=None, body=None, map_frame="map"):
+    def __init__(self, edges, traj_t=None, traj_T=None, body=None, map_frame="map", tracks=None):
         from . import tftree
         self.tf, self.edges, self.map = tftree, edges, map_frame
-        self.traj_t, self.traj_T, self.body = traj_t, traj_T, body
+        self.tracks = [(np.asarray(t, float), np.asarray(T, float), b)
+                       for t, T, b in (tracks or []) if b is not None and len(t)]
+        if traj_t is not None and body is not None:
+            self.tracks.insert(0, (np.asarray(traj_t, float), np.asarray(traj_T, float), body))
         self._cache: Dict[str, Callable] = {}
 
     def _top(self, frame):
@@ -418,6 +423,14 @@ class Positions:
             f = self.edges[f].parent
         return f, M, f in self.edges          # stopped on a /tf edge -> moving
 
+    def _track(self, top):
+        """The track whose body is in the moving subtree `top`: (t, T, T_top_body)."""
+        for t0, T, body in self.tracks:
+            btop, T_top_b, _ = self._top(body)
+            if btop == top:
+                return t0, T, T_top_b
+        return None
+
     def of(self, frame) -> Optional[Callable]:
         if frame in self._cache:
             return self._cache[frame]
@@ -426,28 +439,26 @@ class Positions:
         if not moving and top == self.map:
             p = T_top_f[:3, 3].copy()
             fn = lambda t: np.broadcast_to(p, (len(np.atleast_1d(t)), 3)).copy()   # noqa: E731
-        elif moving and self.traj_t is not None and self.body is not None:
-            btop, T_top_b, _ = self._top(self.body)
-            if btop == top:
-                T_b_f = np.linalg.inv(T_top_b) @ T_top_f
-                fn = self._moving(T_b_f)
+        elif moving:
+            tr = self._track(top)
+            if tr is not None:
+                t0, T, T_top_b = tr
+                fn = self._moving(t0, T, np.linalg.inv(T_top_b) @ T_top_f)
         self._cache[frame] = fn
         return fn
 
     def pose_of(self, frame) -> Optional[Callable]:
         """t -> (N, 4, 4) pose of `frame` in map (rotation slerped along the
-        trajectory for the moving robot), or None where it is not placed."""
+        trajectory for a moving robot), or None where it is not placed."""
         top, T_top_f, moving = self._top(frame)
         if not moving and top == self.map:
             return lambda t: np.broadcast_to(T_top_f, (len(np.atleast_1d(t)), 4, 4)).copy()  # noqa: E731
-        if not (moving and self.traj_t is not None and self.body is not None):
-            return None
-        btop, T_top_b, _ = self._top(self.body)
-        if btop != top:
+        tr = self._track(top) if moving else None
+        if tr is None:
             return None
         from scipy.spatial.transform import Rotation, Slerp
+        t0, T, T_top_b = tr
         T_b_f = np.linalg.inv(T_top_b) @ T_top_f
-        t0, T = self.traj_t, self.traj_T
         slerp = Slerp(t0, Rotation.from_matrix(T[:, :3, :3]))
 
         def at(t):
@@ -463,8 +474,8 @@ class Positions:
             return out
         return at
 
-    def _moving(self, T_b_f):
-        t0, T = self.traj_t, self.traj_T
+    @staticmethod
+    def _moving(t0, T, T_b_f):
         P = np.einsum("nij,j->ni", T[:, :3, :], np.append(T_b_f[:3, 3], 1.0))
 
         def at(t):
