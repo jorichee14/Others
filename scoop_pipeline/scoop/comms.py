@@ -439,7 +439,10 @@ class Positions:
         if not moving and top == self.map:
             p = T_top_f[:3, 3].copy()
             fn = lambda t: np.broadcast_to(p, (len(np.atleast_1d(t)), 3)).copy()   # noqa: E731
-        elif moving:
+        elif moving or top != self.map:
+            # moving: below a /tf edge; or a tree whose /tf edge begins later
+            # than tf_edges looked (a robot that starts moving late) -- a track
+            # with its body in that tree says it moves
             tr = self._track(top)
             if tr is not None:
                 t0, T, T_top_b = tr
@@ -453,7 +456,7 @@ class Positions:
         top, T_top_f, moving = self._top(frame)
         if not moving and top == self.map:
             return lambda t: np.broadcast_to(T_top_f, (len(np.atleast_1d(t)), 4, 4)).copy()  # noqa: E731
-        tr = self._track(top) if moving else None
+        tr = self._track(top) if moving or top != self.map else None
         if tr is None:
             return None
         from scipy.spatial.transform import Rotation, Slerp

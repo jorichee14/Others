@@ -278,6 +278,14 @@ def main():
             f.append("positions, two robots moving: %s %s" % (p1, p2))
         if np.abs(pos.pose_of("camera_link")(np.array([1.0]))[0][:3, 3] - (0, 6, 0)).max() > 1e-9:
             f.append("pose_of, the second robot")
+        # its /tf edge not seen (it starts later than tf_edges looks): still placed
+        late = dict(edges)
+        late.pop("camera_link")
+        pl = comms.Positions(late, tt_, T1, "zed_left_camera_optical_frame",
+                             tracks=[(tt_, T2, "camera_link")])
+        if pl.of("camera_link") is None or pl.pose_of("camera_link") is None or \
+                np.abs(pl.of("camera_link")(np.array([1.5]))[0] - (0, 6.5, 0)).max() > 1e-9:
+            f.append("positions, a robot whose /tf starts late")
     except AssertionError as e:
         f.append(str(e))
     finally:
