@@ -66,7 +66,8 @@ analysis/            measuring results; reads outputs, writes nothing back
   comms/wifi_analysis.py  links: RSSI, PHY rates, ping loss per ICMP seq, iperf,
                      ping during iperf vs not, RSSI along the path
   comms/comms_map.py      RF map: NTP, RSSI, ping, iperf on the map's top view with
-                     the robot's path and the parked nodes (comms/maps/)
+                     each moving robot's path and the parked nodes; a coop run
+                     gets RSSI and ping panels per robot (comms/maps/)
   comms/csi_analysis.py   CSI links: capture, frame types and their subcarriers, path
                      loss, delay spread, coherence vs speed, RSSI on the map
   comms/csi_view.py       pictures of the clean CSI: amplitude, phase, delay profile

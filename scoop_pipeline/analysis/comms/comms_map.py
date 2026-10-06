@@ -6,22 +6,27 @@
 
 Background: the anchored map (the reference pass's, for a run) seen from
 above, the points between --band m above its floor (walls and furniture,
-no floor or ceiling). On it: the robot's path from its LiDAR track with its
-heading every few metres, the parked robots and the infra node where they
-stood, the boards. Four panels, from the comms tables (processing/
+no floor or ceiling). On it: each moving robot's path with its heading every
+few metres (mobile_1 from its LiDAR track, the others -- mobile_2 in a coop
+run -- from their 04 tracks), the parked robots and the infra node where they
+stood, the boards. Panels, from the comms tables (processing/
 comms_tables.py, made with positions):
 
-  NTP     the moving machine's clock offset measured at each poll (the CSI
+  NTP     the moving machines' clock offset measured at each poll (the CSI
           sniffer rides on mobile_1; mobile_1 is the reference), the parked
           machines labelled with their median |offset|
-  Wi-Fi   RSSI of the moving robot, median per --grid m cell; the others
+  Wi-Fi   RSSI of a moving robot, median per --grid m cell; the others
           labelled with theirs
-  ping    RTT of the moving robot, median per cell (log scale), cells that
+  ping    RTT of a moving robot, median per cell (log scale), cells that
           lost a ping outlined
   iperf   goodput where each test ran: down circles, up triangles
 
-Writes comms/maps/: comms_map.png / .pdf (the four panels), one figure per
-panel (ntp / rssi / ping / iperf .png), and <metric>_grid.csv (cell centre,
+With more than one robot moving (coop), a Wi-Fi and a ping panel per robot,
+on one colour scale, its own path dark and the other's light.
+
+Writes comms/maps/: comms_map.png / .pdf (all panels), one figure per panel
+(ntp / rssi / ping / iperf .png; rssi_<machine> / ping_<machine> with more
+than one robot moving), and <metric>_grid[_<machine>].csv (cell centre,
 median, count) for other tools.
 """
 import argparse
@@ -124,12 +129,19 @@ def write_grid(path, cells, name):
 
 
 def context(P):
-    """Map cloud, the robot's path (N, 4, 4), the boards [(name, x, y)]."""
+    """Map cloud, the moving robots' paths {machine: (N, 4, 4)}, the boards
+    [(name, x, y)]."""
     import json
     from pipeline_common import load_traj
     pcd = P.ref_file("anchored_map") if P.reference else P.outp("map_final_{tag}_anchored.pcd")
+    paths = {}
     traj = P.lidar_track_traj()
-    path = load_traj(traj)[1] if os.path.exists(traj) else None
+    if os.path.exists(traj):
+        paths[P.dataset.get("machine") or "mobile_1"] = load_traj(traj)[1]
+    for tr in (P.cfg.get("04_reference") or {}).get("tracks") or []:
+        p = os.path.join(P.reference_dir(), "traj_%s.tum" % tr["name"])
+        if tr.get("enabled", True) and os.path.exists(p):
+            paths[tr.get("machine") or tr["name"]] = load_traj(p)[1]
     boards = []
     files = [P.anchor_frame()] + ([P.outp("boards_{tag}.json")] if P.reference else [])
     seen = set()
@@ -139,17 +151,22 @@ def context(P):
                 if n not in seen:
                     seen.add(n)
                     boards.append((n, rec["xyz"][0], rec["xyz"][1]))
-    return (pcd if os.path.exists(pcd) else None), path, boards
+    return (pcd if os.path.exists(pcd) else None), paths, boards
 
 
-def draw_base(ax, plan, extent, path, boards, statics):
+def draw_base(ax, plan, extent, paths, boards, statics, focus=None):
+    """paths {machine: (N, 4, 4)}: focus's (all, without one) dark, the rest light."""
     if plan is not None:
         ax.imshow(np.ma.masked_equal(plan, 0), origin="lower", extent=extent, cmap="Greys",
                   vmin=0, vmax=1.6, interpolation="antialiased", zorder=0)
-    if path is not None:
+    for m, path in paths.items():
+        col = "0.15" if focus in (None, m) else "0.6"
         p = path[:, :2, 3]
-        ax.plot(p[:, 0], p[:, 1], color="0.15", lw=0.6, zorder=2)
-        ax.plot(p[0, 0], p[0, 1], "o", color="0.15", ms=4, zorder=3)
+        ax.plot(p[:, 0], p[:, 1], color=col, lw=0.6, zorder=2)
+        ax.plot(p[0, 0], p[0, 1], "o", color=col, ms=4, zorder=3)
+        if len(paths) > 1:
+            ax.annotate(m, (p[0, 0], p[0, 1]), fontsize=7, color=col, xytext=(4, 4),
+                        textcoords="offset points", zorder=6)
         d = np.r_[0, np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))]
         for s in np.arange(2.0, d[-1], 4.0):
             i = int(np.searchsorted(d, s))
@@ -158,7 +175,7 @@ def draw_base(ax, plan, extent, path, boards, statics):
             if np.linalg.norm(v) > 1e-3:
                 v = v / np.linalg.norm(v) * 0.6
                 ax.annotate("", xy=p[i] + v, xytext=p[i], zorder=3,
-                            arrowprops=dict(arrowstyle="-|>", color="0.15", lw=0.6))
+                            arrowprops=dict(arrowstyle="-|>", color=col, lw=0.6))
     for n, x, y in boards:
         ax.plot(x, y, "s", color="C1", ms=4, zorder=4)
         ax.annotate(n, (x, y), fontsize=6, color="C1", xytext=(3, -8), textcoords="offset points")
@@ -206,12 +223,13 @@ def main():
     out = os.path.join(comms, "maps")
     os.makedirs(out, exist_ok=True)
     cfg = a.config or pass_tf.find_config(proc)
-    pcd, path, boards = (None, None, [])
+    pcd, paths, boards = (None, {}, [])
     if cfg:
-        pcd, path, boards = context(pass_tf.load_pipeline(cfg))
+        pcd, paths, boards = context(pass_tf.load_pipeline(cfg))
     pcd = a.map or pcd
     plan, extent = floor_plan(pcd, a.band) if pcd else (None, None)
-    print(f"background: {pcd or 'none'}; path: {'%d poses' % len(path) if path is not None else 'none'}; "
+    print(f"background: {pcd or 'none'}; paths: "
+          f"{', '.join('%s %d poses' % (m, len(p)) for m, p in paths.items()) or 'none'}; "
           f"boards: {len(boards)}")
 
     wifi = by_machine(rows_of(comms, "wifi", "wifi.csv"))
@@ -243,46 +261,56 @@ def main():
     med_us = lambda rows: "%.0f us" % (np.nanmedian(np.abs(arr(rows, "last_offset_seconds"))) * 1e6)  # noqa: E731
     st = statics_of(ntp, lambda rows: ("|offset| " + med_us(rows)) if "7F7F" not in rows[0].get(
         "sync_source", "") else "reference clock")
-    panels.append(("ntp", "NTP: |measured clock offset| (us)", pts, st))
+    panels.append(("ntp", "NTP: |measured clock offset| (us)", pts, st, None))
 
-    def moving_one(table):
-        mv = [m for m, rows in table.items() if "x" in rows[0] and moving(rows)]
-        return mv[0] if mv else None
+    def movers(table):
+        return [m for m, rows in table.items() if "x" in rows[0] and moving(rows)]
 
-    m_w = moving_one(wifi)
+    def tag(key, m, ms):
+        return key if len(ms) <= 1 else f"{key}_{m}"
+
+    ms = movers(wifi)
     st = statics_of(wifi, lambda rows: "RSSI %.0f dBm" % np.nanmedian(arr(rows, "signal_dbm")))
-    cells = grid(arr(wifi[m_w], "x"), arr(wifi[m_w], "y"), arr(wifi[m_w], "signal_dbm"), a.grid) \
-        if m_w else []
-    if cells:
-        write_grid(os.path.join(out, "rssi_grid.csv"), cells, "rssi_dbm")
-    panels.append(("rssi", f"Wi-Fi: {m_w} RSSI (dBm), median per {a.grid:g} m cell", cells, st))
+    for m in ms or [None]:
+        cells = grid(arr(wifi[m], "x"), arr(wifi[m], "y"), arr(wifi[m], "signal_dbm"), a.grid) \
+            if m else []
+        if cells:
+            write_grid(os.path.join(out, tag("rssi_grid", m, ms) + ".csv"), cells, "rssi_dbm")
+        panels.append((tag("rssi", m, ms), f"Wi-Fi: {m} RSSI (dBm), median per {a.grid:g} m cell",
+                       cells, st, m))
 
-    m_p = moving_one(ping)
+    ms = movers(ping)
     st = statics_of(ping, lambda rows: "RTT %.1f ms" % np.nanmedian(
         arr([r for r in rows if num(r, "reply") == 1], "rtt_ms")))
-    cells, lost = [], []
-    if m_p:
-        rows = ping[m_p]
-        rep = arr(rows, "reply") == 1
-        x, y, rtt = arr(rows, "x"), arr(rows, "y"), arr(rows, "rtt_ms")
-        cells = grid(x[rep], y[rep], rtt[rep], a.grid)
-        write_grid(os.path.join(out, "ping_rtt_grid.csv"), cells, "rtt_ms")
-        # a cell lost a ping when one of its seqs never got a reply
-        seq = arr(rows, "icmp_seq")
-        got = set(seq[rep])
-        miss = ~rep & np.array([s not in got for s in seq])
-        lost = sorted({(c[0], c[1]) for c in grid(x[miss], y[miss], np.ones(miss.sum()), a.grid)})
-    panels.append(("ping", f"ping: {m_p} RTT (ms), median per {a.grid:g} m cell; red: a ping lost",
-                   (cells, lost), st))
+    for m in ms or [None]:
+        cells, lost = [], []
+        if m:
+            rows = ping[m]
+            rep = arr(rows, "reply") == 1
+            x, y, rtt = arr(rows, "x"), arr(rows, "y"), arr(rows, "rtt_ms")
+            cells = grid(x[rep], y[rep], rtt[rep], a.grid)
+            write_grid(os.path.join(out, tag("ping_rtt_grid", m, ms) + ".csv"), cells, "rtt_ms")
+            # a cell lost a ping when one of its seqs never got a reply
+            seq = arr(rows, "icmp_seq")
+            got = set(seq[rep])
+            miss = ~rep & np.array([s not in got for s in seq])
+            lost = sorted({(c[0], c[1]) for c in grid(x[miss], y[miss], np.ones(miss.sum()), a.grid)})
+        panels.append((tag("ping", m, ms),
+                       f"ping: {m} RTT (ms), median per {a.grid:g} m cell; red: a ping lost",
+                       (cells, lost), st, m))
 
     ip = []
     for m, rows in iperf.items():
         ok = [r for r in rows if num(r, "success") == 1]
         ip.append((m, arr(ok, "x"), arr(ok, "y"), arr(ok, "bitrate_mbps"), arr(ok, "reverse") == 1))
-    panels.append(("iperf", "iperf goodput (Mbit/s): o down, ^ up", ip, {}))
+    panels.append(("iperf", "iperf goodput (Mbit/s): o down, ^ up", ip, {}, None))
 
-    def draw(ax, key, title, data, statics, fig):
-        draw_base(ax, plan, extent, path, boards, statics)
+    # one colour scale per metric across the robots' panels
+    vals = {"rssi": [c[2] for p in panels if p[0].startswith("rssi") for c in p[2]],
+            "ping": [c[2] for p in panels if p[0].startswith("ping") for c in p[2][0]]}
+
+    def draw(ax, key, title, data, statics, focus, fig):
+        draw_base(ax, plan, extent, paths, boards, statics, focus)
         ax.set_title(title, fontsize=9)
         if key == "ntp":
             allv = np.concatenate([p[3] for p in data]) if data else np.array([])
@@ -291,12 +319,12 @@ def main():
                 for m, x, y, v in data:
                     sc = ax.scatter(x, y, c=v, s=10, cmap="magma_r", norm=norm, zorder=4, label=m)
                 fig.colorbar(sc, ax=ax, shrink=0.8, label="us")
-        elif key == "rssi" and data:
-            v = np.array([c[2] for c in data])
+        elif key.startswith("rssi") and data:
+            v = np.array(vals["rssi"])
             pc = draw_cells(ax, data, a.grid, "viridis", Normalize(np.percentile(v, 2), np.percentile(v, 98)))
             fig.colorbar(pc, ax=ax, shrink=0.8, label="dBm")
-        elif key == "ping" and data[0]:
-            v = np.array([c[2] for c in data[0]])
+        elif key.startswith("ping") and data[0]:
+            v = np.array(vals["ping"])
             lo, hi = max(np.percentile(v, 2), 0.1), np.percentile(v, 98)
             pc = draw_cells(ax, data[0], a.grid, "plasma",
                             LogNorm(lo, hi) if hi > 1.5 * lo else Normalize(lo, hi), outline=data[1])
@@ -315,9 +343,15 @@ def main():
                                norm=norm, edgecolors="k", lw=0.4, zorder=4)
                 fig.colorbar(sc, ax=ax, shrink=0.8, label="Mbit/s")
 
-    fig, axs = plt.subplots(2, 2, figsize=(16, 13))
-    for ax, (key, title, data, statics) in zip(axs.ravel(), panels):
-        draw(ax, key, title, data, statics, fig)
+    # robots' panels side by side: rssi, ping, then ntp and iperf
+    order = [p for p in panels if p[0].startswith("rssi")] + \
+        [p for p in panels if p[0].startswith("ping")] + [p for p in panels if p[0] in ("ntp", "iperf")]
+    nr = (len(order) + 1) // 2
+    fig, axs = plt.subplots(nr, 2, figsize=(16, 6.5 * nr), squeeze=False)
+    for ax, (key, title, data, statics, focus) in zip(axs.ravel(), order):
+        draw(ax, key, title, data, statics, focus, fig)
+    for ax in axs.ravel()[len(order):]:
+        ax.axis("off")
     fig.tight_layout()
     written = []
     for ext in ("png", "pdf"):
@@ -325,9 +359,9 @@ def main():
         fig.savefig(p, dpi=200)
         written.append(p)
     plt.close(fig)
-    for key, title, data, statics in panels:
+    for key, title, data, statics, focus in panels:
         fig, ax = plt.subplots(figsize=(9, 8))
-        draw(ax, key, title, data, statics, fig)
+        draw(ax, key, title, data, statics, focus, fig)
         fig.tight_layout()
         p = os.path.join(out, f"{key}.png")
         fig.savefig(p, dpi=200)

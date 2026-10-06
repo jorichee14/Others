@@ -7,7 +7,8 @@
 From comms/csi/csi_<link>_clean.npz, writes comms/csi/view/:
 
   csi_view_<link>.png / .pdf     the whole pass:
-    a  link length, RSSI and the receiver's speed (standing shaded)
+    a  link length and RSSI; shaded where both ends stand still (the
+       receiver and the transmitter: both move in a coop run)
     b  amplitude per subcarrier, H scaled to the frame's RSSI (dBm per
        subcarrier) -- frequency-selective fading as horizontal structure,
        motion as vertical
@@ -56,6 +57,15 @@ def speed(t, pose):
     return np.interp(t, g, np.convolve(v, np.ones(5) / 5, mode="same"))
 
 
+def link_speed(z, sel=slice(None)):
+    """The faster end's speed (receiver or transmitter) per frame."""
+    vs = [speed(z["t"][sel], z[k][sel]) for k in ("rx_pose", "tx_pose") if k in z.files]
+    if not vs:
+        return np.full(len(z["t"][sel]), np.nan)
+    v = np.vstack(vs)
+    return np.where(np.isfinite(v).any(axis=0), np.nanmax(np.where(np.isfinite(v), v, -1), axis=0), np.nan)
+
+
 def default_zoom(t, v, width=10.0):
     """10 s in the middle of the longest stretch above 0.1 m/s."""
     mv = np.nan_to_num(v) > 0.1
@@ -89,8 +99,7 @@ def figure(z, name, sel, t0, out, title, delay_ns, max_cols):
     P = pdp(Hc, sub)
     tap_ns = 1e3 / float(z["bandwidth_mhz"]) if "bandwidth_mhz" in z.files else 12.5   # 1 / bandwidth
     taps = int(delay_ns / tap_ns) + 8
-    rx = z["rx_pose"][sel] if "rx_pose" in z.files else None
-    v = speed(z["t"][sel], rx)
+    v = link_speed(z, sel)
     d = z["distance_m"][sel] if "distance_m" in z.files else None
 
     fig = plt.figure(figsize=(13, 15))
@@ -108,7 +117,7 @@ def figure(z, name, sel, t0, out, title, delay_ns, max_cols):
     a2.plot(t, z["rssi_dbm"][sel], ".", ms=1, color="C0", alpha=0.4)
     a2.set_ylabel("RSSI dBm", color="C0")
     a.set_xlim(*ext)
-    a.set_title(f"{title}  (grey: standing)", fontsize=10)
+    a.set_title(f"{title}  (grey: both ends standing)", fontsize=10)
 
     def heat(row, img, label, cmap, vmin=None, vmax=None, extent=None, ylabel="subcarrier"):
         ax = fig.add_subplot(gs[row, 0], sharex=a)
@@ -171,8 +180,7 @@ def main():
         for p in figure(z, name, slice(None), t0, os.path.join(out, f"csi_view_{name}"),
                         f"CSI {name}, whole pass", a.delay_ns, a.max_cols):
             print(f"  {p}")
-        rx = z["rx_pose"] if "rx_pose" in z.files else None
-        lo, hi = a.zoom if a.zoom else [x - t0 for x in default_zoom(z["t"], speed(z["t"], rx))]
+        lo, hi = a.zoom if a.zoom else [x - t0 for x in default_zoom(z["t"], link_speed(z))]
         sel = np.flatnonzero((z["t"] - t0 >= lo) & (z["t"] - t0 <= hi))
         if len(sel) > 10:
             for p in figure(z, name, sel, t0, os.path.join(out, f"csi_view_{name}_zoom"),
