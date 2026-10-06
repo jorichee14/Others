@@ -19,8 +19,8 @@ RealSense's own tree from camera_link (mobile_2).
   coop (coop_1): mobile_2 driving, from 04's track (camera_link in map), its
       origin map_realsense at the first pose below a board only survey_1
       measured (dataset.boards_from); no 05, so mobile_1's origin map_zed is
-      placed where the ZED's own tracking puts the camera at the LiDAR
-      trajectory's first pose, below the start board; the arducam where
+      its start (zed_camera_link at the LiDAR trajectory's first pose), below
+      the start board, whatever the ZED's own odometry says; the arducam where
       survey_1's 07 put it (dataset.cameras_from).
 
 Every lookup in the merged bag must give the pipeline's poses, and every
@@ -399,14 +399,17 @@ def main():
         close(tree.lookup("map", "map_realsense", T0 + 5), true_rs(0), "coop: map_realsense", f)
         close(tree.lookup("map", "board_b", T0 + 5), rotz(45, (-7.2, 12.6, 0.03)),
               "coop: board_b from survey_1", f)
-        # mobile_1 without 05: map_zed where the ZED's (wrong by 1 m / 20 deg)
-        # tracking agrees with the LiDAR track at its start, below the start board;
-        # the LiDAR track carries mobile_1, the ZED's map_zed ~~ odom_zed stays
+        # mobile_1 without 05: map_zed at its start, not where the ZED's (wrong
+        # by 1 m / 20 deg) odometry would put it; the LiDAR track carries
+        # mobile_1 from there, the ZED's map_zed ~~ odom_zed stays
         for t in stamps[::7]:
             close(tree.lookup("map", "zed_left_camera_optical_frame", T0 + t), true_cam(t),
                   "coop: mobile_1 at %.1f s" % t, f)
-        close(tree.lookup("map", "map_zed", T0 + 5),
-              np.linalg.inv(rotz(20, (1.0, 0, 0))) @ T_MAP_MAPZED, "coop: map_zed", f)
+        T_cam_link = np.linalg.inv(CHAIN[0][2] @ CHAIN[1][2] @ CHAIN[2][2])
+        close(tree.lookup("map", "map_zed", T0 + 5), true_cam(0) @ T_cam_link,
+              "coop: map_zed at mobile_1's start", f)
+        close(tree.lookup("map_zed", "zed_camera_link", T0), np.eye(4),
+              "coop: mobile_1 starts at map_zed's origin", f)
         if tree.lookup("map_zed", "odom_zed", T0 + 5) is None:
             f.append("coop: map_zed ~~ odom_zed is missing")
         if after["map_zed"].parent != "board" or after["zed_camera_link"].parent != "map_zed":

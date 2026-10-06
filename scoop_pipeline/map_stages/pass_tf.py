@@ -10,8 +10,9 @@ it started at (map ── board ── map_zed, map ── board_rs ── map_r
   board ── map_zed          mobile_1's origin: the ZED's map of this session
                             (05: T_map_mapzed in anchor_frame.json, or
                             boards_<tag>.json for a run; a run without 05, coop:
-                            where the ZED's own tracking puts the camera at the
-                            LiDAR trajectory's first pose); map_zed ~~ odom_zed
+                            mobile_1's start, zed_camera_link at the LiDAR
+                            trajectory's first pose, as map_realsense is
+                            mobile_2's); map_zed ~~ odom_zed
                             stays as recorded, so the ZED's own topics show in map
      map_zed ~~ zed_camera_link
                             mobile_1 from the LiDAR trajectory (a run: 04's
@@ -103,75 +104,6 @@ def _odom_edge(body, edges):
             return e.parent, f
         f = e.parent
     return None
-
-
-def _tf_samples(bags, pairs, t_lo, t_hi):
-    """/tf transforms of the (parent, child) `pairs` stamped in [t_lo, t_hi]
-    (ns) -> {(parent, child): [(t_ns, T)]}, by stamp."""
-    from mcap.reader import make_reader
-    from scoop import rosmsg
-    ts = rosmsg.typestore()
-    out = {k: [] for k in pairs}
-    for b in bags:
-        r = scoop_bag.open_bag(b)
-        if "/tf" not in r.topics():
-            continue
-        for f in r.files:
-            with open(f, "rb") as fh:
-                for sc, _, msg in make_reader(fh).iter_messages(
-                        topics=["/tf"], start_time=t_lo - int(5e9), end_time=t_hi + int(5e9)):
-                    for tr in ts.deserialize_cdr(msg.data, tftree.TFMSG).transforms:
-                        k = (tr.header.frame_id.lstrip("/"), tr.child_frame_id.lstrip("/"))
-                        if k not in out:
-                            continue
-                        t_ns = tr.header.stamp.sec * 1000000000 + tr.header.stamp.nanosec
-                        if t_lo <= t_ns <= t_hi:
-                            a, q = tr.transform.translation, tr.transform.rotation
-                            out[k].append((t_ns, tftree.matrix([a.x, a.y, a.z],
-                                                               [q.x, q.y, q.z, q.w])))
-    for v in out.values():
-        v.sort(key=lambda x: x[0])
-    return out
-
-
-def _mapzed_from_track(bags, edges, mapzed, body, poses, log=print):
-    """T_map_mapzed for a pass without 05: the ZED's own tracking (map_zed ~~
-    ... ~~ body in the bags) against the LiDAR trajectory (`poses`, body in
-    map) at the trajectory's first poses where the ZED tracks -> T or None."""
-    chain, f = [], body
-    while f != mapzed:
-        e = edges.get(f)
-        if e is None:
-            log("    (%s not placed: %s is not below it in the bags; the tree above %s ends at %s)"
-                % (mapzed, body, body, f))
-            return None
-        chain.append(e)
-        f = e.parent
-    dyn = [(e.parent, e.child) for e in chain if not e.static]
-    t0 = poses[0][0]
-    smp = _tf_samples(bags, dyn, t0, t0 + int(30e9))
-    if any(not smp[k] for k in dyn):
-        log("    (%s not placed: no /tf %s in the 30 s from the LiDAR trajectory's start)"
-            % (mapzed, ", ".join("%s->%s" % k for k in dyn if not smp[k])))
-        return None
-    t_ref = max(smp[k][0][0] for k in dyn)          # every edge has a transform from here
-    T = np.eye(4)
-    for e in reversed(chain):                         # map_zed down to body
-        if e.static:
-            T = T @ e.T
-        else:
-            v = smp[(e.parent, e.child)]
-            k = int(np.argmin([abs(t - t_ref) for t, _ in v]))
-            T = T @ v[k][1]
-    pt = np.array([t for t, _ in poses])
-    k = int(np.argmin(np.abs(pt - t_ref)))
-    if abs(pt[k] - t_ref) > int(0.2e9):
-        log("    (%s not placed: no LiDAR trajectory pose within 0.2 s of the ZED's first "
-            "transforms)" % mapzed)
-        return None
-    log("    %s placed where the ZED's tracking puts %s at the LiDAR trajectory's pose "
-        "%.2f s after its start" % (mapzed, body, (pt[k] - t0) * 1e-9))
-    return poses[k][1] @ np.linalg.inv(T)
 
 
 def _load_poses(path, T_left=None):
@@ -266,9 +198,15 @@ def plan(P, edges, bags, log=print):
         if body is None or T_left is None:
             traj = None
     if T_mz is None and P.reference and traj and os.path.exists(traj) and \
-            mapzed in frames and mapzed not in edges:
-        # a run without 05 (coop): the ZED's map placed by its own tracking
-        T_mz = _mapzed_from_track(bags, edges, mapzed, body, _load_poses(traj), log)
+            mapzed in frames and mapzed not in edges and body in edges:
+        # a run without 05 (coop): mobile_1's origin is its start -- the frame
+        # its tree hangs from (below the ZED's odometry) at the first pose
+        oe = _odom_edge(body, edges)
+        start = oe[1] if oe else tftree._root(body, edges)
+        p0 = _load_poses(traj)[0]
+        T_mz = p0[1] @ np.linalg.inv(tftree._static_pose(start, body, edges))
+        log("    %s at mobile_1's start: %s at the LiDAR trajectory's first pose"
+            % (mapzed, start))
     origin = mapzed if T_mz is not None else mapf
     if traj and os.path.exists(traj):
         oe = _odom_edge(body, edges)
