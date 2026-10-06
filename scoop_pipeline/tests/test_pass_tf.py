@@ -254,8 +254,8 @@ def check09(b09, stamps, T_cam_sensor, what):
     close(tree.lookup("map", "board_b", T0 + 5), rotz(45, (-7.2, 12.6, 0.03)),
           what + ": board_b", f)
     close(tree.lookup("map", "map_zed", T0 + 5), T_MAP_MAPZED, what + ": map_zed", f)
-    if tree.lookup("map_zed", "odom_zed", T0 + 5) is None:
-        f.append(what + ": the bag's map_zed ~~ odom_zed is missing")
+    if tree.lookup("map_zed", "odom_zed", T0 + 5) is not None:
+        f.append(what + ": the ZED's odom_zed is still in")
     if after["map_zed"].parent != "board" or after["map_realsense"].parent != "board_rs":
         f.append("%s: origins below %s / %s" % (what, after["map_zed"].parent,
                                                  after["map_realsense"].parent))
@@ -326,8 +326,8 @@ def main():
         close(tree.lookup("map", "board", t), np.eye(4), "run: board (reference's)", f)
         close(tree.lookup("map", "board_b", t), rotz(45, (-7.2, 12.6, 0.03)), "run: board_b", f)
         close(tree.lookup("map", "board_rs", t), rotz(10, (-24.4, 2.2, 0.1)), "run: board_rs", f)
-        if tree.lookup("map_zed", "odom_zed", t) is None:
-            f.append("run: map_zed ~~ odom_zed (the ZED's own topics) is gone")
+        if tree.lookup("map_zed", "odom_zed", t) is not None:
+            f.append("run: the ZED's odom_zed is still in")
         if after["zed_camera_link"].parent != "map_zed":
             f.append("run: zed_camera_link hangs from %s" % after["zed_camera_link"].parent)
         if after["map_zed"].parent != "board":
@@ -401,7 +401,7 @@ def main():
               "coop: board_b from survey_1", f)
         # mobile_1 without 05: map_zed at its start, not where the ZED's (wrong
         # by 1 m / 20 deg) odometry would put it; the LiDAR track carries
-        # mobile_1 from there, the ZED's map_zed ~~ odom_zed stays
+        # mobile_1 from there, the ZED's odom_zed is dropped
         for t in stamps[::7]:
             close(tree.lookup("map", "zed_left_camera_optical_frame", T0 + t), true_cam(t),
                   "coop: mobile_1 at %.1f s" % t, f)
@@ -410,8 +410,8 @@ def main():
               "coop: map_zed at mobile_1's start", f)
         close(tree.lookup("map_zed", "zed_camera_link", T0), np.eye(4),
               "coop: mobile_1 starts at map_zed's origin", f)
-        if tree.lookup("map_zed", "odom_zed", T0 + 5) is None:
-            f.append("coop: map_zed ~~ odom_zed is missing")
+        if tree.lookup("map_zed", "odom_zed", T0 + 5) is not None or "odom_zed" in after:
+            f.append("coop: the ZED's odom_zed is still in")
         if after["map_zed"].parent != "board" or after["zed_camera_link"].parent != "map_zed":
             f.append("coop: map_zed / zed_camera_link hang from %s / %s"
                      % (after["map_zed"].parent, after["zed_camera_link"].parent))

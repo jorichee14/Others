@@ -12,16 +12,15 @@ it started at (map ── board ── map_zed, map ── board_rs ── map_r
                             boards_<tag>.json for a run; a run without 05, coop:
                             mobile_1's start, zed_camera_link at the LiDAR
                             trajectory's first pose, as map_realsense is
-                            mobile_2's); map_zed ~~ odom_zed
-                            stays as recorded, so the ZED's own topics show in map
+                            mobile_2's)
      map_zed ~~ zed_camera_link
                             mobile_1 from the LiDAR trajectory (a run: 04's
                             traj_<name>_in_cam.tum; a mapping pass: 02's refined
                             trajectory through 05's T_N_world), replacing the
-                            ZED's odom_zed ~~ zed_camera_link: the ZED's tracking
-                            is not trusted. Its whole tree (ZED, os_sensor,
-                            radars) follows. (Without T_map_mapzed: map ~~
-                            zed_camera_link.)
+                            ZED's map_zed ~~ odom_zed ~~ zed_camera_link: the
+                            ZED's tracking is not trusted, and odom_zed goes with
+                            it. Its whole tree (ZED, os_sensor, radars) follows.
+                            (Without T_map_mapzed: map ~~ zed_camera_link.)
   board_rs ── map_realsense mobile_2's origin (07's camera "origin_frame", below
                             its "board"): at its place from 07 while it is parked
      map_realsense ── camera_link
@@ -212,6 +211,14 @@ def plan(P, edges, bags, log=print):
         oe = _odom_edge(body, edges)
         if oe:
             drop_edge(oe[0], oe[1], "the old odometry; the LiDAR trajectory replaces it")
+            # the frames that odometry hung from, left with nothing below them
+            # (odom_zed): gone too, mobile_1 hangs from its origin directly
+            f = oe[0]
+            while f in edges and f != origin and \
+                    not any(e.parent == f for e in edges.values()):
+                p_ = edges[f].parent
+                drop_edge(p_, f, "the ZED's odometry frame, nothing below it now")
+                f = p_
         if T_mz is not None:                            # poses in map -> in map_zed
             T_left = np.linalg.inv(T_mz) @ (np.eye(4) if T_left is None else T_left)
         poses = _load_poses(traj, T_left)

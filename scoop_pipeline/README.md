@@ -451,10 +451,11 @@ leaves it out; `--check` prints the tree without merging):
 map
 ├── board                   05's start board
 │  └── map_zed              mobile_1's origin, 05: the ZED's map at the start board
-│     ├~~ odom_zed          the ZED's own topics, as recorded
+│                           (a run without 05, coop: mobile_1's start)
 │     └~~ zed_camera_link   mobile_1 on its LiDAR trajectory (04's in a run, 02's
 │        └── ... ZED, os_sensor, radars   through T_N_world in a mapping pass);
-│                           replaces the ZED's odom_zed ~~ zed_camera_link
+│                           replaces the ZED's map_zed ~~ odom_zed ~~ zed_camera_link
+│                           (odom_zed is dropped)
 ├── board_rs                05's RealSense board
 │  └── map_realsense        mobile_2's origin (07 camera "origin_frame", below its "board")
 │     └── camera_link       parked: where 07 placed it
