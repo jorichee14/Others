@@ -824,7 +824,7 @@ def run(P, tr, base, ref, outd):
 
     fixes, fix_at = [], {}
     if c["board_fixes"]:
-        fixes = board_fixes(P, c, bag, T_bc, os.path.join(outd, "board_fixes_%s.json" % name))
+        fixes = board_fixes(P, c, bag, T_bc, os.path.join(outd, "board_fixes_%s.json" % c.get("cache_name", name)))
         fix_at = fix_lookup(fixes, times, float(c["board_tol_s"]))
         per = {}
         for f in fixes:
@@ -851,7 +851,7 @@ def run(P, tr, base, ref, outd):
         print("    floor under mobile_2's start %.2f m, its camera %.2f m" % (floor, z_cam))
         lc = dict(LS.DEFAULTS, z_lo=floor + 0.08, z_hi=z_cam + 0.15)
         lc.update(c.get("lidar") or {})
-        scans_l = LS.detect(P, ref, lc, os.path.join(outd, "lidar_sightings_%s.json" % name))
+        scans_l = LS.detect(P, ref, lc, os.path.join(outd, "lidar_sightings_%s.json" % c.get("cache_name", name)))
         sight = LS.Sightings(scans_l)
         nc = sum(len(x[1]) for x in scans_l)
         print("    mobile_1's LiDAR: %d scans, %d robot-sized clusters off the map at %.2f-%.2f m"

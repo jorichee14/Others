@@ -224,6 +224,23 @@ def main():
         i = args.index("--track")
         only = args[i + 1]
         del args[i:i + 2]
+    # an ablation of one track: --as NAME writes it under NAME (its board and
+    # LiDAR caches stay the track's); --set key=value (JSON value) overrides
+    # the track's settings, e.g. --set pgo_map=false (the pose graph without
+    # the depth frames' map fixes)
+    as_name, sets = None, {}
+    if "--as" in args:
+        i = args.index("--as")
+        as_name = args[i + 1]
+        del args[i:i + 2]
+    while "--set" in args:
+        i = args.index("--set")
+        k, v = args[i + 1].split("=", 1)
+        try:
+            sets[k] = json.loads(v)
+        except ValueError:
+            sets[k] = v
+        del args[i:i + 2]
     cfg_path = args[0] if args else "pipeline_config.json"
     P = load_pipeline(cfg_path)
     s01 = P.cfg["01_build_map"]
@@ -256,6 +273,11 @@ def main():
         tracks = [t for t in tracks if t["name"] == only]
         if not tracks:
             raise SystemExit("no track %r in 04_reference.tracks" % only)
+        if as_name or sets:
+            tracks = [dict(tracks[0], **sets)]
+            if as_name:
+                tracks[0].update(cache_name=only, name=as_name)
+            print("ablation of %s: written as %s, settings %s" % (only, tracks[0]["name"], sets))
         run_tracks(P, tracks, c, load_reference(ref_map, c), outd)
         return
 

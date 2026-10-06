@@ -285,6 +285,26 @@ def main():
             if len(cv) != len(ts) or not np.isfinite(cv).all() or (cv[:, 5] <= 0).any() \
                     or cv[:, 5].max() > 1.0:
                 f.append("pose graph covariance: %d rows, %s" % (len(cv), cv[:, 5].max()))
+            # the ablation: the same graph without the map fixes, under another name
+            r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages", "04_reference_traj.py"),
+                                cfg, "--track", "mobile_2_depth", "--as", "mobile_2_depth_nomap",
+                                "--set", "pgo_map=false"], capture_output=True, text=True)
+            if r.returncode or not os.path.exists(os.path.join(od, "cov_mobile_2_depth_nomap.csv")):
+                f.append("ablation: " + r.stdout[-1500:] + r.stderr[-2500:])
+            else:
+                cn = np.loadtxt(os.path.join(od, "cov_mobile_2_depth_nomap.csv"), delimiter=",",
+                                skiprows=1)
+                print("ablation without map fixes: sigma xy median %.1f cm (with: %.1f cm)"
+                      % (100 * np.median(cn[:, 5]), 100 * np.median(cv[:, 5])))
+                if not np.median(cn[:, 5]) > 2 * np.median(cv[:, 5]):
+                    f.append("ablation: sigma without map fixes %.3f, with %.3f"
+                             % (np.median(cn[:, 5]), np.median(cv[:, 5])))
+                r = subprocess.run([sys.executable, os.path.join(ROOT, "checks", "compare_tracks.py"),
+                                    cfg], capture_output=True, text=True)
+                print("\n".join(r.stdout.splitlines()[:6]))
+                if r.returncode or not os.path.exists(os.path.join(
+                        od, "compare_mobile_2_depth_mobile_2_depth_nomap.png")):
+                    f.append("compare_tracks: " + r.stdout[-1500:] + r.stderr[-2500:])
         # the marginals are the inverse information's diagonal blocks
         import depth_pgo as PG
         g = PG.Graph(6)

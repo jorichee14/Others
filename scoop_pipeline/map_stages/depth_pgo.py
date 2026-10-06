@@ -34,6 +34,9 @@ writes the outputs, this solves for the poses).
                  across it, not along it; floor points fix nothing -- scaled
                  so a fully constrained frame is map_sigma_m; pgo_icp_iters
                  passes
+  ablation    "pgo_map": false leaves the map fixes out (cuVSLAM, the anchor and
+              the boards only): 04 --track <t> --as <t>_nomap --set pgo_map=false,
+              then checks/compare_tracks.py
   solve       Gauss-Newton on the sparse normal equations, a Cauchy loss
               (robust_c sigmas) on all but the odometry within a piece; the
               graph is solved after each step above, the frames re-matched to
@@ -307,7 +310,10 @@ def run_pgo(A, ref, scans, times, T_odom, piece, o_t, pc_o, soft, T_anchor, k_an
     # map: search around the estimate
     search = []
     every = float(c["pgo_search_every_s"])
-    for rnd, radius in enumerate(c["pgo_search_m"]):
+    use_map = bool(c.get("pgo_map", True))          # false: the ablation without map fixes
+    if not use_map:
+        log("    map fixes left out (pgo_map false): cuVSLAM, the start anchor and the boards only")
+    for rnd, radius in enumerate(c["pgo_search_m"] if use_map else []):
         search = []
         t_next = -np.inf
         seg_found = set()
@@ -345,7 +351,7 @@ def run_pgo(A, ref, scans, times, T_odom, piece, o_t, pc_o, soft, T_anchor, k_an
     ci = dict(c, max_shift=float(c["pgo_icp_shift"]))
     icp_T = [None] * n
     sig2 = float(c["map_sigma_m"]) ** 2
-    for it in range(int(c["pgo_icp_iters"])):
+    for it in range(int(c["pgo_icp_iters"]) if use_map else 0):
         facs = []
         icp_T = [None] * n
         for j in range(n):
