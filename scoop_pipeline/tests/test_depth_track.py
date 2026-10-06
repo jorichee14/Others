@@ -279,6 +279,27 @@ def main():
             if len(ts) < 146 or np.median(e) > 1.0 or max(e) > 5.0:
                 f.append("pose graph: %d frames, %.2f cm median, %.2f cm max"
                          % (len(ts), np.median(e), max(e)))
+            cv = np.loadtxt(os.path.join(od, "cov_mobile_2_depth.csv"), delimiter=",", skiprows=1)
+            print("pose graph uncertainty: %d poses, xy major semi-axis %.1f-%.1f cm"
+                  % (len(cv), 100 * cv[:, 5].min(), 100 * cv[:, 5].max()))
+            if len(cv) != len(ts) or not np.isfinite(cv).all() or (cv[:, 5] <= 0).any() \
+                    or cv[:, 5].max() > 1.0:
+                f.append("pose graph covariance: %d rows, %s" % (len(cv), cv[:, 5].max()))
+        # the marginals are the inverse information's diagonal blocks
+        import depth_pgo as PG
+        g = PG.Graph(6)
+        for k in range(5):
+            g.add_rel(k, k + 1, np.array([1.0, 0.0, 0.1]), np.diag([10.0, 20.0, 30.0]), False)
+        g.add_abs(0, np.zeros(3), np.diag([50.0, 50.0, 80.0]), False, "anchor")
+        g.add_abs(5, np.array([4.8, 1.0, 0.5]), np.diag([5.0, 5.0, 8.0]), False, "board")
+        cg = dict(PG.DEFAULTS)
+        Xg = g.solve(np.zeros((6, 3)), cg)
+        Jg, _ = g.linearize(Xg, cg)
+        Hd = np.linalg.inv((Jg.T @ Jg).toarray() + 1e-6 * np.eye(18))
+        mg = g.marginals(Xg, cg, chunk=4)
+        dm = max(np.abs(mg[k] - Hd[3 * k:3 * k + 3, 3 * k:3 * k + 3]).max() for k in range(6))
+        if dm > 1e-9:
+            f.append("pose graph marginals off the dense inverse by %g" % dm)
         c["04_reference"]["tracks"][0].pop("method")
         json.dump(c, open(cfg, "w"))
 

@@ -857,13 +857,13 @@ def run(P, tr, base, ref, outd):
         print("    mobile_1's LiDAR: %d scans, %d robot-sized clusters off the map at %.2f-%.2f m"
               % (len(scans_l), nc, lc["z_lo"], lc["z_hi"]))
 
-    history, rows, events, T_cur = [], [], [], None
+    history, rows, events, T_cur, cov = [], [], [], None, None
     pgo = c.get("method", "track") == "pgo"
     if pgo:                                          # one pose graph (depth_pgo.py)
         import depth_pgo
         print("\n=== %s: pose graph over every depth frame, anchored to the frozen map ===" % name)
         k_a = int(np.argmin(np.abs(times - t_a)))
-        T_cur, rows, history = depth_pgo.run_pgo(
+        T_cur, rows, history, cov = depth_pgo.run_pgo(
             A, ref, scans, times, T_odom_all, piece, o_t, pc_o, c["_dropout"],
             T_map_odom @ T_odom_all[k_a], k_a, fix_at, c, refind, from_board, step)
     for rnd in (range(1, int(c["rounds"]) + 1) if not pgo else ()):
@@ -940,6 +940,16 @@ def run(P, tr, base, ref, outd):
         f.write("t,piece,status,n_corr,residual_cm,correction_cm,correction_deg\n")
         for t, pc_, (st, nc, rms, dd, da) in zip(times, piece, rows):
             f.write("%.9f,%d,%s,%d,%.3f,%.3f,%.4f\n" % (t, pc_, st, nc, rms * 100, dd * 100, da))
+    if cov is not None:                              # the pose graph's per-pose uncertainty
+        import depth_pgo
+        major = depth_pgo.sigma_major(cov)
+        with open(os.path.join(outd, "cov_%s.csv" % name), "w") as f:
+            f.write("t,sigma_x_m,sigma_y_m,sigma_yaw_deg,corr_xy,sigma_xy_major_m\n")
+            for t, C, mj in zip(times, cov, major):
+                sx, sy = np.sqrt(max(C[0, 0], 0)), np.sqrt(max(C[1, 1], 0))
+                f.write("%.9f,%.4f,%.4f,%.4f,%.4f,%.4f\n"
+                        % (t, sx, sy, np.degrees(np.sqrt(max(C[2, 2], 0))),
+                           C[0, 1] / max(sx * sy, 1e-12), mj))
     a0 = placed & (piece == piece0)                 # the anchored piece: the seed means something
     drift = np.linalg.norm(T_cur[a0, :3, 3] - T_seed[a0, :3, 3], axis=1) * 100 \
         if a0.any() else np.zeros(1)
@@ -956,6 +966,10 @@ def run(P, tr, base, ref, outd):
                                         "p95": float(np.percentile(resid, 95)) if resid else None,
                                         "max": float(max(resid)) if resid else None},
                "longest_unplaced_s": float(gaps.max()) if len(gaps) else None,
+               "sigma_xy_major_cm": ({"median": float(100 * np.median(major)),
+                                      "p95": float(100 * np.percentile(major, 95)),
+                                      "max": float(100 * major.max()),
+                                      "file": "cov_%s.csv" % name} if cov is not None else None),
                "anchored_piece_seed_to_final_cm": {"median": float(np.median(drift)),
                                                    "p95": float(np.percentile(drift, 95)),
                                                    "max": float(drift.max()),
@@ -977,5 +991,6 @@ def run(P, tr, base, ref, outd):
     print("anchored piece, odometry seed -> final: median %.1f cm, p95 %.1f cm, max %.1f cm, "
           "%.1f cm at its end (how far the odometry drifted from the map)"
           % (np.median(drift), np.percentile(drift, 95), drift.max(), drift[-1]))
-    print("wrote %s\n      %s\n      quality_%s.csv, summary_%s.json" % (p_body, p_cam, name, name))
+    print("wrote %s\n      %s\n      quality_%s.csv, summary_%s.json%s"
+          % (p_body, p_cam, name, name, ", cov_%s.csv (per-pose uncertainty)" % name if cov is not None else ""))
     return p_body, p_cam

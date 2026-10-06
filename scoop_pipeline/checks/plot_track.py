@@ -11,7 +11,9 @@ start and length), the other robot's track in grey, the boards, and the raw
 cuVSLAM odometry (processing/vslam.py's traj_vslam.txt) in purple, put on the
 map at the track's first pose (the board seed) and never corrected after:
 where it and the track part, one of them is wrong. Time marks every 50 s on both.
-Bottom: the timeline -- when the track has a pose, when not.
+Bottom: the timeline -- when the track has a pose, when not; for a pose graph
+track (04's method pgo, cov_<track>.csv) also each pose's uncertainty over time
+(the major semi-axis of its xy ellipse, and yaw).
 Writes odometry/reference_<tag>/track_<track>.png and lists the stretches.
 """
 import argparse
@@ -93,8 +95,11 @@ def main():
     gaps = [(t2[i], t2[i + 1], xy[i], xy[i + 1]) for i in gi]
     span = (t2[0] - t0, t2[-1] - t0)
 
-    fig = plt.figure(figsize=(12, 10.5))
-    gs = fig.add_gridspec(2, 1, height_ratios=[6, 1], hspace=0.18)
+    pc = os.path.join(od, "cov_%s.csv" % a.track)
+    cv = np.loadtxt(pc, delimiter=",", skiprows=1, ndmin=2) if os.path.exists(pc) else None
+    fig = plt.figure(figsize=(12, 10.5 if cv is None else 12.5))
+    gs = fig.add_gridspec(2 if cv is None else 3, 1,
+                          height_ratios=[6, 1] if cv is None else [6, 1, 1.6], hspace=0.18 if cv is None else 0.3)
     ax = fig.add_subplot(gs[0])
     ax.set_facecolor("white")
     if len(W):
@@ -182,6 +187,29 @@ def main():
     tx.set_xlabel("s from the start  (blue: a pose, orange: none)")
     for sp in ("top", "right", "left"):
         tx.spines[sp].set_visible(False)
+    if cv is not None:                         # the pose graph's per-pose uncertainty
+        ux = fig.add_subplot(gs[2], sharex=tx)
+        tc = cv[:, 0] - t0
+        brk = np.r_[0, np.flatnonzero(np.diff(cv[:, 0]) > a.gap) + 1, len(tc)]
+        for s0, s1 in zip(brk[:-1], brk[1:]):
+            ux.plot(tc[s0:s1], 100 * cv[s0:s1, 5], color=cmap(0.85), lw=1.2,
+                    label="xy, major semi-axis (cm)" if s0 == 0 else None)
+        uy = ux.twinx()
+        for s0, s1 in zip(brk[:-1], brk[1:]):
+            uy.plot(tc[s0:s1], cv[s0:s1, 3], color="#8a8a8a", lw=0.9,
+                    label="yaw (deg)" if s0 == 0 else None)
+        ux.set_ylabel("1-sigma xy (cm)")
+        uy.set_ylabel("1-sigma yaw (deg)", color="#6a6a6a")
+        ux.set_xlabel("s from the start  (the pose graph's marginal covariance per pose)")
+        ux.set_ylim(bottom=0)
+        uy.set_ylim(bottom=0)
+        h1, l1 = ux.get_legend_handles_labels()
+        h2, l2 = uy.get_legend_handles_labels()
+        ux.legend(h1 + h2, l1 + l2, loc="upper left", fontsize=8)
+        ux.grid(color="#e6e6e6", lw=0.5)
+        print("uncertainty (%s): xy major semi-axis median %.1f cm, p95 %.1f cm, max %.1f cm"
+              % (os.path.basename(pc), 100 * np.median(cv[:, 5]), 100 * np.percentile(cv[:, 5], 95),
+                 100 * cv[:, 5].max()))
 
     tag = ("_" + os.path.basename(os.path.dirname(os.path.abspath(os.path.expanduser(a.vslam))))
            if a.vslam else "")             # another run: its own png (track_<track>_vslam_prev.png)

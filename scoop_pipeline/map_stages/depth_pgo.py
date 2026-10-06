@@ -39,6 +39,12 @@ writes the outputs, this solves for the poses).
               graph is solved after each step above, the frames re-matched to
               the map from where it puts them.
 
+Each pose's uncertainty: its marginal covariance in the solved graph
+(Graph.marginals), written per frame by depth_track (cov_<track>.csv: sigma x,
+y, yaw, the x-y correlation, the major semi-axis of the xy ellipse) -- where
+the graph holds the robot well (boards, map-rich views) and where it does not
+(across dropouts).
+
 Nothing sees the robot where it has no images; there the pose is where the
 odometry within its pieces, the dropouts' weak links and the absolute fixes on
 both sides put it together.
@@ -106,88 +112,110 @@ class Graph:
         return np.r_[c * d[0] + s * d[1] - m[0], -s * d[0] + c * d[1] - m[1],
                      wrap(X[j, 2] - X[i, 2] - m[2])]
 
+    def _arrays(self):
+        R, A_ = self.rel, self.abs
+        return (np.array([f[0] for f in R], int), np.array([f[1] for f in R], int),
+                np.array([f[2] for f in R]).reshape(-1, 3), np.array([f[3] for f in R]).reshape(-1, 3, 3),
+                np.array([f[4] for f in R], bool),
+                np.array([f[0] for f in A_], int), np.array([f[1] for f in A_]).reshape(-1, 3),
+                np.array([f[2] for f in A_]).reshape(-1, 3, 3), np.array([f[3] for f in A_], bool))
+
+    def linearize(self, X, c, arr=None):
+        """Whitened, robust-weighted Jacobian (sparse) and residual at X."""
+        from scipy import sparse
+        ri, rj, rm, rW, rr, ak, am, aW, ar = arr if arr is not None else self._arrays()
+        n, nR, nA = self.n, len(ri), len(ak)
+        cr = float(c["robust_c"])
+        # relative factors
+        th = X[ri, 2]
+        cs, sn = np.cos(th), np.sin(th)
+        d = X[rj, :2] - X[ri, :2]
+        e = np.column_stack([cs * d[:, 0] + sn * d[:, 1] - rm[:, 0],
+                             -sn * d[:, 0] + cs * d[:, 1] - rm[:, 1],
+                             wrap(X[rj, 2] - X[ri, 2] - rm[:, 2])])
+        Ji = np.zeros((nR, 3, 3))
+        Jj = np.zeros((nR, 3, 3))
+        Ji[:, 0, 0], Ji[:, 0, 1] = -cs, -sn
+        Ji[:, 1, 0], Ji[:, 1, 1] = sn, -cs
+        Ji[:, 0, 2] = -sn * d[:, 0] + cs * d[:, 1]
+        Ji[:, 1, 2] = -cs * d[:, 0] - sn * d[:, 1]
+        Ji[:, 2, 2] = -1.0
+        Jj[:, 0, 0], Jj[:, 0, 1] = cs, sn
+        Jj[:, 1, 0], Jj[:, 1, 1] = -sn, cs
+        Jj[:, 2, 2] = 1.0
+        r_rel = np.einsum("kab,kb->ka", rW, e)
+        Ji = np.einsum("kab,kbc->kac", rW, Ji)
+        Jj = np.einsum("kab,kbc->kac", rW, Jj)
+        w = np.ones(nR)
+        nr = np.linalg.norm(r_rel, axis=1)
+        w[rr] = 1.0 / (1.0 + (nr[rr] / cr) ** 2)
+        sw = np.sqrt(w)
+        r_rel *= sw[:, None]
+        Ji *= sw[:, None, None]
+        Jj *= sw[:, None, None]
+        # absolute factors
+        ea = np.column_stack([X[ak, :2] - am[:, :2], wrap(X[ak, 2] - am[:, 2])])
+        r_abs = np.einsum("kab,kb->ka", aW, ea)
+        wa = np.ones(nA)
+        na = np.linalg.norm(r_abs, axis=1)
+        wa[ar] = 1.0 / (1.0 + (na[ar] / cr) ** 2)
+        swa = np.sqrt(wa)
+        r_abs *= swa[:, None]
+        Ja = aW * swa[:, None, None]
+        # sparse Jacobian
+        rows, cols, vals = [], [], []
+        kk = np.arange(nR)
+        for blk, idx in ((Ji, ri), (Jj, rj)):
+            for a in range(3):
+                for b in range(3):
+                    rows.append(3 * kk + a)
+                    cols.append(3 * idx + b)
+                    vals.append(blk[:, a, b])
+        ka = np.arange(nA)
+        for a in range(3):
+            for b in range(3):
+                rows.append(3 * nR + 3 * ka + a)
+                cols.append(3 * ak + b)
+                vals.append(Ja[:, a, b])
+        J = sparse.csr_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+                              shape=(3 * (nR + nA), 3 * n))
+        return J, np.concatenate([r_rel.ravel(), r_abs.ravel()])
+
     def solve(self, X0, c, log=print):
         from scipy import sparse
         from scipy.sparse.linalg import spsolve
         X = X0.copy()
         n = self.n
-        cr = float(c["robust_c"])
-        R = self.rel
-        A_ = self.abs
-        ri = np.array([f[0] for f in R], int)
-        rj = np.array([f[1] for f in R], int)
-        rm = np.array([f[2] for f in R]).reshape(-1, 3)
-        rW = np.array([f[3] for f in R]).reshape(-1, 3, 3)
-        rr = np.array([f[4] for f in R], bool)
-        ak = np.array([f[0] for f in A_], int)
-        am = np.array([f[1] for f in A_]).reshape(-1, 3)
-        aW = np.array([f[2] for f in A_]).reshape(-1, 3, 3)
-        ar = np.array([f[3] for f in A_], bool)
+        arr = self._arrays()
         for it in range(int(c["gn_iters"])):
-            # relative factors
-            th = X[ri, 2]
-            cs, sn = np.cos(th), np.sin(th)
-            d = X[rj, :2] - X[ri, :2]
-            e = np.column_stack([cs * d[:, 0] + sn * d[:, 1] - rm[:, 0],
-                                 -sn * d[:, 0] + cs * d[:, 1] - rm[:, 1],
-                                 wrap(X[rj, 2] - X[ri, 2] - rm[:, 2])])
-            Ji = np.zeros((len(R), 3, 3))
-            Jj = np.zeros((len(R), 3, 3))
-            Ji[:, 0, 0], Ji[:, 0, 1] = -cs, -sn
-            Ji[:, 1, 0], Ji[:, 1, 1] = sn, -cs
-            Ji[:, 0, 2] = -sn * d[:, 0] + cs * d[:, 1]
-            Ji[:, 1, 2] = -cs * d[:, 0] - sn * d[:, 1]
-            Ji[:, 2, 2] = -1.0
-            Jj[:, 0, 0], Jj[:, 0, 1] = cs, sn
-            Jj[:, 1, 0], Jj[:, 1, 1] = -sn, cs
-            Jj[:, 2, 2] = 1.0
-            r_rel = np.einsum("kab,kb->ka", rW, e)
-            Ji = np.einsum("kab,kbc->kac", rW, Ji)
-            Jj = np.einsum("kab,kbc->kac", rW, Jj)
-            w = np.ones(len(R))
-            nr = np.linalg.norm(r_rel, axis=1)
-            w[rr] = 1.0 / (1.0 + (nr[rr] / cr) ** 2)
-            sw = np.sqrt(w)
-            r_rel *= sw[:, None]
-            Ji *= sw[:, None, None]
-            Jj *= sw[:, None, None]
-            # absolute factors
-            ea = np.column_stack([X[ak, :2] - am[:, :2], wrap(X[ak, 2] - am[:, 2])])
-            r_abs = np.einsum("kab,kb->ka", aW, ea)
-            Ja = aW.copy()
-            wa = np.ones(len(A_))
-            na = np.linalg.norm(r_abs, axis=1)
-            wa[ar] = 1.0 / (1.0 + (na[ar] / cr) ** 2)
-            swa = np.sqrt(wa)
-            r_abs *= swa[:, None]
-            Ja = Ja * swa[:, None, None]
-            # sparse Jacobian
-            rows, cols, vals = [], [], []
-            base = 0
-            kk = np.arange(len(R))
-            for blk, idx in ((Ji, ri), (Jj, rj)):
-                for a in range(3):
-                    for b in range(3):
-                        rows.append(base + 3 * kk + a)
-                        cols.append(3 * idx + b)
-                        vals.append(blk[:, a, b])
-            base = 3 * len(R)
-            ka = np.arange(len(A_))
-            for a in range(3):
-                for b in range(3):
-                    rows.append(base + 3 * ka + a)
-                    cols.append(3 * ak + b)
-                    vals.append(Ja[:, a, b])
-            J = sparse.csr_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
-                                  shape=(3 * (len(R) + len(A_)), 3 * n))
-            r = np.concatenate([r_rel.ravel(), r_abs.ravel()])
+            J, r = self.linearize(X, c, arr)
             H = (J.T @ J + 1e-6 * sparse.identity(3 * n)).tocsc()
             dx = -spsolve(H, J.T @ r)
             X += dx.reshape(n, 3)
-            step = float(np.max(np.abs(dx)))
-            if step < 1e-4:
+            if float(np.max(np.abs(dx))) < 1e-4:
                 break
         return X
+
+    def marginals(self, X, c, chunk=600):
+        """Each pose's marginal covariance (n, 3, 3) in (x [m], y [m], yaw [rad]):
+        the 3x3 diagonal blocks of the inverse information matrix at X, with
+        the robust weights there (Laplace approximation; as calibrated as the
+        factors' sigmas)."""
+        from scipy import sparse
+        from scipy.sparse.linalg import splu
+        n = self.n
+        J, _ = self.linearize(X, c)
+        lu = splu((J.T @ J + 1e-6 * sparse.identity(3 * n)).tocsc())
+        cov = np.zeros((n, 3, 3))
+        for k0 in range(0, n, chunk):
+            k1 = min(n, k0 + chunk)
+            B = np.zeros((3 * n, 3 * (k1 - k0)))
+            B[3 * k0:3 * k1, :] = np.eye(3 * (k1 - k0))
+            S = lu.solve(B)
+            for k in range(k0, k1):
+                q = 3 * (k - k0)
+                cov[k] = S[3 * k:3 * k + 3, q:q + 3]
+        return 0.5 * (cov + cov.transpose(0, 2, 1))
 
 
 def run_pgo(A, ref, scans, times, T_odom, piece, o_t, pc_o, soft, T_anchor, k_anchor,
@@ -371,4 +399,30 @@ def run_pgo(A, ref, scans, times, T_odom, piece, o_t, pc_o, soft, T_anchor, k_an
                       for i, j, m, W, rb in G.rel if rb), reverse=True)[:5]
         log("    across breaks, where the graph and the odometry disagree most: "
             + "; ".join("%.2f m at %.1f s (%.1f s)" % b for b in big))
-    return T_out, rows, history
+    t_cov = time.time()
+    cov = G.marginals(X, c)
+    major = sigma_major(cov)
+    log("    uncertainty (marginal covariance, %.0f s): sigma xy major axis median %.1f cm, p95 %.1f cm, "
+        "max %.1f cm; yaw median %.2f deg" % (time.time() - t_cov, 100 * np.median(major),
+                                               100 * np.percentile(major, 95), 100 * major.max(),
+                                               np.degrees(np.median(np.sqrt(cov[:, 2, 2])))))
+    log("    least held (sigma xy major axis, 5 s apart): " + "; ".join(
+        "%.0f cm at %.1f s" % (100 * major[k], times[k] - times[0]) for k in peaks(major, times, 5.0, 5)))
+    return T_out, rows, history, cov
+
+
+def sigma_major(cov):
+    """The xy ellipse's major semi-axis (m) per pose."""
+    a, b, d = cov[:, 0, 0], cov[:, 0, 1], cov[:, 1, 1]
+    return np.sqrt(np.maximum(0.5 * (a + d) + np.sqrt(0.25 * (a - d) ** 2 + b ** 2), 0.0))
+
+
+def peaks(v, times, sep_s, k):
+    """Indices of the k largest values at least sep_s apart."""
+    out = []
+    for i in np.argsort(-v):
+        if all(abs(times[i] - times[j]) >= sep_s for j in out):
+            out.append(int(i))
+            if len(out) == k:
+                break
+    return out
