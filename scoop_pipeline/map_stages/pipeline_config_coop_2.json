@@ -1,12 +1,12 @@
 {
   "extends": "pipeline_config.json",
-  "_note": "coop_2 in mapping_A's map. The boards keep the poses mapping_A and survey_1 measured (no 05; rs_anchor from survey_1: dataset.boards_from). mobile_1: 03 (ZED at the anchor board, through GLIM) -> 04 (LiDAR ICP to the anchored map). mobile_2 drives and its VSLAM was not recorded: vslam (cuVSLAM offline on its stereo + IMU) -> 03 (its colour camera at rs_anchor in the opening dwell) -> 04's track mobile_2_depth (method pgo: one pose graph over every depth frame -- cuVSLAM between frames, weak across its camera dropouts, the start anchor, the boards and the anchored map). No infra camera placement (07/08) in coop.",
+  "_note": "coop_2 in mapping_A's map. The boards keep the poses mapping_A and survey_1 measured (no 05; rs_anchor from survey_1: dataset.boards_from). mobile_1: 03 (ZED at the anchor board, through GLIM) -> 04 (LiDAR ICP to the anchored map). mobile_2 drives and its VSLAM was not recorded: vslam (cuVSLAM offline on its stereo + IMU) -> 03 (its colour camera at rs_anchor in the opening dwell) -> 04's track mobile_2_depth (method pgo: one pose graph over every depth frame -- cuVSLAM between frames, weak across its camera dropouts, the start anchor, the boards and the anchored map). No infra camera placement (07/08) in coop: the arducam where survey_1's 07 put it (dataset.cameras_from; it did not move).",
   "dataset": {
     "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/coop_2/mirc_dataset_coop_2_20260924_merged",
     "traj": null,
     "machine": "mobile_1",
     "reference_pass": "mapping_A",
-    "boards_from": ["survey_1"]
+    "boards_from": ["survey_1"], "cameras_from": ["survey_1"]
   },
   "vslam": {"machine": "mobile_2"},
   "03_init": {"sensors": [{"name": "zed", "source": "lidar_odom"},

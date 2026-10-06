@@ -311,10 +311,20 @@ def plan(P, edges, bags, log=print):
         under_board(tr.get("board"), og, T_og, "%s's origin: its first pose" % tr["name"])
         frames |= {og}
 
-    # -- infra / parked cameras from 07
-    cy = P.stage("07_build_cameras")["output"] if "07_build_cameras" in P.cfg and \
-        P.cfg["07_build_cameras"].get("enabled", True) else None
-    if cy and os.path.exists(cy):
+    # -- infra / parked cameras from 07 (this pass's; 07 off: dataset.cameras_from's)
+    if "07_build_cameras" in P.cfg and P.cfg["07_build_cameras"].get("enabled", True):
+        cys = [P.stage("07_build_cameras")["output"]]
+    else:
+        cys = P.cameras_from()
+        if not cys:
+            log("    (07_build_cameras off: infra/parked cameras not placed)")
+    for cy in cys:
+        if not os.path.exists(cy):
+            log("    (no %s: infra/parked cameras not placed)" % cy)
+            continue
+        src = "" if cy == cys[0] and len(cys) == 1 and "07_build_cameras" in P.cfg and \
+            P.cfg["07_build_cameras"].get("enabled", True) else " (from %s)" % os.path.relpath(
+                cy, os.path.dirname(os.path.dirname(P.out_dir)))
         _, cams = load_cameras_yaml(cy)
         for c in cams:
             child = c["child_frame"]
@@ -333,8 +343,8 @@ def plan(P, edges, bags, log=print):
                     % (child, c["name"]))
                 continue
             T_root = T @ np.linalg.inv(T_rc)
-            why = ("07: %s, so %s -> %s is its pose" % (c["name"], mapf, child)
-                   if root != child else "07: %s" % c["name"])
+            why = ("07%s: %s, so %s -> %s is its pose" % (src, c["name"], mapf, child)
+                   if root != child else "07%s: %s" % (src, c["name"]))
             cc = cfg_cams.get(c["name"], {})
             og = cc.get("origin_frame")
             if og and og not in frames and og not in edges:
@@ -343,10 +353,6 @@ def plan(P, edges, bags, log=print):
                 add_static(og, root, np.eye(4), "parked")
             else:
                 add_static(mapf, root, T_root, why)
-    elif cy is None:
-        log("    (07_build_cameras off: infra/parked cameras not placed)")
-    else:
-        log("    (no %s: infra/parked cameras not placed)" % cy)
     return drop, static, extra, edges
 
 

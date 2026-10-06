@@ -208,11 +208,14 @@ A coop run (`pipeline_config_coop_2.json`) has both robots moving. mobile_1 is
 as in a survey run. mobile_2: `vslam` gives its odometry; 03 places its colour
 camera at `rs_anchor` in the opening dwell, with the board's pose from the pass
 that measured it (`dataset.boards_from: ["survey_1"]`; boards do not move); 04's
-track `mobile_2_depth` registers every depth frame to the anchored map, the
-odometry as the seed, carried by the last registered frame's correction. The
-tree gets `board_rs ── map_realsense` (its first pose) `~~ camera_link`, and 10
+track `mobile_2_depth` (`"method": "pgo"`: one pose graph over every depth
+frame, see 04 above) places mobile_2 in the anchored map. The tree gets
+`board_rs ── map_realsense` (its first pose) `~~ camera_link`, mobile_1's
+`board ── map_zed` where the ZED's own tracking puts the camera at the LiDAR
+track's first pose (no 05), and the arducam where survey_1's 07 put it
+(`dataset.cameras_from: ["survey_1"]`; the infra camera did not move); 10
 publishes `/mobile_2/global_pose` and `/mobile_2/local_pose`. No infra cameras
-(07/08) or boards re-measured (05) in coop.
+placed (07/08) or boards re-measured (05) in coop itself.
 
 ## Processing a recording
 

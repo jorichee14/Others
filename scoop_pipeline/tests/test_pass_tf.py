@@ -20,7 +20,8 @@ RealSense's own tree from camera_link (mobile_2).
       origin map_realsense at the first pose below a board only survey_1
       measured (dataset.boards_from); no 05, so mobile_1's origin map_zed is
       placed where the ZED's own tracking puts the camera at the LiDAR
-      trajectory's first pose, below the start board.
+      trajectory's first pose, below the start board; the arducam where
+      survey_1's 07 put it (dataset.cameras_from).
 
 Every lookup in the merged bag must give the pipeline's poses, and every
 frame one parent.
@@ -198,7 +199,7 @@ def coop(data, stages):
     json.dump({"extends": "pipeline_config.json",
                "dataset": {"bag": os.path.join(data, "work", "20260101", "coop_1", "x_merged"),
                            "traj": None, "reference_pass": "mapping_A",
-                           "boards_from": ["survey_1"]},
+                           "boards_from": ["survey_1"], "cameras_from": ["survey_1"]},
                "07_build_cameras": {"enabled": False},
                "04_reference": {"tracks": [{"name": "mobile_2_depth", "body_frame": "camera_link",
                                             "origin_frame": "map_realsense",
@@ -411,6 +412,8 @@ def main():
         if after["map_zed"].parent != "board" or after["zed_camera_link"].parent != "map_zed":
             f.append("coop: map_zed / zed_camera_link hang from %s / %s"
                      % (after["map_zed"].parent, after["zed_camera_link"].parent))
+        close(tree.lookup("map", "arducam_optical_frame", T0 + 5), T_ARDU,
+              "coop: arducam from survey_1's 07 (cameras_from)", f)
         roots = {tftree._root(c, after) for c in after}
         if roots != {"map"}:
             f.append("coop: the tree has more than one root: %s" % sorted(roots))

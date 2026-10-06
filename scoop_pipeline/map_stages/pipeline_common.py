@@ -731,6 +731,25 @@ class Pipeline:
                 out.setdefault(n, dict(rec, source=path))
         return out
 
+    def cameras_from(self):
+        """Other passes' 07 outputs (frames/cameras_in_map.yaml) for a pass that
+        does not place its infra/parked cameras itself (07 off: coop), by
+        dataset.cameras_from: ["survey_1", ...] (same date or "<date>/<pass>").
+        A camera that did not move holds here. -> [path], in the order listed."""
+        out = []
+        root = os.path.dirname(os.path.dirname(os.path.normpath(self.out_dir)))
+        here = os.path.basename(os.path.dirname(os.path.normpath(self.out_dir)))
+        name = os.path.basename((self.cfg.get("07_build_cameras") or {}).get("output")
+                                or "cameras_in_map.yaml")
+        for ref in self.dataset.get("cameras_from") or []:
+            ref = ref.strip("/")
+            date, pas = (ref.split("/")[-2:] if "/" in ref else (here, ref))
+            path = os.path.join(root, date, pas, "frames", name)
+            if not os.path.exists(path):
+                raise SystemExit("dataset.cameras_from: no %s (run 07 on %s)" % (path, pas))
+            out.append(path)
+        return out
+
     def anchor_frame(self, name="anchor_frame.json"):
         """This pass's anchor_frame.json, or the reference pass's for a run
         (dataset.reference_pass) that has none of its own."""
