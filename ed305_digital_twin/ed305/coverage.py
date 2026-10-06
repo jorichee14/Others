@@ -77,22 +77,32 @@ def segment_hits_box(a, pts, lo, hi, eps=1e-9):
     return (~np.any(out, axis=1)) & (t_in <= t_out) & (t_out > eps) & (t_in < 1 - eps)
 
 
-def visibility(cameras, room, pts):
-    """(n_cams, n_pts) bool: camera i sees point j."""
-    vis = np.zeros((len(cameras), len(pts)), bool)
+def obstacle_mask(room, pts):
     blocked = np.zeros(len(pts), bool)
     for _, lo, hi in room.obstacles:
         blocked |= inside_box(pts, lo, hi)
+    return blocked
+
+
+def camera_visibility(cam, room, pts, blocked):
+    """(n_pts,) bool: `cam` sees each point."""
+    ok, z = cam.in_view(pts, margin_px=room.margin_px)
+    if room.min_px_per_m > 0:
+        ok &= cam.K[0, 0] / np.maximum(z, 1e-9) >= room.min_px_per_m
+    ok &= ~blocked
+    for _, lo, hi in room.obstacles:
+        idx = np.flatnonzero(ok)
+        if idx.size:
+            ok[idx[segment_hits_box(cam.center, pts[idx], lo, hi)]] = False
+    return ok
+
+
+def visibility(cameras, room, pts):
+    """(n_cams, n_pts) bool: camera i sees point j."""
+    blocked = obstacle_mask(room, pts)
+    vis = np.zeros((len(cameras), len(pts)), bool)
     for i, cam in enumerate(cameras):
-        ok, z = cam.in_view(pts, margin_px=room.margin_px)
-        if room.min_px_per_m > 0:
-            ok &= cam.K[0, 0] / np.maximum(z, 1e-9) >= room.min_px_per_m
-        ok &= ~blocked
-        for _, lo, hi in room.obstacles:
-            idx = np.flatnonzero(ok)
-            if idx.size:
-                ok[idx[segment_hits_box(cam.center, pts[idx], lo, hi)]] = False
-        vis[i] = ok
+        vis[i] = camera_visibility(cam, room, pts, blocked)
     return vis, blocked
 
 

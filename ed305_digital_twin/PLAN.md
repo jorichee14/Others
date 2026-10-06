@@ -36,9 +36,11 @@ Done when: agreed with the lab, written down.
    `solvePnP` per camera, then one joint refinement over every camera that
    shares a board view. Check: triangulate a point no fit used; error at the
    room centre within a few cm. Re-check cams 4 and 6 and any that moved.
-5. **Coverage.** `coverage_map.py` on the real poses and furniture. Where
-   the target volume is below k, re-aim cameras (the corners are the likely
-   gaps, since all cameras aim at the centre), re-calibrate only those, rerun.
+5. **Coverage.** `coverage_map.py` on the real poses and furniture.
+6. **Placement.** Measure each mount's range of movement (pan, tilt, and
+   whether it can slide; README table) into `configs/mounts.yaml`, run
+   `optimize_cameras.py`, re-aim the cameras it lists, re-calibrate only
+   those, rerun coverage.
 
 Done when: `configs/cameras.yaml` and `configs/room.yaml` from measurements,
 and a coverage report with no blind spots at k = 2 (or a list of accepted ones).

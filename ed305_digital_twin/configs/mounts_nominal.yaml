@@ -1,0 +1,22 @@
+# How far each ED305 camera can move.  PLACEHOLDER ranges: measure them.
+#
+# Per camera, what to find out at the mount:
+#   pan:   how far the bracket turns left/right from where it points now (deg)
+#   tilt:  lowest and highest tilt it can hold, 0 = level, 90 = straight down;
+#          includes where the camera body or cable hits the wall/ceiling
+#   along: if it can be moved (rail, clamp, new holes, cable long enough),
+#          the two ends of the stretch it can sit on, room frame, metres
+#   fixed: true if it must not be touched
+# Roll is always 0 (image upright).  Angles in degrees.
+defaults:
+  pan: [-45, 45]
+  tilt: [15, 80]
+
+mounts:
+  # ceiling row: assume a ball head that can turn all the way round
+  cam_9:  {pan: [-180, 180], tilt: [30, 90]}
+  cam_10: {pan: [-180, 180], tilt: [30, 90]}
+  cam_11: {pan: [-180, 180], tilt: [30, 90]}
+  cam_12: {pan: [-180, 180], tilt: [30, 90]}
+  # example of a camera that can slide along its wall:
+  # cam_4:  {along: [[-3.9, -4.6, 2.6], [-3.9, -2.5, 2.6]]}
