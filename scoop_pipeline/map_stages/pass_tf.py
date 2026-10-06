@@ -142,6 +142,8 @@ def _mapzed_from_track(bags, edges, mapzed, body, poses, log=print):
     while f != mapzed:
         e = edges.get(f)
         if e is None:
+            log("    (%s not placed: %s is not below it in the bags; the tree above %s ends at %s)"
+                % (mapzed, body, body, f))
             return None
         chain.append(e)
         f = e.parent
@@ -149,6 +151,8 @@ def _mapzed_from_track(bags, edges, mapzed, body, poses, log=print):
     t0 = poses[0][0]
     smp = _tf_samples(bags, dyn, t0, t0 + int(30e9))
     if any(not smp[k] for k in dyn):
+        log("    (%s not placed: no /tf %s in the 30 s from the LiDAR trajectory's start)"
+            % (mapzed, ", ".join("%s->%s" % k for k in dyn if not smp[k])))
         return None
     t_ref = max(smp[k][0][0] for k in dyn)          # every edge has a transform from here
     T = np.eye(4)
@@ -162,6 +166,8 @@ def _mapzed_from_track(bags, edges, mapzed, body, poses, log=print):
     pt = np.array([t for t, _ in poses])
     k = int(np.argmin(np.abs(pt - t_ref)))
     if abs(pt[k] - t_ref) > int(0.2e9):
+        log("    (%s not placed: no LiDAR trajectory pose within 0.2 s of the ZED's first "
+            "transforms)" % mapzed)
         return None
     log("    %s placed where the ZED's tracking puts %s at the LiDAR trajectory's pose "
         "%.2f s after its start" % (mapzed, body, (pt[k] - t0) * 1e-9))
@@ -260,7 +266,7 @@ def plan(P, edges, bags, log=print):
         if body is None or T_left is None:
             traj = None
     if T_mz is None and P.reference and traj and os.path.exists(traj) and \
-            mapzed in frames and mapzed not in edges and body in edges:
+            mapzed in frames and mapzed not in edges:
         # a run without 05 (coop): the ZED's map placed by its own tracking
         T_mz = _mapzed_from_track(bags, edges, mapzed, body, _load_poses(traj), log)
     origin = mapzed if T_mz is not None else mapf
