@@ -1,0 +1,27 @@
+# ED305 room model for the coverage tool.  PLACEHOLDER: the size below is a
+# guess, not a measurement.  Replace room.x / room.y / room.height with tape
+# (or LiDAR map) measurements and add the furniture as obstacle boxes.
+#
+# Frame: origin on the floor at the red dot of the wiki camera map (under the
+# middle of cams 10 and 11), z up, x toward the right wall, y toward the top
+# (door) wall of the floor plan.  Metres.
+room:
+  x: [-4.0, 4.0]      # left wall, right wall
+  y: [-5.0, 5.0]      # bottom wall, top (door) wall
+  height: 2.8
+
+# Static things that block the view, as axis-aligned boxes (min/max corners).
+# A table is modelled as a solid box from the floor to its top: conservative.
+obstacles: []
+#  - name: desk_row_left
+#    min: [-3.9, -2.0, 0.0]
+#    max: [-3.1,  2.0, 0.75]
+
+# The volume that must have no blind spots.
+target:
+  z: [0.0, 2.0]       # floor to head height
+  z_step: 0.25
+  xy_step: 0.10
+  k: 2                # cameras needed per voxel (2 = can triangulate a 3D position)
+  min_px_per_m: 40    # a 0.5 m wide person must span >= 20 px
+  margin_px: 0

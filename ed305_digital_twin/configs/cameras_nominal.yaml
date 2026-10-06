@@ -1,0 +1,39 @@
+# ED305 cameras, NOMINAL layout from the wiki camera map, not a calibration.
+# Replace with configs/cameras.yaml written from the ED305-cameras
+# calibration/ results (T_world_cam or rvec/tvec per camera; see ed305/camera.py).
+#
+# What is from the wiki:   numbering, which wall/row, mount height 2.5-2.7 m,
+#                          every camera aimed at the red dot (origin) except
+#                          4 and 6 (slightly off: not modelled here),
+#                          10 and 11 near the dot, looking almost straight down,
+#                          1920x1080 stream.
+# What is guessed:         room size (configs/room_nominal.yaml), spacing along
+#                          each wall, lens.  Basler a2A1920-51gc = Sony IMX392,
+#                          3.45 um pixels; fx 1160 px is a 4 mm lens
+#                          (~79 x 50 deg).  Put the real K in once known.
+defaults:
+  width: 1920
+  height: 1080
+  fx: 1160
+
+cameras:
+  # left wall, from the entrance (top) down
+  cam_1:  {position: [-3.9,  3.75, 2.6], look_at: [0, 0, 0]}
+  cam_2:  {position: [-3.9,  1.25, 2.6], look_at: [0, 0, 0]}
+  cam_3:  {position: [-3.9, -1.25, 2.6], look_at: [0, 0, 0]}
+  cam_4:  {position: [-3.9, -3.75, 2.6], look_at: [0, 0, 0]}
+  # right wall, top to bottom
+  cam_5:  {position: [ 3.9,  3.75, 2.6], look_at: [0, 0, 0]}
+  cam_6:  {position: [ 3.9,  1.25, 2.6], look_at: [0, 0, 0]}
+  cam_7:  {position: [ 3.9, -1.25, 2.6], look_at: [0, 0, 0]}
+  cam_8:  {position: [ 3.9, -3.75, 2.6], look_at: [0, 0, 0]}
+  # ceiling row through the middle, left to right
+  cam_9:  {position: [-3.0,  0.0, 2.7], look_at: [0, 0, 0]}
+  cam_10: {position: [-0.5,  0.0, 2.7], look_at: [0, 0, 0]}
+  cam_11: {position: [ 0.5,  0.0, 2.7], look_at: [0, 0, 0]}
+  cam_12: {position: [ 3.0,  0.0, 2.7], look_at: [0, 0, 0]}
+  # bottom row, left to right
+  cam_13: {position: [-3.0, -4.9, 2.6], look_at: [0, 0, 0]}
+  cam_14: {position: [-1.0, -4.9, 2.6], look_at: [0, 0, 0]}
+  cam_15: {position: [ 1.0, -4.9, 2.6], look_at: [0, 0, 0]}
+  cam_16: {position: [ 3.0, -4.9, 2.6], look_at: [0, 0, 0]}
