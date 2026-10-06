@@ -30,11 +30,11 @@ that puts that link back in the loop for any collaborative method.
 | Benchmark: Channels, replay module | Channel-in-the-loop replay |
 
 **Evaluation.** Experiments E1 to E5 are planned in full in PAPER_A.md:
-- E1: precision margin;
-- E2: clearance against RSSI;
-- E3: message-level replay fidelity;
-- E4: repeatability;
-- E5: logged against synthetic delay.
+- E1 Headroom: precision margin;
+- E2 Map Meets Radio: clearance against RSSI;
+- E3 Twin Run: message-level replay fidelity;
+- E4 Same Knob, Same Link: repeatability;
+- E5 Sim Gap: logged against synthetic delay.
 
 **Structural models**
 - `wilson2021robotarium` (RA-L): frames the testbed itself as the contribution.

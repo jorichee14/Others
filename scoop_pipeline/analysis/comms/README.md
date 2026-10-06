@@ -17,3 +17,8 @@ position in map.
                                        (comms/csi/csi_report.json and plots)
     csi_view.py <processed pass>       pictures of the clean CSI per link: amplitude, phase and
                                        delay profile over time, snapshots (comms/csi/view/)
+    link_clearance.py <processed pass> Fresnel clearance of each link's path through the anchored
+      [--ap X Y Z]                     map against its RSSI / CSI power / goodput, after the
+    link_clearance.py --all <data/processed> [--ap-file F]
+                                       distance trend (comms/clearance/; pooled over every
+                                       pass in <data/processed>/clearance/)

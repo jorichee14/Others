@@ -42,7 +42,7 @@ works, and one example of what it reveals.
    | Agent pose in the site frame | about 1 cm surface agreement; board residual | second pass, rangefinder, held-out boards |
    | Link state | 5 Hz passive, 100 Hz RTT, 4 s goodput | explicit outage labels |
    | Channel state (CSI) | 104–141 Hz; valid below 1.2 m/s | λ/2 sampling argument |
-   | Replay fidelity | arrival-time error; agreement on which frame each message lands in | experiment E3 |
+   | Replay fidelity | arrival-time error; agreement on which frame each message lands in | E3 Twin Run |
 
 2. **A tolerance-margin figure (the key figure).** On one log axis, plot the
    testbed's error next to the error at which collaborative perception breaks:
@@ -50,7 +50,7 @@ works, and one example of what it reveals.
      ego-only in the OPV2V study;
    - time: 70 µs, against the delay at which every fusion method falls below
      ego-only. Express it as displacement (speed × delay): the 100 ms figure was
-     measured at vehicle speed. See E1.
+     measured at vehicle speed. See E1 Headroom.
 
    The point is that the testbed is two to four orders of magnitude more precise
    than the effects it exists to measure. This is the strongest argument a
@@ -259,7 +259,7 @@ the agents actually had?
     `yan2018pantheon` (emulators calibrated against real paths).
   - Robotics and network co-simulation: `calvofullana2021rosnetsim`,
     `sommer2011veins`, `xu2021opencda`.
-  - Synthetic channels in collaborative perception (what E5 compares against):
+  - Synthetic channels in collaborative perception (what E5 Sim Gap compares against):
     `where2comm` (bandwidth budget), `v2xvit` (fixed or sampled delay),
     `lei2022syncnet`, `wei2023cobevflow` (asynchrony as a delay parameter).
   - **Positioning.** Network emulators replay a link for network software.
@@ -272,104 +272,112 @@ the agents actually had?
     loses.
 - **Figure:** replay diagram.
 
-### VIII. Experiments: Validating the Testbed (about 1.5 pages)
-Every experiment asks a question about the testbed, not about collaborative
-perception. Status below is as of the current pipeline (`scoop_pipeline`,
-`mirc_dataset_paper`, `collab_perception_failure_analysis`).
+### VIII. Experiments: Is SCooP-Bed a Trustworthy Instrument?
 
-**E1. Is the testbed precise enough for what it is meant to measure?**
-- *How.* Put two things on one log axis, in metres.
-  - The testbed's error terms: clock offset × speed, sniffer bias × speed,
-    extrinsic residuals, pose error from held-out boards and the second pass.
-  - The displacement at which fusion breaks.
-- *Thresholds.*
-  - Pose error: late fusion fell below ego-only at 0.2 m in the OPV2V study.
-    That is a geometric threshold and carries over.
-  - Latency: in the OPV2V study the damage was displacement, v × delay, at
-    20 m/s. Indoors at about 1.5 m/s the same delay moves objects about 13 times
-    less.
-  - So state the latency threshold as displacement relative to object size, not
-    as "100 ms". Use one sentence and one row per error term.
-- *Can you do it now?* Mostly.
-  - The clock (70 µs) and second-pass (1.06 cm) numbers exist, as do the OPV2V
-    thresholds.
-  - The held-out board residual, calibration residuals and sniffer bias are still
-    TODO. They come from data you have. Plot with placeholders until they land.
+**Main goal.** Show that SCooP-Bed measures what it claims, precisely enough,
+the same way every time, and that what it measures could not have come from
+simulation. A testbed paper is judged on whether readers can trust it as an
+instrument. Each experiment backs one property of that trust, and together
+they are the evidence behind the spec sheet.
 
-**E2. Do the link logs agree with the building layout?**
-- *How.* For every link sample (pair, time), compute the Fresnel clearance of
-  the straight path through the reference map from both agents' reference poses.
-  Then compare it with the measured RSSI and goodput at that time:
-  - Spearman correlation per site;
-  - RSSI and goodput for clear (above 0.6) against blocked (below 0.6) links;
-  - a scatter plot.
-- *Why it matters.* The clearance never saw the radio, and the radio never saw
-  the map. Agreement validates both the poses and the link logs at once.
-- *Can you do it now?* Yes.
-  - `characterize_stage2.py` already computes link clearance and a validation
-    correlation (`summary.json: link.validation` on `coop2_0828`).
-  - The comms tables already carry each machine's map position per row
-    (`analysis/comms`).
-  - Run it on every processed pass and make one figure.
+| Name | Property it proves | Reviewer question it answers | Status |
+|---|---|---|---|
+| **E1 Headroom** | Precise | "Is the testbed finer than the effects it is meant to measure?" | Existing numbers plus 3 TODO values |
+| **E2 Map Meets Radio** | Consistent | "Are the poses and the link logs right, if neither is checked by hand?" | Script ready (`link_clearance.py`); run it on your data |
+| **E3 Twin Run** | Faithful | "Does replaying a logged link reproduce what the real link does?" | Needs one new recording |
+| **E4 Same Knob, Same Link** | Repeatable | "If I set the same condition on another day, do I get the same link?" | Existing data, if same-route repeats exist |
+| **E5 Sim Gap** | Necessary | "Why not just simulate the link?" | Existing logs |
 
-**E3. Does replay reproduce what the real link does to real messages?**
-- *How.* Run it at the message level first. This needs no detector, which also
-  keeps Paper A clear of Paper B's findings.
-  1. *Run A* (normal pass): link monitors with iperf and ping, as in every
-     recording.
-  2. *Run B*: same route, same load mode, same day. Replace iperf with a payload
-     node on each agent that sends messages over the real link at 10 Hz in three
-     sizes: boxes (about 1 KB), compressed features (about 100 KB) and raw clouds
-     (about 1–2 MB). Each message is stamped at send and at receive. With the
-     clocks synced, the one-way delay is exact.
-  3. *Replay*: feed B's send times and sizes through the trace recorded in A, and
-     predict each arrival or drop.
-- *Report.*
-  - Arrival-time error per message size.
-  - Agreement in which receiver frame (100 ms at 10 Hz) each message lands in.
-    This is the quantity fusion actually sees.
-  - Drop agreement.
-  - The same comparison with the synthetic channel, which shows how much closer
-    the logged trace gets.
-- *Optional second level.* A late-fusion run on the received messages against
-  the replayed ones. Do it only if an indoor detector exists by then.
-- *Can you do it now?* No. It needs one new collection: run B, plus the payload
-  node, which is a small ROS 2 publisher and subscriber with stamps. The analysis
-  reuses the comms tables. Schedule it together with E4.
+E1 to E4 establish that the instrument can be trusted. E5 is the reason to
+build it.
 
-**E4. Is the testbed repeatable?**
-- *How.* Take the same route and load mode on two days. Compare the link
-  statistics:
-  - the RTT, goodput and RSSI distributions;
-  - RSSI against position along the route;
-  - a Wasserstein or Kolmogorov–Smirnov distance between days;
-  - the same distance between survey and cooperation modes.
-- *Claim.* The day-to-day difference is small next to the mode difference, so a
-  load mode is a reproducible setting. The pose half is the second mapping pass,
-  four weeks later, 1.06 cm, already measured.
-- *Can you do it now?*
-  - Yes, if you already have two passes of the same route and mode on different
-    days. `wifi_analysis.py` gives the distributions, and the distance is a few
-    lines.
-  - If not, record the repeat in the same visit as E3. Run A on two days covers
-    it.
+**E1 Headroom: the testbed is finer than what it measures**
+- *Goal.* Show a wide margin between the testbed's own error and the error at
+  which collaborative fusion breaks.
+- *Why.* If the testbed's clock or poses were as coarse as the effects under
+  study, every later measurement would be ambiguous. This is the first thing a
+  reviewer checks.
+- *How.*
+  - On one log axis in metres, plot each error term of the testbed: clock offset
+    × speed, sniffer bias × speed, extrinsic residuals, held-out board residual,
+    second-pass agreement.
+  - Against them, plot the fusion breaking points: 0.2 m of pose error, and
+    latency expressed as speed × delay relative to indoor object size.
+  - The OPV2V 100 ms figure was measured at 20 m/s, so state it as displacement,
+    not as time.
+- *Status.* The clock (70 µs) and second pass (1.06 cm) are measured. The board
+  residual, calibration residuals and sniffer bias come from data you already
+  have.
 
-**E5. Demonstration: what the logged link shows that a synthetic one hides.**
-- *How.* Keep it at the message level, from the logs, so it does not pre-empt
-  Paper B. For each mode (survey, cooperation) and message size, take the share
-  of messages that would arrive within one LiDAR frame (100 ms), computed from
-  the logged trace. Next to it, show what the synthetic channels of `where2comm`
-  and `v2xvit` assume.
-- *Message.* Expect the real link to be bimodal: about 3 ms when idle and
-  60–109 ms under contention, with outages tied to position. The synthetic
-  channel is one fixed or independently sampled delay. Raw clouds cross the
-  one-frame boundary under contention, and boxes do not.
-- *One figure.* Delay CDFs per mode and size, with the frame boundary and the
-  synthetic assumption drawn in.
-- *Can you do it now?* Yes, for the logged side: the ping and iperf tables
-  exist, and arrival per size is the replay formula applied to them. The
-  synthetic side is the parameter values from those papers. A detection-level
-  version is left to Paper B.
+**E2 Map Meets Radio: two independent references agree**
+- *Goal.* Show that the geometry SCooP-Bed builds (map and poses) predicts the
+  signal SCooP-Bed logs (RSSI, CSI power, goodput), although neither was used to
+  produce the other.
+- *Why.* It validates the poses and the link logs together, without any hand
+  measurement. A pose error or a mislabelled link would break the agreement.
+- *How.*
+  - For every link window, compute the first-Fresnel-zone clearance of the path
+    between the two ends through the anchored map.
+  - Remove the distance trend from the dB signal, using a fixed path-loss
+    exponent and an offset taken from the clear windows. Fixing the exponent
+    matters: along a route, length and obstruction move together, and a free
+    fit puts the wall loss into the slope. The self-test showed exactly that.
+  - Report Spearman's rho between clearance and the residual, and the residual
+    drop from clear (≥ 0.6) to obstructed (< 0.6) windows, per link and pooled.
+  - Links used:
+    - CSI links, agent to agent: sniffer ↔ mobile_2, sniffer ↔ infra_1.
+    - Agent-to-AP links, from Wi-Fi status RSSI and iperf goodput, once the
+      AP's position is given.
+- *Command.*
+  `python scoop_pipeline/analysis/comms/link_clearance.py --all data/processed [--ap-file ap.yaml]`
+- *Status.* Ready. The self-test recovers a planted 12 dB wall loss as 11.9 dB
+  (rho 0.68).
+
+**E3 Twin Run: replay matches the real link**
+- *Goal.* Show that replaying a logged trace predicts when real messages arrive,
+  or whether they are dropped.
+- *Why.* Replay is what SCooP-Bed offers every method that runs on it. If replay
+  does not match reality, the logged channel is just another simulation.
+- *How.* Use twin runs on the same route, same mode and same day.
+  - **Run A** records the link as usual, with iperf and ping.
+  - **Run B** replaces iperf with a payload node that sends stamped messages at
+    10 Hz in three sizes: about 1 KB (boxes), about 100 KB (features) and 1–2 MB
+    (raw clouds). Because the clocks are synced, one-way delay is exact.
+  - Replay B's messages through A's trace.
+  - Report:
+    - arrival-time error per size;
+    - agreement on which receiver frame each message lands in;
+    - drop agreement;
+    - the same comparison for the synthetic channel.
+- *Status.* Needs run B and a small ROS 2 publisher and subscriber. The analysis
+  reuses the comms tables.
+
+**E4 Same Knob, Same Link: a setting reproduces its condition**
+- *Goal.* Show that a load mode (survey or cooperation) produces the same link
+  statistics on different days.
+- *Why.* A testbed setting is useful only if it is repeatable. Otherwise
+  "cooperation mode" is not a controlled condition.
+- *How.* Take the same route and mode on two days. Compare the RTT, goodput and
+  RSSI-against-position distributions with a Wasserstein or KS distance. The
+  day-to-day distance should be small next to the survey-to-cooperation
+  distance. The pose half is the second mapping pass, four weeks later, 1.06 cm.
+- *Status.* Existing data, if you have same-route repeats. Otherwise record the
+  repeat together with E3.
+
+**E5 Sim Gap: what a synthetic channel hides**
+- *Goal.* Show that the measured link differs from the synthetic channels in the
+  literature in a way that matters for fusion.
+- *Why.* This is the reason SCooP-Bed should exist. If a fixed-delay channel
+  described the real link, nobody would need to measure it.
+- *How.*
+  - From the logged ping and iperf data, compute the share of messages of each
+    size that would arrive within one LiDAR frame (100 ms), per load mode.
+  - Set it against the synthetic channels of Where2comm and V2X-ViT.
+  - Expected: bimodal delay (about 3 ms idle, 60–109 ms under contention) with
+    outages tied to position. Raw clouds cross the frame boundary under
+    contention; boxes do not.
+  - One figure of delay CDFs.
+- *Status.* Existing logs. Detection-level results stay in Paper B.
 
 ### IX. Lessons Learned and Limitations (about 0.4 pages)
 Testbed papers are valued for these (see Robotarium and the Kimera-Multi
@@ -398,8 +406,8 @@ without claiming it.
 | Paper A (testbed) | Paper B (dataset) |
 |---|---|
 | Clock, extrinsics, ground-truth procedure and their validation | One-paragraph summary that cites A |
-| Link instrumentation and replay, validated (E2, E3) | Logged link used as a condition in Q4 |
-| One method, one site, one demonstration figure (E5) | Multi-method transfer, heterogeneity, occlusion vs range, retained gain, attribution, geometry share |
+| Link instrumentation and replay, validated (E2 Map Meets Radio, E3 Twin Run) | Logged link used as a condition in Q4 |
+| Message-level demonstration, logged against synthetic delay (E5 Sim Gap) | Multi-method transfer, heterogeneity, occlusion vs range, retained gain, attribution, geometry share |
 | No sequences, labels or leaderboard | Release, annotations, splits, benchmarks |
 
 ## What exists and what is new
@@ -411,7 +419,8 @@ without claiming it.
   - held-out board residuals;
   - calibration residuals;
   - bill of materials and setup time;
-  - E2 (from existing logs);
-  - E4 (from existing sessions if the same route was repeated).
-- **New collection:** E3 run B (payload node), plus E4's repeat day if you have
-  no same-route repeat yet.
+  - E2 Map Meets Radio (`link_clearance.py --all`);
+  - E4 Same Knob, Same Link (from existing sessions if the same route was
+    repeated).
+- **New collection:** E3 Twin Run (run B, payload node), plus E4's repeat day
+  if you have no same-route repeat yet.
