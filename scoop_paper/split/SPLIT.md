@@ -12,7 +12,7 @@ numbers, and adds no new testbed contribution.
 
 ---
 
-## Paper A: RA-L testbed
+## Paper A: RA-L testbed (no dataset release; full plan in PAPER_A.md)
 
 **Claim.** A reproducible, heterogeneous indoor multi-robot testbed in which
 every frame carries the measured state of every wireless link, on one clock,
@@ -28,7 +28,6 @@ that puts that link back in the loop for any collaborative method.
 | Ground Truth: reference map, fiducial network, validation | Indoor ground truth without motion capture |
 | Communication Ground Truth | Per-link measurement stack (status, iperf, CSI sniffer, NTP) |
 | Benchmark: Channels, replay module | Channel-in-the-loop replay |
-| Development Kit | Software release |
 
 **Evaluation (the numbers an RA-L reviewer will ask for)**
 
