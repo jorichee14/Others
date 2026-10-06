@@ -12,7 +12,7 @@ numbers, and adds no new testbed contribution.
 
 ---
 
-## Paper A: RA-L testbed (no dataset release; full plan in PAPER_A.md)
+## Paper A: SCooP-Bed, RA-L testbed (no dataset release; full plan in PAPER_A.md)
 
 **Claim.** A reproducible, heterogeneous indoor multi-robot testbed in which
 every frame carries the measured state of every wireless link, on one clock,
@@ -29,21 +29,12 @@ that puts that link back in the loop for any collaborative method.
 | Communication Ground Truth | Per-link measurement stack (status, iperf, CSI sniffer, NTP) |
 | Benchmark: Channels, replay module | Channel-in-the-loop replay |
 
-**Evaluation (the numbers an RA-L reviewer will ask for)**
-
-1. Timing: cross-agent clock offset and its residual after calibration.
-2. Ground truth: held-out fiducial residuals and rangefinder control distances
-   per site (RESULTS_PLAN Phase A).
-3. Link measurement: map Fresnel clearance against measured RSSI and goodput
-   (RESULTS_PLAN Phase C.1). This shows that the geometry and the radio logs
-   agree with each other.
-4. Replay validity. Run one cheap method (late fusion) live over the real link
-   on a few sequences. Then replay the logged trace on the same frames and show
-   the accuracies agree. Only a testbed can make this claim. If no live runs
-   are available, items 1 to 3 carry the evaluation on their own.
-5. One demonstration: Swarm-SLAM on all agents under the ideal and logged
-   channels. It shows the testbed is used, and it does not pre-empt the T-RO
-   questions.
+**Evaluation.** Experiments E1 to E5 are planned in full in PAPER_A.md:
+- E1: precision margin;
+- E2: clearance against RSSI;
+- E3: message-level replay fidelity;
+- E4: repeatability;
+- E5: logged against synthetic delay.
 
 **Structural models**
 - `wilson2021robotarium` (RA-L): frames the testbed itself as the contribution.
