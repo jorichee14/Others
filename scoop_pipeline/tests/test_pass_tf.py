@@ -384,8 +384,8 @@ def main():
                 f += check09(b09, stamps, T_cam_sensor, "10 again")
 
         # coop: mobile_2 moves on its own track, below a board from survey_1
-        tree, after = merged_tree(inputs, coop(data, stages), os.path.join(tmp, "coop_merged"),
-                                  static_yaml)
+        coop_cfg = coop(data, stages)
+        tree, after = merged_tree(inputs, coop_cfg, os.path.join(tmp, "coop_merged"), static_yaml)
         T_link_col = RS_CHAIN[0][2] @ RS_CHAIN[1][2]
         for t in stamps[::7]:
             close(tree.lookup("map", "camera_link", T0 + t), true_rs(t),
@@ -417,6 +417,11 @@ def main():
                      % (after["map_zed"].parent, after["zed_camera_link"].parent))
         close(tree.lookup("map", "arducam_optical_frame", T0 + 5), T_ARDU,
               "coop: arducam from survey_1's 07 (cameras_from)", f)
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "checks", "tf_at.py"),
+                            coop_cfg, "--bag", os.path.join(tmp, "coop_merged"), "--t", "0"],
+                           capture_output=True, text=True)
+        if r.returncode or "0.0 cm, 0.00 deg apart" not in r.stdout:
+            f.append("checks/tf_at.py: " + r.stdout[-800:] + r.stderr[-800:])
         roots = {tftree._root(c, after) for c in after}
         if roots != {"map"}:
             f.append("coop: the tree has more than one root: %s" % sorted(roots))
