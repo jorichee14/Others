@@ -35,10 +35,12 @@ def legacy_mask(sub):
     return m
 
 
-def main():
+def case(f, tx_moves=False):
+    """tx_moves: the sniffer stands and the transmitter moves (a coop link):
+    coherence goes by the faster end's speed all the same."""
     rng = np.random.default_rng(7)
     tmp = tempfile.mkdtemp()
-    f = []
+    tag = "transmitter moving: " if tx_moves else ""
     try:
         out = os.path.join(tmp, "processed", "20260101", "survey_9", "comms", "csi")
         os.makedirs(out)
@@ -66,7 +68,8 @@ def main():
                          "topic": "/mobile_1/sniffer/infra_1/csi", "t": t[i], "t_log": t[i] + 0.004,
                          "rssi": -30 - 25 * np.log10(d) + rng.normal(0, 1.0),
                          "frame_control": int(fc[i]), "seq": (seq % 4096) << 4 if fc[i] == 0x88 else 65535,   # Sequence Control
-                         "x": d, "y": 0.0, "distance_m": d})
+                         **({"x": 0.0, "y": 0.0, "peer_x": d, "peer_y": 0.0} if tx_moves
+                            else {"x": d, "y": 0.0}), "distance_m": d})
         amp_db, phase, power, spread = comms.csi_features(sub, H)
         for r, p in zip(rows, power):
             r["csi_power_db"] = p
@@ -98,7 +101,7 @@ def main():
             f.append("delay spread %.1f ns (40)" % ds)
         cs = {tuple(c["speed_mps"]): c["median_correlation"] for c in rep["coherence_by_speed"]}
         if not (cs.get((0.0, 0.05), 0) > 0.95 and cs.get((0.2, 0.5), 1) < cs[(0.0, 0.05)] - 0.05):
-            f.append("coherence by speed: %s" % cs)
+            f.append(tag + "coherence by speed: %s" % cs)
         for png in ("csi_timeline.png", "csi_occupancy.png", "csi_pathloss.png", "csi_coherence.png",
                     "csi_amplitude_infra_1_to_mobile_1_sniffer.png"):
             try:
@@ -108,9 +111,15 @@ def main():
             if not os.path.exists(os.path.join(out, png)):
                 f.append("no " + png)
     except AssertionError as e:
-        f.append(str(e))
+        f.append(tag + str(e))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def main():
+    f = []
+    case(f)
+    case(f, tx_moves=True)
     print("\n".join(f) or "csi analysis ok")
     sys.exit(1 if f else 0)
 

@@ -277,11 +277,17 @@ def plots(out_dir, t0, links, pings, iperf, busy):
     if have:
         fig, ax = plt.subplots(figsize=(9, 8))
         sc = None
+        # one colour scale for every moving robot (two in a coop run)
+        allr = np.concatenate([col(rows, "signal_dbm") for rows in have.values()])
+        lo, hi = (np.nanpercentile(allr, 2), np.nanpercentile(allr, 98)) if np.isfinite(allr).any() \
+            else (None, None)
         for m, rows in have.items():
             x, y, rssi = col(rows, "x"), col(rows, "y"), col(rows, "signal_dbm")
             moving = np.nanstd(x) > 0.2 or np.nanstd(y) > 0.2
             if moving:
-                sc = ax.scatter(x, y, c=rssi, s=6, cmap="viridis", label=f"{m} RSSI")
+                sc = ax.scatter(x, y, c=rssi, s=6, cmap="viridis", vmin=lo, vmax=hi, label=f"{m} RSSI")
+                ax.annotate(m, (x[np.isfinite(x)][0], y[np.isfinite(y)][0]), fontsize=8,
+                            xytext=(4, 4), textcoords="offset points")
             else:
                 ax.plot(np.nanmedian(x), np.nanmedian(y), "k^", ms=9)
                 ax.annotate(f"{m}\n{np.nanmedian(rssi):.0f} dBm", (np.nanmedian(x), np.nanmedian(y)),

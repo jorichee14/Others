@@ -25,8 +25,9 @@ Per link (transmitter -> sniffer):
               strongest; 80 MHz: 12.5 ns per tap)
   coherence   correlation of the CSI amplitude between consecutive frames of
               one type (< 0.1 s apart), over its data subcarriers (no pilots:
-              +-11, +-39, +-75, +-103 at 80 MHz), against the robot's speed:
-              how fast the channel changes as it moves
+              +-11, +-39, +-75, +-103 at 80 MHz), against the speed of the
+              faster end (receiver or transmitter: both move in a coop run):
+              how fast the channel changes as they move
 
 Writes comms/csi/csi_report.json and csi_timeline.png, csi_occupancy.png,
 csi_pathloss.png, csi_coherence.png, csi_amplitude_<link>.png, csi_map.png.
@@ -250,7 +251,9 @@ def link_report(name, rows, z, log=print):
         ds[big] = delay_spread(H[big], sub)
         del H
         rep["rms_delay_spread_ns"] = stats(ds[big])
-    spd = speed_at(t, rows.get("x", np.full(n, np.nan)), rows.get("y", np.full(n, np.nan)))
+    nan = np.full(n, np.nan)
+    spd = np.fmax(speed_at(t, rows.get("x", nan), rows.get("y", nan)),
+                  speed_at(t, rows.get("peer_x", nan), rows.get("peer_y", nan)))
     coh = coherence(amp, t, fc, masks)
     rep["coherence_by_speed"] = []
     for lo, hi in zip(SPEED_BINS[:-1], SPEED_BINS[1:]):
@@ -438,7 +441,8 @@ def main():
         sys.exit(f"no {path} (run processing/comms_tables.py)")
     print(f"reading {path} ...")
     cols = load_csv(path, ["machine", "peer", "t", "t_log", "rssi", "frame_control", "seq",
-                           "csi_power_db", "csi_amp_spread_db", "x", "y", "distance_m"])
+                           "csi_power_db", "csi_amp_spread_db", "x", "y", "peer_x", "peer_y",
+                           "distance_m"])
     links, report = {}, {}
     for peer in sorted(set(cols["peer"])):
         for machine in sorted(set(cols["machine"][cols["peer"] == peer])):
