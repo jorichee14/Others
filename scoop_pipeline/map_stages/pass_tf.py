@@ -343,6 +343,8 @@ def plan(P, edges, bags, log=print):
                 add_static(og, root, np.eye(4), "parked")
             else:
                 add_static(mapf, root, T_root, why)
+    elif cy is None:
+        log("    (07_build_cameras off: infra/parked cameras not placed)")
     else:
         log("    (no %s: infra/parked cameras not placed)" % cy)
     return drop, static, extra, edges
