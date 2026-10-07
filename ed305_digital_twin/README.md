@@ -2,7 +2,7 @@
 
 Digital twin of the ED305 room (16 Basler cameras, see the lab wiki "ED305
 Indoor Camera User Guide") for collaborative perception. The plan is
-[PLAN.md](PLAN.md); camera placement step by step is [WORKFLOW.md](WORKFLOW.md). v1 so far: the camera coverage / blind-spot tool.
+[PLAN.md](PLAN.md); camera placement step by step is [WORKFLOW.md](WORKFLOW.md). v1 so far: coverage / blind spots, placement within each mount's range, and measuring that range from video.
 
 ```
 ed305/camera.py        pinhole camera in the room frame; loads cameras YAML
