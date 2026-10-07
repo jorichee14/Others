@@ -20,8 +20,12 @@ arrives after the logged channel's delay (Sec. VII)
            measurement, the message is left out
   G(t)     the goodput of the robot's most recent successful iperf up test
            (robot to server; down when it ran none) started at or before t
-  outage   a run of pings that never got a reply lasting >= --frame-ms: a
-           message sent in it is lost (one lost ping is not an outage)
+  outage   a run of pings that never got a reply lasting >= --frame-ms,
+           from the first one sent to one ping interval after the last: a
+           message sent in it is lost (one lost ping is not an outage). Where
+           the robot logged no ping at all (its monitor or recording stalled),
+           there is no evidence either way: the run ends there, and messages
+           of the stall are left out like any without a measurement
 
 Reported per pass, robot and size: messages, lost (outage), the share that
 arrives within one LiDAR frame (--frame-ms), delay p50 / p95 / max; the same
@@ -107,20 +111,23 @@ def ping_seqs(rows):
 
 
 def outages(ts, rtt, min_s):
-    """[(t0, t1)]: runs of unanswered pings from the first one sent to the next
-    answered one, min_s or longer."""
+    """[(t0, t1)]: runs of unanswered pings, from the first one sent to one
+    ping interval after the last, min_s or longer. A run is cut where no ping
+    was logged for over RTT_AGE_S (a stall says nothing about the link)."""
+    if len(ts) < 2:
+        return []
+    dt = float(np.median(np.diff(ts)))
     out, i, n = [], 0, len(ts)
     while i < n:
         if np.isfinite(rtt[i]):
             i += 1
             continue
         j = i
-        while j < n and not np.isfinite(rtt[j]):
+        while j + 1 < n and not np.isfinite(rtt[j + 1]) and ts[j + 1] - ts[j] <= RTT_AGE_S:
             j += 1
-        t1 = ts[j] if j < n else ts[-1]
-        if t1 - ts[i] >= min_s:
-            out.append((float(ts[i]), float(t1)))
-        i = j
+        if ts[j] + dt - ts[i] >= min_s:
+            out.append((float(ts[i]), float(ts[j] + dt)))
+        i = j + 1
     return out
 
 

@@ -3,7 +3,9 @@
 
 mobile_1 pings at 50 Hz for 60 s: RTT 4 ms, 80 ms while its iperf up test
 runs (20-30 s, 100 Mbit/s); no reply for 1 s at 40 s (an outage) and one
-lone lost ping at 10 s (not one); no ping at all 50-52 s (left out). A
+lone lost ping at 10 s (not one); no ping at all 50-52 s (left out); no
+reply 54-54.2 s and then no ping logged until 56 s (an outage of 0.2 s
+only: the stall is no evidence of the link, its messages left out). A
 message every 100 ms must then take RTT / 2 + s / G: boxes 2.08 ms idle,
 clouds 2 + 120 = 122 ms (never within a frame); the ten messages of the
 outage lost; the stall's left out once its last ping is 0.5 s old.
@@ -41,9 +43,9 @@ def main():
         T0 = 1000.0
         ping = []
         for i, t in enumerate(np.arange(0, 60, 0.02)):
-            if 50 <= t < 52:
+            if 50 <= t < 52 or 54.2 <= t < 56:
                 continue
-            lost = (40 <= t < 41) or i == 500
+            lost = (40 <= t < 41) or (54 <= t < 54.2) or i == 500
             rtt = 80.0 if 20 <= t <= 30 else 4.0
             ping.append({"machine": "mobile_1", "t": T0 + t, "t_log": T0 + t + 0.001,
                          "icmp_seq": i % 65536, "reply": "False" if lost else "True",
@@ -59,8 +61,10 @@ def main():
             raise AssertionError(r.stderr[-2500:])
         rep = json.load(open(os.path.join(proc, "comms", "sim_gap", "sim_gap.json")))
         m = rep["robots"]["mobile_1"]
-        if len(m["outages"]) != 1 or abs(m["outages"][0]["duration_s"] - 1.0) > 0.05:
-            f.append("outages %s: want one of 1 s (a lone lost ping is not one)" % m["outages"])
+        dur = [round(o["duration_s"], 2) for o in m["outages"]]
+        if dur != [1.0, 0.2]:
+            f.append("outages %s s: want 1 and 0.2 (a lone lost ping is not one, a stall adds "
+                     "nothing)" % dur)
         box = m["sizes"]["boxes"]
         if abs(box["idle"]["delay_ms"]["p50"] - 2.08) > 0.01:
             f.append("boxes idle p50 %s ms, want 2.08" % box["idle"]["delay_ms"]["p50"])
@@ -71,10 +75,10 @@ def main():
             f.append("clouds: %s (want p50 122 ms, none within a frame)" % cl)
         n_all = box["all"]["messages"]
         lost = round(box["all"]["lost_percent"] * n_all / 100)
-        if lost != 10:
-            f.append("%d box messages lost, want the 10 of the outage" % lost)
-        if n_all != 585:                                    # 600 minus the stall's last 15
-            f.append("%d box messages, want 585 (the stall left out after 0.5 s)" % n_all)
+        if lost != 12:
+            f.append("%d box messages lost, want the 10 + 2 of the outages" % lost)
+        if n_all != 570:                                    # 600 minus each stall's last 15
+            f.append("%d box messages, want 570 (the stalls left out after 0.5 s)" % n_all)
         if abs(m["outages"][0]["at_s"] - 40.0) > 0.05 if m["outages"] else False:
             f.append("outage at %s s, want 40" % m["outages"][0]["at_s"])
         v = rep["synthetic"]["V2X-ViT"]
