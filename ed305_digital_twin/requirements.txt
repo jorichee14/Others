@@ -2,3 +2,4 @@ numpy
 pyyaml
 matplotlib
 pytest
+opencv-python-headless

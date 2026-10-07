@@ -10,7 +10,9 @@ ed305/coverage.py      room + target volume, visibility with occlusion, k-covera
                        leave-one-out, greedy smallest camera set
 ed305/placement.py     aim as heading/tilt, each mount's range of movement, the search
 coverage_map.py        command line: report.md, floor.png, slices.png, coverage.npz
+ed305/rotation.py      a camera's rotation from its own video (features -> pure rotation)
 optimize_cameras.py    command line: re-aim / move cameras within their mounts' ranges
+measure_rotation.py    command line: a camera's pan / tilt range from a video of it being turned
 configs/room_nominal.yaml     PLACEHOLDER room size, no furniture yet
 configs/cameras_nominal.yaml  PLACEHOLDER layout from the wiki map (not a calibration)
 configs/mounts_small.yaml  ASSUMED range: +-15 deg re-aim, nothing slides (the default)
@@ -91,6 +93,43 @@ one change that helps most is applied. It stops when no change adds
 `--max-moved` cameras. Output: `moves.md` (per moved camera: heading, tilt,
 position, and the floor/wall point to centre in the image when aiming it by
 hand), `cameras.yaml` with the new poses, and before/after coverage reports.
+
+## Measuring a mount's range from video
+
+While a camera is turned by hand, its own stream shows how far it turned:
+with the pivot close to the lens, two frames differ by a pure rotation, so
+matched features give the angle without knowing the scene.
+
+1. Lights on (the cameras do not brighten a dark room). Something with
+   texture in view helps; bare wall alone does not.
+2. Start recording the camera's own stream (camera hosts from the wiki):
+
+   | cameras | stream |
+   |---|---|
+   | 3, 6, 8, 10, 12, 13, 15, 16 | `rtsp://192.168.1.13:8554/cam_N` |
+   | 1, 2, 4, 5, 7, 9, 11, 14 | `rtsp://192.168.1.56:8554/cam_N` |
+
+   ```bash
+   ffmpeg -rtsp_transport tcp -i rtsp://192.168.1.56:8554/cam_2 -c copy cam_2_turn.mp4
+   ```
+3. Hold still 2 s. Loosen the bracket, turn **slowly** (about 5 s to each stop):
+   full left, full right, back to the start; full down, full up, back to the
+   start. Hold still 2 s, press `q`.
+4. `python measure_rotation.py cam_2_turn.mp4 --camera cam_2 --cameras configs/cameras.yaml`
+
+It prints the pan and tilt range (and writes `mount.yaml` to paste into
+`configs/mounts.yaml`, 2 deg off each end), `rotation.png`, and a per-frame
+`rotation.csv`.
+
+- Angles are from the pose in `--cameras`, so the video must start with the
+  camera where it was calibrated. With `cameras_nominal.yaml` the focal length
+  is a guess and the angles scale with it.
+- "end vs start" is the check: if you turned back to the start, it should be
+  well under 1 deg. Larger means drift (too fast, blur, or a featureless view).
+- Turning moves the camera: put it back to its marks, or re-calibrate it after.
+- Tested on synthetic 1080p video with a known turn: range recovered within
+  0.1 deg. A bracket whose pivot sits far from the lens adds parallax, small at
+  room distances; not tested on the real cameras yet.
 
 ## What the nominal numbers mean
 
