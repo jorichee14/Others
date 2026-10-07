@@ -12,7 +12,10 @@ signal measured on it.
 Links, from the comms tables (processing/comms_tables.py, made with positions):
   csi     agent to agent: the sniffer (on mobile_1) and each transmitter it
           heard (mobile_2, infra_1), both ends positioned per packet. QoS data
-          frames only. Signal: the frame's RSSI and its CSI power.
+          frames only. Signal: the frame's RSSI. Its CSI power goes in the
+          table as it is, not tested: the CSI is taken after the receiver's
+          gain control, so it does not fall with distance and the distance
+          trend removed below would turn it into a length ramp.
   ap      agent to access point, only with --ap (the AP is in no TF tree):
           the Wi-Fi status RSSI of every machine, and the iperf goodput of
           the tests it ran.
@@ -315,8 +318,8 @@ def find_map(proc, config=None):
     return c[0] if c else None
 
 
-SIGNALS = {"csi": ("rssi_dbm", "csi_power_db"), "ap": ("rssi_dbm",),
-           "ap_iperf": ("goodput_mbps",)}
+SIGNALS = {"csi": ("rssi_dbm",), "ap": ("rssi_dbm",), "ap_iperf": ("goodput_mbps",)}
+RAW = ("csi_power_db",)              # in the table, not tested (after gain control)
 
 
 def run_pass(proc, map_path=None, ap=None, window=0.5, margin=0.3, config=None,
@@ -366,6 +369,9 @@ def run_pass(proc, map_path=None, ap=None, window=0.5, margin=0.3, config=None,
                 if s in w:
                     row[s] = w[s][i]
                     row[s + "_residual"] = resid[s][i] if s in resid else math.nan
+            for s in RAW:
+                if s in w:
+                    row[s] = w[s][i]
             table.append(row)
     cols = []
     for r in table:
@@ -400,7 +406,7 @@ def plot(table, path, title):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    sig = [s for s in ("rssi_dbm", "csi_power_db", "goodput_mbps")
+    sig = [s for s in ("rssi_dbm", "goodput_mbps")
            if any(np.isfinite(r.get(s + "_residual", math.nan)) for r in table)]
     if not sig:
         return
