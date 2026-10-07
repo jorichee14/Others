@@ -22,3 +22,6 @@ position in map.
     link_clearance.py --all <data/processed> [--ap-file F]
                                        distance trend (comms/clearance/; pooled over every
                                        pass in <data/processed>/clearance/)
+    sim_gap.py <processed pass> [...]   messages of 1 KB / 100 KB / 1.5 MB through the logged
+                                       link (RTT/2 + size/goodput, lost in outages) against the
+                                       synthetic channels: share within one frame (comms/sim_gap/)

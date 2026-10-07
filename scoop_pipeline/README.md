@@ -90,6 +90,7 @@ tests/               self-tests, no real bag needed
   test_ntp_analysis.py  ntp_analysis on a synthetic ntp.csv with known events
   test_wifi_analysis.py  wifi_analysis: seq wrap, late replies, contention, goodput vs RSSI
   test_comms_map.py  comms_map: figures written, grid cells hold their samples' median
+  test_sim_gap.py    sim_gap: known RTT, goodput and outage give the message delays and losses
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
   test_csi_view.py   csi_view: delay profile puts the paths at their delays; figures
   test_replica.py    replica with lidar depth on a synthetic scene
