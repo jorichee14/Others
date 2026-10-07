@@ -13,7 +13,8 @@ coverage_map.py        command line: report.md, floor.png, slices.png, coverage.
 optimize_cameras.py    command line: re-aim / move cameras within their mounts' ranges
 configs/room_nominal.yaml     PLACEHOLDER room size, no furniture yet
 configs/cameras_nominal.yaml  PLACEHOLDER layout from the wiki map (not a calibration)
-configs/mounts_nominal.yaml   PLACEHOLDER range of movement per camera
+configs/mounts_small.yaml  ASSUMED range: +-15 deg re-aim, nothing slides (the default)
+configs/mounts_wide.yaml   ASSUMED range: +-45 deg pan, tilt 15-80, ceiling row turns fully
 tests/                 pytest
 ```
 
@@ -59,13 +60,24 @@ as `obstacles` boxes in `configs/room.yaml`.
 
 ## Optimizing camera placement
 
-`optimize_cameras.py` only moves a camera as far as its mount allows, so first
-measure, per camera, and write into `configs/mounts.yaml`:
+`optimize_cameras.py` only moves a camera as far as its mount allows. Until the
+mounts are measured, run it with an assumed range and check only what it asks for:
+
+```bash
+python optimize_cameras.py --mounts configs/mounts_small.yaml   # +-15 deg, the default
+python optimize_cameras.py --mounts configs/mounts_wide.yaml    # +-45 deg
+```
+
+`moves.md` then says, per camera, e.g. "turn 15 deg right, tilt 15 deg up":
+try exactly that on the camera. If it can't, mark it (`fixed: true`, or a
+smaller `pan` / `tilt_change`) and run again.
+
+To measure a mount properly, per camera, into `configs/mounts.yaml`:
 
 | what | key | how to measure |
 |---|---|---|
 | pan range | `pan: [lo, hi]` | turn the bracket left/right to its stops, degrees from where it points now |
-| tilt range | `tilt: [lo, hi]` | lowest and highest tilt it holds (0 level, 90 straight down), including where the body or cable hits the wall/ceiling |
+| tilt range | `tilt: [lo, hi]` or `tilt_change: [lo, hi]` (from the current tilt) | lowest and highest tilt it holds (0 level, 90 straight down), including where the body or cable hits the wall/ceiling |
 | position range | `along: [[x,y,z],[x,y,z]]` | if it can move (rail, clamp, new holes, cable reach to its host), the ends of that stretch in the room frame; leave out if it can only turn |
 | don't touch | `fixed: true` | cameras someone depends on as they are |
 

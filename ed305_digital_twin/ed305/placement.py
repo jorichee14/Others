@@ -7,9 +7,11 @@ A camera's aim is (heading, tilt), roll kept at 0 (image upright):
            image faces.
   tilt     degrees below horizontal: 0 = level, 90 = straight down.
 
-The mounts YAML says how far each camera can move (see configs/mounts_nominal.yaml):
+The mounts YAML says how far each camera can move (see configs/mounts_wide.yaml):
   pan:    [lo, hi]   heading change from `heading0` (default: where it points now)
   tilt:   [lo, hi]   absolute tilt range
+  tilt_change: [lo, hi]   or: tilt range relative to the current tilt
+                     (+ = further down), clipped to 0..90
   along:  [[x,y,z], [x,y,z]]   the camera can sit anywhere on this segment
                      (a rail, a stretch of wall); leave out = position fixed
   fixed:  true       the camera does not move at all
@@ -112,8 +114,13 @@ def load_mounts(path, cameras):
         raise ValueError(f"mounts for unknown cameras: {', '.join(sorted(unknown))}")
     mounts = []
     for cam in cameras:
-        m = {**defaults, **(per.get(cam.name) or {})}
+        own = per.get(cam.name) or {}
+        m = {**defaults, **own}
         heading, tilt, _ = aim_from_pose(cam.T_world_cam)
+        # the camera's own tilt / tilt_change wins over either from defaults
+        if "tilt_change" in own or ("tilt_change" in m and "tilt" not in own):
+            lo, hi = m["tilt_change"]
+            m["tilt"] = [max(0.0, tilt + lo), min(90.0, tilt + hi)]
         along = m.get("along")
         mounts.append(Mount(
             name=cam.name,

@@ -1,0 +1,7 @@
+# ASSUMED range: a small re-aim that almost any camera bracket allows
+# (loosen the bracket screw, turn a little, tighten).  Positions fixed.
+# Not measured: check on the camera that the moves optimize_cameras.py
+# asks for are possible.
+defaults:
+  pan: [-15, 15]          # degrees left/right of where it points now
+  tilt_change: [-15, 15]  # degrees up/down from its current tilt

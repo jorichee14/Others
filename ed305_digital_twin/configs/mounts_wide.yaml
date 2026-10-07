@@ -1,5 +1,5 @@
-# How far each ED305 camera can move.  PLACEHOLDER ranges: measure them.
-#
+# ASSUMED range: a wide re-aim (a ball head or a bracket that turns well).
+# Not measured: check on the camera that the moves optimize_cameras.py asks for are possible.
 # Per camera, what to find out at the mount:
 #   pan:   how far the bracket turns left/right from where it points now (deg)
 #   tilt:  lowest and highest tilt it can hold, 0 = level, 90 = straight down;
