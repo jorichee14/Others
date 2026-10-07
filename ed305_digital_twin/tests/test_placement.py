@@ -53,3 +53,11 @@ def test_optimise_stays_in_range_and_never_worse():
         assert m.pan[0] - 1e-6 <= (h - m.heading0 + 180) % 360 - 180 <= m.pan[1] + 1e-6
         assert m.tilt[0] - 1e-6 <= t <= m.tilt[1] + 1e-6
         assert np.allclose(c.center, cams[mounts.index(m)].center)
+
+
+def test_printed_head_scale_readings():
+    wall = Mount("w", 180.0, (-90, 90), (-10, 90), scale=True)               # right wall, faces -x
+    assert wall.readings(pose_from_aim([3.9, 0, 2.6], -128, 5)) == ("L52", "5")
+    assert wall.readings(pose_from_aim([3.9, 0, 2.6], 150, 30)) == ("R30", "30")
+    ceil = Mount("c", 90.0, (-170, 170), (-10, 90), scale=True, ceiling=True)  # seen from below: L/R swap
+    assert ceil.readings(pose_from_aim([0, 0, 2.7], 60, 45)) == ("L30", "45")

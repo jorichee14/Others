@@ -102,8 +102,8 @@ def main():
              "To set a camera: put a marker at the new aim point (where the image centre falls on the floor "
              "or a wall), turn the camera until the marker is at the image centre with the image level, "
              "then re-calibrate that camera.", "",
-             "| camera | change (seen from behind the camera) | heading (deg) | tilt (deg) | position (m) | aim point (x, y, z) |",
-             "|---|---|---|---|---|---|"]
+             "| camera | change (seen from behind the camera) | set scales: pan, tilt | heading (deg) | tilt (deg) | position (m) | aim point (x, y, z) |",
+             "|---|---|---|---|---|---|---|"]
     for i, (c0, c1) in enumerate(zip(cams, new)):
         if i not in moved:
             continue
@@ -114,10 +114,12 @@ def main():
         dh, dt = (h1 - h0 + 180) % 360 - 180, t1 - t0
         turn = [f"turn {abs(dh):.0f} deg {'left' if dh > 0 else 'right'}"] if abs(dh) >= 0.5 else []
         turn += [f"tilt {abs(dt):.0f} deg {'down' if dt > 0 else 'up'}"] if abs(dt) >= 0.5 else []
-        lines.append(f"| {c1.name} | {', '.join(turn) or '-'} | {h0:.0f} -> {h1:.0f} | {t0:.0f} -> {t1:.0f} | {pos} | "
+        m = mounts[i]
+        scales = "{}, {}".format(*m.readings(c1.T_world_cam)) if m.scale else "-"
+        lines.append(f"| {c1.name} | {', '.join(turn) or '-'} | {scales} | {h0:.0f} -> {h1:.0f} | {t0:.0f} -> {t1:.0f} | {pos} | "
                      f"{fmt_aim(room_aim_point(c0.T_world_cam, room))} -> {fmt_aim(room_aim_point(c1.T_world_cam, room))} |")
     if not moved:
-        lines.append("| (none: no change within the mount ranges helps) | | | | | |")
+        lines.append("| (none: no change within the mount ranges helps) | | | | | | |")
     lines += ["", "Unchanged: " + (", ".join(c.name for i, c in enumerate(cams) if i not in moved) or "none") + ".",
               "", "Full reports: before/report.md, after/report.md."]
     (out / "moves.md").write_text("\n".join(lines) + "\n")

@@ -15,6 +15,9 @@ The mounts YAML says how far each camera can move (see configs/mounts_wide.yaml)
   along:  [[x,y,z], [x,y,z]]   the camera can sit anywhere on this segment
                      (a rail, a stretch of wall); leave out = position fixed
   fixed:  true       the camera does not move at all
+  scale:  true       the mount has a pan scale whose 0 points at heading0
+                     (hardware/pan_tilt): moves.md then gives scale readings
+  ceiling: true      that scale is upside down (base on the ceiling)
 `defaults:` fills what a camera leaves out.
 """
 from dataclasses import dataclass, replace
@@ -86,6 +89,15 @@ class Mount:
     tilt: tuple
     along: np.ndarray = None      # (2,3) segment, or None
     fixed: bool = False
+    scale: bool = False           # pan scale with 0 at heading0
+    ceiling: bool = False         # scale seen from below
+
+    def readings(self, T):
+        """(pan, tilt) as read on the printed head's scales: 'L23' / 'R5', degrees down."""
+        h, t, _ = aim_from_pose(T)
+        d = wrap(h - self.heading0) * (-1 if self.ceiling else 1)   # + = counter-clockwise on the base's own face
+        pan = "0" if abs(d) < 0.5 else f"{'L' if d > 0 else 'R'}{abs(d):.0f}"
+        return pan, f"{t:.0f}"
 
     def position(self, s, default):
         if self.along is None:
@@ -129,6 +141,8 @@ def load_mounts(path, cameras):
             tilt=tuple(m.get("tilt", [tilt, tilt])),
             along=None if along is None else np.asarray(along, float),
             fixed=bool(m.get("fixed", False)),
+            scale=bool(m.get("scale", False)),
+            ceiling=bool(m.get("ceiling", False)),
         ))
     return mounts
 

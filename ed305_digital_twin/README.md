@@ -13,6 +13,8 @@ coverage_map.py        command line: report.md, floor.png, slices.png, coverage.
 ed305/rotation.py      a camera's rotation from its own video (features -> pure rotation)
 optimize_cameras.py    command line: re-aim / move cameras within their mounts' ranges
 measure_rotation.py    command line: a camera's pan / tilt range from a video of it being turned
+hardware/pan_tilt/     3D-printed pan-tilt head with pan / tilt scales (OpenSCAD, STL)
+configs/mounts_printed.yaml   the printed head's ranges
 configs/room_nominal.yaml     PLACEHOLDER room size, no furniture yet
 configs/cameras_nominal.yaml  PLACEHOLDER layout from the wiki map (not a calibration)
 configs/mounts_small.yaml  ASSUMED range: +-15 deg re-aim, nothing slides (the default)

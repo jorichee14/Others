@@ -47,7 +47,7 @@ Then, still in the room:
 |---|---|---|
 | B6 | `configs/mounts.yaml`: measured cameras as measured, every other camera `fixed: true`. | |
 | B7 | `python optimize_cameras.py --cameras configs/cameras.yaml --room configs/room.yaml --mounts configs/mounts.yaml --max-moved N` (N = how many you are willing to re-calibrate). | `moves.md`: which camera, turn how far, aim point |
-| B8 | For each camera in `moves.md`: tape a marker at its aim point (floor or wall), open its view full screen at `http://192.168.1.188:3000/cameras`, turn until the marker is at the image centre and the image is level, tighten. | cameras re-aimed |
+| B8 | With the printed heads (hardware/pan_tilt): set each camera to the "set scales" readings in `moves.md`. Otherwise: tape a marker at its aim point (floor or wall), open its view full screen at `http://192.168.1.188:3000/cameras`, turn until the marker is at the image centre and the image is level, tighten. | cameras re-aimed |
 | B9 | `focus_score.py N` again: same as B1, or refocus. | focus kept |
 
 ## C. Re-calibrate the moved cameras

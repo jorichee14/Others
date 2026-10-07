@@ -1,0 +1,34 @@
+# Range of the 3D-printed pan-tilt head (hardware/pan_tilt), installed with the
+# base's 0 mark pointing straight out from the wall (wall cameras) or toward
+# the top (door) wall (ceiling row).  heading0 = where that 0 mark points.
+#
+# Tilt: the slot allows -10..90 deg below horizontal.
+# Pan: the head turns all the way round; a wall camera only needs the half
+# facing the room, and the cable sets the real limit, so +-90 (wall) and
+# +-170 (ceiling).  Narrow these if a cable or a neighbour gets in the way.
+defaults:
+  scale: true
+  tilt: [-10, 90]
+  pan: [-90, 90]
+
+mounts:
+  # left wall: faces +x
+  cam_1: {heading0: 0}
+  cam_2: {heading0: 0}
+  cam_3: {heading0: 0}
+  cam_4: {heading0: 0}
+  # right wall: faces -x
+  cam_5: {heading0: 180}
+  cam_6: {heading0: 180}
+  cam_7: {heading0: 180}
+  cam_8: {heading0: 180}
+  # ceiling row, base upside down, 0 mark toward the top (door) wall
+  cam_9:  {heading0: 90, ceiling: true, pan: [-170, 170]}
+  cam_10: {heading0: 90, ceiling: true, pan: [-170, 170]}
+  cam_11: {heading0: 90, ceiling: true, pan: [-170, 170]}
+  cam_12: {heading0: 90, ceiling: true, pan: [-170, 170]}
+  # bottom wall: faces +y
+  cam_13: {heading0: 90}
+  cam_14: {heading0: 90}
+  cam_15: {heading0: 90}
+  cam_16: {heading0: 90}
