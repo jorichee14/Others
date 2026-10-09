@@ -1,0 +1,584 @@
+<title>Digital Twin & SCooP Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: sticky header with tabs; each view is a list of task rows whose right side is a shared week timeline. */
+:root {
+  --bg: #f4f6f9; --surface: #ffffff; --surface-2: #eef2f6; --ink: #16202b; --muted: #5a6676; --line: #dbe1e8;
+  --accent: #1f4e78; --accent-ink: #ffffff; --accent-soft: #e2ecf6;
+  --st-none: #a3acb7; --st-progress: #e3a21a; --st-partial: #e07b4c; --st-blocked: #c8363d; --st-done: #3f9a4f; --milestone: #1f4e78;
+  --today: #c8363d; --overdue: #b42d33; --week: #edf0f4;
+  --font: "Public Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --radius: 8px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e131a; --surface: #151c25; --surface-2: #1b2430; --ink: #e5ebf2; --muted: #93a1b2; --line: #263241;
+  --accent: #7fb3e6; --accent-ink: #0e131a; --accent-soft: #1d2d40;
+  --st-none: #6d7886; --st-progress: #e8b04a; --st-partial: #ea8f63; --st-blocked: #e5575d; --st-done: #5cb86b; --milestone: #7fb3e6;
+  --today: #e5575d; --overdue: #f07a7f; --week: #18212b; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0e131a; --surface: #151c25; --surface-2: #1b2430; --ink: #e5ebf2; --muted: #93a1b2; --line: #263241;
+  --accent: #7fb3e6; --accent-ink: #0e131a; --accent-soft: #1d2d40;
+  --st-none: #6d7886; --st-progress: #e8b04a; --st-partial: #ea8f63; --st-blocked: #e5575d; --st-done: #5cb86b; --milestone: #7fb3e6;
+  --today: #e5575d; --overdue: #f07a7f; --week: #18212b; color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font); }
+.wrap { max-width: 1400px; margin: 0 auto; padding-inline: 16px; padding-block: 0 48px }
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line) }
+.bar { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between; padding-block: 14px 10px }
+.brand h1 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -0.01em; text-wrap: balance }
+.brand p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center }
+label.inline { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12.5px }
+select, input, textarea { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; min-width: 0 }
+textarea { width: 100%; min-height: 70px; resize: vertical }
+button { font: inherit; cursor: pointer; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 6px 12px }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600 }
+button.danger { color: var(--overdue); border-color: var(--overdue); background: transparent }
+button:disabled { opacity: .5; cursor: default }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+nav.tabs { display: flex; gap: 2px; overflow-x: auto; padding-bottom: 0 }
+nav.tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); padding: 8px 12px; font-weight: 600; white-space: nowrap }
+nav.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent) }
+.notice { margin-top: 14px; padding: 10px 14px; border-radius: var(--radius); background: var(--accent-soft); color: var(--ink) }
+.notice[data-kind="error"] { background: color-mix(in srgb, var(--overdue) 14%, var(--surface)) }
+section.view { margin-top: 18px }
+h2 { font-size: 16px; margin: 0 0 4px; text-wrap: balance }
+.sub { color: var(--muted); font-size: 12.5px; margin: 0 0 12px }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px }
+.chip { border-radius: 999px; padding: 4px 12px; font-size: 13px; background: var(--surface); }
+.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent) }
+.chip .n { font-family: var(--mono); font-size: 11.5px; opacity: .75; margin-left: 6px }
+.summary { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 4px 0 14px; font-size: 13px; color: var(--muted) }
+.summary b { color: var(--ink); font-variant-numeric: tabular-nums }
+.summary .bad b { color: var(--overdue) }
+
+/* overview */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; min-width: 0 }
+.card h3 { margin: 0 0 8px; font-size: 14px }
+.card button.link { border: 0; padding: 0; background: none; color: var(--accent); font-weight: 600; text-align: left }
+.stack { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--surface-2); margin: 8px 0 }
+.stack span { display: block; height: 100% }
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; font-size: 13px }
+.kv dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right }
+.kv dt { color: var(--muted) }
+.kv dd.bad { color: var(--overdue); font-weight: 600 }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface) }
+table.people { border-collapse: collapse; width: 100%; font-size: 13px }
+table.people th, table.people td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap }
+table.people th { color: var(--muted); font-weight: 600; font-size: 12px }
+table.people td.num { text-align: right; font-variant-numeric: tabular-nums }
+table.people td.bad { color: var(--overdue); font-weight: 600 }
+
+/* task timeline */
+.tl { min-width: 980px }
+.tl-head, .tl-row { display: grid; grid-template-columns: var(--cols); align-items: center }
+.tl-head { position: sticky; top: 0; background: var(--surface); border-bottom: 1px solid var(--line); font-size: 11.5px; color: var(--muted); font-weight: 600 }
+.tl-head > div { padding: 6px 8px }
+.tl-group { padding: 10px 8px 4px; font-weight: 700; font-size: 13px; border-bottom: 1px solid var(--line); background: var(--surface-2) }
+.tl-group .n { font-family: var(--mono); font-weight: 400; color: var(--muted); font-size: 11.5px; margin-left: 6px }
+.tl-row { border-bottom: 1px solid var(--line); min-height: 34px; font-size: 13px }
+.tl-row > div { padding: 4px 8px; min-width: 0 }
+.tl-row.parent .title { font-weight: 600 }
+.tl-row.child .title { padding-left: 14px; color: var(--ink) }
+.code { font-family: var(--mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.title button { border: 0; background: none; padding: 0; text-align: left; color: inherit; font-weight: inherit; overflow-wrap: anywhere }
+.title button:hover { color: var(--accent); text-decoration: underline }
+.who { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.date { font-family: var(--mono); font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums }
+.date.bad { color: var(--overdue); font-weight: 600 }
+.st { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; white-space: nowrap }
+.st::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--dot, var(--st-none)) }
+select.st-sel { padding: 3px 6px; font-size: 12.5px; max-width: 100%; border-left: 4px solid var(--dot, var(--st-none)) }
+.track { position: relative; height: 22px; background: repeating-linear-gradient(90deg, transparent 0 calc(var(--wk) - 1px), var(--week) calc(var(--wk) - 1px) var(--wk)) }
+.track .barx { position: absolute; top: 5px; height: 12px; border-radius: 3px; background: var(--c, var(--st-none)); min-width: 4px }
+.track .barx.ms { top: 4px; height: 14px; width: 14px !important; min-width: 14px; transform: translateX(-50%) rotate(45deg); border-radius: 2px; background: var(--milestone) }
+.track .today, .weeks .today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--today); opacity: .8 }
+.weeks { position: relative; height: 30px }
+.weeks span { position: absolute; top: 4px; font-size: 10.5px; font-family: var(--mono); color: var(--muted); white-space: nowrap; transform: translateX(2px) }
+.weeks span.m { top: 15px; color: var(--ink); font-weight: 600; font-family: var(--font) }
+.empty { padding: 28px 16px; text-align: center; color: var(--muted) }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); margin: 10px 0 0 }
+.legend i { display: inline-block; width: 12px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: middle }
+.filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px }
+
+/* manage people */
+.plist { display: grid; gap: 8px; max-width: 760px }
+.prow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto auto; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px }
+.prow .cnt { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap }
+@media (max-width: 640px) { .prow { grid-template-columns: 1fr; } }
+
+/* editor dialog */
+dialog { border: 1px solid var(--line); border-radius: 12px; padding: 0; background: var(--surface); color: var(--ink); width: min(560px, calc(100vw - 32px)) }
+dialog::backdrop { background: rgb(0 0 0 / .45) }
+form.ed { display: grid; gap: 12px; padding: 18px }
+form.ed h2 { margin: 0 }
+.f2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px }
+@media (max-width: 520px) { .f2 { grid-template-columns: 1fr } }
+.fld { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted) }
+.fld input, .fld select, .fld textarea { color: var(--ink); font-size: 14px; width: 100% }
+.ed-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center }
+.ed-actions .r { display: flex; gap: 8px }
+.hint { font-size: 12px; color: var(--muted) }
+.err { color: var(--overdue); font-size: 12.5px }
+@media (prefers-reduced-motion: no-preference) { button, .chip { transition: background-color .12s, color .12s } }
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <div class="bar">
+      <div class="brand">
+        <h1>Digital Twin & SCooP Tracker</h1>
+        <p id="tagline">ED305 live digital twin · SCooP dataset & testbed · dual-link · semantic comm</p>
+      </div>
+      <div class="actions">
+        <label class="inline" for="me">I am
+          <select id="me"><option value="">—</option></select>
+        </label>
+        <button class="primary" id="addBtn" type="button">Add task</button>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Views">
+      <button type="button" role="tab" data-view="overview" aria-selected="true">Overview</button>
+      <button type="button" role="tab" data-view="person">By person</button>
+      <button type="button" role="tab" data-view="goal">By goal</button>
+      <button type="button" role="tab" data-view="gantt">Gantt</button>
+      <button type="button" role="tab" data-view="people">People</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="notice" class="notice" hidden></div>
+  <section class="view" id="view"></section>
+</main>
+
+<dialog id="dlg">
+  <form class="ed" id="edForm" method="dialog">
+    <h2 id="edTitle">Add task</h2>
+    <label class="fld" for="f-title">Task
+      <input id="f-title" required maxlength="200" placeholder="e.g. Calibrate ED305 cameras in the room frame">
+    </label>
+    <div class="f2">
+      <label class="fld" for="f-goal">Goal <select id="f-goal" required></select></label>
+      <label class="fld" for="f-assignee">Assigned to <select id="f-assignee" required></select></label>
+    </div>
+    <div class="f2">
+      <label class="fld" for="f-status">Status <select id="f-status"></select></label>
+      <label class="fld" for="f-code">ID (optional) <input id="f-code" maxlength="20" placeholder="G1-GS-7"></label>
+    </div>
+    <div class="f2">
+      <label class="fld" for="f-start">Start (a Monday) <input id="f-start" type="date"></label>
+      <label class="fld" for="f-weeks">Weeks <input id="f-weeks" type="number" min="1" max="104" step="1"></label>
+    </div>
+    <label class="fld" for="f-notes">Notes <textarea id="f-notes" maxlength="2000"></textarea></label>
+    <p class="err" id="edErr" hidden></p>
+    <div class="ed-actions">
+      <div id="delWrap"><button type="button" class="danger" id="delBtn">Delete</button></div>
+      <div class="r">
+        <button type="button" id="cancelBtn">Cancel</button>
+        <button type="submit" class="primary" id="saveBtn">Save</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<script>
+(() => {
+  const GOALS = ["G1 ED305 live digital twin", "G2 SCooP dataset & paper", "Shared SCooP testbed",
+                 "Dual-Link Communication", "Semantic Communication"];
+  const STATUSES = ["Not Started", "In Progress", "Partially Completed", "Blocked", "Complete"];
+  const ST_VAR = { "Not Started": "--st-none", "In Progress": "--st-progress", "Partially Completed": "--st-partial",
+                   "Blocked": "--st-blocked", "Complete": "--st-done", "": "--st-none" };
+  const DAY = 86400000;
+
+  const state = { tasks: [], people: [], loaded: { tasks: false, people: false }, view: "overview",
+                  person: null, goal: GOALS[0], gf: { who: "", goal: "", status: "" }, canWrite: true, db: null, editing: null };
+
+  // ---------- helpers
+  const $ = (s) => document.querySelector(s);
+  function h(tag, attrs, ...kids) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v == null || v === false) continue;
+      if (k === "class") el.className = v;
+      else if (k === "style") el.setAttribute("style", v);
+      else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? "" : v);
+    }
+    for (const c of kids.flat()) if (c != null && c !== false) el.append(c.nodeType ? c : String(c));
+    return el;
+  }
+  const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+                  set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+  const parseDay = (s) => { if (!s) return null; const [y, m, d] = s.split("-").map(Number); return Date.UTC(y, m - 1, d); };
+  const today = (() => { const n = new Date(); return Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()); })();
+  const fmt = (t) => t == null ? "" : new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+  const fmtY = (t) => new Date(t).toLocaleDateString("en-GB", { month: "short", year: "2-digit", timeZone: "UTC" });
+  const startOf = (t) => parseDay(t.start);
+  const endOf = (t) => { const s = startOf(t); return s != null && t.weeks ? s + (7 * t.weeks - 3) * DAY : null; };
+  const overdue = (t) => { const e = endOf(t); return e != null && e < today && t.status !== "Complete"; };
+  const isParent = (t) => !!t.code && !t.code.includes(".");
+  const isMilestone = (t) => /-M\d/.test(t.code || "");
+  const personName = (id) => (state.people.find((p) => p.id === id) || {}).name || "Unassigned";
+  const sorted = (list) => list.slice().sort((a, b) => (a.order ?? 1e15) - (b.order ?? 1e15));
+  const goalShort = (g) => ({ "G1 ED305 live digital twin": "G1 Digital twin", "G2 SCooP dataset & paper": "G2 SCooP",
+                              "Shared SCooP testbed": "Testbed", "Dual-Link Communication": "Dual-link",
+                              "Semantic Communication": "Semantic comm" })[g] || g || "No goal";
+
+  function counts(list) {
+    const c = { total: list.length, overdue: 0 };
+    for (const s of STATUSES) c[s] = 0;
+    c[""] = 0;
+    for (const t of list) { c[t.status || ""] = (c[t.status || ""] || 0) + 1; if (overdue(t)) c.overdue++; }
+    return c;
+  }
+  function summaryLine(list) {
+    const c = counts(list);
+    return h("div", { class: "summary" },
+      h("span", null, h("b", null, c.total), " tasks"),
+      h("span", null, h("b", null, c["In Progress"]), " in progress"),
+      h("span", null, h("b", null, c["Complete"]), " complete"),
+      h("span", { class: c["Blocked"] ? "bad" : "" }, h("b", null, c["Blocked"]), " blocked"),
+      h("span", { class: c.overdue ? "bad" : "" }, h("b", null, c.overdue), " overdue"));
+  }
+  function stackBar(list) {
+    const c = counts(list), tot = Math.max(1, c.total);
+    return h("div", { class: "stack", role: "img", "aria-label": STATUSES.map((s) => `${s} ${c[s]}`).join(", ") },
+      ...["Complete", "In Progress", "Partially Completed", "Blocked", "Not Started"].map((s) =>
+        h("span", { style: `width:${(100 * c[s]) / tot}%;background:var(${ST_VAR[s]})`, title: `${s}: ${c[s]}` })),
+      h("span", { style: `width:${(100 * c[""]) / tot}%;background:var(--surface-2)`, title: `No status: ${c[""]}` }));
+  }
+
+  // ---------- timeline (shared week scale)
+  function range() {           // one week scale for every view, so bars line up across tabs
+    let lo = Infinity, hi = -Infinity;
+    for (const t of state.tasks) { const s = startOf(t), e = endOf(t); if (s != null) lo = Math.min(lo, s); if (e != null) hi = Math.max(hi, e); }
+    if (!isFinite(lo)) { lo = today - 14 * DAY; hi = today + 120 * DAY; }
+    lo = Math.min(lo, today); hi = Math.max(hi, today + 14 * DAY);
+    const dow = (new Date(lo).getUTCDay() + 6) % 7;            // back to Monday
+    lo -= dow * DAY;
+    const weeks = Math.ceil((hi - lo) / (7 * DAY)) + 1;
+    return { lo, weeks, span: weeks * 7 * DAY };
+  }
+  const pct = (r, t) => (100 * (t - r.lo)) / r.span;
+
+  function statusCell(t) {
+    const dot = `--dot:var(${ST_VAR[t.status || ""]})`;
+    if (!state.canWrite) return h("span", { class: "st", style: dot }, t.status || "No status");
+    const sel = h("select", { class: "st-sel", "aria-label": `Status of ${t.title}`, style: dot,
+      onchange: async (e) => {
+        const v = e.target.value; e.target.disabled = true;
+        try { await state.db.collection("tasks").doc(t.id).update({ status: v, updatedAt: new Date().toISOString() }); }
+        catch (err) { writeFailed(err); }
+        finally { e.target.disabled = false; }
+      } },
+      ...(t.status ? [] : [h("option", { value: "", selected: true }, "No status")]),
+      ...STATUSES.map((s) => h("option", { value: s, selected: s === t.status }, s)));
+    return sel;
+  }
+
+  function timeline(groups, opts) {
+    const r = range();
+    const third = opts.third;     // "who" or "goal"
+    const cols = "92px minmax(220px, 2.2fr) 130px 150px 70px 70px minmax(360px, 4fr)";
+    const wk = `${100 / r.weeks}%`;
+    const weeksHead = h("div", { class: "weeks" });
+    let lastMonth = -1;
+    for (let i = 0; i < r.weeks; i++) {
+      const t = r.lo + i * 7 * DAY, d = new Date(t);
+      if (i % 2 === 0) weeksHead.append(h("span", { style: `left:${(100 * i) / r.weeks}%` }, d.getUTCDate()));
+      if (d.getUTCMonth() !== lastMonth) { weeksHead.append(h("span", { class: "m", style: `left:${(100 * i) / r.weeks}%` }, fmtY(t))); lastMonth = d.getUTCMonth(); }
+    }
+    weeksHead.append(h("i", { class: "today", style: `left:${pct(r, today)}%`, title: "Today" }));
+    const head = h("div", { class: "tl-head", style: `--cols:${cols}` },
+      h("div", null, "ID"), h("div", null, "Task"), h("div", null, third === "goal" ? "Goal" : "Assigned to"),
+      h("div", null, "Status"), h("div", null, "Start"), h("div", null, "End"), h("div", null, weeksHead));
+    const body = [];
+    let any = false;
+    for (const [label, list] of groups) {
+      if (!list.length) continue;
+      any = true;
+      if (label) body.push(h("div", { class: "tl-group" }, label, h("span", { class: "n" }, list.length)));
+      for (const t of list) {
+        const s = startOf(t), e = endOf(t), od = overdue(t);
+        const track = h("div", { class: "track", style: `--wk:${wk}` });
+        if (s != null && e != null) {
+          track.append(h("i", { class: "barx" + (isMilestone(t) ? " ms" : ""), title: `${fmt(s)} – ${fmt(e)}`,
+            style: `left:${pct(r, s)}%;width:${Math.max(0.6, pct(r, e + DAY) - pct(r, s))}%;--c:var(${ST_VAR[t.status || ""]})` }));
+        }
+        track.append(h("i", { class: "today", style: `left:${pct(r, today)}%` }));
+        body.push(h("div", { class: "tl-row " + (isParent(t) ? "parent" : t.code ? "child" : ""), style: `--cols:${cols}` },
+          h("div", { class: "code", title: t.code || "" }, t.code || ""),
+          h("div", { class: "title" }, h("button", { type: "button", onclick: () => openEditor(t) }, t.title),
+            t.notes ? h("div", { class: "hint" }, t.notes) : null),
+          h("div", { class: "who" }, third === "goal" ? goalShort(t.goal) : personName(t.assignee)),
+          h("div", null, statusCell(t)),
+          h("div", { class: "date" }, fmt(s)),
+          h("div", { class: "date" + (od ? " bad" : ""), title: od ? "Overdue" : "" }, fmt(e)),
+          h("div", null, track)));
+      }
+    }
+    const tl = h("div", { class: "tl" }, head, ...(any ? body : [h("div", { class: "empty" }, opts.empty || "No tasks here yet.")]));
+    return h("div", null, h("div", { class: "scroll" }, tl), legend());
+  }
+  function legend() {
+    return h("div", { class: "legend" },
+      ...STATUSES.map((s) => h("span", null, h("i", { style: `background:var(${ST_VAR[s]})` }), s)),
+      h("span", null, h("i", { style: "background:var(--milestone);width:9px;height:9px;transform:rotate(45deg)" }), "Milestone"),
+      h("span", null, h("i", { style: "background:var(--today);width:2px;height:12px" }), "Today"),
+      h("span", { style: "color:var(--overdue);font-weight:600" }, "Red end date = overdue"));
+  }
+
+  // ---------- views
+  function viewOverview() {
+    const out = [h("h2", null, "Overview"), h("p", { class: "sub" }, "Every goal and every person at a glance. Click a name to open their list.")];
+    const grid = h("div", { class: "grid" });
+    for (const g of GOALS) {
+      const list = state.tasks.filter((t) => t.goal === g), c = counts(list);
+      grid.append(h("div", { class: "card" },
+        h("h3", null, h("button", { type: "button", class: "link", onclick: () => { state.goal = g; go("goal"); } }, g)),
+        stackBar(list),
+        h("dl", { class: "kv" },
+          h("dt", null, "Tasks"), h("dd", null, c.total),
+          h("dt", null, "Complete"), h("dd", null, c["Complete"]),
+          h("dt", null, "In progress"), h("dd", null, c["In Progress"]),
+          h("dt", null, "Blocked"), h("dd", { class: c["Blocked"] ? "bad" : "" }, c["Blocked"]),
+          h("dt", null, "Overdue"), h("dd", { class: c.overdue ? "bad" : "" }, c.overdue))));
+    }
+    out.push(grid);
+    out.push(h("h2", { style: "margin-top:22px" }, "People"));
+    const rows = sorted(state.people).map((p) => {
+      const list = state.tasks.filter((t) => t.assignee === p.id), c = counts(list);
+      return h("tr", null,
+        h("td", null, h("button", { type: "button", class: "link", style: "border:0;background:none;padding:0;color:var(--accent);font-weight:600",
+          onclick: () => { state.person = p.id; go("person"); } }, p.name)),
+        h("td", { class: "num" }, c.total), h("td", { class: "num" }, c["In Progress"]), h("td", { class: "num" }, c["Complete"]),
+        h("td", { class: "num" + (c["Blocked"] ? " bad" : "") }, c["Blocked"]), h("td", { class: "num" + (c.overdue ? " bad" : "") }, c.overdue));
+    });
+    out.push(h("div", { class: "scroll" }, h("table", { class: "people" },
+      h("thead", null, h("tr", null, ...["Person", "Tasks", "In progress", "Complete", "Blocked", "Overdue"].map((x, i) => h("th", { style: i ? "text-align:right" : "" }, x)))),
+      h("tbody", null, ...rows))));
+    const late = sorted(state.tasks.filter(overdue)).sort((a, b) => endOf(a) - endOf(b));
+    out.push(h("h2", { style: "margin-top:22px" }, `Overdue (${late.length})`));
+    out.push(h("p", { class: "sub" }, "End date passed and not Complete. Update the dates or the status."));
+    out.push(timeline([["", late]], { third: "who", empty: "Nothing overdue." }));
+    return out;
+  }
+
+  function viewPerson() {
+    const ppl = sorted(state.people);
+    if (!ppl.length) return [h("div", { class: "empty" }, "No people yet. Add them in the People tab.")];
+    if (!state.person || !ppl.some((p) => p.id === state.person)) state.person = store.get("tracker.me") || ppl[0].id;
+    if (!ppl.some((p) => p.id === state.person)) state.person = ppl[0].id;
+    const chips = h("div", { class: "chips", role: "group", "aria-label": "Person" },
+      ...ppl.map((p) => h("button", { type: "button", class: "chip", "aria-pressed": String(p.id === state.person),
+        onclick: () => { state.person = p.id; render(); } }, p.name, h("span", { class: "n" }, state.tasks.filter((t) => t.assignee === p.id).length))));
+    const me = ppl.find((p) => p.id === state.person);
+    const list = sorted(state.tasks.filter((t) => t.assignee === state.person));
+    const groups = GOALS.map((g) => [g, list.filter((t) => t.goal === g)]);
+    groups.push(["Other", list.filter((t) => !GOALS.includes(t.goal))]);
+    return [chips, h("h2", null, me.name), h("p", { class: "sub" }, me.area || ""), summaryLine(list),
+            timeline(groups, { third: "goal", empty: `${me.name} has no tasks yet. Use Add task to assign one.` })];
+  }
+
+  function viewGoal() {
+    const chips = h("div", { class: "chips", role: "group", "aria-label": "Goal" },
+      ...GOALS.map((g) => h("button", { type: "button", class: "chip", "aria-pressed": String(g === state.goal),
+        onclick: () => { state.goal = g; render(); } }, goalShort(g), h("span", { class: "n" }, state.tasks.filter((t) => t.goal === g).length))));
+    const list = sorted(state.tasks.filter((t) => t.goal === state.goal));
+    const groups = sorted(state.people).map((p) => [p.name, list.filter((t) => t.assignee === p.id)]);
+    groups.push(["Unassigned", list.filter((t) => !state.people.some((p) => p.id === t.assignee))]);
+    return [chips, h("h2", null, state.goal), summaryLine(list), timeline(groups, { third: "who", empty: "No tasks in this goal yet." })];
+  }
+
+  function viewGantt() {
+    const f = state.gf;
+    const sel = (id, label, value, options, key) => h("label", { class: "inline", for: id }, label,
+      h("select", { id, onchange: (e) => { f[key] = e.target.value; render(); } },
+        h("option", { value: "" }, "All"), ...options.map(([v, l]) => h("option", { value: v, selected: v === value }, l))));
+    const filters = h("div", { class: "filters" },
+      sel("g-who", "Person", f.who, sorted(state.people).map((p) => [p.id, p.name]), "who"),
+      sel("g-goal", "Goal", f.goal, GOALS.map((g) => [g, goalShort(g)]), "goal"),
+      sel("g-status", "Status", f.status, [["open", "Open (not Complete)"], ...STATUSES.map((s) => [s, s])], "status"));
+    const list = sorted(state.tasks.filter((t) => (!f.who || t.assignee === f.who) && (!f.goal || t.goal === f.goal) &&
+      (!f.status || (f.status === "open" ? t.status !== "Complete" : t.status === f.status))));
+    const groups = GOALS.map((g) => [g, list.filter((t) => t.goal === g)]);
+    groups.push(["Other", list.filter((t) => !GOALS.includes(t.goal))]);
+    return [h("h2", null, "Gantt"), filters, summaryLine(list), timeline(groups, { third: "who", empty: "No tasks match these filters." })];
+  }
+
+  function viewPeople() {
+    const out = [h("h2", null, "People"), h("p", { class: "sub" },
+      "Rename a person here and every task assigned to them follows. A person with tasks can't be removed until their tasks are reassigned.")];
+    const listEl = h("div", { class: "plist" });
+    for (const p of sorted(state.people)) {
+      const n = state.tasks.filter((t) => t.assignee === p.id).length;
+      const save = (field) => async (e) => {
+        const v = e.target.value.trim();
+        if (field === "name" && !v) { e.target.value = p.name; return; }
+        if (v === (p[field] || "")) return;
+        try { await state.db.collection("people").doc(p.id).update({ [field]: v }); } catch (err) { writeFailed(err); }
+      };
+      listEl.append(h("div", { class: "prow" },
+        h("input", { id: `pn-${p.id}`, "aria-label": "Name", value: p.name, disabled: !state.canWrite, onchange: save("name") }),
+        h("input", { id: `pa-${p.id}`, "aria-label": "Area", value: p.area || "", placeholder: "Area", disabled: !state.canWrite, onchange: save("area") }),
+        h("span", { class: "cnt" }, `${n} task${n === 1 ? "" : "s"}`),
+        h("button", { type: "button", class: "danger", disabled: !state.canWrite || n > 0,
+          title: n ? "Reassign their tasks first" : "Remove",
+          onclick: async () => { try { await state.db.collection("people").doc(p.id).delete(); } catch (err) { writeFailed(err); } } }, "Remove")));
+    }
+    out.push(listEl);
+    if (state.canWrite) {
+      const inp = h("input", { id: "newPerson", placeholder: "Name", maxlength: "80" });
+      out.push(h("form", { class: "filters", style: "margin-top:14px;max-width:760px",
+        onsubmit: async (e) => {
+          e.preventDefault();
+          const v = inp.value.trim(); if (!v) return;
+          const order = Math.max(0, ...state.people.map((p) => p.order || 0)) + 1;
+          try { await state.db.collection("people").doc().set({ name: v, area: "", order }); inp.value = ""; } catch (err) { writeFailed(err); }
+        } }, inp, h("button", { type: "submit", class: "primary" }, "Add person")));
+    }
+    return out;
+  }
+
+  // ---------- render
+  function render() {
+    const v = $("#view");
+    document.querySelectorAll("nav.tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.view === state.view)));
+    renderMe();
+    if (!state.db) return;
+    if (!state.loaded.tasks || !state.loaded.people) { v.replaceChildren(h("div", { class: "empty" }, "Loading tasks…")); return; }
+    if (!state.tasks.length && state.view !== "people") {
+      v.replaceChildren(h("div", { class: "card empty" }, h("h3", null, "No tasks yet"),
+        h("p", null, state.canWrite ? "Use Add task (top right) to create the first one and assign it to someone." : "Tasks will appear here as the team adds them.")));
+      return;
+    }
+    const views = { overview: viewOverview, person: viewPerson, goal: viewGoal, gantt: viewGantt, people: viewPeople };
+    v.replaceChildren(...views[state.view]());
+  }
+  function go(view) {
+    state.view = view; store.set("tracker.view", view);
+    try { history.replaceState(null, "", "#" + view); } catch {}
+    render(); window.scrollTo({ top: 0 });
+  }
+  function renderMe() {
+    const sel = $("#me"), cur = store.get("tracker.me") || "";
+    sel.replaceChildren(h("option", { value: "" }, "—"), ...sorted(state.people).map((p) => h("option", { value: p.id, selected: p.id === cur }, p.name)));
+  }
+  function notice(text, kind) { const n = $("#notice"); n.textContent = text; n.dataset.kind = kind || ""; n.hidden = !text; }
+  function writeFailed(err) {
+    if (err && err.code === "invalid_argument") {
+      state.canWrite = false; render();
+      notice("You can view this tracker but not change it. Ask the owner for Contributor access to edit.", "error");
+    } else if (err && err.code === "quota_exceeded") {
+      notice("The tracker is full: remove some old tasks before adding new ones.", "error");
+    } else {
+      notice("That change didn't save. Check your connection and try again.", "error");
+    }
+  }
+
+  // ---------- editor
+  const dlg = $("#dlg");
+  function fillSelect(sel, options, value) {
+    sel.replaceChildren(...options.map(([v, l]) => h("option", { value: v, selected: v === value }, l)));
+  }
+  function openEditor(t) {
+    if (!state.db) return;
+    state.editing = t || null;
+    const me = store.get("tracker.me");
+    const def = t || { title: "", goal: state.view === "goal" ? state.goal : GOALS[0],
+      assignee: state.view === "person" && state.person ? state.person : (me || (sorted(state.people)[0] || {}).id || ""),
+      status: "Not Started", code: "", start: "", weeks: "", notes: "" };
+    $("#edTitle").textContent = t ? "Edit task" : "Add task";
+    $("#f-title").value = def.title;
+    fillSelect($("#f-goal"), GOALS.map((g) => [g, g]), def.goal);
+    fillSelect($("#f-assignee"), sorted(state.people).map((p) => [p.id, p.name]), def.assignee);
+    fillSelect($("#f-status"), [["", "No status"], ...STATUSES.map((s) => [s, s])], def.status || "");
+    $("#f-code").value = def.code || "";
+    $("#f-start").value = def.start || "";
+    $("#f-weeks").value = def.weeks || "";
+    $("#f-notes").value = def.notes || "";
+    $("#edErr").hidden = true;
+    resetDelete();
+    $("#delWrap").hidden = !t;
+    for (const el of dlg.querySelectorAll("input,select,textarea")) el.disabled = !state.canWrite;
+    $("#saveBtn").hidden = !state.canWrite;
+    dlg.showModal();
+    $("#f-title").focus();
+  }
+  function resetDelete() {
+    $("#delWrap").replaceChildren(h("button", { type: "button", class: "danger", disabled: !state.canWrite, onclick: askDelete }, "Delete"));
+  }
+  function askDelete() {
+    $("#delWrap").replaceChildren(h("span", { class: "hint" }, "Delete this task? "),
+      h("button", { type: "button", class: "danger", onclick: doDelete }, "Yes, delete"), " ",
+      h("button", { type: "button", onclick: resetDelete }, "Keep"));
+  }
+  async function doDelete() {
+    const t = state.editing; if (!t) return;
+    try { await state.db.collection("tasks").doc(t.id).delete(); dlg.close(); } catch (err) { dlg.close(); writeFailed(err); }
+  }
+  $("#cancelBtn").addEventListener("click", () => dlg.close());
+  $("#edForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = $("#f-title").value.trim();
+    const weeks = $("#f-weeks").value ? Math.max(1, Math.min(104, Math.round(Number($("#f-weeks").value)))) : null;
+    const start = $("#f-start").value || "";
+    const err = $("#edErr");
+    if (!title) { err.textContent = "Give the task a name."; err.hidden = false; return; }
+    if (!$("#f-assignee").value) { err.textContent = "Choose who it is assigned to (add people in the People tab)."; err.hidden = false; return; }
+    if ((start && !weeks) || (!start && weeks)) { err.textContent = "Set both Start and Weeks to place it on the Gantt, or leave both empty."; err.hidden = false; return; }
+    const t = state.editing;
+    const body = { code: $("#f-code").value.trim(), goal: $("#f-goal").value, title, assignee: $("#f-assignee").value,
+                   status: $("#f-status").value, start, weeks, notes: $("#f-notes").value.trim(),
+                   order: t ? (t.order ?? Date.now()) : Date.now(), updatedAt: new Date().toISOString() };
+    $("#saveBtn").disabled = true;
+    try {
+      const col = state.db.collection("tasks");
+      await (t ? col.doc(t.id) : col.doc()).set(body);
+      dlg.close();
+    } catch (er) { dlg.close(); writeFailed(er); }
+    finally { $("#saveBtn").disabled = false; }
+  });
+
+  // ---------- wiring
+  document.querySelectorAll("nav.tabs button").forEach((b) => b.addEventListener("click", () => go(b.dataset.view)));
+  $("#addBtn").addEventListener("click", () => openEditor(null));
+  $("#me").addEventListener("change", (e) => { store.set("tracker.me", e.target.value); if (e.target.value) { state.person = e.target.value; } render(); });
+  const fromHash = (location.hash || "").slice(1);
+  state.view = ["overview", "person", "goal", "gantt", "people"].includes(fromHash) ? fromHash : (store.get("tracker.view") || "overview");
+  render();
+  $("#view").replaceChildren(h("div", { class: "empty" }, "Connecting to the shared tracker…"));
+
+  (async () => {
+    const db = await window.claude?.use?.("db");
+    if (!db) {
+      $("#addBtn").disabled = true;
+      $("#view").replaceChildren();
+      notice("Open this page signed in to claude.ai to see and edit the team's tasks.");
+      return;
+    }
+    state.db = db;
+    try {
+      const user = await window.claude.use("user");
+      const can = user ? await user.can("data.write") : null;
+      if (can === false) state.canWrite = false;
+    } catch {}
+    if (!state.canWrite) { $("#addBtn").hidden = true; notice("View only: ask the owner for Contributor access to add or change tasks."); }
+    const onErr = (e) => { if (e && e.code !== "revoked") notice("Lost the live connection. Reload the page to reconnect.", "error"); };
+    db.collection("tasks").onSnapshot((snap) => {
+      state.tasks = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      state.loaded.tasks = true; render();
+    }, onErr);
+    db.collection("people").onSnapshot((snap) => {
+      state.people = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      state.loaded.people = true; render();
+    }, onErr);
+  })();
+})();
+</script>
