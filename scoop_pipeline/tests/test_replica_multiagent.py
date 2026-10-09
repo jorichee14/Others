@@ -128,6 +128,14 @@ def main():
     tmp = tempfile.mkdtemp()
     f = []
     try:
+        # gap filling: a one-pixel hole takes its neighbour, an empty edge stays empty
+        D = np.zeros((6, 6), np.float32)
+        D[2:4, 2:4] = WALL
+        D[2, 2] = 0
+        F = RM.fill_gaps(D)
+        if F[2, 2] != WALL or F[0, 0] != 0 or F.max() != WALL:
+            f.append("fill_gaps: hole %s, empty corner %s, max %s (want %s, 0, %s)"
+                     % (F[2, 2], F[0, 0], F.max(), WALL, WALL))
         bag = os.path.join(tmp, "bag")
         write_bag(bag)
         out = os.path.join(tmp, "scene")
@@ -185,6 +193,9 @@ def main():
                 f.append("%s: %.0f %% of pixels with depth" % (nm, 100 * valid.mean()))
             if valid.any() and np.abs(np.median(d[valid]) - WALL) > 0.003:
                 f.append("%s: wall at %.3f m, want %.3f" % (nm, np.median(d[valid]), WALL))
+            if valid.any() and np.abs(d[valid] - WALL).max() > 0.01:
+                f.append("%s: depth up to %.2f m off the wall (gap filling)" % (
+                    nm, np.abs(d[valid] - WALL).max()))
         y = open(out + ".yaml").read()
         for k in ("input_path: %s" % out, "agent_ids: [0, 1]", "W: %d" % tgt.width,
                   "H: %d" % tgt.height, "depth_scale: 6553.5"):

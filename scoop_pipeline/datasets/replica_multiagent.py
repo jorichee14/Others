@@ -120,8 +120,10 @@ def depth_points(d, K):
 
 def fill_gaps(D):
     """Empty pixels with a neighbour (3 x 3) get the nearest neighbour's depth."""
-    m = cv2.erode(np.where(D > 0, D, np.float32(np.inf)), np.ones((3, 3), np.uint8))
-    return np.where((D == 0) & np.isfinite(m), m, D).astype(np.float32)
+    big = np.float32(1e6)                 # no depth (cv2 pads with FLT_MAX: never inf)
+    m = cv2.erode(np.where(D > 0, D, big), np.ones((3, 3), np.uint8),
+                  borderType=cv2.BORDER_REPLICATE)
+    return np.where((D == 0) & (m < big), m, D).astype(np.float32)
 
 
 def register_depth(d, dinfo, T_cd, tgt, dmin, dmax, dmap=None):
