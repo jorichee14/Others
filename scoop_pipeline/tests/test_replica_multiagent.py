@@ -16,7 +16,9 @@ take frame i of both at the same moment, starting when both have poses
 and skipping the pose gap; give each frame the pose at its image stamp;
 sample the colour where the common camera's ray falls in each image;
 register both depths to 3 m (the RealSense's through its 2 cm offset);
-leave nothing but the agent folders in the scene.
+leave nothing but the agent folders in the scene. Then the same bag with no
+/tf_static (an older recording): the depth extrinsic given instead must
+register mobile_2's depth the same.
 
     python scoop_pipeline/tests/test_replica_multiagent.py
 """
@@ -77,12 +79,13 @@ def image(arr, enc, frame, t):
                                       data=np.frombuffer(arr.tobytes(), np.uint8))
 
 
-def write_bag(path):
+def write_bag(path, tf_static=True):
     T = rosmsg.msg_type
     recs = []
     q = mc.T_to_xyzq(T_CD2)
-    recs.append((T0, "/tf_static", rosmsg.tf_message(
-        [("m2_color", "m2_depth", q[:3], q[3:])], T0)))
+    if tf_static:
+        recs.append((T0, "/tf_static", rosmsg.tf_message(
+            [("m2_color", "m2_depth", q[:3], q[3:])], T0)))
     for m in CAMS:
         start = 1.0 if m == "mobile_2" else 0.0
         for k in range(int(DUR * 100) + 1):
@@ -192,6 +195,17 @@ def main():
             f.append("a second run into the same scene was not refused")
         except mc.ConvertError:
             pass
+        # an older bag: no /tf_static, the extrinsic given
+        bag2 = os.path.join(tmp, "bag_old")
+        write_bag(bag2, tf_static=False)
+        out2 = os.path.join(tmp, "scene_old")
+        RM.convert(bag2, out2, rate=10.0, width=120, max_frames=3,
+                   depth_extrinsics={"mobile_2": list(mc.T_to_xyzq(T_CD2))})
+        d = cv2.imread(os.path.join(out2, "agent_1_mobile_2", "results", "depth000001.png"),
+                       cv2.IMREAD_UNCHANGED).astype(float) / RM.DEPTH_SCALE
+        if not (d > 0).any() or abs(np.median(d[d > 0]) - WALL) > 0.003:
+            f.append("no /tf_static, extrinsic given: wall at %s m, want %.3f"
+                     % (np.median(d[d > 0]) if (d > 0).any() else None, WALL))
     except Exception as e:                                         # noqa: BLE001
         import traceback
         f.append(traceback.format_exc())

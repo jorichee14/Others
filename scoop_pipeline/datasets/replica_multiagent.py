@@ -69,7 +69,12 @@ AGENTS = {
                  "info": "/mobile_2/color/camera_info",
                  "depth": "/mobile_2/depth/image_rect_raw",
                  "depth_info": "/mobile_2/depth/camera_info",
-                 "pose": "/mobile_2/global_pose"},
+                 "pose": "/mobile_2/global_pose",
+                 # the depth imager in the colour optical frame [x y z qx qy qz qw], used
+                 # when /tf_static does not link them (older bags): the D455's colour ->
+                 # depth of publish_map_tfs.sh
+                 "depth_extrinsic": [0.059190, -0.000010, -0.000406,
+                                     -0.002966, 0.000832, 0.001305, 0.999994]},
 }
 DEPTH_SCALE = 6553.5                 # Replica: uint16 0..65535 = 0..10 m
 MAGIC_BASE = "configs/ReplicaMultiagent/replica_multiagent.yaml"
@@ -131,7 +136,7 @@ def register_depth(d, dinfo, T_cd, tgt, dmin, dmax, dmap=None):
 
 
 class Agent:
-    def __init__(self, i, machine, spec, paths, pose_paths, edges):
+    def __init__(self, i, machine, spec, paths, pose_paths, edges, depth_extrinsic=None):
         self.i, self.machine, self.spec = i, machine, spec
         self.name = "agent_%d_%s" % (i, machine)
         self.info = mc.first_msg(paths, spec["info"])
@@ -144,9 +149,16 @@ class Agent:
             raise mc.ConvertError(f"{machine}: no messages on {spec['color']} or {spec['depth']}")
         cf, df = cm.header.frame_id.lstrip("/"), dm.header.frame_id.lstrip("/")
         self.T_cd = np.eye(4) if cf == df else mc.lookup_static(edges, cf, df)
+        ext = depth_extrinsic or (spec.get("depth_extrinsic") if self.T_cd is None else None)
+        if ext is not None:
+            self.T_cd = mc.xyzq_to_T(ext)
+            log.info(f"{machine}: {df} in {cf} from "
+                     f"{'--depth-extrinsic' if depth_extrinsic else 'the default (not in /tf_static)'}: "
+                     f"{' '.join('%.6f' % v for v in ext)}")
         if self.T_cd is None:
             raise mc.ConvertError(f"{machine}: depth frame {df} and colour frame {cf} are not "
-                                  "connected in /tf_static")
+                                  f"connected in /tf_static: give --depth-extrinsic {machine} "
+                                  "x y z qx qy qz qw (the depth frame in the colour frame)")
         self.frames = (cf, df)
         if (dm.width, dm.height) != (self.dinfo.width, self.dinfo.height):
             if self.dinfo is not self.info:
@@ -218,7 +230,7 @@ def default_out(bag):
 
 def convert(bag, out=None, *, agents=("mobile_1", "mobile_2"), specs=None, pose_bag=None,
             rate=10.0, width=640, depth_min=0.2, depth_max=10.0, min_valid=0.05,
-            sync_tol_ms=20.0, max_frames=0):
+            sync_tol_ms=20.0, max_frames=0, depth_extrinsics=None):
     specs = specs or AGENTS
     paths = mc._paths(bag)
     out = os.path.abspath(os.path.expanduser(out or default_out(bag)))
@@ -229,7 +241,8 @@ def convert(bag, out=None, *, agents=("mobile_1", "mobile_2"), specs=None, pose_
         raise mc.ConvertError(f"depth_max {depth_max} m does not fit Replica's uint16 at {DEPTH_SCALE}/m")
     edges = mc.build_tf_static(paths)
     pose_paths = mc._paths(pose_bag) if pose_bag else paths
-    ags = [Agent(i, m, specs[m], paths, pose_paths, edges) for i, m in enumerate(agents)]
+    ags = [Agent(i, m, specs[m], paths, pose_paths, edges, (depth_extrinsics or {}).get(m))
+           for i, m in enumerate(agents)]
     tgt = common_camera([a.info for a in ags], width)
     log.info("common camera %dx%d f %.2f (hfov %.1f deg, vfov %.1f deg)" % (
         tgt.width, tgt.height, tgt.fx, 2 * np.degrees(np.arctan(tgt.cx / tgt.fx)),
@@ -328,12 +341,16 @@ def main():
     ap.add_argument("--depth-max", type=float, default=10.0)
     ap.add_argument("--min-valid", type=float, default=0.05, help="least share of pixels with depth")
     ap.add_argument("--max-frames", type=int, default=0)
+    ap.add_argument("--depth-extrinsic", nargs=8, action="append", default=[],
+                    metavar=("MACHINE", "X", "Y", "Z", "QX", "QY", "QZ", "QW"),
+                    help="a robot's depth frame in its colour optical frame, over /tf_static")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         convert(a.bag, a.out, agents=a.agents, pose_bag=a.pose_bag, rate=a.rate, width=a.width,
                 depth_min=a.depth_min, depth_max=a.depth_max, min_valid=a.min_valid,
-                max_frames=a.max_frames)
+                max_frames=a.max_frames,
+                depth_extrinsics={e[0]: [float(v) for v in e[1:]] for e in a.depth_extrinsic})
     except mc.ConvertError as e:
         sys.exit(str(e))
 
