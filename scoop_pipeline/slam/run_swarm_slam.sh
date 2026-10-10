@@ -31,7 +31,8 @@ RUN="$OUT/runs/$TAG"
 mkdir -p "$RUN/results"
 sed "s#log_folder: .*#log_folder: \"$RUN/results\"#" "$OUT/scoop_rgbd.yaml" > "$RUN/scoop_rgbd.yaml"
 PIDS=()
-trap 'kill ${PIDS[@]} 2>/dev/null; wait 2>/dev/null' EXIT
+# the container runs as root: hand the run folder back to the export's owner
+trap 'kill ${PIDS[@]} 2>/dev/null; wait 2>/dev/null; chown -R --reference="$OUT" "$RUN" 2>/dev/null' EXIT
 for ((i = 0; i < N; i++)); do
   D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
   ROS_DOMAIN_ID=$D ros2 launch cslam_experiments cslam_rgbd.launch.py config_path:="$RUN/" \
