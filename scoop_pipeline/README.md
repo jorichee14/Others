@@ -63,6 +63,8 @@ analysis/            measuring results; reads outputs, writes nothing back
   mapping/map_quality.py  surface thickness of a map cloud (noise / pose error / smear)
   mapping/scan_consistency.py  why walls are thick: noise floor, timing offset,
                      deskew, drift -- from ~200 scans of the bag + trajectory
+  slam/cslam_eval.py  Swarm-SLAM run against the ground truth: ATE per robot and joint,
+                     inter-robot loop closures checked, time to merge, bytes exchanged
   odom/zed_vs_lidar.py    drift of the ZED's own tracking (map_zed) against the LiDAR trajectory
   comms/             link analyses on processing/comms_tables.py's tables
   comms/ntp_analysis.py   clock agreement: offsets at polls, error bounds, steps,
@@ -95,6 +97,7 @@ tests/               self-tests, no real bag needed
   test_wifi_analysis.py  wifi_analysis: seq wrap, late replies, contention, goodput vs RSSI
   test_comms_map.py  comms_map: figures written, grid cells hold their samples' median
   test_sim_gap.py    sim_gap: known RTT, goodput and outage give the message delays and losses
+  test_cslam_eval.py cslam_eval: keys to robots, ATE, wrong loop closure flagged, merge time
   test_swarm_slam.py swarm_slam: topics, intrinsics, registered depth, odometry in the
                      robot's odom frame at the image stamp, ground truth
   test_replica_multiagent.py  replica_multiagent: common camera, lockstep frames, poses,
