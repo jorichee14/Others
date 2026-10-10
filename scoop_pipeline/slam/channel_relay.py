@@ -117,8 +117,10 @@ def ros_main(a):
         nodes.append(n)
         execs.append(e)
     clock = {"t": None}
+    # rosbag2 publishes /clock best effort: a reliable subscription gets nothing
     nodes[0].create_subscription(Clock, "/clock", lambda m: clock.__setitem__(
-        "t", m.clock.sec + m.clock.nanosec * 1e-9), 10)
+        "t", m.clock.sec + m.clock.nanosec * 1e-9),
+        QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
     subs, pubs, echo, types = {}, {}, {}, {}
 
     def others(infos):
@@ -167,6 +169,14 @@ def ros_main(a):
         pubs[k].publish(data)
 
     nodes[0].create_timer(1.0, discover)
+    started = nodes[0].get_clock().now()
+
+    def watch_clock():
+        if clock["t"] is None and (nodes[0].get_clock().now() - started).nanoseconds > 30e9:
+            nodes[0].get_logger().warn("no /clock after 30 s: messages go through at once "
+                                       "(play the bag with --clock in domain %d)" % domains[0])
+
+    nodes[0].create_timer(10.0, watch_clock)
     try:
         while all(rclpy.ok(context=n.context) for n in nodes):
             for e in execs:
