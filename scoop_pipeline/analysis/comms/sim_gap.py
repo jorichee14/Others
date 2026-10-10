@@ -11,13 +11,17 @@ that ran iperf, a message every 1 / --rate s over the pass, of each size
 
     boxes 1 KB, features 100 KB, clouds 1.5 MB,
 
-arrives after the logged channel's delay (Sec. VII)
+arrives after the logged channel's delay (Sec. VII; scoop/channel.py, the
+"logged" channel, one hop robot -> server, from processing/link_trace.py's
+traces, made here)
 
     d(t) = RTT(t) / 2 + s / G(t)
 
-  RTT(t)   the most recent ping (by ICMP seq) sent at or before t that got a
-           reply, its reply counted even when late; none within 0.5 s: no
-           measurement, the message is left out
+  RTT(t)   the most recent answered ping (by ICMP seq) at or before t, taken
+           outside the robot's own iperf tests (those already hold the
+           test's queue, which s / G counts; the last one before a test holds
+           through it); another robot's test is cross traffic and counts;
+           none within 0.5 s: no measurement, the message is left out
   G(t)     the goodput of the robot's most recent successful iperf up test
            (robot to server; down when it ran none) started at or before t
   outage   a run of pings that never got a reply lasting >= --frame-ms,
@@ -58,115 +62,29 @@ SYNTH = {"V2X-ViT": {"delay_ms": 100.0, "loss": 0.0,
                      "note": "fixed 100 ms delay (noisy setting), no loss, no size dependence"},
          "Where2comm": {"delay_ms": 0.0, "loss": 0.0,
                         "note": "delivery within a bandwidth budget: no delay, no loss"}}
-RTT_AGE_S = 0.5
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "processing"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
+import link_trace as LT                                             # noqa: E402
+from scoop import channel as CH                                     # noqa: E402
 
 
-def load(path):
-    if not os.path.exists(path):
-        return []
-    return list(csv.DictReader(open(path)))
-
-
-def num(r, k):
-    v = r.get(k, "")
-    if v in ("", None):
-        return math.nan
-    if v in ("True", "true"):
-        return 1.0
-    if v in ("False", "false"):
-        return 0.0
-    try:
-        return float(v)
-    except ValueError:
-        return math.nan
-
-
-def unwrap_seq(seq):
-    """16-bit ICMP seqs in message order -> ints (as wifi_analysis)."""
-    out = np.array(seq, float)
-    ref = None
-    for i, s in enumerate(seq):
-        if not np.isfinite(s):
-            continue
-        c = s if ref is None else s + 65536 * np.round((ref - s) / 65536)
-        out[i] = c
-        ref = c if ref is None else max(ref, c)
-    return out
-
-
-def ping_seqs(rows):
-    """Per ICMP seq: (send t, rtt ms or nan when never answered), by send t."""
-    rows = sorted(rows, key=lambda r: num(r, "t_log"))
-    seq = unwrap_seq([num(r, "icmp_seq") for r in rows])
-    first, rtt = {}, {}
-    for r, s in zip(rows, seq):
-        if not np.isfinite(s):
-            continue
-        t = num(r, "t")
-        first.setdefault(s, t)
-        if num(r, "reply") == 1 and np.isfinite(num(r, "rtt_ms")):
-            rtt.setdefault(s, num(r, "rtt_ms"))
-    ss = sorted(first, key=lambda s: first[s])
-    return (np.array([first[s] for s in ss]), np.array([rtt.get(s, math.nan) for s in ss]))
-
-
-def outages(ts, rtt, min_s):
-    """[(t0, t1)]: runs of unanswered pings, from the first one sent to one
-    ping interval after the last, min_s or longer. A run is cut where no ping
-    was logged for over RTT_AGE_S (a stall says nothing about the link)."""
-    if len(ts) < 2:
-        return []
-    dt = float(np.median(np.diff(ts)))
-    out, i, n = [], 0, len(ts)
-    while i < n:
-        if np.isfinite(rtt[i]):
-            i += 1
-            continue
-        j = i
-        while j + 1 < n and not np.isfinite(rtt[j + 1]) and ts[j + 1] - ts[j] <= RTT_AGE_S:
-            j += 1
-        if ts[j] + dt - ts[i] >= min_s:
-            out.append((float(ts[i]), float(ts[j] + dt)))
-        i = j + 1
-    return out
-
-
-def iperf_tests(rows):
-    """[(t0, t1, goodput Mbit/s, up)] of the successful tests, by start."""
-    out = []
-    for r in rows:
-        t, g = num(r, "t"), num(r, "bitrate_mbps")
-        if num(r, "success") == 1 and np.isfinite(t) and np.isfinite(g) and g > 0:
-            d = num(r, "duration_s")
-            out.append((t, t + (d if np.isfinite(d) else 0.0), g, num(r, "reverse") != 1))
-    return sorted(out)
-
-
-def robot_messages(ping, tests, busy, rate, frame_ms):
-    """One row per message per size for one robot."""
-    ts, rtt = ping_seqs(ping)
-    if not len(ts):
+def robot_messages(ch, m, busy, rate):
+    """One row per message per size for one robot, through the logged channel."""
+    tr = ch.traces[m]
+    if not len(tr.t):
         return [], [], math.nan
-    outs = outages(ts, rtt, frame_ms / 1e3)
-    use = [x for x in tests if x[3]] or tests                 # up (robot -> server), else down
-    st = np.array([x[0] for x in use])
-    ok = np.isfinite(rtt)
-    ta, ra = ts[ok], rtt[ok]
     rows = []
-    for t in np.arange(ts[0], ts[-1], 1.0 / rate):
-        lost = any(a <= t < b for a, b in outs)
-        k = int(np.searchsorted(ta, t, side="right")) - 1
-        r = ra[k] if k >= 0 and t - ta[k] <= RTT_AGE_S else math.nan
-        if not lost and not np.isfinite(r):
+    for t in np.arange(tr.t[0], tr.t[-1], 1.0 / rate):
+        ds = [ch.deliver(m, "server", t, s) for _, s in SIZES]
+        if not ds[0].lost and not ds[0].measured:
             continue                                          # no measurement: left out
-        j = int(np.searchsorted(st, t, side="right")) - 1
-        g = use[max(j, 0)][2]
         loaded = any(a <= t <= b for a, b in busy)
-        for name, s in SIZES:
-            d = math.nan if lost else r / 2 + s * 8 / (g * 1e6) * 1e3
-            rows.append({"t": float(t), "size": name, "bytes": s, "lost": int(lost), "loaded": int(loaded),
-                         "rtt_ms": r, "goodput_mbps": g, "delay_ms": d})
-    return rows, outs, float(ts[0])
+        r, g = tr.rtt_at(t), tr.goodput_at(t, True)
+        for (name, s), d in zip(SIZES, ds):
+            rows.append({"t": float(t), "size": name, "bytes": s, "lost": int(d.lost), "loaded": int(loaded),
+                         "rtt_ms": r * 1e3 if r is not None else math.nan, "goodput_mbps": g,
+                         "delay_ms": math.nan if d.lost else d.delay_s * 1e3})
+    return rows, tr.out, float(tr.t[0])
 
 
 def stats(rows, frame_ms):
@@ -192,22 +110,20 @@ def synth_stats(frame_ms):
 def run_pass(proc, rate=10.0, frame_ms=100.0, log=print):
     proc = os.path.abspath(os.path.expanduser(proc))
     wifi = os.path.join(proc, "comms", "wifi")
-    ping, iperf = load(os.path.join(wifi, "ping.csv")), load(os.path.join(wifi, "iperf.csv"))
-    if not ping or not iperf:
+    if not os.path.exists(os.path.join(wifi, "ping.csv")) or not os.path.exists(os.path.join(wifi, "iperf.csv")):
         log(f"  {proc}: no ping.csv / iperf.csv (run processing/comms_tables.py)")
         return None
-    by = lambda rows: {m: [r for r in rows if r["machine"] == m] for m in sorted({r["machine"] for r in rows})}  # noqa: E731
-    ping, iperf = by(ping), by(iperf)
-    busy = [(a, b) for rows in iperf.values() for a, b, _, _ in iperf_tests(rows)]
-    rep = {"pass": proc, "rate_hz": rate, "frame_ms": frame_ms,
+    LT.make(proc, frame_ms, log=lambda *_: None)
+    ch = CH.Logged(proc)
+    busy = [(a, b) for tr in ch.traces.values() for a, b in tr.own]
+    rep = {"pass": proc, "rate_hz": rate, "frame_ms": frame_ms, "channel": ch.name,
            "sizes_bytes": dict(SIZES), "synthetic": synth_stats(frame_ms), "robots": {}}
     table = []
-    for m in sorted(ping):
-        tests = iperf_tests(iperf.get(m, []))
-        if not tests:
+    for m in sorted(ch.traces):
+        if not ch.traces[m].tests:
             log(f"  {m}: no successful iperf test, no goodput: left out")
             continue
-        rows, outs, t_first = robot_messages(ping[m], tests, busy, rate, frame_ms)
+        rows, outs, t_first = robot_messages(ch, m, busy, rate)
         r = {"first_ping_t": t_first,
              "outages": [{"t0": a, "at_s": a - t_first, "duration_s": b - a} for a, b in outs],
              "outage_s_total": float(sum(b - a for a, b in outs)), "sizes": {}}

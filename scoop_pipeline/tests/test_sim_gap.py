@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 """Self-test for analysis/comms/sim_gap.py on comms tables with a known link.
 
-mobile_1 pings at 50 Hz for 60 s: RTT 4 ms, 80 ms while its iperf up test
-runs (20-30 s, 100 Mbit/s); no reply for 1 s at 40 s (an outage) and one
+mobile_1 pings at 50 Hz for 60 s: RTT 4 ms, 80 ms while its own iperf up
+test runs (20-30 s, 100 Mbit/s: not counted again on top of s / G, the 4 ms
+before it holds); no reply for 1 s at 40 s (an outage) and one
 lone lost ping at 10 s (not one); no ping at all 50-52 s (left out); no
 reply 54-54.2 s and then no ping logged until 56 s (an outage of 0.2 s
 only: the stall is no evidence of the link, its messages left out). A
-message every 100 ms must then take RTT / 2 + s / G: boxes 2.08 ms idle,
+message every 100 ms must then take RTT / 2 + s / G: boxes 2.08 ms idle and
+during the test,
 clouds 2 + 120 = 122 ms (never within a frame); the ten messages of the
 outage lost; the stall's left out once its last ping is 0.5 s old.
 
@@ -68,8 +70,9 @@ def main():
         box = m["sizes"]["boxes"]
         if abs(box["idle"]["delay_ms"]["p50"] - 2.08) > 0.01:
             f.append("boxes idle p50 %s ms, want 2.08" % box["idle"]["delay_ms"]["p50"])
-        if abs(box["loaded"]["delay_ms"]["p50"] - 40.08) > 0.01:
-            f.append("boxes loaded p50 %s ms, want 40.08" % box["loaded"]["delay_ms"]["p50"])
+        if abs(box["loaded"]["delay_ms"]["p50"] - 2.08) > 0.01:
+            f.append("boxes loaded p50 %s ms, want 2.08 (own test not counted twice)"
+                     % box["loaded"]["delay_ms"]["p50"])
         cl = m["sizes"]["clouds"]["all"]
         if abs(cl["delay_ms"]["p50"] - 122.0) > 0.01 or cl["within_frame_percent"] != 0:
             f.append("clouds: %s (want p50 122 ms, none within a frame)" % cl)
