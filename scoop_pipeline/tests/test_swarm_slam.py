@@ -2,7 +2,9 @@
 """Self-test for datasets/swarm_slam.py on test_replica_multiagent's two-robot
 bag, with each robot's onboard odometry added: of a body frame (not the
 camera) in an odom frame of its own (not map), linked to the colour camera
-through /tf_static.
+through /tf_static. Then again with mobile_2's odometry not recorded: it
+must come from <work>/mobile_2/vslam/traj_vslam.txt (processing/vslam.py's
+offline cuVSLAM, of camera_link) the same.
 
 It must write one bag with /r0 and /r1 in cslam's RGB-D layout: colour at
 --width with matching intrinsics and no distortion, depth registered to it
@@ -46,7 +48,7 @@ BODY = {"mobile_1": "m1_base", "mobile_2": "m2_link"}
 CAM = {"mobile_1": "m1_left", "mobile_2": "m2_color"}
 
 
-def odom_bag(path):
+def odom_bag(path, skip=()):
     T = rosmsg.msg_type
     recs = []
     tfs = []
@@ -55,6 +57,8 @@ def odom_bag(path):
         tfs.append((BODY[m], CAM[m], q[:3], q[3:]))
     recs.append((RMT.T0, "/tf_static", rosmsg.tf_message(tfs, RMT.T0)))
     for m, topic in SS.ODOM.items():
+        if m in skip:
+            continue
         for k in range(int(RMT.DUR * 50) + 1):                     # 50 Hz
             t = RMT.T0 + k * S // 50
             Tb = np.linalg.inv(T_MO[m]) @ RMT.pose(m, t) @ np.linalg.inv(T_BC[m])
@@ -119,6 +123,29 @@ def main():
             if len(gt) == 0 or np.abs(gt[:, 1] - np.array([RMT.pose(m, int(round(t * S)))[0, 3]
                                                           for t in gt[:, 0]])).max() > 1e-3:
                 f.append("%s: ground truth not the camera in map" % ns)
+        # mobile_2's odometry not recorded: the offline cuVSLAM file next to the bag
+        w2 = os.path.join(tmp, "w2")
+        os.makedirs(os.path.join(w2, "mobile_2", "vslam"))
+        BODY["mobile_2"] = SS.VSLAM_BASE
+        b3 = os.path.join(tmp, "odom1")
+        odom_bag(b3, skip=("mobile_2",))
+        merge.merge_bags([b1, b3], os.path.join(w2, "merged"), log=lambda *_: None)
+        with open(os.path.join(w2, "mobile_2", "vslam", "traj_vslam.txt"), "w") as fh:
+            for k in range(int(RMT.DUR * 50) + 1):
+                t = RMT.T0 + k * S // 50
+                Tb = np.linalg.inv(T_MO["mobile_2"]) @ RMT.pose("mobile_2", t) @ np.linalg.inv(T_BC["mobile_2"])
+                fh.write(mc.tum_line(t, Tb) + "\n")
+        out2 = os.path.join(tmp, "swarm2")
+        SS.convert(os.path.join(w2, "merged"), out2, rate=10.0, width=100)
+        err = 0.0
+        for m_ in mc.read(mc._paths(os.path.join(out2, "bag")), ["/r1/odom"]):
+            P = m_.ros_msg.pose.pose
+            Tg = mc.xyzq_to_T([P.position.x, P.position.y, P.position.z, P.orientation.x,
+                               P.orientation.y, P.orientation.z, P.orientation.w])
+            want = np.linalg.inv(T_MO["mobile_2"]) @ RMT.pose("mobile_2", mc.stamp_ns(m_.ros_msg))
+            err = max(err, np.abs(Tg - want).max())
+        if not err < 1e-3:
+            f.append("offline cuVSLAM odometry: off by %.4f" % err)
         y = open(os.path.join(out, "scoop_rgbd.yaml")).read()
         for k in ('sensor_type: "rgbd"', "enable_logs: true", 'odom_topic: "odom"'):
             if k not in y:

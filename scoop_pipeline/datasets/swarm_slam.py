@@ -31,7 +31,9 @@ Odometry (Swarm-SLAM takes it from outside, matched to the images by stamp):
   onboard  what the robot ran: the ZED's /mobile_1/zed/odom, the RealSense
            robot's cuVSLAM /mobile_2/visual_slam/tracking/odometry, moved to
            the colour camera through /tf_static and interpolated to the image
-           stamp
+           stamp; a robot whose odometry was not recorded takes the offline
+           cuVSLAM of processing/vslam.py (data/work/<date>/<pass>/<machine>/
+           vslam/traj_vslam.txt, of camera_link), when it is there
   gt       the ground truth itself (a check of the setup: no drift to correct)
 """
 import argparse
@@ -53,6 +55,7 @@ log = logging.getLogger("swarm_slam")
 
 ODOM = {"mobile_1": "/mobile_1/zed/odom",
         "mobile_2": "/mobile_2/visual_slam/tracking/odometry"}
+VSLAM_BASE = "camera_link"           # processing/vslam.py's base_frame
 CONFIG = """/**:
   ros__parameters:
     frontend:
@@ -152,7 +155,7 @@ def odometry(T_oc, frame, child, t):
 
 
 class Robot:
-    def __init__(self, i, machine, paths, edges, width, odom, depth_extrinsic=None):
+    def __init__(self, i, machine, paths, edges, width, odom, depth_extrinsic=None, work_dir=None):
         spec = dict(RM.AGENTS[machine])
         self.a = RM.Agent(i, machine, spec, paths, paths, edges, depth_extrinsic)
         self.i, self.machine, self.spec = i, machine, spec
@@ -169,14 +172,25 @@ class Robot:
             self.odom, self.T_bc, self.odom_src = self.gt, np.eye(4), spec["pose"] + " (ground truth)"
         else:
             topic = ODOM[machine]
-            ts, pos, quat, frames = mc.load_poses(paths, topic)
-            child = mc.first_msg(paths, topic).child_frame_id.lstrip("/")
-            self.odom = mc.PoseInterp(ts, pos, quat)
+            msg = mc.first_msg(paths, topic)
+            vs = os.path.join(work_dir or "", machine, "vslam", "traj_vslam.txt")
+            if msg is not None:
+                ts, pos, quat, frames = mc.load_poses(paths, topic)
+                child = msg.child_frame_id.lstrip("/")
+                self.odom = mc.PoseInterp(ts, pos, quat)
+                src = topic
+            elif work_dir and os.path.exists(vs):
+                # not recorded: the offline cuVSLAM of processing/vslam.py (T_odom_base)
+                self.odom, child, src = mc.PoseInterp.from_tum(vs), VSLAM_BASE, vs
+                log.info(f"{machine}: no {topic} in the bag: odometry from {vs}")
+            else:
+                raise mc.ConvertError(f"{machine}: no messages on {topic} and no {vs} "
+                                      "(processing/vslam.py), or use --odom gt")
             self.T_bc = np.eye(4) if child == cf else mc.lookup_static(edges, child, cf)
             if self.T_bc is None:
-                raise mc.ConvertError(f"{machine}: {topic}'s frame {child} and the colour frame {cf} "
+                raise mc.ConvertError(f"{machine}: the odometry's frame {child} and the colour frame {cf} "
                                       "are not connected in /tf_static (try --odom gt to check the rest)")
-            self.odom_src = f"{topic} ({child} -> {cf})"
+            self.odom_src = f"{src} ({child} -> {cf})"
         self.last = None
         self.gt_lines, self.n, self.drop = [], 0, {"no odom": 0}
 
@@ -243,7 +257,9 @@ def convert(bag, out=None, *, agents=("mobile_1", "mobile_2"), odom="onboard", r
         raise mc.ConvertError(f"{bag_out} exists: remove it first")
     os.makedirs(out, exist_ok=True)
     edges = mc.build_tf_static(paths)
-    robots = [Robot(i, m, paths, edges, width, odom, (depth_extrinsics or {}).get(m))
+    b = os.path.abspath(bag[0] if isinstance(bag, (list, tuple)) else bag)
+    work_dir = os.path.dirname(os.path.dirname(b) if os.path.isfile(b) else b)   # data/work/<date>/<pass>
+    robots = [Robot(i, m, paths, edges, width, odom, (depth_extrinsics or {}).get(m), work_dir)
               for i, m in enumerate(agents)]
     for r in robots:
         log.info("r%d = %s: %dx%d f %.1f; odometry %s" % (r.i, r.machine, r.tgt.width, r.tgt.height,
