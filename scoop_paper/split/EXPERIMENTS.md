@@ -17,14 +17,37 @@ results are read as tests.
 |---|---|---|---|---|
 | E2 | Map Meets Radio | coop2_0828; 24 Sep survey_1, coop_2 | `link_clearance.py` (ready) | 1 |
 | E1 | Headroom | existing passes | existing reports + one figure script | 1 |
-| E5 | Sim Gap | existing ping/iperf tables | `sim_gap.py` (to write) | 1 |
+| E5 | Sim Gap | existing ping/iperf tables | `sim_gap.py` (ready) | 1 |
 | E4 | Same Knob, Same Link, mode half | 24 Sep survey_1 vs coop_2 | `link_repeat.py` (to write) | 1 |
 | E3 | Twin Run | new session | payload node + `twin_run.py` (to write) | 2 |
 | E4 | Same Knob, Same Link, day half | new session vs 24 Sep | `link_repeat.py` | 2 |
 
+## Progress
+
+No schedule: each item gets the date it ended once it ends.
+
+| Item | Status | Result so far | Ended |
+|---|---|---|---|
+| E1.1 clock (coop_2) | done | measured <= 0.99 ms, bound <= 12 ms | |
+| E1.3 pose vs boards, mobile_2 (coop_2) | done | 3.1 cm median; sigma 5.3 cm (284 cm without map fixes) | |
+| E1.3 pose vs boards, mobile_1 (coop_2) | open | | |
+| E1.6 p95 speeds (coop_2) | open | | |
+| E1 Headroom figure | open | | |
+| E2.2 robot-to-robot RSSI (coop_2) | done, passes | rho 0.60, 5.4 dB (mobile_2 link); infra_1 0.23, 4.7 dB | |
+| E2.3 robot-to-AP (needs AP position) | open | | |
+| E2 pooled over passes | open | | |
+| E4 mode half (`link_repeat.py`) | open | | |
+| E5 Sim Gap (24 Sep) | done | clouds in frame 86 % alone, 59-68 % with two robots; synthetic 100 % | |
+| E5 synthetic settings checked in code | done | V2X-ViT constant 100 ms; Where2comm no latency | |
+| Payload node + `twin_run.py` | open | | |
+| Phase 2 session | open | | |
+| E3 Twin Run | open | | |
+| E4 day half | open | | |
+| Phase 3 assembly | open | | |
+
 ---
 
-## Phase 1: desk work on existing data (week 1)
+## Phase 1: desk work on existing data
 
 ### 1.1 E2 Map Meets Radio
 1. For each site, read the access point's position off the anchored map (the
@@ -108,7 +131,7 @@ results are read as tests.
 
 ---
 
-## Phase 2: one recording session (week 2)
+## Phase 2: one recording session
 
 **Where.** The 24 Sep site and route, so that every run doubles as E4's
 "another day". Reuse `mapping_A` and check the boards are in place. No new
@@ -159,7 +182,7 @@ The sniffer bias for E1 also comes from this session, if it was not available in
 
 ---
 
-## Phase 3: assembly (week 3)
+## Phase 3: assembly
 1. Spec-sheet table: every bound filled from E1–E4, each with its pass.
 2. Figures:
    - Headroom (E1);
