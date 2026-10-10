@@ -2,7 +2,7 @@
 """Swarm-SLAM (cslam) against the ground truth: a run of
 slam/run_swarm_slam.sh on a datasets/swarm_slam.py export.
 
-    python scoop_pipeline/analysis/slam/cslam_eval.py <export dir> [--results DIR]
+    python scoop_pipeline/analysis/slam/cslam_eval.py <export dir> [--run runs/<channel>] [--results DIR]
         [--cov ROBOT FILE] [--sigma-max 0.15] [--lc-ok 0.5 10]
 
 Reads <export>/results/<..._experiment_robot_<i>>/<time>/ (cslam's logs,
@@ -28,8 +28,10 @@ Keyframes whose ground truth is not known within 10 ms are left out, and so
 are those where --cov (04's cov_<track>.csv: t, ..., sigma_xy_major_m) says
 the ground truth's own uncertainty is over --sigma-max m.
 
-Writes <export>/cslam_eval.json and cslam_eval.png (top view: ground truth,
-aligned keyframes per robot, inter-robot loop closures).
+--run: a run of slam/run_swarm_slam.sh (<export>/runs/<channel>): its results/
+are read and the outputs go there. Writes cslam_eval.json and cslam_eval.png
+(top view: ground truth, aligned keyframes per robot, inter-robot loop
+closures) in the run (or <export> for --results / the default results/).
 """
 import argparse
 import glob
@@ -139,8 +141,9 @@ def read_log(path):
     return out
 
 
-def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), plot=True):
+def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), plot=True, out=None):
     results = results or os.path.join(export, "results")
+    out = out or export
     gts = {}
     for p in sorted(glob.glob(os.path.join(export, "gt_r*.tum"))):
         gts[int(os.path.basename(p)[4:-4])] = read_tum(p)
@@ -228,9 +231,9 @@ def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), 
         p = os.path.join(s, "log.csv")
         if os.path.exists(p):
             rep["robots"].setdefault(r, {})["log"] = read_log(p)        # the latest wins
-    json.dump(rep, open(os.path.join(export, "cslam_eval.json"), "w"), indent=1)
+    json.dump(rep, open(os.path.join(out, "cslam_eval.json"), "w"), indent=1)
     if plot and out_plot:
-        draw(out_plot, gts, os.path.join(export, "cslam_eval.png"))
+        draw(out_plot, gts, os.path.join(out, "cslam_eval.png"))
     return rep
 
 
@@ -265,13 +268,18 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("export")
+    ap.add_argument("--run", default=None, help="a run folder (runs/<channel>)")
     ap.add_argument("--results", default=None)
     ap.add_argument("--cov", nargs=2, action="append", default=[], metavar=("ROBOT", "FILE"))
     ap.add_argument("--sigma-max", type=float, default=0.15)
     ap.add_argument("--lc-ok", type=float, nargs=2, default=[0.5, 10.0], metavar=("M", "DEG"))
     a = ap.parse_args()
     export = os.path.abspath(os.path.expanduser(a.export))
-    rep = evaluate(export, a.results, {int(r): f for r, f in a.cov}, a.sigma_max, tuple(a.lc_ok))
+    run = os.path.abspath(os.path.expanduser(a.run)) if a.run else None
+    if run and not os.path.isdir(run):
+        run = os.path.join(export, "runs", a.run)
+    rep = evaluate(export, a.results or (os.path.join(run, "results") if run else None),
+                   {int(r): f for r, f in a.cov}, a.sigma_max, tuple(a.lc_ok), out=run)
     print("graph: %s" % rep["graph"])
     for w in ("optimized", "initial"):
         if w in rep:
@@ -290,7 +298,7 @@ def main():
           "(median %s m, %s deg)" % (lc.get("total", 0), lc.get("checked", 0), lc.get("correct", 0),
                                      fmt(lc.get("t_err_median_m")), fmt(lc.get("r_err_median_deg"), 1)))
     print("time to merge: %s s into the run" % fmt(rep["time_to_merge_s"], 1))
-    print("wrote %s/cslam_eval.json, cslam_eval.png" % export)
+    print("wrote %s/cslam_eval.json, cslam_eval.png" % (run or export))
 
 
 if __name__ == "__main__":

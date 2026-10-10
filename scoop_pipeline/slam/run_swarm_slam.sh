@@ -1,13 +1,23 @@
 #!/bin/bash
-# Swarm-SLAM (cslam, RGB-D) on a datasets/swarm_slam.py export: one cslam
-# instance per robot (/r0, /r1, ...), then the bag. Run inside Swarm-SLAM's
-# container (cslam_experiments/docker), with the data mounted at the same path.
+# Swarm-SLAM (cslam, RGB-D) on a datasets/swarm_slam.py export, the robots
+# talking through a channel (scoop/channel.py). Run inside Swarm-SLAM's
+# container (cslam_experiments/docker), with the data and this repo mounted
+# at the same paths as outside.
 #
-#   scoop_pipeline/slam/run_swarm_slam.sh <export dir> [rate 0.5] [robots 2]
+#   scoop_pipeline/slam/run_swarm_slam.sh <export dir> [channel ideal] [rate 0.5] [robots "mobile_1 mobile_2"]
 #
-# Writes <export dir>/results/ (cslam's logs) and <export dir>/cslam_*.log.
+# channel: any scoop/channel.py spec (ideal, v2xvit, cobevflow:0.3,
+#   synthetic:delay_ms=50,mbps=100,loss=0.01, fit:<pass>, logged:<pass>[,queue]):
+#   robot i runs in ROS domain DOMAIN_BASE+i (default 10+i) with its half of
+#   the bag (--clock), and slam/channel_relay.py carries what they exchange.
+#   "direct": every robot in one domain, no relay (Swarm-SLAM's own setup).
+#
+# Writes <export dir>/runs/<channel>/: results/ (cslam's logs), relay.csv
+# (every message: sent, size, lost, arrival), cslam_r<i>.log, relay.log.
 set -e
-OUT=$(realpath "$1"); RATE=${2:-0.5}; N=${3:-2}
+OUT=$(realpath "$1"); CHANNEL=${2:-ideal}; RATE=${3:-0.5}; ROBOTS=(${4:-mobile_1 mobile_2})
+N=${#ROBOTS[@]}; BASE=${DOMAIN_BASE:-10}
+HERE=$(dirname "$(realpath "$0")")
 [ -f "$OUT/scoop_rgbd.yaml" ] || { echo "no $OUT/scoop_rgbd.yaml: run datasets/swarm_slam.py first"; exit 1; }
 source /opt/ros/$ROS_DISTRO/setup.bash
 source /Swarm-SLAM/install/setup.bash 2>/dev/null || source ~/Swarm-SLAM/install/setup.bash
@@ -15,17 +25,36 @@ if [ ! -f "$OUT/resnet18_64.pth" ]; then
   echo "fetching the CosPlace ResNet-18/64 weights -> $OUT/resnet18_64.pth"
   python3 -c "import torch; m = torch.hub.load('gmberton/cosplace', 'get_trained_model', backbone='ResNet18', fc_output_dim=64); torch.save(m.state_dict(), '$OUT/resnet18_64.pth')"
 fi
-mkdir -p "$OUT/results"
+TAG=$(echo "$CHANNEL" | sed -E 's#:[^,]*/([^/,]+)#:\1#; s#[:,=/]#_#g')
+RUN="$OUT/runs/$TAG"
+[ -e "$RUN" ] && { echo "$RUN exists: remove it to run this channel again"; exit 1; }
+mkdir -p "$RUN/results"
+sed "s#log_folder: .*#log_folder: \"$RUN/results\"#" "$OUT/scoop_rgbd.yaml" > "$RUN/scoop_rgbd.yaml"
 PIDS=()
+trap 'kill ${PIDS[@]} 2>/dev/null; wait 2>/dev/null' EXIT
 for ((i = 0; i < N; i++)); do
-  ros2 launch cslam_experiments cslam_rgbd.launch.py config_path:="$OUT/" config_file:=scoop_rgbd.yaml \
-      robot_id:=$i namespace:=/r$i max_nb_robots:=$N > "$OUT/cslam_r$i.log" 2>&1 &
+  D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
+  ROS_DOMAIN_ID=$D ros2 launch cslam_experiments cslam_rgbd.launch.py config_path:="$RUN/" \
+      config_file:=scoop_rgbd.yaml robot_id:=$i namespace:=/r$i max_nb_robots:=$N > "$RUN/cslam_r$i.log" 2>&1 &
   PIDS+=($!)
 done
-trap 'kill ${PIDS[@]} 2>/dev/null' EXIT
-echo "cslam up for $N robots; playing the bag at x$RATE in 15 s (logs: $OUT/cslam_r*.log)"
+if [ "$CHANNEL" != direct ]; then
+  DOMAINS=$(for ((i = 0; i < N; i++)); do echo -n "$((BASE + i)) "; done)
+  python3 "$HERE/channel_relay.py" --channel "$CHANNEL" --robots "${ROBOTS[@]}" --domains $DOMAINS \
+      --log "$RUN/relay.csv" > "$RUN/relay.log" 2>&1 &
+  PIDS+=($!)
+fi
+echo "cslam up for $N robots, channel $CHANNEL; playing the bag at x$RATE in 15 s ($RUN)"
 sleep 15
-ros2 bag play "$OUT/bag" -r "$RATE"
+PLAY=()
+if [ "$CHANNEL" = direct ]; then
+  ROS_DOMAIN_ID=0 ros2 bag play "$OUT/bag" -r "$RATE" & PLAY+=($!)
+else
+  for ((i = 0; i < N; i++)); do
+    ROS_DOMAIN_ID=$((BASE + i)) ros2 bag play "$OUT/bag" -r "$RATE" --clock --regex "^/r$i/" & PLAY+=($!)
+  done
+fi
+wait ${PLAY[@]}
 echo "bag done; letting the pose graph settle 30 s"
 sleep 30
-ls -la "$OUT/results"
+ls "$RUN/results"
