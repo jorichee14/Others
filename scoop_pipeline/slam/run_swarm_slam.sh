@@ -51,10 +51,15 @@ if [ "$CHANNEL" = direct ]; then
   ROS_DOMAIN_ID=0 ros2 bag play "$OUT/bag" -r "$RATE" & PLAY+=($!)
 else
   for ((i = 0; i < N; i++)); do
-    ROS_DOMAIN_ID=$((BASE + i)) ros2 bag play "$OUT/bag" -r "$RATE" --clock --regex "^/r$i/" & PLAY+=($!)
+    # ros2 bag play's --regex must match the whole topic name
+    ROS_DOMAIN_ID=$((BASE + i)) ros2 bag play "$OUT/bag" -r "$RATE" --clock --regex "/r$i/.*" & PLAY+=($!)
   done
 fi
+T0=$SECONDS
 wait ${PLAY[@]}
-echo "bag done; letting the pose graph settle 30 s"
+if (( SECONDS - T0 < 20 )); then
+  echo "the bag played for $((SECONDS - T0)) s: no topics were played (check ros2 bag info $OUT/bag)"; exit 1
+fi
+echo "bag done after $((SECONDS - T0)) s; letting the pose graph settle 30 s"
 sleep 30
 ls "$RUN/results"
