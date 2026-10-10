@@ -55,6 +55,8 @@ map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
                      09 run cloud, 10 poses bag
 datasets/            bags -> datasets for other tools
   mcap_convert.py    replica (RGB + lidar depth), mcd, mcgs (standalone)
+  swarm_slam.py      a multi-robot pass as Swarm-SLAM input (RGB-D per robot, /r<i>,
+                     onboard or ground-truth odometry) + config; slam/run_swarm_slam.sh runs it
   replica_multiagent.py  a multi-robot pass as a ReplicaMultiagent scene for MAGiC-SLAM:
                      one common camera, frames in lockstep, poses in the shared map
 analysis/            measuring results; reads outputs, writes nothing back
@@ -93,6 +95,8 @@ tests/               self-tests, no real bag needed
   test_wifi_analysis.py  wifi_analysis: seq wrap, late replies, contention, goodput vs RSSI
   test_comms_map.py  comms_map: figures written, grid cells hold their samples' median
   test_sim_gap.py    sim_gap: known RTT, goodput and outage give the message delays and losses
+  test_swarm_slam.py swarm_slam: topics, intrinsics, registered depth, odometry in the
+                     robot's odom frame at the image stamp, ground truth
   test_replica_multiagent.py  replica_multiagent: common camera, lockstep frames, poses,
                      colour resampling and depth registration on a two-robot bag
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
