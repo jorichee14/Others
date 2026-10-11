@@ -27,6 +27,9 @@ Reported, from the last global graph (the one with the most keyframes):
   odometry        the export's /r<i>/odom (what cslam was given) against the
                   ground truth at every frame, aligned the same way: the
                   baseline the optimized graph should beat
+  in map          every error also without any alignment (*_map_*): the
+                  export starts each robot's odometry in map at its session
+                  anchor, so the graph is in map as it stands
 Keyframes whose ground truth is not known within 10 ms are left out, and so
 are those where --cov (04's cov_<track>.csv: t, ..., sigma_xy_major_m) says
 the ground truth's own uncertainty is over --sigma-max m.
@@ -103,6 +106,14 @@ def ate(est, gt):
     T = umeyama(est, gt)
     e = np.linalg.norm(est @ T[:3, :3].T + T[:3, 3] - gt, axis=1)
     return float(np.sqrt(np.mean(e ** 2))), float(np.median(e)), T
+
+
+def map_err(est, gt):
+    """(rmse, median) of positions as they stand, no alignment."""
+    if len(est) == 0:
+        return None
+    e = np.linalg.norm(est - gt, axis=1)
+    return float(np.sqrt(np.mean(e ** 2))), float(np.median(e))
 
 
 def rot_deg(R):
@@ -240,14 +251,16 @@ def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), 
         est = np.array([V[k][:3, 3] for k in keys])
         gt = np.array([gt_of(k)[:3, 3] for k in keys])
         rob = np.array([key_robot(k)[0] for k in keys])
-        j = ate(est, gt)
+        j, jm = ate(est, gt), map_err(est, gt)
         rep[which] = {"keyframes": len(V), "with_ground_truth": len(keys),
-                      "joint_ate_rmse_m": j[0] if j else None, "joint_ate_median_m": j[1] if j else None}
+                      "joint_ate_rmse_m": j[0] if j else None, "joint_ate_median_m": j[1] if j else None,
+                      "joint_map_rmse_m": jm[0] if jm else None, "joint_map_median_m": jm[1] if jm else None}
         for r in sorted(set(rob)):
-            a = ate(est[rob == r], gt[rob == r])
+            a, am = ate(est[rob == r], gt[rob == r]), map_err(est[rob == r], gt[rob == r])
             rr = rep["robots"].setdefault(int(r), {})
             rr[which] = {"keyframes": int((rob == r).sum()),
-                         "ate_rmse_m": a[0] if a else None, "ate_median_m": a[1] if a else None}
+                         "ate_rmse_m": a[0] if a else None, "ate_median_m": a[1] if a else None,
+                         "map_rmse_m": am[0] if am else None, "map_median_m": am[1] if am else None}
         if which == "optimized":
             lcs = []
             for a, b, Tm in E:
@@ -273,9 +286,10 @@ def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), 
                         "edges": [(V[a][:3, 3], V[b][:3, 3]) for a, b, _ in E
                                   if key_robot(a)[0] != key_robot(b)[0]]}
     for r, (e, g) in odometry(export, gts, gt_at).items():
-        a = ate(e, g)
+        a, am = ate(e, g), map_err(e, g)
         rep["robots"].setdefault(r, {})["odometry"] = {
-            "frames": len(e), "ate_rmse_m": a[0] if a else None, "ate_median_m": a[1] if a else None}
+            "frames": len(e), "ate_rmse_m": a[0] if a else None, "ate_median_m": a[1] if a else None,
+            "map_rmse_m": am[0] if am else None, "map_median_m": am[1] if am else None}
     for r, s in logs:
         p = os.path.join(s, "log.csv")
         if os.path.exists(p):
@@ -333,16 +347,17 @@ def main():
     for w in ("optimized", "initial"):
         if w in rep:
             g = rep[w]
-            print("%-9s joint ATE rmse %s m, median %s m (%d of %d keyframes with ground truth)"
-                  % (w, fmt(g["joint_ate_rmse_m"]), fmt(g["joint_ate_median_m"]), g["with_ground_truth"],
-                     g["keyframes"]))
+            print("%-9s joint ATE rmse %s m, median %s m; in map rmse %s m (%d of %d keyframes "
+                  "with ground truth)" % (w, fmt(g["joint_ate_rmse_m"]), fmt(g["joint_ate_median_m"]),
+                                          fmt(g["joint_map_rmse_m"]), g["with_ground_truth"], g["keyframes"]))
     for r, v in sorted(rep["robots"].items()):
         o, i, lg = v.get("optimized", {}), v.get("initial", {}), v.get("log", {})
         od = v.get("odometry", {})
-        print("  r%d  ATE rmse %s m (initial %s m, odometry %s m over %d frames), %d keyframes; "
-              "front-end bytes %s, matches %s"
+        print("  r%d  ATE rmse %s m (initial %s m, odometry %s m over %d frames); in map %s m "
+              "(odometry %s m), %d keyframes; front-end bytes %s, matches %s"
               % (r, fmt(o.get("ate_rmse_m")), fmt(i.get("ate_rmse_m")), fmt(od.get("ate_rmse_m")),
-                 od.get("frames", 0), o.get("keyframes", 0),
+                 od.get("frames", 0), fmt(o.get("map_rmse_m")), fmt(od.get("map_rmse_m")),
+                 o.get("keyframes", 0),
                  fmt(lg.get("total_front_end_cumulative_communication_bytes"), 0),
                  fmt(lg.get("total_nb_successful_matches"), 0)))
     lc = rep.get("inter_robot_loop_closures") or {}

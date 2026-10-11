@@ -149,6 +149,9 @@ def main():
         if (od[0].get("frames"), od[1].get("frames")) != (40, 39) or not od[0]["ate_rmse_m"] < 1e-6 \
                 or not od[1]["ate_rmse_m"] > 0.5:
             f.append("odometry %s (want 40 and 39 frames, ATE 0 and > 0.5 m)" % od)
+        if not od[0]["map_rmse_m"] > 1.0:
+            f.append("odometry in map %.3f m: robot 0's is in cslam's frame, %.1f m from map"
+                     % (od[0]["map_rmse_m"], np.linalg.norm(W[:3, 3])))
         if rep["robots"][1]["log"]["total_front_end_cumulative_communication_bytes"] != 2000:
             f.append("log.csv not the latest: %s" % rep["robots"][1]["log"])
     except Exception:                                              # noqa: BLE001
