@@ -127,6 +127,11 @@ def main():
             fh.write("t,sx,sy,syaw,corr,sigma_xy_major_m\n")
             for i in range(40):
                 fh.write("%.6f,0,0,0,0,%.3f\n" % (T0 + i * 0.5, 0.5 if i == 5 else 0.03))
+        open(os.path.join(tmp, "cslam_r0.log"), "w").write(
+            "[map_manager-2] [INFO] [1.0] [r0.cslam_map_manager]: Could not compute transformation "
+            "between (0,3) and (1,3): Not enough inliers 0/100 (matches=85) between 3 and 0\n"
+            "[map_manager-2] [INFO] [1.0] [r0.cslam_map_manager]: Could not compute transformation "
+            "between (0,30) and (1,2): Not enough inliers 0/100 (matches=40) between 30 and 0\n")
         rep = CE.evaluate(tmp, cov={1: cov}, sigma_max=0.15, plot=False)
         o, ini = rep["optimized"], rep["initial"]
         if o["keyframes"] != 80 or o["with_ground_truth"] != 79:
@@ -152,6 +157,11 @@ def main():
         if not od[0]["map_rmse_m"] > 1.0:
             f.append("odometry in map %.3f m: robot 0's is in cslam's frame, %.1f m from map"
                      % (od[0]["map_rmse_m"], np.linalg.norm(W[:3, 3])))
+        rc = rep["rejected_candidates"]
+        d = [c.get("gt_dist_m") for c in rc["pairs"]]
+        if (rc["total"], rc["with_ground_truth"], rc["same_place"]) != (2, 2, 1) or abs(d[0] - 2.0) > 1e-6:
+            f.append("rejected candidates %s, distances %s (want 2, 2, 1; 2.0 m)"
+                     % ({k: rc[k] for k in ("total", "with_ground_truth", "same_place")}, d))
         if rep["robots"][1]["log"]["total_front_end_cumulative_communication_bytes"] != 2000:
             f.append("log.csv not the latest: %s" % rep["robots"][1]["log"])
     except Exception:                                              # noqa: BLE001

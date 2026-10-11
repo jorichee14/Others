@@ -27,6 +27,10 @@ Reported, from the last global graph (the one with the most keyframes):
   odometry        the export's /r<i>/odom (what cslam was given) against the
                   ground truth at every frame, aligned the same way: the
                   baseline the optimized graph should beat
+  candidates      every inter-robot match cslam tried to verify and rejected
+                  (cslam_r<i>.log: "Could not compute transformation"), with
+                  the ground-truth distance and viewing angle between its two
+                  cameras: whether place recognition picked the same place
   in map          every error also without any alignment (*_map_*): the
                   export starts each robot's odometry in map at its session
                   anchor, so the graph is in map as it stands
@@ -41,6 +45,7 @@ closures) in the run (or <export> for --results / the default results/).
 """
 import argparse
 import glob
+import re
 import json
 import os
 import sys
@@ -184,6 +189,26 @@ def odometry(export, gts, ok):
     return out
 
 
+REJECTED = re.compile(r"Could not compute transformation between \((\d+),(\d+)\) and "
+                      r"\((\d+),(\d+)\): ?(.*)")
+
+
+def rejected(folder):
+    """[(robot, keyframe, robot, keyframe, reason)] of the inter-robot matches
+    cslam rejected (cslam_r<i>.log in a run folder)."""
+    out = []
+    for p in sorted(glob.glob(os.path.join(folder, "cslam_r*.log"))):
+        for line in open(p, errors="replace"):
+            m = REJECTED.search(line)
+            if m:
+                out.append((int(m[1]), int(m[2]), int(m[3]), int(m[4]), m[5].strip()))
+    return out
+
+
+def sym(r, k):
+    return ((ord("A") + r) << 48) | k
+
+
 def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), plot=True, out=None):
     results = results or os.path.join(export, "results")
     out = out or export
@@ -285,6 +310,21 @@ def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), 
             out_plot = {"est": est, "gt": gt, "rob": rob, "T": j[2] if j else np.eye(4),
                         "edges": [(V[a][:3, 3], V[b][:3, 3]) for a, b, _ in E
                                   if key_robot(a)[0] != key_robot(b)[0]]}
+    cands = []
+    for ra, ka, rb, kb, why in rejected(out):
+        Ga, Gb = gt_of(sym(ra, ka)), gt_of(sym(rb, kb))
+        c = {"robots": [ra, rb], "keyframes": [ka, kb], "reason": why}
+        if Ga is not None and Gb is not None:
+            c["gt_dist_m"] = float(np.linalg.norm(Ga[:3, 3] - Gb[:3, 3]))
+            c["gt_angle_deg"] = rot_deg(Ga[:3, :3].T @ Gb[:3, :3])
+        cands.append(c)
+    ck = [c for c in cands if "gt_dist_m" in c]
+    rep["rejected_candidates"] = {
+        "total": len(cands), "with_ground_truth": len(ck),
+        "same_place": sum(c["gt_dist_m"] <= 3.0 and c["gt_angle_deg"] <= 30.0 for c in ck),
+        "gt_dist_median_m": float(np.median([c["gt_dist_m"] for c in ck])) if ck else None,
+        "gt_angle_median_deg": float(np.median([c["gt_angle_deg"] for c in ck])) if ck else None,
+        "pairs": cands}
     for r, (e, g) in odometry(export, gts, gt_at).items():
         a, am = ate(e, g), map_err(e, g)
         rep["robots"].setdefault(r, {})["odometry"] = {
@@ -364,6 +404,15 @@ def main():
     print("inter-robot loop closures: %s, %s checked against the ground truth, %s correct "
           "(median %s m, %s deg)" % (lc.get("total", 0), lc.get("checked", 0), lc.get("correct", 0),
                                      fmt(lc.get("t_err_median_m")), fmt(lc.get("r_err_median_deg"), 1)))
+    rc = rep.get("rejected_candidates") or {}
+    if rc.get("total"):
+        print("rejected candidates: %d, %d with ground truth: %d at the same place (<= 3 m, 30 deg); "
+              "median %s m, %s deg apart" % (rc["total"], rc["with_ground_truth"], rc["same_place"],
+                                            fmt(rc["gt_dist_median_m"], 1), fmt(rc["gt_angle_median_deg"], 0)))
+        for c in rc["pairs"]:
+            print("  (%d,%d)-(%d,%d)  %s m  %s deg  %s" % (
+                c["robots"][0], c["keyframes"][0], c["robots"][1], c["keyframes"][1],
+                fmt(c.get("gt_dist_m"), 1), fmt(c.get("gt_angle_deg"), 0), c["reason"][:40]))
     print("time to merge: %s s into the run" % fmt(rep["time_to_merge_s"], 1))
     print("wrote %s/cslam_eval.json, cslam_eval.png" % (run or export))
 
