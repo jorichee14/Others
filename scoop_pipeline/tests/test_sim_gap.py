@@ -87,6 +87,11 @@ def main():
         v = rep["synthetic"]["V2X-ViT"]
         if v["delay_ms"] != 100.0 or v["lost_percent"] != 0:
             f.append("V2X-ViT synthetic %s" % v)
+        fj = m["fitted"]
+        if not (fj["clouds"]["within_frame_percent"] == 0.0 and fj["boxes"]["within_frame_percent"] > 90.0):
+            f.append("best-fit synthetic: clouds %.1f %%, boxes %.1f %% in frame (want 0, > 90: 1.5 MB at "
+                     "the fitted 100 Mbit/s takes 120 ms)" % (fj["clouds"]["within_frame_percent"],
+                                                              fj["boxes"]["within_frame_percent"]))
         try:
             import matplotlib                                    # noqa: F401
             if not os.path.exists(os.path.join(proc, "comms", "sim_gap", "sim_gap.png")):

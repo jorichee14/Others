@@ -39,6 +39,11 @@ dependence:
 
   V2X-ViT     a fixed 100 ms delay (its noisy setting), no loss
   Where2comm  delivery within a bandwidth budget: no delay, no loss
+  best-fit    the tuned synthetic baseline: the same messages through
+              scoop/channel.py's Fit of the same pass (i.i.d. lognormal
+              latency, median goodput, Gilbert-Elliott loss, all fitted to
+              this link; no load dependence): what is left of the gap when
+              the synthetic channel gets the right parameters
 
 Writes comms/sim_gap/: sim_gap.json, sim_gap.csv (one row per message),
 sim_gap.png (delay CDF per size, logged per robot against the synthetic
@@ -107,6 +112,24 @@ def synth_stats(frame_ms):
             for k, v in SYNTH.items()}
 
 
+def fitted(proc, m, rows, frame_ms):
+    """The best-fit synthetic baseline: the same messages (same send times and
+    sizes) through scoop/channel.py's Fit of this pass: i.i.d. lognormal
+    latency, median goodput, Gilbert-Elliott loss, all fitted to the logged
+    link, with no load dependence. {size: stats}."""
+    ch = CH.Fit(proc, seed=0)
+    out = {}
+    for name, s in SIZES:
+        rr = []
+        for x in rows:
+            if x["size"] != name:
+                continue
+            d = ch.deliver(m, "server", x["t"], s)
+            rr.append({"lost": int(d.lost), "delay_ms": math.nan if d.lost else d.delay_s * 1e3})
+        out[name] = stats(rr, frame_ms)
+    return out
+
+
 def run_pass(proc, rate=10.0, frame_ms=100.0, log=print):
     proc = os.path.abspath(os.path.expanduser(proc))
     wifi = os.path.join(proc, "comms", "wifi")
@@ -132,6 +155,7 @@ def run_pass(proc, rate=10.0, frame_ms=100.0, log=print):
             r["sizes"][name] = {"all": stats(rr, frame_ms),
                                 "loaded": stats([x for x in rr if x["loaded"]], frame_ms),
                                 "idle": stats([x for x in rr if not x["loaded"]], frame_ms)}
+        r["fitted"] = fitted(proc, m, rows, frame_ms)
         rep["robots"][m] = r
         table += [dict(x, machine=m) for x in rows]
     return rep, table
@@ -160,6 +184,10 @@ def print_report(rep, log=print):
             m, len(o), r["outage_s_total"],
             (" (" + ", ".join("%.1f s at %.0f s" % (x["duration_s"], x["at_s"]) for x in o[:8])
              + (", ..." if len(o) > 8 else "") + "; from its first ping)") if o else ""))
+    for m, r in rep["robots"].items():
+        f = r.get("fitted") or {}
+        log("  %-9s best-fit synthetic (fitted i.i.d. delay, goodput, loss): in frame %s" % (
+            m, ", ".join("%s %s %%" % (n, fmt((f.get(n) or {}).get("within_frame_percent"))) for n, _ in SIZES)))
     for k, v in rep["synthetic"].items():
         log("  %-9s every size: lost %s %%, delay %s ms, in frame %s %%  (%s)" % (
             k, fmt(v["lost_percent"]), fmt(v["delay_ms"]), fmt(v["within_frame_percent"]), v["note"]))
