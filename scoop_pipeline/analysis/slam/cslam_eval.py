@@ -181,8 +181,12 @@ def keyframe_stamps(folder):
             continue
         mc = _mc()
         r = int(os.path.basename(d)[len("keyframes_r"):])
-        for m in mc.read(mc._paths(d), None):
-            out[sym(r, int(m.ros_msg.id))] = mc.stamp_ns(m.ros_msg.odom) * 1e-9
+        try:
+            for m in mc.read(mc._paths(d), None):
+                out[sym(r, int(m.ros_msg.id))] = mc.stamp_ns(m.ros_msg.odom) * 1e-9
+        except Exception as e:                                     # noqa: BLE001
+            print("%s: not readable (%s: the recorder did not close it); robot %d's keyframes "
+                  "without a stamp" % (d, type(e).__name__, r))
     return out
 
 

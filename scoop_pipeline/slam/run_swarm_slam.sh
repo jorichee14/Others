@@ -39,12 +39,15 @@ for ((i = 0; i < N; i++)); do
 done
 mkdir -p "$RUN/results"
 sed "s#log_folder: .*#log_folder: \"$RUN/results\"#" "$OUT/scoop_rgbd.yaml" > "$RUN/scoop_rgbd.yaml"
-PIDS=(); PLAY=()
+PIDS=(); PLAY=(); REC=()
 # each launch in its own process group, so that the nodes it starts stop with it;
 # the container runs as root: hand the run folder back to the export's owner
 # (set +e: under set -e the first kill of an already finished group would end the trap)
-trap 'set +e; for p in ${PIDS[@]} ${PLAY[@]}; do kill -INT -- -$p 2>/dev/null; done; sleep 3
-      for p in ${PIDS[@]} ${PLAY[@]}; do kill -KILL -- -$p 2>/dev/null; done; wait 2>/dev/null
+# (the keyframe recorders first, and given time to write their bag's end)
+trap 'set +e; for p in ${REC[@]}; do kill -INT -- -$p 2>/dev/null; done
+      for k in $(seq 30); do kill -0 ${REC[@]} 2>/dev/null || break; sleep 1; done
+      for p in ${PIDS[@]} ${PLAY[@]}; do kill -INT -- -$p 2>/dev/null; done; sleep 3
+      for p in ${PIDS[@]} ${PLAY[@]} ${REC[@]}; do kill -KILL -- -$p 2>/dev/null; done; wait 2>/dev/null
       chown -R --reference="$OUT" "$RUN" 2>/dev/null' EXIT
 for ((i = 0; i < N; i++)); do
   D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
@@ -57,7 +60,7 @@ for ((i = 0; i < N; i++)); do
   D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
   ROS_DOMAIN_ID=$D setsid ros2 bag record -s mcap -o "$RUN/keyframes_r$i" /r$i/cslam/keyframe_odom \
       > "$RUN/record_r$i.log" 2>&1 &
-  PIDS+=($!)
+  REC+=($!)
 done
 if [ "$CHANNEL" != direct ]; then
   DOMAINS=$(for ((i = 0; i < N; i++)); do echo -n "$((BASE + i)) "; done)
