@@ -130,7 +130,8 @@ def main():
         L = open(os.path.join(out, "scoop_hydra.launch.yaml")).read()
         for s in ("hydra/input/frontleft/rgb/image_raw, to: /camera/color/image_raw",
                   "hydra/input/frontleft/depth_registered/image_rect, to: /camera/depth/image_rect",
-                  "closed_set_node", "use_sim_time, value: true"):
+                  "closed_set_node", "use_sim_time, value: true",
+                  "exit_after_clock: $(var exit_after_clock)"):
             if s not in L:
                 f.append("launch lacks %r" % s)
         try:
