@@ -168,7 +168,7 @@ def main():
                 {"from": "hydra_visualizer/dsg", "to": "/hydra/backend/dsg"} not in [
                     c.get("set_remap") for c in g[0]["children"]]:
             f.append("launch: visualizer group wrong: %s" % g)
-        elif {"name": "use_sim_time", "value": True} not in [c.get("set_parameter") for c in g[0]["children"]]:
+        elif {"name": "use_sim_time", "value": "true"} not in [c.get("set_parameter") for c in g[0]["children"]]:
             f.append("launch: visualizer and rviz not on sim time")
     except Exception:                                              # noqa: BLE001
         import traceback

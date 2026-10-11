@@ -213,7 +213,7 @@ launch:
   - group:
       if: $(var visualize)
       children:
-        - set_parameter: {name: use_sim_time, value: true}
+        - set_parameter: {name: use_sim_time, value: 'true'}
         - set_remap: {from: hydra_visualizer/dsg, to: /hydra/backend/dsg}
         - include:
             file: $(find-pkg-share hydra_visualizer)/launch/streaming_visualizer.launch.yaml
