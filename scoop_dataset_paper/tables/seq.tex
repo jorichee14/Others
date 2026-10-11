@@ -1,0 +1,26 @@
+\begin{table*}[t]
+\centering
+\caption{Per-sequence descriptors}
+\label{tab:seq}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}lllll ccc cccc ccc@{}}
+\toprule
+\multicolumn{5}{c}{Design} & \multicolumn{3}{c}{Geometry} &
+\multicolumn{4}{c}{Complementary observations} & \multicolumn{2}{c}{Link, scene} \\
+\cmidrule(r){1-5}\cmidrule(lr){6-8}\cmidrule(lr){9-12}\cmidrule(l){13-14}
+Sequence & Site & Paradigm & Stressor & Ego &
+$C$ & $\beta_{\textsf{inf}}$ & $\beta_{\textsf{pr}}$ & \textsf{Ep.} &
+\textsf{Occ} & \textsf{Ev} RGB-D & \textsf{Ev} LiDAR & Dopp. &
+NLoS (\%) & Obj. \\
+\midrule
+\multirow{2}{*}{\texttt{coop2\_0828}} & \multirow{2}{*}{MIRC} &
+\multirow{2}{*}{co-observation} & \multirow{2}{*}{none} &
+\texttt{m1}$^\ast$ & 0.5 & 149/0.67 & 146/0.74 & 9 (3\textsf{i},2\textsf{p})
+& 0.10 & 0.29 & 0.01 & --- & 33 & 2 \\
+ & & & & \texttt{m2} & 0.5 & 29/0.33 & 145/0.83 & 8 (1\textsf{i},2\textsf{p})
+& 0.02 & 0.39 & --- & --- & 18 & 2 \\
+\bottomrule
+\end{tabular}}
+\end{table*}

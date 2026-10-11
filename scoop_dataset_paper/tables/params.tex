@@ -1,0 +1,34 @@
+\begin{table}[t]
+\centering
+\caption{Pipeline parameters, frozen across sequences.}
+\label{tab:params}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabularx}{\columnwidth}{@{}l>{\raggedright\arraybackslash}X@{}}
+\toprule
+Parameter & Value \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Occlusion}}\\
+\quad occupancy voxel      & \SI{10}{\centi\metre} \\
+\quad rays per object      & 200 per agent and frame \\
+\addlinespace
+\multicolumn{2}{@{}l}{\emph{Evidence floors}}\\
+\quad LiDAR                & 1 point \\
+\quad depth                & 50 points \\
+\quad camera               & \SI{400}{px^2} \\
+\addlinespace
+\multicolumn{2}{@{}l}{\emph{Range caps}}\\
+\quad Ouster, infra        & \SI{20}{\metre} \\
+\quad ZED                  & \SI{4.5}{\metre} \\
+\quad RealSense            & \SI{5}{\metre} \\
+\addlinespace
+\multicolumn{2}{@{}l}{\emph{Link}}\\
+\quad centre frequency     & \SI{5.775}{\giga\hertz} ($\lambda = \SI{5.19}{\centi\metre}$) \\
+\addlinespace
+\multicolumn{2}{@{}l}{\emph{Workarounds}}\\
+\quad outlier removal      & 20 neighbours, $2\sigma$ \\
+\quad sensor self-clearance & \SI{0.6}{\metre} \\
+\quad link endpoint clearance & \SI{0.7}{\metre} \\
+\bottomrule
+\end{tabularx}
+\end{table}

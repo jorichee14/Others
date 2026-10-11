@@ -1,0 +1,19 @@
+\begin{table}[t]
+\centering
+\caption{Calibration residuals on held-out observations.}
+\label{tab:calib}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Transform & Check & Median & p95 \\
+\midrule
+\Ttransform{LiDAR}{Camera}  & board corner reprojection (px) & \todo{} & \todo{} \\
+\Ttransform{LiDAR}{Radar}   & reflector offset (cm)          & \todo{} & \todo{} \\
+\Ttransform{Base}{LiDAR}    & board pose via chain (cm, deg) & \todo{} & \todo{} \\
+\Ttransform{Camera}{Radar}  & reflector offset (cm), infra   & \todo{} & \todo{} \\
+Clock, all clients          & offset to \texttt{mobile\_1} (\si{\micro\second}) & \todo{} & \todo{} \\
+Clock, \texttt{sniffer}     & probe-packet bias (ms)         & \todo{} & \todo{} \\
+\bottomrule
+\end{tabular}
+\end{table}

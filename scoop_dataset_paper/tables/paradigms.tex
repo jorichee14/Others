@@ -1,0 +1,19 @@
+\begin{table}[t]
+\centering
+\caption{Trajectory Paradigms Evaluation}
+\label{tab:paradigms}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}cll@{}}
+\toprule
+\# & Paradigm & Condition \\
+\midrule
+1 & Co-observation     & $\mathrm{visible}(e) \;\wedge\; \text{helper}$ \\
+2 & Occlusion          & $\neg\,\mathrm{visible}(e) \;\wedge\; \text{helper}$ \\
+3 & Handover          & $\lvert \{ i : \mathrm{visible}(i) \} \rvert = 1$ \\
+4 & Link stress             & $\text{helper} \;\wedge\; \mathrm{clear}(e,j^\star) < 0.6$ \\
+5 & Occlusion $\times$ link & $\neg\,\mathrm{visible}(e) \;\wedge\; \text{helper} \;\wedge\; \mathrm{clear}(e,j^\star) < 0.6$ \\
+6 & Unstructured       & none of the above \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,37 @@
+\begin{table*}[!t]
+\caption{Per-Agent Sensor Specifications}
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\setlength{\tabcolsep}{4pt}
+\scriptsize
+\begin{tabular}{@{}p{2.0cm} p{2.6cm} p{5.6cm} p{1.9cm} p{2.1cm} p{1.5cm}@{}}
+\toprule
+\textbf{Equipment} & \textbf{Model Type} & \textbf{Characteristics} & \textbf{Resolution} & \textbf{FoV} & \textbf{Rate} \\
+\midrule
+\multicolumn{6}{@{}l}{\textit{Mobile Agents}} \\
+LiDAR & Ouster OS1-128 & 100 m range & 1024 $\times$ 128 & 45$^\circ$ vert. & 10 Hz \\
+LiDAR & Ouster OS0-64 & 50 m range & 1024 $\times$ 64 & 90$^\circ$ vert. & 10 Hz \\
+Stereo Camera & ZED 2i & RGB stereo, baseline 120 mm & 1920 $\times$ 1080 & 110$^\circ$ $\times$ 70$^\circ$ & 30 Hz \\
+ & & IMU 6-axis, barometer, magnetometer & -- & -- & 400 Hz \\
+RGBD & RealSense D455 & RGB, global shutter & 1280 $\times$ 800 & 90$^\circ$ $\times$ 65$^\circ$ & 30 Hz \\
+ & & Stereo IR, global shutter, baseline 95 mm & 1280 $\times$ 720 & 87$^\circ$ $\times$ 58$^\circ$ & 30 Hz \\
+ & & IMU BMI 055 & -- & -- & 200 Hz \\
+ Radar & TI IWR6843ISK & 60--62 GHz, 3 TX / 4 RX & \shortstack[l]{7.5\,cm range \\ $14.2^\circ$ az., $57^\circ$ el.} & $\pm$60$^\circ$ az., $\pm$20$^\circ$ el & 10 Hz \\
+Radar & TI IWR6843ISK & 62--64 GHz, 3 TX / 4 RX & \shortstack[l]{7.5\,cm range \\ $13.8^\circ$ az., $55^\circ$ el.} & $\pm$60$^\circ$ az., $\pm$20$^\circ$ el & 10 Hz \\
+Radar & TI MMWCAS-RF-EVM & 76--81 GHz, 4$\times$ AWR2243 cascade, 12 TX / 16 RX & \todo{--} & \todo{--} & \todo{--} Hz \\
+CSI extractor & RPi 4B (BCM43455c0) & Nexmon, monitor mode, 80 MHz, 1 antenna & 256 subcarriers & -- & $\sim$100 Hz \\
+Wi-Fi USB Dongle &  D-Link AX1800 & USB, 5 GHz 802.11ac; iw / iperf3 endpoint & -- & -- & 5/1 Hz \\
+Computer &  MIC-713-OX4B2 & NVIDIA Jetson AGX Orin & -- & -- & -- \\
+
+\midrule
+\multicolumn{6}{@{}l}{\textit{Infrastructure Agents}} \\
+RGB Camera & Arducam B0495 & AR0234, color global shutter, M12 lens & 1920 $\times$ 1200 & 95$^\circ$ diag. & 30 Hz \\
+Radar & TI IWR6843ISK & 61.75--64 GHz, 3 TX / 4 RX & \shortstack[l]{7.5\,cm range \\ $13.9^\circ$ az., $56^\circ$ el.} & $\pm$60$^\circ$ az., , $\pm$20$^\circ$ & 10 Hz \\
+CSI extractor & RPi 4B (BCM43455c0) & Nexmon, monitor mode, 80 MHz, 1 antenna & 256 subcarriers & -- & $\sim$100 Hz \\
+Wi-Fi USB Dongle & Edimax N150 & USB, 5 GHz 802.11ac; iw / iperf3 endpoint & -- & -- &  5/1 Hz \\
+
+\bottomrule
+\end{tabular}
+\end{center}
+\label{tab:sensors}
+\end{table*}

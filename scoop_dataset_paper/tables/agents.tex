@@ -1,0 +1,20 @@
+\begin{table}[t]
+\centering
+\caption{Agents and sensing. Full specifications, rates, and
+resolutions are given in the testbed paper \cite{scoop_testbed}.}
+\label{tab:agents}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}l>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\toprule
+Agent & Platform & Sensing and link \\
+\midrule
+\texttt{mobile\_1} & AgileX Scout Mini & Ouster LiDAR, ZED~2i stereo + IMU, 2$\times$ IWR6843 radar, 802.11ac Wi-Fi; carries \texttt{sniffer} (BCM43455c0 CSI) \\
+\texttt{mobile\_2} & Pushcart & RealSense D455 RGB-D + IMU, on-board visual SLAM, Wi-Fi \todo{radar?} \\
+\texttt{infra\_1--3} & Fixed mast & Arducam RGB, IWR6843 radar, Raspberry Pi Wi-Fi \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Per link, every pair:} RSSI, MCS, retries, busy ratio (\SI{5}{\hertz}); \texttt{iperf3} goodput} \\
+\multicolumn{3}{@{}l}{up/down; ICMP RTT (\SI{100}{\hertz}); clock offset (\SI{10}{\hertz}); CSI on two links ($\sim$\SIrange{100}{140}{\hertz})} \\
+\bottomrule
+\end{tabularx}
+\end{table}
