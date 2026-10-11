@@ -21,8 +21,10 @@ there is at most --sigma-max):
   joint ATE       one alignment for both robots: whether their maps agree
   in map          every error also without any alignment: each robot's
                   odometry starts in map at its session anchor
-  odometry        the same for the odometry Hydra was given, at every frame:
-                  the baseline Hydra's loop closures should beat
+  odometry        the same for the odometry Hydra was given, at Hydra's own
+                  poses (the like-for-like baseline: Hydra keeps a pose every
+                  few seconds, and an ATE over fewer poses differs by itself)
+                  and over every frame
   loop closures   how many Hydra found (backend/loop_closures.csv)
 Hydra keeps one map per robot (no inter-robot loop closures: that is
 Hydra-Multi), so there is no time to merge.
@@ -114,8 +116,24 @@ def evaluate(export, run=None, cov=None, sigma_max=0.15, plot=True):
     for r in sorted(gts):
         rr = rep["robots"][r] = {}
         traj = os.path.join(run, "hydra_out_r%d" % r, "backend", "trajectory.csv")
+        bag = os.path.join(export, "bag_r%d" % r)
+        to, po = tf_odometry(bag, r) if os.path.isdir(bag) else (np.zeros(0), np.zeros((0, 3)))
         if os.path.exists(traj):
             t, p = read_trajectory(traj)
+            # the odometry at Hydra's poses (frame stamps: nearest within 10 ms)
+            keep, po_at = [], []
+            for k, s in enumerate(t):
+                if len(to):
+                    j = int(np.argmin(np.abs(to - s)))
+                    if abs(to[j] - s) <= 0.01:
+                        keep.append(k)
+                        po_at.append(po[j])
+            if keep:
+                e, g = matched(r, t[keep], np.array(po_at))
+                a, am = CE.ate(e, g), CE.map_err(e, g)
+                rr["odometry_at_hydra_poses"] = {
+                    "poses": len(e), "ate_rmse_m": a[0] if a else None, "ate_median_m": a[1] if a else None,
+                    "map_rmse_m": am[0] if am else None, "map_median_m": am[1] if am else None}
             e, g = matched(r, t, p)
             a, am = CE.ate(e, g), CE.map_err(e, g)
             rr["hydra"] = {"poses": len(t), "with_ground_truth": len(e),
@@ -127,10 +145,8 @@ def evaluate(export, run=None, cov=None, sigma_max=0.15, plot=True):
             rob_all.append(np.full(len(e), r))
         else:
             rr["hydra"] = None
-        bag = os.path.join(export, "bag_r%d" % r)
-        if os.path.isdir(bag):
-            t, p = tf_odometry(bag, r)
-            e, g = matched(r, t, p)
+        if len(to):
+            e, g = matched(r, to, po)
             a, am = CE.ate(e, g), CE.map_err(e, g)
             rr["odometry"] = {"frames": len(e), "ate_rmse_m": a[0] if a else None,
                               "ate_median_m": a[1] if a else None,
@@ -173,15 +189,15 @@ def report(rep):
     lines = ["joint ATE rmse %s m, median %s m; in map rmse %s m (%d poses with ground truth)"
              % (f(j["ate_rmse_m"]), f(j["ate_median_m"]), f(j["map_rmse_m"]), j["poses"])]
     for r, d in sorted(rep["robots"].items()):
-        h, o = d.get("hydra"), d.get("odometry") or {}
+        h, o, oh = d.get("hydra"), d.get("odometry") or {}, d.get("odometry_at_hydra_poses") or {}
         if not h:
             lines.append("  r%d  no Hydra trajectory" % r)
             continue
-        lines.append("  r%d  ATE rmse %s m (odometry %s m over %s frames); in map %s m (odometry %s m), "
-                     "%d poses; loop closures %s"
-                     % (r, f(h["ate_rmse_m"]), f(o.get("ate_rmse_m")), o.get("frames", "-"), f(h["map_rmse_m"]),
-                        f(o.get("map_rmse_m")), h["poses"], h["loop_closures"] if h["loop_closures"] is not None
-                        else "-"))
+        lines.append("  r%d  ATE rmse %s m (odometry at the same %s poses %s m; over all %s frames %s m); "
+                     "in map %s m (odometry %s m); loop closures %s"
+                     % (r, f(h["ate_rmse_m"]), oh.get("poses", "-"), f(oh.get("ate_rmse_m")), o.get("frames", "-"),
+                        f(o.get("ate_rmse_m")), f(h["map_rmse_m"]), f(oh.get("map_rmse_m")),
+                        h["loop_closures"] if h["loop_closures"] is not None else "-"))
     return "\n".join(lines)
 
 

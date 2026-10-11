@@ -96,7 +96,10 @@ def main():
         if json.load(open(os.path.join(run, "hydra_eval.json")))["robots"]["0"]["hydra"]["loop_closures"] != 2:
             f.append("json")
         txt = HE.report(rep)
-        if "loop closures 2" not in txt or "r1  ATE rmse 0.000 m (odometry 0.000 m" not in txt:
+        oh = r1["odometry_at_hydra_poses"]
+        if oh["poses"] != THE.N - 1 or not oh["ate_rmse_m"] < 1e-4 or abs(oh["map_rmse_m"] - 1.0) > 1e-4:
+            f.append("odometry at hydra poses r1 %s" % oh)
+        if "loop closures 2" not in txt or "r1  ATE rmse 0.000 m (odometry at the same 11 poses 0.000 m" not in txt:
             f.append("report:\n" + txt)
     except Exception:                                              # noqa: BLE001
         import traceback
