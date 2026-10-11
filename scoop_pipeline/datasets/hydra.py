@@ -30,7 +30,9 @@ Writes <out> (default: next to the export, datasets/hydra/<name>):
                   graph and trajectory when it stops; it stops by itself when
                   the bag ends, exit_after_clock), enable_lcd (Hydra's loop
                   closure detection, on by default: without it the optimized
-                  trajectory is the odometry) and visualize:=true
+                  trajectory is the odometry), dsg_topic (where the stream
+                  goes; slam/run_hydra.sh gives robot i /r<i>/hydra/backend/dsg)
+                  and visualize:=true
                   (hydra_visualizer + rviz on the scene-graph stream)
   gt_r<i>.tum     the colour camera in map (the export's), for the evaluation
   report.txt
@@ -184,6 +186,7 @@ launch:
   - arg: {name: visualize, default: 'false', description: hydra_visualizer + rviz on hydra/backend/dsg}
   - arg: {name: exit_after_clock, default: 'true', description: stop and save when the bag clock stops}
   - arg: {name: enable_lcd, default: 'true', description: scene-graph loop closure detection}
+  - arg: {name: dsg_topic, default: /hydra/backend/dsg, description: where the scene-graph stream goes}
   - arg: {name: lcd_config, default: $(find-pkg-share hydra)/config/lcd/default.yaml}
 
   - node:
@@ -208,6 +211,7 @@ launch:
   - set_remap: {from: hydra/input/frontleft/rgb/camera_info, to: /camera/color/camera_info}
   - set_remap: {from: hydra/input/frontleft/depth_registered/image_rect, to: /camera/depth/image_rect}
   - set_remap: {from: hydra/input/frontleft/semantic/image_raw, to: /frontleft/semantic/image_raw}
+  - set_remap: {from: /hydra/backend/dsg, to: $(var dsg_topic)}
   - node:
       pkg: hydra_ros
       exec: hydra_ros_node
@@ -227,7 +231,7 @@ launch:
       if: $(var visualize)
       children:
         - set_parameter: {name: use_sim_time, value: 'true'}
-        - set_remap: {from: hydra_visualizer/dsg, to: /hydra/backend/dsg}
+        - set_remap: {from: hydra_visualizer/dsg, to: $(var dsg_topic)}
         - include:
             file: $(find-pkg-share hydra_visualizer)/launch/streaming_visualizer.launch.yaml
             arg:

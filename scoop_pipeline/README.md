@@ -75,7 +75,9 @@ analysis/            measuring results; reads outputs, writes nothing back
   mapping/scan_consistency.py  why walls are thick: noise floor, timing offset,
                      deskew, drift -- from ~200 scans of the bag + trajectory
   (slam/channel_relay.py: ROS 2 relay between robot domains through scoop/channel.py;
-   slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel)
+   slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel;
+   slam/run_hydra.sh <hydra export> <channel>: every robot's Hydra streaming its
+   scene graph to a server through the channel, one run per channel)
   slam/cslam_eval.py  Swarm-SLAM run against the ground truth: ATE per robot and joint,
                      inter-robot loop closures checked, time to merge, bytes exchanged
   slam/hydra_eval.py  Hydra against the ground truth as cslam_eval does Swarm-SLAM: ATE per
@@ -117,7 +119,8 @@ tests/               self-tests, no real bag needed
   test_channel.py    link_trace + channel: hops, own test not counted twice, cross traffic,
                      outage, stall, queue, synthetic and fitted channels
   test_channel_relay.py  channel_relay: messages held to their arrival, outage dropped,
-                     never back to the sender, every message logged
+                     never back to the sender, every message logged; MB updates to a
+                     server queued per robot uplink
   test_cslam_eval.py cslam_eval: keys to robots, ATE, wrong loop closure flagged, merge time
   test_swarm_slam.py swarm_slam: topics, intrinsics, registered depth, odometry in the
                      robot's odom frame at the image stamp, ground truth

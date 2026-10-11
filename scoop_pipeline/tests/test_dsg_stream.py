@@ -37,6 +37,21 @@ def main():
         out = D.plot(p, goodput=175)
         if not os.path.getsize(out) > 1000:
             f.append("no figure")
+        # several streams in one file: --topic picks one, none given refuses
+        p2 = os.path.join(tmp, "server.csv")
+        with open(p2, "w") as fh:
+            fh.write("t,t_recv,bytes,topic\n")
+            for k in range(4):
+                fh.write("%d.0,%d.5,%d,/r0/hydra/backend/dsg\n" % (100 + k, 100 + k, 1000 * (k + 1)))
+                fh.write("%d.2,%d.7,%d,/r1/hydra/backend/dsg\n" % (100 + k, 100 + k, 5000 * (k + 1)))
+        t1, b1 = D.load(p2, "/r1/hydra/backend/dsg")
+        if b1 != [5000, 10000, 15000, 20000] or abs(t1[0] - 100.2) > 1e-9:
+            f.append("--topic r1: %s %s" % (t1, b1))
+        try:
+            D.load(p2)
+            f.append("two streams without --topic did not refuse")
+        except SystemExit:
+            pass
     except Exception:                                              # noqa: BLE001
         import traceback
         f.append(traceback.format_exc())

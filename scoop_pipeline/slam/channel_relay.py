@@ -9,7 +9,8 @@ dropping it.
         [--log relay.csv] [--seed 0]
 
 Robot i is in ROS domain --domains[i] (default i) and is --robots[i] for the
-channel. A topic matching --topics is carried from domain A to domain B when
+channel; a name with no measured link (e.g. "server", slam/run_hydra.sh's
+receiver of every robot's scene graph) is one hop from a robot, its uplink. A topic matching --topics is carried from domain A to domain B when
 A has a publisher on it (other than the relay) and B has a subscriber (other
 than the relay), so only what the robots really exchange is carried
 (Swarm-SLAM: /cslam/local_descriptors, /cslam/inter_robot_loop_closure,

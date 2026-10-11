@@ -60,6 +60,19 @@ def main():
             f.append("log: %d rows, %s lost (want 3, 1)" % (len(rows), [x["lost"] for x in rows]))
         if any(x["src"] == x["dst"] for x in rows):
             f.append("a robot was sent its own message")
+        # Hydra: both robots stream 5 MB updates to "server" (one hop, the robot's uplink) with ,queue
+        #   mobile_1 at 45 s: RTT 4 ms, up 100 Mbit/s -> 0.4 s + 2 ms; its second update (45.1 s)
+        #   waits for the first -> 45.802; mobile_2: RTT 10 ms, up 50 Mbit/s -> 0.8 s + 5 ms, on its own link
+        q = CR.Relay(CH.make("logged:%s,queue" % proc), ["mobile_1", "mobile_2", "server"])
+        q.send(T + 45.0, 0, "/r0/hydra/backend/dsg", b"a" * 5000000, [2])
+        q.send(T + 45.1, 0, "/r0/hydra/backend/dsg", b"b" * 5000000, [2])
+        q.send(T + 45.0, 1, "/r1/hydra/backend/dsg", b"c" * 5000000, [2])
+        arr = sorted((row[7] - T, row[2]) for *_, row in q.heap)
+        want = [(45.402, "mobile_1"), (45.802, "mobile_1"), (45.805, "mobile_2")]
+        if len(arr) != 3 or any(abs(a_[0] - w[0]) > 1e-6 or a_[1] != w[1] for a_, w in zip(arr, want)):
+            f.append("to the server with ,queue: %s, want %s" % (arr, want))
+        if any(d != 2 for d, *_ in q.due(T + 46.0)):
+            f.append("a server update went to a robot")
         v = CR.Relay(CH.make("v2xvit"), ["a", "b"])
         v.send(5.0, 1, "/cslam/x", b"q", [0])
         if v.due(5.099) or len(v.due(5.1001)) != 1:

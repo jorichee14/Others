@@ -5,13 +5,15 @@ its size grows with the map; this logs each update's size against bag time
 and plots it.
 
     # inside Hydra's container, while the bag plays (rclpy, hydra_msgs):
-    python3 dsg_stream.py log  [--topic /hydra/backend/dsg] [--out dsg_stream.csv]
+    python3 dsg_stream.py log  [--topic /hydra/backend/dsg ...] [--out dsg_stream.csv]
     # anywhere (matplotlib):
-    python3 dsg_stream.py plot dsg_stream.csv [--goodput 175] [--out dsg_stream.png]
+    python3 dsg_stream.py plot dsg_stream.csv [--topic T] [--goodput 175] [--out dsg_stream.png]
 
 log: one CSV row per update, written as it arrives: t (its header stamp, s,
 bag time), t_recv (receipt on the node's clock: bag time under --clock), bytes
-(the serialized message, what a link would carry). Stop it with Ctrl-C.
+(the serialized message, what a link would carry), topic. --topic again for
+more streams in one file (slam/run_hydra.sh's server logs every robot's).
+Stop it with Ctrl-C.
 
 plot: the update size (MB) and the rate it asks of a link at real time
 (Mbit/s: size x 8 over the bag time since the previous update), against bag
@@ -26,7 +28,7 @@ import struct
 import sys
 
 
-def log(topic, out):
+def log(topics, out):
     import rclpy
     from rclpy.node import Node
     from rclpy.parameter import Parameter
@@ -37,21 +39,24 @@ def log(topic, out):
     node = Node("dsg_stream_logger", parameter_overrides=[Parameter("use_sim_time", value=True)])
     fh = open(out, "w", newline="")
     w = csv.writer(fh)
-    w.writerow(["t", "t_recv", "bytes"])
+    w.writerow(["t", "t_recv", "bytes", "topic"])
     n = [0]
 
-    def cb(raw):
-        # CDR: 4 bytes encapsulation, then the header's stamp (int32 sec, uint32 nanosec)
-        sec, nsec = struct.unpack_from("<iI", raw, 4)
-        now = node.get_clock().now().nanoseconds * 1e-9
-        w.writerow(["%.6f" % (sec + nsec * 1e-9), "%.6f" % now, len(raw)])
-        fh.flush()
-        n[0] += 1
-        node.get_logger().info("update %d: %.2f MB" % (n[0], len(raw) / 1e6))
+    def on(topic):
+        def cb(raw):
+            # CDR: 4 bytes encapsulation, then the header's stamp (int32 sec, uint32 nanosec)
+            sec, nsec = struct.unpack_from("<iI", raw, 4)
+            now = node.get_clock().now().nanoseconds * 1e-9
+            w.writerow(["%.6f" % (sec + nsec * 1e-9), "%.6f" % now, len(raw), topic])
+            fh.flush()
+            n[0] += 1
+            node.get_logger().info("update %d: %.2f MB on %s" % (n[0], len(raw) / 1e6, topic))
+        return cb
 
-    node.create_subscription(DsgUpdate, topic, cb, QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE),
-                             raw=True)
-    node.get_logger().info("logging %s to %s (Ctrl-C to stop)" % (topic, out))
+    for topic in topics:
+        node.create_subscription(DsgUpdate, topic, on(topic),
+                                 QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE), raw=True)
+    node.get_logger().info("logging %s to %s (Ctrl-C to stop)" % (", ".join(topics), out))
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -61,8 +66,14 @@ def log(topic, out):
         print("%d updates in %s" % (n[0], out))
 
 
-def load(path):
+def load(path, topic=None):
+    """(stamps, bytes) of one stream in time order; topic picks one of several."""
     rows = [r for r in csv.DictReader(open(path))]
+    have = sorted({r.get("topic") or "" for r in rows})
+    if topic:
+        rows = [r for r in rows if r.get("topic") == topic]
+    elif len(have) > 1:
+        sys.exit("%s holds %s: pick one with --topic" % (path, ", ".join(have)))
     t = [float(r["t"]) for r in rows]
     b = [int(r["bytes"]) for r in rows]
     order = sorted(range(len(t)), key=t.__getitem__)
@@ -78,12 +89,12 @@ def series(t, b):
     return x, mb, rate
 
 
-def plot(path, out=None, goodput=None):
+def plot(path, out=None, goodput=None, topic=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    t, b = load(path)
+    t, b = load(path, topic)
     if len(t) < 2:
         sys.exit("%s: fewer than 2 updates" % path)
     x, mb, rate = series(t, b)
@@ -124,17 +135,19 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     lg = sub.add_parser("log")
-    lg.add_argument("--topic", default="/hydra/backend/dsg")
+    lg.add_argument("--topic", action="append", default=None, help="a stream (again for more; "
+                    "default /hydra/backend/dsg)")
     lg.add_argument("--out", default="dsg_stream.csv")
     pl = sub.add_parser("plot")
     pl.add_argument("csv")
     pl.add_argument("--out", default=None)
     pl.add_argument("--goodput", type=float, default=None, help="a link's goodput to draw (Mbit/s)")
+    pl.add_argument("--topic", default=None, help="which stream, when the file holds several")
     a = ap.parse_args()
     if a.cmd == "log":
-        log(a.topic, a.out)
+        log(a.topic or ["/hydra/backend/dsg"], a.out)
     else:
-        plot(a.csv, a.out, a.goodput)
+        plot(a.csv, a.out, a.goodput, a.topic)
 
 
 if __name__ == "__main__":

@@ -139,7 +139,8 @@ def main():
                   "hydra/input/frontleft/depth_registered/image_rect, to: /camera/depth/image_rect",
                   "closed_set_node", "use_sim_time, value: true",
                   "exit_after_clock: $(var exit_after_clock)", "{enable_lcd: $(var enable_lcd)}",
-                  "--config-utilities-file $(var lcd_config)"):
+                  "--config-utilities-file $(var lcd_config)",
+                  "set_remap: {from: /hydra/backend/dsg, to: $(var dsg_topic)}"):
             if s not in L:
                 f.append("launch lacks %r" % s)
         try:
@@ -178,7 +179,7 @@ def main():
             f.append("launch has no visualize arg")
         g = [a_["group"] for a_ in acts if "group" in a_]
         if not g or g[0].get("if") != "$(var visualize)" or \
-                {"from": "hydra_visualizer/dsg", "to": "/hydra/backend/dsg"} not in [
+                {"from": "hydra_visualizer/dsg", "to": "$(var dsg_topic)"} not in [
                     c.get("set_remap") for c in g[0]["children"]]:
             f.append("launch: visualizer group wrong: %s" % g)
         elif {"name": "use_sim_time", "value": "true"} not in [c.get("set_parameter") for c in g[0]["children"]]:
