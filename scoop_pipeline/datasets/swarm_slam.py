@@ -82,7 +82,10 @@ CONFIG = """/**:
       global_descriptors_topic: "global_descriptors"
       image_crop_size: %(crop)d
       intra_loop_min_inbetween_keyframes: 8
-      pnp_min_inliers: 100
+      # rtabmap runs PnP only on at least this many feature matches: two different
+      # cameras (ZED, RealSense) give 20-100 at the same place, never 100
+      # (realsense_rgbd.yaml's value, for one camera model); Swarm-SLAM's stereo configs use 18-20
+      pnp_min_inliers: 20
       detection_publication_period_sec: 1.0
       detection_publication_max_elems_per_msg: 10
       enable_intra_robot_loop_closures: true
