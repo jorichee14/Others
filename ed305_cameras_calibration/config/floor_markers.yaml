@@ -1,0 +1,19 @@
+# Surveyed floor markers that tie the cameras to the ROOM FRAME.
+# Room frame: origin at a marked floor corner, X along one wall, Y along the other, Z up (metres).
+# Measure each tag CENTRE with a laser distance meter from the two walls (or read it off the
+# LiDAR room map). yaw_deg: angle of the tag's +x edge from the room X axis, 0 if the tag is
+# taped square to the walls. Put 8 to 12 tags spread over the floor, more near the centre.
+# Edit the numbers below; the ids are the AprilTag ids printed by make_boards.py.
+markers:
+  - {id: 0, x: 1.00, y: 1.00, yaw_deg: 0}
+  - {id: 1, x: 3.00, y: 1.00, yaw_deg: 0}
+  - {id: 2, x: 5.00, y: 1.00, yaw_deg: 0}
+  - {id: 3, x: 1.00, y: 3.00, yaw_deg: 0}
+  - {id: 4, x: 3.00, y: 3.00, yaw_deg: 0}
+  - {id: 5, x: 5.00, y: 3.00, yaw_deg: 0}
+  - {id: 6, x: 1.00, y: 5.00, yaw_deg: 0}
+  - {id: 7, x: 3.00, y: 5.00, yaw_deg: 0}
+  - {id: 8, x: 5.00, y: 5.00, yaw_deg: 0}
+  - {id: 9, x: 2.00, y: 2.00, yaw_deg: 0}
+  - {id: 10, x: 4.00, y: 4.00, yaw_deg: 0}
+  - {id: 11, x: 2.00, y: 4.00, yaw_deg: 0}

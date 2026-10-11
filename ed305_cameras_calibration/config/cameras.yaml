@@ -1,0 +1,24 @@
+# ED305 cameras (wiki: equipment/ed305-cameras). Basler ace2 a2A1920-51gcBAS, 1920x1080, 30 fps,
+# H.264 over RTSP from the two camera hosts. Reading a stream does not disturb the live wall.
+hosts:
+  right: 192.168.1.13   # cams 3 6 8 10 12 13 15 16
+  left:  192.168.1.56   # cams 1 2 4 5 7 9 11 14
+cameras:
+  1:  rtsp://192.168.1.56:8554/cam_1
+  2:  rtsp://192.168.1.56:8554/cam_2
+  3:  rtsp://192.168.1.13:8554/cam_3
+  4:  rtsp://192.168.1.56:8554/cam_4
+  5:  rtsp://192.168.1.56:8554/cam_5
+  6:  rtsp://192.168.1.13:8554/cam_6
+  7:  rtsp://192.168.1.56:8554/cam_7
+  8:  rtsp://192.168.1.13:8554/cam_8
+  9:  rtsp://192.168.1.56:8554/cam_9
+  10: rtsp://192.168.1.13:8554/cam_10
+  11: rtsp://192.168.1.56:8554/cam_11
+  12: rtsp://192.168.1.13:8554/cam_12
+  13: rtsp://192.168.1.13:8554/cam_13
+  14: rtsp://192.168.1.56:8554/cam_14
+  15: rtsp://192.168.1.13:8554/cam_15
+  16: rtsp://192.168.1.13:8554/cam_16
+# Where the cameras are (top view, door top-left): 1-4 left wall, 5-8 right wall,
+# 9-12 ceiling upper row, 13-16 ceiling lower row. All aim at the floor point under 10/11.
