@@ -790,8 +790,8 @@ behind the specification sheet of Table~\ref{tab:spec}. Each opens
 with its question and its pass criterion, fixed before the data were
 read, gives the answer the recordings in hand support, and states what
 remains to be collected. Table~\ref{tab:questions} summarizes all
-seven questions, and Table~\ref{tab:results} lists every measured term
-behind the answers with its pass and verdict. Unless stated otherwise, numbers come from the
+seven questions; Tables~\ref{tab:res_q1}--\ref{tab:res_q5} list, per
+question, the terms answered and the terms still needed. Unless stated otherwise, numbers come from the
 24 September session at site 1 (MIRC 1F): the mapping pass
 \texttt{mapping\_A}, the survey pass \texttt{survey\_1} in which
 one agent owns the channel, and the cooperation pass \texttt{coop\_2}
@@ -800,10 +800,9 @@ in which both robots move and contend.
 \input{tables/spec}
 
 \input{tables/questions}
-
-\input{tables/results}
-% RA-L budget: tables/results.tex is the working ledger; fold its rows into
-% the spec sheet and the E1-E5 paragraphs at camera-ready and drop the float.
+% RA-L budget: the per-question result tables (tables/results_q1..q5.tex) are
+% the working ledger; fold them into the spec sheet and the E1-E5 paragraphs
+% at camera-ready and drop the floats.
 
 \subsection{E1 Headroom: The Testbed Is Finer Than What It Measures}
 \emph{Question.} Is the testbed finer than the effects it is meant to
@@ -845,6 +844,8 @@ margin per term.
 
 \input{figures/headroom}
 
+\input{tables/results_q1}
+
 \subsection{E2 Map Meets Radio: Two Independent References Agree}
 \emph{Question.} Are the poses and the link logs right, if neither is
 checked by hand? \emph{Pass.} Pooled Spearman $\rho$ between clearance
@@ -885,6 +886,8 @@ signal (Fig.~\ref{fig:clearance}).
 
 \input{figures/clearance}
 
+\input{tables/results_q2}
+
 \subsection{E3 Twin Run: Replay Matches the Real Link}
 \emph{Question.} Does replaying a logged link reproduce what the real
 link does? \emph{Pass.} Agreement of at least 90\,\% on which receiver
@@ -915,6 +918,8 @@ agreement, with the synthetic channel on the same axes.
 
 % RA-L budget: E3 shares a figure with E5 (figures/simgap.tex, two panels)
 
+\input{tables/results_q3}
+
 \subsection{E4 Same Knob, Same Link: A Setting Reproduces Its Condition}
 \emph{Question.} If the same condition is set on another day, is the
 same link obtained? \emph{Pass.} The day-to-day distance between link
@@ -935,6 +940,8 @@ mode distance from the two existing passes; one repeat of the same
 route and modes on another day, which the E3 session provides; and the
 table of day distance against mode distance for RTT, goodput, and
 RSSI on the shared grid.
+
+\input{tables/results_q4}
 
 \subsection{E5 Sim Gap: What a Synthetic Channel Hides}
 \emph{Question.} Why not simulate the link? This is a demonstration
@@ -975,6 +982,8 @@ measurement itself adds from the queueing the team would face.
 Detection-level consequences are reported in \cite{scoop_dataset}.
 
 \input{figures/simgap}
+
+\input{tables/results_q5}
 
 %=======================================================================
 \section{Lessons Learned and Limitations}

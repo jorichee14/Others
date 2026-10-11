@@ -1,0 +1,31 @@
+\begin{table}[t]
+\centering
+\caption{Q1 Is it precise? Each term against the breaking point of its
+kind: \SI{0.2}{\metre} for pose, one LiDAR frame (\SI{0.1}{\metre} at
+\SI{1}{\metre\per\second}) for time. Pass at $\geq 10\times$.}
+\label{tab:res_q1}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}>{\raggedright\arraybackslash}X l r@{}}
+\toprule
+Term & Value & Margin \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Answered}} \\
+Clock offset, measured (coop\_2) & \SI{0.99}{\milli\second} & $101\times$ \\
+Clock offset, strict bound (coop\_2) & \SI{12}{\milli\second} & $8.3\times$ short \\
+Map refinement, final correction & \SI{0.15}{\centi\metre} & $133\times$ \\
+Map repeatability, four weeks apart & \SI{1.06}{\centi\metre} & $19\times$ \\
+Board detector vs.\ pipeline & \SI{8.1}{} / \SI{8.3}{\milli\metre} & $24\times$ \\
+RGB-D cart vs.\ held-out boards (coop\_2) & \SI{3.1}{\centi\metre} & $6.5\times$ short \\
+LiDAR robot vs.\ held-out boards (coop2\_0828) & \SI{10.0}{\milli\metre} & $20\times$ \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Still needed}} \\
+LiDAR robot vs.\ boards on coop\_2 & \multicolumn{2}{l}{\texttt{board\_table.py}} \\
+Radar reflector residual, mobile and mast & \multicolumn{2}{l}{held-out positions} \\
+LiDAR--camera reprojection per range & \multicolumn{2}{l}{mapping-session boards} \\
+Sniffer clock bias & \multicolumn{2}{l}{probe stamps} \\
+Measured p95 agent speed & \multicolumn{2}{l}{reference tracks} \\
+Control distances, map $-$ rangefinder & \multicolumn{2}{l}{per site} \\
+\bottomrule
+\end{tabularx}
+\end{table}

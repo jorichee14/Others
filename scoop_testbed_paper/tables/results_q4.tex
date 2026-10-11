@@ -1,0 +1,21 @@
+\begin{table}[t]
+\centering
+\caption{Q4 Is it repeatable? Pass: day-to-day distance below half the
+survey-to-cooperation distance, for RTT and goodput.}
+\label{tab:res_q4}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}>{\raggedright\arraybackslash}X l l@{}}
+\toprule
+Half & Value & Verdict \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Answered}} \\
+Frame across days (two maps, four weeks apart) & \SI{1.06}{\centi\metre}, scale $2\times10^{-5}$ & pass \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Still needed}} \\
+Mode distance, survey\_1 vs.\ coop\_2 & \multicolumn{2}{l}{\texttt{link\_repeat.py}, data in hand} \\
+Repeat day, same route and modes & \multicolumn{2}{l}{from the E3 session} \\
+Day-vs-mode ratio, RTT and goodput & \multicolumn{2}{l}{\texttt{link\_repeat.py --against}} \\
+\bottomrule
+\end{tabularx}
+\end{table}

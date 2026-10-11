@@ -1,0 +1,26 @@
+\begin{table}[t]
+\centering
+\caption{Q5 Is it necessary? \SI{1.5}{\mega\byte} messages through the
+logged link against the synthetic channels of prior benchmarks.
+Demonstration, no pass criterion.}
+\label{tab:res_q5}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}>{\raggedright\arraybackslash}X l@{}}
+\toprule
+Quantity & Value \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Answered}} \\
+In frame, one robot (survey\_1) & 86\,\% \\
+In frame, two robots contending (coop\_2) & \SIrange{59}{68}{\percent} \\
+In frame, synthetic (V2X-ViT \SI{100}{\milli\second}; Where2comm none) & 100\,\% \\
+RTT idle $\rightarrow$ under load (coop\_2) & \SIrange{5}{10}{} $\rightarrow$ \SIrange{25}{33}{\milli\second} \\
+Real outages (coop2\_0828) & 3, 12\,\% of frames \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Still needed}} \\
+Best-fit synthetic baseline & fit to measured delays \\
+More passes, second site & rerun \texttt{sim\_gap.py} \\
+Probe-off control run & one run in the session \\
+\bottomrule
+\end{tabularx}
+\end{table}
