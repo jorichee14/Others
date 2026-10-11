@@ -28,7 +28,9 @@ Writes <out> (default: next to the export, datasets/hydra/<name>):
                   Hydra on the bag's topics, sim time; args robot_id, config
                   (a hydra_r<i>.yaml), log_path (where Hydra saves its scene
                   graph and trajectory when it stops; it stops by itself when
-                  the bag ends, exit_after_clock) and visualize:=true
+                  the bag ends, exit_after_clock), enable_lcd (Hydra's loop
+                  closure detection, on by default: without it the optimized
+                  trajectory is the odometry) and visualize:=true
                   (hydra_visualizer + rviz on the scene-graph stream)
   gt_r<i>.tum     the colour camera in map (the export's), for the evaluation
   report.txt
@@ -176,6 +178,8 @@ launch:
   - arg: {name: labelspace_name, default: ade20k_mit}
   - arg: {name: visualize, default: 'false', description: hydra_visualizer + rviz on hydra/backend/dsg}
   - arg: {name: exit_after_clock, default: 'true', description: stop and save when the bag clock stops}
+  - arg: {name: enable_lcd, default: 'true', description: scene-graph loop closure detection}
+  - arg: {name: lcd_config, default: $(find-pkg-share hydra)/config/lcd/default.yaml}
 
   - node:
       pkg: semantic_inference_ros
@@ -208,6 +212,8 @@ launch:
       args: >-
         --config-utilities-file $(var config)
         --config-utilities-file $(find-pkg-share hydra)/config/label_spaces/$(var labelspace_name)_label_space.yaml
+        --config-utilities-yaml {enable_lcd: $(var enable_lcd)}
+        --config-utilities-file $(var lcd_config)
         --config-utilities-yaml {print_missing: false, show_config: true, verbosity: 2}
         --config-utilities-yaml {log_path: $(var log_path), exit_after_clock: $(var exit_after_clock)}
         --config-utilities-yaml {glog_level: 0, glog_verbosity: 0}

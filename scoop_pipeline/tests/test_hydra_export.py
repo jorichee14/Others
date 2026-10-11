@@ -131,7 +131,8 @@ def main():
         for s in ("hydra/input/frontleft/rgb/image_raw, to: /camera/color/image_raw",
                   "hydra/input/frontleft/depth_registered/image_rect, to: /camera/depth/image_rect",
                   "closed_set_node", "use_sim_time, value: true",
-                  "exit_after_clock: $(var exit_after_clock)"):
+                  "exit_after_clock: $(var exit_after_clock)", "{enable_lcd: $(var enable_lcd)}",
+                  "--config-utilities-file $(var lcd_config)"):
             if s not in L:
                 f.append("launch lacks %r" % s)
         try:
