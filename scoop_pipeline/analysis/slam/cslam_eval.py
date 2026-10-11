@@ -192,6 +192,17 @@ def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), 
             continue
         V, E = read_g2o(path)
         keys = [k for k in V if gt_of(k) is not None]
+        if not keys:
+            ks = [k for k in V if k in st]
+            for r in sorted({key_robot(k)[0] for k in V}):
+                kr = [st[k] for k in ks if key_robot(k)[0] == r]
+                print("%s graph, r%d: %d keyframes, %d with a stamp %s; ground truth %s" % (
+                    which, r, sum(key_robot(k)[0] == r for k in V), len(kr),
+                    "%.3f..%.3f" % (min(kr), max(kr)) if kr else "",
+                    "%.3f..%.3f (%d)" % (gts[r][0][0], gts[r][0][-1], len(gts[r][0])) if r in gts else "none"))
+            print("  first keys in the graph: %s; in pose_timestamps: %s" % (
+                [hex(k) for k in list(V)[:3]], [hex(k) for k in list(st)[:3]]))
+            raise SystemExit("no keyframe of %s matched to the ground truth (stamps within 10 ms)" % path)
         est = np.array([V[k][:3, 3] for k in keys])
         gt = np.array([gt_of(k)[:3, 3] for k in keys])
         rob = np.array([key_robot(k)[0] for k in keys])
