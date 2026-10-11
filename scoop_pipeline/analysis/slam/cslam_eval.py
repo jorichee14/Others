@@ -326,12 +326,19 @@ def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), 
                     continue
                 D = np.linalg.inv(Tm) @ np.linalg.inv(Ga) @ Gb
                 et, er = float(np.linalg.norm(D[:3, 3])), rot_deg(D[:3, :3])
+                # how far the optimized graph is from this measurement: kept, or outvoted
+                Dk = np.linalg.inv(Tm) @ np.linalg.inv(V[a]) @ V[b] if a in V and b in V else None
                 lcs.append({"robots": [ra, rb], "checked": True, "t_err_m": et, "r_err_deg": er,
                             "correct": bool(et <= lc_ok[0] and er <= lc_ok[1]),
+                            "residual_m": float(np.linalg.norm(Dk[:3, 3])) if Dk is not None else None,
                             "stamps": [st.get(a), st.get(b)]})
             ck = [x for x in lcs if x["checked"]]
+            kept = [x for x in ck if x["residual_m"] is not None and x["residual_m"] <= lc_ok[0]]
             rep["inter_robot_loop_closures"] = {
                 "total": len(lcs), "checked": len(ck), "correct": sum(x["correct"] for x in ck),
+                "kept": len(kept), "correct_kept": sum(x["correct"] for x in kept),
+                "residual_median_m": float(np.median([x["residual_m"] for x in ck
+                                                      if x["residual_m"] is not None])) if ck else None,
                 "t_err_median_m": float(np.median([x["t_err_m"] for x in ck])) if ck else None,
                 "r_err_median_deg": float(np.median([x["r_err_deg"] for x in ck])) if ck else None,
                 "edges": lcs}
@@ -430,8 +437,10 @@ def main():
                  fmt(lg.get("total_nb_successful_matches"), 0)))
     lc = rep.get("inter_robot_loop_closures") or {}
     print("inter-robot loop closures: %s, %s checked against the ground truth, %s correct "
-          "(median %s m, %s deg)" % (lc.get("total", 0), lc.get("checked", 0), lc.get("correct", 0),
-                                     fmt(lc.get("t_err_median_m")), fmt(lc.get("r_err_median_deg"), 1)))
+          "(median %s m, %s deg); the optimized graph keeps %s of them (%s correct; median "
+          "residual %s m)" % (lc.get("total", 0), lc.get("checked", 0), lc.get("correct", 0),
+                              fmt(lc.get("t_err_median_m")), fmt(lc.get("r_err_median_deg"), 1),
+                              lc.get("kept", 0), lc.get("correct_kept", 0), fmt(lc.get("residual_median_m"))))
     rc = rep.get("rejected_candidates") or {}
     if rc.get("total"):
         print("rejected candidates: %d, %d with ground truth: %d at the same place (<= 3 m, 30 deg); "

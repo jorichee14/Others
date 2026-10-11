@@ -146,6 +146,9 @@ def main():
         if not 0.4 < ini["joint_ate_rmse_m"] < 0.6:
             f.append("initial joint ATE %.3f m, want ~0.5 (robot 1 1 m off)" % ini["joint_ate_rmse_m"])
         lc = rep["inter_robot_loop_closures"]
+        if (lc["kept"], lc["correct_kept"]) != (1, 1):
+            f.append("kept by the graph %s, correct %s (want 1, 1: the true edge agrees with the "
+                     "optimized poses, the 2 m wrong one does not)" % (lc["kept"], lc["correct_kept"]))
         if (lc["total"], lc["checked"], lc["correct"]) != (2, 2, 1):
             f.append("loop closures %s" % {k: lc[k] for k in ("total", "checked", "correct")})
         if abs(rep["time_to_merge_s"] - 39 * 0.5) > 1e-3:
