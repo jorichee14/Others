@@ -129,7 +129,8 @@ def main():
             lo, hi = H.RANGE[machine]
             for s in ("robot_id: %d" % i, "odom_frame: r%d/odom" % i, "robot_frame: r%d/base" % i,
                       "sensor_frame: r%d/camera" % i, "map_frame: map", "serialize_dsg_mesh: true",
-                      "min_dsg_separation_s: 1", "max_range: %g" % hi, "min_range: %g" % lo):
+                      "min_dsg_separation_s: 1", "max_range: %g" % hi, "min_range: %g" % lo,
+                      "type: gvd", "type: UpdatePlacesFunctor"):
                 if s not in y:
                     f.append("hydra_r%d.yaml lacks %r" % (i, s))
             if open(os.path.join(out, "gt_r%d.tum" % i)).read() != "%d 0 0 0 0 0 0 1\n" % i:

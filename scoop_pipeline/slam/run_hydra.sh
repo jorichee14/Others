@@ -80,7 +80,19 @@ for ((i = 0; i < N; i++)); do
       > "$RUN/play_r$i.log" 2>&1 & PLAY+=($!)
 done
 T0=$SECONDS
-wait ${PLAY[@]}
+# while the bags play, stop at once if a Hydra dies (the run is no use then)
+while :; do
+  alive=0
+  for p in ${PLAY[@]}; do kill -0 $p 2>/dev/null && alive=1; done
+  (( alive )) || break
+  for ((i = 0; i < N; i++)); do
+    if grep -q "process has died" "$RUN/hydra_r$i.log"; then
+      echo "Hydra r$i died $((SECONDS - T0)) s into the bags: $(grep -m1 -E "what\(\)|terminate called|\[FATAL\]" "$RUN/hydra_r$i.log")"
+      echo "  see $RUN/hydra_r$i.log"; exit 1
+    fi
+  done
+  sleep 5
+done
 if (( SECONDS - T0 < 20 )); then
   echo "the bags played for $((SECONDS - T0)) s: nothing was played (check ros2 bag info $OUT/bag_r0)"; exit 1
 fi
