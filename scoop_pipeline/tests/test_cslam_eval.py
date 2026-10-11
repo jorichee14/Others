@@ -157,6 +157,28 @@ def main():
         if not od[0]["map_rmse_m"] > 1.0:
             f.append("odometry in map %.3f m: robot 0's is in cslam's frame, %.1f m from map"
                      % (od[0]["map_rmse_m"], np.linalg.norm(W[:3, 3])))
+        # keyframe stamps recorded by run_swarm_slam.sh (cslam's KeyframeOdom)
+        from rosbags.typesys import get_types_from_msg
+        from scoop import rosmsg
+        KO = "cslam_common_interfaces/msg/KeyframeOdom"
+        if KO not in rosmsg.typestore().types:
+            rosmsg.typestore().register(get_types_from_msg(
+                "uint32 id\nnav_msgs/Odometry odom\nsensor_msgs/NavSatFix gps\n", KO))
+        NavSatFix = rosmsg.msg_type("sensor_msgs/msg/NavSatFix")
+        NSS = rosmsg.msg_type("sensor_msgs/msg/NavSatStatus")
+        w = BagWriter(os.path.join(tmp, "keyframes_r1"))
+        for i in (4, 7):
+            tn = int(round(st[key(1, i)] * 1e9))
+            w.write("/r1/cslam/keyframe_odom", rosmsg.msg_type(KO)(
+                id=i, odom=SS.odometry(np.eye(4), "r1/odom", "r1/camera", tn),
+                gps=NavSatFix(header=rosmsg.header(0, ""), status=NSS(status=0, service=0), latitude=0.0,
+                              longitude=0.0, altitude=0.0, position_covariance=np.zeros(9),
+                              position_covariance_type=0)), tn)
+        w.close()
+        ks = CE.keyframe_stamps(tmp)
+        if {k & CE.KEY_MASK: v for k, v in ks.items()} != {key(1, i) & CE.KEY_MASK: st[key(1, i)]
+                                                           for i in (4, 7)}:
+            f.append("keyframe stamps from keyframes_r1/: %s" % ks)
         rc = rep["rejected_candidates"]
         d = [c.get("gt_dist_m") for c in rc["pairs"]]
         if (rc["total"], rc["with_ground_truth"], rc["same_place"]) != (2, 2, 1) or abs(d[0] - 2.0) > 1e-6:

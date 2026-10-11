@@ -9,7 +9,10 @@ Reads <export>/results/<..._experiment_robot_<i>>/<time>/ (cslam's logs,
 evaluation.enable_logs): optimized_global_pose_graph.g2o and
 initial_global_pose_graph.g2o (keyframe poses of the colour camera, gtsam keys
 'g', 'A' + robot, keyframe), pose_timestamps<i>.csv (key -> stamp), log.csv;
-and gt_r<i>.tum (the colour camera in map at every frame exported).
+the run's keyframes_r<i>/ (run_swarm_slam.sh records every robot's
+/r<i>/cslam/keyframe_odom: keyframe -> stamp, also for a robot that never
+wrote logs); and gt_r<i>.tum (the colour camera in map at every frame
+exported).
 
 Reported, from the last global graph (the one with the most keyframes):
   ATE per robot   each robot's keyframes aligned to the ground truth on their
@@ -163,6 +166,26 @@ def read_log(path):
     return out
 
 
+def _mc():
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "datasets"))
+    import mcap_convert as mc
+    return mc
+
+
+def keyframe_stamps(folder):
+    """{key: stamp s} from the run's keyframes_r<i>/ bags (KeyframeOdom: id,
+    odom with the image stamp)."""
+    out = {}
+    for d in sorted(glob.glob(os.path.join(folder or "", "keyframes_r*"))):
+        if not os.path.isdir(d) or not glob.glob(os.path.join(d, "*.mcap")):
+            continue
+        mc = _mc()
+        r = int(os.path.basename(d)[len("keyframes_r"):])
+        for m in mc.read(mc._paths(d), None):
+            out[sym(r, int(m.ros_msg.id))] = mc.stamp_ns(m.ros_msg.odom) * 1e-9
+    return out
+
+
 def odometry(export, gts, ok):
     """{robot: (stamps s, positions (N, 3))} of the export's /r<i>/odom at
     the frames whose ground truth ok(robot, stamp) gives, with that ground
@@ -170,8 +193,7 @@ def odometry(export, gts, ok):
     bag = os.path.join(export, "bag")
     if not os.path.isdir(bag):
         return {}
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "datasets"))
-    import mcap_convert as mc
+    mc = _mc()
     est = {r: [] for r in gts}
     for m in mc.read(mc._paths(bag), ["/r%d/odom" % r for r in gts]):
         P = m.ros_msg.pose.pose.position
@@ -218,6 +240,8 @@ def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), 
     if not gts:
         raise SystemExit("no gt_r<i>.tum in %s (datasets/swarm_slam.py writes them)" % export)
     st = stamps(results)
+    for k, v in keyframe_stamps(out).items():
+        st.setdefault(k, v)
     logs = runs(results)
     graphs = [(r, s) for r, s in logs if os.path.exists(os.path.join(s, "optimized_global_pose_graph.g2o"))]
     if not graphs:

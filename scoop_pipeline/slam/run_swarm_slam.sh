@@ -12,7 +12,8 @@
 #   the bag (--clock), and slam/channel_relay.py carries what they exchange.
 #   "direct": every robot in one domain, no relay (Swarm-SLAM's own setup).
 #
-# Writes <export dir>/runs/<channel>/: results/ (cslam's logs), relay.csv
+# Writes <export dir>/runs/<channel>/: results/ (cslam's logs), keyframes_r<i>/
+# (each robot's /r<i>/cslam/keyframe_odom), relay.csv
 # (every message: sent, size, lost, arrival), cslam_r<i>.log, relay.log.
 set -e
 OUT=$(realpath "$1"); CHANNEL=${2:-ideal}; RATE=${3:-0.5}; ROBOTS=(${4:-mobile_1 mobile_2})
@@ -49,6 +50,13 @@ for ((i = 0; i < N; i++)); do
   D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
   ROS_DOMAIN_ID=$D setsid ros2 launch cslam_experiments cslam_rgbd.launch.py config_path:="$RUN/" \
       config_file:=scoop_rgbd.yaml robot_id:=$i namespace:=/r$i max_nb_robots:=$N > "$RUN/cslam_r$i.log" 2>&1 &
+  PIDS+=($!)
+done
+# every robot's keyframe ids and stamps (cslam logs them only once a robot is in an optimization)
+for ((i = 0; i < N; i++)); do
+  D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
+  ROS_DOMAIN_ID=$D setsid ros2 bag record -s mcap -o "$RUN/keyframes_r$i" /r$i/cslam/keyframe_odom \
+      > "$RUN/record_r$i.log" 2>&1 &
   PIDS+=($!)
 done
 if [ "$CHANNEL" != direct ]; then
