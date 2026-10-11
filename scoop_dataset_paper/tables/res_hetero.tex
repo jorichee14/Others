@@ -1,0 +1,31 @@
+\begin{table*}[t]
+\centering
+\caption{Q2 heterogeneity. Cooperative gain $G$ (AP at IoU 0.5, \%)
+with the ego fixed and the helper's sensing varied: rows are the
+helper configuration trained on, columns the one tested on. One block
+per fusion family. Ideal channel.}
+\label{tab:res_hetero}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}ll ccccccc@{}}
+\toprule
+& & \multicolumn{7}{c}{Test helper} \\
+\cmidrule(lr){3-9}
+Fusion & Train helper & LiDAR-128 & LiDAR-64 & LiDAR-32 & LiDAR-16 & RGB-D cart & Cam.\ mast & Cam.+radar mast \\
+\midrule
+\multirow{3}{*}{early}        & LiDAR-128 & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
+                              & LiDAR-32  & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
+                              & RGB-D cart& \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
+\midrule
+\multirow{3}{*}{intermediate} & LiDAR-128 & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
+                              & LiDAR-32  & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
+                              & RGB-D cart& \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
+\midrule
+\multirow{3}{*}{late}         & LiDAR-128 & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
+                              & LiDAR-32  & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
+                              & RGB-D cart& \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}

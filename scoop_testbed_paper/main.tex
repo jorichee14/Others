@@ -1,7 +1,26 @@
-\documentclass[conference]{IEEEtran}
+\documentclass[journal]{IEEEtran}
 \IEEEoverridecommandlockouts
 % Paper A: SCooP-iT, the testbed paper split out of the SCooP draft.
-% Target: RA-L (6 pages + 2 overlength). Structure follows
+% Target: IEEE RA-L. Hard budget: 6 pages, plus at most 2 overlength pages
+% (8 pages total including references, ~35 refs = ~0.7 page). No appendix
+% counts outside the limit, so appendices went to supplementary.tex.
+%
+% Page budget (double column, from PAPER_A.md):
+%   I   Introduction               0.8
+%   II  Related Work               0.7  + capability table (full width)
+%   III Testbed Design             1.1  + Fig.1, platforms, compact sensors, BOM
+%   IV  Time and Space Alignment   0.9  + calib table (clock rows included)
+%   V   Ground Truth               1.0  + refpipeline fig, gt table
+%   VI  Link Instrumentation       0.6  + link trace fig
+%   VII Replay                     0.5  + replay fig
+%   VIII Experiments               1.4  + spec table, headroom, E2, E3/E5 figs
+%   IX  Lessons and Limitations    0.35
+%   X   Conclusion                 0.15
+%   References                     0.7
+%   total                          8.2  -> trim ~0.3 page in VIII/III at camera-ready
+% Floats moved to supplementary.tex: full sensors table, topics table,
+% second mapping-pass error figure, reference-map figure, data-flow figure,
+% sensor intrinsics. Structure follows
 % ../scoop_paper/split/PAPER_A.md; experiments E1-E5 follow
 % ../scoop_paper/split/EXPERIMENTS.md.
 % Companion: ../scoop_dataset_paper (Paper B: sequences, labels, release,
@@ -38,17 +57,19 @@
 
 \begin{document}
 
-\title{SCooP-iT: An Indoor Testbed for Collaborative Perception over Measured Wireless Links\\
+\title{SCooP-iT: An Indoor Testbed for Collaborative Perception over Measured Wireless Links}
 
-\thanks{Identify applicable funding agency here. If none, delete this.}
-}
-
-\author{%
-\IEEEauthorblockN{Jorich Loquero and Ming-Chun Lee,~\IEEEmembership{Member,~IEEE}%
+\author{Jorich Loquero and Ming-Chun Lee,~\IEEEmembership{Member,~IEEE}%
+\thanks{Manuscript received Month DD, YYYY; revised Month DD, YYYY; accepted
+Month DD, YYYY. This letter was recommended for publication by Editor
+\todo{name} upon evaluation of the reviewers' comments. \todo{Funding.}}%
 \thanks{The authors are with the Department of Electrical and Computer
 Engineering, National Yang Ming Chiao Tung University, Hsinchu, Taiwan
-(e-mail: jorich.ee14@nycu.edu.tw; \todo{email}).}}
-}
+(e-mail: jorich.ee14@nycu.edu.tw; \todo{email}).}%
+\thanks{Digital Object Identifier (DOI): see top of this page.}}
+
+\markboth{IEEE Robotics and Automation Letters. Preprint Version. Accepted Month, Year}%
+{Loquero \MakeLowercase{\textit{et al.}}: SCooP-iT: An Indoor Testbed for Collaborative Perception over Measured Wireless Links}
 
 \maketitle
 
@@ -92,7 +113,7 @@ information
 %=======================================================================
 \section{Introduction}
 \label{sec:introduction}
-A robot team cooperates through two processes, collaborative SLAM,
+\IEEEPARstart{A}{robot} team cooperates through two processes, collaborative SLAM,
 which places every robot in one shared map \cite{swarmslam,doorslam,
 kimeramulti}, and collaborative perception, which fuses what the agents
 observe within it \cite{where2comm,zhou2022gnnperception}. Both depend
@@ -267,7 +288,9 @@ provide the elevated, persistent vantage no mobile node can sustain.
 
 \input{figures/platforms}
 
-\input{tables/sensors}
+\input{tables/sensors_compact}
+
+\input{tables/bom}
 
 \subsection{Network}
 All agents associate to a single access point on channel 149 (VHT-80,
@@ -322,7 +345,7 @@ agents, the infrastructure placement, the trajectory paradigm
 \subsection{Recording}
 \label{sec:recording}
 Each unit records one bag containing what its sensors and interfaces
-produce, and nothing else (Table~\ref{tab:topics}): Ouster packets
+produce, and nothing else (topic list in the supplementary material): Ouster packets
 with the sensor's metadata message, which allows lossless re-decoding
 through the vendor driver at any later time; images and IMU samples;
 radar detections; the full on-board visual SLAM output of
@@ -331,16 +354,14 @@ loop-closed path, and the tracker status; the wireless and clock topics
 of Sec.~\ref{sec:link} on the same timeline as the sensor topics; and
 the raw Nexmon CSI frames on \texttt{sniffer}. Decoded clouds,
 reference poses, and parsed CSI do not exist at recording time; they
-are produced by the post-processing pipeline (Fig.~\ref{fig:dataflow}),
-which decodes the streams, computes the reference poses
+are produced by the post-processing pipeline (data-flow diagram in the
+supplementary material), which decodes the streams, computes the reference poses
 (Sec.~\ref{sec:gt}), parses the link and CSI logs, and merges all units
 into one MCAP per run on the common timebase, with each unit's original
 stamp preserved in the MCAP publish time. Every stage is scripted and
 released so that the products can be regenerated.
 
-\input{tables/topics}
-
-\input{figures/dataflow}
+% RA-L budget: topics table and data-flow figure live in supplementary.tex
 
 %=======================================================================
 \section{Time and Space Alignment}
@@ -360,13 +381,11 @@ Recording starts only after every unit reports a converged offset.
 Each unit logs its offset and any clock adjustment
 (\texttt{ntp/status}, \texttt{ntp/events}) into its own bag, so the
 alignment at any frame can be checked and poorly aligned frames can
-be filtered out. Table~\ref{tab:ntp} summarizes the result over
-\todo{1} sequences. No clock was stepped during any recording, and the
+be filtered out. Over \todo{N} runs no clock was stepped, and the
 worst pairwise offset is \todo{about \SI{70}{\micro\second};
-reconcile with the table maximum of \SI{42.5}{\micro\second} and with
-the coop\_2 measurement of E1}.
-
-\input{tables/ntp}
+reconcile with the per-client maximum of \SI{42.5}{\micro\second}
+(supplementary Table S-II) and with the coop\_2 measurement of E1}; the
+clock rows of Table~\ref{tab:calib} give the per-client statistics.
 
 \subsection{Sniffer Bias}
 \label{sec:sniffer}
@@ -509,9 +528,8 @@ validation measurement. All trajectories therefore share one metric
 frame by construction, inter-agent relative poses reduce to two
 registration errors against shared local geometry instead of two
 accumulated drifts, and since no run contributes to the map, each
-agent's agreement with it is an out-of-sample check.
-
-\input{figures/refmap}
+agent's agreement with it is an out-of-sample check (reference map and
+fiducial network shown in the supplementary material).
 
 \subsection{Fiducial Chain for Agents Without LiDAR}
 \label{sec:fiducials}
@@ -554,7 +572,8 @@ Convergence of the refinement establishes self-consistency, not
 accuracy: the plane targets are themselves estimated from the map, so
 a self-consistent deformation would converge equally well. Accuracy is
 therefore established by four checks that did not enter the
-estimation (Table~\ref{tab:gt}, Fig.~\ref{fig:gt_errors}).
+estimation (Table~\ref{tab:gt}; error distributions in the
+supplementary material).
 
 \paragraph{Second mapping pass.} Surfaces are measured by their
 thickness, the p95--p5 spread of points about planes fitted to
@@ -593,8 +612,6 @@ LiDAR pair, and isolates the sensor-constrained mechanism for the
 RGB-D cart. \todo{Report.}
 
 \input{tables/gt}
-
-\input{figures/gt_errors}
 
 Each number bounds one error only. A smooth deformation displaces
 surfaces without thickening them, so the residual thickness is
@@ -796,12 +813,12 @@ collaborative method would use. Because the clocks are synchronized,
 the one-way delay of every message is exact. B's messages are replayed
 through A's trace and through the synthetic channel, and the
 arrival-time error, frame-assignment agreement, and drop agreement are
-reported per size and mode (Fig.~\ref{fig:twinrun}). If the pass
+reported per size and mode (Fig.~\ref{fig:simgap}, left). If the pass
 fails for a size or mode, the fluid model of Eq.~\eqref{eq:replay} is
 the limitation and a per-packet trace is the stated fix. \todo{Needs
 the Phase-2 session: A1/B1 survey, A2/B2 cooperation.}
 
-\input{figures/twinrun}
+% RA-L budget: E3 shares a figure with E5 (figures/simgap.tex, two panels)
 
 \subsection{E4 Same Knob, Same Link: A Setting Reproduces Its Condition}
 \emph{Question.} If the same condition is set on another day, is the
@@ -830,7 +847,7 @@ Eq.~\eqref{eq:replay} is computed for messages of \SI{1}{\kilo\byte},
 the share arriving within one LiDAR frame (\SI{100}{\milli\second}) is
 set against the synthetic channels of Where2comm (bandwidth budget, no
 latency) and V2X-ViT (constant \SI{100}{\milli\second}) exactly as
-published (Fig.~\ref{fig:simgap}). \emph{Result so far} (24 Sep): raw
+published (Fig.~\ref{fig:simgap}, right). \emph{Result so far} (24 Sep): raw
 clouds arrive within the frame in 86\,\% of cases when one robot owns
 the channel and in \SIrange{59}{68}{\percent} with two robots
 contending, against 100\,\% under the synthetic channels; the measured
@@ -900,19 +917,10 @@ labels, and the benchmark are released as the SCooP dataset
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 
-\appendices
-\section{Bill of Materials and Setup Effort}
-\label{app:bom}
-\input{tables/bom}
-\todo{Per-site setup effort: mapping-session length, number of boards,
-rangefinder distances, software stack and versions.}
-
-\section{Sensor Intrinsics}
-\label{app:intrinsics}
-\todo{Per-sensor intrinsic parameters and the plots behind
-Table~\ref{tab:calib}: camera reprojection residual by image region,
-LiDAR range bias by range, radar reflector offset by range.}
-
-%\input{figures/app_intrinsics}
+% RA-L: no appendices inside the page limit. Supporting material is in
+% supplementary.tex (compiled separately and uploaded as a multimedia
+% attachment): full sensor table, topics, clock statistics per client,
+% reference map, GT error distributions, data flow, sensor intrinsics,
+% per-site setup effort.
 
 \end{document}

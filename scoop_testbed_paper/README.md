@@ -1,7 +1,10 @@
 # SCooP-iT: testbed paper (Paper A, split from the SCooP draft)
 
 SCooP-iT: An Indoor Multi-Robot Testbed for Collaborative Perception over
-Measured Wireless Links. Target: RA-L (6 pages + 2 overlength).
+Measured Wireless Links. Target: IEEE RA-L, IEEEtran journal class, 6 pages +
+at most 2 overlength including references. No appendix: `supplementary.tex`
+(compile separately) holds the full sensor table, topics, clock table,
+reference map, GT error figure, data flow, intrinsics, and setup effort.
 
 Structure follows `../scoop_paper/split/PAPER_A.md`; the experiments E1-E5
 follow `../scoop_paper/split/EXPERIMENTS.md` (pass criteria and the results
@@ -17,14 +20,15 @@ Releases no sequences, labels, or leaderboard (those are Paper B).
 Companion: `../scoop_dataset_paper` (cites this paper as `scoop_testbed`;
 this paper cites it as `scoop_dataset`).
 
-- `main.tex`: manuscript (IEEEtran conference template for drafting)
+- `main.tex`: manuscript (IEEEtran journal class, RA-L header); page budget per section in the header comment
+- `supplementary.tex`: RA-L multimedia attachment root
 - `references.bib`: SCooP bib + `../scoop_paper/split/testbed_refs.bib` + companion entry
   (note: `itup530` is duplicated in the original bib; remove one copy before submission)
-- `tables/`: sensors, topics, ntp, calib, gt from the draft; new: `spec.tex`
-  (spec sheet, the central table), `capability.tex`, `bom.tex`
-- `figures/`: overview, platforms, refpipeline, refmap, gt_errors, linktrace,
-  dataflow from the draft; new placeholders: `replay.tex`, `headroom.tex`,
-  `clearance.tex`, `twinrun.tex`, `simgap.tex`
+- `tables/`: `sensors_compact.tex`, calib, gt, bom in main; sensors, topics, ntp in supplementary;
+  new: `spec.tex` (spec sheet, the central table), `capability.tex`
+- `figures/`: overview, platforms, refpipeline, linktrace in main; refmap, gt_errors,
+  dataflow in supplementary; new placeholders: `replay.tex`, `headroom.tex`,
+  `clearance.tex`, `simgap.tex` (two panels: E3 and E5)
 - `figs/`: images
 
 Upload the folder to Overleaf as is; `main.tex` is the root file.

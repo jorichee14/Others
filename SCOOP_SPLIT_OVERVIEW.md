@@ -1,155 +1,132 @@
-# SCooP split: testbed paper and dataset paper
+# SCooP split: SCooP-iT testbed paper (RA-L) and SCooP dataset paper (T-RO)
 
 Source: the uploaded `SCooP.zip` draft (newer than `scoop_paper/`, which is left
-untouched). Two self-contained LaTeX folders were created:
+untouched). Two self-contained LaTeX folders, both on the IEEEtran journal class:
 
-| Folder | Paper | Role |
-|---|---|---|
-| `scoop_testbed_paper/` | SCooP-iT: An Indoor Testbed for Collaborative Perception over Measured Wireless Links | Paper A, RA-L testbed paper (the instrument, its guarantees, and the proof it can be trusted) |
-| `scoop_dataset_paper/` | SCooP: A Real-World Indoor Multi-Agent Dataset for Collaborative SLAM and Perception over Measured Wireless Links | Paper B, dataset / benchmark paper (what was recorded, how it is labeled and released, what the benchmark shows) |
+| Folder | Paper | Venue | Budget |
+|---|---|---|---|
+| `scoop_testbed_paper/` | SCooP-iT (SCooP Indoor Testbed): An Indoor Testbed for Collaborative Perception over Measured Wireless Links | IEEE RA-L | 6 pages + at most 2 overlength, references included; no appendix; extra material in `supplementary.tex` |
+| `scoop_dataset_paper/` | SCooP: A Real-World Indoor Multi-Agent Dataset for Collaborative SLAM and Perception over Measured Wireless Links | IEEE T-RO regular paper | about 12 pages main text + references, appendices count; verify the current T-RO overlength policy |
 
-Each cites the other (`\cite{scoop_testbed}` / `\cite{scoop_dataset}`; placeholder
-bib entries appended to each `references.bib`). Nothing from the original was
-deleted; text was reassigned, and bridging text (abstracts, intros,
-contributions, summaries, lessons learned, conclusions) was written new.
+Each cites the other (`\cite{scoop_testbed}` / `\cite{scoop_dataset}`). A page
+budget per section is written as a comment at the top of each `main.tex`.
+Nothing from the original was deleted; text was reassigned, and bridging text
+(abstracts, intros, contributions, summaries, lessons learned, conclusions, the
+Q1 to Q3 experiment designs) was written new. Submit RA-L first; T-RO cites it.
 
 ---
 
-## 1. Testbed paper, Paper A (`scoop_testbed_paper/main.tex`)
-
-**Title.** SCooP-iT (SCooP Indoor Testbed): An Indoor Testbed for Collaborative
-Perception over Measured Wireless Links. Follows the plan already on the branch
-(`scoop_paper/split/PAPER_A.md`, `EXPERIMENTS.md`).
+## 1. SCooP-iT testbed paper, Paper A (`scoop_testbed_paper/main.tex`)
 
 **One claim.** A heterogeneous indoor team in which every inter-agent link is
 measured alongside the sensors, all agents sit on one clock and in one metric
 frame, there is no motion capture or GNSS, and any collaborative method can be
-run against the link the agents actually had.
+run against the link the agents actually had. Follows
+`scoop_paper/split/PAPER_A.md` and `EXPERIMENTS.md`.
 
-**Venue.** RA-L, 6 pages + 2 overlength. Submit first; the dataset paper cites it.
+### Sections and page budget (total 8.2 pages, trim ~0.3 at camera-ready)
 
-### Sections
+| # | Section | Pages | Floats kept in main text |
+|---|---|---|---|
+| I | Introduction | 0.8 | |
+| II | Related Work: testbeds, comm-aware systems, coop-perception platforms with measured links, indoor GT without a survey instrument | 0.7 | capability table (full width) |
+| III | Testbed Design: three agent classes, network, four design decisions with reasons, recording | 1.1 | Fig. 1 overview, platforms, compact sensors table, BOM |
+| IV | Time and Space Alignment: clock, sniffer bias, error budget, extrinsics | 0.9 | calibration table (clock rows included) |
+| V | Ground Truth Without Motion Capture: map + plane-fit ICP, fiducial chain, four checks, scoring capability | 1.0 | reference pipeline fig, GT table |
+| VI | Link Instrumentation: link state, CSI, 1.2 m/s limit, contention knob | 0.6 | link trace fig |
+| VII | Channel-in-the-Loop Replay: one-way-delay model, interface, positioning vs netem/Mahimahi/co-simulators | 0.5 | replay fig |
+| VIII | Experiments: spec sheet, E1 to E5 | 1.4 | spec table (full width), headroom fig, E2 fig, E3+E5 two-panel fig |
+| IX | Lessons Learned and Limitations | 0.35 | |
+| X | Conclusion | 0.15 | |
+| | References (~35) | 0.7 | |
 
-| # | Section | Content (origin) |
-|---|---|---|
-| I | Introduction | Need, three-sentence gap (testbeds / comm-aware systems / coop-perception platforms), three contributions with numbers, highlight sentence (3 ms to 60-109 ms crosses one LiDAR frame). *(new)* |
-| II | Related Work | A. Multi-robot testbeds (Robotarium, Duckietown, CPM Lab, ChoiRbot...). B. Communication in multi-robot systems (ROS-NetSim, CHORD/ACHORD, MOCHA...). C. Coop-perception platforms and measured links (CoPeD as closest RA-L neighbour, V2X-ReaLO, CooperScene). D. Indoor GT without a survey instrument (condensed from old Sec. II-D). New **capability table** `tables/capability.tex`. |
-| III | Testbed Design | Agents (3 classes), network, **design decisions each with its reason**, recording + topics + data flow (old Sec. III, VII-B). BOM table in appendix. |
-| IV | Time and Space Alignment | Clock, sniffer bias ("the measured link calibrates the clock"), error budget Eq. (1)-(2), extrinsics + residual table (old Sec. IV). |
-| V | Ground Truth Without Motion Capture | Reference map + plane-fit ICP, fiducial chain Eq. (3)-(4), four independent checks, one-paragraph scoring capability (old Sec. V-A..C). |
-| VI | Link Instrumentation | Link state, CSI, 1.2 m/s limit, contention knob (old Sec. V-E). |
-| VII | Channel-in-the-Loop Replay | Model with one-way delay d_ab(t), interface, implementation, positioning against trace-driven emulation (netem, Mahimahi, Pantheon) and co-simulators. *(new; was old Sec. VIII-A)* |
-| VIII | Experiments | **Spec sheet** `tables/spec.tex` (central table) + E1 Headroom (precise), E2 Map Meets Radio (consistent), E3 Twin Run (faithful), E4 Same Knob Same Link (repeatable), E5 Sim Gap (necessary); each with question, pass criterion, and result so far. |
-| IX | Lessons Learned and Limitations | CSI shapes the network; NTP asymmetry; cold-start ICP basins; plane fits vs NN; limits. |
-| X | Conclusion | |
-| App. | Bill of materials and setup effort; sensor intrinsics | |
+Moved to `supplementary.tex` (RA-L multimedia attachment): full sensors table,
+topics table, per-client clock table, reference-map figure, GT error
+distributions, data-flow figure, sensor intrinsics, per-site setup effort.
 
-### What to highlight
+### Experiments needed
 
-1. **The spec sheet** (Table `tab:spec`): every guarantee with a measured bound
-   and the check that produced it. Reviewers of a testbed paper read this first.
-2. **The headroom argument (E1).** Testbed error (70 us clock -> 0.2 mm; 1.06 cm
-   pose) is one to three orders of magnitude below the errors at which fusion
-   breaks (0.2 m pose; ~100 ms delay stated as displacement). Make it the key figure.
-3. **The link is measured, not loaded,** and contention is a knob (survey vs
-   cooperation), with a measured effect: RTT 3.3 ms idle -> 60-109 ms under load.
-4. **Ground truth without mocap or GNSS**, at building scale, from onboard sensing
-   only: frozen self-built map, plane-fit ICP (3 cm offset hides behind 0.5 cm NN
-   residual), boards posed from the map, infra posed through a shared board view.
-   Four independent checks; say which error each bounds.
-5. **E2 Map Meets Radio** validates poses and link logs together with no hand
-   measurement: rho 0.60, 5.4 dB on the mobile_2 link already passes the
-   pre-registered criterion.
-6. **Channel-in-the-loop replay** as the testbed's offer to every method, and
-   the one-way-delay point: only a synchronized testbed can measure d_ab directly
-   rather than assume RTT/2. E3 Twin Run is what makes replay more than a simulation.
-7. **E5 Sim Gap** as the reason to exist: raw clouds arrive within one frame 86 %
-   alone vs 59-68 % under contention vs 100 % under Where2comm / V2X-ViT channels;
-   three real outages (12 % of frames) that no synthetic channel produces.
-8. **Lessons learned** with numbers (1x1 802.11ac at 80 MHz forced by the CSI
-   receiver; aggregation caps CSI at 100-140 Hz; 2.4 GHz management-link bias).
+| Exp. | Proves | Pass criterion | Status |
+|---|---|---|---|
+| E1 Headroom | precise | every testbed error at least 10x below the smallest fusion breaking point | clock and second pass measured; board residuals on one pass; calibration residuals, sniffer bias, p95 speeds, and the figure open |
+| E2 Map Meets Radio | consistent | pooled rho > 0.3 and clear-minus-obstructed drop > 5 dB on one link kind | passes on the mobile_2 link (rho 0.60, 5.4 dB); pool over passes, add agent-to-AP once `ap.yaml` exists |
+| E3 Twin Run | faithful | frame-assignment agreement >= 90 %, logged replay closer than synthetic | needs the payload node and one recording session (A1/B1 survey, A2/B2 cooperation) |
+| E4 Same Knob, Same Link | repeatable | day-to-day distance below half the survey-to-cooperation distance | mode half from survey_1 vs coop_2; day half from the same session |
+| E5 Sim Gap | necessary | demonstration | done on one day: clouds within one frame 86 % alone, 59-68 % under contention, 100 % synthetic; three real outages |
 
-Still needed (from `EXPERIMENTS.md`): reconcile the clock bound (70 us text vs
-42.5 us table vs the coop_2 value), sniffer bias, calibration residuals, control
-distances, cross-robot consistency, E2 pooled + agent-to-AP, E4 mode and day
-halves, the Phase-2 session for E3, BOM costs, redrawn Fig. 1, all five
+Also: reconcile the clock bound (70 us text vs 42.5 us table vs coop_2), control
+distances, cross-robot consistency, BOM costs, redrawn Fig. 1, the four
 experiment figures.
 
+### What to highlight
+
+1. **The spec sheet**: every guarantee with a measured bound and the check behind it.
+2. **Headroom**: the instrument is one to three orders of magnitude finer than the effects it measures.
+3. **The link is measured, not loaded**, and contention is a knob with a measured effect (RTT 3.3 ms to 60-109 ms).
+4. **Building-scale GT from onboard sensing only**, four independent checks, each bounding one error.
+5. **E2** validates poses and link logs together with no hand measurement.
+6. **Replay with measured one-way delay**, which only a synchronized testbed can do; E3 makes it more than a simulation.
+7. **E5 as the reason to exist**: synthetic channels never cross the frame boundary and never produce outages.
+8. **Lessons learned** with numbers (1x1 802.11ac at 80 MHz forced by the CSI receiver, aggregation caps CSI, management-link bias).
+
 ---
 
-## 2. Dataset paper, Paper B (`scoop_dataset_paper/main.tex`)
+## 2. SCooP dataset paper, Paper B (`scoop_dataset_paper/main.tex`)
 
-**One-line pitch.** The first indoor multi-robot dataset on which one can measure
-what a real link costs C-SLAM and collaborative perception, and how much of that
-cost the mapped geometry could have predicted.
+**One-line pitch.** The dataset on which collaborative perception for indoor
+robot teams can be studied as findings, not only benchmarked: transfer from
+vehicles, heterogeneity between collaborators, where the gain comes from, and
+what the real link costs. CODa-style per `scoop_paper/split/SPLIT.md`.
 
-**Venue.** IJRR data paper (default, per `scoop_paper/README.md`); T-RO if
-the findings are strong. Note: `scoop_paper/split/SPLIT.md` plans a CODa-style
-T-RO version with five questions (Q1 transfer from V2X data, Q2 heterogeneity
-between collaborators, Q3 where the indoor gain comes from, Q4 link cost and
-foreseeability, Q5 pretraining transfer). The benchmark section here carries the
-draft's existing experiment, which is that plan's Q4; a comment at the top of the
-section records this.
+### Sections and page budget (total 12.7 pages + appendices)
 
-### Sections
+| # | Section | Pages | Content |
+|---|---|---|---|
+| I | Introduction | 1.0 | Three-layer gap, the open questions, four contributions (dataset, paradigms, release, benchmarks and findings) |
+| II | Related Work | 1.3 | C-SLAM datasets; coop perception and comm datasets; ISAC datasets; indoor GT (short); collaboration geometry; comparison table |
+| III | Acquisition Platform and Reference | 0.9 | SCooP-iT summary, agents table, reference-accuracy summary, communication ground truth, link trace |
+| IV | Perception Annotations | 0.7 | Static and dynamic boxes, per-point labels, rendered and projected masks, box-fit check |
+| V | Dataset Design and Collection | 2.0 | Environments; protocol; geometry characterization and paradigms; conditions; statistics |
+| VI | Release | 1.2 | Bag and extracted formats, derived products, structure, devkit, license |
+| VII | Benchmarks | 0.8 | T1 and T2 protocol: channels, replay, tasks, baselines, metrics, splits, allowed inputs |
+| VIII | Experiments | 2.5 | Q1 transfer, Q2 heterogeneity, Q3 where the gain comes from, Q4 link cost and foreseeable share, failure cases |
+| IX | Discussion | 0.8 | Q1-Q2, Q3, Q4 cost, Q4 foresight, limitations, ethics |
+| X | Conclusion | 0.2 | |
+| | References (~75) | 1.3 | |
+| A-D | Appendices | | Sequence inventory; annotation ontology and statistics; full training tables; devkit and release details |
 
-| # | Section | Content (origin in the SCooP draft) |
+### Experiments needed
+
+| Question | Experiment | Output |
 |---|---|---|
-| I | Introduction | The two questions, the three-layer gap, four contributions (old Sec. I; platform now deferred to companion). |
-| II | Related Work | C-SLAM datasets; cooperative perception/comm datasets; ISAC datasets; indoor GT (shortened, points to testbed paper); collaboration geometry (full); positioning + comparison table (old Sec. II). |
-| III | Acquisition Platform and Reference | Condensed: agents (new `tables/agents.tex`), reference poses with headline accuracy (new `tables/gt_summary.tex`), communication ground truth as the replayed reference (old Sec. III, V-A..C, V-E compressed). |
-| IV | Perception Annotations | Static/dynamic boxes, per-point labels, rendered/projected masks, box-fit check (old Sec. V-D). |
-| V | Dataset Design and Collection | Environments; protocol (site/session/sequence, ego/partner, infra never ego); collaboration geometry characterization Eq. (1)-(2), Fresnel clearance, paradigms, params; conditions; dataset statistics *(new placeholder)* (old Sec. VI). |
-| VI | Release | Formats (MCAP + OPV2V-style), derived products, structure, three per-frame files with no counterpart, devkit, license (old Sec. VII). |
-| VII | Benchmark | Channels (+ new `figures/replay.tex`), T1/T2 baselines, Q1 results, Q2 results, failure cases (old Sec. VIII). |
-| VIII | Discussion | Q1, Q2, characterization, limitations, ethics (old Sec. IX). |
-| IX | Conclusion | |
-| App. | Sequence inventory; extended results | |
+| Q1 Transfer | 4 T2 detectors trained on OPV2V, V2V4Real, V2X-Real, DAIR-V2X; direct, fine-tuned, from scratch on SCooP; ideal channel | ego AP and gain G per source and regime (`tables/res_transfer.tex`); hypothesis: G shrinks more than ego AP |
+| Q2 Heterogeneity | train-by-test matrix over helper LiDAR resolution (128/64/32/16) and helper modality (LiDAR, RGB-D cart, camera or camera+radar mast), ego fixed; early, intermediate, late fusion | G per train/test pair (`tables/res_hetero.tex`) |
+| Q3 Where the gain comes from | stratify G by omega_e, r_e, beta, C from `_geom.yaml`; occlusion rescue vs range rescue | gain share per stratum per baseline (`figures/gain_strata.tex`); first evidence: range rescue 0.008 LiDAR ego vs 0.29 RGB-D ego |
+| Q4a Link cost | T1 (Swarm-SLAM, DiSCo-SLAM, COVINS-G, Kimera-Multi, Hydra-Multi) and T2 under ideal / synthetic / logged channels | Delta and retained gain; synthetic vs logged misstatement; T2 on T1 poses; the 100 ms latency-cliff check |
+| Q4b Foreseeable share | leave-one-site-out regression of per-frame loss on D, G, G+L | anticipated share per site and task; feature ablation |
+| Failure cases | three link-caused, one with the link intact | figure |
+| Collection | sessions table, totals, statistics figure, box-fit fraction, clearance vs RSSI, intended vs measured paradigm | tables and figures in Secs. IV-V |
 
 ### What to highlight
 
-1. **Lead with the two questions**, not with the sensor list. Q1: how much accuracy
-   a real indoor link costs a team. Q2: how much of that cost the map already
-   predicts. Every section should be visibly in service of one of them.
-2. **Comparison table position.** Each prior family covers at most two of the three
-   layers; SCooP is the only dataset with measured link + indoor full-trajectory GT
-   + cooperative labels + per-frame geometry. Make that the figure reviewers screenshot.
-3. **Annotations are cross-agent consistent by construction.** One box in the map
-   frame -> same identity, size, position in every agent's view; per-point labels and
-   rendered masks fall out for free. Prior datasets author labels independently of
-   the reference; SCooP derives them from it, which is why the reference had to be
-   annotation grade (hand off to the testbed paper for proof).
-4. **Collaboration geometry as a released, per-frame, signal-independent quantity.**
-   visible vs observed kept distinct; best helper and aspect angle beta; co-visibility
-   C; Fresnel clearance computed from the map and validated against RSSI it did not
-   use. Paradigms are predicates over these, assigned per frame, not asserted per run.
-5. **The three per-frame files nobody else ships:** `_link.yaml`, `_geom.yaml`,
-   `csi/`. This is the concrete artifact that makes bandwidth-, latency-, and
-   geometry-conditioned fusion trainable from the frame index.
-6. **The benchmark is one controlled experiment.** Same frames, three channels, one
-   replay module; the channel is the only variable. Report Delta and retained gain
-   1 - Delta/G, and use the synthetic run to show how prior impairment models misstate
-   the cost. Leave-one-site-out makes Q2 a transfer test across buildings.
-7. **The fourth failure case** (link intact, baseline fails anyway) is what shows the
-   benchmark attributes loss to the link only where the link caused it. Keep it.
-8. **Heterogeneity and elevation asymmetry** as deliberate: an RGB-D ego with a
-   sensing budget, infra never ego, ego alternates so conditions attach to geometry
-   rather than platform.
-
-Numbers still needed: session table and totals, statistics figure, all T1/T2
-results, Q2 share, failure-case figure, box-fit fraction, headline sentence for
-abstract and conclusion.
+1. **Findings, not a leaderboard.** Four questions, one controlled experiment each, full training tables in the appendix. This is what carried CODa into T-RO.
+2. **Q4 is the question no outdoor dataset can answer**, and the latency cliff (100 ms breaks every fusion method; the logged RTT under contention is 60-109 ms) is the sentence reviewers will quote if it holds.
+3. **The comparison table**: each prior family covers at most two of the three layers.
+4. **Annotations consistent across agents by construction**, authored in the reference frame.
+5. **Collaboration geometry released per frame, independent of the signal it predicts**; it is what makes Q3 and Q4b possible at all.
+6. **The three per-frame files nobody else ships**: link, geometry, CSI.
+7. **Heterogeneity as a design axis** (RGB-D ego with a sensing budget, infra never ego, ego alternates), which is what Q2 measures.
+8. **The fourth failure case** shows loss is attributed to the link only where the link caused it.
 
 ---
 
-## Overlap policy between the two papers
+## Overlap policy
 
 - Platform, calibration, timing, reference pipeline, link measurement design,
-  the channel-replay module, and their validation numbers live in the **testbed**
-  paper. The dataset paper
-  carries a half-page summary plus two summary tables and cites the testbed paper.
+  the replay module, and their validation numbers live in **Paper A**. Paper B
+  carries a half-page summary, two summary tables, and cites Paper A.
 - Annotations, geometry characterization, collection protocol, release format,
-  devkit, benchmark, and discussion live in the **dataset** paper. The testbed
-  paper mentions them only as downstream consumers of its outputs.
-- Shared figures (overview, link trace, reference map) appear in both on purpose;
-  swap one of them for a different image before submission if the venues overlap.
+  devkit, benchmarks, experiments, and discussion live in **Paper B**. Paper A
+  mentions them only as downstream consumers of its outputs.
+- Shared figures (overview, link trace) appear in both on purpose; swap one for a
+  different image before submission.

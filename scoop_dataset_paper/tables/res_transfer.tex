@@ -1,0 +1,22 @@
+\begin{table*}[t]
+\centering
+\caption{Q1 transfer. Ego AP and cooperative gain $G$ (AP at IoU 0.5,
+\%) of each fusion method by training source and regime, evaluated on
+SCooP under the ideal channel.}
+\label{tab:res_transfer}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}ll cc cc cc cc cc@{}}
+\toprule
+& & \multicolumn{2}{c}{OPV2V} & \multicolumn{2}{c}{V2V4Real} & \multicolumn{2}{c}{V2X-Real} & \multicolumn{2}{c}{DAIR-V2X} & \multicolumn{2}{c}{SCooP (scratch)} \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}\cmidrule(lr){9-10}\cmidrule(lr){11-12}
+Regime & Method & ego & $G$ & ego & $G$ & ego & $G$ & ego & $G$ & ego & $G$ \\
+\midrule
+Direct     & early / late / Where2comm / V2X-ViT & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & -- & -- \\
+Fine-tuned & early / late / Where2comm / V2X-ViT & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & -- & -- \\
+Scratch    & early / late / Where2comm / V2X-ViT & -- & -- & -- & -- & -- & -- & -- & -- & \todo{} & \todo{} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}

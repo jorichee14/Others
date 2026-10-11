@@ -1,0 +1,54 @@
+\documentclass[journal]{IEEEtran}
+% Supplementary material for SCooP-iT (RA-L multimedia attachment).
+% Holds the floats that do not fit the 8-page limit of main.tex.
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage[hidelinks]{hyperref}
+\graphicspath{{figures/}}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\unsure}[1]{\textcolor{orange}{[UNSURE: #1]}}
+\newcommand{\Ttransform}[2]{\ensuremath{T_{\mathrm{#1}}^{\mathrm{#2}}}}
+\newcommand{\cmark}{$\checkmark$}
+\newcommand{\xmark}{--}
+\renewcommand{\thetable}{S-\Roman{table}}
+\renewcommand{\thefigure}{S\arabic{figure}}
+\renewcommand{\thesection}{S\Roman{section}}
+
+\begin{document}
+\title{Supplementary Material for\\SCooP-iT: An Indoor Testbed for Collaborative Perception over Measured Wireless Links}
+\author{Jorich Loquero and Ming-Chun Lee}
+\maketitle
+
+\section{Full Sensor Specification}
+\input{tables/sensors}
+
+\section{Recorded Topics and Clock Statistics}
+\input{tables/topics}
+\input{tables/ntp}
+
+\section{Reference Map and Error Distributions}
+\input{figures/refmap}
+\input{figures/gt_errors}
+
+\section{Post-Processing Data Flow}
+\input{figures/dataflow}
+
+\section{Sensor Intrinsics}
+\todo{Per-sensor intrinsic parameters and the plots behind the
+calibration table of the main paper: camera reprojection residual by
+image region, LiDAR range bias by range, radar reflector offset by
+range.}
+%\input{figures/app_intrinsics}
+
+\section{Per-Site Setup Effort}
+\todo{Mapping-session length, number of boards, rangefinder distances,
+software stack and versions, per site.}
+
+\end{document}

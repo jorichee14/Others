@@ -1,6 +1,24 @@
-\documentclass[conference]{IEEEtran}
+\documentclass[journal]{IEEEtran}
 \IEEEoverridecommandlockouts
-% Dataset paper split out of the SCooP draft.
+% Paper B: the SCooP dataset paper split out of the SCooP draft.
+% Target: IEEE T-RO regular paper, CODa-style (findings as questions with one
+% controlled experiment each; full training tables in the appendix).
+% Budget: aim for 12 double-column pages of main text + references; check
+% the current T-RO overlength policy before submission. Appendices count.
+%
+% Page budget (double column):
+%   I    Introduction                  1.0
+%   II   Related Work                  1.3  + comparison table (full width)
+%   III  Platform and Reference        0.9  + overview, agents, gt summary, link trace
+%   IV   Annotations                   0.7  + annotations fig
+%   V    Design and Collection         2.0  + sites, paradigms, geometry, params, seq, sessions, stats
+%   VI   Release                       1.2  + topics table, two trees
+%   VII  Benchmarks                    0.8  + replay fig, t1 table
+%   VIII Experiments (Q1-Q4)           2.5  + res tables, q1/q2 figs, failures
+%   IX   Discussion                    0.8
+%   X    Conclusion                    0.2
+%   References (~75)                   1.3
+%   total                              12.7 (+ appendices)
 % Companion: ../scoop_testbed_paper (platform, calibration, timing,
 % reference-localization pipeline, communication measurement). This paper
 % owns the dataset: annotations, collaboration geometry, collection design,
@@ -37,17 +55,22 @@
 
 \begin{document}
 
-\title{SCooP: A Real-World Indoor Multi-Agent Dataset for Collaborative SLAM and Perception over Measured Wireless Links\\
+\title{SCooP: A Real-World Indoor Multi-Agent Dataset for Collaborative SLAM and Perception over Measured Wireless Links}
 
-\thanks{Identify applicable funding agency here. If none, delete this.}
-}
-
-\author{%
-\IEEEauthorblockN{Jorich Loquero and Ming-Chun Lee,~\IEEEmembership{Member,~IEEE}%
+\author{Jorich Loquero and Ming-Chun Lee,~\IEEEmembership{Member,~IEEE}%
+\thanks{Manuscript received Month DD, YYYY; revised Month DD, YYYY; accepted
+Month DD, YYYY. This paper was recommended for publication by Associate
+Editor \todo{name} and Editor \todo{name} upon evaluation of the
+reviewers' comments. \todo{Funding.}}%
 \thanks{The authors are with the Department of Electrical and Computer
 Engineering, National Yang Ming Chiao Tung University, Hsinchu, Taiwan
-(e-mail: jorich.ee14@nycu.edu.tw; \todo{email}).}}
-}
+(e-mail: jorich.ee14@nycu.edu.tw; \todo{email}).}%
+\thanks{This paper has supplementary downloadable material available at
+\todo{URL}, provided by the authors.}%
+\thanks{Digital Object Identifier (DOI): see top of this page.}}
+
+\markboth{IEEE Transactions on Robotics}%
+{Loquero \MakeLowercase{\textit{et al.}}: SCooP: An Indoor Multi-Agent Dataset for Collaborative SLAM and Perception over Measured Wireless Links}
 
 \maketitle
 
@@ -71,12 +94,15 @@ and are therefore consistent across agents. For every frame, node, and
 object the release reports occlusion, co-visibility, viewpoint
 diversity, and Fresnel clearance of the link, computed from the map
 and independent of the measured signal, and sequences follow
-trajectory paradigms designed to induce these conditions. A benchmark
-runs collaborative SLAM and collaborative perception baselines on the
-same frames under an ideal channel, a synthetic channel, and the
-logged channel, and reports the accuracy the real link costs and the
-share of that cost predictable from map geometry alone. \todo{One
-sentence with the headline result.} The dataset and development kit
+trajectory paradigms designed to induce these conditions. Benchmarks for
+collaborative SLAM, 3D detection, and segmentation, run under an ideal
+channel, a synthetic channel, and the logged channel, answer four
+questions: whether collaborative perception learned on vehicles
+transfers to an indoor robot team, how a sensor mismatch between
+collaborators changes the cooperative gain, whether that gain comes
+from occlusion, range, or viewpoint, and what the real link costs and
+how much of that cost the map foresees. \todo{One sentence with the
+headline result per question.} The dataset and development kit
 are available at \todo{URL/DOI}.
 \end{abstract}
 
@@ -88,7 +114,7 @@ sensing and communication, dataset, benchmark
 %=======================================================================
 \section{Introduction}
 \label{sec:introduction}
-Collaborative robotic systems --- fleets of vehicles, drone swarms, and
+\IEEEPARstart{C}{ollaborative} robotic systems --- fleets of vehicles, drone swarms, and
 multi-robot teams --- depend on three tightly coupled layers:
 \emph{sensing} for localization and mapping, \emph{perception} for
 scene understanding, and \emph{communication} for sharing information
@@ -135,11 +161,14 @@ cooperative scene understanding, and do so outdoors
 transmitter positions but no perception sensing and no multi-agent
 structure \cite{dichasus}, while ray-traced alternatives supply
 arbitrarily dense channel and pose samples at the cost of a simulated
-propagation environment \cite{deepmimo}. As a result, two questions
-that span layers remain open: \emph{how much accuracy a real indoor
-link costs a collaborating team}, and \emph{how much of that cost
-could be anticipated from the geometry the team already maps}.
-Neither can be answered with any single existing dataset.
+propagation environment \cite{deepmimo}. As a result, questions that
+span layers remain open. The two that no outdoor dataset can answer are
+\emph{how much accuracy a real indoor link costs a collaborating team}
+and \emph{how much of that cost could be anticipated from the geometry
+the team already maps}. Two more, which driving datasets answer only
+for vehicles, are whether collaborative perception learned on cars
+transfers to a heterogeneous robot team indoors, and what governs its
+gain there. None can be answered with any single existing dataset.
 
 We close this gap with \textbf{SCooP}: a multi-agent, multi-view,
 multi-sensor dataset that jointly captures all three layers under
@@ -168,16 +197,20 @@ The main contributions are:
     an OPV2V-style extracted format, with per-frame link, geometry,
     and CSI files that have no counterpart in existing collaborative
     perception datasets, and a channel-replay module.
-    \item \textbf{Benchmarks.} Geometric and semantic C-SLAM and
-    collaborative perception baselines under idealized, synthetic, and
-    measured channels, reporting the accuracy the link costs and the
-    share of that cost the geometry anticipates.
+    \item \textbf{Benchmarks and findings.} Geometric and semantic
+    C-SLAM, collaborative 3D detection, and collaborative segmentation
+    baselines under idealized, synthetic, and measured channels, used
+    to answer four questions with one controlled experiment each: Q1,
+    transfer from vehicle datasets; Q2, heterogeneity between
+    collaborators; Q3, where the indoor gain comes from; Q4, what the
+    real link costs and how much of it the map foresees.
 \end{itemize}
 
 %=======================================================================
 \section{Related Work}
 \label{sec:related}
-We review prior datasets against the two questions of Sec.~I.
+We review prior datasets against the questions of Sec.~I, in
+particular the two that concern the link.
 Measuring what a real link costs requires the channel recorded on the
 sensing timeline, together with ground truth for every agent
 throughout its trajectory. Testing whether that cost could be foreseen
@@ -535,7 +568,7 @@ anchored map frame, so that occlusion, co-visibility, and link
 geometry are evaluated against a common geometric representation.
 The three sites differ in layout, corridor width, wall material, and
 access point placement. This spread in map geometry is what makes the
-held-out site of Sec.~\ref{sec:q2} a test of transfer to a new
+held-out site of Sec.~\ref{sec:q2} (Q4) a test of transfer to a new
 building and not an interpolation within one.
 
 \input{figures/sites}
@@ -583,7 +616,7 @@ illustrates the paradigms on one site.
 The quantities defined here serve two purposes. They characterize the
 condition under which each frame was recorded, so that results can be
 stratified by it; and they are the predictor set $\mathcal{G}$ of
-Sec.~\ref{sec:q2}, used to test how much of the link's cost could
+Sec.~\ref{sec:q2} (Q4), used to test how much of the link's cost could
 be foreseen from the map alone. Both purposes require them to be
 computed per frame from the map, the annotations, and the agent poses,
 never from the signal they are meant to predict. A paradigm specifies
@@ -700,7 +733,7 @@ paradigm label, and the distributions of $\omega_e$, $\beta$, $C$, and
 clearance (Fig.~\ref{fig:stats}). State the fraction of frames in
 which the ego is occluded but a helper is visible, and the fraction in
 which the best helper's link is obstructed; these are the frames the
-two questions turn on.}
+questions of Q3 and Q4 turn on.}
 
 \input{figures/stats}
 
@@ -896,10 +929,13 @@ message stream, reading goodput, RTT, and link state from
 representation.
 \item \emph{Evaluation.} Fixed splits and scripts for T1 (ATE, RPE,
 loop closures, time to merge, merged-map label accuracy) and T2 (AP
-at IoU 0.3, 0.5, 0.7; mIoU), the Q1 link-cost and retained-gain
-metrics, and the Q2 regression with leave-one-site-out, feature sets,
-and the anticipated-share metric. Splits are defined by sequence,
-never by frame, to prevent temporal leakage, and by site for Q2.
+at IoU 0.3, 0.5, 0.7; mIoU), the Q4 link-cost and retained-gain
+metrics and the Q4 regression with leave-one-site-out, feature sets,
+and the anticipated-share metric; the Q1 transfer protocol (direct,
+fine-tuned, from scratch) with the resolution and modality
+downsampling of Q2; and the stratification of Q3 by
+\texttt{\_geom.yaml}. Splits are defined by sequence, never by frame,
+to prevent temporal leakage, and by site for Q4.
 \end{enumerate}
 
 \subsection{License and Access}
@@ -914,20 +950,24 @@ across the release, so link topology remains analyzable without
 exposing the deployment network.
 
 %=======================================================================
-% NOTE: scoop_paper/split/SPLIT.md plans a CODa-style T-RO benchmark with
-% five questions (Q1 transfer from V2X data, Q2 heterogeneity between
-% collaborators, Q3 where the indoor gain comes from, Q4 what the real link
-% costs and whether it is foreseeable, Q5 pretraining transfer). The section
-% below carries the draft's existing experiment, which maps to that plan's Q4.
-\section{Benchmark}
+% Structure follows scoop_paper/split/SPLIT.md (CODa-style T-RO): Sec. VII
+% fixes the protocol; Sec. VIII answers Q1-Q4 with one controlled experiment
+% each. Q5 (pretraining transfer to CoPeD) is optional and not drafted.
+\section{Benchmarks}
 \label{sec:benchmarks}
-The benchmark is a single controlled experiment. Two collaborative
-tasks are run on the same frames three times, and each time the
-inter-agent messages are delivered through a different channel, so
-that any difference in accuracy is caused by the channel alone.
-Comparing the runs measures the cost of the real link (Q1). Relating
-that cost, frame by frame, to the geometry of Sec.~\ref{sec:paradigms}
-measures how much of it could have been foreseen from the map (Q2).
+SCooP defines two benchmarks, collaborative SLAM (T1) and collaborative
+perception (T2), each with fixed splits, metrics, and allowed inputs.
+Every experiment of Sec.~\ref{sec:experiments} is run on these
+benchmarks, so the questions differ only in what is varied: the
+training source (Q1), the collaborator's sensing (Q2), the stratum of
+collaboration geometry (Q3), or the channel (Q4). Inter-agent messages
+are delivered through one replay module under one of three channels,
+so that in Q4 any difference in accuracy is caused by the channel
+alone. Splits are cut by sequence, never by frame, and by site where a
+question tests transfer across buildings; the frame-history rule and
+the allowed inputs (reference or estimated poses, logged link) are
+fixed per benchmark and shipped with the devkit
+(Sec.~\ref{sec:devkit}).
 
 \subsection{Channels}
 \label{sec:channels}
@@ -941,9 +981,9 @@ $\mathrm{RTT}_{ab}(t)/2 + s/G_{ab}(t)$, where $G_{ab}(t)$ is the
 goodput measured on that link at $t$ (Sec.~\ref{sec:commgt}), and it
 is dropped if the link was down. One replay module applies all three
 channels (Fig.~\ref{fig:replay}), so the channel is the only
-variable between runs. Evaluation uses leave-one-site-out over the
+variable between runs. Q4 evaluates leave-one-site-out over the
 three sites (Sec.~\ref{sec:q2}), so that nothing fitted on one site
-is evaluated on it. \todo{Sequences and frames per site.}
+is evaluated on it. \todo{Sequences and frames per site and split.}
 
 \input{figures/replay}
 
@@ -1023,11 +1063,90 @@ placed in the ego frame using either the reference poses or the T1
 estimate; the second option carries the effect of the link on
 localization through to perception.
 
-\subsection{Results: What the Link Costs}
+%=======================================================================
+\section{Experiments}
+\label{sec:experiments}
+Each question is answered by one controlled experiment on the
+benchmarks of Sec.~\ref{sec:benchmarks}; the full training tables
+behind every number are in Appendix~\ref{app:results}. Throughout, the
+cooperative gain of a method is $G = A_{\mathrm{coop}} -
+A_{\mathrm{ego}}$, with $A_{\mathrm{ego}}$ its single-agent accuracy
+on the same frames, so that every result is read relative to what the
+ego achieves alone.
+
+\subsection{Q1: Does Collaborative Perception Learned on Vehicles Transfer Indoors?}
+\label{sec:q1_transfer}
+Collaborative detection models are trained on vehicle datasets, where
+helpers sit at a common height, objects are car-sized, and ranges are
+tens of metres. We measure how much of that learning survives an
+indoor robot team. The four T2 detection baselines of
+Sec.~\ref{sec:tasks} are trained on OPV2V \cite{opv2v}, V2V4Real
+\cite{v2v4real}, V2X-Real \cite{v2xreal}, and DAIR-V2X
+\cite{dairv2x}, then evaluated on SCooP under the ideal channel in
+three regimes: direct transfer, fine-tuning on the SCooP training
+split, and training from scratch on SCooP. Ego AP and the cooperative
+gain $G$ are reported separately (Table~\ref{tab:res_transfer}),
+because the hypothesis is that $G$ shrinks more than ego AP does:
+fusion learned vehicle-scale range, height, and object size, which an
+indoor team does not reproduce. \todo{Results: ego AP and $G$ per
+source dataset and regime at IoU 0.3/0.5/0.7; whether the ranking of
+fusion methods on the source holds on SCooP; which regime recovers the
+gain.}
+
+\input{tables/res_transfer}
+
+\subsection{Q2: How Does Heterogeneity Between Collaborators Change the Gain?}
+\label{sec:q2_hetero}
+A deployed team mixes sensors. We measure how a mismatch between the
+ego and its helper changes the cooperative gain with a train-by-test
+matrix over the helper's sensing: LiDAR resolution (128, 64, 32, and
+16 channels, obtained by downsampling the Ouster returns) and helper
+modality (LiDAR robot, RGB-D cart, camera--radar mast), with the ego
+fixed. Early, late, and intermediate fusion are trained on one helper
+configuration and tested on every other (Table~\ref{tab:res_hetero}),
+under the ideal channel so that the effect is sensing alone. The
+cart and mast columns use the evidence floors and range caps of
+Table~\ref{tab:params}, so a drop is attributable to the helper's
+sensing and not to a label the helper could never have supported.
+\todo{Results: $G$ per train/test pair; whether intermediate fusion
+degrades more gracefully than early fusion under resolution mismatch;
+whether an elevated camera--radar mast helps a LiDAR ego at all.}
+
+\input{tables/res_hetero}
+
+\subsection{Q3: Where Does the Indoor Gain Come From?}
+\label{sec:q3_gain}
+In driving datasets the cooperative gain is usually a range story: the
+helper sees farther. Indoors, occlusion, range, and viewpoint are
+separable because the release carries them per object and frame
+(Sec.~\ref{sec:paradigms}). We stratify the gain of each T2 baseline
+under the ideal channel by ego occlusion $\omega_e$, by ego-to-object
+range $r_e$, by aspect angle $\beta$ to the best helper, and by
+co-visibility $C$, and report the share of the total gain contributed
+by each stratum (Fig.~\ref{fig:gain_strata}). The visible/observed
+distinction separates two kinds of rescue: objects the ego could not
+see (occlusion rescue) from objects it saw but returned too little
+evidence for (range rescue). \todo{Results: gain share per stratum
+per baseline; first evidence points to occlusion, with range rescue
+0.008 for the LiDAR ego against 0.29 for the RGB-D ego; whether the
+elevated mast is complementary ($\beta > 90^\circ$) for every ego
+position or only some; whether planned paradigms produced the intended
+strata.}
+
+\input{figures/gain_strata}
+
+\subsection{Q4: What Does the Real Link Cost, and Could the Map Have Foreseen It?}
 \label{sec:results}
-For a task with accuracy $A$, the cooperative gain is
-$G = A_{\mathrm{ideal}} - A_{\mathrm{ego}}$ and the cost of the link
-is $\Delta = A_{\mathrm{ideal}} - A_{\mathrm{logged}}$. We report
+This is the question no outdoor dataset can answer. Both benchmarks
+are run on the same frames three times, under the ideal, synthetic,
+and logged channels of Sec.~\ref{sec:channels}, so that any
+difference is caused by the channel alone; the link's cost is then
+related, frame by frame, to the geometry of Sec.~\ref{sec:paradigms}.
+
+\subsubsection{What the link costs}
+With $G = A_{\mathrm{ideal}} - A_{\mathrm{ego}}$ the cooperative gain
+under the ideal channel, the cost of the link is
+$\Delta = A_{\mathrm{ideal}} - A_{\mathrm{logged}}$. We report
 $\Delta$ and the retained gain $1 - \Delta/G$ per task and, for T2,
 per output (AP for boxes, mIoU for labels)
 (Tables~\ref{tab:res_t1}, \ref{tab:res_t2}; Fig.~\ref{fig:q1}). The
@@ -1051,9 +1170,13 @@ labels, which separates misplaced objects from lost coverage; (6)
 synthetic against logged, where the impairment model over- or
 under-stated the cost; (7) T2 on T1 poses (table in the appendix),
 the added loss from degraded localization; (8) the
-clearance-against-RSSI check of Sec.~\ref{sec:environments}.}
+clearance-against-RSSI check of Sec.~\ref{sec:environments}; (9) the
+latency cliff: in the OPV2V study \SI{100}{\milli\second} puts every
+fusion method below the ego floor, and the logged RTT under contention
+is \SIrange{60}{109}{\milli\second}, so state whether the real indoor
+link sits at that cliff and whether the cliff is contention.}
 
-\subsection{\unsure{Results: What the Map Could Foresee}}
+\subsubsection{What the map could foresee}
 \label{sec:q2}
 
 \unsure{For each frame $t$ of a logged run, the loss
@@ -1084,6 +1207,7 @@ over time. Position against map-based link prediction work.}
 
 \subsection{Failure Cases}
 \label{sec:failures}
+
 Four sequences are shown in Fig.~\ref{fig:failures}, each with the
 ego frame, the link trace, and the geometry over the same window.
 Three were selected where a baseline lost most of its gain under the
@@ -1104,9 +1228,24 @@ where the link caused it.
 \section{Discussion}
 \label{sec:discussion}
 
-\subsection{What the Link Costs}
+\subsection{Transfer and Heterogeneity (Q1, Q2)}
+\todo{Answer Q1 and Q2 in one sentence each first. Then: what a
+vehicle-trained fusion model carries over (backbone features) and what
+it does not (helper geometry, object scale); whether fine-tuning or
+from-scratch training closes the gap, and on how many sequences;
+which fusion family tolerates a resolution or modality mismatch, and
+what that implies for a team that cannot field identical sensors.}
+
+\subsection{Where the Gain Comes From (Q3)}
+\todo{Answer Q3 in one sentence first. Then: occlusion against range
+as the indoor story, how the evidence definition (LiDAR against depth)
+changes collaboration rates, whether elevated infrastructure is
+complementary for every ego or only depending on where the ego stands,
+and whether the planned paradigms produced the intended conditions.}
+
+\subsection{What the Link Costs (Q4)}
 \label{sec:findings}
-\todo{Answer Q1 in one sentence first: how much of the cooperative
+\todo{Answer the first half of Q4 in one sentence first: how much of the cooperative
 gain survives the logged link, per task.
 Then discuss:
 (1) Which task lost more, C-SLAM or detection, and why: C-SLAM sends
@@ -1121,8 +1260,8 @@ Then discuss:
 (4) T2 on T1 poses: how much extra loss comes from the link degrading
     localization, compared with the link delaying perception data.}
 
-\subsection{What the Map Could Foresee}
-\todo{Answer Q2 in one sentence first: the anticipated share, and
+\subsection{What the Map Could Foresee (Q4)}
+\todo{Answer the second half of Q4 in one sentence first: the anticipated share, and
 whether geometry beat distance alone.
 Then discuss, depending on the outcome:
 - High share: which geometric features carried it (from the feature
@@ -1136,19 +1275,6 @@ Then discuss, depending on the outcome:
   time (moving obstacles, contention) or in space (propagation).
 - Either way: did the predictor transfer to the held-out site? If
   not, geometry predicts link loss only in buildings it was fit on.}
-
-\subsection{What the Characterization Shows}
-\todo{Observations from the geometry itself, independent of the
-benchmark. Candidates to check once sequences exist:
-(1) whether range or occlusion limits the team more (visible vs.\
-observed by range bin);
-(2) how much the evidence definition (LiDAR vs.\ depth) changes
-collaboration rates;
-(3) whether elevated infrastructure is complementary for every ego, or
-only depending on where the ego stands ($\beta$ per ego);
-(4) whether planned paradigms produced the intended conditions
-(\texttt{intended\_paradigm} vs.\ measured);
-(5) whether map clearance agrees with measured RSSI.}
 
 \subsection{Limitations}
 \todo{Keep to limits that bound the claims:
@@ -1176,8 +1302,10 @@ only depending on where the ego stands ($\beta$ per ego);
 We presented SCooP, a multi-agent dataset that jointly captures
 synchronized sensing, cooperative perception labels, and measured
 communication, with dense reconstruction supervision, per-frame
-collaboration geometry, and benchmarks across the three layers.
-\todo{One sentence of headline findings.} Future work includes scaling
+collaboration geometry, and benchmarks across the three layers, and
+used it to answer four questions about collaborative perception in
+indoor robot teams. \todo{One sentence of headline findings per
+question.} Future work includes scaling
 to larger teams, adding modalities, and richer channel models.
 
 \section*{Acknowledgment}
@@ -1196,12 +1324,25 @@ $\mathrm{clear} < 0.6$.}
 
 %\input{figures/app_trajectories}
 
-\section{Extended Benchmark Results}
+\section{Annotation Ontology and Statistics}
+\label{app:ontology}
+\todo{Class list with definitions, per-class and per-site instance
+counts, static against dynamic, mask provenance counts.}
+
+\section{Full Training Tables}
 \label{app:results}
-\todo{T2 precision-recall curves at each IoU threshold per baseline
-and channel; T2 results with partner data placed by T1 poses;
-per-class mIoU; Q2 feature ablation, one feature removed at a time,
-per site.}
+\todo{Every number of Sec.~\ref{sec:experiments} with its training
+configuration: Q1 per source dataset, regime, and IoU; Q2 full
+train-by-test matrix per fusion family; Q3 gain per stratum and
+baseline; Q4 T2 precision-recall curves at each IoU threshold per
+baseline and channel, T2 with partner data placed by T1 poses,
+per-class mIoU, and the Q4 feature ablation, one feature removed at a
+time, per site. Re-parameterization table for outdoor-origin methods.}
+
+\section{Devkit and Release Details}
+\label{app:devkit}
+\todo{File schemas for \texttt{\_link.yaml}, \texttt{\_geom.yaml},
+and the CSI tensors; devkit API summary; checksums and DOI.}
 
 %\input{figures/app_pr}
 

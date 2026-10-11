@@ -9,7 +9,7 @@
 \toprule
 \textbf{Guarantee} & \textbf{Bound} & \textbf{Validated by} & \textbf{Experiment} \\
 \midrule
-Clock agreement between agents & \unsure{about \SI{70}{\micro\second} (\SI{0.2}{\milli\metre} at \SI{3}{\metre\per\second})}; \todo{reconcile with Table~\ref{tab:ntp} max \SI{42.5}{\micro\second} and the coop\_2 measurement} & chrony offset logs, every run & E1 \\
+Clock agreement between agents & \unsure{about \SI{70}{\micro\second} (\SI{0.2}{\milli\metre} at \SI{3}{\metre\per\second})}; \todo{reconcile with the per-client max of \SI{42.5}{\micro\second} and the coop\_2 measurement} & chrony offset logs, every run & E1 \\
 Sniffer clock bias & \todo{to be measured} (worst case \SI{7.8}{\milli\second}) & probe-packet stamps on both ends & E1 \\
 Spatial extrinsics & residual per sensor pair, Table~\ref{tab:calib} & held-out reflector and board positions & E1 \\
 Agent pose in the site frame & \SI{1.06}{\centi\metre} surface agreement across passes; board residual \todo{10.0 mm / 0.88$^\circ$ (mobile\_1), 54.0 mm / 1.38$^\circ$ (mobile\_2), coop2\_0828} & second mapping pass, rangefinder control distances, held-out boards & E1, E2 \\
