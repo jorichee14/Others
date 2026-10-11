@@ -28,20 +28,31 @@ fi
 TAG=$(echo "$CHANNEL" | sed -E 's#:[^,]*/([^/,]+)#:\1#; s#[:,=/]#_#g')
 RUN="$OUT/runs/$TAG"
 [ -e "$RUN" ] && { echo "$RUN exists: remove it to run this channel again"; exit 1; }
-mkdir -p "$RUN/results"
-sed "s#log_folder: .*#log_folder: \"$RUN/results\"#" "$OUT/scoop_rgbd.yaml" > "$RUN/scoop_rgbd.yaml"
-PIDS=()
-# the container runs as root: hand the run folder back to the export's owner
-trap 'kill ${PIDS[@]} 2>/dev/null; wait 2>/dev/null; chown -R --reference="$OUT" "$RUN" 2>/dev/null' EXIT
+# cslam nodes left in these domains (e.g. from an earlier run in another container
+# on the host network) would get the same data and publish the same keyframe ids
 for ((i = 0; i < N; i++)); do
   D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
-  ROS_DOMAIN_ID=$D ros2 launch cslam_experiments cslam_rgbd.launch.py config_path:="$RUN/" \
+  if ROS_DOMAIN_ID=$D ros2 node list --no-daemon --spin-time 3 2>/dev/null | grep -q cslam; then
+    echo "cslam nodes are already running in ROS domain $D: stop them first (docker stop <the old container>)"; exit 1
+  fi
+done
+mkdir -p "$RUN/results"
+sed "s#log_folder: .*#log_folder: \"$RUN/results\"#" "$OUT/scoop_rgbd.yaml" > "$RUN/scoop_rgbd.yaml"
+PIDS=(); PLAY=()
+# each launch in its own process group, so that the nodes it starts stop with it;
+# the container runs as root: hand the run folder back to the export's owner
+trap 'for p in ${PIDS[@]} ${PLAY[@]}; do kill -INT -- -$p 2>/dev/null; done; sleep 3
+      for p in ${PIDS[@]} ${PLAY[@]}; do kill -KILL -- -$p 2>/dev/null; done; wait 2>/dev/null
+      chown -R --reference="$OUT" "$RUN" 2>/dev/null' EXIT
+for ((i = 0; i < N; i++)); do
+  D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
+  ROS_DOMAIN_ID=$D setsid ros2 launch cslam_experiments cslam_rgbd.launch.py config_path:="$RUN/" \
       config_file:=scoop_rgbd.yaml robot_id:=$i namespace:=/r$i max_nb_robots:=$N > "$RUN/cslam_r$i.log" 2>&1 &
   PIDS+=($!)
 done
 if [ "$CHANNEL" != direct ]; then
   DOMAINS=$(for ((i = 0; i < N; i++)); do echo -n "$((BASE + i)) "; done)
-  python3 "$HERE/channel_relay.py" --channel "$CHANNEL" --robots "${ROBOTS[@]}" --domains $DOMAINS \
+  setsid python3 "$HERE/channel_relay.py" --channel "$CHANNEL" --robots "${ROBOTS[@]}" --domains $DOMAINS \
       --log "$RUN/relay.csv" > "$RUN/relay.log" 2>&1 &
   PIDS+=($!)
 fi
@@ -49,11 +60,11 @@ echo "cslam up for $N robots, channel $CHANNEL; playing the bag at x$RATE in 15 
 sleep 15
 PLAY=()
 if [ "$CHANNEL" = direct ]; then
-  ROS_DOMAIN_ID=0 ros2 bag play "$OUT/bag" -r "$RATE" & PLAY+=($!)
+  ROS_DOMAIN_ID=0 setsid ros2 bag play "$OUT/bag" -r "$RATE" & PLAY+=($!)
 else
   for ((i = 0; i < N; i++)); do
     # ros2 bag play's --regex must match the whole topic name
-    ROS_DOMAIN_ID=$((BASE + i)) ros2 bag play "$OUT/bag" -r "$RATE" --clock --regex "/r$i/.*" & PLAY+=($!)
+    ROS_DOMAIN_ID=$((BASE + i)) setsid ros2 bag play "$OUT/bag" -r "$RATE" --clock --regex "/r$i/.*" & PLAY+=($!)
   done
 fi
 T0=$SECONDS
