@@ -143,9 +143,10 @@ Neither can be answered with any single existing dataset.
 
 We close this gap with \textbf{SCooP}: a multi-agent, multi-view,
 multi-sensor dataset that jointly captures all three layers under
-building-scale indoor ground truth. The acquisition platform, its
-calibration, and the survey-free reference pipeline are described in
-a companion paper \cite{scoop_testbed}; this paper describes the data.
+building-scale indoor ground truth. SCooP is recorded on SCooP-Bed; the
+platform, its calibration, the survey-free reference pipeline, and the
+channel-replay module are described and validated in a companion paper
+\cite{scoop_testbed}. This paper describes the data.
 The main contributions are:
 \begin{itemize}
     \item \textbf{A joint sensing and communication dataset with
@@ -344,9 +345,10 @@ measured.
 %=======================================================================
 \section{Acquisition Platform and Reference}
 \label{sec:platform}
-This section summarizes the platform on which SCooP is recorded; the
-full system, calibration, timing budget, reference pipeline, and their
-validation are given in \cite{scoop_testbed}.
+This section summarizes SCooP-Bed, the platform on which SCooP is
+recorded; the full system, calibration, timing budget, reference
+pipeline, replay module, and their validation are given in
+\cite{scoop_testbed}.
 
 \subsection{Agents and Sensing}
 SCooP is recorded by two mobile agents and three infrastructure
@@ -912,6 +914,11 @@ across the release, so link topology remains analyzable without
 exposing the deployment network.
 
 %=======================================================================
+% NOTE: scoop_paper/split/SPLIT.md plans a CODa-style T-RO benchmark with
+% five questions (Q1 transfer from V2X data, Q2 heterogeneity between
+% collaborators, Q3 where the indoor gain comes from, Q4 what the real link
+% costs and whether it is foreseeable, Q5 pretraining transfer). The section
+% below carries the draft's existing experiment, which maps to that plan's Q4.
 \section{Benchmark}
 \label{sec:benchmarks}
 The benchmark is a single controlled experiment. Two collaborative

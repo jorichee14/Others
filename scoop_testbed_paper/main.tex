@@ -1,9 +1,11 @@
 \documentclass[conference]{IEEEtran}
 \IEEEoverridecommandlockouts
-% Testbed / systems paper split out of the SCooP draft.
-% Companion: ../scoop_dataset_paper (the dataset, geometry characterization,
-% release, and benchmark). This paper owns the platform, calibration,
-% timing, reference-localization pipeline, and communication measurement.
+% Paper A: SCooP-Bed, the testbed paper split out of the SCooP draft.
+% Target: RA-L (6 pages + 2 overlength). Structure follows
+% ../scoop_paper/split/PAPER_A.md; experiments E1-E5 follow
+% ../scoop_paper/split/EXPERIMENTS.md.
+% Companion: ../scoop_dataset_paper (Paper B: sequences, labels, release,
+% benchmark). This paper releases no sequences, labels, or leaderboard.
 % Template version as of 6/27/2024
 
 \usepackage{cite}
@@ -36,7 +38,7 @@
 
 \begin{document}
 
-\title{A Heterogeneous Indoor Multi-Robot Testbed for Synchronized Sensing and Wireless Link Measurement with Survey-Free Building-Scale Ground Truth\\
+\title{SCooP-Bed: An Indoor Multi-Robot Testbed for Collaborative Perception over Measured Wireless Links\\
 
 \thanks{Identify applicable funding agency here. If none, delete this.}
 }
@@ -51,354 +53,304 @@ Engineering, National Yang Ming Chiao Tung University, Hsinchu, Taiwan
 \maketitle
 
 \begin{abstract}
-Evaluating collaborative SLAM and collaborative perception on a real
-wireless link requires three things that no indoor multi-robot platform
-provides together: synchronized multi-modal sensing on every agent, the
-state of the link between every pair of agents recorded on the same
-timeline, and a pose for every scan of every agent in one metric frame
-at building scale, where GNSS and motion capture are unavailable. We
-present a testbed that meets these requirements with two mobile robots
-and three infrastructure nodes. Each agent carries LiDAR, camera, IMU,
-or mmWave radar and a Wi-Fi interface; the link is measured throughout
-as passive link state, active goodput and round-trip time, and
-channel state information, and is never used to transport sensor data.
-All units are clock-synchronized over the measured link with a
-documented error budget in which synchronization contributes well
-under a millimetre of spatial error. A survey-free reference pipeline
-builds a dense map with the testbed's own LiDAR, freezes it, and
-registers every subsequent scan into it; a network of fiducial boards
-posed from the map anchors an RGB-D-only robot and the LiDAR-less
-infrastructure in the same frame. The reference is validated by a
-second independent mapping pass, laser-rangefinder control distances,
-and held-out boards, none of which enter its estimation, and is built
-to annotation grade so that labels can be derived from it. We report
-the calibration residuals, timing statistics, reference accuracy, and
-link characteristics measured at three sites, and the lessons learned
-in building the system. The testbed is the acquisition platform of the
-SCooP dataset \cite{scoop_dataset}; its post-processing pipeline is
-released so that every derived product can be regenerated.
+Collaboration between robots is useful only if a neighbor's message
+arrives in time and lands in the right place. Indoors, the wireless
+link is shared and contended, and there is no GNSS against which to
+check where a message landed, yet existing multi-robot testbeds treat
+the network as ideal, communication-aware systems do not score
+perception against ground truth, and cooperative-perception platforms
+are outdoor and simulate the link. We present SCooP-Bed, a
+heterogeneous indoor testbed of three agent classes, a LiDAR robot, an
+RGB-D cart, and camera--radar infrastructure masts, in which the state
+of every inter-agent link is recorded on the sensors' clock: passive
+link state at \SI{5}{\hertz}, round-trip time at \SI{100}{\hertz},
+goodput in \SI{4}{\second} windows, and channel state information at
+\SIrange{104}{141}{\hertz}. All agents share one clock, bounded to
+\unsure{about \SI{70}{\micro\second}}, and one metric frame at building
+scale, obtained without motion capture or GNSS from a self-built
+reference map and a fiducial chain for agents without LiDAR, and
+validated by a second mapping pass (\SI{1.06}{\centi\metre} surface
+agreement), rangefinder control distances, and held-out fiducials. A
+channel-in-the-loop replay module runs any collaborative method against
+the link the agents actually had. Experiments show that the testbed is
+one to three orders of magnitude finer than the effects it measures,
+that its map predicts the signal it logs although neither produced the
+other, \todo{that replay reproduces live arrivals}, that a load mode
+reproduces its link on another day, and that under contention the
+delay moves from about \SI{3}{\milli\second} to
+\SIrange{60}{109}{\milli\second}, crossing one LiDAR frame, which the
+synthetic channels of prior benchmarks do not capture. SCooP-Bed is
+the acquisition platform of the SCooP dataset \cite{scoop_dataset}.
 \end{abstract}
 
 \begin{IEEEkeywords}
-multi-robot systems, testbed, sensor calibration, time synchronization,
-ground truth, integrated sensing and communication, channel state
+multi-robot systems, testbed, cooperative perception, wireless
+communication, time synchronization, ground truth, channel state
 information
 \end{IEEEkeywords}
 
 %=======================================================================
 \section{Introduction}
 \label{sec:introduction}
-Collaborative robot teams couple three layers: \emph{sensing} for
-localization and mapping, \emph{perception} for scene understanding,
-and \emph{communication} for sharing information between agents. The
-two processes in which these layers meet, collaborative SLAM (C-SLAM)
-\cite{swarmslam,doorslam,kimeramulti} and collaborative perception
-\cite{where2comm}, are evaluated almost entirely on data in which the
-communication layer is assumed ideal or simulated. Measuring what a
-real link costs a team requires an acquisition platform in which the
-link is a recorded quantity rather than a transport, and in which every
-agent has a reference pose on the timeline of that recording.
+A robot team cooperates through two processes, collaborative SLAM,
+which places every robot in one shared map \cite{swarmslam,doorslam,
+kimeramulti}, and collaborative perception, which fuses what the agents
+observe within it \cite{where2comm,zhou2022gnnperception}. Both depend
+on a wireless link, and both are useful only if a neighbor's message
+arrives before the scene changes and can be placed in the receiver's
+frame with accuracy comparable to its own sensors. Indoors, where
+occlusion is dense and cooperation matters most, the link is shared
+among the agents and contended, and there is no GNSS to say where a
+message landed. Measuring what the link does to a team therefore
+requires a platform in which the link is recorded alongside the
+sensors, and in which every agent has a reference pose on that same
+timeline.
 
-Indoors, where cooperation matters most because occlusion is dense,
-line of sight is short, and the channel is dominated by multipath, the
-reference every outdoor platform relies on does not exist. RTK-GNSS
-is unavailable \cite{dairv2x,v2v4real,deepsense6g}; motion capture is
-confined to an instrumented room \cite{utias,m2dgr}; total-station
-anchoring leaves odometry to carry the pose between surveyed points
-\cite{hilti2022}; and survey-scanner priors for map registration
-\cite{newercollege,oxfordspires,lamar} require an instrument most
-robotics groups do not own. Multi-robot indoor platforms therefore
-either restrict ground truth to a short segment \cite{s3e} or report
-the estimator's own pose with no independent reference \cite{coped}.
-A heterogeneous team adds a second difficulty: an agent without a
-LiDAR, such as an RGB-D pushcart or a camera-only infrastructure node,
-cannot be placed in a LiDAR map by registration alone.
+No existing platform provides this. Multi-robot testbeds such as the
+Robotarium \cite{pickem2017robotarium,wilson2021robotarium},
+Duckietown \cite{paull2017duckietown}, the CPM Lab
+\cite{kloock2021cpmlab}, and ChoiRbot \cite{testa2021choirbot} give
+precise positions from motion capture or overhead cameras but treat
+the network as ideal. Communication-aware systems such as ROS-NetSim
+\cite{calvofullana2021rosnetsim}, CHORD and ACHORD
+\cite{ginting2021chord,saboia2022achord}, and MOCHA
+\cite{cladera2024mocha} model or survive the link but do not score
+perception against ground truth. Cooperative-perception platforms such
+as V2V4Real \cite{v2v4real}, V2X-Real \cite{v2xreal}, TUMTraf-V2X
+\cite{zimmer2024tumtrafv2x}, and CoPeD \cite{coped} are outdoor or
+GNSS-referenced, and they idealize or simulate the link.
 
-The communication side raises its own requirements. Joint
-sensing--communication testbeds record a real channel
-\cite{deepsense6g,dichasus}, but with a single scripted transmitter
-and no cooperating agent. Robotic systems that do log the link report
-data volume \cite{doorslam,swarmslam} or peer-to-peer latency and
-throughput at \SI{1}{\hertz} \cite{planetary_cslam}, not channel state,
-and the measurement is a by-product of the system under test rather
-than a controlled stream. Extracting channel state information (CSI)
-from commodity Wi-Fi \cite{nexmon} further constrains the link
-configuration, so the measurement design and the network design cannot
-be separated.
-
-This paper describes a testbed built to meet these requirements
-together. Its design is governed by four principles: every unit records
-its own sensors locally and nothing crosses the wireless network before
-reaching disk, so the link is measured and not loaded; every rig is
-fixed, so calibration is done once; every agent, whatever its sensors,
-is placed in one frozen site map by registration or by fiducials posed
-from that map; and every reference quantity is validated against a
-measurement that did not produce it. The contributions are:
-\begin{itemize}
-    \item \textbf{A heterogeneous five-agent acquisition platform} with
-    synchronized LiDAR, stereo and RGB-D cameras, IMU, and mmWave radar
-    on two mobile and three infrastructure agents, with the Wi-Fi link
-    between every agent pair measured as a first-class stream at three
-    levels: passive link state, active goodput and round-trip time, and
-    per-frame CSI (Secs.~\ref{sec:system}, \ref{sec:comm}).
-    \item \textbf{A documented calibration and timing budget}
-    (Sec.~\ref{sec:calibration}): per-platform spatial calibration
-    validated on held-out observations, clock synchronization over the
-    measured link with per-frame offset logging, direct measurement of
-    the one asymmetric-path bias the protocol cannot observe, and an
-    error bound showing that synchronization is not the limiting term.
-    \item \textbf{A survey-free, annotation-grade reference pipeline}
-    (Sec.~\ref{sec:groundtruth}) that places every agent, including an
-    RGB-D-only robot and LiDAR-less infrastructure, in one building-scale
-    metric frame using only the testbed's own sensors, and validates it
-    against a second mapping pass, control distances, and held-out
-    fiducials.
-    \item \textbf{An evaluation and lessons learned}
-    (Secs.~\ref{sec:evaluation}, \ref{sec:lessons}) covering reference
-    accuracy, calibration residuals, clock stability, the achievable CSI
-    rate against robot speed, and the design decisions forced by
-    commodity CSI extraction.
-\end{itemize}
-The testbed is the acquisition platform of the SCooP dataset
-\cite{scoop_dataset}, which describes the recorded sequences, the
-annotations, the collaboration-geometry characterization, the release
-format, and the benchmark. This paper is self-contained with respect to
-the platform and its validation.
+This paper presents SCooP-Bed, a testbed built so that any
+collaborative method can be run against the link the agents actually
+had, and scored against a pose reference that exists for every scan of
+every agent. Its contributions are:
+\begin{enumerate}
+    \item \textbf{A heterogeneous testbed of three agent classes} in
+    which every pair's link state and channel state is recorded on the
+    sensors' clock: passive state at \SI{5}{\hertz}, RTT at
+    \SI{100}{\hertz}, goodput in \SI{4}{\second} windows, and CSI at
+    \SIrange{104}{141}{\hertz}, with contention as a controlled knob
+    (Secs.~\ref{sec:design}, \ref{sec:link}).
+    \item \textbf{A procedure for building-scale ground truth without
+    motion capture or GNSS}: a self-built reference map, plus a fiducial
+    chain for agents without LiDAR, validated by measurements that never
+    enter it, to \SI{1.06}{\centi\metre} surface agreement across
+    independent passes, on one clock bounded to \unsure{about
+    \SI{70}{\micro\second}} (Secs.~\ref{sec:alignment},
+    \ref{sec:gt}).
+    \item \textbf{A channel-in-the-loop replay} that runs any
+    collaborative method against the recorded link, \todo{validated
+    against live execution to within one receiver frame}
+    (Sec.~\ref{sec:replay}).
+\end{enumerate}
+Under contention, the measured delay moves from about
+\SI{3}{\milli\second} to \SIrange{60}{109}{\milli\second}, which
+crosses one LiDAR frame. Only a testbed that records the link can show
+which messages cross it. Sec.~\ref{sec:experiments} establishes, with
+five experiments, that SCooP-Bed is precise, consistent,
+\todo{faithful}, repeatable, and necessary. The testbed releases no
+sequences, labels, or leaderboard; those belong to the SCooP dataset
+\cite{scoop_dataset}, which was recorded on it.
 
 %=======================================================================
 \section{Related Work}
 \label{sec:related}
 
-\subsection{Multi-Robot Data Acquisition Platforms}
-Multi-robot SLAM datasets are recorded by platforms that provide
-synchronized multi-agent sensing: SubT-MRS~\cite{subtmrs} in degraded
-underground environments, Kimera-Multi~\cite{kimeramulti} with up to
-eight robots at campus scale, S3E~\cite{s3e} with UWB inter-robot
-ranging, and CoPeD~\cite{coped} and CU-Multi~\cite{cumulti} moving
-toward collaborative perception. Across all of these the communication
-layer is absent or incidental: inter-agent links are assumed ideal or
-logged only as a by-product of the C-SLAM system under test, and no
-channel measurements are released alongside the sensor streams. A
-planetary-analogue C-SLAM platform \cite{planetary_cslam} is a notable
-exception in reporting measured peer-to-peer latency and throughput,
-but at \SI{1}{\hertz} and without channel state. Cooperative-perception
-acquisition for driving has begun to measure the link:
-V2X-ReaLO~\cite{v2xrealo} evaluates fusion over a live Wi-Fi link and
-CooperScene~\cite{cooperscene} releases per-scene C-V2X latency,
-throughput, and loss traces. Both are outdoor and vehicle-centric, with
-GNSS ground truth. Our platform differs in recording the channel at
-three levels on every link, in operating indoors without GNSS, and in
-handling heterogeneous agents whose sensing does not include a LiDAR.
+\subsection{Multi-Robot Testbeds and Platforms}
+Remotely accessible and educational testbeds made multi-robot
+experiments reproducible: the Robotarium
+\cite{pickem2017robotarium,wilson2021robotarium}, Pheeno
+\cite{wilson2016pheeno}, Duckietown \cite{paull2017duckietown},
+Crazyswarm \cite{preiss2017crazyswarm}, the CPM Lab
+\cite{kloock2021cpmlab}, the Cambridge minicar fleet
+\cite{hyldmar2019fleet}, and the ROS~2 toolboxes ChoiRbot
+\cite{testa2021choirbot} and CrazyChoir \cite{pichierri2023crazychoir};
+see \cite{mokhtarian2025survey} for a survey. They lead with
+reproducibility, a bill of materials, and a validated position
+reference, which we adopt. In every case the reference is motion
+capture or an overhead camera, confining the arena to one room, and
+the network between robots is assumed ideal or is not a measured
+quantity.
 
-\subsection{Joint Sensing--Communication Testbeds}
-Integrated sensing and communication (ISAC) testbeds co-register real
-wireless measurements with conventional sensors. DeepSense
-6G~\cite{deepsense6g} synchronizes mmWave and sub-6\,GHz channel data
-with camera, LiDAR, radar, and GPS, primarily for beam and blockage
-prediction. DICHASUS~\cite{dichasus} provides massive-MIMO CSI with
-sub-decimetre position ground truth from a total station, and
-DeepMIMO~\cite{deepmimo} offers ray-traced CSI in simulated settings.
-These platforms ground the communication layer in measurement but are
-single-link: the transmitter follows a scripted path, no other agent
-cooperates with it, and the sensing on board serves the channel
-measurement rather than a robotic task. Commodity CSI extraction
-\cite{nexmon} has made per-frame channel state available on low-cost
-hardware, but at the price of constraints on bandwidth, spatial
-streams, and PHY mode that an acquisition platform must design around
-(Sec.~\ref{sec:comm}). Our testbed retains the measured-channel
-character of ISAC platforms while embedding it in a multi-agent robotic
-system with full sensing on every node.
+\subsection{Communication in Multi-Robot Systems}
+Communication-aware systems bring the network into the loop.
+ROS-NetSim \cite{calvofullana2021rosnetsim} couples a robot simulator
+with a network simulator; CHORD and ACHORD
+\cite{ginting2021chord,saboia2022achord} and MOCHA
+\cite{cladera2024mocha} share data over intermittent real links in
+underground and field deployments; \cite{blumenkamp2022framework}
+provides a framework for real-robot wireless experiments; and
+\cite{tian2023resilient} reports a resilient multi-robot SLAM system
+run under real communication, followed by lessons learned. Large-scale
+multi-robot SLAM systems report the volume exchanged
+\cite{chang2022lamp2,swarmslam,doorslam}. These works survive or model
+the link; none records it per pair on the sensors' clock in a form
+that can be replayed into another method, and none scores perception
+against an independent reference.
 
-\subsection{Ground Truth for Indoor Multi-Agent Platforms}
+\subsection{Cooperative-Perception Platforms and Measured Links}
+Cooperative-perception platforms provide multi-agent sensing with
+labels: CoPeD \cite{coped}, a heterogeneous air--ground team, is the
+closest RA-L neighbor and the one this testbed must be separated from,
+since it reports the estimator's own pose and no link; V2V4Real
+\cite{v2v4real}, V2X-Real \cite{v2xreal}, TUMTraf-V2X
+\cite{zimmer2024tumtrafv2x}, and RCooper \cite{hao2024rcooper} are
+outdoor and RTK-referenced; Providentia \cite{krammer2022providentia}
+and the mobile-plus-static system of \cite{jimenez2011integrated} are
+the closest architectures in combining infrastructure and mobile
+sensors. The link has begun to be measured for driving: AutoCast
+\cite{qiu2022autocast} and EMP \cite{zhang2021emp} schedule
+transmissions under modeled or emulated V2X, \cite{hawlader2024v2xexp}
+reports V2X experiments on real hardware, V2X-ReaLO \cite{v2xrealo}
+evaluates online fusion over a live Wi-Fi link, and CooperScene
+\cite{cooperscene} releases per-scene C-V2X latency, throughput, and
+loss traces. All are outdoor, GNSS-referenced, and record the link at
+the transport level without channel state.
+Table~\ref{tab:capability} compares the capabilities. Only SCooP-Bed
+fills every column; CooperScene is the nearest case and differs in
+setting, pose reference, CSI, and replay.
+
+\input{tables/capability}
+
+\subsection{Indoor Ground Truth Without a Survey Instrument}
 \label{sec:gt_related}
-Indoor platforms differ along two axes: where the reference geometry
-comes from, and whether it is validated \emph{independently}, against
-a higher-accuracy measurement that did not inform the solution, or
-only by internal consistency. \emph{Motion capture} handles multiple
-agents naturally and gives millimetre-accurate, independently measured
-trajectories, but only inside a camera-instrumented volume, typically
-a single room \cite{utias,m2dgr}. \emph{Sparse anchoring} spreads
-surveyed references across a site, whether total-station control
-points \cite{hilti2022} or fiducial beacons constraining a
-structure-from-motion solution \cite{airmuseum}, but between anchors
-the pose is carried by odometry or SfM; taken to its limit, some
-multi-agent releases provide full trajectories only within a short
-mocap segment and endpoint poses elsewhere \cite{s3e}. \emph{Map
-registration} aligns each scan to a dense prior of the whole site and
-yields full, independently validated trajectories at building scale,
-including multi-robot and multi-session releases \cite{subtmrs} and
-heterogeneous camera-centric devices \cite{lamar}, but in every case
-the guarantee is inherited from a prior captured with a dedicated
-survey scanner. \emph{SLAM-derived pseudo-ground truth} dispenses with
-the survey instrument: an offline SLAM solution supplies a pose for
-every scan. Single-agent instances attach quantitative checks such as
-sparse physically measured landmark distances \cite{incrowdvi}, while
-the multi-robot instances we are aware of validate by internal
-consistency alone, for example by overlay against geospatial imagery
-\cite{envodat}. Independent traversals can converge to the same wrong
-geometry, most likely in degenerate regions such as featureless
-corridors, where a converged registration offers no internal evidence
-of being correct. Finally, some multi-robot releases report the
-estimator's own pose with no reference at all \cite{coped}.
-
-A reference that will be used to derive labels places a heavier demand
-than one used only as an evaluation target: an error in it propagates
-into every annotation. Our pipeline combines three of the strategies
-above, an offline SLAM-derived map, scan-to-map registration against
-it, and fiducial anchoring, and unlike prior SLAM-derived references
-it is validated against independent control distances and
-cross-referenced between repeated passes (Sec.~\ref{sec:groundtruth}).
+Indoor references differ in where the geometry comes from and whether
+it is validated independently. Motion capture is accurate but
+room-bound \cite{utias,m2dgr}. Sparse anchoring from total-station
+points \cite{hilti2022} or surveyed fiducials \cite{airmuseum} leaves
+odometry to carry the pose between anchors, and at its limit provides
+trajectories only inside a short mocap segment \cite{s3e}. Map
+registration against a dense prior yields full, independently
+validated trajectories at building scale \cite{subtmrs,lamar}, but the
+prior comes from a survey scanner. SLAM-derived references dispense
+with the instrument and are validated by sparse measured landmark
+distances in the single-agent case \cite{incrowdvi} or by internal
+consistency alone in the multi-robot case \cite{envodat}; independent
+traversals can converge to the same wrong geometry in featureless
+corridors. SCooP-Bed combines an offline SLAM-derived map, scan-to-map
+registration, and map-posed fiducials, and validates the result against
+control distances and repeated passes that never enter it
+(Sec.~\ref{sec:gt}).
 
 %=======================================================================
-\section{System Overview}
-\label{sec:system}
-
-The testbed consists of two mobile agents and three infrastructure
+\section{Testbed Design}
+\label{sec:design}
+SCooP-Bed consists of two mobile agents and three infrastructure
 agents connected to a single access point, with an additional host
-that extracts channel state. Each platform carries its own sensors and
-records to local storage. The wireless link is measured throughout the
-recording and is not used to transport any sensor data.
-Fig.~\ref{fig:overview} shows the agents, their sensors, and the
-measured link in a recording scenario.
+that extracts channel state. Fig.~\ref{fig:overview} shows a recording
+scenario with the agents placed in the map frame and the measured
+links between them. \todo{Redraw Fig.~\ref{fig:overview} per the plan:
+floor plan with agents in the map frame, links colored by measured RTT
+or RSSI, and a strip below with one shared timeline of sensor frames,
+link samples, and CSI. It should say ``one clock, one frame, every
+link'' without text.}
 
 \input{figures/overview}
 
-\subsection{Design Principles}
-Four decisions shape the system and recur throughout the paper.
-
-\emph{The link is a measurement, not a transport.} Each unit records
-locally; no sensor stream traverses the wireless network before
-reaching disk. The only traffic the testbed itself places on the link
-is clock synchronization and the active probes of
-Sec.~\ref{sec:comm}, both of which are present in every run and
-therefore form part of the channel that is measured. This keeps the
-measured link representative of what a deployed team would have, and
-keeps a link outage from costing sensor data.
-
-\emph{Rigs are fixed; calibration is done once.} In each agent, a fixed
-rig compounds the multi-modal sensors (Fig.~\ref{fig:platforms}). The
-rig is constant across all recordings, removing the need to calibrate
-in every session, and allowing each extrinsic to be validated on
-observations that did not enter its estimation
-(Sec.~\ref{sec:calibration}).
-
-\emph{One frozen map per site places every agent.} A dense reference
-map built with the testbed's own LiDAR is frozen before any sequence
-is recorded. LiDAR agents enter the map frame by scan-to-map
-registration; agents without a LiDAR enter it through fiducial boards
-whose poses were themselves estimated from the map
-(Sec.~\ref{sec:groundtruth}). No survey instrument is required.
-
-\emph{Every reference quantity is validated out of sample.} Extrinsics,
-clock offsets, and poses are each checked against data that did not
-inform them: held-out boards and reflector positions, probe packets
-stamped on both ends, a second mapping pass, and laser-rangefinder
-control distances.
-
 \subsection{Agents}
-\texttt{mobile\_1} is an AgileX Scout Mini equipped with an Ouster
-LiDAR, a ZED~2i stereo camera with an integrated IMU, two IWR6843
-mmWave radars, and an RTL8852BU Wi-Fi interface. It also carries
-\texttt{sniffer}, a Raspberry Pi~4 whose BCM43455c0 chipset is used
-for CSI extraction. \texttt{mobile\_2}, the sensor-constrained agent,
-is a pushcart equipped with a RealSense D455 RGB-D camera with IMU, an
+\texttt{mobile\_1}, the LiDAR robot, is an AgileX Scout Mini equipped
+with an Ouster LiDAR, a ZED~2i stereo camera with an integrated IMU,
+two IWR6843 mmWave radars, and an RTL8852BU Wi-Fi interface. It also
+carries \texttt{sniffer}, a Raspberry Pi~4 whose BCM43455c0 chipset is
+used for CSI extraction. \texttt{mobile\_2}, the RGB-D cart, is a
+pushcart equipped with a RealSense D455 RGB-D camera with IMU, an
 on-board visual SLAM pipeline, and a Wi-Fi interface \todo{Add Radar
-(?)}. Each infrastructure agent, \texttt{infra\_N}, is a mast with an
-Arducam RGB camera, an IWR6843 radar, and a Raspberry Pi whose
-on-board BCM43455 serves as the wireless interface. The sensor models,
-rates, and resolutions are listed in Table~\ref{tab:sensors}.
+(?)}. Each infrastructure mast, \texttt{infra\_N}, carries an Arducam
+RGB camera, an IWR6843 radar, and a Raspberry Pi whose on-board
+BCM43455 serves as the wireless interface. The sensor models, rates,
+and resolutions are listed in Table~\ref{tab:sensors}; compute,
+storage, and cost per agent class are given in Table~\ref{tab:bom}.
+The three classes are deliberate: the LiDAR robot builds the reference
+map, the cart represents the low-cost agents a deployed team contains
+and that a reference must localize without a LiDAR, and the masts
+provide the elevated, persistent vantage no mobile node can sustain.
 
 \input{figures/platforms}
 
 \input{tables/sensors}
 
-The heterogeneity is deliberate. \texttt{mobile\_1} is the fully
-equipped agent whose LiDAR builds the reference map.
-\texttt{mobile\_2} represents the class of low-cost agents that a
-deployed team will contain and that a reference pipeline must be able
-to localize without a LiDAR. The infrastructure agents provide the
-elevated, persistent vantage that no mobile node can sustain, and the
-camera-only sensing typical of fixed installations.
+\subsection{Network}
+All agents associate to a single access point on channel 149 (VHT-80,
+\SI{5745}{\mega\hertz}); no ad hoc or mesh mode is used, and power
+save is disabled on all transmitters. The transmitter settings are
+imposed by the CSI receiver: a 1$\times$1 802.11ac configuration.
+802.11ax is disabled, since the receiver cannot demodulate HE frames
+and would capture only control frames, and the number of spatial
+streams is fixed to one, since a single-antenna receiver cannot
+separate a two-stream transmission. The measured single-stream
+capacity is \numrange{275}{282}\,Mbit/s uplink and
+\numrange{598}{676}\,Mbit/s downlink per mobile agent.
 
-\subsection{Frames}
-\label{sec:frames}
-The sensors of each platform are expressed in the origin frame of that
-platform, and each platform is expressed in the world frame of its
-site (Sec.~\ref{sec:groundtruth}). The origin frame depends on the
-platform. For \texttt{mobile\_1} we use the robot's
-\texttt{base\_link}, so that sensor data and poses are expressed
-relative to the body that moves and can be related to wheel odometry
-and control. \texttt{mobile\_2} has no robot body, so its LiDAR is
-used as the origin, as it provides the strongest metric. For the
-infrastructure agents, which carry no LiDAR, the origin is the camera.
-The estimation of each transform is described in
-Sec.~\ref{sec:calibration}.
+\subsection{Design Decisions}
+\label{sec:decisions}
+Four decisions make SCooP-Bed a testbed rather than a hardware list.
+
+\emph{The link is measured, not used to carry sensor data.} Each unit
+records locally; no sensor stream traverses the wireless network
+before reaching disk. Measurement and transport stay separate, so any
+method's traffic can be replayed afterwards (Sec.~\ref{sec:replay})
+without the recording having been shaped by one method. The only
+traffic the testbed itself places on the link is clock synchronization
+and the active probes of Sec.~\ref{sec:link}, present in every run and
+therefore part of the channel that is measured.
+
+\emph{Single stream, 802.11ax off.} The 1$\times$1 CSI receiver
+requires it. It also keeps capacity governed by geometry rather than
+by scattering richness, which two-stream capacity depends on and which
+a map does not capture.
+
+\emph{Survey and cooperation modes.} In survey mode each agent owns
+the whole channel; in cooperation mode several agents run their active
+tests at the same time by design. Contention becomes a controlled knob
+instead of an accident, and its effect is measurable: RTT moves from
+\SI{3.3}{\milli\second} idle to \SIrange{60}{109}{\milli\second} under
+load (Sec.~\ref{sec:link}).
+
+\emph{Fixed sensor rigs.} In each agent a fixed rig compounds the
+sensors (Fig.~\ref{fig:platforms}), so calibration is done once and
+each extrinsic can be validated on observations that did not enter it
+(Sec.~\ref{sec:alignment}). The sensors of each platform are expressed
+in that platform's origin frame: \texttt{base\_link} for
+\texttt{mobile\_1}, so that poses relate to wheel odometry and control;
+the LiDAR for \texttt{mobile\_2}, which has no robot body; and the
+camera for the masts, which carry no LiDAR.
+
+The remaining knobs a user controls are the number and class of
+agents, the infrastructure placement, the trajectory paradigm
+(concurrent, intersecting, or rendezvous), and agent speed.
 
 \subsection{Recording}
 \label{sec:recording}
-Each unit records what its sensors and interfaces produce, and nothing
-else: Ouster packets with the sensor's metadata message, images and
-IMU samples, radar detections, the on-board visual SLAM output of
-\texttt{mobile\_2}, the wireless metrics of Sec.~\ref{sec:comm}, and
+Each unit records one bag containing what its sensors and interfaces
+produce, and nothing else (Table~\ref{tab:topics}): Ouster packets
+with the sensor's metadata message, which allows lossless re-decoding
+through the vendor driver at any later time; images and IMU samples;
+radar detections; the full on-board visual SLAM output of
+\texttt{mobile\_2}, including the drifting visual-odometry path, the
+loop-closed path, and the tracker status; the wireless and clock topics
+of Sec.~\ref{sec:link} on the same timeline as the sensor topics; and
 the raw Nexmon CSI frames on \texttt{sniffer}. Decoded clouds,
 reference poses, and parsed CSI do not exist at recording time; they
-are produced by the post-processing of Sec.~\ref{sec:postproc}.
-Table~\ref{tab:topics} lists the recorded topics per unit.
-
-Ouster data is stored as raw packets together with the sensor's
-metadata message, which allows lossless re-decoding through the vendor
-driver at any later time. \texttt{mobile\_2} provides an RGB-D module
-(color, aligned depth, and both infrared imagers with
-\texttt{CameraInfo} and factory extrinsics) and the full output of its
-on-board GPU visual SLAM pipeline, including the drifting
-visual-odometry path, the loop-closed path, and the tracker status.
-Infrastructure units provide an RGB camera and a radar each. The
-wireless measurements appear as ordinary topics on the same timeline,
-and the CSI stream from \texttt{sniffer} is recorded in its own bag as
-raw Nexmon frames.
+are produced by the post-processing pipeline (Fig.~\ref{fig:dataflow}),
+which decodes the streams, computes the reference poses
+(Sec.~\ref{sec:gt}), parses the link and CSI logs, and merges all units
+into one MCAP per run on the common timebase, with each unit's original
+stamp preserved in the MCAP publish time. Every stage is scripted and
+released so that the products can be regenerated.
 
 \input{tables/topics}
 
+\input{figures/dataflow}
+
 %=======================================================================
-\section{Calibration and Timing}
-\label{sec:calibration}
-Two calibrations are required to relate the streams. The spatial
-calibration places every sensor in the origin frame of its platform.
-The temporal calibration places every measurement on a common
-timeline. Each is validated with data that was not used in its
-estimation. The placement of platforms in the world frame is part of
-the reference and is described in Sec.~\ref{sec:groundtruth}.
+\section{Time and Space Alignment}
+\label{sec:alignment}
+This section answers how well the testbed puts every measurement from
+every agent on one clock and in one rig frame. Each quantity is
+validated with data that was not used in its estimation.
 
-\subsection{Spatial Calibration}
-\label{sec:spatial}
-Three transforms are estimated per platform. On \texttt{mobile\_1},
-\Ttransform{Base}{LiDAR} is obtained by hand-eye calibration: the
-robot is driven through a sequence of motions, and the transform is
-solved from the pairs of relative motions reported by wheel odometry
-and by LiDAR odometry \cite{furrer2018handeye}. On both mobile
-agents, \Ttransform{LiDAR}{Camera} is obtained by direct, target-free
-alignment of image and point-cloud features \cite{koide2023lidarcam}.
-For the radar, whose returns are too sparse for feature alignment,
-\Ttransform{LiDAR}{Radar} is obtained with a corner reflector placed
-at several positions \cite{domhof2019calib}.
-
-For the infrastructure rig, the camera and radar are mounted on the
-same fixed bracket and each sensor is calibrated against a LiDAR by
-the same methods, which gives \Ttransform{Camera}{Radar} directly.
-Since the rig is fixed, the extrinsic remains valid once the sensors
-are placed on the infrastructure. The world pose of each
-infrastructure camera is obtained during the mapping session through
-the fiducial chain of Sec.~\ref{sec:fiducials}.
-
-\subsection{Temporal Calibration}
-\label{sec:temporal}
-Each unit records its own bag, so frames from different agents are
-related only through their timestamps. Two conditions must hold: the
-clocks of the units must agree, and each stamp must be close to the
-time at which its measurement was taken. We address each condition
-below and then bound the remaining error.
-
-\subsubsection{Clock Synchronization}
+\subsection{Clock}
+\label{sec:clock}
 The clocks are synchronized with chrony. \texttt{mobile\_1} acts as
 the server, and every other agent and \texttt{sniffer} act as clients
 polling every \SI{8}{\second}. This traffic passes over the measured
@@ -408,45 +360,43 @@ Recording starts only after every unit reports a converged offset.
 Each unit logs its offset and any clock adjustment
 (\texttt{ntp/status}, \texttt{ntp/events}) into its own bag, so the
 alignment at any frame can be checked and poorly aligned frames can
-be filtered out.
-
-Table~\ref{tab:ntp} summarizes the result over \todo{1} sequences. No
-clock was stepped during any recording, and the worst pairwise offset
-is \todo{about \SI{70}{\micro\second}}.
+be filtered out. Table~\ref{tab:ntp} summarizes the result over
+\todo{1} sequences. No clock was stepped during any recording, and the
+worst pairwise offset is \todo{about \SI{70}{\micro\second};
+reconcile with the table maximum of \SI{42.5}{\micro\second} and with
+the coop\_2 measurement of E1}.
 
 \input{tables/ntp}
 
+\subsection{Sniffer Bias}
+\label{sec:sniffer}
 These offsets describe the stability of each clock relative to the
 server, not its accuracy. NTP assumes a symmetric path delay, and any
 asymmetry appears as a constant bias that chrony cannot observe. This
 is relevant only for \texttt{sniffer}, which reaches the server over
 its \SI{2.4}{\giga\hertz} management link with a path delay several
-times larger than that of the other units, so its bias may be as
-large as half that delay, \SI{7.8}{\milli\second}. We measure the
-bias directly from the probe packets that \texttt{mobile\_2} sends
-and \texttt{sniffer} captures. Each packet is stamped at transmission
-on the clock of \texttt{mobile\_2} and at reception on the clock of
+times larger than that of the other units, so its bias may be as large
+as half that delay, \SI{7.8}{\milli\second}. We measure the bias
+directly from the probe packets that \texttt{mobile\_2} sends and
+\texttt{sniffer} captures. Each packet is stamped at transmission on
+the clock of \texttt{mobile\_2} and at reception on the clock of
 \texttt{sniffer}. Since the packet is in flight for only nanoseconds,
 the difference between the two stamps equals the bias of the sniffer
-plus its driver latency. The median difference over a run is
-\todo{}, which bounds the bias. \todo{Remove this consideration by
-replacing the connection to the sniffer with Ethernet directly to
-mobile\_1; see Sec.~\ref{sec:lessons}.}
+plus its driver latency: the measured link calibrates the clock. The
+median difference over a run is \todo{}, which bounds the bias.
 
-\subsubsection{Timestamp Latency}
-Agreeing clocks are not sufficient if the stamps themselves are
-late. Every message is stamped on arrival at its host, so each stamp
-lags its measurement by the transport latency of that sensor
+\subsection{Error Budget}
+\label{sec:budget}
+Agreeing clocks are not sufficient if the stamps themselves are late.
+Every message is stamped on arrival at its host, so each stamp lags
+its measurement by the transport latency of that sensor
 \todo{estimates per sensor: LiDAR over Ethernet, cameras over USB,
 radar over UART}, and camera stamps lag further by the exposure time.
-These lags are approximately constant for a given sensor. We leave
-the stamps as recorded so that users can apply their own correction,
-for example by aligning the motion observed by each sensor.
+These lags are approximately constant for a given sensor; we leave the
+stamps as recorded so that users can apply their own correction.
 
-\subsubsection{Motion Compensation and Fusion Error Bounds}
-\label{sec:temporal_bounds}
-Both conditions reduce to a timing error $\Delta t$, which displaces
-a measurement taken on a platform moving at speed $v$ by
+Every timing error $\Delta t$ displaces a measurement taken on a
+platform moving at speed $v$ by
 \begin{equation}
   \delta x = v \, \Delta t .
   \label{eq:time_bound}
@@ -460,13 +410,11 @@ sets the CSI sampling requirement (Sec.~\ref{sec:csi}). Transport
 latency and exposure are larger: a constant lag of
 \SI{10}{\milli\second} corresponds to \SI{3}{\centi\metre}, but since
 it is constant it can be estimated and removed. The largest term is
-the LiDAR sweep, which takes \SI{100}{\milli\second} at
-\SI{10}{\hertz}, so the first and last points of a scan can be
-\SI{30}{\centi\metre} apart. This is removed by per-point deskewing
-with IMU-propagated motion in the reference pipeline \cite{glim}.
-
-Combining the terms that remain after compensation, the worst-case
-intra-frame spatial error at $v_{\max}$ is
+the LiDAR sweep, \SI{100}{\milli\second} at \SI{10}{\hertz}, so the
+first and last points of a scan can be \SI{30}{\centi\metre} apart;
+it is removed by per-point deskewing with IMU-propagated motion in the
+reference pipeline \cite{glim}. Combining the terms that remain after
+compensation, the worst-case intra-frame spatial error at $v_{\max}$ is
 \begin{equation}
   \delta x_{\max} = v_{\max}\,\big(\Delta t_{\mathrm{clk}}
   + \Delta t_{\mathrm{lat}} + \Delta t_{\mathrm{exp}}\big)
@@ -475,65 +423,66 @@ intra-frame spatial error at $v_{\max}$ is
 \end{equation}
 where $\Delta t_{\mathrm{clk}}$ is the worst clock offset,
 $\Delta t_{\mathrm{lat}}$ the largest uncorrected transport latency,
-and $\Delta t_{\mathrm{exp}}$ the longest camera exposure. The LiDAR
-sweep is excluded because it is deskewed.
+and $\Delta t_{\mathrm{exp}}$ the longest camera exposure. The budget
+is dominated by sensor physics and transport, not by synchronization:
+clock alignment contributes well under a millimetre, while the larger
+terms are either compensated or constant and removable. \todo{Show the
+budget as a stacked bar; it feeds the headroom figure of E1.}
 
-The error budget is therefore dominated by sensor physics and
-transport, not by synchronization. Clock alignment contributes well
-under a millimetre, while the larger terms are either compensated,
-as for the LiDAR sweep, or constant and removable, as for per-sensor
-latency.
+\subsection{Extrinsics}
+\label{sec:spatial}
+Three transforms are estimated per platform. On \texttt{mobile\_1},
+\Ttransform{Base}{LiDAR} is obtained by hand-eye calibration: the
+robot is driven through a sequence of motions, and the transform is
+solved from the pairs of relative motions reported by wheel odometry
+and by LiDAR odometry \cite{furrer2018handeye}. On both mobile agents,
+\Ttransform{LiDAR}{Camera} is obtained by direct, target-free alignment
+of image and point-cloud features \cite{koide2023lidarcam}. For the
+radar, whose returns are too sparse for feature alignment,
+\Ttransform{LiDAR}{Radar} is obtained with a corner reflector placed at
+several positions \cite{domhof2019calib}. For the infrastructure rig,
+the camera and radar are mounted on the same fixed bracket and each is
+calibrated against a LiDAR by the same methods, which gives
+\Ttransform{Camera}{Radar} directly; the world pose of each mast camera
+is obtained through the fiducial chain of Sec.~\ref{sec:fiducials}.
 
-\subsection{Calibration Validation}
-\label{sec:calib_val}
-Each extrinsic is checked on data that was not used in its
-estimation. For \Ttransform{LiDAR}{Camera}, the LiDAR returns on the
-ChArUco boards of the mapping session are projected into the image
-and compared with the detected board corners; the reprojection
-residual is reported per board and per range. For the RGB-D agent,
-whose trajectory uses board sightings as constraints, the boards are
-split once per site into an estimation set and a held-out set, and
-the residual is evaluated on the held-out set only. \todo{State the
-split, e.g. every third board.}
-
-For \Ttransform{LiDAR}{Radar}, the corner reflector is placed at
-positions not used in calibration, and the radar detection is
-compared with the LiDAR centroid of the reflector. For
-\Ttransform{Base}{LiDAR}, the hand-eye result is checked through the
-board residual of Sec.~\ref{sec:gt_val}: a board observed from
-\texttt{mobile\_1} predicts a board pose through
-\Ttransform{Base}{LiDAR} and \Ttransform{LiDAR}{Camera}, so the
-residual tests both transforms at once and is not reported
-separately. For the infrastructure rig, \Ttransform{Camera}{Radar} is
-checked in the same way as the mobile radar, with the rig mounted in
-place. Table~\ref{tab:calib} lists the residuals per sensor pair. The
-same values are stored with the released data
+Each extrinsic is checked on held-out data. For
+\Ttransform{LiDAR}{Camera}, LiDAR returns on the ChArUco boards of the
+mapping session are projected into the image and compared with the
+detected corners; for the RGB-D agent, whose trajectory uses board
+sightings as constraints, the boards are split once per site into an
+estimation set and a held-out set, and the residual is evaluated on
+the held-out set only \todo{state the split}. For
+\Ttransform{LiDAR}{Radar} and \Ttransform{Camera}{Radar}, the reflector
+is placed at positions not used in calibration and the radar detection
+is compared with the LiDAR centroid. For \Ttransform{Base}{LiDAR}, the
+hand-eye result is checked through the board residual of
+Sec.~\ref{sec:gt_val}, which tests \Ttransform{Base}{LiDAR} and
+\Ttransform{LiDAR}{Camera} at once. Table~\ref{tab:calib} lists the
+residuals; the same values are stored with the data
 (\texttt{calibration/residuals.json}) so that users can weight each
-transform according to its accuracy.
+transform by its accuracy.
 
 \input{tables/calib}
 
 %=======================================================================
-\section{Reference Localization}
-\label{sec:groundtruth}
-The reference combines three of the strategies reviewed in
-Sec.~\ref{sec:gt_related}. The reference map is SLAM-derived, which
-removes the survey scanner normally required for map registration.
-Every scan is registered against this map, so the pose is carried by
-the map and not by odometry between anchors. Fiducial boards, posed
-in the map frame during the mapping session, anchor the RGB-D agent
-and the infrastructure where registration alone is weak. Since the
-annotations of the dataset \cite{scoop_dataset} are derived from these
-poses, the reference is built and validated to annotation grade and
-not only as an evaluation target. Fig.~\ref{fig:refpipeline} shows the
-pipeline; the following subsections describe each stage.
+\section{Ground Truth Without Motion Capture}
+\label{sec:gt}
+This section answers how accurately the testbed knows where every
+agent is, at building scale, using only onboard sensors. The reference
+map is SLAM-derived, which removes the survey scanner normally required
+for map registration; every scan is registered against it, so the pose
+is carried by the map and not by odometry between anchors; and
+fiducial boards posed in the map frame anchor the RGB-D cart and the
+masts where registration alone is weak. Fig.~\ref{fig:refpipeline}
+shows the pipeline.
 
 \input{figures/refpipeline}
 
-\subsection{Reference Map and Scan-to-Map Registration}
-\label{sec:gt}
+\subsection{Reference Map}
+\label{sec:map}
 The reference map is built in a dedicated mapping session and held
-fixed afterwards; no recorded sequence contributes to it. A second,
+fixed afterwards; no recorded run contributes to it. A second,
 separate mapping pass is recorded and processed independently and is
 used only to cross-check the first. A LiDAR-inertial SLAM solution
 \cite{glim} estimates the mapping trajectory, with sub-mapping and
@@ -541,69 +490,53 @@ loop closure tuned for offline accuracy and checked so that no submap
 is left without a long-range constraint. The map is then frozen and
 every scan is re-registered into it by point-to-plane ICP against
 local plane fits, iterated until the pose corrections fall below the
-sensor noise. This follows the prior-map registration used by the
-survey-grade datasets \cite{newercollege,oxfordspires,lamar}, with
-the prior built by our own sensors instead of a survey scanner. Plane
-fits are used instead of nearest-neighbour targets because, on a
-surface smeared by accumulated drift, a \SI{3.0}{\centi\metre} scan
-offset produces only \SI{0.5}{\centi\metre} of nearest-neighbour
-residual, so the error would not be visible to conventional ICP.
+sensor noise. This follows the prior-map registration used by
+survey-grade datasets \cite{newercollege,oxfordspires,lamar}, with the
+prior built by our own sensors. Plane fits are used instead of
+nearest-neighbour targets because, on a surface smeared by accumulated
+drift, a \SI{3.0}{\centi\metre} scan offset produces only
+\SI{0.5}{\centi\metre} of nearest-neighbour residual, so the error
+would not be visible to conventional ICP.
 
-This frozen map is the metric backbone of every sequence. The
-LiDAR-equipped agents are localized by scan-to-map registration. For
-\texttt{mobile\_2}, the depth registration, its visual odometry, and a
-subset of the board sightings of Sec.~\ref{sec:fiducials} are
-combined in one pose-graph optimization per sequence, with the
-selected boards entering as absolute pose factors; the remaining
-boards are held out and serve only for validation
-(Sec.~\ref{sec:gt_val}). The LiDAR agents need no board factors,
-since scan-to-map registration alone constrains every frame, so for
-them every board sighting is a validation measurement. \unsure{All
-trajectories therefore share one metric frame by construction and do
-not require post-hoc alignment.} Inter-agent relative poses reduce to
-two registration errors against shared local geometry instead of two
-accumulated drifts, and since no recorded sequence contributes to the
-map, the agreement of each agent with the map is an out-of-sample
-check.
+The frozen map is the metric backbone of every run. LiDAR agents are
+localized by scan-to-map registration. For \texttt{mobile\_2}, depth
+registration, visual odometry, and a subset of the board sightings of
+Sec.~\ref{sec:fiducials} are combined in one pose-graph optimization
+per run, with the selected boards entering as absolute pose factors;
+the remaining boards are held out for validation. The LiDAR agents
+need no board factors, so for them every board sighting is a
+validation measurement. All trajectories therefore share one metric
+frame by construction, inter-agent relative poses reduce to two
+registration errors against shared local geometry instead of two
+accumulated drifts, and since no run contributes to the map, each
+agent's agreement with it is an out-of-sample check.
 
 \input{figures/refmap}
 
-\subsection{Fiducial Network}
+\subsection{Fiducial Chain for Agents Without LiDAR}
 \label{sec:fiducials}
-The reference map provides the shared metric frame, but a
-sensor-constrained agent cannot enter it by registration alone. A
-cold-start ICP against a building-scale map may converge in a wrong
-basin, and between registrations the visual odometry of the agent
-accumulates drift, fastest in feature-poor regions where the local
-geometry only weakly constrains the alignment. We therefore deploy a
-network of printed ChArUco boards in the environment. The boards are
-not surveyed independently: the pose of each board is estimated in
-the reference frame from the observations of the mapping session
-itself, so the network inherits the metric accuracy of the map. This
-is sparse anchoring as in \cite{airmuseum}, with the anchors posed by
-the map instead of by survey equipment.
-
-During the mapping session, the mapping agent, which carries a LiDAR
-and a camera, loops around the site and stops at each board to
-record several views of it. With the mapping trajectory
-\Ttransform{World}{LiDAR} from Sec.~\ref{sec:gt} and the extrinsic
-\Ttransform{LiDAR}{MobileCamera} from Sec.~\ref{sec:spatial}, the
-pose of each board is
+A sensor-constrained agent cannot enter the map by registration alone:
+a cold-start ICP against a building-scale map may converge in a wrong
+basin, and between registrations visual odometry accumulates drift,
+fastest in feature-poor regions. We therefore deploy a network of
+printed ChArUco boards, placed mainly in feature-poor regions where
+both visual tracking and depth registration are weakest. The boards
+are not surveyed: the pose of each is estimated in the reference frame
+from the observations of the mapping session itself, so the network
+inherits the metric accuracy of the map. This is sparse anchoring as
+in \cite{airmuseum}, with the anchors posed by the map instead of by
+survey equipment. During the mapping session the mapping agent stops
+at each board to record several views; with the mapping trajectory
+\Ttransform{World}{LiDAR} and the extrinsic
+\Ttransform{LiDAR}{MobileCamera}, the pose of each board is
 \begin{equation}
    \Ttransform{World}{Board} = \Ttransform{World}{LiDAR} \times \Ttransform{LiDAR}{MobileCamera} \times \Ttransform{MobileCamera}{Board} .
    \label{eq:board_chain}
 \end{equation}
-One board serves as the origin of the world frame,
-\Ttransform{World}{OriginBoard}, and every mobile agent starts at a
-board, so that each run begins at a known pose.
-
-Infrastructure agents are placed in the same frame through the
-boards. During the mapping session, a
-\(500\,\mathrm{cm} \times 500\,\mathrm{cm}\) ChArUco board is shown to
-the mobile and infrastructure cameras simultaneously in the same
-frame. Each camera computes its pose relative to the board,
-\Ttransform{Board}{MobileCamera} and \Ttransform{Board}{InfraCamera},
-and the world pose of the infrastructure camera is
+One board serves as the origin of the world frame, and every mobile
+agent starts at a board, so that each run begins at a known pose.
+Infrastructure masts are placed in the same frame through a board shown
+simultaneously to a mobile and an infrastructure camera:
 \begin{equation}
 \begin{split}
   \Ttransform{World}{InfraCamera} = {}
@@ -612,92 +545,92 @@ and the world pose of the infrastructure camera is
 \end{split}
 \label{eq:infra_camera_chain}
 \end{equation}
+Board sightings thus serve as initialization at the start of a run, as
+drift bounds along it, and as validation of every subsequent run.
 
-The boards serve three roles. At the start of a sequence, a board
-sighting provides the absolute initial pose that places the first
-registration in the correct convergence basin. Along the trajectory,
-board sightings provide absolute pose observations that bound the
-drift accumulated by visual odometry between map registrations.
-\unsure{For this reason the boards are placed mainly in feature-poor
-regions, where both visual tracking and depth registration are
-weakest.} Finally, the boards are used to validate the registration
-of every subsequent sequence, as described in Sec.~\ref{sec:gt_val}.
-
-\subsection{Validation Methodology}
+\subsection{Validation}
 \label{sec:gt_val}
-Convergence of the refinement in Sec.~\ref{sec:gt} establishes
-self-consistency, not accuracy. The plane targets are themselves
-estimated from the map, so a self-consistent deformation would
-converge equally well. Accuracy is therefore established by checks
-that did not enter the estimation, along two axes: where the surfaces
-are, and how consistently the poses place them. The results are
-reported in Sec.~\ref{sec:eval_gt}.
+Convergence of the refinement establishes self-consistency, not
+accuracy: the plane targets are themselves estimated from the map, so
+a self-consistent deformation would converge equally well. Accuracy is
+therefore established by four checks that did not enter the
+estimation (Table~\ref{tab:gt}, Fig.~\ref{fig:gt_errors}).
 
 \paragraph{Second mapping pass.} Surfaces are measured by their
-thickness, defined as the p95--p5 spread of points about planes
-fitted to \SI{0.25}{\metre} patches, and always compared with the
-sensor noise floor obtained from individual sweeps, which carry no
-pose error. A second recording, captured weeks later and processed
-independently, is compared in surface placement and relative scale.
-Since both runs share the sensor and the algorithm, this establishes
-scale \emph{stability} between sessions; a deformation common to both
-would not be visible in this test.
+thickness, the p95--p5 spread of points about planes fitted to
+\SI{0.25}{\metre} patches, against the sensor noise floor from
+individual sweeps, which carry no pose error. After refinement, floors
+are within \SI{1}{\centi\metre} of that floor; walls, observed at
+longer range and shallower incidence, remain above it, and more so in
+single-visit corridor sections where no revisit constrains lateral
+placement. The second pass, captured four weeks later and processed
+independently, reproduces the surface placement to
+\SI{1.06}{\centi\metre} on walls, with relative scale agreeing to
+$2\times10^{-5}$. Since both runs share the sensor and the algorithm,
+this establishes scale stability, not absolute scale.
 
-\paragraph{Control distances.} The absolute scale is established by
-laser-rangefinder control distances measured between landmarks such
-as walls at each site. Their disagreement with the map grows with the
-scale at which a common deformation would act, which closes the gap
-left by the second pass.
+\paragraph{Control distances.} Laser-rangefinder distances between
+landmarks such as walls, \todo{$N$ distances of
+\SIrange{5}{40}{\metre} per site}, establish the absolute scale; their
+disagreement with the map grows with the scale at which a common
+deformation would act, which closes the gap left by the second pass.
+\todo{Report per site: mean and max map-minus-rangefinder error.}
 
-\paragraph{Held-out boards.} The pose of each board in the map is
-fixed by the mapping session. When an agent sights a board during a
-sequence, its registered pose and camera extrinsic predict where the
-board should appear, and the difference between this prediction and
-the observed board pose is a residual that did not enter the
-registration. It is therefore an independent check at that frame.
-For the RGB-D agent, whose trajectory uses board sightings as
-constraints, a subset of boards is held out of the estimation and the
-residual is evaluated on those boards only.
+\paragraph{Held-out boards.} When an agent sights a board during a
+run, its registered pose and camera extrinsic predict where the board
+should appear; the difference from the observed board pose is a
+residual that did not enter the registration. \todo{Report median and
+p95 in translation and rotation per agent; current values on
+coop2\_0828: \SI{10.0}{\milli\metre} / 0.88$^\circ$ for mobile\_1,
+\SI{54.0}{\milli\metre} / 1.38$^\circ$ for mobile\_2; 3.1 cm median
+for mobile\_2 on coop\_2.}
 
-\paragraph{Pose consistency.} Per-scan consistency is measured where
-the same surface is observed twice: by the same robot minutes apart,
-and by different robots on overlapping routes. The second case tests
-the full chain of each robot (registration, extrinsic calibration,
-and time association) at LiDAR accuracy for the LiDAR pair, and
-isolates the sensor-constrained mechanism for the RGB-D robot.
+\paragraph{Cross-robot consistency.} Where the same surface is observed
+by the same robot minutes apart and by different robots on overlapping
+routes, the surface agreement tests the full chain of each robot
+(registration, extrinsics, time association) at LiDAR accuracy for the
+LiDAR pair, and isolates the sensor-constrained mechanism for the
+RGB-D cart. \todo{Report.}
+
+\input{tables/gt}
+
+\input{figures/gt_errors}
+
+Each number bounds one error only. A smooth deformation displaces
+surfaces without thickening them, so the residual thickness is
+per-scan placement scatter; the cross-session comparison bounds the
+disagreement between two runs; the control distances bound what both
+runs have in common. The reference is centimetre-level and
+building-scale from onboard sensing only, and the independent
+measurements check the result and never produce it.
+
+\subsection{Scoring Capability}
+Because every agent has a pose in the map frame at every scan, an
+object labelled once in that frame projects into every agent's frame
+through these poses, with the same position, size, and identity across
+agents. This is how the testbed scores collaborative perception
+without per-frame annotation, and it is why the reference is built to
+annotation grade and not only as an evaluation target. The labels
+themselves are a release of the dataset \cite{scoop_dataset}.
 
 %=======================================================================
-\section{Communication Measurement}
-\label{sec:comm}
-The link is recorded on the same timeline as the sensing streams at
-two levels: the link state, which describes what the network
-delivered, and the channel state, which describes the propagation
-that produced it. Fig.~\ref{fig:linktrace} shows one sequence.
-
-\subsection{Network Configuration}
-All agents associate to a single access point on channel 149 (VHT-80,
-\SI{5745}{\mega\hertz}); no ad hoc or mesh mode is used. The
-transmitter settings are imposed by the CSI receiver: 1$\times$1
-802.11ac configuration. 802.11ax is disabled, since the receiver
-cannot demodulate HE frames and would capture only control frames,
-and the number of spatial streams is fixed to one, since a
-single-antenna receiver cannot separate a two-stream transmission.
-Power save is disabled on all transmitters. The measured
-single-stream capacity is \numrange{275}{282}\,Mbit/s uplink and
-\numrange{598}{676}\,Mbit/s downlink per mobile agent.
+\section{Link Instrumentation}
+\label{sec:link}
+This section answers what the testbed observes of each link, how
+often, and within what limits. Fig.~\ref{fig:linktrace} shows one run.
+\todo{Extend the figure with RTT and CSI amplitude against time
+alongside the agents' positions.}
 
 \subsection{Link State}
 Passive metrics are read at \SI{5}{\hertz} from the kernel wireless
 interface: RSSI, negotiated bitrate and MCS, transmit retries and
-failures, and channel busy ratio. During outages the monitor
-continues publishing with \texttt{associated=false}, so coverage gaps
-appear as explicit labels and not as missing samples. Active metrics
-are obtained with \texttt{iperf3} \cite{iperf3} in \SI{4}{\second}
-tests, uplink and downlink separately. Two load modes are supported.
-In \emph{survey} mode, each agent owns the whole channel. In
-\emph{cooperation} mode, several agents run their tests at the same
-time by design, so the measured goodput includes the contention that
-a deployed team would face when agents share the channel. Latency is
+failures, and channel busy ratio. During outages the monitor continues
+publishing with \texttt{associated=false}, so coverage gaps appear as
+explicit labels and not as missing samples. Active metrics are
+obtained with \texttt{iperf3} \cite{iperf3} in \SI{4}{\second} tests,
+uplink and downlink separately, in survey or cooperation mode
+(Sec.~\ref{sec:decisions}); in cooperation mode the measured goodput
+includes the contention a deployed team would face. Latency is
 measured as ICMP round-trip time at \SI{100}{\hertz}:
 \SI{3.3}{\milli\second} when idle and \SIrange{60}{109}{\milli\second}
 under load, the latter caused by queueing and not by path loss.
@@ -707,13 +640,12 @@ under load, the latter caused by queueing and not by path loss.
 CSI is extracted with Nexmon \cite{nexmon} on a BCM43455c0 in monitor
 mode at \SI{80}{\mega\hertz}, which yields one estimate over 242 used
 subcarriers per received frame from its VHT-LTF. The extractor,
-\texttt{sniffer}, is a separate host carried on \texttt{mobile\_1},
-with a \SI{2.4}{\giga\hertz} management link kept off the measured
-band; it captures the frames of \texttt{mobile\_2} and
-\texttt{infra\_1}. Only QoS data frames give full-bandwidth estimates.
-Control frames are captured, since they are useful for diagnosing PHY
-problems, but they are excluded from the analysis, since mixing them
-changes the effective bandwidth from frame to frame. The achieved
+\texttt{sniffer}, is carried on \texttt{mobile\_1} with a
+\SI{2.4}{\giga\hertz} management link kept off the measured band; it
+captures the frames of \texttt{mobile\_2} and \texttt{infra\_1}. Only
+QoS data frames give full-bandwidth estimates; control frames are
+captured for PHY diagnosis but excluded from analysis, since mixing
+them changes the effective bandwidth from frame to frame. The achieved
 data-frame rates were \SI{141}{\hertz} from \texttt{infra\_1} and
 \SI{104}{\hertz} from \texttt{mobile\_2}.
 
@@ -721,221 +653,246 @@ The channel varies over roughly half a wavelength of motion,
 $\lambda/2 = \SI{26.1}{\milli\metre}$ at \SI{5745}{\mega\hertz}. If
 three estimates per half-wavelength are required to follow these
 variations, the achieved rates are sufficient up to a relative speed
-of about \SI{1.2}{\metre\per\second}; above that, the CSI is too
-sparse to resolve them. The rate cannot simply be raised by sending
-more packets, since Wi-Fi aggregates many packets into one
-transmission and each transmission yields a single channel estimate
-from its preamble. Disabling aggregation would raise the CSI rate but
-would also distort the throughput being measured. CSI phase is not
-coherent across devices, which run on independent oscillators, so
-each transmitter--receiver pair is treated as an independent sensing
-link.
+of about \SI{1.2}{\metre\per\second}; above that the CSI is too sparse
+to resolve them. The rate cannot simply be raised by sending more
+packets, since Wi-Fi aggregates many packets into one transmission and
+each transmission yields a single channel estimate from its preamble;
+disabling aggregation would raise the CSI rate but distort the
+throughput being measured. CSI phase is not coherent across devices,
+which run on independent oscillators, so each transmitter--receiver
+pair is treated as an independent sensing link.
 
 \input{figures/linktrace}
 
 %=======================================================================
-\section{Post-Processing Pipeline}
-\label{sec:postproc}
-Recording and release are separate stages. During a run, each unit
-writes only what its sensors and interfaces produce. The per-unit
-recordings are converted into a merged, time-aligned bag and derived
-products by a fixed pipeline (Fig.~\ref{fig:dataflow}), run once per
-sequence and released so that every step can be repeated.
+\section{Channel-in-the-Loop Replay}
+\label{sec:replay}
+This section answers whether any collaborative method can be run
+against the link the agents actually had.
 
-\input{figures/dataflow}
+\paragraph{Model.} A message of size $s$ sent at time $t$ over link
+$(a,b)$ arrives at
+\begin{equation}
+  t + d_{ab}(t) + s / G_{ab}(t),
+  \label{eq:replay}
+\end{equation}
+where $d_{ab}(t)$ is the one-way delay and $G_{ab}(t)$ the most recent
+goodput measured on that link, and is dropped when the link was down
+(\texttt{associated=false}, or a run of lost pings). Because the
+clocks agree to \unsure{about \SI{70}{\micro\second}}, $d_{ab}$ can be
+measured directly from stamped probes where they exist, instead of
+being assumed to be $\mathrm{RTT}/2$; only a synchronized testbed can
+do this. The ideal channel (instant, lossless), the synthetic channels
+of prior benchmarks (a fixed bandwidth budget and a fixed or sampled
+delay \cite{where2comm,v2xvit,lei2022syncnet,wei2023cobevflow}), and
+the logged channel all pass through one module
+(Fig.~\ref{fig:replay}), so the channel is the only variable between
+runs of a method.
 
-\emph{Decoding.} The Ouster packets are decoded into \SI{10}{\hertz}
-point clouds with the vendor driver and the sensor's metadata
-message, using the same driver version as the reference pipeline. The
-ZED~2i recordings, stored as \texttt{.svo} files, are decoded with the
-ZED SDK into left and right images, depth, and IMU samples at their
-native rates. The RealSense streams and the infrastructure cameras are
-recorded as images and require no decoding. Every decoded message
-keeps the stamp of the packet or frame it was decoded from.
+\paragraph{Interface.} Any method that emits (sender, receiver, $t$,
+size) plugs in and receives, for each message, an arrival time or a
+drop. The implementation extends an OpenCOOD-style wrapper that already
+turns latency into staleness and drops collaborators, with a schedule
+driven by the trace; a converter places recorded frames in the layout
+it reads. \todo{Name the released modules.}
 
-\emph{Reference poses.} Each agent's pose in the site frame,
-\texttt{global\_pose}, is computed offline by the reference pipeline
-of Sec.~\ref{sec:groundtruth}: scan-to-map registration against the
-frozen map for the LiDAR agents, depth-to-map registration with board
-constraints for \texttt{mobile\_2}, and the fiducial chain of
-Sec.~\ref{sec:fiducials} for the infrastructure. Poses are written at
-the LiDAR or depth frame rate and can be interpolated to any other
-sensor's stamps.
+\paragraph{Positioning.} Trace-driven network emulation replays a link
+for network software, from trace modulation \cite{noble1997trace}
+through netem \cite{hemminger2005netem}, Cellsim
+\cite{winstein2013sprout}, Mahimahi \cite{netravali2015mahimahi}, and
+Pantheon \cite{yan2018pantheon}; robotics and network co-simulators
+couple a robot simulator with a simulated network
+\cite{calvofullana2021rosnetsim,sommer2011veins,xu2021opencda};
+collaborative-perception benchmarks simulate a link for perception.
+SCooP-Bed replays the measured robot link into perception, on the same
+clock as the sensors. The fluid model of Eq.~\eqref{eq:replay} is
+chosen because the iperf windows give goodput, not per-packet delivery
+opportunities as in Mahimahi; E3 measures how much accuracy the simpler
+model loses.
 
-\emph{Link and channel.} The passive and active link metrics are
-resampled to a common frame index, and the CSI frames captured by
-\texttt{sniffer} are parsed from the Nexmon format into NumPy/HDF5
-arrays and time-joined to the reference poses.
-
-\emph{Merge.} The per-unit recordings, the decoded streams, the
-reference poses and TF, and the parsed link state are written into a
-single MCAP per sequence, ordered on the common timebase. Every
-message carries its stamp converted to \texttt{mobile\_1}'s clock
-using the offset logged by that unit at that moment
-(\texttt{ntp/status}, \SI{10}{\hertz}), and the unit's original stamp
-is preserved in the MCAP publish time, so users can recover the raw
-per-unit timeline and can discard frames recorded while a unit's clock
-offset exceeded a chosen threshold.
-
-The annotation, collaboration-geometry, and per-frame extraction
-stages that build on these products are part of the dataset release
-and are described in \cite{scoop_dataset}.
+\input{figures/replay}
 
 %=======================================================================
-\section{Evaluation}
-\label{sec:evaluation}
-We evaluate the testbed on the quantities a user of its data depends
-on: the accuracy of the reference, the residuals of the calibration,
-the stability of the clocks, and the character of the measured link.
-All numbers come from recordings at three indoor sites on the Guangfu
-Campus of National Yang Ming Chiao Tung University, which differ in
-layout, corridor width, wall material, and access-point placement.
+\section{Experiments: Is SCooP-Bed a Trustworthy Instrument?}
+\label{sec:experiments}
+A testbed paper is judged on whether readers can trust it as an
+instrument. Five experiments each back one property of that trust, and
+together they are the evidence behind the specification sheet of
+Table~\ref{tab:spec}: E1 shows the testbed is precise, E2 that it is
+consistent, E3 that its replay is faithful, E4 that its settings are
+repeatable, and E5 that what it measures could not have come from
+simulation. Each opens with its question and pass criterion and closes
+with the result. All recordings are from three indoor sites on the
+Guangfu Campus of National Yang Ming Chiao Tung University.
 
-\subsection{Reference Accuracy}
-\label{sec:eval_gt}
-Table~\ref{tab:gt} and Fig.~\ref{fig:gt_errors} summarize the checks
-of Sec.~\ref{sec:gt_val}.
+\input{tables/spec}
 
-\paragraph{Second mapping pass.} After refinement, floor surfaces are
-within \SI{1}{\centi\metre} of the sensor noise floor, while walls,
-observed at longer range and shallower incidence, remain above it.
-The larger wall thickness of Sequence B comes from extended
-single-visit corridor sections, where no revisit constrains the
-lateral placement; floors, observed at short range throughout, are
-unaffected. The second recording, captured four weeks later and
-processed independently, reproduces the surface placement to
-\SI{1.06}{\centi\metre} on walls, with the relative scale agreeing to
-$2\times10^{-5}$.
+\subsection{E1 Headroom: The Testbed Is Finer Than What It Measures}
+\emph{Question.} Is the testbed finer than the effects it is meant to
+measure? \emph{Pass.} Every testbed error term is at least ten times
+below the smallest fusion breaking point.
 
-\paragraph{Control distances.} \todo{Already measured some distances:
-$N$ distances of \SIrange{5}{40}{\metre} per site. Report per site:
-mean and max map-minus-rangefinder error.}
+On one log axis in metres (Fig.~\ref{fig:headroom}), each error term
+of the testbed is plotted: clock offset and sniffer bias multiplied by
+the 95th-percentile agent speed, extrinsic residuals, held-out board
+residual, and second-pass agreement. Against them stand the points at
+which collaborative fusion breaks: about \SI{0.2}{\metre} of pose
+error, at which late fusion falls below ego-only in the OPV2V study,
+and latency expressed as displacement, speed times delay, relative to
+an indoor object of \SIrange{0.5}{0.7}{\metre}; the \SI{100}{\milli\second}
+figure at which every fusion method falls below ego-only was measured
+at vehicle speed and is stated here as displacement. \todo{Result:
+clock \SI{70}{\micro\second} and second pass \SI{1.06}{\centi\metre}
+measured; board residuals \SI{10.0}{\milli\metre} (mobile\_1) and
+\SI{54.0}{\milli\metre} (mobile\_2) on coop2\_0828; fill calibration
+residuals, sniffer bias, p95 speeds; state the margin.}
 
-\paragraph{Held-out boards.} \todo{Report the median and
-95th-percentile board residual, in translation and rotation, per
-agent.}
+\input{figures/headroom}
 
-\paragraph{Pose consistency.} \todo{Report repeat-visit and
-cross-robot surface agreement for the LiDAR pair and for LiDAR against
-RGB-D.}
+\subsection{E2 Map Meets Radio: Two Independent References Agree}
+\emph{Question.} Are the poses and the link logs right, if neither is
+checked by hand? \emph{Pass.} Pooled Spearman $\rho$ between clearance
+and the residual signal above 0.3, and a clear-minus-obstructed drop
+above \SI{5}{\decibel}, on at least one link kind.
 
-No single number in Table~\ref{tab:gt} applies to every use of the
-reference, and each number bounds one error only. A smooth
-deformation displaces surfaces without thickening them, since the
-scans remain locally consistent, so the residual thickness is per-scan
-placement scatter, which averages out in the map. The cross-session
-comparison bounds the disagreement between the surface placement of
-two runs, here about one centimetre, and the control distances bound
-the disagreement both runs have in common. Annotations placed against
-the fused map therefore inherit centimetre-level geometry, while
-per-scan placement scatter and pose-level fusion are governed by the
-repeat-visit, cross-robot, and board figures. We release the
-reference as a validated pseudo-ground truth on these terms: it is
-established from onboard sensing alone, and the independent
-measurements are used only to check the result, never to produce it.
+For every link window, the first-Fresnel-zone clearance of the path
+between the two ends is computed through the anchored map; a link is
+conventionally free-space when at least $0.6\,r_1$ of the first
+Fresnel radius $r_1 = \sqrt{\lambda d_1 d_2 / d}$ is clear
+\cite{itup530}, which at \SI{5.75}{\giga\hertz} is \SI{28}{\centi\metre}
+at the midpoint of a \SI{6}{\metre} link. The distance trend is
+removed from the dB signal with a fixed path-loss exponent and an
+offset taken from the clear windows; fixing the exponent matters,
+since along a route length and obstruction move together and a free
+fit puts the wall loss into the slope. A self-test recovers a planted
+\SI{12}{\decibel} wall loss as \SI{11.9}{\decibel} ($\rho = 0.68$).
+Neither the map nor the poses used the signal, and the signal did not
+use the map, so agreement validates both at once; prior
+sensing--communication datasets infer blockage from received power
+\cite{deepsense6g}, which cannot make this check. Links tested are
+the CSI links \texttt{sniffer}--\texttt{mobile\_2} and
+\texttt{sniffer}--\texttt{infra\_1}, and the agent-to-AP links from
+status RSSI and goodput. \emph{Result so far} (coop\_2, robot to
+robot): $\rho = 0.60$ and a \SI{5.4}{\decibel} drop on the
+\texttt{mobile\_2} link, which passes; $\rho = 0.23$ and
+\SI{4.7}{\decibel} on the \texttt{infra\_1} link. \todo{Pool over
+passes and add the agent-to-AP links once the AP position is in
+\texttt{ap.yaml}; Fig.~\ref{fig:clearance}.}
 
-\input{tables/gt}
+\input{figures/clearance}
 
-\input{figures/gt_errors}
+\subsection{E3 Twin Run: Replay Matches the Real Link}
+\emph{Question.} Does replaying a logged link reproduce what the real
+link does? \emph{Pass.} Agreement of at least 90\,\% on which receiver
+frame (\SI{100}{\milli\second}) each message lands in, with the logged
+replay clearly closer than the synthetic channel.
 
-\subsection{Calibration and Timing}
-Table~\ref{tab:calib} reports the held-out residuals per transform
-and the clock statistics. \todo{Discuss: which extrinsic is weakest
-and why (radar, expected); whether the board-chain residual on
-mobile\_1 is consistent with the LiDAR--camera residual alone, which
-would show the hand-eye transform adds little error; the measured
-sniffer bias against the \SI{7.8}{\milli\second} worst case.}
+Two runs follow the same route, mode, and day. Run A records the link
+as usual with iperf and ping. Run B replaces iperf with a payload node
+that sends stamped messages at \SI{10}{\hertz} in three sizes: about
+\SI{1}{\kilo\byte} (boxes), \SI{100}{\kilo\byte} (features), and
+\SIrange{1}{2}{\mega\byte} (raw clouds), over the transport and QoS a
+collaborative method would use. Because the clocks are synchronized,
+the one-way delay of every message is exact. B's messages are replayed
+through A's trace and through the synthetic channel, and the
+arrival-time error, frame-assignment agreement, and drop agreement are
+reported per size and mode (Fig.~\ref{fig:twinrun}). If the pass
+fails for a size or mode, the fluid model of Eq.~\eqref{eq:replay} is
+the limitation and a per-packet trace is the stated fix. \todo{Needs
+the Phase-2 session: A1/B1 survey, A2/B2 cooperation.}
 
-\subsection{Link Characterization}
-\label{sec:eval_link}
-Fig.~\ref{fig:linktrace} shows RSSI and uplink goodput over one survey
-sequence, binned in the reference map frame. \todo{Report per site:
-RSSI range, goodput range in survey and cooperation modes, RTT idle
-and loaded, fraction of samples with \texttt{associated=false}, and
-achieved CSI rates per transmitter. Show the contention effect:
-goodput per agent in cooperation mode against survey mode on the same
-route.}
+\input{figures/twinrun}
 
-\subsection{Geometric Link State Against Measured RSSI}
-\label{sec:eval_clear}
-The dataset built on this testbed \cite{scoop_dataset} labels each
-link per frame with its first-Fresnel-zone clearance computed from the
-reference map, independently of the measured signal. The testbed makes
-that independence testable: because the map, the poses, and the RSSI
-are all recorded, the geometric label can be checked against the
-signal it is meant to predict. \todo{Report RSSI distribution for
-frames with clearance above and below 0.6, per site; this is the
-check that a map-derived link label carries information about the
-measured link.}
+\subsection{E4 Same Knob, Same Link: A Setting Reproduces Its Condition}
+\emph{Question.} If the same condition is set on another day, is the
+same link obtained? \emph{Pass.} The day-to-day distance between link
+distributions is below half the survey-to-cooperation distance, for
+RTT and goodput.
 
-\subsection{End-to-End Demonstration}
-\todo{One sequence shown from raw bags to merged MCAP: timeline of all
-units, reference trajectories on the map, link trace, and CSI
-amplitude over time, to show that the products of
-Sec.~\ref{sec:postproc} line up on one timebase. Optionally a
-single-agent SLAM run (GLIM on mobile\_1, on-board VSLAM on mobile\_2)
-evaluated against the reference to demonstrate use as an evaluation
-target.}
+The same route and mode are recorded on two days. The Wasserstein (or
+KS) distance between their RTT, goodput, and RSSI distributions, and
+between RSSI-against-position on a shared map grid, is compared with
+the distance between survey and cooperation mode on the same route.
+The pose half of repeatability is the second mapping pass of
+Sec.~\ref{sec:gt_val}, four weeks apart, at \SI{1.06}{\centi\metre}.
+\todo{Mode half from survey\_1 vs.\ coop\_2 (24 Sep); day half from
+the Phase-2 session.}
+
+\subsection{E5 Sim Gap: What a Synthetic Channel Hides}
+\emph{Question.} Why not simulate the link? This is a demonstration
+with no pass criterion; the claim checked is that cooperation mode
+pushes raw clouds past the one-frame boundary while boxes stay within
+it, and that outages exist which synthetic channels do not have.
+
+From the logged ping and iperf data, the arrival delay of
+Eq.~\eqref{eq:replay} is computed for messages of \SI{1}{\kilo\byte},
+\SI{100}{\kilo\byte}, and \SI{1.5}{\mega\byte}, per load mode, and
+the share arriving within one LiDAR frame (\SI{100}{\milli\second}) is
+set against the synthetic channels of Where2comm (bandwidth budget, no
+latency) and V2X-ViT (constant \SI{100}{\milli\second}) exactly as
+published (Fig.~\ref{fig:simgap}). \emph{Result so far} (24 Sep): raw
+clouds arrive within the frame in 86\,\% of cases when one robot owns
+the channel and in \SIrange{59}{68}{\percent} with two robots
+contending, against 100\,\% under the synthetic channels; the measured
+delay is bimodal, about \SI{3}{\milli\second} idle and
+\SIrange{60}{109}{\milli\second} under contention, and coop2\_0828
+contains three real outages covering 12\,\% of frames, which no
+synthetic channel produces. Detection-level consequences are reported
+in \cite{scoop_dataset}.
+
+\input{figures/simgap}
 
 %=======================================================================
 \section{Lessons Learned and Limitations}
 \label{sec:lessons}
 
-\paragraph{The CSI receiver dictates the network.} Commodity CSI
-extraction imposed a single spatial stream, 802.11ac rather than ax,
-and \SI{80}{\mega\hertz} bandwidth on every transmitter. These are
-constraints of the measurement, not of the robots, and they must be
-stated with any throughput number recorded on the platform.
+\paragraph{CSI constraints shape the network.} Commodity CSI extraction
+imposed a single spatial stream, 802.11ac rather than ax, and
+\SI{80}{\mega\hertz} on every transmitter, and aggregation caps the
+CSI rate at roughly \SIrange{100}{140}{\hertz} under load, sufficient
+only below about \SI{1.2}{\metre\per\second}. These are constraints of
+the measurement, not of the robots, and must accompany any throughput
+number recorded on the platform; raising the CSI rate by disabling
+aggregation would distort the throughput being measured.
 
-\paragraph{Aggregation caps the CSI rate.} One channel estimate per
-aggregated transmission limits CSI to roughly \SIrange{100}{140}{\hertz}
-under load, sufficient only below about \SI{1.2}{\metre\per\second} of
-relative motion. Raising the rate by disabling aggregation would
-distort the throughput being measured; the two cannot be optimized
-together on one link.
+\paragraph{NTP asymmetry on the sniffer's management link.} Reaching
+the CSI host over a second wireless hop introduced the only clock bias
+the protocol cannot observe. Probe packets stamped on both ends
+measure it; a wired connection to \texttt{mobile\_1} removes it.
+\todo{Confirm once the Ethernet change is made.}
 
-\paragraph{Keep the sniffer off a second wireless hop.} Synchronizing
-the CSI host over a \SI{2.4}{\giga\hertz} management link introduced
-the only clock bias the protocol cannot observe. The probe-packet
-measurement bounds it, but a wired connection to \texttt{mobile\_1}
-removes it. \todo{Confirm once the Ethernet change is made.}
+\paragraph{Cold-start ICP falls into wrong basins at building scale.}
+Hence boards go in feature-poor regions and every run starts at a
+board.
 
-\paragraph{Plane targets, not nearest neighbours.} On a map smeared by
-drift, nearest-neighbour ICP hides a \SI{3}{\centi\metre} scan offset
-behind a \SI{0.5}{\centi\metre} residual. Registration against local
-plane fits made the error visible and was necessary to reach the
-reported surface thickness.
+\paragraph{Plane-fit refinement versus nearest neighbours.} On a map
+smeared by drift, nearest-neighbour ICP hides a \SI{3}{\centi\metre}
+scan offset behind a \SI{0.5}{\centi\metre} residual; plane targets
+made the error visible and were necessary to reach the reported
+surface thickness.
 
-\paragraph{Post boards from the map, not from a survey.} Estimating
-board poses from the mapping session itself removed the survey
-instrument and gave the RGB-D agent and the infrastructure a frame
-consistent with the LiDAR map by construction. The cost is that board
-accuracy is bounded by map accuracy, which is why the control
-distances are needed.
-
-\paragraph{Limitations.} The radio layer covers one band, one
-protocol, and one access point per site, with CSI from a single
-receiver. The two mapping passes share a sensor and a pipeline, so
-absolute accuracy rests on the control distances. Each extrinsic is
-validated on held-out observations but the rig, once fixed, is not
-re-verified per session. \todo{Add scale: three sites, number of
-sessions and hours recorded, once final.}
+\paragraph{Limits.} One band and one protocol; one access point per
+site; one CSI receiver; the self-built map rests on the control
+distances for absolute scale, since the two passes share a sensor and
+a pipeline; endpoint clearances hide obstacles within
+\SI{0.7}{\metre} of a radio. \todo{Add scale: three sites, sessions,
+hours, once final.}
 
 %=======================================================================
 \section{Conclusion}
 \label{sec:conclusion}
-We presented a heterogeneous indoor multi-robot testbed in which the
-wireless link between every pair of agents is measured on the sensing
-timeline and every agent, with or without a LiDAR, is placed in one
-building-scale metric frame built from the testbed's own sensors and
-validated against independent measurements. The calibration and timing
-budget shows that synchronization is not the limiting error, and the
-reference reaches centimetre-level surface agreement across
-independent passes. The platform is the acquisition system of the
-SCooP dataset \cite{scoop_dataset}; its post-processing pipeline is
-released so that the products described here can be regenerated.
-Future work includes a wired CSI host, multi-antenna CSI extraction,
-and additional access points per site.
+SCooP-Bed gives a heterogeneous indoor robot team one clock, bounded to
+\unsure{about \SI{70}{\micro\second}}, one metric frame, validated to
+\SI{1.06}{\centi\metre} across independent passes without motion
+capture or GNSS, and a record of every inter-agent link from passive
+state to channel state, with a replay module that puts that link back
+in the loop for any collaborative method \todo{validated to within one
+receiver frame}. Under contention the real link moves the delay across
+one LiDAR frame, which no synthetic channel of prior benchmarks
+reproduces. Next steps are more agents, other radios, multi-antenna
+CSI, and a wired CSI host. The sequences recorded on SCooP-Bed, their
+labels, and the benchmark are released as the SCooP dataset
+\cite{scoop_dataset}.
 
 \section*{Acknowledgment}
 \todo{Add acknowledgments in this section.}
@@ -944,6 +901,12 @@ and additional access points per site.
 \bibliography{references}
 
 \appendices
+\section{Bill of Materials and Setup Effort}
+\label{app:bom}
+\input{tables/bom}
+\todo{Per-site setup effort: mapping-session length, number of boards,
+rangefinder distances, software stack and versions.}
+
 \section{Sensor Intrinsics}
 \label{app:intrinsics}
 \todo{Per-sensor intrinsic parameters and the plots behind
@@ -951,10 +914,5 @@ Table~\ref{tab:calib}: camera reprojection residual by image region,
 LiDAR range bias by range, radar reflector offset by range.}
 
 %\input{figures/app_intrinsics}
-
-\section{Bill of Materials}
-\label{app:bom}
-\todo{Per-agent component list with approximate cost, to support the
-claim that the reference is reachable without a survey scanner.}
 
 \end{document}

@@ -1,0 +1,23 @@
+\begin{table*}[!t]
+\caption{SCooP-Bed Specification Sheet: Every Guarantee, Its Measured Bound, and the Check That Produced It}
+\label{tab:spec}
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\setlength{\tabcolsep}{4pt}
+\scriptsize
+\begin{tabular}{@{}p{3.6cm} p{5.2cm} p{5.4cm} p{1.6cm}@{}}
+\toprule
+\textbf{Guarantee} & \textbf{Bound} & \textbf{Validated by} & \textbf{Experiment} \\
+\midrule
+Clock agreement between agents & \unsure{about \SI{70}{\micro\second} (\SI{0.2}{\milli\metre} at \SI{3}{\metre\per\second})}; \todo{reconcile with Table~\ref{tab:ntp} max \SI{42.5}{\micro\second} and the coop\_2 measurement} & chrony offset logs, every run & E1 \\
+Sniffer clock bias & \todo{to be measured} (worst case \SI{7.8}{\milli\second}) & probe-packet stamps on both ends & E1 \\
+Spatial extrinsics & residual per sensor pair, Table~\ref{tab:calib} & held-out reflector and board positions & E1 \\
+Agent pose in the site frame & \SI{1.06}{\centi\metre} surface agreement across passes; board residual \todo{10.0 mm / 0.88$^\circ$ (mobile\_1), 54.0 mm / 1.38$^\circ$ (mobile\_2), coop2\_0828} & second mapping pass, rangefinder control distances, held-out boards & E1, E2 \\
+Link state & \SI{5}{\hertz} passive, \SI{100}{\hertz} RTT, \SI{4}{\second} goodput windows; outages labelled explicitly & monitor publishes through outages & E2, E4 \\
+Channel state (CSI) & \SIrange{104}{141}{\hertz}; valid below \SI{1.2}{\metre\per\second} relative speed & $\lambda/2$ sampling argument & --- \\
+Contention as a knob & RTT \SI{3.3}{\milli\second} idle, \SIrange{60}{109}{\milli\second} under load & survey vs.\ cooperation mode, repeated across days & E4 \\
+Replay fidelity & \todo{arrival-time error; frame-assignment agreement} & twin run: live payload against replayed trace & E3 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table*}

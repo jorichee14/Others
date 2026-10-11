@@ -1,0 +1,19 @@
+\begin{table}[t]
+\centering
+\caption{Bill of materials and per-site setup effort. \todo{Fill costs and effort.}}
+\label{tab:bom}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabularx}{\columnwidth}{@{}l>{\raggedright\arraybackslash}Xr@{}}
+\toprule
+Agent class & Main components & Cost \\
+\midrule
+LiDAR robot (\texttt{mobile\_1}) & Scout Mini, Ouster OS1-128/OS0-64, ZED 2i, 2$\times$ IWR6843ISK, Jetson AGX Orin, RTL8852BU, RPi 4B sniffer & \todo{} \\
+RGB-D cart (\texttt{mobile\_2}) & Pushcart, RealSense D455, compute \todo{}, Wi-Fi & \todo{} \\
+Infrastructure mast (\texttt{infra\_N}) & Mast, Arducam B0495, IWR6843ISK, RPi 4B & \todo{} \\
+Network & 1 access point (802.11ac, VHT-80), rangefinder, printed ChArUco boards & \todo{} \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Per new site:} mapping session \todo{min}; \todo{N} boards; \todo{N} rangefinder distances; second pass optional} \\
+\bottomrule
+\end{tabularx}
+\end{table}

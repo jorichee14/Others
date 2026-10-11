@@ -1,0 +1,37 @@
+\begin{table*}[!t]
+\caption{Capabilities of Multi-Robot and Cooperative-Perception Platforms}
+\label{tab:capability}
+\begin{center}
+\renewcommand{\arraystretch}{1.15}
+\setlength{\tabcolsep}{3pt}
+\scriptsize
+\begin{tabular}{@{}l cccccccc@{}}
+\toprule
+\textbf{Platform} & \textbf{Indoor} & \shortstack{\textbf{Heterogeneous}\\\textbf{(incl.\ infra)}} & \shortstack{\textbf{Pose ref.\ w/o}\\\textbf{mocap/GNSS}} & \shortstack{\textbf{Per-pair}\\\textbf{link measured}} & \textbf{CSI} & \shortstack{\textbf{Clock bound}\\\textbf{reported}} & \shortstack{\textbf{Link replay}\\\textbf{into methods}} & \shortstack{\textbf{Perception}\\\textbf{scoring}} \\
+\midrule
+\multicolumn{9}{@{}l}{\textit{Multi-robot testbeds}} \\
+Robotarium \cite{wilson2021robotarium}        & \cmark & \xmark & \xmark (mocap) & \xmark & \xmark & \xmark & \xmark & \xmark \\
+Duckietown \cite{paull2017duckietown}         & \cmark & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark \\
+CPM Lab \cite{kloock2021cpmlab}               & \cmark & \xmark & \xmark & \xmark & \xmark & \todo{} & \xmark & \xmark \\
+ChoiRbot \cite{testa2021choirbot}             & \cmark & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark \\
+\midrule
+\multicolumn{9}{@{}l}{\textit{Communication-aware multi-robot systems}} \\
+ROS-NetSim \cite{calvofullana2021rosnetsim}   & --- & \cmark & --- & \xmark (sim.) & \xmark & \xmark & \cmark (sim.) & \xmark \\
+CHORD / ACHORD \cite{ginting2021chord,saboia2022achord} & \cmark & \cmark & \xmark & partial & \xmark & \xmark & \xmark & \xmark \\
+MOCHA \cite{cladera2024mocha}                 & \cmark & \cmark & \xmark & partial & \xmark & \xmark & \xmark & \xmark \\
+\midrule
+\multicolumn{9}{@{}l}{\textit{Cooperative-perception platforms}} \\
+CoPeD \cite{coped}                            & \cmark & \cmark & \xmark (estimator) & \xmark & \xmark & \xmark & \xmark & \cmark \\
+V2V4Real \cite{v2v4real}                      & \xmark & \xmark & \xmark (RTK) & \xmark & \xmark & \xmark & \xmark & \cmark \\
+TUMTraf-V2X \cite{zimmer2024tumtrafv2x}       & \xmark & \cmark & \xmark (RTK) & \xmark & \xmark & \xmark & \xmark & \cmark \\
+AutoCast \cite{qiu2022autocast}               & \xmark & \xmark & --- (sim.) & \xmark & \xmark & \xmark & \cmark (sim.) & \cmark \\
+V2X-ReaLO \cite{v2xrealo}                     & \xmark & \cmark & \xmark (RTK) & latency & \xmark & \xmark & live & \cmark \\
+CooperScene \cite{cooperscene}                & \xmark & \cmark & \xmark (RTK) & \cmark & \xmark & \xmark & \todo{} & \cmark \\
+\midrule
+\textbf{SCooP-Bed (ours)}                     & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark \\
+\bottomrule
+\end{tabular}
+\end{center}
+\vspace{2pt}
+{\scriptsize \todo{Verify every cell against the cited paper before submission; word the CSI and replay columns carefully, as CooperScene is the nearest case.}}
+\end{table*}

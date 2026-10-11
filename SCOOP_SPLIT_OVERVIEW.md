@@ -5,8 +5,8 @@ untouched). Two self-contained LaTeX folders were created:
 
 | Folder | Paper | Role |
 |---|---|---|
-| `scoop_testbed_paper/` | A Heterogeneous Indoor Multi-Robot Testbed for Synchronized Sensing and Wireless Link Measurement with Survey-Free Building-Scale Ground Truth | Systems / instrumentation paper (how the data is acquired and why it can be trusted) |
-| `scoop_dataset_paper/` | SCooP: A Real-World Indoor Multi-Agent Dataset for Collaborative SLAM and Perception over Measured Wireless Links | Dataset / benchmark paper (what was recorded, how it is labeled and released, what the benchmark shows) |
+| `scoop_testbed_paper/` | SCooP-Bed: An Indoor Multi-Robot Testbed for Collaborative Perception over Measured Wireless Links | Paper A, RA-L testbed paper (the instrument, its guarantees, and the proof it can be trusted) |
+| `scoop_dataset_paper/` | SCooP: A Real-World Indoor Multi-Agent Dataset for Collaborative SLAM and Perception over Measured Wireless Links | Paper B, dataset / benchmark paper (what was recorded, how it is labeled and released, what the benchmark shows) |
 
 Each cites the other (`\cite{scoop_testbed}` / `\cite{scoop_dataset}`; placeholder
 bib entries appended to each `references.bib`). Nothing from the original was
@@ -15,73 +15,81 @@ contributions, summaries, lessons learned, conclusions) was written new.
 
 ---
 
-## 1. Testbed paper (`scoop_testbed_paper/main.tex`)
+## 1. Testbed paper, Paper A (`scoop_testbed_paper/main.tex`)
 
-**One-line pitch.** A five-agent indoor platform in which the Wi-Fi link between
-every agent pair is a measured stream rather than a transport, and every agent,
-with or without a LiDAR, gets a validated pose in one building-scale frame
-without a survey scanner.
+**Title.** SCooP-Bed: An Indoor Multi-Robot Testbed for Collaborative
+Perception over Measured Wireless Links. Follows the plan already on the branch
+(`scoop_paper/split/PAPER_A.md`, `EXPERIMENTS.md`).
 
-**Suggested venues.** IEEE T-IM, IEEE Sensors Journal, RA-L (systems), Journal of
-Field Robotics, or ICRA/IROS systems track. The "lessons learned" section
-suits JFR / Sensors.
+**One claim.** A heterogeneous indoor team in which every inter-agent link is
+measured alongside the sensors, all agents sit on one clock and in one metric
+frame, there is no motion capture or GNSS, and any collaborative method can be
+run against the link the agents actually had.
+
+**Venue.** RA-L, 6 pages + 2 overlength. Submit first; the dataset paper cites it.
 
 ### Sections
 
-| # | Section | Content (origin in the SCooP draft) |
+| # | Section | Content (origin) |
 |---|---|---|
-| I | Introduction | Why a measured link plus indoor GT requires a purpose-built platform; four design principles; four contributions. *(new)* |
-| II | Related Work | A. Multi-robot acquisition platforms (C-SLAM datasets, V2X-ReaLO, CooperScene). B. ISAC testbeds (DeepSense 6G, DICHASUS, DeepMIMO, Nexmon). C. Indoor GT strategies (the full taxonomy from old Sec. II-D). |
-| III | System Overview | Design principles *(new)*; agents; frames; recording and topics table (old Sec. III). |
-| IV | Calibration and Timing | Spatial calibration, chrony sync, sniffer bias, timestamp latency, error bounds Eq. (1)-(2), calibration validation + residual table (old Sec. IV, unchanged). |
-| V | Reference Localization | Map + plane-fit ICP, fiducial network with Eq. (3)-(4), validation methodology (old Sec. V-A to V-C). Numbers moved to the Evaluation section. |
-| VI | Communication Measurement | Network configuration, link state (survey vs cooperation mode), CSI and the 1.2 m/s rate limit (old Sec. V-E). |
-| VII | Post-Processing Pipeline | Decode, reference poses, link/CSI parsing, merge to MCAP (old Sec. VII-B minus labels/geometry/extraction, which stay with the dataset). |
-| VIII | Evaluation | Reference accuracy (Table gt, Fig. gt_errors); calibration and timing residuals; link characterization (Fig. linktrace); geometric clearance vs RSSI; end-to-end demo. *(numbers mostly TODO)* |
-| IX | Lessons Learned and Limitations | CSI receiver dictates the network; aggregation caps CSI rate; sniffer off a second wireless hop; plane targets vs nearest neighbours; boards posed from the map. *(new, distilled from existing text)* |
-| X | Conclusion | *(new)* |
-| App. | Sensor intrinsics; Bill of materials | |
+| I | Introduction | Need, three-sentence gap (testbeds / comm-aware systems / coop-perception platforms), three contributions with numbers, highlight sentence (3 ms to 60-109 ms crosses one LiDAR frame). *(new)* |
+| II | Related Work | A. Multi-robot testbeds (Robotarium, Duckietown, CPM Lab, ChoiRbot...). B. Communication in multi-robot systems (ROS-NetSim, CHORD/ACHORD, MOCHA...). C. Coop-perception platforms and measured links (CoPeD as closest RA-L neighbour, V2X-ReaLO, CooperScene). D. Indoor GT without a survey instrument (condensed from old Sec. II-D). New **capability table** `tables/capability.tex`. |
+| III | Testbed Design | Agents (3 classes), network, **design decisions each with its reason**, recording + topics + data flow (old Sec. III, VII-B). BOM table in appendix. |
+| IV | Time and Space Alignment | Clock, sniffer bias ("the measured link calibrates the clock"), error budget Eq. (1)-(2), extrinsics + residual table (old Sec. IV). |
+| V | Ground Truth Without Motion Capture | Reference map + plane-fit ICP, fiducial chain Eq. (3)-(4), four independent checks, one-paragraph scoring capability (old Sec. V-A..C). |
+| VI | Link Instrumentation | Link state, CSI, 1.2 m/s limit, contention knob (old Sec. V-E). |
+| VII | Channel-in-the-Loop Replay | Model with one-way delay d_ab(t), interface, implementation, positioning against trace-driven emulation (netem, Mahimahi, Pantheon) and co-simulators. *(new; was old Sec. VIII-A)* |
+| VIII | Experiments | **Spec sheet** `tables/spec.tex` (central table) + E1 Headroom (precise), E2 Map Meets Radio (consistent), E3 Twin Run (faithful), E4 Same Knob Same Link (repeatable), E5 Sim Gap (necessary); each with question, pass criterion, and result so far. |
+| IX | Lessons Learned and Limitations | CSI shapes the network; NTP asymmetry; cold-start ICP basins; plane fits vs NN; limits. |
+| X | Conclusion | |
+| App. | Bill of materials and setup effort; sensor intrinsics | |
 
 ### What to highlight
 
-1. **The link is measured, not loaded.** No sensor data crosses Wi-Fi; only chrony
-   and probes do, and both are present in every run, so the recorded channel is the
-   channel a deployed team would have. This is the single most distinctive design choice.
-2. **Three-level link measurement on commodity hardware.** Passive (5 Hz), active
-   goodput/RTT (iperf3, 100 Hz ICMP), and per-frame CSI (Nexmon, 242 subcarriers,
-   100-140 Hz) on every pair, with cooperation-mode contention captured by design.
-3. **Survey-free, annotation-grade ground truth for heterogeneous agents.** Frozen
-   self-built map + plane-fit ICP + fiducials posed *from the map*; this is what lets
-   an RGB-D pushcart and camera-only masts share the LiDAR frame. The plane-fit
-   argument (3 cm offset -> 0.5 cm NN residual) is a concrete technical point reviewers
-   will remember.
-4. **Out-of-sample validation everywhere.** Second mapping pass (1.06 cm walls, scale
-   2e-5), rangefinder control distances, held-out boards, cross-robot consistency;
-   held-out reflector positions and boards for extrinsics; probe packets for the
-   sniffer bias. Say explicitly which error each number bounds and which it does not.
-5. **The timing error budget.** Synchronization contributes < 1 mm at 3 m/s; the
-   dominant terms are sensor physics (LiDAR sweep, deskewed) and constant transport
-   lags (removable). This pre-empts the usual "how well are the clocks aligned" question.
-6. **The CSI rate vs robot speed argument** (half-wavelength 26 mm, 3 samples ->
-   1.2 m/s) and why aggregation forbids simply sending more packets. It is an honest,
-   quantitative limit and a reusable design rule.
-7. **Lessons learned** as a contribution in itself: the CSI receiver forcing 1x1
-   802.11ac at 80 MHz, the 2.4 GHz management link bias, the endpoint-clearance workaround.
+1. **The spec sheet** (Table `tab:spec`): every guarantee with a measured bound
+   and the check that produced it. Reviewers of a testbed paper read this first.
+2. **The headroom argument (E1).** Testbed error (70 us clock -> 0.2 mm; 1.06 cm
+   pose) is one to three orders of magnitude below the errors at which fusion
+   breaks (0.2 m pose; ~100 ms delay stated as displacement). Make it the key figure.
+3. **The link is measured, not loaded,** and contention is a knob (survey vs
+   cooperation), with a measured effect: RTT 3.3 ms idle -> 60-109 ms under load.
+4. **Ground truth without mocap or GNSS**, at building scale, from onboard sensing
+   only: frozen self-built map, plane-fit ICP (3 cm offset hides behind 0.5 cm NN
+   residual), boards posed from the map, infra posed through a shared board view.
+   Four independent checks; say which error each bounds.
+5. **E2 Map Meets Radio** validates poses and link logs together with no hand
+   measurement: rho 0.60, 5.4 dB on the mobile_2 link already passes the
+   pre-registered criterion.
+6. **Channel-in-the-loop replay** as the testbed's offer to every method, and
+   the one-way-delay point: only a synchronized testbed can measure d_ab directly
+   rather than assume RTT/2. E3 Twin Run is what makes replay more than a simulation.
+7. **E5 Sim Gap** as the reason to exist: raw clouds arrive within one frame 86 %
+   alone vs 59-68 % under contention vs 100 % under Where2comm / V2X-ViT channels;
+   three real outages (12 % of frames) that no synthetic channel produces.
+8. **Lessons learned** with numbers (1x1 802.11ac at 80 MHz forced by the CSI
+   receiver; aggregation caps CSI at 100-140 Hz; 2.4 GHz management-link bias).
 
-Numbers still needed before submission: control-distance errors, board residuals,
-cross-robot consistency, calibration residual table, sniffer bias, per-site link
-characterization, end-to-end demo figure.
+Still needed (from `EXPERIMENTS.md`): reconcile the clock bound (70 us text vs
+42.5 us table vs the coop_2 value), sniffer bias, calibration residuals, control
+distances, cross-robot consistency, E2 pooled + agent-to-AP, E4 mode and day
+halves, the Phase-2 session for E3, BOM costs, redrawn Fig. 1, all five
+experiment figures.
 
 ---
 
-## 2. Dataset paper (`scoop_dataset_paper/main.tex`)
+## 2. Dataset paper, Paper B (`scoop_dataset_paper/main.tex`)
 
 **One-line pitch.** The first indoor multi-robot dataset on which one can measure
 what a real link costs C-SLAM and collaborative perception, and how much of that
 cost the mapped geometry could have predicted.
 
-**Suggested venues.** IJRR data paper (default, as in `scoop_paper/README.md`);
-T-RO if the Q2 share is strong; RA-L fallback.
+**Venue.** IJRR data paper (default, per `scoop_paper/README.md`); T-RO if
+the findings are strong. Note: `scoop_paper/split/SPLIT.md` plans a CODa-style
+T-RO version with five questions (Q1 transfer from V2X data, Q2 heterogeneity
+between collaborators, Q3 where the indoor gain comes from, Q4 link cost and
+foreseeability, Q5 pretraining transfer). The benchmark section here carries the
+draft's existing experiment, which is that plan's Q4; a comment at the top of the
+section records this.
 
 ### Sections
 
@@ -137,7 +145,8 @@ abstract and conclusion.
 ## Overlap policy between the two papers
 
 - Platform, calibration, timing, reference pipeline, link measurement design,
-  and their validation numbers live in the **testbed** paper. The dataset paper
+  the channel-replay module, and their validation numbers live in the **testbed**
+  paper. The dataset paper
   carries a half-page summary plus two summary tables and cites the testbed paper.
 - Annotations, geometry characterization, collection protocol, release format,
   devkit, benchmark, and discussion live in the **dataset** paper. The testbed

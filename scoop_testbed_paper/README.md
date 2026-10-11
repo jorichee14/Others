@@ -1,21 +1,31 @@
-# SCooP testbed paper (split from the SCooP draft)
+# SCooP-Bed: testbed paper (Paper A, split from the SCooP draft)
 
-A Heterogeneous Indoor Multi-Robot Testbed for Synchronized Sensing and
-Wireless Link Measurement with Survey-Free Building-Scale Ground Truth.
+SCooP-Bed: An Indoor Multi-Robot Testbed for Collaborative Perception over
+Measured Wireless Links. Target: RA-L (6 pages + 2 overlength).
 
-Systems/instrumentation paper. Owns: platform and sensing suite, spatial and
-temporal calibration with error budget, survey-free reference-localization
-pipeline (map, fiducials, validation methodology), communication measurement
-(network config, link state, CSI), post-processing pipeline, evaluation of
-reference accuracy / calibration / clocks / link, lessons learned.
+Structure follows `../scoop_paper/split/PAPER_A.md`; the experiments E1-E5
+follow `../scoop_paper/split/EXPERIMENTS.md` (pass criteria and the results
+recorded there so far are already in the text).
 
-Companion: `../scoop_dataset_paper` (cited as `scoop_testbed` from there; this
-paper cites the dataset paper as `scoop_dataset`).
+Owns: testbed design and design decisions, time and space alignment (clock,
+sniffer bias, error budget, extrinsics), ground truth without motion capture
+(map, fiducial chain, validation, scoring capability), link instrumentation,
+channel-in-the-loop replay, experiments E1 Headroom / E2 Map Meets Radio /
+E3 Twin Run / E4 Same Knob Same Link / E5 Sim Gap, lessons learned.
+Releases no sequences, labels, or leaderboard (those are Paper B).
+
+Companion: `../scoop_dataset_paper` (cites this paper as `scoop_testbed`;
+this paper cites it as `scoop_dataset`).
 
 - `main.tex`: manuscript (IEEEtran conference template for drafting)
-- `references.bib`: bibliography (copy of the SCooP bib + companion entry)
-- `tables/`, `figures/`: `.tex` includes; `figs/`: images
-- Only the tables/figures this paper uses were copied from the SCooP draft.
+- `references.bib`: SCooP bib + `../scoop_paper/split/testbed_refs.bib` + companion entry
+  (note: `itup530` is duplicated in the original bib; remove one copy before submission)
+- `tables/`: sensors, topics, ntp, calib, gt from the draft; new: `spec.tex`
+  (spec sheet, the central table), `capability.tex`, `bom.tex`
+- `figures/`: overview, platforms, refpipeline, refmap, gt_errors, linktrace,
+  dataflow from the draft; new placeholders: `replay.tex`, `headroom.tex`,
+  `clearance.tex`, `twinrun.tex`, `simgap.tex`
+- `figs/`: images
 
 Upload the folder to Overleaf as is; `main.tex` is the root file.
 The original single-paper draft in `../scoop_paper` is untouched.
