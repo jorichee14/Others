@@ -45,23 +45,26 @@ function body(slide, items, fs) {
 }
 
 
-// Result table: header row, "Answered" rows, "Still needed" rows (grey, italic)
-function resultTable(slide, cols, colW, answered, needed, verdictCol) {
-  const H = (t) => ({ text: t, options: { bold: true, color: "FFFFFF", fill: { color: CYAN }, fontFace: F, fontSize: 12, valign: "middle" } });
-  const T = (t, o) => ({ text: t, options: { fontFace: F, fontSize: 11, color: TXT, valign: "middle", ...(o || {}) } });
-  const G = (t) => ({ text: t, options: { fontFace: F, fontSize: 11, color: GREY, italic: true, valign: "middle" } });
-  const sub = (t, col) => [{ text: t, options: { bold: true, color: col, fontFace: F, fontSize: 11, colspan: cols.length, fill: { color: "F4F6F7" } } }];
-  const rows = [cols.map(H), sub("Answered", GREEN)];
-  answered.forEach(r => rows.push(r.map((c, i) => {
-    if (i === verdictCol) {
-      const bad = /short|no data|half|partial|untested/i.test(c);
-      return T(c, { color: bad ? ORANGE : GREEN, bold: true });
-    }
-    return T(c);
-  })));
-  rows.push(sub("Still needed", ORANGE));
-  needed.forEach(r => rows.push(r.map(G)));
-  slide.addTable(rows, { x: 0.4, y: 0.98, w: 9.2, colW, border: { type: "solid", pt: 0.5, color: "CCCCCC" }, rowH: 0.26, margin: 0.03, fontFace: F, objectName: "results" });
+// Booktabs-style table: three columns, italic group rows, indented terms,
+// "--" where a value is still missing (grey), pass green / short orange.
+function bookTable(slide, caption, cols, colW, groups) {
+  const none = { type: "none" };
+  const rule = (pt) => ({ type: "solid", pt, color: "333333" });
+  const cell = (t, o) => ({ text: t, options: { fontFace: F, fontSize: 11, color: TXT, valign: "middle", border: [none, none, none, none], ...(o || {}) } });
+  const rows = [];
+  rows.push(cols.map((c, i) => cell(c, { bold: true, border: [rule(1.25), none, rule(0.75), none] })));
+  groups.forEach(g => {
+    rows.push([cell(g.title, { italic: true, bold: true, colspan: cols.length })]);
+    g.rows.forEach(r => {
+      const [term, qty, val, st] = r;
+      const col = st === "pass" ? GREEN : st === "short" ? ORANGE : st === "missing" ? GREY : TXT;
+      rows.push([cell("      " + term), cell(qty, { color: "444444" }), cell(val === "" ? "--" : val, { color: col, bold: st === "pass" || st === "short" })]);
+    });
+  });
+  // bottom rule on the last row
+  rows[rows.length - 1] = rows[rows.length - 1].map(c => ({ ...c, options: { ...c.options, border: [none, none, rule(1.25), none] } }));
+  slide.addText(caption, { x: 0.6, y: 0.95, w: 8.8, h: 0.35, fontFace: F, fontSize: 12, color: "444444", align: "center", isTextBox: true, margin: 0, objectName: "caption" });
+  slide.addTable(rows, { x: 0.6, y: 1.35, w: 8.8, colW, rowH: 0.23, margin: 0.02, fontFace: F, objectName: "results" });
 }
 
 const FS = { l0: 17, l1: 15, l2: 14, l3: 13 };
@@ -102,9 +105,11 @@ slides.push(s => {
 });
 
 
+
+
 slides.push(s => {
   titleBand(s, "Q1 results: is it precise?");
-  resultTable(s, ["Term", "Pass", "Value", "Margin"], [3.3, 1.3, 2.6, 2.0], [["Clock offset, measured", "coop_2", "0.99 ms (1 mm at 1 m/s)", "101x, pass"], ["Clock offset, strict chrony bound", "coop_2", "12 ms (1.2 cm)", "8.3x, short"], ["Map refinement, final correction", "mapping_A", "0.15 cm, 0.017 deg", "133x, pass"], ["Map repeatability, four weeks apart", "two maps", "1.06 cm, scale 2e-5", "19x, pass"], ["Board detector vs pipeline", "mapping_A", "8.1 mm ZED, 8.3 mm RealSense", "24x, pass"], ["RGB-D cart vs held-out boards", "coop_2", "3.1 cm median, sigma 5.3 cm", "6.5x, short"], ["LiDAR robot vs held-out boards", "coop2_0828", "10.0 mm, 0.88 deg", "20x, pass"]], [["LiDAR robot vs boards on coop_2", "coop_2", "board_table.py", ""], ["Radar and LiDAR-camera extrinsic residuals", "", "held-out reflector positions and boards", ""], ["Sniffer clock bias", "", "probe stamps or field session", ""], ["Measured p95 agent speed", "", "reference tracks (headroom.py --traj)", ""], ["Control distances, map minus rangefinder", "", "per site", ""]], 3);
+  bookTable(s, "Each term against the breaking point of its kind: 0.2 m for pose, one LiDAR frame (0.1 m at 1 m/s) for time; pass at 10x", ["", "Quantity", "Value"], [2.7, 3.0, 3.1], [{"title": "Clock", "rows": [["Measured offset", "coop_2, chrony logs", "0.99 ms = 1 mm (101x)", "pass"], ["Strict chrony bound", "coop_2, offset + root delay/2", "12 ms = 1.2 cm (8.3x)", "short"], ["Sniffer bias", "probe stamps, both ends", "", "missing"]]}, {"title": "Map", "rows": [["Refinement", "final pose correction", "0.15 cm, 0.017 deg (133x)", "pass"], ["Repeatability", "two maps, four weeks apart", "1.06 cm, scale 0.99998 (19x)", "pass"], ["Control distances", "rangefinder, per site", "", "missing"]]}, {"title": "Agents in the frame", "rows": [["Board detector", "vs pipeline, ZED / RealSense", "8.1 / 8.3 mm (24x)", "pass"], ["RGB-D cart", "held-out boards, coop_2", "3.1 cm (6.5x), sigma 5.3 cm", "short"], ["LiDAR robot", "held-out boards, coop2_0828", "10.0 mm, 0.88 deg (20x)", "pass"], ["LiDAR robot", "held-out boards, coop_2", "", "missing"], ["Extrinsics", "radar; LiDAR-camera", "", "missing"], ["Agent speed", "p95 of reference tracks", "", "missing"]]}]);
 });
 
 // ---- 3 Q2
@@ -123,9 +128,11 @@ slides.push(s => {
 });
 
 
+
+
 slides.push(s => {
   titleBand(s, "Q2 results: is it consistent?");
-  resultTable(s, ["Link", "Pass", "rho, drop", "Verdict"], [3.6, 1.3, 2.3, 2.0], [["mobile_2 to sniffer, CSI", "coop_2", "0.60, 5.4 dB", "pass"], ["infra_1 to sniffer, CSI", "coop_2", "0.23, 4.7 dB", "short"], ["Method self-test, planted 12 dB wall", "synthetic", "0.68, 11.9 dB recovered", "pass"]], [["Agent to access point, RSSI and goodput", "survey_1, coop_2", "AP position in ap.yaml", ""], ["Pooled over passes and sites", "", "link_clearance.py --all", ""], ["Confidence interval on rho", "", "bootstrap over windows", ""], ["Out-of-run prediction", "", "fit survey_1, score coop_2", ""], ["CSI power as second signal", "", "column present, untested", ""]], 3);
+  bookTable(s, "Map-derived Fresnel clearance against RSSI with the distance trend removed; pass: rho > 0.3 and clear-minus-obstructed drop > 5 dB", ["", "Quantity", "Value"], [2.7, 3.0, 3.1], [{"title": "Robot-to-robot CSI links (coop_2)", "rows": [["mobile_2 to sniffer", "Spearman rho, drop", "0.60, 5.4 dB", "pass"], ["infra_1 to sniffer", "Spearman rho, drop", "0.23, 4.7 dB", "short"]]}, {"title": "Agent-to-access-point links", "rows": [["RSSI and goodput", "needs AP position (ap.yaml)", "", "missing"], ["Pooled over passes and sites", "link_clearance.py --all", "", "missing"]]}, {"title": "Method", "rows": [["Self-test", "planted 12 dB wall", "recovered 11.9 dB, rho 0.68", "pass"], ["Confidence interval", "bootstrap over windows", "", "missing"], ["Out-of-run prediction", "fit survey_1, score coop_2", "", "missing"], ["CSI power", "second signal, same test", "", "missing"]]}]);
 });
 
 // ---- 4 Q3
@@ -143,9 +150,11 @@ slides.push(s => {
 });
 
 
+
+
 slides.push(s => {
   titleBand(s, "Q3 results: is it faithful?");
-  resultTable(s, ["Item", "Status", "How"], [4.2, 2.0, 3.0], [["Replay model d(t) + s/G(t), drop in outage", "defined", "one module, three channels"], ["Inputs: goodput, RTT, outages", "measured", "every pass"], ["Live arrivals to compare against", "no data", "none recorded"]], [["Payload node, 1 KB / 100 KB / 1.5 MB at 10 Hz", "to write", "ROS 2 pub/sub, stamps both ends"], ["Twin runs A1/B1 survey, A2/B2 cooperation", "one session", "survey_1 route, same day"], ["Arrival error, frame agreement, drop agreement", "to compute", "twin_run.py; pass >= 90 % frame agreement"]], 1);
+  bookTable(s, "Replay against live arrivals; pass: at least 90 % agreement on the receiver frame, closer than the synthetic channel", ["", "Quantity", "Value"], [2.7, 3.0, 3.1], [{"title": "Replay model", "rows": [["Arrival rule", "d(t) + s/G(t), drop in outage", "defined", ""], ["Inputs", "goodput, RTT, outages", "measured on every pass", ""]]}, {"title": "Live comparison", "rows": [["Payload node", "1 KB / 100 KB / 1.5 MB at 10 Hz, stamped", "", "missing"], ["Twin runs", "A1/B1 survey, A2/B2 cooperation", "", "missing"], ["Arrival-time error", "median, p95 per size and mode", "", "missing"], ["Frame agreement", "share landing in the same 100 ms frame", "", "missing"], ["Drop agreement", "per size and mode", "", "missing"]]}]);
 });
 
 // ---- 5 Q4
@@ -165,9 +174,11 @@ slides.push(s => {
 });
 
 
+
+
 slides.push(s => {
   titleBand(s, "Q4 results: is it repeatable?");
-  resultTable(s, ["Half", "Pass", "Value", "Verdict"], [3.4, 1.6, 2.4, 1.8], [["Frame across days", "two maps, 4 weeks", "1.06 cm, scale 2e-5", "pass"], ["Link across modes, same day", "survey_1 vs coop_2", "computable", "untested"], ["Link across days, same mode", "needs repeat", "", "untested"]], [["Mode distance", "", "link_repeat.py survey_1 coop_2", ""], ["Repeat day, same route and modes", "", "from the Q3 session", ""], ["Day-vs-mode ratio, RTT and goodput", "", "link_repeat.py --against; pass < 0.5", ""]], 3);
+  bookTable(s, "Pass: day-to-day distance below half the survey-to-cooperation distance, for RTT and goodput", ["", "Quantity", "Value"], [2.7, 3.0, 3.1], [{"title": "Pose half", "rows": [["Frame across days", "two maps, four weeks apart", "1.06 cm, scale 0.99998", "pass"]]}, {"title": "Link half", "rows": [["Mode distance", "survey_1 vs coop_2, W1 and KS", "", "missing"], ["Day distance", "same route and mode, second day", "", "missing"], ["Day / mode ratio", "RTT and goodput, pass < 0.5", "", "missing"]]}]);
 });
 
 // ---- 6 Q5
@@ -186,9 +197,11 @@ slides.push(s => {
 });
 
 
+
+
 slides.push(s => {
   titleBand(s, "Q5 results: is it necessary?");
-  resultTable(s, ["Quantity", "Pass", "Value", "Verdict"], [3.6, 1.3, 2.5, 1.8], [["1.5 MB in frame, one robot", "survey_1", "86 %", "shown"], ["1.5 MB in frame, two robots contending", "coop_2", "59 to 68 %", "shown"], ["1.5 MB in frame, synthetic channels", "code", "100 % (V2X-ViT 100 ms; Where2comm none)", "shown"], ["RTT idle to under load", "coop_2", "5 to 10 ms to 25 to 33 ms", "shown"], ["Real outages", "coop2_0828", "3, covering 12 % of frames", "shown"]], [["Best-fit synthetic baseline", "", "constant or Binomial delay fitted to measured", ""], ["More passes, second site", "", "rerun sim_gap.py", ""], ["Probe-off control run", "", "one run in the session", ""]], 3);
+  bookTable(s, "1.5 MB messages at 10 Hz through the logged link against the synthetic channels of prior benchmarks; demonstration", ["", "Quantity", "Value"], [2.7, 3.0, 3.1], [{"title": "Share arriving within one LiDAR frame", "rows": [["One robot", "survey_1", "86 %", "pass"], ["Two robots contending", "coop_2", "59 to 68 %", "short"], ["Synthetic channels", "V2X-ViT 100 ms; Where2comm none", "100 %", ""]]}, {"title": "Delay and outages", "rows": [["RTT idle to loaded", "coop_2", "5 to 10 ms to 25 to 33 ms", ""], ["Real outages", "coop2_0828", "3, covering 12 % of frames", ""]]}, {"title": "Strengthening", "rows": [["Best-fit synthetic baseline", "constant or Binomial delay fitted", "", "missing"], ["More passes, second site", "sim_gap.py", "", "missing"], ["Probe-off control run", "ping only, no iperf", "", "missing"]]}]);
 });
 
 // ---- 7 Q6 + Q7
@@ -207,9 +220,11 @@ slides.push(s => {
 });
 
 
+
+
 slides.push(s => {
   titleBand(s, "Q6 and Q7 results: unique, reproducible?");
-  resultTable(s, ["Item", "SCooP-iT", "Nearest other / how"], [3.4, 1.6, 4.2], [["Indoor, no mocap or GNSS reference", "yes", "CoPeD (estimator pose only)"], ["Heterogeneous incl. infrastructure", "yes", "CoPeD, TUMTraf-V2X"], ["Every pair's link measured on the sensors' clock", "yes", "CooperScene (C-V2X, per scene)"], ["Channel state (CSI)", "yes", "none"], ["Clock bound reported; replay into methods", "yes", "CooperScene (PTP, no bound); AutoCast, ROS-NetSim (simulated)"], ["Pipeline, spec sheet, component list, E1/E2/E4/E5 tools", "released / drafted", "Q7"]], [["Verify every capability cell against the cited paper", "", "CooperScene replay and probe rate unknown"], ["Cost per agent class; per-site setup effort; software versions", "", "bookkeeping"], ["Payload node and twin_run.py", "", "to write (Q3)"]], 1);
+  bookTable(s, "Q6: fills every capability column no other platform fills together. Q7: bill of materials, setup effort, pipeline, spec sheet", ["", "Nearest other / how", "SCooP-iT"], [3.4, 3.4, 2.0], [{"title": "Q6 Capability", "rows": [["Indoor, no mocap or GNSS", "CoPeD (estimator pose only)", "yes", "pass"], ["Heterogeneous incl. infrastructure", "CoPeD, TUMTraf-V2X", "yes", "pass"], ["Every pair's link on the sensors' clock", "CooperScene (C-V2X, per scene)", "yes", "pass"], ["Channel state (CSI)", "none", "yes", "pass"], ["Clock bound; replay into methods", "CooperScene (no bound); simulators", "yes", "pass"], ["Cells verified against cited papers", "CooperScene replay, probe rate unknown", "", "missing"]]}, {"title": "Q7 Reproducibility", "rows": [["Pipeline and E1/E2/E4/E5 tools", "released", "yes", "pass"], ["Spec sheet, component list", "drafted", "yes", "pass"], ["Cost per agent class", "bookkeeping", "", "missing"], ["Per-site effort, software versions", "bookkeeping", "", "missing"]]}]);
 });
 
 // ---- 8 status table
