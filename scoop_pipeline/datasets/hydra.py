@@ -5,7 +5,7 @@ of the same pass, so both methods get the same frames, the same odometry and
 the same start in map.
 
     python scoop_pipeline/datasets/hydra.py <swarm_slam export dir> [<out dir>]
-        [--robots 0 1] [--no-mesh]
+        [--robots 0 1] [--no-mesh] [--configs-only]
 
 Writes <out> (default: next to the export, datasets/hydra/<name>):
 
@@ -25,10 +25,15 @@ Writes <out> (default: next to the export, datasets/hydra/<name>):
                   second on hydra/backend/dsg (--no-mesh: without the mesh)
   scoop_hydra.launch.yaml
                   semantic segmentation (semantic_inference, closed set) and
-                  Hydra on the bag's topics, sim time; args robot_id and
-                  config (a hydra_r<i>.yaml)
+                  Hydra on the bag's topics, sim time; args robot_id, config
+                  (a hydra_r<i>.yaml), log_path (where Hydra saves its scene
+                  graph and trajectory when it stops) and visualize:=true
+                  (hydra_visualizer + rviz on the scene-graph stream)
   gt_r<i>.tum     the colour camera in map (the export's), for the evaluation
   report.txt
+
+--configs-only: rewrite the configs and the launch file of an existing
+output, its bags untouched.
 
 The semantic labels are not in the bag: Hydra's own segmentation node makes
 them from the colour image while the bag plays, as hydra_ros's zed2i launch
@@ -168,6 +173,7 @@ launch:
   - arg: {name: model_name, default: /root/hydra_ws/.models/ade20k-efficientvit_seg_l2.onnx}
   - arg: {name: model_config_path, default: $(find-pkg-share semantic_inference_ros)/config/models/ade20k-efficientvit_seg_l2.yaml}
   - arg: {name: labelspace_name, default: ade20k_mit}
+  - arg: {name: visualize, default: 'false', description: hydra_visualizer + rviz on hydra/backend/dsg}
 
   - node:
       pkg: semantic_inference_ros
@@ -203,6 +209,15 @@ launch:
         --config-utilities-yaml {print_missing: false, show_config: true, verbosity: 2}
         --config-utilities-yaml {log_path: $(var log_path)}
         --config-utilities-yaml {glog_level: 0, glog_verbosity: 0}
+
+  - group:
+      if: $(var visualize)
+      children:
+        - set_remap: {from: hydra_visualizer/dsg, to: /hydra/backend/dsg}
+        - include:
+            file: $(find-pkg-share hydra_visualizer)/launch/streaming_visualizer.launch.yaml
+            arg:
+              - {name: visualizer_frame, value: map}
 """
 
 
@@ -230,7 +245,7 @@ def body_T_camera():
     return T
 
 
-def convert(export, out=None, robots=None, mesh=True):
+def convert(export, out=None, robots=None, mesh=True, configs_only=False):
     export = os.path.abspath(os.path.expanduser(export))
     src = os.path.join(export, "bag")
     if not os.path.isdir(src):
@@ -244,9 +259,14 @@ def convert(export, out=None, robots=None, mesh=True):
         raise mc.ConvertError(f"{src} has no /r<i>/ topics for robots {robots} (have {have})")
     names = robots_of(export)
     os.makedirs(out, exist_ok=True)
+    if configs_only:
+        missing = [i for i in robots if not os.path.isdir(os.path.join(out, "bag_r%d" % i))]
+        if missing:
+            raise mc.ConvertError(f"--configs-only: no {out}/bag_r{missing[0]} (run without it first)")
+        return write_configs(export, out, robots, names, mesh, None)
     for i in robots:
         if os.path.exists(os.path.join(out, "bag_r%d" % i)):
-            raise mc.ConvertError(f"{out}/bag_r{i} exists: remove it first")
+            raise mc.ConvertError(f"{out}/bag_r{i} exists: remove it first (or --configs-only)")
     ts = rosmsg.typestore()
     T_bc = body_T_camera()
     T_cb = np.linalg.inv(T_bc)
@@ -276,6 +296,16 @@ def convert(export, out=None, robots=None, mesh=True):
         counts[i][topic] += 1
     for w in writers.values():
         w.close()
+    for i in robots:
+        if not counts[i]["/camera/color/image_raw"] or not counts[i]["/tf"]:
+            raise mc.ConvertError(f"r{i}: no images or no odometry in {src}")
+    return write_configs(export, out, robots, names, mesh, counts)
+
+
+def write_configs(export, out, robots, names, mesh, counts):
+    """hydra_r<i>.yaml, the launch file, ground truth and report.txt (counts:
+    the bags' message counts, None when the bags were not written now)."""
+    src = os.path.join(export, "bag")
     lines = ["source              : %s" % src, "scene-graph mesh    : %s" % ("on" if mesh else "off")]
     for i in robots:
         m = names.get(i, "r%d" % i)
@@ -285,13 +315,14 @@ def convert(export, out=None, robots=None, mesh=True):
         gt = os.path.join(export, "gt_r%d.tum" % i)
         if os.path.exists(gt):
             shutil.copy(gt, os.path.join(out, "gt_r%d.tum" % i))
-        c = counts[i]
-        lines.append("r%d %-16s: %d colour, %d depth, %d camera_info, %d tf; depth %g-%g m; "
-                     "frames r%d/odom -> r%d/base -> r%d/camera"
-                     % (i, m, c["/camera/color/image_raw"], c["/camera/depth/image_rect"],
-                        c["/camera/color/camera_info"], c["/tf"], lo, hi, i, i, i))
-        if not c["/camera/color/image_raw"] or not c["/tf"]:
-            raise mc.ConvertError(f"r{i}: no images or no odometry in {src}")
+        if counts is None:
+            lines.append("r%d %-16s: configs rewritten (bag_r%d kept); depth %g-%g m" % (i, m, i, lo, hi))
+        else:
+            c = counts[i]
+            lines.append("r%d %-16s: %d colour, %d depth, %d camera_info, %d tf; depth %g-%g m; "
+                         "frames r%d/odom -> r%d/base -> r%d/camera"
+                         % (i, m, c["/camera/color/image_raw"], c["/camera/depth/image_rect"],
+                            c["/camera/color/camera_info"], c["/tf"], lo, hi, i, i, i))
     open(os.path.join(out, "scoop_hydra.launch.yaml"), "w").write(LAUNCH)
     report = "\n".join(lines) + "\n"
     open(os.path.join(out, "report.txt"), "w").write(report)
@@ -306,10 +337,12 @@ def main():
     ap.add_argument("out", nargs="?", default=None)
     ap.add_argument("--robots", nargs="+", type=int, default=None, help="robot indices (default: all)")
     ap.add_argument("--no-mesh", action="store_true", help="send the scene graph without its mesh")
+    ap.add_argument("--configs-only", action="store_true",
+                    help="rewrite the configs and launch file of an existing output, not its bags")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        convert(a.export, a.out, a.robots, mesh=not a.no_mesh)
+        convert(a.export, a.out, a.robots, mesh=not a.no_mesh, configs_only=a.configs_only)
     except mc.ConvertError as e:
         sys.exit(str(e))
 

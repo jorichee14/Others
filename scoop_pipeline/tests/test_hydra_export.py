@@ -144,6 +144,30 @@ def main():
             f.append("--robots 1 wrote %s" % sorted(os.listdir(o2)))
         if "serialize_dsg_mesh: false" not in open(os.path.join(o2, "hydra_r1.yaml")).read():
             f.append("--no-mesh still sends the mesh")
+        # --configs-only: configs and launch rewritten, bags untouched
+        import yaml
+        bag0 = os.path.join(out, "bag_r0")
+        before = sorted((n, os.path.getsize(os.path.join(bag0, n))) for n in os.listdir(bag0))
+        os.remove(os.path.join(out, "hydra_r0.yaml"))
+        H.convert(exp, configs_only=True)
+        if not os.path.exists(os.path.join(out, "hydra_r0.yaml")):
+            f.append("--configs-only did not rewrite hydra_r0.yaml")
+        if sorted((n, os.path.getsize(os.path.join(bag0, n))) for n in os.listdir(bag0)) != before:
+            f.append("--configs-only touched bag_r0")
+        try:
+            H.convert(exp, os.path.join(tmp, "nobags"), configs_only=True)
+            f.append("--configs-only without bags did not refuse")
+        except mc.ConvertError:
+            pass
+        doc = yaml.safe_load(open(os.path.join(out, "scoop_hydra.launch.yaml")))
+        acts = doc["launch"]
+        if not any(a_.get("arg", {}).get("name") == "visualize" for a_ in acts):
+            f.append("launch has no visualize arg")
+        g = [a_["group"] for a_ in acts if "group" in a_]
+        if not g or g[0].get("if") != "$(var visualize)" or \
+                {"from": "hydra_visualizer/dsg", "to": "/hydra/backend/dsg"} not in [
+                    c.get("set_remap") for c in g[0]["children"]]:
+            f.append("launch: visualizer group wrong: %s" % g)
     except Exception:                                              # noqa: BLE001
         import traceback
         f.append(traceback.format_exc())

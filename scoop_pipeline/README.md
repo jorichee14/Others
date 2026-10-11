@@ -65,6 +65,7 @@ datasets/            bags -> datasets for other tools
   hydra.py           a swarm_slam.py export as Hydra input: one bag per robot (colour,
                      depth, camera_info, /tf odom -> base -> camera), a hydra_ros config
                      each (scene graph + mesh streamed once a second) and a launch file
+                     (visualize:=true for the live scene graph); --configs-only rewrites those
   replica_multiagent.py  a multi-robot pass as a ReplicaMultiagent scene for MAGiC-SLAM:
                      one common camera, frames in lockstep, poses in the shared map
 analysis/            measuring results; reads outputs, writes nothing back
@@ -77,6 +78,8 @@ analysis/            measuring results; reads outputs, writes nothing back
    slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel)
   slam/cslam_eval.py  Swarm-SLAM run against the ground truth: ATE per robot and joint,
                      inter-robot loop closures checked, time to merge, bytes exchanged
+  slam/dsg_stream.py  Hydra's scene-graph stream: log (in Hydra's container) the size of
+                     every hydra/backend/dsg update against bag time; plot size and rate
   odom/zed_vs_lidar.py    drift of the ZED's own tracking (map_zed) against the LiDAR trajectory
   comms/             link analyses on processing/comms_tables.py's tables
   comms/ntp_analysis.py   clock agreement: offsets at polls, error bounds, steps,
@@ -118,6 +121,7 @@ tests/               self-tests, no real bag needed
                      robot's odom frame at the image stamp, ground truth
   test_hydra_export.py  hydra: a bag per robot, images byte for byte, /tf composing to the
                      odometry with a z-up body frame, config frames, range and mesh stream
+  test_dsg_stream.py dsg_stream: sizes, rates from bag time between updates, figure
   test_replica_multiagent.py  replica_multiagent: common camera, lockstep frames, poses,
                      colour resampling and depth registration on a two-robot bag
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
