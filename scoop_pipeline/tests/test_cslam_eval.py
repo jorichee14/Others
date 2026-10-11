@@ -48,11 +48,13 @@ def rz(a, t):
 
 
 def write_g2o(path, V, E):
+    """As gtsam's writeG2o: keys without the symbol's 'g' (its top byte)."""
+    m = (1 << 56) - 1
     with open(path, "w") as f:
         for k, T in V.items():
-            f.write("VERTEX_SE3:QUAT %d %s\n" % (k, " ".join("%.9f" % v for v in xyzq(T))))
+            f.write("VERTEX_SE3:QUAT %d %s\n" % (k & m, " ".join("%.9f" % v for v in xyzq(T))))
         for a, b, T in E:
-            f.write("EDGE_SE3:QUAT %d %d %s %s\n" % (a, b, " ".join("%.9f" % v for v in xyzq(T)),
+            f.write("EDGE_SE3:QUAT %d %d %s %s\n" % (a & m, b & m, " ".join("%.9f" % v for v in xyzq(T)),
                                                       " ".join(["1"] + ["0"] * 20)))
 
 

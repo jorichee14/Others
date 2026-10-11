@@ -43,6 +43,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 SYM_MASK = (1 << 48) - 1
+# gtsam's writeG2o drops a LabeledSymbol's top byte (the 'g'); pose_timestamps keeps it
+KEY_MASK = (1 << 56) - 1
 
 
 def key_robot(k):
@@ -67,9 +69,9 @@ def read_g2o(path):
         if not p:
             continue
         if p[0].startswith("VERTEX_SE3"):
-            V[int(p[1])] = pose([float(x) for x in p[2:9]])
+            V[int(p[1]) & KEY_MASK] = pose([float(x) for x in p[2:9]])
         elif p[0].startswith("EDGE_SE3"):
-            E.append((int(p[1]), int(p[2]), pose([float(x) for x in p[3:10]])))
+            E.append((int(p[1]) & KEY_MASK, int(p[2]) & KEY_MASK, pose([float(x) for x in p[3:10]])))
     return V, E
 
 
@@ -125,7 +127,7 @@ def stamps(results):
     for p in latest.values():
         for line in open(p).readlines()[1:]:
             k, s, ns = line.strip().split(",")
-            out[int(k)] = int(s) + int(ns) * 1e-9
+            out[int(k) & KEY_MASK] = int(s) + int(ns) * 1e-9
     return out
 
 
