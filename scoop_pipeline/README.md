@@ -62,6 +62,9 @@ datasets/            bags -> datasets for other tools
                      offline cuVSLAM (vslam.py --machine), onboard or ground-truth odometry,
                      started where 03's session_anchor.json
                      put each robot) + config; slam/run_swarm_slam.sh runs it
+  hydra.py           a swarm_slam.py export as Hydra input: one bag per robot (colour,
+                     depth, camera_info, /tf odom -> base -> camera), a hydra_ros config
+                     each (scene graph + mesh streamed once a second) and a launch file
   replica_multiagent.py  a multi-robot pass as a ReplicaMultiagent scene for MAGiC-SLAM:
                      one common camera, frames in lockstep, poses in the shared map
 analysis/            measuring results; reads outputs, writes nothing back
@@ -113,6 +116,8 @@ tests/               self-tests, no real bag needed
   test_cslam_eval.py cslam_eval: keys to robots, ATE, wrong loop closure flagged, merge time
   test_swarm_slam.py swarm_slam: topics, intrinsics, registered depth, odometry in the
                      robot's odom frame at the image stamp, ground truth
+  test_hydra_export.py  hydra: a bag per robot, images byte for byte, /tf composing to the
+                     odometry with a z-up body frame, config frames, range and mesh stream
   test_replica_multiagent.py  replica_multiagent: common camera, lockstep frames, poses,
                      colour resampling and depth registration on a two-robot bag
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
