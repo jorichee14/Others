@@ -26,7 +26,8 @@ if [ ! -f "$OUT/resnet18_64.pth" ]; then
   echo "fetching the CosPlace ResNet-18/64 weights -> $OUT/resnet18_64.pth"
   python3 -c "import torch; m = torch.hub.load('gmberton/cosplace', 'get_trained_model', backbone='ResNet18', fc_output_dim=64); torch.save(m.state_dict(), '$OUT/resnet18_64.pth')"
 fi
-TAG=$(echo "$CHANNEL" | sed -E 's#:[^,]*/([^/,]+)#:\1#; s#[:,=/]#_#g')
+# REPEAT=<n> (environment): a repeat of the same channel, in runs/<channel>_r<n>
+TAG=$(echo "$CHANNEL" | sed -E 's#:[^,]*/([^/,]+)#:\1#; s#[:,=/]#_#g')${REPEAT:+_r$REPEAT}
 RUN="$OUT/runs/$TAG"
 [ -e "$RUN" ] && { echo "$RUN exists: remove it to run this channel again"; exit 1; }
 # cslam nodes left in these domains (e.g. from an earlier run in another container
