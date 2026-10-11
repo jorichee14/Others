@@ -26,7 +26,10 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)
 
 A stereo pair is a left and right image within 2 ms, at most --rate per
 second; the IMU goes in whole. Frames come from each message's header; the
-camera and IMU frames are the ones their messages name.
+camera and IMU frames are the ones their messages name. The IMU's link to the
+cameras comes from /tf_static, or, where a driver publishes it on /tf (the
+ZED's zed_imu_link), from the first /tf message of an edge touching the IMU
+frame: the IMU is rigid on the camera.
 """
 import argparse
 import logging
@@ -105,6 +108,23 @@ def default_out(bag):
     return os.path.join(os.path.dirname(os.path.dirname(d)), "euroc", os.path.basename(d))
 
 
+def imu_edges_from_tf(paths, imu_frame):
+    """{(parent, child): T} of the first /tf transform of every edge touching
+    imu_frame (the IMU is rigid on the camera; some drivers send it on /tf)."""
+    out = {}
+    try:
+        for m in mc.read(paths, ["/tf"]):
+            for t in m.ros_msg.transforms:
+                k, T = mc._tf_edge(t)
+                if imu_frame in k and k not in out:
+                    out[k] = T
+            if out:
+                break
+    except Exception as e:                                         # noqa: BLE001
+        log.warning("  could not read /tf: %s" % e)
+    return out
+
+
 def grey(msg):
     img = mc.decode_image(msg)
     if img.ndim == 2:
@@ -152,13 +172,19 @@ def convert_robot(paths, edges, machine, out, rate, template):
     if imu0 is None:
         raise mc.ConvertError(f"{machine}: no IMU on {spec['imu']}")
     imu_frame = imu0.header.frame_id.lstrip("/")
+    cams = [infos[s].header.frame_id.lstrip("/") for s in ("left", "right")]
+    if any(mc.lookup_static(edges, imu_frame, f) is None for f in cams):
+        edges = dict(edges)
+        edges.update(imu_edges_from_tf(paths, imu_frame))
     T_bs = {}
     for side in ("left", "right"):
         f = infos[side].header.frame_id.lstrip("/")
         T = mc.lookup_static(edges, imu_frame, f)
         if T is None:
+            near = sorted({x for k in edges for x in k if machine.split("_")[0] in x or "zed" in x
+                           or "camera" in x or "imu" in x})
             raise mc.ConvertError(f"{machine}: the IMU frame {imu_frame} and the {side} camera frame {f} "
-                                  "are not connected in /tf_static")
+                                  f"are not connected in /tf_static or /tf (frames there: {near})")
         T_bs[side] = T
     root = os.path.join(out, machine)
     if os.path.exists(root):

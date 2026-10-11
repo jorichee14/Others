@@ -33,7 +33,7 @@ T0 = 1_790_000_000_000_000_000
 L_CAM, R_CAM, IMU_F = "camera_infra1_optical_frame", "camera_infra2_optical_frame", "camera_imu_optical_frame"
 
 
-def make_bag(path):
+def make_bag(path, imu_on_tf=False):
     w = BagWriter(path)
     tgt = mc.Intrinsics(380.0, 381.0, 320.5, 240.5, 640, 480, [0.0] * 4, None)
     # IMU -> left: 1 cm along x, rotated 90 deg about z; left -> right: 5 cm along x
@@ -43,8 +43,14 @@ def make_bag(path):
     T_lr = np.eye(4)
     T_lr[0, 3] = 0.05
     q_il, q_lr = mc.T_to_xyzq(T_il), mc.T_to_xyzq(T_lr)
-    w.write("/tf_static", rosmsg.tf_message([(IMU_F, L_CAM, q_il[:3], q_il[3:]),
-                                             (L_CAM, R_CAM, q_lr[:3], q_lr[3:])], T0), T0)
+    if imu_on_tf:
+        w.write("/tf_static", rosmsg.tf_message([(L_CAM, R_CAM, q_lr[:3], q_lr[3:])], T0), T0)
+        for k in range(3):
+            w.write("/tf", rosmsg.tf_message([("odom", "base", [k, 0, 0], [0, 0, 0, 1]),
+                                              (IMU_F, L_CAM, q_il[:3], q_il[3:])], T0 + k), T0 + k)
+    else:
+        w.write("/tf_static", rosmsg.tf_message([(IMU_F, L_CAM, q_il[:3], q_il[3:]),
+                                                 (L_CAM, R_CAM, q_lr[:3], q_lr[3:])], T0), T0)
     recs = []
     for k in range(60):                                   # 30 Hz for 2 s
         t = T0 + k * 33_333_333
@@ -82,6 +88,9 @@ def main():
     try:
         bag = os.path.join(tmp, "bag")
         T_il, T_ir = make_bag(bag)
+        # the IMU link only on /tf (as the ZED driver sends it), the camera chain on /tf_static
+        bag2 = os.path.join(tmp, "bag_tf")
+        make_bag(bag2, imu_on_tf=True)
         tpl = os.path.join(tmp, "D455")
         template(tpl)
         out = os.path.join(tmp, "euroc")
@@ -128,6 +137,12 @@ def main():
         rep = open(os.path.join(out, "report.txt")).read()
         if "baseline 0.050 m" not in rep:
             f.append("report: " + rep)
+        out2 = os.path.join(tmp, "euroc_tf")
+        EU.convert(bag2, out2, agents=["mobile_2"], rate=10.0, template=tpl)
+        got = np.array(yaml_list(open(os.path.join(out2, "mobile_2", "params", "RightCameraParams.yaml")).read(),
+                                 "data")).reshape(4, 4)
+        if not np.allclose(got, T_ir, atol=1e-6):
+            f.append("IMU link from /tf: right T_BS\n%s\nwant\n%s" % (got, T_ir))
         try:
             EU.convert(bag, out, agents=["mobile_2"], rate=10.0, template=tpl)
             f.append("an existing export was overwritten")
