@@ -86,21 +86,24 @@ RGB-D cart, and camera--radar infrastructure masts, in which the state
 of every inter-agent link is recorded on the sensors' clock: passive
 link state at \SI{5}{\hertz}, round-trip time at \SI{100}{\hertz},
 goodput in \SI{4}{\second} windows, and channel state information at
-\SIrange{104}{141}{\hertz}. All agents share one clock, bounded to
-\unsure{about \SI{70}{\micro\second}}, and one metric frame at building
-scale, obtained without motion capture or GNSS from a self-built
+\SIrange{104}{141}{\hertz}. All agents share one clock, with measured offsets below
+\SI{1}{\milli\second} and reported RMS offsets of tens of
+microseconds, and one metric frame at building scale, obtained without motion capture or GNSS from a self-built
 reference map and a fiducial chain for agents without LiDAR, and
 validated by a second mapping pass (\SI{1.06}{\centi\metre} surface
-agreement), rangefinder control distances, and held-out fiducials. A
+agreement), held-out fiducials (\SI{10}{\milli\metre} for the LiDAR
+robot, \SIrange{31}{54}{\milli\metre} for the RGB-D cart), and
+rangefinder control distances. A
 channel-in-the-loop replay module runs any collaborative method against
 the link the agents actually had. Experiments show that the testbed is
-one to three orders of magnitude finer than the effects it measures,
+one to two orders of magnitude finer than the effects it measures,
 that its map predicts the signal it logs although neither produced the
-other, \todo{that replay reproduces live arrivals}, that a load mode
-reproduces its link on another day, and that under contention the
-delay moves from about \SI{3}{\milli\second} to
-\SIrange{60}{109}{\milli\second}, crossing one LiDAR frame, which the
-synthetic channels of prior benchmarks do not capture. SCooP-iT is
+other (Spearman $\rho = 0.60$, \SI{5.4}{\decibel} clear-to-obstructed
+drop), \todo{that replay reproduces live arrivals}, \todo{that a load
+mode reproduces its link on another day}, and that under contention
+the share of \SI{1.5}{\mega\byte} messages arriving within one LiDAR
+frame falls from 86\,\% to \SIrange{59}{68}{\percent}, against
+100\,\% under the synthetic channels of prior benchmarks. SCooP-iT is
 the acquisition platform of the SCooP dataset \cite{scoop_dataset}.
 \end{abstract}
 
@@ -156,9 +159,9 @@ every agent. Its contributions are:
     motion capture or GNSS}: a self-built reference map, plus a fiducial
     chain for agents without LiDAR, validated by measurements that never
     enter it, to \SI{1.06}{\centi\metre} surface agreement across
-    independent passes, on one clock bounded to \unsure{about
-    \SI{70}{\micro\second}} (Secs.~\ref{sec:alignment},
-    \ref{sec:gt}).
+    independent passes and \SI{10}{\milli\metre} against held-out
+    boards, on one clock with measured offsets below
+    \SI{1}{\milli\second} (Secs.~\ref{sec:alignment}, \ref{sec:gt}).
     \item \textbf{A channel-in-the-loop replay} that runs any
     collaborative method against the recorded link, \todo{validated
     against live execution to within one receiver frame}
@@ -381,11 +384,18 @@ Recording starts only after every unit reports a converged offset.
 Each unit logs its offset and any clock adjustment
 (\texttt{ntp/status}, \texttt{ntp/events}) into its own bag, so the
 alignment at any frame can be checked and poorly aligned frames can
-be filtered out. Over \todo{N} runs no clock was stepped, and the
-worst pairwise offset is \todo{about \SI{70}{\micro\second};
-reconcile with the per-client maximum of \SI{42.5}{\micro\second}
-(supplementary Table S-II) and with the coop\_2 measurement of E1}; the
-clock rows of Table~\ref{tab:calib} give the per-client statistics.
+be filtered out. Two numbers describe the result, and they answer
+different questions. The RMS offset chrony reports per client is tens
+of microseconds (median \SIrange{10.9}{42.5}{\micro\second} across
+clients on a live pass, no clock stepped; supplementary Table S-II).
+The \emph{measured} offset over the whole of the coop\_2 run, the
+quantity a user of the data cares about, is at most
+\SI{0.99}{\milli\second}, and chrony's strict error bound, the
+offset plus half the root delay, is at most \SI{12}{\milli\second}.
+We report the measured offset as the clock guarantee and carry the
+strict bound through the error budget as the worst case; the clock
+rows of Table~\ref{tab:calib} give both. \todo{Repeat over every
+pass; report the worst pairwise value.}
 
 \subsection{Sniffer Bias}
 \label{sec:sniffer}
@@ -421,9 +431,13 @@ platform moving at speed $v$ by
   \label{eq:time_bound}
 \end{equation}
 We take $v_{\max} = \SI{3}{\metre\per\second}$ as an upper bound on
-agent speed. The clock offset of \unsure{\SI{70}{\micro\second}} then
-corresponds to \unsure{\SI{0.21}{\milli\metre}}, and the sniffer bias
-of \todo{} to \todo{}, which is \todo{}\,\% of the half-wavelength
+agent speed; indoor agents move far slower, and E1 uses the measured
+95th-percentile speed. The measured clock offset of
+\SI{0.99}{\milli\second} then corresponds to \SI{3}{\milli\metre}
+at $v_{\max}$ and to \SI{1}{\milli\metre} at \SI{1}{\metre\per\second};
+the strict \SI{12}{\milli\second} bound to \SI{3.6}{\centi\metre}
+and \SI{1.2}{\centi\metre}. The sniffer bias of \todo{} corresponds
+to \todo{}, which is \todo{}\,\% of the half-wavelength
 $\lambda/2 = \SI{26.1}{\milli\metre}$ at \SI{5745}{\mega\hertz} that
 sets the CSI sampling requirement (Sec.~\ref{sec:csi}). Transport
 latency and exposure are larger: a constant lag of
@@ -444,8 +458,8 @@ where $\Delta t_{\mathrm{clk}}$ is the worst clock offset,
 $\Delta t_{\mathrm{lat}}$ the largest uncorrected transport latency,
 and $\Delta t_{\mathrm{exp}}$ the longest camera exposure. The budget
 is dominated by sensor physics and transport, not by synchronization:
-clock alignment contributes well under a millimetre, while the larger
-terms are either compensated or constant and removable. \todo{Show the
+measured clock alignment contributes a few millimetres at most, while
+the larger terms are either compensated or constant and removable. \todo{Show the
 budget as a stacked bar; it feeds the headroom figure of E1.}
 
 \subsection{Extrinsics}
@@ -471,7 +485,14 @@ mapping session are projected into the image and compared with the
 detected corners; for the RGB-D agent, whose trajectory uses board
 sightings as constraints, the boards are split once per site into an
 estimation set and a held-out set, and the residual is evaluated on
-the held-out set only \todo{state the split}. For
+the held-out set only \todo{state the split}. The board detector
+itself is validated before it validates anything: re-run on the
+mapping session's images it reproduces the pipeline's board poses to
+\SI{8.1}{\milli\metre} / 0.66$^\circ$ on the ZED and
+\SI{8.3}{\milli\metre} / 0.58$^\circ$ on the RealSense, at or below
+each board's own scatter (\SI{2.0}{} and \SI{6.9}{\milli\metre}),
+with lens distortion handled at corner interpolation rather than at
+PnP, which otherwise costs \SI{34}{\milli\metre}. For
 \Ttransform{LiDAR}{Radar} and \Ttransform{Camera}{Radar}, the reflector
 is placed at positions not used in calibration and the radar detection
 is compared with the LiDAR centroid. For \Ttransform{Base}{LiDAR}, the
@@ -598,11 +619,20 @@ deformation would act, which closes the gap left by the second pass.
 \paragraph{Held-out boards.} When an agent sights a board during a
 run, its registered pose and camera extrinsic predict where the board
 should appear; the difference from the observed board pose is a
-residual that did not enter the registration. \todo{Report median and
-p95 in translation and rotation per agent; current values on
-coop2\_0828: \SI{10.0}{\milli\metre} / 0.88$^\circ$ for mobile\_1,
-\SI{54.0}{\milli\metre} / 1.38$^\circ$ for mobile\_2; 3.1 cm median
-for mobile\_2 on coop\_2.}
+residual that did not enter the registration. On coop2\_0828 (two
+agents, one room, \SIrange{146}{152}{\second}, \SIrange{26}{31}{\metre}
+of path, three boards, LiDAR held out of every estimate it scores) the
+residual is \SI{10.0}{\milli\metre} / 0.88$^\circ$ for
+\texttt{mobile\_1} and \SI{54.0}{\milli\metre} / 1.38$^\circ$ for
+\texttt{mobile\_2}. The first is fully independent, since the LiDAR
+reference consumes no board; its uncertainty is \SI{15}{\milli\metre}.
+On coop\_2, whose longer route crosses feature-poor sections, the
+RGB-D cart's held-out residual is \SI{3.1}{\centi\metre} median with a
+per-pose marginal $\sigma$ of \SI{5.3}{\centi\metre}; without the
+map-fix factors the same pose graph reaches \SI{284}{\centi\metre},
+which is what the fiducial chain and map registration buy a
+sensor-constrained agent. \todo{Report p95 and the board split per
+site once all passes are processed.}
 
 \paragraph{Cross-robot consistency.} Where the same surface is observed
 by the same robot minutes apart and by different robots on overlapping
@@ -651,6 +681,9 @@ includes the contention a deployed team would face. Latency is
 measured as ICMP round-trip time at \SI{100}{\hertz}:
 \SI{3.3}{\milli\second} when idle and \SIrange{60}{109}{\milli\second}
 under load, the latter caused by queueing and not by path loss.
+\todo{The 24 Sep passes give \SIrange{5}{10}{\milli\second} idle and
+\SIrange{25}{33}{\milli\second} under iperf load; state both passes
+and the load that produced each, or report the range across passes.}
 
 \subsection{Channel State}
 \label{sec:csi}
@@ -696,10 +729,13 @@ $(a,b)$ arrives at
 where $d_{ab}(t)$ is the one-way delay and $G_{ab}(t)$ the most recent
 goodput measured on that link, and is dropped when the link was down
 (\texttt{associated=false}, or a run of lost pings). Because the
-clocks agree to \unsure{about \SI{70}{\micro\second}}, $d_{ab}$ can be
+measured clock offset is below \SI{1}{\milli\second}, $d_{ab}$ can be
 measured directly from stamped probes where they exist, instead of
 being assumed to be $\mathrm{RTT}/2$; only a synchronized testbed can
-do this. The ideal channel (instant, lossless), the synthetic channels
+do this. The strict \SI{12}{\milli\second} chrony bound exceeds the
+idle one-way delay, so one-way-delay claims rest on the measured
+offset, and where probes are absent the module falls back to
+$\mathrm{RTT}/2$ and says so. The ideal channel (instant, lossless), the synthetic channels
 of prior benchmarks (a fixed bandwidth budget and a fixed or sampled
 delay \cite{where2comm,v2xvit,lei2022syncnet,wei2023cobevflow}), and
 the logged channel all pass through one module
@@ -758,11 +794,18 @@ error, at which late fusion falls below ego-only in the OPV2V study,
 and latency expressed as displacement, speed times delay, relative to
 an indoor object of \SIrange{0.5}{0.7}{\metre}; the \SI{100}{\milli\second}
 figure at which every fusion method falls below ego-only was measured
-at vehicle speed and is stated here as displacement. \todo{Result:
-clock \SI{70}{\micro\second} and second pass \SI{1.06}{\centi\metre}
-measured; board residuals \SI{10.0}{\milli\metre} (mobile\_1) and
-\SI{54.0}{\milli\metre} (mobile\_2) on coop2\_0828; fill calibration
-residuals, sniffer bias, p95 speeds; state the margin.}
+at vehicle speed and is stated here as displacement. \emph{Result so far.} At \SI{1}{\metre\per\second} the measured
+clock offset is \SI{1}{\milli\metre} and the strict bound
+\SI{1.2}{\centi\metre}; the second-pass agreement is
+\SI{1.06}{\centi\metre}; the held-out board residual is
+\SI{10}{\milli\metre} for the LiDAR robot and
+\SIrange{31}{54}{\milli\metre} for the RGB-D cart; the board detector
+reproduces the pipeline to \SI{8}{\milli\metre}. Every term is at
+least \todo{16}$\times$ below the \SI{0.2}{\metre} pose breaking
+point and \todo{$\geq 10$}$\times$ below the latency displacement at
+indoor speed, so the criterion passes on the terms measured.
+\todo{Fill radar residuals, sniffer bias, and the measured p95 speed;
+then state the final margin.}
 
 \input{figures/headroom}
 
@@ -851,10 +894,19 @@ published (Fig.~\ref{fig:simgap}, right). \emph{Result so far} (24 Sep): raw
 clouds arrive within the frame in 86\,\% of cases when one robot owns
 the channel and in \SIrange{59}{68}{\percent} with two robots
 contending, against 100\,\% under the synthetic channels; the measured
-delay is bimodal, about \SI{3}{\milli\second} idle and
-\SIrange{60}{109}{\milli\second} under contention, and coop2\_0828
-contains three real outages covering 12\,\% of frames, which no
-synthetic channel produces. Detection-level consequences are reported
+delay depends on offered load, rising several-fold from idle to loaded
+(\SIrange{5}{10}{\milli\second} to \SIrange{25}{33}{\milli\second}
+on 24 Sep; \SI{3.3}{\milli\second} to \SIrange{60}{109}{\milli\second}
+on the earlier pass), and coop2\_0828 contains three real outages
+covering 12\,\% of frames, which no synthetic channel produces. The
+two-robot drop is the effect that i.i.d.\ per-agent delay models
+cannot express: the robots contend for one access point, so their
+delays are correlated. A \SI{1.5}{\mega\byte} message is about
+11$\times$ V2X-ViT's configured 1.06\,Mb and needs about
+120\,Mbit/s of sustained goodput to land inside a frame; under the
+frame-quantized synthetic models any delay below
+\SI{100}{\milli\second} counts as zero, which is why they deliver
+100\,\%. Detection-level consequences are reported
 in \cite{scoop_dataset}.
 
 \input{figures/simgap}
@@ -898,10 +950,11 @@ hours, once final.}
 %=======================================================================
 \section{Conclusion}
 \label{sec:conclusion}
-SCooP-iT gives a heterogeneous indoor robot team one clock, bounded to
-\unsure{about \SI{70}{\micro\second}}, one metric frame, validated to
-\SI{1.06}{\centi\metre} across independent passes without motion
-capture or GNSS, and a record of every inter-agent link from passive
+SCooP-iT gives a heterogeneous indoor robot team one clock, with
+measured offsets below \SI{1}{\milli\second}, one metric frame,
+validated to \SI{1.06}{\centi\metre} across independent passes and
+\SI{10}{\milli\metre} against held-out boards without motion capture
+or GNSS, and a record of every inter-agent link from passive
 state to channel state, with a replay module that puts that link back
 in the loop for any collaborative method \todo{validated to within one
 receiver frame}. Under contention the real link moves the delay across

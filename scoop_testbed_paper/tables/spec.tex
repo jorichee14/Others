@@ -9,13 +9,13 @@
 \toprule
 \textbf{Guarantee} & \textbf{Bound} & \textbf{Validated by} & \textbf{Experiment} \\
 \midrule
-Clock agreement between agents & \unsure{about \SI{70}{\micro\second} (\SI{0.2}{\milli\metre} at \SI{3}{\metre\per\second})}; \todo{reconcile with the per-client max of \SI{42.5}{\micro\second} and the coop\_2 measurement} & chrony offset logs, every run & E1 \\
+Clock agreement between agents & measured offset $\leq$ \SI{0.99}{\milli\second} (\SI{1}{\milli\metre} at \SI{1}{\metre\per\second}); strict chrony bound $\leq$ \SI{12}{\milli\second}; reported RMS offsets \SIrange{10.9}{42.5}{\micro\second} per client & chrony offset logs, every run (coop\_2 so far) & E1 \\
 Sniffer clock bias & \todo{to be measured} (worst case \SI{7.8}{\milli\second}) & probe-packet stamps on both ends & E1 \\
 Spatial extrinsics & residual per sensor pair, Table~\ref{tab:calib} & held-out reflector and board positions & E1 \\
-Agent pose in the site frame & \SI{1.06}{\centi\metre} surface agreement across passes; board residual \todo{10.0 mm / 0.88$^\circ$ (mobile\_1), 54.0 mm / 1.38$^\circ$ (mobile\_2), coop2\_0828} & second mapping pass, rangefinder control distances, held-out boards & E1, E2 \\
-Link state & \SI{5}{\hertz} passive, \SI{100}{\hertz} RTT, \SI{4}{\second} goodput windows; outages labelled explicitly & monitor publishes through outages & E2, E4 \\
+Agent pose in the site frame & \SI{1.06}{\centi\metre} surface agreement across passes (scale $2\times10^{-5}$); held-out boards \SI{10.0}{\milli\metre} / 0.88$^\circ$ (LiDAR robot), \SI{54.0}{\milli\metre} / 1.38$^\circ$ (RGB-D cart, coop2\_0828) and \SI{3.1}{\centi\metre} median (RGB-D cart, coop\_2); control distances \todo{} & second mapping pass, held-out boards, rangefinder control distances & E1, E2 \\
+Link state & \SI{5}{\hertz} passive, \SI{100}{\hertz} RTT, \SI{4}{\second} goodput windows; outages labelled explicitly (3 outages, 12\,\% of frames on coop2\_0828) & monitor publishes through outages; map clearance predicts RSSI ($\rho = 0.60$, \SI{5.4}{\decibel}) & E2, E4 \\
 Channel state (CSI) & \SIrange{104}{141}{\hertz}; valid below \SI{1.2}{\metre\per\second} relative speed & $\lambda/2$ sampling argument & --- \\
-Contention as a knob & RTT \SI{3.3}{\milli\second} idle, \SIrange{60}{109}{\milli\second} under load & survey vs.\ cooperation mode, repeated across days & E4 \\
+Contention as a knob & RTT rises several-fold idle to loaded (\SIrange{5}{10}{} to \SIrange{25}{33}{\milli\second}, 24 Sep; \SI{3.3}{} to \SIrange{60}{109}{\milli\second}, earlier pass); in-frame share of \SI{1.5}{\mega\byte} messages 86\,\% alone, \SIrange{59}{68}{\percent} with two robots & survey vs.\ cooperation mode; \todo{repeat across days} & E4, E5 \\
 Replay fidelity & \todo{arrival-time error; frame-assignment agreement} & twin run: live payload against replayed trace & E3 \\
 \bottomrule
 \end{tabular}
