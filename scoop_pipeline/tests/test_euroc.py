@@ -32,6 +32,9 @@ from scoop.bagwrite import BagWriter                                # noqa: E402
 T0 = 1_790_000_000_000_000_000
 L_CAM, R_CAM, IMU_F = "camera_infra1_optical_frame", "camera_infra2_optical_frame", "camera_gyro_optical_frame"
 IMU_MSG_F = "camera_imu_optical_frame"     # what the RealSense's united IMU messages name (in no TF tree)
+COL = "camera_color_optical_frame"
+T_IC = np.eye(4)                           # the colour camera in the IMU frame: 3 cm along y
+T_IC[1, 3] = 0.03
 
 
 def make_bag(path, imu_on_tf=False):
@@ -43,15 +46,17 @@ def make_bag(path, imu_on_tf=False):
     T_il[:3, 3] = [0.01, 0.0, 0.0]
     T_lr = np.eye(4)
     T_lr[0, 3] = 0.05
-    q_il, q_lr = mc.T_to_xyzq(T_il), mc.T_to_xyzq(T_lr)
+    q_il, q_lr, q_ic = mc.T_to_xyzq(T_il), mc.T_to_xyzq(T_lr), mc.T_to_xyzq(T_IC)
     if imu_on_tf:
-        w.write("/tf_static", rosmsg.tf_message([(L_CAM, R_CAM, q_lr[:3], q_lr[3:])], T0), T0)
+        w.write("/tf_static", rosmsg.tf_message([(L_CAM, R_CAM, q_lr[:3], q_lr[3:]),
+                                                 (IMU_F, COL, q_ic[:3], q_ic[3:])], T0), T0)
         for k in range(3):
             w.write("/tf", rosmsg.tf_message([("odom", "base", [k, 0, 0], [0, 0, 0, 1]),
                                               (IMU_F, L_CAM, q_il[:3], q_il[3:])], T0 + k), T0 + k)
     else:
         w.write("/tf_static", rosmsg.tf_message([(IMU_F, L_CAM, q_il[:3], q_il[3:]),
-                                                 (L_CAM, R_CAM, q_lr[:3], q_lr[3:])], T0), T0)
+                                                 (L_CAM, R_CAM, q_lr[:3], q_lr[3:]),
+                                                 (IMU_F, COL, q_ic[:3], q_ic[3:])], T0), T0)
     recs = []
     for k in range(60):                                   # 30 Hz for 2 s
         t = T0 + k * 33_333_333
@@ -61,6 +66,11 @@ def make_bag(path, imu_on_tf=False):
             recs.append((t + dt, topic, SS.image(img, "mono8", frame, t + dt)))
         for topic, frame in (("/mobile_2/infra1/camera_info", L_CAM), ("/mobile_2/infra2/camera_info", R_CAM)):
             recs.append((t, topic, SS.camera_info(tgt, frame, t)))
+    for k in range(20):                                   # global_pose: the colour camera, 10 Hz, 1 m/s along x
+        t = T0 + k * 100_000_000
+        recs.append((t, "/mobile_2/color/camera_info", SS.camera_info(tgt, COL, t)))
+        recs.append((t, "/mobile_2/global_pose", rosmsg.pose_stamped(t, "map", gt_cam(k)[:3, 3],
+                                                                     mc.T_to_xyzq(gt_cam(k))[3:])))
     for k in range(400):                                  # 200 Hz, stamp 10 repeated
         t = T0 + (k if k != 11 else 10) * 5_000_000
         recs.append((t, "/mobile_2/imu", rosmsg.imu(t, IMU_MSG_F, [0.1, 0.2, 9.8], [0.01, 0.02, 0.03])))
@@ -68,6 +78,14 @@ def make_bag(path, imu_on_tf=False):
         w.write(topic, msg, t)
     w.close()
     return T_il, T_il @ T_lr
+
+
+def gt_cam(k):
+    """The colour camera in map at global_pose k: 0.1 m per 0.1 s along x, turned 90 deg about z."""
+    T = np.eye(4)
+    T[:3, :3] = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], float)
+    T[:3, 3] = [0.1 * k, 2.0, 1.0]
+    return T
 
 
 def template(d):
@@ -135,9 +153,29 @@ def main():
             f.append("flags:\n" + fl)
         if not os.path.exists(os.path.join(P, "BackendParams.yaml")):
             f.append("template files not copied")
+        gt = [ln.split(",") for ln in open(os.path.join(root, "mav0", "state_groundtruth_estimate0",
+                                                         "data.csv")).read().splitlines()[1:]]
+        g5 = [float(v) for v in gt[5]]
+        want = gt_cam(5) @ np.linalg.inv(T_IC)
+        qw = mc.T_to_xyzq(want)
+        if len(gt) != 20 or any(len(r) != 17 for r in gt) or int(gt[5][0]) != T0 + 5 * 100_000_000:
+            f.append("ground truth: %d rows of %s columns" % (len(gt), {len(r) for r in gt}))
+        elif not (np.allclose(g5[1:4], want[:3, 3], atol=1e-6)
+                  and (np.allclose(g5[4:8], [qw[6], qw[3], qw[4], qw[5]], atol=1e-6)
+                       or np.allclose(g5[4:8], [-qw[6], -qw[3], -qw[4], -qw[5]], atol=1e-6))
+                  and np.allclose(g5[8:11], [1.0, 0.0, 0.0], atol=1e-6) and not any(g5[11:])):
+            f.append("ground truth row 5 %s, want the IMU at %s moving 1 m/s along x" % (g5, want[:3, 3]))
+        sy = open(os.path.join(root, "mav0", "state_groundtruth_estimate0", "sensor.yaml")).read()
+        if not sy.startswith("%YAML:1.0") or "data: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0" not in sy:
+            f.append("ground-truth sensor.yaml:\n" + sy)
         rep = open(os.path.join(out, "report.txt")).read()
-        if "baseline 0.050 m" not in rep:
+        if "baseline 0.050 m" not in rep or "20 ground-truth poses" not in rep:
             f.append("report: " + rep)
+        gtd = os.path.join(root, "mav0", "state_groundtruth_estimate0")
+        shutil.rmtree(gtd)
+        EU.convert(bag, out, agents=["mobile_2"], rate=10.0, template=tpl, gt_only=True)
+        if len(open(os.path.join(gtd, "data.csv")).read().splitlines()) != 21:
+            f.append("--gt-only did not rewrite the ground truth")
         open(os.path.join(out, "report.txt"), "a").write("mobile_1: an earlier export\n")
         shutil.rmtree(os.path.join(out, "mobile_2"))
         EU.convert(bag, out, agents=["mobile_2"], rate=10.0, template=tpl)

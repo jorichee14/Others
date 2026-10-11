@@ -5,13 +5,19 @@ the EuRoC layout, with a Kimera-VIO parameter folder made from the recorded
 calibration.
 
     python scoop_pipeline/datasets/euroc.py <finalized merged bag> [<out dir>]
-        [--agents mobile_1 mobile_2] [--rate 20] [--template <Kimera-VIO params/D455>]
+        [--agents mobile_1 mobile_2] [--rate 20] [--template <Kimera-VIO params/D455>] [--gt-only]
 
 Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)/<machine>/:
 
   mav0/cam0/data.csv, data/<ns>.png   left image (grey), stamped as recorded
   mav0/cam1/data.csv, data/<ns>.png   right image of the same stereo pair
   mav0/imu0/data.csv                  ns, gyro x y z (rad/s), accel x y z (m/s^2)
+  mav0/state_groundtruth_estimate0/   the IMU (Kimera-VIO's body) in map at every
+                                      /<robot>/global_pose (the colour camera,
+                                      moved through /tf_static): ns, position,
+                                      quaternion w x y z, velocity (finite
+                                      differences), biases 0; Kimera-VIO's reader
+                                      wants it, and logs it next to its estimate
   params/                             Kimera-VIO's parameters: --template's
                                       (D455: stereo + IMU, frontend_type 1),
                                       with LeftCameraParams.yaml and
@@ -23,6 +29,8 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)
                                       and the machine's noise) and the flags
                                       with logging on and the viewer off
   report.txt
+
+--gt-only: (re)write only mav0/state_groundtruth_estimate0 of an existing export.
 
 A stereo pair is a left and right image within 2 ms, at most --rate per
 second; the IMU goes in whole. Frames come from each message's header; the
@@ -129,6 +137,42 @@ def imu_edges_from_tf(paths, imu_frame):
     return out
 
 
+def write_gt(paths, edges, machine, imu_frame, folder):
+    """mav0/state_groundtruth_estimate0: the IMU in map from /<robot>/global_pose."""
+    import replica_multiagent as RM
+    spec = RM.AGENTS[machine]
+    info = mc.first_msg(paths, spec["info"])
+    if info is None:
+        raise mc.ConvertError(f"{machine}: no {spec['info']} (the colour camera global_pose is of)")
+    col = info.header.frame_id.lstrip("/")
+    T_ic = mc.lookup_static(edges, imu_frame, col)
+    if T_ic is None:
+        raise mc.ConvertError(f"{machine}: the IMU frame {imu_frame} and the colour frame {col} are not connected")
+    ts, pos, quat, _ = mc.load_poses(paths, spec["pose"])
+    T_ci = np.linalg.inv(T_ic)
+    P = np.empty((len(ts), 3))
+    Q = np.empty((len(ts), 4))
+    for k in range(len(ts)):
+        T = mc.xyzq_to_T(list(pos[k]) + list(quat[k])) @ T_ci
+        q = mc.T_to_xyzq(T)
+        P[k], Q[k] = T[:3, 3], np.array(q[3:]) / np.linalg.norm(q[3:])
+    V = np.gradient(P, ts * 1e-9, axis=0) if len(ts) > 1 else np.zeros_like(P)
+    os.makedirs(folder)
+    open(os.path.join(folder, "sensor.yaml"), "w").write(
+        "%YAML:1.0\nsensor_type: visual-inertial\nT_BS:\n  cols: 4\n  rows: 4\n"
+        "  data: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]\n")
+    with open(os.path.join(folder, "data.csv"), "w") as fh:
+        fh.write("#timestamp,p_RS_R_x [m],p_RS_R_y [m],p_RS_R_z [m],q_RS_w [],q_RS_x [],q_RS_y [],q_RS_z [],"
+                 "v_RS_R_x [m s^-1],v_RS_R_y [m s^-1],v_RS_R_z [m s^-1],b_w_RS_S_x [rad s^-1],"
+                 "b_w_RS_S_y [rad s^-1],b_w_RS_S_z [rad s^-1],b_a_RS_S_x [m s^-2],b_a_RS_S_y [m s^-2],"
+                 "b_a_RS_S_z [m s^-2]\n")
+        for k in range(len(ts)):
+            x, y, z, w = Q[k]
+            fh.write("%d,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,0,0,0,0,0,0\n"
+                     % (ts[k], P[k, 0], P[k, 1], P[k, 2], w, x, y, z, V[k, 0], V[k, 1], V[k, 2]))
+    return len(ts)
+
+
 def grey(msg):
     img = mc.decode_image(msg)
     if img.ndim == 2:
@@ -166,7 +210,7 @@ def params(folder, template, rate_cam, rate_imu, infos, T_bs, noise):
     open(fl, "w").write("\n".join(["--log_output=true", "--visualize=false"] + lines) + "\n")
 
 
-def convert_robot(paths, edges, machine, out, rate, template):
+def convert_robot(paths, edges, machine, out, rate, template, gt_only=False):
     spec = MACHINES[machine]
     infos = {"left": mc.first_msg(paths, spec["left_info"]), "right": mc.first_msg(paths, spec["right_info"])}
     for side, info in infos.items():
@@ -191,6 +235,13 @@ def convert_robot(paths, edges, machine, out, rate, template):
                                   f"are not connected in /tf_static or /tf (frames there: {near})")
         T_bs[side] = T
     root = os.path.join(out, machine)
+    if gt_only:
+        gt_dir = os.path.join(root, "mav0", "state_groundtruth_estimate0")
+        if not os.path.isdir(os.path.join(root, "mav0")):
+            raise mc.ConvertError(f"--gt-only: no {root}/mav0 (export it first)")
+        shutil.rmtree(gt_dir, ignore_errors=True)
+        return "%s: %d ground-truth poses (ground truth only)" % (
+            machine, write_gt(paths, edges, machine, imu_frame, gt_dir))
     if os.path.exists(root):
         raise mc.ConvertError(f"{root} exists: remove it first")
     dirs = {k: os.path.join(root, "mav0", k) for k in ("cam0", "cam1", "imu0")}
@@ -242,14 +293,16 @@ def convert_robot(paths, edges, machine, out, rate, template):
         raise mc.ConvertError(f"{machine}: {n_pair} stereo pairs and {n_imu} IMU samples")
     rate_imu = int(round(1e9 / np.median(np.diff(t_imu))))
     rate_cam = int(round((n_pair - 1) * 1e9 / (last - first)))
+    n_gt = write_gt(paths, edges, machine, imu_frame, os.path.join(root, "mav0", "state_groundtruth_estimate0"))
     params(os.path.join(root, "params"), template, rate_cam, rate_imu, infos, T_bs, spec["noise"])
     b = np.linalg.norm(T_bs["left"][:3, 3] - T_bs["right"][:3, 3])
-    return ("%s: %d stereo pairs at %d Hz, %dx%d, fx %.1f; %d IMU samples at %d Hz (%s); baseline %.3f m"
+    return ("%s: %d stereo pairs at %d Hz, %dx%d, fx %.1f; %d IMU samples at %d Hz (%s); baseline %.3f m; "
+            "%d ground-truth poses"
             % (machine, n_pair, rate_cam, infos["left"].width, infos["left"].height, intrinsics(infos["left"])[0],
-               n_imu, rate_imu, imu_frame, b))
+               n_imu, rate_imu, imu_frame, b, n_gt))
 
 
-def convert(bag, out=None, agents=("mobile_1", "mobile_2"), rate=20.0, template=TEMPLATE):
+def convert(bag, out=None, agents=("mobile_1", "mobile_2"), rate=20.0, template=TEMPLATE, gt_only=False):
     paths = mc._paths(bag)
     out = os.path.abspath(os.path.expanduser(out or default_out(bag)))
     os.makedirs(out, exist_ok=True)
@@ -259,8 +312,10 @@ def convert(bag, out=None, agents=("mobile_1", "mobile_2"), rate=20.0, template=
             if ln.split(":")[0] not in agents]           # robots exported before stay in the report
     lines = []
     for m in agents:
-        line = convert_robot(paths, edges, m, out, rate, os.path.expanduser(template))
+        line = convert_robot(paths, edges, m, out, rate, os.path.expanduser(template), gt_only)
         log.info(line)
+        if gt_only:
+            continue                                      # the report keeps the export's own line
         lines.append(line)
         open(rp, "w").write("\n".join(sorted(kept + lines)) + "\n")
     return {"out": out, "lines": lines}
@@ -273,10 +328,11 @@ def main():
     ap.add_argument("--agents", nargs="+", default=["mobile_1", "mobile_2"], choices=sorted(MACHINES))
     ap.add_argument("--rate", type=float, default=20.0, help="most stereo pairs per second")
     ap.add_argument("--template", default=TEMPLATE, help="a Kimera-VIO stereo + IMU parameter folder")
+    ap.add_argument("--gt-only", action="store_true", help="(re)write only the ground truth of an existing export")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        convert(a.bag, a.out, a.agents, a.rate, a.template)
+        convert(a.bag, a.out, a.agents, a.rate, a.template, a.gt_only)
     except mc.ConvertError as e:
         sys.exit(str(e))
 
