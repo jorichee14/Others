@@ -1,11 +1,12 @@
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{figs/fig09_link_trace.png}
-\caption{Measured link over one survey sequence at site 1, in the
-reference map frame. Left: RSSI, median per \SI{0.5}{\metre} cell
-(177 cells, 2208 samples). Right: TCP uplink goodput from
-\texttt{iperf3}, median per \SI{0.75}{\metre} cell (108 cells, 443
-samples). Circles mark the 16 survey stops, the star the start of the
-mapping trajectory.}
+\fbox{\parbox[c][5cm][c]{0.95\columnwidth}{\centering
+\todo{Fig.: one sequence over time. Rows: goodput and RTT per link,
+\texttt{associated} flag, CSI amplitude, and the per-frame paradigm
+label and clearance, with the ego's position marked. These are the
+inputs the benchmark replays. Distinct from the testbed paper's
+map-binned RSSI/goodput figure.}}}
+\caption{Communication ground truth over one sequence: link state,
+channel state, and the geometry label on the same timeline.}
 \label{fig:linktrace}
 \end{figure}

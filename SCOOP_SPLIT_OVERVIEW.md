@@ -128,5 +128,7 @@ what the real link costs. CODa-style per `scoop_paper/split/SPLIT.md`.
 - Annotations, geometry characterization, collection protocol, release format,
   devkit, benchmarks, experiments, and discussion live in **Paper B**. Paper A
   mentions them only as downstream consumers of its outputs.
-- Shared figures (overview, link trace) appear in both on purpose; swap one for a
-  different image before submission.
+- No image file is used by both papers. The testbed keeps the map-binned link
+  trace and gets a redrawn Fig. 1 (placeholder); the dataset keeps the top-view
+  scenario and the reference-map render and gets a time-series link-trace figure
+  (placeholder); the testbed supplementary gets a thickness-colored map (placeholder).
