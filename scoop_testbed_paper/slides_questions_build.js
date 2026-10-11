@@ -67,6 +67,22 @@ function bookTable(slide, caption, cols, colW, groups) {
   slide.addTable(rows, { x: 0.6, y: 1.35, w: 8.8, colW, rowH: 0.23, margin: 0.02, fontFace: F, objectName: "results" });
 }
 
+
+function metricsSlide(s, title, items) {
+  titleBand(s, title);
+  const runs = [];
+  items.forEach((it, i) => {
+    const last = i === items.length - 1;
+    runs.push({ text: it[0] + ": ", options: { fontFace: F, fontSize: 13, bold: true, color: TXT, bullet: { code: "25C6", indent: 16 }, indentLevel: 0, paraSpaceAfter: 5, breakLine: false } });
+    runs.push({ text: it[1], options: { fontFace: F, fontSize: 13, color: TXT, bullet: { code: "25C6", indent: 16 }, indentLevel: 0, paraSpaceAfter: 5, breakLine: !last } });
+  });
+  // pptxgenjs: paragraph props come from the last run; a bulleted non-first run would start a new
+  // paragraph, so merge each pair into one run instead (bold label is lost; kept as "Name." prefix).
+  const merged = [];
+  for (let i = 0; i < runs.length; i += 2) merged.push({ text: runs[i].text + runs[i + 1].text, options: { ...runs[i + 1].options } });
+  s.addText(merged, { x: 0.45, y: 0.98, w: 9.1, h: 4.2, valign: "top", isTextBox: true, margin: 0, objectName: "metrics" });
+}
+
 const FS = { l0: 17, l1: 15, l2: 14, l3: 13 };
 const slides = [];
 
@@ -127,6 +143,11 @@ slides.push(s => {
       ["Agent speed, p95 of reference tracks", "input", "", "missing"]]}]);
 });
 
+
+slides.push(s => metricsSlide(s, "Q1 metrics explained: clock and map", [["Measured clock offset", "how far a client's clock sat from mobile_1's at each chrony poll over the run; the worst value is quoted. At 1 m/s, 1 ms of clock error moves a measurement by 1 mm"], ["Strict chrony bound", "chrony's guaranteed worst case: the offset plus half the network round-trip to the server. Always larger than the measured offset; it is what you quote if you refuse to trust the measurement itself"], ["Sniffer bias", "a constant error NTP cannot see when the path to the server is asymmetric (the CSI Pi syncs over a slow 2.4 GHz link). Measured by stamping the same packet at the sender and at the sniffer"], ["Final pose correction", "how much the last refinement iteration still moved a scan against the map. Small means the registration converged; it shows self-consistency, not accuracy"], ["Repeatability", "wall surfaces of two maps built independently, four weeks apart; 1.06 cm is how far apart the two maps put the same walls. Scale 0.99998 is the size ratio between them"], ["Control distances", "wall-to-wall distances from a laser rangefinder compared with the same distances read in the map. The only check of absolute scale, since both maps could be wrong the same way"], ["Time threshold 10 ms, pose threshold 2 cm", "one tenth of where fusion breaks: 100 ms (one LiDAR frame, every fusion method below ego-only) and 0.2 m (late fusion below ego-only)"]]));
+
+slides.push(s => metricsSlide(s, "Q1 metrics explained: agents in the frame", [["ChArUco board", "a printed checkerboard with markers whose pose a camera can compute. Each board's pose in the map is fixed once, during the mapping session"], ["Board detector check", "re-detecting the mapping session's boards must reproduce the pipeline's own board poses. 8 mm says the instrument used in the next rows is finer than what it checks"], ["Held-out board residual", "from the agent's reference trajectory and its camera extrinsic, predict where a board should appear, then compare with where the camera saw it. Only boards that did not enter the trajectory estimate count, so the check is independent"], ["Median and sigma", "median over all board sightings in a run; sigma is the pose graph's own per-pose uncertainty (marginal covariance). 284 cm without map fixes is the same cart with the map registration switched off"], ["LiDAR robot vs RGB-D cart", "the LiDAR robot's reference uses no boards at all, so its 10 mm is fully independent; the cart's trajectory uses some boards, so it is scored on the held-out ones"], ["Agent speed, p95", "the 95th-percentile speed of the reference tracks. It converts a time error into a position error; 1 m/s is assumed until measured"]]));
+
 // ---- 3 Q2
 slides.push(s => {
   titleBand(s, "Q2. Is it consistent?");
@@ -161,6 +182,9 @@ slides.push(s => {
       ["CSI power as second signal", "same", "", "missing"]]}]);
 });
 
+
+slides.push(s => metricsSlide(s, "Q2 metrics explained", [["Fresnel clearance", "along the straight line between two radios, the smallest free distance to the nearest map point, divided by the first Fresnel radius at that point. 1 or more: the zone the signal needs is free; below 0.6: obstructed; near 0: the line crosses a wall"], ["Detrended RSSI", "received signal strength minus the free-space distance trend (fixed exponent 2, offset taken from clear windows). What remains is the part obstruction explains, not distance"], ["Spearman rho", "rank correlation between clearance and detrended RSSI over 0.5 s windows. 0 means no relation, 1 a perfect monotone one; above 0.3 is the pre-set bar"], ["Clear-minus-obstructed drop", "median detrended RSSI in clear windows minus the median in obstructed windows, in dB. Above 5 dB means the wall is visible in the radio"], ["Self-test", "synthetic data with a 12 dB wall planted; the method recovers 11.9 dB, so it measures what it claims"], ["Why it validates two things", "the map and poses produced the clearance; the radio produced the RSSI; neither used the other. Agreement means both are right together"], ["Out-of-run prediction", "fit the detrending offset on one pass, score another: shows the geometry predicts a run it was not tuned on"]]));
+
 // ---- 4 Q3
 slides.push(s => {
   titleBand(s, "Q3. Is it faithful?");
@@ -191,6 +215,9 @@ slides.push(s => {
       ["Payload node and twin runs", "A1/B1 survey, A2/B2 coop", "", "missing"]]}]);
 });
 
+
+slides.push(s => metricsSlide(s, "Q3 metrics explained", [["Replay rule", "a message of size s sent at time t arrives at t + d(t) + s / G(t): one-way delay plus transmission time at the goodput measured at that moment; dropped if the link was in an outage"], ["d(t) and G(t)", "d is the one-way delay (RTT/2, or a stamped probe where available); G is the goodput of the most recent iperf test on that link"], ["Twin runs", "the same route driven twice the same day: run A logs the link as usual; run B sends stamped messages of 1 KB, 100 KB, 1.5 MB at 10 Hz. B's messages are replayed through A's log and compared with when they really arrived"], ["Frame agreement", "share of messages for which replay and live put the arrival in the same 100 ms LiDAR frame. The pass bar is 90 %"], ["Arrival-time error", "replayed minus live arrival time per message; reported as median and 95th percentile, per size and mode"], ["Drop agreement", "share of messages on which replay and live agree about lost versus delivered"], ["Closer than synthetic", "the same comparison with the published synthetic channel must come out worse than the replay"]]));
+
 // ---- 5 Q4
 slides.push(s => {
   titleBand(s, "Q4. Is it repeatable?");
@@ -220,6 +247,9 @@ slides.push(s => {
       ["Day distance, same route and mode", "", "", "missing"],
       ["Day / mode ratio, RTT and goodput", "< 0.5", "", "missing"]]}]);
 });
+
+
+slides.push(s => metricsSlide(s, "Q4 metrics explained", [["W1, Wasserstein-1 distance", "the average shift between two distributions, in the unit measured (ms for RTT, Mbit/s for goodput, dB for RSSI). It answers by how much the link changed"], ["KS statistic", "the largest gap between two cumulative distributions, from 0 to 1. It answers whether the shapes differ at all, regardless of how much"], ["Mode distance", "survey_1 against coop_2 on the same day: the distance one knob (one sender versus all senders) produces. It is the reference the day distance is compared with"], ["Day distance", "the same route and the same mode on two different days"], ["Day / mode ratio", "pass when below 0.5: a day changes the link by less than half of what the mode changes it, so the mode is a controlled condition"], ["RSSI on grid", "per-cell median RSSI in the map frame, compared only on cells both passes occupied, so a different route is not counted as a different link"], ["Pose half", "the two maps four weeks apart are the same test for the frame instead of the link"]]));
 
 // ---- 6 Q5
 slides.push(s => {
@@ -254,6 +284,9 @@ slides.push(s => {
       ["More passes, second site", "", "", "missing"],
       ["Probe-off control run (ping only)", "", "", "missing"]]}]);
 });
+
+
+slides.push(s => metricsSlide(s, "Q5 metrics explained", [["In-frame share", "percentage of 1.5 MB messages, one every 100 ms, whose delay RTT/2 + size/goodput is at most 100 ms and that were not sent during an outage. 100 ms is one LiDAR frame"], ["Synthetic channel share", "what the benchmarks' own settings imply: V2X-ViT adds a constant 100 ms then rounds down to whole frames, so every message counts as on time; Where2comm has no latency model at all. Both give 100 %"], ["One robot vs two robots", "survey_1 has one sender owning the channel; coop_2 has both robots contending at the same access point. The drop from 86 % to 59 to 68 % is contention, which i.i.d. per-agent delay models cannot express"], ["RTT idle vs loaded", "ping round-trip time with no traffic and with iperf running. Delay depends on offered load, which a constant delay cannot represent"], ["Outage", "a run of unanswered pings lasting at least one frame; messages sent inside it are lost. Synthetic channels have none"], ["Best-fit synthetic baseline", "a constant or Binomial delay tuned to the measured delays; if it still mispredicts the in-frame share, the gap is not a matter of parameter choice"], ["Probe-off control", "a run with ping only, no iperf, to separate the queueing the measurement adds from the queueing the team would face"]]));
 
 // ---- 7 Q6 + Q7
 slides.push(s => {
