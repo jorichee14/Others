@@ -37,7 +37,7 @@ T_IC = np.eye(4)                           # the colour camera in the IMU frame:
 T_IC[1, 3] = 0.03
 
 
-def make_bag(path, imu_on_tf=False):
+def make_bag(path, imu_on_tf=False, tf_no_baseline=False):
     w = BagWriter(path)
     tgt = mc.Intrinsics(380.0, 381.0, 320.5, 240.5, 640, 480, [0.0] * 4, None)
     # IMU -> left: 1 cm along x, rotated 90 deg about z; left -> right: 5 cm along x
@@ -46,7 +46,8 @@ def make_bag(path, imu_on_tf=False):
     T_il[:3, 3] = [0.01, 0.0, 0.0]
     T_lr = np.eye(4)
     T_lr[0, 3] = 0.05
-    q_il, q_lr, q_ic = mc.T_to_xyzq(T_il), mc.T_to_xyzq(T_lr), mc.T_to_xyzq(T_IC)
+    T_tf = np.eye(4) if tf_no_baseline else T_lr          # as the RealSense driver: both at one place
+    q_il, q_lr, q_ic = mc.T_to_xyzq(T_il), mc.T_to_xyzq(T_tf), mc.T_to_xyzq(T_IC)
     if imu_on_tf:
         w.write("/tf_static", rosmsg.tf_message([(L_CAM, R_CAM, q_lr[:3], q_lr[3:]),
                                                  (IMU_F, COL, q_ic[:3], q_ic[3:])], T0), T0)
@@ -65,7 +66,10 @@ def make_bag(path, imu_on_tf=False):
                                  ("/mobile_2/infra2/image_rect_raw", R_CAM, 5_000_000 if k == 7 else 0)):
             recs.append((t + dt, topic, SS.image(img, "mono8", frame, t + dt)))
         for topic, frame in (("/mobile_2/infra1/camera_info", L_CAM), ("/mobile_2/infra2/camera_info", R_CAM)):
-            recs.append((t, topic, SS.camera_info(tgt, frame, t)))
+            ci = SS.camera_info(tgt, frame, t)
+            if tf_no_baseline and frame == R_CAM:
+                ci.p[3] = -380.0 * 0.05                     # rectified right: Tx = -fx b
+            recs.append((t, topic, ci))
     for k in range(20):                                   # global_pose: the colour camera, 10 Hz, 1 m/s along x
         t = T0 + k * 100_000_000
         recs.append((t, "/mobile_2/color/camera_info", SS.camera_info(tgt, COL, t)))
@@ -182,6 +186,21 @@ def main():
         rep = open(os.path.join(out, "report.txt")).read().splitlines()
         if len(rep) != 2 or not rep[0].startswith("mobile_1: an earlier") or not rep[1].startswith("mobile_2:"):
             f.append("report after a second robot's export: %s" % rep)
+        # /tf_static puts both cameras at one place; the right camera_info's P has the baseline
+        bag3 = os.path.join(tmp, "bag_p")
+        make_bag(bag3, tf_no_baseline=True)
+        out3 = os.path.join(tmp, "euroc_p")
+        EU.convert(bag3, out3, agents=["mobile_2"], rate=10.0, template=tpl)
+        got = np.array(yaml_list(open(os.path.join(out3, "mobile_2", "params", "RightCameraParams.yaml")).read(),
+                                 "data")).reshape(4, 4)
+        if not np.allclose(got, T_ir, atol=1e-6) or "baseline 0.050 m (camera_info)" not in \
+                open(os.path.join(out3, "report.txt")).read():
+            f.append("baseline from camera_info P: right T_BS\n%s\nwant\n%s" % (got, T_ir))
+        shutil.rmtree(os.path.join(out3, "mobile_2", "params"))
+        r = EU.convert(bag3, out3, agents=["mobile_2"], rate=10.0, template=tpl, params_only=True)
+        lp = os.path.join(out3, "mobile_2", "params", "LeftCameraParams.yaml")
+        if not os.path.exists(lp) or "rate_hz: 10" not in open(lp).read():
+            f.append("--params-only did not rewrite the parameters")
         out2 = os.path.join(tmp, "euroc_tf")
         EU.convert(bag2, out2, agents=["mobile_2"], rate=10.0, template=tpl)
         got = np.array(yaml_list(open(os.path.join(out2, "mobile_2", "params", "RightCameraParams.yaml")).read(),

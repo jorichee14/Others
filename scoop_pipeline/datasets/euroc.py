@@ -5,7 +5,8 @@ the EuRoC layout, with a Kimera-VIO parameter folder made from the recorded
 calibration.
 
     python scoop_pipeline/datasets/euroc.py <finalized merged bag> [<out dir>]
-        [--agents mobile_1 mobile_2] [--rate 20] [--template <Kimera-VIO params/D455>] [--gt-only]
+        [--agents mobile_1 mobile_2] [--rate 20] [--template <Kimera-VIO params/D455>]
+        [--gt-only | --params-only]
 
 Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)/<machine>/:
 
@@ -24,13 +25,18 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)
                                       RightCameraParams.yaml (the rectified
                                       intrinsics of camera_info's P, no
                                       distortion; T_BS the camera in the IMU
-                                      frame from /tf_static), ImuParams.yaml
+                                      frame from /tf_static, the right one the
+                                      left moved by the rectified baseline of
+                                      the right camera_info's P where it has
+                                      one: a driver's /tf_static may put both
+                                      at one place), ImuParams.yaml
                                       (identity: the body is the IMU; its rate
                                       and the machine's noise) and the flags
                                       with logging on and the viewer off
   report.txt
 
 --gt-only: (re)write only mav0/state_groundtruth_estimate0 of an existing export.
+--params-only: (re)write only params/ of an existing export (rates from its data.csv files).
 
 A stereo pair is a left and right image within 2 ms, at most --rate per
 second; the IMU goes in whole. Frames come from each message's header; the
@@ -210,7 +216,18 @@ def params(folder, template, rate_cam, rate_imu, infos, T_bs, noise):
     open(fl, "w").write("\n".join(["--log_output=true", "--visualize=false"] + lines) + "\n")
 
 
-def convert_robot(paths, edges, machine, out, rate, template, gt_only=False):
+def rectified_baseline(info):
+    """b (m) of a rectified right camera: its P has Tx = -fx b (0 when not given)."""
+    P = np.asarray(info.p, float).reshape(3, 4)
+    return -P[0, 3] / P[0, 0] if P[0, 0] else 0.0
+
+
+def csv_rate(path):
+    t = np.array([int(ln.split(",")[0]) for ln in open(path).read().splitlines()[1:] if ln.strip()])
+    return int(round((len(t) - 1) * 1e9 / (t[-1] - t[0]))) if len(t) > 1 else 0
+
+
+def convert_robot(paths, edges, machine, out, rate, template, gt_only=False, params_only=False):
     spec = MACHINES[machine]
     infos = {"left": mc.first_msg(paths, spec["left_info"]), "right": mc.first_msg(paths, spec["right_info"])}
     for side, info in infos.items():
@@ -234,7 +251,24 @@ def convert_robot(paths, edges, machine, out, rate, template, gt_only=False):
             raise mc.ConvertError(f"{machine}: the IMU frame {imu_frame} and the {side} camera frame {f} "
                                   f"are not connected in /tf_static or /tf (frames there: {near})")
         T_bs[side] = T
+    # rectified stereo: the right camera is the left moved by the baseline along its x axis
+    b_p = rectified_baseline(infos["right"])
+    b_src = "/tf_static"
+    if abs(b_p) > 1e-3:
+        D = np.eye(4)
+        D[0, 3] = b_p
+        T_bs["right"] = T_bs["left"] @ D
+        b_src = "camera_info"
     root = os.path.join(out, machine)
+    if params_only:
+        m0 = os.path.join(root, "mav0")
+        if not os.path.isdir(m0):
+            raise mc.ConvertError(f"--params-only: no {m0} (export it first)")
+        shutil.rmtree(os.path.join(root, "params"), ignore_errors=True)
+        params(os.path.join(root, "params"), template, csv_rate(os.path.join(m0, "cam0", "data.csv")),
+               csv_rate(os.path.join(m0, "imu0", "data.csv")), infos, T_bs, spec["noise"])
+        return "%s: parameters rewritten; baseline %.3f m (%s)" % (
+            machine, np.linalg.norm(T_bs["left"][:3, 3] - T_bs["right"][:3, 3]), b_src)
     if gt_only:
         gt_dir = os.path.join(root, "mav0", "state_groundtruth_estimate0")
         if not os.path.isdir(os.path.join(root, "mav0")):
@@ -296,13 +330,14 @@ def convert_robot(paths, edges, machine, out, rate, template, gt_only=False):
     n_gt = write_gt(paths, edges, machine, imu_frame, os.path.join(root, "mav0", "state_groundtruth_estimate0"))
     params(os.path.join(root, "params"), template, rate_cam, rate_imu, infos, T_bs, spec["noise"])
     b = np.linalg.norm(T_bs["left"][:3, 3] - T_bs["right"][:3, 3])
-    return ("%s: %d stereo pairs at %d Hz, %dx%d, fx %.1f; %d IMU samples at %d Hz (%s); baseline %.3f m; "
+    return ("%s: %d stereo pairs at %d Hz, %dx%d, fx %.1f; %d IMU samples at %d Hz (%s); baseline %.3f m (%s); "
             "%d ground-truth poses"
             % (machine, n_pair, rate_cam, infos["left"].width, infos["left"].height, intrinsics(infos["left"])[0],
-               n_imu, rate_imu, imu_frame, b, n_gt))
+               n_imu, rate_imu, imu_frame, b, b_src, n_gt))
 
 
-def convert(bag, out=None, agents=("mobile_1", "mobile_2"), rate=20.0, template=TEMPLATE, gt_only=False):
+def convert(bag, out=None, agents=("mobile_1", "mobile_2"), rate=20.0, template=TEMPLATE, gt_only=False,
+            params_only=False):
     paths = mc._paths(bag)
     out = os.path.abspath(os.path.expanduser(out or default_out(bag)))
     os.makedirs(out, exist_ok=True)
@@ -312,9 +347,9 @@ def convert(bag, out=None, agents=("mobile_1", "mobile_2"), rate=20.0, template=
             if ln.split(":")[0] not in agents]           # robots exported before stay in the report
     lines = []
     for m in agents:
-        line = convert_robot(paths, edges, m, out, rate, os.path.expanduser(template), gt_only)
+        line = convert_robot(paths, edges, m, out, rate, os.path.expanduser(template), gt_only, params_only)
         log.info(line)
-        if gt_only:
+        if gt_only or params_only:
             continue                                      # the report keeps the export's own line
         lines.append(line)
         open(rp, "w").write("\n".join(sorted(kept + lines)) + "\n")
@@ -329,10 +364,11 @@ def main():
     ap.add_argument("--rate", type=float, default=20.0, help="most stereo pairs per second")
     ap.add_argument("--template", default=TEMPLATE, help="a Kimera-VIO stereo + IMU parameter folder")
     ap.add_argument("--gt-only", action="store_true", help="(re)write only the ground truth of an existing export")
+    ap.add_argument("--params-only", action="store_true", help="(re)write only the parameters of an existing export")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        convert(a.bag, a.out, a.agents, a.rate, a.template, a.gt_only)
+        convert(a.bag, a.out, a.agents, a.rate, a.template, a.gt_only, a.params_only)
     except mc.ConvertError as e:
         sys.exit(str(e))
 
