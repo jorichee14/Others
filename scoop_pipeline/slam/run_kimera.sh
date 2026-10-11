@@ -6,12 +6,15 @@
 #
 #   scoop_pipeline/slam/run_kimera.sh <euroc export dir> [robots "mobile_1 mobile_2"]
 #
+# INITIAL_K=<k> (environment): start at stereo pair k (default 50, as Kimera-VIO's
+#   own script), e.g. after a long stationary start.
+#
 # Writes <export>/<robot>/out/: traj_vio.csv (Kimera-VIO's odometry),
 # traj_pgo.csv (with its loop closures), output_lcd_result.csv (every loop
 # closure query: is it one, the two keyframe stamps and their relative pose),
 # kimera.log.
 set -e
-OUT=$(realpath "$1"); ROBOTS=(${2:-mobile_1 mobile_2})
+OUT=$(realpath "$1"); ROBOTS=(${2:-mobile_1 mobile_2}); INITIAL_K=${INITIAL_K:-50}
 WS=${HYDRA_WS:-/root/hydra_ws}
 BIN=$WS/build/kimera_vio/stereoVIOEuroc
 VOC=$WS/src/kimera_vio/vocabulary/ORBvoc.yml
@@ -24,11 +27,11 @@ for R in "${ROBOTS[@]}"; do
   [ -f "$D/mav0/cam0/data.csv" ] || { echo "no $D/mav0: run datasets/euroc.py first"; exit 1; }
   [ -e "$O" ] && { echo "$O exists: remove it to run $R again"; exit 1; }
   mkdir -p "$O"
-  echo "$R: Kimera-VIO on $(($(wc -l < $D/mav0/cam0/data.csv) - 1)) stereo pairs ($O/kimera.log)"
+  echo "$R: Kimera-VIO on $(($(wc -l < $D/mav0/cam0/data.csv) - 1)) stereo pairs from $INITIAL_K, backend $(grep -m1 "^backend_type" $P/PipelineParams.yaml) ($O/kimera.log)"
   T0=$SECONDS
   set +e
   "$BIN" --dataset_type=0 --dataset_path="$D" --params_folder_path="$P" \
-      --initial_k=50 --final_k=100000000 --use_lcd=true --vocabulary_path="$VOC" \
+      --initial_k=$INITIAL_K --final_k=100000000 --use_lcd=true --vocabulary_path="$VOC" \
       --flagfile="$P/flags/stereoVIOEuroc.flags" --flagfile="$P/flags/Mesher.flags" \
       --flagfile="$P/flags/VioBackend.flags" --flagfile="$P/flags/RegularVioBackend.flags" \
       --flagfile="$P/flags/Visualizer3D.flags" --output_path="$O/" \
