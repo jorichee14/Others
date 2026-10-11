@@ -40,7 +40,8 @@ done
 mkdir -p "$RUN/results"
 sed "s#log_folder: .*#log_folder: \"$RUN/results\"#" "$OUT/scoop_rgbd.yaml" > "$RUN/scoop_rgbd.yaml"
 PIDS=(); PLAY=(); REC=()
-# each launch in its own process group, so that the nodes it starts stop with it;
+# each launch in its own process group, so that the nodes it starts stop with it, and
+# with SIGINT restored (a background job of a script starts with it ignored);
 # the container runs as root: hand the run folder back to the export's owner
 # (set +e: under set -e the first kill of an already finished group would end the trap)
 # (the keyframe recorders first, and given time to write their bag's end)
@@ -51,20 +52,20 @@ trap 'set +e; for p in ${REC[@]}; do kill -INT -- -$p 2>/dev/null; done
       chown -R --reference="$OUT" "$RUN" 2>/dev/null' EXIT
 for ((i = 0; i < N; i++)); do
   D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
-  ROS_DOMAIN_ID=$D setsid ros2 launch cslam_experiments cslam_rgbd.launch.py config_path:="$RUN/" \
+  ROS_DOMAIN_ID=$D setsid env --default-signal=INT ros2 launch cslam_experiments cslam_rgbd.launch.py config_path:="$RUN/" \
       config_file:=scoop_rgbd.yaml robot_id:=$i namespace:=/r$i max_nb_robots:=$N > "$RUN/cslam_r$i.log" 2>&1 &
   PIDS+=($!)
 done
 # every robot's keyframe ids and stamps (cslam logs them only once a robot is in an optimization)
 for ((i = 0; i < N; i++)); do
   D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
-  ROS_DOMAIN_ID=$D setsid ros2 bag record -s mcap -o "$RUN/keyframes_r$i" /r$i/cslam/keyframe_odom \
+  ROS_DOMAIN_ID=$D setsid env --default-signal=INT ros2 bag record -s mcap -o "$RUN/keyframes_r$i" /r$i/cslam/keyframe_odom \
       > "$RUN/record_r$i.log" 2>&1 &
   REC+=($!)
 done
 if [ "$CHANNEL" != direct ]; then
   DOMAINS=$(for ((i = 0; i < N; i++)); do echo -n "$((BASE + i)) "; done)
-  setsid python3 "$HERE/channel_relay.py" --channel "$CHANNEL" --robots "${ROBOTS[@]}" --domains $DOMAINS \
+  setsid env --default-signal=INT python3 "$HERE/channel_relay.py" --channel "$CHANNEL" --robots "${ROBOTS[@]}" --domains $DOMAINS \
       --log "$RUN/relay.csv" > "$RUN/relay.log" 2>&1 &
   PIDS+=($!)
 fi
@@ -72,11 +73,11 @@ echo "cslam up for $N robots, channel $CHANNEL; playing the bag at x$RATE in 15 
 sleep 15
 PLAY=()
 if [ "$CHANNEL" = direct ]; then
-  ROS_DOMAIN_ID=0 setsid ros2 bag play "$OUT/bag" -r "$RATE" & PLAY+=($!)
+  ROS_DOMAIN_ID=0 setsid env --default-signal=INT ros2 bag play "$OUT/bag" -r "$RATE" & PLAY+=($!)
 else
   for ((i = 0; i < N; i++)); do
     # ros2 bag play's --regex must match the whole topic name
-    ROS_DOMAIN_ID=$((BASE + i)) setsid ros2 bag play "$OUT/bag" -r "$RATE" --clock --regex "/r$i/.*" & PLAY+=($!)
+    ROS_DOMAIN_ID=$((BASE + i)) setsid env --default-signal=INT ros2 bag play "$OUT/bag" -r "$RATE" --clock --regex "/r$i/.*" & PLAY+=($!)
   done
 fi
 T0=$SECONDS
