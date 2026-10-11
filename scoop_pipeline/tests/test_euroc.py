@@ -30,7 +30,8 @@ from scoop import rosmsg                                            # noqa: E402
 from scoop.bagwrite import BagWriter                                # noqa: E402
 
 T0 = 1_790_000_000_000_000_000
-L_CAM, R_CAM, IMU_F = "camera_infra1_optical_frame", "camera_infra2_optical_frame", "camera_imu_optical_frame"
+L_CAM, R_CAM, IMU_F = "camera_infra1_optical_frame", "camera_infra2_optical_frame", "camera_gyro_optical_frame"
+IMU_MSG_F = "camera_imu_optical_frame"     # what the RealSense's united IMU messages name (in no TF tree)
 
 
 def make_bag(path, imu_on_tf=False):
@@ -62,7 +63,7 @@ def make_bag(path, imu_on_tf=False):
             recs.append((t, topic, SS.camera_info(tgt, frame, t)))
     for k in range(400):                                  # 200 Hz, stamp 10 repeated
         t = T0 + (k if k != 11 else 10) * 5_000_000
-        recs.append((t, "/mobile_2/imu", rosmsg.imu(t, IMU_F, [0.1, 0.2, 9.8], [0.01, 0.02, 0.03])))
+        recs.append((t, "/mobile_2/imu", rosmsg.imu(t, IMU_MSG_F, [0.1, 0.2, 9.8], [0.01, 0.02, 0.03])))
     for t, topic, msg in sorted(recs, key=lambda r: (r[0], r[1])):
         w.write(topic, msg, t)
     w.close()
@@ -137,6 +138,12 @@ def main():
         rep = open(os.path.join(out, "report.txt")).read()
         if "baseline 0.050 m" not in rep:
             f.append("report: " + rep)
+        open(os.path.join(out, "report.txt"), "a").write("mobile_1: an earlier export\n")
+        shutil.rmtree(os.path.join(out, "mobile_2"))
+        EU.convert(bag, out, agents=["mobile_2"], rate=10.0, template=tpl)
+        rep = open(os.path.join(out, "report.txt")).read().splitlines()
+        if len(rep) != 2 or not rep[0].startswith("mobile_1: an earlier") or not rep[1].startswith("mobile_2:"):
+            f.append("report after a second robot's export: %s" % rep)
         out2 = os.path.join(tmp, "euroc_tf")
         EU.convert(bag2, out2, agents=["mobile_2"], rate=10.0, template=tpl)
         got = np.array(yaml_list(open(os.path.join(out2, "mobile_2", "params", "RightCameraParams.yaml")).read(),

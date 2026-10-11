@@ -26,7 +26,8 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)
 
 A stereo pair is a left and right image within 2 ms, at most --rate per
 second; the IMU goes in whole. Frames come from each message's header; the
-camera and IMU frames are the ones their messages name. The IMU's link to the
+camera and IMU frames are the ones their messages name (the RealSense's united
+IMU: the gyro's frame, as its messages name one no TF tree has). The IMU's link to the
 cameras comes from /tf_static, or, where a driver publishes it on /tf (the
 ZED's zed_imu_link), from the first /tf message of an edge touching the IMU
 frame: the IMU is rigid on the camera.
@@ -58,6 +59,9 @@ MACHINES = {
     "mobile_2": {"left": "/mobile_2/infra1/image_rect_raw", "right": "/mobile_2/infra2/image_rect_raw",
                  "left_info": "/mobile_2/infra1/camera_info", "right_info": "/mobile_2/infra2/camera_info",
                  "imu": "/mobile_2/imu",
+                 # the united IMU's messages name camera_imu_optical_frame, which the driver
+                 # puts in no TF tree; it is the gyro's frame (as processing/vslam.py takes it)
+                 "imu_frame": "camera_gyro_optical_frame",
                  "noise": {"gyroscope_noise_density": 2.44e-4, "gyroscope_random_walk": 1.9393e-5,
                            "accelerometer_noise_density": 1.862e-3, "accelerometer_random_walk": 3.0e-3}},
 }
@@ -171,7 +175,7 @@ def convert_robot(paths, edges, machine, out, rate, template):
     imu0 = mc.first_msg(paths, spec["imu"])
     if imu0 is None:
         raise mc.ConvertError(f"{machine}: no IMU on {spec['imu']}")
-    imu_frame = imu0.header.frame_id.lstrip("/")
+    imu_frame = spec.get("imu_frame") or imu0.header.frame_id.lstrip("/")
     cams = [infos[s].header.frame_id.lstrip("/") for s in ("left", "right")]
     if any(mc.lookup_static(edges, imu_frame, f) is None for f in cams):
         edges = dict(edges)
@@ -250,12 +254,15 @@ def convert(bag, out=None, agents=("mobile_1", "mobile_2"), rate=20.0, template=
     out = os.path.abspath(os.path.expanduser(out or default_out(bag)))
     os.makedirs(out, exist_ok=True)
     edges = mc.build_tf_static(paths)
+    rp = os.path.join(out, "report.txt")
+    kept = [ln for ln in (open(rp).read().splitlines() if os.path.exists(rp) else [])
+            if ln.split(":")[0] not in agents]           # robots exported before stay in the report
     lines = []
     for m in agents:
         line = convert_robot(paths, edges, m, out, rate, os.path.expanduser(template))
         log.info(line)
         lines.append(line)
-    open(os.path.join(out, "report.txt"), "w").write("\n".join(lines) + "\n")
+        open(rp, "w").write("\n".join(sorted(kept + lines)) + "\n")
     return {"out": out, "lines": lines}
 
 
