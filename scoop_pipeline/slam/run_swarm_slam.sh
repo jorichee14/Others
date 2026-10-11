@@ -41,7 +41,8 @@ sed "s#log_folder: .*#log_folder: \"$RUN/results\"#" "$OUT/scoop_rgbd.yaml" > "$
 PIDS=(); PLAY=()
 # each launch in its own process group, so that the nodes it starts stop with it;
 # the container runs as root: hand the run folder back to the export's owner
-trap 'for p in ${PIDS[@]} ${PLAY[@]}; do kill -INT -- -$p 2>/dev/null; done; sleep 3
+# (set +e: under set -e the first kill of an already finished group would end the trap)
+trap 'set +e; for p in ${PIDS[@]} ${PLAY[@]}; do kill -INT -- -$p 2>/dev/null; done; sleep 3
       for p in ${PIDS[@]} ${PLAY[@]}; do kill -KILL -- -$p 2>/dev/null; done; wait 2>/dev/null
       chown -R --reference="$OUT" "$RUN" 2>/dev/null' EXIT
 for ((i = 0; i < N; i++)); do
