@@ -22,6 +22,9 @@ position in map.
     link_clearance.py --all <data/processed> [--ap-file F]
                                        distance trend (comms/clearance/; pooled over every
                                        pass in <data/processed>/clearance/)
+    link_repeat.py <pass A> <pass B>   E4: W1 and KS distance between two passes' RTT, goodput
+      [--against JSON]                 up/down, RSSI, and RSSI on shared map cells; --against
+                                       prints the day/mode ratio (pass < 0.5) (comms/repeat/)
     sim_gap.py <processed pass> [...]   messages of 1 KB / 100 KB / 1.5 MB through the logged
                                        link (RTT/2 + size/goodput, lost in outages) against the
                                        synthetic channels: share within one frame (comms/sim_gap/)

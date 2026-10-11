@@ -65,6 +65,8 @@ datasets/            bags -> datasets for other tools
   replica_multiagent.py  a multi-robot pass as a ReplicaMultiagent scene for MAGiC-SLAM:
                      one common camera, frames in lockstep, poses in the shared map
 analysis/            measuring results; reads outputs, writes nothing back
+  headroom.py configs/headroom_terms.json [--traj ref.tum ...]  E1: every testbed error term
+                          against the fusion breaking points, like against like, log axis
   mapping/map_quality.py  surface thickness of a map cloud (noise / pose error / smear)
   mapping/scan_consistency.py  why walls are thick: noise floor, timing offset,
                      deskew, drift -- from ~200 scans of the bag + trajectory

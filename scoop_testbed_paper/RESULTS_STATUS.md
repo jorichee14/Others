@@ -56,7 +56,7 @@ moving, contended channel). Earlier pass at the same site: `coop2_0828`.
 
 | Question | Verdict from 24 Sep |
 |---|---|
-| 1 Precise | passes on every term except the cart (3.1 cm is 6x below 0.2 m, not 10x) |
+| 1 Precise | like against like at 1 m/s: measured clock 101x, map refinement 133x, repeatability 19x, detector 24x pass; cart 3.1 cm (6.5x) and strict clock bound 12 ms (8.3x) fall short of 10x (`headroom.py`) |
 | 2 Consistent | passes on the mobile_2 link; not on infra_1 |
 | 3 Faithful | no data |
 | 4 Repeatable | pose half yes (1.06 cm); mode half computable, not computed; day half no data |
@@ -72,10 +72,10 @@ moving, contended channel). Earlier pass at the same site: `coop2_0828`.
 |---|---|---|
 | LiDAR robot (mobile_1) vs boards on coop_2 | Q1, spec sheet | `board_table.py` on coop_2 |
 | p95 agent speed per pass | Q1 latency displacement | from reference tracks |
-| E1 headroom figure | Q1 | one plot script over the rows above |
-| Agent-to-AP clearance vs RSSI and goodput | Q2 | read AP position off the anchored map into `ap.yaml`; `link_clearance.py --all` |
+| E1 headroom figure | Q1 | `analysis/headroom.py configs/headroom_terms.json --traj <reference .tum files>`; fill the null terms as they arrive |
+| Agent-to-AP clearance vs RSSI and goodput | Q2 | fill `scoop_pipeline/configs/ap.yaml`; `link_clearance.py --all data/processed --ap-file scoop_pipeline/configs/ap.yaml` |
 | Pool E2 over survey_1 and coop_2; CI on rho; out-of-run fit | Q2 | `link_clearance.py --all`, small additions |
-| Mode distance survey_1 vs coop_2 (RTT, goodput, RSSI on grid) | Q4 mode half | write `link_repeat.py` |
+| Mode distance survey_1 vs coop_2 (RTT, goodput, RSSI on grid) | Q4 mode half | `analysis/comms/link_repeat.py survey_1 coop_2 --label-a survey --label-b coop` (written, self-tested) |
 | Cross-robot surface consistency on coop_2 | Q1, GT table | `scan_consistency.py` |
 | Sniffer bias | Q1, spec sheet | median of (sniffer receive - mobile_2 send) if the sender logged its stamp; else from the field session |
 | Best-fit synthetic baseline for E5 | Q5 | fit constant / Binomial delay to measured delays in `sim_gap.py` |

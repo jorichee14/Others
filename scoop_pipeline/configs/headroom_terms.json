@@ -1,0 +1,23 @@
+{
+  "_comment": "E1 Headroom terms. Lengths in m, times in s (converted at the agent speed: pass --traj to use the p95 of the reference tracks, else speed_mps). null = not yet measured; the tool lists it as missing. Fill from the 24 Sep passes; sources name the pass.",
+  "speed_mps": 1.0,
+  "breaking_points": [
+    {"name": "pose: late fusion falls below ego-only (0.2 m)", "m": 0.2, "source": "OpenCOOD / OPV2V pose-noise study"},
+    {"name": "delay: one LiDAR frame (100 ms) as displacement", "s": 0.1, "source": "every fusion method below ego-only at 100 ms; stated as speed x delay"}
+  ],
+  "terms": [
+    {"name": "clock offset, measured (0.99 ms)", "s": 0.00099, "source": "coop_2, ntp_analysis.py"},
+    {"name": "clock offset, strict chrony bound (12 ms)", "s": 0.012, "source": "coop_2, ntp_analysis.py"},
+    {"name": "sniffer clock bias", "s": null, "source": "TODO: median of sniffer receive - mobile_2 send stamp"},
+    {"name": "map refinement, final pose correction", "m": 0.0015, "source": "mapping_A, 02_refine_poses.py"},
+    {"name": "map repeatability, walls, four weeks apart", "m": 0.0106, "source": "mapping_A vs earlier map, map_quality.py"},
+    {"name": "board detector vs mapping pipeline (ZED)", "m": 0.0081, "source": "board_detect.py"},
+    {"name": "board detector vs mapping pipeline (RealSense)", "m": 0.0083, "source": "board_detect.py"},
+    {"name": "LiDAR robot vs held-out boards", "m": null, "source": "TODO on coop_2 (board_table.py); 0.0100 on coop2_0828"},
+    {"name": "RGB-D cart vs held-out boards, median", "m": 0.031, "source": "coop_2, board_table.py"},
+    {"name": "LiDAR-camera extrinsic, held-out boards", "m": null, "source": "TODO: reprojection residual per range"},
+    {"name": "radar reflector residual, mobile", "m": null, "source": "TODO: radar_camera_calibration on held-out positions"},
+    {"name": "radar reflector residual, mast", "m": null, "source": "TODO"},
+    {"name": "control distances, map minus rangefinder", "m": null, "source": "TODO: per site"}
+  ]
+}

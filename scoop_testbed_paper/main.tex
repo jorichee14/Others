@@ -821,12 +821,18 @@ is \SI{1.2}{\centi\metre}. The RGB-D cart sits in the LiDAR frame to
 \SI{3.1}{\centi\metre} median against held-out boards; the LiDAR
 robot's own frame converges to \SI{0.15}{\centi\metre} and
 reproduces an earlier map to \SI{1.06}{\centi\metre}; the board
-detector reproduces the pipeline to \SI{8}{\milli\metre}. The
-largest term, the cart's \SI{3.1}{\centi\metre}, is 6$\times$ below
-the \SI{0.2}{\metre} pose breaking point, and every other term is
-more than 15$\times$ below it, so the criterion passes on every term
-except the cart, where it is met at 6$\times$ rather than 10$\times$
-and is reported as such. \emph{Remaining.} The LiDAR robot's board
+detector reproduces the pipeline to \SI{8}{\milli\metre}. Each
+term is judged against the breaking point of its own kind: length terms
+against the \SI{0.2}{\metre} pose point, time terms against one
+LiDAR frame at \SI{1}{\metre\per\second}, \SI{0.1}{\metre}. The
+measured clock offset is 101$\times$ below its point; map refinement,
+map repeatability, and the board detector are 133$\times$, 19$\times$,
+and 24$\times$ below theirs. Two terms fall short of 10$\times$ and are
+reported as such: the cart's \SI{3.1}{\centi\metre} is 6.5$\times$
+below the pose point, and the strict \SI{12}{\milli\second} chrony
+bound is 8.3$\times$ below one frame, which is why the paper rests the
+clock guarantee on the measured offset and carries the bound only as a
+worst case. \emph{Remaining.} The LiDAR robot's board
 residual on \texttt{coop\_2} (tool exists, not yet run), the radar
 reflector residuals, the sniffer bias, and the measured p95 agent
 speed that fixes the latency displacement; with those, the final

@@ -1,0 +1,10 @@
+# Access-point position per pass, in that pass's anchored map frame (m), for
+#   python scoop_pipeline/analysis/comms/link_clearance.py --all data/processed --ap-file scoop_pipeline/configs/ap.yaml
+# Keys: "<date>/<pass>", or "<pass>", or "default". The AP is fixed per site;
+# the MIRC map contains it as structure, so read x y z off the anchored map
+# (e.g. in the comms_map top view) and fill the numbers below.
+# Units: metres. Height z matters for the Fresnel clearance; measure it.
+#
+# 20260924/survey_1: [TODO_x, TODO_y, TODO_z]
+# 20260924/coop_2:   [TODO_x, TODO_y, TODO_z]
+# default:           [TODO_x, TODO_y, TODO_z]
