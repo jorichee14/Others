@@ -43,6 +43,13 @@ def cam_pose(i, k):
     return T
 
 
+def gt_pose(i, k):
+    """The ground truth: the odometry's camera, 1 m further along x and a little higher."""
+    T = cam_pose(i, k).copy()
+    T[:3, 3] += [1.0, 0.0, 0.05]
+    return T
+
+
 def make_export(d):
     os.makedirs(d)
     tgt = mc.Intrinsics(50.0, 50.0, 31.5, 23.5, 64, 48, [0.0] * 4, None)
@@ -176,6 +183,40 @@ def main():
             f.append("launch: visualizer group wrong: %s" % g)
         elif {"name": "use_sim_time", "value": "true"} not in [c.get("set_parameter") for c in g[0]["children"]]:
             f.append("launch: visualizer and rviz not on sim time")
+        # --poses gt: /tf from gt_r<i>.tum (offset from the odometry), a frame without one skipped
+        exg = os.path.join(tmp, "datasets", "swarm_slam", "pass_g")
+        make_export(exg)
+        for i in (0, 1):
+            with open(os.path.join(exg, "gt_r%d.tum" % i), "w") as fh:
+                for k in range(N):
+                    if i == 1 and k == 5:
+                        continue
+                    fh.write(mc.tum_line(T0 + k * 100_000_000 + i * 1_000_000, gt_pose(i, k)) + "\n")
+        rg = H.convert(exg, poses="gt")
+        if rg["out"] != os.path.join(tmp, "datasets", "hydra", "pass_g_gt"):
+            f.append("--poses gt out %s" % rg["out"])
+        for i in (0, 1):
+            k, err = 0, 0.0
+            for t, m in records(os.path.join(rg["out"], "bag_r%d" % i)):
+                if t != "/tf":
+                    continue
+                tf = {(x.header.frame_id, x.child_frame_id): x
+                      for x in ts.deserialize_cdr(m.data, "tf2_msgs/msg/TFMessage").transforms}
+                x_ob = tf[("r%d/odom" % i, "r%d/base" % i)]
+                x_bc = tf[("r%d/base" % i, "r%d/camera" % i)]
+                kk = (mc.stamp_ns(x_ob) - T0 - i * 1_000_000) // 100_000_000
+
+                def T_of(x):
+                    tr, q = x.transform.translation, x.transform.rotation
+                    return mc.xyzq_to_T([tr.x, tr.y, tr.z, q.x, q.y, q.z, q.w])
+                err = max(err, np.abs(T_of(x_ob) @ T_of(x_bc) - gt_pose(i, kk)).max())
+                k += 1
+            want = N - (1 if i == 1 else 0)
+            if k != want or not err < 1e-6:
+                f.append("--poses gt r%d: %d tf of %d, off by %.2e" % (i, k, want, err))
+        rep = open(os.path.join(rg["out"], "report.txt")).read()
+        if "ground truth" not in rep or "1 frames without a pose" not in rep:
+            f.append("--poses gt report: %s" % rep)
     except Exception:                                              # noqa: BLE001
         import traceback
         f.append(traceback.format_exc())

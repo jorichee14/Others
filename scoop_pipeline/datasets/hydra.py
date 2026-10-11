@@ -5,7 +5,7 @@ of the same pass, so both methods get the same frames, the same odometry and
 the same start in map.
 
     python scoop_pipeline/datasets/hydra.py <swarm_slam export dir> [<out dir>]
-        [--robots 0 1] [--no-mesh] [--configs-only]
+        [--robots 0 1] [--poses odom|gt] [--no-mesh] [--configs-only]
 
 Writes <out> (default: next to the export, datasets/hydra/<name>):
 
@@ -34,6 +34,11 @@ Writes <out> (default: next to the export, datasets/hydra/<name>):
                   (hydra_visualizer + rviz on the scene-graph stream)
   gt_r<i>.tum     the colour camera in map (the export's), for the evaluation
   report.txt
+
+--poses gt: the camera's pose in /tf is the ground truth (the export's
+gt_r<i>.tum, /<robot>/global_pose) instead of the export's odometry, so
+Hydra maps on the correct poses (a frame without one gets no /tf); the
+output goes to datasets/hydra/<name>_gt by default.
 
 --configs-only: rewrite the configs and the launch file of an existing
 output, its bags untouched.
@@ -254,12 +259,24 @@ def body_T_camera():
     return T
 
 
-def convert(export, out=None, robots=None, mesh=True, configs_only=False):
+def read_gt(path):
+    """{t in us: T (4x4)} from a TUM file (t x y z qx qy qz qw, seconds)."""
+    out = {}
+    for ln in open(path):
+        v = ln.split()
+        if len(v) == 8 and not ln.startswith("#"):
+            out[int(round(float(v[0]) * 1e6))] = mc.xyzq_to_T([float(x) for x in v[1:8]])
+    return out
+
+
+def convert(export, out=None, robots=None, mesh=True, configs_only=False, poses="odom"):
     export = os.path.abspath(os.path.expanduser(export))
     src = os.path.join(export, "bag")
     if not os.path.isdir(src):
         raise mc.ConvertError(f"no {src}: run datasets/swarm_slam.py first")
-    out = os.path.abspath(os.path.expanduser(out or default_out(export)))
+    if poses not in ("odom", "gt"):
+        raise mc.ConvertError(f"poses {poses!r}: odom or gt")
+    out = os.path.abspath(os.path.expanduser(out or (default_out(export) + ("_gt" if poses == "gt" else ""))))
     reader = B.open_bag(src)
     schemas = B.topic_schemas(reader)
     have = sorted({int(m.group(1)) for t in schemas for m in [re.match(r"/r(\d+)/", t)] if m})
@@ -272,10 +289,17 @@ def convert(export, out=None, robots=None, mesh=True, configs_only=False):
         missing = [i for i in robots if not os.path.isdir(os.path.join(out, "bag_r%d" % i))]
         if missing:
             raise mc.ConvertError(f"--configs-only: no {out}/bag_r{missing[0]} (run without it first)")
-        return write_configs(export, out, robots, names, mesh, None)
+        return write_configs(export, out, robots, names, mesh, None, poses)
     for i in robots:
         if os.path.exists(os.path.join(out, "bag_r%d" % i)):
             raise mc.ConvertError(f"{out}/bag_r{i} exists: remove it first (or --configs-only)")
+    gts = {}
+    if poses == "gt":
+        for i in robots:
+            g = os.path.join(export, "gt_r%d.tum" % i)
+            if not os.path.exists(g):
+                raise mc.ConvertError(f"--poses gt: no {g}")
+            gts[i] = read_gt(g)
     ts = rosmsg.typestore()
     T_bc = body_T_camera()
     T_cb = np.linalg.inv(T_bc)
@@ -286,7 +310,7 @@ def convert(export, out=None, robots=None, mesh=True, configs_only=False):
         for k, v in TOPICS.items():
             route["/r%d/%s" % (i, k)] = (i, v)
         route["/r%d/odom" % i] = (i, "/tf")
-    counts = {i: {v: 0 for v in list(TOPICS.values()) + ["/tf"]} for i in robots}
+    counts = {i: {v: 0 for v in list(TOPICS.values()) + ["/tf", "no pose"]} for i in robots}
     for _, _, ch, msg in B.iter_mcap_records(reader, topics=list(route)):
         i, topic = route[ch.topic]
         w = writers[i]
@@ -294,11 +318,17 @@ def convert(export, out=None, robots=None, mesh=True, configs_only=False):
             w.write_raw(topic, schemas[ch.topic], msg.data, msg.log_time, msg.publish_time)
         else:
             o = ts.deserialize_cdr(msg.data, "nav_msgs/msg/Odometry")
-            p = o.pose.pose
-            T_oc = mc.xyzq_to_T([p.position.x, p.position.y, p.position.z,
-                                 p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w])
-            q_ob = mc.T_to_xyzq(T_oc @ T_cb)
             t = mc.stamp_ns(o)
+            if poses == "gt":
+                T_oc = gts[i].get(int(round(t / 1e3)))
+                if T_oc is None:
+                    counts[i]["no pose"] += 1
+                    continue
+            else:
+                p = o.pose.pose
+                T_oc = mc.xyzq_to_T([p.position.x, p.position.y, p.position.z,
+                                     p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w])
+            q_ob = mc.T_to_xyzq(T_oc @ T_cb)
             w.write("/tf", rosmsg.tf_message(
                 [("r%d/odom" % i, "r%d/base" % i, q_ob[:3], q_ob[3:]),
                  ("r%d/base" % i, "r%d/camera" % i, q_bc[:3], q_bc[3:])], t), msg.log_time)
@@ -308,14 +338,16 @@ def convert(export, out=None, robots=None, mesh=True, configs_only=False):
     for i in robots:
         if not counts[i]["/camera/color/image_raw"] or not counts[i]["/tf"]:
             raise mc.ConvertError(f"r{i}: no images or no odometry in {src}")
-    return write_configs(export, out, robots, names, mesh, counts)
+    return write_configs(export, out, robots, names, mesh, counts, poses)
 
 
-def write_configs(export, out, robots, names, mesh, counts):
+def write_configs(export, out, robots, names, mesh, counts, poses="odom"):
     """hydra_r<i>.yaml, the launch file, ground truth and report.txt (counts:
     the bags' message counts, None when the bags were not written now)."""
     src = os.path.join(export, "bag")
-    lines = ["source              : %s" % src, "scene-graph mesh    : %s" % ("on" if mesh else "off")]
+    lines = ["source              : %s" % src, "scene-graph mesh    : %s" % ("on" if mesh else "off"),
+             "poses               : %s" % ("ground truth (gt_r<i>.tum, /<robot>/global_pose)" if poses == "gt"
+                                           else "the export's odometry")]
     for i in robots:
         m = names.get(i, "r%d" % i)
         lo, hi = RANGE.get(m, (0.3, 5.0))
@@ -328,10 +360,11 @@ def write_configs(export, out, robots, names, mesh, counts):
             lines.append("r%d %-16s: configs rewritten (bag_r%d kept); depth %g-%g m" % (i, m, i, lo, hi))
         else:
             c = counts[i]
-            lines.append("r%d %-16s: %d colour, %d depth, %d camera_info, %d tf; depth %g-%g m; "
+            lines.append("r%d %-16s: %d colour, %d depth, %d camera_info, %d tf%s; depth %g-%g m; "
                          "frames r%d/odom -> r%d/base -> r%d/camera"
                          % (i, m, c["/camera/color/image_raw"], c["/camera/depth/image_rect"],
-                            c["/camera/color/camera_info"], c["/tf"], lo, hi, i, i, i))
+                            c["/camera/color/camera_info"], c["/tf"],
+                            " (%d frames without a pose)" % c["no pose"] if c["no pose"] else "", lo, hi, i, i, i))
     open(os.path.join(out, "scoop_hydra.launch.yaml"), "w").write(LAUNCH)
     report = "\n".join(lines) + "\n"
     open(os.path.join(out, "report.txt"), "w").write(report)
@@ -345,13 +378,15 @@ def main():
     ap.add_argument("export", help="a datasets/swarm_slam.py export (has bag/ and report.txt)")
     ap.add_argument("out", nargs="?", default=None)
     ap.add_argument("--robots", nargs="+", type=int, default=None, help="robot indices (default: all)")
+    ap.add_argument("--poses", choices=["odom", "gt"], default="odom",
+                    help="the camera pose in /tf: the export's odometry, or the ground truth (global_pose)")
     ap.add_argument("--no-mesh", action="store_true", help="send the scene graph without its mesh")
     ap.add_argument("--configs-only", action="store_true",
                     help="rewrite the configs and launch file of an existing output, not its bags")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        convert(a.export, a.out, a.robots, mesh=not a.no_mesh, configs_only=a.configs_only)
+        convert(a.export, a.out, a.robots, mesh=not a.no_mesh, configs_only=a.configs_only, poses=a.poses)
     except mc.ConvertError as e:
         sys.exit(str(e))
 
