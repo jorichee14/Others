@@ -3,7 +3,7 @@
 the cslam packages), RGB-D mode on every robot.
 
     python scoop_pipeline/datasets/swarm_slam.py <finalized merged bag> [<out dir>]
-        [--agents mobile_1 mobile_2] [--odom onboard|gt] [--rate 10] [--width 960]
+        [--agents mobile_1 mobile_2] [--odom vslam|onboard|gt] [--rate 10] [--width 960]
         [--anchor <session_anchor.json> | --no-anchor] [--anchor-cam MACHINE NAME]
 
 Writes <out> (default data/processed/<date>/<pass>/datasets/swarm_slam/<pass>_<date>):
@@ -30,6 +30,10 @@ back-projected and moved through /tf_static, or the D455 default when the bag
 has no link). Frames: a colour/depth pair at most every 1 / --rate s.
 
 Odometry (Swarm-SLAM takes it from outside, matched to the images by stamp):
+  vslam    (default) each robot's offline cuVSLAM of processing/vslam.py
+           (data/work/<date>/<pass>/<machine>/vslam/traj_vslam.txt, of the
+           base_frame its summary.json names), moved to the colour camera;
+           a robot without one: onboard
   onboard  what the robot ran: the ZED's /mobile_1/zed/odom, the RealSense
            robot's cuVSLAM /mobile_2/visual_slam/tracking/odometry, moved to
            the colour camera through /tf_static and interpolated to the image
@@ -222,8 +226,9 @@ class Robot:
             self.odom, self.T_bc, self.odom_src = self.gt, np.eye(4), spec["pose"] + " (ground truth)"
         else:
             topic = ODOM[machine]
-            msg = mc.first_msg(paths, topic)
             vs = os.path.join(work_dir or "", machine, "vslam", "traj_vslam.txt")
+            use_vs = odom == "vslam" and bool(work_dir) and os.path.exists(vs)
+            msg = None if use_vs else mc.first_msg(paths, topic)
             if msg is not None:
                 ts, pos, quat, frames = mc.load_poses(paths, topic)
                 child = msg.child_frame_id.lstrip("/")
@@ -231,8 +236,11 @@ class Robot:
                 src = topic
             elif work_dir and os.path.exists(vs):
                 # not recorded: the offline cuVSLAM of processing/vslam.py (T_odom_base)
-                self.odom, child, src = mc.PoseInterp.from_tum(vs), VSLAM_BASE, vs
-                log.info(f"{machine}: no {topic} in the bag: odometry from {vs}")
+                sj = os.path.join(os.path.dirname(vs), "summary.json")
+                child = (json.load(open(sj)).get("base_frame") if os.path.exists(sj) else None) or VSLAM_BASE
+                self.odom, src = mc.PoseInterp.from_tum(vs), vs
+                if not use_vs:
+                    log.info(f"{machine}: no {topic} in the bag: odometry from {vs}")
             else:
                 raise mc.ConvertError(f"{machine}: no messages on {topic} and no {vs} "
                                       "(processing/vslam.py), or use --odom gt")
@@ -308,7 +316,7 @@ def default_out(bag):
                         os.path.basename(RM.default_out(bag)))
 
 
-def convert(bag, out=None, *, agents=("mobile_1", "mobile_2"), odom="onboard", rate=10.0, width=960,
+def convert(bag, out=None, *, agents=("mobile_1", "mobile_2"), odom="vslam", rate=10.0, width=960,
             depth_min=0.2, depth_max=10.0, sync_tol_ms=20.0, checkpoint=None, depth_extrinsics=None,
             reorder_s=3.0, anchor="auto", anchor_cams=None):
     """anchor: a session_anchor.json, "auto" (the pass's, when the bag is in
@@ -395,7 +403,8 @@ def main():
     ap.add_argument("bag", help="the finalized merged bag (has /<robot>/global_pose)")
     ap.add_argument("out", nargs="?", default=None)
     ap.add_argument("--agents", nargs="+", default=["mobile_1", "mobile_2"], choices=sorted(ODOM))
-    ap.add_argument("--odom", choices=["onboard", "gt"], default="onboard")
+    ap.add_argument("--odom", choices=["vslam", "onboard", "gt"], default="vslam",
+                    help="vslam: the offline cuVSLAM where there is one, else onboard")
     ap.add_argument("--rate", type=float, default=10.0, help="most frames per second per robot")
     ap.add_argument("--width", type=int, default=960, help="image width (px), every robot")
     ap.add_argument("--checkpoint", default=None,

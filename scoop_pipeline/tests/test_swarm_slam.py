@@ -172,6 +172,31 @@ def main():
             err = max(err, np.abs(Tg - want).max())
         if not err < 1e-3:
             f.append("offline cuVSLAM odometry: off by %.4f" % err)
+        # mobile_1 has its onboard odometry and an offline cuVSLAM (of another base
+        # frame, named in its summary.json): --odom vslam (the default) takes the
+        # cuVSLAM, --odom onboard the topic
+        os.makedirs(os.path.join(w2, "mobile_1", "vslam"))
+        with open(os.path.join(w2, "mobile_1", "vslam", "traj_vslam.txt"), "w") as fh:
+            for k in range(int(RMT.DUR * 50) + 1):
+                t = RMT.T0 + k * S // 50
+                Tb = RMT.pose("mobile_1", t) @ np.linalg.inv(T_BC["mobile_1"])   # in map itself
+                fh.write(mc.tum_line(t, Tb) + "\n")
+        json.dump({"base_frame": BODY["mobile_1"]},
+                  open(os.path.join(w2, "mobile_1", "vslam", "summary.json"), "w"))
+        merge.merge_bags([b1, b3], os.path.join(w2, "merged_both"), log=lambda *_: None)
+        for mode, want_map in (("vslam", True), ("onboard", False)):
+            o4 = os.path.join(tmp, "swarm4_" + mode)
+            SS.convert(os.path.join(w2, "merged_both"), o4, rate=10.0, width=100, odom=mode)
+            err = 0.0
+            for m_ in mc.read(mc._paths(os.path.join(o4, "bag")), ["/r0/odom"]):
+                P = m_.ros_msg.pose.pose
+                Tg = mc.xyzq_to_T([P.position.x, P.position.y, P.position.z, P.orientation.x,
+                                   P.orientation.y, P.orientation.z, P.orientation.w])
+                Tm = RMT.pose("mobile_1", mc.stamp_ns(m_.ros_msg))
+                want = Tm if want_map else np.linalg.inv(T_MO["mobile_1"]) @ Tm
+                err = max(err, np.abs(Tg - want).max())
+            if not err < 1e-3:
+                f.append("--odom %s: mobile_1's odometry off by %.4f" % (mode, err))
         y = open(os.path.join(out, "scoop_rgbd.yaml")).read()
         for k in ('sensor_type: "rgbd"', "enable_logs: true", 'odom_topic: "odom"'):
             if k not in y:
