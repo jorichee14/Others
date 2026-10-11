@@ -1,0 +1,26 @@
+\begin{table}[t]
+\centering
+\caption{Q6 Is it unique? Pass: fills every column of
+Table~\ref{tab:capability} that no other platform fills together.}
+\label{tab:res_q6}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}>{\raggedright\arraybackslash}X l@{}}
+\toprule
+Capability & SCooP-iT / nearest other \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Answered}} \\
+Indoor, no mocap or GNSS reference & yes / CoPeD (estimator pose only) \\
+Heterogeneous agents incl.\ infrastructure & yes / CoPeD, TUMTraf-V2X \\
+Every pair's link measured on the sensors' clock & yes / CooperScene (C-V2X, per scene) \\
+Channel state (CSI) & yes / none \\
+Clock bound reported & yes / CooperScene (PTP, bound not given) \\
+Link replay into methods & yes / AutoCast, ROS-NetSim (simulated) \\
+Perception scoring against a reference & yes / CoPeD, V2V4Real (outdoor) \\
+Link geometry in the map frame (clearance) & yes / none \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Still needed}} \\
+Verify every cell against the cited paper & CooperScene replay and probe rate unknown \\
+\bottomrule
+\end{tabularx}
+\end{table}

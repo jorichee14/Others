@@ -790,7 +790,7 @@ behind the specification sheet of Table~\ref{tab:spec}. Each opens
 with its question and its pass criterion, fixed before the data were
 read, gives the answer the recordings in hand support, and states what
 remains to be collected. Table~\ref{tab:questions} summarizes all
-seven questions; Tables~\ref{tab:res_q1}--\ref{tab:res_q5} list, per
+seven questions; Tables~\ref{tab:res_q1}--\ref{tab:res_q7} list, per
 question, the terms answered and the terms still needed. Unless stated otherwise, numbers come from the
 24 September session at site 1 (MIRC 1F): the mapping pass
 \texttt{mapping\_A}, the survey pass \texttt{survey\_1} in which
@@ -800,7 +800,7 @@ in which both robots move and contend.
 \input{tables/spec}
 
 \input{tables/questions}
-% RA-L budget: the per-question result tables (tables/results_q1..q5.tex) are
+% RA-L budget: the per-question result tables (tables/results_q1..q7.tex) are
 % the working ledger; fold them into the spec sheet and the E1-E5 paragraphs
 % at camera-ready and drop the floats.
 
@@ -984,6 +984,23 @@ Detection-level consequences are reported in \cite{scoop_dataset}.
 \input{figures/simgap}
 
 \input{tables/results_q5}
+
+\subsection{Worth: Is It Unique, and Can Others Build It?}
+\label{sec:worth}
+The two remaining questions are answered outside the experiments.
+Uniqueness is the capability table of Sec.~\ref{sec:related}:
+SCooP-iT is the only platform that is indoor, heterogeneous, referenced
+without motion capture or GNSS, and measures every pair's link down to
+channel state with a reported clock bound and a replay path into
+methods; Table~\ref{tab:res_q6} lists the nearest platform per
+capability and what remains to verify. Reproducibility rests on the
+released pipeline, the spec sheet, and the bill of materials;
+Table~\ref{tab:res_q7} lists what is in hand and the bookkeeping still
+owed.
+
+\input{tables/results_q6}
+
+\input{tables/results_q7}
 
 %=======================================================================
 \section{Lessons Learned and Limitations}
