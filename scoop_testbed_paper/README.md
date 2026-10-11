@@ -1,6 +1,6 @@
-# SCooP-Bed: testbed paper (Paper A, split from the SCooP draft)
+# SCooP-iT: testbed paper (Paper A, split from the SCooP draft)
 
-SCooP-Bed: An Indoor Multi-Robot Testbed for Collaborative Perception over
+SCooP-iT: An Indoor Multi-Robot Testbed for Collaborative Perception over
 Measured Wireless Links. Target: RA-L (6 pages + 2 overlength).
 
 Structure follows `../scoop_paper/split/PAPER_A.md`; the experiments E1-E5

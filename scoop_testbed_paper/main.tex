@@ -1,6 +1,6 @@
 \documentclass[conference]{IEEEtran}
 \IEEEoverridecommandlockouts
-% Paper A: SCooP-Bed, the testbed paper split out of the SCooP draft.
+% Paper A: SCooP-iT, the testbed paper split out of the SCooP draft.
 % Target: RA-L (6 pages + 2 overlength). Structure follows
 % ../scoop_paper/split/PAPER_A.md; experiments E1-E5 follow
 % ../scoop_paper/split/EXPERIMENTS.md.
@@ -38,7 +38,7 @@
 
 \begin{document}
 
-\title{SCooP-Bed: An Indoor Multi-Robot Testbed for Collaborative Perception over Measured Wireless Links\\
+\title{SCooP-iT: An Indoor Testbed for Collaborative Perception over Measured Wireless Links\\
 
 \thanks{Identify applicable funding agency here. If none, delete this.}
 }
@@ -59,8 +59,8 @@ link is shared and contended, and there is no GNSS against which to
 check where a message landed, yet existing multi-robot testbeds treat
 the network as ideal, communication-aware systems do not score
 perception against ground truth, and cooperative-perception platforms
-are outdoor and simulate the link. We present SCooP-Bed, a
-heterogeneous indoor testbed of three agent classes, a LiDAR robot, an
+are outdoor and simulate the link. We present SCooP-iT, the SCooP Indoor
+Testbed, a heterogeneous testbed of three agent classes, a LiDAR robot, an
 RGB-D cart, and camera--radar infrastructure masts, in which the state
 of every inter-agent link is recorded on the sensors' clock: passive
 link state at \SI{5}{\hertz}, round-trip time at \SI{100}{\hertz},
@@ -79,7 +79,7 @@ other, \todo{that replay reproduces live arrivals}, that a load mode
 reproduces its link on another day, and that under contention the
 delay moves from about \SI{3}{\milli\second} to
 \SIrange{60}{109}{\milli\second}, crossing one LiDAR frame, which the
-synthetic channels of prior benchmarks do not capture. SCooP-Bed is
+synthetic channels of prior benchmarks do not capture. SCooP-iT is
 the acquisition platform of the SCooP dataset \cite{scoop_dataset}.
 \end{abstract}
 
@@ -120,7 +120,7 @@ as V2V4Real \cite{v2v4real}, V2X-Real \cite{v2xreal}, TUMTraf-V2X
 \cite{zimmer2024tumtrafv2x}, and CoPeD \cite{coped} are outdoor or
 GNSS-referenced, and they idealize or simulate the link.
 
-This paper presents SCooP-Bed, a testbed built so that any
+This paper presents SCooP-iT, the SCooP Indoor Testbed, built so that any
 collaborative method can be run against the link the agents actually
 had, and scored against a pose reference that exists for every scan of
 every agent. Its contributions are:
@@ -147,7 +147,7 @@ Under contention, the measured delay moves from about
 \SI{3}{\milli\second} to \SIrange{60}{109}{\milli\second}, which
 crosses one LiDAR frame. Only a testbed that records the link can show
 which messages cross it. Sec.~\ref{sec:experiments} establishes, with
-five experiments, that SCooP-Bed is precise, consistent,
+five experiments, that SCooP-iT is precise, consistent,
 \todo{faithful}, repeatable, and necessary. The testbed releases no
 sequences, labels, or leaderboard; those belong to the SCooP dataset
 \cite{scoop_dataset}, which was recorded on it.
@@ -206,7 +206,7 @@ evaluates online fusion over a live Wi-Fi link, and CooperScene
 \cite{cooperscene} releases per-scene C-V2X latency, throughput, and
 loss traces. All are outdoor, GNSS-referenced, and record the link at
 the transport level without channel state.
-Table~\ref{tab:capability} compares the capabilities. Only SCooP-Bed
+Table~\ref{tab:capability} compares the capabilities. Only SCooP-iT
 fills every column; CooperScene is the nearest case and differs in
 setting, pose reference, CSI, and replay.
 
@@ -227,7 +227,7 @@ with the instrument and are validated by sparse measured landmark
 distances in the single-agent case \cite{incrowdvi} or by internal
 consistency alone in the multi-robot case \cite{envodat}; independent
 traversals can converge to the same wrong geometry in featureless
-corridors. SCooP-Bed combines an offline SLAM-derived map, scan-to-map
+corridors. SCooP-iT combines an offline SLAM-derived map, scan-to-map
 registration, and map-posed fiducials, and validates the result against
 control distances and repeated passes that never enter it
 (Sec.~\ref{sec:gt}).
@@ -235,7 +235,7 @@ control distances and repeated passes that never enter it
 %=======================================================================
 \section{Testbed Design}
 \label{sec:design}
-SCooP-Bed consists of two mobile agents and three infrastructure
+SCooP-iT consists of two mobile agents and three infrastructure
 agents connected to a single access point, with an additional host
 that extracts channel state. Fig.~\ref{fig:overview} shows a recording
 scenario with the agents placed in the map frame and the measured
@@ -283,7 +283,7 @@ capacity is \numrange{275}{282}\,Mbit/s uplink and
 
 \subsection{Design Decisions}
 \label{sec:decisions}
-Four decisions make SCooP-Bed a testbed rather than a hardware list.
+Four decisions make SCooP-iT a testbed rather than a hardware list.
 
 \emph{The link is measured, not used to carry sensor data.} Each unit
 records locally; no sensor stream traverses the wireless network
@@ -704,7 +704,7 @@ Pantheon \cite{yan2018pantheon}; robotics and network co-simulators
 couple a robot simulator with a simulated network
 \cite{calvofullana2021rosnetsim,sommer2011veins,xu2021opencda};
 collaborative-perception benchmarks simulate a link for perception.
-SCooP-Bed replays the measured robot link into perception, on the same
+SCooP-iT replays the measured robot link into perception, on the same
 clock as the sensors. The fluid model of Eq.~\eqref{eq:replay} is
 chosen because the iperf windows give goodput, not per-packet delivery
 opportunities as in Mahimahi; E3 measures how much accuracy the simpler
@@ -713,7 +713,7 @@ model loses.
 \input{figures/replay}
 
 %=======================================================================
-\section{Experiments: Is SCooP-Bed a Trustworthy Instrument?}
+\section{Experiments: Is SCooP-iT a Trustworthy Instrument?}
 \label{sec:experiments}
 A testbed paper is judged on whether readers can trust it as an
 instrument. Five experiments each back one property of that trust, and
@@ -881,7 +881,7 @@ hours, once final.}
 %=======================================================================
 \section{Conclusion}
 \label{sec:conclusion}
-SCooP-Bed gives a heterogeneous indoor robot team one clock, bounded to
+SCooP-iT gives a heterogeneous indoor robot team one clock, bounded to
 \unsure{about \SI{70}{\micro\second}}, one metric frame, validated to
 \SI{1.06}{\centi\metre} across independent passes without motion
 capture or GNSS, and a record of every inter-agent link from passive
@@ -890,7 +890,7 @@ in the loop for any collaborative method \todo{validated to within one
 receiver frame}. Under contention the real link moves the delay across
 one LiDAR frame, which no synthetic channel of prior benchmarks
 reproduces. Next steps are more agents, other radios, multi-antenna
-CSI, and a wired CSI host. The sequences recorded on SCooP-Bed, their
+CSI, and a wired CSI host. The sequences recorded on SCooP-iT, their
 labels, and the benchmark are released as the SCooP dataset
 \cite{scoop_dataset}.
 

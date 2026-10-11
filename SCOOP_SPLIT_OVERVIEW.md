@@ -5,7 +5,7 @@ untouched). Two self-contained LaTeX folders were created:
 
 | Folder | Paper | Role |
 |---|---|---|
-| `scoop_testbed_paper/` | SCooP-Bed: An Indoor Multi-Robot Testbed for Collaborative Perception over Measured Wireless Links | Paper A, RA-L testbed paper (the instrument, its guarantees, and the proof it can be trusted) |
+| `scoop_testbed_paper/` | SCooP-iT: An Indoor Testbed for Collaborative Perception over Measured Wireless Links | Paper A, RA-L testbed paper (the instrument, its guarantees, and the proof it can be trusted) |
 | `scoop_dataset_paper/` | SCooP: A Real-World Indoor Multi-Agent Dataset for Collaborative SLAM and Perception over Measured Wireless Links | Paper B, dataset / benchmark paper (what was recorded, how it is labeled and released, what the benchmark shows) |
 
 Each cites the other (`\cite{scoop_testbed}` / `\cite{scoop_dataset}`; placeholder
@@ -17,7 +17,7 @@ contributions, summaries, lessons learned, conclusions) was written new.
 
 ## 1. Testbed paper, Paper A (`scoop_testbed_paper/main.tex`)
 
-**Title.** SCooP-Bed: An Indoor Multi-Robot Testbed for Collaborative
+**Title.** SCooP-iT (SCooP Indoor Testbed): An Indoor Testbed for Collaborative
 Perception over Measured Wireless Links. Follows the plan already on the branch
 (`scoop_paper/split/PAPER_A.md`, `EXPERIMENTS.md`).
 
