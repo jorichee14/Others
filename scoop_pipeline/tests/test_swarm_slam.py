@@ -10,10 +10,14 @@ It must write one bag with /r0 and /r1 in cslam's RGB-D layout: colour at
 --width with matching intrinsics and no distortion, depth registered to it
 (3 m to the wall for both robots), and odometry that is the colour camera's
 pose in the robot's odom frame at the image stamp; frames at most --rate;
-ground truth (map) per frame; the cslam config.
+ground truth (map) per frame; the cslam config. With a session anchor
+(03's session_anchor.json: mobile_1's colour camera, mobile_2's body frame,
+each at a moment of its run) the odometry must start in map: the colour
+camera's pose in map at every frame.
 
     python scoop_pipeline/tests/test_swarm_slam.py
 """
+import json
 import os
 import shutil
 import sys
@@ -123,6 +127,28 @@ def main():
             if len(gt) == 0 or np.abs(gt[:, 1] - np.array([RMT.pose(m, int(round(t * S)))[0, 3]
                                                           for t in gt[:, 0]])).max() > 1e-3:
                 f.append("%s: ground truth not the camera in map" % ns)
+        # the session anchor: odometry placed in map at each robot's start
+        cams = {}
+        for m, nm, fr, Tx in (("mobile_1", "zed", CAM["mobile_1"], np.eye(4)),
+                              ("mobile_2", "realsense", BODY["mobile_2"], np.linalg.inv(T_BC["mobile_2"]))):
+            t_a = RMT.T0 + int(0.4 * S)
+            q = mc.T_to_xyzq(RMT.pose(m, t_a) @ Tx)
+            cams[nm] = {"cam_frame": fr, "dwell_t_end": t_a / S,
+                        "map_to_cam": {"parent": "map", "child": nm + "_pose",
+                                       "xyz": list(q[:3]), "qxyzw": list(q[3:])}}
+        sa = os.path.join(tmp, "session_anchor.json")
+        json.dump({"cameras": cams}, open(sa, "w"))
+        out3 = os.path.join(tmp, "swarm3")
+        SS.convert(bag, out3, rate=10.0, width=100, anchor=sa, anchor_cams={"mobile_2": "realsense"})
+        for i, m in enumerate(SS.ODOM):
+            err = 0.0
+            for m_ in mc.read(mc._paths(os.path.join(out3, "bag")), ["/r%d/odom" % i]):
+                P = m_.ros_msg.pose.pose
+                Tg = mc.xyzq_to_T([P.position.x, P.position.y, P.position.z, P.orientation.x,
+                                   P.orientation.y, P.orientation.z, P.orientation.w])
+                err = max(err, np.abs(Tg - RMT.pose(m, mc.stamp_ns(m_.ros_msg))).max())
+            if not err < 1e-3:
+                f.append("r%d: anchored odometry off the camera in map by %.4f" % (i, err))
         # mobile_2's odometry not recorded: the offline cuVSLAM file next to the bag
         w2 = os.path.join(tmp, "w2")
         os.makedirs(os.path.join(w2, "mobile_2", "vslam"))

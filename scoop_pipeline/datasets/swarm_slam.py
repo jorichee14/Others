@@ -4,6 +4,7 @@ the cslam packages), RGB-D mode on every robot.
 
     python scoop_pipeline/datasets/swarm_slam.py <finalized merged bag> [<out dir>]
         [--agents mobile_1 mobile_2] [--odom onboard|gt] [--rate 10] [--width 960]
+        [--anchor <session_anchor.json> | --no-anchor] [--anchor-cam MACHINE NAME]
 
 Writes <out> (default data/processed/<date>/<pass>/datasets/swarm_slam/<pass>_<date>):
 
@@ -13,7 +14,8 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/swarm_slam/<pass>_<d
                     /r<i>/color/camera_info                its intrinsics, no distortion
                     /r<i>/aligned_depth_to_color/image_raw 16UC1 mm, in the colour camera
                     /r<i>/odom                             nav_msgs/Odometry: the colour
-                                                           camera's pose in the robot's odom
+                                                           camera's pose, its odometry
+                                                           started at the session anchor
                   stamped as recorded (play it with --clock)
   scoop_rgbd.yaml the cslam config: realsense_rgbd.yaml's, with logs on (results/)
                   and the CosPlace weights at <out>/resnet18_64.pth
@@ -35,7 +37,15 @@ Odometry (Swarm-SLAM takes it from outside, matched to the images by stamp):
            cuVSLAM of processing/vslam.py (data/work/<date>/<pass>/<machine>/
            vslam/traj_vslam.txt, of camera_link), when it is there
   gt       the ground truth itself (a check of the setup: no drift to correct)
+
+Start: each robot's odometry is placed in map where 03_init_from_boards put
+its camera at the start (data/processed/<date>/<pass>/frames/
+session_anchor.json, or --anchor): the camera of cameras[<name>] whose
+cam_frame is the robot's colour frame (or --anchor-cam MACHINE NAME), at its
+dwell_t_end. Every robot's odometry then begins in the one map frame, as the
+robots were placed on the boards. --no-anchor: each in its own odom frame.
 """
+import json
 import argparse
 import heapq
 import logging
@@ -109,6 +119,42 @@ CONFIG = """/**:
 """
 
 
+def anchor_path(bag):
+    """data/processed/<date>/<pass>/frames/session_anchor.json of a bag below
+    data/{raw,work,processed}/<date>/<pass>/, or None."""
+    dp = mc.pass_of(bag)
+    if dp is None:
+        return None
+    date, pas = dp
+    p = os.path.abspath(os.path.expanduser(bag[0] if isinstance(bag, (list, tuple)) else bag))
+    root = p[:p.rindex(os.sep + date + os.sep + pas)]
+    root = root[:root.rindex(os.sep)]
+    return os.path.join(root, "processed", date, pas, "frames", "session_anchor.json")
+
+
+def anchor_of(cams, machine, cf, edges, name=None):
+    """(T_map_cf, t_ns, name): where 03 put this robot's colour camera cf at
+    the start, from the session anchor's cameras (the one whose cam_frame is
+    cf, or `name`)."""
+    have = {n: r.get("cam_frame") for n, r in cams.items() if "map_to_cam" in r}
+    if name is None:
+        hits = [n for n, f in have.items() if f == cf]
+        if len(hits) != 1:
+            raise mc.ConvertError(f"{machine}: {len(hits)} session-anchor cameras on its colour frame {cf} "
+                                  f"(have {have}): give --anchor-cam {machine} <name>, or --no-anchor")
+        name = hits[0]
+    if name not in have:
+        raise mc.ConvertError(f"{machine}: no session-anchor camera {name} (have {have})")
+    rec = cams[name]
+    T_cam_cf = mc.lookup_static(edges, have[name], cf) if have[name] else None
+    if T_cam_cf is None:
+        raise mc.ConvertError(f"{machine}: session-anchor camera {name} ({have[name]}) and the colour "
+                              f"frame {cf} are not connected in /tf_static")
+    m = rec["map_to_cam"]
+    T = mc.xyzq_to_T(list(m["xyz"]) + list(m["qxyzw"])) @ T_cam_cf
+    return T, int(round(float(rec["dwell_t_end"]) * 1e9)), name
+
+
 def T_msg():
     from scoop import rosmsg
     return rosmsg
@@ -155,7 +201,8 @@ def odometry(T_oc, frame, child, t):
 
 
 class Robot:
-    def __init__(self, i, machine, paths, edges, width, odom, depth_extrinsic=None, work_dir=None):
+    def __init__(self, i, machine, paths, edges, width, odom, depth_extrinsic=None, work_dir=None,
+                 anchor=None, anchor_cam=None):
         spec = dict(RM.AGENTS[machine])
         self.a = RM.Agent(i, machine, spec, paths, paths, edges, depth_extrinsic)
         self.i, self.machine, self.spec = i, machine, spec
@@ -191,6 +238,18 @@ class Robot:
                 raise mc.ConvertError(f"{machine}: the odometry's frame {child} and the colour frame {cf} "
                                       "are not connected in /tf_static (try --odom gt to check the rest)")
             self.odom_src = f"{src} ({child} -> {cf})"
+        # the odometry's frame in map: where the session anchor put the camera
+        self.T_mo, self.start = np.eye(4), "own odom frame"
+        if anchor is not None and odom != "gt":
+            T_map_cf, t_a, name = anchor_of(anchor, machine, cf, edges, anchor_cam)
+            t = int(np.clip(t_a, self.odom.ts[0], self.odom.ts[-1]))
+            To = self.odom.at(t)
+            if To is None:
+                t = int(self.odom.ts[np.argmin(np.abs(self.odom.ts - t))])
+                To = self.odom.at(t)
+            self.T_mo = T_map_cf @ np.linalg.inv(To @ self.T_bc)
+            self.start = "map, at session-anchor camera %s (t %.3f%s)" % (
+                name, t_a * 1e-9, "" if t == t_a else ", odometry from %.3f" % (t * 1e-9))
         self.last = None
         self.gt_lines, self.n, self.drop = [], 0, {"no odom": 0}
 
@@ -213,7 +272,7 @@ class Robot:
         return [(ct, ns + "/color/image_raw", image(bgr, "bgr8", cam, ct)),
                 (ct, ns + "/color/camera_info", camera_info(self.tgt, cam, ct)),
                 (ct, ns + "/aligned_depth_to_color/image_raw", image(mm, "16UC1", cam, ct)),
-                (ct, ns + "/odom", odometry(To @ self.T_bc, "r%d/odom" % self.i, cam, ct))]
+                (ct, ns + "/odom", odometry(self.T_mo @ To @ self.T_bc, "r%d/odom" % self.i, cam, ct))]
 
 
 def pairs(paths, robots, tol_ns):
@@ -248,7 +307,9 @@ def default_out(bag):
 
 def convert(bag, out=None, *, agents=("mobile_1", "mobile_2"), odom="onboard", rate=10.0, width=960,
             depth_min=0.2, depth_max=10.0, sync_tol_ms=20.0, checkpoint=None, depth_extrinsics=None,
-            reorder_s=3.0):
+            reorder_s=3.0, anchor="auto", anchor_cams=None):
+    """anchor: a session_anchor.json, "auto" (the pass's, when the bag is in
+    the data layout), or None (each robot in its own odom frame)."""
     from scoop.bagwrite import BagWriter
     paths = mc._paths(bag)
     out = os.path.abspath(os.path.expanduser(out or default_out(bag)))
@@ -259,7 +320,18 @@ def convert(bag, out=None, *, agents=("mobile_1", "mobile_2"), odom="onboard", r
     edges = mc.build_tf_static(paths)
     b = os.path.abspath(bag[0] if isinstance(bag, (list, tuple)) else bag)
     work_dir = os.path.dirname(os.path.dirname(b) if os.path.isfile(b) else b)   # data/work/<date>/<pass>
-    robots = [Robot(i, m, paths, edges, width, odom, (depth_extrinsics or {}).get(m), work_dir)
+    if anchor == "auto":
+        anchor = anchor_path(bag)
+        if anchor is None:
+            log.info("the bag is not in data/<stage>/<date>/<pass>: no session anchor, each robot "
+                     "starts in its own odom frame")
+    cams = None
+    if anchor and odom != "gt":
+        if not os.path.exists(anchor):
+            raise mc.ConvertError(f"no {anchor} (03_init_from_boards): give --anchor, or --no-anchor")
+        cams = json.load(open(anchor)).get("cameras", {})
+    robots = [Robot(i, m, paths, edges, width, odom, (depth_extrinsics or {}).get(m), work_dir,
+                    cams, (anchor_cams or {}).get(m))
               for i, m in enumerate(agents)]
     for r in robots:
         log.info("r%d = %s: %dx%d f %.1f; odometry %s" % (r.i, r.machine, r.tgt.width, r.tgt.height,
@@ -301,12 +373,13 @@ def convert(bag, out=None, *, agents=("mobile_1", "mobile_2"), odom="onboard", r
                   "logs": os.path.join(out, "results")})
     lines = ["bag                 : %s" % bag_out,
              "robots              : %s" % ", ".join("r%d = %s" % (r.i, r.machine) for r in robots),
-             "odometry            : %s" % odom]
+             "odometry            : %s" % odom,
+             "session anchor      : %s" % (anchor if cams is not None else "-")]
     for r in robots:
         lines.append("r%d %-16s: %d frames at <= %g Hz, %dx%d fx %.2f fy %.2f cx %.1f cy %.1f; "
-                     "odometry %s; dropped %s; %d ground-truth poses"
+                     "odometry %s, starting in %s; dropped %s; %d ground-truth poses"
                      % (r.i, r.machine, r.n, rate, r.tgt.width, r.tgt.height, r.tgt.fx, r.tgt.fy,
-                        r.tgt.cx, r.tgt.cy, r.odom_src, r.drop, len(r.gt_lines)))
+                        r.tgt.cx, r.tgt.cy, r.odom_src, r.start, r.drop, len(r.gt_lines)))
     report = "\n".join(lines) + "\n"
     open(os.path.join(out, "report.txt"), "w").write(report)
     log.info("\n" + report)
@@ -327,12 +400,18 @@ def main():
                          "slam/run_swarm_slam.sh fetches)")
     ap.add_argument("--depth-extrinsic", nargs=8, action="append", default=[],
                     metavar=("MACHINE", "X", "Y", "Z", "QX", "QY", "QZ", "QW"))
+    ap.add_argument("--anchor", default="auto",
+                    help="03's session_anchor.json (default: data/processed/<date>/<pass>/frames/)")
+    ap.add_argument("--no-anchor", action="store_true", help="each robot in its own odom frame")
+    ap.add_argument("--anchor-cam", nargs=2, action="append", default=[], metavar=("MACHINE", "NAME"),
+                    help="the session-anchor camera of a robot (default: the one on its colour frame)")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         convert(a.bag, a.out, agents=a.agents, odom=a.odom, rate=a.rate, width=a.width,
                 checkpoint=a.checkpoint,
-                depth_extrinsics={e[0]: [float(v) for v in e[1:]] for e in a.depth_extrinsic})
+                depth_extrinsics={e[0]: [float(v) for v in e[1:]] for e in a.depth_extrinsic},
+                anchor=None if a.no_anchor else a.anchor, anchor_cams=dict(a.anchor_cam))
     except mc.ConvertError as e:
         sys.exit(str(e))
 

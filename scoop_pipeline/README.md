@@ -59,7 +59,8 @@ map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
 datasets/            bags -> datasets for other tools
   mcap_convert.py    replica (RGB + lidar depth), mcd, mcgs (standalone)
   swarm_slam.py      a multi-robot pass as Swarm-SLAM input (RGB-D per robot, /r<i>,
-                     onboard or ground-truth odometry) + config; slam/run_swarm_slam.sh runs it
+                     onboard or ground-truth odometry, started where 03's session_anchor.json
+                     put each robot) + config; slam/run_swarm_slam.sh runs it
   replica_multiagent.py  a multi-robot pass as a ReplicaMultiagent scene for MAGiC-SLAM:
                      one common camera, frames in lockstep, poses in the shared map
 analysis/            measuring results; reads outputs, writes nothing back
