@@ -175,7 +175,7 @@ launch:
   - arg: {name: model_config_path, default: $(find-pkg-share semantic_inference_ros)/config/models/ade20k-efficientvit_seg_l2.yaml}
   - arg: {name: labelspace_name, default: ade20k_mit}
   - arg: {name: visualize, default: 'false', description: hydra_visualizer + rviz on hydra/backend/dsg}
-  - arg: {name: exit_after_clock, default: 'true', description: stop when the bag's clock stops, then save}
+  - arg: {name: exit_after_clock, default: 'true', description: stop and save when the bag clock stops}
 
   - node:
       pkg: semantic_inference_ros

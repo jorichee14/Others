@@ -162,6 +162,10 @@ def main():
             pass
         doc = yaml.safe_load(open(os.path.join(out, "scoop_hydra.launch.yaml")))
         acts = doc["launch"]
+        for a_ in acts:
+            if "arg" in a_ and set(a_["arg"]) - {"name", "default", "description"}:
+                f.append("launch arg %s has unexpected keys %s" % (a_["arg"].get("name"),
+                                                                  set(a_["arg"]) - {"name", "default", "description"}))
         if not any(a_.get("arg", {}).get("name") == "visualize" for a_ in acts):
             f.append("launch has no visualize arg")
         g = [a_["group"] for a_ in acts if "group" in a_]
