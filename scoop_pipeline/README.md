@@ -78,6 +78,8 @@ analysis/            measuring results; reads outputs, writes nothing back
    slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel)
   slam/cslam_eval.py  Swarm-SLAM run against the ground truth: ATE per robot and joint,
                      inter-robot loop closures checked, time to merge, bytes exchanged
+  slam/hydra_eval.py  Hydra against the ground truth as cslam_eval does Swarm-SLAM: ATE per
+                     robot and joint, in map, the odometry baseline, loop closures
   slam/dsg_stream.py  Hydra's scene-graph stream: log (in Hydra's container) the size of
                      every hydra/backend/dsg update against bag time; plot size and rate
   odom/zed_vs_lidar.py    drift of the ZED's own tracking (map_zed) against the LiDAR trajectory
@@ -121,6 +123,8 @@ tests/               self-tests, no real bag needed
                      robot's odom frame at the image stamp, ground truth
   test_hydra_export.py  hydra: a bag per robot, images byte for byte, /tf composing to the
                      odometry with a z-up body frame, config frames, range and mesh stream
+  test_hydra_eval.py hydra_eval: odometry shift aligned away, Hydra's offset in map, --cov,
+                     loop closures, json and figure
   test_dsg_stream.py dsg_stream: sizes, rates from bag time between updates, figure
   test_replica_multiagent.py  replica_multiagent: common camera, lockstep frames, poses,
                      colour resampling and depth registration on a two-robot bag
