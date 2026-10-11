@@ -11,7 +11,9 @@ It must: decode gtsam keys to robots; find per-robot and joint ATE of about
 2 cm for the optimized graph and a joint ATE near 0.5 m for the initial one;
 flag exactly one of the two loop closures as correct; date the merge by the
 latest keyframe of the first graph with an inter-robot edge; drop the
-keyframe whose ground truth uncertainty is over --sigma-max.
+keyframe whose ground truth uncertainty is over --sigma-max; and find the
+export's odometry (/r<i>/odom in its bag: robot 0 exact, robot 1 drifting
+0.1 m per frame along x) about 0 and over 0.5 m off.
 
     python scoop_pipeline/tests/test_cslam_eval.py
 """
@@ -25,6 +27,8 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "datasets"))
 sys.path.insert(0, os.path.join(ROOT, "analysis", "slam"))
 import cslam_eval as CE                                             # noqa: E402
 
@@ -108,6 +112,16 @@ def main():
                     write_g2o(os.path.join(d, "optimized_global_pose_graph.g2o"), *graph(r_max, False, lc))
                     write_g2o(os.path.join(d, "initial_global_pose_graph.g2o"), *graph(r_max, True, lc))
                 time.sleep(0.02)
+        import swarm_slam as SS
+        from scoop.bagwrite import BagWriter
+        w = BagWriter(os.path.join(tmp, "bag"))
+        for i in range(40):
+            for r in (0, 1):
+                Tm = np.linalg.inv(W) @ gt[(r, i)]
+                Tm[0, 3] += 0.1 * i * r
+                tn = int(round(st[key(r, i)] * 1e9))
+                w.write("/r%d/odom" % r, SS.odometry(Tm, "r%d/odom" % r, "r%d/camera" % r, tn), tn)
+        w.close()
         cov = os.path.join(tmp, "cov_r1.csv")
         with open(cov, "w") as fh:
             fh.write("t,sx,sy,syaw,corr,sigma_xy_major_m\n")
@@ -131,6 +145,10 @@ def main():
             f.append("loop closures %s" % {k: lc[k] for k in ("total", "checked", "correct")})
         if abs(rep["time_to_merge_s"] - 39 * 0.5) > 1e-3:
             f.append("time to merge %s s, want 19.5" % rep["time_to_merge_s"])
+        od = [rep["robots"][r].get("odometry", {}) for r in (0, 1)]
+        if (od[0].get("frames"), od[1].get("frames")) != (40, 39) or not od[0]["ate_rmse_m"] < 1e-6 \
+                or not od[1]["ate_rmse_m"] > 0.5:
+            f.append("odometry %s (want 40 and 39 frames, ATE 0 and > 0.5 m)" % od)
         if rep["robots"][1]["log"]["total_front_end_cumulative_communication_bytes"] != 2000:
             f.append("log.csv not the latest: %s" % rep["robots"][1]["log"])
     except Exception:                                              # noqa: BLE001

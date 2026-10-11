@@ -24,6 +24,9 @@ Reported, from the last global graph (the one with the most keyframes):
   time to merge   the first global graph with an inter-robot edge: the latest
                   keyframe stamp in it, s from the run's start
   communication   log.csv's front-end bytes, matches and vertices per robot
+  odometry        the export's /r<i>/odom (what cslam was given) against the
+                  ground truth at every frame, aligned the same way: the
+                  baseline the optimized graph should beat
 Keyframes whose ground truth is not known within 10 ms are left out, and so
 are those where --cov (04's cov_<track>.csv: t, ..., sigma_xy_major_m) says
 the ground truth's own uncertainty is over --sigma-max m.
@@ -42,6 +45,7 @@ import sys
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 SYM_MASK = (1 << 48) - 1
 # gtsam's writeG2o drops a LabeledSymbol's top byte (the 'g'); pose_timestamps keeps it
 KEY_MASK = (1 << 56) - 1
@@ -143,6 +147,32 @@ def read_log(path):
     return out
 
 
+def odometry(export, gts, ok):
+    """{robot: (stamps s, positions (N, 3))} of the export's /r<i>/odom at
+    the frames whose ground truth ok(robot, stamp) gives, with that ground
+    truth; {} without the export's bag."""
+    bag = os.path.join(export, "bag")
+    if not os.path.isdir(bag):
+        return {}
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "datasets"))
+    import mcap_convert as mc
+    est = {r: [] for r in gts}
+    for m in mc.read(mc._paths(bag), ["/r%d/odom" % r for r in gts]):
+        P = m.ros_msg.pose.pose.position
+        est[int(m.channel.topic.split("/")[1][1:])].append((mc.stamp_ns(m.ros_msg) * 1e-9, P.x, P.y, P.z))
+    out = {}
+    for r, rows in est.items():
+        e, g = [], []
+        for t, x, y, z in rows:
+            G = ok(r, t)
+            if G is not None:
+                e.append((x, y, z))
+                g.append(G[:3, 3])
+        if e:
+            out[r] = (np.array(e), np.array(g))
+    return out
+
+
 def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), plot=True, out=None):
     results = results or os.path.join(export, "results")
     out = out or export
@@ -162,17 +192,19 @@ def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), 
         c = np.loadtxt(f, delimiter=",", skiprows=1, ndmin=2)
         bad_cov[int(r)] = c[c[:, 5] > sigma_max, 0]
 
-    def gt_of(k):
-        r, _ = key_robot(k)
-        if k not in st or r not in gts:
+    def gt_at(r, s):
+        if r not in gts:
             return None
         t, T = gts[r]
-        i = int(np.argmin(np.abs(t - st[k])))
-        if abs(t[i] - st[k]) > 0.01:
+        i = int(np.argmin(np.abs(t - s)))
+        if abs(t[i] - s) > 0.01:
             return None
-        if r in bad_cov and len(bad_cov[r]) and np.min(np.abs(bad_cov[r] - st[k])) <= 0.01:
+        if r in bad_cov and len(bad_cov[r]) and np.min(np.abs(bad_cov[r] - s)) <= 0.01:
             return None
         return T[i]
+
+    def gt_of(k):
+        return gt_at(key_robot(k)[0], st[k]) if k in st else None
 
     t_start = min(g[0][0] for g in gts.values())
     # time to merge: the first global graph with an inter-robot edge
@@ -240,6 +272,10 @@ def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), 
             out_plot = {"est": est, "gt": gt, "rob": rob, "T": j[2] if j else np.eye(4),
                         "edges": [(V[a][:3, 3], V[b][:3, 3]) for a, b, _ in E
                                   if key_robot(a)[0] != key_robot(b)[0]]}
+    for r, (e, g) in odometry(export, gts, gt_at).items():
+        a = ate(e, g)
+        rep["robots"].setdefault(r, {})["odometry"] = {
+            "frames": len(e), "ate_rmse_m": a[0] if a else None, "ate_median_m": a[1] if a else None}
     for r, s in logs:
         p = os.path.join(s, "log.csv")
         if os.path.exists(p):
@@ -302,8 +338,11 @@ def main():
                      g["keyframes"]))
     for r, v in sorted(rep["robots"].items()):
         o, i, lg = v.get("optimized", {}), v.get("initial", {}), v.get("log", {})
-        print("  r%d  ATE rmse %s m (initial %s m), %d keyframes; front-end bytes %s, matches %s"
-              % (r, fmt(o.get("ate_rmse_m")), fmt(i.get("ate_rmse_m")), o.get("keyframes", 0),
+        od = v.get("odometry", {})
+        print("  r%d  ATE rmse %s m (initial %s m, odometry %s m over %d frames), %d keyframes; "
+              "front-end bytes %s, matches %s"
+              % (r, fmt(o.get("ate_rmse_m")), fmt(i.get("ate_rmse_m")), fmt(od.get("ate_rmse_m")),
+                 od.get("frames", 0), o.get("keyframes", 0),
                  fmt(lg.get("total_front_end_cumulative_communication_bytes"), 0),
                  fmt(lg.get("total_nb_successful_matches"), 0)))
     lc = rep.get("inter_robot_loop_closures") or {}
