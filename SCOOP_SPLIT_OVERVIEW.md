@@ -44,19 +44,25 @@ Moved to `supplementary.tex` (RA-L multimedia attachment): full sensors table,
 topics table, per-client clock table, reference-map figure, GT error
 distributions, data-flow figure, sensor intrinsics, per-site setup effort.
 
-### Experiments needed
+### The seven questions the paper answers
 
-| Exp. | Proves | Pass criterion | Status |
-|---|---|---|---|
-| E1 Headroom | precise | every testbed error at least 10x below the smallest fusion breaking point | clock and second pass measured; board residuals on one pass; calibration residuals, sniffer bias, p95 speeds, and the figure open |
-| E2 Map Meets Radio | consistent | pooled rho > 0.3 and clear-minus-obstructed drop > 5 dB on one link kind | passes on the mobile_2 link (rho 0.60, 5.4 dB); pool over passes, add agent-to-AP once `ap.yaml` exists |
-| E3 Twin Run | faithful | frame-assignment agreement >= 90 %, logged replay closer than synthetic | needs the payload node and one recording session (A1/B1 survey, A2/B2 cooperation) |
-| E4 Same Knob, Same Link | repeatable | day-to-day distance below half the survey-to-cooperation distance | mode half from survey_1 vs coop_2; day half from the same session |
-| E5 Sim Gap | necessary | demonstration | done on one day: clouds within one frame 86 % alone, 59-68 % under contention, 100 % synthetic; three real outages |
+Five about trust, two about worth. Pass criteria were fixed before the data
+were read. "Answer now" uses the 24 Sep session at site 1 (mapping_A, survey_1,
+coop_2). This table is `tables/questions.tex` in the paper.
 
-Also: reconcile the clock bound (70 us text vs 42.5 us table vs coop_2), control
-distances, cross-robot consistency, BOM costs, redrawn Fig. 1, the four
-experiment figures.
+| # | Question | Pass criterion | Answer now (24 Sep) | Remaining data to collect | Where |
+|---|---|---|---|---|---|
+| 1 | **Is it precise?** Are the testbed's own errors small next to the effects it measures? | every error term >= 10x below the fusion breaking points (0.2 m pose; 100 ms as displacement) | clock <= 0.99 ms measured (1 mm at 1 m/s, 1.2 cm strict bound); RGB-D cart in the LiDAR frame 3.1 cm median (6x below); map converges to 0.15 cm and repeats to 1.06 cm; board detector 8 mm. Passes on every term but the cart, met at 6x | mobile_1 vs boards on coop_2 (tool exists); radar reflector residuals; sniffer bias; measured p95 speed; final margin per term | E1 Headroom |
+| 2 | **Is it consistent?** Do the poses and the link logs agree when neither was checked by hand? | map clearance predicts detrended RSSI: rho > 0.3 and clear-minus-obstructed drop > 5 dB on one link kind | mobile_2 link rho 0.60, 5.4 dB: passes. infra_1 link rho 0.23, 4.7 dB: does not | agent-to-AP links (write the AP position to `ap.yaml`); pool over survey_1 and coop_2 and over sites; CI on rho; out-of-run prediction; CSI power as second signal | E2 Map Meets Radio |
+| 3 | **Is it faithful?** Does replaying a logged link reproduce what the live link did? | >= 90 % agreement on which receiver frame each message lands in, and closer than a synthetic channel | none yet; replay is a model with measured inputs and unvalidated output (abstract says so) | one twin-run session on the survey_1 route: A1/B1 survey, A2/B2 cooperation, back to back; payload node and comparison script; per-size, per-mode table of arrival error, frame agreement, drop agreement | E3 Twin Run |
+| 4 | **Is it repeatable?** Does the same setting give the same link on another day? | day-to-day distance < half the survey-to-cooperation distance, for RTT and goodput | pose half only: map repeats to 1.06 cm and 2e-5 in scale four weeks apart; mode half (survey_1 vs coop_2) computable, not yet computed | compute the mode distance now; one repeat day (the E3 session gives it); day-vs-mode table on RTT, goodput, RSSI grid | E4 Same Knob, Same Link |
+| 5 | **Is it necessary?** What does a measured link show that a synthetic one hides? | demonstration, no pass | 1.5 MB messages within one LiDAR frame: 86 % alone (survey_1), 59 to 68 % with two robots (coop_2), 100 % under Where2comm / V2X-ViT; RTT 5 to 10 ms idle to 25 to 33 ms loaded; real outages on an earlier pass | best-fit synthetic baseline (constant or Binomial delay fitted to the measured delays); more passes and a second site; probe-off control run | E5 Sim Gap |
+| 6 | **Is it unique?** What can it do that no existing platform can? | fills every column of the capability table | indoor, heterogeneous incl. infra, no mocap or GNSS, every pair's link measured, CSI, clock bound reported, replay into methods, perception scoring; CooperScene is the nearest case | verify every cell against the cited paper | Related Work |
+| 7 | **Is it reproducible?** Can someone else build and use it? | bill of materials, setup effort per site, released pipeline, spec sheet with bounds | pipeline released; spec sheet drafted | costs per agent class; mapping-session length, number of boards, control distances per site | Design, Lessons |
+
+Numbers whose pass should be confirmed before they go on a slide: surface
+thickness 7.9 / 2.1 cm (mapping_A or the Aug map?), capacity 275-282 /
+598-676 Mbit/s, CSI 141 / 104 Hz, chrony RMS 10.9 / 42.5 / 28.7 us.
 
 ### What to highlight
 
