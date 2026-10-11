@@ -146,7 +146,7 @@ def main():
     ap.add_argument("--traj", nargs="*", default=[], help="TUM reference tracks for the speed percentile")
     ap.add_argument("--speed-p", type=float, default=95.0)
     ap.add_argument("--min-margin", type=float, default=10.0)
-    ap.add_argument("--out", default=None, help="figure path (default next to the JSON)")
+    ap.add_argument("--out", default=None, help="figure path (default <terms>_headroom.png)")
     a = ap.parse_args()
     cfg = json.load(open(a.terms_json))
     speed = p_speed(a.traj, a.speed_p) if a.traj else cfg.get("speed_mps")
@@ -155,7 +155,10 @@ def main():
     rep = evaluate(cfg, speed, a.min_margin)
     rep["speed_source"] = ("p%g of %s" % (a.speed_p, ", ".join(a.traj))) if a.traj else "speed_mps in JSON"
     print_report(rep)
-    out = a.out or os.path.splitext(a.terms_json)[0] + ".png"
+    # never next to the terms under their own name: <terms>.json would be overwritten by the report
+    out = a.out or os.path.splitext(a.terms_json)[0] + "_headroom.png"
+    if os.path.abspath(os.path.splitext(out)[0] + ".json") == os.path.abspath(a.terms_json):
+        raise SystemExit("--out %s would overwrite the terms file %s" % (out, a.terms_json))
     plot(rep, out)
     json.dump(rep, open(os.path.splitext(out)[0] + ".json", "w"), indent=1)
     print(f"  wrote {out} and {os.path.splitext(out)[0]}.json")
