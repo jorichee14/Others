@@ -93,13 +93,13 @@ slides.push(s => {
   titleBand(s, "Q1. Is it precise?");
   body(s, [
     { l: 0, t: "Are the testbed's own errors small next to the effects it measures?" },
-    { l: 1, t: "If clock or pose errors were as coarse as the effects under study, every later number would be ambiguous. Pass: each term 10x below the breaking point of its kind (0.2 m pose; one LiDAR frame for time)" },
+    { l: 1, t: "If clock or pose errors were as coarse as the effects under study, every later number would be ambiguous. Thresholds: a tenth of where fusion breaks, 2 cm for pose terms, 10 ms for time terms" },
     { l: 1, t: "Q1.1 How far apart are the agents' clocks?", b: true },
     { l: 3, label: "Setup:", color: SETUP, t: "chrony offset logs over coop_2, turned into displacement at 1 m/s" },
-    { l: 3, label: "Answer:", t: "0.99 ms measured = 1 mm, 101x below one frame; strict bound 12 ms = 1.2 cm, 8x (short)", color: GREEN },
+    { l: 3, label: "Answer:", t: "0.99 ms measured, under the 10 ms threshold; strict bound 12 ms, above it", color: GREEN },
     { l: 1, t: "Q1.2 How well is an agent without LiDAR placed in the LiDAR frame?", b: true },
     { l: 3, label: "Setup:", color: SETUP, t: "held-out ChArUco boards predict where the board should appear; map built once, frozen" },
-    { l: 3, label: "Answer:", t: "RGB-D cart 3.1 cm median (6.5x below 0.2 m, short of 10x); LiDAR robot 10 mm (coop2_0828); map repeats to 1.06 cm", color: GREEN },
+    { l: 3, label: "Answer:", t: "RGB-D cart 3.1 cm median, above the 2 cm threshold; LiDAR robot 10 mm (coop2_0828); map repeats to 1.06 cm", color: GREEN },
     { l: 3, label: "Lacking:", t: "LiDAR robot vs boards on coop_2; radar and LiDAR-camera residuals; sniffer bias; measured p95 speed; rangefinder control distances", color: ORANGE },
   ], FS);
 });
@@ -109,7 +109,22 @@ slides.push(s => {
 
 slides.push(s => {
   titleBand(s, "Q1 results: is it precise?");
-  bookTable(s, "Each term against the breaking point of its kind: 0.2 m for pose, one LiDAR frame (0.1 m at 1 m/s) for time; pass at 10x", ["", "Quantity", "Value"], [2.7, 3.0, 3.1], [{"title": "Clock", "rows": [["Measured offset", "coop_2, chrony logs", "0.99 ms = 1 mm (101x)", "pass"], ["Strict chrony bound", "coop_2, offset + root delay/2", "12 ms = 1.2 cm (8.3x)", "short"], ["Sniffer bias", "probe stamps, both ends", "", "missing"]]}, {"title": "Map", "rows": [["Refinement", "final pose correction", "0.15 cm, 0.017 deg (133x)", "pass"], ["Repeatability", "two maps, four weeks apart", "1.06 cm, scale 0.99998 (19x)", "pass"], ["Control distances", "rangefinder, per site", "", "missing"]]}, {"title": "Agents in the frame", "rows": [["Board detector", "vs pipeline, ZED / RealSense", "8.1 / 8.3 mm (24x)", "pass"], ["RGB-D cart", "held-out boards, coop_2", "3.1 cm (6.5x), sigma 5.3 cm", "short"], ["LiDAR robot", "held-out boards, coop2_0828", "10.0 mm, 0.88 deg (20x)", "pass"], ["LiDAR robot", "held-out boards, coop_2", "", "missing"], ["Extrinsics", "radar; LiDAR-camera", "", "missing"], ["Agent speed", "p95 of reference tracks", "", "missing"]]}]);
+  bookTable(s, "Thresholds are a tenth of where fusion breaks: 2 cm for pose terms (0.2 m), 10 ms for time terms (one LiDAR frame)", ["", "Threshold", "Value"], [3.9, 1.5, 3.4], [
+    {"title": "Clock", "rows": [
+      ["Measured offset (coop_2)", "10 ms", "0.99 ms", "pass"],
+      ["Strict chrony bound (coop_2)", "10 ms", "12 ms", "short"],
+      ["Sniffer bias (probe stamps)", "10 ms", "", "missing"]]},
+    {"title": "Map", "rows": [
+      ["Refinement, final correction (mapping_A)", "2 cm", "0.15 cm, 0.017 deg", "pass"],
+      ["Repeatability, two maps four weeks apart", "2 cm", "1.06 cm, scale 0.99998", "pass"],
+      ["Control distances (rangefinder, per site)", "2 cm", "", "missing"]]},
+    {"title": "Agents in the frame", "rows": [
+      ["Board detector vs pipeline, ZED / RealSense", "2 cm", "8.1 / 8.3 mm", "pass"],
+      ["RGB-D cart vs held-out boards (coop_2)", "2 cm", "3.1 cm median, sigma 5.3 cm", "short"],
+      ["LiDAR robot vs held-out boards (coop2_0828)", "2 cm", "10.0 mm, 0.88 deg", "pass"],
+      ["LiDAR robot vs held-out boards (coop_2)", "2 cm", "", "missing"],
+      ["Extrinsics: radar; LiDAR-camera", "2 cm", "", "missing"],
+      ["Agent speed, p95 of reference tracks", "input", "", "missing"]]}]);
 });
 
 // ---- 3 Q2
@@ -132,7 +147,18 @@ slides.push(s => {
 
 slides.push(s => {
   titleBand(s, "Q2 results: is it consistent?");
-  bookTable(s, "Map-derived Fresnel clearance against RSSI with the distance trend removed; pass: rho > 0.3 and clear-minus-obstructed drop > 5 dB", ["", "Quantity", "Value"], [2.7, 3.0, 3.1], [{"title": "Robot-to-robot CSI links (coop_2)", "rows": [["mobile_2 to sniffer", "Spearman rho, drop", "0.60, 5.4 dB", "pass"], ["infra_1 to sniffer", "Spearman rho, drop", "0.23, 4.7 dB", "short"]]}, {"title": "Agent-to-access-point links", "rows": [["RSSI and goodput", "needs AP position (ap.yaml)", "", "missing"], ["Pooled over passes and sites", "link_clearance.py --all", "", "missing"]]}, {"title": "Method", "rows": [["Self-test", "planted 12 dB wall", "recovered 11.9 dB, rho 0.68", "pass"], ["Confidence interval", "bootstrap over windows", "", "missing"], ["Out-of-run prediction", "fit survey_1, score coop_2", "", "missing"], ["CSI power", "second signal, same test", "", "missing"]]}]);
+  bookTable(s, "Map-derived Fresnel clearance against RSSI with the distance trend removed", ["", "Threshold", "Value"], [3.9, 2.3, 2.6], [
+    {"title": "Robot-to-robot CSI links (coop_2)", "rows": [
+      ["mobile_2 to sniffer: rho, drop", "rho > 0.3, drop > 5 dB", "0.60, 5.4 dB", "pass"],
+      ["infra_1 to sniffer: rho, drop", "rho > 0.3, drop > 5 dB", "0.23, 4.7 dB", "short"]]},
+    {"title": "Agent-to-access-point links", "rows": [
+      ["RSSI and goodput (needs AP position)", "rho > 0.3, drop > 5 dB", "", "missing"],
+      ["Pooled over passes and sites", "rho > 0.3, drop > 5 dB", "", "missing"]]},
+    {"title": "Method", "rows": [
+      ["Self-test, planted 12 dB wall", "recovers 12 dB", "11.9 dB, rho 0.68", "pass"],
+      ["Confidence interval on rho", "lower bound > 0.3", "", "missing"],
+      ["Out-of-run prediction (fit survey_1, score coop_2)", "rho > 0.3", "", "missing"],
+      ["CSI power as second signal", "same", "", "missing"]]}]);
 });
 
 // ---- 4 Q3
@@ -154,7 +180,15 @@ slides.push(s => {
 
 slides.push(s => {
   titleBand(s, "Q3 results: is it faithful?");
-  bookTable(s, "Replay against live arrivals; pass: at least 90 % agreement on the receiver frame, closer than the synthetic channel", ["", "Quantity", "Value"], [2.7, 3.0, 3.1], [{"title": "Replay model", "rows": [["Arrival rule", "d(t) + s/G(t), drop in outage", "defined", ""], ["Inputs", "goodput, RTT, outages", "measured on every pass", ""]]}, {"title": "Live comparison", "rows": [["Payload node", "1 KB / 100 KB / 1.5 MB at 10 Hz, stamped", "", "missing"], ["Twin runs", "A1/B1 survey, A2/B2 cooperation", "", "missing"], ["Arrival-time error", "median, p95 per size and mode", "", "missing"], ["Frame agreement", "share landing in the same 100 ms frame", "", "missing"], ["Drop agreement", "per size and mode", "", "missing"]]}]);
+  bookTable(s, "Replay against live arrivals on twin runs (A logs the link, B sends stamped messages)", ["", "Threshold", "Value"], [3.4, 2.4, 3.0], [
+    {"title": "Replay model", "rows": [
+      ["Arrival rule d(t) + s/G(t), drop in outage", "", "defined", ""],
+      ["Inputs: goodput, RTT, outages", "", "measured on every pass", ""]]},
+    {"title": "Live comparison (per size and mode)", "rows": [
+      ["Frame agreement", ">= 90 %", "", "missing"],
+      ["Arrival-time error, median and p95", "below synthetic channel", "", "missing"],
+      ["Drop agreement", "", "", "missing"],
+      ["Payload node and twin runs", "A1/B1 survey, A2/B2 coop", "", "missing"]]}]);
 });
 
 // ---- 5 Q4
@@ -178,7 +212,13 @@ slides.push(s => {
 
 slides.push(s => {
   titleBand(s, "Q4 results: is it repeatable?");
-  bookTable(s, "Pass: day-to-day distance below half the survey-to-cooperation distance, for RTT and goodput", ["", "Quantity", "Value"], [2.7, 3.0, 3.1], [{"title": "Pose half", "rows": [["Frame across days", "two maps, four weeks apart", "1.06 cm, scale 0.99998", "pass"]]}, {"title": "Link half", "rows": [["Mode distance", "survey_1 vs coop_2, W1 and KS", "", "missing"], ["Day distance", "same route and mode, second day", "", "missing"], ["Day / mode ratio", "RTT and goodput, pass < 0.5", "", "missing"]]}]);
+  bookTable(s, "Same setting, another day", ["", "Threshold", "Value"], [3.4, 2.4, 3.0], [
+    {"title": "Pose half", "rows": [
+      ["Frame across days, two maps four weeks apart", "2 cm", "1.06 cm, scale 0.99998", "pass"]]},
+    {"title": "Link half", "rows": [
+      ["Mode distance, survey_1 vs coop_2 (W1, KS)", "reference", "", "missing"],
+      ["Day distance, same route and mode", "", "", "missing"],
+      ["Day / mode ratio, RTT and goodput", "< 0.5", "", "missing"]]}]);
 });
 
 // ---- 6 Q5
@@ -201,7 +241,18 @@ slides.push(s => {
 
 slides.push(s => {
   titleBand(s, "Q5 results: is it necessary?");
-  bookTable(s, "1.5 MB messages at 10 Hz through the logged link against the synthetic channels of prior benchmarks; demonstration", ["", "Quantity", "Value"], [2.7, 3.0, 3.1], [{"title": "Share arriving within one LiDAR frame", "rows": [["One robot", "survey_1", "86 %", "pass"], ["Two robots contending", "coop_2", "59 to 68 %", "short"], ["Synthetic channels", "V2X-ViT 100 ms; Where2comm none", "100 %", ""]]}, {"title": "Delay and outages", "rows": [["RTT idle to loaded", "coop_2", "5 to 10 ms to 25 to 33 ms", ""], ["Real outages", "coop2_0828", "3, covering 12 % of frames", ""]]}, {"title": "Strengthening", "rows": [["Best-fit synthetic baseline", "constant or Binomial delay fitted", "", "missing"], ["More passes, second site", "sim_gap.py", "", "missing"], ["Probe-off control run", "ping only, no iperf", "", "missing"]]}]);
+  bookTable(s, "1.5 MB messages at 10 Hz through the logged link against the synthetic channels of prior benchmarks", ["", "Reference", "Value"], [4.0, 1.9, 2.9], [
+    {"title": "Share arriving within one LiDAR frame (100 ms)", "rows": [
+      ["One robot (survey_1)", "100 % synthetic", "86 %", "pass"],
+      ["Two robots contending (coop_2)", "100 % synthetic", "59 to 68 %", "short"],
+      ["Synthetic: V2X-ViT 100 ms; Where2comm none", "", "100 %", ""]]},
+    {"title": "Delay and outages", "rows": [
+      ["RTT idle to loaded (coop_2)", "100 ms frame", "5 to 10 ms to 25 to 33 ms", ""],
+      ["Real outages (coop2_0828)", "none in synthetic", "3, covering 12 % of frames", ""]]},
+    {"title": "Strengthening", "rows": [
+      ["Best-fit synthetic baseline, fitted delay", "in-frame share", "", "missing"],
+      ["More passes, second site", "", "", "missing"],
+      ["Probe-off control run (ping only)", "", "", "missing"]]}]);
 });
 
 // ---- 7 Q6 + Q7
@@ -234,7 +285,7 @@ slides.push(s => {
   const c = (t, col) => ({ text: t, options: { fontFace: F, fontSize: 11, color: col || TXT, valign: "middle" } });
   const rows = [
     [hdr("Question"), hdr("Answer now"), hdr("Verdict"), hdr("Still lacking")],
-    [c("Q1 Precise"), c("clock 0.99 ms (101x); map 0.15 / 1.06 cm; detector 8 mm; cart 3.1 cm; LiDAR robot 10 mm"), c("pass, 2 terms short", GREEN), c("mobile_1 on coop_2; radar; LiDAR-cam; sniffer bias; p95 speed; control distances")],
+    [c("Q1 Precise"), c("clock 0.99 ms; map 0.15 / 1.06 cm; detector 8 mm; cart 3.1 cm; LiDAR robot 10 mm"), c("pass, 2 terms short", GREEN), c("mobile_1 on coop_2; radar; LiDAR-cam; sniffer bias; p95 speed; control distances")],
     [c("Q2 Consistent"), c("rho 0.60, 5.4 dB on mobile_2 link"), c("pass on one link", GREEN), c("AP links; pooling; CI; out-of-run; CSI power")],
     [c("Q3 Faithful"), c("model and inputs only"), c("no data", ORANGE), c("payload node; twin-run session; comparison table")],
     [c("Q4 Repeatable"), c("frame repeats: 1.06 cm, 2e-5"), c("half", ORANGE), c("mode distance (tool ready); repeat day")],
