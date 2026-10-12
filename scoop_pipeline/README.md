@@ -72,7 +72,8 @@ datasets/            bags -> datasets for other tools
                      (visualize:=true for the live scene graph); --configs-only rewrites those
   euroc.py           a multi-robot pass as Kimera-VIO input: each robot's rectified stereo
                      pair and IMU in the EuRoC layout, a parameter folder from the recorded
-                     calibration (slam/run_kimera.sh runs it, loop closure on); the IMU
+                     calibration (slam/run_kimera.sh runs it, loop closure on; STRETCHES=1
+                     one run per stretch without a dropout, slam/kimera_stretches.py); the IMU
                      moved onto the images' clock (mobile_1's ZED: 2.12 s; --imu-only rewrites it)
   replica_multiagent.py  a multi-robot pass as a ReplicaMultiagent scene for MAGiC-SLAM:
                      one common camera, frames in lockstep, poses in the shared map
@@ -88,6 +89,8 @@ analysis/            measuring results; reads outputs, writes nothing back
    scene graph to a server through the channel, one run per channel)
   slam/cslam_eval.py  Swarm-SLAM run against the ground truth: ATE per robot and joint,
                      inter-robot loop closures checked, time to merge, bytes exchanged
+  slam/kimera_eval.py  Kimera-VIO (slam/run_kimera.sh) against the ground truth: ATE and
+                     drift in map per run, or per stretch without a dropout (STRETCHES=1)
   slam/hydra_eval.py  Hydra against the ground truth as cslam_eval does Swarm-SLAM: ATE per
                      robot and joint, in map, the odometry baseline, loop closures
   slam/imu_check.py  a euroc.py export's IMU timing against its images and ground truth
@@ -149,6 +152,8 @@ tests/               self-tests, no real bag needed
                      body and a blocked sector in view), a LiDAR 0.3 s late found and fails
   test_imu_sync.py   imu_sync: a ZED IMU 2.12 s late found against the reference IMU, a still
                      robot not sure; processing/imu_sync.py --out moves only its stamps; retime step 5
+  test_kimera_stretches.py  kimera_stretches: a dropout and an IMU-only gap split three stretches;
+                     kimera_eval: ATE and in-map error per stretch, a failed stretch, a whole run
   test_imu_check.py  imu_check: a gyro 2.1 s late found against images and ground truth;
                      an IMU turned 90 deg found by gravity and the rotation fit
   test_relay_stats.py  relay_stats: delay, loss, backlog of a queued stream, map age
