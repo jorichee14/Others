@@ -381,10 +381,11 @@ def kimera_runs(robot_dir):
 
 class KimeraOdometry:
     """Kimera-VIO's IMU in map (traj_vio.csv per run): at(t) interpolates within
-    the run spanning t (keyframes up to max_gap_s apart: a robot standing still
-    makes few), None outside every run."""
+    the run spanning t, across any gap between keyframes (Kimera-VIO makes none
+    while the robot stands still: no keyframe, no motion; a dropout ends the
+    run), None outside every run."""
 
-    def __init__(self, robot_dir, max_gap_s=5.0):
+    def __init__(self, robot_dir, max_gap_s=float("inf")):
         self.runs = []
         for r in kimera_runs(robot_dir):
             rows = _rows(os.path.join(r, "traj_vio.csv"))

@@ -68,7 +68,7 @@ def make_kimera(d):
     os.makedirs(o)
     with open(os.path.join(o, "traj_vio.csv"), "w") as fh:
         fh.write("#timestamp,x,y,z,qw,qx,qy,qz,vx,vy,vz,bgx,bgy,bgz,bax,bay,baz\n")
-        for k in (1, 2, 4, 7, 10):                       # keyframes; 3, 5, 6, 8, 9 interpolated
+        for k in (1, 2, 4, 10):                          # keyframes; the rest interpolated, 4-10 0.6 s
             T = imu_gt(k)
             fh.write("%d,%s,%s,0,0,0,0,0,0,0,0,0\n" % (kstamp(k), ",".join("%.9f" % x for x in T[:3, 3] + SHIFT),
                                                       ",".join("%.9f" % x for x in wxyz(T))))
@@ -119,7 +119,7 @@ def main():
         for t, k in want.items():
             if t in tf:
                 g = THE.gt_pose(0, k)
-                tol = 1e-5 if k in (1, 2, 4, 7, 10) else 1e-3       # between keyframes: chord vs arc
+                tol = 1e-5 if k in (1, 2, 4, 10) else 3e-3       # between keyframes: chord vs arc
                 if not (np.allclose(tf[t][:3, 3], g[:3, 3] + SHIFT, atol=tol)
                         and np.allclose(tf[t][:3, :3], g[:3, :3], atol=tol)):
                     f.append("frame %d: camera at %s, want %s" % (k, tf[t][:3, 3], g[:3, 3] + SHIFT))
@@ -136,6 +136,14 @@ def main():
             if (e.key_from, e.key_to, e.robot_from, e.robot_to, e.type) != (kstamp(10), kstamp(2), 0, 0, 1) \
                     or lt != kstamp(10) + H.LC_DELAY_NS or not np.allclose(got, rel, atol=1e-5):
                 f.append("closure: keys %s %s at %s, pose\n%s\nwant\n%s" % (e.key_from, e.key_to, lt, got, rel))
+        # a robot standing still: two keyframes 20 s apart, the pose known in between
+        ko = os.path.join(tmp, "still", "out")
+        os.makedirs(ko)
+        with open(os.path.join(ko, "traj_vio.csv"), "w") as fh:
+            fh.write("#timestamp,x,y,z,qw,qx,qy,qz\n%d,1,2,0,1,0,0,0\n%d,1,2,0,1,0,0,0\n" % (THE.T0, THE.T0 + 20 * 10 ** 9))
+        mid = H.KimeraOdometry(os.path.join(tmp, "still")).at(THE.T0 + 10 * 10 ** 9)
+        if mid is None or not np.allclose(mid[:3, 3], [1, 2, 0]):
+            f.append("no pose between keyframes 20 s apart: %s" % mid)
         rep = open(os.path.join(out, "report.txt")).read()
         if "2 from Kimera-VIO; 1 agree with its odometry" not in rep or "(1 of 1 right by the ground truth), " \
                 "1 left out (0 of 1 right)" not in rep or "2 frames without a pose" not in rep:
