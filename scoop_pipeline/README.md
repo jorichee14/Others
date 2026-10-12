@@ -13,6 +13,8 @@ scoop/               library: everything reusable lives here
   ouster.py          Ouster packets -> frames / IMU / scans, clock fit, ouster_ros layout
   replay.py          the replay step: packets bag -> points bag, with remaps
   retime.py          sensor time -> capture time (retime_bag.py without ROS)
+  imu_sync.py        how far an IMU's stamps run behind another's on the robot (|w| lined up);
+                     retime moves the ZED IMU's back by it (recording.yaml ouster.imu_sync)
   zed.py             ZED SVO2 -> bag on capture time (wrapper replay + restamp)
   recording.py       one recording: raw bag -> decoded -> retimed -> GLIM, SVO -> zed
   session.py         one pass: every machine's bags, checked against record.yaml
@@ -31,6 +33,8 @@ processing/          raw recordings -> processed bags (command lines around scoo
   process_recording.py  raw recording -> decoded, retimed, glim, zed (the usual entry point)
   decode_ouster.py   packets bag -> points bag (replaces the ouster_ros replay)
   retime.py          points bag -> retimed bag (same arguments as retime_bag.py)
+  imu_sync.py        a processed bag's ZED IMU against the Ouster's IMU; --out a copy with its
+                     stamps moved back (for passes processed before the retimed step did it)
   run_glim.sh        GLIM (docker) on a bag, dump next to the bag, owned by you
   svo_to_bag.py      one SVO2 -> bag on capture time (the zed step alone)
   run_zed.sh         ZED wrapper replay + ros2 bag record (here or in the isaac_ros container)
@@ -143,6 +147,8 @@ tests/               self-tests, no real bag needed
                      loop closures, json and figure
   test_camera_lidar_sync.py  camera_lidar_sync: synced bag passes (Ouster start-of-sweep stamps, robot
                      body and a blocked sector in view), a LiDAR 0.3 s late found and fails
+  test_imu_sync.py   imu_sync: a ZED IMU 2.12 s late found against the reference IMU, a still
+                     robot not sure; processing/imu_sync.py --out moves only its stamps; retime step 5
   test_imu_check.py  imu_check: a gyro 2.1 s late found against images and ground truth;
                      an IMU turned 90 deg found by gravity and the rotation fit
   test_relay_stats.py  relay_stats: delay, loss, backlog of a queued stream, map age

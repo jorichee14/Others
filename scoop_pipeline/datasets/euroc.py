@@ -38,9 +38,12 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)
 --gt-only: (re)write only mav0/state_groundtruth_estimate0 of an existing export.
 --imu-only: (re)write only mav0/imu0 of an existing export (after a new --imu-delay).
 --imu-delay S: how far the IMU's stamps run behind the images' (s), taken off
-  every IMU stamp; default the machine's measured delay (mobile_1's ZED: 2.12 s,
-  the same in the SVO replay's first and second half; analysis/slam/imu_check.py
-  measures it: "gyro vs images").
+  every IMU stamp. Default: measured in the bag against the machine's
+  reference IMU (mobile_1: the Ouster's, scoop/imu_sync.py), so a bag whose
+  ZED IMU is still late (20260924: the wrapper on the robot stamped it 2.12 s
+  late) and one the retimed step already corrected both come out right; 0
+  where there is no reference or the measurement is not sure.
+  analysis/slam/imu_check.py checks the export against the images.
 --params-only: (re)write only params/ of an existing export (rates from its data.csv files).
 
 A stereo pair is a left and right image within 2 ms, at most --rate per
@@ -73,9 +76,9 @@ MACHINES = {
     "mobile_1": {"left": "/mobile_1/zed/left/image_rect_color", "right": "/mobile_1/zed/right/image_rect_color",
                  "left_info": "/mobile_1/zed/left/camera_info", "right_info": "/mobile_1/zed/right/camera_info",
                  "imu": "/mobile_1/zed/imu/data",
-                 # its IMU stamps run 2.12 s behind the images (analysis/slam/imu_check.py: gyro vs
-                 # images +2.12 / +2.08 s, vs the ground truth +2.14 s over 26-200 and 200-440 s)
-                 "imu_delay_s": 2.12,
+                 # the IMU's delay is measured against the Ouster's IMU (20260924: 2.12 s; imu_check.py:
+                 # gyro vs images +2.12 / +2.08 s, vs the ground truth +2.14 s over 26-200 and 200-440 s)
+                 "imu_ref": "/mobile_1/ouster/imu",
                  "noise": {"gyroscope_noise_density": 3.0e-4, "gyroscope_random_walk": 1.0e-5,
                            "accelerometer_noise_density": 2.0e-3, "accelerometer_random_walk": 3.0e-3}},
     "mobile_2": {"left": "/mobile_2/infra1/image_rect_raw", "right": "/mobile_2/infra2/image_rect_raw",
@@ -187,6 +190,26 @@ def write_gt(paths, edges, machine, imu_frame, folder):
     return len(ts)
 
 
+def measured_delay(paths, spec, machine):
+    """Seconds the machine's IMU runs behind its reference IMU in the bag (0
+    without a reference, or when the two do not agree enough to say)."""
+    if not spec.get("imu_ref"):
+        return 0.0
+    from scoop import bag as B, imu_sync as IS
+    reader = B.open_bag(paths[0] if len(paths) == 1 else os.path.dirname(paths[0]))
+    if spec["imu_ref"] not in reader.topics():
+        log.warning("  %s: no %s to measure the IMU's delay against: none taken off" % (machine, spec["imu_ref"]))
+        return 0.0
+    r = IS.measure(reader, spec["imu"], spec["imu_ref"])
+    if not r.ok:
+        log.warning("  %s: IMU vs %s not sure (correlation %.2f): no delay taken off" % (
+            machine, spec["imu_ref"], r.correlation))
+        return 0.0
+    log.info("  %s: %s %+.3f s behind %s (correlation %.2f)" % (machine, spec["imu"], r.shift_s, spec["imu_ref"],
+                                                              r.correlation))
+    return r.shift_s
+
+
 def write_imu(paths, topic, path, delay_ns):
     """mav0/imu0/data.csv: every IMU message, its stamp less delay_ns, strictly
     increasing (a repeated or earlier stamp left out). (stamps written)"""
@@ -256,7 +279,7 @@ def csv_rate(path):
 def convert_robot(paths, edges, machine, out, rate, template, gt_only=False, params_only=False,
                   imu_only=False, imu_delay=None):
     spec = MACHINES[machine]
-    delay = spec.get("imu_delay_s", 0.0) if imu_delay is None else imu_delay
+    delay = imu_delay if imu_delay is not None else measured_delay(paths, spec, machine)
     delay_ns = int(round(delay * 1e9))
     infos = {"left": mc.first_msg(paths, spec["left_info"]), "right": mc.first_msg(paths, spec["right_info"])}
     for side, info in infos.items():
@@ -395,7 +418,8 @@ def main():
     ap.add_argument("--params-only", action="store_true", help="(re)write only the parameters of an existing export")
     ap.add_argument("--imu-only", action="store_true", help="(re)write only the IMU of an existing export")
     ap.add_argument("--imu-delay", type=float, default=None,
-                    help="seconds the IMU's stamps run behind the images' (default: the machine's measured delay)")
+                    help="seconds the IMU's stamps run behind the images' (default: measured against the "
+                         "machine's reference IMU)")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:

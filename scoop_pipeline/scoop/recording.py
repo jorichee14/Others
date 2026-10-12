@@ -29,6 +29,7 @@ built from it (``LATER``): decoded -> retimed -> glim; zed stands alone.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -278,9 +279,14 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
                 log=log)
         elif s == "retimed":
             res = retime.retime_bag(rec.bag, rec.step("decoded"), tmp,
-                                    packets_ns=packets_ns, points_ns=out_ns, log=log)
+                                    packets_ns=packets_ns, points_ns=out_ns,
+                                    imu_sync=o.get("imu_sync") or (), log=log)
             res.clock.save(rec.clock_json)
             log(f"    clock fit -> {rec.clock_json}")
+            if res.imu_sync:
+                with open(rec.work / "imu_sync.json", "w") as fh:
+                    json.dump([r.as_dict() for r in res.imu_sync], fh, indent=1)
+                log(f"    imu sync -> {rec.work / 'imu_sync.json'}")
         elif s == "glim":
             g = settings["glim"]
             script = glim_script or ROOT / "processing" / "run_glim.sh"

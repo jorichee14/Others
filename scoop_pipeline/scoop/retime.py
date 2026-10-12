@@ -16,7 +16,11 @@ else is the same procedure:
 3. every other message shifted by the median (mapped stamp - log time) of
    those two topics, so the whole bag lives on the capture timeline;
 4. written in non-decreasing log-time order through a bounded reorder buffer;
-   metadata.yaml regenerated from the input's, keeping its QoS profiles.
+   metadata.yaml regenerated from the input's, keeping its QoS profiles;
+5. ``imu_sync``: another IMU copied through (the ZED's live one), whose
+   driver stamps it late, measured against the Ouster's IMU on the capture
+   clock (:mod:`scoop.imu_sync`) and its header stamps moved back by that
+   (only when the two correlate; its log time is shifted as in 3).
 
     from scoop import retime
     retime.retime_bag(original, decoded, out_dir, "/ouster", "/mobile_1/ouster")
@@ -26,11 +30,11 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterable, List, Optional
 
 import numpy as np
 
-from . import bag, ouster
+from . import bag, imu_sync as IS, ouster
 from .bag import BagError, TopicSchema
 from .bagwrite import BagWriter, write_in_order
 
@@ -87,22 +91,39 @@ class RetimeResult:
     counts: Dict[str, int] = field(default_factory=dict)
     t_min: int = 0
     t_max: int = 0
+    imu_sync: List["IS.ImuSync"] = field(default_factory=list)
 
 
 def retime_bag(packets_bag, sensortime_bag, out_dir, packets_ns: str = "/ouster",
                points_ns: str = "/mobile_1/ouster",
                clock: Optional[ouster.ClockMap] = None,
-               reorder_s: float = REORDER_S, metadata=None, log=print) -> RetimeResult:
+               reorder_s: float = REORDER_S, metadata=None, imu_sync: Iterable[dict] = (),
+               log=print) -> RetimeResult:
     """Retime ``sensortime_bag`` (decoded or replayed, sensor-time stamps)
     into ``out_dir`` using the clock of ``packets_bag`` (the original).
     ``clock`` skips the fit (e.g. a saved :class:`~scoop.ouster.ClockMap`);
-    ``metadata`` overrides the packets bag's sensor metadata."""
+    ``metadata`` overrides the packets bag's sensor metadata. ``imu_sync``:
+    [{"topic": ..., "ref": (default <points_ns>/imu), "max_shift": s,
+    "min_corr": c}], see step 5."""
     if clock is None:
         clock = ouster.fit_clock(bag.open_bag(packets_bag), packets_ns,
                                  metadata=metadata, log=log)
     reader = bag.open_bag(sensortime_bag)
     retime = [f"{points_ns}/points", f"{points_ns}/imu"]
     delta = replay_shift_ns(reader, retime, clock, reorder_s, log)
+    synced, shift = [], {}
+    for c in imu_sync or ():
+        r = IS.measure(reader, c["topic"], c.get("ref", f"{points_ns}/imu"), ref_stamp=clock.host_ns,
+                       max_shift=float(c.get("max_shift", 5.0)),
+                       min_corr=float(c.get("min_corr", IS.MIN_CORR)))
+        synced.append(r)
+        if r.ok:
+            shift[r.topic] = r.shift_ns
+            log(f"imu sync: {r.topic} {r.shift_s:+.3f} s behind {r.ref} (correlation "
+                f"{r.correlation:.2f}, scale {r.scale:.2f}): stamps moved back by it")
+        else:
+            log(f"imu sync: WARNING {r.topic} vs {r.ref}: correlation {r.correlation:.2f}, "
+                f"turning {r.turn_rms:.3f} rad/s -- not sure enough, stamps left as they are")
 
     template = Path(sensortime_bag) / "metadata.yaml"
     retimed = {t: 0 for t in retime}
@@ -115,6 +136,10 @@ def retime_bag(packets_bag, sensortime_bag, out_dir, packets_ns: str = "/ouster"
                 data = with_header_stamp(data, new_ns)
                 log_time = pub_time = new_ns
                 retimed[ch.topic] += 1
+            elif ch.topic in shift:
+                data = with_header_stamp(data, header_stamp_ns(data) - shift[ch.topic])
+                log_time = msg.log_time + delta
+                pub_time = msg.publish_time + delta
             else:
                 log_time = msg.log_time + delta
                 pub_time = msg.publish_time + delta
@@ -130,7 +155,7 @@ def retime_bag(packets_bag, sensortime_bag, out_dir, packets_ns: str = "/ouster"
             raise BagError(str(e)) from None
 
     res = RetimeResult(w.dir, clock, delta, retimed, dict(w.counts),
-                       int(w.t_min or 0), int(w.t_max or 0))
+                       int(w.t_min or 0), int(w.t_max or 0), synced)
     log(f"wrote {w.n} messages -> {w.dir}")
     for t, c in retimed.items():
         log(f"retimed {c} msgs on {t}")

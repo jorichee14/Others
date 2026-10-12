@@ -598,8 +598,11 @@ def test_process_recording_steps_skip_redo_fail():
         assert st == {"decoded": True, "retimed": True, "glim": True, "zed": False}, st
         w = rec.work
         B = "mirc_survey_mobile_1"
-        assert sorted(os.listdir(w)) == sorted(["clock.json", f"{B}_decoded", "glim",
+        assert sorted(os.listdir(w)) == sorted(["clock.json", f"{B}_decoded", "glim", "imu_sync.json",
                                                 "process.yaml", f"{B}_retimed"]), os.listdir(w)
+        import json
+        sync = json.load(open(os.path.join(w, "imu_sync.json")))       # recording.yaml's ouster.imu_sync
+        assert [x["topic"] for x in sync] == ["/mobile_1/zed/imu/data"], sync
         assert os.path.isfile(os.path.join(w, f"{B}_decoded", f"{B}_decoded_0.mcap"))
         assert os.path.isfile(os.path.join(w, f"{B}_retimed", f"{B}_retimed_0.mcap"))
         used = open(os.path.join(w, "glim", "bag_used.txt")).read().strip()

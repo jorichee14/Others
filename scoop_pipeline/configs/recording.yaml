@@ -18,6 +18,11 @@ ouster:
     - /ouster/lidar_packets:=/mobile_1/ouster/lidar_packets
     - /zed/zed_node/imu/data:=/mobile_1/zed/imu/data
     - /zed/zed_node/imu/mag:=/mobile_1/zed/imu/mag
+  imu_sync:                        # IMUs copied through whose driver stamps them late: measured
+    - topic: /mobile_1/zed/imu/data   # against the Ouster's IMU (default ref <out_ns>/imu) and
+                                      # their header stamps moved back (scoop/imu_sync.py); the
+                                      # live ZED wrapper stamped it 2.12 s late on 20260924.
+                                      # The result: <work>/imu_sync.json
 
 glim:
   config: ~/workspaces/isaac_ros-dev/glim_config   # $GLIM_CONFIG overrides
