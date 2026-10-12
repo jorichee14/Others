@@ -85,6 +85,8 @@ analysis/            measuring results; reads outputs, writes nothing back
                      inter-robot loop closures checked, time to merge, bytes exchanged
   slam/hydra_eval.py  Hydra against the ground truth as cslam_eval does Swarm-SLAM: ATE per
                      robot and joint, in map, the odometry baseline, loop closures
+  slam/imu_check.py  a euroc.py export's IMU against its ground truth: gravity while still,
+                     the gyro's rotation and time shift that fit the turns (T_BS, clock)
   slam/relay_stats.py  what a channel did to a run's messages (relay.csv), runs side by
                      side: MB, lost, delay, backlog; --to server: map age at the receiver
   slam/dsg_stream.py  Hydra's scene-graph stream: log (in Hydra's container) the size of
@@ -135,6 +137,7 @@ tests/               self-tests, no real bag needed
                      odometry with a z-up body frame, config frames, range and mesh stream
   test_hydra_eval.py hydra_eval: odometry shift aligned away, Hydra's offset in map, --cov,
                      loop closures, json and figure
+  test_imu_check.py  imu_check: a turned, late IMU found (90 deg, +0.10 s), a right one not
   test_relay_stats.py  relay_stats: delay, loss, backlog of a queued stream, map age
   test_dsg_stream.py dsg_stream: sizes, rates from bag time between updates, figure
   test_replica_multiagent.py  replica_multiagent: common camera, lockstep frames, poses,
