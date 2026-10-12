@@ -27,11 +27,15 @@ for R in "${ROBOTS[@]}"; do
   [ -f "$D/mav0/cam0/data.csv" ] || { echo "no $D/mav0: run datasets/euroc.py first"; exit 1; }
   [ -e "$O" ] && { echo "$O exists: remove it to run $R again"; exit 1; }
   mkdir -p "$O"
-  echo "$R: Kimera-VIO on $(($(wc -l < $D/mav0/cam0/data.csv) - 1)) stereo pairs from $INITIAL_K, backend $(grep -m1 "^backend_type" $P/PipelineParams.yaml) ($O/kimera.log)"
+  # the last stereo pair with IMU after it: Kimera-VIO waits for IMU past a frame forever (an
+  # IMU moved back onto the images' clock, euroc.py --imu-delay, ends before the last frames)
+  t_imu=$(awk -F, 'END {print $1}' "$D/mav0/imu0/data.csv")
+  FINAL_K=$(awk -F, -v t="$t_imu" '!/^#/ && $1 + 50000000 < t {n++} END {print n - 1}' "$D/mav0/cam0/data.csv")
+  echo "$R: Kimera-VIO on $(($(wc -l < $D/mav0/cam0/data.csv) - 1)) stereo pairs from $INITIAL_K to $FINAL_K (the last with IMU after it), backend $(grep -m1 "^backend_type" $P/PipelineParams.yaml), autoInitialize $(grep -m1 "^autoInitialize" $P/BackendParams.yaml | awk '{print $2}') ($O/kimera.log)"
   T0=$SECONDS
   set +e
   "$BIN" --dataset_type=0 --dataset_path="$D" --params_folder_path="$P" \
-      --initial_k=$INITIAL_K --final_k=100000000 --use_lcd=true --vocabulary_path="$VOC" \
+      --initial_k=$INITIAL_K --final_k=$FINAL_K --use_lcd=true --vocabulary_path="$VOC" \
       --flagfile="$P/flags/stereoVIOEuroc.flags" --flagfile="$P/flags/Mesher.flags" \
       --flagfile="$P/flags/VioBackend.flags" --flagfile="$P/flags/RegularVioBackend.flags" \
       --flagfile="$P/flags/Visualizer3D.flags" --output_path="$O/" \
