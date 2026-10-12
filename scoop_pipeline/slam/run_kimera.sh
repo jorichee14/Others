@@ -44,5 +44,14 @@ for R in "${ROBOTS[@]}"; do
   fi
   n_vio=$(($(wc -l < "$O/traj_vio.csv" 2>/dev/null || echo 1) - 1))
   n_lc=$(awk -F, 'NR > 1 && $4 == 1' "$O/output_lcd_result.csv" 2>/dev/null | wc -l)
-  echo "$R: done in $((SECONDS - T0)) s: $n_vio odometry poses, $n_lc loop closures"
+  # seconds of the data the odometry covers (its last pose after the first stereo pair)
+  t0=$(awk -F, 'NR == 2 {print $1}' "$D/mav0/cam0/data.csv"); t1=$(awk -F, 'END {print $1}' "$D/mav0/cam0/data.csv")
+  tv=$(awk -F, 'END {print $1}' "$O/traj_vio.csv" 2>/dev/null)
+  span=$(awk -v a="$t0" -v b="${tv:-$t0}" -v c="$t1" 'BEGIN {printf "%.1f of %.1f s", (b - a) * 1e-9, (c - a) * 1e-9}')
+  # the backend stops on a failed optimization and Kimera-VIO still exits with 0
+  if grep -q "Variable has type" "$O/kimera.log"; then
+    echo "$R: Kimera-VIO's backend failed after $n_vio odometry poses, $span of the data:"
+    grep -m1 -B1 "Variable has type" "$O/kimera.log"; exit 1
+  fi
+  echo "$R: done in $((SECONDS - T0)) s: $n_vio odometry poses over $span of the data, $n_lc loop closures"
 done
