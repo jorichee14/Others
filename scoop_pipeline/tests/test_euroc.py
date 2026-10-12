@@ -99,7 +99,8 @@ def gt_cam(k):
 def template(d):
     os.makedirs(os.path.join(d, "flags"))
     open(os.path.join(d, "PipelineParams.yaml"), "w").write("%YAML:1.0\nfrontend_type: 1\nbackend_type: 1\n")
-    open(os.path.join(d, "BackendParams.yaml"), "w").write("%YAML:1.0\nautoInitialize: 1\n")
+    open(os.path.join(d, "BackendParams.yaml"), "w").write("%YAML:1.0\nautoInitialize: 1\n"
+                                                           "initialVelocitySigma: 0.001\n")
     open(os.path.join(d, "flags", "stereoVIOEuroc.flags"), "w").write("--log_output=false\n--visualize=true\n"
                                                                      "--backend_type=1\n")
 
@@ -152,6 +153,18 @@ def main():
         EU.convert(bag, out, agents=["mobile_2"], rate=10.0, template=tpl, imu_only=True)
         if open(os.path.join(root, "mav0", "imu0", "data.csv")).read().splitlines()[1:] != imu:
             f.append("--imu-only without a delay did not restore the stamps (mobile_2 has none)")
+        # the ground truth's velocity: 2 cm of jitter on a robot standing still is not 0.45 m/s
+        rng = np.random.default_rng(0)
+        tj = np.arange(0, 20, 0.05)
+        Pj = rng.normal(0, 0.02, (len(tj), 3))
+        Pj[tj > 10, 0] += (tj[tj > 10] - 10) * 0.5
+        keep = (tj < 5) | (tj >= 6)                       # and a 1 s dropout
+        Vj = EU.smooth_velocity((T0 + tj[keep] * 1e9).astype(np.int64), Pj[keep])
+        tk = tj[keep]
+        if not (np.median(np.linalg.norm(Vj[tk < 4], axis=1)) < 0.08 and abs(np.median(Vj[tk > 12, 0]) - 0.5) < 0.02
+                and np.linalg.norm(Vj[np.searchsorted(tk, 6.0)]) < 0.2):
+            f.append("smooth_velocity: standing %.3f, moving %.3f" % (
+                np.median(np.linalg.norm(Vj[tk < 4], axis=1)), np.median(Vj[tk > 12, 0])))
         P = os.path.join(root, "params")
         lc, rc = open(os.path.join(P, "LeftCameraParams.yaml")).read(), open(os.path.join(P, "RightCameraParams.yaml")).read()
         if not np.allclose(yaml_list(lc, "intrinsics"), [380.0, 381.0, 320.5, 240.5]):
@@ -169,6 +182,8 @@ def main():
         if "--log_output=true" not in fl or "--visualize=false" not in fl or "--log_output=false" in fl \
                 or "--visualize=true" in fl or "--backend_type=1" not in fl:
             f.append("flags:\n" + fl)
+        if "initialVelocitySigma: 0.1\n" not in open(os.path.join(P, "BackendParams.yaml")).read():
+            f.append("initialVelocitySigma not loosened")
         if "autoInitialize: 0" not in open(os.path.join(P, "BackendParams.yaml")).read() \
                 or "backend_type: 0" not in open(os.path.join(P, "PipelineParams.yaml")).read():
             f.append("backend_type / autoInitialize not set to 0")

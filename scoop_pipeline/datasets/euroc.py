@@ -19,7 +19,8 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)
                                       at every stereo pair (autoInitialize: 0
                                       starts from the state within 10 ms of its
                                       first frame): ns, position, quaternion
-                                      w x y z, velocity (finite differences),
+                                      w x y z, velocity (position change over
+                                      +-0.5 s, not across a gap),
                                       biases 0; Kimera-VIO's reader wants it, and
                                       logs it next to its estimate
   params/                             Kimera-VIO's parameters: --template's
@@ -37,7 +38,8 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)
                                       and the machine's noise) and the flags
                                       with logging on and the viewer off;
                                       backend_type 0 and autoInitialize 0 (the
-                                      first state from the ground truth)
+                                      first state from the ground truth, its
+                                      velocity to 0.1 m/s)
   report.txt
 
 --gt-only: (re)write only mav0/state_groundtruth_estimate0 of an existing export.
@@ -98,6 +100,8 @@ MACHINES = {
 }
 TEMPLATE = os.path.expanduser("~/workspaces/hydra_ws/src/kimera_vio/params/D455")
 PAIR_TOL_NS = 2_000_000
+VEL_HALF_S = 0.5           # the ground truth's velocity: position change over +-0.5 s
+INIT_VEL_SIGMA = 0.1       # m/s: Kimera-VIO's trust in that first velocity (the D455 profile: 0.001)
 
 CAMERA = """%%YAML:1.0
 camera_id: %(name)s
@@ -189,7 +193,7 @@ def write_gt(paths, edges, machine, imu_frame, folder, at_ns=()):
         T = Tc @ T_ci
         q = mc.T_to_xyzq(T)
         P[k], Q[k] = T[:3, 3], np.array(q[3:]) / np.linalg.norm(q[3:])
-    V = np.gradient(P, (ts - ts[0]) * 1e-9, axis=0) if len(ts) > 1 else np.zeros_like(P)
+    V = smooth_velocity(ts, P)
     os.makedirs(folder)
     open(os.path.join(folder, "sensor.yaml"), "w").write(
         "%YAML:1.0\nsensor_type: visual-inertial\nT_BS:\n  cols: 4\n  rows: 4\n"
@@ -204,6 +208,30 @@ def write_gt(paths, edges, machine, imu_frame, folder, at_ns=()):
             fh.write("%d,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,0,0,0,0,0,0\n"
                      % (ts[k], P[k, 0], P[k, 1], P[k, 2], w, x, y, z, V[k, 0], V[k, 1], V[k, 2]))
     return len(ts)
+
+
+def smooth_velocity(ts, P, half_s=VEL_HALF_S, gap_s=0.5):
+    """Velocity at every stamp: the position change over +-half_s, never across
+    a gap over gap_s (ends there). A difference of neighbouring poses turns a
+    noisy trajectory's jitter into speed: mobile_2's depth-tracked ground truth
+    read 0.3-0.6 m/s at standstill, which Kimera-VIO started from."""
+    t = (np.asarray(ts, np.int64) - int(ts[0])) * 1e-9
+    V = np.zeros_like(P)
+    if len(t) < 2:
+        return V
+    cut = np.flatnonzero(np.diff(t) > gap_s)
+    starts, ends = np.r_[0, cut + 1], np.r_[cut, len(t) - 1]
+    for a, b in zip(starts, ends):
+        ta, Pa = t[a:b + 1], P[a:b + 1]
+        if len(ta) < 2:
+            continue
+        lo, hi = np.maximum(ta - half_s, ta[0]), np.minimum(ta + half_s, ta[-1])
+        dt = hi - lo
+        ok = dt > 1e-3
+        for k in range(3):
+            V[a:b + 1, k] = np.where(ok, (np.interp(hi, ta, Pa[:, k]) - np.interp(lo, ta, Pa[:, k]))
+                                     / np.where(ok, dt, 1), 0.0)
+    return V
 
 
 def pair_stamps(root):
@@ -290,8 +318,10 @@ def params(folder, template, rate_cam, rate_imu, infos, T_bs, noise):
     # takes a tilted robot's gravity on x for an accelerometer bias (mobile_1, 20260924: 0.38
     # m/s^2), which runs away as soon as the robot turns (ATE 33 m -> 1.9 m)
     bp = os.path.join(folder, "BackendParams.yaml")
-    btxt = open(bp).read()
-    open(bp, "w").write(re.sub(r"(?m)^autoInitialize:.*$", "autoInitialize: 0", btxt))
+    btxt = re.sub(r"(?m)^autoInitialize:.*$", "autoInitialize: 0", open(bp).read())
+    # ... and from its velocity loosely: a ground truth's velocity is a difference of noisy poses
+    btxt = re.sub(r"(?m)^initialVelocitySigma:.*$", "initialVelocitySigma: %g" % INIT_VEL_SIGMA, btxt)
+    open(bp, "w").write(btxt)
     fl = os.path.join(folder, "flags", "stereoVIOEuroc.flags")
     lines = [ln for ln in open(fl).read().splitlines() if not ln.startswith(("--log_output", "--visualize="))]
     open(fl, "w").write("\n".join(["--log_output=true", "--visualize=false"] + lines) + "\n")
