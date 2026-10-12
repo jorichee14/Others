@@ -41,6 +41,11 @@ def stamp(k):
     return THE.T0 + k * 100_000_000
 
 
+def kstamp(k):
+    """Kimera-VIO's keyframe stamp near frame k: a few ns off, as no float64 holds it exactly."""
+    return stamp(k) + (-7 if k == 1 else 7)
+
+
 def imu_gt(k):
     return THE.gt_pose(0, k) @ np.linalg.inv(T_IC)
 
@@ -65,7 +70,7 @@ def make_kimera(d):
         fh.write("#timestamp,x,y,z,qw,qx,qy,qz,vx,vy,vz,bgx,bgy,bgz,bax,bay,baz\n")
         for k in (1, 2, 4, 7, 10):                       # keyframes; 3, 5, 6, 8, 9 interpolated
             T = imu_gt(k)
-            fh.write("%d,%s,%s,0,0,0,0,0,0,0,0,0\n" % (stamp(k), ",".join("%.9f" % x for x in T[:3, 3] + SHIFT),
+            fh.write("%d,%s,%s,0,0,0,0,0,0,0,0,0\n" % (kstamp(k), ",".join("%.9f" % x for x in T[:3, 3] + SHIFT),
                                                       ",".join("%.9f" % x for x in wxyz(T))))
     right = np.linalg.inv(imu_gt(2)) @ imu_gt(10)
     wrong = np.eye(4)
@@ -73,7 +78,7 @@ def make_kimera(d):
     with open(os.path.join(o, "output_lcd_result.csv"), "w") as fh:
         fh.write("#timestamp_kf,timestamp_query,timestamp_match,isLoop,matchKfId,queryKfId,x,y,z,qw,qx,qy,qz\n")
         for tq, tm, T in ((10, 2, right), (10, 1, wrong)):
-            fh.write("%d,%d,%d,1,0,0,%s,%s\n" % (stamp(tq), stamp(tq), stamp(tm),
+            fh.write("%d,%d,%d,1,0,0,%s,%s\n" % (kstamp(tq), kstamp(tq), kstamp(tm),
                                                 ",".join("%.9f" % x for x in T[:3, 3]),
                                                 ",".join("%.9f" % x for x in wxyz(T))))
         fh.write("%d,0,0,0,0,0,0,0,0,1,0,0,0\n" % stamp(5))
@@ -128,8 +133,8 @@ def main():
             rel = np.linalg.inv(base(2)) @ base(10)
             p, q = e.pose.position, e.pose.orientation
             got = mc.xyzq_to_T([p.x, p.y, p.z, q.x, q.y, q.z, q.w])
-            if (e.key_from, e.key_to, e.robot_from, e.robot_to, e.type) != (stamp(10), stamp(2), 0, 0, 1) \
-                    or lt != stamp(10) + H.LC_DELAY_NS or not np.allclose(got, rel, atol=1e-5):
+            if (e.key_from, e.key_to, e.robot_from, e.robot_to, e.type) != (kstamp(10), kstamp(2), 0, 0, 1) \
+                    or lt != kstamp(10) + H.LC_DELAY_NS or not np.allclose(got, rel, atol=1e-5):
                 f.append("closure: keys %s %s at %s, pose\n%s\nwant\n%s" % (e.key_from, e.key_to, lt, got, rel))
         rep = open(os.path.join(out, "report.txt")).read()
         if "2 from Kimera-VIO; 1 agree with its odometry" not in rep or "(1 of 1 right by the ground truth), " \

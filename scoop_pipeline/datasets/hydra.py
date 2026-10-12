@@ -54,7 +54,7 @@ in map, so its odometry frame is map. Its loop closures go to Hydra on
 /hydra/external_loop_closures (pose_graph_tools_msgs/PoseGraph, keys the two
 keyframe stamps, the query's pose in the match's base frame), half a second
 after the query, each only when it agrees with Kimera-VIO's own odometry
-between the two keyframes: translation within max(1 m, 5 % of the path
+between the two keyframes: translation within max(1.5 m, 10 % of the path
 between) and rotation within 10 deg + 0.1 deg per metre of it. mobile_1 of
 20260924: 48 of 62 closures put the end of the run on its start, 14 m away
 (identical calibration boards), which Kimera-VIO's own outlier rejection kept
@@ -342,21 +342,23 @@ def read_gt(path):
     return out
 
 
-# loop closures Hydra gets from Kimera-VIO: the odometry between the two keyframes must agree
-GATE_M, GATE_FRAC, GATE_DEG, GATE_DEG_PER_M = 1.0, 0.05, 10.0, 0.1
+# loop closures Hydra gets from Kimera-VIO: the odometry between the two keyframes must agree,
+# within what it drifts (mobile_1 20260924: its path 10 % short over the run)
+GATE_M, GATE_FRAC, GATE_DEG, GATE_DEG_PER_M = 1.5, 0.10, 10.0, 0.1
 # a closure the ground truth calls right (report only): relative pose within these
 RIGHT_M, RIGHT_DEG = 0.5, 10.0
 LC_DELAY_NS = 500_000_000            # sent half a second after the query keyframe
 
 
-def _rows(path):
-    """Rows of a Kimera-VIO csv (comment header) as floats, keys exact as int."""
+def _rows(path, int_cols=(0,)):
+    """Rows of a Kimera-VIO csv (comment header) as floats, the int_cols (stamps,
+    ns: a float64 has 53 bits, a stamp 61) exact as int."""
     out = []
     for ln in open(path):
         if ln.startswith("#") or not ln.strip():
             continue
         v = ln.strip().split(",")
-        out.append([int(v[0])] + [float(x) for x in v[1:]])
+        out.append([int(x) if k in int_cols else float(x) for k, x in enumerate(v)])
     return out
 
 
@@ -437,8 +439,8 @@ def kimera_closures(robot_dir, T_ib, robot, gt_rows=None):
         odo = {int(x[0]): _T(x[1:4], x[4:8]) for x in rows}
         ts = np.array(sorted(odo), np.int64)
         P = np.array([odo[t][:3, 3] for t in ts])
-        for x in _rows(f):
-            if len(x) < 13 or int(x[3]) != 1:
+        for x in _rows(f, int_cols=(0, 1, 2, 3)):
+            if len(x) < 13 or x[3] != 1:
                 continue
             tq, tm = int(x[1]), int(x[2])
             lc = _T(x[6:9], x[9:13])                                  # imuMatch_T_imuQuery
