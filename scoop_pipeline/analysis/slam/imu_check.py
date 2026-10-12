@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
-"""Does a datasets/euroc.py export's IMU agree with its ground truth? Checks
-the IMU's link to the cameras (T_BS) and its timing before Kimera-VIO runs.
+"""Does a datasets/euroc.py export's IMU agree with its images and ground
+truth? Checks the IMU's timing and its link to the cameras (T_BS) before
+Kimera-VIO runs.
 
-    python scoop_pipeline/analysis/slam/imu_check.py <export>/<robot> [--still 5 25] [--drive 26 60]
+    python scoop_pipeline/analysis/slam/imu_check.py <export>/<robot> [--still 5 25] [--span 26 200]
+        [--max-shift 10]
 
-The ground truth (mav0/state_groundtruth_estimate0: the IMU in map, through
-the same T_BS as the parameters) is compared with the IMU itself:
-  still   (--still, seconds after the first stereo pair, the robot standing)
-          the mean accelerometer reading against gravity turned into the
-          IMU frame by the ground truth: the angle between them
-  driving (--drive, the robot turning) the gyro against the ground truth's
-          rotation over 0.5 s windows; then the rotation and the time shift
-          of the gyro that fit them best. A right export fits with a few
-          degrees and a few hundredths of a second; a wrong T_BS shows as a
-          large rotation, a clock offset between IMU and camera as a shift.
+Times in seconds after the first stereo pair. Three measures of how fast the
+left camera turns about its own vertical (y) axis, over --span:
+  images        the left images' horizontal shift between frames (phase
+                correlation, OpenCV) over the focal length
+  gyro          the IMU's angular rate turned into the camera by T_BS
+                (params/LeftCameraParams.yaml); against the ground truth
+                its size (in line whether T_BS is right or not)
+  ground truth  mav0/state_groundtruth_estimate0's rotation (the IMU in map,
+                through the same T_BS)
+Each pair is lined up by the time shift (up to --max-shift) that correlates
+them best: "gyro +2.10 s" means the gyro's stamps run 2.10 s behind the
+images'. Kimera-VIO needs the gyro on the images' clock: shift about 0.
+Then:
+  still   (--still, the robot standing) the mean accelerometer reading
+          against gravity turned into the IMU frame by the ground truth
+  rotation the rotation that best maps the gyro onto the ground truth's
+          rate, at their shift: a few degrees when T_BS is right
 """
 import argparse
 import os
+import re
 
 import numpy as np
 
@@ -42,17 +52,70 @@ def fit(a, b):
     return (U @ np.diag([1, 1, np.linalg.det(U @ Vt)]) @ Vt).T
 
 
-def rms(x):
-    return float(np.sqrt(np.mean(np.sum(x ** 2, 1)))) if len(x) else float("nan")
+def camera_params(path):
+    """(R of T_BS: the camera's axes in the IMU frame, fx) of a Kimera-VIO camera yaml."""
+    txt = open(path).read()
+    T = np.array([float(x) for x in re.search(r"data:\s*\[([^\]]*)\]", txt).group(1).split(",")]).reshape(4, 4)
+    fx = float(re.search(r"intrinsics:\s*\[([^,\]]*)", txt).group(1))
+    return T[:3, :3], fx
 
 
-def check(robot_dir, still=(5.0, 25.0), drive=(26.0, 60.0), window=0.5):
+def image_rate(cam_dir, fx, t0, span):
+    """(times s, rad/s about the camera's y axis) from the left images' shift between frames."""
+    import cv2
+    rows = [ln.strip().split(",") for ln in open(os.path.join(cam_dir, "data.csv")) if not ln.startswith("#")]
+    rows = [(int(r[0]), r[1]) for r in rows if len(r) >= 2]
+    rows = [(t, f) for t, f in rows if span[0] - 1 <= (t - t0) * 1e-9 <= span[1] + 1]
+    ts, rate, prev, win, ds = [], [], None, None, 1
+    for t, f in rows:
+        im = cv2.imread(os.path.join(cam_dir, "data", f), cv2.IMREAD_GRAYSCALE)
+        if im is None:
+            continue
+        if win is None:
+            ds = max(1, im.shape[1] // 240)
+        im = np.float32(cv2.resize(im, (im.shape[1] // ds, im.shape[0] // ds), interpolation=cv2.INTER_AREA))
+        if win is None:
+            win = cv2.createHanningWindow(im.shape[::-1], cv2.CV_32F)
+        if prev is not None:
+            (dx, _), _ = cv2.phaseCorrelate(prev[1], im, win)
+            dt = (t - prev[0]) * 1e-9
+            # a turn by +a about y (down) moves the scene left by fx * a
+            ts.append(((t + prev[0]) / 2 - t0) * 1e-9)
+            rate.append(-dx * ds / fx / dt)
+        prev = (t, im)
+    return np.array(ts), np.array(rate)
+
+
+def smooth(T, t, x, width=0.5):
+    """x(t) on the grid T, averaged over `width` seconds."""
+    y = np.interp(T, t, x)
+    n = max(1, int(round(width / (T[1] - T[0]))))
+    return np.convolve(y, np.ones(n) / n, "same")
+
+
+def line_up(T, a, tb, b, max_shift):
+    """(shift s, correlation, scale): b's stamps run `shift` behind a's."""
+    def at(s):
+        return np.interp(T + s, tb, b)
+
+    def corr(s):
+        x = at(s)
+        return np.corrcoef(a, x)[0, 1] if x.std() > 0 and a.std() > 0 else -1.0
+
+    step = tb[1] - tb[0]
+    s = max(np.arange(-max_shift, max_shift + step / 2, step), key=corr)
+    x = at(s)
+    return float(s), float(corr(s)), float((a @ x) / (a @ a)) if a @ a > 0 else float("nan")
+
+
+def check(robot_dir, still=(5.0, 25.0), span=(26.0, 200.0), max_shift=10.0, images=True):
     m0 = os.path.join(robot_dir, "mav0")
     c = np.loadtxt(os.path.join(m0, "cam0", "data.csv"), delimiter=",", comments="#", dtype=np.int64, usecols=0)
     u = np.loadtxt(os.path.join(m0, "imu0", "data.csv"), delimiter=",", comments="#", ndmin=2)
     g = np.loadtxt(os.path.join(m0, "state_groundtruth_estimate0", "data.csv"), delimiter=",", comments="#", ndmin=2)
+    R_bs, fx = camera_params(os.path.join(robot_dir, "params", "LeftCameraParams.yaml"))
     tu, tg = (u[:, 0] - c[0]) * 1e-9, (g[:, 0] - c[0]) * 1e-9
-    rep = {}
+    rep = {"span": list(span)}
 
     m = (tu > still[0]) & (tu < still[1])
     acc = u[m, 4:7].mean(0)
@@ -61,57 +124,66 @@ def check(robot_dir, still=(5.0, 25.0), drive=(26.0, 60.0), window=0.5):
                     "angle_deg": float(np.degrees(np.arccos(np.clip(
                         acc @ up / np.linalg.norm(acc) / np.linalg.norm(up), -1, 1))))}
 
-    def windows(shift):
-        a, b = [], []
-        for t in np.arange(drive[0], drive[1], window):
-            i, j = np.searchsorted(tg, [t, t + window])
-            k = (tu >= t + shift) & (tu < t + window + shift)
-            if j >= len(tg) or j <= i or k.sum() < 10:
-                continue
-            a.append(log(rot(g[i, 4:8]).T @ rot(g[j, 4:8])) / (tg[j] - tg[i]))
-            b.append(u[k, 1:4].mean(0))
-        return np.array(a).reshape(-1, 3), np.array(b).reshape(-1, 3)
+    # angular rate in the IMU frame on a fine grid: gyro and ground truth (+-0.1 s differences)
+    dt = 0.02
+    lo, hi = max(tu[0], tg[0]) + 0.2, min(tu[-1], tg[-1]) - 0.2
+    G = np.arange(lo, hi, dt)
+    w_gyro = np.stack([smooth(G, tu, u[:, 1 + k]) for k in range(3)], 1)
+    i0 = np.clip(np.searchsorted(tg, G - 0.1), 0, len(tg) - 1)
+    i1 = np.clip(np.searchsorted(tg, G + 0.1), 0, len(tg) - 1)
+    w_gt = np.array([log(rot(g[a, 4:8]).T @ rot(g[b, 4:8])) / max(tg[b] - tg[a], 1e-3) for a, b in zip(i0, i1)])
+    w_gt = np.stack([smooth(G, G, w_gt[:, k]) for k in range(3)], 1)
+    # about the camera's y axis
+    y_gyro, y_gt = (w_gyro @ R_bs)[:, 1], (w_gt @ R_bs)[:, 1]
+    T = np.arange(span[0], span[1], dt)
+    T = T[(T - max_shift >= lo) & (T + max_shift <= hi)]
+    gt_T = np.interp(T, G, y_gt)
+    # gyro against ground truth by the rate's size: in line even when T_BS is wrong
+    pairs = {"gyro vs ground truth": line_up(T, np.interp(T, G, np.linalg.norm(w_gt, axis=1)), G,
+                                             np.linalg.norm(w_gyro, axis=1), max_shift)}
+    if images:
+        try:
+            ti, ri = image_rate(os.path.join(m0, "cam0"), fx, c[0], span)
+            im_T = smooth(T, ti, ri)
+            pairs["gyro vs images"] = line_up(T, im_T, G, y_gyro, max_shift)
+            pairs["ground truth vs images"] = line_up(T, im_T, G, y_gt, max_shift)
+        except ImportError:
+            rep["images"] = "no OpenCV (cv2): run in the scoop environment for the images"
+    rep["timing"] = {k: {"shift_s": round(s, 2), "correlation": cc, "scale": sc} for k, (s, cc, sc) in pairs.items()}
 
-    a, b = windows(0.0)
-    Q = fit(a, b)
-
-    def off(shift):
-        a, b = windows(shift)
-        return rms(a - b @ Q.T)
-
-    best = min(np.arange(-0.5, 0.501, 0.02), key=off)
-    a2, b2 = windows(best)
-    Q = fit(a2, b2)
-    big = np.argsort(-np.linalg.norm(a2, axis=1))[:3]
-    rep["driving"] = {"windows": len(a), "ground_truth_rms": rms(a), "as_exported_rms": rms(a - b),
-                      "shift_s": round(float(best), 2), "rotation_deg": float(np.degrees(np.linalg.norm(log(Q)))),
-                      "rotation": Q.tolist(), "fitted_rms": rms(a2 - b2 @ Q.T),
-                      "examples": [(a2[k].tolist(), b2[k].tolist()) for k in big]}
+    # T_BS: the rotation that maps the gyro onto the ground truth, the gyro lined up
+    s = pairs["gyro vs ground truth"][0]
+    W = np.stack([np.interp(G + s, G, w_gyro[:, k]) for k in range(3)], 1)
+    keep = (G >= span[0]) & (G <= span[1]) & (G + s <= hi)
+    Q = fit(w_gt[keep], W[keep])
+    rep["rotation"] = {"deg": float(np.degrees(np.linalg.norm(log(Q)))), "matrix": Q.tolist()}
     return rep
 
 
 def report(rep):
-    s, d = rep["still"], rep["driving"]
+    s = rep["still"]
     r = lambda v: "[%s]" % " ".join("%6.3f" % x for x in v)
-    lines = ["still: accelerometer %s (|a| %.2f m/s^2), gravity by the ground truth %s: %.1f deg apart"
-             % (r(s["accelerometer"]), np.linalg.norm(s["accelerometer"]), r(s["gravity_by_ground_truth"]),
-                s["angle_deg"]),
-             "driving (%d windows): the ground truth turns at rms %.3f rad/s; the gyro is off it by rms %.3f "
-             "rad/s as exported" % (d["windows"], d["ground_truth_rms"], d["as_exported_rms"]),
-             "best fit: the gyro rotated %.1f deg and shifted %+.2f s, then off by rms %.3f rad/s"
-             % (d["rotation_deg"], d["shift_s"], d["fitted_rms"])]
-    lines += ["    " + r(row) for row in d["rotation"]]
-    lines += ["  ground truth %s   gyro %s" % (r(a), r(b)) for a, b in d["examples"]]
+    lines = ["timing, %g-%g s, turn rate about the camera's vertical axis (+ = the second runs behind):"
+             % tuple(rep["span"])]
+    for k, d in rep["timing"].items():
+        lines.append("  %-24s %+6.2f s  correlation %.2f  scale %.2f" % (k, d["shift_s"], d["correlation"], d["scale"]))
+    if "images" in rep:
+        lines.append("  " + rep["images"])
+    lines.append("still: accelerometer %s (|a| %.2f m/s^2), gravity by the ground truth %s: %.1f deg apart"
+                 % (r(s["accelerometer"]), np.linalg.norm(s["accelerometer"]), r(s["gravity_by_ground_truth"]),
+                    s["angle_deg"]))
+    lines.append("rotation fitting the gyro to the ground truth (lined up): %.1f deg" % rep["rotation"]["deg"])
     return "\n".join(lines)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("robot_dir", help="<euroc export>/<robot> (with mav0/)")
+    ap.add_argument("robot_dir", help="<euroc export>/<robot> (with mav0/ and params/)")
     ap.add_argument("--still", nargs=2, type=float, default=(5.0, 25.0), metavar=("FROM", "TO"))
-    ap.add_argument("--drive", nargs=2, type=float, default=(26.0, 60.0), metavar=("FROM", "TO"))
+    ap.add_argument("--span", nargs=2, type=float, default=(26.0, 200.0), metavar=("FROM", "TO"))
+    ap.add_argument("--max-shift", type=float, default=10.0)
     a = ap.parse_args()
-    print(report(check(a.robot_dir, a.still, a.drive)))
+    print(report(check(a.robot_dir, a.still, a.span, a.max_shift)))
 
 
 if __name__ == "__main__":
