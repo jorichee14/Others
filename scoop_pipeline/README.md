@@ -112,6 +112,9 @@ checks/              is the environment / the decoder right? (against real bags)
   bag_check.py       verify + time the fast decoder on a real bag
   ouster_check.py    verify packet decoding against a replayed/retimed bag
   replica_check.py   does a replica dataset fit itself (depth vs image, depth vs poses)
+data_quality_validation/  is the recorded data right? (straight from the bag, PASS/FAIL)
+  camera_lidar_sync.py <bag> [--robot mobile_1]  camera and LiDAR on one clock: the turn rate
+                     from image shifts and from scan azimuth shifts, lined up per segment
 tests/               self-tests, no real bag needed
   test_bag.py        reading, writing, messages
   test_ouster.py     packets, clock, replay, remaps (needs ouster-sdk)
@@ -138,6 +141,7 @@ tests/               self-tests, no real bag needed
                      odometry with a z-up body frame, config frames, range and mesh stream
   test_hydra_eval.py hydra_eval: odometry shift aligned away, Hydra's offset in map, --cov,
                      loop closures, json and figure
+  test_camera_lidar_sync.py  camera_lidar_sync: synced bag passes, a LiDAR 0.3 s late found and fails
   test_imu_check.py  imu_check: a gyro 2.1 s late found against images and ground truth;
                      an IMU turned 90 deg found by gravity and the rotation fit
   test_relay_stats.py  relay_stats: delay, loss, backlog of a queued stream, map age
