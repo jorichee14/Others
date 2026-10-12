@@ -68,7 +68,8 @@ datasets/            bags -> datasets for other tools
                      (visualize:=true for the live scene graph); --configs-only rewrites those
   euroc.py           a multi-robot pass as Kimera-VIO input: each robot's rectified stereo
                      pair and IMU in the EuRoC layout, a parameter folder from the recorded
-                     calibration (slam/run_kimera.sh runs it, loop closure on)
+                     calibration (slam/run_kimera.sh runs it, loop closure on); the IMU
+                     moved onto the images' clock (mobile_1's ZED: 2.12 s; --imu-only rewrites it)
   replica_multiagent.py  a multi-robot pass as a ReplicaMultiagent scene for MAGiC-SLAM:
                      one common camera, frames in lockstep, poses in the shared map
 analysis/            measuring results; reads outputs, writes nothing back
@@ -132,7 +133,7 @@ tests/               self-tests, no real bag needed
   test_swarm_slam.py swarm_slam: topics, intrinsics, registered depth, odometry in the
                      robot's odom frame at the image stamp, ground truth
   test_euroc.py      euroc: stereo pairs at --rate, unpaired frames out, IMU increasing,
-                     intrinsics from P, T_BS from /tf_static, flags
+                     intrinsics from P, T_BS from /tf_static, flags, --imu-only --imu-delay
   test_hydra_export.py  hydra: a bag per robot, images byte for byte, /tf composing to the
                      odometry with a z-up body frame, config frames, range and mesh stream
   test_hydra_eval.py hydra_eval: odometry shift aligned away, Hydra's offset in map, --cov,

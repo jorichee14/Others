@@ -36,6 +36,11 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)
   report.txt
 
 --gt-only: (re)write only mav0/state_groundtruth_estimate0 of an existing export.
+--imu-only: (re)write only mav0/imu0 of an existing export (after a new --imu-delay).
+--imu-delay S: how far the IMU's stamps run behind the images' (s), taken off
+  every IMU stamp; default the machine's measured delay (mobile_1's ZED: 2.12 s,
+  the same in the SVO replay's first and second half; analysis/slam/imu_check.py
+  measures it: "gyro vs images").
 --params-only: (re)write only params/ of an existing export (rates from its data.csv files).
 
 A stereo pair is a left and right image within 2 ms, at most --rate per
@@ -68,6 +73,9 @@ MACHINES = {
     "mobile_1": {"left": "/mobile_1/zed/left/image_rect_color", "right": "/mobile_1/zed/right/image_rect_color",
                  "left_info": "/mobile_1/zed/left/camera_info", "right_info": "/mobile_1/zed/right/camera_info",
                  "imu": "/mobile_1/zed/imu/data",
+                 # its IMU stamps run 2.12 s behind the images (analysis/slam/imu_check.py: gyro vs
+                 # images +2.12 / +2.08 s, vs the ground truth +2.14 s over 26-200 and 200-440 s)
+                 "imu_delay_s": 2.12,
                  "noise": {"gyroscope_noise_density": 3.0e-4, "gyroscope_random_walk": 1.0e-5,
                            "accelerometer_noise_density": 2.0e-3, "accelerometer_random_walk": 3.0e-3}},
     "mobile_2": {"left": "/mobile_2/infra1/image_rect_raw", "right": "/mobile_2/infra2/image_rect_raw",
@@ -179,6 +187,24 @@ def write_gt(paths, edges, machine, imu_frame, folder):
     return len(ts)
 
 
+def write_imu(paths, topic, path, delay_ns):
+    """mav0/imu0/data.csv: every IMU message, its stamp less delay_ns, strictly
+    increasing (a repeated or earlier stamp left out). (stamps written)"""
+    t_imu = []
+    with open(path, "w") as fh:
+        fh.write("#timestamp [ns],w_RS_S_x [rad s^-1],w_RS_S_y [rad s^-1],w_RS_S_z [rad s^-1],"
+                 "a_RS_S_x [m s^-2],a_RS_S_y [m s^-2],a_RS_S_z [m s^-2]\n")
+        for m in mc.read(paths, [topic]):
+            msg = m.ros_msg
+            t = mc.stamp_ns(msg) - delay_ns
+            if t_imu and t <= t_imu[-1]:
+                continue                                  # Kimera-VIO wants strictly increasing stamps
+            a, w = msg.linear_acceleration, msg.angular_velocity
+            fh.write("%d,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f\n" % (t, w.x, w.y, w.z, a.x, a.y, a.z))
+            t_imu.append(t)
+    return t_imu
+
+
 def grey(msg):
     img = mc.decode_image(msg)
     if img.ndim == 2:
@@ -227,8 +253,11 @@ def csv_rate(path):
     return int(round((len(t) - 1) * 1e9 / (t[-1] - t[0]))) if len(t) > 1 else 0
 
 
-def convert_robot(paths, edges, machine, out, rate, template, gt_only=False, params_only=False):
+def convert_robot(paths, edges, machine, out, rate, template, gt_only=False, params_only=False,
+                  imu_only=False, imu_delay=None):
     spec = MACHINES[machine]
+    delay = spec.get("imu_delay_s", 0.0) if imu_delay is None else imu_delay
+    delay_ns = int(round(delay * 1e9))
     infos = {"left": mc.first_msg(paths, spec["left_info"]), "right": mc.first_msg(paths, spec["right_info"])}
     for side, info in infos.items():
         if info is None:
@@ -276,31 +305,27 @@ def convert_robot(paths, edges, machine, out, rate, template, gt_only=False, par
         shutil.rmtree(gt_dir, ignore_errors=True)
         return "%s: %d ground-truth poses (ground truth only)" % (
             machine, write_gt(paths, edges, machine, imu_frame, gt_dir))
+    if imu_only:
+        d = os.path.join(root, "mav0", "imu0")
+        if not os.path.isdir(d):
+            raise mc.ConvertError(f"--imu-only: no {d} (export it first)")
+        n = len(write_imu(paths, spec["imu"], os.path.join(d, "data.csv"), delay_ns))
+        return "%s: %d IMU samples rewritten, %.3f s taken off their stamps (IMU only)" % (machine, n, delay)
     if os.path.exists(root):
         raise mc.ConvertError(f"{root} exists: remove it first")
     dirs = {k: os.path.join(root, "mav0", k) for k in ("cam0", "cam1", "imu0")}
     for k in ("cam0", "cam1"):
         os.makedirs(os.path.join(dirs[k], "data"))
     os.makedirs(dirs["imu0"])
-    csv = {k: open(os.path.join(dirs[k], "data.csv"), "w") for k in dirs}
+    csv = {k: open(os.path.join(dirs[k], "data.csv"), "w") for k in ("cam0", "cam1")}
     csv["cam0"].write("#timestamp [ns],filename\n")
     csv["cam1"].write("#timestamp [ns],filename\n")
-    csv["imu0"].write("#timestamp [ns],w_RS_S_x [rad s^-1],w_RS_S_y [rad s^-1],w_RS_S_z [rad s^-1],"
-                      "a_RS_S_x [m s^-2],a_RS_S_y [m s^-2],a_RS_S_z [m s^-2]\n")
     period = int(round(1e9 / rate))
     pend = {"l": [], "r": []}
-    n_pair, n_imu, first, last, t_imu = 0, 0, None, None, []
-    for m in mc.read(paths, [spec["left"], spec["right"], spec["imu"]]):
+    n_pair, first, last = 0, None, None
+    for m in mc.read(paths, [spec["left"], spec["right"]]):
         topic, msg = m.channel.topic, m.ros_msg
         t = mc.stamp_ns(msg)
-        if topic == spec["imu"]:
-            if t_imu and t <= t_imu[-1]:
-                continue                                  # Kimera-VIO wants strictly increasing stamps
-            a, w = msg.linear_acceleration, msg.angular_velocity
-            csv["imu0"].write("%d,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f\n" % (t, w.x, w.y, w.z, a.x, a.y, a.z))
-            t_imu.append(t)
-            n_imu += 1
-            continue
         pend["l" if topic == spec["left"] else "r"].append((t, msg))
         while pend["l"] and pend["r"]:
             (tl, ml), (tr, mr) = pend["l"][0], pend["r"][0]
@@ -323,6 +348,8 @@ def convert_robot(paths, edges, machine, out, rate, template, gt_only=False, par
                     log.info("  %s: %d stereo pairs" % (machine, n_pair))
     for f in csv.values():
         f.close()
+    t_imu = write_imu(paths, spec["imu"], os.path.join(dirs["imu0"], "data.csv"), delay_ns)
+    n_imu = len(t_imu)
     if n_pair < 2 or n_imu < 2:
         raise mc.ConvertError(f"{machine}: {n_pair} stereo pairs and {n_imu} IMU samples")
     rate_imu = int(round(1e9 / np.median(np.diff(t_imu))))
@@ -330,14 +357,14 @@ def convert_robot(paths, edges, machine, out, rate, template, gt_only=False, par
     n_gt = write_gt(paths, edges, machine, imu_frame, os.path.join(root, "mav0", "state_groundtruth_estimate0"))
     params(os.path.join(root, "params"), template, rate_cam, rate_imu, infos, T_bs, spec["noise"])
     b = np.linalg.norm(T_bs["left"][:3, 3] - T_bs["right"][:3, 3])
-    return ("%s: %d stereo pairs at %d Hz, %dx%d, fx %.1f; %d IMU samples at %d Hz (%s); baseline %.3f m (%s); "
-            "%d ground-truth poses"
+    return ("%s: %d stereo pairs at %d Hz, %dx%d, fx %.1f; %d IMU samples at %d Hz (%s, %.3f s taken off); "
+            "baseline %.3f m (%s); %d ground-truth poses"
             % (machine, n_pair, rate_cam, infos["left"].width, infos["left"].height, intrinsics(infos["left"])[0],
-               n_imu, rate_imu, imu_frame, b, b_src, n_gt))
+               n_imu, rate_imu, imu_frame, delay, b, b_src, n_gt))
 
 
 def convert(bag, out=None, agents=("mobile_1", "mobile_2"), rate=20.0, template=TEMPLATE, gt_only=False,
-            params_only=False):
+            params_only=False, imu_only=False, imu_delay=None):
     paths = mc._paths(bag)
     out = os.path.abspath(os.path.expanduser(out or default_out(bag)))
     os.makedirs(out, exist_ok=True)
@@ -347,9 +374,10 @@ def convert(bag, out=None, agents=("mobile_1", "mobile_2"), rate=20.0, template=
             if ln.split(":")[0] not in agents]           # robots exported before stay in the report
     lines = []
     for m in agents:
-        line = convert_robot(paths, edges, m, out, rate, os.path.expanduser(template), gt_only, params_only)
+        line = convert_robot(paths, edges, m, out, rate, os.path.expanduser(template), gt_only, params_only,
+                             imu_only, imu_delay)
         log.info(line)
-        if gt_only or params_only:
+        if gt_only or params_only or imu_only:
             continue                                      # the report keeps the export's own line
         lines.append(line)
         open(rp, "w").write("\n".join(sorted(kept + lines)) + "\n")
@@ -365,10 +393,13 @@ def main():
     ap.add_argument("--template", default=TEMPLATE, help="a Kimera-VIO stereo + IMU parameter folder")
     ap.add_argument("--gt-only", action="store_true", help="(re)write only the ground truth of an existing export")
     ap.add_argument("--params-only", action="store_true", help="(re)write only the parameters of an existing export")
+    ap.add_argument("--imu-only", action="store_true", help="(re)write only the IMU of an existing export")
+    ap.add_argument("--imu-delay", type=float, default=None,
+                    help="seconds the IMU's stamps run behind the images' (default: the machine's measured delay)")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        convert(a.bag, a.out, a.agents, a.rate, a.template, a.gt_only, a.params_only)
+        convert(a.bag, a.out, a.agents, a.rate, a.template, a.gt_only, a.params_only, a.imu_only, a.imu_delay)
     except mc.ConvertError as e:
         sys.exit(str(e))
 

@@ -7,7 +7,8 @@ IMU at 200 Hz with one repeated stamp, camera_info with a rectified P, and
 It must write the EuRoC layout with --rate 10 Hz of pairs (left and right
 under the same stamp), the IMU strictly increasing (gyro first), and the
 parameters: intrinsics from P, T_BS the camera in the IMU frame, the IMU
-rate and noise, the template's other files, logging on and the viewer off.
+rate and noise, the template's other files, logging on and the viewer off;
+--imu-only with --imu-delay rewrites the IMU 0.5 s earlier, nothing else.
 
     python scoop_pipeline/tests/test_euroc.py
 """
@@ -138,6 +139,16 @@ def main():
         v = [float(x) for x in imu[0].split(",")[1:]]
         if not np.allclose(v, [0.01, 0.02, 0.03, 0.1, 0.2, 9.8]):
             f.append("imu row %s: want gyro then accel" % v)
+        # --imu-only with --imu-delay: the same samples, every stamp 0.5 s earlier
+        r = EU.convert(bag, out, agents=["mobile_2"], rate=10.0, template=tpl, imu_only=True, imu_delay=0.5)
+        imu2 = open(os.path.join(root, "mav0", "imu0", "data.csv")).read().splitlines()[1:]
+        it2 = [int(x.split(",")[0]) for x in imu2]
+        if len(imu2) != 399 or [a - b for a, b in zip(it, it2)] != [500_000_000] * 399 \
+                or [x.split(",")[1:] for x in imu2] != [x.split(",")[1:] for x in imu] or r["lines"]:
+            f.append("--imu-only --imu-delay 0.5: %d rows, first %s (was %s)" % (len(imu2), it2[:1], it[:1]))
+        EU.convert(bag, out, agents=["mobile_2"], rate=10.0, template=tpl, imu_only=True)
+        if open(os.path.join(root, "mav0", "imu0", "data.csv")).read().splitlines()[1:] != imu:
+            f.append("--imu-only without a delay did not restore the stamps (mobile_2 has none)")
         P = os.path.join(root, "params")
         lc, rc = open(os.path.join(P, "LeftCameraParams.yaml")).read(), open(os.path.join(P, "RightCameraParams.yaml")).read()
         if not np.allclose(yaml_list(lc, "intrinsics"), [380.0, 381.0, 320.5, 240.5]):
