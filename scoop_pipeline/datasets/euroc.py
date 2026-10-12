@@ -182,8 +182,10 @@ def write_gt(paths, edges, machine, imu_frame, folder, at_ns=()):
     ts = np.unique(np.concatenate([ts0, np.asarray(extra, np.int64)]))
     P = np.empty((len(ts), 3))
     Q = np.empty((len(ts), 4))
+    own = {int(t): k for k, t in enumerate(ts0)}
     for k in range(len(ts)):
-        Tc = poses.at(int(ts[k])) if poses is not None else mc.xyzq_to_T(list(pos[0]) + list(quat[0]))
+        j = own.get(int(ts[k]))                  # a pose's own stamp: as recorded (also next to a gap)
+        Tc = mc.xyzq_to_T(list(pos[j]) + list(quat[j])) if j is not None else poses.at(int(ts[k]))
         T = Tc @ T_ci
         q = mc.T_to_xyzq(T)
         P[k], Q[k] = T[:3, 3], np.array(q[3:]) / np.linalg.norm(q[3:])

@@ -73,6 +73,8 @@ def make_bag(path, imu_on_tf=False, tf_no_baseline=False):
                 ci.p[3] = -380.0 * 0.05                     # rectified right: Tx = -fx b
             recs.append((t, topic, ci))
     for k in range(20):                                   # global_pose: the colour camera, 10 Hz, 1 m/s along x
+        if 12 <= k <= 17:
+            continue                                      # a dropout (0.7 s): 11 and 18 sit next to it
         t = T0 + k * 100_000_000
         recs.append((t, "/mobile_2/color/camera_info", SS.camera_info(tgt, COL, t)))
         recs.append((t, "/mobile_2/global_pose", rosmsg.pose_stamped(t, "map", gt_cam(k)[:3, 3],
@@ -177,7 +179,7 @@ def main():
         g5 = [float(v) for v in gt[5]]
         want = gt_cam(5) @ np.linalg.inv(T_IC)
         qw = mc.T_to_xyzq(want)
-        if len(gt) != 20 or any(len(r) != 17 for r in gt) or int(gt[5][0]) != T0 + 5 * 100_000_000:
+        if len(gt) != 14 or any(len(r) != 17 for r in gt) or int(gt[5][0]) != T0 + 5 * 100_000_000:
             f.append("ground truth: %d rows of %s columns" % (len(gt), {len(r) for r in gt}))
         elif not (np.allclose(g5[1:4], want[:3, 3], atol=1e-6)
                   and (np.allclose(g5[4:8], [qw[6], qw[3], qw[4], qw[5]], atol=1e-6)
@@ -188,12 +190,12 @@ def main():
         if not sy.startswith("%YAML:1.0") or "data: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0" not in sy:
             f.append("ground-truth sensor.yaml:\n" + sy)
         rep = open(os.path.join(out, "report.txt")).read()
-        if "baseline 0.050 m" not in rep or "20 ground-truth poses" not in rep:
+        if "baseline 0.050 m" not in rep or "14 ground-truth poses" not in rep:
             f.append("report: " + rep)
         gtd = os.path.join(root, "mav0", "state_groundtruth_estimate0")
         shutil.rmtree(gtd)
         EU.convert(bag, out, agents=["mobile_2"], rate=10.0, template=tpl, gt_only=True)
-        if len(open(os.path.join(gtd, "data.csv")).read().splitlines()) != 21:
+        if len(open(os.path.join(gtd, "data.csv")).read().splitlines()) != 15:
             f.append("--gt-only did not rewrite the ground truth")
         # a stereo pair between two global_poses (Kimera-VIO wants a state within 10 ms of a frame)
         c0f = os.path.join(root, "mav0", "cam0", "data.csv")
@@ -206,7 +208,7 @@ def main():
                 for ln in open(os.path.join(gtd, "data.csv")).read().splitlines()[1:]}
         mid = rows.get(T0 + 550_000_000)
         a, b = rows.get(T0 + 500_000_000), rows.get(T0 + 600_000_000)
-        if len(rows) != 21 or mid is None or a is None or b is None \
+        if len(rows) != 15 or mid is None or a is None or b is None \
                 or not np.allclose(mid[:3], (np.array(a[:3]) + b[:3]) / 2, atol=1e-6) \
                 or not np.allclose(mid[7:10], [1.0, 0.0, 0.0], atol=1e-6):
             f.append("ground truth at a stereo pair between two poses: %s rows, %s" % (len(rows), mid))
