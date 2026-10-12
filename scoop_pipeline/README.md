@@ -70,6 +70,8 @@ datasets/            bags -> datasets for other tools
                      depth, camera_info, /tf odom -> base -> camera), a hydra_ros config
                      each (scene graph + mesh streamed once a second) and a launch file
                      (visualize:=true for the live scene graph); --configs-only rewrites those
+                     --poses kimera --kimera <euroc export>: Kimera-VIO's odometry in /tf and its
+                     loop closures that agree with it on /hydra/external_loop_closures
   euroc.py           a multi-robot pass as Kimera-VIO input: each robot's rectified stereo
                      pair and IMU in the EuRoC layout, a parameter folder from the recorded
                      calibration (slam/run_kimera.sh runs it, loop closure on; STRETCHES=1
@@ -154,6 +156,8 @@ tests/               self-tests, no real bag needed
                      robot not sure; processing/imu_sync.py --out moves only its stamps; retime step 5
   test_kimera_stretches.py  kimera_stretches: a dropout and an IMU-only gap split three stretches;
                      kimera_eval: ATE and in-map error per stretch, a failed stretch, a whole run
+  test_hydra_kimera.py  hydra --poses kimera: the camera from Kimera-VIO's IMU at every frame of its
+                     runs, a right loop closure sent, one the odometry contradicts left out
   test_imu_check.py  imu_check: a gyro 2.1 s late found against images and ground truth;
                      an IMU turned 90 deg found by gravity and the rotation fit
   test_relay_stats.py  relay_stats: delay, loss, backlog of a queued stream, map age

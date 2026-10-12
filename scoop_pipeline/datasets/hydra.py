@@ -5,7 +5,7 @@ of the same pass, so both methods get the same frames, the same odometry and
 the same start in map.
 
     python scoop_pipeline/datasets/hydra.py <swarm_slam export dir> [<out dir>]
-        [--robots 0 1] [--poses odom|gt] [--no-mesh] [--configs-only]
+        [--robots 0 1] [--poses odom|gt|kimera] [--kimera <euroc export>] [--no-mesh] [--configs-only]
 
 Writes <out> (default: next to the export, datasets/hydra/<name>):
 
@@ -44,6 +44,23 @@ gt_r<i>.tum, /<robot>/global_pose) instead of the export's odometry, so
 Hydra maps on the correct poses (a frame without one gets no /tf); the
 output goes to datasets/hydra/<name>_gt by default.
 
+--poses kimera --kimera <euroc export>: the camera's pose in /tf is
+Kimera-VIO's odometry (slam/run_kimera.sh on datasets/euroc.py's export of
+the same pass: out/traj_vio.csv, or out/stretch_<n>/ each), the IMU's pose
+at its keyframes interpolated at every frame and moved to the colour camera
+(their link from the two ground truths, which both come from global_pose);
+a frame outside its runs gets no /tf. Kimera-VIO starts from the ground truth
+in map, so its odometry frame is map. Its loop closures go to Hydra on
+/hydra/external_loop_closures (pose_graph_tools_msgs/PoseGraph, keys the two
+keyframe stamps, the query's pose in the match's base frame), half a second
+after the query, each only when it agrees with Kimera-VIO's own odometry
+between the two keyframes: translation within max(1 m, 5 % of the path
+between) and rotation within 10 deg + 0.1 deg per metre of it. mobile_1 of
+20260924: 48 of 62 closures put the end of the run on its start, 14 m away
+(identical calibration boards), which Kimera-VIO's own outlier rejection kept
+(they agree with each other). The report counts them, and how many the
+ground truth says are right; the output goes to datasets/hydra/<name>_kimera.
+
 --configs-only: rewrite the configs and the launch file of an existing
 output, its bags untouched.
 
@@ -73,6 +90,7 @@ log = logging.getLogger("hydra")
 R_BODY_OPTICAL = np.array([[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]])
 # depth range per robot (m): the paper's range caps (ZED 4.5 m, RealSense 5 m)
 RANGE = {"mobile_1": (0.3, 4.5), "mobile_2": (0.3, 5.0)}
+LC_TOPIC = "/hydra/external_loop_closures"
 TOPICS = {"color/image_raw": "/camera/color/image_raw",
           "color/camera_info": "/camera/color/camera_info",
           "aligned_depth_to_color/image_raw": "/camera/depth/image_rect"}
@@ -324,14 +342,145 @@ def read_gt(path):
     return out
 
 
-def convert(export, out=None, robots=None, mesh=True, configs_only=False, poses="odom"):
+# loop closures Hydra gets from Kimera-VIO: the odometry between the two keyframes must agree
+GATE_M, GATE_FRAC, GATE_DEG, GATE_DEG_PER_M = 1.0, 0.05, 10.0, 0.1
+# a closure the ground truth calls right (report only): relative pose within these
+RIGHT_M, RIGHT_DEG = 0.5, 10.0
+LC_DELAY_NS = 500_000_000            # sent half a second after the query keyframe
+
+
+def _rows(path):
+    """Rows of a Kimera-VIO csv (comment header) as floats, keys exact as int."""
+    out = []
+    for ln in open(path):
+        if ln.startswith("#") or not ln.strip():
+            continue
+        v = ln.strip().split(",")
+        out.append([int(v[0])] + [float(x) for x in v[1:]])
+    return out
+
+
+def _T(xyz, wxyz):
+    return mc.xyzq_to_T(list(xyz) + [wxyz[1], wxyz[2], wxyz[3], wxyz[0]])
+
+
+def _angle(R):
+    return float(np.degrees(np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1))))
+
+
+def kimera_runs(robot_dir):
+    """Kimera-VIO's run folders of an export's robot: out/stretch_<n> each, or out."""
+    out = os.path.join(robot_dir, "out")
+    st = sorted((d for d in os.listdir(out) if d.startswith("stretch_")) if os.path.isdir(out) else [],
+                key=lambda d: int(d.split("_")[1]))
+    runs = [os.path.join(out, d) for d in st] or [out]
+    return [r for r in runs if os.path.exists(os.path.join(r, "traj_vio.csv"))]
+
+
+class KimeraOdometry:
+    """Kimera-VIO's IMU in map (traj_vio.csv per run): at(t) interpolates within
+    the run spanning t (keyframes up to max_gap_s apart: a robot standing still
+    makes few), None outside every run."""
+
+    def __init__(self, robot_dir, max_gap_s=5.0):
+        self.runs = []
+        for r in kimera_runs(robot_dir):
+            rows = _rows(os.path.join(r, "traj_vio.csv"))
+            if len(rows) < 2:
+                continue
+            ts = np.array([x[0] for x in rows], np.int64)
+            pos = np.array([[x[1], x[2], x[3]] for x in rows])
+            quat = np.array([[x[5], x[6], x[7], x[4]] for x in rows])       # xyzw
+            self.runs.append((r, ts, mc.PoseInterp(ts, pos, quat, max_gap_s=max_gap_s)))
+        if not self.runs:
+            raise mc.ConvertError(f"no Kimera-VIO odometry (out/traj_vio.csv) under {robot_dir}")
+
+    def at(self, t_ns):
+        for _, ts, pi in self.runs:
+            if ts[0] <= t_ns <= ts[-1]:
+                return pi.at(int(t_ns))
+        return None
+
+
+def imu_T_colour(robot_dir, gt_tum):
+    """The colour camera in the IMU frame: euroc.py's ground truth (the IMU in map)
+    against the export's gt_r<i>.tum (the colour camera in map), both global_pose."""
+    rows = _rows(os.path.join(robot_dir, "mav0", "state_groundtruth_estimate0", "data.csv"))
+    imu = {int(round(r[0] / 1e3)): _T(r[1:4], r[4:8]) for r in rows}
+    col = sorted(read_gt(gt_tum).items())
+    Ts = [np.linalg.inv(imu[t]) @ T for t, T in col if t in imu][:200]
+    if len(Ts) < 10:                     # other stamps (another camera's frames): interpolate the IMU
+        ts = np.array([r[0] for r in rows], np.int64)
+        pi = mc.PoseInterp(ts, np.array([r[1:4] for r in rows]), np.array([[r[5], r[6], r[7], r[4]] for r in rows]))
+        Ts = [np.linalg.inv(Ti) @ T for t, T in col[::max(1, len(col) // 400)]
+              for Ti in [pi.at(t * 1000)] if Ti is not None and pi.dt_to_nearest(t * 1000) < 0.05][:200]
+    if not Ts:
+        raise mc.ConvertError(f"{robot_dir}: its ground truth and {gt_tum} have no time in common")
+    T = Ts[len(Ts) // 2].copy()
+    spread = np.median([np.linalg.norm(x[:3, 3] - T[:3, 3]) for x in Ts])
+    if spread > 0.02:
+        raise mc.ConvertError(f"{robot_dir}: the IMU-to-camera link varies by {spread:.3f} m (median) between "
+                              f"the ground truths")
+    return T
+
+
+def kimera_closures(robot_dir, T_ib, robot, gt_rows=None):
+    """Kimera-VIO's loop closures of every run, each: stamps (match, query), the
+    query's base pose in the match's (Hydra's to_T_from), whether the odometry
+    agrees (passed), and whether the ground truth does (right, None without it)."""
+    out = []
+    for r in kimera_runs(robot_dir):
+        f = os.path.join(r, "output_lcd_result.csv")
+        if not os.path.exists(f):
+            continue
+        rows = _rows(os.path.join(r, "traj_vio.csv"))
+        odo = {int(x[0]): _T(x[1:4], x[4:8]) for x in rows}
+        ts = np.array(sorted(odo), np.int64)
+        P = np.array([odo[t][:3, 3] for t in ts])
+        for x in _rows(f):
+            if len(x) < 13 or int(x[3]) != 1:
+                continue
+            tq, tm = int(x[1]), int(x[2])
+            lc = _T(x[6:9], x[9:13])                                  # imuMatch_T_imuQuery
+            c = {"query_ns": tq, "match_ns": tm, "passed": False, "right": None}
+            if tm in odo and tq in odo:
+                rel = np.linalg.inv(odo[tm]) @ odo[tq]
+                a, b = sorted((tm, tq))
+                k = (ts >= a) & (ts <= b)
+                path = float(np.sum(np.linalg.norm(np.diff(P[k], axis=0), axis=1))) if k.sum() > 1 else 0.0
+                dt = float(np.linalg.norm(rel[:3, 3] - lc[:3, 3]))
+                dr = _angle(rel[:3, :3].T @ lc[:3, :3])
+                c.update(path_m=path, odo_diff_m=dt, odo_diff_deg=dr,
+                         passed=dt <= max(GATE_M, GATE_FRAC * path) and dr <= GATE_DEG + GATE_DEG_PER_M * path)
+            if gt_rows is not None:
+                g = gt_rows
+                def at(t):
+                    i = int(np.clip(np.searchsorted(g[:, 0], t), 0, len(g) - 1))
+                    p = [np.interp(t, g[:, 0], g[:, k]) for k in (1, 2, 3)]
+                    return _T(p, g[i, 4:8]), abs(g[i, 0] - t) < 0.2e9
+                Gm, okm = at(tm)
+                Gq, okq = at(tq)
+                if okm and okq:
+                    rg = np.linalg.inv(Gm) @ Gq
+                    c["right"] = bool(np.linalg.norm(rg[:3, 3] - lc[:3, 3]) < RIGHT_M
+                                      and _angle(rg[:3, :3].T @ lc[:3, :3]) < RIGHT_DEG)
+            e = np.linalg.inv(T_ib) @ lc @ T_ib                       # baseMatch_T_baseQuery
+            c["edge"] = (tq, tm, robot, robot, e[:3, 3], mc.T_to_xyzq(e)[3:])
+            out.append(c)
+    return out
+
+
+def convert(export, out=None, robots=None, mesh=True, configs_only=False, poses="odom", kimera=None):
     export = os.path.abspath(os.path.expanduser(export))
     src = os.path.join(export, "bag")
     if not os.path.isdir(src):
         raise mc.ConvertError(f"no {src}: run datasets/swarm_slam.py first")
-    if poses not in ("odom", "gt"):
-        raise mc.ConvertError(f"poses {poses!r}: odom or gt")
-    out = os.path.abspath(os.path.expanduser(out or (default_out(export) + ("_gt" if poses == "gt" else ""))))
+    if poses not in ("odom", "gt", "kimera"):
+        raise mc.ConvertError(f"poses {poses!r}: odom, gt or kimera")
+    if poses == "kimera" and not kimera:
+        raise mc.ConvertError("--poses kimera needs --kimera <datasets/euroc.py export with Kimera-VIO's out/>")
+    suffix = {"gt": "_gt", "kimera": "_kimera"}.get(poses, "")
+    out = os.path.abspath(os.path.expanduser(out or (default_out(export) + suffix)))
     reader = B.open_bag(src)
     schemas = B.topic_schemas(reader)
     have = sorted({int(m.group(1)) for t in schemas for m in [re.match(r"/r(\d+)/", t)] if m})
@@ -345,6 +494,21 @@ def convert(export, out=None, robots=None, mesh=True, configs_only=False, poses=
         if missing:
             raise mc.ConvertError(f"--configs-only: no {out}/bag_r{missing[0]} (run without it first)")
         return write_configs(export, out, robots, names, mesh, None, poses)
+    T_bc = body_T_camera()
+    T_cb = np.linalg.inv(T_bc)
+    kim, closures = {}, {}
+    if poses == "kimera":
+        for i in robots:
+            m = names.get(i)
+            rd = os.path.join(os.path.abspath(os.path.expanduser(kimera)), m or "")
+            g = os.path.join(export, "gt_r%d.tum" % i)
+            if not m or not os.path.isdir(rd):
+                raise mc.ConvertError(f"r{i} ({m}): no {rd} in the Kimera-VIO export")
+            T_ib = imu_T_colour(rd, g) @ T_cb                     # the IMU's base frame
+            gtf = os.path.join(rd, "mav0", "state_groundtruth_estimate0", "data.csv")
+            gt_rows = np.array(_rows(gtf), dtype=float) if os.path.exists(gtf) else None
+            kim[i] = (KimeraOdometry(rd), T_ib)
+            closures[i] = kimera_closures(rd, T_ib, i, gt_rows)
     for i in robots:
         if os.path.exists(os.path.join(out, "bag_r%d" % i)):
             raise mc.ConvertError(f"{out}/bag_r{i} exists: remove it first (or --configs-only)")
@@ -356,8 +520,6 @@ def convert(export, out=None, robots=None, mesh=True, configs_only=False, poses=
                 raise mc.ConvertError(f"--poses gt: no {g}")
             gts[i] = read_gt(g)
     ts = rosmsg.typestore()
-    T_bc = body_T_camera()
-    T_cb = np.linalg.inv(T_bc)
     q_bc = mc.T_to_xyzq(T_bc)
     writers = {i: BagWriter(os.path.join(out, "bag_r%d" % i)) for i in robots}
     route = {}
@@ -365,10 +527,21 @@ def convert(export, out=None, robots=None, mesh=True, configs_only=False, poses=
         for k, v in TOPICS.items():
             route["/r%d/%s" % (i, k)] = (i, v)
         route["/r%d/odom" % i] = (i, "/tf")
-    counts = {i: {v: 0 for v in list(TOPICS.values()) + ["/tf", "no pose"]} for i in robots}
+    counts = {i: {v: 0 for v in list(TOPICS.values()) + ["/tf", "no pose", LC_TOPIC]} for i in robots}
+    # the loop closures that passed, each at its query + LC_DELAY_NS, in time with the rest
+    pending = {i: sorted((c["query_ns"] + LC_DELAY_NS, c["edge"]) for c in closures.get(i, []) if c["passed"])
+               for i in robots}
+
+    def flush(i, upto):
+        while pending[i] and pending[i][0][0] <= upto:
+            t, e = pending[i].pop(0)
+            writers[i].write(LC_TOPIC, rosmsg.pose_graph(t, "world", [e]), t)
+            counts[i][LC_TOPIC] += 1
+
     for _, _, ch, msg in B.iter_mcap_records(reader, topics=list(route)):
         i, topic = route[ch.topic]
         w = writers[i]
+        flush(i, msg.log_time)
         if topic != "/tf":
             w.write_raw(topic, schemas[ch.topic], msg.data, msg.log_time, msg.publish_time)
         else:
@@ -379,6 +552,12 @@ def convert(export, out=None, robots=None, mesh=True, configs_only=False, poses=
                 if T_oc is None:
                     counts[i]["no pose"] += 1
                     continue
+            elif poses == "kimera":
+                T_mi = kim[i][0].at(t)
+                if T_mi is None:
+                    counts[i]["no pose"] += 1
+                    continue
+                T_oc = T_mi @ kim[i][1] @ T_bc                         # the camera: base -> optical
             else:
                 p = o.pose.pose
                 T_oc = mc.xyzq_to_T([p.position.x, p.position.y, p.position.z,
@@ -388,21 +567,24 @@ def convert(export, out=None, robots=None, mesh=True, configs_only=False, poses=
                 [("r%d/odom" % i, "r%d/base" % i, q_ob[:3], q_ob[3:]),
                  ("r%d/base" % i, "r%d/camera" % i, q_bc[:3], q_bc[3:])], t), msg.log_time)
         counts[i][topic] += 1
+    for i in robots:
+        flush(i, np.iinfo(np.int64).max)
     for w in writers.values():
         w.close()
     for i in robots:
         if not counts[i]["/camera/color/image_raw"] or not counts[i]["/tf"]:
             raise mc.ConvertError(f"r{i}: no images or no odometry in {src}")
-    return write_configs(export, out, robots, names, mesh, counts, poses)
+    return write_configs(export, out, robots, names, mesh, counts, poses, closures)
 
 
-def write_configs(export, out, robots, names, mesh, counts, poses="odom"):
+def write_configs(export, out, robots, names, mesh, counts, poses="odom", closures=None):
     """hydra_r<i>.yaml, the launch file, ground truth and report.txt (counts:
     the bags' message counts, None when the bags were not written now)."""
     src = os.path.join(export, "bag")
     lines = ["source              : %s" % src, "scene-graph mesh    : %s" % ("on" if mesh else "off"),
-             "poses               : %s" % ("ground truth (gt_r<i>.tum, /<robot>/global_pose)" if poses == "gt"
-                                           else "the export's odometry")]
+             "poses               : %s" % {"gt": "ground truth (gt_r<i>.tum, /<robot>/global_pose)",
+                                             "kimera": "Kimera-VIO's odometry (traj_vio.csv)"}.get(
+                                                 poses, "the export's odometry")]
     for i in robots:
         m = names.get(i, "r%d" % i)
         lo, hi = RANGE.get(m, (0.3, 5.0))
@@ -420,6 +602,15 @@ def write_configs(export, out, robots, names, mesh, counts, poses="odom"):
                          % (i, m, c["/camera/color/image_raw"], c["/camera/depth/image_rect"],
                             c["/camera/color/camera_info"], c["/tf"],
                             " (%d frames without a pose)" % c["no pose"] if c["no pose"] else "", lo, hi, i, i, i))
+        cl = (closures or {}).get(i)
+        if cl is not None:
+            ok = [c for c in cl if c["passed"]]
+            no = [c for c in cl if not c["passed"]]
+            right = lambda xs: sum(1 for c in xs if c["right"])
+            known = lambda xs: sum(1 for c in xs if c["right"] is not None)
+            lines.append("r%d loop closures   : %d from Kimera-VIO; %d agree with its odometry -> %s "
+                         "(%d of %d right by the ground truth), %d left out (%d of %d right)"
+                         % (i, len(cl), len(ok), LC_TOPIC, right(ok), known(ok), len(no), right(no), known(no)))
     open(os.path.join(out, "scoop_hydra.launch.yaml"), "w").write(LAUNCH)
     report = "\n".join(lines) + "\n"
     open(os.path.join(out, "report.txt"), "w").write(report)
@@ -433,15 +624,19 @@ def main():
     ap.add_argument("export", help="a datasets/swarm_slam.py export (has bag/ and report.txt)")
     ap.add_argument("out", nargs="?", default=None)
     ap.add_argument("--robots", nargs="+", type=int, default=None, help="robot indices (default: all)")
-    ap.add_argument("--poses", choices=["odom", "gt"], default="odom",
-                    help="the camera pose in /tf: the export's odometry, or the ground truth (global_pose)")
+    ap.add_argument("--poses", choices=["odom", "gt", "kimera"], default="odom",
+                    help="the camera pose in /tf: the export's odometry, the ground truth (global_pose), or "
+                         "Kimera-VIO's (--kimera)")
+    ap.add_argument("--kimera", default=None,
+                    help="--poses kimera: the datasets/euroc.py export Kimera-VIO ran on (<robot>/out/)")
     ap.add_argument("--no-mesh", action="store_true", help="send the scene graph without its mesh")
     ap.add_argument("--configs-only", action="store_true",
                     help="rewrite the configs and launch file of an existing output, not its bags")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        convert(a.export, a.out, a.robots, mesh=not a.no_mesh, configs_only=a.configs_only, poses=a.poses)
+        convert(a.export, a.out, a.robots, mesh=not a.no_mesh, configs_only=a.configs_only, poses=a.poses,
+                kimera=a.kimera)
     except mc.ConvertError as e:
         sys.exit(str(e))
 

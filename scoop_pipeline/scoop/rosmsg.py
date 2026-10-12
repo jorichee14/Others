@@ -14,7 +14,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 __all__ = ["typestore", "msg_type", "msgdef", "serialize", "header", "tf_message",
-           "point_fields", "pointcloud2", "imu", "string", "pose_stamped"]
+           "point_fields", "pointcloud2", "imu", "string", "pose_stamped", "pose_graph"]
 
 # numpy (kind, bytes) -> sensor_msgs/PointField datatype
 _PF_CODE = {("i", 1): 1, ("u", 1): 2, ("i", 2): 3, ("u", 2): 4,
@@ -144,3 +144,48 @@ def pose_stamped(stamp_ns: int, frame_id: str, t, q):
             position=T("geometry_msgs/msg/Point")(x=float(t[0]), y=float(t[1]), z=float(t[2])),
             orientation=T("geometry_msgs/msg/Quaternion")(x=float(q[0]), y=float(q[1]),
                                                           z=float(q[2]), w=float(q[3]))))
+
+
+# pose_graph_tools_msgs (MIT-SPARK/pose_graph_tools, ROS 2): Hydra's external loop closures
+_PGT = {
+    "pose_graph_tools_msgs/msg/PoseGraphNode":
+        "std_msgs/Header header\nint32 robot_id\nuint64 key\ngeometry_msgs/Pose pose\n",
+    "pose_graph_tools_msgs/msg/PoseGraphEdge":
+        "std_msgs/Header header\nuint64 key_from\nuint64 key_to\nint32 robot_from\nint32 robot_to\n"
+        "int32 type\nint32 UNKNOWN=-1\nint32 ODOM=0\nint32 LOOPCLOSE=1\nint32 LANDMARK=2\n"
+        "int32 REJECTED_LOOPCLOSE=3\nint32 MESH=4\nint32 POSE_MESH=5\nint32 MESH_POSE=6\nint32 PRIOR=7\n"
+        "int32 REJECTED_PRIOR=8\ngeometry_msgs/Pose pose\nfloat64[36] covariance\n",
+    "pose_graph_tools_msgs/msg/PoseGraph":
+        "std_msgs/Header header\npose_graph_tools_msgs/PoseGraphNode[] nodes\n"
+        "pose_graph_tools_msgs/PoseGraphEdge[] edges\n",
+}
+
+
+def _register_pgt():
+    ts = typestore()
+    if "pose_graph_tools_msgs/msg/PoseGraph" in ts.types:
+        return
+    from rosbags.typesys import get_types_from_msg
+    types = {}
+    for name, text in _PGT.items():
+        types.update(get_types_from_msg(text, name))
+    ts.register(types)
+
+
+def pose_graph(stamp_ns: int, frame_id: str, edges):
+    """pose_graph_tools_msgs/PoseGraph of loop-closure edges ``(key_from,
+    key_to, robot_from, robot_to, translation xyz, rotation xyzw)``: the pose
+    of ``from`` in ``to`` (Hydra: to_T_from; its keys are timestamps, ns)."""
+    _register_pgt()
+    T = msg_type
+    out = []
+    for kf, kt, rf, rt, t, q in edges:
+        out.append(T("pose_graph_tools_msgs/msg/PoseGraphEdge")(
+            header=header(stamp_ns, frame_id), key_from=int(kf), key_to=int(kt), robot_from=int(rf),
+            robot_to=int(rt), type=1,
+            pose=T("geometry_msgs/msg/Pose")(
+                position=T("geometry_msgs/msg/Point")(x=float(t[0]), y=float(t[1]), z=float(t[2])),
+                orientation=T("geometry_msgs/msg/Quaternion")(x=float(q[0]), y=float(q[1]), z=float(q[2]),
+                                                              w=float(q[3]))),
+            covariance=np.zeros(36)))
+    return T("pose_graph_tools_msgs/msg/PoseGraph")(header=header(stamp_ns, frame_id), nodes=[], edges=out)
