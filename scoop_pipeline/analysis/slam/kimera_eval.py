@@ -17,7 +17,8 @@ Per run and trajectory:
          frame (euroc.py's autoInitialize 0), so this is its drift from there
   path   its path length against the ground truth's, over the same poses
 Over the stretches: the rmse of every pose of every run (each aligned on its
-own) and the seconds covered. Writes out/kimera_eval.json.
+own), the median of the runs' ATE, how many ran away (ATE over 5 m) and the
+seconds covered. Writes out/kimera_eval.json.
 """
 import argparse
 import glob
@@ -25,6 +26,8 @@ import json
 import os
 
 import numpy as np
+
+RUNAWAY_M = 5.0            # a run's ATE above this: it ran away (one such hides every other in the rmse)
 
 
 def load(path):
@@ -99,7 +102,10 @@ def evaluate(robot_dir):
     for k, e in errs.items():
         if e:
             e = np.concatenate(e)
+            per = [r[k]["ate_rmse_m"] for r in rep["runs"] if r.get(k)]
             rep[k] = {"poses": int(len(e)), "ate_rmse_m": float(np.sqrt(np.mean(e ** 2))),
+                      "median_run_ate_m": float(np.median(per)), "runaways": int(sum(a > RUNAWAY_M for a in per)),
+                      "runs": len(per),
                       "covered_s": float(sum(r[k]["to_s"] - r[k]["from_s"] for r in rep["runs"] if r.get(k)))}
     if os.path.isdir(out):
         json.dump(rep, open(os.path.join(out, "kimera_eval.json"), "w"), indent=1)
@@ -126,8 +132,10 @@ def report(rep):
     for k, label in (("traj_vio", "odometry"), ("traj_pgo", "with loop closures")):
         if k in rep:
             x = rep[k]
-            lines.append("%s over all runs: ATE rmse %.2f m (%d poses, %.0f of %.0f s covered)"
-                         % (label, x["ate_rmse_m"], x["poses"], x["covered_s"], rep["data_s"]))
+            lines.append("%s over all runs: ATE rmse %.2f m (%d poses, %.0f of %.0f s covered); median of the "
+                         "runs %.2f m, %d of %d ran away (over %g m)"
+                         % (label, x["ate_rmse_m"], x["poses"], x["covered_s"], rep["data_s"], x["median_run_ate_m"],
+                            x["runaways"], x["runs"], RUNAWAY_M))
     return "\n".join(lines)
 
 

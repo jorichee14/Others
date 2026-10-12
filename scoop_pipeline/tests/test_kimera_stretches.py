@@ -105,7 +105,8 @@ def main():
             f.append("stretch 2 %s, loop closures %s" % (r2["traj_vio"], r2["loop_closures"]))
         if not (r3["failed"] and r3["traj_vio"] is None):
             f.append("stretch 3 %s" % r3)
-        if rep["traj_vio"]["poses"] != len(t1) + len(t2) or rep["traj_vio"]["ate_rmse_m"] > 1e-4:
+        if rep["traj_vio"]["poses"] != len(t1) + len(t2) or rep["traj_vio"]["ate_rmse_m"] > 1e-4 \
+                or rep["traj_vio"]["runaways"] != 0 or rep["traj_vio"]["runs"] != 2:
             f.append("over all runs %s" % rep["traj_vio"])
         txt = KE.report(rep)
         if "backend failed" not in txt or "over all runs" not in txt:
