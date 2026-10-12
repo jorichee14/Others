@@ -96,7 +96,7 @@ def gt_cam(k):
 
 def template(d):
     os.makedirs(os.path.join(d, "flags"))
-    open(os.path.join(d, "PipelineParams.yaml"), "w").write("%YAML:1.0\nfrontend_type: 1\n")
+    open(os.path.join(d, "PipelineParams.yaml"), "w").write("%YAML:1.0\nfrontend_type: 1\nbackend_type: 1\n")
     open(os.path.join(d, "BackendParams.yaml"), "w").write("%YAML:1.0\nautoInitialize: 1\n")
     open(os.path.join(d, "flags", "stereoVIOEuroc.flags"), "w").write("--log_output=false\n--visualize=true\n"
                                                                      "--backend_type=1\n")
@@ -167,6 +167,9 @@ def main():
         if "--log_output=true" not in fl or "--visualize=false" not in fl or "--log_output=false" in fl \
                 or "--visualize=true" in fl or "--backend_type=1" not in fl:
             f.append("flags:\n" + fl)
+        if "autoInitialize: 0" not in open(os.path.join(P, "BackendParams.yaml")).read() \
+                or "backend_type: 0" not in open(os.path.join(P, "PipelineParams.yaml")).read():
+            f.append("backend_type / autoInitialize not set to 0")
         if not os.path.exists(os.path.join(P, "BackendParams.yaml")):
             f.append("template files not copied")
         gt = [ln.split(",") for ln in open(os.path.join(root, "mav0", "state_groundtruth_estimate0",

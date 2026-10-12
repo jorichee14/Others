@@ -35,7 +35,9 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)
                                       at one place), ImuParams.yaml
                                       (identity: the body is the IMU; its rate
                                       and the machine's noise) and the flags
-                                      with logging on and the viewer off
+                                      with logging on and the viewer off;
+                                      backend_type 0 and autoInitialize 0 (the
+                                      first state from the ground truth)
   report.txt
 
 --gt-only: (re)write only mav0/state_groundtruth_estimate0 of an existing export.
@@ -60,6 +62,7 @@ frame: the IMU is rigid on the camera.
 import argparse
 import logging
 import os
+import re
 import shutil
 import sys
 
@@ -279,6 +282,14 @@ def params(folder, template, rate_cam, rate_imu, infos, T_bs, noise):
     txt = open(pp).read()
     if "frontend_type: 1" not in txt:
         raise mc.ConvertError(f"{template}: not a stereo + IMU profile (frontend_type 1)")
+    # the standard VIO backend (the D455 profile's Regular one adds structure factors)
+    open(pp, "w").write(re.sub(r"(?m)^backend_type:.*$", "backend_type: 0", txt))
+    # start from the ground truth's state at the first frame: from the IMU alone Kimera-VIO
+    # takes a tilted robot's gravity on x for an accelerometer bias (mobile_1, 20260924: 0.38
+    # m/s^2), which runs away as soon as the robot turns (ATE 33 m -> 1.9 m)
+    bp = os.path.join(folder, "BackendParams.yaml")
+    btxt = open(bp).read()
+    open(bp, "w").write(re.sub(r"(?m)^autoInitialize:.*$", "autoInitialize: 0", btxt))
     fl = os.path.join(folder, "flags", "stereoVIOEuroc.flags")
     lines = [ln for ln in open(fl).read().splitlines() if not ln.startswith(("--log_output", "--visualize="))]
     open(fl, "w").write("\n".join(["--log_output=true", "--visualize=false"] + lines) + "\n")
