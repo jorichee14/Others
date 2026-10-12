@@ -8,7 +8,8 @@ It must write the EuRoC layout with --rate 10 Hz of pairs (left and right
 under the same stamp), the IMU strictly increasing (gyro first), and the
 parameters: intrinsics from P, T_BS the camera in the IMU frame, the IMU
 rate and noise, the template's other files, logging on and the viewer off;
---imu-only with --imu-delay rewrites the IMU 0.5 s earlier, nothing else.
+--imu-only with --imu-delay rewrites the IMU 0.5 s earlier, nothing else;
+the ground truth also at a stereo pair between two global_poses.
 
     python scoop_pipeline/tests/test_euroc.py
 """
@@ -191,6 +192,21 @@ def main():
         EU.convert(bag, out, agents=["mobile_2"], rate=10.0, template=tpl, gt_only=True)
         if len(open(os.path.join(gtd, "data.csv")).read().splitlines()) != 21:
             f.append("--gt-only did not rewrite the ground truth")
+        # a stereo pair between two global_poses (Kimera-VIO wants a state within 10 ms of a frame)
+        c0f = os.path.join(root, "mav0", "cam0", "data.csv")
+        keep_c0 = open(c0f).read()
+        open(c0f, "a").write("%d,%d.png\n" % (T0 + 550_000_000, T0 + 550_000_000))
+        shutil.rmtree(gtd)
+        EU.convert(bag, out, agents=["mobile_2"], rate=10.0, template=tpl, gt_only=True)
+        open(c0f, "w").write(keep_c0)
+        rows = {int(ln.split(",")[0]): [float(v) for v in ln.split(",")[1:]]
+                for ln in open(os.path.join(gtd, "data.csv")).read().splitlines()[1:]}
+        mid = rows.get(T0 + 550_000_000)
+        a, b = rows.get(T0 + 500_000_000), rows.get(T0 + 600_000_000)
+        if len(rows) != 21 or mid is None or a is None or b is None \
+                or not np.allclose(mid[:3], (np.array(a[:3]) + b[:3]) / 2, atol=1e-6) \
+                or not np.allclose(mid[7:10], [1.0, 0.0, 0.0], atol=1e-6):
+            f.append("ground truth at a stereo pair between two poses: %s rows, %s" % (len(rows), mid))
         open(os.path.join(out, "report.txt"), "a").write("mobile_1: an earlier export\n")
         shutil.rmtree(os.path.join(out, "mobile_2"))
         EU.convert(bag, out, agents=["mobile_2"], rate=10.0, template=tpl)

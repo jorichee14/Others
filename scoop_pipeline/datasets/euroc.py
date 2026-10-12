@@ -15,10 +15,13 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)
   mav0/imu0/data.csv                  ns, gyro x y z (rad/s), accel x y z (m/s^2)
   mav0/state_groundtruth_estimate0/   the IMU (Kimera-VIO's body) in map at every
                                       /<robot>/global_pose (the colour camera,
-                                      moved through /tf_static): ns, position,
-                                      quaternion w x y z, velocity (finite
-                                      differences), biases 0; Kimera-VIO's reader
-                                      wants it, and logs it next to its estimate
+                                      moved through /tf_static) and, interpolated,
+                                      at every stereo pair (autoInitialize: 0
+                                      starts from the state within 10 ms of its
+                                      first frame): ns, position, quaternion
+                                      w x y z, velocity (finite differences),
+                                      biases 0; Kimera-VIO's reader wants it, and
+                                      logs it next to its estimate
   params/                             Kimera-VIO's parameters: --template's
                                       (D455: stereo + IMU, frontend_type 1),
                                       with LeftCameraParams.yaml and
@@ -154,8 +157,10 @@ def imu_edges_from_tf(paths, imu_frame):
     return out
 
 
-def write_gt(paths, edges, machine, imu_frame, folder):
-    """mav0/state_groundtruth_estimate0: the IMU in map from /<robot>/global_pose."""
+def write_gt(paths, edges, machine, imu_frame, folder, at_ns=()):
+    """mav0/state_groundtruth_estimate0: the IMU in map from /<robot>/global_pose,
+    at its own stamps and at at_ns (the stereo pairs) where it is no more than
+    0.5 s from a pose either side."""
     import replica_multiagent as RM
     spec = RM.AGENTS[machine]
     info = mc.first_msg(paths, spec["info"])
@@ -165,15 +170,21 @@ def write_gt(paths, edges, machine, imu_frame, folder):
     T_ic = mc.lookup_static(edges, imu_frame, col)
     if T_ic is None:
         raise mc.ConvertError(f"{machine}: the IMU frame {imu_frame} and the colour frame {col} are not connected")
-    ts, pos, quat, _ = mc.load_poses(paths, spec["pose"])
+    ts0, pos, quat, _ = mc.load_poses(paths, spec["pose"])
     T_ci = np.linalg.inv(T_ic)
+    poses = mc.PoseInterp(ts0, pos, quat) if len(ts0) > 1 else None
+    ts0 = np.asarray(ts0, np.int64)
+    extra = [int(t) for t in at_ns if poses is not None and poses.at(int(t)) is not None
+             and poses.dt_to_nearest(int(t)) > 1e-3]               # not a pose's own stamp again
+    ts = np.unique(np.concatenate([ts0, np.asarray(extra, np.int64)]))
     P = np.empty((len(ts), 3))
     Q = np.empty((len(ts), 4))
     for k in range(len(ts)):
-        T = mc.xyzq_to_T(list(pos[k]) + list(quat[k])) @ T_ci
+        Tc = poses.at(int(ts[k])) if poses is not None else mc.xyzq_to_T(list(pos[0]) + list(quat[0]))
+        T = Tc @ T_ci
         q = mc.T_to_xyzq(T)
         P[k], Q[k] = T[:3, 3], np.array(q[3:]) / np.linalg.norm(q[3:])
-    V = np.gradient(P, ts * 1e-9, axis=0) if len(ts) > 1 else np.zeros_like(P)
+    V = np.gradient(P, (ts - ts[0]) * 1e-9, axis=0) if len(ts) > 1 else np.zeros_like(P)
     os.makedirs(folder)
     open(os.path.join(folder, "sensor.yaml"), "w").write(
         "%YAML:1.0\nsensor_type: visual-inertial\nT_BS:\n  cols: 4\n  rows: 4\n"
@@ -188,6 +199,14 @@ def write_gt(paths, edges, machine, imu_frame, folder):
             fh.write("%d,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,0,0,0,0,0,0\n"
                      % (ts[k], P[k, 0], P[k, 1], P[k, 2], w, x, y, z, V[k, 0], V[k, 1], V[k, 2]))
     return len(ts)
+
+
+def pair_stamps(root):
+    """The stereo pairs' stamps (ns) of an export's mav0/cam0/data.csv."""
+    f = os.path.join(root, "mav0", "cam0", "data.csv")
+    if not os.path.exists(f):
+        return []
+    return [int(ln.split(",")[0]) for ln in open(f) if ln.strip() and not ln.startswith("#")]
 
 
 def measured_delay(paths, spec, machine):
@@ -327,7 +346,7 @@ def convert_robot(paths, edges, machine, out, rate, template, gt_only=False, par
             raise mc.ConvertError(f"--gt-only: no {root}/mav0 (export it first)")
         shutil.rmtree(gt_dir, ignore_errors=True)
         return "%s: %d ground-truth poses (ground truth only)" % (
-            machine, write_gt(paths, edges, machine, imu_frame, gt_dir))
+            machine, write_gt(paths, edges, machine, imu_frame, gt_dir, pair_stamps(root)))
     if imu_only:
         d = os.path.join(root, "mav0", "imu0")
         if not os.path.isdir(d):
@@ -377,7 +396,8 @@ def convert_robot(paths, edges, machine, out, rate, template, gt_only=False, par
         raise mc.ConvertError(f"{machine}: {n_pair} stereo pairs and {n_imu} IMU samples")
     rate_imu = int(round(1e9 / np.median(np.diff(t_imu))))
     rate_cam = int(round((n_pair - 1) * 1e9 / (last - first)))
-    n_gt = write_gt(paths, edges, machine, imu_frame, os.path.join(root, "mav0", "state_groundtruth_estimate0"))
+    n_gt = write_gt(paths, edges, machine, imu_frame, os.path.join(root, "mav0", "state_groundtruth_estimate0"),
+                    pair_stamps(root))
     params(os.path.join(root, "params"), template, rate_cam, rate_imu, infos, T_bs, spec["noise"])
     b = np.linalg.norm(T_bs["left"][:3, 3] - T_bs["right"][:3, 3])
     return ("%s: %d stereo pairs at %d Hz, %dx%d, fx %.1f; %d IMU samples at %d Hz (%s, %.3f s taken off); "
