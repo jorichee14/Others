@@ -298,8 +298,7 @@ def csv_rate(path):
 def convert_robot(paths, edges, machine, out, rate, template, gt_only=False, params_only=False,
                   imu_only=False, imu_delay=None):
     spec = MACHINES[machine]
-    delay = imu_delay if imu_delay is not None else measured_delay(paths, spec, machine)
-    delay_ns = int(round(delay * 1e9))
+    delay = delay_ns = None                               # measured only where the IMU is written
     infos = {"left": mc.first_msg(paths, spec["left_info"]), "right": mc.first_msg(paths, spec["right_info"])}
     for side, info in infos.items():
         if info is None:
@@ -347,6 +346,9 @@ def convert_robot(paths, edges, machine, out, rate, template, gt_only=False, par
         shutil.rmtree(gt_dir, ignore_errors=True)
         return "%s: %d ground-truth poses (ground truth only)" % (
             machine, write_gt(paths, edges, machine, imu_frame, gt_dir, pair_stamps(root)))
+    if imu_only or not (gt_only or params_only):
+        delay = imu_delay if imu_delay is not None else measured_delay(paths, spec, machine)
+        delay_ns = int(round(delay * 1e9))
     if imu_only:
         d = os.path.join(root, "mav0", "imu0")
         if not os.path.isdir(d):
