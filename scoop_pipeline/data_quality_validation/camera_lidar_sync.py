@@ -11,8 +11,12 @@ How fast the robot turns (about the vertical), measured twice:
           the downsized grey images) over fx: a turn left by a moves the
           scene right by fx * a
   LiDAR   the scan's shift in azimuth between scans (phase correlation of the
-          mean range per 0.5 deg of azimuth, points within 0.3-30 m): a turn
-          left by a moves every point's azimuth by -a
+          mean range per 0.5 deg of azimuth, points within 1-30 m, so not the
+          robot itself; azimuths with no point, a blocked sector, filled from
+          their neighbours so nothing fixed to the sensor pins the shift at 0):
+          a turn left by a moves every point's azimuth by -a. A scan's time is
+          the median of its points' own times (an Ouster stamps the start of
+          its 0.1 s sweep), its stamp where it has none
 Both assume the camera's y axis and the LiDAR's z axis about vertical (a
 level mount). Times are header stamps, in seconds after the first image.
 
@@ -63,13 +67,16 @@ def shift_1d(a, b):
 def lidar_profile(xyz):
     """Mean range per azimuth bin, less its mean (0 where no point)."""
     r = np.hypot(xyz[:, 0], xyz[:, 1])
-    k = (r > 0.3) & (r < 30.0)
+    k = (r > 1.0) & (r < 30.0)
     az = np.arctan2(xyz[k, 1], xyz[k, 0])
     b = ((az + np.pi) / (2 * np.pi) * BINS).astype(int) % BINS
     n = np.bincount(b, minlength=BINS)
     s = np.bincount(b, weights=r[k], minlength=BINS)
-    p = np.where(n > 0, s / np.maximum(n, 1), 0.0)
-    return np.where(n > 0, p - p[n > 0].mean(), 0.0) if n.any() else p
+    if not n.any():
+        return np.zeros(BINS)
+    full = np.flatnonzero(n)
+    p = np.interp(np.arange(BINS), np.r_[full - BINS, full, full + BINS], np.tile(s[full] / n[full], 3))
+    return p - p.mean()
 
 
 def lidar_rate(reader, topic, t0, span):
@@ -78,14 +85,15 @@ def lidar_rate(reader, topic, t0, span):
     lo, hi = t0 + int((span[0] - 1) * 1e9), t0 + int((span[1] + 1) * 1e9)
     ts, rate, prev = [], [], None
     for sc in B.iter_scans(reader, topic, select=lambda s: 0 if lo <= s <= hi else None, min_points=50,
-                           log=lambda *_: None):
+                           with_time=True, log=lambda *_: None):
         p = lidar_profile(np.asarray(sc.xyz, np.float64))
+        mid = sc.stamp_ns + (int(np.median(sc.t) * 1e9) if sc.t is not None and len(sc.t) else 0)
         if prev is not None:
-            dt = (sc.stamp_ns - prev[0]) * 1e-9
+            dt = (mid - prev[0]) * 1e-9
             if 0 < dt < 0.5:
-                ts.append(((sc.stamp_ns + prev[0]) / 2 - t0) * 1e-9)
+                ts.append(((mid + prev[0]) / 2 - t0) * 1e-9)
                 rate.append(-shift_1d(prev[1], p) * 2 * np.pi / BINS / dt)
-        prev = (sc.stamp_ns, p)
+        prev = (mid, p)
     return np.array(ts), np.array(rate)
 
 

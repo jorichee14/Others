@@ -141,7 +141,8 @@ tests/               self-tests, no real bag needed
                      odometry with a z-up body frame, config frames, range and mesh stream
   test_hydra_eval.py hydra_eval: odometry shift aligned away, Hydra's offset in map, --cov,
                      loop closures, json and figure
-  test_camera_lidar_sync.py  camera_lidar_sync: synced bag passes, a LiDAR 0.3 s late found and fails
+  test_camera_lidar_sync.py  camera_lidar_sync: synced bag passes (Ouster start-of-sweep stamps, robot
+                     body and a blocked sector in view), a LiDAR 0.3 s late found and fails
   test_imu_check.py  imu_check: a gyro 2.1 s late found against images and ground truth;
                      an IMU turned 90 deg found by gravity and the rotation fit
   test_relay_stats.py  relay_stats: delay, loss, backlog of a queued stream, map age
