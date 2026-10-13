@@ -8,7 +8,7 @@
 # ntp topics: without them there is no evidence the clocks agreed during a run.
 #
 #   mobile_1        admin@mobile1        LiDAR + ZED + radar, iperf server
-#   mobile_2        mic-713@ubuntu       RealSense + Isaac VSLAM
+#   mobile_2        mic-713@ubuntu       RealSense (ns /mobile_2/camera) + Ouster, Isaac VSLAM
 #   infra_1         wicoms-robot2        fixed CSI transmitter (Pi)
 #   mobile_1/sniffer wicoms-robot1       nexmon CSI receiver (Pi)
 #
@@ -56,8 +56,10 @@ check:
       skip: ["/*/wifi/*", "/*/ntp/*", "/*/diagnostics"]   # diagnostics come with ntp
     survey:                        # mobile_2 is parked as an anchor: link + time base, and
                                    # its colour camera, which sights the board that places it
-      skip: ["/mobile_2/infra1/*", "/mobile_2/infra2/*",
-             "/mobile_2/depth/*", "/mobile_2/imu", "/mobile_2/extrinsics/*",
+      skip: ["/mobile_2/camera/infra1/*", "/mobile_2/camera/infra2/*",
+             "/mobile_2/camera/depth/*", "/mobile_2/camera/imu",
+             "/mobile_2/camera/extrinsics/*",
+             "/mobile_2/ouster/*",         # a parked robot's LiDAR maps nothing new
              "/mobile_2/wifi/iperf_*",
              "/infra_*/wifi/iperf_*"]  # the infra nodes run iperf in contention only
     coop:
@@ -102,24 +104,60 @@ machines:
       - /mobile_1/diagnostics
 
   # ------------------------------------------------------------------ mobile_2
-  # Second agent: stereo + depth + Isaac VSLAM. Parked as an anchor during
-  # survey passes, driven during coop passes.
+  # Second agent: RealSense stereo + depth + Isaac VSLAM, and its own Ouster.
+  # Parked as an anchor during survey passes, driven during coop passes.
+  #
+  # The RealSense runs as node `camera` in namespace /mobile_2, so every topic
+  # is /mobile_2/camera/...  (a bag with /mobile_2/infra1/... is from before
+  # this; the pipeline's defaults in processing/vslam.py and
+  # map_stages/depth_track.py still name those):
+  #
+  #   ros2 run realsense2_camera realsense2_camera_node --ros-args \
+  #     -r __ns:=/mobile_2 -r __node:=camera \
+  #     -p enable_infra1:=true -p enable_infra2:=true \
+  #     -p enable_color:=true -p enable_depth:=true \
+  #     -p depth_module.emitter_enabled:=0 \
+  #     -p depth_module.depth_profile:=848x480x30 \
+  #     -p depth_module.infra_profile:=848x480x30 \
+  #     -p rgb_camera.color_profile:=848x480x30 \
+  #     -p align_depth.enable:=false -p pointcloud.enable:=false \
+  #     -p enable_gyro:=true -p enable_accel:=true \
+  #     -p gyro_fps:=200 -p accel_fps:=200 -p unite_imu_method:=2
+  #
+  # emitter_enabled 0: no IR projector dots in the infra images VSLAM tracks on.
+  # unite_imu_method 2 (linear interpolation): gyro + accel as one /camera/imu.
+  #
+  # By hand, the camera topics alone (a dummy run; record.sh records the list
+  # below, -d splits the bag every 24 s):
+  #
+  #   ros2 bag record -s mcap --storage-preset-profile fastwrite \
+  #     --max-cache-size 2147483648 -d 24 -o dummy_mobile_2 \
+  #     /mobile_2/camera/infra1/image_rect_raw /mobile_2/camera/infra1/camera_info \
+  #     /mobile_2/camera/infra2/image_rect_raw /mobile_2/camera/infra2/camera_info \
+  #     /mobile_2/camera/color/image_raw       /mobile_2/camera/color/camera_info \
+  #     /mobile_2/camera/depth/image_rect_raw  /mobile_2/camera/depth/camera_info
   mobile_2:
     topics:
+      # --- LiDAR (the driver in namespace /mobile_2, proc_mask RAW as on
+      # mobile_1: packets + metadata only, decoded offline by decode_ouster.py
+      # with --packets-ns /mobile_2/ouster)
+      - /mobile_2/ouster/lidar_packets
+      - /mobile_2/ouster/imu_packets
+      - /mobile_2/ouster/metadata          # TRANSIENT_LOCAL, see qos overrides
       # --- stereo infra pair (the pair VSLAM actually tracks on)
-      - /mobile_2/infra1/image_rect_raw
-      - /mobile_2/infra1/camera_info
-      - /mobile_2/infra2/image_rect_raw
-      - /mobile_2/infra2/camera_info
+      - /mobile_2/camera/infra1/image_rect_raw
+      - /mobile_2/camera/infra1/camera_info
+      - /mobile_2/camera/infra2/image_rect_raw
+      - /mobile_2/camera/infra2/camera_info
       # --- colour + depth
-      - /mobile_2/color/image_raw
-      - /mobile_2/color/camera_info
-      - /mobile_2/depth/image_rect_raw
-      - /mobile_2/depth/camera_info
-      # --- IMU and extrinsics
-      - /mobile_2/imu
-      - /mobile_2/extrinsics/depth_to_infra1    # TRANSIENT_LOCAL
-      - /mobile_2/extrinsics/depth_to_infra2    # TRANSIENT_LOCAL
+      - /mobile_2/camera/color/image_raw
+      - /mobile_2/camera/color/camera_info
+      - /mobile_2/camera/depth/image_rect_raw
+      - /mobile_2/camera/depth/camera_info
+      # --- IMU (unite_imu_method 2) and extrinsics
+      - /mobile_2/camera/imu
+      - /mobile_2/camera/extrinsics/depth_to_infra1    # TRANSIENT_LOCAL
+      - /mobile_2/camera/extrinsics/depth_to_infra2    # TRANSIENT_LOCAL
       # --- VSLAM
       #- /mobile_2/visual_slam/status
       #- /mobile_2/visual_slam/tracking/odometry
