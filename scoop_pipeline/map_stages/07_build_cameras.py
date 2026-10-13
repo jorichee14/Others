@@ -233,28 +233,34 @@ def main():
            "tr_t": None, "tr_T": None}
 
     if P.reference:
-        # boards this run measured (05 on the run: boards_<tag>.json): the ones
-        # the reference lacks are added; the ones it has are compared with it
+        # boards this run measured (05 on the run: boards_<tag>.json) and other
+        # passes' (dataset.boards_from): the ones the reference lacks are added;
+        # the ones it has are compared with it, and replace it when the boards
+        # were moved since (dataset.boards_moved; P.boards decides)
         rb_path = P.outp("boards_{tag}.json")
-        if os.path.exists(rb_path):
-            rb = json.load(open(rb_path))
-            run_boards = boards_in_map(rb, P.cfg)
+        rb = json.load(open(rb_path)) if os.path.exists(rb_path) else {}
+        if rb:
             # map_zed is this session's ZED map: 05 on the run measured it
             ctx["T_map_mapzed"] = load_T_map_mapzed(rb, {})
             if ctx["T_map_mapzed"] is not None:
                 print("map -> map_zed of this session from %s (for the ChArUco check)"
                       % rb_path)
-            for name, (T, rec) in sorted(run_boards.items()):
-                if name in ctx["boards"]:
-                    Tr = ctx["boards"][name][0]
-                    print("board '%s': this run measures it %.1f mm / %.2f deg from the "
-                          "reference's pose (kept)" % (name, np.linalg.norm(
-                              T[:3, 3] - Tr[:3, 3]) * 1000, ang_deg(T[:3, :3], Tr[:3, :3])))
-                else:
-                    ctx["boards"][name] = (T, rec)
-                    print("board '%s': from this run (%s)" % (name, rb_path))
         else:
             print("(no %s: run 05 on this run to place boards the reference lacks)" % rb_path)
+        since = dict(P.extra_boards())
+        for name, rec in (rb.get("boards") or {}).items():
+            since[name] = dict(rec, source=rb_path)
+        for name, rec in sorted(since.items()):
+            if name in ctx["boards"]:
+                T, Tr = T_from_record(rec), ctx["boards"][name][0]
+                print("board '%s': %s measures it %.1f mm / %.2f deg from the reference's "
+                      "pose (%s)" % (name, rec["source"], np.linalg.norm(T[:3, 3] - Tr[:3, 3])
+                                     * 1000, ang_deg(T[:3, :3], Tr[:3, :3]),
+                                     "taken: dataset.boards_moved" if P.boards_moved
+                                     else "kept"))
+        for name, rec in P.boards(af.get("boards") or {}, rb.get("boards") or {},
+                                  log=lambda *_: None).items():
+            ctx["boards"][name] = (T_from_record(rec), rec)
     print("anchor_frame: %s  (map_frame='%s')" % (s["anchor_frame"], map_frame))
     print("boards in map: %s" % ", ".join(sorted(ctx["boards"])) or "(none)")
 

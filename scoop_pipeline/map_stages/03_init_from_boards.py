@@ -3,9 +3,11 @@
 STAGE 03 - localise every SLAM origin in a NEW bag into `map`, from the board
 each sensor can see.
 
-`map -> board` is FIXED (the boards do not move). `<slam origin> -> board` is
-run-specific, because a SLAM origin lands somewhere new every recording. So for
-each sensor, from THIS bag:
+`map -> board` is FIXED (the boards do not move; when they were moved since the
+reference pass -- dataset.boards_moved -- the poses 05 measured since replace
+the reference's, see pipeline_common.Pipeline.boards). `<slam origin> -> board`
+is run-specific, because a SLAM origin lands somewhere new every recording. So
+for each sensor, from THIS bag:
 
     T_origin_board = T_origin_cam(t) @ T_cam_board(t)     (averaged; board is static)
     T_map_origin   = T_map_board @ inv(T_origin_board)    (T_map_board fixed, from 05)
@@ -338,10 +340,9 @@ def main():
         af = json.load(open(s["anchor_frame"]))
     except (FileNotFoundError, OSError):
         af = {}
-    for n, rec in P.extra_boards().items():          # dataset.boards_from
-        if n not in (af.get("boards") or {}):
-            af.setdefault("boards", {})[n] = rec
-            print("board '%s' from %s" % (n, rec["source"]))
+    # the reference's boards, other passes' (dataset.boards_from) and this
+    # run's own (05 on it); which pose wins: P.boards (dataset.boards_moved)
+    af["boards"] = P.boards(af.get("boards") or {}, log=print)
     bmap = boards_in_map(af, s)
     if not bmap:
         raise SystemExit("no board poses in map. Re-run 05_anchor.py so "
@@ -938,9 +939,20 @@ def main():
                       % (ac, bc[2], bc[0], bc[1], lim_cm, lim_deg))
                 rec["checks"].update(board_cm=round(bc[0], 2), board_deg=round(bc[1], 3),
                                      board_n=bc[2])
+                bname = sens.get("board")
+                bsrc = bmap.get(bname, (None, {}))[1].get("source", "reference")
                 if bc[0] > lim_cm or bc[1] > lim_deg:
-                    raise SystemExit("relocalize: the board dwell disagrees with the LiDAR "
-                                     "start -- refused (open %s to look)" % reloc["look"])
+                    if P.boards_moved and bsrc == "reference":
+                        # the dwell was read against where the board USED to be:
+                        # the disagreement is the board's move, not a wrong start
+                        print("  the '%s' board's pose is the reference pass's and the boards "
+                              "were moved since (dataset.boards_moved): that is the board's "
+                              "move, the LiDAR start stands; 05 on this run measures where "
+                              "the board is now" % bname)
+                        rec["checks"]["board_moved"] = True
+                    else:
+                        raise SystemExit("relocalize: the board dwell disagrees with the LiDAR "
+                                         "start -- refused (open %s to look)" % reloc["look"])
         else:
             print("\n  [board]  no %s board dwell in this run: the board check is skipped" % ac)
         if ac in cam_out:

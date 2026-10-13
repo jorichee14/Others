@@ -12,6 +12,8 @@ RealSense's own tree from camera_link (mobile_2).
       from boards_<tag>.json, map_zed ~~ mobile_1 from 04's in-camera
       trajectory, the boards of the reference and of the run, arducam from 07,
       map -> map_realsense (mobile_2's origin) -> camera_link from 07;
+      the same with dataset.boards_moved: the run's 05 replaces the
+      reference's pose of a board it measured again;
   mapping pass (mapping_A): mobile_1 from the refined LiDAR trajectory
       through T_N_world, in the points' frame;
   10 on a bag merged before the map stages: the same tree in its bag, with
@@ -338,6 +340,29 @@ def main():
                      % (after["camera_link"].parent, after["map_realsense"].parent))
         close(tree.lookup("map", "map_realsense", t),
               T_RS @ np.linalg.inv(RS_CHAIN[0][2] @ RS_CHAIN[1][2]), "run: map_realsense", f)
+
+        # the boards were moved since mapping_A (dataset.boards_moved): the run's
+        # own 05 says where `anchor` is now and replaces the reference's pose;
+        # board_rs, which only the reference measured, stays; the robot and its
+        # origin map_zed do not move with the board
+        cfg = os.path.join(stages, "pipeline_config_survey_1.json")
+        c = json.load(open(cfg))
+        c["dataset"]["boards_moved"] = True
+        json.dump(c, open(cfg, "w"))
+        tree, after = merged_tree(inputs, cfg, os.path.join(tmp, "run_moved"), static_yaml)
+        close(tree.lookup("map", "board", t), rotz(0.2, (0.004, 0, 0)),
+              "moved: board (this run's 05)", f)
+        close(tree.lookup("map", "board_rs", t), rotz(10, (-24.4, 2.2, 0.1)),
+              "moved: board_rs (the reference's, nobody measured it since)", f)
+        close(tree.lookup("map", "board_b", t), rotz(45, (-7.2, 12.6, 0.03)), "moved: board_b", f)
+        close(tree.lookup("map", "map_zed", t), T_MAP_MAPZED, "moved: map_zed", f)
+        for t_ in stamps[::7]:
+            close(tree.lookup("map", "zed_left_camera_optical_frame", T0 + t_), true_cam(t_),
+                  "moved: mobile_1 at %.1f s" % t_, f)
+        if after["map_zed"].parent != "board":
+            f.append("moved: map_zed hangs from %s, not the start board" % after["map_zed"].parent)
+        del c["dataset"]["boards_moved"]
+        json.dump(c, open(cfg, "w"))
 
         tree, after = merged_tree(inputs, os.path.join(stages, "pipeline_config.json"),
                                   os.path.join(tmp, "map_merged"), static_yaml)

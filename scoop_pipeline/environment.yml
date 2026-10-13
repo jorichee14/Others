@@ -37,7 +37,9 @@ dependencies:
       - ouster-sdk                      # lidar_packets -> scans (scoop/ouster.py)
       - mcap                            # MCAP bags without ROS
       - mcap-ros2-support
-      - rosbags                         # .db3 bags, CDR for tests
+      - rosbags<0.10                    # .db3 bags, CDR for tests. 0.11 reads no /tf_static
+                                        # from the pipeline's merged bags (every TF lookup
+                                        # fails, tests/test_pass_tf.py); 0.9 reads them
       # GPU (optional; stage 01 falls back to the CPU without it). Match the
       # CUDA major version `nvidia-smi` reports: cupy-cuda11x for CUDA 11.
       - cupy-cuda12x

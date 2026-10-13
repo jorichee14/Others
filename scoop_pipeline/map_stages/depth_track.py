@@ -64,7 +64,8 @@ Stage 04 runs it for each entry of "04_reference" "tracks":
   boards    every board sighting of the colour camera (board_image_topic, every
             board_stride-th image, within board_max_range and board_max_reproj)
             is a fix: the body in map from the board's pose (the reference
-            pass's, dataset.boards_from's). A frame within board_tol_s of one
+            pass's, dataset.boards_from's; the day's own measurements with
+            dataset.boards_moved). A frame within board_tol_s of one
             is placed from it when the track is lost, or when the track is
             more than board_reset_m from it; a design with several copies
             (anchor / anchor_b) gives one candidate per copy, the depth frame
@@ -451,9 +452,7 @@ def board_fixes(P, c, bag, T_bc, cache, log=print):
             return [(f["t"], f["board"], np.array(f["T"]), f["range"], f["reproj"])
                     for f in d["fixes"]]
     af = json.load(open(P.anchor_frame()))
-    recs = dict(af.get("boards") or {})
-    for n, r in P.extra_boards().items():
-        recs.setdefault(n, r)
+    recs = P.boards(af.get("boards") or {}, log=log)   # + boards_from, this run's own
     axes, origin = af.get("board_axes", "opencv"), af.get("board_origin", "corner")
     reg = P.cfg.get("boards", {})
     by_design = {}

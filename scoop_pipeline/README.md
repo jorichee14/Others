@@ -292,6 +292,23 @@ track's first pose (no 05), and the arducam where survey_1's 07 put it
 publishes `/mobile_2/global_pose` and `/mobile_2/local_pose`. No infra cameras
 placed (07/08) or boards re-measured (05) in coop itself.
 
+A later day in the same place (the place is not mapped again; the boards are
+put up again, roughly where they were): every run of that day keeps the first
+day's map, `"reference_pass": "20260924/mapping_A"`, and says the boards moved,
+`"boards_moved": true` in `dataset`. The first run of the day measures where
+they are now: `03_init.relocalize` places its start from the LiDAR (the board
+dwell would put it where the board used to be; 03 reports that disagreement as
+the board's move instead of refusing), 04 registers its LiDAR track to the map,
+and 05 on the run measures every board it saw, in that map
+(`frames/boards_<tag>.json`). With `boards_moved` the poses measured since the
+reference pass -- the run's own, then `boards_from`'s -- replace the
+reference's wherever a board is used (03, 04's tracks, 07, the TF tree,
+`pipeline_common.Pipeline.boards`); the reference's pose stands only for a
+board nobody measured since. The other runs of the day take them with
+`"boards_from": ["<first run>"]` (or `"<date>/<run>"`); on the first run,
+`--from 03_init` then places its parked robots from the new poses too. Without
+`boards_moved` the reference's pose wins, as before.
+
 ## Processing a recording
 
 ```

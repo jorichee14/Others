@@ -154,8 +154,7 @@ def main():
     ax.plot(*xy[-1], "D", ms=7, color=cmap(1.0), mec="black", mew=0.6, zorder=6, label="end")
     # boards
     af = json.load(open(P.anchor_frame()))
-    boards = dict(af.get("boards") or {})
-    boards.update({k: v for k, v in P.extra_boards().items() if k not in boards})
+    boards = P.boards(af.get("boards") or {}, log=lambda *_: None)
     for n, r in boards.items():
         bx, by = r["xyz"][:2]
         if lo[0] <= bx <= hi[0] and lo[1] <= by <= hi[1]:

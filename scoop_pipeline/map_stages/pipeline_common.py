@@ -731,6 +731,58 @@ class Pipeline:
                 out.setdefault(n, dict(rec, source=path))
         return out
 
+    @property
+    def boards_moved(self):
+        """dataset.boards_moved: the boards were moved since the reference pass
+        mapped the place (a later day; the place is not mapped again, the boards
+        are put up again roughly where they were). Their poses measured since
+        -- 05 on a run of that day, in the reference's map -- then replace the
+        reference pass's (self.boards)."""
+        return bool(self.dataset.get("boards_moved"))
+
+    def run_boards(self):
+        """The boards this run measured (05 on the run: frames/boards_<tag>.json,
+        in the reference's map): {name: record}; {} for a mapping pass, or before
+        05 ran."""
+        if not self.reference:
+            return {}
+        p = self.outp("boards_{tag}.json")
+        if not os.path.exists(p):
+            return {}
+        return {n: dict(rec, source=p)
+                for n, rec in (json.load(open(p)).get("boards") or {}).items()}
+
+    def boards(self, base, run=None, log=print):
+        """The board poses a stage works with: `base`, the reference pass's
+        (anchor_frame.json's "boards"), this run's own (05 on the run; `run`, or
+        read here when None) and other passes' (dataset.boards_from). -> {name:
+        record}, each with "source": "reference", or the file it came from.
+
+        The boards do not move between the passes of a day, so the reference's
+        pose stands and the others only add the boards it lacks (this run's,
+        then boards_from's, the first listed first). With dataset.boards_moved
+        the boards were moved since the reference pass: the poses measured
+        since replace the reference's -- this run's own first, then
+        boards_from's -- and the reference's stands only for a board nobody
+        measured since."""
+        out = {n: dict(rec, source="reference") for n, rec in (base or {}).items()}
+        since = {}
+        for n, rec in (self.run_boards() if run is None else
+                       {n: dict(r, source=self.outp("boards_{tag}.json"))
+                        for n, r in run.items()}).items():
+            since.setdefault(n, rec)
+        for n, rec in self.extra_boards().items():
+            since.setdefault(n, rec)
+        for n, rec in since.items():
+            if n not in out:
+                out[n] = rec
+                log("board '%s' from %s" % (n, rec["source"]))
+            elif self.boards_moved:
+                out[n] = rec
+                log("board '%s' from %s (replaces the reference's: dataset.boards_moved)"
+                    % (n, rec["source"]))
+        return out
+
     def cameras_from(self):
         """Other passes' 07 outputs (frames/cameras_in_map.yaml) for a pass that
         does not place its infra/parked cameras itself (07 off: coop), by

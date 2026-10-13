@@ -146,11 +146,9 @@ def plan(P, edges, bags, log=print):
     session = run if P.reference else af
     if not af:
         log("    (no %s: no boards, map_zed or mapping trajectory)" % af_path)
-    boards = dict((af.get("boards") or {}))
-    for n, rec in (run.get("boards") or {}).items():
-        boards.setdefault(n, rec)
-    for n, rec in P.extra_boards().items():            # dataset.boards_from
-        boards.setdefault(n, rec)
+    # the reference's, this run's own (05 on the run) and boards_from's; the
+    # reference's pose wins unless dataset.boards_moved (P.boards)
+    boards = P.boards(af.get("boards") or {}, run.get("boards") or {}, log=log)
     bframe = {n: rec.get("frame") or n for n, rec in boards.items()}
     s04 = P.cfg.get("07_build_cameras") or {}
     cfg_cams = {c["name"]: c for c in s04.get("cameras", [])}
