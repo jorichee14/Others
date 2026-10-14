@@ -116,6 +116,8 @@ print(d.get("max_bag_size", 2147483648))
 print(d.get("compression_mode", "none"))
 print(" ".join(topics))
 print(summary)
+print(d.get("max_cache_size", 0))
+print(d.get("storage_preset", ""))
 PYEOF
 ) || { echo "$PLAN"; exit 1; }
 
@@ -131,6 +133,8 @@ MAXSIZE=$(sed -n 4p <<<"$PLAN")
 COMPRESS=$(sed -n 5p <<<"$PLAN")
 read -r -a TOPICS <<<"$(sed -n 6p <<<"$PLAN")"
 SELECTED=$(sed -n 7p <<<"$PLAN")
+CACHE=$(sed -n 8p <<<"$PLAN")
+PRESET=$(sed -n 9p <<<"$PLAN")
 
 # Created if absent, parents included -- a fresh machine or a newly mounted
 # drive needs no setup.
@@ -191,6 +195,17 @@ fi
 if [ -f "$QOS" ]; then
     ARGS+=(--qos-profile-overrides-path "$QOS")
 fi
+# The writer buffers messages in RAM and flushes to disk; when the disk is slower
+# than the sensors the buffer overflows and messages are DROPPED. A bigger
+# buffer rides out bursts, and the mcap `fastwrite` preset trades a little file
+# size for write speed. Neither helps if the disk is slower than the sustained
+# data rate -- the check below reports what was lost.
+if [ "${CACHE:-0}" != "0" ]; then
+    ARGS+=(--max-cache-size "$CACHE")
+fi
+if [ -n "$PRESET" ] && [ "$STORAGE" = "mcap" ]; then
+    ARGS+=(--storage-preset-profile "$PRESET")
+fi
 
 # Remember which bag this is, so svo.sh can name the ZED file after it.
 echo "$OUT" > "$OUT_DIR/.last_run"
@@ -201,11 +216,15 @@ echo
 # Not `exec`: when you stop it with Ctrl-C the check below still runs. `trap :`
 # (a handler, not "ignore") keeps this script alive while the recorder, which
 # gets the same Ctrl-C, shuts down and writes its metadata.
+LOG=$(mktemp)
 trap : INT
 set +e
-ros2 bag record "${ARGS[@]}" "${TOPICS[@]}"
+ros2 bag record "${ARGS[@]}" "${TOPICS[@]}" 2>&1 | tee "$LOG"
 set -e
 trap - INT
+# rosbag2 prints "Total lost: N" whenever its cache overflowed.
+LOST=$(grep -o "Total lost: [0-9]*" "$LOG" | awk '{s += $3} END {print s + 0}')
+rm -f "$LOG"
 
 # ---------------------------------------------------------------- check
 # A bag that stopped without data on a topic you asked for is found out here,
@@ -241,5 +260,11 @@ if bad:
 print("OK    %d topics have data%s" % (len(want) - len(empty),
       ", %d quiet (allowed)" % len(warn) if warn else ""))
 PYEOF
+if [ "$LOST" -gt 0 ]; then
+    echo "FAIL  the recorder dropped $LOST messages (write cache overflowed)."
+    echo "      Use a faster disk, lower the data rate (smaller images), or raise"
+    echo "      max_cache_size in record.yaml. This pass is not complete."
+    CHECK=1
+fi
 echo
 exit $CHECK

@@ -16,6 +16,9 @@ defaults:
   storage: mcap                 # embeds message definitions; .db3 stores only
                                 # the type NAME, so replay needs the workspace
   max_bag_size: 2147483648      # 2 GiB per file
+  max_cache_size: 1073741824    # 1 GiB write buffer (default is ~100 MB); bursts that
+                                # overflow it are dropped, and record.sh reports them
+  storage_preset: fastwrite     # mcap: favour write speed over file size
   compression_mode: none        # zstd costs CPU the Jetsons need for VSLAM
   qos_overrides: rosbag_qos_override.yaml
   # Bag name: <prefix>_<pass>_[<site>_]<YYYYMMDD>_<machine>
