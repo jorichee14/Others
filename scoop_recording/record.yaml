@@ -159,6 +159,14 @@ machines:
         - /mobile_1/sniffer/ntp/client/status
         - /mobile_1/sniffer/ntp/events
 
+# Topics that may legitimately have no messages in a good bag (shell-style
+# patterns). record.sh's end-of-run check only warns for these, and fails on any
+# other empty topic.
+may_be_empty:
+  - "*/ntp/events"            # published when the clock steps, not periodically
+  - "*/wifi/iperf_up"         # only while an iperf test is running
+  - "*/wifi/iperf_down"
+
 # Which groups each kind of run records. Pick with PROFILE=<name> on the
 # command line, or it is chosen by the start of the pass name (map_1 ->
 # map, coop_2 -> coop). A machine not listed records all its groups.

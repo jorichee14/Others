@@ -5,9 +5,16 @@
 #   ./record.sh mobile_1/sniffer coop
 #   ./record.sh mobile_1 survey_1 slowwalk     # free-form label in the name
 #
+# Which topics: the profile named by the start of the pass (map_1 -> map, ...)
+# picks groups per machine; PROFILE=, ONLY=a,b and SKIP=a,b override it. See
+# the profiles: block in record.yaml. A machine a profile lists as [] does not
+# record.
+#
 # Refuses to start if a listed topic has no publisher: a bag that silently
 # contains an empty topic is worse than no bag, because you only find out after
-# the robot has been driven.
+# the robot has been driven. When you stop it (Ctrl-C) it checks the finished
+# bag and exits non-zero if a topic has no messages (topics matching
+# may_be_empty: in record.yaml only warn). It also writes ./.last_run for svo.sh.
 set -eo pipefail
 
 MACHINE=${1:?usage: record.sh <machine> <pass> [label]}
@@ -197,19 +204,22 @@ echo
 trap : INT
 set +e
 ros2 bag record "${ARGS[@]}" "${TOPICS[@]}"
-STATUS=$?
 set -e
 trap - INT
 
 # ---------------------------------------------------------------- check
 # A bag that stopped without data on a topic you asked for is found out here,
-# not after the robot has been driven away.
+# not after the robot has been driven away. Topics matching `may_be_empty:` in
+# record.yaml (event-driven ones like ntp/events, iperf outside a test) only
+# warn.
 echo
 echo "== check: $(basename "$OUT") =="
-python3 - "$OUT" "${TOPICS[@]}" <<'PYEOF'
-import os, sys, yaml
+CHECK=0
+python3 - "$OUT" "$YAML" "${TOPICS[@]}" <<'PYEOF' || CHECK=$?
+import fnmatch, os, sys, yaml
 
-bag, want = sys.argv[1], sys.argv[2:]
+bag, yml, want = sys.argv[1], sys.argv[2], sys.argv[3:]
+quiet = (yaml.safe_load(open(yml)) or {}).get("may_be_empty") or []
 meta = os.path.join(bag, "metadata.yaml")
 if not os.path.isfile(meta):
     sys.exit("FAIL  no metadata.yaml in %s -- the recorder did not finish writing" % bag)
@@ -220,13 +230,16 @@ dur = info.get("duration", {}).get("nanoseconds", 0) / 1e9
 size = sum(os.path.getsize(os.path.join(bag, f)) for f in os.listdir(bag)) / 1e6
 print("duration %.1f s   size %.0f MB   messages %d" % (dur, size, sum(counts.values())))
 empty = [t for t in want if counts.get(t, 0) == 0]
-for t in want:
-    if t in empty:
-        print("  EMPTY  %s" % t)
-if empty:
-    sys.exit("FAIL  %d of %d topics have no messages" % (len(empty), len(want)))
-print("OK    all %d topics have data" % len(want))
+bad  = [t for t in empty if not any(fnmatch.fnmatch(t, q) for q in quiet)]
+warn = [t for t in empty if t not in bad]
+for t in warn:
+    print("  quiet  %s" % t)
+for t in bad:
+    print("  EMPTY  %s" % t)
+if bad:
+    sys.exit("FAIL  %d of %d topics have no messages" % (len(bad), len(want)))
+print("OK    %d topics have data%s" % (len(want) - len(empty),
+      ", %d quiet (allowed)" % len(warn) if warn else ""))
 PYEOF
-CHECK=$?
 echo
-exit $((CHECK != 0 ? CHECK : 0))
+exit $CHECK
