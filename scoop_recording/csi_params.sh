@@ -98,7 +98,7 @@ if total == 0:
 PYEOF
 }
 
-case "${1:?usage: csi_params.sh rx [mac,...] | tx | check [secs] | all [secs]}" in
+case "${1:-}" in
 rx)
     arm "${2-$MACS}"
     ;;
@@ -117,5 +117,13 @@ tx)
     iw dev "$IFACE" info | grep -E "channel|txpower"
     iw dev "$IFACE" link | grep -E "tx bitrate" || echo "(not associated yet)"
     ;;
-*)  echo "usage: csi_params.sh rx [mac,...] | tx | check [secs] | all [secs]"; exit 1 ;;
+*)  cat <<USAGE
+usage: sudo ./csi_params.sh <mode>
+  rx [mac,...]   sniffer: arm nexmon (default MACs: \$MACS)
+  check [secs]   sniffer: count CSI frames per transmitter, no ROS
+  all [secs]     sniffer: arm, then check
+  tx             transmitter (infra_1, mobile_2): VHT, 1 spatial stream
+env: IFACE=$IFACE CHAN=$CHAN MACS=$MACS
+USAGE
+    exit 1 ;;
 esac
