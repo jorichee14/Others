@@ -225,11 +225,16 @@ echo
 LOG=$(mktemp)
 trap : INT
 set +e
-ros2 bag record "${ARGS[@]}" "${TOPICS[@]}" 2>&1 | tee "$LOG"
+# `tee -i`: Ctrl-C goes to the whole foreground group. A plain tee would die with
+# it, the recorder would then lose its output while shutting down, and its
+# metadata.yaml would never be written.
+ros2 bag record "${ARGS[@]}" "${TOPICS[@]}" 2>&1 | tee -i "$LOG"
 set -e
 trap - INT
 # rosbag2 prints "Total lost: N" whenever its cache overflowed.
-LOST=$(grep -o "Total lost: [0-9]*" "$LOG" | awk '{s += $3} END {print s + 0}')
+# (awk, not grep: grep exits 1 when nothing matches, which under `set -e` would
+# end the script silently before the check below runs.)
+LOST=$(awk '/Total lost:/ {s += $NF} END {print s + 0}' "$LOG")
 rm -f "$LOG"
 
 # ---------------------------------------------------------------- check
