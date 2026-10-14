@@ -160,8 +160,8 @@ machines:
         - /mobile_1/sniffer/ntp/events
 
 # Which groups each kind of run records. Pick with PROFILE=<name> on the
-# command line, or it is chosen by the start of the pass name (survey_1 ->
-# survey, coop_2 -> coop). A machine not listed records all its groups.
+# command line, or it is chosen by the start of the pass name (map_1 ->
+# map, coop_2 -> coop). A machine not listed records all its groups.
 #
 #   ./record.sh mobile_2 survey_1                    # profile "survey" (by name)
 #   PROFILE=coop ./record.sh mobile_2 test_1         # force a profile
@@ -169,7 +169,26 @@ machines:
 #   SKIP=vslam ./record.sh mobile_2 coop_1          # all but these
 # The start-up banner prints "selected:" so you can see what was chosen.
 profiles:
-  survey:                       # mobile_2 parked as an anchor: no VSLAM, no depth
+  # Mapping: only the mobile platform (mobile_1), recording its own sensors.
+  # Nobody else records; a machine listed as [] sits the run out.
+  map:
+    mobile_1: [lidar, zed, radar, ntp, health]
+    mobile_2: []
+    infra_1: []
+    mobile_1/sniffer: []
+
+  # Survey: mobile_1 surveys, mobile_2 parked as an anchor (no VSLAM).
+  survey:
     mobile_2: [infra, color_depth, imu, link, ntp, health]
-  coop:                         # everything on
+
+  # Coop: everything on, both robots driving. (A machine not listed here
+  # records all its groups.)
+  coop:
     mobile_2: [infra, color_depth, imu, vslam, link, ntp, health]
+
+  # Contention: the radio is the experiment -- link, CSI and clocks, plus the
+  # robots' own motion (IMU). No imaging sensors.
+  contention:
+    mobile_1: [link, ntp, health]
+    mobile_2: [imu, link, ntp, health]
+    infra_1: [link, ntp, health]

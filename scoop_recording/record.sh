@@ -54,6 +54,11 @@ if os.environ.get("ONLY"):
     chosen = [g for g in os.environ["ONLY"].split(",") if g]
 elif profile and machine in (profiles.get(profile) or {}):
     chosen = list(profiles[profile][machine] or [])
+    if not chosen and not topics:
+        # `machine: []` in a profile = this machine sits this run out.
+        print("SKIP")
+        print("profile %r: %s does not record this run" % (profile, machine))
+        sys.exit(0)
 chosen = [g for g in chosen
           if g not in (os.environ.get("SKIP") or "").split(",")]
 bad = [g for g in chosen if g not in groups]
@@ -106,6 +111,11 @@ print(" ".join(topics))
 print(summary)
 PYEOF
 ) || { echo "$PLAN"; exit 1; }
+
+if [ "$(sed -n 1p <<<"$PLAN")" = "SKIP" ]; then
+    sed -n 2p <<<"$PLAN"
+    exit 0
+fi
 
 OUT=$(sed -n 1p <<<"$PLAN")
 OUT_DIR=$(sed -n 2p <<<"$PLAN")
