@@ -4,7 +4,14 @@ Intrinsics and room-frame extrinsics for the 16 Basler cameras in ED305, capture
 RTSP streams so nothing stops the live camera wall and three people can work at the same time.
 
 Result: `results/intrinsics/cam_N.json` (K, distortion), `results/extrinsics/cameras.json`
-(R, t of every camera in the room frame, camera positions) and `results/extrinsics/report.md`.
+(R, t of every camera in the room frame, camera positions) and `results/extrinsics/report.md`,
+plus CSV files with every view, event and camera (`x y z roll pitch yaw`, errors, calibrate/test
+split) so the calibration can be re-checked at any time with `evaluate.py`.
+
+**Calibrate and test sets.** Every 5th saved view (intrinsics) and every 5th still-board event
+(extrinsics) is a TEST sample. Test samples are never used in the fit; the error on them
+(`rms_test_px`, `floor_err_test_cm`) is the honest quality number. The split is recorded in
+`results/intrinsics/views.csv` and `results/extrinsics/events.csv`.
 
 ## Setup (once, each laptop)
 
@@ -42,14 +49,31 @@ python capture.py --person Jorich  --board A --mode intr --cams 1 2 3 4 13 14
 python capture.py --person Ralph   --board B --mode intr --cams 5 6 7 8 15 16
 python capture.py --person Britney --board C --mode intr --cams 9 10 11 12
 ```
-Walk your board in front of your cameras: near and far, tilted, in every part of the image.
-The window counts saved frames per camera (target 40) and shows a 3x3 map of which image
-regions still lack views (`.` empty, `#` covered). Frames save by themselves when the board
-is well seen and has moved. Then, each person on their own cameras:
+Walk your board in front of your cameras. Frames save by themselves when the board is well
+seen and has moved. Each camera tile shows six bars, like the X Y Size Skew bars of the ROS
+`cameracalibrator`, for the range of board poses saved so far:
+
+| bar | what to do to fill it |
+|---|---|
+| x, y | move the board to the left, right, top and bottom of the image |
+| z | hold it close (fills the image) and far (small) |
+| roll | turn the board in its own plane, about 60 degrees between extremes |
+| pitch | tilt it forward and back (top edge towards / away from the camera) |
+| yaw | tilt it left and right (one side towards the camera) |
+
+When all six bars are green and 20+ frames are saved the tile says **READY: press c**. `c`
+calibrates every camera that has frames (the CALIBRATE button): it fits on the calibrate views,
+measures on the held-out test views and shows `rms calib / test` on the tile. Want rms under
+0.6 px and test under 1.0 px. If not, keep moving the board (more tilted and corner views) and
+press `c` again. The fit is written to `results/intrinsics/cam_N.json` straight away.
+
+The same solve from saved frames, for all cameras at once, or to redo it later:
 ```
 python calibrate_intrinsics.py --data data --cams 1 2 3 4 13 14
 ```
-Want rms under 0.6 px per camera. If a camera is worse, capture more tilted and corner views.
+It writes `results/intrinsics/summary.csv` (per camera: errors, K, distortion, coverage of
+each bar, status) and `views.csv` (per view: split, used or dropped, error, board x y z roll
+pitch yaw).
 
 **Round 2, extrinsics (about 2 hours, all three at once).**
 Every laptop watches all 16 cameras; every person walks their own board:
@@ -68,7 +92,10 @@ recorded in every frame that sees them).
 python calibrate_extrinsics.py --data data --results results
 ```
 It prints the camera positions in the room frame (z should be 2.5 to 2.7 m) and the
-reprojection error per camera, and writes `results/extrinsics/report.md`.
+reprojection error per camera on the calibrate events and on the held-out test events, plus
+the floor-point error of the floor tags seen in test events (want under 5 cm), and writes
+`results/extrinsics/report.md`, `cameras.csv` (x y z roll pitch yaw per camera), `events.csv`
+(board pose and error per event) and `tags.csv`.
 
 **Verify (about 1 hour).** Put a floor tag at a measured spot and run
 ```
@@ -77,10 +104,30 @@ python verify.py --tag 11 --x 2.00 --y 4.00
 at 10 spots across the room. Target: under 5 cm on the floor plane, which is what the BEV
 person detection needs. Record the numbers in the report.
 
+## Re-evaluation later (any time, 15 minutes)
+
+To check whether a camera has been bumped or drifted, record a short new session into a new
+folder (any person name, intr and/or extr mode, no need for full coverage) and evaluate it
+against the stored calibration without refitting:
+```
+python capture.py --person check --board A --mode extr --out data_check
+python evaluate.py --data data_check --all
+```
+It prints, per camera, the new reprojection error next to the stored test error and the floor
+error, and flags `CHECK` when a camera no longer fits. Results go to
+`results/evaluation/<date>/cameras.csv` and `details.csv`. `python evaluate.py --data data`
+(without `--all`) re-scores the original test sets only.
+
 ## What to keep
 
-`data/` (raw frames and detections, so anything can be re-run), `results/`, the filled-in
-`config/floor_markers.yaml` and `config/boards.yaml`. Re-run round 2 after any camera is bumped.
+`data/` (raw frames and detections, so anything can be re-run), `results/` (including the CSVs
+with the calibrate/test split), the filled-in `config/floor_markers.yaml` and
+`config/boards.yaml`. Re-run round 2 after any camera is bumped.
+
+Conventions in the CSV and JSON files: room frame x, y along the walls, z up, metres. A
+camera's `roll pitch yaw` are of its pose in the room, `R_wc = Rz(yaw) Ry(pitch) Rx(roll)`,
+degrees. A view's `x y` are the board centre in the image (0 to 1), `z` its distance along the
+optical axis, `roll` its in-plane rotation and `pitch`, `yaw` its tilt about the image axes.
 
 ## Files
 
@@ -88,9 +135,11 @@ person detection needs. Record the numbers in the report.
 |---|---|
 | `capture.py` | capture frames from RTSP, intr or extr mode |
 | `calibrate_intrinsics.py` | per-camera K and distortion |
-| `calibrate_extrinsics.py` | all cameras in the room frame (bundle adjustment with floor tags) |
+| `calibrate_extrinsics.py` | all cameras in the room frame (bundle adjustment with floor tags), test on held-out events |
+| `evaluate.py` | re-score a stored calibration on test sets or on a new recording, no refit |
 | `verify.py` | triangulate a tag live and compare with a measured spot |
 | `make_boards.py` | printable boards and floor tags |
+| `calib/intr.py`, `calib/extr.py` | the fitting, split and evaluation code shared by the scripts |
 | `config/` | camera URLs, boards, floor tag survey, who does which cameras |
 | `tests/test_synthetic.py` | end-to-end check on a simulated room, no cameras needed |
 
