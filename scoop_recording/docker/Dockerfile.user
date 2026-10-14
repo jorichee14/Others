@@ -1,0 +1,16 @@
+# Extra layer for the Isaac ROS dev image (mobile_2). Survives container restarts,
+# unlike anything installed by hand in /usr/local.
+#   cp this to  <ws>/src/isaac_ros_common/docker/Dockerfile.user
+#   echo 'CONFIG_IMAGE_KEY="ros2_humble.user"' >> ~/.isaac_ros_common-config
+#   ./src/isaac_ros_common/scripts/run_dev.sh        # once, WITHOUT -b: builds the image
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# magic_enum, needed to build isaac_ros_nitros / GXF
+RUN git clone --depth 1 https://github.com/Neargye/magic_enum.git /tmp/magic_enum \
+ && cmake -S /tmp/magic_enum -B /tmp/magic_enum/build \
+      -DMAGIC_ENUM_OPT_BUILD_EXAMPLES=OFF -DMAGIC_ENUM_OPT_BUILD_TESTS=OFF \
+ && cmake --install /tmp/magic_enum/build \
+ && ln -sf /usr/local/include/magic_enum/magic_enum.hpp /usr/local/include/magic_enum.hpp \
+ && rm -rf /tmp/magic_enum
+ENV CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH}

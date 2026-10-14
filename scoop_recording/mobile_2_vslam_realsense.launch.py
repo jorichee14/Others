@@ -3,6 +3,8 @@
 # Edit it on the robot; keep this copy in step so the camera settings are recorded.
 # SPDX-License-Identifier: Apache-2.0 (NVIDIA original, modified)
 import launch
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
 
@@ -17,10 +19,12 @@ def generate_launch_description():
         parameters=[{
             'enable_infra1': True,
             'enable_infra2': True,
-            'enable_color': True,
-            'enable_depth': True,
+            'enable_color': LaunchConfiguration('enable_color'),
+            'enable_depth': LaunchConfiguration('enable_depth'),
             'depth_module.emitter_enabled': 0,
             'depth_module.profile': '640x480x30',
+            'depth_module.infra_profile': '640x480x30',
+            'rgb_camera.color_profile': '640x480x30',
             'align_depth.enable': False,
             'pointcloud.enable': False,
             'enable_gyro': True,
@@ -75,4 +79,12 @@ def generate_launch_description():
         composable_node_descriptions=[visual_slam_node],
         output='screen',
     )
-    return launch.LaunchDescription([visual_slam_launch_container, realsense_camera_node])
+    return launch.LaunchDescription([
+        # VSLAM only needs infra1/infra2 + IMU. Colour and depth are recorded
+        # for the dataset; turn them off if the camera or USB link struggles:
+        #   ros2 launch ... enable_depth:=false enable_color:=false
+        DeclareLaunchArgument('enable_color', default_value='true'),
+        DeclareLaunchArgument('enable_depth', default_value='true'),
+        visual_slam_launch_container,
+        realsense_camera_node,
+    ])
