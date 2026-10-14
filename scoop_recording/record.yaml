@@ -18,6 +18,7 @@ defaults:
   max_bag_size: 2147483648      # 2 GiB per file
   max_cache_size: 1073741824    # 1 GiB write buffer (default is ~100 MB); bursts that
                                 # overflow it are dropped, and record.sh reports them
+  max_bag_duration: 24          # s; new file every 24 s (or at max_bag_size, whichever first). 0 = off
   storage_preset: fastwrite     # mcap: favour write speed over file size
   compression_mode: none        # zstd costs CPU the Jetsons need for VSLAM
   qos_overrides: rosbag_qos_override.yaml

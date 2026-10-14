@@ -118,6 +118,7 @@ print(" ".join(topics))
 print(summary)
 print(d.get("max_cache_size", 0))
 print(d.get("storage_preset", ""))
+print(d.get("max_bag_duration", 0))
 PYEOF
 ) || { echo "$PLAN"; exit 1; }
 
@@ -135,6 +136,7 @@ read -r -a TOPICS <<<"$(sed -n 6p <<<"$PLAN")"
 SELECTED=$(sed -n 7p <<<"$PLAN")
 CACHE=$(sed -n 8p <<<"$PLAN")
 PRESET=$(sed -n 9p <<<"$PLAN")
+DURATION=$(sed -n 10p <<<"$PLAN")
 
 # Created if absent, parents included -- a fresh machine or a newly mounted
 # drive needs no setup.
@@ -202,6 +204,10 @@ fi
 # data rate -- the check below reports what was lost.
 if [ "${CACHE:-0}" != "0" ]; then
     ARGS+=(--max-cache-size "$CACHE")
+fi
+# New bag file every N seconds as well as every max_bag_size: whichever comes first.
+if [ "${DURATION:-0}" != "0" ]; then
+    ARGS+=(-d "$DURATION")
 fi
 if [ -n "$PRESET" ] && [ "$STORAGE" = "mcap" ]; then
     ARGS+=(--storage-preset-profile "$PRESET")
