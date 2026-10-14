@@ -169,11 +169,12 @@ machines:
 #   SKIP=vslam ./record.sh mobile_2 coop_1          # all but these
 # The start-up banner prints "selected:" so you can see what was chosen.
 profiles:
-  # Mapping: only the mobile platform (mobile_1), recording its own sensors.
-  # Nobody else records; a machine listed as [] sits the run out.
+  # Mapping: the two mobile platforms, each recording its own sensors only
+  # (no link measurements). infra_1 and the sniffer sit the run out; a
+  # machine listed as [] does not record.
   map:
     mobile_1: [lidar, zed, radar, ntp, health]
-    mobile_2: []
+    mobile_2: [infra, color_depth, imu, vslam, ntp, health]
     infra_1: []
     mobile_1/sniffer: []
 
