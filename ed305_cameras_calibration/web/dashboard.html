@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ED305 calibration</title>
+<style>
+  :root { --bg:#14171c; --card:#1e2329; --line:#2e353d; --text:#e8ecf0; --dim:#9aa5b1; --ok:#35c759; --warn:#f5b400; --bad:#ff5c5c; --acc:#4da3ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:17px; margin:0 12px 0 0; }
+  input, select, button { font:inherit; padding:7px 10px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--text); }
+  button { cursor:pointer; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#000; font-weight:600; }
+  button.on { background:#2a3a4f; border-color:var(--acc); }
+  button:disabled { opacity:.5; cursor:default; }
+  main { padding:12px 16px; display:grid; gap:14px; grid-template-columns: minmax(0,1fr); }
+  main > section { min-width:0; }
+  @media (min-width: 1000px) { main { grid-template-columns: 300px minmax(0,1fr); } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .card h2 { font-size:14px; margin:0 0 8px; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; }
+  .grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:6px; }
+  .tile { border:1px solid var(--line); border-radius:8px; padding:6px; cursor:pointer; text-align:left; background:#171b20; min-width:0; overflow:hidden; }
+  .tile.sel { border-color:var(--acc); background:#1d2a3a; }
+  .tile .n { font-weight:700; }
+  .tile .c { font-size:12px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; }
+  .tile .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; background:#555; }
+  .dot.ready { background:var(--ok); } .dot.part { background:var(--warn); } .dot.done { background:var(--acc); }
+  img.live { width:100%; max-height:62vh; object-fit:contain; border-radius:8px; background:#000; aspect-ratio:16/9; }
+  .bars { display:grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap:6px; margin:10px 0; }
+  .bar { background:#0f1216; border:1px solid var(--line); border-radius:6px; height:30px; position:relative; overflow:hidden; }
+  .bar .fill { position:absolute; left:0; top:0; bottom:0; background:var(--warn); }
+  .bar.full .fill { background:var(--ok); }
+  .bar span { position:absolute; left:6px; top:5px; font-size:13px; font-weight:600; color:#fff; mix-blend-mode:difference; white-space:nowrap; overflow:hidden; }
+  .big { font-size:28px; font-weight:700; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .dim { color:var(--dim); }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { border-bottom:1px solid var(--line); padding:4px 6px; text-align:right; white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; }
+  pre { white-space:pre-wrap; font-size:12px; color:var(--dim); max-height:260px; overflow:auto; margin:0; }
+  .thumbs { display:grid; grid-template-columns: repeat(4, 1fr); gap:6px; }
+  .thumbs img { width:100%; border-radius:6px; background:#000; aspect-ratio:16/9; }
+  .msg { color:var(--bad); min-height:1.2em; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ED305 calibration</h1>
+  <input id="name" placeholder="your name" size="12">
+  <select id="board"><option>A</option><option>B</option><option>C</option></select>
+  <button id="join" class="primary">Join</button>
+  <span id="who" class="dim"></span>
+  <span style="flex:1"></span>
+  <button id="mIntr" class="on">1 Intrinsics</button>
+  <button id="mExtr">2 Extrinsics</button>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>Cameras <span class="dim">(tap yours)</span></h2>
+      <div class="grid" id="grid"></div>
+      <div class="msg" id="msg"></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>People</h2>
+      <div id="people" class="dim"></div>
+    </div>
+  </section>
+  <section>
+    <div class="card" id="intrPanel">
+      <div class="row">
+        <span class="big" id="camTitle">no camera</span>
+        <span id="camStatus" class="dim"></span>
+        <span style="flex:1"></span>
+        <button id="calib" class="primary" disabled>Calibrate</button>
+      </div>
+      <div class="bars" id="bars"></div>
+      <div class="row"><span id="count"></span><span id="readyTxt"></span><span id="rms"></span></div>
+      <img class="live" id="live" alt="">
+      <p class="dim" style="margin:8px 0 0">Move the board left, right, up, down (x y), close and far (z), turn it in its plane (roll), tilt it forward/back (pitch) and left/right (yaw). Frames save by themselves when the board has moved. When every bar is green and 20+ frames are saved, press Calibrate. Want test error under 1 px.</p>
+    </div>
+    <div class="card" id="extrPanel" style="display:none">
+      <div class="row">
+        <span class="big">Extrinsics</span>
+        <span id="events" class="dim"></span>
+        <span style="flex:1"></span>
+        <button id="solve" class="primary">Solve extrinsics</button>
+      </div>
+      <p class="dim">Every camera watches every joined board. Hold your board still for a second where two or more cameras see it; an event is saved and counted. Move, hold again. Cover every overlap. Aim for 150+ events in total.</p>
+      <div class="thumbs" id="thumbs"></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>Log</h2><pre id="log"></pre>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>Results: intrinsics (results/intrinsics/summary.csv)</h2>
+      <div style="overflow:auto"><table id="tIntr"></table></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>Results: extrinsics, room frame (results/extrinsics/cameras.csv)</h2>
+      <div style="overflow:auto"><table id="tExtr"></table></div>
+    </div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let me = localStorage.getItem('name') || '', myBoard = localStorage.getItem('board') || 'A', myCam = null, state = null;
+$('name').value = me; $('board').value = myBoard;
+const FIELDS = ['x','y','z','roll','pitch','yaw'];
+async function post(url, body) {
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const j = await r.json(); $('msg').textContent = j.error || ''; return j;
+}
+$('join').onclick = async () => {
+  me = $('name').value.trim(); myBoard = $('board').value;
+  const j = await post('/api/join', {name: me, board: myBoard});
+  if (j.ok) { localStorage.setItem('name', me); localStorage.setItem('board', myBoard); $('who').textContent = me + ' / board ' + myBoard; }
+};
+$('mIntr').onclick = () => post('/api/mode', {mode:'intr'});
+$('mExtr').onclick = () => post('/api/mode', {mode:'extr'});
+$('calib').onclick = () => myCam && post('/api/calibrate', {camera: myCam});
+$('solve').onclick = () => post('/api/solve_extrinsics', {});
+async function selectCam(c) { if (!me) { $('msg').textContent = 'join first'; return; } const j = await post('/api/select', {name: me, camera: c}); if (j.ok) myCam = c; }
+function cls(v, good, bad) { return v === '' ? '' : (parseFloat(v) <= good ? 'ok' : parseFloat(v) >= bad ? 'bad' : 'warn'); }
+function render() {
+  const s = state; if (!s) return;
+  $('mIntr').className = s.mode === 'intr' ? 'on' : ''; $('mExtr').className = s.mode === 'extr' ? 'on' : '';
+  $('intrPanel').style.display = s.mode === 'intr' ? '' : 'none'; $('extrPanel').style.display = s.mode === 'extr' ? '' : 'none';
+  if (me && s.people[me] && s.people[me].camera) myCam = s.people[me].camera;
+  const g = $('grid'); g.innerHTML = '';
+  for (const c of Object.keys(s.cams).map(Number).sort((a,b)=>a-b)) {
+    const v = s.cams[c]; const d = document.createElement('button'); d.className = 'tile' + (c === myCam ? ' sel' : '');
+    const dot = v.ready ? 'ready' : (v.calibrated ? 'done' : (v.calib > 0 ? 'part' : ''));
+    d.innerHTML = `<span class="dot ${dot}"></span><span class="n">${c}</span> <span class="c">${v.count} fr</span><span class="c">${v.person || '&nbsp;'}</span>`;
+    d.onclick = () => selectCam(c); g.appendChild(d);
+  }
+  $('people').innerHTML = Object.entries(s.people).map(([n,p]) => `${p.active ? '●' : '○'} ${n}: board ${p.board}, cam ${p.camera || '-'}`).join('<br>') || 'nobody yet';
+  if (myCam && s.cams[myCam]) {
+    const v = s.cams[myCam];
+    $('camTitle').textContent = 'camera ' + myCam; $('camStatus').textContent = v.status;
+    $('bars').innerHTML = FIELDS.map(k => { const p = Math.round(100 * v.coverage[k]); return `<div class="bar ${p >= 100 ? 'full' : ''}"><div class="fill" style="width:${p}%"></div><span>${k} ${p}%</span></div>`; }).join('');
+    $('count').textContent = `${v.count} frames saved (${v.calib} calibrate + ${v.count - v.calib} test)`;
+    $('readyTxt').innerHTML = v.ready ? '<span class="ok">READY: press Calibrate</span>' : '<span class="dim">keep moving the board</span>';
+    $('rms').innerHTML = v.rms ? `<span class="${/OK/.test(v.rms) ? 'ok' : 'warn'}">${v.rms}</span>` : '';
+    $('calib').disabled = v.calib < 10 || v.status === 'calibrating';
+  } else { $('camTitle').textContent = 'no camera'; $('bars').innerHTML = ''; $('count').textContent = ''; $('readyTxt').textContent = ''; $('rms').textContent = ''; }
+  $('events').textContent = 'events: ' + (Object.entries(s.events).map(([b,n]) => `board ${b} ${n}`).join(', ') || 'none yet') + (s.busy ? ' | ' + s.busy : '');
+  $('solve').disabled = !!s.busy;
+  $('log').textContent = s.log;
+  if (s.mode === 'extr' && $('thumbs').children.length !== Object.keys(s.cams).length) {
+    $('thumbs').innerHTML = Object.keys(s.cams).map(c => `<img data-cam="${c}" alt="cam ${c}">`).join('');
+  }
+}
+function table(el, rows) {
+  if (!rows.length) { el.innerHTML = '<tr><td class="dim">nothing yet</td></tr>'; return; }
+  const cols = Object.keys(rows[0]);
+  el.innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>' + rows.map(r => '<tr>' + cols.map(c => {
+    let k = ''; if (c === 'rms_test_px' || c === 'rms_calib_px') k = cls(r[c], 0.6, 1.0); if (c === 'floor_err_test_cm') k = cls(r[c], 3, 5); if (c === 'status') k = /OK/.test(r[c]) ? 'ok' : 'warn';
+    return `<td class="${k}">${r[c]}</td>`; }).join('') + '</tr>').join('');
+}
+async function poll() {
+  try { state = await (await fetch('/api/state' + (me ? '?name=' + encodeURIComponent(me) : ''))).json(); render(); } catch (e) {}
+  setTimeout(poll, 700);
+}
+function frames() {
+  const t = Date.now();
+  if (state && state.mode === 'intr' && myCam) $('live').src = `/frame/${myCam}.jpg?t=${t}`;
+  if (state && state.mode === 'extr') for (const im of $('thumbs').querySelectorAll('img')) im.src = `/frame/${im.dataset.cam}.jpg?t=${t}`;
+  setTimeout(frames, state && state.mode === 'extr' ? 1200 : 400);
+}
+async function results() {
+  try { const r = await (await fetch('/api/results')).json(); table($('tIntr'), r.intrinsics); table($('tExtr'), r.extrinsics); } catch (e) {}
+  setTimeout(results, 5000);
+}
+if (me) { post('/api/join', {name: me, board: myBoard}).then(j => { if (j.ok) $('who').textContent = me + ' / board ' + myBoard; }); }
+poll(); frames(); results();
+</script>
+</body>
+</html>
