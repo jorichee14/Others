@@ -3,7 +3,7 @@
 #
 #   sudo ./csi_params.sh rx                       # sniffer (mobile_1/sniffer): arm nexmon
 #   sudo ./csi_params.sh rx aa:bb:cc:dd:ee:ff     # ...only frames from that transmitter
-#   sudo ./csi_params.sh tx                       # transmitter (infra_1, mobile_2): VHT, 1 SS
+#   sudo ./csi_params.sh tx                       # transmitter (infra_1, mobile_2): VHT, 1 SS, then verify
 #   sudo ./csi_params.sh check [secs]             # sniffer: are CSI frames arriving? (no ROS)
 #   sudo ./csi_params.sh all [secs]               # sniffer: arm, then check
 #
@@ -25,6 +25,7 @@ MCS=${MCS:-0-9}
 # transmitters the sniffer listens to: mobile_2's dongle and infra_1's Pi
 MACS=${MACS-88:76:b9:ea:e1:01,d8:3a:dd:19:66:3e}
 PORT=${PORT:-5500}                              # nexmon_csi's UDP port
+TARGET=${TARGET-192.168.51.11}                  # tx: short ping burst to this host so the link has traffic
 
 arm() {
     local mac=${1-$MACS}
@@ -98,6 +99,39 @@ if total == 0:
 PYEOF
 }
 
+# Compare what the radio reports with what the sniffer is armed for.
+verify_tx() {
+    local ch=${CHAN%/*} bw=${CHAN#*/} want_freq fails=0
+    want_freq=$((5000 + 5 * ch))
+    local link info
+    link=$(iw dev "$IFACE" link 2>/dev/null || true)
+    info=$(iw dev "$IFACE" info 2>/dev/null || true)
+    ok()   { printf '  ok    %s\n' "$1"; }
+    bad()  { printf '  FAIL  %s\n' "$1"; fails=$((fails + 1)); }
+
+    echo "== verify: $IFACE (sniffer listens on $CHAN) =="
+    echo "  mac   $(cat /sys/class/net/"$IFACE"/address 2>/dev/null)"
+    if grep -q "Not connected" <<<"$link" || [ -z "$link" ]; then
+        bad "not connected to an access point"
+        echo "$fails problem(s)"; return 1
+    fi
+    ok "connected to $(awk '/SSID/ {print $2}' <<<"$link")"
+    local freq; freq=$(awk '/freq:/ {print int($2)}' <<<"$link")
+    [ "$freq" = "$want_freq" ] && ok "frequency $freq MHz (channel $ch)" \
+                               || bad "frequency $freq MHz, the sniffer is on $want_freq (channel $ch)"
+    local width; width=$(grep -o "width: [0-9]* MHz" <<<"$info" | head -1 | grep -o "[0-9]*")
+    [ "$width" = "$bw" ] && ok "width $width MHz" || bad "width ${width:-?} MHz, the sniffer expects $bw"
+    local rate; rate=$(grep "tx bitrate" <<<"$link" || true)
+    if [ -z "$rate" ]; then
+        bad "no tx bitrate yet (no traffic): send some and run again"
+    else
+        grep -q "VHT-NSS $NSS" <<<"$rate" && grep -q "VHT-MCS" <<<"$rate" \
+            && ok "${rate#*: }" || bad "tx is not VHT with $NSS stream: ${rate#*: }"
+    fi
+    if [ "$fails" -eq 0 ]; then echo "tx setup OK"; else echo "$fails problem(s)"; fi
+    [ "$fails" -eq 0 ]
+}
+
 case "${1:-}" in
 rx)
     arm "${2-$MACS}"
@@ -114,16 +148,23 @@ tx)
     # VHT only, NSS $NSS, MCS $MCS (5 GHz; 0-9 = any). `iw ... bitrates` needs the interface
     # associated; re-run after reconnecting.
     iw dev "$IFACE" set bitrates legacy-5 ht-mcs-5 vht-mcs-5 "$NSS:$MCS"
-    iw dev "$IFACE" info | grep -E "channel|txpower"
-    iw dev "$IFACE" link | grep -E "tx bitrate" || echo "(not associated yet)"
+    if [ -n "$TARGET" ]; then
+        echo "sending a short burst to $TARGET so the link reports a tx rate..."
+        ping -i 0.01 -c 200 -q "$TARGET" >/dev/null 2>&1 || echo "  (no reply from $TARGET; the burst still went out)"
+    fi
+    verify_tx
+    ;;
+txcheck)
+    verify_tx
     ;;
 *)  cat <<USAGE
 usage: sudo ./csi_params.sh <mode>
   rx [mac,...]   sniffer: arm nexmon (default MACs: \$MACS)
   check [secs]   sniffer: count CSI frames per transmitter, no ROS
   all [secs]     sniffer: arm, then check
-  tx             transmitter (infra_1, mobile_2): VHT, 1 spatial stream
-env: IFACE=$IFACE CHAN=$CHAN MACS=$MACS
+  tx             transmitter (infra_1, mobile_2): VHT, 1 spatial stream, then verify
+  txcheck        transmitter: verify only (after traffic has been running)
+env: IFACE=$IFACE CHAN=$CHAN MACS=$MACS TARGET=$TARGET
 USAGE
     exit 1 ;;
 esac
