@@ -12,7 +12,7 @@ the container if there is one, cd'd, and sourced -- with its command sitting in
 bash history. Press Up, then Enter.
 
 Before the windows open, the recording files (record.yaml, record.sh, svo.sh,
-rosbag_qos_override.yaml, csi_params.sh) are copied from this folder to each
+rosbag_qos_override.yaml, csi_params.sh, rtl8852bu.sh) are copied from this folder to each
 machine's Dataset/scripts, over ssh, so every machine records from the same
 record.yaml. `--no-sync` skips that; `--print` only lists what would be copied.
 
@@ -153,7 +153,7 @@ def tab_command(shell, tab_index, title, cmd, subs, run, also=(), extra=(), host
 
 
 SYNC_FILES = ["record.yaml", "record.sh", "svo.sh", "rosbag_qos_override.yaml",
-              "csi_params.sh"]
+              "csi_params.sh", "rtl8852bu.sh"]
 
 
 def scripts_dir(shell):
