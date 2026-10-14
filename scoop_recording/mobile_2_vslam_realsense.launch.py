@@ -23,8 +23,7 @@ def generate_launch_description():
             'enable_depth': LaunchConfiguration('enable_depth'),
             'depth_module.emitter_enabled': 0,
             'depth_module.profile': '640x480x30',
-            'depth_module.infra_profile': '640x480x30',
-            'rgb_camera.color_profile': '640x480x30',
+            'rgb_camera.profile': '640x480x30',   # realsense-ros 4.51: no color_profile/infra_profile
             'align_depth.enable': False,
             'pointcloud.enable': False,
             'enable_gyro': True,
