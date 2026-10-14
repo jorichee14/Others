@@ -13,13 +13,23 @@ split) so the calibration can be re-checked at any time with `evaluate.py`.
 (`rms_test_px`, `floor_err_test_cm`) is the honest quality number. The split is recorded in
 `results/intrinsics/views.csv` and `results/extrinsics/events.csv`.
 
-## Setup (once, each laptop)
+Two ways to run it:
+
+- **Dashboard (recommended): one PC, everyone on a browser.** `python server.py` on a PC in the
+  lab reads all 16 streams; each person opens `http://<that pc>:8080` on a phone or laptop,
+  picks a name, board and camera, and sees the live view, the frame count and the six coverage
+  bars. All frames and results land on that PC. Try it without cameras: `python server.py --fake`.
+- **Three laptops with `capture.py`** (the same logic in an OpenCV window, one person per laptop,
+  folders merged afterwards). Described further down.
+
+## Setup (once)
 
 ```
 pip install -r requirements.txt
 ```
 Be on the ED305 network (lab Wi-Fi or VPN); `http://192.168.1.188:3000/cameras` must open.
-Stream addresses are in `config/cameras.yaml` (from the wiki).
+Stream addresses are in `config/cameras.yaml` (from the wiki). The dashboard PC wants 8+ cores
+(each camera runs one board detection per board in the room, 4 times a second).
 
 ## Before calibration day (half a day, one person)
 
@@ -38,7 +48,27 @@ Stream addresses are in `config/cameras.yaml` (from the wiki).
 4. Each person checks their laptop can show their cameras: `python capture.py --person Me
    --board A --mode intr --cams 1 2` and press q.
 
-## Calibration day
+## Calibration day with the dashboard
+
+On the lab PC, in this folder: `python server.py`. It prints the address; everyone opens it.
+
+1. **Join.** Type your name, pick your board (A, B or C: one per person) and press Join.
+2. **Intrinsics.** Tap your camera in the grid (a camera can be used by one person at a time;
+   camera groups per person are in `config/assignments.yaml`). Walk the board in front of it.
+   Frames save by themselves when the board has moved; the page shows the count and the six
+   bars x y z roll pitch yaw (what each one wants is written under the live view). When all
+   bars are green and 20+ frames are saved the page says READY: press **Calibrate**. It shows
+   `rms calib / test`; want calib under 0.6 px and test under 1 px, else keep moving the board
+   and press Calibrate again. Then tap your next camera. The grid dots show every camera's
+   state (grey none, yellow some frames, green ready, blue calibrated).
+3. **Extrinsics.** When all 16 are calibrated, press **2 Extrinsics** (one mode for everyone).
+   Every camera now watches every joined board. Hold your board still for a second where two
+   or more cameras see it: the event counter goes up. Move, hold again, cover every overlap.
+   Aim for 150+ events in total. Then press **Solve extrinsics**: the room-frame table
+   (x y z roll pitch yaw, calibrate/test error, floor error) appears at the bottom.
+4. Everything is in `data/` and `results/` on that PC, the same files as below.
+
+## Calibration day with three laptops (no dashboard)
 
 Everyone works on their own laptop in their own output folder (`data/<person>/`).
 Camera groups per person are in `config/assignments.yaml`.
@@ -133,7 +163,8 @@ optical axis, `roll` its in-plane rotation and `pitch`, `yaw` its tilt about the
 
 | File | What |
 |---|---|
-| `capture.py` | capture frames from RTSP, intr or extr mode |
+| `server.py`, `web/dashboard.html` | one-PC dashboard: everyone captures and calibrates from a browser |
+| `capture.py` | capture frames from RTSP in an OpenCV window, intr or extr mode |
 | `calibrate_intrinsics.py` | per-camera K and distortion |
 | `calibrate_extrinsics.py` | all cameras in the room frame (bundle adjustment with floor tags), test on held-out events |
 | `evaluate.py` | re-score a stored calibration on test sets or on a new recording, no refit |
