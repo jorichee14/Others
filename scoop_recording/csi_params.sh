@@ -2,13 +2,15 @@
 # CSI settings for the rig, one place.
 #
 #   sudo ./csi_params.sh rx                       # sniffer (mobile_1/sniffer): arm nexmon
-#   sudo ./csi_params.sh rx aa:bb:cc:dd:ee:ff     # ...only frames from that transmitter
+#   sudo ./csi_params.sh rx aa:bb:cc:dd:ee:ff     # ...only frames from that one transmitter
 #   sudo ./csi_params.sh tx                       # transmitter (infra_1, mobile_2): power save off, VHT, 1 SS, then verify
 #   sudo ./csi_params.sh check [secs]             # sniffer: are CSI frames arriving? (no ROS)
 #   sudo ./csi_params.sh all [secs]               # sniffer: arm, then check
 #
-# `rx` takes one MAC or a comma-separated list; with none it uses $MACS (below),
-# and MACS= (empty) means no filter at all.
+# `rx` arms with no MAC filter by default ($MACS is empty): this nexmon build lets
+# NOTHING through when makecsiparams -m gets a comma-separated list, so the
+# per-transmitter filtering is done in software by csi_publisher (mac_filter).
+# `rx <mac>` still arms with a single-MAC hardware filter if you want one.
 #
 # Override with env: IFACE=wlan0 CHAN=149/80 CORE=1 NSS=1 MCS=0-9 ONE_CHAIN=1
 # tx: ONE_CHAIN=1 also limits the dongle to one transmit/receive chain and re-associates
@@ -24,8 +26,9 @@ CHAN=${CHAN:-149/80}
 CORE=${CORE:-1}
 NSS=${NSS:-1}
 MCS=${MCS:-0-9}
-# transmitters the sniffer listens to: mobile_2's dongle and infra_1's Pi
-MACS=${MACS-88:76:b9:ea:e1:01,d8:3a:dd:19:66:3e}
+# Hardware MAC filter for arming. Empty = none (see above); csi_publisher's
+# mac_filter picks the transmitters (mobile_2 88:76:b9:ea:e1:01, infra_1 d8:3a:dd:19:66:3e).
+MACS=${MACS-}
 PORT=${PORT:-5500}                              # nexmon_csi's UDP port
 TARGET=${TARGET-auto}                           # tx: host for a short ping burst so the link has traffic (auto = the router on $IFACE; empty = none)
 
@@ -61,7 +64,7 @@ import collections, struct, sys
 
 path, secs, port = sys.argv[1], float(sys.argv[2]), int(sys.argv[3])
 NAMES = {"88:76:b9:ea:e1:01": "mobile_2", "d8:3a:dd:19:66:3e": "infra_1",
-         "88:76:b9:ea:e0:ff": "mobile_1"}
+         "88:76:b9:ea:e0:ff": "mobile_1", "ba:82:e2:21:55:75": "router"}
 data = open(path, "rb").read()
 frames, rssi, ctrl = collections.Counter(), collections.defaultdict(list), collections.Counter()
 if len(data) >= 24:
@@ -206,7 +209,7 @@ txcheck)
     ;;
 *)  cat <<USAGE
 usage: sudo ./csi_params.sh <mode>
-  rx [mac,...]   sniffer: arm nexmon (default MACs: \$MACS)
+  rx [mac]       sniffer: arm nexmon (default: no hardware MAC filter)
   check [secs]   sniffer: count CSI frames per transmitter, no ROS
   all [secs]     sniffer: arm, then check
   tx             transmitter (infra_1, mobile_2): power save off, VHT, 1 stream, then verify

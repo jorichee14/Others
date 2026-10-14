@@ -195,14 +195,14 @@ targets:
     tabs:
       # csi-capture.service is disabled, so nothing arms the extractor after a
       # reboot. Run this first; it must print 149/80. The MAC is the transmitter
-      # to listen to: mobile_2 = 88:76:b9:ea:e1:01, infra_1 = d8:3a:dd:19:66:3e
-      # (the src_mac seen on each CSI topic);
-      # drop `-m <mac>` to hear every transmitter.
+      # No MAC filter here: with a comma-separated -m list this nexmon build passes
+      # nothing. csi_publisher's mac_filter keeps mobile_2 (88:76:b9:ea:e1:01) and
+      # infra_1 (d8:3a:dd:19:66:3e) and drops every other sender.
       - name: arm
         cmd: >-
           sudo ip link set wlan0 up &&
           sudo nexutil -Iwlan0 -s500 -b -l34
-          -v$(makecsiparams -c 149/80 -C 1 -N 1 -m 88:76:b9:ea:e1:01,d8:3a:dd:19:66:3e) &&
+          -v$(makecsiparams -c 149/80 -C 1 -N 1) &&
           sudo nexutil -Iwlan0 -m1 && sudo nexutil -Iwlan0 -k
       - name: csi
         cmd: ros2 launch comms session.launch.py agent:={machine} pass:={pass}
