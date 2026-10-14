@@ -33,7 +33,36 @@ if machine not in machines:
     sys.exit("record.yaml has no machine %r (have: %s)"
              % (machine, ", ".join(sorted(machines))))
 
-topics = list(machines[machine].get("topics") or [])
+m = machines[machine]
+topics = list(m.get("topics") or [])          # always recorded
+
+# Optional topic groups: record.yaml `groups:` per machine, picked per run.
+#   1. ONLY=a,b          exactly these (env)
+#   2. PROFILE=name      profiles.<name>.<machine> = [groups]  (env)
+#   3. profiles.<key>    key is a prefix of the pass name (survey_1 -> survey)
+#   4. otherwise         all groups
+# SKIP=a,b then removes groups from whatever was chosen.
+groups = m.get("groups") or {}
+profiles = doc.get("profiles") or {}
+profile = os.environ.get("PROFILE") or next(
+    (k for k in profiles if pas.startswith(str(k))), "")
+if os.environ.get("PROFILE") and profile not in profiles:
+    sys.exit("no profile %r in record.yaml (have: %s)"
+             % (profile, ", ".join(sorted(map(str, profiles))) or "none"))
+chosen = list(groups)
+if os.environ.get("ONLY"):
+    chosen = [g for g in os.environ["ONLY"].split(",") if g]
+elif profile and machine in (profiles.get(profile) or {}):
+    chosen = list(profiles[profile][machine] or [])
+chosen = [g for g in chosen
+          if g not in (os.environ.get("SKIP") or "").split(",")]
+bad = [g for g in chosen if g not in groups]
+if bad:
+    sys.exit("%s has no group(s) %s (have: %s)"
+             % (machine, ", ".join(bad), ", ".join(groups) or "none"))
+for g in chosen:
+    topics += list(groups[g] or [])
+summary = "profile=%s groups=%s" % (profile or "-", ",".join(chosen) or "-")
 
 # Exactly one machine carries /tf and /tf_static. Two recorders give duplicated
 # transforms at slightly different stamps, which breaks lookups on replay.
@@ -74,6 +103,7 @@ print(d.get("storage", "mcap"))
 print(d.get("max_bag_size", 2147483648))
 print(d.get("compression_mode", "none"))
 print(" ".join(topics))
+print(summary)
 PYEOF
 ) || { echo "$PLAN"; exit 1; }
 
@@ -83,6 +113,7 @@ STORAGE=$(sed -n 3p <<<"$PLAN")
 MAXSIZE=$(sed -n 4p <<<"$PLAN")
 COMPRESS=$(sed -n 5p <<<"$PLAN")
 read -r -a TOPICS <<<"$(sed -n 6p <<<"$PLAN")"
+SELECTED=$(sed -n 7p <<<"$PLAN")
 
 # Created if absent, parents included -- a fresh machine or a newly mounted
 # drive needs no setup.
@@ -104,6 +135,7 @@ echo "machine  : $MACHINE"
 echo "pass     : $PASS${LABEL:+  label: $LABEL}"
 echo "output   : $OUT"
 echo "free     : $(df -h "$OUT_DIR" | awk 'NR==2 {print $4}') on $(df -h "$OUT_DIR" | awk 'NR==2 {print $6}')"
+echo "selected : $SELECTED"
 echo "topics   : ${#TOPICS[@]}"
 
 # ---------------------------------------------------------------- preflight

@@ -43,73 +43,73 @@ machines:
   # ------------------------------------------------------------------ mobile_1
   # The surveying robot: all mapping sensors, plus the iperf server end.
   mobile_1:
-    topics:
-      # --- LiDAR
-      # The driver runs with proc_mask:='RAW', so it publishes ONLY packets --
-      # there is no /ouster/points, /ouster/scan or /ouster/imu to record.
-      # Packets + metadata is the better dataset choice anyway: smaller, and
-      # replayable through any future driver version to regenerate clouds.
-      # metadata is mandatory here, not optional: without it the packets cannot
-      # be decoded at all.
-      - /ouster/lidar_packets
-      - /ouster/imu_packets
-      - /ouster/metadata          # TRANSIENT_LOCAL, see qos overrides
-      # --- ZED
-      # Images/depth are not here: the ZED records its own .svo via
-      # /zed/zed_node/start_svo_rec. Keep the svo filename in step with the bag.
-      - /zed/zed_node/imu/data
-      - /zed/zed_node/imu/mag
-      # --- radar (both under the mobile_1 namespace)
-      - /mobile_1/radar1/radar/points_all
-      - /mobile_1/radar2/radar/points_all
-      # --- link measurements
-      - /mobile_1/wifi/iperf_up
-      - /mobile_1/wifi/iperf_down
-      - /mobile_1/wifi/status
-      - /mobile_1/wifi/ping
-      # --- time base
-      # mobile_1 is the NTP server for the rig, so it publishes server status,
-      # not client status like the other three.
-      - /mobile_1/ntp/server/status
-      - /mobile_1/ntp/events
-      # --- health
-      - /mobile_1/diagnostics
+    groups:
+      lidar:
+        # The driver runs with proc_mask:='RAW', so it publishes ONLY packets --
+        # there is no /ouster/points, /ouster/scan or /ouster/imu to record.
+        # Packets + metadata is the better dataset choice anyway: smaller, and
+        # replayable through any future driver version to regenerate clouds.
+        # metadata is mandatory here, not optional: without it the packets cannot
+        # be decoded at all.
+        - /ouster/lidar_packets
+        - /ouster/imu_packets
+        - /ouster/metadata          # TRANSIENT_LOCAL, see qos overrides
+      zed:
+        # Images/depth are not here: the ZED records its own .svo via
+        # /zed/zed_node/start_svo_rec. Keep the svo filename in step with the bag.
+        - /zed/zed_node/imu/data
+        - /zed/zed_node/imu/mag
+      radar:
+        - /mobile_1/radar1/radar/points_all
+        - /mobile_1/radar2/radar/points_all
+      link:
+        - /mobile_1/wifi/iperf_up
+        - /mobile_1/wifi/iperf_down
+        - /mobile_1/wifi/status
+        - /mobile_1/wifi/ping
+      ntp:
+        # mobile_1 is the NTP server for the rig, so it publishes server status,
+        # not client status like the other three.
+        - /mobile_1/ntp/server/status
+        - /mobile_1/ntp/events
+      health:
+        - /mobile_1/diagnostics
   # ------------------------------------------------------------------ mobile_2
   # Second agent: stereo + depth + Isaac VSLAM. Parked as an anchor during
   # survey passes, driven during coop passes.
   mobile_2:
-    topics:
-      # --- stereo infra pair (the pair VSLAM actually tracks on)
-      - /mobile_2/infra1/image_rect_raw
-      - /mobile_2/infra1/camera_info
-      - /mobile_2/infra2/image_rect_raw
-      - /mobile_2/infra2/camera_info
-      # --- colour + depth
-      - /mobile_2/color/image_raw
-      - /mobile_2/color/camera_info
-      - /mobile_2/depth/image_rect_raw
-      - /mobile_2/depth/camera_info
-      # --- IMU and extrinsics
-      - /mobile_2/imu
-      - /mobile_2/extrinsics/depth_to_infra1    # TRANSIENT_LOCAL
-      - /mobile_2/extrinsics/depth_to_infra2    # TRANSIENT_LOCAL
-      # --- VSLAM
-      - /mobile_2/visual_slam/status
-      - /mobile_2/visual_slam/tracking/odometry
-      - /mobile_2/visual_slam/tracking/vo_pose
-      - /mobile_2/visual_slam/tracking/vo_pose_covariance
-      - /mobile_2/visual_slam/tracking/slam_path
-      - /mobile_2/visual_slam/tracking/vo_path
-      # --- link measurements
-      - /mobile_2/wifi/iperf_up
-      - /mobile_2/wifi/iperf_down
-      - /mobile_2/wifi/status
-      - /mobile_2/wifi/ping
-      # --- time base
-      - /mobile_2/ntp/client/status
-      - /mobile_2/ntp/events
-      # --- health
-      - /mobile_2/diagnostics
+    groups:
+      infra:
+        - /mobile_2/infra1/image_rect_raw
+        - /mobile_2/infra1/camera_info
+        - /mobile_2/infra2/image_rect_raw
+        - /mobile_2/infra2/camera_info
+      color_depth:
+        - /mobile_2/color/image_raw
+        - /mobile_2/color/camera_info
+        - /mobile_2/depth/image_rect_raw
+        - /mobile_2/depth/camera_info
+      imu:
+        - /mobile_2/imu
+        - /mobile_2/extrinsics/depth_to_infra1    # TRANSIENT_LOCAL
+        - /mobile_2/extrinsics/depth_to_infra2    # TRANSIENT_LOCAL
+      vslam:
+        - /mobile_2/visual_slam/status
+        - /mobile_2/visual_slam/tracking/odometry
+        - /mobile_2/visual_slam/tracking/vo_pose
+        - /mobile_2/visual_slam/tracking/vo_pose_covariance
+        - /mobile_2/visual_slam/tracking/slam_path
+        - /mobile_2/visual_slam/tracking/vo_path
+      link:
+        - /mobile_2/wifi/iperf_up
+        - /mobile_2/wifi/iperf_down
+        - /mobile_2/wifi/status
+        - /mobile_2/wifi/ping
+      ntp:
+        - /mobile_2/ntp/client/status
+        - /mobile_2/ntp/events
+      health:
+        - /mobile_2/diagnostics
 
   # ------------------------------------------------------------------- infra_1
   # Fixed node: a 1x1 Pi that both TRANSMITS (so the sniffer has PPDUs to
@@ -121,24 +121,24 @@ machines:
   # pass specifically needs raw; see `image_raw` below.
   infra_1:
     out_dir: ~/workspaces/Dataset          # no /workspaces on the Pis
-    topics:
-      # --- camera (v4l2_camera_node, namespace infra_1)
-      - /infra_1/image_raw/compressed
-      - /infra_1/camera_info
-      - /arducam/board_pose
-      # - /infra_1/image_raw          # raw: 34.6 MB/s, enable deliberately
-      # --- radar (radar_node_direct, namespace infra_1, frame infra1_link)
-      - /infra_1/radar/points_all
-      # --- link measurements
-      - /infra_1/wifi/ping
-      - /infra_1/wifi/status
-      - /infra_1/wifi/iperf_up
-      - /infra_1/wifi/iperf_down
-      # --- time base
-      - /infra_1/ntp/client/status
-      - /infra_1/ntp/events
-      # --- health
-      - /infra_1/diagnostics
+    groups:
+      camera:
+        - /infra_1/image_raw/compressed
+        - /infra_1/camera_info
+        - /arducam/board_pose
+        # - /infra_1/image_raw          # raw: 34.6 MB/s, enable deliberately
+      radar:
+        - /infra_1/radar/points_all
+      link:
+        - /infra_1/wifi/ping
+        - /infra_1/wifi/status
+        - /infra_1/wifi/iperf_up
+        - /infra_1/wifi/iperf_down
+      ntp:
+        - /infra_1/ntp/client/status
+        - /infra_1/ntp/events
+      health:
+        - /infra_1/diagnostics
 
   # ----------------------------------------------------------- mobile_1/sniffer
   # nexmon CSI receiver. One topic per transmitter; the namespace is the
@@ -150,10 +150,26 @@ machines:
   # elsewhere. Alignment is by timestamp; chrony holds it to ~29 us RMS.
   mobile_1/sniffer:
     out_dir: ~/workspaces/Dataset
-    topics:
-      - /mobile_1/sniffer/infra_1/csi
-      - /mobile_1/sniffer/mobile_2/csi
-      - /mobile_1/sniffer/csi_publisher/status
-      - /mobile_1/sniffer/ntp/client/status
-      - /mobile_1/sniffer/ntp/events
+    groups:
+      csi:
+        - /mobile_1/sniffer/infra_1/csi
+        - /mobile_1/sniffer/mobile_2/csi
+        - /mobile_1/sniffer/csi_publisher/status
+      ntp:
+        - /mobile_1/sniffer/ntp/client/status
+        - /mobile_1/sniffer/ntp/events
 
+# Which groups each kind of run records. Pick with PROFILE=<name> on the
+# command line, or it is chosen by the start of the pass name (survey_1 ->
+# survey, coop_2 -> coop). A machine not listed records all its groups.
+#
+#   ./record.sh mobile_2 survey_1                    # profile "survey" (by name)
+#   PROFILE=coop ./record.sh mobile_2 test_1         # force a profile
+#   ONLY=imu,ntp ./record.sh mobile_2 test_1        # exactly these groups
+#   SKIP=vslam ./record.sh mobile_2 coop_1          # all but these
+# The start-up banner prints "selected:" so you can see what was chosen.
+profiles:
+  survey:                       # mobile_2 parked as an anchor: no VSLAM, no depth
+    mobile_2: [infra, color_depth, imu, link, ntp, health]
+  coop:                         # everything on
+    mobile_2: [infra, color_depth, imu, vslam, link, ntp, health]
