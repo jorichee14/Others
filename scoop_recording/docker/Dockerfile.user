@@ -14,3 +14,7 @@ RUN git clone --depth 1 https://github.com/Neargye/magic_enum.git /tmp/magic_enu
  && ln -sf /usr/local/include/magic_enum/magic_enum.hpp /usr/local/include/magic_enum.hpp \
  && rm -rf /tmp/magic_enum
 ENV CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH}
+
+# GXF extension libs end up under share/<pkg>/gxf/lib, which the loader doesn't
+# search. The workspace is mounted at runtime, so the folder only has to exist then.
+ENV LD_LIBRARY_PATH=/workspaces/isaac_ros-dev/install/gxf_isaac_optimizer/share/gxf_isaac_optimizer/gxf/lib:${LD_LIBRARY_PATH}
