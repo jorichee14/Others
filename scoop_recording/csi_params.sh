@@ -3,14 +3,16 @@
 #
 #   sudo ./csi_params.sh rx                       # sniffer (mobile_1/sniffer): arm nexmon
 #   sudo ./csi_params.sh rx aa:bb:cc:dd:ee:ff     # ...only frames from that transmitter
-#   sudo ./csi_params.sh tx                       # transmitter (infra_1, mobile_2): VHT, 1 SS, then verify
+#   sudo ./csi_params.sh tx                       # transmitter (infra_1, mobile_2): power save off, VHT, 1 SS, then verify
 #   sudo ./csi_params.sh check [secs]             # sniffer: are CSI frames arriving? (no ROS)
 #   sudo ./csi_params.sh all [secs]               # sniffer: arm, then check
 #
 # `rx` takes one MAC or a comma-separated list; with none it uses $MACS (below),
 # and MACS= (empty) means no filter at all.
 #
-# Override with env: IFACE=wlan0 CHAN=149/80 CORE=1 NSS=1 MCS=0-9
+# Override with env: IFACE=wlan0 CHAN=149/80 CORE=1 NSS=1 MCS=0-9 ONE_CHAIN=1
+# tx: ONE_CHAIN=1 also limits the dongle to one transmit/receive chain and re-associates
+#     (drops the Wi-Fi link for a few seconds, so don't use it over ssh on that link).
 # MCS defaults to 0-9 (rate adaptation picks it); MCS=4 or MCS=3-5 fixes or limits it.
 # rx: BCM43455c0, 1 antenna -> core 1, 1 spatial stream, channel 149 / 80 MHz.
 # tx: send VHT, 1 spatial stream (MCS left to rate adaptation), so every frame the
@@ -121,6 +123,8 @@ verify_tx() {
                                || bad "frequency $freq MHz, the sniffer is on $want_freq (channel $ch)"
     local width; width=$(grep -o "width: [0-9]* MHz" <<<"$info" | head -1 | grep -o "[0-9]*")
     [ "$width" = "$bw" ] && ok "width $width MHz" || bad "width ${width:-?} MHz, the sniffer expects $bw"
+    local ps; ps=$(iw dev "$IFACE" get power_save 2>/dev/null | awk '{print $NF}')
+    [ "$ps" = "off" ] && ok "power save off" || bad "power save is '${ps:-unknown}' (the sniffer needs steady traffic)"
     local rate; rate=$(grep "tx bitrate" <<<"$link" || true)
     if [ -z "$rate" ]; then
         bad "no tx bitrate yet (no traffic): send some and run again"
@@ -158,13 +162,27 @@ all)
     check "${2:-5}"
     ;;
 tx)
-    # VHT only, NSS $NSS, MCS $MCS (5 GHz; 0-9 = any). `iw ... bitrates` needs the interface
-    # associated; re-run after reconnecting.
-    # Some USB drivers refuse this ("Operation not supported"). That is fine for a
-    # 1x1 dongle, which only sends one stream anyway: the verify step below checks
-    # the rate the link really uses.
+    # 1. Power save off: in power save the dongle sends in bursts and the sniffer sees gaps.
+    iw dev "$IFACE" set power_save off 2>/dev/null && echo "power save: off" \
+        || echo "note: could not turn power save off on $IFACE"
+    # 2. VHT only, NSS $NSS, MCS $MCS (5 GHz; 0-9 = any). Needs the interface
+    #    associated; re-run after reconnecting. Some USB drivers refuse this
+    #    ("Operation not supported"): the verify step then shows what the link uses.
     iw dev "$IFACE" set bitrates legacy-5 ht-mcs-5 vht-mcs-5 "$NSS:$MCS" \
         || echo "note: this driver does not allow locking the rate set; checking what the link uses instead"
+    # 3. Optional: one chain, so a 2x2 dongle sends one stream. Changes what the
+    #    dongle negotiates, so it has to re-associate (Wi-Fi drops for a few seconds).
+    if [ "${ONE_CHAIN:-0}" = "1" ]; then
+        phy=phy$(iw dev "$IFACE" info | awk '/wiphy/ {print $2}')
+        if iw phy "$phy" set antenna 1 1; then
+            echo "one chain set on $phy; re-associating..."
+            iw dev "$IFACE" disconnect || true
+            for _ in $(seq 20); do sleep 1; iw dev "$IFACE" link | grep -q "Connected" && break; done
+            iw dev "$IFACE" set power_save off 2>/dev/null || true
+        else
+            echo "note: this driver does not allow limiting the antennas"
+        fi
+    fi
     if [ -n "$TARGET" ]; then
         echo "sending a short burst to $TARGET so the link reports a tx rate..."
         ping -i 0.01 -c 200 -q "$TARGET" >/dev/null 2>&1 || echo "  (no reply from $TARGET; the burst still went out)"
@@ -179,7 +197,8 @@ usage: sudo ./csi_params.sh <mode>
   rx [mac,...]   sniffer: arm nexmon (default MACs: \$MACS)
   check [secs]   sniffer: count CSI frames per transmitter, no ROS
   all [secs]     sniffer: arm, then check
-  tx             transmitter (infra_1, mobile_2): VHT, 1 spatial stream, then verify
+  tx             transmitter (infra_1, mobile_2): power save off, VHT, 1 stream, then verify
+                 (ONE_CHAIN=1 also limits a 2x2 dongle to one chain; Wi-Fi drops briefly)
   txcheck        transmitter: verify only (after traffic has been running)
 env: IFACE=$IFACE CHAN=$CHAN MACS=$MACS TARGET=$TARGET
 USAGE
