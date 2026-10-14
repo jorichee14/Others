@@ -11,6 +11,11 @@ Every tab ends on an interactive shell that has already hopped over ssh, entered
 the container if there is one, cd'd, and sourced -- with its command sitting in
 bash history. Press Up, then Enter.
 
+Before the windows open, the recording files (record.yaml, record.sh, svo.sh,
+rosbag_qos_override.yaml, csi_params.sh) are copied from this folder to each
+machine's Dataset/scripts, over ssh, so every machine records from the same
+record.yaml. `--no-sync` skips that; `--print` only lists what would be copied.
+
 Typed-not-run is the default on purpose: you read the command before it
 executes, and a wrong pass name costs nothing.
 """
@@ -147,6 +152,65 @@ def tab_command(shell, tab_index, title, cmd, subs, run, also=(), extra=(), host
     return payload
 
 
+SYNC_FILES = ["record.yaml", "record.sh", "svo.sh", "rosbag_qos_override.yaml",
+              "csi_params.sh"]
+
+
+def scripts_dir(shell):
+    """Where a machine keeps Dataset/scripts, on the HOST (not in its container).
+
+    `scripts_dir:` in panes.yaml wins; otherwise <host_cd or cd>/Dataset/scripts,
+    which is where the record tab does `cd Dataset`.
+    """
+    if shell.get("scripts_dir"):
+        return shell["scripts_dir"]
+    base = shell.get("host_cd") or shell.get("cd") or "~"
+    return base.rstrip("/") + "/Dataset/scripts"
+
+
+def sync_scripts(targets, just_print):
+    """Copy SYNC_FILES from this folder to every machine in `targets`.
+
+    Over ssh with rsync (scp if there is no rsync). A machine with no ssh host
+    is this one: its files are copied only if its scripts folder is not this one.
+    A machine that cannot be reached is reported and skipped, not fatal -- the
+    windows still open.
+    """
+    files = [os.path.join(HERE, f) for f in SYNC_FILES
+             if os.path.isfile(os.path.join(HERE, f))]
+    print("sync: %s" % ", ".join(os.path.basename(f) for f in files))
+    for name, cfg in targets.items():
+        shell = cfg.get("shell") or {}
+        ssh = (shell.get("ssh") or "").strip()
+        dest = scripts_dir(shell)
+        if not ssh:
+            local = os.path.expanduser(dest)
+            if os.path.realpath(local) == os.path.realpath(HERE):
+                print("  %-18s this folder, nothing to copy" % name)
+                continue
+            cmds = [["mkdir", "-p", local], ["cp", "-p"] + files + [local + "/"]]
+        elif shutil.which("rsync"):
+            cmds = [["ssh", "-o", "ConnectTimeout=8", ssh, "mkdir -p %s" % dest],
+                    ["rsync", "-az", "-e", "ssh -o ConnectTimeout=8"] + files
+                    + ["%s:%s/" % (ssh, dest)]]
+        else:
+            cmds = [["ssh", "-o", "ConnectTimeout=8", ssh, "mkdir -p %s" % dest],
+                    ["scp", "-o", "ConnectTimeout=8", "-p"] + files
+                    + ["%s:%s/" % (ssh, dest)]]
+        label = "%s:%s" % (ssh, dest) if ssh else dest
+        if just_print:
+            print("  %-18s -> %s" % (name, label))
+            continue
+        try:
+            for c in cmds:
+                subprocess.run(c, check=True, stdout=subprocess.DEVNULL, timeout=60)
+            print("  %-18s -> %s  ok" % (name, label))
+        except (subprocess.SubprocessError, OSError) as e:
+            print("  %-18s -> %s  FAILED (%s) -- this machine keeps its old files"
+                  % (name, label, e))
+    print()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("pass_name", metavar="pass")
@@ -156,6 +220,8 @@ def main():
     ap.add_argument("--run", action="store_true",
                     help="execute each tab's command instead of just typing it")
     ap.add_argument("--print", dest="just_print", action="store_true")
+    ap.add_argument("--no-sync", action="store_true",
+                    help="do not copy record.yaml and the scripts to the machines")
     ap.add_argument("--terminal", default=None,
                     help="terminal emulator (default: from panes.yaml)")
     a = ap.parse_args()
@@ -197,6 +263,9 @@ def main():
                                      also, t.get("setup") or [],
                                      t.get("host", False))))
         plan[name] = tabs
+
+    if not a.no_sync:
+        sync_scripts(targets, a.just_print)
 
     for name, tabs in plan.items():
         print("== %s ==" % name)
