@@ -200,9 +200,13 @@ targets:
         - export ROS_DOMAIN_ID={domain}
     tabs:
       # csi-capture.service is disabled, so nothing arms the extractor after a
-      # reboot. Run this first; it must print 149/80.
+      # reboot. Run this first; it must print 149/80. The MAC is the transmitter
+      # to listen to (88:76:b9:ea:e0:ff = the USB adapter on the other Jetson);
+      # drop it to hear every transmitter. See csi_params.sh.
       - name: arm
-        cmd: sudo nexutil -Iwlan0 -m1 && sudo nexutil -Iwlan0 -k
+        setup:
+          - cd Dataset
+        cmd: sudo ./scripts/csi_params.sh rx 88:76:b9:ea:e0:ff
       - name: csi
         cmd: ros2 launch comms session.launch.py agent:={machine} pass:={pass}
       - name: record
