@@ -175,7 +175,48 @@ if [ -f "$QOS" ]; then
     ARGS+=(--qos-profile-overrides-path "$QOS")
 fi
 
+# Remember which bag this is, so svo.sh can name the ZED file after it.
+echo "$OUT" > "$OUT_DIR/.last_run"
+
 echo
 echo "ros2 bag record ${ARGS[*]} ${TOPICS[*]}"
 echo
-exec ros2 bag record "${ARGS[@]}" "${TOPICS[@]}"
+# Not `exec`: when you stop it with Ctrl-C the check below still runs. `trap :`
+# (a handler, not "ignore") keeps this script alive while the recorder, which
+# gets the same Ctrl-C, shuts down and writes its metadata.
+trap : INT
+set +e
+ros2 bag record "${ARGS[@]}" "${TOPICS[@]}"
+STATUS=$?
+set -e
+trap - INT
+
+# ---------------------------------------------------------------- check
+# A bag that stopped without data on a topic you asked for is found out here,
+# not after the robot has been driven away.
+echo
+echo "== check: $(basename "$OUT") =="
+python3 - "$OUT" "${TOPICS[@]}" <<'PYEOF'
+import os, sys, yaml
+
+bag, want = sys.argv[1], sys.argv[2:]
+meta = os.path.join(bag, "metadata.yaml")
+if not os.path.isfile(meta):
+    sys.exit("FAIL  no metadata.yaml in %s -- the recorder did not finish writing" % bag)
+info = (yaml.safe_load(open(meta)) or {})["rosbag2_bagfile_information"]
+counts = {t["topic_metadata"]["name"]: t["message_count"]
+          for t in info.get("topics_with_message_count") or []}
+dur = info.get("duration", {}).get("nanoseconds", 0) / 1e9
+size = sum(os.path.getsize(os.path.join(bag, f)) for f in os.listdir(bag)) / 1e6
+print("duration %.1f s   size %.0f MB   messages %d" % (dur, size, sum(counts.values())))
+empty = [t for t in want if counts.get(t, 0) == 0]
+for t in want:
+    if t in empty:
+        print("  EMPTY  %s" % t)
+if empty:
+    sys.exit("FAIL  %d of %d topics have no messages" % (len(empty), len(want)))
+print("OK    all %d topics have data" % len(want))
+PYEOF
+CHECK=$?
+echo
+exit $((CHECK != 0 ? CHECK : 0))

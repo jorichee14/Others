@@ -25,3 +25,13 @@ SKIP=vslam ./record.sh mobile_2 coop_1        # all groups but these
 
 Edit the `profiles:` block at the bottom of `record.yaml` to change what a kind
 of run records. The banner prints `selected:` before recording starts.
+
+## Recording a pass
+
+1. Start the sensors, then `record` (`record.sh <machine> <pass> run`). It refuses
+   to start if a listed topic has no publisher.
+2. On mobile_1, start the `svo` tab *after* `record`: `svo.sh` names the ZED file
+   after the bag.
+3. Stop with Ctrl-C. `record.sh` then checks the bag and prints OK, or lists the
+   topics that have no messages and exits non-zero. Do not move the robot until
+   it says OK.

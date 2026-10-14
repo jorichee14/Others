@@ -84,22 +84,16 @@ targets:
 
       - name: comms
         cmd: ros2 launch comms session.launch.py agent:={machine} pass:={pass}
-      # The ZED writes its own .svo rather than publishing image topics. It
-      # goes in record.yaml's out_dir under the same base name as the bag, so
-      # one rsync of that folder takes the whole pass. Nothing links the two
-      # automatically -- if you re-run a pass, record.sh adds _r2 to the bag but
-      # this service call will overwrite the previous .svo. Up = start,
-      # Up Up = stop.
+      # The ZED writes its own .svo rather than publishing image topics. svo.sh
+      # names it after the bag record.sh started (read from Dataset/.last_run),
+      # so start the `record` tab FIRST. Up = start, Up Up = stop.
       - name: svo
         setup:
           - cd Dataset
-        cmd: >-
-          ros2 service call /zed/zed_node/start_svo_rec zed_msgs/srv/StartSvoRec
-          "{bitrate: 0, compression_mode: 0, target_framerate: 0,
-          input_transcode: false,
-          svo_filename: '/workspaces/isaac_ros-dev/Dataset/mirc_dataset_{pass}_site_label_{date}_{machine}.svo'}"
+          - chmod +x scripts/svo.sh
+        cmd: ./scripts/svo.sh start
         also:
-          - ros2 service call /zed/zed_node/stop_svo_rec std_srvs/srv/Trigger
+          - ./scripts/svo.sh stop
 
       - name: record
         setup:
