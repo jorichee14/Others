@@ -13,6 +13,23 @@ split) so the calibration can be re-checked at any time with `evaluate.py`.
 (`rms_test_px`, `floor_err_test_cm`) is the honest quality number. The split is recorded in
 `results/intrinsics/views.csv` and `results/extrinsics/events.csv`.
 
+## The whole process in one list
+
+1. Print boards A, B, C (A1) and 12 floor tags (A4): `python make_boards.py`. Mount the boards flat.
+2. Measure a printed square and a tag edge; write them into `config/boards.yaml`.
+3. Tape the tags to the floor, measure each tag centre from the two walls, write them into
+   `config/floor_markers.yaml`. Lock exposure, gain and focus on every camera.
+4. On the lab PC (scoop env, `pip install flask` once): `python server.py`. Everyone opens the
+   address it prints on a phone or laptop and joins with their name and board.
+5. Intrinsics: tap a camera, move the board until the six bars are green, press Calibrate,
+   next camera. All 16 cameras: about 2 hours for three people.
+6. Extrinsics: press "2 Extrinsics", hold the boards still where cameras overlap until 150+
+   events, press "Solve extrinsics". About 1 to 2 hours.
+7. Read the table: z between 2.5 and 2.7 m, test rms under 1 px, floor error under 5 cm.
+   Optional: `python verify.py --tag 11 --x 2.00 --y 4.00` at a few measured spots.
+8. Keep `data/`, `results/` and the two config files. Later: `python evaluate.py` after a
+   short new recording tells whether a camera moved.
+
 Two ways to run it:
 
 - **Dashboard (recommended): one PC, everyone on a browser.** `python server.py` on a PC in the
