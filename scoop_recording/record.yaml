@@ -94,12 +94,12 @@ machines:
       - /mobile_2/extrinsics/depth_to_infra1    # TRANSIENT_LOCAL
       - /mobile_2/extrinsics/depth_to_infra2    # TRANSIENT_LOCAL
       # --- VSLAM
-      #- /mobile_2/visual_slam/status
-      #- /mobile_2/visual_slam/tracking/odometry
-      #- /mobile_2/visual_slam/tracking/vo_pose
-      #- /mobile_2/visual_slam/tracking/vo_pose_covariance
-      #- /mobile_2/visual_slam/tracking/slam_path
-      #- /mobile_2/visual_slam/tracking/vo_path
+      - /mobile_2/visual_slam/status
+      - /mobile_2/visual_slam/tracking/odometry
+      - /mobile_2/visual_slam/tracking/vo_pose
+      - /mobile_2/visual_slam/tracking/vo_pose_covariance
+      - /mobile_2/visual_slam/tracking/slam_path
+      - /mobile_2/visual_slam/tracking/vo_path
       # --- link measurements
       - /mobile_2/wifi/iperf_up
       - /mobile_2/wifi/iperf_down
