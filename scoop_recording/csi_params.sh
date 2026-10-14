@@ -27,7 +27,7 @@ MCS=${MCS:-0-9}
 # transmitters the sniffer listens to: mobile_2's dongle and infra_1's Pi
 MACS=${MACS-88:76:b9:ea:e1:01,d8:3a:dd:19:66:3e}
 PORT=${PORT:-5500}                              # nexmon_csi's UDP port
-TARGET=${TARGET-192.168.51.11}                  # tx: short ping burst to this host so the link has traffic
+TARGET=${TARGET-auto}                           # tx: host for a short ping burst so the link has traffic (auto = the router on $IFACE; empty = none)
 
 arm() {
     local mac=${1-$MACS}
@@ -183,9 +183,17 @@ tx)
             echo "note: this driver does not allow limiting the antennas"
         fi
     fi
-    if [ -n "$TARGET" ]; then
-        echo "sending a short burst to $TARGET so the link reports a tx rate..."
-        ping -i 0.01 -c 200 -q "$TARGET" >/dev/null 2>&1 || echo "  (no reply from $TARGET; the burst still went out)"
+    target=$TARGET
+    if [ "$target" = "auto" ]; then
+        target=$(ip route show default dev "$IFACE" 2>/dev/null | awk '{print $3; exit}')
+        [ -n "$target" ] || target=$(ip -4 route show dev "$IFACE" 2>/dev/null | awk '/via/ {print $3; exit}')
+    fi
+    if [ -n "$target" ]; then
+        echo "sending a short burst to $target so the link reports a tx rate..."
+        timeout 8 ping -i 0.01 -c 200 -W 1 -q "$target" >/dev/null 2>&1 \
+            || echo "  (no reply from $target; the burst still went out)"
+    else
+        echo "no router found on $IFACE for a traffic burst; send some traffic yourself, then run txcheck"
     fi
     verify_tx
     ;;
@@ -200,7 +208,7 @@ usage: sudo ./csi_params.sh <mode>
   tx             transmitter (infra_1, mobile_2): power save off, VHT, 1 stream, then verify
                  (ONE_CHAIN=1 also limits a 2x2 dongle to one chain; Wi-Fi drops briefly)
   txcheck        transmitter: verify only (after traffic has been running)
-env: IFACE=$IFACE CHAN=$CHAN MACS=$MACS TARGET=$TARGET
+env: IFACE=$IFACE CHAN=$CHAN MACS=$MACS TARGET=$TARGET (auto = router on IFACE)
 USAGE
     exit 1 ;;
 esac
