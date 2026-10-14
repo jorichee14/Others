@@ -583,6 +583,9 @@ def test_recording_layout():
             pass
         else:
             raise AssertionError("a folder not below raw/ must be refused")
+        # ...unless work_root says where the derived files go (a record.sh Dataset/ folder)
+        w = recording.work_dir_for(os.path.join(t.root, "data"), os.path.join(t.root, "out"))
+        assert str(w) == os.path.join(os.path.realpath(t.root), "out", "data"), w
     finally:
         t.close()
 
