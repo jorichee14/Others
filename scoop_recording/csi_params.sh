@@ -44,10 +44,13 @@ check() {
     local secs=${1:-5}
     command -v tcpdump >/dev/null || { echo "tcpdump missing: sudo apt install tcpdump"; exit 1; }
     echo "== interface =="
-    iw dev "$IFACE" info | grep -E "type|channel" || true
-    local mode
-    mode=$(iw dev "$IFACE" info | awk '/type/ {print $2}')
-    [ "$mode" = "monitor" ] || echo "WARNING: $IFACE is '$mode', not 'monitor' -- something undid the arming"
+    iw dev "$IFACE" info | grep -E "channel" || true
+    # nexmon's monitor mode lives in the firmware (nexutil -m1); the kernel still
+    # calls the interface "managed", so ask the firmware, not iw.
+    local mon
+    mon=$(nexutil -I"$IFACE" -m 2>/dev/null | grep -o "[0-9]\+" | head -1 || true)
+    echo "  firmware monitor mode: ${mon:-?}"
+    [ "$mon" = "1" ] || echo "WARNING: firmware monitor mode is '${mon:-?}', not 1 -- arm again"
     local pcap
     pcap=$(mktemp /tmp/csi_check.XXXXXX.pcap)
     trap 'rm -f "$pcap"' EXIT
@@ -96,7 +99,8 @@ if total == 0:
     print("NO CSI FRAMES. Most likely, in order:")
     print("  1. the MAC filter: re-arm with MACS= (empty) to hear everyone")
     print("  2. nobody is sending on channel 149/80: start a ping flood on the transmitter")
-    print("  3. the interface left monitor mode (see WARNING above): nmcli dev set wlan0 managed no")
+    print("  3. the firmware left monitor mode (see WARNING above): arm again")
+    print("  (a ping to an address nobody answers sends almost nothing: check the target is up)")
     sys.exit(1)
 PYEOF
 }
