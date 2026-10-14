@@ -148,3 +148,42 @@ def load_intrinsics(results_dir):
             j = read_json(os.path.join(d, fn))
             out[int(j["camera"])] = (np.array(j["K"], float), np.array(j["dist"], float).reshape(-1))
     return out
+
+
+def euler_zyx_deg(R):
+    """roll, pitch, yaw (deg) of a rotation R = Rz(yaw) @ Ry(pitch) @ Rx(roll)."""
+    R = np.asarray(R, float)
+    pitch = np.arcsin(np.clip(-R[2, 0], -1, 1))
+    roll = np.arctan2(R[2, 1], R[2, 2])
+    yaw = np.arctan2(R[1, 0], R[0, 0])
+    return float(np.degrees(roll)), float(np.degrees(pitch)), float(np.degrees(yaw))
+
+
+def pose_row(T_wx):
+    """x, y, z (m) and roll, pitch, yaw (deg) of a frame given by its pose in the world (T world<-x)."""
+    T = np.asarray(T_wx, float)
+    r, p, y = euler_zyx_deg(T[:3, :3])
+    return {"x": round(T[0, 3], 4), "y": round(T[1, 3], 4), "z": round(T[2, 3], 4),
+            "roll": round(r, 3), "pitch": round(p, 3), "yaw": round(y, 3)}
+
+
+def write_csv(path, rows, fields=None, append=False):
+    import csv
+    if not rows and not fields:
+        return
+    fields = fields or list(rows[0].keys())
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    new = not (append and os.path.exists(path) and os.path.getsize(path) > 0)
+    with open(path, "a" if append else "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        if new:
+            w.writeheader()
+        w.writerows(rows)
+
+
+def read_csv(path):
+    import csv
+    if not os.path.exists(path):
+        return []
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f))
