@@ -125,8 +125,21 @@ verify_tx() {
     if [ -z "$rate" ]; then
         bad "no tx bitrate yet (no traffic): send some and run again"
     else
-        grep -q "VHT-NSS $NSS" <<<"$rate" && grep -q "VHT-MCS" <<<"$rate" \
-            && ok "${rate#*: }" || bad "tx is not VHT with $NSS stream: ${rate#*: }"
+        if grep -q "VHT-NSS $NSS" <<<"$rate" && grep -q "VHT-MCS" <<<"$rate"; then
+            ok "${rate#*: }"
+        else
+            bad "tx is not VHT with $NSS stream: ${rate#*: }"
+            if grep -q "HE-" <<<"$rate"; then
+                echo "        This dongle sends HE (Wi-Fi 6) frames. The sniffer's BCM43455 is an 802.11ac"
+                echo "        chip and cannot extract CSI from HE, so the sniffer will not hear it."
+            else
+                echo "        The sniffer has one antenna, so it needs single-stream frames."
+            fi
+            echo "        Fix, in order of preference:"
+            echo "          1. use an 802.11ac (Wi-Fi 5) 1x1 dongle as this transmitter"
+            echo "          2. switch off 802.11ax / Wi-Fi 6 in the router's 5 GHz settings"
+            echo "          3. try one transmit chain: sudo iw phy \$(iw dev $IFACE info | awk '/wiphy/ {print \"phy\"\$2}') set antenna 1 1"
+        fi
     fi
     if [ "$fails" -eq 0 ]; then echo "tx setup OK"; else echo "$fails problem(s)"; fi
     [ "$fails" -eq 0 ]
