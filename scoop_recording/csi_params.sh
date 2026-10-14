@@ -147,7 +147,11 @@ all)
 tx)
     # VHT only, NSS $NSS, MCS $MCS (5 GHz; 0-9 = any). `iw ... bitrates` needs the interface
     # associated; re-run after reconnecting.
-    iw dev "$IFACE" set bitrates legacy-5 ht-mcs-5 vht-mcs-5 "$NSS:$MCS"
+    # Some USB drivers refuse this ("Operation not supported"). That is fine for a
+    # 1x1 dongle, which only sends one stream anyway: the verify step below checks
+    # the rate the link really uses.
+    iw dev "$IFACE" set bitrates legacy-5 ht-mcs-5 vht-mcs-5 "$NSS:$MCS" \
+        || echo "note: this driver does not allow locking the rate set; checking what the link uses instead"
     if [ -n "$TARGET" ]; then
         echo "sending a short burst to $TARGET so the link reports a tx rate..."
         ping -i 0.01 -c 200 -q "$TARGET" >/dev/null 2>&1 || echo "  (no reply from $TARGET; the burst still went out)"
