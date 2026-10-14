@@ -1,0 +1,218 @@
+# The rig, as native terminal tabs: one window per machine, one tab per process.
+#
+#   ./rig.py survey_1                 # pick machines, open their windows
+#   ./rig.py survey_1 --all
+#   ./rig.py survey_1 --only infra_1
+#   ./rig.py survey_1 --print         # show what each tab will do, open nothing
+#   ./rig.py survey_1 --run           # also press Enter on each tab's command
+#
+# Every tab lands on an interactive shell that is already sourced and on the
+# right domain, with its command sitting in history: press Up, then Enter.
+#
+# `shell:` says how to GET to that shell on this machine.
+#   ssh:        host to hop to first; omit or empty for local
+#   container:  docker container the work happens in; omit for native
+#   create:     how tab 0 brings that container up (it then holds it open)
+#   cd:         directory each tab starts in
+#   setup:      lines each tab runs once it is in the right shell
+#
+# {pass}, {machine} and {domain} are substituted everywhere.
+
+defaults:
+  domain_id: 0
+  terminal: gnome-terminal
+
+targets:
+
+  # ------------------------------------------------------------------ mobile_1
+  mobile_1:
+    shell:
+      host_cd: ~/workspaces/isaac_ros-dev
+      ssh: ""
+      container: isaac_ros_dev-aarch64-container
+      container_user: admin
+      create: ./src/isaac_ros_common/scripts/run_dev.sh -b
+      cd: /workspaces/isaac_ros-dev
+      host_cd: ~/workspaces/isaac_ros-dev
+      setup:
+        - source install/setup.bash
+        - export ROS_DOMAIN_ID={domain}
+    tabs:
+      - name: host
+        host: true
+        cmd: docker ps --format 'table {{.Names}}\t{{.Status}}'
+
+      # Tab 0 creates and HOLDS the container -- run_dev.sh starts it with
+      # --rm, so closing this tab stops it and every other tab dies with it.
+      - name: container
+        cmd: ""
+
+      # proc_mask:='RAW' means packets only: no /ouster/points, /ouster/scan or
+      # /ouster/imu are published. record.yaml records the packets + metadata,
+      # which is what the clouds are regenerated from offline.
+      - name: lidar
+        cmd: >-
+          ros2 launch ouster_ros sensor.launch.xml
+          sensor_hostname:=169.254.92.16 viz:=false
+          use_system_default_qos:=true
+          timestamp_mode:=TIME_FROM_ROS_TIME proc_mask:='RAW'
+
+      - name: zed
+        cmd: ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
+
+      # Two IWR6843s. /dev/ttyUSB0..3 are assigned in enumeration order and
+      # swap between boots -- when they do, a radar gets its config on the data
+      # port and never starts. udev symlinks keyed on the adapter serial fix it
+      # permanently; see the note in record.yaml.
+      - name: radar1
+        cmd: >-
+          ros2 run radar_node radar_node_direct --ros-args
+          -p config_path:=/workspaces/isaac_ros-dev/src/radar_node/radar_node/PeopleTrackingSystem_250320/IWR6843ISK_36230023.cfg
+          -p config_port:=/dev/ttyUSB0 -p data_port:=/dev/ttyUSB1
+          -p radar_frame_id:=radar1_link -r __ns:=/mobile_1/radar1
+        also:
+         - sudo chmod 666 /dev/ttyUSB
+
+      - name: radar2
+        cmd: >-
+          ros2 run radar_node radar_node_direct --ros-args
+          -p config_path:=/workspaces/isaac_ros-dev/src/radar_node/radar_node/PeopleTrackingSystem_250320/IWR6843ISK_36230670.cfg
+          -p config_port:=/dev/ttyUSB2 -p data_port:=/dev/ttyUSB3
+          -p radar_frame_id:=radar2_link -r __ns:=/mobile_1/radar2
+        also:
+         - sudo chmod 666 /dev/ttyUSB
+
+      - name: comms
+        cmd: ros2 launch comms session.launch.py agent:={machine} pass:={pass}
+      # The ZED writes its own .svo rather than publishing image topics. It
+      # goes in record.yaml's out_dir under the same base name as the bag, so
+      # one rsync of that folder takes the whole pass. Nothing links the two
+      # automatically -- if you re-run a pass, record.sh adds _r2 to the bag but
+      # this service call will overwrite the previous .svo. Up = start,
+      # Up Up = stop.
+      - name: svo
+        setup:
+          - cd Dataset
+        cmd: >-
+          ros2 service call /zed/zed_node/start_svo_rec zed_msgs/srv/StartSvoRec
+          "{bitrate: 0, compression_mode: 0, target_framerate: 0,
+          input_transcode: false,
+          svo_filename: '/workspaces/isaac_ros-dev/Dataset/mirc_dataset_{pass}_site_label_{date}_{machine}.svo'}"
+        also:
+          - ros2 service call /zed/zed_node/stop_svo_rec std_srvs/srv/Trigger
+
+      - name: record
+        setup:
+          - cd Dataset
+          - chmod +x scripts/record.sh
+        cmd: ./scripts/record.sh {machine} {pass} run
+
+      # ZED <-> Arducam extrinsics. Not part of a survey pass: set
+      # enabled: true when you are calibrating.
+      - name: calib
+        enabled: true
+        cmd: >-
+          ros2 run wicoms_utils general_charuco --ros-args
+          -p mode:=calibrator
+          -p image_topic:=/zed/zed_node/left/image_rect_color
+          -p info_topic:=/zed/zed_node/left/camera_info
+          -p recv_pose_topic:=/arducam/board_pose
+          -p parent_frame:=zed_left_camera_optical_frame
+          -p child_frame:=arducam_optical_frame
+          -p world_frame:=map_zed
+          -p cam_a_map_frame:=zed_left_camera_optical_frame
+          -p camera_a_name:=zed_left -p camera_b_name:=arducam
+          -p publish_to_map:=fixed
+          -p squares_x:=4 -p squares_y:=4 -p square_len:=0.120 -p marker_len:=0.09
+          -p dictionary:=DICT_4X4_50
+          -p output_path:=extrinsic_arducam.yaml
+
+  # ------------------------------------------------------------------ mobile_2
+  mobile_2:
+    shell:
+      ssh: mic-713@192.168.51.94        # alias in ~/.ssh/config
+      container: isaac_ros_dev-aarch64-container
+      container_user: admin
+      create: ./src/isaac_ros_common/scripts/run_dev.sh -b
+      cd: /workspaces/isaac_ros-dev
+      host_cd: ~/workspaces/isaac_ros-dev
+      setup:
+        - source install/setup.bash
+        - export ROS_DOMAIN_ID={domain}
+    tabs:
+      - name: host
+        host: true
+        setup:
+         - conda deactivate
+        cmd: docker ps --format 'table {{.Names}}\t{{.Status}}'
+      - name: container
+        cmd: ""
+     # - name: realsense
+     #   cmd: ros2 launch realsense2_camera rs_launch.py       # <-- confirm
+      - name: vslam
+        cmd: ros2 launch isaac_ros_visual_slam isaac_ros_visual_slam_realsense.launch.py 
+      - name: comms
+        cmd: ros2 launch comms session.launch.py agent:={machine} pass:={pass}
+      - name: record
+        setup:
+          - cd Dataset
+          - chmod +x scripts/record.sh
+        cmd: ./scripts/record.sh {machine} {pass} run
+
+
+  # ------------------------------------------------------------------- infra_1
+  # Native Pi: no container, so no holder tab.
+  infra_1:
+    shell:
+      ssh: wicoms-robot2@192.168.51.196         # alias in ~/.ssh/config
+      cd: ~/workspaces
+      setup:
+        - source /opt/ros/humble/setup.bash
+        - source ~/workspaces/install/setup.bash
+        - export ROS_DOMAIN_ID={domain}
+    tabs:
+      - name: camera
+        cmd: ros2 launch wicoms_utils arducam.launch.py
+      - name: radar
+        cmd: >-
+          ros2 run radar_node radar_node_direct --ros-args
+          -p config_path:=$HOME/workspaces/src/radar_node/radar_node/PeopleTrackingSystem_250320/IWR6843ISK_36231198.cfg
+          -p config_port:=/dev/ttyUSB0 -p data_port:=/dev/ttyUSB1
+          -p radar_frame_id:=infra1_link -r __ns:=/infra_1
+      - name: comms
+        cmd: ros2 launch comms session.launch.py agent:={machine} pass:={pass}
+      - name: record
+        setup:
+          - cd Dataset
+          - chmod +x scripts/record.sh
+        cmd: ./scripts/record.sh {machine} {pass} run
+      - name: shell
+        cmd: ""
+
+  # ----------------------------------------------------------- mobile_1/sniffer
+  mobile_1/sniffer:
+    shell:
+      ssh: wicoms-robot1@192.168.51.136         # alias in ~/.ssh/config
+      cd: ~/workspaces
+      setup:
+        - source /opt/ros/humble/setup.bash
+        - source ~/workspaces/install/setup.bash
+        - export ROS_DOMAIN_ID={domain}
+    tabs:
+      # csi-capture.service is disabled, so nothing arms the extractor after a
+      # reboot. Run this first; it must print 149/80.
+      - name: arm
+        cmd: sudo nexutil -Iwlan0 -m1 && sudo nexutil -Iwlan0 -k
+      - name: csi
+        cmd: ros2 launch comms session.launch.py agent:={machine} pass:={pass}
+      - name: record
+        setup:
+          - cd Dataset
+          - chmod +x scripts/record.sh
+        cmd: ./scripts/record.sh {machine} {pass} run
+      - name: hz
+        cmd: ros2 topic hz /mobile_1/sniffer/infra_1/csi
+        also:  
+        - ros2 topic hz /mobile_1/sniffer/mobile_2/csi 
+      - name: shell
+        cmd: ""
