@@ -13,7 +13,13 @@ on the robot (one binary, listens on 8554), or push to an existing one.
 
 ```bash
 sudo apt install ffmpeg                      # if missing in the container
+# MediaMTX, once (arm64v8 on a Jetson, amd64 on a PC):
+ARCH=$( [ "$(uname -m)" = aarch64 ] && echo arm64v8 || echo amd64 )
+mkdir -p ~/mediamtx && cd ~/mediamtx
+wget https://github.com/bluenviron/mediamtx/releases/download/v1.9.3/mediamtx_v1.9.3_linux_${ARCH}.tar.gz
+tar xzf mediamtx_v1.9.3_linux_${ARCH}.tar.gz
 ./mediamtx &                                 # on the robot, or skip and use --url below
+cd -
 source /opt/ros/humble/setup.bash
 python3 ros_image_to_rtsp.py                 # -> rtsp://<robot-ip>:8554/mobile_2/color
 python3 ros_image_to_rtsp.py --url rtsp://<server>:8554/mobile_2_color --width 960 --bitrate 2000
