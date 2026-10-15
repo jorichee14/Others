@@ -353,7 +353,7 @@ class RefPose(threading.Thread):
     def __init__(self, url):
         super().__init__(daemon=True)
         self.url, self.T, self.t, self.error, self.world = url, None, 0.0, "not polled yet", ""
-        self.still = Still(0.6, 0.005, 0.3)
+        self.still = Still(ARGS.still_s, 0.005, 0.3)
         self.start()
 
     def run(self):
@@ -394,7 +394,7 @@ class NetCam:
     def __init__(self, cam, board):
         self.cam, self.board = cam, board
         self.pose = BoardPose(board, 8)
-        self.still = Still(0.6, 0.003, 0.3)
+        self.still = Still(ARGS.still_s, 0.003, 0.3)
         self.pair = self.new_pair()
         self.T, self.reproj, self.n, self.t, self.sees = None, None, 0, 0.0, "no stream"
         self.last_sample, self.session, self.saved = 0.0, 1, None
@@ -978,6 +978,9 @@ def main():
     ap.add_argument("--ref-pose", default="", metavar="URL",
                     help="with --ref: http://<robot>:8765/pose from robot/zed_pose_server.py; cameras are then placed "
                          "in the ZED map and the robot may move between board placements")
+    ap.add_argument("--still-s", type=float, default=0.6, metavar="S",
+                    help="with --ref: the board (and the robot) must be still this long in every view before a sample "
+                         "is taken; streams arrive with different delays, so raise it (e.g. 1.0) on a laggy network")
     ap.add_argument("--url", action="append", default=[], metavar="N=URL",
                     help="camera N reads this stream (adds to / overrides config/cameras.yaml); repeatable")
     ap.add_argument("--intrinsics", action="append", default=[], metavar="N=FILE",

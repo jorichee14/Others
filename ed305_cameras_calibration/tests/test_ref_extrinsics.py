@@ -7,6 +7,8 @@ Room: cam 5 on a wall, cam 10 on the ceiling (fixed, known poses in the map); ca
 robot that drives to a new spot for every board placement and reports its pose like the robot would.
 Checks over the dashboard's own API that both cameras get placed within 10 mm / 0.3 deg of the truth,
 that the files are written, and that the page renders (screenshots if Playwright is installed).
+Every stream arrives with its own delay (ZED 0.1 s, cam 5 0.4 s, cam 10 0.25 s, pose 0.05 s), as over
+RTSP: there is no common clock, the pairing must still be right.
 
   python tests/test_ref_extrinsics.py
 """
@@ -56,12 +58,26 @@ def look_at(pos, target, up=(0, 0, 1)):
 TRUTH = {5: look_at(np.array([0.0, -3.0, 2.0]), [0.0, 0.0, 0.6]),
          10: look_at(np.array([0.3, 0.2, 2.7]), [0.0, 0.0, 0.0], up=(0, 1, 0))}
 WORLD = {"board": np.eye(4), "robot": look_at(np.array([2.0, 0, 1.0]), [0, 0, 0.5])}
+DELAY = {20: 0.10, 5: 0.40, 10: 0.25, "pose": 0.05}     # seconds each stream lags behind the room
+HISTORY = []                                            # (time, board, robot) every time something moved
+
+
+def world_at(t):
+    """The room as it was at time t (what a stream with that delay shows now)."""
+    past = [h for h in HISTORY if h[0] <= t]
+    return past[-1] if past else HISTORY[0]
+
+
+def move(board, robot):
+    WORLD["board"], WORLD["robot"] = board, robot
+    HISTORY.append((time.time(), board, robot))
 BOARD_IMG = None
 
 
 def render(cam):
-    T_wc = WORLD["robot"] if cam == 20 else TRUTH[cam]
-    T = np.linalg.inv(T_wc) @ WORLD["board"]
+    _, board, robot = world_at(time.time() - DELAY[cam])
+    T_wc = robot if cam == 20 else TRUTH[cam]
+    T = np.linalg.inv(T_wc) @ board
     s = BOARD_IMG.shape[1] / (9 * SQ)
     Hm = K[cam] @ np.column_stack([T[:3, 0], T[:3, 1], T[:3, 3]]) @ np.diag([1 / s, 1 / s, 1])
     g = cv2.warpPerspective(BOARD_IMG, Hm, (W, H), borderValue=110) if T[2, 3] > 0 else np.full((H, W), 110, np.uint8)
@@ -81,7 +97,7 @@ class WorldStream:
 
 class Pose(BaseHTTPRequestHandler):
     def do_GET(self):
-        data = json.dumps({"ok": True, "T": WORLD["robot"].tolist(), "world_frame": "map_zed",
+        data = json.dumps({"ok": True, "T": world_at(time.time() - DELAY["pose"])[2].tolist(), "world_frame": "map_zed",
                            "camera_frame": "zed_left_camera_optical_frame"}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -105,6 +121,7 @@ def main():
     for c, k in K.items():
         with open(os.path.join(TMP, "results", "intrinsics", "cam_%d.json" % c), "w") as f:
             json.dump({"camera": c, "K": k.tolist(), "dist": [0, 0, 0, 0, 0], "model": "full", "image_size": [W, H]}, f)
+    move(WORLD["board"], WORLD["robot"])
     threading.Thread(target=ThreadingHTTPServer(("127.0.0.1", POSE_PORT), Pose).serve_forever, daemon=True).start()
 
     import server
@@ -135,7 +152,7 @@ def main():
         Tb[:3, :3], Tb[:3, 3] = R, centre - R @ np.array([4.5 * SQ, 3.5 * SQ, 0])
         ang = rng.uniform(0, 2 * np.pi)
         pos = centre + np.array([np.cos(ang), np.sin(ang), 0]) * rng.uniform(1.5, 2.5) + [0, 0, rng.uniform(-0.2, 0.3)]
-        WORLD["robot"], WORLD["board"] = look_at(pos, centre), Tb     # robot drives there, board placed
+        move(Tb, look_at(pos, centre))                                # robot drives there, board placed
         placements += 1
         time.sleep(3.5)                                               # hold still
     st = api("/api/state")
