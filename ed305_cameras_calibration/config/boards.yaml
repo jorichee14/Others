@@ -1,13 +1,12 @@
-# The lab's ChArUco board (every printed copy is the same board): printed portrait, 7 squares
-# across, 9 down, DICT_4X4_50. square_m / marker_m: one black square and one marker as measured
-# on the print (calib.io prints them in the footer). They do not matter for intrinsics, only
-# for extrinsics (metres in the room).
-# If the dashboard finds no corners on the board, the board is the other way round in the
-# camera's eyes: swap squares_x and squares_y.
+# The lab's ChArUco board (every printed copy is the same board): calib.io 7x9, DICT_4X4_50,
+# 9 squares along the long side (footer underneath), 7 along the short side; black square
+# 24.5 mm, marker 18 mm. How the board is held does not matter; squares_x/squares_y must match
+# the board itself (swapped, OpenCV finds no corners at all). The sizes do not matter for
+# intrinsics, only for extrinsics (metres in the room): measure them on each print.
 # Identical copies are fine for intrinsics; for extrinsics only one copy may be in the room at a
 # time (the cameras cannot tell identical boards apart).
 boards:
-  A: {dictionary: DICT_4X4_50, squares_x: 7, squares_y: 9, square_m: 0.245, marker_m: 0.180}
+  A: {dictionary: DICT_4X4_50, squares_x: 9, squares_y: 7, square_m: 0.0245, marker_m: 0.018}
 # Floor markers: single AprilTags taped to the floor at surveyed positions (see floor_markers.yaml).
 floor_tags:
   dictionary: DICT_APRILTAG_36h11
