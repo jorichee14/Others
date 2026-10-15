@@ -32,8 +32,20 @@
   .bar { background:#0f1216; border:1px solid var(--line); border-radius:6px; height:30px; position:relative; overflow:hidden; }
   .bar .fill { position:absolute; left:0; top:0; bottom:0; background:var(--warn); }
   .bar.full .fill { background:var(--ok); }
-  .bar span { position:absolute; left:6px; top:5px; font-size:13px; font-weight:600; color:#fff; mix-blend-mode:difference; white-space:nowrap; overflow:hidden; }
-  .big { font-size:28px; font-weight:700; }
+  .bar span { position:absolute; left:6px; top:5px; font-size:13px; font-weight:600; color:#fff; text-shadow:0 0 3px #000, 0 0 2px #000; white-space:nowrap; overflow:hidden; }
+  .big { font-size:26px; font-weight:700; }
+  .sub { color:var(--dim); font-size:13px; margin-top:2px; }
+  .stats { display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:8px; margin:12px 0 4px; }
+  .stat { background:#171b20; border:1px solid var(--line); border-radius:8px; padding:8px 10px; min-width:0; }
+  .stat .k { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; }
+  .stat .v { font-size:18px; font-weight:700; margin-top:2px; }
+  .stat .d { font-size:12px; color:var(--dim); overflow-wrap:anywhere; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+  .seg button { border:0; border-radius:0; background:transparent; }
+  .seg button + button { border-left:1px solid var(--line); }
+  .seg button.on { background:#2a3a4f; color:var(--text); }
+  details.help { margin-top:10px; color:var(--dim); font-size:14px; }
+  details.help summary { cursor:pointer; color:var(--text); }
   .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
   .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .dim { color:var(--dim); }
   table { border-collapse:collapse; width:100%; font-size:13px; }
@@ -84,27 +96,28 @@
   <section>
     <div class="card" id="intrPanel">
       <div class="row">
-        <span class="big" id="camTitle">no camera</span>
-        <span id="camStatus" class="dim"></span>
+        <div><div class="big" id="camTitle">no camera</div><div class="sub" id="camStatus"></div></div>
         <span style="flex:1"></span>
-        <button id="vRaw" class="on">Live</button><button id="vRect">Rectified</button><button id="vBoth">Both</button>
         <button id="rec">Record</button>
         <button id="calib" class="primary" disabled>Calibrate</button>
       </div>
-      <div class="row dim" id="kTxt"></div>
+      <div class="stats">
+        <div class="stat"><div class="k">Frames</div><div class="v" id="count">0</div><div class="d" id="countD"></div></div>
+        <div class="stat"><div class="k">Next</div><div class="v" id="readyTxt">-</div><div class="d" id="readyD"></div></div>
+        <div class="stat"><div class="k">Calibration</div><div class="v" id="rms">-</div><div class="d" id="kTxt"></div></div>
+      </div>
       <div class="bars" id="bars"></div>
-      <div class="row"><span id="count"></span><span id="readyTxt"></span><span id="rms"></span></div>
+      <div class="row" style="margin-bottom:8px"><div class="seg"><button id="vRaw" class="on">Live</button><button id="vRect">Rectified</button><button id="vBoth">Both</button></div></div>
       <div class="views" id="views">
-        <figure id="fRaw"><img class="live" id="live" alt=""><figcaption>live (green: detected corners while recording)</figcaption></figure>
+        <figure id="fRaw"><img class="live" id="live" alt=""><figcaption>live · green dots: board corners found (while recording)</figcaption></figure>
         <figure id="fRect" style="display:none"><img class="live" id="liveRect" alt=""><figcaption>rectified: straight edges should look straight</figcaption></figure>
       </div>
-      <p class="dim" style="margin:8px 0 0">Join with your name and board, then Record on this camera. Move the board left, right, up, down (x y), close and far (z), turn it in its plane (roll), tilt it forward/back (pitch) and left/right (yaw). Frames save by themselves when the board has moved. When every bar is green and 20+ frames are saved, press Calibrate. Want test error under 1 px.</p>
+      <details class="help"><summary>How to record</summary>Join with your name and board, then Record on this camera. Move the board left, right, up, down (x y), close and far (z), turn it in its plane (roll), tilt it forward/back (pitch) and left/right (yaw). Frames save by themselves when the board has moved. When every bar is green and 20+ frames are saved, press Calibrate. Want test error under 1 px.</details>
     </div>
     <div class="card" id="framesPanel" style="margin-top:14px">
       <div class="row"><h2 style="margin:0">Frames <span class="dim" id="framesTxt"></span></h2><span style="flex:1"></span>
         <button id="framesReload">Reload</button></div>
-      <p class="dim" style="margin:6px 0">Where the corners of all saved frames are (green calibrate, orange test): fill the whole image, corners and edges too.
-        Below, each saved frame: green circles = detected corners, red dots = where the calibration puts them, and the error. Click to open full size; delete frames with a high error, then Calibrate again.</p>
+      <p class="sub" style="margin:4px 0 8px">Map: corners of every saved frame (green calibrate, orange test); fill the whole image. Thumbnails: green circles found, red dots where the calibration puts them, error in px. Click to enlarge; ✕ deletes a bad frame (then Calibrate again).</p>
       <img class="cov" id="cov" alt="">
       <div class="gallery" id="gallery"></div>
     </div>
@@ -177,19 +190,22 @@ function render() {
   $('people').innerHTML = Object.entries(s.people).map(([n,p]) => `${p.active ? '●' : '○'} ${n}: board ${p.board}, cam ${p.camera || '-'}`).join('<br>') || 'nobody yet';
   if (viewCam && s.cams[viewCam]) {
     const v = s.cams[viewCam];
-    $('camTitle').textContent = 'camera ' + viewCam; $('camStatus').textContent = (v.label ? v.label + ' · ' : '') + v.status + (v.size ? ` · ${v.size[0]}x${v.size[1]}` : '');
+    $('camTitle').textContent = 'Camera ' + viewCam; $('camStatus').textContent = (v.label ? v.label + ' · ' : '') + (v.size ? `${v.size[0]}x${v.size[1]} · ` : '') + v.status + (v.person ? ' · recording: ' + v.person : '');
     const mine = myCam === viewCam;
     $('rec').textContent = mine ? 'Stop recording' : (v.person ? 'Recording: ' + v.person : 'Record');
     $('rec').className = mine ? 'rec' : ''; $('rec').disabled = !!v.person && !mine;
-    $('kTxt').textContent = v.calibrated ? `calibrated: fx ${v.K.fx} fy ${v.K.fy} cx ${v.K.cx} cy ${v.K.cy} (${v.source})` : 'not calibrated yet: rectified view after Calibrate';
+    $('kTxt').textContent = (v.rms ? v.rms.replace(/^rms /, '') + ' · ' : '') + (v.calibrated ? `fx ${v.K.fx} fy ${v.K.fy} cx ${v.K.cx} cy ${v.K.cy} · ${v.source}` : 'Rectified view after Calibrate');
     const mode = v.calibrated ? viewMode : 'raw';
     for (const [id, m] of [['vRaw','raw'], ['vRect','rect'], ['vBoth','both']]) { $(id).className = mode === m ? 'on' : ''; $(id).disabled = m !== 'raw' && !v.calibrated; }
     $('fRaw').style.display = mode === 'rect' ? 'none' : ''; $('fRect').style.display = mode === 'raw' ? 'none' : '';
     $('views').className = 'views' + (mode === 'both' ? ' both' : '');
     $('bars').innerHTML = FIELDS.map(k => { const p = Math.round(100 * v.coverage[k]); return `<div class="bar ${p >= 100 ? 'full' : ''}"><div class="fill" style="width:${p}%"></div><span>${k} ${p}%</span></div>`; }).join('');
-    $('count').textContent = `${v.count} frames saved (${v.calib} calibrate + ${v.count - v.calib} test)`;
-    $('readyTxt').innerHTML = v.ready ? '<span class="ok">READY: press Calibrate</span>' : '<span class="dim">keep moving the board</span>';
-    $('rms').innerHTML = v.rms ? `<span class="${/OK/.test(v.rms) ? 'ok' : 'warn'}">${v.rms}</span>` : '';
+    $('count').textContent = v.count; $('countD').textContent = `${v.calib} calibrate + ${v.count - v.calib} test`;
+    const low = FIELDS.filter(k => v.coverage[k] < 1);
+    $('readyTxt').innerHTML = v.ready ? '<span class="ok">Press Calibrate</span>' : (myCam === viewCam ? 'Move the board' : (v.person ? 'Recording…' : 'Press Record'));
+    $('readyD').textContent = v.ready ? 'all bars green, 20+ frames' : (low.length ? 'more range in: ' + low.join(' ') : `${Math.max(0, 20 - v.calib)} more frames`);
+    const m = /rms calib ([\d.]+) test ([\d.]+)/.exec(v.rms || '');
+    $('rms').innerHTML = m ? `<span class="${parseFloat(m[2]) <= 1 ? 'ok' : 'warn'}">${m[2]} px test</span>` : (v.rms ? `<span class="warn">${v.rms}</span>` : (v.calibrated ? '<span class="ok">Calibrated</span>' : 'Not yet'));
     $('calib').disabled = v.calib < 10 || v.status === 'calibrating';
     const key = viewCam + ':' + v.count + ':' + v.rms + ':' + v.calibrated;
     if (key !== galleryKey) { galleryKey = key; gallery(); }

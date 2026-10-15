@@ -45,7 +45,7 @@ from calib.common import (FloorTags, camera_urls, load_boards, now_tag, read_csv
 from calib.intr import FIELDS, board_pose, coverage, nominal_K, ready, split_for, view_features  # noqa: E402
 from calib.streams import open_streams  # noqa: E402
 from calibrate_intrinsics import solve_camera  # noqa: E402
-from capture import draw, draw_bars, save_frame  # noqa: E402
+from capture import save_frame  # noqa: E402
 from calib.intr import summary_row, view_rows  # noqa: E402
 
 MIN_CORNERS = 12
@@ -187,6 +187,28 @@ def active_people():
         return {n: dict(p) for n, p in S["people"].items() if now - p["seen"] < ACTIVE_S}
 
 
+def tag(img, text, color=(255, 255, 255), bottom=False):
+    """Small label on a dark strip in a corner, sized to the image (the page shows the rest)."""
+    h, w = img.shape[:2]
+    fs = max(0.55, w / 1300)
+    th = max(1, int(round(fs * 1.6)))
+    (tw, tht), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
+    pad = int(6 * fs + 2)
+    y0 = h - tht - base - 2 * pad if bottom else 0
+    cv2.rectangle(img, (0, y0), (tw + 2 * pad, y0 + tht + base + 2 * pad), (20, 20, 20), -1)
+    cv2.putText(img, text, (pad, y0 + pad + tht), cv2.FONT_HERSHEY_SIMPLEX, fs, color, th, cv2.LINE_AA)
+
+
+def dots(img, corners, tag_det=None, color=(0, 255, 0)):
+    """Detected board corners (and floor tags) as dots sized to the image."""
+    r = max(3, img.shape[1] // 300)
+    if corners is not None:
+        for c in corners.reshape(-1, 2):
+            cv2.circle(img, (int(c[0]), int(c[1])), r, color, -1, cv2.LINE_AA)
+    for tid, c in (tag_det or {}).items():
+        cv2.polylines(img, [c.astype(int)], True, (255, 0, 255), max(2, r // 2))
+
+
 def encode(frame, width=960):
     h, w = frame.shape[:2]
     small = cv2.resize(frame, (width, int(round(h * width / w))), interpolation=cv2.INTER_AREA) if w > width else frame
@@ -198,7 +220,7 @@ def publish(cs, raw, shown):
     cs.jpeg, cs.jpeg_t = encode(shown), time.time()
     if cs.calibrated and time.time() - cs.rect_wanted < VIEW_S:
         rect = cs.rectify(raw)
-        cv2.putText(rect, "cam %d rectified" % cs.cam, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (255, 220, 0), 4)
+        tag(rect, "rectified", (255, 220, 0))
         cs.jpeg_rect = encode(rect)
 
 
@@ -221,7 +243,7 @@ def process(cam, mode, active):
         b = active[person]["board"]
         corners, ids = BOARDS[b].detect(gray)
         seen = corners is not None and len(corners) >= MIN_CORNERS
-        label = "cam %d  %s  board %s  %d saved  REC" % (cam, person, b, cs.count)
+        label = "REC  %d saved" % cs.count
         cs.status = "board seen" if seen else "no board"
         if seen:
             centre, size = corners.mean(0), np.ptp(corners, axis=0).max()
@@ -244,8 +266,8 @@ def process(cam, mode, active):
                         cs.feats.append(f)
                     cs.last_saved = (centre, size)
                 label += "  SAVED " + split
-        draw(frame, corners, ids, tag_det, label, (0, 255, 0) if seen else (0, 200, 255))
-        draw_bars(frame, cs.feats, len(cs.feats), cs.rms)
+        dots(frame, corners, tag_det)
+        tag(frame, label if seen else label + "  no board", (0, 255, 0) if seen else (0, 200, 255))
     else:
         found = []
         for person, info in active.items():
@@ -267,12 +289,12 @@ def process(cam, mode, active):
                 else:
                     cs.still_frame.pop(b, None)
                 found.append("%s %s" % (b, "STILL" if is_still else "moving"))
-                draw(frame, corners, ids, tag_det, "", (0, 255, 0) if is_still else (0, 200, 255))
+                dots(frame, corners, None, (0, 255, 0) if is_still else (0, 200, 255))
             else:
                 cs.still[b] = []
                 cs.still_frame.pop(b, None)
         cs.status = ", ".join(found) if found else "no board"
-        cv2.putText(frame, "cam %d  %s" % (cam, cs.status), (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 255, 0), 4)
+        tag(frame, "cam %d  %s" % (cam, cs.status), (0, 255, 0))
     publish(cs, raw, frame)
 
 
@@ -321,7 +343,7 @@ def loop():
                 if frame is not None:
                     cs.check_size(frame.shape[1], frame.shape[0])
                     raw = frame.copy() if cs.calibrated else frame
-                    cv2.putText(frame, "cam %d" % c, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (200, 200, 200), 4)
+                    tag(frame, "cam %d" % c, (200, 200, 200))
                     publish(cs, raw, frame)
                     if cs.person is None:
                         cs.status = "live"
@@ -464,9 +486,8 @@ def view_image(cam, vid):
                 for c in pr:
                     cv2.circle(img, tuple(np.round(c).astype(int)), r, (0, 0, 255), -1)
                 e = np.sqrt(np.mean(np.sum((pr - corners) ** 2, axis=1)))
-                cv2.putText(img, "%.2f px" % e, (20, img.shape[0] - 30), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 0, 255), 4)
-    cv2.putText(img, "%s  %s" % (j.get("split") or "", vid.split("/")[1]), (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
-                (0, 255, 255), 3)
+                tag(img, "%.2f px" % e, (80, 80, 255), bottom=True)
+    tag(img, "%s  %s" % (j.get("split") or "", vid.split("/")[1]), (0, 255, 255))
     return Response(encode(img, img.shape[1] if full else 480), mimetype="image/jpeg")
 
 
