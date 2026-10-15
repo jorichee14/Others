@@ -179,6 +179,9 @@ without a web page: `radar_camera_calibration/network_charuco.py`
 | `results/extrinsics_ref/cam_N.json` | camera N in `map_zed`: `T` (4x4, map <- camera), `translation`, `quaternion_xyzw`, `rpy_deg`, samples, placements, spread |
 | `results/extrinsics_ref/network.json` | every placed camera in one file |
 
+Field of view of every calibrated camera: `python3 fov.py` (pinhole and real, with the lens
+distortion; use the real one for coverage planning).
+
 The page shows them too: a camera page's **Calibration result** (Download JSON), and the tables
 under **Results of all cameras** on the overview. Keep `data/` and `results/`.
 
