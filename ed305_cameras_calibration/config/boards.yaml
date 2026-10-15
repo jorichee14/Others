@@ -1,11 +1,11 @@
-# One ChArUco board per person. Each board uses its own marker dictionary, so three boards can
-# be in the room at the same time without confusing the detectors.
-# Print each at 100% on A1 landscape (841 x 594 mm). After printing, MEASURE one square with a
-# ruler and put the real size here (metres). The marker is 0.75 of the square.
+# The lab's ChArUco board (every printed copy is the same board): 9 squares across, 7 down,
+# DICT_4X4_50, black square 24.5 cm, marker 18 cm (measured on the print).
+# If the dashboard finds no corners on the board, the board is the other way round in the
+# camera's eyes: swap squares_x and squares_y.
+# Identical copies are fine for intrinsics; for extrinsics only one copy may be in the room at a
+# time (the cameras cannot tell identical boards apart).
 boards:
-  A: {dictionary: DICT_4X4_50, squares_x: 11, squares_y: 8, square_m: 0.070, marker_m: 0.0525}
-  B: {dictionary: DICT_5X5_50, squares_x: 11, squares_y: 8, square_m: 0.070, marker_m: 0.0525}
-  C: {dictionary: DICT_6X6_50, squares_x: 11, squares_y: 8, square_m: 0.070, marker_m: 0.0525}
+  A: {dictionary: DICT_4X4_50, squares_x: 9, squares_y: 7, square_m: 0.245, marker_m: 0.180}
 # Floor markers: single AprilTags taped to the floor at surveyed positions (see floor_markers.yaml).
 floor_tags:
   dictionary: DICT_APRILTAG_36h11

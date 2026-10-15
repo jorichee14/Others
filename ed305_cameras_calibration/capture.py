@@ -102,7 +102,7 @@ def calibrate_now(cams, data_root, results_dir, boards_all):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--person", required=True)
-    ap.add_argument("--board", required=True, choices=["A", "B", "C"])
+    ap.add_argument("--board", required=True, choices=sorted(load_boards()))
     ap.add_argument("--mode", required=True, choices=["intr", "extr"])
     ap.add_argument("--cams", nargs="*", type=int, default=None, help="camera numbers; default all 16")
     ap.add_argument("--out", default="data")

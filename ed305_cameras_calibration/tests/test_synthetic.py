@@ -97,7 +97,7 @@ def main():
     ev = 0
     tag_obs = 0
     while ev < 120:
-        board = boards[["A", "B", "C"][ev % 3]]
+        board = boards[sorted(boards)[ev % len(boards)]]
         obj = board.object_points
         pos = np.array([rng.uniform(0.8, 5.2), rng.uniform(0.8, 5.2), rng.uniform(0.3, 1.8)])
         R, _ = cv2.Rodrigues(np.array([rng.uniform(-1.6, -0.6), rng.normal(0, 0.4), rng.uniform(-3.1, 3.1)]))
@@ -156,7 +156,7 @@ def main():
     assert len(summ) == 16 and all(int(r["n_test"]) >= 8 for r in summ), "test views missing"
     assert all(r["used"] == "0" for r in views if r["split"] == "test"), "a test view was used in the fit"
     assert all(float(r["rms_test_px"]) < 1.0 for r in summ), "intrinsics test error too high"
-    assert all(0.5 < float(r["z"]) < 4.0 and abs(float(r["pitch"])) < 90 for r in views if r["z"]), "bad view features"
+    assert all(0.3 < float(r["z"]) < 6.0 and abs(float(r["pitch"])) < 90 for r in views if r["z"]), "bad view features"
     ev = read_csv(os.path.join(results, "extrinsics", "events.csv"))
     cams_csv = read_csv(os.path.join(results, "extrinsics", "cameras.csv"))
     assert sum(r["split"] == "test" for r in ev) >= 20, "test events missing"
