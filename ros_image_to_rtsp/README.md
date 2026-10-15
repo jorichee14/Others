@@ -52,7 +52,7 @@ ffplay -rtsp_transport tcp rtsp://<robot-ip>:8554/mobile_2/color
 | `--fps` | 30 | output rate; the latest frame is sent every tick |
 | `--bitrate` | 4000 | kbit/s |
 | `--width` | as published | scale before encoding (height keeps aspect) |
-| `--encoder` | `libx264` | push mode ffmpeg encoder |
+| `--encoder` | `auto` | push mode ffmpeg encoder: first of libx264, libopenh264, h264_nvmpi, h264_v4l2m2m, h264_nvenc, mpeg4 that runs |
 
 The subscription is best-effort, so it connects to both reliable and
 best-effort publishers.

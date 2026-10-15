@@ -67,6 +67,11 @@ def frame_bytes(msg):
     return data[:, :row].tobytes()
 
 
+# ffmpeg encoders tried in this order by --encoder auto (the first one that runs).
+# Not every ffmpeg has libx264 (e.g. some Jetson builds); mpeg4 is always built in.
+H264_ENCODERS = ['libx264', 'libopenh264', 'h264_nvmpi', 'h264_v4l2m2m', 'h264_nvenc', 'mpeg4']
+
+
 class FfmpegPush:
     """Raw frames on stdin -> ffmpeg -> H.264 -> RTSP server (push)."""
 
@@ -75,8 +80,30 @@ class FfmpegPush:
         self.proc = None
         self.fmt = None          # (width, height, encoding) ffmpeg was started for
 
+    def _pick_encoder(self):
+        """First encoder in H264_ENCODERS that this ffmpeg can actually run."""
+        for enc in H264_ENCODERS:
+            probe = ['ffmpeg', '-hide_banner', '-loglevel', 'error',
+                     '-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-s', '256x256', '-i', '-',
+                     '-frames:v', '1', '-c:v', enc, '-f', 'null', '-']
+            try:
+                r = subprocess.run(probe, input=bytes(256 * 256 * 3 // 2),
+                                   capture_output=True, timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if r.returncode == 0:
+                return enc
+        raise RuntimeError('this ffmpeg has none of ' + ', '.join(H264_ENCODERS) +
+                           '; install one or use --mode serve')
+
     def _start(self, w, h, enc):
         a = self.a
+        if a.encoder == 'auto':
+            a.encoder = self._pick_encoder()
+            self.log.info(f'ffmpeg encoder: {a.encoder}')
+            if a.encoder == 'mpeg4':
+                self.log.warning('no working H.264 encoder in this ffmpeg, streaming MPEG-4 '
+                                 '(fine for ffplay / VLC / OpenCV)')
         cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'warning',
                '-f', 'rawvideo', '-pix_fmt', ENCODINGS[enc][1],
                '-s', f'{w}x{h}', '-framerate', str(a.fps), '-i', '-']
@@ -109,8 +136,9 @@ class FfmpegPush:
     def send(self, w, h, enc, data):
         if self.proc is not None and (self.fmt != (w, h, enc) or self.proc.poll() is not None):
             if self.proc.poll() is not None:
-                self.log.warning(f'ffmpeg exited ({self.proc.returncode}); is the RTSP '
-                              f'server at {self.a.url} running? retrying in 2 s')
+                self.log.warning(f'ffmpeg exited ({self.proc.returncode}), its error is above '
+                                 f'("Connection refused": start MediaMTX for {self.a.url}); '
+                                 'retrying in 2 s')
                 time.sleep(2)
             else:
                 self.log.info(f'image format changed to {w}x{h} {enc}, restarting ffmpeg')
@@ -263,7 +291,9 @@ def parse(argv):
     p.add_argument('--bitrate', type=int, default=4000, help='kbit/s')
     p.add_argument('--width', type=int, default=0,
                    help='scale to this width before encoding (0 = as published)')
-    p.add_argument('--encoder', default='libx264', help='push: ffmpeg video encoder')
+    p.add_argument('--encoder', default='auto',
+                   help='push: ffmpeg video encoder (auto = first of ' + ', '.join(H264_ENCODERS) +
+                        ' that works; see ffmpeg -encoders)')
     p.add_argument('--gst-encoder', default='',
                    help='serve: GStreamer encoder chain from I420 to H.264, e.g. on a '
                         'Jetson "nvvidconv ! video/x-raw(memory:NVMM) ! '
