@@ -13,6 +13,7 @@ split) so the calibration can be re-checked at any time with `evaluate.py`.
 (`rms_test_px`, `floor_err_test_cm`) is the honest quality number. The split is recorded in
 `results/intrinsics/views.csv` and `results/extrinsics/events.csv`.
 
+**Start here: [GUIDE.md](GUIDE.md)** (setup, intrinsics, extrinsics with the ZED, output, troubleshooting).
 All options and settings: [SETTINGS.md](SETTINGS.md).
 
 ## Try it now with one RTSP camera (any stream, e.g. the robot)
