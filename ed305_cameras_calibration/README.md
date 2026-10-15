@@ -13,6 +13,8 @@ split) so the calibration can be re-checked at any time with `evaluate.py`.
 (`rms_test_px`, `floor_err_test_cm`) is the honest quality number. The split is recorded in
 `results/intrinsics/views.csv` and `results/extrinsics/events.csv`.
 
+All options and settings: [SETTINGS.md](SETTINGS.md).
+
 ## Try it now with one RTSP camera (any stream, e.g. the robot)
 
 On the PC that will run the dashboard (it must reach the stream and the other people must reach it):
@@ -245,6 +247,7 @@ optical axis, `roll` its in-plane rotation and `pitch`, `yaw` its tilt about the
 
 | File | What |
 |---|---|
+| `SETTINGS.md` | every option, setting, config file and output path in one place |
 | `server.py`, `web/dashboard.html` | one-PC dashboard: everyone captures and calibrates from a browser |
 | `capture.py` | capture frames from RTSP in an OpenCV window, intr or extr mode |
 | `calibrate_intrinsics.py` | per-camera K and distortion |
