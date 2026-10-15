@@ -128,6 +128,15 @@
   .gallery button { padding:0 7px; font-size:12px; border-radius:6px; }
   img.cov { width:100%; max-width:440px; border-radius:8px; display:block; }
   .framesHead { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+  .res { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px; }
+  .res .stat .v { font-size:16px; }
+  .mono { font-family:ui-monospace, "Cascadia Mono", Consolas, monospace; font-size:13px; }
+  .kgrid { display:grid; grid-template-columns:repeat(3, auto); justify-content:start; gap:2px 16px; margin-top:4px; }
+  .kgrid span { text-align:right; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; margin-top:4px; }
+  .kv span:nth-child(odd) { color:var(--dim); }
+  a.btn { display:inline-block; text-decoration:none; background:var(--panel2); border:1px solid var(--line2); border-radius:8px; padding:7px 14px; font-weight:500; }
+  a.btn:hover { border-color:var(--acc); }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -162,7 +171,7 @@
     </div>
     <div class="cams" id="cams"></div>
     <div class="legend"><span class="l-ok">calibrated</span><span class="l-rec">recording now</span><span>not calibrated yet</span></div>
-    <details class="more"><summary>Results and log</summary>
+    <details class="more" open><summary>Results of all cameras, and log</summary>
       <div class="panel"><h2>Intrinsics · results/intrinsics/summary.csv</h2><div style="overflow:auto"><table id="tIntr"></table></div></div>
       <div class="panel"><h2>Extrinsics, room frame · results/extrinsics/cameras.csv</h2><div style="overflow:auto"><table id="tExtr"></table></div></div>
       <div class="panel"><h2>Log</h2><pre id="log"></pre></div>
@@ -200,6 +209,10 @@
           <p>When every bar is green and 20+ frames are saved, press Calibrate. Good: test error under 1 px (under 0.5 is very good).</p>
         </details>
       </div>
+    </div>
+    <div class="panel gap" id="resPanel">
+      <div class="framesHead"><h2 style="margin:0">Calibration result <span class="dim" id="resName"></span></h2><a class="btn" id="resDl" href="#" download>Download JSON</a></div>
+      <div class="res" id="res" style="margin-top:10px"></div>
     </div>
     <div class="panel gap">
       <div class="framesHead"><h2 style="margin:0">Saved frames <span class="dim" id="framesTxt"></span></h2><button id="framesReload">Reload</button></div>
@@ -358,8 +371,31 @@ function renderCamera(s, c) {
   if (key !== galleryKey) { galleryKey = key; gallery(); }
 }
 
+const fmt = (x, n) => (x == null || isNaN(x)) ? '-' : Number(x).toFixed(n);
+async function showResult(cam) {
+  try {
+    const r = await (await fetch(`/api/result/${cam}`)).json(); if (cam !== camOfHash()) return;
+    if (!r.K) { $('resPanel').hidden = true; return; }
+    $('resPanel').hidden = false;
+    $('resName').textContent = r.name ? `· ${r.name} · saved ${r.saved}` : '· ' + (r.source || '');
+    $('resDl').hidden = !r.file; $('resDl').href = `/download/${cam}.json`;
+    const K = r.K, d = r.dist || [], names = ['k1','k2','p1','p2','k3','k4','k5','k6'];
+    const tiles = [];
+    tiles.push(`<div class="stat"><div class="k">Camera matrix K (px)</div><div class="kgrid mono">${K.flat().map((x, i) => `<span>${fmt(x, i === 8 ? 0 : 2)}</span>`).join('')}</div></div>`);
+    tiles.push(`<div class="stat"><div class="k">Distortion</div><div class="kv mono">${d.map((x, i) => `<span>${names[i] || 'd' + i}</span><span>${Number(x).toPrecision(4)}</span>`).join('')}</div></div>`);
+    if (r.rms_px != null) {
+      const t = r.rms_test_px, good = t <= 1 && r.rms_px <= 0.6;
+      tiles.push(`<div class="stat"><div class="k">Reprojection error</div><div class="v ${good ? 'ok' : 'warn'}">${fmt(t, 3)} px test</div>
+        <div class="kv"><span>calibrate</span><span>${fmt(r.rms_px, 3)} px</span><span>frames used</span><span>${r.views} calibrate + ${r.test_views} test</span><span>dropped</span><span>${r.dropped_views}</span>
+        <span>image</span><span>${(r.image_size || []).join('×')}</span><span>round</span><span>${r.session || 1}</span></div></div>`);
+    }
+    if (r.coverage) tiles.push(`<div class="stat"><div class="k">Coverage of the views used</div><div class="kv">${FIELDS.map(k => `<span>${k}</span><span class="${r.coverage[k] >= 1 ? 'ok' : 'warn'}">${Math.round(100 * r.coverage[k])}%</span>`).join('')}</div></div>`);
+    $('res').innerHTML = tiles.join('');
+  } catch (e) {}
+}
 async function gallery() {
   const cam = camOfHash(); if (!cam) return;
+  showResult(cam);
   const v = (state && state.cams[cam]) || {}, ck = encodeURIComponent((v.rms || '') + v.calibrated);
   $('cov').src = `/coverage/${cam}.jpg?t=${Date.now()}`;
   try {

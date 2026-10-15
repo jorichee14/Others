@@ -381,13 +381,20 @@ def calibrate_thread(cam):
         if res is None:
             cs.rms = "fewer than 10 calibrate views"
         else:
-            with LOCK:
-                RES[cam] = res
-                write_summaries()
             cs.set_intrinsics(res["K"], res["dist"], "calibrated here, %s.json" % cam_name(cam, cs.session),
                               res["views"][0]["image_size"])
             cs.rms = "rms calib %.2f test %.2f px (%d+%d views) %s" % (
                 res["rms_calib"], res["rms_test"], res["n_calib"], res["n_test"], summary_row(cam, res)["status"])
+            locked = None
+            with LOCK:
+                RES[cam] = res
+                try:
+                    write_summaries()
+                except PermissionError as e:   # Windows: the CSV is open in Excel
+                    locked = os.path.basename(e.filename or "a CSV file")
+            if locked:
+                log("cam %d: calibration saved in %s.json, but %s could not be written (open in Excel? "
+                    "close it, then press Calibrate again to refresh the CSV files)" % (cam, cam_name(cam, cs.session), locked))
     except Exception as e:  # keep the server alive
         cs.rms = "error: %s" % e
     cs.status = "calibrated"
@@ -453,6 +460,43 @@ def view_path(cam, vid):
         return None
     p = os.path.join(ARGS.out, person, "intr", cam_name(cam, CAMS[cam].session), name + ".json")
     return p if os.path.exists(p) else None
+
+
+def result_file(cam):
+    """The newest result file of a camera (its current round or an earlier one), or None."""
+    cs = CAMS[cam]
+    for k in range(cs.session, 0, -1):
+        p = os.path.join(ARGS.results, "intrinsics", cam_name(cam, k) + ".json")
+        if os.path.exists(p):
+            return p
+    return None
+
+
+@app.route("/api/result/<int:cam>")
+def result(cam):
+    """This camera's calibration as stored on disk (K, distortion, errors, views), for the camera page."""
+    if cam not in CAMS:
+        return jsonify({"error": "unknown camera"}), 404
+    p = result_file(cam)
+    if p is None:
+        cs = CAMS[cam]
+        return jsonify({"file": None, "source": cs.source, "K": cs.K.tolist() if cs.calibrated else None,
+                        "dist": cs.dist.tolist() if cs.calibrated and cs.dist is not None else None})
+    j = read_json(p)
+    j.pop("frames", None)
+    j.pop("test_frames", None)
+    j["file"] = os.path.relpath(p, HERE) if os.path.abspath(p).startswith(HERE) else p
+    j["name"] = os.path.basename(p)
+    j["saved"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(p)))
+    return jsonify(j)
+
+
+@app.route("/download/<int:cam>.json")
+def download(cam):
+    p = result_file(cam) if cam in CAMS else None
+    if p is None:
+        return Response(status=404)
+    return send_from_directory(os.path.dirname(os.path.abspath(p)), os.path.basename(p), as_attachment=True)
 
 
 @app.route("/api/views/<int:cam>")
