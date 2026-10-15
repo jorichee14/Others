@@ -19,6 +19,7 @@ and in the config files. Defaults are what you get with plain `python server.py`
 | `--workers N` | CPU cores - 1 | how many cameras are processed at the same time |
 | `--fake` | off | simulated cameras, to try the page without any camera |
 | `--ref N` | none | extrinsics mode places every camera relative to camera N, the reference (the ZED streamed with `ros_image_to_rtsp.py`); see README "Extrinsics with the ZED" |
+| `--ref-board E` | first board | with `--ref`: which board from `boards.yaml` is used for extrinsics (`E` = the 4 x 4, 12 cm board) |
 | `--still-s 0.6` | `0.6` | with `--ref`: seconds the board (and the robot) must be still in every view before a sample; no clock sync is used, so this must exceed the delay difference between the streams; raise it (e.g. `1.0`) on Wi-Fi |
 | `--ref-pose URL` | none | with `--ref`: the ZED's pose from `robot/zed_pose_server.py` (`http://<robot>:8765/pose`); cameras are then placed in the ZED map and the robot may move between board placements |
 

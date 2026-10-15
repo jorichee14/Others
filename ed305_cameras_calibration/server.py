@@ -978,6 +978,9 @@ def main():
     ap.add_argument("--ref-pose", default="", metavar="URL",
                     help="with --ref: http://<robot>:8765/pose from robot/zed_pose_server.py; cameras are then placed "
                          "in the ZED map and the robot may move between board placements")
+    ap.add_argument("--ref-board", default="", metavar="NAME",
+                    help="with --ref: the board (name in config/boards.yaml) held up for extrinsics, e.g. E "
+                         "(default: the first board)")
     ap.add_argument("--still-s", type=float, default=0.6, metavar="S",
                     help="with --ref: the board (and the robot) must be still this long in every view before a sample "
                          "is taken; streams arrive with different delays, so raise it (e.g. 1.0) on a laggy network")
@@ -1009,7 +1012,9 @@ def main():
     if ARGS.ref is not None:
         if ARGS.ref not in CAMS:
             sys.exit("--ref %d: no such camera (add it with --url %d=rtsp://...)" % (ARGS.ref, ARGS.ref))
-        board = BOARDS[sorted(BOARDS)[0]].board
+        if ARGS.ref_board and ARGS.ref_board not in BOARDS:
+            sys.exit("--ref-board %s: not in config/boards.yaml (%s)" % (ARGS.ref_board, ", ".join(sorted(BOARDS))))
+        board = BOARDS[ARGS.ref_board or sorted(BOARDS)[0]].board
         NET.update({c: NetCam(c, board) for c in CAMS})
         REFPOSE = RefPose(ARGS.ref_pose) if ARGS.ref_pose else None
         net_load()

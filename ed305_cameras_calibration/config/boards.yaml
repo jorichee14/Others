@@ -7,6 +7,9 @@
 # time (the cameras cannot tell identical boards apart).
 boards:
   A: {dictionary: DICT_4X4_50, squares_x: 9, squares_y: 7, square_m: 0.0245, marker_m: 0.018}
+# The extrinsics board (as used with general_charuco.py on the robot): 4 x 4 squares of 12 cm, 9 cm
+# markers. Large, so the ceiling cameras and the ZED see it from a few metres. Measure your print.
+  E: {dictionary: DICT_4X4_50, squares_x: 4, squares_y: 4, square_m: 0.120, marker_m: 0.090}
 # Floor markers: single AprilTags taped to the floor at surveyed positions (see floor_markers.yaml).
 floor_tags:
   dictionary: DICT_APRILTAG_36h11
