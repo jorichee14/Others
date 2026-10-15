@@ -150,12 +150,12 @@ targets:
       # On the HOST: the Wi-Fi dongle as a CSI transmitter. RTL8852BU options
       # (HE off, tx 1 stream, rx 2 -- reloads the driver only if they differ),
       # power save off, then verify against the sniffer's 149/80.
-      # Up Up = status of the driver options.
+      # Up Up = verify again later (txcheck).
       - name: tx
         host: true
         cmd: sudo IFACE=wlx8876b9eae101 ./Dataset/scripts/csi_params.sh tx
         also:
-          - sudo ./Dataset/scripts/rtl8852bu.sh status
+          - sudo IFACE=wlx8876b9eae101 ./Dataset/scripts/csi_params.sh txcheck
       # Starts the RealSense node (namespace mobile_2) AND Isaac VSLAM; see
       # mobile_2_vslam_realsense.launch.py. No separate realsense tab.
       - name: vslam
@@ -179,6 +179,14 @@ targets:
         - source ~/workspaces/install/setup.bash
         - export ROS_DOMAIN_ID={domain}
     tabs:
+      # The Pi's Wi-Fi as a CSI transmitter: power save off, then verify
+      # against the sniffer's 149/80. Up Up = verify again later (txcheck).
+      - name: tx
+        setup:
+          - cd Dataset
+        cmd: sudo IFACE=wlan0 ./scripts/csi_params.sh tx
+        also:
+          - sudo IFACE=wlan0 ./scripts/csi_params.sh txcheck
       - name: camera
         cmd: ros2 launch wicoms_utils arducam.launch.py
       - name: radar
@@ -207,17 +215,16 @@ targets:
         - source ~/workspaces/install/setup.bash
         - export ROS_DOMAIN_ID={domain}
     tabs:
-      # csi-capture.service is disabled, so nothing arms the extractor after a
-      # reboot. Run this first; it must print 149/80. The MAC is the transmitter
-      # No MAC filter here: with a comma-separated -m list this nexmon build passes
-      # nothing. csi_publisher's mac_filter keeps mobile_2 (88:76:b9:ea:e1:01) and
-      # infra_1 (d8:3a:dd:19:66:3e) and drops every other sender.
+      # Arm the nexmon extractor: rp_filter off (and saved), no hardware MAC
+      # filter -- csi_publisher's mac_filter keeps mobile_2 and infra_1. Run it
+      # before the csi tab (csi_publisher runs with arm_on_start: false).
+      # Up Up = count CSI frames per transmitter for 5 s, no ROS (check).
       - name: arm
-        cmd: >-
-          sudo ip link set wlan0 up &&
-          sudo nexutil -Iwlan0 -s500 -b -l34
-          -v$(makecsiparams -c 149/80 -C 1 -N 1) &&
-          sudo nexutil -Iwlan0 -m1 && sudo nexutil -Iwlan0 -k
+        setup:
+          - cd Dataset
+        cmd: sudo ./scripts/csi_params.sh rx
+        also:
+          - sudo ./scripts/csi_params.sh check 5
       - name: csi
         cmd: ros2 launch comms session.launch.py agent:={machine} pass:={pass}
       - name: record
