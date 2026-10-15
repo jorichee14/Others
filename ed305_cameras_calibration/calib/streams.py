@@ -7,7 +7,8 @@ from urllib.parse import urlparse
 
 import cv2
 
-os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|stimeout;5000000")
+# RTSP over TCP without FFmpeg's input buffering (default buffering adds ~150-250 ms of delay)
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|stimeout;5000000")
 
 
 def reachable(url, timeout=2.0):
