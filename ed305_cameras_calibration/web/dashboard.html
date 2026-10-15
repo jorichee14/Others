@@ -99,7 +99,13 @@
   .views { display:grid; gap:10px; grid-template-columns:minmax(0,1fr); }
   .views.both { grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); }
   .views figure { margin:0; }
+  .views figure { position:relative; }
   .views img { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; border-radius:10px; display:block; }
+  .views img:not(.shown) { visibility:hidden; }
+  .nopic { position:absolute; left:0; right:0; top:0; aspect-ratio:16/9; background:#000; border-radius:10px; display:grid; place-content:center;
+           text-align:center; gap:6px; padding:20px; color:var(--dim); font-size:13px; }
+  .nopic b { color:var(--text); font-size:15px; }
+  .nopic code { color:var(--warn); overflow-wrap:anywhere; }
   .views figcaption { color:var(--faint); font-size:12px; margin-top:4px; }
   .side { display:grid; gap:12px; align-content:start; }
   .actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
@@ -178,7 +184,7 @@
           <span class="sub" id="viewHint"></span>
         </div>
         <div class="views" id="views">
-          <figure id="fRaw"><img id="live" alt=""><figcaption>Live · green dots: board corners found while recording</figcaption></figure>
+          <figure id="fRaw"><img id="live" alt=""><div class="nopic" id="nopic" hidden></div><figcaption>Live · green dots: board corners found while recording</figcaption></figure>
           <figure id="fRect" hidden><img id="liveRect" alt=""><figcaption>Rectified · straight edges should look straight</figcaption></figure>
         </div>
       </div>
@@ -326,6 +332,12 @@ function renderCamera(s, c) {
   for (const b of $('viewSeg').querySelectorAll('button')) { b.className = b.dataset.v === mode ? 'on' : ''; b.disabled = b.dataset.v !== 'raw' && !v.calibrated; }
   $('viewHint').textContent = v.calibrated ? '' : 'Rectified view after Calibrate';
   $('fRaw').hidden = mode === 'rect'; $('fRect').hidden = mode === 'raw';
+  const noPic = v.status === 'no stream' || !$('live').classList.contains('shown');
+  $('nopic').hidden = !noPic;
+  if (noPic) $('nopic').innerHTML = v.status === 'no stream'
+    ? `<b>No picture from this camera</b><span>The PC running server.py cannot read its stream:</span><code>${esc(v.url || '')}</code>`
+      + `<span>Is this PC on the camera's network? Test the address in VLC (Media → Open Network Stream).</span>`
+    : '<b>Waiting for the first picture…</b><span>Opening the stream can take a few seconds.</span>';
   $('views').className = 'views' + (mode === 'both' ? ' both' : '');
   $('count').textContent = v.count; $('countD').textContent = `${v.calib} calibrate + ${v.count - v.calib} test · 20+ wanted`;
   const low = FIELDS.filter(k => (v.coverage[k] || 0) < 1);

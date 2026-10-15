@@ -71,6 +71,7 @@ def log(msg):
 class Cam:
     def __init__(self, cam, url=""):
         self.cam = cam
+        self.url = url
         self.label = url.split("://")[-1].split("/", 1)[-1] if url else ""
         self.lock = threading.Lock()
         self.person = None                        # who records frames on this camera (None: nobody)
@@ -556,7 +557,7 @@ def state():
         cov = coverage(cs.feats)
         K = cs.K if cs.calibrated else None
         cams[c] = {"person": cs.person, "count": cs.count, "calib": len(cs.feats), "coverage": cov,
-                   "ready": ready(cs.feats), "rms": cs.rms, "status": cs.status, "label": cs.label,
+                   "ready": ready(cs.feats), "rms": cs.rms, "status": cs.status, "label": cs.label, "url": cs.url,
                    "size": cs.size, "calibrated": cs.calibrated, "source": cs.source, "session": cs.session,
                    "round_done": os.path.exists(os.path.join(ARGS.results, "intrinsics", cam_name(c, cs.session) + ".json")),
                    "K": None if K is None else {"fx": round(K[0, 0], 1), "fy": round(K[1, 1], 1),
