@@ -75,7 +75,8 @@ class Cam:
     def __init__(self, cam, url=""):
         self.cam = cam
         self.url = url
-        self.label = url.split("://")[-1].split("/", 1)[-1] if url else ""
+        self.label = ("ROS " + url.split("://", 1)[1].split("/")[0] if url.startswith("ros://")     # ROS: the namespace
+                      else url.split("://")[-1].split("/", 1)[-1]) if url else ""
         self.lock = threading.Lock()
         self.person = None                        # who records frames on this camera (None: nobody)
         self.viewed, self.rect_wanted = 0.0, 0.0  # last time a browser fetched its frame / rectified frame

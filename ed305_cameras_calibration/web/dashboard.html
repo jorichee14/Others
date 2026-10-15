@@ -72,7 +72,9 @@
   .chip.dark { background:rgba(0,0,0,.65); }
   .cam .body { padding:10px 12px 12px; display:grid; gap:6px; }
   .cam .row1 { display:flex; justify-content:space-between; gap:8px; align-items:baseline; }
-  .cam .label { color:var(--dim); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cam .label { color:var(--dim); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1; text-align:right; }
+  .cam .row1 b { white-space:nowrap; }
+  .cam .body, .cam .facts { min-width:0; } .cam .facts span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .cam .facts { display:flex; justify-content:space-between; color:var(--dim); font-size:12px; }
   @media (max-width: 600px) {
     main { padding:14px 12px 30px; } header { padding:10px 12px; }
