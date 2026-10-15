@@ -23,11 +23,12 @@ from calib.intr import FIELDS, IMAGE_SIZE, fit_camera, load_views, summary_row, 
 def solve_camera(cam, data_dir, results_dir, boards, flags=0):
     """Fit one camera from its saved views and write cam_N.json. Returns the fit_camera result or None."""
     views = load_views(data_dir, cam)
-    res = fit_camera(views, boards, flags)
+    size = views[0]["image_size"] if views else IMAGE_SIZE
+    res = fit_camera(views, boards, flags, size)
     if res is None:
         return None
     write_json(os.path.join(results_dir, "intrinsics", "cam_%d.json" % cam), {
-        "camera": cam, "image_size": IMAGE_SIZE, "K": res["K"], "dist": res["dist"],
+        "camera": cam, "image_size": size, "K": res["K"], "dist": res["dist"],
         "rms_px": res["rms_calib"], "rms_test_px": res["rms_test"],
         "views": res["n_calib"], "test_views": res["n_test"], "dropped_views": res["dropped"],
         "coverage": res["coverage"],

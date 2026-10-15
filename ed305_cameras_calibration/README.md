@@ -13,6 +13,41 @@ split) so the calibration can be re-checked at any time with `evaluate.py`.
 (`rms_test_px`, `floor_err_test_cm`) is the honest quality number. The split is recorded in
 `results/intrinsics/views.csv` and `results/extrinsics/events.csv`.
 
+## Try it now with one RTSP camera (any stream, e.g. the robot)
+
+On the PC that will run the dashboard (it must reach the stream and the other people must reach it):
+
+```
+cd ed305_cameras_calibration
+pip install -r requirements.txt
+python server.py --cams 17 --url 17=rtsp://<robot-ip>:8554/mobile_2/color
+```
+
+1. Open `http://<this pc's ip>:8080` on your laptop; the other two open the same address on
+   theirs (same network). Anyone can tap camera 17 and watch it live without joining.
+2. Board: any ChArUco board whose layout is in `config/boards.yaml` (the A1 boards A, B, C, or
+   print one with `python make_boards.py --page A3` and write the printed square size in).
+3. Type your name, pick your board, **Join**, then **Record** on camera 17. Move the board
+   through the image (corners and edges too, near and far, tilted). Frames save by themselves
+   when the board has moved; the six bars, the frame count and the coverage map fill up.
+4. **Calibrate** (10+ frames, better 20+ with all bars green). K, distortion and the
+   calibrate/test error appear; `results/intrinsics/cam_17.json` is written.
+5. **Rectified** or **Both** shows the undistorted live view right away.
+6. **Frames** panel: every saved frame with its detected corners (green) and where the
+   calibration puts them (red) with the error. Delete bad frames (high error, blurred) and
+   press Calibrate again.
+
+Already calibrated? The rectified view is there from the start:
+- a camera calibrated here before: `results/intrinsics/cam_N.json` is loaded at startup;
+- calibrated elsewhere: `--intrinsics 17=camera_info.yaml` takes a ROS camera_info
+  (`ros2 topic echo --once /<camera>/camera_info > camera_info.yaml`, or a `camera_calibration`
+  YAML), this folder's `cam_N.json`, or the wiki's `calibration/data/outputs/results/cam_N.json`.
+  If the file is for another resolution than the stream, K is scaled to the stream.
+
+Several streams at once: repeat `--url` (`--cams 17 18 --url 17=... --url 18=...`), or add them
+to `config/cameras.yaml`. A test run over RTSP of a simulated 1280x720 camera (fx 900,
+k1 -0.25, k2 0.08) gave fx 900.2, fy 900.0, k1 -0.250, k2 0.084 and 0.26 px test error.
+
 ## The whole process in one list
 
 1. Print boards A, B, C (A1) and 12 floor tags (A4): `python make_boards.py`. Mount the boards flat.
@@ -21,7 +56,7 @@ split) so the calibration can be re-checked at any time with `evaluate.py`.
    `config/floor_markers.yaml`. Lock exposure, gain and focus on every camera.
 4. On the lab PC (scoop env, `pip install flask` once): `python server.py`. Everyone opens the
    address it prints on a phone or laptop and joins with their name and board.
-5. Intrinsics: tap a camera, move the board until the six bars are green, press Calibrate,
+5. Intrinsics: tap a camera, press Record, move the board until the six bars are green, press Calibrate,
    next camera. All 16 cameras: about 2 hours for three people.
 6. Extrinsics: press "2 Extrinsics", hold the boards still where cameras overlap until 150+
    events, press "Solve extrinsics". About 1 to 2 hours.
@@ -70,13 +105,14 @@ Stream addresses are in `config/cameras.yaml` (from the wiki). The dashboard PC 
 On the lab PC, in this folder: `python server.py`. It prints the address; everyone opens it.
 
 1. **Join.** Type your name, pick your board (A, B or C: one per person) and press Join.
-2. **Intrinsics.** Tap your camera in the grid (a camera can be used by one person at a time;
+2. **Intrinsics.** Tap your camera in the grid and press **Record** (a camera can be recorded by one person at a time;
    camera groups per person are in `config/assignments.yaml`). Walk the board in front of it.
    Frames save by themselves when the board has moved; the page shows the count and the six
    bars x y z roll pitch yaw (what each one wants is written under the live view). When all
    bars are green and 20+ frames are saved the page says READY: press **Calibrate**. It shows
    `rms calib / test`; want calib under 0.6 px and test under 1 px, else keep moving the board
-   and press Calibrate again. Then tap your next camera. The grid dots show every camera's
+   and press Calibrate again. Check the Frames panel (delete frames with a high error) and
+   the Rectified view. Then press Stop recording and tap your next camera. The grid dots show every camera's
    state (grey none, yellow some frames, green ready, blue calibrated).
 3. **Extrinsics.** When all 16 are calibrated, press **2 Extrinsics** (one mode for everyone).
    Every camera now watches every joined board. Hold your board still for a second where two

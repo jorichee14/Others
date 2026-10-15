@@ -3,6 +3,15 @@
 
   python server.py                      # then open http://<this pc>:8080 on any phone or laptop
   python server.py --fake               # no cameras: synthetic moving boards, to try the dashboard
+  python server.py --cams 17 --url 17=rtsp://<robot-ip>:8554/mobile_2/color
+                                        # any RTSP stream as camera 17 (not in config/cameras.yaml)
+  python server.py --intrinsics 17=camera_info.yaml
+                                        # camera already calibrated: rectified view right away
+
+Anyone can tap a camera to watch it (live, rectified once calibrated, or both). Recording frames
+for a camera needs a name and a board (Join), then "Record" on that camera; "Stop" releases it.
+The Frames panel shows every saved frame with its detected corners (green) and, once the camera is
+calibrated, the reprojected corners (red) and its error; a bad frame can be deleted there.
 
 Each person opens the page, types their name, picks their board (A, B or C) and a camera.
 Intrinsics mode: the PC detects that person's board in that camera and saves a frame by itself
@@ -17,6 +26,7 @@ Everything is saved on this PC: nothing to merge.
 """
 import argparse
 import glob
+import shutil
 import os
 import subprocess
 import sys
@@ -30,8 +40,9 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from calib.common import FloorTags, camera_urls, load_boards, load_intrinsics, now_tag, read_csv, read_json, write_csv  # noqa: E402
-from calib.intr import FIELDS, coverage, nominal_K, ready, split_for, view_features  # noqa: E402
+from calib.common import (FloorTags, camera_urls, load_boards, now_tag, read_csv, read_intrinsics_file,  # noqa: E402
+                          read_json, write_csv)
+from calib.intr import FIELDS, board_pose, coverage, nominal_K, ready, split_for, view_features  # noqa: E402
 from calib.streams import open_streams  # noqa: E402
 from calibrate_intrinsics import solve_camera  # noqa: E402
 from capture import draw, draw_bars, save_frame  # noqa: E402
@@ -41,6 +52,7 @@ MIN_CORNERS = 12
 ACTIVE_S = 60          # a person whose browser has not polled for this long is inactive
 STILL_PX, MOVE_PX = 2.0, 25.0
 STILL_S = 0.8          # the board must have been within STILL_PX for this long to count as still
+VIEW_S = 4.0           # a camera someone has looked at within this many seconds is refreshed every tick
 
 app = Flask(__name__, static_folder=os.path.join(HERE, "web"), static_url_path="/web")
 app.json.sort_keys = False
@@ -57,18 +69,61 @@ def log(msg):
 
 
 class Cam:
-    def __init__(self, cam):
+    def __init__(self, cam, url=""):
         self.cam = cam
+        self.label = url.split("://")[-1].split("/", 1)[-1] if url else ""
         self.lock = threading.Lock()
-        self.person = None
+        self.person = None                        # who records frames on this camera (None: nobody)
+        self.viewed, self.rect_wanted = 0.0, 0.0  # last time a browser fetched its frame / rectified frame
+        self.jpeg_rect = None
+        self.size = None                          # (w, h) of the stream
+        self.calibrated, self.source = False, ""  # real K known (and where it came from)
+        self._maps = None
         self.count, self.feats, self.last_saved = 0, [], None
         self.rms, self.status, self.last_board = "", "idle", ""
         self.jpeg, self.jpeg_t = None, 0.0
         self.still, self.still_frame = {}, {}     # board -> recent centres / (frame, corners, ids, tags, t, person)
         self.K, self.dist = nominal_K(), None
 
+    def set_intrinsics(self, K, dist, source, size=None):
+        """Real K and distortion (rectified view from now on). size: the image size K belongs to;
+        K is scaled when the stream turns out to have another resolution."""
+        with self.lock:
+            self.K, self.dist = np.array(K, float), np.array(dist, float).reshape(-1)
+            self.k_size = tuple(size) if size else None
+            self.calibrated, self.source, self._maps = True, source, None
+
+    def check_size(self, w, h):
+        """Called with every frame: nominal K for the real resolution, or the real K scaled to it."""
+        if self.size == (w, h):
+            return
+        self.size = (w, h)
+        with self.lock:
+            if not self.calibrated:
+                self.K = nominal_K((w, h))
+            elif self.k_size and self.k_size != (w, h):
+                sx, sy = w / self.k_size[0], h / self.k_size[1]
+                self.K = np.diag([sx, sy, 1.0]) @ self.K
+                log("cam %d: intrinsics were for %dx%d, stream is %dx%d: K scaled" % (self.cam, *self.k_size, w, h))
+                self.k_size = (w, h)
+            self._maps = None
+
+    def rectify(self, frame):
+        """Undistorted frame (same K for the output, cropped to valid pixels), or None if not calibrated."""
+        if not self.calibrated:
+            return None
+        h, w = frame.shape[:2]
+        with self.lock:
+            if self._maps is None or self._maps[0] != (w, h):
+                newK, _ = cv2.getOptimalNewCameraMatrix(self.K, self.dist, (w, h), 0)
+                m1, m2 = cv2.initUndistortRectifyMap(self.K, self.dist, None, newK, (w, h), cv2.CV_16SC2)
+                self._maps = ((w, h), m1, m2)
+            _, m1, m2 = self._maps
+        return cv2.remap(frame, m1, m2, cv2.INTER_LINEAR)
+
     def load_existing(self, data_dir):
         """Counts and bar features of frames already on disk (so a restart keeps the bars)."""
+        self.count, self.feats = 0, []
         for path in sorted(glob.glob(os.path.join(data_dir, "*", "intr", "cam_%d" % self.cam, "*.json"))):
             j = read_json(path)
             self.count += 1
@@ -132,9 +187,19 @@ def active_people():
         return {n: dict(p) for n, p in S["people"].items() if now - p["seen"] < ACTIVE_S}
 
 
-def encode(frame):
-    small = cv2.resize(frame, (960, 540))
+def encode(frame, width=960):
+    h, w = frame.shape[:2]
+    small = cv2.resize(frame, (width, int(round(h * width / w))), interpolation=cv2.INTER_AREA) if w > width else frame
     return cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])[1].tobytes()
+
+
+def publish(cs, raw, shown):
+    """JPEGs for the page: the annotated frame, and the rectified raw frame when someone watches it."""
+    cs.jpeg, cs.jpeg_t = encode(shown), time.time()
+    if cs.calibrated and time.time() - cs.rect_wanted < VIEW_S:
+        rect = cs.rectify(raw)
+        cv2.putText(rect, "cam %d rectified" % cs.cam, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (255, 220, 0), 4)
+        cs.jpeg_rect = encode(rect)
 
 
 def process(cam, mode, active):
@@ -143,9 +208,11 @@ def process(cam, mode, active):
     if frame is None:
         cs.status = "no stream"
         return
+    h, w = frame.shape[:2]
+    cs.check_size(w, h)
+    raw = frame.copy() if cs.calibrated else frame
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     tag_det = {}                      # floor tags are slow to detect: only on the frames that get saved
-    h, w = frame.shape[:2]
     if mode == "intr":
         person = cs.person
         if person not in active:
@@ -154,12 +221,12 @@ def process(cam, mode, active):
         b = active[person]["board"]
         corners, ids = BOARDS[b].detect(gray)
         seen = corners is not None and len(corners) >= MIN_CORNERS
-        label = "cam %d  %s  board %s  %d saved" % (cam, person, b, cs.count)
+        label = "cam %d  %s  board %s  %d saved  REC" % (cam, person, b, cs.count)
         cs.status = "board seen" if seen else "no board"
         if seen:
             centre, size = corners.mean(0), np.ptp(corners, axis=0).max()
             prev = cs.last_saved
-            moved = prev is None or np.linalg.norm(centre - prev[0]) > 0.06 * w or abs(size - prev[1]) > 0.12 * prev[1]
+            moved = cs.person is not None and (prev is None or np.linalg.norm(centre - prev[0]) > 0.06 * w or abs(size - prev[1]) > 0.12 * prev[1])
             if moved:
                 tag_det = TAGS.detect(gray)
                 with cs.lock:
@@ -206,7 +273,7 @@ def process(cam, mode, active):
                 cs.still_frame.pop(b, None)
         cs.status = ", ".join(found) if found else "no board"
         cv2.putText(frame, "cam %d  %s" % (cam, cs.status), (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 255, 0), 4)
-    cs.jpeg, cs.jpeg_t = encode(frame), time.time()
+    publish(cs, raw, frame)
 
 
 def extr_events(active):
@@ -247,12 +314,17 @@ def loop():
         list(pool.map(lambda c: process(c, mode, active), jobs))
         if mode == "extr":
             extr_events(active)
-        for c, cs in CAMS.items():      # idle cameras: a raw thumbnail once a second
-            if c not in jobs and time.time() - cs.jpeg_t > 1.0:
+        for c, cs in CAMS.items():      # other cameras: raw view every tick if watched, else once a second
+            watched = time.time() - cs.viewed < VIEW_S
+            if c not in jobs and (watched or time.time() - cs.jpeg_t > 1.0):
                 frame, _ = STREAMS[c].latest()
                 if frame is not None:
+                    cs.check_size(frame.shape[1], frame.shape[0])
+                    raw = frame.copy() if cs.calibrated else frame
                     cv2.putText(frame, "cam %d" % c, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (200, 200, 200), 4)
-                    cs.jpeg, cs.jpeg_t = encode(frame), time.time()
+                    publish(cs, raw, frame)
+                    if cs.person is None:
+                        cs.status = "live"
                 else:
                     cs.status = "no stream"
         time.sleep(max(0.0, period - (time.time() - t0)))
@@ -282,7 +354,7 @@ def calibrate_thread(cam):
             with LOCK:
                 RES[cam] = res
                 write_summaries()
-            cs.K, cs.dist = res["K"], res["dist"]
+            cs.set_intrinsics(res["K"], res["dist"], "calibrated here", res["views"][0]["image_size"])
             cs.rms = "rms calib %.2f test %.2f px (%d+%d views) %s" % (
                 res["rms_calib"], res["rms_test"], res["n_calib"], res["n_test"], summary_row(cam, res)["status"])
     except Exception as e:  # keep the server alive
@@ -309,10 +381,135 @@ def index():
 
 @app.route("/frame/<int:cam>.jpg")
 def frame(cam):
+    """Latest view of a camera; ?view=rect for the rectified one (calibrated cameras only)."""
     cs = CAMS.get(cam)
-    if cs is None or cs.jpeg is None:
+    if cs is None:
+        return Response(status=404)
+    rect = request.args.get("view") == "rect"
+    cs.viewed = time.time()
+    if rect:
+        cs.rect_wanted = time.time()
+    jpeg = cs.jpeg_rect if rect else cs.jpeg
+    if jpeg is None:
         return Response(status=204)
-    return Response(cs.jpeg, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+    return Response(jpeg, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+# ---------------------------------------------------------------- saved frames
+def view_files(cam):
+    """Saved intr frames of a camera, newest first: (id 'person/name', json path)."""
+    paths = glob.glob(os.path.join(ARGS.out, "*", "intr", "cam_%d" % cam, "*.json"))
+    out = [("%s/%s" % (p.split(os.sep)[-4], os.path.basename(p)[:-5]), p) for p in paths]
+    return sorted(out, key=lambda x: x[0].split("/")[1], reverse=True)
+
+
+def view_errors(cam):
+    """{json path: (rms_px, used)} from the last fit of this camera (this run, or views.csv on disk)."""
+    if cam in RES:
+        return {v["path"]: (v["rms_px"], v["used"]) for v in RES[cam]["views"]}
+    out = {}
+    for r in read_csv(os.path.join(ARGS.results, "intrinsics", "views.csv")):
+        if r.get("camera") and int(r["camera"]) == cam:
+            out[r["file"]] = (float(r["rms_px"]) if r["rms_px"] else float("nan"), r["used"] == "1")
+    return out
+
+
+def view_path(cam, vid):
+    """json path of a saved frame from its id, refusing anything outside this camera's folders."""
+    person, _, name = vid.partition("/")
+    if not person or not name or os.sep in name or ".." in vid or "/" in name:
+        return None
+    p = os.path.join(ARGS.out, person, "intr", "cam_%d" % cam, name + ".json")
+    return p if os.path.exists(p) else None
+
+
+@app.route("/api/views/<int:cam>")
+def views(cam):
+    err = view_errors(cam)
+    out = []
+    for vid, p in view_files(cam):
+        j = read_json(p)
+        e = err.get(p) or err.get(os.path.relpath(p)) or (float("nan"), None)
+        out.append({"id": vid, "split": j.get("split") or "", "board": j.get("board"),
+                    "corners": len((j.get("charuco") or {}).get("ids") or []),
+                    "rms_px": None if not np.isfinite(e[0]) else round(e[0], 3), "used": e[1]})
+    return jsonify({"camera": cam, "views": out})
+
+
+@app.route("/view/<int:cam>/<path:vid>.jpg")
+def view_image(cam, vid):
+    """A saved frame with its detected corners (green) and, if calibrated, the reprojected ones (red)."""
+    p = view_path(cam, vid)
+    cs = CAMS.get(cam)
+    if p is None or cs is None:
+        return Response(status=404)
+    img = cv2.imread(p[:-5] + ".jpg")
+    j = read_json(p)
+    ch = j.get("charuco")
+    if img is None:
+        return Response(status=404)
+    full = request.args.get("full") == "1"
+    r = max(2, img.shape[1] // 400)
+    if ch:
+        corners, ids = np.array(ch["corners"], np.float32).reshape(-1, 2), np.array(ch["ids"], int).reshape(-1)
+        for c in corners:
+            cv2.circle(img, tuple(np.round(c).astype(int)), r + 2, (0, 255, 0), 2)
+        b = BOARDS.get(j.get("board"))
+        if cs.calibrated and b is not None:
+            pose = board_pose(b, corners, ids, cs.K, cs.dist)
+            if pose is not None:
+                obj = b.object_points[ids]
+                pr, _ = cv2.projectPoints(obj, pose[0], pose[1], cs.K, cs.dist)
+                pr = pr.reshape(-1, 2)
+                for c in pr:
+                    cv2.circle(img, tuple(np.round(c).astype(int)), r, (0, 0, 255), -1)
+                e = np.sqrt(np.mean(np.sum((pr - corners) ** 2, axis=1)))
+                cv2.putText(img, "%.2f px" % e, (20, img.shape[0] - 30), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 0, 255), 4)
+    cv2.putText(img, "%s  %s" % (j.get("split") or "", vid.split("/")[1]), (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
+                (0, 255, 255), 3)
+    return Response(encode(img, img.shape[1] if full else 480), mimetype="image/jpeg")
+
+
+@app.route("/coverage/<int:cam>.jpg")
+def coverage_image(cam):
+    """Every corner of every saved frame on one image: where in the image the board has been."""
+    cs = CAMS.get(cam)
+    if cs is None:
+        return Response(status=404)
+    w, h = cs.size or (1920, 1080)
+    s = 480.0 / w
+    img = np.full((int(h * s), 480, 3), 24, np.uint8)
+    for k in range(1, 4):
+        cv2.line(img, (int(k * 120), 0), (int(k * 120), img.shape[0]), (60, 60, 60), 1)
+        cv2.line(img, (0, int(k * img.shape[0] / 4)), (480, int(k * img.shape[0] / 4)), (60, 60, 60), 1)
+    for _, p in view_files(cam):
+        j = read_json(p)
+        ch = j.get("charuco")
+        if not ch:
+            continue
+        col = (0, 160, 255) if j.get("split") == "test" else (80, 220, 80)
+        for c in np.array(ch["corners"], float).reshape(-1, 2) * s:
+            cv2.circle(img, (int(c[0]), int(c[1])), 1, col, -1)
+    return Response(encode(img, 480), mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.route("/api/delete_view", methods=["POST"])
+def delete_view():
+    """Move a saved frame to cam_N/deleted/ (kept on disk, no longer used); recalibrate afterwards."""
+    j = request.get_json(force=True)
+    cam = j.get("camera")
+    p = view_path(cam, j.get("id") or "") if cam in CAMS else None
+    if p is None:
+        return jsonify({"error": "no such frame"}), 404
+    d = os.path.join(os.path.dirname(p), "deleted")
+    os.makedirs(d, exist_ok=True)
+    for ext in (".json", ".jpg"):
+        if os.path.exists(p[:-5] + ext):
+            shutil.move(p[:-5] + ext, os.path.join(d, os.path.basename(p[:-5]) + ext))
+    with CAMS[cam].lock:
+        CAMS[cam].load_existing(ARGS.out)
+    log("cam %d: frame %s deleted by %s (press Calibrate again)" % (cam, j["id"], j.get("name") or "?"))
+    return jsonify({"ok": True})
 
 
 @app.route("/api/state")
@@ -327,11 +524,14 @@ def state():
     cams = {}
     for c, cs in CAMS.items():
         cov = coverage(cs.feats)
+        K = cs.K if cs.calibrated else None
         cams[c] = {"person": cs.person, "count": cs.count, "calib": len(cs.feats), "coverage": cov,
-                   "ready": ready(cs.feats), "rms": cs.rms, "status": cs.status,
-                   "calibrated": c in RES or os.path.exists(os.path.join(ARGS.results, "intrinsics", "cam_%d.json" % c))}
+                   "ready": ready(cs.feats), "rms": cs.rms, "status": cs.status, "label": cs.label,
+                   "size": cs.size, "calibrated": cs.calibrated, "source": cs.source,
+                   "K": None if K is None else {"fx": round(K[0, 0], 1), "fy": round(K[1, 1], 1),
+                                                "cx": round(K[0, 2], 1), "cy": round(K[1, 2], 1)}}
     return jsonify({"mode": mode, "people": people, "cams": cams, "events": events, "log": "\n".join(lines), "busy": busy,
-                    "fields": FIELDS})
+                    "fields": FIELDS, "boards": sorted(BOARDS)})
 
 
 @app.route("/api/join", methods=["POST"])
@@ -339,7 +539,7 @@ def join():
     j = request.get_json(force=True)
     name, board = (j.get("name") or "").strip(), j.get("board")
     if not name or board not in BOARDS:
-        return jsonify({"error": "name and board (A/B/C) needed"}), 400
+        return jsonify({"error": "name and board (%s) needed" % "/".join(sorted(BOARDS))}), 400
     with LOCK:
         for n, p in S["people"].items():
             if n != name and p["board"] == board and time.time() - p["seen"] < ACTIVE_S:
@@ -349,12 +549,20 @@ def join():
     return jsonify({"ok": True})
 
 
-@app.route("/api/select", methods=["POST"])
-def select():
+@app.route("/api/record", methods=["POST"])
+def record():
+    """on: this person records frames on this camera (one person per camera); off: stop."""
     j = request.get_json(force=True)
-    name, cam = j.get("name"), j.get("camera")
+    name, cam, on = j.get("name"), j.get("camera"), j.get("on", True)
+    if not on:
+        with LOCK:
+            if cam in CAMS and CAMS[cam].person == name:
+                CAMS[cam].person, CAMS[cam].last_saved = None, None
+            if name in S["people"] and S["people"][name].get("camera") == cam:
+                S["people"][name]["camera"] = None
+        return jsonify({"ok": True})
     if name not in S["people"] or cam not in CAMS:
-        return jsonify({"error": "join first / unknown camera"}), 400
+        return jsonify({"error": "join first (name and board) / unknown camera"}), 400
     with LOCK:
         other = CAMS[cam].person
         if other and other != name and other in S["people"] and time.time() - S["people"][other]["seen"] < ACTIVE_S:
@@ -362,7 +570,7 @@ def select():
         old = S["people"][name].get("camera")
         if old in CAMS and CAMS[old].person == name:
             CAMS[old].person = None
-        CAMS[cam].person = name
+        CAMS[cam].person, CAMS[cam].last_saved = name, None
         S["people"][name]["camera"] = cam
         S["people"][name]["seen"] = time.time()
     return jsonify({"ok": True})
@@ -419,16 +627,29 @@ def main():
     ap.add_argument("--hz", type=float, default=4.0, help="processing rate per camera")
     ap.add_argument("--workers", type=int, default=max(2, (os.cpu_count() or 4) - 1))
     ap.add_argument("--fake", action="store_true", help="synthetic cameras, to try the dashboard")
+    ap.add_argument("--url", action="append", default=[], metavar="N=URL",
+                    help="camera N reads this stream (adds to / overrides config/cameras.yaml); repeatable")
+    ap.add_argument("--intrinsics", action="append", default=[], metavar="N=FILE",
+                    help="camera N is already calibrated: K and distortion from FILE (this repo's cam_N.json, "
+                         "the wiki's results/cam_N.json, or a ROS camera_info YAML); repeatable")
     ARGS = ap.parse_args()
     BOARDS, TAGS = load_boards(), FloorTags()
-    urls = camera_urls(ARGS.cams)
+    extra = {int(n): u for n, _, u in (a.partition("=") for a in ARGS.url)}
+    urls = {**camera_urls([c for c in (ARGS.cams or []) if c not in extra] if ARGS.cams else None), **extra}
+    if ARGS.cams:
+        urls = {c: urls[c] for c in ARGS.cams if c in urls}
     STREAMS.update({c: FakeStream(c, BOARDS) for c in urls} if ARGS.fake else open_streams(urls))
-    intr = load_intrinsics(ARGS.results)
+    given = {int(n): f for n, _, f in (a.partition("=") for a in ARGS.intrinsics)}
     for c in sorted(urls):
-        CAMS[c] = Cam(c)
+        CAMS[c] = Cam(c, "" if ARGS.fake else urls[c])
         CAMS[c].load_existing(ARGS.out)
-        if c in intr:
-            CAMS[c].K, CAMS[c].dist = intr[c]
+        mine = os.path.join(ARGS.results, "intrinsics", "cam_%d.json" % c)
+        for path, src in ((mine, "results/intrinsics"), (given.get(c), "given")):
+            if path and os.path.exists(path):
+                K, dist, size = read_intrinsics_file(path)
+                CAMS[c].set_intrinsics(K, dist, "%s (%s)" % (src, os.path.basename(path)), size)
+            elif path and src == "given":
+                sys.exit("--intrinsics %d=%s: file not found" % (c, path))
     threading.Thread(target=loop, daemon=True).start()
     print("dashboard: http://%s:%d  (saving to %s, results in %s)" % (ARGS.host, ARGS.port, ARGS.out, ARGS.results))
     app.run(host=ARGS.host, port=ARGS.port, threaded=True, debug=False)

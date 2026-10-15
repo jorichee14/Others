@@ -45,6 +45,7 @@ def save_frame(out_dir, name, frame, cam, board, corners, ids, tag_det, t, event
     cv2.imwrite(os.path.join(out_dir, name + ".jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
     write_json(os.path.join(out_dir, name + ".json"), {
         "camera": cam, "board": board, "time": t, "event": event, "split": split, "features": features,
+        "image_size": [frame.shape[1], frame.shape[0]],
         "charuco": None if corners is None else {"ids": ids, "corners": corners},
         "tags": {str(k): v for k, v in tag_det.items()},
     })

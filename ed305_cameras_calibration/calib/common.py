@@ -137,6 +137,34 @@ def _np(o):
     raise TypeError(str(type(o)))
 
 
+def read_intrinsics_file(path):
+    """(K, dist, image_size or None) from a file made elsewhere: this repo's cam_N.json (K, dist),
+    the ED305 wiki results (camera_matrix, dist_coeffs), a ROS camera_info YAML from
+    camera_calibration (camera_matrix.data, distortion_coefficients.data) or from
+    `ros2 topic echo --once <camera_info>` (k, d, width, height)."""
+    j = load_yaml(path) if path.endswith((".yaml", ".yml")) else read_json(path)
+
+    def first(*keys):
+        for k in keys:
+            if k in j and j[k] is not None:
+                v = j[k]
+                return v["data"] if isinstance(v, dict) and "data" in v else v
+        return None
+
+    K = first("K", "camera_matrix", "k")
+    dist = first("dist", "dist_coeffs", "distortion_coefficients", "d", "D")
+    if K is None:
+        raise ValueError("%s: no K / camera_matrix / k" % path)
+    size = j.get("image_size")
+    if size is None and j.get("width") and j.get("height"):
+        size = [j["width"], j["height"]]
+    if size is None and j.get("image_width") and j.get("image_height"):
+        size = [j["image_width"], j["image_height"]]
+    dist = np.array(dist if dist is not None else [], float).reshape(-1)
+    return np.array(K, float).reshape(3, 3), (dist if dist.size else np.zeros(5)), \
+        (tuple(int(v) for v in size) if size else None)
+
+
 def load_intrinsics(results_dir):
     """{cam: (K, dist)} from results/intrinsics/cam_N.json."""
     out = {}

@@ -91,7 +91,8 @@ def load_views(data_dir, cam):
         if j.get("charuco") and len(j["charuco"]["ids"]) >= 6:
             views.append({"board": j["board"], "corners": np.array(j["charuco"]["corners"], np.float32),
                           "ids": np.array(j["charuco"]["ids"], np.int32), "path": path,
-                          "person": path.split(os.sep)[-4], "split": j.get("split")})
+                          "person": path.split(os.sep)[-4], "split": j.get("split"),
+                          "image_size": tuple(j.get("image_size") or IMAGE_SIZE)})
     for k, v in enumerate(views):
         if v["split"] not in ("calib", "test"):
             v["split"] = split_for(k)

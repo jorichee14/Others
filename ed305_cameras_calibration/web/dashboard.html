@@ -43,13 +43,26 @@
   .thumbs { display:grid; grid-template-columns: repeat(4, 1fr); gap:6px; }
   .thumbs img { width:100%; border-radius:6px; background:#000; aspect-ratio:16/9; }
   .msg { color:var(--bad); min-height:1.2em; }
+  .tile .lab { font-size:11px; color:var(--dim); }
+  .badge { font-size:11px; padding:1px 5px; border-radius:4px; border:1px solid var(--acc); color:var(--acc); margin-left:4px; }
+  .badge.rec { border-color:var(--bad); color:var(--bad); }
+  .views { display:grid; gap:8px; grid-template-columns: minmax(0,1fr); }
+  .views.both { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .views figure { margin:0; } .views figcaption { font-size:12px; color:var(--dim); }
+  button.rec { background:var(--bad); border-color:var(--bad); color:#000; font-weight:600; }
+  .gallery { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:8px; margin-top:8px; }
+  .gallery figure { margin:0; position:relative; }
+  .gallery img { width:100%; border-radius:6px; background:#000; display:block; }
+  .gallery figcaption { font-size:12px; color:var(--dim); display:flex; justify-content:space-between; gap:4px; }
+  .gallery button { padding:0 6px; font-size:12px; }
+  img.cov { width:100%; max-width:480px; border-radius:6px; }
 </style>
 </head>
 <body>
 <header>
   <h1>ED305 calibration</h1>
   <input id="name" placeholder="your name" size="12">
-  <select id="board"><option>A</option><option>B</option><option>C</option></select>
+  <select id="board"></select>
   <button id="join" class="primary">Join</button>
   <span id="who" class="dim"></span>
   <span style="flex:1"></span>
@@ -59,7 +72,7 @@
 <main>
   <section>
     <div class="card">
-      <h2>Cameras <span class="dim">(tap yours)</span></h2>
+      <h2>Cameras <span class="dim">(tap to watch)</span></h2>
       <div class="grid" id="grid"></div>
       <div class="msg" id="msg"></div>
     </div>
@@ -74,12 +87,26 @@
         <span class="big" id="camTitle">no camera</span>
         <span id="camStatus" class="dim"></span>
         <span style="flex:1"></span>
+        <button id="vRaw" class="on">Live</button><button id="vRect">Rectified</button><button id="vBoth">Both</button>
+        <button id="rec">Record</button>
         <button id="calib" class="primary" disabled>Calibrate</button>
       </div>
+      <div class="row dim" id="kTxt"></div>
       <div class="bars" id="bars"></div>
       <div class="row"><span id="count"></span><span id="readyTxt"></span><span id="rms"></span></div>
-      <img class="live" id="live" alt="">
-      <p class="dim" style="margin:8px 0 0">Move the board left, right, up, down (x y), close and far (z), turn it in its plane (roll), tilt it forward/back (pitch) and left/right (yaw). Frames save by themselves when the board has moved. When every bar is green and 20+ frames are saved, press Calibrate. Want test error under 1 px.</p>
+      <div class="views" id="views">
+        <figure id="fRaw"><img class="live" id="live" alt=""><figcaption>live (green: detected corners while recording)</figcaption></figure>
+        <figure id="fRect" style="display:none"><img class="live" id="liveRect" alt=""><figcaption>rectified: straight edges should look straight</figcaption></figure>
+      </div>
+      <p class="dim" style="margin:8px 0 0">Join with your name and board, then Record on this camera. Move the board left, right, up, down (x y), close and far (z), turn it in its plane (roll), tilt it forward/back (pitch) and left/right (yaw). Frames save by themselves when the board has moved. When every bar is green and 20+ frames are saved, press Calibrate. Want test error under 1 px.</p>
+    </div>
+    <div class="card" id="framesPanel" style="margin-top:14px">
+      <div class="row"><h2 style="margin:0">Frames <span class="dim" id="framesTxt"></span></h2><span style="flex:1"></span>
+        <button id="framesReload">Reload</button></div>
+      <p class="dim" style="margin:6px 0">Where the corners of all saved frames are (green calibrate, orange test): fill the whole image, corners and edges too.
+        Below, each saved frame: green circles = detected corners, red dots = where the calibration puts them, and the error. Click to open full size; delete frames with a high error, then Calibrate again.</p>
+      <img class="cov" id="cov" alt="">
+      <div class="gallery" id="gallery"></div>
     </div>
     <div class="card" id="extrPanel" style="display:none">
       <div class="row">
@@ -107,7 +134,8 @@
 <script>
 const $ = id => document.getElementById(id);
 let me = localStorage.getItem('name') || '', myBoard = localStorage.getItem('board') || 'A', myCam = null, state = null;
-$('name').value = me; $('board').value = myBoard;
+let viewCam = Number(localStorage.getItem('viewCam')) || null, viewMode = localStorage.getItem('viewMode') || 'raw', galleryKey = '';
+$('name').value = me;
 const FIELDS = ['x','y','z','roll','pitch','yaw'];
 async function post(url, body) {
   const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
@@ -120,31 +148,51 @@ $('join').onclick = async () => {
 };
 $('mIntr').onclick = () => post('/api/mode', {mode:'intr'});
 $('mExtr').onclick = () => post('/api/mode', {mode:'extr'});
-$('calib').onclick = () => myCam && post('/api/calibrate', {camera: myCam});
+$('calib').onclick = () => viewCam && post('/api/calibrate', {camera: viewCam});
+$('rec').onclick = () => {
+  if (!viewCam) return;
+  if (!me) { $('msg').textContent = 'type your name, pick your board and press Join first'; return; }
+  post('/api/record', {name: me, camera: viewCam, on: myCam !== viewCam});
+};
+for (const [id, m] of [['vRaw','raw'], ['vRect','rect'], ['vBoth','both']]) $(id).onclick = () => { viewMode = m; localStorage.setItem('viewMode', m); render(); };
+$('framesReload').onclick = () => { galleryKey = ''; gallery(); };
 $('solve').onclick = () => post('/api/solve_extrinsics', {});
-async function selectCam(c) { if (!me) { $('msg').textContent = 'join first'; return; } const j = await post('/api/select', {name: me, camera: c}); if (j.ok) myCam = c; }
+function selectCam(c) { viewCam = c; localStorage.setItem('viewCam', c); galleryKey = ''; render(); gallery(); }
 function cls(v, good, bad) { return v === '' ? '' : (parseFloat(v) <= good ? 'ok' : parseFloat(v) >= bad ? 'bad' : 'warn'); }
 function render() {
   const s = state; if (!s) return;
   $('mIntr').className = s.mode === 'intr' ? 'on' : ''; $('mExtr').className = s.mode === 'extr' ? 'on' : '';
-  $('intrPanel').style.display = s.mode === 'intr' ? '' : 'none'; $('extrPanel').style.display = s.mode === 'extr' ? '' : 'none';
-  if (me && s.people[me] && s.people[me].camera) myCam = s.people[me].camera;
+  $('intrPanel').style.display = s.mode === 'intr' ? '' : 'none'; $('framesPanel').style.display = s.mode === 'intr' ? '' : 'none'; $('extrPanel').style.display = s.mode === 'extr' ? '' : 'none';
+  myCam = (me && s.people[me]) ? s.people[me].camera : null;
+  if (!viewCam || !s.cams[viewCam]) viewCam = myCam || Number(Object.keys(s.cams)[0]);
+  const bs = $('board'); if (bs.options.length !== s.boards.length) { bs.innerHTML = s.boards.map(b => `<option>${b}</option>`).join(''); bs.value = myBoard; }
   const g = $('grid'); g.innerHTML = '';
   for (const c of Object.keys(s.cams).map(Number).sort((a,b)=>a-b)) {
-    const v = s.cams[c]; const d = document.createElement('button'); d.className = 'tile' + (c === myCam ? ' sel' : '');
-    const dot = v.ready ? 'ready' : (v.calibrated ? 'done' : (v.calib > 0 ? 'part' : ''));
-    d.innerHTML = `<span class="dot ${dot}"></span><span class="n">${c}</span> <span class="c">${v.count} fr</span><span class="c">${v.person || '&nbsp;'}</span>`;
+    const v = s.cams[c]; const d = document.createElement('button'); d.className = 'tile' + (c === viewCam ? ' sel' : '');
+    const dot = v.calibrated ? 'done' : (v.ready ? 'ready' : (v.calib > 0 ? 'part' : ''));
+    d.innerHTML = `<span class="dot ${dot}"></span><span class="n">${c}</span>${v.person ? '<span class="badge rec">REC</span>' : ''}${v.calibrated ? '<span class="badge">K</span>' : ''}`
+      + `<span class="c">${v.count} fr${v.status === 'no stream' ? ' · offline' : ''}</span><span class="c">${v.person || v.label || '&nbsp;'}</span>`;
     d.onclick = () => selectCam(c); g.appendChild(d);
   }
   $('people').innerHTML = Object.entries(s.people).map(([n,p]) => `${p.active ? '●' : '○'} ${n}: board ${p.board}, cam ${p.camera || '-'}`).join('<br>') || 'nobody yet';
-  if (myCam && s.cams[myCam]) {
-    const v = s.cams[myCam];
-    $('camTitle').textContent = 'camera ' + myCam; $('camStatus').textContent = v.status;
+  if (viewCam && s.cams[viewCam]) {
+    const v = s.cams[viewCam];
+    $('camTitle').textContent = 'camera ' + viewCam; $('camStatus').textContent = (v.label ? v.label + ' · ' : '') + v.status + (v.size ? ` · ${v.size[0]}x${v.size[1]}` : '');
+    const mine = myCam === viewCam;
+    $('rec').textContent = mine ? 'Stop recording' : (v.person ? 'Recording: ' + v.person : 'Record');
+    $('rec').className = mine ? 'rec' : ''; $('rec').disabled = !!v.person && !mine;
+    $('kTxt').textContent = v.calibrated ? `calibrated: fx ${v.K.fx} fy ${v.K.fy} cx ${v.K.cx} cy ${v.K.cy} (${v.source})` : 'not calibrated yet: rectified view after Calibrate';
+    const mode = v.calibrated ? viewMode : 'raw';
+    for (const [id, m] of [['vRaw','raw'], ['vRect','rect'], ['vBoth','both']]) { $(id).className = mode === m ? 'on' : ''; $(id).disabled = m !== 'raw' && !v.calibrated; }
+    $('fRaw').style.display = mode === 'rect' ? 'none' : ''; $('fRect').style.display = mode === 'raw' ? 'none' : '';
+    $('views').className = 'views' + (mode === 'both' ? ' both' : '');
     $('bars').innerHTML = FIELDS.map(k => { const p = Math.round(100 * v.coverage[k]); return `<div class="bar ${p >= 100 ? 'full' : ''}"><div class="fill" style="width:${p}%"></div><span>${k} ${p}%</span></div>`; }).join('');
     $('count').textContent = `${v.count} frames saved (${v.calib} calibrate + ${v.count - v.calib} test)`;
     $('readyTxt').innerHTML = v.ready ? '<span class="ok">READY: press Calibrate</span>' : '<span class="dim">keep moving the board</span>';
     $('rms').innerHTML = v.rms ? `<span class="${/OK/.test(v.rms) ? 'ok' : 'warn'}">${v.rms}</span>` : '';
     $('calib').disabled = v.calib < 10 || v.status === 'calibrating';
+    const key = viewCam + ':' + v.count + ':' + v.rms + ':' + v.calibrated;
+    if (key !== galleryKey) { galleryKey = key; gallery(); }
   } else { $('camTitle').textContent = 'no camera'; $('bars').innerHTML = ''; $('count').textContent = ''; $('readyTxt').textContent = ''; $('rms').textContent = ''; }
   $('events').textContent = 'events: ' + (Object.entries(s.events).map(([b,n]) => `board ${b} ${n}`).join(', ') || 'none yet') + (s.busy ? ' | ' + s.busy : '');
   $('solve').disabled = !!s.busy;
@@ -164,9 +212,33 @@ async function poll() {
   try { state = await (await fetch('/api/state' + (me ? '?name=' + encodeURIComponent(me) : ''))).json(); render(); } catch (e) {}
   setTimeout(poll, 700);
 }
+async function gallery() {
+  if (!viewCam) return;
+  const cam = viewCam, c = (state && state.cams[cam]) || {}, ck = encodeURIComponent((c.rms || '') + c.calibrated);
+  $('cov').src = `/coverage/${cam}.jpg?t=${Date.now()}`;
+  try {
+    const r = await (await fetch(`/api/views/${cam}`)).json(); if (cam !== viewCam) return;
+    $('framesTxt').textContent = `camera ${cam}: ${r.views.length} saved`;
+    $('gallery').innerHTML = r.views.slice(0, 120).map(v => {
+      const e = v.rms_px == null ? '' : `<span class="${v.rms_px <= 0.6 ? 'ok' : v.rms_px >= 1 ? 'bad' : 'warn'}">${v.rms_px} px</span>`;
+      const u = `/view/${cam}/${v.id}.jpg`;
+      return `<figure><a href="${u}?full=1" target="_blank"><img loading="lazy" src="${u}?k=${ck}" alt=""></a>`
+        + `<figcaption><span>${v.split}${v.used === false && v.split === 'calib' ? ' (dropped)' : ''} · ${v.corners} pts</span>${e}`
+        + `<button data-id="${v.id}" title="delete this frame">✕</button></figcaption></figure>`;
+    }).join('') || '<span class="dim">no frames saved yet</span>';
+    for (const b of $('gallery').querySelectorAll('button')) b.onclick = async () => {
+      if (!confirm('Delete this frame? (moved to deleted/, not used any more)')) return;
+      await post('/api/delete_view', {camera: cam, id: b.dataset.id, name: me}); galleryKey = ''; gallery();
+    };
+  } catch (e) {}
+}
 function frames() {
   const t = Date.now();
-  if (state && state.mode === 'intr' && myCam) $('live').src = `/frame/${myCam}.jpg?t=${t}`;
+  if (state && state.mode === 'intr' && viewCam) {
+    const v = state.cams[viewCam] || {}; const mode = v.calibrated ? viewMode : 'raw';
+    if (mode !== 'rect') $('live').src = `/frame/${viewCam}.jpg?t=${t}`;
+    if (mode !== 'raw') $('liveRect').src = `/frame/${viewCam}.jpg?view=rect&t=${t}`;
+  }
   if (state && state.mode === 'extr') for (const im of $('thumbs').querySelectorAll('img')) im.src = `/frame/${im.dataset.cam}.jpg?t=${t}`;
   setTimeout(frames, state && state.mode === 'extr' ? 1200 : 400);
 }
