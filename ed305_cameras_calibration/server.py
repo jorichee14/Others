@@ -44,6 +44,7 @@ from calib.common import (FloorTags, cam_name, camera_urls, latest_session, load
                           read_csv, read_intrinsics_file, read_json, write_csv)
 from calib.intr import (DEFAULT_MODEL, FIELDS, MODELS, board_pose, coverage, nominal_K, project_model, ready,  # noqa: E402
                         split_for, view_features)
+from calib.network import BoardPose, Pair, Still, finite, pose_dict  # noqa: E402
 from calib.streams import open_streams  # noqa: E402
 from calibrate_intrinsics import solve_camera  # noqa: E402
 from capture import save_frame  # noqa: E402
@@ -60,6 +61,7 @@ app.json.sort_keys = False
 S = {"mode": "intr", "people": {}, "armed": {}, "events": {}, "log": [], "busy": ""}
 LOCK = threading.Lock()
 CAMS, STREAMS, BOARDS, TAGS, RES, ARGS = {}, {}, {}, None, {}, None
+NET, REFPOSE = {}, None          # extrinsics against a reference camera (--ref): per camera state, the ZED pose
 
 
 def log(msg):
@@ -342,6 +344,202 @@ def save_event(person, b, ev, static):
                    corners, ids, TAGS.detect(gray), t, event=ev)
 
 
+# ---------------------------------------------------------------- extrinsics against a reference camera
+# (--ref N: camera N is the ZED; every other calibrated camera is placed relative to it, or in the ZED map
+#  when --ref-pose gives the ZED's pose. Same method as radar_camera_calibration/network_charuco.py.)
+class RefPose(threading.Thread):
+    """Polls the robot's zed_pose_server.py (GET /pose) and tells whether the robot is still."""
+
+    def __init__(self, url):
+        super().__init__(daemon=True)
+        self.url, self.T, self.t, self.error, self.world = url, None, 0.0, "not polled yet", ""
+        self.still = Still(0.6, 0.005, 0.3)
+        self.start()
+
+    def run(self):
+        import json
+        import urllib.request
+        while True:
+            try:
+                with urllib.request.urlopen(self.url, timeout=1.0) as r:
+                    j = json.loads(r.read().decode())
+                if j.get("ok"):
+                    self.T, self.t, self.error = np.array(j["T"], float), time.time(), ""
+                    self.world = j.get("world_frame", "map")
+                    self.still.add(self.t, self.T)
+                else:
+                    self.T, self.error = None, j.get("error", "no pose")
+                    self.still.add(time.time(), None)
+            except Exception as e:  # server down, robot off the network
+                self.T, self.error = None, str(e)
+                self.still.add(time.time(), None)
+            time.sleep(0.1)
+
+    def now(self):
+        """T_world_ref if the pose is fresh and the robot has been still, else None."""
+        if self.T is None or time.time() - self.t > 1.0 or not self.still.still:
+            return None
+        return self.T.copy()
+
+    def status(self):
+        if self.T is None:
+            return {"ok": False, "text": "no pose: " + self.error}
+        return {"ok": True, "still": self.still.still, "text": "robot still" if self.still.still else "robot moving",
+                "world": self.world}
+
+
+class NetCam:
+    """One camera in reference-camera extrinsics: board pose, stillness, pooled pose, round."""
+
+    def __init__(self, cam, board):
+        self.cam, self.board = cam, board
+        self.pose = BoardPose(board, 8)
+        self.still = Still(0.6, 0.003, 0.3)
+        self.pair = self.new_pair()
+        self.T, self.reproj, self.n, self.t, self.sees = None, None, 0, 0.0, "no stream"
+        self.last_sample, self.session, self.saved = 0.0, 1, None
+
+    @staticmethod
+    def new_pair():
+        return Pair("cam", conv_window=15, conv_hold=10, conv_t_std=0.003, conv_rot_std=0.2, conv_pool=30, min_holds=3)
+
+
+def net_dir():
+    return os.path.join(ARGS.results, "extrinsics_ref")
+
+
+def net_parent():
+    return (REFPOSE.world or "map") if REFPOSE is not None else "cam_%d" % ARGS.ref
+
+
+def net_record(ns):
+    """What is saved for a camera (same keys as network_charuco.py's cam_N.json)."""
+    X = ns.pair.locked if ns.pair.locked is not None else ns.pair.X
+    if X is None:
+        return ns.saved
+    st = ns.pair.status()
+    return {"parent_frame": net_parent(), "child_frame": "cam_%d" % ns.cam, "reference_camera": ARGS.ref,
+            "camera": ns.cam, "session": ns.session, **pose_dict(X),
+            "stage": "locked" if ns.pair.locked is not None else "live", "reproj_a_px": NET[ARGS.ref].reproj,
+            "reproj_b_px": st["reproj_b_px"], "samples": st["samples"], "board_placements": st["holds"],
+            "spread_mm": st["spread_mm"], "spread_deg": st["spread_deg"], "t_std_mm": st["t_std_mm"],
+            "rot_std_deg": st["rot_std_deg"], "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+
+
+def net_save(ns):
+    import json
+    rec = net_record(ns)
+    if rec is None:
+        return
+    os.makedirs(net_dir(), exist_ok=True)
+    with open(os.path.join(net_dir(), cam_name(ns.cam, ns.session) + ".json"), "w") as f:
+        json.dump(rec, f, indent=2)
+    allc = {str(c): net_record(n) for c, n in NET.items() if c != ARGS.ref and net_record(n) is not None}
+    allc[str(ARGS.ref)] = {"camera": ARGS.ref, "reference": True, "parent_frame": net_parent()}
+    with open(os.path.join(net_dir(), "network.json"), "w") as f:
+        json.dump(allc, f, indent=2)
+
+
+def net_load():
+    """Cameras locked in an earlier run (newest round of each) count as done after a restart."""
+    import json
+    import re
+    d = net_dir()
+    if not os.path.isdir(d):
+        return
+    for fn in os.listdir(d):
+        m = re.match(r"^cam_(\d+)(?:_(\d+))?\.json$", fn)
+        if not m or int(m.group(1)) not in NET or int(m.group(1)) == ARGS.ref:
+            continue
+        ns, k = NET[int(m.group(1))], int(m.group(2) or 1)
+        if k < ns.session:
+            continue
+        ns.session = k
+        j = json.load(open(os.path.join(d, fn)))
+        ns.saved = j if j.get("stage") == "locked" else None
+        ns.pair = NetCam.new_pair()
+        if ns.saved:
+            ns.pair.locked = np.array(j["T"], float)
+
+
+def net_detect(cam):
+    """Board pose in the newest frame of one camera; the live view shows the corners."""
+    cs, ns = CAMS[cam], NET[cam]
+    frame, _ = STREAMS[cam].latest()
+    if frame is None:
+        cs.status, ns.sees, ns.T = "no stream", "no stream", None
+        ns.still.add(time.time(), None)
+        return
+    cs.check_size(frame.shape[1], frame.shape[0])
+    K, dist, model = cs.lens()
+    T = None
+    if not cs.calibrated or model == "fisheye":
+        ns.sees, ns.n = "needs intrinsics" if not cs.calibrated else "fisheye not supported", 0
+    else:
+        T, r, n = ns.pose(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), K, np.asarray(dist, float))
+        if T is not None and r > 1.5:
+            T = None
+        ns.reproj, ns.n = r, n
+    ns.T, ns.t = T, time.time()
+    still = ns.still.add(ns.t, T)
+    if T is not None:
+        ns.sees = "board still" if still else "board moving"
+    elif cs.calibrated and model != "fisheye":
+        ns.sees = "no board"
+    raw = frame.copy() if cs.calibrated else frame
+    if ns.pose.corners is not None:
+        dots(frame, ns.pose.corners, None, (0, 255, 0) if still else (0, 200, 255))
+    label = "REFERENCE" if cam == ARGS.ref else ("PLACED" if ns.pair.locked is not None else "%d samples" % len(ns.pair.pool))
+    tag(frame, "cam %d  %s  %s" % (cam, label, ns.sees), (0, 255, 0) if still else (0, 200, 255))
+    cs.status = ns.sees
+    publish(cs, raw, frame)
+
+
+def net_pair():
+    """Every camera that sees the board still together with the reference camera gets a sample."""
+    ref, now = NET[ARGS.ref], time.time()
+    if ref.T is None or not ref.still.still or now - ref.t > 1.0:
+        return
+    W = None
+    if REFPOSE is not None:
+        W = REFPOSE.now()
+        if W is None:
+            return
+    for cam, ns in NET.items():
+        if cam == ARGS.ref or ns.pair.locked is not None or ns.T is None or not ns.still.still:
+            continue
+        if now - ns.t > 1.0 or now - ns.last_sample < 0.2:
+            continue
+        X = ref.T @ np.linalg.inv(ns.T)                # T_ref_cam
+        if W is not None:
+            X = W @ X                                  # T_world_cam
+        ns.last_sample = now
+        if ns.pair.add(X, (ref.still.hold, ns.still.hold), ns.reproj):
+            net_save(ns)
+            st = ns.pair.status()
+            log("cam %d PLACED in %s: %d samples, %d placements, spread %.1f mm / %.2f deg -> %s" % (
+                cam, net_parent(), st["samples"], st["holds"], st["spread_mm"], st["spread_deg"],
+                cam_name(cam, ns.session) + ".json"))
+
+
+def net_state():
+    if ARGS.ref is None:
+        return None
+    cams = {}
+    for c, ns in NET.items():
+        st = ns.pair.status()
+        rec = ns.saved if (ns.pair.locked is not None and ns.saved and not ns.pair.pool) else None
+        X = ns.pair.locked if ns.pair.locked is not None else ns.pair.X
+        cams[c] = {"reference": c == ARGS.ref, "sees": ns.sees, "locked": ns.pair.locked is not None,
+                   "samples": rec["samples"] if rec else st["samples"], "holds": rec["board_placements"] if rec else st["holds"],
+                   "spread_mm": rec["spread_mm"] if rec else st["spread_mm"],
+                   "spread_deg": rec["spread_deg"] if rec else st["spread_deg"],
+                   "t_std_mm": st["t_std_mm"], "rot_std_deg": st["rot_std_deg"], "session": ns.session,
+                   "position": None if X is None else [round(float(v), 3) for v in X[:3, 3]]}
+    return finite({"ref": ARGS.ref, "frame": net_parent(), "pose": REFPOSE.status() if REFPOSE is not None else None,
+                   "cams": {str(c): v for c, v in cams.items()}})
+
+
 def loop():
     pool = ThreadPoolExecutor(max_workers=ARGS.workers)
     period = 1.0 / ARGS.hz
@@ -354,8 +552,13 @@ def loop():
             jobs = [c for c in CAMS if CAMS[c].person in active]
         else:
             jobs = list(CAMS) if active else []
-        list(pool.map(lambda c: process(c, mode, active), jobs))
-        if mode == "extr":
+        if mode == "extr" and ARGS.ref is not None:      # extrinsics against the reference camera (the ZED)
+            jobs = list(CAMS)
+            list(pool.map(net_detect, jobs))
+            net_pair()
+        else:
+            list(pool.map(lambda c: process(c, mode, active), jobs))
+        if mode == "extr" and ARGS.ref is None:
             extr_events(active)
         for c, cs in CAMS.items():      # other cameras: raw view every tick if watched, else once a second
             watched = time.time() - cs.viewed < VIEW_S
@@ -620,7 +823,8 @@ def state():
                    "K": None if K is None else {"fx": round(K[0, 0], 1), "fy": round(K[1, 1], 1),
                                                 "cx": round(K[0, 2], 1), "cy": round(K[1, 2], 1)}}
     return jsonify({"mode": mode, "people": people, "cams": cams, "events": events, "log": "\n".join(lines), "busy": busy,
-                    "fields": FIELDS, "boards": sorted(BOARDS), "models": MODELS, "default_model": ARGS.model})
+                    "fields": FIELDS, "boards": sorted(BOARDS), "models": MODELS, "default_model": ARGS.model,
+                    "net": net_state()})
 
 
 @app.route("/api/join", methods=["POST"])
@@ -707,6 +911,21 @@ def recalibrate():
     return jsonify({"ok": True, "session": cs.session})
 
 
+@app.route("/api/net/reset", methods=["POST"])
+def net_reset():
+    """Collect a camera's extrinsic again as a new round (cam_N_2.json, ...); earlier files are kept."""
+    j = request.get_json(force=True)
+    cam = j.get("camera")
+    if ARGS.ref is None or cam not in NET or cam == ARGS.ref:
+        return jsonify({"error": "no such camera in reference extrinsics"}), 400
+    ns = NET[cam]
+    if ns.pair.locked is not None or ns.pair.pool:
+        ns.session += 1
+    ns.pair, ns.saved = NetCam.new_pair(), None
+    log("cam %d: extrinsics collected again (round %d) by %s" % (cam, ns.session, j.get("name") or "?"))
+    return jsonify({"ok": True})
+
+
 @app.route("/api/solve_extrinsics", methods=["POST"])
 def solve_extrinsics():
     with LOCK:
@@ -721,13 +940,26 @@ def solve_extrinsics():
 def results():
     d = ARGS.results
     rep = os.path.join(d, "extrinsics", "report.md")
+    ref_rows = []
+    net = os.path.join(d, "extrinsics_ref", "network.json")
+    if os.path.exists(net):
+        for c, r in sorted(read_json(net).items(), key=lambda kv: int(kv[0])):
+            if r and not r.get("reference"):
+                ref_rows.append({"camera": c, "stage": r.get("stage"), "frame": r.get("parent_frame"),
+                                 "x": round(r["translation"][0], 3), "y": round(r["translation"][1], 3),
+                                 "z": round(r["translation"][2], 3), "roll": round(r["rpy_deg"][0], 2),
+                                 "pitch": round(r["rpy_deg"][1], 2), "yaw": round(r["rpy_deg"][2], 2),
+                                 "samples": r.get("samples"), "placements": r.get("board_placements"),
+                                 "spread_mm": None if r.get("spread_mm") is None else round(r["spread_mm"], 1),
+                                 "round": r.get("session", 1)})
     return jsonify({"intrinsics": read_csv(os.path.join(d, "intrinsics", "summary.csv")),
                     "extrinsics": read_csv(os.path.join(d, "extrinsics", "cameras.csv")),
+                    "extrinsics_ref": ref_rows,
                     "report": open(rep).read() if os.path.exists(rep) else ""})
 
 
 def main():
-    global ARGS, TAGS, BOARDS
+    global ARGS, TAGS, BOARDS, REFPOSE
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8080)
@@ -740,6 +972,12 @@ def main():
     ap.add_argument("--model", default=DEFAULT_MODEL, choices=sorted(MODELS),
                     help="lens model preselected on the page (each Calibrate can pick another): "
                          + "; ".join("%s = %s" % kv for kv in MODELS.items()))
+    ap.add_argument("--ref", type=int, default=None, metavar="N",
+                    help="extrinsics mode: camera N (the ZED, e.g. streamed with ros_image_to_rtsp.py) is the reference; "
+                         "every other calibrated camera is placed relative to it")
+    ap.add_argument("--ref-pose", default="", metavar="URL",
+                    help="with --ref: http://<robot>:8765/pose from robot/zed_pose_server.py; cameras are then placed "
+                         "in the ZED map and the robot may move between board placements")
     ap.add_argument("--url", action="append", default=[], metavar="N=URL",
                     help="camera N reads this stream (adds to / overrides config/cameras.yaml); repeatable")
     ap.add_argument("--intrinsics", action="append", default=[], metavar="N=FILE",
@@ -765,6 +1003,13 @@ def main():
                 CAMS[c].set_intrinsics(K, dist, "%s (%s)" % (src, os.path.basename(path)), size, model)
             elif path and src == "given":
                 sys.exit("--intrinsics %d=%s: file not found" % (c, path))
+    if ARGS.ref is not None:
+        if ARGS.ref not in CAMS:
+            sys.exit("--ref %d: no such camera (add it with --url %d=rtsp://...)" % (ARGS.ref, ARGS.ref))
+        board = BOARDS[sorted(BOARDS)[0]].board
+        NET.update({c: NetCam(c, board) for c in CAMS})
+        REFPOSE = RefPose(ARGS.ref_pose) if ARGS.ref_pose else None
+        net_load()
     threading.Thread(target=loop, daemon=True).start()
     print("dashboard: http://%s:%d  (saving to %s, results in %s)" % (ARGS.host, ARGS.port, ARGS.out, ARGS.results))
     app.run(host=ARGS.host, port=ARGS.port, threaded=True, debug=False)

@@ -18,6 +18,8 @@ and in the config files. Defaults are what you get with plain `python server.py`
 | `--hz 4` | `4` | board detections per second per camera; higher feels faster, uses more CPU |
 | `--workers N` | CPU cores - 1 | how many cameras are processed at the same time |
 | `--fake` | off | simulated cameras, to try the page without any camera |
+| `--ref N` | none | extrinsics mode places every camera relative to camera N, the reference (the ZED streamed with `ros_image_to_rtsp.py`); see README "Extrinsics with the ZED" |
+| `--ref-pose URL` | none | with `--ref`: the ZED's pose from `robot/zed_pose_server.py` (`http://<robot>:8765/pose`); cameras are then placed in the ZED map and the robot may move between board placements |
 
 Examples:
 
@@ -110,3 +112,5 @@ says which one failed.
 | `data/<person>/intr/cam_N/` | saved frames of camera N: `.jpg` picture + `.json` detected corners |
 | `data/<person>/intr/cam_N/deleted/` | frames removed with the X button (kept, not used) |
 | `results/extrinsics/` | room frame of all cameras (extrinsics round) |
+| `results/extrinsics_ref/cam_N.json` | with `--ref`: camera N's pose relative to the reference camera, or in the ZED map with `--ref-pose` (`T`, translation, quaternion, roll-pitch-yaw, samples, placements, spread); `cam_N_2.json` ... after "Collect again" |
+| `results/extrinsics_ref/network.json` | with `--ref`: every placed camera in one file |

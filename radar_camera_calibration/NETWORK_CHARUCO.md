@@ -1,5 +1,10 @@
 # ZED + camera network extrinsics (`network_charuco.py`)
 
+The same method is built into the calibration dashboard (`ed305_cameras_calibration`, "Extrinsics with
+the ZED" in its README): there the ZED is streamed over RTSP and its pose served by
+`robot/zed_pose_server.py`, and everything is done from a browser. This ROS node is the alternative
+that runs entirely on the robot.
+
 `general_charuco.py` gives the extrinsic of ONE camera pair (the ZED and one other ROS camera).
 `network_charuco.py` does the same for the ZED and MANY cameras at once, including cameras that are
 not on ROS (the 16 ED305 cameras, streamed over RTSP), and places every camera in the ZED map.

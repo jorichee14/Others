@@ -1,6 +1,7 @@
-"""Pure logic of network_charuco.py (no ROS): the board pose in one image, "is the board still",
-and per-camera pooling / convergence / lock of an extrinsic, the same way general_charuco.py does
-it for one pair (average of the samples, stable for a while -> LOCKED)."""
+"""Extrinsics against a reference camera (the ZED), shared by the dashboard (server.py, extrinsics
+mode) and radar_camera_calibration/network_charuco.py (ROS). No ROS here: the board pose in one
+image, "is the board still", and per-camera pooling / convergence / lock of an extrinsic, the way
+general_charuco.py does it for one pair (average of the samples, stable for a while -> LOCKED)."""
 import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation as Rot
@@ -25,6 +26,17 @@ def rt_error(X, Y):
     return float(np.linalg.norm(X[:3, 3] - Y[:3, 3])), float(np.degrees(np.linalg.norm(Rot.from_matrix(d[:3, :3]).as_rotvec())))
 
 
+def finite(obj):
+    """obj with every NaN / infinity replaced by None (strict JSON: browsers reject NaN and Infinity)."""
+    if isinstance(obj, dict):
+        return {k: finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [finite(v) for v in obj]
+    if isinstance(obj, (float, np.floating)):
+        return float(obj) if np.isfinite(obj) else None
+    return obj
+
+
 def pose_dict(T):
     """translation, quaternion (x y z w) and roll-pitch-yaw (deg, xyz) of a 4x4 transform, JSON-ready."""
     R = Rot.from_matrix(T[:3, :3])
@@ -42,10 +54,12 @@ class BoardPose:
         self.det = cv2.aruco.CharucoDetector(board)
         self.obj = board.getChessboardCorners().reshape(-1, 3)
         self.min_corners = min_corners
+        self.corners = None          # corners found in the last image (Nx2), for drawing
 
     def __call__(self, gray, K, D):
         cc, cid, _, _ = self.det.detectBoard(gray)
         n = 0 if cid is None else len(cid)
+        self.corners = None if cid is None else cc.reshape(-1, 2)
         if n < self.min_corners:
             return None, None, n
         objp = self.obj[cid.ravel()].astype(np.float64)
@@ -137,7 +151,7 @@ class Pair:
 
     def status(self):
         st, sr = self.spread()
-        return {"samples": len(self.pool), "holds": len(self.holds), "t_std_mm": self.t_std * 1000,
+        return finite({"samples": len(self.pool), "holds": len(self.holds), "t_std_mm": self.t_std * 1000,
                 "rot_std_deg": self.rot_std, "spread_mm": st * 1000, "spread_deg": sr,
                 "reproj_b_px": float(np.mean(self.reproj)) if self.reproj else None,
-                "stable": self.stable, "locked": self.locked is not None}
+                "stable": self.stable, "locked": self.locked is not None})

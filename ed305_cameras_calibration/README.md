@@ -65,6 +65,31 @@ PC with 8+ cores. The overview shows every camera; calibrated ones have a green 
 `_3`, ...). Round 1 (`cam_N`, `cam_N.json`) stays as it was. Everything uses the newest round
 that has a result; until the new round is calibrated the previous calibration stays in use.
 
+## Extrinsics with the ZED (reference camera)
+
+Every camera placed relative to the robot's ZED, in the ZED's map, from the dashboard's **2 · Extrinsics**
+mode. The same method as `radar_camera_calibration/network_charuco.py` (which runs on the robot under
+ROS instead); see `radar_camera_calibration/NETWORK_CHARUCO.md` for how it works.
+
+On the robot (ROS 2 sourced, ZED wrapper running with positional tracking):
+```
+python3 ros_image_to_rtsp/ros_image_to_rtsp.py --topic /zed/zed_node/left/image_rect_color --url rtsp://localhost:8554/zed/left
+python3 ed305_cameras_calibration/robot/zed_pose_server.py        # http://<robot>:8765/pose
+ros2 topic echo --once /zed/zed_node/left/camera_info > zed_left_info.yaml
+```
+(MediaMTX running on the robot for the RTSP stream, as for `mobile_2/color`; copy `zed_left_info.yaml`
+to the dashboard PC.) On the dashboard PC, with every other camera's intrinsics already done:
+```
+python server.py --url 20=rtsp://<robot-ip>:8554/zed/left --intrinsics 20=zed_left_info.yaml \
+                 --ref 20 --ref-pose http://<robot-ip>:8765/pose
+```
+Press **2 · Extrinsics**. Hold the board **still** where the ZED and a camera both see it (green dots
+in both), move it, hold again; the robot may drive between placements but must stand still while you
+hold. A camera is **placed** (green outline) after 3+ placements; its pose is in
+`results/extrinsics_ref/cam_N.json` and all of them in `network.json`. "Collect again" on a camera
+page starts a new round (`cam_N_2.json`), keeping the old file. Without `--ref-pose` the poses are
+relative to the ZED itself and the robot must not move at all.
+
 ## Lens models
 
 Picked on the camera page (or `calibrate_intrinsics.py --model ...`) before Calibrate:

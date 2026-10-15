@@ -55,6 +55,8 @@
   .cam:hover { transform:translateY(-2px); border-color:var(--line2); }
   .cam.calibrated { border-color:var(--ok); }
   .cam.recording { border-color:var(--rec); }
+  .cam.reference { border-color:var(--acc); }
+  #intrSide, #extrSide { display:grid; gap:12px; align-content:start; }
   .cam .thumb { position:relative; aspect-ratio:16/9; background:#000; }
   .cam .thumb img { width:100%; height:100%; object-fit:cover; display:block; visibility:hidden; }
   .cam .thumb img.shown { visibility:visible; }
@@ -79,7 +81,7 @@
   }
   .legend { display:flex; flex-wrap:wrap; gap:14px; color:var(--dim); font-size:12px; margin-top:12px; }
   .legend span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:3px; border:2px solid var(--line); margin-right:6px; vertical-align:-1px; }
-  .legend .l-ok::before { border-color:var(--ok); } .legend .l-rec::before { border-color:var(--rec); }
+  .legend .l-ok::before { border-color:var(--ok); } .legend .l-ref::before { border-color:var(--acc); } .legend .l-rec::before { border-color:var(--rec); }
   .extrbar { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:16px; }
   details.more { margin-top:16px; }
   details.more > summary { cursor:pointer; color:var(--dim); font-weight:600; padding:6px 0; }
@@ -166,13 +168,14 @@
     <div class="panel extrbar" id="extrBar" hidden>
       <div><b>Extrinsics</b> <span class="sub" id="events"></span></div>
       <span class="spacer"></span>
-      <span class="sub">Hold a board still where 2+ cameras see it; an event is saved. Aim for 150+.</span>
+      <span class="sub" id="extrHint">Hold a board still where 2+ cameras see it; an event is saved. Aim for 150+.</span>
       <button id="solve" class="primary">Solve extrinsics</button>
     </div>
     <div class="cams" id="cams"></div>
-    <div class="legend"><span class="l-ok">calibrated</span><span class="l-rec">recording now</span><span>not calibrated yet</span></div>
+    <div class="legend" id="legend"><span class="l-ok">calibrated</span><span class="l-rec">recording now</span><span>not calibrated yet</span></div>
     <details class="more" open><summary>Results of all cameras, and log</summary>
       <div class="panel"><h2>Intrinsics · results/intrinsics/summary.csv</h2><div style="overflow:auto"><table id="tIntr"></table></div></div>
+      <div class="panel" id="pRef" hidden><h2>Extrinsics against the reference camera · results/extrinsics_ref/network.json</h2><div style="overflow:auto"><table id="tRef"></table></div></div>
       <div class="panel"><h2>Extrinsics, room frame · results/extrinsics/cameras.csv</h2><div style="overflow:auto"><table id="tExtr"></table></div></div>
       <div class="panel"><h2>Log</h2><pre id="log"></pre></div>
     </details>
@@ -198,6 +201,17 @@
         </div>
       </div>
       <div class="side">
+        <div id="extrSide" hidden>
+          <div class="stat"><div class="k">Extrinsics</div><div class="v" id="xState">-</div><div class="d" id="xStateD"></div></div>
+          <div class="stat"><div class="k">Samples</div><div class="v" id="xSamples">0</div><div class="d" id="xSamplesD"></div></div>
+          <div class="stat"><div class="k">Pose</div><div class="v mono" id="xPos" style="font-size:14px">-</div><div class="d" id="xPosD"></div></div>
+          <button id="xReset">↻ Collect again (new round)</button>
+          <details class="help" open><summary>How to place a camera</summary>
+            <p>Hold the board <b>still</b> where the reference camera (the ZED) and this camera both see it: green dots in both. Hold about a second, move it to another spot or angle, hold again. After 3 or more placements the camera is placed.</p>
+            <p>With the ZED pose server, the robot may move between placements, but keep it still while you hold the board.</p>
+          </details>
+        </div>
+        <div id="intrSide">
         <div class="stat"><div class="k">Lens model for Calibrate</div>
           <select id="model" style="width:100%;margin-top:6px"></select><div class="d" id="modelD"></div></div>
         <div class="actions"><button id="rec">Record</button><button id="calib" class="primary" disabled>Calibrate</button>
@@ -210,13 +224,14 @@
           <p>Join with your name, then press Record. Move the board left, right, up and down (x, y), close and far (z), turn it in its plane (roll) and tilt it forward/back (pitch) and left/right (yaw). Bring it into the corners of the image too. A frame saves by itself each time the board has moved; move slowly to avoid blur.</p>
           <p>When every bar is green and 20+ frames are saved, press Calibrate. Good: test error under 1 px (under 0.5 is very good).</p>
         </details>
+        </div>
       </div>
     </div>
     <div class="panel gap" id="resPanel">
       <div class="framesHead"><h2 style="margin:0">Calibration result <span class="dim" id="resName"></span></h2><a class="btn" id="resDl" href="#" download>Download JSON</a></div>
       <div class="res" id="res" style="margin-top:10px"></div>
     </div>
-    <div class="panel gap">
+    <div class="panel gap" id="framesPanel">
       <div class="framesHead"><h2 style="margin:0">Saved frames <span class="dim" id="framesTxt"></span></h2><button id="framesReload">Reload</button></div>
       <p class="sub" style="margin:6px 0 10px">Map: corners of every saved frame (green calibrate, orange test); fill the whole image. Thumbnails: green circles found, red dots where the calibration puts them, error in px. Click to enlarge; ✕ removes a bad frame (then Calibrate again).</p>
       <img class="cov" id="cov" alt="">
@@ -274,6 +289,11 @@ $('recal').onclick = () => {
   post('/api/recalibrate', {camera: c, name: me}).then(() => { galleryKey = ''; gallery(); });
 };
 $('framesReload').onclick = () => { galleryKey = ''; gallery(); };
+$('xReset').onclick = () => {
+  const c = camOfHash(); if (!c) return;
+  if (!confirm(`Collect camera ${c}'s extrinsics again? Its current result stays on disk; the new one is saved as the next round.`)) return;
+  post('/api/net/reset', {camera: c, name: me});
+};
 
 function chip(v) {
   if (v.person) return '<span class="chip rec">● REC ' + esc(v.person) + '</span>';
@@ -310,8 +330,19 @@ function renderOverview(s, cams) {
   const ppl = Object.entries(s.people).filter(([, p]) => p.active);
   $('kPeople').innerHTML = ppl.length ? ppl.map(([nm, p]) => esc(nm) + (p.camera ? ` <span class="dim">· cam ${p.camera}</span>` : '')).join('<br>') : 'nobody yet';
   $('extrBar').hidden = s.mode !== 'extr';
-  $('events').textContent = '· events: ' + (Object.values(s.events).reduce((a, b) => a + b, 0)) + (s.busy ? ' · ' + s.busy : '');
-  $('solve').disabled = !!s.busy;
+  const net = s.mode === 'extr' && s.net ? s.net : null;
+  if (net) {
+    const others = Object.values(net.cams).filter(x => !x.reference), placed = others.filter(x => x.locked).length;
+    const pose = net.pose ? (net.pose.ok ? ` · ZED pose: ${net.pose.text}` : ` · <span class="warn">${esc(net.pose.text)}</span>`) : ' · no pose server: poses relative to the reference camera, keep the robot still';
+    $('events').innerHTML = `· reference camera ${net.ref} · <b>${placed} / ${others.length}</b> placed in ${esc(net.frame)}${pose}`;
+    $('extrHint').textContent = 'Hold the board still where the reference camera and another camera both see it; move it; hold again. 3+ placements per camera.';
+  } else {
+    $('events').textContent = '· events: ' + (Object.values(s.events).reduce((a, b) => a + b, 0)) + (s.busy ? ' · ' + s.busy : '');
+    $('extrHint').textContent = 'Hold a board still where 2+ cameras see it; an event is saved. Aim for 150+.';
+  }
+  $('solve').hidden = !!net; $('solve').disabled = !!s.busy;
+  $('legend').innerHTML = net ? '<span class="l-ok">placed</span><span class="l-ref">reference camera</span><span>not placed yet</span>'
+    : '<span class="l-ok">calibrated</span><span class="l-rec">recording now</span><span>not calibrated yet</span>';
   $('log').textContent = s.log;
   const grid = $('cams');
   if (grid.children.length !== n) {
@@ -323,6 +354,24 @@ function renderOverview(s, cams) {
   }
   for (const el of grid.querySelectorAll('.cam')) {
     const c = Number(el.dataset.cam), v = s.cams[c];
+    el.querySelector('.off').hidden = v.status !== 'no stream';
+    el.querySelector('.label').textContent = v.label || (v.size ? v.size.join('×') : '');
+    const x = net && net.cams[c];
+    if (x) {
+      el.classList.toggle('calibrated', x.locked); el.classList.remove('recording'); el.classList.toggle('reference', x.reference);
+      const ch = x.reference ? '<span class="chip dark" style="color:var(--acc)">★ reference</span>'
+        : x.locked ? '<span class="chip dark ok">✓ placed</span>'
+        : /intrinsics|fisheye/.test(x.sees) ? `<span class="chip dark warn">${esc(x.sees)}</span>`
+        : x.samples ? `<span class="chip dark warn">${x.holds}/3 placements</span>` : '<span class="chip dark idle">not placed</span>';
+      el.querySelector('.chipbox').innerHTML = ch;
+      const bar = el.querySelector('.meter i');
+      bar.style.width = (x.locked || x.reference ? 100 : Math.round(100 * Math.min(1, x.samples / 30, x.holds / 3))) + '%';
+      bar.style.background = x.reference ? 'var(--acc)' : (x.locked ? 'var(--ok)' : 'var(--warn)');
+      el.querySelector('.f1').textContent = x.reference ? x.sees : (x.locked ? 'placed' : x.sees);
+      el.querySelector('.f2').textContent = x.samples && !x.reference ? `spread ${fmt(x.spread_mm, 1)} mm` : '';
+      continue;
+    }
+    el.classList.remove('reference');
     el.classList.toggle('calibrated', v.calibrated && !v.person); el.classList.toggle('recording', !!v.person);
     el.querySelector('.chipbox').innerHTML = chip(v).replace('class="chip', 'class="chip dark');
     el.querySelector('.label').textContent = v.label || (v.size ? v.size.join('×') : '');
@@ -338,6 +387,18 @@ function renderOverview(s, cams) {
 
 function renderCamera(s, c) {
   const v = s.cams[c];
+  const x = s.mode === 'extr' && s.net ? s.net.cams[c] : null;
+  $('extrSide').hidden = !x; $('intrSide').hidden = !!x; $('framesPanel').hidden = !!x;
+  if (x) {
+    $('xState').innerHTML = x.reference ? '<span style="color:var(--acc)">Reference camera</span>'
+      : x.locked ? '<span class="ok">Placed</span>' : (/intrinsics|fisheye/.test(x.sees) ? `<span class="warn">${esc(x.sees)}</span>` : 'Collecting');
+    $('xStateD').textContent = x.reference ? 'every other camera is placed relative to this one' : `${x.sees} · in ${s.net.frame}` + (x.session > 1 ? ` · round ${x.session}` : '');
+    $('xSamples').textContent = x.reference ? '-' : x.samples;
+    $('xSamplesD').textContent = x.reference ? '' : `${x.holds} of 3+ board placements · spread ${fmt(x.spread_mm, 1)} mm / ${fmt(x.spread_deg, 2)}°`;
+    $('xPos').textContent = x.position ? x.position.map(p => fmt(p, 3)).join('  ') + ' m' : '-';
+    $('xPosD').textContent = x.position ? `x y z of this camera in ${s.net.frame}` : '';
+    $('xReset').hidden = x.reference; $('xReset').disabled = !(x.locked || x.samples);
+  }
   $('camTitle').textContent = 'Camera ' + c; $('camChip').innerHTML = chip(v);
   $('camSub').textContent = [v.label, v.size ? v.size.join('×') : '', v.status, v.session > 1 ? 'round ' + v.session : ''].filter(Boolean).join(' · ');
   const mine = s.people[me] && s.people[me].camera === c;
@@ -432,7 +493,7 @@ function table(el, rows) {
   const cls = (v, good, bad) => v === '' ? '' : (parseFloat(v) <= good ? 'ok' : parseFloat(v) >= bad ? 'bad' : 'warn');
   el.innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>' + rows.map(r => '<tr>' + cols.map(c => {
     let k = ''; if (c === 'rms_test_px' || c === 'rms_calib_px') k = cls(r[c], 0.6, 1.0); if (c === 'floor_err_test_cm') k = cls(r[c], 3, 5); if (c === 'status') k = /OK/.test(r[c]) ? 'ok' : 'warn';
-    return `<td class="${k}">${esc(r[c])}</td>`; }).join('') + '</tr>').join('');
+    return `<td class="${k}">${esc(r[c] == null ? '' : r[c])}</td>`; }).join('') + '</tr>').join('');
 }
 
 async function poll() {
@@ -459,7 +520,8 @@ function frames() {
   }
 }
 async function results() {
-  try { const r = await (await fetch('/api/results')).json(); table($('tIntr'), r.intrinsics); table($('tExtr'), r.extrinsics); } catch (e) {}
+  try { const r = await (await fetch('/api/results')).json(); table($('tIntr'), r.intrinsics); table($('tExtr'), r.extrinsics);
+    $('pRef').hidden = !(r.extrinsics_ref && r.extrinsics_ref.length); if (r.extrinsics_ref) table($('tRef'), r.extrinsics_ref); } catch (e) {}
   setTimeout(results, 5000);
 }
 if (me) post('/api/join', {name: me, board: myBoard}).then(j => { if (j.ok) { joined = true; render(); } });

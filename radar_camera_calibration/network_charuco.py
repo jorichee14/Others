@@ -47,10 +47,9 @@ from tf2_ros import Buffer, TransformListener
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CALIB_DIR = os.path.join(os.path.dirname(HERE), "ed305_cameras_calibration")
-sys.path.insert(0, HERE)
 sys.path.insert(0, CALIB_DIR)
-from network_charuco_core import BoardPose, Pair, Still, pose_dict  # noqa: E402
 from calib.common import camera_urls, load_boards, load_intrinsics  # noqa: E402
+from calib.network import BoardPose, Pair, Still, pose_dict  # noqa: E402
 from calib.streams import Stream  # noqa: E402
 
 
@@ -61,6 +60,10 @@ def transform_to_T(tr):
     T[:3, :3] = Rot.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
     T[:3, 3] = [t.x, t.y, t.z]
     return T
+
+
+def nan(v):
+    return float("nan") if v is None else v
 
 
 class Cam:
@@ -275,7 +278,7 @@ class NetworkCharuco(Node):
             seen = ("board %d corners %.2f px %s" % (c.ncorners, c.reproj, "STILL" if c.still.still else "moving")
                     if c.T is not None else ("no board" if c.stream.ok else "no stream"))
             lines.append("cam %-3d %-8s samples %3d placements %d  t-std %5.1f mm rot-std %5.2f deg | %s" % (
-                c.n, "LOCKED" if st["locked"] else "", st["samples"], st["holds"], st["t_std_mm"], st["rot_std_deg"], seen))
+                c.n, "LOCKED" if st["locked"] else "", st["samples"], st["holds"], nan(st["t_std_mm"]), nan(st["rot_std_deg"]), seen))
             if c.pair.X is not None and c.pair.locked is None:
                 self._save(c)
         net = {str(c.n): self._record(c) for c in self.cams.values() if c.pair.X is not None}
