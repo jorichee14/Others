@@ -127,11 +127,17 @@ targets:
       ssh: mic-713@192.168.51.94        # alias in ~/.ssh/config
       container: isaac_ros_dev-aarch64-container
       container_user: admin
-      create: ./src/isaac_ros_common/scripts/run_dev.sh -b
+      # The external drive is mounted into the container at the same path, so
+      # record.yaml's out_dir works inside it. Plug the drive in BEFORE this
+      # runs, or Docker creates an empty folder on the internal disk instead.
+      create: ./src/isaac_ros_common/scripts/run_dev.sh -b -a "-v /media/mic-713/JORICH:/media/mic-713/JORICH"
       cd: /workspaces/isaac_ros-dev
       host_cd: ~/workspaces/isaac_ros-dev
       setup:
         - source install/setup.bash
+        # GXF extension libs sit under share/<pkg>/gxf/lib, which the loader
+        # does not search (also set in Dockerfile.user once the image is rebuilt).
+        - export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/workspaces/isaac_ros-dev/install/gxf_isaac_optimizer/share/gxf_isaac_optimizer/gxf/lib
         - export ROS_DOMAIN_ID={domain}
     tabs:
       - name: host
@@ -141,10 +147,19 @@ targets:
         cmd: docker ps --format 'table {{.Names}}\t{{.Status}}'
       - name: container
         cmd: ""
+      # On the HOST: the Wi-Fi dongle as a CSI transmitter. RTL8852BU options
+      # (HE off, tx 1 stream, rx 2 -- reloads the driver only if they differ),
+      # power save off, then verify against the sniffer's 149/80.
+      # Up Up = status of the driver options.
+      - name: tx
+        host: true
+        cmd: sudo IFACE=wlx8876b9eae101 ./Dataset/scripts/csi_params.sh tx
+        also:
+          - sudo ./Dataset/scripts/rtl8852bu.sh status
       # Starts the RealSense node (namespace mobile_2) AND Isaac VSLAM; see
       # mobile_2_vslam_realsense.launch.py. No separate realsense tab.
       - name: vslam
-        cmd: ros2 launch isaac_ros_visual_slam isaac_ros_visual_slam_realsense.launch.py 
+        cmd: ros2 launch isaac_ros_visual_slam isaac_ros_visual_slam_realsense.launch.py
       - name: comms
         cmd: ros2 launch comms session.launch.py agent:={machine} pass:={pass}
       - name: record
@@ -152,7 +167,6 @@ targets:
           - cd Dataset
           - chmod +x scripts/record.sh
         cmd: ./scripts/record.sh {machine} {pass} run
-
 
   # ------------------------------------------------------------------- infra_1
   # Native Pi: no container, so no holder tab.
