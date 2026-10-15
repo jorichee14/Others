@@ -17,6 +17,7 @@ and in the config files. Defaults are what you get with plain `python server.py`
 | `--results results` | `results` | where calibrations go |
 | `--hz 4` | `4` | board detections per second per camera; higher feels faster, uses more CPU |
 | `--workers N` | CPU cores - 1 | how many cameras are processed at the same time |
+| `--access-log` | off | print every web request in the terminal (off: only the dashboard's own messages) |
 | `--fake` | off | simulated cameras, to try the page without any camera |
 | `--ref N` | none | extrinsics mode places every camera relative to camera N, the reference (the ZED streamed with `ros_image_to_rtsp.py`); see README "Extrinsics with the ZED" |
 | `--ref-topic TOPIC` | none | with `--ref`, on the robot: read the reference camera from this ROS 2 image topic, with `--ref-info` (camera_info, default `/zed/zed_node/left/camera_info`) and its pose from TF `--ref-world` <- `--ref-frame` (default `map_zed` <- `zed_left_camera_optical_frame`); replaces `--url`/`--intrinsics`/`--ref-pose` for it |

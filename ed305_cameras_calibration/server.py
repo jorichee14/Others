@@ -974,6 +974,7 @@ def main():
     ap.add_argument("--model", default=DEFAULT_MODEL, choices=sorted(MODELS),
                     help="lens model preselected on the page (each Calibrate can pick another): "
                          + "; ".join("%s = %s" % kv for kv in MODELS.items()))
+    ap.add_argument("--access-log", action="store_true", help="print every web request (off: only the dashboard's messages)")
     ap.add_argument("--ref", type=int, default=None, metavar="N",
                     help="extrinsics mode: camera N (the ZED, e.g. streamed with ros_image_to_rtsp.py) is the reference; "
                          "every other calibrated camera is placed relative to it")
@@ -1039,6 +1040,9 @@ def main():
         net_load()
     threading.Thread(target=loop, daemon=True).start()
     print("dashboard: http://%s:%d  (saving to %s, results in %s)" % (ARGS.host, ARGS.port, ARGS.out, ARGS.results))
+    if not ARGS.access_log:          # no "GET /api/state ... 200" line for every page refresh
+        import logging
+        logging.getLogger("werkzeug").setLevel(logging.ERROR)
     app.run(host=ARGS.host, port=ARGS.port, threaded=True, debug=False)
 
 
