@@ -67,6 +67,18 @@ that has a result; until the new round is calibrated the previous calibration st
 
 ## Extrinsics with the ZED (reference camera)
 
+**On the robot (Jetson), the simplest way:** the dashboard reads the ZED straight from ROS 2 (image,
+camera_info, its map pose from TF at each image's capture time). No RTSP stream, pose server or
+intrinsics file for the ZED. With the ZED wrapper running (positional tracking on) and ROS sourced:
+```
+python3 server.py --ref 20 --ref-topic /zed/zed_node/left/image_rect_color --ref-board E --cams 3 20
+```
+(`--ref-info`, `--ref-world`, `--ref-frame` default to `/zed/zed_node/left/camera_info`, `map_zed`,
+`zed_left_camera_optical_frame`.) The other cameras still come over RTSP with their intrinsics from
+`results/intrinsics/`. Open `http://<robot-ip>:8080`, press **2 · Extrinsics**.
+
+**From another PC** (no ROS there), the ZED is streamed and its pose served by the robot:
+
 Every camera placed relative to the robot's ZED, in the ZED's map, from the dashboard's **2 · Extrinsics**
 mode. The same method as `radar_camera_calibration/network_charuco.py` (which runs on the robot under
 ROS instead); see `radar_camera_calibration/NETWORK_CHARUCO.md` for how it works.

@@ -465,7 +465,10 @@ def net_load():
 def net_detect(cam):
     """Board pose in the newest frame of one camera; the live view shows the corners."""
     cs, ns = CAMS[cam], NET[cam]
-    frame, _ = STREAMS[cam].latest()
+    src = STREAMS[cam]
+    if not cs.calibrated and getattr(src, "K", None) is not None:      # ROS reference: K from camera_info
+        cs.set_intrinsics(src.K, src.D, "camera_info " + src.info_topic, src.size, "full")
+    frame, _ = src.latest()
     if frame is None:
         cs.status, ns.sees, ns.T = "no stream", "no stream", None
         ns.still.add(time.time(), None)
@@ -498,13 +501,11 @@ def net_detect(cam):
 def net_pair():
     """Every camera that sees the board still together with the reference camera gets a sample."""
     ref, now = NET[ARGS.ref], time.time()
+    W = REFPOSE.now() if REFPOSE is not None else None     # every tick, so the robot's stillness stays current
     if ref.T is None or not ref.still.still or now - ref.t > 1.0:
         return
-    W = None
-    if REFPOSE is not None:
-        W = REFPOSE.now()
-        if W is None:
-            return
+    if REFPOSE is not None and W is None:
+        return
     for cam, ns in NET.items():
         if cam == ARGS.ref or ns.pair.locked is not None or ns.T is None or not ns.still.still:
             continue
@@ -978,6 +979,15 @@ def main():
     ap.add_argument("--ref-pose", default="", metavar="URL",
                     help="with --ref: http://<robot>:8765/pose from robot/zed_pose_server.py; cameras are then placed "
                          "in the ZED map and the robot may move between board placements")
+    ap.add_argument("--ref-topic", default="", metavar="TOPIC",
+                    help="with --ref, on the robot: read the reference camera from this ROS 2 image topic (e.g. "
+                         "/zed/zed_node/left/image_rect_color) with its camera_info and its map pose from TF: no RTSP "
+                         "stream, pose server or intrinsics file needed")
+    ap.add_argument("--ref-info", default="/zed/zed_node/left/camera_info", metavar="TOPIC",
+                    help="with --ref-topic: camera_info of that image")
+    ap.add_argument("--ref-world", default="map_zed", metavar="FRAME", help="with --ref-topic: the map frame in TF")
+    ap.add_argument("--ref-frame", default="zed_left_camera_optical_frame", metavar="FRAME",
+                    help="with --ref-topic: the image's optical frame in TF")
     ap.add_argument("--ref-board", default="", metavar="NAME",
                     help="with --ref: the board (name in config/boards.yaml) held up for extrinsics, e.g. E "
                          "(default: the first board)")
@@ -992,10 +1002,18 @@ def main():
     ARGS = ap.parse_args()
     BOARDS, TAGS = load_boards(), FloorTags()
     extra = {int(n): u for n, _, u in (a.partition("=") for a in ARGS.url)}
+    if ARGS.ref is not None and ARGS.ref_topic:            # the ZED straight from ROS, no stream needed
+        extra[ARGS.ref] = "ros://" + ARGS.ref_topic.lstrip("/")
     urls = {**camera_urls([c for c in (ARGS.cams or []) if c not in extra] if ARGS.cams else None), **extra}
     if ARGS.cams:
         urls = {c: urls[c] for c in ARGS.cams if c in urls}
-    STREAMS.update({c: FakeStream(c, BOARDS) for c in urls} if ARGS.fake else open_streams(urls))
+    ros_ref = None
+    if ARGS.ref is not None and ARGS.ref_topic:
+        from calib.ros_ref import RosRef
+        ros_ref = RosRef(ARGS.ref_topic, ARGS.ref_info, ARGS.ref_world, ARGS.ref_frame, ARGS.still_s)
+        STREAMS[ARGS.ref] = ros_ref
+    rest = {c: u for c, u in urls.items() if c not in STREAMS}
+    STREAMS.update({c: FakeStream(c, BOARDS) for c in rest} if ARGS.fake else open_streams(rest))
     given = {int(n): f for n, _, f in (a.partition("=") for a in ARGS.intrinsics)}
     for c in sorted(urls):
         CAMS[c] = Cam(c, "" if ARGS.fake else urls[c])
@@ -1016,7 +1034,7 @@ def main():
             sys.exit("--ref-board %s: not in config/boards.yaml (%s)" % (ARGS.ref_board, ", ".join(sorted(BOARDS))))
         board = BOARDS[ARGS.ref_board or sorted(BOARDS)[0]].board
         NET.update({c: NetCam(c, board) for c in CAMS})
-        REFPOSE = RefPose(ARGS.ref_pose) if ARGS.ref_pose else None
+        REFPOSE = ros_ref if ros_ref is not None else (RefPose(ARGS.ref_pose) if ARGS.ref_pose else None)
         net_load()
     threading.Thread(target=loop, daemon=True).start()
     print("dashboard: http://%s:%d  (saving to %s, results in %s)" % (ARGS.host, ARGS.port, ARGS.out, ARGS.results))
