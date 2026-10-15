@@ -17,6 +17,16 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
+# The simulated room is calibrated with three A1 boards, whatever board config/boards.yaml has.
+TEST_BOARDS = os.path.join(tempfile.gettempdir(), "ed305_test_boards.yaml")
+with open(TEST_BOARDS, "w") as _f:
+    _f.write("""boards:
+  A: {dictionary: DICT_4X4_50, squares_x: 11, squares_y: 8, square_m: 0.070, marker_m: 0.0525}
+  B: {dictionary: DICT_5X5_50, squares_x: 11, squares_y: 8, square_m: 0.070, marker_m: 0.0525}
+  C: {dictionary: DICT_6X6_50, squares_x: 11, squares_y: 8, square_m: 0.070, marker_m: 0.0525}
+floor_tags: {dictionary: DICT_APRILTAG_36h11, size_m: 0.200}
+""")
+os.environ["ED305_BOARDS"] = TEST_BOARDS
 from calib.common import FloorTags, T_to_rt, inv_T, load_boards, project, read_csv, read_json, rt_to_T, write_json  # noqa: E402
 from calib.intr import coverage, view_features  # noqa: E402
 
@@ -156,7 +166,7 @@ def main():
     assert len(summ) == 16 and all(int(r["n_test"]) >= 8 for r in summ), "test views missing"
     assert all(r["used"] == "0" for r in views if r["split"] == "test"), "a test view was used in the fit"
     assert all(float(r["rms_test_px"]) < 1.0 for r in summ), "intrinsics test error too high"
-    assert all(0.3 < float(r["z"]) < 6.0 and abs(float(r["pitch"])) < 90 for r in views if r["z"]), "bad view features"
+    assert all(0.5 < float(r["z"]) < 4.0 and abs(float(r["pitch"])) < 90 for r in views if r["z"]), "bad view features"
     ev = read_csv(os.path.join(results, "extrinsics", "events.csv"))
     cams_csv = read_csv(os.path.join(results, "extrinsics", "cameras.csv"))
     assert sum(r["split"] == "test" for r in ev) >= 20, "test events missing"

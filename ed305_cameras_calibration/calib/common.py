@@ -14,6 +14,8 @@ _DICTS = {k: getattr(cv2.aruco, k) for k in dir(cv2.aruco) if k.startswith("DICT
 
 
 def load_yaml(name):
+    if name == "boards.yaml" and os.environ.get("ED305_BOARDS"):   # tests use their own boards
+        name = os.environ["ED305_BOARDS"]
     path = name if os.path.isabs(name) or os.path.exists(name) else os.path.join(CONFIG, name)
     with open(path) as f:
         return yaml.safe_load(f)
