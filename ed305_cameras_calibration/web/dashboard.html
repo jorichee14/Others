@@ -56,6 +56,7 @@
   .cam.calibrated { border-color:var(--ok); }
   .cam.recording { border-color:var(--rec); }
   .cam.reference { border-color:var(--acc); }
+  .chipbox { display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end; }
   #intrSide, #extrSide { display:grid; gap:12px; align-content:start; }
   .cam .thumb { position:relative; aspect-ratio:16/9; background:#000; }
   .cam .thumb img { width:100%; height:100%; object-fit:cover; display:block; visibility:hidden; }
@@ -341,7 +342,7 @@ function renderOverview(s, cams) {
     $('extrHint').textContent = 'Hold a board still where 2+ cameras see it; an event is saved. Aim for 150+.';
   }
   $('solve').hidden = !!net; $('solve').disabled = !!s.busy;
-  $('legend').innerHTML = net ? '<span class="l-ok">placed</span><span class="l-ref">reference camera</span><span>not placed yet</span>'
+  $('legend').innerHTML = net ? '<span class="l-ok">placed</span><span class="l-ref">reference camera</span><span>not placed yet</span><b class="dim" style="font-weight:500">✓ intrinsics = lens calibrated, ready to place</b>'
     : '<span class="l-ok">calibrated</span><span class="l-rec">recording now</span><span>not calibrated yet</span>';
   $('log').textContent = s.log;
   const grid = $('cams');
@@ -359,11 +360,14 @@ function renderOverview(s, cams) {
     const x = net && net.cams[c];
     if (x) {
       el.classList.toggle('calibrated', x.locked); el.classList.remove('recording'); el.classList.toggle('reference', x.reference);
+      const intr = v.calibrated ? '<span class="chip dark ok" title="lens calibrated (intrinsics)">✓ intrinsics</span>'
+        : '<span class="chip dark warn" title="calibrate this camera in 1 · Intrinsics first">no intrinsics</span>';
       const ch = x.reference ? '<span class="chip dark" style="color:var(--acc)">★ reference</span>'
         : x.locked ? '<span class="chip dark ok">✓ placed</span>'
-        : /intrinsics|fisheye/.test(x.sees) ? `<span class="chip dark warn">${esc(x.sees)}</span>`
+        : !v.calibrated ? ''
+        : /fisheye/.test(x.sees) ? `<span class="chip dark warn">${esc(x.sees)}</span>`
         : x.samples ? `<span class="chip dark warn">${x.holds}/3 placements</span>` : '<span class="chip dark idle">not placed</span>';
-      el.querySelector('.chipbox').innerHTML = ch;
+      el.querySelector('.chipbox').innerHTML = intr + ch;
       const bar = el.querySelector('.meter i');
       bar.style.width = (x.locked || x.reference ? 100 : Math.round(100 * Math.min(1, x.samples / 30, x.holds / 3))) + '%';
       bar.style.background = x.reference ? 'var(--acc)' : (x.locked ? 'var(--ok)' : 'var(--warn)');
