@@ -7,6 +7,8 @@ it at a known, fixed offset.
 - `radar_camera_calib.py` — the calibration node (this task).
 - `general_charuco.py` — the original **camera-to-camera** tool you started from,
   kept for reference.
+- `network_charuco.py` — `general_charuco.py` for the ZED and **many cameras** (RTSP, e.g. the ED305
+  network), every camera placed in the ZED map. See [NETWORK_CHARUCO.md](NETWORK_CHARUCO.md).
 
 ---
 
