@@ -42,7 +42,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from calib.common import (FloorTags, cam_name, camera_urls, latest_session, load_boards, now_tag,  # noqa: E402
                           read_csv, read_intrinsics_file, read_json, write_csv)
-from calib.intr import FIELDS, board_pose, coverage, nominal_K, ready, split_for, view_features  # noqa: E402
+from calib.intr import (DEFAULT_MODEL, FIELDS, MODELS, board_pose, coverage, nominal_K, project_model, ready,  # noqa: E402
+                        split_for, view_features)
 from calib.streams import open_streams  # noqa: E402
 from calibrate_intrinsics import solve_camera  # noqa: E402
 from capture import save_frame  # noqa: E402
@@ -80,18 +81,24 @@ class Cam:
         self.size = None                          # (w, h) of the stream
         self.calibrated, self.source = False, ""  # real K known (and where it came from)
         self.session = 1                          # calibration round: frames in cam_N, then cam_N_2, ...
+        self.calibrating = False                  # a Calibrate is running (status text is overwritten by the live view)
         self._maps = None
         self.count, self.feats, self.last_saved = 0, [], None
         self.rms, self.status, self.last_board = "", "idle", ""
         self.jpeg, self.jpeg_t = None, 0.0
         self.still, self.still_frame = {}, {}     # board -> recent centres / (frame, corners, ids, tags, t, person)
         self.K, self.dist = nominal_K(), None
+        self.model = "full"                       # lens model of the current K/dist (calib.intr.MODELS)
 
-    def set_intrinsics(self, K, dist, source, size=None):
+    def lens(self):
+        """(K, dist, model) to use now: the calibration, or the nominal pinhole before there is one."""
+        return (self.K, self.dist, self.model) if self.calibrated else (self.K, None, "full")
+
+    def set_intrinsics(self, K, dist, source, size=None, model="full"):
         """Real K and distortion (rectified view from now on). size: the image size K belongs to;
         K is scaled when the stream turns out to have another resolution."""
         with self.lock:
-            self.K, self.dist = np.array(K, float), np.array(dist, float).reshape(-1)
+            self.K, self.dist, self.model = np.array(K, float), np.array(dist, float).reshape(-1), model
             self.k_size = tuple(size) if size else None
             self.calibrated, self.source, self._maps = True, source, None
 
@@ -117,8 +124,13 @@ class Cam:
         h, w = frame.shape[:2]
         with self.lock:
             if self._maps is None or self._maps[0] != (w, h):
-                newK, _ = cv2.getOptimalNewCameraMatrix(self.K, self.dist, (w, h), 0)
-                m1, m2 = cv2.initUndistortRectifyMap(self.K, self.dist, None, newK, (w, h), cv2.CV_16SC2)
+                if self.model == "fisheye":
+                    D = self.dist.reshape(4, 1)
+                    newK = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(self.K, D, (w, h), np.eye(3), balance=0.0)
+                    m1, m2 = cv2.fisheye.initUndistortRectifyMap(self.K, D, np.eye(3), newK, (w, h), cv2.CV_16SC2)
+                else:
+                    newK, _ = cv2.getOptimalNewCameraMatrix(self.K, self.dist, (w, h), 0)
+                    m1, m2 = cv2.initUndistortRectifyMap(self.K, self.dist, None, newK, (w, h), cv2.CV_16SC2)
                 self._maps = ((w, h), m1, m2)
             _, m1, m2 = self._maps
         return cv2.remap(frame, m1, m2, cv2.INTER_LINEAR)
@@ -264,7 +276,8 @@ def process(cam, mode, active):
                 with cs.lock:
                     name = now_tag()
                     split = split_for(cs.count)
-                    f = view_features(BOARDS[b], corners, ids, cs.K, cs.dist, (w, h))
+                    K, dist, model = cs.lens()
+                    f = view_features(BOARDS[b], corners, ids, K, dist, (w, h), model)
                     out_root = os.path.join(ARGS.out, person, "intr")
                     save_frame(os.path.join(out_root, cam_name(cam, cs.session)), name, frame, cam, b, corners, ids, tag_det, t,
                                split=split, features=f)
@@ -373,16 +386,15 @@ def write_summaries():
         write_csv(os.path.join(d, "views.csv"), old_v + rows_v, list(rows_v[0].keys()))
 
 
-def calibrate_thread(cam):
+def calibrate_thread(cam, model):
     cs = CAMS[cam]
-    cs.status = "calibrating"
     try:
-        res = solve_camera(cam, ARGS.out, ARGS.results, BOARDS, session=cs.session)
+        res = solve_camera(cam, ARGS.out, ARGS.results, BOARDS, session=cs.session, model=model)
         if res is None:
             cs.rms = "fewer than 10 calibrate views"
         else:
             cs.set_intrinsics(res["K"], res["dist"], "calibrated here, %s.json" % cam_name(cam, cs.session),
-                              res["views"][0]["image_size"])
+                              res["views"][0]["image_size"], model)
             cs.rms = "rms calib %.2f test %.2f px (%d+%d views) %s" % (
                 res["rms_calib"], res["rms_test"], res["n_calib"], res["n_test"], summary_row(cam, res)["status"])
             locked = None
@@ -397,7 +409,7 @@ def calibrate_thread(cam):
                     "close it, then press Calibrate again to refresh the CSV files)" % (cam, cam_name(cam, cs.session), locked))
     except Exception as e:  # keep the server alive
         cs.rms = "error: %s" % e
-    cs.status = "calibrated"
+    cs.calibrating = False
     log("cam %d: %s" % (cam, cs.rms))
 
 
@@ -532,11 +544,11 @@ def view_image(cam, vid):
             cv2.circle(img, tuple(np.round(c).astype(int)), r + 2, (0, 255, 0), 2)
         b = BOARDS.get(j.get("board"))
         if cs.calibrated and b is not None:
-            pose = board_pose(b, corners, ids, cs.K, cs.dist)
+            K, dist, model = cs.lens()
+            pose = board_pose(b, corners, ids, K, dist, model)
             if pose is not None:
                 obj = b.object_points[ids]
-                pr, _ = cv2.projectPoints(obj, pose[0], pose[1], cs.K, cs.dist)
-                pr = pr.reshape(-1, 2)
+                pr = project_model(obj, pose[0], pose[1], K, dist, model)
                 for c in pr:
                     cv2.circle(img, tuple(np.round(c).astype(int)), r, (0, 0, 255), -1)
                 e = np.sqrt(np.mean(np.sum((pr - corners) ** 2, axis=1)))
@@ -601,13 +613,14 @@ def state():
         cov = coverage(cs.feats)
         K = cs.K if cs.calibrated else None
         cams[c] = {"person": cs.person, "count": cs.count, "calib": len(cs.feats), "coverage": cov,
-                   "ready": ready(cs.feats), "rms": cs.rms, "status": cs.status, "label": cs.label, "url": cs.url,
+                   "ready": ready(cs.feats), "rms": cs.rms, "status": "calibrating" if cs.calibrating else cs.status, "label": cs.label, "url": cs.url,
                    "size": cs.size, "calibrated": cs.calibrated, "source": cs.source, "session": cs.session,
+                   "model": cs.model if cs.calibrated else None,
                    "round_done": os.path.exists(os.path.join(ARGS.results, "intrinsics", cam_name(c, cs.session) + ".json")),
                    "K": None if K is None else {"fx": round(K[0, 0], 1), "fy": round(K[1, 1], 1),
                                                 "cx": round(K[0, 2], 1), "cy": round(K[1, 2], 1)}}
     return jsonify({"mode": mode, "people": people, "cams": cams, "events": events, "log": "\n".join(lines), "busy": busy,
-                    "fields": FIELDS, "boards": sorted(BOARDS)})
+                    "fields": FIELDS, "boards": sorted(BOARDS), "models": MODELS, "default_model": ARGS.model})
 
 
 @app.route("/api/join", methods=["POST"])
@@ -661,12 +674,15 @@ def mode():
 
 @app.route("/api/calibrate", methods=["POST"])
 def calibrate():
-    cam = request.get_json(force=True).get("camera")
-    if cam not in CAMS:
-        return jsonify({"error": "unknown camera"}), 400
-    if CAMS[cam].status == "calibrating":
-        return jsonify({"error": "already calibrating"}), 409
-    threading.Thread(target=calibrate_thread, args=(cam,), daemon=True).start()
+    j = request.get_json(force=True)
+    cam, model = j.get("camera"), j.get("model") or ARGS.model
+    if cam not in CAMS or model not in MODELS:
+        return jsonify({"error": "unknown camera or lens model"}), 400
+    with LOCK:
+        if CAMS[cam].calibrating:
+            return jsonify({"error": "already calibrating"}), 409
+        CAMS[cam].calibrating = True
+    threading.Thread(target=calibrate_thread, args=(cam, model), daemon=True).start()
     return jsonify({"ok": True})
 
 
@@ -680,7 +696,7 @@ def recalibrate():
     if cam not in CAMS:
         return jsonify({"error": "unknown camera"}), 400
     cs = CAMS[cam]
-    if cs.status == "calibrating":
+    if cs.calibrating:
         return jsonify({"error": "camera %d is calibrating" % cam}), 409
     with cs.lock:
         cs.session = max(cs.session, latest_session(ARGS.out, ARGS.results, cam)) + 1
@@ -721,6 +737,9 @@ def main():
     ap.add_argument("--hz", type=float, default=4.0, help="processing rate per camera")
     ap.add_argument("--workers", type=int, default=max(2, (os.cpu_count() or 4) - 1))
     ap.add_argument("--fake", action="store_true", help="synthetic cameras, to try the dashboard")
+    ap.add_argument("--model", default=DEFAULT_MODEL, choices=sorted(MODELS),
+                    help="lens model preselected on the page (each Calibrate can pick another): "
+                         + "; ".join("%s = %s" % kv for kv in MODELS.items()))
     ap.add_argument("--url", action="append", default=[], metavar="N=URL",
                     help="camera N reads this stream (adds to / overrides config/cameras.yaml); repeatable")
     ap.add_argument("--intrinsics", action="append", default=[], metavar="N=FILE",
@@ -742,8 +761,8 @@ def main():
         mine = next((p for p in done if os.path.exists(p)), None)     # newest round that has a result
         for path, src in ((mine, "results/intrinsics"), (given.get(c), "given")):
             if path and os.path.exists(path):
-                K, dist, size = read_intrinsics_file(path)
-                CAMS[c].set_intrinsics(K, dist, "%s (%s)" % (src, os.path.basename(path)), size)
+                K, dist, size, model = read_intrinsics_file(path)
+                CAMS[c].set_intrinsics(K, dist, "%s (%s)" % (src, os.path.basename(path)), size, model)
             elif path and src == "given":
                 sys.exit("--intrinsics %d=%s: file not found" % (c, path))
     threading.Thread(target=loop, daemon=True).start()

@@ -17,25 +17,33 @@ import cv2
 import numpy as np
 
 from calib.common import cam_name, latest_session, load_boards, write_csv, write_json
-from calib.intr import FIELDS, IMAGE_SIZE, fit_camera, load_views, summary_row, view_rows
+from calib.intr import DEFAULT_MODEL, FIELDS, IMAGE_SIZE, MODELS, fit_camera, load_views, summary_row, view_rows
 
 
-def solve_camera(cam, data_dir, results_dir, boards, flags=0, session=None):
-    """Fit one camera from the saved views of one calibration round (default: the latest) and write
-    cam_N.json (round 1) or cam_N_<round>.json. Returns the fit_camera result or None."""
+def solve_camera(cam, data_dir, results_dir, boards, flags=0, session=None, model=DEFAULT_MODEL):
+    """Fit one camera from the saved views of one calibration round (default: the latest) with a lens
+    model (calib.intr.MODELS) and write cam_N.json (round 1) or cam_N_<round>.json. Returns the
+    fit_camera result or None."""
     session = session or latest_session(data_dir, results_dir, cam)
     views = load_views(data_dir, cam, session)
     size = views[0]["image_size"] if views else IMAGE_SIZE
-    res = fit_camera(views, boards, flags, size)
+    res = fit_camera(views, boards, flags, size, model)
     if res is None:
         return None
+    K, d, (w, h) = res["K"], res["dist"], size
     write_json(os.path.join(results_dir, "intrinsics", cam_name(cam, session) + ".json"), {
-        "camera": cam, "session": session, "image_size": size, "K": res["K"], "dist": res["dist"],
+        "camera": cam, "session": session, "model": model, "model_text": MODELS[model],
+        "image_size": size, "K": K, "dist": d,
         "rms_px": res["rms_calib"], "rms_test_px": res["rms_test"],
         "views": res["n_calib"], "test_views": res["n_test"], "dropped_views": res["dropped"],
         "coverage": res["coverage"],
         "frames": [v["path"] for v in res["views"] if v["used"]],
         "test_frames": [v["path"] for v in res["views"] if v["split"] == "test"],
+        # the same keys as the March 2026 ED305 calibration files (calibration/data/outputs/results/cam_N.json
+        # and camera_params/cam_N.json), so tools reading those read this too
+        "camera_id": cam, "img_w": w, "img_h": h, "camera_matrix": K, "dist_coeffs": d,
+        "fx": K[0, 0], "fy": K[1, 1], "cx": K[0, 2], "cy": K[1, 2], "rms": res["rms_calib"],
+        "intrinsic": K.reshape(-1), "distortion": d,
     })
     return res
 
@@ -45,14 +53,16 @@ def main():
     ap.add_argument("--data", default="data")
     ap.add_argument("--results", default="results")
     ap.add_argument("--cams", nargs="*", type=int, default=list(range(1, 17)))
-    ap.add_argument("--rational", action="store_true", help="8-coefficient distortion model")
+    ap.add_argument("--model", default=DEFAULT_MODEL, choices=sorted(MODELS),
+                    help="lens model: " + "; ".join("%s = %s" % kv for kv in MODELS.items()))
+    ap.add_argument("--rational", action="store_true", help="with --model full: 8-coefficient distortion model")
     args = ap.parse_args()
     boards = load_boards()
     flags = cv2.CALIB_RATIONAL_MODEL if args.rational else 0
 
     rows, summary = [], []
     for cam in args.cams:
-        res = solve_camera(cam, args.data, args.results, boards, flags)
+        res = solve_camera(cam, args.data, args.results, boards, flags, model=args.model)
         if res is None:
             n = len([v for v in load_views(args.data, cam, latest_session(args.data, args.results, cam))
                      if v["split"] == "calib"])

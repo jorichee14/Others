@@ -142,7 +142,7 @@ def _np(o):
 
 
 def read_intrinsics_file(path):
-    """(K, dist, image_size or None) from a file made elsewhere: this repo's cam_N.json (K, dist),
+    """(K, dist, image_size or None, lens model) from a file made here or elsewhere: this repo's cam_N.json (K, dist),
     the ED305 wiki results (camera_matrix, dist_coeffs), a ROS camera_info YAML from
     camera_calibration (camera_matrix.data, distortion_coefficients.data) or from
     `ros2 topic echo --once <camera_info>` (k, d, width, height)."""
@@ -165,8 +165,10 @@ def read_intrinsics_file(path):
     if size is None and j.get("image_width") and j.get("image_height"):
         size = [j["image_width"], j["image_height"]]
     dist = np.array(dist if dist is not None else [], float).reshape(-1)
-    return np.array(K, float).reshape(3, 3), (dist if dist.size else np.zeros(5)), \
-        (tuple(int(v) for v in size) if size else None)
+    model = j.get("model") or ("fisheye" if str(j.get("distortion_model", "")).lower() in (
+        "equidistant", "fisheye", "kannala_brandt") else "full")
+    return np.array(K, float).reshape(3, 3), (dist if dist.size else np.zeros(4 if model == "fisheye" else 5)), \
+        (tuple(int(v) for v in size) if size else None), model
 
 
 def cam_name(cam, session=1):
@@ -198,7 +200,12 @@ def load_intrinsics(results_dir):
         if session >= best.get(cam, 0):
             j = read_json(os.path.join(d, fn))
             best[cam] = session
-            out[cam] = (np.array(j["K"], float), np.array(j["dist"], float).reshape(-1))
+            out[cam] = (np.array(j["K"], float), np.array(j["dist"], float).reshape(-1), j.get("model", "full"))
+    for cam, (K, dist, model) in list(out.items()):
+        out[cam] = (K, dist)
+        if model == "fisheye":   # the room (extrinsic) solver projects with the standard model only
+            print("cam %d: fisheye calibration, left out of the room extrinsics (standard lens models only)" % cam)
+            del out[cam]
     return out
 
 

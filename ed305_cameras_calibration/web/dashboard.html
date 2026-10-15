@@ -198,6 +198,8 @@
         </div>
       </div>
       <div class="side">
+        <div class="stat"><div class="k">Lens model for Calibrate</div>
+          <select id="model" style="width:100%;margin-top:6px"></select><div class="d" id="modelD"></div></div>
         <div class="actions"><button id="rec">Record</button><button id="calib" class="primary" disabled>Calibrate</button>
           <button id="recal" style="grid-column:1/-1" title="Start a new round; earlier frames and results are kept">↻ Recalibrate (new round)</button></div>
         <div class="stat"><div class="k">Next step</div><div class="v" id="next">-</div><div class="d" id="nextD"></div></div>
@@ -261,7 +263,10 @@ $('rec').onclick = () => {
   const mine = state && state.people[me] && state.people[me].camera === c;
   post('/api/record', {name: me, camera: c, on: !mine});
 };
-$('calib').onclick = () => { const c = camOfHash(); if (c) post('/api/calibrate', {camera: c}); };
+$('calib').onclick = () => { const c = camOfHash(); if (c) post('/api/calibrate', {camera: c, model: $('model').value}); };
+const MODEL_NAMES = {ed305: 'Standard, as ED305 March (k1 k2)', full: 'Standard, full (k1 k2 p1 p2 k3)', fisheye: 'Fisheye (k1–k4)'};
+let modelCam = null;
+$('model').onchange = () => { $('modelD').textContent = (state && state.models[$('model').value]) || ''; };
 $('recal').onclick = () => {
   const c = camOfHash(); if (!c || !state) return;
   const n = (state.cams[c].session || 1) + 1;
@@ -340,6 +345,12 @@ function renderCamera(s, c) {
   $('rec').className = mine ? 'danger' : ''; $('rec').disabled = !!v.person && !mine;
   $('calib').disabled = v.calib < 10 || v.status === 'calibrating';
   $('calib').textContent = v.status === 'calibrating' ? 'Calibrating…' : 'Calibrate';
+  if (modelCam !== c || $('model').options.length !== Object.keys(s.models).length) {   // once per camera, keep the user's pick
+    modelCam = c;
+    $('model').innerHTML = Object.keys(s.models).map(m => `<option value="${m}">${MODEL_NAMES[m] || m}</option>`).join('');
+    $('model').value = v.model && s.models[v.model] ? v.model : s.default_model;
+    $('modelD').textContent = s.models[$('model').value];
+  }
   $('recal').hidden = !(v.calibrated || v.count > 0); $('recal').disabled = v.status === 'calibrating' || !!v.person;
   const mode = v.calibrated ? viewMode : 'raw';
   for (const b of $('viewSeg').querySelectorAll('button')) { b.className = b.dataset.v === mode ? 'on' : ''; b.disabled = b.dataset.v !== 'raw' && !v.calibrated; }
@@ -379,10 +390,10 @@ async function showResult(cam) {
     $('resPanel').hidden = false;
     $('resName').textContent = r.name ? `· ${r.name} · saved ${r.saved}` : '· ' + (r.source || '');
     $('resDl').hidden = !r.file; $('resDl').href = `/download/${cam}.json`;
-    const K = r.K, d = r.dist || [], names = ['k1','k2','p1','p2','k3','k4','k5','k6'];
+    const K = r.K, d = r.dist || [], names = r.model === 'fisheye' ? ['k1','k2','k3','k4'] : ['k1','k2','p1','p2','k3','k4','k5','k6'];
     const tiles = [];
     tiles.push(`<div class="stat"><div class="k">Camera matrix K (px)</div><div class="kgrid mono">${K.flat().map((x, i) => `<span>${fmt(x, i === 8 ? 0 : 2)}</span>`).join('')}</div></div>`);
-    tiles.push(`<div class="stat"><div class="k">Distortion</div><div class="kv mono">${d.map((x, i) => `<span>${names[i] || 'd' + i}</span><span>${Number(x).toPrecision(4)}</span>`).join('')}</div></div>`);
+    tiles.push(`<div class="stat"><div class="k">Distortion · ${esc(MODEL_NAMES[r.model] || r.model || 'standard')}</div><div class="kv mono">${d.map((x, i) => `<span>${names[i] || 'd' + i}</span><span>${Number(x).toPrecision(4)}</span>`).join('')}</div></div>`);
     if (r.rms_px != null) {
       const t = r.rms_test_px, good = t <= 1 && r.rms_px <= 0.6;
       tiles.push(`<div class="stat"><div class="k">Reprojection error</div><div class="v ${good ? 'ok' : 'warn'}">${fmt(t, 3)} px test</div>

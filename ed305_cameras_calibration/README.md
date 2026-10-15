@@ -63,6 +63,20 @@ PC with 8+ cores. The overview shows every camera; calibrated ones have a green 
 `_3`, ...). Round 1 (`cam_N`, `cam_N.json`) stays as it was. Everything uses the newest round
 that has a result; until the new round is calibrated the previous calibration stays in use.
 
+## Lens models
+
+Picked on the camera page (or `calibrate_intrinsics.py --model ...`) before Calibrate:
+
+| model | what | for |
+|---|---|---|
+| `full` (default) | OpenCV pinhole, k1 k2 p1 p2 k3, principal point estimated | any normal lens: the ED305 Baslers, RealSense |
+| `ed305` | k1 k2 only, principal point at the image centre: how the March 2026 ED305 calibration (`cal_params.py`) did it | comparing with that calibration |
+| `fisheye` | OpenCV fisheye (equidistant), k1 k2 k3 k4 | lenses over about 120 degrees |
+
+Every result `cam_N.json` also has the keys of the March 2026 files (`camera_matrix`, `dist_coeffs`,
+`fx fy cx cy`, `img_w img_h`, `intrinsic`, `distortion`), so tools that read those read these.
+The room extrinsics use the standard models only (a fisheye camera is left out there).
+
 ## The whole process in one list
 
 1. Print boards A, B, C (A1) and 12 floor tags (A4): `python make_boards.py`. Mount the boards flat.
