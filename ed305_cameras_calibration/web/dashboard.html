@@ -5,264 +5,396 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ED305 calibration</title>
 <style>
-  :root { --bg:#14171c; --card:#1e2329; --line:#2e353d; --text:#e8ecf0; --dim:#9aa5b1; --ok:#35c759; --warn:#f5b400; --bad:#ff5c5c; --acc:#4da3ff; }
+  :root {
+    --bg:#0f1216; --panel:#171b21; --panel2:#1d222a; --line:#2a313b; --line2:#38414d;
+    --text:#e9edf2; --dim:#94a0ae; --faint:#6b7684;
+    --ok:#34c759; --okbg:rgba(52,199,89,.12); --warn:#f5b400; --warnbg:rgba(245,180,0,.12);
+    --rec:#ff5a5f; --recbg:rgba(255,90,95,.12); --acc:#4da3ff; --accbg:rgba(77,163,255,.14);
+  }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-  header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
-  header h1 { font-size:17px; margin:0 12px 0 0; }
-  input, select, button { font:inherit; padding:7px 10px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--text); }
-  button { cursor:pointer; }
-  button.primary { background:var(--acc); border-color:var(--acc); color:#000; font-weight:600; }
-  button.on { background:#2a3a4f; border-color:var(--acc); }
-  button:disabled { opacity:.5; cursor:default; }
-  main { padding:12px 16px; display:grid; gap:14px; grid-template-columns: minmax(0,1fr); }
-  main > section { min-width:0; }
-  @media (min-width: 1000px) { main { grid-template-columns: 300px minmax(0,1fr); } }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; }
-  .card h2 { font-size:14px; margin:0 0 8px; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; }
-  .grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:6px; }
-  .tile { border:1px solid var(--line); border-radius:8px; padding:6px; cursor:pointer; text-align:left; background:#171b20; min-width:0; overflow:hidden; }
-  .tile.sel { border-color:var(--acc); background:#1d2a3a; }
-  .tile .n { font-weight:700; }
-  .tile .c { font-size:12px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; }
-  .tile .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; background:#555; }
-  .dot.ready { background:var(--ok); } .dot.part { background:var(--warn); } .dot.done { background:var(--acc); }
-  img.live { width:100%; max-height:62vh; object-fit:contain; border-radius:8px; background:#000; aspect-ratio:16/9; }
-  .bars { display:grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap:6px; margin:10px 0; }
-  .bar { background:#0f1216; border:1px solid var(--line); border-radius:6px; height:30px; position:relative; overflow:hidden; }
-  .bar .fill { position:absolute; left:0; top:0; bottom:0; background:var(--warn); }
-  .bar.full .fill { background:var(--ok); }
-  .bar span { position:absolute; left:6px; top:5px; font-size:13px; font-weight:600; color:#fff; text-shadow:0 0 3px #000, 0 0 2px #000; white-space:nowrap; overflow:hidden; }
-  .big { font-size:26px; font-weight:700; }
-  .sub { color:var(--dim); font-size:13px; margin-top:2px; }
-  .stats { display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:8px; margin:12px 0 4px; }
-  .stat { background:#171b20; border:1px solid var(--line); border-radius:8px; padding:8px 10px; min-width:0; }
-  .stat .k { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; }
-  .stat .v { font-size:18px; font-weight:700; margin-top:2px; }
-  .stat .d { font-size:12px; color:var(--dim); overflow-wrap:anywhere; }
-  .seg { display:inline-flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
-  .seg button { border:0; border-radius:0; background:transparent; }
-  .seg button + button { border-left:1px solid var(--line); }
-  .seg button.on { background:#2a3a4f; color:var(--text); }
-  details.help { margin-top:10px; color:var(--dim); font-size:14px; }
-  details.help summary { cursor:pointer; color:var(--text); }
-  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
-  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .dim { color:var(--dim); }
-  table { border-collapse:collapse; width:100%; font-size:13px; }
-  th, td { border-bottom:1px solid var(--line); padding:4px 6px; text-align:right; white-space:nowrap; }
+  html, body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color:inherit; }
+  button, input, select { font:inherit; color:var(--text); }
+  input, select { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
+  button { background:var(--panel2); border:1px solid var(--line2); border-radius:8px; padding:7px 14px; cursor:pointer; font-weight:500; }
+  button:hover:not(:disabled) { border-color:var(--acc); }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#06121f; font-weight:650; }
+  button.danger { background:var(--rec); border-color:var(--rec); color:#1a0506; font-weight:650; }
+  .seg { display:inline-flex; background:var(--panel2); border:1px solid var(--line); border-radius:9px; padding:3px; gap:2px; }
+  .seg button { border:0; background:transparent; padding:5px 12px; border-radius:6px; color:var(--dim); }
+  .seg button.on { background:var(--line2); color:var(--text); }
+
+  header { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; gap:10px 14px; align-items:center;
+           padding:10px 20px; background:rgba(15,18,22,.92); backdrop-filter:blur(6px); border-bottom:1px solid var(--line); }
+  .brand { font-weight:700; font-size:16px; letter-spacing:.01em; margin-right:6px; }
+  .brand span { color:var(--dim); font-weight:500; }
+  .spacer { flex:1; }
+  .who { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .me { display:flex; gap:8px; align-items:center; color:var(--dim); }
+  .me b { color:var(--text); font-weight:600; }
+  .msg { color:var(--rec); font-size:13px; }
+
+  main { max-width:1500px; margin:0 auto; padding:18px 20px 40px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .panel + .panel, .gap { margin-top:16px; }
+  h2 { font-size:12px; font-weight:650; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; margin:0 0 10px; }
+  .sub { color:var(--dim); font-size:13px; }
+
+  /* overview */
+  .summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; margin-bottom:16px; }
+  .kpi { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .kpi .k { font-size:12px; color:var(--dim); }
+  .kpi .v { font-size:24px; font-weight:700; margin-top:2px; }
+  .kpi .v small { font-size:14px; color:var(--dim); font-weight:500; }
+  .meter { height:5px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:8px; }
+  .meter i { display:block; height:100%; background:var(--ok); border-radius:3px; }
+  .cams { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:14px; }
+  .cam { background:var(--panel); border:2px solid var(--line); border-radius:12px; overflow:hidden; cursor:pointer; text-align:left; padding:0;
+         display:flex; flex-direction:column; transition:transform .08s, border-color .15s; }
+  .cam:hover { transform:translateY(-2px); border-color:var(--line2); }
+  .cam.calibrated { border-color:var(--ok); }
+  .cam.recording { border-color:var(--rec); }
+  .cam .thumb { position:relative; aspect-ratio:16/9; background:#000; }
+  .cam .thumb img { width:100%; height:100%; object-fit:cover; display:block; visibility:hidden; }
+  .cam .thumb img.shown { visibility:visible; }
+  .cam .thumb .off { position:absolute; inset:0; display:grid; place-items:center; color:var(--faint); font-size:13px; }
+  .cam .badges { position:absolute; top:8px; left:8px; right:8px; display:flex; justify-content:space-between; gap:6px; }
+  .num { background:rgba(0,0,0,.65); border-radius:6px; padding:1px 8px; font-weight:700; font-size:15px; }
+  .chip { display:inline-flex; align-items:center; gap:5px; border-radius:999px; padding:2px 9px; font-size:12px; font-weight:600; white-space:nowrap; }
+  .chip.ok { background:var(--okbg); color:var(--ok); }
+  .chip.rec { background:var(--recbg); color:var(--rec); }
+  .chip.warn { background:var(--warnbg); color:var(--warn); }
+  .chip.idle { background:rgba(148,160,174,.12); color:var(--dim); }
+  .chip.dark { background:rgba(0,0,0,.65); }
+  .cam .body { padding:10px 12px 12px; display:grid; gap:6px; }
+  .cam .row1 { display:flex; justify-content:space-between; gap:8px; align-items:baseline; }
+  .cam .label { color:var(--dim); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cam .facts { display:flex; justify-content:space-between; color:var(--dim); font-size:12px; }
+  @media (max-width: 600px) {
+    main { padding:14px 12px 30px; } header { padding:10px 12px; }
+    .cams { grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px; }
+    .cam .label, .cam .f2 { display:none; } .cam .body { padding:8px 10px 10px; }
+    .kpi .v { font-size:20px; }
+  }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; color:var(--dim); font-size:12px; margin-top:12px; }
+  .legend span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:3px; border:2px solid var(--line); margin-right:6px; vertical-align:-1px; }
+  .legend .l-ok::before { border-color:var(--ok); } .legend .l-rec::before { border-color:var(--rec); }
+  .extrbar { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:16px; }
+  details.more { margin-top:16px; }
+  details.more > summary { cursor:pointer; color:var(--dim); font-weight:600; padding:6px 0; }
+  table { border-collapse:collapse; width:100%; font-size:12.5px; }
+  th, td { border-bottom:1px solid var(--line); padding:5px 8px; text-align:right; white-space:nowrap; }
+  th { color:var(--dim); font-weight:600; }
   th:first-child, td:first-child { text-align:left; }
   pre { white-space:pre-wrap; font-size:12px; color:var(--dim); max-height:260px; overflow:auto; margin:0; }
-  .thumbs { display:grid; grid-template-columns: repeat(4, 1fr); gap:6px; }
-  .thumbs img { width:100%; border-radius:6px; background:#000; aspect-ratio:16/9; }
-  .msg { color:var(--bad); min-height:1.2em; }
-  .tile .lab { font-size:11px; color:var(--dim); }
-  .badge { font-size:11px; padding:1px 5px; border-radius:4px; border:1px solid var(--acc); color:var(--acc); margin-left:4px; }
-  .badge.rec { border-color:var(--bad); color:var(--bad); }
-  .views { display:grid; gap:8px; grid-template-columns: minmax(0,1fr); }
-  .views.both { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
-  .views figure { margin:0; } .views figcaption { font-size:12px; color:var(--dim); }
-  button.rec { background:var(--bad); border-color:var(--bad); color:#000; font-weight:600; }
-  .gallery { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:8px; margin-top:8px; }
-  .gallery figure { margin:0; position:relative; }
-  .gallery img { width:100%; border-radius:6px; background:#000; display:block; }
-  .gallery figcaption { font-size:12px; color:var(--dim); display:flex; justify-content:space-between; gap:4px; }
-  .gallery button { padding:0 6px; font-size:12px; }
-  img.cov { width:100%; max-width:480px; border-radius:6px; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--rec); } .dim { color:var(--dim); }
+
+  /* camera page */
+  .crumbs { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+  .back { background:transparent; border:1px solid var(--line); }
+  .title { font-size:22px; font-weight:700; }
+  .camgrid { display:grid; gap:16px; grid-template-columns:minmax(0,1fr); align-items:start; }
+  @media (min-width: 1100px) { .camgrid { grid-template-columns:minmax(0,1fr) 340px; } }
+  .views { display:grid; gap:10px; grid-template-columns:minmax(0,1fr); }
+  .views.both { grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); }
+  .views figure { margin:0; }
+  .views img { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; border-radius:10px; display:block; }
+  .views figcaption { color:var(--faint); font-size:12px; margin-top:4px; }
+  .side { display:grid; gap:12px; align-content:start; }
+  .actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .actions button { padding:10px; }
+  .stat { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .stat .k { font-size:12px; color:var(--dim); }
+  .stat .v { font-size:18px; font-weight:700; margin-top:1px; }
+  .stat .d { font-size:12px; color:var(--dim); overflow-wrap:anywhere; margin-top:2px; }
+  .bars { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px; }
+  .bar .n { display:flex; justify-content:space-between; font-size:12px; color:var(--dim); }
+  .bar .t { height:7px; background:var(--line); border-radius:4px; overflow:hidden; margin-top:3px; }
+  .bar .t i { display:block; height:100%; background:var(--warn); border-radius:4px; }
+  .bar.full .t i { background:var(--ok); } .bar.full .n b { color:var(--ok); }
+  details.help { color:var(--dim); font-size:13px; }
+  details.help summary { cursor:pointer; color:var(--text); font-weight:600; }
+  .gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; margin-top:12px; }
+  .gallery figure { margin:0; }
+  .gallery img { width:100%; border-radius:8px; background:#000; display:block; }
+  .gallery figcaption { font-size:12px; color:var(--dim); display:flex; justify-content:space-between; align-items:center; gap:4px; margin-top:3px; }
+  .gallery button { padding:0 7px; font-size:12px; border-radius:6px; }
+  img.cov { width:100%; max-width:440px; border-radius:8px; display:block; }
+  .framesHead { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+  [hidden] { display:none !important; }
 </style>
 </head>
 <body>
 <header>
-  <h1>ED305 calibration</h1>
-  <input id="name" placeholder="your name" size="12">
-  <select id="board"></select>
-  <button id="join" class="primary">Join</button>
-  <span id="who" class="dim"></span>
-  <span style="flex:1"></span>
-  <button id="mIntr" class="on">1 Intrinsics</button>
-  <button id="mExtr">2 Extrinsics</button>
+  <div class="brand">ED305 <span>calibration</span></div>
+  <div class="seg" id="modeSeg"><button data-m="intr">1 · Intrinsics</button><button data-m="extr">2 · Extrinsics</button></div>
+  <span class="spacer"></span>
+  <div class="who" id="joinForm">
+    <input id="name" placeholder="Your name" size="14">
+    <select id="board" title="board"></select>
+    <button id="join" class="primary">Join</button>
+  </div>
+  <div class="me" id="meBox" hidden><span>●</span><b id="meName"></b><span id="meBoard"></span><button id="change" style="padding:3px 10px">Change</button></div>
+  <span class="msg" id="msg"></span>
 </header>
+
 <main>
-  <section>
-    <div class="card">
-      <h2>Cameras <span class="dim">(tap to watch)</span></h2>
-      <div class="grid" id="grid"></div>
-      <div class="msg" id="msg"></div>
+  <!-- ============ overview ============ -->
+  <section id="overview">
+    <div class="summary">
+      <div class="kpi"><div class="k">Calibrated</div><div class="v" id="kCal">0 <small>/ 0</small></div><div class="meter"><i id="kCalBar" style="width:0"></i></div></div>
+      <div class="kpi"><div class="k">Online</div><div class="v" id="kOn">0 <small>/ 0</small></div></div>
+      <div class="kpi"><div class="k">Frames saved</div><div class="v" id="kFrames">0</div></div>
+      <div class="kpi"><div class="k">People</div><div class="v" id="kPeople" style="font-size:15px;font-weight:600;margin-top:6px">nobody yet</div></div>
     </div>
-    <div class="card" style="margin-top:14px">
-      <h2>People</h2>
-      <div id="people" class="dim"></div>
+    <div class="panel extrbar" id="extrBar" hidden>
+      <div><b>Extrinsics</b> <span class="sub" id="events"></span></div>
+      <span class="spacer"></span>
+      <span class="sub">Hold a board still where 2+ cameras see it; an event is saved. Aim for 150+.</span>
+      <button id="solve" class="primary">Solve extrinsics</button>
     </div>
+    <div class="cams" id="cams"></div>
+    <div class="legend"><span class="l-ok">calibrated</span><span class="l-rec">recording now</span><span>not calibrated yet</span></div>
+    <details class="more"><summary>Results and log</summary>
+      <div class="panel"><h2>Intrinsics · results/intrinsics/summary.csv</h2><div style="overflow:auto"><table id="tIntr"></table></div></div>
+      <div class="panel"><h2>Extrinsics, room frame · results/extrinsics/cameras.csv</h2><div style="overflow:auto"><table id="tExtr"></table></div></div>
+      <div class="panel"><h2>Log</h2><pre id="log"></pre></div>
+    </details>
   </section>
-  <section>
-    <div class="card" id="intrPanel">
-      <div class="row">
-        <div><div class="big" id="camTitle">no camera</div><div class="sub" id="camStatus"></div></div>
-        <span style="flex:1"></span>
-        <button id="rec">Record</button>
-        <button id="calib" class="primary" disabled>Calibrate</button>
-      </div>
-      <div class="stats">
-        <div class="stat"><div class="k">Frames</div><div class="v" id="count">0</div><div class="d" id="countD"></div></div>
-        <div class="stat"><div class="k">Next</div><div class="v" id="readyTxt">-</div><div class="d" id="readyD"></div></div>
-        <div class="stat"><div class="k">Calibration</div><div class="v" id="rms">-</div><div class="d" id="kTxt"></div></div>
-      </div>
-      <div class="bars" id="bars"></div>
-      <div class="row" style="margin-bottom:8px"><div class="seg"><button id="vRaw" class="on">Live</button><button id="vRect">Rectified</button><button id="vBoth">Both</button></div></div>
-      <div class="views" id="views">
-        <figure id="fRaw"><img class="live" id="live" alt=""><figcaption>live · green dots: board corners found (while recording)</figcaption></figure>
-        <figure id="fRect" style="display:none"><img class="live" id="liveRect" alt=""><figcaption>rectified: straight edges should look straight</figcaption></figure>
-      </div>
-      <details class="help"><summary>How to record</summary>Join with your name and board, then Record on this camera. Move the board left, right, up, down (x y), close and far (z), turn it in its plane (roll), tilt it forward/back (pitch) and left/right (yaw). Frames save by themselves when the board has moved. When every bar is green and 20+ frames are saved, press Calibrate. Want test error under 1 px.</details>
+
+  <!-- ============ one camera ============ -->
+  <section id="camera" hidden>
+    <div class="crumbs">
+      <button class="back" id="back">← All cameras</button>
+      <span class="title" id="camTitle"></span>
+      <span id="camChip"></span>
+      <span class="sub" id="camSub"></span>
     </div>
-    <div class="card" id="framesPanel" style="margin-top:14px">
-      <div class="row"><h2 style="margin:0">Frames <span class="dim" id="framesTxt"></span></h2><span style="flex:1"></span>
-        <button id="framesReload">Reload</button></div>
-      <p class="sub" style="margin:4px 0 8px">Map: corners of every saved frame (green calibrate, orange test); fill the whole image. Thumbnails: green circles found, red dots where the calibration puts them, error in px. Click to enlarge; ✕ deletes a bad frame (then Calibrate again).</p>
+    <div class="camgrid">
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <div class="seg" id="viewSeg"><button data-v="raw">Live</button><button data-v="rect">Rectified</button><button data-v="both">Both</button></div>
+          <span class="sub" id="viewHint"></span>
+        </div>
+        <div class="views" id="views">
+          <figure id="fRaw"><img id="live" alt=""><figcaption>Live · green dots: board corners found while recording</figcaption></figure>
+          <figure id="fRect" hidden><img id="liveRect" alt=""><figcaption>Rectified · straight edges should look straight</figcaption></figure>
+        </div>
+      </div>
+      <div class="side">
+        <div class="actions"><button id="rec">Record</button><button id="calib" class="primary" disabled>Calibrate</button></div>
+        <div class="stat"><div class="k">Next step</div><div class="v" id="next">-</div><div class="d" id="nextD"></div></div>
+        <div class="stat"><div class="k">Frames</div><div class="v" id="count">0</div><div class="d" id="countD"></div></div>
+        <div class="stat"><div class="k">Coverage</div><div class="bars" id="bars" style="margin-top:6px"></div></div>
+        <div class="stat"><div class="k">Calibration</div><div class="v" id="cal">-</div><div class="d" id="calD"></div></div>
+        <details class="help"><summary>How to record</summary>
+          <p>Join with your name, then press Record. Move the board left, right, up and down (x, y), close and far (z), turn it in its plane (roll) and tilt it forward/back (pitch) and left/right (yaw). Bring it into the corners of the image too. A frame saves by itself each time the board has moved; move slowly to avoid blur.</p>
+          <p>When every bar is green and 20+ frames are saved, press Calibrate. Good: test error under 1 px (under 0.5 is very good).</p>
+        </details>
+      </div>
+    </div>
+    <div class="panel gap">
+      <div class="framesHead"><h2 style="margin:0">Saved frames <span class="dim" id="framesTxt"></span></h2><button id="framesReload">Reload</button></div>
+      <p class="sub" style="margin:6px 0 10px">Map: corners of every saved frame (green calibrate, orange test); fill the whole image. Thumbnails: green circles found, red dots where the calibration puts them, error in px. Click to enlarge; ✕ removes a bad frame (then Calibrate again).</p>
       <img class="cov" id="cov" alt="">
       <div class="gallery" id="gallery"></div>
     </div>
-    <div class="card" id="extrPanel" style="display:none">
-      <div class="row">
-        <span class="big">Extrinsics</span>
-        <span id="events" class="dim"></span>
-        <span style="flex:1"></span>
-        <button id="solve" class="primary">Solve extrinsics</button>
-      </div>
-      <p class="dim">Every camera watches every joined board. Hold your board still for a second where two or more cameras see it; an event is saved and counted. Move, hold again. Cover every overlap. Aim for 150+ events in total.</p>
-      <div class="thumbs" id="thumbs"></div>
-    </div>
-    <div class="card" style="margin-top:14px">
-      <h2>Log</h2><pre id="log"></pre>
-    </div>
-    <div class="card" style="margin-top:14px">
-      <h2>Results: intrinsics (results/intrinsics/summary.csv)</h2>
-      <div style="overflow:auto"><table id="tIntr"></table></div>
-    </div>
-    <div class="card" style="margin-top:14px">
-      <h2>Results: extrinsics, room frame (results/extrinsics/cameras.csv)</h2>
-      <div style="overflow:auto"><table id="tExtr"></table></div>
-    </div>
   </section>
 </main>
+
 <script>
 const $ = id => document.getElementById(id);
-let me = localStorage.getItem('name') || '', myBoard = localStorage.getItem('board') || 'A', myCam = null, state = null;
-let viewCam = Number(localStorage.getItem('viewCam')) || null, viewMode = localStorage.getItem('viewMode') || 'raw', galleryKey = '';
-$('name').value = me;
 const FIELDS = ['x','y','z','roll','pitch','yaw'];
+const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
+let me = store.get('name') || '', myBoard = store.get('board') || 'A', joined = false;
+let state = null, viewMode = store.get('viewMode') || 'raw', galleryKey = '';
+$('name').value = me;
+
 async function post(url, body) {
-  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-  const j = await r.json(); $('msg').textContent = j.error || ''; return j;
+  try {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json(); $('msg').textContent = j.error || ''; return j;
+  } catch (e) { $('msg').textContent = 'server not reachable'; return {}; }
 }
-$('join').onclick = async () => {
-  me = $('name').value.trim(); myBoard = $('board').value;
+async function join() {
+  me = $('name').value.trim(); myBoard = $('board').value || myBoard;
+  if (!me) { $('msg').textContent = 'type your name'; return; }
   const j = await post('/api/join', {name: me, board: myBoard});
-  if (j.ok) { localStorage.setItem('name', me); localStorage.setItem('board', myBoard); $('who').textContent = me + ' / board ' + myBoard; }
-};
-$('mIntr').onclick = () => post('/api/mode', {mode:'intr'});
-$('mExtr').onclick = () => post('/api/mode', {mode:'extr'});
-$('calib').onclick = () => viewCam && post('/api/calibrate', {camera: viewCam});
-$('rec').onclick = () => {
-  if (!viewCam) return;
-  if (!me) { $('msg').textContent = 'type your name, pick your board and press Join first'; return; }
-  post('/api/record', {name: me, camera: viewCam, on: myCam !== viewCam});
-};
-for (const [id, m] of [['vRaw','raw'], ['vRect','rect'], ['vBoth','both']]) $(id).onclick = () => { viewMode = m; localStorage.setItem('viewMode', m); render(); };
-$('framesReload').onclick = () => { galleryKey = ''; gallery(); };
+  if (j.ok) { joined = true; store.set('name', me); store.set('board', myBoard); }
+  render();
+}
+$('join').onclick = join;
+$('name').onkeydown = e => { if (e.key === 'Enter') join(); };
+$('change').onclick = () => { joined = false; render(); $('name').focus(); };
+for (const b of $('modeSeg').querySelectorAll('button')) b.onclick = () => post('/api/mode', {mode: b.dataset.m});
+for (const b of $('viewSeg').querySelectorAll('button')) b.onclick = () => { viewMode = b.dataset.v; store.set('viewMode', viewMode); render(); };
 $('solve').onclick = () => post('/api/solve_extrinsics', {});
-function selectCam(c) { viewCam = c; localStorage.setItem('viewCam', c); galleryKey = ''; render(); gallery(); }
-function cls(v, good, bad) { return v === '' ? '' : (parseFloat(v) <= good ? 'ok' : parseFloat(v) >= bad ? 'bad' : 'warn'); }
+$('back').onclick = () => { location.hash = ''; };
+window.onhashchange = () => { galleryKey = ''; render(); gallery(); window.scrollTo(0, 0); };
+const camOfHash = () => { const m = /^#cam-(\d+)$/.exec(location.hash); return m ? Number(m[1]) : null; };
+
+$('rec').onclick = () => {
+  const c = camOfHash(); if (!c) return;
+  if (!joined) { $('msg').textContent = 'type your name and press Join first'; $('name').focus(); return; }
+  const mine = state && state.people[me] && state.people[me].camera === c;
+  post('/api/record', {name: me, camera: c, on: !mine});
+};
+$('calib').onclick = () => { const c = camOfHash(); if (c) post('/api/calibrate', {camera: c}); };
+$('framesReload').onclick = () => { galleryKey = ''; gallery(); };
+
+function chip(v) {
+  if (v.person) return '<span class="chip rec">● REC ' + esc(v.person) + '</span>';
+  if (v.status === 'calibrating') return '<span class="chip warn">calibrating…</span>';
+  if (v.calibrated) return '<span class="chip ok">✓ calibrated</span>';
+  if (v.status === 'no stream') return '<span class="chip idle">offline</span>';
+  if (v.count > 0) return `<span class="chip warn">${v.count} frames</span>`;
+  return '<span class="chip idle">not started</span>';
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function testErr(v) { const m = /test ([\d.]+)/.exec(v.rms || ''); return m ? parseFloat(m[1]) : null; }
+function minCov(v) { return Math.min(...FIELDS.map(k => v.coverage[k] || 0)); }
+
 function render() {
   const s = state; if (!s) return;
-  $('mIntr').className = s.mode === 'intr' ? 'on' : ''; $('mExtr').className = s.mode === 'extr' ? 'on' : '';
-  $('intrPanel').style.display = s.mode === 'intr' ? '' : 'none'; $('framesPanel').style.display = s.mode === 'intr' ? '' : 'none'; $('extrPanel').style.display = s.mode === 'extr' ? '' : 'none';
-  myCam = (me && s.people[me]) ? s.people[me].camera : null;
-  if (!viewCam || !s.cams[viewCam]) viewCam = myCam || Number(Object.keys(s.cams)[0]);
-  const bs = $('board'); if (bs.options.length !== s.boards.length) { bs.innerHTML = s.boards.map(b => `<option>${b}</option>`).join(''); bs.value = myBoard; }
-  const g = $('grid'); g.innerHTML = '';
-  for (const c of Object.keys(s.cams).map(Number).sort((a,b)=>a-b)) {
-    const v = s.cams[c]; const d = document.createElement('button'); d.className = 'tile' + (c === viewCam ? ' sel' : '');
-    const dot = v.calibrated ? 'done' : (v.ready ? 'ready' : (v.calib > 0 ? 'part' : ''));
-    d.innerHTML = `<span class="dot ${dot}"></span><span class="n">${c}</span>${v.person ? '<span class="badge rec">REC</span>' : ''}${v.calibrated ? '<span class="badge">K</span>' : ''}`
-      + `<span class="c">${v.count} fr${v.status === 'no stream' ? ' · offline' : ''}</span><span class="c">${v.person || v.label || '&nbsp;'}</span>`;
-    d.onclick = () => selectCam(c); g.appendChild(d);
-  }
-  $('people').innerHTML = Object.entries(s.people).map(([n,p]) => `${p.active ? '●' : '○'} ${n}: board ${p.board}, cam ${p.camera || '-'}`).join('<br>') || 'nobody yet';
-  if (viewCam && s.cams[viewCam]) {
-    const v = s.cams[viewCam];
-    $('camTitle').textContent = 'Camera ' + viewCam; $('camStatus').textContent = (v.label ? v.label + ' · ' : '') + (v.size ? `${v.size[0]}x${v.size[1]} · ` : '') + v.status + (v.person ? ' · recording: ' + v.person : '');
-    const mine = myCam === viewCam;
-    $('rec').textContent = mine ? 'Stop recording' : (v.person ? 'Recording: ' + v.person : 'Record');
-    $('rec').className = mine ? 'rec' : ''; $('rec').disabled = !!v.person && !mine;
-    $('kTxt').textContent = (v.rms ? v.rms.replace(/^rms /, '') + ' · ' : '') + (v.calibrated ? `fx ${v.K.fx} fy ${v.K.fy} cx ${v.K.cx} cy ${v.K.cy} · ${v.source}` : 'Rectified view after Calibrate');
-    const mode = v.calibrated ? viewMode : 'raw';
-    for (const [id, m] of [['vRaw','raw'], ['vRect','rect'], ['vBoth','both']]) { $(id).className = mode === m ? 'on' : ''; $(id).disabled = m !== 'raw' && !v.calibrated; }
-    $('fRaw').style.display = mode === 'rect' ? 'none' : ''; $('fRect').style.display = mode === 'raw' ? 'none' : '';
-    $('views').className = 'views' + (mode === 'both' ? ' both' : '');
-    $('bars').innerHTML = FIELDS.map(k => { const p = Math.round(100 * v.coverage[k]); return `<div class="bar ${p >= 100 ? 'full' : ''}"><div class="fill" style="width:${p}%"></div><span>${k} ${p}%</span></div>`; }).join('');
-    $('count').textContent = v.count; $('countD').textContent = `${v.calib} calibrate + ${v.count - v.calib} test`;
-    const low = FIELDS.filter(k => v.coverage[k] < 1);
-    $('readyTxt').innerHTML = v.ready ? '<span class="ok">Press Calibrate</span>' : (myCam === viewCam ? 'Move the board' : (v.person ? 'Recording…' : 'Press Record'));
-    $('readyD').textContent = v.ready ? 'all bars green, 20+ frames' : (low.length ? 'more range in: ' + low.join(' ') : `${Math.max(0, 20 - v.calib)} more frames`);
-    const m = /rms calib ([\d.]+) test ([\d.]+)/.exec(v.rms || '');
-    $('rms').innerHTML = m ? `<span class="${parseFloat(m[2]) <= 1 ? 'ok' : 'warn'}">${m[2]} px test</span>` : (v.rms ? `<span class="warn">${v.rms}</span>` : (v.calibrated ? '<span class="ok">Calibrated</span>' : 'Not yet'));
-    $('calib').disabled = v.calib < 10 || v.status === 'calibrating';
-    const key = viewCam + ':' + v.count + ':' + v.rms + ':' + v.calibrated;
-    if (key !== galleryKey) { galleryKey = key; gallery(); }
-  } else { $('camTitle').textContent = 'no camera'; $('bars').innerHTML = ''; $('count').textContent = ''; $('readyTxt').textContent = ''; $('rms').textContent = ''; }
-  $('events').textContent = 'events: ' + (Object.entries(s.events).map(([b,n]) => `board ${b} ${n}`).join(', ') || 'none yet') + (s.busy ? ' | ' + s.busy : '');
+  // header
+  $('joinForm').hidden = joined; $('meBox').hidden = !joined;
+  $('meName').textContent = me; $('meBoard').textContent = s.boards.length > 1 ? 'board ' + myBoard : '';
+  const bs = $('board');
+  if (bs.options.length !== s.boards.length) { bs.innerHTML = s.boards.map(b => `<option>${b}</option>`).join(''); bs.value = s.boards.includes(myBoard) ? myBoard : s.boards[0]; }
+  bs.hidden = s.boards.length < 2;
+  for (const b of $('modeSeg').querySelectorAll('button')) b.className = b.dataset.m === s.mode ? 'on' : '';
+  const cams = Object.keys(s.cams).map(Number).sort((a, b) => a - b);
+  const cam = camOfHash();
+  $('overview').hidden = !!cam && !!s.cams[cam]; $('camera').hidden = !(cam && s.cams[cam]);
+  if (!$('overview').hidden) renderOverview(s, cams); else renderCamera(s, cam);
+}
+
+function renderOverview(s, cams) {
+  const n = cams.length, cal = cams.filter(c => s.cams[c].calibrated).length, on = cams.filter(c => s.cams[c].status !== 'no stream').length;
+  $('kCal').innerHTML = `${cal} <small>/ ${n}</small>`; $('kCalBar').style.width = (n ? 100 * cal / n : 0) + '%';
+  $('kOn').innerHTML = `${on} <small>/ ${n}</small>`;
+  $('kFrames').textContent = cams.reduce((a, c) => a + s.cams[c].count, 0);
+  const ppl = Object.entries(s.people).filter(([, p]) => p.active);
+  $('kPeople').innerHTML = ppl.length ? ppl.map(([nm, p]) => esc(nm) + (p.camera ? ` <span class="dim">· cam ${p.camera}</span>` : '')).join('<br>') : 'nobody yet';
+  $('extrBar').hidden = s.mode !== 'extr';
+  $('events').textContent = '· events: ' + (Object.values(s.events).reduce((a, b) => a + b, 0)) + (s.busy ? ' · ' + s.busy : '');
   $('solve').disabled = !!s.busy;
   $('log').textContent = s.log;
-  if (s.mode === 'extr' && $('thumbs').children.length !== Object.keys(s.cams).length) {
-    $('thumbs').innerHTML = Object.keys(s.cams).map(c => `<img data-cam="${c}" alt="cam ${c}">`).join('');
+  const grid = $('cams');
+  if (grid.children.length !== n) {
+    grid.innerHTML = cams.map(c => `<button class="cam" data-cam="${c}"><div class="thumb"><img alt="" data-cam="${c}"><div class="off" hidden>no picture</div>
+      <div class="badges"><span class="num">${c}</span><span class="chipbox"></span></div></div>
+      <div class="body"><div class="row1"><b>Camera ${c}</b><span class="label"></span></div>
+      <div class="meter"><i style="width:0"></i></div><div class="facts"><span class="f1"></span><span class="f2"></span></div></div></button>`).join('');
+    for (const el of grid.querySelectorAll('.cam')) el.onclick = () => { location.hash = 'cam-' + el.dataset.cam; };
+  }
+  for (const el of grid.querySelectorAll('.cam')) {
+    const c = Number(el.dataset.cam), v = s.cams[c];
+    el.classList.toggle('calibrated', v.calibrated && !v.person); el.classList.toggle('recording', !!v.person);
+    el.querySelector('.chipbox').innerHTML = chip(v).replace('class="chip', 'class="chip dark');
+    el.querySelector('.label').textContent = v.label || (v.size ? v.size.join('×') : '');
+    const mc = minCov(v); const bar = el.querySelector('.meter i');
+    bar.style.width = (v.calibrated ? 100 : Math.round(100 * Math.min(mc, v.calib / 20))) + '%';
+    bar.style.background = v.calibrated ? 'var(--ok)' : 'var(--warn)';
+    const e = testErr(v);
+    el.querySelector('.f1').textContent = `${v.count} frames`;
+    el.querySelector('.f2').innerHTML = e != null ? `<span class="${e <= 1 ? 'ok' : 'warn'}">${e} px test</span>` : (v.calibrated ? (v.K ? 'fx ' + v.K.fx : '') : `coverage ${Math.round(100 * mc)}%`);
+    el.querySelector('.off').hidden = v.status !== 'no stream';
   }
 }
-function table(el, rows) {
-  if (!rows.length) { el.innerHTML = '<tr><td class="dim">nothing yet</td></tr>'; return; }
-  const cols = Object.keys(rows[0]);
-  el.innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>' + rows.map(r => '<tr>' + cols.map(c => {
-    let k = ''; if (c === 'rms_test_px' || c === 'rms_calib_px') k = cls(r[c], 0.6, 1.0); if (c === 'floor_err_test_cm') k = cls(r[c], 3, 5); if (c === 'status') k = /OK/.test(r[c]) ? 'ok' : 'warn';
-    return `<td class="${k}">${r[c]}</td>`; }).join('') + '</tr>').join('');
+
+function renderCamera(s, c) {
+  const v = s.cams[c];
+  $('camTitle').textContent = 'Camera ' + c; $('camChip').innerHTML = chip(v);
+  $('camSub').textContent = [v.label, v.size ? v.size.join('×') : '', v.status].filter(Boolean).join(' · ');
+  const mine = s.people[me] && s.people[me].camera === c;
+  $('rec').textContent = mine ? '■ Stop recording' : (v.person ? 'Recording: ' + v.person : '● Record');
+  $('rec').className = mine ? 'danger' : ''; $('rec').disabled = !!v.person && !mine;
+  $('calib').disabled = v.calib < 10 || v.status === 'calibrating';
+  $('calib').textContent = v.status === 'calibrating' ? 'Calibrating…' : 'Calibrate';
+  const mode = v.calibrated ? viewMode : 'raw';
+  for (const b of $('viewSeg').querySelectorAll('button')) { b.className = b.dataset.v === mode ? 'on' : ''; b.disabled = b.dataset.v !== 'raw' && !v.calibrated; }
+  $('viewHint').textContent = v.calibrated ? '' : 'Rectified view after Calibrate';
+  $('fRaw').hidden = mode === 'rect'; $('fRect').hidden = mode === 'raw';
+  $('views').className = 'views' + (mode === 'both' ? ' both' : '');
+  $('count').textContent = v.count; $('countD').textContent = `${v.calib} calibrate + ${v.count - v.calib} test · 20+ wanted`;
+  const low = FIELDS.filter(k => (v.coverage[k] || 0) < 1);
+  let next, nextD;
+  if (v.ready) { next = '<span class="ok">Press Calibrate</span>'; nextD = 'all bars green, enough frames'; }
+  else if (mine) { next = 'Move the board'; nextD = low.length ? 'more range in: ' + low.join(', ') : `${Math.max(0, 20 - v.calib)} more frames`; }
+  else if (v.person) { next = 'Recording…'; nextD = 'by ' + v.person; }
+  else if (v.calibrated) { next = '<span class="ok">Done</span>'; nextD = 'Record again to add frames, then Calibrate'; }
+  else { next = joined ? 'Press Record' : 'Join, then Record'; nextD = 'hold the board in front of this camera'; }
+  $('next').innerHTML = next; $('nextD').textContent = nextD;
+  $('bars').innerHTML = FIELDS.map(k => { const p = Math.round(100 * (v.coverage[k] || 0));
+    return `<div class="bar ${p >= 100 ? 'full' : ''}"><div class="n"><span>${k}</span><b>${p}%</b></div><div class="t"><i style="width:${p}%"></i></div></div>`; }).join('');
+  const e = testErr(v);
+  $('cal').innerHTML = e != null ? `<span class="${e <= 1 ? 'ok' : 'warn'}">${e} px test error</span>` : (v.calibrated ? '<span class="ok">Calibrated</span>' : (/error|fewer/.test(v.rms) ? `<span class="warn">${esc(v.rms)}</span>` : 'Not yet'));
+  $('calD').textContent = [v.rms ? v.rms.replace(/^rms /, '') : '', v.calibrated ? `fx ${v.K.fx} fy ${v.K.fy} cx ${v.K.cx} cy ${v.K.cy}` : '', v.source].filter(Boolean).join(' · ');
+  const key = c + ':' + v.count + ':' + v.rms + ':' + v.calibrated;
+  if (key !== galleryKey) { galleryKey = key; gallery(); }
 }
-async function poll() {
-  try { state = await (await fetch('/api/state' + (me ? '?name=' + encodeURIComponent(me) : ''))).json(); render(); } catch (e) {}
-  setTimeout(poll, 700);
-}
+
 async function gallery() {
-  if (!viewCam) return;
-  const cam = viewCam, c = (state && state.cams[cam]) || {}, ck = encodeURIComponent((c.rms || '') + c.calibrated);
+  const cam = camOfHash(); if (!cam) return;
+  const v = (state && state.cams[cam]) || {}, ck = encodeURIComponent((v.rms || '') + v.calibrated);
   $('cov').src = `/coverage/${cam}.jpg?t=${Date.now()}`;
   try {
-    const r = await (await fetch(`/api/views/${cam}`)).json(); if (cam !== viewCam) return;
-    $('framesTxt').textContent = `camera ${cam}: ${r.views.length} saved`;
-    $('gallery').innerHTML = r.views.slice(0, 120).map(v => {
-      const e = v.rms_px == null ? '' : `<span class="${v.rms_px <= 0.6 ? 'ok' : v.rms_px >= 1 ? 'bad' : 'warn'}">${v.rms_px} px</span>`;
-      const u = `/view/${cam}/${v.id}.jpg`;
+    const r = await (await fetch(`/api/views/${cam}`)).json(); if (cam !== camOfHash()) return;
+    $('framesTxt').textContent = `· ${r.views.length}`;
+    $('gallery').innerHTML = r.views.slice(0, 120).map(f => {
+      const e = f.rms_px == null ? '' : `<span class="${f.rms_px <= 0.6 ? 'ok' : f.rms_px >= 1 ? 'bad' : 'warn'}">${f.rms_px} px</span>`;
+      const u = `/view/${cam}/${f.id}.jpg`;
       return `<figure><a href="${u}?full=1" target="_blank"><img loading="lazy" src="${u}?k=${ck}" alt=""></a>`
-        + `<figcaption><span>${v.split}${v.used === false && v.split === 'calib' ? ' (dropped)' : ''} · ${v.corners} pts</span>${e}`
-        + `<button data-id="${v.id}" title="delete this frame">✕</button></figcaption></figure>`;
-    }).join('') || '<span class="dim">no frames saved yet</span>';
+        + `<figcaption><span>${f.split}${f.used === false && f.split === 'calib' ? ' (dropped)' : ''} · ${f.corners} pts</span>${e}`
+        + `<button data-id="${f.id}" title="remove this frame">✕</button></figcaption></figure>`;
+    }).join('') || '<span class="sub">No frames saved yet.</span>';
     for (const b of $('gallery').querySelectorAll('button')) b.onclick = async () => {
-      if (!confirm('Delete this frame? (moved to deleted/, not used any more)')) return;
+      if (!confirm('Remove this frame? (moved to deleted/, not used any more)')) return;
       await post('/api/delete_view', {camera: cam, id: b.dataset.id, name: me}); galleryKey = ''; gallery();
     };
   } catch (e) {}
 }
+
+function table(el, rows) {
+  if (!rows.length) { el.innerHTML = '<tr><td class="dim">nothing yet</td></tr>'; return; }
+  const cols = Object.keys(rows[0]);
+  const cls = (v, good, bad) => v === '' ? '' : (parseFloat(v) <= good ? 'ok' : parseFloat(v) >= bad ? 'bad' : 'warn');
+  el.innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>' + rows.map(r => '<tr>' + cols.map(c => {
+    let k = ''; if (c === 'rms_test_px' || c === 'rms_calib_px') k = cls(r[c], 0.6, 1.0); if (c === 'floor_err_test_cm') k = cls(r[c], 3, 5); if (c === 'status') k = /OK/.test(r[c]) ? 'ok' : 'warn';
+    return `<td class="${k}">${esc(r[c])}</td>`; }).join('') + '</tr>').join('');
+}
+
+async function poll() {
+  try { state = await (await fetch('/api/state' + (joined && me ? '?name=' + encodeURIComponent(me) : ''))).json(); render(); } catch (e) {}
+  setTimeout(poll, 700);
+}
+function refreshImg(img, url) {          // next picture only after the last one arrived (no pile-up on slow links)
+  if (img.dataset.busy === '1') return;
+  img.dataset.busy = '1';
+  img.onload = () => { img.dataset.busy = ''; img.classList.add('shown'); };
+  img.onerror = () => { img.dataset.busy = ''; img.classList.remove('shown'); };
+  img.src = url;
+}
 function frames() {
-  const t = Date.now();
-  if (state && state.mode === 'intr' && viewCam) {
-    const v = state.cams[viewCam] || {}; const mode = v.calibrated ? viewMode : 'raw';
-    if (mode !== 'rect') $('live').src = `/frame/${viewCam}.jpg?t=${t}`;
-    if (mode !== 'raw') $('liveRect').src = `/frame/${viewCam}.jpg?view=rect&t=${t}`;
+  const t = Date.now(), cam = camOfHash();
+  if (state && cam && state.cams[cam]) {
+    const v = state.cams[cam], mode = v.calibrated ? viewMode : 'raw';
+    if (mode !== 'rect') refreshImg($('live'), `/frame/${cam}.jpg?t=${t}`);
+    if (mode !== 'raw') refreshImg($('liveRect'), `/frame/${cam}.jpg?view=rect&t=${t}`);
+    setTimeout(frames, 300);
+  } else {
+    for (const img of $('cams').querySelectorAll('img')) refreshImg(img, `/frame/${img.dataset.cam}.jpg?thumb=1&t=${t}`);
+    setTimeout(frames, 1500);
   }
-  if (state && state.mode === 'extr') for (const im of $('thumbs').querySelectorAll('img')) im.src = `/frame/${im.dataset.cam}.jpg?t=${t}`;
-  setTimeout(frames, state && state.mode === 'extr' ? 1200 : 400);
 }
 async function results() {
   try { const r = await (await fetch('/api/results')).json(); table($('tIntr'), r.intrinsics); table($('tExtr'), r.extrinsics); } catch (e) {}
   setTimeout(results, 5000);
 }
-if (me) { post('/api/join', {name: me, board: myBoard}).then(j => { if (j.ok) $('who').textContent = me + ' / board ' + myBoard; }); }
+if (me) post('/api/join', {name: me, board: myBoard}).then(j => { if (j.ok) { joined = true; render(); } });
 poll(); frames(); results();
 </script>
 </body>

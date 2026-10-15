@@ -187,6 +187,14 @@ def active_people():
         return {n: dict(p) for n, p in S["people"].items() if now - p["seen"] < ACTIVE_S}
 
 
+def board_users(active):
+    """{board: one person using it}: copies of the same board are one board for extrinsics."""
+    out = {}
+    for person, info in sorted(active.items()):
+        out.setdefault(info["board"], person)
+    return out
+
+
 def tag(img, text, color=(255, 255, 255), bottom=False):
     """Small label on a dark strip in a corner, sized to the image (the page shows the rest)."""
     h, w = img.shape[:2]
@@ -270,8 +278,7 @@ def process(cam, mode, active):
         tag(frame, label if seen else label + "  no board", (0, 255, 0) if seen else (0, 200, 255))
     else:
         found = []
-        for person, info in active.items():
-            b = info["board"]
+        for b, person in board_users(active).items():
             corners, ids = BOARDS[b].detect(gray)
             seen = corners is not None and len(corners) >= MIN_CORNERS
             if seen:
@@ -300,8 +307,7 @@ def process(cam, mode, active):
 
 def extr_events(active):
     now = time.time()
-    for person, info in active.items():
-        b = info["board"]
+    for b, person in board_users(active).items():
         static = {c: cs.still_frame[b] for c, cs in CAMS.items() if b in cs.still_frame and now - cs.still_frame[b][4] < 1.5}
         with LOCK:
             armed = S["armed"].get(b, True)
@@ -408,7 +414,8 @@ def frame(cam):
     if cs is None:
         return Response(status=404)
     rect = request.args.get("view") == "rect"
-    cs.viewed = time.time()
+    if request.args.get("thumb") != "1":       # overview thumbnails: the once-a-second refresh is enough
+        cs.viewed = time.time()
     if rect:
         cs.rect_wanted = time.time()
     jpeg = cs.jpeg_rect if rect else cs.jpeg
@@ -561,10 +568,7 @@ def join():
     name, board = (j.get("name") or "").strip(), j.get("board")
     if not name or board not in BOARDS:
         return jsonify({"error": "name and board (%s) needed" % "/".join(sorted(BOARDS))}), 400
-    with LOCK:
-        for n, p in S["people"].items():
-            if n != name and p["board"] == board and time.time() - p["seen"] < ACTIVE_S:
-                return jsonify({"error": "board %s is used by %s" % (board, n)}), 409
+    with LOCK:   # several people may use copies of the same board (one camera each when recording)
         p = S["people"].setdefault(name, {"camera": None})
         p.update({"board": board, "seen": time.time()})
     return jsonify({"ok": True})
