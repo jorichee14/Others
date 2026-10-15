@@ -16,19 +16,21 @@ import os
 import cv2
 import numpy as np
 
-from calib.common import load_boards, write_csv, write_json
+from calib.common import cam_name, latest_session, load_boards, write_csv, write_json
 from calib.intr import FIELDS, IMAGE_SIZE, fit_camera, load_views, summary_row, view_rows
 
 
-def solve_camera(cam, data_dir, results_dir, boards, flags=0):
-    """Fit one camera from its saved views and write cam_N.json. Returns the fit_camera result or None."""
-    views = load_views(data_dir, cam)
+def solve_camera(cam, data_dir, results_dir, boards, flags=0, session=None):
+    """Fit one camera from the saved views of one calibration round (default: the latest) and write
+    cam_N.json (round 1) or cam_N_<round>.json. Returns the fit_camera result or None."""
+    session = session or latest_session(data_dir, results_dir, cam)
+    views = load_views(data_dir, cam, session)
     size = views[0]["image_size"] if views else IMAGE_SIZE
     res = fit_camera(views, boards, flags, size)
     if res is None:
         return None
-    write_json(os.path.join(results_dir, "intrinsics", "cam_%d.json" % cam), {
-        "camera": cam, "image_size": size, "K": res["K"], "dist": res["dist"],
+    write_json(os.path.join(results_dir, "intrinsics", cam_name(cam, session) + ".json"), {
+        "camera": cam, "session": session, "image_size": size, "K": res["K"], "dist": res["dist"],
         "rms_px": res["rms_calib"], "rms_test_px": res["rms_test"],
         "views": res["n_calib"], "test_views": res["n_test"], "dropped_views": res["dropped"],
         "coverage": res["coverage"],
@@ -52,7 +54,8 @@ def main():
     for cam in args.cams:
         res = solve_camera(cam, args.data, args.results, boards, flags)
         if res is None:
-            n = len([v for v in load_views(args.data, cam) if v["split"] == "calib"])
+            n = len([v for v in load_views(args.data, cam, latest_session(args.data, args.results, cam))
+                     if v["split"] == "calib"])
             print("cam %2d: only %d calibrate views, need 10+ (skipped)" % (cam, n))
             continue
         rows += view_rows(cam, res)

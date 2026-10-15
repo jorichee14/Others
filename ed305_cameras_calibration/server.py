@@ -40,8 +40,8 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from calib.common import (FloorTags, camera_urls, load_boards, now_tag, read_csv, read_intrinsics_file,  # noqa: E402
-                          read_json, write_csv)
+from calib.common import (FloorTags, cam_name, camera_urls, latest_session, load_boards, now_tag,  # noqa: E402
+                          read_csv, read_intrinsics_file, read_json, write_csv)
 from calib.intr import FIELDS, board_pose, coverage, nominal_K, ready, split_for, view_features  # noqa: E402
 from calib.streams import open_streams  # noqa: E402
 from calibrate_intrinsics import solve_camera  # noqa: E402
@@ -78,6 +78,7 @@ class Cam:
         self.jpeg_rect = None
         self.size = None                          # (w, h) of the stream
         self.calibrated, self.source = False, ""  # real K known (and where it came from)
+        self.session = 1                          # calibration round: frames in cam_N, then cam_N_2, ...
         self._maps = None
         self.count, self.feats, self.last_saved = 0, [], None
         self.rms, self.status, self.last_board = "", "idle", ""
@@ -124,7 +125,7 @@ class Cam:
     def load_existing(self, data_dir):
         """Counts and bar features of frames already on disk (so a restart keeps the bars)."""
         self.count, self.feats = 0, []
-        for path in sorted(glob.glob(os.path.join(data_dir, "*", "intr", "cam_%d" % self.cam, "*.json"))):
+        for path in sorted(glob.glob(os.path.join(data_dir, "*", "intr", cam_name(self.cam, self.session), "*.json"))):
             j = read_json(path)
             self.count += 1
             if j.get("split") == "calib" and j.get("features"):
@@ -264,7 +265,7 @@ def process(cam, mode, active):
                     split = split_for(cs.count)
                     f = view_features(BOARDS[b], corners, ids, cs.K, cs.dist, (w, h))
                     out_root = os.path.join(ARGS.out, person, "intr")
-                    save_frame(os.path.join(out_root, "cam_%d" % cam), name, frame, cam, b, corners, ids, tag_det, t,
+                    save_frame(os.path.join(out_root, cam_name(cam, cs.session)), name, frame, cam, b, corners, ids, tag_det, t,
                                split=split, features=f)
                     write_csv(os.path.join(out_root, "views.csv"), [{
                         "person": person, "board": b, "camera": cam, "file": name, "time": t, "split": split,
@@ -375,14 +376,15 @@ def calibrate_thread(cam):
     cs = CAMS[cam]
     cs.status = "calibrating"
     try:
-        res = solve_camera(cam, ARGS.out, ARGS.results, BOARDS)
+        res = solve_camera(cam, ARGS.out, ARGS.results, BOARDS, session=cs.session)
         if res is None:
             cs.rms = "fewer than 10 calibrate views"
         else:
             with LOCK:
                 RES[cam] = res
                 write_summaries()
-            cs.set_intrinsics(res["K"], res["dist"], "calibrated here", res["views"][0]["image_size"])
+            cs.set_intrinsics(res["K"], res["dist"], "calibrated here, %s.json" % cam_name(cam, cs.session),
+                              res["views"][0]["image_size"])
             cs.rms = "rms calib %.2f test %.2f px (%d+%d views) %s" % (
                 res["rms_calib"], res["rms_test"], res["n_calib"], res["n_test"], summary_row(cam, res)["status"])
     except Exception as e:  # keep the server alive
@@ -427,7 +429,7 @@ def frame(cam):
 # ---------------------------------------------------------------- saved frames
 def view_files(cam):
     """Saved intr frames of a camera, newest first: (id 'person/name', json path)."""
-    paths = glob.glob(os.path.join(ARGS.out, "*", "intr", "cam_%d" % cam, "*.json"))
+    paths = glob.glob(os.path.join(ARGS.out, "*", "intr", cam_name(cam, CAMS[cam].session), "*.json"))
     out = [("%s/%s" % (p.split(os.sep)[-4], os.path.basename(p)[:-5]), p) for p in paths]
     return sorted(out, key=lambda x: x[0].split("/")[1], reverse=True)
 
@@ -448,7 +450,7 @@ def view_path(cam, vid):
     person, _, name = vid.partition("/")
     if not person or not name or os.sep in name or ".." in vid or "/" in name:
         return None
-    p = os.path.join(ARGS.out, person, "intr", "cam_%d" % cam, name + ".json")
+    p = os.path.join(ARGS.out, person, "intr", cam_name(cam, CAMS[cam].session), name + ".json")
     return p if os.path.exists(p) else None
 
 
@@ -555,7 +557,8 @@ def state():
         K = cs.K if cs.calibrated else None
         cams[c] = {"person": cs.person, "count": cs.count, "calib": len(cs.feats), "coverage": cov,
                    "ready": ready(cs.feats), "rms": cs.rms, "status": cs.status, "label": cs.label,
-                   "size": cs.size, "calibrated": cs.calibrated, "source": cs.source,
+                   "size": cs.size, "calibrated": cs.calibrated, "source": cs.source, "session": cs.session,
+                   "round_done": os.path.exists(os.path.join(ARGS.results, "intrinsics", cam_name(c, cs.session) + ".json")),
                    "K": None if K is None else {"fx": round(K[0, 0], 1), "fy": round(K[1, 1], 1),
                                                 "cx": round(K[0, 2], 1), "cy": round(K[1, 2], 1)}}
     return jsonify({"mode": mode, "people": people, "cams": cams, "events": events, "log": "\n".join(lines), "busy": busy,
@@ -622,6 +625,27 @@ def calibrate():
     return jsonify({"ok": True})
 
 
+@app.route("/api/recalibrate", methods=["POST"])
+def recalibrate():
+    """Start a new calibration round for a camera: new frames go to cam_N_<round>, the next Calibrate
+    writes cam_N_<round>.json. Earlier frames and results stay on disk untouched; the rectified view
+    keeps using the previous calibration until the new one is done."""
+    j = request.get_json(force=True)
+    cam = j.get("camera")
+    if cam not in CAMS:
+        return jsonify({"error": "unknown camera"}), 400
+    cs = CAMS[cam]
+    if cs.status == "calibrating":
+        return jsonify({"error": "camera %d is calibrating" % cam}), 409
+    with cs.lock:
+        cs.session = max(cs.session, latest_session(ARGS.out, ARGS.results, cam)) + 1
+        cs.count, cs.feats, cs.last_saved, cs.rms = 0, [], None, ""
+    RES.pop(cam, None)
+    log("cam %d: recalibration round %d started by %s (frames go to %s, earlier rounds kept)" % (
+        cam, cs.session, j.get("name") or "?", cam_name(cam, cs.session)))
+    return jsonify({"ok": True, "session": cs.session})
+
+
 @app.route("/api/solve_extrinsics", methods=["POST"])
 def solve_extrinsics():
     with LOCK:
@@ -667,8 +691,10 @@ def main():
     given = {int(n): f for n, _, f in (a.partition("=") for a in ARGS.intrinsics)}
     for c in sorted(urls):
         CAMS[c] = Cam(c, "" if ARGS.fake else urls[c])
+        CAMS[c].session = latest_session(ARGS.out, ARGS.results, c)
         CAMS[c].load_existing(ARGS.out)
-        mine = os.path.join(ARGS.results, "intrinsics", "cam_%d.json" % c)
+        done = [os.path.join(ARGS.results, "intrinsics", cam_name(c, k) + ".json") for k in range(CAMS[c].session, 0, -1)]
+        mine = next((p for p in done if os.path.exists(p)), None)     # newest round that has a result
         for path, src in ((mine, "results/intrinsics"), (given.get(c), "given")):
             if path and os.path.exists(path):
                 K, dist, size = read_intrinsics_file(path)

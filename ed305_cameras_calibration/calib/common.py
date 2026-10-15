@@ -1,6 +1,8 @@
 """Shared helpers: config loading, boards and detectors, pose maths, file layout."""
+import glob
 import json
 import os
+import re
 import time
 
 import cv2
@@ -167,16 +169,36 @@ def read_intrinsics_file(path):
         (tuple(int(v) for v in size) if size else None)
 
 
+def cam_name(cam, session=1):
+    """Folder / result file name of a camera's calibration round: cam_N, and after each Recalibrate
+    cam_N_2, cam_N_3, ... (earlier rounds are kept, never overwritten)."""
+    return "cam_%d" % cam if session <= 1 else "cam_%d_%d" % (cam, session)
+
+
+def latest_session(data_dir, results_dir, cam):
+    """Highest calibration round of a camera that has frames or a result on disk (1 if none)."""
+    pat = re.compile(r"^cam_%d(?:_(\d+))?(?:\.json)?$" % cam)
+    names = [os.path.basename(p) for p in glob.glob(os.path.join(data_dir, "*", "intr", "cam_%d*" % cam))]
+    names += [os.path.basename(p) for p in glob.glob(os.path.join(results_dir, "intrinsics", "cam_%d*.json" % cam))]
+    found = [int(m.group(1) or 1) for m in map(pat.match, names) if m]
+    return max(found or [1])
+
+
 def load_intrinsics(results_dir):
-    """{cam: (K, dist)} from results/intrinsics/cam_N.json."""
-    out = {}
+    """{cam: (K, dist)} from results/intrinsics/cam_N.json, the latest round (cam_N_2.json, ...) if any."""
+    out, best = {}, {}
     d = os.path.join(results_dir, "intrinsics")
     if not os.path.isdir(d):
         return out
-    for fn in sorted(os.listdir(d)):
-        if fn.startswith("cam_") and fn.endswith(".json"):
+    for fn in os.listdir(d):
+        m = re.match(r"^cam_(\d+)(?:_(\d+))?\.json$", fn)
+        if not m:
+            continue
+        cam, session = int(m.group(1)), int(m.group(2) or 1)
+        if session >= best.get(cam, 0):
             j = read_json(os.path.join(d, fn))
-            out[int(j["camera"])] = (np.array(j["K"], float), np.array(j["dist"], float).reshape(-1))
+            best[cam] = session
+            out[cam] = (np.array(j["K"], float), np.array(j["dist"], float).reshape(-1))
     return out
 
 

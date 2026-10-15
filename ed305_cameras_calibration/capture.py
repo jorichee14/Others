@@ -29,7 +29,8 @@ import time
 import cv2
 import numpy as np
 
-from calib.common import FloorTags, camera_urls, load_boards, load_intrinsics, now_tag, write_csv, write_json
+from calib.common import (FloorTags, cam_name, camera_urls, latest_session, load_boards, load_intrinsics, now_tag,
+                          write_csv, write_json)
 from calib.intr import FIELDS, MIN_VIEWS, coverage, nominal_K, ready, split_for, view_features
 from calib.streams import open_streams, tile
 
@@ -156,7 +157,7 @@ def main():
                         name = now_tag()
                         split = split_for(counts[cam])
                         f = view_features(board, corners, ids, Kd[cam][0], Kd[cam][1], (w, h))
-                        save_frame(os.path.join(out_root, "cam_%d" % cam), name, frame, cam, args.board,
+                        save_frame(os.path.join(out_root, cam_name(cam, latest_session(args.out, args.results, cam))), name, frame, cam, args.board,
                                    corners, ids, tag_det, t, split=split, features=f)
                         write_csv(os.path.join(out_root, "views.csv"), [{
                             "person": args.person, "board": args.board, "camera": cam, "file": name, "time": t,

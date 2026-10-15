@@ -183,7 +183,8 @@
         </div>
       </div>
       <div class="side">
-        <div class="actions"><button id="rec">Record</button><button id="calib" class="primary" disabled>Calibrate</button></div>
+        <div class="actions"><button id="rec">Record</button><button id="calib" class="primary" disabled>Calibrate</button>
+          <button id="recal" style="grid-column:1/-1" title="Start a new round; earlier frames and results are kept">↻ Recalibrate (new round)</button></div>
         <div class="stat"><div class="k">Next step</div><div class="v" id="next">-</div><div class="d" id="nextD"></div></div>
         <div class="stat"><div class="k">Frames</div><div class="v" id="count">0</div><div class="d" id="countD"></div></div>
         <div class="stat"><div class="k">Coverage</div><div class="bars" id="bars" style="margin-top:6px"></div></div>
@@ -242,6 +243,12 @@ $('rec').onclick = () => {
   post('/api/record', {name: me, camera: c, on: !mine});
 };
 $('calib').onclick = () => { const c = camOfHash(); if (c) post('/api/calibrate', {camera: c}); };
+$('recal').onclick = () => {
+  const c = camOfHash(); if (!c || !state) return;
+  const n = (state.cams[c].session || 1) + 1;
+  if (!confirm(`Start calibration round ${n} for camera ${c}?\n\nNothing is deleted: the current frames and calibration stay on disk. New frames go to cam_${c}_${n}, and Calibrate then writes cam_${c}_${n}.json. The rectified view keeps the current calibration until then.`)) return;
+  post('/api/recalibrate', {camera: c, name: me}).then(() => { galleryKey = ''; gallery(); });
+};
 $('framesReload').onclick = () => { galleryKey = ''; gallery(); };
 
 function chip(v) {
@@ -308,12 +315,13 @@ function renderOverview(s, cams) {
 function renderCamera(s, c) {
   const v = s.cams[c];
   $('camTitle').textContent = 'Camera ' + c; $('camChip').innerHTML = chip(v);
-  $('camSub').textContent = [v.label, v.size ? v.size.join('×') : '', v.status].filter(Boolean).join(' · ');
+  $('camSub').textContent = [v.label, v.size ? v.size.join('×') : '', v.status, v.session > 1 ? 'round ' + v.session : ''].filter(Boolean).join(' · ');
   const mine = s.people[me] && s.people[me].camera === c;
   $('rec').textContent = mine ? '■ Stop recording' : (v.person ? 'Recording: ' + v.person : '● Record');
   $('rec').className = mine ? 'danger' : ''; $('rec').disabled = !!v.person && !mine;
   $('calib').disabled = v.calib < 10 || v.status === 'calibrating';
   $('calib').textContent = v.status === 'calibrating' ? 'Calibrating…' : 'Calibrate';
+  $('recal').hidden = !(v.calibrated || v.count > 0); $('recal').disabled = v.status === 'calibrating' || !!v.person;
   const mode = v.calibrated ? viewMode : 'raw';
   for (const b of $('viewSeg').querySelectorAll('button')) { b.className = b.dataset.v === mode ? 'on' : ''; b.disabled = b.dataset.v !== 'raw' && !v.calibrated; }
   $('viewHint').textContent = v.calibrated ? '' : 'Rectified view after Calibrate';
@@ -325,7 +333,8 @@ function renderCamera(s, c) {
   if (v.ready) { next = '<span class="ok">Press Calibrate</span>'; nextD = 'all bars green, enough frames'; }
   else if (mine) { next = 'Move the board'; nextD = low.length ? 'more range in: ' + low.join(', ') : `${Math.max(0, 20 - v.calib)} more frames`; }
   else if (v.person) { next = 'Recording…'; nextD = 'by ' + v.person; }
-  else if (v.calibrated) { next = '<span class="ok">Done</span>'; nextD = 'Record again to add frames, then Calibrate'; }
+  else if (v.calibrated && (v.round_done || (v.session === 1 && v.count === 0))) { next = '<span class="ok">Done</span>'; nextD = 'Recalibrate starts a new round; this one is kept'; }
+  else if (v.session > 1 && !v.round_done) { next = joined ? 'Press Record' : 'Join, then Record'; nextD = `round ${v.session}: ${v.count} frames so far, the previous calibration is kept`; }
   else { next = joined ? 'Press Record' : 'Join, then Record'; nextD = 'hold the board in front of this camera'; }
   $('next').innerHTML = next; $('nextD').textContent = nextD;
   $('bars').innerHTML = FIELDS.map(k => { const p = Math.round(100 * (v.coverage[k] || 0));

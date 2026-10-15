@@ -17,7 +17,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from calib.common import FloorTags, load_boards, load_intrinsics, pose_row, read_csv, read_json, write_csv
+from calib.common import FloorTags, latest_session, load_boards, load_intrinsics, pose_row, read_csv, read_json, write_csv
 from calib.extr import evaluate_events, evaluate_tags, load_observations, rms_of
 from calib.intr import evaluate as eval_views, load_views, view_features
 
@@ -44,7 +44,7 @@ def main():
     for cam in args.cams:
         if cam not in intr:
             continue
-        views = load_views(args.data, cam)
+        views = load_views(args.data, cam, latest_session(args.data, args.results, cam))
         if not args.all:
             views = [v for v in views if known_views.get(v["path"], v["split"]) == "test"]
         if not views:

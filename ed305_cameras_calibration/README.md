@@ -48,6 +48,21 @@ Several streams at once: repeat `--url` (`--cams 17 18 --url 17=... --url 18=...
 to `config/cameras.yaml`. A test run over RTSP of a simulated 1280x720 camera (fx 900,
 k1 -0.25, k2 0.08) gave fx 900.2, fy 900.0, k1 -0.250, k2 0.084 and 0.26 px test error.
 
+## All 16 ED305 cameras: one command
+
+On a PC on the ED305 network (lab Wi-Fi or VPN):
+```
+python server.py
+```
+Without `--cams` it opens every camera in `config/cameras.yaml` (cam_1 ... cam_16); add the robot
+with `--url 17=rtsp://<robot-ip>:8554/mobile_2/color`. Reading 16 streams of 1920x1080 wants a
+PC with 8+ cores. The overview shows every camera; calibrated ones have a green outline.
+
+**Recalibrate** (camera page) starts a new round without deleting anything: new frames go to
+`data/<person>/intr/cam_N_2/` and Calibrate writes `results/intrinsics/cam_N_2.json` (then
+`_3`, ...). Round 1 (`cam_N`, `cam_N.json`) stays as it was. Everything uses the newest round
+that has a result; until the new round is calibrated the previous calibration stays in use.
+
 ## The whole process in one list
 
 1. Print boards A, B, C (A1) and 12 floor tags (A4): `python make_boards.py`. Mount the boards flat.

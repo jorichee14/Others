@@ -6,7 +6,7 @@ import os
 import cv2
 import numpy as np
 
-from calib.common import read_json
+from calib.common import cam_name, read_json
 
 IMAGE_SIZE = (1920, 1080)
 TEST_EVERY = 5          # every 5th saved view of a camera is a TEST view (never used for fitting)
@@ -82,11 +82,11 @@ def ready(feats):
 
 
 # ---------------------------------------------------------------- saved views
-def load_views(data_dir, cam):
+def load_views(data_dir, cam, session=1):
     """All saved intr views of a camera (all people merged), each a dict with board, corners, ids,
     path, person, split. Views saved without a split get one by order (every 5th = test)."""
     views = []
-    for path in sorted(glob.glob(os.path.join(data_dir, "*", "intr", "cam_%d" % cam, "*.json"))):
+    for path in sorted(glob.glob(os.path.join(data_dir, "*", "intr", cam_name(cam, session), "*.json"))):
         j = read_json(path)
         if j.get("charuco") and len(j["charuco"]["ids"]) >= 6:
             views.append({"board": j["board"], "corners": np.array(j["charuco"]["corners"], np.float32),
