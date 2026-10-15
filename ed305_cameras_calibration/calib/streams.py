@@ -1,11 +1,27 @@
 """Threaded RTSP readers: each stream keeps only its latest frame, so slow processing never lags."""
 import os
+import socket
 import threading
 import time
+from urllib.parse import urlparse
 
 import cv2
 
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|stimeout;5000000")
+
+
+def reachable(url, timeout=2.0):
+    """Does the stream's host accept a connection? OpenCV opens streams one at a time, and opening an
+    unreachable address blocks for ~30 s, so every other camera would wait behind it."""
+    u = urlparse(url)
+    if not u.hostname or u.scheme not in ("rtsp", "rtsps", "http", "https"):
+        return True                       # a file, or something we cannot check
+    port = u.port or {"rtsp": 554, "rtsps": 322, "http": 80, "https": 443}[u.scheme]
+    try:
+        socket.create_connection((u.hostname, port), timeout).close()
+        return True
+    except OSError:
+        return False
 
 
 class Stream(threading.Thread):
@@ -19,7 +35,12 @@ class Stream(threading.Thread):
 
     def run(self):
         while not self._stop:
-            cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+            if not reachable(self.url):
+                self.ok = False
+                time.sleep(3)
+                continue
+            cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 8000,
+                                                              cv2.CAP_PROP_READ_TIMEOUT_MSEC, 8000])
             if not cap.isOpened():
                 self.ok = False
                 time.sleep(2)
