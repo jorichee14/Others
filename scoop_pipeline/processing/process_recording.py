@@ -49,7 +49,9 @@ def main():
     ap.add_argument("--status", action="store_true", help="show what is done and stop")
     a = ap.parse_args()
     try:
-        settings = recording.load_settings(a.settings)
+        # the machine folder's own settings (recording.yaml machines:), e.g. mobile_2/
+        settings = recording.settings_for(recording.load_settings(a.settings),
+                                          os.path.basename(os.path.normpath(a.raw_dir)))
         rec = recording.find_recording(a.raw_dir, a.work_root,
                                        settings["ouster"].get("packets_ns", "/ouster"),
                                        recording.zed_bags(settings["zed"]))

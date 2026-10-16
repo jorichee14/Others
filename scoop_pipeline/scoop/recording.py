@@ -42,7 +42,8 @@ import yaml
 from . import bag, replay, retime, zed
 from .bag import BagError
 
-__all__ = ["STEPS", "LATER", "Recording", "work_dir_for", "find_recording", "load_settings", "zed_bags",
+__all__ = ["STEPS", "LATER", "Recording", "work_dir_for", "find_recording", "load_settings",
+           "settings_for", "zed_bags",
            "zed_args", "process"]
 
 STEPS = ["decoded", "retimed", "glim", "zed"]
@@ -158,6 +159,27 @@ def load_settings(path=None) -> dict:
     return s
 
 
+def _deep(base, over):
+    if not isinstance(base, dict) or not isinstance(over, dict):
+        return over
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _deep(base.get(k), v) if k in base else v
+    return out
+
+
+def settings_for(settings: dict, machine: Optional[str]) -> dict:
+    """The settings for one machine: the top level (mobile_1's) with that
+    machine's block of ``machines:`` merged over it (dicts merged key by key,
+    lists and values replaced). A machine without a block gets the top level."""
+    base = {k: v for k, v in settings.items() if k != "machines"}
+    over = (settings.get("machines") or {}).get(machine) if machine else None
+    s = _deep(base, over or {})
+    for k in ("ouster", "glim", "zed"):
+        s.setdefault(k, {})
+    return s
+
+
 def zed_bags(z: dict) -> Dict[str, List[str]]:
     """Bag name -> topics, one ZED replay per bag: the ``zed.bags`` setting
     (or ``zed.topics`` as a single bag ``zed``)."""
@@ -222,6 +244,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
     for name in (until, redo, only):
         if name is not None and name not in STEPS:
             raise ValueError(f"unknown step {name!r}; steps: {STEPS}")
+    until = until or settings.get("until")       # a machine's own last step (recording.yaml)
     last = STEPS.index(until) if until else len(STEPS) - 1
     bags = zed_bags(settings["zed"])
     rec.zed_bags = tuple(bags)

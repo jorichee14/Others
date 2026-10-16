@@ -341,6 +341,23 @@ data/work/20260924/mapping_A/mobile_1/
 ```
 
 Settings come from `configs/recording.yaml` (`--settings` for another file).
+Its top level is mobile_1's; a machine folder named in its `machines:` block
+gets that block merged over it. mobile_2's (`mobile_2/` folder):
+
+```
+data/raw/<date>/<pass>/mobile_2/<its bag>/      Ouster packets on /mobile_2/ouster
+data/work/<date>/<pass>/mobile_2/
+    <bag>_decoded/   points + IMU, every other topic copied (camera, VSLAM, /tf,
+                     /tf_static) without the packets; Ouster frames *_mobile2
+    <bag>_retimed/   capture time; what the merge takes for mobile_2
+    clock.json  process.yaml
+```
+
+No GLIM there (`until: retimed`): the map and the poses come from mobile_1.
+`run_pass.py`, `merge_session.py` and `process_recording.py` all apply the
+block by the folder's (machine's) name; the merge then adds
+`configs/static_tf.yaml` (mobile_2: `os_lidar_mobile2 ->
+camera_color_optical_frame`) and the map stages' TF (map, boards, cameras).
 The two bags are named `<original bag>_decoded` and `<original bag>_retimed`
 (the .mcap inside too), so a copied bag still says where it came from.
 A folder with an SVO but no Ouster packets bag (e.g. an older recording)

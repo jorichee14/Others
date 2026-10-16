@@ -25,6 +25,18 @@ ouster:
                                       # live ZED wrapper stamped it 2.12 s late on 20260924.
                                       # The result: <work>/imu_sync.json
 
+machines:                          # per machine folder (raw/<date>/<pass>/<machine>/): merged
+                                   # over the settings above, which are mobile_1's
+  mobile_2:                        # Ouster packets + RealSense + Isaac VSLAM
+    ouster:
+      packets_ns: /mobile_2/ouster
+      out_ns: /mobile_2/ouster
+      frame_suffix: _mobile2       # os_lidar_mobile2, os_sensor_mobile2, os_imu_mobile2
+      remap: []                    # its topics keep their names
+      exclude: [/mobile_2/ouster/lidar_packets, /mobile_2/ouster/imu_packets]
+      imu_sync: []                 # the RealSense IMU is on the PC clock already
+    until: retimed                 # no GLIM: the map and its poses come from mobile_1
+
 glim:
   config: ~/workspaces/isaac_ros-dev/glim_config   # $GLIM_CONFIG overrides
   image: koide3/glim_ros2:humble-mcap

@@ -87,9 +87,13 @@ def machines(raw):
     out = []
     if not os.path.isdir(raw):
         return out
+    settings = recording.load_settings(None)
     for d in sorted(p for p in os.listdir(raw) if os.path.isdir(os.path.join(raw, p))):
+        s = recording.settings_for(settings, d)                 # recording.yaml machines:
         try:
-            recording.find_recording(os.path.join(raw, d))
+            recording.find_recording(os.path.join(raw, d), None,
+                                     s["ouster"].get("packets_ns", "/ouster"),
+                                     recording.zed_bags(s["zed"]))
         except (BagError, OSError, ValueError):
             continue
         out.append(os.path.join(raw, d))
