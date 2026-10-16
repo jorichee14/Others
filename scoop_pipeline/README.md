@@ -44,6 +44,8 @@ processing/          raw recordings -> processed bags (command lines around scoo
   csi_clean.py       CSI for use: data frames, no pilots, H scaled to RSSI, poses
   link_trace.py      the measured link as traces (pings, iperf, outages) for scoop/channel.py
   tf_edit.py         show or change a bag's TF: drop edges, add transforms, new odometry
+  dvlc_pauses.py     a merged bag's pauses (robot still) -> one short bag each, for Koide's
+                     direct_visual_lidar_calibration
 run_pass.py          one pass from raw to processed, every step in order (below)
 map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
                      (01_build_map.py, 02_refine_poses.py, ...);
@@ -555,6 +557,48 @@ map
 └── arducam_optical_frame   07 (its ChArUco pose under map_zed is dropped)
    └── infra1_link          the radar, configs/static_tf.yaml
 ```
+
+## mobile_2: camera-LiDAR calibration at the pauses
+
+Koide's direct_visual_lidar_calibration (DVLC) wants short bags with the
+sensors still. mobile_2's recording has Ouster packets only and stops several
+times, so: decode, retime, merge, then cut one bag per pause.
+
+```
+RAW=mirc_dataset_mapping_2_run_20261015_mobile_2      # the raw rosbag2 folder
+W=work/mobile_2_calib
+
+# 1. packets -> points (sensor time)
+python processing/decode_ouster.py $RAW $W/decoded \
+    --packets-ns /mobile_2/ouster --out-ns /mobile_2/ouster
+# 2. sensor time -> capture time
+python processing/retime.py $RAW $W/decoded $W/retimed /mobile_2/ouster /mobile_2/ouster
+# 3. points + camera + what finds the pauses, in one bag
+python processing/merge_bags.py $RAW $W/retimed -o $W/merged --topics \
+    /mobile_2/ouster/points /mobile_2/color/image_raw /mobile_2/color/camera_info \
+    /mobile_2/visual_slam/tracking/odometry /mobile_2/imu
+# 4. the pauses: look first, then cut
+python processing/dvlc_pauses.py $W/merged $W/pauses --list
+python processing/dvlc_pauses.py $W/merged $W/pauses
+# 5. DVLC on every pause together
+dvlc ros2 run direct_visual_lidar_calibration preprocess $W/pauses $W/preprocessed -v \
+    --image_topic /mobile_2/color/image_raw --points_topic /mobile_2/ouster/points \
+    --camera_info_topic /mobile_2/color/camera_info
+dvlc ros2 run direct_visual_lidar_calibration initial_guess_manual $W/preprocessed
+dvlc ros2 run direct_visual_lidar_calibration calibrate $W/preprocessed
+dvlc ros2 run direct_visual_lidar_calibration viewer $W/preprocessed
+```
+
+A pause is where, over +-0.25 s, the VSLAM odometry moves under 0.01 m/s, the
+RealSense gyro reads under 0.02 rad/s and its accelerometer shakes under
+0.08 m/s^2 (std), for at least 4 s; 1 s comes off both ends and at most the
+middle 10 s are kept (`--max-speed --max-gyro --max-acc-std --min-pause
+--trim --max-len`). `--list` prints the table with each pause's worst values;
+`--only 0,2,5` cuts just those, `--intervals 120.5-130,300-310` (s from the
+bag's start) skips the detection. Each pause goes to `pause_NN/` with the
+three DVLC topics byte for byte; `pauses.yaml` records what was cut. For the
+infra1 camera instead: merge `/mobile_2/infra1/image_rect_raw
+/mobile_2/infra1/camera_info` and pass them as `--image --camera-info`.
 
 ## Merging chosen topics of any bags
 
