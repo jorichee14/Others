@@ -20,3 +20,16 @@ transforms:
     child: infra1_link                                    # infra_1's radar
     translation: [0.017773, -0.208023, -0.155788]        # |t| = 0.260 m
     rotation_xyzw: [0.571431, 0.563856, 0.432969, -0.409965]
+  - parent: os_lidar                                      # mobile_2's Ouster (decoded frame)
+    child: camera_color_optical_frame                     # mobile_2's RealSense colour
+    translation: [-0.273322, 0.029175, 0.004183]          # |t| = 0.275 m
+    rotation_xyzw: [0.552208, 0.540455, -0.450592, -0.447148]
+    quality:                                              # not read by the merge; the record
+      method: direct_visual_lidar_calibration (Koide), NID, static integration
+      recording: 20261015 mapping, mirc_dataset_mapping_2_run_20261015_mobile_2
+      pauses: [pause_01, pause_02, pause_03, pause_04]    # processing/dvlc_pauses.py
+      initial_guess: manual, 8 point pairs
+      cost: {initial: 3.724714, final: 3.716170, iterations: 10}
+      change_from_guess: {translation_m: 0.030, rotation_deg: 0.41}
+      viewer_check: edges matched in all pauses
+      calib_json: work/20261015/mobile_2_calib/pauses_preprocessed/calib.json
