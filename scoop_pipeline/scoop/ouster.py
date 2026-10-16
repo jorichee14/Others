@@ -466,6 +466,14 @@ ROS_POINT_DTYPE = np.dtype({
     "itemsize": 48})
 ROS_FRAME_ID = {"lidar": "os_lidar", "sensor": "os_sensor"}
 ROS_IMU_FRAME_ID = "os_imu"
+
+
+def frame_names(suffix: str = "") -> dict:
+    """ouster_ros's frame names -> the same with ``suffix`` (e.g. ``_mobile2``);
+    {} without one."""
+    if not suffix:
+        return {}
+    return {n: n + suffix for n in (*ROS_FRAME_ID.values(), ROS_IMU_FRAME_ID)}
 ROS_IMU_ACCEL_COV = 0.01            # ouster_ros's fixed IMU covariances
 ROS_IMU_GYRO_COV = 6e-4
 

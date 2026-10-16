@@ -94,17 +94,18 @@ def decode_ouster_bag(packets_bag, out_dir, packets_ns: str = "/ouster",
                       driver_max_range: float = 1000.0, frame: str = "lidar",
                       imu: bool = True, remap: Optional[Dict[str, str]] = None,
                       copy_all: bool = False, exclude=(),
-                      limit: int = 0, metadata=None, frame_id: Optional[str] = None,
+                      limit: int = 0, metadata=None, frame_suffix: str = "",
                       log=print) -> ReplayResult:
     """Decode ``<packets_ns>/{lidar,imu}_packets`` of ``packets_bag`` into a new
     rosbag2 folder ``out_dir`` (which must not exist). Topics are copied along
     byte for byte with their QoS (:func:`plan_copies`): ``remap`` = {src: dst}
     renames, ``copy_all`` copies every other topic too, ``exclude`` leaves
     some out. ``limit`` stops after that many scans; ``metadata`` overrides
-    the bag's sensor metadata (JSON string or SensorInfo). ``frame_id``
-    names the cloud's frame (default os_lidar / os_sensor, as ouster_ros),
-    e.g. os_lidar_mobile2; the default name is renamed to it in the copied
-    topics too (their headers, /tf, /tf_static), so the TF tree still holds."""
+    the bag's sensor metadata (JSON string or SensorInfo). ``frame_suffix``
+    (e.g. ``_mobile2``) goes on every Ouster frame name -- os_lidar, os_sensor,
+    os_imu -> os_lidar_mobile2, ... -- in the clouds, the IMU and the copied
+    topics (their headers, /tf, /tf_static), so the TF tree still holds and
+    two robots never share a frame."""
     reader = bag.open_bag(packets_bag)
     points_t, imu_t, meta_t = f"{out_ns}/points", f"{out_ns}/imu", f"{out_ns}/metadata"
     copies = plan_copies(reader.topics().keys(), dict(remap or {}), copy_all, exclude,
@@ -116,9 +117,9 @@ def decode_ouster_bag(packets_bag, out_dir, packets_ns: str = "/ouster",
     src = metadata or ouster.read_metadata(reader, packets_ns)
     info = ouster.sensor_info(src)
     meta_json = src if isinstance(src, str) else info.to_json_string()
-    default_id = ouster.ROS_FRAME_ID[frame]
-    frame_id = frame_id or default_id
-    rename = {default_id: frame_id} if frame_id != default_id else {}
+    rename = ouster.frame_names(frame_suffix)
+    frame_id = rename.get(ouster.ROS_FRAME_ID[frame], ouster.ROS_FRAME_ID[frame])
+    imu_frame = rename.get(ouster.ROS_IMU_FRAME_ID, ouster.ROS_IMU_FRAME_ID)
 
     st: Dict[str, int] = {}
     n_scans = 0
@@ -141,7 +142,7 @@ def decode_ouster_bag(packets_bag, out_dir, packets_ns: str = "/ouster",
                 w.write_raw(copies[ev.topic], schemas[ev.topic],
                             ev.payload if payload is None else payload, ev.log_ns)
             elif isinstance(ev, ouster.ImuSample):
-                w.write(imu_t, rosmsg.imu(ev.stamp_ns, ouster.ROS_IMU_FRAME_ID,
+                w.write(imu_t, rosmsg.imu(ev.stamp_ns, imu_frame,
                                           ev.accel, ev.gyro,
                                           accel_cov=ouster.ROS_IMU_ACCEL_COV,
                                           gyro_cov=ouster.ROS_IMU_GYRO_COV), ev.log_ns)

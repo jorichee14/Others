@@ -9,7 +9,7 @@ ouster:
   driver_min_range: 1.30           # m, the replay's min_range
   driver_max_range: 1000.0
   frame: lidar                     # os_lidar, the replay's default point_cloud_frame
-  frame_id: os_lidar_mobile1       # its name in the bag: one per robot (mobile_2: os_lidar_mobile2)
+  frame_suffix: _mobile1           # on os_lidar, os_sensor, os_imu: one per robot (mobile_2: _mobile2)
   imu: true
   copy_all: true                   # copy EVERY other topic too (tf, tf_static, radar, ntp, ...)
   exclude: []                      # topics to leave out of the copy

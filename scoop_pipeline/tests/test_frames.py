@@ -118,6 +118,27 @@ def test_unknown_type_with_odd_length_change_is_refused():
     assert b"os_lidar_mobile2\0" in out
 
 
+def test_suffix_names_all_three_ouster_frames(d):
+    from scoop import ouster
+    assert ouster.frame_names("") == {}
+    m = ouster.frame_names("_mobile2")
+    assert m == {"os_lidar": "os_lidar_mobile2", "os_sensor": "os_sensor_mobile2",
+                 "os_imu": "os_imu_mobile2"}
+    src, out = os.path.join(d, "src"), os.path.join(d, "out")
+    with BagWriter(src) as w:
+        w.write("/points", cloud(), 1)
+        w.write("/imu", imu("os_imu"), 2)
+        w.write("/tf_static", rosmsg.tf_message(
+            [("os_sensor", "os_lidar", [0, 0, 0], [0, 0, 0, 1]),
+             ("os_sensor", "os_imu", [0, 0, 0], [0, 0, 0, 1])], 0), 3)
+    frames.rename_bag(src, out, m, log=lambda *_: None)
+    got = {t: dec(p) for t, _, p, dec in bag.open_bag(out).iter_raw()}
+    assert got["/points"].header.frame_id == "os_lidar_mobile2"
+    assert got["/imu"].header.frame_id == "os_imu_mobile2"
+    assert [(t.header.frame_id, t.child_frame_id) for t in got["/tf_static"].transforms] == \
+        [("os_sensor_mobile2", "os_lidar_mobile2"), ("os_sensor_mobile2", "os_imu_mobile2")]
+
+
 def test_parse_renames():
     assert frames.parse_renames(["a:=b", " c := d "]) == {"a": "b", "c": "d"}
     for bad in ("a", "a:=", ":=b", "a:=a"):
@@ -153,7 +174,7 @@ def test_rename_bag_end_to_end(d):
     assert "durability: 1" in bag.topic_qos(r)["/tf_static"]
 
 
-def test_decode_frame_id_names_the_cloud_and_the_copied_tf(d):
+def test_decode_frame_suffix_names_the_cloud_imu_and_the_copied_tf(d):
     try:
         import test_ouster as to
     except ImportError as e:                                  # no ouster-sdk
@@ -186,22 +207,25 @@ def test_decode_frame_id_names_the_cloud_and_the_copied_tf(d):
         w.finish()
     out = os.path.join(d, "dec")
     replay.decode_ouster_bag(src, out, packets_ns=to.NS, out_ns="/mobile_2/ouster",
-                             metadata=to.meta(), copy_all=True, frame_id="os_lidar_mobile2",
+                             metadata=to.meta(), copy_all=True, frame_suffix="_mobile2",
                              log=lambda *_: None)
     r = bag.open_bag(out)
     pts = next(r.iter_messages(["/mobile_2/ouster/points"]))[2]
     assert pts.header.frame_id == "os_lidar_mobile2"
     tf = next(r.iter_messages(["/tf_static"]))[2]
-    assert tf.transforms[0].child_frame_id == "os_lidar_mobile2"
+    assert (tf.transforms[0].header.frame_id, tf.transforms[0].child_frame_id) == \
+        ("os_sensor_mobile2", "os_lidar_mobile2")
     imu_msg = next(r.iter_messages(["/mobile_2/ouster/imu"]))[2]
-    assert imu_msg.header.frame_id == ouster.ROS_IMU_FRAME_ID       # untouched
-    # without frame_id: the ouster_ros name, as before
+    assert imu_msg.header.frame_id == "os_imu_mobile2"
+    # without a suffix: the ouster_ros names, as before
     out2 = os.path.join(d, "dec2")
     replay.decode_ouster_bag(src, out2, packets_ns=to.NS, out_ns="/mobile_2/ouster",
                              metadata=to.meta(), copy_all=True, log=lambda *_: None)
     r2 = bag.open_bag(out2)
     assert next(r2.iter_messages(["/mobile_2/ouster/points"]))[2].header.frame_id == "os_lidar"
     assert next(r2.iter_messages(["/tf_static"]))[2].transforms[0].child_frame_id == "os_lidar"
+    assert next(r2.iter_messages(["/mobile_2/ouster/imu"]))[2].header.frame_id == \
+        ouster.ROS_IMU_FRAME_ID
 
 
 def check(name, fn, *args):

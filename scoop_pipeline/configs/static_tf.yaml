@@ -3,9 +3,10 @@
 # If `child` already has a parent in the bags' TF tree (the ZED optical frame
 # does), the merge adds the same geometry as `child` -> <root of parent's tree>
 # instead, so every frame keeps one parent (scoop/tftree.py).
-# Each robot's LiDAR has its own frame (decode_ouster.py --frame-id, recording.yaml
-# ouster.frame_id): os_lidar_mobile1, os_lidar_mobile2. A bag decoded before that
-# says os_lidar: processing/rename_frames.py --rename os_lidar:=os_lidar_mobileN.
+# Each robot's Ouster frames carry its suffix (decode_ouster.py --frame-suffix,
+# recording.yaml ouster.frame_suffix): os_lidar_mobile1, os_sensor_mobile1,
+# os_imu_mobile1; _mobile2 on mobile_2. A bag decoded before that says os_lidar:
+# processing/rename_frames.py --suffix _mobileN.
 transforms:
   - parent: os_lidar_mobile1                              # mobile_1's Ouster
     child: zed_left_camera_optical_frame

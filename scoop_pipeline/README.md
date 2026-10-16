@@ -49,7 +49,7 @@ processing/          raw recordings -> processed bags (command lines around scoo
   run_dvlc.sh        that calibration (docker) on the pause bags: preprocess, guess, calibrate,
                      viewer; output owned by you
   rename_frames.py   rename TF frames in a bag (headers, Odometry child, /tf, /tf_static), e.g.
-                     os_lidar:=os_lidar_mobile2 for a bag decoded before --frame-id
+                     --suffix _mobile2 for a bag decoded before --frame-suffix
 run_pass.py          one pass from raw to processed, every step in order (below)
 map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
                      (01_build_map.py, 02_refine_poses.py, ...);
@@ -386,20 +386,21 @@ also still runs on its output unchanged.
 ```
 python processing/decode_ouster.py <original bag> <decoded bag dir> \
     --packets-ns /ouster --out-ns /mobile_1/ouster --driver-min-range 1.30 \
-    --frame-id os_lidar_mobile1
+    --frame-suffix _mobile1
 ```
 
-`--frame-id` names the cloud's frame: one name per robot (`os_lidar_mobile1`,
-`os_lidar_mobile2`), so two robots' LiDARs stay two frames when their bags are
-merged. Without it the frame is ouster_ros's `os_lidar`. The old name is
-renamed to it in the copied topics too (their headers, /tf, /tf_static), so
-the driver's `os_sensor -> os_lidar` becomes `os_sensor -> os_lidar_mobile1`.
-`configs/recording.yaml` has `frame_id: os_lidar_mobile1`, and
-`configs/static_tf.yaml` hangs each robot's camera from its own LiDAR frame.
-A bag decoded before this says `os_lidar`; rename it in a copy:
+`--frame-suffix` goes on every Ouster frame -- `os_lidar`, `os_sensor`,
+`os_imu` become `os_lidar_mobile1`, `os_sensor_mobile1`, `os_imu_mobile1` --
+one suffix per robot, so two robots' sensors stay apart when their bags are
+merged. Without it the names are ouster_ros's. The copied topics are renamed
+too (their headers, /tf, /tf_static), so the driver's `os_sensor -> os_lidar`
+becomes `os_sensor_mobile1 -> os_lidar_mobile1`. `configs/recording.yaml` has
+`frame_suffix: _mobile1`, and `configs/static_tf.yaml` hangs each robot's
+camera from its own LiDAR frame. A bag decoded before this has the plain
+names; rename them in a copy:
 
 ```
-python processing/rename_frames.py <bag> -o <new bag> --rename os_lidar:=os_lidar_mobile1
+python processing/rename_frames.py <bag> -o <new bag> --suffix _mobile1
 ```
 
 `--limit 200` stops after 200 scans, for a quick look. `--remap SRC:=DST`
@@ -588,7 +589,7 @@ W=work/mobile_2_calib
 
 # 1. packets -> points (sensor time)
 python processing/decode_ouster.py $RAW $W/decoded \
-    --packets-ns /mobile_2/ouster --out-ns /mobile_2/ouster --frame-id os_lidar_mobile2
+    --packets-ns /mobile_2/ouster --out-ns /mobile_2/ouster --frame-suffix _mobile2
 # 2. sensor time -> capture time
 python processing/retime.py $RAW $W/decoded $W/retimed /mobile_2/ouster /mobile_2/ouster
 # 3. points + camera + what finds the pauses, in one bag
