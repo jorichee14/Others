@@ -353,7 +353,11 @@ data/work/<date>/<pass>/mobile_2/
     clock.json  process.yaml
 ```
 
-No GLIM there (`until: retimed`): the map and the poses come from mobile_1.
+GLIM runs on it with its own config (`machines.mobile_2.glim.config`, made
+from mobile_1's by `processing/glim_config.py`: topics, and `T_lidar_imu` from
+the bag's Ouster frames). In a pass where mobile_2 maps alone, the map stages
+take this retimed bag as `dataset.bag` (no merge; GLIM's `glim/` is found next
+to it) -- e.g. `map_stages/pipeline_config_mapping_20261015.json`.
 `run_pass.py`, `merge_session.py` and `process_recording.py` all apply the
 block by the folder's (machine's) name.
 

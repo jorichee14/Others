@@ -1,0 +1,39 @@
+{
+ "extends": "pipeline_config.json",
+ "_note": "20261015 mapping: mobile_2 alone builds its own map. dataset.bag is mobile_2's retimed bag (no merge: it holds every topic and its TF, the LiDAR-camera calibration included); GLIM's traj_lidar.txt next to it in mobile_2/glim/. 01 seed -> 02 refine -> 01 map (coloured from the raw RealSense image, undistorted) -> 05 boards anchor the map -> 10 poses. No 07/08: no other cameras in this pass.",
+ "dataset": {
+  "bag": "~/workspaces/isaac_ros-dev/data/work/20261015/mapping/mobile_2/mirc_dataset_mapping_2_run_20261015_mobile_2_retimed",
+  "traj": "traj_lidar_refined.txt",
+  "machine": "mobile_2",
+  "points_topic": "/mobile_2/ouster/points",
+  "image_topic": "/mobile_2/color/image_raw",
+  "camera_info_topic": "/mobile_2/color/camera_info"
+ },
+ "01_build_map": {
+  "rectified": false
+ },
+ "02_refine": {
+  "points_topic": "/mobile_2/ouster/points"
+ },
+ "04_reference": {
+  "name": "mobile_2_lidar",
+  "points_topic": "/mobile_2/ouster/points"
+ },
+ "05_anchor": {
+  "rectified": false,
+  "zed_map_frame": "map_realsense",
+  "mapzed_frame": "map_realsense",
+  "cam_frame": "camera_color_optical_frame"
+ },
+ "07_build_cameras": {"enabled": false},
+ "08_emit_tfs": {"enabled": false},
+ "10_publish": {
+  "robots": [
+   {"name": "mobile_1", "enabled": false},
+   {"name": "mobile_2",
+    "traj": "traj_mobile_2_lidar_in_cam.tum",
+    "optical_frame": "camera_color_optical_frame",
+    "local_frame": "camera_link"}
+  ]
+ }
+}

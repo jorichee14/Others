@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Self-tests for per-machine settings (configs/recording.yaml machines:):
 a mobile_2 folder is processed with its own namespace and frame suffix,
-stops after retimed, and the merge takes its retimed bag. Needs ouster-sdk,
+runs GLIM with its own config, and the merge takes its retimed bag. Needs ouster-sdk,
 mcap and rosbags.
 
     python tests/test_machines.py
@@ -36,7 +36,9 @@ def test_settings_for_merges_a_machine_over_the_top_level():
     assert (o["packets_ns"], o["out_ns"], o["frame_suffix"]) == (NS2, NS2, "_mobile2")
     assert o["remap"] == [] and o["imu_sync"] == []           # lists replaced, not merged
     assert o["copy_all"] is True and o["driver_min_range"] == s["ouster"]["driver_min_range"]
-    assert m2["until"] == "retimed" and m2["glim"] == s["glim"]
+    assert "until" not in m2                                   # GLIM runs for mobile_2 too
+    assert m2["glim"]["config"].endswith("glim_config_mobile2")
+    assert m2["glim"]["image"] == s["glim"]["image"]           # the rest inherited
     assert recording.settings_for(s, None)["ouster"] == s["ouster"]
 
 
@@ -89,10 +91,10 @@ def test_mobile_2_folder_processed_with_its_own_settings(d):
     saved = ouster.sensor_info
     ouster.sensor_info = lambda src: to.meta()         # SDK 1.0 and the synthetic JSON
     try:
-        st = recording.process(rec, s, log=lambda *_: None)
+        st = recording.process(rec, s, until="retimed", log=lambda *_: None)   # no docker here
     finally:
         ouster.sensor_info = saved
-    assert st["decoded"] and st["retimed"] and not st["glim"], st   # until: retimed
+    assert st["decoded"] and st["retimed"] and not st["glim"], st
     assert not os.path.exists(rec.step("glim"))
     r = bag.open_bag(rec.step("retimed"))
     topics = r.topics()

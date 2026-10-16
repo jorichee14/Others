@@ -812,9 +812,13 @@ class Pipeline:
 
     def glim_traj(self):
         """The run's own GLIM trajectory: <work>/<date>/<pass>/<machine>/glim/
-        traj_lidar.txt, next to the merged bag (process_recording.py writes it)."""
-        return os.path.join(os.path.dirname(os.path.normpath(self.dataset["bag"])),
-                            self.machine, "glim", "traj_lidar.txt")
+        traj_lidar.txt (process_recording.py writes it): next to the merged
+        bag, or next to the bag itself when dataset.bag is a robot's own
+        processed bag in its machine folder (a pass with one robot, no merge)."""
+        here = os.path.dirname(os.path.normpath(os.path.expanduser(self.dataset["bag"])))
+        if os.path.basename(here) == self.machine:
+            return os.path.join(here, "glim", "traj_lidar.txt")
+        return os.path.join(here, self.machine, "glim", "traj_lidar.txt")
 
     def seed_traj(self):
         """The trajectory a mapping pass starts from (01 --seed, 02's seed):

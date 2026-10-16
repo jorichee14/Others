@@ -1066,6 +1066,19 @@ def denoise(s, pcd):
     return pcd
 
 
+def undistorter(S, W, H, rectified=True):
+    """img -> img on the pinhole camera (S.fx, S.fy, S.cx, S.cy) the projection
+    uses. A rectified image (the ZED's) is that already: identity. A raw one
+    (the RealSense colour, plumb_bob) is undistorted with camera_info's D,
+    keeping the same K, so a projected point lands on its own pixel."""
+    D = np.asarray(getattr(S, "dist", np.zeros(5)), float)
+    if rectified or not np.any(D):
+        return lambda img: img
+    K = np.array([[S.fx, 0, S.cx], [0, S.fy, S.cy], [0, 0, 1]], float)
+    m1, m2 = cv2.initUndistortRectifyMap(K, D, None, K, (int(W), int(H)), cv2.CV_16SC2)
+    return lambda img: cv2.remap(img, m1, m2, cv2.INTER_LINEAR)
+
+
 def colorize(P, S, s, pcd):
     print("[3] colorize: best-view projection (frustum-culled)")
     tr_t, tr_T = P.traj
@@ -1076,6 +1089,10 @@ def colorize(P, S, s, pcd):
               f"image_width/height ({s.get('image_width')}x{s.get('image_height')}) ignored")
     c = s["colorize"]; stride = c["img_stride"]; max_range = c["max_range"]
     on_voxel = c["voxel"]; drop_gray = c["drop_gray"]
+    rectified = bool(s.get("rectified", True))
+    undistort = undistorter(S, W, H, rectified)
+    if not rectified:
+        print(f"    images not rectified: undistorted with camera_info's D {list(np.round(S.dist, 4))}")
 
     if on_voxel > 0 and len(pcd.points) > 0:
         work = pcd.voxel_down_sample(on_voxel)
@@ -1138,6 +1155,7 @@ def colorize(P, S, s, pcd):
                 continue
             if (img.shape[1], img.shape[0]) != (W, H):
                 img = cv2.resize(img, (W, H))
+            img = undistort(img)
             gb = g_keep[better]
             # 640x360x3 is under a megabyte -- cheaper to push the image to the
             # device than to pull the (much larger) index arrays back

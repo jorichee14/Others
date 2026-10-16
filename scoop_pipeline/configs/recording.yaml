@@ -36,7 +36,8 @@ machines:                          # per machine folder (raw/<date>/<pass>/<mach
       remap: []                    # its topics keep their names
       exclude: [/mobile_2/ouster/lidar_packets, /mobile_2/ouster/imu_packets]
       imu_sync: []                 # the RealSense IMU is on the PC clock already
-    until: retimed                 # no GLIM: the map and its poses come from mobile_1
+    glim:                          # its own GLIM config: its topics and T_lidar_imu
+      config: ~/workspaces/isaac_ros-dev/glim_config_mobile2   # processing/glim_config.py
 
 glim:
   config: ~/workspaces/isaac_ros-dev/glim_config   # $GLIM_CONFIG overrides
