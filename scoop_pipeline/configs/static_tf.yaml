@@ -33,7 +33,8 @@ transforms:
     translation: [-0.273322, 0.029175, 0.004183]          # |t| = 0.275 m
     rotation_xyzw: [0.552208, 0.540455, -0.450592, -0.447148]
     quality:                                              # not read by the merge; the record
-      method: direct_visual_lidar_calibration (Koide), NID, static integration
+      method: direct_visual_lidar_calibration (Koide), NID on reflectivity, static integration
+      camera: /mobile_2/color (fx 427.703 fy 427.108 cx 423.132 cy 239.735, plumb_bob)
       recording: 20261015 mapping, mirc_dataset_mapping_2_run_20261015_mobile_2
       pauses: [pause_01, pause_02, pause_03, pause_04]    # processing/dvlc_pauses.py
       initial_guess: manual, 8 point pairs
