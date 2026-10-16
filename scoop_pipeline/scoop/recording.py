@@ -114,6 +114,8 @@ def work_dir_for(raw_dir, work_root=None) -> Path:
         raise BagError(f"{raw_dir} is not a folder")
     parts = raw_dir.parts
     if "raw" not in parts:
+        if work_root:                  # e.g. straight from record.sh's Dataset/ folder
+            return Path(work_root).expanduser().resolve() / raw_dir.name
         raise BagError(f"{raw_dir} is not below a 'raw' folder; pass work_root")
     i = len(parts) - 1 - parts[::-1].index("raw")          # the last 'raw'
     rel = Path(*parts[i + 1:]) if i + 1 < len(parts) else Path()
