@@ -1,4 +1,8 @@
-# Calibrated transforms the merge adds to /tf_static (processing/merge_session.py).
+# Calibrated transforms. A robot's own -- reached from its Ouster frames, e.g.
+# os_lidar_mobile1 -> ZED -> radars -- go into its processed bag at decode
+# (recording.yaml ouster.static_tf, decode_ouster.py --static-tf), so the bag
+# carries its TF alone; the merge (processing/merge_session.py) adds the rest
+# (infra_1's camera -> radar) and any a bag does not have yet (older bags).
 # pose of `child` in `parent`: translation in m, rotation as a quaternion xyzw.
 # If `child` already has a parent in the bags' TF tree (the ZED optical frame
 # does), the merge adds the same geometry as `child` -> <root of parent's tree>

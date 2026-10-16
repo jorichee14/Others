@@ -294,6 +294,11 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
         _clear_leftovers(tmp)
         log(f"[run ] {s} -> {final}")
         if s == "decoded":
+            cals = []
+            if o.get("static_tf"):                    # the robot's calibrations, into its bag
+                from . import tftree
+                with open(ROOT / Path(o["static_tf"]).expanduser()) as fh:
+                    cals = tftree.load_calibrations(yaml.safe_load(fh))
             replay.decode_ouster_bag(
                 rec.bag, tmp, packets_ns=packets_ns, out_ns=out_ns,
                 driver_min_range=float(o.get("driver_min_range", 0.0)),
@@ -301,7 +306,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
                 frame=o.get("frame", "lidar"), imu=bool(o.get("imu", True)),
                 remap=replay.parse_remaps(o.get("remap")),
                 copy_all=bool(o.get("copy_all", False)), exclude=o.get("exclude") or (),
-                frame_suffix=o.get("frame_suffix") or "", log=log)
+                frame_suffix=o.get("frame_suffix") or "", static_tf=cals, log=log)
         elif s == "retimed":
             res = retime.retime_bag(rec.bag, rec.step("decoded"), tmp,
                                     packets_ns=packets_ns, points_ns=out_ns,

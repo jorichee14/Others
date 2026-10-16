@@ -10,6 +10,7 @@ ouster:
   driver_max_range: 1000.0
   frame: lidar                     # os_lidar, the replay's default point_cloud_frame
   frame_suffix: _mobile1           # on os_lidar, os_sensor, os_imu: one per robot (mobile_2: _mobile2)
+  static_tf: configs/static_tf.yaml  # this robot's calibrations go into its bag's /tf_static
   imu: true
   copy_all: true                   # copy EVERY other topic too (tf, tf_static, radar, ntp, ...)
   exclude: []                      # topics to leave out of the copy

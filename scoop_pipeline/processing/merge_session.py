@@ -117,6 +117,14 @@ def main():
             import yaml
             with open(os.path.expanduser(a.static_tf)) as fh:
                 cals = tftree.load_calibrations(yaml.safe_load(fh))
+            # each robot's processed bag carries its own (decode); added here: the
+            # rest -- machines without a processing step (infra_1), older bags
+            have = [c for c in cals if tftree.connected(c.parent, c.child, edges)]
+            cals = [c for c in cals if c not in have]
+            if have:
+                print("\nstatic transforms already in the bags:")
+                for c in have:
+                    print(f"    {c.parent} -> {c.child}")
             if cals:
                 static_tf, notes = tftree.attach(cals, edges)
                 print("\nstatic transforms:")

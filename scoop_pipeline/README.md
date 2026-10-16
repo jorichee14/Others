@@ -355,9 +355,19 @@ data/work/<date>/<pass>/mobile_2/
 
 No GLIM there (`until: retimed`): the map and the poses come from mobile_1.
 `run_pass.py`, `merge_session.py` and `process_recording.py` all apply the
-block by the folder's (machine's) name; the merge then adds
-`configs/static_tf.yaml` (mobile_2: `os_lidar_mobile2 ->
-camera_color_optical_frame`) and the map stages' TF (map, boards, cameras).
+block by the folder's (machine's) name.
+
+Each robot's TF is made with its bag, not in the merge: decode
+(`ouster.static_tf: configs/static_tf.yaml`) puts the calibrations reached
+from the robot's Ouster frames into its `/tf_static` -- mobile_1:
+`os_lidar_mobile1 -> zed_left_camera_optical_frame -> radar1/2_link`,
+mobile_2: `os_lidar_mobile2 -> camera_color_optical_frame` -- with the
+Ouster's tree hung below the camera (`<camera optical> -> os_sensor_mobileN`),
+also when the camera's frames are in another bag (mobile_1's ZED bag), so a
+merge never gives a frame two parents. A processed bag then carries its
+robot's whole TF on its own. The merge only adds the pass-level TF (map,
+boards, infra cameras, from the map stages) and the calibrations no bag has
+yet (infra_1's camera -> radar; bags decoded before this).
 The two bags are named `<original bag>_decoded` and `<original bag>_retimed`
 (the .mcap inside too), so a copied bag still says where it came from.
 A folder with an SVO but no Ouster packets bag (e.g. an older recording)
@@ -608,12 +618,11 @@ W=work/mobile_2_calib
 #    /tf, /tf_static); os_lidar, os_sensor, os_imu -> *_mobile2 everywhere
 python processing/decode_ouster.py $RAW $W/decoded \
     --packets-ns /mobile_2/ouster --out-ns /mobile_2/ouster --frame-suffix _mobile2 \
+    --static-tf configs/static_tf.yaml \
     --copy-all --exclude /mobile_2/ouster/lidar_packets --exclude /mobile_2/ouster/imu_packets
+#    (--static-tf: its calibration, os_lidar_mobile2 -> colour camera, into /tf_static)
 # 2. retime: the Ouster on the PC clock, with everything else  ->  the processed bag
 python processing/retime.py $RAW $W/decoded $W/retimed /mobile_2/ouster /mobile_2/ouster
-#    (optional) the calibration into its /tf_static
-python processing/tf_edit.py $W/retimed -o $W/retimed_tf --add os_lidar_mobile2 \
-    camera_color_optical_frame -0.273322 0.029175 0.004183 0.552208 0.540455 -0.450592 -0.447148
 # 3. the pauses: look first, then cut
 python processing/dvlc_pauses.py $W/retimed $W/pauses --list
 python processing/dvlc_pauses.py $W/retimed $W/pauses

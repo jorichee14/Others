@@ -100,28 +100,97 @@ def test_mobile_2_folder_processed_with_its_own_settings(d):
     assert f"{NS2}/lidar_packets" not in topics and f"{NS2}/imu_packets" not in topics
     pts = next(r.iter_messages([f"{NS2}/points"]))[2]
     imu = next(r.iter_messages([f"{NS2}/imu"]))[2]
-    tf = next(r.iter_messages(["/tf_static"]))[2]
     assert pts.header.frame_id == "os_lidar_mobile2"
     assert imu.header.frame_id == "os_imu_mobile2"
-    assert [(t.header.frame_id, t.child_frame_id) for t in tf.transforms] == \
-        [("os_sensor_mobile2", "os_lidar_mobile2"), ("camera_link", "camera_color_optical_frame")]
+    pairs = [(t.header.frame_id, t.child_frame_id)
+             for _, _, m in r.iter_messages(["/tf_static"]) for t in m.transforms]
+    assert ("os_sensor_mobile2", "os_lidar_mobile2") in pairs, pairs
+    assert ("camera_link", "camera_color_optical_frame") in pairs, pairs
+    # static_tf.yaml's calibration is in the robot's own bag: the Ouster below the camera
+    assert ("camera_color_optical_frame", "os_sensor_mobile2") in pairs, pairs
+    from scoop import tftree
+    edges = tftree.tf_edges([rec.step("retimed")])
+    cal = [c for c in _cals() if c.parent == "os_lidar_mobile2"][0]
+    assert_lookup(edges, cal)
 
-    # the merge takes mobile_2's retimed bag, checked against its own topics
+    # the merge takes mobile_2's retimed bag, checked against its own topics,
+    # and finds the calibration there already
     plan = session.RecordPlan(None)
     u = session._unit("mobile_2", recording.Path(raw), [recording.Path(b)], plan,
                       recording.load_settings(), None, None)
     assert u.processed and u.bags == [rec.step("retimed")], u.bags
     assert f"{NS2}/points" in u.expected and f"{NS2}/lidar_packets" not in u.expected
+    assert tftree.connected(cal.parent, cal.child, tftree.tf_edges(u.bags))
 
-    # static_tf.yaml's calibration hangs from os_lidar_mobile2 in that tree
+
+def _cals():
     from scoop import tftree
-    cals = tftree.load_calibrations(yaml.safe_load(open(os.path.join(
+    return tftree.load_calibrations(yaml.safe_load(open(os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "static_tf.yaml"))))
-    mine = [c for c in cals if c.parent == "os_lidar_mobile2"]
-    assert [c.child for c in mine] == ["camera_color_optical_frame"]
-    edges = tftree.tf_edges([rec.step("retimed")])
-    added, notes = tftree.attach(mine, edges)
-    assert added, notes
+
+
+def assert_lookup(edges, cal):
+    """parent -> child through the tree equals the calibration."""
+    import numpy as np
+    from scoop import tftree
+    root = tftree._root(cal.parent, edges)
+    assert root == tftree._root(cal.child, edges), (cal.parent, cal.child)
+    T = np.linalg.inv(tftree._static_pose(root, cal.parent, edges)) @ \
+        tftree._static_pose(root, cal.child, edges)
+    want = tftree.matrix(cal.translation, cal.rotation_xyzw)
+    assert np.allclose(T, want, atol=1e-6), (T, want)
+
+
+def test_mobile_1_camera_in_another_bag(d):
+    """mobile_1: the ZED's frames come from the zed bag, not the decoded one.
+    Decode still hangs the Ouster below the ZED optical frame (and the radars
+    from it), so merging with the zed bag gives one tree, no frame two parents,
+    and each lookup the calibration."""
+    import numpy as np
+    from scoop import merge, replay, tftree
+    from scoop.bagwrite import BagWriter
+    pk = os.path.join(d, "pk.mcap")
+    to.make_bag(pk, n_frames=12)
+    cals = _cals()
+    # the driver's TF, as mobile_1's raw bag would carry it
+    src = os.path.join(d, "raw")
+    from mcap.reader import make_reader
+    with BagWriter(src) as w:
+        w.set_qos("/tf_static", replay.LATCHED)
+        with open(pk, "rb") as fh:
+            recs = list(make_reader(fh).iter_messages())
+        w.write("/tf_static", rosmsg.tf_message(
+            [("os_sensor", "os_lidar", [0, 0, 0.036], [0, 0, 1, 0])], recs[0][2].log_time),
+            recs[0][2].log_time)
+        from scoop.bag import TopicSchema
+        for sc, ch, m in recs:
+            w.write_raw(ch.topic, TopicSchema(sc.name, sc.encoding, bytes(sc.data), "cdr"),
+                        m.data, m.log_time)
+    dec = os.path.join(d, "dec")
+    replay.decode_ouster_bag(src, dec, packets_ns=to.NS, out_ns="/mobile_1/ouster",
+                             metadata=to.meta(), copy_all=True, frame_suffix="_mobile1",
+                             static_tf=cals, log=lambda *_: None)
+    pairs = [(t.header.frame_id, t.child_frame_id)
+             for _, _, m in bag.open_bag(dec).iter_messages(["/tf_static"]) for t in m.transforms]
+    assert ("zed_left_camera_optical_frame", "os_sensor_mobile1") in pairs, pairs
+    assert ("zed_left_camera_optical_frame", "radar1_link") in pairs, pairs
+    assert ("zed_left_camera_optical_frame", "radar2_link") in pairs, pairs
+    assert not any("os_lidar_mobile2" in p or "arducam" in p[0] for p in pairs), pairs  # not its own
+    # the zed bag: the ZED's own tree, as the wrapper publishes it
+    zb = os.path.join(d, "zed")
+    with BagWriter(zb) as w:
+        w.set_qos("/tf_static", replay.LATCHED)
+        w.write("/tf_static", rosmsg.tf_message(
+            [("zed_camera_link", "zed_left_camera_frame", [0, 0.06, 0], [0, 0, 0, 1]),
+             ("zed_left_camera_frame", "zed_left_camera_optical_frame", [0, 0, 0],
+              [-0.5, 0.5, -0.5, 0.5])], 1), recs[0][2].log_time)
+    out = os.path.join(d, "merged")
+    merge.merge_bags([dec, zb], out, log=lambda *_: None)      # no two-parents error
+    edges = tftree.tf_edges([out])
+    for c in tftree.reachable(cals, ["os_lidar_mobile1"]):
+        assert_lookup(edges, c)
+    assert tftree._root("os_lidar_mobile1", edges) == "zed_camera_link"
+    assert np.isfinite(edges["os_sensor_mobile1"].T).all()
 
 
 def check(name, fn, *args):
