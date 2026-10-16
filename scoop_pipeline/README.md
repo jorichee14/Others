@@ -581,29 +581,37 @@ map
 
 Koide's direct_visual_lidar_calibration (DVLC) wants short bags with the
 sensors still. mobile_2's recording has Ouster packets only and stops several
-times, so: decode, retime, merge, then cut one bag per pause.
+times. Two steps make one complete bag on one clock, then one bag per pause.
 
 ```
 RAW=mirc_dataset_mapping_2_run_20261015_mobile_2      # the raw rosbag2 folder
 W=work/mobile_2_calib
 
-# 1. packets -> points (sensor time)
+# 1. decode: packets -> points + IMU; every other topic copied (camera, VSLAM,
+#    /tf, /tf_static); os_lidar, os_sensor, os_imu -> *_mobile2 everywhere
 python processing/decode_ouster.py $RAW $W/decoded \
-    --packets-ns /mobile_2/ouster --out-ns /mobile_2/ouster --frame-suffix _mobile2
-# 2. sensor time -> capture time
+    --packets-ns /mobile_2/ouster --out-ns /mobile_2/ouster --frame-suffix _mobile2 \
+    --copy-all --exclude /mobile_2/ouster/lidar_packets --exclude /mobile_2/ouster/imu_packets
+# 2. retime: the Ouster on the PC clock, with everything else  ->  the processed bag
 python processing/retime.py $RAW $W/decoded $W/retimed /mobile_2/ouster /mobile_2/ouster
-# 3. points + camera + what finds the pauses, in one bag
-python processing/merge_bags.py $RAW $W/retimed -o $W/merged --topics \
-    /mobile_2/ouster/points /mobile_2/color/image_raw /mobile_2/color/camera_info \
-    /mobile_2/visual_slam/tracking/odometry /mobile_2/imu
-# 4. the pauses: look first, then cut
-python processing/dvlc_pauses.py $W/merged $W/pauses --list
-python processing/dvlc_pauses.py $W/merged $W/pauses
-# 5. DVLC on every pause together (docker; output in $W/pauses_preprocessed)
+#    (optional) the calibration into its /tf_static
+python processing/tf_edit.py $W/retimed -o $W/retimed_tf --add os_lidar_mobile2 \
+    camera_color_optical_frame -0.273322 0.029175 0.004183 0.552208 0.540455 -0.450592 -0.447148
+# 3. the pauses: look first, then cut
+python processing/dvlc_pauses.py $W/retimed $W/pauses --list
+python processing/dvlc_pauses.py $W/retimed $W/pauses
+# 4. DVLC on every pause together (docker; output in $W/pauses_preprocessed)
 processing/run_dvlc.sh preprocess $W/pauses    # then guess, calibrate, viewer
 processing/run_dvlc.sh guess      $W/pauses
 processing/run_dvlc.sh calibrate  $W/pauses
 processing/run_dvlc.sh viewer     $W/pauses
+```
+
+Timing check (the RealSense IMU against the retimed Ouster IMU; ~0 s and a
+correlation above 0.8 = one clock; 20261015: -0.018 s, 0.97):
+
+```
+python processing/imu_sync.py $W/retimed --topic /mobile_2/imu --ref /mobile_2/ouster/imu
 ```
 
 A pause is where, over +-0.25 s, the VSLAM odometry moves under 0.01 m/s, the
@@ -614,8 +622,8 @@ middle 10 s are kept (`--max-speed --max-gyro --max-acc-std --min-pause
 `--only 0,2,5` cuts just those, `--intervals 120.5-130,300-310` (s from the
 bag's start) skips the detection. Each pause goes to `pause_NN/` with the
 three DVLC topics byte for byte; `pauses.yaml` records what was cut. For the
-infra1 camera instead: merge `/mobile_2/infra1/image_rect_raw
-/mobile_2/infra1/camera_info` and pass them as `--image --camera-info`
+infra1 camera instead: pass `/mobile_2/infra1/image_rect_raw` and
+`/mobile_2/infra1/camera_info` as `--image --camera-info`
 (and to `run_dvlc.sh` as `IMAGE_TOPIC=... CAMERA_INFO_TOPIC=...`).
 `run_dvlc.sh` mounts only the `pause_*` folders, read-only; `DVLC_IMAGE`
 picks another image than `dvlc:humble-mcap`.
