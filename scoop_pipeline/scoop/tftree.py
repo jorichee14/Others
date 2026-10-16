@@ -33,7 +33,7 @@ from . import bag, rosmsg
 from .bag import BagError
 
 __all__ = ["Edge", "Calibration", "matrix", "to_tq", "tf_edges", "attach", "load_calibrations",
-           "reachable", "rename_edges", "connected",
+           "reachable", "rename_edges", "connected", "static_between",
            "edge_matcher", "read_tum", "read_pose_topic", "odom_transforms", "plan_edits",
            "format_tree", "TFEdits"]
 
@@ -182,6 +182,21 @@ def attach(cals: List[Calibration], edges: Dict[str, Edge], keep=()):
         out.append((add[0], add[1], t, q))
         edges[add[1]] = Edge(add[0], add[1], True, add[2])
     return out, notes
+
+
+def static_between(a: str, b: str, edges: Dict[str, Edge]) -> np.ndarray:
+    """Pose of ``b`` in ``a`` (4x4), through their nearest common ancestor and
+    static edges only -- what moves above that ancestor (odometry) does not
+    matter, e.g. os_lidar -> os_imu below os_sensor."""
+    up = [a]
+    while up[-1] in edges:
+        up.append(edges[up[-1]].parent)
+    f = b
+    while f not in up:
+        if f not in edges:
+            raise BagError(f"{a} and {b} are not in one TF tree")
+        f = edges[f].parent
+    return np.linalg.inv(_static_pose(f, a, edges)) @ _static_pose(f, b, edges)
 
 
 def connected(a: str, b: str, edges: Dict[str, Edge]) -> bool:

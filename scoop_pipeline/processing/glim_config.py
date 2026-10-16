@@ -41,11 +41,7 @@ def frame_of(reader, topic):
 def t_lidar_imu(bag_dir, lidar_frame, imu_frame):
     """[x, y, z, qx, qy, qz, qw]: points in the IMU frame -> the LiDAR frame."""
     edges = tftree.tf_edges([bag_dir])
-    root = tftree._root(lidar_frame, edges)
-    if root != tftree._root(imu_frame, edges):
-        raise BagError(f"{lidar_frame} and {imu_frame} are not in one TF tree in {bag_dir}")
-    T = np.linalg.inv(tftree._static_pose(root, lidar_frame, edges)) @ \
-        tftree._static_pose(root, imu_frame, edges)
+    T = tftree.static_between(lidar_frame, imu_frame, edges)   # below os_sensor: static
     t, q = tftree.to_tq(T)
     return [float(v) for v in (*t, *q)]
 
