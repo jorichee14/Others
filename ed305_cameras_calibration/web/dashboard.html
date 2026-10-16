@@ -337,14 +337,14 @@ function renderOverview(s, cams) {
   if (net) {
     const others = Object.values(net.cams).filter(x => !x.reference), placed = others.filter(x => x.locked).length;
     const pose = net.pose ? (net.pose.ok ? ` · ZED pose: ${net.pose.text}` : ` · <span class="warn">${esc(net.pose.text)}</span>`) : ' · no pose server: poses relative to the reference camera, keep the robot still';
-    $('events').innerHTML = `· reference camera ${net.ref} · <b>${placed} / ${others.length}</b> placed in ${esc(net.frame)}${pose}`;
+    $('events').innerHTML = `· reference camera ${net.ref} · <b>${placed} / ${others.length}</b> extrinsics calibrated (in ${esc(net.frame)})${pose}`;
     $('extrHint').textContent = 'Hold the board still where the reference camera and another camera both see it; move it; hold again. 3+ placements per camera.';
   } else {
     $('events').textContent = '· events: ' + (Object.values(s.events).reduce((a, b) => a + b, 0)) + (s.busy ? ' · ' + s.busy : '');
     $('extrHint').textContent = 'Hold a board still where 2+ cameras see it; an event is saved. Aim for 150+.';
   }
   $('solve').hidden = !!net; $('solve').disabled = !!s.busy;
-  $('legend').innerHTML = net ? '<span class="l-ok">placed</span><span class="l-ref">reference camera</span><span>not placed yet</span><b class="dim" style="font-weight:500">✓ intrinsics = lens calibrated, ready to place</b>'
+  $('legend').innerHTML = net ? '<span class="l-ok">extrinsics calibrated</span><span class="l-ref">reference camera</span><span>extrinsics not yet</span><b class="dim" style="font-weight:500">✓ intrinsics = lens calibrated · ✓ extrinsics = position calibrated</b>'
     : '<span class="l-ok">calibrated</span><span class="l-rec">recording now</span><span>not calibrated yet</span>';
   $('log').textContent = s.log;
   const grid = $('cams');
@@ -365,15 +365,15 @@ function renderOverview(s, cams) {
       const intr = v.calibrated ? '<span class="chip dark ok" title="lens calibrated (intrinsics)">✓ intrinsics</span>'
         : '<span class="chip dark warn" title="calibrate this camera in 1 · Intrinsics first">no intrinsics</span>';
       const ch = x.reference ? '<span class="chip dark" style="color:var(--acc)">★ reference</span>'
-        : x.locked ? '<span class="chip dark ok">✓ placed</span>'
+        : x.locked ? '<span class="chip dark ok" title="position calibrated (extrinsics)">✓ extrinsics</span>'
         : !v.calibrated ? ''
         : /fisheye/.test(x.sees) ? `<span class="chip dark warn">${esc(x.sees)}</span>`
-        : x.samples ? `<span class="chip dark warn">${x.holds}/3 placements</span>` : '<span class="chip dark idle">not placed</span>';
+        : x.samples ? `<span class="chip dark warn">${x.holds}/3 placements</span>` : '<span class="chip dark idle">no extrinsics</span>';
       el.querySelector('.chipbox').innerHTML = intr + ch;
       const bar = el.querySelector('.meter i');
       bar.style.width = (x.locked || x.reference ? 100 : Math.round(100 * Math.min(1, x.samples / 30, x.holds / 3))) + '%';
       bar.style.background = x.reference ? 'var(--acc)' : (x.locked ? 'var(--ok)' : 'var(--warn)');
-      el.querySelector('.f1').textContent = x.reference ? x.sees : (x.locked ? 'placed' : x.sees);
+      el.querySelector('.f1').textContent = x.reference ? x.sees : (x.locked ? 'extrinsics calibrated' : x.sees);
       el.querySelector('.f2').textContent = x.samples && !x.reference ? `spread ${fmt(x.spread_mm, 1)} mm` : '';
       continue;
     }
@@ -397,7 +397,7 @@ function renderCamera(s, c) {
   $('extrSide').hidden = !x; $('intrSide').hidden = !!x; $('framesPanel').hidden = !!x;
   if (x) {
     $('xState').innerHTML = x.reference ? '<span style="color:var(--acc)">Reference camera</span>'
-      : x.locked ? '<span class="ok">Placed</span>' : (/intrinsics|fisheye/.test(x.sees) ? `<span class="warn">${esc(x.sees)}</span>` : 'Collecting');
+      : x.locked ? '<span class="ok">Calibrated</span>' : (/intrinsics|fisheye/.test(x.sees) ? `<span class="warn">${esc(x.sees)}</span>` : 'Collecting');
     $('xStateD').textContent = x.reference ? 'every other camera is placed relative to this one' : `${x.sees} · in ${s.net.frame}` + (x.session > 1 ? ` · round ${x.session}` : '');
     $('xSamples').textContent = x.reference ? '-' : x.samples;
     $('xSamplesD').textContent = x.reference ? '' : `${x.holds} of 3+ board placements · spread ${fmt(x.spread_mm, 1)} mm / ${fmt(x.spread_deg, 2)}°`;

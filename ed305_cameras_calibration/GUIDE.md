@@ -128,6 +128,9 @@ recalibrating it. The ED305 cameras have manual focus rings (no autofocus).
 - Lens models: `full` (default, any normal lens), `ed305` (k1 k2 only, centred principal point, like
   the March 2026 calibration), `fisheye` (over ~120 degrees).
 - A camera calibrated elsewhere: `--intrinsics N=file` (its `cam_N.json` or a ROS camera_info YAML).
+- Results copied into `results/intrinsics/` (e.g. `scp` from the Windows PC) are picked up within a
+  few seconds, without a restart; the terminal says "intrinsics loaded from cam_N.json". The same for
+  `results/extrinsics_ref/` in extrinsics mode.
 
 ---
 
@@ -142,6 +145,9 @@ Before:
   check with `ros2 run tf2_ros tf2_echo map_zed zed_left_camera_optical_frame`).
 - Every camera to place has its intrinsics (mode 1); its card shows **✓ intrinsics**. The ZED's
   intrinsics come from its camera_info by themselves.
+- Nothing needs rectifying: the ED305 pictures are used as they are and their lens distortion is
+  corrected on the board corners with their intrinsics; the ZED's `image_rect_color` is already
+  rectified (its camera_info has zero distortion).
 - Start the dashboard with the Jetson command above (`--ref 20 --ref-topic ... --ref-board E`).
 
 Steps:
@@ -149,7 +155,7 @@ Steps:
 2. Drive the robot so the ZED and a camera both see the board area. **Stop the robot.**
 3. Hold board E **still** (about 1 to 2 s) where both see it: green dots in both pictures.
 4. Move the board to another spot or angle, hold still again. Repeat.
-5. After **3+ placements** the camera is **placed** (green outline, **✓ placed**). A placement seen
+5. After **3+ placements** the camera's extrinsics are **calibrated** (green outline, **✓ extrinsics**). A placement seen
    by several cameras counts for all of them.
 6. Drive to the next cameras and repeat. The robot may move between placements, never while
    you hold the board.

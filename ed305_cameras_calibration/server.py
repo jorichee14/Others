@@ -493,7 +493,7 @@ def net_detect(cam):
     raw = frame.copy() if cs.calibrated else frame
     if ns.pose.corners is not None:
         dots(frame, ns.pose.corners, None, (0, 255, 0) if still else (0, 200, 255))
-    label = "REFERENCE" if cam == ARGS.ref else ("PLACED" if ns.pair.locked is not None else "%d samples" % len(ns.pair.pool))
+    label = "REFERENCE" if cam == ARGS.ref else ("EXTRINSICS OK" if ns.pair.locked is not None else "%d samples" % len(ns.pair.pool))
     tag(frame, "cam %d  %s  %s" % (cam, label, ns.sees), (0, 255, 0) if still else (0, 200, 255))
     cs.status = ns.sees
     publish(cs, raw, frame)
@@ -519,7 +519,7 @@ def net_pair():
         if ns.pair.add(X, (ref.still.hold, ns.still.hold), ns.reproj):
             net_save(ns)
             st = ns.pair.status()
-            log("cam %d PLACED in %s: %d samples, %d placements, spread %.1f mm / %.2f deg -> %s" % (
+            log("cam %d extrinsics CALIBRATED in %s: %d samples, %d placements, spread %.1f mm / %.2f deg -> %s" % (
                 cam, net_parent(), st["samples"], st["holds"], st["spread_mm"], st["spread_deg"],
                 cam_name(cam, ns.session) + ".json"))
 
@@ -542,9 +542,70 @@ def net_state():
                    "cams": {str(c): v for c, v in cams.items()}})
 
 
+# ---------------------------------------------------------------- files added or changed while running
+SEEN = {}          # path -> mtime of the result files already applied
+
+
+def newest_result(cam, kind):
+    """Newest round's result file of a camera: kind "intr" (results/intrinsics) or "extr" (extrinsics_ref)."""
+    import re
+    d = os.path.join(ARGS.results, "intrinsics" if kind == "intr" else "extrinsics_ref")
+    best = None
+    for p in glob.glob(os.path.join(d, "cam_%d*.json" % cam)):
+        m = re.match(r"^cam_%d(?:_(\d+))?\.json$" % cam, os.path.basename(p))
+        if m and (best is None or int(m.group(1) or 1) > best[0]):
+            best = (int(m.group(1) or 1), p)
+    return best
+
+
+def watch_files(startup=False):
+    """Intrinsics / extrinsics files copied in (e.g. from another PC) or written by another run are used
+    without a restart. At startup it only records what is there (startup loading does the rest)."""
+    for c, cs in CAMS.items():
+        for kind in ("intr", "extr") if ARGS.ref is not None else ("intr",):
+            best = newest_result(c, kind)
+            if best is None:
+                continue
+            k, path = best
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if SEEN.get(path) == mtime:
+                continue
+            SEEN[path] = mtime
+            if startup:
+                continue
+            try:
+                if kind == "intr":
+                    if cs.calibrating:
+                        continue
+                    K, dist, size, model = read_intrinsics_file(path)
+                    same = cs.calibrated and np.allclose(cs.K, K) and cs.dist is not None and \
+                        len(cs.dist) == len(dist) and np.allclose(cs.dist, dist)
+                    if k > cs.session:
+                        cs.session = k
+                        with cs.lock:
+                            cs.load_existing(ARGS.out)
+                    if not same:
+                        cs.set_intrinsics(K, dist, "results/intrinsics (%s)" % os.path.basename(path), size, model)
+                        log("cam %d: intrinsics loaded from %s (added or changed)" % (c, os.path.basename(path)))
+                elif c != ARGS.ref and c in NET and not NET[c].pair.pool:
+                    j = read_json(path)
+                    ns = NET[c]
+                    if j.get("stage") == "locked" and (ns.pair.locked is None or not np.allclose(ns.pair.locked, j["T"])):
+                        ns.session, ns.saved, ns.pair = max(ns.session, k), j, NetCam.new_pair()
+                        ns.pair.locked = np.array(j["T"], float)
+                        log("cam %d: extrinsics loaded from %s (added or changed)" % (c, os.path.basename(path)))
+            except Exception as e:  # a half-copied file: try again next time it changes
+                SEEN.pop(path, None)
+                print("cam %d: could not read %s yet (%s)" % (c, path, e))
+
+
 def loop():
     pool = ThreadPoolExecutor(max_workers=ARGS.workers)
     period = 1.0 / ARGS.hz
+    last_watch = 0.0
     while True:
         t0 = time.time()
         with LOCK:
@@ -575,6 +636,9 @@ def loop():
                         cs.status = "live"
                 else:
                     cs.status = "no stream"
+        if time.time() - last_watch > 3.0:          # result files added / changed on disk
+            last_watch = time.time()
+            watch_files()
         time.sleep(max(0.0, period - (time.time() - t0)))
 
 
@@ -1038,6 +1102,7 @@ def main():
         NET.update({c: NetCam(c, board) for c in CAMS})
         REFPOSE = ros_ref if ros_ref is not None else (RefPose(ARGS.ref_pose) if ARGS.ref_pose else None)
         net_load()
+    watch_files(startup=True)
     threading.Thread(target=loop, daemon=True).start()
     print("dashboard: http://%s:%d  (saving to %s, results in %s)" % (ARGS.host, ARGS.port, ARGS.out, ARGS.results))
     if not ARGS.access_log:          # no "GET /api/state ... 200" line for every page refresh
