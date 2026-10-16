@@ -4,7 +4,7 @@
     python3 processing/decode_ouster.py <packets_bag> <out_bag_dir>
         [--packets-ns /ouster] [--out-ns /mobile_1/ouster]
         [--driver-min-range 1.30] [--driver-max-range 1000]
-        [--frame lidar|sensor] [--no-imu] [--limit N]
+        [--frame lidar|sensor] [--frame-id os_lidar_mobile1] [--no-imu] [--limit N]
         [--remap SRC:=DST ...]
 
 Does what the replay launch did (ros2 bag play --remap + ouster_ros driver +
@@ -44,6 +44,9 @@ def main():
     ap.add_argument("--driver-min-range", type=float, default=1.30)
     ap.add_argument("--driver-max-range", type=float, default=1000.0)
     ap.add_argument("--frame", choices=("lidar", "sensor"), default="lidar")
+    ap.add_argument("--frame-id", default=None,
+                    help="the cloud's frame name (default os_lidar / os_sensor); one per robot, "
+                         "e.g. os_lidar_mobile2, also renamed in the copied topics' TF")
     ap.add_argument("--no-imu", action="store_true")
     ap.add_argument("--limit", type=int, default=0, help="stop after N scans (for a test)")
     ap.add_argument("--remap", action="append", default=[], metavar="SRC:=DST",
@@ -61,7 +64,7 @@ def main():
                                  out_ns=a.out_ns, driver_min_range=a.driver_min_range,
                                  driver_max_range=a.driver_max_range, frame=a.frame,
                                  imu=not a.no_imu, remap=remap, copy_all=a.copy_all,
-                                 exclude=a.exclude, limit=a.limit)
+                                 exclude=a.exclude, limit=a.limit, frame_id=a.frame_id)
     except (ValueError, replay.bag.BagError) as e:
         sys.exit(f"error: {e}")
     print(f"\nnext:  python processing/retime.py {a.packets_bag} "

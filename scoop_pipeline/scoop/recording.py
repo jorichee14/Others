@@ -278,7 +278,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
                 frame=o.get("frame", "lidar"), imu=bool(o.get("imu", True)),
                 remap=replay.parse_remaps(o.get("remap")),
                 copy_all=bool(o.get("copy_all", False)), exclude=o.get("exclude") or (),
-                log=log)
+                frame_id=o.get("frame_id"), log=log)
         elif s == "retimed":
             res = retime.retime_bag(rec.bag, rec.step("decoded"), tmp,
                                     packets_ns=packets_ns, points_ns=out_ns,
