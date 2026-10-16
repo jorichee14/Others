@@ -10,6 +10,9 @@
   "camera_info_topic": "/mobile_2/color/camera_info"
  },
  "01_build_map": {
+  "_note": "2 cm, not mapping_A's 1 cm: 543 m of drive at 1 cm passed 10 GB by scan 11000 of 13903 and was killed; 02 thins its reference to 5 cm anyway, and 2 cm is finer than the Ouster's noise",
+  "scan_voxel": 0.02,
+  "final_voxel": 0.02,
   "rectified": false
  },
  "02_refine": {
