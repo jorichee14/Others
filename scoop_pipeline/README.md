@@ -46,6 +46,8 @@ processing/          raw recordings -> processed bags (command lines around scoo
   tf_edit.py         show or change a bag's TF: drop edges, add transforms, new odometry
   dvlc_pauses.py     a merged bag's pauses (robot still) -> one short bag each, for Koide's
                      direct_visual_lidar_calibration
+  run_dvlc.sh        that calibration (docker) on the pause bags: preprocess, guess, calibrate,
+                     viewer; output owned by you
 run_pass.py          one pass from raw to processed, every step in order (below)
 map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
                      (01_build_map.py, 02_refine_poses.py, ...);
@@ -580,13 +582,11 @@ python processing/merge_bags.py $RAW $W/retimed -o $W/merged --topics \
 # 4. the pauses: look first, then cut
 python processing/dvlc_pauses.py $W/merged $W/pauses --list
 python processing/dvlc_pauses.py $W/merged $W/pauses
-# 5. DVLC on every pause together
-dvlc ros2 run direct_visual_lidar_calibration preprocess $W/pauses $W/preprocessed -v \
-    --image_topic /mobile_2/color/image_raw --points_topic /mobile_2/ouster/points \
-    --camera_info_topic /mobile_2/color/camera_info
-dvlc ros2 run direct_visual_lidar_calibration initial_guess_manual $W/preprocessed
-dvlc ros2 run direct_visual_lidar_calibration calibrate $W/preprocessed
-dvlc ros2 run direct_visual_lidar_calibration viewer $W/preprocessed
+# 5. DVLC on every pause together (docker; output in $W/pauses_preprocessed)
+processing/run_dvlc.sh preprocess $W/pauses    # then guess, calibrate, viewer
+processing/run_dvlc.sh guess      $W/pauses
+processing/run_dvlc.sh calibrate  $W/pauses
+processing/run_dvlc.sh viewer     $W/pauses
 ```
 
 A pause is where, over +-0.25 s, the VSLAM odometry moves under 0.01 m/s, the
@@ -598,7 +598,10 @@ middle 10 s are kept (`--max-speed --max-gyro --max-acc-std --min-pause
 bag's start) skips the detection. Each pause goes to `pause_NN/` with the
 three DVLC topics byte for byte; `pauses.yaml` records what was cut. For the
 infra1 camera instead: merge `/mobile_2/infra1/image_rect_raw
-/mobile_2/infra1/camera_info` and pass them as `--image --camera-info`.
+/mobile_2/infra1/camera_info` and pass them as `--image --camera-info`
+(and to `run_dvlc.sh` as `IMAGE_TOPIC=... CAMERA_INFO_TOPIC=...`).
+`run_dvlc.sh` mounts only the `pause_*` folders, read-only; `DVLC_IMAGE`
+picks another image than `dvlc:humble-mcap`.
 
 ## Merging chosen topics of any bags
 
