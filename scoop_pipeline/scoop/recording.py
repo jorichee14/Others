@@ -45,7 +45,7 @@ from . import bag, replay, retime, zed
 from .bag import BagError
 
 __all__ = ["STEPS", "LATER", "Recording", "work_dir_for", "find_recording", "load_settings",
-           "settings_for", "zed_bags", "export_glim", "glim_config_dir",
+           "settings_for", "zed_bags", "export_glim", "glim_config_dir", "glim_loop_check",
            "zed_args", "process"]
 
 STEPS = ["decoded", "retimed", "glim", "zed"]
@@ -293,6 +293,72 @@ def export_glim(rec: "Recording", settings: dict, log=print) -> Optional[Path]:
     return out
 
 
+def glim_loop_check(rec: "Recording", log=print, config=None) -> Optional[dict]:
+    """GLIM's loop closure, measured on the boards: stage 05 in its read-only
+    check mode (map_stages/05_anchor.py --traj --check) on GLIM's own
+    trajectory, with this pass's map-stage config (the one whose dataset is
+    this pass and this machine; ``config`` picks another). The report goes to
+    odometry/<machine>/glim_loop_closure.json and its summary into glim.yaml:
+    per board seen at the start and again later, how far apart GLIM puts it
+    (mm / deg, against the detections' own noise). None when there is no
+    such config, the export is missing, or the check fails (GLIM's result
+    stands either way)."""
+    import sys
+    out = rec.odometry
+    if out is None or not (out / "traj_lidar.txt").is_file():
+        return None
+    stages = ROOT / "map_stages"
+    if config is None:
+        sys.path.insert(0, str(stages))
+        import pass_tf
+        config = pass_tf.find_config(str(rec.raw.parent))
+        if config is None:
+            log(f"    glim loop closure: no map-stage config for {rec.raw.parent}; not checked")
+            return None
+        import json as _json
+        with open(config) as fh:
+            mach = (_json.load(fh).get("dataset") or {}).get("machine")
+        if mach and mach != rec.raw.name:
+            log(f"    glim loop closure: {Path(config).name} maps with {mach}, "
+                f"not {rec.raw.name}; not checked")
+            return None
+    report = out / "glim_loop_closure.json"
+    log(f"    glim loop closure: stage 05 on GLIM's trajectory ({Path(config).name}) ...")
+    code = subprocess.call([sys.executable, str(stages / "05_anchor.py"), str(config),
+                            "--traj", str(out / "traj_lidar.txt"), "--check", str(report)])
+    if code != 0 or not report.is_file():
+        log(f"    glim loop closure: the check failed (exit {code}); GLIM's result stands")
+        return None
+    with open(report) as fh:
+        r = json.load(fh)
+    boards = {}
+    for name, b in (r.get("boards") or {}).items():
+        lc = b.get("loop_closure")
+        boards[name] = ({"sections": b["sections"], "from_section": lc["from_section"],
+                         "to_section": lc["to_section"], "over_s": lc["dt_s"],
+                         "mm": lc["mm"], "deg": lc["deg"], "noise_mm": lc["noise_mm"],
+                         "significant": lc["significant"]} if lc else
+                        {"sections": b["sections"], "mm": None})
+    summary = {"report": str(report), "anchor_board": r.get("anchor_board"), "boards": boards,
+               "cross_checks": [{k: c[k] for k in ("a", "b", "disagreement_mm",
+                                                   "disagreement_deg", "significant")}
+                                for c in r.get("cross_checks") or []]}
+    info_p = out / "glim.yaml"
+    info = yaml.safe_load(open(info_p)) if info_p.is_file() else {}
+    info["loop_closure"] = summary
+    with open(info_p, "w") as fh:
+        yaml.safe_dump(info, fh, sort_keys=False)
+    for name, b in boards.items():
+        if b.get("mm") is None:
+            log(f"    loop closure {name}: seen in {b['sections']} section(s), not revisited")
+        else:
+            log(f"    loop closure {name}: s{b['from_section']}->s{b['to_section']} over "
+                f"{b['over_s']:.0f} s: {b['mm']:.1f} mm / {b['deg']:.3f} deg "
+                f"(noise {b['noise_mm']:.1f} mm) -> "
+                f"{'DRIFT' if b['significant'] else 'not significant'}")
+    return summary
+
+
 def _publish(tmp: Path, final: Path):
     """Move a finished step from .partial/ into place."""
     _clear(final)
@@ -344,6 +410,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
             if s == "glim" and rec.odometry is not None and \
                     not (rec.odometry / "glim.yaml").is_file():
                 export_glim(rec, settings, log)          # done before the export existed
+                glim_loop_check(rec, log)
             continue
         if not only and s != until and LATER[s] and all(rec.done(x) for x in LATER[s]):
             log(f"[skip] {s}: not needed, {' and '.join(LATER[s])} done")   # e.g. deleted
@@ -406,4 +473,5 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
         log(f"[done] {s}")
         if s == "glim":
             export_glim(rec, settings, log)
+            glim_loop_check(rec, log)
     return rec.status()

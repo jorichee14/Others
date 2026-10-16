@@ -49,6 +49,7 @@ processing/          raw recordings -> processed bags (command lines around scoo
                      direct_visual_lidar_calibration
   run_dvlc.sh        that calibration (docker) on the pause bags: preprocess, guess, calibrate,
                      viewer; output owned by you
+  glim_check.py      a GLIM run's trajectory summary and loop closure on the boards
   rename_frames.py   rename TF frames in a bag (headers, Odometry child, /tf, /tf_static), e.g.
                      --suffix _mobile2 for a bag decoded before --frame-suffix
 run_pass.py          one pass from raw to processed, every step in order (below)
@@ -343,12 +344,26 @@ data/processed/20260924/mapping_A/odometry/mobile_1/   what the map stages use o
     traj_lidar.txt    GLIM's poses of the cloud's frame (TUM), the stages' start
     traj_imu.txt      GLIM's IMU poses, when it wrote them
     glim_config/      the GLIM config it ran with (configs/glim/<machine>)
-    glim.yaml         bag, config, image; poses, span, rate, path length
+    glim.yaml         bag, config, image; poses, span, rate, path length; loop closure
+    glim_loop_closure.json   the boards' sections and loop closures on GLIM's poses
 ```
 
 The GLIM step writes that `odometry/<machine>/` export when it finishes (and
 on the next run for a GLIM run done before); GLIM's dump, with its map,
-stays in `work/.../glim/`.
+stays in `work/.../glim/`. It then measures GLIM's loop closure on the
+boards: stage 05 in its read-only check mode (`05_anchor.py --traj
+<GLIM's traj_lidar.txt> --check <report>`, with the pass's map-stage config)
+finds every board seen at the start and again later and reports how far
+apart GLIM puts it, in mm / deg against the detections' own noise:
+
+```
+    glim -> .../odometry/mobile_2: 13871 poses over 1387.017 s (10.0 Hz), 543.375 m
+    loop closure rs_anchor: s0->s3 over 1380 s: 12.4 mm / 0.210 deg (noise 3.1 mm) -> DRIFT
+```
+
+`processing/glim_check.py <raw machine folder>` runs both again on a GLIM run
+that is already there. Without a map-stage config for the pass (or one that
+maps with another robot) the loop closure is not measured.
 
 Settings come from `configs/recording.yaml` (`--settings` for another file).
 Its top level is mobile_1's; a machine folder named in its `machines:` block

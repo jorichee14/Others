@@ -96,10 +96,26 @@ def sig(mm, noise_mm, k=2.0):
 
 # --------------------------------------------------------------------------- #
 def main():
-    cfg_path = sys.argv[1] if len(sys.argv) > 1 else "pipeline_config.json"
+    # 05_anchor.py [config] [--traj FILE] [--check OUT.json]
+    #   --traj   measure on this trajectory instead (e.g. GLIM's own)
+    #   --check  read-only: no cloud, no anchor_frame / boards file; the boards'
+    #            sections, loop closures and cross-checks go to OUT.json only
+    args = sys.argv[1:]
+    opt = {}
+    for flag in ("--traj", "--check"):
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args):
+                raise SystemExit("%s needs a value" % flag)
+            opt[flag] = args[i + 1]
+            del args[i:i + 2]
+    cfg_path = args[0] if args else "pipeline_config.json"
+    check = opt.get("--check")
     P = load_pipeline(cfg_path)
     S = P.sensor
     s = P.stage("05_anchor")
+    if check:
+        s["skip_cloud"] = True
 
     detect_period = float(s.get("detect_period", 0.20))
     section_gap = float(s.get("section_gap", 3.0))
@@ -149,6 +165,9 @@ def main():
             s["frame_out"] = P.outp("boards_{tag}.json")
     else:
         traj = P.outp(P.dataset["traj"])
+    if opt.get("--traj"):
+        traj = os.path.expanduser(opt["--traj"])
+        print("trajectory given: %s" % traj)
     tr_t, tr_T = load_traj(traj)
     T_lidar_cam = S.T_lidar_camera
     t0, t1 = float(tr_t[0]), float(tr_t[-1])
@@ -632,9 +651,23 @@ def main():
     else:
         print("\nmap->map_zed NOT exported (no map_zed TF during anchor section 0).")
 
-    with open(s["frame_out"], "w") as f:
-        json.dump(frame_out, f, indent=2)
-    print("wrote %d board(s) -> %s" % (len(boards_out), s["frame_out"]))
+    if check:
+        report = {"trajectory": traj, "poses": int(len(tr_t)),
+                  "duration_s": round(t1 - t0, 3), "anchor_board": anchor["name"],
+                  "boards": dict((i["name"], {"design": i["design"],
+                                              "sections": len(i["sections"]),
+                                              "loop_closure": i.get("lc")})
+                                 for i in instances),
+                  "cross_checks": xcheck, "provenance": provenance(cfg_path, s)}
+        with open(check, "w") as f:
+            json.dump(report, f, indent=2,
+                      default=lambda o: o.item() if hasattr(o, "item") else str(o))
+        print("check: %d board(s), loop closures -> %s (nothing else written)"
+              % (len(instances), check))
+    else:
+        with open(s["frame_out"], "w") as f:
+            json.dump(frame_out, f, indent=2)
+        print("wrote %d board(s) -> %s" % (len(boards_out), s["frame_out"]))
 
     # ------------------------- drift summary + TF chain --------------------- #
     print("\n=== drift summary (revisited boards only) ===")
