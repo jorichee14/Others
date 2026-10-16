@@ -158,6 +158,26 @@ def main():
             fails.append(f"no summary line: {logs}")
         else:
             print("  ok    " + [ln for ln in logs if "loop closure rs_anchor" in ln][0].strip())
+        # 02's check at its end: the refined trajectory (5 mm left), against GLIM's
+        sys.path.insert(0, STAGES)
+        import loop_check
+        ref = rec.odometry / "traj_lidar_refined.txt"
+        with open(traj) as fi, open(ref, "w") as fo:
+            for ln in fi:
+                v = ln.split()
+                if float(v[0]) - t0 * 1e-9 >= 20 - 1e-6:
+                    v[1] = "%.6f" % (float(v[1]) - 0.010)          # 15 mm -> 5 mm
+                fo.write(" ".join(v) + "\n")
+        out3 = []
+        summ3 = loop_check.check_trajectory(cfg_path, str(ref), log=out3.append)
+        b3 = (summ3 or {}).get("boards", {}).get("rs_anchor", {})
+        cmp3 = [ln for ln in out3 if "GLIM" in ln and "refined" in ln]
+        if summ3 is None or abs((b3.get("mm") or 0) - 5.0) > 2.0 or not cmp3:
+            fails.append(f"refined check: {b3} / {out3}")
+        elif not os.path.isfile(rec.odometry / "traj_lidar_refined_loop_closure.json"):
+            fails.append("no traj_lidar_refined_loop_closure.json")
+        else:
+            print("  ok    " + cmp3[0].strip())
     finally:
         shutil.rmtree(d, ignore_errors=True)
     for f in fails:

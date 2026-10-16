@@ -686,6 +686,12 @@ def main():
         print(f"    wrote {out_r} (and {out})")
 
     print_convergence(history)
+    # the refined trajectory's loop closure on the boards, against GLIM's
+    try:
+        import loop_check
+        loop_check.check_trajectory(args.config, P.outp(c["output"]))
+    except Exception as e:                     # the poses stand either way
+        print(f"\n(loop closure not measured: {type(e).__name__}: {e})")
     print(f"\nnext: set dataset.traj to \"{c['output']}\" (found in "
           f"{P.folder_for(c['output'])}), delete "
           f"{', '.join(P.pcd(b) for b in ('merged', 'static', 'denoised', 'colored'))} "

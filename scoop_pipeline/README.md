@@ -362,7 +362,14 @@ apart GLIM puts it, in mm / deg against the detections' own noise:
 ```
 
 `processing/glim_check.py <raw machine folder>` runs both again on a GLIM run
-that is already there. Without a map-stage config for the pass (or one that
+that is already there. Stage 02 runs the same check on its refined trajectory
+when it finishes and prints it next to GLIM's (`map_stages/loop_check.py
+<config> [--traj FILE]` on any trajectory):
+
+```
+  against GLIM:
+    anchor       GLIM   10.8 mm / 1.240 deg  ->  refined    4.2 mm / 0.310 deg
+``` Without a map-stage config for the pass (or one that
 maps with another robot) the loop closure is not measured.
 
 Settings come from `configs/recording.yaml` (`--settings` for another file).

@@ -325,38 +325,19 @@ def glim_loop_check(rec: "Recording", log=print, config=None) -> Optional[dict]:
             return None
     report = out / "glim_loop_closure.json"
     log(f"    glim loop closure: stage 05 on GLIM's trajectory ({Path(config).name}) ...")
-    code = subprocess.call([sys.executable, str(stages / "05_anchor.py"), str(config),
-                            "--traj", str(out / "traj_lidar.txt"), "--check", str(report)])
-    if code != 0 or not report.is_file():
-        log(f"    glim loop closure: the check failed (exit {code}); GLIM's result stands")
+    sys.path.insert(0, str(stages))
+    import loop_check
+    summary = loop_check.run(config, out / "traj_lidar.txt", report, log)
+    if summary is None:
+        log("    glim loop closure: not measured; GLIM's result stands")
         return None
-    with open(report) as fh:
-        r = json.load(fh)
-    boards = {}
-    for name, b in (r.get("boards") or {}).items():
-        lc = b.get("loop_closure")
-        boards[name] = ({"sections": b["sections"], "from_section": lc["from_section"],
-                         "to_section": lc["to_section"], "over_s": lc["dt_s"],
-                         "mm": lc["mm"], "deg": lc["deg"], "noise_mm": lc["noise_mm"],
-                         "significant": lc["significant"]} if lc else
-                        {"sections": b["sections"], "mm": None})
-    summary = {"report": str(report), "anchor_board": r.get("anchor_board"), "boards": boards,
-               "cross_checks": [{k: c[k] for k in ("a", "b", "disagreement_mm",
-                                                   "disagreement_deg", "significant")}
-                                for c in r.get("cross_checks") or []]}
     info_p = out / "glim.yaml"
     info = yaml.safe_load(open(info_p)) if info_p.is_file() else {}
     info["loop_closure"] = summary
     with open(info_p, "w") as fh:
         yaml.safe_dump(info, fh, sort_keys=False)
-    for name, b in boards.items():
-        if b.get("mm") is None:
-            log(f"    loop closure {name}: seen in {b['sections']} section(s), not revisited")
-        else:
-            log(f"    loop closure {name}: s{b['from_section']}->s{b['to_section']} over "
-                f"{b['over_s']:.0f} s: {b['mm']:.1f} mm / {b['deg']:.3f} deg "
-                f"(noise {b['noise_mm']:.1f} mm) -> "
-                f"{'DRIFT' if b['significant'] else 'not significant'}")
+    for ln in loop_check.lines(summary):
+        log("    " + ln)
     return summary
 
 
