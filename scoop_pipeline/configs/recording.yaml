@@ -37,10 +37,10 @@ machines:                          # per machine folder (raw/<date>/<pass>/<mach
       exclude: [/mobile_2/ouster/lidar_packets, /mobile_2/ouster/imu_packets]
       imu_sync: []                 # the RealSense IMU is on the PC clock already
     glim:                          # its own GLIM config: its topics and T_lidar_imu
-      config: ~/workspaces/isaac_ros-dev/glim_config_mobile2   # processing/glim_config.py
+      config: configs/glim/mobile_2   # made from mobile_1's by processing/glim_config.py
 
 glim:
-  config: ~/workspaces/isaac_ros-dev/glim_config   # $GLIM_CONFIG overrides
+  config: configs/glim/mobile_1    # GLIM's config folder, in this repo; $GLIM_CONFIG overrides
   image: koide3/glim_ros2:humble-mcap
 
 zed:                               # the .svo2 in the raw folder -> <svo name>_zed/

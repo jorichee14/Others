@@ -3,6 +3,9 @@
 points / IMU topics and T_lidar_imu set from that robot's processed bag.
 
     python3 processing/glim_config.py <src config dir> <new config dir> <bag>
+
+    e.g. python3 processing/glim_config.py configs/glim/mobile_1 configs/glim/mobile_2 \
+             <work>/<date>/<pass>/mobile_2/<bag>_retimed
         [--points /mobile_2/ouster/points] [--imu /mobile_2/ouster/imu]
 
 GLIM's config files carry // comments, so they are edited as text: every

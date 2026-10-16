@@ -27,6 +27,7 @@ configs/recording.yaml  settings for processing a recording (topics, remaps, GLI
 configs/zed/         the robot's zed_wrapper config, used to replay SVOs
 configs/record.yaml  what each machine records (the robots' record.yaml)
 configs/static_tf.yaml  calibrated transforms the merge adds to /tf_static
+configs/glim/<machine>/  GLIM's config folder per robot (configs/glim/README.md)
 configs/comms.yaml   which TF frame places each machine in the comms tables
 environment.yml      conda env for all offline processing
 processing/          raw recordings -> processed bags (command lines around scoop/)
@@ -353,9 +354,10 @@ data/work/<date>/<pass>/mobile_2/
     clock.json  process.yaml
 ```
 
-GLIM runs on it with its own config (`machines.mobile_2.glim.config`, made
-from mobile_1's by `processing/glim_config.py`: topics, and `T_lidar_imu` from
-the bag's Ouster frames). In a pass where mobile_2 maps alone, the map stages
+GLIM runs on it with its own config (`machines.mobile_2.glim.config`:
+`configs/glim/mobile_2`, made from `configs/glim/mobile_1` by
+`processing/glim_config.py`: topics, and `T_lidar_imu` from the bag's Ouster
+frames; see `configs/glim/README.md`). In a pass where mobile_2 maps alone, the map stages
 take this retimed bag as `dataset.bag` (no merge; GLIM's `glim/` is found next
 to it) -- e.g. `map_stages/pipeline_config_mapping_20261015.json`.
 `run_pass.py`, `merge_session.py` and `process_recording.py` all apply the

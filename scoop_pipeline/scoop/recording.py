@@ -323,8 +323,8 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
             env = dict(os.environ)
             if g.get("image"):
                 env["GLIM_IMAGE"] = str(g["image"])
-            cfg = str(Path(g.get("config", "~/workspaces/isaac_ros-dev/glim_config"))
-                      .expanduser())
+            # relative to scoop_pipeline/ (configs/glim/<machine>), or absolute
+            cfg = str(ROOT / Path(g.get("config", "configs/glim/mobile_1")).expanduser())
             tmp.mkdir()                          # made here, owned by you, empty
             code = subprocess.call([str(script), str(rec.step("retimed")), cfg, str(tmp)],
                                    env=env)

@@ -37,7 +37,7 @@ def test_settings_for_merges_a_machine_over_the_top_level():
     assert o["remap"] == [] and o["imu_sync"] == []           # lists replaced, not merged
     assert o["copy_all"] is True and o["driver_min_range"] == s["ouster"]["driver_min_range"]
     assert "until" not in m2                                   # GLIM runs for mobile_2 too
-    assert m2["glim"]["config"].endswith("glim_config_mobile2")
+    assert m2["glim"]["config"] == "configs/glim/mobile_2"
     assert m2["glim"]["image"] == s["glim"]["image"]           # the rest inherited
     assert recording.settings_for(s, None)["ouster"] == s["ouster"]
 
