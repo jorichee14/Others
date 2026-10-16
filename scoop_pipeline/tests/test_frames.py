@@ -139,6 +139,36 @@ def test_suffix_names_all_three_ouster_frames(d):
         [("os_sensor_mobile2", "os_lidar_mobile2"), ("os_sensor_mobile2", "os_imu_mobile2")]
 
 
+def test_a_stopped_write_leaves_no_bag(d):
+    out = os.path.join(d, "half")
+    try:
+        with BagWriter(out) as w:
+            w.write("/points", cloud(), 1)
+            raise KeyboardInterrupt                          # Ctrl+C half way
+    except KeyboardInterrupt:
+        pass
+    assert not os.path.exists(out), os.listdir(out)
+    src = os.path.join(d, "src")
+    with BagWriter(src) as w:
+        w.write("/points", cloud(), 1)
+    calls = {"n": 0}
+
+    def stop(*_):                                         # interrupt rename_bag's log
+        calls["n"] += 1
+        raise KeyboardInterrupt
+    out2 = os.path.join(d, "renamed")
+    real = frames.rename_payload
+    frames.rename_payload = lambda *a: (_ for _ in ()).throw(KeyboardInterrupt())
+    try:
+        frames.rename_bag(src, out2, MAP, log=stop)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        frames.rename_payload = real
+    assert not os.path.exists(out2)
+    assert os.path.isfile(os.path.join(src, "metadata.yaml"))   # a finished one stays
+
+
 def test_parse_renames():
     assert frames.parse_renames(["a:=b", " c := d "]) == {"a": "b", "c": "d"}
     for bad in ("a", "a:=", ":=b", "a:=a"):

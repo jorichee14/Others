@@ -15,11 +15,14 @@ ros2msg schemas and CDR messages, plus the ``metadata.yaml`` that
         w.write("/points", rosmsg.pointcloud2(...), log_ns)
         w.write_raw("/zed/imu", schemas["/zed/zed_node/imu/data"], payload, log_ns)
 
-Messages should arrive in log-time order, as a recorder writes them.
+Messages should arrive in log-time order, as a recorder writes them. Used
+with ``with``, a bag is finished (metadata.yaml written) only when the block
+ends normally; stopped by Ctrl+C or an error, its folder is removed.
 """
 from __future__ import annotations
 
 import heapq
+import shutil
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
@@ -177,8 +180,23 @@ class BagWriter:
     def __enter__(self):
         return self
 
-    def __exit__(self, *exc):
-        self.close()
+    def abort(self):
+        """Throw the unfinished bag away: no metadata.yaml, folder removed, so a
+        run stopped half way (Ctrl+C, an error) leaves nothing that looks done
+        and nothing taking space."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._fh.close()
+        finally:
+            shutil.rmtree(self.dir, ignore_errors=True)
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.close()
+        else:
+            self.abort()
         return False
 
 
