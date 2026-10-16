@@ -649,6 +649,12 @@ def test_process_recording_steps_skip_redo_fail():
         recording.process(rec, _settings(), until="glim", glim_script=t.glim, log=logs.append)
         assert not [l for l in logs if l.startswith("[run ]")], logs
         assert any("decoded: not needed" in l for l in logs), logs
+        logs = []                                           # glim redone: decoded stays gone
+        recording.process(rec, _settings(), until="glim", redo="glim", glim_script=t.glim,
+                          log=logs.append)
+        ran = [l.split()[2] for l in logs if l.startswith("[run ]")]
+        assert ran == ["glim"], logs
+        assert not rec.done("decoded")
         recording.process(rec, _settings(), until="decoded", log=quiet)   # wanted back
         assert rec.done("decoded")
         shutil.rmtree(rec.step("decoded"))

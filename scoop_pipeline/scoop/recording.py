@@ -50,6 +50,7 @@ __all__ = ["STEPS", "LATER", "Recording", "work_dir_for", "find_recording", "loa
 
 STEPS = ["decoded", "retimed", "glim", "zed"]
 LATER = {"decoded": ["retimed", "glim"], "retimed": ["glim"], "glim": [], "zed": []}
+READ_BY = {"decoded": ["retimed"], "retimed": ["glim"], "glim": [], "zed": []}   # direct readers
 ROOT = Path(__file__).resolve().parents[1]                 # scoop_pipeline/
 DEFAULT_SETTINGS = ROOT / "configs" / "recording.yaml"
 
@@ -412,8 +413,10 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
                 export_glim(rec, settings, log)          # done before the export existed
                 glim_loop_check(rec, log)
             continue
-        if not only and s != until and LATER[s] and all(rec.done(x) for x in LATER[s]):
-            log(f"[skip] {s}: not needed, {' and '.join(LATER[s])} done")   # e.g. deleted
+        # not needed when every step that reads it is done (e.g. decoded, once
+        # retimed exists -- also while glim is being redone)
+        if not only and s != until and READ_BY[s] and all(rec.done(x) for x in READ_BY[s]):
+            log(f"[skip] {s}: not needed, {' and '.join(READ_BY[s])} done")   # e.g. deleted
             continue
         if s == "zed":                           # one replay per bag, each published alone
             log(f"[run ] zed -> {', '.join(rec.zed_bag(n).name for n in bags)}")
