@@ -125,6 +125,41 @@ def test_mobile_2_folder_processed_with_its_own_settings(d):
     assert tftree.connected(cal.parent, cal.child, tftree.tf_edges(u.bags))
 
 
+def test_glim_results_exported_to_processed(d):
+    """GLIM's trajectory, IMU trajectory and config go to processed/<date>/<pass>/
+    odometry/<machine>/, also for a GLIM run done before the export existed."""
+    work = recording.Path(d) / "data" / "work" / "20261015" / "mapping" / "mobile_2"
+    rec = recording.Recording(recording.Path(d) / "data" / "raw" / "20261015" / "mapping" / "mobile_2",
+                              recording.Path(d) / "raw_bag", work)
+    assert rec.odometry == recording.Path(d) / "data" / "processed" / "20261015" / "mapping" / \
+        "odometry" / "mobile_2"
+    dump = rec.step("glim")
+    dump.mkdir(parents=True)
+    with open(dump / "traj_lidar.txt", "w") as fh:            # 3 poses, 0.1 s apart, 2 m
+        fh.write("100.0 0 0 0 0 0 0 1\n100.1 1 0 0 0 0 0 1\n100.2 1 1 0 0 0 0 1\n")
+    (dump / "traj_imu.txt").write_text("100.0 0 0 0 0 0 0 1\n100.2 1 1 0 0 0 0 1\n")
+    cfg = recording.Path(d) / "glim_cfg"
+    cfg.mkdir()
+    (cfg / "config_ros.json").write_text('{ // GLIM\n "glim_ros": {} }')
+    s = recording.settings_for(recording.load_settings(), "mobile_2")
+    s["glim"]["config"] = str(cfg)
+    out = recording.export_glim(rec, s, log=lambda *_: None)
+    assert sorted(p.name for p in out.iterdir()) == \
+        ["glim.yaml", "glim_config", "traj_imu.txt", "traj_lidar.txt"]
+    assert (out / "glim_config" / "config_ros.json").read_text().startswith("{ // GLIM")
+    info = yaml.safe_load(open(out / "glim.yaml"))
+    tl = info["files"]["traj_lidar.txt"]
+    assert (tl["poses"], tl["duration_s"], tl["rate_hz"], tl["path_length_m"]) == (3, 0.2, 10.0, 2.0)
+    assert info["config"] == str(cfg) and info["dump"] == str(dump)
+    # a GLIM run done before: the next process run exports it (and runs nothing)
+    import shutil as sh
+    sh.rmtree(out)
+    rec.bag = recording.Path(d) / "raw_bag"                   # has() needs a bag
+    logs = []
+    recording.process(rec, s, only="glim", log=logs.append)
+    assert (out / "traj_lidar.txt").is_file() and not [l for l in logs if l.startswith("[run ]")]
+
+
 def _cals():
     from scoop import tftree
     return tftree.load_calibrations(yaml.safe_load(open(os.path.join(

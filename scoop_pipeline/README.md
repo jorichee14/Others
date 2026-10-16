@@ -339,7 +339,16 @@ data/work/20260924/mapping_A/mobile_1/
     <svo name>_zed/        4  the SVO2 as a bag, capture time (zed_logs/ inside)
     clock.json        the clock fit (drift, residual, packets) for the paper
     process.yaml      the settings the steps ran with
+data/processed/20260924/mapping_A/odometry/mobile_1/   what the map stages use of GLIM
+    traj_lidar.txt    GLIM's poses of the cloud's frame (TUM), the stages' start
+    traj_imu.txt      GLIM's IMU poses, when it wrote them
+    glim_config/      the GLIM config it ran with (configs/glim/<machine>)
+    glim.yaml         bag, config, image; poses, span, rate, path length
 ```
+
+The GLIM step writes that `odometry/<machine>/` export when it finishes (and
+on the next run for a GLIM run done before); GLIM's dump, with its map,
+stays in `work/.../glim/`.
 
 Settings come from `configs/recording.yaml` (`--settings` for another file).
 Its top level is mobile_1's; a machine folder named in its `machines:` block
