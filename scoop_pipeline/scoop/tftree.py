@@ -33,6 +33,7 @@ from . import bag, rosmsg
 from .bag import BagError
 
 __all__ = ["Edge", "Calibration", "matrix", "to_tq", "tf_edges", "attach", "load_calibrations",
+           "reachable", "rename_edges", "connected", "static_between",
            "edge_matcher", "read_tum", "read_pose_topic", "odom_transforms", "plan_edits",
            "format_tree", "TFEdits"]
 
@@ -149,10 +150,17 @@ def _static_pose(root: str, frame: str, edges: Dict[str, Edge]) -> np.ndarray:
     return M
 
 
-def attach(cals: List[Calibration], edges: Dict[str, Edge]):
+def attach(cals: List[Calibration], edges: Dict[str, Edge], keep=()):
     """The transforms to add to /tf_static for ``cals``, as
-    ``[(parent, child, t, q)]``, and one note per calibration."""
+    ``[(parent, child, t, q)]``, and one note per calibration.
+
+    ``keep``: frames whose tree stays a subtree, e.g. a robot's own Ouster
+    frames when its bag is processed alone. A calibration from such a tree to
+    a frame this bag does not have (mobile_1's ZED, in another bag) is added
+    re-rooted all the same -- <child> -> <root of that tree> -- the edge a
+    merge with the camera's bag adds, so the two never give a frame two parents."""
     edges = dict(edges)
+    keep = set(keep)
     out, notes = [], []
     for c in cals:
         T = matrix(c.translation, c.rotation_xyzw)
@@ -160,19 +168,63 @@ def attach(cals: List[Calibration], edges: Dict[str, Edge]):
         if rp == rc:
             raise BagError(f"{c.parent} and {c.child} are already connected (root {rp}); "
                            f"adding {c.parent} -> {c.child} would make a loop")
-        if c.child not in edges:                              # free: add as given
+        if c.child not in edges and rp not in keep:           # free: add as given
             add = (c.parent, c.child, T)
             notes.append(f"{c.parent} -> {c.child}")
         else:                                                 # re-root the parent's tree
             T_root_parent = _static_pose(rp, c.parent, edges)
             add = (c.child, rp, np.linalg.inv(T) @ np.linalg.inv(T_root_parent))
-            notes.append(f"{c.child} already has a parent ({edges[c.child].parent}): "
-                         f"added {c.child} -> {rp} instead, so {c.parent} -> {c.child} "
+            why = (f"{c.child} already has a parent ({edges[c.child].parent})"
+                   if c.child in edges else f"{rp}'s tree is kept whole")
+            notes.append(f"{why}: added {c.child} -> {rp} instead, so {c.parent} -> {c.child} "
                          f"is the calibration")
         t, q = to_tq(add[2])
         out.append((add[0], add[1], t, q))
         edges[add[1]] = Edge(add[0], add[1], True, add[2])
     return out, notes
+
+
+def static_between(a: str, b: str, edges: Dict[str, Edge]) -> np.ndarray:
+    """Pose of ``b`` in ``a`` (4x4), through their nearest common ancestor and
+    static edges only -- what moves above that ancestor (odometry) does not
+    matter, e.g. os_lidar -> os_imu below os_sensor."""
+    up = [a]
+    while up[-1] in edges:
+        up.append(edges[up[-1]].parent)
+    f = b
+    while f not in up:
+        if f not in edges:
+            raise BagError(f"{a} and {b} are not in one TF tree")
+        f = edges[f].parent
+    return np.linalg.inv(_static_pose(f, a, edges)) @ _static_pose(f, b, edges)
+
+
+def connected(a: str, b: str, edges: Dict[str, Edge]) -> bool:
+    """Whether ``a`` and ``b`` are in one tree."""
+    return _root(a, edges) == _root(b, edges)
+
+
+def reachable(cals: List[Calibration], frames: Iterable[str]) -> List[Calibration]:
+    """The calibrations reached from ``frames`` through calibrations (either
+    end), in their order: a robot's own, e.g. os_lidar_mobile1 -> ZED ->
+    radars, not infra_1's camera -> radar."""
+    seen = set(frames)
+    picked: List[int] = []
+    grew = True
+    while grew:
+        grew = False
+        for i, c in enumerate(cals):
+            if i not in picked and (c.parent in seen or c.child in seen):
+                picked.append(i)
+                seen |= {c.parent, c.child}
+                grew = True
+    return [cals[i] for i in sorted(picked)]
+
+
+def rename_edges(edges: Dict[str, Edge], mapping: Dict[str, str]) -> Dict[str, Edge]:
+    """``edges`` with frames renamed (scoop.frames), as a renamed bag has them."""
+    r = lambda f: mapping.get(f, f)                            # noqa: E731
+    return {r(c): Edge(r(e.parent), r(c), e.static, e.T) for c, e in edges.items()}
 
 
 def edge_matcher(patterns):

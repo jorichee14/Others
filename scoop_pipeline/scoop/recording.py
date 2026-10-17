@@ -13,6 +13,8 @@ a bag, with every output at a fixed place.
         <svo>_zed_right/   one replay per bag (settings zed.bags)
         clock.json         the clock fit of step 2 (drift, residual, ...)
         process.yaml       the settings the steps ran with
+    data/processed/<date>/<pass>/odometry/<machine>/   what the map stages use of GLIM
+        traj_lidar.txt  traj_imu.txt  glim_config/  glim.yaml     (:func:`export_glim`)
 
 ``<bag>`` is the original bag's folder name (``<svo>`` the SVO's file name), so a derived bag says which
 recording it came from wherever it is copied. ``<rel>`` is the recording's
@@ -42,11 +44,13 @@ import yaml
 from . import bag, replay, retime, zed
 from .bag import BagError
 
-__all__ = ["STEPS", "LATER", "Recording", "work_dir_for", "find_recording", "load_settings", "zed_bags",
+__all__ = ["STEPS", "LATER", "Recording", "work_dir_for", "find_recording", "load_settings",
+           "settings_for", "zed_bags", "export_glim", "glim_config_dir", "glim_loop_check",
            "zed_args", "process"]
 
 STEPS = ["decoded", "retimed", "glim", "zed"]
 LATER = {"decoded": ["retimed", "glim"], "retimed": ["glim"], "glim": [], "zed": []}
+READ_BY = {"decoded": ["retimed"], "retimed": ["glim"], "glim": [], "zed": []}   # direct readers
 ROOT = Path(__file__).resolve().parents[1]                 # scoop_pipeline/
 DEFAULT_SETTINGS = ROOT / "configs" / "recording.yaml"
 
@@ -76,6 +80,20 @@ class Recording:
     def zed_bag(self, name: str) -> Path:
         """``<svo>_<name>``, e.g. ``<svo>_zed``, ``<svo>_zed_right``."""
         return self.work / (f"{self.svo.stem}_{name}" if self.svo else name)
+
+    @property
+    def odometry(self) -> Optional[Path]:
+        """data/processed/<date>/<pass>/odometry/<machine>/ for a work folder
+        data/work/<date>/<pass>/<machine>/ -- where the map stages look for this
+        robot's trajectory first; None for another layout."""
+        parts = self.work.parts
+        if "work" not in parts:
+            return None
+        i = len(parts) - 1 - parts[::-1].index("work")
+        rel = parts[i + 1:]
+        if len(rel) < 3:
+            return None
+        return Path(*parts[:i]) / "processed" / rel[0] / rel[1] / "odometry" / rel[-1]
 
     @property
     def clock_json(self) -> Path:
@@ -114,6 +132,8 @@ def work_dir_for(raw_dir, work_root=None) -> Path:
         raise BagError(f"{raw_dir} is not a folder")
     parts = raw_dir.parts
     if "raw" not in parts:
+        if work_root:                  # e.g. straight from record.sh's Dataset/ folder
+            return Path(work_root).expanduser().resolve() / raw_dir.name
         raise BagError(f"{raw_dir} is not below a 'raw' folder; pass work_root")
     i = len(parts) - 1 - parts[::-1].index("raw")          # the last 'raw'
     rel = Path(*parts[i + 1:]) if i + 1 < len(parts) else Path()
@@ -153,6 +173,27 @@ def load_settings(path=None) -> dict:
     s.setdefault("zed", {})
     if os.environ.get("GLIM_CONFIG"):
         s["glim"]["config"] = os.environ["GLIM_CONFIG"]
+    return s
+
+
+def _deep(base, over):
+    if not isinstance(base, dict) or not isinstance(over, dict):
+        return over
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _deep(base.get(k), v) if k in base else v
+    return out
+
+
+def settings_for(settings: dict, machine: Optional[str]) -> dict:
+    """The settings for one machine: the top level (mobile_1's) with that
+    machine's block of ``machines:`` merged over it (dicts merged key by key,
+    lists and values replaced). A machine without a block gets the top level."""
+    base = {k: v for k, v in settings.items() if k != "machines"}
+    over = (settings.get("machines") or {}).get(machine) if machine else None
+    s = _deep(base, over or {})
+    for k in ("ouster", "glim", "zed"):
+        s.setdefault(k, {})
     return s
 
 
@@ -200,6 +241,106 @@ def _clear_leftovers(tmp: Path):
     tmp.parent.mkdir(parents=True, exist_ok=True)
 
 
+def glim_config_dir(settings: dict) -> Path:
+    """GLIM's config folder: settings glim.config, relative to scoop_pipeline/."""
+    return ROOT / Path(settings["glim"].get("config", "configs/glim/mobile_1")).expanduser()
+
+
+def _traj_summary(path: Path) -> dict:
+    """Poses, time span, rate and path length of a TUM trajectory."""
+    import numpy as np
+    a = np.loadtxt(path, ndmin=2)
+    if a.size == 0:
+        return {"poses": 0}
+    t, xyz = a[:, 0], a[:, 1:4]
+    span = float(t[-1] - t[0])
+    return {"poses": int(len(a)), "t_start": float(t[0]), "t_end": float(t[-1]),
+            "duration_s": round(span, 3),
+            "rate_hz": round((len(a) - 1) / span, 3) if span > 0 else None,
+            "path_length_m": round(float(np.linalg.norm(np.diff(xyz, axis=0), axis=1).sum()), 3)}
+
+
+def export_glim(rec: "Recording", settings: dict, log=print) -> Optional[Path]:
+    """GLIM's results into processed/<date>/<pass>/odometry/<machine>/, where
+    the map stages read this robot's trajectory: traj_lidar.txt (the poses of
+    the cloud's frame, TUM), traj_imu.txt when GLIM wrote one, glim_config/
+    (the config it ran with) and glim.yaml (bag, config, image, and the
+    trajectory's poses / span / rate / length). Its dump with the map stays
+    in work/.../glim/. Returns the folder, or None for another layout."""
+    out = rec.odometry
+    if out is None:
+        log(f"    (glim: {rec.work} is not data/work/<date>/<pass>/<machine>; not exported)")
+        return None
+    dump = rec.step("glim")
+    out.mkdir(parents=True, exist_ok=True)
+    files = {}
+    for name in ("traj_lidar.txt", "traj_imu.txt"):
+        if (dump / name).is_file():
+            shutil.copy2(dump / name, out / name)
+            files[name] = _traj_summary(out / name)
+    cfg = glim_config_dir(settings)
+    if cfg.is_dir():
+        _clear(out / "glim_config")
+        shutil.copytree(cfg, out / "glim_config")
+    info = {"bag": str(rec.step("retimed")), "dump": str(dump),
+            "config": str(cfg), "image": settings["glim"].get("image"),
+            "frame": "the points' frame (traj_lidar.txt: T_world_lidar, TUM: t x y z qx qy qz qw)",
+            "files": files}
+    with open(out / "glim.yaml", "w") as fh:
+        yaml.safe_dump(info, fh, sort_keys=False)
+    tl = files.get("traj_lidar.txt", {})
+    log(f"    glim -> {out}: {tl.get('poses', 0)} poses over {tl.get('duration_s')} s "
+        f"({tl.get('rate_hz')} Hz), {tl.get('path_length_m')} m")
+    return out
+
+
+def glim_loop_check(rec: "Recording", log=print, config=None) -> Optional[dict]:
+    """GLIM's loop closure, measured on the boards: stage 05 in its read-only
+    check mode (map_stages/05_anchor.py --traj --check) on GLIM's own
+    trajectory, with this pass's map-stage config (the one whose dataset is
+    this pass and this machine; ``config`` picks another). The report goes to
+    odometry/<machine>/glim_loop_closure.json and its summary into glim.yaml:
+    per board seen at the start and again later, how far apart GLIM puts it
+    (mm / deg, against the detections' own noise). None when there is no
+    such config, the export is missing, or the check fails (GLIM's result
+    stands either way)."""
+    import sys
+    out = rec.odometry
+    if out is None or not (out / "traj_lidar.txt").is_file():
+        return None
+    stages = ROOT / "map_stages"
+    if config is None:
+        sys.path.insert(0, str(stages))
+        import pass_tf
+        config = pass_tf.find_config(str(rec.raw.parent))
+        if config is None:
+            log(f"    glim loop closure: no map-stage config for {rec.raw.parent}; not checked")
+            return None
+        import json as _json
+        with open(config) as fh:
+            mach = (_json.load(fh).get("dataset") or {}).get("machine")
+        if mach and mach != rec.raw.name:
+            log(f"    glim loop closure: {Path(config).name} maps with {mach}, "
+                f"not {rec.raw.name}; not checked")
+            return None
+    report = out / "glim_loop_closure.json"
+    log(f"    glim loop closure: stage 05 on GLIM's trajectory ({Path(config).name}) ...")
+    sys.path.insert(0, str(stages))
+    import loop_check
+    summary = loop_check.run(config, out / "traj_lidar.txt", report, log)
+    if summary is None:
+        log("    glim loop closure: not measured; GLIM's result stands")
+        return None
+    info_p = out / "glim.yaml"
+    info = yaml.safe_load(open(info_p)) if info_p.is_file() else {}
+    info["loop_closure"] = summary
+    with open(info_p, "w") as fh:
+        yaml.safe_dump(info, fh, sort_keys=False)
+    for ln in loop_check.lines(summary):
+        log("    " + ln)
+    return summary
+
+
 def _publish(tmp: Path, final: Path):
     """Move a finished step from .partial/ into place."""
     _clear(final)
@@ -220,6 +361,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
     for name in (until, redo, only):
         if name is not None and name not in STEPS:
             raise ValueError(f"unknown step {name!r}; steps: {STEPS}")
+    until = until or settings.get("until")       # a machine's own last step (recording.yaml)
     last = STEPS.index(until) if until else len(STEPS) - 1
     bags = zed_bags(settings["zed"])
     rec.zed_bags = tuple(bags)
@@ -247,9 +389,15 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
         tmp = rec.work / ".partial" / final.name   # same name, so the .mcap inside is too
         if rec.done(s):
             log(f"[skip] {s}: done ({final})")
+            if s == "glim" and rec.odometry is not None and \
+                    not (rec.odometry / "glim.yaml").is_file():
+                export_glim(rec, settings, log)          # done before the export existed
+                glim_loop_check(rec, log)
             continue
-        if not only and s != until and LATER[s] and all(rec.done(x) for x in LATER[s]):
-            log(f"[skip] {s}: not needed, {' and '.join(LATER[s])} done")   # e.g. deleted
+        # not needed when every step that reads it is done (e.g. decoded, once
+        # retimed exists -- also while glim is being redone)
+        if not only and s != until and READ_BY[s] and all(rec.done(x) for x in READ_BY[s]):
+            log(f"[skip] {s}: not needed, {' and '.join(READ_BY[s])} done")   # e.g. deleted
             continue
         if s == "zed":                           # one replay per bag, each published alone
             log(f"[run ] zed -> {', '.join(rec.zed_bag(n).name for n in bags)}")
@@ -269,6 +417,11 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
         _clear_leftovers(tmp)
         log(f"[run ] {s} -> {final}")
         if s == "decoded":
+            cals = []
+            if o.get("static_tf"):                    # the robot's calibrations, into its bag
+                from . import tftree
+                with open(ROOT / Path(o["static_tf"]).expanduser()) as fh:
+                    cals = tftree.load_calibrations(yaml.safe_load(fh))
             replay.decode_ouster_bag(
                 rec.bag, tmp, packets_ns=packets_ns, out_ns=out_ns,
                 driver_min_range=float(o.get("driver_min_range", 0.0)),
@@ -276,7 +429,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
                 frame=o.get("frame", "lidar"), imu=bool(o.get("imu", True)),
                 remap=replay.parse_remaps(o.get("remap")),
                 copy_all=bool(o.get("copy_all", False)), exclude=o.get("exclude") or (),
-                log=log)
+                frame_suffix=o.get("frame_suffix") or "", static_tf=cals, log=log)
         elif s == "retimed":
             res = retime.retime_bag(rec.bag, rec.step("decoded"), tmp,
                                     packets_ns=packets_ns, points_ns=out_ns,
@@ -293,8 +446,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
             env = dict(os.environ)
             if g.get("image"):
                 env["GLIM_IMAGE"] = str(g["image"])
-            cfg = str(Path(g.get("config", "~/workspaces/isaac_ros-dev/glim_config"))
-                      .expanduser())
+            cfg = str(glim_config_dir(settings))   # configs/glim/<machine>, or absolute
             tmp.mkdir()                          # made here, owned by you, empty
             code = subprocess.call([str(script), str(rec.step("retimed")), cfg, str(tmp)],
                                    env=env)
@@ -303,4 +455,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
                                f"(exit {code}); the partial run is left in {tmp}")
         _publish(tmp, final)
         log(f"[done] {s}")
+        if s == "glim":
+            export_glim(rec, settings, log)
+            glim_loop_check(rec, log)
     return rec.status()

@@ -1,0 +1,20 @@
+# Topics published TRANSIENT_LOCAL (latched). rosbag2 subscribes VOLATILE by
+# default, so it joins too late and records nothing -- the topic appears in the
+# bag with zero messages. These are exactly the topics you only get one message
+# of, which makes the loss silent and permanent.
+/tf_static:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local
+/ouster/metadata:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local
+/mobile_2/extrinsics/depth_to_infra1:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local
+/mobile_2/extrinsics/depth_to_infra2:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local

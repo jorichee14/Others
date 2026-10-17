@@ -6,7 +6,7 @@
 #
 #   bag_dir     the retimed bag, e.g. .../20260924/mapping_A/mobile_1/retimed_full
 #   config_dir  GLIM config folder (default: $GLIM_CONFIG if set,
-#               else ~/workspaces/isaac_ros-dev/glim_config)
+#               else configs/glim/mobile_1 in this repo)
 #   dump_dir    where GLIM's dump goes (default: <folder of the bag>/glim_dump);
 #               must be new or empty, so an earlier run is never overwritten
 #
@@ -17,7 +17,7 @@ if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     sed -n '2,13p' "$0"; exit 1
 fi
 BAG=$(realpath "$1")
-CONFIG=$(realpath "${2:-${GLIM_CONFIG:-$HOME/workspaces/isaac_ros-dev/glim_config}}")
+CONFIG=$(realpath "${2:-${GLIM_CONFIG:-$(dirname "$0")/../configs/glim/mobile_1}}")
 DUMP=$(realpath -m "${3:-$(dirname "$BAG")/glim_dump}")
 IMAGE=${GLIM_IMAGE:-koide3/glim_ros2:humble-mcap}
 

@@ -4,7 +4,8 @@
     python3 processing/decode_ouster.py <packets_bag> <out_bag_dir>
         [--packets-ns /ouster] [--out-ns /mobile_1/ouster]
         [--driver-min-range 1.30] [--driver-max-range 1000]
-        [--frame lidar|sensor] [--no-imu] [--limit N]
+        [--frame lidar|sensor] [--frame-suffix _mobile1] [--static-tf configs/static_tf.yaml]
+        [--no-imu] [--limit N]
         [--remap SRC:=DST ...]
 
 Does what the replay launch did (ros2 bag play --remap + ouster_ros driver +
@@ -44,6 +45,12 @@ def main():
     ap.add_argument("--driver-min-range", type=float, default=1.30)
     ap.add_argument("--driver-max-range", type=float, default=1000.0)
     ap.add_argument("--frame", choices=("lidar", "sensor"), default="lidar")
+    ap.add_argument("--frame-suffix", default="",
+                    help="added to every Ouster frame (os_lidar, os_sensor, os_imu), one per "
+                         "robot, e.g. _mobile2; also in the copied topics' headers and TF")
+    ap.add_argument("--static-tf", default=None,
+                    help="calibrations (configs/static_tf.yaml): the ones of this robot's "
+                         "Ouster go into the bag's /tf_static")
     ap.add_argument("--no-imu", action="store_true")
     ap.add_argument("--limit", type=int, default=0, help="stop after N scans (for a test)")
     ap.add_argument("--remap", action="append", default=[], metavar="SRC:=DST",
@@ -57,11 +64,18 @@ def main():
         sys.exit(f"{a.out_bag_dir} exists; pick a new output folder")
     try:
         remap = replay.parse_remaps(a.remap)
+        cals = []
+        if a.static_tf:
+            import yaml
+            from scoop import tftree
+            with open(os.path.expanduser(a.static_tf)) as fh:
+                cals = tftree.load_calibrations(yaml.safe_load(fh))
         replay.decode_ouster_bag(a.packets_bag, a.out_bag_dir, packets_ns=a.packets_ns,
                                  out_ns=a.out_ns, driver_min_range=a.driver_min_range,
                                  driver_max_range=a.driver_max_range, frame=a.frame,
                                  imu=not a.no_imu, remap=remap, copy_all=a.copy_all,
-                                 exclude=a.exclude, limit=a.limit)
+                                 exclude=a.exclude, limit=a.limit, frame_suffix=a.frame_suffix,
+                                 static_tf=cals)
     except (ValueError, replay.bag.BagError) as e:
         sys.exit(f"error: {e}")
     print(f"\nnext:  python processing/retime.py {a.packets_bag} "

@@ -208,6 +208,7 @@ def find_units(session_raw, plan: RecordPlan, settings: dict,
 def _unit(machine, folder, raw_bags, plan, settings, work_root, mode) -> Unit:
     """Processed bags if the folder's recording was processed, else raw."""
     expected = plan.topics(machine, mode)
+    settings = recording.settings_for(settings, machine)      # recording.yaml machines:
     try:
         rec = recording.find_recording(folder, work_root,
                                        settings["ouster"].get("packets_ns", "/ouster"),

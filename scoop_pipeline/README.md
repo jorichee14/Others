@@ -27,6 +27,7 @@ configs/recording.yaml  settings for processing a recording (topics, remaps, GLI
 configs/zed/         the robot's zed_wrapper config, used to replay SVOs
 configs/record.yaml  what each machine records (the robots' record.yaml)
 configs/static_tf.yaml  calibrated transforms the merge adds to /tf_static
+configs/glim/<machine>/  GLIM's config folder per robot (configs/glim/README.md)
 configs/comms.yaml   which TF frame places each machine in the comms tables
 environment.yml      conda env for all offline processing
 processing/          raw recordings -> processed bags (command lines around scoop/)
@@ -44,6 +45,14 @@ processing/          raw recordings -> processed bags (command lines around scoo
   csi_clean.py       CSI for use: data frames, no pilots, H scaled to RSSI, poses
   link_trace.py      the measured link as traces (pings, iperf, outages) for scoop/channel.py
   tf_edit.py         show or change a bag's TF: drop edges, add transforms, new odometry
+  dvlc_pauses.py     a merged bag's pauses (robot still) -> one short bag each, for Koide's
+                     direct_visual_lidar_calibration
+  run_dvlc.sh        that calibration (docker) on the pause bags: preprocess, guess, calibrate,
+                     viewer; output owned by you
+  glim_check.py      a GLIM run's trajectory summary and loop closure on the boards
+  convert_cloud.py   a point cloud to another format (pcd, ply, xyz, ...), optionally thinned
+  rename_frames.py   rename TF frames in a bag (headers, Odometry child, /tf, /tf_static), e.g.
+                     --suffix _mobile2 for a bag decoded before --frame-suffix
 run_pass.py          one pass from raw to processed, every step in order (below)
 map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
                      (01_build_map.py, 02_refine_poses.py, ...);
@@ -82,9 +91,12 @@ datasets/            bags -> datasets for other tools
 analysis/            measuring results; reads outputs, writes nothing back
   headroom.py configs/headroom_terms.json [--traj ref.tum ...]  E1: every testbed error term
                           against the fusion breaking points, like against like, log axis
-  mapping/map_quality.py  surface thickness of a map cloud (noise / pose error / smear)
+  mapping/map_quality.py  surface thickness of a map cloud (noise / pose error / smear); a wall's two faces
+                          vs one surface mapped twice (--traj), patches for CloudCompare (--save)
   mapping/scan_consistency.py  why walls are thick: noise floor, timing offset,
                      deskew, drift -- from ~200 scans of the bag + trajectory
+  mapping/wall_build.py  map walls vs the scans placed by 01's own code: whether 01
+                     adds the thickness, how it grows with time, range error
   (slam/channel_relay.py: ROS 2 relay between robot domains through scoop/channel.py;
    slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel;
    slam/run_hydra.sh <hydra export> <channel>: every robot's Hydra streaming its
@@ -169,6 +181,9 @@ tests/               self-tests, no real bag needed
   test_replica.py    replica with lidar depth on a synthetic scene
   test_scan_consistency.py  scan_consistency on synthetic sweeps: true, time-
                      shifted, drifting, broken deskew
+  test_map_quality.py  map_quality's layer split: a wall's two faces, a surface
+                     mapped twice, smear
+  test_wall_build.py  wall_build on a synthetic room: clean, and a 2 % range error
 ```
 
 ## Environment
@@ -332,9 +347,71 @@ data/work/20260924/mapping_A/mobile_1/
     <svo name>_zed/        4  the SVO2 as a bag, capture time (zed_logs/ inside)
     clock.json        the clock fit (drift, residual, packets) for the paper
     process.yaml      the settings the steps ran with
+data/processed/20260924/mapping_A/odometry/mobile_1/   what the map stages use of GLIM
+    traj_lidar.txt    GLIM's poses of the cloud's frame (TUM), the stages' start
+    traj_imu.txt      GLIM's IMU poses, when it wrote them
+    glim_config/      the GLIM config it ran with (configs/glim/<machine>)
+    glim.yaml         bag, config, image; poses, span, rate, path length; loop closure
+    glim_loop_closure.json   the boards' sections and loop closures on GLIM's poses
 ```
 
+The GLIM step writes that `odometry/<machine>/` export when it finishes (and
+on the next run for a GLIM run done before); GLIM's dump, with its map,
+stays in `work/.../glim/`. It then measures GLIM's loop closure on the
+boards: stage 05 in its read-only check mode (`05_anchor.py --traj
+<GLIM's traj_lidar.txt> --check <report>`, with the pass's map-stage config)
+finds every board seen at the start and again later and reports how far
+apart GLIM puts it, in mm / deg against the detections' own noise:
+
+```
+    glim -> .../odometry/mobile_2: 13871 poses over 1387.017 s (10.0 Hz), 543.375 m
+    loop closure rs_anchor: s0->s3 over 1380 s: 12.4 mm / 0.210 deg (noise 3.1 mm) -> DRIFT
+```
+
+`processing/glim_check.py <raw machine folder>` runs both again on a GLIM run
+that is already there. Stage 02 runs the same check on its refined trajectory
+when it finishes and prints it next to GLIM's (`map_stages/loop_check.py
+<config> [--traj FILE]` on any trajectory):
+
+```
+  against GLIM:
+    anchor       GLIM   10.8 mm / 1.240 deg  ->  refined    4.2 mm / 0.310 deg
+``` Without a map-stage config for the pass (or one that
+maps with another robot) the loop closure is not measured.
+
 Settings come from `configs/recording.yaml` (`--settings` for another file).
+Its top level is mobile_1's; a machine folder named in its `machines:` block
+gets that block merged over it. mobile_2's (`mobile_2/` folder):
+
+```
+data/raw/<date>/<pass>/mobile_2/<its bag>/      Ouster packets on /mobile_2/ouster
+data/work/<date>/<pass>/mobile_2/
+    <bag>_decoded/   points + IMU, every other topic copied (camera, VSLAM, /tf,
+                     /tf_static) without the packets; Ouster frames *_mobile2
+    <bag>_retimed/   capture time; what the merge takes for mobile_2
+    clock.json  process.yaml
+```
+
+GLIM runs on it with its own config (`machines.mobile_2.glim.config`:
+`configs/glim/mobile_2`, made from `configs/glim/mobile_1` by
+`processing/glim_config.py`: topics, and `T_lidar_imu` from the bag's Ouster
+frames; see `configs/glim/README.md`). In a pass where mobile_2 maps alone, the map stages
+take this retimed bag as `dataset.bag` (no merge; GLIM's `glim/` is found next
+to it) -- e.g. `map_stages/pipeline_config_mapping_20261015.json`.
+`run_pass.py`, `merge_session.py` and `process_recording.py` all apply the
+block by the folder's (machine's) name.
+
+Each robot's TF is made with its bag, not in the merge: decode
+(`ouster.static_tf: configs/static_tf.yaml`) puts the calibrations reached
+from the robot's Ouster frames into its `/tf_static` -- mobile_1:
+`os_lidar_mobile1 -> zed_left_camera_optical_frame -> radar1/2_link`,
+mobile_2: `os_lidar_mobile2 -> camera_color_optical_frame` -- with the
+Ouster's tree hung below the camera (`<camera optical> -> os_sensor_mobileN`),
+also when the camera's frames are in another bag (mobile_1's ZED bag), so a
+merge never gives a frame two parents. A processed bag then carries its
+robot's whole TF on its own. The merge only adds the pass-level TF (map,
+boards, infra cameras, from the map stages) and the calibrations no bag has
+yet (infra_1's camera -> radar; bags decoded before this).
 The two bags are named `<original bag>_decoded` and `<original bag>_retimed`
 (the .mcap inside too), so a copied bag still says where it came from.
 A folder with an SVO but no Ouster packets bag (e.g. an older recording)
@@ -379,7 +456,22 @@ also still runs on its output unchanged.
 
 ```
 python processing/decode_ouster.py <original bag> <decoded bag dir> \
-    --packets-ns /ouster --out-ns /mobile_1/ouster --driver-min-range 1.30
+    --packets-ns /ouster --out-ns /mobile_1/ouster --driver-min-range 1.30 \
+    --frame-suffix _mobile1
+```
+
+`--frame-suffix` goes on every Ouster frame -- `os_lidar`, `os_sensor`,
+`os_imu` become `os_lidar_mobile1`, `os_sensor_mobile1`, `os_imu_mobile1` --
+one suffix per robot, so two robots' sensors stay apart when their bags are
+merged. Without it the names are ouster_ros's. The copied topics are renamed
+too (their headers, /tf, /tf_static), so the driver's `os_sensor -> os_lidar`
+becomes `os_sensor_mobile1 -> os_lidar_mobile1`. `configs/recording.yaml` has
+`frame_suffix: _mobile1`, and `configs/static_tf.yaml` hangs each robot's
+camera from its own LiDAR frame. A bag decoded before this has the plain
+names; rename them in a copy:
+
+```
+python processing/rename_frames.py <bag> -o <new bag> --suffix _mobile1
 ```
 
 `--limit 200` stops after 200 scans, for a quick look. `--remap SRC:=DST`
@@ -555,6 +647,56 @@ map
 └── arducam_optical_frame   07 (its ChArUco pose under map_zed is dropped)
    └── infra1_link          the radar, configs/static_tf.yaml
 ```
+
+## mobile_2: camera-LiDAR calibration at the pauses
+
+Koide's direct_visual_lidar_calibration (DVLC) wants short bags with the
+sensors still. mobile_2's recording has Ouster packets only and stops several
+times. Two steps make one complete bag on one clock, then one bag per pause.
+
+```
+RAW=mirc_dataset_mapping_2_run_20261015_mobile_2      # the raw rosbag2 folder
+W=work/mobile_2_calib
+
+# 1. decode: packets -> points + IMU; every other topic copied (camera, VSLAM,
+#    /tf, /tf_static); os_lidar, os_sensor, os_imu -> *_mobile2 everywhere
+python processing/decode_ouster.py $RAW $W/decoded \
+    --packets-ns /mobile_2/ouster --out-ns /mobile_2/ouster --frame-suffix _mobile2 \
+    --static-tf configs/static_tf.yaml \
+    --copy-all --exclude /mobile_2/ouster/lidar_packets --exclude /mobile_2/ouster/imu_packets
+#    (--static-tf: its calibration, os_lidar_mobile2 -> colour camera, into /tf_static)
+# 2. retime: the Ouster on the PC clock, with everything else  ->  the processed bag
+python processing/retime.py $RAW $W/decoded $W/retimed /mobile_2/ouster /mobile_2/ouster
+# 3. the pauses: look first, then cut
+python processing/dvlc_pauses.py $W/retimed $W/pauses --list
+python processing/dvlc_pauses.py $W/retimed $W/pauses
+# 4. DVLC on every pause together (docker; output in $W/pauses_preprocessed)
+processing/run_dvlc.sh preprocess $W/pauses    # then guess, calibrate, viewer
+processing/run_dvlc.sh guess      $W/pauses
+processing/run_dvlc.sh calibrate  $W/pauses
+processing/run_dvlc.sh viewer     $W/pauses
+```
+
+Timing check (the RealSense IMU against the retimed Ouster IMU; ~0 s and a
+correlation above 0.8 = one clock; 20261015: -0.018 s, 0.97):
+
+```
+python processing/imu_sync.py $W/retimed --topic /mobile_2/imu --ref /mobile_2/ouster/imu
+```
+
+A pause is where, over +-0.25 s, the VSLAM odometry moves under 0.01 m/s, the
+RealSense gyro reads under 0.02 rad/s and its accelerometer shakes under
+0.08 m/s^2 (std), for at least 4 s; 1 s comes off both ends and at most the
+middle 10 s are kept (`--max-speed --max-gyro --max-acc-std --min-pause
+--trim --max-len`). `--list` prints the table with each pause's worst values;
+`--only 0,2,5` cuts just those, `--intervals 120.5-130,300-310` (s from the
+bag's start) skips the detection. Each pause goes to `pause_NN/` with the
+three DVLC topics byte for byte; `pauses.yaml` records what was cut. For the
+infra1 camera instead: pass `/mobile_2/infra1/image_rect_raw` and
+`/mobile_2/infra1/camera_info` as `--image --camera-info`
+(and to `run_dvlc.sh` as `IMAGE_TOPIC=... CAMERA_INFO_TOPIC=...`).
+`run_dvlc.sh` mounts only the `pause_*` folders, read-only; `DVLC_IMAGE`
+picks another image than `dvlc:humble-mcap`.
 
 ## Merging chosen topics of any bags
 

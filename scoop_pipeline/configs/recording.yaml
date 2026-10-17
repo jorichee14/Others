@@ -9,6 +9,8 @@ ouster:
   driver_min_range: 1.30           # m, the replay's min_range
   driver_max_range: 1000.0
   frame: lidar                     # os_lidar, the replay's default point_cloud_frame
+  frame_suffix: _mobile1           # on os_lidar, os_sensor, os_imu: one per robot (mobile_2: _mobile2)
+  static_tf: configs/static_tf.yaml  # this robot's calibrations go into its bag's /tf_static
   imu: true
   copy_all: true                   # copy EVERY other topic too (tf, tf_static, radar, ntp, ...)
   exclude: []                      # topics to leave out of the copy
@@ -24,8 +26,21 @@ ouster:
                                       # live ZED wrapper stamped it 2.12 s late on 20260924.
                                       # The result: <work>/imu_sync.json
 
+machines:                          # per machine folder (raw/<date>/<pass>/<machine>/): merged
+                                   # over the settings above, which are mobile_1's
+  mobile_2:                        # Ouster packets + RealSense + Isaac VSLAM
+    ouster:
+      packets_ns: /mobile_2/ouster
+      out_ns: /mobile_2/ouster
+      frame_suffix: _mobile2       # os_lidar_mobile2, os_sensor_mobile2, os_imu_mobile2
+      remap: []                    # its topics keep their names
+      exclude: [/mobile_2/ouster/lidar_packets, /mobile_2/ouster/imu_packets]
+      imu_sync: []                 # the RealSense IMU is on the PC clock already
+    glim:                          # its own GLIM config: its topics and T_lidar_imu
+      config: configs/glim/mobile_2   # made from mobile_1's by processing/glim_config.py
+
 glim:
-  config: ~/workspaces/isaac_ros-dev/glim_config   # $GLIM_CONFIG overrides
+  config: configs/glim/mobile_1    # GLIM's config folder, in this repo; $GLIM_CONFIG overrides
   image: koide3/glim_ros2:humble-mcap
 
 zed:                               # the .svo2 in the raw folder -> <svo name>_zed/
