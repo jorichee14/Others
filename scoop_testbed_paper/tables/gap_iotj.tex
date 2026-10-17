@@ -1,45 +1,47 @@
 \begin{table*}[!t]
-\caption{Capabilities of Wireless Testbeds, Networked Multi-Robot Systems, and Cooperative-Perception Platforms}
+\caption{Capabilities of Existing Platforms, Grouped by the Discipline That Needs Them}
 \label{tab:gap_iotj}
 \begin{center}
 \renewcommand{\arraystretch}{1.15}
 \setlength{\tabcolsep}{3pt}
 \scriptsize
-\begin{tabular}{@{}l cccccccc@{}}
+\begin{tabular}{@{}l cc cc cc c c@{}}
 \toprule
-\textbf{Platform} & \textbf{Indoor} & \shortstack{\textbf{Mobile +}\\\textbf{infra agents}} & \shortstack{\textbf{Per-pair link}\\\textbf{state logged}} & \shortstack{\textbf{CSI on the}\\\textbf{data links}} & \shortstack{\textbf{Link and sensors}\\\textbf{on one clock}} & \shortstack{\textbf{Pose ref.\ w/o}\\\textbf{mocap/GNSS}} & \shortstack{\textbf{Multi-agent}\\\textbf{perception scoring}} & \shortstack{\textbf{Link replay}\\\textbf{into methods}} \\
+& \multicolumn{2}{c}{\textbf{Wireless comms}} & \multicolumn{2}{c}{\textbf{Robotics}} & \multicolumn{2}{c}{\textbf{Computing}} & \textbf{Perception} & \textbf{Testbed} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){8-8}\cmidrule(lr){9-9}
+\textbf{Platform} & \shortstack{\textbf{Per-pair link}\\\textbf{state logged}} & \shortstack{\textbf{CSI on the}\\\textbf{data links}} & \shortstack{\textbf{Mobile +}\\\textbf{infra agents}} & \shortstack{\textbf{Pose ref.\ w/o}\\\textbf{mocap/GNSS}} & \shortstack{\textbf{Link--sensor}\\\textbf{clock bound}} & \shortstack{\textbf{Link replay}\\\textbf{into methods}} & \shortstack{\textbf{Multi-agent}\\\textbf{scoring}} & \textbf{Indoor} \\
 \midrule
 \multicolumn{9}{@{}l}{\textit{Wireless and IoT testbeds}} \\
-FIT IoT-LAB \cite{adjih2015iotlab}              & \cmark & \cmark & \cmark & \xmark & \xmark & \xmark & \xmark & \xmark \\
-POWDER \cite{breen2021powder}                   & \xmark & \cmark & \cmark & \cmark (SDR) & partial (GPS) & \xmark (GNSS) & \xmark & \xmark \\
-COSMOS \cite{raychaudhuri2020cosmos}            & partial & \cmark & \cmark & \cmark (SDR) & partial & \xmark & \xmark & \xmark \\
-Colosseum \cite{bonati2021colosseum}            & --- & --- & \cmark (emul.) & \cmark (emul.) & \xmark & --- & \xmark & \cmark (RF) \\
+FIT IoT-LAB \cite{adjih2015iotlab}              & \cmark & \xmark & \cmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
+POWDER \cite{breen2021powder}                   & \cmark & \cmark (SDR) & \cmark & \xmark (GNSS) & partial (GPS) & \xmark & \xmark & \xmark \\
+COSMOS \cite{raychaudhuri2020cosmos}            & \cmark & \cmark (SDR) & \cmark & \xmark & partial & \xmark & \xmark & partial \\
+Colosseum \cite{bonati2021colosseum}            & \cmark (emul.) & \cmark (emul.) & --- & --- & \xmark & \cmark (RF) & \xmark & --- \\
 \midrule
 \multicolumn{9}{@{}l}{\textit{Wi-Fi CSI tools and channel datasets}} \\
-Nexmon / PicoScenes \cite{nexmon,jiang2022picoscenes} & --- & --- & \xmark & \cmark & \xmark & --- & \xmark & \xmark \\
-DICHASUS / ESPARGOS \cite{dichasus,espargos}   & \cmark & \xmark & \xmark & \cmark & partial & \xmark (survey) & \xmark & \xmark \\
-DeepSense 6G \cite{deepsense6g}                 & \xmark & partial & partial (beam) & \xmark & partial & \xmark (GPS) & \xmark & \xmark \\
+Nexmon / PicoScenes \cite{nexmon,jiang2022picoscenes} & \xmark & \cmark & --- & --- & \xmark & \xmark & \xmark & --- \\
+DICHASUS / ESPARGOS \cite{dichasus,espargos}   & \xmark & \cmark & \xmark & \xmark (survey) & partial & \xmark & \xmark & \cmark \\
+DeepSense 6G \cite{deepsense6g}                 & partial (beam) & \xmark & partial & \xmark (GPS) & partial & \xmark & \xmark & \xmark \\
 \midrule
-\multicolumn{9}{@{}l}{\textit{Networked and communication-aware multi-robot systems}} \\
-Robotarium / CPM Lab \cite{wilson2021robotarium,kloock2021cpmlab} & \cmark & \xmark & \xmark & \xmark & \xmark & \xmark (mocap) & \xmark & \xmark \\
-ROS-NetSim \cite{calvofullana2021rosnetsim}     & --- & \cmark & \xmark (sim.) & \xmark & \xmark & --- & \xmark & \cmark (sim.) \\
-CHORD / ACHORD \cite{ginting2021chord,saboia2022achord} & \cmark & \cmark & partial & \xmark & \xmark & \xmark & \xmark & \xmark \\
-MOCHA \cite{cladera2024mocha}                   & \cmark & \cmark & partial & \xmark & \xmark & \xmark & \xmark & \xmark \\
+\multicolumn{9}{@{}l}{\textit{Networked and communication-aware robots}} \\
+Robotarium / CPM Lab \cite{wilson2021robotarium,kloock2021cpmlab} & \xmark & \xmark & \xmark & \xmark (mocap) & \xmark & \xmark & \xmark & \cmark \\
+CHORD / ACHORD \cite{ginting2021chord,saboia2022achord} & partial & \xmark & \cmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
+MOCHA \cite{cladera2024mocha}                   & partial & \xmark & \cmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
+\midrule
+\multicolumn{9}{@{}l}{\textit{Computing: simulation and emulation}} \\
+ROS-NetSim \cite{calvofullana2021rosnetsim}     & \xmark (sim.) & \xmark & \cmark & --- & \xmark & \cmark (sim.) & \xmark & --- \\
+Mahimahi / NetEm \cite{netravali2015mahimahi,hemminger2005netem} & \cmark (trace) & \xmark & --- & --- & \xmark & transport & \xmark & --- \\
 \midrule
 \multicolumn{9}{@{}l}{\textit{Cooperative-perception platforms}} \\
-CoPeD \cite{coped}                              & \cmark & \cmark & \xmark & \xmark & \xmark & \xmark (estimator) & \cmark & \xmark \\
-V2V4Real \cite{v2v4real}                        & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark (RTK) & \cmark & \xmark \\
-TUMTraf-V2X \cite{zimmer2024tumtrafv2x}         & \xmark & \cmark & \xmark & \xmark & \xmark & \xmark (RTK) & \cmark & \xmark \\
-V2X-ReaLO \cite{v2xrealo}                       & \xmark & \cmark & latency & \xmark & \xmark & \xmark (RTK) & \cmark & live \\
-CooperScene \cite{cooperscene}                  & \xmark & \cmark & \cmark & \xmark & \xmark & \xmark (RTK) & \cmark & \todo{} \\
-\midrule
-\multicolumn{9}{@{}l}{\textit{Trace-driven network emulation}} \\
-Mahimahi / NetEm \cite{netravali2015mahimahi,hemminger2005netem} & --- & --- & \cmark (trace) & \xmark & \xmark & --- & \xmark & transport \\
+CoPeD \cite{coped}                              & \xmark & \xmark & \cmark & \xmark (estimator) & \xmark & \xmark & \cmark & \cmark \\
+V2V4Real \cite{v2v4real}                        & \xmark & \xmark & \xmark & \xmark (RTK) & \xmark & \xmark & \cmark & \xmark \\
+TUMTraf-V2X \cite{zimmer2024tumtrafv2x}         & \xmark & \xmark & \cmark & \xmark (RTK) & \xmark & \xmark & \cmark & \xmark \\
+V2X-ReaLO \cite{v2xrealo}                       & latency & \xmark & \cmark & \xmark (RTK) & \xmark & live & \cmark & \xmark \\
+CooperScene \cite{cooperscene}                  & \cmark & \xmark & \cmark & \xmark (RTK) & \xmark & \todo{} & \cmark & \xmark \\
 \midrule
 \textbf{SCooP-iT (ours)}                       & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark \\
 \bottomrule
 \end{tabular}
 \end{center}
 \vspace{2pt}
-{\scriptsize \cmark: provided; partial: provided in part; \xmark: not provided; ---: not applicable. \todo{Verify every cell against the cited paper before submission, in particular the clock column for POWDER, COSMOS, and DICHASUS, and the replay cell for CooperScene.}}
+{\scriptsize \cmark: provided; partial: provided in part; \xmark: not provided; ---: not applicable. \todo{Verify every cell against the cited paper before submission, in particular the clock column for POWDER, COSMOS, DICHASUS, and DeepSense 6G, and the replay cell for CooperScene.}}
 \end{table*}
