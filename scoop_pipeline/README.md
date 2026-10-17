@@ -95,6 +95,8 @@ analysis/            measuring results; reads outputs, writes nothing back
                           vs one surface mapped twice (--traj), patches for CloudCompare (--save)
   mapping/scan_consistency.py  why walls are thick: noise floor, timing offset,
                      deskew, drift -- from ~200 scans of the bag + trajectory
+  mapping/wall_build.py  map walls vs the scans placed by 01's own code: whether 01
+                     adds the thickness, how it grows with time, range error
   (slam/channel_relay.py: ROS 2 relay between robot domains through scoop/channel.py;
    slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel;
    slam/run_hydra.sh <hydra export> <channel>: every robot's Hydra streaming its
@@ -179,6 +181,9 @@ tests/               self-tests, no real bag needed
   test_replica.py    replica with lidar depth on a synthetic scene
   test_scan_consistency.py  scan_consistency on synthetic sweeps: true, time-
                      shifted, drifting, broken deskew
+  test_map_quality.py  map_quality's layer split: a wall's two faces, a surface
+                     mapped twice, smear
+  test_wall_build.py  wall_build on a synthetic room: clean, and a 2 % range error
 ```
 
 ## Environment
