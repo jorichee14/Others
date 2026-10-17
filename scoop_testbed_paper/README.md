@@ -33,3 +33,11 @@ this paper cites it as `scoop_dataset`).
 
 Upload the folder to Overleaf as is; `main.tex` is the root file.
 The original single-paper draft in `../scoop_paper` is untouched.
+
+IoT-J variant of Sec. II: `iotj/related_work_iotj.tex` (wireless/IoT
+testbeds, CSI sensing, networked robots, cooperative perception under
+imperfect links, indoor ground truth, trace-driven emulation), with
+`tables/gap_iotj.tex` (capability table) and `tables/gap_fill_iotj.tex`
+(gap, what prior work lacks, what SCooP-iT provides, evidence). To use it,
+replace Sec. II of `main.tex` with `\input{iotj/related_work_iotj}`.
+New bib entries are at the end of `references.bib` under "IoT-J additions".

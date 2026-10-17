@@ -1,0 +1,129 @@
+%=======================================================================
+% Related Work, reframed for IEEE Internet of Things Journal (IoT-J).
+% Drop-in replacement for Sec. II of ../main.tex: \input{iotj/related_work_iotj}
+% Needs ../tables/gap_iotj.tex (capability table) and
+% ../tables/gap_fill_iotj.tex (gap -> what SCooP-iT provides -> evidence).
+% New bib entries are appended to ../references.bib under "IoT-J additions".
+% IoT-J readers come from wireless/IoT systems, not robotics, so the order
+% is: wireless testbeds -> CSI sensing -> networked robots -> cooperative
+% perception -> indoor ground truth -> trace-driven emulation.
+%=======================================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Wireless and IoT Experimentation Testbeds}
+Open testbeds made wireless and IoT experiments reproducible at scale.
+FIT IoT-LAB \cite{adjih2015iotlab} offers thousands of low-power nodes
+and over a hundred mobile robots across several indoor sites; the PAWR
+platforms POWDER \cite{breen2021powder} and COSMOS
+\cite{raychaudhuri2020cosmos} provide city-scale software-defined radio,
+massive MIMO, and edge computing; Colosseum
+\cite{bonati2021colosseum} emulates the channel in hardware for
+hundreds of radios. These testbeds treat the radio as the object of
+study: they measure the link precisely, but carry no perception
+sensors, no per-node pose reference, and no task whose output depends
+on what crosses the link. Their mobile nodes are carriers of radios,
+not agents whose position and observations are scored.
+
+\subsection{Wi-Fi Channel State Information as a Measurement}
+Commodity CSI extraction, first on the Intel~5300
+\cite{halperin2011csitool}, then on Broadcom chips with Nexmon
+\cite{nexmon} and across several NIC families with PicoScenes
+\cite{jiang2022picoscenes}, turned Wi-Fi into a sensor
+\cite{ma2019wifisensing}. Channel-sounding and sensing datasets such as
+DICHASUS \cite{dichasus}, ESPARGOS \cite{espargos}, MM-Fi \cite{mmfi},
+and DeepSense~6G \cite{deepsense6g} pair CSI or beam power with
+positions or other modalities, and ray-traced digital twins
+\cite{hoydis2023sionnart,alkhateeb2023digitaltwin,bostontwin,deepmimo}
+and learned radio maps \cite{levie2021radiounet} predict the channel
+from geometry. In this line, CSI serves sensing or localization of a
+target, and the geometry is either surveyed or simulated. None records
+CSI on the links that a robot team uses to exchange perception data,
+on the same clock as the robots' sensors, and none checks a measured
+map against the measured channel as two independent references.
+
+\subsection{Networked and Communication-Aware Multi-Robot Systems}
+The Internet of Robotic Things \cite{simoens2018iort} treats robots as
+mobile IoT nodes that sense, act, and share data over the same network
+as other devices. Communication-aware robotics plans motion around the
+channel \cite{muralidharan2021commaware}: robots map signal strength
+online \cite{fink2010radiomap} or exploit the directionality of the
+received signal to keep a team connected \cite{gil2015adaptive}.
+ROS-NetSim \cite{calvofullana2021rosnetsim} couples a robot simulator
+with a network simulator; CHORD and ACHORD
+\cite{ginting2021chord,saboia2022achord} and MOCHA
+\cite{cladera2024mocha} share data over intermittent real links in
+subterranean and field deployments; \cite{blumenkamp2022framework}
+provides a framework for real-robot wireless experiments; and
+\cite{zhang2024ros2middleware} compares DDS, Zenoh, and MQTT for ROS~2
+over Ethernet, Wi-Fi, and 4G. Multi-robot testbeds
+\cite{wilson2021robotarium,paull2017duckietown,kloock2021cpmlab,testa2021choirbot}
+give precise positions from motion capture or overhead cameras but
+treat the network as ideal. These works model, survive, or benchmark
+the link; none logs it per pair, at the rate of the sensors and on
+their clock, in a form that can be replayed into another method, and
+none scores perception against an independent reference.
+
+\subsection{Cooperative Perception Under Imperfect Communication}
+Cooperative perception fuses raw points \cite{chen2019cooper},
+features \cite{chen2019fcooper,wang2020v2vnet}, or selected regions
+\cite{where2comm,liu2020when2com} from several agents. A growing set
+of methods targets what the link does to the fused result: latency
+\cite{lei2022syncnet,v2xvit}, asynchrony \cite{wei2023cobevflow},
+interruptions and packet loss \cite{ren2024v2xincop}, and pose error
+\cite{lu2023coalign}. They are trained and evaluated against
+synthetic channels: a constant delay, a Bernoulli drop, or no latency
+at all. Platforms that record the link are recent and outdoor:
+V2V4Real \cite{v2v4real}, V2X-Real \cite{v2xreal}, and TUMTraf-V2X
+\cite{zimmer2024tumtrafv2x} provide RTK-referenced multi-agent data
+with an idealized link; \cite{hawlader2024v2xexp} reports V2X
+experiments on real hardware; V2X-ReaLO \cite{v2xrealo} runs online
+fusion over a live Wi-Fi link; and CooperScene \cite{cooperscene}
+releases per-scene C-V2X latency, throughput, and loss. CoPeD
+\cite{coped}, the one indoor heterogeneous team, reports the
+estimator's own pose and no link. All record the link at the
+transport level, if at all, without channel state, and rely on GNSS
+or on the estimator itself for pose.
+
+\subsection{Indoor Ground Truth Without a Survey Instrument}
+Indoor references differ in where the geometry comes from and whether
+it is validated independently. Motion capture is accurate but
+room-bound \cite{utias,m2dgr}; ultra-wideband anchors extend coverage
+but need surveyed anchors and suffer in non-line-of-sight
+\cite{zhao2024util}. Sparse anchoring from total-station points
+\cite{hilti2022} or surveyed fiducials \cite{airmuseum} leaves
+odometry to carry the pose between anchors. Map registration against
+a dense prior yields full trajectories at building scale
+\cite{subtmrs,lamar}, but the prior comes from a survey scanner.
+SLAM-derived references dispense with the instrument and are validated
+by sparse landmark distances \cite{incrowdvi} or by internal
+consistency alone \cite{envodat}. SCooP-iT combines a self-built
+reference map, scan-to-map registration, and map-posed fiducials, and
+validates the result with measurements that never enter it
+(Sec.~\ref{sec:gt}).
+
+\subsection{Trace-Driven Network Emulation}
+Record-and-replay of a measured network is established for mobile and
+cellular links \cite{noble1997trace,winstein2013sprout,netravali2015mahimahi,yan2018pantheon}
+and is available in the Linux kernel \cite{hemminger2005netem};
+vehicular studies couple network and mobility simulators
+\cite{sommer2011veins}. These tools replay a trace into a transport
+stream, not into a multi-agent perception pipeline aligned to sensor
+timestamps, and the traces carry no pose of the endpoints.
+
+\subsection{Summary of the Gap}
+Table~\ref{tab:gap_iotj} places the closest works on the eight
+capabilities that the question of this paper requires, and
+Table~\ref{tab:gap_fill} states each gap, why existing platforms leave
+it open, what SCooP-iT provides, and where the paper shows it. The
+wireless testbeds measure the link but not the task; the cooperative
+perception platforms score the task but simulate the link or measure
+it only above the transport layer, outdoors, under GNSS; the
+networked-robot systems run over real links but score nothing.
+SCooP-iT is the first platform in which an indoor, heterogeneous team
+records per-pair link and channel state on the sensors' clock, has a
+validated pose for every scan without motion capture or GNSS, and
+replays the recorded link into any collaborative method.
+
+\input{tables/gap_iotj}
+\input{tables/gap_fill_iotj}

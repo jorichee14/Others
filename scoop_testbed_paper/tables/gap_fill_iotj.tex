@@ -1,0 +1,54 @@
+\begin{table*}[!t]
+\caption{Gaps Left by Prior Platforms and What SCooP-iT Provides}
+\label{tab:gap_fill}
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\setlength{\tabcolsep}{4pt}
+\scriptsize
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{2.6cm} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}p{2.3cm}@{}}
+\toprule
+\textbf{Gap} & \textbf{Closest prior work and what it lacks} & \textbf{What SCooP-iT provides} & \textbf{Evidence} \\
+\midrule
+G1 The link measured where the task runs: indoors, per pair, under contention
+& Wireless testbeds \cite{adjih2015iotlab,breen2021powder,raychaudhuri2020cosmos} measure the link but run no perception task; cooperative-perception platforms \cite{v2v4real,zimmer2024tumtrafv2x,cooperscene} are outdoor and idealize the link or log it per scene
+& Per-pair link state at \SI{5}{\hertz}, RTT at \SI{100}{\hertz}, goodput in \SI{4}{\second} windows, with contention as a controlled knob
+& Sec.~\ref{sec:link}; E5: 86\,\% of \SI{1.5}{\mega\byte} messages within one LiDAR frame alone, \SIrange{59}{68}{\percent} with two robots \\
+\addlinespace
+G2 Physical-layer channel state on the links that carry perception data
+& CSI tools and datasets \cite{nexmon,jiang2022picoscenes,dichasus,espargos} sense a person or a target, not the team's own data links; V2X platforms \cite{v2xrealo,cooperscene} stop at the transport layer
+& CSI at \SIrange{104}{141}{\hertz} on agent-to-AP links, valid up to about \SI{1.2}{\metre\per\second} relative speed
+& Sec.~\ref{sec:link} \\
+\addlinespace
+G3 Link logs and sensor data on one clock, with a stated bound
+& Network logs and sensor timestamps come from separate clocks; no platform in Table~\ref{tab:gap_iotj} reports the offset between them
+& One chrony domain for all agents and the CSI host: measured offset $\leq$\,\SI{0.99}{\milli\second}, RMS offsets of tens of \si{\micro\second}, sniffer bias calibrated
+& Sec.~\ref{sec:alignment}; E1 \\
+\addlinespace
+G4 Building-scale pose reference without motion capture, GNSS, or surveyed anchors
+& Motion capture is room-bound \cite{utias,m2dgr}; UWB \cite{zhao2024util} and total stations \cite{hilti2022} need surveyed anchors; V2X platforms use RTK; CoPeD \cite{coped} reports the estimator's own pose
+& Self-built reference map, scan-to-map registration, fiducial chain for agents without LiDAR, validated by measurements that never enter it: \SI{1.06}{\centi\metre} surface agreement, \SI{10}{\milli\metre} (LiDAR robot) and \SIrange{31}{54}{\milli\metre} (RGB-D cart) on held-out boards
+& Sec.~\ref{sec:gt}; E1 \\
+\addlinespace
+G5 Geometry and radio checked against each other
+& Radio maps are predicted from geometry by ray tracing or learning \cite{hoydis2023sionnart,levie2021radiounet,alkhateeb2023digitaltwin} or mapped by robots without a validated pose \cite{fink2010radiomap}; neither reference checks the other
+& The measured map predicts the measured signal although neither produced the other
+& E2: Spearman $\rho = 0.60$, \SI{5.4}{\decibel} clear-to-obstructed drop \\
+\addlinespace
+G6 A heterogeneous team with infrastructure, indoors
+& Indoor teams \cite{coped,ginting2021chord,cladera2024mocha} have no infrastructure sensors or no link log; infrastructure-assisted platforms \cite{zimmer2024tumtrafv2x,v2xrealo} are outdoor
+& LiDAR robot, RGB-D cart, and camera--radar infrastructure masts on one access point
+& Sec.~\ref{sec:design} \\
+\addlinespace
+G7 Any collaborative method run against the link the agents actually had
+& Methods \cite{v2xvit,lei2022syncnet,wei2023cobevflow,ren2024v2xincop} are evaluated under a constant delay, a Bernoulli drop, or no latency; trace emulators \cite{netravali2015mahimahi,hemminger2005netem} replay into a transport stream, not a perception pipeline keyed to sensor time
+& Channel-in-the-loop replay of the recorded per-pair link into any method, on sensor timestamps
+& Sec.~\ref{sec:replay}; E3 \todo{replay vs live}; E5: synthetic channels deliver 100\,\% of the same messages \\
+\addlinespace
+G8 A link condition that reproduces on another day
+& Testbeds report a link once; none shows that a setting reproduces its condition
+& Load mode as a named setting, compared across passes and days
+& E4 \todo{day half pending} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\end{table*}
