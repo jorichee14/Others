@@ -2,7 +2,13 @@
 """How good is the map? Measures local surface thickness across the cloud.
 
   python3 scoop_pipeline/analysis/mapping/map_quality.py \
-      <data>/processed/<date>/<pass>/mapping/denoised_<pass>_<date>.pcd
+      <data>/processed/<date>/<pass>/mapping/denoised_<pass>_<date>.pcd [--save patches.ply]
+      [--samples 4000]
+
+--save writes every measured patch as a point at its centre with its thickness
+(cm), tilt (deg, 0 = floor/ceiling, 90 = wall) and point count as scalar
+fields (ASCII PLY; CloudCompare: colour by "thickness_cm"), so the thick
+places can be seen on the map. --samples measures more patches (denser).
 
 Samples planar patches everywhere in the map, fits a plane to each, and
 reports how thick the points sit around it. That thickness is the map's
@@ -37,8 +43,9 @@ def load(path):
     return np.asarray(pcd.points)
 
 
-def patch_stats(P, n_samples=N_SAMPLES, r=R, seed=0):
-    """Per-patch (thickness_m, tilt_deg_of_normal_from_vertical)."""
+def patch_stats(P, n_samples=N_SAMPLES, r=R, seed=0, centres=None):
+    """Per-patch (thickness_m, tilt_deg_of_normal_from_vertical); with a
+    list as ``centres``, each patch's (x, y, z, n_points) is appended to it."""
     from scipy.spatial import cKDTree
     rng = np.random.default_rng(seed)
     tree = cKDTree(P)
@@ -67,24 +74,50 @@ def patch_stats(P, n_samples=N_SAMPLES, r=R, seed=0):
         # always catches from an adjoining surface
         thick = np.percentile(d, 95) - np.percentile(d, 5)
         out.append((thick, np.degrees(np.arccos(abs(n[2])))))
+        if centres is not None:
+            c = P[nb].mean(0)
+            centres.append((c[0], c[1], c[2], len(nb)))
     cap = 3.29 * PLANARITY * r / 2 * 100
     return np.array(out), dict(sparse=n_sparse, rough=n_rough, cap_cm=cap)
 
 
+def save_patches(path, stats, centres):
+    """ASCII PLY, one vertex per measured patch, thickness / tilt / count."""
+    with open(path, "w") as fh:
+        fh.write("ply\nformat ascii 1.0\nelement vertex %d\n" % len(stats))
+        for f in ("x", "y", "z", "thickness_cm", "tilt_deg", "n_points"):
+            fh.write("property float %s\n" % f)
+        fh.write("end_header\n")
+        for (t, tilt), (x, y, z, n) in zip(stats, centres):
+            fh.write("%.3f %.3f %.3f %.2f %.1f %d\n" % (x, y, z, t * 100, tilt, n))
+
+
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else "denoised.pcd"
+    args = sys.argv[1:]
+    opt = {}
+    for flag in ("--save", "--samples"):
+        if flag in args:
+            i = args.index(flag)
+            opt[flag] = args[i + 1]
+            del args[i:i + 2]
+    path = args[0] if args else "denoised.pcd"
     P = load(path)
     print(f"{path}: {len(P)} points, extent "
           f"{np.round(P.max(0) - P.min(0), 1)} m")
 
-    st, rej = patch_stats(P)
+    n_samples = int(opt.get("--samples", N_SAMPLES))
+    centres = [] if "--save" in opt else None
+    st, rej = patch_stats(P, n_samples=n_samples, centres=centres)
     if len(st) == 0:
         raise SystemExit("no planar patches found -- is this a surface map?")
+    if centres is not None:
+        save_patches(opt["--save"], st, centres)
+        print(f"patches -> {opt['--save']} (colour by thickness_cm)")
     t = st[:, 0] * 100                     # cm
     tilt = st[:, 1]
     q = np.percentile(t, [10, 25, 50, 75, 90])
 
-    n_try = min(N_SAMPLES, len(P))
+    n_try = min(n_samples, len(P))
     print(f"\n{len(st)} planar patches measured of {n_try} sampled "
           f"(radius {R} m)")
     print(f"  rejected: {rej['sparse']} too sparse, {rej['rough']} non-planar")
