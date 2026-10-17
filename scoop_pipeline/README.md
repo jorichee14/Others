@@ -91,7 +91,8 @@ datasets/            bags -> datasets for other tools
 analysis/            measuring results; reads outputs, writes nothing back
   headroom.py configs/headroom_terms.json [--traj ref.tum ...]  E1: every testbed error term
                           against the fusion breaking points, like against like, log axis
-  mapping/map_quality.py  surface thickness of a map cloud (noise / pose error / smear)
+  mapping/map_quality.py  surface thickness of a map cloud (noise / pose error / smear); a wall's two faces
+                          vs one surface mapped twice (--traj), patches for CloudCompare (--save)
   mapping/scan_consistency.py  why walls are thick: noise floor, timing offset,
                      deskew, drift -- from ~200 scans of the bag + trajectory
   (slam/channel_relay.py: ROS 2 relay between robot domains through scoop/channel.py;
