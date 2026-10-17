@@ -50,6 +50,7 @@ processing/          raw recordings -> processed bags (command lines around scoo
   run_dvlc.sh        that calibration (docker) on the pause bags: preprocess, guess, calibrate,
                      viewer; output owned by you
   glim_check.py      a GLIM run's trajectory summary and loop closure on the boards
+  convert_cloud.py   a point cloud to another format (pcd, ply, xyz, ...), optionally thinned
   rename_frames.py   rename TF frames in a bag (headers, Odometry child, /tf, /tf_static), e.g.
                      --suffix _mobile2 for a bag decoded before --frame-suffix
 run_pass.py          one pass from raw to processed, every step in order (below)
