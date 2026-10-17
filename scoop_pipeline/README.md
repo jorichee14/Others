@@ -184,6 +184,8 @@ tests/               self-tests, no real bag needed
   test_map_quality.py  map_quality's layer split: a wall's two faces, a surface
                      mapped twice, smear
   test_wall_build.py  wall_build on a synthetic room: clean, and a 2 % range error
+  test_bundle_adjust.py  02b on a synthetic room driven twice with drift: poses
+                     back to the truth, planes back to the noise
 ```
 
 ## Environment
@@ -282,6 +284,15 @@ it, `--only S` runs S alone, `--until S` stops after S.
 | finalize | the merged bag again, with 10's /tf, /tf_static and poses in it | the merged bag, in place |
 | comms | `processing/comms_tables.py`: NTP, Wi-Fi, ping, iperf, CSI with positions | `comms/{ntp,wifi,csi}/`, `comms/summary.json` |
 | csi_clean | `processing/csi_clean.py`: QoS data frames, no pilots, H scaled to RSSI, both ends' poses | `comms/csi/csi_<link>_clean.npz` + README |
+
+By hand after 02, when the map's walls are still thicker than its scans
+(`analysis/mapping/wall_build.py`): `map_stages/02b_bundle_adjust.py <config>`,
+plane bundle adjustment of all poses at once (BALM / HBA: every plane's
+smallest eigenvalue, the planes solved in closed form, 1 s keyframes, the
+input's relative motion as a soft factor) -> `odometry/<machine>/traj_lidar_ba.txt`
+and its loop closure on the boards; then `dataset.traj` = `traj_lidar_ba.txt`
+and 01 again. The keyframes are kept in `traj_lidar_ba_keyframes.npz`, so a
+re-run with other settings does not read the bag.
 
 The map stages need the pass's config in `map_stages/`: `pipeline_config.json`
 for the mapping pass, and for a run `pipeline_config_<run>.json` with
