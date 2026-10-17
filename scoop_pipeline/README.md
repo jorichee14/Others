@@ -186,6 +186,7 @@ tests/               self-tests, no real bag needed
   test_wall_build.py  wall_build on a synthetic room: clean, and a 2 % range error
   test_bundle_adjust.py  02b on a synthetic room driven twice with drift: poses
                      back to the truth, planes back to the noise
+  test_compare_trajs.py  compare_trajs on an offset and a drifting trajectory
 ```
 
 ## Environment
