@@ -290,7 +290,10 @@ By hand after 02, when the map's walls are still thicker than its scans
 (`analysis/mapping/wall_build.py`): `map_stages/02b_bundle_adjust.py <config>`,
 plane bundle adjustment of all poses at once (BALM / HBA: every plane's
 smallest eigenvalue, the planes solved in closed form, 1 s keyframes, the
-input's relative motion as a soft factor) -> `odometry/<machine>/traj_lidar_ba.txt`
+input's relative motion as a soft factor, roll / pitch held to the input's) ->
+`odometry/<machine>/traj_lidar_ba.txt`; `--input traj_lidar.txt --output
+traj_lidar_ba_glim.txt` adjusts GLIM's own trajectory instead of 02's (GLIM's
+IMU-smooth motion inside each keyframe; 02's carries its per-scan noise)
 and its loop closure on the boards; then `dataset.traj` = `traj_lidar_ba.txt`
 and 01 again. The keyframes are kept in `traj_lidar_ba_keyframes.npz`, so a
 re-run with other settings does not read the bag.

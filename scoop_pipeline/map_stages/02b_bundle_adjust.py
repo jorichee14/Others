@@ -31,7 +31,9 @@ poses as the only unknowns.
      every step. Pairs far off their plane are down-weighted (Huber). The
      relative motion between keyframes is kept as a soft factor (odometry,
      from the input), so directions no plane sees (a corridor's length)
-     stay where the input put them; the first keyframe is held fixed.
+     stay where the input put them; each keyframe's roll and pitch are held
+     near the input's (gravity: small floor cubes cannot see a slow vertical
+     bend); the first keyframe is held fixed.
   4. steps 2-3 again (outer rounds), the planes found anew from the
      adjusted poses.
   5. every pose of the input moved by its keyframes' correction, interpolated
@@ -42,6 +44,12 @@ The plane thickness printed (5-95 % equivalent, 3.29 sigma) is the
 quantity analysis/mapping/map_quality.py measures, on the BA's planes.
 
   python3 02b_bundle_adjust.py [pipeline_config.json] [--rounds N]
+                               [--input TRAJ] [--output NAME]
+
+Which input: GLIM's own trajectory (traj_lidar.txt) keeps GLIM's IMU-smooth
+motion inside each keyframe, and its roll / pitch for the gravity factor;
+02's (the default) carries 02's per-scan registration noise into every
+keyframe, as the BA keeps the input's motion within a keyframe.
 
 Config block (all optional, under "02b_bundle_adjust"):
   "input":            traj_lidar_refined.txt (02), else the seed trajectory
@@ -61,6 +69,7 @@ Config block (all optional, under "02b_bundle_adjust"):
   "huber":            0.05    # m, rms of a keyframe on its plane above which it is down-weighted
   "odom_sigma_t":     0.03    # m, per keyframe step
   "odom_sigma_r_deg": 0.3     # deg, per keyframe step
+  "gravity_sigma_deg": 0.1    # deg, a keyframe's roll / pitch from the input's (0 = off)
   "rounds":           3       # outer rounds (planes found anew)
   "iters":            10      # LM iterations per round
   "cache":            true    # keep the keyframes (<output>_keyframes.npz) for re-runs
@@ -277,7 +286,8 @@ def total_cost(pr, R, t, R0, t0, odo):
     c_pl = float(lam.sum())
     c_od = odom_terms(R, t, odo["Rm"], odo["tm"], odo["W"], False) if len(R) > 1 else 0.0
     e0 = np.r_[Rotation.from_matrix(R0[0].T @ R[0]).as_rotvec(), t[0] - t0[0]]
-    return c_pl + c_od + 1e8 * float(e0 @ e0), c_pl
+    eg = R[:, 2, :] - odo["g0"]
+    return c_pl + c_od + odo["wg"] * float((eg * eg).sum()) + 1e8 * float(e0 @ e0), c_pl
 
 
 def gn_step(pr, R, t, R0, t0, odo, mu):
@@ -337,6 +347,14 @@ def gn_step(pr, R, t, R0, t0, odo, mu):
             S[ra[:, :, None], rb[:, None, :]] += blkab
         np.add.at(b, idx[:-1].ravel(), np.einsum("kai,a,ka->ki", Ja, W, e).ravel())
         np.add.at(b, idx[1:].ravel(), np.einsum("kai,a,ka->ki", Jb, W, e).ravel())
+    if odo["wg"] > 0:
+        # gravity: e = R^T z - R0^T z, de/dtheta = [R^T z]x
+        gb = R[:, 2, :]
+        Jg = skew(gb)
+        eg = gb - odo["g0"]
+        rot = idx[:, :3]
+        S[rot[:, :, None], rot[:, None, :]] += odo["wg"] * np.einsum("kai,kaj->kij", Jg, Jg)
+        np.add.at(b, rot.ravel(), (odo["wg"] * np.einsum("kai,ka->ki", Jg, eg)).ravel())
     e0 = np.r_[Rotation.from_matrix(R0[0].T @ R[0]).as_rotvec(), t[0] - t0[0]]
     S[:6, :6] += 1e8 * np.eye(6)
     b[:6] += 1e8 * e0
@@ -402,6 +420,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("config", nargs="?", default="pipeline_config.json")
     ap.add_argument("--rounds", type=int, default=None)
+    ap.add_argument("--input", help="trajectory to adjust (a bare name is in odometry/<machine>/)")
+    ap.add_argument("--output", help="output name (default traj_lidar_ba.txt)")
     a = ap.parse_args()
 
     P = load_pipeline(a.config)
@@ -409,12 +429,17 @@ def main():
     c = dict(input="", output="traj_lidar_ba.txt", kf_period=1.0, kf_voxel=0.05,
              max_range=12.0, voxel=0.5, plane_sigma_max=0.06, thinness=0.3,
              min_kf=3, min_pts=10, max_planes=12000, point_sigma=0.02, n_eff=30,
-             huber=0.05, odom_sigma_t=0.03, odom_sigma_r_deg=0.3, rounds=3, iters=10,
+             huber=0.05, odom_sigma_t=0.03, odom_sigma_r_deg=0.3, gravity_sigma_deg=0.1,
+             rounds=3, iters=10,
              cache=True, points_topic="",
              deskew=bool(s.get("deskew", True)), deskew_bins=max(2, int(s.get("deskew_bins", 100))))
     c.update(P.cfg.get("02b_bundle_adjust", {}))
     if a.rounds is not None:
         c["rounds"] = a.rounds
+    if a.input:
+        c["input"] = a.input
+    if a.output:
+        c["output"] = a.output
     c["points_topic"] = (c["points_topic"] or P.dataset.get("points_topic")
                          or "/ouster/points")
     print(P.describe())
@@ -458,7 +483,10 @@ def main():
     odo = dict(Rm=np.einsum("kji,kjl->kil", R0[:-1], R0[1:]),
                tm=np.einsum("kji,kj->ki", R0[:-1], t0[1:] - t0[:-1]),
                W=np.r_[[1 / np.radians(float(c["odom_sigma_r_deg"])) ** 2] * 3,
-                       [1 / float(c["odom_sigma_t"]) ** 2] * 3])
+                       [1 / float(c["odom_sigma_t"]) ** 2] * 3],
+               g0=R0[:, 2, :].copy(),           # R0^T z: gravity in each keyframe
+               wg=(1 / np.radians(float(c["gravity_sigma_deg"])) ** 2
+                   if float(c["gravity_sigma_deg"]) > 0 else 0.0))
     rng = np.random.default_rng(0)
     history = []
     for rnd in range(1, int(c["rounds"]) + 1):
@@ -498,11 +526,15 @@ def main():
                 break
         th1 = thickness_report(pr, R, t)
         moved = np.linalg.norm(t - t0, axis=1) * 100
+        tilt = np.degrees(np.arccos(np.clip(np.einsum("ki,ki->k", R[:, 2, :], odo["g0"]), -1, 1)))
         print(f"[3] plane thickness (3.29 sigma) all / walls / floors: "
               f"{th0[0]:.1f} / {th0[1]:.1f} / {th0[2]:.1f} cm  ->  "
               f"{th1[0]:.1f} / {th1[1]:.1f} / {th1[2]:.1f} cm")
         print(f"    keyframes moved from the input: median {np.median(moved):.1f} cm, "
-              f"p95 {np.percentile(moved, 95):.1f} cm, max {moved.max():.1f} cm")
+              f"p95 {np.percentile(moved, 95):.1f} cm, max {moved.max():.1f} cm; vertical "
+              f"median {np.median(np.abs(t - t0)[:, 2]) * 100:.1f} cm, p95 "
+              f"{np.percentile(np.abs(t - t0)[:, 2], 95) * 100:.1f} cm; roll/pitch change "
+              f"median {np.median(tilt):.3f} deg, max {tilt.max():.3f} deg")
         history.append(dict(round=rnd, planes=pr["n_planes"], thickness_before_cm=th0,
                             thickness_after_cm=th1, moved_median_cm=float(np.median(moved)),
                             moved_p95_cm=float(np.percentile(moved, 95))))

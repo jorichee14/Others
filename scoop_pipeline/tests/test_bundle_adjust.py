@@ -2,7 +2,8 @@
 """Self-test for map_stages/02b_bundle_adjust.py: a synthetic 10 x 8 x 3 m
 room (walls, floor, ceiling, two pillars, a table) scanned from a robot that
 drives a loop in it twice (10 Hz, 80 s). The trajectory given to the BA has
-drifted: 1.5 deg of yaw and (8, -5, 3) cm by the end, growing with time, so
+drifted: 1.5 deg of yaw and (8, -5, 3) cm by the end, growing with time
+(roll and pitch stay true, as an IMU's gravity keeps them), so
 the second loop's walls land beside the first's. The BA must bring the
 poses back to the truth and the planes back to the sensor's noise.
 Needs numpy, scipy, rosbags, mcap.
@@ -69,7 +70,7 @@ def truth(s):
 
 def drift(s):
     f = s / DUR
-    return (Rotation.from_euler("xyz", [0.2 * f, -0.2 * f, 1.5 * f], degrees=True).as_matrix(),
+    return (Rotation.from_euler("z", 1.5 * f, degrees=True).as_matrix(),
             np.array([0.08, -0.05, 0.03]) * f)
 
 

@@ -6,11 +6,12 @@ before and after 01's merge / dynamic removal / denoise.
 
   python3 scoop_pipeline/analysis/mapping/wall_build.py <pipeline config> \\
       [--map <data>/processed/<date>/<pass>/mapping/denoised_<pass>_<date>.pcd] \\
-      [--probes 300] [--stride 1]
+      [--probes 300] [--stride 1] [--traj FILE]
 
 --map     the map to compare with (default: 01's denoised cloud of the config)
 --probes  wall spots measured (planar wall patches of the map, 0.25 m radius)
 --stride  every Nth scan (faster, fewer views)
+--traj    place the scans with this trajectory instead of dataset.traj
 
 For each spot, every scan that hit it: where that scan puts the wall along
 the wall's normal. Thickness is the 5-95 % spread, as map_quality.py:
@@ -86,13 +87,18 @@ def wall_probes(M, n, seed=0):
     return out
 
 
-def measure(config, map_path=None, n_probes=300, stride=1):
+def measure(config, map_path=None, n_probes=300, stride=1, traj=None):
     """Prints the tables; returns their medians (m): single, spans {s: m},
     whole, map, by_dist [(lo, hi, median offset)]."""
     b = stage01()
     P = b.load_pipeline(config)
     s = P.stage("01_build_map")
-    P.traj = b.load_traj_cached(P)
+    if traj:
+        from pipeline_common import load_traj
+        P.traj = load_traj(P.outp(traj))
+        print(f"trajectory {P.outp(traj)}")
+    else:
+        P.traj = b.load_traj_cached(P)
     # 01 takes the points topic from P.sensor, which is dataset.points_topic
     # when set; this one does not need the camera P.sensor also reads
     S = SimpleNamespace(points_topic=P.dataset.get("points_topic")
@@ -211,8 +217,9 @@ def main():
     ap.add_argument("--map")
     ap.add_argument("--probes", type=int, default=300)
     ap.add_argument("--stride", type=int, default=1)
+    ap.add_argument("--traj")
     a = ap.parse_args()
-    measure(a.config, a.map, a.probes, a.stride)
+    measure(a.config, a.map, a.probes, a.stride, a.traj)
 
 
 if __name__ == "__main__":
