@@ -7,8 +7,9 @@
 
 --save writes every measured patch as a point at its centre with its thickness
 (cm), tilt (deg, 0 = floor/ceiling, 90 = wall) and point count as scalar
-fields (ASCII PLY; CloudCompare: colour by "thickness_cm"), so the thick
-places can be seen on the map. --samples measures more patches (denser).
+fields (ASCII PLY, named scalar_* so CloudCompare loads them as scalar
+fields by itself: colour by "thickness_cm"), so the thick places can be seen
+on the map. --samples measures more patches (denser).
 
 Samples planar patches everywhere in the map, fits a plane to each, and
 reports how thick the points sit around it. That thickness is the map's
@@ -82,10 +83,12 @@ def patch_stats(P, n_samples=N_SAMPLES, r=R, seed=0, centres=None):
 
 
 def save_patches(path, stats, centres):
-    """ASCII PLY, one vertex per measured patch, thickness / tilt / count."""
+    """ASCII PLY, one vertex per measured patch, thickness / tilt / count.
+    CloudCompare takes only properties named scalar_<name> as scalar fields
+    without asking (shown as <name>); others are dropped on open."""
     with open(path, "w") as fh:
         fh.write("ply\nformat ascii 1.0\nelement vertex %d\n" % len(stats))
-        for f in ("x", "y", "z", "thickness_cm", "tilt_deg", "n_points"):
+        for f in ("x", "y", "z", "scalar_thickness_cm", "scalar_tilt_deg", "scalar_n_points"):
             fh.write("property float %s\n" % f)
         fh.write("end_header\n")
         for (t, tilt), (x, y, z, n) in zip(stats, centres):
