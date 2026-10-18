@@ -22,12 +22,18 @@ walls by \SI{4}{\centi\metre} over the scans that built them, whereas the
 signed distance averages across a surface. Each stage is measured by the
 thickness of the map's planar surfaces (Table~\ref{tab:refmap_stages}):
 from the SLAM solution alone to the reference, walls go from
-\SI{14.3}{\centi\metre} to \todo{} and floors from \SI{3.6}{\centi\metre}
-to \todo{}, and the doubled surfaces left by drift between visits fall
-from 2.0\,\% to \todo{}. Against the reference, the SLAM trajectory's error
-is a heading error of about $0.6^\circ$ that builds within
-\SI{10}{\second} and does not grow further, with an ATE of \todo{}
-(Table~\ref{tab:glim_vs_ref}). Bundle adjustment started from two
-different trajectories reaches the same poses to \SI{0.7}{\centi\metre}
-(median, after alignment) and $0.1^\circ$, so the result is fixed by the
-scans and not by the starting point.
+\SI{14.3}{\centi\metre} to \SI{7.5}{\centi\metre} and floors from
+\SI{3.6}{\centi\metre} to \SI{1.7}{\centi\metre}, and the doubled surfaces
+left by drift between visits fall from 2.0\,\% to 0.6\,\%; the spread with
+which the scans place a wall over the whole run falls from
+\SI{19.2}{\centi\metre} to \SI{8.8}{\centi\metre}, against
+\SI{4.9}{\centi\metre} for a single scan. Against the reference, the SLAM
+trajectory's error is mainly in heading, $0.93^\circ$ over \SI{10}{\second}
+and not growing further ($0.96^\circ$ over \SI{100}{\second}), with an
+ATE of \SI{3.4}{\centi\metre} and $0.69^\circ$
+(Table~\ref{tab:glim_vs_ref}). Bundle adjustment started from a different
+trajectory reaches the same poses to \SI{1.0}{\centi\metre} and
+$0.10^\circ$ (ATE), so the result is fixed by the scans and not by the
+starting point. The final trajectory closes on the anchor board, seen at
+the start and the end of the \SI{1387}{\second} run, within
+\SI{15}{\milli\metre}, inside the detection noise.

@@ -1,9 +1,9 @@
 {
  "extends": "pipeline_config.json",
- "_note": "20261015 mapping: mobile_2 alone builds its own map. dataset.bag is mobile_2's retimed bag (no merge: it holds every topic and its TF, the LiDAR-camera calibration included); GLIM's traj_lidar.txt next to it in mobile_2/glim/. 01 seed -> 02 refine -> 02b BA (traj_lidar_ba.txt: thinnest walls of GLIM / 02 / BA on 02 / BA on GLIM, wall_build) -> 01 map, fused as a TSDF (coloured from the raw RealSense image, undistorted) -> 05 boards anchor the map -> 10 poses. No 07/08: no other cameras in this pass.",
+ "_note": "20261015 mapping: mobile_2 alone builds its own map. dataset.bag is mobile_2's retimed bag (no merge: it holds every topic and its TF, the LiDAR-camera calibration included); GLIM's traj_lidar.txt next to it in mobile_2/glim/. GLIM -> 02b BA on GLIM's own trajectory (traj_lidar_ba_glim.txt; 02 not needed: BA from 02 reaches the same poses, 1.0 cm / 0.10 deg ATE, but keeps 02's per-scan jitter and was run without gravity) -> 01 map, fused as a TSDF -> 05 boards -> 10 poses (coloured from the raw RealSense image, undistorted) -> 05 boards anchor the map -> 10 poses. No 07/08: no other cameras in this pass.",
  "dataset": {
   "bag": "~/workspaces/isaac_ros-dev/data/work/20261015/mapping/mobile_2/mirc_dataset_mapping_2_run_20261015_mobile_2_retimed",
-  "traj": "traj_lidar_ba.txt",
+  "traj": "traj_lidar_ba_glim.txt",
   "machine": "mobile_2",
   "points_topic": "/mobile_2/ouster/points",
   "image_topic": "/mobile_2/color/image_raw",
@@ -16,10 +16,14 @@
   "rectified": false,
   "fusion": "tsdf",
   "tsdf": {
-   "_note": "trunc = 3 sigma of where the scans put a wall: wall_build on traj_lidar_ba.txt, whole run 8.4 cm (5-95 %) -> sigma 8.4 / 3.29 = 2.55 cm -> 7.7 cm; >= 3 cells of 2 cm. min_weight 3: a cell seen by fewer rays is a stray hit.",
+   "_note": "trunc = 3 sigma of where the scans put a wall: wall_build on traj_lidar_ba_glim.txt, whole run 8.8 cm (5-95 %) -> sigma 8.8 / 3.29 = 2.7 cm -> 8.0 cm; >= 3 cells of 2 cm. min_weight 3: a cell seen by fewer rays is a stray hit.",
    "trunc": 0.08,
    "min_weight": 3
   }
+ },
+ "02b_bundle_adjust": {
+  "input": "traj_lidar.txt",
+  "output": "traj_lidar_ba_glim.txt"
  },
  "02_refine": {
   "points_topic": "/mobile_2/ouster/points"

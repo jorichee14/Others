@@ -147,9 +147,10 @@ on walls is $\sigma\approx\SI{1.2}{\centi\metre}$ and the point spacing at
 \SIrange{3}{6}{\metre} is \SIrange{1.8}{3.7}{\centi\metre}, so finer cells
 add no detail, and they would cost $8\times$ the memory. Truncation
 $\tau=3\sigma_s$, with $\sigma_s$ the spread with which the scans place a
-wall (Sec.~\ref{sec:supp_quality}, scans as placed, whole run
-\SI{8.4}{\centi\metre}, $\sigma_s=8.4/3.29=\SI{2.55}{\centi\metre}$),
-giving $\tau=\SI{8}{\centi\metre}$, at least three cells: a smaller
+wall (Sec.~\ref{sec:supp_quality}, scans as placed with the reference
+trajectory, whole run \SI{8.8}{\centi\metre},
+$\sigma_s=8.8/3.29=\SI{2.7}{\centi\metre}$), giving
+$\tau=\SI{8}{\centi\metre}$, at least three cells: a smaller
 $\tau$ cuts off part of the spread before it is averaged, a larger one
 distorts objects thinner than $\tau$. $W_{\min}=3$ rays.
 
@@ -194,7 +195,8 @@ both as RMSE \cite{sturm2012}.
 \paragraph{Independent starts} The bundle adjustment run from two different
 input trajectories (the SLAM solution, and the same after scan-to-map
 registration) should reach the same poses; their difference bounds how much
-the result depends on its start.
+the result depends on its start: \SI{1.0}{\centi\metre} and $0.10^\circ$
+ATE on pass 20261015.
 
 \paragraph{Control distances} Laser-rangefinder distances between landmarks
 fix the absolute scale, which none of the measures above observes.

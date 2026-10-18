@@ -31,10 +31,12 @@ Method: `supp/refmap_method.tex` (supplementary); main-text version `sections/re
 | Scans as placed, walls, whole run: scan-to-map + BA / GLIM + BA | 8.4 / 8.8 cm (one scan 4.6, 1 s 6.5) | `wall_build.py` |
 | BA from two starts (GLIM, scan-to-map) agree | 0.7 cm (median, after alignment), 0.1 deg | `compare_trajs.py` |
 | GLIM against GLIM + BA | 5.3 cm median, 0.42 deg; heading error ~0.6 deg within 10 s, not growing | `compare_trajs.py` |
+| **Reference = GLIM + BA**: TSDF map walls / floors | 7.5 / 1.7 cm, 0.6 % doubled, 96.8 % of the union's surfaces | `map_quality.py`, `compare_maps.py` |
+| ATE / RPE (RMSE) against the reference: GLIM | 3.4 cm / 0.69 deg; RPE 1 s 1.3 cm / 0.26, 10 s 5.7 / 0.93, 100 s 15.0 / 0.96 | `compare_trajs.py --ref ba_glim` |
+| same: scan-to-map + BA (the other start) | 1.0 cm / 0.10 deg | same |
+| Scans as placed, walls, whole run: GLIM / GLIM + BA (same spots) | 19.2 / 8.8 cm (one scan 4.9) | `wall_build.py` |
 
-Still lacking: the TSDF map from GLIM + BA (the reference) with its thickness and doubled share;
-ATE / RPE rows (`compare_trajs.py --ref ba_glim`); scans as placed for GLIM alone at the same spots;
-control distances.
+Still lacking: control distances.
 
 ### Survey (`survey_1`)
 
