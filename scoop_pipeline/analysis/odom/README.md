@@ -11,3 +11,6 @@ Trajectory analysis; reads outputs, writes nothing back.
   02's and 02b's trajectories of a pass (odometry/<machine>/) against each other: position
   and rotation difference as they are and after a rigid fit, the difference of the motion
   over 1 s / 10 s / 100 s (short-term vs drift), and each one's loop closure on the boards.
+- `imu_vs_traj.py <pipeline config> [--traj NAME=FILE ...]` -- are the IMU's stamps on the
+  LiDAR's time? The IMU's |w| lined up with a trajectory's (default: the reference and GLIM's):
+  ~0 against the reference = the stamping is right.
