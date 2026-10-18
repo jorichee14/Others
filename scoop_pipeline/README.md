@@ -95,6 +95,8 @@ analysis/            measuring results; reads outputs, writes nothing back
                           vs one surface mapped twice (--traj), patches for CloudCompare (--save)
   mapping/scan_consistency.py  why walls are thick: noise floor, timing offset,
                      deskew, drift -- from ~200 scans of the bag + trajectory
+  mapping/compare_maps.py  completeness / accuracy of one map against another (what
+                     a TSDF map misses of the union), by range from the path and height
   mapping/wall_build.py  map walls vs the scans placed by 01's own code: whether 01
                      adds the thickness, how it grows with time, range error
   (slam/channel_relay.py: ROS 2 relay between robot domains through scoop/channel.py;
