@@ -879,8 +879,11 @@ class TsdfAccumulator:
         wd = m.concatenate([b[2] for b in self._buf])
         self._buf = []; self._n = 0
         order, uniq, start, count = group_bounds(m, k)
-        self._chunks.append((as_cpu(uniq), as_cpu(group_sum(m, w[order], start, count)),
-                             as_cpu(group_sum(m, wd[order], start, count))))
+        # float64: group_sum differences a running total over every sample,
+        # which passes float32's 2^24 exact range long before a map is done
+        self._chunks.append((as_cpu(uniq),
+                             as_cpu(group_sum(m, w[order].astype(m.float64), start, count)),
+                             as_cpu(group_sum(m, wd[order].astype(m.float64), start, count))))
         self._chunk_n += int(uniq.size)
         if self._chunk_n >= max(20_000_000, 0 if self.keys is None else self.keys.size):
             self._merge()
@@ -891,14 +894,14 @@ class TsdfAccumulator:
         if not parts:
             return
         n = sum(len(x[0]) for x in parts)
-        m = reduce_module(n * 24)
+        m = reduce_module(n * 40)
         k = m.concatenate([m.asarray(x[0]) for x in parts])
         w = m.concatenate([m.asarray(x[1]) for x in parts])
         wd = m.concatenate([m.asarray(x[2]) for x in parts])
         order, uniq, start, count = group_bounds(m, k)
         self.keys = as_cpu_of(m, uniq)
-        self.w = as_cpu_of(m, group_sum(m, w[order], start, count))
-        self.wd = as_cpu_of(m, group_sum(m, wd[order], start, count))
+        self.w = as_cpu_of(m, group_sum(m, w[order].astype(m.float64), start, count))
+        self.wd = as_cpu_of(m, group_sum(m, wd[order].astype(m.float64), start, count))
 
     def flush(self):
         self._reduce_batch()

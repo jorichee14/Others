@@ -42,6 +42,34 @@ def room(n, rng):
     return P
 
 
+def sums_exact(fails):
+    """Cell totals stay exact over many samples: 40 M unit weights into 4 M
+    cells, merged in batches. The totals are differences of a running sum
+    over all samples, past float32's 2^24 -- in float32, the cells late in
+    key order (one side of the map) came out wrong and lost their surface."""
+    rng = np.random.default_rng(1)
+    acc = b.TsdfAccumulator(0.02, 0.08, batch_samples=10_000_000)
+    n_cells = 4_000_000
+    for _ in range(4):
+        k = rng.integers(0, n_cells, 10_000_000).astype(np.int64)
+        acc._buf.append((k, np.ones(len(k), np.float32), np.full(len(k), 0.01, np.float32)))
+        acc._n += len(k)
+        acc._reduce_batch()
+    acc.flush()
+    truth = np.zeros(n_cells)
+    rng = np.random.default_rng(1)
+    for _ in range(4):
+        np.add.at(truth, rng.integers(0, n_cells, 10_000_000), 1.0)
+    got = np.zeros(n_cells)
+    got[acc.keys] = acc.w
+    bad = int((np.abs(got - truth) > 1e-6).sum())
+    wd_ok = np.allclose(acc.wd, 0.01 * acc.w, rtol=1e-5)
+    print(f"  {'ok  ' if not bad and wd_ok else 'FAIL'}  40 M samples in 4 M cells: "
+          f"{bad} cells with a wrong weight total")
+    if bad or not wd_ok:
+        fails.append("cell totals not exact")
+
+
 def main():
     rng = np.random.default_rng(0)
     union = b.VoxelAccumulator(0.02)
@@ -61,6 +89,7 @@ def main():
     U = union.points()
     T = tsdf.surface(3)
     fails = []
+    sums_exact(fails)
     res = {}
     for name, M in (("union", U), ("tsdf", T)):
         st, _ = mq.patch_stats(M, n_samples=3000)
