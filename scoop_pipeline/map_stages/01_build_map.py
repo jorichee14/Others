@@ -94,7 +94,7 @@ Two complementary tests, combined per voxel of a global decision grid:
 
 FUSION (01_build_map.fusion): "union" (default) keeps one point per cell any
 scan hit -- every stray point widens a surface by a cell, so walls come out
-about 4 cm thicker than the scans (analysis/mapping/wall_build.py). "tsdf"
+about 4 cm thicker than the scans (check.py walls). "tsdf"
 averages the scans' signed distances along every ray (TsdfAccumulator) and
 keeps the zero crossing: the reference-map choice. Its block "tsdf":
 {"trunc", "min_weight", "voxel"} is documented at merge_tsdf.
@@ -996,7 +996,7 @@ def merge_tsdf(P, S, s, dyn=None, carver=None):
 
       "tsdf": {
         "trunc": 0.08,     # m: 3 x the spread of where the scans put a surface,
-                           # sigma = wall_build's "whole run" / 3.29 (20261015:
+                           # sigma = check.py walls' "whole run" / 3.29 (20261015:
                            # 8.4 cm -> sigma 2.55 cm -> 0.077 m); at least 3 cells
         "min_weight": 3,   # summed ray weight a cell needs to be a surface
         "voxel": final_voxel or scan_voxel,

@@ -26,16 +26,8 @@ python processing/glim_config.py configs/glim/mobile_1 configs/glim/mobile_2 \
 So a change to GLIM's tuning goes into mobile_1's folder and is carried over
 by making mobile_2's again.
 
-`variants/` holds mobile_2 with a few settings changed (GPU modules; finer
-sub-mapping and global registration; shorter submaps), to choose the config
-by measurement: `processing/glim_sweep.sh <pipeline config> <reference traj>
-configs/glim/variants/*/` runs each on the mapping bag and scores it against
-the reference trajectory (ATE / RPE, board loop closure). The GPU modules
-need the CUDA image, `koide3/glim_ros2:humble_cuda12.2` plus the MCAP storage
-plugin (`koide3/glim_ros2:humble_cuda12.2-mcap`, the sweep's default).
-
 `imu_time_offset` (config_ros.json) stays 0. The Ouster IMU runs about 11 ms
-behind its LiDAR (`analysis/odom/imu_vs_traj.py` on 20261015: 8 / 12 / 14 ms
+behind its LiDAR (`check.py imu` on 20261015: 8 / 12 / 14 ms
 against the BA, 02 and reference trajectories), but GLIM run with -0.011 gave
 the same trajectory (ATE 3.41 vs 3.42 cm, the same 46 ms heading pattern).
 That 46 ms is between GLIM's output poses and the scans, and is corrected on

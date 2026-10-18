@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Self-test for analysis/odom/imu_vs_traj.py: a robot turning back and
+"""Self-test for check.py imu (analysis/trajs.py): a robot turning back and
 forth, its IMU (200 Hz) stamped 40 ms late against a 10 Hz trajectory, and
 a trajectory on the IMU's time. The check must find +40 ms and 0 ms.
 Needs numpy, scipy, rosbags, mcap.
@@ -59,7 +59,7 @@ def main():
         cfg["dataset"].update(bag=bag, out_dir=os.path.join(d, "out"))
         cp = os.path.join(d, "cfg.json")
         json.dump(cfg, open(cp, "w"))
-        r = subprocess.run([sys.executable, os.path.join(ROOT, "analysis", "odom", "imu_vs_traj.py"),
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "check.py"), "imu",
                             cp, "--traj", f"lidar={traj}"], capture_output=True, text=True)
         m = re.search(r"^lidar\s+([-\d.]+) ms\s+([-\d.]+)", r.stdout, re.M)
         if r.returncode or not m:

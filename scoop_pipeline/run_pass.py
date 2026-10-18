@@ -20,7 +20,7 @@ Steps (a step whose output is there already is skipped):
     02_ba         02_bundle_adjust.py        GLIM's poses (time-corrected on export)
                                              bundle-adjusted on the planes: the reference
                                              trajectory (traj_lidar_ba.txt)
-    time_check    pose_time_check.py         GLIM's pose time against it (on time / OFF)
+    time_check    check.py time              GLIM's pose time against it (on time / OFF)
     01_seed       01_build_map.py --seed     map from the GLIM poses (02b's reference)
     02b_s2m       02b_scan_to_map.py         every scan registered to that map: the
                                              comparison (traj_lidar_refined.txt)
@@ -28,13 +28,13 @@ Steps (a step whose output is there already is skipped):
                                              fused as 01_build_map.fusion says (TSDF)
     01_union      01_build_map.py --union    the same poses, union of points: the
                                              comparison map (only beside a TSDF)
-    report        mapping_report.py          GLIM, + correction, + scan-to-map, + BA
+    report        check.py report            GLIM, + correction, + scan-to-map, + BA
                                              against the reference; TSDF and union maps
     a run in a mapping pass's map (dataset.reference_pass):
     03_init       03_init_from_boards.py     start pose from the anchor board
     04_reference  04_reference_traj.py       every scan registered to the anchored map
                                              (and 04's "tracks": mobile_2's depth frames)
-    time_check    pose_time_check.py         GLIM's pose time against 04's track
+    time_check    check.py time              GLIM's pose time against 04's track
     both:
     05_anchor     05_anchor.py               boards; a mapping pass: the anchored map
     06_cut        06_cut.py                  viewing copy, only when 06_cut has floor/ceil
@@ -163,11 +163,12 @@ def plan_steps(raw, cfg):
     tag = P.tag
     blk = lambda k: P.cfg.get(k) or {}                               # noqa: E731
     stg = lambda k, f, d: P.stage(k).get(f) or P.outp(d) if k in P.cfg else P.outp(d)  # noqa: E731
-    import pose_time_check
+    sys.path.insert(0, os.path.join(ROOT, "analysis"))
+    import trajs
     fusion = blk("01_build_map").get("fusion", "union")
     out = {
-        "02_ba": pose_time_check.reference(P) if not run else None,
-        "time_check": pose_time_check.odometry_file(P, "pose_time_check.json"),
+        "02_ba": trajs.reference_traj(P) if not run else None,
+        "time_check": trajs.odometry_file(P, "pose_time_check.json"),
         "01_seed": P.outp("denoised_seed_%s.pcd" % tag),
         "02b_s2m": P.outp(blk("02b_scan_to_map").get("output", "traj_lidar_refined.txt")),
         "01_map": P.outp(blk("01_build_map").get("output") or P.pcd("map_final")),
@@ -197,12 +198,12 @@ def plan_steps(raw, cfg):
             applies[s_] = False
     cmds = {
         "02_ba": [py(st("02_bundle_adjust.py"), cfg)],
-        "time_check": [py(st("pose_time_check.py"), cfg)],
+        "time_check": [py(os.path.join(ROOT, "check.py"), "time", cfg)],
         "01_seed": [py(st("01_build_map.py"), cfg, "--seed")],
         "02b_s2m": [py(st("02b_scan_to_map.py"), cfg)],
         "01_map": [py(st("01_build_map.py"), cfg)],
         "01_union": [py(st("01_build_map.py"), cfg, "--union")],
-        "report": [py(st("mapping_report.py"), cfg)],
+        "report": [py(os.path.join(ROOT, "check.py"), "report", cfg)],
         "03_init": [py(st("03_init_from_boards.py"), cfg)],
         "04_reference": [py(st("04_reference_traj.py"), cfg)],
         "05_anchor": [py(st("05_anchor.py"), cfg)],

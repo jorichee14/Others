@@ -1,9 +1,45 @@
 #!/usr/bin/env python3
-"""A mapping pass's results in one place: its trajectories against the
+"""The checks of maps and trajectories, one command:
+
+  python3 check.py <command> [args]      python3 check.py <command> -h
+
+  map     <map.pcd>        surface thickness: walls, floors, doubled surfaces
+  walls   <config>         the scans as placed at the map's wall spots: one
+                           scan, 1 s ... whole run, the map
+  maps    <A.pcd> <B.pcd>  completeness / accuracy of B against A
+  scans   <config>         single scans and pairs: noise, deskew, time offset,
+                           drift
+  trajs   <config>         a pass's trajectories against each other / a
+                           reference: ATE, RPE, heading vs turning
+  time    <config>         is GLIM's pose time its scans'? (on time / OFF)
+  imu     <config>         is the IMU on the LiDAR's time?
+  loop    <config>         loop closure on the boards
+  report  <config>         a mapping pass's results: GLIM, + time correction,
+                           + scan-to-map, + BA against the reference; the TSDF
+                           and union maps
+
+The code: analysis/maps.py (map, walls, maps, scans) and analysis/trajs.py
+(trajs, time, imu, loop); report is below. run_pass.py runs `time` and
+`report` as steps of a pass.
+"""
+import argparse
+import json
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(ROOT, "analysis"))
+sys.path.insert(0, os.path.join(ROOT, "map_stages"))
+
+import maps                                                              # noqa: E402
+import trajs                                                             # noqa: E402
+from pipeline_common import load_pipeline, load_traj                     # noqa: E402
+
+DELTAS = (1.0, 10.0, 100.0)
+REPORT_DOC = r'''A mapping pass's results in one place: its trajectories against the
 reference, and its maps. The last step of a mapping pass in run_pass.py.
 
-    python3 map_stages/mapping_report.py <pipeline config> [--samples 20000]
-        [--no-loop]
+    python3 check.py report <pipeline config> [--samples 20000] [--no-loop]
 
 Trajectories (odometry/<machine>/), each against the reference:
   GLIM                    GLIM's own trajectory (its dump in work/), as it
@@ -15,7 +51,7 @@ Trajectories (odometry/<machine>/), each against the reference:
   GLIM + BA (reference)   02's traj_lidar_ba.txt (02_bundle_adjust.output)
 per trajectory: ATE after the best rigid fit and RPE over 1, 10, 100 s
 (RMSE, cm / deg, Sturm et al. 2012), its heading error against the
-reference vs the turning (pose_time_check.py: dt, r), its path length, and
+reference vs the turning (check.py time: dt, r), its path length, and
 its loop closure on the boards (05 --check, run here when its report is
 not there yet; --no-loop skips that).
 
@@ -23,35 +59,20 @@ Maps (mapping/), both from the reference poses:
   TSDF   01's map (denoised_<tag>.pcd, 01_build_map.fusion "tsdf"): the
          reference map
   union  01 --union's (denoised_union_<tag>.pcd): the comparison
-per map: points, surface thickness (analysis/mapping/map_quality.py: walls,
+per map: points, surface thickness (check.py map: walls,
 floors, all; every layer of a patch on its own), patches holding one surface
 twice (%), and the TSDF's completeness against the union (within 10 cm).
 
 Writes mapping_report_<tag>.json and .md in the pass's processed folder.
-"""
-import argparse
-import json
-import os
-import sys
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-sys.path.insert(0, HERE)
-sys.path.insert(0, os.path.join(ROOT, "analysis", "odom"))
-sys.path.insert(0, os.path.join(ROOT, "analysis", "mapping"))
-
-from pipeline_common import load_pipeline, load_traj                     # noqa: E402
-import pose_time_check as ptc                                            # noqa: E402
-
-DELTAS = (1.0, 10.0, 100.0)
+'''
 
 
 def trajectories(P):
     """[(key, label, file)] of the pass, the reference last."""
     corr = P.seed_traj()
-    applied = ptc.applied_offset(corr)
+    applied = trajs.applied_offset(corr)
     s2m = (P.cfg.get("02b_scan_to_map") or {}).get("output") or "traj_lidar_refined.txt"
-    ba = ptc.reference(P)
+    ba = trajs.reference_traj(P)
     rows = [("glim", "GLIM", P.glim_traj() if applied else corr)]
     if applied:
         rows.append(("glim_corr", "GLIM + time correction (%+.0f ms)" % (applied * 1000), corr))
@@ -63,15 +84,14 @@ def trajectories(P):
 def loop_closure(P, config, key, path, run):
     """The trajectory's loop closure on the anchor board (or the first board
     revisited): dict(board, mm, deg, noise_mm, significant), or None."""
-    import loop_check
-    odo = lambda n: ptc.odometry_file(P, n)                              # noqa: E731
+    odo = lambda n: trajs.odometry_file(P, n)                              # noqa: E731
     report = {"glim": odo("glim_raw_loop_closure.json"),
               "glim_corr": odo("glim_loop_closure.json")}.get(
         key, os.path.splitext(path)[0] + "_loop_closure.json")
     if os.path.isfile(report):
-        summ = loop_check.summarize(report)
+        summ = trajs.loop_summary(report)
     elif run:
-        summ = loop_check.check_trajectory(config, path, report=report, label=key)
+        summ = trajs.loop_check(config, path, report=report, label=key)
     else:
         return None
     if not summ:
@@ -87,10 +107,9 @@ def loop_closure(P, config, key, path, run):
 
 
 def map_stats(path, positions, n):
-    import map_quality as mq
-    pts = mq.load(path)
-    st, _ = mq.patch_stats(pts, n_samples=n, positions=positions)
-    out = mq.summary(st) if len(st) else {}
+    pts = maps.load(path)
+    st, _ = maps.patch_stats(pts, n_samples=n, positions=positions)
+    out = maps.summary(st) if len(st) else {}
     out.update(file=path, points=int(len(pts)))
     return out, pts
 
@@ -99,14 +118,13 @@ def fmt(v, nd=1):
     return "-" if v is None else f"{v:.{nd}f}"
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+def report(argv=None):
+    ap = argparse.ArgumentParser(description=REPORT_DOC,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("config")
-    ap.add_argument("--samples", type=int, default=20000, help="map_quality patches per map")
+    ap.add_argument("--samples", type=int, default=20000, help="check.py map patches per map")
     ap.add_argument("--no-loop", action="store_true", help="do not run missing loop checks")
-    a = ap.parse_args()
-    from compare_trajs import compare, path_length
+    a = ap.parse_args(argv)
 
     P = load_pipeline(a.config)
     rows, applied = trajectories(P)
@@ -117,22 +135,22 @@ def main():
     report = dict(pass_tag=P.tag, reference=ref_file, pose_time_offset_s=applied,
                   trajectories=[], maps={})
 
-    print(f"reference: {ref_file} ({len(tr)} poses, {path_length(Tr):.1f} m)\n")
+    print(f"reference: {ref_file} ({len(tr)} poses, {trajs.path_length(Tr):.1f} m)\n")
     for key, label, f in rows:
         if not os.path.isfile(f):
             print(f"{label}: none at {f}")
             report["trajectories"].append(dict(key=key, label=label, file=f, missing=True))
             continue
         t, T = load_traj(f)
-        r = dict(key=key, label=label, file=f, poses=int(len(t)), path_m=path_length(T))
+        r = dict(key=key, label=label, file=f, poses=int(len(t)), path_m=trajs.path_length(T))
         if key != ref_key:
-            c, _ = compare(key, ref_key, t, T, tr, Tr)
+            c, _ = trajs.compare(key, ref_key, t, T, tr, Tr)
             r["ate_cm"] = c["after_rigid_fit_cm"]["rmse"]
             r["ate_deg"] = c["after_rigid_fit_deg"]["rmse"]
             r["rpe"] = {f"{d:g}s": (c["relative"][f"{d:g}s"]["translation_cm"]["rmse"],
                                     c["relative"][f"{d:g}s"]["rotation_deg"]["rmse"])
                         for d in DELTAS}
-            h = ptc.check(t, T, tr, Tr, applied if key == "glim_corr" else 0.0)
+            h = trajs.time_check(t, T, tr, Tr, applied if key == "glim_corr" else 0.0)
             r["timing"] = {k: h.get(k) for k in ("dt_ms", "r_timing", "on_time")}
         r["loop"] = loop_closure(P, a.config, key, f, not a.no_loop)
         report["trajectories"].append(r)
@@ -155,8 +173,7 @@ def main():
         m["label"] = label
         report["maps"][key] = m
     if "tsdf" in clouds and "union" in clouds:
-        from compare_maps import coverage
-        comp, acc, *_ = coverage(clouds["union"], clouds["tsdf"], 0.10)
+        comp, acc, *_ = maps.coverage(clouds["union"], clouds["tsdf"], 0.10)
         report["maps"]["tsdf"]["completeness_vs_union_pct"] = comp * 100
         report["maps"]["tsdf"]["accuracy_vs_union_pct"] = acc * 100
 
@@ -204,6 +221,20 @@ def main():
     with open(base + ".md", "w") as fh:
         fh.write(text + "\n")
     print(f"\nreport: {base}.md, {base}.json")
+
+
+COMMANDS = {"map": maps.main_quality, "walls": maps.main_walls, "maps": maps.main_compare,
+            "scans": maps.main_scans, "trajs": trajs.main_compare, "time": trajs.main_time,
+            "imu": trajs.main_imu, "loop": trajs.main_loop, "report": report}
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
+        print(__doc__)
+        sys.exit(0 if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help") else 2)
+    cmd = sys.argv[1]
+    sys.argv = ["check.py " + cmd] + sys.argv[2:]          # each command's usage line
+    COMMANDS[cmd](sys.argv[1:])
 
 
 if __name__ == "__main__":

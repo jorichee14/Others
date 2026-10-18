@@ -12,7 +12,7 @@ python scoop_pipeline/analysis/comms/ntp_analysis.py  $DATA/processed/20260924/s
 python scoop_pipeline/analysis/comms/ntp_analysis.py  $DATA/processed/20260924/coop_2     # 0.99 ms / 12 ms should reappear
 python scoop_pipeline/analysis/comms/wifi_analysis.py $DATA/processed/20260924/survey_1   # capacity 275-282 / 598-676?
 python scoop_pipeline/analysis/comms/csi_analysis.py  $DATA/processed/20260924/survey_1   # 141 / 104 Hz?
-python scoop_pipeline/analysis/mapping/map_quality.py $DATA/processed/20260924/mapping_A/mapping/denoised_mapping_A_20260924.pcd
+python scoop_pipeline/check.py map $DATA/processed/20260924/mapping_A/mapping/denoised_mapping_A_20260924.pcd
 ```
 Read: `comms/ntp/ntp_report.json`, `comms/wifi/wifi_report.json`,
 `comms/csi/csi_report.json`, and the thickness printout. Write the pass name
@@ -42,7 +42,7 @@ from the field session.
 
 Cross-robot surface consistency:
 ```
-python scoop_pipeline/analysis/mapping/scan_consistency.py $DATA/processed/20260924/coop_2
+python scoop_pipeline/check.py scans $DATA/processed/20260924/coop_2
 ```
 
 ## 3. Q2 Consistent: AP links, pooling, CI (30 min + the AP position)

@@ -50,7 +50,7 @@ rather than as a search for something to report.
 Closes todos at main.tex lines 457, 480, 496, 666, 669, 680, 721.
 
 Inputs: `scoop_pipeline/map_stages/03_anchor.py`, `08_reference_traj.py`,
-`analysis/mapping/map_quality.py`, `analysis/mapping/scan_consistency.py`,
+`check.py map`, `check.py scans`,
 rangefinder sheet per site, held-out board list.
 
 Outputs:

@@ -40,12 +40,12 @@ poses as the only unknowns.
      adjusted poses.
   5. every pose of the input moved by its keyframes' correction, interpolated
      in time between keyframes -> traj_lidar_ba.txt; its loop closure on the
-     boards against GLIM's (loop_check).
+     boards against GLIM's (check.py loop).
 The pose-time check of the input against the result is the next step of a
-mapping pass (pose_time_check.py).
+mapping pass (check.py time).
 
 The plane thickness printed (5-95 % equivalent, 3.29 sigma) is the
-quantity analysis/mapping/map_quality.py measures, on the BA's planes.
+quantity check.py map measures, on the BA's planes.
 
   python3 02_bundle_adjust.py [pipeline_config.json] [--rounds N]
                               [--input TRAJ] [--output NAME]
@@ -555,12 +555,13 @@ def main():
     print(f"\nwrote {out}: {len(times)} poses, moved median {np.median(d):.1f} cm, "
           f"p95 {np.percentile(d, 95):.1f} cm, max {d.max():.1f} cm")
     try:
-        import loop_check
-        loop_check.check_trajectory(a.config, out, label="BA")
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "analysis"))
+        import trajs
+        trajs.loop_check(a.config, out, label="BA")
     except Exception as e:                     # the poses stand either way
         print(f"\n(loop closure not measured: {type(e).__name__}: {e})")
-    nxt = ("next (run_pass.py does these): pose_time_check.py, 01_build_map.py, "
-           "01_build_map.py --union, mapping_report.py")
+    nxt = ("next (run_pass.py does these): check.py time, 01_build_map.py, "
+           "01_build_map.py --union, check.py report")
     if os.path.basename(P.dataset.get("traj") or "") != os.path.basename(out):
         nxt += f"; dataset.traj is {P.dataset.get('traj')}, set it to \"{c['output']}\" for the map"
     print("\n" + nxt)

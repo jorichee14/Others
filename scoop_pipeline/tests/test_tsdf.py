@@ -17,9 +17,9 @@ from scipy.spatial.transform import Rotation
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "map_stages"))
-sys.path.insert(0, os.path.join(ROOT, "analysis", "mapping"))
+sys.path.insert(0, os.path.join(ROOT, "analysis"))
 
-import map_quality as mq                                               # noqa: E402
+import maps as mq                                                      # noqa: E402
 
 spec = importlib.util.spec_from_file_location("build_map", os.path.join(ROOT, "map_stages",
                                                                         "01_build_map.py"))

@@ -16,7 +16,7 @@
   "rectified": false,
   "fusion": "tsdf",
   "tsdf": {
-   "_note": "trunc = 3 sigma of where the scans put a wall: wall_build on traj_lidar_ba_glim.txt, whole run 9.0 cm (5-95 %) -> sigma 9.0 / 3.29 = 2.7 cm -> 8.0 cm; >= 3 cells of 2 cm. min_weight 3: a cell seen by fewer rays is a stray hit.",
+   "_note": "trunc = 3 sigma of where the scans put a wall: check.py walls on traj_lidar_ba_glim.txt, whole run 9.0 cm (5-95 %) -> sigma 9.0 / 3.29 = 2.7 cm -> 8.0 cm; >= 3 cells of 2 cm. min_weight 3: a cell seen by fewer rays is a stray hit.",
    "trunc": 0.08,
    "min_weight": 3
   }
@@ -37,6 +37,10 @@
   "zed_map_frame": "map_realsense",
   "mapzed_frame": "map_realsense",
   "cam_frame": "camera_color_optical_frame"
+ },
+ "clean": {
+  "_note": "clean_pass.py keeps these beside the pipeline's own outputs: results the paper cites. v1 = the reference built from GLIM before its 46 ms correction (0.5 cm ATE from the final one; GLIM as output 3.4 cm / 0.69 deg against it); traj_lidar_ba = the BA started from scan-to-map (Table II's 'BA from a different start', 1.0 cm / 0.12 deg).",
+  "keep": ["traj_lidar_ba_glim_v1.txt", "traj_lidar_ba.txt", "traj_lidar_ba_loop_closure.json", "traj_lidar_ba_report.json"]
  },
  "07_build_cameras": {"enabled": false},
  "08_emit_tfs": {"enabled": false},

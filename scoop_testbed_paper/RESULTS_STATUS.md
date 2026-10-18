@@ -11,31 +11,31 @@ moving, contended channel). Earlier pass at the same site: `coop2_0828`.
 | Result | Value | Tool |
 |---|---|---|
 | Final pose correction at convergence of scan-to-map refinement | 0.15 cm, 0.017° | `02b_scan_to_map.py` (then stage 02) |
-| Surface thickness after refinement, walls / floors | 7.9 / 2.1 cm vs noise floor 2.9 / 1.25 cm (confirm this is mapping_A) | `map_quality.py` |
-| Agreement with the map built four weeks earlier, walls | 1.06 cm | `map_quality.py` on both maps |
+| Surface thickness after refinement, walls / floors | 7.9 / 2.1 cm vs noise floor 2.9 / 1.25 cm (confirm this is mapping_A) | `check.py map` |
+| Agreement with the map built four weeks earlier, walls | 1.06 cm | `check.py map` on both maps |
 | Relative scale between the two maps | 0.99998 | same |
 | Board detector against the mapping pipeline | 8.1 mm / 0.66° ZED, 8.3 mm / 0.58° RealSense | `board_detect.py` |
 | Boards posed from the mapping session; infra camera posed through the shared board | done | `05_anchor.py`, `07` |
 
 ### Mapping pass 20261015 (`mobile_2`, 1387 s, 544 m): FINAL
 
-Pipeline (`run_pass.py`): GLIM (export moves poses +46 ms) -> `02_bundle_adjust.py` -> `pose_time_check.py` -> [`01 --seed` + `02b_scan_to_map.py`, the comparison] -> `01_build_map.py` (TSDF) -> `01 --union` -> `mapping_report.py` -> 05 -> 10.
+Pipeline (`run_pass.py`): GLIM (export moves poses +46 ms) -> `02_bundle_adjust.py` -> `check.py time` -> [`01 --seed` + `02b_scan_to_map.py`, the comparison] -> `01_build_map.py` (TSDF) -> `01 --union` -> `check.py report` -> 05 -> 10.
 Reference trajectory `odometry/mobile_2/traj_lidar_ba_glim.txt`; reference map from 01 on it.
 Paper: `sections/refmap_main.tex` (Sec. V-A), `supp/refmap_method.tex`, `tables/refmap_stages.tex`, `tables/glim_vs_ref.tex`.
 
 | Result (all in the paper) | Value | Tool |
 |---|---|---|
-| Reference TSDF map, walls / floors | 7.8 / 1.9 cm | `map_quality.py` |
-| Reference board loop closure | 13.9 mm / 1.36 deg (detection noise 6-8 mm) | `loop_check.py` |
-| Walls, scans as placed with the reference: 1 scan / 1 s / run | 4.7 / 6.7 / 9.0 cm | `wall_build.py` |
-| Same with GLIM corrected | 4.7 / 6.6 / 12.3 cm; TSDF map 10.7 / 2.8 cm; loop 10.8 mm / 1.24 deg | same, `map_quality.py`, `loop_check.py` |
+| Reference TSDF map, walls / floors | 7.8 / 1.9 cm | `check.py map` |
+| Reference board loop closure | 13.9 mm / 1.36 deg (detection noise 6-8 mm) | `check.py loop` |
+| Walls, scans as placed with the reference: 1 scan / 1 s / run | 4.7 / 6.7 / 9.0 cm | `check.py walls` |
+| Same with GLIM corrected | 4.7 / 6.6 / 12.3 cm; TSDF map 10.7 / 2.8 cm; loop 10.8 mm / 1.24 deg | same, `check.py map`, `check.py loop` |
 | Same with GLIM as output | 4.9 / 7.5 / 19.2 cm; TSDF map 14.3 / 3.6 cm | same |
-| Fusion, same poses (BA from scan-to-map): union vs TSDF | walls 12.5 vs 7.4 cm, floors 3.6 vs 1.6 cm; TSDF 98 % complete | `map_quality.py`, `compare_maps.py` |
-| GLIM corrected vs reference | ATE 2.7 cm / 0.26 deg; RPE 1 s 1.2 / 0.13, 10 s 3.5 / 0.31, 100 s 6.2 / 0.34 | `compare_trajs.py --ref ba_glim` |
+| Fusion, same poses (BA from scan-to-map): union vs TSDF | walls 12.5 vs 7.4 cm, floors 3.6 vs 1.6 cm; TSDF 98 % complete | `check.py map`, `check.py maps` |
+| GLIM corrected vs reference | ATE 2.7 cm / 0.26 deg; RPE 1 s 1.2 / 0.13, 10 s 3.5 / 0.31, 100 s 6.2 / 0.34 | `check.py trajs --ref ba_glim` |
 | GLIM as output vs reference (v1) | ATE 3.4 cm / 0.69 deg | same |
 | BA from scan-to-map vs reference | ATE 1.0 cm / 0.12 deg | same |
 | Reference rebuilt before vs after the 46 ms correction (v1 vs final) | ATE 0.5 cm / 0.10 deg | same |
-| GLIM's pose time vs the scans | +46 ms (heading vs turning r 0.92); not the IMU's 8-14 ms lag | `compare_trajs.py --ref`, `imu_vs_traj.py` |
+| GLIM's pose time vs the scans | +46 ms (heading vs turning r 0.92); not the IMU's 8-14 ms lag | `check.py trajs --ref`, `check.py imu` |
 
 Doubled surfaces (kind 3) are not reported: a smeared surface fills the gap between its copies, so the count does not rank the trajectories (GLIM corrected 0.6 %, reference 0.7 %).
 
@@ -103,7 +103,7 @@ Still lacking: control distances.
 | Agent-to-AP clearance vs RSSI and goodput | Q2 | fill `scoop_pipeline/configs/ap.yaml`; `link_clearance.py --all data/processed --ap-file scoop_pipeline/configs/ap.yaml` |
 | Pool E2 over survey_1 and coop_2; CI on rho; out-of-run fit | Q2 | `link_clearance.py --all`, small additions |
 | Mode distance survey_1 vs coop_2 (RTT, goodput, RSSI on grid) | Q4 mode half | `analysis/comms/link_repeat.py survey_1 coop_2 --label-a survey --label-b coop` (written, self-tested) |
-| Cross-robot surface consistency on coop_2 | Q1, GT table | `scan_consistency.py` |
+| Cross-robot surface consistency on coop_2 | Q1, GT table | `check.py scans` |
 | Sniffer bias | Q1, spec sheet | median of (sniffer receive - mobile_2 send) if the sender logged its stamp; else from the field session |
 | Best-fit synthetic baseline for E5 | Q5 | fit constant / Binomial delay to measured delays in `sim_gap.py` |
 | Control distances vs map | Q1, absolute scale | only if rangefinder distances and endpoints were logged; short script |

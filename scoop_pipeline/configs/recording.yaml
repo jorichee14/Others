@@ -40,8 +40,8 @@ machines:                          # per machine folder (raw/<date>/<pass>/<mach
       config: configs/glim/mobile_2   # made from mobile_1's by processing/glim_config.py
       pose_time_offset: 0.046      # s traj_lidar.txt's poses are moved in time on export: GLIM's pose
                                    # for t is the scans' pose at t + 46 ms (20261015, measured
-                                   # twice: analysis/odom/compare_trajs.py --ref, heading vs
-                                   # turning; analysis/mapping/scan_consistency.py, timing).
+                                   # twice: check.py trajs --ref, heading vs
+                                   # turning; check.py scans, timing).
                                    # ~half the 100 ms sweep: GLIM labels a pose with its scan's
                                    # start (github.com/MOLAorg/mola_glim_wrapper: measure it per
                                    # dataset); run_pass.py's time_check re-checks it on every pass

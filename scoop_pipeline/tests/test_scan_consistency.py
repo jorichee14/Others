@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Self-test for analysis/mapping/scan_consistency.py on synthetic sweeps.
+"""Self-test for check.py scans (analysis/maps.py) on synthetic sweeps.
 
 A robot drives a square loop in a 16 x 12 x 3 m room (4 s straight at
 0.8 m/s, then a 90 deg turn on the spot at 45 deg/s), scanned by a
@@ -97,8 +97,7 @@ def write_traj(path_, stamps, shift=0.0, drift_dps=0.0):
 
 
 def run(cfg, traj):  # noqa: D103
-    out = subprocess.run([sys.executable, os.path.join(ROOT, "analysis", "mapping",
-                                                       "scan_consistency.py"), cfg,
+    out = subprocess.run([sys.executable, os.path.join(ROOT, "check.py"), "scans", cfg,
                           "--traj", traj, "--anchors", "16", "--patches", "120",
                           "--revisit-s", "20", "--revisit-m", "0.5",
                           "--offsets=-0.05,0,0.05"],

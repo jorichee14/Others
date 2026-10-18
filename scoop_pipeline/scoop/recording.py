@@ -362,9 +362,9 @@ def glim_loop_check(rec: "Recording", log=print, config=None) -> Optional[dict]:
             return None
     report = out / "glim_loop_closure.json"
     log(f"    glim loop closure: stage 05 on GLIM's trajectory ({Path(config).name}) ...")
-    sys.path.insert(0, str(stages))
-    import loop_check
-    summary = loop_check.run(config, out / "traj_lidar.txt", report, log)
+    sys.path.insert(0, str(ROOT / "analysis"))
+    import trajs
+    summary = trajs.loop_run(config, out / "traj_lidar.txt", report, log)
     if summary is None:
         log("    glim loop closure: not measured; GLIM's result stands")
         return None
@@ -373,7 +373,7 @@ def glim_loop_check(rec: "Recording", log=print, config=None) -> Optional[dict]:
     info["loop_closure"] = summary
     with open(info_p, "w") as fh:
         yaml.safe_dump(info, fh, sort_keys=False)
-    for ln in loop_check.lines(summary):
+    for ln in trajs.loop_lines(summary):
         log("    " + ln)
     return summary
 

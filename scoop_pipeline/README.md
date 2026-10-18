@@ -54,12 +54,31 @@ processing/          raw recordings -> processed bags (command lines around scoo
   rename_frames.py   rename TF frames in a bag (headers, Odometry child, /tf, /tf_static), e.g.
                      --suffix _mobile2 for a bag decoded before --frame-suffix
 run_pass.py          one pass from raw to processed, every step in order (below)
+clean_pass.py <config> [--apply] [--work]  keep a pass's current results, move older
+                     versions, side runs and caches to processed/<date>/<pass>/_old/
+                     (a dry run without --apply; clean.keep in the config keeps more)
+check.py <command>   every map and trajectory check, one command (check.py -h;
+                     check.py <command> -h):
+    map     <map.pcd>       surface thickness (walls, floors; a wall's two faces vs
+                            one surface mapped twice with --traj; --save patches.ply)
+    walls   <config>        the map's wall spots with the scans placed by a trajectory:
+                            one scan (the sensor), 1 s ... whole run, the map
+    maps    <A> <B>         completeness / accuracy of map B against map A
+    scans   <config>        single scans and pairs: noise floor, deskew, time offset, drift
+    trajs   <config>        a pass's trajectories: ATE / RPE against --ref, heading vs
+                            turning, loop closures
+    time    <config>        is GLIM's pose time its scans'? (run_pass.py's time_check)
+    imu     <config>        is the IMU on the LiDAR's time?
+    loop    <config>        loop closure on the boards (05 --check)
+    report  <config>        a mapping pass: GLIM, + time correction, + scan-to-map, + BA
+                            against the reference; TSDF and union maps (run_pass's report)
 map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
                      (01_build_map.py, 02_bundle_adjust.py, ...);
                      calibration read from the bag (camera_info + /tf_static); outputs in
                      data/processed/<date>/<pass>/{mapping,odometry/<machine>,frames,bags,comms};
                      datasets/<machine>/<format>_<depth>_<pass>_<date> from datasets/
-                     mapping pass: 01 --seed map from GLIM, 02 refine, 01 final map,
+                     mapping pass: 02 bundle adjustment of GLIM's poses (the reference),
+                     01 map (TSDF) and its union, 02b scan-to-map (the comparison),
                      05 anchor, 06 view copy, 07/08 cameras+TF, 10 poses;
                      a run in that map (pipeline_config_<run>.json: "extends" the mapping
                      config, dataset.reference_pass): 03 start pose from the anchor board --
@@ -91,14 +110,8 @@ datasets/            bags -> datasets for other tools
 analysis/            measuring results; reads outputs, writes nothing back
   headroom.py configs/headroom_terms.json [--traj ref.tum ...]  E1: every testbed error term
                           against the fusion breaking points, like against like, log axis
-  mapping/map_quality.py  surface thickness of a map cloud (noise / pose error / smear); a wall's two faces
-                          vs one surface mapped twice (--traj), patches for CloudCompare (--save)
-  mapping/scan_consistency.py  why walls are thick: noise floor, timing offset,
-                     deskew, drift -- from ~200 scans of the bag + trajectory
-  mapping/compare_maps.py  completeness / accuracy of one map against another (what
-                     a TSDF map misses of the union), by range from the path and height
-  mapping/wall_build.py  map walls vs the scans placed by 01's own code: whether 01
-                     adds the thickness, how it grows with time, range error
+  maps.py, trajs.py  the map and trajectory checks, run through check.py (above)
+  odom/zed_vs_lidar.py  the ZED's own tracking against the LiDAR trajectory
   (slam/channel_relay.py: ROS 2 relay between robot domains through scoop/channel.py;
    slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel;
    slam/run_hydra.sh <hydra export> <channel>: every robot's Hydra streaming its
@@ -181,16 +194,18 @@ tests/               self-tests, no real bag needed
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
   test_csi_view.py   csi_view: delay profile puts the paths at their delays; figures
   test_replica.py    replica with lidar depth on a synthetic scene
-  test_scan_consistency.py  scan_consistency on synthetic sweeps: true, time-
+  test_scan_consistency.py  check.py scans on synthetic sweeps: true, time-
                      shifted, drifting, broken deskew
-  test_map_quality.py  map_quality's layer split: a wall's two faces, a surface
+  test_map_quality.py  check.py map's layer split: a wall's two faces, a surface
                      mapped twice, smear
-  test_wall_build.py  wall_build on a synthetic room: clean, and a 2 % range error
+  test_wall_build.py  check.py walls on a synthetic room: clean, and a 2 % range error
   test_bundle_adjust.py  02 on a synthetic room driven twice with drift: poses
                      back to the truth, planes back to the noise
-  test_pose_time_check.py  pose_time_check: a corrected GLIM on time, one 30 ms
-                     late flagged with the offset to set; mapping_report's rows
-  test_compare_trajs.py  compare_trajs on an offset and a drifting trajectory
+  test_clean_pass.py  clean_pass on a made-up pass: current results kept, a stale
+                     seed map, a cache, an old map folder and a GLIM side run moved
+  test_pose_time_check.py  check.py time: a corrected GLIM on time, one 30 ms
+                     late flagged with the offset to set; check.py report's rows
+  test_compare_trajs.py  check.py trajs on an offset and a drifting trajectory
   test_tsdf.py       01's TSDF fusion against its voxel union on a smeared synthetic
                      room: thinner, and its surfaces where the true ones are
 ```
@@ -278,12 +293,12 @@ it, `--only S` runs S alone, `--until S` stops after S.
 | merge | `merge_session.py`: check against record.yaml, merge | `work/<date>/<pass>/<prefix>_<pass>_<date>_merged` |
 | vslam | only with a `"vslam"` block (coop: mobile_2 drives, its VSLAM was not recorded): `processing/vslam.py`, cuVSLAM offline on its stereo + IMU, in the isaac_ros container | `work/<date>/<pass>/<machine>/vslam/traj_vslam.txt` |
 | 02_ba | mapping pass: `02_bundle_adjust.py`, GLIM's poses (moved by `glim.pose_time_offset` on export) bundle-adjusted on the map's planes: the reference trajectory | `odometry/<machine>/traj_lidar_ba.txt` (`02_bundle_adjust.output`) |
-| time_check | `pose_time_check.py`: GLIM's pose time against the reference (a mapping pass: 02's; a run: 04's track); on time, or OFF with the `pose_time_offset` to set | `odometry/<machine>/pose_time_check.json` |
+| time_check | `check.py time`: GLIM's pose time against the reference (a mapping pass: 02's; a run: 04's track); on time, or OFF with the `pose_time_offset` to set | `odometry/<machine>/pose_time_check.json` |
 | 01_seed | mapping pass, for 02b: `01_build_map.py --seed`, the map from GLIM's poses | `mapping/denoised_seed_<tag>.pcd` |
 | 02b_s2m | mapping pass, the comparison: `02b_scan_to_map.py`, every scan registered to that map (`"02b_scan_to_map": {"enabled": false}` skips it and 01_seed) | `odometry/<machine>/traj_lidar_refined.txt` |
 | 01_map | mapping pass: `01_build_map.py`, the map from `dataset.traj` (02's), fused as `01_build_map.fusion` says | `mapping/map_final_<tag>.pcd` |
 | 01_union | mapping pass with a TSDF map: `01_build_map.py --union`, the same poses as a union of points, the comparison map | `mapping/denoised_union_<tag>.pcd` |
-| report | mapping pass: `mapping_report.py`, GLIM / + time correction / + scan-to-map / + BA against the reference (ATE, RPE, pose time, loop closure, path) and the TSDF and union maps (thickness, doubled surfaces, completeness) | `mapping_report_<tag>.md`, `.json` |
+| report | mapping pass: `check.py report`, GLIM / + time correction / + scan-to-map / + BA against the reference (ATE, RPE, pose time, loop closure, path) and the TSDF and union maps (thickness, doubled surfaces, completeness) | `mapping_report_<tag>.md`, `.json` |
 | 03_init | run: `03_init_from_boards.py`, start pose from the anchor board | `frames/session_anchor.json` |
 | 04_reference | run: `04_reference_traj.py`, every scan registered to the anchored map; its `"tracks"` (`map_stages/depth_track.py`): another robot's depth frames registered to it from its own odometry; with `"method": "pgo"` (`map_stages/depth_pgo.py`) one pose graph instead: cuVSLAM between frames, weak across camera dropouts, the start anchor, boards and map fixes (search, then ICP with Hessian information), solved together; each pose's marginal covariance in `cov_<track>.csv` (σx, σy, σyaw, xy correlation, the xy ellipse's major semi-axis) | `odometry/reference_<tag>/` |
 | 05_anchor | `05_anchor.py`: the boards (mapping pass: and the anchored map) | `frames/anchor_frame.json`, `boards_<tag>.json` |
@@ -308,7 +323,7 @@ from it reaches the same poses, 1.0 cm / 0.12 deg ATE).
 `01_build_map.fusion: "tsdf"` fuses the scans as a truncated signed distance
 field (Curless & Levoy; VDBFusion) instead of keeping every cell any scan hit:
 the map is the averaged surface, without the union's ~4 cm of stray cells.
-`tsdf.trunc` = 3 x the spread of where the scans put a wall (wall_build's
+`tsdf.trunc` = 3 x the spread of where the scans put a wall (check.py walls'
 "whole run" / 3.29), at least 3 cells.
 
 The map stages need the pass's config in `map_stages/`: `pipeline_config.json`
@@ -398,8 +413,8 @@ apart GLIM puts it, in mm / deg against the detections' own noise:
 
 `processing/glim_check.py <raw machine folder>` runs both again on a GLIM run
 that is already there. Stage 02 runs the same check on its refined trajectory
-when it finishes and prints it next to GLIM's (`map_stages/loop_check.py
-<config> [--traj FILE]` on any trajectory):
+when it finishes and prints it next to GLIM's (`check.py loop <config>
+[--traj FILE]` on any trajectory):
 
 ```
   against GLIM:

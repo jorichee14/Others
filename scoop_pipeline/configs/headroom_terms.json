@@ -10,7 +10,7 @@
     {"name": "clock offset, strict chrony bound (12 ms)", "s": 0.012, "source": "coop_2, ntp_analysis.py"},
     {"name": "sniffer clock bias", "s": null, "source": "TODO: median of sniffer receive - mobile_2 send stamp"},
     {"name": "map refinement, final pose correction", "m": 0.0015, "source": "mapping_A, 02b_scan_to_map.py (then stage 02)"},
-    {"name": "map repeatability, walls, four weeks apart", "m": 0.0106, "source": "mapping_A vs earlier map, map_quality.py"},
+    {"name": "map repeatability, walls, four weeks apart", "m": 0.0106, "source": "mapping_A vs earlier map, check.py map"},
     {"name": "board detector vs mapping pipeline (ZED)", "m": 0.0081, "source": "board_detect.py"},
     {"name": "board detector vs mapping pipeline (RealSense)", "m": 0.0083, "source": "board_detect.py"},
     {"name": "LiDAR robot vs held-out boards", "m": null, "source": "TODO on coop_2 (board_table.py); 0.0100 on coop2_0828"},

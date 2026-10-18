@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Self-test for analysis/mapping/wall_build.py: a synthetic 8 x 6 m room
+"""Self-test for check.py walls (analysis/maps.py): a synthetic 8 x 6 m room
 scanned from a robot driving a circle in it (10 Hz, 40 s), placed by stage
 01's own iter_world_scans. Clean points: the scans as placed are as thin as
 the map. Points with a 2 % range scale error: where a scan puts a wall
@@ -21,12 +21,12 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "map_stages"))
-sys.path.insert(0, os.path.join(ROOT, "analysis", "mapping"))
+sys.path.insert(0, os.path.join(ROOT, "analysis"))
 
 import open3d as o3d                                                   # noqa: E402
 
 import pipeline_common as pc                                           # noqa: E402
-import wall_build                                                      # noqa: E402
+import maps                                                            # noqa: E402
 from scoop import rosmsg                                               # noqa: E402
 from scoop.bagwrite import BagWriter                                   # noqa: E402
 
@@ -81,7 +81,7 @@ def run(d, scale):
     json.dump(cfg, open(cp, "w"))
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        r = wall_build.measure(cp, mp, n_probes=60)
+        r = maps.measure(cp, mp, n_probes=60)
     return r, out.getvalue()
 
 

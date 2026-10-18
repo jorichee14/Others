@@ -692,15 +692,13 @@ def main():
     print_convergence(history)
     # the refined trajectory's loop closure on the boards, against GLIM's
     try:
-        import loop_check
-        loop_check.check_trajectory(args.config, P.outp(c["output"]))
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "analysis"))
+        import trajs
+        trajs.loop_check(args.config, P.outp(c["output"]))
     except Exception as e:                     # the poses stand either way
         print(f"\n(loop closure not measured: {type(e).__name__}: {e})")
-    print(f"\nnext: set dataset.traj to \"{c['output']}\" (found in "
-          f"{P.folder_for(c['output'])}), delete "
-          f"{', '.join(P.pcd(b) for b in ('merged', 'static', 'denoised', 'colored'))} "
-          f"in {P.folder_for('x.pcd')}, re-run 01_build_map.py, "
-          f"then analysis/mapping/map_quality.py {P.outp(P.pcd('denoised'))}")
+    print(f"\n{P.outp(c['output'])}: the comparison to 02's reference "
+          "(check.py report sets them side by side)")
 
 
 if __name__ == "__main__":

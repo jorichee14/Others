@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Self-test for map_stages/pose_time_check.py and mapping_report.py on
+"""Self-test for check.py time and check.py report on
 synthetic trajectories of a robot turning back and forth for 300 s:
 
   reference   the truth (02's bundle-adjusted trajectory)
@@ -26,6 +26,7 @@ from scipy.spatial.transform import Rotation
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STAGES = os.path.join(ROOT, "map_stages")
+CHECK = os.path.join(ROOT, "check.py")
 sys.path.insert(0, STAGES)
 
 T0 = 1.8e9
@@ -69,7 +70,7 @@ def main():
         run = lambda *a: subprocess.run([sys.executable, *a], capture_output=True,  # noqa: E731
                                         text=True, cwd=STAGES)
 
-        p = run(os.path.join(STAGES, "pose_time_check.py"), cfg)
+        p = run(CHECK, "time", cfg)
         rep = os.path.join(out, "pose_time_check.json")
         h = json.load(open(rep)) if os.path.isfile(rep) else {}
         line = f"corrected GLIM: {h.get('dt_ms', float('nan')):+.1f} ms, r {h.get('r_timing', float('nan')):.2f}"
@@ -78,7 +79,7 @@ def main():
         else:
             print("  ok    " + line + ", on time")
 
-        p = run(os.path.join(STAGES, "pose_time_check.py"), cfg, "--traj",
+        p = run(CHECK, "time", cfg, "--traj",
                 os.path.join(out, "traj_late.txt"), "--out", os.path.join(out, "late.json"))
         h = json.load(open(os.path.join(out, "late.json"))) if not p.returncode else {}
         line = (f"30 ms late again: {h.get('dt_ms', float('nan')):+.1f} ms, "
@@ -89,7 +90,7 @@ def main():
         else:
             print("  ok    " + line + ", flagged")
 
-        p = run(os.path.join(STAGES, "mapping_report.py"), cfg, "--no-loop")
+        p = run(CHECK, "report", cfg, "--no-loop")
         md = os.path.join(out, "mapping_report.md")
         text = open(md).read() if os.path.isfile(md) else ""
         rows = [ln for ln in text.splitlines() if ln.startswith("| GLIM") or ln.startswith("| **GLIM")]

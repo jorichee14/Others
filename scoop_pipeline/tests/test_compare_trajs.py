@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Self-test for analysis/odom/compare_trajs.py on three synthetic
+"""Self-test for check.py trajs (analysis/trajs.py) on three synthetic
 trajectories of a 200 s loop: 'glim' the truth, '02' the truth moved 5 cm
 (a global offset: gone after the rigid fit, nothing in the relative
 motion), 'ba' the truth with a slow yaw drift (grows with the time span).
@@ -31,8 +31,8 @@ def write(path, t, R, p):
 def turning_check(fails):
     """A trajectory stamped 30 ms late on a path that turns back and forth:
     its heading error follows the yaw rate, and the time offset is found."""
-    sys.path.insert(0, os.path.join(ROOT, "analysis", "odom"))
-    import compare_trajs as ct
+    sys.path.insert(0, os.path.join(ROOT, "analysis"))
+    import trajs as ct
     t = np.arange(0, 300, 0.1)
     psi = 0.8 * np.sin(2 * np.pi * t / 15) + 0.4 * np.sin(2 * np.pi * t / 6.3)
 
@@ -71,7 +71,7 @@ def main():
         cp = os.path.join(d, "cfg.json")
         json.dump(cfg, open(cp, "w"))
         out = os.path.join(d, "r.json")
-        r = subprocess.run([sys.executable, os.path.join(ROOT, "analysis", "odom", "compare_trajs.py"),
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "check.py"), "trajs",
                             cp, "--traj", f"glim={d}/glim.txt", "--traj", f"02={d}/o2.txt",
                             "--traj", f"ba={d}/ba.txt", "--out", out, "--plot", f"{d}/p.png",
                             "--ref", "glim"],

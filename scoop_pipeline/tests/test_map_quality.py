@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Self-test for analysis/mapping/map_quality.py's layer split, on a
+"""Self-test for check.py map (analysis/maps.py)'s layer split, on a
 synthetic map at 2 cm with 0.5 cm noise: a floor; a 15 cm wall seen from
 both sides (the path passes on both); a 20 cm wall seen from both sides
 (one layer that thick would fail the planarity test); one surface mapped
@@ -15,9 +15,9 @@ import sys
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "analysis", "mapping"))
+sys.path.insert(0, os.path.join(ROOT, "analysis"))
 
-import map_quality as mq                                               # noqa: E402
+import maps as mq                                                      # noqa: E402
 
 rng = np.random.default_rng(0)
 G = 0.02
