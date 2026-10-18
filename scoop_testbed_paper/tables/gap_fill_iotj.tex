@@ -32,18 +32,18 @@
 & Secs.~\ref{sec:gt}, \ref{sec:link} \\
 \cmidrule(l){2-5}
 & R2 Building-scale pose reference without a survey instrument
-& Motion capture is room-bound \cite{utias,m2dgr}; UWB \cite{zhao2024util} and total stations \cite{hilti2022} need surveyed anchors; outdoor platforms use RTK; CoPeD \cite{coped} reports the estimator's own pose
+& Motion capture is room-bound \cite{utias,m2dgr}; UWB \cite{zhao2024util} and total stations \cite{hilti2022} need surveyed anchors; outdoor platforms use GNSS or RTK; CoPeD \cite{coped} fuses its own odometry with GPS
 & Self-built map, scan-to-map registration, fiducial chain for agents without LiDAR, validated by measurements that never enter it
 & \SI{1.06}{\centi\metre} surface agreement; \SI{10}{\milli\metre} (LiDAR robot), \SIrange{31}{54}{\milli\metre} (RGB-D cart) on held-out boards \\
 \cmidrule(l){2-5}
 & R3 Heterogeneous team with infrastructure, indoors
-& Indoor teams \cite{coped,ginting2021chord,cladera2024mocha} have no infrastructure sensors; infrastructure-assisted platforms \cite{zimmer2024tumtrafv2x,v2xrealo} are outdoor
+& Robot teams \cite{coped,ginting2021chord,cladera2024mocha} are air--ground, subterranean, or outdoor and have no infrastructure sensors; infrastructure-assisted platforms \cite{zimmer2024tumtrafv2x,v2xrealo} are outdoor
 & LiDAR robot, RGB-D cart, and camera--radar infrastructure masts on one access point
 & Sec.~\ref{sec:design} \\
 \midrule
 \multirow[t]{3}{=}{\textbf{Computing and networked systems}}
-& C1 A stated bound between link logs and sensor data
-& NTP \cite{mills1991ntp} and FTSP \cite{maroti2004ftsp} are evaluated on their own; no platform in Table~\ref{tab:gap_iotj} reports the offset between its network logs and its sensors
+& C1 A measured, not claimed, bound between link logs and sensor data
+& NTP \cite{mills1991ntp} and FTSP \cite{maroti2004ftsp} are evaluated on their own; perception platforms state a sensor-sync figure (PTP, claimed sub-ms \cite{cooperscene}; \SI{24.9}{\milli\second} \cite{zimmer2024tumtrafv2x}; $<$\,\SI{50}{\milli\second} \cite{v2v4real}) but measure no offset between link log and sensors
 & One chrony domain for all agents and the CSI host; sniffer bias calibrated; an error budget that converts clock error into displacement at agent speed
 & Measured offset $\leq$\,\SI{0.99}{\milli\second}, RMS offsets of tens of \si{\micro\second}; E1 \\
 \cmidrule(l){2-5}
@@ -59,7 +59,7 @@
 \midrule
 \multirow[t]{2}{=}{\textbf{Perception}}
 & P1 Evaluation against the link the agents actually had
-& Methods robust to latency, asynchrony, and loss \cite{v2xvit,lei2022syncnet,wei2023cobevflow,ren2024v2xincop} are evaluated under a constant delay, a Bernoulli drop, or no latency
+& Methods robust to latency, asynchrony, and loss \cite{v2xvit,lei2022syncnet,wei2023cobevflow,ren2024v2xincop} are evaluated under a constant delay, a Bernoulli drop, or no latency; CooperScene \cite{cooperscene} applies one delay derived from mean measured throughput
 & Measured arrival of every message, replayable into the same methods
 & E5: synthetic channels deliver 100\,\% of the messages the measured link delivers at \SIrange{59}{68}{\percent} \\
 \cmidrule(l){2-5}

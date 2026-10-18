@@ -12,36 +12,37 @@
 \textbf{Platform} & \shortstack{\textbf{Per-pair link}\\\textbf{state logged}} & \shortstack{\textbf{CSI on the}\\\textbf{data links}} & \shortstack{\textbf{Mobile +}\\\textbf{infra agents}} & \shortstack{\textbf{Pose ref.\ w/o}\\\textbf{mocap/GNSS}} & \shortstack{\textbf{Link--sensor}\\\textbf{clock bound}} & \shortstack{\textbf{Link replay}\\\textbf{into methods}} & \shortstack{\textbf{Multi-agent}\\\textbf{scoring}} & \textbf{Indoor} \\
 \midrule
 \multicolumn{9}{@{}l}{\textit{Wireless and IoT testbeds}} \\
-FIT IoT-LAB \cite{adjih2015iotlab}              & \cmark & \xmark & \cmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
-POWDER \cite{breen2021powder}                   & \cmark & \cmark (SDR) & \cmark & \xmark (GNSS) & partial (GPS) & \xmark & \xmark & \xmark \\
-COSMOS \cite{raychaudhuri2020cosmos}            & \cmark & \cmark (SDR) & \cmark & \xmark & partial & \xmark & \xmark & partial \\
+FIT IoT-LAB \cite{adjih2015iotlab}              & partial & \xmark & \cmark & \xmark (self-est.) & partial (subset) & \xmark & \xmark & \cmark \\
+POWDER \cite{breen2021powder}                   & partial & \cmark (SDR) & \cmark & \xmark (GNSS) & partial (GPSDO) & \xmark & \xmark & partial \\
+COSMOS \cite{raychaudhuri2020cosmos}            & partial & \cmark (SDR) & \cmark & \xmark & \xmark & \xmark & \xmark & partial \\
 Colosseum \cite{bonati2021colosseum}            & \cmark (emul.) & \cmark (emul.) & --- & --- & \xmark & \cmark (RF) & \xmark & --- \\
 \midrule
 \multicolumn{9}{@{}l}{\textit{Wi-Fi CSI tools and channel datasets}} \\
-Nexmon / PicoScenes \cite{nexmon,jiang2022picoscenes} & \xmark & \cmark & --- & --- & \xmark & \xmark & \xmark & --- \\
-DICHASUS / ESPARGOS \cite{dichasus,espargos}   & \xmark & \cmark & \xmark & \xmark (survey) & partial & \xmark & \xmark & \cmark \\
-DeepSense 6G \cite{deepsense6g}                 & partial (beam) & \xmark & partial & \xmark (GPS) & partial & \xmark & \xmark & \xmark \\
+Nexmon / PicoScenes \cite{nexmon,jiang2022picoscenes} & partial (RSSI) & \cmark & --- & --- & \xmark & \xmark & \xmark & --- \\
+DICHASUS \cite{dichasus}                        & \xmark & partial (sounding) & partial & \xmark (tachym.) & partial & \xmark & \xmark & partial \\
+ESPARGOS \cite{espargos}                        & \xmark & partial (rx only) & partial & \xmark (total st.) & partial & \xmark & \xmark & \cmark \\
+DeepSense 6G \cite{deepsense6g}                 & partial (beam) & \xmark & partial & \xmark (RTK) & partial & \xmark & \xmark & partial \\
 \midrule
 \multicolumn{9}{@{}l}{\textit{Networked and communication-aware robots}} \\
-Robotarium / CPM Lab \cite{wilson2021robotarium,kloock2021cpmlab} & \xmark & \xmark & \xmark & \xmark (mocap) & \xmark & \xmark & \xmark & \cmark \\
-CHORD / ACHORD \cite{ginting2021chord,saboia2022achord} & partial & \xmark & \cmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
-MOCHA \cite{cladera2024mocha}                   & partial & \xmark & \cmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
+Robotarium / CPM Lab \cite{wilson2021robotarium,kloock2021cpmlab} & \xmark & \xmark & \xmark & \xmark (overhead) & \xmark & \xmark & \xmark & \cmark \\
+CHORD / ACHORD \cite{ginting2021chord,saboia2022achord} & partial (SNR) & \xmark & \cmark & \xmark & \xmark & \xmark & \xmark & subterr. \\
+MOCHA \cite{cladera2024mocha}                   & partial (RSSI) & \xmark & \cmark & \xmark & \xmark & \xmark & \xmark & \xmark \\
 \midrule
 \multicolumn{9}{@{}l}{\textit{Computing: simulation and emulation}} \\
-ROS-NetSim \cite{calvofullana2021rosnetsim}     & \xmark (sim.) & \xmark & \cmark & --- & \xmark & \cmark (sim.) & \xmark & --- \\
+ROS-NetSim \cite{calvofullana2021rosnetsim}     & \xmark (sim.) & \xmark & --- & --- & \xmark & \cmark (sim.) & \xmark & --- \\
 Mahimahi / NetEm \cite{netravali2015mahimahi,hemminger2005netem} & \cmark (trace) & \xmark & --- & --- & \xmark & transport & \xmark & --- \\
 \midrule
 \multicolumn{9}{@{}l}{\textit{Cooperative-perception platforms}} \\
-CoPeD \cite{coped}                              & \xmark & \xmark & \cmark & \xmark (estimator) & \xmark & \xmark & \cmark & \cmark \\
-V2V4Real \cite{v2v4real}                        & \xmark & \xmark & \xmark & \xmark (RTK) & \xmark & \xmark & \cmark & \xmark \\
-TUMTraf-V2X \cite{zimmer2024tumtrafv2x}         & \xmark & \xmark & \cmark & \xmark (RTK) & \xmark & \xmark & \cmark & \xmark \\
-V2X-ReaLO \cite{v2xrealo}                       & latency & \xmark & \cmark & \xmark (RTK) & \xmark & live & \cmark & \xmark \\
-CooperScene \cite{cooperscene}                  & \cmark & \xmark & \cmark & \xmark (RTK) & \xmark & \todo{} & \cmark & \xmark \\
+CoPeD \cite{coped}                              & \xmark & \xmark & air--ground & \xmark (VIO+GPS) & \xmark & \xmark & partial & partial \\
+V2V4Real \cite{v2v4real}                        & \xmark & \xmark & \xmark & \xmark (GNSS) & partial & \xmark & \cmark & \xmark \\
+TUMTraf-V2X \cite{zimmer2024tumtrafv2x}         & \xmark & \xmark & \cmark & \xmark (RTK) & partial & \xmark & \cmark & \xmark \\
+V2X-ReaLO \cite{v2xrealo}                       & latency & \xmark & \cmark & \xmark (GNSS) & \xmark & live & \cmark & \xmark \\
+CooperScene \cite{cooperscene}                  & \cmark & \xmark & \cmark & \xmark (RTK) & claimed & scalar delay & \cmark & \xmark \\
 \midrule
-\textbf{SCooP-iT (ours)}                       & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark \\
+\textbf{SCooP-iT (ours)}                       & \cmark & \cmark & \cmark & \cmark & measured & \cmark & \cmark & \cmark \\
 \bottomrule
 \end{tabular}
 \end{center}
 \vspace{2pt}
-{\scriptsize \cmark: provided; partial: provided in part; \xmark: not provided; ---: not applicable. \todo{Verify every cell against the cited paper before submission, in particular the clock column for POWDER, COSMOS, DICHASUS, and DeepSense 6G, and the replay cell for CooperScene.}}
+{\scriptsize \cmark: provided; partial: provided in part or only if the experimenter instruments it; \xmark: not provided; ---: not applicable. Clock: a stated synchronization figure is partial, a claimed sub-ms bound is ``claimed'', a bound measured between link log and sensors is ``measured''. Parentheses name the pose source.}
 \end{table*}
