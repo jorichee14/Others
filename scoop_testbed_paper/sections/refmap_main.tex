@@ -38,7 +38,11 @@ trajectory's heading error followed the yaw rate ($r=0.92$), the signature
 of a time offset: its pose for time $t$ is the scans' pose at
 $t+\SI{46}{\milli\second}$, confirmed independently by the scans being most
 consistent with that shift, and not removed by correcting the IMU's own
-\SI{11}{\milli\second} lag inside the SLAM. Corrected on export, its ATE
+\SI{11}{\milli\second} lag inside the SLAM. The SLAM labels each pose
+with the start of its \SI{100}{\milli\second} sweep, where other LiDAR
+odometry uses the middle or the end \cite{molaglim}; ours behaves as the
+pose about half a sweep later, so the offset is measured per sensor rather
+than assumed, and re-checked on every mapping pass. Corrected on export, its ATE
 falls from \SI{3.4}{\centi\metre} and $0.69^\circ$ to
 \SI{2.7}{\centi\metre} and $0.26^\circ$ (Table~\ref{tab:glim_vs_ref}), and
 rebuilding the reference from the corrected trajectory moves the reference

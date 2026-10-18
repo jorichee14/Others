@@ -210,7 +210,13 @@ $\delta t=\SI{46}{\milli\second}$), its scans agree best at
 $+\SI{46}{\milli\second}$, and the IMU lags the LiDAR by
 \SIrange{8}{14}{\milli\second}; running the SLAM with that IMU lag removed
 leaves the \SI{46}{\milli\second}, so the offset is in the SLAM's output
-poses and is corrected on export.
+poses and is corrected on export. It is about half the
+\SI{100}{\milli\second} sweep: the SLAM labels each pose with the start of
+its scan, where other LiDAR odometry labels the middle or the end, and the
+resulting half- or whole-sweep shift is to be measured per dataset
+\cite{molaglim}. Our scans' stamp is the sweep's first column and each
+point carries its own time, so the reference has no such convention; the
+bundle adjustment re-measures the offset of its input on every mapping pass.
 
 \paragraph{Independent starts} The bundle adjustment run from two different
 input trajectories (the SLAM solution, and the same after scan-to-map
