@@ -24,10 +24,16 @@ thickness of the map's planar surfaces (Table~\ref{tab:refmap_stages}):
 from the SLAM solution alone to the reference, walls go from
 \SI{14.3}{\centi\metre} to \SI{7.8}{\centi\metre} and floors from
 \SI{3.6}{\centi\metre} to \SI{1.9}{\centi\metre}, and the doubled surfaces
-left by drift between visits fall from 2.0\,\% to 0.7\,\%; the spread with
-which the scans place a wall over the whole run falls from
-\SI{19.2}{\centi\metre} to \SI{8.8}{\centi\metre}, against
-\SI{4.9}{\centi\metre} for a single scan. Against the reference, the SLAM
+left by drift between visits fall from 2.0\,\% to 0.7\,\%. Where a wall's
+remaining spread comes from is read across the table, by placing the scans
+that saw it with each trajectory: a single scan spreads it over
+\SI{4.6}{\centi\metre}, the sensor's noise; the scans of one second, too
+short for drift, over \SI{6.5}{\centi\metre}; the whole run over
+\SI{8.8}{\centi\metre} with the reference trajectory, against
+\SI{19.2}{\centi\metre} with the SLAM solution alone. Three quarters of the
+reference's spread is thus present within one second, and drift adds only
+\SI{2.3}{\centi\metre} over the \SI{1387}{\second} run, where it added
+\SI{11.7}{\centi\metre} before bundle adjustment. Against the reference, the SLAM
 trajectory's heading error followed the yaw rate ($r=0.92$), the signature
 of a time offset: its pose for time $t$ is the scans' pose at
 $t+\SI{46}{\milli\second}$, confirmed independently by the scans being most

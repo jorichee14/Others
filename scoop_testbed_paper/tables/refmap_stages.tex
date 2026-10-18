@@ -1,32 +1,38 @@
 % Reference construction, stage by stage, mapping pass 20261015 (mobile_2,
-% 1387 s, 544 m). Source: scoop_pipeline odometry/mobile_2/*_loop_closure.json,
-% analysis/mapping/map_quality.py on each TSDF map, wall_build.py (spots of
-% the union map built from traj_lidar_ba.txt), compare_trajs.py.
+% 1387 s, 544 m). Read left to right: where a wall's spread comes from.
+% Sources: analysis/mapping/wall_build.py (scans as placed: one scan, the
+% scans of 1 s around a spot's best view, the whole run; 300 wall spots of
+% the union map built from traj_lidar_ba.txt), map_quality.py on each TSDF
+% map (20,000 sampled patches), odometry/mobile_2/*_loop_closure.json.
 \begin{table}[!t]
 \centering
 \caption{Reference Construction, Stage by Stage (Pass 20261015)}
 \label{tab:refmap_stages}
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{lcccc}
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{lcccccc}
 \toprule
-Trajectory & Board loop & \multicolumn{2}{c}{TSDF map thickness} & Scans as \\
- & closure & walls / floors & doubled & placed, walls \\
- & mm / deg & cm & \% & cm \\
+Trajectory & \multicolumn{3}{c}{Walls, scans as placed} & \multicolumn{2}{c}{TSDF map} & Board loop \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-6}
+ & 1 scan & 1\,s & run & walls / floors & doubled & closure \\
+ & cm & cm & cm & cm & \% & mm / deg \\
 \midrule
-SLAM (GLIM)$^\ddagger$   & 10.8 / 1.24 & 14.3 / 3.6 & 2.0 & 19.2 \\
-+ scan-to-map            & 13.7 / 1.30 & --         & --  & 10.3$^\dagger$ \\
-+ scan-to-map + BA       & 12.1 / 1.31 & 7.4 / 1.6  & 0.7 & 8.4 \\
-\textbf{SLAM + BA (ref.)} & 13.9 / 1.36 & 7.8 / 1.9 & 0.7 & 8.8$^\S$ \\
+SLAM (GLIM)$^\ddagger$    & 4.9 & 7.5 & 19.2 & 14.3 / 3.6 & 2.0 & 10.8 / 1.24 \\
++ scan-to-map             & 3.9$^\dagger$ & 6.1$^\dagger$ & 10.3$^\dagger$ & -- & -- & 13.7 / 1.30 \\
++ scan-to-map + BA        & 4.6 & 6.5 & 8.4  & 7.4 / 1.6  & 0.7 & 12.1 / 1.31 \\
+\textbf{SLAM + BA (ref.)} & 4.6$^\S$ & 6.5$^\S$ & 8.8$^\S$ & 7.8 / 1.9 & 0.7 & 13.9 / 1.36 \\
 \midrule
-\multicolumn{5}{l}{\emph{Fusion, same poses (scan-to-map + BA)}} \\
-\quad union of points    & & 12.5 / 3.6 & 0.3 & \\
-\quad TSDF               & & 7.4 / 1.6  & 0.7 & completeness 98\,\% \\
+\multicolumn{7}{l}{\emph{Fusion, same scans and poses (scan-to-map + BA)}} \\
+\quad union of points     & & & 8.4 & 12.5 / 3.6 & 0.3 & \\
+\quad TSDF                & & & 8.4 & 7.4 / 1.6  & 0.7 & \\
 \bottomrule
-\multicolumn{5}{l}{\footnotesize Detection noise of the loop closure 6--8\,mm.
-Thickness: p95--p5 about planes in 0.25\,m patches.}\\
-\multicolumn{5}{l}{\footnotesize Scans as placed: one scan 4.9\,cm, the whole run as listed.}\\
-\multicolumn{5}{l}{\footnotesize $^\dagger$ measured at the spots of a different map.}\\
-\multicolumn{5}{l}{\footnotesize $^\ddagger$ as output, before its 46\,ms pose-time correction.}\\
-\multicolumn{5}{l}{\footnotesize $^\S$ with the reference built before that correction (0.5\,cm ATE apart).}
+\multicolumn{7}{l}{Left to right: the sensor (1 scan), short-term pose error (1\,s), drift}\\
+\multicolumn{7}{l}{(run), fusion (map), the whole run's closure. Thickness: p95--p5 about}\\
+\multicolumn{7}{l}{planes in 0.25\,m patches; median of 300 wall spots (scans as placed)}\\
+\multicolumn{7}{l}{or of 20,000 sampled patches (map). Loop detection noise 6--8\,mm.}\\
+\multicolumn{7}{l}{TSDF completeness 98\,\% of the union's surfaces.}\\
+\multicolumn{7}{l}{$^\dagger$ at the spots of a different map.}\\
+\multicolumn{7}{l}{$^\ddagger$ as output, before its 46\,ms pose-time correction.}\\
+\multicolumn{7}{l}{$^\S$ with the reference built before that correction (0.5\,cm ATE apart).}
 \end{tabular}
 \end{table}

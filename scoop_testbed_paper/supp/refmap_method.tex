@@ -176,7 +176,11 @@ that saw a spot is placed with the trajectory under test, and the thickness
 is measured for one scan, for the scans of \SI{1}{\second} to
 \SI{300}{\second} around the spot's best view, and for the whole run. This
 separates the sensor's noise floor, short-term pose error and drift from
-the effect of the map's construction.
+the effect of the map's construction. With the reference trajectory:
+\SI{4.6}{\centi\metre} for one scan, \SI{6.5}{\centi\metre} within
+\SI{1}{\second}, \SI{8.8}{\centi\metre} over the whole run; with the SLAM
+solution alone 4.9, 7.5 and \SI{19.2}{\centi\metre}. One scan differs
+between trajectories only through deskewing.
 
 \paragraph{Completeness} The share of a reference map's points with a point
 of the map under test within \SI{10}{\centi\metre}, and the reverse
