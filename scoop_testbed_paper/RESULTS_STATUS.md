@@ -17,42 +17,27 @@ moving, contended channel). Earlier pass at the same site: `coop2_0828`.
 | Board detector against the mapping pipeline | 8.1 mm / 0.66° ZED, 8.3 mm / 0.58° RealSense | `board_detect.py` |
 | Boards posed from the mapping session; infra camera posed through the shared board | done | `05_anchor.py`, `07` |
 
-### Mapping pass 20261015 (`mobile_2`, 1387 s, 544 m): reference with bundle adjustment and TSDF
+### Mapping pass 20261015 (`mobile_2`, 1387 s, 544 m): FINAL
 
-Method: `supp/refmap_method.tex` (supplementary); main-text version `sections/refmap_main.tex`
-(replaces the body of Sec. V-A); tables `tables/refmap_stages.tex`, `tables/glim_vs_ref.tex`.
+Pipeline: GLIM (export moves poses +46 ms) -> `02b_bundle_adjust.py` -> `01_build_map.py` (TSDF) -> 05 -> 10.
+Reference trajectory `odometry/mobile_2/traj_lidar_ba_glim.txt`; reference map from 01 on it.
+Paper: `sections/refmap_main.tex` (Sec. V-A), `supp/refmap_method.tex`, `tables/refmap_stages.tex`, `tables/glim_vs_ref.tex`.
 
-| Result | Value | Tool |
+| Result (all in the paper) | Value | Tool |
 |---|---|---|
-| Board loop closure, GLIM / scan-to-map / scan-to-map + BA / GLIM + BA | 10.8 / 13.7 / 12.1 / 15.1 mm (noise 6-8 mm, none significant) | `loop_check.py` |
-| TSDF map thickness, walls / floors: GLIM poses | 14.3 / 3.6 cm, 2.0 % doubled | `map_quality.py` |
-| TSDF map thickness, walls / floors: scan-to-map + BA poses | 7.4 / 1.6 cm, 0.7 % doubled | `map_quality.py` |
-| Union vs TSDF, same poses (scan-to-map + BA) | walls 12.5 vs 7.4 cm, floors 3.6 vs 1.6 cm; TSDF 98 % complete | `map_quality.py`, `compare_maps.py` |
-| Scans as placed, walls, whole run: scan-to-map + BA / GLIM + BA | 8.4 / 8.8 cm (one scan 4.6, 1 s 6.5) | `wall_build.py` |
-| BA from two starts (GLIM, scan-to-map) agree | 0.7 cm (median, after alignment), 0.1 deg | `compare_trajs.py` |
-| GLIM against GLIM + BA | 5.3 cm median, 0.42 deg; heading error ~0.6 deg within 10 s, not growing | `compare_trajs.py` |
-| **Reference = GLIM + BA**: TSDF map walls / floors | 7.5 / 1.7 cm, 0.6 % doubled, 96.8 % of the union's surfaces | `map_quality.py`, `compare_maps.py` |
-| ATE / RPE (RMSE) against the reference: GLIM | 3.4 cm / 0.69 deg; RPE 1 s 1.3 cm / 0.26, 10 s 5.7 / 0.93, 100 s 15.0 / 0.96 | `compare_trajs.py --ref ba_glim` |
-| same: scan-to-map + BA (the other start) | 1.0 cm / 0.10 deg | same |
-| Scans as placed, walls, whole run: GLIM / GLIM + BA (same spots) | 19.2 / 8.8 cm (one scan 4.9) | `wall_build.py` |
+| Reference TSDF map, walls / floors | 7.8 / 1.9 cm, 0.7 % doubled | `map_quality.py` |
+| Reference board loop closure | 13.9 mm / 1.36 deg (detection noise 6-8 mm) | `loop_check.py` |
+| Walls, scans as placed with the reference: 1 scan / 1 s / run | 4.6 / 6.5 / 8.8 cm (measured with v1) | `wall_build.py` |
+| Same with GLIM as output | 4.9 / 7.5 / 19.2 cm; TSDF map 14.3 / 3.6 cm, 2.0 % doubled; loop 10.8 mm / 1.24 deg | same |
+| Fusion, same poses (BA from scan-to-map): union vs TSDF | walls 12.5 vs 7.4 cm, floors 3.6 vs 1.6 cm; TSDF 98 % complete | `map_quality.py`, `compare_maps.py` |
+| GLIM corrected vs reference | ATE 2.7 cm / 0.26 deg; RPE 1 s 1.2 / 0.13, 10 s 3.5 / 0.31, 100 s 6.2 / 0.34 | `compare_trajs.py --ref ba_glim` |
+| GLIM as output vs reference (v1) | ATE 3.4 cm / 0.69 deg | same |
+| BA from scan-to-map vs reference | ATE 1.0 cm / 0.12 deg | same |
+| Reference rebuilt before vs after the 46 ms correction (v1 vs final) | ATE 0.5 cm / 0.10 deg | same |
+| GLIM's pose time vs the scans | +46 ms (heading vs turning r 0.92); not the IMU's 8-14 ms lag | `compare_trajs.py --ref`, `imu_vs_traj.py` |
 
-| GLIM's pose time vs the scans | +46 ms (heading vs turning r 0.92; scans thinnest at +46 ms); the IMU lags the LiDAR 8-14 ms, but GLIM with that removed keeps the 46 ms | `compare_trajs.py --ref`, `scan_consistency.py`, `imu_vs_traj.py` |
-| GLIM re-stamped +46 ms on export, against the reference | ATE 2.7 cm / 0.27 deg (was 3.4 / 0.69); RPE 10 s 3.6 / 0.33, 100 s 6.5 / 0.36 | `compare_trajs.py --ref ba_glim` |
-
-The reference (GLIM + BA) was built from GLIM before the 46 ms correction; BA absorbed it (BA from 02 agrees to
-1.0 cm / 0.10 deg). Re-running 02b and 01 from the corrected export makes it reproducible from today's pipeline.
-The GLIM rows of `tables/refmap_stages.tex` (TSDF map, scans as placed) are before the correction.
-
-**Reference v2** (02b re-run from the corrected GLIM export, 01 TSDF again), the one in the tables:
-
-| Result | Value | Tool |
-|---|---|---|
-| v2 against v1 (built before the correction) | ATE 0.48 cm / 0.10 deg, RPE 10 s 0.8 cm / 0.14 deg | `compare_trajs.py` |
-| Board loop closure | 13.9 mm / 1.36 deg (noise 7.7 mm), not significant | `loop_check.py` |
-| TSDF map walls / floors | 7.8 / 1.9 cm, 0.7 % doubled (v1 7.5 / 1.7, 0.6 %) | `map_quality.py` |
-| Against v2: GLIM corrected / 02 / BA from 02 | ATE 2.7 / 3.0 / 1.0 cm, 0.26 / 0.27 / 0.12 deg | `compare_trajs.py --ref ba_glim` |
-
-Scans as placed (8.8 cm, and tau = 8 cm from it) were measured with v1.
+Superseded (not in the paper): the union-of-points maps, the v1 reference map (7.5 / 1.7 cm, loop 15.1 mm), the
+scan-to-map trajectory alone (02, not in the pipeline), GLIM with `imu_time_offset`.
 
 Still lacking: control distances.
 

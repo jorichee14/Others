@@ -1,25 +1,25 @@
-% The SLAM solution against the reference trajectory (SLAM + BA), pass
-% 20261015. Source: analysis/odom/compare_trajs.py <config>
+% Trajectories against the reference (SLAM + BA, traj_lidar_ba_glim.txt),
+% pass 20261015. Source: analysis/odom/compare_trajs.py <config>
 %   --traj ba_glim=<odometry>/traj_lidar_ba_glim.txt --ref ba_glim
-% (its "LaTeX rows"). ATE after the best rigid fit; RMSE throughout.
+% (its "LaTeX rows"). ATE after the best rigid fit; RMSE throughout. The
+% as-output numbers in the footnote are against the reference built before
+% the correction (traj_lidar_ba_glim_v1.txt, 0.5 cm ATE from this one).
 \begin{table}[!t]
 \centering
-\caption{SLAM Trajectory Against the Reference (Pass 20261015)}
+\caption{Trajectories Against the Reference (Pass 20261015)}
 \label{tab:glim_vs_ref}
-\setlength{\tabcolsep}{3pt}
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
 \begin{tabular}{lcccccc}
 \toprule
 Trajectory & \multicolumn{2}{c}{ATE} & \multicolumn{3}{c}{RPE, cm / deg} & Path \\
  & cm & deg & 1\,s & 10\,s & 100\,s & m \\
 \midrule
-SLAM (GLIM)$^\ast$       & 2.7 & 0.26 & 1.2 / 0.13 & 3.5 / 0.31 & 6.2 / 0.34 & 542.9 \\
-+ scan-to-map            & 3.0 & 0.27 & 1.6 / 0.19 & 2.9 / 0.33 & 6.8 / 0.39 & 570.3 \\
-+ scan-to-map + BA       & 1.0 & 0.12 & 1.3 / 0.17 & 1.5 / 0.16 & 2.6 / 0.16 & 570.1 \\
-\midrule
-\multicolumn{7}{l}{\footnotesize Reference: SLAM + BA, path 543.6\,m. The last row is the BA}\\
-\multicolumn{7}{l}{\footnotesize from a different start, so it bounds the reference's dependence on it.}\\
-\multicolumn{7}{l}{\footnotesize $^\ast$ poses corrected for the SLAM's 46\,ms pose-time offset; as output,}\\
-\multicolumn{7}{l}{\footnotesize ATE 3.4\,cm / 0.69$^\circ$, RPE 10\,s 5.7\,cm / 0.93$^\circ$.}\\
+SLAM (GLIM)$^\ast$          & 2.7 & 0.26 & 1.2 / 0.13 & 3.5 / 0.31 & 6.2 / 0.34 & 542.9 \\
+BA from scan-to-map$^\dagger$ & 1.0 & 0.12 & 1.3 / 0.17 & 1.5 / 0.16 & 2.6 / 0.16 & 570.1 \\
 \bottomrule
+\multicolumn{7}{l}{Reference: SLAM + BA, path 543.6\,m.}\\
+\multicolumn{7}{l}{$^\ast$ corrected for its 46\,ms pose-time offset; as output, ATE 3.4\,cm / 0.69$^\circ$.}\\
+\multicolumn{7}{l}{$^\dagger$ BA from a different start: bounds the reference's dependence on it.}
 \end{tabular}
 \end{table}
