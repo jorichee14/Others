@@ -89,6 +89,13 @@ Two complementary tests, combined per voxel of a global decision grid:
   the mesh by hand. Carving costs roughly one extra
   50-70%% of merge time at the default strides.
 
+FUSION (01_build_map.fusion): "union" (default) keeps one point per cell any
+scan hit -- every stray point widens a surface by a cell, so walls come out
+about 4 cm thicker than the scans (analysis/mapping/wall_build.py). "tsdf"
+averages the scans' signed distances along every ray (TsdfAccumulator) and
+keeps the zero crossing: the reference-map choice. Its block "tsdf":
+{"trunc", "min_weight", "voxel"} is documented at merge_tsdf.
+
   python3 01_build_map.py [pipeline_config.json]
 """
 import os
@@ -800,6 +807,141 @@ class VoxelAccumulator:
                    if a is not None)
 
 
+
+class TsdfAccumulator:
+    """Truncated signed distance fusion (Curless & Levoy 1996; VDBFusion,
+    Vizzo et al. 2022), the alternative to the union of VoxelAccumulator.
+
+    Every point is a ray from the sensor. The cells within +/-trunc of the
+    hit along that ray get the signed distance of their centre to the hit,
+        sdf = |hit - origin| - |centre - origin|   (+ in front, - behind)
+    clipped to +/-trunc, averaged over every ray that reached the cell:
+        D = sum(w sdf) / sum(w)
+    The surface is where D crosses zero. A point that landed 6 cm behind a
+    wall moves that average a little; in the union it adds a whole cell. So
+    the band of a wall's points collapses to its centre instead of keeping
+    its full width.
+
+    Every sample weighs the same, in front of the hit and behind it. A weight
+    that fades behind the hit (KinectFusion's) makes the average lopsided:
+    noisy hits behind the surface count less than those in front, and the
+    surface moves back -- 8 mm on a floor seen at grazing angles in
+    tests/test_tsdf.py. For a reference map an unbiased surface matters more
+    than thin objects.
+
+    Cells are kept sparse, sorted by key: each batch of samples is reduced on
+    its own and merged into the table only when the batches outweigh it, so
+    the cost of the sort is paid O(log) times, not once per batch."""
+
+    def __init__(self, voxel, trunc, batch_samples=30_000_000):
+        self.v = float(voxel)
+        self.trunc = float(trunc)
+        if self.trunc < 2.0 * self.v:
+            raise SystemExit(f"tsdf trunc {self.trunc} m < 2 x voxel {self.v} m: "
+                             "the zero crossing needs cells on both sides")
+        k = int(np.ceil(self.trunc / self.v))
+        self.offsets = np.arange(-k, k + 1, dtype=np.float32) * self.v   # along the ray
+        self.batch = int(batch_samples)
+        self.keys = None; self.w = None; self.wd = None
+        self._buf = []; self._n = 0
+        self._chunks = []; self._chunk_n = 0
+
+    def add(self, origin, wp):
+        m = mod_of(wp)
+        p = wp.astype(m.float32)
+        o = m.asarray(origin, dtype=m.float32).reshape(1, 3)
+        d = p - o
+        r = m.sqrt((d * d).sum(1))
+        u = d / r[:, None]
+        off = m.asarray(self.offsets)
+        # samples: from trunc in front of the hit to trunc behind it
+        x = p[:, None, :] - off[None, :, None] * u[:, None, :]          # (N,K,3)
+        vox = m.floor(x / self.v).astype(m.int64)
+        c = (vox.astype(m.float32) + 0.5) * self.v
+        dc = c - o[None]
+        sdf = r[:, None] - m.sqrt((dc * dc).sum(2))
+        front = off[None, :] < r[:, None]                                 # not past the sensor
+        keep = front & (m.abs(sdf) <= self.trunc)
+        w = m.ones(sdf.shape, m.float32)
+        k = pack_voxels(vox[keep])
+        ww = w[keep]
+        self._buf.append((k, ww, ww * sdf[keep].astype(m.float32)))
+        self._n += int(k.size)
+        if self._n >= self.batch:
+            self._reduce_batch()
+
+    def _reduce_batch(self):
+        if not self._buf:
+            return
+        m = mod_of(self._buf[0][0])
+        k = m.concatenate([b[0] for b in self._buf])
+        w = m.concatenate([b[1] for b in self._buf])
+        wd = m.concatenate([b[2] for b in self._buf])
+        self._buf = []; self._n = 0
+        order, uniq, start, count = group_bounds(m, k)
+        # float64: group_sum differences a running total over every sample,
+        # which passes float32's 2^24 exact range long before a map is done
+        self._chunks.append((as_cpu(uniq),
+                             as_cpu(group_sum(m, w[order].astype(m.float64), start, count)),
+                             as_cpu(group_sum(m, wd[order].astype(m.float64), start, count))))
+        self._chunk_n += int(uniq.size)
+        if self._chunk_n >= max(20_000_000, 0 if self.keys is None else self.keys.size):
+            self._merge()
+
+    def _merge(self):
+        parts = self._chunks + ([(self.keys, self.w, self.wd)] if self.keys is not None else [])
+        self._chunks = []; self._chunk_n = 0
+        if not parts:
+            return
+        n = sum(len(x[0]) for x in parts)
+        m = reduce_module(n * 40)
+        k = m.concatenate([m.asarray(x[0]) for x in parts])
+        w = m.concatenate([m.asarray(x[1]) for x in parts])
+        wd = m.concatenate([m.asarray(x[2]) for x in parts])
+        order, uniq, start, count = group_bounds(m, k)
+        self.keys = as_cpu_of(m, uniq)
+        self.w = as_cpu_of(m, group_sum(m, w[order].astype(m.float64), start, count))
+        self.wd = as_cpu_of(m, group_sum(m, wd[order].astype(m.float64), start, count))
+
+    def flush(self):
+        self._reduce_batch()
+        self._merge()
+
+    def cells(self):
+        """Cells merged so far plus those in unmerged batches (an upper bound)."""
+        return (0 if self.keys is None else int(self.keys.size)) + self._chunk_n
+
+    def nbytes(self):
+        return sum(a.nbytes for a in (self.keys, self.w, self.wd) if a is not None)
+
+    def surface(self, min_weight):
+        """Zero crossings of D between neighbouring cells along x, y and z,
+        both seen with at least min_weight; one point per crossing, placed by
+        linear interpolation. A jump across a whole band (+trunc to -trunc,
+        the two sides of a thin object) is not a surface."""
+        self.flush()
+        if self.keys is None:
+            return np.empty((0, 3))
+        keys, W = self.keys, self.w
+        D = np.where(W > 0, self.wd / np.maximum(W, 1e-12), 0.0)
+        ok = W >= float(min_weight)
+        out = []
+        for step in (1 << (2 * _VOX_BITS), 1 << _VOX_BITS, 1):
+            nb = keys + step
+            j = np.searchsorted(keys, nb)
+            j = np.minimum(j, keys.size - 1)
+            hit = (keys[j] == nb) & ok & ok[j]
+            a, b = np.flatnonzero(hit), j[hit]
+            Da, Db = D[a], D[b]
+            cross = (Da * Db < 0) & (np.abs(Da - Db) < self.trunc)
+            a, b, Da, Db = a[cross], b[cross], Da[cross], Db[cross]
+            tt = (Da / (Da - Db))[:, None]
+            ca = (unpack_voxels(keys[a]).astype(np.float64) + 0.5) * self.v
+            cb = (unpack_voxels(keys[b]).astype(np.float64) + 0.5) * self.v
+            out.append(ca + tt * (cb - ca))
+        return np.vstack(out)
+
+
 def as_cpu_of(m, a):
     """as_cpu() for a reduction that may have run on a different module."""
     return m.asnumpy(a) if m is not np else np.asarray(a)
@@ -841,6 +983,47 @@ def merge(P, S, s, dyn=None, carver=None):
         m = m.voxel_down_sample(final_voxel)
     print(f"    merged {n} scans -> {len(m.points)} pts")
     return m
+
+
+def merge_tsdf(P, S, s, dyn=None, carver=None):
+    """merge()'s alternative with 01_build_map.fusion = "tsdf": the scans fused
+    into a truncated signed distance field (TsdfAccumulator), the map is its
+    zero-crossing surface. Same scans, poses and moving-object statistics as
+    merge(); remove_dynamic and denoise then run on the surface as usual.
+
+      "tsdf": {
+        "trunc": 0.08,     # m: 3 x the spread of where the scans put a surface,
+                           # sigma = wall_build's "whole run" / 3.29 (20261015:
+                           # 8.4 cm -> sigma 2.55 cm -> 0.077 m); at least 3 cells
+        "min_weight": 3,   # summed ray weight a cell needs to be a surface
+        "voxel": final_voxel or scan_voxel,
+        "batch_samples": 30000000
+      }"""
+    t = s.get("tsdf", {})
+    voxel = float(t.get("voxel") or s.get("final_voxel") or s["scan_voxel"])
+    trunc = float(t.get("trunc", 0.08))
+    min_w = float(t.get("min_weight", 3))
+    extras = [x for x, on in (("dynamic-voxel stats", dyn is not None),
+                              ("free-space carving", carver is not None)) if on]
+    print(f"[1] merge: LiDAR scans -> TSDF (cell {voxel * 100:g} cm, trunc {trunc * 100:g} cm, "
+          f"min weight {min_w:g})" + (f" (+ {', '.join(extras)})" if extras else ""))
+    acc = TsdfAccumulator(voxel, trunc, int(t.get("batch_samples", 30_000_000)))
+    n = 0
+    report = max(1, int(s["flush_every"]))
+    for tt, wp, origin in iter_world_scans(P, S, s):
+        if dyn is not None:
+            dyn.add(wp, tt)
+        if carver is not None:
+            carver.add(origin, wp)
+        acc.add(origin, wp)
+        n += 1
+        if n % report == 0:
+            print(f"    {n} scans, <= {acc.cells()} cells", flush=True)
+    pts = acc.surface(min_w)
+    print(f"    fused {n} scans -> {acc.cells()} cells -> {len(pts)} surface points")
+    del acc
+    gpu_free()
+    return _pc(pts)
 
 
 def remove_dynamic(P, S, s, pcd, dyn, carver):
@@ -1287,7 +1470,8 @@ def main():
             if rd_on:
                 dyn = DynStats(rd.get("voxel", 0.15))
                 carver = make_carver(rd, s)
-            pcd = merge(P, S, s, dyn, carver); save(P, pcd, P.pcd("merged"))
+            fuse = merge_tsdf if s.get("fusion", "union") == "tsdf" else merge
+            pcd = fuse(P, S, s, dyn, carver); save(P, pcd, P.pcd("merged"))
 
         if rd_on:
             pcd = remove_dynamic(P, S, s, pcd, dyn, carver)

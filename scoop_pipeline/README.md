@@ -95,6 +95,8 @@ analysis/            measuring results; reads outputs, writes nothing back
                           vs one surface mapped twice (--traj), patches for CloudCompare (--save)
   mapping/scan_consistency.py  why walls are thick: noise floor, timing offset,
                      deskew, drift -- from ~200 scans of the bag + trajectory
+  mapping/compare_maps.py  completeness / accuracy of one map against another (what
+                     a TSDF map misses of the union), by range from the path and height
   mapping/wall_build.py  map walls vs the scans placed by 01's own code: whether 01
                      adds the thickness, how it grows with time, range error
   (slam/channel_relay.py: ROS 2 relay between robot domains through scoop/channel.py;
@@ -187,6 +189,8 @@ tests/               self-tests, no real bag needed
   test_bundle_adjust.py  02b on a synthetic room driven twice with drift: poses
                      back to the truth, planes back to the noise
   test_compare_trajs.py  compare_trajs on an offset and a drifting trajectory
+  test_tsdf.py       01's TSDF fusion against its voxel union on a smeared synthetic
+                     room: thinner, and its surfaces where the true ones are
 ```
 
 ## Environment
@@ -297,6 +301,12 @@ IMU-smooth motion inside each keyframe; 02's carries its per-scan noise)
 and its loop closure on the boards; then `dataset.traj` = `traj_lidar_ba.txt`
 and 01 again. The keyframes are kept in `traj_lidar_ba_keyframes.npz`, so a
 re-run with other settings does not read the bag.
+
+`01_build_map.fusion: "tsdf"` fuses the scans as a truncated signed distance
+field (Curless & Levoy; VDBFusion) instead of keeping every cell any scan hit:
+the map is the averaged surface, without the union's ~4 cm of stray cells.
+`tsdf.trunc` = 3 x the spread of where the scans put a wall (wall_build's
+"whole run" / 3.29), at least 3 cells.
 
 The map stages need the pass's config in `map_stages/`: `pipeline_config.json`
 for the mapping pass, and for a run `pipeline_config_<run>.json` with
