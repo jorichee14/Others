@@ -28,6 +28,7 @@ and per trajectory: path length, and the loop closure on the boards from
 <traj>_loop_closure.json (GLIM: glim_loop_closure.json) when it is there.
 --plot draws the top view and |p_A - p_B| over time.
 
+--shift NAME=SECONDS  adds NAME with its stamps moved (NAME+<ms>ms)
 --ref NAME  every other trajectory against this one in the usual metrics
             (Sturm et al., IROS 2012), as a table and as LaTeX rows:
               ATE  RMSE of the position (and rotation) error after the best
@@ -202,6 +203,9 @@ def main():
     ap.add_argument("--plot")
     ap.add_argument("--out")
     ap.add_argument("--ref", help="name of the reference trajectory (e.g. ba_glim)")
+    ap.add_argument("--shift", action="append", default=[], metavar="NAME=SECONDS",
+                    help="also compare NAME with its stamps moved by SECONDS, as NAME+<ms>ms "
+                         "(e.g. glim=0.046: is its error a time offset?)")
     a = ap.parse_args()
 
     P = load_pipeline(a.config)
@@ -225,13 +229,21 @@ def main():
         t, T = load_traj(f)
         trajs[name] = (t, T, f)
         print(f"  {name:6s} {len(t)} poses, {t[-1] - t[0]:.0f} s, {path_length(T):.1f} m  {f}")
+    for kv in a.shift:
+        name, _, sec = kv.partition("=")
+        if name not in trajs or not sec:
+            raise SystemExit(f"--shift {kv}: write NAME=SECONDS with NAME one of {', '.join(trajs)}")
+        t, T, f = trajs[name]
+        new = f"{name}{float(sec) * 1000:+.0f}ms"
+        trajs[new] = (t + float(sec), T, f)
+        print(f"  {new:6s} {name} with its stamps moved by {float(sec) * 1000:+.1f} ms")
     if len(trajs) < 2:
         raise SystemExit("need at least two trajectories")
 
     print("\nloop closure on the boards (mm / deg, noise mm):")
     lcs = {}
     for name, (_, _, f) in trajs.items():
-        lcs[name] = loop_closure(f, name)
+        lcs[name] = None if name.endswith("ms") and name not in files else loop_closure(f, name)
         if not lcs[name]:
             print(f"  {name:6s} -")
         for b, v in (lcs[name] or {}).items():
