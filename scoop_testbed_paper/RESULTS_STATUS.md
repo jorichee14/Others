@@ -10,7 +10,7 @@ moving, contended channel). Earlier pass at the same site: `coop2_0828`.
 
 | Result | Value | Tool |
 |---|---|---|
-| Final pose correction at convergence of scan-to-map refinement | 0.15 cm, 0.017° | `02_refine_poses.py` |
+| Final pose correction at convergence of scan-to-map refinement | 0.15 cm, 0.017° | `02b_scan_to_map.py` (then stage 02) |
 | Surface thickness after refinement, walls / floors | 7.9 / 2.1 cm vs noise floor 2.9 / 1.25 cm (confirm this is mapping_A) | `map_quality.py` |
 | Agreement with the map built four weeks earlier, walls | 1.06 cm | `map_quality.py` on both maps |
 | Relative scale between the two maps | 0.99998 | same |
@@ -19,7 +19,7 @@ moving, contended channel). Earlier pass at the same site: `coop2_0828`.
 
 ### Mapping pass 20261015 (`mobile_2`, 1387 s, 544 m): FINAL
 
-Pipeline: GLIM (export moves poses +46 ms) -> `02b_bundle_adjust.py` -> `01_build_map.py` (TSDF) -> 05 -> 10.
+Pipeline (`run_pass.py`): GLIM (export moves poses +46 ms) -> `02_bundle_adjust.py` -> `pose_time_check.py` -> [`01 --seed` + `02b_scan_to_map.py`, the comparison] -> `01_build_map.py` (TSDF) -> `01 --union` -> `mapping_report.py` -> 05 -> 10.
 Reference trajectory `odometry/mobile_2/traj_lidar_ba_glim.txt`; reference map from 01 on it.
 Paper: `sections/refmap_main.tex` (Sec. V-A), `supp/refmap_method.tex`, `tables/refmap_stages.tex`, `tables/glim_vs_ref.tex`.
 

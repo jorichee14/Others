@@ -765,7 +765,7 @@ def run(P, tr, base, ref, outd):
     for what the entry leaves out, `ref` = 04's frozen map)."""
     import importlib
     from scoop import tftree
-    A = importlib.import_module("02_refine_poses")
+    A = importlib.import_module("02b_scan_to_map")
     R04 = importlib.import_module("04_reference_traj")
     from pipeline_common import traj_quats, interp_poses
     c = dict(base)

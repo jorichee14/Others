@@ -5,7 +5,7 @@ mode (05_anchor.py --traj --check), summed up and set against GLIM's.
     python3 map_stages/loop_check.py <pipeline config> [--traj FILE] [--out REPORT]
 
 --traj  the trajectory to check (default: dataset.traj, e.g. 02's
-        traj_lidar_refined.txt in odometry/<machine>/)
+        traj_lidar_ba.txt in odometry/<machine>/)
 --out   the report (default: <trajectory>_loop_closure.json next to it)
 
 For every board seen at the start and again later -- start and end on the
@@ -13,7 +13,7 @@ same board -- where the trajectory puts it the first and the last time, in
 mm / deg against the detections' own noise (DRIFT or not significant), and
 the co-visible cross-checks. When GLIM's own check is there
 (odometry/<machine>/glim_loop_closure.json, written after GLIM) the two are
-printed side by side. Stage 02 runs this on its result by itself; the GLIM
+printed side by side. Stages 02 and 02b run this on their results by themselves; the GLIM
 step of process_recording.py runs it on GLIM's.
 """
 import json

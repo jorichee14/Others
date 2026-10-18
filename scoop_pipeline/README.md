@@ -55,7 +55,7 @@ processing/          raw recordings -> processed bags (command lines around scoo
                      --suffix _mobile2 for a bag decoded before --frame-suffix
 run_pass.py          one pass from raw to processed, every step in order (below)
 map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
-                     (01_build_map.py, 02_refine_poses.py, ...);
+                     (01_build_map.py, 02_bundle_adjust.py, ...);
                      calibration read from the bag (camera_info + /tf_static); outputs in
                      data/processed/<date>/<pass>/{mapping,odometry/<machine>,frames,bags,comms};
                      datasets/<machine>/<format>_<depth>_<pass>_<date> from datasets/
@@ -186,9 +186,10 @@ tests/               self-tests, no real bag needed
   test_map_quality.py  map_quality's layer split: a wall's two faces, a surface
                      mapped twice, smear
   test_wall_build.py  wall_build on a synthetic room: clean, and a 2 % range error
-  test_bundle_adjust.py  02b on a synthetic room driven twice with drift: poses
-                     back to the truth, planes back to the noise; the timing
-                     check on time there and flagging an input 30 ms late
+  test_bundle_adjust.py  02 on a synthetic room driven twice with drift: poses
+                     back to the truth, planes back to the noise
+  test_pose_time_check.py  pose_time_check: a corrected GLIM on time, one 30 ms
+                     late flagged with the offset to set; mapping_report's rows
   test_compare_trajs.py  compare_trajs on an offset and a drifting trajectory
   test_tsdf.py       01's TSDF fusion against its voxel union on a smeared synthetic
                      room: thinner, and its surfaces where the true ones are
@@ -276,9 +277,13 @@ it, `--only S` runs S alone, `--until S` stops after S.
 | process | `process_recording.py` per machine folder with an Ouster bag or SVO2 | `work/<date>/<pass>/<machine>/` |
 | merge | `merge_session.py`: check against record.yaml, merge | `work/<date>/<pass>/<prefix>_<pass>_<date>_merged` |
 | vslam | only with a `"vslam"` block (coop: mobile_2 drives, its VSLAM was not recorded): `processing/vslam.py`, cuVSLAM offline on its stereo + IMU, in the isaac_ros container | `work/<date>/<pass>/<machine>/vslam/traj_vslam.txt` |
-| 01_seed | mapping pass: `01_build_map.py --seed`, the map from GLIM's poses | `mapping/denoised_seed_<tag>.pcd` |
-| 02_refine | mapping pass: `02_refine_poses.py`, every scan registered to it | `odometry/<machine>/traj_lidar_refined.txt` |
-| 01_map | mapping pass: `01_build_map.py`, the final map from the refined poses | `mapping/map_final_<tag>.pcd` |
+| 02_ba | mapping pass: `02_bundle_adjust.py`, GLIM's poses (moved by `glim.pose_time_offset` on export) bundle-adjusted on the map's planes: the reference trajectory | `odometry/<machine>/traj_lidar_ba.txt` (`02_bundle_adjust.output`) |
+| time_check | `pose_time_check.py`: GLIM's pose time against the reference (a mapping pass: 02's; a run: 04's track); on time, or OFF with the `pose_time_offset` to set | `odometry/<machine>/pose_time_check.json` |
+| 01_seed | mapping pass, for 02b: `01_build_map.py --seed`, the map from GLIM's poses | `mapping/denoised_seed_<tag>.pcd` |
+| 02b_s2m | mapping pass, the comparison: `02b_scan_to_map.py`, every scan registered to that map (`"02b_scan_to_map": {"enabled": false}` skips it and 01_seed) | `odometry/<machine>/traj_lidar_refined.txt` |
+| 01_map | mapping pass: `01_build_map.py`, the map from `dataset.traj` (02's), fused as `01_build_map.fusion` says | `mapping/map_final_<tag>.pcd` |
+| 01_union | mapping pass with a TSDF map: `01_build_map.py --union`, the same poses as a union of points, the comparison map | `mapping/denoised_union_<tag>.pcd` |
+| report | mapping pass: `mapping_report.py`, GLIM / + time correction / + scan-to-map / + BA against the reference (ATE, RPE, pose time, loop closure, path) and the TSDF and union maps (thickness, doubled surfaces, completeness) | `mapping_report_<tag>.md`, `.json` |
 | 03_init | run: `03_init_from_boards.py`, start pose from the anchor board | `frames/session_anchor.json` |
 | 04_reference | run: `04_reference_traj.py`, every scan registered to the anchored map; its `"tracks"` (`map_stages/depth_track.py`): another robot's depth frames registered to it from its own odometry; with `"method": "pgo"` (`map_stages/depth_pgo.py`) one pose graph instead: cuVSLAM between frames, weak across camera dropouts, the start anchor, boards and map fixes (search, then ICP with Hessian information), solved together; each pose's marginal covariance in `cov_<track>.csv` (σx, σy, σyaw, xy correlation, the xy ellipse's major semi-axis) | `odometry/reference_<tag>/` |
 | 05_anchor | `05_anchor.py`: the boards (mapping pass: and the anchored map) | `frames/anchor_frame.json`, `boards_<tag>.json` |
@@ -291,17 +296,14 @@ it, `--only S` runs S alone, `--until S` stops after S.
 | comms | `processing/comms_tables.py`: NTP, Wi-Fi, ping, iperf, CSI with positions | `comms/{ntp,wifi,csi}/`, `comms/summary.json` |
 | csi_clean | `processing/csi_clean.py`: QoS data frames, no pilots, H scaled to RSSI, both ends' poses | `comms/csi/csi_<link>_clean.npz` + README |
 
-By hand after 02, when the map's walls are still thicker than its scans
-(`analysis/mapping/wall_build.py`): `map_stages/02b_bundle_adjust.py <config>`,
-plane bundle adjustment of all poses at once (BALM / HBA: every plane's
-smallest eigenvalue, the planes solved in closed form, 1 s keyframes, the
-input's relative motion as a soft factor, roll / pitch held to the input's) ->
-`odometry/<machine>/traj_lidar_ba.txt`; `--input traj_lidar.txt --output
-traj_lidar_ba_glim.txt` adjusts GLIM's own trajectory instead of 02's (GLIM's
-IMU-smooth motion inside each keyframe; 02's carries its per-scan noise)
-and its loop closure on the boards; then `dataset.traj` = `traj_lidar_ba.txt`
-and 01 again. The keyframes are kept in `traj_lidar_ba_keyframes.npz`, so a
-re-run with other settings does not read the bag.
+Stage 02 is plane bundle adjustment of all poses at once (BALM / HBA: every
+plane's smallest eigenvalue, the planes solved in closed form, 1 s keyframes,
+the input's relative motion as a soft factor, roll / pitch held to the
+input's) on GLIM's trajectory, and its loop closure on the boards. A mapping
+pass's `dataset.traj` is its output. The keyframes are kept in
+`<output>_keyframes.npz`, so a re-run with other settings does not read the
+bag. 02b, scan-to-map, is kept as the comparison (on 20261015 a BA started
+from it reaches the same poses, 1.0 cm / 0.12 deg ATE).
 
 `01_build_map.fusion: "tsdf"` fuses the scans as a truncated signed distance
 field (Curless & Levoy; VDBFusion) instead of keeping every cell any scan hit:
@@ -314,7 +316,7 @@ for the mapping pass, and for a run `pipeline_config_<run>.json` with
 `"extends": "pipeline_config.json"` and `dataset.reference_pass` (e.g.
 `pipeline_config_survey_1.json`); `--config` names another. Once the merged
 bag exists, processing is not redone, so the decoded/retimed/ZED bags may be
-deleted (keep `glim/`: 01_seed, 02 and 03 read GLIM's trajectory). finalize
+deleted (keep `glim/`: 02, 01_seed, the report and 03 read GLIM's trajectory). finalize
 needs as much free space as the merged bag takes. A config written before the
 stages were renumbered still works: a block under its old number ("08_reference")
 is read as the new one ("04_reference"). A stage whose block has `"enabled": false`

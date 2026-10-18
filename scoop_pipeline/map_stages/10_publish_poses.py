@@ -170,7 +170,7 @@ def mapping_track(P):
     T_N = np.array(json.load(open(af))["T_N_world"], float)
     times, T = load_traj(src)
     T_map = np.einsum("ij,njk->nik", T_N, T)
-    W = importlib.import_module("02_refine_poses")
+    W = importlib.import_module("02b_scan_to_map")
     os.makedirs(os.path.dirname(p_c), exist_ok=True)
     W.write_traj(p_l, times, T_map)
     W.write_traj(p_c, times, np.einsum("nij,jk->nik", T_map, P.sensor.T_lidar_camera))

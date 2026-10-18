@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Self-test for map_stages/02b_bundle_adjust.py: a synthetic 10 x 8 x 3 m
+"""Self-test for map_stages/02_bundle_adjust.py: a synthetic 10 x 8 x 3 m
 room (walls, floor, ceiling, two pillars, a table) scanned from a robot that
 drives a loop in it twice (10 Hz, 80 s). The trajectory given to the BA has
 drifted: 1.5 deg of yaw and (8, -5, 3) cm by the end, growing with time
@@ -102,10 +102,10 @@ def main():
         cfg = pc.load_config(os.path.join(STAGES, "pipeline_config_mapping_20261015.json"))
         cfg.pop("extends", None)
         cfg["dataset"].update(bag=bag, traj=traj, points_topic=TOPIC, out_dir=os.path.join(d, "out"))
-        cfg["02b_bundle_adjust"] = {"input": traj, "rounds": 2}
+        cfg["02_bundle_adjust"] = {"input": traj, "rounds": 2}
         cp = os.path.join(d, "cfg.json")
         json.dump(cfg, open(cp, "w"))
-        p = subprocess.run([sys.executable, os.path.join(STAGES, "02b_bundle_adjust.py"), cp],
+        p = subprocess.run([sys.executable, os.path.join(STAGES, "02_bundle_adjust.py"), cp],
                            capture_output=True, text=True, cwd=STAGES)
         log = p.stdout + p.stderr
         out = os.path.join(d, "out", "traj_lidar_ba.txt")
@@ -127,16 +127,8 @@ def main():
             print("  ok    " + line)
             for ln in th:
                 print("        " + ln.strip())
-        # the timing check: a drifted input with no time offset is on time
-        rep = json.load(open(os.path.join(d, "out", "traj_lidar_ba_report.json")))
-        tm = rep.get("timing", {})
-        line = f"timing check: {tm.get('dt_ms', float('nan')):+.1f} ms, r {tm.get('r_timing', float('nan')):.2f}"
-        if tm.get("on_time") is not True:
-            fails.append(line + " flagged, the input has no time offset: " + json.dumps(tm))
-        else:
-            print("  ok    " + line + ", on time")
         # the cache: a second run reads no bag
-        p2 = subprocess.run([sys.executable, os.path.join(STAGES, "02b_bundle_adjust.py"), cp,
+        p2 = subprocess.run([sys.executable, os.path.join(STAGES, "02_bundle_adjust.py"), cp,
                              "--rounds", "1"], capture_output=True, text=True, cwd=STAGES)
         if p2.returncode != 0 or "keyframes from" not in p2.stdout:
             fails.append("second run did not use the keyframe cache:\n" + p2.stdout[-2000:] + p2.stderr[-2000:])
@@ -144,22 +136,6 @@ def main():
             print("  ok    second run took the keyframes from the cache")
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    # the timing check flags an input whose poses are 30 ms late
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("ba", os.path.join(STAGES, "02b_bundle_adjust.py"))
-    ba = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(ba)
-    t = np.arange(0, 300, 0.1)
-    yaw = lambda tt: 0.8 * np.sin(tt / 3.0) + 0.3 * np.sin(tt / 1.3)
-    poses = lambda ps: np.array([np.block([[Rotation.from_euler("z", a).as_matrix(), np.zeros((3, 1))],
-                                           [np.zeros((1, 3)), np.ones((1, 1))]]) for a in ps])
-    tm = ba.timing_check(os.path.join(tempfile.gettempdir(), "none", "traj.txt"),
-                         t, poses(yaw(t + 0.03)), poses(yaw(t)))
-    line = f"timing check, input 30 ms late: {tm.get('dt_ms', float('nan')):+.1f} ms, r {tm.get('r_timing', 0):.2f}"
-    if tm.get("on_time") is not False or abs(tm["dt_ms"] - 30) > 3:
-        fails.append(line + " not flagged as 30 ms")
-    else:
-        print("  ok    " + line + ", flagged")
     for f in fails:
         print("  FAIL  " + f)
     print("bundle adjust ok" if not fails else "bundle adjust FAILED")

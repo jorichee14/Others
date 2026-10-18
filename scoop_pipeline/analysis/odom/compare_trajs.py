@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-How a robot's trajectories of one pass differ: GLIM's, 02's refined and
-02b's bundle-adjusted (or any others), pose by pose. No ground truth: this
+How a robot's trajectories of one pass differ: GLIM's, 02's bundle-adjusted
+and 02b's scan-to-map (or any others), pose by pose. No ground truth: this
 says where and on which time scale they disagree, and what each one's
 loop closure on the boards was.
 
@@ -10,13 +10,14 @@ loop closure on the boards was.
 
 Default trajectories, from odometry/<machine>/ of the config's pass:
   glim     traj_lidar.txt          (GLIM, exported by process_recording.py)
-  02       traj_lidar_refined.txt  (02_refine_poses.py)
-  ba       traj_lidar_ba.txt       (02b_bundle_adjust.py)
+  ba       traj_lidar_ba.txt       (02_bundle_adjust.py)
+  s2m      traj_lidar_refined.txt  (02b_scan_to_map.py)
+(map_stages/mapping_report.py is the same against the reference, per pass.)
 --traj NAME=FILE adds or replaces one.
 
 For every pair (A, B), B interpolated at A's stamps:
   absolute   |p_A - p_B| and the rotation between them, as they are (both
-             in the same frame: 02 starts from GLIM's, BA from 02's) and
+             in the same frame: 02 and 02b start from GLIM's) and
              after the best rigid fit of B onto A (what is left is shape,
              not a global offset)
   relative   over 1 s, 10 s, 100 s: the difference of the motion each one
@@ -52,8 +53,8 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "map_stages"))
 from pipeline_common import load_pipeline, load_traj                         # noqa: E402
 
 DELTAS = (1.0, 10.0, 100.0)
-DEFAULT = (("glim", "traj_lidar.txt"), ("02", "traj_lidar_refined.txt"),
-           ("ba", "traj_lidar_ba.txt"))
+DEFAULT = (("glim", "traj_lidar.txt"), ("ba", "traj_lidar_ba.txt"),
+           ("s2m", "traj_lidar_refined.txt"))
 
 
 def interp(t, T, tq):

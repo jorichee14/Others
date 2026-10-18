@@ -58,7 +58,7 @@ def main():
     ap.add_argument("--other", default="mobile_1_lidar")
     a = ap.parse_args()
     from pipeline_common import load_pipeline
-    A = importlib.import_module("02_refine_poses")
+    A = importlib.import_module("02b_scan_to_map")
     P = load_pipeline(a.config)
     od = P.reference_dir()
 

@@ -17,13 +17,24 @@ Steps (a step whose output is there already is skipped):
                   IMU in the merged bag (only with a "vslam" block: mobile_2 in coop)
   work -> processed (map_stages/, the pipeline config of this pass)
     mapping pass (no dataset.reference_pass):
-    01_seed       01_build_map.py --seed     map from the GLIM poses (02's reference)
-    02_refine     02_refine_poses.py         every scan registered to that map
-    01_map        01_build_map.py            the final map from the refined poses
+    02_ba         02_bundle_adjust.py        GLIM's poses (time-corrected on export)
+                                             bundle-adjusted on the planes: the reference
+                                             trajectory (traj_lidar_ba.txt)
+    time_check    pose_time_check.py         GLIM's pose time against it (on time / OFF)
+    01_seed       01_build_map.py --seed     map from the GLIM poses (02b's reference)
+    02b_s2m       02b_scan_to_map.py         every scan registered to that map: the
+                                             comparison (traj_lidar_refined.txt)
+    01_map        01_build_map.py            the map from dataset.traj (02's output),
+                                             fused as 01_build_map.fusion says (TSDF)
+    01_union      01_build_map.py --union    the same poses, union of points: the
+                                             comparison map (only beside a TSDF)
+    report        mapping_report.py          GLIM, + correction, + scan-to-map, + BA
+                                             against the reference; TSDF and union maps
     a run in a mapping pass's map (dataset.reference_pass):
     03_init       03_init_from_boards.py     start pose from the anchor board
     04_reference  04_reference_traj.py       every scan registered to the anchored map
                                              (and 04's "tracks": mobile_2's depth frames)
+    time_check    pose_time_check.py         GLIM's pose time against 04's track
     both:
     05_anchor     05_anchor.py               boards; a mapping pass: the anchored map
     06_cut        06_cut.py                  viewing copy, only when 06_cut has floor/ceil
@@ -43,7 +54,8 @@ Steps (a step whose output is there already is skipped):
 --until S stop after S                --only S  run S alone, done or not
 A map stage whose block in the pipeline config has "enabled": false is not run
 (e.g. a coop run: "05_anchor": {"enabled": false}, the boards as the mapping
-pass placed them).
+pass placed them; "02b_scan_to_map": {"enabled": false} skips the comparison
+and its seed map).
 
 --config  the pipeline config (default: the one in map_stages/ whose dataset is
           this pass, e.g. pipeline_config_survey_1.json; a run needs its own,
@@ -64,14 +76,15 @@ STAGES = os.path.join(ROOT, "map_stages")
 sys.path.insert(0, ROOT)
 sys.path.insert(0, STAGES)
 
-MAPPING = ["01_seed", "02_refine", "01_map"]
-RUN = ["03_init", "04_reference"]
+MAPPING = ["02_ba", "time_check", "01_seed", "02b_s2m", "01_map", "01_union", "report"]
+RUN = ["03_init", "04_reference", "time_check"]
 # each map stage's block in the pipeline config
-BLOCK = {"01_seed": "01_build_map", "02_refine": "02_refine", "01_map": "01_build_map",
+BLOCK = {"02_ba": "02_bundle_adjust", "01_seed": "02b_scan_to_map",
+         "02b_s2m": "02b_scan_to_map", "01_map": "01_build_map", "01_union": "01_build_map",
          "03_init": "03_init", "04_reference": "04_reference", "05_anchor": "05_anchor",
          "06_cut": "06_cut", "07_cameras": "07_build_cameras", "08_tfs": "08_emit_tfs",
          "09_cloud": "09_build", "10_poses": "10_publish"}
-ORDER = (["process", "merge", "vslam"] + MAPPING + RUN
+ORDER = (["process", "merge", "vslam"] + MAPPING + [s for s in RUN if s not in MAPPING]
          + ["05_anchor", "06_cut", "07_cameras", "08_tfs", "09_cloud", "10_poses", "finalize",
             "comms", "csi_clean"])
 
@@ -150,10 +163,17 @@ def plan_steps(raw, cfg):
     tag = P.tag
     blk = lambda k: P.cfg.get(k) or {}                               # noqa: E731
     stg = lambda k, f, d: P.stage(k).get(f) or P.outp(d) if k in P.cfg else P.outp(d)  # noqa: E731
+    import pose_time_check
+    fusion = blk("01_build_map").get("fusion", "union")
     out = {
+        "02_ba": pose_time_check.reference(P) if not run else None,
+        "time_check": pose_time_check.odometry_file(P, "pose_time_check.json"),
         "01_seed": P.outp("denoised_seed_%s.pcd" % tag),
-        "02_refine": P.outp(blk("02_refine").get("output", "traj_lidar_refined.txt")),
+        "02b_s2m": P.outp(blk("02b_scan_to_map").get("output", "traj_lidar_refined.txt")),
         "01_map": P.outp(blk("01_build_map").get("output") or P.pcd("map_final")),
+        "01_union": P.outp("denoised_union_%s.pcd" % tag if tag else "denoised_union.pcd"),
+        "report": os.path.join(P.out_dir, "mapping_report_%s.md" % tag if tag
+                               else "mapping_report.md"),
         "03_init": stg("03_init", "output", "session_anchor.json"),
         "04_reference": P.lidar_track_traj(),
         "05_anchor": P.outp("boards_{tag}.json") if run
@@ -166,7 +186,9 @@ def plan_steps(raw, cfg):
     }
     cut = blk("06_cut")
     applies = {s: not run for s in MAPPING}
-    applies.update({s: run for s in RUN})
+    applies.update({s: run for s in RUN if s not in MAPPING})
+    applies["time_check"] = True
+    applies["01_union"] = not run and fusion == "tsdf"
     applies.update({"05_anchor": True, "06_cut": not run and (cut.get("floor") is not None
                                                              or cut.get("ceil") is not None),
                     "07_cameras": True, "08_tfs": True, "09_cloud": run, "10_poses": True})
@@ -174,9 +196,13 @@ def plan_steps(raw, cfg):
         if blk(k).get("enabled", True) is False:
             applies[s_] = False
     cmds = {
+        "02_ba": [py(st("02_bundle_adjust.py"), cfg)],
+        "time_check": [py(st("pose_time_check.py"), cfg)],
         "01_seed": [py(st("01_build_map.py"), cfg, "--seed")],
-        "02_refine": [py(st("02_refine_poses.py"), cfg)],
+        "02b_s2m": [py(st("02b_scan_to_map.py"), cfg)],
         "01_map": [py(st("01_build_map.py"), cfg)],
+        "01_union": [py(st("01_build_map.py"), cfg, "--union")],
+        "report": [py(st("mapping_report.py"), cfg)],
         "03_init": [py(st("03_init_from_boards.py"), cfg)],
         "04_reference": [py(st("04_reference_traj.py"), cfg)],
         "05_anchor": [py(st("05_anchor.py"), cfg)],
@@ -187,7 +213,7 @@ def plan_steps(raw, cfg):
         "10_poses": [py(st("10_publish_poses.py"), cfg)],
     }
     done = {k: bool(v) and os.path.exists(v) for k, v in out.items()}
-    done["01_seed"] = done["01_seed"] or done["02_refine"]       # only 02 reads it
+    done["01_seed"] = done["01_seed"] or done["02b_s2m"]         # only 02b reads it
     tracks = [t for t in blk("04_reference").get("tracks") or [] if t.get("enabled", True)]
     done["04_reference"] = done["04_reference"] and all(
         os.path.exists(os.path.join(P.reference_dir(), "traj_%s.tum" % t["name"])) for t in tracks)
@@ -197,8 +223,10 @@ def plan_steps(raw, cfg):
         vt = vslam.traj_path(P)
         steps.append(("vslam", True, os.path.exists(vt), vt,
                       [py(os.path.join(ROOT, "processing", "vslam.py"), cfg)]))
-    for s in MAPPING + RUN + ["05_anchor", "06_cut", "07_cameras", "08_tfs", "09_cloud",
-                              "10_poses"]:
+    # time_check follows 02 in a mapping pass, 04 in a run
+    seq = ([s for s in MAPPING if s != "time_check"] + RUN if run
+           else MAPPING + [s for s in RUN if s != "time_check"])
+    for s in seq + ["05_anchor", "06_cut", "07_cameras", "08_tfs", "09_cloud", "10_poses"]:
         steps.append((s, applies[s], done[s], out[s], cmds[s]))
     db = P.dataset["bag"]
     if mb and os.path.normpath(db) != os.path.normpath(mb):

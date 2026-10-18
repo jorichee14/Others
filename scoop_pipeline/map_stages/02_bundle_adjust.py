@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-STAGE 02b - plane bundle adjustment: all poses at once, so that every plane
-of the map is as thin as the scans allow.
+STAGE 02 - plane bundle adjustment: all poses at once, so that every plane
+of the map is as thin as the scans allow. A mapping pass's reference
+trajectory: GLIM -> 02 -> 01 (the map).
 
-  bag + traj_lidar_refined.txt (02)  ->  keyframes  ->  planes  ->  BA
-  ->  traj_lidar_ba.txt
+  bag + traj_lidar.txt (GLIM, pose-time corrected on export)  ->  keyframes
+  ->  planes  ->  BA  ->  traj_lidar_ba.txt
 
-Stage 02 registers each scan alone to a map built from the poses being
-fixed, so it can only centre a scan in that map's blur. Bundle adjustment
+Scan-to-map (02b, kept as the comparison) registers each scan alone to a
+map built from the poses being fixed, so it can only centre a scan in that
+map's blur. Bundle adjustment
 (BALM, Liu & Zhang 2021; HBA, Liu et al. 2023) moves all poses together:
 
   min over poses T   sum_f  lambda_min( Cov_f(T) )  +  odometry  +  anchor
@@ -39,23 +41,23 @@ poses as the only unknowns.
   5. every pose of the input moved by its keyframes' correction, interpolated
      in time between keyframes -> traj_lidar_ba.txt; its loop closure on the
      boards against GLIM's (loop_check).
-  6. timing: whether the input's pose time is its scans' (timing_check), so
-     every mapping pass re-checks glim.pose_time_offset; in the printout
-     ([4]) and in <output>_report.json.
+The pose-time check of the input against the result is the next step of a
+mapping pass (pose_time_check.py).
 
 The plane thickness printed (5-95 % equivalent, 3.29 sigma) is the
 quantity analysis/mapping/map_quality.py measures, on the BA's planes.
 
-  python3 02b_bundle_adjust.py [pipeline_config.json] [--rounds N]
-                               [--input TRAJ] [--output NAME]
+  python3 02_bundle_adjust.py [pipeline_config.json] [--rounds N]
+                              [--input TRAJ] [--output NAME]
 
-Which input: GLIM's own trajectory (traj_lidar.txt) keeps GLIM's IMU-smooth
-motion inside each keyframe, and its roll / pitch for the gravity factor;
-02's (the default) carries 02's per-scan registration noise into every
-keyframe, as the BA keeps the input's motion within a keyframe.
+Which input: GLIM's trajectory (traj_lidar.txt, the default) keeps GLIM's
+IMU-smooth motion inside each keyframe, and its roll / pitch for the
+gravity factor; 02b's would carry its per-scan registration noise into
+every keyframe, as the BA keeps the input's motion within a keyframe (on
+20261015 both reach the same poses, 1.0 cm / 0.12 deg ATE).
 
-Config block (all optional, under "02b_bundle_adjust"):
-  "input":            traj_lidar_refined.txt (02), else the seed trajectory
+Config block (all optional, under "02_bundle_adjust"; "02b_bundle_adjust" is read as it):
+  "input":            the seed trajectory (pipeline_common.seed_traj: traj_lidar.txt)
   "output":           "traj_lidar_ba.txt"
   "kf_period":        1.0     # s of scans per keyframe
   "kf_voxel":         0.05    # keyframe cloud thinning (m)
@@ -422,42 +424,6 @@ def apply_corrections(times, T_in, anchor, R_new, t_new):
 
 
 # --------------------------------------------------------------------- main
-TIMING_MS, TIMING_R = 10.0, 0.5    # flag the input's pose time beyond these
-
-
-def timing_check(inp, times, T_in, T_out):
-    """Is the input's pose time on its scans'? The adjusted poses are fixed
-    by the scans, so a pose stamped dt off in the input shows as a heading
-    error against them that follows the turning, e = w dt
-    (compare_trajs.heading_vs_turning). Flagged when |dt| >= 10 ms and
-    r >= 0.5 (20261015: GLIM as output 45.8 ms, r 0.92; with the 46 ms
-    export correction 3.9 ms, r 0.23). The correction the input was exported
-    with is read from glim.yaml beside it; the right one is it + dt."""
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    "..", "analysis", "odom"))
-    from compare_trajs import heading_vs_turning
-    h = heading_vs_turning(times, T_in, times, T_out)
-    applied = 0.0
-    meta = os.path.join(os.path.dirname(inp), "glim.yaml")
-    if os.path.isfile(meta):
-        for ln in open(meta):
-            if ln.startswith("pose_time_offset_s:"):
-                applied = float(ln.split(":", 1)[1] or 0)
-    dt, r = h.get("dt_ms", 0.0), h.get("r_timing", 0.0)
-    h.update(applied_offset_ms=applied * 1000,
-             on_time=not (abs(dt) >= TIMING_MS and r >= TIMING_R))
-    print(f"\n[4] timing: the input's heading error against the result follows the turning "
-          f"as {dt:+.1f} ms (r {r:.2f}); input exported with pose_time_offset "
-          f"{applied * 1000:.0f} ms")
-    if h["on_time"]:
-        print("    -> on time: the input's poses are its scans' (keep the offset)")
-    else:
-        print(f"    -> OFF by {dt:+.0f} ms: set glim.pose_time_offset to "
-              f"{applied + dt / 1000:.3f} in configs/recording.yaml for this machine, "
-              "re-export GLIM (processing/glim_check.py) and run 02b again")
-    return h
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -476,7 +442,7 @@ def main():
              rounds=3, iters=10,
              cache=True, points_topic="",
              deskew=bool(s.get("deskew", True)), deskew_bins=max(2, int(s.get("deskew_bins", 100))))
-    c.update(P.cfg.get("02b_bundle_adjust", {}))
+    c.update(P.cfg.get("02_bundle_adjust", {}))
     if a.rounds is not None:
         c["rounds"] = a.rounds
     if a.input:
@@ -487,12 +453,10 @@ def main():
                          or "/ouster/points")
     print(P.describe())
 
-    inp = P.outp(c["input"]) if c["input"] else P.outp("traj_lidar_refined.txt")
-    if not os.path.exists(inp):
-        inp = P.seed_traj()
+    inp = P.outp(c["input"]) if c["input"] else P.seed_traj()
     out = P.outp(c["output"])
     if os.path.abspath(inp) == os.path.abspath(out):
-        raise SystemExit(f"input and output are the same file ({out}); set 02b_bundle_adjust.input")
+        raise SystemExit(f"input and output are the same file ({out}); set 02_bundle_adjust.input")
     times, T_in = load_traj(inp)
     kf_of, anchor = keyframe_plan(times, float(c["kf_period"]))
     K = len(anchor)
@@ -584,14 +548,9 @@ def main():
 
     T_out = apply_corrections(times, T_in, anchor, R, t)
     write_traj(out, times, T_out)
-    try:
-        timing = timing_check(inp, times, T_in, T_out)
-    except Exception as e:                     # the poses stand either way
-        timing = {"error": f"{type(e).__name__}: {e}"}
-        print(f"\n(timing not checked: {timing['error']})")
     with open(os.path.splitext(out)[0] + "_report.json", "w") as fh:
         json.dump(dict(input=inp, output=out, keyframes=K, settings={k: c[k] for k in c},
-                       rounds=history, timing=timing), fh, indent=1)
+                       rounds=history), fh, indent=1)
     d = np.linalg.norm(T_out[:, :3, 3] - T_in[:, :3, 3], axis=1) * 100
     print(f"\nwrote {out}: {len(times)} poses, moved median {np.median(d):.1f} cm, "
           f"p95 {np.percentile(d, 95):.1f} cm, max {d.max():.1f} cm")
@@ -600,10 +559,11 @@ def main():
         loop_check.check_trajectory(a.config, out, label="BA")
     except Exception as e:                     # the poses stand either way
         print(f"\n(loop closure not measured: {type(e).__name__}: {e})")
-    print(f"\nnext: set dataset.traj to \"{c['output']}\", delete "
-          f"{', '.join(P.pcd(b) for b in ('merged', 'static', 'denoised', 'colored'))} "
-          f"in {P.folder_for('x.pcd')}, re-run 01_build_map.py, then "
-          f"analysis/mapping/map_quality.py and analysis/mapping/wall_build.py")
+    nxt = ("next (run_pass.py does these): pose_time_check.py, 01_build_map.py, "
+           "01_build_map.py --union, mapping_report.py")
+    if os.path.basename(P.dataset.get("traj") or "") != os.path.basename(out):
+        nxt += f"; dataset.traj is {P.dataset.get('traj')}, set it to \"{c['output']}\" for the map"
+    print("\n" + nxt)
 
 
 if __name__ == "__main__":

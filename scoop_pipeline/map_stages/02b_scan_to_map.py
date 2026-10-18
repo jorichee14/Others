@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-STAGE 02 - re-derive the trajectory by registering every scan to the MAP.
+STAGE 02b - re-derive the trajectory by registering every scan to the MAP.
+
+A mapping pass runs it as the comparison to stage 02 (the bundle
+adjustment, which makes the reference): GLIM + scan-to-map. Its functions
+(scan reading, deskew, ICP) are also used by 04 and the checks.
 
   bag (/ouster/points) + seed traj  ->  reference map  ->  per-scan ICP
   ->  traj_lidar_refined.txt
@@ -33,14 +37,14 @@ reference map from the poses the previous round produced. The per-round
 correction statistics printed at the end are the convergence evidence: when
 round N moves the poses by millimetres, the trajectory and the map agree.
 
-  python3 02_refine_poses.py [pipeline_config.json] [--rounds N] [--restart]
+  python3 02b_scan_to_map.py [pipeline_config.json] [--rounds N] [--restart]
 
 Rounds already written (traj_lidar_refined_r1.txt, _r2, ...) are not redone:
 --rounds 3 after a 2-round run does round 3 only, starting from _r2's poses
 (and the convergence table includes the earlier rounds, kept in
 traj_lidar_refined_rounds.json). --restart starts again from round 1.
 
-Config block (all optional, under "02_refine"):
+Config block (all optional, under "02b_scan_to_map"; "02_refine" is read as it):
   "seed":           the trajectory to refine; default odometry/<machine>/traj_lidar.txt,
                     else GLIM's own <work>/.../<machine>/glim/traj_lidar.txt
   "map":            denoised_seed_<tag>.pcd (01 --seed), else denoised_<tag>.pcd
@@ -150,7 +154,7 @@ def detect_points_topic(bag, override="", n_poses=0):
     print(f"    PointCloud2 topics in bag: "
           f"{[f'{t} ({n})' for t, n in cands]}")
     print(f"    -> using {topic!r} ({dict(cands)[topic]} msgs vs "
-          f"{n_poses} poses); set 02_refine.points_topic to override")
+          f"{n_poses} poses); set 02b_scan_to_map.points_topic to override")
     return topic
 
 
@@ -564,9 +568,9 @@ def main():
              plane_huber=0.10, planarity=1.0,
              points_topic="", output="traj_lidar_refined.txt")
     # deskew as 01_build_map does, so the map and the scans registered to it
-    # place points the same way (02_refine.deskew overrides)
+    # place points the same way (02b_scan_to_map.deskew overrides)
     c.update(deskew=bool(s.get("deskew", True)), deskew_bins=max(2, int(s.get("deskew_bins", 100))))
-    c.update(cfg_all.get("02_refine", {}))
+    c.update(cfg_all.get("02b_scan_to_map", {}))
     if args.rounds is not None:
         c["rounds"] = args.rounds
     bag = ds["bag"]
@@ -655,7 +659,7 @@ def main():
                 f"correspondences, {n_rej} were rejected).\n"
                 f"  - wrong points topic? currently {topic!r}\n"
                 f"  - seed poses not aligned with the reference map?\n"
-                f"  - try a larger first entry in 02_refine.max_corr")
+                f"  - try a larger first entry in 02b_scan_to_map.max_corr")
         sh = np.array(shifts) * 100
         ro = np.array(rots)
         rr = np.array([r for r in rms_all if np.isfinite(r)]) * 100

@@ -327,7 +327,7 @@ def main():
         # track run backwards fills them
         import importlib
         import depth_track as D
-        A = importlib.import_module("02_refine_poses")
+        A = importlib.import_module("02b_scan_to_map")
         R04 = importlib.import_module("04_reference_traj")
         cc = dict(R04.DEFAULTS)
         cc.update(D.DEFAULTS)

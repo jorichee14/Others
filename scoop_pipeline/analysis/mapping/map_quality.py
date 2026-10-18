@@ -186,6 +186,18 @@ def patch_stats(P, n_samples=N_SAMPLES, r=R, seed=0, centres=None, positions=Non
     return np.array(out).reshape(-1, 5), dict(sparse=n_sparse, rough=n_rough, cap_cm=cap)
 
 
+def summary(st):
+    """patch_stats' patches -> the numbers a report needs: surface thickness
+    (cm, every layer on its own) median of all, walls (tilt > 60 deg) and
+    floors / ceilings (< 30 deg), and the share of patches holding one
+    surface twice (kind 3, %)."""
+    t, tilt, kind = st[:, 2] * 100, st[:, 1], st[:, 4].astype(int)
+    med = lambda m: float(np.median(t[m])) if m.sum() > 20 else None      # noqa: E731
+    return dict(patches=int(len(st)), median_cm=float(np.median(t)),
+                walls_cm=med(tilt > 60), floors_cm=med(tilt < 30),
+                doubled_pct=float(100 * (kind == DOUBLED).mean()))
+
+
 def save_patches(path, stats, centres):
     """ASCII PLY, one vertex per measured patch with its values.
     CloudCompare takes only properties named scalar_<name> as scalar fields

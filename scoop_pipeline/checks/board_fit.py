@@ -34,7 +34,7 @@ def main():
     a = ap.parse_args()
     from pipeline_common import load_pipeline
     from scoop import tftree
-    A = importlib.import_module("02_refine_poses")
+    A = importlib.import_module("02b_scan_to_map")
     R04 = importlib.import_module("04_reference_traj")
     import depth_track as DT
     P = load_pipeline(a.config)

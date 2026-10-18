@@ -821,10 +821,12 @@ class Pipeline:
         return os.path.join(here, self.machine, "glim", "traj_lidar.txt")
 
     def seed_traj(self):
-        """The trajectory a mapping pass starts from (01 --seed, 02's seed):
-        02_refine.seed when set (a bare name is in odometry/<machine>/), else
-        odometry/<machine>/traj_lidar.txt when there, else GLIM's own file."""
-        name = (self.cfg.get("02_refine") or {}).get("seed")
+        """The trajectory a mapping pass starts from (02's input, 01 --seed and
+        02b's seed): 02b_scan_to_map.seed when set (a bare name is in
+        odometry/<machine>/), else odometry/<machine>/traj_lidar.txt (GLIM,
+        exported with its pose-time correction) when there, else GLIM's own
+        file."""
+        name = (self.cfg.get("02b_scan_to_map") or {}).get("seed")
         if name:
             return self.outp(name)
         local = self.outp("traj_lidar.txt")
@@ -905,7 +907,9 @@ def _merge(base, over):
 
 
 # stage blocks under the numbers they had before the stages were put in run order
-OLD_KEYS = {"01a_refine": "02_refine", "06_init": "03_init", "08_reference": "04_reference",
+# (and before the bundle adjustment became stage 02, scan-to-map 02b)
+OLD_KEYS = {"01a_refine": "02b_scan_to_map", "02_refine": "02b_scan_to_map",
+            "02b_bundle_adjust": "02_bundle_adjust", "06_init": "03_init", "08_reference": "04_reference",
             "03_anchor": "05_anchor", "02_cut": "06_cut", "04_build_cameras": "07_build_cameras",
             "05_emit_tfs": "08_emit_tfs", "07_build": "09_build", "09_publish": "10_publish"}
 

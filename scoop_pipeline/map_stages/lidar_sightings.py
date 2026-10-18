@@ -78,7 +78,7 @@ def detect(P, ref, c, cache, log=print):
     """[(t, [(x, y, n)])] for every scan of mobile_1 (cached in `cache`)."""
     import importlib
     from pipeline_common import iter_scans
-    A = importlib.import_module("02_refine_poses")
+    A = importlib.import_module("02b_scan_to_map")
     track = os.path.join(P.reference_dir(), "traj_%s.tum" % c["lidar_track"])
     bag = os.path.expanduser(P.dataset["bag"])
     key = "%s|%s|%s|%.2f|%.2f|%.2f|%.2f" % (bag, track, c["points_topic"], float(c["z_lo"]),

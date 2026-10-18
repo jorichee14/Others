@@ -6,7 +6,7 @@ frame in `map`.
 
   ZED:   T_map_mapzed @ T_mapzed_cam(t)        (map -> map_zed from 05:
                                                measured at the run's start)
-  LiDAR: stage 04's traj_<name>_in_cam.tum (a run), or 02's refined
+  LiDAR: stage 04's traj_<name>_in_cam.tum (a run), or dataset.traj's (02's)
          trajectory @ T_lidar_camera (a mapping pass)
 
 Both start together (map -> map_zed is fixed at the start board), so the gap

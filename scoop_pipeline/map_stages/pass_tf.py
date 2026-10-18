@@ -15,7 +15,7 @@ it started at (map ── board ── map_zed, map ── board_rs ── map_r
                             mobile_2's)
      map_zed ~~ zed_camera_link
                             mobile_1 from the LiDAR trajectory (a run: 04's
-                            traj_<name>_in_cam.tum; a mapping pass: 02's refined
+                            traj_<name>_in_cam.tum; a mapping pass: dataset.traj's
                             trajectory through 05's T_N_world), replacing the
                             ZED's map_zed ~~ odom_zed ~~ zed_camera_link: the
                             ZED's tracking is not trusted, and odom_zed goes with

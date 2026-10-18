@@ -12,7 +12,7 @@ reference pass's FROZEN anchored map.
             (round 1, "carry": GLIM's drift is smooth, so the start is close
             even where GLIM is far off; a scan fitting clearly worse than the
             run's typical one, carry_fit, passes nothing on) and is registered
-            to the map by 02's ICP on its own: planes
+            to the map by 02b's ICP on its own: planes
             fitted over plane_voxel cells first, then nearest-neighbour
             point-to-plane, both anchored to the seed (prior_beta) where the
             map leaves a direction open, so a corridor scan cannot slide
@@ -70,7 +70,7 @@ import open3d as o3d
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pipeline_common import load_pipeline, make_T, traj_quats, interp_poses   # noqa: E402
 
-A = importlib.import_module("02_refine_poses")
+A = importlib.import_module("02b_scan_to_map")
 
 DEFAULTS = dict(rounds=2, target_voxel=0.05, scan_voxel=0.10, plane_voxel=0.4,
                 max_corr=[0.4, 0.2, 0.1], iters_per_gate=5, huber=0.05, plane_iters=8,

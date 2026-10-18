@@ -105,7 +105,7 @@ def _icp(src, tgt, T0, voxel):
 
 def window_cloud(bag, topic, tr_t, tr_T, s01, t_from, t_to):
     """Deskewed scans with GLIM pose times in [t_from, t_to], in the GLIM world."""
-    a = importlib.import_module("02_refine_poses")
+    a = importlib.import_module("02b_scan_to_map")
     pts, n = [], 0
     for j, p in a.iter_scans(bag, topic, tr_t, s01["time_tol"], s01["lidar_min"],
                              s01["lidar_max"], tr_T, bool(s01.get("deskew", True)),
@@ -251,7 +251,7 @@ def relocalize(P, T_lidar_cam=None):
     """-> dict: t0, T_map_glim, T_map_lidar0 (and T_map_cam0 with T_lidar_cam),
     the run trajectory, and every check's numbers. SystemExit when a check fails."""
     o3d, REG = _o3d()
-    a = importlib.import_module("02_refine_poses")
+    a = importlib.import_module("02b_scan_to_map")
     c = dict(DEFAULTS)
     c.update((P.cfg.get("03_init") or {}).get("relocalize") or {})
     s01 = P.cfg["01_build_map"]
@@ -266,7 +266,7 @@ def relocalize(P, T_lidar_cam=None):
             raise SystemExit("relocalize: %s not found: %s" % (what, f))
     tr_t, tr_T = a.load_traj(run_traj)
     tr_q = traj_quats(tr_T)
-    topic = a.detect_points_topic(bag, P.cfg.get("02_refine", {}).get("points_topic", ""),
+    topic = a.detect_points_topic(bag, P.cfg.get("02b_scan_to_map", {}).get("points_topic", ""),
                                   len(tr_t))
     print("\n=== LiDAR relocalization in the reference map ===")
     print("  run trajectory: %s (%d poses, %.1f s)" % (run_traj, len(tr_t), tr_t[-1] - tr_t[0]))

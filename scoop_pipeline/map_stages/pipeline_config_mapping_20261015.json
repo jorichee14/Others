@@ -1,6 +1,6 @@
 {
  "extends": "pipeline_config.json",
- "_note": "20261015 mapping: mobile_2 alone builds its own map. dataset.bag is mobile_2's retimed bag (no merge: it holds every topic and its TF, the LiDAR-camera calibration included); GLIM's traj_lidar.txt next to it in mobile_2/glim/. GLIM -> 02b BA on GLIM's own trajectory (traj_lidar_ba_glim.txt; 02 not needed: BA from 02 reaches the same poses, 1.0 cm / 0.10 deg ATE, but keeps 02's per-scan jitter and was run without gravity) -> 01 map, fused as a TSDF -> 05 boards -> 10 poses (coloured from the raw RealSense image, undistorted) -> 05 boards anchor the map -> 10 poses. No 07/08: no other cameras in this pass.",
+ "_note": "20261015 mapping: mobile_2 alone builds its own map. dataset.bag is mobile_2's retimed bag (no merge: it holds every topic and its TF, the LiDAR-camera calibration included); GLIM's traj_lidar.txt (poses moved +46 ms on export) next to it in mobile_2/glim/. run_pass.py: 02 BA on GLIM's trajectory (traj_lidar_ba_glim.txt, the reference) -> pose-time check -> 01 --seed + 02b scan-to-map (the comparison) -> 01 map, fused as a TSDF -> 01 --union (the comparison map) -> mapping report -> 05 boards anchor the map -> 10 poses (coloured from the raw RealSense image, undistorted). No 07/08: no other cameras in this pass.",
  "dataset": {
   "bag": "~/workspaces/isaac_ros-dev/data/work/20261015/mapping/mobile_2/mirc_dataset_mapping_2_run_20261015_mobile_2_retimed",
   "traj": "traj_lidar_ba_glim.txt",
@@ -21,11 +21,11 @@
    "min_weight": 3
   }
  },
- "02b_bundle_adjust": {
+ "02_bundle_adjust": {
   "input": "traj_lidar.txt",
   "output": "traj_lidar_ba_glim.txt"
  },
- "02_refine": {
+ "02b_scan_to_map": {
   "points_topic": "/mobile_2/ouster/points"
  },
  "04_reference": {

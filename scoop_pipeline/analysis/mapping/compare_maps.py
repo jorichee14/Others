@@ -37,6 +37,19 @@ def sample(P, n, rng):
     return P if len(P) <= n else P[rng.choice(len(P), n, replace=False)]
 
 
+def coverage(A, B, dist=0.10, n=5_000_000, seed=0):
+    """(completeness, accuracy, As, dA, comp): the share of A's points with B
+    within dist and of B's with A within dist, on at most n points of each;
+    As the points of A measured, dA their distance to B, comp the mask."""
+    rng = np.random.default_rng(seed)
+    As, Bs = sample(A, n, rng), sample(B, n, rng)
+    dA, _ = cKDTree(B).query(As, distance_upper_bound=1.0)
+    dB, _ = cKDTree(A).query(Bs, distance_upper_bound=1.0)
+    comp = np.isfinite(dA) & (dA <= dist)
+    acc = np.isfinite(dB) & (dB <= dist)
+    return float(comp.mean()), float(acc.mean()), As, dA, comp
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -48,19 +61,14 @@ def main():
     ap.add_argument("--sample", type=int, default=5_000_000)
     a = ap.parse_args()
 
-    rng = np.random.default_rng(0)
     A, B = load(a.a), load(a.b)
     print(f"A {a.a}: {len(A)} points, extent {np.round(A.max(0) - A.min(0), 1)} m")
     print(f"B {a.b}: {len(B)} points, extent {np.round(B.max(0) - B.min(0), 1)} m")
-    As, Bs = sample(A, a.sample, rng), sample(B, a.sample, rng)
-    dA, _ = cKDTree(B).query(As, distance_upper_bound=1.0)
-    dB, _ = cKDTree(A).query(Bs, distance_upper_bound=1.0)
-    comp = np.isfinite(dA) & (dA <= a.dist)
-    acc = np.isfinite(dB) & (dB <= a.dist)
+    c, acc, As, dA, comp = coverage(A, B, a.dist, a.sample)
     print(f"\nwithin {a.dist * 100:g} cm:")
-    print(f"  completeness  {comp.mean() * 100:5.1f} %  of A's points have B nearby "
-          f"(B misses {100 - comp.mean() * 100:.1f} %)")
-    print(f"  accuracy      {acc.mean() * 100:5.1f} %  of B's points have A nearby")
+    print(f"  completeness  {c * 100:5.1f} %  of A's points have B nearby "
+          f"(B misses {100 - c * 100:.1f} %)")
+    print(f"  accuracy      {acc * 100:5.1f} %  of B's points have A nearby")
 
     rng_m = None
     if a.traj:

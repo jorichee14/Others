@@ -34,7 +34,7 @@ def test_config_is_mobile_2_s_own_map():
                              "mirc_dataset_mapping_2_run_20261015_mobile_2_retimed")
     assert (d["points_topic"], d["image_topic"], d["camera_info_topic"]) == \
         ("/mobile_2/ouster/points", "/mobile_2/color/image_raw", "/mobile_2/color/camera_info")
-    assert c["02_refine"]["points_topic"] == c["04_reference"]["points_topic"] == d["points_topic"]
+    assert c["02b_scan_to_map"]["points_topic"] == c["04_reference"]["points_topic"] == d["points_topic"]
     assert c["04_reference"]["name"] == "mobile_2_lidar"
     assert c["01_build_map"]["rectified"] is False and c["05_anchor"]["rectified"] is False
     assert c["01_build_map"]["colorize"]["enable"]                     # inherited

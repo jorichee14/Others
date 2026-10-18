@@ -109,14 +109,25 @@ def main():
                 f.append("--status after finalize: %r" % line)
 
         rc, out = runner(os.path.join(data, "raw", "20260101", "mapping_A"), "--config",
-                         os.path.join(stages, "pipeline_config.json"), "--dry", "--from", "01_seed")
+                         os.path.join(stages, "pipeline_config.json"), "--dry", "--from", "02_ba")
         print(out[-1500:])
         order = [ln.split("== ")[1].split(" ==")[0].strip() for ln in out.splitlines() if ln.startswith("== ")]
-        if order[:4] != ["01_seed", "02_refine", "01_map", "05_anchor"] or \
+        if order[:7] != ["02_ba", "time_check", "01_seed", "02b_s2m", "01_map", "report",
+                         "05_anchor"] or "01_union" in order or \
                 any(s in order for s in ("03_init", "04_reference", "09_cloud")):
             f.append("mapping --dry order: %s" % order)
         if "01_build_map.py %s --seed" % os.path.join(stages, "pipeline_config.json") not in out:
             f.append("mapping --dry: no 01 --seed")
+        # a TSDF map gets the union beside it
+        tc = os.path.join(stages, "pipeline_config_tsdf.json")
+        json.dump({"extends": "pipeline_config.json", "01_build_map": {"fusion": "tsdf"}},
+                  open(tc, "w"))
+        rc, out = runner(os.path.join(data, "raw", "20260101", "mapping_A"), "--config", tc,
+                         "--dry", "--from", "01_map")
+        order = [ln.split("== ")[1].split(" ==")[0].strip() for ln in out.splitlines() if ln.startswith("== ")]
+        os.remove(tc)
+        if order[:3] != ["01_map", "01_union", "report"] or "%s --union" % tc not in out:
+            f.append("mapping --dry with a TSDF: %s" % order)
 
         # a mapping pass has no 04: 10 writes its track in map from the refined
         # trajectory through T_N_world, under 04's names

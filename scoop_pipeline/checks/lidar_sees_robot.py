@@ -35,7 +35,7 @@ def main():
     from pipeline_common import load_pipeline, iter_scans
     from scipy.spatial import cKDTree
     import open3d as o3d
-    A = importlib.import_module("02_refine_poses")
+    A = importlib.import_module("02b_scan_to_map")
     P = load_pipeline(a.config)
     od = P.reference_dir()
     t1, T1 = A.load_traj(os.path.join(od, "traj_%s.tum" % a.track1))

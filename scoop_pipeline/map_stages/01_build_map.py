@@ -2,10 +2,13 @@
 """
 STAGE 01 - build the map cloud from LiDAR scans placed by GLIM poses.
 
-A mapping pass runs it twice: `--seed` first, on the seed (GLIM) trajectory
-up to the denoised cloud (denoised_seed_<tag>.pcd, the map 02 refines
-against), then without it on dataset.traj (02's traj_lidar_refined.txt) for
-the final map.
+A mapping pass runs it three times (run_pass.py): `--seed` on the seed
+(GLIM) trajectory up to the denoised cloud (denoised_seed_<tag>.pcd, the
+map 02b's scan-to-map registers to); without a flag on dataset.traj (02's
+bundle-adjusted traj_lidar_ba.txt) for the final map, fused as
+01_build_map.fusion says (a TSDF); and `--union` on the same poses with the
+union of points instead, up to denoised_union_<tag>.pcd, the comparison
+map (only when the final map is not a union already).
 
   bag (/ouster/points) + traj_lidar.txt  ->  merge -> [remove dynamic]
   -> denoise -> colorize -> [flatten] -> [anchor to camera start]
@@ -1421,9 +1424,12 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     cfg_path = args[0] if args else "pipeline_config.json"
     seed = "--seed" in sys.argv
+    union = "--union" in sys.argv and not seed
     P = load_pipeline(cfg_path)
     S = P.sensor
     s = P.stage("01_build_map")
+    if union:
+        s = dict(s, fusion="union")
     init_gpu(s.get("gpu", True))
     if seed:
         # the map 02 registers to on its first round: the seed (GLIM) poses,
@@ -1437,6 +1443,12 @@ def main():
     else:
         P.traj = load_traj_cached(P)
         print(f"loaded {len(P.traj[0])} poses from {P.outp(P.dataset['traj'])}")
+    if union:
+        # the comparison map: the same poses, the union of points, up to
+        # denoise, under its own names (denoised_union_<tag>.pcd)
+        tag = P.tag
+        P.pcd = lambda base: "%s_union_%s.pcd" % (base, tag) if tag else base + "_union.pcd"
+        print(f"--union: the union of points -> {P.pcd('denoised')}")
     print(P.describe())
 
     rd = s.get("remove_dynamic", {})
@@ -1482,8 +1494,9 @@ def main():
             pcd = denoise(s, pcd)
             save(P, pcd, P.pcd("denoised"))
 
-    if seed:
-        print(f"DONE (--seed) -> {P.outp(P.pcd('denoised'))}: 02's first-round map")
+    if seed or union:
+        print(f"DONE ({'--seed' if seed else '--union'}) -> {P.outp(P.pcd('denoised'))}"
+              + (": 02b's first-round map" if seed else ": the comparison map"))
         return
 
     if s["colorize"]["enable"]:

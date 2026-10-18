@@ -9,7 +9,7 @@
     {"name": "clock offset, measured (0.99 ms)", "s": 0.00099, "source": "coop_2, ntp_analysis.py"},
     {"name": "clock offset, strict chrony bound (12 ms)", "s": 0.012, "source": "coop_2, ntp_analysis.py"},
     {"name": "sniffer clock bias", "s": null, "source": "TODO: median of sniffer receive - mobile_2 send stamp"},
-    {"name": "map refinement, final pose correction", "m": 0.0015, "source": "mapping_A, 02_refine_poses.py"},
+    {"name": "map refinement, final pose correction", "m": 0.0015, "source": "mapping_A, 02b_scan_to_map.py (then stage 02)"},
     {"name": "map repeatability, walls, four weeks apart", "m": 0.0106, "source": "mapping_A vs earlier map, map_quality.py"},
     {"name": "board detector vs mapping pipeline (ZED)", "m": 0.0081, "source": "board_detect.py"},
     {"name": "board detector vs mapping pipeline (RealSense)", "m": 0.0083, "source": "board_detect.py"},
