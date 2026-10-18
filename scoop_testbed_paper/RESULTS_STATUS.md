@@ -43,6 +43,17 @@ The reference (GLIM + BA) was built from GLIM before the 46 ms correction; BA ab
 1.0 cm / 0.10 deg). Re-running 02b and 01 from the corrected export makes it reproducible from today's pipeline.
 The GLIM rows of `tables/refmap_stages.tex` (TSDF map, scans as placed) are before the correction.
 
+**Reference v2** (02b re-run from the corrected GLIM export, 01 TSDF again), the one in the tables:
+
+| Result | Value | Tool |
+|---|---|---|
+| v2 against v1 (built before the correction) | ATE 0.48 cm / 0.10 deg, RPE 10 s 0.8 cm / 0.14 deg | `compare_trajs.py` |
+| Board loop closure | 13.9 mm / 1.36 deg (noise 7.7 mm), not significant | `loop_check.py` |
+| TSDF map walls / floors | 7.8 / 1.9 cm, 0.7 % doubled (v1 7.5 / 1.7, 0.6 %) | `map_quality.py` |
+| Against v2: GLIM corrected / 02 / BA from 02 | ATE 2.7 / 3.0 / 1.0 cm, 0.26 / 0.27 / 0.12 deg | `compare_trajs.py --ref ba_glim` |
+
+Scans as placed (8.8 cm, and tau = 8 cm from it) were measured with v1.
+
 Still lacking: control distances.
 
 ### Survey (`survey_1`)

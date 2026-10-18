@@ -16,7 +16,7 @@ Trajectory & Board loop & \multicolumn{2}{c}{TSDF map thickness} & Scans as \\
 SLAM (GLIM)$^\ddagger$   & 10.8 / 1.24 & 14.3 / 3.6 & 2.0 & 19.2 \\
 + scan-to-map            & 13.7 / 1.30 & --         & --  & 10.3$^\dagger$ \\
 + scan-to-map + BA       & 12.1 / 1.31 & 7.4 / 1.6  & 0.7 & 8.4 \\
-\textbf{SLAM + BA (ref.)} & 15.1 / 1.35 & 7.5 / 1.7 & 0.6 & 8.8 \\
+\textbf{SLAM + BA (ref.)} & 13.9 / 1.36 & 7.8 / 1.9 & 0.7 & 8.8$^\S$ \\
 \midrule
 \multicolumn{5}{l}{\emph{Fusion, same poses (scan-to-map + BA)}} \\
 \quad union of points    & & 12.5 / 3.6 & 0.3 & \\
@@ -26,6 +26,7 @@ SLAM (GLIM)$^\ddagger$   & 10.8 / 1.24 & 14.3 / 3.6 & 2.0 & 19.2 \\
 Thickness: p95--p5 about planes in 0.25\,m patches.}\\
 \multicolumn{5}{l}{\footnotesize Scans as placed: one scan 4.9\,cm, the whole run as listed.}\\
 \multicolumn{5}{l}{\footnotesize $^\dagger$ measured at the spots of a different map.}\\
-\multicolumn{5}{l}{\footnotesize $^\ddagger$ as output, before its 46\,ms pose-time correction.}
+\multicolumn{5}{l}{\footnotesize $^\ddagger$ as output, before its 46\,ms pose-time correction.}\\
+\multicolumn{5}{l}{\footnotesize $^\S$ with the reference built before that correction (0.5\,cm ATE apart).}
 \end{tabular}
 \end{table}

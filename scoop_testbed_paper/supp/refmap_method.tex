@@ -211,8 +211,10 @@ poses and is corrected on export.
 \paragraph{Independent starts} The bundle adjustment run from two different
 input trajectories (the SLAM solution, and the same after scan-to-map
 registration) should reach the same poses; their difference bounds how much
-the result depends on its start: \SI{1.0}{\centi\metre} and $0.10^\circ$
-ATE on pass 20261015.
+the result depends on its start: \SI{1.0}{\centi\metre} and $0.12^\circ$
+ATE on pass 20261015; rebuilding it from the SLAM trajectory before and
+after its \SI{46}{\milli\second} correction moves it by
+\SI{0.5}{\centi\metre} and $0.10^\circ$.
 
 \paragraph{Control distances} Laser-rangefinder distances between landmarks
 fix the absolute scale, which none of the measures above observes.
