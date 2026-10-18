@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """Self-test for scoop/recording.py export_glim's glim.pose_time_offset:
-traj_lidar.txt's stamps moved by it (poses as they were), traj_imu.txt and
+traj_lidar.txt's poses moved by it in time on their own stamps, traj_imu.txt and
 GLIM's dump untouched, the offset in glim.yaml; and mobile_2's setting is
 read from configs/recording.yaml.
 
@@ -20,7 +20,8 @@ sys.path.insert(0, ROOT)
 from scoop import recording                                            # noqa: E402
 
 LINES = ["1800000000.000000000 1.0 2.0 0.5 0 0 0 1",
-         "1800000000.100000000 1.1 2.0 0.5 0 0 0.0087265 0.9999619"]
+         "1800000000.100000000 1.1 2.0 0.5 0 0 0.0087265 0.9999619",
+         "1800000000.200000000 1.2 2.0 0.5 0 0 0.0174524 0.9998477"]
 
 
 def main():
@@ -39,9 +40,14 @@ def main():
         if off != 0.046:
             fails.append(f"mobile_2's glim.pose_time_offset is {off}, not 0.046")
         out = recording.export_glim(rec, settings, log=lambda *_: None)
-        got = (out / "traj_lidar.txt").read_text().split("\n")
-        if got[0].split()[0] != "1800000000.046000000" or got[0].split()[1:] != LINES[0].split()[1:]:
-            fails.append(f"traj_lidar.txt not moved by 46 ms: {got[0]}")
+        got = [ln.split() for ln in (out / "traj_lidar.txt").read_text().split("\n") if ln]
+        # stamps kept; the pose at 0.1 s is the input's at 0.054 s: x 1.054
+        if [g[0] for g in got] != [ln.split()[0] for ln in LINES]:
+            fails.append(f"stamps changed: {[g[0] for g in got]}")
+        elif abs(float(got[1][1]) - 1.054) > 1e-6 or abs(float(got[2][1]) - 1.154) > 1e-6:
+            fails.append(f"poses not moved 46 ms in time: {got}")
+        elif abs(float(got[0][1]) - 1.0) > 1e-6:
+            fails.append(f"first pose not held: {got[0]}")
         if (out / "traj_imu.txt").read_text().split("\n")[0] != LINES[0]:
             fails.append("traj_imu.txt changed")
         if (dump / "traj_lidar.txt").read_text().split("\n")[0] != LINES[0]:
@@ -56,7 +62,7 @@ def main():
         shutil.rmtree(d, ignore_errors=True)
     for f in fails:
         print("  FAIL  " + f)
-    print("  ok    traj_lidar.txt moved +46 ms on export, poses, traj_imu.txt and the dump as they were"
+    print("  ok    traj_lidar.txt's poses moved +46 ms in time on its own stamps; traj_imu.txt and the dump as they were"
           if not fails else "")
     print("glim export ok" if not fails else "glim export FAILED")
     sys.exit(1 if fails else 0)

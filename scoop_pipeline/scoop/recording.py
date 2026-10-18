@@ -261,19 +261,26 @@ def _traj_summary(path: Path) -> dict:
 
 
 def shift_traj(src: Path, dst: Path, dt: float) -> None:
-    """A TUM trajectory with every stamp moved by ``dt`` s, the poses as they
-    are (text kept; stamps in decimal, so a 1.8e9 s stamp gains no float
-    rounding)."""
-    from decimal import Decimal
-    step = Decimal(repr(float(dt)))
-    lines = []
-    for ln in Path(src).read_text().splitlines():
-        f = ln.split()
-        if f and not ln.lstrip().startswith("#"):
-            f[0] = format(Decimal(f[0]) + step, ".9f")
-            ln = " ".join(f)
-        lines.append(ln)
-    Path(dst).write_text("\n".join(lines) + "\n")
+    """A TUM trajectory moved ``dt`` s later in time, on its own stamps: the
+    pose written for stamp t is the input's pose at t - dt (spherical
+    linear interpolation of the rotation, linear of the position; held at
+    the first pose before it). Moving the stamps instead would leave every
+    pose dt away from its scan, and the map stages pair a scan with a pose
+    only within 01_build_map.time_tol (40 ms). Stamps are kept as text."""
+    import numpy as np
+    from scipy.spatial.transform import Rotation, Slerp
+    rows = [ln.split() for ln in Path(src).read_text().splitlines()
+            if ln.split() and not ln.lstrip().startswith("#")]
+    stamps = [r[0] for r in rows]
+    a = np.array([[float(x) for x in r] for r in rows])
+    t0 = a[0, 0]
+    t = a[:, 0] - t0                         # relative: no float rounding of 1.8e9 s
+    q = np.clip(t - dt, t[0], t[-1])
+    rot = Slerp(t, Rotation.from_quat(a[:, 4:8]))(q).as_quat()
+    pos = np.stack([np.interp(q, t, a[:, k]) for k in (1, 2, 3)], 1)
+    with open(dst, "w") as fh:
+        for st, p_, r_ in zip(stamps, pos, rot):
+            fh.write("%s %.6f %.6f %.6f %.9f %.9f %.9f %.9f\n" % (st, *p_, *r_))
 
 
 def export_glim(rec: "Recording", settings: dict, log=print) -> Optional[Path]:
@@ -284,8 +291,9 @@ def export_glim(rec: "Recording", settings: dict, log=print) -> Optional[Path]:
     trajectory's poses / span / rate / length). Its dump with the map stays
     in work/.../glim/. Returns the folder, or None for another layout.
 
-    glim.pose_time_offset (s, per machine): traj_lidar.txt's stamps are
-    moved by it, so that the pose given for t is the scans' pose at t. On
+    glim.pose_time_offset (s, per machine): traj_lidar.txt's poses are
+    moved by it in time, on GLIM's own stamps (shift_traj), so that the pose
+    given for t is the scans' pose at t. On
     mobile_2 GLIM's pose for stamp t is the scans' pose at t + 46 ms
     (20261015: heading error against the BA reference follows the yaw rate
     as 45.8 ms, r 0.92; GLIM's scans are thinnest at +46 ms; unchanged with
@@ -319,7 +327,7 @@ def export_glim(rec: "Recording", settings: dict, log=print) -> Optional[Path]:
     tl = files.get("traj_lidar.txt", {})
     log(f"    glim -> {out}: {tl.get('poses', 0)} poses over {tl.get('duration_s')} s "
         f"({tl.get('rate_hz')} Hz), {tl.get('path_length_m')} m"
-        + (f"; stamps moved {offset * 1000:+.1f} ms (glim.pose_time_offset)" if offset else ""))
+        + (f"; poses moved {offset * 1000:+.1f} ms in time (glim.pose_time_offset)" if offset else ""))
     return out
 
 

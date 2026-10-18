@@ -155,6 +155,10 @@ def build_keyframes(P, c, s, times, T_in, kf_of, anchor):
                   flush=True)
     for kk in list(buf):
         flush(kk)
+    if n < 0.5 * len(times):
+        raise SystemExit(f"only {n} of {len(times)} scans have a trajectory pose within "
+                         f"01_build_map.time_tol ({s['time_tol']} s) of their stamp: are the "
+                         "trajectory's stamps the scans' (not moved in time)?")
     print(f"    {n} scans in {K} keyframes, median {np.median([len(x) for x in clouds]):.0f} "
           f"points each at {c['kf_voxel'] * 100:g} cm ({time.time() - t0:.0f} s)")
     return clouds
