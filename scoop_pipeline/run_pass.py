@@ -21,15 +21,17 @@ Steps (a step whose output is there already is skipped):
                                              bundle-adjusted on the planes: the reference
                                              trajectory (traj_lidar_ba.txt)
     time_check    check.py time              GLIM's pose time against it (on time / OFF)
-    01_seed       01_build_map.py --seed     map from the GLIM poses (02b's reference)
+    01_seed       01_build_map.py --seed     map from the GLIM poses (02b's reference) *
     02b_s2m       02b_scan_to_map.py         every scan registered to that map: the
-                                             comparison (traj_lidar_refined.txt)
+                                             comparison (traj_lidar_refined.txt) *
     01_map        01_build_map.py            the map from dataset.traj (02's output),
                                              fused as 01_build_map.fusion says (TSDF)
     01_union      01_build_map.py --union    the same poses, union of points: the
-                                             comparison map (only beside a TSDF)
-    report        check.py report            GLIM, + correction, + scan-to-map, + BA
-                                             against the reference; TSDF and union maps
+                                             comparison map (only beside a TSDF) *
+    report        check.py report            GLIM, + correction, (+ scan-to-map,) + BA
+                                             against the reference; the map (and the union)
+    * only with "comparisons": true in the config: the paper's comparisons, made
+      once (20261015), not on every mapping pass
     a run in a mapping pass's map (dataset.reference_pass):
     03_init       03_init_from_boards.py     start pose from the anchor board
     04_reference  04_reference_traj.py       every scan registered to the anchored map
@@ -54,8 +56,7 @@ Steps (a step whose output is there already is skipped):
 --until S stop after S                --only S  run S alone, done or not
 A map stage whose block in the pipeline config has "enabled": false is not run
 (e.g. a coop run: "05_anchor": {"enabled": false}, the boards as the mapping
-pass placed them; "02b_scan_to_map": {"enabled": false} skips the comparison
-and its seed map).
+pass placed them).
 
 --config  the pipeline config (default: the one in map_stages/ whose dataset is
           this pass, e.g. pipeline_config_survey_1.json; a run needs its own,
@@ -189,7 +190,10 @@ def plan_steps(raw, cfg):
     applies = {s: not run for s in MAPPING}
     applies.update({s: run for s in RUN if s not in MAPPING})
     applies["time_check"] = True
-    applies["01_union"] = not run and fusion == "tsdf"
+    compare = bool(P.cfg.get("comparisons", False))       # the paper's, not every pass's
+    for s_ in ("01_seed", "02b_s2m"):
+        applies[s_] = not run and compare
+    applies["01_union"] = not run and compare and fusion == "tsdf"
     applies.update({"05_anchor": True, "06_cut": not run and (cut.get("floor") is not None
                                                              or cut.get("ceil") is not None),
                     "07_cameras": True, "08_tfs": True, "09_cloud": run, "10_poses": True})

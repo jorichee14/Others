@@ -138,8 +138,10 @@ def report(argv=None):
     print(f"reference: {ref_file} ({len(tr)} poses, {trajs.path_length(Tr):.1f} m)\n")
     for key, label, f in rows:
         if not os.path.isfile(f):
-            print(f"{label}: none at {f}")
-            report["trajectories"].append(dict(key=key, label=label, file=f, missing=True))
+            print(f"{label}: none at {f}" + (" (a comparison: \"comparisons\": true)"
+                                             if key == "glim_s2m" else ""))
+            if key != "glim_s2m":
+                report["trajectories"].append(dict(key=key, label=label, file=f, missing=True))
             continue
         t, T = load_traj(f)
         r = dict(key=key, label=label, file=f, poses=int(len(t)), path_m=trajs.path_length(T))
@@ -165,8 +167,10 @@ def report(argv=None):
     clouds = {}
     for key, label, f in maps:
         if not os.path.isfile(f):
-            print(f"map {label}: none at {f}")
-            report["maps"][key] = dict(label=label, file=f, missing=True)
+            print(f"map {label}: none at {f}" + (" (a comparison: \"comparisons\": true)"
+                                                 if key == "union" and fusion == "tsdf" else ""))
+            if not (key == "union" and fusion == "tsdf"):
+                report["maps"][key] = dict(label=label, file=f, missing=True)
             continue
         print(f"map {label}: {f} ...")
         m, clouds[key] = map_stats(f, pos, a.samples)
