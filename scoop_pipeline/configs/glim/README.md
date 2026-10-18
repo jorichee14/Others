@@ -33,3 +33,10 @@ configs/glim/variants/*/` runs each on the mapping bag and scores it against
 the reference trajectory (ATE / RPE, board loop closure). The GPU modules
 need the CUDA image, `koide3/glim_ros2:humble_cuda12.2` plus the MCAP storage
 plugin (`koide3/glim_ros2:humble_cuda12.2-mcap`, the sweep's default).
+
+`imu_time_offset` (config_ros.json) is set per robot from a measurement, not
+carried over: mobile_2's is -0.011 s, its Ouster IMU running 11 ms behind
+its LiDAR (`analysis/odom/imu_vs_traj.py` on 20261015: 8 / 12 / 14 ms against
+the BA, 02 and reference trajectories). Making mobile_2's folder again from
+mobile_1's with glim_config.py resets it; set it back. mobile_1's is still 0
+until measured the same way on one of its passes.
