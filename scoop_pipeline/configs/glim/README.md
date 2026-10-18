@@ -25,3 +25,11 @@ python processing/glim_config.py configs/glim/mobile_1 configs/glim/mobile_2 \
 
 So a change to GLIM's tuning goes into mobile_1's folder and is carried over
 by making mobile_2's again.
+
+`variants/` holds mobile_2 with a few settings changed (GPU modules; finer
+sub-mapping and global registration; shorter submaps), to choose the config
+by measurement: `processing/glim_sweep.sh <pipeline config> <reference traj>
+configs/glim/variants/*/` runs each on the mapping bag and scores it against
+the reference trajectory (ATE / RPE, board loop closure). The GPU modules
+need the CUDA image, `koide3/glim_ros2:humble_cuda12.2` plus the MCAP storage
+plugin (`koide3/glim_ros2:humble_cuda12.2-mcap`, the sweep's default).
