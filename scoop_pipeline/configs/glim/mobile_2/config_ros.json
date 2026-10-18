@@ -50,7 +50,7 @@
     // Points config
     "keep_raw_points": false,
     // IMU config
-    "imu_time_offset": -0.011, // the Ouster IMU runs 11 ms behind its LiDAR (analysis/odom/imu_vs_traj.py, 20261015: 8 / 12 / 14 ms against BA / 02 / reference)
+    "imu_time_offset": 0.0,
     "points_time_offset": 0.0,
     "acc_scale": 0.0, // Auto-detect if zero
     // TF config

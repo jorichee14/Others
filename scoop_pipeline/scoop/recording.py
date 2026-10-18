@@ -260,13 +260,36 @@ def _traj_summary(path: Path) -> dict:
             "path_length_m": round(float(np.linalg.norm(np.diff(xyz, axis=0), axis=1).sum()), 3)}
 
 
+def shift_traj(src: Path, dst: Path, dt: float) -> None:
+    """A TUM trajectory with every stamp moved by ``dt`` s, the poses as they
+    are (text kept; stamps in decimal, so a 1.8e9 s stamp gains no float
+    rounding)."""
+    from decimal import Decimal
+    step = Decimal(repr(float(dt)))
+    lines = []
+    for ln in Path(src).read_text().splitlines():
+        f = ln.split()
+        if f and not ln.lstrip().startswith("#"):
+            f[0] = format(Decimal(f[0]) + step, ".9f")
+            ln = " ".join(f)
+        lines.append(ln)
+    Path(dst).write_text("\n".join(lines) + "\n")
+
+
 def export_glim(rec: "Recording", settings: dict, log=print) -> Optional[Path]:
     """GLIM's results into processed/<date>/<pass>/odometry/<machine>/, where
     the map stages read this robot's trajectory: traj_lidar.txt (the poses of
     the cloud's frame, TUM), traj_imu.txt when GLIM wrote one, glim_config/
     (the config it ran with) and glim.yaml (bag, config, image, and the
     trajectory's poses / span / rate / length). Its dump with the map stays
-    in work/.../glim/. Returns the folder, or None for another layout."""
+    in work/.../glim/. Returns the folder, or None for another layout.
+
+    glim.pose_time_offset (s, per machine): traj_lidar.txt's stamps are
+    moved by it, so that the pose given for t is the scans' pose at t. On
+    mobile_2 GLIM's pose for stamp t is the scans' pose at t + 46 ms
+    (20261015: heading error against the BA reference follows the yaw rate
+    as 45.8 ms, r 0.92; GLIM's scans are thinnest at +46 ms; unchanged with
+    an IMU time offset in GLIM). The dump keeps GLIM's own stamps."""
     out = rec.odometry
     if out is None:
         log(f"    (glim: {rec.work} is not data/work/<date>/<pass>/<machine>; not exported)")
@@ -274,9 +297,13 @@ def export_glim(rec: "Recording", settings: dict, log=print) -> Optional[Path]:
     dump = rec.step("glim")
     out.mkdir(parents=True, exist_ok=True)
     files = {}
+    offset = float(settings["glim"].get("pose_time_offset") or 0.0)
     for name in ("traj_lidar.txt", "traj_imu.txt"):
         if (dump / name).is_file():
-            shutil.copy2(dump / name, out / name)
+            if name == "traj_lidar.txt" and offset:
+                shift_traj(dump / name, out / name, offset)
+            else:
+                shutil.copy2(dump / name, out / name)
             files[name] = _traj_summary(out / name)
     cfg = glim_config_dir(settings)
     if cfg.is_dir():
@@ -285,12 +312,14 @@ def export_glim(rec: "Recording", settings: dict, log=print) -> Optional[Path]:
     info = {"bag": str(rec.step("retimed")), "dump": str(dump),
             "config": str(cfg), "image": settings["glim"].get("image"),
             "frame": "the points' frame (traj_lidar.txt: T_world_lidar, TUM: t x y z qx qy qz qw)",
+            "pose_time_offset_s": offset,
             "files": files}
     with open(out / "glim.yaml", "w") as fh:
         yaml.safe_dump(info, fh, sort_keys=False)
     tl = files.get("traj_lidar.txt", {})
     log(f"    glim -> {out}: {tl.get('poses', 0)} poses over {tl.get('duration_s')} s "
-        f"({tl.get('rate_hz')} Hz), {tl.get('path_length_m')} m")
+        f"({tl.get('rate_hz')} Hz), {tl.get('path_length_m')} m"
+        + (f"; stamps moved {offset * 1000:+.1f} ms (glim.pose_time_offset)" if offset else ""))
     return out
 
 
