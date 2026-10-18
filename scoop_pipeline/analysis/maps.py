@@ -950,3 +950,178 @@ def main_scans(argv=None):
     if not said:
         print("   no timing, deskew or drift signature between these scans: the wall "
               "thickness of the map comes from something they do not sample")
+
+
+# ============================================================================
+# distances: control distances measured on site against the map
+# ============================================================================
+DIST_DOC = r'''Control distances: wall-to-wall lengths measured on site with a laser
+meter, against the map.
+
+  python3 check.py distances <map.pcd> <distances.csv> [--picks picks.txt]
+      [--radius 0.3]
+
+distances.csv, one row per distance (a header row is fine):
+  name, measured_m [, ax, ay, az, bx, by, bz]
+with the two walls' picked points (the map's frame) on the row, or without
+them from --picks: CloudCompare's picked points saved as ASCII, two per
+distance in the csv's order (wall A, then wall B); the last three numbers of
+each line are taken as x y z.
+
+Pick A on the wall where the meter was held and B where its dot landed,
+within a hand's width: the picks only say WHICH wall and WHERE along it.
+Each wall is the plane through the map's points within --radius of its
+pick that passes the pick and holds the most of them (RANSAC); other
+surfaces in the ball (a floor, a door frame) and the strip where they meet
+the wall are left out, so they cannot tilt it; then
+
+  map distance  from A's plane to B's centre along A's normal and from B's
+                to A's along B's, averaged: the perpendicular distance a
+                laser meter reads at its minimum
+  error         map - measured, mm, and per metre of distance
+  flags         the two walls not parallel (> 2 deg: the measured line was
+                not perpendicular to both), or a pick on no flat wall
+
+At the end: the mean and RMS error and the scale that fits them all
+(map = s x measured), to set against the meter's own 1.5-3 mm.
+'''
+
+
+def _ransac(Q, rng, keep, tries=300, band=0.03):
+    """The plane (point, unit normal) with the most points of Q within band,
+    among those keep(point, normal) accepts; None when there is none."""
+    best, best_n = None, 0
+    for _ in range(tries):
+        a, b, c = Q[rng.choice(len(Q), 3, replace=False)]
+        n = np.cross(b - a, c - a)
+        if np.linalg.norm(n) < 1e-9:
+            continue
+        n /= np.linalg.norm(n)
+        if not keep(a, n):
+            continue
+        k = int((np.abs((Q - a) @ n) < band).sum())
+        if k > best_n:
+            best, best_n = (a, n), k
+    return best
+
+
+def wall_plane(tree, P, p, r, seed=0):
+    """(centre, unit normal, thickness m, points) of the wall the pick p is
+    on, or None when there is no flat surface there. RANSAC on the map's
+    points within r of p: the plane that passes within 5 cm of the pick (it
+    was clicked on the wall) and holds the most points within 3 cm. Other
+    surfaces in the ball (a floor, a door frame: planes more than 30 deg off
+    it) and the strip where they meet it are taken out, then the wall is
+    fitted to what is left by least squares."""
+    idx = tree.query_ball_point(p, r)
+    if len(idx) < MIN_PTS:
+        return None
+    Q = P[idx]
+    rng = np.random.default_rng(seed)
+    w = _ransac(Q, rng, lambda a, n: abs((p - a) @ n) < 0.05)
+    if w is None:
+        return None
+    on = np.abs((Q - w[0]) @ w[1]) < 0.03
+    rest = Q[~on]
+    for _ in range(2):                    # up to two other surfaces in the ball
+        if len(rest) < MIN_PTS:
+            break
+        o = _ransac(rest, rng, lambda a, n: abs(n @ w[1]) < np.cos(np.radians(30)))
+        if o is None or (np.abs((rest - o[0]) @ o[1]) < 0.03).sum() < MIN_PTS:
+            break
+        on &= np.abs((Q - o[0]) @ o[1]) >= 0.03
+        rest = rest[np.abs((rest - o[0]) @ o[1]) >= 0.03]
+    Q = Q[on]
+    if len(Q) < MIN_PTS:
+        return None
+    c = Q.mean(0)
+    _, sv, vt = np.linalg.svd(Q - c, full_matrices=False)
+    if sv[1] < 1e-9 or sv[2] / sv[1] > 0.3:
+        return None
+    n = vt[2]
+    return c, n, spread((Q - c) @ n), len(Q)
+
+
+def wall_distance(A, B):
+    """(distance m, angle between the walls deg) of two wall_plane()s."""
+    (ca, na, *_), (cb, nb, *_) = A, B
+    na = na if (cb - ca) @ na > 0 else -na
+    nb = nb if (ca - cb) @ nb > 0 else -nb
+    dist = 0.5 * ((cb - ca) @ na + (ca - cb) @ nb)
+    return float(dist), float(np.degrees(np.arccos(min(1.0, abs(na @ nb)))))
+
+
+def read_distances(path, picks=None):
+    """[(name, measured m, a xyz, b xyz)] from the csv (and the picks file)."""
+    import csv
+    import re
+    rows = []
+    with open(path) as fh:
+        for row in csv.reader(fh):
+            row = [x.strip() for x in row if x.strip()]
+            if len(row) < 2:
+                continue
+            try:
+                vals = [float(x) for x in row[1:]]
+            except ValueError:
+                continue                  # the header
+            rows.append((row[0], vals))
+    pts = []
+    if picks:
+        for ln in open(picks):
+            nums = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", ln)
+            if len(nums) >= 3:
+                pts.append([float(x) for x in nums[-3:]])
+    out = []
+    for i, (name, vals) in enumerate(rows):
+        if len(vals) >= 7:
+            a, b = vals[1:4], vals[4:7]
+        elif len(pts) >= 2 * i + 2:
+            a, b = pts[2 * i], pts[2 * i + 1]
+        else:
+            raise SystemExit(f"{name}: no picked points (give ax..bz on its row, or --picks "
+                             f"with two points per distance: {len(pts)} points for {len(rows)} rows)")
+        out.append((name, vals[0], np.array(a, float), np.array(b, float)))
+    return out
+
+
+def main_distances(argv=None):
+    ap = argparse.ArgumentParser(description=DIST_DOC,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("map")
+    ap.add_argument("distances")
+    ap.add_argument("--picks")
+    ap.add_argument("--radius", type=float, default=0.3)
+    a = ap.parse_args(argv)
+    rows = read_distances(a.distances, a.picks)
+    P = load(a.map)
+    tree = cKDTree(P)
+    print(f"{a.map}: {len(P)} points; {len(rows)} control distances\n")
+    print(f"  {'name':14s}{'measured m':>11s}{'map m':>10s}{'error mm':>10s}{'mm/m':>7s}"
+          f"{'angle':>7s}{'walls cm':>11s}   flags")
+    meas, mapd = [], []
+    for name, m, pa, pb in rows:
+        A, B = wall_plane(tree, P, pa, a.radius), wall_plane(tree, P, pb, a.radius)
+        if A is None or B is None:
+            which = " and ".join(w for w, x in (("A", A), ("B", B)) if x is None)
+            print(f"  {name:14s}{m:11.3f}{'-':>10s}{'':10s}{'':7s}{'':7s}{'':11s}   "
+                  f"no flat wall at {which}'s pick")
+            continue
+        d, ang = wall_distance(A, B)
+        err = (d - m) * 1000
+        flag = "walls not parallel" if ang > 2.0 else ""
+        print(f"  {name:14s}{m:11.3f}{d:10.3f}{err:+10.1f}{err / m:+7.2f}{ang:6.1f}d"
+              f"{A[2] * 100:5.1f}/{B[2] * 100:<4.1f}   {flag}")
+        if ang <= 2.0:
+            meas.append(m)
+            mapd.append(d)
+    if not meas:
+        raise SystemExit("\nno distance measured: check the picks (the map's frame, on the walls)")
+    meas, mapd = np.array(meas), np.array(mapd)
+    e = (mapd - meas) * 1000
+    s = float(meas @ mapd / (meas @ meas))
+    print(f"\n{len(meas)} distances ({meas.min():.2f}-{meas.max():.2f} m): error mean {e.mean():+.1f} mm, "
+          f"RMS {np.sqrt(np.mean(e ** 2)):.1f} mm, max |{np.abs(e).max():.1f}| mm")
+    print(f"scale map / measured {s:.5f} ({(s - 1) * 1e6:+.0f} ppm = {(s - 1) * 100:+.3f} %); "
+          f"after it, RMS {np.sqrt(np.mean(((mapd - s * meas) * 1000) ** 2)):.1f} mm")
+    print("(walls: each wall's thickness in the map, p95-p5, around its pick)")

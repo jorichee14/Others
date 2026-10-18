@@ -64,6 +64,9 @@ check.py <command>   every map and trajectory check, one command (check.py -h;
     walls   <config>        the map's wall spots with the scans placed by a trajectory:
                             one scan (the sensor), 1 s ... whole run, the map
     maps    <A> <B>         completeness / accuracy of map B against map A
+    distances <map> <csv>   control distances (wall to wall, laser meter) against
+                            the map: each wall fitted around a picked point (RANSAC),
+                            error per distance, RMS, scale
     scans   <config>        single scans and pairs: noise floor, deskew, time offset, drift
     trajs   <config>        a pass's trajectories: ATE / RPE against --ref, heading vs
                             turning, loop closures
@@ -203,6 +206,9 @@ tests/               self-tests, no real bag needed
                      back to the truth, planes back to the noise
   test_clean_pass.py  clean_pass on a made-up pass: current results kept, a stale
                      seed map, a cache, an old map folder and a GLIM side run moved
+  test_distances.py  check.py distances on a synthetic room: 8 m and 6 m to 0.1 mm
+                     from rough picks (one at the floor), a pick in the air
+                     reported, a map scaled 1.002 read as +2000 ppm
   test_pose_time_check.py  check.py time: a corrected GLIM on time, one 30 ms
                      late flagged with the offset to set; check.py report's rows
   test_compare_trajs.py  check.py trajs on an offset and a drifting trajectory
