@@ -187,7 +187,8 @@ tests/               self-tests, no real bag needed
                      mapped twice, smear
   test_wall_build.py  wall_build on a synthetic room: clean, and a 2 % range error
   test_bundle_adjust.py  02b on a synthetic room driven twice with drift: poses
-                     back to the truth, planes back to the noise
+                     back to the truth, planes back to the noise; the timing
+                     check on time there and flagging an input 30 ms late
   test_compare_trajs.py  compare_trajs on an offset and a drifting trajectory
   test_tsdf.py       01's TSDF fusion against its voxel union on a smeared synthetic
                      room: thinner, and its surfaces where the true ones are

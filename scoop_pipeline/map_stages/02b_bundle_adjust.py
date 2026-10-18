@@ -39,6 +39,9 @@ poses as the only unknowns.
   5. every pose of the input moved by its keyframes' correction, interpolated
      in time between keyframes -> traj_lidar_ba.txt; its loop closure on the
      boards against GLIM's (loop_check).
+  6. timing: whether the input's pose time is its scans' (timing_check), so
+     every mapping pass re-checks glim.pose_time_offset; in the printout
+     ([4]) and in <output>_report.json.
 
 The plane thickness printed (5-95 % equivalent, 3.29 sigma) is the
 quantity analysis/mapping/map_quality.py measures, on the BA's planes.
@@ -419,6 +422,42 @@ def apply_corrections(times, T_in, anchor, R_new, t_new):
 
 
 # --------------------------------------------------------------------- main
+TIMING_MS, TIMING_R = 10.0, 0.5    # flag the input's pose time beyond these
+
+
+def timing_check(inp, times, T_in, T_out):
+    """Is the input's pose time on its scans'? The adjusted poses are fixed
+    by the scans, so a pose stamped dt off in the input shows as a heading
+    error against them that follows the turning, e = w dt
+    (compare_trajs.heading_vs_turning). Flagged when |dt| >= 10 ms and
+    r >= 0.5 (20261015: GLIM as output 45.8 ms, r 0.92; with the 46 ms
+    export correction 3.9 ms, r 0.23). The correction the input was exported
+    with is read from glim.yaml beside it; the right one is it + dt."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "analysis", "odom"))
+    from compare_trajs import heading_vs_turning
+    h = heading_vs_turning(times, T_in, times, T_out)
+    applied = 0.0
+    meta = os.path.join(os.path.dirname(inp), "glim.yaml")
+    if os.path.isfile(meta):
+        for ln in open(meta):
+            if ln.startswith("pose_time_offset_s:"):
+                applied = float(ln.split(":", 1)[1] or 0)
+    dt, r = h.get("dt_ms", 0.0), h.get("r_timing", 0.0)
+    h.update(applied_offset_ms=applied * 1000,
+             on_time=not (abs(dt) >= TIMING_MS and r >= TIMING_R))
+    print(f"\n[4] timing: the input's heading error against the result follows the turning "
+          f"as {dt:+.1f} ms (r {r:.2f}); input exported with pose_time_offset "
+          f"{applied * 1000:.0f} ms")
+    if h["on_time"]:
+        print("    -> on time: the input's poses are its scans' (keep the offset)")
+    else:
+        print(f"    -> OFF by {dt:+.0f} ms: set glim.pose_time_offset to "
+              f"{applied + dt / 1000:.3f} in configs/recording.yaml for this machine, "
+              "re-export GLIM (processing/glim_check.py) and run 02b again")
+    return h
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -545,9 +584,14 @@ def main():
 
     T_out = apply_corrections(times, T_in, anchor, R, t)
     write_traj(out, times, T_out)
+    try:
+        timing = timing_check(inp, times, T_in, T_out)
+    except Exception as e:                     # the poses stand either way
+        timing = {"error": f"{type(e).__name__}: {e}"}
+        print(f"\n(timing not checked: {timing['error']})")
     with open(os.path.splitext(out)[0] + "_report.json", "w") as fh:
         json.dump(dict(input=inp, output=out, keyframes=K, settings={k: c[k] for k in c},
-                       rounds=history), fh, indent=1)
+                       rounds=history, timing=timing), fh, indent=1)
     d = np.linalg.norm(T_out[:, :3, 3] - T_in[:, :3, 3], axis=1) * 100
     print(f"\nwrote {out}: {len(times)} poses, moved median {np.median(d):.1f} cm, "
           f"p95 {np.percentile(d, 95):.1f} cm, max {d.max():.1f} cm")

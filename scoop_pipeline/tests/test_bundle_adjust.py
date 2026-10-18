@@ -127,6 +127,14 @@ def main():
             print("  ok    " + line)
             for ln in th:
                 print("        " + ln.strip())
+        # the timing check: a drifted input with no time offset is on time
+        rep = json.load(open(os.path.join(d, "out", "traj_lidar_ba_report.json")))
+        tm = rep.get("timing", {})
+        line = f"timing check: {tm.get('dt_ms', float('nan')):+.1f} ms, r {tm.get('r_timing', float('nan')):.2f}"
+        if tm.get("on_time") is not True:
+            fails.append(line + " flagged, the input has no time offset: " + json.dumps(tm))
+        else:
+            print("  ok    " + line + ", on time")
         # the cache: a second run reads no bag
         p2 = subprocess.run([sys.executable, os.path.join(STAGES, "02b_bundle_adjust.py"), cp,
                              "--rounds", "1"], capture_output=True, text=True, cwd=STAGES)
@@ -136,6 +144,22 @@ def main():
             print("  ok    second run took the keyframes from the cache")
     finally:
         shutil.rmtree(d, ignore_errors=True)
+    # the timing check flags an input whose poses are 30 ms late
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ba", os.path.join(STAGES, "02b_bundle_adjust.py"))
+    ba = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ba)
+    t = np.arange(0, 300, 0.1)
+    yaw = lambda tt: 0.8 * np.sin(tt / 3.0) + 0.3 * np.sin(tt / 1.3)
+    poses = lambda ps: np.array([np.block([[Rotation.from_euler("z", a).as_matrix(), np.zeros((3, 1))],
+                                           [np.zeros((1, 3)), np.ones((1, 1))]]) for a in ps])
+    tm = ba.timing_check(os.path.join(tempfile.gettempdir(), "none", "traj.txt"),
+                         t, poses(yaw(t + 0.03)), poses(yaw(t)))
+    line = f"timing check, input 30 ms late: {tm.get('dt_ms', float('nan')):+.1f} ms, r {tm.get('r_timing', 0):.2f}"
+    if tm.get("on_time") is not False or abs(tm["dt_ms"] - 30) > 3:
+        fails.append(line + " not flagged as 30 ms")
+    else:
+        print("  ok    " + line + ", flagged")
     for f in fails:
         print("  FAIL  " + f)
     print("bundle adjust ok" if not fails else "bundle adjust FAILED")
