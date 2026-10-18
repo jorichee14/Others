@@ -76,6 +76,17 @@ def main():
             line = next((ln for ln in out.splitlines() if ln.strip().startswith(step + " ")), "")
             if line.split()[1:2] != [state]:
                 f.append("run --status: %s is %r, not %s" % (step, line, state))
+        # one robot alone, its own bag in its machine folder: nothing to merge
+        c = json.load(open(cfg))
+        c["dataset"] = dict(c["dataset"], machine="mobile_1", bag=os.path.join(
+            data, "work", "20260101", "survey_1", "mobile_1", "x_mobile_1_retimed"))
+        own = cfg[:-5] + "_own.json"
+        json.dump(c, open(own, "w"))
+        rc, out = runner(raw, "--config", own, "--status")
+        line = next((ln for ln in out.splitlines() if ln.strip().startswith("merge ")), "")
+        if line.split()[1:2] != ["-"] or "the merge writes" in out:
+            f.append("one robot's own bag: merge is %r, not -" % line)
+        os.remove(own)
         c = json.load(open(cfg))
         c["05_anchor"] = {"enabled": False}
         off = cfg[:-5] + "_off.json"

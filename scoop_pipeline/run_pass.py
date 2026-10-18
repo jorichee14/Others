@@ -145,20 +145,25 @@ def plan_steps(raw, cfg):
     import pass_tf
     steps = []
     mb = merged_bag(raw)
+    P = pass_tf.load_pipeline(cfg) if cfg else None
+    db = os.path.normpath(os.path.expanduser(P.dataset["bag"])) if P else None
+    # one robot alone: the config reads its own processed bag in its machine
+    # folder (work/<date>/<pass>/<machine>/), and there is nothing to merge
+    own = bool(P and os.path.basename(os.path.dirname(db)) == P.machine)
     # once merged, the processed bags may be gone: processing is not redone for them
-    have = mb is not None and os.path.isdir(mb)
-    steps.append(("process", mb is not None, have, "%d machine folder(s)" % len(machines(raw))
+    have = os.path.isdir(db) if own else (mb is not None and os.path.isdir(mb))
+    steps.append(("process", mb is not None or own, have, "%d machine folder(s)" % len(machines(raw))
                   if os.path.isdir(raw) else "no %s" % raw,
                   [py(os.path.join(ROOT, "processing", "process_recording.py"), m)
                    for m in machines(raw)]))
-    steps.append(("merge", mb is not None, have, mb or "no bags below %s" % raw,
+    steps.append(("merge", mb is not None and not own, have,
+                  mb or "no bags below %s" % raw,
                   [py(os.path.join(ROOT, "processing", "merge_session.py"), raw)]))
     if not cfg:
         if mb:
             steps.append(comms_step(mb, None))
             steps.append(csi_clean_step(mb, None))
         return steps, None
-    P = pass_tf.load_pipeline(cfg)
     run = bool(P.reference)
     st = lambda name: os.path.join(STAGES, name)                     # noqa: E731
     tag = P.tag
@@ -233,8 +238,7 @@ def plan_steps(raw, cfg):
            else MAPPING + [s for s in RUN if s != "time_check"])
     for s in seq + ["05_anchor", "06_cut", "07_cameras", "08_tfs", "09_cloud", "10_poses"]:
         steps.append((s, applies[s], done[s], out[s], cmds[s]))
-    db = P.dataset["bag"]
-    if mb and os.path.normpath(db) != os.path.normpath(mb):
+    if mb and not own and db != os.path.normpath(mb):
         print("note: dataset.bag of %s is %s; the merge writes %s" % (cfg, db, mb))
     steps.append(("finalize", True, lambda: finalized(db, out["10_poses"]), db,
                   lambda dry: finalize(db, out["10_poses"], dry)))
