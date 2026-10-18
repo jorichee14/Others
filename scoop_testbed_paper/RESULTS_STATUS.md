@@ -17,6 +17,25 @@ moving, contended channel). Earlier pass at the same site: `coop2_0828`.
 | Board detector against the mapping pipeline | 8.1 mm / 0.66° ZED, 8.3 mm / 0.58° RealSense | `board_detect.py` |
 | Boards posed from the mapping session; infra camera posed through the shared board | done | `05_anchor.py`, `07` |
 
+### Mapping pass 20261015 (`mobile_2`, 1387 s, 544 m): reference with bundle adjustment and TSDF
+
+Method: `supp/refmap_method.tex` (supplementary); main-text version `sections/refmap_main.tex`
+(replaces the body of Sec. V-A); tables `tables/refmap_stages.tex`, `tables/glim_vs_ref.tex`.
+
+| Result | Value | Tool |
+|---|---|---|
+| Board loop closure, GLIM / scan-to-map / scan-to-map + BA / GLIM + BA | 10.8 / 13.7 / 12.1 / 15.1 mm (noise 6-8 mm, none significant) | `loop_check.py` |
+| TSDF map thickness, walls / floors: GLIM poses | 14.3 / 3.6 cm, 2.0 % doubled | `map_quality.py` |
+| TSDF map thickness, walls / floors: scan-to-map + BA poses | 7.4 / 1.6 cm, 0.7 % doubled | `map_quality.py` |
+| Union vs TSDF, same poses (scan-to-map + BA) | walls 12.5 vs 7.4 cm, floors 3.6 vs 1.6 cm; TSDF 98 % complete | `map_quality.py`, `compare_maps.py` |
+| Scans as placed, walls, whole run: scan-to-map + BA / GLIM + BA | 8.4 / 8.8 cm (one scan 4.6, 1 s 6.5) | `wall_build.py` |
+| BA from two starts (GLIM, scan-to-map) agree | 0.7 cm (median, after alignment), 0.1 deg | `compare_trajs.py` |
+| GLIM against GLIM + BA | 5.3 cm median, 0.42 deg; heading error ~0.6 deg within 10 s, not growing | `compare_trajs.py` |
+
+Still lacking: the TSDF map from GLIM + BA (the reference) with its thickness and doubled share;
+ATE / RPE rows (`compare_trajs.py --ref ba_glim`); scans as placed for GLIM alone at the same spots;
+control distances.
+
 ### Survey (`survey_1`)
 
 | Result | Value | Tool |

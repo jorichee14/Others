@@ -49,7 +49,8 @@ def main():
         out = os.path.join(d, "r.json")
         r = subprocess.run([sys.executable, os.path.join(ROOT, "analysis", "odom", "compare_trajs.py"),
                             cp, "--traj", f"glim={d}/glim.txt", "--traj", f"02={d}/o2.txt",
-                            "--traj", f"ba={d}/ba.txt", "--out", out, "--plot", f"{d}/p.png"],
+                            "--traj", f"ba={d}/ba.txt", "--out", out, "--plot", f"{d}/p.png",
+                            "--ref", "glim"],
                            capture_output=True, text=True)
         if r.returncode != 0:
             raise AssertionError(r.stdout + r.stderr)
@@ -62,6 +63,8 @@ def main():
         r1, r100 = dr["1s"]["translation_cm"]["median"], dr["100s"]["translation_cm"]["median"]
         if not (r1 < 0.2 and r100 > 5 * r1 and r100 > 1.0):
             fails.append(f"drift pair relative 1 s {r1} / 100 s {r100}")
+        if "ATE cm" not in r.stdout or "02 & 0.0 & 0.00" not in r.stdout:
+            fails.append("no --ref table, or the offset trajectory's ATE is not 0 after the fit")
         if not os.path.isfile(f"{d}/p.png") and "matplotlib is not installed" not in r.stdout:
             fails.append("no plot")
         if not fails:

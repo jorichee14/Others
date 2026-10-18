@@ -27,6 +27,12 @@ For every pair (A, B), B interpolated at A's stamps:
 and per trajectory: path length, and the loop closure on the boards from
 <traj>_loop_closure.json (GLIM: glim_loop_closure.json) when it is there.
 --plot draws the top view and |p_A - p_B| over time.
+
+--ref NAME  every other trajectory against this one in the usual metrics
+            (Sturm et al., IROS 2012), as a table and as LaTeX rows:
+              ATE  RMSE of the position (and rotation) error after the best
+                   rigid fit of the trajectory onto the reference
+              RPE  RMSE of the error of the motion over 1 s, 10 s, 100 s
 """
 import argparse
 import itertools
@@ -72,7 +78,7 @@ def rigid_fit(src, dst):
 def stats(v):
     v = np.asarray(v)
     return dict(median=float(np.median(v)), p95=float(np.percentile(v, 95)),
-                max=float(v.max())) if len(v) else None
+                max=float(v.max()), rmse=float(np.sqrt(np.mean(v ** 2)))) if len(v) else None
 
 
 def path_length(T):
@@ -123,9 +129,11 @@ def compare(a, b, ta, TA, tb, TB):
     dR = rot_deg(np.einsum("nji,njk->nik", A[:, :3, :3], B[:, :3, :3]))
     R, tt = rigid_fit(B[:, :3, 3], A[:, :3, 3])
     dp_fit = np.linalg.norm(A[:, :3, 3] - (B[:, :3, 3] @ R.T + tt), axis=1)
-    out = dict(pair=f"{a} vs {b}", poses=int(len(t)),
+    dR_fit = rot_deg(np.einsum("nji,njk->nik", A[:, :3, :3], R @ B[:, :3, :3]))
+    out = dict(pair=f"{a} vs {b}", a=a, b=b, poses=int(len(t)),
                position_cm=stats(dp * 100), vertical_cm=stats(dz * 100),
                rotation_deg=stats(dR), after_rigid_fit_cm=stats(dp_fit * 100),
+               after_rigid_fit_deg=stats(dR_fit),
                rigid_fit=dict(t_cm=(tt * 100).round(2).tolist(),
                               deg=float(rot_deg(R[None])[0])), relative={})
     for d in DELTAS:
@@ -145,6 +153,7 @@ def main():
     ap.add_argument("--traj", action="append", default=[], metavar="NAME=FILE")
     ap.add_argument("--plot")
     ap.add_argument("--out")
+    ap.add_argument("--ref", help="name of the reference trajectory (e.g. ba_glim)")
     a = ap.parse_args()
 
     P = load_pipeline(a.config)
@@ -202,6 +211,34 @@ def main():
     for r in results:
         print(f"  {r['pair']:14s}" + "".join(
             f"{fmt(r['relative'][f'{d:g}s']['rotation_deg'], 3):>24s}" for d in DELTAS))
+
+    if a.ref:
+        if a.ref not in trajs:
+            raise SystemExit(f"--ref {a.ref}: no such trajectory ({', '.join(trajs)})")
+        print(f"\nagainst the reference '{a.ref}' (RMSE; ATE after the best rigid fit):")
+        hdr = (f"  {'trajectory':10s}{'ATE cm':>8s}{'ATE deg':>9s}"
+               + "".join(f"{f'RPE {d:g}s cm':>13s}{'deg':>7s}" for d in DELTAS)
+               + f"{'path m':>9s}")
+        print(hdr)
+        rows = []
+        for name in trajs:
+            if name == a.ref:
+                continue
+            r = next(x for x in results if {x["a"], x["b"]} == {name, a.ref})
+            rel = [(r["relative"][f"{d:g}s"]["translation_cm"]["rmse"],
+                    r["relative"][f"{d:g}s"]["rotation_deg"]["rmse"]) for d in DELTAS]
+            ate = (r["after_rigid_fit_cm"]["rmse"], r["after_rigid_fit_deg"]["rmse"])
+            path = path_length(trajs[name][1])
+            print(f"  {name:10s}{ate[0]:8.2f}{ate[1]:9.3f}"
+                  + "".join(f"{x:13.2f}{y:7.3f}" for x, y in rel) + f"{path:9.1f}")
+            rows.append(f"{name} & {ate[0]:.1f} & {ate[1]:.2f} & "
+                        + " & ".join(f"{x:.1f} / {y:.2f}" for x, y in rel)
+                        + f" & {path:.1f} \\\\")
+        print(f"  ({a.ref}: path {path_length(trajs[a.ref][1]):.1f} m)")
+        print("  LaTeX rows (trajectory & ATE cm & ATE deg & RPE " +
+              " & ".join(f"{d:g} s cm / deg" for d in DELTAS) + " & path m):")
+        for ln in rows:
+            print("    " + ln)
 
     out = a.out or os.path.join(os.path.dirname(trajs[next(iter(trajs))][2]), "traj_compare.json")
     with open(out, "w") as fh:
