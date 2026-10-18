@@ -1,0 +1,12 @@
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figs/fig_refpipeline.jpg}
+\caption{Reference pipeline. Top: the mapping session, run once per
+site, builds and refines the map, poses the boards in it
+(Eq.~\eqref{eq:board_chain}), and places the infrastructure cameras
+through the boards (Eq.~\eqref{eq:infra_camera_chain}). Bottom: each
+sequence is registered into the frozen map, by scan-to-map ICP for the
+LiDAR agents and by odometry with ICP and board factors for the RGB-D
+agent, and the poses are exported in the site frame.}
+\label{fig:refpipeline}
+\end{figure*}

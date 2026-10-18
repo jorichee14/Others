@@ -1,0 +1,205 @@
+% Reference map: full method (supplementary). \input from supplementary.tex,
+% section "Reference Map and Error Distributions". Code: scoop_pipeline/
+% map_stages/02b_bundle_adjust.py (bundle adjustment), 01_build_map.py
+% (fusion: tsdf), analysis/mapping/{map_quality,wall_build,compare_maps}.py,
+% analysis/odom/compare_trajs.py (quality measures).
+
+\subsection{Overview}
+\label{sec:supp_refmap}
+The reference is built from one mapping session of the LiDAR robot in five
+steps: (i) the scans are placed with a trajectory, each point at its own
+time; (ii) a LiDAR-inertial SLAM solution \cite{glim} gives the initial
+trajectory; (iii) plane bundle adjustment moves all poses jointly until the
+planar surfaces seen from several places are as thin as the scans allow;
+(iv) the scans are fused into a truncated signed distance field (TSDF) and
+the map is its zero-level surface, with moving objects removed; (v) the
+fiducial boards are posed in the map (Eq.~(1) of the main paper). The
+quality measures of Sec.~\ref{sec:supp_quality} are computed on the
+intermediate and final products and never enter the estimation.
+
+Notation: $T=(R,\mathbf t)\in SE(3)$ maps the LiDAR frame to the world,
+$\mathbf x$ is a point in the LiDAR frame, $\mathrm{Exp}/\mathrm{Log}$ map
+between $\mathbb R^3$ and $SO(3)$, $[\mathbf a]_\times$ is the
+cross-product matrix, $\mathbf e_z$ the vertical.
+
+\subsection{Scan Placement}
+A sweep lasts \SI{0.1}{\second}; point $j$ is measured at $t_j$. Its world
+position is $\mathbf p_j = T(t_j)\,\mathbf x_j$, with $T(t)$ interpolated
+between trajectory poses (spherical linear interpolation of the rotation,
+linear of the translation), evaluated at 100 time bins per sweep, so the
+residual motion within a bin is below \SI{1}{\milli\metre} at walking speed.
+
+\subsection{Plane Bundle Adjustment}
+\paragraph{Keyframes} The scans of each \SI{1}{\second} are placed, with the
+input trajectory, in the frame of their middle pose and thinned to
+\SI{5}{\centi\metre}; the keyframe poses $T_k$, $k=1..K$, are the
+unknowns, and the motion within a keyframe is kept from the input.
+
+\paragraph{Planes} The keyframes' points are binned in world cubes of edge
+$c=\SI{0.5}{\metre}$. With $\lambda_1\le\lambda_2\le\lambda_3$ the
+eigenvalues of a cube's scatter matrix over its $N$ points and
+$\sigma_i=\sqrt{\lambda_i/N}$, a cube is a plane when
+$\sigma_1<\SI{6}{\centi\metre}$, $\sigma_1<0.3\,\sigma_2$,
+$\sigma_2>0.1\,c$ and at least three keyframes see it. The thickness bound
+is deliberately loose: a surface smeared by pose error must still qualify,
+or the error it shows is never corrected.
+
+\paragraph{Cost} For plane $f$ with unit normal $\mathbf n$ and offset $d$
+($\mathbf n^\top\mathbf p=d$), the squared distances of all its points are
+\begin{equation}
+E_f=\sum_{k\in f}\sum_{j}\big(\mathbf n^\top(R_k\mathbf x_j+\mathbf t_k)-d\big)^2
+   =\sum_{k\in f}\boldsymbol\pi_{kf}^\top C_{kf}\,\boldsymbol\pi_{kf},
+\end{equation}
+with the plane in the keyframe's frame and the keyframe's point cluster
+\begin{equation}
+\boldsymbol\pi_{kf}=\begin{bmatrix}R_k^\top\mathbf n\\ \mathbf n^\top\mathbf t_k-d\end{bmatrix},\qquad
+C_{kf}=\sum_j\begin{bmatrix}\mathbf x_j\\1\end{bmatrix}\begin{bmatrix}\mathbf x_j\\1\end{bmatrix}^\top ,
+\end{equation}
+so the points themselves are not kept. For fixed poses the plane has a
+closed form: $d=\mathbf n^\top\bar{\mathbf p}$ and $\mathbf n$ is the
+eigenvector of the smallest eigenvalue of the world scatter matrix $S_f$,
+so that
+\begin{equation}
+\min_{\mathbf n,d}E_f=\lambda_{\min}\big(S_f(T)\big),
+\end{equation}
+the plane's squared thickness summed over its points \cite{balm}. The
+bundle adjustment minimizes
+\begin{equation}
+E(T)=\sum_f\lambda_{\min}\big(\tilde S_f(T)\big)+E_{\mathrm{odo}}+E_{g}+E_{0},
+\label{eq:ba}
+\end{equation}
+where $\tilde S_f$ uses the weighted clusters
+$\tilde C_{kf}=w_{kf}\,\tfrac{\min(N_{kf},n_{\mathrm{eff}})}{N_{kf}}\,C_{kf}/\sigma_p^2$:
+$\sigma_p=\SI{2}{\centi\metre}$ is the point noise along the normal;
+$n_{\mathrm{eff}}=30$ caps a keyframe's count, since its points share one
+pose error; and $w_{kf}=\min(1,\delta/\rho_{kf})$ is a Huber weight on the
+keyframe's RMS distance to the plane,
+$\rho_{kf}=(\boldsymbol\pi^\top C\boldsymbol\pi/N)^{1/2}$, with
+$\delta=\SI{5}{\centi\metre}$.
+
+\paragraph{Priors} Directions that no plane observes (the length of a
+corridor) keep the input's relative motion between consecutive keyframes,
+\begin{equation}
+\begin{aligned}
+\mathbf e_R&=\mathrm{Log}\big(\Delta\bar R^\top R_k^\top R_{k+1}\big),\quad
+\mathbf e_t=R_k^\top(\mathbf t_{k+1}-\mathbf t_k)-\Delta\bar{\mathbf t},\\
+E_{\mathrm{odo}}&=\textstyle\sum_k \sigma_r^{-2}\|\mathbf e_R\|^2+\sigma_t^{-2}\|\mathbf e_t\|^2,
+\end{aligned}
+\end{equation}
+with $\sigma_t=\SI{3}{\centi\metre}$ and $\sigma_r=0.3^\circ$ per keyframe.
+Small floor cubes cannot see a slow vertical bend of the trajectory, so
+each keyframe keeps the input's gravity direction,
+$E_g=\sum_k\sigma_g^{-2}\|R_k^\top\mathbf e_z-\bar R_k^\top\mathbf e_z\|^2$,
+$\sigma_g=0.1^\circ$, from the IMU through the SLAM solution. $E_0$ holds
+the first keyframe fixed (the gauge); the boards later fix the frame.
+
+\paragraph{Solver} Levenberg--Marquardt on right perturbations
+$R\leftarrow R\,\mathrm{Exp}(\delta\boldsymbol\theta)$,
+$\mathbf t\leftarrow\mathbf t+\delta\mathbf t$. With
+$\mathbf m=R^\top\mathbf n$, the Jacobians of $\boldsymbol\pi$ are
+$\partial\boldsymbol\pi/\partial\delta\boldsymbol\theta=[[\mathbf m]_\times;\mathbf 0^\top]$
+and $\partial\boldsymbol\pi/\partial\delta\mathbf t=[0;\mathbf n^\top]$; the
+plane parameters (two for the normal, one for the offset) are eliminated by
+the Schur complement,
+\begin{equation}
+S=H_{pp}-\textstyle\sum_f H_{pf}H_{ff}^{-1}H_{fp},\qquad
+(S+\mu\,\mathrm{diag}\,S)\,\delta\mathbf x=-\mathbf b ,
+\end{equation}
+a $6K\times6K$ system. After every step the planes are re-solved in closed
+form, so the planes are always optimal for the current poses (variable
+projection). Three rounds find the planes anew from the adjusted poses.
+
+\paragraph{All poses} Each keyframe's correction
+$\Delta T_k=T_k'T_k^{-1}$ is interpolated in time to every pose of the input,
+$T'(t)=\Delta T(t)\,T(t)$, which keeps the motion within a keyframe.
+
+\subsection{TSDF Fusion}
+\paragraph{Why not the union} The usual map keeps one point per cell that
+any scan hit. If the scans place a surface with a spread $\sigma$ along its
+normal and a column of cells collects $M$ hits, a cell at offset $u$ holds
+on average $M c\,\varphi(u/\sigma)/\sigma$ points and is kept once that
+reaches about one, so the band extends to
+\begin{equation}
+u^\ast\approx\sigma\sqrt{2\ln\!\big(Mc/(\sqrt{2\pi}\,\sigma)\big)}\, ,
+\end{equation}
+which grows with every pass: a rarely hit cell counts as much as the dense
+centre. On the 20261015 pass the union map's walls were
+\SI{4}{\centi\metre} thicker than the scans that built it.
+
+\paragraph{Fusion} A point $\mathbf p$ measured from sensor origin
+$\mathbf o$ at range $r$ is a ray. Each cell $v$ (centre $\mathbf c_v$)
+within $\pm\tau$ of the hit along the ray receives the projective signed
+distance $d_v=r-\|\mathbf c_v-\mathbf o\|$ (positive in front of the
+surface), and every ray's contribution is averaged
+\cite{curless1996,vdbfusion}:
+\begin{equation}
+D(v)=\frac{\sum w\,d_v}{\sum w},\qquad W(v)=\sum w,\qquad w=1 .
+\end{equation}
+The weight is uniform: a weight that fades behind the hit makes the average
+lopsided and moved a floor seen at grazing incidence \SI{8}{\milli\metre}
+backwards in simulation. The surface is the zero crossing between
+face-adjacent cells $a,b$ with $W\ge W_{\min}$ and $D_aD_b<0$,
+$|D_a-D_b|<\tau$, placed at
+$\mathbf c_a+\tfrac{D_a}{D_a-D_b}(\mathbf c_b-\mathbf c_a)$.
+
+\paragraph{Parameters} Cell $c=\SI{2}{\centi\metre}$: the single-scan noise
+on walls is $\sigma\approx\SI{1.2}{\centi\metre}$ and the point spacing at
+\SIrange{3}{6}{\metre} is \SIrange{1.8}{3.7}{\centi\metre}, so finer cells
+add no detail, and they would cost $8\times$ the memory. Truncation
+$\tau=3\sigma_s$, with $\sigma_s$ the spread with which the scans place a
+wall (Sec.~\ref{sec:supp_quality}, scans as placed, whole run
+\SI{8.4}{\centi\metre}, $\sigma_s=8.4/3.29=\SI{2.55}{\centi\metre}$),
+giving $\tau=\SI{8}{\centi\metre}$, at least three cells: a smaller
+$\tau$ cuts off part of the spread before it is averaged, a larger one
+distorts objects thinner than $\tau$. $W_{\min}=3$ rays.
+
+\paragraph{Moving objects} Cells of a \SI{15}{\centi\metre} grid that rays
+pass through in at least five scans while being occupied in others are
+dynamic \cite{dufomap}, as are cells occupied for less than
+\SI{1}{\second}; the surface points in them are removed.
+
+\subsection{Quality Measures}
+\label{sec:supp_quality}
+\paragraph{Surface thickness} Around points sampled from the map,
+\SI{0.25}{\metre} patches that are planar ($\sigma_3<0.6\,\sigma_2$) are
+fitted with a plane, and the thickness is the 5--95\,\% spread of the
+points' normal offsets, $3.29\sigma$ for a Gaussian spread; walls and floors
+are reported separately. This is the mean-plane-variance idea of
+\cite{razlaw} in a robust form. A patch whose offsets show an empty gap of
+at least \SI{3}{\centi\metre} is split and each layer measured alone; it is
+the two faces of a wall when the path passes on both sides, otherwise one
+surface placed twice (a misalignment).
+
+\paragraph{Scans as placed} At the same wall spots of the map, every scan
+that saw a spot is placed with the trajectory under test, and the thickness
+is measured for one scan, for the scans of \SI{1}{\second} to
+\SI{300}{\second} around the spot's best view, and for the whole run. This
+separates the sensor's noise floor, short-term pose error and drift from
+the effect of the map's construction.
+
+\paragraph{Completeness} The share of a reference map's points with a point
+of the map under test within \SI{10}{\centi\metre}, and the reverse
+(accuracy), split by range from the path and height.
+
+\paragraph{Board loop closure} The mapping session starts and ends at the
+anchor board. The difference between the board's pose from the first and
+the last sighting section measures the trajectory's accumulated error over
+the run, against the detection noise within a section.
+
+\paragraph{Trajectory error} Against the reference trajectory, the absolute
+trajectory error (ATE) after the best rigid alignment and the relative pose
+error (RPE) over \SI{1}{\second}, \SI{10}{\second} and \SI{100}{\second},
+both as RMSE \cite{sturm2012}.
+
+\paragraph{Independent starts} The bundle adjustment run from two different
+input trajectories (the SLAM solution, and the same after scan-to-map
+registration) should reach the same poses; their difference bounds how much
+the result depends on its start.
+
+\paragraph{Control distances} Laser-rangefinder distances between landmarks
+fix the absolute scale, which none of the measures above observes.
+\todo{Distances and errors.}
+
+\subsection{Results, Mapping Pass 20261015}
+\input{tables/refmap_stages}
+\input{tables/glim_vs_ref}

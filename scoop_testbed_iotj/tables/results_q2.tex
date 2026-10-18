@@ -1,0 +1,26 @@
+\begin{table}[t]
+\centering
+\caption{Q2 Is it consistent? Map-derived Fresnel clearance against RSSI
+with the distance trend removed. Pass: $\rho > 0.3$ and clear-minus-obstructed
+drop $> \SI{5}{\decibel}$ on one link kind.}
+\label{tab:res_q2}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}>{\raggedright\arraybackslash}X l l@{}}
+\toprule
+Link & $\rho$, drop & Verdict \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Answered (coop\_2)}} \\
+mobile\_2 $\rightarrow$ sniffer, CSI & 0.60, \SI{5.4}{\decibel} & pass \\
+infra\_1 $\rightarrow$ sniffer, CSI & 0.23, \SI{4.7}{\decibel} & short \\
+Method self-test, planted \SI{12}{\decibel} wall & 0.68, \SI{11.9}{\decibel} & recovered \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Still needed}} \\
+Agent $\rightarrow$ access point, RSSI and goodput & \multicolumn{2}{l}{AP position in \texttt{ap.yaml}} \\
+Pooled over survey\_1, coop\_2, sites & \multicolumn{2}{l}{\texttt{link\_clearance.py --all}} \\
+Confidence interval on $\rho$ & \multicolumn{2}{l}{bootstrap} \\
+Out-of-run prediction & \multicolumn{2}{l}{fit survey\_1, score coop\_2} \\
+CSI power as second signal & \multicolumn{2}{l}{column present} \\
+\bottomrule
+\end{tabularx}
+\end{table}

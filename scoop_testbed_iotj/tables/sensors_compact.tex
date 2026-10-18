@@ -1,0 +1,27 @@
+\begin{table}[t]
+\centering
+\caption{Sensing per agent class (full specification in the
+supplementary material).}
+\label{tab:sensors}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}l>{\raggedright\arraybackslash}Xl@{}}
+\toprule
+Agent & Sensor & Rate \\
+\midrule
+\multirow{5}{*}{\texttt{mobile\_1}} & Ouster OS1-128 / OS0-64 LiDAR & \SI{10}{\hertz} \\
+ & ZED 2i stereo (1920$\times$1080) + IMU & 30 / \SI{400}{\hertz} \\
+ & 2$\times$ TI IWR6843ISK \SI{60}{\giga\hertz} radar & \SI{10}{\hertz} \\
+ & RTL8852BU 802.11ac Wi-Fi & 5 / \SI{100}{\hertz} \\
+ & \texttt{sniffer}: RPi 4B BCM43455c0 CSI (242 sc.) & $\sim$\SIrange{100}{140}{\hertz} \\
+\midrule
+\multirow{3}{*}{\texttt{mobile\_2}} & RealSense D455 RGB-D (1280$\times$800) & \SI{30}{\hertz} \\
+ & IMU BMI055; on-board visual SLAM & 200 / \SI{30}{\hertz} \\
+ & 802.11ac Wi-Fi & 5 / \SI{100}{\hertz} \\
+\midrule
+\multirow{3}{*}{\texttt{infra\_N}} & Arducam B0495 RGB (1920$\times$1200) & \SI{30}{\hertz} \\
+ & TI IWR6843ISK radar & \SI{10}{\hertz} \\
+ & RPi 4B BCM43455 Wi-Fi & 5 / \SI{100}{\hertz} \\
+\bottomrule
+\end{tabularx}
+\end{table}

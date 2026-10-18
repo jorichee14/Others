@@ -1,0 +1,21 @@
+\begin{table}[t]
+\centering
+\caption{Calibration residuals on held-out observations.}
+\label{tab:calib}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Transform & Check & Median & p95 \\
+\midrule
+\Ttransform{LiDAR}{Camera}  & board corner reprojection (px) & \todo{} & \todo{} \\
+Board detector, ZED / RealSense & board pose vs.\ mapping pipeline (mm, deg) & 8.1, 0.66 / 8.3, 0.58 & \todo{} \\
+\Ttransform{LiDAR}{Radar}   & reflector offset (cm)          & \todo{} & \todo{} \\
+\Ttransform{Base}{LiDAR}    & board pose via chain (cm, deg) & \todo{} & \todo{} \\
+\Ttransform{Camera}{Radar}  & reflector offset (cm), infra   & \todo{} & \todo{} \\
+Clock, all clients          & chrony RMS offset to \texttt{mobile\_1} (\si{\micro\second}) & 10.9--42.5 & \todo{} \\
+Clock, coop\_2 run           & measured offset / strict bound (ms) & $\leq 0.99$ / $\leq 12$ & -- \\
+Clock, \texttt{sniffer}     & probe-packet bias (ms)         & \todo{} & \todo{} \\
+\bottomrule
+\end{tabular}
+\end{table}

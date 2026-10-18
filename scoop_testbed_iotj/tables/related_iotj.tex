@@ -1,0 +1,58 @@
+% Table II: related platforms, every cell checked on 18 Oct 2026 against
+% official repos, project documentation, and excerpts of the papers
+% (ACHORD paper, MOCHA and CPM Lab code read in full). Re-check against
+% the PDFs before submission; arXiv and IEEE Xplore were not reachable.
+\begin{table*}[!t]
+\caption{Related IoT Testbeds, Channel Datasets, Networked Robots, and
+Cooperative-Perception Platforms Compared on Link, Channel, Clock, Pose
+Reference, and Replay}
+\label{tab:gap_iotj}
+\begin{center}
+\renewcommand{\arraystretch}{1.15}
+\setlength{\tabcolsep}{2pt}
+\scriptsize
+\begin{tabularx}{\textwidth}{@{}l l >{\raggedright\arraybackslash}p{1.3cm} c >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}p{1.1cm} >{\raggedright\arraybackslash}p{1.3cm} >{\raggedright\arraybackslash}p{1.4cm} >{\raggedright\arraybackslash}p{1.1cm} >{\raggedright\arraybackslash}p{1.1cm}@{}}
+\toprule
+\textbf{Platform} & \textbf{Venue} & \shortstack[l]{\textbf{Nodes}\\\textbf{(mob./fixed)}} & \textbf{Indoor} & \textbf{Measured link} & \textbf{CSI} & \shortstack[l]{\textbf{Pose}\\\textbf{reference}} & \shortstack[l]{\textbf{Clock}\\\textbf{sync}} & \shortstack[l]{\textbf{Link}\\\textbf{replay}} & \shortstack[l]{\textbf{App.}\\\textbf{scoring}} \\
+\midrule
+\multicolumn{10}{@{}l}{\textit{IoT and wireless testbeds}} \\
+FIT IoT-LAB \cite{adjih2015iotlab} & WF-IoT'15 & 117 / 2728 & \cmark & Partial: RSSI per channel at node & \xmark & Self-estimate & Partial: GPS, subset & \xmark & \xmark \\
+POWDER \cite{breen2021powder} & ComNet'21 & 20 / sites & partial & Partial: user-instrumented & Raw IQ & GNSS & Partial: GPSDO & \xmark & \xmark \\
+COSMOS \cite{raychaudhuri2020cosmos} & MobiCom'20 & $\sim$200 / $\sim$50$^a$ & partial & Partial: user-instrumented & Raw IQ & Not reported & Not reported & \xmark & \xmark \\
+Colosseum \cite{bonati2021colosseum} & DySPAN'21 & 128 emul. & --- & Emulated per pair & Emul.\ CIR & --- & Not reported & RF replay & \xmark \\
+\midrule
+\multicolumn{10}{@{}l}{\textit{Wi-Fi CSI tools and channel datasets}} \\
+Nexmon CSI \cite{nexmon} & WiNTECH'19 & tool & --- & Partial: per-frame RSSI & \cmark & --- & \xmark & \xmark & \xmark \\
+PicoScenes \cite{jiang2022picoscenes} & IoT-J'22 & tool & --- & Partial: per-frame RSSI, SNR & \cmark & --- & \xmark & \xmark & \xmark \\
+DICHASUS \cite{dichasus} & WSA'21 & 1 / arrays & partial & --- & Sounding link & Tachymeter, DGNSS & Partial: OTA ref. & \xmark & \xmark \\
+ESPARGOS \cite{espargos} & arXiv'24 & 1 / 4 arrays & \cmark & --- & Receive-only & Total station & Partial: shared clock & \xmark & \xmark \\
+DeepSense 6G \cite{deepsense6g} & ComMag'23 & 1 / 1 & partial & Partial: beam power & \xmark & RTK & Partial: UTC stamps & \xmark & \xmark \\
+\midrule
+\multicolumn{10}{@{}l}{\textit{Robots as IoT nodes}} \\
+Robotarium \cite{wilson2021robotarium} & RA-L'21 & $N$ / 0 & \cmark & --- & \xmark & Overhead tracking & \xmark & \xmark & \xmark \\
+CPM Lab \cite{kloock2021cpmlab} & ECC'21 & $N$ / 0 & \cmark & Aggregate RTT (UI only) & \xmark & Overhead camera & NTP, no bound & \xmark & \xmark \\
+ChoiRbot \cite{testa2021choirbot} & RA-L'21 & $N$ / 0 & \cmark & --- & \xmark & Motion capture & \xmark & \xmark & \xmark \\
+CHORD / ACHORD \cite{ginting2021chord,saboia2022achord} & RA-L'21/'22 & 6 / base + relays & subterr. & Partial: per-link SNR, not released & \xmark & \xmark & \xmark & \xmark & \xmark \\
+MOCHA \cite{cladera2024mocha} & ICRA'24 & UAV+UGVs / base & \xmark & Partial: per-peer RSSI, RTT, bandwidth, not released & \xmark & Not reported & \xmark & \xmark & \xmark \\
+ROS-NetSim \cite{calvofullana2021rosnetsim} & RA-L'21 & sim. & --- & Simulated & \xmark & --- & \xmark & Sim. & \xmark \\
+Mahimahi / NetEm \cite{netravali2015mahimahi,hemminger2005netem} & ATC'15 / LCA'05 & --- & --- & Recorded trace & \xmark & --- & \xmark & Transport & \xmark \\
+\midrule
+\multicolumn{10}{@{}l}{\textit{Cooperative-perception platforms}} \\
+CoPeD \cite{coped} & RA-L'24 & 5 / 0 & partial & --- & \xmark & VIO + GPS & NTP, no number & \xmark & Partial$^b$ \\
+V2V4Real \cite{v2v4real} & CVPR'23 & 2 / 0 & \xmark & --- & \xmark & GNSS/INS & Partial: $<$\,50\,ms & \xmark & Det., track. \\
+TUMTraf-V2X \cite{zimmer2024tumtrafv2x} & CVPR'24 & 1 / 1 & \xmark & --- & \xmark & RTK & Partial: 24.9\,ms & \xmark & Det., track. \\
+V2X-ReaLO \cite{v2xrealo} & arXiv'25 & 2 / 2 & \xmark & Latency (Wi-Fi) & \xmark & GNSS & No number & Live only & Det.\ (online) \\
+CooperScene \cite{cooperscene} & ECCV'26 & 3 / 1 & \xmark & Pairwise C-V2X RTT, throughput, loss, jitter & \xmark & RTK + ICP & Claimed sub-ms & Scalar delay$^c$ & Detection \\
+AutoCast \cite{qiu2022autocast} & MobiSys'22 & sim. & \xmark & Simulated & \xmark & Simulator & \xmark & Sim. & Sim. \\
+\midrule
+\textbf{SCooP-iT (ours)} & --- & 2 / 3 & \cmark & RSSI, MCS, retries (5\,Hz), RTT (100\,Hz), goodput (4\,s), per pair & \cmark$^d$ & Map + fiducials & Measured & Per message & C-SLAM, det. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\vspace{2pt}
+{\scriptsize \cmark: provided; partial: provided in part, or only if the experimenter instruments it; \xmark: not provided; ---: not applicable.\quad
+$^a$Planned deployment in the 2020 paper.\quad
+$^b$Zero-shot foundation-model image labels, no 3D boxes.\quad
+$^c$One delay derived from mean measured throughput, not a per-message trace.\quad
+$^d$Single-antenna Wi-Fi CSI on the data links (BCM43455c0, \SI{80}{\mega\hertz}, \SIrange{104}{141}{\hertz}), not phase-coherent across nodes.}
+\end{table*}

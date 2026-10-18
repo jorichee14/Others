@@ -1,0 +1,45 @@
+\begin{table*}[!t]
+\caption{Recorded topics per unit (representative rates).}
+\label{tab:topics}
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\setlength{\tabcolsep}{4pt}
+\scriptsize
+\begin{tabular}{@{}p{6.2cm} p{6.6cm} p{2.6cm}@{}}
+\toprule
+\textbf{Topic (namespace)} & \textbf{Message Type} & \textbf{Rate} \\
+\midrule
+\multicolumn{3}{@{}l}{\textit{\texttt{mobile\_1/}}} \\
+\texttt{ouster/lidar\_packets} & \texttt{ouster\_sensor\_msgs/PacketMsg} & 640 Hz \\
+\texttt{ouster/imu\_packets} & \texttt{ouster\_sensor\_msgs/PacketMsg} & 100 Hz \\
+\texttt{ouster/metadata} & \texttt{std\_msgs/String} & latched \\
+\texttt{radar\{1,2\}/radar/points\_all} & \texttt{PointCloud2} & 10 Hz \\
+\texttt{zed/left/image\_rect\_color} & \texttt{Image} (+\,\texttt{CameraInfo}) & 15 Hz \\
+\texttt{zed/depth/depth\_registered} & \texttt{Image} & 15 Hz \\
+\texttt{zed/imu/data}, \texttt{zed/imu/mag} & \texttt{Imu}, \texttt{MagneticField} & 200 / 50 Hz \\
+\texttt{zed/odom}, \texttt{zed/pose}, \texttt{zed/path\_*} & \texttt{Odometry}, \texttt{PoseStamped}, \texttt{Path} & 15 Hz \\
+\texttt{tf}, \texttt{tf\_static} & \texttt{TFMessage} & --- \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textit{\texttt{mobile\_2/}}} \\
+\texttt{color/image\_raw} & \texttt{Image} (+\,\texttt{CameraInfo}) & 30 Hz \\
+\texttt{depth/image\_rect\_raw} & \texttt{Image} (+\,\texttt{CameraInfo}) & 30 Hz \\
+\texttt{infra\{1,2\}/image\_rect\_raw} & \texttt{Image} (+\,\texttt{CameraInfo}) & 30 Hz \\
+\texttt{extrinsics/depth\_to\_infra\{1,2\}} & \texttt{realsense2\_camera\_msgs/Extrinsics} & latched \\
+\texttt{imu} & \texttt{Imu} & 200 Hz \\
+\texttt{visual\_slam/tracking/*}, \texttt{status} & \texttt{Odometry}, \texttt{PoseStamped}, \texttt{Path} & 30 Hz \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textit{\texttt{infra\_N/}}} \\
+\texttt{image\_raw} & \texttt{Image} (+\,\texttt{CameraInfo}) & 30 Hz \\
+\texttt{radar/points\_all} & \texttt{PointCloud2} & 10 Hz \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textit{\texttt{sniffer/}}} \\
+\texttt{csi} & \unsure{\texttt{csi\_msgs/Csi}} & $\sim$100--140 Hz \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textit{All units}} \\
+\texttt{wifi/status} & \texttt{wifi\_monitor\_msgs/WifiLinkStatus} & 5 Hz \\
+\texttt{wifi/iperf}, \texttt{wifi/iperf\_r2r} & \texttt{wifi\_monitor\_msgs/IperfResult} & per test \\
+\texttt{ntp/status}, \texttt{ntp/events} & \texttt{ntp\_monitor\_msgs/NtpStatus}, \texttt{String} & 10 Hz / event \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table*}

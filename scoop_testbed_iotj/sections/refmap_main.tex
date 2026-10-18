@@ -1,0 +1,33 @@
+% Sec. V-A "Reference Map" for main.tex, with the bundle-adjusted and
+% TSDF-fused reference (pass 20261015). To use: replace the body of
+% \subsection{Reference Map} in main.tex (from "The reference map is built"
+% to "...would not be visible to conventional ICP.") with
+% \input{sections/refmap_main}. Full method and equations:
+% supplementary, supp/refmap_method.tex.
+The reference map is built in a dedicated mapping session and held fixed
+afterwards; no recorded run contributes to it. A LiDAR-inertial SLAM
+solution \cite{glim} gives the initial trajectory. It is refined by plane
+bundle adjustment \cite{balm,hba}: the poses of \SI{1}{\second} keyframes
+are moved jointly so that every planar patch seen from several keyframes is
+as thin as possible, the cost of a patch being the smallest eigenvalue of
+the scatter of its points, with the SLAM solution's relative motion and
+gravity direction kept as soft priors. The scans are then fused into a
+truncated signed distance field \cite{curless1996,vdbfusion} with
+\SI{2}{\centi\metre} cells and a truncation of \SI{8}{\centi\metre}, three
+standard deviations of the spread with which the scans place a wall; the
+map is its zero-level surface, and moving objects are removed by
+free-space carving \cite{dufomap}. Fusion matters as much as the poses: the
+usual union of points keeps every cell a stray point reached, which widened
+walls by \SI{4}{\centi\metre} over the scans that built them, whereas the
+signed distance averages across a surface. Each stage is measured by the
+thickness of the map's planar surfaces (Table~\ref{tab:refmap_stages}):
+from the SLAM solution alone to the reference, walls go from
+\SI{14.3}{\centi\metre} to \todo{} and floors from \SI{3.6}{\centi\metre}
+to \todo{}, and the doubled surfaces left by drift between visits fall
+from 2.0\,\% to \todo{}. Against the reference, the SLAM trajectory's error
+is a heading error of about $0.6^\circ$ that builds within
+\SI{10}{\second} and does not grow further, with an ATE of \todo{}
+(Table~\ref{tab:glim_vs_ref}). Bundle adjustment started from two
+different trajectories reaches the same poses to \SI{0.7}{\centi\metre}
+(median, after alignment) and $0.1^\circ$, so the result is fixed by the
+scans and not by the starting point.

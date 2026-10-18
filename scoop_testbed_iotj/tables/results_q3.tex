@@ -1,0 +1,23 @@
+\begin{table}[t]
+\centering
+\caption{Q3 Is it faithful? Replay against live arrivals. Pass: $\geq 90\,\%$
+agreement on the receiver frame each message lands in, and closer than the
+synthetic channel.}
+\label{tab:res_q3}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}>{\raggedright\arraybackslash}X l@{}}
+\toprule
+Item & Status \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Answered}} \\
+Replay model $d_{ab}(t) + s/G_{ab}(t)$, drop in outage & defined \\
+Inputs: goodput, RTT, outages on every pass & measured \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Still needed}} \\
+Payload node, \SI{1}{\kilo\byte} / \SI{100}{\kilo\byte} / \SI{1.5}{\mega\byte} at \SI{10}{\hertz} & to write \\
+Twin runs A1/B1 survey, A2/B2 cooperation & one session \\
+Arrival error, frame agreement, drop agreement per size and mode & \texttt{twin\_run.py} \\
+\bottomrule
+\end{tabularx}
+\end{table}

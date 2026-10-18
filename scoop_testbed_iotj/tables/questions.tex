@@ -1,0 +1,25 @@
+\begin{table*}[!t]
+\caption{The Seven Questions a Testbed Paper Must Answer, the Pass Criterion Fixed Before the Data Were Read, the Answer the 24 September Session Supports, and What Remains to Be Collected}
+\label{tab:questions}
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\setlength{\tabcolsep}{4pt}
+\scriptsize
+\begin{tabular}{@{}p{2.3cm} p{3.6cm} p{5.3cm} p{4.6cm} c@{}}
+\toprule
+\textbf{Question} & \textbf{Pass criterion} & \textbf{Answer now (24 Sep, site 1)} & \textbf{Remaining} & \textbf{Where} \\
+\midrule
+\multicolumn{5}{@{}l}{\textit{Trust: can readers rely on the instrument?}} \\
+1. Is it precise? Are the testbed's own errors small next to the effects it measures? & every error term $\geq 10\times$ below the fusion breaking points (\SI{0.2}{\metre} pose; \SI{100}{\milli\second} as displacement) & like against like, at \SI{1}{\metre\per\second}: measured clock $101\times$ below one frame; map refinement $133\times$, repeatability $19\times$, board detector $24\times$ below the pose point. Short: cart \SI{3.1}{\centi\metre} at $6.5\times$; strict clock bound \SI{12}{\milli\second} at $8.3\times$ & LiDAR robot vs.\ boards on coop\_2; radar residuals; sniffer bias; measured p95 speed; final margin per term & E1 \\
+2. Is it consistent? Do the poses and the link logs agree when neither was checked by hand? & map clearance predicts detrended RSSI: $\rho > 0.3$ and clear-minus-obstructed drop $> \SI{5}{\decibel}$ on one link kind & mobile\_2 link $\rho = 0.60$, \SI{5.4}{\decibel}: passes. infra\_1 link $\rho = 0.23$, \SI{4.7}{\decibel}: does not & agent-to-AP links (AP position); pooling over passes and sites; CI on $\rho$; out-of-run prediction; CSI power & E2 \\
+3. Is it faithful? Does replaying a logged link reproduce what the live link did? & $\geq 90\,\%$ agreement on the receiver frame each message lands in; logged replay closer than synthetic & none; replay is a model with measured inputs and unvalidated output & one twin-run session (A1/B1 survey, A2/B2 cooperation); payload node; per-size, per-mode arrival-error table & E3 \\
+4. Is it repeatable? Does the same setting give the same link on another day? & day-to-day distance $<$ half the survey-to-cooperation distance, RTT and goodput & pose half only: map repeats to \SI{1.06}{\centi\metre}, scale $2\times10^{-5}$, four weeks apart. Mode half computable from survey\_1 vs.\ coop\_2, not yet computed & mode distance from existing passes; one repeat day (from the E3 session); day-vs-mode table & E4 \\
+5. Is it necessary? What does a measured link show that a synthetic one hides? & demonstration, no pass & \SI{1.5}{\mega\byte} messages in one frame: 86\,\% alone, \SIrange{59}{68}{\percent} with two robots, 100\,\% synthetic; RTT \SIrange{5}{10}{} to \SIrange{25}{33}{\milli\second} idle to loaded; real outages & best-fit synthetic baseline; more passes and a second site; probe-off control run & E5 \\
+\midrule
+\multicolumn{5}{@{}l}{\textit{Worth: should anyone care?}} \\
+6. Is it unique? What can it do that no existing platform can? & fills every column of Table~\ref{tab:gap_iotj} & indoor mobile and fixed nodes, no mocap or GNSS, every pair's link, CSI on data links, measured clock bound, per-message replay, perception scoring; CooperScene nearest (outdoor, scalar delay) & re-check cells against the PDFs & Sec.~\ref{sec:related} \\
+7. Is it reproducible? Can someone else build and use it? & bill of materials, setup effort per site, released pipeline, spec sheet with bounds & pipeline and spec sheet (Table~\ref{tab:spec}) in hand & costs per agent class; mapping-session length, boards, and control distances per site & Secs.~\ref{sec:design}, \ref{sec:lessons} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table*}

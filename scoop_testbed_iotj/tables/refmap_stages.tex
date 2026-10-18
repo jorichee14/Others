@@ -1,0 +1,29 @@
+% Reference construction, stage by stage, mapping pass 20261015 (mobile_2,
+% 1387 s, 544 m). Source: scoop_pipeline odometry/mobile_2/*_loop_closure.json,
+% analysis/mapping/map_quality.py on each TSDF map, wall_build.py (spots of
+% the union map built from traj_lidar_ba.txt), compare_trajs.py.
+\begin{table}[!t]
+\centering
+\caption{Reference Construction, Stage by Stage (Pass 20261015)}
+\label{tab:refmap_stages}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccc}
+\toprule
+Trajectory & Board loop & \multicolumn{2}{c}{TSDF map thickness} & Scans as \\
+ & closure & walls / floors & doubled & placed, walls \\
+ & mm / deg & cm & \% & cm \\
+\midrule
+SLAM (GLIM)              & 10.8 / 1.24 & 14.3 / 3.6 & 2.0 & \todo{} \\
++ scan-to-map            & 13.7 / 1.30 & --         & --  & 10.3$^\dagger$ \\
++ scan-to-map + BA       & 12.1 / 1.31 & 7.4 / 1.6  & 0.7 & 8.4 \\
+\textbf{SLAM + BA (ref.)} & 15.1 / 1.35 & \todo{} & \todo{} & 8.8 \\
+\midrule
+\multicolumn{5}{l}{\emph{Fusion, same poses (scan-to-map + BA)}} \\
+\quad union of points    & & 12.5 / 3.6 & 0.3 & \\
+\quad TSDF               & & 7.4 / 1.6  & 0.7 & completeness 98\,\% \\
+\bottomrule
+\multicolumn{5}{l}{\footnotesize Detection noise of the loop closure 6--8\,mm.
+Thickness: p95--p5 about planes in 0.25\,m patches.}\\
+\multicolumn{5}{l}{\footnotesize $^\dagger$ measured at the spots of a different map.}
+\end{tabular}
+\end{table}

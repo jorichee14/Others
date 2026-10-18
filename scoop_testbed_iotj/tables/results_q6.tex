@@ -1,0 +1,26 @@
+\begin{table}[t]
+\centering
+\caption{Q6 Is it unique? Pass: fills every column of
+Table~\ref{tab:gap_iotj} that no other platform fills together.}
+\label{tab:res_q6}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}p{4.1cm}@{}}
+\toprule
+Capability & SCooP-iT / nearest other \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Answered}} \\
+Indoor, no mocap or GNSS reference & yes / CoPeD (indoor and outdoor, VIO + GPS) \\
+Mobile and fixed nodes, indoors & yes / none (TUMTraf-V2X, V2X-ReaLO outdoor) \\
+Every pair's link measured on the sensors' clock & yes / CooperScene (C-V2X, outdoor) \\
+Channel state on the data links & yes / none \\
+Measured link-to-sensor clock bound & yes / CooperScene (sub-ms claimed, not measured) \\
+Per-message link replay into methods & yes / CooperScene (scalar delay) \\
+Perception scoring against a reference & yes / V2V4Real, TUMTraf-V2X (outdoor) \\
+Link geometry in the map frame (clearance) & yes / none \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Still needed}} \\
+Re-check cells against the PDFs & arXiv and IEEE Xplore full texts \\
+\bottomrule
+\end{tabularx}
+\end{table}
