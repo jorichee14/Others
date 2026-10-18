@@ -16,7 +16,7 @@
   "rectified": false,
   "fusion": "tsdf",
   "tsdf": {
-   "_note": "trunc = 3 sigma of where the scans put a wall: wall_build on traj_lidar_ba_glim.txt, whole run 8.8 cm (5-95 %) -> sigma 8.8 / 3.29 = 2.7 cm -> 8.0 cm; >= 3 cells of 2 cm. min_weight 3: a cell seen by fewer rays is a stray hit.",
+   "_note": "trunc = 3 sigma of where the scans put a wall: wall_build on traj_lidar_ba_glim.txt, whole run 9.0 cm (5-95 %) -> sigma 9.0 / 3.29 = 2.7 cm -> 8.0 cm; >= 3 cells of 2 cm. min_weight 3: a cell seen by fewer rays is a stray hit.",
    "trunc": 0.08,
    "min_weight": 3
   }

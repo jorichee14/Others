@@ -21,19 +21,18 @@ usual union of points keeps every cell a stray point reached, which widened
 walls by \SI{4}{\centi\metre} over the scans that built them, whereas the
 signed distance averages across a surface. Each stage is measured by the
 thickness of the map's planar surfaces (Table~\ref{tab:refmap_stages}):
-from the SLAM solution alone to the reference, walls go from
-\SI{14.3}{\centi\metre} to \SI{7.8}{\centi\metre} and floors from
-\SI{3.6}{\centi\metre} to \SI{1.9}{\centi\metre}, and the doubled surfaces
-left by drift between visits fall from 2.0\,\% to 0.7\,\%. Where a wall's
-remaining spread comes from is read across the table, by placing the scans
-that saw it with each trajectory: a single scan spreads it over
-\SI{4.6}{\centi\metre}, the sensor's noise; the scans of one second, too
-short for drift, over \SI{6.5}{\centi\metre}; the whole run over
-\SI{8.8}{\centi\metre} with the reference trajectory, against
-\SI{19.2}{\centi\metre} with the SLAM solution alone. Three quarters of the
-reference's spread is thus present within one second, and drift adds only
+from the SLAM solution (time-corrected, below) to the reference, walls go
+from \SI{10.7}{\centi\metre} to \SI{7.8}{\centi\metre} and floors from
+\SI{2.8}{\centi\metre} to \SI{1.9}{\centi\metre}. Where a wall's remaining
+spread comes from is read across the table, by placing the scans that saw
+it with each trajectory: a single scan spreads it over
+\SI{4.7}{\centi\metre}, the sensor's noise; the scans of one second, too
+short for drift, over \SI{6.7}{\centi\metre} with either trajectory; the
+whole run over \SI{9.0}{\centi\metre} with the reference, against
+\SI{12.3}{\centi\metre} with the SLAM solution. Three quarters of the
+reference's spread is thus present within one second, and drift adds
 \SI{2.3}{\centi\metre} over the \SI{1387}{\second} run, where it added
-\SI{11.7}{\centi\metre} before bundle adjustment. Against the reference, the SLAM
+\SI{5.7}{\centi\metre} before bundle adjustment. Against the reference, the SLAM
 trajectory's heading error followed the yaw rate ($r=0.92$), the signature
 of a time offset: its pose for time $t$ is the scans' pose at
 $t+\SI{46}{\milli\second}$, confirmed independently by the scans being most

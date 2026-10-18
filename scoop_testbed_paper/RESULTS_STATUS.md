@@ -25,16 +25,19 @@ Paper: `sections/refmap_main.tex` (Sec. V-A), `supp/refmap_method.tex`, `tables/
 
 | Result (all in the paper) | Value | Tool |
 |---|---|---|
-| Reference TSDF map, walls / floors | 7.8 / 1.9 cm, 0.7 % doubled | `map_quality.py` |
+| Reference TSDF map, walls / floors | 7.8 / 1.9 cm | `map_quality.py` |
 | Reference board loop closure | 13.9 mm / 1.36 deg (detection noise 6-8 mm) | `loop_check.py` |
-| Walls, scans as placed with the reference: 1 scan / 1 s / run | 4.6 / 6.5 / 8.8 cm (measured with v1) | `wall_build.py` |
-| Same with GLIM as output | 4.9 / 7.5 / 19.2 cm; TSDF map 14.3 / 3.6 cm, 2.0 % doubled; loop 10.8 mm / 1.24 deg | same |
+| Walls, scans as placed with the reference: 1 scan / 1 s / run | 4.7 / 6.7 / 9.0 cm | `wall_build.py` |
+| Same with GLIM corrected | 4.7 / 6.6 / 12.3 cm; TSDF map 10.7 / 2.8 cm; loop 10.8 mm / 1.24 deg | same, `map_quality.py`, `loop_check.py` |
+| Same with GLIM as output | 4.9 / 7.5 / 19.2 cm; TSDF map 14.3 / 3.6 cm | same |
 | Fusion, same poses (BA from scan-to-map): union vs TSDF | walls 12.5 vs 7.4 cm, floors 3.6 vs 1.6 cm; TSDF 98 % complete | `map_quality.py`, `compare_maps.py` |
 | GLIM corrected vs reference | ATE 2.7 cm / 0.26 deg; RPE 1 s 1.2 / 0.13, 10 s 3.5 / 0.31, 100 s 6.2 / 0.34 | `compare_trajs.py --ref ba_glim` |
 | GLIM as output vs reference (v1) | ATE 3.4 cm / 0.69 deg | same |
 | BA from scan-to-map vs reference | ATE 1.0 cm / 0.12 deg | same |
 | Reference rebuilt before vs after the 46 ms correction (v1 vs final) | ATE 0.5 cm / 0.10 deg | same |
 | GLIM's pose time vs the scans | +46 ms (heading vs turning r 0.92); not the IMU's 8-14 ms lag | `compare_trajs.py --ref`, `imu_vs_traj.py` |
+
+Doubled surfaces (kind 3) are not reported: a smeared surface fills the gap between its copies, so the count does not rank the trajectories (GLIM corrected 0.6 %, reference 0.7 %).
 
 Superseded (not in the paper): the union-of-points maps, the v1 reference map (7.5 / 1.7 cm, loop 15.1 mm), the
 scan-to-map trajectory alone (02, not in the pipeline), GLIM with `imu_time_offset`.
