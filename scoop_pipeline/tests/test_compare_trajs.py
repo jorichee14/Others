@@ -28,9 +28,33 @@ def write(path, t, R, p):
             fh.write("%.9f %.6f %.6f %.6f %.9f %.9f %.9f %.9f\n" % (row[0], *row[1], *row[2]))
 
 
+def turning_check(fails):
+    """A trajectory stamped 30 ms late on a path that turns back and forth:
+    its heading error follows the yaw rate, and the time offset is found."""
+    sys.path.insert(0, os.path.join(ROOT, "analysis", "odom"))
+    import compare_trajs as ct
+    t = np.arange(0, 300, 0.1)
+    psi = 0.8 * np.sin(2 * np.pi * t / 15) + 0.4 * np.sin(2 * np.pi * t / 6.3)
+
+    def poses(ps):
+        T = np.tile(np.eye(4), (len(t), 1, 1))
+        T[:, :3, :3] = Rotation.from_euler("z", ps[:, None]).as_matrix()
+        T[:, 0, 3] = 0.4 * t
+        return T
+    late = 0.8 * np.sin(2 * np.pi * (t + 0.03) / 15) + 0.4 * np.sin(2 * np.pi * (t + 0.03) / 6.3)
+    h = ct.heading_vs_turning(t, poses(late), t, poses(psi))
+    h0 = ct.heading_vs_turning(t, poses(psi + 0.002 * np.sin(t / 7.0)), t, poses(psi))
+    ok = h["r_timing"] > 0.9 and abs(h["dt_ms"] - 30) < 3 and abs(h0.get("r_timing", 0)) < 0.5
+    print(f"  {'ok  ' if ok else 'FAIL'}  30 ms late: r {h['r_timing']:.2f}, offset {h['dt_ms']:.1f} ms; "
+          f"error not tied to turning: r {h0.get('r_timing', 0):.2f}")
+    if not ok:
+        fails.append("heading vs turning")
+
+
 def main():
     d = tempfile.mkdtemp(prefix="cmp_")
     fails = []
+    turning_check(fails)
     try:
         t = 1.8e9 + np.arange(0, 200, 0.1)
         u = (t - t[0]) / 100 * np.pi

@@ -33,6 +33,8 @@ and per trajectory: path length, and the loop closure on the boards from
               ATE  RMSE of the position (and rotation) error after the best
                    rigid fit of the trajectory onto the reference
               RPE  RMSE of the error of the motion over 1 s, 10 s, 100 s
+            and whether each one's heading error follows the turns (a time
+            offset or a gyro scale / extrinsic error) or not (drift)
 """
 import argparse
 import itertools
@@ -117,6 +119,52 @@ def relative(TA, TB, t, d):
     RB = np.einsum("nji,njk->nik", TB[i, :3, :3], TB[j, :3, :3])
     dr = rot_deg(np.einsum("nji,njk->nik", RA, RB))
     return dt, dr
+
+
+def yaw(T):
+    return np.unwrap(np.arctan2(T[:, 1, 0], T[:, 0, 0]))
+
+
+def smooth(v, n):
+    if n <= 1:
+        return v
+    k = np.ones(n) / n
+    return np.convolve(np.pad(v, (n // 2, n - 1 - n // 2), mode="edge"), k, mode="valid")
+
+
+def heading_vs_turning(ta, TA, tb, TB, hp_s=20.0):
+    """Does the heading error of A against the reference B follow B's
+    turning? Two regressions over the run:
+      timing   e(t) against the yaw rate w(t): a pose stamped dt off is
+               rotated by w dt, so e = dt w; e with its slow part (> hp_s)
+               removed, so drift does not count
+      scale    the change of e over 1 s against the turned angle over 1 s:
+               a gyro scale or extrinsic tilt error makes it proportional
+    -> dict(r_timing, dt_ms, r_scale, scale_pct)."""
+    lo, hi = max(ta[0], tb[0]), min(ta[-1], tb[-1])
+    m = (ta >= lo) & (ta <= hi)
+    t, A = ta[m], TA[m]
+    B = interp(tb, TB, t)
+    step = float(np.median(np.diff(t)))
+    psi_b = yaw(B)
+    e = yaw(A) - psi_b
+    e -= np.median(e)
+    # the same band-pass on both, so the slope is not biased by the filter
+    ns, nh = max(1, int(round(0.3 / step))), max(1, int(round(hp_s / step)))
+    w_raw = np.gradient(psi_b, t)
+    w = smooth(w_raw, ns) - smooth(w_raw, nh)
+    e_hp = smooth(e, ns) - smooth(e, nh)
+    out = {}
+    if np.std(w) > 1e-6:
+        out["r_timing"] = float(np.corrcoef(e_hp, w)[0, 1])
+        out["dt_ms"] = float(np.dot(e_hp - e_hp.mean(), w - w.mean()) / np.sum((w - w.mean()) ** 2) * 1000)
+    k = max(1, int(round(1.0 / step)))
+    de, dpsi = e[k:] - e[:-k], psi_b[k:] - psi_b[:-k]
+    if np.std(dpsi) > 1e-6:
+        out["r_scale"] = float(np.corrcoef(de, dpsi)[0, 1])
+        out["scale_pct"] = float(np.dot(de - de.mean(), dpsi - dpsi.mean())
+                                 / np.sum((dpsi - dpsi.mean()) ** 2) * 100)
+    return out
 
 
 def compare(a, b, ta, TA, tb, TB):
@@ -235,6 +283,21 @@ def main():
                         + " & ".join(f"{x:.1f} / {y:.2f}" for x, y in rel)
                         + f" & {path:.1f} \\\\")
         print(f"  ({a.ref}: path {path_length(trajs[a.ref][1]):.1f} m)")
+        print(f"\nheading error against '{a.ref}' vs turning (correlation r; "
+              f"|r| > 0.5 = follows the turns):")
+        print(f"  {'trajectory':10s}{'r timing':>10s}{'time offset ms':>16s}{'r scale':>10s}"
+              f"{'per turned angle':>18s}")
+        turn = {}
+        for name in trajs:
+            if name == a.ref:
+                continue
+            h = heading_vs_turning(trajs[name][0], trajs[name][1], trajs[a.ref][0], trajs[a.ref][1])
+            turn[name] = h
+            print(f"  {name:10s}{h.get('r_timing', float('nan')):10.2f}{h.get('dt_ms', float('nan')):16.1f}"
+                  f"{h.get('r_scale', float('nan')):10.2f}{h.get('scale_pct', float('nan')):17.2f}%")
+        print("  timing: a pose stamped dt off turns e = w dt; scale: a gyro scale or extrinsic\n"
+              "  tilt error grows with the angle turned. Neither (|r| small): the error is not\n"
+              "  tied to turning (drift / registration).")
         print("  LaTeX rows (trajectory & ATE cm & ATE deg & RPE " +
               " & ".join(f"{d:g} s cm / deg" for d in DELTAS) + " & path m):")
         for ln in rows:
@@ -243,7 +306,7 @@ def main():
     out = a.out or os.path.join(os.path.dirname(trajs[next(iter(trajs))][2]), "traj_compare.json")
     with open(out, "w") as fh:
         json.dump(dict(files={k: v[2] for k, v in trajs.items()}, loop_closure=lcs,
-                       pairs=results), fh, indent=1)
+                       pairs=results, heading_vs_turning=turn if a.ref else None), fh, indent=1)
     print(f"\nreport: {out}")
 
     if a.plot:
