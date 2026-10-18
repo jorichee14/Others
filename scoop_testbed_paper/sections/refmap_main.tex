@@ -28,10 +28,13 @@ left by drift between visits fall from 2.0\,\% to 0.6\,\%; the spread with
 which the scans place a wall over the whole run falls from
 \SI{19.2}{\centi\metre} to \SI{8.8}{\centi\metre}, against
 \SI{4.9}{\centi\metre} for a single scan. Against the reference, the SLAM
-trajectory's error is mainly in heading, $0.93^\circ$ over \SI{10}{\second}
-and not growing further ($0.96^\circ$ over \SI{100}{\second}), with an
-ATE of \SI{3.4}{\centi\metre} and $0.69^\circ$
-(Table~\ref{tab:glim_vs_ref}). Bundle adjustment started from a different
+trajectory's heading error followed the yaw rate ($r=0.92$), the signature
+of a time offset: its pose for time $t$ is the scans' pose at
+$t+\SI{46}{\milli\second}$, confirmed independently by the scans being most
+consistent with that shift, and not removed by correcting the IMU's own
+\SI{11}{\milli\second} lag inside the SLAM. Re-stamped on export, its ATE
+falls from \SI{3.4}{\centi\metre} and $0.69^\circ$ to
+\SI{2.7}{\centi\metre} and $0.27^\circ$ (Table~\ref{tab:glim_vs_ref}). Bundle adjustment started from a different
 trajectory reaches the same poses to \SI{1.0}{\centi\metre} and
 $0.10^\circ$ (ATE), so the result is fixed by the scans and not by the
 starting point. The final trajectory closes on the anchor board, seen at

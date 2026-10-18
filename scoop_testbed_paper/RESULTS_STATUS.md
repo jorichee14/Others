@@ -36,6 +36,13 @@ Method: `supp/refmap_method.tex` (supplementary); main-text version `sections/re
 | same: scan-to-map + BA (the other start) | 1.0 cm / 0.10 deg | same |
 | Scans as placed, walls, whole run: GLIM / GLIM + BA (same spots) | 19.2 / 8.8 cm (one scan 4.9) | `wall_build.py` |
 
+| GLIM's pose time vs the scans | +46 ms (heading vs turning r 0.92; scans thinnest at +46 ms); the IMU lags the LiDAR 8-14 ms, but GLIM with that removed keeps the 46 ms | `compare_trajs.py --ref`, `scan_consistency.py`, `imu_vs_traj.py` |
+| GLIM re-stamped +46 ms on export, against the reference | ATE 2.7 cm / 0.27 deg (was 3.4 / 0.69); RPE 10 s 3.6 / 0.33, 100 s 6.5 / 0.36 | `compare_trajs.py --ref ba_glim` |
+
+The reference (GLIM + BA) was built from GLIM before the 46 ms correction; BA absorbed it (BA from 02 agrees to
+1.0 cm / 0.10 deg). Re-running 02b and 01 from the corrected export makes it reproducible from today's pipeline.
+The GLIM rows of `tables/refmap_stages.tex` (TSDF map, scans as placed) are before the correction.
+
 Still lacking: control distances.
 
 ### Survey (`survey_1`)

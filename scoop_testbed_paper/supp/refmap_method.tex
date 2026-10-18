@@ -192,6 +192,22 @@ trajectory error (ATE) after the best rigid alignment and the relative pose
 error (RPE) over \SI{1}{\second}, \SI{10}{\second} and \SI{100}{\second},
 both as RMSE \cite{sturm2012}.
 
+\paragraph{Timing} A pose stamped $\delta t$ away from its scans is turned
+by $\omega\,\delta t$ at yaw rate $\omega$, so a trajectory's heading error
+$e(t)$ against the reference is regressed on the reference's yaw rate (both
+band-passed, \SIrange{0.3}{20}{\second}): the slope is $\delta t$, the
+correlation tells whether the error is timing at all. Independently, the
+IMU's $|\boldsymbol\omega|$ is lined up with a trajectory's (central
+differences of its rotations), which gives the IMU's lag behind the LiDAR's
+time, and pairs of scans are measured with the trajectory's stamps shifted,
+which gives the shift that makes the scans agree best. On pass 20261015 the
+SLAM trajectory's heading error follows the yaw rate ($r=0.92$,
+$\delta t=\SI{46}{\milli\second}$), its scans agree best at
+$+\SI{46}{\milli\second}$, and the IMU lags the LiDAR by
+\SIrange{8}{14}{\milli\second}; running the SLAM with that IMU lag removed
+leaves the \SI{46}{\milli\second}, so the offset is in the SLAM's output
+poses and is corrected on export.
+
 \paragraph{Independent starts} The bundle adjustment run from two different
 input trajectories (the SLAM solution, and the same after scan-to-map
 registration) should reach the same poses; their difference bounds how much
