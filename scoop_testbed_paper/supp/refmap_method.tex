@@ -210,9 +210,11 @@ IMU's $|\boldsymbol\omega|$ is lined up with a trajectory's (central
 differences of its rotations), which gives the IMU's lag behind the LiDAR's
 time, and pairs of scans are measured with the trajectory's stamps shifted,
 which gives the shift that makes the scans agree best. On pass 20261015 the
-SLAM trajectory's heading error follows the yaw rate ($r=0.92$,
-$\delta t=\SI{46}{\milli\second}$), its scans agree best at
-$+\SI{46}{\milli\second}$, and the IMU lags the LiDAR by
+SLAM trajectory's heading error follows the yaw rate ($r=0.95$,
+$\delta t=\SI{50}{\milli\second}$ against the final reference;
+\SI{46}{\milli\second} against a first one, the correction applied on
+export, which leaves \SI{4}{\milli\second}, $r=0.23$), its scans agree best
+at $+\SI{46}{\milli\second}$, and the IMU lags the LiDAR by
 \SIrange{8}{14}{\milli\second}; running the SLAM with that IMU lag removed
 leaves the \SI{46}{\milli\second}, so the offset is in the SLAM's output
 poses and is corrected on export. It is about half the
@@ -224,12 +226,13 @@ point carries its own time, so the reference has no such convention; the
 bundle adjustment re-measures the offset of its input on every mapping pass.
 
 \paragraph{Independent starts} The bundle adjustment run from two different
-input trajectories (the SLAM solution, and the same after scan-to-map
-registration) should reach the same poses; their difference bounds how much
-the result depends on its start: \SI{1.0}{\centi\metre} and $0.12^\circ$
-ATE on pass 20261015; rebuilding it from the SLAM trajectory before and
-after its \SI{46}{\milli\second} correction moves it by
-\SI{0.5}{\centi\metre} and $0.10^\circ$.
+input trajectories should reach the same poses; their difference bounds how
+much the result depends on its start. Run from the SLAM trajectory before
+and after its pose-time correction (3.5 and \SI{2.7}{\centi\metre}
+ATE from the result) it reaches the same poses to \SI{0.5}{\centi\metre}
+and $0.10^\circ$ on pass 20261015, and scan-to-map registration of every
+scan to a map of the corrected SLAM poses, a different method, agrees with
+it to \SI{1.5}{\centi\metre} and $0.14^\circ$.
 
 \paragraph{Control distances} Laser-rangefinder distances between landmarks
 fix the absolute scale, which none of the measures above observes.

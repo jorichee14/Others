@@ -1,9 +1,6 @@
 % Trajectories against the reference (SLAM + BA, traj_lidar_ba_glim.txt),
-% pass 20261015. Source: check.py trajs <config>
-%   --traj ba_glim=<odometry>/traj_lidar_ba_glim.txt --ref ba_glim
-% (its "LaTeX rows"). ATE after the best rigid fit; RMSE throughout. The
-% as-output numbers in the footnote are against the reference built before
-% the correction (traj_lidar_ba_glim_v1.txt, 0.5 cm ATE from this one).
+% pass 20261015. Source: check.py report (mapping_report_mapping_20261015.md).
+% ATE after the best rigid fit; RMSE throughout.
 \begin{table}[!t]
 \centering
 \caption{Trajectories Against the Reference (Pass 20261015)}
@@ -15,11 +12,12 @@
 Trajectory & \multicolumn{2}{c}{ATE} & \multicolumn{3}{c}{RPE, cm / deg} & Path \\
  & cm & deg & 1\,s & 10\,s & 100\,s & m \\
 \midrule
-SLAM (GLIM)$^\ast$          & 2.7 & 0.26 & 1.2 / 0.13 & 3.5 / 0.31 & 6.2 / 0.34 & 542.9 \\
-BA from scan-to-map$^\dagger$ & 1.0 & 0.12 & 1.3 / 0.17 & 1.5 / 0.16 & 2.6 / 0.16 & 570.1 \\
+SLAM (GLIM), as output      & 3.5 & 0.72 & 1.4 / 0.32 & 5.8 / 0.97 & 15.5 / 0.99 & 543.5 \\
++ pose-time correction      & 2.7 & 0.26 & 1.2 / 0.13 & 3.5 / 0.31 & 6.2 / 0.34  & 542.9 \\
++ scan-to-map$^\ast$        & 1.5 & 0.14 & 0.8 / 0.15 & 1.1 / 0.16 & 2.7 / 0.18  & 546.3 \\
 \bottomrule
 \multicolumn{7}{l}{Reference: SLAM + BA, path 543.6\,m.}\\
-\multicolumn{7}{l}{$^\ast$ corrected for its 46\,ms pose-time offset; as output, ATE 3.4\,cm / 0.69$^\circ$.}\\
-\multicolumn{7}{l}{$^\dagger$ BA from a different start: bounds the reference's dependence on it.}
+\multicolumn{7}{l}{$^\ast$ every scan registered to a map of the corrected SLAM poses: an}\\
+\multicolumn{7}{l}{\phantom{$^\ast$} independent method, agreeing with the reference to 1.5\,cm.}
 \end{tabular}
 \end{table}

@@ -41,8 +41,8 @@
   "cam_frame": "camera_color_optical_frame"
  },
  "clean": {
-  "_note": "clean_pass.py keeps these beside the pipeline's own outputs: results the paper cites. v1 = the reference built from GLIM before its 46 ms correction (0.5 cm ATE from the final one; GLIM as output 3.4 cm / 0.69 deg against it); traj_lidar_ba = the BA started from scan-to-map (Table II's 'BA from a different start', 1.0 cm / 0.12 deg).",
-  "keep": ["traj_lidar_ba_glim_v1.txt", "traj_lidar_ba.txt", "traj_lidar_ba_loop_closure.json", "traj_lidar_ba_report.json"]
+  "_note": "clean_pass.py keeps this beside the pipeline's own outputs, as the paper cites it: v1 = the reference built from GLIM before its pose-time correction (0.5 cm / 0.10 deg ATE from the final one).",
+  "keep": ["traj_lidar_ba_glim_v1.txt"]
  },
  "07_build_cameras": {"enabled": false},
  "08_emit_tfs": {"enabled": false},

@@ -1,10 +1,10 @@
 % Reference construction, mapping pass 20261015 (mobile_2, 1387 s, 544 m).
-% Read left to right: where a wall's spread comes from. Sources:
-% check.py walls (scans as placed at the same 300 wall
-% spots), check.py map on each TSDF map (20,000 sampled patches),
-% odometry/mobile_2/*_loop_closure.json. SLAM row: GLIM exported with its
-% 46 ms pose-time correction (traj_lidar.txt); reference: traj_lidar_ba_glim.txt.
-% Fusion rows: the poses of the BA started from scan-to-map (traj_lidar_ba.txt).
+% Read left to right: where a wall's spread comes from. Sources: check.py
+% walls (scans as placed at the same 300 wall spots), check.py map on each
+% map (20,000 sampled patches), the loop closures beside the trajectories;
+% check.py report (mapping_report_mapping_20261015.md) for the union row.
+% SLAM row: GLIM exported with its pose-time correction (traj_lidar.txt);
+% reference: traj_lidar_ba_glim.txt.
 \begin{table}[!t]
 \centering
 \caption{Reference Construction, Stage by Stage (Pass 20261015)}
@@ -13,26 +13,23 @@
 \setlength{\tabcolsep}{3pt}
 \begin{tabular}{lccccc}
 \toprule
-Trajectory & \multicolumn{3}{c}{Walls, scans as placed} & TSDF map & Board loop \\
+Trajectory & \multicolumn{3}{c}{Walls, scans as placed} & Map & Board loop \\
 \cmidrule(lr){2-4}
  & 1 scan & 1\,s & run & walls / floors & closure \\
  & cm & cm & cm & cm & mm / deg \\
 \midrule
-SLAM (GLIM)$^\ast$         & 4.7 & 6.6 & 12.3 & 10.7 / 2.8 & 10.8 / 1.24 \\
-\textbf{SLAM + BA (ref.)}  & 4.7 & 6.7 & 9.0  & \textbf{7.8 / 1.9} & 13.9 / 1.36 \\
-\midrule
-\multicolumn{6}{l}{\emph{Fusion, same scans and poses$^\dagger$}} \\
-\quad union of points      & & & 8.4 & 12.5 / 3.6 & \\
-\quad TSDF                 & & & 8.4 & 7.4 / 1.6  & \\
+SLAM (GLIM)$^\ast$          & 4.7 & 6.6 & 12.3 & 10.7 / 2.8 & 10.8 / 1.24 \\
+\textbf{SLAM + BA (ref.)}   & 4.7 & 6.7 & 9.0  & \textbf{7.8 / 1.9} & 13.9 / 1.36 \\
+\quad fused as a union$^\dagger$ &  &  &  & 12.8 / 3.5 & \\
 \bottomrule
 \multicolumn{6}{l}{Left to right: the sensor (1 scan), short-term pose error (1\,s),}\\
 \multicolumn{6}{l}{drift (run), fusion (map), the whole run's closure. Thickness:}\\
 \multicolumn{6}{l}{p95--p5 about planes in 0.25\,m patches; median of 300 wall spots}\\
-\multicolumn{6}{l}{(scans as placed) or of 20,000 sampled patches (map). Loop}\\
-\multicolumn{6}{l}{detection noise 6--8\,mm.}\\
-\multicolumn{6}{l}{$^\ast$ corrected for its 46\,ms pose-time offset; as output: 4.9 / 7.5 /}\\
-\multicolumn{6}{l}{\phantom{$^\ast$} 19.2\,cm, map 14.3 / 3.6\,cm.}\\
-\multicolumn{6}{l}{$^\dagger$ BA started from scan-to-map (1.0\,cm ATE from the reference);}\\
-\multicolumn{6}{l}{\phantom{$^\dagger$} TSDF completeness 98\,\% of the union's surfaces.}
+\multicolumn{6}{l}{(scans as placed) or of 20,000 sampled patches (map, a TSDF).}\\
+\multicolumn{6}{l}{Loop detection noise 6--8\,mm.}\\
+\multicolumn{6}{l}{$^\ast$ corrected for its pose-time offset; as output: 4.9 / 7.5 / 19.2\,cm,}\\
+\multicolumn{6}{l}{\phantom{$^\ast$} map 14.3 / 3.6\,cm.}\\
+\multicolumn{6}{l}{$^\dagger$ the same scans and poses, every point kept; the TSDF holds 98\,\%}\\
+\multicolumn{6}{l}{\phantom{$^\dagger$} of its surfaces.}
 \end{tabular}
 \end{table}

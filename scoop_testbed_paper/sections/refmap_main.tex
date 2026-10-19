@@ -17,9 +17,10 @@ truncated signed distance field \cite{curless1996,vdbfusion} with
 standard deviations of the spread with which the scans place a wall; the
 map is its zero-level surface, and moving objects are removed by
 free-space carving \cite{dufomap}. Fusion matters as much as the poses: the
-usual union of points keeps every cell a stray point reached, which widened
-walls by \SI{4}{\centi\metre} over the scans that built them, whereas the
-signed distance averages across a surface. Each stage is measured by the
+usual union of points keeps every cell a stray point reached, so on the same
+scans and poses its walls are \SI{12.8}{\centi\metre} thick against the
+signed distance's \SI{7.8}{\centi\metre}, which averages across a surface
+and keeps 98\,\% of the union's surfaces. Each stage is measured by the
 thickness of the map's planar surfaces (Table~\ref{tab:refmap_stages}):
 from the SLAM solution (time-corrected, below) to the reference, walls go
 from \SI{10.7}{\centi\metre} to \SI{7.8}{\centi\metre} and floors from
@@ -33,21 +34,22 @@ whole run over \SI{9.0}{\centi\metre} with the reference, against
 reference's spread is thus present within one second, and drift adds
 \SI{2.3}{\centi\metre} over the \SI{1387}{\second} run, where it added
 \SI{5.7}{\centi\metre} before bundle adjustment. Against the reference, the SLAM
-trajectory's heading error followed the yaw rate ($r=0.92$), the signature
+trajectory's heading error followed the yaw rate ($r=0.95$), the signature
 of a time offset: its pose for time $t$ is the scans' pose at
-$t+\SI{46}{\milli\second}$, confirmed independently by the scans being most
-consistent with that shift, and not removed by correcting the IMU's own
+$t+\SI{50}{\milli\second}$, confirmed independently by the scans agreeing
+best with a shift of that size, and not removed by correcting the IMU's own
 \SI{11}{\milli\second} lag inside the SLAM. The SLAM labels each pose
 with the start of its \SI{100}{\milli\second} sweep, where other LiDAR
 odometry uses the middle or the end \cite{molaglim}; ours behaves as the
 pose about half a sweep later, so the offset is measured per sensor rather
-than assumed, and re-checked on every mapping pass. Corrected on export, its ATE
-falls from \SI{3.4}{\centi\metre} and $0.69^\circ$ to
-\SI{2.7}{\centi\metre} and $0.26^\circ$ (Table~\ref{tab:glim_vs_ref}), and
-rebuilding the reference from the corrected trajectory moves the reference
-itself by only \SI{0.5}{\centi\metre} and $0.10^\circ$. Bundle adjustment started from a different
-trajectory reaches the same poses to \SI{1.0}{\centi\metre} and
-$0.12^\circ$ (ATE), so the result is fixed by the scans and not by the
-starting point. The final trajectory closes on the anchor board, seen at
+than assumed, and re-checked on every mapping pass. Corrected on export by
+\SI{46}{\milli\second}, which leaves \SI{4}{\milli\second} ($r=0.23$), its
+ATE falls from \SI{3.5}{\centi\metre} and $0.72^\circ$ to
+\SI{2.7}{\centi\metre} and $0.26^\circ$ (Table~\ref{tab:glim_vs_ref}).
+Bundle adjustment started from the SLAM trajectory before and after the
+correction reaches the same poses to \SI{0.5}{\centi\metre} and
+$0.10^\circ$, and an independent registration of every scan to the map
+agrees with it to \SI{1.5}{\centi\metre} and $0.14^\circ$ (ATE): the
+result is fixed by the scans, not by its start. The final trajectory closes on the anchor board, seen at
 the start and the end of the \SI{1387}{\second} run, within
 \SI{14}{\milli\metre}, inside the detection noise.

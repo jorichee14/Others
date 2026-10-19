@@ -30,17 +30,17 @@ Paper: `sections/refmap_main.tex` (Sec. V-A), `supp/refmap_method.tex`, `tables/
 | Walls, scans as placed with the reference: 1 scan / 1 s / run | 4.7 / 6.7 / 9.0 cm | `check.py walls` |
 | Same with GLIM corrected | 4.7 / 6.6 / 12.3 cm; TSDF map 10.7 / 2.8 cm; loop 10.8 mm / 1.24 deg | same, `check.py map`, `check.py loop` |
 | Same with GLIM as output | 4.9 / 7.5 / 19.2 cm; TSDF map 14.3 / 3.6 cm | same |
-| Fusion, same poses (BA from scan-to-map): union vs TSDF | walls 12.5 vs 7.4 cm, floors 3.6 vs 1.6 cm; TSDF 98 % complete | `check.py map`, `check.py maps` |
-| GLIM corrected vs reference | ATE 2.7 cm / 0.26 deg; RPE 1 s 1.2 / 0.13, 10 s 3.5 / 0.31, 100 s 6.2 / 0.34 | `check.py trajs --ref ba_glim` |
-| GLIM as output vs reference (v1) | ATE 3.4 cm / 0.69 deg | same |
-| BA from scan-to-map vs reference | ATE 1.0 cm / 0.12 deg | same |
+| Fusion, reference poses: union vs TSDF | walls 12.8 vs 7.8 cm, floors 3.5 vs 1.9 cm; TSDF 98.1 % complete | `check.py report` |
+| GLIM corrected vs reference | ATE 2.7 cm / 0.26 deg; RPE 1 s 1.2 / 0.13, 10 s 3.5 / 0.31, 100 s 6.2 / 0.34 | `check.py report` |
+| GLIM as output vs reference | ATE 3.5 cm / 0.72 deg; RPE 1 s 1.4 / 0.32, 10 s 5.8 / 0.97, 100 s 15.5 / 0.99 | `check.py report` |
+| GLIM + scan-to-map (02b) vs reference | ATE 1.5 cm / 0.14 deg; RPE 1 s 0.8 / 0.15, 10 s 1.1 / 0.16, 100 s 2.7 / 0.18 | `check.py report` |
 | Reference rebuilt before vs after the 46 ms correction (v1 vs final) | ATE 0.5 cm / 0.10 deg | same |
-| GLIM's pose time vs the scans | +46 ms (heading vs turning r 0.92); not the IMU's 8-14 ms lag | `check.py trajs --ref`, `check.py imu` |
+| GLIM's pose time vs the scans | +50 ms against the final reference (r 0.95; +46 against v1, the correction applied); 4 ms left after it (r 0.23); not the IMU's 8-14 ms lag | `check.py report`, `check.py time`, `check.py imu` |
 
 Doubled surfaces (kind 3) are not reported: a smeared surface fills the gap between its copies, so the count does not rank the trajectories (GLIM corrected 0.6 %, reference 0.7 %).
 
-Superseded (not in the paper): the union-of-points maps, the v1 reference map (7.5 / 1.7 cm, loop 15.1 mm), the
-scan-to-map trajectory alone (02, not in the pipeline), GLIM with `imu_time_offset`.
+Superseded (not in the paper): the BA started from the old scan-to-map (traj_lidar_ba.txt, 1.0 cm / 0.12 deg), the maps
+of earlier poses (union_ba, tsdf_ba, v1: 7.5 / 1.7 cm), GLIM with `imu_time_offset`. All in `_old/`.
 
 Still lacking: control distances.
 
