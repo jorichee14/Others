@@ -687,7 +687,7 @@ def main_loop(argv=None):
         print(LOOP_DOC)
         return
     P = load_pipeline(args[0])
-    traj = os.path.expanduser(opt.get("--traj") or P.outp(P.dataset["traj"]))
+    traj = P.outp(opt.get("--traj") or P.dataset["traj"])        # a bare name is in odometry/<machine>/
     if not os.path.isfile(traj):
         sys.exit("no trajectory at %s" % traj)
     if loop_check(args[0], traj, opt.get("--out")) is None:
