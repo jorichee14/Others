@@ -81,7 +81,8 @@ check.py <command>   every map and trajectory check, one command (check.py -h;
                             across), loop, stages (needs walls --json), noise (--bag)
     method  <config>        the method on one wall spot, from the pass's own clouds:
                             path and map, the 0.25 m patch and its thickness, the
-                            keyframes that saw it before / after BA, union vs TSDF;
+                            keyframes that saw it before / after BA, each visit as a
+                            submap before / after BA, union vs TSDF;
                             PNG + PDF in processed/<pass>/figures/method/ (--spot x,y,z)
     report  <config>        a mapping pass: GLIM, + time correction, + scan-to-map, + BA
                             against the reference; TSDF and union maps (run_pass's report)

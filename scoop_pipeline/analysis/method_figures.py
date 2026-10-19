@@ -30,6 +30,10 @@ PNG (300 dpi) and PDF each, and the spot in method_spot.json:
                     plane placed with the BA's input poses and with its output
   method_fusion     the same spot in the union of points and in the TSDF map,
                     cut across the wall
+  method_submaps    bundle adjustment as submaps: each visit's keyframes are one
+                    submap; the wall about the spot (2 m along, at its height) from
+                    above, each submap's points across the wall, before and after
+                    BA, and each submap's offset from the others
   method            all of them in one figure, with the spot's thickness at
                     each step
 """
@@ -234,6 +238,41 @@ def clean(M, tree, c, far=0.08):
     return float(np.mean(np.abs(Q[:, 2]) > far)) if len(Q) else 1.0
 
 
+def submaps(d, ks, vis, axes, along=1.0, up=0.15, across=0.3):
+    """Each visit's keyframes as one submap: their points on the wall strip
+    about the spot (|along| <= along, |up| <= up), chosen once by the
+    reference placement and placed both ways, in the strip's own plane
+    (fitted to the TSDF map). Returns {visit: {"before": Q, "after": Q}}."""
+    c, n, u, v = axes
+    q = d["M"][cKDTree(d["M"]).query_ball_point(c, float(np.hypot(along, up)) + across)] - c
+    m = (np.abs(q @ u) <= along) & (np.abs(q @ v) <= up) & (np.abs(q @ n) <= 0.05)
+    if m.sum() >= 30:                                  # the strip's plane, not the 0.25 m patch's
+        W = q[m]
+        c = c + W.mean(0)
+        n2 = np.linalg.svd(W - W.mean(0), full_matrices=False)[2][2]
+        n = n2 * np.sign(n2 @ n)
+        u = np.cross([0.0, 0.0, 1.0], n)
+        u /= np.linalg.norm(u)
+        v = np.cross(n, u)
+    out = {}
+    for k, vi in zip(ks, vis):
+        pa = world(d["clouds"][k], d["after"][k]) - c
+        a, h, o = pa @ u, pa @ v, pa @ n
+        m = (np.abs(a) <= along) & (np.abs(h) <= up) & (np.abs(o) <= across)
+        pb = world(d["clouds"][k][m], d["before"][k]) - c
+        e = out.setdefault(int(vi), {"before": [], "after": []})
+        e["after"].append(np.stack([a[m], h[m], o[m]], 1))
+        e["before"].append(np.stack([pb @ u, pb @ v, pb @ n], 1))
+    return {vi: {key: np.vstack(e[key]) for key in e} for vi, e in out.items()
+            if sum(len(x) for x in e["after"]) >= 30}
+
+
+def submap_gap(S, key):
+    """Max - min of the submaps' median offsets (m): how far apart they put the wall."""
+    meds = [np.median(e[key][:, 2]) for e in S.values()]
+    return float(max(meds) - min(meds)) if len(meds) >= 2 else float("nan")
+
+
 def spread(d):
     return float(np.percentile(d, 95) - np.percentile(d, 5)) if len(d) >= 10 else float("nan")
 
@@ -383,6 +422,37 @@ def draw_fusion(ax, Q, color, title):
     return th
 
 
+def draw_submap_strip(ax, S, key, title, lim):
+    for vi, e in sorted(S.items()):
+        Q = e[key]
+        col = VISIT[vi % len(VISIT)]
+        ax.scatter(Q[:, 0], Q[:, 2] * 100, s=1.2, color=col, linewidths=0, alpha=0.6, rasterized=True)
+        ax.axhline(np.median(Q[:, 2]) * 100, color=col, lw=1.0)
+    ax.axhline(0, color=INK2, lw=0.6, ls="--")
+    ax.set_ylim(-lim, lim)
+    ax.set_xlabel("along the wall (m)")
+    gap = submap_gap(S, key)
+    ax.set_title(f"{title}: submaps {gap * 100:.1f} cm apart")
+    return gap
+
+
+def draw_submap_profiles(ax, S, lim):
+    bins = np.linspace(-lim, lim, 61)
+    for vi, e in sorted(S.items()):
+        col = VISIT[vi % len(VISIT)]
+        for key, ls in (("before", ":"), ("after", "-")):
+            h, b = np.histogram(e[key][:, 2] * 100, bins=bins, density=True)
+            ax.plot(h, 0.5 * (b[1:] + b[:-1]), color=col, lw=1.0, ls=ls)
+    ax.plot([], [], color=INK2, ls=":", label="before BA")
+    ax.plot([], [], color=INK2, ls="-", label="after BA")
+    ax.legend(loc="upper right", fontsize=6.5, frameon=False)
+    ax.axhline(0, color=INK2, lw=0.6, ls="--")
+    ax.set_ylim(-lim, lim)
+    ax.set_xticks([])
+    ax.set_xlabel("points (per submap)")
+    ax.set_title("across the wall")
+
+
 def draw_steps(ax, steps):
     names = [s[0] for s in steps]
     vals = [s[1] * 100 for s in steps]
@@ -432,6 +502,21 @@ def make(d, axes, ks, vis, out, tag=""):
     a1.set_ylabel("height about the spot (m)")
     files.append(save(fig, out, "method_fusion"))
 
+    S = submaps(d, ks, vis, axes)
+    gap_b = gap_a = float("nan")
+    if len(S) >= 2:
+        allo = np.concatenate([e[k][:, 2] for e in S.values() for k in ("before", "after")])
+        slim = max(4.0, 100 * float(np.percentile(np.abs(allo), 98)) * 1.15)
+        fig, (a1, a2, a3) = plt.subplots(1, 3, figsize=(7.16, 2.8), sharey=True,
+                                         gridspec_kw={"width_ratios": [1, 1, 0.45]})
+        gap_b = draw_submap_strip(a1, S, "before", "before BA", slim)
+        gap_a = draw_submap_strip(a2, S, "after", "after BA", slim)
+        draw_submap_profiles(a3, S, slim)
+        a1.set_ylabel("offset from the wall (cm)")
+        fig.suptitle(f"{len(S)} submaps (one per visit) of the wall about the spot, 2 m along, from above",
+                     fontsize=8, y=1.0)
+        files.append(save(fig, out, "method_submaps"))
+
     steps = [("before BA", th_b, COLOR["glim_corr"]),
              ("after BA", th_a, COLOR["glim_ba"]),
              ("union", th_u, COLOR["union"]),
@@ -456,7 +541,9 @@ def make(d, axes, ks, vis, out, tag=""):
         fig.suptitle(f"how the reference is made, at one wall spot of {tag}", y=0.995, fontsize=9)
     files.append(save(fig, out, "method"))
     return files, dict(map_patch_cm=th_map * 100, keyframes_before_cm=th_b * 100,
-                       keyframes_after_cm=th_a * 100, union_cut_cm=th_u * 100, tsdf_cut_cm=th_t * 100)
+                       keyframes_after_cm=th_a * 100, union_cut_cm=th_u * 100, tsdf_cut_cm=th_t * 100,
+                       submaps=len(S), submaps_apart_before_cm=gap_b * 100,
+                       submaps_apart_after_cm=gap_a * 100)
 
 
 def main_method(argv=None):
