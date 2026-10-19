@@ -79,6 +79,9 @@ check.py <command>   every map and trajectory check, one command (check.py -h;
     figures <config>        a figure per step that is done, PNG + PDF in processed/<pass>/
                             figures/: timing, ba, trajectories, maps, wall (one wall cut
                             across), loop, stages (needs walls --json), noise (--bag)
+    smooth  <config>        how smooth each trajectory is (GLIM, 02b, BA): jitter about a
+                            local quadratic fit (0.5 s, 1 s), jerk, angular acceleration;
+                            also while standing still; no bag, no map
     method  <config>        the method on one wall spot, from the pass's own clouds:
                             path and map, the 0.25 m patch and its thickness, the
                             keyframes that saw it before / after BA, each visit as a
@@ -224,6 +227,8 @@ tests/               self-tests, no real bag needed
                      read 3.29 x the points' 1.4 cm noise
   test_figures.py    check.py figures on a made-up pass: seven figures as PNG and
                      PDF, noise skipped without --bag
+  test_smooth.py     check.py smooth: a smooth path near zero, the same with 3 mm /
+                     0.1 deg jitter read back as 0.72 / 0.89 x it
   test_method_figures.py  check.py method on a synthetic room: a wall seen on two
                      laps, thinner after BA than before, TSDF thinner than union
   test_pose_time_check.py  check.py time: a corrected GLIM on time, one 30 ms
