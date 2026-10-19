@@ -18,6 +18,8 @@
   time    <config>         is GLIM's pose time its scans'? (on time / OFF)
   imu     <config>         is the IMU on the LiDAR's time?
   loop    <config>         loop closure on the boards
+  figures <config>         a figure per step that is done (timing, BA, trajectories,
+                           maps, one wall cut across, loop closure, ...)
   report  <config>         a mapping pass's results: GLIM, + time correction,
                            + scan-to-map, + BA against the reference; the TSDF
                            and union maps
@@ -35,6 +37,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "analysis"))
 sys.path.insert(0, os.path.join(ROOT, "map_stages"))
 
+import figures                                                           # noqa: E402
 import maps                                                              # noqa: E402
 import trajs                                                             # noqa: E402
 from pipeline_common import load_pipeline, load_traj                     # noqa: E402
@@ -234,7 +237,8 @@ def report(argv=None):
 COMMANDS = {"map": maps.main_quality, "walls": maps.main_walls, "maps": maps.main_compare,
             "scans": maps.main_scans, "distances": maps.main_distances,
             "noise": maps.main_noise, "trajs": trajs.main_compare, "time": trajs.main_time,
-            "imu": trajs.main_imu, "loop": trajs.main_loop, "report": report}
+            "imu": trajs.main_imu, "loop": trajs.main_loop, "report": report,
+            "figures": figures.main_figures}
 
 
 def main():

@@ -163,15 +163,10 @@ def smooth(v, n):
     return np.convolve(np.pad(v, (n // 2, n - 1 - n // 2), mode="edge"), k, mode="valid")
 
 
-def heading_vs_turning(ta, TA, tb, TB, hp_s=20.0):
-    """Does the heading error of A against the reference B follow B's
-    turning? Two regressions over the run:
-      timing   e(t) against the yaw rate w(t): a pose stamped dt off is
-               rotated by w dt, so e = dt w; e with its slow part (> hp_s)
-               removed, so drift does not count
-      scale    the change of e over 1 s against the turned angle over 1 s:
-               a gyro scale or extrinsic tilt error makes it proportional
-    -> dict(r_timing, dt_ms, r_scale, scale_pct)."""
+def heading_turning_series(ta, TA, tb, TB, hp_s=20.0):
+    """The two series heading_vs_turning regresses, on A's stamps inside B's
+    span: (t, w: B's yaw rate rad/s, e: A's heading error against B rad, both
+    band-passed 0.3 s .. hp_s the same way), plus (e unfiltered, B's yaw)."""
     lo, hi = max(ta[0], tb[0]), min(ta[-1], tb[-1])
     m = (ta >= lo) & (ta <= hi)
     t, A = ta[m], TA[m]
@@ -185,6 +180,20 @@ def heading_vs_turning(ta, TA, tb, TB, hp_s=20.0):
     w_raw = np.gradient(psi_b, t)
     w = smooth(w_raw, ns) - smooth(w_raw, nh)
     e_hp = smooth(e, ns) - smooth(e, nh)
+    return t, w, e_hp, e, psi_b
+
+
+def heading_vs_turning(ta, TA, tb, TB, hp_s=20.0):
+    """Does the heading error of A against the reference B follow B's
+    turning? Two regressions over the run:
+      timing   e(t) against the yaw rate w(t): a pose stamped dt off is
+               rotated by w dt, so e = dt w; e with its slow part (> hp_s)
+               removed, so drift does not count
+      scale    the change of e over 1 s against the turned angle over 1 s:
+               a gyro scale or extrinsic tilt error makes it proportional
+    -> dict(r_timing, dt_ms, r_scale, scale_pct)."""
+    t, w, e_hp, e, psi_b = heading_turning_series(ta, TA, tb, TB, hp_s)
+    step = float(np.median(np.diff(t)))
     out = {}
     if np.std(w) > 1e-6:
         out["r_timing"] = float(np.corrcoef(e_hp, w)[0, 1])

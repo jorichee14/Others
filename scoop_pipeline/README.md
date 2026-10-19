@@ -76,6 +76,9 @@ check.py <command>   every map and trajectory check, one command (check.py -h;
     time    <config>        is GLIM's pose time its scans'? (run_pass.py's time_check)
     imu     <config>        is the IMU on the LiDAR's time?
     loop    <config>        loop closure on the boards (05 --check)
+    figures <config>        a figure per step that is done, PNG + PDF in processed/<pass>/
+                            figures/: timing, ba, trajectories, maps, wall (one wall cut
+                            across), loop, stages (needs walls --json), noise (--bag)
     report  <config>        a mapping pass: GLIM, + time correction, + scan-to-map, + BA
                             against the reference; TSDF and union maps (run_pass's report)
 map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
@@ -214,6 +217,8 @@ tests/               self-tests, no real bag needed
                      reported, a map scaled 1.002 read as +2000 ppm
   test_noise.py      check.py noise on a synthetic bag: one scan's walls and floors
                      read 3.29 x the points' 1.4 cm noise
+  test_figures.py    check.py figures on a made-up pass: seven figures as PNG and
+                     PDF, noise skipped without --bag
   test_pose_time_check.py  check.py time: a corrected GLIM on time, one 30 ms
                      late flagged with the offset to set; check.py report's rows
   test_compare_trajs.py  check.py trajs on an offset and a drifting trajectory

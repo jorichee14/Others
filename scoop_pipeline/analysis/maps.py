@@ -463,6 +463,7 @@ before and after 01's merge / dynamic removal / denoise.
 --probes  wall spots measured (planar wall patches of the map, 0.25 m radius)
 --stride  every Nth scan (faster, fewer views)
 --traj    place the scans with this trajectory instead of dataset.traj
+--json    also write the medians (one scan, the spans, whole run, map) to a file
 
 For each spot, every scan that hit it: where that scan puts the wall along
 the wall's normal. Thickness is the 5-95 % spread, as `map`:
@@ -653,8 +654,15 @@ def main_walls(argv=None):
     ap.add_argument("--probes", type=int, default=300)
     ap.add_argument("--stride", type=int, default=1)
     ap.add_argument("--traj")
+    ap.add_argument("--json", help="also write the medians here (check.py figures reads them)")
     a = ap.parse_args(argv)
-    measure(a.config, a.map, a.probes, a.stride, a.traj)
+    res = measure(a.config, a.map, a.probes, a.stride, a.traj)
+    if a.json:
+        import json
+        with open(a.json, "w") as fh:
+            json.dump(dict(res, traj=a.traj, map=a.map, spans={str(k): v for k, v in res["spans"].items()}),
+                      fh, indent=1)
+        print(f"medians -> {a.json}")
 
 
 # ============================================================================
