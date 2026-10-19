@@ -127,6 +127,8 @@ def main():
                 f.append("keyframes not thinner after BA: %s" % th)
             if not th["tsdf_cut_cm"] < th["union_cut_cm"]:
                 f.append("TSDF not thinner than the union: %s" % th)
+            if not th["union_cut_cm"] < 12:
+                f.append("union cut %.1f cm: the cut holds more than the wall" % th["union_cut_cm"])
             if not 1.0 < th["map_patch_cm"] < 3.5:
                 f.append("TSDF patch %.1f cm, want about 3.29 x 0.6 = 2.0" % th["map_patch_cm"])
             for name in ("method_overview", "method_thickness", "method_views", "method_fusion", "method"):

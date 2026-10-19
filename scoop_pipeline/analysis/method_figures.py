@@ -175,15 +175,18 @@ def choose(d, n_probes, gap, spot=None):
     seen = views(d, C)
     med = np.median(th)
     best, why = None, ""
-    for need in ((2, 6), (2, 4), (1, 4), (1, 1)):          # visits, keyframes
+    dirt = np.array([clean(d["M"], tree, c) for c in C])
+    for need in ((2, 6, 0.02), (2, 6, 0.05), (2, 4, 0.05), (1, 4, 0.1), (1, 1, 1.0)):   # visits, keyframes, dirt
         cand = []
         for j, s in enumerate(seen):
             ks = np.array(sorted(s))
-            if len(ks) >= need[1] and visits_of(d["kt"], ks, gap).max() + 1 >= need[0]:
+            if (len(ks) >= need[1] and dirt[j] <= need[2]
+                    and visits_of(d["kt"], ks, gap).max() + 1 >= need[0]):
                 cand.append(j)
         if cand:
             best = min(cand, key=lambda j: abs(th[j] - med))
-            why = f"{len(cand)} of {len(probes)} wall spots seen on >= {need[0]} visits by >= {need[1]} keyframes"
+            why = (f"{len(cand)} of {len(probes)} wall spots seen on >= {need[0]} visits by >= {need[1]} "
+                   f"keyframes, <= {need[2] * 100:.0f} % of the cut off the wall")
             break
     if best is None:
         raise SystemExit("no wall spot is seen by any keyframe: wrong keyframes for this map?")
@@ -208,6 +211,29 @@ def keyframe_offsets(d, ks, axes, r=R):
     return out
 
 
+def tiled(Q, r=R):
+    """Median p95-p5 of the offset over discs of radius r in the wall's plane,
+    centred every r along and up the cut: check.py map's patches, so a cut
+    reads like the map's thickness."""
+    if len(Q) < 10:
+        return float("nan")
+    t = []
+    for a0 in np.arange(Q[:, 0].min() + r, Q[:, 0].max() - r + 1e-9, r):
+        for h0 in np.arange(Q[:, 1].min() + r, Q[:, 1].max() - r + 1e-9, r):
+            m = np.hypot(Q[:, 0] - a0, Q[:, 1] - h0) <= r
+            if m.sum() >= 10:
+                t.append(spread(Q[m, 2]))
+    return float(np.median(t)) if t else spread(Q[:, 2])
+
+
+def clean(M, tree, c, far=0.08):
+    """Share of the map's points in a box about c (the cut, 30 cm deep) that
+    lie more than far off the wall's plane: floor, ceiling, a corner, clutter."""
+    c, n, u, v = plane_at(M, tree, c)
+    Q = map_cut(M, (c, n, u, v), across=0.3)
+    return float(np.mean(np.abs(Q[:, 2]) > far)) if len(Q) else 1.0
+
+
 def spread(d):
     return float(np.percentile(d, 95) - np.percentile(d, 5)) if len(d) >= 10 else float("nan")
 
@@ -218,7 +244,10 @@ def map_patch(cloud, axes, r=R):
     return np.stack([q @ u, q @ v, q @ n], 1)
 
 
-def map_cut(cloud, axes, along=0.5, up=0.6, across=0.3):
+CUT = dict(along=0.5, up=0.4, across=0.15)     # the fusion cut about the spot (m)
+
+
+def map_cut(cloud, axes, along=CUT["along"], up=CUT["up"], across=CUT["across"]):
     c, n, u, v = axes
     tree = cKDTree(cloud)
     q = cloud[tree.query_ball_point(c, float(np.hypot(np.hypot(along, up), across)))] - c
@@ -343,12 +372,12 @@ def draw_views_offsets(ax, offs, vis, title, lim):
 
 def draw_fusion(ax, Q, color, title):
     a, h, o = Q[:, 0], Q[:, 1], Q[:, 2]
-    th = spread(o)
+    th = tiled(Q)
     if len(o) >= 10:
         p5, p95 = np.percentile(o, [5, 95])
         ax.axvspan(p5 * 100, p95 * 100, color=color, alpha=0.15, lw=0)
     ax.scatter(o * 100, h, s=1.5, color=color, linewidths=0, rasterized=True)
-    ax.set_xlim(-30, 30)
+    ax.set_xlim(-CUT["across"] * 100, CUT["across"] * 100)
     ax.set_xlabel("across the wall (cm)")
     ax.set_title(f"{title}: {th * 100:.1f} cm")
     return th
