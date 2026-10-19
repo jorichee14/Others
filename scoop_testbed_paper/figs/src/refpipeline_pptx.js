@@ -160,4 +160,18 @@ function canvas(title, top, hu) {
   d.slide.addNotes("Top: the mapping session, once per site. GLIM with its pose-time correction, plane bundle adjustment and TSDF fusion give the frozen reference map and trajectory; the boards are posed in it and the infrastructure cameras placed through them. Wall thickness, loop closure, pose time and control distances check it. Bottom: every sequence is registered into the frozen map per agent, validated on held-out boards, and exported in the site frame.");
 }
 
+// ============================================================ slide 3: what each mapping step does
+{
+  const slide = pres.addSlide();
+  slide.background = { color: "FFFFFF" };
+  slide.addText("What each mapping step does to a wall", { x: 0.5, y: 0.4, w: 12.3, h: 0.7,
+    fontFace: "Cambria", fontSize: 32, bold: true, color: INK, margin: 0, isTextBox: true, objectName: "Title" });
+  const w = 11.0, h = w * 1110 / 2148;                // figs/fig_refmethod.png, from refmethod.py
+  slide.addImage({ path: require("path").join(__dirname, "..", "fig_refmethod.png"), x: (13.333 - w) / 2,
+    y: 1.25, w, h, altText: "Wall offsets before and after pose-time correction, plane bundle adjustment and TSDF fusion", objectName: "Method figure" });
+  slide.addText("Simulated room (top view); the dataset's numbers are in the tables", { x: 0.5, y: 7.0, w: 12.3, h: 0.3,
+    fontFace: FONT, fontSize: 11, italic: true, color: MUTED, margin: 0, isTextBox: true, objectName: "Source" });
+  slide.addNotes("One wall, seen from above, before and after each step; the shaded bars are the 5-95 % spread of each 0.25 m patch, the wall thickness. (a) GLIM writes each pose with the start of its sweep, 50 ms before the scan's middle; while turning, the scans land off the wall. Moving the poses 46 ms on export leaves 4 ms and the wall is as thin as the sensor. (b) Small odometry drift places the same wall differently on each visit; plane bundle adjustment moves all keyframes together until every plane is as thin as the scans allow. (c) The union keeps every cell any scan hit, so the band grows with every pass; the TSDF averages the rays' signed distances and keeps one surface at their mean. This is a simulation: its walls are perfect planes, so the TSDF comes out thinner than on the real map (7.8 cm against 12.8 cm for the union on 20261015).");
+}
+
 pres.writeFile({ fileName: "fig_refpipeline.pptx" }).then(f => console.log("wrote " + f));
