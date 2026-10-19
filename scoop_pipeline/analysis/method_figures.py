@@ -72,19 +72,31 @@ def paths(P, a):
     ba = P.cfg.get("02_bundle_adjust") or P.cfg.get("02b_bundle_adjust") or {}
     ref = a.ref or trajs.reference_traj(P)
     inp = a.input or (P.outp(ba["input"]) if ba.get("input") else P.seed_traj())
+    kf = a.keyframes or os.path.splitext(ref)[0] + "_keyframes.npz"
+    old = os.path.join(P.out_dir, "_old", os.path.relpath(kf, P.out_dir))
+    if not a.keyframes and not os.path.isfile(kf) and os.path.isfile(old):
+        kf = old                                     # clean_pass.py moves 02's cache to _old/
     return dict(
         tsdf=a.tsdf or P.outp(P.pcd("denoised")),
         union=a.union or P.outp("denoised_union_%s.pcd" % P.tag if P.tag else "denoised_union.pcd"),
         ref=ref, input=inp,
-        keyframes=a.keyframes or os.path.splitext(ref)[0] + "_keyframes.npz",
+        keyframes=kf, config=a.config,
         kf_period=float(ba.get("kf_period", 1.0)))
 
 
 def load(f):
     """Maps, trajectories, and the keyframes placed both ways."""
-    for k in ("tsdf", "union", "ref", "input", "keyframes"):
+    for k in ("tsdf", "union", "ref", "input"):
         if not os.path.isfile(f[k]):
             raise SystemExit(f"no {k}: {f[k]}")
+    if not os.path.isfile(f["keyframes"]):
+        out = os.path.splitext(os.path.basename(f["ref"]))[0] + "_kf.txt"
+        raise SystemExit(
+            f"no keyframes: {f['keyframes']} (02's cache; clean_pass.py moves it to _old/, so it may "
+            f"have been deleted with _old/). Rebuild only the keyframes, leaving the reference as it is:\n"
+            f"  python3 map_stages/02_bundle_adjust.py {f['config']} --input {f['input']} "
+            f"--output {out} --rounds 0\n"
+            f"then add --keyframes {os.path.join(os.path.dirname(f['ref']), out[:-4] + '_keyframes.npz')}")
     tr, Tr = load_traj(f["ref"])
     ti, Ti = load_traj(f["input"])
     z = np.load(f["keyframes"], allow_pickle=False)
