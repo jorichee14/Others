@@ -160,18 +160,50 @@ function canvas(title, top, hu) {
   d.slide.addNotes("Top: the mapping session, once per site. GLIM with its pose-time correction, plane bundle adjustment and TSDF fusion give the frozen reference map and trajectory; the boards are posed in it and the infrastructure cameras placed through them. Wall thickness, loop closure, pose time and control distances check it. Bottom: every sequence is registered into the frozen map per agent, validated on held-out boards, and exported in the site frame.");
 }
 
-// ============================================================ slide 3: what each mapping step does
-{
+// ============================================================ slides 3-6: how each mapping step works
+// drawings from refmethod.py (figs/fig_refmethod_{a,b,c,d}.png); 20261015 numbers from the tables
+const STEPS = [
+  ["a", "Pose-time correction", [
+    "GLIM stamps each pose with the start of its LiDAR sweep; the pose is the robot about half a sweep (50 ms) later.",
+    "A scan placed with the pose stamped at its own time lands off the walls whenever the robot turns.",
+    "Fix: every pose moved +46 ms on export (recording.yaml, pose_time_offset)."],
+   "20261015: 4 ms left; checked on every pass (heading against turning rate)",
+   "GLIM writes each pose with the time its sweep started, but the pose describes the robot about half a sweep later. Looking up the pose at a scan's own time therefore gives where the robot was 50 ms later; while turning, that scan lands beside the walls. We move every pose 46 ms on export, and check the remaining offset on every pass."],
+  ["b", "Plane bundle adjustment", [
+    "Keyframes: 1 s of scans each. Planes: flat 0.5 m cubes seen by at least 3 keyframes.",
+    "Each plane is solved in closed form, so only the poses are unknown; the cost is every plane's thickness squared.",
+    "All keyframe poses move together; odometry keeps what no plane sees, gravity holds roll and pitch; 3 rounds."],
+   "20261015: whole-run walls 12.3 cm (GLIM as output) → 9.0 cm (reference)",
+   "Like bundle adjustment with cameras, but the shared features are planes instead of points. Each keyframe sees part of a plane; if its pose is off, its points sit above or below the others. The plane is fitted in closed form, and all poses are moved together until every plane is as thin as the scans allow."],
+  ["c", "TSDF fusion", [
+    "Each point is a ray: every 2 cm cell within ±8 cm of the hit gets its signed distance (+ in front, − behind).",
+    "Averaged over all rays; the surface is where the average crosses zero (cells seen by at least 3 rays).",
+    "One surface instead of every cell any scan hit: the union's band grows with every pass."],
+   "20261015: map walls 7.8 cm, against 12.8 cm for the union",
+   "The union of points keeps every cell any scan ever hit, so a rarely hit cell counts as much as the dense centre and walls grow thicker with every pass. The TSDF instead averages, along each ray, how far each cell is in front of or behind the hit, and puts the surface where that average is zero."],
+  ["d", "Wall thickness", [
+    "Each 0.25 m patch: fit a plane, take the points' offsets along its normal.",
+    "Thickness = p95 − p5 of the offsets (3.29σ for Gaussian noise).",
+    "Points from one scan, 1 s or the whole run, as placed: separates sensor, motion and pose error."],
+   "20261015 reference: sensor alone 3.0 · 1 scan 4.7 · 1 s 6.7 · whole run 9.0 cm",
+   "This is how every thickness in the tables is measured. The same patches are measured with the points of one scan, of one second, or of the whole run as placed by the trajectory; each scan against its own plane gives the sensor alone."],
+];
+for (const [key, title, bullets, result, notes] of STEPS) {
   const slide = pres.addSlide();
   slide.background = { color: "FFFFFF" };
-  slide.addText("What each mapping step does to a wall", { x: 0.5, y: 0.4, w: 12.3, h: 0.7,
-    fontFace: "Cambria", fontSize: 32, bold: true, color: INK, margin: 0, isTextBox: true, objectName: "Title" });
-  const w = 11.0, h = w * 1110 / 2148;                // figs/fig_refmethod.png, from refmethod.py
-  slide.addImage({ path: require("path").join(__dirname, "..", "fig_refmethod.png"), x: (13.333 - w) / 2,
-    y: 1.25, w, h, altText: "Wall offsets before and after pose-time correction, plane bundle adjustment and TSDF fusion", objectName: "Method figure" });
-  slide.addText("Simulated room (top view); the dataset's numbers are in the tables", { x: 0.5, y: 7.0, w: 12.3, h: 0.3,
-    fontFace: FONT, fontSize: 11, italic: true, color: MUTED, margin: 0, isTextBox: true, objectName: "Source" });
-  slide.addNotes("One wall, seen from above, before and after each step; the shaded bars are the 5-95 % spread of each 0.25 m patch, the wall thickness. (a) GLIM writes each pose with the start of its sweep, 50 ms before the scan's middle; while turning, the scans land off the wall. Moving the poses 46 ms on export leaves 4 ms and the wall is as thin as the sensor. (b) Small odometry drift places the same wall differently on each visit; plane bundle adjustment moves all keyframes together until every plane is as thin as the scans allow. (c) The union keeps every cell any scan hit, so the band grows with every pass; the TSDF averages the rays' signed distances and keeps one surface at their mean. This is a simulation with perfectly flat walls; on the real 20261015 map the TSDF walls are 7.8 cm against 12.8 cm for the union.");
+  slide.addText(title, { x: 0.5, y: 0.4, w: 12.3, h: 0.7, fontFace: "Cambria", fontSize: 32, bold: true,
+    color: INK, margin: 0, isTextBox: true, objectName: "Title" });
+  const h = 5.7, w = h * 1440 / 1180;
+  slide.addImage({ path: require("path").join(__dirname, "..", `fig_refmethod_${key}.png`), x: 0.35, y: 1.35, w, h,
+    altText: title + ": schematic drawing", objectName: "Drawing" });
+  const x = 0.35 + w + 0.35, tw = 13.333 - x - 0.5;
+  slide.addText(bullets.map((t, i) => ({ text: t, options: { bullet: true, breakLine: i < bullets.length - 1 } })), {
+    x, y: 1.7, w: tw, h: 3.6, fontFace: FONT, fontSize: 17, color: INK, valign: "top", paraSpaceAfter: 12,
+    margin: 0, isTextBox: true, objectName: "Bullets" });
+  slide.addText(result, { shape: pres.shapes.ROUNDED_RECTANGLE, x, y: 5.6, w: tw, h: 0.9, fill: { color: OUTF },
+    line: { color: OUTE, width: 1 }, rectRadius: 0.08, fontFace: FONT, fontSize: 15, bold: true, color: INK,
+    align: "left", valign: "middle", margin: 8, objectName: "Result" });
+  slide.addNotes(notes);
 }
 
 pres.writeFile({ fileName: "fig_refpipeline.pptx" }).then(f => console.log("wrote " + f));

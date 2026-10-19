@@ -1,32 +1,23 @@
 #!/usr/bin/env python3
-"""What each mapping step does to a wall: figs/fig_refmethod.pdf (and .png).
+"""How each mapping step works, as schematic drawings: figs/fig_refmethod.pdf
+(and .png, the four panels together) and figs/fig_refmethod_{a,b,c,d}.png
+(one per step, for the slides).
 
     python3 figs/src/refmethod.py
 
-Computed on a simulated room seen from above, not on 20261015: a planar
-LiDAR with the Ouster's angular step (1024 per turn) and 0.9 cm range noise
-(sigma of the sensor alone). Every panel shows the same wall, as the offset
-of its points from the wall (cm) against the position along it (m). The
-shaded bars are the 5-95 % spread of each 0.25 m patch, the paper's wall
-thickness; their medians are printed, not drawn, because the simulation's
-walls are perfect planes and its numbers are not the dataset's (those are
-in tables/refmap_stages.tex). Top row before the step, bottom row after.
-
-  (a) pose-time correction: scans of a walk through a turn, placed with poses
-      50 ms late (GLIM labels a pose with the start of its sweep) and with the
-      4 ms left after the correction.
-  (b) plane bundle adjustment: one scan per 1 s keyframe around the room, the
-      keyframes placed with a drifting odometry, then adjusted as in
-      map_stages/02_bundle_adjust.py in 2-D: 0.5 m cubes, a cube a plane when
-      thin and seen by 3 keyframes, the cost each plane's points' squared
-      distance to it with the plane solved in closed form, an odometry
-      factor, the first keyframe fixed, three rounds.
-  (c) fusion: scans placed with a 2.7 cm spread (sigma_s of the reference)
-      fused as the union (one point per 2 cm cell any scan hit) and as a TSDF
-      (2 cm cells, truncation 8 cm, at least 3 rays, zero crossings), as in
-      01_build_map.py. The placement errors are shared within each of 8
-      visits of the wall, as pose errors are; independent errors would
-      average away in the TSDF entirely.
+  (a) pose-time correction: GLIM stamps a pose with the start of its sweep,
+      while the pose is the robot about half a sweep later; a scan placed
+      with the pose stamped at its time lands off the walls when turning.
+  (b) plane bundle adjustment: keyframe poses T_k, the points each keyframe
+      sees of one plane, their distances to the plane (solved in closed
+      form), all poses moved together to make every plane thin.
+  (c) TSDF fusion: the rays of two scans on a grid of cells, the signed
+      distance each cell within tau of a hit receives, averaged over the
+      rays; the surface where it crosses zero (computed, not drawn by hand).
+  (d) wall thickness: a 0.25 m patch, its plane, the offsets of the points
+      along its normal; the thickness is their 5-95 % spread.
+Drawn to explain, not to scale (the turn in (a) and the offsets in (b) are
+exaggerated).
 """
 import os
 
@@ -34,28 +25,53 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt                                         # noqa: E402
-from scipy.optimize import least_squares                                # noqa: E402
+from matplotlib.colors import LinearSegmentedColormap                   # noqa: E402
+from matplotlib.patches import Polygon, Circle, Rectangle               # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(os.path.dirname(HERE), "fig_refmethod")
 
-INK, INK2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
-GREY, BLUE, ORANGE = "#8a8984", "#2a78d6", "#eb6834"     # GLIM, GLIM corrected, reference / TSDF
+INK, INK2, GRID = "#0b0b0b", "#52514e", "#d4d3cf"
+GREY, BLUE, ORANGE = "#8a8984", "#2a78d6", "#eb6834"     # GLIM, corrected / planes, result
+PLANE = "#9cc0ec"                                       # a plane, as in the classic BA drawing
 FS = 7.0
-plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": FS, "axes.edgecolor": INK2,
-                     "axes.linewidth": 0.6, "xtick.color": INK2, "ytick.color": INK2,
-                     "xtick.major.width": 0.6, "ytick.major.width": 0.6})
+plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": FS, "mathtext.fontset": "dejavusans"})
+RNG = np.random.default_rng(3)
 
-RNG = np.random.default_rng(7)
-SIGMA = 0.009                          # sensor alone, m
-STEP = 2 * np.pi / 1024                # Ouster angular step
-PATCH = 0.25                           # thickness patch, m
-WALL_X = (4.0, 6.0)                    # the wall shown: y = 0, x in this range
 
-# room 10 x 6 m with a pillar in the middle, as segments (a, b)
-_box = [(4.4, 2.6), (5.6, 2.6), (5.6, 3.4), (4.4, 3.4)]
-_room = [(0, 0), (10, 0), (10, 6), (0, 6)]
-SEGS = np.array([(p, q) for poly in (_room, _box) for p, q in zip(poly, poly[1:] + poly[:1])], float)
+def P(p, az=-30.0, el=20.0, f=14.0):
+    """Perspective view of 3-D points (x right, y away, z up) -> 2-D."""
+    p = np.asarray(p, float)
+    x, y, z = p[..., 0], p[..., 1], p[..., 2]
+    a, e = np.radians(az), np.radians(el)
+    xr, yr = x * np.cos(a) - y * np.sin(a), x * np.sin(a) + y * np.cos(a)
+    s = f / (f + yr * np.cos(e) - z * np.sin(e))
+    return np.stack([xr * s, (z * np.cos(e) + yr * np.sin(e)) * s], -1)
+
+
+def arrow(ax, p, q, color=INK, lw=0.9, style="-|>", ms=7, z=4, rad=0.0, ls="-"):
+    ax.annotate("", xy=q, xytext=p, zorder=z, arrowprops=dict(
+        arrowstyle=style, color=color, lw=lw, shrinkA=0, shrinkB=0, mutation_scale=ms,
+        linestyle=ls, connectionstyle=f"arc3,rad={rad}"))
+
+
+def callout(ax, text, xy, xytext, rad=0.3, ha="center", color=INK):
+    ax.annotate(text, xy=xy, xytext=xytext, ha=ha, va="center", color=color, zorder=6,
+                arrowprops=dict(arrowstyle="-|>", color=INK, lw=0.7, mutation_scale=6,
+                                shrinkA=2, shrinkB=1, connectionstyle=f"arc3,rad={rad}"))
+
+
+def sensor(ax, xy, label, color=INK, hollow=False, dx=0.0, dy=-0.25, r=0.075, ha="center"):
+    ax.add_patch(Circle(xy, r, fc="white" if hollow else color, ec=color, lw=1.0, zorder=5))
+    if label:
+        ax.text(xy[0] + dx, xy[1] + dy, label, ha=ha, va="top", color=color, zorder=6)
+
+
+def frame(ax, xlim, ylim):
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
+    ax.set_aspect("equal")
+    ax.axis("off")
 
 
 def rot(t):
@@ -63,244 +79,263 @@ def rot(t):
     return np.array([[c, -s], [s, c]])
 
 
-def scan(pose, max_range=12.0):
-    """One sweep from pose (x, y, heading): points in the sensor frame."""
-    phi = np.arange(0, 2 * np.pi, STEP)
-    d = np.stack([np.cos(phi + pose[2]), np.sin(phi + pose[2])], 1)          # N x 2
-    a, e = SEGS[:, 0], SEGS[:, 1] - SEGS[:, 0]                              # S x 2
-    ao = a[None] - np.asarray(pose[:2])[None, None]                        # 1 x S x 2
-    cross = lambda u, v: u[..., 0] * v[..., 1] - u[..., 1] * v[..., 0]    # noqa: E731
-    den = cross(d[:, None], e[None])
-    with np.errstate(divide="ignore", invalid="ignore"):
-        t = cross(ao, e[None]) / den
-        s = cross(ao, d[:, None]) / den
-    t[~((np.abs(den) > 1e-12) & (t > 0.1) & (s >= 0) & (s <= 1))] = np.inf
-    r = t.min(1)
-    ok = r < max_range
-    r = r[ok] + RNG.normal(0, SIGMA, ok.sum())
-    return r[:, None] * np.stack([np.cos(phi[ok]), np.sin(phi[ok])], 1)
-
-
-def place(p, pose):
-    return p @ rot(pose[2]).T + np.asarray(pose[:2])
-
-
-def on_wall(w, pad=0.15):
-    """Points of the shown wall: (along, offset)."""
-    keep = (np.abs(w[:, 1]) < pad) & (w[:, 0] > WALL_X[0]) & (w[:, 0] < WALL_X[1])
-    return w[keep]
-
-
-def thickness(w):
-    """Patches of PATCH m: (x0, p5, p95) each, and the median 5-95 % spread."""
-    bars = []
-    for x0 in np.arange(WALL_X[0], WALL_X[1] - 1e-9, PATCH):
-        y = w[(w[:, 0] >= x0) & (w[:, 0] < x0 + PATCH), 1]
-        if len(y) >= 10:
-            bars.append((x0, *np.percentile(y, [5, 95])))
-    bars = np.array(bars)
-    return bars, float(np.median(bars[:, 2] - bars[:, 1]))
-
-
 # ------------------------------------------------------------------ (a) pose time
-def pose_time():
-    """A walk at 0.8 m/s through a left turn; scans at 10 Hz placed with the
-    pose dt later than their own time."""
-    ts = np.arange(0, 6, 0.001)
-    w = 0.8 * np.exp(-((ts - 2.5) / 0.7) ** 2)                 # rad/s, about 80 deg in all
-    th = np.cumsum(w) * 0.001
-    xy = np.array([1.5, 1.2]) + np.cumsum(0.8 * np.stack([np.cos(th), np.sin(th)], 1), 0) * 0.001
-    pose = lambda t: np.array([*(np.interp(t, ts, xy[:, i]) for i in (0, 1)), np.interp(t, ts, th)])  # noqa: E731
-    out = {}
-    times = np.arange(0.5, 5.0, 0.1)
-    scans = [(t, scan(pose(t))) for t in times]
-    for dt in (0.050, 0.004):
-        out[dt] = np.concatenate([on_wall(place(p, pose(t + dt))) for t, p in scans])
-    return out[0.050], out[0.004]
+def pose_time(ax):
+    """Top view of a left turn; below it, one sweep on a time axis."""
+    C, R = np.array([0.0, 2.2]), 2.2
+    on = lambda phi: C + R * np.array([np.cos(phi), np.sin(phi)])       # noqa: E731
+    ph = np.radians(np.linspace(-125, -8, 100))
+    path = C + R * np.stack([np.cos(ph), np.sin(ph)], 1)
+    ax.plot(*path.T, color=INK2, lw=0.8, ls=(0, (4, 3)), zorder=1)
+    arrow(ax, path[-6], path[-1], color=INK2, lw=0.8)
+    ax.text(*(path[-1] + [0.12, 0]), "path", color=INK2, ha="left", va="center")
+
+    # the wall, its far side hatched
+    xw = 3.3
+    ax.plot([xw, xw], [-0.7, 2.5], color=INK, lw=1.6, zorder=2)
+    ax.add_patch(Rectangle((xw, -0.7), 0.16, 3.2, fc="none", ec=GREY, lw=0, hatch="////", zorder=1))
+    ax.text(xw + 0.25, 2.5, "wall", ha="left", va="top", color=INK)
+
+    pt, pa = np.radians(-82), np.radians(-70)              # the scan's time; 50 ms later (exaggerated)
+    t_pos, a_pos = on(pt), on(pa)
+    t_h, a_h = pt + np.pi / 2, pa + np.pi / 2
+    hits = np.array([[xw, y] for y in (-0.35, 0.25, 0.85, 1.45)])
+    local = (hits - t_pos) @ rot(t_h)                      # the scan, in the sensor's frame
+    ghost = local @ rot(a_h).T + a_pos                     # ... placed with the later pose
+
+    for h in hits:
+        ax.plot(*np.stack([t_pos, h]).T, color=BLUE, lw=0.7, zorder=2)
+    for g in ghost:
+        ax.plot(*np.stack([a_pos, g]).T, color=GREY, lw=0.7, ls=(0, (2, 2)), zorder=2)
+    ax.scatter(*hits.T, s=14, color=BLUE, zorder=4, lw=0)
+    ax.scatter(*ghost.T, s=14, color="white", edgecolor=GREY, lw=1.0, zorder=4)
+    for h, g in zip(hits, ghost):
+        arrow(ax, h, g, color=GREY, lw=0.6, ms=5, z=3)
+    for pos, h, col, hol in ((t_pos, t_h, BLUE, False), (a_pos, a_h, GREY, True)):
+        sensor(ax, pos, None, color=col, hollow=hol)
+        arrow(ax, pos, pos + 0.55 * np.array([np.cos(h), np.sin(h)]), color=col, lw=1.4, ms=8, z=6)
+    ax.text(*(t_pos + [-0.15, -0.12]), "robot at the\nscan's time $t$", ha="right", va="top", color=BLUE)
+    callout(ax, "GLIM's pose\nstamped $t$", a_pos + [-0.05, 0.08], a_pos + [-0.6, 1.05], rad=0.3,
+            color=INK2)
+    callout(ax, "placed with it:\noff the wall", ghost[2] + [0.04, 0.0], (4.75, 1.85), rad=0.3)
+    callout(ax, "corrected:\non the wall", hits[0] + [0.0, -0.02], hits[0] + [-0.6, -0.75], rad=-0.3,
+            color=BLUE)
+
+    # one sweep on a time axis
+    y0, x0, x1 = -2.05, -0.9, 3.1
+    ax.plot([x0, x1], [y0, y0], color=INK, lw=1.0)
+    for x, lab in ((x0, "0"), ((x0 + x1) / 2, "50"), (x1, "100 ms")):  # noqa: B007
+        ax.plot([x, x], [y0 - 0.06, y0 + 0.06], color=INK, lw=0.8)
+        ax.text(x, y0 - 0.12, lab, ha="center", va="top", color=INK2)
+    ax.scatter(np.linspace(x0 + 0.1, x1 - 0.1, 14), np.full(14, y0 + 0.17), s=4, color=INK2, lw=0)
+    ax.text((x0 + x1) / 2, y0 - 0.48, "one sweep", ha="center", va="top", color=INK2)
+    xm = x0 + 0.46 * (x1 - x0)
+    ax.annotate("", xy=(xm, y0 + 0.36), xytext=(x0, y0 + 0.36), arrowprops=dict(
+        arrowstyle="-|>", color=BLUE, lw=1.0, mutation_scale=7, shrinkA=0, shrinkB=0,
+        connectionstyle="arc3,rad=-0.35"))
+    ax.text(x0, y0 - 0.48, "GLIM's stamp:\nsweep start", ha="center", va="top", color=INK2)
+    ax.text((x0 + xm) / 2, y0 + 0.78, "+46 ms on export", ha="center", va="bottom", color=BLUE,
+            fontweight="bold")
+    frame(ax, (-1.5, 5.4), (-3.0, 2.7))
 
 
-# ------------------------------------------------------------------ (b) bundle adjustment
-def voxel_thin(p, v=0.05):
-    k = np.floor(p / v).astype(np.int64)
-    _, inv = np.unique(k, axis=0, return_inverse=True)
-    inv = inv.ravel()
-    n = np.bincount(inv)
-    return np.stack([np.bincount(inv, p[:, i]) / n for i in (0, 1)], 1)
+# ------------------------------------------------------------------ (b) plane BA
+def plane_ba(ax):
+    """Three keyframes above one plane (a floor, so its normal is up); each
+    keyframe's points of it, and their distances to it."""
+    pr = lambda p: P(p, az=-18, el=36)                    # noqa: E731
+    floor = [[-1.9, 0.3, 0], [1.9, 0.3, 0], [1.9, 3.3, 0], [-1.9, 3.3, 0]]
+    ax.add_patch(Polygon(pr(floor), closed=True, fc=PLANE, ec=INK, lw=0.9, alpha=0.6, zorder=2))
+    ax.text(*(pr([1.9, 0.3, 0]) + [0.05, -0.08]), "plane $f$", ha="left", va="top", color=INK,
+            zorder=6)
+
+    poses = [np.array([-2.7, 0.1, 1.7]), np.array([0.0, -0.6, 3.1]), np.array([2.7, 0.4, 1.7])]
+    off = [0.42, -0.08, -0.36]                           # each keyframe's pose error, along the normal
+    xy = [[(-1.45, 0.9), (-0.7, 2.5), (0.05, 1.45)],
+          [(-1.0, 2.0), (0.35, 0.8), (1.0, 2.7)],
+          [(-0.1, 2.9), (0.85, 1.6), (1.45, 0.75)]]
+    seg = None
+    for k, (T, e, pts) in enumerate(zip(poses, off, xy)):
+        s2 = pr(T)
+        for j, (x, y) in enumerate(pts):
+            q = np.array([x, y, e + RNG.normal(0, 0.03)])
+            z = 3 if q[2] > 0 else 1
+            ax.plot(*np.stack([s2, pr(q)]).T, color=INK2, lw=0.55, zorder=z)
+            ax.plot(*np.stack([pr(q), pr([x, y, 0])]).T, color=ORANGE, lw=1.8, zorder=z + 1)
+            ax.scatter(*pr(q), s=13, color=INK, lw=0, zorder=z + 1)
+            if k == 0 and j == 0:
+                seg = (pr(q) + pr([x, y, 0])) / 2
+        sensor(ax, s2, None, r=0.08)
+        ax.text(s2[0], s2[1] + 0.3, f"$T_{k + 1}$", ha="center", va="bottom", color=INK, fontsize=FS + 1)
+        for d in ((0.32, 0), (0, 0.32)):                 # the pose moves
+            d = np.array(d)
+            arrow(ax, s2 - d, s2 + d, style="<|-|>", lw=0.8, ms=5)
+
+    c = np.array([0.0, 1.8, 0.0])
+    arrow(ax, pr(c), pr(c + [0, 0, 0.95]), color=BLUE, lw=1.4, z=5)
+    ax.text(*(pr(c + [0, 0, 0.95]) + [0.08, 0]), r"$\mathbf{n}$", color=BLUE, ha="left", va="center",
+            fontsize=FS + 1.5)
+    callout(ax, "distance to\nthe plane", seg, seg + [-0.9, -1.0], rad=-0.3)
+
+    x0 = 3.5
+    ax.text(x0, 2.35, "keyframe: 1 s of scans\nplane: a flat 0.5 m cube\nseen by $\\geq$3 keyframes",
+            ha="left", va="top", color=INK2, linespacing=1.4)
+    ax.text(x0, 0.75, "plane in closed form ($\\mathbf{n}$, $d$);\nall poses $T_k$ moved together:",
+            ha="left", va="top", color=INK, linespacing=1.4)
+    ax.text(x0, -0.55, r"$\min_{T}\ \sum_f\ \lambda_{\min}(\mathrm{Cov}_f)$", ha="left", va="center",
+            color=INK, fontsize=FS + 1.5)
+    ax.text(x0, -1.15, "every plane's thickness$^2$", ha="left", va="center", color=INK2)
+    frame(ax, (-3.3, 7.0), (-1.6, 3.2))
 
 
-def compose(a, b):
-    return np.array([*(place(b[None, :2], a)[0]), a[2] + b[2]])
-
-
-def relative(a, b):
-    return np.array([*((np.asarray(b[:2]) - a[:2]) @ rot(a[2])), b[2] - a[2]])
-
-
-def find_planes(clouds, poses, c=0.5, sig_max=0.06, thin=0.3, min_kf=3):
-    """Cubes of edge c whose points are flat: lists of (keyframe, point index)."""
-    w = np.concatenate([place(p, T) for p, T in zip(clouds, poses)])
-    kf = np.concatenate([np.full(len(p), k) for k, p in enumerate(clouds)])
-    idx = np.concatenate([np.arange(len(p)) for p in clouds])
-    key = np.floor(w / c).astype(np.int64)
-    _, inv = np.unique(key, axis=0, return_inverse=True)
-    planes = []
-    for v in range(inv.max() + 1):
-        m = np.flatnonzero(inv.ravel() == v)
-        if len(np.unique(kf[m])) < min_kf:
-            continue
-        q = w[m] - w[m].mean(0)
-        sig = np.sqrt(np.linalg.eigvalsh(q.T @ q / len(m)))
-        if sig[0] < sig_max and sig[0] < thin * sig[1] and sig[1] > 0.1 * c:
-            planes.append((kf[m], idx[m]))
-    return planes
-
-
-def bundle_adjust(clouds, init, odo, s_odo=(0.006, 0.006, np.radians(0.1)), rounds=3):
-    K = len(clouds)
-    poses = np.array(init, float)
-    for _ in range(rounds):
-        planes = find_planes(clouds, poses)
-        pts = [np.array([clouds[k][i] for k, i in zip(kk, ii)]) for kk, ii in planes]
-
-        def residuals(x):
-            P = np.vstack([poses[:1], x.reshape(K - 1, 3)])
-            res = []
-            for (kk, _), p in zip(planes, pts):
-                c, s = np.cos(P[kk, 2]), np.sin(P[kk, 2])
-                w = np.stack([c * p[:, 0] - s * p[:, 1], s * p[:, 0] + c * p[:, 1]], 1) + P[kk, :2]
-                q = w - w.mean(0)
-                n = np.linalg.eigh(q.T @ q)[1][:, 0]       # the plane, in closed form
-                res.append(q @ n / SIGMA)
-            for k in range(K - 1):
-                e = relative(P[k], P[k + 1]) - odo[k]
-                e[2] = (e[2] + np.pi) % (2 * np.pi) - np.pi
-                res.append(e / np.asarray(s_odo))
-            return np.concatenate(res)
-
-        x = least_squares(residuals, poses[1:].ravel(), method="trf", x_scale="jac").x
-        poses = np.vstack([poses[:1], x.reshape(K - 1, 3)])
-    return poses
-
-
-def bundle():
-    """One scan per keyframe, 1 s apart, around the pillar; odometry with
-    0.6 cm and 0.1 deg noise per keyframe."""
-    a = np.linspace(0, 2 * np.pi, 31)[:-1] - np.pi / 2
-    truth = np.stack([5 + 3.4 * np.cos(a), 3 + 2.0 * np.sin(a), a + np.pi / 2], 1)
-    clouds = [voxel_thin(scan(T)) for T in truth]
-    odo = []
-    for k in range(len(truth) - 1):
-        d = relative(truth[k], truth[k + 1])
-        odo.append(d + RNG.normal(0, [0.006, 0.006, np.radians(0.1)]))
-    init = [truth[0]]
-    for d in odo:
-        init.append(compose(init[-1], d))
-    init = np.array(init)
-    ba = bundle_adjust(clouds, init, odo)
-    wall = lambda P: np.concatenate([on_wall(place(p, T)) for p, T in zip(clouds, P)])  # noqa: E731
-    return wall(init), wall(ba)
-
-
-# ------------------------------------------------------------------ (c) fusion
-def fusion(visits=8, per_visit=20, sigma_s=0.027, cell=0.02, tau=0.08, w_min=3):
-    """Scans of the wall from all over the room, placed with pose errors that
-    are shared within a visit (2.4 cm along the wall's normal, 0.3 deg) plus
-    0.8 cm per scan: with the sensor's 0.9 cm, one scan's points spread
-    sigma_s."""
-    origins, hits = [], []
-    for v in range(visits):
-        dv, av = RNG.normal(0, 0.024), RNG.normal(0, np.radians(0.3))
-        for k in range(per_visit):
-            T = np.array([RNG.uniform(1, 9), RNG.uniform(0.8, 2.2), RNG.uniform(-np.pi, np.pi)])
-            E = np.array([0.0, dv + RNG.normal(0, 0.008), av])        # the placement error
-            w = place(place(scan(T), T), E)
-            keep = (np.abs(w[:, 1]) < 0.15) & (w[:, 0] > WALL_X[0] - 0.3) & (w[:, 0] < WALL_X[1] + 0.3)
-            hits.append(w[keep])
-            origins.append(np.repeat(place(T[None, :2], E), keep.sum(), 0))
-    p, o = np.concatenate(hits), np.concatenate(origins)
-
-    # the union: one point (the centroid) per cell any scan hit
-    key = np.floor(p / cell).astype(np.int64)
-    _, inv = np.unique(key, axis=0, return_inverse=True)
-    inv = inv.ravel()
-    n = np.bincount(inv)
-    union = np.stack([np.bincount(inv, p[:, i]) / n for i in (0, 1)], 1)
-
-    # TSDF: every cell within tau of the hit along the ray gets r - |c - o|
-    x0 = np.array([WALL_X[0] - 0.4, -0.4])
-    nx, ny = int(2.8 / cell) + 1, int(0.8 / cell)
+# ------------------------------------------------------------------ (c) TSDF
+def tsdf(ax):
+    """Two scans' rays on 2 cm cells; D computed, surface where D = 0."""
+    nx, ny, y0, tau = 16, 9, 3, 4.0                       # cells; tau = 8 cm = 4 cells
+    surf = lambda x: 7.0 + 0.14 * (x - 8)                  # noqa: E731
+    origins = [np.array([-1.5, -0.6]), np.array([17.5, -0.8])]
+    targets = [np.arange(0.4, 16, 1.4), np.arange(1.1, 16, 1.4)]
     D, W = np.zeros((nx, ny)), np.zeros((nx, ny))
-    u = (p - o) / np.linalg.norm(p - o, axis=1)[:, None]
-    r = np.linalg.norm(p - o, axis=1)
-    s = np.arange(-tau, tau + 1e-9, cell / 2)
-    q = p[:, None] + u[:, None] * s[None, :, None]                   # samples along each ray
-    ij = np.floor((q - x0) / cell).astype(np.int64)
-    ok = (ij[..., 0] >= 0) & (ij[..., 0] < nx) & (ij[..., 1] >= 0) & (ij[..., 1] < ny)
-    ray = np.repeat(np.arange(len(p)), len(s)).reshape(len(p), len(s))
-    pairs = np.unique(np.stack([ray[ok], ij[ok][:, 0], ij[ok][:, 1]], 1), axis=0)
-    c = x0 + (pairs[:, 1:] + 0.5) * cell
-    d = r[pairs[:, 0]] - np.linalg.norm(c - o[pairs[:, 0]], axis=1)
-    m = np.abs(d) <= tau
-    np.add.at(D, (pairs[m, 1], pairs[m, 2]), d[m])
-    np.add.at(W, (pairs[m, 1], pairs[m, 2]), 1)
-    D = np.where(W > 0, D / np.maximum(W, 1), 0)
+    rays = []
+    for o, xs in zip(origins, targets):
+        for xt in xs:
+            h = np.array([xt, surf(xt)])
+            u = (h - o) / np.linalg.norm(h - o)
+            for _ in range(20):                            # where the ray meets the surface
+                h = o + u * ((surf(h[0]) - o[1]) / u[1])
+            h = h + u * RNG.normal(0, 0.35)                # range noise
+            r = np.linalg.norm(h - o)
+            rays.append((o, h, u))
+            seen = set()
+            for s in np.arange(-tau, tau + 1e-9, 0.05):
+                q = h + u * s
+                i, j = int(np.floor(q[0])), int(np.floor(q[1])) - y0
+                if 0 <= i < nx and 0 <= j < ny and (i, j) not in seen:
+                    seen.add((i, j))
+                    d = r - np.linalg.norm(np.array([i + 0.5, j + y0 + 0.5]) - o)
+                    if abs(d) <= tau:
+                        D[i, j] += d
+                        W[i, j] += 1
+    D = np.where(W > 0, D / np.maximum(W, 1), np.nan)
 
-    surf = []
-    for di, dj in ((1, 0), (0, 1)):
-        a, b = (slice(0, nx - di), slice(0, ny - dj)), (slice(di, nx), slice(dj, ny))
-        Da, Db = D[a], D[b]
-        good = (W[a] >= w_min) & (W[b] >= w_min) & (Da * Db < 0) & (np.abs(Da - Db) < tau)
-        I, J = np.nonzero(good)
-        f = Da[I, J] / (Da[I, J] - Db[I, J])
-        ca = x0 + (np.stack([I, J], 1) + 0.5) * cell
-        surf.append(ca + f[:, None] * cell * np.array([di, dj]))
-    surf = np.concatenate(surf)
-    return on_wall(union), on_wall(surf)
+    cmap = LinearSegmentedColormap.from_list("sd", [ORANGE, "#ffffff", BLUE])
+    ax.pcolormesh(np.arange(nx + 1), np.arange(ny + 1) + y0, D.T, cmap=cmap, vmin=-tau, vmax=tau,
+                  alpha=0.55, zorder=0, edgecolors="none")
+    for i in range(nx + 1):
+        ax.plot([i, i], [y0, y0 + ny], color=GRID, lw=0.5, zorder=1)
+    for j in range(ny + 1):
+        ax.plot([0, nx], [y0 + j, y0 + j], color=GRID, lw=0.5, zorder=1)
+
+    for o, h, u in rays:
+        ax.plot(*np.stack([o, h]).T, color=INK2, lw=0.5, zorder=2)
+        ax.plot(*np.stack([h, h + u * tau]).T, color=INK2, lw=0.5, ls=(0, (1.5, 1.5)), zorder=2)
+        ax.scatter(*h, s=10, color=INK, lw=0, zorder=4)
+    sensor(ax, origins[0], None, r=0.35)
+    sensor(ax, origins[1], None, r=0.35)
+    ax.text(origins[0][0] - 0.6, origins[0][1], "$\\mathbf{o}_1$", ha="right", va="center", fontsize=FS + 1)
+    ax.text(origins[1][0] + 0.6, origins[1][1], "$\\mathbf{o}_2$", ha="left", va="center", fontsize=FS + 1)
+
+    # zero crossings between vertically adjacent cells (the surface)
+    zc = []
+    for i in range(nx):
+        for j in range(ny - 1):
+            a, b = D[i, j], D[i, j + 1]
+            if np.isfinite(a) and np.isfinite(b) and a * b < 0 and W[i, j] >= 2 and W[i, j + 1] >= 2:
+                zc.append((i + 0.5, y0 + j + 0.5 + a / (a - b)))
+    zc = np.array(sorted(zc))
+    ax.plot(*zc.T, color=ORANGE, lw=2.2, zorder=5)
+    ax.scatter(*zc.T, s=11, color=ORANGE, lw=0, zorder=5)
+
+    # +-tau along one ray
+    o, h, u = rays[2]
+    nrm = np.array([-u[1], u[0]]) * 1.0
+    a, b = h - u * tau + nrm, h + u * tau + nrm
+    arrow(ax, a, b, style="<|-|>", lw=0.9, ms=5, z=6)
+    ax.text(-0.5, b[1] - 0.6, r"$\pm\tau$" + "\n8 cm", ha="right", va="center", color=INK, zorder=6)
+    xl = nx + 0.5
+    ax.text(xl, y0 + ny, "cells 2 cm", ha="left", va="top", color=INK2)
+    ax.text(xl, y0 + ny - 2.3, "$D$ < 0\nbehind", ha="left", va="center", color="#b4501f")
+    ax.text(xl, y0 + 4.0, "surface:\n$D$ = 0", ha="left", va="center", color=ORANGE, fontweight="bold")
+    ax.text(xl, y0 + 1.3, "$D$ > 0\nin front", ha="left", va="center", color=BLUE)
+    ax.text(8.0, -2.0, "each cell within $\\tau$ of a hit: $d = r - \\|\\mathbf{c}_v - \\mathbf{o}\\|$\n"
+            "$D(v)$ = mean of $d$ over all rays (at least 3)",
+            ha="center", va="top", color=INK, linespacing=1.5)
+    frame(ax, (-3.6, 21.6), (-4.6, 12.3))
 
 
-# ------------------------------------------------------------------ figure
-def panel(ax, w, color, label, size=1.6):
-    bars, t = thickness(w)
-    for x0, lo, hi in bars:
-        ax.add_patch(plt.Rectangle((x0 + 0.01, lo * 100), PATCH - 0.02, (hi - lo) * 100,
-                                   fc=color, ec="none", alpha=0.16, zorder=1))
-    ax.scatter(w[:, 0], w[:, 1] * 100, s=size, lw=0, color=color, alpha=0.55, zorder=2,
-               rasterized=True)
-    ax.axhline(0, color=INK2, lw=0.5, ls=(0, (3, 2)), zorder=0)
-    ax.text(0.02, 0.95, label, transform=ax.transAxes, ha="left", va="top", color=INK, zorder=3,
-            bbox=dict(fc="white", ec="none", alpha=0.85, pad=1.5))
-    ax.set_xlim(*WALL_X)
-    ax.set_ylim(-12, 12)
-    ax.set_yticks([-10, -5, 0, 5, 10])
-    ax.grid(axis="y", color=GRID, lw=0.5)
-    ax.set_axisbelow(True)
-    for s in ("top", "right"):
-        ax.spines[s].set_visible(False)
-    return t
+# ------------------------------------------------------------------ (d) thickness
+def thickness(ax):
+    """A patch seen from above (its normal up), its points' offsets along the
+    normal and their histogram on the same vertical scale."""
+    q = lambda u, w, n: P([u, w, n], az=-25, el=24, f=8.0)   # noqa: E731
+    corners = np.array([q(0, 0, 0), q(1, 0, 0), q(1, 1, 0), q(0, 1, 0)])
+    sig = 0.11
+    u, w = RNG.uniform(0.05, 0.95, 60), RNG.uniform(0.05, 0.95, 60)
+    n = RNG.normal(0, sig, 60)
+    for uu, ww, nn in zip(u, w, n):
+        if nn <= 0:
+            ax.plot(*np.stack([q(uu, ww, nn), q(uu, ww, 0)]).T, color=INK2, lw=0.5, zorder=1)
+            ax.scatter(*q(uu, ww, nn), s=7, color=INK2, lw=0, zorder=1)
+    ax.add_patch(Polygon(corners, closed=True, fc=PLANE, ec=INK, lw=0.9, alpha=0.6, zorder=2))
+    for uu, ww, nn in zip(u, w, n):
+        if nn > 0:
+            ax.plot(*np.stack([q(uu, ww, nn), q(uu, ww, 0)]).T, color=INK, lw=0.5, zorder=3)
+            ax.scatter(*q(uu, ww, nn), s=8, color=INK, lw=0, zorder=4)
+    c0, c1 = q(0.5, 0.5, 0), q(0.5, 0.5, 0.5)
+    arrow(ax, c0, c1, color=BLUE, lw=1.4, z=5)
+    ax.text(c1[0] + 0.04, c1[1], r"$\mathbf{n}$", color=BLUE, ha="left", va="center", fontsize=FS + 1.5)
+    e0, e1 = q(0, 0, 0) + [0, -0.1], q(1, 0, 0) + [0, -0.1]
+    arrow(ax, e0, e1, style="<|-|>", lw=0.7, ms=5)
+    ax.text(*((e0 + e1) / 2 + [0, -0.06]), "0.25 m patch", ha="center", va="top", color=INK)
+    ax.text(0.45, 0.98, "fit a plane to the patch's points", ha="center", va="bottom", color=INK)
+
+    # histogram of the offsets along n, on the drawing's vertical scale
+    sc = (c1[1] - c0[1]) / 0.5
+    xh, yc = 1.45, c0[1]
+    edges = np.linspace(-3 * sig, 3 * sig, 13)
+    cnt, _ = np.histogram(n, edges)
+    for k, e_lo, e_hi in zip(cnt, edges[:-1], edges[1:]):
+        ax.add_patch(Rectangle((xh, yc + e_lo * sc), k * 0.04, (e_hi - e_lo) * sc * 0.9,
+                               fc=GREY, ec="none", alpha=0.7, zorder=2))
+    ax.plot([xh, xh], [yc - 3.2 * sig * sc, yc + 3.2 * sig * sc], color=INK, lw=0.8)
+    ax.text(xh, yc + 3.2 * sig * sc + 0.03, "offset along $\\mathbf{n}$", ha="center", va="bottom",
+            color=INK)
+    p5, p95 = np.percentile(n, [5, 95])
+    for p, lab in ((p5, "p5"), (p95, "p95")):
+        ax.plot([xh - 0.04, xh + 0.55], [yc + p * sc] * 2, color=ORANGE, lw=1.0, ls=(0, (3, 2)))
+        ax.text(xh - 0.07, yc + p * sc, lab, ha="right", va="center", color=ORANGE)
+    xb = xh + 0.62
+    arrow(ax, (xb, yc + p5 * sc), (xb, yc + p95 * sc), color=ORANGE, style="<|-|>", lw=1.0, ms=5)
+    ax.text(xb + 0.07, yc, "thickness\n= p95 $-$ p5\n(3.29$\\sigma$)", ha="left", va="center",
+            color=ORANGE, fontweight="bold")
+    ax.text(1.05, -0.5, "points as placed from one scan, 1 s or the whole run;\n"
+            "each scan against its own plane: the sensor alone",
+            ha="center", va="top", color=INK2, linespacing=1.4)
+    frame(ax, (-0.3, 2.65), (-0.85, 1.2))
+
+
+PANELS = [("a", "(a) Pose-time correction", pose_time),
+          ("b", "(b) Plane bundle adjustment", plane_ba),
+          ("c", "(c) TSDF fusion", tsdf),
+          ("d", "(d) Wall thickness", thickness)]
 
 
 def main():
-    a0, a1 = pose_time()
-    b0, b1 = bundle()
-    c0, c1 = fusion()
-
-    fig, axs = plt.subplots(2, 3, figsize=(7.16, 3.7), sharex=True, sharey=True)
-    cols = [("(a) Pose-time correction", (a0, GREY, "poses 50 ms late"), (a1, BLUE, "corrected (4 ms left)")),
-            ("(b) Plane bundle adjustment", (b0, BLUE, "drifting odometry"), (b1, ORANGE, "after adjustment")),
-            ("(c) Fusion", (c0, GREY, "union of points"), (c1, ORANGE, "TSDF: one surface, at the rays' mean"))]
-    thick = {}
-    for j, (title, top, bot) in enumerate(cols):
-        axs[0, j].set_title(title, loc="left", fontsize=FS + 1, fontweight="bold", color=INK, pad=6)
-        thick[title] = (panel(axs[0, j], *top), panel(axs[1, j], *bot, size=3.0 if j == 2 else 1.6))
-        axs[1, j].set_xlabel("along the wall (m)")
-    for i, row in enumerate(("before", "after")):
-        axs[i, 0].set_ylabel(f"{row}\noffset from wall (cm)")
-    fig.tight_layout(h_pad=0.8, w_pad=0.6)
-    fig.savefig(OUT + ".pdf", dpi=300)
+    fig, axs = plt.subplots(2, 2, figsize=(7.16, 5.5))
+    for ax, (_, title, draw) in zip(axs.ravel(), PANELS):
+        draw(ax)
+        ax.set_title(title, loc="left", fontsize=FS + 1.5, fontweight="bold", color=INK)
+    fig.tight_layout(h_pad=1.2, w_pad=1.0)
+    fig.savefig(OUT + ".pdf")
     fig.savefig(OUT + ".png", dpi=300)
-    for k, (t0, t1) in thick.items():
-        print(f"{k}: {t0 * 100:.1f} -> {t1 * 100:.1f} cm")
-    print(OUT + ".pdf", OUT + ".png")
+    plt.close(fig)
+    for key, _, draw in PANELS:
+        fig, ax = plt.subplots(figsize=(3.6, 2.95))
+        draw(ax)
+        fig.tight_layout(pad=0.2)
+        fig.savefig(f"{OUT}_{key}.png", dpi=400)
+        plt.close(fig)
+    print(OUT + ".pdf", OUT + ".png", *(f"{OUT}_{k}.png" for k, _, _ in PANELS))
 
 
 if __name__ == "__main__":
