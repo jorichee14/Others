@@ -9,6 +9,8 @@
   maps    <A.pcd> <B.pcd>  completeness / accuracy of B against A
   distances <map.pcd> <csv> control distances (wall to wall, measured on
                            site) against the map: error and scale
+  noise   <bag>            the LiDAR's own noise floor from a bag alone: one
+                           scan's thickness on walls / floors, by range, incidence
   scans   <config>         single scans and pairs: noise, deskew, time offset,
                            drift
   trajs   <config>         a pass's trajectories against each other / a
@@ -20,7 +22,7 @@
                            + scan-to-map, + BA against the reference; the TSDF
                            and union maps
 
-The code: analysis/maps.py (map, walls, maps, scans, distances) and analysis/trajs.py
+The code: analysis/maps.py (map, walls, maps, scans, distances, noise) and analysis/trajs.py
 (trajs, time, imu, loop); report is below. run_pass.py runs `time` and
 `report` as steps of a pass.
 """
@@ -230,7 +232,8 @@ def report(argv=None):
 
 
 COMMANDS = {"map": maps.main_quality, "walls": maps.main_walls, "maps": maps.main_compare,
-            "scans": maps.main_scans, "distances": maps.main_distances, "trajs": trajs.main_compare, "time": trajs.main_time,
+            "scans": maps.main_scans, "distances": maps.main_distances,
+            "noise": maps.main_noise, "trajs": trajs.main_compare, "time": trajs.main_time,
             "imu": trajs.main_imu, "loop": trajs.main_loop, "report": report}
 
 

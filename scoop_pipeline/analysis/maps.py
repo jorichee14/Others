@@ -1125,3 +1125,106 @@ def main_distances(argv=None):
     print(f"scale map / measured {s:.5f} ({(s - 1) * 1e6:+.0f} ppm = {(s - 1) * 100:+.3f} %); "
           f"after it, RMS {np.sqrt(np.mean(((mapd - s * meas) * 1000) ** 2)):.1f} mm")
     print("(walls: each wall's thickness in the map, p95-p5, around its pick)")
+
+
+# ============================================================================
+# noise: one scan's own spread on flat surfaces, straight from a bag
+# ============================================================================
+NOISE_DOC = r'''The LiDAR's noise floor from a bag alone: no trajectory, no map.
+
+  python3 check.py noise <bag> [--topic /ouster/points] [--scans 50]
+      [--patches 400] [--min-range 1.0] [--max-range 30]
+
+From --scans scans spread evenly over the bag, patches of 0.25 m radius
+around random points of each scan, in the scan's own frame: a patch that is
+one flat layer (as `map` tests it) gets a plane fitted, and its thickness is
+the 5-95 % spread of its points about it, as `map` and `walls` measure it.
+One scan's points at a spot are taken within a few ms of the 100 ms sweep
+(the robot moves under 2 mm meanwhile), so no pose is needed: this is the
+sensor alone, the "1 scan" column of `walls`.
+
+Reported as medians: walls (normal more than 60 deg from the sensor's z;
+the sensor mounted near level) and floors / ceilings (less than 30), the
+walls by range and by incidence (the angle between the beam and the wall's
+normal: grazing hits spread wider).
+'''
+
+INC_BINS = (0.0, 30.0, 60.0, 75.0, 90.01)
+CHI_ = 3.29                       # 5-95 % spread of a normal = 3.29 sigma
+
+
+def scan_noise(xyz, rng, n=400, r=R):
+    """Per flat one-layer patch of one scan, in its own frame: (thickness m,
+    normal tilt from z deg, range m, incidence deg)."""
+    tree = cKDTree(xyz)
+    out = []
+    for i in rng.choice(len(xyz), size=min(n, len(xyz)), replace=False):
+        nb = tree.query_ball_point(xyz[i], r)
+        if len(nb) < MIN_PTS:
+            continue
+        Q = xyz[nb]
+        c = Q.mean(0)
+        _, sv, vt = np.linalg.svd(Q - c, full_matrices=False)
+        if sv[1] < 1e-9 or sv[2] / sv[1] > PLANARITY:
+            continue
+        nrm = vt[2]
+        d = (Q - c) @ nrm
+        if split_layers(d) is not None:
+            continue                      # two layers: an edge, not one surface
+        rng_m = float(np.linalg.norm(c))
+        inc = float(np.degrees(np.arccos(min(1.0, abs(c @ nrm) / max(rng_m, 1e-9)))))
+        out.append((spread(d), float(np.degrees(np.arccos(min(1.0, abs(nrm[2]))))), rng_m, inc))
+    return np.array(out).reshape(-1, 4)
+
+
+def main_noise(argv=None):
+    ap = argparse.ArgumentParser(description=NOISE_DOC,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("bag")
+    ap.add_argument("--topic", default="")
+    ap.add_argument("--scans", type=int, default=50)
+    ap.add_argument("--patches", type=int, default=400, help="patches tried per scan")
+    ap.add_argument("--min-range", type=float, default=1.0, help="m (the robot itself)")
+    ap.add_argument("--max-range", type=float, default=30.0)
+    a = ap.parse_args(argv)
+    sys.path.insert(0, ROOT)
+    from scoop import bag as sbag
+    reader = sbag.open_bag(a.bag)
+    topic = sbag.detect_points_topic(reader, a.topic)
+    total = reader.topics()[topic].count
+    stride = max(1, total // max(1, a.scans))
+    seen = [0]
+
+    def every(_stamp):
+        seen[0] += 1
+        k = seen[0] - 1
+        return k if k % stride == 0 else None
+    rng = np.random.default_rng(0)
+    rows, n_scans = [], 0
+    print(f"{a.bag}\n{topic}: {total} scans, every {stride}th, "
+          f"range {a.min_range:g}-{a.max_range:g} m")
+    for scan in sbag.iter_scans(reader, topic, select=every, min_range=a.min_range,
+                                max_range=a.max_range, min_points=1000):
+        st = scan_noise(np.asarray(scan.xyz, np.float64), rng, a.patches)
+        rows.append(st)
+        n_scans += 1
+    st = np.vstack(rows) if rows else np.zeros((0, 4))
+    if not len(st):
+        raise SystemExit("no flat patches found")
+    th, tilt, rg, inc = st[:, 0] * 100, st[:, 1], st[:, 2], st[:, 3]
+    wall, floor = tilt > 60, tilt < 30
+    med = lambda m: f"{np.median(th[m]):5.1f} cm ({m.sum()})" if m.sum() >= 10 else "    -"  # noqa: E731
+    print(f"\n{n_scans} scans, {len(st)} flat patches; one scan's thickness, median (patches)")
+    sig = f"   sigma {np.median(th[wall]) / CHI_:.1f} cm per point" if wall.sum() >= 10 else ""
+    print(f"  walls             {med(wall)}{sig}")
+    print(f"  floors / ceilings {med(floor)}")
+    print(f"  all               {med(np.ones(len(st), bool))}")
+    print("\nwalls by range (m)")
+    for lo, hi in zip(DIST[:-1], DIST[1:]):
+        m = wall & (rg >= lo) & (rg < hi)
+        print(f"  {lo:4g}-{'' if hi > 1e8 else f'{hi:g}':4s} {med(m)}")
+    print("walls by incidence (deg between beam and wall normal)")
+    for lo, hi in zip(INC_BINS[:-1], INC_BINS[1:]):
+        m = wall & (inc >= lo) & (inc < hi)
+        print(f"  {lo:4.0f}-{min(hi, 90):<4.0f} {med(m)}")
+
