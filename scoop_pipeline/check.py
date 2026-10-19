@@ -164,10 +164,10 @@ def report(argv=None):
     tsdf = P.outp(P.pcd("denoised"))
     union = P.outp("denoised_union_%s.pcd" % P.tag if P.tag else "denoised_union.pcd")
     fusion = P.stage("01_build_map").get("fusion", "union")
-    maps = [("tsdf", "TSDF (reference map)", tsdf), ("union", "union of points", union)] \
+    map_list = [("tsdf", "TSDF (reference map)", tsdf), ("union", "union of points", union)] \
         if fusion == "tsdf" else [("union", "union of points (01's map)", tsdf)]
     clouds = {}
-    for key, label, f in maps:
+    for key, label, f in map_list:
         if not os.path.isfile(f):
             print(f"map {label}: none at {f}" + (" (a comparison: \"comparisons\": true)"
                                                  if key == "union" and fusion == "tsdf" else ""))

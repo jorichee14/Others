@@ -61,6 +61,14 @@ def main():
         write(os.path.join(out, "traj_late.txt"), t, late=0.030)
         write(os.path.join(out, "traj_lidar_ba.txt"), t)
         write(os.path.join(out, "traj_lidar_refined.txt"), t, noise=0.01)
+        # the maps: a room as the TSDF map, the same room thicker as the union
+        import open3d as o3d
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from test_distances import room
+        for name, noise in (("denoised.pcd", 0.005), ("denoised_union.pcd", 0.02)):
+            pc = o3d.geometry.PointCloud()
+            pc.points = o3d.utility.Vector3dVector(room(np.random.default_rng(1), s=0.04, noise=noise))
+            o3d.io.write_point_cloud(os.path.join(out, name), pc)
         with open(os.path.join(out, "glim.yaml"), "w") as fh:
             fh.write("pose_time_offset_s: 0.046\n")
         cfg = os.path.join(d, "cfg.json")
@@ -96,12 +104,15 @@ def main():
         rows = [ln for ln in text.splitlines() if ln.startswith("| GLIM") or ln.startswith("| **GLIM")]
         glim = next((ln for ln in rows if ln.startswith("| GLIM |")), "")
         dt = float(glim.split("|")[6].split()[0]) if glim else float("nan")
-        if p.returncode or len(rows) != 4 or abs(dt - 46) > 4 or "TSDF" not in text:
+        maps_ = {ln.split("|")[1].strip(): ln for ln in text.splitlines()
+                 if ln.startswith("| TSDF") or ln.startswith("| union")}
+        tsdf_ok = "TSDF (reference map)" in maps_ and "%" in maps_["TSDF (reference map)"]
+        if p.returncode or len(rows) != 4 or abs(dt - 46) > 4 or not tsdf_ok or len(maps_) != 2:
             fails.append(f"report: {len(rows)} trajectory rows, GLIM {dt} ms\n"
                          + p.stdout[-2500:] + p.stderr[-1500:])
         else:
             print(f"  ok    report: 4 trajectories, GLIM's pose time {dt:+.1f} ms, maps listed")
-            for ln in rows:
+            for ln in rows + list(maps_.values()):
                 print("        " + ln)
     finally:
         shutil.rmtree(d, ignore_errors=True)
