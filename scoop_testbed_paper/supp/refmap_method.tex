@@ -180,12 +180,16 @@ the effect of the map's construction. With the reference trajectory:
 \SI{4.7}{\centi\metre} for one scan, \SI{6.7}{\centi\metre} within
 \SI{1}{\second}, \SI{9.0}{\centi\metre} over the whole run; with the SLAM
 solution 4.7, 6.6 and \SI{12.3}{\centi\metre} (4.9, 7.5 and
-\SI{19.2}{\centi\metre} before its pose-time correction). The scans are
-taken while driving: no pause is needed for the single-scan value, since
-the beams sweep past a \SI{0.5}{\metre} spot at \SIrange{2}{10}{\metre} in
+\SI{19.2}{\centi\metre} before its pose-time correction). The sensor
+alone is measured without any pose: in 50 scans spread over the bag, flat
+\SI{0.25}{\metre} patches of each scan are fitted with their own plane
+(\SI{3.0}{\centi\metre} on walls, $\sigma=\SI{0.9}{\centi\metre}$;
+\SI{1.4}{\centi\metre} on floors). No pause is needed for it: the beams
+sweep past a \SI{0.5}{\metre} spot at \SIrange{2}{10}{\metre} in
 \SIrange{1}{4}{\milli\second} of the \SI{100}{\milli\second} rotation, in
-which the robot moves under \SI{2}{\milli\metre}, so one scan's spread at a
-spot is the sensor's whatever the trajectory.
+which the robot moves under \SI{2}{\milli\metre}. One scan against the
+map's plane (\SI{4.7}{\centi\metre}) adds how each scan sits in the final
+map: its pose and deskew within the sweep.
 
 \paragraph{Completeness} The share of a reference map's points with a point
 of the map under test within \SI{10}{\centi\metre}, and the reverse

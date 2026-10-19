@@ -27,6 +27,7 @@ Paper: `sections/refmap_main.tex` (Sec. V-A), `supp/refmap_method.tex`, `tables/
 |---|---|---|
 | Reference TSDF map, walls / floors | 7.8 / 1.9 cm | `check.py map` |
 | Reference board loop closure | 13.9 mm / 1.36 deg (detection noise 6-8 mm) | `check.py loop` |
+| Sensor alone (each scan against its own plane) | walls 3.0 cm (sigma 0.9), floors 1.4 cm; another area (20260723, `/ouster`): 2.4-3.9 cm beyond 2 m, 6.2 cm within 2 m | `check.py noise` |
 | Walls, scans as placed with the reference: 1 scan / 1 s / run | 4.7 / 6.7 / 9.0 cm | `check.py walls` |
 | Same with GLIM corrected | 4.7 / 6.6 / 12.3 cm; TSDF map 10.7 / 2.8 cm; loop 10.8 mm / 1.24 deg | same, `check.py map`, `check.py loop` |
 | Same with GLIM as output | 4.9 / 7.5 / 19.2 cm; TSDF map 14.3 / 3.6 cm | same |
