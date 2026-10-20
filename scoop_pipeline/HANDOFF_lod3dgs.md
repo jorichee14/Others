@@ -66,24 +66,40 @@ structure from motion.
   Not anchored or flattened, so the map is in the BA trajectory's frame.
 - **Tag:** `mapping_20261015` (`map_stages/pipeline_common.py:653`, `<pass>_<date>`).
 
-## Done (pushed)
+## Done (pushed; this session and another session on the same branch)
 
-- `lod3dgs.py mesh <map> --traj <TUM> [--ceil auto|Z] [--voxel] [--show]` writes:
-  - `mapping/mesh_<tag>.ply`: Poisson mesh, normals turned toward the
-    nearest pose, faces more than 0.1 m from the map deleted, coloured
-    from the map's colours;
-  - `mesh_<tag>_noceil.ply`: a viewing copy without the ceiling, cut at the
-    top height-histogram peak minus 0.1 m. For viewing only; the training
-    scene keeps the ceiling.
-- `lod3dgs.py scene <replica export> --map <map> [--every N]` writes the
-  LOD-3DGS scene:
+`lod3dgs.py` has four subcommands. Run `-h` on each for every flag.
+- **`mesh <map> --traj <TUM> [--ceil auto|Z] [--voxel] [--show]`**: writes
+  `mapping/mesh_<tag>.ply`, a Poisson mesh of the map with faces more than
+  0.1 m from the map deleted. The other session added:
+  - mirror ghosts removed (points no direct ray from the path reaches;
+    `--keep-ghosts` keeps them);
+  - floating pieces, and pieces open to the sky, removed (`--min-piece`);
+  - objects meshed separately at a finer cell (`--no-objects`,
+    `--object-cell`, ...);
+  - colours: the median of the 5 nearest map points (`--colour-k`).
+
+  `--ceil` also writes `*_noceil.ply`. With `auto`, the cut is the first
+  strong height peak 2.1 m or more above the floor; the floor comes from the
+  robot's height on `--traj`.
+- **`view <map> --traj <TUM>`**: a viewing copy of the point cloud with
+  walls flattened, stray points removed, and **floor holes filled** (up to
+  `--max-hole` m², only where `--roof` of the hole has ceiling over it).
+- **`cut <mesh or cloud> --traj <TUM> [--ceil auto|Z]`**: a copy without the
+  ceiling, without meshing again.
+- **`scene <replica export> --map <map> [--every N]`**: the LOD-3DGS scene:
   - images and depth, recentred on the principal point;
   - depth in LOD-3DGS's format;
   - cameras.txt and images.txt;
-  - points3D.ply sampled every 4 cm from the trimmed mesh, coloured from
-    the frames that see each point.
-- Test: `python scoop_pipeline/tests/test_lod3dgs.py` (synthetic room) passes.
-  LOD-3DGS's own colmap_loader and plyfile read the output.
+  - points3D.ply sampled every 4 cm from the trimmed Poisson mesh,
+    coloured from the frames.
+
+  `scene` does not yet use the `mesh` command's ghost, piece and object
+  steps. It has its own simpler Poisson step.
+
+`python scoop_pipeline/tests/test_lod3dgs.py` passes: view, ghosts, objects,
+mesh with ceiling cut, and scene. LOD-3DGS's own colmap_loader and plyfile
+read the `scene` output.
 
 ## State of the user's run
 
@@ -118,9 +134,9 @@ yet known.
    Hole shape helps: round patches where people walked → moving-object
    removal; holes growing with distance from the path → grazing; one stripe
    under the path → LiDAR blind zone.
-   If holes remain on flat floor, one option is a looser trim for
-   horizontal faces at floor height only, so Poisson's fill survives there
-   and nowhere else. The user has not decided.
+   For viewing, `lod3dgs.py view` already fills floor holes. For training,
+   the fix belongs in 01, so the map itself is complete. `view` is a
+   viewing copy only.
 3. **Replica export** with the same poses and map:
    ```
    B=~/workspaces/isaac_ros-dev/data/work/20261015/mapping/mobile_2/mirc_dataset_mapping_2_run_20261015_mobile_2_retimed
@@ -153,10 +169,12 @@ yet known.
      ```
      These are the flags from its README.
 
-## Open choice
+## Open choices
 
-The TSDF map is already a noise-averaged surface, and the paper's mesh gain
-was measured against raw LiDAR. Starting from `map_final` thinned to 4 cm,
-with its own colours and no Poisson, may be just as good. Comparing the two
-in one training run each would settle it. Proposed, not built: making
-"no Poisson" the default with `--mesh poisson` as the option.
+- Should `scene` reuse the `mesh` command's ghost, piece and object steps
+  for its starting points?
+
+- The TSDF map is already a noise-averaged surface, and the paper's mesh gain
+  was measured against raw LiDAR. Starting from `map_final` thinned to 4 cm,
+  with its own colours and no Poisson, may be just as good. One training run
+  of each would settle it.
