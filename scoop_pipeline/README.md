@@ -222,7 +222,8 @@ tests/               self-tests, no real bag needed
                      colour resampling and depth registration on a two-robot bag
   test_lod3dgs.py    lod3dgs on a synthetic open-top room: centred camera, poses, depth,
                      the Poisson surface over the open top trimmed, point colours; mesh:
-                     the map's colours, the ceiling found and cut, the walls kept
+                     the map's colours, the ceiling found and cut, the walls kept; view:
+                     floor holes filled (not under a box, a stair opening, over max), walls flat
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
   test_csi_view.py   csi_view: delay profile puts the paths at their delays; figures
   test_replica.py    replica with lidar depth on a synthetic scene
@@ -915,6 +916,24 @@ writes `mapping/mesh_<tag>.ply` in the map's colours (colorize's) and
 above the highest peak of the height histogram (printed) less
 `--ceil-margin` (0.10 m), or above `--ceil Z`. `--voxel 0.04` meshes a
 quarter of the points for a quick look (Poisson depth one less).
+
+A viewing copy of the map as points, its colours as crisp as the map's
+(the mesh's are interpolated):
+
+```
+python scoop_pipeline/datasets/lod3dgs.py view $P/mapping/map_final_<tag>.pcd \
+    --traj $P/odometry/mobile_2/traj_lidar_ba_glim.txt [--ceil Z] [--max-hole 20]
+```
+
+writes `mapping/view_<tag>.pcd`: stray points out (fewer than 8 others within
+8 cm), every flat 0.4 m cell's points put onto its plane (walls and floors
+thin), and the floor's holes filled at the height and in the colours of the
+floor around them. The floor is found from the trajectory (sensor height
+from the floor under the poses); filled are the holes enclosed by floor and
+walls and gaps up to 0.4 m, never under furniture or walls (points 0.15-0.6
+m above the floor), never over a stair opening or an atrium (points below
+it), each up to `--max-hole` m2. For looking at only: the reference map,
+and every measurement, stays `map_final_<tag>.pcd`.
 
 The scene, from a replica export with map depth made with the same poses:
 

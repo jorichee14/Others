@@ -15,7 +15,12 @@ surface Poisson puts over the open top (no starting point above the walls,
 every point near the map); give the points on each surface its colour.
 Then `mesh` on the room with a ceiling, the map coloured: the mesh in the
 map's colours, named after the map, and its copy without the ceiling (auto:
-the highest height peak) keeping the walls.
+the highest height peak) keeping the walls. Then `view` on an 8 x 6 m room
+with noisy walls and stray points, the floor missing in four places: a 1 m2
+hole (filled, at the floor's height and colour), a 5 m2 hole over --max-hole
+(left), under a box (blocked: left) and a stair opening onto a floor 1 m
+lower (a void: left); the sensor height found from the floor under the
+poses, the strays gone, the walls flat, nothing added outside the room.
 
     python scoop_pipeline/tests/test_lod3dgs.py
 """
@@ -138,6 +143,65 @@ def check_mesh(tmp):
     return r
 
 
+def check_view(tmp):
+    import open3d as o3d
+    rng = np.random.default_rng(1)
+    g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
+    X, Y = np.meshgrid(g(0, 8), g(0, 6), indexing="ij")
+    F = np.c_[X.ravel(), Y.ravel(), np.zeros(X.size)]
+    inside = lambda P, x0, x1, y0, y1: ((P[:, 0] > x0) & (P[:, 0] < x1)   # noqa: E731
+                                         & (P[:, 1] > y0) & (P[:, 1] < y1))
+    A, B, BOX, VOID = (1.5, 2.5, 3.5, 4.5), (4.5, 7.0, 3.6, 5.6), (1.0, 2.0, 0.8, 1.8), (3.5, 4.5, 0.8, 1.8)
+    for r in (A, B, BOX, VOID):
+        F = F[~inside(F, *r)]
+    floor_col = np.array([0.55, 0.45, 0.35])
+    pts, cols = [F], [np.clip(floor_col + rng.normal(0, 0.03, (len(F), 3)), 0, 1)]
+    for axis, val, col in ((0, 0.0, (0.8, 0.2, 0.2)), (0, 8.0, (0.2, 0.8, 0.2)),
+                           (1, 0.0, (0.2, 0.2, 0.8)), (1, 6.0, (0.8, 0.8, 0.2))):
+        a, b = np.meshgrid(g(0, 8 if axis else 6), g(0, 2.5), indexing="ij")
+        W = np.zeros((a.size, 3))
+        W[:, 1 - axis], W[:, 2], W[:, axis] = a.ravel(), b.ravel(), val + rng.normal(0, 0.02, a.size)
+        pts.append(W)
+        cols.append(np.tile(col, (len(W), 1)))
+    bx, by = np.meshgrid(g(BOX[0], BOX[1]), g(BOX[2], BOX[3]), indexing="ij")
+    pts.append(np.c_[bx.ravel(), by.ravel(), np.full(bx.size, 0.5)])        # the box's top
+    cols.append(np.tile([0.3, 0.3, 0.3], (bx.size, 1)))
+    vx, vy = np.meshgrid(g(VOID[0], VOID[1]), g(VOID[2], VOID[3]), indexing="ij")
+    pts.append(np.c_[vx.ravel(), vy.ravel(), np.full(vx.size, -1.0)])      # the floor below
+    cols.append(np.tile([0.5, 0.5, 0.5], (vx.size, 1)))
+    stray = np.c_[rng.uniform(1, 7, 300), rng.uniform(1, 5, 300), rng.uniform(0.8, 2.0, 300)]
+    pts.append(stray)
+    cols.append(np.tile([1.0, 1.0, 1.0], (300, 1)))
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.concatenate(pts)))
+    pc.colors = o3d.utility.Vector3dVector(np.concatenate(cols))
+    mp = os.path.join(tmp, "map_final_view_test.pcd")
+    o3d.io.write_point_cloud(mp, pc)
+    t = np.linspace(0, 2 * np.pi, 200)
+    tr = os.path.join(tmp, "traj_view.txt")
+    np.savetxt(tr, np.c_[t, 4 + 3 * np.cos(t), 3 + 2 * np.sin(t), np.full_like(t, 0.6),
+                         np.zeros((len(t), 3)), np.ones(len(t))])
+    r = L.map_view(mp, tr, max_hole=3.0)
+    assert os.path.basename(r["out"]) == "view_view_test.pcd", r["out"]
+    assert abs(r["sensor_height"] - 0.6) < 0.03, r["sensor_height"]
+    v = o3d.io.read_point_cloud(r["out"])
+    P, C = np.asarray(v.points), np.asarray(v.colors)
+    low = np.abs(P[:, 2]) < 0.04
+    a_in = inside(P, 1.6, 2.4, 3.6, 4.4) & low
+    assert a_in.sum() > 1200, ("hole A not filled", a_in.sum())
+    assert np.abs(np.median(C[a_in], 0) - floor_col).max() < 0.05, np.median(C[a_in], 0)
+    for name, rr in (("big hole", (4.6, 6.9, 3.7, 5.5)), ("under the box", (1.1, 1.9, 0.9, 1.7)),
+                     ("stair opening", (3.6, 4.4, 0.9, 1.7))):
+        n = (inside(P, *rr) & low).sum()
+        assert n < 10, (name, "filled", n)
+    assert ((P[:, 0] < -0.15) | (P[:, 0] > 8.15) | (P[:, 1] < -0.15) | (P[:, 1] > 6.15)).sum() == 0
+    air = inside(P, 0.3, 7.7, 0.3, 5.7) & (P[:, 2] > 0.8) & ~inside(P, 0.9, 2.1, 0.7, 1.9)
+    assert air.sum() < 30, ("strays left", air.sum())
+    wall = (np.abs(P[:, 0]) < 0.15) & (P[:, 2] > 0.3) & (P[:, 2] < 2.0) & (P[:, 1] > 0.5) & (P[:, 1] < 5.5)
+    th = np.subtract(*np.percentile(P[wall, 0], [95, 5]))
+    assert th < 0.02, ("wall not flat", th)
+    return r, th
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="lod3dgs_")
     try:
@@ -215,6 +279,9 @@ def main():
             assert on.sum() > 200, (a, c, on.sum())
             med = np.median(rgb[on].astype(int), 0)
             assert np.abs(med - np.array(col)[::-1]).max() < 15, (a, c, med, col)
+        rv, th = check_view(tmp)
+        print(f"ok view: sensor {rv['sensor_height']:.2f} m up, {rv['holes']} hole filled "
+              f"({rv['filled_m2']:.1f} m2), {rv['skipped']} left, wall {th * 100:.1f} cm thick")
         rm = check_mesh(tmp)
         print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
               f"{rm['noceil_faces']} faces without it")

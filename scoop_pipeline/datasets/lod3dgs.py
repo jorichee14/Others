@@ -258,6 +258,177 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
     return res
 
 
+def default_view_out(map_path):
+    d, name = os.path.split(os.path.abspath(map_path))
+    stem = os.path.splitext(name)[0]
+    if stem.startswith("map_final_"):
+        return os.path.join(d, "view_" + stem[len("map_final_"):] + ".pcd")
+    return os.path.join(d, stem + "_view.pcd")
+
+
+def snap_planes(P, cell=0.4, sig_max=0.04, thin=0.35, min_pts=30):
+    """(P with the points of every flat cell moved onto the cell's plane, the
+    number moved). A cell of edge `cell` is flat when its points' smallest
+    spread is under sig_max and under thin x the next: a wall or a floor, not
+    a corner, an edge or an object."""
+    lo = P.min(0)
+    k = np.floor((P - lo) / cell).astype(np.int64)
+    dims = k.max(0) + 1
+    _, inv, cnt = np.unique((k[:, 0] * dims[1] + k[:, 1]) * dims[2] + k[:, 2],
+                            return_inverse=True, return_counts=True)
+    inv = inv.ravel()
+    m_ = len(cnt)
+    X = P - lo
+    mu = np.stack([np.bincount(inv, X[:, i], m_) for i in range(3)], 1) / cnt[:, None]
+    C = np.empty((m_, 3, 3))
+    for i in range(3):
+        for j in range(i, 3):
+            C[:, i, j] = C[:, j, i] = (np.bincount(inv, X[:, i] * X[:, j], m_) / cnt
+                                       - mu[:, i] * mu[:, j])
+    w, v = np.linalg.eigh(C)
+    sig = np.sqrt(np.clip(w, 0, None))
+    flat = (cnt >= min_pts) & (sig[:, 0] < sig_max) & (sig[:, 0] < thin * sig[:, 1])
+    on = flat[inv]
+    n = v[inv[on], :, 0]
+    d = np.einsum("ij,ij->i", X[on] - mu[inv[on]], n)
+    Q = P.copy()
+    Q[on] -= d[:, None] * n
+    return Q, int(on.sum())
+
+
+def sensor_height(P, T, cell=0.5, samples=300):
+    """Height of the sensor above the floor: per sampled pose, the densest
+    2 cm layer of the points within cell/2 under it, 0.1 to 3 m below."""
+    lo = P[:, :2].min(0)
+    k = np.floor((P[:, :2] - lo) / cell).astype(np.int64)
+    ny = int(k[:, 1].max()) + 1
+    key = k[:, 0] * ny + k[:, 1]
+    order = np.argsort(key, kind="stable")
+    ks = key[order]
+    hs = []
+    for t in T[np.linspace(0, len(T) - 1, min(samples, len(T))).astype(int)]:
+        c = np.floor((t[:2] - lo) / cell).astype(np.int64)
+        a, b = np.searchsorted(ks, [c[0] * ny + c[1], c[0] * ny + c[1] + 1])
+        z = P[order[a:b], 2]
+        z = z[(z < t[2] - 0.1) & (z > t[2] - 3.0)]
+        if len(z) < 20:
+            continue
+        cnt, e = np.histogram(z, bins=np.arange(z.min(), z.max() + 0.04, 0.02))
+        hs.append(t[2] - 0.5 * (e[np.argmax(cnt)] + e[np.argmax(cnt) + 1]))
+    if not hs:
+        raise ConvertError("no floor under the trajectory: is --traj the map's trajectory?")
+    return float(np.median(hs)), len(hs)
+
+
+def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spacing=0.02):
+    """Floor points for the holes in the floor: (points, colours, stats).
+
+    The floor's height under every cell is the nearest pose's less the sensor
+    height h; a cell is floor when it holds points within band of it, blocked
+    when it holds points 0.15-0.6 m above it (walls, furniture) and a void
+    when points lie more than 0.3 m below it (stairs, an atrium). Filled: the
+    cells enclosed by floor and blocked cells, and gaps up to 2 x close in the
+    floor, never blocked or void, each hole up to max_hole m2; at the height
+    and in the colours of the floor around them (8 nearest floor cells)."""
+    from scipy import ndimage
+    lo = P[:, :2].min(0) - 2 * cell
+    nx, ny = (np.floor((P[:, :2].max(0) + 2 * cell - lo) / cell).astype(int) + 1)
+    ij = np.floor((P[:, :2] - lo) / cell).astype(np.int64)
+    lin = ij[:, 0] * ny + ij[:, 1]
+    gx, gy = np.meshgrid(lo[0] + (np.arange(nx) + 0.5) * cell, lo[1] + (np.arange(ny) + 0.5) * cell,
+                         indexing="ij")
+    _, near = cKDTree(T[:, :2]).query(np.c_[gx.ravel(), gy.ravel()])
+    level = T[near, 2] - h                                   # floor height per cell
+    dz = P[:, 2] - level[lin]
+    fl = np.abs(dz) < band
+    N = nx * ny
+    nfl = np.bincount(lin[fl], minlength=N)
+    zf = np.bincount(lin[fl], P[fl, 2], N) / np.maximum(nfl, 1)
+    cf = np.stack([np.bincount(lin[fl], C[fl, i], N) for i in range(3)], 1) / np.maximum(nfl, 1)[:, None]
+    floor = (nfl >= 3).reshape(nx, ny)          # 3 of the 4 a 2 cm map gives: a half-covered edge cell is filled
+    blocked = (np.bincount(lin[(dz > 0.15) & (dz < 0.6)], minlength=N) >= 2).reshape(nx, ny)
+    void = (np.bincount(lin[dz < -0.3], minlength=N) >= 2).reshape(nx, ny)
+    r = max(1, int(round(close / cell)))
+    disk = np.hypot(*np.mgrid[-r:r + 1, -r:r + 1]) <= r
+    cand = (ndimage.binary_fill_holes(floor | blocked) | ndimage.binary_closing(floor, disk))
+    cand &= ~floor & ~blocked & ~void
+    lab, nlab = ndimage.label(cand)
+    area = np.bincount(lab.ravel(), minlength=nlab + 1) * cell * cell
+    keep = (area <= max_hole)
+    keep[0] = False
+    holes = keep[lab]
+    stats = {"floor_m2": float(floor.sum() * cell * cell), "holes": int(keep.sum()),
+             "filled_m2": float(holes.sum() * cell * cell),
+             "skipped": int(nlab - keep[1:].sum()), "skipped_m2": float(area[1:][~keep[1:]].sum())}
+    if not holes.any():
+        return np.zeros((0, 3)), np.zeros((0, 3)), stats
+    # points every `spacing` in the hole cells; height and colour of the floor around
+    sub = max(1, int(round(cell / spacing)))
+    off = (np.arange(sub) + 0.5) / sub * cell
+    hi, hj = np.nonzero(holes)
+    ox, oy = np.meshgrid(off, off, indexing="ij")
+    xy = np.c_[(lo[0] + np.repeat(hi, sub * sub) * cell + np.tile(ox.ravel(), len(hi))),
+               (lo[1] + np.repeat(hj, sub * sub) * cell + np.tile(oy.ravel(), len(hi)))]
+    fi = np.flatnonzero(floor.ravel())
+    fxy = np.c_[gx.ravel()[fi], gy.ravel()[fi]]
+    d, k = cKDTree(fxy).query(xy, k=min(8, len(fi)))
+    w = 1.0 / np.maximum(d, 1e-3)
+    w /= w.sum(1, keepdims=True)
+    z = (w * zf[fi][k]).sum(1)
+    col = np.einsum("nk,nkc->nc", w, cf[fi][k])
+    stats["points"] = len(xy)
+    return np.c_[xy, z], col, stats
+
+
+def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
+             ceil=None, ceil_margin=0.10, max_hole=20.0):
+    """A viewing copy of the map: stray points out, walls and floors flat,
+    the floor's holes filled; points, so the colours stay the map's own."""
+    o3d = _o3d()
+    out = out or default_view_out(map_path)
+    pc = o3d.io.read_point_cloud(os.path.expanduser(map_path))
+    if not len(pc.points):
+        raise ConvertError(f"{map_path}: no points")
+    n0 = len(pc.points)
+    report = [f"map {map_path}: {n0} points"]
+    if outliers:
+        pc, _ = pc.remove_radius_outlier(nb_points=8, radius=0.08)
+        report.append(f"  stray points (fewer than 8 others within 8 cm) removed: {n0 - len(pc.points)}")
+    P = np.asarray(pc.points).copy()
+    C = np.asarray(pc.colors).copy() if pc.has_colors() else np.full((len(P), 3), 0.6)
+    if snap:
+        P, moved = snap_planes(P)
+        report.append(f"  points put onto their wall or floor plane: {moved} ({100 * moved / len(P):.0f} %)")
+    res = {"out": out, "map_points": n0}
+    if fill:
+        T = read_tum_positions(traj, stride=5)
+        h, nh = sensor_height(P, T)
+        Fp, Fc, st = fill_floor(P, C, T, h, max_hole=max_hole)
+        report.append(f"  sensor {h:.2f} m above the floor ({nh} poses); floor seen {st['floor_m2']:.0f} m2; "
+                      f"{st['holes']} holes filled, {st['filled_m2']:.1f} m2, {len(Fp)} points"
+                      + (f"; {st['skipped']} larger than {max_hole:g} m2 left open "
+                         f"({st['skipped_m2']:.0f} m2)" if st["skipped"] else ""))
+        P, C = np.vstack([P, Fp]), np.vstack([C, Fc])
+        res.update(sensor_height=h, **st)
+    if ceil is not None:
+        if str(ceil) == "auto":
+            _, hc, hn = height_histogram(P[:, 2])
+            z = ceiling_height(hc, hn) - ceil_margin
+        else:
+            z = float(ceil)
+        keep = P[:, 2] <= z
+        report.append(f"  above z = {z:+.2f} removed (the ceiling): {int((~keep).sum())} points")
+        P, C = P[keep], C[keep]
+        res["ceil_z"] = z
+    v = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    v.colors = o3d.utility.Vector3dVector(np.clip(C, 0, 1))
+    o3d.io.write_point_cloud(out, v)
+    report.append(f"view {out}: {len(P)} points (a viewing copy: the reference map is unchanged)")
+    log.info("\n".join(report))
+    res["points"] = len(P)
+    return res
+
+
 def sample_mesh(mesh, spacing=0.04):
     """Points evenly over the mesh, about `spacing` apart."""
     area = mesh.get_surface_area()
@@ -439,6 +610,16 @@ def main():
     me.add_argument("--ceil-margin", type=float, default=0.10,
                     help="[auto] cut this far below the ceiling peak (m)")
     me.add_argument("--show", action="store_true", help="open it in an Open3D window")
+    vw = sub.add_parser("view", help="a viewing copy of the map: walls flat, floor holes filled")
+    vw.add_argument("map", help="the map (.pcd/.ply), e.g. mapping/map_final_<tag>.pcd")
+    vw.add_argument("out", nargs="?", default=None, help="view .pcd (default: next to the map)")
+    vw.add_argument("--traj", required=True, help="TUM trajectory the map was built from (the floor)")
+    vw.add_argument("--no-outliers", action="store_true", help="keep the stray points")
+    vw.add_argument("--no-snap", action="store_true", help="leave walls and floors as mapped")
+    vw.add_argument("--no-fill", action="store_true", help="leave the floor's holes")
+    vw.add_argument("--max-hole", type=float, default=20.0, help="largest hole filled (m2)")
+    vw.add_argument("--ceil", default=None, help="remove points above Z, or 'auto'")
+    vw.add_argument("--ceil-margin", type=float, default=0.10)
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
@@ -446,6 +627,10 @@ def main():
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,
                     poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
                     color_views=a.color_views, jpeg_quality=a.jpeg_quality)
+        elif a.cmd == "view":
+            map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
+                     fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,
+                     max_hole=a.max_hole)
         else:
             map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,
                      trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show)
