@@ -20,6 +20,8 @@
   loop    <config>         loop closure on the boards
   chain   <config>         is the mapping pass's chain each step once, nothing
                            stale? (pose-time shift, BA in/out, caches, maps' age)
+  tf      <config>         a robot's TF in 10's poses bag: base -> LiDAR against the
+                           calibration, every frame against the reference trajectories
   smooth  <config>         how smooth each trajectory is: jitter about a local
                            fit, jerk (GLIM, 02b, BA; no bag, no map)
   figures <config>         a figure per step that is done (timing, BA, trajectories,
@@ -62,6 +64,7 @@ import figures                                                           # noqa:
 import maps                                                              # noqa: E402
 import method_figures                                                    # noqa: E402
 import smooth                                                            # noqa: E402
+import tfcheck                                                           # noqa: E402
 import trajs                                                             # noqa: E402
 from pipeline_common import load_pipeline, load_traj                     # noqa: E402
 
@@ -118,8 +121,9 @@ def loop_closure(P, config, key, path, run):
     report = {"glim": odo("glim_raw_loop_closure.json"),
               "glim_corr": odo("glim_loop_closure.json")}.get(
         key, os.path.splitext(path)[0] + "_loop_closure.json")
-    if os.path.isfile(report):
-        summ = trajs.loop_summary(report)
+    if os.path.isfile(report) and not (os.path.isfile(path) and
+                                       os.path.getmtime(path) > os.path.getmtime(report)):
+        summ = trajs.loop_summary(report)                 # measured on this trajectory
     elif run:
         summ = trajs.loop_check(config, path, report=report, label=key)
     else:
@@ -262,7 +266,8 @@ COMMANDS = {"map": maps.main_quality, "walls": maps.main_walls, "maps": maps.mai
             "noise": maps.main_noise, "trajs": trajs.main_compare, "time": trajs.main_time,
             "imu": trajs.main_imu, "loop": trajs.main_loop, "report": report,
             "figures": figures.main_figures, "method": method_figures.main_method,
-            "smooth": smooth.main_smooth, "chain": chain.main_chain}
+            "smooth": smooth.main_smooth, "chain": chain.main_chain,
+            "tf": tfcheck.main_tf}
 
 
 # the recording and environment checks: scripts in checks/, run as they are

@@ -1,18 +1,22 @@
-% The SLAM solution against the reference trajectory (SLAM + BA), pass
-% 20261015. Source: check.py trajs <config>
-%   --traj ba_glim=<odometry>/traj_lidar_ba_glim.txt --ref ba_glim
-% (its "LaTeX rows"). ATE after the best rigid fit; RMSE throughout.
+% The SLAM solution and the scan-to-map refinement against the reference
+% trajectory (time-corrected SLAM + BA), pass 20261015. Source: check.py
+% trajs <config> --ref ba_glim (its "LaTeX rows"). ATE after the best
+% rigid fit; RMSE throughout.
 \begin{table}[!t]
 \centering
-\caption{SLAM Trajectory Against the Reference (Pass 20261015)}
+\caption{Trajectories Against the Reference (Pass 20261015)}
 \label{tab:glim_vs_ref}
+\footnotesize
 \setlength{\tabcolsep}{3pt}
 \begin{tabular}{lcccccc}
 \toprule
 Trajectory & \multicolumn{2}{c}{ATE} & \multicolumn{3}{c}{RPE, cm / deg} & Path \\
  & cm & deg & 1\,s & 10\,s & 100\,s & m \\
 \midrule
-\multicolumn{7}{c}{\todo{rows from compare\_trajs.py --ref ba\_glim}} \\
+SLAM (GLIM), as output & 3.4 & 0.71 & 1.4 / 0.32 & 5.8 / 0.96 & 15.3 / 0.98 & 543.3 \\
++ time correction      & 2.6 & 0.25 & 1.2 / 0.12 & 3.5 / 0.30 & 5.8 / 0.33  & 542.7 \\
+\quad + scan-to-map    & 1.3 & 0.15 & 0.8 / 0.15 & 1.1 / 0.16 & 2.6 / 0.18  & 546.2 \\
+Reference (+ BA)       & --  & --   & --         & --         & --          & 543.5 \\
 \bottomrule
 \end{tabular}
 \end{table}

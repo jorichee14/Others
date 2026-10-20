@@ -148,8 +148,8 @@ on walls is $\sigma\approx\SI{1.2}{\centi\metre}$ and the point spacing at
 add no detail, and they would cost $8\times$ the memory. Truncation
 $\tau=3\sigma_s$, with $\sigma_s$ the spread with which the scans place a
 wall (Sec.~\ref{sec:supp_quality}, scans as placed, whole run
-\SI{8.4}{\centi\metre}, $\sigma_s=8.4/3.29=\SI{2.55}{\centi\metre}$),
-giving $\tau=\SI{8}{\centi\metre}$, at least three cells: a smaller
+\SI{9.7}{\centi\metre}, $\sigma_s=9.7/3.29=\SI{2.95}{\centi\metre}$),
+rounded down to whole cells, $\tau=\SI{8}{\centi\metre}$, four cells: a smaller
 $\tau$ cuts off part of the spread before it is averaged, a larger one
 distorts objects thinner than $\tau$. $W_{\min}=3$ rays.
 
@@ -191,10 +191,15 @@ trajectory error (ATE) after the best rigid alignment and the relative pose
 error (RPE) over \SI{1}{\second}, \SI{10}{\second} and \SI{100}{\second},
 both as RMSE \cite{sturm2012}.
 
-\paragraph{Independent starts} The bundle adjustment run from two different
-input trajectories (the SLAM solution, and the same after scan-to-map
-registration) should reach the same poses; their difference bounds how much
-the result depends on its start.
+\paragraph{Independent refinement} Scan-to-map registration of every scan
+against the map built with the SLAM solution refines the same input by a
+different method; its difference from the bundle adjustment bounds how much
+the reference depends on the method.
+
+\paragraph{Smoothness} The jitter of a trajectory is the RMS deviation of
+its poses from a local quadratic fit (Savitzky--Golay) over
+\SI{0.5}{\second}, in position and rotation, over the whole run and while
+the robot stands still; a timestamped position inherits it.
 
 \paragraph{Control distances} Laser-rangefinder distances between landmarks
 fix the absolute scale, which none of the measures above observes.

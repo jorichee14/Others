@@ -27,6 +27,7 @@ Reads the pass's files only (no bag, no map is loaded) and checks, step by step:
 OK / ! per line; ! says what to redo. Exit 1 when any ! .
 """
 import argparse
+import fnmatch
 import glob
 import json
 import os
@@ -237,14 +238,21 @@ def main_chain(argv=None):
     else:
         print("        no report yet")
 
+    # made by a step, though no later step reads them: GLIM's IMU trajectory,
+    # 02b's per-round trajectories, 05's anchored map
+    side = [os.path.join(odo, "traj_imu.txt"), os.path.splitext(s2m)[0] + "_r*.txt",
+            P.outp(P.pcd("map_final")).replace(".pcd", "_anchored.pcd")]
+    made = {os.path.abspath(f) for pat in side for f in glob.glob(pat)}
+    keep = list((P.cfg.get("clean") or {}).get("keep") or [])
     print("\nnot in the chain (earlier versions, side runs; kept, not used):")
     loose = []
     for pat in (os.path.join(odo, "traj_*.txt"), os.path.join(os.path.dirname(P.outp(P.pcd("denoised"))), "*.pcd")):
         for f in sorted(glob.glob(pat)):
-            if os.path.abspath(f) not in used:
+            if os.path.abspath(f) not in used | made:
                 loose.append(f)
     for f in loose:
-        print(f"        {rel(f, base)}")
+        kept = any(fnmatch.fnmatch(os.path.basename(f), k) for k in keep)
+        print(f"        {rel(f, base)}" + ("   (clean.keep)" if kept else ""))
     if not loose:
         print("        none")
     print(f"\n{len(BAD)} problem(s)" if BAD else "\nthe chain is consistent: every step once, nothing stale")

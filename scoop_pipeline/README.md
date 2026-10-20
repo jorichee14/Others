@@ -85,6 +85,10 @@ check.py <command>   every check, one command (check.py -h; check.py <command> -
                             output, the keyframe cache's input, every 01 cloud newer
                             than its poses (01 resumes from clouds on disk), 02b,
                             the report; lists what is in no step
+    tf      <config>        a robot's TF in 10's poses bag (--bag the finalized one): the
+                            base link -> LiDAR against the calibration, the LiDAR and
+                            camera in map at every pose against the reference
+                            trajectories, global_pose against the tree
     smooth  <config>        how smooth each trajectory is (GLIM, 02b, BA): jitter about a
                             local quadratic fit (0.5 s, 1 s), jerk, angular acceleration;
                             also while standing still; no bag, no map
@@ -231,7 +235,7 @@ tests/               self-tests, no real bag needed
                      back to the truth, planes back to the noise
   test_clean_pass.py  clean_pass on a made-up pass: current results kept, a stale
                      seed map, a cache, an old map folder and a GLIM side run moved
-  test_distances.py  check.py distances on a synthetic room: 8 m and 6 m to 0.1 mm
+  test_distances.py  check.py distances on a synthetic room: 8 m and 6 m to 0.1 mm: csv, picks alone, --ask, the --click floor plan
                      from rough picks (one at the floor), a pick in the air
                      reported, a map scaled 1.002 read as +2000 ppm
   test_noise.py      check.py noise on a synthetic bag: one scan's walls and floors
@@ -241,6 +245,9 @@ tests/               self-tests, no real bag needed
   test_chain.py      check.py chain on a made-up pass: consistent; then the export
                      shifted twice, a map older than the reference, a cache from
                      another input, each caught
+  test_tfcheck.py    check.py tf: a made-up poses bag reads consistent; a base ->
+                     os_sensor edge turned 1 deg caught against the calibration
+                     and the reference LiDAR trajectory
   test_smooth.py     check.py smooth: a smooth path near zero, the same with 3 mm /
                      0.1 deg jitter read back as 0.72 / 0.89 x it
   test_method_figures.py  check.py method on a synthetic room: a wall seen on two
@@ -348,8 +355,8 @@ it, `--only S` runs S alone, `--until S` stops after S.
 | 07_cameras | `07_build_cameras.py`: infra / parked cameras in map | `frames/cameras_in_map.yaml` |
 | 08_tfs | `08_emit_tfs.py` | `frames/publish_tfs_<tag>.sh` |
 | 09_cloud | run: `09_build_coop_cloud.py`, the run's cloud in the map | `mapping/cloud_in_ref_<tag>.pcd` |
-| 10_poses | `10_publish_poses.py`: poses + the complete TF | `bags/<tag>_best_poses` |
-| finalize | the merged bag again, with 10's /tf, /tf_static and poses in it | the merged bag, in place |
+| 10_poses | `10_publish_poses.py`: poses + the complete TF; with a robot's `base_frame`: its base link (on /tf_static, or with `children` the root of its sensors, moved by the trajectory), `/<robot>/global_pose` = the base link in map, `/<robot>/camera_pose` = the camera optical frame | `bags/<tag>_best_poses` |
+| finalize | the merged bag again, with 10's /tf, /tf_static and poses in it; a bag finalized in place before is only renamed | `<merged bag>_final`, in its place (the stages read it for dataset.bag from then on) |
 | comms | `processing/comms_tables.py`: NTP, Wi-Fi, ping, iperf, CSI with positions | `comms/{ntp,wifi,csi}/`, `comms/summary.json` |
 | csi_clean | `processing/csi_clean.py`: QoS data frames, no pilots, H scaled to RSSI, both ends' poses | `comms/csi/csi_<link>_clean.npz` + README |
 

@@ -966,10 +966,33 @@ def main_scans(argv=None):
 DIST_DOC = r'''Control distances: wall-to-wall lengths measured on site with a laser
 meter, against the map.
 
+  python3 check.py distances <map.pcd> --click [--zband 0.3,1.2]
+  python3 check.py distances <map.pcd> --picks picks.txt [--measured 6.214,4.882,...]
   python3 check.py distances <map.pcd> <distances.csv> [--picks picks.txt]
       [--radius 0.3]
 
-distances.csv, one row per distance (a header row is fine):
+--click: a floor plan opens: the map's points between --zband (m, the
+map's frame: the LiDAR started at z = 0; default above desks and below the
+ceiling) seen from above, the walls as dark lines. Left click near wall A,
+then near wall B, for every distance; each click finds the straight wall
+nearest it (within 0.5 m), fitted at once and drawn (green), and after B
+the distance is drawn with its length (a red cross: no wall near the click,
+click closer). Scroll zooms around the cursor, a right-button drag moves
+the view, h shows the whole map; u undoes the last click; q or closing the
+window finishes. The meter's reading is then asked
+for each pair (Enter skips one) and the errors reported. The picks are
+saved as <map>_picks.txt and the readings with them as
+<map>_distances.csv, so the same check runs again without clicking:
+check.py distances <map.pcd> <map>_distances.csv.
+
+With picks alone: the wall pairs picked in the map, two points per pair
+(CloudCompare's picked points saved as ASCII; the last three numbers of each
+line are taken as x y z), named d1, d2, ... in the order picked. Without
+--measured each pair's map distance is printed, to match the pairs to the
+meter's readings; --measured gives those readings in metres, one per pair in
+the same order.
+
+distances.csv (the other way, with names), one row per distance (a header row is fine):
   name, measured_m [, ax, ay, az, bx, by, bz]
 with the two walls' picked points (the map's frame) on the row, or without
 them from --picks: CloudCompare's picked points saved as ASCII, two per
@@ -983,12 +1006,13 @@ pick that passes the pick and holds the most of them (RANSAC); other
 surfaces in the ball (a floor, a door frame) and the strip where they meet
 the wall are left out, so they cannot tilt it; then
 
-  map distance  from A's plane to B's centre along A's normal and from B's
-                to A's along B's, averaged: the perpendicular distance a
-                laser meter reads at its minimum
+  map distance  the meter's line: from A's pick (put on A's plane) along
+                A's normal to B's plane, as a meter held flat on wall A
+                reads; for parallel walls the same anywhere along them
   error         map - measured, mm, and per metre of distance
-  flags         the two walls not parallel (> 2 deg: the measured line was
-                not perpendicular to both), or a pick on no flat wall
+  flags         the two walls not parallel (> 2 deg: the distance changes by
+                tan(angle) per metre along A, so A's pick must be where the
+                meter was; left out of the totals), or a pick on no flat wall
 
 At the end: the mean and RMS error and the scale that fits them all
 (map = s x measured), to set against the meter's own 1.5-3 mm.
@@ -1050,19 +1074,30 @@ def wall_plane(tree, P, p, r, seed=0):
     return c, n, spread((Q - c) @ n), len(Q)
 
 
-def wall_distance(A, B):
-    """(distance m, angle between the walls deg) of two wall_plane()s."""
+def wall_distance(A, B, pa=None):
+    """(distance m, angle between the walls deg) of two wall_plane()s: the
+    laser meter's line, from pa (the meter on wall A, put on A's plane;
+    A's centre without it) along A's normal to B's plane. For parallel walls
+    that is the walls' distance anywhere; for walls an angle apart it changes
+    by tan(angle) per metre along A, so pa must be where the meter was."""
     (ca, na, *_), (cb, nb, *_) = A, B
-    na = na if (cb - ca) @ na > 0 else -na
-    nb = nb if (ca - cb) @ nb > 0 else -nb
-    dist = 0.5 * ((cb - ca) @ na + (ca - cb) @ nb)
-    return float(dist), float(np.degrees(np.arccos(min(1.0, abs(na @ nb)))))
+    pa = ca if pa is None else np.asarray(pa, float) - na * ((np.asarray(pa, float) - ca) @ na)
+    na = na if (cb - pa) @ na > 0 else -na
+    cos = float(na @ nb)
+    ang = float(np.degrees(np.arccos(min(1.0, abs(cos)))))
+    if abs(cos) < 0.2:
+        return None, ang
+    return float(((cb - pa) @ nb) / cos), ang
+
+
+def per_metre(ang):
+    """cm the laser line changes per metre along wall A, walls ang deg apart."""
+    return 100 * np.tan(np.radians(ang))
 
 
 def read_distances(path, picks=None):
     """[(name, measured m, a xyz, b xyz)] from the csv (and the picks file)."""
     import csv
-    import re
     rows = []
     with open(path) as fh:
         for row in csv.reader(fh):
@@ -1074,12 +1109,7 @@ def read_distances(path, picks=None):
             except ValueError:
                 continue                  # the header
             rows.append((row[0], vals))
-    pts = []
-    if picks:
-        for ln in open(picks):
-            nums = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", ln)
-            if len(nums) >= 3:
-                pts.append([float(x) for x in nums[-3:]])
+    pts = read_picks(picks) if picks else []
     out = []
     for i, (name, vals) in enumerate(rows):
         if len(vals) >= 7:
@@ -1093,39 +1123,287 @@ def read_distances(path, picks=None):
     return out
 
 
+def read_picks(path):
+    """The picked points (x y z: the last three numbers of each line)."""
+    import re
+    pts = []
+    for ln in open(path):
+        nums = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", ln)
+        if len(nums) >= 3:
+            pts.append([float(x) for x in nums[-3:]])
+    return pts
+
+
+def pick_pairs(picks, measured=None):
+    """[(name, measured m or None, a xyz, b xyz)] from the picks alone: d1, d2, ..."""
+    pts = read_picks(picks)
+    if len(pts) % 2:
+        raise SystemExit(f"{picks}: {len(pts)} points, an odd number: two per distance (A, then B)")
+    n = len(pts) // 2
+    if measured is not None and len(measured) != n:
+        raise SystemExit(f"--measured has {len(measured)} values for {n} picked pairs")
+    return [(f"d{i + 1}", None if measured is None else measured[i],
+             np.array(pts[2 * i], float), np.array(pts[2 * i + 1], float)) for i in range(n)]
+
+
+def wall_near(S, stree, x, y, r=0.5):
+    """The straight wall nearest a floor-plan click at (x, y): RANSAC on the
+    slice's points within r (in plan) for a vertical plane passing within
+    0.3 m of the click, refitted by least squares to its points within 3 cm
+    along 1 m either side of the click.
+    (centre, unit normal, thickness m, points, the click on the wall) or None."""
+    idx = stree.query_ball_point([x, y], r)
+    if len(idx) < MIN_PTS:
+        return None
+    Q = S[idx]
+    q = np.array([x, y, float(np.median(Q[:, 2]))])
+    rng = np.random.default_rng(0)
+    w = _ransac(Q, rng, lambda a, n: abs(n[2]) < 0.17 and abs((q - a)[:2] @ n[:2]) < 0.3, tries=400)
+    if w is None:
+        return None
+    # the wall's points along 1 m of it either side of the click (a long
+    # base for its direction), refitted until the 3 cm band no longer moves
+    W = S[stree.query_ball_point([x, y], 1.0)]
+    c, n = w
+    for _ in range(4):
+        Q = W[np.abs((W - c) @ n) < 0.03]
+        if len(Q) < MIN_PTS:
+            return None
+        c = Q.mean(0)
+        n = np.linalg.svd(Q - c, full_matrices=False)[2][2]
+    p = q - n * ((q - c) @ n)
+    return c, n, spread((Q - c) @ n), len(Q), p
+
+
+class PlanPicker:
+    """The floor-plan clicks of --click: each finds the straight wall nearest
+    it (within r); pairs (A, B) give distances."""
+
+    def __init__(self, ax, P, tree, S, radius=0.3, r=0.5):
+        self.ax, self.P, self.tree, self.radius, self.r = ax, P, tree, radius, r
+        self.S, self.stree = S, cKDTree(S[:, :2])
+        self.picks, self.artists = [], []           # (point on the wall, wall), [artists] per click
+
+    def click(self, x, y):
+        """A click at (x, y): a message; the pick is kept only near a straight wall."""
+        w = wall_near(self.S, self.stree, x, y, self.r)
+        if w is None:
+            self.ax.plot(x, y, "x", color="#d03b3b", ms=10, mew=2)
+            return f"no straight wall within {self.r:g} m of the click: click closer to a wall line"
+        n, p = w[1], w[4]
+        t = np.cross(n, [0, 0, 1.0])
+        t = t / (np.linalg.norm(t) or 1)
+        seg = np.array([p - 0.6 * t, p + 0.6 * t])
+        art = self.ax.plot(seg[:, 0], seg[:, 1], color="#1baf7a", lw=4)
+        art += self.ax.plot(p[0], p[1], "o", color="#1baf7a", ms=7)
+        self.picks.append((p, w))
+        k = len(self.picks)
+        if k % 2:
+            self.artists.append(art)
+            return f"d{k // 2 + 1}: wall A found ({w[2] * 100:.1f} cm thick); now click wall B"
+        A, B = self.picks[-2][1], w
+        pa = self.picks[-2][0]
+        d, ang = wall_distance(A, B, pa)
+        if d is None:
+            self.picks.pop()
+            for a in art:
+                a.remove()
+            return f"walls {ang:.0f} deg apart: not facing each other; click wall B again"
+        na = A[1] if (B[0] - pa) @ A[1] > 0 else -A[1]
+        q1 = pa + na * d
+        art += self.ax.plot([pa[0], q1[0]], [pa[1], q1[1]], color="#eb6834", lw=2)
+        art.append(self.ax.text((pa[0] + q1[0]) / 2, (pa[1] + q1[1]) / 2, f" d{k // 2}  {d:.3f} m",
+                                color="#b4501f", fontsize=12, fontweight="bold"))
+        self.artists.append(art)
+        warn = (f"  (not parallel: {per_metre(ang):.1f} cm per m along A, so click A where the meter "
+                "was; left out of the totals)") if ang > 2.0 else ""
+        return f"d{k // 2} = {d:.3f} m, walls {ang:.1f} deg apart{warn}; next: wall A of d{k // 2 + 1}"
+
+    def undo(self):
+        if not self.picks:
+            return "nothing to undo"
+        self.picks.pop()
+        for art in self.artists.pop():
+            art.remove()
+        return f"undone; {len(self.picks)} clicks kept"
+
+    def points(self):
+        n = len(self.picks) // 2 * 2
+        return [p.tolist() for p, _ in self.picks[:n]]
+
+
+def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03):
+    """The wall pairs clicked on a floor plan of the map: [xyz, ...], A, B, A, B."""
+    import matplotlib.pyplot as plt
+    S = P[(P[:, 2] >= zband[0]) & (P[:, 2] <= zband[1])]
+    if len(S) < 1000:
+        raise SystemExit(f"only {len(S)} map points between z {zband[0]} and {zband[1]} m: "
+                         "choose --zband where the walls are")
+    lo, hi = S[:, :2].min(0), S[:, :2].max(0)
+    H, xe, ye = np.histogram2d(S[:, 0], S[:, 1], bins=np.maximum(((hi - lo) / cell).astype(int), 1),
+                               range=[[lo[0], hi[0]], [lo[1], hi[1]]])
+    with plt.rc_context({"toolbar": "None"}):     # no pan / zoom modes to swallow the clicks
+        fig, ax = plt.subplots(figsize=(13, 9))
+    ax.imshow(np.log1p(H).T, origin="lower", extent=(xe[0], xe[-1], ye[0], ye[-1]), cmap="Greys",
+              interpolation="nearest")
+    ax.set_aspect("equal")
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    pk = PlanPicker(ax, P, tree, S, radius)
+    head = ("left click: wall A, then wall B  ·  scroll: zoom  ·  right drag: move  ·  "
+            "h: whole map  ·  u: undo  ·  q: done")
+    home = (ax.get_xlim(), ax.get_ylim())
+    drag = {}
+    ax.set_title(head + "\nclick near a dark wall line: d1, wall A", fontsize=11)
+
+    def say(msg):
+        print("  " + msg)
+        ax.set_title(head + "\n" + msg, fontsize=11)
+        fig.canvas.draw_idle()
+
+    def on_click(ev):
+        if ev.inaxes is not ax:
+            return
+        if ev.button == 3:                            # right drag moves the view
+            drag.update(x=ev.x, y=ev.y, xl=ax.get_xlim(), yl=ax.get_ylim())
+        elif ev.button == 1:
+            say(pk.click(ev.xdata, ev.ydata))
+
+    def on_move(ev):
+        if "x" not in drag:
+            return
+        bb = ax.get_window_extent()
+        (x0, x1), (y0, y1) = drag["xl"], drag["yl"]
+        dx = (ev.x - drag["x"]) * (x1 - x0) / bb.width
+        dy = (ev.y - drag["y"]) * (y1 - y0) / bb.height
+        ax.set_xlim(x0 - dx, x1 - dx)
+        ax.set_ylim(y0 - dy, y1 - dy)
+        fig.canvas.draw_idle()
+
+    def on_release(ev):
+        drag.clear()
+
+    def on_key(ev):
+        if ev.key == "u":
+            say(pk.undo())
+        elif ev.key == "h":
+            ax.set_xlim(*home[0])
+            ax.set_ylim(*home[1])
+            fig.canvas.draw_idle()
+        elif ev.key in ("q", "enter", "escape"):
+            plt.close(fig)
+
+    def on_scroll(ev):
+        if ev.inaxes is not ax:
+            return
+        f = 0.8 if ev.button == "up" else 1.25
+        x0, x1 = ax.get_xlim()
+        y0, y1 = ax.get_ylim()
+        ax.set_xlim(ev.xdata + (x0 - ev.xdata) * f, ev.xdata + (x1 - ev.xdata) * f)
+        ax.set_ylim(ev.ydata + (y0 - ev.ydata) * f, ev.ydata + (y1 - ev.ydata) * f)
+        fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect("button_press_event", on_click)
+    fig.canvas.mpl_connect("motion_notify_event", on_move)
+    fig.canvas.mpl_connect("button_release_event", on_release)
+    fig.canvas.mpl_connect("key_press_event", on_key)
+    fig.canvas.mpl_connect("scroll_event", on_scroll)
+    print(f"floor plan: {len(S)} points between z {zband[0]} and {zband[1]} m; " + head)
+    plt.show()
+    return pk.points()
+
+
+def _distance_rows(tree, P, rows, radius):
+    """[(name, measured, a, b, A, B, d, angle)] with each pair's walls fitted."""
+    out = []
+    for name, m, pa, pb in rows:
+        A, B = wall_plane(tree, P, pa, radius), wall_plane(tree, P, pb, radius)
+        d, ang = wall_distance(A, B, pa) if A is not None and B is not None else (None, None)
+        out.append([name, m, pa, pb, A, B, d, ang])
+    return out
+
+
+def _distance_table(res):
+    print(f"  {'name':14s}{'measured m':>11s}{'map m':>10s}{'error mm':>10s}{'mm/m':>7s}"
+          f"{'angle':>7s}{'walls cm':>11s}   flags")
+    for name, m, _, _, A, B, d, ang in res:
+        ms = "-" if m is None else f"{m:.3f}"
+        if d is None:
+            which = " and ".join(w for w, x in (("A", A), ("B", B)) if x is None)
+            print(f"  {name:14s}{ms:>11s}{'-':>10s}{'':35s}   no flat wall at {which}'s pick")
+            continue
+        err = "" if m is None else f"{(d - m) * 1000:+10.1f}{(d - m) * 1000 / m:+7.2f}"
+        print(f"  {name:14s}{ms:>11s}{d:10.3f}{err:17s}{ang:6.1f}d"
+              f"{A[2] * 100:5.1f}/{B[2] * 100:<4.1f}   "
+              f"{f'not parallel: {per_metre(ang):.1f} cm per m along A' if ang > 2.0 else ''}")
+
+
 def main_distances(argv=None):
     ap = argparse.ArgumentParser(description=DIST_DOC,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("map")
-    ap.add_argument("distances")
+    ap.add_argument("distances", nargs="?", help="csv with names (optional: picks alone number the pairs)")
+    ap.add_argument("--click", action="store_true", help="pick the wall pairs on the map in a window")
     ap.add_argument("--picks")
+    ap.add_argument("--measured", help="the meter's readings, m, one per picked pair: 6.214,4.882,...")
+    ap.add_argument("--ask", action="store_true", help="ask for each pair's reading (default with --click)")
     ap.add_argument("--radius", type=float, default=0.3)
+    ap.add_argument("--zband", default="0.3,1.2",
+                    help="--click: the floor plan's slice, z from,to in m (the LiDAR started at 0)")
     a = ap.parse_args(argv)
-    rows = read_distances(a.distances, a.picks)
+    if not (a.click or a.distances or a.picks):
+        ap.error("give --click, or --picks (and --measured), or a distances csv")
+    stem = os.path.splitext(a.map)[0]
+    measured = None
+    if a.measured:
+        measured = [float(x) for x in a.measured.replace(",", " ").split()]
     P = load(a.map)
     tree = cKDTree(P)
+    if a.click:
+        pts = click_plan(P, tree, [float(x) for x in a.zband.split(",")], a.radius)
+        if not pts:
+            raise SystemExit("no wall pair clicked")
+        a.picks = a.picks or stem + "_picks.txt"
+        with open(a.picks, "w") as fh:
+            fh.writelines(f"{x:.4f},{y:.4f},{z:.4f}\n" for x, y, z in pts)
+        print(f"saved {len(pts) // 2} pairs -> {a.picks}")
+        rows = pick_pairs(a.picks, measured)
+    elif a.distances:
+        rows = read_distances(a.distances, a.picks)
+    elif a.picks:
+        rows = pick_pairs(a.picks, measured)
     print(f"{a.map}: {len(P)} points; {len(rows)} control distances\n")
-    print(f"  {'name':14s}{'measured m':>11s}{'map m':>10s}{'error mm':>10s}{'mm/m':>7s}"
-          f"{'angle':>7s}{'walls cm':>11s}   flags")
-    meas, mapd = [], []
-    for name, m, pa, pb in rows:
-        A, B = wall_plane(tree, P, pa, a.radius), wall_plane(tree, P, pb, a.radius)
-        if A is None or B is None:
-            which = " and ".join(w for w, x in (("A", A), ("B", B)) if x is None)
-            print(f"  {name:14s}{m:11.3f}{'-':>10s}{'':10s}{'':7s}{'':7s}{'':11s}   "
-                  f"no flat wall at {which}'s pick")
-            continue
-        d, ang = wall_distance(A, B)
-        err = (d - m) * 1000
-        flag = "walls not parallel" if ang > 2.0 else ""
-        print(f"  {name:14s}{m:11.3f}{d:10.3f}{err:+10.1f}{err / m:+7.2f}{ang:6.1f}d"
-              f"{A[2] * 100:5.1f}/{B[2] * 100:<4.1f}   {flag}")
-        if ang <= 2.0:
-            meas.append(m)
-            mapd.append(d)
-    if not meas:
+    res = _distance_rows(tree, P, rows, a.radius)
+    _distance_table(res)
+
+    ask = a.ask or (a.click and measured is None and sys.stdin.isatty())
+    if ask and all(r[1] is None for r in res):
+        print("\nthe meter's reading for each pair, m (Enter skips it):")
+        for r in res:
+            if r[6] is None:
+                continue
+            got = input(f"  {r[0]}  map {r[6]:.3f} m  measured: ").strip()
+            if got:
+                r[1] = float(got)
+        if any(r[1] is not None for r in res):
+            out = stem + "_distances.csv"
+            with open(out, "w") as fh:
+                fh.write("name,measured_m,ax,ay,az,bx,by,bz\n")
+                for name, m, pa, pb, *_ in res:
+                    if m is not None:
+                        fh.write(f"{name},{m:.4f}," + ",".join(f"{v:.4f}" for v in (*pa, *pb)) + "\n")
+            print(f"saved the readings with their picks -> {out}\n")
+            _distance_table(res)
+
+    if all(r[1] is None for r in res):
+        print("\nmap distances only: give the meter's readings in the same order with "
+              "--measured 6.214,4.882,...")
+        print("(walls: each wall's thickness in the map, p95-p5, around its pick)")
+        return
+    ok = [(r[1], r[6]) for r in res if r[1] is not None and r[6] is not None and r[7] <= 2.0]
+    if not ok:
         raise SystemExit("\nno distance measured: check the picks (the map's frame, on the walls)")
-    meas, mapd = np.array(meas), np.array(mapd)
+    meas, mapd = np.array(ok).T
     e = (mapd - meas) * 1000
     s = float(meas @ mapd / (meas @ meas))
     print(f"\n{len(meas)} distances ({meas.min():.2f}-{meas.max():.2f} m): error mean {e.mean():+.1f} mm, "

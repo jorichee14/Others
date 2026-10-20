@@ -45,14 +45,21 @@
   "keep": ["traj_lidar_ba_glim_v1.txt"]
  },
  "07_build_cameras": {"enabled": false},
+ "comms": {"enabled": false, "_note": "mobile_2 alone, no comms topics in its bag"},
  "08_emit_tfs": {"enabled": false},
  "10_publish": {
+  "drop_tf": ["camera_link->base_link"],
+  "_drop_tf": "base_link: the base link's name before mobile_2_base_link, still in the finalized bag",
   "robots": [
    {"name": "mobile_1", "enabled": false},
    {"name": "mobile_2",
     "traj": "traj_mobile_2_lidar_in_cam.tum",
     "optical_frame": "camera_color_optical_frame",
-    "local_frame": "camera_link"}
+    "local_frame": "mobile_2_base_link",
+    "base_frame": {"_note": "mobile_2's base link, the root of its sensors (the trajectory moves it; camera_link and the LiDAR hang from it). On the RealSense body (camera_link: x forward, y left, z up) until the base is measured; then its pose in camera_link here",
+                   "name": "mobile_2_base_link", "measured_in": "camera_link",
+                   "xyz": [0, 0, 0], "qxyzw": [0, 0, 0, 1],
+                   "children": ["camera_link", "os_sensor_mobile2"]}}
   ]
  }
 }

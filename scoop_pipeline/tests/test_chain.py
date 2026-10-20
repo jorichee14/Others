@@ -89,6 +89,9 @@ def build(tmp, fault=None):
         touch(os.path.join(mp, f"{b}_seed_{tag}.pcd"), t0 + 10 + i)
     touch(os.path.join(odo, "traj_lidar_refined.txt"), t0 + 20)
     touch(os.path.join(odo, "traj_lidar_ba_glim_v1.txt"), t0 - 500)
+    for f in ("traj_imu.txt", "traj_lidar_refined_r1.txt"):            # made by steps, read by none
+        touch(os.path.join(odo, f), t0 + 20)
+    touch(os.path.join(mp, f"map_final_{tag}_anchored.pcd"), t0 + 600)
     touch(os.path.join(base, f"mapping_report_{tag}.md"), t0 + 500)
     cfg = os.path.join(tmp, "pipeline_config.json")
     json.dump({"dataset": {"bag": os.path.join(tmp, "work", "x.mcap"), "processed": base,
@@ -119,6 +122,9 @@ def main():
                     f.append("clean pass not consistent:\n" + out[-3000:])
                 elif "traj_lidar_ba_glim_v1.txt" not in out.split("not in the chain")[-1]:
                     f.append("leftover v1 not listed:\n" + out[-1500:])
+                elif any(x in out.split("not in the chain")[-1] for x in
+                         ("traj_imu.txt", "refined_r1", "_anchored.pcd")):
+                    f.append("a step's side output listed as a leftover:\n" + out[-1500:])
             elif r.returncode != 1 or want not in out:
                 f.append(f"fault {fault} not caught (want '{want}'):\n" + out[-3000:])
         finally:

@@ -622,26 +622,10 @@ shows the pipeline.
 
 \subsection{Reference Map}
 \label{sec:map}
-% The bundle-adjusted, TSDF-fused reference (pass 20261015) is written up
-% in sections/refmap_main.tex (method in supp/refmap_method.tex); replace
-% the next two paragraphs with \input{sections/refmap_main} once its
-% numbers are in, and update E1 and Sec. IX to match.
-The reference map is built in a dedicated mapping session and held
-fixed afterwards; no recorded run contributes to it. A second,
-separate mapping pass is recorded and processed independently and is
-used only to cross-check the first. A LiDAR-inertial SLAM solution
-\cite{glim} estimates the mapping trajectory, with sub-mapping and
-loop closure tuned for offline accuracy and checked so that no submap
-is left without a long-range constraint. The map is then frozen and
-every scan is re-registered into it by point-to-plane ICP against
-local plane fits, iterated until the pose corrections fall below the
-sensor noise. This follows the prior-map registration used by
-survey-grade datasets \cite{newercollege,oxfordspires,lamar}, with the
-prior built by our own sensors. Plane fits are used instead of
-nearest-neighbour targets because, on a surface smeared by accumulated
-drift, a \SI{3.0}{\centi\metre} scan offset produces only
-\SI{0.5}{\centi\metre} of nearest-neighbour residual, so the error
-would not be visible to conventional ICP.
+\input{sections/refmap_main}
+
+\input{tables/refmap_stages}
+\input{tables/glim_vs_ref}
 
 The frozen map is the metric backbone of every run. LiDAR agents are
 localized by scan-to-map registration. For \texttt{mobile\_2}, depth
@@ -914,14 +898,15 @@ at most \SI{0.99}{\milli\second}, which is \SI{1}{\milli\metre} at
 \SI{1}{\metre\per\second}; the strict bound of \SI{12}{\milli\second}
 is \SI{1.2}{\centi\metre}. The RGB-D cart sits in the LiDAR frame to
 \SI{3.1}{\centi\metre} median against held-out boards; the LiDAR
-robot's own frame converges to \SI{0.15}{\centi\metre} and
-reproduces an earlier map to \SI{1.06}{\centi\metre}; the board
+robot's mapping trajectory agrees with an independent refinement
+(scan-to-map against bundle adjustment) to \SI{1.3}{\centi\metre} and
+its map reproduces an earlier map to \SI{1.06}{\centi\metre}; the board
 detector reproduces the pipeline to \SI{8}{\milli\metre}. Each
 term is judged against the breaking point of its own kind: length terms
 against the \SI{0.2}{\metre} pose point, time terms against one
 LiDAR frame at \SI{1}{\metre\per\second}, \SI{0.1}{\metre}. The
 measured clock offset is 101$\times$ below its point; map refinement,
-map repeatability, and the board detector are 133$\times$, 19$\times$,
+map repeatability, and the board detector are 15$\times$, 19$\times$,
 and 24$\times$ below theirs. Two terms fall short of 10$\times$ and are
 reported as such: the cart's \SI{3.1}{\centi\metre} is 6.5$\times$
 below the pose point, and the strict \SI{12}{\milli\second} chrony
@@ -1116,11 +1101,13 @@ measure it; a wired connection to \texttt{mobile\_1} removes it.
 Hence boards go in feature-poor regions and every run starts at a
 board.
 
-\paragraph{Plane-fit refinement versus nearest neighbours.} On a map
-smeared by drift, nearest-neighbour ICP hides a \SI{3}{\centi\metre}
-scan offset behind a \SI{0.5}{\centi\metre} residual; plane targets
-made the error visible and were necessary to reach the reported
-surface thickness.
+\paragraph{Check the SLAM solution's clock before refining it.} The
+SLAM poses were stamped \SI{46}{\milli\second} early; uncorrected,
+this alone made the heading wrong by about $1^\circ$ while turning and
+walls \SI{18.8}{\centi\metre} thick over the run instead of
+\SI{12.0}{\centi\metre}. Fusion is the second
+term: a union of points kept walls \SI{5}{\centi\metre} thicker than
+the signed-distance fusion of the same scans.
 
 \paragraph{Limits.} One band and one protocol; one access point per
 site; one CSI receiver; the self-built map rests on the control
