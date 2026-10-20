@@ -224,7 +224,8 @@ tests/               self-tests, no real bag needed
                      the Poisson surface over the open top trimmed, point colours; mesh:
                      the map's colours, the ceiling found and cut, the walls kept; view:
                      floor holes filled (not under a box, a stair opening, over max), walls flat;
-                     mirror ghosts and loose pieces (courtyard, floating) out, furniture kept
+                     mirror ghosts and loose pieces (courtyard, floating) out, furniture kept;
+                     objects (a ball, a rack of bars) meshed on their own, on them
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
   test_csi_view.py   csi_view: delay profile puts the paths at their delays; figures
   test_replica.py    replica with lidar depth on a synthetic scene
@@ -920,7 +921,14 @@ quarter of the points for a quick look (Poisson depth one less). Every face
 is split in four (`--subdivide 1`) and every vertex takes the colour of the
 map's nearest point (Poisson's own colours are averages, blurred and
 greyed); the mesh is written without normals (`--normals` to keep them), so
-a viewer shows its colours unlit. The mirror ghosts and loose pieces go as
+a viewer shows its colours unlit. Objects are meshed on their own: the
+building (0.4 m cells flat to 1.5 cm and at least half filled) as above, the
+rest (objects, edges, corners) by a Poisson of its own in 4 m tiles, octree
+cells about `--object-cell` (1.2 cm), the faces farther than `--object-trim`
+(3 cm) from a point and the least-backed tenth removed, so racks and chairs
+are not wrapped in the building's smooth bubbles (`--no-objects`: one
+Poisson for all). Loose pieces go from the points before meshing, so a thing
+on a wall stays with it. The mirror ghosts and loose pieces go as
 in `view` (`--keep-ghosts`, `--min-piece 0` keep them). The `view` copy can be meshed the same way
 (`mesh view_<tag>.ply` -> `mesh_view_<tag>.ply`): walls flat, floor filled.
 

@@ -26,7 +26,8 @@ the sensor height found from the floor under the
 poses, the strays gone, the walls flat, nothing added outside the room. Then
 the mirror ghosts of a polished floor and wall (under the floor, behind the
 wall: no direct ray from the path reaches them) and a loose 5 m2 sheet removed
-by both mesh and view, the room's own surfaces kept.
+by both mesh and view, the room's own surfaces kept. Then objects (a ball,
+a rack of thin bars) meshed on their own, finer: their faces on them.
 
     python scoop_pipeline/tests/test_lod3dgs.py
 """
@@ -280,6 +281,64 @@ def check_ghosts(tmp):
     return clean, v
 
 
+def check_objects(tmp):
+    """A 6 x 4 x 3 room with a ball (r 0.3 m) and a rack of five thin bars
+    (r 2 cm, 1.2 m tall): meshed on their own (the default), the objects'
+    faces lie on them (90 % of the vertices within 1.5 cm of the ball's
+    surface; every bar meshed, its faces at its 2 cm radius, 90 % within 6 cm
+    of its axis: the most a map of 2 cm points gives); with one Poisson for
+    everything the ball gets the shells Poisson closes it with (75 %)."""
+    import open3d as o3d
+    rng = np.random.default_rng(4)
+    g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
+    pts = []
+    for axis, val, ra, rb in ((2, 0.0, (0, 6), (0, 4)), (2, 3.0, (0, 6), (0, 4)),
+                              (0, 0.0, (0, 4), (0, 3)), (0, 6.0, (0, 4), (0, 3)),
+                              (1, 0.0, (0, 6), (0, 3)), (1, 4.0, (0, 6), (0, 3))):
+        A, B = np.meshgrid(g(*ra), g(*rb), indexing="ij")
+        o = [i for i in range(3) if i != axis]
+        p = np.zeros((A.size, 3))
+        p[:, o[0]], p[:, o[1]], p[:, axis] = A.ravel(), B.ravel(), val
+        pts.append(p)
+    t = np.linspace(0, 2 * np.pi, 60)                          # a loop round the room: both sides seen
+    path = np.c_[3 + 2.4 * np.cos(t), 2 + 1.5 * np.sin(t), np.full_like(t, 1.2)]
+    ball_c = np.array([2.0, 2.0, 0.8])
+    u = rng.normal(size=(12000, 3))
+    u /= np.linalg.norm(u, axis=1, keepdims=True)
+    b = ball_c + 0.3 * u
+    seen = (np.einsum("ij,kj->ik", u, path) - np.einsum("ij,ij->i", u, b)[:, None] > 0).any(1)
+    pts.append(b[seen])                                        # what a sensor on the path can see of it
+    bars = [np.array([3.2 + 0.3 * i, 1.5]) for i in range(5)]
+    for b in bars:
+        t, z = np.meshgrid(np.linspace(0, 2 * np.pi, 7, endpoint=False), g(0.0, 1.2))
+        pts.append(np.c_[b[0] + 0.02 * np.cos(t.ravel()), b[1] + 0.02 * np.sin(t.ravel()), z.ravel()])
+    P = np.concatenate(pts) + rng.normal(0, 0.003, (sum(len(p) for p in pts), 3))
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    pc.colors = o3d.utility.Vector3dVector(rng.uniform(0.3, 0.7, P.shape))
+    mp = os.path.join(tmp, "map_final_objects.pcd")
+    o3d.io.write_point_cloud(mp, pc)
+    tr = os.path.join(tmp, "traj_objects.txt")
+    np.savetxt(tr, np.c_[t, path, np.zeros((len(t), 3)), np.ones(len(t))])
+
+    def ball_fit(path):
+        V = np.asarray(o3d.io.read_triangle_mesh(path).vertices)
+        near = np.linalg.norm(V - ball_c, axis=1) < 0.5
+        return float(np.mean(np.abs(np.linalg.norm(V[near] - ball_c, axis=1) - 0.3) < 0.015)), V
+    r = L.map_mesh(mp, tr, os.path.join(tmp, "o_split.ply"))
+    one = L.map_mesh(mp, tr, os.path.join(tmp, "o_one.ply"), objects=False)
+    fs, V = ball_fit(r["out"])
+    f1, _ = ball_fit(one["out"])
+    assert r["object_faces"] > 0, r
+    assert fs > 0.9 and fs > f1 + 0.1, ("objects' mesh off the ball", fs, "one Poisson", f1)
+    for b in bars:
+        on = (np.linalg.norm(V[:, :2] - b, axis=1) < 0.1) & (V[:, 2] > 0.2) & (V[:, 2] < 1.0)
+        assert on.sum() > 30, ("bar not meshed", b, on.sum())
+        w = np.linalg.norm(V[on, :2] - b, axis=1)
+        assert abs(np.median(w) - 0.02) < 0.008 and np.percentile(w, 90) < 0.06, \
+            ("bar not meshed on it", b, np.percentile(w, [50, 90]))
+    return fs, f1
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="lod3dgs_")
     try:
@@ -361,8 +420,11 @@ def main():
         print(f"ok view: sensor {rv['sensor_height']:.2f} m up, {rv['holes']} hole filled "
               f"({rv['filled_m2']:.1f} m2), {rv['skipped']} left, wall {th * 100:.1f} cm thick")
         gm, gv = check_ghosts(tmp)
-        print(f"ok ghosts: mesh {gm['ghost_faces']} ghost and {gm['piece_faces']} loose faces out, "
+        print(f"ok ghosts: mesh {gm['ghost_faces']} ghost faces and {gm['piece_points']} loose points out, "
               f"view {gv['ghost_points']} ghost and {gv['piece_points']} loose points out, the room kept")
+        fs, f1 = check_objects(tmp)
+        print(f"ok objects: {100 * fs:.0f} % of the ball's vertices on it meshed on their own "
+              f"({100 * f1:.0f} % with one Poisson), every bar meshed at its radius")
         rm = check_mesh(tmp)
         print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
               f"{rm['noceil_faces']} faces without it")
