@@ -974,11 +974,12 @@ meter, against the map.
 --click: a floor plan opens: the map's points between --zband (m, the
 map's frame: the LiDAR started at z = 0; default above desks and below the
 ceiling) seen from above, the walls as dark lines. Left click near wall A,
-then near wall B, for every distance; each click snaps to the nearest map
-point, its wall is fitted at once and drawn (green), and after B the
-distance is drawn with its length (a red cross: no flat wall there, click
-again). Scroll zooms around the cursor, the toolbar pans; u undoes the last
-click; q or closing the window finishes. The meter's reading is then asked
+then near wall B, for every distance; each click finds the straight wall
+nearest it (within 0.5 m), fitted at once and drawn (green), and after B
+the distance is drawn with its length (a red cross: no wall near the click,
+click closer). Scroll zooms around the cursor, a right-button drag moves
+the view, h shows the whole map; u undoes the last click; q or closing the
+window finishes. The meter's reading is then asked
 for each pair (Enter skips one) and the errors reported. The picks are
 saved as <map>_picks.txt and the readings with them as
 <map>_distances.csv, so the same check runs again without clicking:
@@ -1222,14 +1223,18 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03):
     lo, hi = S[:, :2].min(0), S[:, :2].max(0)
     H, xe, ye = np.histogram2d(S[:, 0], S[:, 1], bins=np.maximum(((hi - lo) / cell).astype(int), 1),
                                range=[[lo[0], hi[0]], [lo[1], hi[1]]])
-    fig, ax = plt.subplots(figsize=(13, 9))
+    with plt.rc_context({"toolbar": "None"}):     # no pan / zoom modes to swallow the clicks
+        fig, ax = plt.subplots(figsize=(13, 9))
     ax.imshow(np.log1p(H).T, origin="lower", extent=(xe[0], xe[-1], ye[0], ye[-1]), cmap="Greys",
               interpolation="nearest")
     ax.set_aspect("equal")
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
     pk = PlanPicker(ax, P, tree, S, radius)
-    head = "left click wall A, then wall B  ·  scroll: zoom  ·  u: undo  ·  q: done"
+    head = ("left click: wall A, then wall B  ·  scroll: zoom  ·  right drag: move  ·  "
+            "h: whole map  ·  u: undo  ·  q: done")
+    home = (ax.get_xlim(), ax.get_ylim())
+    drag = {}
     ax.set_title(head + "\nclick near a dark wall line: d1, wall A", fontsize=11)
 
     def say(msg):
@@ -1238,17 +1243,34 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03):
         fig.canvas.draw_idle()
 
     def on_click(ev):
-        tb = getattr(fig.canvas, "toolbar", None)
-        if ev.inaxes is not ax or ev.button != 1:
+        if ev.inaxes is not ax:
             return
-        if tb is not None and tb.mode:
-            say("click ignored: the toolbar's pan or zoom is on; click its button again to turn it off")
+        if ev.button == 3:                            # right drag moves the view
+            drag.update(x=ev.x, y=ev.y, xl=ax.get_xlim(), yl=ax.get_ylim())
+        elif ev.button == 1:
+            say(pk.click(ev.xdata, ev.ydata))
+
+    def on_move(ev):
+        if "x" not in drag:
             return
-        say(pk.click(ev.xdata, ev.ydata))
+        bb = ax.get_window_extent()
+        (x0, x1), (y0, y1) = drag["xl"], drag["yl"]
+        dx = (ev.x - drag["x"]) * (x1 - x0) / bb.width
+        dy = (ev.y - drag["y"]) * (y1 - y0) / bb.height
+        ax.set_xlim(x0 - dx, x1 - dx)
+        ax.set_ylim(y0 - dy, y1 - dy)
+        fig.canvas.draw_idle()
+
+    def on_release(ev):
+        drag.clear()
 
     def on_key(ev):
         if ev.key == "u":
             say(pk.undo())
+        elif ev.key == "h":
+            ax.set_xlim(*home[0])
+            ax.set_ylim(*home[1])
+            fig.canvas.draw_idle()
         elif ev.key in ("q", "enter", "escape"):
             plt.close(fig)
 
@@ -1263,6 +1285,8 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03):
         fig.canvas.draw_idle()
 
     fig.canvas.mpl_connect("button_press_event", on_click)
+    fig.canvas.mpl_connect("motion_notify_event", on_move)
+    fig.canvas.mpl_connect("button_release_event", on_release)
     fig.canvas.mpl_connect("key_press_event", on_key)
     fig.canvas.mpl_connect("scroll_event", on_scroll)
     print(f"floor plan: {len(S)} points between z {zband[0]} and {zband[1]} m; " + head)
