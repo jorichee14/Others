@@ -248,7 +248,9 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
     m, mstat = build_mesh(map_path, centres, voxel, poisson_depth, trim)
     m, _ = crisp_colours(m, map_path, subdivide)
     mstat["faces_kept"] = len(m.triangles)
-    if not normals:
+    if normals:
+        m.compute_vertex_normals()      # from the split faces (the midpoints' would not be unit)
+    else:
         m.vertex_normals = o3d.utility.Vector3dVector(np.zeros((0, 3)))
         m.triangle_normals = o3d.utility.Vector3dVector(np.zeros((0, 3)))
     o3d.io.write_triangle_mesh(out, m)
