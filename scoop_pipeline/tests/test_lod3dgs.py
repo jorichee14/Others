@@ -25,7 +25,7 @@ lower (a void: left), and a courtyard with no ceiling over it (left), a bench in
 the sensor height found from the floor under the
 poses, the strays gone, the walls flat, nothing added outside the room. Then
 the mirror ghosts of a polished floor and wall (under the floor, behind the
-wall: no direct ray from the path reaches them) and a loose panel removed
+wall: no direct ray from the path reaches them) and a loose 5 m2 sheet removed
 by both mesh and view, the room's own surfaces kept.
 
     python scoop_pipeline/tests/test_lod3dgs.py
@@ -230,7 +230,7 @@ def check_ghosts(tmp):
     """A closed 6 x 4 x 3 room as a polished floor and wall would show it:
     a ghost of the ceiling 3 m under the floor and of a cabinet behind the
     x = 0 wall (no direct ray from the path reaches either), and a loose
-    0.5 m panel floating in the room. mesh and view: all three gone, the
+    5 m2 sheet floating tilted in the room. mesh and view: all three gone, the
     room's own surfaces kept."""
     import open3d as o3d
     rng = np.random.default_rng(2)
@@ -248,7 +248,9 @@ def check_ghosts(tmp):
     ghost = [sheet(2, -3.0, (0, 6), (0, 4)),                                     # the ceiling, mirrored
              sheet(0, -1.0, (1, 2), (0.5, 1.5)), sheet(1, 1.0, (-1.0, -0.2), (0.5, 1.5)),
              sheet(1, 2.0, (-1.0, -0.2), (0.5, 1.5))]                             # a cabinet, behind x = 0
-    panel = [sheet(2, 1.5, (2.8, 3.3), (1.8, 2.3))]                               # a loose piece
+    pa = sheet(2, 0.0, (1.0, 3.5), (1.0, 3.0))
+    pa[:, 2] = 1.6 + 0.2 * (pa[:, 0] - 1.0)
+    panel = [pa]                                    # a loose 5 m2 sheet, tilted, floating (seen through glass)
     P = np.concatenate(room + ghost + panel)
     P += rng.normal(0, 0.003, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
@@ -260,8 +262,8 @@ def check_ghosts(tmp):
 
     def bad(V):
         return {"under the floor": int((V[:, 2] < -0.5).sum()), "behind the wall": int((V[:, 0] < -0.3).sum()),
-                "panel": int(((np.abs(V[:, 2] - 1.5) < 0.1) & (V[:, 0] > 2.7) & (V[:, 0] < 3.4)
-                              & (V[:, 1] > 1.7) & (V[:, 1] < 2.4)).sum())}
+                "panel": int(((V[:, 2] > 1.5) & (V[:, 2] < 2.2) & (V[:, 0] > 1.1) & (V[:, 0] < 3.4)
+                              & (V[:, 1] > 1.1) & (V[:, 1] < 2.9)).sum())}
     floor = lambda V: int(((np.abs(V[:, 2]) < 0.03) & (V[:, 0] > 0.3) & (V[:, 0] < 5.7)   # noqa: E731
                            & (V[:, 1] > 0.3) & (V[:, 1] < 3.7)).sum())
     keep = L.map_mesh(mp, tr, os.path.join(tmp, "m_keep.ply"), ghosts=False, min_piece=0)

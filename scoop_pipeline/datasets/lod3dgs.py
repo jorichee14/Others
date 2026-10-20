@@ -241,14 +241,15 @@ def ghost_points(P, T, voxel=0.06, near=0.12, **kw):
     return ghost
 
 
-def loose(ids, X, area, T, h, min_area=2.0, roof_h=2.0, float_h=1.2, cell=0.4):
+def loose(ids, X, area, T, h, min_area=50.0, roof_h=2.0, float_h=1.2, cell=0.4):
     """Per piece (ids: each element's piece, X: its position, area: per piece
-    m2): to remove. A piece under min_area is removed when it is open to the
-    sky (under half of it has a ceiling over it: points of the larger pieces
-    roof_h or more above the floor in its 0.4 m columns; a courtyard seen
-    through glass) or when it floats (its bottom float_h or more above the
-    floor: a lamp, a sign, a reflection). A small piece under a ceiling and
-    down at the floor is furniture: kept. The floor under each element is the
+    m2): to remove. The pieces of min_area or more are the building; any
+    other is removed when it is open to the sky (under half of it has the
+    building's ceiling over it: points roof_h or more above the floor in its
+    0.4 m columns; a courtyard, a facade seen through glass) or when it
+    floats (its bottom float_h or more above the floor: a lamp, a sign, a
+    reflection, a sheet seen through glass). One under the ceiling and down
+    at the floor is furniture: kept. The floor under each element is the
     nearest pose's height less the sensor height h."""
     small = area < min_area
     if not small.any():
@@ -270,7 +271,7 @@ def loose(ids, X, area, T, h, min_area=2.0, roof_h=2.0, float_h=1.2, cell=0.4):
     return small & (sky | (bottom >= float_h))
 
 
-def drop_pieces(mesh, T, h, min_area=2.0):
+def drop_pieces(mesh, T, h, min_area=50.0):
     """(the mesh without its loose pieces (see loose()), faces removed)."""
     tri, _, area = mesh.cluster_connected_triangles()
     tri, area = np.asarray(tri), np.asarray(area)
@@ -282,7 +283,7 @@ def drop_pieces(mesh, T, h, min_area=2.0):
     return out, int(gone.sum())
 
 
-def piece_points(P, T, h, min_area=2.0, cell=0.1):
+def piece_points(P, T, h, min_area=50.0, cell=0.1):
     """Per point: in a loose piece (see loose()); a piece is the points of
     10 cm cells touching, its area their count x cell^2."""
     from scipy import ndimage
@@ -360,7 +361,7 @@ def crisp_colours(mesh, map_path, subdivide=1):
 
 def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10,
          ceil=None, ceil_margin=0.10, show=False, subdivide=1, normals=False, ghosts=True,
-         min_piece=2.0):
+         min_piece=50.0):
     """The mesh step alone: mesh of the map (+ a copy without the ceiling),
     each vertex in the colour of the map's nearest point; written without
     normals unless asked, so a viewer shows the colours unlit."""
@@ -394,7 +395,7 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
               f"{'' if normals else ', no normals (shown unlit)'}"
               + (f"\n  mirror ghosts (faces no direct ray from the path reaches) removed: {nghost} faces"
                  if ghosts else "")
-              + (f"\n  loose pieces under {min_piece:g} m2 open to the sky or floating removed: "
+              + (f"\n  loose pieces (not the building) open to the sky or floating removed: "
                  f"{npiece} faces" if min_piece > 0 else ""))
     res.update(ghost_faces=nghost, piece_faces=npiece)
     shown = m
@@ -557,7 +558,7 @@ def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spaci
 
 
 def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
-             ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=2.0):
+             ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=50.0):
     """A viewing copy of the map: stray points out, walls and floors flat,
     the floor's holes filled; points, so the colours stay the map's own."""
     o3d = _o3d()
@@ -584,7 +585,7 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
     if min_piece > 0:
         g = piece_points(P, T1, h, min_piece)
         P, C = P[~g], C[~g]
-        report.append(f"  loose pieces under {min_piece:g} m2 open to the sky or floating removed: "
+        report.append(f"  loose pieces (not the building) open to the sky or floating removed: "
                       f"{int(g.sum())} points")
         res["piece_points"] = int(g.sum())
     if snap:
@@ -613,7 +614,7 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         if min_piece > 0:
             g = piece_points(P, T1, h, min_piece)       # what hung from the ceiling now floats
             P, C = P[~g], C[~g]
-            report.append(f"  then loose under {min_piece:g} m2: {int(g.sum())} points")
+            report.append(f"  then loose (hung from the ceiling): {int(g.sum())} points")
         res["ceil_z"] = z
     v = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     v.colors = o3d.utility.Vector3dVector(np.clip(C, 0, 1))
@@ -807,8 +808,9 @@ def main():
     me.add_argument("--show", action="store_true", help="open it in an Open3D window")
     me.add_argument("--subdivide", type=int, default=1,
                     help="split every face into four this many times before colouring (finer colour)")
-    me.add_argument("--min-piece", type=float, default=2.0,
-                    help="remove loose pieces smaller than this (m2; 0 keeps them)")
+    me.add_argument("--min-piece", type=float, default=50.0,
+                    help="pieces not joined to one of this size or more (the building, m2) are removed "
+                         "when open to the sky or floating (0 keeps them)")
     me.add_argument("--keep-ghosts", action="store_true",
                     help="keep the mirror ghosts (faces no direct ray from the path reaches)")
     me.add_argument("--normals", action="store_true",
@@ -820,8 +822,9 @@ def main():
     vw.add_argument("--no-outliers", action="store_true", help="keep the stray points")
     vw.add_argument("--no-snap", action="store_true", help="leave walls and floors as mapped")
     vw.add_argument("--no-fill", action="store_true", help="leave the floor's holes")
-    vw.add_argument("--min-piece", type=float, default=2.0,
-                    help="remove loose pieces smaller than this (m2; 0 keeps them)")
+    vw.add_argument("--min-piece", type=float, default=50.0,
+                    help="pieces not joined to one of this size or more (the building, m2) are removed "
+                         "when open to the sky or floating (0 keeps them)")
     vw.add_argument("--keep-ghosts", action="store_true",
                     help="keep the mirror ghosts (points no direct ray from the path reaches)")
     vw.add_argument("--max-hole", type=float, default=20.0, help="largest hole filled (m2)")

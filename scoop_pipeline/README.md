@@ -935,10 +935,11 @@ python scoop_pipeline/datasets/lod3dgs.py view $P/mapping/map_final_<tag>.pcd \
 writes `mapping/view_<tag>.pcd`: stray points out (fewer than 8 others within
 8 cm), the mirror ghosts out (the room the LiDAR saw in polished stone or
 glass, put behind it: points no direct ray from the path reaches, cast from
-1000 poses against a coarse mesh; `--keep-ghosts`), loose pieces under
-`--min-piece` (2 m2) out when open to the sky (a courtyard seen through
-glass) or floating 1.2 m or more above the floor (lamps, signs; furniture
-under a ceiling stays), every flat 0.4 m cell's points put onto its plane (walls and floors
+1000 poses against a coarse mesh; `--keep-ghosts`), every piece not joined
+to the building (a piece of `--min-piece`, 50 m2, or more) out when open to
+the sky (a courtyard, facades and sheets seen through glass) or floating
+1.2 m or more above the floor (lamps, signs; furniture under a ceiling,
+down at the floor, stays), every flat 0.4 m cell's points put onto its plane (walls and floors
 thin), and the floor's holes filled at the height and in the colours of the
 floor around them. The floor is found from the trajectory (sensor height
 from the floor under the poses); filled are the holes enclosed by floor and
