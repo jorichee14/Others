@@ -318,52 +318,55 @@ def height_histogram(z, step=0.05, width=50):
     return "\n".join(lines), centres, counts
 
 
-def height_peaks(centres, counts, above):
-    """[(height, count)] of the strong peaks (local maxima of a quarter of the
-    largest above `above`, or more) above `above`, lowest first."""
-    sel = centres > above
-    c, n = centres[sel], counts[sel]
-    return [(float(c[i]), int(n[i])) for i in range(len(c))
-            if n[i] >= 0.25 * n.max() and (i == 0 or n[i] >= n[i - 1])
-            and (i == len(c) - 1 or n[i] >= n[i + 1])] if len(c) else []
-
-
-def ceiling_height(centres, counts, above=None):
-    """The ceiling's height from the height histogram. With `above` (the
-    lowest a ceiling can be: the floor the robot drove on + 2.1 m): the first
-    strong peak above it, the ceiling of that floor, in a building of several
-    floors too, not a shelf, a counter or a roof. Without: the largest bin of
-    the top 40 % of the height range."""
-    if above is not None:
-        sel = centres > above
-        c, n = centres[sel], counts[sel]
-        if len(c):
-            for i in range(len(c)):
-                if (n[i] >= 0.25 * n.max() and (i == 0 or n[i] >= n[i - 1])
-                        and (i == len(c) - 1 or n[i] >= n[i + 1])):
-                    return float(c[i])
-    top = centres >= centres[0] + 0.6 * (centres[-1] - centres[0])
-    return float(centres[top][np.argmax(counts[top])])
-
-
 CEIL_MIN = 2.1          # a ceiling is this far above the floor at least (m)
 
 
-def ceil_z(z, ceil, margin, floor_z=None):
-    """(the height to cut above, how): ceil a number, or "auto" (the
-    ceiling's peak, see ceiling_height, CEIL_MIN or more above floor_z, less
-    margin). The strong peaks found are logged, to pick another by number."""
+def ceiling_faces(mesh, T, h, flat=0.8):
+    """Per face of the mesh: a ceiling, a horizontal face (|n_z| > flat)
+    CEIL_MIN or more above the floor under it (the nearest pose's height less
+    the sensor height h). Walls keep their full height whatever the ceiling's
+    height is there, over a low ceiling and a high one alike."""
+    F, V = np.asarray(mesh.triangles), np.asarray(mesh.vertices)
+    if not len(F):
+        return np.zeros(0, bool)
+    a, b, c = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+    n = np.cross(b - a, c - a)
+    nz = np.abs(n[:, 2]) / np.maximum(np.linalg.norm(n, axis=1), 1e-12)
+    cen = (a + b + c) / 3
+    _, near = cKDTree(T[:, :2]).query(cen[:, :2], workers=-1)
+    up = cen[:, 2] - (T[near, 2] - h)
+    return (nz > flat) & (up >= CEIL_MIN)
+
+
+def ceiling_points(P, T, h, flat=0.8, r=0.1):
+    """Per point: on a ceiling (see ceiling_faces), its normal from the
+    points within r."""
+    o3d = _o3d()
+    _, near = cKDTree(T[:, :2]).query(P[:, :2], workers=-1)
+    up = P[:, 2] - (T[near, 2] - h)
+    hi = np.flatnonzero(up >= CEIL_MIN)
+    out = np.zeros(len(P), bool)
+    if len(hi):
+        pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P[hi]))
+        pc.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=r, max_nn=30))
+        out[hi] = np.abs(np.asarray(pc.normals)[:, 2]) > flat
+    return out
+
+
+def remove_ceiling_mesh(mesh, T, h, ceil, margin):
+    """(the mesh without its ceiling, how, faces removed): ceil "auto" the
+    ceiling surfaces (ceiling_faces), a number every face above it."""
     if str(ceil) == "auto":
-        _, hc, hn = height_histogram(z)
-        above = None if floor_z is None else floor_z + CEIL_MIN
-        peak = ceiling_height(hc, hn, above)
-        if above is not None:
-            pk = height_peaks(hc, hn, floor_z + 0.3)
-            log.info(f"  floor {floor_z:+.2f}; strong height peaks above it: "
-                     + ", ".join(f"{h:+.2f} ({n:,d})" for h, n in pk)
-                     + f"; the ceiling: the first {CEIL_MIN} m or more above the floor, {peak:+.2f}")
-        return peak - margin, f"ceiling peak {peak:+.2f} less {margin} m"
-    return float(ceil), "given"
+        gone = ceiling_faces(mesh, T, h)
+        how = f"the ceilings: horizontal faces {CEIL_MIN} m or more above the floor"
+    else:
+        F, V = np.asarray(mesh.triangles), np.asarray(mesh.vertices)
+        gone = V[F].mean(1)[:, 2] > float(ceil)
+        how = f"every face above z = {float(ceil):+.2f}"
+    out = type(mesh)(mesh)
+    out.remove_triangles_by_mask(gone)
+    out.remove_unreferenced_vertices()
+    return out, how, int(gone.sum())
 
 
 def cut_file(path, traj, ceil="auto", margin=0.10, out=None):
@@ -376,10 +379,8 @@ def cut_file(path, traj, ceil="auto", margin=0.10, out=None):
     T = read_tum_positions(traj, stride=1)
     m = o3d.io.read_triangle_mesh(path)
     if len(m.triangles):
-        V = np.asarray(m.vertices)
-        fz = float(np.median(T[:, 2])) - sensor_height(V, T)[0]
-        z, how = ceil_z(V[:, 2], ceil, margin, fz)
-        c = cut_above(m, z)
+        h = sensor_height(np.asarray(m.vertices), T)[0]
+        c, how, _ = remove_ceiling_mesh(m, T, h, ceil, margin)
         o3d.io.write_triangle_mesh(out, c)
         n, kept = len(m.triangles), len(c.triangles)
     else:
@@ -387,22 +388,18 @@ def cut_file(path, traj, ceil="auto", margin=0.10, out=None):
         if not len(pc.points):
             raise ConvertError(f"{path}: no faces or points")
         P = np.asarray(pc.points)
-        fz = float(np.median(T[:, 2])) - sensor_height(P, T)[0]
-        z, how = ceil_z(P[:, 2], ceil, margin, fz)
-        c = pc.select_by_index(np.flatnonzero(P[:, 2] <= z))
+        h = sensor_height(P, T)[0]
+        if str(ceil) == "auto":
+            gone = ceiling_points(P, T, h)
+            how = f"the ceilings: horizontal surfaces {CEIL_MIN} m or more above the floor"
+        else:
+            gone = P[:, 2] > float(ceil)
+            how = f"every point above z = {float(ceil):+.2f}"
+        c = pc.select_by_index(np.flatnonzero(~gone))
         o3d.io.write_point_cloud(out, c)
         n, kept = len(P), len(c.points)
-    log.info(f"{out}: above z = {z:+.2f} ({how}) removed, {kept} of {n} kept")
-    return {"out": out, "ceil_z": z, "kept": kept}
-
-
-def cut_above(mesh, z):
-    """A copy of the mesh without the faces whose centre is above z."""
-    out = type(mesh)(mesh)
-    F, V = np.asarray(out.triangles), np.asarray(out.vertices)
-    out.remove_triangles_by_mask(V[F].mean(1)[:, 2] > z)
-    out.remove_unreferenced_vertices()
-    return out
+    log.info(f"{out}: {how} removed, {kept} of {n} kept")
+    return {"out": out, "kept": kept, "removed": n - kept}
 
 
 def default_mesh_out(map_path):
@@ -567,15 +564,13 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
     if ceil is not None:
         if hs is None:
             hs, _ = sensor_height(V, Tf)
-        z, how = ceil_z(V[:, 2], ceil, ceil_margin, float(np.median(Tf[:, 2])) - hs)
-        nc = cut_above(m, z)
+        nc, how, ngone = remove_ceiling_mesh(m, Tf, hs, ceil, ceil_margin)
         if min_piece > 0 and not objects:
             nc, _ = drop_pieces(nc, Tf, hs, min_piece)      # what hung from the ceiling now floats
         p = os.path.splitext(out)[0] + "_noceil.ply"
         o3d.io.write_triangle_mesh(p, nc)
-        report += (f"\nno ceiling {p}: faces above z = {z:+.2f} ({how}) removed, "
-                   f"{len(nc.triangles)} kept")
-        res.update(noceil=p, ceil_z=z, noceil_faces=len(nc.triangles))
+        report += f"\nno ceiling {p}: {how}, {ngone} faces, removed; {len(nc.triangles)} kept"
+        res.update(noceil=p, noceil_faces=len(nc.triangles), ceiling_faces=ngone)
         shown = nc
     log.info(report)
     if show:
@@ -781,15 +776,14 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         P, C = np.vstack([P, Fp]), np.vstack([C, Fc])
         res.update(sensor_height=h, **st)
     if ceil is not None:
-        z, _ = ceil_z(P[:, 2], ceil, ceil_margin, float(np.median(T1[:, 2])) - h)
-        keep = P[:, 2] <= z
-        report.append(f"  above z = {z:+.2f} removed (the ceiling): {int((~keep).sum())} points")
+        keep = ~(ceiling_points(P, T1, h) if str(ceil) == "auto" else P[:, 2] > float(ceil))
+        report.append(f"  the ceiling removed ({'horizontal surfaces 2.1 m or more above the floor' if str(ceil) == 'auto' else f'above z = {float(ceil):+.2f}'}): "
+                      f"{int((~keep).sum())} points")
         P, C = P[keep], C[keep]
         if min_piece > 0:
             g = piece_points(P, T1, h, min_piece)       # what hung from the ceiling now floats
             P, C = P[~g], C[~g]
             report.append(f"  then loose (hung from the ceiling): {int(g.sum())} points")
-        res["ceil_z"] = z
     v = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     v.colors = o3d.utility.Vector3dVector(np.clip(C, 0, 1))
     o3d.io.write_point_cloud(out, v)
@@ -976,8 +970,9 @@ def main():
                     help="TUM trajectory the map was built from (normals turn to it)")
     meshing(me)
     me.add_argument("--ceil", default=None,
-                    help="also a copy without the ceiling: faces above this height (m), or 'auto' "
-                         "(the first strong peak 2.1 m or more above the floor)")
+                    help="also a copy without the ceiling: 'auto' (the ceiling surfaces: horizontal "
+                         "faces 2.1 m or more above the floor; walls keep their height), or every face "
+                         "above this height (m)")
     me.add_argument("--ceil-margin", type=float, default=0.10,
                     help="[auto] cut this far below the ceiling peak (m)")
     me.add_argument("--show", action="store_true", help="open it in an Open3D window")
@@ -1020,13 +1015,16 @@ def main():
     vw.add_argument("--roof", type=float, default=0.5,
                     help="share of a hole that must have a ceiling over it (0: courtyards too)")
     vw.add_argument("--ceil", default=None,
-                    help="remove points above this height (m), or 'auto' (the first strong peak 2.1 m or more above the floor)")
+                    help="remove the ceiling: 'auto' (horizontal surfaces 2.1 m or more above the floor), "
+                         "or every point above this height (m)")
     vw.add_argument("--ceil-margin", type=float, default=0.10)
     ct = sub.add_parser("cut", help="a copy of a mesh or point cloud without the ceiling")
     ct.add_argument("file", help="a mesh or a point cloud (.ply/.pcd)")
     ct.add_argument("out", nargs="?", default=None, help="default: <file>_noceil")
     ct.add_argument("--traj", required=True, help="TUM trajectory in the same frame (the floor driven on)")
-    ct.add_argument("--ceil", default="auto", help="cut above this height (m), or 'auto'")
+    ct.add_argument("--ceil", default="auto",
+                    help="'auto': the ceiling surfaces (horizontal, 2.1 m or more above the floor); "
+                         "or a height (m): everything above it")
     ct.add_argument("--ceil-margin", type=float, default=0.10)
     a = ap.parse_args()
     if getattr(a, "ceil", None) not in (None, "auto"):

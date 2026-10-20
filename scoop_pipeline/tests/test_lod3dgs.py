@@ -16,9 +16,9 @@ every point near the map); give the points on each surface its colour.
 Then `mesh` on the room with a ceiling, the map coloured: the mesh in the
 map's colours (each vertex the median of its 5 nearest map points', no normals so it is
 shown unlit), named after the map, and its copy without the ceiling (auto:
-the highest height peak) keeping the walls; `cut` making that copy from
-the mesh already made; auto in a building of several floors taking the
-ceiling over the robot (2.8 m), not shelf tops (1.6 m) or the roof (6.5 m). Then `view` on an 8 x 6 m room
+the ceiling's own faces: horizontal, 2.1 m or more above the floor) keeping
+the walls to their full height; `cut` making that copy from the mesh
+already made. Then `view` on an 8 x 6 m room
 with noisy walls and stray points, the floor missing in four places: a 1 m2
 hole (filled, at the floor's height and colour), a 5 m2 hole over --max-hole
 (left), under a box (blocked: left) and a stair opening onto a floor 1 m
@@ -148,24 +148,23 @@ def check_mesh(tmp):
     top = V[:, 2] > ROOM[2] - 0.02
     assert top.sum() > 1000, top.sum()
     assert np.abs(np.median(C[top], 0) * 255 - [200, 120, 240][::-1]).max() < 15
-    assert abs(r["ceil_z"] - (ROOM[2] - 0.10)) < 0.06, r["ceil_z"]
+    # without the ceiling: its horizontal faces gone, the walls kept to their full height
+    def ceiling_left(mesh):
+        F, V = np.asarray(mesh.triangles), np.asarray(mesh.vertices)
+        a, b, c = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+        n = np.cross(b - a, c - a)
+        nz = np.abs(n[:, 2]) / np.maximum(np.linalg.norm(n, axis=1), 1e-12)
+        return int(((nz > 0.8) & ((a + b + c)[:, 2] / 3 > ROOM[2] - 0.3)).sum())
     n = o3d.io.read_triangle_mesh(r["noceil"])
     W = np.asarray(n.vertices)
-    assert W[:, 2].max() < r["ceil_z"] + 0.05, W[:, 2].max()
-    walls = (np.abs(W[:, 0]) < 0.03) & (W[:, 2] > 2.5)
-    assert walls.sum() > 50, walls.sum()
-    # cut: the copy without the ceiling from the mesh already made
+    assert ceiling_left(m) > 1000 and ceiling_left(n) < 0.01 * ceiling_left(m), (ceiling_left(m), ceiling_left(n))
+    walls = (np.abs(W[:, 0]) < 0.03) & (W[:, 2] > ROOM[2] - 0.15)
+    assert walls.sum() > 50, ("walls cut short", walls.sum())
+    # cut: the same copy from the mesh already made
     c = L.cut_file(r["out"], tr)
-    Wc = np.asarray(o3d.io.read_triangle_mesh(c["out"]).vertices)
-    assert abs(c["ceil_z"] - (ROOM[2] - 0.10)) < 0.06 and Wc[:, 2].max() < c["ceil_z"] + 0.05, c
-    # auto in a building of several floors: the ceiling over the robot, not the roof
-    rng = np.random.default_rng(5)
-    z = np.concatenate([rng.normal(0, 0.01, 40000), rng.normal(1.6, 0.01, 20000),     # shelf tops
-                        rng.normal(2.8, 0.01, 30000), rng.normal(6.5, 0.01, 60000),
-                        rng.uniform(0, 6.5, 20000)])
-    _, hc, hn = L.height_histogram(z)
-    got = L.ceiling_height(hc, hn, above=0.0 + L.CEIL_MIN)
-    assert abs(got - 2.8) < 0.05, got
+    Wc = o3d.io.read_triangle_mesh(c["out"])
+    assert ceiling_left(Wc) < 0.01 * ceiling_left(m), ceiling_left(Wc)
+    assert ((np.abs(np.asarray(Wc.vertices)[:, 0]) < 0.03) & (np.asarray(Wc.vertices)[:, 2] > ROOM[2] - 0.15)).sum() > 50
     return r
 
 
@@ -456,8 +455,8 @@ def main():
               f"({100 * f1:.0f} % with one Poisson), every bar meshed at its radius; "
               f"radio mesh {nr} faces, floor and ball within 5 cm")
         rm = check_mesh(tmp)
-        print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
-              f"{rm['noceil_faces']} faces without it")
+        print(f"ok mesh: {rm['faces_kept']} faces, the ceiling's {rm['ceiling_faces']} removed, "
+              f"walls kept to the top, {rm['noceil_faces']} faces without it")
         print(f"ok: {r['frames']} frames, camera {Wc}x{Hc}, {r['points']} points "
               f"({100 * r['coloured']:.0f}% coloured), mesh {r['faces_kept']}/{r['faces']} faces")
     finally:

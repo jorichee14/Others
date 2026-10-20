@@ -915,10 +915,10 @@ python scoop_pipeline/datasets/lod3dgs.py mesh $P/mapping/map_final_<tag>.pcd \
 ```
 
 writes `mapping/mesh_<tag>.ply` in the map's colours (colorize's) and
-`mesh_<tag>_noceil.ply`, a viewing copy without the ceiling: every face
-above the ceiling less `--ceil-margin` (0.10 m) with `--ceil auto` (the
-first strong peak of the height histogram, printed, 0.3 m or more above the
-robot: the ceiling of the floor it drove on), or above `--ceil <height m>`.
+`mesh_<tag>_noceil.ply`, a viewing copy without the ceiling: with `--ceil
+auto` the ceiling's own faces (horizontal, 2.1 m or more above the floor
+under them), so every wall keeps its full height under a low ceiling and a
+high one alike; with `--ceil <height m>` every face above that height.
 The copy alone, from a mesh or cloud already made:
 `lod3dgs.py cut <mesh or cloud> --traj <TUM> [--ceil auto|<height m>]`. `--voxel 0.04` meshes a
 quarter of the points for a quick look (Poisson depth one less). Every face
