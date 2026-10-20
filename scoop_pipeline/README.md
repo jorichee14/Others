@@ -222,7 +222,10 @@ tests/               self-tests, no real bag needed
                      colour resampling and depth registration on a two-robot bag
   test_lod3dgs.py    lod3dgs on a synthetic open-top room: centred camera, poses, depth,
                      the Poisson surface over the open top trimmed, point colours; mesh:
-                     the map's colours, the ceiling found and cut, the walls kept
+                     the map's colours, the ceiling found and cut, the walls kept; view:
+                     floor holes filled (not under a box, a stair opening, over max), walls flat;
+                     mirror ghosts and loose pieces (courtyard, floating) out, furniture kept;
+                     objects (a ball, a rack of bars) meshed on their own, on them
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
   test_csi_view.py   csi_view: delay profile puts the paths at their delays; figures
   test_replica.py    replica with lidar depth on a synthetic scene
@@ -912,9 +915,52 @@ python scoop_pipeline/datasets/lod3dgs.py mesh $P/mapping/map_final_<tag>.pcd \
 
 writes `mapping/mesh_<tag>.ply` in the map's colours (colorize's) and
 `mesh_<tag>_noceil.ply`, a viewing copy without the ceiling: every face
-above the highest peak of the height histogram (printed) less
-`--ceil-margin` (0.10 m), or above `--ceil Z`. `--voxel 0.04` meshes a
-quarter of the points for a quick look (Poisson depth one less).
+above the ceiling less `--ceil-margin` (0.10 m) with `--ceil auto` (the
+first strong peak of the height histogram, printed, 0.3 m or more above the
+robot: the ceiling of the floor it drove on), or above `--ceil <height m>`.
+The copy alone, from a mesh or cloud already made:
+`lod3dgs.py cut <mesh or cloud> --traj <TUM> [--ceil auto|<height m>]`. `--voxel 0.04` meshes a
+quarter of the points for a quick look (Poisson depth one less). Every face
+is split in four (`--subdivide 1`) and every vertex takes the median colour
+of the map's 5 nearest points (`--colour-k`; Poisson's own colours are
+averages, blurred and greyed, and the nearest point alone copies every point
+coloured wrong, a wall's white on a chair's edge); the mesh is written without normals (`--normals` to keep them), so
+a viewer shows its colours unlit. Objects are meshed on their own: the
+building (0.4 m cells flat to 1.5 cm and at least half filled) as above, the
+rest (objects, edges, corners) by a Poisson of its own in 4 m tiles, octree
+cells about `--object-cell` (1.2 cm), the faces farther than `--object-trim`
+(3 cm) from a point and the least-backed tenth removed, then smoothed
+(`--object-smooth`, 10 Taubin passes), so racks and chairs
+are not wrapped in the building's smooth bubbles (`--no-objects`: one
+Poisson for all). Loose pieces go from the points before meshing, so a thing
+on a wall stays with it. The mirror ghosts and loose pieces go as
+in `view` (`--keep-ghosts`, `--min-piece 0` keep them). The `view` copy can be meshed the same way
+(`mesh view_<tag>.ply` -> `mesh_view_<tag>.ply`): walls flat, floor filled.
+
+A viewing copy of the map as points, its colours as crisp as the map's
+(the mesh's are interpolated):
+
+```
+python scoop_pipeline/datasets/lod3dgs.py view $P/mapping/map_final_<tag>.pcd \
+    --traj $P/odometry/mobile_2/traj_lidar_ba_glim.txt [--ceil Z] [--max-hole 20]
+```
+
+writes `mapping/view_<tag>.pcd`: stray points out (fewer than 8 others within
+8 cm), the mirror ghosts out (the room the LiDAR saw in polished stone or
+glass, put behind it: points no direct ray from the path reaches, cast from
+1000 poses against a coarse mesh; `--keep-ghosts`), every piece not joined
+to the building (a piece of `--min-piece`, 50 m2, or more) out when open to
+the sky (a courtyard, facades and sheets seen through glass) or floating
+1.2 m or more above the floor (lamps, signs; furniture under a ceiling,
+down at the floor, stays), every flat 0.4 m cell's points put onto its plane (walls and floors
+thin), and the floor's holes filled at the height and in the colours of the
+floor around them. The floor is found from the trajectory (sensor height
+from the floor under the poses); filled are the holes enclosed by floor and
+walls and gaps up to 0.4 m, never under furniture or walls (points 0.15-0.6
+m above the floor), never over a stair opening or an atrium (points below
+it), never a courtyard (a hole over 1 m2 with a ceiling over less than
+`--roof`, 50 %, of it), each up to `--max-hole` m2. For looking at only: the reference map,
+and every measurement, stays `map_final_<tag>.pcd`.
 
 The scene, from a replica export with map depth made with the same poses:
 
