@@ -2,6 +2,7 @@
 """Keep a pass's current results, move everything else aside.
 
     python3 clean_pass.py <pipeline config> [--apply] [--work]
+    python3 clean_pass.py <pipeline config> --redo [--apply]
 
 Looks at the pass's mapping/ and odometry/<machine>/ folders and sorts every
 file and folder in them into
@@ -23,6 +24,13 @@ folders; nothing is deleted. Without --apply it only prints the lists (a dry
 run); look at them, then run again with --apply, and delete _old/ yourself
 once the pass runs again without it. --work also moves GLIM's side runs in
 work/ (<machine>/glim_*/ other than glim/) to work/<date>/<pass>/_old/.
+
+--redo: the pass again from GLIM's export. Everything the pipeline makes from
+it goes to _old/redo_<date>_<time>/ (mapping/, frames/, bags/, figures/,
+comms/, the mapping report, and in odometry/ all but GLIM's export and
+clean.keep); then `run_pass.py <raw pass> --from 02_ba` makes it all again,
+02 reading the bag afresh (its keyframe cache goes too). Anything else in the
+pass folder is left where it is and listed.
 """
 import argparse
 import fnmatch
@@ -112,6 +120,55 @@ def plan(P):
     return out
 
 
+REDO_FOLDERS = ("mapping", "frames", "bags", "figures", "comms")
+
+
+def redo_plan(P):
+    """(moves [(src, rel)], left [names]) for --redo: what the pipeline makes
+    from GLIM's export, and what is left in place."""
+    keep_extra = list((P.cfg.get("clean") or {}).get("keep") or [])
+    moves, left = [], []
+    for name in sorted(os.listdir(P.out_dir)):
+        p = os.path.join(P.out_dir, name)
+        if name == "_old":
+            continue
+        if name in REDO_FOLDERS or fnmatch.fnmatch(name, "mapping_report*"):
+            moves.append((p, name))
+        elif name == "odometry" and os.path.isdir(p):
+            for sub in sorted(os.listdir(p)):
+                q = os.path.join(p, sub)
+                if not os.path.isdir(q):
+                    moves.append((q, os.path.join(name, sub)))
+                    continue
+                for f in sorted(os.listdir(q)):
+                    if f in GLIM_EXPORT or any(fnmatch.fnmatch(f, k) for k in keep_extra):
+                        continue
+                    moves.append((os.path.join(q, f), os.path.join(name, sub, f)))
+        else:
+            left.append(name)
+    return moves, left
+
+
+def main_redo(P, apply):
+    moves, left = redo_plan(P)
+    dst = os.path.join(P.out_dir, "_old", time.strftime("redo_%Y%m%d_%H%M"))
+    print(f"--redo {P.out_dir}: kept, GLIM's export and clean.keep in odometry/<machine>/")
+    total = 0
+    for src, rel in moves:
+        n = size(src)
+        total += n
+        print(f"  MOVE  {human(n):>9s}  {rel}{'/' if os.path.isdir(src) else ''}")
+    for name in left:
+        print(f"  LEFT             {name}  -- not a pipeline output; left where it is")
+    print(f"\n{len(moves)} to move to {os.path.relpath(dst, P.out_dir)}/ ({human(total)})")
+    if not apply:
+        print("dry run: nothing moved; run again with --apply")
+        return
+    for src, rel in moves:
+        move(src, os.path.join(dst, rel))
+    print(f"moved. Now: python3 run_pass.py <raw pass folder> --from 02_ba --config <this config>")
+
+
 def work_side_runs(P):
     """GLIM's side runs in work/: <machine>/glim_*/ other than glim/."""
     mdir = os.path.dirname(os.path.dirname(P.glim_traj()))
@@ -134,8 +191,12 @@ def main():
     ap.add_argument("config")
     ap.add_argument("--apply", action="store_true", help="move STALE and OLD to _old/")
     ap.add_argument("--work", action="store_true", help="also GLIM's side runs in work/")
+    ap.add_argument("--redo", action="store_true",
+                    help="move everything made from GLIM's export aside, to make the pass again")
     a = ap.parse_args()
     P = load_pipeline(a.config)
+    if a.redo:
+        return main_redo(P, a.apply)
     old_root = os.path.join(P.out_dir, "_old")
     moves, freed = [], 0
     for folder, rows in plan(P).items():

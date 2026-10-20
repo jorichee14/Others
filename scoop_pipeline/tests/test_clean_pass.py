@@ -81,6 +81,36 @@ def main():
         if not fails:
             print("  ok    dry run moved nothing; --apply kept 11, moved the stale seed map, "
                   "the cache, the old map folder and GLIM's side run")
+        # --redo: all but GLIM's export (and clean.keep) aside, the rest left in place
+        for f in ("frames/publish_tfs_x.sh", "bags/x_best_poses/metadata.yaml", "comms/ntp.csv",
+                  f"mapping_report_{tag}.md", "notes.txt"):
+            touch(os.path.join(proc, f), t0 + 30)
+        r = run("--redo")
+        if r.returncode or "dry run" not in r.stdout or any(
+                n.startswith("redo_") for n in os.listdir(old)):
+            fails.append("--redo dry run: " + r.stdout[-800:] + r.stderr[-800:])
+        r = run("--redo", "--apply")
+        redo = [n for n in os.listdir(old) if n.startswith("redo_")]
+        if r.returncode or len(redo) != 1:
+            fails.append("--redo --apply: " + r.stdout[-800:] + r.stderr[-800:])
+        else:
+            rd = os.path.join(old, redo[0])
+            stay = ["odometry/mobile_2/" + f for f in ("traj_lidar.txt", "glim.yaml",
+                    "glim_loop_closure.json", "traj_lidar_ba_glim_v1.txt")] + ["notes.txt"]
+            gone = ["mapping", "frames", "bags", "comms", f"mapping_report_{tag}.md",
+                    "odometry/mobile_2/traj_lidar_ba_glim.txt",
+                    "odometry/mobile_2/pose_time_check.json"]
+            for f in stay:
+                if not os.path.exists(os.path.join(proc, f)):
+                    fails.append(f"--redo moved {f}")
+            for f in gone:
+                if os.path.exists(os.path.join(proc, f)) or not os.path.exists(os.path.join(rd, f)):
+                    fails.append(f"--redo did not move {f} to _old/{redo[0]}/")
+            if "notes.txt" not in r.stdout:
+                fails.append("--redo: notes.txt not listed as left")
+        if not fails:
+            print("  ok    --redo moved the maps, frames, bags, comms, report and 02's outputs; "
+                  "kept GLIM's export and clean.keep; left notes.txt")
     finally:
         shutil.rmtree(d, ignore_errors=True)
     for f in fails:

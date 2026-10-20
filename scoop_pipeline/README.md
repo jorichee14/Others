@@ -56,6 +56,9 @@ run_pass.py          one pass from raw to processed, every step in order (below)
 clean_pass.py <config> [--apply] [--work]  keep a pass's current results, move older
                      versions, side runs and caches to processed/<date>/<pass>/_old/
                      (a dry run without --apply; clean.keep in the config keeps more)
+clean_pass.py <config> --redo [--apply]  the pass again from GLIM's export: all it
+                     makes (maps, frames, bags, figures, comms, report, 02's outputs) to
+                     _old/redo_<date>_<time>/; then run_pass.py <raw pass> --from 02_ba
 check.py <command>   every check, one command (check.py -h; check.py <command> -h):
     map     <map.pcd>       surface thickness (walls, floors; a wall's two faces vs
                             one surface mapped twice with --traj; --save patches.ply)
