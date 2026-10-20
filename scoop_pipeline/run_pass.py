@@ -56,7 +56,8 @@ Steps (a step whose output is there already is skipped):
 --until S stop after S                --only S  run S alone, done or not
 A map stage whose block in the pipeline config has "enabled": false is not run
 (e.g. a coop run: "05_anchor": {"enabled": false}, the boards as the mapping
-pass placed them).
+pass placed them); "comms": {"enabled": false} leaves out comms and csi_clean
+(a pass that recorded no comms topics, e.g. mapping_20261015).
 
 --config  the pipeline config (default: the one in map_stages/ whose dataset is
           this pass, e.g. pipeline_config_survey_1.json; a run needs its own,
@@ -242,8 +243,9 @@ def plan_steps(raw, cfg):
         print("note: dataset.bag of %s is %s; the merge writes %s" % (cfg, db, mb))
     steps.append(("finalize", True, lambda: finalized(db, out["10_poses"]), db,
                   lambda dry: finalize(db, out["10_poses"], dry)))
-    steps.append(comms_step(db, cfg))
-    steps.append(csi_clean_step(db, cfg))
+    on = (P.cfg.get("comms") or {}).get("enabled", True) is not False   # a pass with no comms topics
+    for st_ in (comms_step(db, cfg), csi_clean_step(db, cfg)):
+        steps.append(st_[:1] + (st_[1] and on,) + st_[2:])
     return steps, P
 
 

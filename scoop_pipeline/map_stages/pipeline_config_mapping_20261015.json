@@ -45,6 +45,7 @@
   "keep": ["traj_lidar_ba_glim_v1.txt"]
  },
  "07_build_cameras": {"enabled": false},
+ "comms": {"enabled": false, "_note": "mobile_2 alone, no comms topics in its bag"},
  "08_emit_tfs": {"enabled": false},
  "10_publish": {
   "robots": [
