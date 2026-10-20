@@ -415,13 +415,14 @@ def default_mesh_out(map_path):
     return os.path.join(d, stem + "_mesh.ply")
 
 
-def mesh_objects(pc, centres, cell=0.012, trim=0.03, tile=4.0, min_pts=200):
+def mesh_objects(pc, centres, cell=0.012, trim=0.03, tile=4.0, min_pts=200, smooth=10):
     """The mesh of the points that are not walls or floors (objects), on its
     own and finer: Poisson tile by tile (tile m, with 0.2 m of the next tiles
     so nothing is cut at an edge), octree cells about `cell` across, the
     tenth of vertices least backed by points (Poisson's density) and every
     face farther than `trim` from a point removed (no bubbles), each tile
-    keeping the faces whose centre is in it."""
+    keeping the faces whose centre is in it; then `smooth` passes of Taubin
+    smoothing (evens a ragged surface out without shrinking it)."""
     o3d = _o3d()
     P = np.asarray(pc.points)
     out = o3d.geometry.TriangleMesh()
@@ -456,28 +457,37 @@ def mesh_objects(pc, centres, cell=0.012, trim=0.03, tile=4.0, min_pts=200):
         inside = np.all((c[:, :2] >= x0) & (c[:, :2] < x0 + tile), 1)
         m.remove_triangles_by_mask((d > trim) | ~inside)
         m.remove_unreferenced_vertices()
+        if smooth and len(m.triangles):
+            m = m.filter_smooth_taubin(number_of_iterations=int(smooth))
         out += m
     return out
 
 
-def crisp_colours(mesh, map_path, subdivide=1):
+def crisp_colours(mesh, map_path, subdivide=1, k=5):
     """The mesh split `subdivide` times (each face into four) and every vertex
-    given the colour of the map's nearest point, at full resolution: Poisson
-    averages the thinned map's colours, which blurs and greys them."""
+    given the median colour of the map's k nearest points, at full
+    resolution: Poisson averages the thinned map's colours, which blurs and
+    greys them; the median of a few keeps an edge and drops a point coloured
+    wrong (a wall's colour put on a chair's edge), where the nearest alone
+    (k=1) copies it."""
     o3d = _o3d()
     if subdivide > 0:
         mesh = mesh.subdivide_midpoint(number_of_iterations=int(subdivide))
     src = o3d.io.read_point_cloud(os.path.expanduser(map_path))
     if not src.has_colors():
         return mesh, False
-    _, idx = cKDTree(np.asarray(src.points)).query(np.asarray(mesh.vertices), workers=-1)
-    mesh.vertex_colors = o3d.utility.Vector3dVector(np.asarray(src.colors)[idx])
+    k = max(1, int(k))
+    _, idx = cKDTree(np.asarray(src.points)).query(np.asarray(mesh.vertices), k=k, workers=-1)
+    C = np.asarray(src.colors)
+    col = C[idx] if k == 1 else np.median(C[idx], axis=1)
+    mesh.vertex_colors = o3d.utility.Vector3dVector(col)
     return mesh, True
 
 
 def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10,
          ceil=None, ceil_margin=0.10, show=False, subdivide=1, normals=False, ghosts=True,
-         min_piece=50.0, objects=True, object_cell=0.012, object_trim=0.03, flat_sigma=0.015):
+         min_piece=50.0, objects=True, object_cell=0.012, object_trim=0.03, flat_sigma=0.015,
+         colour_k=5, object_smooth=10):
     """The mesh step alone: mesh of the map (+ a copy without the ceiling),
     each vertex in the colour of the map's nearest point; written without
     normals unless asked, so a viewer shows the colours unlit."""
@@ -516,13 +526,13 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
     if subdivide > 0:
         m = m.subdivide_midpoint(number_of_iterations=int(subdivide))
     if objects:
-        mo = mesh_objects(obj, centres, object_cell, object_trim)
+        mo = mesh_objects(obj, centres, object_cell, object_trim, smooth=object_smooth)
         nobj = len(mo.triangles)
         m += mo
     nghost = 0
     if ghosts:
         m, nghost = remove_ghosts(m, Tf)
-    m, _ = crisp_colours(m, map_path, 0)
+    m, _ = crisp_colours(m, map_path, 0, colour_k)
     mstat["faces_kept"] = len(m.triangles)
     if normals:
         m.compute_vertex_normals()      # from the split faces (the midpoints' would not be unit)
@@ -538,7 +548,7 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
               f"{trim} m trim{f', split {subdivide}x' if subdivide else ''})"
               f"{f' + {nobj} of objects ({object_cell * 100:g} cm, {object_trim * 100:g} cm trim)' if objects else ''}"
               f", {len(V)} vertices, "
-              f"{'each in its nearest map point colour' if m.has_vertex_colors() else 'no colour (map has none)'}"
+              f"{f'each the median colour of its {colour_k} nearest map points' if m.has_vertex_colors() else 'no colour (map has none)'}"
               f"{'' if normals else ', no normals (shown unlit)'}"
               + (f"\n  mirror ghosts (faces no direct ray from the path reaches) removed: {nghost} faces"
                  if ghosts else "")
@@ -975,6 +985,10 @@ def main():
     me.add_argument("--object-cell", type=float, default=0.012, help="objects' octree cell (m)")
     me.add_argument("--object-trim", type=float, default=0.03,
                     help="objects' faces farther than this from a point removed (m)")
+    me.add_argument("--object-smooth", type=int, default=10,
+                    help="passes of Taubin smoothing of the objects' mesh (0: none)")
+    me.add_argument("--colour-k", type=int, default=5,
+                    help="each vertex the median colour of this many nearest map points (1: the nearest)")
     me.add_argument("--normals", action="store_true",
                     help="write vertex normals (viewers then light the mesh, greying its colours)")
     vw = sub.add_parser("view", help="a viewing copy of the map: walls flat, floor holes filled")
@@ -1025,7 +1039,7 @@ def main():
                      trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show,
                      subdivide=a.subdivide, normals=a.normals, ghosts=not a.keep_ghosts,
                      min_piece=a.min_piece, objects=not a.no_objects, object_cell=a.object_cell,
-                     object_trim=a.object_trim)
+                     object_trim=a.object_trim, colour_k=a.colour_k, object_smooth=a.object_smooth)
     except ConvertError as e:
         sys.exit(str(e))
 

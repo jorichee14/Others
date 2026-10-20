@@ -921,14 +921,16 @@ robot: the ceiling of the floor it drove on), or above `--ceil <height m>`.
 The copy alone, from a mesh or cloud already made:
 `lod3dgs.py cut <mesh or cloud> --traj <TUM> [--ceil auto|<height m>]`. `--voxel 0.04` meshes a
 quarter of the points for a quick look (Poisson depth one less). Every face
-is split in four (`--subdivide 1`) and every vertex takes the colour of the
-map's nearest point (Poisson's own colours are averages, blurred and
-greyed); the mesh is written without normals (`--normals` to keep them), so
+is split in four (`--subdivide 1`) and every vertex takes the median colour
+of the map's 5 nearest points (`--colour-k`; Poisson's own colours are
+averages, blurred and greyed, and the nearest point alone copies every point
+coloured wrong, a wall's white on a chair's edge); the mesh is written without normals (`--normals` to keep them), so
 a viewer shows its colours unlit. Objects are meshed on their own: the
 building (0.4 m cells flat to 1.5 cm and at least half filled) as above, the
 rest (objects, edges, corners) by a Poisson of its own in 4 m tiles, octree
 cells about `--object-cell` (1.2 cm), the faces farther than `--object-trim`
-(3 cm) from a point and the least-backed tenth removed, so racks and chairs
+(3 cm) from a point and the least-backed tenth removed, then smoothed
+(`--object-smooth`, 10 Taubin passes), so racks and chairs
 are not wrapped in the building's smooth bubbles (`--no-objects`: one
 Poisson for all). Loose pieces go from the points before meshing, so a thing
 on a wall stays with it. The mirror ghosts and loose pieces go as

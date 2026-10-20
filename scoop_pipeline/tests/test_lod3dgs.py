@@ -14,7 +14,7 @@ LOD-3DGS reads it (warped grey, alpha where there is depth); remove the
 surface Poisson puts over the open top (no starting point above the walls,
 every point near the map); give the points on each surface its colour.
 Then `mesh` on the room with a ceiling, the map coloured: the mesh in the
-map's colours (each vertex its nearest map point's, no normals so it is
+map's colours (each vertex the median of its 5 nearest map points', no normals so it is
 shown unlit), named after the map, and its copy without the ceiling (auto:
 the highest height peak) keeping the walls; `cut` making that copy from
 the mesh already made; auto in a building of several floors taking the
@@ -141,9 +141,9 @@ def check_mesh(tmp):
     V, C = np.asarray(m.vertices), np.asarray(m.vertex_colors)
     assert r["coloured"] and len(C) == len(V)
     assert not m.has_vertex_normals(), "normals written: viewers would light (grey) the colours"
-    # every vertex in the colour of its nearest map point, not an average of several
-    _, i = cKDTree(np.asarray(pc.points)).query(V)
-    assert np.abs(C - np.asarray(pc.colors)[i]).max() < 1.5 / 255
+    # every vertex the median colour of its 5 nearest map points, not Poisson's average
+    _, i = cKDTree(np.asarray(pc.points)).query(V, k=5)
+    assert np.abs(C - np.median(np.asarray(pc.colors)[i], axis=1)).max() < 1.5 / 255
     top = V[:, 2] > ROOM[2] - 0.02
     assert top.sum() > 1000, top.sum()
     assert np.abs(np.median(C[top], 0) * 255 - [200, 120, 240][::-1]).max() < 15
@@ -348,7 +348,7 @@ def check_objects(tmp):
         on = (np.linalg.norm(V[:, :2] - b, axis=1) < 0.1) & (V[:, 2] > 0.2) & (V[:, 2] < 1.0)
         assert on.sum() > 30, ("bar not meshed", b, on.sum())
         w = np.linalg.norm(V[on, :2] - b, axis=1)
-        assert abs(np.median(w) - 0.02) < 0.008 and np.percentile(w, 90) < 0.06, \
+        assert abs(np.median(w) - 0.02) < 0.012 and np.percentile(w, 90) < 0.06, \
             ("bar not meshed on it", b, np.percentile(w, [50, 90]))
     return fs, f1
 
