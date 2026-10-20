@@ -16,7 +16,9 @@ every point near the map); give the points on each surface its colour.
 Then `mesh` on the room with a ceiling, the map coloured: the mesh in the
 map's colours (each vertex its nearest map point's, no normals so it is
 shown unlit), named after the map, and its copy without the ceiling (auto:
-the highest height peak) keeping the walls. Then `view` on an 8 x 6 m room
+the highest height peak) keeping the walls; `cut` making that copy from
+the mesh already made; auto in a building of several floors taking the
+ceiling over the robot (2.8 m), not the roof (6.5 m). Then `view` on an 8 x 6 m room
 with noisy walls and stray points, the floor missing in four places: a 1 m2
 hole (filled, at the floor's height and colour), a 5 m2 hole over --max-hole
 (left), under a box (blocked: left) and a stair opening onto a floor 1 m
@@ -151,6 +153,16 @@ def check_mesh(tmp):
     assert W[:, 2].max() < r["ceil_z"] + 0.05, W[:, 2].max()
     walls = (np.abs(W[:, 0]) < 0.03) & (W[:, 2] > 2.5)
     assert walls.sum() > 50, walls.sum()
+    # cut: the copy without the ceiling from the mesh already made
+    c = L.cut_file(r["out"], tr)
+    Wc = np.asarray(o3d.io.read_triangle_mesh(c["out"]).vertices)
+    assert abs(c["ceil_z"] - (ROOM[2] - 0.10)) < 0.06 and Wc[:, 2].max() < c["ceil_z"] + 0.05, c
+    # auto in a building of several floors: the ceiling over the robot, not the roof
+    rng = np.random.default_rng(5)
+    z = np.concatenate([rng.normal(0, 0.01, 40000), rng.normal(2.8, 0.01, 30000),
+                        rng.normal(6.5, 0.01, 60000), rng.uniform(0, 6.5, 20000)])
+    _, hc, hn = L.height_histogram(z)
+    assert abs(L.ceiling_height(hc, hn, above=0.8) - 2.8) < 0.05, L.ceiling_height(hc, hn, above=0.8)
     return r
 
 

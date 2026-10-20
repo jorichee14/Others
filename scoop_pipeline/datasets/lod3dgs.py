@@ -318,11 +318,59 @@ def height_histogram(z, step=0.05, width=50):
     return "\n".join(lines), centres, counts
 
 
-def ceiling_height(centres, counts):
-    """The highest strong peak of the histogram: the largest bin of the top 40 %
-    of the height range."""
+def ceiling_height(centres, counts, above=None):
+    """The ceiling's height from the height histogram. With `above` (the
+    robot's sensor height): the first strong peak (a quarter of the largest
+    above it, or more) 0.3 m or more above it, the ceiling of the floor it
+    drove on, in a building of several floors too. Without: the largest bin
+    of the top 40 % of the height range."""
+    if above is not None:
+        sel = centres > above + 0.3
+        c, n = centres[sel], counts[sel]
+        if len(c):
+            for i in range(len(c)):
+                if (n[i] >= 0.25 * n.max() and (i == 0 or n[i] >= n[i - 1])
+                        and (i == len(c) - 1 or n[i] >= n[i + 1])):
+                    return float(c[i])
     top = centres >= centres[0] + 0.6 * (centres[-1] - centres[0])
     return float(centres[top][np.argmax(counts[top])])
+
+
+def ceil_z(z, ceil, margin, sensor_z=None):
+    """(the height to cut above, how): ceil a number, or "auto" (the
+    ceiling's peak, see ceiling_height, less margin)."""
+    if str(ceil) == "auto":
+        _, hc, hn = height_histogram(z)
+        peak = ceiling_height(hc, hn, sensor_z)
+        return peak - margin, f"ceiling peak {peak:+.2f} less {margin} m"
+    return float(ceil), "given"
+
+
+def cut_file(path, traj, ceil="auto", margin=0.10, out=None):
+    """A copy of a mesh or a point cloud without what is above the ceiling
+    (ceil_z): <name>_noceil, the mesh not made again."""
+    o3d = _o3d()
+    path = os.path.expanduser(path)
+    stem, ext = os.path.splitext(path)
+    out = out or stem + "_noceil" + ext
+    sz = float(np.median(read_tum_positions(traj, stride=1)[:, 2]))
+    m = o3d.io.read_triangle_mesh(path)
+    if len(m.triangles):
+        z, how = ceil_z(np.asarray(m.vertices)[:, 2], ceil, margin, sz)
+        c = cut_above(m, z)
+        o3d.io.write_triangle_mesh(out, c)
+        n, kept = len(m.triangles), len(c.triangles)
+    else:
+        pc = o3d.io.read_point_cloud(path)
+        if not len(pc.points):
+            raise ConvertError(f"{path}: no faces or points")
+        P = np.asarray(pc.points)
+        z, how = ceil_z(P[:, 2], ceil, margin, sz)
+        c = pc.select_by_index(np.flatnonzero(P[:, 2] <= z))
+        o3d.io.write_point_cloud(out, c)
+        n, kept = len(P), len(c.points)
+    log.info(f"{out}: above z = {z:+.2f} ({how}; the sensor at {sz:+.2f}) removed, {kept} of {n} kept")
+    return {"out": out, "ceil_z": z, "kept": kept}
 
 
 def cut_above(mesh, z):
@@ -476,13 +524,7 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
     res.update(ghost_faces=nghost, piece_faces=npiece, piece_points=nloose, object_faces=nobj)
     shown = m
     if ceil is not None:
-        if str(ceil) == "auto":
-            peak = ceiling_height(hc, hn)
-            z = peak - ceil_margin
-            how = f"ceiling peak {peak:+.2f} less {ceil_margin} m"
-        else:
-            z = float(ceil)
-            how = "given"
+        z, how = ceil_z(V[:, 2], ceil, ceil_margin, float(np.median(Tf[:, 2])))
         nc = cut_above(m, z)
         if min_piece > 0 and not objects:
             nc, _ = drop_pieces(nc, Tf, hs, min_piece)      # what hung from the ceiling now floats
@@ -696,11 +738,7 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         P, C = np.vstack([P, Fp]), np.vstack([C, Fc])
         res.update(sensor_height=h, **st)
     if ceil is not None:
-        if str(ceil) == "auto":
-            _, hc, hn = height_histogram(P[:, 2])
-            z = ceiling_height(hc, hn) - ceil_margin
-        else:
-            z = float(ceil)
+        z, _ = ceil_z(P[:, 2], ceil, ceil_margin, float(np.median(T1[:, 2])))
         keep = P[:, 2] <= z
         report.append(f"  above z = {z:+.2f} removed (the ceiling): {int((~keep).sum())} points")
         P, C = P[keep], C[keep]
@@ -895,7 +933,8 @@ def main():
                     help="TUM trajectory the map was built from (normals turn to it)")
     meshing(me)
     me.add_argument("--ceil", default=None,
-                    help="also a copy without the ceiling: faces above Z, or 'auto'")
+                    help="also a copy without the ceiling: faces above this height (m), or 'auto' "
+                         "(the first strong peak above the robot)")
     me.add_argument("--ceil-margin", type=float, default=0.10,
                     help="[auto] cut this far below the ceiling peak (m)")
     me.add_argument("--show", action="store_true", help="open it in an Open3D window")
@@ -928,15 +967,29 @@ def main():
     vw.add_argument("--max-hole", type=float, default=20.0, help="largest hole filled (m2)")
     vw.add_argument("--roof", type=float, default=0.5,
                     help="share of a hole that must have a ceiling over it (0: courtyards too)")
-    vw.add_argument("--ceil", default=None, help="remove points above Z, or 'auto'")
+    vw.add_argument("--ceil", default=None,
+                    help="remove points above this height (m), or 'auto' (the first strong peak above the robot)")
     vw.add_argument("--ceil-margin", type=float, default=0.10)
+    ct = sub.add_parser("cut", help="a copy of a mesh or point cloud without the ceiling")
+    ct.add_argument("file", help="a mesh or a point cloud (.ply/.pcd)")
+    ct.add_argument("out", nargs="?", default=None, help="default: <file>_noceil")
+    ct.add_argument("--traj", required=True, help="TUM trajectory in the same frame (the floor driven on)")
+    ct.add_argument("--ceil", default="auto", help="cut above this height (m), or 'auto'")
+    ct.add_argument("--ceil-margin", type=float, default=0.10)
     a = ap.parse_args()
+    if getattr(a, "ceil", None) not in (None, "auto"):
+        try:
+            float(a.ceil)
+        except ValueError:
+            ap.error(f"--ceil {a.ceil}: a height in m (e.g. 2.6), or auto")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         if a.cmd == "scene":
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,
                     poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
                     color_views=a.color_views, jpeg_quality=a.jpeg_quality)
+        elif a.cmd == "cut":
+            cut_file(a.file, a.traj, a.ceil, a.ceil_margin, a.out)
         elif a.cmd == "view":
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,
