@@ -427,19 +427,22 @@ def main():
                              % (e.parent if e else None))
                 else:
                     close(e.T, T_sb, "base_frame: os_sensor -> base_link", f)
-                n = 0
-                for _, _, pl, dec in sbag.open_bag(b09).iter_raw(["/mobile_1/base_pose"]):
-                    m = dec(pl)
-                    if m.header.frame_id != "map":
-                        f.append("base_pose in %s" % m.header.frame_id)
-                        break
-                    t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9 - T0
-                    o_, q_ = m.pose.position, m.pose.orientation
-                    T = tftree.matrix([o_.x, o_.y, o_.z], [q_.x, q_.y, q_.z, q_.w])
-                    close(T, true_cam(t) @ T_cam_sensor @ T_sb, "base_pose at %.1f s" % t, f)
-                    n += 1
-                if not n:
-                    f.append("no /mobile_1/base_pose")
+                # global_pose is base_link now; the camera optical frame on camera_pose
+                for topic, T_x in (("/mobile_1/global_pose", T_cam_sensor @ T_sb),
+                                   ("/mobile_1/camera_pose", np.eye(4))):
+                    n = 0
+                    for _, _, pl, dec in sbag.open_bag(b09).iter_raw([topic]):
+                        m = dec(pl)
+                        if m.header.frame_id != "map":
+                            f.append("%s in %s" % (topic, m.header.frame_id))
+                            break
+                        t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9 - T0
+                        o_, q_ = m.pose.position, m.pose.orientation
+                        T = tftree.matrix([o_.x, o_.y, o_.z], [q_.x, q_.y, q_.z, q_.w])
+                        close(T, true_cam(t) @ T_x, "%s at %.1f s" % (topic, t), f)
+                        n += 1
+                    if not n:
+                        f.append("no " + topic)
 
         # coop: mobile_2 moves on its own track, below a board from survey_1
         coop_cfg = coop(data, stages)

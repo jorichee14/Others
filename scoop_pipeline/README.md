@@ -347,7 +347,7 @@ it, `--only S` runs S alone, `--until S` stops after S.
 | 07_cameras | `07_build_cameras.py`: infra / parked cameras in map | `frames/cameras_in_map.yaml` |
 | 08_tfs | `08_emit_tfs.py` | `frames/publish_tfs_<tag>.sh` |
 | 09_cloud | run: `09_build_coop_cloud.py`, the run's cloud in the map | `mapping/cloud_in_ref_<tag>.pcd` |
-| 10_poses | `10_publish_poses.py`: poses + the complete TF; with a robot's `base_frame`, its base_link on /tf_static and `/<robot>/base_pose` (base_link in map) | `bags/<tag>_best_poses` |
+| 10_poses | `10_publish_poses.py`: poses + the complete TF; with a robot's `base_frame`, its base_link on /tf_static, `/<robot>/global_pose` = base_link in map and `/<robot>/camera_pose` = the camera optical frame | `bags/<tag>_best_poses` |
 | finalize | the merged bag again, with 10's /tf, /tf_static and poses in it; a bag finalized in place before is only renamed | `<merged bag>_final`, in its place (the stages read it for dataset.bag from then on) |
 | comms | `processing/comms_tables.py`: NTP, Wi-Fi, ping, iperf, CSI with positions | `comms/{ntp,wifi,csi}/`, `comms/summary.json` |
 | csi_clean | `processing/csi_clean.py`: QoS data frames, no pilots, H scaled to RSSI, both ends' poses | `comms/csi/csi_<link>_clean.npz` + README |

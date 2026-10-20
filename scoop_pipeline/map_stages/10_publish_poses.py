@@ -35,11 +35,14 @@ mapping_track() under the same names)
                          itself. "full_tf": false: only
                          map -> <robot>/<optical_frame> on /tf ("write_tf").
 
-  /<robot>/base_pose     geometry_msgs/PoseStamped, frame_id "map": the robot's
-                         base_link in map, with a robot's "base_frame" (below);
-                         base_link is in /tf_static as a child of its "parent"
+  with a robot's "base_frame" (below), global_pose is its base_link instead:
+  /<robot>/global_pose   the robot's base_link in map (base_link is in
+                         /tf_static as a child of its "parent")
+  /<robot>/camera_pose   the camera optical frame in map (what global_pose is
+                         without a base_frame)
 The optical frame is the frame the images and depth are expressed in, so a
-consumer can project through global_pose directly with the camera intrinsics.
+consumer can project through it (global_pose, or camera_pose with a
+base_frame) directly with the camera intrinsics.
 
 base_frame (per robot, optional): the robot's base_link, fixed to a frame of
 its tree by a measured or chosen transform (the pose of base_link in parent):
@@ -302,7 +305,7 @@ def main():
         shutil.rmtree(out)
     topics = []
     for rb, ts, Tb, Tl in robots:
-        for nm in ("global_pose", "local_pose") + (("base_pose",) if rb.get("base_frame") else ()):
+        for nm in ("global_pose", "local_pose") + (("camera_pose",) if rb.get("base_frame") else ()):
             topics.append("/%s/%s" % (rb["name"], nm))
     full = bool(s.get("full_tf", True))
     if full and not os.path.exists(P.dataset["bag"]):
@@ -341,11 +344,14 @@ def main():
             t_ns = int(round(t * 1e9))
             qm = Rot.from_matrix(Tm[:3, :3]).as_quat()
             ql = Rot.from_matrix(Tloc[:3, :3]).as_quat()
-            yield t_ns, "/%s/global_pose" % rb["name"], \
-                rosmsg.pose_stamped(t_ns, map_frame, Tm[:3, 3], qm)
-            if Tbs is not None:
-                yield t_ns, "/%s/base_pose" % rb["name"], rosmsg.pose_stamped(
+            if Tbs is None:
+                yield t_ns, "/%s/global_pose" % rb["name"], \
+                    rosmsg.pose_stamped(t_ns, map_frame, Tm[:3, 3], qm)
+            else:                                   # base_link; the camera on its own topic
+                yield t_ns, "/%s/global_pose" % rb["name"], rosmsg.pose_stamped(
                     t_ns, map_frame, Tbs[:3, 3], Rot.from_matrix(Tbs[:3, :3]).as_quat())
+                yield t_ns, "/%s/camera_pose" % rb["name"], \
+                    rosmsg.pose_stamped(t_ns, map_frame, Tm[:3, 3], qm)
             if t_ns in local[rb["name"]]:
                 p, c, t_, q_ = local[rb["name"]][t_ns]
                 yield t_ns, "/%s/local_pose" % rb["name"], rosmsg.pose_stamped(t_ns, p, t_, q_)
@@ -386,9 +392,13 @@ def main():
                     n += 1
     print("wrote %s: %d messages on %s%s" % (out, n, ", ".join(topics),
                                             ", /tf" if write_tf or full else ""))
-    print("  global_pose: camera optical frame in '%s' (unless publish_body_frame)" % map_frame)
-    for name, ((p_, c_, _, _), _) in base.items():
-        print("  base_pose of %s: %s in '%s' (%s below %s on /tf_static)" % (name, c_, map_frame, c_, p_))
+    for rb, *_ in robots:
+        if rb["name"] in base:
+            p_, c_ = base[rb["name"]][0][:2]
+            print("  global_pose of %s: %s in '%s' (%s below %s on /tf_static); camera_pose: %s in '%s'"
+                  % (rb["name"], c_, map_frame, c_, p_, rb["_frame"], map_frame))
+        else:
+            print("  global_pose of %s: %s in '%s'" % (rb["name"], rb["_frame"], map_frame))
     for name, lp in local.items():
         if lp:
             p, c = next(iter(lp.values()))[:2]
