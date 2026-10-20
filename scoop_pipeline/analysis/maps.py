@@ -966,19 +966,23 @@ def main_scans(argv=None):
 DIST_DOC = r'''Control distances: wall-to-wall lengths measured on site with a laser
 meter, against the map.
 
-  python3 check.py distances <map.pcd> --click [--zmax 2.5]
+  python3 check.py distances <map.pcd> --click [--zband 0.3,1.2]
   python3 check.py distances <map.pcd> --picks picks.txt [--measured 6.214,4.882,...]
   python3 check.py distances <map.pcd> <distances.csv> [--picks picks.txt]
       [--radius 0.3]
 
---click: the map opens in a window (thinned to --view-voxel for the view;
---zmax hides what is above, e.g. the ceiling). Shift + left click on wall A,
-then on wall B, for every distance (shift + right click undoes the last);
-close the window (Q) when done. Each pair is then fitted and its map
-distance printed, the meter's reading asked for each pair (Enter skips
-one), and the errors reported. The picks are saved as <map>_picks.txt and
-the readings with them as <map>_distances.csv, so the same check runs again
-without clicking: check.py distances <map.pcd> <map>_distances.csv.
+--click: a floor plan opens: the map's points between --zband (m, the
+map's frame: the LiDAR started at z = 0; default above desks and below the
+ceiling) seen from above, the walls as dark lines. Left click near wall A,
+then near wall B, for every distance; each click snaps to the nearest map
+point, its wall is fitted at once and drawn (green), and after B the
+distance is drawn with its length (a red cross: no flat wall there, click
+again). Scroll zooms around the cursor, the toolbar pans; u undoes the last
+click; q or closing the window finishes. The meter's reading is then asked
+for each pair (Enter skips one) and the errors reported. The picks are
+saved as <map>_picks.txt and the readings with them as
+<map>_distances.csv, so the same check runs again without clicking:
+check.py distances <map.pcd> <map>_distances.csv.
 
 With picks alone: the wall pairs picked in the map, two points per pair
 (CloudCompare's picked points saved as ASCII; the last three numbers of each
@@ -1128,26 +1132,113 @@ def pick_pairs(picks, measured=None):
              np.array(pts[2 * i], float), np.array(pts[2 * i + 1], float)) for i in range(n)]
 
 
-def click_points(path, voxel=0.03, zmax=None):
-    """The points shift-clicked on the map in an Open3D window, in order."""
-    import open3d as o3d
-    pcd = o3d.io.read_point_cloud(path) if not path.endswith(".npy") else o3d.geometry.PointCloud(
-        o3d.utility.Vector3dVector(np.load(path)))
-    if zmax is not None:
-        keep = np.flatnonzero(np.asarray(pcd.points)[:, 2] <= zmax)
-        pcd = pcd.select_by_index(keep)
-    if voxel > 0:
-        pcd = pcd.voxel_down_sample(voxel)
-    print(f"view: {len(pcd.points)} points ({voxel * 100:g} cm); shift + left click wall A, then wall B, "
-          "for every distance; shift + right click undoes; Q closes")
-    vis = o3d.visualization.VisualizerWithEditing()
-    vis.create_window(window_name="check.py distances: shift+click A, B, A, B, ... then Q",
-                      width=1600, height=1000)
-    vis.add_geometry(pcd)
-    vis.run()
-    vis.destroy_window()
-    V = np.asarray(pcd.points)
-    return [V[i].tolist() for i in vis.get_picked_points()]
+class PlanPicker:
+    """The floor-plan clicks of --click: each snaps to the nearest map point
+    of the slice, its wall is fitted at once; pairs (A, B) give distances."""
+
+    def __init__(self, ax, P, tree, S, radius=0.3):
+        self.ax, self.P, self.tree, self.radius = ax, P, tree, radius
+        self.S, self.stree = S, cKDTree(S[:, :2])
+        self.picks, self.artists = [], []           # (xyz, wall), [artists] per click
+
+    def click(self, x, y):
+        """A click at (x, y): a message; the pick is kept only on a flat wall."""
+        dd, i = self.stree.query([x, y])
+        if dd > 0.25:
+            return "no map point near the click: click on a wall line"
+        p = self.S[i]
+        w = wall_plane(self.tree, self.P, p, self.radius)
+        if w is None:
+            self.ax.plot(p[0], p[1], "x", color="#d03b3b", ms=9, mew=2)
+            return "no flat wall there: click again on a straight wall"
+        c, n = w[0], w[1]
+        t = np.cross(n, [0, 0, 1.0])
+        t = t / (np.linalg.norm(t) or 1)
+        seg = np.array([c - 0.5 * t, c + 0.5 * t])
+        art = self.ax.plot(seg[:, 0], seg[:, 1], color="#1baf7a", lw=3)
+        art += self.ax.plot(p[0], p[1], "o", color="#1baf7a", ms=5)
+        self.picks.append((p, w))
+        k = len(self.picks)
+        if k % 2:
+            self.artists.append(art)
+            return f"d{k // 2 + 1}: wall A fitted ({w[2] * 100:.1f} cm thick); now click wall B"
+        A, B = self.picks[-2][1], w
+        d, ang = wall_distance(A, B)
+        na = A[1] if (B[0] - A[0]) @ A[1] > 0 else -A[1]
+        q0 = A[0]
+        q1 = q0 + na * ((B[0] - A[0]) @ na)
+        art += self.ax.plot([q0[0], q1[0]], [q0[1], q1[1]], color="#eb6834", lw=1.5)
+        art.append(self.ax.text((q0[0] + q1[0]) / 2, (q0[1] + q1[1]) / 2, f" d{k // 2}  {d:.3f} m",
+                                color="#b4501f", fontsize=11, fontweight="bold"))
+        self.artists.append(art)
+        warn = "  (walls not parallel: left out)" if ang > 2.0 else ""
+        return f"d{k // 2} = {d:.3f} m, walls {ang:.1f} deg apart{warn}; next: wall A of d{k // 2 + 1}"
+
+    def undo(self):
+        if not self.picks:
+            return "nothing to undo"
+        self.picks.pop()
+        for art in self.artists.pop():
+            art.remove()
+        return f"undone; {len(self.picks)} clicks kept"
+
+    def points(self):
+        n = len(self.picks) // 2 * 2
+        return [p.tolist() for p, _ in self.picks[:n]]
+
+
+def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03):
+    """The wall pairs clicked on a floor plan of the map: [xyz, ...], A, B, A, B."""
+    import matplotlib.pyplot as plt
+    S = P[(P[:, 2] >= zband[0]) & (P[:, 2] <= zband[1])]
+    if len(S) < 1000:
+        raise SystemExit(f"only {len(S)} map points between z {zband[0]} and {zband[1]} m: "
+                         "choose --zband where the walls are")
+    lo, hi = S[:, :2].min(0), S[:, :2].max(0)
+    H, xe, ye = np.histogram2d(S[:, 0], S[:, 1], bins=np.maximum(((hi - lo) / cell).astype(int), 1),
+                               range=[[lo[0], hi[0]], [lo[1], hi[1]]])
+    fig, ax = plt.subplots(figsize=(13, 9))
+    ax.imshow(np.log1p(H).T, origin="lower", extent=(xe[0], xe[-1], ye[0], ye[-1]), cmap="Greys",
+              interpolation="nearest")
+    ax.set_aspect("equal")
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    pk = PlanPicker(ax, P, tree, S, radius)
+    head = "left click wall A, then wall B  ·  scroll: zoom  ·  u: undo  ·  q: done"
+    ax.set_title(head + "\nclick near a dark wall line: d1, wall A", fontsize=11)
+
+    def say(msg):
+        print("  " + msg)
+        ax.set_title(head + "\n" + msg, fontsize=11)
+        fig.canvas.draw_idle()
+
+    def on_click(ev):
+        tb = getattr(fig.canvas, "toolbar", None)
+        if ev.inaxes is ax and ev.button == 1 and not (tb is not None and tb.mode):
+            say(pk.click(ev.xdata, ev.ydata))
+
+    def on_key(ev):
+        if ev.key == "u":
+            say(pk.undo())
+        elif ev.key in ("q", "enter", "escape"):
+            plt.close(fig)
+
+    def on_scroll(ev):
+        if ev.inaxes is not ax:
+            return
+        f = 0.8 if ev.button == "up" else 1.25
+        x0, x1 = ax.get_xlim()
+        y0, y1 = ax.get_ylim()
+        ax.set_xlim(ev.xdata + (x0 - ev.xdata) * f, ev.xdata + (x1 - ev.xdata) * f)
+        ax.set_ylim(ev.ydata + (y0 - ev.ydata) * f, ev.ydata + (y1 - ev.ydata) * f)
+        fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect("button_press_event", on_click)
+    fig.canvas.mpl_connect("key_press_event", on_key)
+    fig.canvas.mpl_connect("scroll_event", on_scroll)
+    print(f"floor plan: {len(S)} points between z {zband[0]} and {zband[1]} m; " + head)
+    plt.show()
+    return pk.points()
 
 
 def _distance_rows(tree, P, rows, radius):
@@ -1184,20 +1275,21 @@ def main_distances(argv=None):
     ap.add_argument("--measured", help="the meter's readings, m, one per picked pair: 6.214,4.882,...")
     ap.add_argument("--ask", action="store_true", help="ask for each pair's reading (default with --click)")
     ap.add_argument("--radius", type=float, default=0.3)
-    ap.add_argument("--view-voxel", type=float, default=0.03, help="--click: the view's thinning, m")
-    ap.add_argument("--zmax", type=float, help="--click: hide points above this height (the ceiling)")
+    ap.add_argument("--zband", default="0.3,1.2",
+                    help="--click: the floor plan's slice, z from,to in m (the LiDAR started at 0)")
     a = ap.parse_args(argv)
+    if not (a.click or a.distances or a.picks):
+        ap.error("give --click, or --picks (and --measured), or a distances csv")
     stem = os.path.splitext(a.map)[0]
     measured = None
     if a.measured:
         measured = [float(x) for x in a.measured.replace(",", " ").split()]
+    P = load(a.map)
+    tree = cKDTree(P)
     if a.click:
-        pts = click_points(a.map, a.view_voxel, a.zmax)
-        if len(pts) % 2:
-            print(f"{len(pts)} points picked, an odd number: the last one is left out")
-            pts = pts[:-1]
+        pts = click_plan(P, tree, [float(x) for x in a.zband.split(",")], a.radius)
         if not pts:
-            raise SystemExit("no points picked (shift + left click on the walls)")
+            raise SystemExit("no wall pair clicked")
         a.picks = a.picks or stem + "_picks.txt"
         with open(a.picks, "w") as fh:
             fh.writelines(f"{x:.4f},{y:.4f},{z:.4f}\n" for x, y, z in pts)
@@ -1207,10 +1299,6 @@ def main_distances(argv=None):
         rows = read_distances(a.distances, a.picks)
     elif a.picks:
         rows = pick_pairs(a.picks, measured)
-    else:
-        ap.error("give --click, or --picks (and --measured), or a distances csv")
-    P = load(a.map)
-    tree = cKDTree(P)
     print(f"{a.map}: {len(P)} points; {len(rows)} control distances\n")
     res = _distance_rows(tree, P, rows, a.radius)
     _distance_table(res)
