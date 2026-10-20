@@ -217,7 +217,8 @@ tests/               self-tests, no real bag needed
   test_replica_multiagent.py  replica_multiagent: common camera, lockstep frames, poses,
                      colour resampling and depth registration on a two-robot bag
   test_lod3dgs.py    lod3dgs on a synthetic open-top room: centred camera, poses, depth,
-                     the Poisson surface over the open top trimmed, point colours
+                     the Poisson surface over the open top trimmed, point colours; mesh:
+                     the map's colours, the ceiling found and cut, the walls kept
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
   test_csi_view.py   csi_view: delay profile puts the paths at their delays; figures
   test_replica.py    replica with lidar depth on a synthetic scene
@@ -891,25 +892,47 @@ The file is standalone (no scoop imports).
 LetsGo (Cui et al., ACM TOG 2024; github.com/zhaofuq/LOD-3DGS) trains
 level-of-detail Gaussians from a LiDAR scan: known poses instead of SfM, a
 depth loss, and starting points sampled from a mesh of the scan rather than
-the raw points (2.5-3.4 dB PSNR better in their Table 3). From a replica
-export with map depth:
+the raw points (2.5-3.4 dB PSNR better in their Table 3, against raw LiDAR;
+01's TSDF map is already the averaged surface).
+
+The mesh alone, to look at first (20261015: mobile_2, the BA poses):
 
 ```
-D=$P/datasets/mobile_1/replica_map_<pass>_<date>
-python scoop_pipeline/datasets/lod3dgs.py $D --map $P/mapping/denoised_<pass>_<date>.pcd
-python train.py -s $P/datasets/mobile_1/lod3dgs_map_<pass>_<date> --use_lod \
+P=<data>/processed/20261015/mapping
+python scoop_pipeline/datasets/lod3dgs.py mesh $P/mapping/map_final_<tag>.pcd \
+    --traj $P/odometry/mobile_2/traj_lidar_ba_glim.txt --ceil auto [--voxel 0.04] [--show]
+```
+
+writes `mapping/mesh_<tag>.ply` in the map's colours (colorize's) and
+`mesh_<tag>_noceil.ply`, a viewing copy without the ceiling: every face
+above the highest peak of the height histogram (printed) less
+`--ceil-margin` (0.10 m), or above `--ceil Z`. `--voxel 0.04` meshes a
+quarter of the points for a quick look (Poisson depth one less).
+
+The scene, from a replica export with map depth made with the same poses:
+
+```
+python scoop_pipeline/datasets/mcap_convert.py <merged bag> --format replica \
+    --pose-tum $P/odometry/mobile_2/traj_lidar_ba_glim.txt \
+    --color /mobile_2/color/image_raw --info /mobile_2/color/camera_info \
+    --lidar /mobile_2/ouster/points --depth-source map --map $P/mapping/map_final_<tag>.pcd
+python scoop_pipeline/datasets/lod3dgs.py scene $P/datasets/mobile_2/replica_map_<tag> \
+    --map $P/mapping/map_final_<tag>.pcd
+python train.py -s $P/datasets/mobile_2/lod3dgs_map_<tag> --use_lod \
     --depths depths --data_device cpu -r 1        # in LOD-3DGS, with its README's flags
 ```
 
 The map is meshed (Poisson, `--poisson-depth`, default cells about two
-`--voxel` across; normals turned to the nearest camera), faces farther than
-`--trim` (0.10 m, the paper's) from a map point are removed, and the mesh is
-sampled every `--spacing` (4 cm, the paper's) into `sparse/0/points3D.ply`,
-each point the mean colour of the `--color-views` frames that see it
-(`mesh.ply` is kept for a look). LOD-3DGS ignores the principal point (it
-takes the image centre), so images and depth are resampled onto the largest
-window centred on it; depth goes into `depths/` as LOD-3DGS reads it (8-bit
-warped grey, alpha where there is depth). The map must be the one the
-export's depth was rendered from, so poses, depth and points share a frame.
-`--every N` thins the frames. LOD-3DGS builds its level-of-detail octree with
-PotreeConverter on the first run (its README: built and tested on Windows).
+`--voxel` across; normals turned to the nearest pose), faces farther than
+`--trim` (0.10 m, the paper's) from a map point are removed (Poisson closes
+open sides and holes with surfaces nothing saw), and the mesh is sampled
+every `--spacing` (4 cm, the paper's) into `sparse/0/points3D.ply`, each
+point the mean colour of the `--color-views` frames that see it (`mesh.ply`
+is kept). The scene keeps the ceiling: the cameras see it. LOD-3DGS ignores
+the principal point (it takes the image centre), so images and depth are
+resampled onto the largest window centred on it; depth goes into `depths/`
+as LOD-3DGS reads it (8-bit warped grey, alpha where there is depth). The
+map must be the one the export's depth was rendered from, so poses, depth
+and points share a frame. `--every N` thins the frames. LOD-3DGS builds its
+level-of-detail octree with PotreeConverter on the first run (its README:
+built and tested on Windows).

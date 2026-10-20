@@ -3,9 +3,22 @@
 LOD-3DGS scene (LetsGo, github.com/zhaofuq/LOD-3DGS; Cui et al., ACM TOG 43(6),
 2024): COLMAP layout with known poses, no structure from motion.
 
-    python scoop_pipeline/datasets/lod3dgs.py <replica dataset> --map <map .pcd/.ply>
+    python scoop_pipeline/datasets/lod3dgs.py scene <replica dataset> --map <map .pcd/.ply>
         [<out scene>] [--every 1] [--voxel 0.02] [--poisson-depth 0] [--trim 0.10]
         [--spacing 0.04] [--color-views 300] [--jpeg-quality 95]
+    python scoop_pipeline/datasets/lod3dgs.py mesh <map .pcd/.ply> --traj <TUM of the map>
+        [<out mesh .ply>] [--ceil auto|Z] [--ceil-margin 0.10] [--voxel 0.02]
+        [--poisson-depth 0] [--trim 0.10] [--show]
+
+`mesh` is the mesh step alone, to look at: the map's Poisson mesh, trimmed,
+in the map's colours (map_final_<tag>.pcd is colorized), normals turned to
+the nearest pose of --traj (the trajectory the map was built from). Written
+next to the map as mesh_<tag>.ply (map_final_<tag>.pcd; else <map>_mesh.ply),
+with the height histogram of the map printed (z up). --ceil also writes a
+viewing copy without the ceiling, <mesh>_noceil.ply: every face above Z
+removed, or with "auto" above the highest histogram peak (the ceiling) less
+--ceil-margin. Only a viewing copy, as 06_cut's: a scene keeps the ceiling,
+the cameras see it.
 
 Layout (what LOD-3DGS's Octree loader reads; train.py -s <scene> --use_lod):
 
@@ -164,6 +177,87 @@ def build_mesh(map_path, centres, voxel=0.02, depth=0, trim=0.10):
                   "faces": nf, "faces_kept": len(mesh.triangles)}
 
 
+def read_tum_positions(path, stride=10):
+    """Positions (Nx3) of a TUM trajectory (t x y z qx qy qz qw), every stride-th."""
+    a = np.loadtxt(os.path.expanduser(path), comments="#", ndmin=2)
+    if a.shape[1] < 4 or not len(a):
+        raise ConvertError(f"{path}: not a TUM trajectory")
+    return a[::max(1, int(stride)), 1:4]
+
+
+def height_histogram(z, step=0.05, width=50):
+    """(text, bin centres, counts) of the heights; the text one line a bin, top first."""
+    edges = np.arange(np.floor(z.min() / step) * step, z.max() + step, step)
+    counts, edges = np.histogram(z, bins=edges)
+    centres = 0.5 * (edges[:-1] + edges[1:])
+    peak = max(int(counts.max()), 1)
+    lines = [f"  z={c:+7.2f} | {'#' * int(round(width * n / peak)):<{width}} {n:>10,d}"
+             for c, n in zip(centres[::-1], counts[::-1]) if n]
+    return "\n".join(lines), centres, counts
+
+
+def ceiling_height(centres, counts):
+    """The highest strong peak of the histogram: the largest bin of the top 40 %
+    of the height range."""
+    top = centres >= centres[0] + 0.6 * (centres[-1] - centres[0])
+    return float(centres[top][np.argmax(counts[top])])
+
+
+def cut_above(mesh, z):
+    """A copy of the mesh without the faces whose centre is above z."""
+    out = type(mesh)(mesh)
+    F, V = np.asarray(out.triangles), np.asarray(out.vertices)
+    out.remove_triangles_by_mask(V[F].mean(1)[:, 2] > z)
+    out.remove_unreferenced_vertices()
+    return out
+
+
+def default_mesh_out(map_path):
+    d, name = os.path.split(os.path.abspath(map_path))
+    stem = os.path.splitext(name)[0]
+    if stem.startswith("map_final_"):
+        return os.path.join(d, "mesh_" + stem[len("map_final_"):] + ".ply")
+    return os.path.join(d, stem + "_mesh.ply")
+
+
+def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10,
+         ceil=None, ceil_margin=0.10, show=False):
+    """The mesh step alone: mesh of the map (+ a copy without the ceiling)."""
+    o3d = _o3d()
+    out = out or default_mesh_out(map_path)
+    centres = read_tum_positions(traj)
+    m, mstat = build_mesh(map_path, centres, voxel, poisson_depth, trim)
+    o3d.io.write_triangle_mesh(out, m)
+    V = np.asarray(m.vertices)
+    text, hc, hn = height_histogram(V[:, 2])
+    log.info("height of the mesh (5 cm bins, top first):\n" + text)
+    res = {"out": out, "vertices": len(V), "coloured": m.has_vertex_colors(), **mstat}
+    report = (f"mesh {out}: {mstat['faces_kept']} faces ({mstat['faces']} before the "
+              f"{trim} m trim), {len(V)} vertices, "
+              f"{'coloured from the map' if m.has_vertex_colors() else 'no colour (map has none)'}")
+    shown = m
+    if ceil is not None:
+        if str(ceil) == "auto":
+            peak = ceiling_height(hc, hn)
+            z = peak - ceil_margin
+            how = f"ceiling peak {peak:+.2f} less {ceil_margin} m"
+        else:
+            z = float(ceil)
+            how = "given"
+        nc = cut_above(m, z)
+        p = os.path.splitext(out)[0] + "_noceil.ply"
+        o3d.io.write_triangle_mesh(p, nc)
+        report += (f"\nno ceiling {p}: faces above z = {z:+.2f} ({how}) removed, "
+                   f"{len(nc.triangles)} kept")
+        res.update(noceil=p, ceil_z=z, noceil_faces=len(nc.triangles))
+        shown = nc
+    log.info(report)
+    if show:
+        shown.compute_vertex_normals()
+        o3d.visualization.draw_geometries([shown], window_name=os.path.basename(out))
+    return res
+
+
 def sample_mesh(mesh, spacing=0.04):
     """Points evenly over the mesh, about `spacing` apart."""
     area = mesh.get_surface_area()
@@ -314,25 +408,47 @@ def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("dataset", help="a replica export (mcap_convert.py --format replica)")
-    ap.add_argument("out", nargs="?", default=None, help="scene folder (default: next to it)")
-    ap.add_argument("--map", required=True, help="the map the export's depth came from")
-    ap.add_argument("--every", type=int, default=1, help="keep every Nth frame")
-    ap.add_argument("--voxel", type=float, default=0.02, help="map voxel before meshing (m)")
-    ap.add_argument("--poisson-depth", type=int, default=0,
-                    help="Poisson octree depth (0: cells about two voxels across)")
-    ap.add_argument("--trim", type=float, default=0.10,
-                    help="remove mesh faces farther than this from a map point (m)")
-    ap.add_argument("--spacing", type=float, default=0.04, help="starting point spacing (m)")
-    ap.add_argument("--color-views", type=int, default=300,
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def meshing(p):
+        p.add_argument("--voxel", type=float, default=0.02, help="map voxel before meshing (m)")
+        p.add_argument("--poisson-depth", type=int, default=0,
+                       help="Poisson octree depth (0: cells about two voxels across)")
+        p.add_argument("--trim", type=float, default=0.10,
+                       help="remove mesh faces farther than this from a map point (m)")
+
+    sc = sub.add_parser("scene", help="a replica export + the map -> a LOD-3DGS scene")
+    sc.add_argument("dataset", help="a replica export (mcap_convert.py --format replica)")
+    sc.add_argument("out", nargs="?", default=None, help="scene folder (default: next to it)")
+    sc.add_argument("--map", required=True, help="the map the export's depth came from")
+    sc.add_argument("--every", type=int, default=1, help="keep every Nth frame")
+    meshing(sc)
+    sc.add_argument("--spacing", type=float, default=0.04, help="starting point spacing (m)")
+    sc.add_argument("--color-views", type=int, default=300,
                     help="frames the point colours are taken from (evenly spread)")
-    ap.add_argument("--jpeg-quality", type=int, default=95)
+    sc.add_argument("--jpeg-quality", type=int, default=95)
+
+    me = sub.add_parser("mesh", help="the mesh of a map alone, to look at")
+    me.add_argument("map", help="the map (.pcd/.ply), e.g. mapping/map_final_<tag>.pcd")
+    me.add_argument("out", nargs="?", default=None, help="mesh .ply (default: next to the map)")
+    me.add_argument("--traj", required=True,
+                    help="TUM trajectory the map was built from (normals turn to it)")
+    meshing(me)
+    me.add_argument("--ceil", default=None,
+                    help="also a copy without the ceiling: faces above Z, or 'auto'")
+    me.add_argument("--ceil-margin", type=float, default=0.10,
+                    help="[auto] cut this far below the ceiling peak (m)")
+    me.add_argument("--show", action="store_true", help="open it in an Open3D window")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,
-                poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
-                color_views=a.color_views, jpeg_quality=a.jpeg_quality)
+        if a.cmd == "scene":
+            convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,
+                    poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
+                    color_views=a.color_views, jpeg_quality=a.jpeg_quality)
+        else:
+            map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,
+                     trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show)
     except ConvertError as e:
         sys.exit(str(e))
 

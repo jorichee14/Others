@@ -13,6 +13,9 @@ rendered by the centred camera at the written pose; store depth the way
 LOD-3DGS reads it (warped grey, alpha where there is depth); remove the
 surface Poisson puts over the open top (no starting point above the walls,
 every point near the map); give the points on each surface its colour.
+Then `mesh` on the room with a ceiling, the map coloured: the mesh in the
+map's colours, named after the map, and its copy without the ceiling (auto:
+the highest height peak) keeping the walls.
 
     python scoop_pipeline/tests/test_lod3dgs.py
 """
@@ -100,6 +103,41 @@ def read_ply(path):
     return np.stack([a["x"], a["y"], a["z"]], 1), np.stack([a["red"], a["green"], a["blue"]], 1)
 
 
+def check_mesh(tmp):
+    import open3d as o3d
+    planes = PLANES + [(2, ROOM[2], (200, 120, 240))]
+    pts, cols = [], []
+    for a, c, col in planes:
+        o = [i for i in range(3) if i != a]
+        g = lambda n: np.arange(0.01, n, 0.02)            # noqa: E731
+        A, B = np.meshgrid(g(ROOM[o[0]]), g(ROOM[o[1]]))
+        p = np.zeros((A.size, 3))
+        p[:, o[0]], p[:, o[1]], p[:, a] = A.ravel(), B.ravel(), c
+        pts.append(p)
+        cols.append(np.tile(np.array(col[::-1], float) / 255, (len(p), 1)))
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.concatenate(pts)))
+    pc.colors = o3d.utility.Vector3dVector(np.concatenate(cols))
+    mp = os.path.join(tmp, "map_final_mapping_20260101.pcd")
+    o3d.io.write_point_cloud(mp, pc)
+    tr = os.path.join(tmp, "traj.txt")
+    np.savetxt(tr, [[i, 1 + 0.4 * i, 1.0 + 0.2 * i, 1.0, 0, 0, 0, 1] for i in range(10)])
+    r = L.map_mesh(mp, tr, ceil="auto")
+    assert os.path.basename(r["out"]) == "mesh_mapping_20260101.ply", r["out"]
+    m = o3d.io.read_triangle_mesh(r["out"])
+    V, C = np.asarray(m.vertices), np.asarray(m.vertex_colors)
+    assert r["coloured"] and len(C) == len(V)
+    top = V[:, 2] > ROOM[2] - 0.02
+    assert top.sum() > 1000, top.sum()
+    assert np.abs(np.median(C[top], 0) * 255 - [200, 120, 240][::-1]).max() < 15
+    assert abs(r["ceil_z"] - (ROOM[2] - 0.10)) < 0.06, r["ceil_z"]
+    n = o3d.io.read_triangle_mesh(r["noceil"])
+    W = np.asarray(n.vertices)
+    assert W[:, 2].max() < r["ceil_z"] + 0.05, W[:, 2].max()
+    walls = (np.abs(W[:, 0]) < 0.03) & (W[:, 2] > 2.5)
+    assert walls.sum() > 50, walls.sum()
+    return r
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="lod3dgs_")
     try:
@@ -177,6 +215,9 @@ def main():
             assert on.sum() > 200, (a, c, on.sum())
             med = np.median(rgb[on].astype(int), 0)
             assert np.abs(med - np.array(col)[::-1]).max() < 15, (a, c, med, col)
+        rm = check_mesh(tmp)
+        print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
+              f"{rm['noceil_faces']} faces without it")
         print(f"ok: {r['frames']} frames, camera {Wc}x{Hc}, {r['points']} points "
               f"({100 * r['coloured']:.0f}% coloured), mesh {r['faces_kept']}/{r['faces']} faces")
     finally:
