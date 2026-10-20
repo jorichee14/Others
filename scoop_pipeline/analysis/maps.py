@@ -966,9 +966,19 @@ def main_scans(argv=None):
 DIST_DOC = r'''Control distances: wall-to-wall lengths measured on site with a laser
 meter, against the map.
 
+  python3 check.py distances <map.pcd> --click [--zmax 2.5]
   python3 check.py distances <map.pcd> --picks picks.txt [--measured 6.214,4.882,...]
   python3 check.py distances <map.pcd> <distances.csv> [--picks picks.txt]
       [--radius 0.3]
+
+--click: the map opens in a window (thinned to --view-voxel for the view;
+--zmax hides what is above, e.g. the ceiling). Shift + left click on wall A,
+then on wall B, for every distance (shift + right click undoes the last);
+close the window (Q) when done. Each pair is then fitted and its map
+distance printed, the meter's reading asked for each pair (Enter skips
+one), and the errors reported. The picks are saved as <map>_picks.txt and
+the readings with them as <map>_distances.csv, so the same check runs again
+without clicking: check.py distances <map.pcd> <map>_distances.csv.
 
 With picks alone: the wall pairs picked in the map, two points per pair
 (CloudCompare's picked points saved as ASCII; the last three numbers of each
@@ -1118,54 +1128,121 @@ def pick_pairs(picks, measured=None):
              np.array(pts[2 * i], float), np.array(pts[2 * i + 1], float)) for i in range(n)]
 
 
+def click_points(path, voxel=0.03, zmax=None):
+    """The points shift-clicked on the map in an Open3D window, in order."""
+    import open3d as o3d
+    pcd = o3d.io.read_point_cloud(path) if not path.endswith(".npy") else o3d.geometry.PointCloud(
+        o3d.utility.Vector3dVector(np.load(path)))
+    if zmax is not None:
+        keep = np.flatnonzero(np.asarray(pcd.points)[:, 2] <= zmax)
+        pcd = pcd.select_by_index(keep)
+    if voxel > 0:
+        pcd = pcd.voxel_down_sample(voxel)
+    print(f"view: {len(pcd.points)} points ({voxel * 100:g} cm); shift + left click wall A, then wall B, "
+          "for every distance; shift + right click undoes; Q closes")
+    vis = o3d.visualization.VisualizerWithEditing()
+    vis.create_window(window_name="check.py distances: shift+click A, B, A, B, ... then Q",
+                      width=1600, height=1000)
+    vis.add_geometry(pcd)
+    vis.run()
+    vis.destroy_window()
+    V = np.asarray(pcd.points)
+    return [V[i].tolist() for i in vis.get_picked_points()]
+
+
+def _distance_rows(tree, P, rows, radius):
+    """[(name, measured, a, b, A, B, d, angle)] with each pair's walls fitted."""
+    out = []
+    for name, m, pa, pb in rows:
+        A, B = wall_plane(tree, P, pa, radius), wall_plane(tree, P, pb, radius)
+        d, ang = wall_distance(A, B) if A is not None and B is not None else (None, None)
+        out.append([name, m, pa, pb, A, B, d, ang])
+    return out
+
+
+def _distance_table(res):
+    print(f"  {'name':14s}{'measured m':>11s}{'map m':>10s}{'error mm':>10s}{'mm/m':>7s}"
+          f"{'angle':>7s}{'walls cm':>11s}   flags")
+    for name, m, _, _, A, B, d, ang in res:
+        ms = "-" if m is None else f"{m:.3f}"
+        if d is None:
+            which = " and ".join(w for w, x in (("A", A), ("B", B)) if x is None)
+            print(f"  {name:14s}{ms:>11s}{'-':>10s}{'':35s}   no flat wall at {which}'s pick")
+            continue
+        err = "" if m is None else f"{(d - m) * 1000:+10.1f}{(d - m) * 1000 / m:+7.2f}"
+        print(f"  {name:14s}{ms:>11s}{d:10.3f}{err:17s}{ang:6.1f}d"
+              f"{A[2] * 100:5.1f}/{B[2] * 100:<4.1f}   {'walls not parallel' if ang > 2.0 else ''}")
+
+
 def main_distances(argv=None):
     ap = argparse.ArgumentParser(description=DIST_DOC,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("map")
     ap.add_argument("distances", nargs="?", help="csv with names (optional: picks alone number the pairs)")
+    ap.add_argument("--click", action="store_true", help="pick the wall pairs on the map in a window")
     ap.add_argument("--picks")
     ap.add_argument("--measured", help="the meter's readings, m, one per picked pair: 6.214,4.882,...")
+    ap.add_argument("--ask", action="store_true", help="ask for each pair's reading (default with --click)")
     ap.add_argument("--radius", type=float, default=0.3)
+    ap.add_argument("--view-voxel", type=float, default=0.03, help="--click: the view's thinning, m")
+    ap.add_argument("--zmax", type=float, help="--click: hide points above this height (the ceiling)")
     a = ap.parse_args(argv)
-    if a.distances:
+    stem = os.path.splitext(a.map)[0]
+    measured = None
+    if a.measured:
+        measured = [float(x) for x in a.measured.replace(",", " ").split()]
+    if a.click:
+        pts = click_points(a.map, a.view_voxel, a.zmax)
+        if len(pts) % 2:
+            print(f"{len(pts)} points picked, an odd number: the last one is left out")
+            pts = pts[:-1]
+        if not pts:
+            raise SystemExit("no points picked (shift + left click on the walls)")
+        a.picks = a.picks or stem + "_picks.txt"
+        with open(a.picks, "w") as fh:
+            fh.writelines(f"{x:.4f},{y:.4f},{z:.4f}\n" for x, y, z in pts)
+        print(f"saved {len(pts) // 2} pairs -> {a.picks}")
+        rows = pick_pairs(a.picks, measured)
+    elif a.distances:
         rows = read_distances(a.distances, a.picks)
     elif a.picks:
-        measured = None
-        if a.measured:
-            measured = [float(x) for x in a.measured.replace(",", " ").split()]
         rows = pick_pairs(a.picks, measured)
     else:
-        ap.error("give --picks (and --measured), or a distances csv")
+        ap.error("give --click, or --picks (and --measured), or a distances csv")
     P = load(a.map)
     tree = cKDTree(P)
     print(f"{a.map}: {len(P)} points; {len(rows)} control distances\n")
-    print(f"  {'name':14s}{'measured m':>11s}{'map m':>10s}{'error mm':>10s}{'mm/m':>7s}"
-          f"{'angle':>7s}{'walls cm':>11s}   flags")
-    meas, mapd = [], []
-    for name, m, pa, pb in rows:
-        ms = "-" if m is None else f"{m:.3f}"
-        A, B = wall_plane(tree, P, pa, a.radius), wall_plane(tree, P, pb, a.radius)
-        if A is None or B is None:
-            which = " and ".join(w for w, x in (("A", A), ("B", B)) if x is None)
-            print(f"  {name:14s}{ms:>11s}{'-':>10s}{'':10s}{'':7s}{'':7s}{'':11s}   "
-                  f"no flat wall at {which}'s pick")
-            continue
-        d, ang = wall_distance(A, B)
-        flag = "walls not parallel" if ang > 2.0 else ""
-        err = "" if m is None else f"{(d - m) * 1000:+10.1f}{(d - m) * 1000 / m:+7.2f}"
-        print(f"  {name:14s}{ms:>11s}{d:10.3f}{err:17s}{ang:6.1f}d"
-              f"{A[2] * 100:5.1f}/{B[2] * 100:<4.1f}   {flag}")
-        if m is not None and ang <= 2.0:
-            meas.append(m)
-            mapd.append(d)
-    if all(m is None for _, m, _, _ in rows):
+    res = _distance_rows(tree, P, rows, a.radius)
+    _distance_table(res)
+
+    ask = a.ask or (a.click and measured is None and sys.stdin.isatty())
+    if ask and all(r[1] is None for r in res):
+        print("\nthe meter's reading for each pair, m (Enter skips it):")
+        for r in res:
+            if r[6] is None:
+                continue
+            got = input(f"  {r[0]}  map {r[6]:.3f} m  measured: ").strip()
+            if got:
+                r[1] = float(got)
+        if any(r[1] is not None for r in res):
+            out = stem + "_distances.csv"
+            with open(out, "w") as fh:
+                fh.write("name,measured_m,ax,ay,az,bx,by,bz\n")
+                for name, m, pa, pb, *_ in res:
+                    if m is not None:
+                        fh.write(f"{name},{m:.4f}," + ",".join(f"{v:.4f}" for v in (*pa, *pb)) + "\n")
+            print(f"saved the readings with their picks -> {out}\n")
+            _distance_table(res)
+
+    if all(r[1] is None for r in res):
         print("\nmap distances only: give the meter's readings in the same order with "
               "--measured 6.214,4.882,...")
         print("(walls: each wall's thickness in the map, p95-p5, around its pick)")
         return
-    if not meas:
+    ok = [(r[1], r[6]) for r in res if r[1] is not None and r[6] is not None and r[7] <= 2.0]
+    if not ok:
         raise SystemExit("\nno distance measured: check the picks (the map's frame, on the walls)")
-    meas, mapd = np.array(meas), np.array(mapd)
+    meas, mapd = np.array(ok).T
     e = (mapd - meas) * 1000
     s = float(meas @ mapd / (meas @ meas))
     print(f"\n{len(meas)} distances ({meas.min():.2f}-{meas.max():.2f} m): error mean {e.mean():+.1f} mm, "

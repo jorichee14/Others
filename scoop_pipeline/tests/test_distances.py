@@ -5,7 +5,9 @@ picks a few cm off the walls (one near the floor, so the floor is in its
 ball), one given on the csv's rows and one through a CloudCompare-style
 picks file; a pick in the air is reported; a map scaled by 1.002 shows
 +2000 ppm; picks alone (no csv) give d1, d2 with their map distances, and
-with --measured their errors.
+with --measured their errors; --ask takes the readings typed in and
+saves them with the picks (re-run from that csv: the same errors); --click
+with a stand-in for the Open3D window picks the same pairs.
 
     python tests/test_distances.py
 """
@@ -98,6 +100,49 @@ def main():
         ok = rc == 0 and all(abs(float(got.get(k, ["", "", "", "nan"])[3])) < 3.0 for k in ("d1", "d2"))
         (print if ok else fails.append)("  ok    picks alone with --measured: errors within 3 mm" if ok
                                         else f"picks with --measured: {got} rc {rc}\n{out}")
+        # --ask: readings typed in, saved with the picks; the csv runs again the same
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "check.py"), "distances",
+                            os.path.join(d, "map.npy"), "--picks", os.path.join(d, "pairs.txt"), "--ask"],
+                           input="8.0\n6.002\n", capture_output=True, text=True)
+        saved = os.path.join(d, "map_distances.csv")
+        ok = r.returncode == 0 and os.path.exists(saved) and "error mean" in r.stdout
+        rc, again = run(os.path.join(d, "map.npy"), saved)
+        same = [ln for ln in r.stdout.splitlines() if ln.startswith("scale")] == \
+            [ln for ln in again.splitlines() if ln.startswith("scale")]
+        (print if ok and same and rc == 0 else fails.append)(
+            "  ok    --ask: readings saved; the saved csv gives the same result" if ok and same and rc == 0
+            else f"--ask: rc {r.returncode}\n{r.stdout}{r.stderr}\nagain rc {rc}\n{again}")
+
+        # --click, with a stand-in for the window that picks the points nearest four targets
+        sys.path.insert(0, ROOT)
+        import io
+        import open3d as o3d
+        from analysis import maps
+        targets = np.array([[0.03, 3.0, 1.0], [7.96, 3.1, 1.1], [4.0, 0.02, 0.15], [4.2, 5.97, 0.18]])
+
+        class Window:
+            def create_window(self, **k): pass
+            def add_geometry(self, g): self.V = np.asarray(g.points)
+            def run(self): pass
+            def destroy_window(self): pass
+            def get_picked_points(self):
+                return [int(np.argmin(np.linalg.norm(self.V - t, axis=1))) for t in targets]
+
+        real, real_in, real_out = o3d.visualization.VisualizerWithEditing, sys.stdin, sys.stdout
+        o3d.visualization.VisualizerWithEditing = Window
+        sys.stdin, sys.stdout = io.StringIO("8.0\n6.0\n"), io.StringIO()
+        try:
+            maps.main_distances([os.path.join(d, "map.npy"), "--click", "--ask"])
+            out = sys.stdout.getvalue()
+        except SystemExit as e:
+            out = sys.stdout.getvalue() + f"exit {e}"
+        finally:
+            o3d.visualization.VisualizerWithEditing, sys.stdin, sys.stdout = real, real_in, real_out
+        rms = next((ln for ln in out.splitlines() if "error mean" in ln), "")
+        ok = os.path.exists(os.path.join(d, "map_picks.txt")) and rms and \
+            float(rms.split("RMS")[1].split()[0]) < 5.0
+        (print if ok else fails.append)(f"  ok    --click: two pairs picked, {rms.strip()}" if ok
+                                        else f"--click:\n{out}")
     finally:
         shutil.rmtree(d, ignore_errors=True)
     for f in fails:
