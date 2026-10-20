@@ -30,7 +30,8 @@ the mirror ghosts of a polished floor and wall (under the floor, behind the
 wall: no direct ray from the path reaches them) and a loose 5 m2 sheet removed
 by both mesh and view, the room's own surfaces kept. Then objects (a ball,
 a rack of thin bars) meshed on their own, finer: their faces on them; and
-the radio preset: under 20,000 faces, the floor and the ball within 5 cm.
+the radio preset: under 20,000 faces, the floor and the ball within 5 cm;
+its texture: a 10 cm checker on a wall shown right on few large faces.
 
     python scoop_pipeline/tests/test_lod3dgs.py
 """
@@ -367,6 +368,78 @@ def check_objects(tmp):
     return fs, f1, len(mr.triangles)
 
 
+def read_textured_ply(path):
+    """(V, F, UV, png) of a PLY written by write_textured_ply."""
+    with open(path, "rb") as fh:
+        hdr = []
+        while True:
+            ln = fh.readline().decode().strip()
+            hdr.append(ln)
+            if ln == "end_header":
+                break
+        nv = int(next(h for h in hdr if h.startswith("element vertex")).split()[-1])
+        png = next(h for h in hdr if h.startswith("comment TextureFile")).split()[-1]
+        rgb = any("red" in h for h in hdr)
+        vd = [("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("u", "<f4"), ("v", "<f4")] + (
+            [("r", "u1"), ("g", "u1"), ("b", "u1")] if rgb else [])
+        va = np.frombuffer(fh.read(nv * np.dtype(vd).itemsize), vd)
+        fa = np.frombuffer(fh.read(), [("n", "u1"), ("i", "<i4", (3,)), ("nt", "u1"), ("t", "<f4", (6,))])
+    V = np.c_[va["x"], va["y"], va["z"]].astype(float)
+    return V, fa["i"].astype(int), np.c_[va["u"], va["v"]].astype(float), png, (
+        np.c_[va["r"], va["g"], va["b"]] / 255.0 if rgb else None)
+
+
+def check_texture(tmp):
+    """A room whose x = 0 wall is a checker of 10 cm squares, meshed as
+    --radio does (few faces) with the texture: points sampled on the wall
+    get their colour from the texture right (75 %: a sample within a point
+    spacing of a square's edge can take either colour), where the vertex colours
+    of the few large faces cannot show a checker at all."""
+    import open3d as o3d
+    rng = np.random.default_rng(6)
+    g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
+    pts, cols = [], []
+    check = lambda y, z: ((np.floor(y / 0.1) + np.floor(z / 0.1)) % 2)[:, None] * np.ones(3)  # noqa: E731
+    for axis, val, ra, rb in ((2, 0.0, (0, 6), (0, 4)), (2, 3.0, (0, 6), (0, 4)),
+                              (0, 0.0, (0, 4), (0, 3)), (0, 6.0, (0, 4), (0, 3)),
+                              (1, 0.0, (0, 6), (0, 3)), (1, 4.0, (0, 6), (0, 3))):
+        A, B = np.meshgrid(g(*ra), g(*rb), indexing="ij")
+        o = [i for i in range(3) if i != axis]
+        p = np.zeros((A.size, 3))
+        p[:, o[0]], p[:, o[1]], p[:, axis] = A.ravel(), B.ravel(), val
+        pts.append(p)
+        cols.append(check(p[:, 1], p[:, 2]) if (axis == 0 and val == 0.0) else np.full((len(p), 3), 0.5))
+    P = np.concatenate(pts)
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    pc.colors = o3d.utility.Vector3dVector(np.concatenate(cols))
+    mp = os.path.join(tmp, "map_final_texture.pcd")
+    o3d.io.write_point_cloud(mp, pc)
+    tr = os.path.join(tmp, "traj_texture.txt")
+    t = np.linspace(0, 2 * np.pi, 40)
+    np.savetxt(tr, np.c_[t, 3 + 2 * np.cos(t), 2 + 1.2 * np.sin(t), np.full_like(t, 1.2),
+                         np.zeros((len(t), 3)), np.ones(len(t))])
+    r = L.map_mesh(mp, tr, os.path.join(tmp, "t_radio.ply"), voxel=0.05, trim=0.25, subdivide=0,
+                   object_cell=0.05, object_trim=0.06, faces=3000, texture=True, texel=0.01)
+    V, F, UV, png, rgb = read_textured_ply(r["out"])
+    img = cv2.imread(os.path.join(tmp, png))[:, :, ::-1] / 255.0
+    H, W = img.shape[:2]
+    assert len(F) <= 3000, len(F)
+    cen = V[F].mean(1)
+    wall = np.flatnonzero((np.abs(cen[:, 0]) < 0.05) & (cen[:, 2] > 0.3) & (cen[:, 2] < 2.7)
+                          & (cen[:, 1] > 0.3) & (cen[:, 1] < 3.7))
+    fi = rng.choice(wall, 5000)
+    lam = rng.dirichlet([1, 1, 1], 5000)
+    X = np.einsum("nk,nkd->nd", lam, V[F[fi]])
+    uv = np.einsum("nk,nkd->nd", lam, UV[F[fi]])
+    tex = img[np.clip(((1 - uv[:, 1]) * H).astype(int), 0, H - 1), np.clip((uv[:, 0] * W).astype(int), 0, W - 1)]
+    want = check(X[:, 1], X[:, 2])
+    good = np.mean(np.abs(tex - want).max(1) < 0.35)
+    vcol = np.einsum("nk,nkd->nd", lam, rgb[F[fi]])
+    good_v = np.mean(np.abs(vcol - want).max(1) < 0.35)
+    assert good > 0.75 and good > good_v + 0.25, ("texture", good, "vertex colours", good_v)
+    return len(F), good, good_v
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="lod3dgs_")
     try:
@@ -454,6 +527,9 @@ def main():
         print(f"ok objects: {100 * fs:.0f} % of the ball's vertices on it meshed on their own "
               f"({100 * f1:.0f} % with one Poisson), every bar meshed at its radius; "
               f"radio mesh {nr} faces, floor and ball within 5 cm")
+        nt, gt, gv = check_texture(tmp)
+        print(f"ok texture: {nt} faces, a 10 cm checker right on {100 * gt:.0f} % of the wall from the "
+              f"texture ({100 * gv:.0f} % from the vertex colours)")
         rm = check_mesh(tmp)
         print(f"ok mesh: {rm['faces_kept']} faces, the ceiling's {rm['ceiling_faces']} removed, "
               f"walls kept to the top, {rm['noceil_faces']} faces without it")

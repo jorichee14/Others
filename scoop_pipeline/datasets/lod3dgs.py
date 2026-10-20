@@ -460,6 +460,104 @@ def mesh_objects(pc, centres, cell=0.012, trim=0.03, tile=4.0, min_pts=200, smoo
     return out
 
 
+def bake_texture(mesh, map_path, png, texel=0.01, max_side=8192, k=5, chunk=4_000_000):
+    """(vertices, faces, uv): the mesh unwrapped into one texture (xatlas)
+    and the map's colours baked into it, every texel the median colour of
+    the k map points nearest its place on the surface, written to png. A
+    few large faces then show the map's colours as sharply as its points
+    (texel m per texel, made coarser when the texture would be over
+    max_side texels across)."""
+    import cv2
+    try:
+        import xatlas
+    except ImportError:
+        raise ConvertError("the texture needs xatlas: pip install xatlas (or --no-texture)")
+    V = np.asarray(mesh.vertices, np.float32)
+    F = np.asarray(mesh.triangles, np.uint32)
+    area = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1).sum()
+    t = max(texel, float(np.sqrt(area * 1.5)) / max_side)
+    for _ in range(6):
+        atlas = xatlas.Atlas()
+        atlas.add_mesh(V, F)
+        po = xatlas.PackOptions()
+        po.texels_per_unit, po.padding, po.resolution, po.bilinear = 1.0 / t, 2, 0, True
+        atlas.generate(pack_options=po)
+        if atlas.atlas_count == 1 and max(atlas.width, atlas.height) <= max_side:
+            break
+        t *= 1.3
+    vmap, Fn, UV = atlas.get_mesh(0)
+    W, H = atlas.width, atlas.height
+    Vn = V[vmap].astype(float)
+    # which face each texel is on
+    pix = UV[Fn] * [W, H]
+    pix[..., 1] = H - pix[..., 1]                          # v up, image rows down
+    fid = np.full((H, W), -1, np.int32)
+    tri = np.round(pix * 16).astype(np.int32)
+    for i in range(len(Fn)):
+        cv2.fillPoly(fid, [tri[i]], int(i), lineType=cv2.LINE_8, shift=4)
+    ys, xs = np.nonzero(fid >= 0)
+    o3d = _o3d()
+    src = o3d.io.read_point_cloud(os.path.expanduser(map_path))
+    C = np.asarray(src.colors) if src.has_colors() else np.full((len(src.points), 3), 0.6)
+    tree = cKDTree(np.asarray(src.points))
+    img = np.zeros((H, W, 3), np.uint8)
+    for s0 in range(0, len(ys), chunk):
+        y, x = ys[s0:s0 + chunk], xs[s0:s0 + chunk]
+        f = fid[y, x]
+        # the texel's place on the surface (barycentric), then its colour
+        a, b, c = pix[f, 0], pix[f, 1], pix[f, 2]
+        v0, v1, v2 = b - a, c - a, np.c_[x + 0.5, y + 0.5] - a
+        d00, d01, d11 = (v0 * v0).sum(1), (v0 * v1).sum(1), (v1 * v1).sum(1)
+        d20, d21 = (v2 * v0).sum(1), (v2 * v1).sum(1)
+        den = d00 * d11 - d01 * d01
+        den = np.where(np.abs(den) > 1e-12, den, 1.0)
+        lb, lc = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
+        lam = np.clip(np.c_[1 - lb - lc, lb, lc], 0, 1)
+        lam /= np.maximum(lam.sum(1, keepdims=True), 1e-12)
+        X = np.einsum("nk,nkd->nd", lam, Vn[Fn[f]])
+        _, idx = tree.query(X, k=k, workers=-1)
+        col = C[idx] if k == 1 else np.median(C[idx], axis=1)
+        img[y, x] = np.clip(col * 255 + 0.5, 0, 255).astype(np.uint8)
+    # spread the colours into the padding, so a seam does not show
+    filled = fid >= 0
+    for _ in range(4):
+        grown = cv2.dilate(img, np.ones((3, 3), np.uint8))
+        ring = cv2.dilate(filled.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool) & ~filled
+        img[ring] = grown[ring]
+        filled |= ring
+    cv2.imwrite(png, img[:, :, ::-1])
+    log.info(f"  texture {png}: {W} x {H}, {t * 100:.1f} cm a texel, {len(ys)} texels on the surface")
+    return Vn, Fn.astype(np.int64), UV.astype(float)
+
+
+def write_textured_ply(path, V, F, UV, png, rgb=None):
+    """A binary PLY with its texture: vertex texture_u/texture_v and face
+    texcoord (both, for Mitsuba, MeshLab and CloudCompare), the png named in
+    a TextureFile comment, next to it."""
+    hdr = ["ply", "format binary_little_endian 1.0", f"comment TextureFile {os.path.basename(png)}",
+           f"element vertex {len(V)}", "property float x", "property float y", "property float z",
+           "property float texture_u", "property float texture_v"]
+    vd = [("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("u", "<f4"), ("v", "<f4")]
+    if rgb is not None:
+        hdr += ["property uchar red", "property uchar green", "property uchar blue"]
+        vd += [("r", "u1"), ("g", "u1"), ("b", "u1")]
+    hdr += [f"element face {len(F)}", "property list uchar int vertex_indices",
+            "property list uchar float texcoord", "end_header"]
+    va = np.zeros(len(V), vd)
+    va["x"], va["y"], va["z"] = V[:, 0], V[:, 1], V[:, 2]
+    va["u"], va["v"] = UV[:, 0], UV[:, 1]
+    if rgb is not None:
+        c = np.clip(np.asarray(rgb) * 255 + 0.5, 0, 255).astype(np.uint8)
+        va["r"], va["g"], va["b"] = c[:, 0], c[:, 1], c[:, 2]
+    fa = np.zeros(len(F), [("n", "u1"), ("i", "<i4", (3,)), ("nt", "u1"), ("t", "<f4", (6,))])
+    fa["n"], fa["i"], fa["nt"] = 3, F, 6
+    fa["t"] = UV[F].reshape(-1, 6)
+    with open(path, "wb") as fh:
+        fh.write(("\n".join(hdr) + "\n").encode())
+        fh.write(va.tobytes())
+        fh.write(fa.tobytes())
+
+
 def crisp_colours(mesh, map_path, subdivide=1, k=5):
     """The mesh split `subdivide` times (each face into four) and every vertex
     given the median colour of the map's k nearest points, at full
@@ -484,7 +582,7 @@ def crisp_colours(mesh, map_path, subdivide=1, k=5):
 def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10,
          ceil=None, ceil_margin=0.10, show=False, subdivide=1, normals=False, ghosts=True,
          min_piece=50.0, objects=True, object_cell=0.012, object_trim=0.03, flat_sigma=0.015,
-         colour_k=5, object_smooth=10, faces=0):
+         colour_k=5, object_smooth=10, faces=0, texture=False, texel=0.01):
     """The mesh step alone: mesh of the map (+ a copy without the ceiling),
     each vertex in the colour of the map's nearest point; written without
     normals unless asked, so a viewer shows the colours unlit."""
@@ -543,7 +641,17 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
     else:
         m.vertex_normals = o3d.utility.Vector3dVector(np.zeros((0, 3)))
         m.triangle_normals = o3d.utility.Vector3dVector(np.zeros((0, 3)))
-    o3d.io.write_triangle_mesh(out, m)
+    tex = None
+    if texture:
+        # the colours in a texture, so few large faces show them sharply
+        png = os.path.splitext(out)[0] + ".png"
+        Vt, Ft, UVt = bake_texture(m, map_path, png, texel, k=colour_k)
+        vmap = cKDTree(np.asarray(m.vertices)).query(Vt)[1]
+        rgb = np.asarray(m.vertex_colors)[vmap] if m.has_vertex_colors() else None
+        write_textured_ply(out, Vt, Ft, UVt, png, rgb)
+        tex = (Vt, Ft, UVt, png, rgb)
+    else:
+        o3d.io.write_triangle_mesh(out, m)
     V = np.asarray(m.vertices)
     text, hc, hn = height_histogram(V[:, 2])
     log.info("height of the mesh (5 cm bins, top first):\n" + text)
@@ -554,6 +662,7 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
               f", {len(V)} vertices, "
               f"{f'each the median colour of its {colour_k} nearest map points' if m.has_vertex_colors() else 'no colour (map has none)'}"
               f"{'' if normals else ', no normals (shown unlit)'}"
+              f"{f', textured ({os.path.basename(tex[3])})' if tex is not None else ''}"
               + (f"\n  simplified from {nfull} to {len(m.triangles)} faces" if faces and nfull > faces else "")
               + (f"\n  mirror ghosts (faces no direct ray from the path reaches) removed: {nghost} faces"
                  if ghosts else "")
@@ -568,7 +677,20 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
         if min_piece > 0 and not objects:
             nc, _ = drop_pieces(nc, Tf, hs, min_piece)      # what hung from the ceiling now floats
         p = os.path.splitext(out)[0] + "_noceil.ply"
-        o3d.io.write_triangle_mesh(p, nc)
+        if tex is not None:
+            # the same texture; the faces of the textured mesh that are not the ceiling
+            Vt, Ft, UVt, png, rgb = tex
+            tm = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(Vt), o3d.utility.Vector3iVector(Ft))
+            gone = (ceiling_faces(tm, Tf, hs) if str(ceil) == "auto"
+                    else Vt[Ft].mean(1)[:, 2] > float(ceil))
+            keepf = Ft[~gone]
+            used = np.unique(keepf)
+            remap = np.full(len(Vt), -1, np.int64)
+            remap[used] = np.arange(len(used))
+            write_textured_ply(p, Vt[used], remap[keepf], UVt[used], png,
+                               None if rgb is None else rgb[used])
+        else:
+            o3d.io.write_triangle_mesh(p, nc)
         report += f"\nno ceiling {p}: {how}, {ngone} faces, removed; {len(nc.triangles)} kept"
         res.update(noceil=p, noceil_faces=len(nc.triangles), ceiling_faces=ngone)
         shown = nc
@@ -993,6 +1115,10 @@ def main():
     me.add_argument("--radio", action="store_true",
                     help="a coarse mesh for radio ray tracing (Sionna RT): 5 cm, gaps up to 0.5 m "
                          "closed, objects coarse, simplified to --faces, ceiling kept; <mesh>_radio.ply")
+    me.add_argument("--texture", action="store_true",
+                    help="bake the colours into a texture (<mesh>.png): sharp on few faces (--radio: on)")
+    me.add_argument("--no-texture", action="store_true", help="--radio without a texture")
+    me.add_argument("--texel", type=float, default=0.01, help="texture: m a texel")
     me.add_argument("--faces", type=int, default=0,
                     help="simplify to about this many faces (quadric; 0: not; --radio: 300000)")
     me.add_argument("--colour-k", type=int, default=5,
@@ -1050,13 +1176,14 @@ def main():
                 a.voxel, a.trim, a.subdivide = 0.05, 0.25, 0
                 a.object_cell, a.object_trim = 0.05, 0.06
                 a.faces = a.faces or 300000
+                a.texture = not a.no_texture
                 a.out = a.out or os.path.splitext(default_mesh_out(a.map))[0] + "_radio.ply"
             map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,
                      trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show,
                      subdivide=a.subdivide, normals=a.normals, ghosts=not a.keep_ghosts,
                      min_piece=a.min_piece, objects=not a.no_objects, object_cell=a.object_cell,
                      object_trim=a.object_trim, colour_k=a.colour_k, object_smooth=a.object_smooth,
-                     faces=a.faces)
+                     faces=a.faces, texture=a.texture, texel=a.texel)
     except ConvertError as e:
         sys.exit(str(e))
 

@@ -226,7 +226,7 @@ tests/               self-tests, no real bag needed
                      floor holes filled (not under a box, a stair opening, over max), walls flat;
                      mirror ghosts and loose pieces (courtyard, floating) out, furniture kept;
                      objects (a ball, a rack of bars) meshed on their own, on them;
-                     --radio: few faces, floor and ball within 5 cm
+                     --radio: few faces, floor and ball within 5 cm, a checker shown by its texture
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
   test_csi_view.py   csi_view: delay profile puts the paths at their delays; figures
   test_replica.py    replica with lidar depth on a synthetic scene
@@ -942,8 +942,14 @@ For radio ray tracing (Sionna RT), a coarse mesh of the same: `mesh <view or
 map> --traj <TUM> --radio` -> `mesh_<...>_radio.ply`: the building at 5 cm
 with gaps up to 0.5 m closed (`--trim 0.25`; a doorway stays open), objects
 as coarse 5 cm shells, mirror ghosts and loose pieces out, the ceiling
-kept, simplified (quadric, planes stay planes) to `--faces` (300,000). Glass
-is not in it (the LiDAR sees through it): a window is a hole.
+kept, simplified (quadric, planes stay planes) to `--faces` (300,000), and
+its colours baked into a texture (`mesh_<...>_radio.png`, 1 cm a texel,
+`--texel`; xatlas unwraps it), each texel the median colour of the map's 5
+nearest points: few large faces then show the map's colours as sharply as
+its points (vertex colours on them fade into patches; `--no-texture`). The
+PLY names the png (`comment TextureFile`) and has the texture coordinates
+per vertex and per face, for Mitsuba / Sionna, MeshLab and CloudCompare.
+Glass is not in it (the LiDAR sees through it): a window is a hole.
 
 A viewing copy of the map as points, its colours as crisp as the map's
 (the mesh's are interpolated):

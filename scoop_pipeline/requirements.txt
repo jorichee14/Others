@@ -6,3 +6,4 @@ mcap-ros2-support
 opencv-contrib-python-headless   # images + cv2.aruco; never alongside another opencv-* package
 ouster-sdk               # Ouster lidar_packets (scoop/ouster.py)
 # rosbags               # .db3 bags, and scripts/test_bag.py
+xatlas                   # mesh UV unwrap: datasets/lod3dgs.py mesh --texture / --radio
