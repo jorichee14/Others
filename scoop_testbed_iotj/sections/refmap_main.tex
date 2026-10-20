@@ -1,33 +1,44 @@
-% Sec. V-A "Reference Map" for main.tex, with the bundle-adjusted and
-% TSDF-fused reference (pass 20261015). To use: replace the body of
-% \subsection{Reference Map} in main.tex (from "The reference map is built"
-% to "...would not be visible to conventional ICP.") with
-% \input{sections/refmap_main}. Full method and equations:
-% supplementary, supp/refmap_method.tex.
+% Sec. V-A "Reference Map" body for main.tex, with the bundle-adjusted and
+% TSDF-fused reference (pass 20261015). \input from main.tex. Full method
+% and equations: supplementary, supp/refmap_method.tex.
 The reference map is built in a dedicated mapping session and held fixed
-afterwards; no recorded run contributes to it. A LiDAR-inertial SLAM
-solution \cite{glim} gives the initial trajectory. It is refined by plane
+afterwards; no recorded run contributes to it. A second, separate mapping
+pass is recorded and processed independently and is used only to
+cross-check the first. A LiDAR-inertial SLAM solution \cite{glim} gives the
+initial trajectory; its poses are stamped \SI{46}{\milli\second} early,
+which, measured against the scans and corrected, removes most of its
+heading error (Table~\ref{tab:glim_vs_ref}). It is refined by plane
 bundle adjustment \cite{balm,hba}: the poses of \SI{1}{\second} keyframes
 are moved jointly so that every planar patch seen from several keyframes is
 as thin as possible, the cost of a patch being the smallest eigenvalue of
 the scatter of its points, with the SLAM solution's relative motion and
 gravity direction kept as soft priors. The scans are then fused into a
 truncated signed distance field \cite{curless1996,vdbfusion} with
-\SI{2}{\centi\metre} cells and a truncation of \SI{8}{\centi\metre}, three
-standard deviations of the spread with which the scans place a wall; the
-map is its zero-level surface, and moving objects are removed by
+\SI{2}{\centi\metre} cells and a truncation of \SI{8}{\centi\metre}, about
+three standard deviations of the spread with which the scans place a wall;
+the map is its zero-level surface, and moving objects are removed by
 free-space carving \cite{dufomap}. Fusion matters as much as the poses: the
-usual union of points keeps every cell a stray point reached, which widened
-walls by \SI{4}{\centi\metre} over the scans that built them, whereas the
-signed distance averages across a surface. Each stage is measured by the
-thickness of the map's planar surfaces (Table~\ref{tab:refmap_stages}):
-from the SLAM solution alone to the reference, walls go from
-\SI{14.3}{\centi\metre} to \todo{} and floors from \SI{3.6}{\centi\metre}
-to \todo{}, and the doubled surfaces left by drift between visits fall
-from 2.0\,\% to \todo{}. Against the reference, the SLAM trajectory's error
-is a heading error of about $0.6^\circ$ that builds within
-\SI{10}{\second} and does not grow further, with an ATE of \todo{}
-(Table~\ref{tab:glim_vs_ref}). Bundle adjustment started from two
-different trajectories reaches the same poses to \SI{0.7}{\centi\metre}
-(median, after alignment) and $0.1^\circ$, so the result is fixed by the
-scans and not by the starting point.
+usual union of points keeps every cell a stray point reached, so its walls
+(\SI{12.7}{\centi\metre}) are thicker than the scans that built them
+(\SI{9.7}{\centi\metre} over the run), whereas the signed distance averages
+across a surface (\SI{7.6}{\centi\metre}). Each stage is measured by the
+thickness of walls as the scans place them (Table~\ref{tab:refmap_stages}):
+over the whole run it goes from \SI{18.8}{\centi\metre} for the SLAM
+solution to \SI{12.0}{\centi\metre} with the time correction and
+\SI{9.7}{\centi\metre} with bundle adjustment, near the
+\SI{6.9}{\centi\metre} the scans of one second reach; the final map's
+walls and floors are \SI{7.6}{\centi\metre} and \SI{1.8}{\centi\metre}
+thick. The board loop closure of the reference, \SI{12.3}{\milli\metre},
+is within twice its detection noise, so no drift is detected over the run.
+
+Scan-to-map registration of every scan against the SLAM map, the usual
+alternative, refines the same input to the same wall consistency
+(\SI{9.6}{\centi\metre} over the run, \SI{6.9}{\centi\metre} at
+\SI{1}{\second}) and agrees with the reference to \SI{1.3}{\centi\metre}
+and $0.15^\circ$ ATE, so the result is fixed by the scans rather than by
+the method. Bundle adjustment is kept as the reference because it keeps
+the SLAM input's smoothness: its pose jitter about a local fit over
+\SI{0.5}{\second} is \SI{0.48}{\milli\metre} against
+\SI{1.60}{\milli\metre} for per-scan registration, and
+\SI{0.05}{\milli\metre} against \SI{0.86}{\milli\metre} while the robot
+stands still, an error every timestamped position inherits.
