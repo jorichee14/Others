@@ -18,6 +18,8 @@
   time    <config>         is GLIM's pose time its scans'? (on time / OFF)
   imu     <config>         is the IMU on the LiDAR's time?
   loop    <config>         loop closure on the boards
+  chain   <config>         is the mapping pass's chain each step once, nothing
+                           stale? (pose-time shift, BA in/out, caches, maps' age)
   smooth  <config>         how smooth each trajectory is: jitter about a local
                            fit, jerk (GLIM, 02b, BA; no bag, no map)
   figures <config>         a figure per step that is done (timing, BA, trajectories,
@@ -42,6 +44,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "analysis"))
 sys.path.insert(0, os.path.join(ROOT, "map_stages"))
 
+import chain                                                             # noqa: E402
 import figures                                                           # noqa: E402
 import maps                                                              # noqa: E402
 import method_figures                                                    # noqa: E402
@@ -246,7 +249,7 @@ COMMANDS = {"map": maps.main_quality, "walls": maps.main_walls, "maps": maps.mai
             "noise": maps.main_noise, "trajs": trajs.main_compare, "time": trajs.main_time,
             "imu": trajs.main_imu, "loop": trajs.main_loop, "report": report,
             "figures": figures.main_figures, "method": method_figures.main_method,
-            "smooth": smooth.main_smooth}
+            "smooth": smooth.main_smooth, "chain": chain.main_chain}
 
 
 def main():
@@ -255,7 +258,9 @@ def main():
         sys.exit(0 if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help") else 2)
     cmd = sys.argv[1]
     sys.argv = ["check.py " + cmd] + sys.argv[2:]          # each command's usage line
-    COMMANDS[cmd](sys.argv[1:])
+    rc = COMMANDS[cmd](sys.argv[1:])
+    if isinstance(rc, int) and not isinstance(rc, bool) and rc:       # a check that failed
+        sys.exit(rc)
 
 
 if __name__ == "__main__":
