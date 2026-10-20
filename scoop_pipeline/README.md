@@ -225,7 +225,8 @@ tests/               self-tests, no real bag needed
                      the map's colours, the ceiling found and cut, the walls kept; view:
                      floor holes filled (not under a box, a stair opening, over max), walls flat;
                      mirror ghosts and loose pieces (courtyard, floating) out, furniture kept;
-                     objects (a ball, a rack of bars) meshed on their own, on them
+                     objects (a ball, a rack of bars) meshed on their own, on them;
+                     --radio: few faces, floor and ball within 5 cm
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
   test_csi_view.py   csi_view: delay profile puts the paths at their delays; figures
   test_replica.py    replica with lidar depth on a synthetic scene
@@ -936,6 +937,13 @@ Poisson for all). Loose pieces go from the points before meshing, so a thing
 on a wall stays with it. The mirror ghosts and loose pieces go as
 in `view` (`--keep-ghosts`, `--min-piece 0` keep them). The `view` copy can be meshed the same way
 (`mesh view_<tag>.ply` -> `mesh_view_<tag>.ply`): walls flat, floor filled.
+
+For radio ray tracing (Sionna RT), a coarse mesh of the same: `mesh <view or
+map> --traj <TUM> --radio` -> `mesh_<...>_radio.ply`: the building at 5 cm
+with gaps up to 0.5 m closed (`--trim 0.25`; a doorway stays open), objects
+as coarse 5 cm shells, mirror ghosts and loose pieces out, the ceiling
+kept, simplified (quadric, planes stay planes) to `--faces` (300,000). Glass
+is not in it (the LiDAR sees through it): a window is a hole.
 
 A viewing copy of the map as points, its colours as crisp as the map's
 (the mesh's are interpolated):

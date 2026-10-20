@@ -487,7 +487,7 @@ def crisp_colours(mesh, map_path, subdivide=1, k=5):
 def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10,
          ceil=None, ceil_margin=0.10, show=False, subdivide=1, normals=False, ghosts=True,
          min_piece=50.0, objects=True, object_cell=0.012, object_trim=0.03, flat_sigma=0.015,
-         colour_k=5, object_smooth=10):
+         colour_k=5, object_smooth=10, faces=0):
     """The mesh step alone: mesh of the map (+ a copy without the ceiling),
     each vertex in the colour of the map's nearest point; written without
     normals unless asked, so a viewer shows the colours unlit."""
@@ -532,6 +532,13 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
     nghost = 0
     if ghosts:
         m, nghost = remove_ghosts(m, Tf)
+    nfull = len(m.triangles)
+    if faces and nfull > faces:
+        # few large faces (a radio scene: flat walls in a handful of
+        # triangles, objects coarse), quadric error so planes stay planes
+        m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
+        m.remove_degenerate_triangles()
+        m.remove_unreferenced_vertices()
     m, _ = crisp_colours(m, map_path, 0, colour_k)
     mstat["faces_kept"] = len(m.triangles)
     if normals:
@@ -550,6 +557,7 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
               f", {len(V)} vertices, "
               f"{f'each the median colour of its {colour_k} nearest map points' if m.has_vertex_colors() else 'no colour (map has none)'}"
               f"{'' if normals else ', no normals (shown unlit)'}"
+              + (f"\n  simplified from {nfull} to {len(m.triangles)} faces" if faces and nfull > faces else "")
               + (f"\n  mirror ghosts (faces no direct ray from the path reaches) removed: {nghost} faces"
                  if ghosts else "")
               + (f"\n  loose pieces (not the building) open to the sky or floating removed: "
@@ -987,6 +995,11 @@ def main():
                     help="objects' faces farther than this from a point removed (m)")
     me.add_argument("--object-smooth", type=int, default=10,
                     help="passes of Taubin smoothing of the objects' mesh (0: none)")
+    me.add_argument("--radio", action="store_true",
+                    help="a coarse mesh for radio ray tracing (Sionna RT): 5 cm, gaps up to 0.5 m "
+                         "closed, objects coarse, simplified to --faces, ceiling kept; <mesh>_radio.ply")
+    me.add_argument("--faces", type=int, default=0,
+                    help="simplify to about this many faces (quadric; 0: not; --radio: 300000)")
     me.add_argument("--colour-k", type=int, default=5,
                     help="each vertex the median colour of this many nearest map points (1: the nearest)")
     me.add_argument("--normals", action="store_true",
@@ -1035,11 +1048,17 @@ def main():
                      max_hole=a.max_hole, roof=a.roof, ghosts=not a.keep_ghosts,
                      min_piece=a.min_piece)
         else:
+            if a.radio:
+                a.voxel, a.trim, a.subdivide = 0.05, 0.25, 0
+                a.object_cell, a.object_trim = 0.05, 0.06
+                a.faces = a.faces or 300000
+                a.out = a.out or os.path.splitext(default_mesh_out(a.map))[0] + "_radio.ply"
             map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,
                      trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show,
                      subdivide=a.subdivide, normals=a.normals, ghosts=not a.keep_ghosts,
                      min_piece=a.min_piece, objects=not a.no_objects, object_cell=a.object_cell,
-                     object_trim=a.object_trim, colour_k=a.colour_k, object_smooth=a.object_smooth)
+                     object_trim=a.object_trim, colour_k=a.colour_k, object_smooth=a.object_smooth,
+                     faces=a.faces)
     except ConvertError as e:
         sys.exit(str(e))
 

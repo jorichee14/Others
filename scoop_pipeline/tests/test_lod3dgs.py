@@ -29,7 +29,8 @@ poses, the strays gone, the walls flat, nothing added outside the room. Then
 the mirror ghosts of a polished floor and wall (under the floor, behind the
 wall: no direct ray from the path reaches them) and a loose 5 m2 sheet removed
 by both mesh and view, the room's own surfaces kept. Then objects (a ball,
-a rack of thin bars) meshed on their own, finer: their faces on them.
+a rack of thin bars) meshed on their own, finer: their faces on them; and
+the radio preset: under 20,000 faces, the floor and the ball within 5 cm.
 
     python scoop_pipeline/tests/test_lod3dgs.py
 """
@@ -321,7 +322,8 @@ def check_objects(tmp):
     u /= np.linalg.norm(u, axis=1, keepdims=True)
     b = ball_c + 0.3 * u
     seen = (np.einsum("ij,kj->ik", u, path) - np.einsum("ij,ij->i", u, b)[:, None] > 0).any(1)
-    pts.append(b[seen])                                        # what a sensor on the path can see of it
+    ball_pts = b[seen]
+    pts.append(ball_pts)                                       # what a sensor on the path can see of it
     bars = [np.array([3.2 + 0.3 * i, 1.5]) for i in range(5)]
     for b in bars:
         t, z = np.meshgrid(np.linspace(0, 2 * np.pi, 7, endpoint=False), g(0.0, 1.2))
@@ -350,7 +352,20 @@ def check_objects(tmp):
         w = np.linalg.norm(V[on, :2] - b, axis=1)
         assert abs(np.median(w) - 0.02) < 0.012 and np.percentile(w, 90) < 0.06, \
             ("bar not meshed on it", b, np.percentile(w, [50, 90]))
-    return fs, f1
+    # the radio preset (as --radio sets it): few faces, the room and the ball still there
+    rr = L.map_mesh(mp, tr, os.path.join(tmp, "o_radio.ply"), voxel=0.05, trim=0.25, subdivide=0,
+                    object_cell=0.05, object_trim=0.06, faces=20000)
+    mr = o3d.io.read_triangle_mesh(rr["out"])
+    assert len(mr.triangles) <= 20000, len(mr.triangles)
+    scene = o3d.t.geometry.RaycastingScene()
+    scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(mr))
+    dist = lambda Q: scene.compute_distance(o3d.core.Tensor(Q.astype(np.float32))).numpy()   # noqa: E731
+    fl = np.c_[rng.uniform(0.3, 5.7, 2000), rng.uniform(0.3, 3.7, 2000), np.zeros(2000)]
+    fl = fl[np.linalg.norm(fl[:, :2] - ball_c[:2], axis=1) > 0.5]
+    assert np.mean(dist(fl) < 0.05) > 0.95, ("radio mesh: floor", np.mean(dist(fl) < 0.05))
+    on_ball = ball_pts[::20]
+    assert np.mean(dist(on_ball) < 0.05) > 0.9, ("radio mesh: ball", np.mean(dist(on_ball) < 0.05))
+    return fs, f1, len(mr.triangles)
 
 
 def main():
@@ -436,9 +451,10 @@ def main():
         gm, gv = check_ghosts(tmp)
         print(f"ok ghosts: mesh {gm['ghost_faces']} ghost faces and {gm['piece_points']} loose points out, "
               f"view {gv['ghost_points']} ghost and {gv['piece_points']} loose points out, the room kept")
-        fs, f1 = check_objects(tmp)
+        fs, f1, nr = check_objects(tmp)
         print(f"ok objects: {100 * fs:.0f} % of the ball's vertices on it meshed on their own "
-              f"({100 * f1:.0f} % with one Poisson), every bar meshed at its radius")
+              f"({100 * f1:.0f} % with one Poisson), every bar meshed at its radius; "
+              f"radio mesh {nr} faces, floor and ball within 5 cm")
         rm = check_mesh(tmp)
         print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
               f"{rm['noceil_faces']} faces without it")
