@@ -388,7 +388,13 @@ def main():
             rb["traj"] = os.path.join(P.reference_dir(), rb["traj"])
         rb["traj"] = os.path.expanduser(rb["traj"])
         if not os.path.exists(rb["traj"]):
-            raise SystemExit("%s: trajectory %s not found" % (rb["name"], rb["traj"]))
+            why = ""
+            if not P.reference:
+                src, af = P.outp(P.dataset.get("traj") or ""), P.anchor_frame()
+                gone = [f for f in (src, af) if not os.path.exists(f)]
+                why = ("; it is made from %s, missing (set aside by clean_pass.py --redo? "
+                       "run_pass.py --from 02_ba makes them)" % " and ".join(gone)) if gone else ""
+            raise SystemExit("%s: trajectory %s not found%s" % (rb["name"], rb["traj"], why))
         robots.append((rb, *robot_poses(rb, rate_hz)))
     if dry:
         print("dry run: %d robots, %d messages" % (
