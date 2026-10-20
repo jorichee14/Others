@@ -4,7 +4,8 @@ and floor, 1 cm of noise): the 8 m and 6 m wall-to-wall distances from
 picks a few cm off the walls (one near the floor, so the floor is in its
 ball), one given on the csv's rows and one through a CloudCompare-style
 picks file; a pick in the air is reported; a map scaled by 1.002 shows
-+2000 ppm.
++2000 ppm; picks alone (no csv) give d1, d2 with their map distances, and
+with --measured their errors.
 
     python tests/test_distances.py
 """
@@ -82,6 +83,21 @@ def main():
             fails.append(f"scaled map: {ppm!r} (want +2000 ppm)")
         else:
             print(f"  ok    scaled map: {ppm}")
+        # picks alone: pairs numbered d1, d2; map distances, then with --measured
+        with open(os.path.join(d, "pairs.txt"), "w") as fh:
+            fh.write("1,0.03,3.0,1.0\n2,7.96,3.1,1.1\n3,4.0,0.02,0.15\n4,4.2,5.97,0.18\n")
+        rc, out = run(os.path.join(d, "map.npy"), "--picks", os.path.join(d, "pairs.txt"))
+        got = {ln.split()[0]: ln.split() for ln in out.splitlines() if ln.split()[:1] in (["d1"], ["d2"])}
+        ok = rc == 0 and all(abs(float(got.get(k, ["", "", "nan"])[2]) - v) < 0.003
+                             for k, v in (("d1", 8.0), ("d2", 6.0)))
+        (print if ok else fails.append)(f"  ok    picks alone: d1, d2 map distances" if ok
+                                        else f"picks alone: {got} rc {rc}\n{out}")
+        rc, out = run(os.path.join(d, "map.npy"), "--picks", os.path.join(d, "pairs.txt"),
+                      "--measured", "8.0,6.0")
+        got = {ln.split()[0]: ln.split() for ln in out.splitlines() if ln.split()[:1] in (["d1"], ["d2"])}
+        ok = rc == 0 and all(abs(float(got.get(k, ["", "", "", "nan"])[3])) < 3.0 for k in ("d1", "d2"))
+        (print if ok else fails.append)("  ok    picks alone with --measured: errors within 3 mm" if ok
+                                        else f"picks with --measured: {got} rc {rc}\n{out}")
     finally:
         shutil.rmtree(d, ignore_errors=True)
     for f in fails:

@@ -966,10 +966,18 @@ def main_scans(argv=None):
 DIST_DOC = r'''Control distances: wall-to-wall lengths measured on site with a laser
 meter, against the map.
 
+  python3 check.py distances <map.pcd> --picks picks.txt [--measured 6.214,4.882,...]
   python3 check.py distances <map.pcd> <distances.csv> [--picks picks.txt]
       [--radius 0.3]
 
-distances.csv, one row per distance (a header row is fine):
+With picks alone: the wall pairs picked in the map, two points per pair
+(CloudCompare's picked points saved as ASCII; the last three numbers of each
+line are taken as x y z), named d1, d2, ... in the order picked. Without
+--measured each pair's map distance is printed, to match the pairs to the
+meter's readings; --measured gives those readings in metres, one per pair in
+the same order.
+
+distances.csv (the other way, with names), one row per distance (a header row is fine):
   name, measured_m [, ax, ay, az, bx, by, bz]
 with the two walls' picked points (the map's frame) on the row, or without
 them from --picks: CloudCompare's picked points saved as ASCII, two per
@@ -1062,7 +1070,6 @@ def wall_distance(A, B):
 def read_distances(path, picks=None):
     """[(name, measured m, a xyz, b xyz)] from the csv (and the picks file)."""
     import csv
-    import re
     rows = []
     with open(path) as fh:
         for row in csv.reader(fh):
@@ -1074,12 +1081,7 @@ def read_distances(path, picks=None):
             except ValueError:
                 continue                  # the header
             rows.append((row[0], vals))
-    pts = []
-    if picks:
-        for ln in open(picks):
-            nums = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", ln)
-            if len(nums) >= 3:
-                pts.append([float(x) for x in nums[-3:]])
+    pts = read_picks(picks) if picks else []
     out = []
     for i, (name, vals) in enumerate(rows):
         if len(vals) >= 7:
@@ -1093,15 +1095,47 @@ def read_distances(path, picks=None):
     return out
 
 
+def read_picks(path):
+    """The picked points (x y z: the last three numbers of each line)."""
+    import re
+    pts = []
+    for ln in open(path):
+        nums = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", ln)
+        if len(nums) >= 3:
+            pts.append([float(x) for x in nums[-3:]])
+    return pts
+
+
+def pick_pairs(picks, measured=None):
+    """[(name, measured m or None, a xyz, b xyz)] from the picks alone: d1, d2, ..."""
+    pts = read_picks(picks)
+    if len(pts) % 2:
+        raise SystemExit(f"{picks}: {len(pts)} points, an odd number: two per distance (A, then B)")
+    n = len(pts) // 2
+    if measured is not None and len(measured) != n:
+        raise SystemExit(f"--measured has {len(measured)} values for {n} picked pairs")
+    return [(f"d{i + 1}", None if measured is None else measured[i],
+             np.array(pts[2 * i], float), np.array(pts[2 * i + 1], float)) for i in range(n)]
+
+
 def main_distances(argv=None):
     ap = argparse.ArgumentParser(description=DIST_DOC,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("map")
-    ap.add_argument("distances")
+    ap.add_argument("distances", nargs="?", help="csv with names (optional: picks alone number the pairs)")
     ap.add_argument("--picks")
+    ap.add_argument("--measured", help="the meter's readings, m, one per picked pair: 6.214,4.882,...")
     ap.add_argument("--radius", type=float, default=0.3)
     a = ap.parse_args(argv)
-    rows = read_distances(a.distances, a.picks)
+    if a.distances:
+        rows = read_distances(a.distances, a.picks)
+    elif a.picks:
+        measured = None
+        if a.measured:
+            measured = [float(x) for x in a.measured.replace(",", " ").split()]
+        rows = pick_pairs(a.picks, measured)
+    else:
+        ap.error("give --picks (and --measured), or a distances csv")
     P = load(a.map)
     tree = cKDTree(P)
     print(f"{a.map}: {len(P)} points; {len(rows)} control distances\n")
@@ -1109,20 +1143,26 @@ def main_distances(argv=None):
           f"{'angle':>7s}{'walls cm':>11s}   flags")
     meas, mapd = [], []
     for name, m, pa, pb in rows:
+        ms = "-" if m is None else f"{m:.3f}"
         A, B = wall_plane(tree, P, pa, a.radius), wall_plane(tree, P, pb, a.radius)
         if A is None or B is None:
             which = " and ".join(w for w, x in (("A", A), ("B", B)) if x is None)
-            print(f"  {name:14s}{m:11.3f}{'-':>10s}{'':10s}{'':7s}{'':7s}{'':11s}   "
+            print(f"  {name:14s}{ms:>11s}{'-':>10s}{'':10s}{'':7s}{'':7s}{'':11s}   "
                   f"no flat wall at {which}'s pick")
             continue
         d, ang = wall_distance(A, B)
-        err = (d - m) * 1000
         flag = "walls not parallel" if ang > 2.0 else ""
-        print(f"  {name:14s}{m:11.3f}{d:10.3f}{err:+10.1f}{err / m:+7.2f}{ang:6.1f}d"
+        err = "" if m is None else f"{(d - m) * 1000:+10.1f}{(d - m) * 1000 / m:+7.2f}"
+        print(f"  {name:14s}{ms:>11s}{d:10.3f}{err:17s}{ang:6.1f}d"
               f"{A[2] * 100:5.1f}/{B[2] * 100:<4.1f}   {flag}")
-        if ang <= 2.0:
+        if m is not None and ang <= 2.0:
             meas.append(m)
             mapd.append(d)
+    if all(m is None for _, m, _, _ in rows):
+        print("\nmap distances only: give the meter's readings in the same order with "
+              "--measured 6.214,4.882,...")
+        print("(walls: each wall's thickness in the map, p95-p5, around its pick)")
+        return
     if not meas:
         raise SystemExit("\nno distance measured: check the picks (the map's frame, on the walls)")
     meas, mapd = np.array(meas), np.array(mapd)
