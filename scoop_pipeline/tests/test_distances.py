@@ -7,7 +7,7 @@ picks file; a pick in the air is reported; a map scaled by 1.002 shows
 +2000 ppm; picks alone (no csv) give d1, d2 with their map distances, and
 with --measured their errors; --ask takes the readings typed in and
 saves them with the picks (re-run from that csv: the same errors); the
-floor plan of --click: clicks a few cm off the walls snap and fit them, a
+floor plan of --click: clicks up to 0.4 m off the walls find them, a
 click in an empty room is refused, u undoes, and the clicked pairs give the
 same distances through --click.
 
@@ -126,12 +126,12 @@ def main():
         S = P[(P[:, 2] >= 0.3) & (P[:, 2] <= 1.2)]
         fig, ax = plt.subplots()
         pk = maps.PlanPicker(ax, P, cKDTree(P), S)
-        msgs = [pk.click(0.06, 3.0), pk.click(4.0, 3.0), pk.click(7.93, 3.1),
-                pk.click(4.0, 0.05), pk.undo(), pk.click(4.0, 0.05), pk.click(4.2, 5.95)]
+        msgs = [pk.click(0.35, 3.0), pk.click(4.0, 3.0), pk.click(7.6, 3.1),
+                pk.click(4.0, 0.3), pk.undo(), pk.click(4.0, 0.3), pk.click(4.2, 5.62)]
         plt.close(fig)
-        want = ["wall A", "no map point", "d1 = 8.00", "wall A", "undone", "wall A", "d2 = 6.00"]
+        want = ["wall A", "no straight wall", "d1 = 8.00", "wall A", "undone", "wall A", "d2 = 6.00"]
         ok = all(w in m for w, m in zip(want, msgs)) and len(pk.points()) == 4
-        (print if ok else fails.append)("  ok    floor plan: clicks snap to the walls, empty space refused, undo"
+        (print if ok else fails.append)("  ok    floor plan: clicks 0.4 m off the walls find them, empty space refused, undo"
                                         if ok else f"floor plan: {msgs}")
         real, real_in, real_out = maps.click_plan, sys.stdin, sys.stdout
         maps.click_plan = lambda *a, **k: pk.points()

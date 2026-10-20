@@ -1132,44 +1132,69 @@ def pick_pairs(picks, measured=None):
              np.array(pts[2 * i], float), np.array(pts[2 * i + 1], float)) for i in range(n)]
 
 
-class PlanPicker:
-    """The floor-plan clicks of --click: each snaps to the nearest map point
-    of the slice, its wall is fitted at once; pairs (A, B) give distances."""
+def wall_near(S, stree, x, y, r=0.5):
+    """The straight wall nearest a floor-plan click at (x, y): RANSAC on the
+    slice's points within r (in plan) for a vertical plane passing within
+    0.3 m of the click, refitted by least squares to its points within 3 cm
+    along 1 m either side of the click.
+    (centre, unit normal, thickness m, points, the click on the wall) or None."""
+    idx = stree.query_ball_point([x, y], r)
+    if len(idx) < MIN_PTS:
+        return None
+    Q = S[idx]
+    q = np.array([x, y, float(np.median(Q[:, 2]))])
+    rng = np.random.default_rng(0)
+    w = _ransac(Q, rng, lambda a, n: abs(n[2]) < 0.17 and abs((q - a)[:2] @ n[:2]) < 0.3, tries=400)
+    if w is None:
+        return None
+    # the wall's points along 1 m of it either side of the click (a long
+    # base for its direction), refitted until the 3 cm band no longer moves
+    W = S[stree.query_ball_point([x, y], 1.0)]
+    c, n = w
+    for _ in range(4):
+        Q = W[np.abs((W - c) @ n) < 0.03]
+        if len(Q) < MIN_PTS:
+            return None
+        c = Q.mean(0)
+        n = np.linalg.svd(Q - c, full_matrices=False)[2][2]
+    p = q - n * ((q - c) @ n)
+    return c, n, spread((Q - c) @ n), len(Q), p
 
-    def __init__(self, ax, P, tree, S, radius=0.3):
-        self.ax, self.P, self.tree, self.radius = ax, P, tree, radius
+
+class PlanPicker:
+    """The floor-plan clicks of --click: each finds the straight wall nearest
+    it (within r); pairs (A, B) give distances."""
+
+    def __init__(self, ax, P, tree, S, radius=0.3, r=0.5):
+        self.ax, self.P, self.tree, self.radius, self.r = ax, P, tree, radius, r
         self.S, self.stree = S, cKDTree(S[:, :2])
-        self.picks, self.artists = [], []           # (xyz, wall), [artists] per click
+        self.picks, self.artists = [], []           # (point on the wall, wall), [artists] per click
 
     def click(self, x, y):
-        """A click at (x, y): a message; the pick is kept only on a flat wall."""
-        dd, i = self.stree.query([x, y])
-        if dd > 0.25:
-            return "no map point near the click: click on a wall line"
-        p = self.S[i]
-        w = wall_plane(self.tree, self.P, p, self.radius)
+        """A click at (x, y): a message; the pick is kept only near a straight wall."""
+        w = wall_near(self.S, self.stree, x, y, self.r)
         if w is None:
-            self.ax.plot(p[0], p[1], "x", color="#d03b3b", ms=9, mew=2)
-            return "no flat wall there: click again on a straight wall"
-        c, n = w[0], w[1]
+            self.ax.plot(x, y, "x", color="#d03b3b", ms=10, mew=2)
+            return f"no straight wall within {self.r:g} m of the click: click closer to a wall line"
+        n, p = w[1], w[4]
         t = np.cross(n, [0, 0, 1.0])
         t = t / (np.linalg.norm(t) or 1)
-        seg = np.array([c - 0.5 * t, c + 0.5 * t])
-        art = self.ax.plot(seg[:, 0], seg[:, 1], color="#1baf7a", lw=3)
-        art += self.ax.plot(p[0], p[1], "o", color="#1baf7a", ms=5)
+        seg = np.array([p - 0.6 * t, p + 0.6 * t])
+        art = self.ax.plot(seg[:, 0], seg[:, 1], color="#1baf7a", lw=4)
+        art += self.ax.plot(p[0], p[1], "o", color="#1baf7a", ms=7)
         self.picks.append((p, w))
         k = len(self.picks)
         if k % 2:
             self.artists.append(art)
-            return f"d{k // 2 + 1}: wall A fitted ({w[2] * 100:.1f} cm thick); now click wall B"
+            return f"d{k // 2 + 1}: wall A found ({w[2] * 100:.1f} cm thick); now click wall B"
         A, B = self.picks[-2][1], w
         d, ang = wall_distance(A, B)
+        pa = self.picks[-2][0]
         na = A[1] if (B[0] - A[0]) @ A[1] > 0 else -A[1]
-        q0 = A[0]
-        q1 = q0 + na * ((B[0] - A[0]) @ na)
-        art += self.ax.plot([q0[0], q1[0]], [q0[1], q1[1]], color="#eb6834", lw=1.5)
-        art.append(self.ax.text((q0[0] + q1[0]) / 2, (q0[1] + q1[1]) / 2, f" d{k // 2}  {d:.3f} m",
-                                color="#b4501f", fontsize=11, fontweight="bold"))
+        q1 = pa + na * ((B[0] - pa) @ na)
+        art += self.ax.plot([pa[0], q1[0]], [pa[1], q1[1]], color="#eb6834", lw=2)
+        art.append(self.ax.text((pa[0] + q1[0]) / 2, (pa[1] + q1[1]) / 2, f" d{k // 2}  {d:.3f} m",
+                                color="#b4501f", fontsize=12, fontweight="bold"))
         self.artists.append(art)
         warn = "  (walls not parallel: left out)" if ang > 2.0 else ""
         return f"d{k // 2} = {d:.3f} m, walls {ang:.1f} deg apart{warn}; next: wall A of d{k // 2 + 1}"
@@ -1214,8 +1239,12 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03):
 
     def on_click(ev):
         tb = getattr(fig.canvas, "toolbar", None)
-        if ev.inaxes is ax and ev.button == 1 and not (tb is not None and tb.mode):
-            say(pk.click(ev.xdata, ev.ydata))
+        if ev.inaxes is not ax or ev.button != 1:
+            return
+        if tb is not None and tb.mode:
+            say("click ignored: the toolbar's pan or zoom is on; click its button again to turn it off")
+            return
+        say(pk.click(ev.xdata, ev.ydata))
 
     def on_key(ev):
         if ev.key == "u":
