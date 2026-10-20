@@ -1006,12 +1006,13 @@ pick that passes the pick and holds the most of them (RANSAC); other
 surfaces in the ball (a floor, a door frame) and the strip where they meet
 the wall are left out, so they cannot tilt it; then
 
-  map distance  from A's plane to B's centre along A's normal and from B's
-                to A's along B's, averaged: the perpendicular distance a
-                laser meter reads at its minimum
+  map distance  the meter's line: from A's pick (put on A's plane) along
+                A's normal to B's plane, as a meter held flat on wall A
+                reads; for parallel walls the same anywhere along them
   error         map - measured, mm, and per metre of distance
-  flags         the two walls not parallel (> 2 deg: the measured line was
-                not perpendicular to both), or a pick on no flat wall
+  flags         the two walls not parallel (> 2 deg: the distance changes by
+                tan(angle) per metre along A, so A's pick must be where the
+                meter was; left out of the totals), or a pick on no flat wall
 
 At the end: the mean and RMS error and the scale that fits them all
 (map = s x measured), to set against the meter's own 1.5-3 mm.
@@ -1073,13 +1074,25 @@ def wall_plane(tree, P, p, r, seed=0):
     return c, n, spread((Q - c) @ n), len(Q)
 
 
-def wall_distance(A, B):
-    """(distance m, angle between the walls deg) of two wall_plane()s."""
+def wall_distance(A, B, pa=None):
+    """(distance m, angle between the walls deg) of two wall_plane()s: the
+    laser meter's line, from pa (the meter on wall A, put on A's plane;
+    A's centre without it) along A's normal to B's plane. For parallel walls
+    that is the walls' distance anywhere; for walls an angle apart it changes
+    by tan(angle) per metre along A, so pa must be where the meter was."""
     (ca, na, *_), (cb, nb, *_) = A, B
-    na = na if (cb - ca) @ na > 0 else -na
-    nb = nb if (ca - cb) @ nb > 0 else -nb
-    dist = 0.5 * ((cb - ca) @ na + (ca - cb) @ nb)
-    return float(dist), float(np.degrees(np.arccos(min(1.0, abs(na @ nb)))))
+    pa = ca if pa is None else np.asarray(pa, float) - na * ((np.asarray(pa, float) - ca) @ na)
+    na = na if (cb - pa) @ na > 0 else -na
+    cos = float(na @ nb)
+    ang = float(np.degrees(np.arccos(min(1.0, abs(cos)))))
+    if abs(cos) < 0.2:
+        return None, ang
+    return float(((cb - pa) @ nb) / cos), ang
+
+
+def per_metre(ang):
+    """cm the laser line changes per metre along wall A, walls ang deg apart."""
+    return 100 * np.tan(np.radians(ang))
 
 
 def read_distances(path, picks=None):
@@ -1189,15 +1202,21 @@ class PlanPicker:
             self.artists.append(art)
             return f"d{k // 2 + 1}: wall A found ({w[2] * 100:.1f} cm thick); now click wall B"
         A, B = self.picks[-2][1], w
-        d, ang = wall_distance(A, B)
         pa = self.picks[-2][0]
-        na = A[1] if (B[0] - A[0]) @ A[1] > 0 else -A[1]
-        q1 = pa + na * ((B[0] - pa) @ na)
+        d, ang = wall_distance(A, B, pa)
+        if d is None:
+            self.picks.pop()
+            for a in art:
+                a.remove()
+            return f"walls {ang:.0f} deg apart: not facing each other; click wall B again"
+        na = A[1] if (B[0] - pa) @ A[1] > 0 else -A[1]
+        q1 = pa + na * d
         art += self.ax.plot([pa[0], q1[0]], [pa[1], q1[1]], color="#eb6834", lw=2)
         art.append(self.ax.text((pa[0] + q1[0]) / 2, (pa[1] + q1[1]) / 2, f" d{k // 2}  {d:.3f} m",
                                 color="#b4501f", fontsize=12, fontweight="bold"))
         self.artists.append(art)
-        warn = "  (walls not parallel: left out)" if ang > 2.0 else ""
+        warn = (f"  (not parallel: {per_metre(ang):.1f} cm per m along A, so click A where the meter "
+                "was; left out of the totals)") if ang > 2.0 else ""
         return f"d{k // 2} = {d:.3f} m, walls {ang:.1f} deg apart{warn}; next: wall A of d{k // 2 + 1}"
 
     def undo(self):
@@ -1299,7 +1318,7 @@ def _distance_rows(tree, P, rows, radius):
     out = []
     for name, m, pa, pb in rows:
         A, B = wall_plane(tree, P, pa, radius), wall_plane(tree, P, pb, radius)
-        d, ang = wall_distance(A, B) if A is not None and B is not None else (None, None)
+        d, ang = wall_distance(A, B, pa) if A is not None and B is not None else (None, None)
         out.append([name, m, pa, pb, A, B, d, ang])
     return out
 
@@ -1315,7 +1334,8 @@ def _distance_table(res):
             continue
         err = "" if m is None else f"{(d - m) * 1000:+10.1f}{(d - m) * 1000 / m:+7.2f}"
         print(f"  {name:14s}{ms:>11s}{d:10.3f}{err:17s}{ang:6.1f}d"
-              f"{A[2] * 100:5.1f}/{B[2] * 100:<4.1f}   {'walls not parallel' if ang > 2.0 else ''}")
+              f"{A[2] * 100:5.1f}/{B[2] * 100:<4.1f}   "
+              f"{f'not parallel: {per_metre(ang):.1f} cm per m along A' if ang > 2.0 else ''}")
 
 
 def main_distances(argv=None):
