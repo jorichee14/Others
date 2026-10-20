@@ -104,13 +104,21 @@ def main():
         if rc:
             f.append("--only finalize: " + out[-1500:])
         else:
-            tp = sbag.open_bag(merged).topics()
+            final = merged + "_final"
+            if os.path.exists(merged) or not os.path.isdir(final):
+                f.append("finalize: %s not renamed %s" % (merged, final))
+                final = merged
+            tp = sbag.open_bag(final).topics()
             for t in ("/mobile_1/global_pose", "/mobile_1/local_pose", "/tf", "/tf_static"):
                 if t not in tp:
-                    f.append("finalize: %s missing from the merged bag" % t)
-            if os.path.exists(merged + "_tf"):
-                f.append("finalize left %s_tf behind" % merged)
-            tree = read_tf_and_info(merged, [], want_tf=True, verbose=False)[1]
+                    f.append("finalize: %s missing from the final bag" % t)
+            if os.path.exists(final + "_tf"):
+                f.append("finalize left %s_tf behind" % final)
+            sys.path.insert(0, os.path.join(ROOT, "map_stages"))
+            from pipeline_common import load_pipeline as _lp
+            if os.path.normpath(_lp(cfg).dataset["bag"]) != final:
+                f.append("dataset.bag is not read as %s once finalized" % final)
+            tree = read_tf_and_info(final, [], want_tf=True, verbose=False)[1]
             for t in stamps[::9]:
                 T.close(tree.lookup("map", "os_sensor", T.T0 + t), T.true_cam(t) @ T_cam_sensor,
                         "finalize: os_sensor at %.1f s" % t, f)
@@ -118,6 +126,17 @@ def main():
             line = next((ln for ln in out.splitlines() if ln.strip().startswith("finalize")), "")
             if "done" not in line:
                 f.append("--status after finalize: %r" % line)
+            # again on the final bag: still one bag, <merged>_final
+            rc, out = runner(raw, "--config", cfg, "--only", "finalize")
+            if rc or not os.path.isdir(final) or os.path.exists(final + "_final") \
+                    or os.path.exists(final + "_tf"):
+                f.append("finalize again: " + out[-1500:])
+            # a bag finalized in place before (has the TF, newer than 10's): only renamed
+            os.rename(final, merged)
+            os.utime(os.path.join(merged, "metadata.yaml"))
+            rc, out = runner(raw, "--config", cfg, "--only", "finalize")
+            if rc or "renamed" not in out or not os.path.isdir(final) or os.path.exists(merged):
+                f.append("finalize of a bag finalized in place: " + out[-1500:])
 
         rc, out = runner(os.path.join(data, "raw", "20260101", "mapping_A"), "--config",
                          os.path.join(stages, "pipeline_config.json"), "--dry", "--from", "02_ba")

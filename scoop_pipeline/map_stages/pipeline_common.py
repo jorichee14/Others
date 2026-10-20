@@ -599,6 +599,19 @@ ROUTES = (
 )
 
 
+FINAL = "_final"
+
+
+def final_bag(path):
+    """A dataset bag, or the one run_pass.py's finalize made of it and renamed
+    <bag>_final (with the pipeline's TF and poses in it) once the bag itself
+    is gone."""
+    p = os.path.normpath(os.path.expanduser(path))
+    if not os.path.exists(p) and not p.endswith(FINAL) and os.path.exists(p + FINAL):
+        return p + FINAL
+    return p
+
+
 def processed_dir_for(path):
     """data/{raw,work,processed}/<date>/<pass>/... -> data/processed/<date>/<pass>.
     The path is not resolved, so a data folder reached through a symlink stays
@@ -625,6 +638,8 @@ class Pipeline:
         for k in ("bag", "traj", "calib_json", "out_dir", "processed"):
             if isinstance(d.get(k), str) and d[k]:
                 d[k] = os.path.expanduser(d[k])
+        if d.get("bag"):
+            d["bag"] = final_bag(d["bag"])
         self.machine = d.get("machine") or topic_machine(
             d.get("points_topic") or DEFAULT_TOPICS["points_topic"])
         if d.get("out_dir"):                 # the old layout: one flat folder

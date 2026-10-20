@@ -44,7 +44,9 @@ Steps (a step whose output is there already is skipped):
     08_tfs        08_emit_tfs.py             frames/publish_tfs_<tag>.sh
     09_cloud      09_build_coop_cloud.py     a run's cloud in the map (runs only)
     10_poses      10_publish_poses.py        bags/<tag>_best_poses: poses + complete TF
-    finalize      the merged bag again, with 10's /tf, /tf_static and poses in it
+    finalize      the merged bag again, with 10's /tf, /tf_static and poses in it,
+                  as <merged bag>_final in its place (the stages read it for the
+                  bag from then on)
                   (built next to it, then put in its place)
     comms         processing/comms_tables.py: NTP, Wi-Fi, ping, iperf, CSI tables with
                   each machine's position (processed/<date>/<pass>/comms/)
@@ -145,9 +147,11 @@ def plan_steps(raw, cfg):
     """[(step, applies, done, what, command or callable)]"""
     import pass_tf
     steps = []
+    from pipeline_common import final_bag
     mb = merged_bag(raw)
+    mb = final_bag(mb) if mb else mb                    # finalize renames it <merged>_final
     P = pass_tf.load_pipeline(cfg) if cfg else None
-    db = os.path.normpath(os.path.expanduser(P.dataset["bag"])) if P else None
+    db = os.path.normpath(P.dataset["bag"]) if P else None           # <bag>_final once finalized
     # one robot alone: the config reads its own processed bag in its machine
     # folder (work/<date>/<pass>/<machine>/), and there is nothing to merge
     own = bool(P and os.path.basename(os.path.dirname(db)) == P.machine)
@@ -268,25 +272,46 @@ def comms_step(bag, cfg):
             [cmd + (["--config", cfg] if cfg else [])])
 
 
-def finalized(merged, poses):
-    """The merged bag is newer than 10's bag and has the tree from map."""
+def final_name(merged):
+    """<bag>_final: the name finalize gives the bag it makes."""
+    from pipeline_common import FINAL
+    m = os.path.normpath(merged)
+    return m if m.endswith(FINAL) else m + FINAL
+
+
+def has_poses(merged, poses):
+    """The bag is newer than 10's bag and has the tree from map."""
     meta = lambda b: os.path.join(b, "metadata.yaml")                # noqa: E731
     return (os.path.exists(meta(merged)) and os.path.exists(meta(poses))
             and os.path.getmtime(meta(merged)) > os.path.getmtime(meta(poses))
             and has_map_tf(merged))
 
 
+def finalized(merged, poses):
+    """<bag>_final is there, with 10's TF and poses."""
+    return has_poses(final_name(merged), poses)
+
+
 def finalize(merged, poses, dry):
-    """merged + 10's bag (its /tf, /tf_static and pose topics) -> merged."""
+    """merged + 10's bag (its /tf, /tf_static and pose topics) -> <merged>_final,
+    which replaces merged (one copy on disk; the stages read <bag>_final when
+    dataset.bag is gone). A bag finalized in place before has them already:
+    it is only renamed."""
     from scoop import bag, merge
+    final = final_name(merged)
     if not os.path.isdir(poses):
         if dry:
-            print("  %s + %s (once 10_poses wrote it) -> in its place" % (merged, poses))
+            print("  %s + %s (once 10_poses wrote it) -> %s" % (merged, poses, final))
             return
         raise SystemExit("finalize: no %s (run 10_poses)" % poses)
+    if merged != final and has_poses(merged, poses) and not os.path.exists(final):
+        print("  %s has 10's TF and poses already -> renamed %s" % (merged, final))
+        if not dry:
+            os.rename(merged, final)
+        return
     tp = sorted(bag.open_bag(poses).topics())
-    new = merged.rstrip("/") + "_tf"
-    print("  %s + %s (%s) -> %s, then in its place" % (merged, poses, ", ".join(tp), new))
+    new = final + "_tf"
+    print("  %s + %s (%s) -> %s, then %s" % (merged, poses, ", ".join(tp), new, final))
     if dry:
         return
     if os.path.exists(new):
@@ -298,8 +323,9 @@ def finalize(merged, poses, dry):
                          % (size / 1e9 + merge.MIN_FREE_GB, free / 1e9))
     merge.merge_bags([merged, poses], new, source={t: 1 for t in tp})
     shutil.rmtree(merged)
-    os.rename(new, merged)
-    print("  %s now has the complete TF and the poses" % merged)
+    os.rename(new, final)
+    print("  %s: the dataset with the complete TF and the poses (%s is gone; the stages "
+          "read %s for it)" % (final, os.path.basename(merged), os.path.basename(final)))
 
 
 def run_step(name, cmds, dry):
