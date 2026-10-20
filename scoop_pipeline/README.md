@@ -915,7 +915,12 @@ writes `mapping/mesh_<tag>.ply` in the map's colours (colorize's) and
 `mesh_<tag>_noceil.ply`, a viewing copy without the ceiling: every face
 above the highest peak of the height histogram (printed) less
 `--ceil-margin` (0.10 m), or above `--ceil Z`. `--voxel 0.04` meshes a
-quarter of the points for a quick look (Poisson depth one less).
+quarter of the points for a quick look (Poisson depth one less). Every face
+is split in four (`--subdivide 1`) and every vertex takes the colour of the
+map's nearest point (Poisson's own colours are averages, blurred and
+greyed); the mesh is written without normals (`--normals` to keep them), so
+a viewer shows its colours unlit. The `view` copy can be meshed the same way
+(`mesh view_<tag>.ply` -> `mesh_view_<tag>.ply`): walls flat, floor filled.
 
 A viewing copy of the map as points, its colours as crisp as the map's
 (the mesh's are interpolated):

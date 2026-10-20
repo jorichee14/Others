@@ -14,7 +14,8 @@ LOD-3DGS reads it (warped grey, alpha where there is depth); remove the
 surface Poisson puts over the open top (no starting point above the walls,
 every point near the map); give the points on each surface its colour.
 Then `mesh` on the room with a ceiling, the map coloured: the mesh in the
-map's colours, named after the map, and its copy without the ceiling (auto:
+map's colours (each vertex its nearest map point's, no normals so it is
+shown unlit), named after the map, and its copy without the ceiling (auto:
 the highest height peak) keeping the walls. Then `view` on an 8 x 6 m room
 with noisy walls and stray points, the floor missing in four places: a 1 m2
 hole (filled, at the floor's height and colour), a 5 m2 hole over --max-hole
@@ -132,6 +133,10 @@ def check_mesh(tmp):
     m = o3d.io.read_triangle_mesh(r["out"])
     V, C = np.asarray(m.vertices), np.asarray(m.vertex_colors)
     assert r["coloured"] and len(C) == len(V)
+    assert not m.has_vertex_normals(), "normals written: viewers would light (grey) the colours"
+    # every vertex in the colour of its nearest map point, not an average of several
+    _, i = cKDTree(np.asarray(pc.points)).query(V)
+    assert np.abs(C - np.asarray(pc.colors)[i]).max() < 1.5 / 255
     top = V[:, 2] > ROOM[2] - 0.02
     assert top.sum() > 1000, top.sum()
     assert np.abs(np.median(C[top], 0) * 255 - [200, 120, 240][::-1]).max() < 15

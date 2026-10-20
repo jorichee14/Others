@@ -217,24 +217,49 @@ def default_mesh_out(map_path):
     stem = os.path.splitext(name)[0]
     if stem.startswith("map_final_"):
         return os.path.join(d, "mesh_" + stem[len("map_final_"):] + ".ply")
+    if stem.startswith("view_"):
+        return os.path.join(d, "mesh_" + stem + ".ply")
     return os.path.join(d, stem + "_mesh.ply")
 
 
+def crisp_colours(mesh, map_path, subdivide=1):
+    """The mesh split `subdivide` times (each face into four) and every vertex
+    given the colour of the map's nearest point, at full resolution: Poisson
+    averages the thinned map's colours, which blurs and greys them."""
+    o3d = _o3d()
+    if subdivide > 0:
+        mesh = mesh.subdivide_midpoint(number_of_iterations=int(subdivide))
+    src = o3d.io.read_point_cloud(os.path.expanduser(map_path))
+    if not src.has_colors():
+        return mesh, False
+    _, idx = cKDTree(np.asarray(src.points)).query(np.asarray(mesh.vertices), workers=-1)
+    mesh.vertex_colors = o3d.utility.Vector3dVector(np.asarray(src.colors)[idx])
+    return mesh, True
+
+
 def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10,
-         ceil=None, ceil_margin=0.10, show=False):
-    """The mesh step alone: mesh of the map (+ a copy without the ceiling)."""
+         ceil=None, ceil_margin=0.10, show=False, subdivide=1, normals=False):
+    """The mesh step alone: mesh of the map (+ a copy without the ceiling),
+    each vertex in the colour of the map's nearest point; written without
+    normals unless asked, so a viewer shows the colours unlit."""
     o3d = _o3d()
     out = out or default_mesh_out(map_path)
     centres = read_tum_positions(traj)
     m, mstat = build_mesh(map_path, centres, voxel, poisson_depth, trim)
+    m, _ = crisp_colours(m, map_path, subdivide)
+    mstat["faces_kept"] = len(m.triangles)
+    if not normals:
+        m.vertex_normals = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+        m.triangle_normals = o3d.utility.Vector3dVector(np.zeros((0, 3)))
     o3d.io.write_triangle_mesh(out, m)
     V = np.asarray(m.vertices)
     text, hc, hn = height_histogram(V[:, 2])
     log.info("height of the mesh (5 cm bins, top first):\n" + text)
     res = {"out": out, "vertices": len(V), "coloured": m.has_vertex_colors(), **mstat}
-    report = (f"mesh {out}: {mstat['faces_kept']} faces ({mstat['faces']} before the "
-              f"{trim} m trim), {len(V)} vertices, "
-              f"{'coloured from the map' if m.has_vertex_colors() else 'no colour (map has none)'}")
+    report = (f"mesh {out}: {mstat['faces_kept']} faces ({mstat['faces']} from Poisson before the "
+              f"{trim} m trim{f', split {subdivide}x' if subdivide else ''}), {len(V)} vertices, "
+              f"{'each in its nearest map point colour' if m.has_vertex_colors() else 'no colour (map has none)'}"
+              f"{'' if normals else ', no normals (shown unlit)'}")
     shown = m
     if ceil is not None:
         if str(ceil) == "auto":
@@ -625,6 +650,10 @@ def main():
     me.add_argument("--ceil-margin", type=float, default=0.10,
                     help="[auto] cut this far below the ceiling peak (m)")
     me.add_argument("--show", action="store_true", help="open it in an Open3D window")
+    me.add_argument("--subdivide", type=int, default=1,
+                    help="split every face into four this many times before colouring (finer colour)")
+    me.add_argument("--normals", action="store_true",
+                    help="write vertex normals (viewers then light the mesh, greying its colours)")
     vw = sub.add_parser("view", help="a viewing copy of the map: walls flat, floor holes filled")
     vw.add_argument("map", help="the map (.pcd/.ply), e.g. mapping/map_final_<tag>.pcd")
     vw.add_argument("out", nargs="?", default=None, help="view .pcd (default: next to the map)")
@@ -650,7 +679,8 @@ def main():
                      max_hole=a.max_hole, roof=a.roof)
         else:
             map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,
-                     trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show)
+                     trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show,
+                     subdivide=a.subdivide, normals=a.normals)
     except ConvertError as e:
         sys.exit(str(e))
 
