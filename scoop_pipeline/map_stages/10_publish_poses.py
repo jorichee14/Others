@@ -35,8 +35,21 @@ mapping_track() under the same names)
                          itself. "full_tf": false: only
                          map -> <robot>/<optical_frame> on /tf ("write_tf").
 
+  /<robot>/base_pose     geometry_msgs/PoseStamped, frame_id "map": the robot's
+                         base_link in map, with a robot's "base_frame" (below);
+                         base_link is in /tf_static as a child of its "parent"
 The optical frame is the frame the images and depth are expressed in, so a
 consumer can project through global_pose directly with the camera intrinsics.
+
+base_frame (per robot, optional): the robot's base_link, fixed to a frame of
+its tree by a measured or chosen transform (the pose of base_link in parent):
+    "base_frame": {"name": "base_link", "parent": "camera_link",
+                   "xyz": [0, 0, 0], "qxyzw": [0, 0, 0, 1]}
+Until the robot's base is measured it sits on the camera body (camera_link:
+x forward, y left, z up); with the base measured, put its pose in the parent
+here (e.g. 0.3 m behind and 0.4 m below camera_link: "xyz": [-0.3, 0, -0.4])
+and nothing else changes. The parent must be in the tree (full_tf), or be
+the published optical frame itself.
 No body-frame conversion is applied. cam_extrinsic_xyzquat is no longer read
 here; set "publish_body_frame": true on a robot to get the old behaviour.
 
@@ -141,6 +154,7 @@ def robot_poses(rb, rate_hz):
             print("  (%s: cam_extrinsic_xyzquat is ignored - poses are the optical "
                   "frame; set publish_body_frame: true to apply it)" % rb["name"])
     rb["_frame"] = frame
+    rb["_T_map_frame"] = Tb
 
     T0 = Tb[0]
     Tl = np.array([inv(T0) @ T for T in Tb])
@@ -210,7 +224,36 @@ def full_tf(P, s):
     drop, more, extra, after = pass_tf.plan(P, edges, [bag])
     print(tftree.format_tree(after))
     return (st + more, tftree.edge_matcher(["%s->%s" % d for d in drop]) if drop else None,
-            extra)
+            extra, after)
+
+
+def base_poses(rb, edges):
+    """A robot's base_link ("base_frame"): (static edge (parent, name, t, q),
+    T_map_base per pose), or None. The pose of base_link in map is the
+    published frame's, through the tree's static edges to the parent, then
+    the base_frame transform: T_map_base = T_map_frame @ T_frame_parent @ T_parent_base."""
+    bf = rb.get("base_frame")
+    if not bf:
+        return None
+    from scoop import tftree
+    name, parent = bf.get("name", "base_link"), bf["parent"]
+    T_pb = tftree.matrix(bf.get("xyz", [0, 0, 0]), bf.get("qxyzw", [0, 0, 0, 1]))
+    if parent == rb["_frame"]:
+        T_fp = np.eye(4)
+    elif edges is not None and parent in (set(edges) | {e.parent for e in edges.values()}):
+        T_fp = tftree.static_between(rb["_frame"], parent, edges)
+    else:
+        raise SystemExit("%s: base_frame parent %s is not in the TF tree (full_tf) and is not "
+                         "the published frame %s" % (rb["name"], parent, rb["_frame"]))
+    if edges is not None and name in edges:
+        raise SystemExit("%s: %s is in the tree already (from %s)"
+                         % (rb["name"], name, edges[name].parent))
+    T = np.einsum("nij,jk->nik", rb["_T_map_frame"], T_fp @ T_pb)
+    t, q = tftree.to_tq(T_pb)
+    print("  %s: %s below %s at xyz=%s qxyzw=%s; %s in map starts at %s"
+          % (rb["name"], name, parent, np.round(t, 3).tolist(), np.round(q, 4).tolist(),
+             name, np.round(T[0][:3, 3], 3).tolist()))
+    return (parent, name, t, q), T
 
 
 def main():
@@ -259,7 +302,7 @@ def main():
         shutil.rmtree(out)
     topics = []
     for rb, ts, Tb, Tl in robots:
-        for nm in ("global_pose", "local_pose"):
+        for nm in ("global_pose", "local_pose") + (("base_pose",) if rb.get("base_frame") else ()):
             topics.append("/%s/%s" % (rb["name"], nm))
     full = bool(s.get("full_tf", True))
     if full and not os.path.exists(P.dataset["bag"]):
@@ -268,6 +311,13 @@ def main():
     write_tf = write_tf and not full
 
     parts = full_tf(P, s) if full else None
+    base = {}
+    for rb, *_ in robots:
+        b = base_poses(rb, parts[3] if parts else None)
+        if b:
+            base[rb["name"]] = b
+            if parts:
+                parts[0].append(b[0])                     # parent -> base_link on /tf_static
     # local_pose of each robot the tree moves: the TF edge origin ~~ sensor root
     # (the robot's "local_frame"; the dataset's machine: the first one the plan moves)
     by_root = {}
@@ -281,17 +331,21 @@ def main():
     # interleave all robots by time so the bag plays in order
     events = []
     for rb, ts, Tb, Tl in robots:
+        Tbase = base[rb["name"]][1] if rb["name"] in base else None
         for i, t in enumerate(ts):
-            events.append((t, rb, Tb[i], Tl[i]))
+            events.append((t, rb, Tb[i], Tl[i], None if Tbase is None else Tbase[i]))
     events.sort(key=lambda e: e[0])
 
     def messages():
-        for t, rb, Tm, Tloc in events:
+        for t, rb, Tm, Tloc, Tbs in events:
             t_ns = int(round(t * 1e9))
             qm = Rot.from_matrix(Tm[:3, :3]).as_quat()
             ql = Rot.from_matrix(Tloc[:3, :3]).as_quat()
             yield t_ns, "/%s/global_pose" % rb["name"], \
                 rosmsg.pose_stamped(t_ns, map_frame, Tm[:3, 3], qm)
+            if Tbs is not None:
+                yield t_ns, "/%s/base_pose" % rb["name"], rosmsg.pose_stamped(
+                    t_ns, map_frame, Tbs[:3, 3], Rot.from_matrix(Tbs[:3, :3]).as_quat())
             if t_ns in local[rb["name"]]:
                 p, c, t_, q_ = local[rb["name"]][t_ns]
                 yield t_ns, "/%s/local_pose" % rb["name"], rosmsg.pose_stamped(t_ns, p, t_, q_)
@@ -304,7 +358,7 @@ def main():
 
     if full:
         from scoop import merge
-        st, drop_tf, extra = parts
+        st, drop_tf, extra, _ = parts
         ps = "geometry_msgs/msg/PoseStamped"
         sch = TopicSchema(ps, "ros2msg", rosmsg.msgdef(ps).encode(), "cdr")
         seq = {}
@@ -324,9 +378,17 @@ def main():
             for t_ns, tp, m in messages():
                 w.write(tp, m, t_ns)
                 n += 1
+            for name, ((p_, c_, t_, q_), _) in base.items():
+                if write_tf:                          # base_link below the published frame
+                    w.write("/tf_static", rosmsg.tf_message(
+                        [("%s/%s" % (name, p_), "%s/%s" % (name, c_), t_, q_)],
+                        int(round(events[0][0] * 1e9))), int(round(events[0][0] * 1e9)))
+                    n += 1
     print("wrote %s: %d messages on %s%s" % (out, n, ", ".join(topics),
                                             ", /tf" if write_tf or full else ""))
     print("  global_pose: camera optical frame in '%s' (unless publish_body_frame)" % map_frame)
+    for name, ((p_, c_, _, _), _) in base.items():
+        print("  base_pose of %s: %s in '%s' (%s below %s on /tf_static)" % (name, c_, map_frame, c_, p_))
     for name, lp in local.items():
         if lp:
             p, c = next(iter(lp.values()))[:2]

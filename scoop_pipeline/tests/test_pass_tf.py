@@ -407,6 +407,39 @@ def main():
                 f.append("10 again: " + r.stdout[-1000:] + r.stderr[-1500:])
             else:
                 f += check09(b09, stamps, T_cam_sensor, "10 again")
+            # base_frame: base_link fixed below os_sensor; on /tf_static and as base_pose
+            T_sb = rotz(90, (-0.3, 0.1, -0.4))
+            bt, bq = tq(T_sb)
+            c["10_publish"]["robots"] = [{"name": "mobile_1", "traj": "traj_mobile_1_lidar_in_cam.tum",
+                                          "optical_frame": "zed_left_camera_optical_frame",
+                                          "base_frame": {"name": "base_link", "parent": "os_sensor",
+                                                         "xyz": list(bt), "qxyzw": list(bq)}}]
+            json.dump(c, open(cfg, "w"))
+            r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages",
+                                                             "10_publish_poses.py"), cfg],
+                               capture_output=True, text=True)
+            if r.returncode:
+                f.append("10 base_frame: " + r.stdout[-1000:] + r.stderr[-1500:])
+            else:
+                e = tftree.tf_edges([b09]).get("base_link")
+                if e is None or e.parent != "os_sensor" or not e.static:
+                    f.append("base_frame: base_link on /tf_static below %s"
+                             % (e.parent if e else None))
+                else:
+                    close(e.T, T_sb, "base_frame: os_sensor -> base_link", f)
+                n = 0
+                for _, _, pl, dec in sbag.open_bag(b09).iter_raw(["/mobile_1/base_pose"]):
+                    m = dec(pl)
+                    if m.header.frame_id != "map":
+                        f.append("base_pose in %s" % m.header.frame_id)
+                        break
+                    t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9 - T0
+                    o_, q_ = m.pose.position, m.pose.orientation
+                    T = tftree.matrix([o_.x, o_.y, o_.z], [q_.x, q_.y, q_.z, q_.w])
+                    close(T, true_cam(t) @ T_cam_sensor @ T_sb, "base_pose at %.1f s" % t, f)
+                    n += 1
+                if not n:
+                    f.append("no /mobile_1/base_pose")
 
         # coop: mobile_2 moves on its own track, below a board from survey_1
         coop_cfg = coop(data, stages)
