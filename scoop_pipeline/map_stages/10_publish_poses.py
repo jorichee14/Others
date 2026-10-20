@@ -229,8 +229,37 @@ def full_tf(P, s):
         st += add
         for n in notes:
             print("    %s  (configs/static_tf.yaml)" % n)
+    undone = undo_base(s, edges, st)
     drop, more, extra, after = pass_tf.plan(P, edges, [bag])
-    return st + more, list(drop), extra, after
+    return st + more, list(drop) + undone, extra, after
+
+
+def undo_base(s, edges, st):
+    """A dataset bag 10 put its TF in before (finalize) carries 10's own edits.
+    A base link that is a leaf there goes (it is put in again from the config);
+    one that is the root of its robot's sensors stays: pass_tf moves it from the
+    trajectory as it would the camera body, and reroot() brings its edges to
+    the config. The edges "drop_tf" names go too (e.g. a base link renamed
+    since). Edits edges; -> the (parent, child) edges to leave out of the bag."""
+    from scoop import tftree
+    drop = []
+    for pat in s.get("drop_tf") or []:
+        m = tftree.edge_matcher([pat])
+        for c, e in list(edges.items()):
+            if m(e.parent, c):
+                drop.append((e.parent, c))
+                del edges[c]
+                print("    dropped %s -> %s  (10_publish.drop_tf)" % (e.parent, c))
+    for rb in s.get("robots", []):
+        bf = rb.get("base_frame") or {}
+        name = bf.get("name", "base_link")
+        if not bf or rb.get("enabled", True) is False or name not in edges:
+            continue
+        if not any(e.parent == name for e in edges.values()):
+            drop.append((edges[name].parent, name))
+            print("    %s (a leaf from an earlier 10) dropped, made again" % name)
+            del edges[name]
+    return drop
 
 
 def base_poses(rb, edges):
@@ -251,7 +280,7 @@ def base_poses(rb, edges):
     else:
         raise SystemExit("%s: base_frame parent %s is not in the TF tree (full_tf) and is not "
                          "the published frame %s" % (rb["name"], parent, rb["_frame"]))
-    if edges is not None and name in edges:
+    if edges is not None and name in edges and not bf.get("children"):
         raise SystemExit("%s: %s is in the tree already (from %s)"
                          % (rb["name"], name, edges[name].parent))
     T = np.einsum("nij,jk->nik", rb["_T_map_frame"], T_fp @ T_pb)
@@ -260,6 +289,12 @@ def base_poses(rb, edges):
           % (rb["name"], name, np.round(t, 3).tolist(), np.round(q, 4).tolist(), parent,
              name, np.round(T[0][:3, 3], 3).tolist()))
     return (parent, name, t, q), T
+
+
+def err_mm_deg(T):
+    """(mm, deg) of a transform from identity."""
+    return (float(np.linalg.norm(T[:3, 3]) * 1000),
+            float(np.degrees(np.linalg.norm(Rot.from_matrix(T[:3, :3]).as_rotvec()))))
 
 
 def reroot(rb, edge, parts):
@@ -273,6 +308,29 @@ def reroot(rb, edge, parts):
     st, drop, extra, edges = parts
     T_ref_base = tftree.matrix(t, q)
     kids = list(rb["base_frame"]["children"])
+    if name in edges and not edges[name].static and \
+            all(c in edges and edges[c].parent == name for c in kids):
+        # the root already (a bag 10 put its TF in before): pass_tf moves it from
+        # the trajectory; its pose in measured_in is brought to the config's
+        T_on = tftree.static_between(name, ref, edges) @ T_ref_base       # old base -> new base
+        moved = err_mm_deg(T_on)
+        if moved[0] > 0.5 or moved[1] > 0.01:
+            raise SystemExit("%s: %s is in the bag already, %.1f mm / %.3f deg from the config's; "
+                             "a changed base_frame on a finalized bag is not supported yet: make the "
+                             "pass again from GLIM (clean_pass.py --redo) or keep the bag's"
+                             % (rb["name"], name, *moved))
+        for i, (t_ns, p, c, tt, qq) in enumerate(extra):
+            if c == name:
+                extra[i] = (t_ns, p, name, *tftree.to_tq(tftree.matrix(tt, qq) @ T_on))
+        for c in kids:
+            Tn = np.linalg.inv(T_on) @ edges[c].T
+            drop.append((name, c))
+            st[:] = [e for e in st if e[1] != c]
+            st.append((name, c, *tftree.to_tq(Tn)))
+            edges[c] = tftree.Edge(name, c, True, Tn)
+        print("  %s: %s is the root of its sensors already (%s ~~ %s); its edges to %s from the config"
+              % (rb["name"], name, edges[name].parent, name, ", ".join(kids)))
+        return name
     for c in kids:
         if c not in edges:
             raise SystemExit("%s: base_frame child %s is not in the tree" % (rb["name"], c))

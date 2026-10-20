@@ -443,40 +443,70 @@ def main():
                         n += 1
                     if not n:
                         f.append("no " + topic)
-            # base_frame with children: base_link the root of mobile_1's sensors
-            c["10_publish"]["robots"][0]["base_frame"]["children"] = ["zed_camera_link", "os_sensor"]
+            # base_frame with children: the base the root of mobile_1's sensors, on a
+            # bag 10 put its TF in before (as finalize does) with the leaf base_link
+            # in it: renamed robot_base, the old leaf dropped (drop_tf); then the same
+            # again on that bag: the same tree, nothing doubled
+            def finalize_like():
+                both = os.path.join(tmp, "both")
+                merge.merge_bags([old, b09], both, log=lambda *_: None,
+                                 source={"/tf": 1, "/tf_static": 1})
+                shutil.rmtree(old)
+                os.rename(both, old)
+            rbc = c["10_publish"]["robots"][0]
+            rbc["base_frame"].update(name="robot_base", children=["zed_camera_link", "os_sensor"])
+            c["10_publish"]["drop_tf"] = ["os_sensor->base_link"]
             json.dump(c, open(cfg, "w"))
-            r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages",
-                                                             "10_publish_poses.py"), cfg],
-                               capture_output=True, text=True)
-            if r.returncode:
-                f.append("10 base root: " + r.stdout[-1000:] + r.stderr[-1500:])
-            else:
+            T_sb2 = rotz(-15, (0.2, -0.1, -0.3), axis=(0, 1, 1))           # the base measured
+            for rnd, T_b in (("base root", T_sb), ("base root again", T_sb), ("base moved", T_sb2)):
+                if rnd == "base moved":
+                    bt, bq = tq(T_b)
+                    rbc["base_frame"].update(xyz=list(bt), qxyzw=list(bq))
+                    json.dump(c, open(cfg, "w"))
+                    finalize_like()
+                    r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages",
+                                                                     "10_publish_poses.py"), cfg],
+                                       capture_output=True, text=True)
+                    if r.returncode == 0 or "not supported yet" not in r.stdout + r.stderr:
+                        f.append("base moved on a finalized bag: not stopped: " + r.stdout[-800:])
+                    break
+                bt, bq = tq(T_b)
+                rbc["base_frame"].update(xyz=list(bt), qxyzw=list(bq))
+                json.dump(c, open(cfg, "w"))
+                finalize_like()
+                r = subprocess.run([sys.executable, os.path.join(ROOT, "map_stages",
+                                                                 "10_publish_poses.py"), cfg],
+                                   capture_output=True, text=True)
+                if r.returncode:
+                    f.append(rnd + ": " + r.stdout[-1000:] + r.stderr[-1500:])
+                    break
                 e = tftree.tf_edges([b09])
-                if e["base_link"].parent != "map_zed" or e["base_link"].static:
-                    f.append("base root: base_link below %s (static %s), want map_zed on /tf"
-                             % (e["base_link"].parent, e["base_link"].static))
-                T_sz = np.linalg.inv(T_sb) @ np.linalg.inv(T_cam_sensor) @ \
+                if "base_link" in e:
+                    f.append("%s: the old base_link is still in" % rnd)
+                if e["robot_base"].parent != "map_zed" or e["robot_base"].static:
+                    f.append("%s: robot_base below %s (static %s), want map_zed on /tf"
+                             % (rnd, e["robot_base"].parent, e["robot_base"].static))
+                T_sz = np.linalg.inv(T_b) @ np.linalg.inv(T_cam_sensor) @ \
                     np.linalg.inv(CHAIN[0][2] @ CHAIN[1][2] @ CHAIN[2][2])
-                for ch, T_want in (("os_sensor", np.linalg.inv(T_sb)), ("zed_camera_link", T_sz)):
-                    if e[ch].parent != "base_link" or not e[ch].static:
-                        f.append("base root: %s below %s" % (ch, e[ch].parent))
+                for ch, T_want in (("os_sensor", np.linalg.inv(T_b)), ("zed_camera_link", T_sz)):
+                    if e[ch].parent != "robot_base" or not e[ch].static:
+                        f.append("%s: %s below %s" % (rnd, ch, e[ch].parent))
                     else:
-                        close(e[ch].T, T_want, "base root: base_link -> " + ch, f)
+                        close(e[ch].T, T_want, "%s: robot_base -> %s" % (rnd, ch), f)
                 n = 0
                 for _, _, pl, dec in sbag.open_bag(b09).iter_raw(["/tf"]):
                     for tr in dec(pl).transforms:
                         if tr.child_frame_id == "zed_camera_link":
-                            f.append("base root: zed_camera_link still on /tf")
-                        if tr.child_frame_id != "base_link" or n > 40:
+                            f.append("%s: zed_camera_link still on /tf" % rnd)
+                        if tr.child_frame_id != "robot_base" or n > 40:
                             continue
                         t = tr.header.stamp.sec + tr.header.stamp.nanosec * 1e-9 - T0
                         o_, q_ = tr.transform.translation, tr.transform.rotation
                         Tm = T_MAP_MAPZED @ tftree.matrix([o_.x, o_.y, o_.z], [q_.x, q_.y, q_.z, q_.w])
-                        close(Tm, true_cam(t) @ T_cam_sensor @ T_sb, "base root: base_link at %.1f s" % t, f)
+                        close(Tm, true_cam(t) @ T_cam_sensor @ T_b, "%s: robot_base at %.1f s" % (rnd, t), f)
                         n += 1
                 if not n:
-                    f.append("base root: no map_zed ~~ base_link on /tf")
+                    f.append("%s: no map_zed ~~ robot_base on /tf" % rnd)
 
         # coop: mobile_2 moves on its own track, below a board from survey_1
         coop_cfg = coop(data, stages)

@@ -48,6 +48,8 @@
  "comms": {"enabled": false, "_note": "mobile_2 alone, no comms topics in its bag"},
  "08_emit_tfs": {"enabled": false},
  "10_publish": {
+  "drop_tf": ["camera_link->base_link"],
+  "_drop_tf": "base_link: the base link's name before mobile_2_base_link, still in the finalized bag",
   "robots": [
    {"name": "mobile_1", "enabled": false},
    {"name": "mobile_2",
