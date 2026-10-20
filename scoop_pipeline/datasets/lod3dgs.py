@@ -320,7 +320,8 @@ def sensor_height(P, T, cell=0.5, samples=300):
     return float(np.median(hs)), len(hs)
 
 
-def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spacing=0.02):
+def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spacing=0.02,
+               roof=0.5):
     """Floor points for the holes in the floor: (points, colours, stats).
 
     The floor's height under every cell is the nearest pose's less the sensor
@@ -328,8 +329,12 @@ def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spaci
     when it holds points 0.15-0.6 m above it (walls, furniture) and a void
     when points lie more than 0.3 m below it (stairs, an atrium). Filled: the
     cells enclosed by floor and blocked cells, and gaps up to 2 x close in the
-    floor, never blocked or void, each hole up to max_hole m2; at the height
-    and in the colours of the floor around them (8 nearest floor cells)."""
+    floor, never blocked or void, each hole up to max_hole m2 and with a
+    roof over at least `roof` of it when larger than 1 m2 (points 1.8 m or
+    more above the floor, in the cell or the next: a ceiling; a courtyard is open to
+    the sky; roof=0 fills it too); at the
+    height and in the colours of the floor around them (8 nearest floor
+    cells)."""
     from scipy import ndimage
     lo = P[:, :2].min(0) - 2 * cell
     nx, ny = (np.floor((P[:, :2].max(0) + 2 * cell - lo) / cell).astype(int) + 1)
@@ -350,16 +355,23 @@ def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spaci
     void = (np.bincount(lin[dz < -0.3], minlength=N) >= 2).reshape(nx, ny)
     r = max(1, int(round(close / cell)))
     disk = np.hypot(*np.mgrid[-r:r + 1, -r:r + 1]) <= r
+    covered = ndimage.binary_dilation((np.bincount(lin[dz > 1.8], minlength=N) >= 1).reshape(nx, ny),
+                                      np.ones((3, 3), bool))   # a ceiling's own speckle is no sky
     cand = (ndimage.binary_fill_holes(floor | blocked) | ndimage.binary_closing(floor, disk))
     cand &= ~floor & ~blocked & ~void
     lab, nlab = ndimage.label(cand)
-    area = np.bincount(lab.ravel(), minlength=nlab + 1) * cell * cell
-    keep = (area <= max_hole)
+    ncell = np.bincount(lab.ravel(), minlength=nlab + 1)
+    area = ncell * cell * cell
+    roofed = np.bincount(lab.ravel(), covered.ravel().astype(float), nlab + 1) / np.maximum(ncell, 1)
+    big, sky = area > max_hole, (roofed < roof) & (area > 1.0)     # gaps up to 1 m2 always filled
+    big[0] = sky[0] = False
+    keep = ~big & ~sky
     keep[0] = False
     holes = keep[lab]
     stats = {"floor_m2": float(floor.sum() * cell * cell), "holes": int(keep.sum()),
              "filled_m2": float(holes.sum() * cell * cell),
-             "skipped": int(nlab - keep[1:].sum()), "skipped_m2": float(area[1:][~keep[1:]].sum())}
+             "skipped": int(big[1:].sum()), "skipped_m2": float(area[big].sum()),
+             "open": int((sky & ~big)[1:].sum()), "open_m2": float(area[sky & ~big].sum())}
     if not holes.any():
         return np.zeros((0, 3)), np.zeros((0, 3)), stats
     # points every `spacing` in the hole cells; height and colour of the floor around
@@ -381,7 +393,7 @@ def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spaci
 
 
 def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
-             ceil=None, ceil_margin=0.10, max_hole=20.0):
+             ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5):
     """A viewing copy of the map: stray points out, walls and floors flat,
     the floor's holes filled; points, so the colours stay the map's own."""
     o3d = _o3d()
@@ -403,11 +415,14 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
     if fill:
         T = read_tum_positions(traj, stride=5)
         h, nh = sensor_height(P, T)
-        Fp, Fc, st = fill_floor(P, C, T, h, max_hole=max_hole)
+        Fp, Fc, st = fill_floor(P, C, T, h, max_hole=max_hole, roof=roof)
         report.append(f"  sensor {h:.2f} m above the floor ({nh} poses); floor seen {st['floor_m2']:.0f} m2; "
                       f"{st['holes']} holes filled, {st['filled_m2']:.1f} m2, {len(Fp)} points"
                       + (f"; {st['skipped']} larger than {max_hole:g} m2 left open "
-                         f"({st['skipped_m2']:.0f} m2)" if st["skipped"] else ""))
+                         f"({st['skipped_m2']:.0f} m2)" if st["skipped"] else "")
+                      + (f"; {st['open']} open to the sky (a courtyard: no ceiling over "
+                         f"{100 * (1 - roof):.0f} % of it) left open ({st['open_m2']:.0f} m2)"
+                         if st["open"] else ""))
         P, C = np.vstack([P, Fp]), np.vstack([C, Fc])
         res.update(sensor_height=h, **st)
     if ceil is not None:
@@ -618,6 +633,8 @@ def main():
     vw.add_argument("--no-snap", action="store_true", help="leave walls and floors as mapped")
     vw.add_argument("--no-fill", action="store_true", help="leave the floor's holes")
     vw.add_argument("--max-hole", type=float, default=20.0, help="largest hole filled (m2)")
+    vw.add_argument("--roof", type=float, default=0.5,
+                    help="share of a hole that must have a ceiling over it (0: courtyards too)")
     vw.add_argument("--ceil", default=None, help="remove points above Z, or 'auto'")
     vw.add_argument("--ceil-margin", type=float, default=0.10)
     a = ap.parse_args()
@@ -630,7 +647,7 @@ def main():
         elif a.cmd == "view":
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,
-                     max_hole=a.max_hole)
+                     max_hole=a.max_hole, roof=a.roof)
         else:
             map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,
                      trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show)

@@ -932,7 +932,8 @@ floor around them. The floor is found from the trajectory (sensor height
 from the floor under the poses); filled are the holes enclosed by floor and
 walls and gaps up to 0.4 m, never under furniture or walls (points 0.15-0.6
 m above the floor), never over a stair opening or an atrium (points below
-it), each up to `--max-hole` m2. For looking at only: the reference map,
+it), never a courtyard (a hole over 1 m2 with a ceiling over less than
+`--roof`, 50 %, of it), each up to `--max-hole` m2. For looking at only: the reference map,
 and every measurement, stays `map_final_<tag>.pcd`.
 
 The scene, from a replica export with map depth made with the same poses:
