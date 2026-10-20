@@ -20,9 +20,13 @@ the highest height peak) keeping the walls. Then `view` on an 8 x 6 m room
 with noisy walls and stray points, the floor missing in four places: a 1 m2
 hole (filled, at the floor's height and colour), a 5 m2 hole over --max-hole
 (left), under a box (blocked: left) and a stair opening onto a floor 1 m
-lower (a void: left), and a courtyard with no ceiling over it (left);
+lower (a void: left), and a courtyard with no ceiling over it (left), a bench in it removed
+(a loose piece open to the sky) while the box stays (under the ceiling);
 the sensor height found from the floor under the
-poses, the strays gone, the walls flat, nothing added outside the room.
+poses, the strays gone, the walls flat, nothing added outside the room. Then
+the mirror ghosts of a polished floor and wall (under the floor, behind the
+wall: no direct ray from the path reaches them) and a loose panel removed
+by both mesh and view, the room's own surfaces kept.
 
     python scoop_pipeline/tests/test_lod3dgs.py
 """
@@ -181,6 +185,9 @@ def check_view(tmp):
     roof = roof[~inside(roof, *YARD)]
     pts.append(roof)                                           # the ceiling, open over the yard
     cols.append(np.tile([0.9, 0.9, 0.9], (len(roof), 1)))
+    ux, uy = np.meshgrid(g(6.0, 6.6), g(1.3, 1.7), indexing="ij")
+    pts.append(np.c_[ux.ravel(), uy.ravel(), np.full(ux.size, 0.45)])      # a bench in the courtyard
+    cols.append(np.tile([0.4, 0.3, 0.2], (ux.size, 1)))
     stray = np.c_[rng.uniform(1, 7, 300), rng.uniform(1, 5, 300), rng.uniform(0.8, 2.0, 300)]
     pts.append(stray)
     cols.append(np.tile([1.0, 1.0, 1.0], (300, 1)))
@@ -209,10 +216,66 @@ def check_view(tmp):
     assert ((P[:, 0] < -0.15) | (P[:, 0] > 8.15) | (P[:, 1] < -0.15) | (P[:, 1] > 6.15)).sum() == 0
     air = inside(P, 0.3, 7.7, 0.3, 5.7) & (P[:, 2] > 0.8) & (P[:, 2] < 2.3) & ~inside(P, 0.9, 2.1, 0.7, 1.9)
     assert air.sum() < 30, ("strays left", air.sum())
+    bench = inside(P, 6.0, 6.6, 1.3, 1.7) & (np.abs(P[:, 2] - 0.45) < 0.05)
+    assert bench.sum() == 0, ("a loose piece in the courtyard kept", bench.sum())
+    box = inside(P, 1.0, 2.0, 0.8, 1.8) & (np.abs(P[:, 2] - 0.5) < 0.05)
+    assert box.sum() > 1000, ("the box (furniture under the ceiling) removed", box.sum())
     wall = (np.abs(P[:, 0]) < 0.15) & (P[:, 2] > 0.3) & (P[:, 2] < 2.0) & (P[:, 1] > 0.5) & (P[:, 1] < 5.5)
     th = np.subtract(*np.percentile(P[wall, 0], [95, 5]))
     assert th < 0.02, ("wall not flat", th)
     return r, th
+
+
+def check_ghosts(tmp):
+    """A closed 6 x 4 x 3 room as a polished floor and wall would show it:
+    a ghost of the ceiling 3 m under the floor and of a cabinet behind the
+    x = 0 wall (no direct ray from the path reaches either), and a loose
+    0.5 m panel floating in the room. mesh and view: all three gone, the
+    room's own surfaces kept."""
+    import open3d as o3d
+    rng = np.random.default_rng(2)
+    g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
+
+    def sheet(axis, val, ra, rb):
+        A, B = np.meshgrid(g(*ra), g(*rb), indexing="ij")
+        o = [i for i in range(3) if i != axis]
+        p = np.zeros((A.size, 3))
+        p[:, o[0]], p[:, o[1]], p[:, axis] = A.ravel(), B.ravel(), val
+        return p
+    room = [sheet(2, 0.0, (0, 6), (0, 4)), sheet(2, 3.0, (0, 6), (0, 4)),
+            sheet(0, 0.0, (0, 4), (0, 3)), sheet(0, 6.0, (0, 4), (0, 3)),
+            sheet(1, 0.0, (0, 6), (0, 3)), sheet(1, 4.0, (0, 6), (0, 3))]
+    ghost = [sheet(2, -3.0, (0, 6), (0, 4)),                                     # the ceiling, mirrored
+             sheet(0, -1.0, (1, 2), (0.5, 1.5)), sheet(1, 1.0, (-1.0, -0.2), (0.5, 1.5)),
+             sheet(1, 2.0, (-1.0, -0.2), (0.5, 1.5))]                             # a cabinet, behind x = 0
+    panel = [sheet(2, 1.5, (2.8, 3.3), (1.8, 2.3))]                               # a loose piece
+    P = np.concatenate(room + ghost + panel)
+    P += rng.normal(0, 0.003, P.shape)
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    pc.colors = o3d.utility.Vector3dVector(rng.uniform(0.3, 0.7, P.shape))
+    mp = os.path.join(tmp, "map_final_ghosts.pcd")
+    o3d.io.write_point_cloud(mp, pc)
+    tr = os.path.join(tmp, "traj_ghosts.txt")
+    np.savetxt(tr, [[i, 0.8 + 0.4 * i, 1.0 + 0.15 * i, 1.2, 0, 0, 0, 1] for i in range(12)])
+
+    def bad(V):
+        return {"under the floor": int((V[:, 2] < -0.5).sum()), "behind the wall": int((V[:, 0] < -0.3).sum()),
+                "panel": int(((np.abs(V[:, 2] - 1.5) < 0.1) & (V[:, 0] > 2.7) & (V[:, 0] < 3.4)
+                              & (V[:, 1] > 1.7) & (V[:, 1] < 2.4)).sum())}
+    floor = lambda V: int(((np.abs(V[:, 2]) < 0.03) & (V[:, 0] > 0.3) & (V[:, 0] < 5.7)   # noqa: E731
+                           & (V[:, 1] > 0.3) & (V[:, 1] < 3.7)).sum())
+    keep = L.map_mesh(mp, tr, os.path.join(tmp, "m_keep.ply"), ghosts=False, min_piece=0)
+    clean = L.map_mesh(mp, tr, os.path.join(tmp, "m_clean.ply"))
+    Vk = np.asarray(o3d.io.read_triangle_mesh(keep["out"]).vertices)
+    Vc = np.asarray(o3d.io.read_triangle_mesh(clean["out"]).vertices)
+    assert min(bad(Vk).values()) > 0, ("the scene has no ghost to remove", bad(Vk))
+    assert max(bad(Vc).values()) == 0, ("mesh: left", bad(Vc))
+    assert floor(Vc) > 0.97 * floor(Vk), ("mesh: floor lost", floor(Vc), floor(Vk))
+    v = L.map_view(mp, tr, os.path.join(tmp, "v_clean.pcd"), snap=False, fill=False)
+    Pv = np.asarray(o3d.io.read_point_cloud(v["out"]).points)
+    assert max(bad(Pv).values()) == 0, ("view: left", bad(Pv))
+    assert floor(Pv) > 0.97 * floor(P), ("view: floor lost", floor(Pv), floor(P))
+    return clean, v
 
 
 def main():
@@ -295,6 +358,9 @@ def main():
         rv, th = check_view(tmp)
         print(f"ok view: sensor {rv['sensor_height']:.2f} m up, {rv['holes']} hole filled "
               f"({rv['filled_m2']:.1f} m2), {rv['skipped']} left, wall {th * 100:.1f} cm thick")
+        gm, gv = check_ghosts(tmp)
+        print(f"ok ghosts: mesh {gm['ghost_faces']} ghost and {gm['piece_faces']} loose faces out, "
+              f"view {gv['ghost_points']} ghost and {gv['piece_points']} loose points out, the room kept")
         rm = check_mesh(tmp)
         print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
               f"{rm['noceil_faces']} faces without it")

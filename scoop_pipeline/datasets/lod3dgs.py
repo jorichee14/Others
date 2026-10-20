@@ -145,7 +145,10 @@ def build_mesh(map_path, centres, voxel=0.02, depth=0, trim=0.10):
     """Poisson mesh of the map, faces farther than trim from a map point removed.
     centres: camera positions, the side each normal is turned to."""
     o3d = _o3d()
-    pc = o3d.io.read_point_cloud(os.path.expanduser(map_path))
+    if isinstance(map_path, str):
+        pc = o3d.io.read_point_cloud(os.path.expanduser(map_path))
+    else:
+        pc, map_path = map_path, "the view's points"
     n0 = len(pc.points)
     if not n0:
         raise ConvertError(f"{map_path}: no points")
@@ -175,6 +178,124 @@ def build_mesh(map_path, centres, voxel=0.02, depth=0, trim=0.10):
         raise ConvertError("no mesh face is near the map: is the map the right one?")
     return mesh, {"map_points": n0, "map_voxel_points": len(P), "poisson_depth": depth,
                   "faces": nf, "faces_kept": len(mesh.triangles)}
+
+
+def sphere_dirs(n, rng):
+    """n directions evenly over the sphere (Fibonacci), turned at random."""
+    i = np.arange(n) + 0.5
+    z = 1 - 2 * i / n
+    r = np.sqrt(1 - z * z)
+    a = np.pi * (1 + 5 ** 0.5) * i
+    d = np.c_[r * np.cos(a), r * np.sin(a), z]
+    return d @ Rotation.random(random_state=rng).as_matrix().T
+
+
+def seen_from_path(mesh, T, poses=1000, rays=50000, reach=0.25, seed=0):
+    """Per face of the mesh: seen directly from the path. Rays in every
+    direction from `poses` positions of T, each stopped by the first face it
+    meets; a face is seen when it, or a face within `reach` of it, was hit.
+    A mirror ghost (the room the LiDAR saw in polished stone or glass, put
+    behind it) is reached by no direct ray: the mirror stops them."""
+    o3d = _o3d()
+    scene = o3d.t.geometry.RaycastingScene()
+    scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(mesh))
+    F, V = np.asarray(mesh.triangles), np.asarray(mesh.vertices)
+    hit = np.zeros(len(F), bool)
+    rng = np.random.default_rng(seed)
+    O = T[np.linspace(0, len(T) - 1, min(poses, len(T))).astype(int)]
+    for k in range(0, len(O), 20):
+        orig = np.repeat(O[k:k + 20], rays, 0)
+        dirs = np.concatenate([sphere_dirs(rays, rng) for _ in range(len(O[k:k + 20]))])
+        ans = scene.cast_rays(o3d.core.Tensor(np.hstack([orig, dirs]).astype(np.float32)))
+        ids = ans["primitive_ids"].numpy()
+        hit[ids[ids != o3d.t.geometry.RaycastingScene.INVALID_ID]] = True
+    cen = V[F].mean(1)
+    if not hit.any():
+        return hit
+    d, _ = cKDTree(cen[hit]).query(cen, distance_upper_bound=reach, workers=-1)
+    return np.isfinite(d)
+
+
+def remove_ghosts(mesh, T, **kw):
+    """(the mesh without the faces no direct ray from the path reaches, faces removed)."""
+    seen = seen_from_path(mesh, T, **kw)
+    out = type(mesh)(mesh)
+    out.remove_triangles_by_mask(~seen)
+    out.remove_unreferenced_vertices()
+    return out, int((~seen).sum())
+
+
+def ghost_points(P, T, voxel=0.06, near=0.12, **kw):
+    """Per point: on a mirror ghost. A coarse mesh of the points is tested
+    with seen_from_path; a point whose nearest face (within `near`) no direct
+    ray reaches is a ghost; a point with no face near is kept."""
+    o3d = _o3d()
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    m, _ = build_mesh(pc, T, voxel=voxel, trim=2 * voxel)
+    seen = seen_from_path(m, T, **kw)
+    cen = np.asarray(m.vertices)[np.asarray(m.triangles)].mean(1)
+    d, i = cKDTree(cen).query(P, distance_upper_bound=near, workers=-1)
+    ok = np.isfinite(d)
+    ghost = np.zeros(len(P), bool)
+    ghost[ok] = ~seen[i[ok]]
+    return ghost
+
+
+def loose(ids, X, area, T, h, min_area=2.0, roof_h=2.0, float_h=1.2, cell=0.4):
+    """Per piece (ids: each element's piece, X: its position, area: per piece
+    m2): to remove. A piece under min_area is removed when it is open to the
+    sky (under half of it has a ceiling over it: points of the larger pieces
+    roof_h or more above the floor in its 0.4 m columns; a courtyard seen
+    through glass) or when it floats (its bottom float_h or more above the
+    floor: a lamp, a sign, a reflection). A small piece under a ceiling and
+    down at the floor is furniture: kept. The floor under each element is the
+    nearest pose's height less the sensor height h."""
+    small = area < min_area
+    if not small.any():
+        return small
+    _, near = cKDTree(T[:, :2]).query(X[:, :2], workers=-1)
+    up = X[:, 2] - (T[near, 2] - h)                                 # height above the floor
+    lo = X[:, :2].min(0)
+    ij = np.floor((X[:, :2] - lo) / cell).astype(np.int64)
+    ny = int(ij[:, 1].max()) + 1
+    col = ij[:, 0] * ny + ij[:, 1]
+    big = ~small[ids]
+    roofed = np.zeros(int(col.max()) + 1, bool)
+    roofed[col[big & (up >= roof_h)]] = True
+    n = len(area)
+    cnt = np.bincount(ids, minlength=n)
+    sky = np.bincount(ids, (~roofed[col]).astype(float), n) / np.maximum(cnt, 1) > 0.5
+    bottom = np.full(n, np.inf)
+    np.minimum.at(bottom, ids, up)
+    return small & (sky | (bottom >= float_h))
+
+
+def drop_pieces(mesh, T, h, min_area=2.0):
+    """(the mesh without its loose pieces (see loose()), faces removed)."""
+    tri, _, area = mesh.cluster_connected_triangles()
+    tri, area = np.asarray(tri), np.asarray(area)
+    cen = np.asarray(mesh.vertices)[np.asarray(mesh.triangles)].mean(1)
+    gone = loose(tri, cen, area, T, h, min_area)[tri]
+    out = type(mesh)(mesh)
+    out.remove_triangles_by_mask(gone)
+    out.remove_unreferenced_vertices()
+    return out, int(gone.sum())
+
+
+def piece_points(P, T, h, min_area=2.0, cell=0.1):
+    """Per point: in a loose piece (see loose()); a piece is the points of
+    10 cm cells touching, its area their count x cell^2."""
+    from scipy import ndimage
+    lo = P.min(0)
+    while np.prod(np.ceil((P.max(0) - lo) / cell) + 1) > 4e8:
+        cell *= 1.5
+    ijk = np.floor((P - lo) / cell).astype(np.int64)
+    occ = np.zeros(tuple(ijk.max(0) + 1), bool)
+    occ[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = True
+    lab, n = ndimage.label(occ, structure=np.ones((3, 3, 3), bool))
+    area = np.bincount(lab.ravel(), minlength=n + 1) * cell * cell
+    ids = lab[ijk[:, 0], ijk[:, 1], ijk[:, 2]]
+    return loose(ids, P, area, T, h, min_area)[ids]
 
 
 def read_tum_positions(path, stride=10):
@@ -238,7 +359,8 @@ def crisp_colours(mesh, map_path, subdivide=1):
 
 
 def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10,
-         ceil=None, ceil_margin=0.10, show=False, subdivide=1, normals=False):
+         ceil=None, ceil_margin=0.10, show=False, subdivide=1, normals=False, ghosts=True,
+         min_piece=2.0):
     """The mesh step alone: mesh of the map (+ a copy without the ceiling),
     each vertex in the colour of the map's nearest point; written without
     normals unless asked, so a viewer shows the colours unlit."""
@@ -246,6 +368,14 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
     out = out or default_mesh_out(map_path)
     centres = read_tum_positions(traj)
     m, mstat = build_mesh(map_path, centres, voxel, poisson_depth, trim)
+    nghost = 0
+    if ghosts:
+        m, nghost = remove_ghosts(m, read_tum_positions(traj, stride=1))
+    npiece = 0
+    if min_piece > 0:
+        Tf = read_tum_positions(traj, stride=1)
+        hs, _ = sensor_height(np.asarray(m.vertices), Tf)
+        m, npiece = drop_pieces(m, Tf, hs, min_piece)
     m, _ = crisp_colours(m, map_path, subdivide)
     mstat["faces_kept"] = len(m.triangles)
     if normals:
@@ -261,7 +391,12 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
     report = (f"mesh {out}: {mstat['faces_kept']} faces ({mstat['faces']} from Poisson before the "
               f"{trim} m trim{f', split {subdivide}x' if subdivide else ''}), {len(V)} vertices, "
               f"{'each in its nearest map point colour' if m.has_vertex_colors() else 'no colour (map has none)'}"
-              f"{'' if normals else ', no normals (shown unlit)'}")
+              f"{'' if normals else ', no normals (shown unlit)'}"
+              + (f"\n  mirror ghosts (faces no direct ray from the path reaches) removed: {nghost} faces"
+                 if ghosts else "")
+              + (f"\n  loose pieces under {min_piece:g} m2 open to the sky or floating removed: "
+                 f"{npiece} faces" if min_piece > 0 else ""))
+    res.update(ghost_faces=nghost, piece_faces=npiece)
     shown = m
     if ceil is not None:
         if str(ceil) == "auto":
@@ -272,6 +407,8 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
             z = float(ceil)
             how = "given"
         nc = cut_above(m, z)
+        if min_piece > 0:
+            nc, _ = drop_pieces(nc, Tf, hs, min_piece)      # what hung from the ceiling now floats
         p = os.path.splitext(out)[0] + "_noceil.ply"
         o3d.io.write_triangle_mesh(p, nc)
         report += (f"\nno ceiling {p}: faces above z = {z:+.2f} ({how}) removed, "
@@ -420,7 +557,7 @@ def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spaci
 
 
 def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
-             ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5):
+             ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=2.0):
     """A viewing copy of the map: stray points out, walls and floors flat,
     the floor's holes filled; points, so the colours stay the map's own."""
     o3d = _o3d()
@@ -435,14 +572,26 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         report.append(f"  stray points (fewer than 8 others within 8 cm) removed: {n0 - len(pc.points)}")
     P = np.asarray(pc.points).copy()
     C = np.asarray(pc.colors).copy() if pc.has_colors() else np.full((len(P), 3), 0.6)
+    res = {"out": out, "map_points": n0}
+    T1 = read_tum_positions(traj, stride=1)
+    h, nh = sensor_height(P, T1)
+    if ghosts:
+        g = ghost_points(P, T1)
+        P, C = P[~g], C[~g]
+        report.append(f"  mirror ghosts (behind polished stone or glass: no direct ray from the path "
+                      f"reaches them) removed: {int(g.sum())} points")
+        res["ghost_points"] = int(g.sum())
+    if min_piece > 0:
+        g = piece_points(P, T1, h, min_piece)
+        P, C = P[~g], C[~g]
+        report.append(f"  loose pieces under {min_piece:g} m2 open to the sky or floating removed: "
+                      f"{int(g.sum())} points")
+        res["piece_points"] = int(g.sum())
     if snap:
         P, moved = snap_planes(P)
         report.append(f"  points put onto their wall or floor plane: {moved} ({100 * moved / len(P):.0f} %)")
-    res = {"out": out, "map_points": n0}
     if fill:
-        T = read_tum_positions(traj, stride=5)
-        h, nh = sensor_height(P, T)
-        Fp, Fc, st = fill_floor(P, C, T, h, max_hole=max_hole, roof=roof)
+        Fp, Fc, st = fill_floor(P, C, T1[::5], h, max_hole=max_hole, roof=roof)
         report.append(f"  sensor {h:.2f} m above the floor ({nh} poses); floor seen {st['floor_m2']:.0f} m2; "
                       f"{st['holes']} holes filled, {st['filled_m2']:.1f} m2, {len(Fp)} points"
                       + (f"; {st['skipped']} larger than {max_hole:g} m2 left open "
@@ -461,6 +610,10 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         keep = P[:, 2] <= z
         report.append(f"  above z = {z:+.2f} removed (the ceiling): {int((~keep).sum())} points")
         P, C = P[keep], C[keep]
+        if min_piece > 0:
+            g = piece_points(P, T1, h, min_piece)       # what hung from the ceiling now floats
+            P, C = P[~g], C[~g]
+            report.append(f"  then loose under {min_piece:g} m2: {int(g.sum())} points")
         res["ceil_z"] = z
     v = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     v.colors = o3d.utility.Vector3dVector(np.clip(C, 0, 1))
@@ -654,6 +807,10 @@ def main():
     me.add_argument("--show", action="store_true", help="open it in an Open3D window")
     me.add_argument("--subdivide", type=int, default=1,
                     help="split every face into four this many times before colouring (finer colour)")
+    me.add_argument("--min-piece", type=float, default=2.0,
+                    help="remove loose pieces smaller than this (m2; 0 keeps them)")
+    me.add_argument("--keep-ghosts", action="store_true",
+                    help="keep the mirror ghosts (faces no direct ray from the path reaches)")
     me.add_argument("--normals", action="store_true",
                     help="write vertex normals (viewers then light the mesh, greying its colours)")
     vw = sub.add_parser("view", help="a viewing copy of the map: walls flat, floor holes filled")
@@ -663,6 +820,10 @@ def main():
     vw.add_argument("--no-outliers", action="store_true", help="keep the stray points")
     vw.add_argument("--no-snap", action="store_true", help="leave walls and floors as mapped")
     vw.add_argument("--no-fill", action="store_true", help="leave the floor's holes")
+    vw.add_argument("--min-piece", type=float, default=2.0,
+                    help="remove loose pieces smaller than this (m2; 0 keeps them)")
+    vw.add_argument("--keep-ghosts", action="store_true",
+                    help="keep the mirror ghosts (points no direct ray from the path reaches)")
     vw.add_argument("--max-hole", type=float, default=20.0, help="largest hole filled (m2)")
     vw.add_argument("--roof", type=float, default=0.5,
                     help="share of a hole that must have a ceiling over it (0: courtyards too)")
@@ -678,11 +839,13 @@ def main():
         elif a.cmd == "view":
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,
-                     max_hole=a.max_hole, roof=a.roof)
+                     max_hole=a.max_hole, roof=a.roof, ghosts=not a.keep_ghosts,
+                     min_piece=a.min_piece)
         else:
             map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,
                      trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show,
-                     subdivide=a.subdivide, normals=a.normals)
+                     subdivide=a.subdivide, normals=a.normals, ghosts=not a.keep_ghosts,
+                     min_piece=a.min_piece)
     except ConvertError as e:
         sys.exit(str(e))
 

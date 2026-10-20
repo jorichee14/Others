@@ -223,7 +223,8 @@ tests/               self-tests, no real bag needed
   test_lod3dgs.py    lod3dgs on a synthetic open-top room: centred camera, poses, depth,
                      the Poisson surface over the open top trimmed, point colours; mesh:
                      the map's colours, the ceiling found and cut, the walls kept; view:
-                     floor holes filled (not under a box, a stair opening, over max), walls flat
+                     floor holes filled (not under a box, a stair opening, over max), walls flat;
+                     mirror ghosts and loose pieces (courtyard, floating) out, furniture kept
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
   test_csi_view.py   csi_view: delay profile puts the paths at their delays; figures
   test_replica.py    replica with lidar depth on a synthetic scene
@@ -919,7 +920,8 @@ quarter of the points for a quick look (Poisson depth one less). Every face
 is split in four (`--subdivide 1`) and every vertex takes the colour of the
 map's nearest point (Poisson's own colours are averages, blurred and
 greyed); the mesh is written without normals (`--normals` to keep them), so
-a viewer shows its colours unlit. The `view` copy can be meshed the same way
+a viewer shows its colours unlit. The mirror ghosts and loose pieces go as
+in `view` (`--keep-ghosts`, `--min-piece 0` keep them). The `view` copy can be meshed the same way
 (`mesh view_<tag>.ply` -> `mesh_view_<tag>.ply`): walls flat, floor filled.
 
 A viewing copy of the map as points, its colours as crisp as the map's
@@ -931,7 +933,12 @@ python scoop_pipeline/datasets/lod3dgs.py view $P/mapping/map_final_<tag>.pcd \
 ```
 
 writes `mapping/view_<tag>.pcd`: stray points out (fewer than 8 others within
-8 cm), every flat 0.4 m cell's points put onto its plane (walls and floors
+8 cm), the mirror ghosts out (the room the LiDAR saw in polished stone or
+glass, put behind it: points no direct ray from the path reaches, cast from
+1000 poses against a coarse mesh; `--keep-ghosts`), loose pieces under
+`--min-piece` (2 m2) out when open to the sky (a courtyard seen through
+glass) or floating 1.2 m or more above the floor (lamps, signs; furniture
+under a ceiling stays), every flat 0.4 m cell's points put onto its plane (walls and floors
 thin), and the floor's holes filled at the height and in the colours of the
 floor around them. The floor is found from the trajectory (sensor height
 from the floor under the poses); filled are the holes enclosed by floor and
