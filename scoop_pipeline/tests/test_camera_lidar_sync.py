@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Self-test for data_quality_validation/camera_lidar_sync.py on made-up
+"""Self-test for checks/camera_lidar_sync.py (check.py sync) on made-up
 bags: a robot turning at random for 80 s; its camera (15 Hz) sees a texture
 sliding by fx times the yaw, its LiDAR (10 Hz) a static room turning by
 minus the yaw, stamped as an Ouster at the start of its 0.1 s sweep (the
@@ -24,7 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "datasets"))
-sys.path.insert(0, os.path.join(ROOT, "data_quality_validation"))
+sys.path.insert(0, os.path.join(ROOT, "checks"))
 import camera_lidar_sync as CL                                      # noqa: E402
 import mcap_convert as mc                                           # noqa: E402
 import swarm_slam as SS                                             # noqa: E402

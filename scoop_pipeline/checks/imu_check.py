@@ -3,7 +3,7 @@
 truth? Checks the IMU's timing and its link to the cameras (T_BS) before
 Kimera-VIO runs.
 
-    python scoop_pipeline/analysis/slam/imu_check.py <export>/<robot> [--still 5 25] [--span 26 200]
+    python3 check.py euroc <export>/<robot> [--still 5 25] [--span 26 200]
         [--max-shift 10]
 
 Times in seconds after the first stereo pair. Three measures of how fast the

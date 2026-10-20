@@ -50,7 +50,7 @@ Writes <out> (default data/processed/<date>/<pass>/datasets/euroc/<pass>_<date>)
   ZED IMU is still late (20260924: the wrapper on the robot stamped it 2.12 s
   late) and one the retimed step already corrected both come out right; 0
   where there is no reference or the measurement is not sure.
-  analysis/slam/imu_check.py checks the export against the images.
+  check.py euroc checks the export against the images.
 --params-only: (re)write only params/ of an existing export (rates from its data.csv files).
 
 A stereo pair is a left and right image within 2 ms, at most --rate per

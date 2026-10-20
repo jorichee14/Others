@@ -31,8 +31,21 @@
                            + scan-to-map, + BA against the reference; the TSDF
                            and union maps
 
-The code: analysis/maps.py (map, walls, maps, scans, distances, noise) and analysis/trajs.py
-(trajs, time, imu, loop); report is below. run_pass.py runs `time` and
+  the recording and the environment (checks/):
+  env                      is this environment ready? (versions, cv2.aruco, GPU)
+  decoder <bag>            the fast bag decoder against the generic one, timed
+  ouster  <packets bag>    offline Ouster packet decoding against the replayed clouds
+  sync    <bag>            a robot's camera and LiDAR on one clock (PASS / FAIL)
+  glim    <machine folder> a GLIM run: its trajectory and loop closure on the boards
+  topics  <bag> [PATTERN]  what a bag's topics hold: type, count, definition, messages
+  spacing <bag> <topic>..  how evenly topics are spaced: intervals, gaps, repeats
+  euroc   <export>/<robot> a datasets/euroc.py export's IMU against its images
+  replica <dataset>        a Replica-format dataset fits itself (before SplaTAM)
+
+The code: analysis/maps.py (map, walls, maps, scans, distances, noise),
+analysis/trajs.py (trajs, time, imu, loop), analysis/chain.py, smooth.py,
+figures.py, method_figures.py; report is below; the recording and environment
+checks are scripts in checks/, run as they are. run_pass.py runs `time` and
 `report` as steps of a pass.
 """
 import argparse
@@ -252,7 +265,21 @@ COMMANDS = {"map": maps.main_quality, "walls": maps.main_walls, "maps": maps.mai
             "smooth": smooth.main_smooth, "chain": chain.main_chain}
 
 
+# the recording and environment checks: scripts in checks/, run as they are
+SCRIPTS = {"env": "env_check.py", "decoder": "bag_check.py", "ouster": "ouster_check.py",
+           "sync": "camera_lidar_sync.py", "glim": "glim_check.py", "topics": "show_topics.py",
+           "spacing": "topic_timing.py", "euroc": "imu_check.py", "replica": "replica_check.py"}
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in SCRIPTS:
+        cmd = sys.argv[1]
+        sys.argv = ["check.py " + cmd] + sys.argv[2:]
+        path = os.path.join(ROOT, "checks", SCRIPTS[cmd])
+        sys.path.insert(0, os.path.dirname(path))
+        # run as its own __main__, keeping sys.argv[0] (runpy would set the file's path)
+        exec(compile(open(path).read(), path, "exec"), {"__name__": "__main__", "__file__": path})
+        return
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
         print(__doc__)
         sys.exit(0 if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help") else 2)

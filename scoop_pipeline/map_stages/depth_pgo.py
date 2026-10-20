@@ -35,8 +35,7 @@ writes the outputs, this solves for the poses).
                  so a fully constrained frame is map_sigma_m; pgo_icp_iters
                  passes
   ablation    "pgo_map": false leaves the map fixes out (cuVSLAM, the anchor and
-              the boards only): 04 --track <t> --as <t>_nomap --set pgo_map=false,
-              then checks/compare_tracks.py
+              the boards only): 04 --track <t> --as <t>_nomap --set pgo_map=false
   solve       Gauss-Newton on the sparse normal equations, a Cauchy loss
               (robust_c sigmas) on all but the odometry within a piece; the
               graph is solved after each step above, the frames re-matched to

@@ -2,7 +2,7 @@
 """Is this environment ready for the SCooP pipeline?
 
     conda activate scoop
-    python checks/env_check.py
+    python3 check.py env
 
 Imports every package the pipeline uses and prints its version, checks the
 pieces that fail late rather than at import (cv2.aruco, open3d's native

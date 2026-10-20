@@ -442,11 +442,6 @@ def main():
                      % (after["map_zed"].parent, after["zed_camera_link"].parent))
         close(tree.lookup("map", "arducam_optical_frame", T0 + 5), T_ARDU,
               "coop: arducam from survey_1's 07 (cameras_from)", f)
-        r = subprocess.run([sys.executable, os.path.join(ROOT, "checks", "tf_at.py"),
-                            coop_cfg, "--bag", os.path.join(tmp, "coop_merged"), "--t", "0"],
-                           capture_output=True, text=True)
-        if r.returncode or "0.0 cm, 0.00 deg apart" not in r.stdout:
-            f.append("checks/tf_at.py: " + r.stdout[-800:] + r.stderr[-800:])
         roots = {tftree._root(c, after) for c in after}
         if roots != {"map"}:
             f.append("coop: the tree has more than one root: %s" % sorted(roots))

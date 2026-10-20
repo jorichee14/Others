@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """How good a robot's GLIM run is: its trajectory and its loop closure on the boards.
 
-    python processing/glim_check.py <raw machine folder> [--config map_stages/pipeline_config_<pass>.json]
+    python3 check.py glim <raw machine folder> [--config map_stages/pipeline_config_<pass>.json]
 
-    e.g. python processing/glim_check.py ~/workspaces/isaac_ros-dev/data/raw/20261015/mapping/mobile_2
+    e.g. python3 check.py glim ~/workspaces/isaac_ros-dev/data/raw/20261015/mapping/mobile_2
 
 The GLIM step of process_recording.py does both of these itself when GLIM
 finishes; this runs them again on a GLIM run that is already there:

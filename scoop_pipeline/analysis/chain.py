@@ -164,7 +164,7 @@ def main_chain(argv=None):
         r = json.load(open(rep))
         say(os.path.abspath(r.get("input", "")) == os.path.abspath(seed),
             f"02's input {rel(r.get('input'), base)} is the seed")
-        say(os.path.abspath(r.get("output", "")) == os.path.abspath(ref), f"02's output is the reference")
+        say(os.path.abspath(r.get("output", "")) == os.path.abspath(ref), "02's output is the reference")
         rounds = r.get("rounds") or []
         if rounds:
             x = rounds[-1]

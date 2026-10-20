@@ -49,7 +49,6 @@ processing/          raw recordings -> processed bags (command lines around scoo
                      direct_visual_lidar_calibration
   run_dvlc.sh        that calibration (docker) on the pause bags: preprocess, guess, calibrate,
                      viewer; output owned by you
-  glim_check.py      a GLIM run's trajectory summary and loop closure on the boards
   convert_cloud.py   a point cloud to another format (pcd, ply, xyz, ...), optionally thinned
   rename_frames.py   rename TF frames in a bag (headers, Odometry child, /tf, /tf_static), e.g.
                      --suffix _mobile2 for a bag decoded before --frame-suffix
@@ -57,8 +56,7 @@ run_pass.py          one pass from raw to processed, every step in order (below)
 clean_pass.py <config> [--apply] [--work]  keep a pass's current results, move older
                      versions, side runs and caches to processed/<date>/<pass>/_old/
                      (a dry run without --apply; clean.keep in the config keeps more)
-check.py <command>   every map and trajectory check, one command (check.py -h;
-                     check.py <command> -h):
+check.py <command>   every check, one command (check.py -h; check.py <command> -h):
     map     <map.pcd>       surface thickness (walls, floors; a wall's two faces vs
                             one surface mapped twice with --traj; --save patches.ply)
     walls   <config>        the map's wall spots with the scans placed by a trajectory:
@@ -94,6 +92,18 @@ check.py <command>   every map and trajectory check, one command (check.py -h;
                             PNG + PDF in processed/<pass>/figures/method/ (--spot x,y,z)
     report  <config>        a mapping pass: GLIM, + time correction, + scan-to-map, + BA
                             against the reference; TSDF and union maps (run_pass's report)
+  the recording and the environment (scripts in checks/, run by check.py as they are):
+    env                     is this environment ready? (versions, cv2.aruco, open3d, GPU)
+    decoder <bag>           the fast bag decoder against the generic one, field by field, timed
+    ouster  <packets bag>   offline Ouster packet decoding against the replayed clouds
+    sync    <bag>           a robot's camera and LiDAR on one clock: the turn rate from
+                            image shifts and from scan azimuth shifts, per segment (PASS/FAIL)
+    glim    <machine folder> a GLIM run: trajectory summary and loop closure on the boards
+    topics  <bag> [PATTERN] what a bag's topics hold: type, count, definition, first messages
+    spacing <bag> <topic>.. intervals, gaps and repeated frames of topics in a bag
+    euroc   <export>/<robot> a euroc.py export's IMU timing against its images and ground
+                            truth, gravity while still, T_BS rotation
+    replica <dataset>       a Replica-format dataset fits itself (depth vs image, poses)
 map_stages/          map from LiDAR + GLIM poses, numbered in the order they run
                      (01_build_map.py, 02_bundle_adjust.py, ...);
                      calibration read from the bag (camera_info + /tf_static); outputs in
@@ -133,7 +143,6 @@ analysis/            measuring results; reads outputs, writes nothing back
   headroom.py configs/headroom_terms.json [--traj ref.tum ...]  E1: every testbed error term
                           against the fusion breaking points, like against like, log axis
   maps.py, trajs.py  the map and trajectory checks, run through check.py (above)
-  odom/zed_vs_lidar.py  the ZED's own tracking against the LiDAR trajectory
   (slam/channel_relay.py: ROS 2 relay between robot domains through scoop/channel.py;
    slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel;
    slam/run_hydra.sh <hydra export> <channel>: every robot's Hydra streaming its
@@ -144,13 +153,10 @@ analysis/            measuring results; reads outputs, writes nothing back
                      drift in map per run, or per stretch without a dropout (STRETCHES=1)
   slam/hydra_eval.py  Hydra against the ground truth as cslam_eval does Swarm-SLAM: ATE per
                      robot and joint, in map, the odometry baseline, loop closures
-  slam/imu_check.py  a euroc.py export's IMU timing against its images and ground truth
-                     (turn rates lined up by time shift), gravity while still, T_BS rotation
   slam/relay_stats.py  what a channel did to a run's messages (relay.csv), runs side by
                      side: MB, lost, delay, backlog; --to server: map age at the receiver
   slam/dsg_stream.py  Hydra's scene-graph stream: log (in Hydra's container) the size of
                      every hydra/backend/dsg update against bag time; plot size and rate
-  odom/zed_vs_lidar.py    drift of the ZED's own tracking (map_zed) against the LiDAR trajectory
   comms/             link analyses on processing/comms_tables.py's tables
   comms/ntp_analysis.py   clock agreement: offsets at polls, error bounds, steps,
                      frequency vs temperature, worst case between machines
@@ -163,16 +169,7 @@ analysis/            measuring results; reads outputs, writes nothing back
                      loss, delay spread, coherence vs speed, RSSI on the map
   comms/csi_view.py       pictures of the clean CSI: amplitude, phase, delay profile
                      over time, snapshots by link length (comms/csi/view/)
-  bags/topic_timing.py    intervals, gaps and repeated frames of topics in a bag
-  bags/show_topics.py     what topics hold: type, count, definition, first messages
-checks/              is the environment / the decoder right? (against real bags)
-  env_check.py       is this environment ready?
-  bag_check.py       verify + time the fast decoder on a real bag
-  ouster_check.py    verify packet decoding against a replayed/retimed bag
-  replica_check.py   does a replica dataset fit itself (depth vs image, depth vs poses)
-data_quality_validation/  is the recorded data right? (straight from the bag, PASS/FAIL)
-  camera_lidar_sync.py <bag> [--robot mobile_1]  camera and LiDAR on one clock: the turn rate
-                     from image shifts and from scan azimuth shifts, lined up per segment
+checks/              the recording and environment checks, run through check.py (above)
 tests/               self-tests, no real bag needed
   test_bag.py        reading, writing, messages
   test_ouster.py     packets, clock, replay, remaps (needs ouster-sdk)
@@ -199,7 +196,7 @@ tests/               self-tests, no real bag needed
                      odometry with a z-up body frame, config frames, range and mesh stream
   test_hydra_eval.py hydra_eval: odometry shift aligned away, Hydra's offset in map, --cov,
                      loop closures, json and figure
-  test_camera_lidar_sync.py  camera_lidar_sync: synced bag passes (Ouster start-of-sweep stamps, robot
+  test_camera_lidar_sync.py  check.py sync: synced bag passes (Ouster start-of-sweep stamps, robot
                      body and a blocked sector in view), a LiDAR 0.3 s late found and fails
   test_imu_sync.py   imu_sync: a ZED IMU 2.12 s late found against the reference IMU, a still
                      robot not sure; processing/imu_sync.py --out moves only its stamps; retime step 5
@@ -207,7 +204,7 @@ tests/               self-tests, no real bag needed
                      kimera_eval: ATE and in-map error per stretch, a failed stretch, a whole run
   test_hydra_kimera.py  hydra --poses kimera: the camera from Kimera-VIO's IMU at every frame of its
                      runs, a right loop closure sent, one the odometry contradicts left out
-  test_imu_check.py  imu_check: a gyro 2.1 s late found against images and ground truth;
+  test_imu_check.py  check.py euroc: a gyro 2.1 s late found against images and ground truth;
                      an IMU turned 90 deg found by gravity and the rotation fit
   test_relay_stats.py  relay_stats: delay, loss, backlog of a queued stream, map age
   test_dsg_stream.py dsg_stream: sizes, rates from bag time between updates, figure
@@ -259,7 +256,7 @@ Two environments, each for its own kind of work:
 cd scoop_pipeline
 conda env create -f environment.yml
 conda activate scoop
-python checks/env_check.py        # versions, cv2.aruco, open3d, Ouster SDK, GPU
+python check.py env               # versions, cv2.aruco, open3d, Ouster SDK, GPU
 python tests/test_bag.py && python tests/test_ouster.py
 ```
 
@@ -269,7 +266,7 @@ For CUDA 11 machines, swap `cupy-cuda12x` for `cupy-cuda11x` first
 
 Keep them in separate terminals: `source /opt/ros/<distro>/setup.bash` puts
 ROS's Python packages on `PYTHONPATH`, where they shadow the env's.
-`env_check.py` warns when that has happened.
+`check.py env` warns when that has happened.
 
 ## Bag decoding (`scoop/bag.py`)
 
@@ -300,10 +297,10 @@ Before using it on a new sensor or driver version:
 
 ```
 python3 tests/test_bag.py
-python3 checks/bag_check.py <bag> [--points /ouster/points] [--image <topic>]
+python3 check.py decoder <bag> [--points /ouster/points] [--image <topic>]
 ```
 
-`bag_check.py` compares the fast path with the generic decoder field by field
+`check.py decoder` compares the fast path with the generic decoder field by field
 on the first 50 messages (exits non-zero on any mismatch) and times both.
 On a synthetic uncompressed MCAP of 128x1024 Ouster scans (48-byte points,
 6.3 MB each): 67 msg/s for the scripts' decode + extract + range gate, 235
@@ -447,7 +444,7 @@ apart GLIM puts it, in mm / deg against the detections' own noise:
     loop closure rs_anchor: s0->s3 over 1380 s: 12.4 mm / 0.210 deg (noise 3.1 mm) -> DRIFT
 ```
 
-`processing/glim_check.py <raw machine folder>` runs both again on a GLIM run
+`check.py glim <raw machine folder>` runs both again on a GLIM run
 that is already there. Stage 02 runs the same check on its refined trajectory
 when it finishes and prints it next to GLIM's (`check.py loop <config>
 [--traj FILE]` on any trajectory):
@@ -608,7 +605,7 @@ for scan in ouster.iter_ouster_scans(reader, "/ouster", clock=clock,
 Which conventions the replayed clouds used is checked, not assumed:
 
 ```
-python3 checks/ouster_check.py <packets_bag> --points-bag <retimed bag> \
+python3 check.py ouster <packets_bag> --points-bag <retimed bag> \
     [--packets-ns /ouster] [--points-ns /mobile_1/ouster] [--driver-min-range 1.30]
 ```
 
@@ -840,7 +837,7 @@ names their format requires.
 Replica: `results/frameNNNNNN.jpg` + `depthNNNNNN.png` (uint16, metres = value /
 6553.5 as Replica, so 0-10 m; `--depth-scale 1000` for mm), `traj.txt`
 (camera-to-world, OpenCV axes), `splatam_data_config.yaml`, `report.txt`.
-Before a SLAM run, `python checks/replica_check.py <dataset>`: it checks the
+Before a SLAM run, `python check.py replica <dataset>`: it checks the
 config against the files, scores how well the depth edges sit on the colour
 image (against the mirrored depth as chance) and how well the poses move one
 frame's depth onto the next, and writes `<dataset>/check/frameNNNNNN.png`

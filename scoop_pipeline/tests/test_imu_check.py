@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Self-test for analysis/slam/imu_check.py on made-up exports: the IMU (x
+"""Self-test for checks/imu_check.py (check.py euroc) on made-up exports: the IMU (x
 forward, z up) standing 26 s, then yawing at random; the left camera looking
 along x (T_BS in params/), its images a texture sliding by fx times the yaw;
 the ground truth on the images' clock.
@@ -22,7 +22,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(ROOT, "analysis", "slam"))
+sys.path.insert(0, os.path.join(ROOT, "checks"))
 import imu_check as IC                                              # noqa: E402
 
 RX = np.array([[1.0, 0, 0], [0, 0, -1], [0, 1, 0]])                 # 90 deg about x

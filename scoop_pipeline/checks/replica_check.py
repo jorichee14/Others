@@ -4,7 +4,7 @@ fit itself? Run it on a dataset BEFORE giving it to SplaTAM: SplaTAM tracks the
 camera against the depth, so depth that does not fit the colour image, or
 poses that do not fit the depth, fail every frame whatever the config says.
 
-    python3 checks/replica_check.py <dataset dir> [--frames 0,500,1000] [--step 5]
+    python3 check.py replica <dataset dir> [--frames 0,500,1000] [--step 5]
 
 1. config vs files: png_depth_scale, resolution and intrinsics of
    splatam_data_config.yaml against the PNGs / JPEGs; traj.txt line count.

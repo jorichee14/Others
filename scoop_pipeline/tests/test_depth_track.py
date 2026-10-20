@@ -299,12 +299,6 @@ def main():
                 if not np.median(cn[:, 5]) > 2 * np.median(cv[:, 5]):
                     f.append("ablation: sigma without map fixes %.3f, with %.3f"
                              % (np.median(cn[:, 5]), np.median(cv[:, 5])))
-                r = subprocess.run([sys.executable, os.path.join(ROOT, "checks", "compare_tracks.py"),
-                                    cfg], capture_output=True, text=True)
-                print("\n".join(r.stdout.splitlines()[:6]))
-                if r.returncode or not os.path.exists(os.path.join(
-                        od, "compare_mobile_2_depth_mobile_2_depth_nomap.png")):
-                    f.append("compare_tracks: " + r.stdout[-1500:] + r.stderr[-2500:])
         # the marginals are the inverse information's diagonal blocks
         import depth_pgo as PG
         g = PG.Graph(6)

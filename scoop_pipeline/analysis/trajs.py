@@ -416,7 +416,7 @@ its correlation r whether the error is timing at all (trajs' heading_vs_turning)
             r 0.23; without: 45.8 ms, r 0.92)
   OFF       set glim.pose_time_offset to (the applied one + dt) for this
             machine in configs/recording.yaml, re-export GLIM
-            (processing/glim_check.py), and run the pass again from 02
+            (check.py glim), and run the pass again from 02
 
 Exits 0 either way: 02's reference and 04's track are fixed by the scans
 (references built from GLIM before and after the 46 ms correction agree to
@@ -459,7 +459,7 @@ def time_verdict(h):
     else:
         out.append(f"-> OFF by {h['dt_ms']:+.0f} ms: set glim.pose_time_offset to "
                    f"{h['offset_to_set_s']:.3f} for this machine in configs/recording.yaml, "
-                   "re-export GLIM (processing/glim_check.py) and run the pass again from 02")
+                   "re-export GLIM (check.py glim) and run the pass again from 02")
     return out
 
 

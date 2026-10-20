@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What a bag's topics hold: type, count, message definition, first messages.
 
-    python scoop_pipeline/analysis/bags/show_topics.py <bag dir> [PATTERN ...] [-n 2] [--full]
+    python3 check.py topics <bag dir> [PATTERN ...] [-n 2] [--full]
 
 PATTERNs pick topics as in a shell ('/*/wifi/*', '/*/ntp/*'); none = all.
 The definition is the one the bag carries (MCAP stores it), so the robots'
@@ -10,7 +10,7 @@ types it uses are named, --full prints them too. Long arrays are shortened
 to their length and first values. Reads only the first -n messages of each
 topic.
 
-    python scoop_pipeline/analysis/bags/show_topics.py <merged> '/*/wifi/*' '/*/ntp/*' '/*/csi*' '/*/csi_publisher/*'
+    python3 check.py topics <merged> '/*/wifi/*' '/*/ntp/*' '/*/csi*' '/*/csi_publisher/*'
 """
 import argparse
 import fnmatch
@@ -18,7 +18,7 @@ import os
 import sys
 import warnings
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 warnings.simplefilter("ignore", FutureWarning)
 
 from scoop import bag                                               # noqa: E402

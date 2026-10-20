@@ -2,7 +2,7 @@
 """Are a robot's camera and LiDAR on the same clock? Read straight from the
 recorded (merged) bag: no pipeline output, no calibration beyond fx.
 
-    python scoop_pipeline/data_quality_validation/camera_lidar_sync.py <bag> [--robot mobile_1]
+    python3 check.py sync <bag> [--robot mobile_1]
         [--image TOPIC --info TOPIC --lidar TOPIC] [--span FROM TO] [--segment 100]
         [--tol 0.05] [--max-shift 5] [--plot out.png]
 
@@ -37,7 +37,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "analysis", "slam"))
+sys.path.insert(0, HERE)
 from imu_check import line_up, smooth                              # noqa: E402
 
 ROBOTS = {"mobile_1": {"image": "/mobile_1/zed/left/image_rect_color", "info": "/mobile_1/zed/left/camera_info",
