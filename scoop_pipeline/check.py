@@ -121,8 +121,9 @@ def loop_closure(P, config, key, path, run):
     report = {"glim": odo("glim_raw_loop_closure.json"),
               "glim_corr": odo("glim_loop_closure.json")}.get(
         key, os.path.splitext(path)[0] + "_loop_closure.json")
-    if os.path.isfile(report):
-        summ = trajs.loop_summary(report)
+    if os.path.isfile(report) and not (os.path.isfile(path) and
+                                       os.path.getmtime(path) > os.path.getmtime(report)):
+        summ = trajs.loop_summary(report)                 # measured on this trajectory
     elif run:
         summ = trajs.loop_check(config, path, report=report, label=key)
     else:
