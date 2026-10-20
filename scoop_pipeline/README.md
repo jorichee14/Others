@@ -142,6 +142,9 @@ datasets/            bags -> datasets for other tools
                      moved onto the images' clock (mobile_1's ZED: 2.12 s; --imu-only rewrites it)
   replica_multiagent.py  a multi-robot pass as a ReplicaMultiagent scene for MAGiC-SLAM:
                      one common camera, frames in lockstep, poses in the shared map
+  lod3dgs.py         a replica export + the map as a LOD-3DGS (LetsGo) scene: COLMAP
+                     layout with the known poses, depth for its depth loss, starting
+                     points sampled from the trimmed Poisson mesh of the map
 analysis/            measuring results; reads outputs, writes nothing back
   headroom.py configs/headroom_terms.json [--traj ref.tum ...]  E1: every testbed error term
                           against the fusion breaking points, like against like, log axis
@@ -213,6 +216,8 @@ tests/               self-tests, no real bag needed
   test_dsg_stream.py dsg_stream: sizes, rates from bag time between updates, figure
   test_replica_multiagent.py  replica_multiagent: common camera, lockstep frames, poses,
                      colour resampling and depth registration on a two-robot bag
+  test_lod3dgs.py    lod3dgs on a synthetic open-top room: centred camera, poses, depth,
+                     the Poisson surface over the open top trimmed, point colours
   test_csi_analysis.py  csi_analysis: occupancy, capture, path loss, delay spread, coherence
   test_csi_view.py   csi_view: delay profile puts the paths at their delays; figures
   test_replica.py    replica with lidar depth on a synthetic scene
@@ -880,3 +885,31 @@ Depth (`--depth-source`; for MCD it replaces the config's depth sensors):
 - `zed`: the ZED depth image.
 
 The file is standalone (no scoop imports).
+
+## Gaussian splatting: LOD-3DGS (`datasets/lod3dgs.py`)
+
+LetsGo (Cui et al., ACM TOG 2024; github.com/zhaofuq/LOD-3DGS) trains
+level-of-detail Gaussians from a LiDAR scan: known poses instead of SfM, a
+depth loss, and starting points sampled from a mesh of the scan rather than
+the raw points (2.5-3.4 dB PSNR better in their Table 3). From a replica
+export with map depth:
+
+```
+D=$P/datasets/mobile_1/replica_map_<pass>_<date>
+python scoop_pipeline/datasets/lod3dgs.py $D --map $P/mapping/denoised_<pass>_<date>.pcd
+python train.py -s $P/datasets/mobile_1/lod3dgs_map_<pass>_<date> --use_lod \
+    --depths depths --data_device cpu -r 1        # in LOD-3DGS, with its README's flags
+```
+
+The map is meshed (Poisson, `--poisson-depth`, default cells about two
+`--voxel` across; normals turned to the nearest camera), faces farther than
+`--trim` (0.10 m, the paper's) from a map point are removed, and the mesh is
+sampled every `--spacing` (4 cm, the paper's) into `sparse/0/points3D.ply`,
+each point the mean colour of the `--color-views` frames that see it
+(`mesh.ply` is kept for a look). LOD-3DGS ignores the principal point (it
+takes the image centre), so images and depth are resampled onto the largest
+window centred on it; depth goes into `depths/` as LOD-3DGS reads it (8-bit
+warped grey, alpha where there is depth). The map must be the one the
+export's depth was rendered from, so poses, depth and points share a frame.
+`--every N` thins the frames. LOD-3DGS builds its level-of-detail octree with
+PotreeConverter on the first run (its README: built and tested on Windows).
