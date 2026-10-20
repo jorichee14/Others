@@ -53,10 +53,11 @@
    {"name": "mobile_2",
     "traj": "traj_mobile_2_lidar_in_cam.tum",
     "optical_frame": "camera_color_optical_frame",
-    "local_frame": "camera_link",
-    "base_frame": {"_note": "the robot's base_link, on the RealSense body (camera_link: x forward, y left, z up) until the base is measured; then its pose in camera_link here",
-                   "name": "base_link", "parent": "camera_link",
-                   "xyz": [0, 0, 0], "qxyzw": [0, 0, 0, 1]}}
+    "local_frame": "mobile_2_base_link",
+    "base_frame": {"_note": "mobile_2's base link, the root of its sensors (the trajectory moves it; camera_link and the LiDAR hang from it). On the RealSense body (camera_link: x forward, y left, z up) until the base is measured; then its pose in camera_link here",
+                   "name": "mobile_2_base_link", "measured_in": "camera_link",
+                   "xyz": [0, 0, 0], "qxyzw": [0, 0, 0, 1],
+                   "children": ["camera_link", "os_sensor_mobile2"]}}
   ]
  }
 }

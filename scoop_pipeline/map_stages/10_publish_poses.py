@@ -44,15 +44,20 @@ The optical frame is the frame the images and depth are expressed in, so a
 consumer can project through it (global_pose, or camera_pose with a
 base_frame) directly with the camera intrinsics.
 
-base_frame (per robot, optional): the robot's base_link, fixed to a frame of
-its tree by a measured or chosen transform (the pose of base_link in parent):
-    "base_frame": {"name": "base_link", "parent": "camera_link",
-                   "xyz": [0, 0, 0], "qxyzw": [0, 0, 0, 1]}
-Until the robot's base is measured it sits on the camera body (camera_link:
-x forward, y left, z up); with the base measured, put its pose in the parent
-here (e.g. 0.3 m behind and 0.4 m below camera_link: "xyz": [-0.3, 0, -0.4])
-and nothing else changes. The parent must be in the tree (full_tf), or be
-the published optical frame itself.
+base_frame (per robot, optional): the robot's base link, placed by a measured
+or chosen transform, its pose in the frame "measured_in":
+    "base_frame": {"name": "mobile_2_base_link", "measured_in": "camera_link",
+                   "xyz": [0, 0, 0], "qxyzw": [0, 0, 0, 1],
+                   "children": ["camera_link", "os_sensor_mobile2"]}
+Without "children" it is a leaf below measured_in. With them it is the root of
+the robot's sensors: the trajectory moves it (<origin> ~~ base link on /tf, in
+place of <origin> ~~ <the moving child>) and each child hangs from it by a
+static edge (its old parent edge left out), every frame keeping its place in
+map. Until the robot's base is measured it sits on the camera body
+(camera_link: x forward, y left, z up); with the base measured, put its pose
+in measured_in here (e.g. 0.3 m behind and 0.4 m below camera_link: "xyz":
+[-0.3, 0, -0.4]) and nothing else changes. measured_in must be in the tree
+(full_tf), or be the published optical frame itself ("parent" is read as it).
 No body-frame conversion is applied. cam_extrinsic_xyzquat is no longer read
 here; set "publish_body_frame": true on a robot to get the old behaviour.
 
@@ -225,9 +230,7 @@ def full_tf(P, s):
         for n in notes:
             print("    %s  (configs/static_tf.yaml)" % n)
     drop, more, extra, after = pass_tf.plan(P, edges, [bag])
-    print(tftree.format_tree(after))
-    return (st + more, tftree.edge_matcher(["%s->%s" % d for d in drop]) if drop else None,
-            extra, after)
+    return st + more, list(drop), extra, after
 
 
 def base_poses(rb, edges):
@@ -239,7 +242,7 @@ def base_poses(rb, edges):
     if not bf:
         return None
     from scoop import tftree
-    name, parent = bf.get("name", "base_link"), bf["parent"]
+    name, parent = bf.get("name", "base_link"), bf.get("measured_in") or bf["parent"]
     T_pb = tftree.matrix(bf.get("xyz", [0, 0, 0]), bf.get("qxyzw", [0, 0, 0, 1]))
     if parent == rb["_frame"]:
         T_fp = np.eye(4)
@@ -253,10 +256,49 @@ def base_poses(rb, edges):
                          % (rb["name"], name, edges[name].parent))
     T = np.einsum("nij,jk->nik", rb["_T_map_frame"], T_fp @ T_pb)
     t, q = tftree.to_tq(T_pb)
-    print("  %s: %s below %s at xyz=%s qxyzw=%s; %s in map starts at %s"
-          % (rb["name"], name, parent, np.round(t, 3).tolist(), np.round(q, 4).tolist(),
+    print("  %s: %s at xyz=%s qxyzw=%s in %s; %s in map starts at %s"
+          % (rb["name"], name, np.round(t, 3).tolist(), np.round(q, 4).tolist(), parent,
              name, np.round(T[0][:3, 3], 3).tolist()))
     return (parent, name, t, q), T
+
+
+def reroot(rb, edge, parts):
+    """A base_frame with "children": the base link as the root of the robot's
+    sensors. The moving child's /tf edge <origin> ~~ child becomes <origin> ~~
+    base (T_origin_base = T_origin_child @ inv(T_base_child)); each child
+    hangs from the base by a static edge, its old parent edge dropped. Edits
+    parts (static, drop, /tf, edges) in place; -> the base's name."""
+    from scoop import tftree
+    ref, name, t, q = edge
+    st, drop, extra, edges = parts
+    T_ref_base = tftree.matrix(t, q)
+    kids = list(rb["base_frame"]["children"])
+    for c in kids:
+        if c not in edges:
+            raise SystemExit("%s: base_frame child %s is not in the tree" % (rb["name"], c))
+    T_bc = {c: np.linalg.inv(T_ref_base) @ tftree.static_between(ref, c, edges) for c in kids}
+    moving = [c for c in kids if not edges[c].static]
+    if len(moving) != 1:
+        raise SystemExit("%s: base_frame children %s: one of them must be the frame the "
+                         "trajectory moves (a /tf edge), found %s" % (rb["name"], kids, moving))
+    mv = moving[0]
+    origin = edges[mv].parent
+    T_cb = np.linalg.inv(T_bc[mv])
+    for i, (t_ns, p, c, tt, qq) in enumerate(extra):
+        if c == mv:
+            nt, nq = tftree.to_tq(tftree.matrix(tt, qq) @ T_cb)
+            extra[i] = (t_ns, p, name, nt, nq)
+    for c in kids:
+        if edges[c].static:
+            drop.append((edges[c].parent, c))
+        st[:] = [e for e in st if e[1] != c]
+        ct, cq = tftree.to_tq(T_bc[c])
+        st.append((name, c, ct, cq))
+        edges[c] = tftree.Edge(name, c, True, T_bc[c])
+    edges[name] = tftree.Edge(origin, name, False)
+    print("  %s: %s is the root of its sensors: %s ~~ %s, then %s"
+          % (rb["name"], name, origin, name, ", ".join(kids)))
+    return name
 
 
 def main():
@@ -314,20 +356,27 @@ def main():
     write_tf = write_tf and not full
 
     parts = full_tf(P, s) if full else None
-    base = {}
+    base, roots = {}, {}
     for rb, *_ in robots:
         b = base_poses(rb, parts[3] if parts else None)
         if b:
             base[rb["name"]] = b
-            if parts:
-                parts[0].append(b[0])                     # parent -> base_link on /tf_static
+            if parts and rb["base_frame"].get("children"):
+                roots[rb["name"]] = reroot(rb, b[0], parts)
+            elif parts:
+                parts[0].append(b[0])                     # measured_in -> base link on /tf_static
+            elif rb["base_frame"].get("children"):
+                raise SystemExit("%s: base_frame children need the complete TF (full_tf)" % rb["name"])
+    if parts:
+        from scoop import tftree
+        print(tftree.format_tree(parts[3]))
     # local_pose of each robot the tree moves: the TF edge origin ~~ sensor root
     # (the robot's "local_frame"; the dataset's machine: the first one the plan moves)
     by_root = {}
     for t_ns, p, c, t, q in (parts[2] if parts else []):
         by_root.setdefault(c, {})[t_ns] = (p, c, t, q)
     first = parts[2][0][2] if parts and parts[2] else None
-    local = {rb["name"]: by_root.get(rb.get("local_frame") or
+    local = {rb["name"]: by_root.get(roots.get(rb["name"]) or rb.get("local_frame") or
                                      (first if rb["name"] == P.machine else None), {})
              for rb, *_ in robots}
 
@@ -364,7 +413,8 @@ def main():
 
     if full:
         from scoop import merge
-        st, drop_tf, extra, _ = parts
+        st, drop, extra, _ = parts
+        drop_tf = tftree.edge_matcher(["%s->%s" % d for d in drop]) if drop else None
         ps = "geometry_msgs/msg/PoseStamped"
         sch = TopicSchema(ps, "ros2msg", rosmsg.msgdef(ps).encode(), "cdr")
         seq = {}
@@ -395,8 +445,10 @@ def main():
     for rb, *_ in robots:
         if rb["name"] in base:
             p_, c_ = base[rb["name"]][0][:2]
-            print("  global_pose of %s: %s in '%s' (%s below %s on /tf_static); camera_pose: %s in '%s'"
-                  % (rb["name"], c_, map_frame, c_, p_, rb["_frame"], map_frame))
+            where = ("the root of its sensors" if rb["name"] in roots
+                     else "below %s on /tf_static" % p_)
+            print("  global_pose of %s: %s in '%s' (%s); camera_pose: %s in '%s'"
+                  % (rb["name"], c_, map_frame, where, rb["_frame"], map_frame))
         else:
             print("  global_pose of %s: %s in '%s'" % (rb["name"], rb["_frame"], map_frame))
     for name, lp in local.items():
