@@ -25,6 +25,7 @@ from types import SimpleNamespace
 
 import numpy as np
 from scipy.spatial import cKDTree
+from scipy.spatial.transform import Rotation
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -358,7 +359,7 @@ B against a reference A, the usual reconstruction metrics:
   accuracy       share of B's points with a point of A within --dist
                  (what B has that A has not: new surfaces, or junk)
 
-  python3 check.py maps A.pcd B.pcd [--dist 0.10]
+  python3 check.py maps A.pcd B.pcd [--dist 0.10] [--align]
       [--traj traj.txt] [--save missing.ply] [--sample 5000000]
 
     e.g. A = the union map (mapping/union_ba/denoised_...pcd),
@@ -366,6 +367,11 @@ B against a reference A, the usual reconstruction metrics:
 
 --dist    within this of each other counts as covered (m). A union map's
           surfaces are a band several cm wide; 0.10 holds the band.
+--align   B registered onto A first (two passes' maps, each anchored on its own
+          board: their frames differ by a rigid transform): a global match of
+          geometric features (FPFH, RANSAC), then point-to-plane ICP at 25, 10,
+          5 cm, also from B as given; the better fit is kept and printed (the
+          shift and turn between the two maps' frames)
 --traj    also split completeness by distance from the robot's path and by
           height, to see WHERE B is missing what A has
 --save    A's points B is missing, as a PLY (scalar_dist_cm: to the nearest
@@ -392,6 +398,46 @@ def coverage(A, B, dist=0.10, n=5_000_000, seed=0):
     return float(comp.mean()), float(acc.mean()), As, dA, comp
 
 
+def align(A, B, log=print):
+    """T (4x4) placing B on A: FPFH + RANSAC, then point-to-plane ICP at
+    25 / 10 / 5 cm; also ICP from B as given, the better fit (more of B
+    within 5 cm of A) wins."""
+    import open3d as o3d
+    reg = o3d.pipelines.registration
+    KD = o3d.geometry.KDTreeSearchParamHybrid
+    steps = ((0.25, 1.0), (0.10, 0.30), (0.05, 0.10))            # voxel, max distance
+
+    def down(X, v):
+        p = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(X)).voxel_down_sample(v)
+        p.estimate_normals(KD(radius=3 * v, max_nn=30))
+        return p
+    a = {v: down(A, v) for v, _ in steps}
+    b = {v: down(B, v) for v, _ in steps}
+    v0 = steps[0][0]
+    feat = lambda p: reg.compute_fpfh_feature(p, KD(radius=5 * v0, max_nn=100))  # noqa: E731
+    g = reg.registration_ransac_based_on_feature_matching(
+        b[v0], a[v0], feat(b[v0]), feat(a[v0]), True, 3 * v0,
+        reg.TransformationEstimationPointToPoint(False), 3,
+        [reg.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+         reg.CorrespondenceCheckerBasedOnDistance(3 * v0)],
+        reg.RANSACConvergenceCriteria(200000, 0.999))
+    best = None
+    for name, T in (("B as given", np.eye(4)), ("global match", g.transformation)):
+        for v, d in steps:
+            r = reg.registration_icp(b[v], a[v], d, T, reg.TransformationEstimationPointToPlane(),
+                                     reg.ICPConvergenceCriteria(max_iteration=50))
+            T = r.transformation
+        log(f"  from {name:12s}: {r.fitness * 100:5.1f} % of B within {steps[-1][1] * 100:g} cm "
+            f"of A, RMS {r.inlier_rmse * 100:.1f} cm")
+        if best is None or r.fitness > best[1]:
+            best = (T, r.fitness, name)
+    T = best[0]
+    yaw, pitch, roll = np.degrees(Rotation.from_matrix(T[:3, :3]).as_euler("ZYX"))
+    log(f"  kept {best[2]}: B moved x {T[0, 3]:+.3f} y {T[1, 3]:+.3f} z {T[2, 3]:+.3f} m, "
+        f"yaw {yaw:+.2f} pitch {pitch:+.2f} roll {roll:+.2f} deg")
+    return T
+
+
 def main_compare(argv=None):
     ap = argparse.ArgumentParser(description=COMPARE_DOC,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -401,11 +447,16 @@ def main_compare(argv=None):
     ap.add_argument("--traj")
     ap.add_argument("--save")
     ap.add_argument("--sample", type=int, default=5_000_000)
+    ap.add_argument("--align", action="store_true")
     a = ap.parse_args(argv)
 
     A, B = load(a.a), load(a.b)
     print(f"A {a.a}: {len(A)} points, extent {np.round(A.max(0) - A.min(0), 1)} m")
     print(f"B {a.b}: {len(B)} points, extent {np.round(B.max(0) - B.min(0), 1)} m")
+    if a.align:
+        print("\nB registered onto A:")
+        T = align(A, B)
+        B = B @ T[:3, :3].T + T[:3, 3]
     c, acc, As, dA, comp = coverage(A, B, a.dist, a.sample)
     print(f"\nwithin {a.dist * 100:g} cm:")
     print(f"  completeness  {c * 100:5.1f} %  of A's points have B nearby "
