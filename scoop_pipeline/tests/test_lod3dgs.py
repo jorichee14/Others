@@ -199,7 +199,7 @@ def check_view(tmp):
     tr = os.path.join(tmp, "traj_view.txt")
     np.savetxt(tr, np.c_[t, 4 + 3 * np.cos(t), 3 + 2 * np.sin(t), np.full_like(t, 0.6),
                          np.zeros((len(t), 3)), np.ones(len(t))])
-    r = L.map_view(mp, tr, max_hole=3.0)
+    r = L.map_view(mp, tr, max_hole=3.0, body=0)       # its path runs through the box
     assert os.path.basename(r["out"]) == "view_view_test.pcd", r["out"]
     assert abs(r["sensor_height"] - 0.6) < 0.03, r["sensor_height"]
     assert r["open"] >= 1, r
@@ -278,6 +278,53 @@ def check_ghosts(tmp):
     assert max(bad(Pv).values()) == 0, ("view: left", bad(Pv))
     assert floor(Pv) > 0.97 * floor(P), ("view: floor lost", floor(Pv), floor(P))
     return clean, v
+
+
+def check_body(tmp):
+    """A closed 6 x 4 x 3 room the robot drives along y = 2 (LiDAR 0.8 m up),
+    a sheet standing across its way (x = 3, wall to wall, 0.2-2.6 m: joined
+    to both walls it crosses, as a sheet seen in glass) and a partition it
+    drives past 0.35 m away: view and mesh clear the sheet whole, the walls,
+    the floor and the partition stay."""
+    import open3d as o3d
+    rng = np.random.default_rng(7)
+    g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
+
+    def sheet(axis, val, ra, rb):
+        A, B = np.meshgrid(g(*ra), g(*rb), indexing="ij")
+        o = [i for i in range(3) if i != axis]
+        p = np.zeros((A.size, 3))
+        p[:, o[0]], p[:, o[1]], p[:, axis] = A.ravel(), B.ravel(), val
+        return p
+    room = [sheet(2, 0.0, (0, 6), (0, 4)), sheet(2, 3.0, (0, 6), (0, 4)),
+            sheet(0, 0.0, (0, 4), (0, 3)), sheet(0, 6.0, (0, 4), (0, 3)),
+            sheet(1, 0.0, (0, 6), (0, 3)), sheet(1, 4.0, (0, 6), (0, 3))]
+    part = [sheet(1, 2.35, (4.0, 5.0), (0, 1.5))]                 # a partition, 0.35 m from the way
+    across = [sheet(0, 3.0, (0, 4), (0.2, 2.6))]                  # a sheet across the way
+    P = np.concatenate(room + part + across) + rng.normal(0, 0.003, (1, 3))
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    pc.colors = o3d.utility.Vector3dVector(rng.uniform(0.3, 0.7, P.shape))
+    mp = os.path.join(tmp, "map_final_body.pcd")
+    o3d.io.write_point_cloud(mp, pc)
+    tr = os.path.join(tmp, "traj_body.txt")
+    x = np.arange(0.6, 5.4, 0.05)
+    np.savetxt(tr, np.c_[np.arange(len(x)), x, np.full_like(x, 2.0), np.full_like(x, 0.8),
+                         np.zeros((len(x), 3)), np.ones(len(x))])
+    count = lambda V, x0, x1, y0, y1, z0, z1: int(((V[:, 0] > x0) & (V[:, 0] < x1) & (V[:, 1] > y0)  # noqa: E731
+                                                   & (V[:, 1] < y1) & (V[:, 2] > z0) & (V[:, 2] < z1)).sum())
+    v = L.map_view(mp, tr, os.path.join(tmp, "v_body.pcd"), snap=False, fill=False)
+    Pv = np.asarray(o3d.io.read_point_cloud(v["out"]).points)
+    m = L.map_mesh(mp, tr, os.path.join(tmp, "m_body.ply"))
+    Vm = np.asarray(o3d.io.read_triangle_mesh(m["out"]).vertices)
+    for name, V, ref in (("view", Pv, P), ("mesh", Vm, None)):
+        assert count(V, 2.9, 3.1, 0.3, 3.7, 0.3, 2.5) == 0, (name, "the sheet across the way kept",
+                                                              count(V, 2.9, 3.1, 0.3, 3.7, 0.3, 2.5))
+        assert count(V, 4.1, 4.9, 2.3, 2.4, 0.1, 1.4) > 200, (name, "the partition removed")
+        assert count(V, 0.5, 5.5, -0.05, 0.05, 0.3, 2.7) > 2000, (name, "a side wall removed")
+        if ref is not None:
+            fl = count(ref, 0.3, 5.7, 0.3, 3.7, -0.02, 0.02)
+            assert count(V, 0.3, 5.7, 0.3, 3.7, -0.02, 0.02) > 0.97 * fl, (name, "the floor lost")
+    return v["body_points"]
 
 
 def main():
@@ -363,6 +410,9 @@ def main():
         gm, gv = check_ghosts(tmp)
         print(f"ok ghosts: mesh {gm['ghost_faces']} ghost and {gm['piece_faces']} loose faces out, "
               f"view {gv['ghost_points']} ghost and {gv['piece_points']} loose points out, the room kept")
+        nb = check_body(tmp)
+        print(f"ok body: a sheet across the robot's way cleared whole ({nb} points), "
+              "walls, floor and a partition 0.35 m away kept")
         rm = check_mesh(tmp)
         print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
               f"{rm['noceil_faces']} faces without it")

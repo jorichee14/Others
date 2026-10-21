@@ -949,6 +949,13 @@ it), never a courtyard (a hole over 1 m2 with a ceiling over less than
 `--roof`, 50 %, of it), each up to `--max-hole` m2. For looking at only: the reference map,
 and every measurement, stays `map_final_<tag>.pcd`.
 
+Both clear what the robot drove through (`--body 0.25`, 0 off): nothing
+solid is within 0.25 m of the LiDAR's track from the floor to just over the
+LiDAR, and a flat surface the robot crossed (poses on both sides of it) is
+taken whole, its edges in the cells it shares with a wall too (the points on
+its plane facing as it does): a sheet seen in glass that cuts across the way
+and joins the walls it crosses. A wall the robot drove along stays.
+
 Anchored: make the view and mesh from `map_final_<tag>.pcd` with the BA
 trajectory (GLIM's world), then move each into 05's frame:
 `lod3dgs.py anchor <view or mesh> --frame $P/frames/anchor_frame.json`

@@ -361,21 +361,35 @@ def crisp_colours(mesh, map_path, subdivide=1):
 
 def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10,
          ceil=None, ceil_margin=0.10, show=False, subdivide=1, normals=False, ghosts=True,
-         min_piece=50.0):
+         min_piece=50.0, body=0.25):
     """The mesh step alone: mesh of the map (+ a copy without the ceiling),
     each vertex in the colour of the map's nearest point; written without
     normals unless asked, so a viewer shows the colours unlit."""
     o3d = _o3d()
     out = out or default_mesh_out(map_path)
     centres = read_tum_positions(traj)
-    m, mstat = build_mesh(map_path, centres, voxel, poisson_depth, trim)
+    src, nbody_pts = map_path, 0
+    if body > 0:
+        pc = o3d.io.read_point_cloud(os.path.expanduser(map_path))
+        P0 = np.asarray(pc.points)
+        T0 = read_tum_positions(traj, stride=1)
+        g = body_clear(P0, T0, sensor_height(P0, T0)[0], body)
+        src, nbody_pts = pc.select_by_index(np.flatnonzero(~g)), int(g.sum())
+    m, mstat = build_mesh(src, centres, voxel, poisson_depth, trim)
     nghost = 0
     if ghosts:
         m, nghost = remove_ghosts(m, read_tum_positions(traj, stride=1))
+    Tf = read_tum_positions(traj, stride=1)
+    hs, _ = sensor_height(np.asarray(m.vertices), Tf)
+    nbody = 0
+    if body > 0:
+        cen = np.asarray(m.vertices)[np.asarray(m.triangles)].mean(1)
+        gone = in_body(cen, Tf, hs, body)
+        m.remove_triangles_by_mask(gone)
+        m.remove_unreferenced_vertices()
+        nbody = int(gone.sum())
     npiece = 0
     if min_piece > 0:
-        Tf = read_tum_positions(traj, stride=1)
-        hs, _ = sensor_height(np.asarray(m.vertices), Tf)
         m, npiece = drop_pieces(m, Tf, hs, min_piece)
     m, _ = crisp_colours(m, map_path, subdivide)
     mstat["faces_kept"] = len(m.triangles)
@@ -395,9 +409,12 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
               f"{'' if normals else ', no normals (shown unlit)'}"
               + (f"\n  mirror ghosts (faces no direct ray from the path reaches) removed: {nghost} faces"
                  if ghosts else "")
+              + (f"\n  what the robot drove through ({body} m round its path, floor to over the LiDAR; "
+                 f"a flat surface it crossed, whole) removed: {nbody_pts} points, then {nbody} faces"
+                 if body > 0 else "")
               + (f"\n  loose pieces (not the building) open to the sky or floating removed: "
                  f"{npiece} faces" if min_piece > 0 else ""))
-    res.update(ghost_faces=nghost, piece_faces=npiece)
+    res.update(ghost_faces=nghost, piece_faces=npiece, body_faces=nbody)
     shown = m
     if ceil is not None:
         if str(ceil) == "auto":
@@ -459,6 +476,113 @@ def snap_planes(P, cell=0.4, sig_max=0.04, thin=0.35, min_pts=30):
     Q = P.copy()
     Q[on] -= d[:, None] * n
     return Q, int(on.sum())
+
+
+def in_body(X, T, h, radius=0.25, above=0.2, floor_gap=0.05):
+    """Per point of X: inside the space the robot's body took along its path
+    (within radius, in plan, of a pose of T, the LiDAR's track; from
+    floor_gap over the floor, the pose's height less the sensor height h, to
+    `above` over the LiDAR). The robot drove there: nothing solid is, so
+    what the map has there (a sheet seen in glass that cuts across the way,
+    joined to the walls it crosses) is not real."""
+    out = np.zeros(len(X), bool)
+    if radius <= 0 or not len(X):
+        return out
+    tree = cKDTree(T[:, :2])
+    for k in range(0, len(X), 2_000_000):
+        x = X[k:k + 2_000_000]
+        d, i = tree.query(x[:, :2], k=8, distance_upper_bound=radius, workers=-1)
+        ok = np.isfinite(d)
+        i = np.where(ok, i, 0)
+        z = x[:, 2][:, None]
+        inside = ok & (z > T[i, 2] - h + floor_gap) & (z < T[i, 2] + above)
+        out[k:k + 2_000_000] = inside.any(1)
+    return out
+
+
+def body_clear(P, T, h, radius=0.25, cell=0.4, sig_max=0.04, thin=0.35, min_pts=30,
+               angle=15.0, gap=0.06):
+    """Per point: to clear, as not real, because the robot drove through it:
+    the points in its body's space (in_body), and every flat surface the
+    robot crossed, whole (a sheet seen in glass that cuts across the way and
+    joins the walls it crosses). A surface: flat 0.4 m cells (as snap_planes
+    finds them) joined while their normals agree to `angle` and their planes
+    to `gap`; crossed: it holds points in the body's space and the poses
+    there lie on both sides of it. A wall the robot drove along has them on
+    one side only: kept."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    hit = in_body(P, T, h, radius)
+    if not hit.any():
+        return hit
+    lo = P.min(0)
+    k = np.floor((P - lo) / cell).astype(np.int64)
+    dims = k.max(0) + 3
+    k += 1
+    key = (k[:, 0] * dims[1] + k[:, 1]) * dims[2] + k[:, 2]
+    K, inv, cnt = np.unique(key, return_inverse=True, return_counts=True)
+    inv = inv.ravel()
+    m_ = len(K)
+    X = P - lo
+    mu = np.stack([np.bincount(inv, X[:, i], m_) for i in range(3)], 1) / cnt[:, None]
+    C = np.empty((m_, 3, 3))
+    for i in range(3):
+        for j in range(i, 3):
+            C[:, i, j] = C[:, j, i] = (np.bincount(inv, X[:, i] * X[:, j], m_) / cnt
+                                       - mu[:, i] * mu[:, j])
+    w, v = np.linalg.eigh(C)
+    sig = np.sqrt(np.clip(w, 0, None))
+    flat = (cnt >= min_pts) & (sig[:, 0] < sig_max) & (sig[:, 0] < thin * sig[:, 1])
+    n = v[:, :, 0]
+    kc = np.stack([K // (dims[1] * dims[2]), (K // dims[2]) % dims[1], K % dims[2]], 1)
+    rows, cols = [], []
+    for o in [(a, b, c) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1)
+              if (a, b, c) > (0, 0, 0)]:
+        nb = ((kc[:, 0] + o[0]) * dims[1] + kc[:, 1] + o[1]) * dims[2] + kc[:, 2] + o[2]
+        j = np.minimum(np.searchsorted(K, nb), m_ - 1)
+        ok = (K[j] == nb) & flat & flat[j]
+        i = np.flatnonzero(ok)
+        j = j[ok]
+        same = (np.abs(np.einsum("ij,ij->i", n[i], n[j])) > np.cos(np.radians(angle))) & \
+            (np.abs(np.einsum("ij,ij->i", mu[j] - mu[i], n[i])) < gap)
+        rows.append(i[same])
+        cols.append(j[same])
+    r_, c_ = np.concatenate(rows), np.concatenate(cols)
+    _, seg = connected_components(coo_matrix((np.ones(len(r_)), (r_, c_)), shape=(m_, m_)), directed=False)
+    out = hit.copy()
+    hit_cells = np.unique(inv[hit])
+    ptree = cKDTree(T[:, :2])
+    for sgi in np.unique(seg[hit_cells[flat[hit_cells]]]):
+        cells = np.flatnonzero((seg == sgi) & flat)
+        hc = np.intersect1d(cells, hit_cells)
+        c0 = hc[0]
+        near = np.unique(np.concatenate(ptree.query_ball_point(mu[hc, :2] + lo[:2], radius + cell)))
+        if not len(near):
+            continue
+        sd = (T[near] - (mu[c0] + lo)) @ n[c0]
+        if sd.min() < -0.05 and sd.max() > 0.05:          # the robot went through it
+            out |= np.isin(inv, cells)
+            # its edges, in the cells it shares with a wall or the floor: the
+            # points on its plane that face as it does (the wall's face across)
+            nbk = np.unique((K[cells][:, None] + np.array(
+                [(a * dims[1] + b) * dims[2] + c for a in (-1, 0, 1) for b in (-1, 0, 1)
+                 for c in (-1, 0, 1)])[None]).ravel())
+            j = np.searchsorted(K, nbk)
+            j = j[(j < m_) & (K[np.minimum(j, m_ - 1)] == nbk)]
+            j = j[~np.isin(j, cells)]
+            cand = np.flatnonzero(np.isin(inv, j) & ~out)
+            if len(cand) >= 3:
+                o3d = _o3d()
+                q = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P[cand]))
+                q.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=0.06, max_nn=20))
+                qn = np.asarray(q.normals)
+                ns = n[cells]
+                ns = ns * np.sign(ns @ ns[0])[:, None]
+                nm = ns.mean(0) / np.linalg.norm(ns.mean(0))
+                pm = (mu[cells] + lo).mean(0)
+                on = (np.abs(qn @ nm) > np.cos(np.radians(30))) & (np.abs((P[cand] - pm) @ nm) < 0.04)
+                out[cand[on]] = True
+    return out
 
 
 def sensor_height(P, T, cell=0.5, samples=300):
@@ -558,7 +682,8 @@ def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spaci
 
 
 def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
-             ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=50.0):
+             ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=50.0,
+             body=0.25):
     """A viewing copy of the map: stray points out, walls and floors flat,
     the floor's holes filled; points, so the colours stay the map's own."""
     o3d = _o3d()
@@ -582,6 +707,12 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         report.append(f"  mirror ghosts (behind polished stone or glass: no direct ray from the path "
                       f"reaches them) removed: {int(g.sum())} points")
         res["ghost_points"] = int(g.sum())
+    if body > 0:
+        g = body_clear(P, T1, h, body)
+        P, C = P[~g], C[~g]
+        report.append(f"  what the robot drove through ({body} m round its path, floor to over the LiDAR; "
+                      f"a flat surface it crossed, whole) removed: {int(g.sum())} points")
+        res["body_points"] = int(g.sum())
     if min_piece > 0:
         g = piece_points(P, T1, h, min_piece)
         P, C = P[~g], C[~g]
@@ -841,6 +972,9 @@ def main():
     me.add_argument("--min-piece", type=float, default=50.0,
                     help="pieces not joined to one of this size or more (the building, m2) are removed "
                          "when open to the sky or floating (0 keeps them)")
+    me.add_argument("--body", type=float, default=0.25,
+                    help="clear the space the robot drove through: this far (m) round its path, from the "
+                         "floor to over the LiDAR (0: not)")
     me.add_argument("--keep-ghosts", action="store_true",
                     help="keep the mirror ghosts (faces no direct ray from the path reaches)")
     me.add_argument("--normals", action="store_true",
@@ -855,6 +989,9 @@ def main():
     vw.add_argument("--min-piece", type=float, default=50.0,
                     help="pieces not joined to one of this size or more (the building, m2) are removed "
                          "when open to the sky or floating (0 keeps them)")
+    vw.add_argument("--body", type=float, default=0.25,
+                    help="clear the space the robot drove through: this far (m) round its path, from the "
+                         "floor to over the LiDAR (0: not)")
     vw.add_argument("--keep-ghosts", action="store_true",
                     help="keep the mirror ghosts (points no direct ray from the path reaches)")
     vw.add_argument("--max-hole", type=float, default=20.0, help="largest hole filled (m2)")
@@ -879,12 +1016,12 @@ def main():
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,
                      max_hole=a.max_hole, roof=a.roof, ghosts=not a.keep_ghosts,
-                     min_piece=a.min_piece)
+                     min_piece=a.min_piece, body=a.body)
         else:
             map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,
                      trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show,
                      subdivide=a.subdivide, normals=a.normals, ghosts=not a.keep_ghosts,
-                     min_piece=a.min_piece)
+                     min_piece=a.min_piece, body=a.body)
     except ConvertError as e:
         sys.exit(str(e))
 
