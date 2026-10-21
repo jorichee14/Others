@@ -246,7 +246,8 @@ def check_ghosts(tmp):
     """A closed 6 x 4 x 3 room as a polished floor and wall would show it:
     a ghost of the ceiling 3 m under the floor and of a cabinet behind the
     x = 0 wall (no direct ray from the path reaches either), and a loose
-    5 m2 sheet floating tilted in the room. mesh and view: all three gone, the
+    5 m2 sheet floating tilted in the room and a curved ribbon (meshed as an
+    object). mesh, its radio preset and view: all gone, the
     room's own surfaces kept."""
     import open3d as o3d
     rng = np.random.default_rng(2)
@@ -266,7 +267,9 @@ def check_ghosts(tmp):
              sheet(1, 2.0, (-1.0, -0.2), (0.5, 1.5))]                             # a cabinet, behind x = 0
     pa = sheet(2, 0.0, (1.0, 3.5), (1.0, 3.0))
     pa[:, 2] = 1.6 + 0.2 * (pa[:, 0] - 1.0)
-    panel = [pa]                                    # a loose 5 m2 sheet, tilted, floating (seen through glass)
+    t_, z_ = np.meshgrid(np.linspace(0, np.pi, 100), g(1.8, 2.0))
+    ribbon = np.c_[4.5 + 0.6 * np.cos(t_.ravel()), 2.5 + 0.6 * np.sin(t_.ravel()), z_.ravel()]
+    panel = [pa, ribbon]   # a loose 5 m2 sheet, tilted, and a curved ribbon (an object), floating
     P = np.concatenate(room + ghost + panel)
     P += rng.normal(0, 0.003, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
@@ -279,7 +282,9 @@ def check_ghosts(tmp):
     def bad(V):
         return {"under the floor": int((V[:, 2] < -0.5).sum()), "behind the wall": int((V[:, 0] < -0.3).sum()),
                 "panel": int(((V[:, 2] > 1.5) & (V[:, 2] < 2.2) & (V[:, 0] > 1.1) & (V[:, 0] < 3.4)
-                              & (V[:, 1] > 1.1) & (V[:, 1] < 2.9)).sum())}
+                              & (V[:, 1] > 1.1) & (V[:, 1] < 2.9)).sum()),
+                "ribbon": int(((V[:, 2] > 1.7) & (V[:, 2] < 2.1) & (V[:, 0] > 3.85) & (V[:, 0] < 5.15)
+                               & (V[:, 1] > 2.45) & (V[:, 1] < 3.15)).sum())}
     floor = lambda V: int(((np.abs(V[:, 2]) < 0.03) & (V[:, 0] > 0.3) & (V[:, 0] < 5.7)   # noqa: E731
                            & (V[:, 1] > 0.3) & (V[:, 1] < 3.7)).sum())
     keep = L.map_mesh(mp, tr, os.path.join(tmp, "m_keep.ply"), ghosts=False, min_piece=0)
@@ -289,6 +294,10 @@ def check_ghosts(tmp):
     assert min(bad(Vk).values()) > 0, ("the scene has no ghost to remove", bad(Vk))
     assert max(bad(Vc).values()) == 0, ("mesh: left", bad(Vc))
     assert floor(Vc) > 0.97 * floor(Vk), ("mesh: floor lost", floor(Vc), floor(Vk))
+    radio = L.map_mesh(mp, tr, os.path.join(tmp, "m_radio.ply"), voxel=0.05, trim=0.25, subdivide=0,
+                       object_cell=0.05, object_trim=0.06, faces=20000)
+    Vr = np.asarray(o3d.io.read_triangle_mesh(radio["out"]).vertices)
+    assert max(bad(Vr).values()) == 0, ("radio mesh: left", bad(Vr))
     v = L.map_view(mp, tr, os.path.join(tmp, "v_clean.pcd"), snap=False, fill=False)
     Pv = np.asarray(o3d.io.read_point_cloud(v["out"]).points)
     assert max(bad(Pv).values()) == 0, ("view: left", bad(Pv))
@@ -439,7 +448,11 @@ def check_texture(tmp):
     tex = img[np.clip(((1 - uv[:, 1]) * H).astype(int), 0, H - 1), np.clip((uv[:, 0] * W).astype(int), 0, W - 1)]
     want = check(X[:, 1], X[:, 2])
     good = np.mean(np.abs(tex - want).max(1) < 0.35)
-    vcol = np.einsum("nk,nkd->nd", lam, rgb[F[fi]])
+    assert rgb is None, "vertex colours beside the texture: a viewer shows them, faded"
+    # what vertex colours on these faces would show: the map's colour at each corner, blended
+    _, vi = cKDTree(P).query(V, k=5)
+    vrgb = np.median(np.concatenate(cols)[vi], axis=1)
+    vcol = np.einsum("nk,nkd->nd", lam, vrgb[F[fi]])
     good_v = np.mean(np.abs(vcol - want).max(1) < 0.35)
     assert good > 0.75 and good > good_v + 0.25, ("texture", good, "vertex colours", good_v)
     return len(F), good, good_v

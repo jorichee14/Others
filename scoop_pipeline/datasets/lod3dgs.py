@@ -643,6 +643,11 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
     nghost = 0
     if ghosts:
         m, nghost = remove_ghosts(m, Tf)
+    if min_piece > 0:
+        # the loose pieces of the whole mesh, objects' included (a sheet seen
+        # through glass can be meshed as an object)
+        m, n2 = drop_pieces(m, Tf, hs, min_piece)
+        npiece += n2
     nfull = len(m.triangles)
     if faces and nfull > faces:
         # few large faces (a radio scene: flat walls in a handful of
@@ -662,8 +667,7 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
         # the colours in a texture, so few large faces show them sharply
         png = os.path.splitext(out)[0] + ".png"
         Vt, Ft, UVt = bake_texture(m, map_path, png, texel, k=colour_k)
-        vmap = cKDTree(np.asarray(m.vertices)).query(Vt)[1]
-        rgb = np.asarray(m.vertex_colors)[vmap] if m.has_vertex_colors() else None
+        rgb = None          # no vertex colours beside the texture: a viewer shows them instead (faded)
         Nt = vertex_normals(Vt, Ft)
         write_textured_ply(out, Vt, Ft, UVt, png, rgb, Nt)
         tex = (Vt, Ft, UVt, png, rgb, Nt)
@@ -691,7 +695,7 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
         if hs is None:
             hs, _ = sensor_height(V, Tf)
         nc, how, ngone = remove_ceiling_mesh(m, Tf, hs, ceil, ceil_margin)
-        if min_piece > 0 and not objects:
+        if min_piece > 0:
             nc, _ = drop_pieces(nc, Tf, hs, min_piece)      # what hung from the ceiling now floats
         p = os.path.splitext(out)[0] + "_noceil.ply"
         if tex is not None:
