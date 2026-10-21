@@ -25,7 +25,8 @@ hole (filled, at the floor's height and colour), a 5 m2 hole over --max-hole
 lower (a void: left), and a courtyard with no ceiling over it (left), a bench in it removed
 (a loose piece open to the sky) while the box stays (under the ceiling);
 the sensor height found from the floor under the
-poses, the strays gone, the walls flat, nothing added outside the room. Then
+poses, the strays gone, a strip arching off a wall gone while a vertical bar
+stays, the walls flat, the floor all gray, nothing added outside the room. Then
 the mirror ghosts of a polished floor and wall (under the floor, behind the
 wall: no direct ray from the path reaches them) and a loose 5 m2 sheet removed
 by both mesh and view, the room's own surfaces kept. Then objects (a ball,
@@ -204,6 +205,12 @@ def check_view(tmp):
     ux, uy = np.meshgrid(g(6.0, 6.6), g(1.3, 1.7), indexing="ij")
     pts.append(np.c_[ux.ravel(), uy.ravel(), np.full(ux.size, 0.45)])      # a bench in the courtyard
     cols.append(np.tile([0.4, 0.3, 0.2], (ux.size, 1)))
+    a_, z_ = np.meshgrid(np.linspace(np.pi / 2, 3 * np.pi / 2, 120), g(1.40, 1.45))
+    pts.append(np.c_[8.0 + 0.8 * np.cos(a_.ravel()), 4.5 + 0.8 * np.sin(a_.ravel()), z_.ravel()])
+    cols.append(np.tile([0.8, 0.8, 0.8], (a_.size, 1)))      # a strip arching off the x = 8 wall
+    t_, z_ = np.meshgrid(np.linspace(0, 2 * np.pi, 7, endpoint=False), g(0.0, 2.3))
+    pts.append(np.c_[3.0 + 0.02 * np.cos(t_.ravel()), 2.0 + 0.02 * np.sin(t_.ravel()), z_.ravel()])
+    cols.append(np.tile([0.2, 0.2, 0.2], (t_.size, 1)))      # a vertical bar (a rack's), kept
     stray = np.c_[rng.uniform(1, 7, 300), rng.uniform(1, 5, 300), rng.uniform(0.8, 2.0, 300)]
     pts.append(stray)
     cols.append(np.tile([1.0, 1.0, 1.0], (300, 1)))
@@ -215,7 +222,7 @@ def check_view(tmp):
     tr = os.path.join(tmp, "traj_view.txt")
     np.savetxt(tr, np.c_[t, 4 + 3 * np.cos(t), 3 + 2 * np.sin(t), np.full_like(t, 0.6),
                          np.zeros((len(t), 3)), np.ones(len(t))])
-    r = L.map_view(mp, tr, max_hole=3.0)
+    r = L.map_view(mp, tr, max_hole=3.0, floor_colour="gray")
     assert os.path.basename(r["out"]) == "view_view_test.pcd", r["out"]
     assert abs(r["sensor_height"] - 0.6) < 0.03, r["sensor_height"]
     assert r["open"] >= 1, r
@@ -224,13 +231,20 @@ def check_view(tmp):
     low = np.abs(P[:, 2]) < 0.04
     a_in = inside(P, 1.6, 2.4, 3.6, 4.4) & low
     assert a_in.sum() > 1200, ("hole A not filled", a_in.sum())
-    assert np.abs(np.median(C[a_in], 0) - floor_col).max() < 0.05, np.median(C[a_in], 0)
+    assert np.abs(np.median(C[a_in], 0) - 0.72).max() < 0.02, np.median(C[a_in], 0)
+    fl = inside(P, 0.5, 7.5, 0.5, 5.5) & low & ~inside(P, 1.4, 2.6, 3.4, 4.6)
+    assert np.mean(np.abs(C[fl] - 0.72).max(1) < 0.02) > 0.97, "the floor not all gray"
     for name, rr in (("big hole", (4.6, 6.9, 3.7, 5.5)), ("under the box", (1.1, 1.9, 0.9, 1.7)),
                      ("stair opening", (3.6, 4.4, 0.9, 1.7)), ("courtyard", (5.6, 6.9, 0.9, 2.2))):
         n = (inside(P, *rr) & low).sum()
         assert n < 10, (name, "filled", n)
     assert ((P[:, 0] < -0.15) | (P[:, 0] > 8.15) | (P[:, 1] < -0.15) | (P[:, 1] > 6.15)).sum() == 0
-    air = inside(P, 0.3, 7.7, 0.3, 5.7) & (P[:, 2] > 0.8) & (P[:, 2] < 2.3) & ~inside(P, 0.9, 2.1, 0.7, 1.9)
+    strip = inside(P, 7.1, 7.75, 3.8, 5.2) & (P[:, 2] > 1.3) & (P[:, 2] < 1.55)   # its last 25 cm join the wall
+    assert strip.sum() == 0, ("a strip flying off the wall kept", strip.sum())
+    bar = inside(P, 2.95, 3.05, 1.95, 2.05) & (P[:, 2] > 0.3) & (P[:, 2] < 2.2)
+    assert bar.sum() > 400, ("the vertical bar removed", bar.sum())
+    air = (inside(P, 0.3, 7.7, 0.3, 5.7) & (P[:, 2] > 0.8) & (P[:, 2] < 2.3) & ~inside(P, 0.9, 2.1, 0.7, 1.9)
+           & ~inside(P, 2.9, 3.1, 1.9, 2.1))
     assert air.sum() < 30, ("strays left", air.sum())
     bench = inside(P, 6.0, 6.6, 1.3, 1.7) & (np.abs(P[:, 2] - 0.45) < 0.05)
     assert bench.sum() == 0, ("a loose piece in the courtyard kept", bench.sum())

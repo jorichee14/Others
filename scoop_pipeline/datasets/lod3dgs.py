@@ -873,8 +873,60 @@ def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spaci
     return np.c_[xy, z], col, stats
 
 
+def strip_points(P, T, h, voxel=0.05, k=20, lin=0.2, min_up=0.3, vert=0.7, chunk=500_000):
+    """Per point: on a thin strip, a line rather than a surface (the k
+    nearest 5 cm cells spread along one direction: the next spread under
+    lin x it), lying or arching (that direction under `vert` of vertical)
+    and min_up or more above the floor: the edges of glass the LiDAR saw
+    without the glass (a balustrade's rail, a partition's frame), flying
+    off the walls. A wall, a floor, an object is a surface or a body; a
+    vertical bar (a rack, a door frame) stands up: kept."""
+    lo = P.min(0)
+    kk = np.floor((P - lo) / voxel).astype(np.int64)
+    dims = kk.max(0) + 1
+    _, inv, cnt = np.unique((kk[:, 0] * dims[1] + kk[:, 1]) * dims[2] + kk[:, 2],
+                            return_inverse=True, return_counts=True)
+    inv = inv.ravel()
+    Q = np.stack([np.bincount(inv, P[:, i]) for i in range(3)], 1) / cnt[:, None]
+    k = min(k, len(Q))
+    tree = cKDTree(Q)
+    _, near = cKDTree(T[:, :2]).query(Q[:, :2], workers=-1)
+    up = Q[:, 2] - (T[near, 2] - h)
+    strip = np.zeros(len(Q), bool)
+    cand = np.flatnonzero(up >= min_up)
+    for s0 in range(0, len(cand), chunk):
+        c = cand[s0:s0 + chunk]
+        _, idx = tree.query(Q[c], k=k, workers=-1)
+        X = Q[idx]
+        X = X - X.mean(1, keepdims=True)
+        w, v = np.linalg.eigh(np.einsum("nki,nkj->nij", X, X) / k)
+        sig = np.sqrt(np.clip(w, 0, None))
+        strip[c] = (sig[:, 1] < lin * sig[:, 2]) & (np.abs(v[:, 2, 2]) < vert)
+    return strip[inv]
+
+
+def floor_points(P, T, h, band=0.06):
+    """Per point: on the floor (within band of the nearest pose's height
+    less the sensor height h)."""
+    _, near = cKDTree(T[:, :2]).query(P[:, :2], workers=-1)
+    return np.abs(P[:, 2] - (T[near, 2] - h)) < band
+
+
+def parse_colour(c):
+    """'gray', 'white', 'r,g,b' (0-1 or 0-255) or one value -> rgb in 0-1, or None."""
+    if c is None:
+        return None
+    named = {"gray": 0.72, "grey": 0.72, "white": 0.95, "light": 0.85, "dark": 0.45}
+    if str(c).lower() in named:
+        return np.full(3, named[str(c).lower()])
+    v = np.array([float(x) for x in str(c).replace(" ", "").split(",")])
+    v = np.repeat(v, 3) if len(v) == 1 else v
+    return v / 255.0 if v.max() > 1 else v
+
+
 def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
-             ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=50.0):
+             ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=50.0,
+             strips=True, floor_colour=None):
     """A viewing copy of the map: stray points out, walls and floors flat,
     the floor's holes filled; points, so the colours stay the map's own."""
     o3d = _o3d()
@@ -904,6 +956,12 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         report.append(f"  loose pieces (not the building) open to the sky or floating removed: "
                       f"{int(g.sum())} points")
         res["piece_points"] = int(g.sum())
+    if strips:
+        g = strip_points(P, T1, h)
+        P, C = P[~g], C[~g]
+        report.append(f"  thin strips flying off the walls (glass edges: a line, not a surface, "
+                      f"lying or arching 0.3 m or more above the floor) removed: {int(g.sum())} points")
+        res["strip_points"] = int(g.sum())
     if snap:
         P, moved = snap_planes(P)
         report.append(f"  points put onto their wall or floor plane: {moved} ({100 * moved / len(P):.0f} %)")
@@ -927,6 +985,12 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
             g = piece_points(P, T1, h, min_piece)       # what hung from the ceiling now floats
             P, C = P[~g], C[~g]
             report.append(f"  then loose (hung from the ceiling): {int(g.sum())} points")
+    fc = parse_colour(floor_colour)
+    if fc is not None:
+        on = floor_points(P, T1, h)
+        C[on] = fc
+        report.append(f"  the floor in one colour ({floor_colour}): {int(on.sum())} points")
+        res["floor_points"] = int(on.sum())
     v = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     v.colors = o3d.utility.Vector3dVector(np.clip(C, 0, 1))
     o3d.io.write_point_cloud(out, v)
@@ -1156,6 +1220,10 @@ def main():
     vw.add_argument("--min-piece", type=float, default=50.0,
                     help="pieces not joined to one of this size or more (the building, m2) are removed "
                          "when open to the sky or floating (0 keeps them)")
+    vw.add_argument("--keep-strips", action="store_true",
+                    help="keep the thin strips flying off the walls (glass edges)")
+    vw.add_argument("--floor-colour", default=None,
+                    help="the floor in one colour: gray, white, or r,g,b (0-1 or 0-255)")
     vw.add_argument("--keep-ghosts", action="store_true",
                     help="keep the mirror ghosts (points no direct ray from the path reaches)")
     vw.add_argument("--max-hole", type=float, default=20.0, help="largest hole filled (m2)")
@@ -1195,7 +1263,7 @@ def main():
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,
                      max_hole=a.max_hole, roof=a.roof, ghosts=not a.keep_ghosts,
-                     min_piece=a.min_piece)
+                     min_piece=a.min_piece, strips=not a.keep_strips, floor_colour=a.floor_colour)
         else:
             if a.radio:
                 a.voxel, a.trim, a.subdivide = 0.05, 0.25, 0
