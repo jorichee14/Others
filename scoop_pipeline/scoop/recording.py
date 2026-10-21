@@ -272,6 +272,9 @@ def shift_traj(src: Path, dst: Path, dt: float) -> None:
     rows = [ln.split() for ln in Path(src).read_text().splitlines()
             if ln.split() and not ln.lstrip().startswith("#")]
     stamps = [r[0] for r in rows]
+    if len(rows) < 2:                        # nothing to interpolate between
+        Path(dst).write_text("".join(" ".join(r) + "\n" for r in rows))
+        return
     a = np.array([[float(x) for x in r] for r in rows])
     t0 = a[0, 0]
     t = a[:, 0] - t0                         # relative: no float rounding of 1.8e9 s

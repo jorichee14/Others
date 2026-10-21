@@ -56,8 +56,8 @@ def main():
         if info.get("pose_time_offset_s") != 0.046:
             fails.append(f"glim.yaml: {info.get('pose_time_offset_s')}")
         m1 = recording.settings_for(recording.load_settings(), "mobile_1")
-        if m1["glim"].get("pose_time_offset"):
-            fails.append("mobile_1 got mobile_2's offset")
+        if m1["glim"].get("pose_time_offset") != 0.046:     # its own, the top level's
+            fails.append(f"mobile_1's offset is {m1['glim'].get('pose_time_offset')}, not 0.046")
     finally:
         shutil.rmtree(d, ignore_errors=True)
     for f in fails:
