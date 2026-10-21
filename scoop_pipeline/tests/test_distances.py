@@ -210,6 +210,16 @@ def main():
             plt.show = real_show
             plt.close("all")
         names3 = sorted(r[0] for r in got3)
+        # undo stops at the pairs from before
+        fig, ax = plt.subplots()
+        pk4 = maps.PlanPicker(ax, P, cKDTree(P), S)
+        pk4.add("d1", 8.0, np.array([0.3, 3.0, 0.75]), np.array([7.7, 3.0, 0.75]))
+        pk4.kept = len(pk4.picks)
+        m4 = [pk4.undo(), pk4.click(4.0, 0.3), pk4.undo(), pk4.undo()]
+        plt.close(fig)
+        ok = [r[0] for r in pk4.res] == ["d1"] and "pairs from before stay" in m4[0] and "undone" in m4[2] \
+            and "pairs from before stay" in m4[3]
+        (print if ok else fails.append)("  ok    undo stops at the pairs from before" if ok else f"undo kept: {m4}")
         ok = names3 == ["d1", "d2", "d3"] and [r[1] for r in got3 if r[0] == "d1"] == [8.001]
         (print if ok else fails.append)("  ok    --redo d1: picked again under its name, the next pair d3"
                                         if ok else f"--redo: {got3}")

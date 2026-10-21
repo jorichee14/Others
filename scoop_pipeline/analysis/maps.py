@@ -1322,6 +1322,7 @@ class PlanPicker:
         self.res, self.labels = [], []               # per pair: its row, its label on the plan
         self.redo = []                               # names the next pairs take (--redo)
         self.corner = False                          # the next A a corner (key c)
+        self.kept = 0                                # clicks of pairs from before: undo stops at them
 
     def peek(self):
         """The name the next pair will take."""
@@ -1484,8 +1485,9 @@ class PlanPicker:
 
     def undo(self):
         self.corner = False
-        if not self.picks:
-            return "nothing to undo"
+        if len(self.picks) <= self.kept:
+            return ("nothing to undo in this session: the pairs from before stay "
+                    "(--redo d3 picks one of them again)" if self.kept else "nothing to undo")
         if len(self.picks) % 2 == 0:                   # B of a pair: the pair and its reading go
             self.redo.insert(0, self.res.pop()[0])
             self.labels.pop()
@@ -1530,6 +1532,7 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
     pk = PlanPicker(ax, P, tree, S, radius)
     for name, m, pa, pb, *k in earlier:
         pk.add(name, m, pa, pb, *k)
+    pk.kept = len(pk.picks)
     pk.redo = list(redo)
     tb = TextBox(fig.add_axes([0.32, 0.025, 0.2, 0.045]), "meter reading of the last pair (m or mm), Enter: ",
                  initial="")
