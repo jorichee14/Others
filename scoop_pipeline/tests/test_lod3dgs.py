@@ -26,7 +26,9 @@ lower (a void: left), and a courtyard with no ceiling over it (left), a bench in
 (a loose piece open to the sky) while the box stays (under the ceiling);
 the sensor height found from the floor under the
 poses, the strays gone, a strip arching off a wall gone while a vertical bar
-stays, the walls flat, the floor all gray, nothing added outside the room. Then
+stays, a wall section held to a wall by a strip alone gone with it (not
+left flying), the walls flat, the floor all gray, nothing added outside the
+room. Then
 the mirror ghosts of a polished floor and wall (under the floor, behind the
 wall: no direct ray from the path reaches them) and a loose 5 m2 sheet removed
 by both mesh and view, the room's own surfaces kept. Then objects (a ball,
@@ -208,6 +210,12 @@ def check_view(tmp):
     a_, z_ = np.meshgrid(np.linspace(np.pi / 2, 3 * np.pi / 2, 120), g(1.40, 1.45))
     pts.append(np.c_[8.0 + 0.8 * np.cos(a_.ravel()), 4.5 + 0.8 * np.sin(a_.ravel()), z_.ravel()])
     cols.append(np.tile([0.8, 0.8, 0.8], (a_.size, 1)))      # a strip arching off the x = 8 wall
+    px, pz = np.meshgrid(g(1.2, 2.2), g(1.7, 2.3), indexing="ij")
+    pts.append(np.c_[px.ravel(), np.full(px.size, 5.0), pz.ravel()])     # a wall section, floating ...
+    cols.append(np.tile([0.6, 0.6, 0.6], (px.size, 1)))
+    hx, hz = np.meshgrid(g(0.0, 1.2), g(1.98, 2.01), indexing="ij")
+    pts.append(np.c_[hx.ravel(), np.full(hx.size, 5.0), hz.ravel()])     # ... held to the wall by a strip
+    cols.append(np.tile([0.6, 0.6, 0.6], (hx.size, 1)))
     t_, z_ = np.meshgrid(np.linspace(0, 2 * np.pi, 7, endpoint=False), g(0.0, 2.3))
     pts.append(np.c_[3.0 + 0.02 * np.cos(t_.ravel()), 2.0 + 0.02 * np.sin(t_.ravel()), z_.ravel()])
     cols.append(np.tile([0.2, 0.2, 0.2], (t_.size, 1)))      # a vertical bar (a rack's), kept
@@ -241,6 +249,8 @@ def check_view(tmp):
     assert ((P[:, 0] < -0.15) | (P[:, 0] > 8.15) | (P[:, 1] < -0.15) | (P[:, 1] > 6.15)).sum() == 0
     strip = inside(P, 7.1, 7.75, 3.8, 5.2) & (P[:, 2] > 1.3) & (P[:, 2] < 1.55)   # its last 25 cm join the wall
     assert strip.sum() == 0, ("a strip flying off the wall kept", strip.sum())
+    held = inside(P, 1.25, 2.15, 4.95, 5.05) & (P[:, 2] > 1.75) & (P[:, 2] < 2.25)
+    assert held.sum() == 0, ("a wall section a removed strip held to the wall left flying", held.sum())
     bar = inside(P, 2.95, 3.05, 1.95, 2.05) & (P[:, 2] > 0.3) & (P[:, 2] < 2.2)
     assert bar.sum() > 400, ("the vertical bar removed", bar.sum())
     air = (inside(P, 0.3, 7.7, 0.3, 5.7) & (P[:, 2] > 0.8) & (P[:, 2] < 2.3) & ~inside(P, 0.9, 2.1, 0.7, 1.9)

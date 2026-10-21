@@ -950,18 +950,19 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         report.append(f"  mirror ghosts (behind polished stone or glass: no direct ray from the path "
                       f"reaches them) removed: {int(g.sum())} points")
         res["ghost_points"] = int(g.sum())
+    if strips:
+        # before the loose pieces: what a strip held to the building is judged without it
+        g = strip_points(P, T1, h)
+        P, C = P[~g], C[~g]
+        report.append(f"  thin strips flying off the walls (glass edges: a line, not a surface, "
+                      f"lying or arching 0.3 m or more above the floor) removed: {int(g.sum())} points")
+        res["strip_points"] = int(g.sum())
     if min_piece > 0:
         g = piece_points(P, T1, h, min_piece)
         P, C = P[~g], C[~g]
         report.append(f"  loose pieces (not the building) open to the sky or floating removed: "
                       f"{int(g.sum())} points")
         res["piece_points"] = int(g.sum())
-    if strips:
-        g = strip_points(P, T1, h)
-        P, C = P[~g], C[~g]
-        report.append(f"  thin strips flying off the walls (glass edges: a line, not a surface, "
-                      f"lying or arching 0.3 m or more above the floor) removed: {int(g.sum())} points")
-        res["strip_points"] = int(g.sum())
     if snap:
         P, moved = snap_planes(P)
         report.append(f"  points put onto their wall or floor plane: {moved} ({100 * moved / len(P):.0f} %)")
