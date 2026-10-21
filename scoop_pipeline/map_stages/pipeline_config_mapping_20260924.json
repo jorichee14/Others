@@ -4,7 +4,10 @@
  "dataset": {
   "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping/mirc_dataset_mapping_20260924_merged",
   "traj": "traj_lidar_ba_glim.txt",
-  "machine": "mobile_1"
+  "machine": "mobile_1",
+  "points_topic": "/mobile_1/ouster/points",
+  "image_topic": "/mobile_1/zed/left/image_rect_color",
+  "camera_info_topic": "/mobile_1/zed/left/camera_info"
  },
  "01_build_map": {
   "_note": "20261015's: 2 cm TSDF, trunc 8 cm, min_weight 3, so the two maps differ by the place and the robot, not the settings",

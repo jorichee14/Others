@@ -90,7 +90,7 @@ import scipy.sparse as sp
 from scipy.linalg import cho_factor, cho_solve
 from scipy.spatial.transform import Rotation
 
-from pipeline_common import load_pipeline, load_traj, traj_quats, iter_scans
+from pipeline_common import load_pipeline, load_traj, traj_quats, iter_scans, DEFAULT_TOPICS
 
 CHI = 3.29                       # 5-95 % spread of a normal = 3.29 sigma
 
@@ -450,7 +450,7 @@ def main():
     if a.output:
         c["output"] = a.output
     c["points_topic"] = (c["points_topic"] or P.dataset.get("points_topic")
-                         or "/ouster/points")
+                         or DEFAULT_TOPICS["points_topic"])
     print(P.describe())
 
     inp = P.outp(c["input"]) if c["input"] else P.seed_traj()

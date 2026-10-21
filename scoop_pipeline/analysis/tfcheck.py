@@ -36,7 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "map_stages"))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from pipeline_common import load_pipeline, load_traj                     # noqa: E402
+from pipeline_common import load_pipeline, load_traj, DEFAULT_TOPICS     # noqa: E402
 
 MM, DEG = 1.0, 0.01
 BAD = []
@@ -136,7 +136,8 @@ def main_tf(argv=None):
     bag = a.bag or P.outp(s.get("output_bag") or "{tag}_best_poses")
     optical = rb.get("optical_frame", "camera_optical_frame")
     base = (rb.get("base_frame") or {}).get("name")
-    lidar = a.lidar or pass_tf._frame_id([P.dataset["bag"]], P.dataset.get("points_topic") or "/ouster/points")
+    lidar = a.lidar or pass_tf._frame_id([P.dataset["bag"]], P.dataset.get("points_topic")
+                                                  or DEFAULT_TOPICS["points_topic"])
     if not lidar:
         raise SystemExit("cannot tell the LiDAR frame: pass --lidar")
     print(f"TF of {name} in {bag}\n  base {base}, LiDAR {lidar}, camera {optical}")
