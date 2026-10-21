@@ -210,6 +210,19 @@ def main():
             plt.show = real_show
             plt.close("all")
         names3 = sorted(r[0] for r in got3)
+        # --redo d1, the window closed without picking it: d1 kept as it was
+        plt.show = drive([])
+        try:
+            e1 = maps.read_json_distances(js2)
+            got5 = maps.click_plan(P, cKDTree(P), (0.3, 1.2), 0.3, save=os.path.join(d, "held.json"),
+                                   earlier=[e for e in e1 if e[0] != "d1"], map_path="m", redo=["d1"],
+                                   held=[e for e in e1 if e[0] == "d1"])
+        finally:
+            plt.show = real_show
+            plt.close("all")
+        ok = sorted(r[0] for r in got5) == ["d1", "d2"] and [r[1] for r in got5 if r[0] == "d1"] == [8.0]
+        (print if ok else fails.append)("  ok    --redo, nothing picked: the pair kept with its reading" if ok
+                                        else f"--redo held: {got5}")
         # undo stops at the pairs from before
         fig, ax = plt.subplots()
         pk4 = maps.PlanPicker(ax, P, cKDTree(P), S)
