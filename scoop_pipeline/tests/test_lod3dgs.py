@@ -28,7 +28,8 @@ the sensor height found from the floor under the
 poses, the strays gone, a strip arching off a wall gone while a vertical bar
 stays, a wall section held to a wall by a strip alone gone with it (not
 left flying), the walls flat, the floor all gray, nothing added outside the
-room. Then
+room; `why` saying a wall point is kept as the building and that section is
+removed. Then
 the mirror ghosts of a polished floor and wall (under the floor, behind the
 wall: no direct ray from the path reaches them) and a loose 5 m2 sheet removed
 by both mesh and view, the room's own surfaces kept. Then objects (a ball,
@@ -263,6 +264,14 @@ def check_view(tmp):
     wall = (np.abs(P[:, 0]) < 0.15) & (P[:, 2] > 0.3) & (P[:, 2] < 2.0) & (P[:, 1] > 0.5) & (P[:, 1] < 5.5)
     th = np.subtract(*np.percentile(P[wall, 0], [95, 5]))
     assert th < 0.02, ("wall not flat", th)
+    # why: a wall point kept as the building, the held section removed, each with the reason
+    import contextlib
+    import io
+    for at, want in (([0.0, 3.0, 1.5], "-> kept: it is joined to the building"), ([1.7, 5.0, 2.0], "-> removed")):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            L.why_point(mp, tr, at)
+        assert want in buf.getvalue(), (at, buf.getvalue())
     return r, th
 
 

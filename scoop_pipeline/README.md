@@ -978,7 +978,12 @@ walls and gaps up to 0.4 m, never under furniture or walls (points 0.15-0.6
 m above the floor), never over a stair opening or an atrium (points below
 it), never a courtyard (a hole over 1 m2 with a ceiling over less than
 `--roof`, 50 %, of it), each up to `--max-hole` m2. `--floor-colour gray` (or `white`,
-`r,g,b`) paints the whole floor one colour. For looking at only: the reference map,
+`r,g,b`) paints the whole floor one colour. Why a point is kept or removed:
+`lod3dgs.py why <the map view was made from> --traj <TUM> --at x,y,z` (the
+point picked in CloudCompare) runs the same steps on the points around it
+and prints what each did, then the piece it ends up in: its size (50 m2 or
+more is the building, never removed), its bottom above the floor and its
+share without a ceiling over it. For looking at only: the reference map,
 and every measurement, stays `map_final_<tag>.pcd`.
 
 The scene, from a replica export with map depth made with the same poses:

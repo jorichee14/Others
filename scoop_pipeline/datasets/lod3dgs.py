@@ -241,7 +241,7 @@ def ghost_points(P, T, voxel=0.06, near=0.12, **kw):
     return ghost
 
 
-def loose(ids, X, area, T, h, min_area=50.0, roof_h=2.0, float_h=1.2, cell=0.4):
+def loose(ids, X, area, T, h, min_area=50.0, roof_h=2.0, float_h=1.2, cell=0.4, detail=False):
     """Per piece (ids: each element's piece, X: its position, area: per piece
     m2): to remove. The pieces of min_area or more are the building; any
     other is removed when it is open to the sky (under half of it has the
@@ -250,9 +250,10 @@ def loose(ids, X, area, T, h, min_area=50.0, roof_h=2.0, float_h=1.2, cell=0.4):
     floats (its bottom float_h or more above the floor: a lamp, a sign, a
     reflection, a sheet seen through glass). One under the ceiling and down
     at the floor is furniture: kept. The floor under each element is the
-    nearest pose's height less the sensor height h."""
+    nearest pose's height less the sensor height h. detail: also each
+    piece's (small, share without a ceiling over it, bottom above the floor)."""
     small = area < min_area
-    if not small.any():
+    if not small.any() and not detail:
         return small
     _, near = cKDTree(T[:, :2]).query(X[:, :2], workers=-1)
     up = X[:, 2] - (T[near, 2] - h)                                 # height above the floor
@@ -265,10 +266,12 @@ def loose(ids, X, area, T, h, min_area=50.0, roof_h=2.0, float_h=1.2, cell=0.4):
     roofed[col[big & (up >= roof_h)]] = True
     n = len(area)
     cnt = np.bincount(ids, minlength=n)
-    sky = np.bincount(ids, (~roofed[col]).astype(float), n) / np.maximum(cnt, 1) > 0.5
+    open_share = np.bincount(ids, (~roofed[col]).astype(float), n) / np.maximum(cnt, 1)
+    sky = open_share > 0.5
     bottom = np.full(n, np.inf)
     np.minimum.at(bottom, ids, up)
-    return small & (sky | (bottom >= float_h))
+    gone = small & (sky | (bottom >= float_h))
+    return (gone, small, open_share, bottom) if detail else gone
 
 
 def drop_pieces(mesh, T, h, min_area=50.0):
@@ -283,7 +286,7 @@ def drop_pieces(mesh, T, h, min_area=50.0):
     return out, int(gone.sum())
 
 
-def piece_points(P, T, h, min_area=50.0, cell=0.1):
+def piece_points(P, T, h, min_area=50.0, cell=0.1, detail=False):
     """Per point: in a loose piece (see loose()); a piece is the points of
     10 cm cells touching, its area their count x cell^2."""
     from scipy import ndimage
@@ -296,6 +299,9 @@ def piece_points(P, T, h, min_area=50.0, cell=0.1):
     lab, n = ndimage.label(occ, structure=np.ones((3, 3, 3), bool))
     area = np.bincount(lab.ravel(), minlength=n + 1) * cell * cell
     ids = lab[ijk[:, 0], ijk[:, 1], ijk[:, 2]]
+    if detail:
+        gone, small, open_share, bottom = loose(ids, P, area, T, h, min_area, detail=True)
+        return gone[ids], ids, area, small, open_share, bottom
     return loose(ids, P, area, T, h, min_area)[ids]
 
 
@@ -924,6 +930,68 @@ def parse_colour(c):
     return v / 255.0 if v.max() > 1 else v
 
 
+def why_point(map_path, traj, at, r=0.3, min_piece=50.0):
+    """Why a point picked on the map (at: x, y, z) is kept or removed by the
+    denoise steps of `view`, in their order: the points within r of it
+    through stray points, mirror ghosts and thin strips, then the loose-piece
+    rule on the piece the nearest of them is in (its size, its bottom above
+    the floor, its share without a ceiling over it)."""
+    o3d = _o3d()
+    pc = o3d.io.read_point_cloud(os.path.expanduser(map_path))
+    P0 = np.asarray(pc.points)
+    at = np.asarray(at, float)
+    near0 = np.flatnonzero(np.linalg.norm(P0 - at, axis=1) < r)
+    d0 = float(np.min(np.linalg.norm(P0 - at, axis=1)))
+    print(f"{map_path}: {len(P0)} points; {len(near0)} within {r} m of {at.round(3).tolist()} "
+          f"(the nearest {d0:.3f} m away)")
+    if not len(near0):
+        print("  no map point there: is the pick in this map's frame (the anchored map with the anchored "
+              "trajectory, map_final with GLIM's)?")
+        return
+    T1 = read_tum_positions(traj, stride=1)
+    keep = np.ones(len(P0), bool)
+
+    def step(name, gone_idx):
+        g = np.zeros(len(P0), bool)
+        g[gone_idx] = True
+        k = int((g[near0] & keep[near0]).sum())
+        keep[g] = False
+        print(f"  {name}: {k} of them removed, {int(keep[near0].sum())} left")
+
+    _, kept = pc.remove_radius_outlier(nb_points=8, radius=0.08)
+    step("stray points", np.setdiff1d(np.arange(len(P0)), kept))
+    idx = np.flatnonzero(keep)
+    h, _ = sensor_height(P0[idx], T1)
+    print(f"  (the sensor {h:.2f} m above the floor)")
+    g = ghost_points(P0[idx], T1)
+    step("mirror ghosts", idx[g])
+    idx = np.flatnonzero(keep)
+    g = strip_points(P0[idx], T1, h)
+    step("thin strips", idx[g])
+    idx = np.flatnonzero(keep)
+    gone, ids, area, small, open_share, bottom = piece_points(P0[idx], T1, h, min_piece, detail=True)
+    left = np.flatnonzero(keep[near0])
+    if not len(left):
+        print("  nothing left there for the loose-piece rule")
+        return
+    pos = np.searchsorted(idx, near0[left])
+    pid = np.bincount(ids[pos]).argmax()
+    m = ids == pid
+    floor_z = float(np.median(T1[:, 2])) - h
+    print(f"  loose pieces: the piece most of them are in has {int(m.sum())} points, {area[pid]:.1f} m2, "
+          f"{'under' if small[pid] else 'at least'} {min_piece:g} m2 "
+          f"({'not the building' if small[pid] else 'counted as the building: never removed'}); "
+          f"its bottom {bottom[pid]:.2f} m above the floor (floating from 1.2 m), "
+          f"{100 * open_share[pid]:.0f} % of it without a ceiling over it (open to the sky over 50 %); "
+          f"its extent x {P0[idx][m][:, 0].min():.2f}..{P0[idx][m][:, 0].max():.2f}, "
+          f"y {P0[idx][m][:, 1].min():.2f}..{P0[idx][m][:, 1].max():.2f}, "
+          f"z {P0[idx][m][:, 2].min():.2f}..{P0[idx][m][:, 2].max():.2f} (floor about {floor_z:+.2f})")
+    print(f"  -> {'removed' if gone[pos].any() else 'kept'}"
+          + ("" if gone[pos].any() else
+             (": it is joined to the building (a piece of 50 m2 or more)" if not small[pid] else
+              ": under a ceiling and down at the floor (furniture)")))
+
+
 def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
              ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=50.0,
              strips=True, floor_colour=None):
@@ -1234,6 +1302,11 @@ def main():
                     help="remove the ceiling: 'auto' (horizontal surfaces 2.1 m or more above the floor), "
                          "or every point above this height (m)")
     vw.add_argument("--ceil-margin", type=float, default=0.10)
+    wh = sub.add_parser("why", help="why a picked point is kept or removed by view's denoise steps")
+    wh.add_argument("map", help="the map view was made from (e.g. map_final_<tag>_anchored.pcd)")
+    wh.add_argument("--traj", required=True, help="TUM trajectory in the same frame")
+    wh.add_argument("--at", required=True, help="the picked point: x,y,z")
+    wh.add_argument("--radius", type=float, default=0.3)
     ct = sub.add_parser("cut", help="a copy of a mesh or point cloud without the ceiling")
     ct.add_argument("file", help="a mesh or a point cloud (.ply/.pcd)")
     ct.add_argument("out", nargs="?", default=None, help="default: <file>_noceil")
@@ -1258,6 +1331,8 @@ def main():
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,
                     poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
                     color_views=a.color_views, jpeg_quality=a.jpeg_quality)
+        elif a.cmd == "why":
+            why_point(a.map, a.traj, [float(x) for x in a.at.replace(" ", "").split(",")], a.radius)
         elif a.cmd == "cut":
             cut_file(a.file, a.traj, a.ceil, a.ceil_margin, a.out)
         elif a.cmd == "view":
