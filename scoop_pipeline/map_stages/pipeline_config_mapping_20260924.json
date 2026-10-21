@@ -1,6 +1,7 @@
 {
  "extends": "pipeline_config.json",
- "_note": "20260924 mapping, redone from raw/20260924/mapping/ with the 20261015 settings, so its map compares with mobile_2's: mobile_1 alone (Ouster + ZED; the merge puts the ZED's images beside the LiDAR). run_pass.py: 02 BA on GLIM's trajectory (traj_lidar_ba_glim.txt, the reference) -> pose-time check -> 01 map, TSDF at 2 cm as 20261015 -> mapping report -> 05 boards anchor the map -> 10 poses -> finalize. No comparisons (20261015 only), no 07/08, no comms (a mapping pass records no link or time-base topics). mapping_A's outputs (work/ and processed/20260924/mapping_A) are not touched.",
+ "_note": "20260924 mapping, redone from raw/20260924/mapping/ as 20261015 was, so its map compares with mobile_2's: mobile_1 alone (Ouster + ZED; the merge puts the ZED's images beside the LiDAR); GLIM's traj_lidar.txt moved +46 ms on export (recording.yaml glim.pose_time_offset). run_pass.py: 02 BA on GLIM's trajectory (traj_lidar_ba_glim.txt, the reference) -> pose-time check -> 01 --seed + 02b scan-to-map (the comparison) -> 01 map, TSDF at 2 cm -> 01 --union (the comparison map) -> mapping report -> 05 boards anchor the map -> 10 poses -> finalize. No 07/08, no comms (a mapping pass records no link or time-base topics). mapping_A's outputs (work/ and processed/20260924/mapping_A) are not touched.",
+ "comparisons": true,
  "dataset": {
   "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping/mirc_dataset_mapping_20260924_merged",
   "traj": "traj_lidar_ba_glim.txt",
@@ -22,6 +23,9 @@
  "02_bundle_adjust": {
   "input": "traj_lidar.txt",
   "output": "traj_lidar_ba_glim.txt"
+ },
+ "02b_scan_to_map": {
+  "points_topic": "/mobile_1/ouster/points"
  },
  "07_build_cameras": {"enabled": false},
  "08_emit_tfs": {"enabled": false},

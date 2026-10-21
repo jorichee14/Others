@@ -49,6 +49,9 @@ machines:                          # per machine folder (raw/<date>/<pass>/<mach
 glim:
   config: configs/glim/mobile_1    # GLIM's config folder, in this repo; $GLIM_CONFIG overrides
   image: koide3/glim_ros2:humble-mcap
+  pose_time_offset: 0.046          # s, as mobile_2's (below): GLIM labels a pose with its sweep's
+                                   # start, ~half the 100 ms sweep of either Ouster; run_pass.py's
+                                   # time_check measures it on each pass (check.py glim re-exports)
 
 zed:                               # the .svo2 in the raw folder -> <svo name>_zed/
   camera_model: zed2i
