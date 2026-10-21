@@ -474,8 +474,9 @@ def check_ceilings(tmp):
 def check_sionna(tmp):
     """sionna on the mesh of a 5 m hall by a 3 m arcade (points with 5 mm
     noise) holding a table, a cabinet, a round pillar and a lamp hanging from
-    the hall's ceiling: the pillar with the walls, the lamp with the ceiling,
-    the table and the cabinet objects, every face of the mesh in one part
+    the hall's ceiling: the pillar with the walls, the lamp with the
+    ceiling, the table and the cabinet objects (loose, but well under the
+    ceiling: kept with --traj), every face in one part
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
@@ -520,7 +521,7 @@ def check_sionna(tmp):
                          np.zeros((len(x), 3)), np.ones(len(x))])
     m = L.map_mesh(mp, tr, voxel=0.03, min_piece=0)
     assert os.path.basename(m["out"]) == "mesh_view_radio.ply", m["out"]
-    r = L.sionna_mesh(m["out"], materials={"walls": ("brick", 0.1)}, label_faces_n=300000)
+    r = L.sionna_mesh(m["out"], materials={"walls": ("brick", 0.1)}, label_faces_n=300000, traj=tr)
     parts = {}
     for n in ("floor", "ceiling", "walls", "objects"):
         q = o3d.io.read_triangle_mesh(os.path.join(os.path.dirname(r["scene"]), "meshes", n + ".ply"))
@@ -528,7 +529,7 @@ def check_sionna(tmp):
         parts[n] = np.asarray(q.vertices)[np.asarray(q.triangles)].mean(1)
     inside = lambda Q, x0, x1, y0, y1, z0, z1: ((Q[:, 0] > x0) & (Q[:, 0] < x1) & (Q[:, 1] > y0)  # noqa: E731
                                                & (Q[:, 1] < y1) & (Q[:, 2] > z0) & (Q[:, 2] < z1)).sum()
-    assert np.abs(parts["floor"][:, 2]).max() < 0.2, ("floor off the floor", parts["floor"][:, 2].max())
+    assert np.abs(parts["floor"][:, 2]).max() < 0.3, ("floor off the floor", parts["floor"][:, 2].max())
     for name, part, b_ in (("the pillar", "walls", (3.7, 4.3, 1.2, 1.8, 0.5, 4.5)),
                            ("the lamp", "ceiling", (4.6, 5.4, 2.6, 3.4, 4.5, 4.75)),
                            ("the table", "objects", (2.1, 3.1, 4.1, 4.7, 0.6, 0.8)),
@@ -542,8 +543,8 @@ def check_sionna(tmp):
     grey = (np.abs(Cv[np.abs(Vv[:, 2]) < 0.02] - 0.8).max(1) < 0.01).mean()
     assert grey > 0.9, ("the floor not grey", grey)
     full = o3d.io.read_triangle_mesh(m["out"])
-    assert len(one.triangles) == len(full.triangles) == r["faces"], \
-        ("faces lost or added", len(one.triangles), len(full.triangles), r["faces"])
+    assert len(one.triangles) == r["faces"] == len(full.triangles) - r["left_out"], \
+        ("faces lost or added", len(one.triangles), len(full.triangles), r["faces"], r["left_out"])
     assert os.path.exists(r["labels"])
     T = np.c_[x, np.full(len(x), 3.0), np.full(len(x), 0.8)]
     e, c = L.walk_start(Vv, T)
@@ -572,7 +573,9 @@ def check_hanging(tmp):
     face joined to the next) with a 2 x 1.5 m sheet hanging from the
     ceiling, joined to it (a reflection with its mirrored ceiling): without
     the trajectory it stays, with it it is left out (as _noceil drops it:
-    loose once the ceiling is cut), the ceiling and walls kept."""
+    loose once the ceiling is cut), the ceiling and walls kept. And a
+    reflection 0.6 m under the floor: the floor over and round it still
+    floor (its level from the trajectory)."""
     import open3d as o3d
     sp = 0.05
 
@@ -619,6 +622,19 @@ def check_hanging(tmp):
         return n_
     keep = L.sionna_mesh(mp, os.path.join(tmp, "hang_keep"))
     gone = L.sionna_mesh(mp, os.path.join(tmp, "hang_gone"), traj=tr)
+    # a reflection under the polished floor (a 2 x 2 m sheet 0.6 m down, away from the path):
+    # with --traj the floor over and round it stays floor
+    Vr, Fr = grid(np.array([7.0, 0.5, -0.6]), X, Y, 40, 40)
+    ref = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(Vr), o3d.utility.Vector3iVector(Fr))
+    ref.paint_uniform_color((0.5, 0.5, 0.5))
+    mr = os.path.join(tmp, "mesh_mirror.ply")
+    o3d.io.write_triangle_mesh(mr, mesh + ref)
+    mir = L.sionna_mesh(mr, os.path.join(tmp, "mirror"), traj=tr)
+    Q = o3d.io.read_triangle_mesh(os.path.join(tmp, "mirror", "meshes", "floor.ply"))
+    c = np.asarray(Q.vertices)[np.asarray(Q.triangles)].mean(1)
+    near_ref = (c[:, 0] > 6.0) & (c[:, 0] < 9.5) & (c[:, 1] > 0.2) & (c[:, 1] < 3.0) & (np.abs(c[:, 2]) < 0.02)
+    assert near_ref.sum() >= 0.95 * 2 * (3.5 * 2.8) / sp ** 2, ("the floor by a reflection under it lost",
+                                                               int(near_ref.sum()))
     assert sheet_faces(keep) > 500, ("the sheet not in the mesh to start with", sheet_faces(keep))
     assert sheet_faces(gone) == 0, ("the sheet hanging from the ceiling kept", sheet_faces(gone))
     assert gone["ceiling"] > 0.95 * keep["ceiling"] and gone["walls"] > 0.9 * (keep["walls"] - 2400), \

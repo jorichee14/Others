@@ -1030,34 +1030,46 @@ def plane_faces(C, N, cell=0.4, sig_max=0.03, thin=0.35, min_pts=20, angle=15.0,
     return sid, nz
 
 
-def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0):
+def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
     """Per face of the mesh m (with its ceiling): what `mesh --ceil auto`
     drops from its _noceil copy below the cut. The ceiling cut as there
     (each place's own ceiling and the highest peak, less ceil_margin), then
-    the pieces left loose (loose(): floating, or open to the sky): what hung
-    from the ceiling only, such as a reflection joined to a mirrored ceiling;
-    gone from the copy, so here too. T: the trajectory in the mesh's frame."""
+    the pieces left loose (loose(): floating, or open to the sky) that reach
+    up to the cut (within reach m): what hung from the ceiling only, such as
+    a reflection joined to a mirrored ceiling; gone from the copy, so here
+    too. A loose piece well under the cut (a table, a cabinet: open to the
+    sky only because the ceiling is cut away) stays. T: the trajectory in
+    the mesh's frame."""
     V, F = np.asarray(m.vertices), np.asarray(m.triangles)
     hs, _ = sensor_height(V, T)
     _, hc, hn = height_histogram(V[:, 2])
     z = ceiling_height(hc, hn) - ceil_margin
     c = V[F].mean(1)
-    above = c[:, 2] > np.minimum(z, local_ceiling(V, T, hs)(c) - ceil_margin)
+    cut = np.minimum(z, local_ceiling(V, T, hs)(c) - ceil_margin)
+    above = c[:, 2] > cut
     kept = np.flatnonzero(~above)
     sub = type(m)(m)
     sub.remove_triangles_by_mask(above)                  # keeps the others' order
     tri, _, area = sub.cluster_connected_triangles()
     tri, area = np.asarray(tri), np.asarray(area)
+    gap = np.full(len(area), np.inf)                     # each piece's nearest to the cut
+    np.minimum.at(gap, tri, cut[kept] - c[kept, 2])
+    drop = loose(tri, c[kept], area, T, hs, min_piece) & (gap <= reach)
     gone = np.zeros(len(F), bool)
-    gone[kept[loose(tri, c[kept], area, T, hs, min_piece)[tri]]] = True
+    gone[kept[drop[tri]]] = True
     return gone
 
 
-def label_faces(m, flat=0.9, band=0.2, roof_h=2.0, wall_area=3.0, wall_low=0.5, wall_high=2.2,
-                vertical=0.3, lamp_h=1.8, min_obj=0.05, obj_extent=3.0, obj_height=2.0, obj_area=10.0):
+def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_low=0.5, wall_high=2.2,
+                vertical=0.3, lamp_h=1.8, min_obj=0.05, obj_extent=3.0, obj_height=2.0, obj_area=10.0,
+                T=None):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
     each object face its object's number (-1 for the rest).
-    Floor: horizontal (|n_z| over flat) within band of the floor (floor_grid);
+    The floor: with T (the trajectory, the mesh's frame) the nearest pose's
+    height less the sensor height, as fill_floor takes it, so whatever lies
+    under the floor (a reflection in polished stone, a step down) cannot
+    lower it; without, the lowest of each cell round (floor_grid). Floor:
+    horizontal (|n_z| over flat) within band of it (with T: either side);
     ceiling: horizontal roof_h or more above it. Walls: flat surfaces
     (plane_faces) near vertical (|n_z| under `vertical`) of wall_area m2 or
     more from wall_low or less over the floor to wall_high or more. The rest,
@@ -1075,10 +1087,17 @@ def label_faces(m, flat=0.9, band=0.2, roof_h=2.0, wall_area=3.0, wall_low=0.5, 
     N = np.asarray(m.triangle_normals)
     C = V[F].mean(1)
     A = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1)
-    dz = C[:, 2] - floor_grid(V)(C)
+    if T is not None:
+        h, _ = sensor_height(V, T)
+        _, near = cKDTree(T[:, :2]).query(C[:, :2], workers=-1)
+        dz = C[:, 2] - (T[near, 2] - h)
+        on_floor = np.abs(dz) <= band
+    else:
+        dz = C[:, 2] - floor_grid(V)(C)
+        on_floor = dz <= band
     hor = np.abs(N[:, 2]) > flat
     part = np.full(len(F), "", dtype=object)
-    part[hor & (dz <= band)] = "floor"
+    part[hor & on_floor] = "floor"
     part[hor & (dz >= roof_h)] = "ceiling"
     sid, snz = plane_faces(C, N)
     s_ok = sid >= 0
@@ -1139,7 +1158,8 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     Nothing is rebuilt: faces > 0 simplifies the whole mesh to about that
     many first (quadric), else it is taken as it is. The labels (label_faces)
     are found on a copy simplified to label_faces_n faces and each face takes
-    its nearest one's. traj (the mesh's frame): what the _noceil copy drops
+    its nearest one's. traj (the mesh's frame): the floor level from it (so a
+    reflection under the floor cannot pull it down), and what the _noceil copy drops
     as hanging from the ceiling (hanging_faces: a reflection joined to a
     mirrored ceiling) is left out."""
     o3d = _o3d()
@@ -1162,14 +1182,15 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
         m = M.simplify_quadric_decimation(target_number_of_triangles=int(label_faces_n))
         m.remove_degenerate_triangles()
         m.remove_unreferenced_vertices()
-    part, obj = label_faces(m)
+    T = read_tum_positions(traj, stride=1) if traj else None
+    part, obj = label_faces(m, T=T)
     V, F = np.asarray(m.vertices), np.asarray(m.triangles)
     C = V[F].mean(1)
     A = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1)
     report = [f"sionna {mesh_path}: {n0} faces" + (f", simplified to {len(M.triangles)}"
                                                    if len(M.triangles) != n0 else ", as they are")]
     if traj:
-        hang = hanging_faces(m, read_tum_positions(traj, stride=1), ceil_margin, min_piece)
+        hang = hanging_faces(m, T, ceil_margin, min_piece)
         part[hang] = "gone"
         obj[hang] = -1
         report.append(f"  hanging from the ceiling only (as _noceil drops them: a reflection joined to a "
@@ -1266,6 +1287,7 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
                "ceiling white, objects orange)"]
     log.info("\n".join(report))
     return {"out": sx, "scene": sx, "view": vp, "labels": lp, "faces": sum(used.values()), **used,
+            "left_out": int((fpart == "gone").sum()),
             "n_objects": int(len(np.unique(fobj[fpart == "objects"])))}
 
 
