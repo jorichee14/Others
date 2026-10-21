@@ -1062,7 +1062,7 @@ def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
 
 def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2, vertical=0.3,
                 on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, tall=2.3, sideways=0.75,
-                T=None):
+                line_h=2.1, line_cell=0.05, stair_rise=(0.25, 1.5), T=None):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
     each object face its object's number (-1 for the rest).
 
@@ -1077,17 +1077,26 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
     (|n_z| under `vertical`) of wall_area m2 or more reaching wall_high or
     more over the floor (above a cabinet too); then every face on one of
     them: within on_wall of its plane, facing it to facing_deg, inside its
-    extent (along it and up, reach m more), so the rough parts of a wall go
-    with it and what stands in front of it (a desk, a cabinet: farther than
-    on_wall, or facing up) does not.
+    extent (along it, reach m more; up to its top, and down to the floor:
+    the wall goes on behind the furniture in front of it), so the rough
+    parts of a wall go with it and what stands in front of it (a desk, a
+    cabinet: farther than on_wall, or facing up) does not. Then the wall
+    lines: where faces facing sideways stand line_h or more over the floor
+    (above furniture: walls, pillars), in line_cell cells of the plan; every
+    face facing sideways on one (the cell or the next), facing as it does,
+    is wall too where the line stands on the floor (faces facing sideways
+    under line_h there too; a lamp hanging has none): a wall cluttered with
+    furniture all along it, its plane not found; a pillar.
 
     The rest facing sideways within seam of a floor, wall or ceiling face
     (the rounded strips where they meet) goes with it; one facing up (a
     table top by a wall) does not. Everything else, in connected pieces, is
     objects: furniture, a wall bulging with furniture against it, a lamp;
-    but a piece facing sideways (`sideways` of its area) and reaching `tall`
-    or higher, above furniture, is walls: a wall's thickness (its end, the
-    sides of an opening), a pillar; a piece reaching no higher than band (the floor's bumps)
+    but a piece facing sideways (`sideways` of its area), from the floor
+    (0.5 m) to `tall` or higher, above furniture, is walls: a wall's thickness (its end, the
+    sides of an opening), a pillar; and so are stairs (their flat faces
+    climbing along the piece's length, stair_rise m per m, over 0.8 m; a
+    shelf's stack in place does not); a piece reaching no higher than band (the floor's bumps)
     is floor and one under min_obj m2 (a scrap at a seam) the part of the
     nearest labelled face."""
     from scipy.sparse import coo_matrix
@@ -1133,7 +1142,7 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
             t = np.array([-n[1], n[0], 0.0])
             u = (C[mem] - mu) @ t
             u0, u1 = u.min() - reach, u.max() + reach
-            z0, z1 = C[mem, 2].min() - reach, C[mem, 2].max() + reach
+            z0, z1 = -np.inf, C[mem, 2].max() + reach         # down to the floor, behind the furniture
             mid = mu + t * (u0 + u1) / 2
             idx = cand[np.asarray(ctree.query_ball_point(mid[:2], (u1 - u0) / 2 + on_wall + 0.01), np.int64)]
             if not len(idx):
@@ -1144,6 +1153,32 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
                 (C[idx, 2] >= z0) & (C[idx, 2] <= z1)
             isw[idx[ok]] = True
         part[isw] = "walls"
+    # the wall lines, seen above furniture: every face facing sideways on one is wall
+    side_f = np.abs(N[:, 2]) < vertical
+    up = side_f & (dz >= line_h) & ((part == "") | (part == "walls"))
+    if up.any():
+        from scipy import ndimage
+        lo = C[:, :2].min(0)
+        nx_, ny_ = np.floor((C[:, :2].max(0) - lo) / line_cell).astype(np.int64) + 1
+        ij = np.floor((C[:, :2] - lo) / line_cell).astype(np.int64)
+        lin = ij[:, 0] * ny_ + ij[:, 1]
+        nn = N[:, :2] / np.maximum(np.linalg.norm(N[:, :2], axis=1, keepdims=True), 1e-9)
+        k = np.ones((3, 3))
+        cnt, axx, ayy, axy = [ndimage.convolve(np.bincount(lin[up], w, nx_ * ny_).reshape(nx_, ny_), k,
+                                               mode="constant")
+                              for w in (np.ones(up.sum()), nn[up, 0] ** 2, nn[up, 1] ** 2, nn[up, 0] * nn[up, 1])]
+        low = side_f & (dz < line_h) & ((part == "") | (part == "walls"))
+        below = ndimage.convolve(np.bincount(lin[low], minlength=nx_ * ny_).reshape(nx_, ny_), k,
+                                 mode="constant")
+        cand = np.flatnonzero(side_f & (part == ""))
+        ci, cj = ij[cand, 0], ij[cand, 1]
+        # a line standing on the floor (something under it there too): a lamp hanging claims nothing
+        occ = (cnt[ci, cj] >= 3) & (below[ci, cj] >= 1)
+        # the line's normal: the main axis of the orientation tensor of the faces there
+        th = 0.5 * np.arctan2(2 * axy[ci, cj], axx[ci, cj] - ayy[ci, cj])
+        dirn = np.c_[np.cos(th), np.sin(th)]
+        along = np.abs(np.einsum("ij,ij->i", nn[cand], dirn)) > np.cos(np.radians(facing_deg))
+        part[cand[occ & along]] = "walls"
     # the seams: what is left within `seam` of a floor, wall or ceiling face goes with it
     rest = np.flatnonzero((part == "") & ~hor)
     lab = np.flatnonzero(part != "")
@@ -1165,9 +1200,25 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
         c_area = np.bincount(comp, A[rest], nc)
         c_hi = np.full(nc, -np.inf)
         np.maximum.at(c_hi, comp, dz[rest])
+        c_lo = np.full(nc, np.inf)
+        np.minimum.at(c_lo, comp, dz[rest])
         side = np.bincount(comp, A[rest] * (np.abs(N[rest, 2]) < vertical), nc) / np.maximum(c_area, 1e-12)
         kind = np.full(nc, "objects", dtype=object)
-        kind[(side >= sideways) & (c_hi >= tall)] = "walls"
+        kind[(side >= sideways) & (c_hi >= tall) & (c_lo <= 0.5)] = "walls"
+        # stairs: their treads climb along the flight (shelves stack in place)
+        hr = hor[rest]
+        nh = np.bincount(comp[hr], minlength=nc)
+        for k_ in np.flatnonzero(nh >= 20):
+            sel = rest[hr & (comp == k_)]
+            zz = C[sel, 2]
+            if zz.max() - zz.min() < 0.8:
+                continue
+            xy = C[sel, :2] - C[sel, :2].mean(0)
+            u = xy @ np.linalg.svd(xy, full_matrices=False)[2][0]
+            a_, b_ = np.polyfit(u, zz, 1)
+            r2 = 1 - np.var(zz - (a_ * u + b_)) / max(np.var(zz), 1e-12)
+            if stair_rise[0] <= abs(a_) <= stair_rise[1] and r2 >= 0.6:
+                kind[k_] = "walls"
         kind[c_hi <= band] = "floor"
         scrap = c_area < min_obj
         kind[scrap] = ""

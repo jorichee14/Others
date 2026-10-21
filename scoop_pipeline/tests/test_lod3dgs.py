@@ -475,9 +475,10 @@ def check_sionna(tmp):
     """sionna on the mesh of a 5 m hall by a 3 m arcade (points with 5 mm
     noise) holding a table, a cabinet, a round pillar and a lamp hanging from
     the hall's ceiling, a desk against a wall, 4 m of desks pushed together:
-    walls the wall planes (the wall behind the desk), a wall's end (its
-    thickness) and the pillar; objects the table, the cabinet, the desk and
-    the 4 m of desks (the lamp's flat underside, over 2 m up, with the
+    walls the wall planes (the wall behind the desk, and between and behind
+    chairs touching it, down to the floor), a wall's end (its thickness),
+    the pillar and stairs; objects the table, the cabinet, the desk, the
+    chairs and the 4 m of desks (the lamp's flat underside, over 2 m up, with the
     ceiling); every face in one part
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
@@ -508,6 +509,13 @@ def check_sionna(tmp):
                           + [box(x, x + 0.06, y, y + 0.06, 0, 0.72, top=False)
                              for x in (5.03, 6.11) for y in (0.05, 0.53)])
     stub = box(10.5, 11.98, 1.0, 1.2, 0, 2.98)               # a 20 cm thick wall ending in the arcade
+    chairs = np.concatenate([box(x, x + 0.4, 0.01, 0.41, 0, 1.0) for x in np.arange(7.3, 10.0, 0.6)])
+    stairs = []                                              # 12 steps of 0.17 x 0.28 m, up along x
+    for k_ in range(12):
+        x0_ = 0.2 + 0.28 * k_
+        stairs += [sheet(2, 0.17 * (k_ + 1), (x0_, x0_ + 0.28), (4.95, 5.85)),
+                   sheet(0, x0_, (4.95, 5.85), (0.17 * k_, 0.17 * (k_ + 1)))]
+    stairs = np.concatenate(stairs)
     room_of_desks = np.concatenate([box(7.5, 11.5, 3.6, 4.8, 0.72, 0.75)]   # desks pushed together: 4 m
                                    + [box(x, x + 0.06, y, y + 0.06, 0, 0.72, top=False)
                                       for x in (7.55, 9.0, 10.5, 11.4) for y in (3.65, 4.7)])
@@ -518,7 +526,7 @@ def check_sionna(tmp):
                         sheet(0, 7.0, (0, 6), (3, 5)), sheet(0, 12.0, (0, 6), (0, 3)),
                         sheet(1, 0.0, (0, 7), (0, 5)), sheet(1, 6.0, (0, 7), (0, 5)),
                         sheet(1, 0.0, (7, 12), (0, 3)), sheet(1, 6.0, (7, 12), (0, 3)),
-                        pillar, table, cabinet, lamp, desk, room_of_desks, stub])
+                        pillar, table, cabinet, lamp, desk, room_of_desks, stub, chairs, stairs])
     P = P + rng.normal(0, 0.005, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     pc.colors = o3d.utility.Vector3dVector(np.full(P.shape, 0.5))
@@ -541,16 +549,22 @@ def check_sionna(tmp):
     assert np.abs(parts["floor"][:, 2]).max() < 0.35, ("floor off the floor", parts["floor"][:, 2].max())
     for name, part, b_ in (("the pillar", "walls", (3.7, 4.3, 1.2, 1.8, 0.5, 4.5)),
                            ("a wall's end (its thickness)", "walls", (10.45, 10.55, 1.03, 1.17, 0.5, 2.5)),
-                           ("the lamp", "ceiling", (4.6, 5.4, 2.6, 3.4, 4.5, 4.75)),
                            ("the table", "objects", (2.1, 3.1, 4.1, 4.7, 0.6, 0.8)),
                            ("the cabinet", "objects", (9.05, 9.55, 5.45, 5.95, 0.3, 1.25)),
                            ("the desk against the wall", "objects", (5.1, 6.1, 0.15, 0.6, 0.6, 0.8)),
                            ("the wall over the desk", "walls", (5.1, 6.1, -0.05, 0.05, 1.0, 2.5)),
-                           ("4 m of desks pushed together", "objects", (7.7, 11.3, 3.7, 4.7, 0.6, 0.8))):
+                           ("4 m of desks pushed together", "objects", (7.7, 11.3, 3.7, 4.7, 0.6, 0.8)),
+                           ("chairs against a wall", "objects", (7.4, 9.9, 0.1, 0.38, 0.95, 1.05)),
+                           ("the wall between and behind the chairs", "walls", (7.75, 7.85, -0.05, 0.05, 0.2, 0.8)),
+                           ("stairs", "walls", (0.6, 3.0, 5.0, 5.8, 0.3, 1.8))):
         assert inside(parts[part], *b_) > 0, (name, "not with", part)
         for other in parts:
             if other != part:
                 assert inside(parts[other], *b_) <= 0.05 * inside(parts[part], *b_), (name, "in", other)
+    lamp = (4.6, 5.4, 2.6, 3.4, 4.5, 4.75)
+    assert inside(parts["walls"], *lamp) <= 0.02 * inside(parts["ceiling"], *lamp) and \
+        inside(parts["ceiling"], *lamp) > 0, \
+        ("the lamp: its underside with the ceiling, nothing of it wall", {n: inside(parts[n], *lamp) for n in parts})
     one = o3d.io.read_triangle_mesh(r["view"])
     Vv, Cv = np.asarray(one.vertices), np.asarray(one.vertex_colors)
     grey = (np.abs(Cv[np.abs(Vv[:, 2]) < 0.02] - 0.8).max(1) < 0.01).mean()
@@ -761,7 +775,8 @@ def main():
         rs, ds = check_sionna(tmp)
         print(f"ok sionna: floor {rs['floor']}, ceiling {rs['ceiling']}, walls {rs['walls']}, "
               f"objects {rs['objects']} ({rs['n_objects']} of them); walls the wall planes (the wall "
-              "behind a desk), a wall's end and a pillar; a table, a cabinet, a desk and 4 m of desks objects, "
+              "behind a desk and chairs), a wall's end, a pillar and stairs; a table, a cabinet, a desk, chairs and "
+              "4 m of desks objects, "
               "every face kept"
               + (f"; Sionna RT traced delays {ds} ns" if ds is not None
                  else " (Sionna RT not installed: not loaded)"))
