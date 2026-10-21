@@ -9,6 +9,8 @@ LOD-3DGS scene (LetsGo, github.com/zhaofuq/LOD-3DGS; Cui et al., ACM TOG 43(6),
     python scoop_pipeline/datasets/lod3dgs.py mesh <map .pcd/.ply> --traj <TUM of the map>
         [<out mesh .ply>] [--ceil auto|Z] [--ceil-margin 0.10] [--voxel 0.02]
         [--poisson-depth 0] [--trim 0.10] [--show]
+    python scoop_pipeline/datasets/lod3dgs.py sionna <mesh .ply, with its ceiling> [<out .ply>]
+        [--faces 500000] [--floor-grey 0.8] [--scene] [--material walls=brick:0.1]
 
 `mesh` is the mesh step alone, to look at: the map's Poisson mesh, trimmed,
 in the map's colours (map_final_<tag>.pcd is colorized), normals turned to
@@ -951,6 +953,109 @@ def anchor_file(path, frame, out=None):
     return out
 
 
+SIONNA_MATERIALS = {"floor": ("concrete", 0.2), "ceiling": ("concrete", 0.2), "walls": ("concrete", 0.2)}
+
+
+def sionna_mesh(mesh_path, out=None, faces=500000, scene=False, materials=None, flat=0.9, cell=1.0,
+                band=0.2, roof_h=2.0, floor_colour=(0.8, 0.8, 0.8)):
+    """A mesh for Sionna RT of a mesh made by `mesh` (the one with its
+    ceiling: the radio waves bounce off it): <mesh>_sionna.ply, one file, the
+    mesh simplified to about `faces` (quadric error: a flat wall stays flat in
+    few faces), in its vertex colours but the floor floor_colour (None: its
+    own), no normals. The floor: of the horizontal faces (|n_z| over flat)
+    in each cell (m, in plan), those within band of the full mesh's lowest
+    there. scene: also a Sionna scene
+    of it, <mesh>_sionna/scene.xml with meshes/{floor,ceiling,walls}.ply, each
+    an ITU radio material: the floor; the ceiling, horizontal faces roof_h or
+    more above it; walls, the rest (a table top, furniture). materials: {part: (ITU type,
+    thickness m)} over SIONNA_MATERIALS. Metres, the mesh's frame."""
+    o3d = _o3d()
+    mesh_path = os.path.expanduser(mesh_path)
+    out = out or os.path.splitext(mesh_path)[0] + "_sionna.ply"
+    mats = {**SIONNA_MATERIALS, **(materials or {})}
+    m = o3d.io.read_triangle_mesh(mesh_path)
+    if not len(m.triangles):
+        raise ConvertError(f"{mesh_path}: no faces (give it the mesh, not the view)")
+    n0 = len(m.triangles)
+    m.remove_duplicated_vertices()
+    # the floor's height per cell from the full mesh (simplified, a floor is a
+    # few large faces, most cells holding none's centre): its lowest 1 %
+    from scipy import ndimage
+    V0 = np.asarray(m.vertices)
+    lo = V0[:, :2].min(0)
+    nx, ny = np.floor((V0[:, :2].max(0) - lo) / cell).astype(np.int64) + 1
+    lin = np.floor((V0[:, :2] - lo) / cell).astype(np.int64) @ np.array([ny, 1])
+    o = np.lexsort((V0[:, 2], lin))
+    starts = np.r_[0, np.flatnonzero(np.diff(lin[o])) + 1]
+    cnt = np.diff(np.r_[starts, len(o)])
+    floor_z = np.full(nx * ny, np.inf)
+    floor_z[lin[o][starts]] = V0[o[starts + cnt // 100], 2]
+    floor_z = ndimage.minimum_filter(floor_z.reshape(nx, ny), size=3, mode="nearest")
+    del V0, lin, o
+    if faces and n0 > faces:
+        m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
+    m.remove_degenerate_triangles()
+    m.remove_unreferenced_vertices()
+    m.compute_triangle_normals()
+    V, F = np.asarray(m.vertices), np.asarray(m.triangles)
+    c = V[F].mean(1)
+    hor = np.abs(np.asarray(m.triangle_normals)[:, 2]) > flat
+    k = np.clip(np.floor((c[:, :2] - lo) / cell).astype(np.int64), 0, [nx - 1, ny - 1])
+    low = floor_z[k[:, 0], k[:, 1]]
+    part = np.full(len(F), "walls", dtype=object)
+    part[hor & (c[:, 2] <= low + band)] = "floor"
+    part[hor & (c[:, 2] >= low + roof_h)] = "ceiling"
+    if floor_colour is not None and m.has_vertex_colors():
+        C = np.asarray(m.vertex_colors).copy()
+        C[np.unique(F[part == "floor"])] = floor_colour
+        m.vertex_colors = o3d.utility.Vector3dVector(C)
+    w = type(m)(m)
+    for attr in ("vertex_normals", "triangle_normals"):         # shown unlit, in its colours
+        setattr(w, attr, o3d.utility.Vector3dVector(np.zeros((0, 3))))
+    o3d.io.write_triangle_mesh(out, w)
+    res = {"out": out, "faces": len(F), "floor_faces": int((part == "floor").sum())}
+    msg = (f"sionna mesh {out}: {len(F)} faces (from {n0})"
+           + (", in the mesh's colours" if m.has_vertex_colors() else "")
+           + (f", the floor ({res['floor_faces']} faces) grey {floor_colour[0]:g}"
+              if floor_colour is not None and m.has_vertex_colors() else ""))
+    if not scene:
+        log.info(msg)
+        return res
+    sdir = os.path.splitext(out)[0]
+    os.makedirs(os.path.join(sdir, "meshes"), exist_ok=True)
+    xml_mats, shapes, used = {}, [], {}
+    for name in ("floor", "ceiling", "walls"):
+        sel = part == name
+        if not sel.any():
+            continue
+        q = type(m)(m)
+        q.remove_triangles_by_mask(~sel)
+        q.remove_unreferenced_vertices()
+        for attr in ("vertex_normals", "triangle_normals", "vertex_colors"):   # the material's colour shown
+            setattr(q, attr, o3d.utility.Vector3dVector(np.zeros((0, 3))))
+        o3d.io.write_triangle_mesh(os.path.join(sdir, "meshes", name + ".ply"), q)
+        used[name] = int(sel.sum())
+        typ, th = mats[name]
+        mid = f"{typ}_{round(float(th) * 100):d}cm"          # one material, parts sharing it
+        if mid not in xml_mats:
+            xml_mats[mid] = [f'    <bsdf type="itu-radio-material" id="mat-{mid}">',
+                             f'        <string name="type" value="{typ}"/>',
+                             f'        <float name="thickness" value="{float(th):g}"/>',
+                             "    </bsdf>"]
+        shapes += [f'    <shape type="ply" id="mesh-{name}">',
+                   f'        <string name="filename" value="meshes/{name}.ply"/>',
+                   '        <boolean name="face_normals" value="true"/>',
+                   f'        <ref id="mat-{mid}" name="bsdf"/>',
+                   "    </shape>"]
+    xml = ['<scene version="2.1.0">', *sum(xml_mats.values(), []), *shapes, "</scene>"]
+    sx = os.path.join(sdir, "scene.xml")
+    open(sx, "w").write("\n".join(xml) + "\n")
+    log.info(msg + f"\nsionna scene {sx}:"
+             + "".join(f"\n  {n}: {used[n]} faces, ITU {mats[n][0]} {float(mats[n][1]):g} m" for n in used)
+             + "\n  load: sionna.rt.load_scene(\"" + sx + "\")")
+    return {**res, "scene": sx, **used}
+
+
 def sample_mesh(mesh, spacing=0.04):
     """Points evenly over the mesh, about `spacing` apart."""
     area = mesh.get_surface_area()
@@ -1174,6 +1279,19 @@ def main():
     an.add_argument("file", help="a cloud or mesh made from map_final with the BA trajectory")
     an.add_argument("out", nargs="?", default=None, help="default: <file>_anchored")
     an.add_argument("--frame", required=True, help="05's frames/anchor_frame.json")
+    sn = sub.add_parser("sionna", help="a mesh for Sionna RT (simplified) of a mesh made by `mesh`")
+    sn.add_argument("file", help="the mesh with its ceiling, e.g. mesh_view_<tag>_anchored.ply (not _noceil)")
+    sn.add_argument("out", nargs="?", default=None, help="the mesh (default: <file>_sionna.ply)")
+    sn.add_argument("--faces", type=int, default=500000, help="simplify to about this many faces (0: not)")
+    sn.add_argument("--floor-grey", type=float, default=0.8,
+                    help="the floor in this grey (0 black to 1 white; negative: its own colours)")
+    sn.add_argument("--scene", action="store_true",
+                    help="also a Sionna scene of it: <out>/scene.xml, floor, ceiling and walls apart, "
+                         "each an ITU material (--material)")
+    sn.add_argument("--material", action="append", default=[], metavar="PART=TYPE[:THICKNESS]",
+                    help="floor, ceiling or walls as an ITU material (concrete, brick, plasterboard, wood, "
+                         "glass, ceiling_board, marble, floorboard, metal, ...), thickness m; "
+                         "default concrete:0.2 each; repeat for each part")
     a = ap.parse_args()
     for k in ("map", "file", "traj", "frame", "dataset"):
         p = getattr(a, k, None)
@@ -1185,6 +1303,16 @@ def main():
     try:
         if a.cmd == "anchor":
             anchor_file(a.file, a.frame, a.out)
+        elif a.cmd == "sionna":
+            mats = {}
+            for spec in a.material:
+                part, _, v = spec.partition("=")
+                typ, _, th = v.partition(":")
+                if part not in SIONNA_MATERIALS or not typ:
+                    ap.error(f"--material {spec}: PART=TYPE[:THICKNESS], PART one of floor, ceiling, walls")
+                mats[part] = (typ, float(th) if th else SIONNA_MATERIALS[part][1])
+            sionna_mesh(a.file, a.out, faces=a.faces, scene=a.scene, materials=mats,
+                        floor_colour=None if a.floor_grey < 0 else (a.floor_grey,) * 3)
         elif a.cmd == "scene":
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,
                     poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,

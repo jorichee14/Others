@@ -984,6 +984,20 @@ trajectory (GLIM's world), then move each into 05's frame:
 `lod3dgs.py anchor <view or mesh> --frame $P/frames/anchor_frame.json`
 -> `<name>_anchored` (T_N_world, the move the anchored map was made with).
 
+`sionna` makes a mesh for Sionna RT of the mesh with its ceiling (not
+`_noceil`: the waves bounce off it): `<mesh>_sionna.ply`, one file,
+simplified to `--faces` (500,000; quadric error, a flat wall stays flat in
+few faces), in the mesh's colours with the floor grey (`--floor-grey 0.8`,
+negative keeps its colours), no normals. The floor is, in each 1 m cell, the
+horizontal faces within 0.2 m of the full mesh's lowest there. `--scene`
+also writes `<mesh>_sionna/scene.xml` (`sionna.rt.load_scene`) with the
+floor, the ceiling (horizontal 2 m or more above the floor) and the walls
+(the rest, furniture with them) apart, each an ITU material:
+`--material walls=brick:0.1` (`PART=TYPE[:THICKNESS m]`; default concrete
+0.2 m each).
+
+    python3 scoop_pipeline/datasets/lod3dgs.py sionna mapping/mesh_view_<tag>_anchored.ply [--scene]
+
 The scene, from a replica export with map depth made with the same poses:
 
 ```

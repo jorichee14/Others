@@ -27,7 +27,9 @@ poses, the strays gone, the walls flat, nothing added outside the room. Then
 the mirror ghosts of a polished floor and wall (under the floor, behind the
 wall: no direct ray from the path reaches them) and a loose 5 m2 sheet removed
 by both mesh and view, the room's own surfaces kept. And --ceil auto on a
-5 m hall by a 3 m arcade: each ceiling off at its own height, the walls kept.
+5 m hall by a 3 m arcade: each ceiling off at its own height, the walls kept;
+`sionna` on its mesh: floor, ceiling and walls apart, loaded and traced by
+Sionna RT.
 
     python scoop_pipeline/tests/test_lod3dgs.py
 """
@@ -468,6 +470,72 @@ def check_ceilings(tmp):
     return count(V, 7.6, 11.9, 2.95, 3.1), count(N, 7.6, 11.9, 2.95, 3.1)
 
 
+def check_sionna(tmp):
+    """sionna on the mesh of a 5 m hall by a 3 m arcade, a table in the hall:
+    one simplified mesh in its colours, the floor grey; with --scene floor, ceiling and walls apart (the floor at 0, the table top with the
+    walls, both ceilings), the scene.xml loaded by Sionna RT when installed
+    and a floor bounce traced 2.05 ns after the direct path."""
+    import open3d as o3d
+    g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
+
+    def sheet(axis, val, ra, rb):
+        A, B = np.meshgrid(g(*ra), g(*rb), indexing="ij")
+        o = [i for i in range(3) if i != axis]
+        p = np.zeros((A.size, 3))
+        p[:, o[0]], p[:, o[1]], p[:, axis] = A.ravel(), B.ravel(), val
+        return p
+    P = np.concatenate([sheet(2, 0.0, (0, 12), (0, 6)), sheet(2, 5.0, (0, 7), (0, 6)),
+                        sheet(2, 3.0, (7, 12), (0, 6)), sheet(0, 0.0, (0, 6), (0, 5)),
+                        sheet(0, 7.0, (0, 6), (3, 5)), sheet(0, 12.0, (0, 6), (0, 3)),
+                        sheet(1, 0.0, (0, 7), (0, 5)), sheet(1, 6.0, (0, 7), (0, 5)),
+                        sheet(1, 0.0, (7, 12), (0, 3)), sheet(1, 6.0, (7, 12), (0, 3)),
+                        sheet(2, 0.75, (2, 3), (4, 5))])
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    pc.colors = o3d.utility.Vector3dVector(np.full(P.shape, 0.5))
+    mp = os.path.join(tmp, "map_final_radio.pcd")
+    o3d.io.write_point_cloud(mp, pc)
+    x = np.arange(1.0, 11.0, 0.1)
+    tr = os.path.join(tmp, "traj_radio.txt")
+    np.savetxt(tr, np.c_[np.arange(len(x)), x, np.full(len(x), 3.0), np.full(len(x), 0.8),
+                         np.zeros((len(x), 3)), np.ones(len(x))])
+    m = L.map_mesh(mp, tr, os.path.join(tmp, "m_radio.ply"), voxel=0.05, min_piece=0)
+    r = L.sionna_mesh(m["out"], os.path.join(tmp, "radio.ply"), faces=20000, scene=True,
+                      materials={"walls": ("brick", 0.1)})
+    assert r["faces"] <= 20500, r
+    one = o3d.io.read_triangle_mesh(r["out"])
+    assert len(one.triangles) == r["faces"] and one.has_vertex_colors() and not one.has_vertex_normals()
+    Vo, Co = np.asarray(one.vertices), np.asarray(one.vertex_colors)
+    on_floor = np.abs(Vo[:, 2]) < 0.02
+    assert np.abs(Co[on_floor] - 0.8).max() < 0.01, "the floor not grey"
+    V = {}
+    for n in ("floor", "ceiling", "walls"):
+        q = o3d.io.read_triangle_mesh(os.path.join(tmp, "radio", "meshes", n + ".ply"))
+        assert not q.has_vertex_colors() and len(q.triangles), n
+        V[n] = np.asarray(q.vertices)[np.asarray(q.triangles)].mean(1)
+    assert np.abs(V["floor"][:, 2]).max() < 0.05, ("floor off the floor", V["floor"][:, 2].max())
+    for z, x0, x1 in ((5.0, 0.5, 6.5), (3.0, 7.5, 11.5)):
+        sel = (V["ceiling"][:, 0] > x0) & (V["ceiling"][:, 0] < x1)
+        assert sel.any() and np.abs(V["ceiling"][sel, 2] - z).max() < 0.05, ("ceiling", z)
+    top = (np.abs(V["walls"][:, 2] - 0.75) < 0.05) & (np.abs(V["walls"][:, 0] - 2.5) < 0.4)
+    assert top.any(), "the table top not with the walls"
+    xml = open(r["scene"]).read()
+    assert 'value="brick"' in xml and 'value="concrete"' in xml, xml
+    try:
+        import sionna.rt as rt
+    except ImportError:
+        return r, None
+    sc = rt.load_scene(r["scene"])
+    sc.tx_array = rt.PlanarArray(num_rows=1, num_cols=1, pattern="iso", polarization="V")
+    sc.rx_array = rt.PlanarArray(num_rows=1, num_cols=1, pattern="iso", polarization="V")
+    sc.add(rt.Transmitter("tx", position=[3.0, 3.0, 1.5]))
+    sc.add(rt.Receiver("rx", position=[10.0, 3.0, 1.5]))
+    _, tau = rt.PathSolver()(sc, max_depth=1, refraction=False).cir(out_type="numpy")
+    d = np.unique(np.round(tau[tau >= 0] * 1e9, 2))
+    bounce = (np.hypot(7.0, 3.0) - 7.0) / 0.299792458
+    assert d[0] == 0 and np.abs(d - bounce).min() < 0.05, ("no floor bounce", d[:6], bounce)
+    return r, d[:4]
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="lod3dgs_")
     try:
@@ -563,6 +631,10 @@ def main():
         cv, cm = check_ceilings(tmp)
         print(f"ok ceilings: a 5 m hall's and a 3 m arcade's each cut at its own height ({cv} view points, "
               f"{cm} mesh vertices of the arcade's left), the walls under each kept")
+        rs, ds = check_sionna(tmp)
+        print(f"ok sionna: {rs['faces']} faces, floor {rs['floor']}, ceiling {rs['ceiling']}, walls "
+              f"{rs['walls']}" + (f"; Sionna RT traced delays {ds} ns" if ds is not None
+                                  else " (Sionna RT not installed: not loaded)"))
         rm = check_mesh(tmp)
         print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
               f"{rm['noceil_faces']} faces without it")
