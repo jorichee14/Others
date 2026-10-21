@@ -1118,15 +1118,20 @@ def remesh_object(P, Cp, Nref, cell=0.01, snap=0.01, planes=6, min_plane=0.15, t
         P[idx] -= ((P[idx] @ nrm + d) / (nrm @ nrm))[:, None] * nrm
         left = np.setdiff1d(left, idx)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    keep = np.asarray(pc.voxel_down_sample_and_trace(cell / 2, pc.get_min_bound() - cell,
+                                                     pc.get_max_bound() + cell)[1]).max(1)
+    P, Cp, Nref = P[keep], Cp[keep], Nref[keep]                # no point twice
+    if len(P) < 60:
+        return None
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     pc.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=max(3 * cell, 0.03), max_nn=30))
-    try:                                    # one side to the next across the surface (a plate's two)
-        pc.orient_normals_consistent_tangent_plane(10)
-        Nn = np.asarray(pc.normals)
-        if np.einsum("ij,ij->i", Nn, Nref).mean() < 0:      # then all of it out, as the coarse mesh
-            Nn = -Nn
-    except RuntimeError:
-        Nn = np.asarray(pc.normals).copy()
-        Nn[np.einsum("ij,ij->i", Nn, Nref) < 0] *= -1
+    # out: away from the points round it (a plate's two sides apart), where
+    # they say nothing (one sheet) as the coarse mesh's
+    Nn = np.asarray(pc.normals).copy()
+    _, nb = cKDTree(P).query(P, k=min(50, len(P)), workers=-1)
+    s_ = np.einsum("ij,ij->i", Nn, P - P[nb].mean(1))
+    flip = np.where(np.abs(s_) > 0.004, s_ < 0, np.einsum("ij,ij->i", Nn, Nref) < 0)
+    Nn[flip] *= -1
     pc.normals = o3d.utility.Vector3dVector(Nn)
     ext = float((P.max(0) - P.min(0)).max())
     depth = int(np.clip(np.ceil(np.log2(1.1 * ext / cell)), 5, 10))
@@ -1146,6 +1151,47 @@ def remesh_object(P, Cp, Nref, cell=0.01, snap=0.01, planes=6, min_plane=0.15, t
     return mm
 
 
+def _remesh_job(job):
+    """remesh_object in a worker: (vertices, faces, colours) or None."""
+    mm = remesh_object(*job)
+    if mm is None:
+        return None
+    return np.asarray(mm.vertices), np.asarray(mm.triangles), np.asarray(mm.vertex_colors)
+
+
+def run_isolated(fn, jobs, workers=4):
+    """fn over jobs, each in a worker process: (results, crashed). A job
+    that kills its worker (a segfault in Open3D) gives None and is named in
+    crashed; the others are run again, one worker at a time, until the
+    crashing ones are found. An exception gives None too."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from concurrent.futures.process import BrokenProcessPool
+    ctx = mp.get_context("spawn")       # no fork of a process running Open3D's threads
+    res, crashed = [None] * len(jobs), []
+    todo, n = list(range(len(jobs))), max(1, int(workers))
+    while todo:
+        broken = []
+        with ProcessPoolExecutor(n, mp_context=ctx) as pool:
+            futs = {pool.submit(fn, jobs[i]): i for i in todo}
+            for f in as_completed(futs):
+                try:
+                    res[futs[f]] = f.result()
+                except BrokenProcessPool:
+                    broken.append(futs[f])
+                except Exception as e:                       # noqa: BLE001
+                    log.info(f"  job {futs[f]}: {e}")
+        broken.sort(key=todo.index)
+        if not broken:
+            break
+        if n == 1:                  # one at a time, in order: the first broken one crashed
+            crashed.append(broken[0])
+            todo = broken[1:]
+        else:
+            n, todo = 1, broken
+    return res, crashed
+
+
 def default_points(mesh_path):
     """The view next to a mesh made from it: mesh_view_<tag>[_anchored].ply ->
     view_<tag>[_anchored].ply."""
@@ -1162,7 +1208,7 @@ def default_points(mesh_path):
 
 def sionna_mesh(mesh_path, out=None, faces=500000, materials=None, points=None, label_faces_n=4000000,
                 object_cell=0.01, object_faces=400000, split_objects=False,
-                floor_colour=(0.8, 0.8, 0.8), refine=True):
+                floor_colour=(0.8, 0.8, 0.8), refine=True, workers=4):
     """A Sionna RT scene of a mesh made by `mesh` (the one with its ceiling:
     the radio waves bounce off it), floor, walls, ceiling and objects apart:
     <out>/scene.xml (what Sionna loads: sionna.rt.load_scene) with
@@ -1230,16 +1276,28 @@ def sionna_mesh(mesh_path, out=None, faces=500000, materials=None, points=None, 
             d, j = cKDTree(C).query(P, workers=-1)
             mine = (d < 0.05) & (obj[j] >= 0)
             P, Pc, j = P[mine], Pc[mine], j[mine]
-            for k in range(obj.max() + 1):
-                sel = obj[j] == k
-                mm = remesh_object(P[sel], Pc[sel], Nf[j[sel]], cell=object_cell) if sel.sum() else None
-                if mm is None:                                  # too few points: the mesh's own
+            no = obj.max() + 1
+            order = np.argsort(obj[j], kind="stable")
+            cuts = np.searchsorted(obj[j][order], np.arange(no + 1))
+            jobs = [(P[order[cuts[k]:cuts[k + 1]]], Pc[order[cuts[k]:cuts[k + 1]]],
+                     Nf[j[order[cuts[k]:cuts[k + 1]]]], object_cell) for k in range(no)]
+            log.info(f"rebuilding {no} objects from {len(P)} points ({workers} at a time) ...")
+            out_, crashed = run_isolated(_remesh_job, jobs, workers)
+            nown = 0
+            for k in range(no):
+                if out_[k] is not None:
+                    Vk, Fk, Ck = out_[k]
+                    mm = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(Vk), o3d.utility.Vector3iVector(Fk))
+                    mm.vertex_colors = o3d.utility.Vector3dVector(Ck)
+                else:                                   # too few points, or it crashed: the mesh's own
                     mm = type(m)(m)
                     mm.remove_triangles_by_mask(obj != k)
                     mm.remove_unreferenced_vertices()
+                    nown += 1
                 objs.append(mm)
             report.append(f"  objects rebuilt from {len(P)} points of {pts} (cells {object_cell * 100:g} cm, "
-                          "flat parts flat, smoothed)")
+                          f"flat parts flat, smoothed); {nown} kept as in the mesh (too few points"
+                          + (f", or Open3D crashed on it: {len(crashed)}" if crashed else "") + ")")
         else:
             for k in range(obj.max() + 1):
                 mm = type(m)(m)
@@ -1251,7 +1309,8 @@ def sionna_mesh(mesh_path, out=None, faces=500000, materials=None, points=None, 
         tot = sum(len(q.triangles) for q in objs)
         if object_faces and tot > object_faces:
             r = object_faces / tot
-            objs = [q.simplify_quadric_decimation(max(4, int(len(q.triangles) * r))) for q in objs]
+            objs = [q.simplify_quadric_decimation(int(len(q.triangles) * r)) if len(q.triangles) * r > 50 else q
+                    for q in objs]
     # write: the scene, the coloured mesh, the labels
     sdir = base
     os.makedirs(os.path.join(sdir, "meshes"), exist_ok=True)
@@ -1661,6 +1720,7 @@ def main():
     sn.add_argument("--object-cell", type=float, default=0.01, help="objects rebuilt with cells of this (m)")
     sn.add_argument("--object-faces", type=int, default=400000, help="objects simplified to this in all")
     sn.add_argument("--no-refine", action="store_true", help="keep the mesh's own objects")
+    sn.add_argument("--workers", type=int, default=4, help="objects rebuilt this many at a time")
     sn.add_argument("--split-objects", action="store_true",
                     help="each object its own meshes/objects/obj_NNN.ply (a material each, by editing scene.xml)")
     sn.add_argument("--floor-grey", type=float, default=0.8,
@@ -1703,7 +1763,7 @@ def main():
                 mats[part] = (typ, float(th) if th else SIONNA_MATERIALS[part][1])
             sionna_mesh(a.file, a.out, faces=a.faces, materials=mats, points=a.points,
                         object_cell=a.object_cell, object_faces=a.object_faces,
-                        split_objects=a.split_objects, refine=not a.no_refine,
+                        split_objects=a.split_objects, refine=not a.no_refine, workers=a.workers,
                         floor_colour=None if a.floor_grey < 0 else (a.floor_grey,) * 3)
         elif a.cmd == "scene":
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,

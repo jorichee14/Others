@@ -572,6 +572,24 @@ def check_sionna(tmp):
     return r, d[:4]
 
 
+def _job_crashing(x):
+    """For check_isolated: x == 3 kills its process as a segfault does."""
+    if x == 3:
+        import signal
+        os.kill(os.getpid(), signal.SIGSEGV)
+    if x == 4:
+        raise ValueError("an exception")
+    return 2 * x
+
+
+def check_isolated():
+    """run_isolated: a job that segfaults its worker gives None and is named,
+    one that raises gives None, the others their results."""
+    res, crashed = L.run_isolated(_job_crashing, list(range(7)), workers=3)
+    assert res == [0, 2, 4, None, None, 10, 12] and crashed == [3], (res, crashed)
+    return crashed
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="lod3dgs_")
     try:
@@ -667,6 +685,8 @@ def main():
         cv, cm = check_ceilings(tmp)
         print(f"ok ceilings: a 5 m hall's and a 3 m arcade's each cut at its own height ({cv} view points, "
               f"{cm} mesh vertices of the arcade's left), the walls under each kept")
+        check_isolated()
+        print("ok isolated: a job crashing its worker (segfault) skipped and named, the others done")
         rs, ds = check_sionna(tmp)
         print(f"ok sionna: floor {rs['floor']}, ceiling {rs['ceiling']}, walls {rs['walls']}, "
               f"objects {rs['objects']} ({rs['n_objects']} of them); a pillar with the walls, a lamp with "
