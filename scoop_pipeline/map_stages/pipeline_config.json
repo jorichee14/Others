@@ -207,10 +207,26 @@
   },
 
  "10_publish": {
-  "_note": "robots: dataset.machine's is there already (its LiDAR track in dataset.camera_frame); list the others, or more of its own (local_frame, base_frame)",
+  "_note": "robots: dataset.machine's is there already (its LiDAR track in dataset.camera_frame); list the others (their body comes from \"robots\" below)",
   "output_bag": "{tag}_best_poses",
   "map_frame": "map",
   "write_tf": true,
   "rate_hz": 0
-}
+},
+
+ "robots": {
+  "_note": "each robot's body, the same in every pass: its base link, the root of its sensors (the trajectory moves it, every sensor hangs from it), and local_pose's frame. 10_publish takes it for every robot it publishes; a sensor a pass did not record is left out. The base sits on the camera body (x forward, y left, z up) until it is measured; then its pose in measured_in goes here",
+  "mobile_1": {
+   "local_frame": "mobile_1_base_link",
+   "base_frame": {"name": "mobile_1_base_link", "measured_in": "zed_camera_link",
+                  "xyz": [0, 0, 0], "qxyzw": [0, 0, 0, 1],
+                  "children": ["zed_camera_link", "os_sensor_mobile1", "radar1_link", "radar2_link"]}
+  },
+  "mobile_2": {
+   "local_frame": "mobile_2_base_link",
+   "base_frame": {"name": "mobile_2_base_link", "measured_in": "camera_link",
+                  "xyz": [0, 0, 0], "qxyzw": [0, 0, 0, 1],
+                  "children": ["camera_link", "os_sensor_mobile2"]}
+  }
+ }
 }

@@ -686,16 +686,21 @@ class Pipeline:
     def robots(self):
         """10_publish.robots with the pass's own robot (dataset.machine) in it:
         its LiDAR track in its camera's optical frame, unless its entry there
-        says otherwise. The config lists only the others (or more of its own)."""
+        says otherwise. The config lists only the others (or more of its own).
+        Each robot's body (its base link, local_pose's frame) comes from the
+        config's "robots" block, the same for every pass; an entry overrides."""
         own = {"name": self.machine, "traj": os.path.basename(self.lidar_track_traj("_in_cam")),
                "optical_frame": self.camera_frame}
         robots = [dict(rb) for rb in (self.cfg.get("10_publish") or {}).get("robots") or []]
+        if not any(rb["name"] == self.machine for rb in robots):
+            robots.insert(0, {"name": self.machine})
+        body = self.cfg.get("robots") or {}
         for rb in robots:
-            if rb["name"] == self.machine:
-                for k, v in own.items():
+            more = (own if rb["name"] == self.machine else {}).items()
+            for k, v in list(more) + list((body.get(rb["name"]) or {}).items()):
+                if not k.startswith("_"):
                     rb.setdefault(k, v)
-                return robots
-        return [own] + robots
+        return robots
 
     @property
     def sensor(self):

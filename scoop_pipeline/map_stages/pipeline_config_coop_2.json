@@ -19,6 +19,5 @@
   "08_emit_tfs": {"enabled": false},
   "10_publish": {"robots": [{"name": "mobile_2",
                              "traj": "traj_mobile_2_depth_in_cam.tum",
-                             "optical_frame": "camera_color_optical_frame",
-                             "local_frame": "camera_link"}]}
+                             "optical_frame": "camera_color_optical_frame"}]}
 }

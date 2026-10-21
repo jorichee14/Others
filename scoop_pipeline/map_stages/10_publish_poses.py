@@ -308,7 +308,11 @@ def reroot(rb, edge, parts):
     ref, name, t, q = edge
     st, drop, extra, edges = parts
     T_ref_base = tftree.matrix(t, q)
-    kids = list(rb["base_frame"]["children"])
+    kids = [c for c in rb["base_frame"]["children"] if c in edges]
+    for c in rb["base_frame"]["children"]:
+        if c not in kids:                     # a sensor this pass did not record
+            print("  %s: base_frame child %s is not in this pass's tree, left out"
+                  % (rb["name"], c))
     if name in edges and not edges[name].static and \
             all(c in edges and edges[c].parent == name for c in kids):
         # the root already (a bag 10 put its TF in before): pass_tf moves it from
@@ -332,10 +336,7 @@ def reroot(rb, edge, parts):
         print("  %s: %s is the root of its sensors already (%s ~~ %s); its edges to %s from the config"
               % (rb["name"], name, edges[name].parent, name, ", ".join(kids)))
         return name
-    for c in kids:
-        if c not in edges:
-            raise SystemExit("%s: base_frame child %s is not in the tree" % (rb["name"], c))
-    T_bc = {c: np.linalg.inv(T_ref_base) @ tftree.static_between(ref, c, edges) for c in kids}
+    T_bc ={c: np.linalg.inv(T_ref_base) @ tftree.static_between(ref, c, edges) for c in kids}
     moving = [c for c in kids if not edges[c].static]
     if len(moving) != 1:
         raise SystemExit("%s: base_frame children %s: one of them must be the frame the "

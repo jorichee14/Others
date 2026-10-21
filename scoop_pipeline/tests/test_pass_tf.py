@@ -454,7 +454,9 @@ def main():
                 shutil.rmtree(old)
                 os.rename(both, old)
             rbc = c["10_publish"]["robots"][0]
-            rbc["base_frame"].update(name="robot_base", children=["zed_camera_link", "os_sensor"])
+            # (a sensor this pass did not record is left out, not an error)
+            rbc["base_frame"].update(name="robot_base",
+                                     children=["zed_camera_link", "os_sensor", "radar9_link"])
             c["10_publish"]["drop_tf"] = ["os_sensor->base_link"]
             json.dump(c, open(cfg, "w"))
             T_sb2 = rotz(-15, (0.2, -0.1, -0.3), axis=(0, 1, 1))           # the base measured
@@ -480,6 +482,8 @@ def main():
                 if r.returncode:
                     f.append(rnd + ": " + r.stdout[-1000:] + r.stderr[-1500:])
                     break
+                if "radar9_link is not in this pass's tree, left out" not in r.stdout:
+                    f.append("%s: the unrecorded child not reported" % rnd)
                 e = tftree.tf_edges([b09])
                 if "base_link" in e:
                     f.append("%s: the old base_link is still in" % rnd)

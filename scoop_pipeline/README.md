@@ -400,8 +400,14 @@ where it goes). mobile_1's are the default (`pipeline_config.json`):
 
 The robot's LiDAR track (`traj_<machine>_lidar.tum`) and its entry in 10's
 `robots` (that track, in `camera_frame`) follow from `machine`; 10's `robots`
-lists only other robots, or what else its own needs (`local_frame`,
-`base_frame`). A pass mapped by another robot copies this block with its values:
+lists only other robots. Each robot's body is set once for every pass, in the
+base config's `"robots"` block: its base link, the root of its sensors
+(`mobile_1_base_link` over `zed_camera_link`, `os_sensor_mobile1` and both
+radars; `mobile_2_base_link` over `camera_link` and `os_sensor_mobile2`),
+which the trajectory moves, and `local_pose`'s frame. 10 gives it to every
+robot it publishes (a sensor a pass did not record is left out); the base sits
+on the camera body until it is measured, then its pose in `measured_in` goes
+there, for every pass at once. A pass mapped by another robot copies this block with its values:
 `pipeline_config_mapping_20261015.json` (mobile_2) and
 `pipeline_config_mapping_20260924.json` (mobile_1). Once the merged
 bag exists, processing is not redone, so the decoded/retimed/ZED bags may be
