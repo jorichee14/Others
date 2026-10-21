@@ -1390,9 +1390,10 @@ class PlanPicker:
             na = A[1] if (B[0] - pa) @ A[1] > 0 else -A[1]
             q1 = pa + na * d
         art += self.ax.plot([pa[0], q1[0]], [pa[1], q1[1]], color="#eb6834", lw=2)
-        lab = self.ax.text((pa[0] + q1[0]) / 2, (pa[1] + q1[1]) / 2,
-                           self._label(row) if d is not None else f" {row[0]}  no wall",
-                           color="#b4501f", fontsize=12, fontweight="bold")
+        lab = self.ax.annotate(row[0] if d is not None else f"{row[0]} no wall",
+                               (pa[0] + 0.35 * (q1[0] - pa[0]), pa[1] + 0.35 * (q1[1] - pa[1])), xytext=(5, 5),
+                               textcoords="offset points", color="#b4501f", fontsize=9, fontweight="bold",
+                               bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85))
         art.append(lab)
         return lab
 
@@ -1458,7 +1459,6 @@ class PlanPicker:
         except ValueError:
             return f"{text!r}: not a distance; type it in metres (8.113) or mm (8113)"
         row[1] = m
-        self.labels[-1].set_text(self._label(row))
         if m is None:
             return f"{row[0]}: no reading; next: wall A of {self.peek()}"
         warn = "  (walls not parallel: left out of the totals)" if row[7] > 2.0 else ""
@@ -1523,8 +1523,8 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
     H, xe, ye = np.histogram2d(S[:, 0], S[:, 1], bins=np.maximum(((hi - lo) / cell).astype(int), 1),
                                range=[[lo[0], hi[0]], [lo[1], hi[1]]])
     with plt.rc_context({"toolbar": "None"}):     # no pan / zoom modes to swallow the clicks
-        fig, ax = plt.subplots(figsize=(13, 9.5))
-    fig.subplots_adjust(bottom=0.12)
+        fig, ax = plt.subplots(figsize=(15, 9.5))
+    fig.subplots_adjust(left=0.05, right=0.70, bottom=0.12, top=0.9)
     ax.imshow(np.log1p(H).T, origin="lower", extent=(xe[0], xe[-1], ye[0], ye[-1]), cmap="Greys",
               interpolation="nearest")
     ax.set_aspect("equal")
@@ -1535,15 +1535,16 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
         pk.add(name, m, pa, pb, *k)
     pk.kept = len(pk.picks)
     pk.redo = list(redo)
-    tb = TextBox(fig.add_axes([0.32, 0.025, 0.2, 0.045]), "meter reading of the last pair (m or mm), Enter: ",
+    tb = TextBox(fig.add_axes([0.30, 0.025, 0.18, 0.045]), "meter reading of the last pair (m or mm), Enter: ",
                  initial="")
-    stats = fig.text(0.55, 0.04, summary_line(distance_summary(pk.res)), fontsize=11, color="#b4501f")
-    head = ("left click: wall A, then wall B, then type the reading + Enter  ·  c: A is a corner (on / off)  ·  "
+    panel = fig.text(0.72, 0.9, "", fontsize=10, family="monospace", va="top", color="#333333")
+    head = ("click wall A, then wall B, type the reading + Enter  ·  c: A is a corner (on / off)\n"
             "scroll: zoom  ·  right drag: move  ·  h: whole map  ·  u: undo  ·  q: done")
     home = (ax.get_xlim(), ax.get_ylim())
     drag = {}
     ax.set_title(head + "\n" + (f"{len(pk.res)} pairs from before; " if pk.res else "")
                  + f"click near a dark wall line: {pk.peek()}, wall A", fontsize=10)
+    fig.canvas.draw_idle()
 
     held_res = _distance_rows(tree, P, list(held), radius) if held else []
 
@@ -1552,8 +1553,31 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
         got = {r[0] for r in pk.res}
         return [r for r in held_res if r[0] not in got]
 
+    def table():
+        """The panel beside the plan: every pair, then the totals."""
+        rows = sorted(pk.res + waiting(), key=lambda r: (int(r[0][1:]) if r[0][1:].isdigit() else 1e9, r[0]))
+        out = ["pair     map m   meter m   error", "-" * 34]
+        for r in rows:
+            name, m, d, ang, kind = r[0], r[1], r[6], r[7], r[8]
+            mark = "  corner" if kind == "corner" else ("  >2 deg" if d is not None and ang > 2.0 else "")
+            if d is None:
+                out.append(f"{name:5s}  {'no wall':>8s}")
+                continue
+            ms = "-" if m is None else f"{m:.3f}"
+            es = "" if m is None else f"{(d - m) * 1000:+6.1f} mm"
+            out.append(f"{name:5s} {d:8.3f} {ms:>9s} {es:>9s}{mark}")
+        sm = distance_summary(rows)
+        out += ["-" * 34]
+        if sm is None:
+            out.append("no reading yet")
+        else:
+            out += [f"counted   {sm['n']} (>2 deg left out)", f"mean      {sm['mean_mm']:+.1f} mm",
+                    f"RMSE      {sm['rmse_mm']:.1f} mm", f"max       {sm['max_abs_mm']:.1f} mm",
+                    f"scale     {sm['ppm']:+.0f} ppm"]
+        panel.set_text("\n".join(out))
+
     def keep():
-        stats.set_text(summary_line(distance_summary(pk.res + waiting())))
+        table()
         if save:
             write_distances_json(save, map_path, pk.res + waiting(), radius, zband)
 
@@ -1631,6 +1655,7 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
         ax.set_ylim(ev.ydata + (y0 - ev.ydata) * f, ev.ydata + (y1 - ev.ydata) * f)
         fig.canvas.draw_idle()
 
+    table()
     fig.canvas.mpl_connect("button_press_event", on_click)
     fig.canvas.mpl_connect("motion_notify_event", on_move)
     fig.canvas.mpl_connect("button_release_event", on_release)
