@@ -949,14 +949,14 @@ it), never a courtyard (a hole over 1 m2 with a ceiling over less than
 `--roof`, 50 %, of it), each up to `--max-hole` m2. For looking at only: the reference map,
 and every measurement, stays `map_final_<tag>.pcd`.
 
-Both clear what the robot drove through (`--body 0.25`, 0 off): nothing
+On request, both clear what the robot drove through (`--body 0.25`): nothing
 solid is within 0.25 m of the LiDAR's track from the floor to just over the
 LiDAR, and a flat surface the robot crossed (poses on both sides of it) is
 taken whole, its edges in the cells it shares with a wall too (the points on
 its plane facing as it does): a sheet seen in glass that cuts across the way
 and joins the walls it crosses. A wall the robot drove along stays.
 
-`view` also clears what is over open sky (`--keep-sky` keeps it): a column
+With `--sky`, `view` also clears what is over open sky: a column
 of 0.4 m with no ceiling of the building over it (horizontal surfaces 2 m or
 more above the floor, within a column) and more than 0.6 m from the robot's
 way: a courtyard's inside, whatever it touches, a sheet in it joined to the
@@ -971,6 +971,13 @@ seen through 3 times or more and over twice as often as seen at is empty
 space (a wall's reflection in glass, there only as seen in the glass). The
 trajectory must be the map's and the bag's (map_final with the BA
 trajectory). A cell no scan saw is kept.
+
+`--ceil auto` takes off the ceiling over each place: in every 0.5 m column
+the lowest horizontal surface 2.3 m or more above the floor there (and the
+next columns', so the wall it meets goes with it), and nothing above the
+highest histogram peak, each less `--ceil-margin`. A low arcade beside a tall
+hall loses its own ceiling; a courtyard's walls keep their height. `--ceil Z`
+cuts at Z everywhere.
 
 Anchored: make the view and mesh from `map_final_<tag>.pcd` with the BA
 trajectory (GLIM's world), then move each into 05's frame:

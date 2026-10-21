@@ -16,8 +16,9 @@ the nearest pose of --traj (the trajectory the map was built from). Written
 next to the map as mesh_<tag>.ply (map_final_<tag>.pcd; else <map>_mesh.ply),
 with the height histogram of the map printed (z up). --ceil also writes a
 viewing copy without the ceiling, <mesh>_noceil.ply: every face above Z
-removed, or with "auto" above the highest histogram peak (the ceiling) less
---ceil-margin. Only a viewing copy, as 06_cut's: a scene keeps the ceiling,
+removed, or with "auto" above the ceiling over each place (the lowest
+horizontal surface 2.3 m or more over the floor there, so a low arcade by a
+tall hall loses its own) and the highest histogram peak, less --ceil-margin. Only a viewing copy, as 06_cut's: a scene keeps the ceiling,
 the cameras see it.
 
 Layout (what LOD-3DGS's Octree loader reads; train.py -s <scene> --use_lod):
@@ -326,12 +327,55 @@ def ceiling_height(centres, counts):
 
 
 def cut_above(mesh, z):
-    """A copy of the mesh without the faces whose centre is above z."""
+    """A copy of the mesh without the faces whose centre is above z: a
+    height, or a function of the centres giving one each."""
     out = type(mesh)(mesh)
     F, V = np.asarray(out.triangles), np.asarray(out.vertices)
-    out.remove_triangles_by_mask(V[F].mean(1)[:, 2] > z)
+    c = V[F].mean(1)
+    out.remove_triangles_by_mask(c[:, 2] > (z(c) if callable(z) else z))
     out.remove_unreferenced_vertices()
     return out
+
+
+def local_ceiling(P, T, h, cell=0.5, roof_h=2.3, flat=0.9, layer=0.05, share=0.3, edge=1):
+    """The ceiling over each place, as a function of points giving the height
+    of the ceiling over each (inf where none: a courtyard). Per column (cell
+    m, in plan): the lowest layer (layer m thick) of horizontal surfaces
+    (|n_z| over flat) roof_h or more above the floor holding share of the
+    column's densest one; then the lowest of the columns within `edge`, so
+    the wall a ceiling meets is cut with it. A building of several heights
+    (a low arcade by a tall hall) has each cut at its own."""
+    from scipy import ndimage
+    o3d = _o3d()
+    lo = P[:, :2].min(0)
+    nx, ny = np.floor((P[:, :2].max(0) - lo) / cell).astype(np.int64) + 1
+    grid = np.full((nx, ny), np.inf)
+    _, near = cKDTree(T[:, :2]).query(P[:, :2], workers=-1)
+    hi = np.flatnonzero(P[:, 2] - (T[near, 2] - h) >= roof_h)
+    if len(hi):
+        q = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P[hi]))
+        q.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=20))
+        H = P[hi[np.abs(np.asarray(q.normals)[:, 2]) > flat]]
+        if len(H):
+            ij = np.floor((H[:, :2] - lo) / cell).astype(np.int64)
+            col = ij[:, 0] * ny + ij[:, 1]
+            zb = np.floor(H[:, 2] / layer).astype(np.int64)
+            pairs, n = np.unique(np.c_[col, zb], axis=0, return_counts=True)   # by column, then up
+            first = np.r_[0, np.flatnonzero(np.diff(pairs[:, 0])) + 1]
+            top = np.maximum.reduceat(n, first)
+            ok = n >= np.maximum(3, share * np.repeat(top, np.diff(np.r_[first, len(n)])))
+            c, i = np.unique(pairs[ok, 0], return_index=True)
+            grid.ravel()[c] = pairs[ok][i, 1] * layer
+    if edge:
+        grid = ndimage.minimum_filter(grid, size=2 * edge + 1, mode="constant", cval=np.inf)
+
+    def at(X):
+        k = np.floor((np.asarray(X)[:, :2] - lo) / cell).astype(np.int64)
+        inside = (k[:, 0] >= 0) & (k[:, 0] < nx) & (k[:, 1] >= 0) & (k[:, 1] < ny)
+        z = np.full(len(k), np.inf)
+        z[inside] = grid[k[inside, 0], k[inside, 1]]
+        return z
+    return at
 
 
 def default_mesh_out(map_path):
@@ -361,7 +405,7 @@ def crisp_colours(mesh, map_path, subdivide=1):
 
 def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10,
          ceil=None, ceil_margin=0.10, show=False, subdivide=1, normals=False, ghosts=True,
-         min_piece=50.0, body=0.25):
+         min_piece=50.0, body=0.0):
     """The mesh step alone: mesh of the map (+ a copy without the ceiling),
     each vertex in the colour of the map's nearest point; written without
     normals unless asked, so a viewer shows the colours unlit."""
@@ -420,11 +464,14 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
         if str(ceil) == "auto":
             peak = ceiling_height(hc, hn)
             z = peak - ceil_margin
-            how = f"ceiling peak {peak:+.2f} less {ceil_margin} m"
+            here = local_ceiling(np.asarray(m.vertices), Tf, hs)
+            how = (f"or below each place's own ceiling, less {ceil_margin} m; "
+                   f"the highest, peak {peak:+.2f} less {ceil_margin} m")
+            nc = cut_above(m, lambda c: np.minimum(z, here(c) - ceil_margin))
         else:
             z = float(ceil)
             how = "given"
-        nc = cut_above(m, z)
+            nc = cut_above(m, z)
         if min_piece > 0:
             nc, _ = drop_pieces(nc, Tf, hs, min_piece)      # what hung from the ceiling now floats
         p = os.path.splitext(out)[0] + "_noceil.ply"
@@ -785,7 +832,7 @@ def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spaci
 
 def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
              ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=50.0,
-             body=0.25, sky=True, bag=None, topic=None, scan_every=5):
+             body=0.0, sky=False, bag=None, topic=None, scan_every=5):
     """A viewing copy of the map: stray points out, walls and floors flat,
     the floor's holes filled; points, so the colours stay the map's own."""
     o3d = _o3d()
@@ -852,10 +899,13 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         if str(ceil) == "auto":
             _, hc, hn = height_histogram(P[:, 2])
             z = ceiling_height(hc, hn) - ceil_margin
+            keep = P[:, 2] <= np.minimum(z, local_ceiling(P, T1, h)(P) - ceil_margin)
+            how = f"or below each place's own ceiling, less {ceil_margin} m"
         else:
             z = float(ceil)
-        keep = P[:, 2] <= z
-        report.append(f"  above z = {z:+.2f} removed (the ceiling): {int((~keep).sum())} points")
+            keep = P[:, 2] <= z
+            how = "given"
+        report.append(f"  above z = {z:+.2f} ({how}) removed (the ceiling): {int((~keep).sum())} points")
         P, C = P[keep], C[keep]
         if min_piece > 0:
             g = piece_points(P, T1, h, min_piece)       # what hung from the ceiling now floats
@@ -1087,9 +1137,9 @@ def main():
     me.add_argument("--min-piece", type=float, default=50.0,
                     help="pieces not joined to one of this size or more (the building, m2) are removed "
                          "when open to the sky or floating (0 keeps them)")
-    me.add_argument("--body", type=float, default=0.25,
-                    help="clear the space the robot drove through: this far (m) round its path, from the "
-                         "floor to over the LiDAR (0: not)")
+    me.add_argument("--body", type=float, default=0.0,
+                    help="also clear the space the robot drove through: this far (m) round its path, "
+                         "from the floor to over the LiDAR, e.g. 0.25 (0: not)")
     me.add_argument("--keep-ghosts", action="store_true",
                     help="keep the mirror ghosts (faces no direct ray from the path reaches)")
     me.add_argument("--normals", action="store_true",
@@ -1108,11 +1158,11 @@ def main():
                     help="the bag the map was made from: clear what its scans saw through (reflections)")
     vw.add_argument("--topic", default="/mobile_2/ouster/points", help="--bag: the points topic")
     vw.add_argument("--scan-every", type=int, default=5, help="--bag: use every Nth scan")
-    vw.add_argument("--keep-sky", action="store_true",
-                    help="keep what is over open sky (a courtyard), whatever it touches")
-    vw.add_argument("--body", type=float, default=0.25,
-                    help="clear the space the robot drove through: this far (m) round its path, from the "
-                         "floor to over the LiDAR (0: not)")
+    vw.add_argument("--sky", action="store_true",
+                    help="also clear what is over open sky (a courtyard), whatever it touches")
+    vw.add_argument("--body", type=float, default=0.0,
+                    help="also clear the space the robot drove through: this far (m) round its path, "
+                         "from the floor to over the LiDAR, e.g. 0.25 (0: not)")
     vw.add_argument("--keep-ghosts", action="store_true",
                     help="keep the mirror ghosts (points no direct ray from the path reaches)")
     vw.add_argument("--max-hole", type=float, default=20.0, help="largest hole filled (m2)")
@@ -1143,7 +1193,7 @@ def main():
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,
                      max_hole=a.max_hole, roof=a.roof, ghosts=not a.keep_ghosts,
-                     min_piece=a.min_piece, body=a.body, sky=not a.keep_sky, bag=a.bag,
+                     min_piece=a.min_piece, body=a.body, sky=a.sky, bag=a.bag,
                      topic=a.topic, scan_every=a.scan_every)
         else:
             map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,

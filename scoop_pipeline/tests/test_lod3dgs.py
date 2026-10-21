@@ -26,7 +26,8 @@ the sensor height found from the floor under the
 poses, the strays gone, the walls flat, nothing added outside the room. Then
 the mirror ghosts of a polished floor and wall (under the floor, behind the
 wall: no direct ray from the path reaches them) and a loose 5 m2 sheet removed
-by both mesh and view, the room's own surfaces kept.
+by both mesh and view, the room's own surfaces kept. And --ceil auto on a
+5 m hall by a 3 m arcade: each ceiling off at its own height, the walls kept.
 
     python scoop_pipeline/tests/test_lod3dgs.py
 """
@@ -199,7 +200,7 @@ def check_view(tmp):
     tr = os.path.join(tmp, "traj_view.txt")
     np.savetxt(tr, np.c_[t, 4 + 3 * np.cos(t), 3 + 2 * np.sin(t), np.full_like(t, 0.6),
                          np.zeros((len(t), 3)), np.ones(len(t))])
-    r = L.map_view(mp, tr, max_hole=3.0, body=0)       # its path runs through the box
+    r = L.map_view(mp, tr, max_hole=3.0)
     assert os.path.basename(r["out"]) == "view_view_test.pcd", r["out"]
     assert abs(r["sensor_height"] - 0.6) < 0.03, r["sensor_height"]
     assert r["open"] >= 1, r
@@ -312,9 +313,9 @@ def check_body(tmp):
                          np.zeros((len(x), 3)), np.ones(len(x))])
     count = lambda V, x0, x1, y0, y1, z0, z1: int(((V[:, 0] > x0) & (V[:, 0] < x1) & (V[:, 1] > y0)  # noqa: E731
                                                    & (V[:, 1] < y1) & (V[:, 2] > z0) & (V[:, 2] < z1)).sum())
-    v = L.map_view(mp, tr, os.path.join(tmp, "v_body.pcd"), snap=False, fill=False)
+    v = L.map_view(mp, tr, os.path.join(tmp, "v_body.pcd"), snap=False, fill=False, body=0.25)
     Pv = np.asarray(o3d.io.read_point_cloud(v["out"]).points)
-    m = L.map_mesh(mp, tr, os.path.join(tmp, "m_body.ply"))
+    m = L.map_mesh(mp, tr, os.path.join(tmp, "m_body.ply"), body=0.25)
     Vm = np.asarray(o3d.io.read_triangle_mesh(m["out"]).vertices)
     for name, V, ref in (("view", Pv, P), ("mesh", Vm, None)):
         assert count(V, 2.9, 3.1, 0.3, 3.7, 0.3, 2.5) == 0, (name, "the sheet across the way kept",
@@ -364,7 +365,7 @@ def check_sky(tmp):
     tr = os.path.join(tmp, "traj_sky.txt")
     np.savetxt(tr, np.c_[np.arange(len(loop)), loop, np.full(len(loop), 0.8),
                          np.zeros((len(loop), 3)), np.ones(len(loop))])
-    v = L.map_view(mp, tr, os.path.join(tmp, "v_sky.pcd"), snap=False, fill=False)
+    v = L.map_view(mp, tr, os.path.join(tmp, "v_sky.pcd"), snap=False, fill=False, sky=True)
     V = np.asarray(o3d.io.read_point_cloud(v["out"]).points)
     count = lambda Q, x0, x1, y0, y1, z0, z1: int(((Q[:, 0] > x0) & (Q[:, 0] < x1) & (Q[:, 1] > y0)  # noqa: E731
                                                    & (Q[:, 1] < y1) & (Q[:, 2] > z0) & (Q[:, 2] < z1)).sum())
@@ -424,6 +425,47 @@ def check_scans(tmp):
     assert g_ghost[sel].mean() > 0.95, ("the reflection the laser went through kept", g_ghost[sel].mean())
     assert g_room.mean() < 0.005, ("the room cleared", g_room.mean())
     return g_ghost[sel].mean(), g_room.mean(), sel.mean()
+
+
+def check_ceilings(tmp):
+    """A 7 x 6 m hall 5 m high by a 5 x 6 m arcade 3 m high, the robot
+    through both: --ceil auto takes off each one's own ceiling (the hall's
+    at the highest peak, the arcade's under it) and keeps the walls below
+    each, in view and mesh."""
+    import open3d as o3d
+    g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
+
+    def sheet(axis, val, ra, rb):
+        A, B = np.meshgrid(g(*ra), g(*rb), indexing="ij")
+        o = [i for i in range(3) if i != axis]
+        p = np.zeros((A.size, 3))
+        p[:, o[0]], p[:, o[1]], p[:, axis] = A.ravel(), B.ravel(), val
+        return p
+    P = np.concatenate([sheet(2, 0.0, (0, 12), (0, 6)), sheet(2, 5.0, (0, 7), (0, 6)),
+                        sheet(2, 3.0, (7, 12), (0, 6)), sheet(0, 0.0, (0, 6), (0, 5)),
+                        sheet(0, 7.0, (0, 6), (3, 5)), sheet(0, 12.0, (0, 6), (0, 3)),
+                        sheet(1, 0.0, (0, 7), (0, 5)), sheet(1, 6.0, (0, 7), (0, 5)),
+                        sheet(1, 0.0, (7, 12), (0, 3)), sheet(1, 6.0, (7, 12), (0, 3))])
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    pc.colors = o3d.utility.Vector3dVector(np.full(P.shape, 0.5))
+    mp = os.path.join(tmp, "map_final_ceil.pcd")
+    o3d.io.write_point_cloud(mp, pc)
+    x = np.arange(1.0, 11.0, 0.1)
+    tr = os.path.join(tmp, "traj_ceil.txt")
+    np.savetxt(tr, np.c_[np.arange(len(x)), x, np.full(len(x), 3.0), np.full(len(x), 0.8),
+                         np.zeros((len(x), 3)), np.ones(len(x))])
+    count = lambda Q, x0, x1, z0, z1: int(((Q[:, 0] > x0) & (Q[:, 0] < x1) & (Q[:, 2] > z0)  # noqa: E731
+                                           & (Q[:, 2] < z1)).sum())
+    v = L.map_view(mp, tr, os.path.join(tmp, "v_ceil.pcd"), snap=False, fill=False, ceil="auto")
+    V = np.asarray(o3d.io.read_point_cloud(v["out"]).points)
+    m = L.map_mesh(mp, tr, os.path.join(tmp, "m_ceil.ply"), voxel=0.05, ceil="auto")
+    N = np.asarray(o3d.io.read_triangle_mesh(m["noceil"]).vertices)
+    for name, Q in (("view", V), ("mesh", N)):
+        assert count(Q, 0.5, 6.5, 4.95, 5.1) == 0, (name, "the hall's ceiling kept")
+        assert count(Q, 7.6, 11.9, 2.95, 3.1) == 0, (name, "the arcade's ceiling kept")
+        assert count(Q, 0.5, 6.5, 3.5, 4.8) > 0, (name, "the hall's walls cut to the arcade's height")
+        assert count(Q, 7.6, 11.9, 1.5, 2.8) > 0, (name, "the arcade's walls gone")
+    return count(V, 7.6, 11.9, 2.95, 3.1), count(N, 7.6, 11.9, 2.95, 3.1)
 
 
 def main():
@@ -518,6 +560,9 @@ def main():
         gs, gr, sv = check_scans(tmp)
         print(f"ok scans: {100 * gs:.0f} % of a reflection the scans saw through cleared "
               f"({100 * sv:.0f} % of it in their view), {100 * gr:.2f} % of the room")
+        cv, cm = check_ceilings(tmp)
+        print(f"ok ceilings: a 5 m hall's and a 3 m arcade's each cut at its own height ({cv} view points, "
+              f"{cm} mesh vertices of the arcade's left), the walls under each kept")
         rm = check_mesh(tmp)
         print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
               f"{rm['noceil_faces']} faces without it")
