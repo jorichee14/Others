@@ -7,8 +7,9 @@
   walls   <config>         the scans as placed at the map's wall spots: one
                            scan, 1 s ... whole run, the map
   maps    <A.pcd> <B.pcd>  completeness / accuracy of B against A
-  distances <map.pcd> <csv> control distances (wall to wall, measured on
-                           site) against the map: error and scale
+  distances <map.pcd> --click | <csv|json>  control distances (wall to wall,
+                           measured on site) against the map: the readings typed
+                           in the floor plan, error, RMSE and scale, saved as json
   noise   <bag>            the LiDAR's own noise floor from a bag alone: one
                            scan's thickness on walls / floors, by range, incidence
   scans   <config>         single scans and pairs: noise, deskew, time offset,

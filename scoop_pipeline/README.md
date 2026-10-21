@@ -237,7 +237,7 @@ tests/               self-tests, no real bag needed
                      back to the truth, planes back to the noise
   test_clean_pass.py  clean_pass on a made-up pass: current results kept, a stale
                      seed map, a cache, an old map folder and a GLIM side run moved
-  test_distances.py  check.py distances on a synthetic room: 8 m and 6 m to 0.1 mm: csv, picks alone, --ask, the --click floor plan
+  test_distances.py  check.py distances on a synthetic room: 8 m and 6 m to 0.1 mm: csv, picks alone, --ask, the --click floor plan with its reading box and json
                      from rough picks (one at the floor), a pick in the air
                      reported, a map scaled 1.002 read as +2000 ppm
   test_noise.py      check.py noise on a synthetic bag: one scan's walls and floors

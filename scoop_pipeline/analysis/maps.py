@@ -965,7 +965,7 @@ def main_scans(argv=None):
 DIST_DOC = r'''Control distances: wall-to-wall lengths measured on site with a laser
 meter, against the map.
 
-  python3 check.py distances <map.pcd> --click [--zband 0.3,1.2]
+  python3 check.py distances <map.pcd> --click [--zband 0.3,1.2] [--json <file>] [--new]
   python3 check.py distances <map.pcd> --picks picks.txt [--measured 6.214,4.882,...]
   python3 check.py distances <map.pcd> <distances.csv> [--picks picks.txt]
       [--radius 0.3]
@@ -976,13 +976,16 @@ ceiling) seen from above, the walls as dark lines. Left click near wall A,
 then near wall B, for every distance; each click finds the straight wall
 nearest it (within 0.5 m), fitted at once and drawn (green), and after B
 the distance is drawn with its length (a red cross: no wall near the click,
-click closer). Scroll zooms around the cursor, a right-button drag moves
-the view, h shows the whole map; u undoes the last click; q or closing the
-window finishes. The meter's reading is then asked
-for each pair (Enter skips one) and the errors reported. The picks are
-saved as <map>_picks.txt and the readings with them as
-<map>_distances.csv, so the same check runs again without clicking:
-check.py distances <map.pcd> <map>_distances.csv.
+click closer). Then type the meter's reading in the box under the plan (m,
+8.113, or mm, 8113) and Enter: the pair's error is drawn by it and the
+totals (mean, RMSE, scale) under the plan, and every pair with its picks,
+map distance, reading and error and the totals are saved at once to
+<map>_distances.json (--json): a session closed and opened again carries on
+from its pairs (--new starts again). Scroll zooms around the cursor, a
+right-button drag moves the view, h shows the whole map; u undoes the last
+click; q or closing the window finishes. The picks are also saved as
+<map>_picks.txt and the readings as <map>_distances.csv; the same check
+runs again without clicking: check.py distances <map.pcd> <map>_distances.json.
 
 With picks alone: the wall pairs picked in the map, two points per pair
 (CloudCompare's picked points saved as ASCII; the last three numbers of each
@@ -1094,9 +1097,20 @@ def per_metre(ang):
     return 100 * np.tan(np.radians(ang))
 
 
+def read_json_distances(path):
+    """[(name, measured m or None, a xyz, b xyz)] from a --click session's json."""
+    import json
+    js = json.load(open(path))
+    return [(q["name"], q.get("measured_m"), np.array(q["a"], float), np.array(q["b"], float))
+            for q in js.get("pairs", [])]
+
+
 def read_distances(path, picks=None):
-    """[(name, measured m, a xyz, b xyz)] from the csv (and the picks file)."""
+    """[(name, measured m, a xyz, b xyz)] from the csv (and the picks file),
+    or from a --click session's json."""
     import csv
+    if path.lower().endswith(".json"):
+        return read_json_distances(path)
     rows = []
     with open(path) as fh:
         for row in csv.reader(fh):
@@ -1174,14 +1188,90 @@ def wall_near(S, stree, x, y, r=0.5):
     return c, n, spread((Q - c) @ n), len(Q), p
 
 
+def parse_reading(text):
+    """The meter's reading typed in: metres (8.113), or millimetres when over
+    100 (8113); None for nothing typed. ValueError for anything else."""
+    t = text.strip().lower().replace(",", ".").rstrip("m").strip()
+    if not t:
+        return None
+    v = float(t)
+    if v <= 0:
+        raise ValueError(text)
+    return v / 1000.0 if v > 100 else v
+
+
+def distance_summary(res, max_angle=2.0):
+    """The totals of distance rows ([name, measured, a, b, A, B, d, angle]):
+    the measured ones with walls parallel to max_angle. None when none."""
+    ok = [(r[1], r[6]) for r in res if r[1] is not None and r[6] is not None and r[7] <= max_angle]
+    if not ok:
+        return None
+    meas, mapd = np.array(ok, float).T
+    e = (mapd - meas) * 1000
+    s = float(meas @ mapd / (meas @ meas))
+    return {"n": len(meas), "measured_min_m": float(meas.min()), "measured_max_m": float(meas.max()),
+            "mean_mm": float(e.mean()), "rmse_mm": float(np.sqrt(np.mean(e ** 2))),
+            "max_abs_mm": float(np.abs(e).max()), "scale": s, "ppm": (s - 1) * 1e6,
+            "rmse_after_scale_mm": float(np.sqrt(np.mean(((mapd - s * meas) * 1000) ** 2)))}
+
+
+def write_distances_json(path, map_path, res, radius, zband=None):
+    """The control distances, each with its picks, walls, map distance,
+    reading and error, and the totals (distance_summary), to path."""
+    import json
+    import time
+    pairs = []
+    for name, m, pa, pb, A, B, d, ang in res:
+        q = {"name": name, "a": [round(float(v), 4) for v in pa], "b": [round(float(v), 4) for v in pb],
+             "map_m": None if d is None else round(d, 4), "measured_m": m,
+             "error_mm": None if (d is None or m is None) else round((d - m) * 1000, 1),
+             "angle_deg": None if ang is None else round(ang, 2),
+             "wall_a_cm": None if A is None else round(A[2] * 100, 2),
+             "wall_b_cm": None if B is None else round(B[2] * 100, 2)}
+        if d is None:
+            q["flag"] = "no flat wall at a pick"
+        elif ang > 2.0:
+            q["flag"] = f"not parallel: {per_metre(ang):.1f} cm per m along A; left out of the totals"
+        pairs.append(q)
+    out = {"map": os.path.abspath(map_path), "radius_m": radius, "zband_m": list(zband) if zband else None,
+           "saved": time.strftime("%Y-%m-%d %H:%M:%S"), "pairs": pairs, "summary": distance_summary(res)}
+    with open(path, "w") as fh:
+        json.dump(out, fh, indent=1)
+
+
+def summary_line(sm):
+    if sm is None:
+        return "no reading yet"
+    return (f"{sm['n']} measured: error mean {sm['mean_mm']:+.1f} mm, RMSE {sm['rmse_mm']:.1f} mm, "
+            f"max |{sm['max_abs_mm']:.1f}| mm, scale {sm['ppm']:+.0f} ppm")
+
+
 class PlanPicker:
     """The floor-plan clicks of --click: each finds the straight wall nearest
-    it (within r); pairs (A, B) give distances."""
+    it (within r); pairs (A, B) give distances, each measured as the table
+    does (wall_plane round each pick, wall_distance), and the meter's
+    reading entered for it. res: the pairs as _distance_rows gives them."""
 
     def __init__(self, ax, P, tree, S, radius=0.3, r=0.5):
         self.ax, self.P, self.tree, self.radius, self.r = ax, P, tree, radius, r
         self.S, self.stree = S, cKDTree(S[:, :2])
         self.picks, self.artists = [], []           # (point on the wall, wall), [artists] per click
+        self.res, self.labels = [], []               # per pair: its row, its label on the plan
+
+    def _pair(self, pa, pb, wa, wb):
+        """The pair's row: the table's walls round the picks (the floor
+        plan's slice walls when those find none)."""
+        A, B = wall_plane(self.tree, self.P, pa, self.radius), wall_plane(self.tree, self.P, pb, self.radius)
+        if A is None or B is None:
+            A, B = wa, wb
+        d, ang = wall_distance(A, B, pa)
+        return [f"d{len(self.res) + 1}", None, pa, pb, A, B, d, ang]
+
+    def _label(self, row):
+        name, m, _, _, _, _, d, _ = row
+        if m is None:
+            return f" {name}  {d:.3f} m"
+        return f" {name}  map {d:.3f} · meter {m:.3f} · {(d - m) * 1000:+.0f} mm"
 
     def click(self, x, y):
         """A click at (x, y): a message; the pick is kept only near a straight wall."""
@@ -1200,27 +1290,67 @@ class PlanPicker:
         if k % 2:
             self.artists.append(art)
             return f"d{k // 2 + 1}: wall A found ({w[2] * 100:.1f} cm thick); now click wall B"
-        A, B = self.picks[-2][1], w
-        pa = self.picks[-2][0]
-        d, ang = wall_distance(A, B, pa)
+        (pa, wa), (pb, wb) = self.picks[-2], self.picks[-1]
+        row = self._pair(pa, pb, wa, wb)
+        d, ang = row[6], row[7]
         if d is None:
             self.picks.pop()
             for a in art:
                 a.remove()
             return f"walls {ang:.0f} deg apart: not facing each other; click wall B again"
-        na = A[1] if (B[0] - pa) @ A[1] > 0 else -A[1]
+        A = row[4]
+        na = A[1] if (row[5][0] - pa) @ A[1] > 0 else -A[1]
         q1 = pa + na * d
         art += self.ax.plot([pa[0], q1[0]], [pa[1], q1[1]], color="#eb6834", lw=2)
-        art.append(self.ax.text((pa[0] + q1[0]) / 2, (pa[1] + q1[1]) / 2, f" d{k // 2}  {d:.3f} m",
-                                color="#b4501f", fontsize=12, fontweight="bold"))
+        lab = self.ax.text((pa[0] + q1[0]) / 2, (pa[1] + q1[1]) / 2, self._label(row),
+                           color="#b4501f", fontsize=12, fontweight="bold")
+        art.append(lab)
         self.artists.append(art)
+        self.res.append(row)
+        self.labels.append(lab)
         warn = (f"  (not parallel: {per_metre(ang):.1f} cm per m along A, so click A where the meter "
                 "was; left out of the totals)") if ang > 2.0 else ""
-        return f"d{k // 2} = {d:.3f} m, walls {ang:.1f} deg apart{warn}; next: wall A of d{k // 2 + 1}"
+        return f"{row[0]} = {d:.3f} m, walls {ang:.1f} deg apart{warn}; type the meter's reading below"
+
+    def enter(self, text):
+        """The meter's reading for the last pair: a message."""
+        if not self.res:
+            return "pick a pair of walls first"
+        row = self.res[-1]
+        try:
+            m = parse_reading(text)
+        except ValueError:
+            return f"{text!r}: not a distance; type it in metres (8.113) or mm (8113)"
+        row[1] = m
+        self.labels[-1].set_text(self._label(row))
+        if m is None:
+            return f"{row[0]}: no reading; next: wall A of d{len(self.res) + 1}"
+        warn = "  (walls not parallel: left out of the totals)" if row[7] > 2.0 else ""
+        return (f"{row[0]}: map {row[6]:.3f} m, meter {m:.3f} m, error {(row[6] - m) * 1000:+.1f} mm{warn}"
+                f"  ·  {summary_line(distance_summary(self.res))}; next: wall A of d{len(self.res) + 1}")
+
+    def add(self, name, m, pa, pb):
+        """A pair from an earlier session: drawn, measured again, its reading kept."""
+        wa = wall_near(self.S, self.stree, pa[0], pa[1], self.r)
+        wb = wall_near(self.S, self.stree, pb[0], pb[1], self.r)
+        self.picks += [(np.asarray(pa, float), wa), (np.asarray(pb, float), wb)]
+        row = self._pair(np.asarray(pa, float), np.asarray(pb, float), wa, wb)
+        row[0], row[1] = name, m
+        self.res.append(row)
+        art = self.ax.plot([pa[0], pb[0]], [pa[1], pb[1]], color="#eb6834", lw=2)
+        lab = self.ax.text((pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2,
+                           self._label(row) if row[6] is not None else f" {name}  no wall",
+                           color="#b4501f", fontsize=12, fontweight="bold")
+        art.append(lab)
+        self.artists += [[], art]
+        self.labels.append(lab)
 
     def undo(self):
         if not self.picks:
             return "nothing to undo"
+        if len(self.picks) % 2 == 0:                   # B of a pair: the pair and its reading go
+            self.res.pop()
+            self.labels.pop()
         self.picks.pop()
         for art in self.artists.pop():
             art.remove()
@@ -1230,10 +1360,19 @@ class PlanPicker:
         n = len(self.picks) // 2 * 2
         return [p.tolist() for p, _ in self.picks[:n]]
 
+    def rows(self):
+        """[(name, measured m or None, a, b)] of the pairs."""
+        return [(r[0], r[1], r[2], r[3]) for r in self.res]
 
-def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03):
-    """The wall pairs clicked on a floor plan of the map: [xyz, ...], A, B, A, B."""
+
+def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earlier=(), map_path=""):
+    """The wall pairs clicked on a floor plan of the map, each with the
+    meter's reading typed in the box under it: [(name, measured m or None,
+    a xyz, b xyz)]. save: the json written after every reading and undo
+    (write_distances_json); earlier: pairs of a session before, drawn and
+    kept."""
     import matplotlib.pyplot as plt
+    from matplotlib.widgets import TextBox
     S = P[(P[:, 2] >= zband[0]) & (P[:, 2] <= zband[1])]
     if len(S) < 1000:
         raise SystemExit(f"only {len(S)} map points between z {zband[0]} and {zband[1]} m: "
@@ -1242,23 +1381,45 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03):
     H, xe, ye = np.histogram2d(S[:, 0], S[:, 1], bins=np.maximum(((hi - lo) / cell).astype(int), 1),
                                range=[[lo[0], hi[0]], [lo[1], hi[1]]])
     with plt.rc_context({"toolbar": "None"}):     # no pan / zoom modes to swallow the clicks
-        fig, ax = plt.subplots(figsize=(13, 9))
+        fig, ax = plt.subplots(figsize=(13, 9.5))
+    fig.subplots_adjust(bottom=0.12)
     ax.imshow(np.log1p(H).T, origin="lower", extent=(xe[0], xe[-1], ye[0], ye[-1]), cmap="Greys",
               interpolation="nearest")
     ax.set_aspect("equal")
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
     pk = PlanPicker(ax, P, tree, S, radius)
-    head = ("left click: wall A, then wall B  ·  scroll: zoom  ·  right drag: move  ·  "
-            "h: whole map  ·  u: undo  ·  q: done")
+    for name, m, pa, pb in earlier:
+        pk.add(name, m, pa, pb)
+    tb = TextBox(fig.add_axes([0.32, 0.025, 0.2, 0.045]), "meter reading of the last pair (m or mm), Enter: ",
+                 initial="")
+    stats = fig.text(0.55, 0.04, summary_line(distance_summary(pk.res)), fontsize=11, color="#b4501f")
+    head = ("left click: wall A, then wall B, then type the reading + Enter  ·  scroll: zoom  ·  "
+            "right drag: move  ·  h: whole map  ·  u: undo  ·  q: done")
     home = (ax.get_xlim(), ax.get_ylim())
     drag = {}
-    ax.set_title(head + "\nclick near a dark wall line: d1, wall A", fontsize=11)
+    ax.set_title(head + "\n" + (f"{len(pk.res)} pairs from before; " if pk.res else "")
+                 + f"click near a dark wall line: d{len(pk.res) + 1}, wall A", fontsize=10)
+
+    def keep():
+        stats.set_text(summary_line(distance_summary(pk.res)))
+        if save:
+            write_distances_json(save, map_path, pk.res, radius, zband)
 
     def say(msg):
         print("  " + msg)
-        ax.set_title(head + "\n" + msg, fontsize=11)
+        ax.set_title(head + "\n" + msg, fontsize=10)
         fig.canvas.draw_idle()
+
+    def on_submit(text):
+        if not text.strip() and not (pk.res and pk.res[-1][1] is None):
+            return
+        say(pk.enter(text))
+        keep()
+        tb.set_val("")
+        tb.stop_typing()
+
+    tb.on_submit(on_submit)
 
     def on_click(ev):
         if ev.inaxes is not ax:
@@ -1266,7 +1427,11 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03):
         if ev.button == 3:                            # right drag moves the view
             drag.update(x=ev.x, y=ev.y, xl=ax.get_xlim(), yl=ax.get_ylim())
         elif ev.button == 1:
+            n = len(pk.res)
             say(pk.click(ev.xdata, ev.ydata))
+            if len(pk.res) > n:                     # a pair: its reading next, typed straight in
+                keep()
+                tb.begin_typing()
 
     def on_move(ev):
         if "x" not in drag:
@@ -1283,13 +1448,16 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03):
         drag.clear()
 
     def on_key(ev):
+        if tb.capturekeystrokes:                      # typing a reading: the keys are its
+            return
         if ev.key == "u":
             say(pk.undo())
+            keep()
         elif ev.key == "h":
             ax.set_xlim(*home[0])
             ax.set_ylim(*home[1])
             fig.canvas.draw_idle()
-        elif ev.key in ("q", "enter", "escape"):
+        elif ev.key in ("q", "escape"):
             plt.close(fig)
 
     def on_scroll(ev):
@@ -1307,9 +1475,10 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03):
     fig.canvas.mpl_connect("button_release_event", on_release)
     fig.canvas.mpl_connect("key_press_event", on_key)
     fig.canvas.mpl_connect("scroll_event", on_scroll)
-    print(f"floor plan: {len(S)} points between z {zband[0]} and {zband[1]} m; " + head)
+    print(f"floor plan: {len(S)} points between z {zband[0]} and {zband[1]} m; " + head
+          + (f"\n  every reading saved to {save}" if save else ""))
     plt.show()
-    return pk.points()
+    return pk.rows()
 
 
 def _distance_rows(tree, P, rows, radius):
@@ -1341,32 +1510,45 @@ def main_distances(argv=None):
     ap = argparse.ArgumentParser(description=DIST_DOC,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("map")
-    ap.add_argument("distances", nargs="?", help="csv with names (optional: picks alone number the pairs)")
+    ap.add_argument("distances", nargs="?",
+                    help="csv with names, or a --click session's json (optional: picks alone number the pairs)")
     ap.add_argument("--click", action="store_true", help="pick the wall pairs on the map in a window")
+    ap.add_argument("--json", help="--click: the session's file (default <map>_distances.json; "
+                                   "its pairs are drawn again and kept)")
+    ap.add_argument("--new", action="store_true", help="--click: start again, not from the json's pairs")
     ap.add_argument("--picks")
     ap.add_argument("--measured", help="the meter's readings, m, one per picked pair: 6.214,4.882,...")
-    ap.add_argument("--ask", action="store_true", help="ask for each pair's reading (default with --click)")
+    ap.add_argument("--ask", action="store_true", help="ask for each unread pair's reading in the terminal")
     ap.add_argument("--radius", type=float, default=0.3)
     ap.add_argument("--zband", default="0.3,1.2",
                     help="--click: the floor plan's slice, z from,to in m (the LiDAR started at 0)")
     a = ap.parse_args(argv)
     if not (a.click or a.distances or a.picks):
-        ap.error("give --click, or --picks (and --measured), or a distances csv")
+        ap.error("give --click, or --picks (and --measured), or a distances csv / json")
     stem = os.path.splitext(a.map)[0]
     measured = None
     if a.measured:
         measured = [float(x) for x in a.measured.replace(",", " ").split()]
+    zband = [float(x) for x in a.zband.split(",")]
     P = load(a.map)
     tree = cKDTree(P)
+    js = a.json or (a.distances if a.distances and a.distances.lower().endswith(".json")
+                    else stem + "_distances.json")
     if a.click:
-        pts = click_plan(P, tree, [float(x) for x in a.zband.split(",")], a.radius)
-        if not pts:
+        earlier = read_json_distances(js) if os.path.exists(js) and not a.new else []
+        if earlier:
+            print(f"{len(earlier)} pairs from {js} (--new starts again)")
+        rows = click_plan(P, tree, zband, a.radius, save=js, earlier=earlier, map_path=a.map)
+        if not rows:
             raise SystemExit("no wall pair clicked")
+        if measured is not None:
+            if len(measured) != len(rows):
+                raise SystemExit(f"--measured has {len(measured)} values for {len(rows)} pairs")
+            rows = [(n_, measured[i], pa, pb) for i, (n_, _, pa, pb) in enumerate(rows)]
         a.picks = a.picks or stem + "_picks.txt"
         with open(a.picks, "w") as fh:
-            fh.writelines(f"{x:.4f},{y:.4f},{z:.4f}\n" for x, y, z in pts)
-        print(f"saved {len(pts) // 2} pairs -> {a.picks}")
-        rows = pick_pairs(a.picks, measured)
+            fh.writelines(f"{x:.4f},{y:.4f},{z:.4f}\n" for _, _, pa, pb in rows for x, y, z in (pa, pb))
+        print(f"saved {len(rows)} pairs -> {a.picks}")
     elif a.distances:
         rows = read_distances(a.distances, a.picks)
     elif a.picks:
@@ -1375,40 +1557,41 @@ def main_distances(argv=None):
     res = _distance_rows(tree, P, rows, a.radius)
     _distance_table(res)
 
-    ask = a.ask or (a.click and measured is None and sys.stdin.isatty())
-    if ask and all(r[1] is None for r in res):
+    ask = a.ask or (a.click and sys.stdin.isatty() and all(r[1] is None for r in res))
+    if ask and any(r[1] is None and r[6] is not None for r in res):
         print("\nthe meter's reading for each pair, m (Enter skips it):")
         for r in res:
-            if r[6] is None:
+            if r[6] is None or r[1] is not None:
                 continue
             got = input(f"  {r[0]}  map {r[6]:.3f} m  measured: ").strip()
             if got:
-                r[1] = float(got)
-        if any(r[1] is not None for r in res):
-            out = stem + "_distances.csv"
-            with open(out, "w") as fh:
-                fh.write("name,measured_m,ax,ay,az,bx,by,bz\n")
-                for name, m, pa, pb, *_ in res:
-                    if m is not None:
-                        fh.write(f"{name},{m:.4f}," + ",".join(f"{v:.4f}" for v in (*pa, *pb)) + "\n")
-            print(f"saved the readings with their picks -> {out}\n")
-            _distance_table(res)
+                r[1] = parse_reading(got)
+        print()
+        _distance_table(res)
+    if any(r[1] is not None for r in res):
+        out = stem + "_distances.csv"
+        with open(out, "w") as fh:
+            fh.write("name,measured_m,ax,ay,az,bx,by,bz\n")
+            for name, m, pa, pb, *_ in res:
+                if m is not None:
+                    fh.write(f"{name},{m:.4f}," + ",".join(f"{v:.4f}" for v in (*pa, *pb)) + "\n")
+        print(f"\nsaved the readings with their picks -> {out}")
+    if a.click or a.distances and a.distances.lower().endswith(".json") or any(r[1] is not None for r in res):
+        write_distances_json(js, a.map, res, a.radius, zband if a.click else None)
+        print(f"saved every pair, its error and the totals -> {js}")
 
     if all(r[1] is None for r in res):
         print("\nmap distances only: give the meter's readings in the same order with "
               "--measured 6.214,4.882,...")
         print("(walls: each wall's thickness in the map, p95-p5, around its pick)")
         return
-    ok = [(r[1], r[6]) for r in res if r[1] is not None and r[6] is not None and r[7] <= 2.0]
-    if not ok:
+    sm = distance_summary(res)
+    if sm is None:
         raise SystemExit("\nno distance measured: check the picks (the map's frame, on the walls)")
-    meas, mapd = np.array(ok).T
-    e = (mapd - meas) * 1000
-    s = float(meas @ mapd / (meas @ meas))
-    print(f"\n{len(meas)} distances ({meas.min():.2f}-{meas.max():.2f} m): error mean {e.mean():+.1f} mm, "
-          f"RMS {np.sqrt(np.mean(e ** 2)):.1f} mm, max |{np.abs(e).max():.1f}| mm")
-    print(f"scale map / measured {s:.5f} ({(s - 1) * 1e6:+.0f} ppm = {(s - 1) * 100:+.3f} %); "
-          f"after it, RMS {np.sqrt(np.mean(((mapd - s * meas) * 1000) ** 2)):.1f} mm")
+    print(f"\n{sm['n']} distances ({sm['measured_min_m']:.2f}-{sm['measured_max_m']:.2f} m): error mean "
+          f"{sm['mean_mm']:+.1f} mm, RMS {sm['rmse_mm']:.1f} mm, max |{sm['max_abs_mm']:.1f}| mm")
+    print(f"scale map / measured {sm['scale']:.5f} ({sm['ppm']:+.0f} ppm = {(sm['scale'] - 1) * 100:+.3f} %); "
+          f"after it, RMS {sm['rmse_after_scale_mm']:.1f} mm")
     print("(walls: each wall's thickness in the map, p95-p5, around its pick)")
 
 

@@ -9,7 +9,10 @@ with --measured their errors; --ask takes the readings typed in and
 saves them with the picks (re-run from that csv: the same errors); the
 floor plan of --click: clicks up to 0.4 m off the walls find them, a
 click in an empty room is refused, u undoes, and the clicked pairs give the
-same distances through --click.
+same distances through --click; the reading box: readings in m or mm,
+junk refused, errors and RMSE at once, the json saved, run again and a
+session resumed; the window's events sent by hand (keys typed in the box
+not taken as commands).
 
     python tests/test_distances.py
 """
@@ -133,8 +136,68 @@ def main():
         ok = all(w in m for w, m in zip(want, msgs)) and len(pk.points()) == 4
         (print if ok else fails.append)("  ok    floor plan: clicks 0.4 m off the walls find them, empty space refused, undo"
                                         if ok else f"floor plan: {msgs}")
+        # the reading box: typed after each pair, errors and totals at once, saved to the json
+        fig, ax = plt.subplots()
+        pk = maps.PlanPicker(ax, P, cKDTree(P), S)
+        msgs = [pk.click(0.35, 3.0), pk.click(7.6, 3.1), pk.enter("8.004"), pk.click(4.0, 0.3),
+                pk.click(4.2, 5.62), pk.enter("abc"), pk.enter("5998")]
+        plt.close(fig)
+        sm = maps.distance_summary(pk.res)
+        js = os.path.join(d, "session.json")
+        maps.write_distances_json(js, os.path.join(d, "map.npy"), pk.res, 0.3)
+        import json
+        jd = json.load(open(js))
+        ok = ("error -4" in msgs[2] or "error -3" in msgs[2] or "error -5" in msgs[2]) and \
+            "not a distance" in msgs[5] and "RMSE" in msgs[6] and sm["n"] == 2 and \
+            abs(pk.res[1][1] - 5.998) < 1e-9 and len(jd["pairs"]) == 2 and \
+            abs(jd["summary"]["rmse_mm"] - sm["rmse_mm"]) < 1e-6 and jd["pairs"][0]["measured_m"] == 8.004
+        (print if ok else fails.append)(
+            f"  ok    reading box: m and mm read, junk refused, {maps.summary_line(sm)}; json saved"
+            if ok else f"reading box: {msgs} {sm} {jd}")
+        rc, again = run(os.path.join(d, "map.npy"), js)
+        rms = next((ln for ln in again.splitlines() if "error mean" in ln), "")
+        ok = rc == 0 and rms and abs(float(rms.split("RMS")[1].split()[0]) - sm["rmse_mm"]) < 0.05
+        (print if ok else fails.append)("  ok    the json runs again: the same RMSE" if ok
+                                        else f"json again: rc {rc}\n{again}")
+        # the window itself, its events sent by hand: clicks, the reading typed
+        # (u and q typed into the box neither undo nor close), a session resumed
+        from matplotlib.backend_bases import KeyEvent, MouseEvent
+        real_show = plt.show
+
+        def drive(script):
+            def show(*_a, **_k):
+                f = plt.gcf()
+                axm = f.axes[0]
+                for kind, v in script:
+                    if kind == "click":
+                        px, py = axm.transData.transform(v)
+                        f.canvas.callbacks.process("button_press_event",
+                                                   MouseEvent("button_press_event", f.canvas, px, py, button=1))
+                    else:
+                        for key in v:
+                            f.canvas.callbacks.process("key_press_event", KeyEvent("key_press_event", f.canvas,
+                                                                                    key))
+            return show
+        js2 = os.path.join(d, "win.json")
+        plt.show = drive([("click", (0.35, 3.0)), ("click", (7.6, 3.1)), ("keys", list("8.0uq") + ["backspace"] * 2
+                                                                          + ["enter"])])
+        try:
+            got = maps.click_plan(P, cKDTree(P), (0.3, 1.2), 0.3, save=js2, map_path="m")
+            plt.show = drive([("click", (4.0, 0.3)), ("click", (4.2, 5.62)), ("keys", list("6002") + ["enter"])])
+            got2 = maps.click_plan(P, cKDTree(P), (0.3, 1.2), 0.3, save=js2,
+                                   earlier=maps.read_json_distances(js2), map_path="m")
+        finally:
+            plt.show = real_show
+            plt.close("all")
+        jd2 = json.load(open(js2))
+        ok = len(got) == 1 and got[0][1] == 8.0 and len(got2) == 2 and got2[1][0] == "d2" and \
+            abs(got2[1][1] - 6.002) < 1e-9 and jd2["summary"]["n"] == 2
+        (print if ok else fails.append)("  ok    the window: the reading typed in the box (u, q in it typed, "
+                                        "not obeyed), saved; a session resumed from its json" if ok
+                                        else f"window: {got} {got2} {jd2}")
+
         real, real_in, real_out = maps.click_plan, sys.stdin, sys.stdout
-        maps.click_plan = lambda *a, **k: pk.points()
+        maps.click_plan = lambda *a, **k: [(n_, None, a_, b_) for n_, _, a_, b_ in pk.rows()]
         sys.stdin, sys.stdout = io.StringIO("8.0\n6.0\n"), io.StringIO()
         try:
             maps.main_distances([os.path.join(d, "map.npy"), "--click", "--ask"])
