@@ -11,6 +11,8 @@ LOD-3DGS scene (LetsGo, github.com/zhaofuq/LOD-3DGS; Cui et al., ACM TOG 43(6),
         [--poisson-depth 0] [--trim 0.10] [--show]
     python scoop_pipeline/datasets/lod3dgs.py sionna <mesh .ply, with its ceiling> [<out .ply>]
         [--faces 500000] [--floor-grey 0.8] [--scene] [--material walls=brick:0.1]
+    python scoop_pipeline/datasets/lod3dgs.py walk <mesh .ply> [--traj <TUM, the mesh's frame>]
+        [--at X,Y] [--faces 2000000] [--eye 1.6]
 
 `mesh` is the mesh step alone, to look at: the map's Poisson mesh, trimmed,
 in the map's colours (map_final_<tag>.pcd is colorized), normals turned to
@@ -1056,6 +1058,75 @@ def sionna_mesh(mesh_path, out=None, faces=500000, scene=False, materials=None, 
     return {**res, "scene": sx, **used}
 
 
+def walk_start(V, T=None, at=None, eye=1.6, ahead=2.0):
+    """(eye, look-at) to start walking a mesh of vertices V: at (x, y), else
+    the first pose of T (the trajectory, the mesh's frame) looking along the
+    path, else the middle of the mesh looking along +x; eye m over the floor
+    there (the lowest 2 % of the vertices within 0.5 m in plan)."""
+    if at is not None:
+        xy, d = np.asarray(at, float)[:2], np.array([1.0, 0.0])
+    elif T is not None and len(T):
+        xy = T[0, :2]
+        far = np.flatnonzero(np.linalg.norm(T[:, :2] - xy, axis=1) > ahead)
+        d = (T[far[0], :2] - xy) if len(far) else np.array([1.0, 0.0])
+    else:
+        xy, d = 0.5 * (V[:, :2].min(0) + V[:, :2].max(0)), np.array([1.0, 0.0])
+    near = np.linalg.norm(V[:, :2] - xy, axis=1) < 0.5
+    floor = np.percentile(V[near, 2], 2) if near.any() else V[:, 2].min()
+    e = np.r_[xy, floor + eye]
+    return e, e + np.r_[d / np.linalg.norm(d), 0.0]
+
+
+def walk(mesh_path, traj=None, at=None, faces=2000000, eye=1.6, fov=70.0, shot=None):
+    """Walk inside a mesh (with its ceiling) in a window: Open3D's fly mode,
+    started eye m over the floor at walk_start's place, the mesh unlit in its
+    colours and seen from both sides; simplified to `faces` first when larger
+    (quadric) so it moves smoothly. shot: write the start view to this PNG
+    and close."""
+    o3d = _o3d()
+    from open3d.visualization import gui, rendering
+    m = o3d.io.read_triangle_mesh(os.path.expanduser(mesh_path))
+    if not len(m.triangles):
+        raise ConvertError(f"{mesh_path}: no faces (give it a mesh, not a view)")
+    n0 = len(m.triangles)
+    if faces and n0 > faces:
+        log.info(f"simplifying {n0} faces to {faces} ...")
+        m.remove_duplicated_vertices()
+        m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
+    F = np.asarray(m.triangles)
+    m.triangles = o3d.utility.Vector3iVector(np.vstack([F, F[:, ::-1]]))   # both sides
+    m.compute_vertex_normals()
+    V = np.asarray(m.vertices)
+    e, c = walk_start(V, read_tum_positions(traj, stride=1) if traj else None, at, eye)
+    log.info(f"walk {mesh_path}: {len(F)} faces, from ({e[0]:.1f}, {e[1]:.1f}), eye {eye} m over the floor\n"
+             "  mouse drag: look; W/S forward/back, A/D left/right, Q/Z up/down "
+             "(Open3D fly mode; the mouse wheel changes the speed)")
+    app = gui.Application.instance
+    app.initialize()
+    w = o3d.visualization.O3DVisualizer(f"walk {os.path.basename(mesh_path)}", 1600, 900)
+    mat = rendering.MaterialRecord()
+    mat.shader = "defaultUnlit" if m.has_vertex_colors() else "defaultLit"
+    w.add_geometry("mesh", m, mat)
+    w.show_skybox(False)
+    w.scene.view.set_post_processing(False)     # no tone mapping: the colours as stored, not washed out
+    w.set_background(np.array([0.12, 0.12, 0.12, 1.0], np.float32), None)   # small holes dark, not white
+    w.show_settings = False
+    w.setup_camera(fov, c.astype(np.float32), e.astype(np.float32), np.array([0, 0, 1], np.float32))
+    w.mouse_mode = gui.SceneWidget.Controls.FLY
+    app.add_window(w)
+    if shot:
+        import threading
+        import time
+
+        def snap():
+            time.sleep(3)
+            app.post_to_main_thread(w, lambda: w.export_current_image(os.path.expanduser(shot)))
+            time.sleep(2)
+            app.post_to_main_thread(w, app.quit)
+        threading.Thread(target=snap, daemon=True).start()
+    app.run()
+
+
 def sample_mesh(mesh, spacing=0.04):
     """Points evenly over the mesh, about `spacing` apart."""
     area = mesh.get_surface_area()
@@ -1292,6 +1363,15 @@ def main():
                     help="floor, ceiling or walls as an ITU material (concrete, brick, plasterboard, wood, "
                          "glass, ceiling_board, marble, floorboard, metal, ...), thickness m; "
                          "default concrete:0.2 each; repeat for each part")
+    wk = sub.add_parser("walk", help="walk inside a mesh (with its ceiling) in a window")
+    wk.add_argument("file", help="a mesh, e.g. mesh_view_<tag>_anchored.ply or its _sionna.ply")
+    wk.add_argument("--traj", default=None,
+                    help="a trajectory in the mesh's frame: start at its first pose (anchored mesh: "
+                         "odometry/reference_<tag>/traj_mobile_2_lidar.tum)")
+    wk.add_argument("--at", default=None, metavar="X,Y", help="start here instead")
+    wk.add_argument("--faces", type=int, default=2000000, help="simplify to this many faces first (0: not)")
+    wk.add_argument("--eye", type=float, default=1.6, help="eye height over the floor (m)")
+    wk.add_argument("--shot", default=None, help="write the start view to this PNG and close")
     a = ap.parse_args()
     for k in ("map", "file", "traj", "frame", "dataset"):
         p = getattr(a, k, None)
@@ -1303,6 +1383,9 @@ def main():
     try:
         if a.cmd == "anchor":
             anchor_file(a.file, a.frame, a.out)
+        elif a.cmd == "walk":
+            walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
+                 faces=a.faces, eye=a.eye, shot=a.shot)
         elif a.cmd == "sionna":
             mats = {}
             for spec in a.material:

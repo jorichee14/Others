@@ -998,6 +998,17 @@ floor, the ceiling (horizontal 2 m or more above the floor) and the walls
 
     python3 scoop_pipeline/datasets/lod3dgs.py sionna mapping/mesh_view_<tag>_anchored.ply [--scene]
 
+`walk` opens a window to walk inside a mesh (the one with its ceiling, or
+its `_sionna.ply`): Open3D's fly mode, started 1.6 m (`--eye`) over the floor
+at the first pose of `--traj` facing along the path (or `--at X,Y`), the
+mesh unlit in its colours as stored (no tone mapping) and seen from both
+sides, simplified to `--faces` (2,000,000) first. Mouse drag looks round;
+W/S, A/D, Q/Z move; the wheel sets the speed. `--shot view.png` writes the
+start view and closes.
+
+    python3 scoop_pipeline/datasets/lod3dgs.py walk mapping/mesh_view_<tag>_anchored.ply \
+        --traj odometry/reference_<tag>/traj_mobile_2_lidar.tum
+
 The scene, from a replica export with map depth made with the same poses:
 
 ```

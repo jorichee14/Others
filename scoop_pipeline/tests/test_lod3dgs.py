@@ -472,7 +472,8 @@ def check_ceilings(tmp):
 
 def check_sionna(tmp):
     """sionna on the mesh of a 5 m hall by a 3 m arcade, a table in the hall:
-    one simplified mesh in its colours, the floor grey; with --scene floor, ceiling and walls apart (the floor at 0, the table top with the
+    one simplified mesh in its colours, the floor grey, walk starting 1.6 m over
+    the floor at the first pose, facing along the path; with --scene floor, ceiling and walls apart (the floor at 0, the table top with the
     walls, both ceilings), the scene.xml loaded by Sionna RT when installed
     and a floor bounce traced 2.05 ns after the direct path."""
     import open3d as o3d
@@ -518,6 +519,9 @@ def check_sionna(tmp):
         assert sel.any() and np.abs(V["ceiling"][sel, 2] - z).max() < 0.05, ("ceiling", z)
     top = (np.abs(V["walls"][:, 2] - 0.75) < 0.05) & (np.abs(V["walls"][:, 0] - 2.5) < 0.4)
     assert top.any(), "the table top not with the walls"
+    T = np.c_[x, np.full(len(x), 3.0), np.full(len(x), 0.8)]
+    e, c = L.walk_start(Vo, T)
+    assert np.allclose(e, [1.0, 3.0, 1.6], atol=0.05) and c[0] > e[0], ("walk start", e, c)
     xml = open(r["scene"]).read()
     assert 'value="brick"' in xml and 'value="concrete"' in xml, xml
     try:
