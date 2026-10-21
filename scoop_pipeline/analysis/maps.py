@@ -965,7 +965,7 @@ def main_scans(argv=None):
 DIST_DOC = r'''Control distances: wall-to-wall lengths measured on site with a laser
 meter, against the map.
 
-  python3 check.py distances <map.pcd> --click [--zband 0.3,1.2] [--json <file>] [--new]
+  python3 check.py distances <map.pcd> --click [--zband 0.3,1.2] [--json <file>] [--new] [--redo d3]
   python3 check.py distances <map.pcd> --picks picks.txt [--measured 6.214,4.882,...]
   python3 check.py distances <map.pcd> <distances.csv> [--picks picks.txt]
       [--radius 0.3]
@@ -981,7 +981,8 @@ click closer). Then type the meter's reading in the box under the plan (m,
 totals (mean, RMSE, scale) under the plan, and every pair with its picks,
 map distance, reading and error and the totals are saved at once to
 <map>_distances.json (--json): a session closed and opened again carries on
-from its pairs (--new starts again). Scroll zooms around the cursor, a
+from its pairs (--new starts again; --redo d3 drops d3 and the next pair
+clicked is d3 again, to pick one again that is not the last). Scroll zooms around the cursor, a
 right-button drag moves the view, h shows the whole map; u undoes the last
 click; q or closing the window finishes. The picks are also saved as
 <map>_picks.txt and the readings as <map>_distances.csv; the same check
@@ -1257,6 +1258,24 @@ class PlanPicker:
         self.S, self.stree = S, cKDTree(S[:, :2])
         self.picks, self.artists = [], []           # (point on the wall, wall), [artists] per click
         self.res, self.labels = [], []               # per pair: its row, its label on the plan
+        self.redo = []                               # names the next pairs take (--redo)
+
+    def peek(self):
+        """The name the next pair will take."""
+        keep = list(self.redo)
+        name = self.next_name()
+        self.redo = keep
+        return name
+
+    def next_name(self):
+        """The next pair's name: one being redone, else one past the highest d<n>."""
+        taken = {r[0] for r in self.res}
+        while self.redo:
+            name = self.redo.pop(0)
+            if name not in taken:
+                return name
+        nums = [int(r[0][1:]) for r in self.res if r[0][:1] == "d" and r[0][1:].isdigit()]
+        return f"d{max(nums, default=0) + 1}"
 
     def _pair(self, pa, pb, wa, wb):
         """The pair's row: the table's walls round the picks (the floor
@@ -1265,7 +1284,7 @@ class PlanPicker:
         if A is None or B is None:
             A, B = wa, wb
         d, ang = wall_distance(A, B, pa)
-        return [f"d{len(self.res) + 1}", None, pa, pb, A, B, d, ang]
+        return [None, None, pa, pb, A, B, d, ang]
 
     def _label(self, row):
         name, m, _, _, _, _, d, _ = row
@@ -1289,7 +1308,7 @@ class PlanPicker:
         k = len(self.picks)
         if k % 2:
             self.artists.append(art)
-            return f"d{k // 2 + 1}: wall A found ({w[2] * 100:.1f} cm thick); now click wall B"
+            return f"{self.peek()}: wall A found ({w[2] * 100:.1f} cm thick); now click wall B"
         (pa, wa), (pb, wb) = self.picks[-2], self.picks[-1]
         row = self._pair(pa, pb, wa, wb)
         d, ang = row[6], row[7]
@@ -1298,6 +1317,7 @@ class PlanPicker:
             for a in art:
                 a.remove()
             return f"walls {ang:.0f} deg apart: not facing each other; click wall B again"
+        row[0] = self.next_name()
         A = row[4]
         na = A[1] if (row[5][0] - pa) @ A[1] > 0 else -A[1]
         q1 = pa + na * d
@@ -1324,10 +1344,10 @@ class PlanPicker:
         row[1] = m
         self.labels[-1].set_text(self._label(row))
         if m is None:
-            return f"{row[0]}: no reading; next: wall A of d{len(self.res) + 1}"
+            return f"{row[0]}: no reading; next: wall A of {self.peek()}"
         warn = "  (walls not parallel: left out of the totals)" if row[7] > 2.0 else ""
         return (f"{row[0]}: map {row[6]:.3f} m, meter {m:.3f} m, error {(row[6] - m) * 1000:+.1f} mm{warn}"
-                f"  ·  {summary_line(distance_summary(self.res))}; next: wall A of d{len(self.res) + 1}")
+                f"  ·  {summary_line(distance_summary(self.res))}; next: wall A of {self.peek()}")
 
     def add(self, name, m, pa, pb):
         """A pair from an earlier session: drawn, measured again, its reading kept."""
@@ -1349,7 +1369,7 @@ class PlanPicker:
         if not self.picks:
             return "nothing to undo"
         if len(self.picks) % 2 == 0:                   # B of a pair: the pair and its reading go
-            self.res.pop()
+            self.redo.insert(0, self.res.pop()[0])
             self.labels.pop()
         self.picks.pop()
         for art in self.artists.pop():
@@ -1365,12 +1385,13 @@ class PlanPicker:
         return [(r[0], r[1], r[2], r[3]) for r in self.res]
 
 
-def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earlier=(), map_path=""):
+def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earlier=(), map_path="",
+               redo=()):
     """The wall pairs clicked on a floor plan of the map, each with the
     meter's reading typed in the box under it: [(name, measured m or None,
     a xyz, b xyz)]. save: the json written after every reading and undo
     (write_distances_json); earlier: pairs of a session before, drawn and
-    kept."""
+    kept; redo: names the next pairs take (pairs of earlier being redone)."""
     import matplotlib.pyplot as plt
     from matplotlib.widgets import TextBox
     S = P[(P[:, 2] >= zband[0]) & (P[:, 2] <= zband[1])]
@@ -1391,6 +1412,7 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
     pk = PlanPicker(ax, P, tree, S, radius)
     for name, m, pa, pb in earlier:
         pk.add(name, m, pa, pb)
+    pk.redo = list(redo)
     tb = TextBox(fig.add_axes([0.32, 0.025, 0.2, 0.045]), "meter reading of the last pair (m or mm), Enter: ",
                  initial="")
     stats = fig.text(0.55, 0.04, summary_line(distance_summary(pk.res)), fontsize=11, color="#b4501f")
@@ -1399,7 +1421,7 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
     home = (ax.get_xlim(), ax.get_ylim())
     drag = {}
     ax.set_title(head + "\n" + (f"{len(pk.res)} pairs from before; " if pk.res else "")
-                 + f"click near a dark wall line: d{len(pk.res) + 1}, wall A", fontsize=10)
+                 + f"click near a dark wall line: {pk.peek()}, wall A", fontsize=10)
 
     def keep():
         stats.set_text(summary_line(distance_summary(pk.res)))
@@ -1516,6 +1538,9 @@ def main_distances(argv=None):
     ap.add_argument("--json", help="--click: the session's file (default <map>_distances.json; "
                                    "its pairs are drawn again and kept)")
     ap.add_argument("--new", action="store_true", help="--click: start again, not from the json's pairs")
+    ap.add_argument("--redo", default="",
+                    help="--click: pairs of the json to pick again, e.g. d3 or d3,d5: dropped, and the next "
+                         "pairs clicked take their names")
     ap.add_argument("--picks")
     ap.add_argument("--measured", help="the meter's readings, m, one per picked pair: 6.214,4.882,...")
     ap.add_argument("--ask", action="store_true", help="ask for each unread pair's reading in the terminal")
@@ -1536,9 +1561,15 @@ def main_distances(argv=None):
                     else stem + "_distances.json")
     if a.click:
         earlier = read_json_distances(js) if os.path.exists(js) and not a.new else []
-        if earlier:
-            print(f"{len(earlier)} pairs from {js} (--new starts again)")
-        rows = click_plan(P, tree, zband, a.radius, save=js, earlier=earlier, map_path=a.map)
+        redo = [x.strip() for x in a.redo.replace(",", " ").split()]
+        miss = [x for x in redo if x not in {e[0] for e in earlier}]
+        if miss:
+            ap.error(f"--redo {','.join(miss)}: not in {js}")
+        earlier = [e for e in earlier if e[0] not in redo]
+        if earlier or redo:
+            print(f"{len(earlier)} pairs from {js} (--new starts again)"
+                  + (f"; to pick again: {', '.join(redo)} (the next pairs clicked take these names)" if redo else ""))
+        rows = click_plan(P, tree, zband, a.radius, save=js, earlier=earlier, map_path=a.map, redo=redo)
         if not rows:
             raise SystemExit("no wall pair clicked")
         if measured is not None:

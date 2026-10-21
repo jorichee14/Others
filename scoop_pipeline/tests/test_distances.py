@@ -11,7 +11,7 @@ floor plan of --click: clicks up to 0.4 m off the walls find them, a
 click in an empty room is refused, u undoes, and the clicked pairs give the
 same distances through --click; the reading box: readings in m or mm,
 junk refused, errors and RMSE at once, the json saved, run again and a
-session resumed; the window's events sent by hand (keys typed in the box
+session resumed, --redo; the window's events sent by hand (keys typed in the box
 not taken as commands).
 
     python tests/test_distances.py
@@ -189,6 +189,20 @@ def main():
         finally:
             plt.show = real_show
             plt.close("all")
+        # --redo d1: d1 dropped, the next pair clicked is d1 again; a gap in the names is not reused
+        plt.show = drive([("click", (0.35, 3.0)), ("click", (7.6, 3.1)), ("keys", list("8.001") + ["enter"]),
+                          ("click", (4.0, 0.3)), ("click", (4.2, 5.62)), ("keys", list("6.0") + ["enter"])])
+        try:
+            got3 = maps.click_plan(P, cKDTree(P), (0.3, 1.2), 0.3, save=os.path.join(d, "redo.json"),
+                                   earlier=[e for e in maps.read_json_distances(js2) if e[0] != "d1"],
+                                   map_path="m", redo=["d1"])
+        finally:
+            plt.show = real_show
+            plt.close("all")
+        names3 = sorted(r[0] for r in got3)
+        ok = names3 == ["d1", "d2", "d3"] and [r[1] for r in got3 if r[0] == "d1"] == [8.001]
+        (print if ok else fails.append)("  ok    --redo d1: picked again under its name, the next pair d3"
+                                        if ok else f"--redo: {got3}")
         jd2 = json.load(open(js2))
         ok = len(got) == 1 and got[0][1] == 8.0 and len(got2) == 2 and got2[1][0] == "d2" and \
             abs(got2[1][1] - 6.002) < 1e-9 and jd2["summary"]["n"] == 2
