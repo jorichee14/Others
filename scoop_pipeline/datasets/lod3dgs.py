@@ -1061,7 +1061,8 @@ def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
 
 
 def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2, vertical=0.3,
-                on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, T=None):
+                on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, tall=2.3, sideways=0.75,
+                T=None):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
     each object face its object's number (-1 for the rest).
 
@@ -1083,8 +1084,10 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
     The rest facing sideways within seam of a floor, wall or ceiling face
     (the rounded strips where they meet) goes with it; one facing up (a
     table top by a wall) does not. Everything else, in connected pieces, is
-    objects: furniture, a wall bulging with furniture against it, a pillar,
-    a lamp; only a piece reaching no higher than band (the floor's bumps)
+    objects: furniture, a wall bulging with furniture against it, a lamp;
+    but a piece facing sideways (`sideways` of its area) and reaching `tall`
+    or higher, above furniture, is walls: a wall's thickness (its end, the
+    sides of an opening), a pillar; a piece reaching no higher than band (the floor's bumps)
     is floor and one under min_obj m2 (a scrap at a seam) the part of the
     nearest labelled face."""
     from scipy.sparse import coo_matrix
@@ -1162,7 +1165,9 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
         c_area = np.bincount(comp, A[rest], nc)
         c_hi = np.full(nc, -np.inf)
         np.maximum.at(c_hi, comp, dz[rest])
+        side = np.bincount(comp, A[rest] * (np.abs(N[rest, 2]) < vertical), nc) / np.maximum(c_area, 1e-12)
         kind = np.full(nc, "objects", dtype=object)
+        kind[(side >= sideways) & (c_hi >= tall)] = "walls"
         kind[c_hi <= band] = "floor"
         scrap = c_area < min_obj
         kind[scrap] = ""

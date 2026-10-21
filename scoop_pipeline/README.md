@@ -1041,9 +1041,10 @@ extent), so a wall's rough parts go with it and a desk or cabinet in front
 of it does not; what is left facing sideways within 8 cm of a floor, wall
 or ceiling face (the seams where they meet) goes with it, a table top by a
 wall does not. Everything else, in connected pieces, is objects: furniture,
-a wall bulging with furniture against it, pillars; only floor bumps (no
-higher than 0.25 m) are floor and scraps under 0.05 m2 the part next to
-them. With `--traj` (the mesh's
+a wall bulging with furniture against it; but a piece facing sideways (75 %)
+and reaching 2.3 m or higher, above furniture, is walls: a wall's thickness
+(its end, the sides of an opening) and pillars. Floor bumps (no higher than
+0.25 m) are floor and scraps under 0.05 m2 the part next to them. With `--traj` (the mesh's
 frame; anchored: `odometry/reference_<tag>/traj_mobile_2_lidar.tum`) what
 the `_noceil` copy drops as hanging from the ceiling only (a reflection
 joined to a mirrored ceiling: loose once the ceiling is cut, and reaching up
