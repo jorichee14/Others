@@ -223,7 +223,8 @@ tests/               self-tests, no real bag needed
   test_lod3dgs.py    lod3dgs on a synthetic open-top room: centred camera, poses, depth,
                      the Poisson surface over the open top trimmed, point colours; mesh:
                      the map's colours, the ceiling found and cut, the walls kept; view:
-                     floor holes filled (not under a box, a stair opening, over max), walls flat;
+                     floor holes filled (not under a box, a stair opening, over max), walls flat,
+                     a strip off a wall out (a vertical bar kept), the floor gray;
                      mirror ghosts and loose pieces (courtyard, floating) out, furniture kept;
                      objects (a ball, a rack of bars) meshed on their own, on them;
                      --radio: few faces, floor and ball within 5 cm, a checker shown by its texture
@@ -966,14 +967,18 @@ glass, put behind it: points no direct ray from the path reaches, cast from
 to the building (a piece of `--min-piece`, 50 m2, or more) out when open to
 the sky (a courtyard, facades and sheets seen through glass) or floating
 1.2 m or more above the floor (lamps, signs; furniture under a ceiling,
-down at the floor, stays), every flat 0.4 m cell's points put onto its plane (walls and floors
+down at the floor, stays), thin strips flying off the walls out (a line
+rather than a surface, lying or arching 0.3 m or more above the floor: glass
+edges the LiDAR saw without the glass; a vertical bar stays;
+`--keep-strips`), every flat 0.4 m cell's points put onto its plane (walls and floors
 thin), and the floor's holes filled at the height and in the colours of the
 floor around them. The floor is found from the trajectory (sensor height
 from the floor under the poses); filled are the holes enclosed by floor and
 walls and gaps up to 0.4 m, never under furniture or walls (points 0.15-0.6
 m above the floor), never over a stair opening or an atrium (points below
 it), never a courtyard (a hole over 1 m2 with a ceiling over less than
-`--roof`, 50 %, of it), each up to `--max-hole` m2. For looking at only: the reference map,
+`--roof`, 50 %, of it), each up to `--max-hole` m2. `--floor-colour gray` (or `white`,
+`r,g,b`) paints the whole floor one colour. For looking at only: the reference map,
 and every measurement, stays `map_final_<tag>.pcd`.
 
 The scene, from a replica export with map depth made with the same poses:
