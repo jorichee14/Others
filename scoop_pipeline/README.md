@@ -1013,9 +1013,16 @@ split into floor, walls, ceiling and objects. Sionna loads `scene.xml`; it
 reads the `.ply` files in `meshes/` beside it, so keep the folder whole:
 
     <mesh>_sionna/scene.xml                     sionna.rt.load_scene(".../scene.xml")
-    <mesh>_sionna/meshes/{floor,walls,ceiling,objects}.ply
+    <mesh>_sionna/meshes/{floor,walls,ceiling,objects}.ply   each in the mesh's colours, floor grey
+    <mesh>_sionna/parts.json                    faces and m2 per part, and left out
     <mesh>_sionna.ply                           to look at: its own colours, floor grey
     <mesh>_sionna_labels.ply                    to check: floor grey, walls beige, ceiling white, objects orange
+    <mesh>_sionna_left_out.ply                  what --traj left out (hanging from the ceiling), to look at
+
+Every face of the mesh is in one part or left out: checked on every run
+(the run stops when not) and printed as faces in = floor + walls + ceiling
++ objects + left out. Sionna ignores the parts' colours (it shows its
+materials'); Mitsuba warns that they are integers, harmlessly.
 
 The labels are found on a copy of 4,000,000 faces and every face takes its
 nearest one's: floor, the horizontal faces within 0.25 m of the floor (with

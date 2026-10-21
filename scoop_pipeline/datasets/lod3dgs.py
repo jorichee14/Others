@@ -1151,7 +1151,10 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     <out>/meshes/{floor,walls,ceiling,objects}.ply, each an ITU radio
     material (materials: {part: (ITU type, thickness m)} over
     SIONNA_MATERIALS; split_objects: each object its own
-    meshes/objects/obj_NNN.ply; no colours: Sionna shows its materials'). To
+    meshes/objects/obj_NNN.ply), each in the mesh's colours (the floor
+    floor_colour; Sionna shows its materials' own). Every face is in one
+    part or left out (written to <out>_left_out.ply), checked, and the
+    counts written to <out>/parts.json. To
     look at: <out>.ply, all of it in its own colours with the floor
     floor_colour, and <out>_labels.ply in the parts' colours (PART_COLOURS).
 
@@ -1246,6 +1249,15 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
                        f'        <ref id="mat-{mid}" name="bsdf"/>',
                        "    </shape>"])
 
+    def coloured(q, name):
+        """A part in the mesh's colours, the floor floor_colour."""
+        q = bare(q, colours=True)
+        if not q.has_vertex_colors():
+            q.paint_uniform_color((0.6, 0.6, 0.6))
+        if name == "floor" and floor_colour is not None:
+            q.paint_uniform_color(floor_colour)
+        return q
+
     lab = o3d.geometry.TriangleMesh()
     for name in ("floor", "walls", "ceiling", "objects"):
         sel = fpart == name
@@ -1261,10 +1273,10 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
             os.makedirs(os.path.join(sdir, "meshes", "objects"), exist_ok=True)
             for k, oid in enumerate(np.unique(fobj[sel])):
                 rel = f"meshes/objects/obj_{k:03d}.ply"
-                o3d.io.write_triangle_mesh(os.path.join(sdir, rel), bare(sub_mesh(sel & (fobj == oid))))
+                o3d.io.write_triangle_mesh(os.path.join(sdir, rel), coloured(sub_mesh(sel & (fobj == oid)), name))
                 shape(f"obj_{k:03d}", rel, mid)
         else:
-            o3d.io.write_triangle_mesh(os.path.join(sdir, "meshes", name + ".ply"), bare(q))
+            o3d.io.write_triangle_mesh(os.path.join(sdir, "meshes", name + ".ply"), coloured(q, name))
             shape(name, f"meshes/{name}.ply", mid)
     sx = os.path.join(sdir, "scene.xml")
     open(sx, "w").write("\n".join(['<scene version="2.1.0">', *sum(xml_mats.values(), []), *shapes,
@@ -1279,7 +1291,24 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     vp, lp = base + ".ply", base + "_labels.ply"
     o3d.io.write_triangle_mesh(vp, view)
     o3d.io.write_triangle_mesh(lp, lab)
-    report += [f"sionna scene {sx} (loads meshes/ beside it; keep the folder whole):"]
+    # every face accounted: in a part, or left out (written apart to look at)
+    n_out = int((fpart == "gone").sum())
+    if sum(used.values()) + n_out != len(Ff):
+        raise ConvertError(f"faces not accounted: {len(Ff)} in, {sum(used.values())} in the parts, {n_out} left out")
+    op = None
+    if n_out:
+        op = base + "_left_out.ply"
+        o3d.io.write_triangle_mesh(op, bare(sub_mesh(fpart == "gone"), colours=True))
+    import json
+    json.dump({"mesh": mesh_path, "faces_in": int(n0), "faces": int(len(Ff)),
+               "parts": {n: {"faces": used[n], "m2": round(float(Af[fpart == n].sum()), 2),
+                             "itu": mats[n][0], "thickness_m": float(mats[n][1])} for n in used},
+               "left_out": {"faces": n_out, "m2": round(float(Af[fpart == "gone"].sum()), 2), "file": op}},
+              open(os.path.join(sdir, "parts.json"), "w"), indent=1)
+    report += [f"every face accounted: {len(Ff)} = " + " + ".join(f"{used[n]} {n}" for n in used)
+               + f" + {n_out} left out" + (f" ({op})" if op else "")
+               + (f"  [the mesh's {n0} faces simplified to {len(Ff)} first]" if len(Ff) != n0 else "")]
+    report += [f"sionna scene {sx} (loads meshes/ beside it; keep the folder whole; parts.json: the counts):"]
     report += [f"  {n}: {used[n]} faces, ITU {mats[n][0]} {float(mats[n][1]):g} m" for n in used]
     report += [f"  load: sionna.rt.load_scene(\"{sx}\"" + (", merge_shapes=False" if split_objects else "")
                + ")",
@@ -1287,7 +1316,7 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
                "ceiling white, objects orange)"]
     log.info("\n".join(report))
     return {"out": sx, "scene": sx, "view": vp, "labels": lp, "faces": sum(used.values()), **used,
-            "left_out": int((fpart == "gone").sum()),
+            "left_out": n_out, "left_out_file": op,
             "n_objects": int(len(np.unique(fobj[fpart == "objects"])))}
 
 

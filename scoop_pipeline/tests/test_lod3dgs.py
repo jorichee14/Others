@@ -525,7 +525,7 @@ def check_sionna(tmp):
     parts = {}
     for n in ("floor", "ceiling", "walls", "objects"):
         q = o3d.io.read_triangle_mesh(os.path.join(os.path.dirname(r["scene"]), "meshes", n + ".ply"))
-        assert len(q.triangles) and not q.has_vertex_colors(), n
+        assert len(q.triangles) and q.has_vertex_colors(), n
         parts[n] = np.asarray(q.vertices)[np.asarray(q.triangles)].mean(1)
     inside = lambda Q, x0, x1, y0, y1, z0, z1: ((Q[:, 0] > x0) & (Q[:, 0] < x1) & (Q[:, 1] > y0)  # noqa: E731
                                                & (Q[:, 1] < y1) & (Q[:, 2] > z0) & (Q[:, 2] < z1)).sum()
@@ -637,6 +637,12 @@ def check_hanging(tmp):
                                                                int(near_ref.sum()))
     assert sheet_faces(keep) > 500, ("the sheet not in the mesh to start with", sheet_faces(keep))
     assert sheet_faces(gone) == 0, ("the sheet hanging from the ceiling kept", sheet_faces(gone))
+    lo_ = o3d.io.read_triangle_mesh(gone["left_out_file"])
+    import json
+    pj = json.load(open(os.path.join(tmp, "hang_gone", "parts.json")))
+    assert len(lo_.triangles) == gone["left_out"] == pj["left_out"]["faces"] > 0 and \
+        sum(v["faces"] for v in pj["parts"].values()) + pj["left_out"]["faces"] == pj["faces"], \
+        ("the left-out faces not written apart, or faces not accounted", gone["left_out"], pj)
     assert gone["ceiling"] > 0.95 * keep["ceiling"] and gone["walls"] > 0.9 * (keep["walls"] - 2400), \
         ("ceiling or walls lost", gone, keep)
     return sheet_faces(keep)
