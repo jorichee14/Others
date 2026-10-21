@@ -985,7 +985,8 @@ from its pairs (--new starts again; --redo d3 drops d3 and the next pair
 clicked is d3 again, to pick one again that is not the last). Scroll zooms around the cursor, a
 right-button drag moves the view, h shows the whole map; u undoes the last
 click; q or closing the window finishes. A corner to a wall (the meter
-at the tip where two walls meet, aimed square at the wall across): press c,
+at the tip where two walls meet, aimed square at the wall across): press c
+(for that pair only; c again before clicking goes back to walls),
 click near the corner (its two walls are fitted and the corner put where
 they cross), then click the wall across where the laser dot landed; the
 distance is from the corner square to that wall, and counts in the totals. The picks are also saved as
@@ -1533,7 +1534,7 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
     tb = TextBox(fig.add_axes([0.32, 0.025, 0.2, 0.045]), "meter reading of the last pair (m or mm), Enter: ",
                  initial="")
     stats = fig.text(0.55, 0.04, summary_line(distance_summary(pk.res)), fontsize=11, color="#b4501f")
-    head = ("left click: wall A, then wall B, then type the reading + Enter  ·  c: A is a corner  ·  "
+    head = ("left click: wall A, then wall B, then type the reading + Enter  ·  c: A is a corner (on / off)  ·  "
             "scroll: zoom  ·  right drag: move  ·  h: whole map  ·  u: undo  ·  q: done")
     home = (ax.get_xlim(), ax.get_ylim())
     drag = {}
@@ -1595,10 +1596,13 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
         elif ev.key == "c":
             if len(pk.picks) % 2:
                 say("c: a corner is A; click wall B of this pair first, or u")
+            elif pk.corner:                           # c again: back to walls
+                pk.corner = False
+                say(f"{pk.peek()}: walls again; click wall A")
             else:
                 pk.corner = True
                 say(f"{pk.peek()}: click near the corner (where two straight walls meet), then the wall across "
-                    "where the laser dot landed")
+                    "where the laser dot landed  (c again: walls)")
         elif ev.key == "h":
             ax.set_xlim(*home[0])
             ax.set_ylim(*home[1])

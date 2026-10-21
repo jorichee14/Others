@@ -178,6 +178,16 @@ def main():
                             f.canvas.callbacks.process("key_press_event", KeyEvent("key_press_event", f.canvas,
                                                                                     key))
             return show
+        # c, c again: back to walls; the pair after is two walls
+        plt.show = drive([("keys", ["c", "c"]), ("click", (0.35, 3.0)), ("click", (7.6, 3.1)),
+                          ("keys", list("8") + ["enter"])])
+        try:
+            gotc = maps.click_plan(P, cKDTree(P), (0.3, 1.2), 0.3, map_path="m")
+        finally:
+            plt.show = real_show
+            plt.close("all")
+        ok = len(gotc) == 1 and gotc[0][4] == "wall"
+        (print if ok else fails.append)("  ok    c twice: back to walls" if ok else f"c twice: {gotc}")
         js2 = os.path.join(d, "win.json")
         plt.show = drive([("click", (0.35, 3.0)), ("click", (7.6, 3.1)), ("keys", list("8.0uq") + ["backspace"] * 2
                                                                           + ["enter"])])
