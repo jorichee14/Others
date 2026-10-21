@@ -1027,19 +1027,25 @@ materials'); Mitsuba warns that they are integers, harmlessly.
 The labels are found on a copy of 4,000,000 faces and every face takes its
 nearest one's: floor, the horizontal faces within 0.25 m of the floor (with
 `--traj` the nearest pose less the sensor height, so a reflection under the
-floor cannot pull it down; without, each 1 m cell's lowest); ceiling, horizontal 2 m or more above it; walls, flat
-near-vertical surfaces of 3 m2 or more from the floor (0.5 m) to 2.2 m or
-higher. The rest, in connected pieces: hanging 1.8 m or more up (lamps,
-beams, ducts) with the ceiling; floor to 2.2 m (a round pillar, a door
-frame), under 0.05 m2, or bigger than an object (3 m across, 2 m tall,
-10 m2) with the walls; the others objects. With `--traj` (the mesh's
+floor cannot pull it down; without, each 1 m cell's lowest); ceiling,
+horizontal 2 m or more above it; walls, first the wall planes (flat
+near-vertical surfaces of 3 m2 or more reaching 2.2 m or higher), then every
+face on one of them (within 5 cm of its plane, facing it, inside its
+extent), so a wall's rough parts go with it and a desk or cabinet in front
+of it does not; what is left within 8 cm of a floor, wall or ceiling face
+(the seams where they meet) goes with it. The rest, in connected pieces,
+are objects, but: bigger than furniture (3 m across, 2 m tall, 10 m2) or
+a round pillar (floor to 2.2 m, facing sideways): walls; hanging 1.8 m or
+more up (lamps, beams): ceiling; under 0.05 m2: the part next to it. With `--traj` (the mesh's
 frame; anchored: `odometry/reference_<tag>/traj_mobile_2_lidar.tum`) what
 the `_noceil` copy drops as hanging from the ceiling only (a reflection
 joined to a mirrored ceiling: loose once the ceiling is cut, and reaching up
 to the cut) is left out too; furniture, loose but well under the ceiling,
 stays. `--faces N` simplifies the whole mesh first (0: as it is). Each part an
 ITU material, `--material PART=TYPE[:THICKNESS m]` (default concrete 0.2 m,
-objects wood 0.05 m); `--split-objects` writes each object to
+objects wood 0.05 m); `--normals` writes the parts with vertex normals (a
+viewer shades them as surfaces; without, the per-vertex colours make a
+mesh look like points); `--split-objects` writes each object to
 `meshes/objects/obj_NNN.ply` (load with `merge_shapes=False`; edit an
 object's material in `scene.xml`).
 

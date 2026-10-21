@@ -474,9 +474,9 @@ def check_ceilings(tmp):
 def check_sionna(tmp):
     """sionna on the mesh of a 5 m hall by a 3 m arcade (points with 5 mm
     noise) holding a table, a cabinet, a round pillar and a lamp hanging from
-    the hall's ceiling: the pillar with the walls, the lamp with the
-    ceiling, the table and the cabinet objects (loose, but well under the
-    ceiling: kept with --traj), every face in one part
+    the hall's ceiling, a desk against a wall: the pillar with the walls,
+    the lamp with the ceiling, the table, the cabinet and the desk objects
+    (the desk apart from the wall behind it, which is wall), every face in one part
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
@@ -502,6 +502,9 @@ def check_sionna(tmp):
                            + [box(x, x + 0.06, y, y + 0.06, 0, 0.72, top=False)
                               for x in (2.05, 3.09) for y in (4.05, 4.69)])
     cabinet = box(9.0, 9.6, 5.5, 5.98, 0, 1.2)
+    desk = np.concatenate([box(5.0, 6.2, 0.02, 0.62, 0.72, 0.75)]           # against the wall y = 0
+                          + [box(x, x + 0.06, y, y + 0.06, 0, 0.72, top=False)
+                             for x in (5.03, 6.11) for y in (0.05, 0.53)])
     lamp = np.concatenate([box(4.7, 5.3, 2.7, 3.3, 4.55, 4.7, top=False, bottom=True),
                            box(4.97, 5.03, 2.97, 3.03, 4.7, 5.0, top=False)])
     P = np.concatenate([sheet(2, 0.0, (0, 12), (0, 6)), sheet(2, 5.0, (0, 7), (0, 6)),
@@ -509,7 +512,7 @@ def check_sionna(tmp):
                         sheet(0, 7.0, (0, 6), (3, 5)), sheet(0, 12.0, (0, 6), (0, 3)),
                         sheet(1, 0.0, (0, 7), (0, 5)), sheet(1, 6.0, (0, 7), (0, 5)),
                         sheet(1, 0.0, (7, 12), (0, 3)), sheet(1, 6.0, (7, 12), (0, 3)),
-                        pillar, table, cabinet, lamp])
+                        pillar, table, cabinet, lamp, desk])
     P = P + rng.normal(0, 0.005, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     pc.colors = o3d.utility.Vector3dVector(np.full(P.shape, 0.5))
@@ -533,7 +536,9 @@ def check_sionna(tmp):
     for name, part, b_ in (("the pillar", "walls", (3.7, 4.3, 1.2, 1.8, 0.5, 4.5)),
                            ("the lamp", "ceiling", (4.6, 5.4, 2.6, 3.4, 4.5, 4.75)),
                            ("the table", "objects", (2.1, 3.1, 4.1, 4.7, 0.6, 0.8)),
-                           ("the cabinet", "objects", (9.05, 9.55, 5.45, 5.95, 0.3, 1.25))):
+                           ("the cabinet", "objects", (9.05, 9.55, 5.45, 5.95, 0.3, 1.25)),
+                           ("the desk against the wall", "objects", (5.1, 6.1, 0.15, 0.6, 0.6, 0.8)),
+                           ("the wall over the desk", "walls", (5.1, 6.1, -0.05, 0.05, 1.0, 2.5))):
         assert inside(parts[part], *b_) > 0, (name, "not with", part)
         for other in parts:
             if other != part:
@@ -748,7 +753,8 @@ def main():
         rs, ds = check_sionna(tmp)
         print(f"ok sionna: floor {rs['floor']}, ceiling {rs['ceiling']}, walls {rs['walls']}, "
               f"objects {rs['objects']} ({rs['n_objects']} of them); a pillar with the walls, a lamp with "
-              "the ceiling, a table and a cabinet objects, every face kept"
+              "the ceiling, a table, a cabinet and a desk against a wall objects (the wall behind it wall), "
+              "every face kept"
               + (f"; Sionna RT traced delays {ds} ns" if ds is not None
                  else " (Sionna RT not installed: not loaded)"))
         rm = check_mesh(tmp)

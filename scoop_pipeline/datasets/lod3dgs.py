@@ -1060,26 +1060,37 @@ def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
     return gone
 
 
-def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_low=0.5, wall_high=2.2,
-                vertical=0.3, lamp_h=1.8, min_obj=0.05, obj_extent=3.0, obj_height=2.0, obj_area=10.0,
-                T=None):
+def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2, vertical=0.3,
+                on_wall=0.05, facing_deg=30.0, reach=0.2, lamp_h=1.8, min_obj=0.05, pillar=0.8, seam=0.08,
+                obj_extent=3.0, obj_height=2.0, obj_area=10.0, T=None):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
     each object face its object's number (-1 for the rest).
+
     The floor: with T (the trajectory, the mesh's frame) the nearest pose's
     height less the sensor height, as fill_floor takes it, so whatever lies
     under the floor (a reflection in polished stone, a step down) cannot
     lower it; without, the lowest of each cell round (floor_grid). Floor:
     horizontal (|n_z| over flat) within band of it (with T: either side);
-    ceiling: horizontal roof_h or more above it. Walls: flat surfaces
-    (plane_faces) near vertical (|n_z| under `vertical`) of wall_area m2 or
-    more from wall_low or less over the floor to wall_high or more. The rest,
-    in connected pieces: a piece wholly lamp_h or more up hangs from the
-    ceiling (lamps, beams, ducts): ceiling; one from the floor to wall_high
-    (a round pillar, a door frame), under min_obj m2 (a scrap between walls)
-    or reaching no higher than band (the floor's bumps): with them; the
-    others objects, when object-sized (obj_extent m across, obj_height m
-    tall, obj_area m2 at most), else with the walls (a stretch of wall that
-    is not flat or not full height: kept as the mesh has it)."""
+    ceiling: horizontal roof_h or more above it.
+
+    Walls: the wall planes, flat surfaces (plane_faces) near vertical
+    (|n_z| under `vertical`) of wall_area m2 or more reaching wall_high or
+    more over the floor (above a cabinet too); then every face on one of
+    them: within on_wall of its plane, facing it to facing_deg, inside its
+    extent (along it and up, reach m more), so the rough parts of a wall go
+    with it and what stands in front of it (a desk, a cabinet: farther than
+    on_wall, or facing up) does not.
+
+    The rest within seam of a floor, wall or ceiling face (the rounded
+    strips where they meet) goes with it. Then, in connected pieces, objects
+    (a desk by a wall comes apart from it, the wall taken first), but: one
+    bigger than furniture (obj_extent m across, obj_height m tall or
+    obj_area m2: a stretch of wall too rough for a plane): walls; one wholly lamp_h or more up hangs
+    from the ceiling (lamps, beams, ducts): ceiling; one from the floor (0.5
+    m) to wall_high, pillar of its area or more facing sideways (a round
+    pillar): walls; one reaching no higher than band (the floor's bumps):
+    floor; one under min_obj m2 (a scrap at a seam): the part of the
+    nearest labelled face."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
     V, F = np.asarray(m.vertices), np.asarray(m.triangles)
@@ -1099,16 +1110,49 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_low=0.5,
     part = np.full(len(F), "", dtype=object)
     part[hor & on_floor] = "floor"
     part[hor & (dz >= roof_h)] = "ceiling"
+    # the wall planes
     sid, snz = plane_faces(C, N)
     s_ok = sid >= 0
     ns = len(snz)
     s_area = np.bincount(sid[s_ok], A[s_ok], ns)
-    s_lo = np.full(ns, np.inf)
     s_hi = np.full(ns, -np.inf)
-    np.minimum.at(s_lo, sid[s_ok], dz[s_ok])
     np.maximum.at(s_hi, sid[s_ok], dz[s_ok])
-    wall_s = (snz < vertical) & (s_area >= wall_area) & (s_lo <= wall_low) & (s_hi >= wall_high)
-    part[(part == "") & s_ok & wall_s[np.maximum(sid, 0)]] = "walls"
+    wall_s = np.flatnonzero((snz < vertical) & (s_area >= wall_area) & (s_hi >= wall_high))
+    cand = np.flatnonzero(part == "")
+    if len(wall_s) and len(cand):
+        ctree = cKDTree(C[cand, :2])
+        cosf = np.cos(np.radians(facing_deg))
+        isw = np.zeros(len(F), bool)
+        for k in wall_s:
+            mem = np.flatnonzero(sid == k)
+            w = A[mem] / A[mem].sum()
+            mu = w @ C[mem]
+            X = (C[mem] - mu) * np.sqrt(w)[:, None]
+            n = np.linalg.svd(X, full_matrices=False)[2][2]
+            n[2] = 0.0
+            n /= np.linalg.norm(n) or 1.0
+            t = np.array([-n[1], n[0], 0.0])
+            u = (C[mem] - mu) @ t
+            u0, u1 = u.min() - reach, u.max() + reach
+            z0, z1 = C[mem, 2].min() - reach, C[mem, 2].max() + reach
+            mid = mu + t * (u0 + u1) / 2
+            idx = cand[np.asarray(ctree.query_ball_point(mid[:2], (u1 - u0) / 2 + on_wall + 0.01), np.int64)]
+            if not len(idx):
+                continue
+            d = (C[idx] - mu) @ n
+            uu = (C[idx] - mu) @ t
+            ok = (np.abs(d) < on_wall) & (np.abs(N[idx] @ n) > cosf) & (uu >= u0) & (uu <= u1) & \
+                (C[idx, 2] >= z0) & (C[idx, 2] <= z1)
+            isw[idx[ok]] = True
+        part[isw] = "walls"
+    # the seams: what is left within `seam` of a floor, wall or ceiling face goes with it
+    rest = np.flatnonzero(part == "")
+    lab = np.flatnonzero(part != "")
+    if len(rest) and len(lab):
+        d, i = cKDTree(C[lab]).query(C[rest], workers=-1, distance_upper_bound=seam)
+        hit = np.isfinite(d)
+        part[rest[hit]] = part[lab[i[hit]]]
+    # the rest, in connected pieces
     rest = np.flatnonzero(part == "")
     obj = np.full(len(F), -1)
     if len(rest):
@@ -1120,31 +1164,39 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_low=0.5,
         comp = comp.ravel()
         nc = comp.max() + 1
         c_area = np.bincount(comp, A[rest], nc)
+        side = np.bincount(comp, A[rest] * (np.abs(N[rest, 2]) < vertical), nc) / np.maximum(c_area, 1e-12)
         c_lo = np.full(nc, np.inf)
         c_hi = np.full(nc, -np.inf)
         np.minimum.at(c_lo, comp, dz[rest])
         np.maximum.at(c_hi, comp, dz[rest])
         kind = np.full(nc, "objects", dtype=object)
-        kind[(c_lo <= wall_low) & (c_hi >= wall_high)] = "walls"
         Cr = C[rest]
         lo2 = np.full((nc, 2), np.inf)
         hi2 = np.full((nc, 2), -np.inf)
         np.minimum.at(lo2, comp, Cr[:, :2])
         np.maximum.at(hi2, comp, Cr[:, :2])
-        big = ((hi2 - lo2).max(1) > obj_extent) | (c_hi - c_lo > obj_height) | (c_area > obj_area)
-        kind[big] = "walls"
-        kind[c_area < min_obj] = "walls"
+        kind[((hi2 - lo2).max(1) > obj_extent) | (c_hi - c_lo > obj_height) | (c_area > obj_area)] = "walls"
+        kind[(c_lo <= 0.5) & (c_hi >= wall_high) & (side >= pillar)] = "walls"
         kind[c_hi <= band] = "floor"
         kind[c_lo >= lamp_h] = "ceiling"
+        scrap = c_area < min_obj
+        kind[scrap] = ""
         part[rest] = kind[comp]
         is_obj = kind[comp] == "objects"
         _, num = np.unique(comp[is_obj], return_inverse=True)
         obj[rest[is_obj]] = num.ravel()
+        sf = rest[scrap[comp]]                       # scraps: the nearest labelled face's part (and object)
+        lab = np.flatnonzero(part != "")
+        if len(sf) and len(lab):
+            _, i = cKDTree(C[lab]).query(C[sf], workers=-1)
+            part[sf], obj[sf] = part[lab[i]], obj[lab[i]]
+        elif len(sf):
+            part[sf] = "objects"
     return part, obj
 
 
 def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000000, split_objects=False,
-                floor_colour=(0.8, 0.8, 0.8), traj=None, ceil_margin=0.10, min_piece=50.0):
+                floor_colour=(0.8, 0.8, 0.8), traj=None, ceil_margin=0.10, min_piece=50.0, normals=False):
     """The mesh (the one with its ceiling: the radio waves bounce off it) as
     a Sionna RT scene, its own faces split into floor, walls, ceiling and
     objects: <out>/scene.xml (what Sionna loads: sionna.rt.load_scene) with
@@ -1152,7 +1204,8 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     material (materials: {part: (ITU type, thickness m)} over
     SIONNA_MATERIALS; split_objects: each object its own
     meshes/objects/obj_NNN.ply), each in the mesh's colours (the floor
-    floor_colour; Sionna shows its materials' own). Every face is in one
+    floor_colour; Sionna shows its materials' own; normals: with vertex
+    normals, so a viewer shades them as surfaces). Every face is in one
     part or left out (written to <out>_left_out.ply), checked, and the
     counts written to <out>/parts.json. To
     look at: <out>.ply, all of it in its own colours with the floor
@@ -1256,6 +1309,8 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
             q.paint_uniform_color((0.6, 0.6, 0.6))
         if name == "floor" and floor_colour is not None:
             q.paint_uniform_color(floor_colour)
+        if normals:                    # a viewer then shades it as a surface (its colours greyed)
+            q.compute_vertex_normals()
         return q
 
     lab = o3d.geometry.TriangleMesh()
@@ -1624,6 +1679,8 @@ def main():
                                                          "(0: as it is)")
     sn.add_argument("--split-objects", action="store_true",
                     help="each object its own meshes/objects/obj_NNN.ply (a material each, by editing scene.xml)")
+    sn.add_argument("--normals", action="store_true",
+                    help="write the parts with vertex normals: a viewer shades them as surfaces (colours greyed)")
     sn.add_argument("--floor-grey", type=float, default=0.8,
                     help="the floor of <out>.ply in this grey (0 black to 1 white; negative: its own colours)")
     sn.add_argument("--material", action="append", default=[], metavar="PART=TYPE[:THICKNESS]",
@@ -1663,7 +1720,8 @@ def main():
                              + ", ".join(SIONNA_MATERIALS))
                 mats[part] = (typ, float(th) if th else SIONNA_MATERIALS[part][1])
             sionna_mesh(a.file, a.out, faces=a.faces, materials=mats, split_objects=a.split_objects,
-                        traj=a.traj, floor_colour=None if a.floor_grey < 0 else (a.floor_grey,) * 3)
+                        traj=a.traj, normals=a.normals,
+                        floor_colour=None if a.floor_grey < 0 else (a.floor_grey,) * 3)
         elif a.cmd == "scene":
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,
                     poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
