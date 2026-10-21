@@ -625,6 +625,36 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
     return res
 
 
+def anchor_file(path, frame, out=None):
+    """A cloud or mesh made in GLIM's world moved into the anchored map frame
+    with 05's T_N_world (frames/anchor_frame.json), as the anchored map and
+    the anchored track are: <name>_anchored. Lets view and mesh run on
+    map_final and the BA trajectory and their results be anchored after."""
+    import json
+    o3d = _o3d()
+    path = os.path.expanduser(path)
+    stem, ext = os.path.splitext(path)
+    out = out or stem + "_anchored" + ext
+    af = json.load(open(os.path.expanduser(frame)))
+    if af.get("input_camera_anchored"):
+        raise ConvertError(f"{frame}: the map was anchored at the camera start; T_N_world is not the cloud's move")
+    T = np.array(af["T_N_world"], float)
+    m = o3d.io.read_triangle_mesh(path)
+    if len(m.triangles):
+        m.transform(T)
+        o3d.io.write_triangle_mesh(out, m)
+        n = f"{len(m.triangles)} faces"
+    else:
+        pc = o3d.io.read_point_cloud(path)
+        if not len(pc.points):
+            raise ConvertError(f"{path}: no faces or points")
+        pc.transform(T)
+        o3d.io.write_point_cloud(out, pc)
+        n = f"{len(pc.points)} points"
+    log.info(f"{out}: {n} moved into the anchored frame (T_N_world of {frame})")
+    return out
+
+
 def sample_mesh(mesh, spacing=0.04):
     """Points evenly over the mesh, about `spacing` apart."""
     area = mesh.get_surface_area()
@@ -832,10 +862,16 @@ def main():
                     help="share of a hole that must have a ceiling over it (0: courtyards too)")
     vw.add_argument("--ceil", default=None, help="remove points above Z, or 'auto'")
     vw.add_argument("--ceil-margin", type=float, default=0.10)
+    an = sub.add_parser("anchor", help="a cloud or mesh made in GLIM's world into the anchored frame (05)")
+    an.add_argument("file", help="a cloud or mesh made from map_final with the BA trajectory")
+    an.add_argument("out", nargs="?", default=None, help="default: <file>_anchored")
+    an.add_argument("--frame", required=True, help="05's frames/anchor_frame.json")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        if a.cmd == "scene":
+        if a.cmd == "anchor":
+            anchor_file(a.file, a.frame, a.out)
+        elif a.cmd == "scene":
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,
                     poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
                     color_views=a.color_views, jpeg_quality=a.jpeg_quality)

@@ -949,6 +949,11 @@ it), never a courtyard (a hole over 1 m2 with a ceiling over less than
 `--roof`, 50 %, of it), each up to `--max-hole` m2. For looking at only: the reference map,
 and every measurement, stays `map_final_<tag>.pcd`.
 
+Anchored: make the view and mesh from `map_final_<tag>.pcd` with the BA
+trajectory (GLIM's world), then move each into 05's frame:
+`lod3dgs.py anchor <view or mesh> --frame $P/frames/anchor_frame.json`
+-> `<name>_anchored` (T_N_world, the move the anchored map was made with).
+
 The scene, from a replica export with map depth made with the same poses:
 
 ```
