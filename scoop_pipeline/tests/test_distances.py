@@ -11,7 +11,7 @@ floor plan of --click: clicks up to 0.4 m off the walls find them, a
 click in an empty room is refused, u undoes, and the clicked pairs give the
 same distances through --click; the reading box: readings in m or mm,
 junk refused, errors and RMSE at once, the json saved, run again and a
-session resumed, --redo; the window's events sent by hand (keys typed in the box
+session resumed, --redo; a corner to a wall (key c); the window's events sent by hand (keys typed in the box
 not taken as commands).
 
     python tests/test_distances.py
@@ -212,6 +212,43 @@ def main():
         ok = abs(ln[0, 1] - ln[1, 1]) < 0.02 and abs(abs(ln[1, 0] - ln[0, 0]) - 8.0) < 0.02
         (print if ok else fails.append)("  ok    a pair drawn again: its line square to wall A, not pick to pick"
                                         if ok else f"redrawn line: {ln}")
+        # a corner to a wall: a room with a 45 deg wall cut across its corner, the tip
+        # where it meets the wall x = 8 at (8, 5): to the wall y = 0, 5 m; key c
+        rng2 = np.random.default_rng(1)
+        g = lambda a, b: np.arange(a, b, 0.02)                           # noqa: E731
+        Z = g(0, 3)
+        segs = [((0, 0), (0, 6)), ((0, 0), (8, 0)), ((8, 0), (8, 5)), ((0, 6), (7, 6)), ((8, 5), (7, 6))]
+        W = []
+        for (x0, y0), (x1, y1) in segs:
+            L_ = np.hypot(x1 - x0, y1 - y0)
+            t_ = g(0, L_) / L_
+            T_, Zz = np.meshgrid(t_, Z)
+            nrm = np.array([y1 - y0, x0 - x1]) / L_
+            off = rng2.normal(0, 0.01, T_.size)
+            W.append(np.c_[x0 + T_.ravel() * (x1 - x0) + off * nrm[0], y0 + T_.ravel() * (y1 - y0) + off * nrm[1],
+                           Zz.ravel()])
+        Xf, Yf = np.meshgrid(g(0, 8), g(0, 6))
+        Pc = np.vstack(W + [np.c_[Xf.ravel(), Yf.ravel(), rng2.normal(0, 0.01, Xf.size)]])
+        Sc = Pc[(Pc[:, 2] >= 0.3) & (Pc[:, 2] <= 1.2)]
+        fig, ax = plt.subplots()
+        pkc = maps.PlanPicker(ax, Pc, cKDTree(Pc), Sc)
+        pkc.corner = True
+        mc = [pkc.click(7.8, 4.9), pkc.click(7.4, 0.3), pkc.enter("5.000")]       # B where the dot landed
+        plt.close(fig)
+        rowc = pkc.res[-1] if pkc.res else None
+        tab = maps._distance_rows(cKDTree(Pc), Pc, pkc.rows(), 0.3)
+        fig, ax = plt.subplots()
+        pk3 = maps.PlanPicker(ax, Pc, cKDTree(Pc), Sc)
+        pk3.add(*pkc.rows()[0])
+        plt.close(fig)
+        ok = rowc is not None and "corner found" in mc[0] and abs(rowc[6] - 5.0) < 0.01 and \
+            np.linalg.norm(rowc[4][0][:2] - [8.0, 5.0]) < 0.03 and abs(tab[0][6] - 5.0) < 0.01 and \
+            tab[0][8] == "corner" and abs(pk3.res[0][6] - 5.0) < 0.01 and \
+            maps.distance_summary(pkc.res)["n"] == 1
+        (print if ok else fails.append)(
+            f"  ok    corner to wall (key c): the tip of a 45 deg wall at {rowc[4][0][:2].round(3)}, "
+            f"{rowc[6]:.3f} m to the wall across (5 m), counted; the table and a reopened session the same"
+            if ok else f"corner: {mc} {rowc and rowc[4:8]} {tab and tab[0][4:9]}")
         jd2 = json.load(open(js2))
         ok = len(got) == 1 and got[0][1] == 8.0 and len(got2) == 2 and got2[1][0] == "d2" and \
             abs(got2[1][1] - 6.002) < 1e-9 and jd2["summary"]["n"] == 2
@@ -220,7 +257,7 @@ def main():
                                         else f"window: {got} {got2} {jd2}")
 
         real, real_in, real_out = maps.click_plan, sys.stdin, sys.stdout
-        maps.click_plan = lambda *a, **k: [(n_, None, a_, b_) for n_, _, a_, b_ in pk.rows()]
+        maps.click_plan = lambda *a, **k: [(n_, None, a_, b_, k_) for n_, _, a_, b_, k_ in pk.rows()]
         sys.stdin, sys.stdout = io.StringIO("8.0\n6.0\n"), io.StringIO()
         try:
             maps.main_distances([os.path.join(d, "map.npy"), "--click", "--ask"])

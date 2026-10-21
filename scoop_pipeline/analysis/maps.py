@@ -984,7 +984,11 @@ map distance, reading and error and the totals are saved at once to
 from its pairs (--new starts again; --redo d3 drops d3 and the next pair
 clicked is d3 again, to pick one again that is not the last). Scroll zooms around the cursor, a
 right-button drag moves the view, h shows the whole map; u undoes the last
-click; q or closing the window finishes. The picks are also saved as
+click; q or closing the window finishes. A corner to a wall (the meter
+at the tip where two walls meet, aimed square at the wall across): press c,
+click near the corner (its two walls are fitted and the corner put where
+they cross), then click the wall across where the laser dot landed; the
+distance is from the corner square to that wall, and counts in the totals. The picks are also saved as
 <map>_picks.txt and the readings as <map>_distances.csv; the same check
 runs again without clicking: check.py distances <map.pcd> <map>_distances.json.
 
@@ -1077,6 +1081,59 @@ def wall_plane(tree, P, p, r, seed=0):
     return c, n, spread((Q - c) @ n), len(Q)
 
 
+def corner_fit(Q, q, r=0.7, band=0.03):
+    """The corner nearest q where two straight walls meet, from the points Q
+    round it (a slice, or a ball): RANSAC for a vertical plane, then on what
+    is off it for another 20 deg or more from it, each refitted by least
+    squares to its points within band; the corner where their lines cross
+    (in plan; at q's height). (corner xyz, (corner, n1, the thicker wall's
+    thickness m, points, n2)) or None (no second wall, or the crossing more
+    than r from q)."""
+    if len(Q) < 2 * MIN_PTS:
+        return None
+    rng = np.random.default_rng(0)
+    walls = []
+    rest = Q
+    for _ in range(2):
+        n1 = walls[0][1] if walls else None
+        w = _ransac(rest, rng, lambda a, n: abs(n[2]) < 0.17 and
+                    (n1 is None or abs(n @ n1) < np.cos(np.radians(20))), tries=400)
+        if w is None:
+            return None
+        c, n = w
+        for _ in range(3):
+            W = rest[np.abs((rest - c) @ n) < band]
+            if len(W) < MIN_PTS:
+                return None
+            c = W.mean(0)
+            n = np.linalg.svd(W - c, full_matrices=False)[2][2]
+        walls.append((c, n, spread((W - c) @ n), len(W)))
+        rest = rest[np.abs((rest - c) @ n) >= 2 * band]
+    (c1, n1, t1, k1), (c2, n2, t2, k2) = walls
+    M = np.array([n1[:2], n2[:2]])
+    if abs(np.linalg.det(M)) < 0.3:
+        return None
+    xy = np.linalg.solve(M, [n1 @ c1 - n1[2] * q[2], n2 @ c2 - n2[2] * q[2]])
+    corner = np.array([xy[0], xy[1], q[2]])
+    if np.linalg.norm(corner[:2] - np.asarray(q)[:2]) > r:
+        return None
+    return corner, (corner, n1, max(t1, t2), k1 + k2, n2)
+
+
+def corner_distance(c, B):
+    """(distance m, 0) from the corner c to wall B's plane, square to B: the
+    meter held at the corner aimed square at B (or on B, at the corner)."""
+    return float(abs((np.asarray(c, float) - B[0]) @ B[1])), 0.0
+
+
+def corner_at(tree, P, p, r=0.7, half=0.45):
+    """corner_fit on the map's points round p (within r, and half m of its height)."""
+    idx = tree.query_ball_point(p, r)
+    Q = P[idx]
+    Q = Q[np.abs(Q[:, 2] - p[2]) < half]
+    return corner_fit(Q, p, r)
+
+
 def wall_distance(A, B, pa=None):
     """(distance m, angle between the walls deg) of two wall_plane()s: the
     laser meter's line, from pa (the meter on wall A, put on A's plane;
@@ -1099,11 +1156,12 @@ def per_metre(ang):
 
 
 def read_json_distances(path):
-    """[(name, measured m or None, a xyz, b xyz)] from a --click session's json."""
+    """[(name, measured m or None, a xyz, b xyz, kind)] from a --click session's json
+    (kind: "wall", A a wall; "corner", A a corner)."""
     import json
     js = json.load(open(path))
-    return [(q["name"], q.get("measured_m"), np.array(q["a"], float), np.array(q["b"], float))
-            for q in js.get("pairs", [])]
+    return [(q["name"], q.get("measured_m"), np.array(q["a"], float), np.array(q["b"], float),
+             q.get("kind", "wall")) for q in js.get("pairs", [])]
 
 
 def read_distances(path, picks=None):
@@ -1222,15 +1280,18 @@ def write_distances_json(path, map_path, res, radius, zband=None):
     import json
     import time
     pairs = []
-    for name, m, pa, pb, A, B, d, ang in res:
+    for name, m, pa, pb, A, B, d, ang, *k in res:
+        kind = k[0] if k else "wall"
         q = {"name": name, "a": [round(float(v), 4) for v in pa], "b": [round(float(v), 4) for v in pb],
              "map_m": None if d is None else round(d, 4), "measured_m": m,
              "error_mm": None if (d is None or m is None) else round((d - m) * 1000, 1),
              "angle_deg": None if ang is None else round(ang, 2),
              "wall_a_cm": None if A is None else round(A[2] * 100, 2),
              "wall_b_cm": None if B is None else round(B[2] * 100, 2)}
+        if kind == "corner":
+            q["kind"] = "corner"
         if d is None:
-            q["flag"] = "no flat wall at a pick"
+            q["flag"] = "no flat wall at a pick" if kind == "wall" else "no corner at A or no wall at B"
         elif ang > 2.0:
             q["flag"] = f"not parallel: {per_metre(ang):.1f} cm per m along A; left out of the totals"
         pairs.append(q)
@@ -1259,6 +1320,7 @@ class PlanPicker:
         self.picks, self.artists = [], []           # (point on the wall, wall), [artists] per click
         self.res, self.labels = [], []               # per pair: its row, its label on the plan
         self.redo = []                               # names the next pairs take (--redo)
+        self.corner = False                          # the next A a corner (key c)
 
     def peek(self):
         """The name the next pair will take."""
@@ -1277,19 +1339,35 @@ class PlanPicker:
         nums = [int(r[0][1:]) for r in self.res if r[0][:1] == "d" and r[0][1:].isdigit()]
         return f"d{max(nums, default=0) + 1}"
 
-    def _pair(self, pa, pb, wa, wb):
+    def _pair(self, pa, pb, wa, wb, kind="wall"):
         """The pair's row: the table's walls round the picks (the floor
-        plan's slice walls when those find none)."""
-        A, B = wall_plane(self.tree, self.P, pa, self.radius), wall_plane(self.tree, self.P, pb, self.radius)
+        plan's slice walls when those find none); a corner A from the map
+        round it (the slice's when that finds none), the distance from it
+        square to B."""
+        B = wall_plane(self.tree, self.P, pb, self.radius)
+        if kind == "corner":
+            got = corner_at(self.tree, self.P, pa)
+            A = got[1] if got else wa
+            B = B if B is not None else wb
+            d, ang = corner_distance(A[0], B) if A is not None and B is not None else (None, None)
+            return [None, None, pa, pb, A, B, d, ang, kind]
+        A = wall_plane(self.tree, self.P, pa, self.radius)
         if A is None or B is None:
             A, B = wa, wb
         d, ang = wall_distance(A, B, pa)
-        return [None, None, pa, pb, A, B, d, ang]
+        return [None, None, pa, pb, A, B, d, ang, kind]
 
-    def _draw_pick(self, p, w):
-        """A pick on its wall: the wall's line 0.6 m either side, the pick a dot."""
+    def _draw_pick(self, p, w, kind="wall"):
+        """A pick on its wall: the wall's line 0.6 m either side, the pick a
+        dot; a corner: its two walls' lines 0.6 m from it."""
         art = []
-        if w is not None:
+        if w is not None and kind == "corner":
+            for n in (w[1], w[4]):
+                t = np.cross(n, [0, 0, 1.0])
+                t = t / (np.linalg.norm(t) or 1)
+                seg = np.array([p - 0.6 * t, p + 0.6 * t])
+                art += self.ax.plot(seg[:, 0], seg[:, 1], color="#1baf7a", lw=4)
+        elif w is not None:
             t = np.cross(w[1], [0, 0, 1.0])
             t = t / (np.linalg.norm(t) or 1)
             seg = np.array([p - 0.6 * t, p + 0.6 * t])
@@ -1303,6 +1381,9 @@ class PlanPicker:
         pa, A, B, d = row[2], row[4], row[5], row[6]
         if d is None:
             q1 = row[3]
+        elif row[8:9] == ["corner"]:                   # from the corner square to B
+            pa = A[0]
+            q1 = pa - B[1] * ((pa - B[0]) @ B[1])
         else:
             na = A[1] if (B[0] - pa) @ A[1] > 0 else -A[1]
             q1 = pa + na * d
@@ -1314,26 +1395,40 @@ class PlanPicker:
         return lab
 
     def _label(self, row):
-        name, m, _, _, _, _, d, _ = row
+        name, m, d = row[0], row[1], row[6]
         if m is None:
             return f" {name}  {d:.3f} m"
         return f" {name}  map {d:.3f} · meter {m:.3f} · {(d - m) * 1000:+.0f} mm"
 
     def click(self, x, y):
-        """A click at (x, y): a message; the pick is kept only near a straight wall."""
+        """A click at (x, y): a message; the pick is kept only near a straight
+        wall, or, after key c for A, a corner of two."""
+        if self.corner and len(self.picks) % 2 == 0:
+            q = np.array([x, y, float(np.median(self.S[:, 2]))])
+            Q = self.S[self.stree.query_ball_point([x, y], 0.7)]
+            got = corner_fit(Q, q) if len(Q) else None
+            if got is None:
+                self.ax.plot(x, y, "x", color="#d03b3b", ms=10, mew=2)
+                return "no corner of two straight walls within 0.7 m of the click: click closer to the corner"
+            p, w = got
+            self.picks.append((p, w, "corner"))
+            self.artists.append(self._draw_pick(p, w, "corner"))
+            self.corner = False
+            return (f"{self.peek()}: corner found ({np.degrees(np.arccos(min(1.0, abs(w[1] @ w[4])))):.0f} deg "
+                    "between its walls); now click the wall across where the laser dot landed")
         w = wall_near(self.S, self.stree, x, y, self.r)
         if w is None:
             self.ax.plot(x, y, "x", color="#d03b3b", ms=10, mew=2)
             return f"no straight wall within {self.r:g} m of the click: click closer to a wall line"
         p = w[4]
         art = self._draw_pick(p, w)
-        self.picks.append((p, w))
+        self.picks.append((p, w, "wall"))
         k = len(self.picks)
         if k % 2:
             self.artists.append(art)
             return f"{self.peek()}: wall A found ({w[2] * 100:.1f} cm thick); now click wall B"
-        (pa, wa), (pb, wb) = self.picks[-2], self.picks[-1]
-        row = self._pair(pa, pb, wa, wb)
+        (pa, wa, kind), (pb, wb, _) = self.picks[-2], self.picks[-1]
+        row = self._pair(pa, pb, wa, wb, kind)
         d, ang = row[6], row[7]
         if d is None:
             self.picks.pop()
@@ -1345,6 +1440,8 @@ class PlanPicker:
         self.artists.append(art)
         self.res.append(row)
         self.labels.append(lab)
+        if kind == "corner":
+            return f"{row[0]} = {d:.3f} m, corner square to the wall; type the meter's reading below"
         warn = (f"  (not parallel: {per_metre(ang):.1f} cm per m along A, so click A where the meter "
                 "was; left out of the totals)") if ang > 2.0 else ""
         return f"{row[0]} = {d:.3f} m, walls {ang:.1f} deg apart{warn}; type the meter's reading below"
@@ -1366,20 +1463,26 @@ class PlanPicker:
         return (f"{row[0]}: map {row[6]:.3f} m, meter {m:.3f} m, error {(row[6] - m) * 1000:+.1f} mm{warn}"
                 f"  ·  {summary_line(distance_summary(self.res))}; next: wall A of {self.peek()}")
 
-    def add(self, name, m, pa, pb):
+    def add(self, name, m, pa, pb, kind="wall"):
         """A pair from an earlier session: drawn, measured again, its reading kept."""
-        wa = wall_near(self.S, self.stree, pa[0], pa[1], self.r)
+        pa, pb = np.asarray(pa, float), np.asarray(pb, float)
+        if kind == "corner":
+            got = corner_fit(self.S[self.stree.query_ball_point(pa[:2], 0.7)], pa)
+            wa = got[1] if got else None
+        else:
+            wa = wall_near(self.S, self.stree, pa[0], pa[1], self.r)
         wb = wall_near(self.S, self.stree, pb[0], pb[1], self.r)
-        self.picks += [(np.asarray(pa, float), wa), (np.asarray(pb, float), wb)]
-        row = self._pair(np.asarray(pa, float), np.asarray(pb, float), wa, wb)
+        self.picks += [(pa, wa, kind), (pb, wb, "wall")]
+        row = self._pair(pa, pb, wa, wb, kind)
         row[0], row[1] = name, m
         self.res.append(row)
-        art = self._draw_pick(np.asarray(pa, float), wa) + self._draw_pick(np.asarray(pb, float), wb)
+        art = self._draw_pick(pa, wa, kind) + self._draw_pick(pb, wb)
         lab = self._draw_line(row, art)
         self.artists += [[], art]
         self.labels.append(lab)
 
     def undo(self):
+        self.corner = False
         if not self.picks:
             return "nothing to undo"
         if len(self.picks) % 2 == 0:                   # B of a pair: the pair and its reading go
@@ -1392,11 +1495,11 @@ class PlanPicker:
 
     def points(self):
         n = len(self.picks) // 2 * 2
-        return [p.tolist() for p, _ in self.picks[:n]]
+        return [q[0].tolist() for q in self.picks[:n]]
 
     def rows(self):
-        """[(name, measured m or None, a, b)] of the pairs."""
-        return [(r[0], r[1], r[2], r[3]) for r in self.res]
+        """[(name, measured m or None, a, b, kind)] of the pairs."""
+        return [(r[0], r[1], r[2], r[3], r[8]) for r in self.res]
 
 
 def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earlier=(), map_path="",
@@ -1424,14 +1527,14 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
     pk = PlanPicker(ax, P, tree, S, radius)
-    for name, m, pa, pb in earlier:
-        pk.add(name, m, pa, pb)
+    for name, m, pa, pb, *k in earlier:
+        pk.add(name, m, pa, pb, *k)
     pk.redo = list(redo)
     tb = TextBox(fig.add_axes([0.32, 0.025, 0.2, 0.045]), "meter reading of the last pair (m or mm), Enter: ",
                  initial="")
     stats = fig.text(0.55, 0.04, summary_line(distance_summary(pk.res)), fontsize=11, color="#b4501f")
-    head = ("left click: wall A, then wall B, then type the reading + Enter  ·  scroll: zoom  ·  "
-            "right drag: move  ·  h: whole map  ·  u: undo  ·  q: done")
+    head = ("left click: wall A, then wall B, then type the reading + Enter  ·  c: A is a corner  ·  "
+            "scroll: zoom  ·  right drag: move  ·  h: whole map  ·  u: undo  ·  q: done")
     home = (ax.get_xlim(), ax.get_ylim())
     drag = {}
     ax.set_title(head + "\n" + (f"{len(pk.res)} pairs from before; " if pk.res else "")
@@ -1489,6 +1592,13 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
         if ev.key == "u":
             say(pk.undo())
             keep()
+        elif ev.key == "c":
+            if len(pk.picks) % 2:
+                say("c: a corner is A; click wall B of this pair first, or u")
+            else:
+                pk.corner = True
+                say(f"{pk.peek()}: click near the corner (where two straight walls meet), then the wall across "
+                    "where the laser dot landed")
         elif ev.key == "h":
             ax.set_xlim(*home[0])
             ax.set_ylim(*home[1])
@@ -1518,19 +1628,27 @@ def click_plan(P, tree, zband=(0.3, 1.2), radius=0.3, cell=0.03, save=None, earl
 
 
 def _distance_rows(tree, P, rows, radius):
-    """[(name, measured, a, b, A, B, d, angle)] with each pair's walls fitted."""
+    """[(name, measured, a, b, A, B, d, angle, kind)] with each pair's walls
+    fitted (a corner A: corner_at, the distance from it square to B)."""
     out = []
-    for name, m, pa, pb in rows:
-        A, B = wall_plane(tree, P, pa, radius), wall_plane(tree, P, pb, radius)
-        d, ang = wall_distance(A, B, pa) if A is not None and B is not None else (None, None)
-        out.append([name, m, pa, pb, A, B, d, ang])
+    for name, m, pa, pb, *k in rows:
+        kind = k[0] if k else "wall"
+        B = wall_plane(tree, P, pb, radius)
+        if kind == "corner":
+            got = corner_at(tree, P, pa)
+            A = got[1] if got else None
+            d, ang = corner_distance(A[0], B) if A is not None and B is not None else (None, None)
+        else:
+            A = wall_plane(tree, P, pa, radius)
+            d, ang = wall_distance(A, B, pa) if A is not None and B is not None else (None, None)
+        out.append([name, m, pa, pb, A, B, d, ang, kind])
     return out
 
 
 def _distance_table(res):
     print(f"  {'name':14s}{'measured m':>11s}{'map m':>10s}{'error mm':>10s}{'mm/m':>7s}"
           f"{'angle':>7s}{'walls cm':>11s}   flags")
-    for name, m, _, _, A, B, d, ang in res:
+    for name, m, _, _, A, B, d, ang, *_ in res:
         ms = "-" if m is None else f"{m:.3f}"
         if d is None:
             which = " and ".join(w for w, x in (("A", A), ("B", B)) if x is None)
@@ -1589,10 +1707,10 @@ def main_distances(argv=None):
         if measured is not None:
             if len(measured) != len(rows):
                 raise SystemExit(f"--measured has {len(measured)} values for {len(rows)} pairs")
-            rows = [(n_, measured[i], pa, pb) for i, (n_, _, pa, pb) in enumerate(rows)]
+            rows = [(n_, measured[i], pa, pb, *k) for i, (n_, _, pa, pb, *k) in enumerate(rows)]
         a.picks = a.picks or stem + "_picks.txt"
         with open(a.picks, "w") as fh:
-            fh.writelines(f"{x:.4f},{y:.4f},{z:.4f}\n" for _, _, pa, pb in rows for x, y, z in (pa, pb))
+            fh.writelines(f"{x:.4f},{y:.4f},{z:.4f}\n" for _, _, pa, pb, *_ in rows for x, y, z in (pa, pb))
         print(f"saved {len(rows)} pairs -> {a.picks}")
     elif a.distances:
         rows = read_distances(a.distances, a.picks)
