@@ -360,6 +360,15 @@ def glim_loop_check(rec: "Recording", log=print, config=None) -> Optional[dict]:
             log(f"    glim loop closure: {Path(config).name} maps with {mach}, "
                 f"not {rec.raw.name}; not checked")
             return None
+    sys.path.insert(0, str(stages))
+    import pipeline_common
+    bag = pipeline_common.load_pipeline(str(config)).dataset.get("bag")
+    if bag and not Path(bag).exists():
+        # e.g. the merged bag (with the ZED's images), made after processing:
+        # check.py report measures it then
+        log(f"    glim loop closure: no {Path(bag).name} yet (the merge makes it); "
+            "measured by the mapping report")
+        return None
     report = out / "glim_loop_closure.json"
     log(f"    glim loop closure: stage 05 on GLIM's trajectory ({Path(config).name}) ...")
     sys.path.insert(0, str(ROOT / "analysis"))
