@@ -530,14 +530,28 @@ def bake_texture(mesh, map_path, png, texel=0.01, max_side=8192, k=5, chunk=4_00
     return Vn, Fn.astype(np.int64), UV.astype(float)
 
 
-def write_textured_ply(path, V, F, UV, png, rgb=None):
+def vertex_normals(V, F):
+    """Unit vertex normals of a mesh (V, F), from its faces."""
+    o3d = _o3d()
+    m = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V), o3d.utility.Vector3iVector(F))
+    m.compute_vertex_normals()
+    return np.asarray(m.vertex_normals)
+
+
+def write_textured_ply(path, V, F, UV, png, rgb=None, normals=None):
     """A binary PLY with its texture: vertex texture_u/texture_v and face
     texcoord (both, for Mitsuba, MeshLab and CloudCompare), the png named in
-    a TextureFile comment, next to it."""
+    a TextureFile comment, next to it; with its vertex normals, as a viewer
+    lights a texture (CloudCompare: a textured mesh without normals is drawn
+    in ambient light alone, dark)."""
     hdr = ["ply", "format binary_little_endian 1.0", f"comment TextureFile {os.path.basename(png)}",
-           f"element vertex {len(V)}", "property float x", "property float y", "property float z",
-           "property float texture_u", "property float texture_v"]
-    vd = [("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("u", "<f4"), ("v", "<f4")]
+           f"element vertex {len(V)}", "property float x", "property float y", "property float z"]
+    vd = [("x", "<f4"), ("y", "<f4"), ("z", "<f4")]
+    if normals is not None:
+        hdr += ["property float nx", "property float ny", "property float nz"]
+        vd += [("nx", "<f4"), ("ny", "<f4"), ("nz", "<f4")]
+    hdr += ["property float texture_u", "property float texture_v"]
+    vd += [("u", "<f4"), ("v", "<f4")]
     if rgb is not None:
         hdr += ["property uchar red", "property uchar green", "property uchar blue"]
         vd += [("r", "u1"), ("g", "u1"), ("b", "u1")]
@@ -545,6 +559,8 @@ def write_textured_ply(path, V, F, UV, png, rgb=None):
             "property list uchar float texcoord", "end_header"]
     va = np.zeros(len(V), vd)
     va["x"], va["y"], va["z"] = V[:, 0], V[:, 1], V[:, 2]
+    if normals is not None:
+        va["nx"], va["ny"], va["nz"] = normals[:, 0], normals[:, 1], normals[:, 2]
     va["u"], va["v"] = UV[:, 0], UV[:, 1]
     if rgb is not None:
         c = np.clip(np.asarray(rgb) * 255 + 0.5, 0, 255).astype(np.uint8)
@@ -648,8 +664,9 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
         Vt, Ft, UVt = bake_texture(m, map_path, png, texel, k=colour_k)
         vmap = cKDTree(np.asarray(m.vertices)).query(Vt)[1]
         rgb = np.asarray(m.vertex_colors)[vmap] if m.has_vertex_colors() else None
-        write_textured_ply(out, Vt, Ft, UVt, png, rgb)
-        tex = (Vt, Ft, UVt, png, rgb)
+        Nt = vertex_normals(Vt, Ft)
+        write_textured_ply(out, Vt, Ft, UVt, png, rgb, Nt)
+        tex = (Vt, Ft, UVt, png, rgb, Nt)
     else:
         o3d.io.write_triangle_mesh(out, m)
     V = np.asarray(m.vertices)
@@ -679,7 +696,7 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
         p = os.path.splitext(out)[0] + "_noceil.ply"
         if tex is not None:
             # the same texture; the faces of the textured mesh that are not the ceiling
-            Vt, Ft, UVt, png, rgb = tex
+            Vt, Ft, UVt, png, rgb, Nt = tex
             tm = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(Vt), o3d.utility.Vector3iVector(Ft))
             gone = (ceiling_faces(tm, Tf, hs) if str(ceil) == "auto"
                     else Vt[Ft].mean(1)[:, 2] > float(ceil))
@@ -688,7 +705,7 @@ def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10
             remap = np.full(len(Vt), -1, np.int64)
             remap[used] = np.arange(len(used))
             write_textured_ply(p, Vt[used], remap[keepf], UVt[used], png,
-                               None if rgb is None else rgb[used])
+                               None if rgb is None else rgb[used], Nt[used])
         else:
             o3d.io.write_triangle_mesh(p, nc)
         report += f"\nno ceiling {p}: {how}, {ngone} faces, removed; {len(nc.triangles)} kept"

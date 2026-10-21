@@ -380,11 +380,16 @@ def read_textured_ply(path):
         nv = int(next(h for h in hdr if h.startswith("element vertex")).split()[-1])
         png = next(h for h in hdr if h.startswith("comment TextureFile")).split()[-1]
         rgb = any("red" in h for h in hdr)
-        vd = [("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("u", "<f4"), ("v", "<f4")] + (
-            [("r", "u1"), ("g", "u1"), ("b", "u1")] if rgb else [])
+        nrm = any(h == "property float nx" for h in hdr)
+        vd = ([("x", "<f4"), ("y", "<f4"), ("z", "<f4")]
+              + ([("nx", "<f4"), ("ny", "<f4"), ("nz", "<f4")] if nrm else [])
+              + [("u", "<f4"), ("v", "<f4")] + ([("r", "u1"), ("g", "u1"), ("b", "u1")] if rgb else []))
         va = np.frombuffer(fh.read(nv * np.dtype(vd).itemsize), vd)
         fa = np.frombuffer(fh.read(), [("n", "u1"), ("i", "<i4", (3,)), ("nt", "u1"), ("t", "<f4", (6,))])
     V = np.c_[va["x"], va["y"], va["z"]].astype(float)
+    assert nrm, "a textured mesh without normals: drawn dark (ambient light alone)"
+    N = np.c_[va["nx"], va["ny"], va["nz"]]
+    assert np.allclose(np.linalg.norm(N, axis=1), 1, atol=1e-3)
     return V, fa["i"].astype(int), np.c_[va["u"], va["v"]].astype(float), png, (
         np.c_[va["r"], va["g"], va["b"]] / 255.0 if rgb else None)
 
