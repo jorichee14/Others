@@ -1008,35 +1008,34 @@ trajectory (GLIM's world), then move each into 05's frame:
 -> `<name>_anchored` (T_N_world, the move the anchored map was made with).
 
 `sionna` makes a Sionna RT scene of the mesh with its ceiling (not
-`_noceil`: the waves bounce off it), floor, walls, ceiling and objects apart.
-Sionna loads `scene.xml`; it reads the `.ply` files in `meshes/` beside it,
-so keep the folder whole:
+`_noceil`: the waves bounce off it): the mesh's own faces, nothing rebuilt,
+split into floor, walls, ceiling and objects. Sionna loads `scene.xml`; it
+reads the `.ply` files in `meshes/` beside it, so keep the folder whole:
 
     <mesh>_sionna/scene.xml                     sionna.rt.load_scene(".../scene.xml")
     <mesh>_sionna/meshes/{floor,walls,ceiling,objects}.ply
-    <mesh>_sionna.ply                           to look at: full resolution, its own colours, floor grey
+    <mesh>_sionna.ply                           to look at: its own colours, floor grey
     <mesh>_sionna_labels.ply                    to check: floor grey, walls beige, ceiling white, objects orange
 
-The mesh is labelled at 4,000,000 faces: floor, the horizontal faces within
-0.2 m of the floor (each 1 m cell's lowest); ceiling, horizontal 2 m or more
-above it; walls, flat near-vertical surfaces of 3 m2 or more from the floor
-(0.5 m) to 2.2 m or higher. The rest, in connected pieces: hanging 1.8 m or
-more up (lamps, beams, ducts) with the ceiling; floor to 2.2 m (a round
-pillar, a door frame) or under 0.05 m2 with the walls; the others objects.
-Floor, walls and ceiling are simplified together to `--faces` (500,000; no
-gaps at their seams). Each object is rebuilt from the view's points round it
-(`--points`; default the view next to the mesh, `view_<tag>[_anchored].ply`):
-its flat parts (table tops, cabinet sides) put onto their planes, Poisson
-with 1 cm cells (`--object-cell`) over the object alone, faces off the
-points dropped, smoothed; in its nearest points' colours (`--no-refine`
-keeps the mesh's own). The map's 2 cm spacing bounds the detail: a chair's
-legs stay rough. Each part an ITU material, `--material
-PART=TYPE[:THICKNESS m]` (default concrete 0.2 m, objects wood 0.05 m);
-`--split-objects` writes each object to `meshes/objects/obj_NNN.ply` (load
-with `merge_shapes=False` to keep them apart; edit an object's material in
-`scene.xml`).
+The labels are found on a copy of 4,000,000 faces and every face takes its
+nearest one's: floor, the horizontal faces within 0.2 m of the floor (each
+1 m cell's lowest); ceiling, horizontal 2 m or more above it; walls, flat
+near-vertical surfaces of 3 m2 or more from the floor (0.5 m) to 2.2 m or
+higher. The rest, in connected pieces: hanging 1.8 m or more up (lamps,
+beams, ducts) with the ceiling; floor to 2.2 m (a round pillar, a door
+frame), under 0.05 m2, or bigger than an object (3 m across, 2 m tall,
+10 m2) with the walls; the others objects. With `--traj` (the mesh's
+frame; anchored: `odometry/reference_<tag>/traj_mobile_2_lidar.tum`) what
+the `_noceil` copy drops as hanging from the ceiling only (a reflection
+joined to a mirrored ceiling: loose once the ceiling is cut) is left out
+too. `--faces N` simplifies the whole mesh first (0: as it is). Each part an
+ITU material, `--material PART=TYPE[:THICKNESS m]` (default concrete 0.2 m,
+objects wood 0.05 m); `--split-objects` writes each object to
+`meshes/objects/obj_NNN.ply` (load with `merge_shapes=False`; edit an
+object's material in `scene.xml`).
 
-    python3 scoop_pipeline/datasets/lod3dgs.py sionna mapping/mesh_view_<tag>_anchored.ply
+    python3 scoop_pipeline/datasets/lod3dgs.py sionna mapping/mesh_view_<tag>_anchored.ply \
+        --traj odometry/reference_<tag>/traj_mobile_2_lidar.tum
 
 `walk` opens a window to walk inside a mesh (the one with its ceiling, or
 its `_sionna.ply`): Open3D's fly mode, started 1.6 m (`--eye`) over the floor

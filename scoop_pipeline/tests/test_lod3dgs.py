@@ -28,8 +28,9 @@ the mirror ghosts of a polished floor and wall (under the floor, behind the
 wall: no direct ray from the path reaches them) and a loose 5 m2 sheet removed
 by both mesh and view, the room's own surfaces kept. And --ceil auto on a
 5 m hall by a 3 m arcade: each ceiling off at its own height, the walls kept;
-`sionna` on its mesh: floor, ceiling and walls apart, loaded and traced by
-Sionna RT.
+`sionna` on its mesh: floor, ceiling, walls and objects apart, every face
+kept, loaded and traced by Sionna RT; with --traj a sheet hanging from the
+ceiling left out.
 
     python scoop_pipeline/tests/test_lod3dgs.py
 """
@@ -474,8 +475,8 @@ def check_sionna(tmp):
     """sionna on the mesh of a 5 m hall by a 3 m arcade (points with 5 mm
     noise) holding a table, a cabinet, a round pillar and a lamp hanging from
     the hall's ceiling: the pillar with the walls, the lamp with the ceiling,
-    the table and the cabinet objects, rebuilt flat (the table top within
-    2 mm, at its height); the scene loaded by Sionna RT when installed (four shapes) and a
+    the table and the cabinet objects, every face of the mesh in one part
+    (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
     import open3d as o3d
@@ -519,8 +520,7 @@ def check_sionna(tmp):
                          np.zeros((len(x), 3)), np.ones(len(x))])
     m = L.map_mesh(mp, tr, voxel=0.03, min_piece=0)
     assert os.path.basename(m["out"]) == "mesh_view_radio.ply", m["out"]
-    r = L.sionna_mesh(m["out"], faces=20000, materials={"walls": ("brick", 0.1)})
-    assert L.default_points(m["out"]) == mp
+    r = L.sionna_mesh(m["out"], materials={"walls": ("brick", 0.1)}, label_faces_n=300000)
     parts = {}
     for n in ("floor", "ceiling", "walls", "objects"):
         q = o3d.io.read_triangle_mesh(os.path.join(os.path.dirname(r["scene"]), "meshes", n + ".ply"))
@@ -537,18 +537,13 @@ def check_sionna(tmp):
         for other in parts:
             if other != part:
                 assert inside(parts[other], *b_) <= 0.05 * inside(parts[part], *b_), (name, "in", other)
-    O = o3d.io.read_triangle_mesh(os.path.join(os.path.dirname(r["scene"]), "meshes", "objects.ply"))
-    Vo = np.asarray(O.vertices)
-    top = (np.abs(Vo[:, 2] - 0.75) < 0.03) & (Vo[:, 0] > 2.2) & (Vo[:, 0] < 3.0) & (Vo[:, 1] > 4.2) & \
-        (Vo[:, 1] < 4.6)
-    assert top.sum() > 50 and Vo[top, 2].std() < 0.002 and abs(np.median(Vo[top, 2]) - 0.75) < 0.005, \
-        ("the table top not flat", Vo[top, 2].std(), np.median(Vo[top, 2]))
     one = o3d.io.read_triangle_mesh(r["view"])
     Vv, Cv = np.asarray(one.vertices), np.asarray(one.vertex_colors)
     grey = (np.abs(Cv[np.abs(Vv[:, 2]) < 0.02] - 0.8).max(1) < 0.01).mean()
     assert grey > 0.9, ("the floor not grey", grey)
     full = o3d.io.read_triangle_mesh(m["out"])
-    assert len(one.triangles) > 0.8 * len(full.triangles), ("not at full resolution", len(one.triangles))
+    assert len(one.triangles) == len(full.triangles) == r["faces"], \
+        ("faces lost or added", len(one.triangles), len(full.triangles), r["faces"])
     assert os.path.exists(r["labels"])
     T = np.c_[x, np.full(len(x), 3.0), np.full(len(x), 0.8)]
     e, c = L.walk_start(Vv, T)
@@ -572,22 +567,63 @@ def check_sionna(tmp):
     return r, d[:4]
 
 
-def _job_crashing(x):
-    """For check_isolated: x == 3 kills its process as a segfault does."""
-    if x == 3:
-        import signal
-        os.kill(os.getpid(), signal.SIGSEGV)
-    if x == 4:
-        raise ValueError("an exception")
-    return 2 * x
+def check_hanging(tmp):
+    """sionna --traj on a room's mesh (floor, walls, a 3 m ceiling, every
+    face joined to the next) with a 2 x 1.5 m sheet hanging from the
+    ceiling, joined to it (a reflection with its mirrored ceiling): without
+    the trajectory it stays, with it it is left out (as _noceil drops it:
+    loose once the ceiling is cut), the ceiling and walls kept."""
+    import open3d as o3d
+    sp = 0.05
 
+    def grid(o, u, v, nu, nv):
+        """A rectangle o + i u + j v (i < nu, j < nv steps of sp) as triangles."""
+        I, J = np.meshgrid(np.arange(nu + 1), np.arange(nv + 1), indexing="ij")
+        Vg = o + I.reshape(-1, 1) * u * sp + J.reshape(-1, 1) * v * sp
+        k = lambda i, j: i * (nv + 1) + j                                   # noqa: E731
+        i, j = np.meshgrid(np.arange(nu), np.arange(nv), indexing="ij")
+        i, j = i.ravel(), j.ravel()
+        Fg = np.r_[np.c_[k(i, j), k(i + 1, j), k(i + 1, j + 1)], np.c_[k(i, j), k(i + 1, j + 1), k(i, j + 1)]]
+        return Vg, Fg
+    X, Y, Z = np.array([1.0, 0, 0]), np.array([0, 1.0, 0]), np.array([0, 0, 1.0])
+    o = np.zeros(3)
+    rects = [(o, X, Y, 200, 120), (o + 3 * Z, X, Y, 200, 120),                       # floor, ceiling
+             (o, X, Z, 200, 60), (o + 6 * Y, X, Z, 200, 60), (o, Y, Z, 120, 60), (o + 10 * X, Y, Z, 120, 60),
+             (np.array([6.0, 2.0, 1.5]), Y, Z, 40, 30)]                               # the sheet, up to the ceiling
+    Vs, Fs, n = [], [], 0
+    for r_ in rects:
+        Vg, Fg = grid(*r_)
+        Vs.append(Vg)
+        Fs.append(Fg + n)
+        n += len(Vg)
+    mesh = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(np.vstack(Vs)),
+                                     o3d.utility.Vector3iVector(np.vstack(Fs)))
+    mesh.remove_duplicated_vertices()                  # joined along the edges they share
+    mesh.paint_uniform_color((0.5, 0.5, 0.5))
+    mp = os.path.join(tmp, "mesh_hang.ply")
+    o3d.io.write_triangle_mesh(mp, mesh)
+    x = np.arange(1.0, 9.0, 0.1)
+    tr = os.path.join(tmp, "traj_hang.txt")
+    np.savetxt(tr, np.c_[np.arange(len(x)), x, np.full(len(x), 4.5), np.full(len(x), 0.8),
+                         np.zeros((len(x), 3)), np.ones(len(x))])
 
-def check_isolated():
-    """run_isolated: a job that segfaults its worker gives None and is named,
-    one that raises gives None, the others their results."""
-    res, crashed = L.run_isolated(_job_crashing, list(range(7)), workers=3)
-    assert res == [0, 2, 4, None, None, 10, 12] and crashed == [3], (res, crashed)
-    return crashed
+    def sheet_faces(r):
+        n_ = 0
+        for part in ("walls", "objects", "ceiling", "floor"):
+            q = os.path.join(os.path.dirname(r["scene"]), "meshes", part + ".ply")
+            if os.path.exists(q):
+                Q = o3d.io.read_triangle_mesh(q)
+                c = np.asarray(Q.vertices)[np.asarray(Q.triangles)].mean(1)
+                n_ += int(((np.abs(c[:, 0] - 6.0) < 0.02) & (c[:, 1] > 2.1) & (c[:, 1] < 3.9)
+                           & (c[:, 2] > 1.6) & (c[:, 2] < 2.8)).sum())
+        return n_
+    keep = L.sionna_mesh(mp, os.path.join(tmp, "hang_keep"))
+    gone = L.sionna_mesh(mp, os.path.join(tmp, "hang_gone"), traj=tr)
+    assert sheet_faces(keep) > 500, ("the sheet not in the mesh to start with", sheet_faces(keep))
+    assert sheet_faces(gone) == 0, ("the sheet hanging from the ceiling kept", sheet_faces(gone))
+    assert gone["ceiling"] > 0.95 * keep["ceiling"] and gone["walls"] > 0.9 * (keep["walls"] - 2400), \
+        ("ceiling or walls lost", gone, keep)
+    return sheet_faces(keep)
 
 
 def main():
@@ -685,12 +721,12 @@ def main():
         cv, cm = check_ceilings(tmp)
         print(f"ok ceilings: a 5 m hall's and a 3 m arcade's each cut at its own height ({cv} view points, "
               f"{cm} mesh vertices of the arcade's left), the walls under each kept")
-        check_isolated()
-        print("ok isolated: a job crashing its worker (segfault) skipped and named, the others done")
+        nh = check_hanging(tmp)
+        print(f"ok hanging: a sheet joined to the ceiling ({nh} faces) left out with --traj, as _noceil drops it")
         rs, ds = check_sionna(tmp)
         print(f"ok sionna: floor {rs['floor']}, ceiling {rs['ceiling']}, walls {rs['walls']}, "
               f"objects {rs['objects']} ({rs['n_objects']} of them); a pillar with the walls, a lamp with "
-              "the ceiling, a table and a cabinet objects, the table top flat"
+              "the ceiling, a table and a cabinet objects, every face kept"
               + (f"; Sionna RT traced delays {ds} ns" if ds is not None
                  else " (Sionna RT not installed: not loaded)"))
         rm = check_mesh(tmp)
