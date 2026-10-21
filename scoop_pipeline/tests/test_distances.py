@@ -203,6 +203,15 @@ def main():
         ok = names3 == ["d1", "d2", "d3"] and [r[1] for r in got3 if r[0] == "d1"] == [8.001]
         (print if ok else fails.append)("  ok    --redo d1: picked again under its name, the next pair d3"
                                         if ok else f"--redo: {got3}")
+        # a pair drawn again from the json: the meter's line along A's normal, as when clicked
+        fig, ax = plt.subplots()
+        pk2 = maps.PlanPicker(ax, P, cKDTree(P), S)
+        pk2.add("d1", 8.0, np.array([0.3, 2.0, 0.75]), np.array([7.7, 4.5, 0.75]))
+        ln = [a_ for a_ in ax.lines if a_.get_color() == "#eb6834"][0].get_xydata()
+        plt.close(fig)
+        ok = abs(ln[0, 1] - ln[1, 1]) < 0.02 and abs(abs(ln[1, 0] - ln[0, 0]) - 8.0) < 0.02
+        (print if ok else fails.append)("  ok    a pair drawn again: its line square to wall A, not pick to pick"
+                                        if ok else f"redrawn line: {ln}")
         jd2 = json.load(open(js2))
         ok = len(got) == 1 and got[0][1] == 8.0 and len(got2) == 2 and got2[1][0] == "d2" and \
             abs(got2[1][1] - 6.002) < 1e-9 and jd2["summary"]["n"] == 2

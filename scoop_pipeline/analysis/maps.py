@@ -1286,6 +1286,33 @@ class PlanPicker:
         d, ang = wall_distance(A, B, pa)
         return [None, None, pa, pb, A, B, d, ang]
 
+    def _draw_pick(self, p, w):
+        """A pick on its wall: the wall's line 0.6 m either side, the pick a dot."""
+        art = []
+        if w is not None:
+            t = np.cross(w[1], [0, 0, 1.0])
+            t = t / (np.linalg.norm(t) or 1)
+            seg = np.array([p - 0.6 * t, p + 0.6 * t])
+            art += self.ax.plot(seg[:, 0], seg[:, 1], color="#1baf7a", lw=4)
+        art += self.ax.plot(p[0], p[1], "o", color="#1baf7a", ms=7)
+        return art
+
+    def _draw_line(self, row, art):
+        """The meter's line of a pair: from A's pick along A's normal to B's
+        plane (the distance measured), with its label; added to art."""
+        pa, A, B, d = row[2], row[4], row[5], row[6]
+        if d is None:
+            q1 = row[3]
+        else:
+            na = A[1] if (B[0] - pa) @ A[1] > 0 else -A[1]
+            q1 = pa + na * d
+        art += self.ax.plot([pa[0], q1[0]], [pa[1], q1[1]], color="#eb6834", lw=2)
+        lab = self.ax.text((pa[0] + q1[0]) / 2, (pa[1] + q1[1]) / 2,
+                           self._label(row) if d is not None else f" {row[0]}  no wall",
+                           color="#b4501f", fontsize=12, fontweight="bold")
+        art.append(lab)
+        return lab
+
     def _label(self, row):
         name, m, _, _, _, _, d, _ = row
         if m is None:
@@ -1298,12 +1325,8 @@ class PlanPicker:
         if w is None:
             self.ax.plot(x, y, "x", color="#d03b3b", ms=10, mew=2)
             return f"no straight wall within {self.r:g} m of the click: click closer to a wall line"
-        n, p = w[1], w[4]
-        t = np.cross(n, [0, 0, 1.0])
-        t = t / (np.linalg.norm(t) or 1)
-        seg = np.array([p - 0.6 * t, p + 0.6 * t])
-        art = self.ax.plot(seg[:, 0], seg[:, 1], color="#1baf7a", lw=4)
-        art += self.ax.plot(p[0], p[1], "o", color="#1baf7a", ms=7)
+        p = w[4]
+        art = self._draw_pick(p, w)
         self.picks.append((p, w))
         k = len(self.picks)
         if k % 2:
@@ -1318,13 +1341,7 @@ class PlanPicker:
                 a.remove()
             return f"walls {ang:.0f} deg apart: not facing each other; click wall B again"
         row[0] = self.next_name()
-        A = row[4]
-        na = A[1] if (row[5][0] - pa) @ A[1] > 0 else -A[1]
-        q1 = pa + na * d
-        art += self.ax.plot([pa[0], q1[0]], [pa[1], q1[1]], color="#eb6834", lw=2)
-        lab = self.ax.text((pa[0] + q1[0]) / 2, (pa[1] + q1[1]) / 2, self._label(row),
-                           color="#b4501f", fontsize=12, fontweight="bold")
-        art.append(lab)
+        lab = self._draw_line(row, art)
         self.artists.append(art)
         self.res.append(row)
         self.labels.append(lab)
@@ -1357,11 +1374,8 @@ class PlanPicker:
         row = self._pair(np.asarray(pa, float), np.asarray(pb, float), wa, wb)
         row[0], row[1] = name, m
         self.res.append(row)
-        art = self.ax.plot([pa[0], pb[0]], [pa[1], pb[1]], color="#eb6834", lw=2)
-        lab = self.ax.text((pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2,
-                           self._label(row) if row[6] is not None else f" {name}  no wall",
-                           color="#b4501f", fontsize=12, fontweight="bold")
-        art.append(lab)
+        art = self._draw_pick(np.asarray(pa, float), wa) + self._draw_pick(np.asarray(pb, float), wb)
+        lab = self._draw_line(row, art)
         self.artists += [[], art]
         self.labels.append(lab)
 
