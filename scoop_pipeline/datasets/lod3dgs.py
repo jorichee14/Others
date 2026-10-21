@@ -1061,8 +1061,7 @@ def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
 
 
 def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2, vertical=0.3,
-                on_wall=0.05, facing_deg=30.0, reach=0.2, lamp_h=1.8, min_obj=0.05, pillar=0.8, seam=0.08,
-                obj_extent=3.0, obj_height=2.0, obj_area=10.0, thin=0.08, T=None):
+                on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, T=None):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
     each object face its object's number (-1 for the rest).
 
@@ -1081,18 +1080,12 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
     with it and what stands in front of it (a desk, a cabinet: farther than
     on_wall, or facing up) does not.
 
-    The rest within seam of a floor, wall or ceiling face (the rounded
-    strips where they meet) goes with it. Then, in connected pieces, objects
-    (a desk by a wall comes apart from it, the wall taken first), but: one
-    bigger than furniture (obj_extent m across, obj_height m tall or
-    obj_area m2) and thin in plan (its spread across under `thin` m, 1
-    sigma) and facing sideways (pillar of its area): a stretch of wall too
-    rough for a plane: walls (a room of furniture touching, big but spread
-    out, stays objects); one wholly lamp_h or more up hangs
-    from the ceiling (lamps, beams, ducts): ceiling; one from the floor (0.5
-    m) to wall_high, pillar of its area or more facing sideways (a round
-    pillar): walls; one reaching no higher than band (the floor's bumps):
-    floor; one under min_obj m2 (a scrap at a seam): the part of the
+    The rest facing sideways within seam of a floor, wall or ceiling face
+    (the rounded strips where they meet) goes with it; one facing up (a
+    table top by a wall) does not. Everything else, in connected pieces, is
+    objects: furniture, a wall bulging with furniture against it, a pillar,
+    a lamp; only a piece reaching no higher than band (the floor's bumps)
+    is floor and one under min_obj m2 (a scrap at a seam) the part of the
     nearest labelled face."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
@@ -1149,7 +1142,7 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
             isw[idx[ok]] = True
         part[isw] = "walls"
     # the seams: what is left within `seam` of a floor, wall or ceiling face goes with it
-    rest = np.flatnonzero(part == "")
+    rest = np.flatnonzero((part == "") & ~hor)
     lab = np.flatnonzero(part != "")
     if len(rest) and len(lab):
         d, i = cKDTree(C[lab]).query(C[rest], workers=-1, distance_upper_bound=seam)
@@ -1167,28 +1160,10 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
         comp = comp.ravel()
         nc = comp.max() + 1
         c_area = np.bincount(comp, A[rest], nc)
-        side = np.bincount(comp, A[rest] * (np.abs(N[rest, 2]) < vertical), nc) / np.maximum(c_area, 1e-12)
-        c_lo = np.full(nc, np.inf)
         c_hi = np.full(nc, -np.inf)
-        np.minimum.at(c_lo, comp, dz[rest])
         np.maximum.at(c_hi, comp, dz[rest])
         kind = np.full(nc, "objects", dtype=object)
-        Cr = C[rest]
-        lo2 = np.full((nc, 2), np.inf)
-        hi2 = np.full((nc, 2), -np.inf)
-        np.minimum.at(lo2, comp, Cr[:, :2])
-        np.maximum.at(hi2, comp, Cr[:, :2])
-        big = ((hi2 - lo2).max(1) > obj_extent) | (c_hi - c_lo > obj_height) | (c_area > obj_area)
-        cnt = np.maximum(np.bincount(comp, minlength=nc), 1)
-        mx, my = np.bincount(comp, Cr[:, 0], nc) / cnt, np.bincount(comp, Cr[:, 1], nc) / cnt
-        sxx = np.bincount(comp, Cr[:, 0] ** 2, nc) / cnt - mx ** 2
-        syy = np.bincount(comp, Cr[:, 1] ** 2, nc) / cnt - my ** 2
-        sxy = np.bincount(comp, Cr[:, 0] * Cr[:, 1], nc) / cnt - mx * my
-        across = np.sqrt(np.clip((sxx + syy) / 2 - np.sqrt(((sxx - syy) / 2) ** 2 + sxy ** 2), 0, None))
-        kind[big & (across < thin) & (side >= pillar)] = "walls"
-        kind[(c_lo <= 0.5) & (c_hi >= wall_high) & (side >= pillar)] = "walls"
         kind[c_hi <= band] = "floor"
-        kind[c_lo >= lamp_h] = "ceiling"
         scrap = c_area < min_obj
         kind[scrap] = ""
         part[rest] = kind[comp]

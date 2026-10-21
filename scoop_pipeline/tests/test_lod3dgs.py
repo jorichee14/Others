@@ -475,9 +475,10 @@ def check_sionna(tmp):
     """sionna on the mesh of a 5 m hall by a 3 m arcade (points with 5 mm
     noise) holding a table, a cabinet, a round pillar and a lamp hanging from
     the hall's ceiling, a desk against a wall, 4 m of desks pushed together:
-    the pillar with the walls, the lamp with the ceiling, the table, the
-    cabinet, the desk (apart from the wall behind it, which is wall) and the
-    desks (big, but spread out: no wall) objects, every face in one part
+    walls only the wall planes (the wall behind the desk), everything else
+    objects: the pillar, the table, the cabinet, the desk and the 4 m of
+    desks (the lamp's flat underside, over 2 m up, with the ceiling); every
+    face in one part
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
@@ -537,7 +538,7 @@ def check_sionna(tmp):
     inside = lambda Q, x0, x1, y0, y1, z0, z1: ((Q[:, 0] > x0) & (Q[:, 0] < x1) & (Q[:, 1] > y0)  # noqa: E731
                                                & (Q[:, 1] < y1) & (Q[:, 2] > z0) & (Q[:, 2] < z1)).sum()
     assert np.abs(parts["floor"][:, 2]).max() < 0.3, ("floor off the floor", parts["floor"][:, 2].max())
-    for name, part, b_ in (("the pillar", "walls", (3.7, 4.3, 1.2, 1.8, 0.5, 4.5)),
+    for name, part, b_ in (("the pillar", "objects", (3.7, 4.3, 1.2, 1.8, 0.5, 4.5)),
                            ("the lamp", "ceiling", (4.6, 5.4, 2.6, 3.4, 4.5, 4.75)),
                            ("the table", "objects", (2.1, 3.1, 4.1, 4.7, 0.6, 0.8)),
                            ("the cabinet", "objects", (9.05, 9.55, 5.45, 5.95, 0.3, 1.25)),
@@ -757,9 +758,8 @@ def main():
         print(f"ok hanging: a sheet joined to the ceiling ({nh} faces) left out with --traj, as _noceil drops it")
         rs, ds = check_sionna(tmp)
         print(f"ok sionna: floor {rs['floor']}, ceiling {rs['ceiling']}, walls {rs['walls']}, "
-              f"objects {rs['objects']} ({rs['n_objects']} of them); a pillar with the walls, a lamp with "
-              "the ceiling, a table, a cabinet, a desk against a wall (the wall behind it wall) and 4 m of desks "
-              "objects, "
+              f"objects {rs['objects']} ({rs['n_objects']} of them); walls only the wall planes (the "
+              "wall behind a desk), a pillar, a table, a cabinet, a desk and 4 m of desks objects, "
               "every face kept"
               + (f"; Sionna RT traced delays {ds} ns" if ds is not None
                  else " (Sionna RT not installed: not loaded)"))

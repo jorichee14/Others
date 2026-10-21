@@ -1038,13 +1038,12 @@ horizontal 2 m or more above it; walls, first the wall planes (flat
 near-vertical surfaces of 3 m2 or more reaching 2.2 m or higher), then every
 face on one of them (within 5 cm of its plane, facing it, inside its
 extent), so a wall's rough parts go with it and a desk or cabinet in front
-of it does not; what is left within 8 cm of a floor, wall or ceiling face
-(the seams where they meet) goes with it. The rest, in connected pieces,
-are objects (chairs in a row, a room of desks touching included), but:
-bigger than furniture (3 m across, 2 m tall, 10 m2) and thin in plan (8 cm
-either side, facing sideways: a stretch of wall too rough for a plane) or a
-round pillar (floor to 2.2 m, facing sideways): walls; hanging 1.8 m or
-more up (lamps, beams): ceiling; under 0.05 m2: the part next to it. With `--traj` (the mesh's
+of it does not; what is left facing sideways within 8 cm of a floor, wall
+or ceiling face (the seams where they meet) goes with it, a table top by a
+wall does not. Everything else, in connected pieces, is objects: furniture,
+a wall bulging with furniture against it, pillars; only floor bumps (no
+higher than 0.25 m) are floor and scraps under 0.05 m2 the part next to
+them. With `--traj` (the mesh's
 frame; anchored: `odometry/reference_<tag>/traj_mobile_2_lidar.tum`) what
 the `_noceil` copy drops as hanging from the ceiling only (a reflection
 joined to a mirrored ceiling: loose once the ceiling is cut, and reaching up
