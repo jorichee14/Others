@@ -43,6 +43,24 @@ Doubled surfaces (kind 3) are not reported: a smeared surface fills the gap betw
 Superseded (not in the paper): the BA started from the old scan-to-map (traj_lidar_ba.txt, 1.0 cm / 0.12 deg), the maps
 of earlier poses (union_ba, tsdf_ba, v1: 7.5 / 1.7 cm), GLIM with `imu_time_offset`. All in `_old/`.
 
+### Second mapping pass 20260924 (`mobile_1`, 1078 s, 396 m): the cross-robot check
+
+Same pipeline and settings as 20261015 (`map_stages/pipeline_config_mapping_20260924.json`, from `raw/20260924/mapping/`).
+mobile_1's LiDAR has half mobile_2's beams (64 vs 128).
+Paper: `main.tex` "Second mapping pass" paragraph, `tables/gt.tex` cross-robot rows.
+
+| Result | Value | Tool |
+|---|---|---|
+| GLIM's pose time vs the scans | +44.7 ms (r 0.92) uncorrected; -1.4 ms (r -0.08) with the +46 ms export: the mobile_2 correction holds for mobile_1 | `check.py time`, `check.py report` |
+| Board loop closure: GLIM / + time corr. / 02b / BA (ref.) | 9.0 / 9.1 / 1.9 / 3.2 mm (noise 2.7-4.8 mm); only GLIM uncorrected is DRIFT | `check.py report` |
+| GLIM corrected vs reference | ATE 2.5 cm / 0.21 deg; RPE 1 s 0.9 / 0.11, 10 s 2.7 / 0.26, 100 s 4.9 / 0.27 | `check.py report` |
+| GLIM + scan-to-map (02b) vs reference | ATE 1.7 cm / 0.13 deg | `check.py report` |
+| TSDF map vs union, walls / floors | 6.3 / 0.9 vs 10.8 / 3.2 cm; TSDF 17.4 M points, 98.4 % complete | `check.py report` |
+| Against the 20261015 reference, registered (`check.py maps --align`) | 96.4 % of mobile_1's map within 10 cm of the reference (fit RMS 3.0 cm); covers 86.2 % of the reference: 91.7 / 90.8 / 82.9 / 75.3 / 45.5 % at 0-2 / 2-4 / 4-7 / 7-12 / 12+ m from the reference path | `check.py maps --align` |
+| Board-anchored frames, 20260924 vs 20261015 | differ by 0.49 m, 2.95 deg yaw (x +0.036, y -0.487, z -0.048 m; pitch 0.18, roll -0.13 deg); unregistered, only 35 % within 10 cm (floors and ceilings matched, walls 9-10 %) | same |
+
+The thinner surfaces than 20261015 (6.3 / 0.9 against 7.6 / 1.8 cm) are not a better map: with half the beams, distant cells get fewer than the TSDF's 3 hits and drop out, so what remains is mostly near range; its shorter drive and 3.2 mm loop closure (against 12.3 mm) add to it. Not separated yet (`check.py walls` and `check.py noise` on both passes would).
+
 Still lacking: control distances.
 
 ### Survey (`survey_1`)

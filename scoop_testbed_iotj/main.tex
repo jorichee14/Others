@@ -697,6 +697,21 @@ independently, reproduces the surface placement to
 \SI{1.06}{\centi\metre} on walls, with relative scale agreeing to
 $2\times10^{-5}$. Since both runs share the sensor and the algorithm,
 this establishes scale stability, not absolute scale.
+A pass by the other robot checks the reference across robots and days:
+\texttt{mobile\_1}, whose LiDAR has half the beams of \texttt{mobile\_2}'s,
+mapped the site three weeks before the reference pass, processed by the
+same pipeline with the same settings (board loop closure
+\SI{3.2}{\milli\metre}, within its detection noise). Registered rigidly
+onto the reference, 96.4\,\% of its surface lies within
+\SI{10}{\centi\metre} of the reference's (registration RMS
+\SI{3.0}{\centi\metre}), and it covers 86.2\,\% of the reference:
+91--92\,\% within \SI{4}{\metre} of the reference path, falling to
+46\,\% beyond \SI{12}{\metre}, consistent with its sparser vertical
+sampling leaving distant cells below the fusion's three-hit minimum.
+The two passes' board-anchored frames differ by \SI{0.49}{\metre} and
+$2.95^\circ$ \todo{cause: boards re-mounted between the passes, or a
+different anchor board?}, so maps of different passes are compared after
+registration.
 
 \paragraph{Control distances.} Laser-rangefinder distances between
 landmarks such as walls, \todo{$N$ distances of
