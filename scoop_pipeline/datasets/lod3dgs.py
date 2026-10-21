@@ -1324,7 +1324,7 @@ def main():
     for k in ("map", "file", "traj"):
         p = getattr(a, k, None)
         if p and not os.path.isfile(os.path.expanduser(p)):
-            ap.error(f"no file {p}" + (" (make it with `view` first)" if "view_" in os.path.basename(p) else ""))
+            ap.error(f"no file {p}" + ("  (make it with `view` first)" if "view_" in os.path.basename(p) else ""))
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         if a.cmd == "scene":
