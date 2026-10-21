@@ -90,7 +90,7 @@ import scipy.sparse as sp
 from scipy.linalg import cho_factor, cho_solve
 from scipy.spatial.transform import Rotation
 
-from pipeline_common import load_pipeline, load_traj, traj_quats, iter_scans, DEFAULT_TOPICS
+from pipeline_common import load_pipeline, load_traj, traj_quats, iter_scans
 
 CHI = 3.29                       # 5-95 % spread of a normal = 3.29 sigma
 
@@ -440,7 +440,7 @@ def main():
              min_kf=3, min_pts=10, max_planes=12000, point_sigma=0.02, n_eff=30,
              huber=0.05, odom_sigma_t=0.03, odom_sigma_r_deg=0.3, gravity_sigma_deg=0.1,
              rounds=3, iters=10,
-             cache=True, points_topic="",
+             cache=True,
              deskew=bool(s.get("deskew", True)), deskew_bins=max(2, int(s.get("deskew_bins", 100))))
     c.update(P.cfg.get("02_bundle_adjust", {}))
     if a.rounds is not None:
@@ -449,8 +449,7 @@ def main():
         c["input"] = a.input
     if a.output:
         c["output"] = a.output
-    c["points_topic"] = (c["points_topic"] or P.dataset.get("points_topic")
-                         or DEFAULT_TOPICS["points_topic"])
+    c["points_topic"] = P.points_topic
     print(P.describe())
 
     inp = P.outp(c["input"]) if c["input"] else P.seed_traj()

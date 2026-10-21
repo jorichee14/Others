@@ -55,7 +55,7 @@ def positions(bag, cfg, log=print):
         p = P.lidar_track_traj("_in_cam")
         if os.path.exists(p):
             traj_t, traj_T = load_traj(p)
-            body = P.cfg.get("05_anchor", {}).get("cam_frame", "zed_left_camera_optical_frame")
+            body = P.camera_frame
             log(f"    moving robot: {len(traj_t)} poses of {body} from {p}")
         else:
             log(f"    (no {p}: the moving robot gets no position)")

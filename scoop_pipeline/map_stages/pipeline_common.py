@@ -465,6 +465,10 @@ def load_cameras_yaml(path):
 DEFAULT_TOPICS = {"points_topic": "/mobile_1/ouster/points",
                   "image_topic": "/mobile_1/zed/left/image_rect_color",
                   "camera_info_topic": "/mobile_1/zed/left/camera_info"}
+# the rest of the robot's sensors in "dataset", mobile_1's when not set there
+DEFAULT_CAMERA = {"camera_frame": "zed_left_camera_optical_frame",   # image_topic's optical frame
+                  "camera_map_frame": "map_zed",       # the camera's own tracking origin
+                  "rectified": True}                   # image_topic is rectified already
 
 
 class Sensor:
@@ -660,6 +664,38 @@ class Pipeline:
         # is that pass ("mapping_A", same date, or "<date>/<pass>")
         self.reference = d.get("reference_pass") or None
         self._sensor = None
+
+    # The robot's sensors, set once for the pass in "dataset" (README: a pass's
+    # config); every stage reads them here.
+    @property
+    def points_topic(self):
+        return self.dataset.get("points_topic") or DEFAULT_TOPICS["points_topic"]
+
+    @property
+    def camera_frame(self):
+        return self.dataset.get("camera_frame") or DEFAULT_CAMERA["camera_frame"]
+
+    @property
+    def camera_map_frame(self):
+        return self.dataset.get("camera_map_frame") or DEFAULT_CAMERA["camera_map_frame"]
+
+    @property
+    def rectified(self):
+        return bool(self.dataset.get("rectified", DEFAULT_CAMERA["rectified"]))
+
+    def robots(self):
+        """10_publish.robots with the pass's own robot (dataset.machine) in it:
+        its LiDAR track in its camera's optical frame, unless its entry there
+        says otherwise. The config lists only the others (or more of its own)."""
+        own = {"name": self.machine, "traj": os.path.basename(self.lidar_track_traj("_in_cam")),
+               "optical_frame": self.camera_frame}
+        robots = [dict(rb) for rb in (self.cfg.get("10_publish") or {}).get("robots") or []]
+        for rb in robots:
+            if rb["name"] == self.machine:
+                for k, v in own.items():
+                    rb.setdefault(k, v)
+                return robots
+        return [own] + robots
 
     @property
     def sensor(self):
@@ -929,15 +965,33 @@ OLD_KEYS = {"01a_refine": "02b_scan_to_map", "02_refine": "02b_scan_to_map",
             "05_emit_tfs": "08_emit_tfs", "07_build": "09_build", "09_publish": "10_publish"}
 
 
+# the robot's sensors as stage blocks had them, now set once in "dataset"
+MOVED = {("01_build_map", "rectified"): "rectified",
+         ("02_bundle_adjust", "points_topic"): "points_topic",
+         ("02b_scan_to_map", "points_topic"): "points_topic",
+         ("04_reference", "points_topic"): "points_topic",
+         ("05_anchor", "rectified"): "rectified",
+         ("05_anchor", "cam_frame"): "camera_frame",
+         ("05_anchor", "zed_map_frame"): "camera_map_frame",
+         ("05_anchor", "mapzed_frame"): "camera_map_frame",
+         ("09_build", "topic"): "points_topic"}
+
+
 def load_config(path):
     """A pipeline config; "extends": "<other config>" (relative to this one)
     starts from that one, so a run's config holds only what differs. A block
-    under its old stage number (OLD_KEYS) is read as the new one."""
+    under its old stage number (OLD_KEYS) is read as the new one; a sensor
+    setting in a stage block (MOVED) is refused: it is dataset's."""
     cfg = json.load(open(path))
     for k in [k for k in cfg if k in OLD_KEYS]:
         if OLD_KEYS[k] in cfg:
             raise SystemExit("%s has both %s and %s (its old name)" % (path, OLD_KEYS[k], k))
         cfg[OLD_KEYS[k]] = cfg.pop(k)
+    moved = ["%s.%s -> dataset.%s" % (b, k, d) for (b, k), d in MOVED.items()
+             if k in (cfg.get(b) or {})]
+    if moved:
+        raise SystemExit("%s: the robot's topics and camera are set once, in \"dataset\": "
+                         "move %s" % (path, ", ".join(moved)))
     parent = cfg.pop("extends", None)
     if parent:
         parent = os.path.join(os.path.dirname(os.path.abspath(path)),

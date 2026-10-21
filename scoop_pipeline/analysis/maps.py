@@ -31,8 +31,8 @@ ROOT = os.path.dirname(HERE)
 STAGES = os.path.join(ROOT, "map_stages")
 sys.path.insert(0, STAGES)
 
-from pipeline_common import (DEFAULT_TOPICS, deskew_to_world, load_pipeline,  # noqa: E402
-                             load_traj, pc2_xyzt, traj_quats)
+from pipeline_common import (deskew_to_world, load_pipeline, load_traj,  # noqa: E402
+                             pc2_xyzt, traj_quats)
 
 
 
@@ -537,8 +537,7 @@ def measure(config, map_path=None, n_probes=300, stride=1, traj=None):
         P.traj = b.load_traj_cached(P)
     # 01 takes the points topic from P.sensor, which is dataset.points_topic
     # when set; this one does not need the camera P.sensor also reads
-    S = SimpleNamespace(points_topic=P.dataset.get("points_topic")
-                        or DEFAULT_TOPICS["points_topic"])
+    S = SimpleNamespace(points_topic=P.points_topic)
     mpath = map_path or P.outp(P.pcd("denoised"))
     import open3d as o3d
     M = np.asarray(o3d.io.read_point_cloud(mpath).points)
@@ -809,7 +808,7 @@ def main_scans(argv=None):
     traj = a.traj or P.outp(P.dataset["traj"])
     tr_t, tr_T = load_traj(traj)
     tr_q = traj_quats(tr_T)
-    topic = P.dataset.get("points_topic") or DEFAULT_TOPICS["points_topic"]
+    topic = P.points_topic
     rate, speed = turn_rate_and_speed(tr_t, tr_T)
     step = float(np.median(np.diff(tr_t)))
     N = len(tr_t)

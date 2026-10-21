@@ -113,6 +113,7 @@ def main():
         cfg_defaults["traj"] = (P.outp(cfg_defaults["traj"]) if cfg_defaults.get("traj")
                                 else P.lidar_track_traj())
         cfg_defaults["out"] = P.outp(cfg_defaults.get("out") or "cloud_in_ref_{tag}.pcd")
+        cfg_defaults["topic"] = P.points_topic
         s01 = P.cfg.get("01_build_map", {})
         cfg_defaults.setdefault("deskew", bool(s01.get("deskew", True)))
         cfg_defaults.setdefault("deskew_bins", int(s01.get("deskew_bins", 100)))

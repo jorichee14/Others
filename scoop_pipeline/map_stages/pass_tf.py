@@ -51,7 +51,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 
 from pipeline_common import (load_config, load_pipeline, load_cameras_yaml,  # noqa: E402
-                             processed_dir_for, make_T, DEFAULT_TOPICS)
+                             processed_dir_for, make_T)
 from scoop import bag as scoop_bag, tftree                                   # noqa: E402
 
 
@@ -119,8 +119,7 @@ def plan(P, edges, bags, log=print):
     edges = dict(edges)
     s03 = P.cfg.get("05_anchor", {})
     mapf = s03.get("map_frame", "map")
-    mapzed = s03.get("mapzed_frame", "map_zed")
-    cam = s03.get("cam_frame", "zed_left_camera_optical_frame")
+    mapzed, cam = P.camera_map_frame, P.camera_frame
     frames = set(edges) | {e.parent for e in edges.values()}
     drop, static, extra = [], [], []
 
@@ -188,9 +187,7 @@ def plan(P, edges, bags, log=print):
         body, T_left = cam, None
     else:
         traj = P.outp(P.dataset["traj"]) if P.dataset.get("traj") else None
-        pts = (P.cfg.get("04_reference") or {}).get("points_topic") \
-            or P.dataset.get("points_topic") or DEFAULT_TOPICS["points_topic"]
-        body = _frame_id(bags, pts)
+        body = _frame_id(bags, P.points_topic)
         T_left = np.array(af["T_N_world"], float) if "T_N_world" in af else None
         if body is None or T_left is None:
             traj = None

@@ -34,20 +34,46 @@ def test_config_is_mobile_2_s_own_map():
                              "mirc_dataset_mapping_2_run_20261015_mobile_2_retimed")
     assert (d["points_topic"], d["image_topic"], d["camera_info_topic"]) == \
         ("/mobile_2/ouster/points", "/mobile_2/color/image_raw", "/mobile_2/color/camera_info")
-    assert c["02b_scan_to_map"]["points_topic"] == c["04_reference"]["points_topic"] == d["points_topic"]
-    assert c["04_reference"]["name"] == "mobile_2_lidar"
-    assert c["01_build_map"]["rectified"] is False and c["05_anchor"]["rectified"] is False
+    assert (d["camera_frame"], d["camera_map_frame"], d["rectified"]) == \
+        ("camera_color_optical_frame", "map_realsense", False)
     assert c["01_build_map"]["colorize"]["enable"]                     # inherited
-    assert c["05_anchor"]["cam_frame"] == "camera_color_optical_frame"
     assert c["07_build_cameras"]["enabled"] is False and c["08_emit_tfs"]["enabled"] is False
-    robots = {r["name"]: r for r in c["10_publish"]["robots"]}
-    assert robots["mobile_1"].get("enabled") is False
+    # every stage reads the robot's sensors from dataset alone
+    P = pc.Pipeline(c, STAGES)
+    assert (P.points_topic, P.camera_frame, P.camera_map_frame, P.rectified) == \
+        ("/mobile_2/ouster/points", "camera_color_optical_frame", "map_realsense", False)
+    assert P.lidar_track_traj().endswith("traj_mobile_2_lidar.tum")
+    robots = {r["name"]: r for r in P.robots()}
+    assert list(robots) == ["mobile_2"]                            # mobile_1 is not in this pass
     assert robots["mobile_2"]["traj"] == "traj_mobile_2_lidar_in_cam.tum"
     assert robots["mobile_2"]["optical_frame"] == "camera_color_optical_frame"
+    assert robots["mobile_2"]["local_frame"] == "mobile_2_base_link"
     # the pass it belongs to: raw/20261015/mapping
     import pass_tf
     raw = os.path.expanduser("~/workspaces/isaac_ros-dev/data/raw/20261015/mapping")
     assert pass_tf.find_config(raw) == CFG, pass_tf.find_config(raw)
+
+
+def test_sensors_only_in_dataset(d):
+    """A robot's topic or camera in a stage block is refused, named."""
+    import json
+    cfg = os.path.join(d, "pipeline_config_x.json")
+    json.dump({"extends": os.path.join(STAGES, "pipeline_config.json"),
+               "05_anchor": {"cam_frame": "camera_color_optical_frame"}}, open(cfg, "w"))
+    try:
+        pc.load_config(cfg)
+    except SystemExit as e:
+        assert "05_anchor.cam_frame -> dataset.camera_frame" in str(e), e
+    else:
+        raise AssertionError("05_anchor.cam_frame was accepted")
+    for c in ("pipeline_config.json", "pipeline_config_survey_1.json",
+              "pipeline_config_coop_2.json", "pipeline_config_mapping_20260924.json"):
+        P = pc.Pipeline(pc.load_config(os.path.join(STAGES, c)), STAGES)
+        assert (P.points_topic, P.camera_frame, P.camera_map_frame, P.rectified) == \
+            ("/mobile_1/ouster/points", "zed_left_camera_optical_frame", "map_zed", True), c
+        own = P.robots()[0]
+        assert (own["name"], own["traj"], own["optical_frame"]) == \
+            ("mobile_1", "traj_mobile_1_lidar_in_cam.tum", "zed_left_camera_optical_frame"), c
 
 
 def test_glim_traj_next_to_a_robot_s_own_bag(d):

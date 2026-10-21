@@ -848,7 +848,8 @@ def run(P, tr, base, ref, outd):
         else:
             floor = z_cam - 0.4
         print("    floor under mobile_2's start %.2f m, its camera %.2f m" % (floor, z_cam))
-        lc = dict(LS.DEFAULTS, z_lo=floor + 0.08, z_hi=z_cam + 0.15)
+        lc = dict(LS.DEFAULTS, points_topic=P.points_topic,
+                  lidar_track="%s_lidar" % P.machine, z_lo=floor + 0.08, z_hi=z_cam + 0.15)
         lc.update(c.get("lidar") or {})
         scans_l = LS.detect(P, ref, lc, os.path.join(outd, "lidar_sightings_%s.json" % c.get("cache_name", name)))
         sight = LS.Sightings(scans_l)

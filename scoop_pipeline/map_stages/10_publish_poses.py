@@ -77,7 +77,8 @@ CONFIG
   "map_frame": "map",
   "write_tf": true,
   "rate_hz": 0,                      <- 0 = every pose in the file; else decimate
-  "robots": [
+  "robots": [                        <- dataset.machine's is added when not listed: its
+                                        04 / mapping track, in dataset.camera_frame
     { "name": "mobile_1",
       "traj": "map_stages_20260828_outputs/reference_coop2_all/traj_mobile_1_lidar_in_cam.tum",
       "optical_frame": "zed_left_camera_optical_frame" },
@@ -368,7 +369,7 @@ def main():
     s = P.cfg.get("10_publish")
     if s is None:
         raise SystemExit("add a '10_publish' block to %s (sample in this file)" % cfg_path)
-    s = dict(s)
+    s = dict(s, robots=P.robots())
     # processed layout: the bag into bags/ (<tag>_best_poses); a bare traj
     # name is a stage-04 output in odometry/reference_<tag>/
     s["output_bag"] = P.outp(s.get("output_bag") or "{tag}_best_poses")

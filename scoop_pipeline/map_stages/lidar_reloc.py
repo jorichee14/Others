@@ -266,8 +266,7 @@ def relocalize(P, T_lidar_cam=None):
             raise SystemExit("relocalize: %s not found: %s" % (what, f))
     tr_t, tr_T = a.load_traj(run_traj)
     tr_q = traj_quats(tr_T)
-    topic = a.detect_points_topic(bag, P.cfg.get("02b_scan_to_map", {}).get("points_topic", ""),
-                                  len(tr_t))
+    topic = a.detect_points_topic(bag, P.points_topic, len(tr_t))
     print("\n=== LiDAR relocalization in the reference map ===")
     print("  run trajectory: %s (%d poses, %.1f s)" % (run_traj, len(tr_t), tr_t[-1] - tr_t[0]))
     print("  reference map:  %s" % ref_map)

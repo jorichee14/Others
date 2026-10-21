@@ -1275,7 +1275,7 @@ def colorize(P, S, s, pcd):
               f"image_width/height ({s.get('image_width')}x{s.get('image_height')}) ignored")
     c = s["colorize"]; stride = c["img_stride"]; max_range = c["max_range"]
     on_voxel = c["voxel"]; drop_gray = c["drop_gray"]
-    rectified = bool(s.get("rectified", True))
+    rectified = P.rectified
     undistort = undistorter(S, W, H, rectified)
     if not rectified:
         print(f"    images not rectified: undistorted with camera_info's D {list(np.round(S.dist, 4))}")

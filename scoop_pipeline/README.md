@@ -380,7 +380,30 @@ the map is the averaged surface, without the union's ~4 cm of stray cells.
 The map stages need the pass's config in `map_stages/`: `pipeline_config.json`
 for the mapping pass, and for a run `pipeline_config_<run>.json` with
 `"extends": "pipeline_config.json"` and `dataset.reference_pass` (e.g.
-`pipeline_config_survey_1.json`); `--config` names another. Once the merged
+`pipeline_config_survey_1.json`); `--config` names another.
+
+The robot a pass maps with, and its sensors, are set once, in `dataset`; every
+stage reads them from there (a stage block that sets one is refused, naming
+where it goes). mobile_1's are the default (`pipeline_config.json`):
+
+```
+"dataset": {
+  "bag": ..., "traj": ..., "machine": "mobile_1",
+  "points_topic": "/mobile_1/ouster/points",            the LiDAR (02, 02b, 04, 09, the TF)
+  "image_topic": "/mobile_1/zed/left/image_rect_color",  the camera (01's colours, 05's boards)
+  "camera_info_topic": "/mobile_1/zed/left/camera_info",
+  "camera_frame": "zed_left_camera_optical_frame",       its optical frame (05, 10, the TF)
+  "camera_map_frame": "map_zed",                         the camera's own tracking origin
+  "rectified": true                                      false: 01 and 05 undistort the image
+}
+```
+
+The robot's LiDAR track (`traj_<machine>_lidar.tum`) and its entry in 10's
+`robots` (that track, in `camera_frame`) follow from `machine`; 10's `robots`
+lists only other robots, or what else its own needs (`local_frame`,
+`base_frame`). A pass mapped by another robot copies this block with its values:
+`pipeline_config_mapping_20261015.json` (mobile_2) and
+`pipeline_config_mapping_20260924.json` (mobile_1). Once the merged
 bag exists, processing is not redone, so the decoded/retimed/ZED bags may be
 deleted (keep `glim/`: 02, 01_seed, the report and 03 read GLIM's trajectory). finalize
 needs as much free space as the merged bag takes. A config written before the

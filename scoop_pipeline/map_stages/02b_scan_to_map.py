@@ -154,7 +154,7 @@ def detect_points_topic(bag, override="", n_poses=0):
     print(f"    PointCloud2 topics in bag: "
           f"{[f'{t} ({n})' for t, n in cands]}")
     print(f"    -> using {topic!r} ({dict(cands)[topic]} msgs vs "
-          f"{n_poses} poses); set 02b_scan_to_map.points_topic to override")
+          f"{n_poses} poses); set dataset.points_topic to override")
     return topic
 
 
@@ -566,7 +566,7 @@ def main():
              min_corr=200, max_shift=0.50, max_rot_deg=5.0, rounds=2,
              plane_voxel=0.4, plane_iters=8, prior_beta=0.05,
              plane_huber=0.10, planarity=1.0,
-             points_topic="", output="traj_lidar_refined.txt")
+             output="traj_lidar_refined.txt")
     # deskew as 01_build_map does, so the map and the scans registered to it
     # place points the same way (02b_scan_to_map.deskew overrides)
     c.update(deskew=bool(s.get("deskew", True)), deskew_bins=max(2, int(s.get("deskew_bins", 100))))
@@ -579,7 +579,7 @@ def main():
     seed = P.seed_traj()
     times, T_seed = load_traj(seed)
     print(f"seed trajectory: {seed}  ({len(times)} poses)")
-    topic = detect_points_topic(bag, c["points_topic"], len(times))
+    topic = detect_points_topic(bag, P.points_topic, len(times))
     print(f"points topic: {topic}")
 
     T_cur = T_seed.copy()

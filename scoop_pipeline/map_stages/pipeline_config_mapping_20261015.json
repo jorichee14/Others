@@ -9,13 +9,15 @@
   "machine": "mobile_2",
   "points_topic": "/mobile_2/ouster/points",
   "image_topic": "/mobile_2/color/image_raw",
-  "camera_info_topic": "/mobile_2/color/camera_info"
+  "camera_info_topic": "/mobile_2/color/camera_info",
+  "camera_frame": "camera_color_optical_frame",
+  "camera_map_frame": "map_realsense",
+  "rectified": false
  },
  "01_build_map": {
   "_note": "2 cm, not mapping_A's 1 cm: 543 m of drive at 1 cm passed 10 GB by scan 11000 of 13903 and was killed; 02 thins its reference to 5 cm anyway, and 2 cm is finer than the Ouster's noise",
   "scan_voxel": 0.02,
   "final_voxel": 0.02,
-  "rectified": false,
   "fusion": "tsdf",
   "tsdf": {
    "_note": "trunc = 3 sigma of where the scans put a wall: check.py walls on traj_lidar_ba_glim.txt, whole run 9.0 cm (5-95 %) -> sigma 9.0 / 3.29 = 2.7 cm -> 8.0 cm; >= 3 cells of 2 cm. min_weight 3: a cell seen by fewer rays is a stray hit.",
@@ -26,19 +28,6 @@
  "02_bundle_adjust": {
   "input": "traj_lidar.txt",
   "output": "traj_lidar_ba_glim.txt"
- },
- "02b_scan_to_map": {
-  "points_topic": "/mobile_2/ouster/points"
- },
- "04_reference": {
-  "name": "mobile_2_lidar",
-  "points_topic": "/mobile_2/ouster/points"
- },
- "05_anchor": {
-  "rectified": false,
-  "zed_map_frame": "map_realsense",
-  "mapzed_frame": "map_realsense",
-  "cam_frame": "camera_color_optical_frame"
  },
  "clean": {
   "_note": "clean_pass.py keeps this beside the pipeline's own outputs, as the paper cites it: v1 = the reference built from GLIM before its pose-time correction (0.5 cm / 0.10 deg ATE from the final one).",
@@ -51,10 +40,7 @@
   "drop_tf": ["camera_link->base_link"],
   "_drop_tf": "base_link: the base link's name before mobile_2_base_link, still in the finalized bag",
   "robots": [
-   {"name": "mobile_1", "enabled": false},
    {"name": "mobile_2",
-    "traj": "traj_mobile_2_lidar_in_cam.tum",
-    "optical_frame": "camera_color_optical_frame",
     "local_frame": "mobile_2_base_link",
     "base_frame": {"_note": "mobile_2's base link, the root of its sensors (the trajectory moves it; camera_link and the LiDAR hang from it). On the RealSense body (camera_link: x forward, y left, z up) until the base is measured; then its pose in camera_link here",
                    "name": "mobile_2_base_link", "measured_in": "camera_link",

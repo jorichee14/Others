@@ -101,7 +101,7 @@ def positions(cfg):
     p = P.lidar_track_traj("_in_cam")
     if os.path.exists(p):
         traj_t, traj_T = load_traj(p)
-        body = P.cfg.get("05_anchor", {}).get("cam_frame", "zed_left_camera_optical_frame")
+        body = P.camera_frame
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from comms_tables import other_tracks
     return comms.Positions(edges, traj_t, traj_T, body, tracks=other_tracks(P, log=lambda *_: None))

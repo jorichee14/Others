@@ -2,7 +2,14 @@
   "dataset": {
     "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping_A/mirc_dataset_survey_1_mapping_20260924_merged",
     "traj": "traj_lidar_refined.txt",
-    "machine": "mobile_1"
+    "machine": "mobile_1",
+    "_sensors": "the robot's topics and camera, read by every stage (set them here only)",
+    "points_topic": "/mobile_1/ouster/points",
+    "image_topic": "/mobile_1/zed/left/image_rect_color",
+    "camera_info_topic": "/mobile_1/zed/left/camera_info",
+    "camera_frame": "zed_left_camera_optical_frame",
+    "camera_map_frame": "map_zed",
+    "rectified": true
   },
    "boards": {
     "anchor": {
@@ -112,11 +119,7 @@
     "time_tol": 0.1,
     "tf_max_gap": 0.2,
     "max_images": 0,
-    "rectified": true,
-    "map_frame": "map",
-    "mapzed_frame": "map_zed",
-    "zed_map_frame": "map_zed",
-    "cam_frame": "zed_left_camera_optical_frame"
+    "map_frame": "map"
   },
   "07_build_cameras": {
     "anchor_frame": "anchor_frame.json",
@@ -187,8 +190,7 @@
   ]
 },
 "09_build": {
-  "_note": "bag = dataset.bag; traj = 04's LiDAR-ICP track; out = mapping/cloud_in_ref_<tag>.pcd",
-  "topic": "/mobile_1/ouster/points",
+  "_note": "bag = dataset.bag; topic = dataset.points_topic; traj = 04's LiDAR-ICP track; out = mapping/cloud_in_ref_<tag>.pcd",
   "voxel": 0.03, "range_min": 0.7, "range_max": 25.0,
   "t_start": null, "t_end": null,
   "min_count": 2, "keep_quality": true
@@ -196,8 +198,6 @@
 
 "04_reference": {
     "_note": "every scan of the run registered to the anchored map, seeded by GLIM placed with 03's session anchor; ref_map = the reference pass's (or this pass's) map_final_<tag>_anchored.pcd",
-    "name": "mobile_1_lidar",
-    "points_topic": "/mobile_1/ouster/points",
     "anchor_cam": "zed",
     "out_dir": "reference_{tag}",
     "rounds": 2,
@@ -207,14 +207,10 @@
   },
 
  "10_publish": {
+  "_note": "robots: dataset.machine's is there already (its LiDAR track in dataset.camera_frame); list the others, or more of its own (local_frame, base_frame)",
   "output_bag": "{tag}_best_poses",
   "map_frame": "map",
   "write_tf": true,
-  "rate_hz": 0,
-  "robots": [
-    { "name": "mobile_1",
-      "traj": "traj_mobile_1_lidar_in_cam.tum",
-      "optical_frame": "zed_left_camera_optical_frame" }
-  ]
+  "rate_hz": 0
 }
 }

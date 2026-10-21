@@ -177,15 +177,15 @@ def main():
     infos, tree, available = read_tf_and_info(
         P.dataset["bag"], [S.camera_info_topic], want_tf=True,
         tf_max_gap=float(s.get("tf_max_gap", 0.2)))
-    K, D, from_bag = pick_intrinsics(infos, S.camera_info_topic, s["rectified"],
+    K, D, from_bag = pick_intrinsics(infos, S.camera_info_topic, P.rectified,
                                      S.K, S.dist)
     print("intrinsics: %s | fx=%.2f fy=%.2f cx=%.2f cy=%.2f | rectified=%s"
           % ("bag CameraInfo" if from_bag else "config fallback",
-             K[0, 0], K[1, 1], K[0, 2], K[1, 2], s["rectified"]))
+             K[0, 0], K[1, 1], K[0, 2], K[1, 2], P.rectified))
     print("TF frames: %s ..." % (tree.frames()[:12],))
 
     # ------------------------- pass 2: streaming detect --------------------- #
-    zed_map, cam_frame = s["zed_map_frame"], s["cam_frame"]
+    zed_map, cam_frame = P.camera_map_frame, P.camera_frame
     hits = dict((b.name, []) for b in bank.designs)   # per design, per sighting
     frames = []                                       # co-visible bookkeeping
     n_frames = n_notraj = 0
@@ -684,15 +684,15 @@ def main():
     if not any_lc:
         print("  no board was seen in two accepted sections; no drift measurable.")
 
-    MAP, MAPZED = s["map_frame"], s["mapzed_frame"]
+    MAP, MAPZED = s["map_frame"], P.camera_map_frame
     print("\n=== TF chain rooted at %s ===" % MAP)
     for nm, rec in boards_out.items():
         T = np.eye(4); T[:3, :3] = qR(rec["qxyzw"]); T[:3, 3] = rec["xyz"]
         print("\n[%s -> %s]  (%s)" % (MAP, rec["frame"], rec["method"]))
         print(stp(MAP, rec["frame"], T))
     T_boardA_cam0 = np.linalg.inv(T_world_boardA) @ (tr_T[0] @ T_lidar_cam)
-    print("\n[%s -> %s]" % (boards_out[anchor["name"]]["frame"], s["cam_frame"]))
-    print(stp(boards_out[anchor["name"]]["frame"], s["cam_frame"], T_boardA_cam0))
+    print("\n[%s -> %s]" % (boards_out[anchor["name"]]["frame"], P.camera_frame))
+    print(stp(boards_out[anchor["name"]]["frame"], P.camera_frame, T_boardA_cam0))
     if have_mapzed:
         print("\n[%s -> %s]" % (boards_out[anchor["name"]]["frame"], MAPZED))
         print(stp(boards_out[anchor["name"]]["frame"], MAPZED,

@@ -76,7 +76,7 @@ def corridor_case(tmp):
             open(os.path.join(fr, "session_anchor.json"), "w"))
         c = json.load(open(cfg))
         c["01_build_map"]["lidar_max"] = 6.0
-        c["04_reference"] = {"name": "mobile_1_lidar", "points_topic": "/mobile_1/ouster/points",
+        c["04_reference"] = {"name": "mobile_1_lidar",
                              "anchor_cam": "zed", "rounds": 2}
         json.dump(c, open(cfg, "w"))
         out = subprocess.run([sys.executable, os.path.join(STAGES, "04_reference_traj.py"), cfg],
@@ -139,7 +139,7 @@ def room_case(tmp, drift, label, rounds=2):
                        "qxyzw": Rotation.from_matrix(T_cam[:3, :3]).as_quat().tolist()}}}},
         open(os.path.join(fr, "session_anchor.json"), "w"))
     c = json.load(open(cfg))
-    c["04_reference"] = {"name": "mobile_1_lidar", "points_topic": "/mobile_1/ouster/points",
+    c["04_reference"] = {"name": "mobile_1_lidar",
                          "anchor_cam": "zed", "rounds": rounds}
     json.dump(c, open(cfg, "w"))
     out = subprocess.run([sys.executable, os.path.join(STAGES, "04_reference_traj.py"), cfg],

@@ -42,7 +42,7 @@ Outputs (odometry/reference_<tag>/):
 
 Config "04_reference" (all optional):
   "name":        "<machine>_lidar"
-  "points_topic": the LiDAR cloud topic (default: detected)
+  (the LiDAR topic is dataset.points_topic)
   "run_traj":    <work>/<date>/<pass>/<machine>/glim/traj_lidar.txt
   "anchor_cam":  "zed"       # the session_anchor.json camera to place the seed by
   "ref_map":     the reference pass's map_final_<tag>_anchored.pcd
@@ -75,7 +75,7 @@ A = importlib.import_module("02b_scan_to_map")
 DEFAULTS = dict(rounds=2, target_voxel=0.05, scan_voxel=0.10, plane_voxel=0.4,
                 max_corr=[0.4, 0.2, 0.1], iters_per_gate=5, huber=0.05, plane_iters=8,
                 plane_huber=0.10, prior_beta=0.05, planarity=1.0, min_corr=200,
-                max_shift=0.5, max_rot_deg=5.0, anchor_cam="zed", points_topic="",
+                max_shift=0.5, max_rot_deg=5.0, anchor_cam="zed",
                 seed_held_at=0.5, segment_gap_s=1.0, carry=True, carry_fit=0.85)
 
 
@@ -287,7 +287,7 @@ def main():
     T_seed = np.einsum("ij,njk->nik", T_map_glim, T_glim)
     print("\nseed: %d GLIM poses (%.1f s) placed in map by 03's '%s' anchor (%s) at t=%.3f"
           % (len(times), times[-1] - times[0], c["anchor_cam"], mode, t_a))
-    topic = A.detect_points_topic(bag, c["points_topic"], len(times))
+    topic = A.detect_points_topic(bag, P.points_topic, len(times))
 
     ref = load_reference(ref_map, c)
 
