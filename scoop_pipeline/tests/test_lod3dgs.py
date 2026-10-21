@@ -327,6 +327,57 @@ def check_body(tmp):
     return v["body_points"]
 
 
+def check_sky(tmp):
+    """A 10 x 8 m building round a 3 x 3 m courtyard (no ceiling over it),
+    the robot driving round it, a slanted sheet in the courtyard joined to
+    the courtyard's wall it reaches: view clears the courtyard's inside, the
+    sheet with it, and keeps the courtyard's walls, the outer walls and the
+    floor the robot drove on."""
+    import open3d as o3d
+    g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
+
+    def sheet(axis, val, ra, rb):
+        A, B = np.meshgrid(g(*ra), g(*rb), indexing="ij")
+        o = [i for i in range(3) if i != axis]
+        p = np.zeros((A.size, 3))
+        p[:, o[0]], p[:, o[1]], p[:, axis] = A.ravel(), B.ravel(), val
+        return p
+    yard = lambda Q: (Q[:, 0] > 4) & (Q[:, 0] < 7) & (Q[:, 1] > 2) & (Q[:, 1] < 5)   # noqa: E731
+    ceil = sheet(2, 3.0, (0, 10), (0, 8))
+    ceil = ceil[~yard(ceil)]
+    walls = [sheet(0, 0.0, (0, 8), (0, 3)), sheet(0, 10.0, (0, 8), (0, 3)), sheet(1, 0.0, (0, 10), (0, 3)),
+             sheet(1, 8.0, (0, 10), (0, 3)), sheet(0, 4.0, (2, 5), (0, 3)), sheet(0, 7.0, (2, 5), (0, 3)),
+             sheet(1, 2.0, (4, 7), (0, 3)), sheet(1, 5.0, (4, 7), (0, 3))]
+    u, z = np.meshgrid(g(0, 1), g(0.5, 2.8), indexing="ij")
+    xy = np.array([4.5, 2.5]) + u.ravel()[:, None] * np.array([2.49, 2.0])   # reaches the x = 7 wall
+    slant = np.c_[xy, z.ravel()]
+    floor = sheet(2, 0.0, (0, 10), (0, 8))
+    P = np.concatenate([floor, ceil, *walls, slant])
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    pc.colors = o3d.utility.Vector3dVector(np.full(P.shape, 0.5))
+    mp = os.path.join(tmp, "map_final_sky.pcd")
+    o3d.io.write_point_cloud(mp, pc)
+    loop = np.concatenate([np.c_[np.arange(1.5, 8.5, 0.1), np.full(70, 1.0)],
+                           np.c_[np.full(60, 8.5), np.arange(1.0, 7.0, 0.1)],
+                           np.c_[np.arange(8.5, 1.5, -0.1), np.full(70, 7.0)],
+                           np.c_[np.full(60, 1.5), np.arange(7.0, 1.0, -0.1)]])
+    tr = os.path.join(tmp, "traj_sky.txt")
+    np.savetxt(tr, np.c_[np.arange(len(loop)), loop, np.full(len(loop), 0.8),
+                         np.zeros((len(loop), 3)), np.ones(len(loop))])
+    v = L.map_view(mp, tr, os.path.join(tmp, "v_sky.pcd"), snap=False, fill=False)
+    V = np.asarray(o3d.io.read_point_cloud(v["out"]).points)
+    count = lambda Q, x0, x1, y0, y1, z0, z1: int(((Q[:, 0] > x0) & (Q[:, 0] < x1) & (Q[:, 1] > y0)  # noqa: E731
+                                                   & (Q[:, 1] < y1) & (Q[:, 2] > z0) & (Q[:, 2] < z1)).sum())
+    inner = count(V, 4.8, 6.2, 2.8, 4.2, 0.4, 2.9)
+    assert inner == 0, ("the courtyard's inside kept (the sheet)", inner)
+    for name, box in (("the courtyard wall x = 7", (6.98, 7.02, 2.2, 4.8, 0.3, 2.7)),
+                      ("the courtyard wall y = 2", (4.2, 6.8, 1.98, 2.02, 0.3, 2.7)),
+                      ("an outer wall", (0.5, 9.5, -0.02, 0.02, 0.3, 2.7)),
+                      ("the floor driven on", (0.5, 9.5, 0.3, 1.7, -0.02, 0.02))):
+        assert count(V, *box) > 0.95 * count(P, *box), (name, count(V, *box), count(P, *box))
+    return v["sky_points"]
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="lod3dgs_")
     try:
@@ -413,6 +464,9 @@ def main():
         nb = check_body(tmp)
         print(f"ok body: a sheet across the robot's way cleared whole ({nb} points), "
               "walls, floor and a partition 0.35 m away kept")
+        ns = check_sky(tmp)
+        print(f"ok sky: a courtyard's inside cleared ({ns} points), a sheet joined to its wall with it; "
+              "its walls, the outer walls and the floor kept")
         rm = check_mesh(tmp)
         print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
               f"{rm['noceil_faces']} faces without it")

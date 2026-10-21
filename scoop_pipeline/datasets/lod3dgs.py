@@ -585,6 +585,36 @@ def body_clear(P, T, h, radius=0.25, cell=0.4, sig_max=0.04, thin=0.35, min_pts=
     return out
 
 
+def sky_points(P, T, h, cell=0.4, roof_h=2.0, flat=0.9, keep_path=0.6, edge=1):
+    """Per point: over open sky, a courtyard: in a column (cell m, in plan)
+    with no ceiling of the building over it (horizontal surfaces roof_h or
+    more above the floor: |n_z| over flat, so a slanted sheet is no ceiling)
+    within `edge` columns, and more than keep_path from where the robot
+    drove. All of it, whatever it touches: a sheet in the courtyard joined to
+    the wall it crosses goes too; that wall stays, the ceiling reaching it."""
+    from scipy import ndimage
+    o3d = _o3d()
+    _, near = cKDTree(T[:, :2]).query(P[:, :2], workers=-1)
+    up = P[:, 2] - (T[near, 2] - h)
+    lo = P[:, :2].min(0)
+    ij = np.floor((P[:, :2] - lo) / cell).astype(np.int64)
+    nx, ny = ij.max(0) + 1
+    hi = np.flatnonzero(up >= roof_h)
+    roof = np.zeros((nx, ny), bool)
+    if len(hi):
+        q = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P[hi]))
+        q.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=20))
+        hor = np.abs(np.asarray(q.normals)[:, 2]) > flat
+        roof[ij[hi[hor], 0], ij[hi[hor], 1]] = True
+    if edge:
+        roof = ndimage.binary_dilation(roof, np.ones((2 * edge + 1, 2 * edge + 1), bool))
+    gx, gy = np.meshgrid(lo[0] + (np.arange(nx) + 0.5) * cell, lo[1] + (np.arange(ny) + 0.5) * cell,
+                         indexing="ij")
+    d, _ = cKDTree(T[:, :2]).query(np.c_[gx.ravel(), gy.ravel()], workers=-1)
+    sky = ~roof & (d.reshape(nx, ny) > keep_path)
+    return sky[ij[:, 0], ij[:, 1]]
+
+
 def sensor_height(P, T, cell=0.5, samples=300):
     """Height of the sensor above the floor: per sampled pose, the densest
     2 cm layer of the points within cell/2 under it, 0.1 to 3 m below."""
@@ -683,7 +713,7 @@ def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spaci
 
 def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
              ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=50.0,
-             body=0.25):
+             body=0.25, sky=True):
     """A viewing copy of the map: stray points out, walls and floors flat,
     the floor's holes filled; points, so the colours stay the map's own."""
     o3d = _o3d()
@@ -707,6 +737,12 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         report.append(f"  mirror ghosts (behind polished stone or glass: no direct ray from the path "
                       f"reaches them) removed: {int(g.sum())} points")
         res["ghost_points"] = int(g.sum())
+    if sky:
+        g = sky_points(P, T1, h)
+        P, C = P[~g], C[~g]
+        report.append(f"  over open sky (a courtyard: no ceiling of the building over it, away from the "
+                      f"robot's way), whatever it touches, removed: {int(g.sum())} points")
+        res["sky_points"] = int(g.sum())
     if body > 0:
         g = body_clear(P, T1, h, body)
         P, C = P[~g], C[~g]
@@ -989,6 +1025,8 @@ def main():
     vw.add_argument("--min-piece", type=float, default=50.0,
                     help="pieces not joined to one of this size or more (the building, m2) are removed "
                          "when open to the sky or floating (0 keeps them)")
+    vw.add_argument("--keep-sky", action="store_true",
+                    help="keep what is over open sky (a courtyard), whatever it touches")
     vw.add_argument("--body", type=float, default=0.25,
                     help="clear the space the robot drove through: this far (m) round its path, from the "
                          "floor to over the LiDAR (0: not)")
@@ -1016,7 +1054,7 @@ def main():
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,
                      max_hole=a.max_hole, roof=a.roof, ghosts=not a.keep_ghosts,
-                     min_piece=a.min_piece, body=a.body)
+                     min_piece=a.min_piece, body=a.body, sky=not a.keep_sky)
         else:
             map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,
                      trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show,

@@ -956,6 +956,13 @@ taken whole, its edges in the cells it shares with a wall too (the points on
 its plane facing as it does): a sheet seen in glass that cuts across the way
 and joins the walls it crosses. A wall the robot drove along stays.
 
+`view` also clears what is over open sky (`--keep-sky` keeps it): a column
+of 0.4 m with no ceiling of the building over it (horizontal surfaces 2 m or
+more above the floor, within a column) and more than 0.6 m from the robot's
+way: a courtyard's inside, whatever it touches, a sheet in it joined to the
+wall it crosses included; the courtyard's walls stay, the ceiling reaching
+them.
+
 Anchored: make the view and mesh from `map_final_<tag>.pcd` with the BA
 trajectory (GLIM's world), then move each into 05's frame:
 `lod3dgs.py anchor <view or mesh> --frame $P/frames/anchor_frame.json`
