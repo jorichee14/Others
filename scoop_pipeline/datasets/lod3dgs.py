@@ -615,6 +615,78 @@ def sky_points(P, T, h, cell=0.4, roof_h=2.0, flat=0.9, keep_path=0.6, edge=1):
     return sky[ij[:, 0], ij[:, 1]]
 
 
+def scan_clear(P, scans, voxel=0.1, max_range=20.0, res=0.5, margin=0.25, rel=0.02,
+               min_through=3, ratio=2.0, counts=False):
+    """Per point of the map P: empty space by the LiDAR's own scans. scans:
+    (T_world_lidar 4x4, the scan's points in the LiDAR frame) each. Every
+    scan as a range image (res degrees a pixel, the nearest return in each);
+    each 10 cm cell of the map within max_range and the scan's field of view
+    projected into it: seen through when the scan's return in its direction
+    lies beyond it (by margin + rel x range), seen at when the return is on
+    it. A cell seen through min_through times or more and over ratio x as
+    often as seen at is empty space: the laser went through where the map
+    has something (a wall's reflection in glass, which is there only seen in
+    the glass). A direction with no return (glass, sky) says nothing; a cell
+    no scan saw is kept. counts: also each point's (through, at)."""
+    lo = P.min(0)
+    k = np.floor((P - lo) / voxel).astype(np.int64)
+    dims = k.max(0) + 1
+    _, inv, cnt = np.unique((k[:, 0] * dims[1] + k[:, 1]) * dims[2] + k[:, 2],
+                            return_inverse=True, return_counts=True)
+    inv = inv.ravel()
+    Q = np.stack([np.bincount(inv, P[:, i]) for i in range(3)], 1) / cnt[:, None]
+    tree = cKDTree(Q)
+    through = np.zeros(len(Q), np.int32)
+    at = np.zeros(len(Q), np.int32)
+    rr = np.radians(res)
+    na = int(round(2 * np.pi / rr))
+    n_scans = 0
+    for T, pl in scans:
+        r = np.linalg.norm(pl, axis=1)
+        ok = r > 0.3
+        pl, r = pl[ok], r[ok]
+        if len(r) < 100:
+            continue
+        el = np.arcsin(np.clip(pl[:, 2] / r, -1, 1))
+        e0, e1 = el.min(), el.max()
+        ne = int((e1 - e0) / rr) + 1
+        img = np.full((ne, na), np.inf)
+        ia = (np.floor((np.arctan2(pl[:, 1], pl[:, 0]) + np.pi) / rr).astype(np.int64)) % na
+        np.minimum.at(img, (np.minimum(((el - e0) / rr).astype(np.int64), ne - 1), ia), r)
+        R, t = T[:3, :3], T[:3, 3]
+        cand = np.asarray(tree.query_ball_point(t, max_range), np.int64)
+        if not len(cand):
+            continue
+        q = (Q[cand] - t) @ R                                # into the LiDAR frame
+        rq = np.linalg.norm(q, axis=1)
+        eq = np.arcsin(np.clip(q[:, 2] / np.maximum(rq, 1e-9), -1, 1))
+        inview = (eq >= e0) & (eq <= e1) & (rq > 0.5)
+        cand, q, rq, eq = cand[inview], q[inview], rq[inview], eq[inview]
+        aq = (np.floor((np.arctan2(q[:, 1], q[:, 0]) + np.pi) / rr).astype(np.int64)) % na
+        rs = img[np.minimum(((eq - e0) / rr).astype(np.int64), ne - 1), aq]
+        tol = margin + rel * rq
+        through[cand[np.isfinite(rs) & (rs > rq + tol)]] += 1
+        at[cand[np.abs(rs - rq) < tol]] += 1
+        n_scans += 1
+    empty = (through >= min_through) & (through > ratio * at)
+    log.info(f"  scans: {n_scans} used; {int(empty.sum())} of {len(Q)} map cells ({voxel * 100:g} cm) seen "
+             f"through, empty space")
+    return (empty[inv], through[inv], at[inv]) if counts else empty[inv]
+
+
+def bag_scans(bag, topic, traj, every=5):
+    """(T_world_lidar, points in the LiDAR frame) of every `every`-th scan of
+    the bag's points topic with a pose of traj (TUM, the map's frame) within
+    50 ms, each deskewed to its pose: pipeline_common.iter_scans."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "map_stages"))
+    from pipeline_common import iter_scans, load_traj
+    tr_t, tr_T = load_traj(os.path.expanduser(traj))
+    for n, (j, p) in enumerate(iter_scans(os.path.expanduser(bag), topic, tr_t, 0.05, 0.5, 60.0,
+                                          tr_T=tr_T, deskew=True, frame="pose", verbose=False)):
+        if n % max(1, int(every)) == 0:
+            yield tr_T[j], p
+
+
 def sensor_height(P, T, cell=0.5, samples=300):
     """Height of the sensor above the floor: per sampled pose, the densest
     2 cm layer of the points within cell/2 under it, 0.1 to 3 m below."""
@@ -713,7 +785,7 @@ def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spaci
 
 def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
              ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=50.0,
-             body=0.25, sky=True):
+             body=0.25, sky=True, bag=None, topic=None, scan_every=5):
     """A viewing copy of the map: stray points out, walls and floors flat,
     the floor's holes filled; points, so the colours stay the map's own."""
     o3d = _o3d()
@@ -737,6 +809,13 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         report.append(f"  mirror ghosts (behind polished stone or glass: no direct ray from the path "
                       f"reaches them) removed: {int(g.sum())} points")
         res["ghost_points"] = int(g.sum())
+    if bag:
+        # the LiDAR's own scans: where the laser went through, nothing is
+        g = scan_clear(P, bag_scans(bag, topic, traj, scan_every))
+        P, C = P[~g], C[~g]
+        report.append(f"  seen through by the LiDAR's own scans (every {scan_every}th of the bag), empty "
+                      f"space (a wall's reflection in glass): {int(g.sum())} points removed")
+        res["scan_points"] = int(g.sum())
     if sky:
         g = sky_points(P, T1, h)
         P, C = P[~g], C[~g]
@@ -1025,6 +1104,10 @@ def main():
     vw.add_argument("--min-piece", type=float, default=50.0,
                     help="pieces not joined to one of this size or more (the building, m2) are removed "
                          "when open to the sky or floating (0 keeps them)")
+    vw.add_argument("--bag", default=None,
+                    help="the bag the map was made from: clear what its scans saw through (reflections)")
+    vw.add_argument("--topic", default="/mobile_2/ouster/points", help="--bag: the points topic")
+    vw.add_argument("--scan-every", type=int, default=5, help="--bag: use every Nth scan")
     vw.add_argument("--keep-sky", action="store_true",
                     help="keep what is over open sky (a courtyard), whatever it touches")
     vw.add_argument("--body", type=float, default=0.25,
@@ -1054,7 +1137,8 @@ def main():
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,
                      max_hole=a.max_hole, roof=a.roof, ghosts=not a.keep_ghosts,
-                     min_piece=a.min_piece, body=a.body, sky=not a.keep_sky)
+                     min_piece=a.min_piece, body=a.body, sky=not a.keep_sky, bag=a.bag,
+                     topic=a.topic, scan_every=a.scan_every)
         else:
             map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,
                      trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show,

@@ -963,6 +963,15 @@ way: a courtyard's inside, whatever it touches, a sheet in it joined to the
 wall it crosses included; the courtyard's walls stay, the ceiling reaching
 them.
 
+With `--bag <the bag the map was made from>` (`--topic`, the points;
+`--scan-every 5`) `view` also clears what the LiDAR's own scans saw through:
+every 5th scan as a range image, each 10 cm cell of the map in its view
+seen through when the scan's return in that direction lies beyond it; a cell
+seen through 3 times or more and over twice as often as seen at is empty
+space (a wall's reflection in glass, there only as seen in the glass). The
+trajectory must be the map's and the bag's (map_final with the BA
+trajectory). A cell no scan saw is kept.
+
 Anchored: make the view and mesh from `map_final_<tag>.pcd` with the BA
 trajectory (GLIM's world), then move each into 05's frame:
 `lod3dgs.py anchor <view or mesh> --frame $P/frames/anchor_frame.json`

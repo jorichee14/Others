@@ -378,6 +378,54 @@ def check_sky(tmp):
     return v["sky_points"]
 
 
+def check_scans(tmp):
+    """scan_clear: a closed 6 x 4 x 3 room scanned from a path (rays cast
+    against the room alone, +-22 deg, the LiDAR turned 17 deg), the map
+    holding a wall's reflection: a slanted sheet cutting through two walls.
+    Of its points the scans saw (in view of 3 scans or more, away from the
+    walls) 95 % go: the laser went through them; the room stays."""
+    import open3d as o3d
+    from scipy.spatial.transform import Rotation as Rot
+    g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
+
+    def sheet(axis, val, ra, rb):
+        A, B = np.meshgrid(g(*ra), g(*rb), indexing="ij")
+        o = [i for i in range(3) if i != axis]
+        p = np.zeros((A.size, 3))
+        p[:, o[0]], p[:, o[1]], p[:, axis] = A.ravel(), B.ravel(), val
+        return p
+    room = np.concatenate([sheet(2, 0.0, (0, 6), (0, 4)), sheet(2, 3.0, (0, 6), (0, 4)),
+                           sheet(0, 0.0, (0, 4), (0, 3)), sheet(0, 6.0, (0, 4), (0, 3)),
+                           sheet(1, 0.0, (0, 6), (0, 3)), sheet(1, 4.0, (0, 6), (0, 3))])
+    u, z = np.meshgrid(g(0, 1), g(0.2, 2.6), indexing="ij")
+    ghost = np.c_[np.array([2.0, 0.0]) + u.ravel()[:, None] * np.array([2.0, 4.0]), z.ravel()]
+    P = np.concatenate([room, ghost])
+    box = o3d.geometry.TriangleMesh.create_box(6, 4, 3)
+    scene = o3d.t.geometry.RaycastingScene()
+    scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(box))
+    az, el = np.meshgrid(np.radians(np.arange(-180, 180, 0.5)), np.radians(np.arange(-22, 22, 1.5)))
+    d = np.c_[(np.cos(el) * np.cos(az)).ravel(), (np.cos(el) * np.sin(az)).ravel(), np.sin(el).ravel()]
+    R = Rot.from_euler("z", 17, degrees=True).as_matrix()
+    scans = []
+    for x in np.arange(0.6, 5.4, 0.2):
+        t = np.array([x, 1.0, 0.8])
+        hit = scene.cast_rays(o3d.core.Tensor(np.c_[np.tile(t, (len(d), 1)), d @ R.T].astype(np.float32)))
+        r = hit["t_hit"].numpy()
+        ok = np.isfinite(r)
+        T = np.eye(4)
+        T[:3, :3], T[:3, 3] = R, t
+        scans.append((T, d[ok] * r[ok, None]))
+    gone, thr, at = L.scan_clear(P, scans, counts=True)
+    g_room, g_ghost = gone[:len(room)], gone[len(room):]
+    seen = (thr + at)[len(room):] >= 3
+    away = np.min(np.abs(np.c_[ghost[:, 1], ghost[:, 1] - 4.0]), axis=1) > 0.3
+    sel = seen & away
+    assert sel.sum() > 500, ("too little of the sheet in view to test", int(sel.sum()))
+    assert g_ghost[sel].mean() > 0.95, ("the reflection the laser went through kept", g_ghost[sel].mean())
+    assert g_room.mean() < 0.005, ("the room cleared", g_room.mean())
+    return g_ghost[sel].mean(), g_room.mean(), sel.mean()
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="lod3dgs_")
     try:
@@ -467,6 +515,9 @@ def main():
         ns = check_sky(tmp)
         print(f"ok sky: a courtyard's inside cleared ({ns} points), a sheet joined to its wall with it; "
               "its walls, the outer walls and the floor kept")
+        gs, gr, sv = check_scans(tmp)
+        print(f"ok scans: {100 * gs:.0f} % of a reflection the scans saw through cleared "
+              f"({100 * sv:.0f} % of it in their view), {100 * gr:.2f} % of the room")
         rm = check_mesh(tmp)
         print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
               f"{rm['noceil_faces']} faces without it")
