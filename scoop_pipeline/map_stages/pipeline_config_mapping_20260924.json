@@ -29,5 +29,15 @@
  },
  "07_build_cameras": {"enabled": false},
  "08_emit_tfs": {"enabled": false},
- "comms": {"enabled": false, "_note": "mapping mode: no wifi / ntp topics recorded"}
+ "comms": {"enabled": false, "_note": "mapping mode: no wifi / ntp topics recorded"},
+ "10_publish": {
+  "robots": [
+   {"name": "mobile_1",
+    "local_frame": "mobile_1_base_link",
+    "base_frame": {"_note": "mobile_1's base link, the root of its sensors, as mobile_2's in 20261015 (the trajectory moves it; the ZED body, the Ouster and both radars hang from it). On the ZED body (zed_camera_link: x forward, y left, z up) until the base is measured; then its pose in zed_camera_link here",
+                   "name": "mobile_1_base_link", "measured_in": "zed_camera_link",
+                   "xyz": [0, 0, 0], "qxyzw": [0, 0, 0, 1],
+                   "children": ["zed_camera_link", "os_sensor_mobile1", "radar1_link", "radar2_link"]}}
+  ]
+ }
 }
