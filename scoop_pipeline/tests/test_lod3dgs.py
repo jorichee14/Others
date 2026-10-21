@@ -14,28 +14,19 @@ LOD-3DGS reads it (warped grey, alpha where there is depth); remove the
 surface Poisson puts over the open top (no starting point above the walls,
 every point near the map); give the points on each surface its colour.
 Then `mesh` on the room with a ceiling, the map coloured: the mesh in the
-map's colours (each vertex the median of its 5 nearest map points', no normals so it is
+map's colours (each vertex its nearest map point's, no normals so it is
 shown unlit), named after the map, and its copy without the ceiling (auto:
-the ceiling's own faces: horizontal, 2.1 m or more above the floor) keeping
-the walls to their full height; `cut` making that copy from the mesh
-already made. Then `view` on an 8 x 6 m room
+the highest height peak) keeping the walls. Then `view` on an 8 x 6 m room
 with noisy walls and stray points, the floor missing in four places: a 1 m2
 hole (filled, at the floor's height and colour), a 5 m2 hole over --max-hole
 (left), under a box (blocked: left) and a stair opening onto a floor 1 m
 lower (a void: left), and a courtyard with no ceiling over it (left), a bench in it removed
 (a loose piece open to the sky) while the box stays (under the ceiling);
 the sensor height found from the floor under the
-poses, the strays gone, a strip arching off a wall gone while a vertical bar
-stays, a wall section held to a wall by a strip alone gone with it (not
-left flying), the walls flat, the floor all gray, nothing added outside the
-room; `why` saying a wall point is kept as the building and that section is
-removed. Then
+poses, the strays gone, the walls flat, nothing added outside the room. Then
 the mirror ghosts of a polished floor and wall (under the floor, behind the
 wall: no direct ray from the path reaches them) and a loose 5 m2 sheet removed
-by both mesh and view, the room's own surfaces kept. Then objects (a ball,
-a rack of thin bars) meshed on their own, finer: their faces on them; and
-the radio preset: under 20,000 faces, the floor and the ball within 5 cm;
-its texture: a 10 cm checker on a wall shown right on few large faces.
+by both mesh and view, the room's own surfaces kept.
 
     python scoop_pipeline/tests/test_lod3dgs.py
 """
@@ -147,29 +138,18 @@ def check_mesh(tmp):
     V, C = np.asarray(m.vertices), np.asarray(m.vertex_colors)
     assert r["coloured"] and len(C) == len(V)
     assert not m.has_vertex_normals(), "normals written: viewers would light (grey) the colours"
-    # every vertex the median colour of its 5 nearest map points, not Poisson's average
-    _, i = cKDTree(np.asarray(pc.points)).query(V, k=5)
-    assert np.abs(C - np.median(np.asarray(pc.colors)[i], axis=1)).max() < 1.5 / 255
+    # every vertex in the colour of its nearest map point, not an average of several
+    _, i = cKDTree(np.asarray(pc.points)).query(V)
+    assert np.abs(C - np.asarray(pc.colors)[i]).max() < 1.5 / 255
     top = V[:, 2] > ROOM[2] - 0.02
     assert top.sum() > 1000, top.sum()
     assert np.abs(np.median(C[top], 0) * 255 - [200, 120, 240][::-1]).max() < 15
-    # without the ceiling: its horizontal faces gone, the walls kept to their full height
-    def ceiling_left(mesh):
-        F, V = np.asarray(mesh.triangles), np.asarray(mesh.vertices)
-        a, b, c = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
-        n = np.cross(b - a, c - a)
-        nz = np.abs(n[:, 2]) / np.maximum(np.linalg.norm(n, axis=1), 1e-12)
-        return int(((nz > 0.8) & ((a + b + c)[:, 2] / 3 > ROOM[2] - 0.3)).sum())
+    assert abs(r["ceil_z"] - (ROOM[2] - 0.10)) < 0.06, r["ceil_z"]
     n = o3d.io.read_triangle_mesh(r["noceil"])
     W = np.asarray(n.vertices)
-    assert ceiling_left(m) > 1000 and ceiling_left(n) < 0.01 * ceiling_left(m), (ceiling_left(m), ceiling_left(n))
-    walls = (np.abs(W[:, 0]) < 0.03) & (W[:, 2] > ROOM[2] - 0.15)
-    assert walls.sum() > 50, ("walls cut short", walls.sum())
-    # cut: the same copy from the mesh already made
-    c = L.cut_file(r["out"], tr)
-    Wc = o3d.io.read_triangle_mesh(c["out"])
-    assert ceiling_left(Wc) < 0.01 * ceiling_left(m), ceiling_left(Wc)
-    assert ((np.abs(np.asarray(Wc.vertices)[:, 0]) < 0.03) & (np.asarray(Wc.vertices)[:, 2] > ROOM[2] - 0.15)).sum() > 50
+    assert W[:, 2].max() < r["ceil_z"] + 0.05, W[:, 2].max()
+    walls = (np.abs(W[:, 0]) < 0.03) & (W[:, 2] > 2.5)
+    assert walls.sum() > 50, walls.sum()
     return r
 
 
@@ -208,18 +188,6 @@ def check_view(tmp):
     ux, uy = np.meshgrid(g(6.0, 6.6), g(1.3, 1.7), indexing="ij")
     pts.append(np.c_[ux.ravel(), uy.ravel(), np.full(ux.size, 0.45)])      # a bench in the courtyard
     cols.append(np.tile([0.4, 0.3, 0.2], (ux.size, 1)))
-    a_, z_ = np.meshgrid(np.linspace(np.pi / 2, 3 * np.pi / 2, 120), g(1.40, 1.45))
-    pts.append(np.c_[8.0 + 0.8 * np.cos(a_.ravel()), 4.5 + 0.8 * np.sin(a_.ravel()), z_.ravel()])
-    cols.append(np.tile([0.8, 0.8, 0.8], (a_.size, 1)))      # a strip arching off the x = 8 wall
-    px, pz = np.meshgrid(g(1.2, 2.2), g(1.7, 2.3), indexing="ij")
-    pts.append(np.c_[px.ravel(), np.full(px.size, 5.0), pz.ravel()])     # a wall section, floating ...
-    cols.append(np.tile([0.6, 0.6, 0.6], (px.size, 1)))
-    hx, hz = np.meshgrid(g(0.0, 1.2), g(1.98, 2.01), indexing="ij")
-    pts.append(np.c_[hx.ravel(), np.full(hx.size, 5.0), hz.ravel()])     # ... held to the wall by a strip
-    cols.append(np.tile([0.6, 0.6, 0.6], (hx.size, 1)))
-    t_, z_ = np.meshgrid(np.linspace(0, 2 * np.pi, 7, endpoint=False), g(0.0, 2.3))
-    pts.append(np.c_[3.0 + 0.02 * np.cos(t_.ravel()), 2.0 + 0.02 * np.sin(t_.ravel()), z_.ravel()])
-    cols.append(np.tile([0.2, 0.2, 0.2], (t_.size, 1)))      # a vertical bar (a rack's), kept
     stray = np.c_[rng.uniform(1, 7, 300), rng.uniform(1, 5, 300), rng.uniform(0.8, 2.0, 300)]
     pts.append(stray)
     cols.append(np.tile([1.0, 1.0, 1.0], (300, 1)))
@@ -231,7 +199,7 @@ def check_view(tmp):
     tr = os.path.join(tmp, "traj_view.txt")
     np.savetxt(tr, np.c_[t, 4 + 3 * np.cos(t), 3 + 2 * np.sin(t), np.full_like(t, 0.6),
                          np.zeros((len(t), 3)), np.ones(len(t))])
-    r = L.map_view(mp, tr, max_hole=3.0, floor_colour="gray")
+    r = L.map_view(mp, tr, max_hole=3.0)
     assert os.path.basename(r["out"]) == "view_view_test.pcd", r["out"]
     assert abs(r["sensor_height"] - 0.6) < 0.03, r["sensor_height"]
     assert r["open"] >= 1, r
@@ -240,22 +208,13 @@ def check_view(tmp):
     low = np.abs(P[:, 2]) < 0.04
     a_in = inside(P, 1.6, 2.4, 3.6, 4.4) & low
     assert a_in.sum() > 1200, ("hole A not filled", a_in.sum())
-    assert np.abs(np.median(C[a_in], 0) - 0.72).max() < 0.02, np.median(C[a_in], 0)
-    fl = inside(P, 0.5, 7.5, 0.5, 5.5) & low & ~inside(P, 1.4, 2.6, 3.4, 4.6)
-    assert np.mean(np.abs(C[fl] - 0.72).max(1) < 0.02) > 0.97, "the floor not all gray"
+    assert np.abs(np.median(C[a_in], 0) - floor_col).max() < 0.05, np.median(C[a_in], 0)
     for name, rr in (("big hole", (4.6, 6.9, 3.7, 5.5)), ("under the box", (1.1, 1.9, 0.9, 1.7)),
                      ("stair opening", (3.6, 4.4, 0.9, 1.7)), ("courtyard", (5.6, 6.9, 0.9, 2.2))):
         n = (inside(P, *rr) & low).sum()
         assert n < 10, (name, "filled", n)
     assert ((P[:, 0] < -0.15) | (P[:, 0] > 8.15) | (P[:, 1] < -0.15) | (P[:, 1] > 6.15)).sum() == 0
-    strip = inside(P, 7.1, 7.75, 3.8, 5.2) & (P[:, 2] > 1.3) & (P[:, 2] < 1.55)   # its last 25 cm join the wall
-    assert strip.sum() == 0, ("a strip flying off the wall kept", strip.sum())
-    held = inside(P, 1.25, 2.15, 4.95, 5.05) & (P[:, 2] > 1.75) & (P[:, 2] < 2.25)
-    assert held.sum() == 0, ("a wall section a removed strip held to the wall left flying", held.sum())
-    bar = inside(P, 2.95, 3.05, 1.95, 2.05) & (P[:, 2] > 0.3) & (P[:, 2] < 2.2)
-    assert bar.sum() > 400, ("the vertical bar removed", bar.sum())
-    air = (inside(P, 0.3, 7.7, 0.3, 5.7) & (P[:, 2] > 0.8) & (P[:, 2] < 2.3) & ~inside(P, 0.9, 2.1, 0.7, 1.9)
-           & ~inside(P, 2.9, 3.1, 1.9, 2.1))
+    air = inside(P, 0.3, 7.7, 0.3, 5.7) & (P[:, 2] > 0.8) & (P[:, 2] < 2.3) & ~inside(P, 0.9, 2.1, 0.7, 1.9)
     assert air.sum() < 30, ("strays left", air.sum())
     bench = inside(P, 6.0, 6.6, 1.3, 1.7) & (np.abs(P[:, 2] - 0.45) < 0.05)
     assert bench.sum() == 0, ("a loose piece in the courtyard kept", bench.sum())
@@ -264,14 +223,6 @@ def check_view(tmp):
     wall = (np.abs(P[:, 0]) < 0.15) & (P[:, 2] > 0.3) & (P[:, 2] < 2.0) & (P[:, 1] > 0.5) & (P[:, 1] < 5.5)
     th = np.subtract(*np.percentile(P[wall, 0], [95, 5]))
     assert th < 0.02, ("wall not flat", th)
-    # why: a wall point kept as the building, the held section removed, each with the reason
-    import contextlib
-    import io
-    for at, want in (([0.0, 3.0, 1.5], "-> kept: it is joined to the building"), ([1.7, 5.0, 2.0], "-> removed")):
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            L.why_point(mp, tr, at)
-        assert want in buf.getvalue(), (at, buf.getvalue())
     return r, th
 
 
@@ -279,8 +230,7 @@ def check_ghosts(tmp):
     """A closed 6 x 4 x 3 room as a polished floor and wall would show it:
     a ghost of the ceiling 3 m under the floor and of a cabinet behind the
     x = 0 wall (no direct ray from the path reaches either), and a loose
-    5 m2 sheet floating tilted in the room and a curved ribbon (meshed as an
-    object). mesh, its radio preset and view: all gone, the
+    5 m2 sheet floating tilted in the room. mesh and view: all three gone, the
     room's own surfaces kept."""
     import open3d as o3d
     rng = np.random.default_rng(2)
@@ -300,9 +250,7 @@ def check_ghosts(tmp):
              sheet(1, 2.0, (-1.0, -0.2), (0.5, 1.5))]                             # a cabinet, behind x = 0
     pa = sheet(2, 0.0, (1.0, 3.5), (1.0, 3.0))
     pa[:, 2] = 1.6 + 0.2 * (pa[:, 0] - 1.0)
-    t_, z_ = np.meshgrid(np.linspace(0, np.pi, 100), g(1.8, 2.0))
-    ribbon = np.c_[4.5 + 0.6 * np.cos(t_.ravel()), 2.5 + 0.6 * np.sin(t_.ravel()), z_.ravel()]
-    panel = [pa, ribbon]   # a loose 5 m2 sheet, tilted, and a curved ribbon (an object), floating
+    panel = [pa]                                    # a loose 5 m2 sheet, tilted, floating (seen through glass)
     P = np.concatenate(room + ghost + panel)
     P += rng.normal(0, 0.003, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
@@ -315,9 +263,7 @@ def check_ghosts(tmp):
     def bad(V):
         return {"under the floor": int((V[:, 2] < -0.5).sum()), "behind the wall": int((V[:, 0] < -0.3).sum()),
                 "panel": int(((V[:, 2] > 1.5) & (V[:, 2] < 2.2) & (V[:, 0] > 1.1) & (V[:, 0] < 3.4)
-                              & (V[:, 1] > 1.1) & (V[:, 1] < 2.9)).sum()),
-                "ribbon": int(((V[:, 2] > 1.7) & (V[:, 2] < 2.1) & (V[:, 0] > 3.85) & (V[:, 0] < 5.15)
-                               & (V[:, 1] > 2.45) & (V[:, 1] < 3.15)).sum())}
+                              & (V[:, 1] > 1.1) & (V[:, 1] < 2.9)).sum())}
     floor = lambda V: int(((np.abs(V[:, 2]) < 0.03) & (V[:, 0] > 0.3) & (V[:, 0] < 5.7)   # noqa: E731
                            & (V[:, 1] > 0.3) & (V[:, 1] < 3.7)).sum())
     keep = L.map_mesh(mp, tr, os.path.join(tmp, "m_keep.ply"), ghosts=False, min_piece=0)
@@ -327,168 +273,11 @@ def check_ghosts(tmp):
     assert min(bad(Vk).values()) > 0, ("the scene has no ghost to remove", bad(Vk))
     assert max(bad(Vc).values()) == 0, ("mesh: left", bad(Vc))
     assert floor(Vc) > 0.97 * floor(Vk), ("mesh: floor lost", floor(Vc), floor(Vk))
-    radio = L.map_mesh(mp, tr, os.path.join(tmp, "m_radio.ply"), voxel=0.05, trim=0.25, subdivide=0,
-                       object_cell=0.05, object_trim=0.06, faces=20000)
-    Vr = np.asarray(o3d.io.read_triangle_mesh(radio["out"]).vertices)
-    assert max(bad(Vr).values()) == 0, ("radio mesh: left", bad(Vr))
     v = L.map_view(mp, tr, os.path.join(tmp, "v_clean.pcd"), snap=False, fill=False)
     Pv = np.asarray(o3d.io.read_point_cloud(v["out"]).points)
     assert max(bad(Pv).values()) == 0, ("view: left", bad(Pv))
     assert floor(Pv) > 0.97 * floor(P), ("view: floor lost", floor(Pv), floor(P))
     return clean, v
-
-
-def check_objects(tmp):
-    """A 6 x 4 x 3 room with a ball (r 0.3 m) and a rack of five thin bars
-    (r 2 cm, 1.2 m tall): meshed on their own (the default), the objects'
-    faces lie on them (90 % of the vertices within 1.5 cm of the ball's
-    surface; every bar meshed, its faces at its 2 cm radius, 90 % within 6 cm
-    of its axis: the most a map of 2 cm points gives); with one Poisson for
-    everything the ball gets the shells Poisson closes it with (75 %)."""
-    import open3d as o3d
-    rng = np.random.default_rng(4)
-    g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
-    pts = []
-    for axis, val, ra, rb in ((2, 0.0, (0, 6), (0, 4)), (2, 3.0, (0, 6), (0, 4)),
-                              (0, 0.0, (0, 4), (0, 3)), (0, 6.0, (0, 4), (0, 3)),
-                              (1, 0.0, (0, 6), (0, 3)), (1, 4.0, (0, 6), (0, 3))):
-        A, B = np.meshgrid(g(*ra), g(*rb), indexing="ij")
-        o = [i for i in range(3) if i != axis]
-        p = np.zeros((A.size, 3))
-        p[:, o[0]], p[:, o[1]], p[:, axis] = A.ravel(), B.ravel(), val
-        pts.append(p)
-    t = np.linspace(0, 2 * np.pi, 60)                          # a loop round the room: both sides seen
-    path = np.c_[3 + 2.4 * np.cos(t), 2 + 1.5 * np.sin(t), np.full_like(t, 1.2)]
-    ball_c = np.array([2.0, 2.0, 0.8])
-    u = rng.normal(size=(12000, 3))
-    u /= np.linalg.norm(u, axis=1, keepdims=True)
-    b = ball_c + 0.3 * u
-    seen = (np.einsum("ij,kj->ik", u, path) - np.einsum("ij,ij->i", u, b)[:, None] > 0).any(1)
-    ball_pts = b[seen]
-    pts.append(ball_pts)                                       # what a sensor on the path can see of it
-    bars = [np.array([3.2 + 0.3 * i, 1.5]) for i in range(5)]
-    for b in bars:
-        t, z = np.meshgrid(np.linspace(0, 2 * np.pi, 7, endpoint=False), g(0.0, 1.2))
-        pts.append(np.c_[b[0] + 0.02 * np.cos(t.ravel()), b[1] + 0.02 * np.sin(t.ravel()), z.ravel()])
-    P = np.concatenate(pts) + rng.normal(0, 0.003, (sum(len(p) for p in pts), 3))
-    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
-    pc.colors = o3d.utility.Vector3dVector(rng.uniform(0.3, 0.7, P.shape))
-    mp = os.path.join(tmp, "map_final_objects.pcd")
-    o3d.io.write_point_cloud(mp, pc)
-    tr = os.path.join(tmp, "traj_objects.txt")
-    np.savetxt(tr, np.c_[t, path, np.zeros((len(t), 3)), np.ones(len(t))])
-
-    def ball_fit(path):
-        V = np.asarray(o3d.io.read_triangle_mesh(path).vertices)
-        near = np.linalg.norm(V - ball_c, axis=1) < 0.5
-        return float(np.mean(np.abs(np.linalg.norm(V[near] - ball_c, axis=1) - 0.3) < 0.015)), V
-    r = L.map_mesh(mp, tr, os.path.join(tmp, "o_split.ply"))
-    one = L.map_mesh(mp, tr, os.path.join(tmp, "o_one.ply"), objects=False)
-    fs, V = ball_fit(r["out"])
-    f1, _ = ball_fit(one["out"])
-    assert r["object_faces"] > 0, r
-    assert fs > 0.9 and fs > f1 + 0.1, ("objects' mesh off the ball", fs, "one Poisson", f1)
-    for b in bars:
-        on = (np.linalg.norm(V[:, :2] - b, axis=1) < 0.1) & (V[:, 2] > 0.2) & (V[:, 2] < 1.0)
-        assert on.sum() > 30, ("bar not meshed", b, on.sum())
-        w = np.linalg.norm(V[on, :2] - b, axis=1)
-        assert abs(np.median(w) - 0.02) < 0.012 and np.percentile(w, 90) < 0.06, \
-            ("bar not meshed on it", b, np.percentile(w, [50, 90]))
-    # the radio preset (as --radio sets it): few faces, the room and the ball still there
-    rr = L.map_mesh(mp, tr, os.path.join(tmp, "o_radio.ply"), voxel=0.05, trim=0.25, subdivide=0,
-                    object_cell=0.05, object_trim=0.06, faces=20000)
-    mr = o3d.io.read_triangle_mesh(rr["out"])
-    assert len(mr.triangles) <= 20000, len(mr.triangles)
-    scene = o3d.t.geometry.RaycastingScene()
-    scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(mr))
-    dist = lambda Q: scene.compute_distance(o3d.core.Tensor(Q.astype(np.float32))).numpy()   # noqa: E731
-    fl = np.c_[rng.uniform(0.3, 5.7, 2000), rng.uniform(0.3, 3.7, 2000), np.zeros(2000)]
-    fl = fl[np.linalg.norm(fl[:, :2] - ball_c[:2], axis=1) > 0.5]
-    assert np.mean(dist(fl) < 0.05) > 0.95, ("radio mesh: floor", np.mean(dist(fl) < 0.05))
-    on_ball = ball_pts[::20]
-    assert np.mean(dist(on_ball) < 0.05) > 0.9, ("radio mesh: ball", np.mean(dist(on_ball) < 0.05))
-    return fs, f1, len(mr.triangles)
-
-
-def read_textured_ply(path):
-    """(V, F, UV, png) of a PLY written by write_textured_ply."""
-    with open(path, "rb") as fh:
-        hdr = []
-        while True:
-            ln = fh.readline().decode().strip()
-            hdr.append(ln)
-            if ln == "end_header":
-                break
-        nv = int(next(h for h in hdr if h.startswith("element vertex")).split()[-1])
-        png = next(h for h in hdr if h.startswith("comment TextureFile")).split()[-1]
-        rgb = any("red" in h for h in hdr)
-        nrm = any(h == "property float nx" for h in hdr)
-        vd = ([("x", "<f4"), ("y", "<f4"), ("z", "<f4")]
-              + ([("nx", "<f4"), ("ny", "<f4"), ("nz", "<f4")] if nrm else [])
-              + [("u", "<f4"), ("v", "<f4")] + ([("r", "u1"), ("g", "u1"), ("b", "u1")] if rgb else []))
-        va = np.frombuffer(fh.read(nv * np.dtype(vd).itemsize), vd)
-        fa = np.frombuffer(fh.read(), [("n", "u1"), ("i", "<i4", (3,)), ("nt", "u1"), ("t", "<f4", (6,))])
-    V = np.c_[va["x"], va["y"], va["z"]].astype(float)
-    assert nrm, "a textured mesh without normals: drawn dark (ambient light alone)"
-    N = np.c_[va["nx"], va["ny"], va["nz"]]
-    assert np.allclose(np.linalg.norm(N, axis=1), 1, atol=1e-3)
-    return V, fa["i"].astype(int), np.c_[va["u"], va["v"]].astype(float), png, (
-        np.c_[va["r"], va["g"], va["b"]] / 255.0 if rgb else None)
-
-
-def check_texture(tmp):
-    """A room whose x = 0 wall is a checker of 10 cm squares, meshed as
-    --radio does (few faces) with the texture: points sampled on the wall
-    get their colour from the texture right (75 %: a sample within a point
-    spacing of a square's edge can take either colour), where the vertex colours
-    of the few large faces cannot show a checker at all."""
-    import open3d as o3d
-    rng = np.random.default_rng(6)
-    g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
-    pts, cols = [], []
-    check = lambda y, z: ((np.floor(y / 0.1) + np.floor(z / 0.1)) % 2)[:, None] * np.ones(3)  # noqa: E731
-    for axis, val, ra, rb in ((2, 0.0, (0, 6), (0, 4)), (2, 3.0, (0, 6), (0, 4)),
-                              (0, 0.0, (0, 4), (0, 3)), (0, 6.0, (0, 4), (0, 3)),
-                              (1, 0.0, (0, 6), (0, 3)), (1, 4.0, (0, 6), (0, 3))):
-        A, B = np.meshgrid(g(*ra), g(*rb), indexing="ij")
-        o = [i for i in range(3) if i != axis]
-        p = np.zeros((A.size, 3))
-        p[:, o[0]], p[:, o[1]], p[:, axis] = A.ravel(), B.ravel(), val
-        pts.append(p)
-        cols.append(check(p[:, 1], p[:, 2]) if (axis == 0 and val == 0.0) else np.full((len(p), 3), 0.5))
-    P = np.concatenate(pts)
-    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
-    pc.colors = o3d.utility.Vector3dVector(np.concatenate(cols))
-    mp = os.path.join(tmp, "map_final_texture.pcd")
-    o3d.io.write_point_cloud(mp, pc)
-    tr = os.path.join(tmp, "traj_texture.txt")
-    t = np.linspace(0, 2 * np.pi, 40)
-    np.savetxt(tr, np.c_[t, 3 + 2 * np.cos(t), 2 + 1.2 * np.sin(t), np.full_like(t, 1.2),
-                         np.zeros((len(t), 3)), np.ones(len(t))])
-    r = L.map_mesh(mp, tr, os.path.join(tmp, "t_radio.ply"), voxel=0.05, trim=0.25, subdivide=0,
-                   object_cell=0.05, object_trim=0.06, faces=3000, texture=True, texel=0.01)
-    V, F, UV, png, rgb = read_textured_ply(r["out"])
-    img = cv2.imread(os.path.join(tmp, png))[:, :, ::-1] / 255.0
-    H, W = img.shape[:2]
-    assert len(F) <= 3000, len(F)
-    cen = V[F].mean(1)
-    wall = np.flatnonzero((np.abs(cen[:, 0]) < 0.05) & (cen[:, 2] > 0.3) & (cen[:, 2] < 2.7)
-                          & (cen[:, 1] > 0.3) & (cen[:, 1] < 3.7))
-    fi = rng.choice(wall, 5000)
-    lam = rng.dirichlet([1, 1, 1], 5000)
-    X = np.einsum("nk,nkd->nd", lam, V[F[fi]])
-    uv = np.einsum("nk,nkd->nd", lam, UV[F[fi]])
-    tex = img[np.clip(((1 - uv[:, 1]) * H).astype(int), 0, H - 1), np.clip((uv[:, 0] * W).astype(int), 0, W - 1)]
-    want = check(X[:, 1], X[:, 2])
-    good = np.mean(np.abs(tex - want).max(1) < 0.35)
-    assert rgb is None, "vertex colours beside the texture: a viewer shows them, faded"
-    # what vertex colours on these faces would show: the map's colour at each corner, blended
-    _, vi = cKDTree(P).query(V, k=5)
-    vrgb = np.median(np.concatenate(cols)[vi], axis=1)
-    vcol = np.einsum("nk,nkd->nd", lam, vrgb[F[fi]])
-    good_v = np.mean(np.abs(vcol - want).max(1) < 0.35)
-    assert good > 0.75 and good > good_v + 0.25, ("texture", good, "vertex colours", good_v)
-    return len(F), good, good_v
 
 
 def main():
@@ -572,18 +361,11 @@ def main():
         print(f"ok view: sensor {rv['sensor_height']:.2f} m up, {rv['holes']} hole filled "
               f"({rv['filled_m2']:.1f} m2), {rv['skipped']} left, wall {th * 100:.1f} cm thick")
         gm, gv = check_ghosts(tmp)
-        print(f"ok ghosts: mesh {gm['ghost_faces']} ghost faces and {gm['piece_points']} loose points out, "
+        print(f"ok ghosts: mesh {gm['ghost_faces']} ghost and {gm['piece_faces']} loose faces out, "
               f"view {gv['ghost_points']} ghost and {gv['piece_points']} loose points out, the room kept")
-        fs, f1, nr = check_objects(tmp)
-        print(f"ok objects: {100 * fs:.0f} % of the ball's vertices on it meshed on their own "
-              f"({100 * f1:.0f} % with one Poisson), every bar meshed at its radius; "
-              f"radio mesh {nr} faces, floor and ball within 5 cm")
-        nt, gt, gv = check_texture(tmp)
-        print(f"ok texture: {nt} faces, a 10 cm checker right on {100 * gt:.0f} % of the wall from the "
-              f"texture ({100 * gv:.0f} % from the vertex colours)")
         rm = check_mesh(tmp)
-        print(f"ok mesh: {rm['faces_kept']} faces, the ceiling's {rm['ceiling_faces']} removed, "
-              f"walls kept to the top, {rm['noceil_faces']} faces without it")
+        print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
+              f"{rm['noceil_faces']} faces without it")
         print(f"ok: {r['frames']} frames, camera {Wc}x{Hc}, {r['points']} points "
               f"({100 * r['coloured']:.0f}% coloured), mesh {r['faces_kept']}/{r['faces']} faces")
     finally:

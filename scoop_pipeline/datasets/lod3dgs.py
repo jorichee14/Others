@@ -241,7 +241,7 @@ def ghost_points(P, T, voxel=0.06, near=0.12, **kw):
     return ghost
 
 
-def loose(ids, X, area, T, h, min_area=50.0, roof_h=2.0, float_h=1.2, cell=0.4, detail=False):
+def loose(ids, X, area, T, h, min_area=50.0, roof_h=2.0, float_h=1.2, cell=0.4):
     """Per piece (ids: each element's piece, X: its position, area: per piece
     m2): to remove. The pieces of min_area or more are the building; any
     other is removed when it is open to the sky (under half of it has the
@@ -250,10 +250,9 @@ def loose(ids, X, area, T, h, min_area=50.0, roof_h=2.0, float_h=1.2, cell=0.4, 
     floats (its bottom float_h or more above the floor: a lamp, a sign, a
     reflection, a sheet seen through glass). One under the ceiling and down
     at the floor is furniture: kept. The floor under each element is the
-    nearest pose's height less the sensor height h. detail: also each
-    piece's (small, share without a ceiling over it, bottom above the floor)."""
+    nearest pose's height less the sensor height h."""
     small = area < min_area
-    if not small.any() and not detail:
+    if not small.any():
         return small
     _, near = cKDTree(T[:, :2]).query(X[:, :2], workers=-1)
     up = X[:, 2] - (T[near, 2] - h)                                 # height above the floor
@@ -266,12 +265,10 @@ def loose(ids, X, area, T, h, min_area=50.0, roof_h=2.0, float_h=1.2, cell=0.4, 
     roofed[col[big & (up >= roof_h)]] = True
     n = len(area)
     cnt = np.bincount(ids, minlength=n)
-    open_share = np.bincount(ids, (~roofed[col]).astype(float), n) / np.maximum(cnt, 1)
-    sky = open_share > 0.5
+    sky = np.bincount(ids, (~roofed[col]).astype(float), n) / np.maximum(cnt, 1) > 0.5
     bottom = np.full(n, np.inf)
     np.minimum.at(bottom, ids, up)
-    gone = small & (sky | (bottom >= float_h))
-    return (gone, small, open_share, bottom) if detail else gone
+    return small & (sky | (bottom >= float_h))
 
 
 def drop_pieces(mesh, T, h, min_area=50.0):
@@ -286,7 +283,7 @@ def drop_pieces(mesh, T, h, min_area=50.0):
     return out, int(gone.sum())
 
 
-def piece_points(P, T, h, min_area=50.0, cell=0.1, detail=False):
+def piece_points(P, T, h, min_area=50.0, cell=0.1):
     """Per point: in a loose piece (see loose()); a piece is the points of
     10 cm cells touching, its area their count x cell^2."""
     from scipy import ndimage
@@ -299,9 +296,6 @@ def piece_points(P, T, h, min_area=50.0, cell=0.1, detail=False):
     lab, n = ndimage.label(occ, structure=np.ones((3, 3, 3), bool))
     area = np.bincount(lab.ravel(), minlength=n + 1) * cell * cell
     ids = lab[ijk[:, 0], ijk[:, 1], ijk[:, 2]]
-    if detail:
-        gone, small, open_share, bottom = loose(ids, P, area, T, h, min_area, detail=True)
-        return gone[ids], ids, area, small, open_share, bottom
     return loose(ids, P, area, T, h, min_area)[ids]
 
 
@@ -324,88 +318,20 @@ def height_histogram(z, step=0.05, width=50):
     return "\n".join(lines), centres, counts
 
 
-CEIL_MIN = 2.1          # a ceiling is this far above the floor at least (m)
+def ceiling_height(centres, counts):
+    """The highest strong peak of the histogram: the largest bin of the top 40 %
+    of the height range."""
+    top = centres >= centres[0] + 0.6 * (centres[-1] - centres[0])
+    return float(centres[top][np.argmax(counts[top])])
 
 
-def ceiling_faces(mesh, T, h, flat=0.8):
-    """Per face of the mesh: a ceiling, a horizontal face (|n_z| > flat)
-    CEIL_MIN or more above the floor under it (the nearest pose's height less
-    the sensor height h). Walls keep their full height whatever the ceiling's
-    height is there, over a low ceiling and a high one alike."""
-    F, V = np.asarray(mesh.triangles), np.asarray(mesh.vertices)
-    if not len(F):
-        return np.zeros(0, bool)
-    a, b, c = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
-    n = np.cross(b - a, c - a)
-    nz = np.abs(n[:, 2]) / np.maximum(np.linalg.norm(n, axis=1), 1e-12)
-    cen = (a + b + c) / 3
-    _, near = cKDTree(T[:, :2]).query(cen[:, :2], workers=-1)
-    up = cen[:, 2] - (T[near, 2] - h)
-    return (nz > flat) & (up >= CEIL_MIN)
-
-
-def ceiling_points(P, T, h, flat=0.8, r=0.1):
-    """Per point: on a ceiling (see ceiling_faces), its normal from the
-    points within r."""
-    o3d = _o3d()
-    _, near = cKDTree(T[:, :2]).query(P[:, :2], workers=-1)
-    up = P[:, 2] - (T[near, 2] - h)
-    hi = np.flatnonzero(up >= CEIL_MIN)
-    out = np.zeros(len(P), bool)
-    if len(hi):
-        pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P[hi]))
-        pc.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=r, max_nn=30))
-        out[hi] = np.abs(np.asarray(pc.normals)[:, 2]) > flat
-    return out
-
-
-def remove_ceiling_mesh(mesh, T, h, ceil, margin):
-    """(the mesh without its ceiling, how, faces removed): ceil "auto" the
-    ceiling surfaces (ceiling_faces), a number every face above it."""
-    if str(ceil) == "auto":
-        gone = ceiling_faces(mesh, T, h)
-        how = f"the ceilings: horizontal faces {CEIL_MIN} m or more above the floor"
-    else:
-        F, V = np.asarray(mesh.triangles), np.asarray(mesh.vertices)
-        gone = V[F].mean(1)[:, 2] > float(ceil)
-        how = f"every face above z = {float(ceil):+.2f}"
+def cut_above(mesh, z):
+    """A copy of the mesh without the faces whose centre is above z."""
     out = type(mesh)(mesh)
-    out.remove_triangles_by_mask(gone)
+    F, V = np.asarray(out.triangles), np.asarray(out.vertices)
+    out.remove_triangles_by_mask(V[F].mean(1)[:, 2] > z)
     out.remove_unreferenced_vertices()
-    return out, how, int(gone.sum())
-
-
-def cut_file(path, traj, ceil="auto", margin=0.10, out=None):
-    """A copy of a mesh or a point cloud without what is above the ceiling
-    (ceil_z): <name>_noceil, the mesh not made again."""
-    o3d = _o3d()
-    path = os.path.expanduser(path)
-    stem, ext = os.path.splitext(path)
-    out = out or stem + "_noceil" + ext
-    T = read_tum_positions(traj, stride=1)
-    m = o3d.io.read_triangle_mesh(path)
-    if len(m.triangles):
-        h = sensor_height(np.asarray(m.vertices), T)[0]
-        c, how, _ = remove_ceiling_mesh(m, T, h, ceil, margin)
-        o3d.io.write_triangle_mesh(out, c)
-        n, kept = len(m.triangles), len(c.triangles)
-    else:
-        pc = o3d.io.read_point_cloud(path)
-        if not len(pc.points):
-            raise ConvertError(f"{path}: no faces or points")
-        P = np.asarray(pc.points)
-        h = sensor_height(P, T)[0]
-        if str(ceil) == "auto":
-            gone = ceiling_points(P, T, h)
-            how = f"the ceilings: horizontal surfaces {CEIL_MIN} m or more above the floor"
-        else:
-            gone = P[:, 2] > float(ceil)
-            how = f"every point above z = {float(ceil):+.2f}"
-        c = pc.select_by_index(np.flatnonzero(~gone))
-        o3d.io.write_point_cloud(out, c)
-        n, kept = len(P), len(c.points)
-    log.info(f"{out}: {how} removed, {kept} of {n} kept")
-    return {"out": out, "kept": kept, "removed": n - kept}
+    return out
 
 
 def default_mesh_out(map_path):
@@ -418,308 +344,77 @@ def default_mesh_out(map_path):
     return os.path.join(d, stem + "_mesh.ply")
 
 
-def mesh_objects(pc, centres, cell=0.012, trim=0.03, tile=4.0, min_pts=200, smooth=10):
-    """The mesh of the points that are not walls or floors (objects), on its
-    own and finer: Poisson tile by tile (tile m, with 0.2 m of the next tiles
-    so nothing is cut at an edge), octree cells about `cell` across, the
-    tenth of vertices least backed by points (Poisson's density) and every
-    face farther than `trim` from a point removed (no bubbles), each tile
-    keeping the faces whose centre is in it; then `smooth` passes of Taubin
-    smoothing (evens a ragged surface out without shrinking it)."""
-    o3d = _o3d()
-    P = np.asarray(pc.points)
-    out = o3d.geometry.TriangleMesh()
-    if len(P) < min_pts:
-        return out
-    lo = P[:, :2].min(0)
-    ij = np.floor((P[:, :2] - lo) / tile).astype(np.int64)
-    ctree = cKDTree(centres)
-    for key in np.unique(ij, axis=0):
-        x0 = lo + key * tile
-        sel = np.flatnonzero(np.all((P[:, :2] >= x0 - 0.2) & (P[:, :2] < x0 + tile + 0.2), 1))
-        if len(sel) < min_pts:
-            continue
-        sub = pc.select_by_index(sel)
-        sub.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=0.06, max_nn=30))
-        Q, N = np.asarray(sub.points), np.asarray(sub.normals)
-        _, near = ctree.query(Q)
-        flip = np.einsum("ij,ij->i", N, centres[near] - Q) < 0
-        N[flip] *= -1
-        sub.normals = o3d.utility.Vector3dVector(N)
-        ext = float(np.max(Q.max(0) - Q.min(0)))
-        depth = int(np.clip(np.ceil(np.log2(max(ext, cell) / cell)), 6, 11))
-        m, dens = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(sub, depth=depth)
-        dens = np.asarray(dens)
-        if len(dens):
-            m.remove_vertices_by_mask(dens < np.quantile(dens, 0.1))
-        F, V = np.asarray(m.triangles), np.asarray(m.vertices)
-        if not len(F):
-            continue
-        c = V[F].mean(1)
-        d, _ = cKDTree(Q).query(c)
-        inside = np.all((c[:, :2] >= x0) & (c[:, :2] < x0 + tile), 1)
-        m.remove_triangles_by_mask((d > trim) | ~inside)
-        m.remove_unreferenced_vertices()
-        if smooth and len(m.triangles):
-            m = m.filter_smooth_taubin(number_of_iterations=int(smooth))
-        out += m
-    return out
-
-
-def bake_texture(mesh, map_path, png, texel=0.01, max_side=8192, k=5, chunk=4_000_000):
-    """(vertices, faces, uv): the mesh unwrapped into one texture (xatlas)
-    and the map's colours baked into it, every texel the median colour of
-    the k map points nearest its place on the surface, written to png. A
-    few large faces then show the map's colours as sharply as its points
-    (texel m per texel, made coarser when the texture would be over
-    max_side texels across)."""
-    import cv2
-    try:
-        import xatlas
-    except ImportError:
-        raise ConvertError("the texture needs xatlas: pip install xatlas (or --no-texture)")
-    V = np.asarray(mesh.vertices, np.float32)
-    F = np.asarray(mesh.triangles, np.uint32)
-    area = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1).sum()
-    t = max(texel, float(np.sqrt(area * 1.5)) / max_side)
-    for _ in range(6):
-        atlas = xatlas.Atlas()
-        atlas.add_mesh(V, F)
-        po = xatlas.PackOptions()
-        po.texels_per_unit, po.padding, po.resolution, po.bilinear = 1.0 / t, 2, 0, True
-        atlas.generate(pack_options=po)
-        if atlas.atlas_count == 1 and max(atlas.width, atlas.height) <= max_side:
-            break
-        t *= 1.3
-    vmap, Fn, UV = atlas.get_mesh(0)
-    W, H = atlas.width, atlas.height
-    Vn = V[vmap].astype(float)
-    # which face each texel is on
-    pix = UV[Fn] * [W, H]
-    pix[..., 1] = H - pix[..., 1]                          # v up, image rows down
-    fid = np.full((H, W), -1, np.int32)
-    tri = np.round(pix * 16).astype(np.int32)
-    for i in range(len(Fn)):
-        cv2.fillPoly(fid, [tri[i]], int(i), lineType=cv2.LINE_8, shift=4)
-    ys, xs = np.nonzero(fid >= 0)
-    o3d = _o3d()
-    src = o3d.io.read_point_cloud(os.path.expanduser(map_path))
-    C = np.asarray(src.colors) if src.has_colors() else np.full((len(src.points), 3), 0.6)
-    tree = cKDTree(np.asarray(src.points))
-    img = np.zeros((H, W, 3), np.uint8)
-    for s0 in range(0, len(ys), chunk):
-        y, x = ys[s0:s0 + chunk], xs[s0:s0 + chunk]
-        f = fid[y, x]
-        # the texel's place on the surface (barycentric), then its colour
-        a, b, c = pix[f, 0], pix[f, 1], pix[f, 2]
-        v0, v1, v2 = b - a, c - a, np.c_[x + 0.5, y + 0.5] - a
-        d00, d01, d11 = (v0 * v0).sum(1), (v0 * v1).sum(1), (v1 * v1).sum(1)
-        d20, d21 = (v2 * v0).sum(1), (v2 * v1).sum(1)
-        den = d00 * d11 - d01 * d01
-        den = np.where(np.abs(den) > 1e-12, den, 1.0)
-        lb, lc = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
-        lam = np.clip(np.c_[1 - lb - lc, lb, lc], 0, 1)
-        lam /= np.maximum(lam.sum(1, keepdims=True), 1e-12)
-        X = np.einsum("nk,nkd->nd", lam, Vn[Fn[f]])
-        _, idx = tree.query(X, k=k, workers=-1)
-        col = C[idx] if k == 1 else np.median(C[idx], axis=1)
-        img[y, x] = np.clip(col * 255 + 0.5, 0, 255).astype(np.uint8)
-    # spread the colours into the padding, so a seam does not show
-    filled = fid >= 0
-    for _ in range(4):
-        grown = cv2.dilate(img, np.ones((3, 3), np.uint8))
-        ring = cv2.dilate(filled.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool) & ~filled
-        img[ring] = grown[ring]
-        filled |= ring
-    cv2.imwrite(png, img[:, :, ::-1])
-    log.info(f"  texture {png}: {W} x {H}, {t * 100:.1f} cm a texel, {len(ys)} texels on the surface")
-    return Vn, Fn.astype(np.int64), UV.astype(float)
-
-
-def vertex_normals(V, F):
-    """Unit vertex normals of a mesh (V, F), from its faces."""
-    o3d = _o3d()
-    m = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V), o3d.utility.Vector3iVector(F))
-    m.compute_vertex_normals()
-    return np.asarray(m.vertex_normals)
-
-
-def write_textured_ply(path, V, F, UV, png, rgb=None, normals=None):
-    """A binary PLY with its texture: vertex texture_u/texture_v and face
-    texcoord (both, for Mitsuba, MeshLab and CloudCompare), the png named in
-    a TextureFile comment, next to it; with its vertex normals, as a viewer
-    lights a texture (CloudCompare: a textured mesh without normals is drawn
-    in ambient light alone, dark)."""
-    hdr = ["ply", "format binary_little_endian 1.0", f"comment TextureFile {os.path.basename(png)}",
-           f"element vertex {len(V)}", "property float x", "property float y", "property float z"]
-    vd = [("x", "<f4"), ("y", "<f4"), ("z", "<f4")]
-    if normals is not None:
-        hdr += ["property float nx", "property float ny", "property float nz"]
-        vd += [("nx", "<f4"), ("ny", "<f4"), ("nz", "<f4")]
-    hdr += ["property float texture_u", "property float texture_v"]
-    vd += [("u", "<f4"), ("v", "<f4")]
-    if rgb is not None:
-        hdr += ["property uchar red", "property uchar green", "property uchar blue"]
-        vd += [("r", "u1"), ("g", "u1"), ("b", "u1")]
-    hdr += [f"element face {len(F)}", "property list uchar int vertex_indices",
-            "property list uchar float texcoord", "end_header"]
-    va = np.zeros(len(V), vd)
-    va["x"], va["y"], va["z"] = V[:, 0], V[:, 1], V[:, 2]
-    if normals is not None:
-        va["nx"], va["ny"], va["nz"] = normals[:, 0], normals[:, 1], normals[:, 2]
-    va["u"], va["v"] = UV[:, 0], UV[:, 1]
-    if rgb is not None:
-        c = np.clip(np.asarray(rgb) * 255 + 0.5, 0, 255).astype(np.uint8)
-        va["r"], va["g"], va["b"] = c[:, 0], c[:, 1], c[:, 2]
-    fa = np.zeros(len(F), [("n", "u1"), ("i", "<i4", (3,)), ("nt", "u1"), ("t", "<f4", (6,))])
-    fa["n"], fa["i"], fa["nt"] = 3, F, 6
-    fa["t"] = UV[F].reshape(-1, 6)
-    with open(path, "wb") as fh:
-        fh.write(("\n".join(hdr) + "\n").encode())
-        fh.write(va.tobytes())
-        fh.write(fa.tobytes())
-
-
-def crisp_colours(mesh, map_path, subdivide=1, k=5):
+def crisp_colours(mesh, map_path, subdivide=1):
     """The mesh split `subdivide` times (each face into four) and every vertex
-    given the median colour of the map's k nearest points, at full
-    resolution: Poisson averages the thinned map's colours, which blurs and
-    greys them; the median of a few keeps an edge and drops a point coloured
-    wrong (a wall's colour put on a chair's edge), where the nearest alone
-    (k=1) copies it."""
+    given the colour of the map's nearest point, at full resolution: Poisson
+    averages the thinned map's colours, which blurs and greys them."""
     o3d = _o3d()
     if subdivide > 0:
         mesh = mesh.subdivide_midpoint(number_of_iterations=int(subdivide))
     src = o3d.io.read_point_cloud(os.path.expanduser(map_path))
     if not src.has_colors():
         return mesh, False
-    k = max(1, int(k))
-    _, idx = cKDTree(np.asarray(src.points)).query(np.asarray(mesh.vertices), k=k, workers=-1)
-    C = np.asarray(src.colors)
-    col = C[idx] if k == 1 else np.median(C[idx], axis=1)
-    mesh.vertex_colors = o3d.utility.Vector3dVector(col)
+    _, idx = cKDTree(np.asarray(src.points)).query(np.asarray(mesh.vertices), workers=-1)
+    mesh.vertex_colors = o3d.utility.Vector3dVector(np.asarray(src.colors)[idx])
     return mesh, True
 
 
 def map_mesh(map_path, traj, out=None, *, voxel=0.02, poisson_depth=0, trim=0.10,
          ceil=None, ceil_margin=0.10, show=False, subdivide=1, normals=False, ghosts=True,
-         min_piece=50.0, objects=True, object_cell=0.012, object_trim=0.03, flat_sigma=0.015,
-         colour_k=5, object_smooth=10, faces=0, texture=False, texel=0.01):
+         min_piece=50.0):
     """The mesh step alone: mesh of the map (+ a copy without the ceiling),
     each vertex in the colour of the map's nearest point; written without
     normals unless asked, so a viewer shows the colours unlit."""
     o3d = _o3d()
     out = out or default_mesh_out(map_path)
     centres = read_tum_positions(traj)
-    Tf = read_tum_positions(traj, stride=1)
-    pc = o3d.io.read_point_cloud(os.path.expanduser(map_path))
-    if not len(pc.points):
-        raise ConvertError(f"{map_path}: no points")
-    nloose, hs = 0, None
-    if min_piece > 0:
-        # loose pieces out of the points first, so neither mesh gets them; a
-        # piece is what touches (10 cm), so a thing on a wall stays with it
-        P0 = np.asarray(pc.points)
-        hs, _ = sensor_height(P0, Tf)
-        gone = piece_points(P0, Tf, hs, min_piece)
-        pc = pc.select_by_index(np.flatnonzero(~gone))
-        nloose = int(gone.sum())
-    src = pc
-    nobj = 0
-    if objects:
-        # walls, floors, ceilings (0.4 m cells flat to flat_sigma and at least
-        # half filled: the view copy's walls are; a curved object or a rack's
-        # bars are not) meshed as the building;
-        # the rest (objects) on their own, finer
-        inv, flat, _, _ = flat_cells(np.asarray(pc.points), sig_max=flat_sigma, cover=0.5)
-        fl = flat[inv]
-        src = pc.select_by_index(np.flatnonzero(fl))
-        obj = pc.select_by_index(np.flatnonzero(~fl))
-        log.info(f"  building (flat cells) {int(fl.sum())} points, objects {int((~fl).sum())}")
-    m, mstat = build_mesh(src, centres, voxel, poisson_depth, trim)
-    npiece = 0
-    if min_piece > 0:
-        m, npiece = drop_pieces(m, Tf, hs, min_piece)          # Poisson's own loose bits
-    if subdivide > 0:
-        m = m.subdivide_midpoint(number_of_iterations=int(subdivide))
-    if objects:
-        mo = mesh_objects(obj, centres, object_cell, object_trim, smooth=object_smooth)
-        nobj = len(mo.triangles)
-        m += mo
+    m, mstat = build_mesh(map_path, centres, voxel, poisson_depth, trim)
     nghost = 0
     if ghosts:
-        m, nghost = remove_ghosts(m, Tf)
+        m, nghost = remove_ghosts(m, read_tum_positions(traj, stride=1))
+    npiece = 0
     if min_piece > 0:
-        # the loose pieces of the whole mesh, objects' included (a sheet seen
-        # through glass can be meshed as an object)
-        m, n2 = drop_pieces(m, Tf, hs, min_piece)
-        npiece += n2
-    nfull = len(m.triangles)
-    if faces and nfull > faces:
-        # few large faces (a radio scene: flat walls in a handful of
-        # triangles, objects coarse), quadric error so planes stay planes
-        m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
-        m.remove_degenerate_triangles()
-        m.remove_unreferenced_vertices()
-    m, _ = crisp_colours(m, map_path, 0, colour_k)
+        Tf = read_tum_positions(traj, stride=1)
+        hs, _ = sensor_height(np.asarray(m.vertices), Tf)
+        m, npiece = drop_pieces(m, Tf, hs, min_piece)
+    m, _ = crisp_colours(m, map_path, subdivide)
     mstat["faces_kept"] = len(m.triangles)
     if normals:
         m.compute_vertex_normals()      # from the split faces (the midpoints' would not be unit)
     else:
         m.vertex_normals = o3d.utility.Vector3dVector(np.zeros((0, 3)))
         m.triangle_normals = o3d.utility.Vector3dVector(np.zeros((0, 3)))
-    tex = None
-    if texture:
-        # the colours in a texture, so few large faces show them sharply
-        png = os.path.splitext(out)[0] + ".png"
-        Vt, Ft, UVt = bake_texture(m, map_path, png, texel, k=colour_k)
-        rgb = None          # no vertex colours beside the texture: a viewer shows them instead (faded)
-        Nt = vertex_normals(Vt, Ft)
-        write_textured_ply(out, Vt, Ft, UVt, png, rgb, Nt)
-        tex = (Vt, Ft, UVt, png, rgb, Nt)
-    else:
-        o3d.io.write_triangle_mesh(out, m)
+    o3d.io.write_triangle_mesh(out, m)
     V = np.asarray(m.vertices)
     text, hc, hn = height_histogram(V[:, 2])
     log.info("height of the mesh (5 cm bins, top first):\n" + text)
     res = {"out": out, "vertices": len(V), "coloured": m.has_vertex_colors(), **mstat}
     report = (f"mesh {out}: {mstat['faces_kept']} faces ({mstat['faces']} from Poisson before the "
-              f"{trim} m trim{f', split {subdivide}x' if subdivide else ''})"
-              f"{f' + {nobj} of objects ({object_cell * 100:g} cm, {object_trim * 100:g} cm trim)' if objects else ''}"
-              f", {len(V)} vertices, "
-              f"{f'each the median colour of its {colour_k} nearest map points' if m.has_vertex_colors() else 'no colour (map has none)'}"
+              f"{trim} m trim{f', split {subdivide}x' if subdivide else ''}), {len(V)} vertices, "
+              f"{'each in its nearest map point colour' if m.has_vertex_colors() else 'no colour (map has none)'}"
               f"{'' if normals else ', no normals (shown unlit)'}"
-              f"{f', textured ({os.path.basename(tex[3])})' if tex is not None else ''}"
-              + (f"\n  simplified from {nfull} to {len(m.triangles)} faces" if faces and nfull > faces else "")
               + (f"\n  mirror ghosts (faces no direct ray from the path reaches) removed: {nghost} faces"
                  if ghosts else "")
               + (f"\n  loose pieces (not the building) open to the sky or floating removed: "
-                 f"{nloose} points, then {npiece} faces" if min_piece > 0 else ""))
-    res.update(ghost_faces=nghost, piece_faces=npiece, piece_points=nloose, object_faces=nobj)
+                 f"{npiece} faces" if min_piece > 0 else ""))
+    res.update(ghost_faces=nghost, piece_faces=npiece)
     shown = m
     if ceil is not None:
-        if hs is None:
-            hs, _ = sensor_height(V, Tf)
-        nc, how, ngone = remove_ceiling_mesh(m, Tf, hs, ceil, ceil_margin)
+        if str(ceil) == "auto":
+            peak = ceiling_height(hc, hn)
+            z = peak - ceil_margin
+            how = f"ceiling peak {peak:+.2f} less {ceil_margin} m"
+        else:
+            z = float(ceil)
+            how = "given"
+        nc = cut_above(m, z)
         if min_piece > 0:
             nc, _ = drop_pieces(nc, Tf, hs, min_piece)      # what hung from the ceiling now floats
         p = os.path.splitext(out)[0] + "_noceil.ply"
-        if tex is not None:
-            # the same texture; the faces of the textured mesh that are not the ceiling
-            Vt, Ft, UVt, png, rgb, Nt = tex
-            tm = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(Vt), o3d.utility.Vector3iVector(Ft))
-            gone = (ceiling_faces(tm, Tf, hs) if str(ceil) == "auto"
-                    else Vt[Ft].mean(1)[:, 2] > float(ceil))
-            keepf = Ft[~gone]
-            used = np.unique(keepf)
-            remap = np.full(len(Vt), -1, np.int64)
-            remap[used] = np.arange(len(used))
-            write_textured_ply(p, Vt[used], remap[keepf], UVt[used], png,
-                               None if rgb is None else rgb[used], Nt[used])
-        else:
-            o3d.io.write_triangle_mesh(p, nc)
-        report += f"\nno ceiling {p}: {how}, {ngone} faces, removed; {len(nc.triangles)} kept"
-        res.update(noceil=p, noceil_faces=len(nc.triangles), ceiling_faces=ngone)
+        o3d.io.write_triangle_mesh(p, nc)
+        report += (f"\nno ceiling {p}: faces above z = {z:+.2f} ({how}) removed, "
+                   f"{len(nc.triangles)} kept")
+        res.update(noceil=p, ceil_z=z, noceil_faces=len(nc.triangles))
         shown = nc
     log.info(report)
     if show:
@@ -736,13 +431,11 @@ def default_view_out(map_path):
     return os.path.join(d, stem + "_view.pcd")
 
 
-def flat_cells(P, cell=0.4, sig_max=0.04, thin=0.35, min_pts=30, cover=0.0, sub=0.04):
-    """(each point's cell, per cell: flat, centre, normal). A cell of edge
-    `cell` is flat when its points' smallest spread is under sig_max and under
-    thin x the next: a wall or a floor, not a corner, an edge or an object;
-    with cover > 0 also when its points fill at least that share of the
-    cell's plane in `sub` squares (two bars side by side span a plane but do
-    not fill it)."""
+def snap_planes(P, cell=0.4, sig_max=0.04, thin=0.35, min_pts=30):
+    """(P with the points of every flat cell moved onto the cell's plane, the
+    number moved). A cell of edge `cell` is flat when its points' smallest
+    spread is under sig_max and under thin x the next: a wall or a floor, not
+    a corner, an edge or an object."""
     lo = P.min(0)
     k = np.floor((P - lo) / cell).astype(np.int64)
     dims = k.max(0) + 1
@@ -760,26 +453,11 @@ def flat_cells(P, cell=0.4, sig_max=0.04, thin=0.35, min_pts=30, cover=0.0, sub=
     w, v = np.linalg.eigh(C)
     sig = np.sqrt(np.clip(w, 0, None))
     flat = (cnt >= min_pts) & (sig[:, 0] < sig_max) & (sig[:, 0] < thin * sig[:, 1])
-    if cover > 0:
-        rel = X - mu[inv]
-        n_side = int(np.ceil(cell * np.sqrt(3) / sub))
-        a = np.floor(np.einsum("ij,ij->i", rel, v[inv, :, 1]) / sub).astype(np.int64) + n_side
-        b = np.floor(np.einsum("ij,ij->i", rel, v[inv, :, 2]) / sub).astype(np.int64) + n_side
-        side = 2 * n_side + 1
-        filled = np.bincount(np.unique(inv * side * side + a * side + b) // (side * side), minlength=m_)
-        flat &= filled >= cover * (cell / sub) ** 2
-    return inv, flat, mu + lo, v[:, :, 0]
-
-
-def snap_planes(P, **kw):
-    """(P with the points of every flat cell (flat_cells) moved onto the
-    cell's plane, the number moved)."""
-    inv, flat, mu, n = flat_cells(P, **kw)
     on = flat[inv]
-    nn = n[inv[on]]
-    d = np.einsum("ij,ij->i", P[on] - mu[inv[on]], nn)
+    n = v[inv[on], :, 0]
+    d = np.einsum("ij,ij->i", X[on] - mu[inv[on]], n)
     Q = P.copy()
-    Q[on] -= d[:, None] * nn
+    Q[on] -= d[:, None] * n
     return Q, int(on.sum())
 
 
@@ -879,122 +557,8 @@ def fill_floor(P, C, T, h, cell=0.04, band=0.12, close=0.2, max_hole=20.0, spaci
     return np.c_[xy, z], col, stats
 
 
-def strip_points(P, T, h, voxel=0.05, k=20, lin=0.2, min_up=0.3, vert=0.7, chunk=500_000):
-    """Per point: on a thin strip, a line rather than a surface (the k
-    nearest 5 cm cells spread along one direction: the next spread under
-    lin x it), lying or arching (that direction under `vert` of vertical)
-    and min_up or more above the floor: the edges of glass the LiDAR saw
-    without the glass (a balustrade's rail, a partition's frame), flying
-    off the walls. A wall, a floor, an object is a surface or a body; a
-    vertical bar (a rack, a door frame) stands up: kept."""
-    lo = P.min(0)
-    kk = np.floor((P - lo) / voxel).astype(np.int64)
-    dims = kk.max(0) + 1
-    _, inv, cnt = np.unique((kk[:, 0] * dims[1] + kk[:, 1]) * dims[2] + kk[:, 2],
-                            return_inverse=True, return_counts=True)
-    inv = inv.ravel()
-    Q = np.stack([np.bincount(inv, P[:, i]) for i in range(3)], 1) / cnt[:, None]
-    k = min(k, len(Q))
-    tree = cKDTree(Q)
-    _, near = cKDTree(T[:, :2]).query(Q[:, :2], workers=-1)
-    up = Q[:, 2] - (T[near, 2] - h)
-    strip = np.zeros(len(Q), bool)
-    cand = np.flatnonzero(up >= min_up)
-    for s0 in range(0, len(cand), chunk):
-        c = cand[s0:s0 + chunk]
-        _, idx = tree.query(Q[c], k=k, workers=-1)
-        X = Q[idx]
-        X = X - X.mean(1, keepdims=True)
-        w, v = np.linalg.eigh(np.einsum("nki,nkj->nij", X, X) / k)
-        sig = np.sqrt(np.clip(w, 0, None))
-        strip[c] = (sig[:, 1] < lin * sig[:, 2]) & (np.abs(v[:, 2, 2]) < vert)
-    return strip[inv]
-
-
-def floor_points(P, T, h, band=0.06):
-    """Per point: on the floor (within band of the nearest pose's height
-    less the sensor height h)."""
-    _, near = cKDTree(T[:, :2]).query(P[:, :2], workers=-1)
-    return np.abs(P[:, 2] - (T[near, 2] - h)) < band
-
-
-def parse_colour(c):
-    """'gray', 'white', 'r,g,b' (0-1 or 0-255) or one value -> rgb in 0-1, or None."""
-    if c is None:
-        return None
-    named = {"gray": 0.72, "grey": 0.72, "white": 0.95, "light": 0.85, "dark": 0.45}
-    if str(c).lower() in named:
-        return np.full(3, named[str(c).lower()])
-    v = np.array([float(x) for x in str(c).replace(" ", "").split(",")])
-    v = np.repeat(v, 3) if len(v) == 1 else v
-    return v / 255.0 if v.max() > 1 else v
-
-
-def why_point(map_path, traj, at, r=0.3, min_piece=50.0):
-    """Why a point picked on the map (at: x, y, z) is kept or removed by the
-    denoise steps of `view`, in their order: the points within r of it
-    through stray points, mirror ghosts and thin strips, then the loose-piece
-    rule on the piece the nearest of them is in (its size, its bottom above
-    the floor, its share without a ceiling over it)."""
-    o3d = _o3d()
-    pc = o3d.io.read_point_cloud(os.path.expanduser(map_path))
-    P0 = np.asarray(pc.points)
-    at = np.asarray(at, float)
-    near0 = np.flatnonzero(np.linalg.norm(P0 - at, axis=1) < r)
-    d0 = float(np.min(np.linalg.norm(P0 - at, axis=1)))
-    print(f"{map_path}: {len(P0)} points; {len(near0)} within {r} m of {at.round(3).tolist()} "
-          f"(the nearest {d0:.3f} m away)")
-    if not len(near0):
-        print("  no map point there: is the pick in this map's frame (the anchored map with the anchored "
-              "trajectory, map_final with GLIM's)?")
-        return
-    T1 = read_tum_positions(traj, stride=1)
-    keep = np.ones(len(P0), bool)
-
-    def step(name, gone_idx):
-        g = np.zeros(len(P0), bool)
-        g[gone_idx] = True
-        k = int((g[near0] & keep[near0]).sum())
-        keep[g] = False
-        print(f"  {name}: {k} of them removed, {int(keep[near0].sum())} left")
-
-    _, kept = pc.remove_radius_outlier(nb_points=8, radius=0.08)
-    step("stray points", np.setdiff1d(np.arange(len(P0)), kept))
-    idx = np.flatnonzero(keep)
-    h, _ = sensor_height(P0[idx], T1)
-    print(f"  (the sensor {h:.2f} m above the floor)")
-    g = ghost_points(P0[idx], T1)
-    step("mirror ghosts", idx[g])
-    idx = np.flatnonzero(keep)
-    g = strip_points(P0[idx], T1, h)
-    step("thin strips", idx[g])
-    idx = np.flatnonzero(keep)
-    gone, ids, area, small, open_share, bottom = piece_points(P0[idx], T1, h, min_piece, detail=True)
-    left = np.flatnonzero(keep[near0])
-    if not len(left):
-        print("  nothing left there for the loose-piece rule")
-        return
-    pos = np.searchsorted(idx, near0[left])
-    pid = np.bincount(ids[pos]).argmax()
-    m = ids == pid
-    floor_z = float(np.median(T1[:, 2])) - h
-    print(f"  loose pieces: the piece most of them are in has {int(m.sum())} points, {area[pid]:.1f} m2, "
-          f"{'under' if small[pid] else 'at least'} {min_piece:g} m2 "
-          f"({'not the building' if small[pid] else 'counted as the building: never removed'}); "
-          f"its bottom {bottom[pid]:.2f} m above the floor (floating from 1.2 m), "
-          f"{100 * open_share[pid]:.0f} % of it without a ceiling over it (open to the sky over 50 %); "
-          f"its extent x {P0[idx][m][:, 0].min():.2f}..{P0[idx][m][:, 0].max():.2f}, "
-          f"y {P0[idx][m][:, 1].min():.2f}..{P0[idx][m][:, 1].max():.2f}, "
-          f"z {P0[idx][m][:, 2].min():.2f}..{P0[idx][m][:, 2].max():.2f} (floor about {floor_z:+.2f})")
-    print(f"  -> {'removed' if gone[pos].any() else 'kept'}"
-          + ("" if gone[pos].any() else
-             (": it is joined to the building (a piece of 50 m2 or more)" if not small[pid] else
-              ": under a ceiling and down at the floor (furniture)")))
-
-
 def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
-             ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=50.0,
-             strips=True, floor_colour=None):
+             ceil=None, ceil_margin=0.10, max_hole=20.0, roof=0.5, ghosts=True, min_piece=50.0):
     """A viewing copy of the map: stray points out, walls and floors flat,
     the floor's holes filled; points, so the colours stay the map's own."""
     o3d = _o3d()
@@ -1018,13 +582,6 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         report.append(f"  mirror ghosts (behind polished stone or glass: no direct ray from the path "
                       f"reaches them) removed: {int(g.sum())} points")
         res["ghost_points"] = int(g.sum())
-    if strips:
-        # before the loose pieces: what a strip held to the building is judged without it
-        g = strip_points(P, T1, h)
-        P, C = P[~g], C[~g]
-        report.append(f"  thin strips flying off the walls (glass edges: a line, not a surface, "
-                      f"lying or arching 0.3 m or more above the floor) removed: {int(g.sum())} points")
-        res["strip_points"] = int(g.sum())
     if min_piece > 0:
         g = piece_points(P, T1, h, min_piece)
         P, C = P[~g], C[~g]
@@ -1046,20 +603,19 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
         P, C = np.vstack([P, Fp]), np.vstack([C, Fc])
         res.update(sensor_height=h, **st)
     if ceil is not None:
-        keep = ~(ceiling_points(P, T1, h) if str(ceil) == "auto" else P[:, 2] > float(ceil))
-        report.append(f"  the ceiling removed ({'horizontal surfaces 2.1 m or more above the floor' if str(ceil) == 'auto' else f'above z = {float(ceil):+.2f}'}): "
-                      f"{int((~keep).sum())} points")
+        if str(ceil) == "auto":
+            _, hc, hn = height_histogram(P[:, 2])
+            z = ceiling_height(hc, hn) - ceil_margin
+        else:
+            z = float(ceil)
+        keep = P[:, 2] <= z
+        report.append(f"  above z = {z:+.2f} removed (the ceiling): {int((~keep).sum())} points")
         P, C = P[keep], C[keep]
         if min_piece > 0:
             g = piece_points(P, T1, h, min_piece)       # what hung from the ceiling now floats
             P, C = P[~g], C[~g]
             report.append(f"  then loose (hung from the ceiling): {int(g.sum())} points")
-    fc = parse_colour(floor_colour)
-    if fc is not None:
-        on = floor_points(P, T1, h)
-        C[on] = fc
-        report.append(f"  the floor in one colour ({floor_colour}): {int(on.sum())} points")
-        res["floor_points"] = int(on.sum())
+        res["ceil_z"] = z
     v = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     v.colors = o3d.utility.Vector3dVector(np.clip(C, 0, 1))
     o3d.io.write_point_cloud(out, v)
@@ -1246,9 +802,7 @@ def main():
                     help="TUM trajectory the map was built from (normals turn to it)")
     meshing(me)
     me.add_argument("--ceil", default=None,
-                    help="also a copy without the ceiling: 'auto' (the ceiling surfaces: horizontal "
-                         "faces 2.1 m or more above the floor; walls keep their height), or every face "
-                         "above this height (m)")
+                    help="also a copy without the ceiling: faces above Z, or 'auto'")
     me.add_argument("--ceil-margin", type=float, default=0.10,
                     help="[auto] cut this far below the ceiling peak (m)")
     me.add_argument("--show", action="store_true", help="open it in an Open3D window")
@@ -1259,24 +813,6 @@ def main():
                          "when open to the sky or floating (0 keeps them)")
     me.add_argument("--keep-ghosts", action="store_true",
                     help="keep the mirror ghosts (faces no direct ray from the path reaches)")
-    me.add_argument("--no-objects", action="store_true",
-                    help="one Poisson for everything (objects not meshed on their own)")
-    me.add_argument("--object-cell", type=float, default=0.012, help="objects' octree cell (m)")
-    me.add_argument("--object-trim", type=float, default=0.03,
-                    help="objects' faces farther than this from a point removed (m)")
-    me.add_argument("--object-smooth", type=int, default=10,
-                    help="passes of Taubin smoothing of the objects' mesh (0: none)")
-    me.add_argument("--radio", action="store_true",
-                    help="a coarse mesh for radio ray tracing (Sionna RT): 5 cm, gaps up to 0.5 m "
-                         "closed, objects coarse, simplified to --faces, ceiling kept; <mesh>_radio.ply")
-    me.add_argument("--texture", action="store_true",
-                    help="bake the colours into a texture (<mesh>.png): sharp on few faces (--radio: on)")
-    me.add_argument("--no-texture", action="store_true", help="--radio without a texture")
-    me.add_argument("--texel", type=float, default=0.01, help="texture: m a texel")
-    me.add_argument("--faces", type=int, default=0,
-                    help="simplify to about this many faces (quadric; 0: not; --radio: 300000)")
-    me.add_argument("--colour-k", type=int, default=5,
-                    help="each vertex the median colour of this many nearest map points (1: the nearest)")
     me.add_argument("--normals", action="store_true",
                     help="write vertex normals (viewers then light the mesh, greying its colours)")
     vw = sub.add_parser("view", help="a viewing copy of the map: walls flat, floor holes filled")
@@ -1289,70 +825,30 @@ def main():
     vw.add_argument("--min-piece", type=float, default=50.0,
                     help="pieces not joined to one of this size or more (the building, m2) are removed "
                          "when open to the sky or floating (0 keeps them)")
-    vw.add_argument("--keep-strips", action="store_true",
-                    help="keep the thin strips flying off the walls (glass edges)")
-    vw.add_argument("--floor-colour", default=None,
-                    help="the floor in one colour: gray, white, or r,g,b (0-1 or 0-255)")
     vw.add_argument("--keep-ghosts", action="store_true",
                     help="keep the mirror ghosts (points no direct ray from the path reaches)")
     vw.add_argument("--max-hole", type=float, default=20.0, help="largest hole filled (m2)")
     vw.add_argument("--roof", type=float, default=0.5,
                     help="share of a hole that must have a ceiling over it (0: courtyards too)")
-    vw.add_argument("--ceil", default=None,
-                    help="remove the ceiling: 'auto' (horizontal surfaces 2.1 m or more above the floor), "
-                         "or every point above this height (m)")
+    vw.add_argument("--ceil", default=None, help="remove points above Z, or 'auto'")
     vw.add_argument("--ceil-margin", type=float, default=0.10)
-    wh = sub.add_parser("why", help="why a picked point is kept or removed by view's denoise steps")
-    wh.add_argument("map", help="the map view was made from (e.g. map_final_<tag>_anchored.pcd)")
-    wh.add_argument("--traj", required=True, help="TUM trajectory in the same frame")
-    wh.add_argument("--at", required=True, help="the picked point: x,y,z")
-    wh.add_argument("--radius", type=float, default=0.3)
-    ct = sub.add_parser("cut", help="a copy of a mesh or point cloud without the ceiling")
-    ct.add_argument("file", help="a mesh or a point cloud (.ply/.pcd)")
-    ct.add_argument("out", nargs="?", default=None, help="default: <file>_noceil")
-    ct.add_argument("--traj", required=True, help="TUM trajectory in the same frame (the floor driven on)")
-    ct.add_argument("--ceil", default="auto",
-                    help="'auto': the ceiling surfaces (horizontal, 2.1 m or more above the floor); "
-                         "or a height (m): everything above it")
-    ct.add_argument("--ceil-margin", type=float, default=0.10)
     a = ap.parse_args()
-    if getattr(a, "ceil", None) not in (None, "auto"):
-        try:
-            float(a.ceil)
-        except ValueError:
-            ap.error(f"--ceil {a.ceil}: a height in m (e.g. 2.6), or auto")
-    for k in ("map", "file", "traj"):
-        p = getattr(a, k, None)
-        if p and not os.path.isfile(os.path.expanduser(p)):
-            ap.error(f"no file {p}" + ("  (make it with `view` first)" if "view_" in os.path.basename(p) else ""))
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         if a.cmd == "scene":
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,
                     poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
                     color_views=a.color_views, jpeg_quality=a.jpeg_quality)
-        elif a.cmd == "why":
-            why_point(a.map, a.traj, [float(x) for x in a.at.replace(" ", "").split(",")], a.radius)
-        elif a.cmd == "cut":
-            cut_file(a.file, a.traj, a.ceil, a.ceil_margin, a.out)
         elif a.cmd == "view":
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,
                      max_hole=a.max_hole, roof=a.roof, ghosts=not a.keep_ghosts,
-                     min_piece=a.min_piece, strips=not a.keep_strips, floor_colour=a.floor_colour)
+                     min_piece=a.min_piece)
         else:
-            if a.radio:
-                a.voxel, a.trim, a.subdivide = 0.05, 0.25, 0
-                a.object_cell, a.object_trim = 0.05, 0.06
-                a.faces = a.faces or 300000
-                a.texture = not a.no_texture
-                a.out = a.out or os.path.splitext(default_mesh_out(a.map))[0] + "_radio.ply"
             map_mesh(a.map, a.traj, a.out, voxel=a.voxel, poisson_depth=a.poisson_depth,
                      trim=a.trim, ceil=a.ceil, ceil_margin=a.ceil_margin, show=a.show,
                      subdivide=a.subdivide, normals=a.normals, ghosts=not a.keep_ghosts,
-                     min_piece=a.min_piece, objects=not a.no_objects, object_cell=a.object_cell,
-                     object_trim=a.object_trim, colour_k=a.colour_k, object_smooth=a.object_smooth,
-                     faces=a.faces, texture=a.texture, texel=a.texel)
+                     min_piece=a.min_piece)
     except ConvertError as e:
         sys.exit(str(e))
 

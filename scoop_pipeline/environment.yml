@@ -33,7 +33,6 @@ dependencies:
   - libusb
   - pip:
       - open3d                          # clouds, voxel filters, normals, ICP
-      - xatlas                          # mesh UV unwrap: lod3dgs.py mesh --texture / --radio
       - opencv-contrib-python-headless  # images + cv2.aruco (ChArUco boards)
       - ouster-sdk                      # lidar_packets -> scans (scoop/ouster.py)
       - mcap                            # MCAP bags without ROS
