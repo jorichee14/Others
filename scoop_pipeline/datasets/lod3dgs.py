@@ -9,8 +9,9 @@ LOD-3DGS scene (LetsGo, github.com/zhaofuq/LOD-3DGS; Cui et al., ACM TOG 43(6),
     python scoop_pipeline/datasets/lod3dgs.py mesh <map .pcd/.ply> --traj <TUM of the map>
         [<out mesh .ply>] [--ceil auto|Z] [--ceil-margin 0.10] [--voxel 0.02]
         [--poisson-depth 0] [--trim 0.10] [--show]
-    python scoop_pipeline/datasets/lod3dgs.py sionna <mesh .ply, with its ceiling> [<out .ply>]
-        [--faces 500000] [--floor-grey 0.8] [--scene] [--material walls=brick:0.1]
+    python scoop_pipeline/datasets/lod3dgs.py sionna <mesh .ply, with its ceiling> [<out folder>]
+        [--points <view>] [--faces 500000] [--object-cell 0.01] [--split-objects]
+        [--material walls=brick:0.1]
     python scoop_pipeline/datasets/lod3dgs.py walk <mesh .ply> [--traj <TUM, the mesh's frame>]
         [--at X,Y] [--faces 2000000] [--eye 1.6]
 
@@ -955,107 +956,404 @@ def anchor_file(path, frame, out=None):
     return out
 
 
-SIONNA_MATERIALS = {"floor": ("concrete", 0.2), "ceiling": ("concrete", 0.2), "walls": ("concrete", 0.2)}
+SIONNA_MATERIALS = {"floor": ("concrete", 0.2), "ceiling": ("concrete", 0.2), "walls": ("concrete", 0.2),
+                    "objects": ("wood", 0.05)}
+PART_COLOURS = {"floor": (0.6, 0.6, 0.6), "walls": (0.85, 0.78, 0.62), "ceiling": (0.95, 0.95, 0.95),
+                "objects": (0.95, 0.5, 0.1)}
 
 
-def sionna_mesh(mesh_path, out=None, faces=500000, scene=False, materials=None, flat=0.9, cell=1.0,
-                band=0.2, roof_h=2.0, floor_colour=(0.8, 0.8, 0.8)):
-    """A mesh for Sionna RT of a mesh made by `mesh` (the one with its
-    ceiling: the radio waves bounce off it): <mesh>_sionna.ply, one file, the
-    mesh simplified to about `faces` (quadric error: a flat wall stays flat in
-    few faces), in its vertex colours but the floor floor_colour (None: its
-    own), no normals. The floor: of the horizontal faces (|n_z| over flat)
-    in each cell (m, in plan), those within band of the full mesh's lowest
-    there. scene: also a Sionna scene
-    of it, <mesh>_sionna/scene.xml with meshes/{floor,ceiling,walls}.ply, each
-    an ITU radio material: the floor; the ceiling, horizontal faces roof_h or
-    more above it; walls, the rest (a table top, furniture). materials: {part: (ITU type,
-    thickness m)} over SIONNA_MATERIALS. Metres, the mesh's frame."""
+def floor_grid(V, cell=1.0):
+    """(height function, lo, shape): the floor under each cell (m, in plan)
+    of the vertices V, their lowest 1 % there, a cell with none the lowest of
+    its neighbours'."""
+    from scipy import ndimage
+    lo = V[:, :2].min(0)
+    nx, ny = np.floor((V[:, :2].max(0) - lo) / cell).astype(np.int64) + 1
+    lin = np.floor((V[:, :2] - lo) / cell).astype(np.int64) @ np.array([ny, 1])
+    o = np.lexsort((V[:, 2], lin))
+    starts = np.r_[0, np.flatnonzero(np.diff(lin[o])) + 1]
+    cnt = np.diff(np.r_[starts, len(o)])
+    g = np.full(nx * ny, np.inf)
+    g[lin[o][starts]] = V[o[starts + cnt // 100], 2]
+    g = ndimage.minimum_filter(g.reshape(nx, ny), size=3, mode="nearest")
+
+    def at(X):
+        k = np.clip(np.floor((np.asarray(X)[:, :2] - lo) / cell).astype(np.int64), 0, [nx - 1, ny - 1])
+        return g[k[:, 0], k[:, 1]]
+    return at
+
+
+def plane_faces(C, N, cell=0.4, sig_max=0.03, thin=0.35, min_pts=20, angle=15.0, gap=0.06,
+                near=0.04, facing=30.0):
+    """Per face (centres C, unit normals N): the flat surface it lies on, or
+    -1. Flat 0.4 m cells of the centres (as snap_planes finds them) joined
+    while their normals agree to `angle` and planes to `gap`; a face is on
+    its cell's surface when within `near` of the cell's plane and facing it
+    to `facing`. Also each surface's |n_z|."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    lo = C.min(0)
+    k = np.floor((C - lo) / cell).astype(np.int64) + 1
+    dims = k.max(0) + 2
+    key = (k[:, 0] * dims[1] + k[:, 1]) * dims[2] + k[:, 2]
+    K, inv, cnt = np.unique(key, return_inverse=True, return_counts=True)
+    inv = inv.ravel()
+    m_ = len(K)
+    X = C - lo
+    mu = np.stack([np.bincount(inv, X[:, i], m_) for i in range(3)], 1) / cnt[:, None]
+    S = np.empty((m_, 3, 3))
+    for i in range(3):
+        for j in range(i, 3):
+            S[:, i, j] = S[:, j, i] = np.bincount(inv, X[:, i] * X[:, j], m_) / cnt - mu[:, i] * mu[:, j]
+    w, v = np.linalg.eigh(S)
+    sig = np.sqrt(np.clip(w, 0, None))
+    flat = (cnt >= min_pts) & (sig[:, 0] < sig_max) & (sig[:, 0] < thin * sig[:, 1])
+    n = v[:, :, 0]
+    kc = np.stack([K // (dims[1] * dims[2]), (K // dims[2]) % dims[1], K % dims[2]], 1)
+    rows, cols = [np.arange(m_)], [np.arange(m_)]
+    for o in [(a, b, c) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1) if (a, b, c) > (0, 0, 0)]:
+        nb = ((kc[:, 0] + o[0]) * dims[1] + kc[:, 1] + o[1]) * dims[2] + kc[:, 2] + o[2]
+        j = np.minimum(np.searchsorted(K, nb), m_ - 1)
+        ok = (K[j] == nb) & flat & flat[j]
+        i, j = np.flatnonzero(ok), j[ok]
+        same = (np.abs(np.einsum("ij,ij->i", n[i], n[j])) > np.cos(np.radians(angle))) & \
+            (np.abs(np.einsum("ij,ij->i", mu[j] - mu[i], n[i])) < gap)
+        rows.append(i[same])
+        cols.append(j[same])
+    r_, c_ = np.concatenate(rows), np.concatenate(cols)
+    _, seg = connected_components(coo_matrix((np.ones(len(r_)), (r_, c_)), shape=(m_, m_)), directed=False)
+    nc = n[inv]
+    on = flat[inv] & (np.abs(np.einsum("ij,ij->i", X - mu[inv], nc)) < near) & \
+        (np.abs(np.einsum("ij,ij->i", N, nc)) > np.cos(np.radians(facing)))
+    sid = np.where(on, seg[inv], -1)
+    nz = np.zeros(seg.max() + 1)
+    nz[seg[flat]] = np.abs(n[flat, 2])
+    return sid, nz
+
+
+def label_faces(m, flat=0.9, band=0.2, roof_h=2.0, wall_area=3.0, wall_low=0.5, wall_high=2.2,
+                vertical=0.3, lamp_h=1.8, min_obj=0.05):
+    """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
+    each object face its object's number (-1 for the rest).
+    Floor: horizontal (|n_z| over flat) within band of the floor (floor_grid);
+    ceiling: horizontal roof_h or more above it. Walls: flat surfaces
+    (plane_faces) near vertical (|n_z| under `vertical`) of wall_area m2 or
+    more from wall_low or less over the floor to wall_high or more. The rest,
+    in connected pieces: a piece wholly lamp_h or more up hangs from the
+    ceiling (lamps, beams, ducts): ceiling; one from the floor to wall_high
+    (a round pillar, a door frame), under min_obj m2 (a scrap between walls)
+    or reaching no higher than band (the floor's bumps): with them; the
+    others objects."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    V, F = np.asarray(m.vertices), np.asarray(m.triangles)
+    m.compute_triangle_normals()
+    N = np.asarray(m.triangle_normals)
+    C = V[F].mean(1)
+    A = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1)
+    dz = C[:, 2] - floor_grid(V)(C)
+    hor = np.abs(N[:, 2]) > flat
+    part = np.full(len(F), "", dtype=object)
+    part[hor & (dz <= band)] = "floor"
+    part[hor & (dz >= roof_h)] = "ceiling"
+    sid, snz = plane_faces(C, N)
+    s_ok = sid >= 0
+    ns = len(snz)
+    s_area = np.bincount(sid[s_ok], A[s_ok], ns)
+    s_lo = np.full(ns, np.inf)
+    s_hi = np.full(ns, -np.inf)
+    np.minimum.at(s_lo, sid[s_ok], dz[s_ok])
+    np.maximum.at(s_hi, sid[s_ok], dz[s_ok])
+    wall_s = (snz < vertical) & (s_area >= wall_area) & (s_lo <= wall_low) & (s_hi >= wall_high)
+    part[(part == "") & s_ok & wall_s[np.maximum(sid, 0)]] = "walls"
+    rest = np.flatnonzero(part == "")
+    obj = np.full(len(F), -1)
+    if len(rest):
+        Fr = F[rest]
+        e = np.r_[Fr[:, 0], Fr[:, 1]], np.r_[Fr[:, 1], Fr[:, 2]]
+        _, vc = connected_components(coo_matrix((np.ones(len(e[0])), e), shape=(len(V), len(V))),
+                                     directed=False)
+        _, comp = np.unique(vc[Fr[:, 0]], return_inverse=True)
+        comp = comp.ravel()
+        nc = comp.max() + 1
+        c_area = np.bincount(comp, A[rest], nc)
+        c_lo = np.full(nc, np.inf)
+        c_hi = np.full(nc, -np.inf)
+        np.minimum.at(c_lo, comp, dz[rest])
+        np.maximum.at(c_hi, comp, dz[rest])
+        kind = np.full(nc, "objects", dtype=object)
+        kind[(c_lo <= wall_low) & (c_hi >= wall_high)] = "walls"
+        kind[c_area < min_obj] = "walls"
+        kind[c_hi <= band] = "floor"
+        kind[c_lo >= lamp_h] = "ceiling"
+        part[rest] = kind[comp]
+        is_obj = kind[comp] == "objects"
+        _, num = np.unique(comp[is_obj], return_inverse=True)
+        obj[rest[is_obj]] = num.ravel()
+    return part, obj
+
+
+def remesh_object(P, Cp, Nref, cell=0.01, snap=0.01, planes=6, min_plane=0.15, trim=0.02, smooth=10):
+    """A finer, smoother mesh of one object from its map points P (colours
+    Cp; Nref the coarse mesh's normal at each: which side is out): its flat
+    parts (planes found one after another, RANSAC within `snap`, each holding
+    min_plane of what is left) put onto their planes, then Poisson with
+    cells of about `cell` m over the object alone, faces farther than trim
+    from a point dropped, `smooth` passes of Taubin smoothing; each vertex
+    its nearest point's colour. None when too few points."""
+    o3d = _o3d()
+    if len(P) < 60:
+        return None
+    P = P.copy()
+    left = np.arange(len(P))
+    for _ in range(planes):
+        if len(left) < 60:
+            break
+        q = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P[left]))
+        (a, b, c, d), inl = q.segment_plane(snap, 3, 200)
+        if len(inl) < max(30, min_plane * len(left)):
+            break
+        nrm = np.array([a, b, c])
+        idx = left[np.asarray(inl)]
+        P[idx] -= ((P[idx] @ nrm + d) / (nrm @ nrm))[:, None] * nrm
+        left = np.setdiff1d(left, idx)
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    pc.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=max(3 * cell, 0.03), max_nn=30))
+    try:                                    # one side to the next across the surface (a plate's two)
+        pc.orient_normals_consistent_tangent_plane(10)
+        Nn = np.asarray(pc.normals)
+        if np.einsum("ij,ij->i", Nn, Nref).mean() < 0:      # then all of it out, as the coarse mesh
+            Nn = -Nn
+    except RuntimeError:
+        Nn = np.asarray(pc.normals).copy()
+        Nn[np.einsum("ij,ij->i", Nn, Nref) < 0] *= -1
+    pc.normals = o3d.utility.Vector3dVector(Nn)
+    ext = float((P.max(0) - P.min(0)).max())
+    depth = int(np.clip(np.ceil(np.log2(1.1 * ext / cell)), 5, 10))
+    mm, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pc, depth=depth)
+    if not len(mm.triangles):
+        return None
+    Vm, Fm = np.asarray(mm.vertices), np.asarray(mm.triangles)
+    d, _ = cKDTree(P).query(Vm[Fm].mean(1), workers=-1)
+    mm.remove_triangles_by_mask(d > trim)
+    mm.remove_unreferenced_vertices()
+    if not len(mm.triangles):
+        return None
+    if smooth:
+        mm = mm.filter_smooth_taubin(number_of_iterations=int(smooth))
+    _, i = cKDTree(P).query(np.asarray(mm.vertices), workers=-1)
+    mm.vertex_colors = o3d.utility.Vector3dVector(Cp[i])
+    return mm
+
+
+def default_points(mesh_path):
+    """The view next to a mesh made from it: mesh_view_<tag>[_anchored].ply ->
+    view_<tag>[_anchored].ply."""
+    d, name = os.path.split(os.path.abspath(os.path.expanduser(mesh_path)))
+    stem = os.path.splitext(name)[0]
+    for suf in ("_noceil", "_sionna"):
+        stem = stem.replace(suf, "")
+    if stem.startswith("mesh_view_"):
+        p = os.path.join(d, stem[len("mesh_"):] + ".ply")
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def sionna_mesh(mesh_path, out=None, faces=500000, materials=None, points=None, label_faces_n=4000000,
+                object_cell=0.01, object_faces=400000, split_objects=False,
+                floor_colour=(0.8, 0.8, 0.8), refine=True):
+    """A Sionna RT scene of a mesh made by `mesh` (the one with its ceiling:
+    the radio waves bounce off it), floor, walls, ceiling and objects apart:
+    <out>/scene.xml (what Sionna loads: sionna.rt.load_scene) with
+    <out>/meshes/{floor,ceiling,walls,objects}.ply, each an ITU radio
+    material (materials: {part: (ITU type, thickness m)} over
+    SIONNA_MATERIALS; split_objects: each object its own
+    meshes/objects/obj_NNN.ply; no colours: Sionna shows its materials'), and
+    to look at: <out>.ply, the mesh at full resolution in its own colours
+    (crisp: a simplified mesh blurs them), the floor floor_colour, the
+    objects the rebuilt ones, and <out>_labels.ply in the parts' colours
+    (PART_COLOURS).
+
+    The mesh simplified to label_faces_n faces (quadric), each face labelled
+    (label_faces). Floor, ceiling and walls simplified together to `faces`
+    (no gaps at their seams), each face the part of the nearest labelled
+    one. Each object rebuilt from the points (the view, `points`; default
+    the view next to the mesh) round it (remesh_object: flat parts flat,
+    cells of object_cell, smoothed), all of them simplified to object_faces
+    when over; refine=False keeps the mesh's own."""
     o3d = _o3d()
     mesh_path = os.path.expanduser(mesh_path)
-    out = out or os.path.splitext(mesh_path)[0] + "_sionna.ply"
+    base = os.path.splitext(out)[0] if out else os.path.splitext(mesh_path)[0] + "_sionna"
     mats = {**SIONNA_MATERIALS, **(materials or {})}
     m = o3d.io.read_triangle_mesh(mesh_path)
     if not len(m.triangles):
         raise ConvertError(f"{mesh_path}: no faces (give it the mesh, not the view)")
     n0 = len(m.triangles)
     m.remove_duplicated_vertices()
-    # the floor's height per cell from the full mesh (simplified, a floor is a
-    # few large faces, most cells holding none's centre): its lowest 1 %
-    from scipy import ndimage
-    V0 = np.asarray(m.vertices)
-    lo = V0[:, :2].min(0)
-    nx, ny = np.floor((V0[:, :2].max(0) - lo) / cell).astype(np.int64) + 1
-    lin = np.floor((V0[:, :2] - lo) / cell).astype(np.int64) @ np.array([ny, 1])
-    o = np.lexsort((V0[:, 2], lin))
-    starts = np.r_[0, np.flatnonzero(np.diff(lin[o])) + 1]
-    cnt = np.diff(np.r_[starts, len(o)])
-    floor_z = np.full(nx * ny, np.inf)
-    floor_z[lin[o][starts]] = V0[o[starts + cnt // 100], 2]
-    floor_z = ndimage.minimum_filter(floor_z.reshape(nx, ny), size=3, mode="nearest")
-    del V0, lin, o
-    if faces and n0 > faces:
-        m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
+    full = type(m)(m)                       # at full resolution: the one to look at, its colours crisp
+    if label_faces_n and n0 > label_faces_n:
+        log.info(f"simplifying {n0} faces to {label_faces_n} to label ...")
+        m = m.simplify_quadric_decimation(target_number_of_triangles=int(label_faces_n))
     m.remove_degenerate_triangles()
     m.remove_unreferenced_vertices()
-    m.compute_triangle_normals()
+    part, obj = label_faces(m)
     V, F = np.asarray(m.vertices), np.asarray(m.triangles)
-    c = V[F].mean(1)
-    hor = np.abs(np.asarray(m.triangle_normals)[:, 2]) > flat
-    k = np.clip(np.floor((c[:, :2] - lo) / cell).astype(np.int64), 0, [nx - 1, ny - 1])
-    low = floor_z[k[:, 0], k[:, 1]]
-    part = np.full(len(F), "walls", dtype=object)
-    part[hor & (c[:, 2] <= low + band)] = "floor"
-    part[hor & (c[:, 2] >= low + roof_h)] = "ceiling"
-    if floor_colour is not None and m.has_vertex_colors():
-        C = np.asarray(m.vertex_colors).copy()
-        C[np.unique(F[part == "floor"])] = floor_colour
-        m.vertex_colors = o3d.utility.Vector3dVector(C)
-    w = type(m)(m)
-    for attr in ("vertex_normals", "triangle_normals"):         # shown unlit, in its colours
-        setattr(w, attr, o3d.utility.Vector3dVector(np.zeros((0, 3))))
-    o3d.io.write_triangle_mesh(out, w)
-    res = {"out": out, "faces": len(F), "floor_faces": int((part == "floor").sum())}
-    msg = (f"sionna mesh {out}: {len(F)} faces (from {n0})"
-           + (", in the mesh's colours" if m.has_vertex_colors() else "")
-           + (f", the floor ({res['floor_faces']} faces) grey {floor_colour[0]:g}"
-              if floor_colour is not None and m.has_vertex_colors() else ""))
-    if not scene:
-        log.info(msg)
-        return res
-    sdir = os.path.splitext(out)[0]
+    C = V[F].mean(1)
+    A = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1)
+    report = [f"sionna {mesh_path}: {n0} faces, labelled on {len(F)}"]
+    for p_ in ("floor", "walls", "ceiling", "objects"):
+        report.append(f"  {p_}: {A[part == p_].sum():.0f} m2"
+                      + (f", {obj.max() + 1} objects" if p_ == "objects" and (obj >= 0).any() else ""))
+    # floor, ceiling and walls: simplified together, then labelled from the nearest
+    b = type(m)(m)
+    b.remove_triangles_by_mask(part == "objects")
+    b.remove_unreferenced_vertices()
+    if faces and len(b.triangles) > faces:
+        b = b.simplify_quadric_decimation(target_number_of_triangles=int(faces))
+    b.remove_degenerate_triangles()
+    b.remove_unreferenced_vertices()
+    keep = part != "objects"
+    Vb, Fb = np.asarray(b.vertices), np.asarray(b.triangles)
+    _, i = cKDTree(C[keep]).query(Vb[Fb].mean(1), workers=-1)
+    bpart = part[keep][i]
+    # objects: rebuilt from the points round them, or the mesh's own
+    objs = []
+    pts = points or default_points(mesh_path)
+    if (obj >= 0).any():
+        if refine and pts:
+            pc = o3d.io.read_point_cloud(os.path.expanduser(pts))
+            P = np.asarray(pc.points)
+            Pc = np.asarray(pc.colors) if pc.has_colors() else np.full((len(P), 3), 0.6)
+            m.compute_triangle_normals()
+            Nf = np.asarray(m.triangle_normals)
+            d, j = cKDTree(C).query(P, workers=-1)
+            mine = (d < 0.05) & (obj[j] >= 0)
+            P, Pc, j = P[mine], Pc[mine], j[mine]
+            for k in range(obj.max() + 1):
+                sel = obj[j] == k
+                mm = remesh_object(P[sel], Pc[sel], Nf[j[sel]], cell=object_cell) if sel.sum() else None
+                if mm is None:                                  # too few points: the mesh's own
+                    mm = type(m)(m)
+                    mm.remove_triangles_by_mask(obj != k)
+                    mm.remove_unreferenced_vertices()
+                objs.append(mm)
+            report.append(f"  objects rebuilt from {len(P)} points of {pts} (cells {object_cell * 100:g} cm, "
+                          "flat parts flat, smoothed)")
+        else:
+            for k in range(obj.max() + 1):
+                mm = type(m)(m)
+                mm.remove_triangles_by_mask(obj != k)
+                mm.remove_unreferenced_vertices()
+                objs.append(mm)
+            if refine:
+                report.append("  objects as in the mesh (no view next to it: give --points to rebuild them)")
+        tot = sum(len(q.triangles) for q in objs)
+        if object_faces and tot > object_faces:
+            r = object_faces / tot
+            objs = [q.simplify_quadric_decimation(max(4, int(len(q.triangles) * r))) for q in objs]
+    # write: the scene, the coloured mesh, the labels
+    sdir = base
     os.makedirs(os.path.join(sdir, "meshes"), exist_ok=True)
-    xml_mats, shapes, used = {}, [], {}
-    for name in ("floor", "ceiling", "walls"):
-        sel = part == name
-        if not sel.any():
-            continue
-        q = type(m)(m)
-        q.remove_triangles_by_mask(~sel)
-        q.remove_unreferenced_vertices()
-        for attr in ("vertex_normals", "triangle_normals", "vertex_colors"):   # the material's colour shown
+    strip = ("vertex_normals", "triangle_normals")
+
+    def bare(q, colours=False):
+        q = type(q)(q)
+        for attr in strip + (() if colours else ("vertex_colors",)):
             setattr(q, attr, o3d.utility.Vector3dVector(np.zeros((0, 3))))
-        o3d.io.write_triangle_mesh(os.path.join(sdir, "meshes", name + ".ply"), q)
-        used[name] = int(sel.sum())
+        return q
+
+    def sub_mesh(q, mask):
+        q = type(q)(q)
+        q.remove_triangles_by_mask(~mask)
+        q.remove_unreferenced_vertices()
+        return q
+
+    pieces = {n: sub_mesh(b, bpart == n) for n in ("floor", "ceiling", "walls")}
+    allobj = o3d.geometry.TriangleMesh()
+    for q in objs:
+        allobj += q
+    pieces["objects"] = allobj
+    xml_mats, shapes, used = {}, [], {}
+
+    def material(name):
         typ, th = mats[name]
-        mid = f"{typ}_{round(float(th) * 100):d}cm"          # one material, parts sharing it
+        mid = f"{name}_{typ}"          # one per part: Sionna merges shapes sharing a material
         if mid not in xml_mats:
             xml_mats[mid] = [f'    <bsdf type="itu-radio-material" id="mat-{mid}">',
                              f'        <string name="type" value="{typ}"/>',
                              f'        <float name="thickness" value="{float(th):g}"/>',
                              "    </bsdf>"]
-        shapes += [f'    <shape type="ply" id="mesh-{name}">',
-                   f'        <string name="filename" value="meshes/{name}.ply"/>',
-                   '        <boolean name="face_normals" value="true"/>',
-                   f'        <ref id="mat-{mid}" name="bsdf"/>',
-                   "    </shape>"]
-    xml = ['<scene version="2.1.0">', *sum(xml_mats.values(), []), *shapes, "</scene>"]
+        return mid
+
+    def shape(sid, rel, mid):
+        shapes.extend([f'    <shape type="ply" id="mesh-{sid}">',
+                       f'        <string name="filename" value="{rel}"/>',
+                       '        <boolean name="face_normals" value="true"/>',
+                       f'        <ref id="mat-{mid}" name="bsdf"/>',
+                       "    </shape>"])
+
+    for name, q in pieces.items():
+        if not len(q.triangles):
+            continue
+        used[name] = len(q.triangles)
+        mid = material(name)
+        if name == "objects" and split_objects:
+            os.makedirs(os.path.join(sdir, "meshes", "objects"), exist_ok=True)
+            for k, o in enumerate(objs):
+                rel = f"meshes/objects/obj_{k:03d}.ply"
+                o3d.io.write_triangle_mesh(os.path.join(sdir, rel), bare(o))
+                shape(f"obj_{k:03d}", rel, mid)
+        else:
+            o3d.io.write_triangle_mesh(os.path.join(sdir, "meshes", name + ".ply"), bare(q))
+            shape(name, f"meshes/{name}.ply", mid)
     sx = os.path.join(sdir, "scene.xml")
-    open(sx, "w").write("\n".join(xml) + "\n")
-    log.info(msg + f"\nsionna scene {sx}:"
-             + "".join(f"\n  {n}: {used[n]} faces, ITU {mats[n][0]} {float(mats[n][1]):g} m" for n in used)
-             + "\n  load: sionna.rt.load_scene(\"" + sx + "\")")
-    return {**res, "scene": sx, **used}
+    open(sx, "w").write("\n".join(['<scene version="2.1.0">', *sum(xml_mats.values(), []), *shapes,
+                                   "</scene>"]) + "\n")
+    # to look at: the full mesh (simplified, a face's colour is its corners' blur),
+    # each face the part of the nearest labelled one, its objects the rebuilt ones
+    Vf, Ff = np.asarray(full.vertices), np.asarray(full.triangles)
+    tree = cKDTree(C)
+    fpart = np.empty(len(Ff), dtype=object)
+    for a0 in range(0, len(Ff), 2000000):
+        _, i = tree.query(Vf[Ff[a0:a0 + 2000000]].mean(1), workers=-1)
+        fpart[a0:a0 + 2000000] = part[i]
+    del tree
+    full.remove_triangles_by_mask(fpart == "objects")
+    full.remove_unreferenced_vertices()
+    fpart = fpart[fpart != "objects"]
+    view = bare(full, colours=True)
+    if not view.has_vertex_colors():
+        view.paint_uniform_color((0.6, 0.6, 0.6))
+    if floor_colour is not None:
+        Cv = np.asarray(view.vertex_colors).copy()
+        Cv[np.unique(np.asarray(view.triangles)[fpart == "floor"])] = floor_colour
+        view.vertex_colors = o3d.utility.Vector3dVector(Cv)
+    del full
+    q = bare(allobj, colours=True)
+    if len(q.triangles):
+        if not q.has_vertex_colors():
+            q.paint_uniform_color((0.6, 0.6, 0.6))
+        view += q
+    lab = o3d.geometry.TriangleMesh()
+    for name, q in pieces.items():
+        if len(q.triangles):
+            ql = bare(q)
+            ql.paint_uniform_color(PART_COLOURS[name])
+            lab += ql
+    vp, lp = base + ".ply", base + "_labels.ply"
+    o3d.io.write_triangle_mesh(vp, view)
+    o3d.io.write_triangle_mesh(lp, lab)
+    report += [f"sionna scene {sx} (loads meshes/ beside it; keep the folder whole):"]
+    report += [f"  {n}: {used[n]} faces, ITU {mats[n][0]} {float(mats[n][1]):g} m" for n in used]
+    report += [f"  load: sionna.rt.load_scene(\"{sx}\"" + (", merge_shapes=False" if split_objects else "")
+               + ")",
+               f"to look at: {vp} (full resolution, its own colours, the floor grey; "
+               f"{len(view.triangles)} faces), {lp} (floor grey, walls beige, "
+               "ceiling white, objects orange)"]
+    log.info("\n".join(report))
+    return {"out": sx, "scene": sx, "view": vp, "labels": lp, "faces": sum(used.values()), **used,
+            "n_objects": len(objs)}
 
 
 def walk_start(V, T=None, at=None, eye=1.6, ahead=2.0):
@@ -1350,19 +1648,27 @@ def main():
     an.add_argument("file", help="a cloud or mesh made from map_final with the BA trajectory")
     an.add_argument("out", nargs="?", default=None, help="default: <file>_anchored")
     an.add_argument("--frame", required=True, help="05's frames/anchor_frame.json")
-    sn = sub.add_parser("sionna", help="a mesh for Sionna RT (simplified) of a mesh made by `mesh`")
+    sn = sub.add_parser("sionna", help="a Sionna RT scene of a mesh made by `mesh`: floor, walls, ceiling, "
+                                       "objects apart")
     sn.add_argument("file", help="the mesh with its ceiling, e.g. mesh_view_<tag>_anchored.ply (not _noceil)")
-    sn.add_argument("out", nargs="?", default=None, help="the mesh (default: <file>_sionna.ply)")
-    sn.add_argument("--faces", type=int, default=500000, help="simplify to about this many faces (0: not)")
+    sn.add_argument("out", nargs="?", default=None,
+                    help="the scene folder (default: <file>_sionna; also <out>.ply and <out>_labels.ply)")
+    sn.add_argument("--points", default=None,
+                    help="the points to rebuild the objects from (default: the view next to the mesh, "
+                         "view_<tag>[_anchored].ply)")
+    sn.add_argument("--faces", type=int, default=500000,
+                    help="floor, walls and ceiling simplified to about this many faces (0: not)")
+    sn.add_argument("--object-cell", type=float, default=0.01, help="objects rebuilt with cells of this (m)")
+    sn.add_argument("--object-faces", type=int, default=400000, help="objects simplified to this in all")
+    sn.add_argument("--no-refine", action="store_true", help="keep the mesh's own objects")
+    sn.add_argument("--split-objects", action="store_true",
+                    help="each object its own meshes/objects/obj_NNN.ply (a material each, by editing scene.xml)")
     sn.add_argument("--floor-grey", type=float, default=0.8,
-                    help="the floor in this grey (0 black to 1 white; negative: its own colours)")
-    sn.add_argument("--scene", action="store_true",
-                    help="also a Sionna scene of it: <out>/scene.xml, floor, ceiling and walls apart, "
-                         "each an ITU material (--material)")
+                    help="the floor of <out>.ply in this grey (0 black to 1 white; negative: its own colours)")
     sn.add_argument("--material", action="append", default=[], metavar="PART=TYPE[:THICKNESS]",
-                    help="floor, ceiling or walls as an ITU material (concrete, brick, plasterboard, wood, "
-                         "glass, ceiling_board, marble, floorboard, metal, ...), thickness m; "
-                         "default concrete:0.2 each; repeat for each part")
+                    help="floor, ceiling, walls or objects as an ITU material (concrete, brick, plasterboard, "
+                         "wood, glass, ceiling_board, marble, floorboard, metal, ...), thickness m; "
+                         "default concrete:0.2, objects wood:0.05; repeat for each part")
     wk = sub.add_parser("walk", help="walk inside a mesh (with its ceiling) in a window")
     wk.add_argument("file", help="a mesh, e.g. mesh_view_<tag>_anchored.ply or its _sionna.ply")
     wk.add_argument("--traj", default=None,
@@ -1392,9 +1698,12 @@ def main():
                 part, _, v = spec.partition("=")
                 typ, _, th = v.partition(":")
                 if part not in SIONNA_MATERIALS or not typ:
-                    ap.error(f"--material {spec}: PART=TYPE[:THICKNESS], PART one of floor, ceiling, walls")
+                    ap.error(f"--material {spec}: PART=TYPE[:THICKNESS], PART one of "
+                             + ", ".join(SIONNA_MATERIALS))
                 mats[part] = (typ, float(th) if th else SIONNA_MATERIALS[part][1])
-            sionna_mesh(a.file, a.out, faces=a.faces, scene=a.scene, materials=mats,
+            sionna_mesh(a.file, a.out, faces=a.faces, materials=mats, points=a.points,
+                        object_cell=a.object_cell, object_faces=a.object_faces,
+                        split_objects=a.split_objects, refine=not a.no_refine,
                         floor_colour=None if a.floor_grey < 0 else (a.floor_grey,) * 3)
         elif a.cmd == "scene":
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,

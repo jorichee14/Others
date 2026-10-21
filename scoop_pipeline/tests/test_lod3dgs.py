@@ -471,12 +471,15 @@ def check_ceilings(tmp):
 
 
 def check_sionna(tmp):
-    """sionna on the mesh of a 5 m hall by a 3 m arcade, a table in the hall:
-    one simplified mesh in its colours, the floor grey, walk starting 1.6 m over
-    the floor at the first pose, facing along the path; with --scene floor, ceiling and walls apart (the floor at 0, the table top with the
-    walls, both ceilings), the scene.xml loaded by Sionna RT when installed
-    and a floor bounce traced 2.05 ns after the direct path."""
+    """sionna on the mesh of a 5 m hall by a 3 m arcade (points with 5 mm
+    noise) holding a table, a cabinet, a round pillar and a lamp hanging from
+    the hall's ceiling: the pillar with the walls, the lamp with the ceiling,
+    the table and the cabinet objects, rebuilt flat (the table top within
+    2 mm, at its height); the scene loaded by Sionna RT when installed (four shapes) and a
+    floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
+    over the floor at the first pose, facing along the path."""
     import open3d as o3d
+    rng = np.random.default_rng(0)
     g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
 
     def sheet(axis, val, ra, rb):
@@ -485,57 +488,86 @@ def check_sionna(tmp):
         p = np.zeros((A.size, 3))
         p[:, o[0]], p[:, o[1]], p[:, axis] = A.ravel(), B.ravel(), val
         return p
+
+    def box(x0, x1, y0, y1, z0, z1, top=True, bottom=False):
+        f = [sheet(0, x0, (y0, y1), (z0, z1)), sheet(0, x1, (y0, y1), (z0, z1)),
+             sheet(1, y0, (x0, x1), (z0, z1)), sheet(1, y1, (x0, x1), (z0, z1))]
+        return np.concatenate(f + ([sheet(2, z1, (x0, x1), (y0, y1))] if top else [])
+                              + ([sheet(2, z0, (x0, x1), (y0, y1))] if bottom else []))
+    t_, z_ = np.meshgrid(np.arange(0, 2 * np.pi, 0.02 / 0.25), g(0, 5))
+    pillar = np.c_[4.0 + 0.25 * np.cos(t_.ravel()), 1.5 + 0.25 * np.sin(t_.ravel()), z_.ravel()]
+    table = np.concatenate([box(2, 3.2, 4, 4.8, 0.72, 0.75)]
+                           + [box(x, x + 0.06, y, y + 0.06, 0, 0.72, top=False)
+                              for x in (2.05, 3.09) for y in (4.05, 4.69)])
+    cabinet = box(9.0, 9.6, 5.5, 5.98, 0, 1.2)
+    lamp = np.concatenate([box(4.7, 5.3, 2.7, 3.3, 4.55, 4.7, top=False, bottom=True),
+                           box(4.97, 5.03, 2.97, 3.03, 4.7, 5.0, top=False)])
     P = np.concatenate([sheet(2, 0.0, (0, 12), (0, 6)), sheet(2, 5.0, (0, 7), (0, 6)),
                         sheet(2, 3.0, (7, 12), (0, 6)), sheet(0, 0.0, (0, 6), (0, 5)),
                         sheet(0, 7.0, (0, 6), (3, 5)), sheet(0, 12.0, (0, 6), (0, 3)),
                         sheet(1, 0.0, (0, 7), (0, 5)), sheet(1, 6.0, (0, 7), (0, 5)),
                         sheet(1, 0.0, (7, 12), (0, 3)), sheet(1, 6.0, (7, 12), (0, 3)),
-                        sheet(2, 0.75, (2, 3), (4, 5))])
+                        pillar, table, cabinet, lamp])
+    P = P + rng.normal(0, 0.005, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     pc.colors = o3d.utility.Vector3dVector(np.full(P.shape, 0.5))
-    mp = os.path.join(tmp, "map_final_radio.pcd")
+    mp = os.path.join(tmp, "view_radio.ply")
     o3d.io.write_point_cloud(mp, pc)
     x = np.arange(1.0, 11.0, 0.1)
     tr = os.path.join(tmp, "traj_radio.txt")
     np.savetxt(tr, np.c_[np.arange(len(x)), x, np.full(len(x), 3.0), np.full(len(x), 0.8),
                          np.zeros((len(x), 3)), np.ones(len(x))])
-    m = L.map_mesh(mp, tr, os.path.join(tmp, "m_radio.ply"), voxel=0.05, min_piece=0)
-    r = L.sionna_mesh(m["out"], os.path.join(tmp, "radio.ply"), faces=20000, scene=True,
-                      materials={"walls": ("brick", 0.1)})
-    assert r["faces"] <= 20500, r
-    one = o3d.io.read_triangle_mesh(r["out"])
-    assert len(one.triangles) == r["faces"] and one.has_vertex_colors() and not one.has_vertex_normals()
-    Vo, Co = np.asarray(one.vertices), np.asarray(one.vertex_colors)
-    on_floor = np.abs(Vo[:, 2]) < 0.02
-    assert np.abs(Co[on_floor] - 0.8).max() < 0.01, "the floor not grey"
-    V = {}
-    for n in ("floor", "ceiling", "walls"):
-        q = o3d.io.read_triangle_mesh(os.path.join(tmp, "radio", "meshes", n + ".ply"))
-        assert not q.has_vertex_colors() and len(q.triangles), n
-        V[n] = np.asarray(q.vertices)[np.asarray(q.triangles)].mean(1)
-    assert np.abs(V["floor"][:, 2]).max() < 0.05, ("floor off the floor", V["floor"][:, 2].max())
-    for z, x0, x1 in ((5.0, 0.5, 6.5), (3.0, 7.5, 11.5)):
-        sel = (V["ceiling"][:, 0] > x0) & (V["ceiling"][:, 0] < x1)
-        assert sel.any() and np.abs(V["ceiling"][sel, 2] - z).max() < 0.05, ("ceiling", z)
-    top = (np.abs(V["walls"][:, 2] - 0.75) < 0.05) & (np.abs(V["walls"][:, 0] - 2.5) < 0.4)
-    assert top.any(), "the table top not with the walls"
+    m = L.map_mesh(mp, tr, voxel=0.03, min_piece=0)
+    assert os.path.basename(m["out"]) == "mesh_view_radio.ply", m["out"]
+    r = L.sionna_mesh(m["out"], faces=20000, materials={"walls": ("brick", 0.1)})
+    assert L.default_points(m["out"]) == mp
+    parts = {}
+    for n in ("floor", "ceiling", "walls", "objects"):
+        q = o3d.io.read_triangle_mesh(os.path.join(os.path.dirname(r["scene"]), "meshes", n + ".ply"))
+        assert len(q.triangles) and not q.has_vertex_colors(), n
+        parts[n] = np.asarray(q.vertices)[np.asarray(q.triangles)].mean(1)
+    inside = lambda Q, x0, x1, y0, y1, z0, z1: ((Q[:, 0] > x0) & (Q[:, 0] < x1) & (Q[:, 1] > y0)  # noqa: E731
+                                               & (Q[:, 1] < y1) & (Q[:, 2] > z0) & (Q[:, 2] < z1)).sum()
+    assert np.abs(parts["floor"][:, 2]).max() < 0.2, ("floor off the floor", parts["floor"][:, 2].max())
+    for name, part, b_ in (("the pillar", "walls", (3.7, 4.3, 1.2, 1.8, 0.5, 4.5)),
+                           ("the lamp", "ceiling", (4.6, 5.4, 2.6, 3.4, 4.5, 4.75)),
+                           ("the table", "objects", (2.1, 3.1, 4.1, 4.7, 0.6, 0.8)),
+                           ("the cabinet", "objects", (9.05, 9.55, 5.45, 5.95, 0.3, 1.25))):
+        assert inside(parts[part], *b_) > 0, (name, "not with", part)
+        for other in parts:
+            if other != part:
+                assert inside(parts[other], *b_) <= 0.05 * inside(parts[part], *b_), (name, "in", other)
+    O = o3d.io.read_triangle_mesh(os.path.join(os.path.dirname(r["scene"]), "meshes", "objects.ply"))
+    Vo = np.asarray(O.vertices)
+    top = (np.abs(Vo[:, 2] - 0.75) < 0.03) & (Vo[:, 0] > 2.2) & (Vo[:, 0] < 3.0) & (Vo[:, 1] > 4.2) & \
+        (Vo[:, 1] < 4.6)
+    assert top.sum() > 50 and Vo[top, 2].std() < 0.002 and abs(np.median(Vo[top, 2]) - 0.75) < 0.005, \
+        ("the table top not flat", Vo[top, 2].std(), np.median(Vo[top, 2]))
+    one = o3d.io.read_triangle_mesh(r["view"])
+    Vv, Cv = np.asarray(one.vertices), np.asarray(one.vertex_colors)
+    grey = (np.abs(Cv[np.abs(Vv[:, 2]) < 0.02] - 0.8).max(1) < 0.01).mean()
+    assert grey > 0.9, ("the floor not grey", grey)
+    full = o3d.io.read_triangle_mesh(m["out"])
+    assert len(one.triangles) > 0.8 * len(full.triangles), ("not at full resolution", len(one.triangles))
+    assert os.path.exists(r["labels"])
     T = np.c_[x, np.full(len(x), 3.0), np.full(len(x), 0.8)]
-    e, c = L.walk_start(Vo, T)
+    e, c = L.walk_start(Vv, T)
     assert np.allclose(e, [1.0, 3.0, 1.6], atol=0.05) and c[0] > e[0], ("walk start", e, c)
     xml = open(r["scene"]).read()
-    assert 'value="brick"' in xml and 'value="concrete"' in xml, xml
+    assert 'value="brick"' in xml and 'value="wood"' in xml and 'value="concrete"' in xml, xml
     try:
         import sionna.rt as rt
     except ImportError:
         return r, None
     sc = rt.load_scene(r["scene"])
+    assert set(sc.objects) == {"floor", "ceiling", "walls", "objects"}, set(sc.objects)
     sc.tx_array = rt.PlanarArray(num_rows=1, num_cols=1, pattern="iso", polarization="V")
     sc.rx_array = rt.PlanarArray(num_rows=1, num_cols=1, pattern="iso", polarization="V")
-    sc.add(rt.Transmitter("tx", position=[3.0, 3.0, 1.5]))
-    sc.add(rt.Receiver("rx", position=[10.0, 3.0, 1.5]))
+    sc.add(rt.Transmitter("tx", position=[5.5, 3.0, 1.5]))
+    sc.add(rt.Receiver("rx", position=[10.5, 3.0, 1.5]))
     _, tau = rt.PathSolver()(sc, max_depth=1, refraction=False).cir(out_type="numpy")
     d = np.unique(np.round(tau[tau >= 0] * 1e9, 2))
-    bounce = (np.hypot(7.0, 3.0) - 7.0) / 0.299792458
+    bounce = (np.hypot(5.0, 3.0) - 5.0) / 0.299792458
     assert d[0] == 0 and np.abs(d - bounce).min() < 0.05, ("no floor bounce", d[:6], bounce)
     return r, d[:4]
 
@@ -636,9 +668,11 @@ def main():
         print(f"ok ceilings: a 5 m hall's and a 3 m arcade's each cut at its own height ({cv} view points, "
               f"{cm} mesh vertices of the arcade's left), the walls under each kept")
         rs, ds = check_sionna(tmp)
-        print(f"ok sionna: {rs['faces']} faces, floor {rs['floor']}, ceiling {rs['ceiling']}, walls "
-              f"{rs['walls']}" + (f"; Sionna RT traced delays {ds} ns" if ds is not None
-                                  else " (Sionna RT not installed: not loaded)"))
+        print(f"ok sionna: floor {rs['floor']}, ceiling {rs['ceiling']}, walls {rs['walls']}, "
+              f"objects {rs['objects']} ({rs['n_objects']} of them); a pillar with the walls, a lamp with "
+              "the ceiling, a table and a cabinet objects, the table top flat"
+              + (f"; Sionna RT traced delays {ds} ns" if ds is not None
+                 else " (Sionna RT not installed: not loaded)"))
         rm = check_mesh(tmp)
         print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
               f"{rm['noceil_faces']} faces without it")
