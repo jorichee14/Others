@@ -1105,7 +1105,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 pillar_r=(0.1, 1.0), pillar_fit=0.04, attach=0.04, attach_depth=0.2, attach_upright=0.9,
                 mounted=0.3,
                 stair_rise=(0.25, 1.5), stair_side=0.15, knee_w=1.5, knee_thin=0.1, knee_end=0.35,
-                T=None, why=(), planes=None):
+                T=None, why=(), planes=None, why_objects=0):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
     each object face its object's number (-1 for the rest).
 
@@ -1155,7 +1155,8 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
     0.4 m and more); a piece reaching no higher than band (the floor's
     bumps) is floor and one under min_obj m2 (a scrap at a seam) the part
     of the nearest labelled face. why: plan points (x, y): the pieces left
-    there and what each rule saw of them, logged. planes: a list given gets
+    there and what each rule saw of them, logged; why_objects: the largest
+    that many objects and what each rule saw, logged. planes: a list given gets
     each wall's plane (centre, normal, along, extent, top, floor)."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
@@ -1373,6 +1374,24 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 if not new.any():
                     break
                 kind[new] = "walls"
+            if why_objects:                             # the largest objects and what each rule saw
+                big_o = np.flatnonzero(kind == "objects")
+                big_o = big_o[np.argsort(-c_area[big_o])][:int(why_objects)]
+                wt = cKDTree(C[np.r_[wf, rest[kind[comp] == "walls"]]])
+                lines = [f"the {len(big_o)} largest objects: x y z (centre), m2, height over the floor, % facing "
+                         "sideways, long x across (1 sigma), nearest / farthest from a wall, ends from a wall"]
+                for k_ in big_o:
+                    sel = rest[comp == k_]
+                    dd, _ = wt.query(C[sel], workers=-1, distance_upper_bound=5.0)
+                    ends = [np.r_[mx[k_] + ax_[k_, 0] * e, my[k_] + ax_[k_, 1] * e, mz[k_]]
+                            for e in (p0[k_], p1[k_])]
+                    de = [wtree.query(e_)[0] for e_ in ends]
+                    lines.append(f"  {mx[k_]:8.2f} {my[k_]:8.2f} {mz[k_]:6.2f}  {c_area[k_]:6.2f} m2  "
+                                 f"{c_lo[k_]:5.2f}-{c_hi[k_]:5.2f} m  {100 * side[k_]:3.0f} %  "
+                                 f"{p1[k_] - p0[k_]:5.2f} x {100 * across[k_]:5.1f} cm  "
+                                 f"{dd.min():5.2f} / {np.nanmax(np.where(np.isfinite(dd), dd, 5.0)):5.2f} m  "
+                                 f"ends {de[0]:.2f} / {de[1]:.2f} m")
+                log.info("\n".join(lines))
             for q in why:                               # what each rule saw of the pieces there
                 d2 = np.hypot(Cr[:, 0] - q[0], Cr[:, 1] - q[1])
                 ks = np.unique(comp[d2 < 1.0])
@@ -1507,7 +1526,7 @@ def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4):
 def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000000, split_objects=False,
                 object_faces=0,
                 floor_colour=(0.8, 0.8, 0.8), traj=None, ceil_margin=0.10, min_piece=50.0, normals=False,
-                why=(), flat_floor=True, fill=True):
+                why=(), flat_floor=True, fill=True, why_objects=0):
     """The mesh (the one with its ceiling: the radio waves bounce off it) as
     a Sionna RT scene, its own faces split into floor, walls, ceiling and
     objects: <out>/scene.xml (what Sionna loads: sionna.rt.load_scene) with
@@ -1554,7 +1573,7 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
         m.remove_unreferenced_vertices()
     T = read_tum_positions(traj, stride=1) if traj else None
     planes = []
-    part, obj = label_faces(m, T=T, why=why, planes=planes)
+    part, obj = label_faces(m, T=T, why=why, planes=planes, why_objects=why_objects)
     V, F = np.asarray(m.vertices), np.asarray(m.triangles)
     C = V[F].mean(1)
     A = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1)
@@ -2050,6 +2069,9 @@ def main():
     sn.add_argument("--why", action="append", default=[], metavar="X,Y",
                     help="log what each rule saw of the pieces left within 1 m of this plan point (the mesh's "
                          "frame; pick it in CloudCompare); repeat for more")
+    sn.add_argument("--why-objects", type=int, default=0, metavar="N",
+                    help="log the N largest objects and what each rule saw of them (where, size, height, "
+                         "facing, distance to the walls)")
     sn.add_argument("--no-fill-walls", action="store_true",
                     help="leave the walls as meshed (default: the wall hidden behind furniture, which the mesh "
                          "has not, filled on its plane; doors and windows left open)")
@@ -2100,6 +2122,7 @@ def main():
                         split_objects=a.split_objects,
                         traj=a.traj, normals=a.normals, flat_floor=not a.keep_floor, fill=not a.no_fill_walls,
                         why=[tuple(float(v) for v in w.split(",")[:2]) for w in a.why],
+                        why_objects=a.why_objects,
                         floor_colour=None if a.floor_grey < 0 else (a.floor_grey,) * 3)
         elif a.cmd == "scene":
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,

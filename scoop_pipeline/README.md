@@ -1074,7 +1074,9 @@ pillars standing on the floor, stay. `--faces N` simplifies the floor, walls and
 ITU material, `--material PART=TYPE[:THICKNESS m]` (default concrete 0.2 m,
 objects wood 0.05 m); `--normals` writes the parts with vertex normals (a
 viewer shades them as surfaces; without, the per-vertex colours make a
-mesh look like points); `--why X,Y` (repeat it) logs, for the pieces left within 1 m of that plan
+mesh look like points); `--why-objects N` logs the N largest objects with what each rule saw of
+them (centre, m2, height, share facing sideways, size, distance to the
+walls); `--why X,Y` (repeat it) logs, for the pieces left within 1 m of that plan
 point (pick it in CloudCompare), what each rule saw: height, share facing
 sideways, length and thickness across, how far its ends are from a wall,
 how it climbs; `--split-objects` writes each object to
