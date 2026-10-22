@@ -1972,16 +1972,19 @@ def enhance_colours(C, low=0.5, high=99.5, sat=1.3, gamma=0.9):
     return np.clip(np.clip(C, 0, 1) ** gamma, 0, 1)
 
 
-def walk(mesh_path, traj=None, at=None, faces=2000000, eye=1.6, fov=70.0, shot=None, vivid=True, sat=1.3,
-         one_side=False, step=0.1, turn=4.0):
+def walk(mesh_path, traj=None, at=None, faces=0, eye=1.6, fov=70.0, shot=None, vivid=True, sat=1.3,
+         one_side=False, step=0.1, turn=4.0, near=15.0, cell=4.0):
     """Walk inside a mesh (with its ceiling) in a window, started eye m over
     the floor at walk_start's place, the mesh unlit in its colours (vivid:
     enhance_colours, saturation sat) and seen from both sides (one_side: as
     stored, half the triangles); simplified to `faces` first when larger
-    (quadric; 0: all of it) so it moves smoothly. Each key event moves step
-    m or turns `turn` degrees, whatever the frame rate (Open3D's own fly
-    mode moves per frame: stuck when a big mesh draws slowly); the mouse
-    drag looks round. shot: write the start view to this PNG and close."""
+    (quadric; 0: all of it). The mesh is cut into blocks of `cell` m in
+    plan and only the blocks within `near` m of the eye are drawn (and, of
+    those, the renderer draws only the ones in view), so all of a 40 M face
+    mesh walks smoothly. Each key event moves step m or turns `turn`
+    degrees, whatever the frame rate (Open3D's own fly mode moves per
+    frame: stuck when a big mesh draws slowly); the mouse drag looks round.
+    shot: write the start view to this PNG and close."""
     o3d = _o3d()
     from open3d.visualization import gui, rendering
     m = o3d.io.read_triangle_mesh(os.path.expanduser(mesh_path))
@@ -1995,12 +1998,33 @@ def walk(mesh_path, traj=None, at=None, faces=2000000, eye=1.6, fov=70.0, shot=N
     if vivid and m.has_vertex_colors():
         m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(np.asarray(m.vertex_colors), sat=sat))
     F = np.asarray(m.triangles)
-    if not one_side:
-        m.triangles = o3d.utility.Vector3iVector(np.vstack([F, F[:, ::-1]]))   # both sides
-    m.compute_vertex_normals()
     V = np.asarray(m.vertices)
+    Cc = np.asarray(m.vertex_colors) if m.has_vertex_colors() else None
+    unlit = Cc is not None
+    if not one_side:
+        F = np.vstack([F, F[:, ::-1]])                                     # both sides
     e, c = walk_start(V, read_tum_positions(traj, stride=1) if traj else None, at, eye)
-    log.info(f"walk {mesh_path}: {len(F)} faces, from ({e[0]:.1f}, {e[1]:.1f}), eye {eye} m over the floor\n"
+    # the mesh in blocks of `cell` m in plan: only those near the eye are drawn
+    lo = V[:, :2].min(0)
+    ij = np.floor((V[F[:, 0], :2] - lo) / cell).astype(np.int64)
+    key = ij[:, 0] * (ij[:, 1].max() + 1) + ij[:, 1]
+    order = np.argsort(key, kind="stable")
+    ks, starts = np.unique(key[order], return_index=True)
+    ends = np.r_[starts[1:], len(order)]
+    blocks, centres = [], []
+    for k, a_, b_ in zip(ks, starts, ends):
+        fi = F[order[a_:b_]]
+        vu, inv = np.unique(fi, return_inverse=True)
+        q = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V[vu]), o3d.utility.Vector3iVector(inv.reshape(-1, 3)))
+        if unlit:
+            q.vertex_colors = o3d.utility.Vector3dVector(Cc[vu])
+        else:
+            q.compute_vertex_normals()
+        blocks.append(q)
+        centres.append(lo + (np.array([k // (ij[:, 1].max() + 1), k % (ij[:, 1].max() + 1)]) + 0.5) * cell)
+    centres = np.array(centres)
+    log.info(f"walk {mesh_path}: {len(F) // (1 if one_side else 2)} faces in {len(blocks)} blocks of {cell:g} m, "
+             f"those within {near:g} m drawn; from ({e[0]:.1f}, {e[1]:.1f}), eye {eye} m over the floor\n"
              f"  turn: the arrow keys (left/right turn, up/down tilt, {turn:g} deg each), or drag with the mouse\n"
              f"  move: W forward, S back, A left, D right, Q up, Z down ({step:g} m each; hold a key to keep "
              "going), R back to the start\n  Escape or close the window: out")
@@ -2010,8 +2034,10 @@ def walk(mesh_path, traj=None, at=None, faces=2000000, eye=1.6, fov=70.0, shot=N
     sw = gui.SceneWidget()
     sw.scene = rendering.Open3DScene(win.renderer)
     mat = rendering.MaterialRecord()
-    mat.shader = "defaultUnlit" if m.has_vertex_colors() else "defaultLit"
-    sw.scene.add_geometry("mesh", m, mat)
+    mat.shader = "defaultUnlit" if unlit else "defaultLit"
+    for k, q in enumerate(blocks):
+        sw.scene.add_geometry(f"b{k}", q, mat)
+    shown = np.ones(len(blocks), bool)
     sw.scene.show_skybox(False)
     sw.scene.view.set_post_processing(False)     # no tone mapping: the colours as stored, not washed out
     sw.scene.set_background(np.array([0.12, 0.12, 0.12, 1.0], np.float32))   # small holes dark, not white
@@ -2021,8 +2047,12 @@ def walk(mesh_path, traj=None, at=None, faces=2000000, eye=1.6, fov=70.0, shot=N
 
     def place(eye_, look_):
         cam.look_at(look_.astype(np.float32), eye_.astype(np.float32), up)
-        cam.set_projection(fov, win.size.width / max(win.size.height, 1), 0.05, 2000.0,
+        cam.set_projection(fov, win.size.width / max(win.size.height, 1), 0.05, near + 2 * cell,
                            rendering.Camera.FovType.Vertical)
+        want = np.linalg.norm(centres - eye_[:2], axis=1) <= near + cell * 0.71
+        for k in np.flatnonzero(want != shown):
+            sw.scene.show_geometry(f"b{k}", bool(want[k]))
+        shown[:] = want
         sw.force_redraw()
     place(e, c)
     sw.set_view_controls(gui.SceneWidget.Controls.FLY)
@@ -2342,8 +2372,10 @@ def main():
                     help="a trajectory in the mesh's frame: start at its first pose (anchored mesh: "
                          "odometry/reference_<tag>/traj_mobile_2_lidar.tum)")
     wk.add_argument("--at", default=None, metavar="X,Y", help="start here instead")
-    wk.add_argument("--faces", type=int, default=2000000,
-                    help="simplify to this many faces first (0: all of it; a GPU with 8 GB walks 40 M)")
+    wk.add_argument("--faces", type=int, default=0,
+                    help="simplify to this many faces first (default 0: all of it; only what is near is drawn)")
+    wk.add_argument("--near", type=float, default=15.0, help="draw the mesh within this many metres of the eye")
+    wk.add_argument("--cell", type=float, default=4.0, help="the blocks the mesh is cut into (m, in plan)")
     wk.add_argument("--plain", action="store_true",
                     help="the colours as stored (default: made vivid, the camera's haze and grey gone)")
     wk.add_argument("--sat", type=float, default=1.3, help="the saturation boost when made vivid")
@@ -2368,7 +2400,7 @@ def main():
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
                  faces=a.faces, eye=a.eye, shot=a.shot, vivid=not a.plain, sat=a.sat, one_side=a.one_side,
-                 step=a.step, turn=a.turn)
+                 step=a.step, turn=a.turn, near=a.near, cell=a.cell)
         elif a.cmd == "sionna":
             mats = {}
             for spec in a.material:

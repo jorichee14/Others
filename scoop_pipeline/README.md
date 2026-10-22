@@ -1123,8 +1123,10 @@ at the first pose of `--traj` facing along the path (or `--at X,Y`), the
 mesh unlit in its colours made vivid (stretched over their range, the
 camera's haze and grey gone; the saturation up `--sat` 1.3; `--plain`: as
 stored) and seen from both sides (`--one-side`: as stored, half the load),
-simplified to `--faces` (2,000,000; 0: all of it, a GPU with 8 GB walks
-40 M) first. Turn with the arrow keys (left/right turn, up/down tilt,
+cut into blocks of `--cell` 4 m in plan with only the blocks within
+`--near` 15 m of the eye drawn (and of those only the ones in view), so all
+of a 40 M face mesh walks smoothly (`--faces N` simplifies it to N first;
+default 0: all of it). Turn with the arrow keys (left/right turn, up/down tilt,
 `--turn` 4 degrees each) or by dragging with the mouse; move with W
 forward, S back, A left, D right, Q up, Z down (`--step` 0.1 m each; hold a
 key to keep going: each key event moves that far whatever the frame rate,
