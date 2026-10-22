@@ -1123,8 +1123,9 @@ object's material in `scene.xml`).
 the floor's footprint shrunk `--inset` 1.5 m from the walls and the furniture,
 its outline the path, at `--eye` 1.6 m over the floor, `--speed` 1 m/s,
 looking `--ahead` 2 m along the way; or `--path "X,Y;X,Y;..."`, waypoints
-joined in a loop. Off screen on the GPU, the mesh drawn as in `walk` (colours
-vivid, `--near` 15 m of it); `--fps`, `--size WxH` (1280x720), `--seconds N`
+joined in a loop. Recorded through a window (the flight seen as it goes;
+`--offscreen`: none, which some drivers give black), the mesh drawn as in
+`walk` (colours vivid, `--near` 15 m of it); `--fps`, `--size WxH` (1280x720), `--seconds N`
 for the first N seconds only.
 
     python3 scoop_pipeline/datasets/lod3dgs.py fly mapping/mesh_view_<tag>_anchored_sionna.ply

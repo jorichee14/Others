@@ -2100,16 +2100,18 @@ def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0):
 
 
 def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps=30, size=(1280, 720), fov=70.0,
-              ahead=2.0, near=15.0, cell=4.0, faces=0, vivid=True, sat=1.3, one_side=False, seconds=0):
+              ahead=2.0, near=15.0, cell=4.0, faces=0, vivid=True, sat=1.3, one_side=False, seconds=0,
+              offscreen=False):
     """A video (out, .mp4; default <mesh>_fly.mp4) flying once round the
     area inside the mesh at eye m over the floor, speed m/s, looking ahead
     m along the way: the path loop_path's (inset m from the walls), or
-    `path`, a list of (x, y) waypoints joined in a loop. Rendered off
-    screen (the GPU), the mesh as in walk: its colours made vivid, in
-    blocks with those within near m drawn. seconds > 0: that long at most.
-    The path (n x 2) and the frames written."""
+    `path`, a list of (x, y) waypoints joined in a loop. Rendered in a
+    window (the flight seen as it is recorded; offscreen: no window, which
+    some drivers give black), the mesh as in walk: its colours made vivid,
+    in blocks with those within near m drawn. seconds > 0: that long at
+    most. The path (n x 2) and the frames written."""
     o3d = _o3d()
-    from open3d.visualization import rendering
+    from open3d.visualization import gui, rendering
     mesh_path = os.path.expanduser(mesh_path)
     out = os.path.expanduser(out) if out else os.path.splitext(mesh_path)[0] + "_fly.mp4"
     m = o3d.io.read_triangle_mesh(mesh_path)
@@ -2145,33 +2147,66 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
     blocks, centres, unlit = mesh_blocks(m, cell, one_side)
     log.info(f"fly {mesh_path}: a loop of {total:.0f} m, {nfr} frames at {fps} fps ({nfr / fps:.0f} s), "
              f"{len(blocks)} blocks of {cell:g} m, those within {near:g} m drawn -> {out}")
-    rd = rendering.OffscreenRenderer(size[0], size[1])
     mat = rendering.MaterialRecord()
     mat.shader = "defaultUnlit" if unlit else "defaultLit"
-    for k, q in enumerate(blocks):
-        rd.scene.add_geometry(f"b{k}", q, mat)
-    rd.scene.show_skybox(False)
-    rd.scene.view.set_post_processing(False)
-    rd.scene.set_background(np.array([0.12, 0.12, 0.12, 1.0], np.float32))
-    shown = np.ones(len(blocks), bool)
     vw = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (size[0], size[1]))
     if not vw.isOpened():
         raise ConvertError(f"cannot write {out}")
-    for i in range(nfr):
+    shown = np.ones(len(blocks), bool)
+
+    def fill(scene):
+        for k, q in enumerate(blocks):
+            scene.add_geometry(f"b{k}", q, mat)
+        scene.show_skybox(False)
+        scene.view.set_post_processing(False)
+        scene.set_background(np.array([0.12, 0.12, 0.12, 1.0], np.float32))
+
+    def aim(scene, i):
+        """The camera at frame i, the blocks near it shown."""
         e_ = np.r_[E[i], z0 + eye]
         want = np.linalg.norm(centres - E[i], axis=1) <= near + cell * 0.71
         for k in np.flatnonzero(want != shown):
-            rd.scene.show_geometry(f"b{k}", bool(want[k]))
+            scene.show_geometry(f"b{k}", bool(want[k]))
         shown[:] = want
-        rd.setup_camera(fov, np.r_[Lk[i], z0 + eye].astype(np.float32), e_.astype(np.float32),
-                        np.array([0, 0, 1], np.float32))
-        rd.scene.camera.set_projection(fov, size[0] / size[1], 0.05, near + 2 * cell, rendering.Camera.FovType.Vertical)
-        img = np.asarray(rd.render_to_image())
-        vw.write(cv2.cvtColor(img[:, :, :3], cv2.COLOR_RGB2BGR))
+        scene.camera.look_at(np.r_[Lk[i], z0 + eye].astype(np.float32), e_.astype(np.float32),
+                             np.array([0, 0, 1], np.float32))
+        scene.camera.set_projection(fov, size[0] / size[1], 0.05, near + 2 * cell, rendering.Camera.FovType.Vertical)
         if i % (10 * fps) == 0:
             log.info(f"  {i / fps:.0f} s of {nfr / fps:.0f}")
-    vw.release()
-    return P, nfr
+
+    def keep(img):
+        vw.write(cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR))
+
+    if offscreen:
+        rd = rendering.OffscreenRenderer(size[0], size[1])
+        fill(rd.scene)
+        for i in range(nfr):
+            aim(rd.scene, i)
+            keep(rd.render_to_image())
+        vw.release()
+        return P, nfr
+    app = gui.Application.instance
+    app.initialize()
+    win = app.create_window(f"fly {os.path.basename(mesh_path)}: recording", size[0], size[1])
+    sw = gui.SceneWidget()
+    sw.scene = rendering.Open3DScene(win.renderer)
+    fill(sw.scene)
+    win.add_child(sw)
+    st = {"i": 0, "img": None}
+
+    def tick():
+        i = st["i"]
+        if i >= nfr:
+            vw.release()
+            win.close()
+            return False
+        aim(sw.scene, i)
+        st["i"] = i + 1
+        keep(app.render_to_image(sw.scene, size[0], size[1]))
+        return True
+    win.set_on_tick_event(tick)
+    app.run()
+    return P, st["i"]
 
 
 def walk(mesh_path, traj=None, at=None, faces=0, eye=1.6, fov=70.0, shot=None, vivid=True, sat=1.3,
@@ -2561,6 +2596,7 @@ def main():
     fv.add_argument("--faces", type=int, default=0, help="simplify to this many faces first (0: all of it)")
     fv.add_argument("--plain", action="store_true", help="the colours as stored")
     fv.add_argument("--one-side", action="store_true", help="the faces one-sided as stored")
+    fv.add_argument("--offscreen", action="store_true", help="no window (some drivers then give black frames)")
     wk = sub.add_parser("walk", help="walk inside a mesh (with its ceiling) in a window")
     wk.add_argument("file", help="a mesh, e.g. mesh_view_<tag>_anchored.ply or its _sionna.ply")
     wk.add_argument("--traj", default=None,
@@ -2596,7 +2632,8 @@ def main():
             wh = [int(v) for v in a.size.lower().split("x")]
             fly_video(a.file, a.out, [[float(v) for v in p_.split(",")] for p_ in a.path.split(";")] if a.path else None,
                       inset=a.inset, eye=a.eye, speed=a.speed, fps=a.fps, size=(wh[0], wh[1]), ahead=a.ahead,
-                      near=a.near, faces=a.faces, vivid=not a.plain, one_side=a.one_side, seconds=a.seconds)
+                      near=a.near, faces=a.faces, vivid=not a.plain, one_side=a.one_side, seconds=a.seconds,
+                      offscreen=a.offscreen)
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
                  faces=a.faces, eye=a.eye, shot=a.shot, vivid=not a.plain, sat=a.sat, one_side=a.one_side,
