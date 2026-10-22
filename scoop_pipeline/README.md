@@ -1052,6 +1052,10 @@ and ramps (all their faces climbing along the piece, 0.25-1.5 m per m,
 over 0.8 m) and all that is against a flight (its sides, the landing, the
 floor above it), and low walls between pillars (from the
 floor, 1.5 m long or more, thin across, both ends at a wall) are walls;
+and all that is attached to the walls (touching a wall face and nowhere
+more than 0.2 m from them: door and window frames, sills, panels on a wall,
+what is left of a pillar) is wall too: objects are only what stands out or
+apart (a chair or desk pushed to a wall reaches out 0.4 m and more);
 floor bumps (no higher than 0.12 m) are floor and scraps under 0.05 m2 the
 part next to them. The floor is then flattened onto its own level (the
 median of its flat faces per 1 m, blended between cells): the bumps under

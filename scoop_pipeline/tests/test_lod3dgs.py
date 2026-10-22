@@ -485,7 +485,8 @@ def check_sionna(tmp):
     gone); the wall hidden behind a cupboard (not in the map) filled on its
     plane; the parts in the mesh's colours; every face in one part; with
     --faces the floor, walls and ceiling simplified, the objects kept finer;
-    a flat wall drawn in a few large faces still a wall
+    a flat wall drawn in a few large faces still a wall; chairs pushed to a
+    wall (reaching out 0.4 m) objects
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""

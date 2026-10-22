@@ -1102,7 +1102,7 @@ def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
 
 def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2, vertical=0.3,
                 on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, ground=0.3, against=0.1,
-                pillar_r=(0.1, 1.0), pillar_fit=0.04,
+                pillar_r=(0.1, 1.0), pillar_fit=0.04, attach=0.04, attach_depth=0.2,
                 stair_rise=(0.25, 1.5), stair_side=0.15, knee_w=1.5, knee_thin=0.1, knee_end=0.35,
                 T=None, why=(), planes=None):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
@@ -1143,7 +1143,12 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
     not in the map: a piece from the floor (0.3 m), facing sideways mostly,
     knee_w m long or more, thin across (under knee_thin m, 1 sigma), both
     ends within knee_end of a wall face; a row of cabinets is deeper and
-    has a free end); a piece reaching no higher than band (the floor's
+    has a free end); and so is all that is attached to the walls (touching a
+    wall face within `attach` m and nowhere farther than attach_depth from
+    them: a door's or window's frame, a sill, a panel on a wall, what is
+    left of a pillar, and what is attached to those): objects are only what
+    stands out or apart (a chair or a desk pushed to a wall reaches out
+    0.4 m and more); a piece reaching no higher than band (the floor's
     bumps) is floor and one under min_obj m2 (a scrap at a seam) the part
     of the nearest labelled face. why: plan points (x, y): the pieces left
     there and what each rule saw of them, logged. planes: a list given gets
@@ -1343,6 +1348,26 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 ends = [np.r_[mx[k_] + ax_[k_, 0] * e, my[k_] + ax_[k_, 1] * e, mz[k_]] for e in (p0[k_], p1[k_])]
                 if all(len(wtree.query_ball_point(e_, knee_end)) for e_ in ends):
                     kind[k_] = "walls"
+            # attached to the walls (a door's or window's frame, a sill, a panel on a wall,
+            # what is left of a pillar): touching a wall face and nowhere farther from the
+            # walls than attach_depth is wall; objects are what stands out or apart (a chair
+            # or a desk pushed to a wall reaches out 0.4 m and more)
+            for _ in range(3):
+                wall_now = np.r_[wf, rest[kind[comp] == "walls"]]
+                if not len(wall_now):
+                    break
+                sel_f = (kind == "objects")[comp]
+                if not sel_f.any():
+                    break
+                d_, _ = cKDTree(C[wall_now]).query(C[rest[sel_f]], workers=-1, distance_upper_bound=attach_depth)
+                cs = comp[sel_f]
+                touch, out = np.zeros(nc, bool), np.zeros(nc, bool)
+                touch[np.unique(cs[d_ <= attach])] = True
+                out[np.unique(cs[~np.isfinite(d_)])] = True        # some of it farther than attach_depth
+                new = touch & ~out
+                if not new.any():
+                    break
+                kind[new] = "walls"
             for q in why:                               # what each rule saw of the pieces there
                 d2 = np.hypot(Cr[:, 0] - q[0], Cr[:, 1] - q[1])
                 ks = np.unique(comp[d2 < 1.0])
@@ -1413,7 +1438,7 @@ def flatten_floor(M, floor, cell=1.0, level=0.95):
     return int((moved > 1e-4).sum()), float(moved.max()) if len(moved) else 0.0
 
 
-def fill_walls(M, part, planes, cell=0.1, on=0.08, depth=0.4):
+def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4):
     """The wall hidden behind furniture, which the mesh does not have: on
     each wall plane, the cells (cell m) from the floor to its top where no
     wall face is (within on m of it) but an object stands against it
