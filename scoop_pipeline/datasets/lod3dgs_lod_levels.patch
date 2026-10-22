@@ -1,0 +1,27 @@
+diff --git a/scene/dataset_readers.py b/scene/dataset_readers.py
+index a37c2ae..da9b49f 100644
+--- a/scene/dataset_readers.py
++++ b/scene/dataset_readers.py
+@@ -429,6 +429,22 @@ def readoctreeColmapInfo(path, images, depths, eval, llffhold=8):
+ 
+     nerf_normalization = getNerfppNorm(train_cam_infos)
+ 
++    lod_dir = os.path.join(path, "lod")
++    if os.path.isdir(lod_dir):
++        # levels made beforehand (scoop_pipeline/datasets/lod3dgs.py scene): level_0.ply the
++        # coarsest, each one every point at its resolution; no LAS, no PotreeConverter
++        names = [f for f in os.listdir(lod_dir) if f.startswith("level_") and f.endswith(".ply")]
++        names.sort(key=lambda f: int(f[len("level_"):-len(".ply")]))
++        pcds = [fetchPly(os.path.join(lod_dir, f)) for f in names]
++        print("[ Dataloader ] {} LOD levels from {}: {} points".format(
++            len(pcds), lod_dir, [len(p.points) for p in pcds]))
++        return SceneInfo(point_cloud=pcds,
++                         train_cameras=train_cam_infos,
++                         test_cameras=test_cam_infos,
++                         nerf_normalization=nerf_normalization,
++                         ply_path=os.path.join(path, "sparse/0/points3D.ply"),
++                         max_level=len(pcds) - 1)
++
+     octree_path = os.path.join(path, "octree")
+     las_path = os.path.join(path, "octree/0/points3D.las")
+     ply_path = os.path.join(path, "sparse/0/points3D.ply")

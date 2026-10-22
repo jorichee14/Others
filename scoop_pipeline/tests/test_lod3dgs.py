@@ -12,7 +12,8 @@ point) so that the written images, depth and poses agree with the room
 rendered by the centred camera at the written pose; store depth the way
 LOD-3DGS reads it (warped grey, alpha where there is depth); remove the
 surface Poisson puts over the open top (no starting point above the walls,
-every point near the map); give the points on each surface its colour.
+every point near the map); give the points on each surface its colour; write
+the LOD levels (the paper's: nested, spacing doubling, coarsest under 10,000).
 Then `mesh` on the room with a ceiling, the map coloured: the mesh in the
 map's colours (each vertex its nearest map point's, no normals so it is
 shown unlit), named after the map, and its copy without the ceiling (auto:
@@ -880,6 +881,17 @@ def main():
             assert on.sum() > 200, (a, c, on.sum())
             med = np.median(rgb[on].astype(int), 0)
             assert np.abs(med - np.array(col)[::-1]).max() < 15, (a, c, med, col)
+        # LOD levels: coarsest first, the finest every starting point, each coarser
+        # one a subset at about twice the spacing, the coarsest the first under lod_min
+        lv = [read_ply(os.path.join(out, "lod", f"level_{k}.ply"))[0]
+              for k in range(len(r["levels"]))]
+        assert len(lv) >= 2 and [len(q) for q in lv] == r["levels"], r["levels"]
+        assert len(lv[-1]) == len(P) and np.allclose(lv[-1], P)
+        assert len(lv[0]) < 10000 <= len(lv[1]), r["levels"]
+        sp = [np.median(cKDTree(q).query(q, k=2)[0][:, 1]) for q in lv]
+        for k in range(len(lv) - 1):
+            assert cKDTree(lv[k + 1]).query(lv[k])[0].max() < 1e-6       # nested
+            assert 1.5 < sp[k] / sp[k + 1] < 2.6, sp
         rv, th = check_view(tmp)
         print(f"ok view: sensor {rv['sensor_height']:.2f} m up, {rv['holes']} hole filled "
               f"({rv['filled_m2']:.1f} m2), {rv['skipped']} left, wall {th * 100:.1f} cm thick")
@@ -913,7 +925,8 @@ def main():
         print(f"ok mesh: {rm['faces_kept']} faces, ceiling cut at z = {rm['ceil_z']:+.2f}, "
               f"{rm['noceil_faces']} faces without it")
         print(f"ok: {r['frames']} frames, camera {Wc}x{Hc}, {r['points']} points "
-              f"({100 * r['coloured']:.0f}% coloured), mesh {r['faces_kept']}/{r['faces']} faces")
+              f"({100 * r['coloured']:.0f}% coloured), mesh {r['faces_kept']}/{r['faces']} faces, "
+              f"LOD levels {r['levels']}")
     finally:
         shutil.rmtree(tmp)
 

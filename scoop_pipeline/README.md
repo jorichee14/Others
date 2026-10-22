@@ -1174,9 +1174,13 @@ python scoop_pipeline/datasets/mcap_convert.py <merged bag> --format replica \
     --color /mobile_2/color/image_raw --info /mobile_2/color/camera_info \
     --lidar /mobile_2/ouster/points --depth-source map --map $P/mapping/map_final_<tag>.pcd
 python scoop_pipeline/datasets/lod3dgs.py scene $P/datasets/mobile_2/replica_map_<tag> \
-    --map $P/mapping/map_final_<tag>.pcd
-python train.py -s $P/datasets/mobile_2/lod3dgs_map_<tag> --use_lod \
-    --depths depths --data_device cpu -r 1        # in LOD-3DGS, with its README's flags
+    --map $P/mapping/map_final_<tag>.pcd [--mesh $P/mapping/mesh_<tag>.ply] --every 3
+# in LOD-3DGS (git clone --recursive, its environment, pip install laspy plyfile), once:
+git apply <Others>/scoop_pipeline/datasets/lod3dgs_lod_levels.patch
+python train.py -s $P/datasets/mobile_2/lod3dgs_map_<tag> --use_lod --sh_degree 2 \
+    --depths depths --densification_interval 10000 --iterations 300000 \
+    --scaling_lr 0.0015 --position_lr_init 0.000016 --opacity_reset_interval 300000 \
+    --densify_until_iter 200000 --data_device cpu -r 1      # its README's flags
 ```
 
 The map is meshed (Poisson, `--poisson-depth`, default cells about two
@@ -1190,6 +1194,15 @@ the principal point (it takes the image centre), so images and depth are
 resampled onto the largest window centred on it; depth goes into `depths/`
 as LOD-3DGS reads it (8-bit warped grey, alpha where there is depth). The
 map must be the one the export's depth was rendered from, so poses, depth
-and points share a frame. `--every N` thins the frames. LOD-3DGS builds its
-level-of-detail octree with PotreeConverter on the first run (its README:
-built and tested on Windows).
+and points share a frame. `--every N` thins the frames. `--mesh` samples a
+mesh made beforehand (`lod3dgs.py mesh`: ghosts, loose pieces and objects
+handled) instead of meshing the map again.
+
+The level-of-detail start is written too: `lod/level_<k>.ply`, coarsest
+first, as the paper makes it (Sec. 4.2): the finest level every starting
+point (4 cm), each coarser one a point per cell twice the last one's size,
+until a level has fewer than `--lod-min` (10,000) points. LOD-3DGS makes
+its levels with its own PotreeConverter, a Windows build (a prebuilt LASzip
+DLL, a `Converter.exe` run through the shell);
+`datasets/lod3dgs_lod_levels.patch` (against zhaofuq/LOD-3DGS eec40cf) has
+its loader read `lod/` instead, so no converter is needed on Linux.
