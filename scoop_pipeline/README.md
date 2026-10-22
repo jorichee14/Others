@@ -1029,7 +1029,7 @@ split into floor, walls, ceiling and objects. Sionna loads `scene.xml`; it
 reads the `.ply` files in `meshes/` beside it, so keep the folder whole:
 
     <mesh>_sionna/scene.xml                     sionna.rt.load_scene(".../scene.xml")
-    <mesh>_sionna/meshes/{floor,walls,ceiling,objects}.ply   each in the mesh's colours, floor grey
+    <mesh>_sionna/meshes/{floor,walls,ceiling,objects,glass}.ply   each in the mesh's colours, floor grey
     <mesh>_sionna/parts.json                    faces and m2 per part, and left out
     <mesh>_sionna.ply                           to look at: its own colours, floor grey
     <mesh>_sionna_labels.ply                    to check: floor grey, walls beige, ceiling white, objects orange
@@ -1085,15 +1085,21 @@ floor bumps (no higher than 0.12 m) are floor and scraps under 0.05 m2 the
 part next to them. The floor is then flattened onto its own level (the
 median of its flat faces per 1 m, blended between cells; a vertex moved 0.4 m at most, a floor at another level is not a bump): the bumps under
 furniture go (`--keep-floor` keeps them). The floor's holes (where its reflection was cut away, or furniture hid it;
-closed all round by floor, up to 100 m2) are filled with flat patches at its
-level. The walls are smoothed the same
-way: their faces within 6 cm of a wall plane put on it (`--keep-walls`
-leaves them as meshed); a ledge or frame standing out farther is kept. And the wall hidden behind
+closed all round by floor, or walls and furniture standing on it, up to
+100 m2) are filled with flat patches at its
+level. The ceiling is flattened onto its
+levels the same way (0.15 m at most). The walls are smoothed too: their faces
+within 6 cm of a wall plane put on it (`--keep-walls` leaves them as meshed);
+what stands off the planes (pillars, stairs, frames) keeps its shape but is
+smoothed (Taubin), its ripples gone. And the wall hidden behind
 furniture pushed against it, which the mesh does not have, is filled on its
 plane from the floor (where something stands within 0.4 m of it and no wall
 face is, on the plane or set back from it like a door), and so are the wall's own holes, closed all round by it (the
-floor closing them below) and up to 1 m2: the walls continuous; larger
-openings (doors, windows, nothing against them) stay open. Filled faces are
+floor closing them below, its top above) and up to 1 m2: the walls
+continuous. A larger opening that is not a doorway (off the floor: a window;
+or wider than 2.5 m: a glass wall), which the lidar saw through, is filled
+the same but as `glass` (`meshes/glass.ply`, ITU glass 0.01 m); doorways stay
+open. Filled faces are
 counted apart (`--no-fill-walls`). With `--traj` (the mesh's
 frame; anchored: `odometry/reference_<tag>/traj_mobile_2_lidar.tum`) what
 the `_noceil` copy drops as hanging from the ceiling only (a reflection
@@ -1130,8 +1136,7 @@ over `--spin` 8 s, then straight to the loop's nearest point and round it; at
 `--eye` 1.6 m over the floor, `--speed` 1 m/s, looking `--ahead` 2 m along
 the way; or `--path "X,Y;X,Y;..."`, waypoints joined in a loop. Recorded through Open3D's OpenGL window (the one whose
 frames read back on every driver; `--hidden`: not shown), the flight seen
-as it goes, the mesh unlit in its colours made vivid, drawn to `--near`
-15 m; H.264 when ffmpeg is installed (`sudo apt install ffmpeg`), else
+as it goes, the mesh unlit in its colours made vivid, all of it however far; H.264 when ffmpeg is installed (`sudo apt install ffmpeg`), else
 OpenCV's mp4v, which browsers show black (VLC plays it); `--fps`, `--size WxH` (1280x720), `--seconds N`
 for the first N seconds only.
 
@@ -1142,8 +1147,10 @@ its `_sionna.ply`): Open3D's fly mode, started 1.6 m (`--eye`) over the floor
 at the first pose of `--traj` facing along the path (or `--at X,Y`), the
 mesh unlit in its colours with the speckle smoothed over (a vertex much
 brighter or darker than its neighbours, a glint of the camera's colouring,
-takes their colour) and made vivid (stretched over their range, the
-camera's haze and grey gone; the saturation up `--sat` 1.3; `--plain`: as
+takes their colour), blended with their neighbours (`--smooth` 1 time; 0:
+not) and made vivid (white balanced, the green of
+fluorescent light gone, `--cast` keeps it; stretched over their range, the
+camera's haze and grey gone; the saturation up `--sat` 1.15; `--plain`: as
 stored) and seen from both sides (`--one-side`: as stored, half the load),
 cut into blocks of `--cell` 4 m in plan with only the blocks within
 `--near` 15 m of the eye drawn (and of those only the ones in view), so all
