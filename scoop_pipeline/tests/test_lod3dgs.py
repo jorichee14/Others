@@ -489,7 +489,8 @@ def check_sionna(tmp):
     doorway not; the ceiling flat; the parts in the mesh's colours; every face in one part; with
     --faces the floor, walls and ceiling simplified, the objects kept finer
     (and, colours False, written without colours);
-    a flat wall drawn in a few large faces still a wall; chairs pushed to a
+    a flat wall drawn in a few large faces still a wall (and, flat_colours,
+    the walls one colour, glass tinted); chairs pushed to a
     wall (reaching out 0.4 m) objects, a cabinet on a wall off the floor wall;
     a wall mirrored under the floor left out, the wall over it wall; a door
     standing 0.25 m off a wall (a thin sheet) wall; a doorway's frame (jambs
@@ -674,8 +675,13 @@ def check_sionna(tmp):
     # a flat wall in a few large faces (the mesh thinned by quadric first): still a wall
     qm = o3d.io.read_triangle_mesh(m["out"]).simplify_quadric_decimation(150000)
     o3d.io.write_triangle_mesh(os.path.join(tmp, "thin.ply"), qm)
-    rq = L.sionna_mesh(os.path.join(tmp, "thin.ply"), os.path.join(tmp, "thin_out"), traj=tr, label_faces_n=0)
+    rq = L.sionna_mesh(os.path.join(tmp, "thin.ply"), os.path.join(tmp, "thin_out"), traj=tr, label_faces_n=0,
+                       flat_colours=1.0)
     Wq = o3d.io.read_triangle_mesh(os.path.join(tmp, "thin_out", "meshes", "walls.ply"))
+    Cw_ = np.asarray(Wq.vertex_colors)          # flat colours: the walls their one grey (a pane's rim apart),
+    assert (np.abs(Cw_ - 0.5).max(1) < 0.02).mean() > 0.99, "the walls' colours not flat"        # glass its tint
+    Gq = o3d.io.read_triangle_mesh(os.path.join(tmp, "thin_out", "meshes", "glass.ply"))
+    assert (np.abs(np.asarray(Gq.vertex_colors) - [0.72, 0.82, 0.88]).max(1) < 0.02).mean() > 0.9, "glass not tinted"
     Oq = o3d.io.read_triangle_mesh(os.path.join(tmp, "thin_out", "meshes", "objects.ply"))
     xw = lambda Q: inside(np.asarray(Q.vertices)[np.asarray(Q.triangles)].mean(1),        # noqa: E731
                           -0.05, 0.05, 0.5, 5.5, 0.5, 4.5)

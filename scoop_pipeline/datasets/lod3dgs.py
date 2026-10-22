@@ -1599,6 +1599,59 @@ def flatten_floor(M, floor, cell=1.0, level=0.95, most=0.4):
     return int((moved > 1e-4).sum()), float(moved.max()) if len(moved) else 0.0
 
 
+def segment_colours(M, part, obj, planes, weight=1.0, snap=0.06, margin=0.1, glass=(0.72, 0.82, 0.88)):
+    """The mesh's colours made one per segment, so it looks clean: each
+    wall plane the median colour of its vertices (within snap m of it:
+    the median leaves the glints out), what stands off the planes
+    (pillars, frames, stairs) the median of its own connected piece, the
+    ceiling one colour, the floor one, each object one, glass the tint
+    `glass`; blended with the colours as they are by `weight` (1: flat).
+    The new vertex colours (n x 3)."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    V, F = np.asarray(M.vertices), np.asarray(M.triangles)
+    C = np.asarray(M.vertex_colors) if M.has_vertex_colors() else np.full((len(V), 3), 0.6)
+    Cn = C.copy()
+
+    def paint(vi, colour):
+        Cn[vi] = colour
+
+    def flat(vi):
+        if len(vi):
+            paint(vi, np.median(C[vi], axis=0))
+    for name in ("floor", "ceiling"):
+        flat(np.unique(F[part == name]))
+    for k in np.unique(obj[part == "objects"]):
+        flat(np.unique(F[(part == "objects") & (obj == k)]))
+    wf = np.flatnonzero(part == "walls")
+    if len(wf):
+        vi = np.unique(F[wf])
+        best, which = np.full(len(vi), np.inf), np.full(len(vi), -1)
+        for j, pl in enumerate(planes or []):
+            mu, n, t = pl["mu"], pl["n"], pl["t"]
+            q = V[vi] - mu
+            d, u = np.abs(q @ n), q @ t
+            ok = ((d < snap) & (d < best) & (u > pl["u0"] - margin) & (u < pl["u1"] + margin)
+                  & (V[vi, 2] > pl["floor"] - margin) & (V[vi, 2] < pl["top"] + margin))
+            best[ok], which[ok] = d[ok], j
+        for j in np.unique(which[which >= 0]):
+            flat(vi[which == j])
+        off = vi[which < 0]                      # off the planes: each connected piece of those faces
+        if len(off):
+            isoff = np.zeros(len(V), bool)
+            isoff[off] = True
+            Fo = F[wf][isoff[F[wf]].all(1)]
+            if len(Fo):
+                e = np.r_[Fo[:, 0], Fo[:, 1]], np.r_[Fo[:, 1], Fo[:, 2]]
+                _, vc = connected_components(coo_matrix((np.ones(len(e[0])), e), shape=(len(V), len(V))),
+                                             directed=False)
+                vo = np.unique(Fo)
+                for k in np.unique(vc[vo]):
+                    flat(vo[vc[vo] == k])
+    paint(np.unique(F[part == "glass"]), np.asarray(glass, float))     # last: a pane's rim is the wall's too
+    return weight * Cn + (1 - weight) * C
+
+
 def flatten_walls(M, part, planes, snap=0.06, margin=0.1):
     """The vertices of the wall faces (part == "walls") within snap m of a
     wall plane (inside its extent, margin m round it) put on it, each on its
@@ -1811,7 +1864,8 @@ def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0, door
 def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000000, split_objects=False,
                 object_faces=0,
                 floor_colour=(0.8, 0.8, 0.8), traj=None, ceil_margin=0.10, min_piece=50.0, normals=False,
-                why=(), flat_floor=True, fill=True, why_objects=0, flat_walls=True, colours=True):
+                why=(), flat_floor=True, fill=True, why_objects=0, flat_walls=True, colours=True,
+                flat_colours=0.0):
     """The mesh (the one with its ceiling: the radio waves bounce off it) as
     a Sionna RT scene, its own faces split into floor, walls, ceiling and
     objects: <out>/scene.xml (what Sionna loads: sionna.rt.load_scene) with
@@ -1839,7 +1893,9 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     level (flatten_floor); flat_walls: the walls smoothed onto their planes
     (flatten_walls); fill: the walls filled behind furniture and their small
     holes (fill_walls); colours False: the parts and <out>.ply written
-    without colours (Sionna uses none: smaller files)."""
+    without colours (Sionna uses none: smaller files); flat_colours > 0:
+    the colours made one per segment (segment_colours), blended in by that
+    much (1: flat), so it looks clean."""
     o3d = _o3d()
     mesh_path = os.path.expanduser(mesh_path)
     base = os.path.splitext(out)[0] if out else os.path.splitext(mesh_path)[0] + "_sionna"
@@ -1961,6 +2017,10 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
             add(Vg, Fg, Cg, "glass")
             report.append(f"  glass: the walls' larger openings that are not doorways (windows, glass walls the "
                           f"lidar saw through) filled apart: {len(Fg) // 2 * 0.01:.1f} m2, {len(Fg)} faces added")
+    if flat_colours and colours:
+        M.vertex_colors = o3d.utility.Vector3dVector(segment_colours(M, fpart, fobj, planes, weight=flat_colours))
+        report.append(f"  colours one per segment (each wall plane, pillar, object; the ceiling; glass tinted), "
+                      f"blended in {100 * flat_colours:.0f} %")
     Vf, Ff = np.asarray(M.vertices), np.asarray(M.triangles)
     Af = 0.5 * np.linalg.norm(np.cross(Vf[Ff[:, 1]] - Vf[Ff[:, 0]], Vf[Ff[:, 2]] - Vf[Ff[:, 0]]), axis=1)
     for p_ in PARTS:
@@ -2837,6 +2897,10 @@ def main():
                     help="write the parts and <out>.ply without colours (Sionna uses none: smaller files)")
     sn.add_argument("--normals", action="store_true",
                     help="write the parts with vertex normals: a viewer shades them as surfaces (colours greyed)")
+    sn.add_argument("--flat-colours", type=float, nargs="?", const=1.0, default=0.0, metavar="W",
+                    help="one colour per segment (each wall plane the median of its own, each pillar and object "
+                         "its own, the ceiling one, glass tinted), blended in W (default 1: flat; 0.7 keeps a "
+                         "trace of signs and posters)")
     sn.add_argument("--floor-grey", type=float, default=0.8,
                     help="the floor of <out>.ply in this grey (0 black to 1 white; negative: its own colours)")
     sn.add_argument("--material", action="append", default=[], metavar="PART=TYPE[:THICKNESS]",
@@ -2920,7 +2984,7 @@ def main():
             sionna_mesh(a.file, a.out, faces=a.faces, object_faces=a.object_faces, materials=mats,
                         split_objects=a.split_objects,
                         traj=a.traj, normals=a.normals, flat_floor=not a.keep_floor, fill=not a.no_fill_walls,
-                        colours=not a.no_colours,
+                        colours=not a.no_colours, flat_colours=a.flat_colours,
                         flat_walls=not a.keep_walls,
                         why=[tuple(float(v) for v in w.split(",")[:2]) for w in a.why],
                         why_objects=a.why_objects,

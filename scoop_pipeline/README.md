@@ -1109,7 +1109,11 @@ the `_noceil` copy drops as hanging from the ceiling only (a reflection
 joined to a mirrored ceiling: loose once the ceiling is cut, and reaching up
 to the cut, and joined to the building before it) is left out too;
 furniture, loose but well under the ceiling or joined to nothing, and
-pillars standing on the floor, stay. `--faces N` simplifies the floor, walls and ceiling together to about N faces (flat stays flat, in few faces) and `--object-faces M` the objects apart (0: as meshed), so objects keep finer detail than the walls. A light scene for Sionna (it loads a few
+pillars standing on the floor, stay. `--flat-colours [W]` makes the colours one per segment, so the mesh
+looks clean: each wall plane the median colour of its own vertices (the
+median leaves the glints out), each pillar, frame or flight of stairs its
+own, the ceiling one, each object one, glass a light tint; blended in by W
+(default 1, flat; 0.7 keeps a trace of signs and posters). `--faces N` simplifies the floor, walls and ceiling together to about N faces (flat stays flat, in few faces) and `--object-faces M` the objects apart (0: as meshed), so objects keep finer detail than the walls. A light scene for Sionna (it loads a few
 hundred thousand faces in seconds; 40 M takes minutes and GBs of GPU memory):
 `--faces 200000 --object-faces 200000 --no-colours` (the parts and
 `<out>.ply` without colours: Sionna uses none). Each part an
