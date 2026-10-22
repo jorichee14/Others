@@ -1104,7 +1104,8 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, ground=0.3, against=0.1,
                 pillar_r=(0.1, 1.0), pillar_fit=0.04, attach=0.1, attach_depth=0.2, attach_upright=0.9,
                 mounted=0.3, below=0.25, panel_near=0.5, panel_long=0.5, panel_side=0.8,
-                arch_top=1.9, arch_low=1.7, ledge_near=0.3, top_near=0.3, float_low=0.3,
+                arch_top=1.9, arch_low=1.7, ledge_near=0.3, top_near=0.3, float_low=0.3, hug=0.6,
+                high_cut=2.0, high_near=0.5,
                 stair_rise=(0.25, 1.5), stair_side=0.15, knee_w=1.5, knee_thin=0.1, knee_end=0.35,
                 T=None, why=(), planes=None, why_objects=0):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
@@ -1163,7 +1164,10 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
     m of a wall or of what is wall by these rules (a ledge, a lintel, a
     door's part, a wall's top), and a wall's top (a thick wall, a parapet: facing up, wall
     within top_near m along both its long edges; a table by a wall has it
-    on one side);
+    on one side), and what touches a wall, reaches wall_high and is nowhere
+    farther than hug m from the walls (a wall cluttered); of what is left
+    objects, the faces over high_cut m within high_near m of a wall are
+    wall (joined to furniture, up high on the wall);
     and so is a doorway's frame whose wall is not in the map (its jambs and
     the ledge over them: on the floor at both ends, reaching arch_top m,
     nothing under arch_low m in the middle; a table's top is lower, a
@@ -1396,12 +1400,13 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 if not sel_f.any():
                     break
                 d_, _ = cKDTree(C[wall_now]).query(C[rest[sel_f]], workers=-1,
-                                                   distance_upper_bound=max(attach_depth, panel_near, ledge_near, top_near))
+                                                   distance_upper_bound=max(attach_depth, panel_near, ledge_near, top_near, hug))
                 cs = comp[sel_f]
                 touch, out, by = np.zeros(nc, bool), np.zeros(nc, bool), np.zeros(nc, bool)
                 touch[np.unique(cs[d_ <= attach])] = True
                 by[np.unique(cs[d_ <= panel_near])] = True
-                led = np.zeros(nc, bool)
+                led, far_ = np.zeros(nc, bool), np.zeros(nc, bool)
+                far_[np.unique(cs[~(d_ <= hug)])] = True
                 led[np.unique(cs[d_ <= ledge_near])] = True
                 # a wall's top (a thick wall, a parapet): flat, wall along both its long edges
                 top_ = np.zeros(nc, bool)
@@ -1423,6 +1428,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 new |= by & (across < knee_thin) & (p1 - p0 >= panel_long) & (side >= panel_side)  # a door, a strip
                 new |= led & (c_lo >= float_low)       # floating by a wall: a ledge, a lintel, a door's part
                 new |= top_
+                new |= touch & (c_hi >= wall_high) & ~far_     # hugging a wall up high: wall, cluttered
                 if not new.any():
                     break
                 kind[new] = "walls"
@@ -1465,7 +1471,14 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
         scrap = c_area < min_obj
         kind[scrap] = ""
         part[rest] = kind[comp]
-        is_obj = kind[comp] == "objects"
+        # what is joined to furniture but up high by a wall (over high_cut m, within
+        # high_near m of a wall face): wall; the furniture under it stays objects
+        wl_ = np.flatnonzero(part == "walls")
+        hi_ = rest[(kind[comp] == "objects") & (dz[rest] >= high_cut)]
+        if len(wl_) and len(hi_):
+            d_, _ = cKDTree(C[wl_]).query(C[hi_], workers=-1, distance_upper_bound=high_near)
+            part[hi_[np.isfinite(d_)]] = "walls"
+        is_obj = part[rest] == "objects"
         _, num = np.unique(comp[is_obj], return_inverse=True)
         obj[rest[is_obj]] = num.ravel()
         sf = rest[scrap[comp]]                       # scraps: the nearest labelled face's part (and object)

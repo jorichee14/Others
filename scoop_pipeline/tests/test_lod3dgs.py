@@ -491,7 +491,8 @@ def check_sionna(tmp):
     standing 0.25 m off a wall (a thin sheet) wall; a doorway's frame (jambs
     and the ledge over them) with no wall round it wall, and a ledge high
     up 0.15 m off a wall, a door's part floating by a wall, a flat top with
-    walls along both sides; the
+    walls along both sides, a shelf hugging a wall up to 2.5 m, and a
+    board joined to a desk over 2 m (the desk objects); the
     walls smooth (on their planes)
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
@@ -551,6 +552,13 @@ def check_sionna(tmp):
     wall_cab = box(1.0, 2.0, 0.01, 0.41, 1.5, 2.1)             # a cabinet on the wall y = 0, off the floor
     mirrored = sheet(0, 12.0, (0.2, 2.8), (-1.5, -0.02))       # the wall x = 12 mirrored in the floor
     door = box(0.23, 0.27, 2.0, 2.9, 0, 2.0)                   # a door 0.25 m off the wall x = 0
+    shelf = np.concatenate([np.c_[np.full(Z_.size, xr), np.full(Z_.size, yr), Z_]       # 2.5 m against the wall
+                            for xr in (0.05, 0.38) for yr in (3.3, 4.3) for Z_ in [g(0, 2.5)]]    # x = 0, 0.35 deep
+                           + [sheet(2, zr, (0.05, 0.38), (3.3, 4.3)) for zr in (0.5, 1.0, 1.5, 2.0, 2.5)])
+    board_desk = np.concatenate([box(6.0, 6.9, 5.1, 5.95, 0.72, 0.75)]       # a desk against the wall y = 6,
+                                + [box(x, x + 0.06, y, y + 0.06, 0, 0.72, top=False)   # a board on it up to 2.6 m
+                                   for x in (6.03, 6.81) for y in (5.13, 5.86)]
+                                + [box(6.15, 6.75, 5.6, 5.65, 0.75, 2.6)])
     door_bit = box(3.0, 3.1, 0.15, 0.25, 0.6, 1.4)             # a door's part floating 0.15 m off a wall
     trough = np.concatenate([sheet(1, 3.7, (5.3, 6.7), (0, 2.5)), sheet(1, 4.5, (5.3, 6.7), (0, 2.5)),
                              sheet(2, 1.2, (5.35, 6.65), (3.85, 4.35))])   # a flat top 0.15 m off walls both sides
@@ -562,7 +570,7 @@ def check_sionna(tmp):
                         sheet(2, 3.0, (7, 12), (0, 6)), sheet(0, 0.0, (0, 6), (0, 5)),
                         sheet(0, 7.0, (0, 6), (3, 5)), sheet(0, 12.0, (0, 6), (0, 3)),
                         sheet(1, 0.0, (0, 7), (0, 5)), sheet(1, 6.0, (0, 7), (0, 5)),
-                        sheet(1, 0.0, (7, 12), (0, 3)), back, cupboard, over_glass, wall_cab, mirrored, door, arch, ledge, trough, door_bit,
+                        sheet(1, 0.0, (7, 12), (0, 3)), back, cupboard, over_glass, wall_cab, mirrored, door, arch, ledge, trough, door_bit, shelf, board_desk,
                         pillar, table, cabinet, lamp, desk, room_of_desks, stub, chairs, stairs, knee, rack])
     P = P + rng.normal(0, 0.005, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
@@ -587,7 +595,7 @@ def check_sionna(tmp):
     for name, part, b_ in (("the round pillar (each tall strip of it flat enough)", "walls",
                             (3.7, 4.3, 1.2, 1.8, 0.5, 4.5)),
                            ("a square pillar's face", "walls", (4.52, 4.78, 1.86, 1.94, 2.5, 4.5)),
-                           ("a 2.4 m rack (no flat sheet)", "objects", (10.35, 11.5, 5.15, 5.65, 0.2, 2.2)),
+                           ("a 2.4 m rack (no flat sheet; under 2 m)", "objects", (10.35, 11.5, 5.15, 5.65, 0.2, 1.9)),
                            ("a wall's end (its thickness)", "walls", (10.45, 10.55, 1.03, 1.17, 0.5, 2.5)),
                            ("the table", "objects", (2.1, 3.1, 4.1, 4.7, 0.6, 0.8)),
                            ("the cabinet", "objects", (9.05, 9.55, 5.45, 5.95, 0.3, 1.25)),
@@ -604,6 +612,9 @@ def check_sionna(tmp):
                            ("its top", "walls", (5.0, 6.4, 1.98, 2.12, 0.95, 1.05)),
                            ("a door 0.25 m off a wall", "walls", (0.15, 0.35, 2.1, 2.8, 0.3, 1.8)),
                            ("a doorway's frame (wall not in the map)", "walls", (1.95, 3.15, 1.95, 2.35, 0.3, 2.35)),
+                           ("a shelf hugging a wall up to 2.5 m", "walls", (0.1, 0.35, 3.4, 4.2, 0.3, 2.4)),
+                           ("the board up high on a desk", "walls", (6.2, 6.7, 5.55, 5.7, 2.1, 2.55)),
+                           ("the desk under it", "objects", (6.1, 6.8, 5.15, 5.5, 0.7, 0.78)),
                            ("a door's part floating off a wall", "walls", (2.95, 3.15, 0.1, 0.3, 0.7, 1.3)),
                            ("a flat top, walls both sides", "walls", (5.5, 6.5, 3.9, 4.3, 1.1, 1.3)),
                            ("a ledge floating off a wall", "walls", (4.7, 5.7, 5.6, 5.9, 1.35, 1.6)),
