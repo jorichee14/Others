@@ -1638,7 +1638,8 @@ def close_holes(M, part, obj, radius=0.8, pane=0.2):
     their rims triangulated; a doorway is larger, left open): the glass
     panes the lidar saw through, the gaps the meshing left. The new faces
     are added to M and take the part (and object) of the nearest labelled
-    face; a hole of pane m2 or more in a wall is glass. (part, obj) grown,
+    face (next to faces left out, "gone": left out too); a hole of pane m2
+    or more in a wall is glass. (part, obj) grown,
     and the number of faces added."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
@@ -1650,7 +1651,7 @@ def close_holes(M, part, obj, radius=0.8, pane=0.2):
         return part, obj, 0
     Fn = F1[len(F0):]
     V = np.asarray(M.vertices)
-    lab = np.flatnonzero((part != "gone") & (part != ""))
+    lab = np.flatnonzero(part != "")                 # (a hole next to faces left out is left out too)
     _, i = cKDTree(V[F0[lab]].mean(1)).query(V[Fn].mean(1), workers=-1)
     pn, on = part[lab[i]].copy(), obj[lab[i]].copy()
     # each hole's faces (joined), its area: a pane of glass in a wall
@@ -2194,7 +2195,8 @@ def mesh_blocks(m, cell=4.0, one_side=False):
 
 def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0, eye=1.6, fill_hole=10.0):
     """A closed path once round the area, in plan: the floor (the faces
-    facing up at the floor's level, the lowest band holding most of them)
+    facing up at the floor's level, the lowest band holding a fifth of the
+    most any band holds; stray faces under it do not count)
     as a grid of cell m, its small gaps closed, its holes up to fill_hole
     m2 filled (furniture's footprints; a courtyard, larger, is not floor),
     less every cell holding a face at walking height (0.3 to eye + 0.3 m over the floor: a wall,
@@ -2210,8 +2212,8 @@ def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0, eye=1.6, fill_
     A = np.linalg.norm(N, axis=1) / 2
     up = np.abs(N[:, 2]) > 0.9 * np.maximum(2 * A, 1e-12)
     zs = C[up, 2]
-    hist, edges = np.histogram(zs, bins=np.arange(zs.min(), zs.min() + 1.5, 0.05), weights=A[up])
-    z0 = edges[np.argmax(hist)] + 0.025
+    hist, edges = np.histogram(zs, bins=np.arange(zs.min(), zs.max() + 0.05, 0.05), weights=A[up])
+    z0 = edges[np.flatnonzero(hist >= 0.2 * hist.max())[0]] + 0.025     # the lowest band with much of it
     fl = up & (np.abs(C[:, 2] - z0) < floor_tol)
     o3d = _o3d()
     q = o3d.geometry.TriangleMesh(m.vertices, o3d.utility.Vector3iVector(F[fl]))   # the floor's faces, sampled
