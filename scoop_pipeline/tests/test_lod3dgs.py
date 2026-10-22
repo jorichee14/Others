@@ -481,7 +481,8 @@ def check_sionna(tmp):
     two pillars (its top too); objects the table, the cabinet, the desk, the
     chairs and the 4 m of desks (the lamp's flat underside, over 2 m up, with the
     ceiling); the floor flattened (within 1 cm, bumps under furniture
-    gone); every face in one part
+    gone); the wall hidden behind a cupboard (not in the map) filled on its
+    plane; every face in one part
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
@@ -532,11 +533,14 @@ def check_sionna(tmp):
                                       for x in (7.55, 9.0, 10.5, 11.4) for y in (3.65, 4.7)])
     lamp = np.concatenate([box(4.7, 5.3, 2.7, 3.3, 4.55, 4.7, top=False, bottom=True),
                            box(4.97, 5.03, 2.97, 3.03, 4.7, 5.0, top=False)])
+    back = sheet(1, 6.0, (7, 12), (0, 3))
+    back = back[~((back[:, 0] > 7.4) & (back[:, 0] < 8.9) & (back[:, 2] < 1.2))]   # hidden by the cupboard
+    cupboard = box(7.4, 8.9, 5.45, 5.95, 0, 1.2)
     P = np.concatenate([sheet(2, 0.0, (0, 12), (0, 6)), sheet(2, 5.0, (0, 7), (0, 6)),
                         sheet(2, 3.0, (7, 12), (0, 6)), sheet(0, 0.0, (0, 6), (0, 5)),
                         sheet(0, 7.0, (0, 6), (3, 5)), sheet(0, 12.0, (0, 6), (0, 3)),
                         sheet(1, 0.0, (0, 7), (0, 5)), sheet(1, 6.0, (0, 7), (0, 5)),
-                        sheet(1, 0.0, (7, 12), (0, 3)), sheet(1, 6.0, (7, 12), (0, 3)),
+                        sheet(1, 0.0, (7, 12), (0, 3)), back, cupboard,
                         pillar, table, cabinet, lamp, desk, room_of_desks, stub, chairs, stairs, knee, rack])
     P = P + rng.normal(0, 0.005, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
@@ -572,7 +576,9 @@ def check_sionna(tmp):
                            ("the wall between and behind the chairs", "walls", (7.75, 7.85, -0.05, 0.05, 0.2, 0.8)),
                            ("stairs (with the slope under them)", "walls", (0.6, 3.0, 5.0, 5.8, 0.3, 1.8)),
                            ("a 1 m wall between pillars", "walls", (5.0, 6.4, 1.9, 2.2, 0.2, 0.9)),
-                           ("its top", "walls", (5.0, 6.4, 1.98, 2.12, 0.95, 1.05))):
+                           ("its top", "walls", (5.0, 6.4, 1.98, 2.12, 0.95, 1.05)),
+                           ("a cupboard against a wall", "objects", (7.6, 8.7, 5.4, 5.5, 0.3, 1.0)),
+                           ("the wall behind it (not in the map: filled)", "walls", (7.7, 8.6, 5.97, 6.05, 0.3, 1.0))):
         assert inside(parts[part], *b_) > 0, (name, "not with", part)
         for other in parts:
             if other != part:
@@ -581,16 +587,15 @@ def check_sionna(tmp):
     zf = np.asarray(Qf.vertices)[:, 2]
     assert np.abs(zf - np.median(zf)).max() < 0.01, ("the floor not flat", np.abs(zf - np.median(zf)).max())
     lamp = (4.6, 5.4, 2.6, 3.4, 4.5, 4.75)
-    assert inside(parts["walls"], *lamp) <= 0.02 * inside(parts["ceiling"], *lamp) and \
-        inside(parts["ceiling"], *lamp) > 0, \
-        ("the lamp: its underside with the ceiling, nothing of it wall", {n: inside(parts[n], *lamp) for n in parts})
+    assert inside(parts["walls"], *lamp) <= 0.02 * max(1, sum(inside(parts[n_], *lamp) for n_ in parts)), \
+        ("the lamp (ceiling, or left out as hanging): nothing of it wall", {n: inside(parts[n], *lamp) for n in parts})
     one = o3d.io.read_triangle_mesh(r["view"])
     Vv, Cv = np.asarray(one.vertices), np.asarray(one.vertex_colors)
     grey = (np.abs(Cv[np.abs(Vv[:, 2]) < 0.02] - 0.8).max(1) < 0.01).mean()
     assert grey > 0.9, ("the floor not grey", grey)
     full = o3d.io.read_triangle_mesh(m["out"])
-    assert len(one.triangles) == r["faces"] == len(full.triangles) - r["left_out"], \
-        ("faces lost or added", len(one.triangles), len(full.triangles), r["faces"], r["left_out"])
+    assert len(one.triangles) == r["faces"] == len(full.triangles) - r["left_out"] + r["filled"] and r["filled"], \
+        ("faces lost or added", len(one.triangles), len(full.triangles), r["faces"], r["left_out"], r["filled"])
     assert os.path.exists(r["labels"])
     T = np.c_[x, np.full(len(x), 3.0), np.full(len(x), 0.8)]
     e, c = L.walk_start(Vv, T)

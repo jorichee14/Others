@@ -1037,7 +1037,8 @@ The labels are found on a copy of 4,000,000 faces and every face takes its
 nearest one's: floor, the horizontal faces within 0.25 m of the floor (with
 `--traj` the nearest pose less the sensor height, so a reflection under the
 floor cannot pull it down; without, each 1 m cell's lowest); ceiling,
-horizontal 2 m or more above it; walls, the flat sheets standing on the
+horizontal 2 m or more above it and the highest such overhead (a tall
+rack's top under it is not); walls, the flat sheets standing on the
 floor: a flat near-vertical surface (each cell's faces taken apart by the
 way they face, so the two sides of a thin wall are two surfaces) of 0.5 m2
 or more reaching 2.2 m or higher, every face on its plane (within 5 cm,
@@ -1053,12 +1054,17 @@ floor, 1.5 m long or more, thin across, both ends at a wall) are walls;
 floor bumps (no higher than 0.25 m) are floor and scraps under 0.05 m2 the
 part next to them. The floor is then flattened onto its own level (the
 median of its flat faces per 1 m, blended between cells): the bumps under
-furniture go (`--keep-floor` keeps them). With `--traj` (the mesh's
+furniture go (`--keep-floor` keeps them). And the wall hidden behind
+furniture pushed against it, which the mesh does not have, is filled on its
+plane from the floor (where something stands within 0.4 m of it and no wall
+face is; doors, windows and openings, nothing against them, stay open),
+counted apart (`--no-fill-walls`). With `--traj` (the mesh's
 frame; anchored: `odometry/reference_<tag>/traj_mobile_2_lidar.tum`) what
 the `_noceil` copy drops as hanging from the ceiling only (a reflection
 joined to a mirrored ceiling: loose once the ceiling is cut, and reaching up
-to the cut) is left out too; furniture, loose but well under the ceiling,
-stays. `--faces N` simplifies the whole mesh first (0: as it is). Each part an
+to the cut, and joined to the building before it) is left out too;
+furniture, loose but well under the ceiling or joined to nothing, and
+pillars standing on the floor, stay. `--faces N` simplifies the whole mesh first (0: as it is). Each part an
 ITU material, `--material PART=TYPE[:THICKNESS m]` (default concrete 0.2 m,
 objects wood 0.05 m); `--normals` writes the parts with vertex normals (a
 viewer shades them as surfaces; without, the per-vertex colours make a
