@@ -1102,7 +1102,10 @@ floor closing them below, its top above) and up to 1 m2: the walls
 continuous. A larger opening that is not a doorway (off the floor: a window;
 or wider than 2.5 m: a glass wall), which the lidar saw through, is filled
 the same but as `glass` (`meshes/glass.ply`, ITU glass 0.01 m); doorways stay
-open. Filled faces are
+open, and so does an opening at the top of its wall with ceiling on both
+sides of the wall (over a parapet or a counter, inside the building: a glass
+wall to the outside has ceiling on one side only). `--open X,Y` (repeat it)
+keeps the opening at that plan point open by hand: no patch within 1 m of it. Filled faces are
 counted apart (`--no-fill-walls`). With `--traj` (the mesh's
 frame; anchored: `odometry/reference_<tag>/traj_mobile_2_lidar.tum`) what
 the `_noceil` copy drops as hanging from the ceiling only (a reflection
@@ -1185,7 +1188,7 @@ python scoop_pipeline/datasets/mcap_convert.py <merged bag> --format replica \
 python scoop_pipeline/datasets/lod3dgs.py scene $P/datasets/mobile_2/replica_map_<tag> \
     --map $P/mapping/map_final_<tag>.pcd [--mesh $P/mapping/mesh_<tag>.ply] --every 3
 # in LOD-3DGS (git clone --recursive, its environment, pip install laspy plyfile), once:
-git apply <Others>/scoop_pipeline/datasets/lod3dgs_lod_levels.patch
+python3 <Others>/scoop_pipeline/datasets/lod3dgs_patch.py .   # (or git apply <Others>/scoop_pipeline/datasets/lod3dgs_lod_levels.patch)
 python train.py -s $P/datasets/mobile_2/lod3dgs_map_<tag> --use_lod --sh_degree 2 \
     --depths depths --densification_interval 10000 --iterations 300000 \
     --scaling_lr 0.0015 --position_lr_init 0.000016 --opacity_reset_interval 300000 \
@@ -1214,4 +1217,11 @@ until a level has fewer than `--lod-min` (10,000) points. LOD-3DGS makes
 its levels with its own PotreeConverter, a Windows build (a prebuilt LASzip
 DLL, a `Converter.exe` run through the shell);
 `datasets/lod3dgs_lod_levels.patch` (against zhaofuq/LOD-3DGS eec40cf) has
-its loader read `lod/` instead, so no converter is needed on Linux.
+its loader read `lod/` instead, so no converter is needed on Linux;
+`datasets/lod3dgs_patch.py <LOD-3DGS>` makes the same change whatever the
+file's line numbers or endings. Its environment.yml pins PyTorch for CUDA
+11.6 and Python 3.7, which no current nvcc or gcc builds; on Ubuntu 24.04
+make the environment by hand: Python 3.10, torch 2.4.1 cu124, the CUDA 12.4
+toolkit from the nvidia conda channel (`CUDA_HOME=$CONDA_PREFIX`), and the two
+submodules with `pip install --no-build-isolation`, with `PYTHONNOUSERSITE=1`
+so nothing in `~/.local` leaks in.

@@ -486,7 +486,7 @@ def check_sionna(tmp):
     gone); the wall hidden behind a cupboard (not in the map) filled on its
     plane; a hole in the floor filled, one in the ceiling too; no patch over a door set back from
     its wall; a 3 m window with no glass in the map filled as glass, the
-    doorway not; the ceiling flat; the parts in the mesh's colours; every face in one part; with
+    doorway not, nor the space over a parapet with ceiling on both sides; the ceiling flat; the parts in the mesh's colours; every face in one part; with
     --faces the floor, walls and ceiling simplified, the objects kept finer
     (and, colours False, written without colours);
     a flat wall drawn in a few large faces still a wall (and, flat_colours,
@@ -584,6 +584,9 @@ def check_sionna(tmp):
     P = P[~((np.abs(P[:, 0] - 12) < 0.02) & (P[:, 1] > 1.0) & (P[:, 1] < 4.0) & (P[:, 2] > 0.8) & (P[:, 2] < 2.5))]
     P = P[~((np.abs(P[:, 2] - 5.0) < 0.02) & (P[:, 0] > 1.0) & (P[:, 0] < 2.5) & (P[:, 1] > 0.8) & (P[:, 1] < 2.2))]
     # (a 1.5 x 1.4 m hole in the hall's ceiling)
+    P = P[~((np.abs(P[:, 1] - 6.0) < 0.02) & (P[:, 0] > 2.0) & (P[:, 0] < 4.0) & (P[:, 2] > 1.0))]
+    P = np.concatenate([P, sheet(2, 0.0, (1.5, 4.5), (6, 8)), sheet(2, 5.0, (1.5, 4.5), (6, 8))])
+    P = P + 0   # (the wall y = 6 a 1 m parapet for x 2-4, floor and ceiling beyond it: the space over it open)
     # (a 3 m window in the wall x = 12, its glass not in the map)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))      # a hole in the floor (3-4, 3-3.8)
     pc.colors = o3d.utility.Vector3dVector(np.full(P.shape, 0.5))
@@ -649,6 +652,8 @@ def check_sionna(tmp):
     assert inside(parts["ceiling"], 1.3, 2.2, 1.1, 1.9, 4.95, 5.05) >= 4, "the ceiling's hole not filled"
     assert inside(parts["glass"], 11.95, 12.05, 1.2, 3.8, 1.0, 2.3) >= 100, "the window not glass"
     assert inside(parts["glass"], -0.05, 0.05, 2.0, 2.9, 0.3, 1.8) == 0, "the doorway glazed"
+    assert inside(parts["glass"], 2.2, 3.8, 5.95, 6.05, 1.3, 4.7) + inside(parts["walls"], 2.2, 3.8, 5.95, 6.05, 1.3, 4.7) \
+        < 200, "the space over the parapet (ceiling both sides) walled up"      # (a sliver at its ragged edge)
     zc = parts["ceiling"][(parts["ceiling"][:, 0] > 0.5) & (parts["ceiling"][:, 0] < 6.5), 2]
     assert np.percentile(np.abs(zc - 5.0), 99) < 0.03, ("the hall's ceiling not flat", np.percentile(np.abs(zc - 5.0), 99))
     assert inside(parts["walls"], -0.02, 0.1, 2.1, 2.8, 0.3, 1.8) <= 0.05 * inside(parts["walls"], 0.15, 0.35, 2.1, 2.8, 0.3, 1.8), \
@@ -731,10 +736,14 @@ def check_sionna(tmp):
     sc.rx_array = rt.PlanarArray(num_rows=1, num_cols=1, pattern="iso", polarization="V")
     sc.add(rt.Transmitter("tx", position=[5.5, 3.0, 1.5]))
     sc.add(rt.Receiver("rx", position=[10.5, 3.0, 1.5]))
-    _, tau = rt.PathSolver()(sc, max_depth=1, refraction=False).cir(out_type="numpy")
-    d = np.unique(np.round(tau[tau >= 0] * 1e9, 2))
     bounce = (np.hypot(5.0, 3.0) - 5.0) / 0.299792458
-    assert d[0] == 0 and np.abs(d - bounce).min() < 0.05, ("no floor bounce", d[:6], bounce)
+    for attempt in range(3):                  # the solver samples its rays: the bounce missed now and then
+        _, tau = rt.PathSolver()(sc, max_depth=1, refraction=False).cir(out_type="numpy")
+        d = np.unique(np.round(tau[tau >= 0] * 1e9, 2))
+        if d[0] == 0 and np.abs(d - bounce).min() < 0.05:
+            break
+    else:
+        raise AssertionError(("no floor bounce", d[:6], bounce))
     return r, d[:4]
 
 

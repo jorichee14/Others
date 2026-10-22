@@ -1769,7 +1769,7 @@ def fill_floor_part(M, part, cell=0.2, max_hole=100.0, name="floor"):
     return P, Fs, Cs
 
 
-def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0, door_w=2.5):
+def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0, door_w=2.5, open_pts=(), keep=1.0):
     """The wall hidden behind furniture, which the mesh does not have: on
     each wall plane, the cells (cell m) from the floor to its top where no
     wall face is (within depth m of it: on it, or set back like a door or a
@@ -1781,8 +1781,11 @@ def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0, door
     below, its top above), up to max_hole m2: the wall continuous. A larger
     one that is not a doorway (off the floor: a window; or wider than
     door_w m: a glass wall) is glass, the lidar saw through it: filled the
-    same, apart. ((vertices, faces, colours) of the wall patches, the same
-    of the glass), to add."""
+    same, apart; but one open at the plane's top with ceiling on both sides
+    of the plane (over a parapet or a counter: inside the building, not a
+    glass wall to the outside) stays open, and so does anything within
+    `keep` m (in plan) of a point of open_pts. ((vertices, faces, colours)
+    of the wall patches, the same of the glass), to add."""
     V, F = np.asarray(M.vertices), np.asarray(M.triangles)
     C = V[F].mean(1)
     col = np.asarray(M.vertex_colors) if M.has_vertex_colors() else None
@@ -1793,6 +1796,10 @@ def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0, door
     if not len(ob):
         ob = wl[:1]
     wtree, otree = cKDTree(C[wl, :2]), cKDTree(C[ob, :2])
+    ce = np.flatnonzero(part == "ceiling")
+    ctree = cKDTree(C[ce, :2]) if len(ce) else None
+    A = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1)
+    open_pts = np.asarray(open_pts, float).reshape(-1, 2)
     out = {"walls": [[], [], [], 0], "glass": [[], [], [], 0]}       # vertices, faces, colours, n vertices
     for pl in planes:
         mu, n, t = pl["mu"], pl["n"], pl["t"]
@@ -1832,13 +1839,30 @@ def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0, door
             np.minimum.at(z_lo, hl, hz)
             np.minimum.at(u_lo, hl, hu)
             np.maximum.at(u_hi, hl, hu)
+            z_hi = np.full(nlab_ + 1, -1)
+            np.maximum.at(z_hi, hl, hz)
             small = area <= max_hole
             pane = ~small & ((z_lo > 0) | ((u_hi - u_lo + 1) * cell > door_w))
+            # open at the plane's top: a glass wall to the outside has ceiling on one side
+            # of the plane only; over a parapet or a counter there is ceiling on both
+            if ctree is not None:
+                for k_ in np.flatnonzero(pane & (z_hi >= nz - 1)):
+                    ci = ce[np.asarray(ctree.query_ball_point(mid, rad + 2.0), np.int64)]
+                    uc, dc = (C[ci] - mu) @ t, (C[ci] - mu) @ n
+                    span = (uc >= u0 + u_lo[k_] * cell) & (uc <= u0 + (u_hi[k_] + 1) * cell)
+                    both = (A[ci][span & (dc > 0.3) & (dc < 2.0)].sum() > 0.5
+                            and A[ci][span & (dc < -0.3) & (dc > -2.0)].sum() > 0.5)
+                    if both:
+                        pane[k_] = False
             small[0] = pane[0] = False
             glass = pane[lab_]
             closed = small[lab_]
         for name, g in (("walls", (front | closed) & ~have & ~glass), ("glass", glass)):
             iu, iz = np.nonzero(g)
+            if len(iu) and len(open_pts):            # kept open by hand: no patch near those points
+                pu = mu[:2] + np.outer(u0 + (iu + 0.5) * cell, t[:2])
+                dmin = cKDTree(open_pts).query(pu)[0]
+                iu, iz = iu[dmin > keep], iz[dmin > keep]
             if not len(iu):
                 continue
             Vs, Fs, Cs, nv = out[name]
@@ -1865,7 +1889,7 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
                 object_faces=0,
                 floor_colour=(0.8, 0.8, 0.8), traj=None, ceil_margin=0.10, min_piece=50.0, normals=False,
                 why=(), flat_floor=True, fill=True, why_objects=0, flat_walls=True, colours=True,
-                flat_colours=0.0):
+                flat_colours=0.0, open_pts=()):
     """The mesh (the one with its ceiling: the radio waves bounce off it) as
     a Sionna RT scene, its own faces split into floor, walls, ceiling and
     objects: <out>/scene.xml (what Sionna loads: sionna.rt.load_scene) with
@@ -1895,7 +1919,8 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     holes (fill_walls); colours False: the parts and <out>.ply written
     without colours (Sionna uses none: smaller files); flat_colours > 0:
     the colours made one per segment (segment_colours), blended in by that
-    much (1: flat), so it looks clean."""
+    much (1: flat), so it looks clean; open_pts: plan points (x, y) no wall
+    or glass patch is put within 1 m of (an opening to keep by hand)."""
     o3d = _o3d()
     mesh_path = os.path.expanduser(mesh_path)
     base = os.path.splitext(out)[0] if out else os.path.splitext(mesh_path)[0] + "_sionna"
@@ -2013,7 +2038,7 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
             add(Vn, Fn, Cn, "ceiling")
             report.append(f"  ceiling filled where it was missing (what hung from it cut away): "
                           f"{len(Fn) // 2 * 0.04:.1f} m2, {len(Fn)} faces added")
-        (Vn, Fn, Cn), (Vg, Fg, Cg) = fill_walls(M, fpart, planes)
+        (Vn, Fn, Cn), (Vg, Fg, Cg) = fill_walls(M, fpart, planes, open_pts=open_pts)
         if len(Fn):
             add(Vn, Fn, Cn, "walls")
             report.append(f"  walls filled behind furniture (the mesh has none there) and their small holes: "
@@ -2941,6 +2966,9 @@ def main():
                     help="write the parts and <out>.ply without colours (Sionna uses none: smaller files)")
     sn.add_argument("--normals", action="store_true",
                     help="write the parts with vertex normals: a viewer shades them as surfaces (colours greyed)")
+    sn.add_argument("--open", action="append", default=[], metavar="X,Y",
+                    help="keep the opening at this plan point open: no wall or glass patch within 1 m of it "
+                         "(repeat it; a negative value: --open=-5.7,-25.8)")
     sn.add_argument("--flat-colours", type=float, nargs="?", const=1.0, default=0.0, metavar="W",
                     help="one colour per segment (each wall plane the median of its own, each pillar and object "
                          "its own, the ceiling one, glass tinted), blended in W (default 1: flat; 0.7 keeps a "
@@ -3033,6 +3061,7 @@ def main():
                         split_objects=a.split_objects,
                         traj=a.traj, normals=a.normals, flat_floor=not a.keep_floor, fill=not a.no_fill_walls,
                         colours=not a.no_colours, flat_colours=a.flat_colours,
+                        open_pts=[[float(v) for v in o_.split(",")] for o_ in a.open],
                         flat_walls=not a.keep_walls,
                         why=[tuple(float(v) for v in w.split(",")[:2]) for w in a.why],
                         why_objects=a.why_objects,
