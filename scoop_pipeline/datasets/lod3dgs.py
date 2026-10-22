@@ -1973,13 +1973,15 @@ def enhance_colours(C, low=0.5, high=99.5, sat=1.3, gamma=0.9):
 
 
 def walk(mesh_path, traj=None, at=None, faces=2000000, eye=1.6, fov=70.0, shot=None, vivid=True, sat=1.3,
-         one_side=False):
-    """Walk inside a mesh (with its ceiling) in a window: Open3D's fly mode,
-    started eye m over the floor at walk_start's place, the mesh unlit in its
-    colours (vivid: enhance_colours, saturation sat) and seen from both
-    sides (one_side: as stored, half the triangles); simplified to `faces`
-    first when larger (quadric; 0: all of it) so it moves smoothly. shot:
-    write the start view to this PNG and close."""
+         one_side=False, step=0.1, turn=4.0):
+    """Walk inside a mesh (with its ceiling) in a window, started eye m over
+    the floor at walk_start's place, the mesh unlit in its colours (vivid:
+    enhance_colours, saturation sat) and seen from both sides (one_side: as
+    stored, half the triangles); simplified to `faces` first when larger
+    (quadric; 0: all of it) so it moves smoothly. Each key event moves step
+    m or turns `turn` degrees, whatever the frame rate (Open3D's own fly
+    mode moves per frame: stuck when a big mesh draws slowly); the mouse
+    drag looks round. shot: write the start view to this PNG and close."""
     o3d = _o3d()
     from open3d.visualization import gui, rendering
     m = o3d.io.read_triangle_mesh(os.path.expanduser(mesh_path))
@@ -1999,31 +2001,74 @@ def walk(mesh_path, traj=None, at=None, faces=2000000, eye=1.6, fov=70.0, shot=N
     V = np.asarray(m.vertices)
     e, c = walk_start(V, read_tum_positions(traj, stride=1) if traj else None, at, eye)
     log.info(f"walk {mesh_path}: {len(F)} faces, from ({e[0]:.1f}, {e[1]:.1f}), eye {eye} m over the floor\n"
-             "  turn: drag with the left mouse button, or the arrow keys (left/right turn, up/down tilt)\n"
-             "  move: W forward, S back, A left, D right, Q up, Z down (hold a key to keep going)\n"
-             "  mouse wheel: faster / slower; Escape or close the window: out")
+             f"  turn: the arrow keys (left/right turn, up/down tilt, {turn:g} deg each), or drag with the mouse\n"
+             f"  move: W forward, S back, A left, D right, Q up, Z down ({step:g} m each; hold a key to keep "
+             "going), R back to the start\n  Escape or close the window: out")
     app = gui.Application.instance
     app.initialize()
-    w = o3d.visualization.O3DVisualizer(f"walk {os.path.basename(mesh_path)}", 1600, 900)
+    win = app.create_window(f"walk {os.path.basename(mesh_path)}", 1600, 900)
+    sw = gui.SceneWidget()
+    sw.scene = rendering.Open3DScene(win.renderer)
     mat = rendering.MaterialRecord()
     mat.shader = "defaultUnlit" if m.has_vertex_colors() else "defaultLit"
-    w.add_geometry("mesh", m, mat)
-    w.show_skybox(False)
-    w.scene.view.set_post_processing(False)     # no tone mapping: the colours as stored, not washed out
-    w.set_background(np.array([0.12, 0.12, 0.12, 1.0], np.float32), None)   # small holes dark, not white
-    w.show_settings = False
-    w.setup_camera(fov, c.astype(np.float32), e.astype(np.float32), np.array([0, 0, 1], np.float32))
-    w.mouse_mode = gui.SceneWidget.Controls.FLY
-    app.add_window(w)
+    sw.scene.add_geometry("mesh", m, mat)
+    sw.scene.show_skybox(False)
+    sw.scene.view.set_post_processing(False)     # no tone mapping: the colours as stored, not washed out
+    sw.scene.set_background(np.array([0.12, 0.12, 0.12, 1.0], np.float32))   # small holes dark, not white
+    sw.setup_camera(fov, sw.scene.bounding_box, c.astype(np.float32))
+    cam = sw.scene.camera
+    up = np.array([0.0, 0.0, 1.0], np.float32)
+
+    def place(eye_, look_):
+        cam.look_at(look_.astype(np.float32), eye_.astype(np.float32), up)
+        cam.set_projection(fov, win.size.width / max(win.size.height, 1), 0.05, 2000.0,
+                           rendering.Camera.FovType.Vertical)
+        sw.force_redraw()
+    place(e, c)
+    sw.set_view_controls(gui.SceneWidget.Controls.FLY)
+
+    def on_key(ev):
+        if ev.type != gui.KeyEvent.Type.DOWN:
+            return gui.Widget.EventCallbackResult.IGNORED
+        M_ = np.asarray(cam.get_model_matrix())
+        eye_, fwd, right = M_[:3, 3].copy(), -M_[:3, 2], M_[:3, 0]
+        flat = np.r_[fwd[:2], 0.0]
+        flat /= np.linalg.norm(flat) or 1.0
+        K = gui.KeyName
+        if ev.key == K.ESCAPE:
+            win.close()
+            return gui.Widget.EventCallbackResult.CONSUMED
+        if ev.key == K.R:
+            place(e, c)
+            return gui.Widget.EventCallbackResult.CONSUMED
+        move = {K.W: flat, K.S: -flat, K.A: -right, K.D: right, K.Q: up, K.Z: -up}
+        if ev.key in move:
+            eye_ = eye_ + step * np.asarray(move[ev.key], float)
+            place(eye_, eye_ + fwd)
+            return gui.Widget.EventCallbackResult.CONSUMED
+        if ev.key in (K.LEFT, K.RIGHT, K.UP, K.DOWN):
+            yaw = np.arctan2(fwd[1], fwd[0]) + np.radians(turn) * (1 if ev.key == K.LEFT else -1 if ev.key == K.RIGHT else 0)
+            pitch = np.arcsin(np.clip(fwd[2], -1, 1)) + np.radians(turn) * (1 if ev.key == K.UP else -1 if ev.key == K.DOWN else 0)
+            pitch = np.clip(pitch, np.radians(-85), np.radians(85))
+            fwd = np.array([np.cos(pitch) * np.cos(yaw), np.cos(pitch) * np.sin(yaw), np.sin(pitch)])
+            place(eye_, eye_ + fwd)
+            return gui.Widget.EventCallbackResult.CONSUMED
+        return gui.Widget.EventCallbackResult.IGNORED
+    sw.set_on_key(on_key)
+    win.add_child(sw)
     if shot:
         import threading
         import time
 
         def snap():
             time.sleep(3)
-            app.post_to_main_thread(w, lambda: w.export_current_image(os.path.expanduser(shot)))
+
+            def save():
+                img = app.render_to_image(sw.scene, win.size.width, win.size.height)
+                o3d.io.write_image(os.path.expanduser(shot), img)
+            app.post_to_main_thread(win, save)
             time.sleep(2)
-            app.post_to_main_thread(w, app.quit)
+            app.post_to_main_thread(win, app.quit)
         threading.Thread(target=snap, daemon=True).start()
     app.run()
 
@@ -2302,6 +2347,8 @@ def main():
     wk.add_argument("--plain", action="store_true",
                     help="the colours as stored (default: made vivid, the camera's haze and grey gone)")
     wk.add_argument("--sat", type=float, default=1.3, help="the saturation boost when made vivid")
+    wk.add_argument("--step", type=float, default=0.1, help="metres per key event (W/S/A/D/Q/Z)")
+    wk.add_argument("--turn", type=float, default=4.0, help="degrees per arrow key event")
     wk.add_argument("--one-side", action="store_true",
                     help="the faces one-sided as stored (default: doubled, so a wall is seen from both sides; "
                          "halves the load for a big mesh)")
@@ -2320,7 +2367,8 @@ def main():
             anchor_file(a.file, a.frame, a.out)
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
-                 faces=a.faces, eye=a.eye, shot=a.shot, vivid=not a.plain, sat=a.sat, one_side=a.one_side)
+                 faces=a.faces, eye=a.eye, shot=a.shot, vivid=not a.plain, sat=a.sat, one_side=a.one_side,
+                 step=a.step, turn=a.turn)
         elif a.cmd == "sionna":
             mats = {}
             for spec in a.material:

@@ -1124,11 +1124,13 @@ mesh unlit in its colours made vivid (stretched over their range, the
 camera's haze and grey gone; the saturation up `--sat` 1.3; `--plain`: as
 stored) and seen from both sides (`--one-side`: as stored, half the load),
 simplified to `--faces` (2,000,000; 0: all of it, a GPU with 8 GB walks
-40 M) first. Turn by dragging with the left mouse button or with the arrow
-keys (left/right turn, up/down tilt); move with W forward, S back, A left,
-D right, Q up, Z down (hold a key to keep going); the wheel sets the speed;
-Escape or closing the window ends it. `--shot view.png` writes the start
-view and closes.
+40 M) first. Turn with the arrow keys (left/right turn, up/down tilt,
+`--turn` 4 degrees each) or by dragging with the mouse; move with W
+forward, S back, A left, D right, Q up, Z down (`--step` 0.1 m each; hold a
+key to keep going: each key event moves that far whatever the frame rate,
+where Open3D's own fly mode moves per frame and sticks when a big mesh
+draws slowly); R goes back to the start; Escape or closing the window ends
+it. `--shot view.png` writes the start view and closes.
 
     python3 scoop_pipeline/datasets/lod3dgs.py walk mapping/mesh_view_<tag>_anchored.ply \
         --traj odometry/reference_<tag>/traj_mobile_2_lidar.tum
