@@ -2089,12 +2089,18 @@ def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0, eye=1.6):
     ijb = np.floor((C[blk, :2] - lo) / cell).astype(np.int64)
     ok = (ijb >= 0).all(1) & (ijb[:, 0] < nx) & (ijb[:, 1] < ny)
     g[ijb[ok, 0], ijb[ok, 1]] = False
-    r = max(1, int(round(inset / cell)))
-    yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
-    g = ndimage.binary_erosion(g, (xx ** 2 + yy ** 2) <= r * r)
-    lab, nl = ndimage.label(g)
-    if not nl:
-        raise ConvertError(f"no floor left {inset} m from the walls: a smaller --inset")
+    g0 = g
+    while True:                                      # shrunk inset m; a cramped place: less, told
+        r = max(1, int(round(inset / cell)))
+        yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
+        g = ndimage.binary_erosion(g0, (xx ** 2 + yy ** 2) <= r * r)
+        lab, nl = ndimage.label(g)
+        if nl and np.bincount(lab.ravel())[1:].max() * cell * cell >= 4.0:
+            break
+        if inset <= 0.4:
+            raise ConvertError("no free floor to fly round (a wall, a pillar or furniture within 0.4 m everywhere)")
+        inset = round(inset / 2, 2)
+        log.warning(f"no free floor that far from the walls and furniture: --inset {inset} m tried instead")
     big = np.argmax(np.bincount(lab.ravel())[1:]) + 1
     cs, _ = cv2.findContours((lab == big).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     pts = max(cs, key=len).reshape(-1, 2)[:, ::-1].astype(float)     # (row, col) = (i, j)
@@ -2216,13 +2222,15 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
     log.info(f"fly {mesh_path}: " + (f"a turn round at ({st_[0]:.1f}, {st_[1]:.1f}) over {spin:g} s, " if nspin else "")
              + f"{total:.0f} m of way (a loop of {ltot:.0f} m), {nfr} frames at {fps} fps ({nfr / fps:.0f} s), "
              f"{len(m.triangles)} faces -> {out}")
-    vis = o3d.visualization.Visualizer()
+    F_ = np.asarray(m.triangles)                   # every face both ways round: seen from both sides (the
+    m.triangles = o3d.utility.Vector3iVector(np.vstack([F_, F_[:, ::-1]]))   # viewer's own back-face switch
+    vis = o3d.visualization.Visualizer()           # is not honoured by every driver)
     if not vis.create_window(f"fly {os.path.basename(mesh_path)}: recording", size[0], size[1], visible=not hidden):
         raise ConvertError("no window: fly needs a display (the OpenGL one; ssh -X, or a desktop)")
     vis.add_geometry(m)
     ro = vis.get_render_option()
     ro.light_on = False                            # the colours as stored
-    ro.mesh_show_back_face = True                  # a wall seen from both sides
+    ro.mesh_show_back_face = True
     ro.background_color = np.array([0.12, 0.12, 0.12])
     vc = vis.get_view_control()
     vc.set_constant_z_near(0.05)
