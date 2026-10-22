@@ -561,13 +561,16 @@ def _pose_source(paths, pose_bag, topic, pose_tum=None):
 
 def pass_of(bag):
     """(date, pass) of a bag below data/{raw,work,processed}/<date>/<pass>/...,
-    or None. The tag <pass>_<date> names the pass's outputs (as the map
-    stages name their clouds)."""
+    or None; a pass at a site is two folders, <pass>/site_N, returned joined
+    by "/" (as scoop/layout.py). The tag <pass>_<date> ("/" -> "_") names the
+    pass's outputs (as the map stages name their clouds)."""
     p = bag[0] if isinstance(bag, (list, tuple)) else bag
     parts = os.path.abspath(os.path.expanduser(p)).split(os.sep)
     for i in range(len(parts) - 1, -1, -1):
         if parts[i] in ("raw", "work", "processed") and len(parts) > i + 3:
-            return parts[i + 1], parts[i + 2]
+            rest = parts[i + 2:]
+            n = 2 if len(rest) > 2 and re.fullmatch(r"site_\w+", rest[1]) else 1
+            return parts[i + 1], "/".join(rest[:n])
     return None
 
 
@@ -586,10 +589,10 @@ def dataset_dir(bag, fmt, depth=None, machine="mobile_1"):
                            "give the output folder")
     date, pas = dp
     p = os.path.abspath(os.path.expanduser(bag[0] if isinstance(bag, (list, tuple)) else bag))
-    root = p[:p.rindex(os.sep + date + os.sep + pas)]
+    root = p[:p.rindex(os.sep + date + os.sep + pas.replace("/", os.sep))]
     root = root[:root.rindex(os.sep)]                       # .../data
-    name = "_".join(x for x in (fmt, depth, pas, date) if x)
-    return os.path.join(root, "processed", date, pas, "datasets", machine, name)
+    name = "_".join(x for x in (fmt, depth, pas.replace("/", "_"), date) if x)
+    return os.path.join(root, "processed", date, *pas.split("/"), "datasets", machine, name)
 
 
 # =========================================================================== #
@@ -1994,7 +1997,7 @@ def to_mcd(bag, out, config=None, *, pose_tum=None, tum_frame=None, depth_source
     pose_cfg = dict(cfg["pose"])
     sensors = {k: dict(v) for k, v in cfg["sensors"].items()}
     dp = pass_of(bag) or pass_of(paths[0])
-    seq = (cfg.get("sequence") or (f"{dp[1]}_{dp[0]}" if dp else None)
+    seq = (cfg.get("sequence") or (f"{dp[1].replace('/', '_')}_{dp[0]}" if dp else None)
            or os.path.basename(os.path.normpath(out)))
     body_frame = pose_cfg["frame"]
     os.makedirs(out, exist_ok=True)

@@ -92,7 +92,8 @@ def main():
         plan = session.RecordPlan(a.record)
         settings = recording.load_settings(a.settings)
         raw = recording.Path(a.raw_dir).expanduser().resolve()
-        mode = a.mode or plan.mode_of(raw.name, *(p.parent.name for p in raw.rglob("metadata.yaml")))
+        mode = a.mode or plan.mode_of(raw.name, raw.parent.name,   # survey/site_1: "survey"
+                                      *(p.parent.name for p in raw.rglob("metadata.yaml")))
         if mode is not None and mode not in plan.modes:
             raise ValueError(f"--mode {mode}: record.yaml has {list(plan.modes)}")
         print(f"mode: {mode or 'unknown (no mode name in the folder or bag names)'}")

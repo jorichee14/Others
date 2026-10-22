@@ -333,7 +333,14 @@ python3 scoop_pipeline/run_pass.py ~/workspaces/isaac_ros-dev/data/raw/20260924/
 python3 scoop_pipeline/run_pass.py ~/workspaces/isaac_ros-dev/data/raw/20260924/survey_1
 ```
 
-runs every step of the pass in order and skips the ones whose output is there
+A pass is the folder below the date: `raw/<date>/<pass>/<machine>/`
+(`20260924/mapping`), or, for a pass at one of several sites that day,
+`raw/<date>/<pass>/site_<N>/<machine>/` (`20261015/survey/site_1`). Each site is
+its own pass: its own `work/` and `processed/` folders, named
+`<pass>_site_<N>_<date>` (`survey_site_1_20261015`); a config names it as
+`"survey/site_1"` (same date) or `"20261015/survey/site_1"` (`scoop/layout.py`).
+
+`run_pass.py` runs every step of the pass in order and skips the ones whose output is there
 already, so the same command picks up where it stopped. `--status` shows what
 is done, `--dry` prints the commands, `--from S` redoes S and everything after
 it, `--only S` runs S alone, `--until S` stops after S.
