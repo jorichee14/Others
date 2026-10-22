@@ -1098,7 +1098,10 @@ the `_noceil` copy drops as hanging from the ceiling only (a reflection
 joined to a mirrored ceiling: loose once the ceiling is cut, and reaching up
 to the cut, and joined to the building before it) is left out too;
 furniture, loose but well under the ceiling or joined to nothing, and
-pillars standing on the floor, stay. `--faces N` simplifies the floor, walls and ceiling together to about N faces (flat stays flat, in few faces) and `--object-faces M` the objects apart (0: as meshed), so objects keep finer detail than the walls. Each part an
+pillars standing on the floor, stay. `--faces N` simplifies the floor, walls and ceiling together to about N faces (flat stays flat, in few faces) and `--object-faces M` the objects apart (0: as meshed), so objects keep finer detail than the walls. A light scene for Sionna (it loads a few
+hundred thousand faces in seconds; 40 M takes minutes and GBs of GPU memory):
+`--faces 200000 --object-faces 200000 --no-colours` (the parts and
+`<out>.ply` without colours: Sionna uses none). Each part an
 ITU material, `--material PART=TYPE[:THICKNESS m]` (default concrete 0.2 m,
 objects wood 0.05 m); `--normals` writes the parts with vertex normals (a
 viewer shades them as surfaces; without, the per-vertex colours make a
@@ -1117,10 +1120,15 @@ object's material in `scene.xml`).
 `walk` opens a window to walk inside a mesh (the one with its ceiling, or
 its `_sionna.ply`): Open3D's fly mode, started 1.6 m (`--eye`) over the floor
 at the first pose of `--traj` facing along the path (or `--at X,Y`), the
-mesh unlit in its colours as stored (no tone mapping) and seen from both
-sides, simplified to `--faces` (2,000,000) first. Mouse drag looks round;
-W/S, A/D, Q/Z move; the wheel sets the speed. `--shot view.png` writes the
-start view and closes.
+mesh unlit in its colours made vivid (stretched over their range, the
+camera's haze and grey gone; the saturation up `--sat` 1.3; `--plain`: as
+stored) and seen from both sides (`--one-side`: as stored, half the load),
+simplified to `--faces` (2,000,000; 0: all of it, a GPU with 8 GB walks
+40 M) first. Turn by dragging with the left mouse button or with the arrow
+keys (left/right turn, up/down tilt); move with W forward, S back, A left,
+D right, Q up, Z down (hold a key to keep going); the wheel sets the speed;
+Escape or closing the window ends it. `--shot view.png` writes the start
+view and closes.
 
     python3 scoop_pipeline/datasets/lod3dgs.py walk mapping/mesh_view_<tag>_anchored.ply \
         --traj odometry/reference_<tag>/traj_mobile_2_lidar.tum

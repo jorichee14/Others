@@ -1693,7 +1693,7 @@ def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0):
 def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000000, split_objects=False,
                 object_faces=0,
                 floor_colour=(0.8, 0.8, 0.8), traj=None, ceil_margin=0.10, min_piece=50.0, normals=False,
-                why=(), flat_floor=True, fill=True, why_objects=0, flat_walls=True):
+                why=(), flat_floor=True, fill=True, why_objects=0, flat_walls=True, colours=True):
     """The mesh (the one with its ceiling: the radio waves bounce off it) as
     a Sionna RT scene, its own faces split into floor, walls, ceiling and
     objects: <out>/scene.xml (what Sionna loads: sionna.rt.load_scene) with
@@ -1720,7 +1720,8 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     mirrored ceiling) is left out. flat_floor: the floor flattened onto its
     level (flatten_floor); flat_walls: the walls smoothed onto their planes
     (flatten_walls); fill: the walls filled behind furniture and their small
-    holes (fill_walls)."""
+    holes (fill_walls); colours False: the parts and <out>.ply written
+    without colours (Sionna uses none: smaller files)."""
     o3d = _o3d()
     mesh_path = os.path.expanduser(mesh_path)
     base = os.path.splitext(out)[0] if out else os.path.splitext(mesh_path)[0] + "_sionna"
@@ -1860,11 +1861,11 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
                        "    </shape>"])
 
     def coloured(q, name):
-        """A part in the mesh's colours, the floor floor_colour."""
-        q = bare(q, colours=True)
-        if not q.has_vertex_colors():
+        """A part in the mesh's colours, the floor floor_colour (colours False: none)."""
+        q = bare(q, colours=colours)
+        if colours and not q.has_vertex_colors():
             q.paint_uniform_color((0.6, 0.6, 0.6))
-        if name == "floor" and floor_colour is not None:
+        if colours and name == "floor" and floor_colour is not None:
             q.paint_uniform_color(floor_colour)
         if normals:                    # a viewer then shades it as a surface (its colours greyed)
             q.compute_vertex_normals()
@@ -1893,10 +1894,10 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     sx = os.path.join(sdir, "scene.xml")
     open(sx, "w").write("\n".join(['<scene version="2.1.0">', *sum(xml_mats.values(), []), *shapes,
                                    "</scene>"]) + "\n")
-    view = bare(sub_mesh(fpart != "gone"), colours=True)
-    if not view.has_vertex_colors():
+    view = bare(sub_mesh(fpart != "gone"), colours=colours)
+    if colours and not view.has_vertex_colors():
         view.paint_uniform_color((0.6, 0.6, 0.6))
-    if floor_colour is not None:
+    if colours and floor_colour is not None:
         Cv = np.asarray(view.vertex_colors).copy()
         Cv[np.unique(np.asarray(view.triangles)[fpart[fpart != "gone"] == "floor"])] = floor_colour
         view.vertex_colors = o3d.utility.Vector3dVector(Cv)
@@ -1954,12 +1955,31 @@ def walk_start(V, T=None, at=None, eye=1.6, ahead=2.0):
     return e, e + np.r_[d / np.linalg.norm(d), 0.0]
 
 
-def walk(mesh_path, traj=None, at=None, faces=2000000, eye=1.6, fov=70.0, shot=None):
+def enhance_colours(C, low=0.5, high=99.5, sat=1.3, gamma=0.9):
+    """The mesh's colours (n x 3, 0-1: the camera's, flat and greyish) made
+    vivid: stretched so the low-th and high-th percentiles (the lowest
+    and highest channel's) become 0 and 1 (the haze and the shadows' grey
+    gone; the three channels alike, so the colours keep their cast), the saturation
+    times `sat` (about the grey of each colour) and a gamma (under 1:
+    the shadows lifted). The same n x 3, clipped to 0-1."""
+    C = np.asarray(C, float)
+    if not len(C):
+        return C
+    lo, hi = np.percentile(C, low, axis=0).min(), np.percentile(C, high, axis=0).max()
+    C = (C - lo) / max(hi - lo, 1e-3)
+    grey = C @ [0.299, 0.587, 0.114]
+    C = grey[:, None] + sat * (C - grey[:, None])
+    return np.clip(np.clip(C, 0, 1) ** gamma, 0, 1)
+
+
+def walk(mesh_path, traj=None, at=None, faces=2000000, eye=1.6, fov=70.0, shot=None, vivid=True, sat=1.3,
+         one_side=False):
     """Walk inside a mesh (with its ceiling) in a window: Open3D's fly mode,
     started eye m over the floor at walk_start's place, the mesh unlit in its
-    colours and seen from both sides; simplified to `faces` first when larger
-    (quadric) so it moves smoothly. shot: write the start view to this PNG
-    and close."""
+    colours (vivid: enhance_colours, saturation sat) and seen from both
+    sides (one_side: as stored, half the triangles); simplified to `faces`
+    first when larger (quadric; 0: all of it) so it moves smoothly. shot:
+    write the start view to this PNG and close."""
     o3d = _o3d()
     from open3d.visualization import gui, rendering
     m = o3d.io.read_triangle_mesh(os.path.expanduser(mesh_path))
@@ -1970,14 +1990,18 @@ def walk(mesh_path, traj=None, at=None, faces=2000000, eye=1.6, fov=70.0, shot=N
         log.info(f"simplifying {n0} faces to {faces} ...")
         m.remove_duplicated_vertices()
         m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
+    if vivid and m.has_vertex_colors():
+        m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(np.asarray(m.vertex_colors), sat=sat))
     F = np.asarray(m.triangles)
-    m.triangles = o3d.utility.Vector3iVector(np.vstack([F, F[:, ::-1]]))   # both sides
+    if not one_side:
+        m.triangles = o3d.utility.Vector3iVector(np.vstack([F, F[:, ::-1]]))   # both sides
     m.compute_vertex_normals()
     V = np.asarray(m.vertices)
     e, c = walk_start(V, read_tum_positions(traj, stride=1) if traj else None, at, eye)
     log.info(f"walk {mesh_path}: {len(F)} faces, from ({e[0]:.1f}, {e[1]:.1f}), eye {eye} m over the floor\n"
-             "  mouse drag: look; W/S forward/back, A/D left/right, Q/Z up/down "
-             "(Open3D fly mode; the mouse wheel changes the speed)")
+             "  turn: drag with the left mouse button, or the arrow keys (left/right turn, up/down tilt)\n"
+             "  move: W forward, S back, A left, D right, Q up, Z down (hold a key to keep going)\n"
+             "  mouse wheel: faster / slower; Escape or close the window: out")
     app = gui.Application.instance
     app.initialize()
     w = o3d.visualization.O3DVisualizer(f"walk {os.path.basename(mesh_path)}", 1600, 900)
@@ -2257,6 +2281,8 @@ def main():
     sn.add_argument("--keep-floor", action="store_true",
                     help="leave the floor as meshed (default: its faces flattened onto the floor's level, the "
                          "bumps under furniture gone)")
+    sn.add_argument("--no-colours", action="store_true",
+                    help="write the parts and <out>.ply without colours (Sionna uses none: smaller files)")
     sn.add_argument("--normals", action="store_true",
                     help="write the parts with vertex normals: a viewer shades them as surfaces (colours greyed)")
     sn.add_argument("--floor-grey", type=float, default=0.8,
@@ -2271,7 +2297,14 @@ def main():
                     help="a trajectory in the mesh's frame: start at its first pose (anchored mesh: "
                          "odometry/reference_<tag>/traj_mobile_2_lidar.tum)")
     wk.add_argument("--at", default=None, metavar="X,Y", help="start here instead")
-    wk.add_argument("--faces", type=int, default=2000000, help="simplify to this many faces first (0: not)")
+    wk.add_argument("--faces", type=int, default=2000000,
+                    help="simplify to this many faces first (0: all of it; a GPU with 8 GB walks 40 M)")
+    wk.add_argument("--plain", action="store_true",
+                    help="the colours as stored (default: made vivid, the camera's haze and grey gone)")
+    wk.add_argument("--sat", type=float, default=1.3, help="the saturation boost when made vivid")
+    wk.add_argument("--one-side", action="store_true",
+                    help="the faces one-sided as stored (default: doubled, so a wall is seen from both sides; "
+                         "halves the load for a big mesh)")
     wk.add_argument("--eye", type=float, default=1.6, help="eye height over the floor (m)")
     wk.add_argument("--shot", default=None, help="write the start view to this PNG and close")
     a = ap.parse_args()
@@ -2287,7 +2320,7 @@ def main():
             anchor_file(a.file, a.frame, a.out)
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
-                 faces=a.faces, eye=a.eye, shot=a.shot)
+                 faces=a.faces, eye=a.eye, shot=a.shot, vivid=not a.plain, sat=a.sat, one_side=a.one_side)
         elif a.cmd == "sionna":
             mats = {}
             for spec in a.material:
@@ -2300,6 +2333,7 @@ def main():
             sionna_mesh(a.file, a.out, faces=a.faces, object_faces=a.object_faces, materials=mats,
                         split_objects=a.split_objects,
                         traj=a.traj, normals=a.normals, flat_floor=not a.keep_floor, fill=not a.no_fill_walls,
+                        colours=not a.no_colours,
                         flat_walls=not a.keep_walls,
                         why=[tuple(float(v) for v in w.split(",")[:2]) for w in a.why],
                         why_objects=a.why_objects,

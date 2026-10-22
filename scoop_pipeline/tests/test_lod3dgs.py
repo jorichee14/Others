@@ -484,7 +484,8 @@ def check_sionna(tmp):
     ceiling); the floor flattened (within 1 cm, bumps under furniture
     gone); the wall hidden behind a cupboard (not in the map) filled on its
     plane; the parts in the mesh's colours; every face in one part; with
-    --faces the floor, walls and ceiling simplified, the objects kept finer;
+    --faces the floor, walls and ceiling simplified, the objects kept finer
+    (and, colours False, written without colours);
     a flat wall drawn in a few large faces still a wall; chairs pushed to a
     wall (reaching out 0.4 m) objects, a cabinet on a wall off the floor wall;
     a wall mirrored under the floor left out, the wall over it wall; a door
@@ -661,11 +662,16 @@ def check_sionna(tmp):
                           -0.05, 0.05, 0.5, 5.5, 0.5, 4.5)
     assert xw(Wq) > 0 and xw(Oq) <= 0.05 * xw(Wq), ("a flat wall in large faces not a wall", xw(Wq), xw(Oq))
     # simplified for Sionna: floor, walls and ceiling coarse, the objects as meshed (finer)
-    rs = L.sionna_mesh(m["out"], os.path.join(tmp, "radio_small"), label_faces_n=300000, traj=tr, faces=40000)
+    rs = L.sionna_mesh(m["out"], os.path.join(tmp, "radio_small"), label_faces_n=300000, traj=tr, faces=40000,
+                       colours=False)
     area = {}
     for n_ in ("walls", "objects"):
         q = o3d.io.read_triangle_mesh(os.path.join(tmp, "radio_small", "meshes", n_ + ".ply"))
+        assert not q.has_vertex_colors(), (n_, "written with colours")
         area[n_] = len(q.triangles) / max(q.get_surface_area(), 1e-9)
+    assert not o3d.io.read_triangle_mesh(rs["view"]).has_vertex_colors()
+    Cv_ = L.enhance_colours(np.tile(np.linspace(0.3, 0.6, 100)[:, None], (1, 3)) * [1.0, 0.9, 0.8])
+    assert Cv_.min() < 0.05 and Cv_.max() > 0.95 and Cv_[:, 0].mean() > Cv_[:, 2].mean(), "colours not made vivid"
     assert rs["floor"] + rs["walls"] + rs["ceiling"] < 60000 and rs["objects"] == r["objects"], \
         ("structure not simplified, or the objects not kept", rs, r["objects"])
     assert area["objects"] > 5 * area["walls"], ("the objects not finer than the walls", area)
