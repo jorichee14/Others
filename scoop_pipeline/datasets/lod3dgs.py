@@ -1104,7 +1104,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, ground=0.3, against=0.1,
                 pillar_r=(0.1, 1.0), pillar_fit=0.04, attach=0.1, attach_depth=0.2, attach_upright=0.9,
                 mounted=0.3, below=0.25, panel_near=0.5, panel_long=0.5, panel_side=0.8,
-                arch_top=1.9, arch_low=1.7, ledge_near=0.3, top_near=0.3, float_low=1.2,
+                arch_top=1.9, arch_low=1.7, ledge_near=0.3, top_near=0.3, float_low=0.3,
                 stair_rise=(0.25, 1.5), stair_side=0.15, knee_w=1.5, knee_thin=0.1, knee_end=0.35,
                 T=None, why=(), planes=None, why_objects=0):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
@@ -1159,8 +1159,9 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
     so is a sheet near a wall (thin across, under knee_thin m, panel_long m
     long or more, facing sideways panel_side, within panel_near m of a
     wall face: a door, set in its frame or ajar, a strip or sliver of wall),
-    and all that floats over float_low m (over tables and counters) within
-    ledge_near m of a wall (a ledge, a lintel, a wall's top), and a wall's top (a thick wall, a parapet: facing up, wall
+    and all that floats (off the floor, over float_low m) within ledge_near
+    m of a wall or of what is wall by these rules (a ledge, a lintel, a
+    door's part, a wall's top), and a wall's top (a thick wall, a parapet: facing up, wall
     within top_near m along both its long edges; a table by a wall has it
     on one side);
     and so is a doorway's frame whose wall is not in the map (its jambs and
@@ -1387,7 +1388,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
             # what is left of a pillar): touching a wall face and nowhere farther from the
             # walls than attach_depth is wall; objects are what stands out or apart (a chair
             # or a desk pushed to a wall reaches out 0.4 m and more)
-            for _ in range(3):
+            for _ in range(6):
                 wall_now = np.r_[wf, rest[kind[comp] == "walls"]]
                 if not len(wall_now):
                     break
@@ -1420,7 +1421,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 new = touch & (~out | (side >= attach_upright) | (c_lo > mounted)
                                | ((c_hi >= wall_high) & (side >= 0.6) & (high >= 0.3)))  # a wall cluttered
                 new |= by & (across < knee_thin) & (p1 - p0 >= panel_long) & (side >= panel_side)  # a door, a strip
-                new |= led & (c_lo >= float_low)       # floating by a wall, over a table: a ledge, a lintel
+                new |= led & (c_lo >= float_low)       # floating by a wall: a ledge, a lintel, a door's part
                 new |= top_
                 if not new.any():
                     break

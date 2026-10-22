@@ -1061,8 +1061,8 @@ frames, sills, panels, cabinets and signs on a wall, a pillar's curve,
 pieces of wall, a wall cluttered) is wall too, and so are a thin upright sheet
 within 0.5 m of a wall (a door set in its frame or ajar, a strip of wall), a
 doorway's frame whose wall is not in the map (on the floor at both ends,
-nothing under 1.7 m in its middle), what floats over 1.2 m within 0.3 m of a
-wall (a ledge, a lintel) and a wall's top (facing up, wall along both its
+nothing under 1.7 m in its middle), what floats (off the floor, over 0.3 m) within
+0.3 m of a wall or of what is wall by these rules (a ledge, a lintel, a door's part) and a wall's top (facing up, wall along both its
 long edges; a table by a wall has it on one side): objects are only what stands out or
 apart (a chair or desk pushed to a wall reaches out 0.4 m and more);
 floor bumps (no higher than 0.12 m) are floor and scraps under 0.05 m2 the
