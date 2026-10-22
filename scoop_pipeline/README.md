@@ -1034,7 +1034,7 @@ Every face of the mesh is in one part or left out: checked on every run
 materials'); Mitsuba warns that they are integers, harmlessly.
 
 The labels are found on a copy of 4,000,000 faces and every face takes its
-nearest one's: floor, the horizontal faces within 0.25 m of the floor (with
+nearest one's: floor, the horizontal faces within 0.12 m of the floor (with
 `--traj` the nearest pose less the sensor height, so a reflection under the
 floor cannot pull it down; without, each 1 m cell's lowest); ceiling,
 horizontal 2 m or more above it and the highest such overhead (a tall
@@ -1052,7 +1052,7 @@ and ramps (all their faces climbing along the piece, 0.25-1.5 m per m,
 over 0.8 m) and all that is against a flight (its sides, the landing, the
 floor above it), and low walls between pillars (from the
 floor, 1.5 m long or more, thin across, both ends at a wall) are walls;
-floor bumps (no higher than 0.25 m) are floor and scraps under 0.05 m2 the
+floor bumps (no higher than 0.12 m) are floor and scraps under 0.05 m2 the
 part next to them. The floor is then flattened onto its own level (the
 median of its flat faces per 1 m, blended between cells): the bumps under
 furniture go (`--keep-floor` keeps them). And the wall hidden behind

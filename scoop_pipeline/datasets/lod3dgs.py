@@ -1088,7 +1088,7 @@ def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
     return gone
 
 
-def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=0.5, wall_high=2.2, vertical=0.3,
+def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2, vertical=0.3,
                 on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, ground=0.3, against=0.1,
                 pillar_r=(0.1, 1.0), pillar_fit=0.04,
                 stair_rise=(0.25, 1.5), stair_side=0.15, knee_w=1.5, knee_thin=0.1, knee_end=0.35,
@@ -1111,7 +1111,8 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=0.5, wall_high=2.2
     on_wall, facing it to facing_deg, inside its extent along it, reach m
     more, from its top down to the floor: the wall goes on behind the
     furniture in front of it) is wall when some of them come down to the
-    floor (`ground` m). What is left of a wall's own shape (a pillar's
+    floor (`ground` m) or reach up to the ceiling over them (0.3 m: a wall
+    over glass the map has not, a bulkhead). What is left of a wall's own shape (a pillar's
     rounded edges, a wall's end), facing sideways from the floor to
     wall_high, 70 % of it within `against` of wall faces, goes with them. A
     rack, chairs stacked: no flat sheet, and not against a wall all over:
@@ -1155,6 +1156,7 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=0.5, wall_high=2.2
     part[hor & on_floor] = "floor"
     # ceiling: high and flat, and the highest such overhead (a rack's top under it is not)
     hi_ = np.flatnonzero(hor & (dz >= roof_h))
+    top = None
     if len(hi_):
         from scipy import ndimage
         lo_ = C[:, :2].min(0)
@@ -1164,6 +1166,17 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=0.5, wall_high=2.2
         np.maximum.at(top, (ij[:, 0], ij[:, 1]), C[hi_, 2])
         top = ndimage.maximum_filter(top, size=3, mode="nearest")
         part[hi_[C[hi_, 2] >= top[ij[:, 0], ij[:, 1]] - 0.3]] = "ceiling"
+
+    def ceil_at(X):
+        """The ceiling's height over plan points (inf where none)."""
+        z_ = np.full(len(X), np.inf)
+        if top is None:
+            return z_
+        k_ = np.floor((X[:, :2] - lo_) / 0.5).astype(np.int64)
+        ok_ = (k_ >= 0).all(1) & (k_[:, 0] < top.shape[0]) & (k_[:, 1] < top.shape[1])
+        z_[ok_] = top[k_[ok_, 0], k_[ok_, 1]]
+        z_[~np.isfinite(z_)] = np.inf
+        return z_
     # the wall planes
     sid, snz = plane_faces(C, N)
     s_ok = sid >= 0
@@ -1207,7 +1220,8 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=0.5, wall_high=2.2
         ctree = cKDTree(C[cand, :2])
         for k in wall_s:
             got = claim(k, cand, ctree)
-            if len(got) and (dz[got] <= ground).any():         # it stands on the floor somewhere
+            # it stands on the floor somewhere, or hangs from the ceiling (over glass, a bulkhead)
+            if len(got) and ((dz[got] <= ground).any() or (C[got, 2] >= ceil_at(C[got]) - 0.3).any()):
                 part[got] = "walls"
                 if planes is not None:
                     mu, n, t, _ = plane(k)
