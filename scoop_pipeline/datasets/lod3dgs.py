@@ -1474,14 +1474,16 @@ def flatten_floor(M, floor, cell=1.0, level=0.95, most=0.4):
     return int((moved > 1e-4).sum()), float(moved.max()) if len(moved) else 0.0
 
 
-def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4):
+def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0):
     """The wall hidden behind furniture, which the mesh does not have: on
     each wall plane, the cells (cell m) from the floor to its top where no
     wall face is (within on m of it) but something stands against it
     (within depth m, either side: furniture pushed to the wall, or a panel
     attached to it, off its plane), filled
     with a flat patch on the plane, in the wall's own colour. Doors,
-    windows and openings have nothing against them: left open. (vertices, faces, colours) of the patches, to add."""
+    windows and openings, larger and nothing against them: left open; and
+    the wall's own holes, closed all round by it (the floor closing them
+    below), up to max_hole m2: the wall continuous. (vertices, faces, colours) of the patches, to add."""
     V, F = np.asarray(M.vertices), np.asarray(M.triangles)
     C = V[F].mean(1)
     col = np.asarray(M.vertex_colors) if M.has_vertex_colors() else None
@@ -1513,12 +1515,17 @@ def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4):
         wf_ = wl[np.asarray(wtree.query_ball_point(mid, rad), np.int64)]          # attached, off the plane:
         dw_ = np.abs((C[wf_] - mu) @ n)                                             # a panel in front of it
         oi = np.r_[oi, wf_[(dw_ >= on) & (dw_ < depth)]]
-        if not len(oi):
-            continue
         from scipy import ndimage
         have = ndimage.binary_dilation(cells(wi), np.ones((3, 3), bool)) if len(wi) else np.zeros((nu, nz), bool)
-        front = ndimage.binary_dilation(cells(oi), np.ones((3, 3), bool))
-        iu, iz = np.nonzero(front & ~have)
+        front = ndimage.binary_dilation(cells(oi), np.ones((3, 3), bool)) if len(oi) else np.zeros((nu, nz), bool)
+        # the wall's own holes: closed all round by it (the floor closing it below), up to max_hole m2
+        closed = ndimage.binary_fill_holes(np.c_[np.ones((nu, 1), bool), have])[:, 1:] & ~have
+        lab_, nlab_ = ndimage.label(closed)
+        if nlab_:
+            small = np.bincount(lab_.ravel(), minlength=nlab_ + 1) * cell * cell <= max_hole
+            small[0] = False
+            closed = small[lab_]
+        iu, iz = np.nonzero((front | closed) & ~have)
         if not len(iu):
             continue
         a_u, a_z = u0 + iu * cell, z0 + iz * cell
@@ -1773,6 +1780,96 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     return {"out": sx, "scene": sx, "view": vp, "labels": lp, "faces": sum(used.values()), **used,
             "left_out": n_out, "left_out_file": op, "filled": n_fill,
             "n_objects": int(len(np.unique(fobj[fpart == "objects"])))}
+
+
+def objects_to_walls(scene_dir, points, near=0.05):
+    """Move the objects' pieces at the given points (x y z, the mesh's frame:
+    each takes the piece with a vertex within `near` of it) from
+    meshes/objects.ply to meshes/walls.ply of a sionna scene; parts.json
+    updated, the points added to fix.json (so they can be applied again to
+    a new run). The number of pieces and faces moved."""
+    import json
+    o3d = _o3d()
+    sdir = os.path.expanduser(scene_dir)
+    po, pw = os.path.join(sdir, "meshes", "objects.ply"), os.path.join(sdir, "meshes", "walls.ply")
+    O, W = o3d.io.read_triangle_mesh(po), o3d.io.read_triangle_mesh(pw)
+    if not len(O.triangles) or not len(points):
+        return 0, 0
+    tri, _, _ = O.cluster_connected_triangles()
+    tri = np.asarray(tri)
+    F = np.asarray(O.triangles)
+    vpiece = np.full(len(O.vertices), -1)
+    vpiece[F.ravel()] = np.repeat(tri, 3)
+    d, vi = cKDTree(np.asarray(O.vertices)).query(np.asarray(points, float)[:, :3])
+    pick = np.unique(vpiece[vi[d <= near]])
+    pick = pick[pick >= 0]
+    move = np.isin(tri, pick)
+    if not move.any():
+        return 0, 0
+    moved = type(O)(O)
+    moved.remove_triangles_by_mask(~move)
+    moved.remove_unreferenced_vertices()
+    O.remove_triangles_by_mask(move)
+    O.remove_unreferenced_vertices()
+    W += moved
+    o3d.io.write_triangle_mesh(po, O)
+    o3d.io.write_triangle_mesh(pw, W)
+    pj = os.path.join(sdir, "parts.json")
+    if os.path.exists(pj):
+        js = json.load(open(pj))
+        for n_, q in (("objects", O), ("walls", W)):
+            if n_ in js.get("parts", {}):
+                js["parts"][n_]["faces"] = len(q.triangles)
+                js["parts"][n_]["m2"] = round(float(q.get_surface_area()), 2)
+        json.dump(js, open(pj, "w"), indent=1)
+    fx = os.path.join(sdir, "fix.json")
+    old = json.load(open(fx)).get("to_walls", []) if os.path.exists(fx) else []
+    json.dump({"to_walls": old + [[round(float(v), 4) for v in p_[:3]] for p_ in points]}, open(fx, "w"), indent=1)
+    return len(pick), int(move.sum())
+
+
+def fix_objects(scene_dir, apply=None):
+    """Pick the objects' pieces that are walls, by hand: the objects shown,
+    each piece its own colour; shift + left click a piece (any point of it),
+    as many as wanted, then close the window: they move to the walls
+    (objects_to_walls). apply: a fix.json of an earlier run, its points
+    moved again with no window."""
+    import json
+    o3d = _o3d()
+    sdir = os.path.expanduser(scene_dir)
+    if apply:
+        pts = json.load(open(os.path.expanduser(apply))).get("to_walls", [])
+        n, f = objects_to_walls(sdir, pts)
+        log.info(f"{apply}: {len(pts)} points, {n} pieces ({f} faces) moved from the objects to the walls")
+        return n
+    O = o3d.io.read_triangle_mesh(os.path.join(sdir, "meshes", "objects.ply"))
+    if not len(O.triangles):
+        raise ConvertError(f"{sdir}: no objects")
+    tri, _, _ = O.cluster_connected_triangles()
+    tri = np.asarray(tri)
+    F = np.asarray(O.triangles)
+    vpiece = np.zeros(len(O.vertices), np.int64)
+    vpiece[F.ravel()] = np.repeat(tri, 3)
+    rng = np.random.default_rng(1)
+    col = rng.uniform(0.2, 1.0, (tri.max() + 1, 3))
+    pc = o3d.geometry.PointCloud(O.vertices)
+    pc.colors = o3d.utility.Vector3dVector(col[vpiece])
+    log.info(f"{tri.max() + 1} pieces: shift + left click each that is wall (any point of it), "
+             "shift + right click undoes the last, then close the window")
+    vis = o3d.visualization.VisualizerWithEditing()
+    vis.create_window(f"objects of {os.path.basename(sdir)}: shift + click the walls", 1600, 900)
+    vis.add_geometry(pc)
+    vis.run()
+    vis.destroy_window()
+    picked = vis.get_picked_points()
+    if not picked:
+        log.info("nothing picked")
+        return 0
+    pts = np.asarray(O.vertices)[np.asarray(picked)]
+    n, f = objects_to_walls(sdir, pts)
+    log.info(f"{n} pieces ({f} faces) moved from the objects to the walls; the points kept in "
+             f"{os.path.join(sdir, 'fix.json')} (--apply it to a new run)")
+    return n
 
 
 def walk_start(V, T=None, at=None, eye=1.6, ahead=2.0):
@@ -2102,6 +2199,10 @@ def main():
                     help="floor, ceiling, walls or objects as an ITU material (concrete, brick, plasterboard, "
                          "wood, glass, ceiling_board, marble, floorboard, metal, ...), thickness m; "
                          "default concrete:0.2, objects wood:0.05; repeat for each part")
+    fx = sub.add_parser("sionna-fix", help="pick by hand the objects' pieces that are walls")
+    fx.add_argument("file", help="a sionna scene folder (with meshes/objects.ply and meshes/walls.ply)")
+    fx.add_argument("--apply", default=None,
+                    help="a fix.json of an earlier run: move its points' pieces again, no window")
     wk = sub.add_parser("walk", help="walk inside a mesh (with its ceiling) in a window")
     wk.add_argument("file", help="a mesh, e.g. mesh_view_<tag>_anchored.ply or its _sionna.ply")
     wk.add_argument("--traj", default=None,
@@ -2122,6 +2223,8 @@ def main():
     try:
         if a.cmd == "anchor":
             anchor_file(a.file, a.frame, a.out)
+        elif a.cmd == "sionna-fix":
+            fix_objects(a.file, a.apply)
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
                  faces=a.faces, eye=a.eye, shot=a.shot)

@@ -1066,7 +1066,9 @@ median of its flat faces per 1 m, blended between cells; a vertex moved 0.4 m at
 furniture go (`--keep-floor` keeps them). And the wall hidden behind
 furniture pushed against it, which the mesh does not have, is filled on its
 plane from the floor (where something stands within 0.4 m of it and no wall
-face is; doors, windows and openings, nothing against them, stay open),
+face is), and so are the wall's own holes, closed all round by it (the
+floor closing them below) and up to 1 m2: the walls continuous; larger
+openings (doors, windows, nothing against them) stay open. Filled faces are
 counted apart (`--no-fill-walls`). With `--traj` (the mesh's
 frame; anchored: `odometry/reference_<tag>/traj_mobile_2_lidar.tum`) what
 the `_noceil` copy drops as hanging from the ceiling only (a reflection
@@ -1088,6 +1090,16 @@ object's material in `scene.xml`).
 
     python3 scoop_pipeline/datasets/lod3dgs.py sionna mapping/mesh_view_<tag>_anchored.ply \
         --traj odometry/reference_<tag>/traj_mobile_2_lidar.tum
+
+`sionna-fix` picks by hand what of the objects is wall: `objects.ply` of a
+scene opens with each piece in its own colour; shift + left click any point
+of each piece that is wall (shift + right click undoes the last), close the
+window, and those pieces move to `walls.ply` (`parts.json` updated). The
+points are kept in the scene's `fix.json`: `--apply <scene>/fix.json` moves
+the same pieces of a new run, no window.
+
+    python3 scoop_pipeline/datasets/lod3dgs.py sionna-fix mapping/mesh_view_<tag>_anchored_sionna
+    python3 scoop_pipeline/datasets/lod3dgs.py sionna-fix <new scene> --apply <old scene>/fix.json
 
 `walk` opens a window to walk inside a mesh (the one with its ceiling, or
 its `_sionna.ply`): Open3D's fly mode, started 1.6 m (`--eye`) over the floor

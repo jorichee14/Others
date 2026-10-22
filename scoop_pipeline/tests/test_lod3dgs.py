@@ -618,6 +618,25 @@ def check_sionna(tmp):
     T = np.c_[x, np.full(len(x), 3.0), np.full(len(x), 0.8)]
     e, c = L.walk_start(Vv, T)
     assert np.allclose(e, [1.0, 3.0, 1.6], atol=0.05) and c[0] > e[0], ("walk start", e, c)
+    # sionna-fix: a piece of the objects picked (the table) moved to the walls, and again from fix.json
+    import shutil
+    sd = os.path.dirname(r["scene"])
+    for k_ in ("fix_a", "fix_b"):
+        shutil.copytree(sd, os.path.join(tmp, k_), dirs_exist_ok=True)
+    nO = len(o3d.io.read_triangle_mesh(os.path.join(sd, "meshes", "objects.ply")).triangles)
+    nW = len(o3d.io.read_triangle_mesh(os.path.join(sd, "meshes", "walls.ply")).triangles)
+    Ot = o3d.io.read_triangle_mesh(os.path.join(sd, "meshes", "objects.ply"))
+    Vt = np.asarray(Ot.vertices)
+    at = Vt[np.argmin(np.linalg.norm(Vt - [2.6, 4.4, 0.75], axis=1))]
+    pn, pf = L.objects_to_walls(os.path.join(tmp, "fix_a"), [at])
+    assert pn >= 1 and pf > 0, (pn, pf)
+    for k_ in ("fix_a", "fix_b"):
+        if k_ == "fix_b":
+            assert L.fix_objects(os.path.join(tmp, k_), os.path.join(tmp, "fix_a", "fix.json")) == pn
+        Ox = o3d.io.read_triangle_mesh(os.path.join(tmp, k_, "meshes", "objects.ply"))
+        Wx = o3d.io.read_triangle_mesh(os.path.join(tmp, k_, "meshes", "walls.ply"))
+        assert len(Ox.triangles) == nO - pf and len(Wx.triangles) == nW + pf and Wx.has_vertex_colors(), k_
+        assert inside(np.asarray(Wx.vertices)[np.asarray(Wx.triangles)].mean(1), 2.1, 3.1, 4.1, 4.7, 0.6, 0.8), k_
     # a flat wall in a few large faces (the mesh thinned by quadric first): still a wall
     qm = o3d.io.read_triangle_mesh(m["out"]).simplify_quadric_decimation(150000)
     o3d.io.write_triangle_mesh(os.path.join(tmp, "thin.ply"), qm)
