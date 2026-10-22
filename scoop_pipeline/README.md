@@ -1034,25 +1034,23 @@ The labels are found on a copy of 4,000,000 faces and every face takes its
 nearest one's: floor, the horizontal faces within 0.25 m of the floor (with
 `--traj` the nearest pose less the sensor height, so a reflection under the
 floor cannot pull it down; without, each 1 m cell's lowest); ceiling,
-horizontal 2 m or more above it; walls, first the wall planes (flat
-near-vertical surfaces of 3 m2 or more reaching 2.2 m or higher), then every
-face on one of them (within 5 cm of its plane, facing it, inside its
-extent, down to the floor behind the furniture in front of it), so a wall's
-rough parts go with it and a desk or cabinet in front of it does not; then
-the wall lines seen above furniture (faces facing sideways 2.1 m or more
-up, standing on something below), every face on one facing as it does: a
-wall cluttered with furniture all along it, a pillar; what is left facing sideways within 8 cm of a floor, wall
-or ceiling face (the seams where they meet) goes with it, a table top by a
-wall does not. Everything else, in connected pieces, is objects: furniture,
-a wall bulging with furniture against it; but a piece facing sideways (75 %)
-from the floor to 2.3 m or higher, above furniture, is walls (a wall's
-thickness: its end, the sides of an opening; pillars), and so are stairs
-and ramps (all their faces, treads, the slope under them, the rail,
-climbing along the piece, 0.25-1.5 m per m, over 0.8 m; a shelf's stack in
-place does not) and low walls between pillars (under windows whose glass is
-not in the map: from the floor, 1.5 m long or more, thin across, both ends
-at a wall; a row of cabinets is deeper and has a free end). Floor bumps (no higher than
-0.25 m) are floor and scraps under 0.05 m2 the part next to them. With `--traj` (the mesh's
+horizontal 2 m or more above it; walls, the flat sheets standing on the
+floor: a flat near-vertical surface (each cell's faces taken apart by the
+way they face, so the two sides of a thin wall are two surfaces) of 0.5 m2
+or more reaching 2.2 m or higher, every face on its plane (within 5 cm,
+facing it, inside its extent, down to the floor behind the furniture in
+front of it), when it comes down to the floor (0.3 m) somewhere; what is
+left of a wall's shape (a pillar's rounded edges, 70 % within 10 cm of wall
+faces) and round pillars (round in plan) with them. A rack or stacked
+chairs (no flat sheet) stay objects. The seams facing sideways go with the
+floor, wall or ceiling they touch; everything else is objects, but stairs
+and ramps (all their faces climbing along the piece, 0.25-1.5 m per m,
+over 0.8 m) and a flight's sides, and low walls between pillars (from the
+floor, 1.5 m long or more, thin across, both ends at a wall) are walls;
+floor bumps (no higher than 0.25 m) are floor and scraps under 0.05 m2 the
+part next to them. The floor is then flattened onto its own level (the
+median of its flat faces per 1 m, blended between cells): the bumps under
+furniture go (`--keep-floor` keeps them). With `--traj` (the mesh's
 frame; anchored: `odometry/reference_<tag>/traj_mobile_2_lidar.tum`) what
 the `_noceil` copy drops as hanging from the ceiling only (a reflection
 joined to a mirrored ceiling: loose once the ceiling is cut, and reaching up

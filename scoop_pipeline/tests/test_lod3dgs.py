@@ -480,7 +480,8 @@ def check_sionna(tmp):
     the pillar, stairs (with the slope under them) and a 1 m wall between
     two pillars (its top too); objects the table, the cabinet, the desk, the
     chairs and the 4 m of desks (the lamp's flat underside, over 2 m up, with the
-    ceiling); every face in one part
+    ceiling); the floor flattened (within 1 cm, bumps under furniture
+    gone); every face in one part
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
@@ -520,6 +521,10 @@ def check_sionna(tmp):
     Zs = 0.607 * (X_.ravel() - 0.2) - 0.2
     stairs.append(np.c_[X_.ravel(), Y_.ravel(), Zs][Zs > 0.05])
     stairs = np.concatenate(stairs)
+    rack = np.concatenate([np.c_[np.full(Z_.size, xr), np.full(Z_.size, yr), Z_]          # 2.4 m of poles,
+                           for xr in np.arange(10.3, 11.6, 0.25) for yr in (5.2, 5.6)             # shelves on them:
+                           for Z_ in [g(0, 2.4)]] + [sheet(2, zr, (10.3, 11.55), (5.2, 5.6))    # no flat sheet
+                                                       for zr in (0.4, 0.9, 1.4, 1.9, 2.4)])
     knee = np.concatenate([box(4.5, 4.8, 1.9, 2.2, 0, 4.98, top=False), box(6.6, 6.9, 1.9, 2.2, 0, 4.98, top=False),
                            box(4.8, 6.6, 1.95, 2.15, 0, 1.0)])      # a 1 m wall between two pillars
     room_of_desks = np.concatenate([box(7.5, 11.5, 3.6, 4.8, 0.72, 0.75)]   # desks pushed together: 4 m
@@ -532,7 +537,7 @@ def check_sionna(tmp):
                         sheet(0, 7.0, (0, 6), (3, 5)), sheet(0, 12.0, (0, 6), (0, 3)),
                         sheet(1, 0.0, (0, 7), (0, 5)), sheet(1, 6.0, (0, 7), (0, 5)),
                         sheet(1, 0.0, (7, 12), (0, 3)), sheet(1, 6.0, (7, 12), (0, 3)),
-                        pillar, table, cabinet, lamp, desk, room_of_desks, stub, chairs, stairs, knee])
+                        pillar, table, cabinet, lamp, desk, room_of_desks, stub, chairs, stairs, knee, rack])
     P = P + rng.normal(0, 0.005, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     pc.colors = o3d.utility.Vector3dVector(np.full(P.shape, 0.5))
@@ -553,7 +558,10 @@ def check_sionna(tmp):
     inside = lambda Q, x0, x1, y0, y1, z0, z1: ((Q[:, 0] > x0) & (Q[:, 0] < x1) & (Q[:, 1] > y0)  # noqa: E731
                                                & (Q[:, 1] < y1) & (Q[:, 2] > z0) & (Q[:, 2] < z1)).sum()
     assert np.abs(parts["floor"][:, 2]).max() < 0.35, ("floor off the floor", parts["floor"][:, 2].max())
-    for name, part, b_ in (("the pillar", "walls", (3.7, 4.3, 1.2, 1.8, 0.5, 4.5)),
+    for name, part, b_ in (("the round pillar (each tall strip of it flat enough)", "walls",
+                            (3.7, 4.3, 1.2, 1.8, 0.5, 4.5)),
+                           ("a square pillar's face", "walls", (4.52, 4.78, 1.86, 1.94, 2.5, 4.5)),
+                           ("a 2.4 m rack (no flat sheet)", "objects", (10.35, 11.5, 5.15, 5.65, 0.2, 2.2)),
                            ("a wall's end (its thickness)", "walls", (10.45, 10.55, 1.03, 1.17, 0.5, 2.5)),
                            ("the table", "objects", (2.1, 3.1, 4.1, 4.7, 0.6, 0.8)),
                            ("the cabinet", "objects", (9.05, 9.55, 5.45, 5.95, 0.3, 1.25)),
@@ -569,6 +577,9 @@ def check_sionna(tmp):
         for other in parts:
             if other != part:
                 assert inside(parts[other], *b_) <= 0.05 * inside(parts[part], *b_), (name, "in", other)
+    Qf = o3d.io.read_triangle_mesh(os.path.join(os.path.dirname(r["scene"]), "meshes", "floor.ply"))
+    zf = np.asarray(Qf.vertices)[:, 2]
+    assert np.abs(zf - np.median(zf)).max() < 0.01, ("the floor not flat", np.abs(zf - np.median(zf)).max())
     lamp = (4.6, 5.4, 2.6, 3.4, 4.5, 4.75)
     assert inside(parts["walls"], *lamp) <= 0.02 * inside(parts["ceiling"], *lamp) and \
         inside(parts["ceiling"], *lamp) > 0, \

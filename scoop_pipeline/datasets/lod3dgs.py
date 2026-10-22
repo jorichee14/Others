@@ -985,16 +985,21 @@ def floor_grid(V, cell=1.0):
 def plane_faces(C, N, cell=0.4, sig_max=0.03, thin=0.35, min_pts=20, angle=15.0, gap=0.06,
                 near=0.04, facing=30.0):
     """Per face (centres C, unit normals N): the flat surface it lies on, or
-    -1. Flat 0.4 m cells of the centres (as snap_planes finds them) joined
-    while their normals agree to `angle` and planes to `gap`; a face is on
-    its cell's surface when within `near` of the cell's plane and facing it
-    to `facing`. Also each surface's |n_z|."""
+    -1. In each 0.4 m cell, the faces of each way they face (8 ways round
+    and up and down, so the two sides of a thin wall in one cell are two
+    flat surfaces, not one thick one), flat as snap_planes finds them;
+    joined, in a cell and the next, while they face the same way to `angle`
+    and planes to `gap`; a face is on its group's surface when within
+    `near` of its plane and facing it to `facing`. Also each surface's |n_z|."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
+    NB = 10
+    way = np.where(N[:, 2] > 0.7, 8, np.where(N[:, 2] < -0.7, 9,
+                   (np.floor((np.arctan2(N[:, 1], N[:, 0]) + np.pi) / (np.pi / 4)).astype(np.int64)) % 8))
     lo = C.min(0)
     k = np.floor((C - lo) / cell).astype(np.int64) + 1
     dims = k.max(0) + 2
-    key = (k[:, 0] * dims[1] + k[:, 1]) * dims[2] + k[:, 2]
+    key = ((k[:, 0] * dims[1] + k[:, 1]) * dims[2] + k[:, 2]) * NB + way
     K, inv, cnt = np.unique(key, return_inverse=True, return_counts=True)
     inv = inv.ravel()
     m_ = len(K)
@@ -1008,17 +1013,23 @@ def plane_faces(C, N, cell=0.4, sig_max=0.03, thin=0.35, min_pts=20, angle=15.0,
     sig = np.sqrt(np.clip(w, 0, None))
     flat = (cnt >= min_pts) & (sig[:, 0] < sig_max) & (sig[:, 0] < thin * sig[:, 1])
     n = v[:, :, 0]
-    kc = np.stack([K // (dims[1] * dims[2]), (K // dims[2]) % dims[1], K % dims[2]], 1)
+    nm = np.stack([np.bincount(inv, N[:, i], m_) for i in range(3)], 1)      # the way its faces face
+    n[np.einsum("ij,ij->i", n, nm) < 0] *= -1
+    Ks = K // NB
+    kc = np.stack([Ks // (dims[1] * dims[2]), (Ks // dims[2]) % dims[1], Ks % dims[2]], 1)
     rows, cols = [np.arange(m_)], [np.arange(m_)]
-    for o in [(a, b, c) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1) if (a, b, c) > (0, 0, 0)]:
-        nb = ((kc[:, 0] + o[0]) * dims[1] + kc[:, 1] + o[1]) * dims[2] + kc[:, 2] + o[2]
-        j = np.minimum(np.searchsorted(K, nb), m_ - 1)
-        ok = (K[j] == nb) & flat & flat[j]
-        i, j = np.flatnonzero(ok), j[ok]
-        same = (np.abs(np.einsum("ij,ij->i", n[i], n[j])) > np.cos(np.radians(angle))) & \
-            (np.abs(np.einsum("ij,ij->i", mu[j] - mu[i], n[i])) < gap)
-        rows.append(i[same])
-        cols.append(j[same])
+    cos_a = np.cos(np.radians(angle))
+    for o in [(a, b, c) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1) if (a, b, c) >= (0, 0, 0)]:
+        sp = ((kc[:, 0] + o[0]) * dims[1] + kc[:, 1] + o[1]) * dims[2] + kc[:, 2] + o[2]
+        for wb in range(NB):
+            nb = sp * NB + wb
+            j = np.minimum(np.searchsorted(K, nb), m_ - 1)
+            ok = (K[j] == nb) & flat & flat[j] & (j != np.arange(m_))
+            i, j = np.flatnonzero(ok), j[ok]
+            same = (np.einsum("ij,ij->i", n[i], n[j]) > cos_a) & \
+                (np.abs(np.einsum("ij,ij->i", mu[j] - mu[i], n[i])) < gap)        # facing the same way
+            rows.append(i[same])
+            cols.append(j[same])
     r_, c_ = np.concatenate(rows), np.concatenate(cols)
     _, seg = connected_components(coo_matrix((np.ones(len(r_)), (r_, c_)), shape=(m_, m_)), directed=False)
     nc = n[inv]
@@ -1060,9 +1071,10 @@ def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
     return gone
 
 
-def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2, vertical=0.3,
-                on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, tall=2.3, sideways=0.75,
-                line_h=2.1, line_cell=0.05, stair_rise=(0.25, 1.5), knee_w=1.5, knee_thin=0.1, knee_end=0.35,
+def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=0.5, wall_high=2.2, vertical=0.3,
+                on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, ground=0.3, against=0.1,
+                pillar_r=(0.1, 1.0), pillar_fit=0.04,
+                stair_rise=(0.25, 1.5), stair_side=0.15, knee_w=1.5, knee_thin=0.1, knee_end=0.35,
                 T=None, why=()):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
     each object face its object's number (-1 for the rest).
@@ -1074,38 +1086,35 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
     horizontal (|n_z| over flat) within band of it (with T: either side);
     ceiling: horizontal roof_h or more above it.
 
-    Walls: the wall planes, flat surfaces (plane_faces) near vertical
-    (|n_z| under `vertical`) of wall_area m2 or more reaching wall_high or
-    more over the floor (above a cabinet too); then every face on one of
-    them: within on_wall of its plane, facing it to facing_deg, inside its
-    extent (along it, reach m more; up to its top, and down to the floor:
-    the wall goes on behind the furniture in front of it), so the rough
-    parts of a wall go with it and what stands in front of it (a desk, a
-    cabinet: farther than on_wall, or facing up) does not. Then the wall
-    lines: where faces facing sideways stand line_h or more over the floor
-    (above furniture: walls, pillars), in line_cell cells of the plan; every
-    face facing sideways on one (the cell or the next), facing as it does,
-    is wall too where the line stands on the floor (faces facing sideways
-    under line_h there too; a lamp hanging has none): a wall cluttered with
-    furniture all along it, its plane not found; a pillar.
+    Walls: flat sheets standing on the floor. A flat surface (plane_faces)
+    near vertical (|n_z| under `vertical`) of wall_area m2 or more reaching
+    wall_high or more over the floor; every face on its plane (within
+    on_wall, facing it to facing_deg, inside its extent along it, reach m
+    more, from its top down to the floor: the wall goes on behind the
+    furniture in front of it) is wall when some of them come down to the
+    floor (`ground` m). What is left of a wall's own shape (a pillar's
+    rounded edges, a wall's end), facing sideways from the floor to
+    wall_high, 70 % of it within `against` of wall faces, goes with them. A
+    rack, chairs stacked: no flat sheet, and not against a wall all over:
+    objects. A round pillar's arcs, facing sideways from the floor to
+    wall_high and round in plan (a circle of radius pillar_r, within
+    pillar_fit m): walls (a rack's poles stand on a rectangle).
 
     The rest facing sideways within seam of a floor, wall or ceiling face
     (the rounded strips where they meet) goes with it; one facing up (a
     table top by a wall) does not. Everything else, in connected pieces, is
-    objects: furniture, a wall bulging with furniture against it, a lamp;
-    but a piece facing sideways (`sideways` of its area), from the floor
-    (0.5 m) to `tall` or higher, above furniture, is walls: a wall's thickness (its end, the
-    sides of an opening), a pillar; and so are stairs and ramps (all their
-    faces, treads, risers, the slope under them, the rail, climbing along
-    the piece's length, stair_rise m per m, over 0.8 m; a shelf's stack in
-    place does not); and so is a low wall between pillars (under windows
-    whose glass is not in the map): a piece from the floor (0.3 m), facing
-    sideways mostly, knee_w m long or more, thin across (under knee_thin m,
-    1 sigma) with both ends within knee_end of a wall face (a row of
-    cabinets is deeper, and has a free end); a piece reaching no higher than band (the floor's bumps)
-    is floor and one under min_obj m2 (a scrap at a seam) the part of the
-    nearest labelled face. why: plan points (x, y): the pieces left there
-    and what each rule saw of them, logged."""
+    objects, but: stairs and ramps (all their faces, treads, risers, the
+    slope under them, the rail, climbing along the piece's length,
+    stair_rise m per m, over 0.8 m; a shelf's stack in place does not) and
+    the sides of a flight (facing sideways, within stair_side of one) are
+    walls; so is a low wall between pillars (under windows whose glass is
+    not in the map: a piece from the floor (0.3 m), facing sideways mostly,
+    knee_w m long or more, thin across (under knee_thin m, 1 sigma), both
+    ends within knee_end of a wall face; a row of cabinets is deeper and
+    has a free end); a piece reaching no higher than band (the floor's
+    bumps) is floor and one under min_obj m2 (a scrap at a seam) the part
+    of the nearest labelled face. why: plan points (x, y): the pieces left
+    there and what each rule saw of them, logged."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
     V, F = np.asarray(m.vertices), np.asarray(m.triangles)
@@ -1167,33 +1176,9 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
     if len(wall_s) and len(cand):
         ctree = cKDTree(C[cand, :2])
         for k in wall_s:
-            part[claim(k, cand, ctree)] = "walls"
-    # the wall lines, seen above furniture: every face facing sideways on one is wall
-    side_f = np.abs(N[:, 2]) < vertical
-    up = side_f & (dz >= line_h) & ((part == "") | (part == "walls"))
-    if up.any():
-        from scipy import ndimage
-        lo = C[:, :2].min(0)
-        nx_, ny_ = np.floor((C[:, :2].max(0) - lo) / line_cell).astype(np.int64) + 1
-        ij = np.floor((C[:, :2] - lo) / line_cell).astype(np.int64)
-        lin = ij[:, 0] * ny_ + ij[:, 1]
-        nn = N[:, :2] / np.maximum(np.linalg.norm(N[:, :2], axis=1, keepdims=True), 1e-9)
-        k = np.ones((3, 3))
-        cnt, axx, ayy, axy = [ndimage.convolve(np.bincount(lin[up], w, nx_ * ny_).reshape(nx_, ny_), k,
-                                               mode="constant")
-                              for w in (np.ones(up.sum()), nn[up, 0] ** 2, nn[up, 1] ** 2, nn[up, 0] * nn[up, 1])]
-        low = side_f & (dz < line_h) & ((part == "") | (part == "walls"))
-        below = ndimage.convolve(np.bincount(lin[low], minlength=nx_ * ny_).reshape(nx_, ny_), k,
-                                 mode="constant")
-        cand = np.flatnonzero(side_f & (part == ""))
-        ci, cj = ij[cand, 0], ij[cand, 1]
-        # a line standing on the floor (something under it there too): a lamp hanging claims nothing
-        occ = (cnt[ci, cj] >= 3) & (below[ci, cj] >= 1)
-        # the line's normal: the main axis of the orientation tensor of the faces there
-        th = 0.5 * np.arctan2(2 * axy[ci, cj], axx[ci, cj] - ayy[ci, cj])
-        dirn = np.c_[np.cos(th), np.sin(th)]
-        along = np.abs(np.einsum("ij,ij->i", nn[cand], dirn)) > np.cos(np.radians(facing_deg))
-        part[cand[occ & along]] = "walls"
+            got = claim(k, cand, ctree)
+            if len(got) and (dz[got] <= ground).any():         # it stands on the floor somewhere
+                part[got] = "walls"
     # the seams: what is left within `seam` of a floor, wall or ceiling face goes with it
     rest = np.flatnonzero((part == "") & ~hor)
     lab = np.flatnonzero(part != "")
@@ -1219,12 +1204,32 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
         np.minimum.at(c_lo, comp, dz[rest])
         side = np.bincount(comp, A[rest] * (np.abs(N[rest, 2]) < vertical), nc) / np.maximum(c_area, 1e-12)
         kind = np.full(nc, "objects", dtype=object)
-        kind[(side >= sideways) & (c_hi >= tall) & (c_lo <= 0.5)] = "walls"
+        # what is left of a wall's own shape (a pillar's rounded edges, a wall end):
+        # tall, facing sideways, from the floor, nearly all of it against wall faces
+        wf0 = np.flatnonzero(part == "walls")
+        if len(wf0):
+            dw, _ = cKDTree(C[wf0]).query(C[rest], workers=-1, distance_upper_bound=against)
+            frac = np.bincount(comp, A[rest] * np.isfinite(dw), nc) / np.maximum(c_area, 1e-12)
+            kind[(side >= 0.75) & (c_lo <= 0.5) & (c_hi >= wall_high) & (frac >= 0.7)] = "walls"
+        # a round pillar's arcs: tall, facing sideways, from the floor, round in plan
+        order_ = np.argsort(comp, kind="stable")
+        cuts_ = np.searchsorted(comp[order_], np.arange(nc + 1))
+        for k_ in np.flatnonzero((kind == "objects") & (side >= 0.85) & (c_lo <= 0.5) & (c_hi >= wall_high)):
+            xy = C[rest[order_[cuts_[k_]:cuts_[k_ + 1]]], :2]
+            if len(xy) < 30:
+                continue
+            M_ = np.c_[2 * xy, np.ones(len(xy))]                         # (x-a)^2+(y-b)^2=r^2, linear in a, b, c
+            (ca, cb, cc), *_ = np.linalg.lstsq(M_, (xy ** 2).sum(1), rcond=None)
+            r_ = np.sqrt(max(cc + ca ** 2 + cb ** 2, 0.0))
+            res = np.hypot(xy[:, 0] - ca, xy[:, 1] - cb) - r_
+            if pillar_r[0] <= r_ <= pillar_r[1] and res.std() < pillar_fit:
+                kind[k_] = "walls"
         # stairs and ramps: all their faces climb along the flight (treads, risers,
         # the slope under them, the rail); furniture and a shelf's stack do not
         order = np.argsort(comp, kind="stable")
         cuts = np.searchsorted(comp[order], np.arange(nc + 1))
         slope, fit = np.full(nc, np.nan), np.full(nc, np.nan)
+        flight = np.zeros(nc, bool)
         for k_ in np.flatnonzero((c_hi - c_lo >= 0.8) & (c_area >= 0.5)):
             sel = rest[order[cuts[k_]:cuts[k_ + 1]]]
             if len(sel) < 30:
@@ -1238,6 +1243,14 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
             slope[k_], fit[k_] = abs(a_), r2
             if stair_rise[0] <= abs(a_) <= stair_rise[1] and r2 >= 0.6:
                 kind[k_] = "walls"
+                flight[k_] = True
+        # a stair's sides (stringer, balustrade panel): facing sideways, against a flight
+        if flight.any():
+            fl = flight[comp]
+            d_, _ = cKDTree(C[rest[fl]]).query(C[rest[~fl]], workers=-1, distance_upper_bound=stair_side)
+            near = np.zeros(nc, bool)
+            near[np.unique(comp[~fl][np.isfinite(d_)])] = True
+            kind[near & ~flight & (side >= 0.6) & (kind == "objects")] = "walls"
         # low walls between pillars: long, thin across, both ends at a wall
         wf = np.flatnonzero(part == "walls")
         if len(wf):
@@ -1295,9 +1308,45 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
     return part, obj
 
 
+def flatten_floor(M, floor, cell=1.0, level=0.95):
+    """The vertices of the floor faces (mask) of mesh M put on the floor's
+    own level: per cell (m, in plan), the median height of its flat floor
+    faces (|n_z| over level), between cells the four nearest blended
+    (inverse distance: no steps). The bumps
+    under furniture (legs, feet melted into the floor by Poisson) go flat.
+    The number of vertices moved and the most any moved (m)."""
+    o3d = _o3d()
+    M.compute_triangle_normals()
+    V, F = np.asarray(M.vertices).copy(), np.asarray(M.triangles)
+    C = V[F].mean(1)
+    ref = floor & (np.abs(np.asarray(M.triangle_normals)[:, 2]) > level)
+    if not ref.any():
+        return 0, 0.0
+    lo = C[ref, :2].min(0)
+    ij = np.floor((C[ref, :2] - lo) / cell).astype(np.int64)
+    ny = int(ij[:, 1].max()) + 2
+    key = ij[:, 0] * ny + ij[:, 1]
+    o = np.lexsort((C[ref, 2], key))
+    ks = key[o]
+    starts = np.r_[0, np.flatnonzero(np.diff(ks)) + 1]
+    cnt = np.diff(np.r_[starts, len(ks)])
+    cz = C[ref, 2][o][starts + cnt // 2]                  # each cell's median
+    cxy = lo + (np.c_[ks[starts] // ny, ks[starts] % ny] + 0.5) * cell
+    vi = np.unique(F[floor])
+    kk = min(4, len(cz))
+    d, near = cKDTree(cxy).query(V[vi, :2], k=kk, workers=-1)
+    d, near = d.reshape(len(vi), kk), near.reshape(len(vi), kk)
+    w = 1.0 / np.maximum(d, 1e-3)
+    z = (w * cz[near]).sum(1) / w.sum(1)
+    moved = np.abs(V[vi, 2] - z)
+    V[vi, 2] = z
+    M.vertices = o3d.utility.Vector3dVector(V)
+    return int((moved > 1e-4).sum()), float(moved.max()) if len(moved) else 0.0
+
+
 def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000000, split_objects=False,
                 floor_colour=(0.8, 0.8, 0.8), traj=None, ceil_margin=0.10, min_piece=50.0, normals=False,
-                why=()):
+                why=(), flat_floor=True):
     """The mesh (the one with its ceiling: the radio waves bounce off it) as
     a Sionna RT scene, its own faces split into floor, walls, ceiling and
     objects: <out>/scene.xml (what Sionna loads: sionna.rt.load_scene) with
@@ -1363,6 +1412,10 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
             _, i = tree.query(Vf[Ff[a0:a0 + 2000000]].mean(1), workers=-1)
             fpart[a0:a0 + 2000000], fobj[a0:a0 + 2000000] = part[i], obj[i]
         del tree
+    if flat_floor:
+        nmv, dmax = flatten_floor(M, fpart == "floor")
+        report.append(f"  floor flattened onto its own level: {nmv} vertices moved, {100 * dmax:.1f} cm at most "
+                      "(the bumps under furniture)")
     Vf, Ff = np.asarray(M.vertices), np.asarray(M.triangles)
     Af = 0.5 * np.linalg.norm(np.cross(Vf[Ff[:, 1]] - Vf[Ff[:, 0]], Vf[Ff[:, 2]] - Vf[Ff[:, 0]]), axis=1)
     for p_ in ("floor", "walls", "ceiling", "objects"):
@@ -1783,6 +1836,9 @@ def main():
     sn.add_argument("--why", action="append", default=[], metavar="X,Y",
                     help="log what each rule saw of the pieces left within 1 m of this plan point (the mesh's "
                          "frame; pick it in CloudCompare); repeat for more")
+    sn.add_argument("--keep-floor", action="store_true",
+                    help="leave the floor as meshed (default: its faces flattened onto the floor's level, the "
+                         "bumps under furniture gone)")
     sn.add_argument("--normals", action="store_true",
                     help="write the parts with vertex normals: a viewer shades them as surfaces (colours greyed)")
     sn.add_argument("--floor-grey", type=float, default=0.8,
@@ -1824,7 +1880,7 @@ def main():
                              + ", ".join(SIONNA_MATERIALS))
                 mats[part] = (typ, float(th) if th else SIONNA_MATERIALS[part][1])
             sionna_mesh(a.file, a.out, faces=a.faces, materials=mats, split_objects=a.split_objects,
-                        traj=a.traj, normals=a.normals,
+                        traj=a.traj, normals=a.normals, flat_floor=not a.keep_floor,
                         why=[tuple(float(v) for v in w.split(",")[:2]) for w in a.why],
                         floor_colour=None if a.floor_grey < 0 else (a.floor_grey,) * 3)
         elif a.cmd == "scene":
