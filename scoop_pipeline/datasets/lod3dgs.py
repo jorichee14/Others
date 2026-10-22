@@ -2106,6 +2106,35 @@ def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0, eye=1.6):
     return P, z0, lab == big, lo
 
 
+def calibrate_tone(scene, render, levels=None):
+    """What the frames read back make of the colours, measured: grey
+    squares of each level (and the background at it) rendered through
+    `render` (scene -> image, the recording's own path: some drivers read
+    back in linear light, dark; some compress), (levels, what a mesh
+    colour comes out as, what the background comes out as), monotonic; to
+    undo on the colours first (np.interp(c, out, levels))."""
+    o3d = _o3d()
+    from open3d.visualization import rendering
+    levels = np.r_[0.0, 0.01, 0.02, 0.03, 0.05, np.arange(0.075, 1.001, 0.025)] if levels is None else levels
+    mat = rendering.MaterialRecord()
+    mat.shader = "defaultUnlit"
+    om, ob = [], []
+    for c in levels:
+        q = o3d.geometry.TriangleMesh.create_box(2, 2, 0.1)
+        q.paint_uniform_color((c, c, c))
+        scene.clear_geometry()
+        scene.add_geometry("cal", q, mat)
+        scene.set_background(np.array([c, c, c, 1.0], np.float32))
+        scene.camera.look_at([1.0, 1.0, 0.1], [1.0, 1.0, 5.0], [0.0, 1.0, 0.0])
+        scene.camera.set_projection(60.0, 1.0, 0.1, 100.0, rendering.Camera.FovType.Vertical)
+        img = np.asarray(render(scene)).astype(float) / 255
+        h, w = img.shape[:2]
+        om.append(img[h // 2, w // 2, :3].mean())
+        ob.append(img[2, 2, :3].mean())
+    scene.clear_geometry()
+    return levels, np.maximum.accumulate(np.array(om)), np.maximum.accumulate(np.array(ob))
+
+
 class _FFmpegWriter:
     """Frames (BGR, h x w x 3) to an H.264 .mp4 through ffmpeg (yuv420p:
     every player and browser plays it; OpenCV's own mp4v many show black)."""
@@ -2224,12 +2253,21 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
     shown = np.ones(len(blocks), bool)
     first = os.path.splitext(out)[0] + "_frame0.png"
 
-    def fill(scene):
-        for k, q in enumerate(blocks):
-            scene.add_geometry(f"b{k}", q, mat)
+    bg = 0.12
+
+    def fill(scene, render):
+        """The scene set up and, first, what its frames read back make of the colours
+        measured (calibrate_tone) and undone on the blocks' colours and the background."""
         scene.show_skybox(False)
-        scene.view.set_post_processing(False)
-        scene.set_background(np.array([0.12, 0.12, 0.12, 1.0], np.float32))
+        scene.view.set_post_processing(False)         # no tone mapping: the colours as stored
+        lv, om, ob = calibrate_tone(scene, render)
+        log.info("  the frames read back: a colour of 0.5 comes out {:.2f}, the background {:.2f} (undone)"
+                 .format(np.interp(0.5, lv, om), np.interp(0.5, lv, ob)))
+        for k, q in enumerate(blocks):
+            if unlit:
+                q.vertex_colors = o3d.utility.Vector3dVector(np.interp(np.asarray(q.vertex_colors), om, lv))
+            scene.add_geometry(f"b{k}", q, mat)
+        scene.set_background(np.r_[[np.interp(bg, ob, lv)] * 3, 1.0].astype(np.float32))
 
     def aim(scene, i):
         """The camera at frame i, the blocks near it shown."""
@@ -2252,7 +2290,7 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
 
     if offscreen:
         rd = rendering.OffscreenRenderer(size[0], size[1])
-        fill(rd.scene)
+        fill(rd.scene, lambda sc: rd.render_to_image())
         for i in range(nfr):
             aim(rd.scene, i)
             keep(rd.render_to_image(), i)
@@ -2263,12 +2301,15 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
     win = app.create_window(f"fly {os.path.basename(mesh_path)}: recording", size[0], size[1])
     sw = gui.SceneWidget()
     sw.scene = rendering.Open3DScene(win.renderer)
-    fill(sw.scene)
     win.add_child(sw)
-    st = {"i": 0, "img": None}
+    st = {"i": -1, "img": None}
 
     def tick():
         i = st["i"]
+        if i < 0:                                    # the first tick: the scene filled, calibrated
+            fill(sw.scene, lambda sc: app.render_to_image(sc, 64, 64))
+            st["i"] = 0
+            return True
         if i >= nfr:
             vw.release()
             log.info(f"{out}: {nfr} frames; its first frame {first}")

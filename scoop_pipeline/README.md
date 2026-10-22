@@ -1128,8 +1128,10 @@ from `--start` X,Y (the map's origin; `loop`: on the loop), a turn round there
 over `--spin` 8 s, then straight to the loop's nearest point and round it; at
 `--eye` 1.6 m over the floor, `--speed` 1 m/s, looking `--ahead` 2 m along
 the way; or `--path "X,Y;X,Y;..."`, waypoints joined in a loop. Recorded through a window (the flight seen as it goes;
-`--offscreen`: none, which some drivers give black), the mesh drawn as in
-`walk` (colours vivid, `--near` 15 m of it); `--fps`, `--size WxH` (1280x720), `--seconds N`
+`--offscreen`: none), what the driver makes of the colours read back
+measured first on grey test squares and undone (some read back in linear
+light: near black), the mesh drawn as in `walk` (colours vivid, `--near`
+15 m of it); `--fps`, `--size WxH` (1280x720), `--seconds N`
 for the first N seconds only.
 
     python3 scoop_pipeline/datasets/lod3dgs.py fly mapping/mesh_view_<tag>_anchored_sionna.ply
