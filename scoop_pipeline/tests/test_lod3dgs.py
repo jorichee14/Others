@@ -489,7 +489,9 @@ def check_sionna(tmp):
     wall (reaching out 0.4 m) objects, a cabinet on a wall off the floor wall;
     a wall mirrored under the floor left out, the wall over it wall; a door
     standing 0.25 m off a wall (a thin sheet) wall; a doorway's frame (jambs
-    and the ledge over them) with no wall round it wall
+    and the ledge over them) with no wall round it wall, and a ledge high
+    up 0.15 m off a wall, a flat top with walls along both sides; the
+    walls smooth (on their planes)
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
@@ -548,6 +550,9 @@ def check_sionna(tmp):
     wall_cab = box(1.0, 2.0, 0.01, 0.41, 1.5, 2.1)             # a cabinet on the wall y = 0, off the floor
     mirrored = sheet(0, 12.0, (0.2, 2.8), (-1.5, -0.02))       # the wall x = 12 mirrored in the floor
     door = box(0.23, 0.27, 2.0, 2.9, 0, 2.0)                   # a door 0.25 m off the wall x = 0
+    trough = np.concatenate([sheet(1, 3.7, (5.3, 6.7), (0, 2.5)), sheet(1, 4.5, (5.3, 6.7), (0, 2.5)),
+                             sheet(2, 1.2, (5.35, 6.65), (3.85, 4.35))])   # a flat top 0.15 m off walls both sides
+    ledge = box(4.6, 5.8, 5.65, 5.85, 1.4, 1.55, bottom=True)  # a ledge 0.15 m off the wall y = 6, floating
     arch = np.concatenate([box(2.0, 2.1, 2.0, 2.3, 0, 2.1, top=False), box(3.0, 3.1, 2.0, 2.3, 0, 2.1, top=False),
                            box(2.0, 3.1, 2.0, 2.3, 2.1, 2.4, bottom=True),        # a doorway's frame, its wall
                            box(2.4, 2.6, 2.05, 2.25, 2.4, 2.6)])                  # not in the map, a box on it
@@ -555,7 +560,7 @@ def check_sionna(tmp):
                         sheet(2, 3.0, (7, 12), (0, 6)), sheet(0, 0.0, (0, 6), (0, 5)),
                         sheet(0, 7.0, (0, 6), (3, 5)), sheet(0, 12.0, (0, 6), (0, 3)),
                         sheet(1, 0.0, (0, 7), (0, 5)), sheet(1, 6.0, (0, 7), (0, 5)),
-                        sheet(1, 0.0, (7, 12), (0, 3)), back, cupboard, over_glass, wall_cab, mirrored, door, arch,
+                        sheet(1, 0.0, (7, 12), (0, 3)), back, cupboard, over_glass, wall_cab, mirrored, door, arch, ledge, trough,
                         pillar, table, cabinet, lamp, desk, room_of_desks, stub, chairs, stairs, knee, rack])
     P = P + rng.normal(0, 0.005, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
@@ -597,8 +602,10 @@ def check_sionna(tmp):
                            ("its top", "walls", (5.0, 6.4, 1.98, 2.12, 0.95, 1.05)),
                            ("a door 0.25 m off a wall", "walls", (0.15, 0.35, 2.1, 2.8, 0.3, 1.8)),
                            ("a doorway's frame (wall not in the map)", "walls", (1.95, 3.15, 1.95, 2.35, 0.3, 2.35)),
+                           ("a flat top, walls both sides", "walls", (5.5, 6.5, 3.9, 4.3, 1.1, 1.3)),
+                           ("a ledge floating off a wall", "walls", (4.7, 5.7, 5.6, 5.9, 1.35, 1.6)),
                            ("a cupboard against a wall", "objects", (7.6, 8.7, 5.4, 5.5, 0.3, 1.0)),
-                           ("the wall behind it (not in the map: filled)", "walls", (7.7, 8.6, 5.97, 6.05, 0.3, 1.0))):
+                           ("the wall behind it (not in the map: filled)", "walls", (7.7, 8.6, 5.99, 6.05, 0.3, 1.0))):
         assert inside(parts[part], *b_) > 0, (name, "not with", part)
         for other in parts:
             if other != part:
@@ -626,25 +633,10 @@ def check_sionna(tmp):
     T = np.c_[x, np.full(len(x), 3.0), np.full(len(x), 0.8)]
     e, c = L.walk_start(Vv, T)
     assert np.allclose(e, [1.0, 3.0, 1.6], atol=0.05) and c[0] > e[0], ("walk start", e, c)
-    # sionna-fix: a piece of the objects picked (the table) moved to the walls, and again from fix.json
-    import shutil
-    sd = os.path.dirname(r["scene"])
-    for k_ in ("fix_a", "fix_b"):
-        shutil.copytree(sd, os.path.join(tmp, k_), dirs_exist_ok=True)
-    nO = len(o3d.io.read_triangle_mesh(os.path.join(sd, "meshes", "objects.ply")).triangles)
-    nW = len(o3d.io.read_triangle_mesh(os.path.join(sd, "meshes", "walls.ply")).triangles)
-    Ot = o3d.io.read_triangle_mesh(os.path.join(sd, "meshes", "objects.ply"))
-    Vt = np.asarray(Ot.vertices)
-    at = Vt[np.argmin(np.linalg.norm(Vt - [2.6, 4.4, 0.75], axis=1))]
-    pn, pf = L.objects_to_walls(os.path.join(tmp, "fix_a"), [at])
-    assert pn >= 1 and pf > 0, (pn, pf)
-    for k_ in ("fix_a", "fix_b"):
-        if k_ == "fix_b":
-            assert L.fix_objects(os.path.join(tmp, k_), os.path.join(tmp, "fix_a", "fix.json")) == pn
-        Ox = o3d.io.read_triangle_mesh(os.path.join(tmp, k_, "meshes", "objects.ply"))
-        Wx = o3d.io.read_triangle_mesh(os.path.join(tmp, k_, "meshes", "walls.ply"))
-        assert len(Ox.triangles) == nO - pf and len(Wx.triangles) == nW + pf and Wx.has_vertex_colors(), k_
-        assert inside(np.asarray(Wx.vertices)[np.asarray(Wx.triangles)].mean(1), 2.1, 3.1, 4.1, 4.7, 0.6, 0.8), k_
+    # the walls smooth: the wall y = 0 on its plane
+    Vw = np.asarray(Qw.vertices)
+    on_y0 = Vw[(np.abs(Vw[:, 1]) < 0.06) & (Vw[:, 0] > 0.5) & (Vw[:, 0] < 4.5) & (Vw[:, 2] > 0.5) & (Vw[:, 2] < 4.5)]
+    assert len(on_y0) and on_y0[:, 1].std() < 0.002, ("the wall not smooth", on_y0[:, 1].std())
     # a flat wall in a few large faces (the mesh thinned by quadric first): still a wall
     qm = o3d.io.read_triangle_mesh(m["out"]).simplify_quadric_decimation(150000)
     o3d.io.write_triangle_mesh(os.path.join(tmp, "thin.ply"), qm)

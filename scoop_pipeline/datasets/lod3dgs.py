@@ -1104,7 +1104,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, ground=0.3, against=0.1,
                 pillar_r=(0.1, 1.0), pillar_fit=0.04, attach=0.1, attach_depth=0.2, attach_upright=0.9,
                 mounted=0.3, below=0.25, panel_near=0.5, panel_long=0.5, panel_side=0.8,
-                arch_top=1.9, arch_low=1.7,
+                arch_top=1.9, arch_low=1.7, ledge_near=0.3, top_near=0.3, float_low=1.2,
                 stair_rise=(0.25, 1.5), stair_side=0.15, knee_w=1.5, knee_thin=0.1, knee_end=0.35,
                 T=None, why=(), planes=None, why_objects=0):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
@@ -1158,7 +1158,11 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
     pillar's curve, a piece of wall, and what is attached to those); and
     so is a sheet near a wall (thin across, under knee_thin m, panel_long m
     long or more, facing sideways panel_side, within panel_near m of a
-    wall face: a door, set in its frame or ajar, a strip or sliver of wall);
+    wall face: a door, set in its frame or ajar, a strip or sliver of wall),
+    and all that floats over float_low m (over tables and counters) within
+    ledge_near m of a wall (a ledge, a lintel, a wall's top), and a wall's top (a thick wall, a parapet: facing up, wall
+    within top_near m along both its long edges; a table by a wall has it
+    on one side);
     and so is a doorway's frame whose wall is not in the map (its jambs and
     the ledge over them: on the floor at both ends, reaching arch_top m,
     nothing under arch_low m in the middle; a table's top is lower, a
@@ -1391,17 +1395,33 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 if not sel_f.any():
                     break
                 d_, _ = cKDTree(C[wall_now]).query(C[rest[sel_f]], workers=-1,
-                                                   distance_upper_bound=max(attach_depth, panel_near))
+                                                   distance_upper_bound=max(attach_depth, panel_near, ledge_near, top_near))
                 cs = comp[sel_f]
                 touch, out, by = np.zeros(nc, bool), np.zeros(nc, bool), np.zeros(nc, bool)
                 touch[np.unique(cs[d_ <= attach])] = True
                 by[np.unique(cs[d_ <= panel_near])] = True
+                led = np.zeros(nc, bool)
+                led[np.unique(cs[d_ <= ledge_near])] = True
+                # a wall's top (a thick wall, a parapet): flat, wall along both its long edges
+                top_ = np.zeros(nc, bool)
+                qa = Cr[sel_f, 0] * -ax_[cs, 1] + Cr[sel_f, 1] * ax_[cs, 0]       # across the piece
+                for k_ in np.flatnonzero((kind == "objects") & (side < 0.4) & (p1 - p0 >= 0.5)):
+                    w_ = cs == k_
+                    if w_.sum() < 20:
+                        continue
+                    q_, dd = qa[w_], d_[w_]
+                    lo_, hi_ = np.quantile(q_, [0.1, 0.9])
+                    if (hi_ - lo_ > 0.05 and (dd[q_ <= lo_] <= top_near).mean() >= 0.5
+                            and (dd[q_ >= hi_] <= top_near).mean() >= 0.5):
+                        top_[k_] = True
                 d_ = np.where(d_ <= attach_depth, d_, np.inf)
                 out[np.unique(cs[~np.isfinite(d_)])] = True        # some of it farther than attach_depth
                 # a pillar's curve, a wall's piece; and off the floor, mounted on the wall
                 new = touch & (~out | (side >= attach_upright) | (c_lo > mounted)
                                | ((c_hi >= wall_high) & (side >= 0.6) & (high >= 0.3)))  # a wall cluttered
                 new |= by & (across < knee_thin) & (p1 - p0 >= panel_long) & (side >= panel_side)  # a door, a strip
+                new |= led & (c_lo >= float_low)       # floating by a wall, over a table: a ledge, a lintel
+                new |= top_
                 if not new.any():
                     break
                 kind[new] = "walls"
@@ -1496,6 +1516,32 @@ def flatten_floor(M, floor, cell=1.0, level=0.95, most=0.4):
     return int((moved > 1e-4).sum()), float(moved.max()) if len(moved) else 0.0
 
 
+def flatten_walls(M, part, planes, snap=0.06, margin=0.1):
+    """The vertices of the wall faces (part == "walls") within snap m of a
+    wall plane (inside its extent, margin m round it) put on it, each on its
+    nearest plane: the wall smooth (the meshing's ripples gone); what stands
+    out of it farther (a ledge, a frame, a pillar) is kept. The number of
+    vertices moved and the most any moved (m)."""
+    o3d = _o3d()
+    V, F = np.asarray(M.vertices).copy(), np.asarray(M.triangles)
+    vi = np.unique(F[part == "walls"]) if (part == "walls").any() else np.zeros(0, np.int64)
+    if not planes or not len(vi):
+        return 0, 0.0
+    best, shift = np.full(len(vi), np.inf), np.zeros((len(vi), 3))
+    for pl in planes:
+        mu, n, t = pl["mu"], pl["n"], pl["t"]
+        q = V[vi] - mu
+        d, u = q @ n, q @ t
+        ok = ((np.abs(d) < snap) & (np.abs(d) < best) & (u > pl["u0"] - margin) & (u < pl["u1"] + margin)
+              & (V[vi, 2] > pl["floor"] - margin) & (V[vi, 2] < pl["top"] + margin))
+        best[ok] = np.abs(d[ok])
+        shift[ok] = -d[ok, None] * n
+    on = np.isfinite(best)
+    V[vi[on]] += shift[on]
+    M.vertices = o3d.utility.Vector3dVector(V)
+    return int(on.sum()), float(best[on].max()) if on.any() else 0.0
+
+
 def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0):
     """The wall hidden behind furniture, which the mesh does not have: on
     each wall plane, the cells (cell m) from the floor to its top where no
@@ -1568,7 +1614,7 @@ def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0):
 def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000000, split_objects=False,
                 object_faces=0,
                 floor_colour=(0.8, 0.8, 0.8), traj=None, ceil_margin=0.10, min_piece=50.0, normals=False,
-                why=(), flat_floor=True, fill=True, why_objects=0):
+                why=(), flat_floor=True, fill=True, why_objects=0, flat_walls=True):
     """The mesh (the one with its ceiling: the radio waves bounce off it) as
     a Sionna RT scene, its own faces split into floor, walls, ceiling and
     objects: <out>/scene.xml (what Sionna loads: sionna.rt.load_scene) with
@@ -1592,7 +1638,10 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     them to be seen flat) and each face takes its nearest one's. traj (the mesh's frame): the floor level from it (so a
     reflection under the floor cannot pull it down), and what the _noceil copy drops
     as hanging from the ceiling (hanging_faces: a reflection joined to a
-    mirrored ceiling) is left out."""
+    mirrored ceiling) is left out. flat_floor: the floor flattened onto its
+    level (flatten_floor); flat_walls: the walls smoothed onto their planes
+    (flatten_walls); fill: the walls filled behind furniture and their small
+    holes (fill_walls)."""
     o3d = _o3d()
     mesh_path = os.path.expanduser(mesh_path)
     base = os.path.splitext(out)[0] if out else os.path.splitext(mesh_path)[0] + "_sionna"
@@ -1673,6 +1722,9 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
         nmv, dmax = flatten_floor(M, fpart == "floor")
         report.append(f"  floor flattened onto its own level: {nmv} vertices moved, {100 * dmax:.1f} cm at most "
                       "(the bumps under furniture)")
+    if flat_walls:
+        nmv, dmax = flatten_walls(M, fpart, planes)
+        report.append(f"  walls smoothed onto their planes: {nmv} vertices moved, {100 * dmax:.1f} cm at most")
     n_fill = 0
     if fill:
         Vn, Fn, Cn = fill_walls(M, fpart, planes)
@@ -1802,120 +1854,6 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     return {"out": sx, "scene": sx, "view": vp, "labels": lp, "faces": sum(used.values()), **used,
             "left_out": n_out, "left_out_file": op, "filled": n_fill,
             "n_objects": int(len(np.unique(fobj[fpart == "objects"])))}
-
-
-def objects_to_walls(scene_dir, points, near=0.05):
-    """Move the objects' pieces at the given points (x y z, the mesh's frame:
-    each takes the piece with a vertex within `near` of it) from
-    meshes/objects.ply to meshes/walls.ply of a sionna scene; parts.json
-    updated, the points added to fix.json (so they can be applied again to
-    a new run). The number of pieces and faces moved."""
-    import json
-    o3d = _o3d()
-    sdir = os.path.expanduser(scene_dir)
-    po, pw = os.path.join(sdir, "meshes", "objects.ply"), os.path.join(sdir, "meshes", "walls.ply")
-    O, W = o3d.io.read_triangle_mesh(po), o3d.io.read_triangle_mesh(pw)
-    if not len(O.triangles) or not len(points):
-        return 0, 0
-    tri, _, _ = O.cluster_connected_triangles()
-    tri = np.asarray(tri)
-    F = np.asarray(O.triangles)
-    vpiece = np.full(len(O.vertices), -1)
-    vpiece[F.ravel()] = np.repeat(tri, 3)
-    d, vi = cKDTree(np.asarray(O.vertices)).query(np.asarray(points, float)[:, :3])
-    pick = np.unique(vpiece[vi[d <= near]])
-    pick = pick[pick >= 0]
-    move = np.isin(tri, pick)
-    if not move.any():
-        return 0, 0
-    moved = type(O)(O)
-    moved.remove_triangles_by_mask(~move)
-    moved.remove_unreferenced_vertices()
-    O.remove_triangles_by_mask(move)
-    O.remove_unreferenced_vertices()
-    W += moved
-    o3d.io.write_triangle_mesh(po, O)
-    o3d.io.write_triangle_mesh(pw, W)
-    pj = os.path.join(sdir, "parts.json")
-    if os.path.exists(pj):
-        js = json.load(open(pj))
-        for n_, q in (("objects", O), ("walls", W)):
-            if n_ in js.get("parts", {}):
-                js["parts"][n_]["faces"] = len(q.triangles)
-                js["parts"][n_]["m2"] = round(float(q.get_surface_area()), 2)
-        json.dump(js, open(pj, "w"), indent=1)
-    fx = os.path.join(sdir, "fix.json")
-    old = json.load(open(fx)).get("to_walls", []) if os.path.exists(fx) else []
-    json.dump({"to_walls": old + [[round(float(v), 4) for v in p_[:3]] for p_ in points]}, open(fx, "w"), indent=1)
-    return len(pick), int(move.sum())
-
-
-def boxed_pieces(V, vpiece, P, near=1e-4):
-    """One vertex of V for each piece (vpiece: each vertex's piece) with a
-    vertex at one of the points P (a box drawn round them in the window)."""
-    if not len(P):
-        return np.zeros((0, 3))
-    d, vi = cKDTree(V).query(np.asarray(P, float)[:, :3])
-    hit = np.zeros(vpiece.max() + 1, bool)
-    hit[vpiece[vi[d <= near]]] = True
-    first = np.full(len(hit), -1)
-    first[vpiece[::-1]] = np.arange(len(V))[::-1]
-    return V[first[hit]]
-
-
-def fix_objects(scene_dir, apply=None):
-    """Pick the objects' pieces that are walls, by hand: the objects shown,
-    each piece its own colour; shift + left click a piece (any point of it),
-    as many as wanted, or press K and drag a box (ctrl + left clicks: a
-    polygon) round many, then C: every piece with a point in it; close the
-    window: they move to the walls (objects_to_walls). apply: a fix.json of
-    an earlier run, its points moved again with no window."""
-    import json
-    o3d = _o3d()
-    sdir = os.path.expanduser(scene_dir)
-    if apply:
-        pts = json.load(open(os.path.expanduser(apply))).get("to_walls", [])
-        n, f = objects_to_walls(sdir, pts)
-        log.info(f"{apply}: {len(pts)} points, {n} pieces ({f} faces) moved from the objects to the walls")
-        return n
-    O = o3d.io.read_triangle_mesh(os.path.join(sdir, "meshes", "objects.ply"))
-    if not len(O.triangles):
-        raise ConvertError(f"{sdir}: no objects")
-    tri, _, _ = O.cluster_connected_triangles()
-    tri = np.asarray(tri)
-    F = np.asarray(O.triangles)
-    vpiece = np.zeros(len(O.vertices), np.int64)
-    vpiece[F.ravel()] = np.repeat(tri, 3)
-    rng = np.random.default_rng(1)
-    col = rng.uniform(0.2, 1.0, (tri.max() + 1, 3))
-    pc = o3d.geometry.PointCloud(O.vertices)
-    pc.colors = o3d.utility.Vector3dVector(col[vpiece])
-    log.info(f"{tri.max() + 1} pieces: shift + left click each that is wall (any point of it), "
-             "shift + right click undoes the last; or K, drag a box round many (ctrl + left clicks: "
-             "a polygon), then C (Escape in the save dialog); then close the window")
-    vis = o3d.visualization.VisualizerWithEditing()
-    vis.create_window(f"objects of {os.path.basename(sdir)}: shift + click the walls", 1600, 900)
-    vis.add_geometry(pc)
-    vis.run()
-    vis.destroy_window()
-    picked = vis.get_picked_points()
-    V = np.asarray(O.vertices)
-    cut = vis.get_cropped_geometry()
-    boxed = np.asarray(cut.points) if cut is not None and hasattr(cut, "points") else np.zeros((0, 3))
-    if len(boxed) >= len(V):
-        boxed = boxed[:0]
-    if len(boxed):
-        pts = boxed_pieces(V, vpiece, boxed)
-        log.info(f"the box: {len(pts)} pieces" + (" (the clicks, made before it, ignored)" if picked else ""))
-    elif picked:
-        pts = V[np.asarray(picked)]
-    else:
-        log.info("nothing picked")
-        return 0
-    n, f = objects_to_walls(sdir, pts)
-    log.info(f"{n} pieces ({f} faces) moved from the objects to the walls; the points kept in "
-             f"{os.path.join(sdir, 'fix.json')} (--apply it to a new run)")
-    return n
 
 
 def walk_start(V, T=None, at=None, eye=1.6, ahead=2.0):
@@ -2234,6 +2172,9 @@ def main():
     sn.add_argument("--no-fill-walls", action="store_true",
                     help="leave the walls as meshed (default: the wall hidden behind furniture, which the mesh "
                          "has not, filled on its plane; doors and windows left open)")
+    sn.add_argument("--keep-walls", action="store_true",
+                    help="leave the walls as meshed (default: their faces within 6 cm of a wall plane put on it, "
+                         "smooth)")
     sn.add_argument("--keep-floor", action="store_true",
                     help="leave the floor as meshed (default: its faces flattened onto the floor's level, the "
                          "bumps under furniture gone)")
@@ -2245,10 +2186,6 @@ def main():
                     help="floor, ceiling, walls or objects as an ITU material (concrete, brick, plasterboard, "
                          "wood, glass, ceiling_board, marble, floorboard, metal, ...), thickness m; "
                          "default concrete:0.2, objects wood:0.05; repeat for each part")
-    fx = sub.add_parser("sionna-fix", help="pick by hand the objects' pieces that are walls")
-    fx.add_argument("file", help="a sionna scene folder (with meshes/objects.ply and meshes/walls.ply)")
-    fx.add_argument("--apply", default=None,
-                    help="a fix.json of an earlier run: move its points' pieces again, no window")
     wk = sub.add_parser("walk", help="walk inside a mesh (with its ceiling) in a window")
     wk.add_argument("file", help="a mesh, e.g. mesh_view_<tag>_anchored.ply or its _sionna.ply")
     wk.add_argument("--traj", default=None,
@@ -2269,8 +2206,6 @@ def main():
     try:
         if a.cmd == "anchor":
             anchor_file(a.file, a.frame, a.out)
-        elif a.cmd == "sionna-fix":
-            fix_objects(a.file, a.apply)
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
                  faces=a.faces, eye=a.eye, shot=a.shot)
@@ -2286,6 +2221,7 @@ def main():
             sionna_mesh(a.file, a.out, faces=a.faces, object_faces=a.object_faces, materials=mats,
                         split_objects=a.split_objects,
                         traj=a.traj, normals=a.normals, flat_floor=not a.keep_floor, fill=not a.no_fill_walls,
+                        flat_walls=not a.keep_walls,
                         why=[tuple(float(v) for v in w.split(",")[:2]) for w in a.why],
                         why_objects=a.why_objects,
                         floor_colour=None if a.floor_grey < 0 else (a.floor_grey,) * 3)

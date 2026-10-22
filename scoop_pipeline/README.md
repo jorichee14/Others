@@ -1059,14 +1059,18 @@ more than 0.2 m from them, or 90 % facing sideways, or off the floor, over
 0.3 m, or reaching 2.2 m with 30 % of it above 1.8 m: door and window
 frames, sills, panels, cabinets and signs on a wall, a pillar's curve,
 pieces of wall, a wall cluttered) is wall too, and so are a thin upright sheet
-within 0.5 m of a wall (a door set in its frame or ajar, a strip of wall) and a
+within 0.5 m of a wall (a door set in its frame or ajar, a strip of wall), a
 doorway's frame whose wall is not in the map (on the floor at both ends,
-nothing under 1.7 m in its middle): objects are only what stands out or
+nothing under 1.7 m in its middle), what floats over 1.2 m within 0.3 m of a
+wall (a ledge, a lintel) and a wall's top (facing up, wall along both its
+long edges; a table by a wall has it on one side): objects are only what stands out or
 apart (a chair or desk pushed to a wall reaches out 0.4 m and more);
 floor bumps (no higher than 0.12 m) are floor and scraps under 0.05 m2 the
 part next to them. The floor is then flattened onto its own level (the
 median of its flat faces per 1 m, blended between cells; a vertex moved 0.4 m at most, a floor at another level is not a bump): the bumps under
-furniture go (`--keep-floor` keeps them). And the wall hidden behind
+furniture go (`--keep-floor` keeps them). The walls are smoothed the same
+way: their faces within 6 cm of a wall plane put on it (`--keep-walls`
+leaves them as meshed); a ledge or frame standing out farther is kept. And the wall hidden behind
 furniture pushed against it, which the mesh does not have, is filled on its
 plane from the floor (where something stands within 0.4 m of it and no wall
 face is), and so are the wall's own holes, closed all round by it (the
@@ -1093,18 +1097,6 @@ object's material in `scene.xml`).
 
     python3 scoop_pipeline/datasets/lod3dgs.py sionna mapping/mesh_view_<tag>_anchored.ply \
         --traj odometry/reference_<tag>/traj_mobile_2_lidar.tum
-
-`sionna-fix` picks by hand what of the objects is wall: `objects.ply` of a
-scene opens with each piece in its own colour; shift + left click any point
-of each piece that is wall (shift + right click undoes the last), or press K,
-drag a box round many (ctrl + left clicks draw a polygon) and press C (Escape
-the save dialog it opens): every piece with a point in the box; close the
-window, and those pieces move to `walls.ply` (`parts.json` updated). The
-points are kept in the scene's `fix.json`: `--apply <scene>/fix.json` moves
-the same pieces of a new run, no window.
-
-    python3 scoop_pipeline/datasets/lod3dgs.py sionna-fix mapping/mesh_view_<tag>_anchored_sionna
-    python3 scoop_pipeline/datasets/lod3dgs.py sionna-fix <new scene> --apply <old scene>/fix.json
 
 `walk` opens a window to walk inside a mesh (the one with its ceiling, or
 its `_sionna.ply`): Open3D's fly mode, started 1.6 m (`--eye`) over the floor
