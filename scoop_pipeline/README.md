@@ -1140,7 +1140,9 @@ for the first N seconds only.
 `walk` opens a window to walk inside a mesh (the one with its ceiling, or
 its `_sionna.ply`): Open3D's fly mode, started 1.6 m (`--eye`) over the floor
 at the first pose of `--traj` facing along the path (or `--at X,Y`), the
-mesh unlit in its colours made vivid (stretched over their range, the
+mesh unlit in its colours with the speckle smoothed over (a vertex much
+brighter or darker than its neighbours, a glint of the camera's colouring,
+takes their colour) and made vivid (stretched over their range, the
 camera's haze and grey gone; the saturation up `--sat` 1.3; `--plain`: as
 stored) and seen from both sides (`--one-side`: as stored, half the load),
 cut into blocks of `--cell` 4 m in plan with only the blocks within

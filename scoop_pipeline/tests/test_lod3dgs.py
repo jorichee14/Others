@@ -681,6 +681,14 @@ def check_sionna(tmp):
         assert not q.has_vertex_colors(), (n_, "written with colours")
         area[n_] = len(q.triangles) / max(q.get_surface_area(), 1e-9)
     assert not o3d.io.read_triangle_mesh(rs["view"]).has_vertex_colors()
+    sp = o3d.geometry.TriangleMesh.create_sphere(1.0, 60)        # speckles (150 white, 150 black dots) smoothed over
+    Vs_, Fs_ = np.asarray(sp.vertices), np.asarray(sp.triangles)
+    Cs_ = np.tile((Vs_[:, 2:3] + 1) / 2 * 0.5 + 0.25, (1, 3))
+    ids = np.random.default_rng(0).choice(len(Vs_), 300, replace=False)
+    Cn_ = Cs_.copy()
+    Cn_[ids[:150]], Cn_[ids[150:]] = 1.0, 0.0
+    Cd_, nsp = L.despeckle_colours(Fs_, Cn_)
+    assert nsp and np.abs(Cd_ - Cs_).mean() < 0.01 and np.abs(Cd_ - Cs_).max() < 0.3, ("speckles left", nsp)
     Cv_ = L.enhance_colours(np.tile(np.linspace(0.3, 0.6, 100)[:, None], (1, 3)) * [1.0, 0.9, 0.8])
     assert Cv_.min() < 0.05 and Cv_.max() > 0.95 and Cv_[:, 0].mean() > Cv_[:, 2].mean(), "colours not made vivid"
     assert rs["floor"] + rs["walls"] + rs["ceiling"] < 60000 and rs["objects"] == r["objects"], \

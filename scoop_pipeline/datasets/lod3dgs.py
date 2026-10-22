@@ -2006,6 +2006,29 @@ def walk_start(V, T=None, at=None, eye=1.6, ahead=2.0):
     return e, e + np.r_[d / np.linalg.norm(d), 0.0]
 
 
+def despeckle_colours(F, C, thresh=0.12, passes=2):
+    """The mesh's colours (n x 3) with the speckle gone: a vertex much
+    brighter or darker (thresh, in luminance) than the mean of its
+    neighbours over the faces F (a glint, a shadow dot the camera's
+    colouring left) takes that mean; `passes` times. (colours, vertices
+    changed in the last pass)."""
+    C = np.asarray(C, float).copy()
+    n = len(C)
+    w = np.array([0.299, 0.587, 0.114])
+    changed = 0
+    for _ in range(passes):
+        acc, deg = np.zeros((n, 3)), np.zeros(n)
+        for a, b in ((0, 1), (1, 0), (1, 2), (2, 1), (0, 2), (2, 0)):
+            deg += np.bincount(F[:, a], minlength=n)
+            for ch in range(3):
+                acc[:, ch] += np.bincount(F[:, a], weights=C[F[:, b], ch], minlength=n)
+        mean = acc / np.maximum(deg, 1)[:, None]
+        out = (np.abs(C @ w - mean @ w) > thresh) & (deg > 0)
+        C[out] = mean[out]
+        changed = int(out.sum())
+    return C, changed
+
+
 def enhance_colours(C, low=0.5, high=99.5, sat=1.3, gamma=0.9):
     """The mesh's colours (n x 3, 0-1: the camera's, flat and greyish) made
     vivid: stretched so the low-th and high-th percentiles (the lowest
@@ -2175,7 +2198,9 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
         m.remove_duplicated_vertices()
         m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
     if vivid and m.has_vertex_colors():
-        m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(np.asarray(m.vertex_colors), sat=sat))
+        Cd, nsp = despeckle_colours(np.asarray(m.triangles), np.asarray(m.vertex_colors))
+        log.info(f"colours: {nsp} speckles smoothed over, then made vivid")
+        m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(Cd, sat=sat))
     P, z0, free, lo_ = loop_path(m, inset, eye=eye)
     if path is not None and len(path):
         P = np.asarray(path, float)[:, :2]
@@ -2301,7 +2326,9 @@ def walk(mesh_path, traj=None, at=None, faces=0, eye=1.6, fov=70.0, shot=None, v
         m.remove_duplicated_vertices()
         m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
     if vivid and m.has_vertex_colors():
-        m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(np.asarray(m.vertex_colors), sat=sat))
+        Cd, nsp = despeckle_colours(np.asarray(m.triangles), np.asarray(m.vertex_colors))
+        log.info(f"colours: {nsp} speckles smoothed over, then made vivid")
+        m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(Cd, sat=sat))
     V = np.asarray(m.vertices)
     e, c = walk_start(V, read_tum_positions(traj, stride=1) if traj else None, at, eye)
     blocks, centres, unlit = mesh_blocks(m, cell, one_side)
