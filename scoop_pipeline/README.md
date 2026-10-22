@@ -1084,7 +1084,10 @@ apart (a chair or desk pushed to a wall reaches out 0.4 m and more);
 floor bumps (no higher than 0.12 m) are floor and scraps under 0.05 m2 the
 part next to them. The floor is then flattened onto its own level (the
 median of its flat faces per 1 m, blended between cells; a vertex moved 0.4 m at most, a floor at another level is not a bump): the bumps under
-furniture go (`--keep-floor` keeps them). The floor's holes (where its reflection was cut away, or furniture hid it;
+furniture go (`--keep-floor` keeps them). Every hole up to 0.8 m across is closed (its rim triangulated: the glass
+panes the lidar saw through, which become `glass`, and the gaps the meshing
+left, which take the part round them; a doorway is larger and stays open).
+The floor's holes (where its reflection was cut away, or furniture hid it;
 closed all round by floor, or walls and furniture standing on it, up to
 100 m2) are filled with flat patches at its
 level. The ceiling is flattened onto its

@@ -1633,6 +1633,38 @@ def flatten_walls(M, part, planes, snap=0.06, margin=0.1):
     return int(on.sum()), float(best[on].max()) if on.any() else 0.0, int(len(off))
 
 
+def close_holes(M, part, obj, radius=0.8, pane=0.2):
+    """The mesh's holes up to `radius` m across closed (Open3D's fill_holes:
+    their rims triangulated; a doorway is larger, left open): the glass
+    panes the lidar saw through, the gaps the meshing left. The new faces
+    are added to M and take the part (and object) of the nearest labelled
+    face; a hole of pane m2 or more in a wall is glass. (part, obj) grown,
+    and the number of faces added."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    o3d = _o3d()
+    F0 = np.asarray(M.triangles)
+    tm = o3d.t.geometry.TriangleMesh(o3d.core.Tensor(np.asarray(M.vertices)), o3d.core.Tensor(F0))
+    F1 = tm.fill_holes(hole_size=radius).triangle.indices.numpy()
+    if len(F1) <= len(F0) or not np.array_equal(F1[:len(F0)], F0):
+        return part, obj, 0
+    Fn = F1[len(F0):]
+    V = np.asarray(M.vertices)
+    lab = np.flatnonzero((part != "gone") & (part != ""))
+    _, i = cKDTree(V[F0[lab]].mean(1)).query(V[Fn].mean(1), workers=-1)
+    pn, on = part[lab[i]].copy(), obj[lab[i]].copy()
+    # each hole's faces (joined), its area: a pane of glass in a wall
+    e = np.r_[Fn[:, 0], Fn[:, 1]], np.r_[Fn[:, 1], Fn[:, 2]]
+    _, vc = connected_components(coo_matrix((np.ones(len(e[0])), e), shape=(len(V), len(V))), directed=False)
+    _, hole = np.unique(vc[Fn[:, 0]], return_inverse=True)
+    hole = hole.ravel()
+    An = 0.5 * np.linalg.norm(np.cross(V[Fn[:, 1]] - V[Fn[:, 0]], V[Fn[:, 2]] - V[Fn[:, 0]]), axis=1)
+    big = np.bincount(hole, An)[hole] >= pane
+    pn[(pn == "walls") & big] = "glass"
+    M.triangles = o3d.utility.Vector3iVector(F1)
+    return np.r_[part, pn], np.r_[obj, on], len(Fn)
+
+
 def fill_floor_part(M, part, cell=0.2, max_hole=100.0):
     """The floor's holes (where the polished floor's reflection was cut away,
     or furniture hid it): the cells (cell m, in plan) with no floor face
@@ -1854,6 +1886,14 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
             _, i = tree.query(Vf[Ff[a0:a0 + 2000000]].mean(1), workers=-1)
             fpart[a0:a0 + 2000000], fobj[a0:a0 + 2000000] = part[i], obj[i]
         del tree
+    # the holes up to 0.8 m across closed: the glass panes the lidar saw through (glass),
+    # the gaps the meshing left (the part round them); doorways, larger, stay open
+    n_fill = 0
+    if fill:
+        fpart, fobj, nh = close_holes(M, fpart, fobj)
+        n_fill += nh
+        report.append(f"  holes up to 0.8 m across closed: {nh} faces added "
+                      f"({int((fpart[len(fpart) - nh:] == 'glass').sum()) if nh else 0} of them glass panes)")
     # simplified apart: floor, walls and ceiling together to `faces` (their seams
     # stay shut), the objects on their own to `object_faces`, finer
     if (faces and (fpart != "objects").sum() > faces) or (object_faces and (fpart == "objects").sum() > object_faces):
@@ -1894,8 +1934,6 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
         nmv, dmax, nsm = flatten_walls(M, fpart, planes)
         report.append(f"  walls smoothed onto their planes: {nmv} vertices moved, {100 * dmax:.1f} cm at most; "
                       f"off them (pillars, stairs, frames) {nsm} vertices smoothed")
-    n_fill = 0
-
     def add(Vn, Fn, Cn, name):
         nonlocal fpart, fobj, n_fill
         nv0 = len(M.vertices)
@@ -2025,7 +2063,8 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
               open(os.path.join(sdir, "parts.json"), "w"), indent=1)
     report += [f"every face accounted: {len(Ff)} = " + " + ".join(f"{used[n]} {n}" for n in used)
                + f" + {n_out} left out" + (f" ({op})" if op else "")
-               + (f"  [{n_fill} faces added: the floor where it was missing, the walls behind furniture]" if n_fill else "")
+               + (f"  [{n_fill} faces added: holes closed, the floor where it was missing, the walls behind "
+                  "furniture]" if n_fill else "")
                + (f"  [the mesh's {n0} faces simplified to {len(Ff) - n_fill} first]"
                   if len(Ff) - n_fill != n0 else "")]
     report += [f"sionna scene {sx} (loads meshes/ beside it; keep the folder whole; parts.json: the counts):"]
