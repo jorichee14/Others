@@ -483,7 +483,8 @@ def check_sionna(tmp):
     chairs and the 4 m of desks (the lamp's flat underside, over 2 m up, with the
     ceiling); the floor flattened (within 1 cm, bumps under furniture
     gone); the wall hidden behind a cupboard (not in the map) filled on its
-    plane; the parts in the mesh's colours; every face in one part; with
+    plane; a hole in the floor filled; no patch over a door set back from
+    its wall; the parts in the mesh's colours; every face in one part; with
     --faces the floor, walls and ceiling simplified, the objects kept finer
     (and, colours False, written without colours);
     a flat wall drawn in a few large faces still a wall; chairs pushed to a
@@ -497,7 +498,8 @@ def check_sionna(tmp):
     walls smooth (on their planes)
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
-    over the floor at the first pose, facing along the path."""
+    over the floor at the first pose, facing along the path; a loop round
+    the hall for fly, 1 m from its walls."""
     import open3d as o3d
     rng = np.random.default_rng(0)
     g = lambda a, b: np.arange(a, b, 0.02)                     # noqa: E731
@@ -574,7 +576,9 @@ def check_sionna(tmp):
                         sheet(1, 0.0, (7, 12), (0, 3)), back, cupboard, over_glass, wall_cab, mirrored, door, arch, ledge, trough, door_bit, shelf, board_desk,
                         pillar, table, cabinet, lamp, desk, room_of_desks, stub, chairs, stairs, knee, rack])
     P = P + rng.normal(0, 0.005, P.shape)
-    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
+    P = P[~((np.abs(P[:, 2]) < 0.02) & (P[:, 0] > 3.0) & (P[:, 0] < 4.0) & (P[:, 1] > 3.0) & (P[:, 1] < 3.8))]
+    P = P[~((np.abs(P[:, 0]) < 0.02) & (P[:, 1] > 1.95) & (P[:, 1] < 2.95) & (P[:, 2] < 2.05))]   # the doorway
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))      # a hole in the floor (3-4, 3-3.8)
     pc.colors = o3d.utility.Vector3dVector(np.full(P.shape, 0.5))
     mp = os.path.join(tmp, "view_radio.ply")
     o3d.io.write_point_cloud(mp, pc)
@@ -620,7 +624,7 @@ def check_sionna(tmp):
                            ("a flat top, walls both sides", "walls", (5.5, 6.5, 3.9, 4.3, 1.1, 1.3)),
                            ("a ledge floating off a wall", "walls", (4.7, 5.7, 5.6, 5.9, 1.35, 1.6)),
                            ("a cupboard against a wall", "objects", (7.6, 8.7, 5.4, 5.5, 0.3, 1.0)),
-                           ("the wall behind it (not in the map: filled)", "walls", (7.7, 8.6, 5.99, 6.05, 0.3, 1.0))):
+                           ("the wall behind it (not in the map: filled)", "walls", (7.7, 8.6, 5.9, 6.05, 0.3, 1.0))):
         assert inside(parts[part], *b_) > 0, (name, "not with", part)
         for other in parts:
             if other != part:
@@ -634,6 +638,9 @@ def check_sionna(tmp):
     Qf = o3d.io.read_triangle_mesh(os.path.join(os.path.dirname(r["scene"]), "meshes", "floor.ply"))
     zf = np.asarray(Qf.vertices)[:, 2]
     assert np.abs(zf - np.median(zf)).max() < 0.01, ("the floor not flat", np.abs(zf - np.median(zf)).max())
+    assert inside(parts["floor"], 3.2, 3.8, 3.1, 3.7, -0.05, 0.05) >= 4, "the floor's hole not filled"
+    assert inside(parts["walls"], -0.02, 0.1, 2.1, 2.8, 0.3, 1.8) <= 0.05 * inside(parts["walls"], 0.15, 0.35, 2.1, 2.8, 0.3, 1.8), \
+        "a patch over the door set back from the wall"
     lamp = (4.6, 5.4, 2.6, 3.4, 4.5, 4.75)
     assert inside(parts["walls"], *lamp) <= 0.02 * max(1, sum(inside(parts[n_], *lamp) for n_ in parts)), \
         ("the lamp (ceiling, or left out as hanging): nothing of it wall", {n: inside(parts[n], *lamp) for n in parts})
@@ -648,6 +655,10 @@ def check_sionna(tmp):
     T = np.c_[x, np.full(len(x), 3.0), np.full(len(x), 0.8)]
     e, c = L.walk_start(Vv, T)
     assert np.allclose(e, [1.0, 3.0, 1.6], atol=0.05) and c[0] > e[0], ("walk start", e, c)
+    Pl, z0 = L.loop_path(one, inset=1.0)                 # a loop round the hall, 1 m from its walls
+    dl = np.linalg.norm(np.diff(np.vstack([Pl, Pl[:1]]), axis=0), axis=1).sum()
+    assert abs(z0) < 0.1 and dl > 20 and Pl[:, 0].min() > 0.9 and Pl[:, 1].min() > 0.9 and Pl[:, 1].max() < 5.1, \
+        ("the loop", z0, dl, Pl.min(0), Pl.max(0))
     # the walls smooth: the wall y = 0 on its plane
     Vw = np.asarray(Qw.vertices)
     on_y0 = Vw[(np.abs(Vw[:, 1]) < 0.06) & (Vw[:, 0] > 0.5) & (Vw[:, 0] < 4.5) & (Vw[:, 2] > 0.5) & (Vw[:, 2] < 4.5)]

@@ -1388,6 +1388,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 kind[new] = "walls"
                 stair |= new
         # low walls between pillars: long, thin across, both ends at a wall
+        touched = np.zeros(nc, bool)                          # pieces touching a wall, for the high cut
         wf = np.flatnonzero(part == "walls")
         if len(wf):
             wtree = cKDTree(C[wf])
@@ -1438,6 +1439,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 cs = comp[sel_f]
                 touch, out, by = np.zeros(nc, bool), np.zeros(nc, bool), np.zeros(nc, bool)
                 touch[np.unique(cs[d_ <= attach])] = True
+                touched |= touch
                 by[np.unique(cs[d_ <= panel_near])] = True
                 led, far_ = np.zeros(nc, bool), np.zeros(nc, bool)
                 far_[np.unique(cs[~(d_ <= hug)])] = True
@@ -1506,10 +1508,11 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
         # on a wall's plane, whatever it is joined to (a wall's faces fused with the
         # furniture against it, a door set in its frame): within split_on of it, wall
         part[rest[(part[rest] == "objects") & (dpl <= split_on)]] = "walls"
-        # what is joined to furniture but up high by a wall (over high_cut m, within
-        # high_near m of a wall face): wall; the furniture under it stays objects
+        # what is joined to furniture against a wall but up high by it (a piece touching a
+        # wall: its faces over high_cut m within high_near m of a wall face): wall; the
+        # furniture under it stays objects (a lamp hanging near a pillar touches nothing)
         wl_ = np.flatnonzero(part == "walls")                  # the walls before the high cut
-        hi_ = rest[(part[rest] == "objects") & (dz[rest] >= high_cut)]
+        hi_ = rest[(part[rest] == "objects") & (dz[rest] >= high_cut) & touched[comp]]
         if len(wl_) and len(hi_):
             d_, _ = cKDTree(C[wl_]).query(C[hi_], workers=-1, distance_upper_bound=high_near)
             part[hi_[np.isfinite(d_)]] = "walls"
@@ -1621,12 +1624,50 @@ def flatten_walls(M, part, planes, snap=0.06, margin=0.1):
     return int(on.sum()), float(best[on].max()) if on.any() else 0.0
 
 
+def fill_floor_part(M, part, cell=0.2, max_hole=100.0):
+    """The floor's holes (where the polished floor's reflection was cut away,
+    or furniture hid it): the cells (cell m, in plan) with no floor face
+    that the floor closes all round, up to max_hole m2 (a courtyard is
+    larger), filled with flat patches at the floor's level there (the
+    nearest floor faces'), in the floor's colour. (vertices, faces,
+    colours) of the patches, to add."""
+    from scipy import ndimage
+    V, F = np.asarray(M.vertices), np.asarray(M.triangles)
+    fl = np.flatnonzero(part == "floor")
+    if not len(fl):
+        return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3))
+    C = V[F[fl]].mean(1)
+    lo = C[:, :2].min(0) - cell
+    ij = np.floor((C[:, :2] - lo) / cell).astype(np.int64)
+    nx, ny = ij.max(0) + 2
+    have = np.zeros((nx, ny), bool)
+    have[ij[:, 0], ij[:, 1]] = True
+    holes = ndimage.binary_fill_holes(have) & ~have
+    lab, nl = ndimage.label(holes)
+    if not nl:
+        return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3))
+    small = np.bincount(lab.ravel(), minlength=nl + 1) * cell * cell <= max_hole
+    small[0] = False
+    iu, iz = np.nonzero(small[lab])
+    if not len(iu):
+        return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3))
+    corners = np.array([(0, 0), (1, 0), (1, 1), (0, 1)], float)
+    P = (lo + (np.c_[iu, iz][:, None, :] + corners) * cell).reshape(-1, 2)
+    _, jn = cKDTree(C[:, :2]).query(P, workers=-1)
+    P = np.c_[P, C[jn, 2]]
+    q = 4 * np.arange(len(iu))[:, None]
+    Fs = np.vstack([q + np.array([0, 1, 2]), q + np.array([0, 2, 3])])
+    col = np.asarray(M.vertex_colors) if M.has_vertex_colors() else None
+    Cs = col[F[fl[jn], 0]] if col is not None else np.full((len(P), 3), 0.6)
+    return P, Fs, Cs
+
+
 def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0):
     """The wall hidden behind furniture, which the mesh does not have: on
     each wall plane, the cells (cell m) from the floor to its top where no
-    wall face is (within on m of it) but something stands against it
-    (within depth m, either side: furniture pushed to the wall, or a panel
-    attached to it, off its plane), filled
+    wall face is (within depth m of it: on it, or set back like a door or a
+    panel) but something stands against it (within depth m, either side:
+    furniture pushed to the wall), filled
     with a flat patch on the plane, in the wall's own colour. Doors,
     windows and openings, larger and nothing against them: left open; and
     the wall's own holes, closed all round by it (the floor closing them
@@ -1656,12 +1697,9 @@ def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0):
             g[iu[ok], iz[ok]] = True
             return g
         wi = wl[np.asarray(wtree.query_ball_point(mid, rad), np.int64)]
-        wi = wi[np.abs((C[wi] - mu) @ n) < on]
-        oi = ob[np.asarray(otree.query_ball_point(mid, rad), np.int64)]
+        wi = wi[np.abs((C[wi] - mu) @ n) < depth]      # on the plane, or set back from it (a door, a panel):
+        oi = ob[np.asarray(otree.query_ball_point(mid, rad), np.int64)]            # the wall is there
         oi = oi[np.abs((C[oi] - mu) @ n) < depth]
-        wf_ = wl[np.asarray(wtree.query_ball_point(mid, rad), np.int64)]          # attached, off the plane:
-        dw_ = np.abs((C[wf_] - mu) @ n)                                             # a panel in front of it
-        oi = np.r_[oi, wf_[(dw_ >= on) & (dw_ < depth)]]
         from scipy import ndimage
         have = ndimage.binary_dilation(cells(wi), np.ones((3, 3), bool)) if len(wi) else np.zeros((nu, nz), bool)
         front = ndimage.binary_dilation(cells(oi), np.ones((3, 3), bool)) if len(oi) else np.zeros((nu, nz), bool)
@@ -1682,8 +1720,12 @@ def fill_walls(M, part, planes, cell=0.1, on=0.03, depth=0.4, max_hole=1.0):
         q = nv + 4 * np.arange(len(iu))[:, None]
         Fs.append(np.vstack([q + np.array([0, 1, 2]), q + np.array([0, 2, 3])]))
         Vs.append(P)
-        cw = np.median(col[F[wi].ravel()], 0) if (col is not None and len(wi)) else np.full(3, 0.6)
-        Cs.append(np.tile(cw, (len(P), 1)))
+        if col is not None and len(wi):              # each corner the nearest wall vertex's colour: the
+            vw = np.unique(F[wi].ravel())              # wall's own mottling carried on, not a flat block
+            _, jn = cKDTree(V[vw]).query(P, workers=-1)
+            Cs.append(col[vw[jn]])
+        else:
+            Cs.append(np.full((len(P), 3), 0.6))
         nv += len(P)
     if not Vs:
         return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3))
@@ -1806,20 +1848,29 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
         nmv, dmax = flatten_walls(M, fpart, planes)
         report.append(f"  walls smoothed onto their planes: {nmv} vertices moved, {100 * dmax:.1f} cm at most")
     n_fill = 0
+
+    def add(Vn, Fn, Cn, name):
+        nonlocal fpart, fobj, n_fill
+        nv0 = len(M.vertices)
+        col0 = np.asarray(M.vertex_colors).copy() if M.has_vertex_colors() else None   # before the count changes
+        M.vertices = o3d.utility.Vector3dVector(np.vstack([np.asarray(M.vertices), Vn]))
+        if col0 is not None:
+            M.vertex_colors = o3d.utility.Vector3dVector(np.vstack([col0, Cn]))
+        M.triangles = o3d.utility.Vector3iVector(np.vstack([np.asarray(M.triangles), Fn + nv0]))
+        fpart = np.r_[fpart, np.full(len(Fn), name, dtype=object)]
+        fobj = np.r_[fobj, np.full(len(Fn), -1)]
+        n_fill += len(Fn)
     if fill:
+        Vn, Fn, Cn = fill_floor_part(M, fpart)
+        if len(Fn):
+            add(Vn, Fn, Cn, "floor")
+            report.append(f"  floor filled where it was missing (its reflection cut away, furniture over it): "
+                          f"{len(Fn) // 2 * 0.04:.1f} m2, {len(Fn)} faces added")
         Vn, Fn, Cn = fill_walls(M, fpart, planes)
         if len(Fn):
-            nv0 = len(M.vertices)
-            col0 = np.asarray(M.vertex_colors).copy() if M.has_vertex_colors() else None   # before the count changes
-            M.vertices = o3d.utility.Vector3dVector(np.vstack([np.asarray(M.vertices), Vn]))
-            if col0 is not None:
-                M.vertex_colors = o3d.utility.Vector3dVector(np.vstack([col0, Cn]))
-            M.triangles = o3d.utility.Vector3iVector(np.vstack([np.asarray(M.triangles), Fn + nv0]))
-            fpart = np.r_[fpart, np.full(len(Fn), "walls", dtype=object)]
-            fobj = np.r_[fobj, np.full(len(Fn), -1)]
-            n_fill = len(Fn)
+            add(Vn, Fn, Cn, "walls")
             report.append(f"  walls filled behind furniture (the mesh has none there; doors and windows, "
-                          f"nothing in front, left open): {n_fill // 2 * 0.01:.1f} m2, {n_fill} faces added")
+                          f"nothing in front, left open): {len(Fn) // 2 * 0.01:.1f} m2, {len(Fn)} faces added")
     Vf, Ff = np.asarray(M.vertices), np.asarray(M.triangles)
     Af = 0.5 * np.linalg.norm(np.cross(Vf[Ff[:, 1]] - Vf[Ff[:, 0]], Vf[Ff[:, 2]] - Vf[Ff[:, 0]]), axis=1)
     for p_ in ("floor", "walls", "ceiling", "objects"):
@@ -1917,11 +1968,11 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
                "parts": {n: {"faces": used[n], "m2": round(float(Af[fpart == n].sum()), 2),
                              "itu": mats[n][0], "thickness_m": float(mats[n][1])} for n in used},
                "left_out": {"faces": n_out, "m2": round(float(Af[fpart == "gone"].sum()), 2), "file": op},
-               "walls_filled": {"faces": n_fill, "m2": round(float(Af[len(Af) - n_fill:].sum()), 2) if n_fill else 0.0}},
+               "filled": {"faces": n_fill, "m2": round(float(Af[len(Af) - n_fill:].sum()), 2) if n_fill else 0.0}},
               open(os.path.join(sdir, "parts.json"), "w"), indent=1)
     report += [f"every face accounted: {len(Ff)} = " + " + ".join(f"{used[n]} {n}" for n in used)
                + f" + {n_out} left out" + (f" ({op})" if op else "")
-               + (f"  [{n_fill} of the walls' faces added, filling them behind furniture]" if n_fill else "")
+               + (f"  [{n_fill} faces added: the floor where it was missing, the walls behind furniture]" if n_fill else "")
                + (f"  [the mesh's {n0} faces simplified to {len(Ff) - n_fill} first]"
                   if len(Ff) - n_fill != n0 else "")]
     report += [f"sionna scene {sx} (loads meshes/ beside it; keep the folder whole; parts.json: the counts):"]
@@ -1972,6 +2023,157 @@ def enhance_colours(C, low=0.5, high=99.5, sat=1.3, gamma=0.9):
     return np.clip(np.clip(C, 0, 1) ** gamma, 0, 1)
 
 
+def mesh_blocks(m, cell=4.0, one_side=False):
+    """The mesh in blocks of `cell` m in plan (each face with its first
+    vertex's block), its faces doubled so a wall is seen from both sides
+    (one_side: as stored): (the blocks' meshes, their centres in plan,
+    unlit: they carry the mesh's colours). A renderer then draws only the
+    blocks near the eye and in view."""
+    o3d = _o3d()
+    F, V = np.asarray(m.triangles), np.asarray(m.vertices)
+    Cc = np.asarray(m.vertex_colors) if m.has_vertex_colors() else None
+    if not one_side:
+        F = np.vstack([F, F[:, ::-1]])
+    lo = V[:, :2].min(0)
+    ij = np.floor((V[F[:, 0], :2] - lo) / cell).astype(np.int64)
+    ny = ij[:, 1].max() + 1
+    key = ij[:, 0] * ny + ij[:, 1]
+    order = np.argsort(key, kind="stable")
+    ks, starts = np.unique(key[order], return_index=True)
+    ends = np.r_[starts[1:], len(order)]
+    blocks, centres = [], []
+    for k, a_, b_ in zip(ks, starts, ends):
+        vu, inv = np.unique(F[order[a_:b_]], return_inverse=True)
+        q = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V[vu]), o3d.utility.Vector3iVector(inv.reshape(-1, 3)))
+        if Cc is not None:
+            q.vertex_colors = o3d.utility.Vector3dVector(Cc[vu])
+        else:
+            q.compute_vertex_normals()
+        blocks.append(q)
+        centres.append(lo + (np.array([k // ny, k % ny]) + 0.5) * cell)
+    return blocks, np.array(centres), Cc is not None
+
+
+def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0):
+    """A closed path once round the area, in plan (n x 2, about cell m
+    apart): the floor (the faces facing up at the floor's level, the
+    lowest band holding most of them) as a grid of cell m, its small gaps
+    closed, the furniture's footprints filled, shrunk inset m from the
+    walls and the furniture, the largest piece's outline, smoothed over
+    `smooth` m."""
+    from scipy import ndimage
+    V, F = np.asarray(m.vertices), np.asarray(m.triangles)
+    C = V[F].mean(1)
+    N = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]])
+    A = np.linalg.norm(N, axis=1) / 2
+    up = np.abs(N[:, 2]) > 0.9 * np.maximum(2 * A, 1e-12)
+    zs = C[up, 2]
+    hist, edges = np.histogram(zs, bins=np.arange(zs.min(), zs.min() + 1.5, 0.05), weights=A[up])
+    z0 = edges[np.argmax(hist)] + 0.025
+    fl = up & (np.abs(C[:, 2] - z0) < floor_tol)
+    o3d = _o3d()
+    q = o3d.geometry.TriangleMesh(m.vertices, o3d.utility.Vector3iVector(F[fl]))   # the floor's faces, sampled
+    Pf = np.asarray(q.sample_points_uniformly(max(1000, int(8 * A[fl].sum() / cell ** 2))).points)   # (large ones
+    Pf = np.vstack([Pf, C[fl]])                                                                       # too)
+    lo = Pf[:, :2].min(0) - 2 * cell
+    ij = np.floor((Pf[:, :2] - lo) / cell).astype(np.int64)
+    nx, ny = ij.max(0) + 3
+    g = np.zeros((nx, ny), bool)
+    g[ij[:, 0], ij[:, 1]] = True
+    g = ndimage.binary_closing(g, np.ones((3, 3), bool))
+    g = ndimage.binary_fill_holes(g)
+    r = max(1, int(round(inset / cell)))
+    yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
+    g = ndimage.binary_erosion(g, (xx ** 2 + yy ** 2) <= r * r)
+    lab, nl = ndimage.label(g)
+    if not nl:
+        raise ConvertError(f"no floor left {inset} m from the walls: a smaller --inset")
+    big = np.argmax(np.bincount(lab.ravel())[1:]) + 1
+    cs, _ = cv2.findContours((lab == big).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    pts = max(cs, key=len).reshape(-1, 2)[:, ::-1].astype(float)     # (row, col) = (i, j)
+    P = lo + (pts + 0.5) * cell
+    k = max(1, int(round(smooth / cell)))
+    Pp = np.vstack([P[-k:], P, P[:k]])
+    ker = np.ones(2 * k + 1) / (2 * k + 1)
+    P = np.c_[np.convolve(Pp[:, 0], ker, "valid"), np.convolve(Pp[:, 1], ker, "valid")]
+    return P, z0
+
+
+def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps=30, size=(1280, 720), fov=70.0,
+              ahead=2.0, near=15.0, cell=4.0, faces=0, vivid=True, sat=1.3, one_side=False, seconds=0):
+    """A video (out, .mp4; default <mesh>_fly.mp4) flying once round the
+    area inside the mesh at eye m over the floor, speed m/s, looking ahead
+    m along the way: the path loop_path's (inset m from the walls), or
+    `path`, a list of (x, y) waypoints joined in a loop. Rendered off
+    screen (the GPU), the mesh as in walk: its colours made vivid, in
+    blocks with those within near m drawn. seconds > 0: that long at most.
+    The path (n x 2) and the frames written."""
+    o3d = _o3d()
+    from open3d.visualization import rendering
+    mesh_path = os.path.expanduser(mesh_path)
+    out = os.path.expanduser(out) if out else os.path.splitext(mesh_path)[0] + "_fly.mp4"
+    m = o3d.io.read_triangle_mesh(mesh_path)
+    if not len(m.triangles):
+        raise ConvertError(f"{mesh_path}: no faces (give it a mesh, not a view)")
+    if faces and len(m.triangles) > faces:
+        log.info(f"simplifying {len(m.triangles)} faces to {faces} ...")
+        m.remove_duplicated_vertices()
+        m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
+    if vivid and m.has_vertex_colors():
+        m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(np.asarray(m.vertex_colors), sat=sat))
+    if path is not None and len(path):
+        P = np.asarray(path, float)[:, :2]
+        P = np.vstack([P, P[:1]])
+        seg = np.linalg.norm(np.diff(P, axis=0), axis=1)
+        P = np.vstack([np.linspace(P[i], P[i + 1], max(2, int(np.ceil(seg[i] / 0.2))), endpoint=False)
+                       for i in range(len(seg))])
+        _, z0 = loop_path(m, inset)
+    else:
+        P, z0 = loop_path(m, inset)
+    # at speed m/s, fps frames a second: a point every speed / fps m along the loop
+    seg = np.linalg.norm(np.diff(np.vstack([P, P[:1]]), axis=0), axis=1)
+    total = seg.sum()
+    sdist = np.r_[0, np.cumsum(seg)]
+    nfr = int(total / speed * fps)
+    if seconds:
+        nfr = min(nfr, int(seconds * fps))
+    at_ = np.arange(nfr) * speed / fps
+    Pc = np.vstack([P, P[:1]])
+    E = np.c_[np.interp(at_, sdist, Pc[:, 0]), np.interp(at_, sdist, Pc[:, 1])]
+    la = (at_ + ahead) % total
+    Lk = np.c_[np.interp(la, sdist, Pc[:, 0]), np.interp(la, sdist, Pc[:, 1])]
+    blocks, centres, unlit = mesh_blocks(m, cell, one_side)
+    log.info(f"fly {mesh_path}: a loop of {total:.0f} m, {nfr} frames at {fps} fps ({nfr / fps:.0f} s), "
+             f"{len(blocks)} blocks of {cell:g} m, those within {near:g} m drawn -> {out}")
+    rd = rendering.OffscreenRenderer(size[0], size[1])
+    mat = rendering.MaterialRecord()
+    mat.shader = "defaultUnlit" if unlit else "defaultLit"
+    for k, q in enumerate(blocks):
+        rd.scene.add_geometry(f"b{k}", q, mat)
+    rd.scene.show_skybox(False)
+    rd.scene.view.set_post_processing(False)
+    rd.scene.set_background(np.array([0.12, 0.12, 0.12, 1.0], np.float32))
+    shown = np.ones(len(blocks), bool)
+    vw = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (size[0], size[1]))
+    if not vw.isOpened():
+        raise ConvertError(f"cannot write {out}")
+    for i in range(nfr):
+        e_ = np.r_[E[i], z0 + eye]
+        want = np.linalg.norm(centres - E[i], axis=1) <= near + cell * 0.71
+        for k in np.flatnonzero(want != shown):
+            rd.scene.show_geometry(f"b{k}", bool(want[k]))
+        shown[:] = want
+        rd.setup_camera(fov, np.r_[Lk[i], z0 + eye].astype(np.float32), e_.astype(np.float32),
+                        np.array([0, 0, 1], np.float32))
+        rd.scene.camera.set_projection(fov, size[0] / size[1], 0.05, near + 2 * cell, rendering.Camera.FovType.Vertical)
+        img = np.asarray(rd.render_to_image())
+        vw.write(cv2.cvtColor(img[:, :, :3], cv2.COLOR_RGB2BGR))
+        if i % (10 * fps) == 0:
+            log.info(f"  {i / fps:.0f} s of {nfr / fps:.0f}")
+    vw.release()
+    return P, nfr
+
+
 def walk(mesh_path, traj=None, at=None, faces=0, eye=1.6, fov=70.0, shot=None, vivid=True, sat=1.3,
          one_side=False, step=0.1, turn=4.0, near=15.0, cell=4.0):
     """Walk inside a mesh (with its ceiling) in a window, started eye m over
@@ -1997,33 +2199,10 @@ def walk(mesh_path, traj=None, at=None, faces=0, eye=1.6, fov=70.0, shot=None, v
         m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
     if vivid and m.has_vertex_colors():
         m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(np.asarray(m.vertex_colors), sat=sat))
-    F = np.asarray(m.triangles)
     V = np.asarray(m.vertices)
-    Cc = np.asarray(m.vertex_colors) if m.has_vertex_colors() else None
-    unlit = Cc is not None
-    if not one_side:
-        F = np.vstack([F, F[:, ::-1]])                                     # both sides
     e, c = walk_start(V, read_tum_positions(traj, stride=1) if traj else None, at, eye)
-    # the mesh in blocks of `cell` m in plan: only those near the eye are drawn
-    lo = V[:, :2].min(0)
-    ij = np.floor((V[F[:, 0], :2] - lo) / cell).astype(np.int64)
-    key = ij[:, 0] * (ij[:, 1].max() + 1) + ij[:, 1]
-    order = np.argsort(key, kind="stable")
-    ks, starts = np.unique(key[order], return_index=True)
-    ends = np.r_[starts[1:], len(order)]
-    blocks, centres = [], []
-    for k, a_, b_ in zip(ks, starts, ends):
-        fi = F[order[a_:b_]]
-        vu, inv = np.unique(fi, return_inverse=True)
-        q = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V[vu]), o3d.utility.Vector3iVector(inv.reshape(-1, 3)))
-        if unlit:
-            q.vertex_colors = o3d.utility.Vector3dVector(Cc[vu])
-        else:
-            q.compute_vertex_normals()
-        blocks.append(q)
-        centres.append(lo + (np.array([k // (ij[:, 1].max() + 1), k % (ij[:, 1].max() + 1)]) + 0.5) * cell)
-    centres = np.array(centres)
-    log.info(f"walk {mesh_path}: {len(F) // (1 if one_side else 2)} faces in {len(blocks)} blocks of {cell:g} m, "
+    blocks, centres, unlit = mesh_blocks(m, cell, one_side)
+    log.info(f"walk {mesh_path}: {len(m.triangles)} faces in {len(blocks)} blocks of {cell:g} m, "
              f"those within {near:g} m drawn; from ({e[0]:.1f}, {e[1]:.1f}), eye {eye} m over the floor\n"
              f"  turn: the arrow keys (left/right turn, up/down tilt, {turn:g} deg each), or drag with the mouse\n"
              f"  move: W forward, S back, A left, D right, Q up, Z down ({step:g} m each; hold a key to keep "
@@ -2366,6 +2545,22 @@ def main():
                     help="floor, ceiling, walls or objects as an ITU material (concrete, brick, plasterboard, "
                          "wood, glass, ceiling_board, marble, floorboard, metal, ...), thickness m; "
                          "default concrete:0.2, objects wood:0.05; repeat for each part")
+    fv = sub.add_parser("fly", help="a video flying once round the area inside a mesh")
+    fv.add_argument("file", help="a mesh, e.g. mesh_view_<tag>_anchored.ply or its _sionna.ply")
+    fv.add_argument("out", nargs="?", default=None, help="the video (.mp4; default <file>_fly.mp4)")
+    fv.add_argument("--path", default=None, metavar="X,Y;X,Y;...",
+                    help="waypoints (m) joined in a loop (default: once round the area, --inset from the walls)")
+    fv.add_argument("--inset", type=float, default=1.5, help="the loop this far from the walls and furniture (m)")
+    fv.add_argument("--speed", type=float, default=1.0, help="m/s")
+    fv.add_argument("--fps", type=int, default=30)
+    fv.add_argument("--size", default="1280x720", help="WxH")
+    fv.add_argument("--seconds", type=float, default=0, help="at most this long (0: the whole loop)")
+    fv.add_argument("--ahead", type=float, default=2.0, help="look this far ahead along the way (m)")
+    fv.add_argument("--eye", type=float, default=1.6, help="eye height over the floor (m)")
+    fv.add_argument("--near", type=float, default=15.0, help="draw the mesh within this many metres of the eye")
+    fv.add_argument("--faces", type=int, default=0, help="simplify to this many faces first (0: all of it)")
+    fv.add_argument("--plain", action="store_true", help="the colours as stored")
+    fv.add_argument("--one-side", action="store_true", help="the faces one-sided as stored")
     wk = sub.add_parser("walk", help="walk inside a mesh (with its ceiling) in a window")
     wk.add_argument("file", help="a mesh, e.g. mesh_view_<tag>_anchored.ply or its _sionna.ply")
     wk.add_argument("--traj", default=None,
@@ -2397,6 +2592,11 @@ def main():
     try:
         if a.cmd == "anchor":
             anchor_file(a.file, a.frame, a.out)
+        elif a.cmd == "fly":
+            wh = [int(v) for v in a.size.lower().split("x")]
+            fly_video(a.file, a.out, [[float(v) for v in p_.split(",")] for p_ in a.path.split(";")] if a.path else None,
+                      inset=a.inset, eye=a.eye, speed=a.speed, fps=a.fps, size=(wh[0], wh[1]), ahead=a.ahead,
+                      near=a.near, faces=a.faces, vivid=not a.plain, one_side=a.one_side, seconds=a.seconds)
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
                  faces=a.faces, eye=a.eye, shot=a.shot, vivid=not a.plain, sat=a.sat, one_side=a.one_side,

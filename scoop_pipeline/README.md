@@ -1084,12 +1084,14 @@ apart (a chair or desk pushed to a wall reaches out 0.4 m and more);
 floor bumps (no higher than 0.12 m) are floor and scraps under 0.05 m2 the
 part next to them. The floor is then flattened onto its own level (the
 median of its flat faces per 1 m, blended between cells; a vertex moved 0.4 m at most, a floor at another level is not a bump): the bumps under
-furniture go (`--keep-floor` keeps them). The walls are smoothed the same
+furniture go (`--keep-floor` keeps them). The floor's holes (where its reflection was cut away, or furniture hid it;
+closed all round by floor, up to 100 m2) are filled with flat patches at its
+level. The walls are smoothed the same
 way: their faces within 6 cm of a wall plane put on it (`--keep-walls`
 leaves them as meshed); a ledge or frame standing out farther is kept. And the wall hidden behind
 furniture pushed against it, which the mesh does not have, is filled on its
 plane from the floor (where something stands within 0.4 m of it and no wall
-face is), and so are the wall's own holes, closed all round by it (the
+face is, on the plane or set back from it like a door), and so are the wall's own holes, closed all round by it (the
 floor closing them below) and up to 1 m2: the walls continuous; larger
 openings (doors, windows, nothing against them) stay open. Filled faces are
 counted apart (`--no-fill-walls`). With `--traj` (the mesh's
@@ -1116,6 +1118,16 @@ object's material in `scene.xml`).
 
     python3 scoop_pipeline/datasets/lod3dgs.py sionna mapping/mesh_view_<tag>_anchored.ply \
         --traj odometry/reference_<tag>/traj_mobile_2_lidar.tum
+
+`fly` renders a video flying once round the area inside a mesh (`<file>_fly.mp4`):
+the floor's footprint shrunk `--inset` 1.5 m from the walls and the furniture,
+its outline the path, at `--eye` 1.6 m over the floor, `--speed` 1 m/s,
+looking `--ahead` 2 m along the way; or `--path "X,Y;X,Y;..."`, waypoints
+joined in a loop. Off screen on the GPU, the mesh drawn as in `walk` (colours
+vivid, `--near` 15 m of it); `--fps`, `--size WxH` (1280x720), `--seconds N`
+for the first N seconds only.
+
+    python3 scoop_pipeline/datasets/lod3dgs.py fly mapping/mesh_view_<tag>_anchored_sionna.ply
 
 `walk` opens a window to walk inside a mesh (the one with its ceiling, or
 its `_sionna.ply`): Open3D's fly mode, started 1.6 m (`--eye`) over the floor
