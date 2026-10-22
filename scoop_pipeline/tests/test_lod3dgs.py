@@ -487,7 +487,9 @@ def check_sionna(tmp):
     --faces the floor, walls and ceiling simplified, the objects kept finer;
     a flat wall drawn in a few large faces still a wall; chairs pushed to a
     wall (reaching out 0.4 m) objects, a cabinet on a wall off the floor wall;
-    a wall mirrored under the floor left out, the wall over it wall
+    a wall mirrored under the floor left out, the wall over it wall; a door
+    standing 0.25 m off a wall (a thin sheet) wall; a doorway's frame (jambs
+    and the ledge over them) with no wall round it wall
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
@@ -545,11 +547,15 @@ def check_sionna(tmp):
     over_glass = sheet(1, 2.5, (8.0, 11.0), (1.9, 2.98))     # a wall from the ceiling down to 1.9 m
     wall_cab = box(1.0, 2.0, 0.01, 0.41, 1.5, 2.1)             # a cabinet on the wall y = 0, off the floor
     mirrored = sheet(0, 12.0, (0.2, 2.8), (-1.5, -0.02))       # the wall x = 12 mirrored in the floor
+    door = box(0.23, 0.27, 2.0, 2.9, 0, 2.0)                   # a door 0.25 m off the wall x = 0
+    arch = np.concatenate([box(2.0, 2.1, 2.0, 2.3, 0, 2.1, top=False), box(3.0, 3.1, 2.0, 2.3, 0, 2.1, top=False),
+                           box(2.0, 3.1, 2.0, 2.3, 2.1, 2.4, bottom=True),        # a doorway's frame, its wall
+                           box(2.4, 2.6, 2.05, 2.25, 2.4, 2.6)])                  # not in the map, a box on it
     P = np.concatenate([sheet(2, 0.0, (0, 12), (0, 6)), sheet(2, 5.0, (0, 7), (0, 6)),
                         sheet(2, 3.0, (7, 12), (0, 6)), sheet(0, 0.0, (0, 6), (0, 5)),
                         sheet(0, 7.0, (0, 6), (3, 5)), sheet(0, 12.0, (0, 6), (0, 3)),
                         sheet(1, 0.0, (0, 7), (0, 5)), sheet(1, 6.0, (0, 7), (0, 5)),
-                        sheet(1, 0.0, (7, 12), (0, 3)), back, cupboard, over_glass, wall_cab, mirrored,
+                        sheet(1, 0.0, (7, 12), (0, 3)), back, cupboard, over_glass, wall_cab, mirrored, door, arch,
                         pillar, table, cabinet, lamp, desk, room_of_desks, stub, chairs, stairs, knee, rack])
     P = P + rng.normal(0, 0.005, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
@@ -589,6 +595,8 @@ def check_sionna(tmp):
                            ("a cabinet on a wall, off the floor", "walls", (1.1, 1.9, 0.15, 0.45, 1.55, 2.15)),
                            ("a 1 m wall between pillars", "walls", (5.0, 6.4, 1.9, 2.2, 0.2, 0.9)),
                            ("its top", "walls", (5.0, 6.4, 1.98, 2.12, 0.95, 1.05)),
+                           ("a door 0.25 m off a wall", "walls", (0.15, 0.35, 2.1, 2.8, 0.3, 1.8)),
+                           ("a doorway's frame (wall not in the map)", "walls", (1.95, 3.15, 1.95, 2.35, 0.3, 2.35)),
                            ("a cupboard against a wall", "objects", (7.6, 8.7, 5.4, 5.5, 0.3, 1.0)),
                            ("the wall behind it (not in the map: filled)", "walls", (7.7, 8.6, 5.97, 6.05, 0.3, 1.0))):
         assert inside(parts[part], *b_) > 0, (name, "not with", part)

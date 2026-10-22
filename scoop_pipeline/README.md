@@ -1058,7 +1058,10 @@ and all that is attached to the walls (touching a wall face and nowhere
 more than 0.2 m from them, or 90 % facing sideways, or off the floor, over
 0.3 m, or reaching 2.2 m with 30 % of it above 1.8 m: door and window
 frames, sills, panels, cabinets and signs on a wall, a pillar's curve,
-pieces of wall, a wall cluttered) is wall too: objects are only what stands out or
+pieces of wall, a wall cluttered) is wall too, and so are a thin upright sheet
+within 0.5 m of a wall (a door set in its frame or ajar, a strip of wall) and a
+doorway's frame whose wall is not in the map (on the floor at both ends,
+nothing under 1.7 m in its middle): objects are only what stands out or
 apart (a chair or desk pushed to a wall reaches out 0.4 m and more);
 floor bumps (no higher than 0.12 m) are floor and scraps under 0.05 m2 the
 part next to them. The floor is then flattened onto its own level (the
@@ -1093,7 +1096,9 @@ object's material in `scene.xml`).
 
 `sionna-fix` picks by hand what of the objects is wall: `objects.ply` of a
 scene opens with each piece in its own colour; shift + left click any point
-of each piece that is wall (shift + right click undoes the last), close the
+of each piece that is wall (shift + right click undoes the last), or press K,
+drag a box round many (ctrl + left clicks draw a polygon) and press C (Escape
+the save dialog it opens): every piece with a point in the box; close the
 window, and those pieces move to `walls.ply` (`parts.json` updated). The
 points are kept in the scene's `fix.json`: `--apply <scene>/fix.json` moves
 the same pieces of a new run, no window.

@@ -1103,7 +1103,8 @@ def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
 def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2, vertical=0.3,
                 on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, ground=0.3, against=0.1,
                 pillar_r=(0.1, 1.0), pillar_fit=0.04, attach=0.1, attach_depth=0.2, attach_upright=0.9,
-                mounted=0.3, below=0.25,
+                mounted=0.3, below=0.25, panel_near=0.5, panel_long=0.5, panel_side=0.8,
+                arch_top=1.9, arch_low=1.7,
                 stair_rise=(0.25, 1.5), stair_side=0.15, knee_w=1.5, knee_thin=0.1, knee_end=0.35,
                 T=None, why=(), planes=None, why_objects=0):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
@@ -1154,8 +1155,14 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
     it above 1.8 m, facing sideways 60 % (a wall cluttered; not furniture
     with a sliver of wall joined), however far: a door's or
     window's frame, a sill, a panel, a cabinet or a sign on a wall, a
-    pillar's curve, a piece of wall, and what is attached to those):
-    objects are only what
+    pillar's curve, a piece of wall, and what is attached to those); and
+    so is a sheet near a wall (thin across, under knee_thin m, panel_long m
+    long or more, facing sideways panel_side, within panel_near m of a
+    wall face: a door, set in its frame or ajar, a strip or sliver of wall);
+    and so is a doorway's frame whose wall is not in the map (its jambs and
+    the ledge over them: on the floor at both ends, reaching arch_top m,
+    nothing under arch_low m in the middle; a table's top is lower, a
+    rack's shelves fill its middle): objects are only what
     stands out or apart (a chair or a desk pushed to a wall reaches out
     0.4 m and more); a piece reaching no higher than band (the floor's
     bumps) is floor and one under min_obj m2 (a scrap at a seam) the part
@@ -1361,6 +1368,17 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 ends = [np.r_[mx[k_] + ax_[k_, 0] * e, my[k_] + ax_[k_, 1] * e, mz[k_]] for e in (p0[k_], p1[k_])]
                 if all(len(wtree.query_ball_point(e_, knee_end)) for e_ in ends):
                     kind[k_] = "walls"
+            # a doorway's frame (jambs and the ledge over them, the wall round it not in the
+            # map): on the floor at both ends, nothing low in the middle
+            dzr = dz[rest]
+            for k_ in np.flatnonzero((kind == "objects") & (c_lo <= 0.3) & (c_hi >= arch_top) & (p1 - p0 >= 0.6)):
+                sel = order[cuts[k_]:cuts[k_ + 1]]
+                u, zz = pr[sel] - p0[k_], dzr[sel]
+                L_ = p1[k_] - p0[k_]
+                mid = (u > 0.3 * L_) & (u < 0.7 * L_)
+                if (mid.any() and zz[mid].min() >= arch_low and (zz[u < 0.2 * L_] <= 0.3).any()
+                        and (zz[u > 0.8 * L_] <= 0.3).any()):
+                    kind[k_] = "walls"
             # attached to the walls (a door's or window's frame, a sill, a panel on a wall,
             # what is left of a pillar): touching a wall face and nowhere farther from the
             # walls than attach_depth is wall; objects are what stands out or apart (a chair
@@ -1372,14 +1390,18 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 sel_f = (kind == "objects")[comp]
                 if not sel_f.any():
                     break
-                d_, _ = cKDTree(C[wall_now]).query(C[rest[sel_f]], workers=-1, distance_upper_bound=attach_depth)
+                d_, _ = cKDTree(C[wall_now]).query(C[rest[sel_f]], workers=-1,
+                                                   distance_upper_bound=max(attach_depth, panel_near))
                 cs = comp[sel_f]
-                touch, out = np.zeros(nc, bool), np.zeros(nc, bool)
+                touch, out, by = np.zeros(nc, bool), np.zeros(nc, bool), np.zeros(nc, bool)
                 touch[np.unique(cs[d_ <= attach])] = True
+                by[np.unique(cs[d_ <= panel_near])] = True
+                d_ = np.where(d_ <= attach_depth, d_, np.inf)
                 out[np.unique(cs[~np.isfinite(d_)])] = True        # some of it farther than attach_depth
                 # a pillar's curve, a wall's piece; and off the floor, mounted on the wall
                 new = touch & (~out | (side >= attach_upright) | (c_lo > mounted)
                                | ((c_hi >= wall_high) & (side >= 0.6) & (high >= 0.3)))  # a wall cluttered
+                new |= by & (across < knee_thin) & (p1 - p0 >= panel_long) & (side >= panel_side)  # a door, a strip
                 if not new.any():
                     break
                 kind[new] = "walls"
@@ -1828,12 +1850,26 @@ def objects_to_walls(scene_dir, points, near=0.05):
     return len(pick), int(move.sum())
 
 
+def boxed_pieces(V, vpiece, P, near=1e-4):
+    """One vertex of V for each piece (vpiece: each vertex's piece) with a
+    vertex at one of the points P (a box drawn round them in the window)."""
+    if not len(P):
+        return np.zeros((0, 3))
+    d, vi = cKDTree(V).query(np.asarray(P, float)[:, :3])
+    hit = np.zeros(vpiece.max() + 1, bool)
+    hit[vpiece[vi[d <= near]]] = True
+    first = np.full(len(hit), -1)
+    first[vpiece[::-1]] = np.arange(len(V))[::-1]
+    return V[first[hit]]
+
+
 def fix_objects(scene_dir, apply=None):
     """Pick the objects' pieces that are walls, by hand: the objects shown,
     each piece its own colour; shift + left click a piece (any point of it),
-    as many as wanted, then close the window: they move to the walls
-    (objects_to_walls). apply: a fix.json of an earlier run, its points
-    moved again with no window."""
+    as many as wanted, or press K and drag a box (ctrl + left clicks: a
+    polygon) round many, then C: every piece with a point in it; close the
+    window: they move to the walls (objects_to_walls). apply: a fix.json of
+    an earlier run, its points moved again with no window."""
     import json
     o3d = _o3d()
     sdir = os.path.expanduser(scene_dir)
@@ -1855,17 +1891,27 @@ def fix_objects(scene_dir, apply=None):
     pc = o3d.geometry.PointCloud(O.vertices)
     pc.colors = o3d.utility.Vector3dVector(col[vpiece])
     log.info(f"{tri.max() + 1} pieces: shift + left click each that is wall (any point of it), "
-             "shift + right click undoes the last, then close the window")
+             "shift + right click undoes the last; or K, drag a box round many (ctrl + left clicks: "
+             "a polygon), then C (Escape in the save dialog); then close the window")
     vis = o3d.visualization.VisualizerWithEditing()
     vis.create_window(f"objects of {os.path.basename(sdir)}: shift + click the walls", 1600, 900)
     vis.add_geometry(pc)
     vis.run()
     vis.destroy_window()
     picked = vis.get_picked_points()
-    if not picked:
+    V = np.asarray(O.vertices)
+    cut = vis.get_cropped_geometry()
+    boxed = np.asarray(cut.points) if cut is not None and hasattr(cut, "points") else np.zeros((0, 3))
+    if len(boxed) >= len(V):
+        boxed = boxed[:0]
+    if len(boxed):
+        pts = boxed_pieces(V, vpiece, boxed)
+        log.info(f"the box: {len(pts)} pieces" + (" (the clicks, made before it, ignored)" if picked else ""))
+    elif picked:
+        pts = V[np.asarray(picked)]
+    else:
         log.info("nothing picked")
         return 0
-    pts = np.asarray(O.vertices)[np.asarray(picked)]
     n, f = objects_to_walls(sdir, pts)
     log.info(f"{n} pieces ({f} faces) moved from the objects to the walls; the points kept in "
              f"{os.path.join(sdir, 'fix.json')} (--apply it to a new run)")
