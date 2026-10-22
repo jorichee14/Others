@@ -1033,7 +1033,7 @@ Every face of the mesh is in one part or left out: checked on every run
 + objects + left out. Sionna ignores the parts' colours (it shows its
 materials'); Mitsuba warns that they are integers, harmlessly.
 
-The labels are found on a copy of 4,000,000 faces and every face takes its
+The labels are found on an even copy of about 4,000,000 faces (vertex clustering: faces of one size, so a flat wall keeps enough of them; flatness is judged by area, not face count) and every face takes its
 nearest one's: floor, the horizontal faces within 0.12 m of the floor (with
 `--traj` the nearest pose less the sensor height, so a reflection under the
 floor cannot pull it down; without, each 1 m cell's lowest); ceiling,

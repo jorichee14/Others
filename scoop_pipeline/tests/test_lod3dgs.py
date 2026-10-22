@@ -484,7 +484,8 @@ def check_sionna(tmp):
     ceiling); the floor flattened (within 1 cm, bumps under furniture
     gone); the wall hidden behind a cupboard (not in the map) filled on its
     plane; the parts in the mesh's colours; every face in one part; with
-    --faces the floor, walls and ceiling simplified, the objects kept finer
+    --faces the floor, walls and ceiling simplified, the objects kept finer;
+    a flat wall drawn in a few large faces still a wall
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
@@ -609,6 +610,15 @@ def check_sionna(tmp):
     T = np.c_[x, np.full(len(x), 3.0), np.full(len(x), 0.8)]
     e, c = L.walk_start(Vv, T)
     assert np.allclose(e, [1.0, 3.0, 1.6], atol=0.05) and c[0] > e[0], ("walk start", e, c)
+    # a flat wall in a few large faces (the mesh thinned by quadric first): still a wall
+    qm = o3d.io.read_triangle_mesh(m["out"]).simplify_quadric_decimation(150000)
+    o3d.io.write_triangle_mesh(os.path.join(tmp, "thin.ply"), qm)
+    rq = L.sionna_mesh(os.path.join(tmp, "thin.ply"), os.path.join(tmp, "thin_out"), traj=tr, label_faces_n=0)
+    Wq = o3d.io.read_triangle_mesh(os.path.join(tmp, "thin_out", "meshes", "walls.ply"))
+    Oq = o3d.io.read_triangle_mesh(os.path.join(tmp, "thin_out", "meshes", "objects.ply"))
+    xw = lambda Q: inside(np.asarray(Q.vertices)[np.asarray(Q.triangles)].mean(1),        # noqa: E731
+                          -0.05, 0.05, 0.5, 5.5, 0.5, 4.5)
+    assert xw(Wq) > 0 and xw(Oq) <= 0.05 * xw(Wq), ("a flat wall in large faces not a wall", xw(Wq), xw(Oq))
     # simplified for Sionna: floor, walls and ceiling coarse, the objects as meshed (finer)
     rs = L.sionna_mesh(m["out"], os.path.join(tmp, "radio_small"), label_faces_n=300000, traj=tr, faces=40000)
     area = {}

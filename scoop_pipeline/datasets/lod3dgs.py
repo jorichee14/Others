@@ -983,14 +983,18 @@ def floor_grid(V, cell=1.0):
 
 
 def plane_faces(C, N, cell=0.4, sig_max=0.03, thin=0.35, min_pts=20, angle=15.0, gap=0.06,
-                near=0.04, facing=30.0):
+                near=0.04, facing=30.0, corners=None, area=None, min_area=0.04):
     """Per face (centres C, unit normals N): the flat surface it lies on, or
     -1. In each 0.4 m cell, the faces of each way they face (8 ways round
     and up and down, so the two sides of a thin wall in one cell are two
     flat surfaces, not one thick one), flat as snap_planes finds them;
     joined, in a cell and the next, while they face the same way to `angle`
     and planes to `gap`; a face is on its group's surface when within
-    `near` of its plane and facing it to `facing`. Also each surface's |n_z|."""
+    `near` of its plane and facing it to `facing`. corners (the faces'
+    corners, F x 3 x 3) and area: each face counted by its centre and
+    corners, weighted by its area, and a group flat from min_area m2 (not
+    min_pts faces): a flat wall drawn in a few large faces is still seen
+    flat. Also each surface's |n_z|."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
     NB = 10
@@ -1004,14 +1008,22 @@ def plane_faces(C, N, cell=0.4, sig_max=0.03, thin=0.35, min_pts=20, angle=15.0,
     inv = inv.ravel()
     m_ = len(K)
     X = C - lo
-    mu = np.stack([np.bincount(inv, X[:, i], m_) for i in range(3)], 1) / cnt[:, None]
+    if corners is not None and area is not None:              # centre and corners, by area
+        Pk = np.concatenate([X] + [corners[:, i] - lo for i in range(3)])
+        ik = np.tile(inv, 4)
+        wk = np.tile(area / 4.0, 4)
+    else:
+        Pk, ik, wk = X, inv, np.ones(len(X))
+    sw = np.maximum(np.bincount(ik, wk, m_), 1e-12)
+    mu = np.stack([np.bincount(ik, wk * Pk[:, i], m_) for i in range(3)], 1) / sw[:, None]
     S = np.empty((m_, 3, 3))
     for i in range(3):
         for j in range(i, 3):
-            S[:, i, j] = S[:, j, i] = np.bincount(inv, X[:, i] * X[:, j], m_) / cnt - mu[:, i] * mu[:, j]
+            S[:, i, j] = S[:, j, i] = np.bincount(ik, wk * Pk[:, i] * Pk[:, j], m_) / sw - mu[:, i] * mu[:, j]
     w, v = np.linalg.eigh(S)
     sig = np.sqrt(np.clip(w, 0, None))
-    flat = (cnt >= min_pts) & (sig[:, 0] < sig_max) & (sig[:, 0] < thin * sig[:, 1])
+    enough = (np.bincount(inv, area, m_) >= min_area) if area is not None else (cnt >= min_pts)
+    flat = enough & (sig[:, 0] < sig_max) & (sig[:, 0] < thin * sig[:, 1])
     n = v[:, :, 0]
     nm = np.stack([np.bincount(inv, N[:, i], m_) for i in range(3)], 1)      # the way its faces face
     n[np.einsum("ij,ij->i", n, nm) < 0] *= -1
@@ -1178,7 +1190,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
         z_[~np.isfinite(z_)] = np.inf
         return z_
     # the wall planes
-    sid, snz = plane_faces(C, N)
+    sid, snz = plane_faces(C, N, corners=V[F], area=A)
     s_ok = sid >= 0
     ns = len(snz)
     s_area = np.bincount(sid[s_ok], A[s_ok], ns)
@@ -1480,9 +1492,10 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     Nothing is rebuilt: faces > 0 simplifies the floor, walls and ceiling
     together to about that many (quadric: flat stays flat, in few faces) and
     object_faces > 0 the objects on their own to that many, so the objects
-    keep finer detail (0: as meshed); else it is taken as it is. The labels (label_faces)
-    are found on a copy simplified to label_faces_n faces and each face takes
-    its nearest one's. traj (the mesh's frame): the floor level from it (so a
+    keep finer detail (0: as meshed); else it is taken as it is. The labels
+    (label_faces) are found on an even copy of about label_faces_n faces
+    (vertex clustering: faces of one size, so a flat wall keeps enough of
+    them to be seen flat) and each face takes its nearest one's. traj (the mesh's frame): the floor level from it (so a
     reflection under the floor cannot pull it down), and what the _noceil copy drops
     as hanging from the ceiling (hanging_faces: a reflection joined to a
     mirrored ceiling) is left out."""
@@ -1497,9 +1510,14 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     M.remove_duplicated_vertices()
     m = M
     if label_faces_n and len(M.triangles) > label_faces_n:
-        log.info(f"labelling on a copy of {label_faces_n} faces ...")
-        m = M.simplify_quadric_decimation(target_number_of_triangles=int(label_faces_n))
+        # an even copy (vertex clustering): quadric decimation leaves a flat wall a few
+        # large faces, too few in a 0.4 m cell for plane_faces to see it flat
+        vox = float(np.sqrt(2.0 * M.get_surface_area() / label_faces_n))
+        log.info(f"labelling on an even copy of about {label_faces_n} faces ({100 * vox:.0f} cm) ...")
+        m = M.simplify_vertex_clustering(voxel_size=vox,
+                                         contraction=_o3d().geometry.SimplificationContraction.Average)
         m.remove_degenerate_triangles()
+        m.remove_duplicated_triangles()
         m.remove_unreferenced_vertices()
     T = read_tum_positions(traj, stride=1) if traj else None
     planes = []
