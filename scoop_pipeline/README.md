@@ -1036,7 +1036,9 @@ materials'); Mitsuba warns that they are integers, harmlessly.
 The labels are found on an even copy of about 4,000,000 faces (vertex clustering: faces of one size, so a flat wall keeps enough of them; flatness is judged by area, not face count) and every face takes its
 nearest one's: floor, the horizontal faces within 0.12 m of the floor (with
 `--traj` the nearest pose less the sensor height, so a reflection under the
-floor cannot pull it down; without, each 1 m cell's lowest); ceiling,
+floor cannot pull it down; without, each 1 m cell's lowest); with `--traj`
+what is more than 0.25 m under the floor (the room mirrored in a polished
+floor, joined to the walls it mirrors) is left out; ceiling,
 horizontal 2 m or more above it and the highest such overhead (a tall
 rack's top under it is not); walls, the flat sheets standing on the
 floor: a flat near-vertical surface (each cell's faces taken apart by the
@@ -1054,8 +1056,9 @@ floor above it), and low walls between pillars (from the
 floor, 1.5 m long or more, thin across, both ends at a wall) are walls;
 and all that is attached to the walls (touching a wall face and nowhere
 more than 0.2 m from them, or 90 % facing sideways, or off the floor, over
-0.3 m: door and window frames, sills, panels, cabinets and signs on a wall,
-a pillar's curve, pieces of wall) is wall too: objects are only what stands out or
+0.3 m, or reaching 2.2 m with 30 % of it above 1.8 m: door and window
+frames, sills, panels, cabinets and signs on a wall, a pillar's curve,
+pieces of wall, a wall cluttered) is wall too: objects are only what stands out or
 apart (a chair or desk pushed to a wall reaches out 0.4 m and more);
 floor bumps (no higher than 0.12 m) are floor and scraps under 0.05 m2 the
 part next to them. The floor is then flattened onto its own level (the
