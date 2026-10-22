@@ -510,7 +510,7 @@ gets that block merged over it. mobile_2's (`mobile_2/` folder):
 data/raw/<date>/<pass>/mobile_2/<its bag>/      Ouster packets on /mobile_2/ouster
 data/work/<date>/<pass>/mobile_2/
     <bag>_decoded/   points + IMU, every other topic copied (camera, VSLAM, /tf,
-                     /tf_static) without the packets; Ouster frames *_mobile2
+                     /tf_static, the packets); Ouster frames *_mobile2
     <bag>_retimed/   capture time; what the merge takes for mobile_2
     clock.json  process.yaml
 ```

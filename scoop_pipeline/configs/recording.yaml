@@ -33,8 +33,8 @@ machines:                          # per machine folder (raw/<date>/<pass>/<mach
       packets_ns: /mobile_2/ouster
       out_ns: /mobile_2/ouster
       frame_suffix: _mobile2       # os_lidar_mobile2, os_sensor_mobile2, os_imu_mobile2
-      remap: []                    # its topics keep their names
-      exclude: [/mobile_2/ouster/lidar_packets, /mobile_2/ouster/imu_packets]
+      remap: []                    # its topics keep their names (the packets too: kept, as
+                                   # mobile_1's, so the final bag can be decoded again)
       imu_sync: []                 # the RealSense IMU is on the PC clock already
     glim:                          # its own GLIM config: its topics and T_lidar_imu
       config: configs/glim/mobile_2   # made from mobile_1's by processing/glim_config.py

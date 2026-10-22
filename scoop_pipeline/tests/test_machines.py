@@ -99,7 +99,7 @@ def test_mobile_2_folder_processed_with_its_own_settings(d):
     r = bag.open_bag(rec.step("retimed"))
     topics = r.topics()
     assert f"{NS2}/points" in topics and f"{NS2}/imu" in topics
-    assert f"{NS2}/lidar_packets" not in topics and f"{NS2}/imu_packets" not in topics
+    assert f"{NS2}/lidar_packets" in topics and f"{NS2}/imu_packets" in topics   # kept
     pts = next(r.iter_messages([f"{NS2}/points"]))[2]
     imu = next(r.iter_messages([f"{NS2}/imu"]))[2]
     assert pts.header.frame_id == "os_lidar_mobile2"
@@ -121,7 +121,7 @@ def test_mobile_2_folder_processed_with_its_own_settings(d):
     u = session._unit("mobile_2", recording.Path(raw), [recording.Path(b)], plan,
                       recording.load_settings(), None, None)
     assert u.processed and u.bags == [rec.step("retimed")], u.bags
-    assert f"{NS2}/points" in u.expected and f"{NS2}/lidar_packets" not in u.expected
+    assert f"{NS2}/points" in u.expected and f"{NS2}/lidar_packets" in u.expected
     assert tftree.connected(cal.parent, cal.child, tftree.tf_edges(u.bags))
 
 
