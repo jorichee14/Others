@@ -2569,6 +2569,27 @@ def colour_points(P, frames, Kc, Wc, Hc, tol=0.05, rel=0.02):
     return rgb, seen
 
 
+def lod_levels(P, rgb, tau=0.04, min_points=10000, most=16):
+    """The paper's multi-resolution start (Sec. 4.2): the finest level every
+    point (the mesh sampled every tau), each coarser one a point per cell twice
+    the last one's size (the point nearest the cell's centre, roughly Poisson
+    disk), until a level has fewer than min_points (the paper: 4 cm, 10,000).
+    [(points, rgb)], coarsest first: level_0 as LOD-3DGS numbers them, each one
+    every point at its resolution, as its octree loader gives them."""
+    levels = [(P, rgb)]
+    s = float(tau)
+    while len(levels[-1][0]) >= min_points and len(levels) < most:
+        s *= 2
+        Q, c = levels[-1]
+        k = np.floor(Q / s).astype(np.int64) + (1 << 20)
+        key = (k[:, 0] << 42) | (k[:, 1] << 21) | k[:, 2]
+        d = np.linalg.norm(Q - (np.floor(Q / s) + 0.5) * s, axis=1)
+        o = np.lexsort((d, key))
+        first = o[np.r_[True, key[o][1:] != key[o][:-1]]]
+        levels.append((Q[first], c[first]))
+    return levels[::-1]
+
+
 def write_ply(path, P, rgb):
     """x y z nx ny nz red green blue, binary, as LOD-3DGS's storePly writes it."""
     dt = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("nx", "<f4"), ("ny", "<f4"),
@@ -2597,7 +2618,8 @@ def default_out(dataset):
 
 
 def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0,
-            trim=0.10, spacing=0.04, color_views=300, jpeg_quality=95):
+            trim=0.10, spacing=0.04, color_views=300, jpeg_quality=95, mesh_path=None,
+            lod_min=10000):
     out = out or default_out(dataset)
     cam, T_all, rgb_all, dep_all = read_replica(dataset)
     keep = np.arange(0, len(T_all), max(1, int(every)))
@@ -2646,15 +2668,30 @@ def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0
         f.write("# IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME (world to camera), "
                 "then an empty line\n" + "".join(lines))
 
-    log.info("mesh")
-    centres = T_all[keep, :3, 3]
-    mesh, mstat = build_mesh(map_path, centres, voxel, poisson_depth, trim)
-    _o3d().io.write_triangle_mesh(os.path.join(out, "mesh.ply"), mesh)
+    if mesh_path:
+        log.info(f"mesh {mesh_path} (given)")
+        mesh = _o3d().io.read_triangle_mesh(os.path.expanduser(mesh_path))
+        if not len(mesh.triangles):
+            raise ConvertError(f"{mesh_path}: no faces")
+        mstat = {"faces": len(mesh.triangles), "faces_kept": len(mesh.triangles)}
+    else:
+        log.info("mesh")
+        centres = T_all[keep, :3, 3]
+        mesh, mstat = build_mesh(map_path, centres, voxel, poisson_depth, trim)
+        _o3d().io.write_triangle_mesh(os.path.join(out, "mesh.ply"), mesh)
     P, area = sample_mesh(mesh, spacing)
     log.info(f"  {len(P)} points at {spacing} m over {area:.0f} m2; colour from "
              f"{len(cframes)} frames")
     rgb, seen = colour_points(P, cframes, Kc, Wc, Hc)
     write_ply(os.path.join(out, "sparse/0/points3D.ply"), P, rgb)
+    levels = lod_levels(P, rgb, spacing, lod_min)
+    os.makedirs(os.path.join(out, "lod"), exist_ok=True)
+    for f in glob.glob(os.path.join(out, "lod", "level_*.ply")):
+        os.remove(f)
+    for k, (Q, c) in enumerate(levels):
+        write_ply(os.path.join(out, "lod", f"level_{k}.ply"), Q, c)
+    sizes = [len(Q) for Q, _ in levels]
+    log.info(f"  {len(levels)} LOD levels, coarsest first: {sizes}")
 
     report = (
         f"dataset             : {os.path.abspath(dataset)}\n"
@@ -2665,21 +2702,25 @@ def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0
         f"cx={cam['cx']:.3f} cy={cam['cy']:.3f})\n"
         f"depth valid px      : mean {100 * np.mean(valid):.1f}%, "
         f"min {100 * np.min(valid):.1f}%\n"
-        f"map points          : {mstat['map_points']} -> {mstat['map_voxel_points']} "
-        f"at {voxel} m\n"
-        f"Poisson depth       : {mstat['poisson_depth']}\n"
-        f"mesh faces          : {mstat['faces']}, {mstat['faces_kept']} kept "
-        f"(trim {trim} m)\n"
+        + (f"mesh                : {os.path.abspath(mesh_path)}, {mstat['faces']} faces\n"
+           if mesh_path else
+           f"map points          : {mstat['map_points']} -> {mstat['map_voxel_points']} "
+           f"at {voxel} m\n"
+           f"Poisson depth       : {mstat['poisson_depth']}\n"
+           f"mesh faces          : {mstat['faces']}, {mstat['faces_kept']} kept "
+           f"(trim {trim} m)\n") +
         f"mesh area           : {area:.1f} m2\n"
         f"starting points     : {len(P)} at {spacing} m, {100 * seen.mean():.1f}% "
         f"coloured from {len(cframes)} frames\n"
+        f"LOD levels          : {len(levels)} in lod/, coarsest first {sizes} "
+        f"(cells {spacing} m doubling, until under {lod_min} points)\n"
         f"train               : python train.py -s {os.path.abspath(out)} --use_lod "
         f"--depths depths --data_device cpu -r 1\n")
     with open(os.path.join(out, "report.txt"), "w") as f:
         f.write(report)
     log.info("\n" + report)
     return {"out": out, "frames": len(keep), "camera": (Wc, Hc) + Kc, "points": len(P),
-            "coloured": float(seen.mean()), **mstat}
+            "coloured": float(seen.mean()), "levels": sizes, **mstat}
 
 
 def main():
@@ -2704,6 +2745,10 @@ def main():
     sc.add_argument("--color-views", type=int, default=300,
                     help="frames the point colours are taken from (evenly spread)")
     sc.add_argument("--jpeg-quality", type=int, default=95)
+    sc.add_argument("--mesh", default=None,
+                    help="sample this mesh (e.g. `mesh`'s mesh_<tag>.ply) instead of meshing the map")
+    sc.add_argument("--lod-min", type=int, default=10000,
+                    help="LOD levels: halve until a level has fewer points (the paper's 10,000)")
 
     me = sub.add_parser("mesh", help="the mesh of a map alone, to look at")
     me.add_argument("map", help="the map (.pcd/.ply), e.g. mapping/map_final_<tag>.pcd")
@@ -2883,7 +2928,8 @@ def main():
         elif a.cmd == "scene":
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,
                     poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
-                    color_views=a.color_views, jpeg_quality=a.jpeg_quality)
+                    color_views=a.color_views, jpeg_quality=a.jpeg_quality,
+                    mesh_path=a.mesh, lod_min=a.lod_min)
         elif a.cmd == "view":
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,

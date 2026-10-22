@@ -47,8 +47,12 @@ structure from motion.
 - `--use_lod` reads the Octree loader. On the first run it converts
   points3D.ply to LAS (needs `laspy`) and calls
   `PotreeConverter/bin/Release/Converter.exe` with `shell=True`. That only
-  works on Windows. **Linux needs a patch:** build the PotreeConverter
-  submodule and call its binary without `shell=True`. Not done yet.
+  works on Windows, and the fork links a prebuilt Windows LASzip DLL.
+  **Done instead:** `lod3dgs.py scene` writes the levels itself to
+  `lod/level_<k>.ply`, as Sec. 4.2 defines them: 4 cm, doubling, until a
+  level has fewer than 10,000 points. `datasets/lod3dgs_lod_levels.patch`
+  (against LOD-3DGS eec40cf) makes the loader read them, with no converter.
+  The patched loader was tested on a generated scene.
 
 ## The SCOOP reference map (20261015, `map_stages/pipeline_config_mapping_20261015.json`)
 
@@ -153,13 +157,16 @@ yet known.
 4. **Build the scene:**
    ```
    python3 scoop_pipeline/datasets/lod3dgs.py scene $P/datasets/mobile_2/replica_map_mapping_20261015 \
-       --map $P/mapping/map_final_mapping_20261015.pcd --every 3
+       --map $P/mapping/map_final_mapping_20261015.pcd --every 3 \
+       [--mesh $P/mapping/mesh_mapping_20261015.ply]
    ```
+   `--mesh` samples the cleaned mesh from the `mesh` command instead of
+   meshing the map again.
 5. **LOD-3DGS setup and training:**
    - `git clone --recursive https://github.com/zhaofuq/LOD-3DGS`
    - Install its environment and CUDA extensions (simple-knn,
      diff-gaussian-rasterization), plus `laspy` and `plyfile`.
-   - Patch the PotreeConverter call for Linux (see above).
+   - In LOD-3DGS: `git apply <Others>/scoop_pipeline/datasets/lod3dgs_lod_levels.patch`
    - Train with:
      ```
      python train.py -s <scene> --use_lod --sh_degree 2 --depths depths \
