@@ -1230,7 +1230,11 @@ def to_replica(bag, out, *,
                 "dataset_name: \"replica\"\ncamera_params:\n"
                 f"  image_height: {K.height}\n  image_width: {K.width}\n"
                 f"  fx: {K.fx:.6f}\n  fy: {K.fy:.6f}\n  cx: {K.cx:.6f}\n  cy: {K.cy:.6f}\n"
-                f"  png_depth_scale: {depth_scale:.1f}\n  crop_edge: 0\n")
+                f"  png_depth_scale: {depth_scale:.1f}\n  crop_edge: 0\n"
+                + (f"  # the colour images as recorded, with the lens's distortion (the depth is pinhole)\n"
+                   f"  distortion_model: {ci.distortion_model or 'plumb_bob'}\n"
+                   f"  distortion: [{', '.join(f'{float(v):.9g}' for v in ci.d)}]\n"
+                   if any(abs(float(v)) > 1e-9 for v in ci.d) else ""))
 
     xyz = np.array([[float(x) for x in l.split()][3::4][:3] for l in traj])
     d0 = np.linalg.norm(np.diff(xyz, axis=0), axis=1) if len(xyz) > 1 else np.zeros(1)
@@ -2264,7 +2268,8 @@ def inspect_bag(bag, info="/mobile_1/zed/left/camera_info",
         K = intrinsics_from_info(ci)
         res["intrinsics"] = K
         log.info(f"{info}: {K.width}x{K.height} fx={K.fx:.3f} fy={K.fy:.3f} "
-                 f"cx={K.cx:.3f} cy={K.cy:.3f}")
+                 f"cx={K.cx:.3f} cy={K.cy:.3f}  distortion {ci.distortion_model or '-'} "
+                 f"[{', '.join(f'{float(v):.6g}' for v in ci.d)}]")
     m = first_msg(paths, color)
     res["color_frame"] = m.header.frame_id.lstrip("/") if m is not None else None
     log.info(f"{color} frame_id: {res['color_frame']}")

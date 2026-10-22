@@ -93,6 +93,10 @@ def read_replica(path):
         if m is None:
             raise ConvertError(f"{cfg}: no {k}")
         cam[k] = float(m.group(1))
+    m = re.search(r"^\s*distortion:\s*\[([^\]]*)\]", text, re.M)
+    cam["dist"] = [float(v) for v in m.group(1).split(",") if v.strip()] if m else []
+    m = re.search(r"^\s*distortion_model:\s*(\S+)", text, re.M)
+    cam["distortion_model"] = m.group(1) if m else "plumb_bob"
     T = np.loadtxt(os.path.join(path, "traj.txt"), ndmin=2).reshape(-1, 4, 4)
     rgb = sorted(glob.glob(os.path.join(path, "results", "frame*.jpg")))
     dep = sorted(glob.glob(os.path.join(path, "results", "depth*.png")))
@@ -100,6 +104,23 @@ def read_replica(path):
         raise ConvertError(f"{path}: {len(rgb)} colour, {len(dep)} depth images and "
                            f"{len(T)} poses")
     return cam, T, rgb, dep
+
+
+def undistort_maps(cam, dist=None, model=None):
+    """The remap (map1, map2) that takes the colour image as recorded, with
+    the lens's distortion (the export's `distortion`, or `dist` given: k1 k2
+    p1 p2 [k3 ...]; `model` plumb_bob / rational_polynomial, or equidistant
+    for a fisheye), to the pinhole image of the same fx fy cx cy, the one the
+    depth was rendered with and LOD-3DGS assumes; None when there is none."""
+    d = list(dist) if dist is not None else list(cam.get("dist", []))
+    if not any(abs(v) > 1e-9 for v in d):
+        return None
+    model = model or cam.get("distortion_model", "plumb_bob")
+    K = np.array([[cam["fx"], 0, cam["cx"]], [0, cam["fy"], cam["cy"]], [0, 0, 1]])
+    size = (int(cam["image_width"]), int(cam["image_height"]))
+    if model == "equidistant":
+        return cv2.fisheye.initUndistortRectifyMap(K, np.asarray(d[:4], float), np.eye(3), K, size, cv2.CV_32FC1)
+    return cv2.initUndistortRectifyMap(K, np.asarray(d, float), None, K, size, cv2.CV_32FC1)
 
 
 def centred_camera(cam):
@@ -2750,9 +2771,21 @@ def default_out(dataset):
 
 def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0,
             trim=0.10, spacing=0.04, color_views=300, jpeg_quality=95, mesh_path=None,
-            lod_min=10000):
+            lod_min=10000, dist=None, dist_model=None, bag=None, info=None):
     out = out or default_out(dataset)
     cam, T_all, rgb_all, dep_all = read_replica(dataset)
+    if bag:                                      # the lens's distortion from the bag's camera_info
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import mcap_convert as mc
+        ci = mc.first_msg(mc._paths(os.path.expanduser(bag)), info or "/mobile_2/color/camera_info")
+        if ci is None:
+            raise ConvertError(f"{bag}: no messages on {info}")
+        dist, dist_model = [float(v) for v in ci.d], ci.distortion_model or "plumb_bob"
+    maps = undistort_maps(cam, dist, dist_model)
+    if maps is not None:
+        log.info(f"  the colour images undistorted ({dist_model or cam.get('distortion_model')} "
+                 f"[{', '.join(f'{v:.4g}' for v in (dist if dist is not None else cam['dist']))}]): pinhole, "
+                 "as the depth is and LOD-3DGS assumes")
     keep = np.arange(0, len(T_all), max(1, int(every)))
     Wc, Hc, ox, oy = centred_camera(cam)
     fx, fy = cam["fx"], cam["fy"]
@@ -2776,6 +2809,8 @@ def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0
             raise ConvertError(f"cannot read {rgb_all[i]} / {dep_all[i]}")
         if d16.shape[:2] != bgr.shape[:2]:
             d16 = cv2.resize(d16, (bgr.shape[1], bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+        if maps is not None:
+            bgr = cv2.remap(bgr, maps[0], maps[1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
         bgr = recentre(bgr, Wc, Hc, ox, oy, cv2.INTER_LINEAR)
         D = recentre(d16, Wc, Hc, ox, oy, cv2.INTER_NEAREST).astype(np.float32) / scale
         cv2.imwrite(os.path.join(out, "images", name + ".jpg"), bgr, q)
@@ -2880,6 +2915,12 @@ def main():
                     help="sample this mesh (e.g. `mesh`'s mesh_<tag>.ply) instead of meshing the map")
     sc.add_argument("--lod-min", type=int, default=10000,
                     help="LOD levels: halve until a level has fewer points (the paper's 10,000)")
+    sc.add_argument("--dist", default=None, metavar="k1,k2,p1,p2[,k3...]",
+                    help="undistort the colour images with these coefficients (default: the export's, if "
+                         "it has them; the depth is pinhole already)")
+    sc.add_argument("--dist-model", default=None, help="plumb_bob (default), rational_polynomial, equidistant")
+    sc.add_argument("--bag", default=None, help="read the distortion from this bag's camera_info instead")
+    sc.add_argument("--info", default="/mobile_2/color/camera_info", help="its camera_info topic")
 
     me = sub.add_parser("mesh", help="the mesh of a map alone, to look at")
     me.add_argument("map", help="the map (.pcd/.ply), e.g. mapping/map_final_<tag>.pcd")
@@ -3072,7 +3113,8 @@ def main():
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,
                     poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
                     color_views=a.color_views, jpeg_quality=a.jpeg_quality,
-                    mesh_path=a.mesh, lod_min=a.lod_min)
+                    mesh_path=a.mesh, lod_min=a.lod_min, bag=a.bag, info=a.info, dist_model=a.dist_model,
+                    dist=[float(v) for v in a.dist.split(",")] if a.dist else None)
         elif a.cmd == "view":
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,

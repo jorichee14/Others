@@ -1205,6 +1205,10 @@ is kept). The scene keeps the ceiling: the cameras see it. LOD-3DGS ignores
 the principal point (it takes the image centre), so images and depth are
 resampled onto the largest window centred on it; depth goes into `depths/`
 as LOD-3DGS reads it (8-bit warped grey, alpha where there is depth). The
+colour images are undistorted first when the camera has distortion (the
+export writes its coefficients; for an older export `--bag <bag>` reads them
+from its camera_info, or `--dist k1,k2,p1,p2`): the depth is pinhole already
+and LOD-3DGS assumes a pinhole camera. The
 map must be the one the export's depth was rendered from, so poses, depth
 and points share a frame. `--every N` thins the frames. `--mesh` samples a
 mesh made beforehand (`lod3dgs.py mesh`: ghosts, loose pieces and objects
