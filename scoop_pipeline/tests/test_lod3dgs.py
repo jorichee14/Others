@@ -477,12 +477,13 @@ def check_sionna(tmp):
     the hall's ceiling, a desk against a wall, 4 m of desks pushed together:
     walls the wall planes (the wall behind the desk, and between and behind
     chairs touching it, down to the floor), a wall's end (its thickness),
-    the pillar, stairs (with the slope under them) and a 1 m wall between
+    the pillar, stairs (with the slope under them and the landing at their
+    top) and a 1 m wall between
     two pillars (its top too); objects the table, the cabinet, the desk, the
     chairs and the 4 m of desks (the lamp's flat underside, over 2 m up, with the
     ceiling); the floor flattened (within 1 cm, bumps under furniture
     gone); the wall hidden behind a cupboard (not in the map) filled on its
-    plane; every face in one part
+    plane; the parts in the mesh's colours; every face in one part
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
@@ -521,6 +522,7 @@ def check_sionna(tmp):
     X_, Y_ = np.meshgrid(g(0.2, 3.56), g(4.95, 5.85), indexing="ij")    # the slope under them
     Zs = 0.607 * (X_.ravel() - 0.2) - 0.2
     stairs.append(np.c_[X_.ravel(), Y_.ravel(), Zs][Zs > 0.05])
+    stairs.append(sheet(2, 2.04, (3.56, 4.3), (4.95, 5.85)))           # the landing at the top
     stairs = np.concatenate(stairs)
     rack = np.concatenate([np.c_[np.full(Z_.size, xr), np.full(Z_.size, yr), Z_]          # 2.4 m of poles,
                            for xr in np.arange(10.3, 11.6, 0.25) for yr in (5.2, 5.6)             # shelves on them:
@@ -575,6 +577,7 @@ def check_sionna(tmp):
                            ("chairs against a wall", "objects", (7.4, 9.9, 0.1, 0.38, 0.95, 1.05)),
                            ("the wall between and behind the chairs", "walls", (7.75, 7.85, -0.05, 0.05, 0.2, 0.8)),
                            ("stairs (with the slope under them)", "walls", (0.6, 3.0, 5.0, 5.8, 0.3, 1.8)),
+                           ("the landing at their top", "walls", (3.65, 4.2, 5.0, 5.8, 1.95, 2.1)),
                            ("a 1 m wall between pillars", "walls", (5.0, 6.4, 1.9, 2.2, 0.2, 0.9)),
                            ("its top", "walls", (5.0, 6.4, 1.98, 2.12, 0.95, 1.05)),
                            ("a cupboard against a wall", "objects", (7.6, 8.7, 5.4, 5.5, 0.3, 1.0)),
@@ -583,6 +586,9 @@ def check_sionna(tmp):
         for other in parts:
             if other != part:
                 assert inside(parts[other], *b_) <= 0.05 * inside(parts[part], *b_), (name, "in", other)
+    Qw = o3d.io.read_triangle_mesh(os.path.join(os.path.dirname(r["scene"]), "meshes", "walls.ply"))
+    assert np.abs(np.asarray(Qw.vertex_colors).mean(0) - 0.5).max() < 0.02, \
+        ("the walls lost the mesh's colours", np.asarray(Qw.vertex_colors).mean(0))
     Qf = o3d.io.read_triangle_mesh(os.path.join(os.path.dirname(r["scene"]), "meshes", "floor.ply"))
     zf = np.asarray(Qf.vertices)[:, 2]
     assert np.abs(zf - np.median(zf)).max() < 0.01, ("the floor not flat", np.abs(zf - np.median(zf)).max())

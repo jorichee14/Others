@@ -1049,7 +1049,8 @@ faces) and round pillars (round in plan) with them. A rack or stacked
 chairs (no flat sheet) stay objects. The seams facing sideways go with the
 floor, wall or ceiling they touch; everything else is objects, but stairs
 and ramps (all their faces climbing along the piece, 0.25-1.5 m per m,
-over 0.8 m) and a flight's sides, and low walls between pillars (from the
+over 0.8 m) and all that is against a flight (its sides, the landing, the
+floor above it), and low walls between pillars (from the
 floor, 1.5 m long or more, thin across, both ends at a wall) are walls;
 floor bumps (no higher than 0.25 m) are floor and scraps under 0.05 m2 the
 part next to them. The floor is then flattened onto its own level (the

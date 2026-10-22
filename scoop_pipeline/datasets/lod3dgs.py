@@ -1125,8 +1125,8 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=0.5, wall_high=2.2
     objects, but: stairs and ramps (all their faces, treads, risers, the
     slope under them, the rail, climbing along the piece's length,
     stair_rise m per m, over 0.8 m; a shelf's stack in place does not) and
-    the sides of a flight (facing sideways, within stair_side of one) are
-    walls; so is a low wall between pillars (under windows whose glass is
+    all that is against a flight (within stair_side: its sides, a landing,
+    the floor above it, and what is against those) are walls; so is a low wall between pillars (under windows whose glass is
     not in the map: a piece from the floor (0.3 m), facing sideways mostly,
     knee_w m long or more, thin across (under knee_thin m, 1 sigma), both
     ends within knee_end of a wall face; a row of cabinets is deeper and
@@ -1280,13 +1280,20 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=0.5, wall_high=2.2
             if stair_rise[0] <= abs(a_) <= stair_rise[1] and r2 >= 0.6:
                 kind[k_] = "walls"
                 flight[k_] = True
-        # a stair's sides (stringer, balustrade panel): facing sideways, against a flight
+        # all of the stairs: what is against a flight (its sides, the landing, the floor
+        # above it), and what is against that, goes with it
         if flight.any():
-            fl = flight[comp]
-            d_, _ = cKDTree(C[rest[fl]]).query(C[rest[~fl]], workers=-1, distance_upper_bound=stair_side)
-            near = np.zeros(nc, bool)
-            near[np.unique(comp[~fl][np.isfinite(d_)])] = True
-            kind[near & ~flight & (side >= 0.6) & (kind == "objects")] = "walls"
+            stair = flight.copy()
+            for _ in range(2):
+                fl = stair[comp]
+                d_, _ = cKDTree(C[rest[fl]]).query(C[rest[~fl]], workers=-1, distance_upper_bound=stair_side)
+                near = np.zeros(nc, bool)
+                near[np.unique(comp[~fl][np.isfinite(d_)])] = True
+                new = near & ~stair & (kind == "objects")
+                if not new.any():
+                    break
+                kind[new] = "walls"
+                stair |= new
         # low walls between pillars: long, thin across, both ends at a wall
         wf = np.flatnonzero(part == "walls")
         if len(wf):
@@ -1516,9 +1523,10 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
         Vn, Fn, Cn = fill_walls(M, fpart, planes)
         if len(Fn):
             nv0 = len(M.vertices)
+            col0 = np.asarray(M.vertex_colors).copy() if M.has_vertex_colors() else None   # before the count changes
             M.vertices = o3d.utility.Vector3dVector(np.vstack([np.asarray(M.vertices), Vn]))
-            if M.has_vertex_colors():
-                M.vertex_colors = o3d.utility.Vector3dVector(np.vstack([np.asarray(M.vertex_colors), Cn]))
+            if col0 is not None:
+                M.vertex_colors = o3d.utility.Vector3dVector(np.vstack([col0, Cn]))
             M.triangles = o3d.utility.Vector3iVector(np.vstack([np.asarray(M.triangles), Fn + nv0]))
             fpart = np.r_[fpart, np.full(len(Fn), "walls", dtype=object)]
             fobj = np.r_[fobj, np.full(len(Fn), -1)]
