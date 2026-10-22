@@ -2,76 +2,83 @@
 # and the ZED SVO2 next to it -> a bag on the same clock.
 # Used by processing/process_recording.py; a copy of what was used is written
 # next to the outputs (work/.../process.yaml).
+#
+#   base:      what every robot shares
+#   machines:  each robot's own, by its folder name (raw/<date>/<pass>/<machine>/),
+#              merged over base (dicts key by key, lists and values replaced)
+# A folder without a block, and a tool that names no robot, get default_machine's.
 
-ouster:
-  packets_ns: /ouster              # where the recording has lidar_packets, imu_packets, metadata
-  out_ns: /mobile_1/ouster         # where the decoded bag puts points, imu, metadata
-  driver_min_range: 1.30           # m, the replay's min_range
-  driver_max_range: 1000.0
-  frame: lidar                     # os_lidar, the replay's default point_cloud_frame
-  frame_suffix: _mobile1           # on os_lidar, os_sensor, os_imu: one per robot (mobile_2: _mobile2)
-  static_tf: configs/static_tf.yaml  # this robot's calibrations go into its bag's /tf_static
-  imu: true
-  copy_all: true                   # copy EVERY other topic too (tf, tf_static, radar, ntp, ...)
-  exclude: []                      # topics to leave out of the copy
-  remap:                           # renamed while copied, as the replay launch did
-    - /ouster/metadata:=/mobile_1/ouster/metadata
-    - /ouster/imu_packets:=/mobile_1/ouster/imu_packets
-    - /ouster/lidar_packets:=/mobile_1/ouster/lidar_packets
-    - /zed/zed_node/imu/data:=/mobile_1/zed/imu/data
-    - /zed/zed_node/imu/mag:=/mobile_1/zed/imu/mag
-  imu_sync:                        # IMUs copied through whose driver stamps them late: measured
-    - topic: /mobile_1/zed/imu/data   # against the Ouster's IMU (default ref <out_ns>/imu) and
-                                      # their header stamps moved back (scoop/imu_sync.py); the
-                                      # live ZED wrapper stamped it 2.12 s late on 20260924.
-                                      # The result: <work>/imu_sync.json
+default_machine: mobile_1
 
-machines:                          # per machine folder (raw/<date>/<pass>/<machine>/): merged
-                                   # over the settings above, which are mobile_1's
-  mobile_2:                        # Ouster packets + RealSense + Isaac VSLAM
+base:
+  ouster:
+    driver_min_range: 1.30         # m, the replay's min_range
+    driver_max_range: 1000.0
+    frame: lidar                   # os_lidar, the replay's default point_cloud_frame
+    static_tf: configs/static_tf.yaml  # the robot's calibrations go into its bag's /tf_static
+    imu: true
+    copy_all: true                 # copy EVERY other topic too (tf, tf_static, radar, ntp,
+                                   # the Ouster packets, ...), so the final bag can be decoded again
+    exclude: []                    # topics to leave out of the copy
+  glim:
+    image: koide3/glim_ros2:humble-mcap
+    pose_time_offset: 0.046        # s traj_lidar.txt's poses are moved in time on export: GLIM's
+                                   # pose for t is the scans' pose at t + 46 ms. ~half the 100 ms
+                                   # sweep: GLIM labels a pose with its scan's start
+                                   # (github.com/MOLAorg/mola_glim_wrapper). Measured on mobile_2
+                                   # (20261015) and mobile_1 (20260924); run_pass.py's time_check
+                                   # re-checks it on every pass (check.py glim re-exports)
+
+machines:
+
+  mobile_1:                        # Ouster OS1-64 + ZED 2i (SVO2) + 2 radars
+    ouster:
+      packets_ns: /ouster          # where the recording has lidar_packets, imu_packets, metadata
+      out_ns: /mobile_1/ouster     # where the decoded bag puts points, imu, metadata
+      frame_suffix: _mobile1       # on os_lidar, os_sensor, os_imu: one per robot
+      remap:                       # renamed while copied, as the replay launch did
+        - /ouster/metadata:=/mobile_1/ouster/metadata
+        - /ouster/imu_packets:=/mobile_1/ouster/imu_packets
+        - /ouster/lidar_packets:=/mobile_1/ouster/lidar_packets
+        - /zed/zed_node/imu/data:=/mobile_1/zed/imu/data
+        - /zed/zed_node/imu/mag:=/mobile_1/zed/imu/mag
+      imu_sync:                    # IMUs copied through whose driver stamps them late: measured
+        - topic: /mobile_1/zed/imu/data   # against the Ouster's IMU (default ref <out_ns>/imu)
+                                   # and their header stamps moved back (scoop/imu_sync.py); the
+                                   # live ZED wrapper stamped it 2.12 s late on 20260924.
+                                   # The result: <work>/imu_sync.json
+    glim:
+      config: configs/glim/mobile_1   # GLIM's config folder, in this repo; $GLIM_CONFIG overrides
+    zed:                           # the .svo2 in the raw folder -> <svo name>_zed/
+      camera_model: zed2i
+      wrapper_config:              # the robot's zed_wrapper config, so the replay matches
+        - configs/zed/common_stereo.yaml   # (relative to scoop_pipeline/; merged in order)
+        - configs/zed/zed2i.yaml
+      rename: [/zed/zed_node, /mobile_1/zed]   # topic prefix, as in the raw bag
+      bags:                        # one replay per bag -> <svo name>_<name>/
+        zed:                       # everything in one replay
+          - /zed/zed_node/left/image_rect_color   # the paper's mobile_1/zed topics
+          - /zed/zed_node/left/camera_info        # (tables/topics.tex) + the right camera;
+          - /zed/zed_node/right/image_rect_color  # imu/data and imu/mag are already in
+          - /zed/zed_node/right/camera_info       # the raw bag
+          - /zed/zed_node/depth/depth_registered
+          - /zed/zed_node/depth/camera_info
+          - /zed/zed_node/odom
+          - /zed/zed_node/pose
+          - /zed/zed_node/path_map
+          - /zed/zed_node/path_odom
+        # not recorded: the point cloud (= depth + left camera_info, ~145 GB),
+        # /zed/zed_node/point_cloud/cloud_registered
+      realtime: false              # false: every SVO frame, as fast as the GPU goes
+      params: {}                   # on top of wrapper_config, e.g. {depth: {depth_mode: NEURAL}}
+
+  mobile_2:                        # Ouster (128 beams) + RealSense D455 + Isaac VSLAM
     ouster:
       packets_ns: /mobile_2/ouster
       out_ns: /mobile_2/ouster
       frame_suffix: _mobile2       # os_lidar_mobile2, os_sensor_mobile2, os_imu_mobile2
-      remap: []                    # its topics keep their names (the packets too: kept, as
-                                   # mobile_1's, so the final bag can be decoded again)
+      remap: []                    # its topics keep their names
       imu_sync: []                 # the RealSense IMU is on the PC clock already
-    glim:                          # its own GLIM config: its topics and T_lidar_imu
-      config: configs/glim/mobile_2   # made from mobile_1's by processing/glim_config.py
-      pose_time_offset: 0.046      # s traj_lidar.txt's poses are moved in time on export: GLIM's pose
-                                   # for t is the scans' pose at t + 46 ms (20261015, measured
-                                   # twice: check.py trajs --ref, heading vs
-                                   # turning; check.py scans, timing).
-                                   # ~half the 100 ms sweep: GLIM labels a pose with its scan's
-                                   # start (github.com/MOLAorg/mola_glim_wrapper: measure it per
-                                   # dataset); run_pass.py's time_check re-checks it on every pass
-
-glim:
-  config: configs/glim/mobile_1    # GLIM's config folder, in this repo; $GLIM_CONFIG overrides
-  image: koide3/glim_ros2:humble-mcap
-  pose_time_offset: 0.046          # s, as mobile_2's (below): GLIM labels a pose with its sweep's
-                                   # start, ~half the 100 ms sweep of either Ouster; run_pass.py's
-                                   # time_check measures it on each pass (check.py glim re-exports)
-
-zed:                               # the .svo2 in the raw folder -> <svo name>_zed/
-  camera_model: zed2i
-  wrapper_config:                  # the robot's zed_wrapper config, so the replay matches
-    - configs/zed/common_stereo.yaml   # (relative to scoop_pipeline/; merged in order)
-    - configs/zed/zed2i.yaml
-  rename: [/zed/zed_node, /mobile_1/zed]   # topic prefix, as in the raw bag
-  bags:                            # one replay per bag -> <svo name>_<name>/
-    zed:                           # everything in one replay
-      - /zed/zed_node/left/image_rect_color   # the paper's mobile_1/zed topics
-      - /zed/zed_node/left/camera_info        # (tables/topics.tex) + the right camera;
-      - /zed/zed_node/right/image_rect_color  # imu/data and imu/mag are already in
-      - /zed/zed_node/right/camera_info       # the raw bag
-      - /zed/zed_node/depth/depth_registered
-      - /zed/zed_node/depth/camera_info
-      - /zed/zed_node/odom
-      - /zed/zed_node/pose
-      - /zed/zed_node/path_map
-      - /zed/zed_node/path_odom
-    # not recorded: the point cloud (= depth + left camera_info, ~145 GB),
-    # /zed/zed_node/point_cloud/cloud_registered
-  realtime: false                  # false: every SVO frame, as fast as the GPU goes
-  params: {}                       # on top of wrapper_config, e.g. {depth: {depth_mode: NEURAL}}
+    glim:
+      config: configs/glim/mobile_2   # made from mobile_1's by processing/glim_config.py:
+                                      # its topics and T_lidar_imu

@@ -503,8 +503,11 @@ when it finishes and prints it next to GLIM's (`check.py loop <config>
 maps with another robot) the loop closure is not measured.
 
 Settings come from `configs/recording.yaml` (`--settings` for another file).
-Its top level is mobile_1's; a machine folder named in its `machines:` block
-gets that block merged over it. mobile_2's (`mobile_2/` folder):
+`base:` holds what every robot shares (driver ranges, copying, the GLIM image
+and its pose-time offset); `machines:` holds each robot's own block (its Ouster
+namespaces and frames, topic remaps, GLIM config, ZED), merged over `base` for
+the machine folder of that name. A folder without a block, and a tool that names
+no robot, get `default_machine`'s (mobile_1). mobile_2's (`mobile_2/` folder):
 
 ```
 data/raw/<date>/<pass>/mobile_2/<its bag>/      Ouster packets on /mobile_2/ouster

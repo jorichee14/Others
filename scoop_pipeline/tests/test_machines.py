@@ -28,8 +28,10 @@ NS2 = "/mobile_2/ouster"
 
 def test_settings_for_merges_a_machine_over_the_top_level():
     s = recording.load_settings()
-    m1 = recording.settings_for(s, "mobile_1")                 # no block: the top level
+    m1 = recording.settings_for(s, "mobile_1")                 # base + its block
     assert m1["ouster"]["packets_ns"] == "/ouster" and "machines" not in m1
+    assert not any(k.startswith("_") for k in m1)
+    assert m1 == recording.settings_for(s, None) == recording.settings_for(s, "infra_1")  # the default
     assert m1["ouster"]["frame_suffix"] == "_mobile1"
     m2 = recording.settings_for(s, "mobile_2")
     o = m2["ouster"]
@@ -40,6 +42,7 @@ def test_settings_for_merges_a_machine_over_the_top_level():
     assert m2["glim"]["config"] == "configs/glim/mobile_2"
     assert m2["glim"]["image"] == s["glim"]["image"]           # the rest inherited
     assert recording.settings_for(s, None)["ouster"] == s["ouster"]
+    assert m2["zed"] == {}                                     # mobile_1's ZED is its own
 
 
 def _mobile2_tree(root):

@@ -166,13 +166,31 @@ def find_recording(raw_dir, work_root=None, packets_ns: str = "/ouster",
 
 
 def load_settings(path=None) -> dict:
+    """configs/recording.yaml: ``base:`` what every robot shares, ``machines:``
+    each robot's own. The result's top level is ``default_machine``'s (base +
+    its block), for readers that name no robot; :func:`settings_for` gives any
+    robot's. A file without ``base:`` (the older layout) is its top level as
+    written, ``machines:`` merged over it."""
     with open(Path(path or DEFAULT_SETTINGS).expanduser()) as fh:
-        s = yaml.safe_load(fh) or {}
-    s.setdefault("ouster", {})
-    s.setdefault("glim", {})
-    s.setdefault("zed", {})
-    if os.environ.get("GLIM_CONFIG"):
-        s["glim"]["config"] = os.environ["GLIM_CONFIG"]
+        raw = yaml.safe_load(fh) or {}
+    machines = raw.get("machines") or {}
+    default = raw.get("default_machine") if "base" in raw else None
+    shared = (raw.get("base") or {}) if "base" in raw else \
+        {k: v for k, v in raw.items() if k not in ("machines", "default_machine")}
+    s = _deep(shared, machines.get(default) or {}) if default else dict(shared)
+    s["machines"] = machines
+    if default:
+        s["_shared"], s["_default"] = shared, default
+    return _filled(s, True)
+
+
+def _filled(s: dict, default: bool) -> dict:
+    """The three sections there; $GLIM_CONFIG overrides the default machine's
+    GLIM config (a machine with a config of its own keeps it)."""
+    for k in ("ouster", "glim", "zed"):
+        s.setdefault(k, {})
+    if default and os.environ.get("GLIM_CONFIG"):
+        s["glim"] = dict(s["glim"], config=os.environ["GLIM_CONFIG"])
     return s
 
 
@@ -186,15 +204,16 @@ def _deep(base, over):
 
 
 def settings_for(settings: dict, machine: Optional[str]) -> dict:
-    """The settings for one machine: the top level (mobile_1's) with that
-    machine's block of ``machines:`` merged over it (dicts merged key by key,
-    lists and values replaced). A machine without a block gets the top level."""
-    base = {k: v for k, v in settings.items() if k != "machines"}
-    over = (settings.get("machines") or {}).get(machine) if machine else None
-    s = _deep(base, over or {})
-    for k in ("ouster", "glim", "zed"):
-        s.setdefault(k, {})
-    return s
+    """The settings for one machine: the shared ones with that machine's block
+    of ``machines:`` merged over them (dicts merged key by key, lists and values
+    replaced). A machine without a block, or none, gets the default machine's
+    (the older layout: the top level, the block merged over it)."""
+    machines = settings.get("machines") or {}
+    top = {k: v for k, v in settings.items() if k not in ("machines", "_shared", "_default")}
+    if machine not in machines:
+        return _filled(dict(top), True)
+    s = _deep(settings.get("_shared", top), machines[machine])
+    return _filled(s, machine == settings.get("_default"))
 
 
 def zed_bags(z: dict) -> Dict[str, List[str]]:
