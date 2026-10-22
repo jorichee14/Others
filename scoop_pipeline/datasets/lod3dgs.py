@@ -1460,6 +1460,7 @@ def fill_walls(M, part, planes, cell=0.1, on=0.08, depth=0.4):
 
 
 def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000000, split_objects=False,
+                object_faces=0,
                 floor_colour=(0.8, 0.8, 0.8), traj=None, ceil_margin=0.10, min_piece=50.0, normals=False,
                 why=(), flat_floor=True, fill=True):
     """The mesh (the one with its ceiling: the radio waves bounce off it) as
@@ -1476,8 +1477,10 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     look at: <out>.ply, all of it in its own colours with the floor
     floor_colour, and <out>_labels.ply in the parts' colours (PART_COLOURS).
 
-    Nothing is rebuilt: faces > 0 simplifies the whole mesh to about that
-    many first (quadric), else it is taken as it is. The labels (label_faces)
+    Nothing is rebuilt: faces > 0 simplifies the floor, walls and ceiling
+    together to about that many (quadric: flat stays flat, in few faces) and
+    object_faces > 0 the objects on their own to that many, so the objects
+    keep finer detail (0: as meshed); else it is taken as it is. The labels (label_faces)
     are found on a copy simplified to label_faces_n faces and each face takes
     its nearest one's. traj (the mesh's frame): the floor level from it (so a
     reflection under the floor cannot pull it down), and what the _noceil copy drops
@@ -1492,11 +1495,6 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
         raise ConvertError(f"{mesh_path}: no faces (give it the mesh, not the view)")
     n0 = len(M.triangles)
     M.remove_duplicated_vertices()
-    if faces and n0 > faces:
-        log.info(f"simplifying {n0} faces to {faces} ...")
-        M = M.simplify_quadric_decimation(target_number_of_triangles=int(faces))
-        M.remove_degenerate_triangles()
-        M.remove_unreferenced_vertices()
     m = M
     if label_faces_n and len(M.triangles) > label_faces_n:
         log.info(f"labelling on a copy of {label_faces_n} faces ...")
@@ -1509,8 +1507,7 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     V, F = np.asarray(m.vertices), np.asarray(m.triangles)
     C = V[F].mean(1)
     A = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1)
-    report = [f"sionna {mesh_path}: {n0} faces" + (f", simplified to {len(M.triangles)}"
-                                                   if len(M.triangles) != n0 else ", as they are")]
+    report = [f"sionna {mesh_path}: {n0} faces"]
     if traj:
         hang = hanging_faces(m, T, ceil_margin, min_piece)
         part[hang] = "gone"
@@ -1528,6 +1525,35 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
             _, i = tree.query(Vf[Ff[a0:a0 + 2000000]].mean(1), workers=-1)
             fpart[a0:a0 + 2000000], fobj[a0:a0 + 2000000] = part[i], obj[i]
         del tree
+    # simplified apart: floor, walls and ceiling together to `faces` (their seams
+    # stay shut), the objects on their own to `object_faces`, finer
+    if (faces and (fpart != "objects").sum() > faces) or (object_faces and (fpart == "objects").sum() > object_faces):
+        def piece(mask, n, keep_ids):
+            q = type(M)(M)
+            q.remove_triangles_by_mask(~mask)
+            q.remove_unreferenced_vertices()
+            n_in = len(q.triangles)
+            if n and n_in > n:
+                q = q.simplify_quadric_decimation(target_number_of_triangles=int(n))
+                q.remove_degenerate_triangles()
+                q.remove_unreferenced_vertices()
+            lab = np.flatnonzero(keep_ids)                       # its faces' parts again, from the labelled
+            Vq, Fq = np.asarray(q.vertices), np.asarray(q.triangles)
+            _, i = cKDTree(C[lab]).query(Vq[Fq].mean(1), workers=-1) if len(Fq) else (None, np.zeros(0, int))
+            return q, part[lab][i], obj[lab][i], n_in
+        structure = (fpart == "floor") | (fpart == "walls") | (fpart == "ceiling")
+        qs, ps, os_, ns = piece(structure, faces, (part == "floor") | (part == "walls") | (part == "ceiling"))
+        qo, po, oo, no = piece(fpart == "objects", object_faces, part == "objects")
+        qg = type(M)(M)
+        qg.remove_triangles_by_mask(fpart != "gone")
+        qg.remove_unreferenced_vertices()
+        pg = np.full(len(qg.triangles), "gone", dtype=object)
+        M = qs + qo + qg
+        fpart = np.r_[ps, po, pg]
+        fobj = np.r_[os_, oo, np.full(len(pg), -1)]
+        report.append(f"  floor, walls and ceiling simplified {ns} -> {len(qs.triangles)} faces, objects "
+                      + (f"{no} -> {len(qo.triangles)}" if object_faces and no > object_faces else f"{no} as meshed")
+                      + " (finer)")
     if flat_floor:
         nmv, dmax = flatten_floor(M, fpart == "floor")
         report.append(f"  floor flattened onto its own level: {nmv} vertices moved, {100 * dmax:.1f} cm at most "
@@ -1962,8 +1988,11 @@ def main():
     sn.add_argument("--traj", default=None,
                     help="the trajectory in the mesh's frame: leave out what hangs from the ceiling only, as "
                          "_noceil does (a reflection); anchored mesh: odometry/reference_<tag>/traj_mobile_2_lidar.tum")
-    sn.add_argument("--faces", type=int, default=0, help="simplify the whole mesh to about this many faces first "
-                                                         "(0: as it is)")
+    sn.add_argument("--faces", type=int, default=0,
+                    help="floor, walls and ceiling simplified together to about this many faces (0: as meshed)")
+    sn.add_argument("--object-faces", type=int, default=0,
+                    help="the objects simplified on their own to about this many faces, finer than the "
+                         "rest (0: as meshed)")
     sn.add_argument("--split-objects", action="store_true",
                     help="each object its own meshes/objects/obj_NNN.ply (a material each, by editing scene.xml)")
     sn.add_argument("--why", action="append", default=[], metavar="X,Y",
@@ -2015,7 +2044,8 @@ def main():
                     ap.error(f"--material {spec}: PART=TYPE[:THICKNESS], PART one of "
                              + ", ".join(SIONNA_MATERIALS))
                 mats[part] = (typ, float(th) if th else SIONNA_MATERIALS[part][1])
-            sionna_mesh(a.file, a.out, faces=a.faces, materials=mats, split_objects=a.split_objects,
+            sionna_mesh(a.file, a.out, faces=a.faces, object_faces=a.object_faces, materials=mats,
+                        split_objects=a.split_objects,
                         traj=a.traj, normals=a.normals, flat_floor=not a.keep_floor, fill=not a.no_fill_walls,
                         why=[tuple(float(v) for v in w.split(",")[:2]) for w in a.why],
                         floor_colour=None if a.floor_grey < 0 else (a.floor_grey,) * 3)

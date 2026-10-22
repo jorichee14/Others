@@ -483,7 +483,8 @@ def check_sionna(tmp):
     chairs and the 4 m of desks (the lamp's flat underside, over 2 m up, with the
     ceiling); the floor flattened (within 1 cm, bumps under furniture
     gone); the wall hidden behind a cupboard (not in the map) filled on its
-    plane; the parts in the mesh's colours; every face in one part
+    plane; the parts in the mesh's colours; every face in one part; with
+    --faces the floor, walls and ceiling simplified, the objects kept finer
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
@@ -608,6 +609,15 @@ def check_sionna(tmp):
     T = np.c_[x, np.full(len(x), 3.0), np.full(len(x), 0.8)]
     e, c = L.walk_start(Vv, T)
     assert np.allclose(e, [1.0, 3.0, 1.6], atol=0.05) and c[0] > e[0], ("walk start", e, c)
+    # simplified for Sionna: floor, walls and ceiling coarse, the objects as meshed (finer)
+    rs = L.sionna_mesh(m["out"], os.path.join(tmp, "radio_small"), label_faces_n=300000, traj=tr, faces=40000)
+    area = {}
+    for n_ in ("walls", "objects"):
+        q = o3d.io.read_triangle_mesh(os.path.join(tmp, "radio_small", "meshes", n_ + ".ply"))
+        area[n_] = len(q.triangles) / max(q.get_surface_area(), 1e-9)
+    assert rs["floor"] + rs["walls"] + rs["ceiling"] < 60000 and rs["objects"] == r["objects"], \
+        ("structure not simplified, or the objects not kept", rs, r["objects"])
+    assert area["objects"] > 5 * area["walls"], ("the objects not finer than the walls", area)
     xml = open(r["scene"]).read()
     assert 'value="brick"' in xml and 'value="wood"' in xml and 'value="concrete"' in xml, xml
     try:

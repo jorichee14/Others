@@ -1065,7 +1065,7 @@ the `_noceil` copy drops as hanging from the ceiling only (a reflection
 joined to a mirrored ceiling: loose once the ceiling is cut, and reaching up
 to the cut, and joined to the building before it) is left out too;
 furniture, loose but well under the ceiling or joined to nothing, and
-pillars standing on the floor, stay. `--faces N` simplifies the whole mesh first (0: as it is). Each part an
+pillars standing on the floor, stay. `--faces N` simplifies the floor, walls and ceiling together to about N faces (flat stays flat, in few faces) and `--object-faces M` the objects apart (0: as meshed), so objects keep finer detail than the walls. Each part an
 ITU material, `--material PART=TYPE[:THICKNESS m]` (default concrete 0.2 m,
 objects wood 0.05 m); `--normals` writes the parts with vertex normals (a
 viewer shades them as surfaces; without, the per-vertex colours make a
