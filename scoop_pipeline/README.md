@@ -1053,12 +1053,13 @@ over 0.8 m) and all that is against a flight (its sides, the landing, the
 floor above it), and low walls between pillars (from the
 floor, 1.5 m long or more, thin across, both ends at a wall) are walls;
 and all that is attached to the walls (touching a wall face and nowhere
-more than 0.2 m from them: door and window frames, sills, panels on a wall,
-what is left of a pillar) is wall too: objects are only what stands out or
+more than 0.2 m from them, or 90 % facing sideways, or off the floor, over
+0.3 m: door and window frames, sills, panels, cabinets and signs on a wall,
+a pillar's curve, pieces of wall) is wall too: objects are only what stands out or
 apart (a chair or desk pushed to a wall reaches out 0.4 m and more);
 floor bumps (no higher than 0.12 m) are floor and scraps under 0.05 m2 the
 part next to them. The floor is then flattened onto its own level (the
-median of its flat faces per 1 m, blended between cells): the bumps under
+median of its flat faces per 1 m, blended between cells; a vertex moved 0.4 m at most, a floor at another level is not a bump): the bumps under
 furniture go (`--keep-floor` keeps them). And the wall hidden behind
 furniture pushed against it, which the mesh does not have, is filled on its
 plane from the floor (where something stands within 0.4 m of it and no wall

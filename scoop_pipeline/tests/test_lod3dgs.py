@@ -486,7 +486,7 @@ def check_sionna(tmp):
     plane; the parts in the mesh's colours; every face in one part; with
     --faces the floor, walls and ceiling simplified, the objects kept finer;
     a flat wall drawn in a few large faces still a wall; chairs pushed to a
-    wall (reaching out 0.4 m) objects
+    wall (reaching out 0.4 m) objects, a cabinet on a wall off the floor wall
     (nothing rebuilt, nothing lost; labelled on a smaller copy); the scene loaded by Sionna RT when installed (four shapes) and a
     floor bounce traced 2.05 ns after the direct path; walk starting 1.6 m
     over the floor at the first pose, facing along the path."""
@@ -542,11 +542,12 @@ def check_sionna(tmp):
     back = back[~((back[:, 0] > 7.4) & (back[:, 0] < 8.9) & (back[:, 2] < 1.2))]   # hidden by the cupboard
     cupboard = box(7.4, 8.9, 5.45, 5.95, 0, 1.2)
     over_glass = sheet(1, 2.5, (8.0, 11.0), (1.9, 2.98))     # a wall from the ceiling down to 1.9 m
+    wall_cab = box(1.0, 2.0, 0.01, 0.41, 1.5, 2.1)             # a cabinet on the wall y = 0, off the floor
     P = np.concatenate([sheet(2, 0.0, (0, 12), (0, 6)), sheet(2, 5.0, (0, 7), (0, 6)),
                         sheet(2, 3.0, (7, 12), (0, 6)), sheet(0, 0.0, (0, 6), (0, 5)),
                         sheet(0, 7.0, (0, 6), (3, 5)), sheet(0, 12.0, (0, 6), (0, 3)),
                         sheet(1, 0.0, (0, 7), (0, 5)), sheet(1, 6.0, (0, 7), (0, 5)),
-                        sheet(1, 0.0, (7, 12), (0, 3)), back, cupboard, over_glass,
+                        sheet(1, 0.0, (7, 12), (0, 3)), back, cupboard, over_glass, wall_cab,
                         pillar, table, cabinet, lamp, desk, room_of_desks, stub, chairs, stairs, knee, rack])
     P = P + rng.normal(0, 0.005, P.shape)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
@@ -583,6 +584,7 @@ def check_sionna(tmp):
                            ("stairs (with the slope under them)", "walls", (0.6, 3.0, 5.0, 5.8, 0.3, 1.8)),
                            ("the landing at their top", "walls", (3.65, 4.2, 5.0, 5.8, 1.95, 2.1)),
                            ("a wall from the ceiling (over glass)", "walls", (8.3, 10.7, 2.45, 2.55, 2.1, 2.8)),
+                           ("a cabinet on a wall, off the floor", "walls", (1.1, 1.9, 0.15, 0.45, 1.55, 2.15)),
                            ("a 1 m wall between pillars", "walls", (5.0, 6.4, 1.9, 2.2, 0.2, 0.9)),
                            ("its top", "walls", (5.0, 6.4, 1.98, 2.12, 0.95, 1.05)),
                            ("a cupboard against a wall", "objects", (7.6, 8.7, 5.4, 5.5, 0.3, 1.0)),

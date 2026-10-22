@@ -1102,7 +1102,8 @@ def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
 
 def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2, vertical=0.3,
                 on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, ground=0.3, against=0.1,
-                pillar_r=(0.1, 1.0), pillar_fit=0.04, attach=0.04, attach_depth=0.2,
+                pillar_r=(0.1, 1.0), pillar_fit=0.04, attach=0.04, attach_depth=0.2, attach_upright=0.9,
+                mounted=0.3,
                 stair_rise=(0.25, 1.5), stair_side=0.15, knee_w=1.5, knee_thin=0.1, knee_end=0.35,
                 T=None, why=(), planes=None):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
@@ -1145,8 +1146,11 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
     ends within knee_end of a wall face; a row of cabinets is deeper and
     has a free end); and so is all that is attached to the walls (touching a
     wall face within `attach` m and nowhere farther than attach_depth from
-    them: a door's or window's frame, a sill, a panel on a wall, what is
-    left of a pillar, and what is attached to those): objects are only what
+    them, or facing sideways attach_upright of it, or off the floor (its
+    bottom over `mounted` m: on the wall), however far: a door's or
+    window's frame, a sill, a panel, a cabinet or a sign on a wall, a
+    pillar's curve, a piece of wall, and what is attached to those):
+    objects are only what
     stands out or apart (a chair or a desk pushed to a wall reaches out
     0.4 m and more); a piece reaching no higher than band (the floor's
     bumps) is floor and one under min_obj m2 (a scrap at a seam) the part
@@ -1364,7 +1368,8 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 touch, out = np.zeros(nc, bool), np.zeros(nc, bool)
                 touch[np.unique(cs[d_ <= attach])] = True
                 out[np.unique(cs[~np.isfinite(d_)])] = True        # some of it farther than attach_depth
-                new = touch & ~out
+                # a pillar's curve, a wall's piece; and off the floor, mounted on the wall
+                new = touch & (~out | (side >= attach_upright) | (c_lo > mounted))
                 if not new.any():
                     break
                 kind[new] = "walls"
@@ -1402,11 +1407,12 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
     return part, obj
 
 
-def flatten_floor(M, floor, cell=1.0, level=0.95):
+def flatten_floor(M, floor, cell=1.0, level=0.95, most=0.4):
     """The vertices of the floor faces (mask) of mesh M put on the floor's
     own level: per cell (m, in plan), the median height of its flat floor
     faces (|n_z| over level), between cells the four nearest blended
-    (inverse distance: no steps). The bumps
+    (inverse distance: no steps); a vertex is moved only up to `most` m (a
+    floor at another level, a landing, is not a bump). The bumps
     under furniture (legs, feet melted into the floor by Poisson) go flat.
     The number of vertices moved and the most any moved (m)."""
     o3d = _o3d()
@@ -1433,7 +1439,9 @@ def flatten_floor(M, floor, cell=1.0, level=0.95):
     w = 1.0 / np.maximum(d, 1e-3)
     z = (w * cz[near]).sum(1) / w.sum(1)
     moved = np.abs(V[vi, 2] - z)
-    V[vi, 2] = z
+    ok = moved <= most                       # bumps only: a floor at another level is not the bump's
+    V[vi[ok], 2] = z[ok]
+    moved = moved[ok]
     M.vertices = o3d.utility.Vector3dVector(V)
     return int((moved > 1e-4).sum()), float(moved.max()) if len(moved) else 0.0
 
@@ -1718,7 +1726,8 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     report += [f"every face accounted: {len(Ff)} = " + " + ".join(f"{used[n]} {n}" for n in used)
                + f" + {n_out} left out" + (f" ({op})" if op else "")
                + (f"  [{n_fill} of the walls' faces added, filling them behind furniture]" if n_fill else "")
-               + (f"  [the mesh's {n0} faces simplified to {len(Ff)} first]" if len(Ff) != n0 else "")]
+               + (f"  [the mesh's {n0} faces simplified to {len(Ff) - n_fill} first]"
+                  if len(Ff) - n_fill != n0 else "")]
     report += [f"sionna scene {sx} (loads meshes/ beside it; keep the folder whole; parts.json: the counts):"]
     report += [f"  {n}: {used[n]} faces, ITU {mats[n][0]} {float(mats[n][1]):g} m" for n in used]
     report += [f"  load: sionna.rt.load_scene(\"{sx}\"" + (", merge_shapes=False" if split_objects else "")
