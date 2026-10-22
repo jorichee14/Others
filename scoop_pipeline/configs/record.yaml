@@ -54,12 +54,13 @@ check:
   modes:
     mapping:                       # LiDAR + ZED: no link or time-base measurements
       skip: ["/*/wifi/*", "/*/ntp/*", "/*/diagnostics"]   # diagnostics come with ntp
-    survey:                        # mobile_2 is parked as an anchor: link + time base, and
-                                   # its colour camera, which sights the board that places it
+    survey:                        # mobile_2 is parked as an anchor: link + time base, its
+                                   # colour camera, which sights the board that seeds its
+                                   # place, and its Ouster (since 20261015), which places it
+                                   # (07_cameras "source": "lidar")
       skip: ["/mobile_2/camera/infra1/*", "/mobile_2/camera/infra2/*",
              "/mobile_2/camera/depth/*", "/mobile_2/camera/imu",
              "/mobile_2/camera/extrinsics/*",
-             "/mobile_2/ouster/*",         # a parked robot's LiDAR maps nothing new
              "/mobile_2/wifi/iperf_*",
              "/infra_*/wifi/iperf_*"]  # the infra nodes run iperf in contention only
     coop:

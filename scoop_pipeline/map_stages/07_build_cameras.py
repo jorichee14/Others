@@ -30,6 +30,17 @@ Each camera entry now declares a "source":
       actually static during the sighting; otherwise it takes the single
       lowest-reprojection frame and says so.
 
+  "source": "lidar"
+      A parked robot with a LiDAR of its own (mobile_2 in a survey): placed as
+      "board" first, which seeds its LiDAR pose (through the robot's own
+      LiDAR -> camera calibration in the bag's /tf_static); then "n_scans" of
+      its scans on "points_topic", spread over the recording, are each
+      registered to the map by 04's scan-to-map ICP. The robot is parked, so
+      they must agree ("lidar_static_tol_mm") and are averaged; the camera
+      follows from the averaged LiDAR pose. The board placement stays as the
+      check (board_check_mm / _deg in the output). If the scans do not fit, or
+      the robot moved, the board placement is used and 07 says why.
+
   python3 07_build_cameras.py [pipeline_config.json]
 """
 import os
@@ -199,6 +210,93 @@ def camera_from_board(cam, ctx):
             "translation": t.tolist(), "quaternion_xyzw": q.tolist()}
 
 
+LIDAR_ICP = dict(target_voxel=0.05, scan_voxel=0.10, plane_voxel=0.4, planarity=1.0,
+                 max_corr=[0.4, 0.2, 0.1], iters_per_gate=5, huber=0.05, plane_iters=8,
+                 plane_huber=0.10, prior_beta=0.05, min_corr=200)       # 04's defaults
+
+
+def camera_from_lidar(cam, ctx, P):
+    """"source": "lidar" (see the top): the board placement, then the robot's
+    own scans registered to the map from it; the board stays as the check."""
+    import importlib
+    import open3d as o3d
+    import pass_tf
+    from scoop import bag as sbag, tftree
+    A = importlib.import_module("02b_scan_to_map")
+    rec = camera_from_board(cam, ctx)
+    if rec is None:
+        print("  ! no board placement to start the LiDAR registration from -> skipped")
+        return None
+    child, topic = cam["child_frame"], cam["points_topic"]
+    bag = cam.get("lidar_bag") or ctx["default_bag"]
+    lidar = pass_tf._frame_id([bag], topic)
+    if lidar is None:
+        print("  ! no %s in %s -> the board placement is kept" % (topic, bag))
+        return rec
+    try:
+        T_lc = tftree.static_between(lidar, child, tftree.tf_edges([bag]))
+    except sbag.BagError as e:
+        print("  ! %s -> the board placement is kept" % e)
+        return rec
+    T_mc_board = xyzquat_to_T(list(rec["translation"]) + list(rec["quaternion_xyzw"]))
+    T_seed = T_mc_board @ np.linalg.inv(T_lc)              # map -> LiDAR, from the board
+    c = dict(LIDAR_ICP, **(cam.get("icp") or {}))
+
+    ref_map = ctx["map_file"]
+    print("  LiDAR %s (%s) to %s" % (topic, lidar, ref_map))
+    pc = o3d.io.read_point_cloud(ref_map)
+    ref = A.Reference(np.asarray(pc.voxel_down_sample(float(c["target_voxel"])).points),
+                      plane_voxel=float(c["plane_voxel"]), planarity=float(c["planarity"]))
+    del pc
+    reader = sbag.open_bag(bag)
+    total = reader.topics()[topic].count
+    n = int(cam.get("n_scans", 10))
+    picks = set(np.linspace(0, max(total - 1, 0), min(n, total)).round().astype(int).tolist())
+    lo, hi = cam.get("range", [0.7, 25.0])
+    seen = [-1]
+
+    def pick(_stamp):                         # by message index, before decoding
+        seen[0] += 1
+        return seen[0] if seen[0] in picks else None
+    Ts, fits = [], []
+    for scan in sbag.iter_scans(reader, topic, select=pick, min_range=lo, max_range=hi):
+        pts = np.asarray(o3d.geometry.PointCloud(o3d.utility.Vector3dVector(
+            scan.xyz.astype(np.float64))).voxel_down_sample(float(c["scan_voxel"])).points)
+        T, n_corr, rms, _, _ = A.register(ref, pts, T_seed, c)
+        if n_corr < int(c["min_corr"]) or not np.isfinite(rms):
+            print("    scan at %.1f s: %d correspondences, no fit" % (scan.stamp, n_corr))
+            continue
+        Ts.append(T)
+        fits.append((n_corr, rms))
+    if len(Ts) < max(3, len(picks) // 2):
+        print("  ! %d of %d scans fit the map -> the board placement is kept"
+              % (len(Ts), len(picks)))
+        return rec
+    T_avg, _ = avg_T(Ts)
+    sp = spread(Ts, T_avg)
+    print("  %d of %d scans registered (median %d correspondences, RMS %.1f cm) | %s"
+          % (len(Ts), len(picks), int(np.median([f[0] for f in fits])),
+             np.median([f[1] for f in fits]) * 100, fmt_spread(sp)))
+    if sp[1] > float(cam.get("lidar_static_tol_mm", 20.0)):
+        print("  ! the scans disagree (max %.1f mm): the robot moved? -> the board "
+              "placement is kept" % sp[1])
+        return rec
+    T_mc = T_avg @ T_lc
+    d_mm = float(np.linalg.norm(T_mc[:3, 3] - T_mc_board[:3, 3]) * 1000)
+    d_deg = ang_deg(T_mc[:3, :3], T_mc_board[:3, :3])
+    t = T_mc[:3, 3]; q = R_to_q(T_mc[:3, :3])
+    print("  map->%s from the LiDAR: t=%s q=%s; the board placement is %.1f mm / %.2f deg "
+          "from it" % (child, t.round(4).tolist(), q.round(5).tolist(), d_mm, d_deg))
+    rec.update({"source": "lidar_avg", "points_topic": topic, "lidar_frame": lidar,
+                "n_scans": len(Ts), "lidar_spread_max_mm": round(sp[1], 2),
+                "lidar_rms_cm": round(float(np.median([f[1] for f in fits])) * 100, 2),
+                "board_check_mm": round(d_mm, 1), "board_check_deg": round(d_deg, 3),
+                "board_translation": rec["translation"],
+                "board_quaternion_xyzw": rec["quaternion_xyzw"],
+                "translation": t.tolist(), "quaternion_xyzw": q.tolist()})
+    return rec
+
+
 # --------------------------------------------------------------------------- #
 def main():
     cfg_path = sys.argv[1] if len(sys.argv) > 1 else "pipeline_config.json"
@@ -230,6 +328,10 @@ def main():
            # map -> map_zed does not hold for a run, so no ChArUco delta there
            "T_map_mapzed": None if P.reference else load_T_map_mapzed(af, s),
            "T_lidar_cam": S.T_lidar_camera,
+           # the map a LiDAR-placed camera is registered to: the anchored map
+           # (the reference pass's for a run)
+           "map_file": (P.ref_file("anchored_map") if P.reference
+                        else P.outp("map_final_{tag}_anchored.pcd")),
            "tr_t": None, "tr_T": None}
 
     if P.reference:
@@ -282,9 +384,11 @@ def main():
             rec = camera_from_yaml(cam, ctx)
         elif src == "board":
             rec = camera_from_board(cam, ctx)
+        elif src == "lidar":
+            rec = camera_from_lidar(cam, ctx, P)
         else:
             raise SystemExit("camera '%s': unknown source '%s' "
-                             "(use 'extrinsic_yaml' or 'board')" % (cam["name"], src))
+                             "(use 'extrinsic_yaml', 'board' or 'lidar')" % (cam["name"], src))
         if rec is not None:
             out.append(rec)
 
