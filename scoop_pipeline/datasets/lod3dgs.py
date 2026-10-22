@@ -2189,7 +2189,7 @@ def walk_start(V, T=None, at=None, eye=1.6, ahead=2.0):
     return e, e + np.r_[d / np.linalg.norm(d), 0.0]
 
 
-def smooth_colours(V, C, radius=0.15, cell=0.05, sigma=0.15, weight=0.85):
+def smooth_colours(V, C, radius=0.06, cell=0.03, sigma=0.15, weight=0.7):
     """The mesh's colours (n x 3) smoothed over the surface to about
     `radius` m, keeping edges: the vertices binned in cells of cell m
     (each cell its mean colour), the cells blended with their 26
@@ -2269,14 +2269,15 @@ def despeckle_colours(F, C, thresh=0.12, passes=2):
     return C, changed
 
 
-def enhance_colours(C, low=1.0, high=99.0, sat=1.15, gamma=0.8, wb=True):
+def enhance_colours(C, low=0.5, high=99.5, sat=1.2, gamma=1.0, wb=True, contrast=1.15):
     """The mesh's colours (n x 3, 0-1: the camera's, flat and greyish) made
     vivid: the cast gone (wb: each channel scaled to the mean of the three,
     within a quarter: the green of fluorescent light, the blue of daylight;
     a white room white), then stretched so the low-th and high-th
     percentiles (the lowest and highest channel's) become 0 and 1 (the
     haze and the shadows' grey gone), the saturation times `sat` (about the
-    grey of each colour) and a gamma (under 1: the shadows lifted). The
+    grey of each colour), a gamma (under 1: the shadows lifted) and a
+    contrast about mid grey (`contrast` times the distance from it). The
     same n x 3, clipped to 0-1."""
     C = np.asarray(C, float)
     if not len(C):
@@ -2288,7 +2289,8 @@ def enhance_colours(C, low=1.0, high=99.0, sat=1.15, gamma=0.8, wb=True):
     C = (C - lo) / max(hi - lo, 1e-3)
     grey = C @ [0.299, 0.587, 0.114]
     C = grey[:, None] + sat * (C - grey[:, None])
-    return np.clip(np.clip(C, 0, 1) ** gamma, 0, 1)
+    C = np.clip(np.clip(C, 0, 1) ** gamma, 0, 1)
+    return np.clip(0.5 + contrast * (C - 0.5), 0, 1)
 
 
 def mesh_blocks(m, cell=4.0, one_side=False):
@@ -2420,8 +2422,8 @@ def video_writer(out, fps, size):
 
 
 def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps=30, size=(1280, 720), fov=70.0,
-              ahead=2.0, faces=0, vivid=True, sat=1.15, seconds=0, hidden=False, start=(0.0, 0.0), spin=8.0,
-              wb=True, smooth=0.15, gamma=0.8):
+              ahead=2.0, faces=0, vivid=True, sat=1.2, seconds=0, hidden=False, start=(0.0, 0.0), spin=8.0,
+              wb=True, smooth=0.06, gamma=1.0):
     """A video (out, .mp4; default <mesh>_fly.mp4) flying once round the
     area inside the mesh at eye m over the floor, speed m/s, looking ahead
     m along the way: the path loop_path's (inset m from the walls), or
@@ -2551,8 +2553,8 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
     return P, nfr
 
 
-def walk(mesh_path, traj=None, at=None, faces=0, eye=1.6, fov=70.0, shot=None, vivid=True, sat=1.15,
-         one_side=False, step=0.1, turn=4.0, near=15.0, cell=4.0, wb=True, smooth=0.15, gamma=0.8):
+def walk(mesh_path, traj=None, at=None, faces=0, eye=1.6, fov=70.0, shot=None, vivid=True, sat=1.2,
+         one_side=False, step=0.1, turn=4.0, near=15.0, cell=4.0, wb=True, smooth=0.06, gamma=1.0):
     """Walk inside a mesh (with its ceiling) in a window, started eye m over
     the floor at walk_start's place, the mesh unlit in its colours (vivid:
     enhance_colours, saturation sat) and seen from both sides (one_side: as
@@ -2996,10 +2998,10 @@ def main():
     fv.add_argument("--eye", type=float, default=1.6, help="eye height over the floor (m)")
     fv.add_argument("--faces", type=int, default=0, help="simplify to this many faces first (0: all of it)")
     fv.add_argument("--plain", action="store_true", help="the colours as stored")
-    fv.add_argument("--sat", type=float, default=1.15, help="the saturation boost when made vivid")
-    fv.add_argument("--gamma", type=float, default=0.8, help="under 1 lifts the shadows (dark walls), over 1 deepens them")
+    fv.add_argument("--sat", type=float, default=1.2, help="the saturation boost when made vivid")
+    fv.add_argument("--gamma", type=float, default=1.0, help="under 1 lifts the shadows (dark walls), over 1 deepens them")
     fv.add_argument("--cast", action="store_true", help="keep the colours' cast (default: white balanced)")
-    fv.add_argument("--smooth", type=float, default=0.15,
+    fv.add_argument("--smooth", type=float, default=0.06,
                     help="smooth the colours over the surface to this radius (m), edges kept (0: not)")
     fv.add_argument("--hidden", action="store_true", help="the window not shown")
     wk = sub.add_parser("walk", help="walk inside a mesh (with its ceiling) in a window")
@@ -3014,10 +3016,10 @@ def main():
     wk.add_argument("--cell", type=float, default=4.0, help="the blocks the mesh is cut into (m, in plan)")
     wk.add_argument("--plain", action="store_true",
                     help="the colours as stored (default: made vivid, the camera's haze and grey gone)")
-    wk.add_argument("--sat", type=float, default=1.15, help="the saturation boost when made vivid")
-    wk.add_argument("--gamma", type=float, default=0.8, help="under 1 lifts the shadows (dark walls), over 1 deepens them")
+    wk.add_argument("--sat", type=float, default=1.2, help="the saturation boost when made vivid")
+    wk.add_argument("--gamma", type=float, default=1.0, help="under 1 lifts the shadows (dark walls), over 1 deepens them")
     wk.add_argument("--cast", action="store_true", help="keep the colours' cast (default: white balanced)")
-    wk.add_argument("--smooth", type=float, default=0.15,
+    wk.add_argument("--smooth", type=float, default=0.06,
                     help="smooth the colours over the surface to this radius (m), edges kept (0: not)")
     wk.add_argument("--step", type=float, default=0.1, help="metres per key event (W/S/A/D/Q/Z)")
     wk.add_argument("--turn", type=float, default=4.0, help="degrees per arrow key event")
