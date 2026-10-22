@@ -2159,22 +2159,41 @@ def walk_start(V, T=None, at=None, eye=1.6, ahead=2.0):
     return e, e + np.r_[d / np.linalg.norm(d), 0.0]
 
 
-def smooth_colours(F, C, passes=1):
-    """The mesh's colours (n x 3) blended with their neighbours' over the
-    faces F (half each), `passes` times: the stipple of one colour a
-    vertex softened."""
+def smooth_colours(V, C, radius=0.15, cell=0.05, sigma=0.15, weight=0.85):
+    """The mesh's colours (n x 3) smoothed over the surface to about
+    `radius` m, keeping edges: the vertices binned in cells of cell m
+    (each cell its mean colour), the cells blended with their 26
+    neighbours over radius / cell passes, each neighbour weighted by how
+    alike its colour is (sigma, in rgb: a poster's edge, a door's, stays
+    sharp; the stipple inside a wall goes), and each vertex given its
+    cell's colour by `weight` (the rest its own). The new n x 3."""
     C = np.asarray(C, float)
-    n = len(C)
-    for _ in range(passes):
-        acc, deg = np.zeros((n, 3)), np.zeros(n)
-        for a, b in ((0, 1), (1, 0), (1, 2), (2, 1), (0, 2), (2, 0)):
-            deg += np.bincount(F[:, a], minlength=n)
-            for ch in range(3):
-                acc[:, ch] += np.bincount(F[:, a], weights=C[F[:, b], ch], minlength=n)
-        has = deg > 0
-        C = C.copy()
-        C[has] = 0.5 * C[has] + 0.5 * acc[has] / deg[has, None]
-    return C
+    if not len(C) or radius <= 0:
+        return C
+    ijk = np.floor((V - V.min(0)) / cell).astype(np.int64)
+    dims = ijk.max(0) + 3
+    key = (ijk[:, 0] + 1) * dims[1] * dims[2] + (ijk[:, 1] + 1) * dims[2] + ijk[:, 2] + 1
+    ks, inv = np.unique(key, return_inverse=True)
+    inv = inv.ravel()
+    nk = len(ks)
+    cc = np.c_[[np.bincount(inv, C[:, ch], nk) for ch in range(3)]].T / np.maximum(np.bincount(inv, minlength=nk), 1)[:, None]
+    offs = [np.array([a, b, c_]) for a in (-1, 0, 1) for b in (-1, 0, 1) for c_ in (-1, 0, 1) if (a, b, c_) != (0, 0, 0)]
+    nb = []
+    for o in offs:
+        kn = ks + o[0] * dims[1] * dims[2] + o[1] * dims[2] + o[2]
+        j = np.searchsorted(ks, kn)
+        j[j >= nk] = 0
+        nb.append(np.where(ks[j] == kn, j, -1))
+    nb = np.array(nb)                                     # 26 x nk, -1 where no cell
+    for _ in range(max(1, int(round(radius / cell)))):
+        acc, wsum = cc.copy(), np.ones(nk)
+        for j in nb:
+            has = j >= 0
+            w = np.exp(-((cc[has] - cc[j[has]]) ** 2).sum(1) / (2 * sigma ** 2))
+            acc[has] += w[:, None] * cc[j[has]]
+            wsum[has] += w
+        cc = acc / wsum[:, None]
+    return weight * cc[inv] + (1 - weight) * C
 
 
 def despeckle_colours(F, C, thresh=0.12, passes=2):
@@ -2352,7 +2371,7 @@ def video_writer(out, fps, size):
 
 def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps=30, size=(1280, 720), fov=70.0,
               ahead=2.0, faces=0, vivid=True, sat=1.15, seconds=0, hidden=False, start=(0.0, 0.0), spin=8.0,
-              wb=True, smooth=1):
+              wb=True, smooth=0.15):
     """A video (out, .mp4; default <mesh>_fly.mp4) flying once round the
     area inside the mesh at eye m over the floor, speed m/s, looking ahead
     m along the way: the path loop_path's (inset m from the walls), or
@@ -2377,9 +2396,9 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
     if vivid and m.has_vertex_colors():
         Cd, nsp = despeckle_colours(np.asarray(m.triangles), np.asarray(m.vertex_colors))
         if smooth:
-            Cd = smooth_colours(np.asarray(m.triangles), Cd, smooth)
-        log.info(f"colours: {nsp} speckles smoothed over, blended {smooth} x, then made vivid"
-                 + (", white balanced" if wb else ""))
+            Cd = smooth_colours(np.asarray(m.vertices), Cd, smooth)
+        log.info(f"colours: {nsp} speckles smoothed over, smoothed over {100 * smooth:.0f} cm (edges kept), "
+                 "then made vivid" + (", white balanced" if wb else ""))
         m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(Cd, sat=sat, wb=wb))
     P, z0, free, lo_ = loop_path(m, inset, eye=eye)
     if path is not None and len(path):
@@ -2483,7 +2502,7 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
 
 
 def walk(mesh_path, traj=None, at=None, faces=0, eye=1.6, fov=70.0, shot=None, vivid=True, sat=1.15,
-         one_side=False, step=0.1, turn=4.0, near=15.0, cell=4.0, wb=True, smooth=1):
+         one_side=False, step=0.1, turn=4.0, near=15.0, cell=4.0, wb=True, smooth=0.15):
     """Walk inside a mesh (with its ceiling) in a window, started eye m over
     the floor at walk_start's place, the mesh unlit in its colours (vivid:
     enhance_colours, saturation sat) and seen from both sides (one_side: as
@@ -2508,9 +2527,9 @@ def walk(mesh_path, traj=None, at=None, faces=0, eye=1.6, fov=70.0, shot=None, v
     if vivid and m.has_vertex_colors():
         Cd, nsp = despeckle_colours(np.asarray(m.triangles), np.asarray(m.vertex_colors))
         if smooth:
-            Cd = smooth_colours(np.asarray(m.triangles), Cd, smooth)
-        log.info(f"colours: {nsp} speckles smoothed over, blended {smooth} x, then made vivid"
-                 + (", white balanced" if wb else ""))
+            Cd = smooth_colours(np.asarray(m.vertices), Cd, smooth)
+        log.info(f"colours: {nsp} speckles smoothed over, smoothed over {100 * smooth:.0f} cm (edges kept), "
+                 "then made vivid" + (", white balanced" if wb else ""))
         m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(Cd, sat=sat, wb=wb))
     V = np.asarray(m.vertices)
     e, c = walk_start(V, read_tum_positions(traj, stride=1) if traj else None, at, eye)
@@ -2926,7 +2945,8 @@ def main():
     fv.add_argument("--plain", action="store_true", help="the colours as stored")
     fv.add_argument("--sat", type=float, default=1.15, help="the saturation boost when made vivid")
     fv.add_argument("--cast", action="store_true", help="keep the colours' cast (default: white balanced)")
-    fv.add_argument("--smooth", type=int, default=1, help="blend each colour with its neighbours this many times")
+    fv.add_argument("--smooth", type=float, default=0.15,
+                    help="smooth the colours over the surface to this radius (m), edges kept (0: not)")
     fv.add_argument("--hidden", action="store_true", help="the window not shown")
     wk = sub.add_parser("walk", help="walk inside a mesh (with its ceiling) in a window")
     wk.add_argument("file", help="a mesh, e.g. mesh_view_<tag>_anchored.ply or its _sionna.ply")
@@ -2942,7 +2962,8 @@ def main():
                     help="the colours as stored (default: made vivid, the camera's haze and grey gone)")
     wk.add_argument("--sat", type=float, default=1.15, help="the saturation boost when made vivid")
     wk.add_argument("--cast", action="store_true", help="keep the colours' cast (default: white balanced)")
-    wk.add_argument("--smooth", type=int, default=1, help="blend each colour with its neighbours this many times")
+    wk.add_argument("--smooth", type=float, default=0.15,
+                    help="smooth the colours over the surface to this radius (m), edges kept (0: not)")
     wk.add_argument("--step", type=float, default=0.1, help="metres per key event (W/S/A/D/Q/Z)")
     wk.add_argument("--turn", type=float, default=4.0, help="degrees per arrow key event")
     wk.add_argument("--one-side", action="store_true",

@@ -1154,8 +1154,9 @@ its `_sionna.ply`): Open3D's fly mode, started 1.6 m (`--eye`) over the floor
 at the first pose of `--traj` facing along the path (or `--at X,Y`), the
 mesh unlit in its colours with the speckle smoothed over (a vertex much
 brighter or darker than its neighbours, a glint of the camera's colouring,
-takes their colour), blended with their neighbours (`--smooth` 1 time; 0:
-not) and made vivid (white balanced, the green of
+takes their colour), smoothed over the surface to `--smooth` 0.15 m with
+edges kept (a poster's or a door's outline stays, the stipple inside a wall
+goes; 0: not) and made vivid (white balanced, the green of
 fluorescent light gone, `--cast` keeps it; stretched over their range, the
 camera's haze and grey gone; the saturation up `--sat` 1.15; `--plain`: as
 stored) and seen from both sides (`--one-side`: as stored, half the load),

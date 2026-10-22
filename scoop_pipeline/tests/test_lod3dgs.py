@@ -703,6 +703,11 @@ def check_sionna(tmp):
     Cn_[ids[:150]], Cn_[ids[150:]] = 1.0, 0.0
     Cd_, nsp = L.despeckle_colours(Fs_, Cn_)
     assert nsp and np.abs(Cd_ - Cs_).mean() < 0.01 and np.abs(Cd_ - Cs_).max() < 0.3, ("speckles left", nsp)
+    base_ = np.where(Vs_[:, 2:3] > 0, [0.8, 0.2, 0.2], [0.7, 0.7, 0.7])      # stipple smoothed, the edge kept
+    Cst_ = np.clip(base_ + np.random.default_rng(1).normal(0, 0.08, base_.shape), 0, 1)
+    Csm_ = L.smooth_colours(Vs_, Cst_, 0.15)
+    assert np.abs(Csm_ - base_).mean() < 0.4 * np.abs(Cst_ - base_).mean(), "the stipple not smoothed"
+    assert np.abs(Csm_[Vs_[:, 2] > 0.3].mean(0) - [0.8, 0.2, 0.2]).max() < 0.03, "the colour edge blurred"
     Cv_ = L.enhance_colours(np.tile(np.linspace(0.3, 0.6, 100)[:, None], (1, 3)) * [1.0, 0.9, 0.8])
     assert Cv_.min() < 0.05 and Cv_.max() > 0.95 and abs(Cv_[:, 0].mean() - Cv_[:, 2].mean()) < 0.03, \
         "colours not made vivid and white balanced"
