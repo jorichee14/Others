@@ -374,12 +374,12 @@ link'' without text.}
 
 \subsection{Agents}
 \texttt{mobile\_1}, the LiDAR robot, is an AgileX Scout Mini equipped
-with an Ouster LiDAR, a ZED~2i stereo camera with an integrated IMU,
+with an Ouster OS1-64 LiDAR, a ZED~2i stereo camera with an integrated IMU,
 two IWR6843 mmWave radars, and an RTL8852BU Wi-Fi interface. It also
 carries \texttt{sniffer}, a Raspberry Pi~4 whose BCM43455c0 chipset is
 used for CSI extraction. \texttt{mobile\_2}, the RGB-D cart, is a
-pushcart equipped with a RealSense D455 RGB-D camera with IMU, an
-on-board visual SLAM pipeline, and a Wi-Fi interface \todo{Add Radar
+pushcart equipped with an Ouster OS1-128 LiDAR, a RealSense D455 RGB-D
+camera with IMU, an on-board visual SLAM pipeline, and a Wi-Fi interface \todo{Add Radar
 (?)}. Each infrastructure mast, \texttt{infra\_N}, carries an Arducam
 RGB camera, an IWR6843 radar, and a Raspberry Pi whose on-board
 BCM43455 serves as the wireless interface. The sensor models, rates,
@@ -698,7 +698,7 @@ independently, reproduces the surface placement to
 $2\times10^{-5}$. Since both runs share the sensor and the algorithm,
 this establishes scale stability, not absolute scale.
 A pass by the other robot checks the reference across robots and days:
-\texttt{mobile\_1}, whose LiDAR has half the beams of \texttt{mobile\_2}'s,
+\texttt{mobile\_1}, whose OS1-64 has half the beams of \texttt{mobile\_2}'s OS1-128,
 mapped the site three weeks before the reference pass, processed by the
 same pipeline with the same settings (board loop closure
 \SI{3.2}{\milli\metre}, within its detection noise). Registered rigidly

@@ -46,7 +46,7 @@ of earlier poses (union_ba, tsdf_ba, v1: 7.5 / 1.7 cm), GLIM with `imu_time_offs
 ### Second mapping pass 20260924 (`mobile_1`, 1078 s, 396 m): the cross-robot check
 
 Same pipeline and settings as 20261015 (`map_stages/pipeline_config_mapping_20260924.json`, from `raw/20260924/mapping/`).
-mobile_1's LiDAR has half mobile_2's beams (64 vs 128).
+mobile_1's Ouster OS1-64 has half the beams of mobile_2's OS1-128.
 Paper: `main.tex` "Second mapping pass" paragraph, `tables/gt.tex` cross-robot rows.
 
 | Result | Value | Tool |
