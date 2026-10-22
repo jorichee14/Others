@@ -1063,7 +1063,7 @@ def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
 def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2, vertical=0.3,
                 on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, tall=2.3, sideways=0.75,
                 line_h=2.1, line_cell=0.05, stair_rise=(0.25, 1.5), knee_w=1.5, knee_thin=0.1, knee_end=0.35,
-                T=None):
+                T=None, why=()):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
     each object face its object's number (-1 for the rest).
 
@@ -1104,7 +1104,8 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
     1 sigma) with both ends within knee_end of a wall face (a row of
     cabinets is deeper, and has a free end); a piece reaching no higher than band (the floor's bumps)
     is floor and one under min_obj m2 (a scrap at a seam) the part of the
-    nearest labelled face."""
+    nearest labelled face. why: plan points (x, y): the pieces left there
+    and what each rule saw of them, logged."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
     V, F = np.asarray(m.vertices), np.asarray(m.triangles)
@@ -1223,6 +1224,7 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
         # the slope under them, the rail); furniture and a shelf's stack do not
         order = np.argsort(comp, kind="stable")
         cuts = np.searchsorted(comp[order], np.arange(nc + 1))
+        slope, fit = np.full(nc, np.nan), np.full(nc, np.nan)
         for k_ in np.flatnonzero((c_hi - c_lo >= 0.8) & (c_area >= 0.5)):
             sel = rest[order[cuts[k_]:cuts[k_ + 1]]]
             if len(sel) < 30:
@@ -1233,6 +1235,7 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
             a_, b_ = np.polyfit(u, zz, 1, w=np.sqrt(w))
             r2 = 1 - np.average((zz - (a_ * u + b_)) ** 2, weights=w) / max(np.average(
                 (zz - np.average(zz, weights=w)) ** 2, weights=w), 1e-12)
+            slope[k_], fit[k_] = abs(a_), r2
             if stair_rise[0] <= abs(a_) <= stair_rise[1] and r2 >= 0.6:
                 kind[k_] = "walls"
         # low walls between pillars: long, thin across, both ends at a wall
@@ -1258,6 +1261,23 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
                 ends = [np.r_[mx[k_] + ax_[k_, 0] * e, my[k_] + ax_[k_, 1] * e, mz[k_]] for e in (p0[k_], p1[k_])]
                 if all(len(wtree.query_ball_point(e_, knee_end)) for e_ in ends):
                     kind[k_] = "walls"
+            for q in why:                               # what each rule saw of the pieces there
+                d2 = np.hypot(Cr[:, 0] - q[0], Cr[:, 1] - q[1])
+                ks = np.unique(comp[d2 < 1.0])
+                ks = ks[np.argsort(-c_area[ks])][:4]
+                lines = [f"why ({q[0]:.2f}, {q[1]:.2f}): {len(ks)} pieces left within 1 m"
+                         + ("" if len(ks) else " (all there already floor, wall or ceiling)")]
+                for k_ in ks:
+                    ends = [np.r_[mx[k_] + ax_[k_, 0] * e, my[k_] + ax_[k_, 1] * e, mz[k_]]
+                            for e in (p0[k_], p1[k_])]
+                    de = [wtree.query(e_)[0] for e_ in ends]
+                    lines.append(
+                        f"  piece {k_}: {c_area[k_]:.2f} m2 -> {kind[k_]}; height {c_lo[k_]:.2f}-{c_hi[k_]:.2f} m "
+                        f"over the floor; sideways {100 * side[k_]:.0f} %; long {p1[k_] - p0[k_]:.2f} m, across "
+                        f"{100 * across[k_]:.1f} cm (1 sigma); ends {de[0]:.2f} / {de[1]:.2f} m from a wall; "
+                        + (f"climbs {slope[k_]:.2f} m per m, fit {fit[k_]:.2f}" if np.isfinite(slope[k_])
+                           else "no climb tested (under 0.8 m of height or 0.5 m2)"))
+                log.info("\n".join(lines))
         kind[c_hi <= band] = "floor"
         scrap = c_area < min_obj
         kind[scrap] = ""
@@ -1276,7 +1296,8 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
 
 
 def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000000, split_objects=False,
-                floor_colour=(0.8, 0.8, 0.8), traj=None, ceil_margin=0.10, min_piece=50.0, normals=False):
+                floor_colour=(0.8, 0.8, 0.8), traj=None, ceil_margin=0.10, min_piece=50.0, normals=False,
+                why=()):
     """The mesh (the one with its ceiling: the radio waves bounce off it) as
     a Sionna RT scene, its own faces split into floor, walls, ceiling and
     objects: <out>/scene.xml (what Sionna loads: sionna.rt.load_scene) with
@@ -1319,7 +1340,7 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
         m.remove_degenerate_triangles()
         m.remove_unreferenced_vertices()
     T = read_tum_positions(traj, stride=1) if traj else None
-    part, obj = label_faces(m, T=T)
+    part, obj = label_faces(m, T=T, why=why)
     V, F = np.asarray(m.vertices), np.asarray(m.triangles)
     C = V[F].mean(1)
     A = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1)
@@ -1759,6 +1780,9 @@ def main():
                                                          "(0: as it is)")
     sn.add_argument("--split-objects", action="store_true",
                     help="each object its own meshes/objects/obj_NNN.ply (a material each, by editing scene.xml)")
+    sn.add_argument("--why", action="append", default=[], metavar="X,Y",
+                    help="log what each rule saw of the pieces left within 1 m of this plan point (the mesh's "
+                         "frame; pick it in CloudCompare); repeat for more")
     sn.add_argument("--normals", action="store_true",
                     help="write the parts with vertex normals: a viewer shades them as surfaces (colours greyed)")
     sn.add_argument("--floor-grey", type=float, default=0.8,
@@ -1801,6 +1825,7 @@ def main():
                 mats[part] = (typ, float(th) if th else SIONNA_MATERIALS[part][1])
             sionna_mesh(a.file, a.out, faces=a.faces, materials=mats, split_objects=a.split_objects,
                         traj=a.traj, normals=a.normals,
+                        why=[tuple(float(v) for v in w.split(",")[:2]) for w in a.why],
                         floor_colour=None if a.floor_grey < 0 else (a.floor_grey,) * 3)
         elif a.cmd == "scene":
             convert(a.dataset, a.map, a.out, every=a.every, voxel=a.voxel,

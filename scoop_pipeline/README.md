@@ -1061,7 +1061,10 @@ stays. `--faces N` simplifies the whole mesh first (0: as it is). Each part an
 ITU material, `--material PART=TYPE[:THICKNESS m]` (default concrete 0.2 m,
 objects wood 0.05 m); `--normals` writes the parts with vertex normals (a
 viewer shades them as surfaces; without, the per-vertex colours make a
-mesh look like points); `--split-objects` writes each object to
+mesh look like points); `--why X,Y` (repeat it) logs, for the pieces left within 1 m of that plan
+point (pick it in CloudCompare), what each rule saw: height, share facing
+sideways, length and thickness across, how far its ends are from a wall,
+how it climbs; `--split-objects` writes each object to
 `meshes/objects/obj_NNN.ply` (load with `merge_shapes=False`; edit an
 object's material in `scene.xml`).
 
