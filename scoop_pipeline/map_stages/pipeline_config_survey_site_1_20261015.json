@@ -1,0 +1,22 @@
+{
+  "extends": "pipeline_config.json",
+  "_note": "20261015 survey at site 1 (raw/20261015/survey/site_1/), in the same day's map (20261015 mapping, mobile_2's): mobile_1 drives the survey; mobile_2 is parked as an anchor, its RealSense sighting rs_anchor; infra_1 and the sniffer record the link. As survey_1 (20260924): 03 (start from the ZED's board views, through GLIM) -> 04 (LiDAR ICP to the anchored map) -> 05 (the boards this run saw) -> 07 (the parked RealSense from rs_anchor, the arducam from its yaml) -> 08 -> 10 -> finalize -> comms. Same day as the map: the boards did not move.",
+  "dataset": {
+    "bag": "~/workspaces/isaac_ros-dev/data/work/20261015/survey/site_1/mirc_dataset_survey_site_1_20261015_merged",
+    "traj": null,
+    "machine": "mobile_1",
+    "points_topic": "/mobile_1/ouster/points",
+    "image_topic": "/mobile_1/zed/left/image_rect_color",
+    "camera_info_topic": "/mobile_1/zed/left/camera_info",
+    "camera_frame": "zed_left_camera_optical_frame",
+    "camera_map_frame": "map_zed",
+    "rectified": true,
+    "reference_pass": "mapping"
+  },
+  "03_init": {"sensors": [{"name": "zed", "source": "lidar_odom"},
+                          {"name": "realsense", "enabled": false}]},
+  "07_build_cameras": {"cameras": [{"name": "realsense", "bag": null,
+                                    "image_topic": "/mobile_2/color/image_raw",
+                                    "camera_info_topic": "/mobile_2/color/camera_info",
+                                    "rectified": false, "detect_target": 200}]}
+}

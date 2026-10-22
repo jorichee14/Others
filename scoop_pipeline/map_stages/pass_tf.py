@@ -52,14 +52,15 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 from pipeline_common import (load_config, load_pipeline, load_cameras_yaml,  # noqa: E402
                              processed_dir_for, make_T)
-from scoop import bag as scoop_bag, tftree                                   # noqa: E402
+from scoop import bag as scoop_bag, layout, tftree                           # noqa: E402
 
 
 def find_config(raw_dir, stages_dir=HERE):
-    """The pipeline config whose dataset is the pass of data/raw/<date>/<pass>,
-    or None. A run's config (pipeline_config_<pass>.json) wins over the base."""
-    parts = os.path.normpath(os.path.abspath(os.path.expanduser(raw_dir))).split(os.sep)
-    want = tuple(parts[-2:])
+    """The pipeline config whose dataset is the pass of data/raw/<date>/<pass>
+    (or <date>/<pass>/site_N), or None. A run's config (pipeline_config_<pass>.json)
+    wins over the base."""
+    pp = layout.pass_parts(raw_dir)
+    want = (pp[1], tuple(pp[2])) if pp else None
     hits = []
     for path in sorted(glob.glob(os.path.join(stages_dir, "pipeline_config*.json"))):
         try:
@@ -72,7 +73,8 @@ def find_config(raw_dir, stages_dir=HERE):
                 continue
         except (SystemExit, ValueError, OSError, KeyError):
             continue
-        if tuple(os.path.normpath(proc).split(os.sep)[-2:]) == want:
+        got = layout.pass_parts(proc)
+        if want and got and (got[1], tuple(got[2])) == want:
             hits.append(path)
     return hits[-1] if hits else None
 

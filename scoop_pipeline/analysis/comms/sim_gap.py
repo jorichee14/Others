@@ -69,6 +69,7 @@ SYNTH = {"V2X-ViT": {"delay_ms": 100.0, "loss": 0.0,
                         "note": "delivery within a bandwidth budget: no delay, no loss"}}
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "processing"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
+import link_clearance                                              # noqa: E402
 import link_trace as LT                                             # noqa: E402
 from scoop import channel as CH                                     # noqa: E402
 
@@ -256,7 +257,7 @@ def main():
         out = os.path.join(rep["pass"], "comms", "sim_gap")
         write(rep, table, out)
         print_report(rep)
-        tag = "/".join(os.path.normpath(rep["pass"]).split(os.sep)[-2:])
+        tag = "/".join(link_clearance.pass_key(rep["pass"]))
         groups = [(f"{m}", [x for x in table if x["machine"] == m]) for m in rep["robots"]]
         if not a.no_plots:
             plot(groups, a.frame_ms, os.path.join(out, "sim_gap.png"), f"{tag}: logged channel vs synthetic")

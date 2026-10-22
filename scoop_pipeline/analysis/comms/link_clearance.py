@@ -56,6 +56,7 @@ import glob
 import json
 import math
 import os
+import re
 import sys
 
 import numpy as np
@@ -431,9 +432,10 @@ def plot(table, path, title):
 # ---- every pass ---------------------------------------------------------------
 
 def passes_under(root):
-    """data/processed/<date>/<pass> folders whose comms tables carry positions."""
+    """data/processed/<date>/<pass>[/site_N] folders whose comms tables carry positions."""
     out = []
-    for comms in sorted(glob.glob(os.path.join(root, "*", "*", "comms"))):
+    for comms in sorted(glob.glob(os.path.join(root, "*", "*", "comms"))
+                        + glob.glob(os.path.join(root, "*", "*", "site_*", "comms"))):
         for sub, name, col in (("csi", "csi.csv", "peer_x"), ("wifi", "wifi.csv", "x")):
             p = os.path.join(comms, sub, name)
             if os.path.exists(p):
@@ -444,6 +446,15 @@ def passes_under(root):
     return out
 
 
+def pass_key(proc):
+    """(date, pass) of data/processed/<date>/<pass>[/site_N]: the pass with its
+    site, "survey/site_1"."""
+    parts = os.path.normpath(proc).split(os.sep)
+    if re.fullmatch(r"site_\w+", parts[-1]):
+        return parts[-3], "/".join(parts[-2:])
+    return parts[-2], parts[-1]
+
+
 def ap_for(ap_file, proc):
     """The AP position for a pass from a yaml {"<date>/<pass>" or "<pass>" or
     "default": [x, y, z]} (the AP is fixed per site, the map frame per pass)."""
@@ -451,7 +462,7 @@ def ap_for(ap_file, proc):
         return None
     import yaml
     m = yaml.safe_load(open(ap_file)) or {}
-    date, pas = os.path.normpath(proc).split(os.sep)[-2:]
+    date, pas = pass_key(proc)
     for k in ("%s/%s" % (date, pas), pas, "default"):
         if k in m:
             return [float(v) for v in m[k]]
@@ -472,7 +483,7 @@ def run_all(root, out, ap_file=None, window=0.5, margin=0.3, exponent=2.0, log=p
             continue
         rep, table = r
         summary["passes"][p] = rep
-        tag = "/".join(os.path.normpath(p).split(os.sep)[-2:])
+        tag = "/".join(pass_key(p))
         allrows += [dict(row, **{"pass": tag}) for row in table]
     for kind, sigs in SIGNALS.items():
         rr = [r for r in allrows if r["kind"] == kind]

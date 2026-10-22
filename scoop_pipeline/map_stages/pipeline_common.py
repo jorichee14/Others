@@ -19,9 +19,13 @@ CHANGES vs the previous revision
     for cameras that do not have one (e.g. source: "board").
 """
 import os
+import sys
 import json
 from fnmatch import fnmatch
 import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from scoop import layout                                                 # noqa: E402
 
 
 # ------------------------------- SE3 math -------------------------------
@@ -617,13 +621,13 @@ def final_bag(path):
 
 
 def processed_dir_for(path):
-    """data/{raw,work,processed}/<date>/<pass>/... -> data/processed/<date>/<pass>.
-    The path is not resolved, so a data folder reached through a symlink stays
-    where it is."""
-    parts = os.path.abspath(os.path.expanduser(path)).split(os.sep)
-    for i in range(len(parts) - 1, -1, -1):
-        if parts[i] in ("raw", "work", "processed") and len(parts) > i + 3:
-            return os.sep.join(parts[:i] + ["processed", parts[i + 1], parts[i + 2]])
+    """data/{raw,work,processed}/<date>/<pass>[/site_*]/... -> data/processed/
+    <date>/<pass>[/site_*] (scoop/layout.py). The path is not resolved, so a data
+    folder reached through a symlink stays where it is."""
+    pp = layout.pass_parts(path, below=1)
+    if pp:
+        root, date, pas = pp
+        return os.path.join(root, "processed", date, *pas)
     raise SystemExit("%s is not below data/{raw,work}/<date>/<pass>/, so the "
                      "processed folder cannot be derived from it; set "
                      "dataset.processed (or dataset.out_dir for one flat folder)" % path)
@@ -651,15 +655,22 @@ class Pipeline:
         else:
             self.out_dir = d.get("processed") or processed_dir_for(d["bag"])
             self.routed = True
-        # names the outputs: <pass>_<date> from data/processed/<date>/<pass>,
-        # or dataset.name; none for the old flat folder
-        date, pas = os.path.normpath(self.out_dir).split(os.sep)[-2:]
-        self.tag = d.get("name") or ("%s_%s" % (pas, date) if self.routed else "")
+        # names the outputs: <pass>_<date> from data/processed/<date>/<pass>[/site_*]
+        # (survey_site_1_20261015), or dataset.name; none for the old flat folder
+        pp = layout.pass_parts(self.out_dir) if self.routed else None
+        if pp:
+            root, self.date, pas = pp
+            self._processed_root = os.path.join(root, "processed")
+        else:                                # the old flat folder: <root>/<date>/<folder>
+            self.date = os.path.basename(os.path.dirname(os.path.normpath(self.out_dir)))
+            self._processed_root = os.path.dirname(os.path.dirname(os.path.normpath(self.out_dir)))
+            pas = [os.path.basename(os.path.normpath(self.out_dir))]
+        self.tag = d.get("name") or (layout.tag(self.date, pas) if self.routed else "")
         os.makedirs(self.out_dir, exist_ok=True)
         # files recorded during the session, next to its raw data:
         # data/raw/<date>/<pass>/ (infra_cameras/ holds the camera extrinsic yamls)
-        self.raw_dir = (os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.normpath(self.out_dir)))), "raw", date, pas) if self.routed else None)
+        self.raw_dir = (os.path.join(os.path.dirname(self._processed_root), "raw", self.date, *pas)
+                        if pp else None)
         # a run localized in another pass's map (08_localize): dataset.reference_pass
         # is that pass ("mapping_A", same date, or "<date>/<pass>")
         self.reference = d.get("reference_pass") or None
@@ -753,20 +764,22 @@ class Pipeline:
         (its board-anchored map frame)."""
         if not self.reference:
             raise SystemExit("dataset.reference_pass is not set")
-        root = os.path.dirname(os.path.dirname(os.path.normpath(self.out_dir)))
-        ref = self.reference.strip("/")
-        if "/" not in ref:
-            ref = os.path.join(os.path.basename(os.path.dirname(
-                os.path.normpath(self.out_dir))), ref)
-        date, pas = ref.split("/")[-2:]
-        d = os.path.join(root, date, pas)
+        d, tag = self.pass_dir(self.reference)
         if kind == "map":
-            return os.path.join(d, "mapping", "denoised_%s_%s.pcd" % (pas, date))
+            return os.path.join(d, "mapping", "denoised_%s.pcd" % tag)
         if kind == "anchored_map":
-            return os.path.join(d, "mapping", "map_final_%s_%s_anchored.pcd" % (pas, date))
+            return os.path.join(d, "mapping", "map_final_%s_anchored.pcd" % tag)
         if kind == "anchor":
             return os.path.join(d, "frames", "anchor_frame.json")
         raise ValueError(kind)
+
+    def pass_dir(self, ref):
+        """A pass the config names ("<pass>" of this date, or "<date>/<pass>",
+        either with "/site_N") -> (its processed folder, its tag)."""
+        ref = ref.strip("/").split("/")
+        if not (len(ref) > 1 and ref[0].isdigit() and len(ref[0]) == 8):
+            ref = [self.date] + ref
+        return os.path.join(self._processed_root, ref[0], *ref[1:]), layout.tag(ref[0], ref[1:])
 
     def extra_boards(self):
         """Boards the reference pass lacks, as other passes measured them
@@ -775,14 +788,11 @@ class Pipeline:
         board another run measured holds here: {name: record}, the first pass
         listed wins."""
         out = {}
-        root = os.path.dirname(os.path.dirname(os.path.normpath(self.out_dir)))
-        here = os.path.basename(os.path.dirname(os.path.normpath(self.out_dir)))
         for ref in self.dataset.get("boards_from") or []:
-            ref = ref.strip("/")
-            date, pas = (ref.split("/")[-2:] if "/" in ref else (here, ref))
-            path = os.path.join(root, date, pas, "frames", "boards_%s_%s.json" % (pas, date))
+            d, tag = self.pass_dir(ref)
+            path = os.path.join(d, "frames", "boards_%s.json" % tag)
             if not os.path.exists(path):
-                raise SystemExit("dataset.boards_from: no %s (run 05 on %s)" % (path, pas))
+                raise SystemExit("dataset.boards_from: no %s (run 05 on %s)" % (path, ref))
             for n, rec in (json.load(open(path)).get("boards") or {}).items():
                 out.setdefault(n, dict(rec, source=path))
         return out
@@ -845,16 +855,12 @@ class Pipeline:
         dataset.cameras_from: ["survey_1", ...] (same date or "<date>/<pass>").
         A camera that did not move holds here. -> [path], in the order listed."""
         out = []
-        root = os.path.dirname(os.path.dirname(os.path.normpath(self.out_dir)))
-        here = os.path.basename(os.path.dirname(os.path.normpath(self.out_dir)))
         name = os.path.basename((self.cfg.get("07_build_cameras") or {}).get("output")
                                 or "cameras_in_map.yaml")
         for ref in self.dataset.get("cameras_from") or []:
-            ref = ref.strip("/")
-            date, pas = (ref.split("/")[-2:] if "/" in ref else (here, ref))
-            path = os.path.join(root, date, pas, "frames", name)
+            path = os.path.join(self.pass_dir(ref)[0], "frames", name)
             if not os.path.exists(path):
-                raise SystemExit("dataset.cameras_from: no %s (run 07 on %s)" % (path, pas))
+                raise SystemExit("dataset.cameras_from: no %s (run 07 on %s)" % (path, ref))
             out.append(path)
         return out
 

@@ -30,7 +30,7 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from . import bag, recording, replay
+from . import bag, layout, recording, replay
 from .bag import BagError
 
 __all__ = ["RecordPlan", "Unit", "TopicCheck", "find_units", "processed_topics",
@@ -228,12 +228,15 @@ def _unit(machine, folder, raw_bags, plan, settings, work_root, mode) -> Unit:
 
 
 def session_name(units: List[Unit], plan: RecordPlan, session_raw=None) -> str:
-    """``<prefix>_<pass>_<date>`` from the pass folder (raw/<date>/<pass>/), so
-    the merged bag's name does not depend on how each machine labelled its
-    bag (run1 / run / ru1). Without the folder: the bags' names without the
-    machine, the most common one."""
+    """``<prefix>_<pass>_<date>`` from the pass folder (raw/<date>/<pass>/, or
+    raw/<date>/<pass>/site_N/: <pass>_site_N), so the merged bag's name does not
+    depend on how each machine labelled its bag (run1 / run / ru1). Without the
+    folder: the bags' names without the machine, the most common one."""
     if session_raw is not None:
         p = Path(session_raw).expanduser().resolve()
+        pp = layout.pass_parts(p)
+        if pp and re.fullmatch(r"\d{8}", pp[1]):
+            return f"{plan.prefix}_{layout.tag(pp[1], pp[2])}"
         date = p.parent.name
         return (f"{plan.prefix}_{p.name}_{date}" if re.fullmatch(r"\d{8}", date)
                 else f"{plan.prefix}_{p.name}")

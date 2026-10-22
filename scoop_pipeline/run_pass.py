@@ -131,7 +131,8 @@ def _merged_bag(raw, recording, session):
     plan = session.RecordPlan(None)
     settings = recording.load_settings(None)
     rawp = recording.Path(raw).expanduser().resolve()
-    mode = plan.mode_of(rawp.name, *(p.parent.name for p in rawp.rglob("metadata.yaml")))
+    mode = plan.mode_of(rawp.name, rawp.parent.name,         # survey/site_1: "survey"
+                        *(p.parent.name for p in rawp.rglob("metadata.yaml")))
     units = session.find_units(rawp, plan, settings, None, mode)
     return os.path.join(str(recording.work_dir_for(raw, None)),
                         "%s_merged" % session.session_name(units, plan, rawp))
