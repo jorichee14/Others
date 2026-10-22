@@ -1121,8 +1121,9 @@ object's material in `scene.xml`).
 
 `fly` renders a video flying once round the area inside a mesh (`<file>_fly.mp4`,
 H.264 through ffmpeg; its first frame beside it as `_frame0.png`): the free
-floor (less every cell with anything at walking height: a wall however thin,
-a pillar, furniture) shrunk `--inset` 1.5 m, the largest piece's outline the
+floor (its holes up to 10 m2 filled, furniture's footprints, a courtyard not;
+less every cell with anything at walking height: a wall however thin, a
+pillar, furniture) shrunk `--inset` 1.5 m (less where that leaves nothing), the largest piece's outline the
 path (a room behind a door narrower than 3 m falls off: the main area only);
 from `--start` X,Y (the map's origin; `loop`: on the loop), a turn round there
 over `--spin` 8 s, then straight to the loop's nearest point and round it; at

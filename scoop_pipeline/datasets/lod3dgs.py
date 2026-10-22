@@ -2054,11 +2054,12 @@ def mesh_blocks(m, cell=4.0, one_side=False):
     return blocks, np.array(centres), Cc is not None
 
 
-def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0, eye=1.6):
+def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0, eye=1.6, fill_hole=10.0):
     """A closed path once round the area, in plan: the floor (the faces
     facing up at the floor's level, the lowest band holding most of them)
-    as a grid of cell m, its small gaps closed, less every cell holding a
-    face at walking height (0.3 to eye + 0.3 m over the floor: a wall,
+    as a grid of cell m, its small gaps closed, its holes up to fill_hole
+    m2 filled (furniture's footprints; a courtyard, larger, is not floor),
+    less every cell holding a face at walking height (0.3 to eye + 0.3 m over the floor: a wall,
     however thin, a pillar, furniture), shrunk inset m from those, the
     largest piece's outline (a room behind a door narrower than 2 inset
     falls off: the main area only), smoothed over `smooth` m. (the path,
@@ -2084,7 +2085,12 @@ def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0, eye=1.6):
     g = np.zeros((nx, ny), bool)
     g[ij[:, 0], ij[:, 1]] = True
     g = ndimage.binary_closing(g, np.ones((3, 3), bool))
-    g = ndimage.binary_fill_holes(g)
+    holes = ndimage.binary_fill_holes(g) & ~g
+    lab_h, nh = ndimage.label(holes)
+    if nh:
+        small = np.bincount(lab_h.ravel()) * cell * cell <= fill_hole
+        small[0] = False
+        g |= small[lab_h]
     blk = (C[:, 2] > z0 + 0.3) & (C[:, 2] < z0 + eye + 0.3)              # at walking height: in the way
     ijb = np.floor((C[blk, :2] - lo) / cell).astype(np.int64)
     ok = (ijb >= 0).all(1) & (ijb[:, 0] < nx) & (ijb[:, 1] < ny)
