@@ -1719,7 +1719,7 @@ def close_holes(M, part, obj, radius=0.8, pane=0.2):
     return np.r_[part, pn], np.r_[obj, on], len(Fn)
 
 
-def fill_floor_part(M, part, cell=0.2, max_hole=100.0):
+def fill_floor_part(M, part, cell=0.2, max_hole=100.0, name="floor"):
     """The floor's holes (where the polished floor's reflection was cut away,
     or furniture hid it): the cells (cell m, in plan) with no floor face
     that the floor, and the walls and furniture standing on it (faces
@@ -1729,7 +1729,7 @@ def fill_floor_part(M, part, cell=0.2, max_hole=100.0):
     colours) of the patches, to add."""
     from scipy import ndimage
     V, F = np.asarray(M.vertices), np.asarray(M.triangles)
-    fl = np.flatnonzero(part == "floor")
+    fl = np.flatnonzero(part == name)
     if not len(fl):
         return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3))
     C = V[F[fl]].mean(1)
@@ -1742,7 +1742,7 @@ def fill_floor_part(M, part, cell=0.2, max_hole=100.0):
     if len(on):
         Co = V[F[on]].mean(1)
         _, jn = cKDTree(C[:, :2]).query(Co[:, :2], workers=-1)
-        low = Co[:, 2] - C[jn, 2] < 0.5
+        low = np.abs(Co[:, 2] - C[jn, 2]) < 0.5
         ijo = np.floor((Co[low, :2] - lo) / cell).astype(np.int64)
         ok = (ijo >= 0).all(1) & (ijo[:, 0] < nx) & (ijo[:, 1] < ny)
         closing = have.copy()
@@ -2008,6 +2008,11 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
             add(Vn, Fn, Cn, "floor")
             report.append(f"  floor filled where it was missing (its reflection cut away, furniture over it): "
                           f"{len(Fn) // 2 * 0.04:.1f} m2, {len(Fn)} faces added")
+        Vn, Fn, Cn = fill_floor_part(M, fpart, name="ceiling")
+        if len(Fn):
+            add(Vn, Fn, Cn, "ceiling")
+            report.append(f"  ceiling filled where it was missing (what hung from it cut away): "
+                          f"{len(Fn) // 2 * 0.04:.1f} m2, {len(Fn)} faces added")
         (Vn, Fn, Cn), (Vg, Fg, Cg) = fill_walls(M, fpart, planes)
         if len(Fn):
             add(Vn, Fn, Cn, "walls")
@@ -2165,13 +2170,15 @@ def smooth_colours(V, C, radius=0.15, cell=0.05, sigma=0.15, weight=0.85):
     (each cell its mean colour), the cells blended with their 26
     neighbours over radius / cell passes, each neighbour weighted by how
     alike its colour is (sigma, in rgb: a poster's edge, a door's, stays
-    sharp; the stipple inside a wall goes), and each vertex given its
-    cell's colour by `weight` (the rest its own). The new n x 3."""
+    sharp; the stipple inside a wall goes), and each vertex given the
+    colour interpolated between the cells round it (no blocks) by
+    `weight` (the rest its own). The new n x 3."""
     C = np.asarray(C, float)
     if not len(C) or radius <= 0:
         return C
-    ijk = np.floor((V - V.min(0)) / cell).astype(np.int64)
-    dims = ijk.max(0) + 3
+    lo = V.min(0)
+    ijk = np.floor((V - lo) / cell).astype(np.int64)
+    dims = ijk.max(0) + 4
     key = (ijk[:, 0] + 1) * dims[1] * dims[2] + (ijk[:, 1] + 1) * dims[2] + ijk[:, 2] + 1
     ks, inv = np.unique(key, return_inverse=True)
     inv = inv.ravel()
@@ -2193,7 +2200,25 @@ def smooth_colours(V, C, radius=0.15, cell=0.05, sigma=0.15, weight=0.85):
             acc[has] += w[:, None] * cc[j[has]]
             wsum[has] += w
         cc = acc / wsum[:, None]
-    return weight * cc[inv] + (1 - weight) * C
+    # each vertex: the cells round it blended by its position among their centres (trilinear)
+    g = (V - lo) / cell - 0.5
+    g0 = np.floor(g).astype(np.int64)
+    fr = g - g0
+    out, wtot = np.zeros_like(C), np.zeros(len(C))
+    for a in (0, 1):
+        for b in (0, 1):
+            for c_ in (0, 1):
+                w = (fr[:, 0] if a else 1 - fr[:, 0]) * (fr[:, 1] if b else 1 - fr[:, 1]) * (fr[:, 2] if c_ else 1 - fr[:, 2])
+                kq = (g0[:, 0] + a + 1) * dims[1] * dims[2] + (g0[:, 1] + b + 1) * dims[2] + g0[:, 2] + c_ + 1
+                j = np.searchsorted(ks, kq)
+                j[j >= nk] = 0
+                has = ks[j] == kq
+                out[has] += w[has, None] * cc[j[has]]
+                wtot[has] += w[has]
+    has = wtot > 1e-6
+    out[has] /= wtot[has, None]
+    out[~has] = cc[inv[~has]]
+    return weight * out + (1 - weight) * C
 
 
 def despeckle_colours(F, C, thresh=0.12, passes=2):
@@ -2219,7 +2244,7 @@ def despeckle_colours(F, C, thresh=0.12, passes=2):
     return C, changed
 
 
-def enhance_colours(C, low=1.0, high=99.0, sat=1.15, gamma=1.0, wb=True):
+def enhance_colours(C, low=1.0, high=99.0, sat=1.15, gamma=0.8, wb=True):
     """The mesh's colours (n x 3, 0-1: the camera's, flat and greyish) made
     vivid: the cast gone (wb: each channel scaled to the mean of the three,
     within a quarter: the green of fluorescent light, the blue of daylight;
@@ -2371,7 +2396,7 @@ def video_writer(out, fps, size):
 
 def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps=30, size=(1280, 720), fov=70.0,
               ahead=2.0, faces=0, vivid=True, sat=1.15, seconds=0, hidden=False, start=(0.0, 0.0), spin=8.0,
-              wb=True, smooth=0.15):
+              wb=True, smooth=0.15, gamma=0.8):
     """A video (out, .mp4; default <mesh>_fly.mp4) flying once round the
     area inside the mesh at eye m over the floor, speed m/s, looking ahead
     m along the way: the path loop_path's (inset m from the walls), or
@@ -2399,7 +2424,7 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
             Cd = smooth_colours(np.asarray(m.vertices), Cd, smooth)
         log.info(f"colours: {nsp} speckles smoothed over, smoothed over {100 * smooth:.0f} cm (edges kept), "
                  "then made vivid" + (", white balanced" if wb else ""))
-        m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(Cd, sat=sat, wb=wb))
+        m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(Cd, sat=sat, wb=wb, gamma=gamma))
     P, z0, free, lo_ = loop_path(m, inset, eye=eye)
     if path is not None and len(path):
         P = np.asarray(path, float)[:, :2]
@@ -2502,7 +2527,7 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
 
 
 def walk(mesh_path, traj=None, at=None, faces=0, eye=1.6, fov=70.0, shot=None, vivid=True, sat=1.15,
-         one_side=False, step=0.1, turn=4.0, near=15.0, cell=4.0, wb=True, smooth=0.15):
+         one_side=False, step=0.1, turn=4.0, near=15.0, cell=4.0, wb=True, smooth=0.15, gamma=0.8):
     """Walk inside a mesh (with its ceiling) in a window, started eye m over
     the floor at walk_start's place, the mesh unlit in its colours (vivid:
     enhance_colours, saturation sat) and seen from both sides (one_side: as
@@ -2530,7 +2555,7 @@ def walk(mesh_path, traj=None, at=None, faces=0, eye=1.6, fov=70.0, shot=None, v
             Cd = smooth_colours(np.asarray(m.vertices), Cd, smooth)
         log.info(f"colours: {nsp} speckles smoothed over, smoothed over {100 * smooth:.0f} cm (edges kept), "
                  "then made vivid" + (", white balanced" if wb else ""))
-        m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(Cd, sat=sat, wb=wb))
+        m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(Cd, sat=sat, wb=wb, gamma=gamma))
     V = np.asarray(m.vertices)
     e, c = walk_start(V, read_tum_positions(traj, stride=1) if traj else None, at, eye)
     blocks, centres, unlit = mesh_blocks(m, cell, one_side)
@@ -2944,6 +2969,7 @@ def main():
     fv.add_argument("--faces", type=int, default=0, help="simplify to this many faces first (0: all of it)")
     fv.add_argument("--plain", action="store_true", help="the colours as stored")
     fv.add_argument("--sat", type=float, default=1.15, help="the saturation boost when made vivid")
+    fv.add_argument("--gamma", type=float, default=0.8, help="under 1 lifts the shadows (dark walls), over 1 deepens them")
     fv.add_argument("--cast", action="store_true", help="keep the colours' cast (default: white balanced)")
     fv.add_argument("--smooth", type=float, default=0.15,
                     help="smooth the colours over the surface to this radius (m), edges kept (0: not)")
@@ -2961,6 +2987,7 @@ def main():
     wk.add_argument("--plain", action="store_true",
                     help="the colours as stored (default: made vivid, the camera's haze and grey gone)")
     wk.add_argument("--sat", type=float, default=1.15, help="the saturation boost when made vivid")
+    wk.add_argument("--gamma", type=float, default=0.8, help="under 1 lifts the shadows (dark walls), over 1 deepens them")
     wk.add_argument("--cast", action="store_true", help="keep the colours' cast (default: white balanced)")
     wk.add_argument("--smooth", type=float, default=0.15,
                     help="smooth the colours over the surface to this radius (m), edges kept (0: not)")
@@ -2987,12 +3014,12 @@ def main():
             fly_video(a.file, a.out, [[float(v) for v in p_.split(",")] for p_ in a.path.split(";")] if a.path else None,
                       inset=a.inset, eye=a.eye, speed=a.speed, fps=a.fps, size=(wh[0], wh[1]), ahead=a.ahead,
                       faces=a.faces, vivid=not a.plain, seconds=a.seconds, hidden=a.hidden, spin=a.spin,
-                      sat=a.sat, wb=not a.cast, smooth=a.smooth,
+                      sat=a.sat, wb=not a.cast, smooth=a.smooth, gamma=a.gamma,
                       start=None if a.start.lower() == "loop" else [float(v) for v in a.start.split(",")])
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
                  faces=a.faces, eye=a.eye, shot=a.shot, vivid=not a.plain, sat=a.sat, one_side=a.one_side,
-                 step=a.step, turn=a.turn, near=a.near, cell=a.cell, wb=not a.cast, smooth=a.smooth)
+                 step=a.step, turn=a.turn, near=a.near, cell=a.cell, wb=not a.cast, smooth=a.smooth, gamma=a.gamma)
         elif a.cmd == "sionna":
             mats = {}
             for spec in a.material:

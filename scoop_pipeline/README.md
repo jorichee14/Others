@@ -1090,7 +1090,7 @@ left, which take the part round them; a doorway is larger and stays open).
 The floor's holes (where its reflection was cut away, or furniture hid it;
 closed all round by floor, or walls and furniture standing on it, up to
 100 m2) are filled with flat patches at its
-level. The ceiling is flattened onto its
+level, and the ceiling's the same way (what hung from it cut away). The ceiling is flattened onto its
 levels the same way (0.15 m at most). The walls are smoothed too: their faces
 within 6 cm of a wall plane put on it (`--keep-walls` leaves them as meshed);
 what stands off the planes (pillars, stairs, frames) keeps its shape but is
@@ -1156,7 +1156,8 @@ mesh unlit in its colours with the speckle smoothed over (a vertex much
 brighter or darker than its neighbours, a glint of the camera's colouring,
 takes their colour), smoothed over the surface to `--smooth` 0.15 m with
 edges kept (a poster's or a door's outline stays, the stipple inside a wall
-goes; 0: not) and made vivid (white balanced, the green of
+goes; 0: not) and made vivid (the shadows lifted by `--gamma` 0.8, the
+walls the camera underexposed; white balanced, the green of
 fluorescent light gone, `--cast` keeps it; stretched over their range, the
 camera's haze and grey gone; the saturation up `--sat` 1.15; `--plain`: as
 stored) and seen from both sides (`--one-side`: as stored, half the load),

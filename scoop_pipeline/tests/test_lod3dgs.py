@@ -484,7 +484,7 @@ def check_sionna(tmp):
     chairs and the 4 m of desks (the lamp's flat underside, over 2 m up, with the
     ceiling); the floor flattened (within 1 cm, bumps under furniture
     gone); the wall hidden behind a cupboard (not in the map) filled on its
-    plane; a hole in the floor filled; no patch over a door set back from
+    plane; a hole in the floor filled, one in the ceiling too; no patch over a door set back from
     its wall; a 3 m window with no glass in the map filled as glass, the
     doorway not; the ceiling flat; the parts in the mesh's colours; every face in one part; with
     --faces the floor, walls and ceiling simplified, the objects kept finer
@@ -582,6 +582,8 @@ def check_sionna(tmp):
     P = P[~((np.abs(P[:, 2]) < 0.02) & (P[:, 0] > 3.0) & (P[:, 0] < 4.0) & (P[:, 1] > 3.0) & (P[:, 1] < 3.8))]
     P = P[~((np.abs(P[:, 0]) < 0.02) & (P[:, 1] > 1.95) & (P[:, 1] < 2.95) & (P[:, 2] < 2.05))]   # the doorway
     P = P[~((np.abs(P[:, 0] - 12) < 0.02) & (P[:, 1] > 1.0) & (P[:, 1] < 4.0) & (P[:, 2] > 0.8) & (P[:, 2] < 2.5))]
+    P = P[~((np.abs(P[:, 2] - 5.0) < 0.02) & (P[:, 0] > 1.0) & (P[:, 0] < 2.5) & (P[:, 1] > 0.8) & (P[:, 1] < 2.2))]
+    # (a 1.5 x 1.4 m hole in the hall's ceiling)
     # (a 3 m window in the wall x = 12, its glass not in the map)
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))      # a hole in the floor (3-4, 3-3.8)
     pc.colors = o3d.utility.Vector3dVector(np.full(P.shape, 0.5))
@@ -644,6 +646,7 @@ def check_sionna(tmp):
     zf = np.asarray(Qf.vertices)[:, 2]
     assert np.abs(zf - np.median(zf)).max() < 0.01, ("the floor not flat", np.abs(zf - np.median(zf)).max())
     assert inside(parts["floor"], 3.2, 3.8, 3.1, 3.7, -0.05, 0.05) >= 4, "the floor's hole not filled"
+    assert inside(parts["ceiling"], 1.3, 2.2, 1.1, 1.9, 4.95, 5.05) >= 4, "the ceiling's hole not filled"
     assert inside(parts["glass"], 11.95, 12.05, 1.2, 3.8, 1.0, 2.3) >= 100, "the window not glass"
     assert inside(parts["glass"], -0.05, 0.05, 2.0, 2.9, 0.3, 1.8) == 0, "the doorway glazed"
     zc = parts["ceiling"][(parts["ceiling"][:, 0] > 0.5) & (parts["ceiling"][:, 0] < 6.5), 2]
