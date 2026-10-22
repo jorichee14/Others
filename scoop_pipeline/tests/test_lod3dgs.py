@@ -655,7 +655,7 @@ def check_sionna(tmp):
     T = np.c_[x, np.full(len(x), 3.0), np.full(len(x), 0.8)]
     e, c = L.walk_start(Vv, T)
     assert np.allclose(e, [1.0, 3.0, 1.6], atol=0.05) and c[0] > e[0], ("walk start", e, c)
-    Pl, z0 = L.loop_path(one, inset=1.0)                 # a loop round the hall, 1 m from its walls
+    Pl, z0, _, _ = L.loop_path(one, inset=1.0)           # a loop round the hall, 1 m from its walls
     dl = np.linalg.norm(np.diff(np.vstack([Pl, Pl[:1]]), axis=0), axis=1).sum()
     assert abs(z0) < 0.1 and dl > 20 and Pl[:, 0].min() > 0.9 and Pl[:, 1].min() > 0.9 and Pl[:, 1].max() < 5.1, \
         ("the loop", z0, dl, Pl.min(0), Pl.max(0))

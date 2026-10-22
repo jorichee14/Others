@@ -2054,13 +2054,16 @@ def mesh_blocks(m, cell=4.0, one_side=False):
     return blocks, np.array(centres), Cc is not None
 
 
-def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0):
-    """A closed path once round the area, in plan (n x 2, about cell m
-    apart): the floor (the faces facing up at the floor's level, the
-    lowest band holding most of them) as a grid of cell m, its small gaps
-    closed, the furniture's footprints filled, shrunk inset m from the
-    walls and the furniture, the largest piece's outline, smoothed over
-    `smooth` m."""
+def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0, eye=1.6):
+    """A closed path once round the area, in plan: the floor (the faces
+    facing up at the floor's level, the lowest band holding most of them)
+    as a grid of cell m, its small gaps closed, less every cell holding a
+    face at walking height (0.3 to eye + 0.3 m over the floor: a wall,
+    however thin, a pillar, furniture), shrunk inset m from those, the
+    largest piece's outline (a room behind a door narrower than 2 inset
+    falls off: the main area only), smoothed over `smooth` m. (the path,
+    n x 2 about cell m apart; the floor level; free, the shrunk grid; its
+    origin, with cell: a point (x, y) is on it at free[(x, y) - lo) / cell])."""
     from scipy import ndimage
     V, F = np.asarray(m.vertices), np.asarray(m.triangles)
     C = V[F].mean(1)
@@ -2082,6 +2085,10 @@ def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0):
     g[ij[:, 0], ij[:, 1]] = True
     g = ndimage.binary_closing(g, np.ones((3, 3), bool))
     g = ndimage.binary_fill_holes(g)
+    blk = (C[:, 2] > z0 + 0.3) & (C[:, 2] < z0 + eye + 0.3)              # at walking height: in the way
+    ijb = np.floor((C[blk, :2] - lo) / cell).astype(np.int64)
+    ok = (ijb >= 0).all(1) & (ijb[:, 0] < nx) & (ijb[:, 1] < ny)
+    g[ijb[ok, 0], ijb[ok, 1]] = False
     r = max(1, int(round(inset / cell)))
     yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
     g = ndimage.binary_erosion(g, (xx ** 2 + yy ** 2) <= r * r)
@@ -2096,16 +2103,51 @@ def loop_path(m, inset=1.5, cell=0.2, floor_tol=0.25, smooth=1.0):
     Pp = np.vstack([P[-k:], P, P[:k]])
     ker = np.ones(2 * k + 1) / (2 * k + 1)
     P = np.c_[np.convolve(Pp[:, 0], ker, "valid"), np.convolve(Pp[:, 1], ker, "valid")]
-    return P, z0
+    return P, z0, lab == big, lo
+
+
+class _FFmpegWriter:
+    """Frames (BGR, h x w x 3) to an H.264 .mp4 through ffmpeg (yuv420p:
+    every player and browser plays it; OpenCV's own mp4v many show black)."""
+
+    def __init__(self, out, fps, size):
+        import subprocess
+        self.p = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
+                                   "-s", f"{size[0]}x{size[1]}", "-r", str(fps), "-i", "-", "-an", "-c:v", "libx264",
+                                   "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                                   out], stdin=subprocess.PIPE)
+
+    def write(self, bgr):
+        self.p.stdin.write(np.ascontiguousarray(bgr).tobytes())
+
+    def release(self):
+        self.p.stdin.close()
+        self.p.wait()
+
+
+def video_writer(out, fps, size):
+    """A writer (write(bgr), release()) for the .mp4 out: ffmpeg (H.264) when
+    it is installed, else OpenCV's mp4v."""
+    import shutil
+    if shutil.which("ffmpeg"):
+        return _FFmpegWriter(out, fps, size)
+    log.warning("no ffmpeg: the video in OpenCV's mp4v, which some players show black (apt install ffmpeg)")
+    vw = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (size[0], size[1]))
+    if not vw.isOpened():
+        raise ConvertError(f"cannot write {out}")
+    return vw
 
 
 def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps=30, size=(1280, 720), fov=70.0,
               ahead=2.0, near=15.0, cell=4.0, faces=0, vivid=True, sat=1.3, one_side=False, seconds=0,
-              offscreen=False):
+              offscreen=False, start=(0.0, 0.0), spin=8.0):
     """A video (out, .mp4; default <mesh>_fly.mp4) flying once round the
     area inside the mesh at eye m over the floor, speed m/s, looking ahead
     m along the way: the path loop_path's (inset m from the walls), or
-    `path`, a list of (x, y) waypoints joined in a loop. Rendered in a
+    `path`, a list of (x, y) waypoints joined in a loop; from `start` (x,
+    y; the map's origin), turning once round there over `spin` s, then
+    straight to the loop's nearest point (start None, or not on the free
+    floor: from that point). Rendered in a
     window (the flight seen as it is recorded; offscreen: no window, which
     some drivers give black), the mesh as in walk: its colours made vivid,
     in blocks with those within near m drawn. seconds > 0: that long at
@@ -2123,36 +2165,64 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
         m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
     if vivid and m.has_vertex_colors():
         m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(np.asarray(m.vertex_colors), sat=sat))
+    P, z0, free, lo_ = loop_path(m, inset, eye=eye)
     if path is not None and len(path):
         P = np.asarray(path, float)[:, :2]
         P = np.vstack([P, P[:1]])
         seg = np.linalg.norm(np.diff(P, axis=0), axis=1)
         P = np.vstack([np.linspace(P[i], P[i + 1], max(2, int(np.ceil(seg[i] / 0.2))), endpoint=False)
                        for i in range(len(seg))])
-        _, z0 = loop_path(m, inset)
-    else:
-        P, z0 = loop_path(m, inset)
-    # at speed m/s, fps frames a second: a point every speed / fps m along the loop
-    seg = np.linalg.norm(np.diff(np.vstack([P, P[:1]]), axis=0), axis=1)
-    total = seg.sum()
+    # from the start to the loop's nearest point, round it and that far again (to look ahead)
+    st_ = None
+    if start is not None:
+        st_ = np.asarray(start, float)[:2]
+        ijs = np.floor((st_ - lo_) / 0.2).astype(np.int64)
+        if not ((ijs >= 0).all() and ijs[0] < free.shape[0] and ijs[1] < free.shape[1] and free[ijs[0], ijs[1]]):
+            log.warning(f"the start ({st_[0]:.1f}, {st_[1]:.1f}) is not on the free floor ({inset} m from "
+                        "anything): starting on the loop")
+            st_ = None
+    k0 = int(np.argmin(np.linalg.norm(P - (st_ if st_ is not None else P[0]), axis=1)))
+    P = np.roll(P, -k0, axis=0)
+    way = np.vstack([P, P[:1]])
+    if st_ is not None and np.linalg.norm(P[0] - st_) > 0.05:
+        way = np.vstack([np.linspace(st_, P[0], max(2, int(np.ceil(np.linalg.norm(P[0] - st_) / 0.2))),
+                                     endpoint=False), way])
+    seg = np.linalg.norm(np.diff(way, axis=0), axis=1)
     sdist = np.r_[0, np.cumsum(seg)]
-    nfr = int(total / speed * fps)
+    total = sdist[-1]
+    lseg = np.linalg.norm(np.diff(np.vstack([P, P[:1]]), axis=0), axis=1)
+    lsd, ltot = np.r_[0, np.cumsum(lseg)], lseg.sum()
+
+    def along(d):
+        """The way's point d m along it (past its end: on round the loop)."""
+        d = np.atleast_1d(d)
+        on = d <= total
+        q = np.empty((len(d), 2))
+        q[on] = np.c_[np.interp(d[on], sdist, way[:, 0]), np.interp(d[on], sdist, way[:, 1])]
+        dl = (d[~on] - total) % ltot
+        q[~on] = np.c_[np.interp(dl, lsd, np.r_[P[:, 0], P[0, 0]]), np.interp(dl, lsd, np.r_[P[:, 1], P[0, 1]])]
+        return q
+    nmove = int(total / speed * fps)
+    at_ = np.arange(nmove) * speed / fps
+    E, Lk = along(at_), along(at_ + ahead)
+    nspin = int(spin * fps) if (st_ is not None and spin > 0) else 0
+    if nspin:
+        yaw0 = np.arctan2(*(along(np.array([ahead]))[0] - st_)[::-1])    # ending facing the way to go
+        ang = yaw0 + 2 * np.pi * np.arange(nspin) / nspin
+        E = np.vstack([np.tile(st_, (nspin, 1)), E])
+        Lk = np.vstack([st_ + ahead * np.c_[np.cos(ang), np.sin(ang)], Lk])
+    nfr = len(E)
     if seconds:
         nfr = min(nfr, int(seconds * fps))
-    at_ = np.arange(nfr) * speed / fps
-    Pc = np.vstack([P, P[:1]])
-    E = np.c_[np.interp(at_, sdist, Pc[:, 0]), np.interp(at_, sdist, Pc[:, 1])]
-    la = (at_ + ahead) % total
-    Lk = np.c_[np.interp(la, sdist, Pc[:, 0]), np.interp(la, sdist, Pc[:, 1])]
     blocks, centres, unlit = mesh_blocks(m, cell, one_side)
-    log.info(f"fly {mesh_path}: a loop of {total:.0f} m, {nfr} frames at {fps} fps ({nfr / fps:.0f} s), "
+    log.info(f"fly {mesh_path}: " + (f"a turn round at ({st_[0]:.1f}, {st_[1]:.1f}) over {spin:g} s, " if nspin else "")
+             + f"{total:.0f} m of way (a loop of {ltot:.0f} m), {nfr} frames at {fps} fps ({nfr / fps:.0f} s), "
              f"{len(blocks)} blocks of {cell:g} m, those within {near:g} m drawn -> {out}")
     mat = rendering.MaterialRecord()
     mat.shader = "defaultUnlit" if unlit else "defaultLit"
-    vw = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (size[0], size[1]))
-    if not vw.isOpened():
-        raise ConvertError(f"cannot write {out}")
+    vw = video_writer(out, fps, size)
     shown = np.ones(len(blocks), bool)
+    first = os.path.splitext(out)[0] + "_frame0.png"
 
     def fill(scene):
         for k, q in enumerate(blocks):
@@ -2174,15 +2244,18 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
         if i % (10 * fps) == 0:
             log.info(f"  {i / fps:.0f} s of {nfr / fps:.0f}")
 
-    def keep(img):
-        vw.write(cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR))
+    def keep(img, i):
+        bgr = cv2.cvtColor(np.ascontiguousarray(np.asarray(img)[:, :, :3]), cv2.COLOR_RGB2BGR)
+        if i == 0:
+            cv2.imwrite(first, bgr)                 # to check: black here is the renderer, not the player
+        vw.write(bgr)
 
     if offscreen:
         rd = rendering.OffscreenRenderer(size[0], size[1])
         fill(rd.scene)
         for i in range(nfr):
             aim(rd.scene, i)
-            keep(rd.render_to_image())
+            keep(rd.render_to_image(), i)
         vw.release()
         return P, nfr
     app = gui.Application.instance
@@ -2198,11 +2271,12 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
         i = st["i"]
         if i >= nfr:
             vw.release()
-            win.close()
+            log.info(f"{out}: {nfr} frames; its first frame {first}")
+            app.post_to_main_thread(win, app.quit)
             return False
         aim(sw.scene, i)
         st["i"] = i + 1
-        keep(app.render_to_image(sw.scene, size[0], size[1]))
+        keep(app.render_to_image(sw.scene, size[0], size[1]), i)
         return True
     win.set_on_tick_event(tick)
     app.run()
@@ -2586,6 +2660,9 @@ def main():
     fv.add_argument("--path", default=None, metavar="X,Y;X,Y;...",
                     help="waypoints (m) joined in a loop (default: once round the area, --inset from the walls)")
     fv.add_argument("--inset", type=float, default=1.5, help="the loop this far from the walls and furniture (m)")
+    fv.add_argument("--start", default="0,0", metavar="X,Y",
+                    help="start here (default the map's origin; 'loop': on the loop), turn round, then to the loop")
+    fv.add_argument("--spin", type=float, default=8.0, help="the turn round at the start takes this long (s; 0: none)")
     fv.add_argument("--speed", type=float, default=1.0, help="m/s")
     fv.add_argument("--fps", type=int, default=30)
     fv.add_argument("--size", default="1280x720", help="WxH")
@@ -2633,7 +2710,8 @@ def main():
             fly_video(a.file, a.out, [[float(v) for v in p_.split(",")] for p_ in a.path.split(";")] if a.path else None,
                       inset=a.inset, eye=a.eye, speed=a.speed, fps=a.fps, size=(wh[0], wh[1]), ahead=a.ahead,
                       near=a.near, faces=a.faces, vivid=not a.plain, one_side=a.one_side, seconds=a.seconds,
-                      offscreen=a.offscreen)
+                      offscreen=a.offscreen, spin=a.spin,
+                      start=None if a.start.lower() == "loop" else [float(v) for v in a.start.split(",")])
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
                  faces=a.faces, eye=a.eye, shot=a.shot, vivid=not a.plain, sat=a.sat, one_side=a.one_side,

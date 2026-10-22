@@ -1119,11 +1119,15 @@ object's material in `scene.xml`).
     python3 scoop_pipeline/datasets/lod3dgs.py sionna mapping/mesh_view_<tag>_anchored.ply \
         --traj odometry/reference_<tag>/traj_mobile_2_lidar.tum
 
-`fly` renders a video flying once round the area inside a mesh (`<file>_fly.mp4`):
-the floor's footprint shrunk `--inset` 1.5 m from the walls and the furniture,
-its outline the path, at `--eye` 1.6 m over the floor, `--speed` 1 m/s,
-looking `--ahead` 2 m along the way; or `--path "X,Y;X,Y;..."`, waypoints
-joined in a loop. Recorded through a window (the flight seen as it goes;
+`fly` renders a video flying once round the area inside a mesh (`<file>_fly.mp4`,
+H.264 through ffmpeg; its first frame beside it as `_frame0.png`): the free
+floor (less every cell with anything at walking height: a wall however thin,
+a pillar, furniture) shrunk `--inset` 1.5 m, the largest piece's outline the
+path (a room behind a door narrower than 3 m falls off: the main area only);
+from `--start` X,Y (the map's origin; `loop`: on the loop), a turn round there
+over `--spin` 8 s, then straight to the loop's nearest point and round it; at
+`--eye` 1.6 m over the floor, `--speed` 1 m/s, looking `--ahead` 2 m along
+the way; or `--path "X,Y;X,Y;..."`, waypoints joined in a loop. Recorded through a window (the flight seen as it goes;
 `--offscreen`: none, which some drivers give black), the mesh drawn as in
 `walk` (colours vivid, `--near` 15 m of it); `--fps`, `--size WxH` (1280x720), `--seconds N`
 for the first N seconds only.
