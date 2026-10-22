@@ -1047,8 +1047,11 @@ wall does not. Everything else, in connected pieces, is objects: furniture,
 a wall bulging with furniture against it; but a piece facing sideways (75 %)
 from the floor to 2.3 m or higher, above furniture, is walls (a wall's
 thickness: its end, the sides of an opening; pillars), and so are stairs
-(flat faces climbing along the piece, 0.25-1.5 m per m, over 0.8 m; a
-shelf's stack in place does not). Floor bumps (no higher than
+and ramps (all their faces, treads, the slope under them, the rail,
+climbing along the piece, 0.25-1.5 m per m, over 0.8 m; a shelf's stack in
+place does not) and low walls between pillars (under windows whose glass is
+not in the map: from the floor, 1.5 m long or more, thin across, both ends
+at a wall; a row of cabinets is deeper and has a free end). Floor bumps (no higher than
 0.25 m) are floor and scraps under 0.05 m2 the part next to them. With `--traj` (the mesh's
 frame; anchored: `odometry/reference_<tag>/traj_mobile_2_lidar.tum`) what
 the `_noceil` copy drops as hanging from the ceiling only (a reflection

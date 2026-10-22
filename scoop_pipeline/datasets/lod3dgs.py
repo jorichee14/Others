@@ -1062,7 +1062,8 @@ def hanging_faces(m, T, ceil_margin=0.10, min_piece=50.0, reach=0.3):
 
 def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2, vertical=0.3,
                 on_wall=0.05, facing_deg=30.0, reach=0.2, min_obj=0.05, seam=0.08, tall=2.3, sideways=0.75,
-                line_h=2.1, line_cell=0.05, stair_rise=(0.25, 1.5), T=None):
+                line_h=2.1, line_cell=0.05, stair_rise=(0.25, 1.5), knee_w=1.5, knee_thin=0.1, knee_end=0.35,
+                T=None):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
     each object face its object's number (-1 for the rest).
 
@@ -1094,9 +1095,14 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
     objects: furniture, a wall bulging with furniture against it, a lamp;
     but a piece facing sideways (`sideways` of its area), from the floor
     (0.5 m) to `tall` or higher, above furniture, is walls: a wall's thickness (its end, the
-    sides of an opening), a pillar; and so are stairs (their flat faces
-    climbing along the piece's length, stair_rise m per m, over 0.8 m; a
-    shelf's stack in place does not); a piece reaching no higher than band (the floor's bumps)
+    sides of an opening), a pillar; and so are stairs and ramps (all their
+    faces, treads, risers, the slope under them, the rail, climbing along
+    the piece's length, stair_rise m per m, over 0.8 m; a shelf's stack in
+    place does not); and so is a low wall between pillars (under windows
+    whose glass is not in the map): a piece from the floor (0.3 m), facing
+    sideways mostly, knee_w m long or more, thin across (under knee_thin m,
+    1 sigma) with both ends within knee_end of a wall face (a row of
+    cabinets is deeper, and has a free end); a piece reaching no higher than band (the floor's bumps)
     is floor and one under min_obj m2 (a scrap at a seam) the part of the
     nearest labelled face."""
     from scipy.sparse import coo_matrix
@@ -1125,34 +1131,42 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
     s_area = np.bincount(sid[s_ok], A[s_ok], ns)
     s_hi = np.full(ns, -np.inf)
     np.maximum.at(s_hi, sid[s_ok], dz[s_ok])
+    s_lo = np.full(ns, np.inf)
+    np.minimum.at(s_lo, sid[s_ok], dz[s_ok])
     wall_s = np.flatnonzero((snz < vertical) & (s_area >= wall_area) & (s_hi >= wall_high))
+    cosf = np.cos(np.radians(facing_deg))
+
+    def plane(k):
+        """A flat surface's plane: (centre, unit normal in plan, along it, its members)."""
+        mem = np.flatnonzero(sid == k)
+        w = A[mem] / A[mem].sum()
+        mu = w @ C[mem]
+        n = np.linalg.svd((C[mem] - mu) * np.sqrt(w)[:, None], full_matrices=False)[2][2]
+        n[2] = 0.0
+        n /= np.linalg.norm(n) or 1.0
+        return mu, n, np.array([-n[1], n[0], 0.0]), mem
+
+    def claim(k, cand, ctree):
+        """The faces of cand on surface k's plane: within on_wall, facing it,
+        inside its extent along it (reach m more), up to its top, down to the floor."""
+        mu, n, t, mem = plane(k)
+        u = (C[mem] - mu) @ t
+        u0, u1 = u.min() - reach, u.max() + reach
+        z1 = C[mem, 2].max() + reach
+        mid = mu + t * (u0 + u1) / 2
+        idx = cand[np.asarray(ctree.query_ball_point(mid[:2], (u1 - u0) / 2 + on_wall + 0.01), np.int64)]
+        if not len(idx):
+            return idx
+        uu = (C[idx] - mu) @ t
+        ok = (np.abs((C[idx] - mu) @ n) < on_wall) & (np.abs(N[idx] @ n) > cosf) & (uu >= u0) & \
+            (uu <= u1) & (C[idx, 2] <= z1)
+        return idx[ok]
+
     cand = np.flatnonzero(part == "")
     if len(wall_s) and len(cand):
         ctree = cKDTree(C[cand, :2])
-        cosf = np.cos(np.radians(facing_deg))
-        isw = np.zeros(len(F), bool)
         for k in wall_s:
-            mem = np.flatnonzero(sid == k)
-            w = A[mem] / A[mem].sum()
-            mu = w @ C[mem]
-            X = (C[mem] - mu) * np.sqrt(w)[:, None]
-            n = np.linalg.svd(X, full_matrices=False)[2][2]
-            n[2] = 0.0
-            n /= np.linalg.norm(n) or 1.0
-            t = np.array([-n[1], n[0], 0.0])
-            u = (C[mem] - mu) @ t
-            u0, u1 = u.min() - reach, u.max() + reach
-            z0, z1 = -np.inf, C[mem, 2].max() + reach         # down to the floor, behind the furniture
-            mid = mu + t * (u0 + u1) / 2
-            idx = cand[np.asarray(ctree.query_ball_point(mid[:2], (u1 - u0) / 2 + on_wall + 0.01), np.int64)]
-            if not len(idx):
-                continue
-            d = (C[idx] - mu) @ n
-            uu = (C[idx] - mu) @ t
-            ok = (np.abs(d) < on_wall) & (np.abs(N[idx] @ n) > cosf) & (uu >= u0) & (uu <= u1) & \
-                (C[idx, 2] >= z0) & (C[idx, 2] <= z1)
-            isw[idx[ok]] = True
-        part[isw] = "walls"
+            part[claim(k, cand, ctree)] = "walls"
     # the wall lines, seen above furniture: every face facing sideways on one is wall
     side_f = np.abs(N[:, 2]) < vertical
     up = side_f & (dz >= line_h) & ((part == "") | (part == "walls"))
@@ -1205,20 +1219,45 @@ def label_faces(m, flat=0.9, band=0.25, roof_h=2.0, wall_area=3.0, wall_high=2.2
         side = np.bincount(comp, A[rest] * (np.abs(N[rest, 2]) < vertical), nc) / np.maximum(c_area, 1e-12)
         kind = np.full(nc, "objects", dtype=object)
         kind[(side >= sideways) & (c_hi >= tall) & (c_lo <= 0.5)] = "walls"
-        # stairs: their treads climb along the flight (shelves stack in place)
-        hr = hor[rest]
-        nh = np.bincount(comp[hr], minlength=nc)
-        for k_ in np.flatnonzero(nh >= 20):
-            sel = rest[hr & (comp == k_)]
-            zz = C[sel, 2]
-            if zz.max() - zz.min() < 0.8:
+        # stairs and ramps: all their faces climb along the flight (treads, risers,
+        # the slope under them, the rail); furniture and a shelf's stack do not
+        order = np.argsort(comp, kind="stable")
+        cuts = np.searchsorted(comp[order], np.arange(nc + 1))
+        for k_ in np.flatnonzero((c_hi - c_lo >= 0.8) & (c_area >= 0.5)):
+            sel = rest[order[cuts[k_]:cuts[k_ + 1]]]
+            if len(sel) < 30:
                 continue
-            xy = C[sel, :2] - C[sel, :2].mean(0)
-            u = xy @ np.linalg.svd(xy, full_matrices=False)[2][0]
-            a_, b_ = np.polyfit(u, zz, 1)
-            r2 = 1 - np.var(zz - (a_ * u + b_)) / max(np.var(zz), 1e-12)
+            zz, w = C[sel, 2], A[sel]
+            xy = C[sel, :2] - (w @ C[sel, :2]) / w.sum()
+            u = xy @ np.linalg.svd(xy * np.sqrt(w)[:, None], full_matrices=False)[2][0]
+            a_, b_ = np.polyfit(u, zz, 1, w=np.sqrt(w))
+            r2 = 1 - np.average((zz - (a_ * u + b_)) ** 2, weights=w) / max(np.average(
+                (zz - np.average(zz, weights=w)) ** 2, weights=w), 1e-12)
             if stair_rise[0] <= abs(a_) <= stair_rise[1] and r2 >= 0.6:
                 kind[k_] = "walls"
+        # low walls between pillars: long, thin across, both ends at a wall
+        wf = np.flatnonzero(part == "walls")
+        if len(wf):
+            wtree = cKDTree(C[wf])
+            Cr, wr = C[rest], A[rest]
+            sw = np.maximum(c_area, 1e-12)
+            mx, my = np.bincount(comp, wr * Cr[:, 0], nc) / sw, np.bincount(comp, wr * Cr[:, 1], nc) / sw
+            mz = np.bincount(comp, wr * Cr[:, 2], nc) / sw
+            sxx = np.bincount(comp, wr * (Cr[:, 0] - mx[comp]) ** 2, nc) / sw
+            syy = np.bincount(comp, wr * (Cr[:, 1] - my[comp]) ** 2, nc) / sw
+            sxy = np.bincount(comp, wr * (Cr[:, 0] - mx[comp]) * (Cr[:, 1] - my[comp]), nc) / sw
+            th = 0.5 * np.arctan2(2 * sxy, sxx - syy)
+            ax_ = np.c_[np.cos(th), np.sin(th)]
+            across = np.sqrt(np.clip((sxx + syy) / 2 - np.sqrt(((sxx - syy) / 2) ** 2 + sxy ** 2), 0, None))
+            pr = (Cr[:, 0] - mx[comp]) * ax_[comp, 0] + (Cr[:, 1] - my[comp]) * ax_[comp, 1]
+            p0, p1 = np.full(nc, np.inf), np.full(nc, -np.inf)
+            np.minimum.at(p0, comp, pr)
+            np.maximum.at(p1, comp, pr)
+            for k_ in np.flatnonzero((kind == "objects") & (c_lo <= 0.3) & (c_hi < wall_high) & (side >= 0.6)
+                                     & (p1 - p0 >= knee_w) & (across < knee_thin)):
+                ends = [np.r_[mx[k_] + ax_[k_, 0] * e, my[k_] + ax_[k_, 1] * e, mz[k_]] for e in (p0[k_], p1[k_])]
+                if all(len(wtree.query_ball_point(e_, knee_end)) for e_ in ends):
+                    kind[k_] = "walls"
         kind[c_hi <= band] = "floor"
         scrap = c_area < min_obj
         kind[scrap] = ""
