@@ -1071,8 +1071,14 @@ doorway's frame whose wall is not in the map (on the floor at both ends,
 nothing under 1.7 m in its middle), what floats (off the floor, over 0.3 m) within
 0.3 m of a wall or of what is wall by these rules (a ledge, a lintel, a door's part), what touches a wall, reaches 2.2 m and is
 nowhere farther than 0.6 m from the walls (a wall cluttered), and of what is
-left objects the faces over 2 m within 0.5 m of a wall (joined to furniture
-under them, which stays objects) and a wall's top (facing up, wall along both its
+left objects the faces within 0.1 m of a wall plane (the wall's own faces fused
+with the furniture against it, a door set in its frame) and those over 2 m
+within 0.5 m of a wall (the furniture under them stays objects); of the
+fragments that leaves, one floating within 0.3 m of a wall, or with 90 % of it
+within 0.25 m of one (a frame, a strip; a chair reaches out more), is wall. The
+distance to a wall counts the wall's plane where the map has no wall (hidden by
+what stood against it), so a cluttered wall is wall though the wall behind it
+is missing and a wall's top (facing up, wall along both its
 long edges; a table by a wall has it on one side): objects are only what stands out or
 apart (a chair or desk pushed to a wall reaches out 0.4 m and more);
 floor bumps (no higher than 0.12 m) are floor and scraps under 0.05 m2 the

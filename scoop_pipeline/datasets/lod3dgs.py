@@ -1105,7 +1105,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                 pillar_r=(0.1, 1.0), pillar_fit=0.04, attach=0.1, attach_depth=0.2, attach_upright=0.9,
                 mounted=0.3, below=0.25, panel_near=0.5, panel_long=0.5, panel_side=0.8,
                 arch_top=1.9, arch_low=1.7, ledge_near=0.3, top_near=0.3, float_low=0.3, hug=0.6,
-                high_cut=2.0, high_near=0.5,
+                high_cut=2.0, high_near=0.5, split_on=0.1, with_wall=0.25,
                 stair_rise=(0.25, 1.5), stair_side=0.15, knee_w=1.5, knee_thin=0.1, knee_end=0.35,
                 T=None, why=(), planes=None, why_objects=0):
     """Per face of the mesh m: "floor", "ceiling", "walls" or "objects", and
@@ -1166,8 +1166,14 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
     within top_near m along both its long edges; a table by a wall has it
     on one side), and what touches a wall, reaches wall_high and is nowhere
     farther than hug m from the walls (a wall cluttered); of what is left
-    objects, the faces over high_cut m within high_near m of a wall are
-    wall (joined to furniture, up high on the wall);
+    objects, the faces within split_on m of a wall plane (the wall's own,
+    fused with the furniture against it; a door set in its frame) and those
+    over high_cut m within high_near m of a wall are wall (the furniture
+    under them stays objects), and of the pieces that leaves, one floating
+    (off the floor) within ledge_near of a wall, or with 90 % of it within
+    with_wall of one (a frame, a strip; a chair reaches out more), is wall
+    too. Distances to the walls count the wall's plane where the map has
+    no wall (hidden by what stands against it);
     and so is a doorway's frame whose wall is not in the map (its jambs and
     the ledge over them: on the floor at both ends, reaching arch_top m,
     nothing under arch_low m in the middle; a table's top is lower, a
@@ -1260,6 +1266,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
             (uu <= u1) & (C[idx, 2] <= z1)
         return idx[ok]
 
+    pls = planes if planes is not None else []
     cand = np.flatnonzero(part == "")
     if len(wall_s) and len(cand):
         ctree = cKDTree(C[cand, :2])
@@ -1268,10 +1275,10 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
             # it stands on the floor somewhere, or hangs from the ceiling (over glass, a bulkhead)
             if len(got) and ((dz[got] <= ground).any() or (C[got, 2] >= ceil_at(C[got]) - 0.3).any()):
                 part[got] = "walls"
-                if planes is not None:
+                if True:
                     mu, n, t, _ = plane(k)
                     u = (C[got] - mu) @ t
-                    planes.append({"mu": mu, "n": n, "t": t, "u0": float(u.min()), "u1": float(u.max()),
+                    pls.append({"mu": mu, "n": n, "t": t, "u0": float(u.min()), "u1": float(u.max()),
                                    "top": float(C[got, 2].max()),
                                    "floor": float(np.median(C[got, 2] - dz[got]))})
     # the seams: what is left within `seam` of a floor, wall or ceiling face goes with it
@@ -1281,16 +1288,42 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
         d, i = cKDTree(C[lab]).query(C[rest], workers=-1, distance_upper_bound=seam)
         hit = np.isfinite(d)
         part[rest[hit]] = part[lab[i[hit]]]
+    def pieces(idx):
+        """The faces idx in connected pieces: each one's piece number."""
+        Fr = F[idx]
+        e = np.r_[Fr[:, 0], Fr[:, 1]], np.r_[Fr[:, 1], Fr[:, 2]]
+        _, vc = connected_components(coo_matrix((np.ones(len(e[0])), e), shape=(len(V), len(V))),
+                                     directed=False)
+        _, cm = np.unique(vc[Fr[:, 0]], return_inverse=True)
+        return cm.ravel()
+
+    def plane_dist(idx, margin=0.3, far=2.0):
+        """Each face's (idx) distance to the nearest wall plane, inside its
+        extent (margin m round it, along and up; inf if none within far m):
+        the wall itself where the map has none (hidden by what stands there)."""
+        d = np.full(len(idx), np.inf)
+        if not pls or not len(idx):
+            return d
+        tree2 = cKDTree(C[idx, :2])
+        for pl in pls:
+            mu, n, t = pl["mu"], pl["n"], pl["t"]
+            mid = mu[:2] + t[:2] * (pl["u0"] + pl["u1"]) / 2
+            j = np.asarray(tree2.query_ball_point(mid, np.hypot((pl["u1"] - pl["u0"]) / 2 + margin, far)), np.int64)
+            if not len(j):
+                continue
+            q = C[idx[j]] - mu
+            u, dn = q @ t, np.abs(q @ n)
+            ok = ((u > pl["u0"] - margin) & (u < pl["u1"] + margin) & (dn < far)
+                  & (C[idx[j], 2] > pl["floor"] - margin) & (C[idx[j], 2] < pl["top"] + margin))
+            d[j[ok]] = np.minimum(d[j[ok]], dn[ok])
+        return d
+
     # the rest, in connected pieces
     rest = np.flatnonzero(part == "")
     obj = np.full(len(F), -1)
     if len(rest):
-        Fr = F[rest]
-        e = np.r_[Fr[:, 0], Fr[:, 1]], np.r_[Fr[:, 1], Fr[:, 2]]
-        _, vc = connected_components(coo_matrix((np.ones(len(e[0])), e), shape=(len(V), len(V))),
-                                     directed=False)
-        _, comp = np.unique(vc[Fr[:, 0]], return_inverse=True)
-        comp = comp.ravel()
+        comp = pieces(rest)
+        dpl = plane_dist(rest)                       # to the wall's plane: there even where the map has no wall
         nc = comp.max() + 1
         c_area = np.bincount(comp, A[rest], nc)
         c_hi = np.full(nc, -np.inf)
@@ -1401,6 +1434,7 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                     break
                 d_, _ = cKDTree(C[wall_now]).query(C[rest[sel_f]], workers=-1,
                                                    distance_upper_bound=max(attach_depth, panel_near, ledge_near, top_near, hug))
+                d_ = np.minimum(d_, dpl[sel_f])      # or to the wall's plane, where the wall is hidden
                 cs = comp[sel_f]
                 touch, out, by = np.zeros(nc, bool), np.zeros(nc, bool), np.zeros(nc, bool)
                 touch[np.unique(cs[d_ <= attach])] = True
@@ -1468,26 +1502,57 @@ def label_faces(m, flat=0.9, band=0.12, roof_h=2.0, wall_area=0.5, wall_high=2.2
                            else "no climb tested (under 0.8 m of height or 0.5 m2)"))
                 log.info("\n".join(lines))
         kind[c_hi <= band] = "floor"
-        scrap = c_area < min_obj
-        kind[scrap] = ""
         part[rest] = kind[comp]
+        # on a wall's plane, whatever it is joined to (a wall's faces fused with the
+        # furniture against it, a door set in its frame): within split_on of it, wall
+        part[rest[(part[rest] == "objects") & (dpl <= split_on)]] = "walls"
         # what is joined to furniture but up high by a wall (over high_cut m, within
         # high_near m of a wall face): wall; the furniture under it stays objects
-        wl_ = np.flatnonzero(part == "walls")
-        hi_ = rest[(kind[comp] == "objects") & (dz[rest] >= high_cut)]
+        wl_ = np.flatnonzero(part == "walls")                  # the walls before the high cut
+        hi_ = rest[(part[rest] == "objects") & (dz[rest] >= high_cut)]
         if len(wl_) and len(hi_):
             d_, _ = cKDTree(C[wl_]).query(C[hi_], workers=-1, distance_upper_bound=high_near)
             part[hi_[np.isfinite(d_)]] = "walls"
-        is_obj = part[rest] == "objects"
-        _, num = np.unique(comp[is_obj], return_inverse=True)
-        obj[rest[is_obj]] = num.ravel()
-        sf = rest[scrap[comp]]                       # scraps: the nearest labelled face's part (and object)
-        lab = np.flatnonzero(part != "")
-        if len(sf) and len(lab):
-            _, i = cKDTree(C[lab]).query(C[sf], workers=-1)
-            part[sf], obj[sf] = part[lab[i]], obj[lab[i]]
-        elif len(sf):
-            part[sf] = "objects"
+        # what is left, in pieces again (the split leaves fragments): one floating (off the
+        # floor) within ledge_near of a wall, or with 90 % of it within with_wall of one (a
+        # door's part, a frame, a strip; a chair reaches out more), is wall: near the walls
+        # as they were before the high cut (a rack's top taken by it does not pull the rack
+        # after it); a scrap under min_obj m2 goes with the nearest labelled face
+        ob = np.flatnonzero(part == "objects")
+        if len(ob) and len(wl_):
+            cm = pieces(ob)
+            nk = cm.max() + 1
+            k_lo = np.full(nk, np.inf)
+            np.minimum.at(k_lo, cm, dz[ob])
+            d_, _ = cKDTree(C[wl_]).query(C[ob], workers=-1, distance_upper_bound=ledge_near)
+            d_ = np.minimum(d_, plane_dist(ob))
+            near_ = np.zeros(nk, bool)
+            near_[np.unique(cm[d_ <= ledge_near])] = True
+            o_ = np.lexsort((d_, cm))
+            cs_, ds_ = cm[o_], d_[o_]
+            st = np.r_[0, np.flatnonzero(np.diff(cs_)) + 1]
+            cnt = np.diff(np.r_[st, len(cs_)])
+            far90 = np.full(nk, np.inf)
+            far90[cs_[st]] = ds_[st + np.minimum((0.9 * cnt).astype(np.int64), cnt - 1)]
+            new = (near_ & (k_lo >= float_low)) | (far90 <= with_wall)
+            part[ob[new[cm]]] = "walls"
+        if len(ob):
+            if not len(wl_):
+                cm = pieces(ob)
+                nk = cm.max() + 1
+            sel = part[ob] == "objects"
+            k_area = np.bincount(cm, A[ob] * sel, nk)
+            sf = ob[sel & (k_area[cm] < min_obj)]           # scraps
+            part[sf] = ""
+            sel = part[ob] == "objects"
+            _, num = np.unique(cm[sel], return_inverse=True)
+            obj[ob[sel]] = num.ravel()
+            lab = np.flatnonzero(part != "")
+            if len(sf) and len(lab):
+                _, i = cKDTree(C[lab]).query(C[sf], workers=-1)
+                part[sf], obj[sf] = part[lab[i]], obj[lab[i]]
+            elif len(sf):
+                part[sf] = "objects"
     return part, obj
 
 
