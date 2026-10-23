@@ -42,6 +42,7 @@ __all__ = ["REORDER_S", "header_stamp_ns", "with_header_stamp", "replay_shift_ns
            "retime_bag", "RetimeResult"]
 
 REORDER_S = 2.0          # retime_bag.REORDER_S: must exceed pipeline-latency variation
+MAX_REORDER_S = 60.0     # a wider window (a message logged later than this) is refused
 
 
 def _endian(payload) -> str:
@@ -65,14 +66,18 @@ def with_header_stamp(payload, stamp_ns: int) -> bytes:
 
 
 def replay_shift_ns(reader, topics, clock: ouster.ClockMap,
-                    reorder_s: float = REORDER_S, log=print) -> int:
+                    reorder_s: float = REORDER_S, log=print, stats=None) -> int:
     """Median (mapped capture time - log time) over ``topics``: the constant
-    that moves every other message onto the capture timeline."""
+    that moves every other message onto the capture timeline. ``stats``
+    (a dict, if given) gets "late_s": how far the most out-of-place of them
+    was logged from that (a recorder that fell behind and caught up)."""
     deltas = [clock.host_ns(header_stamp_ns(msg.data)) - msg.log_time
               for _, _, _, msg in bag.iter_mcap_records(reader, topics)]
     if not deltas:
         raise BagError(f"no messages on {topics}; check the points namespace")
     delta = int(np.median(deltas))
+    if stats is not None:          # either way: early ones hold the rest back as much
+        stats["late_s"] = max(0.0, (delta - min(deltas)) * 1e-9, (max(deltas) - delta) * 1e-9)
     spread = (np.percentile(deltas, 99) - np.percentile(deltas, 1)) * 1e-9
     if spread > reorder_s:
         raise BagError(f"replay-latency spread {spread:.2f} s exceeds the "
@@ -110,7 +115,19 @@ def retime_bag(packets_bag, sensortime_bag, out_dir, packets_ns: str = "/ouster"
                                  metadata=metadata, log=log)
     reader = bag.open_bag(sensortime_bag)
     retime = [f"{points_ns}/points", f"{points_ns}/imu"]
-    delta = replay_shift_ns(reader, retime, clock, reorder_s, log)
+    st = {}
+    delta = replay_shift_ns(reader, retime, clock, reorder_s, log, stats=st)
+    # a LiDAR/IMU message logged long after its capture lands that far back in
+    # the output: the reorder window must cover it (20261015 mobile_2's
+    # recorder fell behind in its Ouster gap)
+    need = st.get("late_s", 0.0) + 0.5
+    if need > reorder_s:
+        if need > MAX_REORDER_S:
+            raise BagError(f"a {retime[0]} / imu message was logged {need - 0.5:.1f} s after its "
+                           f"capture: more than the {MAX_REORDER_S:.0f} s reorder window allowed")
+        log(f"reorder window {need:.1f} s: a LiDAR/IMU message was logged {need - 0.5:.1f} s "
+            f"after its capture (the recorder fell behind)")
+        reorder_s = need
     synced, shift = [], {}
     for c in imu_sync or ():
         r = IS.measure(reader, c["topic"], c.get("ref", f"{points_ns}/imu"), ref_stamp=clock.host_ns,

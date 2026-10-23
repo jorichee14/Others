@@ -445,6 +445,37 @@ def test_retime_decoded_bag():
     assert abs(first - truth_host_ns(int(frames[0]["ts"][0]), s0)) < 100_000
 
 
+def test_retime_widens_its_window_for_scans_logged_late():
+    """A recorder that fell behind logs scans seconds after their capture
+    (20261015 mobile_2): the reorder window grows to cover them, every
+    message is kept, and the output is in capture order."""
+    from scoop.bag import TopicSchema
+    from scoop.bagwrite import BagWriter
+    out, p, frames, s0 = _decoded("remapped", remap=REMAP)
+    d = os.path.join(Fixture.get()[0], "late")
+    shutil.rmtree(d, ignore_errors=True)
+    recs = list(bag.iter_mcap_records(bag.open_bag(out)))
+    pts = [i for i, (_, _, ch, _) in enumerate(recs) if ch.topic == "/mobile_1/ouster/points"]
+    late = set(pts[2:5])
+    rows = []
+    for i, (_, sc, ch, m) in enumerate(recs):
+        lag = 5_000_000_000 if i in late else 0
+        rows.append((m.log_time + lag, i, ch.topic, TopicSchema(sc.name, sc.encoding, bytes(sc.data),
+                                                               ch.message_encoding),
+                     m.publish_time + lag, m.sequence, dict(ch.metadata), bytes(m.data)))
+    with BagWriter(os.path.join(d, "decoded")) as w:
+        for log_ns, _, topic, schema, pub, seq, meta_, data in sorted(rows):
+            w.write_raw(topic, schema, data, log_ns, publish_ns=pub, sequence=seq,
+                        channel_metadata=meta_)
+    logs = []
+    retime.retime_bag(p, os.path.join(d, "decoded"), os.path.join(d, "retimed"), NS,
+                      "/mobile_1/ouster", metadata=meta(), log=logs.append)
+    assert any("reorder window" in ln and "after its capture" in ln for ln in logs), logs
+    got = [m for _, _, _, m in bag.iter_mcap_records(bag.open_bag(os.path.join(d, "retimed")))]
+    assert len(got) == len(recs)
+    assert [m.log_time for m in got] == sorted(m.log_time for m in got)
+
+
 LATCHED = "- history: 3\n  depth: 0\n  reliability: 1\n  durability: 1\n"
 
 

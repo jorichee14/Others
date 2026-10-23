@@ -84,17 +84,16 @@ class Recording:
 
     @property
     def odometry(self) -> Optional[Path]:
-        """data/processed/<date>/<pass>/odometry/<machine>/ for a work folder
-        data/work/<date>/<pass>/<machine>/ -- where the map stages look for this
-        robot's trajectory first; None for another layout."""
-        parts = self.work.parts
-        if "work" not in parts:
+        """data/processed/<date>/<pass>[/site_N]/odometry/<machine>/ for a work
+        folder data/work/<date>/<pass>[/site_N]/<machine>/ (scoop/layout.py) --
+        where the map stages look for this robot's trajectory first; None for
+        another layout."""
+        from . import layout
+        pp = layout.pass_parts(self.work, below=1)
+        if pp is None or "work" not in self.work.parts:
             return None
-        i = len(parts) - 1 - parts[::-1].index("work")
-        rel = parts[i + 1:]
-        if len(rel) < 3:
-            return None
-        return Path(*parts[:i]) / "processed" / rel[0] / rel[1] / "odometry" / rel[-1]
+        root, date, pas = pp
+        return Path(root, "processed", date, *pas, "odometry", self.work.name)
 
     @property
     def clock_json(self) -> Path:

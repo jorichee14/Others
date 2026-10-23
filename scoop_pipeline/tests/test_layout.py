@@ -67,6 +67,13 @@ def main():
     eq(P.pass_dir("survey/site_1"), (os.path.join(D, "processed", "20261015", "survey", "site_1"),
                                      "survey_site_1_20261015"), "pass survey/site_1")
     eq(P.pass_dir("20260924/mapping")[1], "mapping_20260924", "pass 20260924/mapping")
+    # a robot's GLIM export: odometry/<machine>/ of its pass, site included
+    from scoop import recording
+    for pas, machine in (("20261015/survey/site_1", "mobile_1"), ("20260924/mapping", "mobile_1")):
+        rec = recording.Recording(recording.Path(D, "raw", pas, machine), None,
+                                  recording.Path(D, "work", pas, machine))
+        eq(str(rec.odometry), os.path.join(D, "processed", pas, "odometry", machine),
+           "odometry of " + pas)
     # a folder named like a site below a machine is not a site
     eq(layout.pass_parts(os.path.join(D, "work", "20261015", "mapping", "mobile_2", "x"))[2],
        ["mapping"], "mobile_2 is not a site")
