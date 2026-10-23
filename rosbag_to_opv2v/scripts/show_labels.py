@@ -239,20 +239,30 @@ def main() -> int:
     ap.add_argument("--floor-z", type=float, default=None)
     a = ap.parse_args()
     if a.locate:
-        frames = load_frames(os.path.expanduser(a.dataset), a.camera)
+        split_dir = os.path.expanduser(a.dataset)
+
+        def frame_of(agent, key):           # just that frame's yaml, not the whole split
+            for y in glob.glob(os.path.join(split_dir, "*", agent, key + ".yaml")):
+                with open(y) as handle:
+                    p = yaml.safe_load(handle) or {}
+                cam = p.get(f"camera{a.camera}")
+                if cam and cam.get("intrinsic"):
+                    return {"cords": cam["cords"], "intrinsic": cam["intrinsic"]}
+            return None
+
         floor = a.floor_z
         if floor is None and a.labels:
             with open(os.path.expanduser(a.labels)) as handle:
                 lab = json.load(handle)
             floor = float(np.median([b["location"][2] - b["extent"][2] for b in lab])) if lab else None
         if floor is None:
-            zs = [f["cords"][2] for v in frames.values() for f in v[:50]]
-            floor = (float(np.median(zs)) if zs else 0.0) - 1.0
+            first = frame_of(a.locate[0].split(":")[0], a.locate[0].split(":")[1])
+            floor = (first["cords"][2] if first else 0.0) - 1.0
         print("floor z %+.3f m" % floor)
         for item in a.locate:
             agent, key, uv = item.split(":")
             u, v = (float(x) for x in uv.split(","))
-            fr = next((f for f in frames.get(agent, []) if f["key"] == key), None)
+            fr = frame_of(agent, key)
             if fr is None:
                 print("  %s: no frame %s with camera%d for agent %s" % (item, key, a.camera, agent))
                 continue
