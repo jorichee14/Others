@@ -62,6 +62,7 @@ class Recording:
     work: Path                      # data/work/<rel>
     svo: Optional[Path] = None      # the ZED .svo2 inside raw, if there is one
     zed_bags: Tuple[str, ...] = ("zed",)   # the zed step's bags (settings zed.bags)
+    packets_ns: str = "/ouster"     # where its bag has the packets (of ouster.packets_ns)
 
     def step(self, name: str) -> Path:
         """Output folder of a step: bags are named after their original
@@ -141,18 +142,26 @@ def work_dir_for(raw_dir, work_root=None) -> Path:
             else Path(*parts[:i]) / "work") / rel
 
 
-def find_recording(raw_dir, work_root=None, packets_ns: str = "/ouster",
+def find_recording(raw_dir, work_root=None, packets_ns="/ouster",
                    zed_bags=("zed",)) -> Recording:
     """The recording in ``raw_dir`` (a folder below ``.../raw/``). Its bag is
-    the rosbag2 folder inside that carries ``<packets_ns>/lidar_packets``.
-    ``work_root`` defaults to the ``work`` folder next to ``raw``;
-    ``zed_bags`` are the names of the zed step's bags (:func:`zed_bags`)."""
+    the rosbag2 folder inside that carries ``<packets_ns>/lidar_packets``;
+    ``packets_ns`` may be a list (a robot recorded under one name before,
+    another since: mobile_1's /ouster, /mobile_1/ouster since 20261015), the
+    one the bag has is the recording's ``packets_ns``. ``work_root`` defaults
+    to the ``work`` folder next to ``raw``; ``zed_bags`` are the names of the
+    zed step's bags (:func:`zed_bags`)."""
     raw_dir = Path(raw_dir).expanduser().resolve()
     work = work_dir_for(raw_dir, work_root)
 
-    topic = f"{packets_ns}/lidar_packets"
-    candidates = [b for b in _bag_folders(raw_dir)
-                  if topic in bag.open_bag(b).topics()]
+    nss = [packets_ns] if isinstance(packets_ns, str) else list(packets_ns)
+    candidates = []                                        # (bag, its namespace)
+    for b in _bag_folders(raw_dir):
+        have = bag.open_bag(b).topics()
+        ns = next((n for n in nss if f"{n}/lidar_packets" in have), None)
+        if ns is not None:
+            candidates.append((b, ns))
+    topic = " or ".join(f"{n}/lidar_packets" for n in nss)
     svo = zed.find_svo(raw_dir)
     if not candidates and svo is None:
         raise BagError(f"no bag with {topic} and no .svo2 in {raw_dir} "
@@ -160,9 +169,9 @@ def find_recording(raw_dir, work_root=None, packets_ns: str = "/ouster",
                        f"files: {sorted(p.name for p in raw_dir.iterdir() if p.is_file())})")
     if len(candidates) > 1:
         raise BagError(f"several bags with {topic} in {raw_dir}: "
-                       f"{[b.name for b in candidates]}")
-    return Recording(raw_dir, candidates[0] if candidates else None, work, svo,
-                     tuple(zed_bags))
+                       f"{[b.name for b, _ in candidates]}")
+    b, ns = candidates[0] if candidates else (None, nss[0])
+    return Recording(raw_dir, b, work, svo, tuple(zed_bags), ns)
 
 
 def load_settings(path=None) -> dict:
@@ -446,7 +455,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
         yaml.safe_dump({"raw_bag": str(rec.bag), **settings}, fh, sort_keys=False)
 
     o = settings["ouster"]
-    packets_ns = o.get("packets_ns", "/ouster")
+    packets_ns = rec.packets_ns
     out_ns = o.get("out_ns", "/mobile_1/ouster")
     for s in ([only] if only else STEPS[:last + 1]):
         if not rec.has(s):
@@ -490,12 +499,18 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
                 from . import tftree
                 with open(ROOT / Path(o["static_tf"]).expanduser()) as fh:
                     cals = tftree.load_calibrations(yaml.safe_load(fh))
+            remap = replay.parse_remaps(o.get("remap"))
+            have = bag.open_bag(rec.bag).topics()       # renames of topics it does not have
+            gone = sorted(t for t in remap if t not in have)
+            if gone:
+                log("    not in this recording, not renamed: %s" % ", ".join(gone))
+                remap = {k: v for k, v in remap.items() if k in have}
             replay.decode_ouster_bag(
                 rec.bag, tmp, packets_ns=packets_ns, out_ns=out_ns,
                 driver_min_range=float(o.get("driver_min_range", 0.0)),
                 driver_max_range=float(o.get("driver_max_range", 1000.0)),
                 frame=o.get("frame", "lidar"), imu=bool(o.get("imu", True)),
-                remap=replay.parse_remaps(o.get("remap")),
+                remap=remap,
                 copy_all=bool(o.get("copy_all", False)), exclude=o.get("exclude") or (),
                 frame_suffix=o.get("frame_suffix") or "", static_tf=cals, log=log)
         elif s == "retimed":

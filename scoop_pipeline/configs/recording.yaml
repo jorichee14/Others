@@ -33,10 +33,13 @@ machines:
 
   mobile_1:                        # Ouster OS1-64 + ZED 2i (SVO2) + 2 radars
     ouster:
-      packets_ns: /ouster          # where the recording has lidar_packets, imu_packets, metadata
+      packets_ns: [/mobile_1/ouster, /ouster]   # where the recording has lidar_packets,
+                                   # imu_packets, metadata: /mobile_1/ouster since 20261015,
+                                   # /ouster before (the bag's own is used)
       out_ns: /mobile_1/ouster     # where the decoded bag puts points, imu, metadata
       frame_suffix: _mobile1       # on os_lidar, os_sensor, os_imu: one per robot
-      remap:                       # renamed while copied, as the replay launch did
+      remap:                       # renamed while copied, as the replay launch did (a
+                                   # topic the recording does not have is left out)
         - /ouster/metadata:=/mobile_1/ouster/metadata
         - /ouster/imu_packets:=/mobile_1/ouster/imu_packets
         - /ouster/lidar_packets:=/mobile_1/ouster/lidar_packets

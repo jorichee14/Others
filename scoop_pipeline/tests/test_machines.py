@@ -29,7 +29,7 @@ NS2 = "/mobile_2/ouster"
 def test_settings_for_merges_a_machine_over_the_top_level():
     s = recording.load_settings()
     m1 = recording.settings_for(s, "mobile_1")                 # base + its block
-    assert m1["ouster"]["packets_ns"] == "/ouster" and "machines" not in m1
+    assert m1["ouster"]["packets_ns"] == ["/mobile_1/ouster", "/ouster"] and "machines" not in m1
     assert not any(k.startswith("_") for k in m1)
     assert m1 == recording.settings_for(s, None) == recording.settings_for(s, "infra_1")  # the default
     assert m1["ouster"]["frame_suffix"] == "_mobile1"
@@ -45,18 +45,20 @@ def test_settings_for_merges_a_machine_over_the_top_level():
     assert m2["zed"] == {}                                     # mobile_1's ZED is its own
 
 
-def _mobile2_tree(root):
-    """data/raw/20261015/mapping/mobile_2/<packets bag with /tf_static>/."""
+def _mobile2_tree(root, ns=NS2, rel=("20261015", "mapping", "mobile_2"),
+                  name="mirc_dataset_mapping_run_20261015_mobile_2"):
+    """data/raw/20261015/mapping/mobile_2/<packets bag with /tf_static>/ (or
+    another robot's folder ``rel``, its packets on ``ns``)."""
     from mcap.reader import make_reader
     from mcap.writer import Writer
     pk = os.path.join(root, "pk.mcap")
-    to.NS = NS2
+    to.NS = ns
     try:
         to.make_bag(pk, n_frames=120)
     finally:
         to.NS = "/ouster"
-    raw = os.path.join(root, "data", "raw", "20261015", "mapping", "mobile_2")
-    b = os.path.join(raw, "mirc_dataset_mapping_run_20261015_mobile_2")
+    raw = os.path.join(root, "data", "raw", *rel)
+    b = os.path.join(raw, name)
     os.makedirs(b)
     name = os.path.basename(b) + "_0.mcap"
     with open(pk, "rb") as fi, open(os.path.join(b, name), "wb") as fo:
@@ -82,6 +84,32 @@ def _mobile2_tree(root):
         "version": 5, "storage_identifier": "mcap", "relative_file_paths": [name]}},
         open(os.path.join(b, "metadata.yaml"), "w"))
     return raw, b
+
+
+def test_mobile_1_packets_under_its_own_namespace(d):
+    """Since 20261015 mobile_1 records its Ouster on /mobile_1/ouster, before on
+    /ouster: either is found, and the old renames of /ouster/* are left out."""
+    raw, b = _mobile2_tree(d, "/mobile_1/ouster", ("20261015", "survey", "site_1", "mobile_1"),
+                           "mirc_dataset_survey_1_run_20261015_mobile_1")
+    s = recording.settings_for(recording.load_settings(), "mobile_1")
+    rec = recording.find_recording(raw, None, s["ouster"]["packets_ns"],
+                                   recording.zed_bags(s["zed"]))
+    assert rec.bag == recording.Path(b).resolve() and rec.packets_ns == "/mobile_1/ouster"
+    logs = []
+    saved = ouster.sensor_info
+    ouster.sensor_info = lambda src: to.meta()
+    try:
+        st = recording.process(rec, s, until="retimed", log=logs.append)
+    finally:
+        ouster.sensor_info = saved
+    assert st["decoded"] and st["retimed"], st
+    assert any("not renamed" in ln and "/ouster/lidar_packets" in ln for ln in logs), logs
+    topics = bag.open_bag(rec.step("retimed")).topics()
+    for t in ("points", "imu", "lidar_packets", "imu_packets", "metadata"):
+        assert "/mobile_1/ouster/" + t in topics, (t, sorted(topics))
+    assert not any(t.startswith("/ouster/") for t in topics), sorted(topics)
+    pts = next(bag.open_bag(rec.step("retimed")).iter_messages(["/mobile_1/ouster/points"]))[2]
+    assert pts.header.frame_id == "os_lidar_mobile1"
 
 
 def test_mobile_2_folder_processed_with_its_own_settings(d):
