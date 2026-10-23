@@ -1079,6 +1079,67 @@ def recolour_mesh(mesh_path, ply, out=None, radius=0.05, k=8, fill=0.5):
     return done + filled, len(V)
 
 
+def recolour_from_renders(mesh_path, renders, out=None, tol=0.05, rel=0.02):
+    """The mesh's vertex colours from views rendered of the trained splats
+    (splat_walk.py --render-views: frameNNNNNN.jpg, depthNNNNNN.png in mm,
+    cameras.json): each vertex the mean of the rendered pixels that see it
+    (projected into each view, kept where the rendered depth agrees within
+    tol m or rel of the depth), as colour_points did with the camera's
+    frames. The rendering blends the Gaussians as training meant, so the
+    colours are the model's, clean. A vertex no view sees keeps its colour.
+    Written to out (default <mesh>_gs.ply); (vertices coloured, vertices)."""
+    import json
+    o3d = _o3d()
+    mesh_path, renders = os.path.expanduser(mesh_path), os.path.expanduser(renders)
+    out = os.path.expanduser(out) if out else os.path.splitext(mesh_path)[0] + "_gs.ply"
+    meta = json.load(open(os.path.join(renders, "cameras.json")))
+    m = o3d.io.read_triangle_mesh(mesh_path)
+    V = np.asarray(m.vertices)
+    if not len(V):
+        raise ConvertError(f"{mesh_path}: no vertices")
+    C = np.asarray(m.vertex_colors).copy() if m.has_vertex_colors() else np.full((len(V), 3), 0.6)
+    acc, cnt = np.zeros((len(V), 3)), np.zeros(len(V))
+    byc = {}
+    for n, fr in enumerate(meta["frames"]):
+        byc.setdefault(str(fr["camera"]), []).append((n, np.array(fr["c2w"], float)))
+    for cid, lst in byc.items():
+        W, H, fx, fy, cx, cy = meta["cameras"][cid]
+        for k0 in range(0, len(lst), 200):                 # 200 views at a time: memory
+            frames = []
+            for n, c2w in lst[k0:k0 + 200]:
+                bgr = cv2.imread(os.path.join(renders, f"frame{n:06d}.jpg"), cv2.IMREAD_COLOR)
+                dep = cv2.imread(os.path.join(renders, f"depth{n:06d}.png"), cv2.IMREAD_UNCHANGED)
+                if bgr is None or dep is None:
+                    raise ConvertError(f"{renders}: no frame{n:06d}.jpg / depth{n:06d}.png")
+                frames.append((c2w, bgr, dep.astype(np.float32) / 1000.0))
+            rgb, seen = colour_points(V, frames, (fx, fy, cx, cy), int(W), int(H), tol=tol, rel=rel)
+            # colour_points gives the mean over its frames: weighted back in by how many saw each point
+            ns = np.zeros(len(V))
+            for c2w, bgr, dep in frames:
+                R, t = c2w[:3, :3], c2w[:3, 3]
+                Pc = (V - t) @ R
+                z = Pc[:, 2]
+                i = np.flatnonzero(z > 0.05)
+                u = np.rint(fx * Pc[i, 0] / z[i] + cx).astype(np.int64)
+                v = np.rint(fy * Pc[i, 1] / z[i] + cy).astype(np.int64)
+                ok = (u >= 0) & (u < int(W)) & (v >= 0) & (v < int(H))
+                i, u, v = i[ok], u[ok], v[ok]
+                d = dep[v, u]
+                ok = (d > 0) & (np.abs(z[i] - d) < np.maximum(tol, rel * d))
+                ns[i[ok]] += 1
+            acc[seen] += rgb[seen].astype(np.float64) / 255.0 * ns[seen, None]
+            cnt[seen] += ns[seen]
+            log.info(f"  {min(k0 + 200, len(lst))} of {len(lst)} views (camera {cid}): "
+                     f"{int((cnt > 0).sum())} vertices seen so far")
+    seen = cnt > 0
+    C[seen] = acc[seen] / cnt[seen, None]
+    m.vertex_colors = o3d.utility.Vector3dVector(np.clip(C, 0, 1))
+    o3d.io.write_triangle_mesh(out, m)
+    log.info(f"{mesh_path}: {int(seen.sum())} of {len(V)} vertices coloured from {len(meta['frames'])} rendered views "
+             f"({renders}), the rest kept their colour -> {out}")
+    return int(seen.sum()), len(V)
+
+
 def anchor_file(path, frame, out=None):
     """A cloud or mesh made in GLIM's world moved into the anchored map frame
     with 05's T_N_world (frames/anchor_frame.json), as the anchored map and
@@ -3192,8 +3253,13 @@ def main():
     cl.add_argument("--max-scale", type=float, default=0.5, help="longer than this along any axis (m): removed")
     rc = sub.add_parser("recolour", help="the mesh's colours from the trained splats' base colours")
     rc.add_argument("mesh", help="the mesh in the model's frame (the unanchored mesh_view_<tag>.ply)")
-    rc.add_argument("ply", help="a trained model, e.g. <run>/point_cloud/iteration_300000/level_5.ply")
+    rc.add_argument("ply", help="a trained model, e.g. <run>/point_cloud/iteration_300000/level_5.ply; or, with "
+                    "--renders, anything")
     rc.add_argument("out", nargs="?", default=None, help="default <mesh>_gs.ply")
+    rc.add_argument("--renders", default=None,
+                    help="views rendered of the model (splat_walk.py --render-views): the mesh coloured from them, "
+                         "each vertex the mean of the rendered pixels that see it (the Gaussians blended as "
+                         "training meant; one by one their colours cancel each other: confetti)")
     rc.add_argument("--radius", type=float, default=0.05, help="Gaussians within this of a vertex colour it (m)")
     rc.add_argument("--fill", type=float, default=0.5, help="a vertex with none that close: the nearest within this (m)")
     wk = sub.add_parser("walk", help="walk inside a mesh (with its ceiling) in a window")
@@ -3241,7 +3307,10 @@ def main():
         elif a.cmd == "splats-clean":
             splats_clean(a.ply, a.mesh, a.out, far=a.far, min_opacity=a.min_opacity, max_scale=a.max_scale)
         elif a.cmd == "recolour":
-            recolour_mesh(a.mesh, a.ply, a.out, radius=a.radius, fill=a.fill)
+            if a.renders:
+                recolour_from_renders(a.mesh, a.renders, a.out)
+            else:
+                recolour_mesh(a.mesh, a.ply, a.out, radius=a.radius, fill=a.fill)
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
                  faces=a.faces, eye=a.eye, shot=a.shot, vivid=not a.plain, sat=a.sat, one_side=a.one_side,

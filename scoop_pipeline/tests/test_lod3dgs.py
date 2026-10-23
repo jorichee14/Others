@@ -750,7 +750,8 @@ def check_sionna(tmp):
 def check_splats(tmp):
     """splats-clean on a model of Gaussians on a box's surface (red) with
     200 floaters 6 m off, 50 faint and 30 oversized ones: those removed,
-    the surface's kept; recolour: the box's vertices in the splats' red."""
+    the surface's kept; recolour: the box's vertices in the splats' red,
+    and from rendered views (flat green, the true depth) green where seen."""
     import open3d as o3d
     m = o3d.geometry.TriangleMesh.create_box(4, 3, 2.5).subdivide_midpoint(4)
     V = np.asarray(m.vertices)
@@ -783,6 +784,35 @@ def check_splats(tmp):
     done, nv = L.recolour_mesh(os.path.join(tmp, "box.ply"), r["out"])
     Cq = np.asarray(o3d.io.read_triangle_mesh(os.path.join(tmp, "box_gs.ply")).vertex_colors)
     assert done == nv == len(V) and (np.abs(Cq - [0.9, 0.2, 0.1]).max(1) < 0.05).all(), ("recolour", done, nv)
+    # from rendered views: 6 views from inside the box, each a flat green with the true depth
+    # (ray cast): the vertices seen take the green, with the depth check keeping the far side out
+    import json
+    W, H, fx, fy, cx, cy = 320, 240, 200.0, 200.0, 159.5, 119.5
+    rd = os.path.join(tmp, "renders")
+    os.makedirs(rd, exist_ok=True)
+    sc = o3d.t.geometry.RaycastingScene()
+    sc.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(m))
+    eye = np.array([2.0, 1.5, 1.25])
+    meta = {"cameras": {"1": [W, H, fx, fy, cx, cy]}, "frames": []}
+    for n, yaw in enumerate(np.linspace(0, 2 * np.pi, 6, endpoint=False)):
+        fwd = np.array([np.cos(yaw), np.sin(yaw), 0.0])
+        right = np.cross(fwd, [0, 0, 1.0])
+        c2w = np.eye(4)
+        c2w[:3, :3] = np.c_[right, np.cross(fwd, right), fwd]      # x right, y down, z forward
+        c2w[:3, 3] = eye
+        uu, vv = np.meshgrid(np.arange(W), np.arange(H))
+        dirs = np.c_[(uu.ravel() - cx) / fx, (vv.ravel() - cy) / fy, np.ones(W * H)]
+        dirs_w = dirs @ c2w[:3, :3].T
+        rays = o3d.core.Tensor(np.c_[np.tile(eye, (W * H, 1)), dirs_w].astype(np.float32))
+        tz = sc.cast_rays(rays)["t_hit"].numpy().reshape(H, W)       # along the ray: z = t (dir_z = 1)
+        cv2.imwrite(os.path.join(rd, f"frame{n:06d}.jpg"), np.full((H, W, 3), (77, 153, 51), np.uint8))
+        cv2.imwrite(os.path.join(rd, f"depth{n:06d}.png"), np.clip(tz * 1000, 0, 65535).astype(np.uint16))
+        meta["frames"].append({"name": f"frame{n:06d}.jpg", "camera": 1, "c2w": c2w.tolist()})
+    json.dump(meta, open(os.path.join(rd, "cameras.json"), "w"))
+    done2, _ = L.recolour_from_renders(os.path.join(tmp, "box.ply"), rd, os.path.join(tmp, "box_rr.ply"))
+    Cr = np.asarray(o3d.io.read_triangle_mesh(os.path.join(tmp, "box_rr.ply")).vertex_colors)
+    green = np.abs(Cr - [0.2, 0.6, 0.3]).max(1) < 0.03
+    assert done2 > 0.5 * len(V) and green.sum() == done2, ("recolour from renders", done2, int(green.sum()))
     return r
 
 

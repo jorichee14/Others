@@ -75,8 +75,9 @@ def camera(eye, look, up, W, H, fov_deg, znear=0.05, zfar=1000.0, device="cuda")
                 tanfovx=tx, tanfovy=ty)
 
 
-def render(g, deg, cam, W, H, bg=(0.12, 0.12, 0.12)):
-    """One frame (H x W x 3 uint8, BGR) of the splats g from the camera."""
+def render(g, deg, cam, W, H, bg=(0.12, 0.12, 0.12), want_depth=False):
+    """One frame (H x W x 3 uint8, BGR) of the splats g from the camera;
+    want_depth: (frame, depth H x W float32, metres along the view)."""
     from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
     settings = GaussianRasterizationSettings(
         image_height=H, image_width=W, tanfovx=cam["tanfovx"], tanfovy=cam["tanfovy"],
@@ -89,7 +90,61 @@ def render(g, deg, cam, W, H, bg=(0.12, 0.12, 0.12)):
             opacities=g["opacity"], scales=g["scales"], rotations=g["rotations"], cov3D_precomp=None)
     img = out[0] if isinstance(out, tuple) else out
     rgb = (img.clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
-    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    if want_depth:
+        dep = out[1] if isinstance(out, tuple) and len(out) > 1 else None
+        dep = dep.squeeze().cpu().numpy().astype(np.float32) if dep is not None else np.zeros((H, W), np.float32)
+        return bgr, dep
+    return bgr
+
+
+def scene_cameras(scene):
+    """The scene's cameras (sparse/0): (W, H, fx, fy, cx, cy) and, per
+    image, (name, camera-to-world 4 x 4)."""
+    cams = {}
+    for line in open(os.path.join(scene, "sparse", "0", "cameras.txt")):
+        v = line.split()
+        if len(v) >= 8 and v[0].isdigit():
+            cams[int(v[0])] = (int(v[2]), int(v[3])) + tuple(float(x) for x in v[4:8])
+    frames = []
+    for line in open(os.path.join(scene, "sparse", "0", "images.txt")):
+        v = line.split()
+        if len(v) >= 10 and v[0].isdigit():
+            qw, qx, qy, qz = map(float, v[1:5])
+            t = np.array(list(map(float, v[5:8])))
+            R = np.array([[1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+                          [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+                          [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)]])
+            c2w = np.eye(4)
+            c2w[:3, :3], c2w[:3, 3] = R.T, -R.T @ t
+            frames.append((v[9], int(v[8]), c2w))
+    if not cams or not frames:
+        raise SystemExit(f"{scene}: no cameras in sparse/0")
+    return cams, frames
+
+
+def render_views(g, deg, scene, out, every=1):
+    """The scene's cameras rendered from the splats: out/frameNNNNNN.jpg
+    and depthNNNNNN.png (uint16, mm) with out/cameras.json (the camera and
+    each frame's camera-to-world), for lod3dgs.py recolour --renders."""
+    cams, frames = scene_cameras(scene)
+    os.makedirs(out, exist_ok=True)
+    meta = {"cameras": {str(k): v for k, v in cams.items()}, "frames": []}
+    frames = frames[::max(1, every)]
+    print(f"rendering {len(frames)} views of {scene} -> {out}", flush=True)
+    for n, (name, cid, c2w) in enumerate(frames):
+        W, H, fx, fy, cx, cy = cams[cid]
+        fov = 2 * math.degrees(math.atan(H / (2 * fy)))
+        eye, fwd = c2w[:3, 3], c2w[:3, 2]
+        up_c = -c2w[:3, 1]                                   # the camera's y is down
+        bgr, dep = render(g, deg, camera(eye, eye + fwd, up_c, W, H, fov), W, H, want_depth=True)
+        cv2.imwrite(os.path.join(out, f"frame{n:06d}.jpg"), bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        cv2.imwrite(os.path.join(out, f"depth{n:06d}.png"), np.clip(dep * 1000, 0, 65535).astype(np.uint16))
+        meta["frames"].append({"name": name, "camera": cid, "c2w": c2w.round(9).tolist()})
+        if n % 200 == 0:
+            print(f"  {n} of {len(frames)}", flush=True)
+    json.dump(meta, open(os.path.join(out, "cameras.json"), "w"))
+    print(f"{len(frames)} views rendered -> {out}", flush=True)
 
 
 def first_camera(scene):
@@ -137,6 +192,9 @@ def main():
     ap.add_argument("--fly", nargs=2, default=None, metavar=("PATH_JSON", "OUT_MP4"),
                     help="render the video of this fly path (lod3dgs.py fly's <out>_path.json) instead")
     ap.add_argument("--frame", default=None, help="anchor_frame.json: the fly path is in the anchored frame")
+    ap.add_argument("--render-views", nargs=2, default=None, metavar=("SCENE", "OUT"),
+                    help="render the scene's cameras (rgb + depth) to OUT, for lod3dgs.py recolour --renders")
+    ap.add_argument("--every", type=int, default=1, help="with --render-views: every Nth camera")
     a = ap.parse_args()
     W, H = [int(v) for v in a.size.lower().split("x")]
     print(f"loading {a.ply} ...", flush=True)
@@ -145,6 +203,9 @@ def main():
     print(f"{len(xyz)} splats, SH degree {deg}", flush=True)
     up = np.array([0.0, 0.0, 1.0])
 
+    if a.render_views:
+        render_views(g, deg, a.render_views[0], a.render_views[1], a.every)
+        return
     if a.fly:
         pj = json.load(open(a.fly[0]))
         E, Lk = np.array(pj["eye"], float), np.array(pj["look"], float)
