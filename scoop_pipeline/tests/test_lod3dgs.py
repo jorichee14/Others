@@ -1000,13 +1000,12 @@ def main():
         rep2 = os.path.join(tmp, "replica_map_mapping_B_20260101")
         os.makedirs(os.path.join(rep2, "results"))
         W2, H2, F2, CX2, CY2 = 120, 90, 80.0, 61.0, 44.0
-        Ti = np.linalg.inv(Tt)
         poses2 = [camera(x, y, yaw, 0.0) for (x, y) in ((3.0, 2.0),) for yaw in np.linspace(0, 2 * np.pi, 4, endpoint=False)]
         for i, T in enumerate(poses2):
             img, D = render(T, W2, H2, F2, F2, CX2, CY2)
             cv2.imwrite(os.path.join(rep2, "results", f"frame{i:06d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 100])
             cv2.imwrite(os.path.join(rep2, "results", f"depth{i:06d}.png"), np.rint(D * SCALE).astype(np.uint16))
-        np.savetxt(os.path.join(rep2, "traj.txt"), np.array([(Ti @ T).reshape(-1) for T in poses2]))
+        np.savetxt(os.path.join(rep2, "traj.txt"), np.array([(Tt @ T).reshape(-1) for T in poses2]))   # in the moved frame
         open(os.path.join(rep2, "splatam_data_config.yaml"), "w").write(
             f"dataset_name: \"replica\"\ncamera_params:\n  image_height: {H2}\n  image_width: {W2}\n"
             f"  fx: {F2}\n  fy: {F2}\n  cx: {CX2}\n  cy: {CY2}\n  png_depth_scale: {SCALE}\n  crop_edge: 0\n")
