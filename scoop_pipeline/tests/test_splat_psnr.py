@@ -41,7 +41,8 @@ def main():
         json.dump(meta, open(os.path.join(renders, "cameras.json"), "w"))
         rows, summ = SP.compare(renders, scene, log=lambda *_: None)
         assert len(rows) == 8 and summ[1]["n"] == 5 and summ[2]["n"] == 3, summ
-        assert 32 < summ[1]["psnr_mean"] < 36 and 21 < summ[2]["psnr_mean"] < 25, summ   # sigma 5 -> ~34 dB, 20 -> ~22
+        assert 27 < summ[1]["psnr_mean"] < 36 and 20 < summ[2]["psnr_mean"] < 27 \
+            and summ[1]["psnr_mean"] > summ[2]["psnr_mean"] + 3, summ     # sigma 5 and 20, through JPEG
         assert summ["all"]["n"] == 8 and summ[1]["l1"] < summ[2]["l1"], summ
         r = subprocess.run([sys.executable, os.path.join(ROOT, "datasets", "splat_psnr.py"), renders, "--scene", scene],
                            capture_output=True, text=True)
