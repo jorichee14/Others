@@ -60,6 +60,7 @@ def run07(bag, traj, out, *extra):
     if r.returncode:
         raise AssertionError(r.stdout[-1500:] + r.stderr[-1500:])
     print(r.stdout[-600:])
+    run07.last = r.stdout
     return read_pcd(out)
 
 
@@ -120,6 +121,15 @@ def dynamic_case(tmp, rng):
     SC.write_traj(traj, stamps)
     raw = run07(bag, traj, os.path.join(tmp, "raw.pcd"), "--keep-dynamic")
     clean = run07(bag, traj, os.path.join(tmp, "clean.pcd"))
+    # a second LiDAR on its own track (here the same one again): the loop
+    # over sources, every scan counted once per source
+    two = run07(bag, traj, os.path.join(tmp, "two.pcd"), "--keep-dynamic",
+                "--also", "/mobile_1/ouster/points=" + traj)
+    if "used 476 scans from 2 LiDAR(s)" not in run07.last:
+        return ["--also: expected 476 scans from 2 LiDAR(s): %s" % run07.last[-300:]]
+    if abs(len(two) - len(raw)) > 0.02 * len(raw):
+        return ["--also: %d points with two sources, %d with one (the same scans twice "
+                "must give the same voxels)" % (len(two), len(raw))]
     gone = read_pcd(os.path.join(tmp, "clean_dynamic.pcd"))
     # the walker's trail: where it was in the first two thirds of the run (it
     # is still standing at the end, where carving has no evidence yet)

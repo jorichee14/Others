@@ -33,6 +33,12 @@ Options worth knowing:
     --no-deskew           one pose per scan (default: every point through the
                           trajectory at its own time, as 01 / 02 / 04 do)
                           (needs quality_<name>.csv next to the tum)
+    --also TOPIC=TRAJ     another LiDAR's scans into the same cloud, placed by its
+                          own stage-04 track (T_map_lidar). From a config, every
+                          "kind": "lidar" entry of 04_reference.tracks is added by
+                          itself: both robots' Ousters build the coop cloud, each
+                          seeing what the other drove past, and each robot's rays
+                          carve the other robot out.
     --keep-dynamic        keep the moving things. By default the run's movers
                           (the other robot, the operators) are removed the way
                           stage 01 removes them from the map: a decision grid
@@ -169,6 +175,17 @@ def main():
                                 else P.lidar_track_traj())
         cfg_defaults["out"] = P.outp(cfg_defaults.get("out") or "cloud_in_ref_{tag}.pcd")
         cfg_defaults["topic"] = P.points_topic
+        # the other robots' LiDARs: 04's lidar tracks, each with its own trajectory
+        also = []
+        for tr in (P.cfg.get("04_reference") or {}).get("tracks") or []:
+            if tr.get("kind") == "lidar" and tr.get("enabled", True):
+                topic = tr.get("points_topic") or P.sensor_setting("points_topic", tr["machine"])
+                traj = os.path.join(P.reference_dir(), "traj_%s.tum" % tr["name"])
+                if os.path.exists(traj):
+                    also.append("%s=%s" % (topic, traj))
+                else:
+                    print("(no %s: track %s not built by 04, left out)" % (traj, tr["name"]))
+        cfg_defaults["also"] = also
         s01 = P.cfg.get("01_build_map", {})
         cfg_defaults.setdefault("deskew", bool(s01.get("deskew", True)))
         cfg_defaults.setdefault("deskew_bins", int(s01.get("deskew_bins", 100)))
@@ -196,6 +213,8 @@ def main():
                     help="place each scan with one pose (default: deskew each point "
                          "through the trajectory at its own time, as the map stages)")
     ap.add_argument("--deskew-bins", type=int, default=100)
+    ap.add_argument("--also", action="append", default=[], metavar="TOPIC=TRAJ",
+                    help="another LiDAR's scans, placed by its own stage-04 track")
     ap.add_argument("--keep-dynamic", action="store_true",
                     help="keep the run's movers (default: removed by span and free-space carving)")
     ap.add_argument("--remove-dynamic", default=None, help=argparse.SUPPRESS)   # the config block
@@ -213,58 +232,66 @@ def main():
     else:
         print("remove dynamic: off (--keep-dynamic)")
 
-    ts, Ts = load_traj(args.traj)
-    ts, Ts = np.asarray(ts), np.asarray(Ts)
-    print(f"trajectory: {len(ts)} poses, {ts[-1]-ts[0]:.1f} s")
-
-    good = None
-    if args.keep_quality:
-        qcsv = os.path.join(os.path.dirname(args.traj),
-                            "quality_" + os.path.basename(args.traj)[5:-4] + ".csv")
-        if os.path.exists(qcsv):
-            good_t = []
-            with open(qcsv) as f:
-                for r in csv.DictReader(f):
-                    if r.get("status") == "ok":
-                        good_t.append(float(r["t"]))
-            good_t = np.array(sorted(good_t))
-            # quality rows are per trajectory pose: the poses they mark ok
-            k = np.clip(np.searchsorted(good_t, ts), 0, max(len(good_t) - 1, 0))
-            near = np.minimum(np.abs(good_t[k] - ts),
-                              np.abs(good_t[np.maximum(k - 1, 0)] - ts)) if len(good_t) else \
-                np.full(len(ts), np.inf)
-            good = near < 1e-3
-            print(f"quality gate: {int(good.sum())} of {len(ts)} poses registered ({qcsv})")
-        else:
-            print(f"(no {qcsv}; --keep-quality ignored)")
-    print("deskew: %s" % ("ON, %d bins, through this trajectory" % args.deskew_bins
+    sources = [(args.topic, args.traj)]
+    for item in args.also or []:
+        if "=" not in item:
+            sys.exit("--also takes TOPIC=TRAJ, got %r" % item)
+        topic, traj = item.split("=", 1)
+        sources.append((topic.strip(), os.path.expanduser(traj.strip())))
+    print("deskew: %s" % ("ON, %d bins, through each trajectory" % args.deskew_bins
                           if args.deskew else "off (one pose per scan)"))
-
     acc = VoxelAccum(args.voxel)
-    n_used = n_skip_q = 0
-    i = -1
-    for j, X in iter_scans(args.bag, args.topic, ts, args.max_gap_ms * 1e-3,
-                           args.range_min, args.range_max, Ts, args.deskew,
-                           args.deskew_bins, frame="world"):
-        i += 1
-        if i % args.stride:
-            continue
-        rel = ts[j] - ts[0]
-        if args.t_start is not None and rel < args.t_start:
-            continue
-        if args.t_end is not None and rel > args.t_end:
-            break
-        if good is not None and not good[j]:
-            n_skip_q += 1
-            continue
-        acc.add(X)
-        if dyn is not None:
-            dyn.add(X, float(ts[j]))
-            if carver is not None:
-                carver.add(Ts[j][:3, 3].astype(np.float64), X)
-        n_used += 1
-        if n_used % 500 == 0:
-            print(f"  {n_used} scans  t={rel:.1f}s", flush=True)
+    n_used_all = 0
+    for topic, traj in sources:
+        ts, Ts = load_traj(traj)
+        ts, Ts = np.asarray(ts), np.asarray(Ts)
+        print(f"{topic}: trajectory {traj}: {len(ts)} poses, {ts[-1]-ts[0]:.1f} s")
+        good = None
+        if args.keep_quality:
+            qcsv = os.path.join(os.path.dirname(traj), "quality_" + os.path.basename(traj)[5:-4] + ".csv")
+            if os.path.exists(qcsv):
+                good_t = []
+                with open(qcsv) as f:
+                    for r in csv.DictReader(f):
+                        if r.get("status") == "ok":
+                            good_t.append(float(r["t"]))
+                good_t = np.array(sorted(good_t))
+                # quality rows are per trajectory pose: the poses they mark ok
+                k = np.clip(np.searchsorted(good_t, ts), 0, max(len(good_t) - 1, 0))
+                near = np.minimum(np.abs(good_t[k] - ts),
+                                  np.abs(good_t[np.maximum(k - 1, 0)] - ts)) if len(good_t) else \
+                    np.full(len(ts), np.inf)
+                good = near < 1e-3
+                print(f"  quality gate: {int(good.sum())} of {len(ts)} poses registered ({qcsv})")
+            else:
+                print(f"  (no {qcsv}; --keep-quality ignored)")
+        n_used = n_skip_q = 0
+        i = -1
+        for j, X in iter_scans(args.bag, topic, ts, args.max_gap_ms * 1e-3,
+                               args.range_min, args.range_max, Ts, args.deskew,
+                               args.deskew_bins, frame="world"):
+            i += 1
+            if i % args.stride:
+                continue
+            rel = ts[j] - ts[0]
+            if args.t_start is not None and rel < args.t_start:
+                continue
+            if args.t_end is not None and rel > args.t_end:
+                break
+            if good is not None and not good[j]:
+                n_skip_q += 1
+                continue
+            acc.add(X)
+            if dyn is not None:
+                dyn.add(X, float(ts[j]))
+                if carver is not None:
+                    carver.add(Ts[j][:3, 3].astype(np.float64), X)
+            n_used += 1
+            if n_used % 500 == 0:
+                print(f"  {n_used} scans  t={rel:.1f}s", flush=True)
+        print(f"  used {n_used} scans of {topic} (skipped {n_skip_q} not registered by 04; scans more than "
+              f"{args.max_gap_ms:.0f} ms from a trajectory pose are not read)")
+        n_used_all += n_used
     out = acc.points(args.min_count)
     if dyn is not None:
         out, gone, (n_static, n_dyn, n_carved) = drop_dynamic(out, dyn, carver, rd)
@@ -274,8 +301,7 @@ def main():
               f"{', %d of them carved by free-space' % n_carved if carver is not None else ''}"
               f" -> dropped {len(gone)} points, kept {len(out)}; the dropped ones in {dyn_path}")
     write_pcd(args.out, out)
-    print(f"used {n_used} scans (skipped {n_skip_q} not registered by 04; scans more than "
-          f"{args.max_gap_ms:.0f} ms from a trajectory pose are not read)")
+    print(f"used {n_used_all} scans from {len(sources)} LiDAR(s)")
     print(f"wrote {args.out}: {len(out)} points at {args.voxel} m voxel, "
           f"x {out[:,0].min():.2f}..{out[:,0].max():.2f}  y {out[:,1].min():.2f}..{out[:,1].max():.2f}")
     print("this cloud is in the same frame as the trajectory it was built from — "
