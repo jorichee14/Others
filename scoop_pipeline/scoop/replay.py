@@ -137,7 +137,9 @@ def decode_ouster_bag(packets_bag, out_dir, packets_ns: str = "/ouster",
                          decoded=(points_t, imu_t) if imu else (points_t,))
     schemas = bag.topic_schemas(reader) if copies else {}
     qos = bag.topic_qos(reader)
-    write_meta = meta_t not in copies.values()     # a copied metadata topic replaces it
+    # a copied metadata topic replaces it, unless the metadata comes from outside
+    # (the bag's own message lost: it is written so the output can be decoded again)
+    write_meta = metadata is not None or meta_t not in copies.values()
 
     src = metadata or ouster.read_metadata(reader, packets_ns)
     info = ouster.sensor_info(src)

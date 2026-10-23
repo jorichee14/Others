@@ -268,6 +268,44 @@ def _clear_leftovers(tmp: Path):
     tmp.parent.mkdir(parents=True, exist_ok=True)
 
 
+OUSTER_METADATA = ("ouster_metadata.yaml", "ouster_metadata.json")
+
+
+def sensor_metadata(rec: "Recording", log=print) -> Optional[str]:
+    """None when the bag has its Ouster's metadata message (it is used); else
+    the robot raw folder's ouster_metadata.yaml (`ros2 topic echo <ns>/metadata
+    --full --once` as it prints it: data: '<json>') or ouster_metadata.json (the
+    JSON alone). The message is published once, at the start: a recording
+    whose first file is lost has none."""
+    from . import ouster
+    try:
+        ouster.read_metadata(bag.open_bag(rec.bag), rec.packets_ns)
+        return None
+    except BagError:
+        pass
+    side = next((rec.raw / n for n in OUSTER_METADATA if (rec.raw / n).is_file()), None)
+    if side is None:
+        raise BagError(f"no {rec.packets_ns}/metadata message in {rec.bag.name} (published once, "
+                       f"at the start: is its first file missing?). Save it next to the bag:\n"
+                       f"  ros2 topic echo {rec.packets_ns}/metadata --full --once > "
+                       f"{rec.raw / OUSTER_METADATA[0]}\n(while a bag of the same sensor plays), "
+                       f"or with python3 scoop_pipeline/processing/process_recording.py "
+                       f"--save-ouster-metadata <that bag> {rec.packets_ns} "
+                       f"{rec.raw / OUSTER_METADATA[1]}")
+    text = side.read_text()
+    if side.suffix == ".yaml":                       # ros2 topic echo: data: '<json>'
+        doc = next((d for d in yaml.safe_load_all(text) if d), None)
+        text = doc.get("data") if isinstance(doc, dict) else None
+        if not isinstance(text, str):
+            raise BagError(f"{side}: no data: '<json>' in it (ros2 topic echo --full --once)")
+    try:
+        json.loads(text)
+    except ValueError as e:
+        raise BagError(f"{side}: not the sensor's metadata JSON ({e})") from None
+    log(f"    {rec.packets_ns}/metadata: not in the bag, from {side}")
+    return text
+
+
 def glim_config_dir(settings: dict) -> Path:
     """GLIM's config folder: settings glim.config, relative to scoop_pipeline/."""
     return ROOT / Path(settings["glim"].get("config", "configs/glim/mobile_1")).expanduser()
@@ -456,6 +494,8 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
     o = settings["ouster"]
     packets_ns = rec.packets_ns
     out_ns = o.get("out_ns", "/mobile_1/ouster")
+    meta = sensor_metadata(rec, log) if rec.bag is not None and any(
+        not rec.done(x) for x in ("decoded", "retimed")) else None
     for s in ([only] if only else STEPS[:last + 1]):
         if not rec.has(s):
             log(f"[skip] {s}: " + (f"no .svo2 in {rec.raw}" if s == "zed" else
@@ -505,7 +545,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
                 log("    not in this recording, not renamed: %s" % ", ".join(gone))
                 remap = {k: v for k, v in remap.items() if k in have}
             replay.decode_ouster_bag(
-                rec.bag, tmp, packets_ns=packets_ns, out_ns=out_ns,
+                rec.bag, tmp, packets_ns=packets_ns, out_ns=out_ns, metadata=meta,
                 driver_min_range=float(o.get("driver_min_range", 0.0)),
                 driver_max_range=float(o.get("driver_max_range", 1000.0)),
                 frame=o.get("frame", "lidar"), imu=bool(o.get("imu", True)),
@@ -514,7 +554,7 @@ def process(rec: Recording, settings: dict, until: Optional[str] = None,
                 frame_suffix=o.get("frame_suffix") or "", static_tf=cals, log=log)
         elif s == "retimed":
             res = retime.retime_bag(rec.bag, rec.step("decoded"), tmp,
-                                    packets_ns=packets_ns, points_ns=out_ns,
+                                    packets_ns=packets_ns, points_ns=out_ns, metadata=meta,
                                     imu_sync=o.get("imu_sync") or (), log=log)
             res.clock.save(rec.clock_json)
             log(f"    clock fit -> {rec.clock_json}")

@@ -6,6 +6,7 @@ ZED SVO2 next to it -> a bag on the same clock.
         [--until decoded|retimed|glim|zed] [--redo decoded|retimed|glim|zed]
         [--only decoded|retimed|glim|zed]
         [--settings configs/recording.yaml] [--work-root <dir>] [--status]
+    python processing/process_recording.py --save-ouster-metadata <bag or .mcap> <ns> <out.json>
 
 <raw recording folder> is a folder below data/raw/, e.g.
     ~/workspaces/isaac_ros-dev/data/raw/20260924/mapping_A/mobile_1
@@ -18,6 +19,12 @@ again (decoded -> retimed -> glim; zed on its own). The GLIM step starts
 docker (processing/run_glim.sh); the zed step needs the ZED wrapper, here or in
 the isaac_ros container (processing/run_zed.sh). The work is in
 scoop/recording.py.
+
+The Ouster's metadata (<ns>/metadata) is published once, at the start of a
+recording; a recording whose first file is lost has none. Then decode and
+retime read it from ouster_metadata.json in the robot's raw folder, which
+--save-ouster-metadata copies out of another bag (or .mcap file) of the same
+sensor, e.g. the lost first file, or the same day's mapping pass.
 """
 import argparse
 import os
@@ -37,7 +44,23 @@ def _word(ok, step=""):
     return "done" if ok else "-"
 
 
+def save_ouster_metadata(src, ns, out):
+    from scoop import bag, ouster
+    text = ouster.read_metadata(bag.open_bag(src), ns)
+    with open(out, "w") as fh:
+        fh.write(text)
+    print(f"{ns}/metadata of {src} -> {out}")
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--save-ouster-metadata":
+        if len(sys.argv) != 5:
+            sys.exit("usage: process_recording.py --save-ouster-metadata <bag or .mcap> <ns> <out.json>")
+        try:
+            save_ouster_metadata(*sys.argv[2:5])
+        except BagError as e:
+            sys.exit(f"error: {e}")
+        return
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("raw_dir")
