@@ -3352,7 +3352,7 @@ def test_map_html_viewer_carries_the_pixel_mapping():
         x = meta['x0'] + px / meta['scale'] * meta['cell']
         y = meta['y0'] + (meta['rows'] - 1 - py) / meta['scale'] * meta['cell']
         assert abs(x) < 1e-9 and abs(y) < 1e-9, (x, y)
-        assert meta['pcd'] == os.path.abspath(pcd)
+        assert meta['pcd'] == os.path.abspath(pcd), (meta['pcd'], os.path.abspath(pcd))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

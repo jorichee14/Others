@@ -449,7 +449,8 @@ def write_map_html(path: str, png: str, canvas, rows: List[dict],
         data = base64.b64encode(handle.read()).decode("ascii")
     meta = {"x0": canvas.x0, "y0": canvas.y0, "cell": canvas.cell, "scale": canvas.scale,
             "rows": canvas.rows, "cols": canvas.cols,
-            "pcd": os.path.abspath(args.pcd[0]) if getattr(args, "pcd", None) else "<pcd>",
+            "pcd": (os.path.abspath(args.pcd if isinstance(args.pcd, str) else args.pcd[0])
+                    if getattr(args, "pcd", None) else "<pcd>"),
             "dataset": os.path.abspath(args.dataset) if getattr(args, "dataset", None) else None,
             "max_height": getattr(args, "max_height", 1.3),
             "proposals": [{"n": i + 1, "x": r["centre"][0], "y": r["centre"][1]} for i, r in enumerate(rows)],
