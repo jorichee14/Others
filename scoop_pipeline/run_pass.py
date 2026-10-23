@@ -538,8 +538,29 @@ def finalize(merged, poses, dry):
     merge.merge_bags([merged, poses], new, source={t: 1 for t in tp})
     shutil.rmtree(merged)
     os.rename(new, final)
+    rename_bag_file(final, os.path.basename(new))
     print("  %s: the dataset with the complete TF and the poses (%s is gone; the stages "
           "read %s for it)" % (final, os.path.basename(merged), os.path.basename(final)))
+
+
+def rename_bag_file(bag_dir, old_stem):
+    """A bag folder renamed after it was written still holds <old_stem>_0.mcap
+    and a metadata.yaml naming it: rename the file to <folder>_0.mcap and
+    repoint metadata.yaml, the convention every other bag here follows."""
+    import yaml
+    old = f"{old_stem}_0.mcap"
+    new = f"{os.path.basename(bag_dir)}_0.mcap"
+    mp = os.path.join(bag_dir, "metadata.yaml")
+    if old == new or not os.path.exists(os.path.join(bag_dir, old)) or not os.path.exists(mp):
+        return
+    os.rename(os.path.join(bag_dir, old), os.path.join(bag_dir, new))
+    m = yaml.safe_load(open(mp))
+    info = m.get("rosbag2_bagfile_information", {})
+    info["relative_file_paths"] = [new if x == old else x for x in info.get("relative_file_paths", [])]
+    for f in info.get("files", []):
+        if f.get("path") == old:
+            f["path"] = new
+    yaml.safe_dump(m, open(mp, "w"), sort_keys=False)
 
 
 def run_step(name, cmds, dry):
