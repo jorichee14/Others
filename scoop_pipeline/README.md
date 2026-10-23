@@ -945,6 +945,10 @@ The file is standalone (no scoop imports).
 
 ## Gaussian splatting: LOD-3DGS (`datasets/lod3dgs.py`)
 
+Block diagram of everything made from the reference map, each block with the
+test that covers it: `docs/lod3dgs_pipeline.svg` (and `.png`), drawn by
+`python3 scoop_pipeline/analysis/lod3dgs_diagram.py`.
+
 LetsGo (Cui et al., ACM TOG 2024; github.com/zhaofuq/LOD-3DGS) trains
 level-of-detail Gaussians from a LiDAR scan: known poses instead of SfM, a
 depth loss, and starting points sampled from a mesh of the scan rather than
