@@ -39,6 +39,8 @@
   decoder <bag>            the fast bag decoder against the generic one, timed
   ouster  <packets bag>    offline Ouster packet decoding against the replayed clouds
   sync    <bag>            a robot's camera and LiDAR on one clock (PASS / FAIL)
+  sensors <bag>            every stream of a robot (LiDAR, RGB, depth, IMUs) against its
+                           motion: rate, jitter, offset to the LiDAR frames, lag (PASS / FAIL)
   glim    <machine folder> a GLIM run: its trajectory and loop closure on the boards
   topics  <bag> [PATTERN]  what a bag's topics hold: type, count, definition, messages
   bags    <raw pass folder> do the robots' bags fit together in time? spans, the
@@ -275,7 +277,8 @@ COMMANDS = {"map": maps.main_quality, "walls": maps.main_walls, "maps": maps.mai
 
 # the recording and environment checks: scripts in checks/, run as they are
 SCRIPTS = {"env": "env_check.py", "decoder": "bag_check.py", "ouster": "ouster_check.py",
-           "sync": "camera_lidar_sync.py", "glim": "glim_check.py", "topics": "show_topics.py",
+           "sync": "camera_lidar_sync.py", "sensors": "sync_quality.py", "glim": "glim_check.py",
+           "topics": "show_topics.py",
            "bags": "bag_times.py",
            "spacing": "topic_timing.py", "euroc": "imu_check.py", "replica": "replica_check.py"}
 

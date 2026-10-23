@@ -1405,3 +1405,32 @@ make the environment by hand: Python 3.10, torch 2.4.1 cu124, the CUDA 12.4
 toolkit from the nvidia conda channel (`CUDA_HOME=$CONDA_PREFIX`), and the two
 submodules with `pip install --no-build-isolation`, with `PYTHONNOUSERSITE=1`
 so nothing in `~/.local` leaks in.
+
+### Sensor sync quality: `check.py sensors`
+
+Do a robot's sensors agree on time, per frame? `checks/sync_quality.py` reads
+the merged (final) bag and assesses every stream of every robot that has an
+Ouster: the LiDAR, the RGB cameras, the depth images and the IMUs.
+
+```
+python3 check.py sensors <final bag> --config map_stages/pipeline_config_coop_site_1_20261015.json \
+    [--robot mobile_1] [--out <dir>] [--dataset <OPV2V split dir>]
+```
+
+Two layers per stream. *Stamps*: rate, jitter (p95 of the period's
+deviation), gaps, and per LiDAR frame the nearest message's distance from the
+frame time (median and p95). *Content*: the robot's turn rate about the
+vertical measured from the stream itself (an image's horizontal shift between
+frames over fx, a depth image's range-per-column profile likewise, a scan's
+shift in azimuth, an IMU's |angular velocity|), lined up against the
+registered LiDAR trajectory's yaw rate (stage 04, from `--config`; without a
+config, the scans). The lag is how far the stream's stamps run behind the
+reference, over the whole run and per `--segment` (default 60 s), so a drift
+shows as a spread. A stream passes when its lag is within `--tol` (30 ms) and
+it correlates (above 0.5) over a run in which the robot turns. `--dataset`
+adds the converter's per-frame `ros_sync` offsets of the dataset as built.
+Writes `sync_quality.{json,md,png}`; the figure shows each stream's turn rate
+shifted by its lag over the 40 s where the robot turns most, and the lags as
+bars. Test: `tests/test_sync_quality.py` (a turning robot with an on-time
+LiDAR, RGB and Ouster IMU, a depth camera 50 ms late and a ZED IMU 80 ms late).
+
