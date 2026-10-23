@@ -33,32 +33,35 @@ Options worth knowing:
     --no-deskew           one pose per scan (default: every point through the
                           trajectory at its own time, as 01 / 02 / 04 do)
                           (needs quality_<name>.csv next to the tum)
-    --ref-map PATH        the reference map's points into the same cloud, so the run's
-                          own objects stand in the building the mapping pass
-                          measured (walls and furniture the run only glimpsed).
-                          From a config it is the reference pass's anchored map
-                          (dataset.reference_pass), already in this frame;
-                          --no-ref-map leaves it out. The map's points are added
-                          AFTER the dynamic filter, which judges the run's scans
-                          alone, so nothing of the map is carved away.
+    --ref-map PATH        the reference map's points into the same cloud as well, so
+                          the run's own objects stand in the building the mapping
+                          pass measured. Off unless asked for (09_build.ref_map,
+                          or "auto" for the reference pass's anchored map): a
+                          merged cloud cannot tell what the run brought into the
+                          room from what was always there. The map's points are
+                          added AFTER the dynamic filter, so none is carved away.
     --also TOPIC=TRAJ     another LiDAR's scans into the same cloud, placed by its
                           own stage-04 track (T_map_lidar). From a config, every
                           "kind": "lidar" entry of 04_reference.tracks is added by
                           itself: both robots' Ousters build the coop cloud, each
                           seeing what the other drove past, and each robot's rays
                           carve the other robot out.
-    --keep-dynamic        keep the moving things. By default the run's movers
-                          (the other robot, the operators) are removed the way
-                          stage 01 removes them from the map: a decision grid
-                          (0.15 m) counts per voxel the scans that hit it, the
-                          span of time over which they did, and the scans whose
-                          rays passed THROUGH it (free-space carving); a voxel
-                          seen through at least min_free times, at least as
-                          often as it was hit, held something that came and
-                          went. The removed points go to <out>_dynamic.pcd so
-                          the decision can be looked at. Config block
-                          "remove_dynamic" under 09_build, the same keys as
-                          01's (voxel, min_span_s, min_hits, carve{...}).
+    --keep-dynamic        keep the moving things. By default the run's movers (the
+                          other robot, the operators) are removed by FREE-SPACE
+                          CARVING alone: a 0.15 m grid counts, per voxel, the
+                          scans whose rays passed THROUGH it to something farther
+                          away, and a voxel seen through at least min_free times,
+                          at least as often as it was hit, held something that
+                          came and went. The point where a ray STOPPED is what
+                          gets taken, never a surface behind it.
+                          Stage 01's other test, the time SPAN a voxel was seen
+                          over, is off here (min_span_s 0): a mapping pass
+                          revisits every surface, but a run drives past most of
+                          the room once, so the span test would delete the walls
+                          it glimpsed along with the movers. Set min_span_s
+                          above 0 to bring it back. The removed points go to
+                          <out>_dynamic.pcd. Config block "remove_dynamic" under
+                          09_build (voxel, min_span_s, min_hits, carve{...}).
 """
 import argparse, os, sys, csv
 import numpy as np
@@ -128,13 +131,17 @@ SAMPLE_CONFIG = """
   "voxel": 0.03, "range_min": 0.7, "range_max": 25.0,
   "t_start": 0, "t_end": 42,        <- optional: only the stretch before people walked through
   "min_count": 2, "keep_quality": true, "ref_map": null,
-  "remove_dynamic": {"enable": true, "voxel": 0.15, "min_span_s": 1.0, "min_hits": 2,
+  "remove_dynamic": {"enable": true, "voxel": 0.15, "min_span_s": 0.0, "min_hits": 2,
                      "carve": {"enable": true, "ray_stride": 4, "scan_stride": 2, "max_range": 20.0,
                                "grazing_margin": 0.03, "min_free": 5, "free_ratio": 1.0}}
 }
 """
 
-REMOVE_DYNAMIC = {"enable": True, "voxel": 0.15, "min_span_s": 1.0, "min_hits": 2,
+# min_span_s 0: carving decides, the span test does not. A run sees most of the
+# room once, in passing; judging those surfaces transient empties the cloud of
+# the walls the objects stand against (on coop site_1: 191k of 246k voxels were
+# "dynamic" by span alone, against 55k the rays actually saw through).
+REMOVE_DYNAMIC = {"enable": True, "voxel": 0.15, "min_span_s": 0.0, "min_hits": 2,
                   "carve": {"enable": True, "ray_stride": 4, "scan_stride": 2, "max_range": 20.0,
                             "endpoint_margin": 0.0, "grazing_margin": 0.03, "min_free": 5,
                             "free_ratio": 1.0}}
@@ -203,10 +210,10 @@ def main():
                 else:
                     print("(no %s: track %s not built by 04, left out)" % (traj, tr["name"]))
         cfg_defaults["also"] = also
-        if cfg_defaults.get("ref_map"):
+        if cfg_defaults.get("ref_map") == "auto":
+            cfg_defaults["ref_map"] = P.ref_file("anchored_map") if P.reference else ""
+        elif cfg_defaults.get("ref_map"):
             cfg_defaults["ref_map"] = P.outp(cfg_defaults["ref_map"])
-        elif P.reference and cfg_defaults.get("ref_map") is None:
-            cfg_defaults["ref_map"] = P.ref_file("anchored_map")
         s01 = P.cfg.get("01_build_map", {})
         cfg_defaults.setdefault("deskew", bool(s01.get("deskew", True)))
         cfg_defaults.setdefault("deskew_bins", int(s01.get("deskew_bins", 100)))
@@ -236,8 +243,12 @@ def main():
     ap.add_argument("--deskew-bins", type=int, default=100)
     ap.add_argument("--also", action="append", default=[], metavar="TOPIC=TRAJ",
                     help="another LiDAR's scans, placed by its own stage-04 track")
+    ap.add_argument("--min-span-s", type=float, default=None,
+                    help="bring back stage 01's span test: a voxel seen over less than this "
+                         "many seconds is transient (0, the default here, leaves it off)")
     ap.add_argument("--ref-map", default=None,
-                    help="the reference map's pcd, added after the dynamic filter")
+                    help="the reference map's pcd, added after the dynamic filter (off by "
+                         "default: a merged cloud cannot tell what the run brought in)")
     ap.add_argument("--no-ref-map", dest="ref_map", action="store_const", const="",
                     help="leave the reference map out")
     ap.add_argument("--ref-voxel", type=float, default=0.0,
@@ -248,11 +259,15 @@ def main():
     ap.set_defaults(**{k.replace("-", "_"): v for k, v in cfg_defaults.items()})
     args = ap.parse_args(argv)
     rd = None if args.keep_dynamic else (args.remove_dynamic if isinstance(args.remove_dynamic, dict) else {})
+    if rd is not None and args.min_span_s is not None:
+        rd = dict(rd, min_span_s=args.min_span_s)
     dyn, carver, rd = dynamic_filter(rd) if rd is not None else (None, None, None)
     if dyn is not None:
         cv = rd.get("carve") or {}
-        print("remove dynamic: ON, grid %.2f m, span >= %.1f s, hits >= %d%s" % (
-            rd["voxel"], rd["min_span_s"], rd["min_hits"],
+        print("remove dynamic: ON, grid %.2f m, %s, hits >= %d%s" % (
+            rd["voxel"],
+            "span >= %.1f s" % rd["min_span_s"] if rd["min_span_s"] > 0
+            else "no span test (a run sees most surfaces once)", rd["min_hits"],
             ", carving every %d-th scan, ray stride %d, free >= %d and >= %.1f x hits" % (
                 cv.get("scan_stride", 2), cv.get("ray_stride", 4), cv.get("min_free", 5),
                 cv.get("free_ratio", 1.0)) if carver is not None else ", no carving"))

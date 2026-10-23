@@ -177,6 +177,31 @@ def dynamic_case(tmp, rng):
     return f
 
 
+def span_case():
+    """A voxel hit in a short burst and never seen through is structure the run
+    drove past once, not a mover: it survives with the span test off (the
+    default here) and is deleted when it is turned on."""
+    sys.path.insert(0, os.path.join(ROOT, "map_stages"))
+    import importlib
+    M = importlib.import_module("01_build_map")
+    seen_once = np.array([[1.0, 1.0, 1.0]])                 # a wall glimpsed in passing
+    seen_always = np.array([[2.0, 2.0, 1.0]])
+    dyn = M.DynStats(0.15)
+    for k in range(40):
+        t = k * 0.1
+        pts = seen_always if not (5 <= k < 10) else np.r_[seen_always, seen_once]
+        dyn.add(pts, t)
+    f = []
+    keys, (n_static, n_dyn, _) = dyn.dynamic_keys(2, 0.0)   # no span test
+    if n_dyn or n_static != 2:
+        f.append("span off: %d static, %d dynamic (both voxels must survive)" % (n_static, n_dyn))
+    keys, (n_static, n_dyn, _) = dyn.dynamic_keys(2, 1.0)   # the mapping pass's test
+    if n_static != 1 or n_dyn != 1:
+        f.append("span 1 s: %d static, %d dynamic (the brief one must go)" % (n_static, n_dyn))
+    print("span test: off keeps both, 1 s drops the briefly seen one")
+    return f
+
+
 def main():
     rng = np.random.default_rng(1)
     tmp = tempfile.mkdtemp()
@@ -198,6 +223,7 @@ def main():
         if not (on < 2.5 and off > 2 * on):
             failed.append(f"deskew {on:.1f} cm vs {off:.1f} cm without")
         failed += dynamic_case(tmp, rng)
+        failed += span_case()
     except AssertionError as e:
         failed.append(str(e))
     finally:
