@@ -1255,7 +1255,8 @@ and points share a frame. Several exports make one scene (`scene <export 1>
 <export 2> ... --bag <bag 1> --bag -`), each with its own camera in
 `cameras.txt` (a ZED's intrinsics differ from a RealSense's), its frames
 named `c2_frame...` from the second on; an export of another session, in
-its own frame, is moved into the first's with `--transform - <align json>`
+its own frame, is moved into the first's with `--transform - --transform
+<align json>` (one per export, like `--bag`)
 after `align` has registered that session's map onto this one's (its depth
 is its own map's, consistent with its poses):
 
@@ -1263,7 +1264,7 @@ is its own map's, consistent with its poses):
         $P/mapping/map_final_<tag>.pcd            # -> map_final_<tag2>_to_map_final_<tag>.json, _aligned.ply
     python3 scoop_pipeline/datasets/lod3dgs.py scene <export of this session> <export of the other> \
         <scene folder> --map $P/mapping/map_final_<tag>.pcd --mesh $P/mapping/mesh_view_<tag>.ply \
-        --every 6 --bag <this session's bag> --bag - --transform - <the align json>
+        --every 8 --bag <this session's bag> --bag - --transform - --transform <the align json>
 
 `align` thins both to 5 cm, finds a global registration on FPFH features
 (or takes `--init X,Y,YAW` by hand) and refines it with ICP point to plane;
