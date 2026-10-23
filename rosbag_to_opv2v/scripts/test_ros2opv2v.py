@@ -3395,6 +3395,38 @@ def test_show_labels_projects_through_the_camera_block():
     im = np.zeros((480, 640, 3), np.uint8)
     assert show_labels.draw_box(im, box, cords, K, text='chair')
     assert im.any(), 'the box must be drawn'
+    # a pixel back to the floor: the camera 1 m up, the floor point (4, 1, 0)
+    # projects to (195, 365); locating that pixel on z = 0 returns (4, 1)
+    T[2, 3] = 1.0
+    cords_up = matrix_to_opencood_pose(T)
+    frame = {"cords": cords_up, "intrinsic": K}
+    uvz = show_labels.project(np.array([[4.0, 1.0, 0.0]]), cords_up, K)[0]
+    hit = show_labels.locate(frame, uvz[0], uvz[1], 0.0)
+    assert hit is not None and abs(hit[0] - 4.0) < 1e-6 and abs(hit[1] - 1.0) < 1e-6, hit
+    assert show_labels.locate(frame, 320, 100, 0.0) is None          # above the horizon
+
+
+def test_manual_box_is_placed_on_the_floor_under_it():
+    import subprocess
+    tmp = tempfile.mkdtemp(prefix='r2o_')
+    try:
+        cloud = _room_cloud(np.random.default_rng(17))
+        pcd = os.path.join(tmp, 'room.pcd')
+        write_pcd(pcd, np.column_stack([cloud, np.full(len(cloud), 0.5)]))
+        out = os.path.join(tmp, 'labels.json')
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'label_static.py')
+        r = subprocess.run([sys.executable, script, '--pcd', pcd, '--manual=4.75,2.0,0.4,0.4,0.8,30',
+                            '--name', 'plant_1', '--obj-type', 'potted_plant', '--out', out],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+        with open(out) as handle:
+            box = json.load(handle)[0]
+        assert box['name'] == 'plant_1' and box['obj_type'] == 'potted_plant', box
+        assert np.allclose(box['extent'], [0.2, 0.2, 0.4]) and box['angle'][1] == 30.0, box
+        assert np.allclose(box['location'][:2], [4.75, 2.0]) and abs(box['location'][2] - (-0.66 + 0.4)) < 0.05, box
+        assert box['fit']['manual'] is True
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == '__main__':

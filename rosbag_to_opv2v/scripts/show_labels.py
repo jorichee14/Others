@@ -51,6 +51,23 @@ def project(points_world: np.ndarray, cords, intrinsic) -> np.ndarray:
     return np.c_[u, v, z]
 
 
+def locate(frame: dict, u: float, v: float, floor_z: float):
+    """The map x, y where the pixel (u, v) of this frame's camera meets the
+    floor plane z = floor_z, and the distance; None if the ray never does."""
+    T_wc = x_to_world(frame["cords"])
+    K = np.asarray(frame["intrinsic"], dtype=np.float64)
+    d_cam = np.array([(u - K[0, 2]) / K[0, 0], (v - K[1, 2]) / K[1, 1], 1.0])
+    d = T_wc[:3, :3] @ d_cam
+    o = T_wc[:3, 3]
+    if abs(d[2]) < 1e-9:
+        return None
+    t = (floor_z - o[2]) / d[2]
+    if t <= 0:
+        return None
+    p = o + t * d
+    return float(p[0]), float(p[1]), float(np.linalg.norm(t * d))
+
+
 def load_frames(split_dir: str, camera: int) -> Dict[str, List[dict]]:
     """{agent: [{key, dir, cords, intrinsic, png, t_ns}]} for frames with the image."""
     out: Dict[str, List[dict]] = {}
@@ -214,7 +231,38 @@ def main() -> int:
     ap.add_argument("--per-agent", type=int, default=3)
     ap.add_argument("--max-range", type=float, default=8.0)
     ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument("--locate", action="append", default=[], metavar="AGENT:KEY:U,V",
+                    help="a pixel of a frame's image (full size, as written) -> the map x, y "
+                         "where it meets the floor: the base of an object, for a --manual box "
+                         "or a seed. Floor z from --floor-z, else the labels' bottoms, else "
+                         "the camera height minus 1 m")
+    ap.add_argument("--floor-z", type=float, default=None)
     a = ap.parse_args()
+    if a.locate:
+        frames = load_frames(os.path.expanduser(a.dataset), a.camera)
+        floor = a.floor_z
+        if floor is None and a.labels:
+            with open(os.path.expanduser(a.labels)) as handle:
+                lab = json.load(handle)
+            floor = float(np.median([b["location"][2] - b["extent"][2] for b in lab])) if lab else None
+        if floor is None:
+            zs = [f["cords"][2] for v in frames.values() for f in v[:50]]
+            floor = (float(np.median(zs)) if zs else 0.0) - 1.0
+        print("floor z %+.3f m" % floor)
+        for item in a.locate:
+            agent, key, uv = item.split(":")
+            u, v = (float(x) for x in uv.split(","))
+            fr = next((f for f in frames.get(agent, []) if f["key"] == key), None)
+            if fr is None:
+                print("  %s: no frame %s with camera%d for agent %s" % (item, key, a.camera, agent))
+                continue
+            hit = locate(fr, u, v, floor)
+            if hit is None:
+                print("  %s: the ray does not reach the floor (above the horizon)" % item)
+            else:
+                print("  %s -> x %.2f  y %.2f   (%.1f m from the camera)   --seed=%.2f,%.2f"
+                      % (item, hit[0], hit[1], hit[2], hit[0], hit[1]))
+        return 0
     labels: List[dict] = []
     if a.labels:
         with open(os.path.expanduser(a.labels)) as handle:

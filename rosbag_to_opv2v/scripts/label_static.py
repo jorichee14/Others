@@ -724,6 +724,11 @@ def main() -> int:
                         help="pixels per height-map cell in --map-image")
     parser.add_argument("--cell", type=float, default=0.10,
                         help="proposals: height-map cell size")
+    parser.add_argument("--manual", action="append", default=[], metavar="X,Y,L,W,H[,YAW]",
+                        help="a box placed by hand instead of fitted: centre x,y on the floor "
+                             "there, length, width, height in metres, yaw in degrees (0). For "
+                             "a small object against a wall that no cluster separates from it; "
+                             "x,y from show_labels.py --locate, read off a camera image")
     parser.add_argument("--floor-z", type=float, default=None,
                         help="the floor's z in the map frame, instead of the cloud's histogram mode")
     parser.add_argument("--local-floor-radius", type=float, default=2.0,
@@ -841,6 +846,14 @@ def main() -> int:
     seeds: List[np.ndarray] = [
         np.array(parts if len(parts) == 3 else parts + [ground_z + 0.5], dtype=np.float64)
         for parts in parse_seeds(args.seed)]
+    manual: Dict[int, dict] = {}
+    for item in args.manual:
+        v = [float(x) for x in item.split(",")]
+        if len(v) not in (5, 6):
+            print("\n! --manual takes X,Y,L,W,H[,YAW], got %r" % item)
+            return 2
+        manual[len(seeds)] = {"L": v[2], "W": v[3], "H": v[4], "yaw": v[5] if len(v) == 6 else 0.0}
+        seeds.append(np.array([v[0], v[1], ground_z + 0.5], dtype=np.float64))
     if args.interactive:
         seeds.extend(pick_interactive(cloud))
     names = list(args.name or [])
@@ -885,40 +898,51 @@ def main() -> int:
             if abs(floor_here - ground_z) > 0.03:
                 print("\nfloor here  : z = %+.3f m within %.1f m of the seed (the cloud's floor is "
                       "%+.3f m); used for this object" % (floor_here, args.local_floor_radius, ground_z))
-        look = seed_report(local, seed, floor_here, radius=args.radius)
-        print("\nat seed %s (%.2f m above the floor), within %.1f m:"
-              % ("%.3f,%.3f,%.3f" % tuple(seed), look["seed_height_m"], args.radius))
-        if not look["points"]:
-            print("  nothing at all — the seed is not in this cloud")
-            return 3
-        print("  %d points, nearest %.3f m from the seed, tallest %.2f m above the floor"
-              % (look["points"], look["nearest_m"], look["tallest_m"]))
-        for lo, hi, count in look["bands"]:
-            if count:
-                bar = "#" * min(40, 1 + count // max(1, look["points"] // 40))
-                print("    %4.2f-%-5s m %6d  %s"
-                      % (lo, "inf" if hi > 100 else "%.2f" % hi, count, bar))
-        # A seed picked in one cloud and clustered in another is otherwise silent:
-        # the fill finds the floor, the box comes back floor-shaped, and nothing
-        # says the object was never here.
-        standing = sum(c for lo, _hi, c in look["bands"] if lo >= args.cluster_floor)
-        if standing < 20:
-            print("  ! only %d returns stand more than %.2f m off the floor here."
-                  % (standing, args.cluster_floor))
-            print("    Nothing is at this seed IN THIS FILE. If the coordinates came "
-                  "from a viewer,\n    check it was this same .pcd — a seed read off "
-                  "another cloud lands on bare floor.")
-            return 3
-        try:
-            cluster, cinfo = cluster_at(local, seed, radius=args.radius,
-                                        voxel=args.cluster_voxel,
-                                        z_min=floor_here + args.cluster_floor,
-                                        z_max=ceiling_z)
-        except StaticsError as exc:
-            print("\n! %s" % exc)
-            return 3
-        box = fit_box(cluster, ground_z=floor_here,
-                      sit_on_ground=not args.no_ground_extend)
+        if index in manual:
+            spec = manual[index]
+            box = {"location": [round(float(seed[0]), 4), round(float(seed[1]), 4),
+                                round(float(floor_here + spec["H"] / 2), 4)],
+                   "extent": [spec["L"] / 2, spec["W"] / 2, spec["H"] / 2],
+                   "angle": [0.0, spec["yaw"], 0.0], "center": [0.0, 0.0, 0.0],
+                   "fit": {"points": 0, "extended_to_ground": True, "manual": True}}
+            cinfo = {"points_in_radius": 0, "manual": True}
+            print("\nplaced by hand at %.3f,%.3f on the floor at %+.3f m"
+                  % (seed[0], seed[1], floor_here))
+        else:
+          look = seed_report(local, seed, floor_here, radius=args.radius)
+          print("\nat seed %s (%.2f m above the floor), within %.1f m:"
+                % ("%.3f,%.3f,%.3f" % tuple(seed), look["seed_height_m"], args.radius))
+          if not look["points"]:
+              print("  nothing at all — the seed is not in this cloud")
+              return 3
+          print("  %d points, nearest %.3f m from the seed, tallest %.2f m above the floor"
+                % (look["points"], look["nearest_m"], look["tallest_m"]))
+          for lo, hi, count in look["bands"]:
+              if count:
+                  bar = "#" * min(40, 1 + count // max(1, look["points"] // 40))
+                  print("    %4.2f-%-5s m %6d  %s"
+                        % (lo, "inf" if hi > 100 else "%.2f" % hi, count, bar))
+          # A seed picked in one cloud and clustered in another is otherwise silent:
+          # the fill finds the floor, the box comes back floor-shaped, and nothing
+          # says the object was never here.
+          standing = sum(c for lo, _hi, c in look["bands"] if lo >= args.cluster_floor)
+          if standing < 20:
+              print("  ! only %d returns stand more than %.2f m off the floor here."
+                    % (standing, args.cluster_floor))
+              print("    Nothing is at this seed IN THIS FILE. If the coordinates came "
+                    "from a viewer,\n    check it was this same .pcd — a seed read off "
+                    "another cloud lands on bare floor.")
+              return 3
+          try:
+              cluster, cinfo = cluster_at(local, seed, radius=args.radius,
+                                          voxel=args.cluster_voxel,
+                                          z_min=floor_here + args.cluster_floor,
+                                          z_max=ceiling_z)
+          except StaticsError as exc:
+              print("\n! %s" % exc)
+              return 3
+          box = fit_box(cluster, ground_z=floor_here,
+                        sit_on_ground=not args.no_ground_extend)
         name = (names[index] if len(names) == len(seeds) else
                 "%s_%d" % (names[0], index + 1) if names else None)
         # A name is the object's identity across runs. Re-fitting chair_1 with a
@@ -956,10 +980,13 @@ def main() -> int:
         print("  extent   %s   = %.2f x %.2f x %.2f m"
               % (box["extent"], length, width, height))
         print("  yaw      %.1f deg" % box["angle"][1])
-        print("  fitted from %d points of %d within %.1f m; %s"
-              % (box["fit"]["points"], cinfo["points_in_radius"], args.radius,
-                 "extended down to the floor" if box["fit"]["extended_to_ground"]
-                 else "not extended (points already reach the floor)"))
+        if index in manual:
+            print("  placed by hand (--manual), not fitted")
+        else:
+            print("  fitted from %d points of %d within %.1f m; %s"
+                  % (box["fit"]["points"], cinfo["points_in_radius"], args.radius,
+                     "extended down to the floor" if box["fit"]["extended_to_ground"]
+                     else "not extended (points already reach the floor)"))
         # A merge with the wall or the floor shows up as a box that is not
         # chair-shaped, and it shows up here rather than in the trained model.
         if max(length, width) > args.max_footprint:
