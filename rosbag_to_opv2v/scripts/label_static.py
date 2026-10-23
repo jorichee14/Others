@@ -55,7 +55,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ros2opv2v.statics import (StaticsError, cluster_at, fit_box,      # noqa: E402
                                footprint_corners, ground_level,
-                               points_in_box, read_pcd_xyz, seed_report,
+                               points_in_box, read_cloud_xyz, seed_report,
                                without_structure)
 from ros2opv2v.preview import Canvas, height_ramp                      # noqa: E402
 from ros2opv2v.geometry import x_to_world                              # noqa: E402
@@ -619,7 +619,7 @@ def probe_clouds(paths: List[str], args) -> int:
           "well above the floor at every seed." % (len(paths), len(seeds)))
     for path in paths:
         try:
-            cloud = read_pcd_xyz(path, max_points=args.max_points)
+            cloud = read_cloud_xyz(path, max_points=args.max_points)
         except (StaticsError, OSError, ValueError) as exc:
             print("\n%-52s  unreadable: %s" % (os.path.basename(path), exc))
             continue
@@ -650,9 +650,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--pcd", action="append", required=True,
-                        help="the run's accumulated map cloud. Repeat it, or give a "
-                             "directory, to probe several clouds for the seeds "
-                             "instead of fitting")
+                        help="the run's accumulated map cloud (.pcd or .ply, so a cloud "
+                             "cropped in a viewer comes straight back). Repeat it, or give "
+                             "a directory, to probe several clouds for the seeds instead "
+                             "of fitting")
     parser.add_argument("--dataset", default=None,
                         help="converted dataset root (<out>/test) — used to verify the "
                              "frame and to check labels against the real clouds")
@@ -742,16 +743,17 @@ def main() -> int:
     clouds: List[str] = []
     for entry in args.pcd:
         if os.path.isdir(entry):
-            clouds.extend(sorted(glob.glob(os.path.join(entry, "*.pcd"))))
+            clouds.extend(sorted(glob.glob(os.path.join(entry, "*.pcd"))
+                                 + glob.glob(os.path.join(entry, "*.ply"))))
         else:
             clouds.append(entry)
     if not clouds:
-        print("no .pcd found in %s" % ", ".join(args.pcd))
+        print("no .pcd or .ply found in %s" % ", ".join(args.pcd))
         return 2
     if len(clouds) > 1:
         return probe_clouds(clouds, args)
     args.pcd = clouds[0]
-    cloud = read_pcd_xyz(args.pcd, max_points=args.max_points)
+    cloud = read_cloud_xyz(args.pcd, max_points=args.max_points)
     poses = load_dataset_poses(args.dataset, limit=400) if args.dataset else {}
 
     print("=" * 78)
@@ -896,7 +898,11 @@ def main() -> int:
         # the cloud's mode may be a landing 15 cm below this room, where the
         # object's legs then sit inside the floor band and cluster into it
         floor_here = ground_z
-        if args.local_floor_radius > 0:
+        # --floor-z is the operator's word on where the floor is: never second
+        # guess it per object. A cloud cropped above the floor (to_ply.py) has
+        # no floor points left, and the local estimate would then take the
+        # object's own base for the ground.
+        if args.local_floor_radius > 0 and args.floor_z is None:
             around = local[np.linalg.norm(local[:, :2] - seed[:2], axis=1) <= args.local_floor_radius]
             try:
                 floor_here, _ = ground_level(around)

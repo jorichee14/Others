@@ -3406,6 +3406,76 @@ def test_show_labels_projects_through_the_camera_block():
     assert show_labels.locate(frame, 320, 100, 0.0) is None          # above the horizon
 
 
+def test_ply_round_trip_and_the_reader_dispatches():
+    """A binary PLY written here, an ascii one as a viewer saves it (with an
+    extra scalar property), and a PCD: one reader takes all three."""
+    from ros2opv2v.statics import read_cloud_xyz, read_pcd_xyz, read_ply_xyz, write_ply
+    tmp = tempfile.mkdtemp(prefix='r2o_')
+    try:
+        rng = np.random.default_rng(23)
+        xyz = rng.normal(size=(300, 3))
+        colours = rng.integers(0, 256, (300, 3))
+        binary = os.path.join(tmp, 'a.ply')
+        assert write_ply(binary, xyz, colours) == 300
+        assert np.allclose(read_ply_xyz(binary), xyz, atol=1e-6)
+        assert np.allclose(read_cloud_xyz(binary), xyz, atol=1e-6)
+        assert np.allclose(read_pcd_xyz(binary), xyz, atol=1e-6)      # dispatches on the magic
+        ascii_ply = os.path.join(tmp, 'b.ply')
+        with open(ascii_ply, 'w') as handle:
+            handle.write('ply\nformat ascii 1.0\ncomment made by CloudCompare\n'
+                         'element vertex 3\nproperty float x\nproperty float y\n'
+                         'property float z\nproperty float scalar_Intensity\n'
+                         'end_header\n1 2 3 0.5\n4 5 6 0.25\n7 8 9 0.75\n')
+        assert np.allclose(read_cloud_xyz(ascii_ply), [[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+        pcd = os.path.join(tmp, 'c.pcd')
+        write_pcd(pcd, np.column_stack([xyz, np.full(len(xyz), 0.5)]))
+        assert np.allclose(read_cloud_xyz(pcd), xyz, atol=1e-6)
+        # thinning applies to either
+        assert len(read_cloud_xyz(binary, max_points=50)) == 50
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_to_ply_cuts_the_ceiling_and_keeps_the_objects():
+    """The converter's cut: the floor and everything above --ceiling go, the
+    chair stays, the written file reads back and still fits a box."""
+    import subprocess
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    to_ply = importlib.import_module('to_ply')
+    from ros2opv2v.statics import read_cloud_xyz
+    tmp = tempfile.mkdtemp(prefix='r2o_')
+    try:
+        rng = np.random.default_rng(29)
+        cloud = _room_cloud(rng)
+        ceiling = np.column_stack([rng.uniform(-5, 5, 40000), rng.uniform(-5, 5, 40000),
+                                   np.full(40000, 2.34)])
+        pcd = os.path.join(tmp, 'room.pcd')
+        write_pcd(pcd, np.column_stack([np.vstack([cloud, ceiling]),
+                                        np.full(len(cloud) + 40000, 0.5)]))
+        out = os.path.join(tmp, 'room.ply')
+        n = to_ply.convert(pcd, out, ceiling=2.0, below=0.05, floor_z=-0.66, log=lambda *_: None)
+        back = read_cloud_xyz(out)
+        assert len(back) == n and n > 0
+        above = back[:, 2] + 0.66
+        assert above.min() >= 0.04 and above.max() <= 2.01, (above.min(), above.max())
+        # the chair in the open survived, the ceiling and the floor did not
+        chair = np.all(np.abs(back[:, :2] - [0.0, 0.0]) < 0.3, axis=1)
+        assert chair.sum() > 1000, chair.sum()
+        assert not (back[:, 2] > 2.0).any()
+        # and the file is a seed source: fitting through the CLI works on it
+        labels = os.path.join(tmp, 'labels.json')
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'label_static.py')
+        r = subprocess.run([sys.executable, script, '--pcd', out, '--seed=0.0,0.0',
+                            '--name', 'chair_1', '--floor-z', '-0.66', '--out', labels],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-1500:]
+        with open(labels) as handle:
+            box = json.load(handle)[0]
+        assert np.allclose(box['location'][:2], [0, 0], atol=0.08), box
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_manual_box_is_placed_on_the_floor_under_it():
     import subprocess
     tmp = tempfile.mkdtemp(prefix='r2o_')

@@ -80,13 +80,123 @@ _PCD_NUMPY = {("F", 4): "<f4", ("F", 8): "<f8", ("U", 1): "<u1", ("U", 2): "<u2"
               ("I", 4): "<i4", ("I", 8): "<i8"}
 
 
+_PLY_NUMPY = {"float": "<f4", "float32": "<f4", "double": "<f8", "float64": "<f8",
+              "char": "i1", "int8": "i1", "uchar": "u1", "uint8": "u1",
+              "short": "<i2", "int16": "<i2", "ushort": "<u2", "uint16": "<u2",
+              "int": "<i4", "int32": "<i4", "uint": "<u4", "uint32": "<u4"}
+
+
+def read_ply_xyz(path: str, max_points: int = 0) -> np.ndarray:
+    """A PLY's vertex x, y, z -> (N, 3) float64, non-finite points dropped.
+
+    ascii and binary_little_endian, which is what CloudCompare, Open3D and
+    MeshLab write. Other vertex properties (colour, normals, scalar fields) are
+    skipped, and any element after the vertices is ignored, so a cloud cropped
+    in a viewer and saved comes straight back in.
+    """
+    with open(path, "rb") as handle:
+        if handle.readline().strip() != b"ply":
+            raise StaticsError(f"{path}: not a PLY (no 'ply' magic)")
+        fmt, n, props, in_vertex = "", 0, [], False
+        while True:
+            line = handle.readline()
+            if not line:
+                raise StaticsError(f"{path}: truncated PLY header")
+            text = line.decode("ascii", "replace").strip()
+            if text.startswith("comment") or not text:
+                continue
+            if text.startswith("format"):
+                fmt = text.split()[1]
+            elif text.startswith("element"):
+                kind, count = text.split()[1], int(text.split()[2])
+                in_vertex = kind == "vertex"
+                if in_vertex:
+                    n = count
+                elif n:
+                    break                       # a later element: the vertices are described
+            elif text.startswith("property") and in_vertex:
+                parts = text.split()
+                if parts[1] == "list":
+                    raise StaticsError(f"{path}: list properties on vertices are not supported")
+                props.append((parts[2], parts[1]))
+            elif text == "end_header":
+                break
+        while not text.startswith("end_header"):
+            line = handle.readline()
+            if not line:
+                raise StaticsError(f"{path}: truncated PLY header")
+            text = line.decode("ascii", "replace").strip()
+        body = handle.read()
+
+    names = [name for name, _ in props]
+    for axis in ("x", "y", "z"):
+        if axis not in names:
+            raise StaticsError(f"{path}: PLY vertices have no '{axis}' (have {names})")
+    if fmt == "ascii":
+        rows = [ln.split() for ln in body.decode("ascii", "replace").splitlines() if ln.strip()]
+        if len(rows) < n:
+            raise StaticsError(f"{path}: header declares {n} vertices but {len(rows)} rows follow")
+        cols = [names.index(a) for a in ("x", "y", "z")]
+        xyz = np.array([[float(r[c]) for c in cols] for r in rows[:n]], dtype=np.float64)
+    elif fmt in ("binary_little_endian", "binary_big_endian"):
+        try:
+            formats = [_PLY_NUMPY[kind] for _, kind in props]
+        except KeyError as exc:
+            raise StaticsError(f"{path}: unsupported PLY property type {exc}") from exc
+        if fmt == "binary_big_endian":
+            formats = [f.replace("<", ">") for f in formats]
+        dtype = np.dtype({"names": names, "formats": formats})
+        if len(body) < dtype.itemsize * n:
+            raise StaticsError(
+                f"{path}: header declares {n} vertices of {dtype.itemsize} bytes but only "
+                f"{len(body)} follow — the file is truncated.")
+        rec = np.frombuffer(body, dtype=dtype, count=n)
+        xyz = np.stack([rec["x"], rec["y"], rec["z"]], axis=1).astype(np.float64)
+    else:
+        raise StaticsError(f"{path}: unsupported PLY format {fmt!r}")
+    return _finish_cloud(xyz, max_points)
+
+
+def write_ply(path: str, xyz: np.ndarray, colours: Optional[np.ndarray] = None) -> int:
+    """(N, 3) xyz, optional (N, 3) uint8 colours -> binary_little_endian PLY."""
+    xyz = np.asarray(xyz, dtype=np.float32).reshape(-1, 3)
+    head = ["ply", "format binary_little_endian 1.0", f"element vertex {len(xyz)}",
+            "property float x", "property float y", "property float z"]
+    if colours is not None:
+        head += ["property uchar red", "property uchar green", "property uchar blue"]
+        dtype = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4"),
+                          ("red", "u1"), ("green", "u1"), ("blue", "u1")])
+        rec = np.zeros(len(xyz), dtype)
+        rec["red"], rec["green"], rec["blue"] = np.asarray(colours, np.uint8).T
+    else:
+        dtype = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4")])
+        rec = np.zeros(len(xyz), dtype)
+    rec["x"], rec["y"], rec["z"] = xyz.T
+    head.append("end_header")
+    with open(path, "wb") as handle:
+        handle.write(("\n".join(head) + "\n").encode("ascii"))
+        handle.write(rec.tobytes())
+    return len(xyz)
+
+
+def read_cloud_xyz(path: str, max_points: int = 0) -> np.ndarray:
+    """A PCD or a PLY -> (N, 3) xyz, by what the file says it is."""
+    with open(path, "rb") as handle:
+        magic = handle.read(3)
+    return (read_ply_xyz if magic == b"ply" else read_pcd_xyz)(path, max_points)
+
+
 def read_pcd_xyz(path: str, max_points: int = 0) -> np.ndarray:
     """Any PCD -> (N, 3) float64 xyz, non-finite points dropped.
 
     Handles ascii, binary and binary_compressed with arbitrary field layouts,
     since this file comes from the mapping pipeline rather than from this
-    package's own writer.
+    package's own writer. A PLY is read by ``read_ply_xyz``; ``read_cloud_xyz``
+    takes either.
     """
+    with open(path, "rb") as handle:
+        if handle.read(3) == b"ply":
+            return read_ply_xyz(path, max_points)
     header: Dict[str, str] = {}
     with open(path, "rb") as handle:
         while True:
@@ -173,6 +283,11 @@ def read_pcd_xyz(path: str, max_points: int = 0) -> np.ndarray:
                             record["y"].astype(np.float64).reshape(-1),
                             record["z"].astype(np.float64).reshape(-1)], axis=1)
 
+    return _finish_cloud(xyz, max_points)
+
+
+def _finish_cloud(xyz: np.ndarray, max_points: int) -> np.ndarray:
+    """Drop non-finite points and thin to ``max_points``, evenly."""
     xyz = xyz[np.isfinite(xyz).all(axis=1)]
     if max_points and len(xyz) > max_points:
         xyz = xyz[np.linspace(0, len(xyz) - 1, max_points).astype(int)]
