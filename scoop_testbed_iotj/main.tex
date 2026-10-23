@@ -6,22 +6,9 @@
 % and cooperative perception is the application whose outcome the network
 % decides.
 %
-% Length: IoT-J publishes 8 pages without overlength charges and charges
-% per page beyond that (check the current rate in the Author Portal).
-% Estimated length of this draft, double column:
-%   I   Introduction               1.0
-%   II  Related Work               1.3  + Table II (full width), Table III (full width)
-%   III Testbed Design             1.1  + Fig. 1, platforms, compact sensors, BOM
-%   IV  Time and Space Alignment   0.9  + calib table
-%   V   Ground Truth               1.0  + refpipeline fig, gt table
-%   VI  Link Instrumentation       0.6  + link trace fig
-%   VII Replay                     0.5  + replay fig
-%   VIII Experiments               1.5  + spec, questions, headroom, E2, E3/E5 figs
-%   IX  Lessons and Limitations    0.35
-%   X   Conclusion                 0.15
-%   References                     1.0
-%   total                          ~9.4 -> fold tables/results_q*.tex into the
-%                                  spec sheet, or accept 1-2 overlength pages
+% Length: compiled 15 pages including 2.5 pages of references (18 before
+% the cuts of DIRECTION.md, Sec. 3). Check the current IoT-J length policy
+% in the Author Portal; the rest is closed by condensing prose.
 % Supplementary material: supplementary.tex (compile separately).
 % Companion: the SCooP dataset paper (cited as scoop_dataset).
 
@@ -72,12 +59,14 @@ Engineering, National Yang Ming Chiao Tung University, Hsinchu, Taiwan
 \maketitle
 
 \begin{abstract}
-Robots and fixed sensors that share what they perceive form an IoT
-system whose application succeeds only if each message arrives while
-it is still fresh and can be placed in the receiver's frame. Indoors,
-these nodes share one contended Wi-Fi network and have no GNSS, yet IoT
-testbeds measure the network without scoring an application, robot
-systems run over real links without logging them, and
+Robots and fixed sensors that share what they perceive form a network
+of embodied agents whose task succeeds only if each message arrives
+while it is still fresh and can be placed in the receiver's frame.
+Whether the network serves the task therefore cannot be read off its
+latency: the link and the task outcome have to be measured together, on
+the same run. Indoors, these nodes share one contended Wi-Fi network
+and have no GNSS, yet IoT testbeds measure the network without scoring
+a task, robot systems run over real links without logging them, and
 cooperative-perception platforms are outdoor, GNSS-referenced, and
 reduce the link to a scalar delay. We present SCooP-iT, an indoor IoT
 testbed of heterogeneous mobile and fixed nodes, a LiDAR robot, an
@@ -96,19 +85,21 @@ surface agreement between independent passes, and
 (RGB-D cart) on held-out fiducials. A channel-in-the-loop replay runs
 any collaborative application against the per-message link the nodes
 actually had. Experiments show that the testbed's own errors are
-6--133$\times$ smaller than the effects it measures; that its map
+6--101$\times$ smaller than the effects it measures; that its map
 predicts the signal it logs although neither produced the other
 (Spearman $\rho = 0.60$, \SI{5.4}{\decibel} clear-to-obstructed drop);
-\todo{that replay reproduces live arrivals}; and that under contention
-the share of \SI{1.5}{\mega\byte} messages arriving within one LiDAR
-frame falls from 86\,\% to \SIrange{59}{68}{\percent}, against
-100\,\% under the synthetic channels of prior benchmarks. SCooP-iT is
-the acquisition platform of the SCooP dataset.
+\todo{that replay reproduces live arrivals}; and that a link whose
+loaded round trip of \SIrange{25}{33}{\milli\second} sits well inside
+one \SI{100}{\milli\second} LiDAR frame still delivers only
+\SIrange{59}{68}{\percent} of \SI{1.5}{\mega\byte} messages within that
+frame when two robots share the access point (86\,\% with one),
+against 100\,\% under the synthetic channels of prior benchmarks.
+SCooP-iT is the acquisition platform of the SCooP dataset.
 \end{abstract}
 
 \begin{IEEEkeywords}
-Internet of Things, testbed, Internet of Robotic Things, cooperative
-perception, Wi-Fi, channel state information, time synchronization,
+Internet of Things, testbed, Internet of Robotic Things, networked
+embodied intelligence, cooperative perception, Wi-Fi, channel state information, time synchronization,
 age of information, ground truth
 \end{IEEEkeywords}
 
@@ -129,6 +120,19 @@ comparable to its own sensors. The network is therefore not a pipe
 beneath the application but part of its outcome: data freshness, long
 studied as the age of information \cite{kaul2012aoi,yates2021aoi},
 here has a concrete deadline of one sensor frame.
+
+Surveys of networked embodied intelligence state the problem in
+general form. Delivering a message is only an intermediate step whose
+value depends on whether it arrives in time for the task, so
+improvements in communication indicators such as latency, reliability,
+or age of information need not translate into task success, and the two
+have to be evaluated together \cite{zhang2026mean}. The same surveys,
+and those of embodied multi-robot systems, name the instrument that is
+missing: benchmarks evaluate communication, robotics, or perception
+separately, most rely on simulations that overlook communication
+latency, and integrated experimental testbeds with realistic wireless
+dynamics, heterogeneous agents, and multi-agent tasks are listed as an
+open problem \cite{zhang2026mean,wen2026embodiedmrs}.
 
 Indoors, where occlusion is dense and cooperation matters most, three
 conditions make this hard to study. The nodes share one access point,
@@ -157,7 +161,11 @@ delay or a Bernoulli drop
 This paper presents SCooP-iT, the SCooP Indoor Testbed, an IoT testbed
 built so that any collaborative application can be run against the
 link the nodes actually had, and scored against a pose reference that
-exists for every scan of every node. Its contributions are:
+exists for every scan of every node. It is such an integrated testbed
+for the perception half of the embodied loop: on every run it records
+the link indicators of each node pair and the perception outcome they
+decide, on one clock and in one frame, so a claim that crosses the two
+layers can be tested instead of assumed. Its contributions are:
 \begin{enumerate}
     \item \textbf{A heterogeneous indoor IoT testbed with link and
     channel state on the sensors' clock}: two mobile and three
@@ -179,17 +187,19 @@ exists for every scan of every node. Its contributions are:
     application, keyed to sensor timestamps, \todo{validated against
     live execution to within one receiver frame}
     (Sec.~\ref{sec:replay}).
-    \item \textbf{Evidence that the measured link changes the answer}:
-    a second robot on the same access point cuts the share of
-    \SI{1.5}{\mega\byte} messages that arrive within one LiDAR frame
-    from 86\,\% to \SIrange{59}{68}{\percent}, while the synthetic
-    channels of prior benchmarks deliver 100\,\% of the same messages
+    \item \textbf{Evidence that link indicators do not predict the task
+    outcome}: with a second robot on the same access point, the loaded
+    round trip of \SIrange{25}{33}{\milli\second} stays well inside one
+    \SI{100}{\milli\second} LiDAR frame, yet only
+    \SIrange{59}{68}{\percent} of \SI{1.5}{\mega\byte} messages arrive
+    within it (86\,\% with one robot), while the synthetic channels of
+    prior benchmarks deliver 100\,\% of the same messages
     (Sec.~\ref{sec:experiments}).
 \end{enumerate}
 
 A testbed paper is judged on seven questions, five about whether the
 instrument can be trusted and two about whether it is worth having
-(Table~\ref{tab:questions}): \emph{Is it precise?} Are its own errors
+(Table~\ref{tab:spec}): \emph{Is it precise?} Are its own errors
 small next to the effects it measures (E1)? \emph{Is it consistent?}
 Do the poses and the link logs agree when neither was checked by hand
 (E2)? \emph{Is it faithful?} Does replaying a logged link reproduce
@@ -217,7 +227,15 @@ A team of robots and fixed sensors that shares perception over Wi-Fi
 is an IoT system: heterogeneous nodes sense, compute, and exchange
 data over one shared, contended network, and the application succeeds
 only if each message arrives while it is still fresh
-\cite{simoens2018iort}. Studying such a system needs four things at
+\cite{simoens2018iort}. Surveys of networked embodied intelligence
+organize its evaluation in levels, communication and computation
+indicators below and embodied task indicators above, and argue that
+only their joint measurement shows whether a network serves a task
+\cite{zhang2026mean}; surveys of embodied multi-robot systems find that
+benchmarks overlook communication latency and call for frameworks that
+evaluate perception and communication across heterogeneous teams, with
+hardware in the loop \cite{wen2026embodiedmrs}. Studying such a system
+needs four things at
 once: the network measured where the application runs, the channel
 beneath it, every node's position and clock, and a way to put a new
 application on the same network again. We review IoT testbeds, network
@@ -338,9 +356,9 @@ trace each node actually had.
 
 \subsection{The Gap at the Intersection}
 Table~\ref{tab:gap_iotj} compares the closest platforms on link,
-channel, clock, pose reference, and replay, and
-Table~\ref{tab:gap_fill} states each gap, what SCooP-iT provides, and
-where the paper shows it. IoT testbeds measure
+channel, clock, pose reference, and replay; the supplementary material
+states each gap by discipline, what SCooP-iT provides, and where the
+paper shows it. IoT testbeds measure
 the network but run no scored application; channel datasets measure
 CSI on sounding links under a survey instrument; robot systems run
 over real links but release no link log and score nothing; and
@@ -350,10 +368,13 @@ an indoor IoT testbed in which heterogeneous mobile and fixed nodes
 record per-pair link and channel state on the sensors' clock, with a
 measured bound on that clock, have a validated pose for every scan
 without motion capture or GNSS, and replay the recorded per-message
-link into any collaborative application.
+link into any collaborative application. It is the integrated testbed
+the surveys call for \cite{zhang2026mean,wen2026embodiedmrs}, restricted
+to perception: the link indicators and the task outcome of every run
+are on one timeline, while the nodes do not yet act on what they
+receive.
 
 \input{tables/related_iotj}
-\input{tables/gap_fill_iotj}
 
 \section{Testbed Design}
 \label{sec:design}
@@ -624,9 +645,6 @@ shows the pipeline.
 \label{sec:map}
 \input{sections/refmap_main}
 
-\input{tables/refmap_stages}
-\input{tables/glim_vs_ref}
-
 The frozen map is the metric backbone of every run. LiDAR agents are
 localized by scan-to-map registration. For \texttt{mobile\_2}, depth
 registration, visual odometry, and a subset of the board sightings of
@@ -765,10 +783,6 @@ without per-frame annotation, and it is why the reference is built to
 annotation grade and not only as an evaluation target. The labels
 themselves are a release of the dataset \cite{scoop_dataset}.
 
-\subsection{Synthetic Views from the Reference}
-\label{sec:gt_twin}
-\input{sections/synthetic_views}
-
 %=======================================================================
 \section{Link Instrumentation}
 \label{sec:link}
@@ -884,9 +898,7 @@ Sec.~\ref{sec:introduction}, and together they are the evidence
 behind the specification sheet of Table~\ref{tab:spec}. Each opens
 with its question and its pass criterion, fixed before the data were
 read, gives the answer the recordings in hand support, and states what
-remains to be collected. Table~\ref{tab:questions} summarizes all
-seven questions; Tables~\ref{tab:res_q1}--\ref{tab:res_q7} list, per
-question, the terms answered and the terms still needed. Unless stated otherwise, numbers come from the
+remains to be collected. Unless stated otherwise, numbers come from the
 24 September session at site 1 (MIRC 1F): the mapping pass
 \texttt{mapping\_A}, the survey pass \texttt{survey\_1} in which
 one agent owns the channel, and the cooperation pass \texttt{coop\_2}
@@ -894,10 +906,9 @@ in which both robots move and contend.
 
 \input{tables/spec}
 
-\input{tables/questions}
-% Page budget: the per-question result tables (tables/results_q1..q7.tex)
-% are the working ledger; fold them into the spec sheet and the E1-E5
-% paragraphs at camera-ready and drop the floats.
+% The per-question result tables (tables/results_q1..q7.tex) and
+% tables/questions.tex are the working ledger and are not input; the
+% questions and their pass criteria are columns of tab:spec.
 
 \subsection{E1 Headroom: The Testbed Is Finer Than What It Measures}
 \emph{Question.} Is the testbed finer than the effects it is meant to
@@ -940,7 +951,6 @@ margin per term.
 
 \input{figures/headroom}
 
-\input{tables/results_q1}
 
 \subsection{E2 Map Meets Radio: Two Independent References Agree}
 \emph{Question.} Are the poses and the link logs right, if neither is
@@ -982,7 +992,6 @@ signal (Fig.~\ref{fig:clearance}).
 
 \input{figures/clearance}
 
-\input{tables/results_q2}
 
 \subsection{E3 Twin Run: Replay Matches the Real Link}
 \emph{Question.} Does replaying a logged link reproduce what the real
@@ -1014,7 +1023,6 @@ agreement, with the synthetic channel on the same axes.
 
 % E3 shares a figure with E5 (figures/simgap.tex, two panels)
 
-\input{tables/results_q3}
 
 \subsection{E4 Same Knob, Same Link: A Setting Reproduces Its Condition}
 \emph{Question.} If the same condition is set on another day, is the
@@ -1037,7 +1045,6 @@ route and modes on another day, which the E3 session provides; and the
 table of day distance against mode distance for RTT, goodput, and
 RSSI on the shared grid.
 
-\input{tables/results_q4}
 
 \subsection{E5 Sim Gap: What a Synthetic Channel Hides}
 \emph{Question.} Why not simulate the link? This is a demonstration
@@ -1061,7 +1068,12 @@ rising from \SIrange{5}{10}{\milli\second} idle to
 (\SI{3.3}{\milli\second} to \SIrange{60}{109}{\milli\second} on an
 earlier pass at the same site), and an earlier cooperation pass
 contains three real outages covering 12\,\% of frames, which no
-synthetic channel produces. The
+synthetic channel produces. Judged by its latency, the contended link
+is healthy: its loaded round trip of \SIrange{25}{33}{\milli\second}
+is at most a third of the frame. The misses come from message size over the
+goodput the contended link had, which no latency indicator sees. This
+is the gap between communication indicators and task indicators that
+\cite{zhang2026mean} describes, measured here on one run. The
 two-robot drop is the effect that i.i.d.\ per-agent delay models
 cannot express: the robots contend for one access point, so their
 delays are correlated. A \SI{1.5}{\mega\byte} message is about
@@ -1079,7 +1091,6 @@ Detection-level consequences are reported in \cite{scoop_dataset}.
 
 \input{figures/simgap}
 
-\input{tables/results_q5}
 
 \subsection{Worth: Is It Unique, and Can Others Build It?}
 \label{sec:worth}
@@ -1088,15 +1099,11 @@ Uniqueness is Table~\ref{tab:gap_iotj}: SCooP-iT is the only
 platform that is indoor, has mobile and fixed nodes, is referenced
 without motion capture or GNSS, and measures every pair's link down to
 channel state with a measured clock bound and a per-message replay
-path into methods; Table~\ref{tab:res_q6} lists the nearest platform per
-capability and what remains to verify. Reproducibility rests on the
-released pipeline, the spec sheet, and the bill of materials;
-Table~\ref{tab:res_q7} lists what is in hand and the bookkeeping still
-owed.
+path into methods. Reproducibility rests on the
+released pipeline, the spec sheet, and the bill of materials
+(Table~\ref{tab:bom}).
 
-\input{tables/results_q6}
 
-\input{tables/results_q7}
 
 %=======================================================================
 \section{Lessons Learned and Limitations}
@@ -1134,7 +1141,11 @@ site; one CSI receiver; the self-built map rests on the control
 distances for absolute scale, since the two passes share a sensor and
 a pipeline; endpoint clearances hide obstacles within
 \SI{0.7}{\metre} of a radio. \todo{Add scale: three sites, sessions,
-hours, once final.}
+hours, once final.} The loop is open: the nodes do not act on what they
+receive, and a replayed trace cannot react to the load a method
+offers, so the step from received message to action, which closes the
+loop of networked embodied intelligence \cite{zhang2026mean}, is
+outside this paper.
 
 %=======================================================================
 \section{Conclusion}
@@ -1149,9 +1160,11 @@ state to channel state, with a replay module that puts that link back
 in the loop for any collaborative method \todo{validated to within one
 receiver frame}. Under contention the shared network moves the delay
 across one LiDAR frame, which no synthetic channel of prior benchmarks
-reproduces: for an IoT application whose deadline is a sensor frame,
-the network has to be measured where the application runs. Next steps are more nodes, other radios and IoT protocols,
-multi-antenna CSI, and a wired CSI host. The sequences recorded on SCooP-iT, their
+reproduces, and which the link's own latency does not reveal: for a
+task whose deadline is a sensor frame, the network has to be measured
+where the task runs, together with the task. Next steps are closing the
+loop from perception to action, more nodes, other radios and IoT
+protocols, multi-antenna CSI, and a wired CSI host. The sequences recorded on SCooP-iT, their
 labels, and the benchmark are released as the SCooP dataset
 \cite{scoop_dataset}.
 

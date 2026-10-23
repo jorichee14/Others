@@ -13,7 +13,7 @@
 & W1 Channel state on the links that carry the team's data
 & CSI tools and datasets \cite{nexmon,jiang2022picoscenes,dichasus,espargos} sense a person or a target; V2X platforms \cite{v2xrealo,cooperscene} stop at the transport layer
 & Per-pair link state at \SI{5}{\hertz}, RTT at \SI{100}{\hertz}, goodput in \SI{4}{\second} windows, and CSI at \SIrange{104}{141}{\hertz} on agent links
-& Sec.~\ref{sec:link} \\
+& main paper, Sec.~VI \\
 \cmidrule(l){2-5}
 & W2 Measured channel checked against measured geometry
 & Radio maps and digital twins predict the channel from surveyed or synthetic geometry \cite{hoydis2023sionnart,levie2021radiounet,alkhateeb2023digitaltwin}; robot-built radio maps \cite{fink2010radiomap} have no validated pose
@@ -29,7 +29,7 @@
 & R1 Real links and scored perception in one experiment
 & Communication-aware systems \cite{gil2015adaptive,ginting2021chord,cladera2024mocha} run over real links but score nothing against a reference; C-SLAM \cite{swarmslam,kimeramulti} is scored but its link is not logged with it
 & Link logs and a pose reference for every scan of every agent on one timeline
-& Secs.~\ref{sec:gt}, \ref{sec:link} \\
+& main paper, Secs.~V, VI \\
 \cmidrule(l){2-5}
 & R2 Building-scale pose reference without a survey instrument
 & Motion capture is room-bound \cite{utias,m2dgr}; UWB \cite{zhao2024util} and total stations \cite{hilti2022} need surveyed anchors; outdoor platforms use GNSS or RTK; CoPeD \cite{coped} fuses its own odometry with GPS
@@ -39,7 +39,7 @@
 & R3 Heterogeneous team with infrastructure, indoors
 & Robot teams \cite{coped,ginting2021chord,cladera2024mocha} are air--ground, subterranean, or outdoor and have no infrastructure sensors; infrastructure-assisted platforms \cite{zimmer2024tumtrafv2x,v2xrealo} are outdoor
 & LiDAR robot, RGB-D cart, and camera--radar infrastructure masts on one access point
-& Sec.~\ref{sec:design} \\
+& main paper, Sec.~III \\
 \midrule
 \multirow[t]{3}{=}{\textbf{Computing and networked systems}}
 & C1 A measured, not claimed, bound between link logs and sensor data
@@ -55,7 +55,7 @@
 & C3 Replay into a multi-agent pipeline, not a transport stream
 & Trace emulators \cite{netravali2015mahimahi,hemminger2005netem,winstein2013sprout} replay into a socket; ROS-NetSim \cite{calvofullana2021rosnetsim} simulates the link
 & Channel-in-the-loop replay of the recorded per-pair link into any method, keyed to sensor timestamps
-& Sec.~\ref{sec:replay}; E3 \todo{replay vs live} \\
+& main paper, Sec.~VII; E3 \todo{replay vs live} \\
 \midrule
 \multirow[t]{2}{=}{\textbf{Perception}}
 & P1 Evaluation against the link the agents actually had
@@ -66,18 +66,18 @@
 & P2 Real localization error on the same timeline as the link
 & Pose-robust fusion \cite{lu2023coalign} is evaluated under pose noise drawn from a chosen distribution
 & Each agent's estimator pose scored against the reference, on the clock of the link log
-& Sec.~\ref{sec:gt} (scoring capability) \\
+& main paper, Sec.~V (scoring capability) \\
 \midrule
 \multirow[t]{2}{=}{\textbf{Testbeds}}
 & T1 One platform across the four disciplines
 & Wireless testbeds \cite{adjih2015iotlab,breen2021powder,raychaudhuri2020cosmos} run no perception task; multi-robot testbeds \cite{wilson2021robotarium,kloock2021cpmlab} assume an ideal network; perception platforms \cite{v2v4real,zimmer2024tumtrafv2x,cooperscene} are outdoor and GNSS-referenced
-& Every column of Table~\ref{tab:gap_iotj}
-& Table~\ref{tab:gap_iotj} \\
+& Every column of the main paper's comparison table
+& main paper, comparison table \\
 \cmidrule(l){2-5}
 & T2 A link condition that reproduces, on hardware others can buy
 & Testbeds report a link once; references depend on mocap, RTK, or a survey scanner
 & Load mode as a named setting compared across days; commodity Wi-Fi, chrony, and printed fiducials; bill of materials
-& E4 \todo{day half pending}; Table~\ref{tab:bom} \\
+& E4 \todo{day half pending}; main paper, bill of materials \\
 \bottomrule
 \end{tabularx}
 \end{center}

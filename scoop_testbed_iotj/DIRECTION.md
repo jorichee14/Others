@@ -12,10 +12,12 @@ this paper.
   live-vs-replay error number, as in Noble, Mahimahi, Pantheon and
   Colosseum-as-twin. IoT-J reviewers know that evidence. RA-L reviewers
   would judge the paper as a dataset against CoPeD and Kimera-Multi.
-- **It fits.** RA-L allows 6 + 2 pages including references, and its draft
-  was already 8.2 pages before the reference map grew. IoT-J charges past
-  8 pages but has no hard cap, and the cuts in Sec. 3 bring this draft to
-  about 7.5.
+- **Length.** RA-L allows 6 + 2 pages including references. Compiled, this
+  draft was 18 pages before the cuts in Sec. 3 and is 15 after them,
+  including 2.5 pages of references (89 entries). The "~9.4 pages" in the
+  old header comment was an estimate, not a compile. Check the current
+  IoT-J length policy in the Author Portal; the remaining gap is closed by
+  condensing prose, not by cutting more content.
 - **No reviewer overlap with the companion paper.** The T-RO dataset
   paper takes the robotics audience, and the two papers stop competing
   for the same reviewers.
@@ -35,6 +37,18 @@ Shared Wi-Fi Network Does to Multi-Agent Perception*
 the sensors' map frame, and it is replayed message by message into any
 collaborative application, **with a measured replay error (E3)**.
 
+**Framing (added 23 Oct):** networked embodied intelligence. Two surveys say
+that link indicators (latency, reliability, AoI) and task outcomes must be
+measured together, and both list integrated testbeds with real wireless
+dynamics and heterogeneous agents as an open problem: MEAN, arXiv:2610.26297,
+Sec. II-B and Sec. VII "Benchmarking and evaluation methodology"; Wen et al.,
+TechRxiv 2026, Sec. V-A. SCooP-iT is that testbed for the perception half of
+the loop. The data already show the surveys' point: on coop_2 the loaded RTT
+(25-33 ms) is well inside the 100 ms frame, yet only 59-68 % of 1.5 MB
+messages land in it. This is now contribution 4, the abstract's last
+result, and a paragraph in E5. Scope stated in Limitations: the loop is open
+(the nodes do not act on what they receive).
+
 Everything else supports that headline, and none of it is a headline of
 its own:
 
@@ -52,7 +66,7 @@ one session of about an hour (Sec. 5B).
 The seven questions stay as the organising device in the introduction and
 in Sec. VIII, but as text only (see Sec. 3).
 
-## 3. Structure and cuts (from ~9.9 to ~7.5 pages)
+## 3. Structure and cuts (done 23 Oct: 18 -> 15 compiled pages)
 
 | Change | Saves | Where it goes |
 |---|---|---|
@@ -62,11 +76,10 @@ in Sec. VIII, but as text only (see Sec. 3).
 | Move `tab:gap_fill` (gaps by discipline) to the supplementary | 0.4 | `tab:gap_iotj` plus the last paragraph of Sec. II already say it |
 | Move `tab:refmap_stages`, `tab:glim_vs_ref` and the BA-vs-scan-to-map paragraph to the supplementary; keep one paragraph and `tab:gt` in Sec. V-A | 0.3 | `supp/refmap_method.tex` |
 
-Contributions go from four to three: (1) the testbed, with link and CSI on
-the sensor clock and in the map frame, including mocap-free GT as the
-enabler; (2) the per-message replay, validated live (E3); (3) what the
-one-clock, one-frame design shows: map predicts radio (E2), and synthetic
-channels miss contention and outages (E5).
+The four contributions stay: (1) the testbed, with link and CSI on the
+sensor clock; (2) mocap-free GT, the enabler; (3) the per-message replay,
+validated live (E3); (4) link indicators do not predict the task outcome
+(E5).
 
 ## 4. Consistency fixes (the reference changed, but parts of the text did not)
 

@@ -1,0 +1,14 @@
+% Moved from sections/refmap_main.tex (main paper Sec. V-A).
+\subsection{Bundle Adjustment Against Per-Scan Registration}
+Scan-to-map registration of every scan against the SLAM map, the usual
+alternative, refines the same input to the same wall consistency
+(\SI{9.6}{\centi\metre} over the run, \SI{6.9}{\centi\metre} at
+\SI{1}{\second}, and a map with \SI{7.6}{\centi\metre} walls and
+\SI{1.7}{\centi\metre} floors) and agrees with the reference to \SI{1.3}{\centi\metre}
+and $0.15^\circ$ ATE, so the result is fixed by the scans rather than by
+the method. Bundle adjustment is kept as the reference because it keeps
+the SLAM input's smoothness: its pose jitter about a local fit over
+\SI{0.5}{\second} is \SI{0.48}{\milli\metre} against
+\SI{1.60}{\milli\metre} for per-scan registration, and
+\SI{0.05}{\milli\metre} against \SI{0.86}{\milli\metre} while the robot
+stands still, an error every timestamped position inherits.

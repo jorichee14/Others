@@ -7,7 +7,7 @@ pass is recorded and processed independently and is used only to
 cross-check the first. A LiDAR-inertial SLAM solution \cite{glim} gives the
 initial trajectory; its poses are stamped \SI{46}{\milli\second} early,
 which, measured against the scans and corrected, removes most of its
-heading error (Table~\ref{tab:glim_vs_ref}). It is refined by plane
+heading error (supplementary material). It is refined by plane
 bundle adjustment \cite{balm,hba}: the poses of \SI{1}{\second} keyframes
 are moved jointly so that every planar patch seen from several keyframes is
 as thin as possible, the cost of a patch being the smallest eigenvalue of
@@ -22,7 +22,7 @@ usual union of points keeps every cell a stray point reached, so its walls
 (\SI{12.7}{\centi\metre}) are thicker than the scans that built them
 (\SI{9.7}{\centi\metre} over the run), whereas the signed distance averages
 across a surface (\SI{7.6}{\centi\metre}). Each stage is measured by the
-thickness of walls as the scans place them (Table~\ref{tab:refmap_stages}):
+thickness of walls as the scans place them (stage by stage in the supplementary material):
 over the whole run it goes from \SI{18.8}{\centi\metre} for the SLAM
 solution to \SI{12.0}{\centi\metre} with the time correction and
 \SI{9.7}{\centi\metre} with bundle adjustment, near the
@@ -30,16 +30,6 @@ solution to \SI{12.0}{\centi\metre} with the time correction and
 walls and floors are \SI{7.6}{\centi\metre} and \SI{1.8}{\centi\metre}
 thick. The board loop closure of the reference, \SI{12.3}{\milli\metre},
 is within twice its detection noise, so no drift is detected over the run.
-
-Scan-to-map registration of every scan against the SLAM map, the usual
-alternative, refines the same input to the same wall consistency
-(\SI{9.6}{\centi\metre} over the run, \SI{6.9}{\centi\metre} at
-\SI{1}{\second}, and a map with \SI{7.6}{\centi\metre} walls and
-\SI{1.7}{\centi\metre} floors) and agrees with the reference to \SI{1.3}{\centi\metre}
-and $0.15^\circ$ ATE, so the result is fixed by the scans rather than by
-the method. Bundle adjustment is kept as the reference because it keeps
-the SLAM input's smoothness: its pose jitter about a local fit over
-\SI{0.5}{\second} is \SI{0.48}{\milli\metre} against
-\SI{1.60}{\milli\metre} for per-scan registration, and
-\SI{0.05}{\milli\metre} against \SI{0.86}{\milli\metre} while the robot
-stands still, an error every timestamped position inherits.
+Per-scan registration against the SLAM map, the usual alternative,
+agrees with the reference to \SI{1.3}{\centi\metre} and $0.15^\circ$
+ATE, so the result is fixed by the scans rather than by the method.

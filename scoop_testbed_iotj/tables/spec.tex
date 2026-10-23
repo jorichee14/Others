@@ -1,22 +1,31 @@
+% Specification sheet, with the seven questions of Sec. I and their pass
+% criteria folded in (tables/questions.tex is the working ledger and is
+% not input). Q1-Q5: trust; Q6-Q7: worth.
 \begin{table*}[!t]
-\caption{SCooP-iT Specification Sheet: Every Guarantee, Its Measured Bound, and the Check That Produced It}
+\caption{SCooP-iT Specification Sheet: The Question Each Guarantee Answers, Its Pass Criterion Fixed Before the Data Were Read, the Measured Bound, and the Check That Produced It}
 \label{tab:spec}
 \begin{center}
 \renewcommand{\arraystretch}{1.2}
 \setlength{\tabcolsep}{4pt}
 \scriptsize
-\begin{tabular}{@{}p{3.6cm} p{5.2cm} p{5.4cm} p{1.6cm}@{}}
+\begin{tabular}{@{}p{1.7cm} p{2.5cm} p{3.0cm} p{5.3cm} p{3.4cm}@{}}
 \toprule
-\textbf{Guarantee} & \textbf{Bound} & \textbf{Validated by} & \textbf{Experiment} \\
+\textbf{Question} & \textbf{Guarantee} & \textbf{Pass criterion} & \textbf{Measured bound} & \textbf{Validated by} \\
 \midrule
-Clock agreement between agents & measured offset $\leq$ \SI{0.99}{\milli\second} (\SI{1}{\milli\metre} at \SI{1}{\metre\per\second}); strict chrony bound $\leq$ \SI{12}{\milli\second}; reported RMS offsets \SIrange{10.9}{42.5}{\micro\second} per client & chrony offset logs, every run (coop\_2 so far) & E1 \\
-Sniffer clock bias & \todo{to be measured} (worst case \SI{7.8}{\milli\second}) & probe-packet stamps on both ends & E1 \\
-Spatial extrinsics & residual per sensor pair, Table~\ref{tab:calib} & held-out reflector and board positions & E1 \\
-Agent pose in the site frame & \SI{1.06}{\centi\metre} surface agreement across passes (scale $2\times10^{-5}$); held-out boards \SI{10.0}{\milli\metre} / 0.88$^\circ$ (LiDAR robot), \SI{54.0}{\milli\metre} / 1.38$^\circ$ (RGB-D cart, coop2\_0828) and \SI{3.1}{\centi\metre} median (RGB-D cart, coop\_2); control distances \todo{} & second mapping pass, held-out boards, rangefinder control distances & E1, E2 \\
-Link state & \SI{5}{\hertz} passive, \SI{100}{\hertz} RTT, \SI{4}{\second} goodput windows; outages labelled explicitly (3 outages, 12\,\% of frames on coop2\_0828) & monitor publishes through outages; map clearance predicts RSSI ($\rho = 0.60$, \SI{5.4}{\decibel}) & E2, E4 \\
-Channel state (CSI) & \SIrange{104}{141}{\hertz}; valid below \SI{1.2}{\metre\per\second} relative speed & $\lambda/2$ sampling argument & --- \\
-Contention as a knob & RTT rises several-fold idle to loaded (\SIrange{5}{10}{} to \SIrange{25}{33}{\milli\second}, 24 Sep; \SI{3.3}{} to \SIrange{60}{109}{\milli\second}, earlier pass); in-frame share of \SI{1.5}{\mega\byte} messages 86\,\% alone, \SIrange{59}{68}{\percent} with two robots & survey vs.\ cooperation mode; \todo{repeat across days} & E4, E5 \\
-Replay fidelity & \todo{arrival-time error; frame-assignment agreement} & twin run: live payload against replayed trace & E3 \\
+\multicolumn{5}{@{}l}{\textit{Trust: can readers rely on the instrument?}} \\
+Q1 Precise (E1) & Clock agreement between agents & every error term $\geq 10\times$ below the fusion breaking point of its kind (\SI{0.2}{\metre} pose; one \SI{100}{\milli\second} frame as displacement) & measured offset $\leq$ \SI{0.99}{\milli\second} ($101\times$); strict chrony bound $\leq$ \SI{12}{\milli\second} ($8.3\times$, worst case only); RMS \SIrange{10.9}{42.5}{\micro\second} per client & chrony offset logs, every run \\
+ & Sniffer clock bias & same & \todo{to be measured} (worst case \SI{7.8}{\milli\second}) & probe stamps on both ends \\
+ & Spatial extrinsics & same & per sensor pair, Table~\ref{tab:calib}; board detector \SI{8}{\milli\metre} ($24\times$) & held-out reflector and board positions \\
+ & Agent pose in the site frame & same & held-out boards \SI{10.0}{\milli\metre} / 0.88$^\circ$ (LiDAR robot), \SI{3.1}{\centi\metre} median (RGB-D cart, $6.5\times$); map refinement ($15\times$); cross-pass agreement ($19\times$); control distances \todo{} & second mapping pass, held-out boards, rangefinder distances \\
+Q2 Consistent (E2) & Link state agrees with the poses & clearance vs.\ detrended RSSI: $\rho > 0.3$ and drop $> \SI{5}{\decibel}$ on one link kind & \SI{5}{\hertz} passive, \SI{100}{\hertz} RTT, \SI{4}{\second} goodput; outages labelled; \texttt{mobile\_2} link $\rho = 0.60$, \SI{5.4}{\decibel} (passes) & Fresnel clearance through the anchored map \\
+ & Channel state (CSI) & --- & \SIrange{104}{141}{\hertz}; valid below \SI{1.2}{\metre\per\second} relative speed & $\lambda/2$ sampling argument \\
+Q3 Faithful (E3) & Replay fidelity & $\geq 90\,\%$ agreement on the receiver frame each message lands in; logged replay closer than synthetic & \todo{arrival-time error; frame-assignment agreement} & twin run: live payload against replayed trace \\
+Q4 Repeatable (E4) & Contention as a knob & day-to-day distance $<$ half the survey-to-cooperation distance (RTT, goodput) & RTT \SIrange{5}{10}{} to \SIrange{25}{33}{\milli\second} idle to loaded (24 Sep), \SI{3.3}{} to \SIrange{60}{109}{\milli\second} (earlier pass); \todo{day and mode distances} & survey vs.\ cooperation mode on two days \\
+Q5 Necessary (E5) & The measured link changes the task outcome & demonstration, no pass & \SI{1.5}{\mega\byte} messages within one frame: 86\,\% alone, \SIrange{59}{68}{\percent} with two robots, 100\,\% synthetic; loaded RTT \SIrange{25}{33}{\milli\second}, inside the frame & logged link vs.\ published synthetic channels \\
+\midrule
+\multicolumn{5}{@{}l}{\textit{Worth: should anyone care?}} \\
+Q6 Unique (Sec.~\ref{sec:related}) & No other platform has all capabilities & fills every column of Table~\ref{tab:gap_iotj} & indoor mobile and fixed nodes; no mocap or GNSS; every pair's link; CSI on data links; measured clock bound; per-message replay; perception scoring & cells checked against the cited papers \\
+Q7 Reproducible (Secs.~\ref{sec:design}, \ref{sec:lessons}) & Others can build and use it & bill of materials, setup effort per site, released pipeline & Table~\ref{tab:bom}; pipeline released; this sheet & --- \\
 \bottomrule
 \end{tabular}
 \end{center}
