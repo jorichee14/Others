@@ -1268,6 +1268,13 @@ and `sionna` as before. Both take the unanchored mesh (the model's frame).
     # scoop env
     python3 scoop_pipeline/datasets/lod3dgs.py recolour mapping/mesh_view_<tag>.ply - --renders <run>/renders
 
+`datasets/splat_psnr.py <renders> --scene <scene>` scores a model on the
+scene's own images: PSNR and L1 of `splat_walk.py --render-views`' renders
+against the images they were rendered for, per camera (each export's) and
+all together, a row per view in `psnr.csv`. Two models rendered on the same
+scene's cameras compare on the same views; a camera a model never saw
+scores low, by design.
+
 `datasets/splat_walk.py` walks inside the trained splats (or flies them round
 the mesh flight's loop) with LOD-3DGS's own rasteriser, in its environment
 (`conda activate lod3dgs; export PYTHONNOUSERSITE=1`): the same keys as
