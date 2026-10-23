@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """Self-test for map_stages/board_scan.py: a stream of frames with board_4
-(the 7x7, 9 x 7 squares of 2.45 cm) rendered 0.5 m away, then 0.7 m away, then absent,
+(the 7x7, 9 x 7 squares of 2.45 cm) rendered 0.33 m away, then 0.7 m away, then absent,
 then another dictionary's board (board_1): the scan reads a pose from the
 near views, finds the markers but no corners at 0.7 m (a 1.75 cm marker
 is 10 px there),
@@ -57,8 +57,8 @@ def main():
     rng = np.random.default_rng(1)
     big4, big1 = board_image(b4), board_image(b1)
     frames = []
-    for k in range(5):                                       # 22 cm board 0.5 m away: read
-        frames.append((100.0 + 0.2 * k, render(big4, b4, 0.5 + 0.01 * k, rng)))
+    for k in range(5):                                       # 22 cm board 0.33 m away: read
+        frames.append((100.0 + 0.2 * k, render(big4, b4, 0.33 + 0.005 * k, rng)))
     for k in range(3):                                       # 0.7 m away: markers 10 px, no corners
         frames.append((110.0 + 0.2 * k, render(big4, b4, 0.7 + 0.02 * k, rng, x=0.1)))
     for k in range(4):
@@ -72,12 +72,12 @@ def main():
         print(summ)
         v = summ["verdicts"]
         assert summ["frames"] == 13 and v["ok"] == 5, summ
-        assert all(r["verdict"] == "ok" and r["n_mine"] >= b4.n_markers - 3 and 0.4 < r["range_m"] < 0.7
-                   and r["reproj"] < 1.0 for r in recs[:5]), recs[:5]
+        assert all(r["verdict"] == "ok" and r["n_mine"] >= b4.n_markers - 3 and 0.25 < r["range_m"] < 0.5
+                   and r["reproj"] <= b4.max_reproj for r in recs[:5]), recs[:5]
         assert all(r["verdict"] in ("few_corners", "no_corners", "absent") for r in recs[5:8]), recs[5:8]
         assert all(r["verdict"] == "absent" and r["n_markers"] == 0 for r in recs[8:12]), recs[8:12]
         assert recs[12]["verdict"] == "absent" and recs[12]["n_markers"] == 0, recs[12]   # 4x4 is not 7x7
-        assert summ["seen_from_s"] == 0.0 and 10 < summ["px_median"] < 22, summ
+        assert summ["seen_from_s"] == 0.0 and 15 < summ["px_median"] < 35, summ
         assert summ["absent"] == 13 - summ["with_board_markers"], summ
         files = sorted(os.listdir(tmp))
         assert "contact_sheet.jpg" in files, files
