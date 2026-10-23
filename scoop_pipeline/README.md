@@ -260,12 +260,6 @@ tests/               self-tests, no real bag needed
   test_tsdf.py       01's TSDF fusion against its voxel union on a smeared synthetic
                      room: thinner, and its surfaces where the true ones are
 ```
-The stamps are surveyed first: a message stamped on another clock (the
-wrapper's startup messages carry the wall clock, days from the SVO's
-frames) is dropped and counted, and the reorder window grows to the
-largest step back in time among the rest (up to 60 s; beyond, the error
-names the topic and the step), so a topic the replay delivered late is
-still written in order.
 
 ## Environment
 
@@ -762,6 +756,12 @@ stored uncompressed). The
 point cloud is left out: it is depth + left camera_info, ~145 GB more.
 `svo_to_bag.py --bag zed_right` makes one of them alone. The wrapper log and the parameters used are kept in
 `<out>/zed_logs/`.
+The stamps are surveyed first: a message stamped on another clock (the
+wrapper's startup messages carry the wall clock, days from the SVO's
+frames) is dropped and counted, and the reorder window grows to the
+largest step back in time among the rest (up to 60 s; beyond, the error
+names the topic and the step), so a topic the replay delivered late is
+still written in order.
 
 Where to run: in any terminal. When `ros2` + `zed_wrapper` are not installed
 there, `run_zed.sh` runs itself in the running isaac_ros container
