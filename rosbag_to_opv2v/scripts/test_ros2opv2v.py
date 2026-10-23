@@ -3288,6 +3288,37 @@ def test_make_view_keeps_the_frames_with_the_image():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_fit_finds_a_chair_under_a_scanned_ceiling():
+    """The fit path through the CLI: a room with a ceiling scanned over every
+    cell. The overhead returns must be ignored before the tall-column filter,
+    or every column is taller than an object and the room empties."""
+    import subprocess
+    tmp = tempfile.mkdtemp(prefix='r2o_')
+    try:
+        rng = np.random.default_rng(11)
+        cloud = _room_cloud(rng)
+        ceiling = np.column_stack([rng.uniform(-5, 5, 40000), rng.uniform(-5, 5, 40000),
+                                   np.full(40000, 2.34)])                 # 3 m over the floor
+        cloud = np.vstack([cloud, ceiling])
+        pcd = os.path.join(tmp, 'room.pcd')
+        write_pcd(pcd, np.column_stack([cloud, np.full(len(cloud), 0.5)]))
+        out = os.path.join(tmp, 'labels.json')
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'label_static.py')
+        r = subprocess.run([sys.executable, script, '--pcd', pcd, '--seed=0.0,0.0', '--name', 'chair_1',
+                            '--obj-type', 'chair', '--out', out], capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+        with open(out) as handle:
+            labels = json.load(handle)
+        assert len(labels) == 1 and labels[0]['obj_type'] == 'chair', labels
+        box = labels[0]
+        assert np.allclose(box['location'][:2], [0.0, 0.0], atol=0.08), box
+        assert all(0.2 <= e <= 0.35 for e in box['extent'][:2]), box
+        assert 0.4 <= box['extent'][2] <= 0.5, box                      # 0.9 m tall: half 0.45
+        assert 'return(s) above 2.00 m (--ceiling)' in r.stdout, r.stdout[-1500:]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

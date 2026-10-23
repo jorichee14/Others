@@ -733,10 +733,16 @@ def main() -> int:
         # see.
         local = cloud
         if not args.keep_structure:
-            local = without_structure(cloud, ground_z, args.max_height, args.cell)
-            print("\ndropped %d point(s) in columns taller than %.2f m (walls, "
-                  "ceilings, beams);\n--keep-structure disables it"
-                  % (len(cloud) - len(local), args.max_height))
+            # the overhead goes first, as in the search: under a scanned ceiling
+            # every column is taller than an object, and the structure filter
+            # would otherwise empty the room
+            if ceiling_z is not None:
+                local = local[local[:, 2] - ground_z <= args.ceiling]
+            n_over = len(cloud) - len(local)
+            local = without_structure(local, ground_z, args.max_height, args.cell)
+            print("\nignored %d return(s) above %.2f m (--ceiling); dropped %d point(s) in "
+                  "columns taller than %.2f m (walls, beams);\n--keep-structure disables it"
+                  % (n_over, args.ceiling or 0.0, len(cloud) - n_over - len(local), args.max_height))
         look = seed_report(local, seed, ground_z, radius=args.radius)
         print("\nat seed %s (%.2f m above the floor), within %.1f m:"
               % ("%.3f,%.3f,%.3f" % tuple(seed), look["seed_height_m"], args.radius))

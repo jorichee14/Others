@@ -253,7 +253,8 @@ def seed_report(points: np.ndarray, seed: np.ndarray, ground_z: float,
     seed = np.asarray(seed, dtype=np.float64).reshape(-1)
     near = points[np.linalg.norm(points[:, :2] - seed[:2], axis=1) <= radius]
     if not len(near):
-        return {"points": 0, "nearest_m": None, "bands": [], "tallest_m": None}
+        return {"points": 0, "nearest_m": None, "bands": [], "tallest_m": None,
+                "seed_height_m": round(float(seed[2] - ground_z), 3)}
     nearest = float(np.linalg.norm(near - seed, axis=1).min())
     above = near[:, 2] - ground_z
     edges = [0.0, 0.15, 0.30, 0.60, 0.90, 1.30, 2.00, 1e9]
