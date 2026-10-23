@@ -9,6 +9,7 @@ diff_gaussian_rasterization, plyfile; the window is OpenCV's):
         --scene <scene folder>                       # starts at its first camera
     python3 scoop_pipeline/datasets/splat_walk.py <level_5.ply> --fly <mesh>_fly_path.json out.mp4 \\
         --frame <data>/frames/anchor_frame.json      # the loop was flown in the anchored frame
+        [--eye-shift -1.0]                           # the eye down to 0.6 m, nearer the training cameras
 
 The level files beside the one given (level_0.ply the coarsest ...
 level_5.ply the finest) are all loaded and each Gaussian is drawn from the
@@ -240,6 +241,9 @@ def main():
     ap.add_argument("--fly", nargs=2, default=None, metavar=("PATH_JSON", "OUT_MP4"),
                     help="render the video of this fly path (lod3dgs.py fly's <out>_path.json) instead")
     ap.add_argument("--frame", default=None, help="anchor_frame.json: the fly path is in the anchored frame")
+    ap.add_argument("--eye-shift", type=float, default=0.0, metavar="DZ",
+                    help="with --fly: move the path's eye up or down by DZ m (the mesh fly is at 1.6 m; the robot's "
+                         "camera, where the model was trained, at 0.3)")
     ap.add_argument("--render-views", nargs=2, default=None, metavar=("SCENE", "OUT"),
                     help="render the scene's cameras (rgb + depth) to OUT, for lod3dgs.py recolour --renders")
     ap.add_argument("--every", type=int, default=1, help="with --render-views: every Nth camera")
@@ -269,6 +273,10 @@ def main():
     if a.fly:
         pj = json.load(open(a.fly[0]))
         E, Lk = np.array(pj["eye"], float), np.array(pj["look"], float)
+        if a.eye_shift:                 # the path's frame is z up: lower the eye towards the training cameras'
+            E[:, 2] += a.eye_shift
+            Lk[:, 2] += a.eye_shift
+            print(f"eye moved {a.eye_shift:+.2f} m: {E[0, 2]:.2f} m up")
         if a.frame:
             af = json.load(open(a.frame))
             Ti = np.linalg.inv(np.array(af["T_N_world"], float))     # anchored -> the model's (GLIM's world)

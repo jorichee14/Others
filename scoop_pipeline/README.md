@@ -1241,7 +1241,9 @@ frames read back on every driver; `--hidden`: not shown), the flight seen
 as it goes, the mesh unlit in its colours made vivid, all of it however far; H.264 when ffmpeg is installed (`sudo apt install ffmpeg`), else
 OpenCV's mp4v, which browsers show black (VLC plays it); `--fps`, `--size WxH` (1280x720), `--seconds N`
 for the first N seconds only; the path flown is written beside the video
-as `<out>_path.json` (eye and look-at per frame), for `splat_walk.py --fly`.
+as `<out>_path.json` (eye and look-at per frame), for `splat_walk.py --fly`. `splat_walk.py --fly ... --eye-shift -1.0` flies the same loop
+with the eye 1 m lower: the splats were trained from the robot's camera at
+0.3 m, and seen from 1.6 m the ceiling, never observed that close, is blobs.
 
     python3 scoop_pipeline/datasets/lod3dgs.py fly mapping/mesh_view_<tag>_anchored_sionna.ply
 
