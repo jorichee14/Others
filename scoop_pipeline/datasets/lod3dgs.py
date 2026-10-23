@@ -3393,10 +3393,13 @@ def main():
     a = ap.parse_args()
     for k in ("map", "file", "traj", "frame", "dataset"):
         p = getattr(a, k, None)
-        if p and not os.path.exists(os.path.expanduser(p)):
-            ap.error(f"no file {p}" + ("  (make it with `view` first)" if "view_" in os.path.basename(p) else ""))
-    if getattr(a, "bag", None) and not os.path.exists(os.path.expanduser(a.bag)):
-        ap.error(f"no bag {a.bag}  (find it: find <data> -name metadata.yaml -path '*<date>*')")
+        for p_ in (p if isinstance(p, list) else [p]):
+            if p_ and not os.path.exists(os.path.expanduser(p_)):
+                ap.error(f"no file {p_}" + ("  (make it with `view` first)" if "view_" in os.path.basename(p_) else ""))
+    bg = getattr(a, "bag", None)
+    for b_ in (bg if isinstance(bg, list) else [bg]):
+        if b_ and b_ != "-" and not os.path.exists(os.path.expanduser(b_)):
+            ap.error(f"no bag {b_}  (find it: find <data> -name metadata.yaml -path '*<date>*')")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         if a.cmd == "anchor":
