@@ -277,14 +277,21 @@ def camera_from_lidar(cam, ctx, P):
     print("  %d of %d scans registered (median %d correspondences, RMS %.1f cm) | %s"
           % (len(Ts), len(picks), int(np.median([f[0] for f in fits])),
              np.median([f[1] for f in fits]) * 100, fmt_spread(sp)))
-    if sp[1] > float(cam.get("lidar_static_tol_mm", 20.0)):
-        print("  ! the scans disagree (max %.1f mm): the robot moved? -> the board "
-              "placement is kept" % sp[1])
-        return rec
     T_mc = T_avg @ T_lc
     d_mm = float(np.linalg.norm(T_mc[:3, 3] - T_mc_board[:3, 3]) * 1000)
     d_deg = ang_deg(T_mc[:3, :3], T_mc_board[:3, :3])
     t = T_mc[:3, 3]; q = R_to_q(T_mc[:3, :3])
+    if sp[1] > float(cam.get("lidar_static_tol_mm", 20.0)):
+        # the check is still worth having: the camera chain (board) against
+        # the map (scans), good to the scans' own spread
+        print("  ! the scans disagree (max %.1f mm): the robot moved? -> the board "
+              "placement is kept; the scans' average is %.1f mm / %.2f deg from it "
+              "(t=%s), good to their spread" % (sp[1], d_mm, d_deg, t.round(4).tolist()))
+        rec.update({"n_scans": len(Ts), "lidar_spread_max_mm": round(sp[1], 2),
+                    "lidar_rms_cm": round(float(np.median([f[1] for f in fits])) * 100, 2),
+                    "board_check_mm": round(d_mm, 1), "board_check_deg": round(d_deg, 3),
+                    "lidar_translation": t.tolist(), "lidar_quaternion_xyzw": q.tolist()})
+        return rec
     print("  map->%s from the LiDAR: t=%s q=%s; the board placement is %.1f mm / %.2f deg "
           "from it" % (child, t.round(4).tolist(), q.round(5).tolist(), d_mm, d_deg))
     rec.update({"source": "lidar_avg", "points_topic": topic, "lidar_frame": lidar,
