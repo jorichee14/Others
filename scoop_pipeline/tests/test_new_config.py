@@ -30,11 +30,12 @@ from scoop.bagwrite import BagWriter                                    # noqa: 
 S = 10 ** 9
 
 
-def bag(folder, name, topics):
+def bag(folder, name, topics, t0=1_790_000_000 * S, span=60 * S):
     w = BagWriter(os.path.join(folder, name))
     msg = rosmsg.msg_type("std_msgs/msg/String")(data="x")
     for i, t in enumerate(topics):
-        w.write(t, msg, 1_790_000_000 * S + i)
+        w.write(t, msg, t0 + i)
+        w.write(t, msg, t0 + span + i)
     w.close()
 
 
@@ -117,13 +118,35 @@ def main():
                 fails.append("%s: not refused" % what)
             except SystemExit as e:
                 eq("exists already" in str(e), True, what)
+        # a coop run on the same day: in mapping 1's map, the boards and the infra camera
+        # from the survey at site 2, mobile_2 by VSLAM and its depth track
         r4 = os.path.join(raw, "20261101", "coop_1")
-        robot(r4, "mobile_1", "/ouster")
-        try:
-            run_pass.new_config(r4, log=lambda *_: None, stages=stages)
-            fails.append("coop: not refused")
-        except SystemExit as e:
-            eq("coop" in str(e), True, "coop message: %s" % e)
+        robot(r4, "mobile_1", "/ouster", svo=True)
+        robot(r4, "mobile_2", "/mobile_2/ouster")
+        robot(r4, "infra_1", extra=["/infra_1/wifi/status"])
+        sn = os.path.join(r4, "mobile_1", "sniffer")                 # a sniffer bag from the day before
+        os.makedirs(sn)
+        bag(sn, "mirc_dataset_coop_1_20261101_mobile_1_sniffer", ["/mobile_1/sniffer/infra_1/csi"],
+            t0=1_790_000_000 * S - 86400 * S)
+        lines = []
+        p = run_pass.new_config(r4, log=lines.append, stages=stages)
+        c, P = json.load(open(p)), pc.load_pipeline(p)
+        eq(os.path.basename(p), "pipeline_config_coop_1_20261101.json", "coop file")
+        eq(any("another run" in ln and "sniffer" in ln for ln in lines), True,
+           "the sniffer bag from another run not flagged: %s" % [ln for ln in lines if "overlap" in ln])
+        eq(sum("another run" in ln for ln in lines), 1, "only the sniffer bag flagged")
+        eq((c["dataset"]["machine"], c["dataset"]["reference_pass"], c["dataset"]["boards_from"],
+            c["dataset"]["cameras_from"]), ("mobile_1", "mapping", ["survey/site_2"], ["survey/site_2"]),
+           "coop dataset")
+        eq(c["dataset"]["bag"].endswith("work/20261101/coop_1/mirc_dataset_coop_1_20261101_merged"),
+           True, "coop bag: " + c["dataset"]["bag"])
+        tr = c["04_reference"]["tracks"][0]                         # mobile_2 has an Ouster: its LiDAR track
+        eq((tr["name"], tr["kind"], tr["machine"], tr["board"], tr["body_frame"], "vslam" in c),
+           ("mobile_2_lidar", "lidar", "mobile_2", "board_4", "os_lidar_mobile2", False), "coop track")
+        eq(c["03_init"]["sensors"][1]["board"], "board_4", "coop start board")
+        eq((c["05_anchor"]["enabled"], c["07_build_cameras"]["enabled"], c["08_emit_tfs"]["enabled"]),
+           (False, False, False), "coop stages off")
+        eq(c["10_publish"]["robots"][0]["traj"], "traj_mobile_2_lidar_in_cam.tum", "coop 10_publish")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     for f in fails:

@@ -344,8 +344,15 @@ A new pass first needs its config. `run_pass.py <raw pass folder> --new-config`
 writes it (`map_stages/pipeline_config_<tag>.json`) from what the raw folder
 holds, shows it and stops: a mapping pass by the robot with an Ouster, with
 20261015's settings; a survey with mobile_1 driving, in the same day's mapping
-pass's map, a parked mobile_2 placed by its LiDAR. `--robot` and `--reference`
-override its choices; a coop run is not written (copy `pipeline_config_coop_2.json`).
+pass's map, a parked mobile_2 placed by its LiDAR; a coop run with both
+robots driving: mobile_2 with an Ouster bag as `pipeline_config_coop_site_1_20261015.json`
+(GLIM on it, every scan to the map), without one as `pipeline_config_coop_2.json`
+(cuVSLAM and its depth track against the map), the boards and the infra
+camera from the day's survey passes (`boards_from`, `cameras_from`), and
+mobile_2's start board to check. `--robot` and `--reference` override its choices. It also lists every
+bag's time span and flags one that does not overlap the run: a bag from
+another run copied into the folder (the site 2 sniffer bag in site 1's, on
+20261015) fails later, at the comms step, with no positions.
 The robots' topics and cameras come from the base config's `"robots"` block, so
 the written config names only the robot. Check it, then run the pass.
 

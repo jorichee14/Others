@@ -72,7 +72,12 @@ pass placed them); "comms": {"enabled": false} leaves out comms and csi_clean
           in the same day's mapping pass's map; a parked mobile_2 placed by its
           LiDAR (or, without one, its board view). The bag: the robot's own when it
           is alone and has no ZED, else the merged one. --robot, --reference
-          override what it picks; a coop run is not written (copy coop_2's).
+          override what it picks. A coop run: both robots drive; mobile_2 with an
+          Ouster bag as coop/site_1 (GLIM on it, every scan to the map), without as
+          coop_2 (cuVSLAM + its depth against the map); the boards and the infra
+          camera from the day's survey passes (boards_from / cameras_from). Every bag's
+          time span is listed, one that does not overlap the run flagged (a bag
+          from another run in the folder).
 
 Datasets for other tools (datasets/mcap_convert.py) are made afterwards from the
 merged bag and the processed outputs.
@@ -157,6 +162,43 @@ def has_map_tf(bag):
 RS_BOARD = "board_4"        # the board mobile_2's RealSense sights (7x7, since 20261015)
 
 
+def bag_spans(raw):
+    """[(bag folder relative to raw, start s, end s)] of every rosbag2 folder
+    below raw, from its metadata.yaml."""
+    import yaml
+    from pathlib import Path
+    out = []
+    for m in sorted(Path(raw).rglob("metadata.yaml")):
+        info = (yaml.safe_load(open(m)) or {}).get("rosbag2_bagfile_information") or {}
+        t0 = (info.get("starting_time") or {}).get("nanoseconds_since_epoch")
+        d = (info.get("duration") or {}).get("nanoseconds")
+        if t0 is not None and d is not None:
+            out.append((str(m.parent.relative_to(raw)), t0 * 1e-9, (t0 + d) * 1e-9))
+    return out
+
+
+def check_spans(spans, log=print, least=0.5):
+    """The bags' time spans side by side, against the longest one (the
+    driving robot's): a bag that overlaps it by less than `least` of its own
+    length is from another run (a sniffer bag copied into the wrong folder).
+    -> the names of those."""
+    import datetime
+    if not spans:
+        return []
+    S, E = max(spans, key=lambda x: x[2] - x[1])[1:]
+    log("the bags' time spans (UTC), against the longest:")
+    bad = []
+    for name, s, e in spans:
+        ov = max(0.0, min(e, E) - max(s, S)) / max(e - s, 1e-9)
+        flag = ""
+        if ov < least:
+            flag = "   ! overlaps the run only %.0f %%: from another run?" % (100 * ov)
+            bad.append(name)
+        log("  %-60s %s  %6.0f s%s" % (name, datetime.datetime.utcfromtimestamp(s).strftime("%Y-%m-%d %H:%M:%S"),
+                                        e - s, flag))
+    return bad
+
+
 def new_config(raw, robot=None, reference=None, log=print, stages=STAGES):
     """--new-config: the pipeline config of the pass in ``raw``, written to
     map_stages/pipeline_config_<tag>.json (see the usage). -> its path."""
@@ -175,10 +217,9 @@ def new_config(raw, robot=None, reference=None, log=print, stages=STAGES):
     plan = session.RecordPlan(None)
     mode = plan.mode_of(rawp.name, rawp.parent.name,
                         *(p.parent.name for p in rawp.rglob("metadata.yaml")))
-    if mode not in ("mapping", "survey"):
-        raise SystemExit("mode %s (from the folder and bag names): --new-config writes mapping "
-                         "and survey passes; for a coop run copy pipeline_config_coop_site_1_20261015.json"
-                         % mode)
+    if mode not in ("mapping", "survey", "coop"):
+        raise SystemExit("mode %s (from the folder and bag names): --new-config writes mapping, "
+                         "survey and coop passes" % (mode or "unknown"))
     settings = recording.load_settings(None)
     recs = {}
     for m in machines(raw):
@@ -217,18 +258,64 @@ def new_config(raw, robot=None, reference=None, log=print, stages=STAGES):
         cfg["08_emit_tfs"] = {"enabled": False}
         cfg["comms"] = {"enabled": False, "_note": "mapping mode: no wifi / ntp topics"}
     else:
-        if reference is None:
-            maps = []
-            for c in glob.glob(os.path.join(stages, "pipeline_config*.json")):
-                d = pc.load_config(c).get("dataset") or {}
-                rp = layout.pass_parts(d.get("bag") or "", below=1)
-                if rp and rp[1] == date and not d.get("reference_pass"):
+        maps, surveys = [], []                       # the date's passes with a config here
+        for c in sorted(glob.glob(os.path.join(stages, "pipeline_config*.json"))):
+            d = pc.load_config(c).get("dataset") or {}
+            rp = layout.pass_parts(d.get("bag") or "", below=1)
+            if rp and rp[1] == date:
+                if not d.get("reference_pass"):
                     maps.append("/".join(rp[2]))
+                elif plan.mode_of(*rp[2]) == "survey":   # a survey's 05 measured the boards
+                    surveys.append("/".join(rp[2]))
+        if reference is None:
             if len(maps) != 1:
                 raise SystemExit("the map to localize in: %s mapping passes on %s in map_stages/ "
                                  "(%s); name it with --reference <pass> or <date>/<pass>"
                                  % (len(maps), date, ", ".join(sorted(maps)) or "none"))
             reference = maps[0]
+    if mode == "coop":
+        lidar2 = "mobile_2" in with_lidar
+        cfg["_note"] = ("%s: coop run, written by run_pass.py --new-config, in %s's map: both robots "
+                        "drive. mobile_1: 03 (its ZED at its start board, through GLIM) -> 04 (every scan "
+                        "to the anchored map). mobile_2: %s. No 05 (the boards as the day's survey "
+                        "measured them: dataset.boards_from), no 07/08 (the infra camera where that "
+                        "survey's 07 put it: cameras_from). Change \"board\" (03's realsense sensor and the "
+                        "04 track) to the board mobile_2 starts in front of if not %s (board_scan.py "
+                        "--image-topic /mobile_2/color/image_raw --camera-info /mobile_2/color/camera_info "
+                        "shows which)."
+                        % (tag, reference,
+                           ("as coop/site_1 (20261015): GLIM on its own Ouster, its start from 03's "
+                            "realsense (its RealSense at the board in the opening dwell, through its "
+                            "LiDAR -> camera calibration) -> 04's track mobile_2_lidar, every scan to "
+                            "the same map" if lidar2 else
+                            "as coop_2 (20260924): vslam (cuVSLAM offline on its stereo + IMU) -> 03 (its "
+                            "colour camera at the board in the opening dwell) -> 04's track mobile_2_depth "
+                            "(method pgo: one pose graph over every depth frame, the start anchor, the "
+                            "boards and the anchored map)"), RS_BOARD))
+        cfg["dataset"] = {"bag": bag, "traj": None, "machine": robot, "reference_pass": reference,
+                          "boards_from": surveys, "cameras_from": surveys}
+        if not surveys:
+            cfg["dataset"]["_boards_from"] = ("no survey of %s has a config in map_stages/: name the pass "
+                                              "whose 05 measured the boards" % date)
+        cfg["03_init"] = {"sensors": [{"name": "zed", "source": "lidar_odom"},
+                                      {"name": "realsense", "source": "camera", "board": RS_BOARD,
+                                       "dwell_only": True}]}
+        if lidar2:
+            track = {"name": "mobile_2_lidar", "kind": "lidar", "machine": "mobile_2",
+                     "anchor_cam": "realsense", "body_frame": "os_lidar_mobile2",
+                     "origin_frame": "map_realsense", "board": RS_BOARD}
+        else:
+            cfg["vslam"] = {"machine": "mobile_2"}
+            track = {"name": "mobile_2_depth", "machine": "mobile_2", "body_frame": "camera_link",
+                     "origin_frame": "map_realsense", "board": RS_BOARD, "anchor_cam": "realsense",
+                     "method": "pgo"}
+        cfg["04_reference"] = {"tracks": [track]}
+        cfg["05_anchor"] = {"enabled": False}
+        cfg["07_build_cameras"] = {"enabled": False}
+        cfg["08_emit_tfs"] = {"enabled": False}
+        cfg["10_publish"] = {"robots": [{"name": "mobile_2", "traj": "traj_%s_in_cam.tum" % track["name"],
+                                         "optical_frame": "camera_color_optical_frame"}]}
+    elif mode == "survey":
         cfg["_note"] = ("%s: survey, written by run_pass.py --new-config: %s drives, in %s's "
                         "map; 03 -> 04 -> 05 (the boards this run saw) -> 07 (parked and infra "
                         "cameras) -> 08 -> 10 -> finalize -> comms" % (tag, robot, reference))
@@ -252,9 +339,16 @@ def new_config(raw, robot=None, reference=None, log=print, stages=STAGES):
     log("wrote %s:\n" % path)
     log(open(path).read())
     log("%s pass, %s; its sensors (from the base config's robots block):" % (mode, P.machine))
+    if mode == "coop":
+        log("  boards and the infra camera from: %s" % (", ".join(cfg["dataset"]["boards_from"]) or "NONE"))
+        log("  mobile_2's start board: %s (the 04 track; change it if it starts elsewhere)" % RS_BOARD)
     for k in ("points_topic", "image_topic", "camera_info_topic", "camera_frame",
               "camera_map_frame", "rectified"):
         log("  %-18s %s" % (k, P.sensor_setting(k)))
+    log("")
+    bad = check_spans(bag_spans(raw), log)
+    if bad:
+        log("fix the bag(s) above before the merge: %s" % ", ".join(bad))
     log("\ncheck it, then: python3 scoop_pipeline/run_pass.py %s --status" % raw)
     return path
 
