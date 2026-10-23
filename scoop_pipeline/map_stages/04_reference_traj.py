@@ -112,6 +112,42 @@ def seed_from_anchor(sa_path, cam, tr_t, tr_T, T_lc):
     return T, t_a, rec.get("mode", "?")
 
 
+def carry_warning(rnd, carry, median_corr_m, counts, n_scans, max_shift):
+    """Is this round's correction the smooth drift `carry` assumes, or a slide?
+
+    `carry` starts each scan from its seed moved by the last good scan's
+    correction, which is right while corrections are the centimetres of GLIM's
+    drift: the gate (max_shift) then measures a scan against a seed that is
+    already nearly right. It is wrong once a correction is metres, because the
+    gate is measured from the CARRIED seed, so a slide into a parallel corridor
+    -- geometry that fits the map as well as the true one -- is passed on to
+    every scan after it and never trips the gate. The run then arrives bent and
+    displaced with a healthy residual.
+
+    A median correction well past max_shift is that case: no single scan may
+    move so far, so the movement came from the carry.
+    """
+    out = []
+    if rnd != 1:
+        return out
+    kept = counts.get("seed_kept_far", 0)
+    if carry and median_corr_m > 2 * max_shift:
+        out.append("  ! the median correction (%.2f m) is past 2 x max_shift (%.2f m), which no "
+                   "single scan may move:\n    with carry on it accumulated. In a building of "
+                   "alike corridors that is a slide into the wrong one\n    (the residual stays "
+                   "healthy there). Check where the run came out -- its boards or a landmark "
+                   "against\n    the map -- and if it moved, re-run 04 with \"carry\": false, "
+                   "\"max_shift\": 0.3, \"max_rot_deg\": 2.0,\n    \"prior_beta\": 0.5, which "
+                   "keeps GLIM's shape and lets the map correct it by centimetres."
+                   % (median_corr_m, 2 * max_shift))
+    elif not carry and kept > 0.2 * max(n_scans, 1):
+        out.append("  ! %d of %d scans (%.0f %%) could not move within max_shift (%.2f m) and kept "
+                   "GLIM's pose:\n    either the map does not cover where the run went, or the "
+                   "seed is too far out for these gates." % (kept, n_scans, 100.0 * kept / n_scans,
+                                                             max_shift))
+    return out
+
+
 def register_round(ref, bag, topic, times, T_cur, c, s01, carry=False):
     """One pass over the scans -> (new poses, per-scan rows, stats). With
     `carry`, each scan starts from its seed moved by the correction of the
@@ -328,6 +364,9 @@ def register_all(name, bag, topic, times, T_glim, T_map_glim, seed, run_traj, T_
               % (len(rows), counts["ok"], counts["seed_kept_far"], counts["seed_kept_thin"]))
         print("  correction this round: median %.2f cm, p95 %.2f cm | residual median %.2f cm"
               % (np.median(d), np.percentile(d, 95), np.median(res)))
+        for line in carry_warning(rnd, bool(c["carry"]), float(np.median(d)) / 100,
+                                  counts, len(rows), float(c["max_shift"])):
+            print(line)
         history.append({"round": rnd, "registered": counts["ok"], "scans": len(rows),
                         "median_corr_cm": float(np.median(d)),
                         "p95_corr_cm": float(np.percentile(d, 95)),

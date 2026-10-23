@@ -1406,6 +1406,30 @@ toolkit from the nvidia conda channel (`CUDA_HOME=$CONDA_PREFIX`), and the two
 submodules with `pip install --no-build-isolation`, with `PYTHONNOUSERSITE=1`
 so nothing in `~/.local` leaks in.
 
+### Stage 04: when to turn `carry` off
+
+`carry` starts each scan from its seed moved by the last well-fitting scan's
+correction. That is right while corrections are the centimetres of GLIM's own
+drift, and wrong once one is metres: the gate (`max_shift`) is measured from
+the CARRIED seed, so a slide into a parallel corridor, geometry that fits the
+map as well as the true one does, is handed to every scan after it and never
+trips the gate. The run arrives bent and displaced with a healthy residual,
+and the boards measured through it scatter far past 05's gates (site_2's
+survey, 20261015: a 10 m median correction, 13 m of lateral error, every
+board refused, while GLIM's own trajectory placed the same boards to 2-8 mm).
+
+Round 1's own numbers decide it, and the stage now says so:
+
+| what round 1 shows | what it means |
+|---|---|
+| median correction within a few times `max_shift` | GLIM's drift; leave `carry` on (the default) |
+| median correction past 2 x `max_shift` | the carry accumulated a slide; check where the run came out, then re-run with `"carry": false, "max_shift": 0.3, "max_rot_deg": 2.0, "prior_beta": 0.5` |
+| with `carry` off, a fifth or more of the scans keeping GLIM's pose | the gates are too tight for the seed, or the map does not cover where the run went |
+
+`check.py glim <raw machine folder>` tells the two apart before any of this:
+it measures the boards on GLIM's own trajectory, so millimetre spreads there
+with metre corrections in 04 mean the registration is at fault, not the run.
+
 ### Sensor sync quality: `check.py sensors`
 
 Do a robot's sensors agree on time, per frame? `checks/sync_quality.py` reads

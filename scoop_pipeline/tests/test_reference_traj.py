@@ -258,10 +258,37 @@ def lidar_track_case(tmp):
     return f
 
 
+def warning_case():
+    """The rule for `carry`: a round whose median correction is past twice
+    max_shift did not move scan by scan, the carry accumulated it; with carry
+    off, a large share keeping GLIM's pose says the gates or the map are the
+    problem instead. Both are the first round's call; later rounds are seeded
+    by the previous one and say nothing about it."""
+    sys.path.insert(0, STAGES)
+    import importlib
+    M = importlib.import_module("04_reference_traj")
+    f = []
+    slide = M.carry_warning(1, True, 9.67, {"seed_kept_far": 1094}, 2790, 0.5)
+    if not slide or "carry" not in slide[0] or "2 x max_shift" not in slide[0]:
+        f.append("a 9.67 m median with carry on must warn: %r" % slide)
+    if M.carry_warning(1, True, 0.11, {"seed_kept_far": 3}, 2790, 0.5):
+        f.append("centimetres of correction must not warn")
+    if M.carry_warning(2, True, 9.67, {"seed_kept_far": 10}, 2790, 0.5):
+        f.append("only the first round judges the carry")
+    stuck = M.carry_warning(1, False, 0.05, {"seed_kept_far": 900}, 2790, 0.3)
+    if not stuck or "kept GLIM's pose" not in stuck[0]:
+        f.append("a third of the scans stuck with carry off must warn: %r" % stuck)
+    if M.carry_warning(1, False, 0.05, {"seed_kept_far": 20}, 2790, 0.3):
+        f.append("a few stuck scans must not warn")
+    print("carry warning ok" if not f else "\n".join(f))
+    return f
+
+
 def main():
     tmp = tempfile.mkdtemp()
     failed = []
     try:
+        failed += warning_case()
         failed += lidar_track_case(tmp)
         failed += corridor_case(tmp)
         # GLIM with drift: the run's own odometry is close, not exact
