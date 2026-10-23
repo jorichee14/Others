@@ -55,6 +55,10 @@ def main():
     stages = os.path.join(tmp, "stages")
     os.makedirs(stages)
     shutil.copy(os.path.join(STAGES, "pipeline_config.json"), stages)
+    # the base config names a pass of the day too (as map_stages/pipeline_config.json does): not a second map
+    base = json.load(open(os.path.join(stages, "pipeline_config.json")))
+    base.setdefault("dataset", {})["bag"] = "~/data/work/20261101/mapping/x_merged"
+    json.dump(base, open(os.path.join(stages, "pipeline_config.json"), "w"), indent=1)
     fails = []
 
     def eq(got, want, what):

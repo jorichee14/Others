@@ -263,10 +263,12 @@ def new_config(raw, robot=None, reference=None, log=print, stages=STAGES):
             d = pc.load_config(c).get("dataset") or {}
             rp = layout.pass_parts(d.get("bag") or "", below=1)
             if rp and rp[1] == date:
+                name_ = "/".join(rp[2])
                 if not d.get("reference_pass"):
-                    maps.append("/".join(rp[2]))
-                elif plan.mode_of(*rp[2]) == "survey":   # a survey's 05 measured the boards
-                    surveys.append("/".join(rp[2]))
+                    if name_ not in maps:                 # the base config names the same pass
+                        maps.append(name_)
+                elif plan.mode_of(*rp[2]) == "survey" and name_ not in surveys:
+                    surveys.append(name_)                 # a survey's 05 measured the boards
         if reference is None:
             if len(maps) != 1:
                 raise SystemExit("the map to localize in: %s mapping passes on %s in map_stages/ "
