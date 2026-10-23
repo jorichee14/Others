@@ -136,7 +136,7 @@ def camera_from_yaml(cam, ctx):
 
 def camera_from_board(cam, ctx):
     name = cam["name"]; child = cam["child_frame"]
-    bname = cam["board"]
+    bname = ctx["board_name"](cam["board"])
     if bname not in ctx["boards"]:
         print("  ! board '%s' has no pose in map (stage 05 did not export it) "
               "-> skipped" % bname)
@@ -317,7 +317,8 @@ def main():
     ctx = {"map_frame": map_frame,
            "T_N_world": T_N_world,
            "tol": float(s.get("time_tol", 0.10)),
-           "boards": boards_in_map(af, P.cfg),
+           "boards": boards_in_map(dict(af, boards=P.renamed(af.get("boards"))), P.cfg),
+           "board_name": P.board_name,
            # 05's board frame convention: a detection is converted to it before
            # it meets a board pose from 05, as 05 and 03 do
            "board_axes": af.get("board_axes", "opencv"),

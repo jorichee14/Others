@@ -98,6 +98,9 @@ class Board(object):
         self.cfg = dict(cfg)
         self.sx = int(cfg["squares_x"])
         self.sy = int(cfg["squares_y"])
+        if cfg.get("square_len") is None or cfg.get("marker_len") is None:
+            raise SystemExit("board '%s': square_len / marker_len not set in the config's "
+                             "\"boards\" block (measure them: m)" % name)
         self.square_len = float(cfg["square_len"])
         self.marker_len = float(cfg["marker_len"])
         self.dict_name = cfg.get("dictionary", "DICT_4X4_50")

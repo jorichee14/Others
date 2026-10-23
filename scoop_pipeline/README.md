@@ -414,7 +414,15 @@ radars; `mobile_2_base_link` over `camera_link` and `os_sensor_mobile2`),
 which the trajectory moves, and `local_pose`'s frame. 10 gives it to every
 robot it publishes (a sensor a pass did not record is left out); the base sits
 on the camera body until it is measured, then its pose in `measured_in` goes
-there, for every pass at once. A pass mapped by another robot copies this block with its values:
+there, for every pass at once. The ChArUco boards are the base config's `"boards"`: `board_1`..`board_4` by
+dictionary (4x4, 5x5, 6x6, 7x7), 9 x 7 squares. A board's `"was"` lists the
+names passes before 20261015 measured it under (`anchor`, `anchor_b`,
+`rs_anchor`), so their stored poses, and a config that still says `anchor`, are
+read under the new names; a board stays on its own TF frame (`board`,
+`board_rs`, `board_3`, `board_4`). A pass uses the ones in `05_anchor.boards_used`;
+one whose `square_len` / `marker_len` is not set stops 05 with its name.
+
+A pass mapped by another robot copies this block with its values:
 `pipeline_config_mapping_20261015.json` (mobile_2) and
 `pipeline_config_mapping_20260924.json` (mobile_1). Once the merged
 bag exists, processing is not redone, so the decoded/retimed/ZED bags may be

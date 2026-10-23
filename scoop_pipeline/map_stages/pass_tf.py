@@ -175,6 +175,7 @@ def plan(P, edges, bags, log=print):
 
     def under_board(name, child, T_map_child, why):
         """child fixed in map, below board `name` when it is placed."""
+        name = P.board_name(name)
         if name in T_board:
             add_static(bframe[name], child, np.linalg.inv(T_board[name]) @ T_map_child,
                        why + "; below board '%s'" % name)

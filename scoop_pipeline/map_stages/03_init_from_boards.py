@@ -445,7 +445,7 @@ def main():
     lines = []
     for sensor in sensors:
         name = sensor["name"]
-        bname = sensor["board"]
+        bname = P.board_name(sensor["board"])
         if not sensor.get("cam_frame"):
             print("\n== %s ==  ! no cam_frame set -> skipped" % name)
             continue

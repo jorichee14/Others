@@ -11,26 +11,39 @@
     "camera_map_frame": "map_zed",
     "rectified": true
   },
+   "_boards": "the ChArUco boards, board_1..board_4 by dictionary (4x4, 5x5, 6x6, 7x7), 9 x 7 squares each. \"was\": the names passes before 20261015 measured them under (anchor, rs_anchor); a stored pose or a config with the old name is read as the new one. \"frame\": the board's TF frame (board_1 and board_2 keep theirs). board_3 and board_4: since 20261015; square_len / marker_len to be measured (a pass using them stops until they are set)",
    "boards": {
-    "anchor": {
+    "board_1": {
       "frame": "board",
       "squares_x": 9, "squares_y": 7,
       "square_len": 0.02, "marker_len": 0.015,
       "dictionary": "DICT_4X4_50",
       "instances": 2,
-      "instance_names": ["anchor", "anchor_b"],
+      "instance_names": ["board_1", "board_1b"],
+      "was": ["anchor", "anchor_b"],
       "min_corners": 8, "max_reproj": 1.5, "min_ambiguity_ratio": 1.5
     },
-    "rs_anchor": {
+    "board_2": {
       "frame": "board_rs",
-      "squares_x": 9,
-      "squares_y": 7,
-      "square_len": 0.025,
-      "marker_len": 0.018,
+      "squares_x": 9, "squares_y": 7,
+      "square_len": 0.025, "marker_len": 0.018,
       "dictionary": "DICT_5X5_50",
-      "min_corners": 8,
-      "max_reproj": 1.5,
-      "min_ambiguity_ratio": 3.0
+      "was": ["rs_anchor"],
+      "min_corners": 8, "max_reproj": 1.5, "min_ambiguity_ratio": 3.0
+    },
+    "board_3": {
+      "frame": "board_3",
+      "squares_x": 9, "squares_y": 7,
+      "square_len": null, "marker_len": null,
+      "dictionary": "DICT_6X6_50",
+      "min_corners": 8, "max_reproj": 1.5, "min_ambiguity_ratio": 3.0
+    },
+    "board_4": {
+      "frame": "board_4",
+      "squares_x": 9, "squares_y": 7,
+      "square_len": null, "marker_len": null,
+      "dictionary": "DICT_7X7_50",
+      "min_corners": 8, "max_reproj": 1.5, "min_ambiguity_ratio": 3.0
     }
   },
   "01_build_map": {
@@ -99,7 +112,7 @@
     "frame_out": "anchor_frame.json",
     "skip_cloud": false,
 
-    "boards_used": ["anchor", "rs_anchor"],
+    "boards_used": ["board_1", "board_2"],
     "anchor_board": null,
     "board_axes": "ros",
     "board_origin": "center",
@@ -132,7 +145,7 @@
         "source": "board",
         "child_frame": "camera_color_optical_frame",
         "origin_frame": "map_realsense",
-        "board": "rs_anchor",
+        "board": "board_2",
         "bag": "/home/wicoms-robot/workspaces/isaac_ros-dev/20260828/mirc_dataset_mapping2_20260828_merged",
         "image_topic": "/camera/color/image_raw",
         "camera_info_topic": "/camera/color/camera_info",
@@ -169,7 +182,7 @@
 
     {
   "name": "zed",
-  "board": "anchor",
+  "board": "board_1",
   "source": "camera",
   "cam_frame": "zed_left_camera_optical_frame",
   "tf_child_frame": "zed_pose",
@@ -179,7 +192,7 @@
   },
    {
    "name": "realsense",
-   "board": "rs_anchor",
+   "board": "board_2",
    "source": "camera",
    "cam_frame": "camera_color_optical_frame",
    "tf_child_frame": "rs_pose",

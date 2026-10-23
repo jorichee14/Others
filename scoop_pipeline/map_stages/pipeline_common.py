@@ -831,13 +831,13 @@ class Pipeline:
         since replace the reference's -- this run's own first, then
         boards_from's -- and the reference's stands only for a board nobody
         measured since."""
-        out = {n: dict(rec, source="reference") for n, rec in (base or {}).items()}
+        out = {n: dict(rec, source="reference") for n, rec in self.renamed(base).items()}
         since = {}
-        for n, rec in (self.run_boards() if run is None else
-                       {n: dict(r, source=self.outp("boards_{tag}.json"))
-                        for n, r in run.items()}).items():
+        for n, rec in self.renamed(self.run_boards() if run is None else
+                                   {n: dict(r, source=self.outp("boards_{tag}.json"))
+                                    for n, r in run.items()}).items():
             since.setdefault(n, rec)
-        for n, rec in self.extra_boards().items():
+        for n, rec in self.renamed(self.extra_boards()).items():
             since.setdefault(n, rec)
         for n, rec in since.items():
             if n not in out:
@@ -848,6 +848,29 @@ class Pipeline:
                 log("board '%s' from %s (replaces the reference's: dataset.boards_moved)"
                     % (n, rec["source"]))
         return out
+
+    def board_alias(self):
+        """A board's older name -> its name now, from the "boards" block's
+        "was" (one per instance, in instance_names' order): a pass measured
+        under the old names (anchor, rs_anchor) is read under the new ones."""
+        out = {}
+        for name, spec in (self.cfg.get("boards") or {}).items():
+            was = spec.get("was") or []
+            for new, old in zip(spec.get("instance_names") or [name], was):
+                out[old] = new
+            if was:
+                out.setdefault(was[0], name)                # the design's own name
+        return out
+
+    def board_name(self, name):
+        """A board name as a config or a stored pose has it -> its name now."""
+        return self.board_alias().get(name, name) if name else name
+
+    def renamed(self, recs):
+        """{name: board record} under the boards' names now (and their designs)."""
+        a = self.board_alias()
+        return {a.get(n, n): (dict(r, design=a.get(r["design"], r["design"])) if "design" in r
+                              else dict(r)) for n, r in (recs or {}).items()}
 
     def cameras_from(self):
         """Other passes' 07 outputs (frames/cameras_in_map.yaml) for a pass that
@@ -909,7 +932,8 @@ class Pipeline:
         """An infra camera's extrinsic yaml from the mapping session: a bare
         name is looked up in data/raw/<date>/<pass>/infra_cameras/<camera>/
         (the camera's own folder, with its recordings), then infra_cameras/,
-        then frames/ (where older runs kept it); a path is used as given. When
+        then the infra node's folder (infra_1/), then frames/ (where older
+        runs kept it); a path is used as given. When
         it is in none, the infra_cameras/<camera>/ path is returned, so the
         message says where to put it."""
         if os.path.isabs(name) or os.path.dirname(name):
@@ -918,6 +942,9 @@ class Pipeline:
         if self.raw_dir:
             ic = os.path.join(self.raw_dir, "infra_cameras")
             cands += ([os.path.join(ic, camera, name)] if camera else []) + [os.path.join(ic, name)]
+            # or in the infra node's own folder (raw/<date>/<pass>/infra_1/)
+            import glob
+            cands += sorted(glob.glob(os.path.join(self.raw_dir, "infra_*", name)))
         cands.append(os.path.join(self.folder_for(name), name))
         return next((c for c in cands if os.path.exists(c)), cands[0])
 
