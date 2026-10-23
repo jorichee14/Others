@@ -984,6 +984,47 @@ def main():
         for k in range(len(lv) - 1):
             assert cKDTree(lv[k + 1]).query(lv[k])[0].max() < 1e-6       # nested
             assert 1.5 < sp[k] / sp[k + 1] < 2.6, sp
+        # align: the room's map moved (yaw 25 deg, 3 m, -2 m, 0.1 m up) registered back
+        Tt = np.eye(4)
+        Tt[:3, :3] = Rotation.from_euler("z", 25, degrees=True).as_matrix()
+        Tt[:3, 3] = [3.0, -2.0, 0.1]
+        Mm = M @ Tt[:3, :3].T + Tt[:3, 3]
+        write_pcd(os.path.join(tmp, "map_moved.pcd"), Mm)
+        Ta, fit, rmse = L.align_maps(os.path.join(tmp, "map_moved.pcd"), os.path.join(tmp, "map.pcd"),
+                                     os.path.join(tmp, "align.json"))
+        back = Ta @ Tt
+        assert np.abs(back[:3, 3]).max() < 0.03 and np.abs(back[:3, :3] - np.eye(3)).max() < 0.01 and fit > 0.8, \
+            ("align", back, fit, rmse)
+        # a second export (another camera, its poses in the moved frame): one scene, two cameras,
+        # the second's poses moved back with the align's json
+        rep2 = os.path.join(tmp, "replica_map_mapping_B_20260101")
+        os.makedirs(os.path.join(rep2, "results"))
+        W2, H2, F2, CX2, CY2 = 120, 90, 80.0, 61.0, 44.0
+        Ti = np.linalg.inv(Tt)
+        poses2 = [camera(x, y, yaw, 0.0) for (x, y) in ((3.0, 2.0),) for yaw in np.linspace(0, 2 * np.pi, 4, endpoint=False)]
+        for i, T in enumerate(poses2):
+            img, D = render(T, W2, H2, F2, F2, CX2, CY2)
+            cv2.imwrite(os.path.join(rep2, "results", f"frame{i:06d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 100])
+            cv2.imwrite(os.path.join(rep2, "results", f"depth{i:06d}.png"), np.rint(D * SCALE).astype(np.uint16))
+        np.savetxt(os.path.join(rep2, "traj.txt"), np.array([(Ti @ T).reshape(-1) for T in poses2]))
+        open(os.path.join(rep2, "splatam_data_config.yaml"), "w").write(
+            f"dataset_name: \"replica\"\ncamera_params:\n  image_height: {H2}\n  image_width: {W2}\n"
+            f"  fx: {F2}\n  fy: {F2}\n  cx: {CX2}\n  cy: {CY2}\n  png_depth_scale: {SCALE}\n  crop_edge: 0\n")
+        r2 = L.convert([rep, rep2], os.path.join(tmp, "map.pcd"), os.path.join(tmp, "scene_two"),
+                       transform=["-", os.path.join(tmp, "align.json")])
+        cams2 = [l.split() for l in open(os.path.join(tmp, "scene_two", "sparse/0/cameras.txt")) if l[0].isdigit()]
+        assert [c[0] for c in cams2] == ["1", "2"] and (int(cams2[1][2]), int(cams2[1][3])) == (121, 89), cams2
+        rows2 = [l.split() for l in open(os.path.join(tmp, "scene_two", "sparse/0/images.txt"))
+                 if l.strip() and not l.startswith("#")]
+        assert len(rows2) == len(poses) + len(poses2) and rows2[-1][8] == "2" and rows2[-1][9].startswith("c2_frame")
+        for row, T in zip(rows2[len(poses):], poses2):                  # moved back into the room's frame
+            qw, qx, qy, qz, tx, ty, tz = map(float, row[1:8])
+            T_cw = np.eye(4)
+            T_cw[:3, :3] = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
+            T_cw[:3, 3] = [tx, ty, tz]
+            assert np.abs(np.linalg.inv(T_cw) - T).max() < 0.03, (row[9], np.linalg.inv(T_cw) - T)
+        assert os.path.exists(os.path.join(tmp, "scene_two", "images", "c2_frame000000.jpg"))
+        assert r2["coloured"] > 0.6, r2["coloured"]
         rv, th = check_view(tmp)
         print(f"ok view: sensor {rv['sensor_height']:.2f} m up, {rv['holes']} hole filled "
               f"({rv['filled_m2']:.1f} m2), {rv['skipped']} left, wall {th * 100:.1f} cm thick")

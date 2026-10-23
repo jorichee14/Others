@@ -1140,6 +1140,64 @@ def recolour_from_renders(mesh_path, renders, out=None, tol=0.05, rel=0.02):
     return int(seen.sum()), len(V)
 
 
+def align_maps(src, dst, out=None, voxel=0.05, init=None, coarse=0.25):
+    """The transform that moves map (or mesh) `src` onto map `dst` (another
+    session's of the same place, its own frame): both thinned to `voxel`
+    m; first a global registration on FPFH features at `coarse` m (RANSAC;
+    or init (x, y, yaw deg) given, a guess by hand), then ICP point to
+    plane at 4 voxel, 2 and 1. Written to out (default <src>_to_<dst>.json:
+    T, fitness, rmse), with <src>_aligned.ply (the thinned source moved) to
+    look at over dst. Returns (T 4 x 4, fitness, inlier rmse m)."""
+    import json
+    o3d = _o3d()
+    reg = o3d.pipelines.registration
+    src, dst = os.path.expanduser(src), os.path.expanduser(dst)
+
+    def cloud(path):
+        m = o3d.io.read_triangle_mesh(path)
+        pc = o3d.geometry.PointCloud(m.vertices) if len(m.triangles) else o3d.io.read_point_cloud(path)
+        if not len(pc.points):
+            raise ConvertError(f"{path}: no points")
+        pc = pc.voxel_down_sample(voxel)
+        pc.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=3 * voxel, max_nn=30))
+        return pc
+    a, b = cloud(src), cloud(dst)
+    log.info(f"align {src} ({len(a.points)} points at {voxel} m) onto {dst} ({len(b.points)})")
+    if init is not None:
+        x, y, yaw = init
+        T0 = np.eye(4)
+        T0[:2, :2] = [[np.cos(np.radians(yaw)), -np.sin(np.radians(yaw))], [np.sin(np.radians(yaw)), np.cos(np.radians(yaw))]]
+        T0[:2, 3] = [x, y]
+    else:
+        ac, bc = a.voxel_down_sample(coarse), b.voxel_down_sample(coarse)
+        for q in (ac, bc):
+            q.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=2 * coarse, max_nn=30))
+        fa = reg.compute_fpfh_feature(ac, o3d.geometry.KDTreeSearchParamHybrid(radius=5 * coarse, max_nn=100))
+        fb = reg.compute_fpfh_feature(bc, o3d.geometry.KDTreeSearchParamHybrid(radius=5 * coarse, max_nn=100))
+        r0 = reg.registration_ransac_based_on_feature_matching(
+            ac, bc, fa, fb, True, 1.5 * coarse, reg.TransformationEstimationPointToPoint(False), 3,
+            [reg.CorrespondenceCheckerBasedOnEdgeLength(0.9), reg.CorrespondenceCheckerBasedOnDistance(1.5 * coarse)],
+            reg.RANSACConvergenceCriteria(2000000, 0.999))
+        T0 = r0.transformation
+        log.info(f"  global registration at {coarse} m: fitness {r0.fitness:.3f}, rmse {r0.inlier_rmse:.3f} m")
+    T = T0
+    for th in (4 * voxel, 2 * voxel, voxel):
+        r = reg.registration_icp(a, b, th, T, reg.TransformationEstimationPointToPlane(),
+                                 reg.ICPConvergenceCriteria(max_iteration=60))
+        T = r.transformation
+        log.info(f"  icp within {th:.2f} m: fitness {r.fitness:.3f}, rmse {r.inlier_rmse:.4f} m")
+    yaw = np.degrees(np.arctan2(T[1, 0], T[0, 0]))
+    log.info(f"  T: move ({T[0, 3]:.3f}, {T[1, 3]:.3f}, {T[2, 3]:.3f}) m, yaw {yaw:.2f} deg")
+    stem = os.path.splitext(src)[0]
+    out = os.path.expanduser(out) if out else f"{stem}_to_{os.path.splitext(os.path.basename(dst))[0]}.json"
+    json.dump({"T": np.asarray(T).tolist(), "src": src, "dst": dst, "fitness": float(r.fitness),
+               "rmse": float(r.inlier_rmse), "voxel": voxel}, open(out, "w"), indent=1)
+    o3d.io.write_point_cloud(stem + "_aligned.ply", a.transform(np.asarray(T).copy()))
+    log.info(f"  -> {out}; {stem}_aligned.ply to look at over {dst} (fitness {r.fitness:.3f}: the share of the "
+             f"source within {voxel} m of the target; under 0.5, check it)")
+    return np.asarray(T), float(r.fitness), float(r.inlier_rmse)
+
+
 def anchor_file(path, frame, out=None):
     """A cloud or mesh made in GLIM's world moved into the anchored map frame
     with 05's T_N_world (frames/anchor_frame.json), as the anchored map and
@@ -2896,18 +2954,20 @@ def sample_mesh(mesh, spacing=0.04):
 
 def colour_points(P, frames, Kc, Wc, Hc, tol=0.05, rel=0.02):
     """Mean colour of each point over the frames that see it: (rgb uint8, seen).
-    frames: (camera-to-world, BGR image, depth metres), all in the centred camera."""
-    fx, fy, cx, cy = Kc
+    frames: (camera-to-world, BGR image, depth metres[, (fx fy cx cy W H), the
+    frame's own camera]), else all in the centred camera Kc, Wc x Hc."""
     acc = np.zeros((len(P), 3))
     cnt = np.zeros(len(P))
-    for T, bgr, D in frames:
+    for fr in frames:
+        T, bgr, D = fr[:3]
+        fx, fy, cx, cy, Wc_, Hc_ = fr[3] if len(fr) > 3 else (*Kc, Wc, Hc)     # a frame's own camera
         R, t = T[:3, :3], T[:3, 3]
         Pc = (P - t) @ R
         z = Pc[:, 2]
         i = np.flatnonzero(z > 0.05)
         u = np.rint(fx * Pc[i, 0] / z[i] + cx).astype(np.int64)
         v = np.rint(fy * Pc[i, 1] / z[i] + cy).astype(np.int64)
-        m = (u >= 0) & (u < Wc) & (v >= 0) & (v < Hc)
+        m = (u >= 0) & (u < Wc_) & (v >= 0) & (v < Hc_)
         i, u, v = i[m], u[m], v[m]
         d = D[v, u]
         m = (d > 0) & (np.abs(z[i] - d) < np.maximum(tol, rel * d))
@@ -2970,65 +3030,94 @@ def default_out(dataset):
 
 def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0,
             trim=0.10, spacing=0.04, color_views=300, jpeg_quality=95, mesh_path=None,
-            lod_min=10000, dist=None, dist_model=None, bag=None, info=None):
-    out = out or default_out(dataset)
-    cam, T_all, rgb_all, dep_all = read_replica(dataset)
-    if bag:                                      # the lens's distortion from the bag's camera_info
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        import mcap_convert as mc
-        ci = mc.first_msg(mc._paths(os.path.expanduser(bag)), info or "/mobile_2/color/camera_info")
-        if ci is None:
-            raise ConvertError(f"{bag}: no messages on {info}")
-        dist, dist_model = [float(v) for v in ci.d], ci.distortion_model or "plumb_bob"
-    maps = undistort_maps(cam, dist, dist_model)
-    if maps is not None:
-        log.info(f"  the colour images undistorted ({dist_model or cam.get('distortion_model')} "
-                 f"[{', '.join(f'{v:.4g}' for v in (dist if dist is not None else cam['dist']))}]): pinhole, "
-                 "as the depth is and LOD-3DGS assumes")
-    keep = np.arange(0, len(T_all), max(1, int(every)))
-    Wc, Hc, ox, oy = centred_camera(cam)
-    fx, fy = cam["fx"], cam["fy"]
-    Kc = (fx, fy, (Wc - 1) / 2.0, (Hc - 1) / 2.0)
-    scale = cam["png_depth_scale"]
-    log.info(f"{dataset}: {len(T_all)} frames, {len(keep)} kept (every {every}); "
-             f"{int(cam['image_width'])}x{int(cam['image_height'])} -> {Wc}x{Hc} centred "
-             f"on ({cam['cx']:.2f}, {cam['cy']:.2f})")
+            lod_min=10000, dist=None, dist_model=None, bag=None, info=None, transform=None):
+    """The scene LOD-3DGS trains from, of one replica export, or of several
+    (a list: each robot's or session's), each with its own camera
+    (cameras.txt), its frames named c<k>_frame... from the second on; bag
+    and info likewise one per export (None or "-" for none), and
+    `transform` (one per export: an align's json, or "-") moves an export's
+    poses into the first's frame (another session's map, aligned with
+    `align`; its depth is its own map's, consistent with its poses)."""
+    import json
+    datasets = [dataset] if isinstance(dataset, str) else list(dataset)
+    bags = bag if isinstance(bag, (list, tuple)) else [bag] * len(datasets)
+    infos = info if isinstance(info, (list, tuple)) else [info] * len(datasets)
+    trs = transform if isinstance(transform, (list, tuple)) else [transform] * len(datasets)
+    out = out or (default_out(datasets[0]) + ("" if len(datasets) == 1 else f"_plus{len(datasets) - 1}"))
     for sub in ("images", "depths", "sparse/0"):
         os.makedirs(os.path.join(out, sub), exist_ok=True)
-
-    cview = set(keep[np.unique(np.linspace(0, len(keep) - 1,
-                                           min(len(keep), max(1, color_views))).astype(int))])
     q = [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)]
-    lines, cframes, valid = [], [], []
-    for n, i in enumerate(keep):
-        name = f"frame{n:06d}"
-        bgr = cv2.imread(rgb_all[i], cv2.IMREAD_COLOR)
-        d16 = cv2.imread(dep_all[i], cv2.IMREAD_UNCHANGED)
-        if bgr is None or d16 is None:
-            raise ConvertError(f"cannot read {rgb_all[i]} / {dep_all[i]}")
-        if d16.shape[:2] != bgr.shape[:2]:
-            d16 = cv2.resize(d16, (bgr.shape[1], bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+    cam_lines, lines, cframes, valid, per = [], [], [], [], []
+    n_img, T_keep = 0, []
+    for k, ds in enumerate(datasets):
+        cam, T_all, rgb_all, dep_all = read_replica(ds)
+        tr_ = trs[k] if k < len(trs) else None
+        if tr_ and tr_ != "-":
+            Tm = np.array(json.load(open(os.path.expanduser(tr_)))["T"], float)
+            T_all = Tm[None] @ T_all                   # into the first export's frame
+            log.info(f"  {ds}: poses moved with {tr_}")
+        bg_, in_ = bags[k] if k < len(bags) else None, infos[k] if k < len(infos) else None
+        d_, dm_ = dist, dist_model
+        if bg_ and bg_ != "-":                        # the lens's distortion from the bag's camera_info
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import mcap_convert as mc
+            ci = mc.first_msg(mc._paths(os.path.expanduser(bg_)), in_ or "/mobile_2/color/camera_info")
+            if ci is None:
+                raise ConvertError(f"{bg_}: no messages on {in_}")
+            d_, dm_ = [float(v) for v in ci.d], ci.distortion_model or "plumb_bob"
+        maps = undistort_maps(cam, d_, dm_)
         if maps is not None:
-            bgr = cv2.remap(bgr, maps[0], maps[1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-        bgr = recentre(bgr, Wc, Hc, ox, oy, cv2.INTER_LINEAR)
-        D = recentre(d16, Wc, Hc, ox, oy, cv2.INTER_NEAREST).astype(np.float32) / scale
-        cv2.imwrite(os.path.join(out, "images", name + ".jpg"), bgr, q)
-        cv2.imwrite(os.path.join(out, "depths", name + ".png"), depth_la(D))
-        valid.append(float((D > 0).mean()))
-        T_cw = np.linalg.inv(T_all[i])
-        qx, qy, qz, qw = Rotation.from_matrix(T_cw[:3, :3]).as_quat()
-        tx, ty, tz = T_cw[:3, 3]
-        lines.append(f"{n + 1} {qw:.12f} {qx:.12f} {qy:.12f} {qz:.12f} "
-                     f"{tx:.9f} {ty:.9f} {tz:.9f} 1 {name}.jpg\n\n")
-        if i in cview:
-            cframes.append((T_all[i], bgr, D))
-        if (n + 1) % 500 == 0:
-            log.info(f"  {n + 1} frames")
-
+            log.info(f"  the colour images undistorted ({dm_ or cam.get('distortion_model')} "
+                     f"[{', '.join(f'{v:.4g}' for v in (d_ if d_ is not None else cam['dist']))}]): pinhole, "
+                     "as the depth is and LOD-3DGS assumes")
+        keep = np.arange(0, len(T_all), max(1, int(every)))
+        Wc, Hc, ox, oy = centred_camera(cam)
+        fx, fy = cam["fx"], cam["fy"]
+        Kc = (fx, fy, (Wc - 1) / 2.0, (Hc - 1) / 2.0)
+        scale = cam["png_depth_scale"]
+        log.info(f"{ds}: {len(T_all)} frames, {len(keep)} kept (every {every}); "
+                 f"{int(cam['image_width'])}x{int(cam['image_height'])} -> {Wc}x{Hc} centred "
+                 f"on ({cam['cx']:.2f}, {cam['cy']:.2f})" + (f"; camera {k + 1}" if len(datasets) > 1 else ""))
+        cam_lines.append(f"{k + 1} PINHOLE {Wc} {Hc} {fx:.6f} {fy:.6f} {Kc[2]:.6f} {Kc[3]:.6f}\n")
+        cview = set(keep[np.unique(np.linspace(0, len(keep) - 1,
+                                               min(len(keep), max(1, color_views))).astype(int))])
+        prefix = "" if k == 0 else f"c{k + 1}_"
+        for n, i in enumerate(keep):
+            name = f"{prefix}frame{n:06d}"
+            bgr = cv2.imread(rgb_all[i], cv2.IMREAD_COLOR)
+            d16 = cv2.imread(dep_all[i], cv2.IMREAD_UNCHANGED)
+            if bgr is None or d16 is None:
+                raise ConvertError(f"cannot read {rgb_all[i]} / {dep_all[i]}")
+            if d16.shape[:2] != bgr.shape[:2]:
+                d16 = cv2.resize(d16, (bgr.shape[1], bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+            if maps is not None:
+                bgr = cv2.remap(bgr, maps[0], maps[1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+            bgr = recentre(bgr, Wc, Hc, ox, oy, cv2.INTER_LINEAR)
+            D = recentre(d16, Wc, Hc, ox, oy, cv2.INTER_NEAREST).astype(np.float32) / scale
+            cv2.imwrite(os.path.join(out, "images", name + ".jpg"), bgr, q)
+            cv2.imwrite(os.path.join(out, "depths", name + ".png"), depth_la(D))
+            valid.append(float((D > 0).mean()))
+            T_cw = np.linalg.inv(T_all[i])
+            qx, qy, qz, qw = Rotation.from_matrix(T_cw[:3, :3]).as_quat()
+            tx, ty, tz = T_cw[:3, 3]
+            n_img += 1
+            lines.append(f"{n_img} {qw:.12f} {qx:.12f} {qy:.12f} {qz:.12f} "
+                         f"{tx:.9f} {ty:.9f} {tz:.9f} {k + 1} {name}.jpg\n\n")
+            if i in cview:
+                cframes.append((T_all[i], bgr, D, (*Kc, Wc, Hc)))
+            if (n + 1) % 500 == 0:
+                log.info(f"  {n + 1} frames")
+        T_keep.append(T_all[keep])
+        per.append({"dataset": ds, "frames": len(keep), "of": len(T_all), "W": Wc, "H": Hc, "fx": fx, "fy": fy,
+                    "cam": cam})
+    T_all = np.concatenate(T_keep)
+    keep = np.arange(len(T_all))
+    dataset, cam = datasets[0], per[0]["cam"]
+    Wc, Hc, fx, fy = per[0]["W"], per[0]["H"], per[0]["fx"], per[0]["fy"]
+    Kc = (fx, fy, (Wc - 1) / 2.0, (Hc - 1) / 2.0)
     with open(os.path.join(out, "sparse/0/cameras.txt"), "w") as f:
         f.write("# CAMERA_ID MODEL WIDTH HEIGHT fx fy cx cy (LOD-3DGS takes cx, cy as "
-                "the image centre)\n"
-                f"1 PINHOLE {Wc} {Hc} {fx:.6f} {fy:.6f} {Kc[2]:.6f} {Kc[3]:.6f}\n")
+                "the image centre)\n" + "".join(cam_lines))
     with open(os.path.join(out, "sparse/0/images.txt"), "w") as f:
         f.write("# IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME (world to camera), "
                 "then an empty line\n" + "".join(lines))
@@ -3041,7 +3130,7 @@ def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0
         mstat = {"faces": len(mesh.triangles), "faces_kept": len(mesh.triangles)}
     else:
         log.info("mesh")
-        centres = T_all[keep, :3, 3]
+        centres = T_all[:, :3, 3]
         mesh, mstat = build_mesh(map_path, centres, voxel, poisson_depth, trim)
         _o3d().io.write_triangle_mesh(os.path.join(out, "mesh.ply"), mesh)
     P, area = sample_mesh(mesh, spacing)
@@ -3059,12 +3148,13 @@ def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0
     log.info(f"  {len(levels)} LOD levels, coarsest first: {sizes}")
 
     report = (
-        f"dataset             : {os.path.abspath(dataset)}\n"
-        f"map                 : {os.path.abspath(map_path)}\n"
-        f"frames              : {len(keep)} of {len(T_all)} (every {every})\n"
-        f"camera              : PINHOLE {Wc}x{Hc} fx={fx:.3f} fy={fy:.3f}, centred "
-        f"(input {int(cam['image_width'])}x{int(cam['image_height'])}, "
-        f"cx={cam['cx']:.3f} cy={cam['cy']:.3f})\n"
+        "".join(f"dataset             : {os.path.abspath(p_['dataset'])}\n"
+                f"frames              : {p_['frames']} of {p_['of']} (every {every})\n"
+                f"camera              : PINHOLE {p_['W']}x{p_['H']} fx={p_['fx']:.3f} fy={p_['fy']:.3f}, centred "
+                f"(input {int(p_['cam']['image_width'])}x{int(p_['cam']['image_height'])}, "
+                f"cx={p_['cam']['cx']:.3f} cy={p_['cam']['cy']:.3f})"
+                + (f"  [camera {k_ + 1}]\n" if len(per) > 1 else "\n") for k_, p_ in enumerate(per))
+        + f"map                 : {os.path.abspath(map_path)}\n"
         f"depth valid px      : mean {100 * np.mean(valid):.1f}%, "
         f"min {100 * np.min(valid):.1f}%\n"
         + (f"mesh                : {os.path.abspath(mesh_path)}, {mstat['faces']} faces\n"
@@ -3101,7 +3191,8 @@ def main():
                        help="remove mesh faces farther than this from a map point (m)")
 
     sc = sub.add_parser("scene", help="a replica export + the map -> a LOD-3DGS scene")
-    sc.add_argument("dataset", help="a replica export (mcap_convert.py --format replica)")
+    sc.add_argument("dataset", nargs="+", help="a replica export (mcap_convert.py --format replica); several: "
+                    "each with its own camera, the first's frame (--transform for the others)")
     sc.add_argument("out", nargs="?", default=None, help="scene folder (default: next to it)")
     sc.add_argument("--map", required=True, help="the map the export's depth came from")
     sc.add_argument("--every", type=int, default=1, help="keep every Nth frame")
@@ -3118,8 +3209,21 @@ def main():
                     help="undistort the colour images with these coefficients (default: the export's, if "
                          "it has them; the depth is pinhole already)")
     sc.add_argument("--dist-model", default=None, help="plumb_bob (default), rational_polynomial, equidistant")
-    sc.add_argument("--bag", default=None, help="read the distortion from this bag's camera_info instead")
-    sc.add_argument("--info", default="/mobile_2/color/camera_info", help="its camera_info topic")
+    sc.add_argument("--bag", action="append", default=None,
+                    help="read the distortion from this bag's camera_info instead (one per export, in order; "
+                         "'-' for none)")
+    sc.add_argument("--info", action="append", default=None,
+                    help="its camera_info topic (one per export; default /mobile_2/color/camera_info)")
+    sc.add_argument("--transform", action="append", default=None,
+                    help="an align's json moving this export's poses into the first's frame (one per export, "
+                         "in order; '-' for none)")
+    al = sub.add_parser("align", help="the transform that moves one session's map onto another's")
+    al.add_argument("src", help="the map or mesh to move (another session's)")
+    al.add_argument("dst", help="the map or mesh to move it onto (the scene's frame)")
+    al.add_argument("out", nargs="?", default=None, help="json (default <src>_to_<dst>.json)")
+    al.add_argument("--voxel", type=float, default=0.05)
+    al.add_argument("--init", default=None, metavar="X,Y,YAW", help="a guess by hand (m, m, deg) instead of the "
+                    "global registration")
 
     me = sub.add_parser("mesh", help="the mesh of a map alone, to look at")
     me.add_argument("map", help="the map (.pcd/.ply), e.g. mapping/map_final_<tag>.pcd")
@@ -3338,7 +3442,10 @@ def main():
                     poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
                     color_views=a.color_views, jpeg_quality=a.jpeg_quality,
                     mesh_path=a.mesh, lod_min=a.lod_min, bag=a.bag, info=a.info, dist_model=a.dist_model,
-                    dist=[float(v) for v in a.dist.split(",")] if a.dist else None)
+                    dist=[float(v) for v in a.dist.split(",")] if a.dist else None, transform=a.transform)
+        elif a.cmd == "align":
+            align_maps(a.src, a.dst, a.out, voxel=a.voxel,
+                       init=[float(v) for v in a.init.split(",")] if a.init else None)
         elif a.cmd == "view":
             map_view(a.map, a.traj, a.out, outliers=not a.no_outliers, snap=not a.no_snap,
                      fill=not a.no_fill, ceil=a.ceil, ceil_margin=a.ceil_margin,

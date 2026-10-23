@@ -1251,7 +1251,26 @@ export writes its coefficients; for an older export `--bag <bag>` reads them
 from its camera_info, or `--dist k1,k2,p1,p2`): the depth is pinhole already
 and LOD-3DGS assumes a pinhole camera. The
 map must be the one the export's depth was rendered from, so poses, depth
-and points share a frame. `--every N` thins the frames. `--mesh` samples a
+and points share a frame. Several exports make one scene (`scene <export 1>
+<export 2> ... --bag <bag 1> --bag -`), each with its own camera in
+`cameras.txt` (a ZED's intrinsics differ from a RealSense's), its frames
+named `c2_frame...` from the second on; an export of another session, in
+its own frame, is moved into the first's with `--transform - <align json>`
+after `align` has registered that session's map onto this one's (its depth
+is its own map's, consistent with its poses):
+
+    python3 scoop_pipeline/datasets/lod3dgs.py align <other session>/mapping/map_final_<tag2>.pcd \
+        $P/mapping/map_final_<tag>.pcd            # -> map_final_<tag2>_to_map_final_<tag>.json, _aligned.ply
+    python3 scoop_pipeline/datasets/lod3dgs.py scene <export of this session> <export of the other> \
+        <scene folder> --map $P/mapping/map_final_<tag>.pcd --mesh $P/mapping/mesh_view_<tag>.ply \
+        --every 6 --bag <this session's bag> --bag - --transform - <the align json>
+
+`align` thins both to 5 cm, finds a global registration on FPFH features
+(or takes `--init X,Y,YAW` by hand) and refines it with ICP point to plane;
+its fitness is the share of the source within 5 cm of the target (under
+0.5, look at `_aligned.ply` over the target in CloudCompare). The place must
+not have changed much between the sessions: furniture moved shows the model
+two things at once there. `--every N` thins the frames. `--mesh` samples a
 mesh made beforehand (`lod3dgs.py mesh`: ghosts, loose pieces and objects
 handled) instead of meshing the map again.
 
