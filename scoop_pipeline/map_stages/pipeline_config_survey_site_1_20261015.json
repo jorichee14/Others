@@ -21,5 +21,7 @@
                                     "points_topic": "/mobile_2/ouster/points",
                                     "image_topic": "/mobile_2/color/image_raw",
                                     "camera_info_topic": "/mobile_2/color/camera_info",
-                                    "rectified": false, "detect_target": 200}]}
+                                    "rectified": false, "detect_target": 200,
+                                    "lidar_static_tol_mm": 60,
+                                    "_why": "its scans spread 5 cm (the parked robot moved a little), 9 cm from the board placement: the LiDAR average is taken (its camera-to-LiDAR calibration is not trusted yet, mobile_1's is), good to the scans' spread"}]}
 }
