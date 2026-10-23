@@ -45,13 +45,22 @@ def main():
         (d[best], np.nanmedian(near), np.nanmedian(far))     # a closed box: reflections flatten the map
     tmp = tempfile.mkdtemp(prefix="sionna_run_")
     try:
+        # map coordinates in, through 05's frame: the map is the scene turned 90 deg and moved
+        import json
+        T = np.array([[0, -1, 0, 2.0], [1, 0, 0, -1.0], [0, 0, 1, 0.3], [0, 0, 0, 1]], float)
+        fj = os.path.join(tmp, "anchor_frame.json")
+        json.dump({"T_N_world": T.tolist()}, open(fj, "w"))
+        Ts, Tm = SR.map_to_scene(fj)
+        p_map = SR.moved(T, [3.0, 0.0, 1.5])
+        assert np.allclose(SR.moved(Ts, p_map), [3.0, 0.0, 1.5]) and np.allclose(Tm, T), "frame"
         r = subprocess.run([sys.executable, os.path.join(ROOT, "analysis", "comms", "sionna_run.py"), "box",
                             "--tx", "0", "0", "1.5", "--rx", "3", "0", "1.5", "--radio-map", "--cell", "1",
-                            "--samples", "200000", "--max-depth", "2", "--out", tmp],
+                            "--samples", "200000", "--max-depth", "2", "--out", tmp, "--frame", fj],
                            capture_output=True, text=True)
         assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-2000:]
         for f in ("cir_rx0.npz", "radio_map.npy", "radio_map.csv", "radio_map.png"):
             assert os.path.exists(os.path.join(tmp, f)), (f, os.listdir(tmp))
+        assert "moved from map coordinates" in r.stdout and "x_map" in open(os.path.join(tmp, "radio_map.csv")).readline()
         print("ok sionna_run: %d and %d paths, line of sight on time, the map %d cells with the near ones "
               "%.0f dB above the far; files written"
               % (recs[0]["n_paths"], recs[1]["n_paths"], g.size, np.nanmedian(near) - np.nanmedian(far)))

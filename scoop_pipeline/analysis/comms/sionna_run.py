@@ -5,12 +5,14 @@ the paths between a transmitter and receivers, and a radio map of the floor.
     python3 scoop_pipeline/analysis/comms/sionna_run.py <scene.xml> --tx X Y Z
         [--rx X Y Z ...] [--freq 5.745e9] [--max-depth 3] [--power 20]
         [--radio-map [--cell 0.5] [--height 1.2]] [--samples 1000000] [--out DIR]
+        [--frame frames/anchor_frame.json]
 
 Positions are in the scene's frame, the mesh's: a scene made from
-mesh_view_<tag>.ply is in the mapping pass's GLIM world; one made from the
-anchored mesh (lod3dgs.py anchor <mesh> --frame frames/anchor_frame.json,
-then sionna on <mesh>_anchored.ply) takes map coordinates, the ones the
-survey's trajectories, boards and cameras are in.
+mesh_view_<tag>.ply is in the mapping pass's GLIM world. With --frame (05's
+anchor_frame.json of that pass) the positions are given in map
+coordinates instead, the ones the survey's trajectories, boards and cameras
+are in, and moved into the scene's frame here; the radio map's csv then
+carries both.
 
 For each receiver: the paths (PathSolver, line of sight, specular
 reflections and refraction up to --max-depth bounces), their total path
@@ -29,6 +31,18 @@ import sys
 import numpy as np
 
 C0 = 299792458.0
+
+
+def map_to_scene(frame_json):
+    """(T_scene_map, T_map_scene) from 05's anchor_frame.json: the scene (a
+    mesh of map_final, GLIM's world) <- the anchored map frame."""
+    import json
+    T_map_world = np.array(json.load(open(os.path.expanduser(frame_json)))["T_N_world"], float)
+    return np.linalg.inv(T_map_world), T_map_world
+
+
+def moved(T, p):
+    return (T @ np.append(np.asarray(p, float), 1.0))[:3]
 
 
 def build(scene_path, freq, power_dbm, tx, rxs):
@@ -93,15 +107,18 @@ def radio_map(sc, cell, height, max_depth, samples, log=print):
     return g_db, np.asarray(rm.cell_centers)
 
 
-def write_map(out, g_db, centres, tx):
+def write_map(out, g_db, centres, tx, T_map_scene=None):
     np.save(os.path.join(out, "radio_map.npy"), g_db)
     with open(os.path.join(out, "radio_map.csv"), "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["x", "y", "z", "path_gain_db"])
+        w.writerow(["x", "y", "z", "path_gain_db"] + (["x_map", "y_map", "z_map"] if T_map_scene is not None else []))
         for (j, i), v in np.ndenumerate(g_db):
             if np.isfinite(v):
                 c = centres[j, i]
-                w.writerow(["%.3f" % c[0], "%.3f" % c[1], "%.3f" % c[2], "%.2f" % v])
+                row = ["%.3f" % c[0], "%.3f" % c[1], "%.3f" % c[2], "%.2f" % v]
+                if T_map_scene is not None:
+                    row += ["%.3f" % q for q in moved(T_map_scene, c)]
+                w.writerow(row)
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -132,7 +149,14 @@ def main():
     ap.add_argument("--cell", type=float, default=0.5, help="radio map cell (m)")
     ap.add_argument("--height", type=float, default=1.2, help="radio map plane above the floor (m)")
     ap.add_argument("--out", default=None, help="default: next to the scene, sionna_run/")
+    ap.add_argument("--frame", default=None, help="anchor_frame.json: --tx/--rx given in map coordinates")
     a = ap.parse_args()
+    T_scene_map = T_map_scene = None
+    if a.frame:
+        T_scene_map, T_map_scene = map_to_scene(a.frame)
+        a.tx = moved(T_scene_map, a.tx).tolist()
+        a.rx = [moved(T_scene_map, p).tolist() for p in a.rx]
+        print("positions moved from map coordinates into the scene's frame (%s)" % a.frame)
     import sionna.rt as rt
     scene = getattr(rt.scene, a.scene) if not os.path.exists(a.scene) and hasattr(rt.scene, a.scene) \
         else os.path.expanduser(a.scene)
@@ -149,7 +173,7 @@ def main():
                      gain_db=rec["gain_db"], rms_delay_ns=rec["rms_delay_ns"])
     if a.radio_map:
         g_db, centres = radio_map(sc, a.cell, a.height, a.max_depth, a.samples)
-        write_map(out, g_db, centres, a.tx)
+        write_map(out, g_db, centres, a.tx, T_map_scene)
         print("  covered cells %d of %d, path gain median %.1f dB, best %.1f dB"
               % (np.isfinite(g_db).sum(), g_db.size, np.nanmedian(g_db), np.nanmax(g_db)))
     print("wrote %s/" % out)

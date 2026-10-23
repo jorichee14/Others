@@ -983,7 +983,7 @@ The file is standalone (no scoop imports).
 ```
 python3 scoop_pipeline/analysis/comms/sionna_run.py <scene.xml> --tx X Y Z [--rx X Y Z ...]
     [--freq 5.745e9] [--max-depth 3] [--power 20] [--radio-map [--cell 0.5] [--height 1.2]]
-    [--samples 1000000] [--out DIR]
+    [--samples 1000000] [--out DIR] [--frame frames/anchor_frame.json]
 ```
 
 loads the scene (`sionna.rt.load_scene`), sets the frequency (channel 149:
@@ -994,11 +994,11 @@ channel impulse response written as `cir_<rx>.npz` (gains and delays per
 path). `--radio-map` computes the path gain over a plane `--height` m above
 the scene's lowest point in `--cell` m cells and writes `radio_map.npy`,
 `.csv` and `.png`. Positions are in the scene's frame, the mesh's: a scene
-made from `mesh_view_<tag>.ply` is in the mapping pass's GLIM world; make
-it from the anchored mesh (`lod3dgs.py anchor <mesh> --frame
-frames/anchor_frame.json`, then `sionna` on `<mesh>_anchored.ply`) to give
-positions in map coordinates, where the survey's trajectories, boards and
-cameras are. Test: `tests/test_sionna_run.py` (Sionna's built-in box).
+made from `mesh_view_<tag>.ply` is in the mapping pass's GLIM world. With
+`--frame` (that pass's `frames/anchor_frame.json`) they are given in map
+coordinates, where the survey's trajectories, boards and cameras are, and
+moved into the scene's frame; the radio map's csv then carries both. Test:
+`tests/test_sionna_run.py` (Sionna's built-in box).
 
 ## One figure of a survey pass (`analysis/survey_figure.py`)
 
