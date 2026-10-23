@@ -424,6 +424,10 @@ def render_map(path: str, hmap: "HeightMap", rows: List[dict], args,
     canvas.save(path)
     print("\n  wrote %s  (%d x %d px, %.2f m per cell)"
           % (path, canvas.cols, canvas.rows, hmap.cell))
+    if getattr(args, "map_html", None):
+        write_map_html(args.map_html, path, canvas, rows, labels, args)
+        print("  wrote %s: open it in a browser, click the objects, copy the command"
+              % args.map_html)
     print("    blue-green-orange = height above the floor, dark grey = taller than "
           "%.2f m (structure)," % args.max_height)
     if rows:
@@ -432,6 +436,118 @@ def render_map(path: str, hmap: "HeightMap", rows: List[dict], args,
     else:
         print("    white dots = where the agents drove, red outlines = the fitted "
               "boxes, numbered by id.")
+
+
+def write_map_html(path: str, png: str, canvas, rows: List[dict],
+                   labels: Optional[List[dict]], args) -> None:
+    """A clickable top-down viewer: the PNG with its pixel-to-metre mapping, a
+    click marks an object and lists its map x, y; a name and a class per mark;
+    the fit command assembled at the bottom to paste. Self-contained (the
+    image is embedded), so it opens from any folder, no server."""
+    import base64
+    with open(png, "rb") as handle:
+        data = base64.b64encode(handle.read()).decode("ascii")
+    meta = {"x0": canvas.x0, "y0": canvas.y0, "cell": canvas.cell, "scale": canvas.scale,
+            "rows": canvas.rows, "cols": canvas.cols,
+            "pcd": os.path.abspath(args.pcd[0]) if getattr(args, "pcd", None) else "<pcd>",
+            "dataset": os.path.abspath(args.dataset) if getattr(args, "dataset", None) else None,
+            "max_height": getattr(args, "max_height", 1.3),
+            "proposals": [{"n": i + 1, "x": r["centre"][0], "y": r["centre"][1]} for i, r in enumerate(rows)],
+            "labels": [{"id": l["id"], "name": l.get("name", ""), "x": l["location"][0],
+                        "y": l["location"][1]} for l in (labels or [])]}
+    html = MAP_HTML.replace("__META__", json.dumps(meta)).replace("__PNG__", data)
+    with open(path, "w") as handle:
+        handle.write(html)
+
+
+MAP_HTML = r"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Label picker</title>
+<style>
+ body{font:14px system-ui,sans-serif;margin:0;background:#1b1d22;color:#e8e8e8;display:flex;height:100vh}
+ #left{flex:1;overflow:auto;position:relative}
+ #wrap{position:relative;display:inline-block;transform-origin:0 0}
+ #img{display:block;image-rendering:pixelated}
+ #ov{position:absolute;left:0;top:0;cursor:crosshair}
+ #right{width:420px;padding:12px;background:#24262c;overflow:auto;border-left:1px solid #444}
+ table{border-collapse:collapse;width:100%}td,th{padding:3px 4px;border-bottom:1px solid #3a3d44;text-align:left}
+ input,select{background:#1b1d22;color:#eee;border:1px solid #555;padding:2px 4px;width:100%}
+ textarea{width:100%;height:160px;background:#111;color:#9f9;border:1px solid #555;font:12px monospace}
+ button{background:#3a6;color:#fff;border:0;padding:6px 10px;margin:4px 2px;cursor:pointer}
+ .x{background:#a44}.muted{color:#aaa}#pos{position:sticky;top:0;background:#24262c;padding:4px 0}
+</style></head><body>
+<div id="left"><div id="wrap"><img id="img" src="data:image/png;base64,__PNG__"><canvas id="ov"></canvas></div></div>
+<div id="right">
+ <div id="pos">x = <b id="mx">–</b> y = <b id="my">–</b> <span class="muted">(map frame, m)</span><br>
+ zoom <input id="zoom" type="range" min="0.5" max="6" step="0.25" value="1" style="width:200px"> <span id="zv">1x</span></div>
+ <p class="muted">Click an object to mark it; click a mark to remove it. Red numbers are the proposals, red outlines the fitted labels.</p>
+ <table id="tbl"><thead><tr><th>#</th><th>x</th><th>y</th><th>name</th><th>class</th><th></th></tr></thead><tbody></tbody></table>
+ <p><button id="copy">copy command</button> <button id="clear" class="x">clear all</button></p>
+ <textarea id="cmd" readonly></textarea>
+ <p class="muted">One fit command per class; --max-height from this run. Add --radius 0.6 --max-wall-contact 0.5 for things against a wall.</p>
+</div>
+<script>
+const M = __META__;
+const CLASSES = ["chair","potted_plant","trash_can","fire_extinguisher","traffic_cone","medical_bag","wet_floor_sign","robot","other"];
+const img = document.getElementById("img"), ov = document.getElementById("ov"), wrap = document.getElementById("wrap");
+let marks = [];
+function toMap(px, py){ return [M.x0 + px / M.scale * M.cell, M.y0 + (M.rows - 1 - py) / M.scale * M.cell]; }
+function toPx(x, y){ return [(x - M.x0) / M.cell * M.scale, M.rows - 1 - (y - M.y0) / M.cell * M.scale]; }
+function draw(){
+  ov.width = M.cols; ov.height = M.rows;
+  const c = ov.getContext("2d"); c.clearRect(0,0,ov.width,ov.height);
+  c.font = "bold 12px sans-serif";
+  for (const p of M.proposals){ const [px,py] = toPx(p.x,p.y); c.strokeStyle="#f55"; c.beginPath(); c.arc(px,py,4,0,7); c.stroke(); }
+  for (const l of M.labels){ const [px,py] = toPx(l.x,l.y); c.strokeStyle="#fa0"; c.beginPath(); c.arc(px,py,6,0,7); c.stroke(); c.fillStyle="#fa0"; c.fillText(l.name||("id "+l.id), px+8, py-4); }
+  marks.forEach((m,i)=>{ const [px,py] = toPx(m.x,m.y); c.fillStyle="#0f0"; c.beginPath(); c.arc(px,py,5,0,7); c.fill(); c.fillStyle="#fff"; c.fillText((i+1)+" "+m.name, px+8, py+4); });
+}
+function cmd(){
+  const by = {};
+  marks.forEach(m => { (by[m.cls] = by[m.cls] || []).push(m); });
+  const base = "python scripts/label_static.py --pcd " + M.pcd + (M.dataset ? " --dataset " + M.dataset : "") + " --max-height " + M.max_height;
+  let out = "L=labels.json   # choose the labels file
+";
+  for (const cls in by){
+    out += base + " --obj-type " + cls + " \
+";
+    for (const m of by[cls]) out += "    --seed=" + m.x.toFixed(2) + "," + m.y.toFixed(2) + " --name " + m.name + " \
+";
+    out += "    --out $L
+";
+  }
+  if (marks.length) out += base.replace(/ --max-height.*/, "") + " --labels $L --check
+";
+  document.getElementById("cmd").value = out;
+}
+function table(){
+  const tb = document.querySelector("#tbl tbody"); tb.innerHTML = "";
+  marks.forEach((m,i)=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td>"+(i+1)+"</td><td>"+m.x.toFixed(2)+"</td><td>"+m.y.toFixed(2)+"</td><td><input value='"+m.name+"'></td><td><select>"+CLASSES.map(c=>"<option"+(c===m.cls?" selected":"")+">"+c+"</option>").join("")+"</select></td><td><button class='x'>×</button></td>";
+    tr.querySelector("input").oninput = e => { m.name = e.target.value; draw(); cmd(); };
+    tr.querySelector("select").onchange = e => { m.cls = e.target.value; cmd(); };
+    tr.querySelector("button").onclick = () => { marks.splice(i,1); refresh(); };
+    tb.appendChild(tr);
+  });
+}
+function refresh(){ draw(); table(); cmd(); }
+function count(cls){ return marks.filter(m=>m.cls===cls).length + 1; }
+ov.addEventListener("mousemove", e => {
+  const r = ov.getBoundingClientRect(); const px = (e.clientX - r.left) * M.cols / r.width, py = (e.clientY - r.top) * M.rows / r.height;
+  const [x,y] = toMap(px,py); document.getElementById("mx").textContent = x.toFixed(2); document.getElementById("my").textContent = y.toFixed(2);
+});
+ov.addEventListener("click", e => {
+  const r = ov.getBoundingClientRect(); const px = (e.clientX - r.left) * M.cols / r.width, py = (e.clientY - r.top) * M.rows / r.height;
+  const [x,y] = toMap(px,py);
+  const hit = marks.findIndex(m => Math.hypot(m.x-x, m.y-y) < 0.4);
+  if (hit >= 0) marks.splice(hit,1); else { const cls = marks.length ? marks[marks.length-1].cls : "chair"; marks.push({x,y,cls,name: cls+"_"+count(cls)}); }
+  refresh();
+});
+document.getElementById("zoom").oninput = e => { wrap.style.transform = "scale("+e.target.value+")"; document.getElementById("zv").textContent = e.target.value+"x"; };
+document.getElementById("copy").onclick = () => { navigator.clipboard.writeText(document.getElementById("cmd").value); };
+document.getElementById("clear").onclick = () => { marks = []; refresh(); };
+img.onload = refresh; if (img.complete) refresh();
+</script></body></html>
+"""
 
 
 # -------------------------------------------------------------------- checks
@@ -601,6 +717,9 @@ def main() -> int:
     parser.add_argument("--map-image", default=None, metavar="PATH.png",
                         help="write a top-down picture of the searched area with the "
                              "proposals numbered on it")
+    parser.add_argument("--map-html", default=None, metavar="PATH.html",
+                        help="with --map-image: a clickable viewer of that image (self-contained "
+                             "html): click the objects, name them, copy the fit command")
     parser.add_argument("--map-scale", type=int, default=4,
                         help="pixels per height-map cell in --map-image")
     parser.add_argument("--cell", type=float, default=0.10,

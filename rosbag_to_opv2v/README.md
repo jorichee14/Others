@@ -16,6 +16,8 @@ python scripts/convert_rosbag.py --config configs/mine.yaml --dry-run          #
 python scripts/convert_rosbag.py --config configs/mine.yaml                    #          convert
 python scripts/validate_opv2v.py --root <output>/test                          # stage C: check it as OpenCOOD will read it
 python scripts/label_static.py   --pcd map.pcd --dataset <output>/test         # stage D: ground truth from the run's own map
+python scripts/label_static.py   --pcd map.pcd --dataset <output>/test --propose \
+    --map-image top.png --map-html top.html                          #   a clickable viewer: click the objects, copy the fit command
 ```
 
 | | |

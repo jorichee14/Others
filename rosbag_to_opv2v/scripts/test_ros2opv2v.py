@@ -3325,6 +3325,38 @@ def test_fit_finds_a_chair_under_a_scanned_ceiling():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_map_html_viewer_carries_the_pixel_mapping():
+    """--propose --map-image --map-html: the viewer embeds the image and the
+    numbers a click needs to become map metres, and the proposals' seeds."""
+    import subprocess
+    tmp = tempfile.mkdtemp(prefix='r2o_')
+    try:
+        cloud = _room_cloud(np.random.default_rng(13))
+        pcd = os.path.join(tmp, 'room.pcd')
+        write_pcd(pcd, np.column_stack([cloud, np.full(len(cloud), 0.5)]))
+        png, html = os.path.join(tmp, 'top.png'), os.path.join(tmp, 'top.html')
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'label_static.py')
+        r = subprocess.run([sys.executable, script, '--pcd', pcd, '--propose', '--whole-map',
+                            '--map-image', png, '--map-html', html], capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+        assert os.path.exists(png) and os.path.exists(html)
+        text = open(html).read()
+        assert 'data:image/png;base64,' in text and 'const M = {' in text
+        meta = json.loads(text.split('const M = ', 1)[1].split(';\n', 1)[0])
+        assert set(meta) >= {'x0', 'y0', 'cell', 'scale', 'rows', 'cols', 'proposals'}, meta.keys()
+        # the chair in the open is a proposal; its pixel maps back to its seed
+        seeds = [(p['x'], p['y']) for p in meta['proposals']]
+        assert any(abs(x) < 0.3 and abs(y) < 0.3 for x, y in seeds), seeds
+        px = (0.0 - meta['x0']) / meta['cell'] * meta['scale']
+        py = meta['rows'] - 1 - (0.0 - meta['y0']) / meta['cell'] * meta['scale']
+        x = meta['x0'] + px / meta['scale'] * meta['cell']
+        y = meta['y0'] + (meta['rows'] - 1 - py) / meta['scale'] * meta['cell']
+        assert abs(x) < 1e-9 and abs(y) < 1e-9, (x, y)
+        assert meta['pcd'] == os.path.abspath(pcd)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     tests = [(k, v) for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

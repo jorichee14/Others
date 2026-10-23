@@ -1,0 +1,220 @@
+# Coop site_2, 20261015 -> one OPV2V tree for InCoP (jorichee14/incop_analysis),
+# stock OpenCOOD and the heterogeneous arms. Plan: docs/SITE1_20261015_PLAN.md.
+#
+# One conversion on the LiDAR grid holds every frame. The ZED (1.3 Hz) is an
+# OPTIONAL camera: a frame without its image is kept and says so
+# (camera0.image_present: false); the camera arm's tree is the view of the
+# frames that have it:
+#     python3 scripts/make_view.py --root <root> --out <root>_zed --require-image 1:0
+#
+# Agent folders: 0 = mobile_2 (ego, InCoP fixes ego 0 and order [0, 1]; OpenCOOD
+# takes the smallest non-negative id), 1 = mobile_1. infra_1 is off (a third
+# folder breaks InCoP's two-agent assignment; its radar is 49 points a frame).
+# The ego is provisional: label_static.py --check decides it (Stage 0 gate).
+#
+# Site_2 is the HELD-OUT site: output.split validate, the whole run. The pass
+# (03 -> 04 -> 09 -> 10 -> finalize) has to exist first; expected_start comes
+# from its stage 10 log ("<robot>_base_link in map starts at ...").
+
+bag: ~/workspaces/isaac_ros-dev/data/work/20261015/coop/site_2/mirc_dataset_coop_site_2_20261015_merged_final
+
+output:
+  # `_real_world` in the path: InCoP's inference reads BEV handedness from the
+  # dataset path (OPV2V / V2XSET / REAL_WORLD), and this data has that convention.
+  root: ~/workspaces/isaac_robotics_data/InCoP/site2_20261015_real_world
+  split: validate
+  scenario_name: case_0
+  # Static objects labelled once in the map frame (scripts/label_static.py on
+  # mapping/cloud_in_ref_coop_site_2_20261015.pcd), with obj_type per object.
+  # Machine-specific; the converter refuses a path that does not exist:
+  # labels_file: ~/workspaces/isaac_robotics_data/InCoP/labels/site2_20261015_statics.json
+  frames_per_scenario: 0
+  frame_stride: 1
+  include_self_in_vehicles: false
+  write_provenance: true
+
+time:
+  stamp_source: header
+  master_agent: mobile_1          # the frame grid: mobile_1's Ouster, 10 Hz
+  rate_hz: 0
+  # Two free-running 10 Hz LiDARs sit at a fixed phase offset anywhere in
+  # 0..50 ms; 40 ms can drop every frame, and 50 ms is the structural floor the
+  # converter refuses to go under. 55 ms keeps every frame; the RealSense at
+  # 15 Hz is within 33 ms of any grid point.
+  match_tolerance_ms: 55
+  drop_incomplete_frames: true
+  start_offset_s: 0.0
+  duration_s: 0.0
+
+clock:
+  enabled: true
+  mode: verify                    # chrony on every host; the pass reported |offset| < 0.1 ms
+  max_residual_ms: 10
+  reference_host: mobile_1        # the NTP server of the run
+  ntp_topics:
+    mobile_2: /mobile_2/ntp/client/status
+  # /mobile_2/ntp/events had no messages in this run (no clock step, nothing
+  # logged), and a topic without messages is not in the merged bag.
+  events_topics: {}
+  offset_field: offset_seconds
+  offset_unit: s
+  sign: auto
+  cross_check_tolerance_ms: 20
+  require_measured: false
+
+world:
+  frame_id: map                   # the anchored map of the 20261015 mapping pass
+  tf_static_topic: /tf_static
+
+# ------------------------------------------------------------------- the link
+# Written into every frame yaml as `comms` (per agent: its own link; `links`:
+# the CSI the sniffer on mobile_1 hears from the other radios), and once per
+# scenario as comms/<name>.csv at full rate. Stamps are on the corrected
+# timeline like the sensors'. tables_dir copies the pipeline's comms tables
+# (CSI H per subcarrier as .npz, summary.json) into comms/tables/.
+comms:
+  enabled: true
+  tables_dir: ~/workspaces/isaac_ros-dev/data/processed/20261015/coop/site_2/comms
+  streams:
+    - {agent: mobile_1, name: wifi,       kind: nearest, topic: /mobile_1/wifi/status,     window_s: 1.0}
+    - {agent: mobile_1, name: ping,       kind: window,  topic: /mobile_1/wifi/ping,       window_s: 1.0, p95: [rtt_ms]}
+    - {agent: mobile_1, name: iperf_up,   kind: nearest, topic: /mobile_1/wifi/iperf_up,   window_s: 10.0}
+    - {agent: mobile_1, name: iperf_down, kind: nearest, topic: /mobile_1/wifi/iperf_down, window_s: 10.0}
+    - {agent: mobile_1, name: ntp,        kind: nearest, topic: /mobile_1/ntp/server/status, window_s: 2.0}
+    - {agent: mobile_2, name: wifi,       kind: nearest, topic: /mobile_2/wifi/status,     window_s: 1.0}
+    - {agent: mobile_2, name: ping,       kind: window,  topic: /mobile_2/wifi/ping,       window_s: 1.0, p95: [rtt_ms]}
+    - {agent: mobile_2, name: iperf_up,   kind: nearest, topic: /mobile_2/wifi/iperf_up,   window_s: 10.0}
+    - {agent: mobile_2, name: iperf_down, kind: nearest, topic: /mobile_2/wifi/iperf_down, window_s: 10.0}
+    - {agent: mobile_2, name: ntp,        kind: nearest, topic: /mobile_2/ntp/client/status, window_s: 2.0}
+    # CSI links: the sniffer rides on mobile_1 (its own clock host); a packet's
+    # RSSI and the per-subcarrier arrays are in the tables; here n and medians.
+    - {name: csi_mobile_2_to_mobile_1, kind: window, topic: /mobile_1/sniffer/mobile_2/csi, window_s: 1.0, host: mobile_1}
+    - {name: csi_infra_1_to_mobile_1,  kind: window, topic: /mobile_1/sniffer/infra_1/csi,  window_s: 1.0, host: mobile_1}
+
+agents:
+  # ------------------------------------------------------------------ mobile_2
+  # THE EGO (provisional): id 0. OS1-128 Ouster, RealSense colour at 15 Hz.
+  - name: mobile_2
+    id: 0
+    role: cav
+    host: mobile_2
+    enabled: true
+    required: true
+    pose:
+      # Stage 10's output: mobile_2_base_link (= camera_link) in map, from the
+      # LiDAR trajectory registered to the reference map (stage 04). Every
+      # sensor hangs below it on /tf_static, so the extrinsics are looked up.
+      source: pose
+      topic: /mobile_2/global_pose
+      frame: mobile_2_base_link
+      # from the stage 10 log: "mobile_2_base_link in map starts at ..."
+      # expected_start: [x, y, z]    # from site_2's stage 10 log
+      expected_start_tolerance_m: 0.25
+      interpolation: linear
+      max_gap_ms: 200
+      align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      child_to_base: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+    cloud:
+      kind: pointcloud2
+      topic: /mobile_2/ouster/points
+      # mobile_2_base_link -> camera_link -> camera_color_frame ->
+      # camera_color_optical_frame -> os_lidar_mobile2, all on /tf_static. The
+      # chain runs through the rig's camera-to-LiDAR calibration, which is the
+      # untrusted one -- but the pose topic was derived from the LiDAR
+      # trajectory through the same chain, so it cancels: the cloud lands at
+      # its stage 04 registered pose exactly. Only the camera's own pose keeps
+      # the calibration's error (about 8 cm / 1.6 deg).
+      extrinsic: tf
+      frame_id: os_lidar_mobile2
+      intensity: {field: intensity, scale: 0.0001, default: 0.5}
+      point_time_field: t
+      deskew: true
+      max_points: 100000
+      ground_lift: 0.0
+      min_points: 1
+    cameras:
+      - topic: /mobile_2/color/image_raw
+        camera_info_topic: /mobile_2/color/camera_info
+        extrinsic: tf
+        frame_id: camera_color_optical_frame
+        optical_frame: true
+        output_size: [1280, 800]     # InCoP's data_aug_conf H 800, W 1280
+        required: true               # 15 Hz: within 33 ms of every frame
+    object:
+      # The robot as the other agent's object: cart plus operator, one box.
+      # extent is HALF size [length, width, height]; center is where the box
+      # centre sits from the base link ([ahead, left, up]). The base link is at
+      # the camera; the cart's middle is about 0.45 m below it. Measure and
+      # correct these on the real cart before training.
+      emit: true
+      extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      extent: [0.31, 0.275, 0.525]
+      center: [0.0, 0.0, -0.45]
+      object_id: 10000
+  # ------------------------------------------------------------------ mobile_1
+  - name: mobile_1
+    id: 1
+    role: cav
+    host: mobile_1
+    enabled: true
+    required: true
+    pose:
+      source: pose
+      topic: /mobile_1/global_pose
+      frame: mobile_1_base_link       # = zed_camera_link
+      # expected_start: [x, y, z]    # from site_2's stage 10 log
+      expected_start_tolerance_m: 0.25
+      interpolation: linear
+      max_gap_ms: 200
+      align: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      child_to_base: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+    cloud:
+      kind: pointcloud2
+      topic: /mobile_1/ouster/points
+      # mobile_1_base_link -> zed_camera_link -> zed_camera_center ->
+      # zed_left_camera_frame -> zed_left_camera_optical_frame ->
+      # os_sensor_mobile1 -> os_lidar_mobile1 (the trusted calibration)
+      extrinsic: tf
+      frame_id: os_lidar_mobile1
+      intensity: {field: intensity, scale: 0.0001, default: 0.5}
+      point_time_field: t
+      deskew: true
+      max_points: 100000
+      ground_lift: 0.0
+      min_points: 1
+    cameras:
+      - topic: /mobile_1/zed/left/image_rect_color
+        camera_info_topic: /mobile_1/zed/left/camera_info
+        extrinsic: tf
+        frame_id: zed_left_camera_optical_frame
+        optical_frame: true
+        output_size: [1280, 800]
+        # 420 images in 329 s (the SVO was recorded lossless at HD1080 and the
+        # recorder dropped frames): one frame in eight has one. Optional, so
+        # the LiDAR arms keep every frame; make_view.py builds the ZED arm.
+        required: false
+    object:
+      emit: true
+      extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      extent: [0.31, 0.275, 0.625]
+      center: [0.0, 0.0, -0.55]
+      object_id: 10001
+  # ------------------------------------------------------------------- infra_1
+  # Off for the two-agent trees. Its camera is placed by stage 07 (map ->
+  # arducam_optical_frame, static); enabling it needs a static pose here and a
+  # three-agent sidecar; InCoP's real_world config has max_cav 2.
+  - name: infra_1
+    id: 2
+    role: cav
+    host: infra_1
+    enabled: false
+    required: false
+    pose:
+      source: static
+      world_pose: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}   # fill from cameras_in_map.yaml
+    cloud:
+      kind: pointcloud2
+      topic: /infra_1/radar/points_all
+      extrinsic: {x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0}
+      intensity: {field: none, default: 0.5}
+    object: {emit: false}
