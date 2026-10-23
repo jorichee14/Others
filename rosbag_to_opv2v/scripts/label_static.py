@@ -732,6 +732,10 @@ def main() -> int:
                              "x,y from show_labels.py --locate, read off a camera image")
     parser.add_argument("--floor-z", type=float, default=None,
                         help="the floor's z in the map frame, instead of the cloud's histogram mode")
+    parser.add_argument("--local-floor-max-offset", type=float, default=0.5,
+                        help="how far the floor under an object may sit from the cloud's own "
+                             "floor before it is taken for another level (a stairwell) and "
+                             "the cloud's is used instead")
     parser.add_argument("--local-floor-radius", type=float, default=2.0,
                         help="fit: the floor under each seed is taken from the points within this "
                              "radius (0: the cloud's one floor). A building's floor is not one "
@@ -904,10 +908,20 @@ def main() -> int:
         # object's own base for the ground.
         if args.local_floor_radius > 0 and args.floor_z is None:
             around = local[np.linalg.norm(local[:, :2] - seed[:2], axis=1) <= args.local_floor_radius]
-            try:
-                floor_here, _ = ground_level(around)
-            except StaticsError:
-                floor_here = ground_z
+            # only surfaces near the cloud's own floor count. A stairwell, a
+            # sunken lobby or a doorway to a lower level sits within a couple
+            # of metres of plenty of objects, and taking ITS surface as the
+            # ground puts the box's bottom a metre underground and makes the
+            # object as tall as the error.
+            band = around[np.abs(around[:, 2] - ground_z) <= args.local_floor_max_offset]
+            if len(band) >= 50:
+                try:
+                    floor_here, _ = ground_level(band)
+                except StaticsError:
+                    floor_here = ground_z
+            elif len(around):
+                print("\nfloor here  : no surface within %.2f m of the cloud's floor near this "
+                      "seed; its floor (%+.3f m) is used" % (args.local_floor_max_offset, ground_z))
             if abs(floor_here - ground_z) > 0.03:
                 print("\nfloor here  : z = %+.3f m within %.1f m of the seed (the cloud's floor is "
                       "%+.3f m); used for this object" % (floor_here, args.local_floor_radius, ground_z))

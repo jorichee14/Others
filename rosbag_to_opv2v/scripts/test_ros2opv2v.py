@@ -3476,6 +3476,37 @@ def test_to_ply_cuts_the_ceiling_and_keeps_the_objects():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_local_floor_ignores_a_lower_level():
+    """A chair standing a metre from a stairwell: the floor under it is its own
+    room's, not the level below, or the box grows down to meet it."""
+    import subprocess
+    tmp = tempfile.mkdtemp(prefix='r2o_')
+    try:
+        rng = np.random.default_rng(31)
+        cloud = _room_cloud(rng)
+        # a lower level 0.8 m down, half a metre from the chair at the origin:
+        # not the cloud's floor (the room's own is denser) but the dominant
+        # surface within 2 m of this seed
+        lower = np.column_stack([rng.uniform(0.5, 4.0, 30000), rng.uniform(-2.0, 2.0, 30000),
+                                 np.full(30000, -1.46)])
+        pcd = os.path.join(tmp, 'room.pcd')
+        both = np.vstack([cloud, lower])
+        write_pcd(pcd, np.column_stack([both, np.full(len(both), 0.5)]))
+        out = os.path.join(tmp, 'labels.json')
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'label_static.py')
+        r = subprocess.run([sys.executable, script, '--pcd', pcd, '--seed=0.0,0.0',
+                            '--name', 'chair_1', '--out', out], capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+        with open(out) as handle:
+            box = json.load(handle)[0]
+        # the chair is 0.9 m tall and stands at z = -0.66; the lower level would
+        # make it 2.1 m and put its centre near -0.9
+        assert 0.4 <= box['extent'][2] <= 0.5, box
+        assert abs(box['location'][2] - (-0.66 + 0.45)) < 0.06, box
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_manual_box_is_placed_on_the_floor_under_it():
     import subprocess
     tmp = tempfile.mkdtemp(prefix='r2o_')
