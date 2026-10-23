@@ -380,12 +380,14 @@ def csi_clean_step(bag, cfg):
 
 
 def comms_step(bag, cfg):
-    """NTP, Wi-Fi, ping, iperf, CSI tables (processed/<date>/<pass>/comms/)."""
-    from pipeline_common import processed_dir_for
+    """NTP, Wi-Fi, ping, iperf, CSI tables (processed/<date>/<pass>/comms/).
+    The bag is looked up when the step runs: finalize, just before it, renames
+    the merged bag <bag>_final."""
+    from pipeline_common import processed_dir_for, final_bag
     summ = os.path.join(processed_dir_for(bag), "comms", "summary.json")
-    cmd = py(os.path.join(ROOT, "processing", "comms_tables.py"), bag)
+    cmd = lambda: py(os.path.join(ROOT, "processing", "comms_tables.py"), final_bag(bag))  # noqa: E731
     return ("comms", True, os.path.exists(summ), os.path.dirname(summ),
-            [cmd + (["--config", cfg] if cfg else [])])
+            lambda dry: run_step("comms", [cmd() + (["--config", cfg] if cfg else [])], dry))
 
 
 def final_name(merged):

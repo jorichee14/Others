@@ -137,6 +137,10 @@ def main():
             rc, out = runner(raw, "--config", cfg, "--only", "finalize")
             if rc or "renamed" not in out or not os.path.isdir(final) or os.path.exists(merged):
                 f.append("finalize of a bag finalized in place: " + out[-1500:])
+            # comms, planned before finalize ran, reads the bag under its final name
+            rc, out = runner(raw, "--config", cfg, "--only", "comms", "--dry")
+            if rc or ("comms_tables.py " + final) not in out or ("comms_tables.py " + merged + " ") in out:
+                f.append("comms --dry after finalize does not read %s: %s" % (final, out[-800:]))
 
         rc, out = runner(os.path.join(data, "raw", "20260101", "mapping_A"), "--config",
                          os.path.join(stages, "pipeline_config.json"), "--dry", "--from", "02_ba")
