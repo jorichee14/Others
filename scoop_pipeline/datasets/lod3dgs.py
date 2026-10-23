@@ -3193,7 +3193,10 @@ def main():
     sc = sub.add_parser("scene", help="a replica export + the map -> a LOD-3DGS scene")
     sc.add_argument("dataset", nargs="+", help="a replica export (mcap_convert.py --format replica); several: "
                     "each with its own camera, the first's frame (--transform for the others)")
-    sc.add_argument("out", nargs="?", default=None, help="scene folder (default: next to it)")
+    sc.add_argument("out", nargs="?", default=None,
+                    help="scene folder (default: next to it); with several exports the last path that is not "
+                         "an export is taken as it, or give --out")
+    sc.add_argument("--out", dest="out_opt", default=None, help="the scene folder")
     sc.add_argument("--map", required=True, help="the map the export's depth came from")
     sc.add_argument("--every", type=int, default=1, help="keep every Nth frame")
     meshing(sc)
@@ -3391,6 +3394,12 @@ def main():
     wk.add_argument("--eye", type=float, default=1.6, help="eye height over the floor (m)")
     wk.add_argument("--shot", default=None, help="write the start view to this PNG and close")
     a = ap.parse_args()
+    if a.cmd == "scene":                         # several exports: the output folder swallowed into the list
+        if a.out_opt:
+            a.out = a.out_opt
+        elif a.out is None and len(a.dataset) > 1 and \
+                not os.path.exists(os.path.join(os.path.expanduser(a.dataset[-1]), "splatam_data_config.yaml")):
+            a.out = a.dataset.pop()
     for k in ("map", "file", "traj", "frame", "dataset"):
         p = getattr(a, k, None)
         for p_ in (p if isinstance(p, list) else [p]):
