@@ -12,7 +12,7 @@ branch `claude/scoop-paper` at 724739d.
 
 | machine | bag | notes |
 |---|---|---|
-| mobile_1 | `mirc_dataset_survey_1_run_20261015_mobile_1` + `..._mobile_1.svo2` | Ouster on `/mobile_1/ouster`, ZED replayed from the SVO at about 1 Hz (1 497 frames) |
+| mobile_1 | `mirc_dataset_survey_1_run_20261015_mobile_1` + `..._mobile_1.svo2` | Ouster on `/mobile_1/ouster`; the ZED SVO holds about 1 frame a second (1 497 frames): recorded at HD1080 with lossless PNG compression, which the robot could not write at the nominal 15 fps (the coop SVO of the same day: 420 frames in 329 s, `ZED_SVO_Editor -inf`). Not a replay loss; H.264/H.265 or HD720 next time |
 | mobile_1/sniffer | `mirc_dataset_survey_1_run1_20261015_mobile_1_sniffer` | the site 2 sniffer bag (`..._run_site2_...`) had been in this folder at first: swapped, merge redone |
 | mobile_2 | `mirc_dataset_survey_1_run1_20261015_mobile_2` | RealSense topics `/mobile_2/color/...` (no `camera/` level: record.yaml corrected), 2.9 s LiDAR gap, IMU gaps while parked |
 | infra_1 | `mirc_dataset_survey_1_run1_20261015_infra_1` | `extrinsic_arducam.yaml` next to it |
