@@ -200,6 +200,38 @@ class BagWriter:
         return False
 
 
+def rename_bag(src, dst) -> Path:
+    """Move the bag folder ``src`` to ``dst`` and keep the convention that its
+    files are named after the folder: ``<src name>_0.mcap`` becomes
+    ``<dst name>_0.mcap`` (every file metadata.yaml lists, however many),
+    and metadata.yaml is repointed. A plain rename leaves ``<old>_0.mcap``
+    inside ``<new>/``, which rosbag2 reads but every tool that names the
+    file after the folder does not find. A folder without metadata.yaml
+    is just moved."""
+    src, dst = Path(src), Path(dst)
+    shutil.move(str(src), str(dst))
+    mp = dst / "metadata.yaml"
+    if src.name == dst.name or not mp.exists():
+        return dst
+    with open(mp) as fh:
+        meta = yaml.safe_load(fh)
+    info = (meta or {}).get("rosbag2_bagfile_information") or {}
+    renamed = {}
+    for old in list(info.get("relative_file_paths") or []):
+        if old.startswith(src.name + "_") and (dst / old).exists():
+            new = dst.name + old[len(src.name):]
+            (dst / old).rename(dst / new)
+            renamed[old] = new
+    if not renamed:
+        return dst
+    info["relative_file_paths"] = [renamed.get(x, x) for x in info["relative_file_paths"]]
+    for f in info.get("files") or []:
+        f["path"] = renamed.get(f.get("path"), f.get("path"))
+    with open(mp, "w") as fh:
+        yaml.safe_dump(meta, fh, sort_keys=False)
+    return dst
+
+
 def write_in_order(w: BagWriter, records: Iterable, reorder_s: float) -> None:
     """Write ``records`` -- ``(log_ns, topic, schema, publish_ns, sequence,
     channel_metadata, payload)`` that are out of log-time order by at most

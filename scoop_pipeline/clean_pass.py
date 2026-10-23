@@ -35,11 +35,11 @@ pass folder is left where it is and listed.
 import argparse
 import fnmatch
 import os
-import shutil
 import sys
 import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "map_stages"))
 sys.path.insert(0, os.path.join(ROOT, "analysis"))
 
@@ -179,10 +179,11 @@ def work_side_runs(P):
 
 
 def move(src, dst):
+    from scoop.bagwrite import rename_bag
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     if os.path.exists(dst):
         dst += time.strftime("_%Y%m%d_%H%M%S")
-    shutil.move(src, dst)
+    rename_bag(src, dst)           # a bag folder keeps its files named after it
 
 
 def main():

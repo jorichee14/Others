@@ -315,6 +315,7 @@ Before using it on a new sensor or driver version:
 
 ```
 python3 tests/test_bag.py
+python3 tests/test_rename_bag.py   # a renamed bag folder keeps its files named after it
 python3 check.py decoder <bag> [--points /ouster/points] [--image <topic>]
 ```
 
