@@ -14,6 +14,7 @@ must — so the whole pipeline is exercised end to end.
 
     python scripts/test_ros2opv2v.py
 """
+import importlib
 import json
 import math
 import os
@@ -3367,6 +3368,33 @@ def test_map_html_viewer_carries_the_pixel_mapping():
             assert r.returncode == 0, r.stderr[-800:]
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_show_labels_projects_through_the_camera_block():
+    """A camera at the map origin looking along +x: a point 4 m ahead and 1 m
+    to the left lands left of the principal point, one 0.5 m up lands above it,
+    both at depth 4; a point behind the camera has a negative depth."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    show_labels = importlib.import_module('show_labels')
+    from ros2opv2v.geometry import matrix_to_opencood_pose
+    R = np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]], float)       # optical axes in the map
+    T = np.identity(4)
+    T[:3, :3] = R
+    cords = matrix_to_opencood_pose(T)
+    K = [[500, 0, 320], [0, 500, 240], [0, 0, 1]]
+    uvz = show_labels.project(np.array([[4.0, 1.0, 0.0], [4.0, 0.0, 0.5], [-2.0, 0.0, 0.0]]), cords, K)
+    assert np.allclose(uvz[0], [320 - 125, 240, 4.0], atol=1e-6), uvz[0]
+    assert np.allclose(uvz[1], [320, 240 - 62.5, 4.0], atol=1e-6), uvz[1]
+    assert uvz[2, 2] < 0
+    box = {"location": [4.0, 0.0, 0.0], "extent": [0.3, 0.3, 0.5], "angle": [0.0, 30.0, 0.0]}
+    frame = {"cords": cords, "intrinsic": K}
+    seen = show_labels.sees(frame, box, (640, 480), max_range=8.0)
+    assert seen is not None and abs(seen[0] - 4.0) < 1e-6 and seen[1] > 0.99, seen
+    assert show_labels.sees(frame, {"location": [4.0, 0.0, 0.0], "extent": box["extent"],
+                                    "angle": box["angle"]}, (640, 480), max_range=3.0) is None
+    im = np.zeros((480, 640, 3), np.uint8)
+    assert show_labels.draw_box(im, box, cords, K, text='chair')
+    assert im.any(), 'the box must be drawn'
 
 
 if __name__ == '__main__':

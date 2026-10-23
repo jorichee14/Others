@@ -18,6 +18,7 @@ python scripts/validate_opv2v.py --root <output>/test                          #
 python scripts/label_static.py   --pcd map.pcd --dataset <output>/test         # stage D: ground truth from the run's own map
 python scripts/label_static.py   --pcd map.pcd --dataset <output>/test --propose \
     --map-image top.png --map-html top.html                          #   a clickable viewer: click the objects, copy the fit command
+python scripts/show_labels.py    --dataset <output>/test --labels labels.json --out checks/   #   the boxes drawn in the robots' own images
 ```
 
 | | |
