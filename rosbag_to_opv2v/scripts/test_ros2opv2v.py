@@ -3242,7 +3242,8 @@ def test_comms_streams_are_written_per_frame_and_as_tables():
             two = yaml.safe_load(handle)['comms']
         assert 'wifi' not in two and two['links']['link']['n'] == 20, two
         # the full-rate tables
-        tables = os.path.join(scenario, 'comms')
+        tables = os.path.join(tmp, 'out', 'comms', 'test', 'synthetic')
+        assert not os.path.exists(os.path.join(scenario, 'comms')), 'comms must not sit in the scenario'
         assert sorted(os.listdir(tables)) == ['ego_ping.csv', 'ego_wifi.csv', 'link.csv', 'streams.json']
         with open(os.path.join(tables, 'ego_ping.csv')) as handle:
             rows = handle.read().strip().split('\n')
@@ -3280,7 +3281,7 @@ def test_make_view_keeps_the_frames_with_the_image():
             assert keys == ['000000', '000004', '000008'], (agent, keys)
         assert os.path.exists(os.path.join(view, '1', '000004_camera0.png'))
         assert os.path.islink(os.path.join(view, '1', '000004.pcd'))
-        assert os.path.isdir(os.path.join(view, 'comms'))
+        assert os.path.isdir(os.path.join(tmp, 'view', 'comms', 'test', 'synthetic'))
         assert os.path.exists(os.path.join(tmp, 'view', 'sidecar.json'))
         assert os.path.exists(os.path.join(tmp, 'view', 'test', 'conversion_report.json'))
     finally:

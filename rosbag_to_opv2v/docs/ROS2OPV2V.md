@@ -471,8 +471,11 @@ numeric field, the fraction of every boolean (a `reply` flag becomes the
 delivery ratio) and p95 for the fields in `p95`, over `[t - w/2, t + w/2)`.
 Stamps are corrected per host like the sensors' (`host` defaults to the
 agent). The full-rate record is written once per scenario as
-`comms/<agent>_<name>.csv` and `comms/<link>.csv`, with `comms/streams.json`
-naming topics and fields, so a per-frame number can be traced to its packets.
+`<root>/comms/<split>/<scenario>/<agent>_<name>.csv` and `<link>.csv`, with
+`streams.json` naming topics and fields, so a per-frame number can be traced
+to its packets. It sits outside the split folders because OpenCOOD treats
+every folder under a split as a scenario and every folder under a scenario
+as an agent id.
 
 ---
 

@@ -552,12 +552,18 @@ def load_comms(reader: BagReader, cfg: ConverterConfig, report: ConversionReport
 
 def write_comms_tables(cfg: ConverterConfig, streams: Dict[str, commsmod.StreamIndex],
                        scenario_dirs: List[str], report: ConversionReport) -> None:
-    """The full-rate record beside the frames: comms/<name>.csv per scenario,
-    and a copy of ``comms.tables_dir`` (the pipeline's CSI arrays and tables)."""
+    """The full-rate record: <root>/comms/<split>/<scenario>/<name>.csv, and a
+    copy of ``comms.tables_dir`` (the pipeline's CSI arrays and tables).
+
+    Outside the split folders on purpose: OpenCOOD lists every folder under a
+    split as a scenario and every folder under a scenario as an agent whose
+    name it int()s, so a comms/ folder in either place breaks the loader."""
     if not cfg.comms.enabled:
         return
     for scenario_dir in scenario_dirs:
-        out = os.path.join(scenario_dir, "comms")
+        out = os.path.join(cfg.output.root, "comms", cfg.output.split, os.path.basename(scenario_dir))
+        if os.path.isdir(out):
+            shutil.rmtree(out)
         os.makedirs(out, exist_ok=True)
         if cfg.comms.write_csv:
             for name, idx in streams.items():

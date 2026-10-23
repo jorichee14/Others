@@ -16,7 +16,7 @@ the folders aligned (OpenCOOD indexes every agent by the ego's keys).
         [--split train] [--copy]       # copy instead of symlink
 
 Sidecars at the root (heter_modality_assign.json, isaacsim_class_map.json)
-and each scenario's comms/ folder are linked too, and conversion_report.json
+and the root's comms/ folder are linked too, and conversion_report.json
 is written beside a view_report.json saying what was kept.
 """
 from __future__ import annotations
@@ -70,7 +70,7 @@ def make_view(root: str, out: str, require_image, splits=SPLITS, copy=False, log
     os.makedirs(out, exist_ok=True)
     for name in os.listdir(root):
         src = os.path.join(root, name)
-        if os.path.isfile(src):                       # sidecars
+        if os.path.isfile(src) or name == "comms":    # sidecars, and the link tables
             _link(src, os.path.join(out, name), copy)
     for split in splits:
         split_dir = os.path.join(root, split)
@@ -93,9 +93,6 @@ def make_view(root: str, out: str, require_image, splits=SPLITS, copy=False, log
                     for f in os.listdir(os.path.join(sdir, agent)):
                         if f.startswith(k + ".") or f.startswith(k + "_"):
                             _link(os.path.join(sdir, agent, f), os.path.join(odir, agent, f), copy)
-            for extra in ("comms",):
-                if os.path.isdir(os.path.join(sdir, extra)):
-                    _link(os.path.join(sdir, extra), os.path.join(odir, extra), copy)
             report["splits"].setdefault(split, {})[scenario] = {
                 "frames_in": len(keys), "frames_kept": len(kept), "agents": agents}
             log(f"{split}/{scenario}: {len(kept)} of {len(keys)} frames kept, agents {agents}")
