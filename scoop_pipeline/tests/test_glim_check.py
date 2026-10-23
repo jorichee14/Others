@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """Self-test for GLIM's loop-closure check: map_stages/05_anchor.py --traj
---check on a synthetic mobile_2 bag. The rs_anchor board is rendered into
+--check on a synthetic mobile_2 bag. The board_2 (5x5, was rs_anchor) board is rendered into
 RealSense colour images at the start (0-4 s) and the end (20-24 s) of a loop
 that ends where it began; the trajectory given to the check drifted 15 mm by
 the end. The check must find the board twice and report ~15 mm, write its
@@ -69,7 +69,7 @@ def main():
     fails = []
     try:
         cfg = pc.load_config(os.path.join(STAGES, "pipeline_config_mapping_20261015.json"))
-        design = pb.Board("rs_anchor", cfg["boards"]["rs_anchor"])
+        design = pb.Board("board_2", cfg["boards"]["board_2"])
         sq_px = 200
         bw, bh = design.sx * sq_px, design.sy * sq_px
         board_img = design.board.generateImage((bw, bh)) if hasattr(design.board, "generateImage") \
@@ -118,7 +118,7 @@ def main():
         if p.returncode != 0:
             raise AssertionError(p.stdout[-3000:] + p.stderr[-3000:])
         r = json.load(open(out))
-        b = r["boards"]["rs_anchor"]
+        b = r["boards"]["board_2"]
         lc = b["loop_closure"]
         if b["sections"] != 2 or lc is None:
             fails.append(f"expected 2 sections with a loop closure: {b}")
@@ -149,15 +149,15 @@ def main():
         logs = []
         summ = recording.glim_loop_check(rec, logs.append, config=cfg_path)
         info = yaml.safe_load(open(rec.odometry / "glim.yaml"))
-        lc2 = (info.get("loop_closure") or {}).get("boards", {}).get("rs_anchor", {})
+        lc2 = (info.get("loop_closure") or {}).get("boards", {}).get("board_2", {})
         if summ is None or abs((lc2.get("mm") or 0) - 15.0) > 2.0:
             fails.append(f"glim.yaml loop_closure: {info.get('loop_closure')} / {logs}")
         elif info["files"]["traj_lidar.txt"]["poses"] != 241:
             fails.append("glim.yaml lost its other values")
-        elif not any("loop closure rs_anchor: s0->s1" in ln for ln in logs):
+        elif not any("loop closure board_2: s0->s1" in ln for ln in logs):
             fails.append(f"no summary line: {logs}")
         else:
-            print("  ok    " + [ln for ln in logs if "loop closure rs_anchor" in ln][0].strip())
+            print("  ok    " + [ln for ln in logs if "loop closure board_2" in ln][0].strip())
         # 02's check at its end: the refined trajectory (5 mm left), against GLIM's
         sys.path.insert(0, os.path.join(ROOT, "analysis"))
         import trajs
@@ -170,7 +170,7 @@ def main():
                 fo.write(" ".join(v) + "\n")
         out3 = []
         summ3 = trajs.loop_check(cfg_path, str(ref), log=out3.append)
-        b3 = (summ3 or {}).get("boards", {}).get("rs_anchor", {})
+        b3 = (summ3 or {}).get("boards", {}).get("board_2", {})
         cmp3 = [ln for ln in out3 if "GLIM" in ln and "refined" in ln]
         if summ3 is None or abs((b3.get("mm") or 0) - 5.0) > 2.0 or not cmp3:
             fails.append(f"refined check: {b3} / {out3}")
