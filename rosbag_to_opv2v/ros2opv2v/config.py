@@ -19,6 +19,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import yaml
 
+from .comms import CommsConfig  # noqa: F401
 from .geometry import OPTICAL_TO_FLU, invert, make_transform
 
 
@@ -37,6 +38,15 @@ def _get(mapping: dict, key: str, default=_REQUIRED, ctx: str = ""):
     return default
 
 
+TF = "tf"
+"""``extrinsic: tf``: resolve the transform from the bag's ``/tf_static`` at run
+time, from the pose's ``frame`` to the sensor's ``frame_id`` (see ``tf.py``)."""
+
+
+def _is_tf(value) -> bool:
+    return isinstance(value, str) and value.strip().lower() == TF
+
+
 def _transform_from(mapping: Optional[dict], ctx: str) -> np.ndarray:
     """Parse an ``{x, y, z, roll, pitch, yaw}`` block into a 4x4 (ROS RPY, degrees).
 
@@ -44,6 +54,9 @@ def _transform_from(mapping: Optional[dict], ctx: str) -> np.ndarray:
     placeholder the operator has not filled in yet, and silently treating it as
     identity is exactly the failure mode this converter must not have.
     """
+    if _is_tf(mapping):
+        raise ConfigError(f"{ctx}: 'tf' is not allowed here; it is for a sensor's "
+                          f"extrinsic (cloud, cameras) together with its frame_id")
     if mapping is None:
         raise ConfigError(
             f"{ctx}: transform is null. Fill in x/y/z/roll/pitch/yaw (degrees), "
@@ -87,6 +100,12 @@ class CloudConfig:
     topic: str
     extrinsic: np.ndarray          # base -> sensor
     intensity: IntensityConfig = field(default_factory=IntensityConfig)
+    frame_id: Optional[str] = None
+    """The sensor's TF frame. With ``extrinsic: tf`` the extrinsic is looked up
+    on /tf_static from the pose's ``frame`` to this one and filled in before
+    conversion (``extrinsic_from_tf`` says so; ``extrinsic`` is identity until
+    then)."""
+    extrinsic_from_tf: bool = False
     camera_info_topic: Optional[str] = None
     depth_scale: float = 0.001     # 16UC1 counts -> metres (ignored for 32FC1)
     max_depth: float = 20.0
@@ -145,10 +164,16 @@ class CloudConfig:
                 f"{ctx}: optical_frame applies to depth_image clouds only. A "
                 f"PointCloud2 is used in the frame its header names; if that frame "
                 f"is optical, say so in `extrinsic` instead.")
+        from_tf = _is_tf(mapping.get("extrinsic"))
+        if from_tf and not mapping.get("frame_id"):
+            raise ConfigError(f"{ctx}: extrinsic: tf needs frame_id (the sensor's TF frame)")
         cfg = CloudConfig(
             kind=kind,
             topic=str(_get(mapping, "topic", ctx=ctx)),
-            extrinsic=_transform_from(mapping.get("extrinsic"), f"{ctx}.extrinsic"),
+            extrinsic=(np.identity(4) if from_tf else
+                       _transform_from(mapping.get("extrinsic"), f"{ctx}.extrinsic")),
+            frame_id=mapping.get("frame_id"),
+            extrinsic_from_tf=from_tf,
             intensity=IntensityConfig.parse(mapping.get("intensity")),
             camera_info_topic=mapping.get("camera_info_topic"),
             depth_scale=float(mapping.get("depth_scale", 0.001)),
@@ -204,6 +229,14 @@ class CameraConfig:
     Handing it 1280x720 where it expects 1280x800 leaves the vertical focal
     length 11% wrong, and 960x540 leaves it 48% wrong, with no error anywhere:
     the model simply projects image features to the wrong places."""
+    frame_id: Optional[str] = None
+    extrinsic_from_tf: bool = False
+    required: bool = True
+    """A frame without this camera's image is dropped (default). ``false`` keeps
+    the frame without the image: the yaml's camera block then says
+    ``image_present: false`` and no png is written. Use it for a camera far
+    slower than the frame grid, and build the camera arm's dataset from the
+    frames that have it (``scripts/make_view.py``)."""
 
     @staticmethod
     def parse(mapping: dict, ctx: str) -> "CameraConfig":
@@ -212,13 +245,20 @@ class CameraConfig:
             size = [int(v) for v in size]
             if len(size) != 2 or size[0] <= 0 or size[1] <= 0:
                 raise ConfigError(f"{ctx}.output_size must be [width, height] in pixels")
+        from_tf = _is_tf(mapping.get("extrinsic"))
+        if from_tf and not mapping.get("frame_id"):
+            raise ConfigError(f"{ctx}: extrinsic: tf needs frame_id (the camera's TF frame)")
         return CameraConfig(
             topic=str(_get(mapping, "topic", ctx=ctx)),
-            extrinsic=_transform_from(mapping.get("extrinsic"), f"{ctx}.extrinsic"),
+            extrinsic=(np.identity(4) if from_tf else
+                       _transform_from(mapping.get("extrinsic"), f"{ctx}.extrinsic")),
             camera_info_topic=mapping.get("camera_info_topic"),
             intrinsic=mapping.get("intrinsic"),
             optical_frame=bool(mapping.get("optical_frame", True)),
-            output_size=size)
+            output_size=size,
+            frame_id=mapping.get("frame_id"),
+            extrinsic_from_tf=from_tf,
+            required=bool(mapping.get("required", True)))
 
 
 @dataclass
@@ -226,6 +266,10 @@ class PoseConfig:
     """How an agent's body pose in the shared world frame is obtained."""
     source: str                    # 'odometry' | 'pose' | 'static'
     topic: Optional[str] = None
+    frame: Optional[str] = None
+    """The TF frame the pose describes (the agent's base), e.g.
+    ``mobile_1_base_link``. Needed for ``extrinsic: tf`` on any of its sensors;
+    documentation otherwise."""
     align: np.ndarray = field(default_factory=lambda: np.identity(4))   # world <- odom
     child_to_base: np.ndarray = field(default_factory=lambda: np.identity(4))
     static_pose: Optional[np.ndarray] = None                            # world <- base
@@ -251,6 +295,7 @@ class PoseConfig:
         if source == "static":
             return PoseConfig(
                 source=source,
+                frame=mapping.get("frame"),
                 static_pose=_transform_from(mapping.get("world_pose"), f"{ctx}.world_pose"))
         interp = str(mapping.get("interpolation", "linear")).lower()
         if interp not in ("linear", "nearest"):
@@ -269,6 +314,7 @@ class PoseConfig:
         return PoseConfig(
             source=source,
             topic=str(_get(mapping, "topic", ctx=ctx)),
+            frame=mapping.get("frame"),
             align=_transform_from(mapping.get("align"), f"{ctx}.align"),
             child_to_base=child_to_base,
             interpolation=interp,
@@ -514,6 +560,12 @@ class ConverterConfig:
     time: TimeConfig = field(default_factory=TimeConfig)
     clock: ClockConfig = field(default_factory=ClockConfig)
     world_frame: str = "world"
+    comms: CommsConfig = field(default_factory=CommsConfig)
+    tf_static_topic: str = "/tf_static"
+
+    def needs_tf(self) -> bool:
+        return any(a.cloud.extrinsic_from_tf or any(c.extrinsic_from_tf for c in a.cameras)
+                   for a in self.active_agents)
 
     @property
     def active_agents(self) -> List[AgentConfig]:
@@ -545,7 +597,8 @@ class ConverterConfig:
                if self.clock.enabled else [])
         return {"pose": dedup(pose), "cloud": dedup(cloud),
                 "camera_info": dedup(info), "camera": dedup(camera),
-                "ntp": dedup(ntp)}
+                "ntp": dedup(ntp), "comms": self.comms.topics(),
+                "tf_static": [self.tf_static_topic] if self.needs_tf() else []}
 
 
 def load_config(path: str) -> ConverterConfig:
@@ -565,7 +618,9 @@ def load_config(path: str) -> ConverterConfig:
         agents=agents,
         time=TimeConfig.parse(raw.get("time")),
         clock=ClockConfig.parse(raw.get("clock")),
-        world_frame=str((raw.get("world") or {}).get("frame_id", "world")))
+        world_frame=str((raw.get("world") or {}).get("frame_id", "world")),
+        comms=CommsConfig.parse(raw.get("comms")),
+        tf_static_topic=str((raw.get("world") or {}).get("tf_static_topic", "/tf_static")))
 
     validate(cfg)
     return cfg
@@ -628,6 +683,17 @@ def validate(cfg: ConverterConfig) -> None:
         raise ConfigError(f"time.master_agent={master!r} is not an enabled agent "
                           f"(enabled: {sorted(names)})")
 
+    for agent in active:
+        if (agent.cloud.extrinsic_from_tf or any(c.extrinsic_from_tf for c in agent.cameras)) \
+                and not agent.pose.frame:
+            raise ConfigError(
+                f"agent[{agent.name}]: extrinsic: tf needs pose.frame, the TF frame the "
+                f"pose topic describes (its base link), so the chain base -> sensor can "
+                f"be looked up on /tf_static")
+    for stream in cfg.comms.streams if cfg.comms.enabled else []:
+        if stream.agent is not None and stream.agent not in names:
+            raise ConfigError(f"comms stream {stream.name!r}: agent {stream.agent!r} is not "
+                              f"an enabled agent (enabled: {sorted(names)})")
     for agent in active:
         n_cams = len(agent.cameras)
         if n_cams > 4:

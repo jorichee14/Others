@@ -272,7 +272,9 @@ def build_frame_table(times: Sequence[int],
                       master: str,
                       drop_incomplete: bool = True,
                       camera_indices: Optional[Dict[Tuple[str, int], StampIndex]] = None,
-                      stride: int = 1) -> FrameTable:
+                      stride: int = 1,
+                      camera_required: Optional[Dict[Tuple[str, int], bool]] = None
+                      ) -> FrameTable:
     """Match every agent's cloud to each candidate frame time.
 
     A frame survives only if each *required* agent has a message within
@@ -281,6 +283,7 @@ def build_frame_table(times: Sequence[int],
     agent legitimately repeats), but it is counted and reported.
     """
     camera_indices = camera_indices or {}
+    camera_required = camera_required or {}
     frames: List[Frame] = []
     dropped: Dict[str, int] = {}
     dropped_at: List[Tuple[int, str]] = []
@@ -308,7 +311,9 @@ def build_frame_table(times: Sequence[int],
         for (agent_name, slot), index in camera_indices.items():
             found = index.nearest_pair(t_ns, tolerance_ns)
             if found is None:
-                if required.get(agent_name, True):
+                # an optional camera (slower than the grid, by design) leaves
+                # the frame without its image; the yaml says so
+                if required.get(agent_name, True) and camera_required.get((agent_name, slot), True):
                     missing.append("%s:camera%d" % (agent_name, slot))
                 continue
             camera_hits[(agent_name, slot)] = found

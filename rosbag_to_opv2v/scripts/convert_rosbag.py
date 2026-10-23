@@ -127,6 +127,19 @@ def print_report(report: ConversionReport, dry_run: bool = False) -> None:
                     for d in steps)
                     + f"   (z span {entry.get('z_span_m', 0):.3f} m)")
 
+    if report.tf_extrinsics:
+        print("\nextrinsics resolved from /tf_static (base -> sensor, metres / degrees)")
+        for name, e in sorted(report.tf_extrinsics.items()):
+            print(f"  {name:<20} x {e['x']:+.4f} y {e['y']:+.4f} z {e['z']:+.4f}  "
+                  f"roll {e['roll']:+.3f} pitch {e['pitch']:+.3f} yaw {e['yaw']:+.3f}")
+            print(f"  {'':<20} {e['chain']}")
+    if report.comms:
+        print("\nlink state written into every frame (comms)")
+        for key, e in sorted(report.comms.items()):
+            where = f"agent {e['agent']}" if e['agent'] else "every agent (links)"
+            print(f"  {key:<28} {e['messages']:>7} msgs  {e['kind']:<8} {e['window_s']:>5.1f} s  "
+                  f"{where}  {e['topic']}")
+
     if report.points_per_agent:
         print("\npoints per frame")
         for name, entry in sorted(report.points_per_agent.items()):

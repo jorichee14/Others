@@ -56,9 +56,17 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", required=True,
                         help="dataset root holding train/ validate/ test/")
+    parser.add_argument("--extra-class", action="append", default=[],
+                        help="append a class to InCoP's seven (e.g. robot): its id is "
+                             "the next index. The loader has to know the class too; "
+                             "check it reads class_names from this file before relying "
+                             "on an eighth class")
     parser.add_argument("--modality", default="m1",
                         help="modality name every agent is assigned (default m1, "
                              "the multimodal LiDAR+camera branch)")
+    parser.add_argument("--assign", action="append", default=[], metavar="AGENT=MODALITY",
+                        help="a heterogeneous assignment, per agent folder (e.g. --assign 0=m1 "
+                             "--assign 1=m2); agents not named keep --modality")
     parser.add_argument("--training-mode", default="class_agnostic")
     args = parser.parse_args()
 
@@ -72,11 +80,19 @@ def main() -> int:
         print("no scenarios under %s/{%s}" % (root, ",".join(SPLITS)), file=sys.stderr)
         return 2
 
-    assign = {name: {agent: args.modality for agent in agents}
+    per_agent = {}
+    for item in args.assign:
+        if "=" not in item:
+            print("--assign takes AGENT=MODALITY, got %r" % item, file=sys.stderr)
+            return 2
+        agent, modality = item.split("=", 1)
+        per_agent[agent.strip()] = modality.strip()
+    assign = {name: {agent: per_agent.get(agent, args.modality) for agent in agents}
               for name, agents in found.items()}
+    names = list(CLASS_NAMES) + [c for c in args.extra_class if c not in CLASS_NAMES]
     class_map = {
-        "class_names": list(CLASS_NAMES),
-        "class_to_id": {name: i for i, name in enumerate(CLASS_NAMES)},
+        "class_names": names,
+        "class_to_id": {name: i for i, name in enumerate(names)},
         "detection_class": "object",
         "training_mode": args.training_mode,
     }
@@ -90,7 +106,7 @@ def main() -> int:
         print("wrote %s" % path)
 
     for name, agents in sorted(found.items()):
-        print("  %-16s agents %s -> %s" % (name, agents, args.modality))
+        print("  %-16s %s" % (name, ", ".join("%s: %s" % (a, assign[name][a]) for a in agents)))
     print("\n  chair is class id %d" % CLASS_NAMES.index("chair"))
     return 0
 

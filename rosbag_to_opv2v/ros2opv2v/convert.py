@@ -31,13 +31,15 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 
 from . import clock as clockmod
+from . import comms as commsmod
 from . import labels
 from .bagreader import BagReader
 from .config import AgentConfig, ConverterConfig, ego_agent
-from .geometry import invert, matrix_to_opencood_pose, quat_to_matrix
+from .geometry import invert, matrix_to_opencood_pose, matrix_to_rpy_config, quat_to_matrix
 from .pointclouds import (apply_range_filter, cloud_from_depth_image,
                           cloud_from_pointcloud2, camera_intrinsics, deskew_cloud,
                           subsample)
+from .tf import TfError, describe_chain, read_static_tf
 from .sync import (NS, Frame, FrameTable, PoseTrack, StampIndex,
                    build_frame_table, frame_times, reuse_statistics,
                    tightness_curve)
@@ -67,6 +69,8 @@ class ConversionReport:
     deskew: Dict[str, dict] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     duration_s: float = 0.0
+    tf_extrinsics: Dict[str, dict] = field(default_factory=dict)
+    comms: Dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -83,6 +87,8 @@ class ConversionReport:
             "clocks": self.clocks,
             "tightness": self.tightness,
             "deskew": self.deskew,
+            "tf_extrinsics": self.tf_extrinsics,
+            "comms": self.comms,
             "warnings": self.warnings,
             "duration_s": round(self.duration_s, 2),
         }
@@ -492,6 +498,81 @@ def _bag_midpoint(indexes) -> int:
     return (min(stamps) + max(stamps)) // 2 if stamps else 0
 
 
+def resolve_tf_extrinsics(reader: BagReader, cfg: ConverterConfig,
+                          report: ConversionReport) -> None:
+    """Fill every ``extrinsic: tf`` from the bag's static transform tree.
+
+    The chain runs from the pose's ``frame`` (the base link the pose topic
+    describes) to the sensor's ``frame_id``; its composition is the base ->
+    sensor extrinsic the rest of the converter uses. What was resolved is kept in
+    the report as x/y/z/roll/pitch/yaw so the dataset's provenance carries the
+    numbers a hand-written config would have shown.
+    """
+    if not cfg.needs_tf():
+        return
+    tree = read_static_tf(reader, cfg.tf_static_topic)
+    if not tree.edges:
+        raise ConversionError(
+            f"extrinsic: tf is configured but {cfg.tf_static_topic} is empty or absent "
+            f"in the bag")
+    for agent in cfg.active_agents:
+        base = agent.pose.frame
+        targets = []
+        if agent.cloud.extrinsic_from_tf:
+            targets.append(("cloud", agent.cloud))
+        for slot, cam in enumerate(agent.cameras):
+            if cam.extrinsic_from_tf:
+                targets.append((f"camera{slot}", cam))
+        for what, sensor in targets:
+            try:
+                sensor.extrinsic = tree.lookup(base, sensor.frame_id)
+                chain = describe_chain(tree, base, sensor.frame_id)
+            except TfError as exc:
+                raise ConversionError(f"agent[{agent.name}].{what}: {exc}") from exc
+            sensor.extrinsic_from_tf = False      # resolved; behaves as typed from here
+            entry = matrix_to_rpy_config(sensor.extrinsic)
+            entry["chain"] = chain
+            report.tf_extrinsics[f"{agent.name}.{what}"] = entry
+
+
+def load_comms(reader: BagReader, cfg: ConverterConfig, report: ConversionReport,
+               clocks: Optional[clockmod.HostClocks]) -> Dict[str, commsmod.StreamIndex]:
+    if not cfg.comms.enabled:
+        return {}
+    streams = commsmod.load_streams(reader, cfg.comms, clocks)
+    for name, idx in streams.items():
+        if not len(idx):
+            report.warnings.append(f"comms stream {name!r} ({idx.cfg.topic}) carried no messages")
+        report.comms[name] = {"topic": idx.cfg.topic, "kind": idx.cfg.kind,
+                              "agent": idx.cfg.agent, "messages": len(idx),
+                              "window_s": idx.cfg.window_s,
+                              "fields": idx.columns + idx.string_columns}
+    return streams
+
+
+def write_comms_tables(cfg: ConverterConfig, streams: Dict[str, commsmod.StreamIndex],
+                       scenario_dirs: List[str], report: ConversionReport) -> None:
+    """The full-rate record beside the frames: comms/<name>.csv per scenario,
+    and a copy of ``comms.tables_dir`` (the pipeline's CSI arrays and tables)."""
+    if not cfg.comms.enabled:
+        return
+    for scenario_dir in scenario_dirs:
+        out = os.path.join(scenario_dir, "comms")
+        os.makedirs(out, exist_ok=True)
+        if cfg.comms.write_csv:
+            for name, idx in streams.items():
+                idx.write_csv(os.path.join(out, f"{name}.csv"))
+        if cfg.comms.tables_dir:
+            if not os.path.isdir(cfg.comms.tables_dir):
+                raise ConversionError(f"comms.tables_dir {cfg.comms.tables_dir} is not a folder")
+            dst = os.path.join(out, "tables")
+            if os.path.isdir(dst):
+                shutil.rmtree(dst)
+            shutil.copytree(cfg.comms.tables_dir, dst)
+        with open(os.path.join(out, "streams.json"), "w") as handle:
+            json.dump(report.comms, handle, indent=2)
+
+
 def plan(reader: BagReader, cfg: ConverterConfig,
          report: ConversionReport) -> Tuple[List[Frame], Dict[str, PoseTrack],
                                             Dict[str, dict], FrameTable,
@@ -505,6 +586,8 @@ def plan(reader: BagReader, cfg: ConverterConfig,
             "these configured topics are not in the bag:\n  " +
             "\n  ".join(sorted(set(missing))) +
             "\n\nRun scripts/inspect_bag.py to list what the recording actually has.")
+
+    resolve_tf_extrinsics(reader, cfg, report)
 
     cloud_topics = wanted["cloud"] + wanted["camera"]
     indexes = reader.index(cloud_topics)
@@ -558,7 +641,9 @@ def plan(reader: BagReader, cfg: ConverterConfig,
         master=master.name,
         drop_incomplete=cfg.time.drop_incomplete_frames,
         camera_indices=camera_indices,
-        stride=cfg.output.frame_stride)
+        stride=cfg.output.frame_stride,
+        camera_required={(a.name, slot): cam.required
+                         for a in cfg.active_agents for slot, cam in enumerate(a.cameras)})
 
     report.frames_candidate = len(times[::max(1, cfg.output.frame_stride)])
     report.dropped = dict(table.dropped)
@@ -759,7 +844,9 @@ def assign_scenarios(frames: List[Frame], cfg: ConverterConfig) -> List[Tuple[st
 
 def write_frame_yamls(cfg: ConverterConfig, scenarios, frame_poses: Dict[str, dict],
                       report: ConversionReport,
-                      clocks: Optional[clockmod.HostClocks] = None) -> Dict[str, str]:
+                      clocks: Optional[clockmod.HostClocks] = None,
+                      streams: Optional[Dict[str, commsmod.StreamIndex]] = None
+                      ) -> Dict[str, str]:
     """Write every agent's per-frame yaml; returns frame key -> scenario dir."""
     agent_objects = {
         a.name: {"object_id": a.obj.object_id, "extent": a.obj.extent,
@@ -807,6 +894,11 @@ def write_frame_yamls(cfg: ConverterConfig, scenarios, frame_poses: Dict[str, di
                 for slot, camera in enumerate(agent.cameras):
                     params[f"camera{slot}"] = _camera_block(
                         camera, world_from_base, agent, cfg)
+                    # an optional camera may have no image in this frame
+                    params[f"camera{slot}"]["image_present"] = \
+                        (agent.name, slot) in frame.camera_stamps
+                if streams:
+                    params["comms"] = commsmod.frame_block(streams, agent.name, frame.t_ns)
 
                 # Provenance: the real sensor time behind this synthetic frame key.
                 params["ros_stamp_ns"] = int(frame.cloud_stamps.get(agent.name,
@@ -1129,8 +1221,10 @@ def convert(cfg: ConverterConfig, overwrite: bool = False,
                         % (agent.name, camera.topic, width, height,
                            camera.output_size[0], camera.output_size[1]))
 
-    frame_dirs = write_frame_yamls(cfg, scenarios, frame_poses, report, clocks)
+    streams = load_comms(reader, cfg, report, clocks)
+    frame_dirs = write_frame_yamls(cfg, scenarios, frame_poses, report, clocks, streams)
     write_clouds(reader, cfg, frames, frame_dirs, camera_infos, report, tracks, progress)
+    write_comms_tables(cfg, streams, sorted(set(frame_dirs.values())), report)
 
     report.frames_written = len(frames)
     report.duration_s = time.time() - started

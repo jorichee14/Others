@@ -414,7 +414,8 @@ def test_cdr_stamp_extraction():
 
 def _write_synthetic_bag(path, n_frames=12, two_clock_error_ns=0, transit_ns=None,
                          ntp_topic=None, ntp_offset_unit='s', ego_point_times=False,
-                         two_speed=0.0, optical_pose_X=None):
+                         two_speed=0.0, optical_pose_X=None, tf_static=False,
+                         ego_camera_every=0, comms=False):
     """Three agents on a 10 Hz grid with exactly known geometry.
 
     ego (agent 1) drives along +x; agent 2 sits 6 m ahead of the ego's start;
@@ -444,6 +445,15 @@ def _write_synthetic_bag(path, n_frames=12, two_clock_error_ns=0, transit_ns=Non
         CAMERA OPTICAL frame, i.e. the odometry pose composed with this
         ``T_child_cam``. That is the shape an offline pipeline republishes a
         corrected trajectory in, and it has no twist and no child_frame_id.
+    ``tf_static``           publish the ego's mounting as a static chain
+        ego_base -> ego_mast (z 0.3) -> ego_lidar (z 0.2) and ego_mast -> ego_cam
+        (x 0.1), so ``extrinsic: tf`` must resolve base -> lidar to z 0.5, the
+        value the typed configs use, and base -> cam to (0.1, 0, 0.3).
+    ``ego_camera_every``    an rgb8 image on /ego/camera/image every this many
+        frames (0: none): a camera slower than the grid, for ``required: false``.
+    ``comms``               /ego/wifi/status every 5 frames (signal -40 - i dBm)
+        and /ego/wifi/ping ten times per frame (rtt 10 + j ms, every fifth ping
+        lost), custom comms_msgs types decoded from their embedded schemas.
     """
     transit_ns = transit_ns or {}
     from mcap_ros2.writer import Writer
@@ -575,6 +585,40 @@ def _write_synthetic_bag(path, n_frames=12, two_clock_error_ns=0, transit_ns=Non
                 'float64 w')
             pose_schema = writer.register_msgdef('geometry_msgs/msg/PoseStamped',
                                                  pose_def)
+        tf_schema = None
+        if tf_static:
+            tf_def = (
+                'geometry_msgs/TransformStamped[] transforms\n'
+                '================================================================================'
+                '\nMSG: geometry_msgs/TransformStamped\nstd_msgs/Header header\n'
+                'string child_frame_id\ngeometry_msgs/Transform transform\n'
+                '================================================================================'
+                '\nMSG: std_msgs/Header\nbuiltin_interfaces/Time stamp\nstring frame_id\n'
+                '================================================================================'
+                '\nMSG: builtin_interfaces/Time\n' + time_def +
+                '\n================================================================================'
+                '\nMSG: geometry_msgs/Transform\ngeometry_msgs/Vector3 translation\n'
+                'geometry_msgs/Quaternion rotation\n'
+                '================================================================================'
+                '\nMSG: geometry_msgs/Vector3\nfloat64 x\nfloat64 y\nfloat64 z\n'
+                '================================================================================'
+                '\nMSG: geometry_msgs/Quaternion\nfloat64 x\nfloat64 y\nfloat64 z\nfloat64 w')
+            tf_schema = writer.register_msgdef('tf2_msgs/msg/TFMessage', tf_def)
+        wifi_schema = ping_schema = None
+        if comms:
+            wifi_def = ('std_msgs/Header header\nfloat64 signal_dbm\nfloat64 tx_bitrate_mbps\n'
+                        'string bssid\nint32 channel\n'
+                        '================================================================================'
+                        '\nMSG: std_msgs/Header\nbuiltin_interfaces/Time stamp\nstring frame_id\n'
+                        '================================================================================'
+                        '\nMSG: builtin_interfaces/Time\n' + time_def)
+            ping_def = ('std_msgs/Header header\nfloat64 rtt_ms\nbool reply\n'
+                        '================================================================================'
+                        '\nMSG: std_msgs/Header\nbuiltin_interfaces/Time stamp\nstring frame_id\n'
+                        '================================================================================'
+                        '\nMSG: builtin_interfaces/Time\n' + time_def)
+            wifi_schema = writer.register_msgdef('comms_msgs/msg/WifiLinkStatus', wifi_def)
+            ping_schema = writer.register_msgdef('comms_msgs/msg/PingStat', ping_def)
         ntp_schema = None
         if ntp_topic:
             ntp_def = ('std_msgs/Header header\nfloat64 offset\nfloat64 jitter\n'
@@ -595,8 +639,50 @@ def _write_synthetic_bag(path, n_frames=12, two_clock_error_ns=0, transit_ns=Non
         ego_points = np.array([[1.0, 0.0, 0.0], [2.0, 1.0, -0.5], [3.0, -1.0, 0.2]])
         # A 90 ms sweep: first point at the stamp, last 90 ms later.
         ego_times = [0, 45_000_000, 90_000_000] if ego_point_times else None
+        def tf_msg(t_ns, edges):
+            def one(parent, child, xyz):
+                return {'header': header(t_ns, parent), 'child_frame_id': child,
+                        'transform': {'translation': {'x': xyz[0], 'y': xyz[1], 'z': xyz[2]},
+                                      'rotation': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}}}
+            return {'transforms': [one(*e) for e in edges]}
+
         for i in range(n_frames):
             t = t0 + i * (NS // 10)
+            if tf_schema is not None and i == 0:
+                writer.write_message('/tf_static', tf_schema,
+                                     tf_msg(t, [('ego_base', 'ego_mast', (0.0, 0.0, 0.3)),
+                                                ('ego_mast', 'ego_lidar', (0.0, 0.0, 0.2)),
+                                                ('ego_mast', 'ego_cam', (0.1, 0.0, 0.0))]),
+                                     log_time=t, publish_time=t)
+            if ego_camera_every and i % ego_camera_every == 0:
+                rgb = np.full((2, 2, 3), 200, dtype=np.uint8)
+                writer.write_message('/ego/camera/image', image_schema,
+                                     {'header': header(t, 'ego_cam'), 'height': 2, 'width': 2,
+                                      'encoding': 'rgb8', 'is_bigendian': 0, 'step': 6,
+                                      'data': rgb.tobytes()},
+                                     log_time=t + ego_transit, publish_time=t)
+                writer.write_message('/ego/camera/camera_info', info_schema,
+                                     {'header': header(t, 'ego_cam'), 'height': 2, 'width': 2,
+                                      'distortion_model': 'plumb_bob', 'd': [],
+                                      'k': [100.0, 0, 1.0, 0, 100.0, 1.0, 0, 0, 1.0],
+                                      'r': [1.0, 0, 0, 0, 1.0, 0, 0, 0, 1.0],
+                                      'p': [100.0, 0, 1.0, 0, 0, 100.0, 1.0, 0, 0, 0, 1.0, 0],
+                                      'binning_x': 0, 'binning_y': 0,
+                                      'roi': {'x_offset': 0, 'y_offset': 0, 'height': 0,
+                                              'width': 0, 'do_rectify': False}},
+                                     log_time=t + ego_transit, publish_time=t)
+            if wifi_schema is not None:
+                if i % 5 == 0:
+                    writer.write_message('/ego/wifi/status', wifi_schema,
+                                         {'header': header(t, 'ego'), 'signal_dbm': -40.0 - i,
+                                          'tx_bitrate_mbps': 433.0, 'bssid': 'aa:bb', 'channel': 149},
+                                         log_time=t, publish_time=t)
+                for j in range(10):
+                    tp = t + j * (NS // 100)
+                    writer.write_message('/ego/wifi/ping', ping_schema,
+                                         {'header': header(tp, 'ego'), 'rtt_ms': 10.0 + j,
+                                          'reply': (j % 5) != 4},
+                                         log_time=tp, publish_time=tp)
             writer.write_message('/ego/points', cloud_schema,
                                  cloud_msg(t, 'ego_lidar', ego_points, ego_times),
                                  log_time=t + ego_transit, publish_time=t)
@@ -3012,6 +3098,191 @@ def test_the_label_class_survives_into_every_frame_yaml():
         vehicles = merge_external_labels({}, loaded)
         assert vehicles[1]["obj_type"] == "chair"
         assert "obj_type" not in vehicles[2]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_static_tf_chain_lookup():
+    from ros2opv2v.tf import StaticTf, TfError
+    tree = StaticTf()
+    tree.add('base', 'mast', make_transform(z=0.3))
+    tree.add('mast', 'lidar', make_transform(z=0.2))
+    tree.add('mast', 'cam', make_transform(x=0.1, yaw=90.0))
+    T = tree.lookup('base', 'lidar')
+    assert np.allclose(T[:3, 3], [0.0, 0.0, 0.5]), T
+    # across the tree, through the shared parent, one edge inverted
+    T = tree.lookup('lidar', 'cam')
+    assert np.allclose(T[:3, 3], [0.1, 0.0, -0.2]), T
+    assert np.allclose(tree.lookup('cam', 'lidar'), invert(T))
+    assert np.allclose(tree.lookup('base', 'base'), np.identity(4))
+    try:
+        tree.lookup('base', 'radar')
+        raise AssertionError('an unknown frame must be refused')
+    except TfError as exc:
+        assert 'radar' in str(exc) and 'lidar' in str(exc)
+
+
+def test_end_to_end_extrinsic_from_tf_matches_typed():
+    """`extrinsic: tf` reproduces the dataset the typed extrinsic gives."""
+    tmp = tempfile.mkdtemp(prefix='r2o_')
+    try:
+        bag = os.path.join(tmp, 'synthetic.mcap')
+        _write_synthetic_bag(bag, n_frames=6, tf_static=True)
+        raw = _synthetic_config(bag, os.path.join(tmp, 'out'))
+        ego = raw['agents'][0]
+        ego['pose']['frame'] = 'ego_base'
+        ego['cloud']['extrinsic'] = 'tf'
+        ego['cloud']['frame_id'] = 'ego_lidar'
+        config_path = os.path.join(tmp, 'cfg.yaml')
+        with open(config_path, 'w') as handle:
+            yaml.safe_dump(raw, handle)
+        cfg = cfgmod.load_config(config_path)
+        assert cfg.agents[0].cloud.extrinsic_from_tf
+        report = convert(cfg, overwrite=True)
+        got = report.tf_extrinsics['ego.cloud']
+        assert abs(got['z'] - 0.5) < 1e-9 and abs(got['x']) < 1e-9, got
+        assert got['chain'] == 'ego_base -> ego_mast -> ego_lidar', got['chain']
+        with open(os.path.join(tmp, 'out', 'test', 'synthetic', '1', '000004.yaml')) as handle:
+            params = yaml.safe_load(handle)
+        assert np.allclose(params['lidar_pose'][:3], [2.0, 0.0, 0.5], atol=1e-6), params['lidar_pose']
+        # a frame the chain cannot reach is refused, naming the frames it knows
+        ego['cloud']['frame_id'] = 'ego_radar'
+        with open(config_path, 'w') as handle:
+            yaml.safe_dump(raw, handle)
+        try:
+            convert(cfgmod.load_config(config_path), overwrite=True)
+            raise AssertionError('an unknown sensor frame must be refused')
+        except Exception as exc:  # noqa: BLE001
+            assert 'ego_radar' in str(exc) and 'ego_lidar' in str(exc), exc
+        # tf without the pose's frame is a config error
+        ego['cloud']['frame_id'] = 'ego_lidar'
+        del ego['pose']['frame']
+        with open(config_path, 'w') as handle:
+            yaml.safe_dump(raw, handle)
+        try:
+            cfgmod.load_config(config_path)
+            raise AssertionError('extrinsic: tf without pose.frame must be refused')
+        except cfgmod.ConfigError as exc:
+            assert 'pose.frame' in str(exc)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_optional_camera_keeps_frames_and_flags_the_image():
+    tmp = tempfile.mkdtemp(prefix='r2o_')
+    try:
+        bag = os.path.join(tmp, 'synthetic.mcap')
+        _write_synthetic_bag(bag, n_frames=12, tf_static=True, ego_camera_every=4)
+        raw = _synthetic_config(bag, os.path.join(tmp, 'out'))
+        ego = raw['agents'][0]
+        ego['pose']['frame'] = 'ego_base'
+        ego['cameras'] = [{'topic': '/ego/camera/image',
+                           'camera_info_topic': '/ego/camera/camera_info',
+                           'extrinsic': 'tf', 'frame_id': 'ego_cam', 'required': False}]
+        config_path = os.path.join(tmp, 'cfg.yaml')
+        with open(config_path, 'w') as handle:
+            yaml.safe_dump(raw, handle)
+        report = convert(cfgmod.load_config(config_path), overwrite=True)
+        assert report.frames_written == 12, (report.frames_written, report.dropped)
+        cam = report.tf_extrinsics['ego.camera0']
+        assert abs(cam['x'] - 0.1) < 1e-9 and abs(cam['z'] - 0.3) < 1e-9, cam
+        scenario = os.path.join(tmp, 'out', 'test', 'synthetic', '1')
+        pngs = sorted(f for f in os.listdir(scenario) if f.endswith('.png'))
+        assert pngs == ['000000_camera0.png', '000004_camera0.png', '000008_camera0.png'], pngs
+        for key, present in (('000004', True), ('000005', False)):
+            with open(os.path.join(scenario, key + '.yaml')) as handle:
+                params = yaml.safe_load(handle)
+            assert params['camera0']['image_present'] is present, (key, params['camera0'])
+        # required (the default) drops the frames without an image
+        ego['cameras'][0]['required'] = True
+        with open(config_path, 'w') as handle:
+            yaml.safe_dump(raw, handle)
+        report = convert(cfgmod.load_config(config_path), overwrite=True)
+        assert report.frames_written == 3, (report.frames_written, report.dropped)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_comms_streams_are_written_per_frame_and_as_tables():
+    tmp = tempfile.mkdtemp(prefix='r2o_')
+    try:
+        bag = os.path.join(tmp, 'synthetic.mcap')
+        _write_synthetic_bag(bag, n_frames=12, comms=True)
+        raw = _synthetic_config(bag, os.path.join(tmp, 'out'))
+        raw['comms'] = {'streams': [
+            {'agent': 'ego', 'name': 'wifi', 'kind': 'nearest', 'topic': '/ego/wifi/status',
+             'window_s': 1.0},
+            {'agent': 'ego', 'name': 'ping', 'kind': 'window', 'topic': '/ego/wifi/ping',
+             'window_s': 0.1, 'p95': ['rtt_ms']},
+            {'name': 'link', 'kind': 'window', 'topic': '/ego/wifi/ping', 'window_s': 0.2,
+             'host': 'ego'}]}
+        config_path = os.path.join(tmp, 'cfg.yaml')
+        with open(config_path, 'w') as handle:
+            yaml.safe_dump(raw, handle)
+        report = convert(cfgmod.load_config(config_path), overwrite=True)
+        assert report.comms['ego_ping']['messages'] == 120, report.comms
+        assert 'rtt_ms' in report.comms['ego_ping']['fields']
+        scenario = os.path.join(tmp, 'out', 'test', 'synthetic')
+        with open(os.path.join(scenario, '1', '000006.yaml')) as handle:
+            ego = yaml.safe_load(handle)['comms']
+        # nearest status: frame 6 sits between the messages at frames 5 and 10
+        assert ego['wifi']['present'] and ego['wifi']['signal_dbm'] == -45.0, ego['wifi']
+        assert abs(ego['wifi']['dt_ms'] + 100.0) < 1e-6, ego['wifi']
+        assert ego['wifi']['bssid'] == 'aa:bb' and ego['wifi']['channel'] == 149
+        # 100 ms window centred on the frame: pings at -50..+40 ms = j 5..9 of the
+        # frame before and j 0..4 of this one -> rtts 15..19 and 10..14
+        ping = ego['ping']
+        assert ping['n'] == 10, ping
+        assert abs(ping['rtt_ms_median'] - 14.5) < 1e-6, ping
+        assert abs(ping['reply_fraction'] - 0.8) < 1e-6, ping
+        assert 'rtt_ms_p95' in ping
+        # a stream without an agent is a link, in every agent's yaml
+        assert ego['links']['link']['n'] == 20, ego['links']
+        with open(os.path.join(scenario, '2', '000006.yaml')) as handle:
+            two = yaml.safe_load(handle)['comms']
+        assert 'wifi' not in two and two['links']['link']['n'] == 20, two
+        # the full-rate tables
+        tables = os.path.join(scenario, 'comms')
+        assert sorted(os.listdir(tables)) == ['ego_ping.csv', 'ego_wifi.csv', 'link.csv', 'streams.json']
+        with open(os.path.join(tables, 'ego_ping.csv')) as handle:
+            rows = handle.read().strip().split('\n')
+        assert rows[0] == 't_ns,t_raw_ns,reply,rtt_ms' and len(rows) == 121, rows[:2]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_make_view_keeps_the_frames_with_the_image():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from make_view import make_view
+    tmp = tempfile.mkdtemp(prefix='r2o_')
+    try:
+        bag = os.path.join(tmp, 'synthetic.mcap')
+        _write_synthetic_bag(bag, n_frames=12, tf_static=True, ego_camera_every=4, comms=True)
+        raw = _synthetic_config(bag, os.path.join(tmp, 'out'))
+        ego = raw['agents'][0]
+        ego['pose']['frame'] = 'ego_base'
+        ego['cameras'] = [{'topic': '/ego/camera/image',
+                           'camera_info_topic': '/ego/camera/camera_info',
+                           'extrinsic': 'tf', 'frame_id': 'ego_cam', 'required': False}]
+        raw['comms'] = {'streams': [{'agent': 'ego', 'name': 'wifi', 'topic': '/ego/wifi/status'}]}
+        config_path = os.path.join(tmp, 'cfg.yaml')
+        with open(config_path, 'w') as handle:
+            yaml.safe_dump(raw, handle)
+        convert(cfgmod.load_config(config_path), overwrite=True)
+        with open(os.path.join(tmp, 'out', 'sidecar.json'), 'w') as handle:
+            handle.write('{}')
+        report = make_view(os.path.join(tmp, 'out'), os.path.join(tmp, 'view'), [('1', 0)],
+                           log=lambda *_: None)
+        assert report['splits']['test']['synthetic']['frames_kept'] == 3, report
+        view = os.path.join(tmp, 'view', 'test', 'synthetic')
+        for agent in ('1', '2', '-1'):
+            keys = sorted(f[:-5] for f in os.listdir(os.path.join(view, agent)) if f.endswith('.yaml'))
+            assert keys == ['000000', '000004', '000008'], (agent, keys)
+        assert os.path.exists(os.path.join(view, '1', '000004_camera0.png'))
+        assert os.path.islink(os.path.join(view, '1', '000004.pcd'))
+        assert os.path.isdir(os.path.join(view, 'comms'))
+        assert os.path.exists(os.path.join(tmp, 'view', 'sidecar.json'))
+        assert os.path.exists(os.path.join(tmp, 'view', 'test', 'conversion_report.json'))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

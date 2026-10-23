@@ -42,7 +42,8 @@ Each frame yaml carries what stock OpenCOOD actually reads —
 | `vehicles` | detection ground truth: `{id: {location, center, extent, angle}}`, `extent` = **half**-dimensions |
 | `ego_speed` | km/h, from the odometry twist (or differenced positions if the bag has none) |
 | `true_ego_pos`, `predicted_ego_pos`, `plan_trajectory` | present for format compatibility; stock OpenCOOD does not read them |
-| `camera0..3` | `cords` / `extrinsic` / `intrinsic`, written only when cameras are configured |
+| `camera0..3` | `cords` / `extrinsic` / `intrinsic` / `image_present`, written only when cameras are configured |
+| `comms` | the link's state around this frame, when `comms.streams` is configured (see [Link state](#link-state-in-every-frame-comms)) |
 
 — plus four provenance keys this converter adds (`ros_stamp_ns`,
 `ros_frame_stamp_ns`, `source_agent`, `ros_sync`). Extra keys are harmless:
@@ -113,6 +114,16 @@ while any of them is `null` rather than guessing:
      anchor is a number to compare against; use it. The dry run prints each
      agent's start pose either way.
 2. **`extrinsic` — where each sensor sits on its robot.** `base_link -> sensor`.
+   When the bag's `/tf_static` carries the mounting (the offline pipeline
+   publishes every sensor below the robot's base link), do not copy numbers:
+   write `extrinsic: tf` with the sensor's `frame_id`, and name the frame the
+   pose topic describes in `pose.frame`. The chain base -> sensor is composed
+   from the static edges at run time, refused if a frame is missing or an edge
+   is on `/tf` (moving), and the resolved x/y/z/roll/pitch/yaw and the chain
+   walked are printed by the dry run and kept in `conversion_report.json`. A
+   chain through an untrusted calibration is still right for the *cloud* when
+   the pose topic was derived through that same chain (it cancels); it is the
+   camera's own pose that keeps the error then.
 3. **`object.extent` — the robots' physical half-dimensions**, if you want the
    agents themselves as pseudo-labels.
 
@@ -164,6 +175,16 @@ everything else is dropped, and the drop reasons are reported. Set
 `required: false` on an agent that may legitimately be absent — but then that
 agent's folder will have fewer files than the ego's, so keep it `false` only
 for an agent you have also disabled from the timestamp reference.
+
+A camera can be the exception. `required: false` on a camera keeps the frame
+when that camera has no image within tolerance; its `camera<slot>` block then
+says `image_present: false` and no png is written. That is for a camera far
+slower than the grid (a 1.3 Hz stereo stream on a 10 Hz LiDAR grid), where
+requiring it would cut the whole dataset to the camera's frames. The LiDAR
+arms use every frame; the camera arm uses the view of the frames that have
+the image, built by `scripts/make_view.py --require-image <agent>:<slot>`,
+which links those frames of every agent into a second tree with the same
+keys, so a frame in the view is the same frame in the full tree.
 
 Tolerance is the main knob, and it is bounded from below: a source at `f` Hz can
 be up to `1/(2f)` off any grid, so a tolerance under that drops frames for a
@@ -421,6 +442,37 @@ Real labels plug in through `labels.merge_external_labels`, which takes
 `{id, location, extent, angle}` in the same world frame. Agent-derived ids are
 reserved at 10000+ (CAVs) and 20000+ (RSUs) so a labelling tool's small ids
 never collide.
+
+---
+
+## Link state in every frame (`comms`)
+
+The frames crossed a network the testbed recorded: Wi-Fi link status (RSSI,
+bit rates, channel), round-trip time at ~100 Hz, goodput tests, the NTP
+daemon's residual, and the CSI a sniffer hears per packet. The `comms` block
+of the config names those topics as streams, and each frame yaml gets a
+`comms` block: the agent's own streams by name, and `links` (streams without
+an agent, the sniffer's CSI) in every agent's yaml.
+
+```yaml
+comms:
+  streams:
+    - {agent: mobile_1, name: wifi, kind: nearest, topic: /mobile_1/wifi/status, window_s: 1.0}
+    - {agent: mobile_1, name: ping, kind: window,  topic: /mobile_1/wifi/ping, window_s: 1.0, p95: [rtt_ms]}
+    - {name: csi_mobile_2_to_mobile_1, kind: window, topic: /mobile_1/sniffer/mobile_2/csi, host: mobile_1}
+  tables_dir: <processed>/comms      # optional: copied to <scenario>/comms/tables/
+```
+
+The message types are custom and their fields are not assumed: every scalar
+field is flattened by its dotted path (times to seconds, booleans to 0/1,
+arrays left out). `nearest` writes the closest message within `window_s` with
+its fields and the signed `dt_ms`; `window` writes `n`, the median of every
+numeric field, the fraction of every boolean (a `reply` flag becomes the
+delivery ratio) and p95 for the fields in `p95`, over `[t - w/2, t + w/2)`.
+Stamps are corrected per host like the sensors' (`host` defaults to the
+agent). The full-rate record is written once per scenario as
+`comms/<agent>_<name>.csv` and `comms/<link>.csv`, with `comms/streams.json`
+naming topics and fields, so a per-frame number can be traced to its packets.
 
 ---
 
