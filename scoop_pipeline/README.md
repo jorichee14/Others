@@ -431,6 +431,27 @@ read under the new names; a board stays on its own TF frame (`board`,
 `board_rs`, `board_3`, `board_4`). A pass uses the ones in `05_anchor.boards_used`;
 one whose `square_len` / `marker_len` is not set stops 05 with its name.
 
+Why a board was seen, or not (05 scans only the dataset's camera, so a board
+meant for a parked robot's camera is scanned here):
+
+```
+python3 scoop_pipeline/map_stages/board_scan.py <config> --board board_4 [--camera realsense]
+    [--from S --to S] [--period 0.2] [--save found|all|none]
+```
+
+scans one stream, the dataset's camera or a `07_build_cameras` entry's
+(`--camera NAME`: its bag, topics and distortion; `--image-topic`,
+`--camera-info`, `--bag` for any other), every `--period` s, and prints a line
+per frame with a marker of the board: how many markers (the board's own, their
+side in px), the chessboard corners found, and the pose verdict (ok, or
+no_corners / few_corners / pnp_fail / ambiguous / reproj, the detector's own
+gates as in 05); frames without a marker of the dictionary are absent. Then
+the totals, when the board was in view, and whether 05's section gate (4
+frames within 3 s) could pass. Written to `frames/board_scan_<board>_<camera>/`:
+`contact_sheet.jpg`, the whole stream in thumbnails (green border: pose,
+yellow: markers only), so what the camera looked at is seen at once, and the
+frames with a marker annotated (`--save all`: every sampled frame).
+
 A pass mapped by another robot copies this block with its values:
 `pipeline_config_mapping_20261015.json` (mobile_2) and
 `pipeline_config_mapping_20260924.json` (mobile_1). Once the merged
