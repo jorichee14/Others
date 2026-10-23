@@ -701,10 +701,18 @@ def check_sionna(tmp):
     for n_ in ("walls", "objects"):
         q = o3d.io.read_triangle_mesh(os.path.join(tmp, "radio_small", "meshes", n_ + ".ply"))
         Cq_ = np.asarray(q.vertex_colors)
-        assert len(Cq_) == len(q.vertices) and (np.abs(Cq_ - L.PLAIN_GREY) < 0.01).all(), (n_, "not one grey")
+        assert len(Cq_) == len(q.vertices) and (np.abs(Cq_[:, 0] - Cq_[:, 2]) < 0.01).all(), (n_, "not grey")
+        if n_ == "walls":
+            assert (np.abs(Cq_[:, 0] - L.PART_GREYS["walls"]) < 0.01).all(), "the walls not their shade"
+        else:
+            lo_, hi_ = L.OBJECT_GREYS
+            assert (Cq_[:, 0] > lo_ - 0.01).all() and (Cq_[:, 0] < hi_ + 0.01).all() \
+                and len(np.unique(Cq_[:, 0].round(3))) >= 3, "the objects not each their own shade"
         area[n_] = len(q.triangles) / max(q.get_surface_area(), 1e-9)
     Cv_ = np.asarray(o3d.io.read_triangle_mesh(rs["view"]).vertex_colors)
-    assert len(Cv_) and (np.abs(Cv_ - L.PLAIN_GREY) < 0.01).all(), "the view copy not one grey"
+    assert len(Cv_) and (np.abs(Cv_[:, 0] - Cv_[:, 2]) < 0.01).all() \
+        and {round(L.PART_GREYS[k_], 2) for k_ in ("floor", "walls", "ceiling")} <= set(Cv_[:, 0].round(2)), \
+        "the view copy not in the parts' greys"
     sp = o3d.geometry.TriangleMesh.create_sphere(1.0, 60)        # speckles (150 white, 150 black dots) smoothed over
     Vs_, Fs_ = np.asarray(sp.vertices), np.asarray(sp.triangles)
     Cs_ = np.tile((Vs_[:, 2:3] + 1) / 2 * 0.5 + 0.25, (1, 3))

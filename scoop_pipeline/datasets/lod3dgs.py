@@ -1233,7 +1233,25 @@ SIONNA_MATERIALS = {"floor": ("concrete", 0.2), "ceiling": ("concrete", 0.2), "w
 PART_COLOURS = {"floor": (0.6, 0.6, 0.6), "walls": (0.85, 0.78, 0.62), "ceiling": (0.95, 0.95, 0.95),
                 "objects": (0.95, 0.5, 0.1), "glass": (0.55, 0.8, 0.95)}
 PARTS = ("floor", "walls", "ceiling", "objects", "glass")
-PLAIN_GREY = (0.6, 0.6, 0.6)                    # --no-colours: every part this, so a viewer shows no default
+PART_GREYS = {"floor": 0.40, "walls": 0.62, "ceiling": 0.85, "objects": 0.52, "glass": 0.92}
+OBJECT_GREYS = (0.46, 0.60)                     # --no-colours: each object its own shade in this band
+
+
+def grey_colours(q, parts, oids=None):
+    """Per-vertex greys of a mesh whose faces are labelled `parts` (one of
+    PART_GREYS per face): the part's shade, each object its own
+    (OBJECT_GREYS, spread by its id), so a viewer tells the parts, and
+    neighbouring objects, apart; Sionna reads none of it."""
+    tri = np.asarray(q.triangles)
+    g = np.array([PART_GREYS.get(p_, 0.6) for p_ in parts], float)
+    if oids is not None:
+        obj = np.asarray(parts) == "objects"
+        lo, hi = OBJECT_GREYS
+        g[obj] = lo + (hi - lo) * ((np.asarray(oids)[obj] * 0.6180339887) % 1.0)
+    C = np.full(len(q.vertices), 0.6)
+    for k in range(3):
+        C[tri[:, k]] = g
+    return np.repeat(C[:, None], 3, axis=1)
 
 
 def floor_grid(V, cell=1.0):
@@ -2190,9 +2208,10 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     mirrored ceiling) is left out. flat_floor: the floor flattened onto its
     level (flatten_floor); flat_walls: the walls smoothed onto their planes
     (flatten_walls); fill: the walls filled behind furniture and their small
-    holes (fill_walls); colours False: the parts and <out>.ply in one grey
-    (PLAIN_GREY; Sionna shows its materials' own colours, a viewer this
-    grey rather than its default); flat_colours > 0:
+    holes (fill_walls); colours False: the parts and <out>.ply in greys,
+    one shade per part and per object (grey_colours; Sionna shows its
+    materials' own colours, a viewer these rather than its default);
+    flat_colours > 0:
     the colours made one per segment (segment_colours), blended in by that
     much (1: flat), so it looks clean; open_pts: plan points (x, y) no wall
     or glass patch is put within 1 m of (an opening to keep by hand)."""
@@ -2368,11 +2387,13 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
                        f'        <ref id="mat-{mid}" name="bsdf"/>',
                        "    </shape>"])
 
-    def coloured(q, name):
-        """A part in the mesh's colours, the floor floor_colour (colours False: one grey)."""
+    def coloured(q, name, oids=None):
+        """A part in the mesh's colours, the floor floor_colour (colours False:
+        the part's grey, each object its own; oids: per face)."""
         q = bare(q, colours=colours)
         if not (colours and q.has_vertex_colors()):
-            q.paint_uniform_color(PLAIN_GREY)
+            q.vertex_colors = o3d.utility.Vector3dVector(
+                grey_colours(q, [name] * len(q.triangles), oids))
         if colours and name == "floor" and floor_colour is not None:
             q.paint_uniform_color(floor_colour)
         if normals:                    # a viewer then shades it as a surface (its colours greyed)
@@ -2394,17 +2415,21 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
             os.makedirs(os.path.join(sdir, "meshes", "objects"), exist_ok=True)
             for k, oid in enumerate(np.unique(fobj[sel])):
                 rel = f"meshes/objects/obj_{k:03d}.ply"
-                o3d.io.write_triangle_mesh(os.path.join(sdir, rel), coloured(sub_mesh(sel & (fobj == oid)), name))
+                qo = sub_mesh(sel & (fobj == oid))
+                o3d.io.write_triangle_mesh(os.path.join(sdir, rel),
+                                           coloured(qo, name, np.full(len(qo.triangles), oid)))
                 shape(f"obj_{k:03d}", rel, mid)
         else:
-            o3d.io.write_triangle_mesh(os.path.join(sdir, "meshes", name + ".ply"), coloured(q, name))
+            o3d.io.write_triangle_mesh(os.path.join(sdir, "meshes", name + ".ply"),
+                                       coloured(q, name, fobj[sel] if name == "objects" else None))
             shape(name, f"meshes/{name}.ply", mid)
     sx = os.path.join(sdir, "scene.xml")
     open(sx, "w").write("\n".join(['<scene version="2.1.0">', *sum(xml_mats.values(), []), *shapes,
                                    "</scene>"]) + "\n")
     view = bare(sub_mesh(fpart != "gone"), colours=colours)
     if not (colours and view.has_vertex_colors()):
-        view.paint_uniform_color(PLAIN_GREY)
+        keep_ = fpart != "gone"
+        view.vertex_colors = o3d.utility.Vector3dVector(grey_colours(view, fpart[keep_], fobj[keep_]))
     if colours and floor_colour is not None:
         Cv = np.asarray(view.vertex_colors).copy()
         Cv[np.unique(np.asarray(view.triangles)[fpart[fpart != "gone"] == "floor"])] = floor_colour
@@ -3314,8 +3339,8 @@ def main():
                     help="leave the floor as meshed (default: its faces flattened onto the floor's level, the "
                          "bumps under furniture gone)")
     sn.add_argument("--no-colours", action="store_true",
-                    help="write the parts and <out>.ply in one grey instead of the mesh's colours "
-                         "(Sionna shows its materials' own)")
+                    help="write the parts and <out>.ply in greys, one shade per part and per object, "
+                         "instead of the mesh's colours (Sionna shows its materials' own)")
     sn.add_argument("--normals", action="store_true",
                     help="write the parts with vertex normals: a viewer shades them as surfaces (colours greyed)")
     sn.add_argument("--open", action="append", default=[], metavar="X,Y",

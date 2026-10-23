@@ -130,6 +130,24 @@ def load_site(P, band=(0.3, 1.8), ap=None, link="infra_1"):
 
 
 # ----------------------------------------------------------------- drawing --
+def headings(t, T, min_speed=0.2):
+    """The robot's heading per pose (rad): the registered yaw, steady to a
+    tenth of a degree, plus the constant offset to its direction of travel
+    fitted where it moves faster than min_speed m/s. The direction of travel
+    alone swings with the pose jitter whenever the robot creeps."""
+    yaw = np.arctan2(T[:, 1, 0], T[:, 0, 0])
+    p = T[:, :2, 3]
+    dt = np.gradient(t)
+    v = np.gradient(p, axis=0) / np.maximum(dt, 1e-3)[:, None]
+    speed = np.linalg.norm(v, axis=1)
+    mv = speed > min_speed
+    if mv.sum() < 10:
+        return yaw
+    d = np.arctan2(v[mv, 1], v[mv, 0]) - yaw[mv]
+    off = np.arctan2(np.mean(np.sin(d)), np.mean(np.cos(d)))
+    return yaw + off
+
+
 def near_intervals(t, P, anchors, near):
     """[(name, t0, t1)] while the path is within `near` m of an anchor."""
     out = []
@@ -210,12 +228,14 @@ def draw_timeline(axes, site, bands):
     """axes: (rssi, ping) sharing x; the iperf on rssi's twin."""
     t0 = site["t"][0] if site["t"] is not None else 0.0
     a_r, a_p = axes
-    for ax in axes:
-        for name, ta, tb in bands:
-            ax.axvspan((ta - t0) / 60, (tb - t0) / 60, color="0.85", zorder=0)
-    for name, ta, tb in bands:
-        a_p.annotate(name, (((ta + tb) / 2 - t0) / 60, 0.97), xycoords=("data", "axes fraction"),
-                     fontsize=5.5, ha="center", va="top", rotation=90, color="0.3")
+    names = sorted({b[0] for b in bands})
+    for name, ta, tb in bands:                       # a strip at the top: when an anchor was within reach
+        col = "C%d" % (names.index(name) % 10)
+        for ax, y in ((a_r, 0.96), (a_p, 0.92)):
+            ax.axvspan((ta - t0) / 60, (tb - t0) / 60, ymin=y, ymax=1.0, color=col, alpha=0.6, lw=0, zorder=0)
+        if tb - ta > 20:
+            a_r.annotate(name, (((ta + tb) / 2 - t0) / 60, 0.95), xycoords=("data", "axes fraction"),
+                         fontsize=5.5, ha="center", va="top", color=col)
     if site["wifi"] is not None:
         w = site["wifi"]
         a_r.plot((w["t"] - t0) / 60, w["rssi"], color="C0", lw=0.7, label="RSSI")
@@ -267,21 +287,31 @@ def draw_csi(ax, site, step=None):
         ax.text(0.5, 0.5, "no cleaned CSI yet", transform=ax.transAxes, ha="center", fontsize=8)
         return
     t0 = site["t"][0] if site["t"] is not None else c["t"][0]
-    n = len(c["t"])
-    step = step or max(n // 1500, 1)
-    A = c["amp_db"][::step]
-    tt = (c["t"][::step] - t0) / 60
-    A = A - np.nanmedian(A, axis=1, keepdims=True)
-    ax.imshow(A.T, aspect="auto", origin="lower", cmap="magma", vmin=-15, vmax=10,
-              extent=(tt[0], tt[-1], c["sub"][0], c["sub"][-1]), interpolation="nearest")
+    t1 = site["t"][-1] if site["t"] is not None else c["t"][-1]
+    nb = 600                                           # bins over the run: packets come in bursts
+    edges = np.linspace(t0, t1, nb + 1)
+    k = np.clip(np.searchsorted(edges, c["t"]) - 1, 0, nb - 1)
+    A = c["amp_db"] - np.nanmedian(c["amp_db"], axis=1, keepdims=True)
+    B = np.full((nb, A.shape[1]), np.nan)
+    cnt = np.bincount(k, minlength=nb)
+    for j in range(A.shape[1]):
+        B[cnt > 0, j] = np.bincount(k, A[:, j], minlength=nb)[cnt > 0] / cnt[cnt > 0]
+    ax.imshow(np.ma.masked_invalid(B).T, aspect="auto", origin="lower", cmap="magma", vmin=-15, vmax=10,
+              extent=(0, (t1 - t0) / 60, c["sub"][0], c["sub"][-1]), interpolation="nearest")
+    ax.set_facecolor("0.92")
     ax.set_ylabel("subcarrier")
     ax.set_xlabel("time into the run (min), link %s" % c["name"])
     try:
         from csi_analysis import delay_spread
+        step = step or max(len(c["t"]) // 3000, 1)
         ds = delay_spread(c["H"][::step], c["sub"])
+        kk = k[::step]
+        med = np.full(nb, np.nan)
+        for b in np.unique(kk):
+            med[b] = np.nanmedian(ds[kk == b])
         ax2 = ax.twinx()
-        ax2.plot(tt, ds, color="w", lw=0.5, alpha=0.8)
-        ax2.set_ylabel("delay spread (ns)", color="0.3")
+        ax2.plot((0.5 * (edges[:-1] + edges[1:]) - t0) / 60, med, color="c", lw=0.8)
+        ax2.set_ylabel("delay spread (ns), median per bin", color="c")
         ax2.set_ylim(0, np.nanpercentile(ds, 99) * 1.5)
     except Exception:
         pass
@@ -395,17 +425,14 @@ def animate(site, out_base, seconds=30.0, fps=10, near=3.0, mp4=True):
     cursors = [axes[k].axvline(0, color="C3", lw=1.0) for k in ("rssi", "ping", "csi", "q")]
     n = max(int(seconds * fps), 2)
     stamps = np.linspace(t[0], t[-1], n)
+    hd = headings(t, T)
 
     def frame(k):
         tk = stamps[k]
         i = min(int(np.searchsorted(t, tk)), len(t) - 1)
         growing.set_data(T[:i + 1, 0, 3], T[:i + 1, 1, 3])
-        j = min(i + 5, len(t) - 1)
-        v = T[j, :2, 3] - T[max(i - 5, 0), :2, 3]
-        if np.linalg.norm(v) > 1e-3:
-            v = v / np.linalg.norm(v) * 1.5
         head.set_position((T[i, 0, 3], T[i, 1, 3]))
-        head.xy = (T[i, 0, 3] + v[0], T[i, 1, 3] + v[1])
+        head.xy = (T[i, 0, 3] + 1.5 * math.cos(hd[i]), T[i, 1, 3] + 1.5 * math.sin(hd[i]))
         clock.set_text("%d:%02d" % divmod(int(tk - t[0]), 60))
         for c in cursors:
             c.set_xdata([(tk - t[0]) / 60] * 2)
