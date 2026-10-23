@@ -63,6 +63,82 @@ def run07(bag, traj, out, *extra):
     return read_pcd(out)
 
 
+CHAIR = np.array([[2.75, -2.25, 0.0], [3.25, -1.75, 0.9]])          # stays put
+WALK = np.array([[-5.0, 3.0], [5.0, 3.0]])                           # crosses the room over the run
+WALK_BOX = np.array([-0.25, -0.25, 0.0]), np.array([0.25, 0.25, 1.7])
+
+
+def walker_at(ts, dur=24.0):
+    xy = WALK[0] + (WALK[1] - WALK[0]) * np.clip(ts / dur, 0, 1)
+    return np.r_[xy, 0.0] + WALK_BOX[0], np.r_[xy, 0.0] + WALK_BOX[1]
+
+
+def scan_with_objects(ts, rng, boxes):
+    """SC.scan with axis-aligned boxes in the room (a chair, a walker): each
+    ray stops at the first box it enters, else at the wall."""
+    tc = ts + np.linspace(0, 0.0999, SC.W)
+    Rc, oc = SC.pose(tc)
+    az = np.linspace(np.pi, -np.pi, SC.W, endpoint=False)
+    el = np.deg2rad(np.linspace(10, -10, SC.H))
+    d = np.stack([np.cos(el)[:, None] * np.cos(az), np.cos(el)[:, None] * np.sin(az),
+                  np.repeat(np.sin(el)[:, None], SC.W, 1)], -1)
+    dw = np.einsum("wij,hwj->hwi", Rc, d)
+    o = np.broadcast_to(oc, (SC.H, SC.W, 3))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        tt = np.where(dw > 0, (SC.ROOM[1] - o) / dw, (SC.ROOM[0] - o) / dw)
+        rng_ = np.min(np.where(tt > 0, tt, np.inf), axis=-1)
+        for lo, hi in boxes:
+            t1 = (lo - o) / dw
+            t2 = (hi - o) / dw
+            tin = np.max(np.minimum(t1, t2), axis=-1)
+            tout = np.min(np.maximum(t1, t2), axis=-1)
+            hit = (tin > 0) & (tin < tout) & (tin < rng_)
+            rng_ = np.where(hit, tin, rng_)
+    rng_ = rng_ + rng.normal(0, 0.005, rng_.shape)
+    a = np.zeros(SC.H * SC.W, SC.CLOUD)
+    p = (d * rng_[..., None]).reshape(-1, 3)
+    a["x"], a["y"], a["z"] = p.T
+    a["t"] = np.broadcast_to(np.round((tc - ts) * SC.S).astype(np.uint32), (SC.H, SC.W)).reshape(-1)
+    from scoop import rosmsg
+    return rosmsg.pointcloud2(a, int(round((SC.T0 + ts) * SC.S)), "os_lidar", height=SC.H, width=SC.W)
+
+
+def inside(P, lo, hi, margin=0.1):
+    return int(np.all((P >= lo - margin) & (P <= hi + margin), axis=1).sum())
+
+
+def dynamic_case(tmp, rng):
+    """The chair survives, the walker's trail does not."""
+    bag = os.path.join(tmp, "bag_dyn")
+    stamps = np.arange(0.2, 24.0, 0.1)
+    w = BagWriter(bag)
+    for ts in stamps:
+        boxes = [(CHAIR[0], CHAIR[1]), walker_at(ts)]
+        w.write("/mobile_1/ouster/points", scan_with_objects(ts, rng, boxes), int(round((SC.T0 + ts) * SC.S)))
+    w.close()
+    traj = os.path.join(tmp, "traj_dyn.tum")
+    SC.write_traj(traj, stamps)
+    raw = run07(bag, traj, os.path.join(tmp, "raw.pcd"), "--keep-dynamic")
+    clean = run07(bag, traj, os.path.join(tmp, "clean.pcd"))
+    gone = read_pcd(os.path.join(tmp, "clean_dynamic.pcd"))
+    # the walker's trail: where it was in the first two thirds of the run (it
+    # is still standing at the end, where carving has no evidence yet)
+    lo, hi = walker_at(0.0)[0], walker_at(16.0)[1]
+    trail = np.array([lo[0], lo[1], 0.2]), np.array([hi[0], hi[1], 1.5])
+    r = {"chair_raw": inside(raw, CHAIR[0], CHAIR[1]), "chair_clean": inside(clean, CHAIR[0], CHAIR[1]),
+         "trail_raw": inside(raw, *trail, margin=0.0), "trail_clean": inside(clean, *trail, margin=0.0),
+         "dropped": len(gone), "kept": len(clean), "raw": len(raw)}
+    print("dynamic:", r)
+    f = []
+    if r["chair_clean"] < 0.8 * r["chair_raw"] or r["chair_raw"] < 200:
+        f.append("the chair lost points: %s" % r)
+    if r["trail_raw"] < 500 or r["trail_clean"] > 0.1 * r["trail_raw"]:
+        f.append("the walker's trail survived: %s" % r)
+    if r["kept"] < 0.9 * r["raw"] - r["trail_raw"]:
+        f.append("too much removed: %s" % r)
+    return f
+
+
 def main():
     rng = np.random.default_rng(1)
     tmp = tempfile.mkdtemp()
@@ -83,6 +159,7 @@ def main():
               f"(range noise 5 mm sigma -> ~1.6 cm)")
         if not (on < 2.5 and off > 2 * on):
             failed.append(f"deskew {on:.1f} cm vs {off:.1f} cm without")
+        failed += dynamic_case(tmp, rng)
     except AssertionError as e:
         failed.append(str(e))
     finally:

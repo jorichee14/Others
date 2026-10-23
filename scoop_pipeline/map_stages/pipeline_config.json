@@ -200,7 +200,11 @@
   "_note": "bag = dataset.bag; topic = dataset.points_topic; traj = 04's LiDAR-ICP track; out = mapping/cloud_in_ref_<tag>.pcd",
   "voxel": 0.03, "range_min": 0.7, "range_max": 25.0,
   "t_start": null, "t_end": null,
-  "min_count": 2, "keep_quality": true
+  "min_count": 2, "keep_quality": true,
+  "_remove_dynamic": "the run's movers (the other robot, the operators) are removed as in 01: a 0.15 m decision grid, span and free-space carving; the dropped points go to cloud_in_ref_<tag>_dynamic.pcd. Omit the block for the defaults, enable false (or --keep-dynamic) to keep them",
+  "remove_dynamic": {"enable": true, "voxel": 0.15, "min_span_s": 1.0, "min_hits": 2,
+                     "carve": {"enable": true, "ray_stride": 4, "scan_stride": 2, "max_range": 20.0,
+                               "grazing_margin": 0.03, "min_free": 5, "free_ratio": 1.0}}
 },
 
 "04_reference": {

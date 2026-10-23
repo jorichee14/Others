@@ -33,6 +33,18 @@ Options worth knowing:
     --no-deskew           one pose per scan (default: every point through the
                           trajectory at its own time, as 01 / 02 / 04 do)
                           (needs quality_<name>.csv next to the tum)
+    --keep-dynamic        keep the moving things. By default the run's movers
+                          (the other robot, the operators) are removed the way
+                          stage 01 removes them from the map: a decision grid
+                          (0.15 m) counts per voxel the scans that hit it, the
+                          span of time over which they did, and the scans whose
+                          rays passed THROUGH it (free-space carving); a voxel
+                          seen through at least min_free times, at least as
+                          often as it was hit, held something that came and
+                          went. The removed points go to <out>_dynamic.pcd so
+                          the decision can be looked at. Config block
+                          "remove_dynamic" under 09_build, the same keys as
+                          01's (voxel, min_span_s, min_hits, carve{...}).
 """
 import argparse, os, sys, csv
 import numpy as np
@@ -92,9 +104,52 @@ SAMPLE_CONFIG = """
   "topic": "/mobile_1/ouster/points",
   "voxel": 0.03, "range_min": 0.7, "range_max": 25.0,
   "t_start": 0, "t_end": 42,        <- optional: only the stretch before people walked through
-  "min_count": 2, "keep_quality": true
+  "min_count": 2, "keep_quality": true,
+  "remove_dynamic": {"enable": true, "voxel": 0.15, "min_span_s": 1.0, "min_hits": 2,
+                     "carve": {"enable": true, "ray_stride": 4, "scan_stride": 2, "max_range": 20.0,
+                               "grazing_margin": 0.03, "min_free": 5, "free_ratio": 1.0}}
 }
 """
+
+REMOVE_DYNAMIC = {"enable": True, "voxel": 0.15, "min_span_s": 1.0, "min_hits": 2,
+                  "carve": {"enable": True, "ray_stride": 4, "scan_stride": 2, "max_range": 20.0,
+                            "endpoint_margin": 0.0, "grazing_margin": 0.03, "min_free": 5,
+                            "free_ratio": 1.0}}
+
+
+def dynamic_filter(rd):
+    """(DynStats, FreeSpaceCarver or None) from the remove_dynamic block, with
+    stage 01's classes (map_stages/01_build_map.py), or (None, None) when off."""
+    rd = dict(REMOVE_DYNAMIC, **(rd or {}))
+    if not rd.get("enable", True):
+        return None, None, rd
+    import importlib
+    M = importlib.import_module("01_build_map")
+    dyn = M.DynStats(float(rd["voxel"]))
+    cv = dict(REMOVE_DYNAMIC["carve"], **(rd.get("carve") or {}))
+    carver = None
+    if cv.get("enable", True):
+        carver = M.FreeSpaceCarver(float(rd["voxel"]), max_range=float(cv["max_range"]),
+                                   ray_stride=int(cv["ray_stride"]), scan_stride=int(cv["scan_stride"]),
+                                   endpoint_margin=float(cv["endpoint_margin"]),
+                                   grazing_margin=float(cv["grazing_margin"]))
+    return dyn, carver, rd
+
+
+def drop_dynamic(P, dyn, carver, rd):
+    """P less the points in voxels judged transient; returns (kept, dropped, counts)."""
+    import importlib
+    M = importlib.import_module("01_build_map")
+    cv = dict(REMOVE_DYNAMIC["carve"], **(rd.get("carve") or {}))
+    keys, counts = dyn.dynamic_keys(int(rd["min_hits"]), float(rd["min_span_s"]), carver=carver,
+                                    min_free=int(cv["min_free"]), free_ratio=float(cv["free_ratio"]))
+    keys = np.asarray(M.as_cpu(keys))
+    if not keys.size or not len(P):
+        return P, P[:0], counts
+    packed = M.pack_voxels(np.floor(P / float(rd["voxel"])).astype(np.int64))
+    pos = np.clip(np.searchsorted(keys, packed), 0, keys.size - 1)
+    gone = keys[pos] == packed
+    return P[~gone], P[gone], counts
 
 
 def main():
@@ -141,8 +196,22 @@ def main():
                     help="place each scan with one pose (default: deskew each point "
                          "through the trajectory at its own time, as the map stages)")
     ap.add_argument("--deskew-bins", type=int, default=100)
+    ap.add_argument("--keep-dynamic", action="store_true",
+                    help="keep the run's movers (default: removed by span and free-space carving)")
+    ap.add_argument("--remove-dynamic", default=None, help=argparse.SUPPRESS)   # the config block
     ap.set_defaults(**{k.replace("-", "_"): v for k, v in cfg_defaults.items()})
     args = ap.parse_args(argv)
+    rd = None if args.keep_dynamic else (args.remove_dynamic if isinstance(args.remove_dynamic, dict) else {})
+    dyn, carver, rd = dynamic_filter(rd) if rd is not None else (None, None, None)
+    if dyn is not None:
+        cv = rd.get("carve") or {}
+        print("remove dynamic: ON, grid %.2f m, span >= %.1f s, hits >= %d%s" % (
+            rd["voxel"], rd["min_span_s"], rd["min_hits"],
+            ", carving every %d-th scan, ray stride %d, free >= %d and >= %.1f x hits" % (
+                cv.get("scan_stride", 2), cv.get("ray_stride", 4), cv.get("min_free", 5),
+                cv.get("free_ratio", 1.0)) if carver is not None else ", no carving"))
+    else:
+        print("remove dynamic: off (--keep-dynamic)")
 
     ts, Ts = load_traj(args.traj)
     ts, Ts = np.asarray(ts), np.asarray(Ts)
@@ -189,10 +258,21 @@ def main():
             n_skip_q += 1
             continue
         acc.add(X)
+        if dyn is not None:
+            dyn.add(X, float(ts[j]))
+            if carver is not None:
+                carver.add(Ts[j][:3, 3].astype(np.float64), X)
         n_used += 1
         if n_used % 500 == 0:
             print(f"  {n_used} scans  t={rel:.1f}s", flush=True)
     out = acc.points(args.min_count)
+    if dyn is not None:
+        out, gone, (n_static, n_dyn, n_carved) = drop_dynamic(out, dyn, carver, rd)
+        dyn_path = os.path.splitext(args.out)[0] + "_dynamic.pcd"
+        write_pcd(dyn_path, gone)
+        print(f"remove dynamic: {n_static} static / {n_dyn} dynamic voxels"
+              f"{', %d of them carved by free-space' % n_carved if carver is not None else ''}"
+              f" -> dropped {len(gone)} points, kept {len(out)}; the dropped ones in {dyn_path}")
     write_pcd(args.out, out)
     print(f"used {n_used} scans (skipped {n_skip_q} not registered by 04; scans more than "
           f"{args.max_gap_ms:.0f} ms from a trajectory pose are not read)")
