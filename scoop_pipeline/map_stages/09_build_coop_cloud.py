@@ -53,7 +53,12 @@ Options worth knowing:
                           away, and a voxel seen through at least min_free times,
                           at least as often as it was hit, held something that
                           came and went. The point where a ray STOPPED is what
-                          gets taken, never a surface behind it.
+                          gets taken, never a surface behind it. Nothing else
+                          removes a point: the span test and the hit-count guard
+                          of stage 01 are both off (min_span_s 0, min_hits 1),
+                          because a run sees most of the room once and both
+                          would call those surfaces transient. --min-count is
+                          the noise guard instead.
                           Stage 01's other test, the time SPAN a voxel was seen
                           over, is off here (min_span_s 0): a mapping pass
                           revisits every surface, but a run drives past most of
@@ -131,17 +136,22 @@ SAMPLE_CONFIG = """
   "voxel": 0.03, "range_min": 0.7, "range_max": 25.0,
   "t_start": 0, "t_end": 42,        <- optional: only the stretch before people walked through
   "min_count": 2, "keep_quality": true, "ref_map": null,
-  "remove_dynamic": {"enable": true, "voxel": 0.15, "min_span_s": 0.0, "min_hits": 2,
+  "remove_dynamic": {"enable": true, "voxel": 0.15, "min_span_s": 0.0, "min_hits": 1,
                      "carve": {"enable": true, "ray_stride": 4, "scan_stride": 2, "max_range": 20.0,
                                "grazing_margin": 0.03, "min_free": 5, "free_ratio": 1.0}}
 }
 """
 
-# min_span_s 0: carving decides, the span test does not. A run sees most of the
-# room once, in passing; judging those surfaces transient empties the cloud of
-# the walls the objects stand against (on coop site_1: 191k of 246k voxels were
-# "dynamic" by span alone, against 55k the rays actually saw through).
-REMOVE_DYNAMIC = {"enable": True, "voxel": 0.15, "min_span_s": 0.0, "min_hits": 2,
+# Carving decides here, and nothing else does.
+#   min_span_s 0  a run drives past most of the room once; judging those
+#                 surfaces transient empties the cloud of the walls the objects
+#                 stand against (coop site_1: 191k of 246k voxels "dynamic" by
+#                 span alone, against 55k the rays actually saw through).
+#   min_hits 1    the same for the noise guard: a 0.15 m voxel a single sweep
+#                 filled densely is a far wall seen once in passing, not noise
+#                 (another 134k voxels). Stray single points are dropped by the
+#                 OUTPUT voxel's min_count instead, which is what it is for.
+REMOVE_DYNAMIC = {"enable": True, "voxel": 0.15, "min_span_s": 0.0, "min_hits": 1,
                   "carve": {"enable": True, "ray_stride": 4, "scan_stride": 2, "max_range": 20.0,
                             "endpoint_margin": 0.0, "grazing_margin": 0.03, "min_free": 5,
                             "free_ratio": 1.0}}
@@ -264,10 +274,12 @@ def main():
     dyn, carver, rd = dynamic_filter(rd) if rd is not None else (None, None, None)
     if dyn is not None:
         cv = rd.get("carve") or {}
-        print("remove dynamic: ON, grid %.2f m, %s, hits >= %d%s" % (
+        print("remove dynamic: ON, grid %.2f m, %s, %s%s" % (
             rd["voxel"],
             "span >= %.1f s" % rd["min_span_s"] if rd["min_span_s"] > 0
-            else "no span test (a run sees most surfaces once)", rd["min_hits"],
+            else "no span test (a run sees most surfaces once)",
+            "hits >= %d" % rd["min_hits"] if rd["min_hits"] > 1
+            else "no hit-count guard (min_count does that)",
             ", carving every %d-th scan, ray stride %d, free >= %d and >= %.1f x hits" % (
                 cv.get("scan_stride", 2), cv.get("ray_stride", 4), cv.get("min_free", 5),
                 cv.get("free_ratio", 1.0)) if carver is not None else ", no carving"))
@@ -339,8 +351,10 @@ def main():
         out, gone, (n_static, n_dyn, n_carved) = drop_dynamic(out, dyn, carver, rd)
         dyn_path = os.path.splitext(args.out)[0] + "_dynamic.pcd"
         write_pcd(dyn_path, gone)
+        other = n_dyn - n_carved
         print(f"remove dynamic: {n_static} static / {n_dyn} dynamic voxels"
-              f"{', %d of them carved by free-space' % n_carved if carver is not None else ''}"
+              f"{', %d carved by free-space' % n_carved if carver is not None else ''}"
+              f"{', %d by the span or hit-count tests' % other if other else ''}"
               f" -> dropped {len(gone)} points, kept {len(out)}; the dropped ones in {dyn_path}")
     n_run = len(out)
     if args.ref_map:
