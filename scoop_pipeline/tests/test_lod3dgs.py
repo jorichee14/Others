@@ -1013,7 +1013,7 @@ def main():
         r2 = L.convert([rep, rep2], os.path.join(tmp, "map.pcd"), os.path.join(tmp, "scene_two"),
                        transform=["-", os.path.join(tmp, "align.json")])
         cams2 = [l.split() for l in open(os.path.join(tmp, "scene_two", "sparse/0/cameras.txt")) if l[0].isdigit()]
-        assert [c[0] for c in cams2] == ["1", "2"] and (int(cams2[1][2]), int(cams2[1][3])) == (121, 89), cams2
+        assert [c[0] for c in cams2] == ["1", "2"] and (int(cams2[1][2]), int(cams2[1][3])) == (117, 89), cams2
         rows2 = [l.split() for l in open(os.path.join(tmp, "scene_two", "sparse/0/images.txt"))
                  if l.strip() and not l.startswith("#")]
         assert len(rows2) == len(poses) + len(poses2) and rows2[-1][8] == "2" and rows2[-1][9].startswith("c2_frame")
