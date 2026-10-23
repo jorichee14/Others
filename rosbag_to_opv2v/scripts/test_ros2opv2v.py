@@ -3353,6 +3353,18 @@ def test_map_html_viewer_carries_the_pixel_mapping():
         y = meta['y0'] + (meta['rows'] - 1 - py) / meta['scale'] * meta['cell']
         assert abs(x) < 1e-9 and abs(y) < 1e-9, (x, y)
         assert meta['pcd'] == os.path.abspath(pcd), (meta['pcd'], os.path.abspath(pcd))
+        # no string literal may span a line (a raw newline in the template once
+        # broke the whole script silently: no marks, no coordinates)
+        script_text = text.split('<script>', 1)[1].split('</script>', 1)[0]
+        for line in script_text.split('\n'):
+            assert line.count('"') % 2 == 0, 'unterminated string: %r' % line
+        node = shutil.which('node')
+        if node:
+            js = os.path.join(tmp, 'viewer.js')
+            with open(js, 'w') as handle:
+                handle.write(script_text)
+            r = subprocess.run([node, '--check', js], capture_output=True, text=True)
+            assert r.returncode == 0, r.stderr[-800:]
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

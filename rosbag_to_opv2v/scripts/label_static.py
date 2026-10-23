@@ -505,18 +505,14 @@ function cmd(){
   const by = {};
   marks.forEach(m => { (by[m.cls] = by[m.cls] || []).push(m); });
   const base = "python scripts/label_static.py --pcd " + M.pcd + (M.dataset ? " --dataset " + M.dataset : "") + " --max-height " + M.max_height;
-  let out = "L=labels.json   # choose the labels file
-";
+  const NL = String.fromCharCode(10), CONT = " \\" + NL;
+  let out = "L=labels.json   # choose the labels file" + NL;
   for (const cls in by){
-    out += base + " --obj-type " + cls + " \
-";
-    for (const m of by[cls]) out += "    --seed=" + m.x.toFixed(2) + "," + m.y.toFixed(2) + " --name " + m.name + " \
-";
-    out += "    --out $L
-";
+    out += base + " --obj-type " + cls + CONT;
+    for (const m of by[cls]) out += "    --seed=" + m.x.toFixed(2) + "," + m.y.toFixed(2) + " --name " + m.name + CONT;
+    out += "    --out $L" + NL;
   }
-  if (marks.length) out += base.replace(/ --max-height.*/, "") + " --labels $L --check
-";
+  if (marks.length) out += base.replace(/ --max-height.*/, "") + " --labels $L --check" + NL;
   document.getElementById("cmd").value = out;
 }
 function table(){
