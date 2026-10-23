@@ -177,13 +177,39 @@ def dynamic_filter(rd):
 
 
 def drop_dynamic(P, dyn, carver, rd):
-    """P less the points in voxels judged transient; returns (kept, dropped, counts)."""
+    """P less the points in voxels judged transient; returns (kept, dropped, counts).
+
+    The classification is done here rather than in stage 01's ``dynamic_keys``
+    so each test stands on its own and is counted on its own: carving removes a
+    voxel, and the span and hit-count tests only when they are switched on
+    (both are off for a run). 01's version folds them together, and its
+    "carved" figure then counts only the voxels the other tests had not already
+    taken, which reads as though carving did less than it did.
+    """
     import importlib
     M = importlib.import_module("01_build_map")
     cv = dict(REMOVE_DYNAMIC["carve"], **(rd.get("carve") or {}))
-    keys, counts = dyn.dynamic_keys(int(rd["min_hits"]), float(rd["min_span_s"]), carver=carver,
-                                    min_free=int(cv["min_free"]), free_ratio=float(cv["free_ratio"]))
-    keys = np.asarray(M.as_cpu(keys))
+    dyn._compact()
+    uniq, hits = np.asarray(M.as_cpu(dyn.k)), np.asarray(M.as_cpu(dyn.hits))
+    span = np.asarray(M.as_cpu(dyn.tmax)) - np.asarray(M.as_cpu(dyn.tmin))
+    counts = {"voxels": int(len(uniq))}
+    drop = np.zeros(len(uniq), bool)
+    if carver is not None:
+        free = np.asarray(M.as_cpu(carver.counts_for(M.as_dev(uniq))))
+        carved = (free >= int(cv["min_free"])) & (free >= float(cv["free_ratio"]) * hits)
+        counts["carved"] = int(carved.sum())
+        drop |= carved
+    if float(rd["min_span_s"]) > 0:
+        brief = span < float(rd["min_span_s"])
+        counts["by_span"] = int((brief & ~drop).sum())
+        drop |= brief
+    if int(rd["min_hits"]) > 1:
+        thin = hits < int(rd["min_hits"])
+        counts["by_hits"] = int((thin & ~drop).sum())
+        drop |= thin
+    counts["dynamic"] = int(drop.sum())
+    counts["static"] = int(len(uniq) - drop.sum())
+    keys = np.sort(uniq[drop])
     if not keys.size or not len(P):
         return P, P[:0], counts
     packed = M.pack_voxels(np.floor(P / float(rd["voxel"])).astype(np.int64))
@@ -348,14 +374,15 @@ def main():
         n_used_all += n_used
     out = acc.points(args.min_count)
     if dyn is not None:
-        out, gone, (n_static, n_dyn, n_carved) = drop_dynamic(out, dyn, carver, rd)
+        out, gone, c = drop_dynamic(out, dyn, carver, rd)
         dyn_path = os.path.splitext(args.out)[0] + "_dynamic.pcd"
         write_pcd(dyn_path, gone)
-        other = n_dyn - n_carved
-        print(f"remove dynamic: {n_static} static / {n_dyn} dynamic voxels"
-              f"{', %d carved by free-space' % n_carved if carver is not None else ''}"
-              f"{', %d by the span or hit-count tests' % other if other else ''}"
-              f" -> dropped {len(gone)} points, kept {len(out)}; the dropped ones in {dyn_path}")
+        why = ", ".join(f"{c[k]} {name}" for k, name in
+                        (("carved", "carved by free-space"), ("by_span", "by the span test"),
+                         ("by_hits", "by the hit-count guard")) if c.get(k))
+        print(f"remove dynamic: {c['static']} static / {c['dynamic']} dynamic voxels of "
+              f"{c['voxels']} ({why}) -> dropped {len(gone)} points, kept {len(out)}; "
+              f"the dropped ones in {dyn_path}")
     n_run = len(out)
     if args.ref_map:
         ref = read_points(args.ref_map)
