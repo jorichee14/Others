@@ -1233,6 +1233,7 @@ SIONNA_MATERIALS = {"floor": ("concrete", 0.2), "ceiling": ("concrete", 0.2), "w
 PART_COLOURS = {"floor": (0.6, 0.6, 0.6), "walls": (0.85, 0.78, 0.62), "ceiling": (0.95, 0.95, 0.95),
                 "objects": (0.95, 0.5, 0.1), "glass": (0.55, 0.8, 0.95)}
 PARTS = ("floor", "walls", "ceiling", "objects", "glass")
+PLAIN_GREY = (0.6, 0.6, 0.6)                    # --no-colours: every part this, so a viewer shows no default
 
 
 def floor_grid(V, cell=1.0):
@@ -2189,8 +2190,9 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     mirrored ceiling) is left out. flat_floor: the floor flattened onto its
     level (flatten_floor); flat_walls: the walls smoothed onto their planes
     (flatten_walls); fill: the walls filled behind furniture and their small
-    holes (fill_walls); colours False: the parts and <out>.ply written
-    without colours (Sionna uses none: smaller files); flat_colours > 0:
+    holes (fill_walls); colours False: the parts and <out>.ply in one grey
+    (PLAIN_GREY; Sionna shows its materials' own colours, a viewer this
+    grey rather than its default); flat_colours > 0:
     the colours made one per segment (segment_colours), blended in by that
     much (1: flat), so it looks clean; open_pts: plan points (x, y) no wall
     or glass patch is put within 1 m of (an opening to keep by hand)."""
@@ -2367,10 +2369,10 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
                        "    </shape>"])
 
     def coloured(q, name):
-        """A part in the mesh's colours, the floor floor_colour (colours False: none)."""
+        """A part in the mesh's colours, the floor floor_colour (colours False: one grey)."""
         q = bare(q, colours=colours)
-        if colours and not q.has_vertex_colors():
-            q.paint_uniform_color((0.6, 0.6, 0.6))
+        if not (colours and q.has_vertex_colors()):
+            q.paint_uniform_color(PLAIN_GREY)
         if colours and name == "floor" and floor_colour is not None:
             q.paint_uniform_color(floor_colour)
         if normals:                    # a viewer then shades it as a surface (its colours greyed)
@@ -2401,8 +2403,8 @@ def sionna_mesh(mesh_path, out=None, faces=0, materials=None, label_faces_n=4000
     open(sx, "w").write("\n".join(['<scene version="2.1.0">', *sum(xml_mats.values(), []), *shapes,
                                    "</scene>"]) + "\n")
     view = bare(sub_mesh(fpart != "gone"), colours=colours)
-    if colours and not view.has_vertex_colors():
-        view.paint_uniform_color((0.6, 0.6, 0.6))
+    if not (colours and view.has_vertex_colors()):
+        view.paint_uniform_color(PLAIN_GREY)
     if colours and floor_colour is not None:
         Cv = np.asarray(view.vertex_colors).copy()
         Cv[np.unique(np.asarray(view.triangles)[fpart[fpart != "gone"] == "floor"])] = floor_colour
@@ -3312,7 +3314,8 @@ def main():
                     help="leave the floor as meshed (default: its faces flattened onto the floor's level, the "
                          "bumps under furniture gone)")
     sn.add_argument("--no-colours", action="store_true",
-                    help="write the parts and <out>.ply without colours (Sionna uses none: smaller files)")
+                    help="write the parts and <out>.ply in one grey instead of the mesh's colours "
+                         "(Sionna shows its materials' own)")
     sn.add_argument("--normals", action="store_true",
                     help="write the parts with vertex normals: a viewer shades them as surfaces (colours greyed)")
     sn.add_argument("--open", action="append", default=[], metavar="X,Y",

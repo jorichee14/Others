@@ -700,9 +700,11 @@ def check_sionna(tmp):
     area = {}
     for n_ in ("walls", "objects"):
         q = o3d.io.read_triangle_mesh(os.path.join(tmp, "radio_small", "meshes", n_ + ".ply"))
-        assert not q.has_vertex_colors(), (n_, "written with colours")
+        Cq_ = np.asarray(q.vertex_colors)
+        assert len(Cq_) == len(q.vertices) and (np.abs(Cq_ - L.PLAIN_GREY) < 0.01).all(), (n_, "not one grey")
         area[n_] = len(q.triangles) / max(q.get_surface_area(), 1e-9)
-    assert not o3d.io.read_triangle_mesh(rs["view"]).has_vertex_colors()
+    Cv_ = np.asarray(o3d.io.read_triangle_mesh(rs["view"]).vertex_colors)
+    assert len(Cv_) and (np.abs(Cv_ - L.PLAIN_GREY) < 0.01).all(), "the view copy not one grey"
     sp = o3d.geometry.TriangleMesh.create_sphere(1.0, 60)        # speckles (150 white, 150 black dots) smoothed over
     Vs_, Fs_ = np.asarray(sp.vertices), np.asarray(sp.triangles)
     Cs_ = np.tile((Vs_[:, 2:3] + 1) / 2 * 0.5 + 0.25, (1, 3))

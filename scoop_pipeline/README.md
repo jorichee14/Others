@@ -1140,7 +1140,8 @@ own, the ceiling one, each object one, glass a light tint; blended in by W
 (default 1, flat; 0.7 keeps a trace of signs and posters). `--faces N` simplifies the floor, walls and ceiling together to about N faces (flat stays flat, in few faces) and `--object-faces M` the objects apart (0: as meshed), so objects keep finer detail than the walls. A light scene for Sionna (it loads a few
 hundred thousand faces in seconds; 40 M takes minutes and GBs of GPU memory):
 `--faces 200000 --object-faces 200000 --no-colours` (the parts and
-`<out>.ply` without colours: Sionna uses none). Each part an
+`<out>.ply` in one grey: Sionna shows its materials' own colours, and a
+viewer this grey rather than its default, CloudCompare's green). Each part an
 ITU material, `--material PART=TYPE[:THICKNESS m]` (default concrete 0.2 m,
 objects wood 0.05 m); `--normals` writes the parts with vertex normals (a
 viewer shades them as surfaces; without, the per-vertex colours make a
