@@ -201,8 +201,8 @@
   "voxel": 0.03, "range_min": 0.7, "range_max": 25.0,
   "t_start": null, "t_end": null,
   "min_count": 2, "keep_quality": true,
-  "_remove_dynamic": "the run's movers (the other robot, the operators) are removed by free-space carving on a 0.15 m grid (the span test of 01 is off here, min_span_s 0: a run sees most surfaces once); the dropped points go to cloud_in_ref_<tag>_dynamic.pcd. Omit the block for the defaults, enable false (or --keep-dynamic) to keep them",
-  "remove_dynamic": {"enable": true, "voxel": 0.15, "min_span_s": 0.0, "min_hits": 2,
+  "_remove_dynamic": "the run's movers (the other robot, the operators) are removed by free-space carving on a 0.15 m grid, and only by that: the span test and the hit-count guard of 01 are off here (min_span_s 0, min_hits 1) because a run sees most surfaces once, and min_count drops stray points; the dropped points go to cloud_in_ref_<tag>_dynamic.pcd. Omit the block for the defaults, enable false (or --keep-dynamic) to keep them",
+  "remove_dynamic": {"enable": true, "voxel": 0.15, "min_span_s": 0.0, "min_hits": 1,
                      "carve": {"enable": true, "ray_stride": 4, "scan_stride": 2, "max_range": 20.0,
                                "grazing_margin": 0.03, "min_free": 5, "free_ratio": 1.0}}
 },
