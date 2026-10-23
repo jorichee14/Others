@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ros2opv2v.bagreader import BagReader                       # noqa: E402
 from ros2opv2v.config import ConfigError, load_config           # noqa: E402
 from ros2opv2v.convert import (ConversionError, ConversionReport,  # noqa: E402
-                               assign_scenarios, convert, plan)
+                               assign_scenarios, convert, load_comms, plan)
 
 
 def print_report(report: ConversionReport, dry_run: bool = False) -> None:
@@ -199,7 +199,8 @@ def main() -> int:
         if args.dry_run:
             report = ConversionReport(bag=cfg.bag)
             reader = BagReader(cfg.bag, cfg.time.stamp_source)
-            frames, _, _, _, _ = plan(reader, cfg, report)
+            frames, _, _, _, clocks = plan(reader, cfg, report)
+            load_comms(reader, cfg, report, clocks)      # the streams' counts and fields
             report.frames_written = len(frames)
             report.scenarios = [name for name, _ in assign_scenarios(frames, cfg)]
         else:
