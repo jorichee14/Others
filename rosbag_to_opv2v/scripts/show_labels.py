@@ -227,7 +227,7 @@ def main() -> int:
                     help="an unfitted spot, drawn as a 0.6 x 0.6 x 1.0 m box standing at --seed-z")
     ap.add_argument("--seed-z", type=float, default=None,
                     help="floor z for --seed boxes (default: the agents' camera height minus 1.0 m)")
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", help="folder for the sheets (not needed with --locate)")
     ap.add_argument("--per-agent", type=int, default=3)
     ap.add_argument("--max-range", type=float, default=8.0)
     ap.add_argument("--camera", type=int, default=0)
@@ -279,6 +279,9 @@ def main() -> int:
                            "extent": [0.3, 0.3, 0.5], "angle": [0.0, 0.0, 0.0]})
     if not labels:
         print("nothing to show: give --labels or --seed", file=sys.stderr)
+        return 2
+    if not a.out:
+        print("--out is needed to write the sheets", file=sys.stderr)
         return 2
     show(os.path.expanduser(a.dataset), labels, os.path.expanduser(a.out), a.per_agent, a.max_range, a.camera)
     print(f"wrote {a.out}/<name>.png, overview_<agent>.png, show_labels.json")
