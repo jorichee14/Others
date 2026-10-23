@@ -605,6 +605,13 @@ def main() -> int:
                         help="pixels per height-map cell in --map-image")
     parser.add_argument("--cell", type=float, default=0.10,
                         help="proposals: height-map cell size")
+    parser.add_argument("--floor-z", type=float, default=None,
+                        help="the floor's z in the map frame, instead of the cloud's histogram mode")
+    parser.add_argument("--local-floor-radius", type=float, default=2.0,
+                        help="fit: the floor under each seed is taken from the points within this "
+                             "radius (0: the cloud's one floor). A building's floor is not one "
+                             "height, and a chair on a landing 15 cm above the cloud's floor "
+                             "would otherwise cluster into it")
     parser.add_argument("--max-points", type=int, default=4000000)
     args = parser.parse_args()
 
@@ -633,7 +640,10 @@ def main() -> int:
               % (len(cloud), lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]))
         print("  (pass --dataset to verify this cloud is in the dataset's frame)")
 
-    ground_z, ginfo = ground_level(cloud)
+    if args.floor_z is not None:
+        ground_z, ginfo = float(args.floor_z), {"method": "--floor-z"}
+    else:
+        ground_z, ginfo = ground_level(cloud)
     print("\nfloor       : z = %+.3f m in the map frame  (%s)" % (ground_z, ginfo["method"]))
     print("  The map's z origin is the surveyed anchor board, not the ground, so this is")
     print("  the number `cloud.ground_lift` needs, and nothing else in the dataset")
@@ -743,7 +753,20 @@ def main() -> int:
             print("\nignored %d return(s) above %.2f m (--ceiling); dropped %d point(s) in "
                   "columns taller than %.2f m (walls, beams);\n--keep-structure disables it"
                   % (n_over, args.ceiling or 0.0, len(cloud) - n_over - len(local), args.max_height))
-        look = seed_report(local, seed, ground_z, radius=args.radius)
+        # the floor UNDER the object: a building's floor is not one height, and
+        # the cloud's mode may be a landing 15 cm below this room, where the
+        # object's legs then sit inside the floor band and cluster into it
+        floor_here = ground_z
+        if args.local_floor_radius > 0:
+            around = local[np.linalg.norm(local[:, :2] - seed[:2], axis=1) <= args.local_floor_radius]
+            try:
+                floor_here, _ = ground_level(around)
+            except StaticsError:
+                floor_here = ground_z
+            if abs(floor_here - ground_z) > 0.03:
+                print("\nfloor here  : z = %+.3f m within %.1f m of the seed (the cloud's floor is "
+                      "%+.3f m); used for this object" % (floor_here, args.local_floor_radius, ground_z))
+        look = seed_report(local, seed, floor_here, radius=args.radius)
         print("\nat seed %s (%.2f m above the floor), within %.1f m:"
               % ("%.3f,%.3f,%.3f" % tuple(seed), look["seed_height_m"], args.radius))
         if not look["points"]:
@@ -770,12 +793,12 @@ def main() -> int:
         try:
             cluster, cinfo = cluster_at(local, seed, radius=args.radius,
                                         voxel=args.cluster_voxel,
-                                        z_min=ground_z + args.cluster_floor,
+                                        z_min=floor_here + args.cluster_floor,
                                         z_max=ceiling_z)
         except StaticsError as exc:
             print("\n! %s" % exc)
             return 3
-        box = fit_box(cluster, ground_z=ground_z,
+        box = fit_box(cluster, ground_z=floor_here,
                       sit_on_ground=not args.no_ground_extend)
         name = (names[index] if len(names) == len(seeds) else
                 "%s_%d" % (names[0], index + 1) if names else None)

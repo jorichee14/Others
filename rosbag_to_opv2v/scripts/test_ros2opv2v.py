@@ -3299,7 +3299,11 @@ def test_fit_finds_a_chair_under_a_scanned_ceiling():
         cloud = _room_cloud(rng)
         ceiling = np.column_stack([rng.uniform(-5, 5, 40000), rng.uniform(-5, 5, 40000),
                                    np.full(40000, 2.34)])                 # 3 m over the floor
-        cloud = np.vstack([cloud, ceiling])
+        # a landing next door, 15 cm lower and larger: the cloud's floor mode
+        # moves there, the chair's floor must still be its own room's
+        landing = np.column_stack([rng.uniform(6, 20, 90000), rng.uniform(-5, 5, 90000),
+                                   np.full(90000, -0.81)])
+        cloud = np.vstack([cloud, ceiling, landing])
         pcd = os.path.join(tmp, 'room.pcd')
         write_pcd(pcd, np.column_stack([cloud, np.full(len(cloud), 0.5)]))
         out = os.path.join(tmp, 'labels.json')
@@ -3314,7 +3318,9 @@ def test_fit_finds_a_chair_under_a_scanned_ceiling():
         assert np.allclose(box['location'][:2], [0.0, 0.0], atol=0.08), box
         assert all(0.2 <= e <= 0.35 for e in box['extent'][:2]), box
         assert 0.4 <= box['extent'][2] <= 0.5, box                      # 0.9 m tall: half 0.45
+        assert abs(box['location'][2] - (-0.66 + 0.45)) < 0.05, box        # standing on ITS floor
         assert 'return(s) above 2.00 m (--ceiling)' in r.stdout, r.stdout[-1500:]
+        assert 'floor here  : z = -0.6' in r.stdout, r.stdout[-1500:]
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
