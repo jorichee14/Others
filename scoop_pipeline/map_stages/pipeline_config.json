@@ -5,7 +5,7 @@
     "machine": "mobile_1",
     "_sensors": "the robot's topics and camera come from \"robots\" below, by machine; a pass sets any of them here to override (points_topic, image_topic, camera_info_topic, camera_frame, camera_map_frame, rectified)"
   },
-   "_boards": "the ChArUco boards, board_1..board_4 by dictionary (4x4, 5x5, 6x6, 7x7), 9 x 7 squares each. \"was\": the names passes before 20261015 measured them under (anchor, rs_anchor); a stored pose or a config with the old name is read as the new one. \"frame\": the board's TF frame (board_1 and board_2 keep theirs). board_3 and board_4: since 20261015, squares 24.5 cm, markers 17.5 cm",
+   "_boards": "the ChArUco boards, board_1..board_4 by dictionary (4x4, 5x5, 6x6, 7x7), 9 x 7 squares each. \"was\": the names passes before 20261015 measured them under (anchor, rs_anchor); a stored pose or a config with the old name is read as the new one. \"frame\": the board's TF frame (board_1 and board_2 keep theirs). board_3 and board_4: since 20261015, squares 2.45 cm, markers 1.75 cm (22.1 x 17.2 cm, as board_2)",
    "boards": {
     "board_1": {
       "frame": "board",
@@ -28,14 +28,14 @@
     "board_3": {
       "frame": "board_3",
       "squares_x": 9, "squares_y": 7,
-      "square_len": 0.245, "marker_len": 0.175,
+      "square_len": 0.0245, "marker_len": 0.0175,
       "dictionary": "DICT_6X6_50",
       "min_corners": 8, "max_reproj": 1.5, "min_ambiguity_ratio": 3.0
     },
     "board_4": {
       "frame": "board_4",
       "squares_x": 9, "squares_y": 7,
-      "square_len": 0.245, "marker_len": 0.175,
+      "square_len": 0.0245, "marker_len": 0.0175,
       "dictionary": "DICT_7X7_50",
       "min_corners": 8, "max_reproj": 1.5, "min_ambiguity_ratio": 3.0
     }

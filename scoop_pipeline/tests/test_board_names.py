@@ -72,10 +72,10 @@ def main():
     eq([s.get("board") for s in P.cfg["03_init"]["sensors"] if s["name"] == "zed"],
        ["board_1"], "03 zed board")
 
-    # sizes: board_3 and board_4 24.5 cm squares, 17.5 cm markers
+    # sizes: board_3 and board_4 2.45 cm squares, 1.75 cm markers
     eq([(Board(n, P.cfg["boards"][n]).square_len, Board(n, P.cfg["boards"][n]).marker_len)
         for n in ("board_1", "board_2", "board_3", "board_4")],
-       [(0.02, 0.015), (0.025, 0.018), (0.245, 0.175), (0.245, 0.175)], "sizes")
+       [(0.02, 0.015), (0.025, 0.018), (0.0245, 0.0175), (0.0245, 0.0175)], "sizes")
     # a board whose size is not set: refused, named
     try:
         Board("board_x", dict(P.cfg["boards"]["board_4"], square_len=None))
