@@ -978,6 +978,28 @@ Depth (`--depth-source`; for MCD it replaces the config's depth sensors):
 
 The file is standalone (no scoop imports).
 
+## Running Sionna RT on the exported scene (`analysis/comms/sionna_run.py`)
+
+```
+python3 scoop_pipeline/analysis/comms/sionna_run.py <scene.xml> --tx X Y Z [--rx X Y Z ...]
+    [--freq 5.745e9] [--max-depth 3] [--power 20] [--radio-map [--cell 0.5] [--height 1.2]]
+    [--samples 1000000] [--out DIR]
+```
+
+loads the scene (`sionna.rt.load_scene`), sets the frequency (channel 149:
+5.745 GHz) and isotropic antennas, and for each receiver traces the paths
+up to `--max-depth` bounces: their number, the total path gain, the
+line-of-sight delay, the RMS delay spread, the strongest paths, and the
+channel impulse response written as `cir_<rx>.npz` (gains and delays per
+path). `--radio-map` computes the path gain over a plane `--height` m above
+the scene's lowest point in `--cell` m cells and writes `radio_map.npy`,
+`.csv` and `.png`. Positions are in the scene's frame, the mesh's: a scene
+made from `mesh_view_<tag>.ply` is in the mapping pass's GLIM world; make
+it from the anchored mesh (`lod3dgs.py anchor <mesh> --frame
+frames/anchor_frame.json`, then `sionna` on `<mesh>_anchored.ply`) to give
+positions in map coordinates, where the survey's trajectories, boards and
+cameras are. Test: `tests/test_sionna_run.py` (Sionna's built-in box).
+
 ## One figure of a survey pass (`analysis/survey_figure.py`)
 
 ```
