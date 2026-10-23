@@ -3,13 +3,7 @@
     "bag": "~/workspaces/isaac_ros-dev/data/work/20260924/mapping_A/mirc_dataset_survey_1_mapping_20260924_merged",
     "traj": "traj_lidar_refined.txt",
     "machine": "mobile_1",
-    "_sensors": "the robot's topics and camera, read by every stage (set them here only)",
-    "points_topic": "/mobile_1/ouster/points",
-    "image_topic": "/mobile_1/zed/left/image_rect_color",
-    "camera_info_topic": "/mobile_1/zed/left/camera_info",
-    "camera_frame": "zed_left_camera_optical_frame",
-    "camera_map_frame": "map_zed",
-    "rectified": true
+    "_sensors": "the robot's topics and camera come from \"robots\" below, by machine; a pass sets any of them here to override (points_topic, image_topic, camera_info_topic, camera_frame, camera_map_frame, rectified)"
   },
    "_boards": "the ChArUco boards, board_1..board_4 by dictionary (4x4, 5x5, 6x6, 7x7), 9 x 7 squares each. \"was\": the names passes before 20261015 measured them under (anchor, rs_anchor); a stored pose or a config with the old name is read as the new one. \"frame\": the board's TF frame (board_1 and board_2 keep theirs). board_3 and board_4: since 20261015, squares 24.5 cm, markers 17.5 cm",
    "boards": {
@@ -228,14 +222,24 @@
 },
 
  "robots": {
-  "_note": "each robot's body, the same in every pass: its base link, the root of its sensors (the trajectory moves it, every sensor hangs from it), and local_pose's frame. 10_publish takes it for every robot it publishes; a sensor a pass did not record is left out. The base sits on the camera body (x forward, y left, z up) until it is measured; then its pose in measured_in goes here",
+  "_note": "each robot, the same in every pass: its sensors (a pass's dataset block names the robot, and overrides any of them), and its body: its base link, the root of its sensors (the trajectory moves it, every sensor hangs from it), and local_pose's frame. 10_publish takes it for every robot it publishes; a sensor a pass did not record is left out. The base sits on the camera body (x forward, y left, z up) until it is measured; then its pose in measured_in goes here",
   "mobile_1": {
+   "sensors": {"points_topic": "/mobile_1/ouster/points",
+               "image_topic": "/mobile_1/zed/left/image_rect_color",
+               "camera_info_topic": "/mobile_1/zed/left/camera_info",
+               "camera_frame": "zed_left_camera_optical_frame", "camera_map_frame": "map_zed",
+               "rectified": true},
    "local_frame": "mobile_1_base_link",
    "base_frame": {"name": "mobile_1_base_link", "measured_in": "zed_camera_link",
                   "xyz": [0, 0, 0], "qxyzw": [0, 0, 0, 1],
                   "children": ["zed_camera_link", "os_sensor_mobile1", "radar1_link", "radar2_link"]}
   },
   "mobile_2": {
+   "sensors": {"points_topic": "/mobile_2/ouster/points",
+               "image_topic": "/mobile_2/color/image_raw",
+               "camera_info_topic": "/mobile_2/color/camera_info",
+               "camera_frame": "camera_color_optical_frame", "camera_map_frame": "map_realsense",
+               "rectified": false},
    "local_frame": "mobile_2_base_link",
    "base_frame": {"name": "mobile_2_base_link", "measured_in": "camera_link",
                   "xyz": [0, 0, 0], "qxyzw": [0, 0, 0, 1],

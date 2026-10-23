@@ -340,6 +340,15 @@ its own pass: its own `work/` and `processed/` folders, named
 `<pass>_site_<N>_<date>` (`survey_site_1_20261015`); a config names it as
 `"survey/site_1"` (same date) or `"20261015/survey/site_1"` (`scoop/layout.py`).
 
+A new pass first needs its config. `run_pass.py <raw pass folder> --new-config`
+writes it (`map_stages/pipeline_config_<tag>.json`) from what the raw folder
+holds, shows it and stops: a mapping pass by the robot with an Ouster, with
+20261015's settings; a survey with mobile_1 driving, in the same day's mapping
+pass's map, a parked mobile_2 placed by its LiDAR. `--robot` and `--reference`
+override its choices; a coop run is not written (copy `pipeline_config_coop_2.json`).
+The robots' topics and cameras come from the base config's `"robots"` block, so
+the written config names only the robot. Check it, then run the pass.
+
 `run_pass.py` runs every step of the pass in order and skips the ones whose output is there
 already, so the same command picks up where it stopped. `--status` shows what
 is done, `--dry` prints the commands, `--from S` redoes S and everything after

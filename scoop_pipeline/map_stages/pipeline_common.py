@@ -676,23 +676,41 @@ class Pipeline:
         self.reference = d.get("reference_pass") or None
         self._sensor = None
 
-    # The robot's sensors, set once for the pass in "dataset" (README: a pass's
-    # config); every stage reads them here.
+    # The robot's sensors (README: a pass's config); every stage reads them
+    # here: the pass's "dataset" block, else the robot's "sensors" in the
+    # base config's "robots" block, else mobile_1's.
+    def sensor_setting(self, key):
+        d = self.dataset
+        if d.get(key) is not None and d.get(key) != "":
+            return d[key]
+        own = (((self.cfg.get("robots") or {}).get(self.machine) or {}).get("sensors") or {})
+        if own.get(key) is not None:
+            return own[key]
+        return {**DEFAULT_TOPICS, **DEFAULT_CAMERA}[key]
+
     @property
     def points_topic(self):
-        return self.dataset.get("points_topic") or DEFAULT_TOPICS["points_topic"]
+        return self.sensor_setting("points_topic")
+
+    @property
+    def image_topic(self):
+        return self.sensor_setting("image_topic")
+
+    @property
+    def camera_info_topic(self):
+        return self.sensor_setting("camera_info_topic")
 
     @property
     def camera_frame(self):
-        return self.dataset.get("camera_frame") or DEFAULT_CAMERA["camera_frame"]
+        return self.sensor_setting("camera_frame")
 
     @property
     def camera_map_frame(self):
-        return self.dataset.get("camera_map_frame") or DEFAULT_CAMERA["camera_map_frame"]
+        return self.sensor_setting("camera_map_frame")
 
     @property
     def rectified(self):
-        return bool(self.dataset.get("rectified", DEFAULT_CAMERA["rectified"]))
+        return bool(self.sensor_setting("rectified"))
 
     def robots(self):
         """10_publish.robots with the pass's own robot (dataset.machine) in it:
@@ -709,7 +727,7 @@ class Pipeline:
         for rb in robots:
             more = (own if rb["name"] == self.machine else {}).items()
             for k, v in list(more) + list((body.get(rb["name"]) or {}).items()):
-                if not k.startswith("_"):
+                if not k.startswith("_") and k != "sensors":
                     rb.setdefault(k, v)
         return robots
 
@@ -723,9 +741,8 @@ class Pipeline:
             if d.get("calib_json"):
                 self._sensor = Sensor(json.load(open(d["calib_json"])))
             else:
-                self._sensor = Sensor.from_bag(d["bag"], d.get("points_topic"),
-                                               d.get("image_topic"),
-                                               d.get("camera_info_topic"))
+                self._sensor = Sensor.from_bag(d["bag"], self.points_topic,
+                                               self.image_topic, self.camera_info_topic)
             print(self._sensor.describe())
         return self._sensor
 

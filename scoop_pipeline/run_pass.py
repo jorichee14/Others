@@ -65,10 +65,20 @@ pass placed them); "comms": {"enabled": false} leaves out comms and csi_clean
           this pass, e.g. pipeline_config_survey_1.json; a run needs its own,
           "extends": "pipeline_config.json" with dataset.reference_pass)
 
+--new-config  write the config of a new pass (map_stages/pipeline_config_<tag>.json)
+          from its raw folder, show it, and stop: check it, then run the pass.
+          A mapping pass: the robot with an Ouster (mobile_1 if both), the same
+          settings as 20261015 (BA on GLIM, 2 cm TSDF). A survey: mobile_1 drives,
+          in the same day's mapping pass's map; a parked mobile_2 placed by its
+          LiDAR (or, without one, its board view). The bag: the robot's own when it
+          is alone and has no ZED, else the merged one. --robot, --reference
+          override what it picks; a coop run is not written (copy coop_2's).
+
 Datasets for other tools (datasets/mcap_convert.py) are made afterwards from the
 merged bag and the processed outputs.
 """
 import argparse
+import glob
 import json
 import os
 import shutil
@@ -142,6 +152,111 @@ def has_map_tf(bag):
     from scoop import tftree
     edges = tftree.tf_edges([bag], seconds=1.0)
     return any(e.parent == "map" for e in edges.values())
+
+
+RS_BOARD = "board_4"        # the board mobile_2's RealSense sights (7x7, since 20261015)
+
+
+def new_config(raw, robot=None, reference=None, log=print, stages=STAGES):
+    """--new-config: the pipeline config of the pass in ``raw``, written to
+    map_stages/pipeline_config_<tag>.json (see the usage). -> its path."""
+    from pathlib import Path
+    from scoop import layout, recording, session
+    import pipeline_common as pc
+    pp = layout.pass_parts(raw)
+    if not pp:
+        raise SystemExit("%s is not below data/raw/<date>/<pass>/" % raw)
+    _, date, pas = pp
+    tag = layout.tag(date, pas)
+    path = os.path.join(stages, "pipeline_config_%s.json" % tag)
+    if os.path.exists(path):
+        raise SystemExit("%s exists already: edit it, or remove it to write it again" % path)
+    rawp = Path(raw).resolve()
+    plan = session.RecordPlan(None)
+    mode = plan.mode_of(rawp.name, rawp.parent.name,
+                        *(p.parent.name for p in rawp.rglob("metadata.yaml")))
+    if mode not in ("mapping", "survey"):
+        raise SystemExit("mode %s (from the folder and bag names): --new-config writes mapping "
+                         "and survey passes; for a coop run copy pipeline_config_coop_2.json"
+                         % mode)
+    settings = recording.load_settings(None)
+    recs = {}
+    for m in machines(raw):
+        s = recording.settings_for(settings, os.path.basename(m))
+        recs[os.path.basename(m)] = recording.find_recording(
+            m, None, s["ouster"].get("packets_ns", "/ouster"), recording.zed_bags(s["zed"]))
+    with_lidar = sorted(n for n, r in recs.items() if r.bag is not None)
+    if robot is None:
+        if mode == "survey" or len(with_lidar) != 1:
+            robot = "mobile_1" if "mobile_1" in with_lidar else None
+        else:
+            robot = with_lidar[0]
+    if robot not in with_lidar:
+        raise SystemExit("which robot %s? with an Ouster bag: %s (--robot)"
+                         % ("maps" if mode == "mapping" else "drives", with_lidar or "none"))
+    folders = {p.relative_to(rawp).parts[0] for p in rawp.rglob("metadata.yaml")
+               if len(p.relative_to(rawp).parts) > 2}
+    if folders == {robot} and recs[robot].svo is None:
+        bag = str(recs[robot].step("retimed"))            # alone, no ZED: its own bag
+    else:
+        bag = merged_bag(raw)
+    home = os.path.expanduser("~")
+    bag = "~" + bag[len(home):] if bag.startswith(home + os.sep) else bag
+    boards = ["board_1", "board_2", "board_3", "board_4"]
+    cfg = {"extends": "pipeline_config.json"}
+    if mode == "mapping":
+        cfg["_note"] = ("%s: mapping pass by %s, written by run_pass.py --new-config; as "
+                        "20261015: 02 BA on GLIM (traj_lidar_ba_glim.txt, the reference) -> "
+                        "01 TSDF at 2 cm -> report -> 05 -> 10 -> finalize" % (tag, robot))
+        cfg["dataset"] = {"bag": bag, "traj": "traj_lidar_ba_glim.txt", "machine": robot}
+        cfg["01_build_map"] = {"scan_voxel": 0.02, "final_voxel": 0.02, "fusion": "tsdf",
+                               "tsdf": {"trunc": 0.08, "min_weight": 3}}
+        cfg["02_bundle_adjust"] = {"input": "traj_lidar.txt", "output": "traj_lidar_ba_glim.txt"}
+        cfg["05_anchor"] = {"boards_used": boards}
+        cfg["07_build_cameras"] = {"enabled": False}
+        cfg["08_emit_tfs"] = {"enabled": False}
+        cfg["comms"] = {"enabled": False, "_note": "mapping mode: no wifi / ntp topics"}
+    else:
+        if reference is None:
+            maps = []
+            for c in glob.glob(os.path.join(stages, "pipeline_config*.json")):
+                d = pc.load_config(c).get("dataset") or {}
+                rp = layout.pass_parts(d.get("bag") or "", below=1)
+                if rp and rp[1] == date and not d.get("reference_pass"):
+                    maps.append("/".join(rp[2]))
+            if len(maps) != 1:
+                raise SystemExit("the map to localize in: %s mapping passes on %s in map_stages/ "
+                                 "(%s); name it with --reference <pass> or <date>/<pass>"
+                                 % (len(maps), date, ", ".join(sorted(maps)) or "none"))
+            reference = maps[0]
+        cfg["_note"] = ("%s: survey, written by run_pass.py --new-config: %s drives, in %s's "
+                        "map; 03 -> 04 -> 05 (the boards this run saw) -> 07 (parked and infra "
+                        "cameras) -> 08 -> 10 -> finalize -> comms" % (tag, robot, reference))
+        cfg["dataset"] = {"bag": bag, "traj": None, "machine": robot,
+                          "reference_pass": reference}
+        cfg["03_init"] = {"sensors": [{"name": "zed", "source": "lidar_odom"},
+                                      {"name": "realsense", "enabled": False}]}
+        cfg["05_anchor"] = {"boards_used": boards}
+        if "mobile_2" in folders:
+            cam = {"name": "realsense", "board": RS_BOARD, "bag": None,
+                   "image_topic": "/mobile_2/color/image_raw",
+                   "camera_info_topic": "/mobile_2/color/camera_info",
+                   "rectified": False, "detect_target": 200}
+            if "mobile_2" in with_lidar:                   # parked, with its Ouster
+                cam = dict(cam, source="lidar", points_topic="/mobile_2/ouster/points")
+            cfg["07_build_cameras"] = {"cameras": [cam]}
+    with open(path, "w") as fh:
+        json.dump(cfg, fh, indent=1)
+        fh.write("\n")
+    P = pc.load_pipeline(path)
+    log("wrote %s:\n" % path)
+    log(open(path).read())
+    log("%s pass, %s; its sensors (from the base config's robots block):" % (mode, P.machine))
+    for k in ("points_topic", "image_topic", "camera_info_topic", "camera_frame",
+              "camera_map_frame", "rectified"):
+        log("  %-18s %s" % (k, P.sensor_setting(k)))
+    log("\ncheck it, then: python3 scoop_pipeline/run_pass.py %s --status" % raw)
+    return path
 
 
 def plan_steps(raw, cfg):
@@ -360,9 +475,15 @@ def main():
     ap.add_argument("--until", choices=ORDER)
     ap.add_argument("--only", choices=ORDER)
     ap.add_argument("--config", default=None)
+    ap.add_argument("--new-config", action="store_true")
+    ap.add_argument("--robot", default=None)
+    ap.add_argument("--reference", default=None)
     a = ap.parse_args()
     import pass_tf
     raw = os.path.abspath(os.path.expanduser(a.raw_dir))
+    if a.new_config:
+        new_config(raw, a.robot, a.reference)
+        return
     cfg = a.config or pass_tf.find_config(raw)
     steps, P = plan_steps(raw, cfg)
     print("pass: %s\nconfig: %s" % (raw, cfg or "none in map_stages/ for this pass"))
@@ -375,7 +496,8 @@ def main():
             state = "-" if not applies else {True: "done", False: "todo", None: "runs"}[done]
             print("  %-13s %-5s %s" % (name, state, what))
         if not cfg:
-            print("no pipeline config for this pass: the map stages need one (--config)")
+            print("no pipeline config for this pass: the map stages need one "
+                  "(--new-config writes it)")
         return
 
     names = [s[0] for s in steps]
@@ -393,10 +515,8 @@ def main():
         print("\n== %s ==  %s" % (name, what))
         run_step(name, cmds, a.dry)
     if P is None:
-        print("\nno pipeline config for this pass: make map_stages/pipeline_config_%s.json "
-              "(a run: {\"extends\": \"pipeline_config.json\", \"dataset\": {\"bag\": "
-              "<the merged bag>, \"reference_pass\": <the mapping pass>}}) and run again"
-              % os.path.basename(raw))
+        print("\nno pipeline config for this pass: write it with\n  python3 scoop_pipeline/"
+              "run_pass.py %s --new-config\ncheck it, and run again" % raw)
 
 
 if __name__ == "__main__":
