@@ -44,5 +44,9 @@ Network Does to Multi-Agent Perception*
 - Reference map: the BA + TSDF write-up is in `sections/refmap_main.tex`
   (with `supp/refmap_method.tex`); swap it into Sec. V-A once its numbers
   are in, and update E1 and Sec. IX to match.
-- Length is estimated at about 9.4 pages; IoT-J charges beyond 8. Fold
+- Sec. V-E `sections/synthetic_views.tex` (Table `tab:twin`): synthetic sensor
+  views from the reference map in Isaac Sim (`../isaac_coop_sim`). The
+  sim-vs-real scan agreement and the detection gap are `\todo` until the
+  runs exist; the tooling itself is not yet run in Isaac Sim.
+- Length is estimated at about 9.4 pages (about 9.9 with Sec. V-E); IoT-J charges beyond 8. Fold
   the per-question result tables into the spec sheet to save about a page.

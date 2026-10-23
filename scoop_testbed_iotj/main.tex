@@ -756,6 +756,7 @@ building-scale from onboard sensing only, and the independent
 measurements check the result and never produce it.
 
 \subsection{Scoring Capability}
+\label{sec:gt_score}
 Because every agent has a pose in the map frame at every scan, an
 object labelled once in that frame projects into every agent's frame
 through these poses, with the same position, size, and identity across
@@ -763,6 +764,10 @@ agents. This is how the testbed scores collaborative perception
 without per-frame annotation, and it is why the reference is built to
 annotation grade and not only as an evaluation target. The labels
 themselves are a release of the dataset \cite{scoop_dataset}.
+
+\subsection{Synthetic Views from the Reference}
+\label{sec:gt_twin}
+\input{sections/synthetic_views}
 
 %=======================================================================
 \section{Link Instrumentation}
