@@ -521,13 +521,16 @@ function table(){
     const tr = document.createElement("tr");
     tr.innerHTML = "<td>"+(i+1)+"</td><td>"+m.x.toFixed(2)+"</td><td>"+m.y.toFixed(2)+"</td><td><input value='"+m.name+"'></td><td><select>"+CLASSES.map(c=>"<option"+(c===m.cls?" selected":"")+">"+c+"</option>").join("")+"</select></td><td><button class='x'>×</button></td>";
     tr.querySelector("input").oninput = e => { m.name = e.target.value; draw(); cmd(); };
-    tr.querySelector("select").onchange = e => { m.cls = e.target.value; cmd(); };
+    tr.querySelector("select").onchange = e => {
+      const auto = new RegExp("^" + m.cls + "_[0-9]+$").test(m.name);   // a name the page gave
+      m.cls = e.target.value; if (auto) m.name = m.cls + "_" + count(m.cls); refresh();
+    };
     tr.querySelector("button").onclick = () => { marks.splice(i,1); refresh(); };
     tb.appendChild(tr);
   });
 }
 function refresh(){ draw(); table(); cmd(); }
-function count(cls){ return marks.filter(m=>m.cls===cls).length + 1; }
+function count(cls){ let n = 1; while (marks.some(m => m.name === cls + "_" + n)) n++; return n; }
 ov.addEventListener("mousemove", e => {
   const r = ov.getBoundingClientRect(); const px = (e.clientX - r.left) * M.cols / r.width, py = (e.clientY - r.top) * M.rows / r.height;
   const [x,y] = toMap(px,py); document.getElementById("mx").textContent = x.toFixed(2); document.getElementById("my").textContent = y.toFixed(2);
