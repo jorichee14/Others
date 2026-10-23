@@ -52,8 +52,9 @@ clock:
   reference_host: mobile_1        # the NTP server of the run
   ntp_topics:
     mobile_2: /mobile_2/ntp/client/status
-  events_topics:
-    mobile_2: /mobile_2/ntp/events
+  # /mobile_2/ntp/events had no messages in this run (no clock step, nothing
+  # logged), and a topic without messages is not in the merged bag.
+  events_topics: {}
   offset_field: offset_seconds
   offset_unit: s
   sign: auto
