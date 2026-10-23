@@ -1045,11 +1045,18 @@ def pick_interactive(cloud: np.ndarray) -> List[np.ndarray]:
         return []
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(cloud)
-    # colour by height so a chair stands out from the floor it is on
-    z = cloud[:, 2]
-    lo, hi = np.percentile(z, 2), np.percentile(z, 98)
-    t = np.clip((z - lo) / max(hi - lo, 1e-6), 0, 1)
-    pcd.colors = o3d.utility.Vector3dVector(np.c_[t, 0.35 + 0.3 * np.sin(np.pi * t), 1 - t])
+    # colour by height over the OBJECT band, so a chair or a pot stands out from
+    # the floor it is on: the floor dark grey, 0.2 m up already a strong colour,
+    # cycling through blue, green, yellow, red to magenta by 1.5 m, white above
+    z = cloud[:, 2] - float(np.percentile(cloud[:, 2], 3))
+    t = np.clip((z - 0.12) / 1.4, 0, 1)
+    import colorsys
+    lut = np.array([colorsys.hsv_to_rgb(0.66 - h if h <= 0.66 else 1.66 - h, 1.0, 1.0)
+                    for h in np.linspace(0, 0.8, 256)])
+    rgb = lut[(t * 255).astype(int)]
+    rgb[z < 0.12] = (0.25, 0.25, 0.28)                       # the floor
+    rgb[z > 1.6] = (0.95, 0.95, 0.95)                        # above the object band
+    pcd.colors = o3d.utility.Vector3dVector(rgb)
     print("\nShift + left click a point ON each object (the click is the seed, with its height);"
           "\nShift + right click undoes the last; mouse wheel zooms; q closes and fits.")
     vis = o3d.visualization.VisualizerWithEditing()
