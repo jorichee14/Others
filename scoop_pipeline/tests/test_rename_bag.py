@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """scoop.bagwrite.rename_bag: a bag folder moved under another name keeps
 its files named after the folder and metadata.yaml pointing at them (the
-finalize step renames <bag>_final_tf to <bag>_final; clean_pass adds a
+finalize step renames a bag that already had the poses to <bag>_final; clean_pass adds a
 timestamp to a folder that exists already).
 
     python3 tests/test_rename_bag.py
@@ -29,9 +29,9 @@ def write(path):
 
 def main():
     d = tempfile.mkdtemp()
-    src = os.path.join(d, "run_merged_final_tf")
+    src = os.path.join(d, "run_merged")
     write(src)
-    assert os.path.exists(os.path.join(src, "run_merged_final_tf_0.mcap"))
+    assert os.path.exists(os.path.join(src, "run_merged_0.mcap"))
 
     # the finalize case: the folder gets a new name, the file and metadata follow
     dst = rename_bag(src, os.path.join(d, "run_merged_final"))

@@ -525,21 +525,26 @@ def finalize(merged, poses, dry):
             rename_bag(merged, final)
         return
     tp = sorted(bag.open_bag(poses).topics())
-    new = final + "_tf"
-    print("  %s + %s (%s) -> %s, then %s" % (merged, poses, ", ".join(tp), new, final))
+    # written as .partial/<final name>, as the merge step does, so the bag's
+    # files carry the final name from the start; moved up when complete
+    tmp = os.path.join(os.path.dirname(final), ".partial", os.path.basename(final))
+    print("  %s + %s (%s) -> %s" % (merged, poses, ", ".join(tp), final))
     if dry:
         return
-    if os.path.exists(new):
-        raise SystemExit("%s exists: remove it (a finalize that stopped half way)" % new)
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(os.path.dirname(tmp), exist_ok=True)
     size = merge.bag_bytes(merged)
     free = shutil.disk_usage(os.path.dirname(merged)).free
     if free < size + merge.MIN_FREE_GB * 1e9:
         raise SystemExit("finalize needs %.0f GB free next to the merged bag, %.0f GB are"
                          % (size / 1e9 + merge.MIN_FREE_GB, free / 1e9))
-    merge.merge_bags([merged, poses], new, source={t: 1 for t in tp})
+    merge.merge_bags([merged, poses], tmp, source={t: 1 for t in tp})
     shutil.rmtree(merged)
-    from scoop.bagwrite import rename_bag
-    rename_bag(new, final)
+    os.replace(tmp, final)
+    try:
+        os.rmdir(os.path.dirname(tmp))
+    except OSError:
+        pass
     print("  %s: the dataset with the complete TF and the poses (%s is gone; the stages "
           "read %s for it)" % (final, os.path.basename(merged), os.path.basename(final)))
 
