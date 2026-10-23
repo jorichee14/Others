@@ -679,11 +679,14 @@ class Pipeline:
     # The robot's sensors (README: a pass's config); every stage reads them
     # here: the pass's "dataset" block, else the robot's "sensors" in the
     # base config's "robots" block, else mobile_1's.
-    def sensor_setting(self, key):
-        d = self.dataset
+    def sensor_setting(self, key, machine=None):
+        """The pass's robot's (dataset.<key>, then its "robots" block), or
+        another robot's (its "robots" block)."""
+        machine = machine or self.machine
+        d = self.dataset if machine == self.machine else {}
         if d.get(key) is not None and d.get(key) != "":
             return d[key]
-        own = (((self.cfg.get("robots") or {}).get(self.machine) or {}).get("sensors") or {})
+        own = (((self.cfg.get("robots") or {}).get(machine) or {}).get("sensors") or {})
         if own.get(key) is not None:
             return own[key]
         return {**DEFAULT_TOPICS, **DEFAULT_CAMERA}[key]

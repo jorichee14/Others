@@ -10,7 +10,10 @@ session anchor is the true camera pose at the start moved 4 cm and turned
 GLIM trajectory drifts 0.5 deg / 6 cm over the run. 04 must bring every scan
 back to its true pose. Again with GLIM 0.85 m off in the middle of the run,
 past max_shift (0.5 m): those scans start round 2 from the correction of the
-registered scans either side.
+registered scans either side. And a second robot with a LiDAR of its own
+(04 "tracks", "kind": "lidar": mobile_2 in coop, the ground truth): its own
+bag, GLIM world and path, its start from 03's anchor of its RealSense (the
+board it starts at), its topic and camera from the config's "robots".
 
     python scoop_pipeline/tests/test_reference_traj.py
 """
@@ -181,10 +184,85 @@ def room_case(tmp, drift, label, rounds=2):
     return failed
 
 
+def lidar_track_case(tmp):
+    """mobile_2 with its own LiDAR, tracked by 04's "kind": "lidar" -> failures."""
+    from scipy.spatial.transform import Rotation
+    from scoop import rosmsg
+    from scoop.bagwrite import BagWriter
+    cfg, data, _ = R.build(os.path.join(tmp, "track"), R.BOXES)
+    work = os.path.join(data, "work", "20260101", "survey_1")
+    bag = os.path.join(work, "x_mobile_2")
+    rng = np.random.default_rng(9)
+    pose = lambda t: R.true_pose(t + 10.0)                    # noqa: E731  another place
+    T_lc = np.eye(4)
+    T_lc[:3, :3] = [[0, 0, 1], [-1, 0, 0], [0, -1, 0]]       # optical in lidar
+    T_lc[:3, 3] = (0.12, 0.0, -0.20)
+    w = BagWriter(bag)
+    q = Rotation.from_matrix(T_lc[:3, :3]).as_quat()
+    w.write("/tf_static", rosmsg.tf_message([("os_lidar_mobile2", "camera_color_optical_frame",
+                                              T_lc[:3, 3], q)], R.T0 * R.S), R.T0 * R.S)
+    stamps = np.arange(0.05, 15.0, 0.1)
+    for t in stamps:
+        ns = R.T0 * R.S + int(round(t * R.S))
+        m = R.scan(pose(t), rng, ns, R.BOXES)
+        m.header.frame_id = "os_lidar_mobile2"
+        w.write("/mobile_2/ouster/points", m, ns)
+    w.close()
+    glim = os.path.join(work, "mobile_2", "glim")
+    os.makedirs(glim)
+    T_run_map = np.linalg.inv(R.rotz(-64.0, (1.2, 3.4, 0.1)))   # its own GLIM world
+    drift = lambda t: R.rotz(0.4 * t / 15.0, (0.05 * t / 15.0, 0, 0))   # noqa: E731
+    R.write_tum(os.path.join(glim, "traj_lidar.txt"), R.T0 + stamps,
+                [T_run_map @ drift(t) @ pose(t) for t in stamps])
+    # 03: mobile_1's ZED (not used here) and mobile_2's RealSense at its board, 3 cm off
+    T_cam = R.rotz(0.5, (0.02, 0.025, 0.0)) @ pose(0.05) @ T_lc
+    rec = lambda T: {"xyz": T[:3, 3].tolist(),                   # noqa: E731
+                     "qxyzw": Rotation.from_matrix(T[:3, :3]).as_quat().tolist()}
+    fr = os.path.join(data, "processed", "20260101", "survey_1", "frames")
+    os.makedirs(fr, exist_ok=True)
+    json.dump({"cameras": {"zed": {"mode": "lidar_odom", "dwell_t_end": R.T0 + 0.05,
+                                   "map_to_cam": rec(np.eye(4))},
+                           "realsense": {"mode": "static", "dwell_t_end": R.T0 + 0.05,
+                                         "map_to_cam": rec(T_cam)}}},
+              open(os.path.join(fr, "session_anchor.json"), "w"))
+    c = json.load(open(cfg))
+    c["robots"] = {"mobile_2": {"sensors": {"points_topic": "/mobile_2/ouster/points",
+                                            "camera_frame": "camera_color_optical_frame"}}}
+    c["04_reference"] = {"name": "mobile_1_lidar", "anchor_cam": "zed", "tracks": [
+        {"name": "mobile_2_lidar", "kind": "lidar", "machine": "mobile_2", "bag": bag,
+         "anchor_cam": "realsense"}]}
+    json.dump(c, open(cfg, "w"))
+    out = subprocess.run([sys.executable, os.path.join(STAGES, "04_reference_traj.py"), cfg,
+                          "--track", "mobile_2_lidar"], capture_output=True, text=True, cwd=STAGES)
+    print(out.stdout[-1500:])
+    if out.returncode:
+        raise AssertionError(out.stdout[-1500:] + out.stderr[-2000:])
+    od = os.path.join(data, "processed", "20260101", "survey_1", "odometry",
+                      "reference_survey_1_20260101")
+    ts, T = read_poses(os.path.join(od, "traj_mobile_2_lidar.tum"))
+    pe = np.array([np.linalg.norm(T[i, :3, 3] - pose(t - R.T0)[:3, 3]) for i, t in enumerate(ts)]) * 100
+    tc, Tc = read_poses(os.path.join(od, "traj_mobile_2_lidar_in_cam.tum"))
+    ce = np.array([np.linalg.norm(Tc[i, :3, 3] - (pose(t - R.T0) @ T_lc)[:3, 3])
+                   for i, t in enumerate(tc)]) * 100
+    print(f"lidar track: mobile_2 vs truth: median {np.median(pe):.2f} cm, max {pe.max():.2f} cm;"
+          f" its camera median {np.median(ce):.2f} cm")
+    f = []
+    if len(ts) != len(stamps) or not (np.median(pe) < 0.5 and np.percentile(pe, 95) < 1.0):
+        f.append(f"lidar track: {len(ts)} poses, {np.median(pe):.2f} / "
+                 f"{np.percentile(pe, 95):.2f} cm off")
+    if not np.median(ce) < 0.5:
+        f.append(f"lidar track: camera {np.median(ce):.2f} cm off")
+    s = json.load(open(os.path.join(od, "summary_mobile_2_lidar.json")))
+    if s.get("anchor_cam") != "realsense" or s.get("lidar_frame") != "os_lidar_mobile2":
+        f.append("lidar track: summary %s" % {k: s.get(k) for k in ("anchor_cam", "lidar_frame")})
+    return f
+
+
 def main():
     tmp = tempfile.mkdtemp()
     failed = []
     try:
+        failed += lidar_track_case(tmp)
         failed += corridor_case(tmp)
         # GLIM with drift: the run's own odometry is close, not exact
         failed += room_case(tmp, lambda t: R.rotz(0.5 * t / R.DUR, (0.06 * t / R.DUR, 0, 0)), "room")

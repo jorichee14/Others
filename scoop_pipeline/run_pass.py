@@ -177,7 +177,7 @@ def new_config(raw, robot=None, reference=None, log=print, stages=STAGES):
                         *(p.parent.name for p in rawp.rglob("metadata.yaml")))
     if mode not in ("mapping", "survey"):
         raise SystemExit("mode %s (from the folder and bag names): --new-config writes mapping "
-                         "and survey passes; for a coop run copy pipeline_config_coop_2.json"
+                         "and survey passes; for a coop run copy pipeline_config_coop_site_1_20261015.json"
                          % mode)
     settings = recording.load_settings(None)
     recs = {}

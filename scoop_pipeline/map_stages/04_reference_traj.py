@@ -52,8 +52,17 @@ Config "04_reference" (all optional):
   "min_corr": 200, "max_shift": 0.5, "max_rot_deg": 5.0, "carry": true, "carry_fit": 0.85,
   "seed_held_at": 0.5, "segment_gap_s": 1.0,
   "deskew": 01_build_map.deskew, "deskew_bins": 01_build_map.deskew_bins
-  "tracks":      more robots, each registered to the same map from its own odometry
-                 (map_stages/depth_track.py: a depth camera, e.g. mobile_2's RealSense)
+  "tracks":      more robots, each registered to the same map from its own odometry:
+                 "kind": "depth" (map_stages/depth_track.py: a depth camera, e.g.
+                 mobile_2's RealSense without a LiDAR), or
+                 "kind": "lidar": a robot with a LiDAR, as above -- its GLIM run
+                 (<work>/<pass>/<machine>/glim/traj_lidar.txt) placed by 03's
+                 anchor of its camera, every scan to the map:
+                   {"name": "mobile_2_lidar", "kind": "lidar", "machine": "mobile_2",
+                    "anchor_cam": "realsense",          # 03's sensor at its start board
+                    "body_frame": "os_lidar_mobile2",   # pass_tf: what the track moves
+                    "origin_frame": "map_realsense", "board": "board_4"}
+                   (points_topic / cam_frame: the robot's in the config's "robots")
 
   python3 04_reference_traj.py pipeline_config_<run>.json [--track NAME]
       --track NAME   only that entry of "tracks" (the LiDAR track as it is)
@@ -278,19 +287,32 @@ def main():
             if as_name:
                 tracks[0].update(cache_name=only, name=as_name)
             print("ablation of %s: written as %s, settings %s" % (only, tracks[0]["name"], sets))
-        run_tracks(P, tracks, c, load_reference(ref_map, c), outd)
+        run_tracks(P, tracks, c, load_reference(ref_map, c), ref_map, outd)
         return
 
     T_lc = np.asarray(P.sensor.T_lidar_camera, float)
     times, T_glim = A.load_traj(run_traj)
     T_map_glim, t_a, mode = seed_from_anchor(sa_path, c["anchor_cam"], times, T_glim, T_lc)
-    T_seed = np.einsum("ij,njk->nik", T_map_glim, T_glim)
-    print("\nseed: %d GLIM poses (%.1f s) placed in map by 03's '%s' anchor (%s) at t=%.3f"
-          % (len(times), times[-1] - times[0], c["anchor_cam"], mode, t_a))
     topic = A.detect_points_topic(bag, P.points_topic, len(times))
 
     ref = load_reference(ref_map, c)
 
+    register_all(name, bag, topic, times, T_glim, T_map_glim,
+                 {"ref_map": ref_map, "session_anchor": sa_path, "anchor_cam": c["anchor_cam"],
+                  "anchor_mode": mode, "t_anchor": t_a}, run_traj, T_lc, c, s01, ref, outd)
+    if tracks:
+        run_tracks(P, tracks, c, ref, ref_map, outd)
+
+
+def register_all(name, bag, topic, times, T_glim, T_map_glim, seed, run_traj, T_lc, c, s01,
+                 ref, outd):
+    """A LiDAR run's every scan to the frozen map, from its GLIM trajectory
+    placed in map by T_map_glim (`seed`: the map and the anchor it came from,
+    for the summary) -> traj_<name>.tum, _in_cam, quality, seed_held, summary."""
+    T_seed = np.einsum("ij,njk->nik", T_map_glim, T_glim)
+    print("\nseed: %d GLIM poses (%.1f s) placed in map by 03's '%s' anchor (%s) at t=%.3f"
+          % (len(times), times[-1] - times[0], seed["anchor_cam"], seed["anchor_mode"],
+             seed["t_anchor"]))
     T_cur, history, rows = T_seed.copy(), [], {}
     for rnd in range(1, int(c["rounds"]) + 1):
         print("\n=== round %d/%d: every scan to the frozen map ===" % (rnd, int(c["rounds"])))
@@ -355,10 +377,8 @@ def main():
                     "seconds": float(sum(g["t1"] - g["t0"] for g in segs)),
                     "max_seed_off_cm": float(np.nanmax(
                         [g["off_cm"] for g in segs])) if segs else 0.0}
-    summary = {"name": name, "bag": bag, "run_traj": run_traj, "ref_map": ref_map,
-               "seed_held": summary_held,
-               "session_anchor": sa_path, "anchor_cam": c["anchor_cam"], "anchor_mode": mode,
-               "t_anchor": t_a, "T_map_glim_seed": T_map_glim.tolist(), "rounds": history,
+    summary = {"name": name, "bag": bag, "run_traj": run_traj, "seed_held": summary_held,
+               **seed, "T_map_glim_seed": T_map_glim.tolist(), "rounds": history,
                "registered_last_round": history[-1]["registered"], "poses": len(times),
                "seed_to_final_cm": {"median": float(np.median(total)),
                                     "p95": float(np.percentile(total, 95)),
@@ -393,8 +413,6 @@ def main():
                      fmt(g["off_before_cm"]), fmt(g["off_after_cm"])))
     print("wrote %s\n      %s\n      quality_%s.csv, seed_held_%s.csv, summary_%s.json"
           % (p_lidar, p_cam, name, name, name))
-    if tracks:
-        run_tracks(P, tracks, c, ref, outd)
 
 
 def load_reference(ref_map, c):
@@ -406,15 +424,53 @@ def load_reference(ref_map, c):
     return A.Reference(pts, plane_voxel=float(c["plane_voxel"]), planarity=float(c["planarity"]))
 
 
-def run_tracks(P, tracks, c, ref, outd):
+def run_tracks(P, tracks, c, ref, ref_map, outd):
     """The other robots of "tracks", each against the same frozen map."""
     import depth_track
-    base = {k: v for k, v in c.items() if k != "tracks"}
+    base = {k: v for k, v in c.items() if k not in ("tracks", "name", "run_traj", "bag")}
     for tr in tracks:
         kind = tr.get("kind", "depth")
-        if kind != "depth":
-            raise SystemExit("track %s: unknown kind %r (depth)" % (tr.get("name"), kind))
-        depth_track.run(P, tr, base, ref, outd)
+        if kind == "depth":
+            depth_track.run(P, tr, base, ref, outd)
+        elif kind == "lidar":
+            lidar_track(P, tr, base, ref, ref_map, outd)
+        else:
+            raise SystemExit("track %s: unknown kind %r (depth, lidar)" % (tr.get("name"), kind))
+
+
+def lidar_track(P, tr, base, ref, ref_map, outd):
+    """"kind": "lidar": another robot with a LiDAR of its own, tracked as the
+    pass's robot is: its GLIM trajectory placed in map by 03's session anchor
+    of its camera (anchor_cam: the board it starts at), every scan registered
+    to the map. Its topic and camera from the config's "robots" block."""
+    import pass_tf
+    from scoop import tftree
+    c = dict(base)
+    c.update(tr)
+    name, machine = c["name"], c["machine"]
+    if not tr.get("anchor_cam"):
+        raise SystemExit("track %s: no anchor_cam (03's camera that places its start)" % name)
+    bag = os.path.expanduser(c.get("bag") or P.dataset["bag"])
+    run_traj = os.path.expanduser(c.get("run_traj") or os.path.join(
+        os.path.dirname(os.path.normpath(bag)), machine, "glim", "traj_lidar.txt"))
+    sa_path = P.outp(c.get("session_anchor") or "session_anchor.json")
+    print("\n##### track %s: %s's LiDAR, seeded by %s #####" % (name, machine, run_traj))
+    for f in (run_traj, sa_path):
+        if not os.path.exists(f):
+            raise SystemExit("not found: %s" % f)
+    topic = c.get("points_topic") or P.sensor_setting("points_topic", machine)
+    cam = c.get("cam_frame") or P.sensor_setting("camera_frame", machine)
+    lidar = pass_tf._frame_id([bag], topic)
+    if lidar is None:
+        raise SystemExit("no %s in %s" % (topic, bag))
+    T_lc = tftree.static_between(lidar, cam, tftree.tf_edges([bag], seconds=1.0))
+    print("%s (%s) -> %s from the bag's /tf_static" % (topic, lidar, cam))
+    times, T_glim = A.load_traj(run_traj)
+    T_map_glim, t_a, mode = seed_from_anchor(sa_path, tr["anchor_cam"], times, T_glim, T_lc)
+    register_all(name, bag, topic, times, T_glim, T_map_glim,
+                 {"ref_map": ref_map, "session_anchor": sa_path, "anchor_cam": tr["anchor_cam"],
+                  "anchor_mode": mode, "t_anchor": t_a, "machine": machine,
+                  "lidar_frame": lidar}, run_traj, T_lc, c, P.cfg["01_build_map"], ref, outd)
 
 
 if __name__ == "__main__":

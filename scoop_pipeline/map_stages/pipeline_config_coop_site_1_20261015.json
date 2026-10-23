@@ -1,0 +1,23 @@
+{
+  "extends": "pipeline_config.json",
+  "_note": "20261015 coop at site 1 (raw/20261015/coop/site_1/), in the same day's map (20261015 mapping). The boards keep the poses the map and survey/site_1 measured (no 05: dataset.boards_from); the arducam where survey/site_1's 07 put it (dataset.cameras_from). mobile_1: 03 (its ZED at its start board, through GLIM) -> 04 (every scan to the anchored map). mobile_2, the ground truth: GLIM on its OS1-128, its start from 03's 'realsense' (its RealSense at board_4 in the opening dwell, through its LiDAR -> camera calibration in the bag) -> 04's track mobile_2_lidar (every scan to the same map). No 07/08 in coop. Same day as the map: the boards did not move.",
+  "dataset": {
+    "bag": "~/workspaces/isaac_ros-dev/data/work/20261015/coop/site_1/mirc_dataset_coop_site_1_20261015_merged",
+    "traj": null,
+    "machine": "mobile_1",
+    "reference_pass": "mapping",
+    "boards_from": ["survey/site_1"], "cameras_from": ["survey/site_1"]
+  },
+  "03_init": {"sensors": [{"name": "zed", "source": "lidar_odom"},
+                          {"name": "realsense", "source": "camera", "board": "board_4",
+                           "dwell_only": true}]},
+  "04_reference": {"tracks": [{"name": "mobile_2_lidar", "kind": "lidar", "machine": "mobile_2",
+                               "anchor_cam": "realsense", "body_frame": "os_lidar_mobile2",
+                               "origin_frame": "map_realsense", "board": "board_4"}]},
+  "05_anchor": {"enabled": false},
+  "07_build_cameras": {"enabled": false},
+  "08_emit_tfs": {"enabled": false},
+  "10_publish": {"robots": [{"name": "mobile_2",
+                             "traj": "traj_mobile_2_lidar_in_cam.tum",
+                             "optical_frame": "camera_color_optical_frame"}]}
+}
