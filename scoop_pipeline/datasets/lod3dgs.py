@@ -1029,11 +1029,12 @@ def splats_clean(ply, mesh_path, out=None, far=0.15, min_opacity=0.05, max_scale
     return res
 
 
-def recolour_mesh(mesh_path, ply, out=None, radius=0.05, k=8):
+def recolour_mesh(mesh_path, ply, out=None, radius=0.05, k=8, fill=0.5):
     """The mesh's vertex colours from the trained splats: each vertex the
     opacity-weighted mean of the base colours (splat_colours) of the k
     nearest Gaussians within `radius` m, weighted down with distance; a
-    vertex with none keeps its colour. The splats' base colour is what
+    vertex with none within radius takes the nearest few within `fill` m
+    (the model is sparser than the mesh); one with none keeps its colour. The splats' base colour is what
     training found consistent from every view, so the mesh gets clean
     colours, the camera's glints and exposure left out. Both in the model's
     frame (the unanchored mesh). Written to out (default <mesh>_gs.ply);
@@ -1049,21 +1050,33 @@ def recolour_mesh(mesh_path, ply, out=None, radius=0.05, k=8):
     rgb, op = splat_colours(G)
     tree = cKDTree(np.c_[G["x"], G["y"], G["z"]].astype(np.float64))
     C = np.asarray(m.vertex_colors).copy() if m.has_vertex_colors() else np.full((len(V), 3), 0.6)
-    done = 0
+    done, filled = 0, 0
     for a0 in range(0, len(V), 2000000):
-        d, j = tree.query(V[a0:a0 + 2000000], k=k, workers=-1, distance_upper_bound=radius)
+        Vb = V[a0:a0 + 2000000]
+        d, j = tree.query(Vb, k=k, workers=-1, distance_upper_bound=fill)
         d, j = d.reshape(-1, k), j.reshape(-1, k)
         has = np.isfinite(d)
         jj = np.where(has, j, 0)
-        w = np.where(has, op[jj] * np.exp(-(np.where(has, d, 0) / (radius / 2)) ** 2 / 2), 0.0)
+        near = has & (d <= radius)
+        w = np.where(near, op[jj] * np.exp(-(np.where(near, d, 0) / (radius / 2)) ** 2 / 2), 0.0)
         ws = w.sum(1)
         ok = ws > 1e-9
-        C[a0:a0 + 2000000][ok] = (w[:, :, None] * rgb[jj]).sum(1)[ok] / ws[ok, None]
+        Cb = C[a0:a0 + 2000000]
+        Cb[ok] = (w[:, :, None] * rgb[jj]).sum(1)[ok] / ws[ok, None]
+        rest = ~ok & has[:, 0]                       # none that close: the nearest few within fill m
+        if rest.any():
+            d0 = np.where(has, d, np.inf)[rest]
+            wf = np.where(has[rest], op[jj[rest]] / (d0 + 0.05), 0.0)
+            wf *= (d0 <= d0.min(1, keepdims=True) + 0.1)
+            Cb[rest] = (wf[:, :, None] * rgb[jj[rest]]).sum(1) / wf.sum(1)[:, None]
         done += int(ok.sum())
+        filled += int(rest.sum())
     m.vertex_colors = o3d.utility.Vector3dVector(np.clip(C, 0, 1))
     o3d.io.write_triangle_mesh(out, m)
-    log.info(f"{mesh_path}: {done} of {len(V)} vertices coloured from {len(G)} Gaussians ({ply}) -> {out}")
-    return done, len(V)
+    log.info(f"{mesh_path}: {done} of {len(V)} vertices coloured from Gaussians within {radius} m, {filled} from "
+             f"the nearest within {fill} m, {len(V) - done - filled} kept their colour ({len(G)} Gaussians, {ply}) "
+             f"-> {out}")
+    return done + filled, len(V)
 
 
 def anchor_file(path, frame, out=None):
@@ -3182,6 +3195,7 @@ def main():
     rc.add_argument("ply", help="a trained model, e.g. <run>/point_cloud/iteration_300000/level_5.ply")
     rc.add_argument("out", nargs="?", default=None, help="default <mesh>_gs.ply")
     rc.add_argument("--radius", type=float, default=0.05, help="Gaussians within this of a vertex colour it (m)")
+    rc.add_argument("--fill", type=float, default=0.5, help="a vertex with none that close: the nearest within this (m)")
     wk = sub.add_parser("walk", help="walk inside a mesh (with its ceiling) in a window")
     wk.add_argument("file", help="a mesh, e.g. mesh_view_<tag>_anchored.ply or its _sionna.ply")
     wk.add_argument("--traj", default=None,
@@ -3227,7 +3241,7 @@ def main():
         elif a.cmd == "splats-clean":
             splats_clean(a.ply, a.mesh, a.out, far=a.far, min_opacity=a.min_opacity, max_scale=a.max_scale)
         elif a.cmd == "recolour":
-            recolour_mesh(a.mesh, a.ply, a.out, radius=a.radius)
+            recolour_mesh(a.mesh, a.ply, a.out, radius=a.radius, fill=a.fill)
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
                  faces=a.faces, eye=a.eye, shot=a.shot, vivid=not a.plain, sat=a.sat, one_side=a.one_side,

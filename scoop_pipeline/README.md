@@ -1160,7 +1160,8 @@ in the air), opacity under `--min-opacity` 0.05, longer than `--max-scale`
 `recolour` gives the mesh the splats' colours: each vertex the
 opacity-weighted mean of the base colours (the SH DC term, what training
 found consistent from every view, the glints and the exposure left out) of
-the Gaussians within `--radius` 0.05 m -> `<mesh>_gs.ply`, to `anchor` and
+the Gaussians within `--radius` 0.05 m, or with none that close the nearest
+within `--fill` 0.5 m (the model is sparser than the mesh) -> `<mesh>_gs.ply`, to `anchor` and
 `sionna` as before. Both take the unanchored mesh (the model's frame).
 
     python3 scoop_pipeline/datasets/lod3dgs.py splats-clean <run>/point_cloud/iteration_300000/level_5.ply \
