@@ -696,6 +696,12 @@ def main():
         T = np.eye(4); T[:3, :3] = qR(rec["qxyzw"]); T[:3, 3] = rec["xyz"]
         print("\n[%s -> %s]  (%s)" % (MAP, rec["frame"], rec["method"]))
         print(stp(MAP, rec["frame"], T))
+    if anchor["name"] not in boards_out:
+        print("\n! the anchor board %r did not pass the fusion gates, so no chain is rooted at it."
+              "\n  Nothing downstream can use this pass until a board is written: see the"
+              "\n  per-board sections above for which gate each one failed (std, n, reproj)."
+              % anchor["name"])
+        return
     T_boardA_cam0 = np.linalg.inv(T_world_boardA) @ (tr_T[0] @ T_lidar_cam)
     print("\n[%s -> %s]" % (boards_out[anchor["name"]]["frame"], P.camera_frame))
     print(stp(boards_out[anchor["name"]]["frame"], P.camera_frame, T_boardA_cam0))
