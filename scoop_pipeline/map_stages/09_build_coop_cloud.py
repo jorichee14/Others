@@ -33,6 +33,14 @@ Options worth knowing:
     --no-deskew           one pose per scan (default: every point through the
                           trajectory at its own time, as 01 / 02 / 04 do)
                           (needs quality_<name>.csv next to the tum)
+    --ref-map PATH        the reference map's points into the same cloud, so the run's
+                          own objects stand in the building the mapping pass
+                          measured (walls and furniture the run only glimpsed).
+                          From a config it is the reference pass's anchored map
+                          (dataset.reference_pass), already in this frame;
+                          --no-ref-map leaves it out. The map's points are added
+                          AFTER the dynamic filter, which judges the run's scans
+                          alone, so nothing of the map is carved away.
     --also TOPIC=TRAJ     another LiDAR's scans into the same cloud, placed by its
                           own stage-04 track (T_map_lidar). From a config, every
                           "kind": "lidar" entry of 04_reference.tracks is added by
@@ -67,6 +75,15 @@ def write_pcd(path, P):
            f"WIDTH {len(P)}\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS {len(P)}\nDATA binary\n")
     with open(path, "wb") as f:
         f.write(hdr.encode("ascii")); f.write(P.tobytes())
+
+
+def read_points(path):
+    """Any pcd -> (N, 3) float64, through Open3D (as 01 and 04 read the map)."""
+    import open3d as o3d
+    pc = o3d.io.read_point_cloud(os.path.expanduser(path))
+    if not len(pc.points):
+        raise SystemExit("no points in %s" % path)
+    return np.asarray(pc.points, dtype=np.float64)
 
 
 class VoxelAccum:
@@ -110,7 +127,7 @@ SAMPLE_CONFIG = """
   "topic": "/mobile_1/ouster/points",
   "voxel": 0.03, "range_min": 0.7, "range_max": 25.0,
   "t_start": 0, "t_end": 42,        <- optional: only the stretch before people walked through
-  "min_count": 2, "keep_quality": true,
+  "min_count": 2, "keep_quality": true, "ref_map": null,
   "remove_dynamic": {"enable": true, "voxel": 0.15, "min_span_s": 1.0, "min_hits": 2,
                      "carve": {"enable": true, "ray_stride": 4, "scan_stride": 2, "max_range": 20.0,
                                "grazing_margin": 0.03, "min_free": 5, "free_ratio": 1.0}}
@@ -186,6 +203,10 @@ def main():
                 else:
                     print("(no %s: track %s not built by 04, left out)" % (traj, tr["name"]))
         cfg_defaults["also"] = also
+        if cfg_defaults.get("ref_map"):
+            cfg_defaults["ref_map"] = P.outp(cfg_defaults["ref_map"])
+        elif P.reference and cfg_defaults.get("ref_map") is None:
+            cfg_defaults["ref_map"] = P.ref_file("anchored_map")
         s01 = P.cfg.get("01_build_map", {})
         cfg_defaults.setdefault("deskew", bool(s01.get("deskew", True)))
         cfg_defaults.setdefault("deskew_bins", int(s01.get("deskew_bins", 100)))
@@ -215,6 +236,12 @@ def main():
     ap.add_argument("--deskew-bins", type=int, default=100)
     ap.add_argument("--also", action="append", default=[], metavar="TOPIC=TRAJ",
                     help="another LiDAR's scans, placed by its own stage-04 track")
+    ap.add_argument("--ref-map", default=None,
+                    help="the reference map's pcd, added after the dynamic filter")
+    ap.add_argument("--no-ref-map", dest="ref_map", action="store_const", const="",
+                    help="leave the reference map out")
+    ap.add_argument("--ref-voxel", type=float, default=0.0,
+                    help="voxel for the map's points (0: --voxel)")
     ap.add_argument("--keep-dynamic", action="store_true",
                     help="keep the run's movers (default: removed by span and free-space carving)")
     ap.add_argument("--remove-dynamic", default=None, help=argparse.SUPPRESS)   # the config block
@@ -300,8 +327,25 @@ def main():
         print(f"remove dynamic: {n_static} static / {n_dyn} dynamic voxels"
               f"{', %d of them carved by free-space' % n_carved if carver is not None else ''}"
               f" -> dropped {len(gone)} points, kept {len(out)}; the dropped ones in {dyn_path}")
+    n_run = len(out)
+    if args.ref_map:
+        ref = read_points(args.ref_map)
+        print(f"reference map: {args.ref_map}: {len(ref)} points")
+        lo, hi = out.min(axis=0) - 2.0, out.max(axis=0) + 2.0
+        inside = np.all((ref >= lo) & (ref <= hi), axis=1)
+        if inside.sum() < len(ref):
+            print(f"  {len(ref) - int(inside.sum())} of them outside the run's extent "
+                  f"(plus 2 m), left out")
+        merged = VoxelAccum(args.ref_voxel or args.voxel)
+        merged.add(out)
+        merged.add(ref[inside])
+        out = merged.points(1)
+        print(f"  merged: {n_run} from the run + {int(inside.sum())} from the map "
+              f"-> {len(out)} at {args.ref_voxel or args.voxel} m "
+              f"(the overlap falls in the same voxels)")
     write_pcd(args.out, out)
-    print(f"used {n_used_all} scans from {len(sources)} LiDAR(s)")
+    print(f"used {n_used_all} scans from {len(sources)} LiDAR(s)"
+          + (f"; the reference map's points are in too ({args.ref_map})" if args.ref_map else ""))
     print(f"wrote {args.out}: {len(out)} points at {args.voxel} m voxel, "
           f"x {out[:,0].min():.2f}..{out[:,0].max():.2f}  y {out[:,1].min():.2f}..{out[:,1].max():.2f}")
     print("this cloud is in the same frame as the trajectory it was built from — "

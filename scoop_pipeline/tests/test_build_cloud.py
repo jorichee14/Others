@@ -104,6 +104,17 @@ def scan_with_objects(ts, rng, boxes):
     return rosmsg.pointcloud2(a, int(round((SC.T0 + ts) * SC.S)), "os_lidar", height=SC.H, width=SC.W)
 
 
+def write_pcd_xyz(path, P):
+    P = np.asarray(P, np.float32)
+    hdr = ("# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\n"
+           "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\n"
+           "WIDTH %d\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS %d\nDATA binary\n"
+           % (len(P), len(P)))
+    with open(path, "wb") as fh:
+        fh.write(hdr.encode("ascii"))
+        fh.write(P.tobytes())
+
+
 def inside(P, lo, hi, margin=0.1):
     return int(np.all((P >= lo - margin) & (P <= hi + margin), axis=1).sum())
 
@@ -140,6 +151,23 @@ def dynamic_case(tmp, rng):
          "dropped": len(gone), "kept": len(clean), "raw": len(raw)}
     print("dynamic:", r)
     f = []
+    # the reference map's points come in after the filter: a wall section the
+    # run never saw (outside the room is clipped, so use a slab inside it that
+    # the run's scans miss: the ceiling at z = 2.9, which the lidar's +-10 deg
+    # never reaches at this range)
+    ref = np.column_stack([rng.uniform(-7, 7, 20000), rng.uniform(-5, 5, 20000),
+                           np.full(20000, 2.9)])
+    ref_pcd = os.path.join(tmp, "ref.pcd")
+    write_pcd_xyz(ref_pcd, ref)
+    both = run07(bag, traj, os.path.join(tmp, "both.pcd"), "--ref-map", ref_pcd)
+    if not (both[:, 2] > 2.5).any():
+        f.append("--ref-map: the map's ceiling is not in the output")
+    if len(both) < len(clean):
+        f.append("--ref-map: %d points, fewer than the run's own %d" % (len(both), len(clean)))
+    if inside(both, CHAIR[0], CHAIR[1]) < 0.8 * r["chair_raw"]:
+        f.append("--ref-map: the chair lost points")
+    if "merged" not in run07.last:
+        f.append("--ref-map: no merge line in the log")
     if r["chair_clean"] < 0.8 * r["chair_raw"] or r["chair_raw"] < 200:
         f.append("the chair lost points: %s" % r)
     if r["trail_raw"] < 500 or r["trail_clean"] > 0.1 * r["trail_raw"]:
