@@ -855,7 +855,14 @@ def main() -> int:
         manual[len(seeds)] = {"L": v[2], "W": v[3], "H": v[4], "yaw": v[5] if len(v) == 6 else 0.0}
         seeds.append(np.array([v[0], v[1], ground_z + 0.5], dtype=np.float64))
     if args.interactive:
-        seeds.extend(pick_interactive(cloud))
+        # the overhead goes, as in the search: a scanned ceiling hides everything
+        # under it from above, and a top-down view is what a pick needs
+        shown = cloud
+        if args.ceiling:
+            shown = cloud[cloud[:, 2] - ground_z <= args.ceiling]
+            print("\n(%d returns above %.2f m over the floor hidden in the picker: --ceiling)"
+                  % (len(cloud) - len(shown), args.ceiling))
+        seeds.extend(pick_interactive(shown))
     names = list(args.name or [])
     if names and len(names) not in (1, len(seeds)):
         print("\n! %d --name for %d --seed: give one name each, or none"
