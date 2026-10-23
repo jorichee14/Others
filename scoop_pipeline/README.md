@@ -1181,8 +1181,12 @@ the mesh flight's loop) with LOD-3DGS's own rasteriser, in its environment
 `--scene <scene>` starts at the scene's first camera, `--at X,Y` elsewhere;
 `--fly <mesh>_fly_path.json out.mp4` renders the loop `fly` flew (the path
 it writes beside the video), `--frame frames/anchor_frame.json` moving it
-from the anchored frame into the model's. One level file is one model:
-`level_5.ply` the finest.
+from the anchored frame into the model's. The level files beside the one
+given (`level_0.ply` the coarsest ... `level_5.ply` the finest) are all
+loaded, and each Gaussian is drawn from the coarsest level whose cell is
+still small on screen at its distance (`--px` 2 pixels: at 720p the finest
+to 20 m, each coarser one over the next doubling), as LOD-3DGS's own
+renderer does; `--no-lod` draws the one file.
 
     python3 scoop_pipeline/datasets/splat_walk.py <run>/point_cloud/iteration_300000/level_5.ply \
         --scene $P/datasets/mobile_2/lod3dgs_map_<tag>

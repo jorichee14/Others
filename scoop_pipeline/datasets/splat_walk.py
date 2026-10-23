@@ -10,6 +10,10 @@ diff_gaussian_rasterization, plyfile; the window is OpenCV's):
     python3 scoop_pipeline/datasets/splat_walk.py <level_5.ply> --fly <mesh>_fly_path.json out.mp4 \\
         --frame <data>/frames/anchor_frame.json      # the loop was flown in the anchored frame
 
+The level files beside the one given (level_0.ply the coarsest ...
+level_5.ply the finest) are all loaded and each Gaussian is drawn from the
+coarsest level whose cell is still small on screen at its distance (--px 2
+pixels), as LOD-3DGS's own renderer does; --no-lod draws the one file.
 Turn with the arrow keys or by dragging with the left mouse button; move
 with W forward, S back, A left, D right, Q up, Z down; R back to the
 start; Escape out. The model is in the map's frame (GLIM's world, z up,
@@ -47,6 +51,50 @@ def load_splats(path, device="cuda"):
     rot /= np.linalg.norm(rot, axis=1, keepdims=True) + 1e-9
     t = lambda a: torch.from_numpy(np.ascontiguousarray(a)).to(device)      # noqa: E731
     return {"xyz": t(xyz), "features": t(feats), "opacity": t(op), "scales": t(sc), "rotations": t(rot)}, deg
+
+
+def load_levels(path, cell=0.04):
+    """The level files beside `path` (level_<k>.ply, k = 0 the coarsest; the
+    given one for its k, e.g. a _clean copy): [(cell size m, splats)] from
+    the coarsest, the finest's cells `cell` m and each coarser level's
+    double; or just the given file when it is not a level file."""
+    import re
+    d, base = os.path.split(path)
+    m = re.match(r"level_(\d+)", base)
+    if not m:
+        g, deg = load_splats(path)
+        return [(cell, g)], deg
+    ks = sorted({int(re.match(r"level_(\d+)", f).group(1)) for f in os.listdir(d)
+                 if re.match(r"level_(\d+)\.ply$", f)} | {int(m.group(1))})
+    kmax = ks[-1]
+    levels, deg = [], None
+    for k in ks:
+        f = path if k == int(m.group(1)) else os.path.join(d, f"level_{k}.ply")
+        g, deg = load_splats(f)
+        levels.append((cell * 2 ** (kmax - k), g))
+        print(f"  level {k}: {len(g['xyz'])} splats, cells {cell * 2 ** (kmax - k):.2f} m ({os.path.basename(f)})",
+              flush=True)
+    return levels, deg
+
+
+def pick_levels(levels, eye, f_px, px=2.0):
+    """The splats to draw this frame, one level per Gaussian by its distance
+    from the eye: the coarsest level whose cell projects to px pixels or
+    less there (a cell c at distance d covers c * f_px / d pixels), the
+    finest nearer than that. One dict of tensors, concatenated."""
+    if len(levels) == 1:
+        return levels[0][1]
+    eye_t = torch.tensor(eye, dtype=torch.float32, device="cuda")
+    cells = [c for c, _ in levels]                      # coarsest first
+    parts = []
+    for i, (c, g) in enumerate(levels):
+        d = torch.linalg.norm(g["xyz"] - eye_t, dim=1)
+        lo = c * f_px / px                                # from here this level's cells are small enough
+        hi = cells[i - 1] * f_px / px if i > 0 else float("inf")   # nearer than the coarser one's
+        sel = (d >= lo) & (d < hi) if i < len(levels) - 1 else (d < hi)
+        if sel.any():
+            parts.append({k: v[sel] for k, v in g.items()})
+    return {k: torch.cat([p_[k] for p_ in parts]) for k in parts[0]}
 
 
 def camera(eye, look, up, W, H, fov_deg, znear=0.05, zfar=1000.0, device="cuda"):
@@ -195,16 +243,28 @@ def main():
     ap.add_argument("--render-views", nargs=2, default=None, metavar=("SCENE", "OUT"),
                     help="render the scene's cameras (rgb + depth) to OUT, for lod3dgs.py recolour --renders")
     ap.add_argument("--every", type=int, default=1, help="with --render-views: every Nth camera")
+    ap.add_argument("--no-lod", action="store_true", help="the given file alone (default: the level files beside "
+                    "it, each Gaussian drawn from the coarsest level whose cell is still small at its distance)")
+    ap.add_argument("--cell", type=float, default=0.04, help="the finest level's cell size (m; the scene's spacing)")
+    ap.add_argument("--px", type=float, default=2.0, help="a level is used from where its cells cover this many pixels")
     a = ap.parse_args()
     W, H = [int(v) for v in a.size.lower().split("x")]
     print(f"loading {a.ply} ...", flush=True)
-    g, deg = load_splats(a.ply)
-    xyz = g["xyz"].cpu().numpy()
-    print(f"{len(xyz)} splats, SH degree {deg}", flush=True)
+    if a.no_lod:
+        g0, deg = load_splats(a.ply)
+        levels = [(a.cell, g0)]
+    else:
+        levels, deg = load_levels(a.ply, a.cell)
+    xyz = levels[-1][1]["xyz"].cpu().numpy()
+    f_px = (H / 2) / math.tan(math.radians(a.fov) / 2)
+    print(f"{len(xyz)} splats at the finest level, SH degree {deg}; "
+          + (f"{len(levels)} levels drawn by distance (a cell of {a.px:g} px or less)" if len(levels) > 1
+             else "one level") , flush=True)
+    g_at = lambda eye: pick_levels(levels, eye, f_px, a.px)      # noqa: E731
     up = np.array([0.0, 0.0, 1.0])
 
     if a.render_views:
-        render_views(g, deg, a.render_views[0], a.render_views[1], a.every)
+        render_views(levels[-1][1], deg, a.render_views[0], a.render_views[1], a.every)   # the finest: for colours
         return
     if a.fly:
         pj = json.load(open(a.fly[0]))
@@ -218,7 +278,7 @@ def main():
         write, release = video_writer(a.fly[1], fps, (W, H))
         print(f"flying {len(E)} frames at {fps} fps -> {a.fly[1]}", flush=True)
         for i in range(len(E)):
-            write(render(g, deg, camera(E[i], Lk[i], up, W, H, a.fov), W, H))
+            write(render(g_at(E[i]), deg, camera(E[i], Lk[i], up, W, H, a.fov), W, H))
             if i % (10 * fps) == 0:
                 print(f"  {i // fps} s of {len(E) // fps}", flush=True)
         release()
@@ -258,7 +318,7 @@ def main():
     while True:
         fwd = np.array([math.cos(st["pitch"]) * math.cos(st["yaw"]), math.cos(st["pitch"]) * math.sin(st["yaw"]),
                         math.sin(st["pitch"])])
-        cv2.imshow(win, render(g, deg, camera(st["eye"], st["eye"] + fwd, up, W, H, a.fov), W, H))
+        cv2.imshow(win, render(g_at(st["eye"]), deg, camera(st["eye"], st["eye"] + fwd, up, W, H, a.fov), W, H))
         k = cv2.waitKeyEx(15)
         if k == 27 or cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:
             break
