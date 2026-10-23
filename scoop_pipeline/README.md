@@ -260,6 +260,12 @@ tests/               self-tests, no real bag needed
   test_tsdf.py       01's TSDF fusion against its voxel union on a smeared synthetic
                      room: thinner, and its surfaces where the true ones are
 ```
+The stamps are surveyed first: a message stamped on another clock (the
+wrapper's startup messages carry the wall clock, days from the SVO's
+frames) is dropped and counted, and the reorder window grows to the
+largest step back in time among the rest (up to 60 s; beyond, the error
+names the topic and the step), so a topic the replay delivered late is
+still written in order.
 
 ## Environment
 

@@ -166,12 +166,52 @@ def test_restamp_bag():
         b = [bytes(m.data) for _, _, _, m in
              bag.iter_mcap_records(bag.open_bag(out), [remap[DEPTH]])]
         assert a == b, "payloads must be copied untouched"
+        # a 50 ms window: the survey widens it to the 150 ms depth latency, and all is written
+        res2 = zed.restamp_bag(rec, os.path.join(d, "tight"), remap, reorder_s=0.05, log=quiet)
+        assert res2.counts[remap[DEPTH]] == N, res2.counts
+    finally:
+        shutil.rmtree(d)
+
+
+def test_restamp_other_clock_and_late_topic():
+    """The wrapper's startup camera_info stamped on the wall clock, days after
+    the SVO's frames, and an image delivered 7 s late: the startup message is
+    dropped and counted, the window widened to the late image, the rest as
+    before; a topic stepping back more than a minute is refused by name."""
+    d = tempfile.mkdtemp()
+    try:
+        rec, out = os.path.join(d, "rec"), os.path.join(d, "out")
+        write_recording(rec)
+        remap = zed.prefix_remap([IMAGE, INFO, DEPTH, STATUS], "/zed/zed_node", "/mobile_1/zed")
+        r = bag.open_bag(rec)
+        items = [(m.log_time, ch.topic, bytes(m.data), sc, ch) for _, sc, ch, m in bag.iter_mcap_records(r)]
+        startup = rosmsg.imu(W0 - 10 * MS, "zed_left", [0, 0, 9.8], [0, 0, 0])      # the wall clock
+        late = rosmsg.imu(S0 + 10 * FRAME, "zed_left", [0, 0, 9.8], [0, 0, 0])      # frame 10, 7 s late
+        rec2 = os.path.join(d, "rec2")
+        with BagWriter(rec2, library="rosbag2") as w:
+            w.write(INFO, startup, W0 - 20 * MS)
+            for log_ns, t, data, sc, ch in items:
+                w.write_raw(t, TopicSchema(sc.name, sc.encoding, bytes(sc.data), ch.message_encoding),
+                            data, log_ns)
+            w.write(IMAGE, late, W0 + N * FRAME)
+        res = zed.restamp_bag(rec2, out, remap, log=quiet)
+        assert res.dropped == {remap[INFO]: 1}, res.dropped
+        assert res.counts[remap[IMAGE]] == N + 1 and res.counts[remap[INFO]] == N, res.counts
+        logs = [m.log_time for _, _, _, m in bag.iter_mcap_records(bag.open_bag(out))]
+        assert logs == sorted(logs) and S0 <= min(logs) and max(logs) < S0 + (N + 1) * FRAME
+        rec3 = os.path.join(d, "rec3")
+        far_back = rosmsg.imu(S0 - 120 * 1_000_000_000, "zed_left", [0, 0, 9.8], [0, 0, 0])  # 2 min back
+        with BagWriter(rec3, library="rosbag2") as w:
+            for log_ns, t, data, sc, ch in items:
+                w.write_raw(t, TopicSchema(sc.name, sc.encoding, bytes(sc.data), ch.message_encoding),
+                            data, log_ns)
+            w.write(IMAGE, far_back, W0 + N * FRAME)
         try:
-            zed.restamp_bag(rec, os.path.join(d, "tight"), remap, reorder_s=0.05, log=quiet)
-        except bag.BagError:
-            pass
+            zed.restamp_bag(rec3, os.path.join(d, "out3"), remap, log=quiet)
+        except bag.BagError as e:
+            assert IMAGE in str(e) and "steps back" in str(e), e
         else:
-            raise AssertionError("depth arrives 150 ms late: a 50 ms window must fail")
+            raise AssertionError("a 2 min step back must be refused")
     finally:
         shutil.rmtree(d)
 

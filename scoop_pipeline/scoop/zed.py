@@ -29,6 +29,7 @@ The result sits on the same timeline as the retimed Ouster bag.
 """
 from __future__ import annotations
 
+import datetime
 import os
 import shutil
 import subprocess
@@ -48,6 +49,8 @@ __all__ = ["REORDER_S", "SVO_PARAMS", "find_svo", "has_header", "prefix_remap",
            "load_wrapper_config", "wrapper_params", "record_svo", "restamp_bag", "svo_to_bag", "RestampResult"]
 
 REORDER_S = 5.0          # replay latency differs per topic (depth, point cloud)
+REORDER_MAX_S = 60.0     # a stamp further back than this is another clock's, not a late message
+OTHER_CLOCK_S = 3600.0   # a stamped message this far from the run's median stamp is dropped
 SVO_PARAMS = {"use_svo_timestamps": True, "svo_loop": False}
 RUN_ZED = Path(__file__).resolve().parents[1] / "processing" / "run_zed.sh"
 HEADER_TYPES = {"Header", "std_msgs/Header", "std_msgs/msg/Header"}
@@ -142,6 +145,7 @@ class RestampResult:
     bag_dir: Path
     counts: Dict[str, int]                              # messages per output topic
     moved: Dict[str, int] = field(default_factory=dict)  # by offset, no usable stamp
+    dropped: Dict[str, int] = field(default_factory=dict)  # stamped on another clock
     t_min: int = 0
     t_max: int = 0
 
@@ -152,12 +156,47 @@ def _stamp(schema: TopicSchema, data) -> int:
     return max(header_stamp_ns(data), 0)
 
 
+def stamp_survey(reader, schema_of, log=print):
+    """One pass over the recording's header stamps: the run's median stamp
+    (over its stamped messages), the stamped messages further than
+    OTHER_CLOCK_S from it per topic (the wrapper's startup messages on the
+    wall clock, dropped by restamp_bag), and the largest step back in time
+    among the rest -- the reorder window write_in_order needs. ->
+    (median_ns, {topic: n_other_clock}, (back_ns, topic, stamp_ns))."""
+    stamps = []
+    for _, sc, ch, msg in bag.iter_mcap_records(reader):
+        st = _stamp(schema_of(sc, ch), msg.data)
+        if st:
+            stamps.append((st, ch.topic))
+    if not stamps:
+        return None, {}, (0, None, 0)
+    med = int(sorted(st for st, _ in stamps)[len(stamps) // 2])
+    far = int(OTHER_CLOCK_S * 1e9)
+    other: Dict[str, int] = {}
+    back, back_topic, back_stamp, hi = 0, None, 0, -1
+    for st, topic in stamps:
+        if abs(st - med) > far:
+            other[topic] = other.get(topic, 0) + 1
+            continue
+        if st < hi and hi - st > back:
+            back, back_topic, back_stamp = hi - st, topic, st
+        hi = max(hi, st)
+    return med, other, (back, back_topic, back_stamp)
+
+
 def restamp_bag(recorded, out_dir, remap: Optional[Dict[str, str]] = None,
                 reorder_s: float = REORDER_S, consume: bool = False,
                 log=print) -> RestampResult:
     """``recorded`` (header stamps = capture time, log times = replay time)
     -> ``out_dir`` with log and publish time = header stamp, topics renamed
     by ``remap``. See the module docstring.
+
+    The stamps are surveyed first (stamp_survey): a message stamped on
+    another clock (the wrapper's startup messages carry the wall clock, the
+    SVO's frames the capture time, days apart) is dropped and counted; the
+    reorder window grows to the largest step back in time among the rest
+    (up to REORDER_MAX_S), so a topic the replay delivered late is still
+    written in order; beyond that the error names the topic and the step.
 
     ``consume`` deletes each file of a split recording once it has been read,
     so the disk holds about one copy instead of two (the recording is gone
@@ -176,14 +215,28 @@ def restamp_bag(recorded, out_dir, remap: Optional[Dict[str, str]] = None,
                                                 ch.message_encoding)
         return s
 
-    offset = None                            # stamp - log of the latest stamped message
+    med, other_clock, (back, back_topic, back_stamp) = stamp_survey(reader, schema_of, log)
+    if med is None:
+        raise BagError(f"no message in {recorded} has a header stamp")
+    far = int(OTHER_CLOCK_S * 1e9)
+    for t, n in sorted(other_clock.items()):
+        log(f"    {t}: {n} message(s) stamped on another clock (more than {OTHER_CLOCK_S / 3600:.0f} h "
+            f"from the run's median stamp): dropped")
+    if back * 1e-9 > reorder_s:
+        if back * 1e-9 > REORDER_MAX_S:
+            raise BagError(f"{back_topic} steps back {back * 1e-9:.1f} s in time (a stamp "
+                           f"{datetime.datetime.utcfromtimestamp(back_stamp * 1e-9):%Y-%m-%d %H:%M:%S} UTC "
+                           f"after later ones): not a late delivery; look at the recording's stamps")
+        reorder_s = back * 1e-9 + 1.0
+        log(f"    reorder window {reorder_s:.1f} s: {back_topic} delivered up to {back * 1e-9:.1f} s late")
+    reader = bag.open_bag(recorded)                   # read again from the start
+    offset = None                                     # stamp - log of the latest stamped message
     for _, sc, ch, msg in bag.iter_mcap_records(reader):
         st = _stamp(schema_of(sc, ch), msg.data)
-        if st:
+        if st and abs(st - med) <= far:
             offset = st - msg.log_time
             break
-    if offset is None:
-        raise BagError(f"no message in {recorded} has a header stamp")
+    reader = bag.open_bag(recorded)
 
     moved: Dict[str, int] = {}
     total = sum(f.stat().st_size for f in Path(recorded).glob("*.mcap")) or 1
@@ -206,6 +259,8 @@ def restamp_bag(recorded, out_dir, remap: Optional[Dict[str, str]] = None,
                     f"({100 * done / total:.0f}%)")
             schema = schema_of(sc, ch)
             st = _stamp(schema, msg.data)
+            if st and abs(st - med) > far:
+                continue                                  # another clock's: dropped (counted above)
             if st:
                 offset = st - msg.log_time
                 log_ns = pub_ns = st
@@ -225,6 +280,7 @@ def restamp_bag(recorded, out_dir, remap: Optional[Dict[str, str]] = None,
         except ValueError as e:
             raise BagError(f"{e}; pass a larger reorder_s") from None
     res = RestampResult(w.dir, dict(w.counts), moved, int(w.t_min or 0), int(w.t_max or 0))
+    res.dropped = {copies.get(t, t): n for t, n in other_clock.items()}
     span = max((res.t_max - res.t_min) * 1e-9, 1e-9)
     log(f"wrote {w.n} messages -> {w.dir} ({span:.1f} s)")
     for t, c in sorted(res.counts.items()):
