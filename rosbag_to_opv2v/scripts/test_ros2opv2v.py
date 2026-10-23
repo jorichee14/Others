@@ -3285,6 +3285,17 @@ def test_make_view_keeps_the_frames_with_the_image():
         assert os.path.isdir(os.path.join(tmp, 'view', 'comms', 'test', 'synthetic'))
         assert os.path.exists(os.path.join(tmp, 'view', 'sidecar.json'))
         assert os.path.exists(os.path.join(tmp, 'view', 'test', 'conversion_report.json'))
+        # a time split: two views of the one tree, by key range, into named splits
+        early = make_view(os.path.join(tmp, 'out'), os.path.join(tmp, 'split'), [],
+                          to_key='000005', as_split='train', log=lambda *_: None)
+        late = make_view(os.path.join(tmp, 'out'), os.path.join(tmp, 'split'), [],
+                         from_key='000006', as_split='validate', log=lambda *_: None)
+        assert early['splits']['test']['synthetic']['frames_kept'] == 6, early
+        assert late['splits']['test']['synthetic']['frames_kept'] == 6, late
+        for split, first in (('train', '000000'), ('validate', '000006')):
+            keys = sorted(f[:-5] for f in os.listdir(os.path.join(tmp, 'split', split, 'synthetic', '1'))
+                          if f.endswith('.yaml'))
+            assert keys[0] == first and len(keys) == 6, (split, keys)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

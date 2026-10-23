@@ -13,7 +13,14 @@ the folders aligned (OpenCOOD indexes every agent by the ego's keys).
 
     python3 scripts/make_view.py --root <tree> --out <tree>_zed \\
         --require-image 1:0            # agent folder 1 must have camera0's image
-        [--split train] [--copy]       # copy instead of symlink
+        [--from-key 000000 --to-key 001485]   # a time range: the keys run in order
+        [--split train] [--as-split validate] # the split folder to read and to write
+        [--copy]                              # copy instead of symlink
+
+A time split costs nothing this way: one conversion holds every frame, and
+train and validate are two views of it, each a folder of symlinks with the
+frames' own keys. Frames 10 Hz apart are near copies, so a random split is
+the training set with noise; a key range is a time range.
 
 Sidecars at the root (heter_modality_assign.json, isaacsim_class_map.json)
 and the root's comms/ folder are linked too, and conversion_report.json
@@ -48,7 +55,11 @@ def frame_keys(agent_dir: str):
     return sorted(f[:-5] for f in os.listdir(agent_dir) if f.endswith(".yaml"))
 
 
-def keep_frame(scenario_dir: str, key: str, require_image) -> bool:
+def keep_frame(scenario_dir: str, key: str, require_image, from_key=None, to_key=None) -> bool:
+    if from_key and key < from_key:
+        return False
+    if to_key and key > to_key:
+        return False
     for agent, slot in require_image:
         path = os.path.join(scenario_dir, agent, f"{key}.yaml")
         if not os.path.exists(path):
@@ -63,10 +74,11 @@ def keep_frame(scenario_dir: str, key: str, require_image) -> bool:
     return True
 
 
-def make_view(root: str, out: str, require_image, splits=SPLITS, copy=False, log=print) -> dict:
+def make_view(root: str, out: str, require_image, splits=SPLITS, copy=False, log=print,
+              from_key=None, to_key=None, as_split=None) -> dict:
     root, out = os.path.expanduser(root), os.path.expanduser(out)
     report = {"root": os.path.abspath(root), "require_image": [f"{a}:{s}" for a, s in require_image],
-              "splits": {}}
+              "from_key": from_key, "to_key": to_key, "splits": {}}
     os.makedirs(out, exist_ok=True)
     for name in os.listdir(root):
         src = os.path.join(root, name)
@@ -85,8 +97,8 @@ def make_view(root: str, out: str, require_image, splits=SPLITS, copy=False, log
             if not agents:
                 continue
             keys = frame_keys(os.path.join(sdir, agents[0]))
-            kept = [k for k in keys if keep_frame(sdir, k, require_image)]
-            odir = os.path.join(out, split, scenario)
+            kept = [k for k in keys if keep_frame(sdir, k, require_image, from_key, to_key)]
+            odir = os.path.join(out, as_split or split, scenario)
             for agent in agents:
                 os.makedirs(os.path.join(odir, agent), exist_ok=True)
                 for k in kept:
@@ -98,8 +110,8 @@ def make_view(root: str, out: str, require_image, splits=SPLITS, copy=False, log
             log(f"{split}/{scenario}: {len(kept)} of {len(keys)} frames kept, agents {agents}")
         src_report = os.path.join(split_dir, "conversion_report.json")
         if os.path.exists(src_report):
-            os.makedirs(os.path.join(out, split), exist_ok=True)
-            _link(src_report, os.path.join(out, split, "conversion_report.json"), copy)
+            os.makedirs(os.path.join(out, as_split or split), exist_ok=True)
+            _link(src_report, os.path.join(out, as_split or split, "conversion_report.json"), copy)
     with open(os.path.join(out, "view_report.json"), "w") as handle:
         json.dump(report, handle, indent=2)
     return report
@@ -121,16 +133,22 @@ def main() -> int:
     ap.add_argument("--require-image", action="append", default=[], metavar="AGENT:SLOT",
                     help="keep only frames where this agent folder has camera SLOT's image")
     ap.add_argument("--split", action="append", default=None, help="limit to these splits")
+    ap.add_argument("--from-key", default=None, help="keep frames from this key on (e.g. 000000)")
+    ap.add_argument("--to-key", default=None, help="keep frames up to this key (e.g. 001485)")
+    ap.add_argument("--as-split", default=None,
+                    help="write into this split folder instead of the source's name")
     ap.add_argument("--copy", action="store_true", help="copy files instead of symlinking")
     a = ap.parse_args()
     req = []
     for item in a.require_image:
         agent, _, slot = item.partition(":")
         req.append((agent, int(slot or 0)))
-    if not req:
-        print("nothing to filter on: give --require-image AGENT:SLOT", file=sys.stderr)
+    if not req and not (a.from_key or a.to_key):
+        print("nothing to filter on: give --require-image AGENT:SLOT, --from-key or --to-key",
+              file=sys.stderr)
         return 2
-    make_view(a.root, a.out, req, splits=tuple(a.split) if a.split else SPLITS, copy=a.copy)
+    make_view(a.root, a.out, req, splits=tuple(a.split) if a.split else SPLITS, copy=a.copy,
+              from_key=a.from_key, to_key=a.to_key, as_split=a.as_split)
     return 0
 
 
