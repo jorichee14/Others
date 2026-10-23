@@ -120,6 +120,12 @@ def main():
     detect_period = float(s.get("detect_period", 0.20))
     section_gap = float(s.get("section_gap", 3.0))
     min_sec_n = int(s.get("min_section_samples", 4))
+    # a board that only seeds a placement (07's LiDAR registration decides) may
+    # pass on fewer: "min_section_samples_by_board": {"board_4": 1}
+    min_by = dict(s.get("min_section_samples_by_board") or {})
+    min_sec_for = lambda design: int(min_by.get(design, min_sec_n))          # noqa: E731
+    for nm_, v_ in sorted(min_by.items()):
+        print("board '%s': sections of %d sample(s) accepted (min_section_samples_by_board)" % (nm_, v_))
     assoc_r = float(s.get("assoc_radius", 0.40))
     tol = float(s["time_tol"])
     fuse_cfg = s.get("fuse", {})
@@ -306,7 +312,7 @@ def main():
                          "mean_reproj": float(np.mean([r["reproj"] for r in sub])),
                          "max_reproj": float(np.max([r["reproj"] for r in sub])),
                          "std_mm": sp[0], "max_mm": sp[1], "max_deg": sp[2],
-                         "weak": len(sub) < min_sec_n})
+                         "weak": len(sub) < min_sec_for(inst["design"])})
         inst["sections"] = secs
 
     # ------------------------- anchor selection ----------------------------- #
@@ -391,7 +397,7 @@ def main():
         for sec in secs:
             gate = []
             if sec["weak"]:
-                gate.append("n<%d" % min_sec_n)
+                gate.append("n<%d" % min_sec_for(inst["design"]))
             if sec["mean_reproj"] > g_reproj:
                 gate.append("reproj>%.2f" % g_reproj)
             if sec["std_mm"] > g_std:

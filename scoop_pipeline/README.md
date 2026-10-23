@@ -430,6 +430,11 @@ names passes before 20261015 measured it under (`anchor`, `anchor_b`,
 read under the new names; a board stays on its own TF frame (`board`,
 `board_rs`, `board_3`, `board_4`). A pass uses the ones in `05_anchor.boards_used`;
 one whose `square_len` / `marker_len` is not set stops 05 with its name.
+A section needs `05_anchor.min_section_samples` (4) sightings to count; a
+board that only seeds a placement, which 07's LiDAR registration then
+decides, may pass on fewer: `"min_section_samples_by_board": {"board_4": 1}`
+(the survey of 20261015: mobile_1's ZED passed board_4 once, the parked
+mobile_2's RealSense faces it from 0.5 m).
 
 Why a board was seen, or not (05 scans only the dataset's camera, so a board
 meant for a parked robot's camera is scanned here):

@@ -1,6 +1,6 @@
 {
   "extends": "pipeline_config.json",
-  "_note": "20261015 survey at site 1 (raw/20261015/survey/site_1/), in the same day's map (20261015 mapping, mobile_2's): mobile_1 drives the survey; mobile_2 is parked as an anchor: its RealSense sights board_4 (7x7), which seeds its place, and its own Ouster places it (07_cameras source lidar, registered to the map, the board as the check); infra_1 and the sniffer record the link. As survey_1 (20260924): 03 (start from the ZED's board views, through GLIM) -> 04 (LiDAR ICP to the anchored map) -> 05 (the boards this run saw: all four, board_3 and board_4 for the first time) -> 07 (the parked RealSense from board_4 and its LiDAR, the arducam from its yaml) -> 08 -> 10 -> finalize -> comms. Same day as the map: the boards did not move.",
+  "_note": "20261015 survey at site 1 (raw/20261015/survey/site_1/), in the same day's map (20261015 mapping, mobile_2's): mobile_1 drives the survey; mobile_2 is parked as an anchor: its RealSense sights board_4 (7x7) from 0.5 m, which seeds its place, and its own Ouster places it (07_cameras source lidar, registered to the map, the board as the check); mobile_1's ZED passed board_4 once, so that one sighting puts it in the map (min_section_samples_by_board: a seed, not a measurement); infra_1 and the sniffer record the link. As survey_1 (20260924): 03 (start from the ZED's board views, through GLIM) -> 04 (LiDAR ICP to the anchored map) -> 05 (the boards this run saw: all four, board_3 and board_4 for the first time) -> 07 (the parked RealSense from board_4 and its LiDAR, the arducam from its yaml) -> 08 -> 10 -> finalize -> comms. Same day as the map: the boards did not move.",
   "dataset": {
     "bag": "~/workspaces/isaac_ros-dev/data/work/20261015/survey/site_1/mirc_dataset_survey_site_1_20261015_merged",
     "traj": null,
@@ -15,7 +15,8 @@
   },
   "03_init": {"sensors": [{"name": "zed", "source": "lidar_odom"},
                           {"name": "realsense", "enabled": false}]},
-  "05_anchor": {"boards_used": ["board_1", "board_2", "board_3", "board_4"]},
+  "05_anchor": {"boards_used": ["board_1", "board_2", "board_3", "board_4"],
+                "min_section_samples_by_board": {"board_4": 1}},
   "07_build_cameras": {"cameras": [{"name": "realsense", "source": "lidar", "board": "board_4", "bag": null,
                                     "points_topic": "/mobile_2/ouster/points",
                                     "image_topic": "/mobile_2/color/image_raw",
