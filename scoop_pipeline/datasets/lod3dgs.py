@@ -946,6 +946,126 @@ def map_view(map_path, traj, out=None, *, outliers=True, snap=True, fill=True,
     return res
 
 
+def read_splats(path):
+    """A 3DGS .ply (binary little endian, one vertex element: x y z,
+    f_dc_0..2, f_rest_*, opacity, scale_0..2, rot_0..3) as a numpy
+    structured array (every property kept) and its header lines."""
+    with open(os.path.expanduser(path), "rb") as f:
+        header = []
+        while True:
+            line = f.readline()
+            if not line:
+                raise ConvertError(f"{path}: no end_header")
+            header.append(line.decode("ascii", "replace").rstrip("\r\n"))
+            if header[-1] == "end_header":
+                break
+        n, props, fmt = 0, [], None
+        kinds = {"float": "<f4", "float32": "<f4", "double": "<f8", "uchar": "u1", "uint8": "u1", "int": "<i4",
+                 "uint": "<u4", "short": "<i2", "ushort": "<u2"}
+        for h in header:
+            v = h.split()
+            if v[:2] == ["format", "binary_little_endian"]:
+                fmt = "le"
+            elif v[:2] == ["element", "vertex"]:
+                n = int(v[2])
+            elif v[0] == "property" and v[1] != "list":
+                props.append((v[2], kinds[v[1]]))
+        if fmt != "le" or not props:
+            raise ConvertError(f"{path}: not a binary little endian ply of vertices")
+        G = np.fromfile(f, np.dtype(props), n)
+    return G, header
+
+
+def write_splats(path, G, header):
+    """A 3DGS .ply back from read_splats's array (the header's vertex count set)."""
+    hl = [f"element vertex {len(G)}" if h.startswith("element vertex") else h for h in header]
+    with open(os.path.expanduser(path), "wb") as f:
+        f.write(("\n".join(hl) + "\n").encode("ascii"))
+        G.tofile(f)
+
+
+def splat_colours(G):
+    """Each Gaussian's base colour (its SH DC term, 0-1: what training found
+    the same from every view; the glints are in the other terms) and its
+    opacity (0-1)."""
+    C0 = 0.28209479177387814
+    rgb = np.clip(0.5 + C0 * np.c_[G["f_dc_0"], G["f_dc_1"], G["f_dc_2"]], 0, 1)
+    return rgb, 1.0 / (1.0 + np.exp(-G["opacity"].astype(np.float64)))
+
+
+def surface_points(mesh_path, spacing=0.02):
+    """The mesh's vertices thinned to `spacing` m: the surface, to measure
+    distances to (a 20 M vertex mesh in a minute)."""
+    o3d = _o3d()
+    m = o3d.io.read_triangle_mesh(os.path.expanduser(mesh_path))
+    if not len(m.vertices):
+        raise ConvertError(f"{mesh_path}: no vertices")
+    pc = o3d.geometry.PointCloud(m.vertices).voxel_down_sample(spacing)
+    return np.asarray(pc.points)
+
+
+def splats_clean(ply, mesh_path, out=None, far=0.15, min_opacity=0.05, max_scale=0.5):
+    """The Gaussians training was unsure about, removed: those farther than
+    `far` m from the mesh's surface (floaters, wisps in the air), those
+    with opacity under min_opacity, those longer than max_scale m along any
+    axis (a blob smeared over a wall). The mesh must be in the model's
+    frame (the scene's: GLIM's world, the unanchored mesh). Written to out
+    (default <ply>_clean.ply); the counts."""
+    ply = os.path.expanduser(ply)
+    out = os.path.expanduser(out) if out else os.path.splitext(ply)[0] + "_clean.ply"
+    G, header = read_splats(ply)
+    xyz = np.c_[G["x"], G["y"], G["z"]].astype(np.float64)
+    _, op = splat_colours(G)
+    sc = np.exp(np.c_[G["scale_0"], G["scale_1"], G["scale_2"]].astype(np.float64)).max(1)
+    d, _ = cKDTree(surface_points(mesh_path)).query(xyz, workers=-1, distance_upper_bound=far)
+    off, faint, big = ~np.isfinite(d), op < min_opacity, sc > max_scale
+    keep = ~(off | faint | big)
+    write_splats(out, G[keep], header)
+    res = {"in": len(G), "kept": int(keep.sum()), "off_surface": int(off.sum()), "faint": int(faint.sum()),
+           "big": int(big.sum()), "out": out}
+    log.info(f"{ply}: {len(G)} Gaussians; {res['off_surface']} farther than {far} m from the mesh, {res['faint']} "
+             f"with opacity under {min_opacity}, {res['big']} longer than {max_scale} m removed (some both): "
+             f"{res['kept']} kept -> {out}")
+    return res
+
+
+def recolour_mesh(mesh_path, ply, out=None, radius=0.05, k=8):
+    """The mesh's vertex colours from the trained splats: each vertex the
+    opacity-weighted mean of the base colours (splat_colours) of the k
+    nearest Gaussians within `radius` m, weighted down with distance; a
+    vertex with none keeps its colour. The splats' base colour is what
+    training found consistent from every view, so the mesh gets clean
+    colours, the camera's glints and exposure left out. Both in the model's
+    frame (the unanchored mesh). Written to out (default <mesh>_gs.ply);
+    (vertices coloured, vertices)."""
+    o3d = _o3d()
+    mesh_path = os.path.expanduser(mesh_path)
+    out = os.path.expanduser(out) if out else os.path.splitext(mesh_path)[0] + "_gs.ply"
+    m = o3d.io.read_triangle_mesh(mesh_path)
+    V = np.asarray(m.vertices)
+    if not len(V):
+        raise ConvertError(f"{mesh_path}: no vertices")
+    G, _ = read_splats(ply)
+    rgb, op = splat_colours(G)
+    tree = cKDTree(np.c_[G["x"], G["y"], G["z"]].astype(np.float64))
+    C = np.asarray(m.vertex_colors).copy() if m.has_vertex_colors() else np.full((len(V), 3), 0.6)
+    done = 0
+    for a0 in range(0, len(V), 2000000):
+        d, j = tree.query(V[a0:a0 + 2000000], k=k, workers=-1, distance_upper_bound=radius)
+        d, j = d.reshape(-1, k), j.reshape(-1, k)
+        has = np.isfinite(d)
+        jj = np.where(has, j, 0)
+        w = np.where(has, op[jj] * np.exp(-(np.where(has, d, 0) / (radius / 2)) ** 2 / 2), 0.0)
+        ws = w.sum(1)
+        ok = ws > 1e-9
+        C[a0:a0 + 2000000][ok] = (w[:, :, None] * rgb[jj]).sum(1)[ok] / ws[ok, None]
+        done += int(ok.sum())
+    m.vertex_colors = o3d.utility.Vector3dVector(np.clip(C, 0, 1))
+    o3d.io.write_triangle_mesh(out, m)
+    log.info(f"{mesh_path}: {done} of {len(V)} vertices coloured from {len(G)} Gaussians ({ply}) -> {out}")
+    return done, len(V)
+
+
 def anchor_file(path, frame, out=None):
     """A cloud or mesh made in GLIM's world moved into the anchored map frame
     with 05's T_N_world (frames/anchor_frame.json), as the anchored map and
@@ -3050,6 +3170,18 @@ def main():
     fv.add_argument("--smooth", type=float, default=0.06,
                     help="smooth the colours over the surface to this radius (m), edges kept (0: not)")
     fv.add_argument("--hidden", action="store_true", help="the window not shown")
+    cl = sub.add_parser("splats-clean", help="remove the Gaussians training was unsure about")
+    cl.add_argument("ply", help="a trained model, e.g. <run>/point_cloud/iteration_300000/level_5.ply")
+    cl.add_argument("mesh", help="the mesh in the model's frame (the unanchored mesh_view_<tag>.ply)")
+    cl.add_argument("out", nargs="?", default=None, help="default <ply>_clean.ply")
+    cl.add_argument("--far", type=float, default=0.15, help="farther than this from the mesh (m): removed")
+    cl.add_argument("--min-opacity", type=float, default=0.05)
+    cl.add_argument("--max-scale", type=float, default=0.5, help="longer than this along any axis (m): removed")
+    rc = sub.add_parser("recolour", help="the mesh's colours from the trained splats' base colours")
+    rc.add_argument("mesh", help="the mesh in the model's frame (the unanchored mesh_view_<tag>.ply)")
+    rc.add_argument("ply", help="a trained model, e.g. <run>/point_cloud/iteration_300000/level_5.ply")
+    rc.add_argument("out", nargs="?", default=None, help="default <mesh>_gs.ply")
+    rc.add_argument("--radius", type=float, default=0.05, help="Gaussians within this of a vertex colour it (m)")
     wk = sub.add_parser("walk", help="walk inside a mesh (with its ceiling) in a window")
     wk.add_argument("file", help="a mesh, e.g. mesh_view_<tag>_anchored.ply or its _sionna.ply")
     wk.add_argument("--traj", default=None,
@@ -3092,6 +3224,10 @@ def main():
                       faces=a.faces, vivid=not a.plain, seconds=a.seconds, hidden=a.hidden, spin=a.spin,
                       sat=a.sat, wb=not a.cast, smooth=a.smooth, gamma=a.gamma,
                       start=None if a.start.lower() == "loop" else [float(v) for v in a.start.split(",")])
+        elif a.cmd == "splats-clean":
+            splats_clean(a.ply, a.mesh, a.out, far=a.far, min_opacity=a.min_opacity, max_scale=a.max_scale)
+        elif a.cmd == "recolour":
+            recolour_mesh(a.mesh, a.ply, a.out, radius=a.radius)
         elif a.cmd == "walk":
             walk(a.file, a.traj, [float(v) for v in a.at.split(",")] if a.at else None,
                  faces=a.faces, eye=a.eye, shot=a.shot, vivid=not a.plain, sat=a.sat, one_side=a.one_side,

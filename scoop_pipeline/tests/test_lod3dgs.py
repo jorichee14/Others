@@ -747,6 +747,45 @@ def check_sionna(tmp):
     return r, d[:4]
 
 
+def check_splats(tmp):
+    """splats-clean on a model of Gaussians on a box's surface (red) with
+    200 floaters 6 m off, 50 faint and 30 oversized ones: those removed,
+    the surface's kept; recolour: the box's vertices in the splats' red."""
+    import open3d as o3d
+    m = o3d.geometry.TriangleMesh.create_box(4, 3, 2.5).subdivide_midpoint(4)
+    V = np.asarray(m.vertices)
+    m.vertex_colors = o3d.utility.Vector3dVector(np.full((len(V), 3), 0.5))
+    o3d.io.write_triangle_mesh(os.path.join(tmp, "box.ply"), m)
+    rng = np.random.default_rng(0)
+    props = ([("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("f_dc_0", "<f4"), ("f_dc_1", "<f4"), ("f_dc_2", "<f4")]
+             + [(f"f_rest_{i}", "<f4") for i in range(24)]
+             + [("opacity", "<f4"), ("scale_0", "<f4"), ("scale_1", "<f4"), ("scale_2", "<f4")]
+             + [(f"rot_{i}", "<f4") for i in range(4)])
+    C0 = 0.28209479177387814
+
+    def rows(P, rgb, op, scale):
+        G = np.zeros(len(P), np.dtype(props))
+        G["x"], G["y"], G["z"] = P.T
+        for i in range(3):
+            G[f"f_dc_{i}"] = (rgb[i] - 0.5) / C0
+        G["opacity"] = np.log(op / (1 - op))
+        G["scale_0"] = G["scale_1"] = G["scale_2"] = np.log(scale)
+        G["rot_0"] = 1
+        return G
+    G = np.concatenate([rows(V + rng.normal(0, 0.01, V.shape), (0.9, 0.2, 0.1), 0.9, 0.02),
+                        rows(rng.uniform(-3, 8, (200, 3)) + [0, 0, 6], (0, 1, 0), 0.9, 0.02),
+                        rows(V[:50], (0, 0, 1), 0.01, 0.02), rows(V[50:80], (0, 0, 1), 0.9, 1.0)])
+    hdr = (["ply", "format binary_little_endian 1.0", f"element vertex {len(G)}"]
+           + [f"property float {p_[0]}" for p_ in props] + ["end_header"])
+    L.write_splats(os.path.join(tmp, "splats.ply"), G, hdr)
+    r = L.splats_clean(os.path.join(tmp, "splats.ply"), os.path.join(tmp, "box.ply"))
+    assert (r["off_surface"], r["faint"], r["big"], r["kept"]) == (200, 50, 30, len(V)), r
+    done, nv = L.recolour_mesh(os.path.join(tmp, "box.ply"), r["out"])
+    Cq = np.asarray(o3d.io.read_triangle_mesh(os.path.join(tmp, "box_gs.ply")).vertex_colors)
+    assert done == nv == len(V) and (np.abs(Cq - [0.9, 0.2, 0.1]).max(1) < 0.05).all(), ("recolour", done, nv)
+    return r
+
+
 def check_hanging(tmp):
     """sionna --traj on a room's mesh (floor, walls, a 3 m ceiling, every
     face joined to the next) with a 2 x 1.5 m sheet hanging from the
@@ -935,6 +974,9 @@ def main():
               f"{cm} mesh vertices of the arcade's left), the walls under each kept")
         nh = check_hanging(tmp)
         print(f"ok hanging: a sheet joined to the ceiling ({nh} faces) left out with --traj, as _noceil drops it")
+        rsp = check_splats(tmp)
+        print(f"ok splats: {rsp['off_surface']} floaters, {rsp['faint']} faint and {rsp['big']} oversized Gaussians "
+              f"removed, {rsp['kept']} on the surface kept; the mesh recoloured from them")
         rs, ds = check_sionna(tmp)
         print(f"ok sionna: floor {rs['floor']}, ceiling {rs['ceiling']}, walls {rs['walls']}, "
               f"objects {rs['objects']} ({rs['n_objects']} of them); walls the wall planes (the wall "

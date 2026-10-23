@@ -1153,6 +1153,21 @@ as `<out>_path.json` (eye and look-at per frame), for `splat_walk.py --fly`.
 
     python3 scoop_pipeline/datasets/lod3dgs.py fly mapping/mesh_view_<tag>_anchored_sionna.ply
 
+After training, `splats-clean` removes the Gaussians training was unsure
+about: farther than `--far` 0.15 m from the mesh's surface (floaters, wisps
+in the air), opacity under `--min-opacity` 0.05, longer than `--max-scale`
+0.5 m along an axis (a blob smeared over a wall) -> `<ply>_clean.ply`; and
+`recolour` gives the mesh the splats' colours: each vertex the
+opacity-weighted mean of the base colours (the SH DC term, what training
+found consistent from every view, the glints and the exposure left out) of
+the Gaussians within `--radius` 0.05 m -> `<mesh>_gs.ply`, to `anchor` and
+`sionna` as before. Both take the unanchored mesh (the model's frame).
+
+    python3 scoop_pipeline/datasets/lod3dgs.py splats-clean <run>/point_cloud/iteration_300000/level_5.ply \
+        mapping/mesh_view_<tag>.ply
+    python3 scoop_pipeline/datasets/lod3dgs.py recolour mapping/mesh_view_<tag>.ply \
+        <run>/point_cloud/iteration_300000/level_5_clean.ply
+
 `datasets/splat_walk.py` walks inside the trained splats (or flies them round
 the mesh flight's loop) with LOD-3DGS's own rasteriser, in its environment
 (`conda activate lod3dgs; export PYTHONNOUSERSITE=1`): the same keys as
