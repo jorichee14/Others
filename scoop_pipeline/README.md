@@ -978,6 +978,27 @@ Depth (`--depth-source`; for MCD it replaces the config's depth sensors):
 
 The file is standalone (no scoop imports).
 
+## One figure of a survey pass (`analysis/survey_figure.py`)
+
+```
+python3 scoop_pipeline/analysis/survey_figure.py <config> [--gif] [--ap X Y Z] [--link infra_1]
+    [--near 3.0] [--band 0.3 1.8] [--seconds 30 --fps 10] [--out DIR]
+```
+
+writes `figures/survey/<tag>_overview.png` (300 dpi) and `.pdf` under the
+pass's processed folder: the anchored map from above with the LiDAR
+trajectory coloured by the RSSI to the access point (by time without comms
+tables), start and end, the boards (05) with their normals, the parked robot
+and the infra camera (07), the AP with `--ap`, a scale bar; Wi-Fi RSSI, PHY
+rate, ping RTT and iperf goodput over the run, grey bands where the robot was
+within `--near` m of an anchor; RSSI against link length per CSI link with
+the path-loss fit; the CSI amplitude of `--link` per subcarrier over the run
+with its delay spread; and 04's residual and correction per scan with the
+boards' spreads and loop closures. Panels whose inputs are not there yet are
+left empty with a note. `--gif` adds `<tag>_overview.gif` (and `.mp4` with
+ffmpeg): the path growing with a heading arrow, cursors sweeping the time
+panels. Test: `tests/test_survey_figure.py`.
+
 ## Gaussian splatting: LOD-3DGS (`datasets/lod3dgs.py`)
 
 Block diagram of everything made from the reference map, each block with the
