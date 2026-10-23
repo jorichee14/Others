@@ -1148,9 +1148,25 @@ the way; or `--path "X,Y;X,Y;..."`, waypoints joined in a loop. Recorded through
 frames read back on every driver; `--hidden`: not shown), the flight seen
 as it goes, the mesh unlit in its colours made vivid, all of it however far; H.264 when ffmpeg is installed (`sudo apt install ffmpeg`), else
 OpenCV's mp4v, which browsers show black (VLC plays it); `--fps`, `--size WxH` (1280x720), `--seconds N`
-for the first N seconds only.
+for the first N seconds only; the path flown is written beside the video
+as `<out>_path.json` (eye and look-at per frame), for `splat_walk.py --fly`.
 
     python3 scoop_pipeline/datasets/lod3dgs.py fly mapping/mesh_view_<tag>_anchored_sionna.ply
+
+`datasets/splat_walk.py` walks inside the trained splats (or flies them round
+the mesh flight's loop) with LOD-3DGS's own rasteriser, in its environment
+(`conda activate lod3dgs; export PYTHONNOUSERSITE=1`): the same keys as
+`walk` (arrows or the mouse to turn, W S A D Q Z to move, R, Escape).
+`--scene <scene>` starts at the scene's first camera, `--at X,Y` elsewhere;
+`--fly <mesh>_fly_path.json out.mp4` renders the loop `fly` flew (the path
+it writes beside the video), `--frame frames/anchor_frame.json` moving it
+from the anchored frame into the model's. One level file is one model:
+`level_5.ply` the finest.
+
+    python3 scoop_pipeline/datasets/splat_walk.py <run>/point_cloud/iteration_300000/level_5.ply \
+        --scene $P/datasets/mobile_2/lod3dgs_map_<tag>
+    python3 scoop_pipeline/datasets/splat_walk.py <run>/point_cloud/iteration_300000/level_5.ply \
+        --fly mapping/sionna_full_fly_path.json splats_fly.mp4 --frame $P/frames/anchor_frame.json
 
 `walk` opens a window to walk inside a mesh (the one with its ceiling, or
 its `_sionna.ply`): Open3D's fly mode, started 1.6 m (`--eye`) over the floor

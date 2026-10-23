@@ -2522,6 +2522,11 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
     nfr = len(E)
     if seconds:
         nfr = min(nfr, int(seconds * fps))
+    import json
+    pj = os.path.splitext(out)[0] + "_path.json"
+    json.dump({"fps": fps, "eye": np.c_[E[:nfr], np.full(nfr, z0 + eye)].round(4).tolist(),
+               "look": np.c_[Lk[:nfr], np.full(nfr, z0 + eye)].round(4).tolist(), "mesh": mesh_path},
+              open(pj, "w"))
     log.info(f"fly {mesh_path}: " + (f"a turn round at ({st_[0]:.1f}, {st_[1]:.1f}) over {spin:g} s, " if nspin else "")
              + f"{total:.0f} m of way (a loop of {ltot:.0f} m), {nfr} frames at {fps} fps ({nfr / fps:.0f} s), "
              f"{len(m.triangles)} faces -> {out}")
@@ -2570,7 +2575,7 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
             log.info(f"  {i / fps:.0f} s of {nfr / fps:.0f}")
     vw.release()
     vis.destroy_window()
-    log.info(f"{out}: {nfr} frames; its first frame {first}")
+    log.info(f"{out}: {nfr} frames; its first frame {first}; the path {pj} (splat_walk.py --fly flies it)")
     return P, nfr
 
 
