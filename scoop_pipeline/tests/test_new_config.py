@@ -112,6 +112,12 @@ def main():
         eq((cam["source"], cam["board"], cam["points_topic"]),
            ("lidar", "board_4", "/mobile_2/ouster/points"), "survey parked mobile_2")
         eq(c["05_anchor"]["boards_used"], ["board_1", "board_2", "board_3", "board_4"], "boards")
+        eq("boards_moved" in c["dataset"], False, "boards_moved is not assumed")
+        # the boards put up again for this pass: what it measures wins
+        os.remove(p)
+        p, c, P = make(r3, boards_moved=True)
+        eq(c["dataset"].get("boards_moved"), True, "boards_moved")
+        eq(P.boards_moved, True, "boards_moved read back")
         eq(P.ref_file("anchor").endswith("processed/20261101/mapping/frames/anchor_frame.json"),
            True, "survey reference")
 

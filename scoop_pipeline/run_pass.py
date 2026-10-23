@@ -199,7 +199,7 @@ def check_spans(spans, log=print, least=0.5):
     return bad
 
 
-def new_config(raw, robot=None, reference=None, log=print, stages=STAGES):
+def new_config(raw, robot=None, reference=None, log=print, stages=STAGES, boards_moved=False):
     """--new-config: the pipeline config of the pass in ``raw``, written to
     map_stages/pipeline_config_<tag>.json (see the usage). -> its path."""
     from pathlib import Path
@@ -323,6 +323,10 @@ def new_config(raw, robot=None, reference=None, log=print, stages=STAGES):
                         "cameras) -> 08 -> 10 -> finalize -> comms" % (tag, robot, reference))
         cfg["dataset"] = {"bag": bag, "traj": None, "machine": robot,
                           "reference_pass": reference}
+        if boards_moved:
+            # the place is not mapped again; the boards are put up again roughly
+            # where they were, so what THIS run measures wins over the reference's
+            cfg["dataset"]["boards_moved"] = True
         cfg["03_init"] = {"sensors": [{"name": "zed", "source": "lidar_odom"},
                                       {"name": "realsense", "enabled": False}]}
         cfg["05_anchor"] = {"boards_used": boards}
@@ -583,11 +587,14 @@ def main():
     ap.add_argument("--new-config", action="store_true")
     ap.add_argument("--robot", default=None)
     ap.add_argument("--reference", default=None)
+    ap.add_argument("--boards-moved", action="store_true",
+                    help="--new-config of a survey: the boards were put up again for this pass, "
+                         "so the poses it measures replace the reference's (dataset.boards_moved)")
     a = ap.parse_args()
     import pass_tf
     raw = os.path.abspath(os.path.expanduser(a.raw_dir))
     if a.new_config:
-        new_config(raw, a.robot, a.reference)
+        new_config(raw, a.robot, a.reference, boards_moved=a.boards_moved)
         return
     cfg = a.config or pass_tf.find_config(raw)
     steps, P = plan_steps(raw, cfg)
