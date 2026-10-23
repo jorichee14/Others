@@ -1038,13 +1038,24 @@ def pick_interactive(cloud: np.ndarray) -> List[np.ndarray]:
         return []
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(cloud)
-    print("\nShift+click each object, then close the window (q).")
+    # colour by height so a chair stands out from the floor it is on
+    z = cloud[:, 2]
+    lo, hi = np.percentile(z, 2), np.percentile(z, 98)
+    t = np.clip((z - lo) / max(hi - lo, 1e-6), 0, 1)
+    pcd.colors = o3d.utility.Vector3dVector(np.c_[t, 0.35 + 0.3 * np.sin(np.pi * t), 1 - t])
+    print("\nShift + left click a point ON each object (the click is the seed, with its height);"
+          "\nShift + right click undoes the last; mouse wheel zooms; q closes and fits.")
     vis = o3d.visualization.VisualizerWithEditing()
-    vis.create_window(window_name="pick a point on each static object")
+    vis.create_window(window_name="shift+click a point on each object, q when done")
     vis.add_geometry(pcd)
     vis.run()
     vis.destroy_window()
-    return [cloud[i] for i in vis.get_picked_points()]
+    picked = [cloud[i] for i in vis.get_picked_points()]
+    for k, p in enumerate(picked):
+        print("  picked %d: x %.2f  y %.2f  z %.2f" % (k + 1, p[0], p[1], p[2]))
+    if not picked:
+        print("  nothing picked")
+    return picked
 
 
 if __name__ == "__main__":
