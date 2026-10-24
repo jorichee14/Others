@@ -281,10 +281,8 @@ def new_config(raw, robot=None, reference=None, log=print, stages=STAGES, boards
                         "drive. mobile_1: 03 (its ZED at its start board, through GLIM) -> 04 (every scan "
                         "to the anchored map). mobile_2: %s. No 05 (the boards as the day's survey "
                         "measured them: dataset.boards_from), no 07/08 (the infra camera where that "
-                        "survey's 07 put it: cameras_from). Change \"board\" (03's realsense sensor and the "
-                        "04 track) to the board mobile_2 starts in front of if not %s (board_scan.py "
-                        "--image-topic /mobile_2/color/image_raw --camera-info /mobile_2/color/camera_info "
-                        "shows which)."
+                        "survey's 07 put it: cameras_from). Neither robot's start board is named: 03 "
+                        "looks for every board in the map and reports the one it found.%s"
                         % (tag, reference,
                            ("as coop/site_1 (20261015): GLIM on its own Ouster, its start from 03's "
                             "realsense (its RealSense at the board in the opening dwell, through its "
@@ -293,23 +291,35 @@ def new_config(raw, robot=None, reference=None, log=print, stages=STAGES, boards
                             "as coop_2 (20260924): vslam (cuVSLAM offline on its stereo + IMU) -> 03 (its "
                             "colour camera at the board in the opening dwell) -> 04's track mobile_2_depth "
                             "(method pgo: one pose graph over every depth frame, the start anchor, the "
-                            "boards and the anchored map)"), RS_BOARD))
+                            "boards and the anchored map)"),
+                           " The boards were put up again for this pass, so what the survey "
+                           "measured replaces the reference's (dataset.boards_moved) and 03 "
+                           "places mobile_1 on the map itself, not on a board whose reference "
+                           "pose is stale (03_init.relocalize)." if boards_moved else ""))
         cfg["dataset"] = {"bag": bag, "traj": None, "machine": robot, "reference_pass": reference,
                           "boards_from": surveys, "cameras_from": surveys}
+        if boards_moved:
+            # the boards were put up again since the reference pass: the survey's
+            # measurements replace its poses, and nothing may be placed from a
+            # board whose pose there is stale (03 refuses without relocalize)
+            cfg["dataset"]["boards_moved"] = True
         if not surveys:
             cfg["dataset"]["_boards_from"] = ("no survey of %s has a config in map_stages/: name the pass "
                                               "whose 05 measured the boards" % date)
+        # no start board for either robot: 03 looks for every board in the map
         cfg["03_init"] = {"sensors": [{"name": "zed", "source": "lidar_odom"},
-                                      {"name": "realsense", "source": "camera", "board": RS_BOARD,
+                                      {"name": "realsense", "source": "camera",
                                        "dwell_only": True}]}
+        if boards_moved:
+            cfg["03_init"]["relocalize"] = {"enabled": True}
         if lidar2:
             track = {"name": "mobile_2_lidar", "kind": "lidar", "machine": "mobile_2",
                      "anchor_cam": "realsense", "body_frame": "os_lidar_mobile2",
-                     "origin_frame": "map_realsense", "board": RS_BOARD}
+                     "origin_frame": "map_realsense"}
         else:
             cfg["vslam"] = {"machine": "mobile_2"}
             track = {"name": "mobile_2_depth", "machine": "mobile_2", "body_frame": "camera_link",
-                     "origin_frame": "map_realsense", "board": RS_BOARD, "anchor_cam": "realsense",
+                     "origin_frame": "map_realsense", "anchor_cam": "realsense",
                      "method": "pgo"}
         cfg["04_reference"] = {"tracks": [track]}
         cfg["05_anchor"] = {"enabled": False}
@@ -592,8 +602,10 @@ def main():
     ap.add_argument("--robot", default=None)
     ap.add_argument("--reference", default=None)
     ap.add_argument("--boards-moved", action="store_true",
-                    help="--new-config of a survey: the boards were put up again for this pass, "
-                         "so the poses it measures replace the reference's (dataset.boards_moved)")
+                    help="--new-config: the boards were put up again for this pass, so the "
+                         "reference pass's poses for them are stale (dataset.boards_moved). A "
+                         "survey then measures them itself; a coop run takes the survey's "
+                         "(boards_from). Either way 03 places the run on the map, not on a board.")
     a = ap.parse_args()
     import pass_tf
     raw = os.path.abspath(os.path.expanduser(a.raw_dir))

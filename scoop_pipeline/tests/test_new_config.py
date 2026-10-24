@@ -155,12 +155,26 @@ def main():
         eq(c["dataset"]["bag"].endswith("work/20261101/coop_1/mirc_dataset_coop_1_20261101_merged"),
            True, "coop bag: " + c["dataset"]["bag"])
         tr = c["04_reference"]["tracks"][0]                         # mobile_2 has an Ouster: its LiDAR track
-        eq((tr["name"], tr["kind"], tr["machine"], tr["board"], tr["body_frame"], "vslam" in c),
-           ("mobile_2_lidar", "lidar", "mobile_2", "board_4", "os_lidar_mobile2", False), "coop track")
-        eq(c["03_init"]["sensors"][1]["board"], "board_4", "coop start board")
+        eq((tr["name"], tr["kind"], tr["machine"], tr["body_frame"], "vslam" in c),
+           ("mobile_2_lidar", "lidar", "mobile_2", "os_lidar_mobile2", False), "coop track")
+        # neither robot's start board is named: 03 looks for every board in the map
+        eq("board" in tr, False, "coop track names no board")
+        eq("board" in c["03_init"]["sensors"][1], False, "coop names no start board")
+        eq("boards_moved" in c["dataset"], False, "coop boards_moved is not assumed")
+        eq((c["03_init"].get("relocalize") or {}).get("enabled"), None,
+           "no relocalize without boards_moved")
         eq((c["05_anchor"]["enabled"], c["07_build_cameras"]["enabled"], c["08_emit_tfs"]["enabled"]),
            (False, False, False), "coop stages off")
         eq(c["10_publish"]["robots"][0]["traj"], "traj_mobile_2_lidar_in_cam.tum", "coop 10_publish")
+
+        # the boards were put up again for this site: the survey's poses replace
+        # the reference's, and the run is placed on the map, not on a board
+        os.remove(p)
+        p = run_pass.new_config(r4, log=lines.append, stages=stages, boards_moved=True)
+        c = json.load(open(p))
+        eq(c["dataset"].get("boards_moved"), True, "coop boards_moved")
+        eq(c["03_init"]["relocalize"]["enabled"], True, "coop boards_moved -> relocalize")
+        eq(c["dataset"]["boards_from"], ["survey/site_2"], "coop boards_from still the survey's")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     for f in fails:
