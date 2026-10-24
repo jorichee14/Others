@@ -108,7 +108,7 @@ agents:
       topic: /mobile_2/global_pose
       frame: mobile_2_base_link
       # from the stage 10 log: "mobile_2_base_link in map starts at ..."
-      # expected_start: [x, y, z]    # from site_2's stage 10 log
+      expected_start: [-20.141, 7.062, 0.333]
       expected_start_tolerance_m: 0.25
       interpolation: linear
       max_gap_ms: 200
@@ -162,7 +162,7 @@ agents:
       source: pose
       topic: /mobile_1/global_pose
       frame: mobile_1_base_link       # = zed_camera_link
-      # expected_start: [x, y, z]    # from site_2's stage 10 log
+      expected_start: [-20.296, -26.324, 0.376]
       expected_start_tolerance_m: 0.25
       interpolation: linear
       max_gap_ms: 200
