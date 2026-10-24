@@ -1,5 +1,10 @@
 # SCooP-iT: final direction
 
+> **24 Oct:** the section plan and the work plan are now `WRITING_GUIDE.md`
+> (section by section) and `../PLAN.md` (train in the Gym, test on the
+> recordings, deploy on the testbed). The paper is split into
+> `sections/s00`-`s11`. Sections 1-6 below are the history of the decisions.
+
 This file fixes the venue, the claim, the structure, and the closed list of
 work left before submission. Anything not on the list in Sec. 5 is out of
 this paper.

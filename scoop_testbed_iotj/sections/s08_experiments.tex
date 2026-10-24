@@ -1,0 +1,254 @@
+% Sec. VIII Experiments (about 1.6 pages): spec sheet, then E1-E5, then worth.
+\section{Experiments: Is SCooP-iT a Trustworthy Instrument?}
+\label{sec:experiments}
+Five experiments answer the five trust questions of
+Sec.~\ref{sec:introduction}, and together they are the evidence
+behind the specification sheet of Table~\ref{tab:spec}. Each opens
+with its question and its pass criterion, fixed before the data were
+read, gives the answer the recordings in hand support, and states what
+remains to be collected. Unless stated otherwise, clock and link
+numbers come from the 24 September session at site 1 (MIRC 1F): the
+survey pass \texttt{survey\_1}, in which one agent owns the channel,
+and the cooperation pass \texttt{coop\_2}, in which both robots move and
+contend. The reference map is the 15 October mapping pass, cross-checked
+by the 24 September one.
+
+\input{tables/spec}
+
+% The per-question result tables (tables/results_q1..q7.tex) and
+% tables/questions.tex are the working ledger and are not input; the
+% questions and their pass criteria are columns of tab:spec.
+
+\subsection{E1 Headroom: The Testbed Is Finer Than What It Measures}
+\emph{Question.} Is the testbed finer than the effects it is meant to
+measure? \emph{Pass.} Every testbed error term is at least ten times
+below the smallest fusion breaking point.
+
+On one log axis in metres (Fig.~\ref{fig:headroom}), each error term
+of the testbed is plotted: clock offset and sniffer bias multiplied by
+the 95th-percentile agent speed, extrinsic residuals, held-out board
+residual, and second-pass agreement. Against them stand the points at
+which collaborative fusion breaks: about \SI{0.2}{\metre} of pose
+error, at which late fusion falls below ego-only in the OPV2V study,
+and latency expressed as displacement, speed times delay, relative to
+an indoor object of \SIrange{0.5}{0.7}{\metre}; the \SI{100}{\milli\second}
+figure at which every fusion method falls below ego-only was measured
+at vehicle speed and is stated here as displacement. \emph{Answer now.} On \texttt{coop\_2} the measured clock offset is
+at most \SI{0.99}{\milli\second}, which is \SI{1}{\milli\metre} at
+\SI{1}{\metre\per\second}; the strict bound of \SI{12}{\milli\second}
+is \SI{1.2}{\centi\metre}. The RGB-D cart sits in the LiDAR frame to
+\SI{3.1}{\centi\metre} median against held-out boards; the LiDAR
+robot's mapping trajectory agrees with an independent refinement
+(scan-to-map against bundle adjustment) to \SI{1.3}{\centi\metre} and
+its map reproduces an earlier map to \SI{1.06}{\centi\metre}; the board
+detector reproduces the pipeline to \SI{8}{\milli\metre}. Each
+term is judged against the breaking point of its own kind: length terms
+against the \SI{0.2}{\metre} pose point, time terms against one
+LiDAR frame at \SI{1}{\metre\per\second}, \SI{0.1}{\metre}. The
+measured clock offset is 101$\times$ below its point; map refinement,
+map repeatability, and the board detector are 15$\times$, 19$\times$,
+and 24$\times$ below theirs. Two terms fall short of 10$\times$ and are
+reported as such: the cart's \SI{3.1}{\centi\metre} is 6.5$\times$
+below the pose point, and the strict \SI{12}{\milli\second} chrony
+bound is 8.3$\times$ below one frame, which is why the paper rests the
+clock guarantee on the measured offset and carries the bound only as a
+worst case. \emph{Remaining.} The LiDAR robot's board
+residual on \texttt{coop\_2} (tool exists, not yet run), the radar
+reflector residuals, the sniffer bias, and the measured p95 agent
+speed that fixes the latency displacement; with those, the final
+margin per term.
+
+\input{figures/headroom}
+
+
+\subsection{E2 Map Meets Radio: Two Independent References Agree}
+\emph{Question.} Are the poses and the link logs right, if neither is
+checked by hand? \emph{Pass.} Pooled Spearman $\rho$ between clearance
+and the residual signal above 0.3, and a clear-minus-obstructed drop
+above \SI{5}{\decibel}, on at least one link kind.
+
+For every link window, the first-Fresnel-zone clearance of the path
+between the two ends is computed through the anchored map; a link is
+conventionally free-space when at least $0.6\,r_1$ of the first
+Fresnel radius $r_1 = \sqrt{\lambda d_1 d_2 / d}$ is clear
+\cite{itup530}, which at \SI{5.75}{\giga\hertz} is \SI{28}{\centi\metre}
+at the midpoint of a \SI{6}{\metre} link. The distance trend is
+removed from the dB signal with a fixed path-loss exponent and an
+offset taken from the clear windows; fixing the exponent matters,
+since along a route length and obstruction move together and a free
+fit puts the wall loss into the slope. A self-test recovers a planted
+\SI{12}{\decibel} wall loss as \SI{11.9}{\decibel} ($\rho = 0.68$).
+Neither the map nor the poses used the signal, and the signal did not
+use the map, so agreement validates both at once; prior
+sensing--communication datasets infer blockage from received power
+\cite{deepsense6g}, which cannot make this check. Links tested are
+the CSI links \texttt{sniffer}--\texttt{mobile\_2} and
+\texttt{sniffer}--\texttt{infra\_1}, and the agent-to-AP links from
+status RSSI and goodput. \emph{Answer now.} On \texttt{coop\_2}, robot to robot, the
+\texttt{mobile\_2} link gives $\rho = 0.60$ and a
+\SI{5.4}{\decibel} drop, which passes both halves of the criterion;
+the \texttt{infra\_1} link gives $\rho = 0.23$ and
+\SI{4.7}{\decibel}, which passes neither, consistent with a fixed
+mast whose path to the moving receiver changes less. Since the poses
+and the map produced the clearance and the radio produced the RSSI,
+agreement on the first link validates both at once.
+\emph{Remaining.} The agent-to-AP links, which need the access
+point's position read off the anchored map; pooling over
+\texttt{survey\_1} and \texttt{coop\_2} and over sites; a
+confidence interval on $\rho$; out-of-run prediction, fitting the
+detrending on one pass and scoring another; and CSI power as a second
+signal (Fig.~\ref{fig:clearance}).
+
+\input{figures/clearance}
+
+
+\subsection{E3 Faithful: Replay and Gym Against Reality}
+\emph{Question.} Do the replay and the Gym reproduce what the real
+agents sensed, sent, and achieved? Three checks, one per use of the
+capture (Sec.~\ref{sec:introduction}). \emph{Pass}, fixed before the
+data are read. E3a, replay: agreement of at least 90\,\% on which
+receiver frame (\SI{100}{\milli\second}) each message lands in, with
+the logged replay clearly closer than the synthetic channel. E3b, the
+Gym's world: synthetic scans at the recorded poses lie within the real
+scan noise of the map (\SI{3}{\centi\metre} median); fitted dropout
+and noise statistics match a held-out session; the link indexed by
+place, fitted on one pass, predicts the in-frame share of another pass
+to within 10 points; and the change in detection AP that the logged
+link causes, against the ideal channel, differs between twin and real
+by less than half its real value. E3c, deployment: the success rate of
+a Gym-trained policy on the real testbed lies within the interval the
+Gym predicted for the same scenario.
+
+\emph{E3a, live against replay.}
+
+Two runs follow the same route, mode, and day. Run A records the link
+as usual with iperf and ping. Run B replaces iperf with a payload node
+that sends stamped messages at \SI{10}{\hertz} in three sizes: about
+\SI{1}{\kilo\byte} (boxes), \SI{100}{\kilo\byte} (features), and
+\SIrange{1}{2}{\mega\byte} (raw clouds), over the transport and QoS a
+collaborative method would use. Because the clocks are synchronized,
+the one-way delay of every message is exact. B's messages are replayed
+through A's trace and through the synthetic channel, and the
+arrival-time error, frame-assignment agreement, and drop agreement are
+reported per size and mode (Fig.~\ref{fig:simgap}, left). If the pass
+fails for a size or mode, the fluid model of Eq.~\eqref{eq:replay} is
+the limitation and a per-packet trace is the stated fix.
+\emph{Answer now.} None: no run yet carries stamped payload messages,
+so the replay of Sec.~\ref{sec:replay} is a model whose inputs are
+measured but whose output is unvalidated, and the abstract says so.
+\emph{Remaining.} One session on the \texttt{survey\_1} route: run
+A1 (survey, iperf and ping) and B1 (survey, payload node), then A2 and
+B2 in cooperation mode, back to back so that building conditions
+match; the payload node and the comparison script; and the per-size,
+per-mode table of arrival-time error, frame agreement, and drop
+agreement, with the synthetic channel on the same axes.
+
+\emph{E3b, the Gym's world against the real one.} Each part of the
+world of Sec.~\ref{sec:gym} is checked against real runs that did not
+build it. \emph{Sensors}: the twin drives the recorded paths of
+\texttt{coop\_2}; its scans are registered to the map and compared with
+the real scans at the same poses, and the dropout and noise models
+fitted on one session are compared with another. \emph{Link}: the
+position-indexed link is fitted on \texttt{survey\_1} and the
+contention mode on \texttt{coop\_2}, then asked to predict a third pass
+along that pass's own path. \emph{Task}: one cooperative detector runs
+on real and twin data under the ideal and logged channels; the twin's
+absolute score is not expected to match, since it carries none of the
+reflectance and motion distortion of the real sensors, but it must
+reproduce the difference the link makes, in which such errors largely
+cancel. \emph{Answer now.} None: the twin tooling exists but has not
+yet run in Isaac Sim, and the position-indexed link is not yet built.
+\emph{Remaining.} The twin run of \texttt{coop\_2}; the fitted
+condition models; the position-indexed link; the coop\_2 labels for the
+detector.
+
+\emph{E3c, the Gym's policy on the real testbed.} A policy trained in
+the Gym for \texttt{OcclusionHandoff} (Sec.~\ref{sec:gym}) is run on the
+real agents in the scenario it was trained for, with the link and
+conditions recorded as usual. Its real success rate is set against the
+distribution of success rates the Gym predicted for that scenario, and
+each real failure is attributed by the same log as in the Gym.
+\emph{Answer now.} None. \emph{Remaining.} The trained policy; one
+field session; the comparison.
+
+% E3 shares a figure with E5 (figures/simgap.tex, two panels)
+
+
+\subsection{E4 Same Knob, Same Link: A Setting Reproduces Its Condition}
+\emph{Question.} If the same condition is set on another day, is the
+same link obtained? \emph{Pass.} The day-to-day distance between link
+distributions is below half the survey-to-cooperation distance, for
+RTT and goodput.
+
+The same route and mode are recorded on two days. The Wasserstein (or
+KS) distance between their RTT, goodput, and RSSI distributions, and
+between RSSI-against-position on a shared map grid, is compared with
+the distance between survey and cooperation mode on the same route.
+\emph{Answer now.} Only the pose half: a map built four weeks before
+\texttt{mapping\_A} agrees with it to \SI{1.06}{\centi\metre} on
+walls and $2\times10^{-5}$ in scale, so the frame repeats across days.
+The mode half, the distance between \texttt{survey\_1} and
+\texttt{coop\_2} on the same route, is computable from the 24
+September tables but has not been computed. \emph{Remaining.} The
+mode distance from the two existing passes; one repeat of the same
+route and modes on another day, which the E3 session provides; and the
+table of day distance against mode distance for RTT, goodput, and
+RSSI on the shared grid.
+
+
+\subsection{E5 Sim Gap: What a Synthetic Channel Hides}
+\emph{Question.} Why not simulate the link? This is a demonstration
+with no pass criterion; the claim checked is that cooperation mode
+pushes raw clouds past the one-frame boundary while boxes stay within
+it, and that outages exist which synthetic channels do not have.
+
+From the logged ping and iperf data, the arrival delay of
+Eq.~\eqref{eq:replay} is computed for messages of \SI{1}{\kilo\byte},
+\SI{100}{\kilo\byte}, and \SI{1.5}{\mega\byte}, per load mode, and
+the share arriving within one LiDAR frame (\SI{100}{\milli\second}) is
+set against the synthetic channels of Where2comm (bandwidth budget, no
+latency) and V2X-ViT (constant \SI{100}{\milli\second}) exactly as
+published (Fig.~\ref{fig:simgap}, right). \emph{Answer now.} Raw
+clouds arrive within the frame in 86\,\% of cases when one robot owns
+the channel (\texttt{survey\_1}) and in \SIrange{59}{68}{\percent}
+with two robots contending (\texttt{coop\_2}), against 100\,\% under
+the synthetic channels; the measured delay depends on offered load,
+rising from \SIrange{5}{10}{\milli\second} idle to
+\SIrange{25}{33}{\milli\second} under iperf load on 24 September
+(\SI{3.3}{\milli\second} to \SIrange{60}{109}{\milli\second} on an
+earlier pass at the same site), and an earlier cooperation pass
+contains three real outages covering 12\,\% of frames, which no
+synthetic channel produces. Judged by its latency, the contended link
+is healthy: its loaded round trip of \SIrange{25}{33}{\milli\second}
+is at most a third of the frame. The misses come from message size over the
+goodput the contended link had, which no latency indicator sees. This
+is the gap between communication indicators and task indicators that
+\cite{zhang2026mean} describes, measured here on one run. The
+two-robot drop is the effect that i.i.d.\ per-agent delay models
+cannot express: the robots contend for one access point, so their
+delays are correlated. A \SI{1.5}{\mega\byte} message is about
+11$\times$ V2X-ViT's configured 1.06\,Mb and needs about
+120\,Mbit/s of sustained goodput to land inside a frame; under the
+frame-quantized synthetic models any delay below
+\SI{100}{\milli\second} counts as zero, which is why they deliver
+100\,\%. \emph{Remaining.} A best-fit synthetic baseline, a constant
+or Binomial delay fitted to the measured delays, to show that even a
+tuned synthetic channel mispredicts in-frame share because outages and
+contention are correlated; the same figure over more passes and a
+second site; and a probe-off control run to separate the queueing the
+measurement itself adds from the queueing the team would face.
+Detection-level consequences are reported in \cite{scoop_dataset}.
+
+\input{figures/simgap}
+
+
+\subsection{Worth: Is It Unique, and Can Others Build It?}
+\label{sec:worth}
+The two remaining questions are answered outside the experiments.
+Uniqueness is Table~\ref{tab:gap_iotj}: SCooP-iT is the only
+platform that is indoor, has mobile and fixed nodes, is referenced
+without motion capture or GNSS, and measures every pair's link down to
+channel state with a measured clock bound and a per-message replay
+path into methods. Reproducibility rests on the
+released pipeline, the spec sheet, and the bill of materials
+(Table~\ref{tab:bom}).

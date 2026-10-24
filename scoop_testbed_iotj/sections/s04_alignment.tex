@@ -1,0 +1,138 @@
+% Sec. Time and Space Alignment
+\section{Time and Space Alignment}
+\label{sec:alignment}
+This section answers how well the testbed puts every measurement from
+every agent on one clock and in one rig frame. Each quantity is
+validated with data that was not used in its estimation.
+
+\subsection{Clock}
+\label{sec:clock}
+The clocks are synchronized with chrony. \texttt{mobile\_1} acts as
+the server, and every other agent and \texttt{sniffer} act as clients
+polling every \SI{8}{\second}. This traffic passes over the measured
+link, but at a few hundred bytes per poll it is negligible, and since
+it is present in every run it forms part of the measured channel.
+Recording starts only after every unit reports a converged offset.
+Each unit logs its offset and any clock adjustment
+(\texttt{ntp/status}, \texttt{ntp/events}) into its own bag, so the
+alignment at any frame can be checked and poorly aligned frames can
+be filtered out. Two numbers describe the result, and they answer
+different questions. The RMS offset chrony reports per client is tens
+of microseconds (median \SIrange{10.9}{42.5}{\micro\second} across
+clients on a live pass, no clock stepped; supplementary Table S-II).
+The \emph{measured} offset over the whole of the coop\_2 run, the
+quantity a user of the data cares about, is at most
+\SI{0.99}{\milli\second}, and chrony's strict error bound, the
+offset plus half the root delay, is at most \SI{12}{\milli\second}.
+We report the measured offset as the clock guarantee and carry the
+strict bound through the error budget as the worst case; the clock
+rows of Table~\ref{tab:calib} give both. \todo{Repeat over every
+pass; report the worst pairwise value.}
+
+\subsection{Sniffer Bias}
+\label{sec:sniffer}
+These offsets describe the stability of each clock relative to the
+server, not its accuracy. NTP assumes a symmetric path delay, and any
+asymmetry appears as a constant bias that chrony cannot observe. This
+is relevant only for \texttt{sniffer}, which reaches the server over
+its \SI{2.4}{\giga\hertz} management link with a path delay several
+times larger than that of the other units, so its bias may be as large
+as half that delay, \SI{7.8}{\milli\second}. We measure the bias
+directly from the probe packets that \texttt{mobile\_2} sends and
+\texttt{sniffer} captures. Each packet is stamped at transmission on
+the clock of \texttt{mobile\_2} and at reception on the clock of
+\texttt{sniffer}. Since the packet is in flight for only nanoseconds,
+the difference between the two stamps equals the bias of the sniffer
+plus its driver latency: the measured link calibrates the clock. The
+median difference over a run is \todo{}, which bounds the bias.
+
+\subsection{Error Budget}
+\label{sec:budget}
+Agreeing clocks are not sufficient if the stamps themselves are late.
+Every message is stamped on arrival at its host, so each stamp lags
+its measurement by the transport latency of that sensor
+\todo{estimates per sensor: LiDAR over Ethernet, cameras over USB,
+radar over UART}, and camera stamps lag further by the exposure time.
+These lags are approximately constant for a given sensor; we leave the
+stamps as recorded so that users can apply their own correction.
+
+Every timing error $\Delta t$ displaces a measurement taken on a
+platform moving at speed $v$ by
+\begin{equation}
+  \delta x = v \, \Delta t .
+  \label{eq:time_bound}
+\end{equation}
+We take $v_{\max} = \SI{3}{\metre\per\second}$ as an upper bound on
+agent speed; indoor agents move far slower, and E1 uses the measured
+95th-percentile speed. The measured clock offset of
+\SI{0.99}{\milli\second} then corresponds to \SI{3}{\milli\metre}
+at $v_{\max}$ and to \SI{1}{\milli\metre} at \SI{1}{\metre\per\second};
+the strict \SI{12}{\milli\second} bound to \SI{3.6}{\centi\metre}
+and \SI{1.2}{\centi\metre}. The sniffer bias of \todo{} corresponds
+to \todo{}, which is \todo{}\,\% of the half-wavelength
+$\lambda/2 = \SI{26.1}{\milli\metre}$ at \SI{5745}{\mega\hertz} that
+sets the CSI sampling requirement (Sec.~\ref{sec:csi}). Transport
+latency and exposure are larger: a constant lag of
+\SI{10}{\milli\second} corresponds to \SI{3}{\centi\metre}, but since
+it is constant it can be estimated and removed. The largest term is
+the LiDAR sweep, \SI{100}{\milli\second} at \SI{10}{\hertz}, so the
+first and last points of a scan can be \SI{30}{\centi\metre} apart;
+it is removed by per-point deskewing with IMU-propagated motion in the
+reference pipeline \cite{glim}. Combining the terms that remain after
+compensation, the worst-case intra-frame spatial error at $v_{\max}$ is
+\begin{equation}
+  \delta x_{\max} = v_{\max}\,\big(\Delta t_{\mathrm{clk}}
+  + \Delta t_{\mathrm{lat}} + \Delta t_{\mathrm{exp}}\big)
+  = \todo{Y}\,\si{\centi\metre},
+  \label{eq:fusion_bound}
+\end{equation}
+where $\Delta t_{\mathrm{clk}}$ is the worst clock offset,
+$\Delta t_{\mathrm{lat}}$ the largest uncorrected transport latency,
+and $\Delta t_{\mathrm{exp}}$ the longest camera exposure. The budget
+is dominated by sensor physics and transport, not by synchronization:
+measured clock alignment contributes a few millimetres at most, while
+the larger terms are either compensated or constant and removable. \todo{Show the
+budget as a stacked bar; it feeds the headroom figure of E1.}
+
+\subsection{Extrinsics}
+\label{sec:spatial}
+Three transforms are estimated per platform. On \texttt{mobile\_1},
+\Ttransform{Base}{LiDAR} is obtained by hand-eye calibration: the
+robot is driven through a sequence of motions, and the transform is
+solved from the pairs of relative motions reported by wheel odometry
+and by LiDAR odometry \cite{furrer2018handeye}. On both mobile agents,
+\Ttransform{LiDAR}{Camera} is obtained by direct, target-free alignment
+of image and point-cloud features \cite{koide2023lidarcam}. For the
+radar, whose returns are too sparse for feature alignment,
+\Ttransform{LiDAR}{Radar} is obtained with a corner reflector placed at
+several positions \cite{domhof2019calib}. For the infrastructure rig,
+the camera and radar are mounted on the same fixed bracket and each is
+calibrated against a LiDAR by the same methods, which gives
+\Ttransform{Camera}{Radar} directly; the world pose of each mast camera
+is obtained through the fiducial chain of Sec.~\ref{sec:fiducials}.
+
+Each extrinsic is checked on held-out data. For
+\Ttransform{LiDAR}{Camera}, LiDAR returns on the ChArUco boards of the
+mapping session are projected into the image and compared with the
+detected corners; for the RGB-D agent, whose trajectory uses board
+sightings as constraints, the boards are split once per site into an
+estimation set and a held-out set, and the residual is evaluated on
+the held-out set only \todo{state the split}. The board detector
+itself is validated before it validates anything: re-run on the
+mapping session's images it reproduces the pipeline's board poses to
+\SI{8.1}{\milli\metre} / 0.66$^\circ$ on the ZED and
+\SI{8.3}{\milli\metre} / 0.58$^\circ$ on the RealSense, at or below
+each board's own scatter (\SI{2.0}{} and \SI{6.9}{\milli\metre}),
+with lens distortion handled at corner interpolation rather than at
+PnP, which otherwise costs \SI{34}{\milli\metre}. For
+\Ttransform{LiDAR}{Radar} and \Ttransform{Camera}{Radar}, the reflector
+is placed at positions not used in calibration and the radar detection
+is compared with the LiDAR centroid. For \Ttransform{Base}{LiDAR}, the
+hand-eye result is checked through the board residual of
+Sec.~\ref{sec:gt_val}, which tests \Ttransform{Base}{LiDAR} and
+\Ttransform{LiDAR}{Camera} at once. Table~\ref{tab:calib} lists the
+residuals; the same values are stored with the data
+(\texttt{calibration/residuals.json}) so that users can weight each
+transform by its accuracy.
+
+\input{tables/calib}

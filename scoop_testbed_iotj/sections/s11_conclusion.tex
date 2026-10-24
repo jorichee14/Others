@@ -1,0 +1,21 @@
+% Sec. XI Conclusion (about 0.2 page): what it gives, what it showed, what is next.
+\section{Conclusion}
+\label{sec:conclusion}
+SCooP-iT captures a real heterogeneous indoor team, sensing and
+communication alike, on one clock, with measured offsets below
+\SI{1}{\milli\second}, and in one metric frame, placed to
+\SI{10}{\milli\metre} against held-out boards without motion capture or
+GNSS. The capture serves three uses, each checked against reality: the
+recordings as a test bench into which any collaborative method is
+replayed against the link the agents had \todo{validated to within one
+receiver frame}; SCooP-iT Gym, a closed-loop environment whose world,
+sensors, link, and conditions are built from the recordings; and the
+testbed itself, on which a policy trained in the Gym is deployed and
+its outcome compared with the Gym's prediction. The real world showed
+what simulation hides: under contention the shared network moves raw
+clouds past one LiDAR frame while its own latency looks healthy, which
+no synthetic channel of prior benchmarks reproduces. Next steps are more
+agents and sites, other radios, multi-antenna CSI, a wired CSI host, and
+Gym tasks in which agents act on the real testbed in closed loop. The
+sequences recorded on SCooP-iT, their labels, and their benchmark are
+released as the SCooP dataset \cite{scoop_dataset}.

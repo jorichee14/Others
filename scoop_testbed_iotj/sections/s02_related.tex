@@ -1,0 +1,176 @@
+% Sec. Related Work
+\section{Related Work}
+\label{sec:related}
+
+A team of robots and fixed sensors that shares perception over Wi-Fi
+is an IoT system: heterogeneous nodes sense, compute, and exchange
+data over one shared, contended network, and the application succeeds
+only if each message arrives while it is still fresh
+\cite{simoens2018iort}. Surveys of networked embodied intelligence
+organize its evaluation in levels, communication and computation
+indicators below and embodied task indicators above, and argue that
+only their joint measurement shows whether a network serves a task
+\cite{zhang2026mean}; surveys of embodied multi-robot systems find that
+benchmarks overlook communication latency and call for frameworks that
+evaluate perception and communication across heterogeneous teams, with
+hardware in the loop \cite{wen2026embodiedmrs}. Studying such a system
+needs four things at
+once: the network measured where the application runs, the channel
+beneath it, every node's position and clock, and a way to put a new
+application on the same network again. We review IoT testbeds, network
+timeliness, wireless channel measurement, robots as IoT nodes, and
+cooperative perception as the application, and close with the gap at
+their intersection.
+
+\subsection{IoT and Wireless Experimentation Testbeds}
+Open testbeds made IoT and wireless experiments reproducible at scale.
+FIT IoT-LAB \cite{adjih2015iotlab} reported 2,728 low-power nodes and
+117 mobile robots across six indoor sites; its robots log their own
+pose estimate, and its nodes record received power per channel. The
+PAWR platforms POWDER \cite{breen2021powder} and COSMOS
+\cite{raychaudhuri2020cosmos} provide city-scale software-defined
+radio and edge computing, with small indoor labs beside the outdoor
+deployment, and Colosseum \cite{bonati2021colosseum} emulates the RF
+channel in FPGA hardware between 128 radios from modeled, ray-traced,
+or measured scenarios. These testbeds make the radio the object of
+study. Link metrics are instrumented by the experimenter, node
+positions come from GNSS or the node itself, and no application task
+is scored against ground truth, so they show what the network did but
+not what it did to an application.
+
+\subsection{Timeliness and Networking for IoT Applications}
+The throughput of a contended 802.11 cell is modeled analytically
+\cite{bianchi2000dcf}, and the freshness of status updates is captured
+by the age of information \cite{kaul2012aoi,yates2021aoi}.
+Task-oriented communication encodes features for a downstream
+inference task rather than for reconstruction
+\cite{shao2022taskoriented}, and edge computing for connected vehicles
+\cite{liu2019edgeav} and cloud robotics \cite{kehoe2015cloud} place
+the network on the critical path of perception. For robots, ROS~2
+middleware (DDS, Zenoh, MQTT) has been benchmarked over Ethernet,
+Wi-Fi, and 4G \cite{zhang2024ros2middleware}. Clocks are aligned by
+NTP \cite{mills1991ntp} or, in sensor networks, by FTSP
+\cite{maroti2004ftsp}. Measured networks are replayed by trace-driven
+emulators \cite{noble1997trace,winstein2013sprout,netravali2015mahimahi,yan2018pantheon,hemminger2005netem}.
+These works analyze, encode for, or emulate the network under
+saturated, synthetic, or recorded traffic, but the deadline they
+evaluate against is not that of a sensing application on the same
+nodes, and a replayed trace feeds a socket, not a multi-node
+application keyed to sensor time.
+
+\subsection{Wireless Channel Measurement and Prediction}
+Commodity CSI extraction, first on the Intel~5300
+\cite{halperin2011csitool}, then with Nexmon \cite{nexmon} and
+PicoScenes \cite{jiang2022picoscenes}, turned Wi-Fi into a sensor
+\cite{ma2019wifisensing}. Channel datasets pair CSI or beam power with
+positions or other modalities: DICHASUS \cite{dichasus} sounds a
+distributed massive-MIMO channel indoors and outdoors with tachymeter
+and GNSS positions, ESPARGOS \cite{espargos} records phase-coherent
+Wi-Fi CSI from a robot-borne transmitter tracked by a total station,
+MM-Fi \cite{mmfi} pairs CSI with human pose, and DeepSense~6G
+\cite{deepsense6g} pairs mmWave beam power with camera, LiDAR, radar,
+and RTK positions. Ray-traced digital twins
+\cite{hoydis2023sionnart,alkhateeb2023digitaltwin,bostontwin,deepmimo}
+and learned radio maps \cite{levie2021radiounet} predict the channel
+from geometry. In this line, CSI is measured on dedicated sounding
+links or used to sense people and passive targets, rather than on the
+links over which IoT nodes exchange their application data; positions
+come from a survey instrument or GNSS; and geometry is an input to
+channel prediction, not an independent reference against which the
+measured channel is checked.
+
+\subsection{Robots as Mobile IoT Nodes}
+The Internet of Robotic Things treats robots as mobile nodes that
+sense, act, and share data over the same network as other devices
+\cite{simoens2018iort}. Communication-aware robotics plans motion
+around the channel \cite{muralidharan2021commaware}: robots map signal
+strength online \cite{fink2010radiomap} or exploit its directionality
+to keep a team connected \cite{gil2015adaptive}. CHORD and ACHORD
+\cite{ginting2021chord,saboia2022achord} share data over intermittent
+links in subterranean deployments of the DARPA SubT Challenge,
+monitoring per-link SNR to route over dropped relays, and MOCHA
+\cite{cladera2024mocha} does so in outdoor air--ground field trials,
+synchronizing when the received signal strength allows. ROS-NetSim
+\cite{calvofullana2021rosnetsim} routes real ROS traffic through a
+simulated network. Multi-robot testbeds such as the Robotarium
+\cite{wilson2021robotarium}, the CPM Lab \cite{kloock2021cpmlab}, and
+ChoiRbot \cite{testa2021choirbot} obtain positions from overhead
+cameras or motion capture and treat the network as ideal. Indoors
+without motion capture, a pose reference needs surveyed UWB anchors
+\cite{zhao2024util}, total-station points \cite{hilti2022}, surveyed
+fiducials \cite{airmuseum}, or a scanner-built prior map
+\cite{subtmrs,lamar}; SLAM-derived references are validated by sparse
+landmark distances \cite{incrowdvi} or by internal consistency alone
+\cite{envodat}. Robots therefore run over real links that are
+monitored but not released, or have precise positions over a network
+assumed ideal; none has both on one timeline, and none scores an
+application against an independent reference.
+
+\subsection{Cooperative Perception as an IoT Application}
+Cooperative perception fuses raw points \cite{chen2019cooper},
+features \cite{chen2019fcooper,wang2020v2vnet}, or selected regions
+\cite{where2comm,liu2020when2com} from several nodes; F-Cooper
+\cite{chen2019fcooper} frames it as an edge-computing system. Methods
+now target what the network does to the fused result: latency
+\cite{lei2022syncnet,v2xvit}, asynchrony \cite{wei2023cobevflow},
+interruptions and packet loss \cite{ren2024v2xincop}, and pose error
+\cite{lu2023coalign}. They are trained on simulated or outdoor data
+\cite{opv2v,v2xsim,dairv2x} and evaluated against a constant delay, a
+Bernoulli drop, or no latency, with pose error drawn from a chosen
+distribution. Real-world platforms are outdoor and vehicular. V2V4Real
+\cite{v2v4real} and TUMTraf-V2X \cite{zimmer2024tumtrafv2x} provide
+GNSS-referenced multi-agent data with synchronization of tens of
+milliseconds and no link log; \cite{hawlader2024v2xexp} reports V2X
+experiments on real hardware; V2X-ReaLO \cite{v2xrealo} runs online
+fusion over a live Wi-Fi link and reports its latency; and CooperScene
+\cite{cooperscene}, the nearest case, releases pairwise C-V2X latency,
+throughput, loss, and jitter traces with PTP-synchronized sensors, and
+evaluates detectors under a delay derived from the measured mean
+throughput. CoPeD \cite{coped}, an air--ground team recorded indoors
+and outdoors, takes pose from its own visual-inertial odometry fused
+with GPS and logs no link. The link, where recorded, is measured at or
+above the transport layer without channel state, and it enters the
+evaluation as a scalar delay or a live run, not as the per-message
+trace each node actually had.
+
+\subsection{Simulators and Environments for Embodied Agents}
+Embodied agents are trained in simulators that generate their world:
+Habitat \cite{habitat} for indoor navigation, CARLA \cite{carla} and
+OpenCDA \cite{xu2021opencda} for driving, the latter generating the
+cooperative-perception data of OPV2V \cite{opv2v}, and Isaac Lab
+\cite{orbit} on Isaac Sim \cite{isaacsim} for robot learning at GPU
+scale, behind the Gymnasium and PettingZoo interfaces
+\cite{gymnasium,pettingzoo}. Lingjing \cite{lingjing} runs heterogeneous
+aerial and ground agents in a simulated city behind a Gym-like
+interface, with star or broadcast communication and episodes replayed
+for failure attribution, but its messages pass an ideal bus whose cost
+is a message count, never a delay or a loss. Driving research grounds
+closed-loop simulation in real logs instead: nuPlan \cite{nuplan} and
+Waymax \cite{waymax} replay recorded scenes around a simulated ego.
+These environments either generate the world or replay it for one ego
+over no network; none builds a multi-agent environment from a real
+team's sensing and communication and checks it against that team.
+
+\subsection{The Gap at the Intersection}
+Table~\ref{tab:gap_iotj} compares the closest platforms on link,
+channel, clock, pose reference, and replay; the supplementary material
+states each gap by discipline, what SCooP-iT provides, and where the
+paper shows it. IoT testbeds measure
+the network but run no scored application; channel datasets measure
+CSI on sounding links under a survey instrument; robot systems run
+over real links but release no link log and score nothing; and
+cooperative-perception platforms score the application outdoors under
+GNSS but reduce the link to a scalar delay or a live run; and embodied
+environments generate their world over an ideal network. SCooP-iT is
+an indoor IoT testbed in which heterogeneous mobile and fixed nodes
+record per-pair link and channel state on the sensors' clock, with a
+measured bound on that clock, have a validated pose for every scan
+without motion capture or GNSS, and replay the recorded per-message
+link into any collaborative application, and build a closed-loop
+environment from the same capture that is checked against it. It is the
+integrated testbed the surveys call for
+\cite{zhang2026mean,wen2026embodiedmrs}: sensing, communication, and
+the task outcome of every run on one timeline, bridged to simulation by
+an environment that answers to the real runs.
+
+\input{tables/related_iotj}

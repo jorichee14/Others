@@ -28,119 +28,94 @@ A real-world indoor platform where researchers can:
    (the Gym), on the recordings and in the twin;
 5. add their own building with a mapping pass and printed boards.
 
-Two papers share one testbed, one channel model
-(`scoop_pipeline/scoop/channel.py`), one set of recordings, and a different
-claim each. The Gym is part of the testbed paper (merged 24 Oct); its closed
-loop is the extension.
+## The loop
 
-| | SCooP-iT, with SCooP-iT Gym | SCooP | Extension: closed-loop Gym |
+```
+ real recordings ──build──▶ Gym (Isaac twin) ──train──▶ policy
+        ▲                     │ checked by E3b              │
+        │                     ▼                             ▼
+        │              replay test bench ◀────test──── on the recordings
+        │                                                   │
+        └──── new recordings, refit ◀── testbed ◀──deploy───┘   (E3c)
+```
+
+- **Train** in the Gym: a closed-loop twin built from the recordings.
+- **Test** on the recordings: the replay test bench, with every condition logged.
+- **Validate** on the testbed: deploy and compare with the Gym's prediction. The new recordings refit the Gym.
+
+## Deliverables
+
+| | SCooP-iT (with SCooP-iT Gym) | SCooP | Extension |
 |---|---|---|---|
-| What | Testbed and environment paper | Dataset paper | Journal extension or short follow-up |
-| Folder | `scoop_testbed_iotj/` | `scoop_dataset_paper/` | `scoop_gym/` (+ `isaac_coop_sim/`) |
-| Venue | IEEE IoT-J | IEEE T-RO | decided when the closed loop works |
-| One claim | A real indoor team captured on one clock and one frame, sensing and communication alike, and offered as a validated environment | Collaborative perception for indoor robot teams studied as findings (Q1-Q4), not only as a leaderboard | Train and score agents against the network the robots actually had |
-| State, 24 Oct | Draft compiles (16 pp); results open | Draft written; collection, labels and every experiment open | Link engine, attribution log, `CommSchedule-v0` and tests done; twin and other tasks open |
+| What | Testbed and environment paper | Dataset paper | Agent benchmark on the Gym |
+| Folder | `scoop_testbed_iotj/`, `scoop_gym/`, `isaac_coop_sim/` | `scoop_dataset_paper/` | `scoop_gym/` |
+| Venue | IEEE IoT-J | IEEE T-RO | decide after SCooP-iT |
+| Claim | A real indoor team captured on one clock and frame, sensing and communication alike, offered as test bench, Gym and testbed, each checked against reality | What changes when collaborative perception meets a real indoor team (Q1-Q4) | Many tasks and agents (rule, RL, VLM) on the Gym, failures attributed down to the link |
+| State, 24 Oct | 18 pages, split into section files (`WRITING_GUIDE.md`); results open | Draft; collection, labels, experiments open | Not started |
 
 ## Who owns what
 
 - **SCooP-iT:**
-  - platform, clock, ground truth, link instrumentation, the replay and its validation (E3a live, E3b twin);
-  - SCooP-iT Gym: the interface, replay mode, the twin along the recorded paths, `CommSchedule-v0` and `CoopDetect-v0`.
+  - the platform, clock, ground truth and link;
+  - the replay test bench with its conditions (E3a);
+  - the Gym: world, interface, conditions, tasks, train-test-deploy;
+  - validation of the Gym's world (E3b) and one deployed policy (E3c, `OcclusionHandoff`);
+  - the `CommSchedule` demonstration.
 - **SCooP:**
-  - sequences, labels, collection design, collaboration geometry, release, devkit;
-  - the offline benchmarks T1 and T2, and Q1-Q4.
-  - It cites SCooP-iT for the platform and keeps half a page on it.
-- **Extension (closed-loop Gym):**
-  - the closed-loop twin and the link indexed by place, with its out-of-run validation;
-  - the twin tasks, the agent benchmark (rule, RL, VLM), and attribution of failures down to the link.
-  - It cites both papers.
-- **Shared, not duplicated:** the channel model, the reference map, and the twin's construction. SCooP-iT describes them; the others cite.
+  - data at every site, labels, collection design, geometry, release, devkit;
+  - the T1 and T2 benchmarks and Q1-Q4;
+  - "does augmentation help" as a finding.
+- **Extension:** the full set of Gym tasks, the agent benchmark, and large-scale attribution.
+- **Shared, described once:** the channel model and conditions (SCooP-iT), the twin construction (SCooP-iT), the labels (SCooP).
+
+## Work streams
+
+| Stream | What | Feeds |
+|---|---|---|
+| **A. Compute on existing passes** | confirm pass sources; E1 terms and headroom figure; E2 CI; E4 mode distance; E5 best-fit; calibration rows; error budget; `CommSchedule` on coop_2 | SCooP-iT IV, VIII, IX |
+| **B. Field sessions** | B1: replay validation session (A1/B1 survey, A2/B2 cooperation, probe-off; needs the payload node and `twin_run.py`). B2: deployment session for E3c | E3a, E4 day half, sniffer bias; E3c |
+| **C. Labels** | coop_2 first (static in the map frame, moving by hand), then every sequence | E3b dAP, `CoopDetect`, all of SCooP |
+| **D. Gym world (Isaac)** | D1 scene: USD from the map (exists), floor and free space. D2 robots: Scout Mini from URDF as a differential drive, cart and walkers kinematic, masts static. D3 sensors: RTX LiDAR (64/128 beams) and cameras from `isaac_coop_sim`; semantic classes on every prim. D4 objects: placement from free space at label counts, real assets for cameras, material and lighting randomization | E3b, all twin tasks |
+| **E. Gym conditions (Python, `scoop_gym`)** | E1 sensor dropout and noise fitted per sensor from bag timestamps and scans. E2 pose error fitted from estimate vs. reference. E3 link indexed by place: survey grids, contention mode, clearance; Sionna fill-in; out-of-run check. E4 attribution causes beyond the link | E3b; every task |
+| **F. Replay test bench** | `ReplayEngine.observe()`: recorded frames through the devkit; one detector per agent; `CoopDetect`, `HelperSelect` | E3b dAP; testing Gym-trained policies |
+| **G. Gym tasks and training** | Isaac Lab multi-agent tasks calling `scoop_gym` each step. `OcclusionHandoff` first: scripted baseline, then RL; then `ActiveCoopDetect` | IX demonstrations, E3c |
+| **H. Writing** | Section by section (`WRITING_GUIDE.md`) | SCooP-iT |
+| **S. SCooP dataset track** | remaining sessions, labels at scale, release and devkit, Q1-Q4 training, failure cases | SCooP |
 
 ## What blocks what
 
 ```
-field session (1 h) ---------------------------> E3a, E4 day half, sniffer bias        [SCooP-iT]
-labels on coop_2 --+--> CoopDetect-v0 --------> gym v1
-                   +--> E3b ΔAP (with twin run) -> SCooP-iT
-                   +--> Q1-Q4 training ---------> SCooP
-twin run of coop_2 ----> E3b scan agreement --> SCooP-iT; twin open loop -> gym v1
-positional link + out-of-run check ------------> closed-loop twin --------> extension
-SCooP-iT on arXiv -----------------------------> SCooP submission (cites it)
+A (compute) ────────────────────────────────▶ E1, E2, E4 mode, E5, IX CommSchedule
+B1 (session) ───────────────────────────────▶ E3a, E4 day, sniffer bias
+C (labels coop_2) ──┬──▶ F (replay bench) ──▶ E3b dAP, testing policies
+                    └──▶ SCooP Q1-Q4
+D (Isaac world) ──┬──▶ E3b scans
+E (conditions)  ──┴──▶ G (OcclusionHandoff: train) ──▶ test on F ──▶ B2 deploy ──▶ E3c
+SCooP-iT on arXiv ──────────────────────────▶ SCooP submission
 ```
 
-Labels are the shared bottleneck. They unlock E3b, `CoopDetect-v0` and the
-whole dataset paper, so start them early (`rosbag_to_opv2v`: `label_static`
-for static objects, by hand for moving ones).
+The critical path to a complete SCooP-iT: C, then D and E, then G, then B2. Labels and the Isaac world can start in parallel today.
 
-## Order of work
+## Milestones (in order; add dates once deadlines are known)
 
-### Phase 1: SCooP-iT, compute only (no new data)
+| M | Done when | Paper sections it completes |
+|---|---|---|
+| M1 | Stream A finished; cross-pass figure decided | IV, V, VIII (E1, E2, E4 mode, E5), IX CommSchedule |
+| M2 | B1 recorded and compared | VIII E3a, E4; abstract and contribution 3 |
+| M3 | coop_2 labelled; replay bench reads frames | VIII E3b dAP (with M4) |
+| M4 | Isaac world of coop_2 runs; conditions and place-indexed link fitted and checked | VIII E3b; IX world table |
+| M5 | `OcclusionHandoff` trained in the twin and tested on the recordings | IX demonstrations |
+| M6 | B2: deployed on the testbed, compared with the Gym | VIII E3c; abstract; conclusion |
+| M7 | Condensed to length, figures done, Table II verified, no `\todo` | submission; arXiv; release pipeline and `scoop_gym` |
 
-From `scoop_testbed_iotj/DIRECTION.md` 5A:
-1. confirm which pass each number comes from;
-2. the E1 terms and the headroom figure;
-3. the E2 confidence interval;
-4. the E4 mode distance;
-5. the E5 best-fit baseline;
-6. the calibration rows;
-7. the error budget;
-8. `CommSchedule-v0` on coop_2 and survey_1 (the Sec. IX numbers).
+## Decision points
 
-Also decide the cross-pass figure: rerun `check.py maps --align` for a cm value, or quote 96.4 % within 10 cm.
-
-### Phase 2: one field session
-
-- Before it, build the payload node and `twin_run.py`.
-- Record A1/B1 survey, A2/B2 cooperation, and a probe-off run on the survey_1 route.
-- This gives E3a, the E4 day half, the E5 control and the sniffer bias.
-
-### Phase 3: labels on coop_2
-
-- Static boxes in the map frame, plus moving objects by hand.
-- Check them projected into every agent (`show_labels.py`).
-- This is the first labelled sequence of SCooP, and the input to E3b and `CoopDetect-v0`.
-
-### Phase 4: the twin
-
-1. `make_scenario.py` from coop_2, then `run_isaac.py`.
-2. Scan-to-map agreement of synthetic against real scans at the same poses (E3b, first half).
-3. With Phase 3: one cooperative detector on real and twin data, under the ideal and logged channels (E3b, second half).
-
-### Phase 5: submit SCooP-iT
-
-- Condense from 16 pages to IoT-J's length (check the Author Portal policy).
-- Fig. 1, the headroom, clearance and simgap figures.
-- Re-check Table II against the PDFs.
-- Remove every `\todo`.
-- Post to arXiv at submission.
-- Release the pipeline and `scoop_gym` v0 with it.
-
-### SCooP track (runs alongside, after Phase 3)
-
-1. Remaining collection sessions (fill `tables/sessions.tex`).
-2. Labels at scale.
-3. Release format and devkit.
-4. Q1 transfer, Q2 heterogeneity, Q3 gain strata and Q4 link cost (training in the appendix tables).
-5. Failure cases.
-
-Submit after SCooP-iT is on arXiv.
-
-### Gym track
-
-- **v0, done:** `CommSchedule-v0` in replay mode.
-- **v1, in SCooP-iT (Sec. IX):**
-  - `CoopDetect-v0`: needs Phase 3 and recorded frames through the devkit.
-  - The twin in open loop: needs Phase 4 (the same run as E3b).
-- **v2, the extension:**
-  - the positional link (survey radio map plus contention mode), validated out of run;
-  - robot control in Isaac instead of pose replay;
-  - `ConnectedCoverage-v0` and `RelayPlacement-v0`;
-  - agents: rule-based, RL, and VLM;
-  - the headline experiment: success under the ideal bus against the measured link, with misses attributed by cause.
+- **After M5, if the deployment can't happen in time:** submit with E3c described and run but its result marked as the next step, and the Gym validated by E3b alone. Weaker, but complete.
+- **If E3b's appearance gap is large for cameras:** keep camera tasks out of the paper and lead with LiDAR tasks.
+- **If the place-indexed link fails its out-of-run check:** closed-loop tasks use the fitted link (statistics without place), and the paper says so.
 
 ## Open decisions
 
-- Deadlines for each submission. Phases 1-5 are in order, but no dates are set.
-- The cross-pass figure (Phase 1).
-- The venue of the extension (when the closed loop works).
-- The project name: keep SCooP or pick a Kimera-style name (see the 24 Oct discussion).
+- Deadlines for each submission.
+- The cross-pass figure (M1).
+- The venue of the extension.

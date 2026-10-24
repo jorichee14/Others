@@ -1,0 +1,45 @@
+% Abstract and index terms.
+% Writing order: real-world problem -> what SCooP-iT captures -> how it is
+% validated -> what others can do with it (replay, Gym) -> results.
+\begin{abstract}
+Methods for teams of robots and fixed sensors that share what they
+perceive are developed on vehicle datasets and in simulation, yet a
+real indoor team differs on every layer at once: its sensors fall short
+and differ between agents, it has no GNSS to tell where an agent was,
+and its agents share one contended wireless network. We present
+SCooP-iT, a real-world indoor testbed and environment in which a
+heterogeneous team, a LiDAR robot, an RGB-D cart, and camera--radar
+infrastructure masts, is captured on one clock and in one metric frame
+without motion capture or GNSS. Sensing and communication are recorded
+together: every inter-agent link is logged on the sensors' clock as
+link state at \SI{5}{\hertz}, round-trip time at \SI{100}{\hertz},
+goodput in \SI{4}{\second} windows, and Wi-Fi channel state at
+\SIrange{104}{141}{\hertz}; clocks agree to below
+\SI{1}{\milli\second}; and a self-built reference map with a fiducial
+chain places every agent to \SI{10}{\milli\metre} (LiDAR robot) and
+\SIrange{31}{54}{\milli\metre} (RGB-D cart) on held-out fiducials. The
+capture is offered for use in three ways: the recordings as a test
+bench into which any collaborative method is replayed against the link
+the agents actually had; SCooP-iT Gym, a closed-loop multi-agent
+environment with a Gymnasium interface whose world, sensors, link, and
+failure conditions are built from the recordings; and the testbed
+itself, on which a policy trained in the Gym is deployed and checked.
+Experiments show that the testbed's own errors are 6--101$\times$
+smaller than the effects it measures; that its map predicts the radio
+signal it logs although neither produced the other (Spearman
+$\rho = 0.60$, \SI{5.4}{\decibel} clear-to-obstructed drop);
+\todo{that replay reproduces live arrivals and the Gym's world
+reproduces the real scans, link, and task}; and that the real world
+hides what simulation shows as solved: under contention, a link whose
+round trip of \SIrange{25}{33}{\milli\second} sits well inside one
+\SI{100}{\milli\second} LiDAR frame still delivers only
+\SIrange{59}{68}{\percent} of \SI{1.5}{\mega\byte} messages within it,
+against 100\,\% under the synthetic channels of prior benchmarks.
+SCooP-iT is the acquisition platform of the SCooP dataset.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Internet of Robotic Things, testbed, embodied multi-agent perception,
+cooperative perception, digital twin, multi-agent environment, Wi-Fi,
+channel state information, time synchronization, ground truth
+\end{IEEEkeywords}
