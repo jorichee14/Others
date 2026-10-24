@@ -262,7 +262,16 @@ def check_with_opencood(root: str, findings: Findings, config_path=None,
         from opencood.data_utils.datasets.late_fusion_dataset import LateFusionDataset
         from opencood.hypes_yaml.yaml_utils import load_yaml as load_opencood_yaml
     except Exception as error:                          # noqa: BLE001
-        findings.warn(f"--with-opencood skipped, OpenCOOD not importable here: {error}")
+        hint = ""
+        if "box_overlaps" in str(error):
+            hint = (" — that is OpenCOOD's cython extension, built in place by "
+                    "`python setup.py build_ext --inplace` in the repo root; "
+                    "training needs it too")
+        elif isinstance(error, ImportError) and "opencood" in str(error):
+            hint = (" — a develop install resolves only from its own repo, so run "
+                    "this with PYTHONPATH set to the directory holding opencood/")
+        findings.warn(
+            f"--with-opencood skipped, OpenCOOD not importable here: {error}{hint}")
         return
 
     if not config_path:
