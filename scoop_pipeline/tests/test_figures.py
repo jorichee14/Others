@@ -54,10 +54,11 @@ def run_figures(d, work, t):
         "board_2": {"method": "fused_sections", "std_mm": 16.1, "max_mm": 23.1},
         "board_3": {"method": "fused_sections", "std_mm": 21.7, "max_mm": 54.3},
         "board_4": {"method": "fused_sections", "std_mm": 12.2, "max_mm": 29.3}}},
-              open(os.path.join(out, "anchor_frame.json"), "w"))
+              open(os.path.join(out, "boards_run.json"), "w"))
     cfg = os.path.join(d, "cfg_run.json")
     json.dump({"dataset": {"bag": os.path.join(work, "bag"), "out_dir": out,
-                           "machine": "mobile_2", "reference_pass": "mapping"},
+                           "machine": "mobile_2", "reference_pass": "mapping",
+                           "name": "run"},
                "04_reference": {"out_dir": "reference", "max_shift": 0.3, "rounds": 3},
                "05_anchor": {"frame_out": "anchor_frame.json",
                              "fuse": {"max_std_mm": 20.0,

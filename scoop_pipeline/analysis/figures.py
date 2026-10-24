@@ -224,10 +224,8 @@ def fig_reference(ctx):
     c = P.cfg.get("04_reference") or {}
     gate = float(c.get("max_shift", 0.5)) * 100
     s05 = P.stage("05_anchor") if "05_anchor" in P.cfg else {}
-    boards = {}
-    bf = s05.get("frame_out")
-    if bf and os.path.isfile(bf):
-        boards = (json.load(open(bf)).get("boards") or {})
+    bf = P.outp("boards_{tag}.json")            # 05 on a run writes here, not frame_out
+    boards = P.run_boards()
     fuse = (s05.get("fuse") or {})
     g_std = float(fuse.get("max_std_mm", 20.0))
     g_by = fuse.get("max_std_mm_by_board") or {}
