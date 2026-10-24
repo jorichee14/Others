@@ -249,6 +249,77 @@ def _boxes_in_range(vehicles: dict, lidar_pose, limits) -> int:
     return inside
 
 
+def range_from_config(config_path: str):
+    """``cav_lidar_range`` from a hypes yaml, read without OpenCOOD.
+
+    Plain ``yaml.safe_load`` is enough and deliberate: this runs before the
+    ``--with-opencood`` import, so the range is available even when OpenCOOD
+    itself will not import.  The key sits at the top level in every config
+    shipped with OpenCOOD and its forks, with ``preprocess.cav_lidar_range`` as
+    the anchored alias.
+    """
+    try:
+        with open(os.path.expanduser(config_path), encoding="utf-8") as handle:
+            params = yaml.safe_load(handle) or {}
+    except Exception:                                   # noqa: BLE001
+        return None
+    for value in (params.get("cav_lidar_range"),
+                  (params.get("preprocess") or {}).get("cav_lidar_range"),
+                  (params.get("postprocess") or {}).get("gt_range")):
+        if isinstance(value, (list, tuple)) and len(value) == 6:
+            return [float(v) for v in value]
+    return None
+
+
+def check_config_demands(root: str, config_path: str, findings: Findings) -> None:
+    """What the config needs from the tree, beyond what the tree alone can show.
+
+    A structurally perfect OPV2V tree still fails to train if the config asks
+    for a modality or a sidecar file the conversion never wrote.  These are
+    cheap to check here and expensive to discover at epoch 0.
+    """
+    try:
+        with open(os.path.expanduser(config_path), encoding="utf-8") as handle:
+            params = yaml.safe_load(handle) or {}
+    except Exception as error:                          # noqa: BLE001
+        findings.warn(f"could not read {config_path} for its data demands: {error}")
+        return
+
+    sources = params.get("input_source") or []
+    if "camera" in sources:
+        images = []
+        for scenario in scenario_dirs(root):
+            for agent in sorted(os.listdir(scenario)):
+                folder = os.path.join(scenario, agent)
+                if os.path.isdir(folder):
+                    images += [f for f in os.listdir(folder)
+                               if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+                    break
+            break
+        if not images:
+            findings.error(
+                f"the config's input_source is {sources}, so the model reads camera "
+                f"images, but the first agent folder under {root} holds none — the "
+                f"camera branch would get nothing")
+
+    assignment = ((params.get("heter") or {}).get("assignment_path"))
+    if assignment:
+        candidates = [assignment,
+                      os.path.join(os.path.dirname(root.rstrip("/")), 
+                                   os.path.basename(assignment)),
+                      os.path.join(root, os.path.basename(assignment))]
+        if not any(os.path.exists(os.path.expanduser(c)) for c in candidates):
+            findings.error(
+                f"the config needs heter.assignment_path {assignment!r}, which maps "
+                f"each agent to a modality; nothing of that name exists beside this "
+                f"tree, so the heter dataset cannot assign modalities")
+
+    classes = ((params.get("postprocess") or {}).get("class_names")) or []
+    if classes:
+        findings.note(f"the config declares {len(classes)} classes: "
+                      f"{', '.join(str(c) for c in classes)}")
+
+
 def check_with_opencood(root: str, findings: Findings, config_path=None,
                         samples: int = 3) -> None:
     """Build OpenCOOD's own dataset over the tree and pull frames through it.
@@ -259,7 +330,7 @@ def check_with_opencood(root: str, findings: Findings, config_path=None,
     reader is whatever the installed version does, not whatever its docs say.
     """
     try:
-        from opencood.data_utils.datasets.late_fusion_dataset import LateFusionDataset
+        from opencood.data_utils.datasets import build_dataset
         from opencood.hypes_yaml.yaml_utils import load_yaml as load_opencood_yaml
     except Exception as error:                          # noqa: BLE001
         hint = ""
@@ -293,11 +364,16 @@ def check_with_opencood(root: str, findings: Findings, config_path=None,
     for key in ("root_dir", "validate_dir", "test_dir"):
         params[key] = root
 
+    # build_dataset honours the config's own fusion.core_method, so an
+    # intermediate-fusion or heterogeneous config is exercised through the class
+    # it will really train with. Hardcoding LateFusionDataset here used to test a
+    # code path the run never takes.
+    method = ((params.get("fusion") or {}).get("core_method")) or "?"
     try:
-        dataset = LateFusionDataset(params, visualize=False, train=False)
+        dataset = build_dataset(params, visualize=False, train=False)
     except Exception as error:                          # noqa: BLE001
-        findings.error(f"OpenCOOD's LateFusionDataset refused this tree: "
-                       f"{type(error).__name__}: {error}")
+        findings.error(f"OpenCOOD refused this tree under fusion.core_method "
+                       f"{method!r}: {type(error).__name__}: {error}")
         return
 
     count = len(dataset)
@@ -305,7 +381,8 @@ def check_with_opencood(root: str, findings: Findings, config_path=None,
         findings.error("OpenCOOD built a dataset of length 0 over this tree — it "
                        "found no usable frames")
         return
-    findings.note(f"OpenCOOD LateFusionDataset built over {root}: {count} samples")
+    findings.note(f"OpenCOOD built {type(dataset).__name__} "
+                  f"(fusion.core_method {method!r}) over {root}: {count} samples")
 
     indices = sorted({0, count // 2, count - 1})[:max(1, samples)]
     for index in indices:
@@ -346,6 +423,21 @@ def main() -> int:
                         help="detection range used for the GT-in-range count")
     args = parser.parse_args()
 
+    # The GT-in-range count is only meaningful against the range the model is
+    # actually built with. OPV2V's outdoor GT_RANGE is 140 m deep and ours is
+    # 22 m deep and forward-only; counting with the wrong one reports every box
+    # as in range and proves nothing.
+    if args.opencood_config and args.range == DEFAULT_RANGE:
+        config_range = range_from_config(args.opencood_config)
+        if config_range:
+            args.range = config_range
+            print(f"detection range from {os.path.basename(args.opencood_config)}: "
+                  f"{config_range}")
+        else:
+            print(f"! {args.opencood_config} declares no cav_lidar_range; counting "
+                  f"GT against OPV2V's outdoor default, which is almost certainly "
+                  f"not what you train with")
+
     root = os.path.expanduser(args.root)
     if not os.path.isdir(root):
         print(f"not a directory: {root}", file=sys.stderr)
@@ -365,6 +457,8 @@ def main() -> int:
         print(f"  {summary['name']:<34} agents={summary['agents']} "
               f"frames={summary['frames']}")
 
+    if args.opencood_config:
+        check_config_demands(root, args.opencood_config, findings)
     if args.with_opencood:
         check_with_opencood(root, findings, args.opencood_config)
 
