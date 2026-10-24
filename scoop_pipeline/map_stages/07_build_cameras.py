@@ -41,6 +41,22 @@ Each camera entry now declares a "source":
       check (board_check_mm / _deg in the output). If the scans do not fit, or
       the robot moved, the board placement is used and 07 says why.
 
+      When the camera never sees its board -- a parked robot that faces none --
+      this falls back to "reloc" below, which needs no board at all.
+
+  "source": "reloc"            (NEW)
+      The same parked robot, placed from its own LiDAR alone: a window of its
+      scans is searched over the whole map (the 2-D wall correlation and ICP of
+      lidar_reloc, the same machinery 03 uses for the moving robot), checked
+      for fit and uniqueness, and that pose seeds the per-scan registration and
+      averaging of "lidar" above. No board, no trajectory, no extrinsic YAML --
+      only the robot's own scans and its LiDAR -> camera calibration from the
+      bag's /tf_static.
+
+      The 2-D search assumes the robot is roughly level (ICP then takes the
+      rest, up to "max_tilt_deg"). Knobs go under "reloc" in the camera entry
+      and default to lidar_reloc's.
+
   python3 07_build_cameras.py [pipeline_config.json]
 """
 import os
@@ -215,6 +231,158 @@ LIDAR_ICP = dict(target_voxel=0.05, scan_voxel=0.10, plane_voxel=0.4, planarity=
                  plane_huber=0.10, prior_beta=0.05, min_corr=200)       # 04's defaults
 
 
+def lidar_frame_of(cam, ctx):
+    """(bag, points topic, LiDAR frame, T_lidar_child) of a parked robot, or
+    None with the reason printed."""
+    import pass_tf
+    from scoop import bag as sbag, tftree
+    child, topic = cam["child_frame"], cam["points_topic"]
+    bag = cam.get("lidar_bag") or ctx["default_bag"]
+    lidar = pass_tf._frame_id([bag], topic)
+    if lidar is None:
+        print("  ! no %s in %s" % (topic, bag))
+        return None
+    try:
+        return bag, topic, lidar, tftree.static_between(lidar, child, tftree.tf_edges([bag]))
+    except sbag.BagError as e:
+        print("  ! %s" % e)
+        return None
+
+
+def pick_scans(bag, topic, n, lo, hi):
+    """n of the topic's scans, spread over the recording, as (stamp, xyz)."""
+    from scoop import bag as sbag
+    reader = sbag.open_bag(bag)
+    total = reader.topics()[topic].count
+    picks = set(np.linspace(0, max(total - 1, 0), min(n, total)).round().astype(int).tolist())
+    seen = [-1]
+
+    def pick(_stamp):                         # by message index, before decoding
+        seen[0] += 1
+        return seen[0] if seen[0] in picks else None
+    out = [(sc.stamp, np.asarray(sc.xyz, np.float64))
+           for sc in sbag.iter_scans(reader, topic, select=pick, min_range=lo, max_range=hi)]
+    return out, len(picks)
+
+
+def scans_to_map(cam, ctx, bag, topic, T_seed):
+    """n_scans of a parked robot's own scans, each registered to the map from
+    T_seed and averaged (the robot is parked, so they must agree).
+    -> (T_avg, spread, used, picked, median rms m), or None if too few fit."""
+    import importlib
+    import open3d as o3d
+    A = importlib.import_module("02b_scan_to_map")
+    c = dict(LIDAR_ICP, **(cam.get("icp") or {}))
+    print("  LiDAR %s to %s" % (topic, ctx["map_file"]))
+    pc = o3d.io.read_point_cloud(ctx["map_file"])
+    ref = A.Reference(np.asarray(pc.voxel_down_sample(float(c["target_voxel"])).points),
+                      plane_voxel=float(c["plane_voxel"]), planarity=float(c["planarity"]))
+    del pc
+    lo, hi = cam.get("range", [0.7, 25.0])
+    scans, n_picks = pick_scans(bag, topic, int(cam.get("n_scans", 10)), lo, hi)
+    Ts, fits = [], []
+    for stamp, xyz in scans:
+        pts = np.asarray(o3d.geometry.PointCloud(o3d.utility.Vector3dVector(xyz))
+                         .voxel_down_sample(float(c["scan_voxel"])).points)
+        T, n_corr, rms, _, _ = A.register(ref, pts, T_seed, c)
+        if n_corr < int(c["min_corr"]) or not np.isfinite(rms):
+            print("    scan at %.1f s: %d correspondences, no fit" % (stamp, n_corr))
+            continue
+        Ts.append(T)
+        fits.append((n_corr, rms))
+    if len(Ts) < max(3, n_picks // 2):
+        print("  ! %d of %d scans fit the map" % (len(Ts), n_picks))
+        return None
+    T_avg, _ = avg_T(Ts)
+    sp = spread(Ts, T_avg)
+    med_rms = float(np.median([f[1] for f in fits]))
+    print("  %d of %d scans registered (median %d correspondences, RMS %.1f cm) | %s"
+          % (len(Ts), n_picks, int(np.median([f[0] for f in fits])), med_rms * 100,
+             fmt_spread(sp)))
+    return T_avg, sp, len(Ts), n_picks, med_rms
+
+
+def camera_from_reloc(cam, ctx, P):
+    """"source": "reloc" (see the top): a parked robot placed from its own
+    LiDAR, searched over the whole map -- no board, no trajectory."""
+    import open3d as o3d
+    from lidar_reloc import DEFAULTS as RD, MapGrid, Scorer, register, distinct, yaw_deg
+    got = lidar_frame_of(cam, ctx)
+    if got is None:
+        print("  ! -> skipped")
+        return None
+    bag, topic, lidar, T_lc = got
+    child = cam["child_frame"]
+    c = dict(RD, **(cam.get("reloc") or {}))
+    lo, hi = cam.get("range", [0.7, 25.0])
+    n_win = int(c.get("window_scans", 10))
+    scans, _ = pick_scans(bag, topic, n_win, lo, hi)
+    if not scans:
+        print("  ! no scans on %s -> skipped" % topic)
+        return None
+    # parked: the scans stack in the LiDAR's own frame, no trajectory needed
+    win = np.vstack([xyz for _, xyz in scans])
+    print("  search %s (%s) over %s" % (topic, lidar, ctx["map_file"]))
+    print("  window: %d scans -> %d points (the robot is parked)" % (len(scans), len(win)))
+    pc = o3d.io.read_point_cloud(ctx["map_file"])
+    v = float(c["voxel"])
+    tgt = pc.voxel_down_sample(v)
+    tgt.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=v * 2.5, max_nn=30))
+    del pc
+    grid = MapGrid(np.asarray(tgt.points), float(c["grid_m"]))
+    score = Scorer(tgt)
+    cands, _ = register(win, tgt, grid, c, "parked", score)
+    if not cands:
+        print("  ! every candidate tilted the robot more than %.1f deg -> skipped "
+              "(is it level?)" % float(c["max_tilt_deg"]))
+        return None
+    T_ml, fit, rmse = cands[0]
+    print("  [fit]    %.1f %% of the window within %.0f cm of the map, rmse %.2f cm "
+          "(min %.0f %%)" % (fit * 100, float(c["fit_m"]) * 100, rmse * 100,
+                             float(c["min_fitness"]) * 100))
+    if fit < float(c["min_fitness"]):
+        print("  ! -> skipped")
+        return None
+    rival = next(((T2, f2) for T2, f2, _ in cands[1:] if distinct(T_ml, T2)), None)
+    rival_off = None
+    if rival is not None:
+        off, roff = 1.0 - fit, 1.0 - rival[1]
+        need = max(float(c["rival_ratio"]) * off, off + float(c["rival_gap"]))
+        rival_off = roff
+        print("  [unique] next distinct fit, %.1f m away, leaves %.1f %% of the window off "
+              "the map vs %.1f %% for this one (must be >= %.1f %%)"
+              % (np.linalg.norm(rival[0][:3, 3] - T_ml[:3, 3]), roff * 100, off * 100,
+                 need * 100))
+        if roff < need:
+            print("  ! a different place fits almost as well -> skipped (ambiguous)")
+            return None
+    else:
+        print("  [unique] every other candidate converged to this same fit")
+
+    got = scans_to_map(cam, ctx, bag, topic, T_ml)
+    if got is None:
+        print("  ! -> skipped")
+        return None
+    T_avg, sp, n_used, n_picks, med_rms = got
+    if sp[1] > float(cam.get("lidar_static_tol_mm", 20.0)):
+        print("  ! the scans disagree (max %.1f mm): the robot moved -> skipped "
+              "(a moving robot needs a trajectory, not a placement)" % sp[1])
+        return None
+    T_mc = T_avg @ T_lc
+    t = T_mc[:3, 3]; q = R_to_q(T_mc[:3, :3])
+    print("  map->%s from the LiDAR alone: t=%s q=%s (yaw %.2f deg)"
+          % (child, t.round(4).tolist(), q.round(5).tolist(), yaw_deg(T_avg[:3, :3])))
+    rec = {"name": cam["name"], "child_frame": child, "parent_frame": ctx["map_frame"],
+           "source": "reloc_avg", "points_topic": topic, "lidar_frame": lidar,
+           "bag": str(bag), "n_scans": n_used,
+           "reloc_fitness": round(float(fit), 4), "reloc_rmse_cm": round(rmse * 100, 2),
+           "lidar_spread_max_mm": round(sp[1], 2), "lidar_rms_cm": round(med_rms * 100, 2),
+           "translation": t.tolist(), "quaternion_xyzw": q.tolist()}
+    if rival_off is not None:
+        rec["reloc_rival_off"] = round(float(rival_off), 4)
+    return rec
+
+
 def camera_from_lidar(cam, ctx, P):
     """"source": "lidar" (see the top): the board placement, then the robot's
     own scans registered to the map from it; the board stays as the check."""
@@ -225,8 +393,9 @@ def camera_from_lidar(cam, ctx, P):
     A = importlib.import_module("02b_scan_to_map")
     rec = camera_from_board(cam, ctx)
     if rec is None:
-        print("  ! no board placement to start the LiDAR registration from -> skipped")
-        return None
+        print("  no board placement to start the LiDAR registration from -> "
+              "placing the robot from its own LiDAR instead (source 'reloc')")
+        return camera_from_reloc(cam, ctx, P)
     child, topic = cam["child_frame"], cam["points_topic"]
     bag = cam.get("lidar_bag") or ctx["default_bag"]
     lidar = pass_tf._frame_id([bag], topic)
@@ -240,43 +409,11 @@ def camera_from_lidar(cam, ctx, P):
         return rec
     T_mc_board = xyzquat_to_T(list(rec["translation"]) + list(rec["quaternion_xyzw"]))
     T_seed = T_mc_board @ np.linalg.inv(T_lc)              # map -> LiDAR, from the board
-    c = dict(LIDAR_ICP, **(cam.get("icp") or {}))
-
-    ref_map = ctx["map_file"]
-    print("  LiDAR %s (%s) to %s" % (topic, lidar, ref_map))
-    pc = o3d.io.read_point_cloud(ref_map)
-    ref = A.Reference(np.asarray(pc.voxel_down_sample(float(c["target_voxel"])).points),
-                      plane_voxel=float(c["plane_voxel"]), planarity=float(c["planarity"]))
-    del pc
-    reader = sbag.open_bag(bag)
-    total = reader.topics()[topic].count
-    n = int(cam.get("n_scans", 10))
-    picks = set(np.linspace(0, max(total - 1, 0), min(n, total)).round().astype(int).tolist())
-    lo, hi = cam.get("range", [0.7, 25.0])
-    seen = [-1]
-
-    def pick(_stamp):                         # by message index, before decoding
-        seen[0] += 1
-        return seen[0] if seen[0] in picks else None
-    Ts, fits = [], []
-    for scan in sbag.iter_scans(reader, topic, select=pick, min_range=lo, max_range=hi):
-        pts = np.asarray(o3d.geometry.PointCloud(o3d.utility.Vector3dVector(
-            scan.xyz.astype(np.float64))).voxel_down_sample(float(c["scan_voxel"])).points)
-        T, n_corr, rms, _, _ = A.register(ref, pts, T_seed, c)
-        if n_corr < int(c["min_corr"]) or not np.isfinite(rms):
-            print("    scan at %.1f s: %d correspondences, no fit" % (scan.stamp, n_corr))
-            continue
-        Ts.append(T)
-        fits.append((n_corr, rms))
-    if len(Ts) < max(3, len(picks) // 2):
-        print("  ! %d of %d scans fit the map -> the board placement is kept"
-              % (len(Ts), len(picks)))
+    got = scans_to_map(cam, ctx, bag, topic, T_seed)
+    if got is None:
+        print("  ! the scans do not fit the map -> the board placement is kept")
         return rec
-    T_avg, _ = avg_T(Ts)
-    sp = spread(Ts, T_avg)
-    print("  %d of %d scans registered (median %d correspondences, RMS %.1f cm) | %s"
-          % (len(Ts), len(picks), int(np.median([f[0] for f in fits])),
-             np.median([f[1] for f in fits]) * 100, fmt_spread(sp)))
+    T_avg, sp, n_used, n_picks, med_rms = got
     T_mc = T_avg @ T_lc
     d_mm = float(np.linalg.norm(T_mc[:3, 3] - T_mc_board[:3, 3]) * 1000)
     d_deg = ang_deg(T_mc[:3, :3], T_mc_board[:3, :3])
@@ -287,16 +424,16 @@ def camera_from_lidar(cam, ctx, P):
         print("  ! the scans disagree (max %.1f mm): the robot moved? -> the board "
               "placement is kept; the scans' average is %.1f mm / %.2f deg from it "
               "(t=%s), good to their spread" % (sp[1], d_mm, d_deg, t.round(4).tolist()))
-        rec.update({"n_scans": len(Ts), "lidar_spread_max_mm": round(sp[1], 2),
-                    "lidar_rms_cm": round(float(np.median([f[1] for f in fits])) * 100, 2),
+        rec.update({"n_scans": n_used, "lidar_spread_max_mm": round(sp[1], 2),
+                    "lidar_rms_cm": round(med_rms * 100, 2),
                     "board_check_mm": round(d_mm, 1), "board_check_deg": round(d_deg, 3),
                     "lidar_translation": t.tolist(), "lidar_quaternion_xyzw": q.tolist()})
         return rec
     print("  map->%s from the LiDAR: t=%s q=%s; the board placement is %.1f mm / %.2f deg "
           "from it" % (child, t.round(4).tolist(), q.round(5).tolist(), d_mm, d_deg))
     rec.update({"source": "lidar_avg", "points_topic": topic, "lidar_frame": lidar,
-                "n_scans": len(Ts), "lidar_spread_max_mm": round(sp[1], 2),
-                "lidar_rms_cm": round(float(np.median([f[1] for f in fits])) * 100, 2),
+                "n_scans": n_used, "lidar_spread_max_mm": round(sp[1], 2),
+                "lidar_rms_cm": round(med_rms * 100, 2),
                 "board_check_mm": round(d_mm, 1), "board_check_deg": round(d_deg, 3),
                 "board_translation": rec["translation"],
                 "board_quaternion_xyzw": rec["quaternion_xyzw"],
@@ -394,9 +531,11 @@ def main():
             rec = camera_from_board(cam, ctx)
         elif src == "lidar":
             rec = camera_from_lidar(cam, ctx, P)
+        elif src == "reloc":
+            rec = camera_from_reloc(cam, ctx, P)
         else:
-            raise SystemExit("camera '%s': unknown source '%s' "
-                             "(use 'extrinsic_yaml', 'board' or 'lidar')" % (cam["name"], src))
+            raise SystemExit("camera '%s': unknown source '%s' (use 'extrinsic_yaml', "
+                             "'board', 'lidar' or 'reloc')" % (cam["name"], src))
         if rec is not None:
             out.append(rec)
 

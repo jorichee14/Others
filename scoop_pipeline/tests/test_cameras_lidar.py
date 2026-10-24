@@ -10,6 +10,8 @@ calibration in the bag's /tf_static. The board placement is given 15 cm and
 
   parked   the camera from the LiDAR within 1 cm / 0.1 deg of the truth, the
            board placement reported ~15 cm / 3 deg from it;
+  no board the camera never sees one: the robot is placed from its own LiDAR
+           searched over the whole map ("reloc"), same accuracy, no board;
   moving   the robot drives during the scans: the scans disagree, the board
            placement is kept.
 
@@ -57,7 +59,7 @@ def bag_of(path, poses):
     w.close()
 
 
-def run_case(tmp, poses, T_true_cam):
+def run_case(tmp, poses, T_true_cam, board=True):
     import open3d as o3d
     mp = os.path.join(tmp, "map.pcd")
     if not os.path.exists(mp):
@@ -71,10 +73,14 @@ def run_case(tmp, poses, T_true_cam):
                  "source": "board_avg", "board": "rs_anchor",
                  "translation": T_board[:3, 3].tolist(),
                  "quaternion_xyzw": Rotation.from_matrix(T_board[:3, :3]).as_quat().tolist()}
-    C.camera_from_board = lambda cam, ctx: dict(board_rec)       # the board part is 07's own
+    # the board part is 07's own; `board` False is a camera that never sees one
+    C.camera_from_board = lambda cam, ctx: (dict(board_rec) if board else None)
     cam = {"name": "realsense", "child_frame": CAM, "source": "lidar", "board": "rs_anchor",
            "points_topic": TOPIC, "n_scans": 8}
-    rec = C.camera_from_lidar(cam, {"default_bag": bag, "map_file": mp}, None)
+    ctx = {"default_bag": bag, "map_file": mp, "map_frame": "map"}
+    rec = C.camera_from_lidar(cam, ctx, None)
+    if rec is None:
+        return None, float("nan"), float("nan")
     T = np.eye(4)
     T[:3, :3] = Rotation.from_quat(rec["quaternion_xyzw"]).as_matrix()
     T[:3, 3] = rec["translation"]
@@ -98,6 +104,13 @@ def main():
         if not (130 < rec.get("board_check_mm", 0) < 170 and 2.5 < rec.get("board_check_deg", 0) < 3.5):
             fails.append("parked: board check %s mm / %s deg, want ~150 / 3"
                          % (rec.get("board_check_mm"), rec.get("board_check_deg")))
+        # no board in sight: the robot is placed from its own LiDAR alone
+        rec, e_mm, e_deg = run_case(tmp, [T_lidar] * 20, T_cam, board=False)
+        print("no board: %s, %.1f mm / %.3f deg from the truth, %.0f %% of the window "
+              "on the map" % (rec["source"], e_mm, e_deg, 100 * rec.get("reloc_fitness", 0)))
+        if rec["source"] != "reloc_avg" or e_mm > 10 or e_deg > 0.1:
+            fails.append("no board: %s %.1f mm / %.3f deg" % (rec["source"], e_mm, e_deg))
+
         moving = [R.rotz(40.0 + 2 * i, (1.5 + 0.15 * i, -2.0, 0.6)) for i in range(20)]
         rec, _, _ = run_case(tmp, moving, T_cam)
         print("moving: %s" % rec["source"])
