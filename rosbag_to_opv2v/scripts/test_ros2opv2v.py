@@ -2021,6 +2021,27 @@ def test_ground_level_finds_the_floor_not_the_ceiling():
     assert abs(z + 1.05) < 0.05, (z, info)
 
 
+def test_a_thin_floor_beside_an_object_reads_as_its_seat():
+    """Why label_static.py --floor-pcd exists. A chair's seat is a broad flat
+    surface; where the run's own cloud is thin on the floor around it (glossy
+    granite, the chair itself occluding), the mode of the low band lands on the
+    seat and every box is cut off at seat height. A cloud that carries the
+    reference map's floor does not have that problem."""
+    from ros2opv2v.statics import ground_level
+    rng = np.random.default_rng(11)
+    seat = np.column_stack([rng.uniform(-0.3, 0.3, 1400), rng.uniform(-0.3, 0.3, 1400),
+                            rng.normal(-0.42, 0.01, 1400)])          # 0.45 m up
+    thin_floor = np.column_stack([rng.uniform(-2, 2, 200), rng.uniform(-2, 2, 200),
+                                  rng.normal(-0.87, 0.01, 200)])
+    z_thin, _ = ground_level(np.vstack([seat, thin_floor]))
+    assert abs(z_thin + 0.42) < 0.05, z_thin                        # the seat wins
+
+    dense_floor = np.column_stack([rng.uniform(-2, 2, 9000), rng.uniform(-2, 2, 9000),
+                                   rng.normal(-0.87, 0.01, 9000)])
+    z_dense, _ = ground_level(np.vstack([seat, dense_floor]))
+    assert abs(z_dense + 0.87) < 0.05, z_dense                      # the floor wins
+
+
 def test_cluster_at_picks_the_object_not_its_neighbour():
     from ros2opv2v.statics import cluster_at
     rng = np.random.default_rng(4)

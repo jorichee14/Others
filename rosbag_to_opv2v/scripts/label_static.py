@@ -730,6 +730,11 @@ def main() -> int:
                              "there, length, width, height in metres, yaw in degrees (0). For "
                              "a small object against a wall that no cluster separates from it; "
                              "x,y from show_labels.py --locate, read off a camera image")
+    parser.add_argument("--floor-pcd", default=None, metavar="PATH",
+                        help="measure the floor from THIS cloud instead of --pcd: the run's "
+                             "own cloud can be too thin on the floor beside an object for the "
+                             "mode to find it (a merged cloud with the reference map's floor "
+                             "is dense everywhere). Only the ground is taken from it")
     parser.add_argument("--floor-z", type=float, default=None,
                         help="the floor's z in the map frame, instead of the cloud's histogram mode")
     parser.add_argument("--local-floor-max-offset", type=float, default=0.5,
@@ -770,8 +775,17 @@ def main() -> int:
               % (len(cloud), lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]))
         print("  (pass --dataset to verify this cloud is in the dataset's frame)")
 
+    floor_cloud = None
+    if args.floor_pcd:
+        floor_cloud = read_cloud_xyz(os.path.expanduser(args.floor_pcd),
+                                     max_points=args.max_points)
+        print("floor cloud : %d points from %s (the ground is taken from this one)"
+              % (len(floor_cloud), args.floor_pcd))
     if args.floor_z is not None:
         ground_z, ginfo = float(args.floor_z), {"method": "--floor-z"}
+    elif floor_cloud is not None:
+        ground_z, ginfo = ground_level(floor_cloud)
+        ginfo = dict(ginfo, method=ginfo.get("method", "?") + " of --floor-pcd")
     else:
         ground_z, ginfo = ground_level(cloud)
     print("\nfloor       : z = %+.3f m in the map frame  (%s)" % (ground_z, ginfo["method"]))
@@ -907,7 +921,11 @@ def main() -> int:
         # no floor points left, and the local estimate would then take the
         # object's own base for the ground.
         if args.local_floor_radius > 0 and args.floor_z is None:
-            around = local[np.linalg.norm(local[:, :2] - seed[:2], axis=1) <= args.local_floor_radius]
+            # from --floor-pcd when given: the object's own seat or table top is
+            # a broad flat surface, and in a cloud whose floor is thin beside it
+            # the mode lands on THAT and the box is cut off at seat height
+            src = floor_cloud if floor_cloud is not None else local
+            around = src[np.linalg.norm(src[:, :2] - seed[:2], axis=1) <= args.local_floor_radius]
             # only surfaces near the cloud's own floor count. A stairwell, a
             # sunken lobby or a doorway to a lower level sits within a couple
             # of metres of plenty of objects, and taking ITS surface as the
@@ -999,6 +1017,9 @@ def main() -> int:
         box["source"] = {"pcd": os.path.abspath(args.pcd),
                          "seed": [round(float(v), 3) for v in seed],
                          "cluster": cinfo, "ground_z": round(ground_z, 4),
+                         "floor_here": round(float(floor_here), 4),
+                         "floor_pcd": os.path.abspath(os.path.expanduser(args.floor_pcd))
+                         if args.floor_pcd else None,
                          "ceiling": args.ceiling}
         width, length, height = (2 * box["extent"][1], 2 * box["extent"][0],
                                  2 * box["extent"][2])
