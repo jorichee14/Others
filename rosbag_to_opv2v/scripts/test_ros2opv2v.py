@@ -2042,6 +2042,33 @@ def test_a_thin_floor_beside_an_object_reads_as_its_seat():
     assert abs(z_dense + 0.87) < 0.05, z_dense                      # the floor wins
 
 
+def test_the_floor_comes_from_the_path_when_the_cloud_cannot_show_it():
+    """A polished floor returns almost nothing except straight under the
+    sensor. The robot rolls on it, so its own height gives the ground where a
+    density vote cannot -- lod3dgs.py's measurement, ported for the labeller."""
+    from ros2opv2v.statics import floor_under, sensor_height
+    rng = np.random.default_rng(12)
+    # the path, 1.05 m over a floor at -0.87 that dips 0.2 m along the way
+    x = np.linspace(-10, 10, 400)
+    floor = -0.87 - 0.2 * (x > 0)
+    poses = np.column_stack([x, np.zeros_like(x), floor + 1.05])
+    # the floor is sampled only under the path, 0.3 m either side
+    under = np.column_stack([
+        np.repeat(x, 30), rng.uniform(-0.3, 0.3, 400 * 30),
+        np.repeat(floor, 30) + rng.normal(0, 0.01, 400 * 30)])
+    # and a dense seat 0.45 m up, 2 m off the path, which would win any vote
+    seat = np.column_stack([rng.uniform(4.7, 5.3, 6000), rng.uniform(1.7, 2.3, 6000),
+                            rng.normal(-1.07 + 0.45, 0.01, 6000)])
+    cloud = np.vstack([under, seat])
+    h, n = sensor_height(cloud, poses)
+    assert abs(h - 1.05) < 0.03, (h, n)
+    here, away = floor_under(poses, h, [5.0, 2.0])      # beside the seat, past the dip
+    assert abs(here - (-1.07)) < 0.03, (here, away)
+    assert away < 2.5, away
+    there, _ = floor_under(poses, h, [-5.0, 0.0])       # before it
+    assert abs(there - (-0.87)) < 0.03, there
+
+
 def test_cluster_at_picks_the_object_not_its_neighbour():
     from ros2opv2v.statics import cluster_at
     rng = np.random.default_rng(4)

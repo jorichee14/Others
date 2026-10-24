@@ -55,7 +55,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ros2opv2v.statics import (StaticsError, cluster_at, fit_box,      # noqa: E402
                                footprint_corners, ground_level,
-                               points_in_box, read_cloud_xyz, seed_report,
+                               floor_under, points_in_box, read_cloud_xyz,
+                               sensor_height, seed_report,
                                without_structure)
 from ros2opv2v.preview import Canvas, height_ramp                      # noqa: E402
 from ros2opv2v.geometry import x_to_world                              # noqa: E402
@@ -730,6 +731,12 @@ def main() -> int:
                              "there, length, width, height in metres, yaw in degrees (0). For "
                              "a small object against a wall that no cluster separates from it; "
                              "x,y from show_labels.py --locate, read off a camera image")
+    parser.add_argument("--floor-traj", default=None, metavar="PATH.tum",
+                        help="the floor under each object from the robot's own path: it rolls "
+                             "on the floor, so the nearest pose's height less the sensor's "
+                             "height above it IS the ground there. Beats any density vote on "
+                             "a polished floor, which returns little except straight under the "
+                             "sensor (the measurement lod3dgs.py fills a floor with)")
     parser.add_argument("--floor-pcd", default=None, metavar="PATH",
                         help="measure the floor from THIS cloud instead of --pcd: the run's "
                              "own cloud can be too thin on the floor beside an object for the "
@@ -775,6 +782,12 @@ def main() -> int:
               % (len(cloud), lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]))
         print("  (pass --dataset to verify this cloud is in the dataset's frame)")
 
+    traj = None
+    if args.floor_traj:
+        traj = np.loadtxt(os.path.expanduser(args.floor_traj), ndmin=2)[:, 1:4]
+        sensor_h, n_h = sensor_height(cloud, traj)
+        print("floor path  : %d poses from %s; the sensor rode %.3f m over the floor "
+              "(measured under %d of them)" % (len(traj), args.floor_traj, sensor_h, n_h))
     floor_cloud = None
     if args.floor_pcd:
         floor_cloud = read_cloud_xyz(os.path.expanduser(args.floor_pcd),
@@ -783,6 +796,9 @@ def main() -> int:
               % (len(floor_cloud), args.floor_pcd))
     if args.floor_z is not None:
         ground_z, ginfo = float(args.floor_z), {"method": "--floor-z"}
+    elif traj is not None:
+        ground_z = float(np.median(traj[:, 2])) - sensor_h
+        ginfo = {"method": "the path's median height less the sensor's"}
     elif floor_cloud is not None:
         ground_z, ginfo = ground_level(floor_cloud)
         ginfo = dict(ginfo, method=ginfo.get("method", "?") + " of --floor-pcd")
@@ -920,7 +936,11 @@ def main() -> int:
         # guess it per object. A cloud cropped above the floor (to_ply.py) has
         # no floor points left, and the local estimate would then take the
         # object's own base for the ground.
-        if args.local_floor_radius > 0 and args.floor_z is None:
+        if traj is not None:
+            floor_here, away = floor_under(traj, sensor_h, seed)
+            print("\nfloor here  : z = %+.3f m, from the pose %.1f m away (the sensor rode "
+                  "%.3f m over the floor)" % (floor_here, away, sensor_h))
+        elif args.local_floor_radius > 0 and args.floor_z is None:
             # from --floor-pcd when given: the object's own seat or table top is
             # a broad flat surface, and in a cloud whose floor is thin beside it
             # the mode lands on THAT and the box is cut off at seat height
@@ -1020,6 +1040,8 @@ def main() -> int:
                          "floor_here": round(float(floor_here), 4),
                          "floor_pcd": os.path.abspath(os.path.expanduser(args.floor_pcd))
                          if args.floor_pcd else None,
+                         "floor_traj": os.path.abspath(os.path.expanduser(args.floor_traj))
+                         if args.floor_traj else None,
                          "ceiling": args.ceiling}
         width, length, height = (2 * box["extent"][1], 2 * box["extent"][0],
                                  2 * box["extent"][2])

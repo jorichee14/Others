@@ -294,6 +294,50 @@ def _finish_cloud(xyz: np.ndarray, max_points: int) -> np.ndarray:
     return xyz
 
 
+# ------------------------------------------------- the floor under a path ----
+def sensor_height(points: np.ndarray, poses: np.ndarray,
+                  cell: float = 0.5, samples: int = 300) -> Tuple[float, int]:
+    """How high the sensor rode above the floor, measured under its own path:
+    per sampled pose, the densest 2 cm layer of the points within cell/2 of it,
+    0.1 to 3 m below; the median over the poses.
+
+    This is scoop_pipeline/datasets/lod3dgs.py's measurement, the one its mesh
+    fills a floor with. It works where a histogram of the whole cloud does not:
+    a polished floor returns almost nothing at grazing incidence, so the floor
+    metres away from the path is thin enough for an object's own seat to
+    outvote it, while the floor directly under the sensor is at normal
+    incidence and comes back strongly.
+    """
+    lo = points[:, :2].min(0)
+    k = np.floor((points[:, :2] - lo) / cell).astype(np.int64)
+    ny = int(k[:, 1].max()) + 1
+    key = k[:, 0] * ny + k[:, 1]
+    order = np.argsort(key, kind="stable")
+    ks = key[order]
+    hs = []
+    for t in poses[np.linspace(0, len(poses) - 1, min(samples, len(poses))).astype(int)]:
+        c = np.floor((t[:2] - lo) / cell).astype(np.int64)
+        a, b = np.searchsorted(ks, [c[0] * ny + c[1], c[0] * ny + c[1] + 1])
+        z = points[order[a:b], 2]
+        z = z[(z < t[2] - 0.1) & (z > t[2] - 3.0)]
+        if len(z) < 20:
+            continue
+        cnt, e = np.histogram(z, bins=np.arange(z.min(), z.max() + 0.04, 0.02))
+        hs.append(t[2] - 0.5 * (e[np.argmax(cnt)] + e[np.argmax(cnt) + 1]))
+    if not hs:
+        raise StaticsError("no floor under the trajectory: is it the map's own track?")
+    return float(np.median(hs)), len(hs)
+
+
+def floor_under(poses: np.ndarray, height: float, xy) -> Tuple[float, float]:
+    """(floor z at xy, how far the nearest pose is). The robot rolls on the
+    floor, so its height less the sensor height IS the floor there -- no
+    density vote, and a mirror image below the floor cannot outvote it."""
+    d = np.linalg.norm(poses[:, :2] - np.asarray(xy, float)[:2], axis=1)
+    i = int(np.argmin(d))
+    return float(poses[i, 2] - height), float(d[i])
+
+
 # ---------------------------------------------------------------- ground level
 def ground_level(points: np.ndarray, bin_m: float = 0.05,
                  percentile: float = 5.0) -> Tuple[float, dict]:
