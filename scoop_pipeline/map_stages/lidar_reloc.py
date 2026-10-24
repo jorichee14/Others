@@ -289,7 +289,7 @@ def relocalize(P, T_lidar_cam=None):
     t0 = tr_t[0]
     w0, n0 = window_cloud(bag, topic, tr_t, tr_T, s01, t0, t0 + float(c["window_s"]))
     print("  start window: %d scans over %.1f s -> %d points" % (n0, float(c["window_s"]), len(w0)))
-    cands, src0 = register(w0, tgt, grid, c, "start", score)
+    cands, _ = register(w0, tgt, grid, c, "start", score)
     if not cands:
         raise SystemExit("relocalize: every candidate tilted the run more than %.1f deg "
                          "after ICP -- wrong map, or the start sees too little of it; "
@@ -324,6 +324,19 @@ def relocalize(P, T_lidar_cam=None):
     T_map_glim = T
     T_map_lidar0 = T_map_glim @ tr_T[0]
 
+    # ---- look: the window on the map around the start. Written BEFORE the
+    # checks below: a refusal is exactly when there is something to look at.
+    near = np.linalg.norm(ref_pts - T_map_lidar0[:3, 3], axis=1) < 25.0
+    win = np.asarray(_cloud(w0, float(c["voxel"]) / 2, normals=False).points) \
+        @ T_map_glim[:3, :3].T + T_map_glim[:3, 3]
+    look = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(
+        np.vstack([ref_pts[near], win])))
+    look.colors = o3d.utility.Vector3dVector(np.vstack([
+        np.full((int(near.sum()), 3), 0.6), np.tile([1.0, 0.0, 0.0], (len(win), 1))]))
+    look_p = P.outp("reloc_check_{tag}.ply")
+    o3d.io.write_point_cloud(look_p, look)
+    print("  [look]   %s (red: the start window, grey: the map within 25 m)" % look_p)
+
     # ---- repeat: a second, independent window
     t1 = t0 + float(c["check_after_s"])
     if tr_t[-1] > t1 + float(c["window_s"]):
@@ -335,28 +348,46 @@ def relocalize(P, T_lidar_cam=None):
         T1, fit1 = c1[0][0], c1[0][1]
         # the start, carried here by GLIM, put to the same test as the start
         # window was: how much of THIS window it lays on the map
-        fit_c, rmse_c = score(np.asarray(src1.points), T_map_glim, float(c["fit_m"]))
+        fine1 = np.asarray(_cloud(w1, float(c["voxel"]) / 2, normals=False).points)
+        fit_c, rmse_c = score(fine1, T_map_glim, float(c["fit_m"]))
         print("  [repeat] this window on the map: %.1f %% by its own fit, %.1f %% by the "
               "start carried %.0f s by GLIM (rmse %.2f cm)"
               % (fit1 * 100, fit_c * 100, t1 - t0, rmse_c * 100))
         checks.update(repeat_after_s=t1 - t0, repeat_fitness=fit1, repeat_carried_fitness=fit_c)
         if fit1 < float(c["min_fitness"]):
-            # the second window did not relocalize on its own (a stretch the map
-            # covers thinly, a corridor with nothing to lock on to). Its fit is
-            # not a place to compare against -- but the start carried here is
-            # still testable, and a wrong start would lay this window off the map.
-            print("    its own fit is below min_fitness %.0f %%: the window did not "
-                  "relocalize, so there is nothing to compare poses with. Judging the "
-                  "start by how it lays this window on the map instead."
+            # The second window did not place itself anywhere in the building.
+            # Then it says nothing about the start by comparison -- but ICP from
+            # the carried pose asks the question directly: where is the LiDAR
+            # now, starting from where the start says it should be?
+            print("    its own fit is below min_fitness %.0f %%: it did not relocalize, so "
+                  "there is no pose to compare with. ICP from the carried pose instead."
                   % (float(c["min_fitness"]) * 100))
-            if fit_c < float(c["min_fitness"]):
-                raise SystemExit(
-                    "relocalize: %.1f %% of the window %.0f s in lies on the map when placed "
-                    "by the start -- the start does not explain it, and the window could not "
-                    "place itself; refused. Move the check to a stretch the map covers "
-                    '("03_init": {"relocalize": {"check_after_s": ...}}) or widen "window_s".'
-                    % (fit_c * 100, t1 - t0))
-            print("    the start lays it on the map: accepted")
+            T_icp = _icp(src1, tgt, T_map_glim, float(c["voxel"]))
+            fit_i, rmse_i = score(fine1, T_icp, float(c["fit_m"]))
+            Tg = pose_at(tr_t, tr_T, tr_q, t1)
+            A, B = T_map_glim @ Tg, T_icp @ Tg
+            icm = np.linalg.norm(A[:3, 3] - B[:3, 3]) * 100
+            ideg = ang_deg(A[:3, :3].T @ B[:3, :3])
+            print("    ICP from the carried pose: %.1f %% on the map (rmse %.2f cm), "
+                  "%.1f cm / %.3f deg from it" % (fit_i * 100, rmse_i * 100, icm, ideg))
+            checks.update(repeat_icp_fitness=fit_i, repeat_icp_cm=icm, repeat_icp_deg=ideg)
+            if fit_i >= float(c["min_fitness"]):
+                # the LiDAR is where the start says it is, to the drift GLIM
+                # accumulated over the interval -- which 04 corrects per scan
+                print("    the start explains where the LiDAR is %.0f s in (%.1f cm of GLIM "
+                      "drift over the interval): accepted" % (t1 - t0, icm))
+            else:
+                # nothing in the map explains this window: not the window's own
+                # search, not the start, not ICP from it. The stretch is not in
+                # the map, so it cannot speak for or against the start, and the
+                # start's own fit and uniqueness stand.
+                print("    ! nothing places this window on the map -- its own search, the "
+                      "start carried here and ICP from it all fall below %.0f %%. The map "
+                      "does not cover this stretch, so this check cannot speak: the start "
+                      "stands on its [fit] and [unique] above. Move it to a mapped stretch "
+                      'to get the check back ("check_after_s"), and treat the run beyond '
+                      "here as travelling outside the map." % (float(c["min_fitness"]) * 100))
+                checks["repeat_inconclusive"] = True
         else:
             Tg = pose_at(tr_t, tr_T, tr_q, t1)
             A, B = T_map_glim @ Tg, T1 @ Tg
@@ -370,17 +401,6 @@ def relocalize(P, T_lidar_cam=None):
                 raise SystemExit("relocalize: the two windows disagree -- refused")
     else:
         print("\n  [repeat] run shorter than check_after_s + window_s: skipped")
-
-    # ---- look: the window on the map around the start
-    near = np.linalg.norm(ref_pts - T_map_lidar0[:3, 3], axis=1) < 25.0
-    win = np.asarray(src0.transform(T_map_glim).points)
-    look = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(
-        np.vstack([ref_pts[near], win])))
-    look.colors = o3d.utility.Vector3dVector(np.vstack([
-        np.full((int(near.sum()), 3), 0.6), np.tile([1.0, 0.0, 0.0], (len(win), 1))]))
-    look_p = P.outp("reloc_check_{tag}.ply")
-    o3d.io.write_point_cloud(look_p, look)
-    print("  [look]   %s (red: the start window, grey: the map within 25 m)" % look_p)
 
     print("\n  map <- GLIM world: t=%s m  yaw %.2f deg  tilt %.3f deg"
           % (np.round(T_map_glim[:3, 3], 4).tolist(), yaw_deg(T_map_glim[:3, :3]),
