@@ -70,7 +70,7 @@ in Sec. VIII, but as text only (see Sec. 3).
 
 | Change | Saves | Where it goes |
 |---|---|---|
-| Remove Sec. V-E synthetic views (Isaac Sim) and `tab:twin` | 0.5 | Out of this paper: no runs exist and it is off-claim. Dataset paper or later work |
+| Remove Sec. V-E synthetic views (Isaac Sim) and `tab:twin` | 0.5 | The twin came back on 24 Oct inside Sec. IX (twin mode) and E3b, a paragraph shorter than V-E was |
 | Remove the seven `results_q*.tex` tables | 1.0 | They are the working ledger. Keep the files; do not `\input` them |
 | Fold `tab:questions` into `tab:spec`: one full-width table with columns Question, Guarantee, Bound, Validated by, Pass criterion | 0.5 | The "Answer now / Remaining" columns cannot appear in a submitted paper |
 | Move `tab:gap_fill` (gaps by discipline) to the supplementary | 0.4 | `tab:gap_iotj` plus the last paragraph of Sec. II already say it |
@@ -125,6 +125,17 @@ drop the claim and state absolute scale as a limit); `mobile_2` radar yes or
 no; the names of the released modules; funding, second e-mail,
 acknowledgments; re-check the `tab:gap_iotj` cells against the PDFs.
 
+### A2. Added 24 Oct: the twin and the gym
+
+8. `CommSchedule-v0` on coop_2 and survey_1: `python -m scoop_gym.run
+   ../scoop_gym/scenarios/comm_schedule_coop_2.yaml --links ideal v2xvit
+   fit:<pass> logged:<pass>`. That fills the `\todo` in Sec. IX (in-frame
+   share, deadline rule vs. always clouds). Compute only.
+9. E3b: the twin run of coop_2 (`isaac_coop_sim`), scan-to-map agreement of
+   the synthetic scans at the real poses, then one cooperative detector on
+   real and twin data under the ideal and logged channels. The detector run
+   needs the dataset paper's labels; see `../PLAN.md` for the order.
+
 ### D. Figures
 
 Fig. 1 redraw, headroom (E1), clearance (E2), simgap two-panel (E3 + E5),
@@ -132,9 +143,20 @@ and the link trace with RTT and CSI added.
 
 ### Out of this paper (not to be added back)
 
-Isaac Sim twin; a second site; CSI power as a second E2 signal; out-of-run
-E2 prediction; agent-to-AP E2 links; more nodes; other radios. The last
-three go in one sentence under next steps.
+The closed-loop twin and the positional link (the gym paper, `../PLAN.md`);
+the twin tasks of Table `tab:gym`; out-of-run E2 prediction (it validates
+the positional link, so it belongs to the gym paper); a second site; CSI
+power as a second E2 signal; agent-to-AP E2 links; more nodes; other
+radios. The last three go in one sentence under next steps.
+
+## 5b. Section plan, 24 Oct (16 compiled pages)
+
+I Introduction (IoRT, then the surveys, then the indoor problem, then
+SCooP-iT and four contributions); II Related Work (adds Lingjing, ideal
+bus); III Design; IV Alignment; V Ground Truth; VI Link; VII Replay;
+VIII Experiments (E3 = E3a live, E3b twin); IX SCooP-iT Gym (link engine,
+two engines, tasks, `CommSchedule-v0` demonstration, `tab:gym`);
+X Lessons and Limitations (the loop closes only in the twin); XI Conclusion.
 
 ## 6. If E3 cannot be recorded before the deadline
 

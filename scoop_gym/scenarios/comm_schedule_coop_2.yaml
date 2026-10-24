@@ -1,0 +1,14 @@
+# CommSchedule-v0 on the 24 Sep cooperation pass (site 1): mobile_2 sends to
+# mobile_1 through the access point (two hops), one decision per LiDAR frame.
+task: CommSchedule-v0
+mode: replay                        # replay | twin (twin: not wired in yet)
+link: logged:~/workspaces/isaac_ros-dev/data/processed/20260924/coop_2
+                                    # any scoop.channel spec: ideal, v2xvit, fit:<pass>, logged:<pass>[,queue]
+frame_s: 0.1
+deadline_frames: 1
+span: null                          # [t0, t1] in pass time; null: where every sender has a link trace
+senders:
+  - {src: mobile_2, dst: mobile_1}
+value: {boxes: 0.2, features: 0.6, clouds: 1.0}   # placeholders for each kind's detection gain
+cost_per_mb: 0.05
+seed: 0

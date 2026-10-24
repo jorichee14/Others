@@ -1,0 +1,77 @@
+% Sec. IX "SCooP-iT Gym" body for main.tex. Code: ../scoop_gym (link engine,
+% attribution log, CommSchedule-v0, baselines, runner); twin: ../isaac_coop_sim.
+A testbed is more useful as a place to run one's own method than as a
+set of results. SCooP-iT Gym puts the measured link and the measured
+building behind the interface that reinforcement-learning and
+embodied-agent research already uses: agents reset and step as in
+Gymnasium and PettingZoo, a scenario file declares the agents, their
+roles, the communication relations, and the link, and every episode
+leaves an attribution log. The contract follows Lingjing
+\cite{lingjing}, a simulated city for heterogeneous agents with engine-side
+adjudication and replayable episodes. What SCooP-iT Gym adds is the
+network: Lingjing's messages pass an ideal bus whose cost is a message
+count, whereas here every message is late or lost as it was on the
+testbed, and its world is measured rather than generated.
+
+\paragraph{Link engine} Every message an agent sends goes through the
+replay module of Sec.~\ref{sec:replay}, with any of its channels: ideal,
+the synthetic channels of prior benchmarks, a synthetic channel fitted to
+the pass, or the logged link. The channel is the only variable between
+runs of a policy. A message that misses its deadline is attributed to
+one cause: an outage, no measurement at that time, waiting behind the
+link's previous message, transmission (size over goodput alone exceeds
+the deadline), or latency. A failure of a task is thus traced to the
+link, not only to an agent or a message as in \cite{lingjing}.
+
+\paragraph{Two engines} In \emph{replay mode} the observations are the
+real recordings and the motion is the recording's, so agents control
+communication: what to send, to whom, and at what size. The logged link
+is exact here, and E3a is its validation. In \emph{twin mode} the
+reference map of Sec.~\ref{sec:gt} becomes a simulator scene: its
+signed-distance surface is exported to Isaac Sim \cite{isaacsim} in the
+map frame, each robot carries the sensors of Table~\ref{tab:sensors} at
+the extrinsics of Table~\ref{tab:calib}, and every object has an exact
+box at every stamp. Driven along the recorded paths, the twin is at the
+recorded places at the recorded times, so the logged link applies
+unchanged, and E3b checks the twin against the real runs. The twin also
+renders the views the recordings lack, a sensor stream that fell short of
+its rate or a viewpoint no robot took. Under the agents' own motion
+the loop from received message to action closes, and the link must be
+indexed by place instead of time: per cell of the survey's radio map,
+scaled by the contention mode, which E2 supports and an out-of-run check
+must validate before closed-loop results are reported.
+
+\paragraph{Tasks} Table~\ref{tab:gym} lists the environments.
+\texttt{CommSchedule-v0} runs today: per LiDAR frame, a sender chooses
+nothing, boxes (\SI{1}{\kilo\byte}), features (\SI{100}{\kilo\byte}), or
+the raw cloud (\SI{1.5}{\mega\byte}) and is paid for what lands within
+the frame, minus airtime. Its observation is what a robot can know:
+the fate of its own past messages and its link monitor's last round trip
+and goodput. Under the ideal and synthetic channels the best policy is
+to always send the raw cloud; under the logged link a rule that sends it
+only when the monitored goodput would land it within the frame
+\todo{raises the in-frame share from X to Y\,\% on \texttt{coop\_2}}.
+A policy tuned on a synthetic channel is thus tuned to a link the robots
+did not have.
+
+\begin{table}[!t]
+\centering
+\caption{SCooP-iT Gym Environments}
+\label{tab:gym}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}l l p{3.6cm}@{}}
+\toprule
+Environment & Mode & Agents decide; reward \\
+\midrule
+\texttt{CommSchedule-v0} & replay & message kind per frame; value in deadline minus airtime \\
+\texttt{CoopDetect-v0} & replay & the same; detection gain over ego \\
+\texttt{OcclusionHandoff-v0} & twin & mast warns robot of an occluded person; warning before the corner \\
+\texttt{ConnectedCoverage-v0} & twin$^\dagger$ & motion and sync; area and data, minus lost links \\
+\texttt{RelayPlacement-v0} & twin$^\dagger$ & where to park as relay; time connected \\
+\bottomrule
+\end{tabular}
+
+\vspace{2pt}
+{\scriptsize $^\dagger$Closed loop: needs the link indexed by place.}
+\end{table}

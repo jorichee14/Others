@@ -84,7 +84,9 @@ surface agreement between independent passes, and
 \SI{10}{\milli\metre} (LiDAR robot) and \SIrange{31}{54}{\milli\metre}
 (RGB-D cart) on held-out fiducials. A channel-in-the-loop replay runs
 any collaborative application against the per-message link the nodes
-actually had. Experiments show that the testbed's own errors are
+actually had, on the real recordings or in a simulated twin of the
+measured building, and SCooP-iT Gym exposes both as multi-agent
+environments with a Gymnasium interface. Experiments show that the testbed's own errors are
 6--101$\times$ smaller than the effects it measures; that its map
 predicts the signal it logs although neither produced the other
 (Spearman $\rho = 0.60$, \SI{5.4}{\decibel} clear-to-obstructed drop);
@@ -121,18 +123,20 @@ beneath the application but part of its outcome: data freshness, long
 studied as the age of information \cite{kaul2012aoi,yates2021aoi},
 here has a concrete deadline of one sensor frame.
 
-Surveys of networked embodied intelligence state the problem in
-general form. Delivering a message is only an intermediate step whose
-value depends on whether it arrives in time for the task, so
-improvements in communication indicators such as latency, reliability,
-or age of information need not translate into task success, and the two
-have to be evaluated together \cite{zhang2026mean}. The same surveys,
-and those of embodied multi-robot systems, name the instrument that is
-missing: benchmarks evaluate communication, robotics, or perception
-separately, most rely on simulations that overlook communication
-latency, and integrated experimental testbeds with realistic wireless
-dynamics, heterogeneous agents, and multi-agent tasks are listed as an
-open problem \cite{zhang2026mean,wen2026embodiedmrs}.
+The Internet of Robotic Things treats robots as mobile nodes that
+sense and share data over the same network as fixed devices
+\cite{simoens2018iort}. Recent surveys of networked embodied
+intelligence draw the consequence for evaluation: delivering a message
+is only an intermediate step whose value depends on whether it arrives
+in time for the task, so gains in latency, reliability, or age of
+information need not translate into task success, and network and task
+have to be measured together \cite{zhang2026mean}. They and surveys of
+embodied multi-robot systems name the missing instrument: benchmarks
+evaluate communication, robotics, or perception separately, most in
+simulations that overlook communication latency, and integrated
+testbeds with real wireless dynamics, heterogeneous agents, and
+multi-agent tasks are an open problem
+\cite{zhang2026mean,wen2026embodiedmrs}.
 
 Indoors, where occlusion is dense and cooperation matters most, three
 conditions make this hard to study. The nodes share one access point,
@@ -182,11 +186,14 @@ layers can be tested instead of assumed. Its contributions are:
     that never enter it, to \SI{1.06}{\centi\metre} surface agreement
     across independent passes and \SI{10}{\milli\metre} against
     held-out fiducials (Sec.~\ref{sec:gt}).
-    \item \textbf{A channel-in-the-loop replay} that feeds the
-    recorded per-pair, per-message link into any collaborative
-    application, keyed to sensor timestamps, \todo{validated against
-    live execution to within one receiver frame}
-    (Sec.~\ref{sec:replay}).
+    \item \textbf{A channel-in-the-loop replay, offered as an
+    environment}: the recorded per-pair, per-message link fed into any
+    collaborative application, keyed to sensor timestamps, on the real
+    recordings or in a twin of the measured building, \todo{validated
+    against live execution to within one receiver frame}, and exposed as
+    SCooP-iT Gym, a multi-agent environment with a Gymnasium interface in
+    which every message is late or lost as it was on the testbed
+    (Secs.~\ref{sec:replay}, \ref{sec:gym}).
     \item \textbf{Evidence that link indicators do not predict the task
     outcome}: with a second robot on the same access point, the loaded
     round trip of \SIrange{25}{33}{\milli\second} stays well inside one
@@ -214,8 +221,8 @@ read; Sec.~\ref{sec:experiments} answers each from the recordings in
 hand and states what remains to be collected.
 Sec.~\ref{sec:related} reviews related work, Secs.~\ref{sec:design}
 to \ref{sec:replay} describe the testbed, Sec.~\ref{sec:experiments}
-reports the experiments, and Sec.~\ref{sec:lessons} gives lessons and
-limitations. The testbed releases no sequences or labels; those
+reports the experiments, Sec.~\ref{sec:gym} offers the testbed as an
+environment, and Sec.~\ref{sec:lessons} gives lessons and limitations. The testbed releases no sequences or labels; those
 belong to the SCooP dataset \cite{scoop_dataset}, which was recorded
 on it.
 
@@ -316,16 +323,22 @@ synchronizing when the received signal strength allows. ROS-NetSim
 simulated network. Multi-robot testbeds such as the Robotarium
 \cite{wilson2021robotarium}, the CPM Lab \cite{kloock2021cpmlab}, and
 ChoiRbot \cite{testa2021choirbot} obtain positions from overhead
-cameras or motion capture and treat the network as ideal. Indoors
-without motion capture, a pose reference needs surveyed UWB anchors
+cameras or motion capture and treat the network as ideal. Embodied
+multi-agent simulators expose such teams to learning through a
+Gym-like interface: Lingjing \cite{lingjing} runs heterogeneous aerial
+and ground agents in a simulated city with star or broadcast
+communication and replays each episode for failure attribution, but its
+messages pass an ideal bus whose cost is a message count, never a delay
+or a loss. Indoors without motion capture, a pose reference needs surveyed UWB anchors
 \cite{zhao2024util}, total-station points \cite{hilti2022}, surveyed
 fiducials \cite{airmuseum}, or a scanner-built prior map
 \cite{subtmrs,lamar}; SLAM-derived references are validated by sparse
 landmark distances \cite{incrowdvi} or by internal consistency alone
 \cite{envodat}. Robots therefore run over real links that are
 monitored but not released, or have precise positions over a network
-assumed ideal; none has both on one timeline, and none scores an
-application against an independent reference.
+assumed ideal, and the environments in which embodied agents are trained
+are simulated, with an ideal network; none has both on one timeline,
+and none scores an application against an independent reference.
 
 \subsection{Cooperative Perception as an IoT Application}
 Cooperative perception fuses raw points \cite{chen2019cooper},
@@ -993,11 +1006,18 @@ signal (Fig.~\ref{fig:clearance}).
 \input{figures/clearance}
 
 
-\subsection{E3 Twin Run: Replay Matches the Real Link}
+\subsection{E3 Replay Against Reality: Live Runs and the Twin}
 \emph{Question.} Does replaying a logged link reproduce what the real
-link does? \emph{Pass.} Agreement of at least 90\,\% on which receiver
-frame (\SI{100}{\milli\second}) each message lands in, with the logged
-replay clearly closer than the synthetic channel.
+link does (E3a), and does the twin under that link reproduce what the
+link does to the task (E3b)? \emph{Pass.} E3a: agreement of at least
+90\,\% on which receiver frame (\SI{100}{\milli\second}) each message
+lands in, with the logged replay clearly closer than the synthetic
+channel. E3b: synthetic scans at the recorded poses lie within the real
+scan noise of the map (\SI{3}{\centi\metre} median), and the change in
+detection AP that the logged link causes, against the ideal channel,
+differs between twin and real by less than half its real value.
+
+\emph{E3a, live against replay.}
 
 Two runs follow the same route, mode, and day. Run A records the link
 as usual with iperf and ping. Run B replaces iperf with a payload node
@@ -1020,6 +1040,18 @@ B2 in cooperation mode, back to back so that building conditions
 match; the payload node and the comparison script; and the per-size,
 per-mode table of arrival-time error, frame agreement, and drop
 agreement, with the synthetic channel on the same axes.
+
+\emph{E3b, twin against real.} The twin drives the recorded paths of
+\texttt{coop\_2}, so the logged link of that pass applies to it
+unchanged (Sec.~\ref{sec:gym}). Its absolute detection score is not
+expected to match the real one, since the twin carries none of the
+reflectance, dropout, and motion distortion of the real sensors; what
+it must reproduce is the difference the link makes, in which such
+errors largely cancel. \emph{Answer now.} None: the twin tooling exists
+but has not yet run in Isaac Sim. \emph{Remaining.} The twin run of
+\texttt{coop\_2}; scan-to-map agreement of synthetic against real scans
+at the same poses; one cooperative detector run on real and twin data
+under the ideal and logged channels.
 
 % E3 shares a figure with E5 (figures/simgap.tex, two panels)
 
@@ -1106,6 +1138,11 @@ released pipeline, the spec sheet, and the bill of materials
 
 
 %=======================================================================
+\section{SCooP-iT Gym: The Testbed as an Environment}
+\label{sec:gym}
+\input{sections/gym}
+
+%=======================================================================
 \section{Lessons Learned and Limitations}
 \label{sec:lessons}
 
@@ -1141,11 +1178,14 @@ site; one CSI receiver; the self-built map rests on the control
 distances for absolute scale, since the two passes share a sensor and
 a pipeline; endpoint clearances hide obstacles within
 \SI{0.7}{\metre} of a radio. \todo{Add scale: three sites, sessions,
-hours, once final.} The loop is open: the nodes do not act on what they
-receive, and a replayed trace cannot react to the load a method
-offers, so the step from received message to action, which closes the
+hours, once final.} On real data the loop is open: the nodes do not act
+on what they receive, and a replayed trace cannot react to the load a
+method offers. It closes only in the twin, whose sensors are geometric,
+without reflectance, dropout, or motion distortion, and whose link, once
+agents leave the recorded paths, is a model indexed by place rather than
+a trace; the step from received message to action, which closes the
 loop of networked embodied intelligence \cite{zhang2026mean}, is
-outside this paper.
+therefore shown here only in simulation.
 
 %=======================================================================
 \section{Conclusion}
@@ -1162,8 +1202,11 @@ receiver frame}. Under contention the shared network moves the delay
 across one LiDAR frame, which no synthetic channel of prior benchmarks
 reproduces, and which the link's own latency does not reveal: for a
 task whose deadline is a sensor frame, the network has to be measured
-where the task runs, together with the task. Next steps are closing the
-loop from perception to action, more nodes, other radios and IoT
+where the task runs, together with the task. SCooP-iT Gym puts that
+link behind a Gymnasium interface, on the real recordings and in a twin
+of the measured building, so that a policy can be trained and scored
+against the network the robots had. Next steps are the closed-loop twin
+with its link indexed by place, more nodes, other radios and IoT
 protocols, multi-antenna CSI, and a wired CSI host. The sequences recorded on SCooP-iT, their
 labels, and the benchmark are released as the SCooP dataset
 \cite{scoop_dataset}.
