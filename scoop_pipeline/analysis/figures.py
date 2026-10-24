@@ -19,6 +19,9 @@ which file is missing), as PNG (300 dpi) and PDF in <processed>/figures/:
                 the union of points (step: 01 and 01 --union)
   wall          one wall cut across, in the TSDF map and in the union: the
                 band that holds 90 % of its points (step: 01 and 01 --union)
+  reference     a run's registration: how far each round moved the scans
+                against the gate, and every board's spread against the gate
+                it had to pass (steps: 04 summary_<track>.json, 05)
   loop          each trajectory's board loop closure against the detection
                 noise (the <traj>_loop_closure.json reports)
   stages        a wall's thickness as the scans pile up, one scan to the
@@ -51,7 +54,8 @@ COLOR = {"glim": "#8a8984", "glim_corr": "#2a78d6", "glim_s2m": "#1baf7a",
          "glim_ba": "#eb6834", "union": "#8a8984", "tsdf": "#eb6834"}
 SHORT = {"glim": "GLIM as output", "glim_corr": "GLIM corrected",
          "glim_s2m": "GLIM + scan-to-map", "glim_ba": "GLIM + BA (reference)"}
-FIGS = ("timing", "ba", "trajectories", "maps", "wall", "loop", "stages", "noise")
+FIGS = ("timing", "ba", "trajectories", "reference", "maps", "wall", "loop",
+        "stages", "noise")
 
 
 def plt_():
@@ -187,8 +191,107 @@ def fig_trajectories(ctx):
     ax.set_ylabel("position error, 1 s mean (cm)")
     ax.set_ylim(bottom=0)
     ax.legend(loc="lower left", bbox_to_anchor=(0, 1.02), ncol=3, borderaxespad=0)
-    ax.set_title("against the reference (GLIM + BA), after the best rigid fit", pad=22)
+    ax.set_title("against the reference (%s), after the best rigid fit"
+                 % ("04, scan-to-map" if ctx["P"].reference else "GLIM + BA"), pad=22)
     return save(fig, ctx["out"], "trajectories")
+
+
+def _summaries(ctx):
+    """[(name, 04's summary dict)] of the run's tracks, in file order."""
+    import glob
+    out = []
+    for f in sorted(glob.glob(os.path.join(ctx["P"].reference_dir(), "summary_*.json"))):
+        try:
+            r = json.load(open(f))
+        except ValueError:
+            continue
+        if r.get("rounds"):
+            out.append((r.get("name") or os.path.basename(f)[8:-5], r))
+    return out
+
+
+def fig_reference(ctx):
+    """A run's own quality: what the registration had to move, and how tightly
+    each board came out. Both are the questions a run (not a mapping pass)
+    answers, so there is nothing to draw for a mapping pass."""
+    plt = plt_()
+    P = ctx["P"]
+    if not P.reference:
+        return "a mapping pass: its registration figure is ba"
+    summ = _summaries(ctx)
+    if not summ:
+        return f"no summary_*.json in {P.reference_dir()} (run 04)"
+    c = P.cfg.get("04_reference") or {}
+    gate = float(c.get("max_shift", 0.5)) * 100
+    s05 = P.stage("05_anchor") if "05_anchor" in P.cfg else {}
+    boards = {}
+    bf = s05.get("frame_out")
+    if bf and os.path.isfile(bf):
+        boards = (json.load(open(bf)).get("boards") or {})
+    fuse = (s05.get("fuse") or {})
+    g_std = float(fuse.get("max_std_mm", 20.0))
+    g_by = fuse.get("max_std_mm_by_board") or {}
+
+    fig, (a, b) = plt.subplots(1, 2, figsize=(7.16, 3.1),
+                              gridspec_kw={"width_ratios": [1, 1], "wspace": 0.45})
+    keys = ("glim_corr", "glim_s2m", "glim_ba")
+    rnds = sorted({h["round"] for _, r in summ for h in r["rounds"]})
+    sub = []
+    for i, (name, r) in enumerate(summ):
+        col = COLOR[keys[i % len(keys)]]
+        rounds = r["rounds"]
+        x = [h["round"] for h in rounds]
+        lab = (name + ": ") if len(summ) > 1 else ""
+        a.plot(x, [h["median_corr_cm"] for h in rounds], marker="o", ms=4, color=col,
+               label=lab + "median")
+        a.plot(x, [h["p95_corr_cm"] for h in rounds], marker="o", ms=3, color=col,
+               ls="--", lw=1.0, alpha=0.8, label=lab + "p95")
+        for h in rounds:                            # how many scans that round placed
+            a.annotate("%d/%d" % (h["registered"], h["scans"]),
+                       (h["round"], h["median_corr_cm"]), xytext=(0, 7),
+                       textcoords="offset points", ha="center", fontsize=7, color=INK2)
+        sf = r.get("seed_to_final_cm") or {}
+        if sf:
+            sub.append("%sGLIM to final %.0f cm median, %.0f max"
+                       % (lab, sf["median"], sf["max"]))
+    a.axhline(gate, color=INK, lw=1.0, ls=":")
+    a.annotate("gate %.0f cm" % gate, (rnds[0], gate), xytext=(0, 3),
+               textcoords="offset points", fontsize=7.5, color=INK)
+    a.set_yscale("log")
+    a.set_xticks(rnds)
+    a.set_xlim(rnds[0] - 0.25, rnds[-1] + 0.25)
+    a.set_xlabel("registration round")
+    a.set_ylabel("correction (cm)")
+    a.set_title("what the map had to move the scans"
+                + ("\n" + "; ".join(sub) if sub else ""), fontsize=8.5)
+    a.legend(loc="lower left", fontsize=7)
+
+    if boards:
+        names = sorted(boards)
+        for i, n in enumerate(names):
+            v = boards[n]
+            g = float(g_by.get(n, g_std))
+            b.barh(i, v["std_mm"], height=0.55, color=COLOR["glim_corr"])
+            b.plot([v["max_mm"]] * 2, [i - 0.3, i + 0.3], color=INK2, lw=1.2)
+            b.plot([g] * 2, [i - 0.38, i + 0.38], color=INK, lw=1.6)
+            b.annotate("%.1f%s" % (v["std_mm"], " (own gate)" if n in g_by else ""),
+                       (max(v["max_mm"], g), i), xytext=(4, 0),
+                       textcoords="offset points", va="center", fontsize=7.5)
+        b.set_yticks(range(len(names)),
+                     [n + (" (anchor)" if boards[n].get("method", "").startswith("anchor")
+                           else "") for n in names])
+        b.invert_yaxis()
+        b.set_xlim(0, max([max(boards[n]["max_mm"], float(g_by.get(n, g_std)))
+                           for n in names]) * 1.9)
+        b.set_xlabel("spread of a board's sightings (mm)\n"
+                     "grey tick: its worst, black: the gate it had to pass")
+        b.set_title("how tightly each board came out", fontsize=8.5)
+        b.grid(axis="y", visible=False)
+    else:
+        b.set_axis_off()
+        b.annotate("no %s (run 05)" % (bf or "anchor frame"), (0.5, 0.5),
+                   xycoords="axes fraction", ha="center", fontsize=7.5, color=INK2)
+    return save(fig, ctx["out"], "reference")
 
 
 def _maps(ctx):

@@ -28,6 +28,54 @@ def loop(path, mm, noise):
         "noise_mm": noise, "significant": False}}}}, open(path, "w"))
 
 
+def run_figures(d, work, t):
+    """A run (not a mapping pass): its reference figure comes from 04's summary
+    and 05's boards, and the gate each board had to pass."""
+    out = os.path.join(d, "run")
+    ref = os.path.join(out, "reference")
+    os.makedirs(ref)
+    write(os.path.join(ref, "traj_mobile_2_lidar.tum"), t)
+    write(os.path.join(out, "traj_lidar.txt"), t, noise=0.01, seed=3)
+    open(os.path.join(out, "glim.yaml"), "w").write("pose_time_offset_s: 0.046\n")
+    json.dump({"name": "mobile_2_lidar", "poses": len(t),
+               "rounds": [{"round": 1, "registered": 516, "scans": 2790,
+                           "median_corr_cm": 19.5, "p95_corr_cm": 29.3,
+                           "median_residual_cm": 2.59},
+                          {"round": 2, "registered": 2731, "scans": 2790,
+                           "median_corr_cm": 2.55, "p95_corr_cm": 23.1,
+                           "median_residual_cm": 2.74},
+                          {"round": 3, "registered": 2747, "scans": 2790,
+                           "median_corr_cm": 0.30, "p95_corr_cm": 2.45,
+                           "median_residual_cm": 2.74}],
+               "seed_to_final_cm": {"median": 32.8, "p95": 57.4, "max": 70.6}},
+              open(os.path.join(ref, "summary_mobile_2_lidar.json"), "w"))
+    json.dump({"anchor_board": "board_1", "boards": {
+        "board_1": {"method": "anchor_section0", "std_mm": 14.9, "max_mm": 35.8},
+        "board_2": {"method": "fused_sections", "std_mm": 16.1, "max_mm": 23.1},
+        "board_3": {"method": "fused_sections", "std_mm": 21.7, "max_mm": 54.3},
+        "board_4": {"method": "fused_sections", "std_mm": 12.2, "max_mm": 29.3}}},
+              open(os.path.join(out, "anchor_frame.json"), "w"))
+    cfg = os.path.join(d, "cfg_run.json")
+    json.dump({"dataset": {"bag": os.path.join(work, "bag"), "out_dir": out,
+                           "machine": "mobile_2", "reference_pass": "mapping"},
+               "04_reference": {"out_dir": "reference", "max_shift": 0.3, "rounds": 3},
+               "05_anchor": {"frame_out": "anchor_frame.json",
+                             "fuse": {"max_std_mm": 20.0,
+                                      "max_std_mm_by_board": {"board_3": 25.0}}}},
+              open(cfg, "w"))
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "check.py"), "figures", cfg,
+                        "--only", "reference"], capture_output=True, text=True)
+    print(r.stdout[-1500:] + r.stderr[-1500:])
+    bad = ["no run reference%s" % e for e in (".png", ".pdf")
+           if not os.path.isfile(os.path.join(out, "figures", "reference" + e))]
+    if r.returncode:
+        bad.append("run figures exit %d" % r.returncode)
+    keep = os.environ.get("FIGS_KEEP")
+    if keep and os.path.isdir(os.path.join(out, "figures")):
+        shutil.copytree(os.path.join(out, "figures"), keep, dirs_exist_ok=True)
+    return bad
+
+
 def main():
     fails = []
     d = tempfile.mkdtemp(prefix="figs_")
@@ -73,13 +121,17 @@ def main():
                     fails.append(f"no {name}{ext}")
         if "noise: skipped" not in r.stdout:
             fails.append("noise not skipped without --bag")
+        if "reference: skipped, a mapping pass" not in r.stdout:
+            fails.append("reference not skipped on a mapping pass")
         if r.returncode:
             fails.append("exit %d" % r.returncode)
+        fails += run_figures(d, work, t)
         keep = os.environ.get("FIGS_KEEP")
         if keep:
             shutil.copytree(figs, keep, dirs_exist_ok=True)
         if not fails:
-            print("  ok    7 figures written (PNG + PDF), noise skipped without --bag")
+            print("  ok    7 figures written (PNG + PDF), noise skipped without --bag,"
+                  "\n        reference written for a run and skipped for a mapping pass")
     finally:
         shutil.rmtree(d, ignore_errors=True)
     for f in fails:
