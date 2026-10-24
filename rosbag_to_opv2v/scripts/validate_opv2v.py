@@ -199,11 +199,22 @@ def check_scenario(scenario: str, findings: Findings, args) -> dict:
     if box_counts:
         summary["boxes_in_range"] = box_counts
         mean_boxes = float(np.mean(box_counts))
+        empty = sum(1 for c in box_counts if c == 0)
+        share = 100.0 * empty / len(box_counts)
         findings.note(f"{name}: {mean_boxes:.2f} GT boxes per frame inside the ego's "
-                      f"detection range (of {len(box_counts)} sampled frames)")
+                      f"detection range (max {max(box_counts)}, {empty} of "
+                      f"{len(box_counts)} sampled frames empty, {share:.0f}%)")
         if mean_boxes == 0:
             findings.warn(f"{name}: no GT box falls inside the detection range — AP "
                           f"will be undefined. Expected if you converted without labels.")
+        elif share >= 50.0:
+            # Background frames are normal and useful, but a split that is mostly
+            # background trains a detector that is right by abstaining, and the
+            # AP it reports rests on the few frames that carry a box.
+            findings.warn(f"{name}: {share:.0f}% of sampled frames hold no GT box in "
+                          f"range. Most of this split is background — check the "
+                          f"detection range covers where the objects are, and read "
+                          f"AP knowing how few frames carry it")
     for agent, counts in point_counts.items():
         findings.note(f"{name}/{agent}: {np.mean(counts):.0f} points/frame "
                       f"(min {min(counts)}, max {max(counts)})")
