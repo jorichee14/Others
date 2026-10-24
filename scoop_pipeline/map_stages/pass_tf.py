@@ -257,7 +257,11 @@ def plan(P, edges, bags, log=print):
         extra = extra + more
         log("    %s ~~ %s  (%d poses of %s from %s)"
             % (og, root, len(more), body, os.path.relpath(traj, P.out_dir)))
-        under_board(tr.get("board"), og, T_og, "%s's origin: its first pose" % tr["name"])
+        # the board 03 actually found for this track's anchor camera, not the
+        # one the config names: 03 looks for every board in the map
+        sb = ((session.get("cameras") or {}).get(tr.get("anchor_cam")) or {}).get("board")
+        under_board(sb or tr.get("board"), og, T_og,
+                    "%s's origin: its first pose" % tr["name"])
         frames |= {og}
 
     # -- infra / parked cameras from 07 (this pass's; 07 off: dataset.cameras_from's)

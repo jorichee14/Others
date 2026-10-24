@@ -1,6 +1,6 @@
 {
  "extends": "pipeline_config.json",
- "_note": "20261015 coop at site 2 (raw/20261015/coop/site_2/), in the same day's map (20261015 mapping). The boards were PUT UP AGAIN for this site, so the mapping pass's poses for them are stale: dataset.boards_moved makes survey/site_2's measurements replace them (dataset.boards_from), and 03 relocalizes mobile_1's start on the map itself rather than on a board (03_init.relocalize) -- at site_2 a board-placed start put the survey 21 m out. The arducam where survey/site_2's 07 put it (dataset.cameras_from). mobile_1: 03 (LiDAR relocalization, its ZED board dwell as the check) -> 04 (every scan to the anchored map). mobile_2, the ground truth: GLIM on its OS1-128, its start from 03's 'realsense' -> 04's track mobile_2_lidar. No 05/07/08 in coop.",
+ "_note": "20261015 coop at site 2 (raw/20261015/coop/site_2/), in the same day's map (20261015 mapping). The boards were PUT UP AGAIN for this site, so the mapping pass's poses for them are stale: dataset.boards_moved makes survey/site_2's measurements replace them (dataset.boards_from), and 03 relocalizes mobile_1's start on the map itself rather than on a board (03_init.relocalize) -- at site_2 a board-placed start put the survey 21 m out. The arducam where survey/site_2's 07 put it (dataset.cameras_from). mobile_1: 03 (LiDAR relocalization, its ZED board dwell as the check) -> 04 (every scan to the anchored map). mobile_2, the ground truth: GLIM on its OS1-128, its start from 03's 'realsense' -> 04's track mobile_2_lidar. Neither entry names a start board: 03 looks for every board in the map and reports the one it found. No 05/07/08 in coop.",
  "dataset": {
   "bag": "~/workspaces/isaac_ros-dev/data/work/20261015/coop/site_2/mirc_dataset_coop_site_2_20261015_merged",
   "traj": null,
@@ -26,7 +26,6 @@
    {
     "name": "realsense",
     "source": "camera",
-    "board": "board_2",
     "dwell_only": true
    }
   ]
@@ -39,8 +38,7 @@
     "machine": "mobile_2",
     "anchor_cam": "realsense",
     "body_frame": "os_lidar_mobile2",
-    "origin_frame": "map_realsense",
-    "board": "board_2"
+    "origin_frame": "map_realsense"
    }
   ]
  },

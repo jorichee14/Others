@@ -9,6 +9,13 @@ the reference's, see pipeline_common.Pipeline.boards). `<slam origin> -> board`
 is run-specific, because a SLAM origin lands somewhere new every recording. So
 for each sensor, from THIS bag:
 
+WHICH board a sensor starts at is FOUND, not assumed. A sensor entry's "board"
+only says which to look for first; every board in the map is then tried over
+the same frames, and the one with the most sightings places the sensor (each
+board is its own ArUco dictionary, so a detector for one finds nothing in
+another and a wrong guess looks exactly like a blind camera). The entry may
+leave "board" out entirely.
+
     T_origin_board = T_origin_cam(t) @ T_cam_board(t)     (averaged; board is static)
     T_map_origin   = T_map_board @ inv(T_origin_board)    (T_map_board fixed, from 05)
 
@@ -118,6 +125,27 @@ def boards_in_map(af, s):
             T = np.eye(4); T[:3, :3] = qR(q)
             out["anchor"] = (T, {"frame": "board", "method": "legacy_qxyzw"})
     return out
+
+
+def look_for_boards(names, bmap, board_cfgs, axes, borig, sensor, frames, K, D,
+                    first_only=False, **kw):
+    """Run each board's detector over the frames (each board is its own ArUco
+    dictionary, so a detector for one finds nothing in another).
+    -> (name, hits, seen, dep, Board, T_map_board, record) for the board with
+    the most sightings, or None. `first_only` stops at the first that is seen."""
+    best = None
+    for bn in names:
+        T_mb, brec = bmap[bn]
+        design = brec.get("design", bn)
+        bd = Board(design, board_cfgs[design])
+        T_fix = bd.frame_fix(axes, borig)
+        hits, seen, dep = localise_camera_only(sensor, bd, T_mb, T_fix, frames, K, D, **kw)
+        if hits:
+            if best is None or len(hits) > len(best[1]):
+                best = (bn, hits, seen, dep, bd, T_mb, brec)
+            if first_only:
+                return best
+    return best
 
 
 def rpy_deg(R):
@@ -474,20 +502,24 @@ def main():
         print("\n== %s ==  origin=%s  cam=%s  board=%s"
               % (name, sensor.get("origin_frame") or "(none: camera from board)",
                  sensor["cam_frame"], bname))
-        if bname not in bmap:
-            print("  ! board '%s' has no pose in map -> skipped (have: %s)"
+        # the entry names the board this sensor was MEANT to start at. Which it
+        # is really looking at is found below, over every board in the map:
+        # a sensor is never placed from a board that was assumed.
+        usable = [b for b in sorted(bmap)
+                  if bmap[b][1].get("design", b) in board_cfgs]
+        if not usable:
+            print("  ! no board in map has a design in the 'boards' registry -> "
+                  "skipped (have: %s)" % ", ".join(sorted(bmap)))
+            continue
+        if bname and bname not in bmap:
+            print("  ! board '%s' has no pose in map; looking at the others (have: %s)"
                   % (bname, ", ".join(sorted(bmap))))
-            continue
-        T_map_board, brec = bmap[bname]
-        # stage 05 keys boards by INSTANCE; the detector is built from the DESIGN
-        design = brec.get("design", bname)
-        if design not in board_cfgs:
-            print("  ! design '%s' (for board '%s') not in the top-level 'boards' "
-                  "registry -> skipped" % (design, bname))
-            continue
-        board = Board(design, board_cfgs[design])
-        T_fix = board.frame_fix(axes, borig)
-        print("  %s" % board.describe())
+            bname = None
+        elif bname and bname not in usable:
+            print("  ! design of board '%s' not in the top-level 'boards' registry; "
+                  "looking at the others" % bname)
+            bname = None
+        order = ([bname] if bname else []) + [b for b in usable if b != bname]
         frames = imgs.get(sensor["image_topic"], [])
         if not frames:
             print("  ! no images on %s\n    topics: %s"
@@ -509,13 +541,18 @@ def main():
         if mode == "lidar_odom":
             # every sighting, moving or parked; combined after the loop through
             # the run's LiDAR odometry (board_views.py)
-            hits, seen, _ = localise_camera_only(sensor, board, T_map_board, T_fix,
-                                                 frames, K, D, dwell_only=False)
-            print("  board sightings %d (all kept: the views are combined through "
-                  "the LiDAR odometry)" % seen)
-            if not hits:
-                print("  ! the board was never detected on %s" % sensor["image_topic"])
+            got = look_for_boards(order, bmap, board_cfgs, axes, borig, sensor,
+                                  frames, K, D, dwell_only=False)
+            if got is None:
+                print("  ! no board 05 placed was detected on %s (looked for %s)"
+                      % (sensor["image_topic"], ", ".join(order)))
                 continue
+            bname, hits, seen, _, board, T_map_board, brec = got
+            print("  %s" % board.describe())
+            print("  board '%s'%s: %d sightings (all kept: the views are combined "
+                  "through the LiDAR odometry)"
+                  % (bname, "" if bname == order[0] else " -- NOT the one the entry "
+                     "names, found by looking at every board in the map", seen))
             lo_results[name] = {"sensor": sensor, "board": bname, "hits": hits,
                                 "t_img0": frames[0][0]}
             continue
@@ -530,33 +567,46 @@ def main():
             dwell_only = bool(sensor.get("dwell_only", s.get("dwell_only", True)))
             tol_m = float(sensor.get("static_tol_mm",
                                      s.get("static_tol_mm", 50.0))) * 1e-3
-            hits, seen, dep = localise_camera_only(
-                sensor, board, T_map_board, T_fix, frames, K, D, tol_m,
-                dwell_only, float(sensor.get("dwell_trim_s",
-                                             s.get("dwell_trim_s", 0.5))))
-            print("  board sightings %d%s"
-                  % (seen, " | %d in the opening dwell" % len(hits)
-                     if dwell_only else ""))
+            got = look_for_boards(
+                order, bmap, board_cfgs, axes, borig, sensor, frames, K, D,
+                tol_m=tol_m, dwell_only=dwell_only,
+                trim_s=float(sensor.get("dwell_trim_s", s.get("dwell_trim_s", 0.5))))
+            if got is None:
+                print("  ! no board 05 placed was detected on %s (looked for %s)%s"
+                      % (sensor["image_topic"], ", ".join(order),
+                         " -- or every sighting fell outside the opening dwell: was "
+                         "the robot already moving at record start?" if dwell_only else ""))
+                continue
+            bname, hits, seen, dep, board, T_map_board, brec = got
+            print("  %s" % board.describe())
+            print("  board '%s'%s: %d sightings%s"
+                  % (bname, "" if bname == order[0] else " -- NOT the one the entry "
+                     "names, found by looking at every board in the map", seen,
+                     " | %d in the opening dwell" % len(hits) if dwell_only else ""))
             if dep is not None:
                 print("  dwell ends at t=%.3f (+%.2f s into the stream): board "
                       "position departed by %.0f mm -> the robot started moving; "
                       "all later sightings ignored"
                       % (dep[0], dep[0] - frames[0][0], dep[1] * 1000))
-            if not hits:
-                print("  ! the board was never detected on %s%s"
-                      % (sensor["image_topic"],
-                         " (or every sighting fell outside the opening dwell -- "
-                         "was the robot already moving at record start?)"
-                         if seen else ""))
-                continue
             cam_results[name] = {"sensor": sensor, "board": bname, "hits": hits,
                                  "t_img0": frames[0][0], "t_img1": frames[-1][0],
                                  "n_frames": len(frames),
                                  "dwell_only": dwell_only,
                                  "departure_t": None if dep is None else dep[0]}
             continue
-        r = localise(sensor, board, T_map_board, T_fix, frames, K, D, tree, s,
-                     pose_streams)
+        r = None
+        for bn in order:                       # as above: found, never assumed
+            T_map_board, brec = bmap[bn]
+            design = brec.get("design", bn)
+            board = Board(design, board_cfgs[design])
+            if bn != order[0]:
+                print("  board '%s' gave nothing; trying '%s'" % (bname, bn))
+            print("  %s" % board.describe())
+            r = localise(sensor, board, T_map_board, board.frame_fix(axes, borig),
+                         frames, K, D, tree, s, pose_streams)
+            if r is not None:
+                bname = bn
+                break
         if r is None:
             continue
         T_map_origin, sp, n, T_board_origin = r
