@@ -1,8 +1,9 @@
 % Sec. IX "SCooP-iT Gym" body for main.tex. Code: ../scoop_gym (link engine,
 % attribution log, CommSchedule-v0, baselines, runner); twin: ../isaac_coop_sim.
 A testbed is more useful as a place to run one's own method than as a
-set of results. SCooP-iT Gym puts the measured link and the measured
-building behind the interface that reinforcement-learning and
+set of results. SCooP-iT Gym lets a researcher work on the real site
+without being on it: it puts the real recordings, the measured link,
+and a twin of the measured building behind the interface that reinforcement-learning and
 embodied-agent research already uses: agents reset and step as in
 Gymnasium and PettingZoo, a scenario file declares the agents, their
 roles, the communication relations, and the link, and every episode
@@ -52,7 +53,15 @@ to always send the raw cloud; under the logged link a rule that sends it
 only when the monitored goodput would land it within the frame
 \todo{raises the in-frame share from X to Y\,\% on \texttt{coop\_2}}.
 A policy tuned on a synthetic channel is thus tuned to a link the robots
-did not have.
+did not have. \texttt{CoopDetect-v0} replaces the placeholder value of
+each message kind with the detection gain it actually brings, scored
+against the labels of Sec.~\ref{sec:gt_score} on the real recordings:
+\todo{gain per kind and policy on \texttt{coop\_2} once it is labelled}.
+
+\paragraph{Scope} This paper covers what E3 validates: the real
+recordings, and the twin along the recorded paths. The closed loop, with
+its link indexed by place and the environments marked $\dagger$ in
+Table~\ref{tab:gym}, is the extension.
 
 \begin{table}[!t]
 \centering

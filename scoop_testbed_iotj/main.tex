@@ -42,8 +42,8 @@
 
 \begin{document}
 
-\title{SCooP-iT: An Indoor IoT Testbed for Measuring What a Shared Wi-Fi
-Network Does to Multi-Agent Perception}
+\title{SCooP-iT: A Real-World Indoor Testbed and Environment for
+Embodied Multi-Agent Perception}
 
 \author{Jorich Loquero and Ming-Chun Lee,~\IEEEmembership{Member,~IEEE}%
 \thanks{Manuscript received Month DD, YYYY; revised Month DD, YYYY;
@@ -54,7 +54,7 @@ Engineering, National Yang Ming Chiao Tung University, Hsinchu, Taiwan
 \thanks{Digital Object Identifier (DOI): see top of this page.}}
 
 \markboth{IEEE Internet of Things Journal,~Vol.~XX, No.~XX, Month~YYYY}%
-{Loquero \MakeLowercase{\textit{et al.}}: SCooP-iT: An Indoor IoT Testbed for Multi-Agent Perception over a Shared Wi-Fi Network}
+{Loquero \MakeLowercase{\textit{et al.}}: SCooP-iT: A Real-World Indoor Testbed and Environment for Embodied Multi-Agent Perception}
 
 \maketitle
 
@@ -162,7 +162,8 @@ methods that target latency and loss are evaluated against a constant
 delay or a Bernoulli drop
 \cite{lei2022syncnet,wei2023cobevflow,ren2024v2xincop}.
 
-This paper presents SCooP-iT, the SCooP Indoor Testbed, an IoT testbed
+This paper presents SCooP-iT, the indoor testbed of SCooP (Sensing and
+Communication for Cooperative Perception), an IoT testbed
 built so that any collaborative application can be run against the
 link the nodes actually had, and scored against a pose reference that
 exists for every scan of every node. It is such an integrated testbed
@@ -186,14 +187,17 @@ layers can be tested instead of assumed. Its contributions are:
     that never enter it, to \SI{1.06}{\centi\metre} surface agreement
     across independent passes and \SI{10}{\milli\metre} against
     held-out fiducials (Sec.~\ref{sec:gt}).
-    \item \textbf{A channel-in-the-loop replay, offered as an
-    environment}: the recorded per-pair, per-message link fed into any
+    \item \textbf{A channel-in-the-loop replay, validated against
+    reality}: the recorded per-pair, per-message link fed into any
     collaborative application, keyed to sensor timestamps, on the real
-    recordings or in a twin of the measured building, \todo{validated
-    against live execution to within one receiver frame}, and exposed as
-    SCooP-iT Gym, a multi-agent environment with a Gymnasium interface in
-    which every message is late or lost as it was on the testbed
-    (Secs.~\ref{sec:replay}, \ref{sec:gym}).
+    recordings and in a twin of the measured building, \todo{validated
+    against live execution to within one receiver frame} and checked
+    twin against real (Sec.~\ref{sec:replay}, E3).
+    \item \textbf{SCooP-iT Gym, the testbed as an environment}: the
+    recordings and their twin behind a Gymnasium interface, in which
+    agents decide what to send, every message is late or lost as it was
+    on the testbed, and every missed deadline is traced to its cause
+    (Sec.~\ref{sec:gym}).
     \item \textbf{Evidence that link indicators do not predict the task
     outcome}: with a second robot on the same access point, the loaded
     round trip of \SIrange{25}{33}{\milli\second} stays well inside one

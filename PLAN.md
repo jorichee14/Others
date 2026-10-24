@@ -1,27 +1,56 @@
-# Plan: SCooP-iT, SCooP, and SCooP-iT Gym
+# Plan: SCooP-iT (with its Gym) and SCooP
 
-Three deliverables share one testbed, one channel model
-(`scoop_pipeline/scoop/channel.py`) and one set of recordings. Each one owns
-a different claim.
+SCooP: Sensing and Communication for Cooperative Perception.
 
-| | SCooP-iT | SCooP | SCooP-iT Gym |
+## Vision
+
+Multi-agent perception should be developed and proven in the real world:
+on real robots in real buildings, with every condition that deployment
+brings measured rather than assumed. Simulators and outdoor vehicle datasets
+hide what an indoor team faces, and our own recordings show it:
+- sensors fall short (the ZED at about 1 Hz) and differ between robots;
+- clocks drift (SLAM poses 46 ms early);
+- the team is mixed (a LiDAR robot, an RGB-D cart, fixed masts);
+- there is no GNSS or motion capture indoors;
+- the building occludes people, objects and the radio;
+- the network is shared and contended.
+
+## End goal
+
+A real-world indoor platform where researchers can:
+1. use synchronized data from a real heterogeneous team, with ground truth
+   in one building-scale frame and no motion capture or GNSS;
+2. benchmark on what the real robots saw, with labels authored once in the
+   map frame and projected into every agent;
+3. extend beyond the recordings with a twin built from the measured
+   building, whose realism is checked against the real runs;
+4. train and test agents in an environment derived from the real site
+   (the Gym), on the recordings and in the twin;
+5. add their own building with a mapping pass and printed boards.
+
+Two papers share one testbed, one channel model
+(`scoop_pipeline/scoop/channel.py`), one set of recordings, and a different
+claim each. The Gym is part of the testbed paper (merged 24 Oct); its closed
+loop is the extension.
+
+| | SCooP-iT, with SCooP-iT Gym | SCooP | Extension: closed-loop Gym |
 |---|---|---|---|
-| What | Testbed paper | Dataset paper | Environment, and later its own paper |
+| What | Testbed and environment paper | Dataset paper | Journal extension or short follow-up |
 | Folder | `scoop_testbed_iotj/` | `scoop_dataset_paper/` | `scoop_gym/` (+ `isaac_coop_sim/`) |
-| Venue | IEEE IoT-J | IEEE T-RO | v0 ships with SCooP-iT; the paper's venue is decided at v1 |
-| One claim | The network and the task are measured on the same run, and the replay of that link is validated | Collaborative perception for indoor robot teams studied as findings (Q1-Q4), not only as a leaderboard | Train and score agents against the network the robots actually had |
+| Venue | IEEE IoT-J | IEEE T-RO | decided when the closed loop works |
+| One claim | A real indoor team captured on one clock and one frame, sensing and communication alike, and offered as a validated environment | Collaborative perception for indoor robot teams studied as findings (Q1-Q4), not only as a leaderboard | Train and score agents against the network the robots actually had |
 | State, 24 Oct | Draft compiles (16 pp); results open | Draft written; collection, labels and every experiment open | Link engine, attribution log, `CommSchedule-v0` and tests done; twin and other tasks open |
 
 ## Who owns what
 
 - **SCooP-iT:**
   - platform, clock, ground truth, link instrumentation, the replay and its validation (E3a live, E3b twin);
-  - the gym's interface and replay mode, with one demonstration (`CommSchedule-v0`).
+  - SCooP-iT Gym: the interface, replay mode, the twin along the recorded paths, `CommSchedule-v0` and `CoopDetect-v0`.
 - **SCooP:**
   - sequences, labels, collection design, collaboration geometry, release, devkit;
   - the offline benchmarks T1 and T2, and Q1-Q4.
   - It cites SCooP-iT for the platform and keeps half a page on it.
-- **Gym paper:**
+- **Extension (closed-loop Gym):**
   - the closed-loop twin and the link indexed by place, with its out-of-run validation;
   - the twin tasks, the agent benchmark (rule, RL, VLM), and attribution of failures down to the link.
   - It cites both papers.
@@ -35,7 +64,7 @@ labels on coop_2 --+--> CoopDetect-v0 --------> gym v1
                    +--> E3b ΔAP (with twin run) -> SCooP-iT
                    +--> Q1-Q4 training ---------> SCooP
 twin run of coop_2 ----> E3b scan agreement --> SCooP-iT; twin open loop -> gym v1
-positional link + out-of-run check ------------> closed-loop twin --------> gym paper
+positional link + out-of-run check ------------> closed-loop twin --------> extension
 SCooP-iT on arXiv -----------------------------> SCooP submission (cites it)
 ```
 
@@ -98,12 +127,11 @@ Submit after SCooP-iT is on arXiv.
 
 ### Gym track
 
-- **v0, done:** `CommSchedule-v0` in replay mode. Shown in SCooP-iT Sec. IX.
-- **v1:**
+- **v0, done:** `CommSchedule-v0` in replay mode.
+- **v1, in SCooP-iT (Sec. IX):**
   - `CoopDetect-v0`: needs Phase 3 and recorded frames through the devkit.
-  - The twin in open loop and `OcclusionHandoff-v0`: needs Phase 4.
-  - Choose the venue here.
-- **v2, the gym paper:**
+  - The twin in open loop: needs Phase 4 (the same run as E3b).
+- **v2, the extension:**
   - the positional link (survey radio map plus contention mode), validated out of run;
   - robot control in Isaac instead of pose replay;
   - `ConnectedCoverage-v0` and `RelayPlacement-v0`;
@@ -114,4 +142,5 @@ Submit after SCooP-iT is on arXiv.
 
 - Deadlines for each submission. Phases 1-5 are in order, but no dates are set.
 - The cross-pass figure (Phase 1).
-- The venue of the gym paper (at v1).
+- The venue of the extension (when the closed loop works).
+- The project name: keep SCooP or pick a Kimera-style name (see the 24 Oct discussion).
