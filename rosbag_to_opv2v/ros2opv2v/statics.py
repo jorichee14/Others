@@ -295,31 +295,61 @@ def _finish_cloud(xyz: np.ndarray, max_points: int) -> np.ndarray:
 
 
 # ------------------------------------------------- the floor under a path ----
-def sensor_height(points: np.ndarray, poses: np.ndarray,
-                  cell: float = 0.5, samples: int = 300) -> Tuple[float, int]:
+def sensor_height(points: np.ndarray, poses: np.ndarray, cell: float = 0.5,
+                  samples: int = 300, body: float = 0.45,
+                  reach: float = 1.4) -> Tuple[float, int]:
     """How high the sensor rode above the floor, measured under its own path:
-    per sampled pose, the densest 2 cm layer of the points within cell/2 of it,
-    0.1 to 3 m below; the median over the poses.
+    per sampled pose, the densest 2 cm layer of the floor around it -- between
+    `body` and `reach` m away horizontally, 0.1 to 3 m below -- and the median
+    over the poses.
 
     This is scoop_pipeline/datasets/lod3dgs.py's measurement, the one its mesh
-    fills a floor with. It works where a histogram of the whole cloud does not:
-    a polished floor returns almost nothing at grazing incidence, so the floor
-    metres away from the path is thin enough for an object's own seat to
-    outvote it, while the floor directly under the sensor is at normal
-    incidence and comes back strongly.
+    fills a floor with, and it works where a histogram of the whole cloud does
+    not: a polished floor returns almost nothing at grazing incidence, so the
+    floor metres away is thin enough for an object's own seat to outvote it,
+    while the floor the sensor looks down on is at normal incidence and comes
+    back strongly.
+
+    `body` is why the ring and not the cell straight below: the robot's own
+    deck sits a fixed distance under its sensor, past the range cut, and
+    returns at EVERY pose. Measured without it the deck is the densest layer
+    by far and passes for the floor -- which is a fixed offset, so nothing
+    downstream looks wrong, it is simply the wrong floor. lod3dgs.py clears
+    the body (in_body) before it measures; here the ring does it.
     """
     lo = points[:, :2].min(0)
     k = np.floor((points[:, :2] - lo) / cell).astype(np.int64)
     ny = int(k[:, 1].max()) + 1
+    nx = int(k[:, 0].max()) + 1
     key = k[:, 0] * ny + k[:, 1]
     order = np.argsort(key, kind="stable")
     ks = key[order]
+    rings = int(np.ceil(reach / cell))
     hs = []
     for t in poses[np.linspace(0, len(poses) - 1, min(samples, len(poses))).astype(int)]:
         c = np.floor((t[:2] - lo) / cell).astype(np.int64)
-        a, b = np.searchsorted(ks, [c[0] * ny + c[1], c[0] * ny + c[1] + 1])
-        z = points[order[a:b], 2]
-        z = z[(z < t[2] - 0.1) & (z > t[2] - 3.0)]
+        near = []
+        for dx in range(-rings, rings + 1):
+            cx = c[0] + dx
+            if not 0 <= cx < nx:
+                continue
+            y0, y1 = c[1] - rings, c[1] + rings
+            a, b = np.searchsorted(ks, [cx * ny + max(y0, 0), cx * ny + min(y1, ny - 1) + 1])
+            if b > a:
+                near.append(points[order[a:b]])
+        if not near:
+            continue
+        P = np.vstack(near)
+        d = np.linalg.norm(P[:, :2] - t[:2], axis=1)
+        P = P[(d <= reach) & (P[:, 2] < t[2] - 0.1) & (P[:, 2] > t[2] - 3.0)]
+        if len(P) < 20:
+            continue
+        # the robot's deck rides with it, so in the map it smears along the
+        # WHOLE path: distance from this one pose does not exclude it, distance
+        # from the path does
+        W = poses[np.linalg.norm(poses[:, :2] - t[:2], axis=1) <= reach + body][:, :2]
+        d_path = np.min(np.linalg.norm(P[:, None, :2] - W[None, :, :], axis=2), axis=1)
+        z = P[d_path > body, 2]
         if len(z) < 20:
             continue
         cnt, e = np.histogram(z, bins=np.arange(z.min(), z.max() + 0.04, 0.02))

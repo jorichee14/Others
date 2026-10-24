@@ -2054,12 +2054,17 @@ def test_the_floor_comes_from_the_path_when_the_cloud_cannot_show_it():
     poses = np.column_stack([x, np.zeros_like(x), floor + 1.05])
     # the floor is sampled only under the path, 0.3 m either side
     under = np.column_stack([
-        np.repeat(x, 30), rng.uniform(-0.3, 0.3, 400 * 30),
+        np.repeat(x, 30), rng.uniform(-1.3, 1.3, 400 * 30),
         np.repeat(floor, 30) + rng.normal(0, 0.01, 400 * 30)])
     # and a dense seat 0.45 m up, 2 m off the path, which would win any vote
     seat = np.column_stack([rng.uniform(4.7, 5.3, 6000), rng.uniform(1.7, 2.3, 6000),
                             rng.normal(-1.07 + 0.45, 0.01, 6000)])
-    cloud = np.vstack([under, seat])
+    # the robot's own deck: dense, 0.70 m under the sensor at EVERY pose, and
+    # the reason the measurement has to skip what is directly below it
+    deck = np.column_stack([np.repeat(x, 40) + rng.uniform(-0.2, 0.2, 400 * 40),
+                            rng.uniform(-0.2, 0.2, 400 * 40),
+                            np.repeat(floor, 40) + 1.05 - 0.70])
+    cloud = np.vstack([under, seat, deck])
     h, n = sensor_height(cloud, poses)
     assert abs(h - 1.05) < 0.03, (h, n)
     here, away = floor_under(poses, h, [5.0, 2.0])      # beside the seat, past the dip
