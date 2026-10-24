@@ -175,6 +175,23 @@ def main():
         eq(c["dataset"].get("boards_moved"), True, "coop boards_moved")
         eq(c["03_init"]["relocalize"]["enabled"], True, "coop boards_moved -> relocalize")
         eq(c["dataset"]["boards_from"], ["survey/site_2"], "coop boards_from still the survey's")
+
+        # a coop run takes its OWN site's survey: the boards stand somewhere
+        # else at each site, so another site's poses would be tens of m out
+        eq(run_pass.same_site(["survey/site_1", "survey/site_2"], ("coop", "site_2")),
+           ["survey/site_2"], "same site's survey")
+        eq(run_pass.same_site(["survey/site_1", "survey/site_2"], ("coop_1",)),
+           ["survey/site_1", "survey/site_2"], "no site in the pass: every survey")
+        eq(run_pass.same_site(["survey/site_1"], ("coop", "site_3")),
+           ["survey/site_1"], "no survey of this site: every survey")
+
+        # a stray bag from another run, disjoint and LONGER than any of the
+        # run's own: the odd one is it, not the three that overlap each other
+        runbags = [("sniffer_from_another_run", 0.0, 304.0),
+                   ("mobile_1", 2400.0, 2647.0), ("mobile_2", 2409.0, 2640.0),
+                   ("infra_1", 2416.0, 2642.0)]
+        eq(run_pass.check_spans(runbags, log=lambda _l: None),
+           ["sniffer_from_another_run"], "the stray bag, not the three that overlap")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     for f in fails:

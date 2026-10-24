@@ -178,15 +178,19 @@ def bag_spans(raw):
 
 
 def check_spans(spans, log=print, least=0.5):
-    """The bags' time spans side by side, against the longest one (the
-    driving robot's): a bag that overlaps it by less than `least` of its own
-    length is from another run (a sniffer bag copied into the wrong folder).
-    -> the names of those."""
+    """The bags' time spans side by side, against the run: a bag that overlaps
+    it by less than `least` of its own length is from another run (a sniffer
+    bag copied into the wrong folder). The run is the bag that overlaps the
+    most others -- not the longest, which is the odd one itself when the stray
+    bag happens to be the long one. -> the names of the strays."""
     import datetime
     if not spans:
         return []
-    S, E = max(spans, key=lambda x: x[2] - x[1])[1:]
-    log("the bags' time spans (UTC), against the longest:")
+    def overlaps(a, b):
+        return min(a[2], b[2]) - max(a[1], b[1]) > 0
+    S, E = max(spans, key=lambda x: (sum(1 for y in spans if y is not x and overlaps(x, y)),
+                                     x[2] - x[1]))[1:]
+    log("the bags' time spans (UTC), against the run:")
     bad = []
     for name, s, e in spans:
         ov = max(0.0, min(e, E) - max(s, S)) / max(e - s, 1e-9)
@@ -197,6 +201,16 @@ def check_spans(spans, log=print, least=0.5):
         log("  %-60s %s  %6.0f s%s" % (name, datetime.datetime.utcfromtimestamp(s).strftime("%Y-%m-%d %H:%M:%S"),
                                         e - s, flag))
     return bad
+
+
+def same_site(surveys, pas):
+    """The surveys whose boards this pass should take: the one of its OWN site
+    when there is one (coop/site_2 -> survey/site_2), else all of them. The
+    boards stand somewhere else at each site, so another site's survey would
+    place this run's boards tens of metres out."""
+    site = pas[-1] if len(pas) > 1 else None
+    same = [s for s in surveys if site and s.split("/")[-1] == site]
+    return same or surveys
 
 
 def new_config(raw, robot=None, reference=None, log=print, stages=STAGES, boards_moved=False):
@@ -269,6 +283,7 @@ def new_config(raw, robot=None, reference=None, log=print, stages=STAGES, boards
                         maps.append(name_)
                 elif plan.mode_of(*rp[2]) == "survey" and name_ not in surveys:
                     surveys.append(name_)                 # a survey's 05 measured the boards
+        surveys = same_site(surveys, pas)
         if reference is None:
             if len(maps) != 1:
                 raise SystemExit("the map to localize in: %s mapping passes on %s in map_stages/ "
@@ -361,7 +376,7 @@ def new_config(raw, robot=None, reference=None, log=print, stages=STAGES, boards
     log("%s pass, %s; its sensors (from the base config's robots block):" % (mode, P.machine))
     if mode == "coop":
         log("  boards and the infra camera from: %s" % (", ".join(cfg["dataset"]["boards_from"]) or "NONE"))
-        log("  mobile_2's start board: %s (the 04 track; change it if it starts elsewhere)" % RS_BOARD)
+        log("  neither robot's start board is named: 03 looks for every board in the map")
     for k in ("points_topic", "image_topic", "camera_info_topic", "camera_frame",
               "camera_map_frame", "rectified"):
         log("  %-18s %s" % (k, P.sensor_setting(k)))
