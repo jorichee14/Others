@@ -131,6 +131,11 @@ def main():
     fuse_cfg = s.get("fuse", {})
     g_reproj = float(fuse_cfg.get("max_reproj_px", 1.0))
     g_std = float(fuse_cfg.get("max_std_mm", 20.0))
+    g_std_by = {k: float(v) for k, v in (fuse_cfg.get("max_std_mm_by_board") or {}).items()}
+    g_std_for = lambda design: g_std_by.get(design, g_std)                   # noqa: E731
+    for nm_, v_ in sorted(g_std_by.items()):
+        print("board '%s': sections up to %.1f mm of spread accepted "
+              "(fuse.max_std_mm_by_board, the rest %.1f)" % (nm_, v_, g_std))
     g_dis_mm = float(fuse_cfg.get("max_section_disagree_mm", 50.0))
     g_dis_deg = float(fuse_cfg.get("max_section_disagree_deg", 1.0))
 
@@ -400,8 +405,8 @@ def main():
                 gate.append("n<%d" % min_sec_for(inst["design"]))
             if sec["mean_reproj"] > g_reproj:
                 gate.append("reproj>%.2f" % g_reproj)
-            if sec["std_mm"] > g_std:
-                gate.append("std>%.1fmm" % g_std)
+            if sec["std_mm"] > g_std_for(inst["design"]):
+                gate.append("std>%.1fmm" % g_std_for(inst["design"]))
             sec["gated"] = gate
             print("  s%d  t=%.1f..%.1f s (%.1f%%..%.1f%%)  n=%d(%d used)  "
                   "reproj %.3f px  %s  xyz=%s%s"

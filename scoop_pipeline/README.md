@@ -443,6 +443,15 @@ board that only seeds a placement, which 07's LiDAR registration then
 decides, may pass on fewer: `"min_section_samples_by_board": {"board_4": 1}`
 (the survey of 20261015: mobile_1's ZED passed board_4 once, the parked
 mobile_2's RealSense faces it from 0.5 m).
+A section is refused when its sightings spread more than `fuse.max_std_mm`
+(20 mm) about their mean. That spread is the TRAJECTORY's jitter as much as
+the detector's: a run whose scans were each registered to the map
+independently wobbles, and a board seen from one spot over a few seconds
+inherits it (site_2's survey, 20261015: 12 to 22 mm, where the same
+sightings on GLIM's own smooth trajectory gave 2 to 8 mm). Loosen it for the
+one board that needs it, not globally:
+`"fuse": {"max_std_mm_by_board": {"board_3": 25.0}}`, and say in the pass's
+results what the spread was.
 
 Why a board was seen, or not (05 scans only the dataset's camera, so a board
 meant for a parked robot's camera is scanned here):

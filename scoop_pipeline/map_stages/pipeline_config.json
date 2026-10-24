@@ -117,8 +117,10 @@
     "group_gap_factor": 2.5,
 
     "fuse": {
+      "_note": "max_std_mm_by_board loosens the spread gate for one board only (a board the run saw from one spot, where the trajectory's own jitter sets the spread), the rest keeping the global one",
       "max_reproj_px": 1.0,
       "max_std_mm": 20.0,
+      "max_std_mm_by_board": {},
       "max_section_disagree_mm": 50.0,
       "max_section_disagree_deg": 1.0
     },
