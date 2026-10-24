@@ -30,6 +30,10 @@ output:
   frames_per_scenario: 0
   frame_stride: 1
   include_self_in_vehicles: false
+  # The classes here are chairs and potted plants; a robot is not one of
+  # them, and a box with no class reads as class id 0 rather than as
+  # unknown. The agents stay out of the detection ground truth.
+  include_agents_in_vehicles: false
   write_provenance: true
 
 time:

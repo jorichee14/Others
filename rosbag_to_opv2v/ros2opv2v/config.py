@@ -521,6 +521,14 @@ class OutputConfig:
     frames_per_scenario: int = 0   # 0 = one scenario for the whole bag
     frame_stride: int = 1
     include_self_in_vehicles: bool = False
+    include_agents_in_vehicles: bool = True
+    """Whether the agents' own boxes are detection targets.
+
+    True is OPV2V's world, where the CAVs *are* what the detector looks for.
+    It is wrong wherever the classes are things like chairs and potted plants:
+    an agent box carries no class, and a class-less box is not read as unknown,
+    it is read as class id 0 -- so leaving it on trains the detector that a
+    moving robot is a potted plant."""
     write_provenance: bool = True
     labels_file: Optional[str] = None
     """Static objects labelled once in the world frame (scripts/label_static.py).
@@ -540,6 +548,8 @@ class OutputConfig:
             frames_per_scenario=int(mapping.get("frames_per_scenario", 0)),
             frame_stride=int(mapping.get("frame_stride", 1)),
             include_self_in_vehicles=bool(mapping.get("include_self_in_vehicles", False)),
+            include_agents_in_vehicles=bool(
+                mapping.get("include_agents_in_vehicles", True)),
             write_provenance=bool(mapping.get("write_provenance", True)),
             labels_file=(os.path.expanduser(str(mapping["labels_file"]))
                          if mapping.get("labels_file") else None))

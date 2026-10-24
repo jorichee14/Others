@@ -2770,7 +2770,13 @@ def test_with_opencood_builds_the_real_dataset_and_reports_failures():
                 return {'ego': {'object_bbx_mask': mask}}
 
         late.LateFusionDataset = LateFusionDataset
-        yaml_utils.load_yaml = lambda path: {'train_params': {'max_cav': 5}}
+        # build_dataset is what the validator calls now, so that the class the
+        # config names is the class that gets exercised.
+        datasets.build_dataset = (
+            lambda params, visualize=False, train=True:
+            LateFusionDataset(params, visualize, train))
+        yaml_utils.load_yaml = lambda path: {'train_params': {'max_cav': 5},
+                                             'fusion': {'core_method': 'late'}}
         for name, module in (('opencood', pkg), ('opencood.data_utils', data_utils),
                              ('opencood.data_utils.datasets', datasets),
                              ('opencood.data_utils.datasets.late_fusion_dataset', late),

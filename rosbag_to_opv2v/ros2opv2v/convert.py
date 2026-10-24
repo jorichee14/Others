@@ -894,7 +894,8 @@ def write_frame_yamls(cfg: ConverterConfig, scenarios, frame_poses: Dict[str, di
                     "vehicles": labels.merge_external_labels(
                         labels.vehicles_for_viewer(
                             world_poses, agent_objects, viewer=agent.name,
-                            include_self=cfg.output.include_self_in_vehicles),
+                            include_self=cfg.output.include_self_in_vehicles)
+                        if cfg.output.include_agents_in_vehicles else {},
                         statics),
                 }
                 for slot, camera in enumerate(agent.cameras):

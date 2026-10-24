@@ -110,6 +110,11 @@ def merge_external_labels(vehicles: dict, external: Optional[Iterable[dict]]) ->
         # so an unlabelled chair is not unclassified, it is confidently a plant.
         obj_type = item.get("obj_type") or item.get("class_name")
         if obj_type:
+            # Both keys, because the loader reads `class_name` first and only
+            # falls back to `obj_type`. InCoP's own real_world release writes
+            # class_name for the real class and leaves obj_type as the generic
+            # detection class, so a reader of either convention finds the class.
             entry["obj_type"] = str(obj_type)
+            entry["class_name"] = str(obj_type)
         vehicles[object_id] = entry
     return vehicles
