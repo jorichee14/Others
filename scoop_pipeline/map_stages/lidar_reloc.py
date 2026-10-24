@@ -26,7 +26,10 @@ Then it is CHECKED, and refused if a check fails:
   unique      a second fit, metres or degrees away, must leave clearly more of
               the window off the map (a symmetric building fits two ways);
   repeat      a second window, check_after_s later, relocalized on its own,
-              must agree with the first carried forward by GLIM;
+              must agree with the first carried forward by GLIM. When that
+              window cannot place itself (below min_fitness: a stretch the
+              map covers thinly), there is no pose to compare, and the start
+              is judged instead by how much of that window it lays on the map;
   board       (03, after this) the ZED's anchor-board dwell -- not used in
               the fit -- must agree with the LiDAR start pose;
   look        mapping/reloc_check_<tag>.ply: the window (red) on the map
@@ -326,21 +329,45 @@ def relocalize(P, T_lidar_cam=None):
     if tr_t[-1] > t1 + float(c["window_s"]):
         w1, n1 = window_cloud(bag, topic, tr_t, tr_T, s01, t1, t1 + float(c["window_s"]))
         print("\n  repeat window at +%.0f s: %d scans -> %d points" % (t1 - t0, n1, len(w1)))
-        c1, _ = register(w1, tgt, grid, c, "repeat", score)
+        c1, src1 = register(w1, tgt, grid, c, "repeat", score)
         if not c1:
             raise SystemExit("relocalize: the repeat window found no fit -- refused")
-        T1 = c1[0][0]
-        Tg = pose_at(tr_t, tr_T, tr_q, t1)
-        A, B = T_map_glim @ Tg, T1 @ Tg
-        dcm = np.linalg.norm(A[:3, 3] - B[:3, 3]) * 100
-        ddeg = ang_deg(A[:3, :3].T @ B[:3, :3])
-        print("  [repeat] start fit carried %.0f s by GLIM vs the window's own fit: "
-              "%.1f cm / %.3f deg  (max %.0f cm / %.2f deg)"
-              % (t1 - t0, dcm, ddeg, float(c["check_max_cm"]), float(c["check_max_deg"])))
-        checks.update(repeat_after_s=t1 - t0, repeat_cm=dcm, repeat_deg=ddeg,
-                      repeat_fitness=c1[0][1])
-        if dcm > float(c["check_max_cm"]) or ddeg > float(c["check_max_deg"]):
-            raise SystemExit("relocalize: the two windows disagree -- refused")
+        T1, fit1 = c1[0][0], c1[0][1]
+        # the start, carried here by GLIM, put to the same test as the start
+        # window was: how much of THIS window it lays on the map
+        fit_c, rmse_c = score(np.asarray(src1.points), T_map_glim, float(c["fit_m"]))
+        print("  [repeat] this window on the map: %.1f %% by its own fit, %.1f %% by the "
+              "start carried %.0f s by GLIM (rmse %.2f cm)"
+              % (fit1 * 100, fit_c * 100, t1 - t0, rmse_c * 100))
+        checks.update(repeat_after_s=t1 - t0, repeat_fitness=fit1, repeat_carried_fitness=fit_c)
+        if fit1 < float(c["min_fitness"]):
+            # the second window did not relocalize on its own (a stretch the map
+            # covers thinly, a corridor with nothing to lock on to). Its fit is
+            # not a place to compare against -- but the start carried here is
+            # still testable, and a wrong start would lay this window off the map.
+            print("    its own fit is below min_fitness %.0f %%: the window did not "
+                  "relocalize, so there is nothing to compare poses with. Judging the "
+                  "start by how it lays this window on the map instead."
+                  % (float(c["min_fitness"]) * 100))
+            if fit_c < float(c["min_fitness"]):
+                raise SystemExit(
+                    "relocalize: %.1f %% of the window %.0f s in lies on the map when placed "
+                    "by the start -- the start does not explain it, and the window could not "
+                    "place itself; refused. Move the check to a stretch the map covers "
+                    '("03_init": {"relocalize": {"check_after_s": ...}}) or widen "window_s".'
+                    % (fit_c * 100, t1 - t0))
+            print("    the start lays it on the map: accepted")
+        else:
+            Tg = pose_at(tr_t, tr_T, tr_q, t1)
+            A, B = T_map_glim @ Tg, T1 @ Tg
+            dcm = np.linalg.norm(A[:3, 3] - B[:3, 3]) * 100
+            ddeg = ang_deg(A[:3, :3].T @ B[:3, :3])
+            print("  [repeat] start fit carried %.0f s by GLIM vs the window's own fit: "
+                  "%.1f cm / %.3f deg  (max %.0f cm / %.2f deg)"
+                  % (t1 - t0, dcm, ddeg, float(c["check_max_cm"]), float(c["check_max_deg"])))
+            checks.update(repeat_cm=dcm, repeat_deg=ddeg)
+            if dcm > float(c["check_max_cm"]) or ddeg > float(c["check_max_deg"]):
+                raise SystemExit("relocalize: the two windows disagree -- refused")
     else:
         print("\n  [repeat] run shorter than check_after_s + window_s: skipped")
 
