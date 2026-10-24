@@ -36,10 +36,13 @@ Options worth knowing:
     --ref-map PATH        the reference map's points into the same cloud as well, so
                           the run's own objects stand in the building the mapping
                           pass measured. Off unless asked for (09_build.ref_map,
-                          or "auto" for the reference pass's anchored map): a
-                          merged cloud cannot tell what the run brought into the
-                          room from what was always there. The map's points are
-                          added AFTER the dynamic filter, so none is carved away.
+                          or "auto" here or in the config for the reference pass's
+                          anchored map): a merged cloud cannot tell what the run
+                          brought into the room from what was always there, so it
+                          is written as cloud_with_ref_<tag>.pcd and the run's own
+                          cloud is left alone (--out overrides). The map's points
+                          are added AFTER the dynamic filter, so none is carved
+                          away.
     --also TOPIC=TRAJ     another LiDAR's scans into the same cloud, placed by its
                           own stage-04 track (T_map_lidar). From a config, every
                           "kind": "lidar" entry of 04_reference.tracks is added by
@@ -221,6 +224,8 @@ def drop_dynamic(P, dyn, carver, rd):
 def main():
     argv = sys.argv[1:]
     cfg_defaults = {}
+    P = None
+    out_given = any(a == "--out" or a.startswith("--out=") for a in argv)
     if argv and not argv[0].startswith("-") and argv[0].endswith(".json"):
         from pipeline_common import load_pipeline
         P = load_pipeline(argv[0])
@@ -294,6 +299,19 @@ def main():
     ap.add_argument("--remove-dynamic", default=None, help=argparse.SUPPRESS)   # the config block
     ap.set_defaults(**{k.replace("-", "_"): v for k, v in cfg_defaults.items()})
     args = ap.parse_args(argv)
+    if args.ref_map == "auto":            # on the command line too, not only in the config
+        if P is None:
+            sys.exit("--ref-map auto needs a pipeline config (it names the reference pass)")
+        args.ref_map = P.ref_file("anchored_map") if P.reference else ""
+        if not args.ref_map:
+            sys.exit("--ref-map auto: this pass has no reference pass to take a map from")
+    if args.ref_map and not out_given and P is not None:
+        # the merged cloud is a different thing from the run's own -- it cannot
+        # tell what the run brought into the room from what was always there --
+        # so it gets its own name instead of overwriting it
+        args.out = P.outp("cloud_with_ref_{tag}.pcd")
+        print("merging with the reference map -> %s (the run's own cloud is left "
+              "as it is; --out overrides)" % args.out)
     rd = None if args.keep_dynamic else (args.remove_dynamic if isinstance(args.remove_dynamic, dict) else {})
     if rd is not None and args.min_span_s is not None:
         rd = dict(rd, min_span_s=args.min_span_s)
