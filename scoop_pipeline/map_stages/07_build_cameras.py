@@ -57,6 +57,11 @@ Each camera entry now declares a "source":
       rest, up to "max_tilt_deg"). Knobs go under "reloc" in the camera entry
       and default to lidar_reloc's.
 
+      Afterwards the camera's frames are searched for EVERY board 05 placed --
+      not the one the entry names -- and each one found is reported against the
+      placement ("board_check" in the output). None of it enters the placement;
+      it is the only independent check a parked robot has.
+
   python3 07_build_cameras.py [pipeline_config.json]
 """
 import os
@@ -150,22 +155,8 @@ def camera_from_yaml(cam, ctx):
     return rec
 
 
-def camera_from_board(cam, ctx):
-    name = cam["name"]; child = cam["child_frame"]
-    bname = ctx["board_name"](cam["board"])
-    if bname not in ctx["boards"]:
-        print("  ! board '%s' has no pose in map (stage 05 did not export it) "
-              "-> skipped" % bname)
-        return None
-    T_map_board, brec = ctx["boards"][bname]
-    design = brec.get("design", bname)
-    B = Board(design, ctx["board_cfgs"][design])
-    T_fix = B.frame_fix(ctx["board_axes"], ctx["board_origin"])
-    print("  %s" % B.describe())
-    print("  board pose in map: %s (%s, %d views, std %.1f mm)"
-          % (np.round(T_map_board[:3, 3], 4).tolist(), brec.get("method", "?"),
-             brec.get("n_views", -1), brec.get("std_mm", float("nan"))))
-
+def read_frames(cam, ctx):
+    """(frames, K, D) of a camera entry's stream, or None with the reason."""
     bag = cam.get("bag") or ctx["default_bag"]
     itopic = cam["image_topic"]; ctopic = cam.get("camera_info_topic")
     imgs, infos, _tree, available = read_bag(
@@ -181,19 +172,79 @@ def camera_from_board(cam, ctx):
                                      cam.get("K"), cam.get("dist"))
     print("  intrinsics: %s | fx=%.2f cx=%.2f"
           % ("bag CameraInfo" if from_bag else "config", K[0, 0], K[0, 2]))
+    return frames, K, D
 
-    target = int(cam.get("detect_target", 20))
-    poses = []   # (T_map_cam, reproj, stamp, n_corners)
+
+def see_board(bname, ctx, frames, K, D, target):
+    """Every pose of the camera this board gives over the frames, stopping at
+    `target`: [(T_map_cam, reproj, stamp, n_corners)]. Each board is its own
+    ArUco dictionary, so a detector for one finds nothing in another."""
+    T_map_board, brec = ctx["boards"][bname]
+    design = brec.get("design", bname)
+    B = Board(design, ctx["board_cfgs"][design])
+    T_fix = B.frame_fix(ctx["board_axes"], ctx["board_origin"])
+    poses = []
     for st, gray in frames:
         if len(poses) >= target:
             break
         d = B.detect(gray, K, D)
-        if d is None:
+        if d is not None:
+            poses.append((T_map_board @ np.linalg.inv(d.T @ T_fix), d.reproj, st, d.n))
+    return poses
+
+
+def see_any_board(ctx, frames, K, D, target, skip=()):
+    """Which of the boards placed in map this camera can see, most sightings
+    first: [(name, poses)]. Nothing is assumed about which board it faces."""
+    out = []
+    for bname in sorted(ctx["boards"]):
+        if bname in skip:
             continue
-        poses.append((T_map_board @ np.linalg.inv(d.T @ T_fix), d.reproj, st, d.n))
-    if not poses:
-        print("  ! board '%s' never detected in %d frames of %s" % (bname, len(frames), itopic))
+        poses = see_board(bname, ctx, frames, K, D, target)
+        if poses:
+            out.append((bname, poses))
+            print("    '%s': %d sighting(s), best reproj %.2f px"
+                  % (bname, len(poses), min(p[1] for p in poses)))
+    return sorted(out, key=lambda x: -len(x[1]))
+
+
+def camera_from_board(cam, ctx):
+    name = cam["name"]; child = cam["child_frame"]
+    bname = ctx["board_name"](cam["board"])
+    if bname not in ctx["boards"]:
+        print("  ! board '%s' has no pose in map (stage 05 did not export it) "
+              "-> skipped" % bname)
         return None
+    T_map_board, brec = ctx["boards"][bname]
+    B = Board(brec.get("design", bname), ctx["board_cfgs"][brec.get("design", bname)])
+    print("  %s" % B.describe())
+    print("  board pose in map: %s (%s, %d views, std %.1f mm)"
+          % (np.round(T_map_board[:3, 3], 4).tolist(), brec.get("method", "?"),
+             brec.get("n_views", -1), brec.get("std_mm", float("nan"))))
+
+    got = read_frames(cam, ctx)
+    if got is None:
+        return None
+    frames, K, D = got
+    bag = cam.get("bag") or ctx["default_bag"]
+    itopic = cam["image_topic"]
+    target = int(cam.get("detect_target", 20))
+    poses = see_board(bname, ctx, frames, K, D, target)
+    if not poses:
+        # the entry names the board the camera was MEANT to face. It may face
+        # another one, or none: look for every board 05 placed before giving up
+        print("  board '%s' never detected in %d frames of %s -- looking for the "
+              "others 05 placed" % (bname, len(frames), itopic))
+        seen = see_any_board(ctx, frames, K, D, target, skip=(bname,))
+        if not seen:
+            print("  ! no placed board is in view of this camera")
+            return None
+        bname, poses = seen[0]
+        T_map_board, brec = ctx["boards"][bname]
+        print("  -> placing it from board '%s' instead (%d sightings)" % (bname, len(poses)))
+        if len(seen) > 1:
+            print("     also in view: %s" % ", ".join("'%s' (%d)" % (n, len(p))
+                                                      for n, p in seen[1:]))
 
     Ts = [p[0] for p in poses]
     T_avg, _ = avg_T(Ts)          # (pose, number of poses kept)
@@ -237,7 +288,7 @@ def lidar_frame_of(cam, ctx):
     import pass_tf
     from scoop import bag as sbag, tftree
     child, topic = cam["child_frame"], cam["points_topic"]
-    bag = cam.get("lidar_bag") or ctx["default_bag"]
+    bag = cam.get("lidar_bag") or cam.get("bag") or ctx["default_bag"]
     lidar = pass_tf._frame_id([bag], topic)
     if lidar is None:
         print("  ! no %s in %s" % (topic, bag))
@@ -380,33 +431,48 @@ def camera_from_reloc(cam, ctx, P):
            "translation": t.tolist(), "quaternion_xyzw": q.tolist()}
     if rival_off is not None:
         rec["reloc_rival_off"] = round(float(rival_off), 4)
+
+    # the check: whatever board this camera can see, against the placement its
+    # own LiDAR just gave. Nothing here was used to make the placement, and no
+    # board is assumed -- every one 05 put in the map is looked for.
+    if cam.get("board_check", True) and cam.get("image_topic") and ctx.get("boards"):
+        print("  check: looking for any board 05 placed in this camera's frames")
+        got = read_frames(cam, ctx)
+        if got is None:
+            print("    no frames: the placement stands unchecked")
+            return rec
+        frames, K, D = got
+        seen = see_any_board(ctx, frames, K, D, int(cam.get("detect_target", 20)))
+        if not seen:
+            print("    none in view: the placement stands unchecked")
+            rec["board_check"] = "no board in view"
+            return rec
+        rec["board_check"] = {}
+        for bname, poses in seen:
+            T_b, _ = avg_T([pp[0] for pp in poses])
+            d_mm = float(np.linalg.norm(T_b[:3, 3] - T_mc[:3, 3]) * 1000)
+            d_deg = ang_deg(T_b[:3, :3], T_mc[:3, :3])
+            print("    '%s' (%d sightings) puts this camera %.1f mm / %.2f deg from "
+                  "the LiDAR placement" % (bname, len(poses), d_mm, d_deg))
+            rec["board_check"][bname] = {"n": len(poses), "mm": round(d_mm, 1),
+                                         "deg": round(d_deg, 3)}
     return rec
 
 
 def camera_from_lidar(cam, ctx, P):
     """"source": "lidar" (see the top): the board placement, then the robot's
     own scans registered to the map from it; the board stays as the check."""
-    import importlib
-    import open3d as o3d
-    import pass_tf
-    from scoop import bag as sbag, tftree
-    A = importlib.import_module("02b_scan_to_map")
     rec = camera_from_board(cam, ctx)
     if rec is None:
         print("  no board placement to start the LiDAR registration from -> "
               "placing the robot from its own LiDAR instead (source 'reloc')")
         return camera_from_reloc(cam, ctx, P)
-    child, topic = cam["child_frame"], cam["points_topic"]
-    bag = cam.get("lidar_bag") or ctx["default_bag"]
-    lidar = pass_tf._frame_id([bag], topic)
-    if lidar is None:
-        print("  ! no %s in %s -> the board placement is kept" % (topic, bag))
+    got = lidar_frame_of(cam, ctx)
+    if got is None:
+        print("  -> the board placement is kept")
         return rec
-    try:
-        T_lc = tftree.static_between(lidar, child, tftree.tf_edges([bag]))
-    except sbag.BagError as e:
-        print("  ! %s -> the board placement is kept" % e)
-        return rec
+    bag, topic, lidar, T_lc = got
+    child = cam["child_frame"]
     T_mc_board = xyzquat_to_T(list(rec["translation"]) + list(rec["quaternion_xyzw"]))
     T_seed = T_mc_board @ np.linalg.inv(T_lc)              # map -> LiDAR, from the board
     got = scans_to_map(cam, ctx, bag, topic, T_seed)

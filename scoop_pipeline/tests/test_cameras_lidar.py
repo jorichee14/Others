@@ -76,7 +76,7 @@ def run_case(tmp, poses, T_true_cam, board=True):
     # the board part is 07's own; `board` False is a camera that never sees one
     C.camera_from_board = lambda cam, ctx: (dict(board_rec) if board else None)
     cam = {"name": "realsense", "child_frame": CAM, "source": "lidar", "board": "rs_anchor",
-           "points_topic": TOPIC, "n_scans": 8}
+           "points_topic": TOPIC, "n_scans": 8, "board_check": False}
     ctx = {"default_bag": bag, "map_file": mp, "map_frame": "map"}
     rec = C.camera_from_lidar(cam, ctx, None)
     if rec is None:
