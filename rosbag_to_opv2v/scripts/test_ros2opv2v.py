@@ -2074,6 +2074,35 @@ def test_the_floor_comes_from_the_path_when_the_cloud_cannot_show_it():
     assert abs(there - (-0.87)) < 0.03, there
 
 
+def test_labels_to_ply_draws_the_box_round_the_points_it_holds():
+    """The box edges land where the box is, and the points it claims are the
+    ones points_in_box claims -- the same test the --check counts make, drawn."""
+    import importlib.util, json, os, tempfile
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location("l2p", os.path.join(here, "labels_to_ply.py"))
+    l2p = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(l2p)
+    from ros2opv2v.statics import points_in_box, read_cloud_xyz, write_ply
+    box = {"name": "chair_1", "obj_type": "chair", "id": 1,
+           "location": [2.1, 3.1, -0.05], "extent": [0.3, 0.25, 0.45],
+           "angle": [0.0, 35.0, 0.0]}
+    c = l2p.corners(box)
+    assert len(c) == 8 and points_in_box(c, box, 1e-6).all(), c   # corners are ON the box
+    e = l2p.edges(box, 0.02)
+    assert points_in_box(e, box, 1e-6).all(), 'an edge left the box'
+    assert abs(e[:, 2].max() - (box["location"][2] + 0.45)) < 1e-6
+    d = tempfile.mkdtemp()
+    rng = np.random.default_rng(0)
+    obj = np.column_stack([rng.uniform(1.9, 2.3, 400), rng.uniform(2.9, 3.3, 400),
+                           rng.uniform(-0.4, 0.3, 400)])
+    write_ply(os.path.join(d, "c.ply"), obj)
+    json.dump([box], open(os.path.join(d, "l.json"), "w"))
+    assert l2p.main(["--pcd", os.path.join(d, "c.ply"), "--labels", os.path.join(d, "l.json"),
+                     "--out", os.path.join(d, "gt.ply")]) == 0
+    out = read_cloud_xyz(os.path.join(d, "gt.ply"))
+    assert len(out) > len(obj), (len(out), len(obj))              # the edges were added
+
+
 def test_cluster_at_picks_the_object_not_its_neighbour():
     from ros2opv2v.statics import cluster_at
     rng = np.random.default_rng(4)
