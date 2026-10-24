@@ -297,7 +297,10 @@ def plan(P, edges, bags, log=print):
             cc = cfg_cams.get(c["name"], {})
             og = cc.get("origin_frame")
             if og and og not in frames and og not in edges:
-                under_board(cc.get("board"), og, T_root,
+                # below the board that actually placed it (07 may have used
+                # another than the entry names), so the chain stays true: if
+                # that board's pose is revised, what it placed follows it
+                under_board(c.get("board") or cc.get("board"), og, T_root,
                             "%s's origin, where it is parked; %s" % (c["name"], why))
                 add_static(og, root, np.eye(4), "parked")
             else:

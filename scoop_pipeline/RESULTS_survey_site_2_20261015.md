@@ -87,9 +87,18 @@ cluster count mismatch; the one it found is the one the run used.
   (`raw/20261015/survey/site_2/infra_1/extrinsic_arducam.yaml`):
   map -> arducam_optical_frame t = [-28.860, -6.950, 1.974], trajectory gap
   10 ms.
-- mobile_2 NOT placed: board_4 was never detected in its 1 304 colour frames.
-  At site_2 the parked robot does not face a board at all, so 07 has nothing
-  to seed its LiDAR registration from, and its CSI stays unposed.
+- mobile_2 (RealSense) placed from **board_2**, not the board_4 its entry
+  names: 200 sightings at 0.15 px, static to 0.6 mm over the stream, averaged.
+  map -> camera_color_optical_frame t = [-20.239, -26.363, 0.344], half a
+  metre in front of board_2. 07 looks for every board 05 placed when the
+  configured one is not detected.
+  Its own LiDAR did not improve on that: 10 of 10 scans registered but
+  scattered 495 mm, so the board placement was kept; the scans' average sits
+  67 mm / 1.41 deg from it. Relocalizing that LiDAR globally in the map had
+  already been refused at 44.6 % of the window on the map (floor 50 %), and
+  its confident candidate was [-0.14, 7.35] -- 35 m from where the board puts
+  the robot. The gate earned its keep. mobile_2 simply does not see enough
+  mapped structure from where it is parked.
 - `mapping/cloud_in_ref_survey_site_2_20261015.pcd`: 3 167 193 points at
   0.03 m from 2 792 scans, x -50.09..4.82, y -39.50..19.81. 61 854 of 241 314
   voxels (299 341 points) carved out as movers, nothing else removed.
@@ -105,14 +114,10 @@ cluster count mismatch; the one it found is the one the run used.
 | iperf | mobile_1 up 239 Mbit/s median, down 301 |
 | CSI | infra_1 -> sniffer 30 910 packets at 89.4 Hz, RSSI median -55 dBm, link 2.2-21.6 m; mobile_2 -> sniffer 31 014 at 89.7 Hz, -56 dBm |
 | NTP | all synchronised, |offset| medians 0.0 to 0.06 ms, no steps |
-| csi_clean | infra_1 link 9 953 QoS frames, all posed; mobile_2 link 5 366, none posed (see above) |
+| csi_clean | infra_1 link 9 953 QoS frames, all posed, link 2.2-21.6 m; mobile_2 link 5 366, 5 348 posed, link 0.1-34.1 m |
 
 ## Open items
 
-- mobile_2 has no placement here, and no board to get one from. It is parked
-  with its Ouster running, so relocalizing its own LiDAR in the map — the same
-  machinery 03 uses for mobile_1 — would place it without a board. 07 only
-  does board-seeded LiDAR placement today.
 - Re-export GLIM over the whole bag to recover the 101 opening sightings.
 - Site_2's coop pass needs `boards_moved` AND the `relocalize` block, and must
   take its board poses from this run (`boards_from`), not from the mapping
