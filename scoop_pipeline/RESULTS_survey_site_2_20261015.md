@@ -4,7 +4,7 @@ mobile_1 drives (Ouster, ZED) through site_2, in the 20261015 mapping pass's
 anchored map. mobile_2 parked there for 92 s with its Ouster and RealSense.
 infra_1 recorded. The boards were put up again for this site, so
 `dataset.boards_moved` is set and what this run measures replaces the
-reference pass's poses. Companion: `RESULTS_survey_site_1_20261015.md`,
+reference pass's poses. Companions: `RESULTS_survey_site_1_20261015.md`,
 `RESULTS_coop_site_1_20261015.md`.
 
 ## Inputs
@@ -16,111 +16,85 @@ reference pass's poses. Companion: `RESULTS_survey_site_1_20261015.md`,
 | config | `map_stages/pipeline_config_survey_site_2_20261015.json` (`--new-config --boards-moved`) |
 | reference map | `processed/20261015/mapping/mapping/map_final_mapping_20261015_anchored.pcd` |
 
-## This pass has to be re-run from 03 (read this first)
+## The run is placed on the map, not on a board
 
-The boards were put up again for this site, so `dataset.boards_moved` is
-set -- and 03 still placed the run from the ZED's dwell on board_1, read
-against board_1's pose IN THE REFERENCE PASS, i.e. where the board was
-before it was moved. The run therefore started out by the board's move, and
-every number below carries it:
+The boards were moved for this site, so the reference pass's board poses say
+nothing about where this run is. 03 therefore relocalizes mobile_1's start in
+the map itself (`"03_init": {"relocalize": {"enabled": true}}`), which is what
+did not move:
 
-- 04 round 1 had to correct a median of 19.5 cm, which is the move, not the
-  seed being noisy;
-- `prior_beta: 0.5` only half-pulls each scan onto the map, so the final
-  trajectory keeps a part of that offset (GLIM to final 32.8 cm median);
-- 05 then measured the boards ON that trajectory, so board_1 reading 223.7 mm
-  from the reference's pose is partly the trajectory and partly the board --
-  the two cannot be separated from this pass;
-- the 12 to 22 mm spreads, against 2 to 8 mm on GLIM's own trajectory, are
-  that offset varying along the path.
+- start at map `[-20.13, 7.23, 0.38]`, yaw 88.4 deg: 86.2 % of the first 5 s
+  of scans lie within 5 cm of the map, rmse 2.2 cm;
+- unique by a wide margin: the next distinct fit, 45 m away, leaves 59.8 % of
+  the window off the map against this one's 13.8 % (needs >= 27.7 %);
+- confirmed by eye against the map: the start sits 0.4 m from where the robot
+  was put down;
+- the repeat window 60 s in could not place itself (43.8 % on the map, its
+  candidates 40 m apart in places the robot could not have reached: the map
+  covers that stretch thinly). ICP from the start carried there settles at
+  79.8 % on the map, 16.9 cm away — GLIM's drift over the interval. The start
+  explains where the LiDAR is; the comparison check stood down.
 
-The map's geometry is what did not move. Re-run from 03 with
+The first attempt at this pass had 03 place the run from the ZED's dwell on
+board_1 against board_1's pose in the REFERENCE pass, i.e. where the board was
+before it was moved. 07 now measures that move: **21 205 mm / 89.6 deg**. The
+run started 21 m from where it was, 04 dragged it back as far as it could, and
+every number that pass produced was a consequence of that. 03 now refuses a
+board-placed start whenever `boards_moved` is set.
 
-    "03_init": {"relocalize": {"enabled": true}}
-
-so the start comes from the LiDAR against the map (lidar_reloc) and the board
-dwell only checks it; `boards_moved` then makes that check report the board's
-move instead of refusing. With the seed right, 04 goes back to its defaults
-(`carry: true`, `max_shift: 0.5`, two rounds, no `prior_beta`) -- the settings
-below are a workaround for a bad seed, not the answer to the corridor.
-
-03 now refuses this combination rather than seeding off a moved board, and
-`run_pass.py --new-config --boards-moved` writes the `relocalize` block.
-
-## The registration had to be re-tuned (and why)
-
-With the stage's defaults (`carry: true`, `max_shift` 0.5 m, two rounds) the
-run came out BENT and 10 to 20 m from where it drove: round 1 corrected a
-median of 9.7 m, 1 094 of 2 790 scans never registered, and 05 then refused
-every board (spreads 23 to 71 mm). The residual stayed at 2.6 cm throughout,
-so nothing in the numbers said "wrong place".
-
-`check.py glim` separated the two possible causes. On GLIM's OWN trajectory
-the same sightings placed the boards to 2.4, 8.2, 2.7 and 6.9 mm, and
-board_2's loop closure over 3 s was 16.7 mm against 11.6 mm of detection
-noise, not significant. So the run was good and the REGISTRATION was at
-fault: site_2 is a corridor among parallel corridors, a scan fits the map as
-well 13 m sideways, and `carry` handed the first slip to every scan after
-it (the gate is measured from the carried seed, so it never tripped).
-
-Re-run with the map correcting GLIM instead of replacing it:
-`"rounds": 3, "carry": false, "max_shift": 0.3, "max_rot_deg": 2.0,
-"prior_beta": 0.5`.
+## Registration (04, stage defaults)
 
 | round | registered | median corr | p95 corr | median residual |
 |---|---|---|---|---|
-| 1 | 516 / 2 790 | 19.50 cm | 29.29 cm | 2.59 cm |
-| 2 | 2 731 / 2 790 | 2.55 cm | 23.11 cm | 2.74 cm |
-| 3 | 2 747 / 2 790 | 0.30 cm | 2.45 cm | 2.74 cm |
+| 1 | 2 790 / 2 790 | 7.17 cm | 22.17 cm | 1.50 cm |
+| 2 | 2 790 / 2 790 | 0.04 cm | 0.39 cm | 1.49 cm |
 
-GLIM seed to final: median 32.8 cm, p95 57.4 cm, max 70.6 cm. 43 scans
-interpolated from their neighbours. Path 97.0 m. The time check says GLIM's
-poses are its scans' (offset kept at 46 ms). Stage 04 now warns by itself
-when a round's median correction is past twice `max_shift`; the rule is in
-the README.
+No scan kept its seed, none lacked correspondences, and no scan sat in a
+direction the map leaves open. GLIM seed to final: median 7.2 cm, p95 22.2 cm,
+max 31.3 cm. Path 83.2 m, against the 82.22 m `check.py glim` measured on
+GLIM's own trajectory — two independent numbers that agree.
+
+`carry`, `max_shift`, `prior_beta` and the round count are all at their
+defaults. The corridor ambiguity that forced them off in the first attempt was
+a consequence of the bad seed, not of the place.
+
+The time check puts GLIM's heading error at -4.3 ms of the turning (r -0.22):
+its poses are its scans', keep the 46 ms export offset.
 
 ## Boards (4 written)
 
-| board | map xyz | sections | spread |
+| board | map xyz | sightings | spread |
 |---|---|---|---|
-| board_1 (anchor) | 0.209, 0.059, -0.054 | 1, n=5 | 14.9 mm / 35.8 mm max |
-| board_2 | -32.392, 0.152, 0.184 | 1 of 2, n=5 | 16.1 mm / 23.1 mm max |
-| board_3 | -26.200, 4.808, 0.130 | 1, n=5 | 21.7 mm / 54.3 mm max |
-| board_4 | -6.130, 4.535, -0.026 | 1, n=5 | 12.2 mm / 29.3 mm max |
+| board_1 (anchor) | -20.1353, 6.6497, 0.1038 | 5, t=3.2-9.4 s | 1.0 mm / 1.3 mm max |
+| board_2 | -20.2789, -25.8491, 0.1809 | 5 of 6, t=76.5-80.1 s | 1.7 mm / 3.3 mm max |
+| board_3 | -24.5949, -19.5875, 0.1843 | 5, t=55.0-61.0 s | 0.4 mm / 0.6 mm max |
+| board_4 | -24.4249, 0.4780, 0.1259 | 5 of 6, t=24.7-30.9 s | 1.4 mm / 3.5 mm max |
 
-board_3 needed `"fuse": {"max_std_mm_by_board": {"board_3": 25.0}}`: 21.7 mm
-against the 20 mm gate. The spreads are the registered trajectory's own
-jitter under a board seen from one spot, not the detector's (the same
-sightings on GLIM's smooth trajectory: 2 to 8 mm). Site_1's survey reached 1
-to 2 mm, where the robot dwelled at each board.
+Reprojection 0.18-0.23 px throughout. board_2's two sections close to 1.6 mm /
+0.25 deg over 3 s against 5.3 mm of detection noise: not significant (its
+second section has one sample, so indicative). No board needed a loosened
+gate, and `map->map_zed` is exported.
 
-board_1 reads 223.7 mm / 1.74 deg from where the mapping pass had it. That
-is NOT a measurement of how far the board was moved: the run was placed from
-this board's old pose, so the trajectory and the board's reading move
-together. The re-run above is what separates them.
-
-board_2's two sections disagree by 49.3 mm / 0.389 deg over 3 s, 2.2x the
-detection noise, flagged DRIFT; its second section has one sample, so it is
-indicative. On GLIM's trajectory the same closure was 16.7 mm and not
-significant, so this is the registration's jitter again, not GLIM drift.
-
-101 sightings, including the best-dwelt views of the anchor board, fall
-before GLIM's trajectory starts and were dropped. Re-exporting GLIM over the
-full bag would recover them and tighten every spread above.
+Two notes on the sightings: 101 of them, including the best-dwelt views of the
+anchor board, fall before GLIM's trajectory starts and are dropped —
+re-exporting GLIM over the full bag would recover them. And design `board_1`
+declares two instances but only one was seen here, which is why 05 reports a
+cluster count mismatch; the one it found is the one the run used.
 
 ## Cameras, cloud, poses
 
-- arducam (infra_1) placed from its extrinsic: map -> arducam_optical_frame
-  t = [-13.579, 8.811, 1.807].
-- mobile_2 NOT placed: board_4 was never detected in its 1 304 colour
-  frames, so 07 had nothing to start its LiDAR registration from. Its CSI is
-  therefore unposed in this pass, and site_2's coop pass needs to know which
-  board the parked robot actually faces.
-- `mapping/cloud_in_ref_survey_site_2_20261015.pcd`: 5 574 564 points at
-  0.03 m from 2 749 scans; 115 092 voxels (718 637 points) carved out as
-  movers, nothing else removed.
-- `bags/survey_site_2_20261015_best_poses`: 11 910 messages; mobile_1 starts
-  at [0.787, 0.123, 0.137].
+- arducam (infra_1) placed from its extrinsic
+  (`raw/20261015/survey/site_2/infra_1/extrinsic_arducam.yaml`):
+  map -> arducam_optical_frame t = [-28.860, -6.950, 1.974], trajectory gap
+  10 ms.
+- mobile_2 NOT placed: board_4 was never detected in its 1 304 colour frames.
+  At site_2 the parked robot does not face a board at all, so 07 has nothing
+  to seed its LiDAR registration from, and its CSI stays unposed.
+- `mapping/cloud_in_ref_survey_site_2_20261015.pcd`: 3 167 193 points at
+  0.03 m from 2 792 scans, x -50.09..4.82, y -39.50..19.81. 61 854 of 241 314
+  voxels (299 341 points) carved out as movers, nothing else removed.
+- `bags/survey_site_2_20261015_best_poses`: 11 910 messages; mobile_1's
+  base_link starts at [-20.17, 7.186, 0.30].
 
 ## Comms
 
@@ -129,19 +103,17 @@ full bag would recover them and tighten every spread above.
 | ping | infra_1 29 856, loss 27.9 %, RTT 10.4 ms median / 54.7 p95; mobile_1 32 781, 30.2 %, 11.6 / 88.9; mobile_2 9 940, 26.5 %, 9.2 / 98 |
 | wifi | RSSI medians -31 (infra_1), -36 (mobile_1), -42 (mobile_2) dBm, channel 149, no roams |
 | iperf | mobile_1 up 239 Mbit/s median, down 301 |
-| CSI | infra_1 -> sniffer 30 910 packets at 89.4 Hz; mobile_2 -> sniffer 31 014 at 89.7 Hz |
+| CSI | infra_1 -> sniffer 30 910 packets at 89.4 Hz, RSSI median -55 dBm, link 2.2-21.6 m; mobile_2 -> sniffer 31 014 at 89.7 Hz, -56 dBm |
 | NTP | all synchronised, |offset| medians 0.0 to 0.06 ms, no steps |
 | csi_clean | infra_1 link 9 953 QoS frames, all posed; mobile_2 link 5 366, none posed (see above) |
 
 ## Open items
 
-- Re-run from 03 with `relocalize` on, then re-read every number above.
-- mobile_2 has no placement here. Find the board it faced at site_2 (or
-  record one for it) before the coop pass at this site.
-- Re-export GLIM over the whole bag to recover the 101 opening sightings,
-  then re-run 05: every board's spread should fall toward the 2 to 8 mm the
-  GLIM check measured.
-- Site_2's coop pass needs the same `relocalize` block, for the same reason:
-  its boards are these boards. Whether it also needs the `04_reference`
-  settings above is a question for after the re-run -- the corridor ambiguity
-  is real, but it was handed a seed 22 cm out.
+- mobile_2 has no placement here, and no board to get one from. It is parked
+  with its Ouster running, so relocalizing its own LiDAR in the map — the same
+  machinery 03 uses for mobile_1 — would place it without a board. 07 only
+  does board-seeded LiDAR placement today.
+- Re-export GLIM over the whole bag to recover the 101 opening sightings.
+- Site_2's coop pass needs `boards_moved` AND the `relocalize` block, and must
+  take its board poses from this run (`boards_from`), not from the mapping
+  pass.
