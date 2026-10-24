@@ -11,9 +11,12 @@ over the run, and the reference's own quality. And the same as an animation.
 Panels (A4 landscape, the map on the left over both rows):
   map        the anchored map between --band m above its floor, the LiDAR
              trajectory coloured by the RSSI to the access point (by time
-             without comms tables), start and end, the boards (05) as
-             squares with their normal, the parked robot and the infra
-             camera (07), the AP if --ap, a scale bar
+             without comms tables), start and end, every OTHER robot's track
+             (04's other LiDAR tracks: a coop run's second robot) in its own
+             colour, the boards as squares with their normal (this pass's 05,
+             or the passes dataset.boards_from names), the parked robot and
+             the infra camera (07, or dataset.cameras_from), the AP if --ap,
+             a scale bar
   timeline   RSSI, PHY rate, ping RTT and iperf goodput of the moving robot
              against time; grey bands where it was within --near m of an
              anchor, labelled
@@ -80,21 +83,41 @@ def load_site(P, band=(0.3, 1.8), ap=None, link="infra_1"):
         site["plan"], site["extent"] = floor_plan(pcd, band)
     traj = P.lidar_track_traj()
     site["t"], site["T"] = load_traj(traj) if os.path.exists(traj) else (None, None)
+    # the boards this pass works with: its own 05, the reference pass's, and
+    # other passes' (dataset.boards_from) -- a coop pass has no 05 of its own
+    try:
+        af = json.load(open(P.anchor_frame()))
+    except (FileNotFoundError, OSError, ValueError):
+        af = {}
     boards = []
-    bf = P.outp("boards_{tag}.json") if P.reference else P.anchor_frame()
-    if os.path.exists(bf):
-        for n, rec in (json.load(open(bf)).get("boards") or {}).items():
-            boards.append({"name": n, "xyz": rec["xyz"], "yaw": quat_yaw(rec["qxyzw"]),
-                           "n_views": rec.get("n_views", 0), "std_mm": rec.get("std_mm", math.nan),
-                           "sections": rec.get("sections") or [], "lc": rec.get("loop_closure")})
-    site["boards"] = boards
+    for n, rec in P.boards(af.get("boards") or {}, log=lambda *a: None).items():
+        if rec.get("xyz") is None or rec.get("qxyzw") is None:
+            continue
+        boards.append({"name": n, "xyz": rec["xyz"], "yaw": quat_yaw(rec["qxyzw"]),
+                       "n_views": rec.get("n_views", 0), "std_mm": rec.get("std_mm", math.nan),
+                       "sections": rec.get("sections") or [], "lc": rec.get("loop_closure")})
+    site["boards"] = sorted(boards, key=lambda b: b["name"])
     statics = []
-    cy = P.outp("cameras_in_map.yaml")
-    if os.path.exists(cy):
+    cys = [P.outp("cameras_in_map.yaml")]
+    if not os.path.exists(cys[0]):            # 07 off (a coop pass): cameras_from's
+        cys = P.cameras_from() or cys
+    for cy in cys:
+        if not os.path.exists(cy):
+            continue
         for c in (yaml.safe_load(open(cy)) or {}).get("cameras") or []:
             statics.append({"name": ANCHOR_NAMES.get(c["name"], c["name"]), "xyz": c["translation"],
                             "source": c.get("source", "")})
     site["statics"] = statics
+    # the other robots: every LiDAR track 04 built besides this machine's own
+    others = []
+    for tr in (P.cfg.get("04_reference") or {}).get("tracks") or []:
+        if not tr.get("enabled", True) or tr.get("machine") == site["machine"]:
+            continue
+        f = os.path.join(P.reference_dir(), "traj_%s.tum" % tr["name"])
+        if os.path.exists(f):
+            ot, oT = load_traj(f)
+            others.append({"name": tr.get("machine") or tr["name"], "t": ot, "T": oT})
+    site["others"] = others
     comms = os.path.join(P.out_dir, "comms")
     m = site["machine"]
     wifi = [r for r in rows_of(os.path.join(comms, "wifi", "wifi.csv")) if r.get("machine") == m]
@@ -194,6 +217,19 @@ def draw_map(ax, site, t_max=None):
             ax.plot(T[-1, 0, 3], T[-1, 1, 3], "s", color="k", ms=5, mfc="w", zorder=4)
             ax.annotate("end", (T[-1, 0, 3], T[-1, 1, 3]), fontsize=7, xytext=(5, -9),
                         textcoords="offset points")
+    for k, o in enumerate(site.get("others") or []):      # the other robots of a coop run
+        oT = o["T"]
+        if t_max is not None:
+            oT = oT[:int(np.searchsorted(o["t"], t_max)) + 1]
+        if len(oT) < 2:
+            continue
+        col = "C4" if k % 2 == 0 else "C6"
+        ax.plot(oT[:, 0, 3], oT[:, 1, 3], color=col, lw=1.6, alpha=0.85, zorder=2,
+                label=o["name"])
+        ax.plot(oT[0, 0, 3], oT[0, 1, 3], "o", color=col, ms=5, mfc="w", zorder=4)
+        ax.annotate(o["name"], (oT[0, 0, 3], oT[0, 1, 3]), fontsize=7, color=col,
+                    xytext=(5, -10), textcoords="offset points", zorder=6,
+                    bbox=dict(boxstyle="round,pad=0.15", fc="w", ec="none", alpha=0.8))
     for b in site["boards"]:
         x, y = b["xyz"][:2]
         ax.plot(x, y, "s", color="C1", ms=7, mec="k", mew=0.5, zorder=5)
@@ -351,6 +387,10 @@ def caption(site):
         p = site["T"][:, :2, 3]
         bits.append("%s: %.0f min, %.0f m path" % (site["machine"], (site["t"][-1] - site["t"][0]) / 60,
                                                    np.linalg.norm(np.diff(p, axis=0), axis=1).sum()))
+    for o in site.get("others") or []:
+        p = o["T"][:, :2, 3]
+        bits.append("%s: %.0f m path" % (o["name"],
+                                         np.linalg.norm(np.diff(p, axis=0), axis=1).sum()))
     if site["quality"] is not None:
         bits.append("%d scans registered to the map" % site["quality"]["ok"].sum())
     if site["boards"]:
@@ -420,6 +460,12 @@ def animate(site, out_base, seconds=30.0, fps=10, near=3.0, mp4=True):
     growing, = axes["map"].plot([], [], color="C0", lw=2.0, zorder=2)
     head = axes["map"].annotate("", xy=(T[0, 0, 3], T[0, 1, 3]), xytext=(T[0, 0, 3], T[0, 1, 3]),
                                 arrowprops=dict(arrowstyle="-|>", color="C3", lw=2), zorder=7)
+    others = []                                 # the other robots, on the same clock
+    for k, o in enumerate(site.get("others") or []):
+        col = "C4" if k % 2 == 0 else "C6"
+        ln, = axes["map"].plot([], [], color=col, lw=1.6, alpha=0.9, zorder=2)
+        dot, = axes["map"].plot([], [], "o", color=col, ms=6, mfc="w", zorder=7)
+        others.append((o, ln, dot))
     clock = axes["map"].text(0.02, 0.98, "", transform=axes["map"].transAxes, fontsize=10, va="top",
                              bbox=dict(boxstyle="round", fc="w", ec="0.6"))
     cursors = [axes[k].axvline(0, color="C3", lw=1.0) for k in ("rssi", "ping", "csi", "q")]
@@ -436,7 +482,18 @@ def animate(site, out_base, seconds=30.0, fps=10, near=3.0, mp4=True):
         clock.set_text("%d:%02d" % divmod(int(tk - t[0]), 60))
         for c in cursors:
             c.set_xdata([(tk - t[0]) / 60] * 2)
-        return [growing, head, clock] + cursors
+        art = []
+        for o, ln, dot in others:
+            j = int(np.searchsorted(o["t"], tk))
+            if j <= 0 or o["t"][0] > tk:        # not recording yet
+                ln.set_data([], [])
+                dot.set_data([], [])
+            else:
+                j = min(j, len(o["t"]) - 1)
+                ln.set_data(o["T"][:j + 1, 0, 3], o["T"][:j + 1, 1, 3])
+                dot.set_data([o["T"][j, 0, 3]], [o["T"][j, 1, 3]])
+            art += [ln, dot]
+        return [growing, head, clock] + cursors + art
 
     anim = animation.FuncAnimation(fig, frame, frames=n, blit=False)
     files = []

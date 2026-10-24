@@ -85,13 +85,28 @@ def main():
         assert all(os.path.exists(f) and os.path.getsize(f) > 50000 for f in files), files
         gif = SF.animate(site, os.path.join(tmp, "full"), seconds=0.6, fps=5, mp4=False)
         assert gif and os.path.getsize(gif[0]) > 20000, gif
+        # a coop run: a second robot, on its own track and starting later
+        coop = synthetic(rng)
+        coop["tag"] = "coop_x"
+        ot = coop["t"][300:]
+        oT = np.tile(np.eye(4), (len(ot), 1, 1))
+        oT[:, 0, 3] = -8 + 10 * np.cos(np.linspace(np.pi, 3 * np.pi, len(ot)))
+        oT[:, 1, 3] = 5 + 6 * np.sin(np.linspace(np.pi, 3 * np.pi, len(ot)))
+        coop["others"] = [{"name": "mobile_2", "t": ot, "T": oT}]
+        cfiles = SF.compose(coop, os.path.join(tmp, "coop"))
+        assert all(os.path.exists(f) and os.path.getsize(f) > 50000 for f in cfiles), cfiles
+        assert "mobile_2: " in SF.caption(coop), SF.caption(coop)
+        cgif = SF.animate(coop, os.path.join(tmp, "coop"), seconds=0.6, fps=5, mp4=False)
+        assert cgif and os.path.getsize(cgif[0]) > 20000, cgif
+
         bare = synthetic(rng, with_comms=False)
         files2 = SF.compose(bare, os.path.join(tmp, "bare"))
         assert all(os.path.exists(f) for f in files2), files2
         print("ok survey_figure: composite %d kB, %d near-anchor bands (%s), animation %d kB; "
-              "without comms tables %d kB"
+              "a coop run's second robot %d kB + %d kB gif; without comms tables %d kB"
               % (os.path.getsize(files[0]) // 1000, len(bands), ", ".join(sorted(names)),
-                 os.path.getsize(gif[0]) // 1000, os.path.getsize(files2[0]) // 1000))
+                 os.path.getsize(gif[0]) // 1000, os.path.getsize(cfiles[0]) // 1000,
+                 os.path.getsize(cgif[0]) // 1000, os.path.getsize(files2[0]) // 1000))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
