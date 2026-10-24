@@ -10,7 +10,9 @@ boxes are hidden). Its GLIM trajectory is in its own world: the map moved by
 
   room with boxes   03 must find the start pose (cm / tenth of a degree of
                     the truth) and pass the fit, unique and repeat checks;
-  bare room         symmetric under a half turn: 03 must refuse.
+  bare room         symmetric under a half turn: 03 must refuse;
+  boards moved      dataset.boards_moved with relocalize off: 03 must refuse,
+                    naming relocalize (the board's pose is the stale one).
 
     python scoop_pipeline/tests/test_reloc.py
 """
@@ -240,6 +242,21 @@ def main():
                 failed.append(f"checks: {ch}")
             if not os.path.exists(z["look"]):
                 failed.append("no look ply")
+
+        # the boards were moved since the reference pass: placing the run from
+        # one of them would start it out by the move, so 03 must refuse unless
+        # it relocalizes on the map
+        moved = os.path.join(tmp, "moved.json")
+        c = json.load(open(cfg))
+        c["dataset"]["boards_moved"] = True
+        c["03_init"].pop("relocalize")
+        json.dump(c, open(moved, "w"))
+        out = run06(moved)
+        said = "relocalize" in (out.stdout + out.stderr)
+        print("boards_moved without relocalize: %s"
+              % ("refused, naming relocalize" if out.returncode and said else "ACCEPTED"))
+        if not (out.returncode and said):
+            failed.append("boards_moved was placed from a board that moved")
 
         cfg, data, _ = build(os.path.join(tmp, "bare"), [])
         out = run06(cfg)

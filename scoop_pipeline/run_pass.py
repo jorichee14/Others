@@ -329,6 +329,10 @@ def new_config(raw, robot=None, reference=None, log=print, stages=STAGES, boards
             cfg["dataset"]["boards_moved"] = True
         cfg["03_init"] = {"sensors": [{"name": "zed", "source": "lidar_odom"},
                                       {"name": "realsense", "enabled": False}]}
+        if boards_moved:
+            # ...and the run cannot be placed from a board that has moved since:
+            # the map's geometry is what did not move (03 refuses without this)
+            cfg["03_init"]["relocalize"] = {"enabled": True}
         cfg["05_anchor"] = {"boards_used": boards}
         if "mobile_2" in folders:
             cam = {"name": "realsense", "board": RS_BOARD, "bag": None,

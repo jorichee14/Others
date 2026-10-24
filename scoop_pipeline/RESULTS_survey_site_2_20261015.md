@@ -16,6 +16,37 @@ reference pass's poses. Companion: `RESULTS_survey_site_1_20261015.md`,
 | config | `map_stages/pipeline_config_survey_site_2_20261015.json` (`--new-config --boards-moved`) |
 | reference map | `processed/20261015/mapping/mapping/map_final_mapping_20261015_anchored.pcd` |
 
+## This pass has to be re-run from 03 (read this first)
+
+The boards were put up again for this site, so `dataset.boards_moved` is
+set -- and 03 still placed the run from the ZED's dwell on board_1, read
+against board_1's pose IN THE REFERENCE PASS, i.e. where the board was
+before it was moved. The run therefore started out by the board's move, and
+every number below carries it:
+
+- 04 round 1 had to correct a median of 19.5 cm, which is the move, not the
+  seed being noisy;
+- `prior_beta: 0.5` only half-pulls each scan onto the map, so the final
+  trajectory keeps a part of that offset (GLIM to final 32.8 cm median);
+- 05 then measured the boards ON that trajectory, so board_1 reading 223.7 mm
+  from the reference's pose is partly the trajectory and partly the board --
+  the two cannot be separated from this pass;
+- the 12 to 22 mm spreads, against 2 to 8 mm on GLIM's own trajectory, are
+  that offset varying along the path.
+
+The map's geometry is what did not move. Re-run from 03 with
+
+    "03_init": {"relocalize": {"enabled": true}}
+
+so the start comes from the LiDAR against the map (lidar_reloc) and the board
+dwell only checks it; `boards_moved` then makes that check report the board's
+move instead of refusing. With the seed right, 04 goes back to its defaults
+(`carry: true`, `max_shift: 0.5`, two rounds, no `prior_beta`) -- the settings
+below are a workaround for a bad seed, not the answer to the corridor.
+
+03 now refuses this combination rather than seeding off a moved board, and
+`run_pass.py --new-config --boards-moved` writes the `relocalize` block.
+
 ## The registration had to be re-tuned (and why)
 
 With the stage's defaults (`carry: true`, `max_shift` 0.5 m, two rounds) the
@@ -63,8 +94,10 @@ jitter under a board seen from one spot, not the detector's (the same
 sightings on GLIM's smooth trajectory: 2 to 8 mm). Site_1's survey reached 1
 to 2 mm, where the robot dwelled at each board.
 
-board_1 sits 223.7 mm / 1.74 deg from where the mapping pass had it, which
-is the boards being put up again and is why `boards_moved` is right.
+board_1 reads 223.7 mm / 1.74 deg from where the mapping pass had it. That
+is NOT a measurement of how far the board was moved: the run was placed from
+this board's old pose, so the trajectory and the board's reading move
+together. The re-run above is what separates them.
 
 board_2's two sections disagree by 49.3 mm / 0.389 deg over 3 s, 2.2x the
 detection noise, flagged DRIFT; its second section has one sample, so it is
@@ -102,10 +135,13 @@ full bag would recover them and tighten every spread above.
 
 ## Open items
 
+- Re-run from 03 with `relocalize` on, then re-read every number above.
 - mobile_2 has no placement here. Find the board it faced at site_2 (or
   record one for it) before the coop pass at this site.
 - Re-export GLIM over the whole bag to recover the 101 opening sightings,
   then re-run 05: every board's spread should fall toward the 2 to 8 mm the
   GLIM check measured.
-- The same `04_reference` settings will be needed for site_2's coop pass:
-  the corridor ambiguity does not go away with a second robot.
+- Site_2's coop pass needs the same `relocalize` block, for the same reason:
+  its boards are these boards. Whether it also needs the `04_reference`
+  settings above is a question for after the re-run -- the corridor ambiguity
+  is real, but it was handed a seed 22 cm out.

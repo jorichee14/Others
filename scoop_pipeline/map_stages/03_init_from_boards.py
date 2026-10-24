@@ -380,7 +380,9 @@ def main():
     S = P.sensor
     # optional ("relocalize": {"enabled": true}): the start from the LiDAR
     # (lidar_reloc; refuses when a check fails), the board dwell then checks it.
-    # Off by default: the start comes from the board dwell, as always.
+    # Off by default: the start comes from the board dwell, as always -- except
+    # with dataset.boards_moved, where the dwell's board pose is stale and this
+    # stage refuses without it (below).
     rcfg = s.get("relocalize") or {}
     reloc = None
     if rcfg.get("enabled", False):
@@ -390,6 +392,26 @@ def main():
     off = [x["name"] for x in s["sensors"] if not x.get("enabled", True)]
     if off:
         print("sensors switched off in the config: %s" % ", ".join(off))
+    # dataset.boards_moved says the reference's board poses are stale. Placing
+    # this run from a board dwell read against one of them starts the whole run
+    # out by exactly the board's move, 04 then has to drag every scan back, and
+    # 05 measures the boards on a trajectory that owes its place to the board it
+    # is measuring. Relocalize on the map instead: the geometry did not move.
+    if P.boards_moved and reloc is None:
+        stale = {n for n, (_, rec) in bmap.items()
+                 if rec.get("source", "reference") == "reference"}
+        used = sorted(stale.intersection(x.get("board") for x in sensors))
+        if used:
+            raise SystemExit(
+                "dataset.boards_moved, and this run would be placed from board %s, whose "
+                "pose is the reference pass's -- i.e. where the board was BEFORE it was "
+                "moved. The run would start out by that move and every number after it "
+                "(04's corrections, 05's board poses, their spreads) would carry it.\n"
+                "  Place it on the map instead, which did not move:\n"
+                '      "03_init": {"relocalize": {"enabled": true}}\n'
+                "  The board dwell then only checks the start, and its disagreement is "
+                "reported as the board's move (lidar_reloc.board_check). Re-run from 03."
+                % ", ".join("'%s'" % b for b in used))
     for x in sensors:
         if not x.get("image_topic"):
             x["image_topic"] = S.image_topic
