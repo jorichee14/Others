@@ -279,6 +279,32 @@ def box_corners(entry):
     return local @ rotation.T + np.array([cx, cy])
 
 
+def even_inches(size: float, dpi: int) -> float:
+    """A figure dimension whose pixel count is even.
+
+    h264 with yuv420p subsamples by two in both directions and refuses an odd
+    dimension outright, so a figure sized from its contents has to be snapped
+    before it reaches the encoder rather than after.
+    """
+    return max(2.0, round(size * dpi / 2.0) * 2.0 / dpi)
+
+
+def camera_aspect(scenario: str, agents, fallback: float = 16.0 / 9.0) -> float:
+    """The shape of the camera frames, read off the first one on disk.
+
+    A panel sized by guesswork letterboxes the picture inside it, and a
+    letterboxed picture cannot be made bigger by widening its panel -- which
+    is exactly the trap that makes a layout look unchanged after a change.
+    """
+    for agent in agents:
+        folder = os.path.join(scenario, agent)
+        for name in sorted(os.listdir(folder)):
+            if name.endswith("_camera0.png"):
+                shape = mpimg.imread(os.path.join(folder, name)).shape
+                return float(shape[1]) / float(shape[0])
+    return fallback
+
+
 def load_image(agent_dir: str, key: str, held):
     """This frame's camera image, or the last one seen.
 
@@ -332,8 +358,9 @@ def main() -> int:
     parser.add_argument("--arrow", type=float, default=0.0,
                         help="heading arrow length (m; 0: from the site's size)")
     parser.add_argument("--cloud-stride", type=int, default=12)
-    parser.add_argument("--side-width", type=float, default=0.52, metavar="F",
-                        help="the side column's width as a fraction of the map's")
+    parser.add_argument("--fig-width", type=float, default=17.0, metavar="IN")
+    parser.add_argument("--fig-aspect", type=float, default=16.0 / 9.0, metavar="R",
+                        help="the figure's width over its height (default 16:9)")
     parser.add_argument("--comms-height", type=float, default=0.55, metavar="F",
                         help="a comms panel's height as a fraction of a camera's")
     parser.add_argument("--dpi", type=int, default=120)
@@ -387,32 +414,104 @@ def main() -> int:
             print(f"no values for {missing} — see the list above", file=sys.stderr)
             return 2
 
+    seen_xy = [[x, y] for agent in agents for _, x, y, _, _, _ in tracks[agent]]
+    seen_xy += [[float(e["location"][0]), float(e["location"][1])] for e in boxes.values()]
+    if ap is not None:
+        seen_xy.append(ap)
+    walked = np.asarray(seen_xy)
+    low, high = walked.min(axis=0) - args.pad, walked.max(axis=0) + args.pad
+
     # ------------------------------------------------------------------ layout
-    # A panel per comms series, never two on one axis: RSSI in dBm and RTT in
-    # ms share no scale, and drawing them together squashes one flat against
-    # the frame. Two y-axes would be worse -- the reader cannot tell which
-    # line belongs to which.
+    # Every panel here has a shape it cannot be argued out of: a BEV is drawn
+    # at equal aspect or it is not a map, and a camera frame is the shape the
+    # sensor made it. A grid of equal cells letterboxes all of them, and the
+    # picture inside a letterboxed panel does not grow when the panel does --
+    # which is what makes widening a column look like nothing happened.
+    #
+    # So the camera column is set to exactly the width its frames fill at the
+    # height left for them, and the map takes the rest. The traces go in one
+    # row across the bottom rather than a stack down the side: that is the
+    # shape a time series wants anyway, and it is where the height for the
+    # camera frames comes from.
     shown_cameras = len(agents) if args.cameras else 0
-    panels = shown_cameras + len(args.comms)
-    width, height = (17.0 if panels else 10.0), 9.5
-    figure = plt.figure(figsize=(width, height), facecolor=theme["bg"])
-    if panels:
-        # The map and the camera frames are what a reader actually reads; the
-        # comms traces are the reference beside them, so they get the height
-        # a reference needs and no more.
-        heights = [1.0] * shown_cameras + [args.comms_height] * len(args.comms)
-        print(f"figure {width:.1f}x{height:.1f} in at {args.dpi} dpi; side column "
-              f"{args.side_width:.2f} of the map, comms rows "
-              f"{args.comms_height:.2f} of a camera row")
-        grid = figure.add_gridspec(panels, 2, width_ratios=[1.0, args.side_width],
-                                   height_ratios=heights,
-                                   hspace=0.30, wspace=0.09,
-                                   left=0.045, right=0.985, top=0.955, bottom=0.06)
-        axis = figure.add_subplot(grid[:, 0])
-        side = [figure.add_subplot(grid[i, 1]) for i in range(panels)]
+    ground = float(high[0] - low[0]) / float(high[1] - low[1])
+    picture = camera_aspect(scenario, agents) if shown_cameras else 1.0
+
+    left, right, top, bottom = 0.78, 0.18, 0.30, 0.62      # inches of margin
+    gap_h, gap_row, gap_block = 0.42, 0.46, 0.95           # inches between panels
+    width = even_inches(args.fig_width, args.dpi)
+    height = even_inches(width / args.fig_aspect, args.dpi)
+    usable_w, usable_h = width - left - right, height - top - bottom
+    traces = len(args.comms)
+    share = args.comms_height if traces else 0.0
+
+    def arrangement(columns):
+        """The camera frames laid out this many to a row, as large as they fit.
+
+        Both limits are hard: the frames and the traces have to fit the height
+        between them, and whatever width the frames take is width the map does
+        not get. Which of the two binds depends on the shape of the site, so
+        both are computed and the tighter one wins.
+        """
+        rows = -(-shown_cameras // columns)
+        by_height = (usable_h - (rows - 1) * gap_row
+                     - (gap_block if traces else 0.0)) / (rows + share)
+        by_width = ((usable_w - columns * gap_h - MIN_MAP) / columns) / picture
+        tall = max(0.5, min(by_height, by_width))
+        wide = tall * picture
+        block = columns * wide + (columns - 1) * gap_h
+        comms = share * tall
+        map_h = usable_h - (gap_block + comms if traces else 0.0)
+        return dict(columns=columns, rows=rows, camera_w=wide, camera_h=tall,
+                    comms_h=comms, map_h=map_h,
+                    map_w=min(ground * map_h, usable_w - gap_h - block),
+                    needs=ground * map_h, has=usable_w - gap_h - block,
+                    area=shown_cameras * wide * tall)
+
+    MIN_MAP = 3.5
+    if shown_cameras:
+        options = [arrangement(c) for c in range(1, shown_cameras + 1)]
+        # The map is not starved to make the frames big: only layouts that
+        # still give it the width its ground needs are in the running.
+        fits = [o for o in options if o["has"] >= o["needs"] - 0.05]
+        chosen = max(fits or options, key=lambda o: o["area"])
     else:
-        axis = figure.add_subplot(111)
-        side = []
+        comms = share * (usable_h / 4.0)
+        map_h = usable_h - (gap_block + comms if traces else 0.0)
+        chosen = dict(columns=0, rows=0, camera_w=0.0, camera_h=0.0,
+                      comms_h=comms, map_h=map_h, map_w=usable_w, area=0.0)
+
+    map_width, map_height = chosen["map_w"], chosen["map_h"]
+    camera_w, camera_h = chosen["camera_w"], chosen["camera_h"]
+    comms_height = chosen["comms_h"]
+    print(f"figure {width:.2f}x{height:.2f} in at {args.dpi} dpi; map "
+          f"{map_width:.1f}x{map_height:.1f} in over ground {ground:.2f}:1; "
+          f"{shown_cameras} frame(s) {camera_w:.1f}x{camera_h:.1f} in, "
+          f"{chosen['columns']} to a row; {traces} trace(s) {comms_height:.1f} in")
+
+    figure = plt.figure(figsize=(width, height), facecolor=theme["bg"])
+
+    def place(x, y, w, h):
+        """An axes at an exact position in inches, measured from the top left."""
+        return figure.add_axes([x / width, 1.0 - (y + h) / height,
+                                w / width, h / height])
+
+    axis = place(left, top, map_width, map_height)
+    side = []
+    block_left = left + map_width + gap_h
+    stack = chosen["rows"] * camera_h + max(0, chosen["rows"] - 1) * gap_row
+    block_top = top + max(0.0, (map_height - stack) / 2.0)   # centred beside the map
+    for index in range(shown_cameras):
+        row, column = divmod(index, max(1, chosen["columns"]))
+        side.append(place(block_left + column * (camera_w + gap_h),
+                          block_top + row * (camera_h + gap_row),
+                          camera_w, camera_h))
+    # The traces go in one row across the bottom: the shape a time series
+    # wants anyway, and it is where the height for the frames comes from.
+    trace_width = (usable_w - max(0, traces - 1) * gap_h) / max(1, traces)
+    for index in range(traces):
+        side.append(place(left + index * (trace_width + gap_h),
+                          top + usable_h - comms_height, trace_width, comms_height))
     axis.set_facecolor(theme["bg"])
 
     if args.cloud:
@@ -436,12 +535,6 @@ def main() -> int:
                       textcoords="offset points", color=theme["ap"],
                       fontsize=10, fontweight="bold", zorder=9)
 
-    seen_xy = [[x, y] for agent in agents for _, x, y, _, _, _ in tracks[agent]]
-    seen_xy += [[float(e["location"][0]), float(e["location"][1])] for e in boxes.values()]
-    if ap is not None:
-        seen_xy.append(ap)
-    walked = np.asarray(seen_xy)
-    low, high = walked.min(axis=0) - args.pad, walked.max(axis=0) + args.pad
     axis.set_xlim(low[0], high[0])
     axis.set_ylim(low[1], high[1])
     axis.set_aspect("equal")
@@ -501,8 +594,7 @@ def main() -> int:
         panel.grid(True, color=theme["grid"], lw=0.5)
         for spine in panel.spines.values():
             spine.set_color(theme["grid"])
-        if number == len(args.comms) - 1:
-            panel.set_xlabel("time (s)", color=theme["muted"], fontsize=8)
+        panel.set_xlabel("time (s)", color=theme["muted"], fontsize=8)
         if number == 0:
             legend = panel.legend(fontsize=7, framealpha=0.0, loc="upper right")
             for text in legend.get_texts():
