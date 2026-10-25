@@ -394,13 +394,16 @@ def main() -> int:
     # line belongs to which.
     shown_cameras = len(agents) if args.cameras else 0
     panels = shown_cameras + len(args.comms)
-    width = 17.0 if panels else 10.0
-    figure = plt.figure(figsize=(width, 9.5), facecolor=theme["bg"])
+    width, height = (17.0 if panels else 10.0), 9.5
+    figure = plt.figure(figsize=(width, height), facecolor=theme["bg"])
     if panels:
         # The map and the camera frames are what a reader actually reads; the
         # comms traces are the reference beside them, so they get the height
         # a reference needs and no more.
         heights = [1.0] * shown_cameras + [args.comms_height] * len(args.comms)
+        print(f"figure {width:.1f}x{height:.1f} in at {args.dpi} dpi; side column "
+              f"{args.side_width:.2f} of the map, comms rows "
+              f"{args.comms_height:.2f} of a camera row")
         grid = figure.add_gridspec(panels, 2, width_ratios=[1.0, args.side_width],
                                    height_ratios=heights,
                                    hspace=0.30, wspace=0.09,
