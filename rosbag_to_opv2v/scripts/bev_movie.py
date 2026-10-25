@@ -320,9 +320,9 @@ def main() -> int:
     parser.add_argument("--min-points", type=int, default=3,
                         help="--only-seen: returns inside a box to count as seen")
     parser.add_argument("--max-range", type=float, default=0.0, metavar="M",
-                        help="draw a box only within this far of the agent (0: no "
-                             "limit); a box 20 m down a corridor is a few pixels "
-                             "of clutter, not a reading of the frame")
+                        help="draw a box only within this far of either robot "
+                             "(0: no limit); a box 20 m down a corridor is a few "
+                             "pixels of clutter, not a reading of the frame")
     parser.add_argument("--seconds", type=float, default=45.0)
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--rate", type=float, default=10.0, help="the frame grid's rate (Hz)")
@@ -332,6 +332,10 @@ def main() -> int:
     parser.add_argument("--arrow", type=float, default=0.0,
                         help="heading arrow length (m; 0: from the site's size)")
     parser.add_argument("--cloud-stride", type=int, default=12)
+    parser.add_argument("--side-width", type=float, default=0.52, metavar="F",
+                        help="the side column's width as a fraction of the map's")
+    parser.add_argument("--comms-height", type=float, default=0.55, metavar="F",
+                        help="a comms panel's height as a fraction of a camera's")
     parser.add_argument("--dpi", type=int, default=120)
     parser.add_argument("--keep-frames", action="store_true")
     args = parser.parse_args()
@@ -388,13 +392,19 @@ def main() -> int:
     # ms share no scale, and drawing them together squashes one flat against
     # the frame. Two y-axes would be worse -- the reader cannot tell which
     # line belongs to which.
-    panels = (1 if args.cameras else 0) * len(agents) + len(args.comms)
-    width = 15.5 if panels else 10.0
-    figure = plt.figure(figsize=(width, 9.0), facecolor=theme["bg"])
+    shown_cameras = len(agents) if args.cameras else 0
+    panels = shown_cameras + len(args.comms)
+    width = 17.0 if panels else 10.0
+    figure = plt.figure(figsize=(width, 9.5), facecolor=theme["bg"])
     if panels:
-        grid = figure.add_gridspec(panels, 2, width_ratios=[1.55, 1.0],
-                                   hspace=0.28, wspace=0.10,
-                                   left=0.05, right=0.985, top=0.95, bottom=0.07)
+        # The map and the camera frames are what a reader actually reads; the
+        # comms traces are the reference beside them, so they get the height
+        # a reference needs and no more.
+        heights = [1.0] * shown_cameras + [args.comms_height] * len(args.comms)
+        grid = figure.add_gridspec(panels, 2, width_ratios=[1.0, args.side_width],
+                                   height_ratios=heights,
+                                   hspace=0.30, wspace=0.09,
+                                   left=0.045, right=0.985, top=0.955, bottom=0.06)
         axis = figure.add_subplot(grid[:, 0])
         side = [figure.add_subplot(grid[i, 1]) for i in range(panels)]
     else:
@@ -582,13 +592,15 @@ def main() -> int:
                         else:
                             only = set(boxes)
                         if args.max_range:
-                            # Measured from where the robot was when the SHOWN
-                            # image was taken, not where it is now.
-                            _, hx, hy = tracks[agent][source][:3]
+                            # Near EITHER robot, measured where the pair stood
+                            # when the SHOWN image was taken: an object the
+                            # collaborator is standing next to is exactly the
+                            # one worth drawing on a camera that cannot see it.
+                            where = [tracks[other][source][1:3] for other in agents]
                             near = {key for key, entry in boxes.items()
-                                    if np.hypot(entry["location"][0] - hx,
-                                                entry["location"][1] - hy)
-                                    <= args.max_range}
+                                    if min(np.hypot(entry["location"][0] - hx,
+                                                    entry["location"][1] - hy)
+                                           for hx, hy in where) <= args.max_range}
                             only &= near
                             if solid is not None:
                                 solid &= near
