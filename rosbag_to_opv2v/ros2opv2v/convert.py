@@ -535,6 +535,23 @@ def resolve_tf_extrinsics(reader: BagReader, cfg: ConverterConfig,
             entry["chain"] = chain
             report.tf_extrinsics[f"{agent.name}.{what}"] = entry
 
+        # The frame the cloud is WRITTEN in, when it is not the one it arrives
+        # in. Same tree, same lookup: the turn that makes +x forward is published,
+        # so it is read rather than assumed.
+        cloud = agent.cloud
+        if cloud.write_frame_id is not None:
+            try:
+                cloud.write_from_sensor = tree.lookup(cloud.write_frame_id,
+                                                      cloud.frame_id)
+                chain = describe_chain(tree, cloud.write_frame_id, cloud.frame_id)
+            except TfError as exc:
+                raise ConversionError(
+                    f"agent[{agent.name}].cloud.write_frame_id: {exc}") from exc
+            entry = matrix_to_rpy_config(cloud.write_from_sensor)
+            entry["chain"] = chain
+            entry["written_in"] = cloud.write_frame_id
+            report.tf_extrinsics[f"{agent.name}.cloud.write_frame"] = entry
+
 
 def load_comms(reader: BagReader, cfg: ConverterConfig, report: ConversionReport,
                clocks: Optional[clockmod.HostClocks]) -> Dict[str, commsmod.StreamIndex]:
@@ -1119,13 +1136,13 @@ def _build_cloud(agent: AgentConfig, msg, camera_infos: Dict[str, object],
     cloud = apply_range_filter(cloud, cloud_cfg.range_filter)
     cloud = subsample(cloud, cloud_cfg.max_points)
     cloud = _apply_ground_lift(cloud, cloud_cfg.ground_lift)
-    if cloud_cfg.rotate_yaw_deg:
+    turn = cloud_cfg.points_write_transform()
+    if not np.allclose(turn, np.identity(4)):
         # Last, so range_filter keeps meaning the frame the points arrived in.
         # The depth-image path already turned optical -> body inside
-        # cloud_from_depth_image; this is the other half of
-        # points_body_rotation(), and frame_extrinsic() carries the same turn
-        # into the pose written beside these points.
-        turn = rpy_to_matrix(0.0, 0.0, float(cloud_cfg.rotate_yaw_deg))
+        # cloud_from_depth_image; this is the rest of points_body_rotation(),
+        # and frame_extrinsic() carries the same move into the pose written
+        # beside these points.
         cloud = cloud.copy()
         cloud[:, :3] = transform_points(cloud[:, :3], turn)
     return cloud

@@ -2896,6 +2896,67 @@ def test_rotate_yaw_keeps_the_written_points_and_pose_describing_one_frame():
     assert np.allclose(plain.frame_extrinsic(), plain.extrinsic)
 
 
+def test_write_frame_id_puts_the_cloud_in_a_frame_the_tf_tree_names():
+    """The turn taken from the tree instead of from a typed angle.
+
+    mobile_2 has no `os_sensor` frame -- its Ouster hangs off the colour
+    optical frame -- so there is no forward-facing LiDAR frame to switch to.
+    Its base link is forward-facing though, and the transform to it is
+    published, so naming it writes the cloud where OPV2V expects without
+    anyone asserting an angle.
+    """
+    from ros2opv2v.geometry import invert, transform_points
+
+    # base -> sensor: the sensor sits 0.2 m up and faces backwards
+    extrinsic = cfgmod.make_transform(x=0.0, y=0.0, z=0.2, yaw=180.0)
+    cloud = cfgmod.CloudConfig('pointcloud2', '/p', extrinsic,
+                               frame_id='os_lidar', write_frame_id='base')
+    # what resolve_tf_extrinsics fills from /tf_static: sensor -> write frame.
+    # Writing in the base means that lookup IS the extrinsic.
+    cloud.write_from_sensor = extrinsic
+
+    # The pose written beside the points then describes the base itself.
+    assert np.allclose(cloud.frame_extrinsic(), np.identity(4))
+
+    # A point 4 m ahead of the sensor is 4 m BEHIND the base, and the written
+    # cloud says so in the base's own axes.
+    arrival = np.array([[4.0, 0.0, 0.0]])
+    written = transform_points(arrival, cloud.points_write_transform())
+    assert np.allclose(written, [[-4.0, 0.0, 0.2]]), written
+
+    # The contract: same world point from either description.
+    world_from_base = cfgmod.make_transform(x=1.0, y=2.0, z=0.0, yaw=-25.0)
+
+    def to_world(points, base_to_frame):
+        homogeneous = np.column_stack([points, np.ones(len(points))])
+        return (homogeneous @ (world_from_base @ base_to_frame).T)[:, :3]
+
+    assert np.allclose(to_world(written, cloud.frame_extrinsic()),
+                       to_world(arrival, cloud.extrinsic))
+
+
+def test_write_frame_id_and_rotate_yaw_are_mutually_exclusive():
+    """Two names for one turn, so taking both would apply it twice."""
+    both = False
+    try:
+        cfgmod.CloudConfig.parse(
+            {'kind': 'pointcloud2', 'topic': '/p', 'extrinsic': 'tf',
+             'frame_id': 'os_lidar', 'write_frame_id': 'base',
+             'rotate_yaw_deg': 180}, 'agent[x].cloud')
+    except cfgmod.ConfigError as error:
+        both = 'not both' in str(error)
+    assert both, 'both turns together would apply the rotation twice'
+
+    nameless = False
+    try:
+        cfgmod.CloudConfig.parse(
+            {'kind': 'pointcloud2', 'topic': '/p', 'extrinsic': 'tf',
+             'write_frame_id': 'base'}, 'agent[x].cloud')
+    except cfgmod.ConfigError as error:
+        nameless = 'frame_id' in str(error)
+    assert nameless, 'the turn is looked up between two named frames'
+
+
 def test_a_depth_agents_written_cloud_has_the_floor_below_it():
     """The end-to-end property, stated the way the bug showed up in the data:
     with a camera looking level at a room, the written cloud must put the floor

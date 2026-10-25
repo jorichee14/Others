@@ -115,9 +115,25 @@ class CloudConfig:
     rotate_yaw_deg: float = 0.0
     """Degrees about the sensor frame's own z, applied to the written points.
 
-    180 for an Ouster publishing `os_lidar` on a forward-facing mount. Check it
-    rather than assume it: the camera's forward axis expressed in the written
-    LiDAR frame should have a positive x, and the robot's travel should too."""
+    A fallback for a rig whose TF tree offers no forward-facing frame to name.
+    Prefer ``write_frame_id``, which takes the same turn from the tree instead
+    of from a typed angle. Check either rather than assume it: the camera's
+    forward axis expressed in the written frame should have a positive x, and
+    so should the robot's travel."""
+    write_frame_id: Optional[str] = None
+    """Write the points in this TF frame instead of the one they arrived in.
+
+    OPV2V reads `lidar_pose` as a frame whose +x is forward -- `cav_lidar_range`
+    starts at x=0 and runs ahead, and a camera's Lift-Splat frustum is placed
+    against it. A sensor frame that does not point along the robot therefore
+    puts the detection range behind it. Ouster publishes `os_lidar` 180 degrees
+    about z from `os_sensor`, so a forward-facing mount writes exactly that.
+
+    Naming the agent's base link here fixes it from the tree the extrinsics
+    already come from: the transform is looked up on /tf_static, nothing is
+    assumed, and the config says which frame the dataset is in."""
+    write_from_sensor: np.ndarray = field(default_factory=lambda: np.identity(4))
+    """The sensor's frame -> ``write_frame_id``, filled from /tf_static."""
 
     def points_body_rotation(self) -> np.ndarray:
         """The rotation applied to this sensor's points before they are written.
@@ -137,28 +153,49 @@ class CloudConfig:
         `frame_extrinsic`. Rotate one without the other and the dataset is
         self-inconsistent in a way that validates cleanly and detects nothing.
         """
-        rotation = np.identity(4)
+        arrival = self.arrival_from_sensor()
+        return self.points_write_transform() @ arrival
+
+    def arrival_from_sensor(self) -> np.ndarray:
+        """The sensor's own frame -> the frame the points are in on arrival.
+
+        Exactly one case is not the identity: a depth image declared
+        `optical_frame`, which `cloud_from_depth_image` turns into ROS body axes
+        as it reprojects.
+        """
         if self.kind == "depth_image" and self.optical_frame:
-            rotation = OPTICAL_TO_FLU @ rotation
+            return OPTICAL_TO_FLU
+        return np.identity(4)
+
+    def points_write_transform(self) -> np.ndarray:
+        """Arrival frame -> written frame: what the writer applies to the points.
+
+        `write_frame_id` and `rotate_yaw_deg` are two ways to name the same kind
+        of turn; the first takes it from /tf_static, the second from a typed
+        angle. They are mutually exclusive, checked where the config is parsed.
+        """
+        if self.write_frame_id is not None:
+            return self.write_from_sensor @ invert(self.arrival_from_sensor())
         if self.rotate_yaw_deg:
-            rotation = rpy_to_matrix(0.0, 0.0, float(self.rotate_yaw_deg)) @ rotation
-        return rotation
+            return rpy_to_matrix(0.0, 0.0, float(self.rotate_yaw_deg))
+        return np.identity(4)
 
     def points_rotated_to_body(self) -> bool:
-        """Are the written points in a frame other than the one they arrived in?"""
+        """Are the written points in a frame other than the sensor's own?"""
         return not np.allclose(self.points_body_rotation(), np.identity(4))
 
     def frame_extrinsic(self) -> np.ndarray:
         """base -> the frame the written points are actually expressed in.
 
-        `extrinsic` names the sensor's own frame. When the points are rotated,
-        the frame they land in is that sensor frame turned by the same rotation,
-        so the pose written beside them has to carry it too.
+        `extrinsic` names the sensor's own frame. When the points are moved into
+        another frame, the pose written beside them has to describe that frame
+        instead -- rotate one without the other and the dataset is
+        self-inconsistent in a way that validates cleanly and detects nothing.
         """
-        rotation = self.points_body_rotation()
-        if np.allclose(rotation, np.identity(4)):
+        written_from_sensor = self.points_body_rotation()
+        if np.allclose(written_from_sensor, np.identity(4)):
             return self.extrinsic
-        return self.extrinsic @ invert(rotation)
+        return self.extrinsic @ invert(written_from_sensor)
     range_filter: Optional[List[float]] = None   # sensor frame [xmin..zmax]
     max_points: int = 0            # 0 = keep all; else random-free uniform subsample
     ground_lift: float = 0.0       # see docs/ROS2OPV2V.md ("ground lift")
@@ -192,6 +229,17 @@ class CloudConfig:
         from_tf = _is_tf(mapping.get("extrinsic"))
         if from_tf and not mapping.get("frame_id"):
             raise ConfigError(f"{ctx}: extrinsic: tf needs frame_id (the sensor's TF frame)")
+        write_frame_id = mapping.get("write_frame_id")
+        if write_frame_id is not None:
+            if not mapping.get("frame_id"):
+                raise ConfigError(
+                    f"{ctx}: write_frame_id needs frame_id, the frame the points "
+                    f"arrive in — the turn is looked up between the two")
+            if float(mapping.get("rotate_yaw_deg", 0.0)):
+                raise ConfigError(
+                    f"{ctx}: set write_frame_id or rotate_yaw_deg, not both. They "
+                    f"name the same turn; the first takes it from /tf_static, the "
+                    f"second from a typed angle.")
         cfg = CloudConfig(
             kind=kind,
             topic=str(_get(mapping, "topic", ctx=ctx)),
@@ -207,6 +255,7 @@ class CloudConfig:
             pixel_stride=int(mapping.get("pixel_stride", 2)),
             optical_frame=bool(mapping.get("optical_frame", True)),
             rotate_yaw_deg=float(mapping.get("rotate_yaw_deg", 0.0)),
+            write_frame_id=(str(write_frame_id) if write_frame_id is not None else None),
             range_filter=mapping.get("range_filter"),
             max_points=int(mapping.get("max_points", 0)),
             ground_lift=float(mapping.get("ground_lift", 0.0)),
@@ -600,7 +649,9 @@ class ConverterConfig:
     tf_static_topic: str = "/tf_static"
 
     def needs_tf(self) -> bool:
-        return any(a.cloud.extrinsic_from_tf or any(c.extrinsic_from_tf for c in a.cameras)
+        return any(a.cloud.extrinsic_from_tf
+                   or a.cloud.write_frame_id is not None
+                   or any(c.extrinsic_from_tf for c in a.cameras)
                    for a in self.active_agents)
 
     @property
