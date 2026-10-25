@@ -136,6 +136,41 @@ def smooth(points: np.ndarray, metres: float, closed: bool = True) -> np.ndarray
                  np.convolve(padded[:, 1], kernel, mode="valid")]
 
 
+def draw(raw, lap, way, path: str, args) -> None:
+    """The walk, and the lap taken out of it, side by side.
+
+    A lap that comes out far shorter than the building is the usual outcome of
+    a `--revisit` radius wider than the corridors: a circuit of a floor passes
+    near itself at every junction, so nothing large qualifies as simple. That is
+    obvious in a picture and invisible in a length.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    figure, axes = plt.subplots(1, 2, figsize=(13, 5.4), facecolor="#0F1419")
+    for axis, (points, title) in zip(axes, [
+            (raw, f"the mapping run — {len(raw)} poses"),
+            (way, f"the lap — {len(way)} waypoints, "
+                  f"revisit {args.revisit} m, close {args.close} m")]):
+        axis.set_facecolor("#0F1419")
+        axis.plot(raw[:, 0], raw[:, 1], color="#39464F", lw=0.6, zorder=1)
+        if points is not raw:
+            axis.plot(points[:, 0], points[:, 1], color="#F2994A", lw=1.8, zorder=3)
+            axis.scatter(*points[0], c="#A3E635", s=45, zorder=5)
+        axis.set_title(title, color="#E6E9EC", fontsize=10, loc="left")
+        axis.set_aspect("equal")
+        axis.tick_params(colors="#8A949E", labelsize=7)
+        axis.set_xlabel("x (m)", color="#8A949E", fontsize=8)
+        axis.set_ylabel("y (m)", color="#8A949E", fontsize=8)
+        for spine in axis.spines.values():
+            spine.set_color("#2A3137")
+    figure.tight_layout()
+    figure.savefig(path, dpi=110, facecolor="#0F1419")
+    plt.close(figure)
+    print(f"wrote {path}", file=sys.stderr)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -149,6 +184,9 @@ def main() -> int:
                         help="the lap ends within this of where it started (m)")
     parser.add_argument("--smooth", type=float, default=2.0,
                         help="average the way over this much of its length (m; 0: not)")
+    parser.add_argument("--plot", default=None, metavar="PNG",
+                        help="draw the walk and the lap chosen out of it, to pick the "
+                             "settings by eye instead of by guessing")
     parser.add_argument("--keep-ends", action="store_true",
                         help="do not treat the circuit as closed when smoothing")
     parser.add_argument("--min-length", type=float, default=15.0,
@@ -185,6 +223,9 @@ def main() -> int:
         print(f"the circuit is {length(way):.1f} m: the revisit radius has collapsed it. "
               f"Lower --revisit.", file=sys.stderr)
         return 1
+
+    if args.plot:
+        draw(raw, once, way, os.path.expanduser(args.plot), args)
 
     text = ";".join(f"{x:.2f},{y:.2f}" for x, y in way)
     if args.out:
