@@ -1,5 +1,9 @@
 # SCooP-iT: section-by-section writing guide
 
+> **25 Oct:** `OUTLINE.md` holds the final outline, tests and scope. It
+> supersedes the task lists for Secs. VIII-IX below; the Gym moves before the
+> Experiments.
+
 **Title:** SCooP-iT: A Real-World Indoor Testbed and Environment for Embodied
 Multi-Agent Perception. SCooP = Sensing and Communication for Cooperative
 Perception. Venue: IEEE IoT-J.
