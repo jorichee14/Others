@@ -26,6 +26,7 @@ the paths actually present are printed.
 from __future__ import annotations
 
 import argparse
+from collections import OrderedDict
 import os
 import subprocess
 import sys
@@ -42,6 +43,8 @@ from matplotlib.patches import Polygon                          # noqa: E402
 
 from ros2opv2v.geometry import invert, x_to_world                # noqa: E402
 from ros2opv2v.statics import box_corners as box_corners_3d      # noqa: E402
+from ros2opv2v.statics import points_in_box                      # noqa: E402
+from ros2opv2v.writers import read_pcd                           # noqa: E402
 
 # statics.box_corners' sign order: sx, sy, sz each -1 then +1, z fastest.
 BOX_EDGES = [(0, 1), (0, 2), (1, 3), (2, 3), (4, 5), (4, 6), (5, 7), (6, 7),
@@ -164,7 +167,8 @@ def read_track(agent_dir: str, comms_paths, want_camera: bool = False):
             params = yaml.safe_load(handle)
         pose = params["lidar_pose"]
         track.append((key, float(pose[0]), float(pose[1]), float(pose[4]),
-                      params.get("camera0") if want_camera else None))
+                      params.get("camera0") if want_camera else None,
+                      list(pose) if want_camera else None))
         boxes.update(params.get("vehicles") or {})
         comms = params.get("comms") or {}
         if not seen:
@@ -218,18 +222,42 @@ def class_colour(entry, theme):
     return theme["box"]
 
 
-def draw_boxes_on(panel, boxes, camera, theme, width, height):
-    """The labelled boxes put back into the image they were labelled against."""
+def seen_by(cloud_world, boxes, min_points: int) -> set:
+    """Which labelled boxes this agent's own returns actually fall inside.
+
+    The test visibility_split.py uses, and the only honest one: a box in front
+    of the lens may be through a wall, round a corner, or past the LiDAR's
+    range. Drawing it there claims the robot sees something it does not.
+    """
+    if cloud_world is None or not len(cloud_world):
+        return set()
+    return {key for key, entry in boxes.items()
+            if int(points_in_box(cloud_world, entry).sum()) >= min_points}
+
+
+def draw_boxes_on(panel, boxes, camera, theme, width, height,
+                  only=None, solid=None):
+    """The labelled boxes put back into the image they were labelled against.
+
+    ``only`` restricts the drawing to boxes something actually saw; of those,
+    the ones outside ``solid`` are this agent's blind spots, filled in by its
+    collaborator, and are drawn dashed to say so.
+    """
     if not camera or "cords" not in camera or "intrinsic" not in camera:
         return
-    for entry in boxes.values():
+    for key, entry in boxes.items():
+        if only is not None and key not in only:
+            continue
+        mine = solid is None or key in solid
         uvz = project(box_corners_3d(entry), camera["cords"], camera["intrinsic"])
         colour = class_colour(entry, theme)
         for a, b in BOX_EDGES:
             if uvz[a, 2] <= 0.05 or uvz[b, 2] <= 0.05:
                 continue            # behind the lens: no line to draw
             panel.plot([uvz[a, 0], uvz[b, 0]], [uvz[a, 1], uvz[b, 1]],
-                       color=colour, lw=1.3, zorder=5)
+                       color=colour, lw=1.3 if mine else 0.9,
+                       ls="-" if mine else (0, (3, 2)),
+                       alpha=1.0 if mine else 0.7, zorder=5)
     panel.set_xlim(0, width)
     panel.set_ylim(height, 0)
 
@@ -276,6 +304,14 @@ def main() -> int:
                         help="the labels json, for --ap-label (label_static.py's output)")
     parser.add_argument("--boxes-on-camera", action="store_true",
                         help="draw the labelled boxes into the camera panels too")
+    parser.add_argument("--only-seen", choices=("self", "either"), default=None,
+                        help="draw a box only where it is actually seen -- returns "
+                             "inside it, not merely in front of the lens. 'self': "
+                             "what this agent's own sweep found. 'either': what the "
+                             "pair found between them, the ones this agent cannot "
+                             "see itself drawn dashed")
+    parser.add_argument("--min-points", type=int, default=3,
+                        help="--only-seen: returns inside a box to count as seen")
     parser.add_argument("--seconds", type=float, default=45.0)
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--rate", type=float, default=10.0, help="the frame grid's rate (Hz)")
@@ -376,7 +412,7 @@ def main() -> int:
                       textcoords="offset points", color=theme["ap"],
                       fontsize=10, fontweight="bold", zorder=9)
 
-    seen_xy = [[x, y] for agent in agents for _, x, y, _, _ in tracks[agent]]
+    seen_xy = [[x, y] for agent in agents for _, x, y, _, _, _ in tracks[agent]]
     seen_xy += [[float(e["location"][0]), float(e["location"][1])] for e in boxes.values()]
     if ap is not None:
         seen_xy.append(ap)
@@ -455,7 +491,25 @@ def main() -> int:
     count = max(2, int(args.seconds * args.fps))
     picks = np.linspace(0, len(keys) - 1, count).astype(int)
     trail = int(args.trail * args.rate) if args.trail else 0
-    held = {agent: (None, None) for agent in agents}   # the image, and its camera
+    held = {agent: (None, None, None) for agent in agents}  # image, camera, frame
+    world_clouds = OrderedDict()    # (agent, frame) -> its returns in the map frame
+
+    def returns_of(agent, frame):
+        """That agent's sweep for a frame, in the map frame.
+
+        Only the handful in play are kept: every frame of every agent is tens
+        of gigabytes, and the frames being drawn only move forward.
+        """
+        if (agent, frame) not in world_clouds:
+            points = read_pcd(os.path.join(scenario, agent,
+                                           f"{keys[frame]}.pcd"))[:, :3]
+            pose = x_to_world(tracks[agent][frame][5])
+            world_clouds[(agent, frame)] = (points.astype(np.float64)
+                                            @ pose[:3, :3].T + pose[:3, 3])
+            while len(world_clouds) > 2 * len(agents):
+                world_clouds.popitem(last=False)
+        world_clouds.move_to_end((agent, frame))
+        return world_clouds[(agent, frame)]
 
     for number, index in enumerate(picks):
         for agent in agents:
@@ -463,7 +517,7 @@ def main() -> int:
             upto = track[max(0, index - trail):index + 1] if trail else track[:index + 1]
             path, nose, _ = drawn[agent]
             path.set_data([p[1] for p in upto], [p[2] for p in upto])
-            _, x, y, yaw, _camera = track[index]
+            _, x, y, yaw, _camera, _pose = track[index]
             nose.set_xy(arrow(x, y, yaw, size))
         a, b = tracks[agents[0]][index], tracks[agents[1]][index]
         link.set_data([a[1], b[1]], [a[2], b[2]])
@@ -485,8 +539,9 @@ def main() -> int:
             # projecting this frame's pose onto it slides the boxes off their
             # objects -- and at 1.3 Hz that is most frames.
             camera = tracks[agent][index][4] if fresh else held[agent][1]
+            source = index if fresh else held[agent][2]
             if fresh:
-                held[agent] = (image, camera)
+                held[agent] = (image, camera, index)
             panel.clear()
             panel.set_xticks([])
             panel.set_yticks([])
@@ -499,10 +554,22 @@ def main() -> int:
             else:
                 panel.imshow(image)
                 if args.boxes_on_camera:
-                    # Where the camera that took THIS image puts them: if they
-                    # land on the objects, the dataset agrees with itself.
+                    # Where the camera that took THIS image puts them, and only
+                    # the ones that image's own LiDAR sweep actually found: if
+                    # they land on the objects, the dataset agrees with itself.
+                    only = solid = None
+                    if args.only_seen and source is not None:
+                        solid = seen_by(returns_of(agent, source), boxes,
+                                        args.min_points)
+                        only = set(solid)
+                        if args.only_seen == "either":
+                            for other in agents:
+                                if other != agent:
+                                    only |= seen_by(returns_of(other, source),
+                                                    boxes, args.min_points)
                     draw_boxes_on(panel, boxes, camera, theme,
-                                  image.shape[1], image.shape[0])
+                                  image.shape[1], image.shape[0],
+                                  only=only, solid=solid)
             role = "ego" if position == 0 else "collaborator"
             panel.set_title(f"agent {agent} — {role}" + ("" if fresh else "   · held"),
                             color=theme["ink"] if fresh else theme["muted"],
