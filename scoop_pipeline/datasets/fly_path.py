@@ -72,42 +72,51 @@ def resample(points: np.ndarray, spacing: float, closed: bool = False) -> np.nda
     return np.c_[np.interp(want, along, points[:, 0]), np.interp(want, along, points[:, 1])]
 
 
-def longest_lap(points: np.ndarray, radius: float, close: float,
-                min_length: float) -> np.ndarray:
-    """The longest stretch walked that comes back without passing anywhere twice.
+def prune_excursions(points: np.ndarray, radius: float, max_loop: float) -> np.ndarray:
+    """Cut out the short excursions: the little loops, spurs and shuffles.
 
-    Skipping revisits in place looks right and is not: dropping a stretch leaves
-    the kept points discontinuous, and smoothing renders that jump as a diagonal
-    straight through a wall. A there-and-back spur has no non-doubling path
-    through it at all, so half of it cannot be kept either.
+    A mapping run around a building is one big ring with small circles at the
+    corners, a spur into a doorway, a shuffle while the operator looks at
+    something. Those are the loops to remove. The ring is not: it is the shape
+    of the place.
 
-    What can be kept is a sub-path of the real walk -- the operator was in a
-    corridor the whole time, so anything they walked is walkable. This finds the
-    longest contiguous one that ends within `close` of where it started and
-    never comes within `radius` of its own earlier self. That is a lap: it
-    closes without a seam, and `fly` joining its ends adds nothing.
+    So the test is length, not shape. Where the walk comes back within `radius`
+    of a point it left less than `max_loop` of path ago, the excursion between
+    is dropped. The cut joins two points `radius` apart, so it cannot cross
+    anything the operator did not. The ring survives because returning to its
+    own start takes far more than `max_loop` of walking.
     """
-    n = len(points)
-    if n < 8:
+    if len(points) < 3:
         return points
     step = max(1e-6, _median_step(points))
-    skip = max(2, int(round(2.0 * radius / step)))          # the stretch just walked
-    need = max(skip + 2, int(round(min_length / step)))
-    distance = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=2)
+    ahead = max(3, int(round(max_loop / step)))
+    kept, index, total = [], 0, len(points)
+    while index < total:
+        kept.append(points[index])
+        high = min(total, index + ahead + 1)
+        if high > index + 2:
+            near = np.nonzero(
+                np.linalg.norm(points[index + 2:high] - points[index], axis=1) < radius)[0]
+            if len(near):
+                index = index + 2 + int(near[-1])     # on past the whole excursion
+                continue
+        index += 1
+    return np.asarray(kept)
 
-    best = None
-    for start in range(n - need):
-        end = None
-        for here in range(start + skip + 1, n):
-            if distance[here, start:here - skip].min() < radius:
-                break                                        # passed its own path
-            if here - start >= need and distance[start, here] < close:
-                end = here                                   # a lap, so far the longest
-        if end is not None and (best is None or end - start > best[1] - best[0]):
-            best = (start, end)
-    if best is None:
-        return points[:0]
-    return points[best[0]:best[1] + 1]
+
+def first_lap(points: np.ndarray, close: float, min_length: float) -> np.ndarray:
+    """One time round: up to where the walk first comes back to where it began.
+
+    After the excursions are gone what is left is the ring, walked once or
+    several times. A flythrough wants it once.
+    """
+    if len(points) < 4:
+        return points
+    along = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
+    far = along >= min_length
+    back = np.linalg.norm(points - points[0], axis=1) < close
+    hit = np.nonzero(far & back)[0]
+    return points[:hit[0] + 1] if len(hit) else points
 
 
 def _median_step(points: np.ndarray) -> float:
@@ -178,9 +187,12 @@ def main() -> int:
     parser.add_argument("--out", default=None, help="write the waypoints here (default: stdout)")
     parser.add_argument("--spacing", type=float, default=0.4,
                         help="resample the trajectory to this spacing (m)")
-    parser.add_argument("--revisit", type=float, default=2.5,
-                        help="the lap may not come within this of its own earlier self (m)")
-    parser.add_argument("--close", type=float, default=3.0,
+    parser.add_argument("--revisit", type=float, default=1.5,
+                        help="coming back within this of an earlier point closes an excursion (m)")
+    parser.add_argument("--max-loop", type=float, default=25.0,
+                        help="an excursion shorter than this is cut out; the ring, which takes "
+                             "far longer to come back to itself, is kept (m)")
+    parser.add_argument("--close", type=float, default=4.0,
                         help="the lap ends within this of where it started (m)")
     parser.add_argument("--smooth", type=float, default=2.0,
                         help="average the way over this much of its length (m; 0: not)")
@@ -195,12 +207,8 @@ def main() -> int:
 
     raw = read_tum_xy(args.traj)
     even = resample(raw, args.spacing)
-    once = longest_lap(even, args.revisit, args.close, args.min_length)
-    if not len(once):
-        print(f"no lap found: nothing the operator walked came back within "
-              f"{args.close} m of its start without crossing itself ({args.revisit} m). "
-              f"Raise --close, lower --revisit, or lower --min-length.", file=sys.stderr)
-        return 1
+    pruned = prune_excursions(even, args.revisit, args.max_loop)
+    once = first_lap(pruned, args.close, args.min_length)
     # Resampled again after smoothing, and over the CLOSED loop: `fly` joins the
     # last waypoint back to the first, so that segment is part of the way and has
     # to be spaced like the rest. Left as a remainder it is a stray 3 cm or 90 cm
@@ -215,8 +223,10 @@ def main() -> int:
 
     print(f"{len(raw)} poses, {length(raw):.1f} m walked\n"
           f"  resampled at {args.spacing} m  -> {len(even)} points\n"
-          f"  longest lap (clear of itself by {args.revisit} m, closing within "
-          f"{args.close} m) -> {len(once)} points, {length(once):.1f} m\n"
+          f"  excursions under {args.max_loop} m cut out -> {len(pruned)} points, "
+          f"{length(pruned):.1f} m\n"
+          f"  one time round (closing within {args.close} m) -> {len(once)} points, "
+          f"{length(once):.1f} m\n"
           f"  smoothed over {args.smooth} m -> {len(way)} waypoints, {length(way):.1f} m circuit",
           file=sys.stderr)
     if length(way) < args.min_length:
