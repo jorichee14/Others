@@ -40,15 +40,22 @@ import numpy as np                                              # noqa: E402
 import yaml                                                     # noqa: E402
 from matplotlib.patches import Polygon                          # noqa: E402
 
+from ros2opv2v.geometry import invert, x_to_world                # noqa: E402
+from ros2opv2v.statics import box_corners as box_corners_3d      # noqa: E402
+
+# statics.box_corners' sign order: sx, sy, sz each -1 then +1, z fastest.
+BOX_EDGES = [(0, 1), (0, 2), (1, 3), (2, 3), (4, 5), (4, 6), (5, 7), (6, 7),
+             (0, 4), (1, 5), (2, 6), (3, 7)]
+
 THEMES = {
     # Blue and orange in both: the one categorical pair every kind of colour
     # blindness keeps apart, which is the whole job here -- telling the two
     # robots apart is what the video is for.
     "light": dict(bg="#FFFFFF", panel="#F4F6F8", map="#CBD4DA", ink="#1F2933",
-                  muted="#67737D", grid="#E2E8ED", box="#15803D",
+                  muted="#67737D", grid="#E2E8ED", box="#15803D", ap="#6D28D9",
                   agents=("#1B6FA8", "#C2410C")),
     "dark": dict(bg="#0F1419", panel="#151C22", map="#2B3740", ink="#E6E9EC",
-                 muted="#8A949E", grid="#2A3137", box="#A3E635",
+                 muted="#8A949E", grid="#2A3137", box="#A3E635", ap="#C4B5FD",
                  agents=("#5BB0E8", "#F2994A")),
 }
 
@@ -138,15 +145,16 @@ def agent_dirs(scenario: str):
                    if os.path.isdir(os.path.join(scenario, d))), key=int)
 
 
-def read_track(agent_dir: str, comms_paths):
-    """Per frame: key, x, y, yaw, the comms values asked for; plus the boxes."""
+def read_track(agent_dir: str, comms_paths, want_camera: bool = False):
+    """Per frame: key, x, y, yaw, its camera block; plus the boxes and comms."""
     keys = sorted(f[:-5] for f in os.listdir(agent_dir) if f.endswith(".yaml"))
     track, boxes, series, seen = [], {}, {p: [] for p in comms_paths}, {}
     for key in keys:
         with open(os.path.join(agent_dir, f"{key}.yaml"), encoding="utf-8") as handle:
             params = yaml.safe_load(handle)
         pose = params["lidar_pose"]
-        track.append((key, float(pose[0]), float(pose[1]), float(pose[4])))
+        track.append((key, float(pose[0]), float(pose[1]), float(pose[4]),
+                      params.get("camera0") if want_camera else None))
         boxes.update(params.get("vehicles") or {})
         comms = params.get("comms") or {}
         if not seen:
@@ -168,6 +176,39 @@ def arrow(x: float, y: float, yaw_deg: float, size: float):
     local = np.array([[nose, 0.0], [back, wing], [-0.15 * size, 0.0], [back, -wing]])
     rotation = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
     return local @ rotation.T + np.array([x, y])
+
+
+def project(points_world: np.ndarray, cords, intrinsic) -> np.ndarray:
+    """(N, 3) map points -> (N, 3) [u, v, depth] through a frame's camera block.
+
+    The camera block as the converter wrote it: `cords` is the camera's optical
+    frame in the map, `intrinsic` the matrix of the image as written. Nothing
+    here goes through the model's loader, so a box that lands on its object is
+    the dataset's own word, not the loader's reading of it.
+    """
+    world_from_camera = x_to_world(cords)
+    K = np.asarray(intrinsic, dtype=np.float64)
+    local = np.c_[points_world, np.ones(len(points_world))] @ invert(world_from_camera).T
+    depth = local[:, 2]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        u = K[0, 0] * local[:, 0] / depth + K[0, 2]
+        v = K[1, 1] * local[:, 1] / depth + K[1, 2]
+    return np.c_[u, v, depth]
+
+
+def draw_boxes_on(panel, boxes, camera, colour, width, height):
+    """The labelled boxes put back into the image they were labelled against."""
+    if not camera or "cords" not in camera or "intrinsic" not in camera:
+        return
+    for entry in boxes.values():
+        uvz = project(box_corners_3d(entry), camera["cords"], camera["intrinsic"])
+        for a, b in BOX_EDGES:
+            if uvz[a, 2] <= 0.05 or uvz[b, 2] <= 0.05:
+                continue            # behind the lens: no line to draw
+            panel.plot([uvz[a, 0], uvz[b, 0]], [uvz[a, 1], uvz[b, 1]],
+                       color=colour, lw=1.3, zorder=5)
+    panel.set_xlim(0, width)
+    panel.set_ylim(height, 0)
 
 
 def box_corners(entry):
@@ -203,6 +244,15 @@ def main() -> int:
     parser.add_argument("--comms", action="append", default=[], metavar="PATH",
                         help="a dotted path in the comms block to trace; repeat for more")
     parser.add_argument("--theme", choices=sorted(THEMES), default="light")
+    parser.add_argument("--ap", default=None, metavar="X,Y",
+                        help="mark the access point here (m, map frame)")
+    parser.add_argument("--ap-label", default=None, metavar="NAME",
+                        help="mark the access point where this labelled object is "
+                             "(needs --labels); the AP stood where one of them stood")
+    parser.add_argument("--labels", default=None,
+                        help="the labels json, for --ap-label (label_static.py's output)")
+    parser.add_argument("--boxes-on-camera", action="store_true",
+                        help="draw the labelled boxes into the camera panels too")
     parser.add_argument("--seconds", type=float, default=45.0)
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--rate", type=float, default=10.0, help="the frame grid's rate (Hz)")
@@ -225,9 +275,31 @@ def main() -> int:
         print(f"{scenario}: {len(agents)} agent(s); this needs two", file=sys.stderr)
         return 2
 
+    ap = None
+    if args.ap:
+        ap = [float(v) for v in args.ap.split(",")][:2]
+    elif args.ap_label:
+        if not args.labels:
+            print("--ap-label needs --labels (the json label_static.py wrote)",
+                  file=sys.stderr)
+            return 2
+        import json
+        with open(os.path.expanduser(args.labels), encoding="utf-8") as handle:
+            known = json.load(handle)
+        known = known.get("labels", known) if isinstance(known, dict) else known
+        match = [l for l in known if l.get("name") == args.ap_label]
+        if not match:
+            names = ", ".join(sorted(str(l.get("name", "?")) for l in known))
+            print(f"no label named {args.ap_label!r}; the file has: {names}",
+                  file=sys.stderr)
+            return 2
+        ap = [float(match[0]["location"][0]), float(match[0]["location"][1])]
+        print(f"AP at {args.ap_label}: {ap[0]:.2f}, {ap[1]:.2f}")
+
     tracks, series, boxes, available = {}, {}, {}, {}
     for agent in agents:
-        track, found, got, seen = read_track(os.path.join(scenario, agent), args.comms)
+        track, found, got, seen = read_track(os.path.join(scenario, agent), args.comms,
+                                             want_camera=args.boxes_on_camera)
         tracks[agent], series[agent] = track, got
         boxes.update(found)
         available.update(seen)
@@ -269,8 +341,17 @@ def main() -> int:
         axis.add_patch(Polygon(box_corners(entry), closed=True, fill=False,
                                edgecolor=theme["box"], lw=1.6, zorder=4))
 
-    seen_xy = [[x, y] for agent in agents for _, x, y, _ in tracks[agent]]
+    if ap is not None:
+        axis.plot([ap[0]], [ap[1]], marker="*", ms=20, color=theme["ap"],
+                  mec=theme["bg"], mew=1.2, zorder=9, ls="none", label="AP")
+        axis.annotate("AP", xy=(ap[0], ap[1]), xytext=(6, 6),
+                      textcoords="offset points", color=theme["ap"],
+                      fontsize=10, fontweight="bold", zorder=9)
+
+    seen_xy = [[x, y] for agent in agents for _, x, y, _, _ in tracks[agent]]
     seen_xy += [[float(e["location"][0]), float(e["location"][1])] for e in boxes.values()]
+    if ap is not None:
+        seen_xy.append(ap)
     walked = np.asarray(seen_xy)
     low, high = walked.min(axis=0) - args.pad, walked.max(axis=0) + args.pad
     axis.set_xlim(low[0], high[0])
@@ -354,7 +435,7 @@ def main() -> int:
             upto = track[max(0, index - trail):index + 1] if trail else track[:index + 1]
             path, nose, _ = drawn[agent]
             path.set_data([p[1] for p in upto], [p[2] for p in upto])
-            _, x, y, yaw = track[index]
+            _, x, y, yaw, _camera = track[index]
             nose.set_xy(arrow(x, y, yaw, size))
         a, b = tracks[agents[0]][index], tracks[agents[1]][index]
         link.set_data([a[1], b[1]], [a[2], b[2]])
@@ -374,6 +455,11 @@ def main() -> int:
                            color=theme["muted"], fontsize=9, transform=panel.transAxes)
             else:
                 panel.imshow(image)
+                if args.boxes_on_camera:
+                    # The box drawn where this frame's own camera block puts it:
+                    # if it lands on the object, the dataset agrees with itself.
+                    draw_boxes_on(panel, boxes, tracks[agent][index][4],
+                                  theme["box"], image.shape[1], image.shape[0])
             role = "ego" if position == 0 else "collaborator"
             panel.set_title(f"agent {agent} — {role}" + ("" if fresh else "   · held"),
                             color=theme["ink"] if fresh else theme["muted"],
