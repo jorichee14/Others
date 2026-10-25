@@ -35,7 +35,8 @@ from . import comms as commsmod
 from . import labels
 from .bagreader import BagReader
 from .config import AgentConfig, ConverterConfig, ego_agent
-from .geometry import invert, matrix_to_opencood_pose, matrix_to_rpy_config, quat_to_matrix
+from .geometry import (invert, matrix_to_opencood_pose, matrix_to_rpy_config,
+                       quat_to_matrix, rpy_to_matrix, transform_points)
 from .pointclouds import (apply_range_filter, cloud_from_depth_image,
                           cloud_from_pointcloud2, camera_intrinsics, deskew_cloud,
                           subsample)
@@ -1117,7 +1118,17 @@ def _build_cloud(agent: AgentConfig, msg, camera_infos: Dict[str, object],
 
     cloud = apply_range_filter(cloud, cloud_cfg.range_filter)
     cloud = subsample(cloud, cloud_cfg.max_points)
-    return _apply_ground_lift(cloud, cloud_cfg.ground_lift)
+    cloud = _apply_ground_lift(cloud, cloud_cfg.ground_lift)
+    if cloud_cfg.rotate_yaw_deg:
+        # Last, so range_filter keeps meaning the frame the points arrived in.
+        # The depth-image path already turned optical -> body inside
+        # cloud_from_depth_image; this is the other half of
+        # points_body_rotation(), and frame_extrinsic() carries the same turn
+        # into the pose written beside these points.
+        turn = rpy_to_matrix(0.0, 0.0, float(cloud_cfg.rotate_yaw_deg))
+        cloud = cloud.copy()
+        cloud[:, :3] = transform_points(cloud[:, :3], turn)
+    return cloud
 
 
 def _deskew(agent: AgentConfig, cloud: np.ndarray, offsets, stamp_ns: Optional[int],

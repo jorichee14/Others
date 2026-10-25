@@ -2859,6 +2859,43 @@ def test_rotating_a_depth_cloud_rotates_the_pose_written_beside_it():
     assert np.allclose(pc.frame_extrinsic(), pc.extrinsic)
 
 
+def test_rotate_yaw_keeps_the_written_points_and_pose_describing_one_frame():
+    """A sensor whose frame points the wrong way along the robot.
+
+    Ouster publishes `os_lidar` 180 degrees about z from `os_sensor`, so a
+    forward-facing mount still writes +x pointing backwards -- and every OPV2V
+    config assumes +x is forward, so `cav_lidar_range` then covers the space
+    behind the robot and the camera's frustum looks the other way. Turning the
+    points fixes that only if the pose written beside them turns too: the same
+    world point must come out of either description.
+    """
+    from ros2opv2v.geometry import invert, rpy_to_matrix, transform_points
+
+    world_from_base = cfgmod.make_transform(x=3.0, y=-1.0, z=0.4, yaw=35.0)
+    extrinsic = cfgmod.make_transform(x=0.1, y=0.0, z=0.2, yaw=0.0)
+    cloud = cfgmod.CloudConfig('pointcloud2', '/p', extrinsic, rotate_yaw_deg=180.0)
+
+    assert cloud.points_rotated_to_body()
+    # 4 m straight ahead of the sensor, as the sensor's own frame has it
+    arrival = np.array([[4.0, 0.0, 0.0]])
+    turned = transform_points(arrival, rpy_to_matrix(0.0, 0.0, 180.0))
+    assert turned[0, 0] < 0, 'a 180 degree turn must put the point behind'
+
+    def to_world(points, base_to_frame):
+        homogeneous = np.column_stack([points, np.ones(len(points))])
+        return (homogeneous @ (world_from_base @ base_to_frame).T)[:, :3]
+
+    # Written points through the written pose == arrival points through the
+    # sensor's own extrinsic. That equality is the whole contract.
+    assert np.allclose(to_world(turned, cloud.frame_extrinsic()),
+                       to_world(arrival, cloud.extrinsic))
+
+    # And it stays an identity when nobody asks for a turn.
+    plain = cfgmod.CloudConfig('pointcloud2', '/p', extrinsic)
+    assert not plain.points_rotated_to_body()
+    assert np.allclose(plain.frame_extrinsic(), plain.extrinsic)
+
+
 def test_a_depth_agents_written_cloud_has_the_floor_below_it():
     """The end-to-end property, stated the way the bug showed up in the data:
     with a camera looking level at a room, the written cloud must put the floor

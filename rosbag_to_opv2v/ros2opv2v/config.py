@@ -20,7 +20,7 @@ import numpy as np
 import yaml
 
 from .comms import CommsConfig  # noqa: F401
-from .geometry import OPTICAL_TO_FLU, invert, make_transform
+from .geometry import OPTICAL_TO_FLU, invert, make_transform, rpy_to_matrix
 
 
 class ConfigError(ValueError):
@@ -112,28 +112,53 @@ class CloudConfig:
     min_depth: float = 0.1
     pixel_stride: int = 2
     optical_frame: bool = True
+    rotate_yaw_deg: float = 0.0
+    """Degrees about the sensor frame's own z, applied to the written points.
+
+    180 for an Ouster publishing `os_lidar` on a forward-facing mount. Check it
+    rather than assume it: the camera's forward axis expressed in the written
+    LiDAR frame should have a positive x, and the robot's travel should too."""
+
+    def points_body_rotation(self) -> np.ndarray:
+        """The rotation applied to this sensor's points before they are written.
+
+        Two independent reasons to turn a sensor's points:
+
+        * a depth image declared `optical_frame` arrives in [right, down,
+          forward] and is turned into ROS body axes;
+        * `rotate_yaw_deg` turns the frame about its own z, for a sensor whose
+          frame convention does not point along the robot. Ouster publishes
+          `os_lidar` 180 deg about z from `os_sensor`, so a rig that mounts the
+          sensor facing forward still writes a frame whose +x points backwards
+          -- and every OPV2V config assumes +x is forward, so the detection
+          range then covers the space behind the robot.
+
+        The pose written beside the points carries the same rotation, through
+        `frame_extrinsic`. Rotate one without the other and the dataset is
+        self-inconsistent in a way that validates cleanly and detects nothing.
+        """
+        rotation = np.identity(4)
+        if self.kind == "depth_image" and self.optical_frame:
+            rotation = OPTICAL_TO_FLU @ rotation
+        if self.rotate_yaw_deg:
+            rotation = rpy_to_matrix(0.0, 0.0, float(self.rotate_yaw_deg)) @ rotation
+        return rotation
 
     def points_rotated_to_body(self) -> bool:
-        """Does the converter rotate this sensor's points into ROS body axes?
-
-        Exactly one case does: a depth image declared `optical_frame`. Anything
-        else is written in the frame it arrived in. Callers need this to keep the
-        WRITTEN pose and the WRITTEN points describing the same frame — rotate one
-        without the other and the dataset is self-inconsistent in a way that
-        validates cleanly and detects nothing.
-        """
-        return self.kind == "depth_image" and self.optical_frame
+        """Are the written points in a frame other than the one they arrived in?"""
+        return not np.allclose(self.points_body_rotation(), np.identity(4))
 
     def frame_extrinsic(self) -> np.ndarray:
         """base -> the frame the written points are actually expressed in.
 
-        `extrinsic` names the sensor's own frame. When the points are rotated to
-        body axes, the frame they land in is that sensor frame turned by the same
-        rotation, so the pose written beside them has to carry it too.
+        `extrinsic` names the sensor's own frame. When the points are rotated,
+        the frame they land in is that sensor frame turned by the same rotation,
+        so the pose written beside them has to carry it too.
         """
-        if not self.points_rotated_to_body():
+        rotation = self.points_body_rotation()
+        if np.allclose(rotation, np.identity(4)):
             return self.extrinsic
-        return self.extrinsic @ invert(OPTICAL_TO_FLU)
+        return self.extrinsic @ invert(rotation)
     range_filter: Optional[List[float]] = None   # sensor frame [xmin..zmax]
     max_points: int = 0            # 0 = keep all; else random-free uniform subsample
     ground_lift: float = 0.0       # see docs/ROS2OPV2V.md ("ground lift")
@@ -181,6 +206,7 @@ class CloudConfig:
             min_depth=float(mapping.get("min_depth", 0.1)),
             pixel_stride=int(mapping.get("pixel_stride", 2)),
             optical_frame=bool(mapping.get("optical_frame", True)),
+            rotate_yaw_deg=float(mapping.get("rotate_yaw_deg", 0.0)),
             range_filter=mapping.get("range_filter"),
             max_points=int(mapping.get("max_points", 0)),
             ground_lift=float(mapping.get("ground_lift", 0.0)),
