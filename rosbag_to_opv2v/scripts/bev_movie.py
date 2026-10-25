@@ -13,6 +13,13 @@ doing, at one glance.
         [--cameras] [--comms wifi.rssi] [--theme dark]
         [--seconds 45] [--fps 20] [--trail 0]      # 0: the whole path stays
 
+The access points, picked in each site's own anchored cloud (and note the
+leading minus on site 2: pass it as --ap=-28.249,-7.207 or the shell reads it
+as a flag):
+
+    site 1   --ap 4.390,6.619
+    site 2   --ap=-28.249,-7.207
+
 A camera slower than the frame grid (the ZED at 1.3 Hz on a 10 Hz grid) has no
 image in most frames. Its panel holds the last one it had and says so, rather
 than going black -- a black panel for ten frames in eleven reads as a broken
