@@ -439,8 +439,16 @@ def main() -> int:
             nose.set_xy(arrow(x, y, yaw, size))
         a, b = tracks[agents[0]][index], tracks[agents[1]][index]
         link.set_data([a[1], b[1]], [a[2], b[2]])
-        caption.set_text(f"frame {keys[index]}   {index / args.rate:6.1f} s\n"
-                         f"apart  {np.hypot(a[1] - b[1], a[2] - b[2]):5.1f} m")
+        lines = [f"frame {keys[index]}   {index / args.rate:6.1f} s",
+                 f"apart  {np.hypot(a[1] - b[1], a[2] - b[2]):5.1f} m"]
+        if ap is not None:
+            # The distance each robot is from the AP, because that is what the
+            # RSSI and RTT traces beside the map are a function of -- the
+            # reader can see the link fall off as the number grows.
+            for agent, where in zip(agents, (a, b)):
+                lines.append(f"AP-{agent}  "
+                             f"{np.hypot(where[1] - ap[0], where[2] - ap[1]):5.1f} m")
+        caption.set_text("\n".join(lines))
         for position, (agent, panel, _) in enumerate(cameras):
             image, fresh = load_image(os.path.join(scenario, agent), keys[index], held[agent])
             held[agent] = image if image is not None else held[agent]
