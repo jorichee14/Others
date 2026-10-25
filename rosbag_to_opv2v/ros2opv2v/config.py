@@ -132,8 +132,19 @@ class CloudConfig:
     Naming the agent's base link here fixes it from the tree the extrinsics
     already come from: the transform is looked up on /tf_static, nothing is
     assumed, and the config says which frame the dataset is in."""
+    write_frame_align: str = "full"
+    """How much of ``write_frame_id`` the written frame takes: ``full`` or ``yaw``.
+
+    ``full`` writes the points in that frame outright. ``yaw`` takes only its
+    heading: the written frame keeps the sensor's own origin, roll and pitch and
+    turns about the sensor's z until +x points where the named frame's +x
+    points. That is the frame a level LiDAR wants on a robot whose base link is
+    not level -- mobile_2's base link is its camera, pitched 11 degrees down,
+    and a cloud written in it has the floor 20 m ahead four metres out of the
+    model's z window. Still from the tree: the heading is read, not typed."""
     write_from_sensor: np.ndarray = field(default_factory=lambda: np.identity(4))
-    """The sensor's frame -> ``write_frame_id``, filled from /tf_static."""
+    """The sensor's frame -> the written frame, filled from /tf_static (under
+    ``yaw`` alignment: the heading-only turn about the sensor's z)."""
 
     def points_body_rotation(self) -> np.ndarray:
         """The rotation applied to this sensor's points before they are written.
@@ -240,6 +251,10 @@ class CloudConfig:
                     f"{ctx}: set write_frame_id or rotate_yaw_deg, not both. They "
                     f"name the same turn; the first takes it from /tf_static, the "
                     f"second from a typed angle.")
+            if str(mapping.get("write_frame_align", "full")).lower() not in ("full", "yaw"):
+                raise ConfigError(
+                    f"{ctx}: write_frame_align must be full or yaw, got "
+                    f"{mapping.get('write_frame_align')!r}")
         cfg = CloudConfig(
             kind=kind,
             topic=str(_get(mapping, "topic", ctx=ctx)),
@@ -256,6 +271,7 @@ class CloudConfig:
             optical_frame=bool(mapping.get("optical_frame", True)),
             rotate_yaw_deg=float(mapping.get("rotate_yaw_deg", 0.0)),
             write_frame_id=(str(write_frame_id) if write_frame_id is not None else None),
+            write_frame_align=str(mapping.get("write_frame_align", "full")).lower(),
             range_filter=mapping.get("range_filter"),
             max_points=int(mapping.get("max_points", 0)),
             ground_lift=float(mapping.get("ground_lift", 0.0)),

@@ -21,6 +21,7 @@ The pipeline is three stages, in this order for a reason:
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -541,15 +542,23 @@ def resolve_tf_extrinsics(reader: BagReader, cfg: ConverterConfig,
         cloud = agent.cloud
         if cloud.write_frame_id is not None:
             try:
-                cloud.write_from_sensor = tree.lookup(cloud.write_frame_id,
-                                                      cloud.frame_id)
+                write_from_sensor = tree.lookup(cloud.write_frame_id, cloud.frame_id)
                 chain = describe_chain(tree, cloud.write_frame_id, cloud.frame_id)
             except TfError as exc:
                 raise ConversionError(
                     f"agent[{agent.name}].cloud.write_frame_id: {exc}") from exc
+            if cloud.write_frame_align == "yaw":
+                # Heading only: where the named frame's +x points, seen from the
+                # sensor, turned about the sensor's own z. The sensor keeps its
+                # origin and its level; the written pose describes that frame.
+                forward = invert(write_from_sensor)[:3, 0]      # named +x, in sensor axes
+                heading = math.degrees(math.atan2(forward[1], forward[0]))
+                write_from_sensor = invert(rpy_to_matrix(0.0, 0.0, heading))
+            cloud.write_from_sensor = write_from_sensor
             entry = matrix_to_rpy_config(cloud.write_from_sensor)
             entry["chain"] = chain
             entry["written_in"] = cloud.write_frame_id
+            entry["align"] = cloud.write_frame_align
             report.tf_extrinsics[f"{agent.name}.cloud.write_frame"] = entry
 
 

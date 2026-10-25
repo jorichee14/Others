@@ -2935,6 +2935,46 @@ def test_write_frame_id_puts_the_cloud_in_a_frame_the_tf_tree_names():
                        to_world(arrival, cloud.extrinsic))
 
 
+def test_yaw_alignment_keeps_the_lidar_level_and_takes_the_base_heading():
+    """mobile_2's base link is its camera, pitched 11 degrees down; its Ouster
+    is level and yawed 180 from it. Written in the base link, the level cloud
+    lands in a pitched frame and the floor 20 m ahead is four metres out of the
+    model's z window. `yaw` alignment takes the heading from the base and the
+    level from the sensor, and the pose written beside the points must say so:
+    world -> written frame has the base's yaw and no pitch.
+    """
+    from ros2opv2v.geometry import invert, matrix_to_rpy_config, rpy_to_matrix
+
+    # the robot in the world: heading 35 deg, nose 11.19 deg down (as measured)
+    world_from_base = cfgmod.make_transform(x=2.0, y=1.0, z=0.37,
+                                            roll=-0.68, pitch=-11.19, yaw=35.0)
+    # the LiDAR in the world: level, 180 deg from the base's heading, mounted
+    # straight above the base so "ahead of the robot" is ahead of the sensor too
+    world_from_sensor = cfgmod.make_transform(x=2.0, y=1.0, z=0.45, yaw=35.0 + 180.0)
+    base_from_sensor = invert(world_from_base) @ world_from_sensor
+    cloud = cfgmod.CloudConfig('pointcloud2', '/p', base_from_sensor, frame_id='os_lidar',
+                               write_frame_id='base', write_frame_align='yaw')
+
+    # what resolve_tf_extrinsics computes under `yaw`: turn about the sensor's z
+    # until +x points where the base's +x points
+    forward = invert(base_from_sensor)[:3, 0]
+    heading = math.degrees(math.atan2(forward[1], forward[0]))
+    cloud.write_from_sensor = invert(rpy_to_matrix(0.0, 0.0, heading))
+
+    written = matrix_to_rpy_config(world_from_base @ cloud.frame_extrinsic())
+    assert abs(written['pitch']) < 0.05, written          # level: the sensor's, not the base's
+    assert abs(written['roll']) < 0.05, written
+    assert abs(written['yaw'] - 35.0) < 0.05, written     # heading: the base's
+    # and the origin stays at the sensor
+    assert np.allclose([written['x'], written['y'], written['z']], [2.0, 1.0, 0.45], atol=1e-6)
+
+    # a point straight ahead of the ROBOT, 4 m out, is +x in the written frame
+    ahead_world = world_from_base @ cfgmod.make_transform(x=4.0)
+    ahead_sensor = (invert(world_from_sensor) @ ahead_world)[:3, 3]
+    ahead_written = (cloud.points_write_transform() @ np.append(ahead_sensor, 1.0))[:3]
+    assert ahead_written[0] > 3.9 and abs(ahead_written[1]) < 0.05, ahead_written
+
+
 def test_write_frame_id_and_rotate_yaw_are_mutually_exclusive():
     """Two names for one turn, so taking both would apply it twice."""
     both = False
