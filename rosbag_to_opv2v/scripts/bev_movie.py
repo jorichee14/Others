@@ -319,6 +319,10 @@ def main() -> int:
                              "see itself drawn dashed")
     parser.add_argument("--min-points", type=int, default=3,
                         help="--only-seen: returns inside a box to count as seen")
+    parser.add_argument("--max-range", type=float, default=0.0, metavar="M",
+                        help="draw a box only within this far of the agent (0: no "
+                             "limit); a box 20 m down a corridor is a few pixels "
+                             "of clutter, not a reading of the frame")
     parser.add_argument("--seconds", type=float, default=45.0)
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--rate", type=float, default=10.0, help="the frame grid's rate (Hz)")
@@ -565,15 +569,29 @@ def main() -> int:
                     # the ones that image's own LiDAR sweep actually found: if
                     # they land on the objects, the dataset agrees with itself.
                     only = solid = None
-                    if args.only_seen and source is not None:
-                        solid = seen_by(returns_of(agent, source), boxes,
-                                        args.min_points)
-                        only = set(solid)
-                        if args.only_seen == "either":
-                            for other in agents:
-                                if other != agent:
-                                    only |= seen_by(returns_of(other, source),
-                                                    boxes, args.min_points)
+                    if (args.only_seen or args.max_range) and source is not None:
+                        if args.only_seen:
+                            solid = seen_by(returns_of(agent, source), boxes,
+                                            args.min_points)
+                            only = set(solid)
+                            if args.only_seen == "either":
+                                for other in agents:
+                                    if other != agent:
+                                        only |= seen_by(returns_of(other, source),
+                                                        boxes, args.min_points)
+                        else:
+                            only = set(boxes)
+                        if args.max_range:
+                            # Measured from where the robot was when the SHOWN
+                            # image was taken, not where it is now.
+                            _, hx, hy = tracks[agent][source][:3]
+                            near = {key for key, entry in boxes.items()
+                                    if np.hypot(entry["location"][0] - hx,
+                                                entry["location"][1] - hy)
+                                    <= args.max_range}
+                            only &= near
+                            if solid is not None:
+                                solid &= near
                     draw_boxes_on(panel, boxes, camera, theme,
                                   image.shape[1], image.shape[0],
                                   only=only, solid=solid)
