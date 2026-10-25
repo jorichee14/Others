@@ -36,6 +36,12 @@ import sys
 
 import yaml
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from ros2opv2v.writers import read_pcd                            # noqa: E402
+
+DEFAULT_RANGE = [0.0, -11.2, -1.0, 22.4, 11.2, 3.0]
+
 SPLITS = ("train", "validate", "test")
 
 
@@ -55,11 +61,39 @@ def frame_keys(agent_dir: str):
     return sorted(f[:-5] for f in os.listdir(agent_dir) if f.endswith(".yaml"))
 
 
-def keep_frame(scenario_dir: str, key: str, require_image, from_key=None, to_key=None) -> bool:
+def points_in_range(path: str, box) -> int:
+    """Returns inside the detection range, in the cloud's own frame."""
+    points = read_pcd(path)[:, :3]
+    if not len(points):
+        return 0
+    keep = ((points[:, 0] >= box[0]) & (points[:, 0] <= box[3]) &
+            (points[:, 1] >= box[1]) & (points[:, 1] <= box[4]) &
+            (points[:, 2] >= box[2]) & (points[:, 2] <= box[5]))
+    return int(keep.sum())
+
+
+def keep_frame(scenario_dir: str, key: str, require_image, from_key=None, to_key=None,
+               min_points=0, box=None) -> bool:
     if from_key and key < from_key:
         return False
     if to_key and key > to_key:
         return False
+    if min_points > 0:
+        # A LiDAR has a blind radius (1.3 m on these Ousters), so a robot nose
+        # to a wall returns nothing inside a forward detection range: the wall
+        # is in the blind zone and there is nothing beyond it. The model cannot
+        # form a feature from no points -- it raises an IndexError assembling
+        # the batch -- so such a frame is dropped rather than widening the range
+        # to hide it. Every agent is checked: one empty agent breaks the frame.
+        for agent in sorted(os.listdir(scenario_dir)):
+            agent_dir = os.path.join(scenario_dir, agent)
+            if not os.path.isdir(agent_dir):
+                continue
+            pcd = os.path.join(agent_dir, f"{key}.pcd")
+            if not os.path.exists(pcd):
+                return False
+            if points_in_range(pcd, box) < min_points:
+                return False
     for agent, slot in require_image:
         path = os.path.join(scenario_dir, agent, f"{key}.yaml")
         if not os.path.exists(path):
@@ -75,7 +109,7 @@ def keep_frame(scenario_dir: str, key: str, require_image, from_key=None, to_key
 
 
 def make_view(root: str, out: str, require_image, splits=SPLITS, copy=False, log=print,
-              from_key=None, to_key=None, as_split=None) -> dict:
+              from_key=None, to_key=None, as_split=None, min_points=0, box=None) -> dict:
     root, out = os.path.expanduser(root), os.path.expanduser(out)
     report = {"root": os.path.abspath(root), "require_image": [f"{a}:{s}" for a, s in require_image],
               "from_key": from_key, "to_key": to_key, "splits": {}}
@@ -97,7 +131,8 @@ def make_view(root: str, out: str, require_image, splits=SPLITS, copy=False, log
             if not agents:
                 continue
             keys = frame_keys(os.path.join(sdir, agents[0]))
-            kept = [k for k in keys if keep_frame(sdir, k, require_image, from_key, to_key)]
+            kept = [k for k in keys if keep_frame(sdir, k, require_image, from_key, to_key,
+                                                  min_points, box)]
             odir = os.path.join(out, as_split or split, scenario)
             for agent in agents:
                 os.makedirs(os.path.join(odir, agent), exist_ok=True)
@@ -138,17 +173,25 @@ def main() -> int:
     ap.add_argument("--as-split", default=None,
                     help="write into this split folder instead of the source's name")
     ap.add_argument("--copy", action="store_true", help="copy files instead of symlinking")
+    ap.add_argument("--min-points-in-range", type=int, default=0, metavar="N",
+                    help="keep only frames where EVERY agent has at least N returns "
+                         "inside --range (a LiDAR's blind radius empties a forward "
+                         "range when the robot is nose to a wall)")
+    ap.add_argument("--range", type=float, nargs=6, default=DEFAULT_RANGE,
+                    metavar=("XMIN", "YMIN", "ZMIN", "XMAX", "YMAX", "ZMAX"),
+                    help="the detection range --min-points-in-range counts inside")
     a = ap.parse_args()
     req = []
     for item in a.require_image:
         agent, _, slot = item.partition(":")
         req.append((agent, int(slot or 0)))
-    if not req and not (a.from_key or a.to_key):
-        print("nothing to filter on: give --require-image AGENT:SLOT, --from-key or --to-key",
-              file=sys.stderr)
+    if not req and not (a.from_key or a.to_key) and not a.min_points_in_range:
+        print("nothing to filter on: give --require-image AGENT:SLOT, --from-key, "
+              "--to-key or --min-points-in-range", file=sys.stderr)
         return 2
     make_view(a.root, a.out, req, splits=tuple(a.split) if a.split else SPLITS, copy=a.copy,
-              from_key=a.from_key, to_key=a.to_key, as_split=a.as_split)
+              from_key=a.from_key, to_key=a.to_key, as_split=a.as_split,
+              min_points=a.min_points_in_range, box=a.range)
     return 0
 
 
