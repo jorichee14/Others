@@ -47,16 +47,26 @@ from ros2opv2v.statics import box_corners as box_corners_3d      # noqa: E402
 BOX_EDGES = [(0, 1), (0, 2), (1, 3), (2, 3), (4, 5), (4, 6), (5, 7), (6, 7),
              (0, 4), (1, 5), (2, 6), (3, 7)]
 
+# InCoP's class order, as isaacsim_class_map.json indexes it. A class keeps its
+# colour whichever site is drawn and whichever classes happen to be present, so
+# two videos can be read side by side.
+CLASS_NAMES = ["potted_plant", "chair", "medical_bag", "traffic_cone",
+               "wet_floor_sign", "fire_extinguisher", "trash_can"]
+
 THEMES = {
     # Blue and orange in both: the one categorical pair every kind of colour
     # blindness keeps apart, which is the whole job here -- telling the two
     # robots apart is what the video is for.
     "light": dict(bg="#FFFFFF", panel="#F4F6F8", map="#CBD4DA", ink="#1F2933",
-                  muted="#67737D", grid="#E2E8ED", box="#15803D", ap="#6D28D9",
-                  agents=("#1B6FA8", "#C2410C")),
+                  muted="#67737D", grid="#E2E8ED", box="#15803D", ap="#111827",
+                  agents=("#1B6FA8", "#C2410C"),
+                  classes=("#15803D", "#7C3AED", "#0E7490", "#B45309",
+                           "#BE123C", "#4D7C0F", "#334155")),
     "dark": dict(bg="#0F1419", panel="#151C22", map="#2B3740", ink="#E6E9EC",
-                 muted="#8A949E", grid="#2A3137", box="#A3E635", ap="#C4B5FD",
-                 agents=("#5BB0E8", "#F2994A")),
+                 muted="#8A949E", grid="#2A3137", box="#A3E635", ap="#F8FAFC",
+                 agents=("#5BB0E8", "#F2994A"),
+                 classes=("#86EFAC", "#C4B5FD", "#67E8F9", "#FCD34D",
+                          "#FDA4AF", "#BEF264", "#CBD5E1")),
 }
 
 
@@ -196,12 +206,25 @@ def project(points_world: np.ndarray, cords, intrinsic) -> np.ndarray:
     return np.c_[u, v, depth]
 
 
-def draw_boxes_on(panel, boxes, camera, colour, width, height):
+def class_colour(entry, theme):
+    """The colour of a labelled box's class, by its name.
+
+    A chair and a potted plant are different things and a reader should not
+    have to guess which green box is which.
+    """
+    name = entry.get("class_name") or entry.get("obj_type")
+    if name in CLASS_NAMES:
+        return theme["classes"][CLASS_NAMES.index(name)]
+    return theme["box"]
+
+
+def draw_boxes_on(panel, boxes, camera, theme, width, height):
     """The labelled boxes put back into the image they were labelled against."""
     if not camera or "cords" not in camera or "intrinsic" not in camera:
         return
     for entry in boxes.values():
         uvz = project(box_corners_3d(entry), camera["cords"], camera["intrinsic"])
+        colour = class_colour(entry, theme)
         for a, b in BOX_EDGES:
             if uvz[a, 2] <= 0.05 or uvz[b, 2] <= 0.05:
                 continue            # behind the lens: no line to draw
@@ -337,9 +360,14 @@ def main() -> int:
         axis.scatter(cloud[:, 0], cloud[:, 1], s=0.3, c=theme["map"], linewidths=0, zorder=1)
         print(f"map: {len(cloud):,} points drawn")
 
+    shown = set()
     for entry in boxes.values():
+        colour = class_colour(entry, theme)
+        name = entry.get("class_name") or entry.get("obj_type") or "object"
         axis.add_patch(Polygon(box_corners(entry), closed=True, fill=False,
-                               edgecolor=theme["box"], lw=1.6, zorder=4))
+                               edgecolor=colour, lw=1.8, zorder=4,
+                               label=None if name in shown else name))
+        shown.add(name)
 
     if ap is not None:
         axis.plot([ap[0]], [ap[1]], marker="*", ms=20, color=theme["ap"],
@@ -427,7 +455,7 @@ def main() -> int:
     count = max(2, int(args.seconds * args.fps))
     picks = np.linspace(0, len(keys) - 1, count).astype(int)
     trail = int(args.trail * args.rate) if args.trail else 0
-    held = {agent: None for agent in agents}
+    held = {agent: (None, None) for agent in agents}   # the image, and its camera
 
     for number, index in enumerate(picks):
         for agent in agents:
@@ -450,8 +478,15 @@ def main() -> int:
                              f"{np.hypot(where[1] - ap[0], where[2] - ap[1]):5.1f} m")
         caption.set_text("\n".join(lines))
         for position, (agent, panel, _) in enumerate(cameras):
-            image, fresh = load_image(os.path.join(scenario, agent), keys[index], held[agent])
-            held[agent] = image if image is not None else held[agent]
+            image, fresh = load_image(os.path.join(scenario, agent), keys[index],
+                                      held[agent][0])
+            # The boxes go through the camera block of the frame the SHOWN image
+            # came from. A held image is of where the robot was then, so
+            # projecting this frame's pose onto it slides the boxes off their
+            # objects -- and at 1.3 Hz that is most frames.
+            camera = tracks[agent][index][4] if fresh else held[agent][1]
+            if fresh:
+                held[agent] = (image, camera)
             panel.clear()
             panel.set_xticks([])
             panel.set_yticks([])
@@ -464,10 +499,10 @@ def main() -> int:
             else:
                 panel.imshow(image)
                 if args.boxes_on_camera:
-                    # The box drawn where this frame's own camera block puts it:
-                    # if it lands on the object, the dataset agrees with itself.
-                    draw_boxes_on(panel, boxes, tracks[agent][index][4],
-                                  theme["box"], image.shape[1], image.shape[0])
+                    # Where the camera that took THIS image puts them: if they
+                    # land on the objects, the dataset agrees with itself.
+                    draw_boxes_on(panel, boxes, camera, theme,
+                                  image.shape[1], image.shape[0])
             role = "ego" if position == 0 else "collaborator"
             panel.set_title(f"agent {agent} — {role}" + ("" if fresh else "   · held"),
                             color=theme["ink"] if fresh else theme["muted"],
