@@ -2723,7 +2723,7 @@ def video_writer(out, fps, size):
 
 def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps=30, size=(1280, 720), fov=70.0,
               ahead=2.0, faces=0, vivid=True, sat=1.2, seconds=0, hidden=False, start=(0.0, 0.0), spin=8.0,
-              wb=True, smooth=0.06, gamma=1.0):
+              wb=True, smooth=0.06, gamma=1.0, point_size=2.0):
     """A video (out, .mp4; default <mesh>_fly.mp4) flying once round the
     area inside the mesh at eye m over the floor, speed m/s, looking ahead
     m along the way: the path loop_path's (inset m from the walls), or
@@ -2739,20 +2739,43 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
     mesh_path = os.path.expanduser(mesh_path)
     out = os.path.expanduser(out) if out else os.path.splitext(mesh_path)[0] + "_fly.mp4"
     m = o3d.io.read_triangle_mesh(mesh_path)
-    if not len(m.triangles):
-        raise ConvertError(f"{mesh_path}: no faces (give it a mesh, not a view)")
-    if faces and len(m.triangles) > faces:
+    cloud = not len(m.triangles)
+    if cloud:
+        # A point cloud: the renderer draws one as readily as a mesh, and the
+        # cloud the splats were trained on is worth seeing beside what came out
+        # of them. It has no surface, so there is no floor to find a loop on and
+        # no face to turn round: `path` says where to go, and the floor is the
+        # lowest band the points themselves make.
+        m = o3d.io.read_point_cloud(mesh_path)
+        if not len(m.points):
+            raise ConvertError(f"{mesh_path}: no faces and no points")
+        if path is None or not len(path):
+            raise ConvertError(f"{mesh_path}: a point cloud has no floor to lay a loop on, "
+                               f"so fly needs --path (fly_path.py makes one from a trajectory)")
+    elif faces and len(m.triangles) > faces:
         log.info(f"simplifying {len(m.triangles)} faces to {faces} ...")
         m.remove_duplicated_vertices()
         m = m.simplify_quadric_decimation(target_number_of_triangles=int(faces))
-    if vivid and m.has_vertex_colors():
+    if vivid and not cloud and m.has_vertex_colors():
         Cd, nsp = despeckle_colours(np.asarray(m.triangles), np.asarray(m.vertex_colors))
         if smooth:
             Cd = smooth_colours(np.asarray(m.vertices), Cd, smooth)
         log.info(f"colours: {nsp} speckles smoothed over, smoothed over {100 * smooth:.0f} cm (edges kept), "
                  "then made vivid" + (", white balanced" if wb else ""))
         m.vertex_colors = o3d.utility.Vector3dVector(enhance_colours(Cd, sat=sat, wb=wb, gamma=gamma))
-    P, z0, free, lo_ = loop_path(m, inset, eye=eye)
+    elif vivid and cloud and m.has_colors():
+        # No faces, so no speckle to find across them: the colours as they are,
+        # made vivid like the meshes' so the three videos match.
+        m.colors = o3d.utility.Vector3dVector(
+            enhance_colours(np.asarray(m.colors), sat=sat, wb=wb, gamma=gamma))
+    if cloud:
+        z = np.asarray(m.points)[:, 2]
+        hist, edges = np.histogram(z, bins=np.arange(z.min(), z.max() + 0.05, 0.05))
+        z0 = float(edges[np.flatnonzero(hist >= 0.2 * hist.max())[0]] + 0.025)
+        free, lo_, P = None, None, np.asarray(path, float)[:, :2]
+        log.info(f"{len(m.points):,} points, floor at z={z0:.2f}")
+    else:
+        P, z0, free, lo_ = loop_path(m, inset, eye=eye)
     if path is not None and len(path):
         P = np.asarray(path, float)[:, :2]
         P = np.vstack([P, P[:1]])
@@ -2761,7 +2784,7 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
                        for i in range(len(seg))])
     # from the start to the loop's nearest point, round it and that far again (to look ahead)
     st_ = None
-    if start is not None:
+    if start is not None and free is not None:
         st_ = np.asarray(start, float)[:2]
         ijs = np.floor((st_ - lo_) / 0.2).astype(np.int64)
         if not ((ijs >= 0).all() and ijs[0] < free.shape[0] and ijs[1] < free.shape[1] and free[ijs[0], ijs[1]]):
@@ -2808,9 +2831,10 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
               open(pj, "w"))
     log.info(f"fly {mesh_path}: " + (f"a turn round at ({st_[0]:.1f}, {st_[1]:.1f}) over {spin:g} s, " if nspin else "")
              + f"{total:.0f} m of way (a loop of {ltot:.0f} m), {nfr} frames at {fps} fps ({nfr / fps:.0f} s), "
-             f"{len(m.triangles)} faces -> {out}")
-    F_ = np.asarray(m.triangles)                   # every face both ways round: seen from both sides (the
-    m.triangles = o3d.utility.Vector3iVector(np.vstack([F_, F_[:, ::-1]]))   # viewer's own back-face switch
+             + (f"{len(m.points):,} points" if cloud else f"{len(m.triangles)} faces") + f" -> {out}")
+    if not cloud:
+        F_ = np.asarray(m.triangles)               # every face both ways round: seen from both sides (the
+        m.triangles = o3d.utility.Vector3iVector(np.vstack([F_, F_[:, ::-1]]))   # viewer's own back-face switch
     vis = o3d.visualization.Visualizer()           # is not honoured by every driver)
     if not vis.create_window(f"fly {os.path.basename(mesh_path)}: recording", size[0], size[1], visible=not hidden):
         raise ConvertError("no window: fly needs a display (the OpenGL one; ssh -X, or a desktop)")
@@ -2818,6 +2842,8 @@ def fly_video(mesh_path, out=None, path=None, inset=1.5, eye=1.6, speed=1.0, fps
     ro = vis.get_render_option()
     ro.light_on = False                            # the colours as stored
     ro.mesh_show_back_face = True
+    if cloud:
+        ro.point_size = float(point_size)
     ro.background_color = np.array([0.12, 0.12, 0.12])
     vc = vis.get_view_control()
     vc.set_constant_z_near(0.05)
@@ -3378,6 +3404,8 @@ def main():
     fv.add_argument("--cast", action="store_true", help="keep the colours' cast (default: white balanced)")
     fv.add_argument("--smooth", type=float, default=0.06,
                     help="smooth the colours over the surface to this radius (m), edges kept (0: not)")
+    fv.add_argument("--point-size", type=float, default=2.0,
+                    help="pixels a point is drawn as, when the file is a cloud rather than a mesh")
     fv.add_argument("--hidden", action="store_true", help="the window not shown")
     cl = sub.add_parser("splats-clean", help="remove the Gaussians training was unsure about")
     cl.add_argument("ply", help="a trained model, e.g. <run>/point_cloud/iteration_300000/level_5.ply")
@@ -3447,6 +3475,7 @@ def main():
                       inset=a.inset, eye=a.eye, speed=a.speed, fps=a.fps, size=(wh[0], wh[1]), ahead=a.ahead,
                       faces=a.faces, vivid=not a.plain, seconds=a.seconds, hidden=a.hidden, spin=a.spin,
                       sat=a.sat, wb=not a.cast, smooth=a.smooth, gamma=a.gamma,
+                      point_size=a.point_size,
                       start=None if a.start.lower() == "loop" else [float(v) for v in a.start.split(",")])
         elif a.cmd == "splats-clean":
             splats_clean(a.ply, a.mesh, a.out, far=a.far, min_opacity=a.min_opacity, max_scale=a.max_scale)
