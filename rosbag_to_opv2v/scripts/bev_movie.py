@@ -34,7 +34,6 @@ import yaml                                                     # noqa: E402
 from matplotlib.patches import Polygon                          # noqa: E402
 
 from ros2opv2v.geometry import x_to_world                        # noqa: E402
-from ros2opv2v.writers import read_pcd                           # noqa: E402
 
 BACKGROUND = "#0F1419"
 MAP_POINTS = "#2B3740"
@@ -42,6 +41,64 @@ AGENT = ("#5BB0E8", "#F2994A")          # blue / orange: the one pair every kind
 INK = "#E6E9EC"                         # of colour blindness keeps apart
 MUTED = "#8A949E"
 BOX_EDGE = "#A3E635"
+
+
+def read_backdrop_xy(path: str) -> np.ndarray:
+    """The x and y of any PCD, for drawing under the paths.
+
+    Not ros2opv2v.writers.read_pcd, which understands exactly the header the
+    converter writes and refuses everything else -- the right strictness for
+    ground truth and the wrong one for a backdrop. A map cloud is `x y z`, a
+    coloured one `x y z rgb`, and here neither has to be read exactly: the
+    fields are located by the header's own offsets and the rest ignored.
+    """
+    with open(os.path.expanduser(path), "rb") as handle:
+        header = {}
+        while True:
+            line = handle.readline()
+            if not line:
+                raise ValueError(f"{path}: truncated PCD header")
+            text = line.decode("ascii", errors="replace").strip()
+            if not text or text.startswith("#"):
+                continue
+            key, _, rest = text.partition(" ")
+            header[key.upper()] = rest.split()
+            if key.upper() == "DATA":
+                break
+        fields = header.get("FIELDS", [])
+        sizes = [int(v) for v in header.get("SIZE", [])]
+        types = [t.upper() for t in header.get("TYPE", [])]
+        counts = [int(v) for v in header.get("COUNT", ["1"] * len(fields))]
+        total = int(header.get("POINTS", header.get("WIDTH", [0]))[0])
+        layout = header["DATA"][0].lower()
+
+        for axis in ("x", "y"):
+            if axis not in fields:
+                raise ValueError(f"{path}: no {axis} field, got {fields}")
+
+        if layout == "ascii":
+            rows = np.loadtxt(handle, ndmin=2)
+            return rows[:, [fields.index("x"), fields.index("y")]]
+        if layout != "binary":
+            raise ValueError(f"{path}: DATA {layout} is not read here; "
+                             f"save it as binary or ascii")
+
+        stride = sum(size * count for size, count in zip(sizes, counts))
+        kinds = {("F", 4): "f4", ("F", 8): "f8", ("U", 4): "u4", ("I", 4): "i4"}
+        spec, offset = [], 0
+        for name, size, kind, count in zip(fields, sizes, types, counts):
+            width = size * count
+            if name in ("x", "y") and count == 1 and (kind, size) in kinds:
+                spec.append((name, kinds[(kind, size)], offset))
+            offset += width
+        if len(spec) != 2:
+            raise ValueError(f"{path}: x and y are not plain scalars here")
+        dtype = np.dtype({"names": [n for n, _, _ in spec],
+                          "formats": [f for _, f, _ in spec],
+                          "offsets": [o for _, _, o in spec],
+                          "itemsize": stride})
+        raw = np.frombuffer(handle.read(total * stride), dtype=dtype, count=total)
+        return np.c_[raw["x"].astype(np.float64), raw["y"].astype(np.float64)]
 
 
 def agent_dirs(scenario: str):
@@ -112,7 +169,7 @@ def main() -> int:
     axis.set_facecolor(BACKGROUND)
 
     if args.cloud:
-        cloud = read_pcd(os.path.expanduser(args.cloud))[::max(1, args.cloud_stride), :2]
+        cloud = read_backdrop_xy(args.cloud)[::max(1, args.cloud_stride)]
         axis.scatter(cloud[:, 0], cloud[:, 1], s=0.25, c=MAP_POINTS, linewidths=0, zorder=1)
         print(f"map: {len(cloud):,} points drawn")
 
