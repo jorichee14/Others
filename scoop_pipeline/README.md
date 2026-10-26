@@ -161,6 +161,13 @@ analysis/            measuring results; reads outputs, writes nothing back
    slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel;
    slam/run_hydra.sh <hydra export> <channel>: every robot's Hydra streaming its
    scene graph to a server through the channel, one run per channel)
+  slam/odometry/      the odometry methods of slam/odometry/PLAN.md (KISS-ICP, RKO-LIO,
+                     FAST-LIO2, OpenVINS, RTAB-Map's rgbd_odometry) in one ROS 2 image
+                     (build.sh); run_odometry.sh <method> <bag> <machine> <run>: the bag at 1x,
+                     a trajectory, and the cost (slam/monitor/: messages.csv, resources.csv,
+                     summary.json: latency, drops, Hz, MB/s, CPU, RSS, GPU); make_config.py
+                     makes each method's config from the bag; processing/run_vslam.sh does the
+                     same for cuVSLAM with VSLAM_MONITOR=1
   slam/cslam_eval.py  Swarm-SLAM run against the ground truth: ATE per robot and joint,
                      inter-robot loop closures checked, time to merge, bytes exchanged
   slam/kimera_eval.py  Kimera-VIO (slam/run_kimera.sh) against the ground truth: ATE and
@@ -204,6 +211,10 @@ tests/               self-tests, no real bag needed
   test_cslam_eval.py cslam_eval: keys to robots, ATE, wrong loop closure flagged, merge time
   test_swarm_slam.py swarm_slam: topics, intrinsics, registered depth, odometry in the
                      robot's odom frame at the image stamp, ground truth
+  test_odometry.py   make_config: frames, beams and extrinsics from the bag, the refusals
+                     (no IMU noise, the ZED, depth outside the left camera, a 1 fps camera);
+                     summarize: outputs matched to their inputs (FAST-LIO2's late stamp,
+                     OpenVINS's early one), drops, repeats, resources over the play
   test_swarm_slam_lidar.py  swarm_slam_lidar: clouds and odometry per robot in the slice,
                      no-returns and the robot itself out, an IMU-frame odometry moved to the
                      LiDAR in its own odom frame (or in map with --start-at-gt), ground truth

@@ -1,0 +1,472 @@
+#!/usr/bin/env python3
+"""One odometry run's configuration, from the bag itself: what to play, how to
+start the method, what it answers on, and the method's config files.
+
+    python scoop_pipeline/slam/odometry/make_config.py <method> <bag> <machine> <run dir>
+        [--start S] [--duration S] [--imu-noise FILE] [--min-rate-frac 0.9]
+
+method: kiss_icp, rko_lio, fast_lio (LiDAR, mobile_1 / mobile_2), openvins,
+rtabmap_rgbd (the D455, mobile_2). Writes <run dir>/run.json and
+<run dir>/config/ (the method's files, as the container sees them under
+/work/config); run_odometry.sh then runs it.
+
+Read from the bag, never typed in: topics and frames (first message of each),
+the LiDAR's beams (the cloud's height), T_imu_lidar and the camera-IMU
+transforms (/tf_static), the cameras' intrinsics (camera_info), the IMU's rate.
+
+Indoor changes, each named in run.json's "settings" beside its published
+default:
+  every LiDAR method leaves out points within 1.0 m (RKO-LIO's default;
+  KISS-ICP's 0.0 keeps the robot and the operator, FAST-LIO2's 4.0 m blind
+  zone is most of the room), so KISS-ICP and RKO-LIO differ in the IMU alone.
+  KISS-ICP deskews (default off; the Ouster gives per-point times).
+  Every method publishes its odometry only (debug clouds, maps, paths off):
+  the cost logged is the odometry's.
+
+Refusals (nothing written):
+  openvins without --imu-noise (a YAML with accelerometer_noise_density,
+  accelerometer_random_walk, gyroscope_noise_density, gyroscope_random_walk:
+  the D455 IMU's Allan variance; a guessed noise model gives a result that
+  completes and is wrong);
+  rtabmap_rgbd when the depth image is not in the left infrared camera
+  (other intrinsics, size, or a transform that is not the identity);
+  a camera method on mobile_1 (the ZED: PLAN.md; 20261015 holds ~1 fps);
+  any key topic whose rate in the bag is under --min-rate-frac of its nominal
+  rate (the ZED's 1 fps would be caught here), or a frame /tf_static does not
+  link.
+"""
+import argparse
+import json
+import os
+import sys
+
+import numpy as np
+import yaml
+from scipy.spatial.transform import Rotation
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "datasets"))
+import mcap_convert as mc                                           # noqa: E402
+
+LIDAR = {"mobile_1": {"points": "/mobile_1/ouster/points", "imu": "/mobile_1/ouster/imu"},
+         "mobile_2": {"points": "/mobile_2/ouster/points", "imu": "/mobile_2/ouster/imu"}}
+LIDAR_HZ = 10.0
+D455 = {"mobile_2": {"left": "/mobile_2/infra1/image_rect_raw",
+                     "left_info": "/mobile_2/infra1/camera_info",
+                     "right": "/mobile_2/infra2/image_rect_raw",
+                     "right_info": "/mobile_2/infra2/camera_info",
+                     "depth": "/mobile_2/depth/image_rect_raw",
+                     "depth_info": "/mobile_2/depth/camera_info",
+                     "imu": "/mobile_2/imu",
+                     "hz": 30.0}}
+NOISE_KEYS = ("accelerometer_noise_density", "accelerometer_random_walk",
+              "gyroscope_noise_density", "gyroscope_random_walk")
+MIN_RANGE = 1.0
+PC2, IMU, IMG = "sensor_msgs/msg/PointCloud2", "sensor_msgs/msg/Imu", "sensor_msgs/msg/Image"
+ODOM = "nav_msgs/msg/Odometry"
+CFG = "/work/config"
+
+
+class Refused(RuntimeError):
+    pass
+
+
+# ------------------------------------------------------------------ the bag
+
+def bag_metadata(bag):
+    """(start ns, duration ns) from the rosbag2 folder's metadata.yaml."""
+    p = os.path.join(bag, "metadata.yaml")
+    if not os.path.isfile(p):
+        raise Refused(f"{bag}: no metadata.yaml (want a rosbag2 folder: ros2 bag play takes it)")
+    info = yaml.safe_load(open(p))["rosbag2_bagfile_information"]
+    return int(info["starting_time"]["nanoseconds_since_epoch"]), int(info["duration"]["nanoseconds"])
+
+
+def topic_rate(paths, topic):
+    """(messages, rate Hz) from the MCAP summaries alone (statistics and chunk
+    indexes: nothing decompressed), or (0, None). The span is that of the
+    chunks holding the topic, which other topics' messages widen a little:
+    the rate is approximate, slightly low, which a 90 % gate absorbs."""
+    from mcap.reader import make_reader
+    n, lo, hi = 0, None, None
+    for f in paths:
+        with open(f, "rb") as fh:
+            s = make_reader(fh).get_summary()
+        if s is None:
+            continue
+        ids = {i for i, c in s.channels.items() if c.topic == topic}
+        if not ids:
+            continue
+        if s.statistics:
+            n += sum(s.statistics.channel_message_counts.get(i, 0) for i in ids)
+        for ci in s.chunk_indexes:
+            if ids & set(ci.message_index_offsets):
+                lo = ci.message_start_time if lo is None else min(lo, ci.message_start_time)
+                hi = ci.message_end_time if hi is None else max(hi, ci.message_end_time)
+    if not n or lo is None or hi <= lo:
+        return n, None
+    return n, n / ((hi - lo) * 1e-9)
+
+
+def frame_of(paths, topic):
+    m = mc.first_msg(paths, topic)
+    if m is None:
+        raise Refused(f"no messages on {topic}")
+    return m, m.header.frame_id.lstrip("/")
+
+
+def static(edges, src, dst):
+    """T_src_dst (dst's pose in src: maps dst coordinates into src) from /tf_static."""
+    T = np.eye(4) if src == dst else mc.lookup_static(edges, src, dst)
+    if T is None:
+        raise Refused(f"/tf_static does not link {src} and {dst}")
+    return T
+
+
+def quat_xyzw_xyz(T):
+    q = Rotation.from_matrix(T[:3, :3]).as_quat()
+    return [float(v) for v in q] + [float(v) for v in T[:3, 3]]
+
+
+def gate(paths, topic, nominal, frac):
+    n, hz = topic_rate(paths, topic)
+    if hz is None:
+        raise Refused(f"{topic}: not in the bag")
+    if hz < frac * nominal:
+        raise Refused(f"{topic}: {hz:.2f} Hz in the bag ({n} messages), under {frac:.0%} of its "
+                      f"nominal {nominal:g} Hz: a method on it would be measuring the recording")
+    return {"topic": topic, "messages": n, "hz": round(hz, 2), "nominal_hz": nominal}
+
+
+# ------------------------------------------------------------------ methods
+
+def kiss_icp(paths, edges, machine, a):
+    t = LIDAR[machine]
+    _, lidar = frame_of(paths, t["points"])
+    cfg = {"kiss_icp_node": {"ros__parameters": {
+        "data": {"deskew": True, "max_range": 100.0, "min_range": MIN_RANGE},
+        "mapping": {"max_points_per_voxel": 20},
+        "adaptive_threshold": {"initial_threshold": 2.0, "min_motion_th": 0.1}}}}
+    return {
+        "files": {"kiss_icp.yaml": yaml.safe_dump(cfg, sort_keys=False)},
+        "launch": ("ros2 launch kiss_icp odometry.launch.py topic:=%s use_sim_time:=true "
+                   "visualize:=false publish_odom_tf:=false config_file:=%s/kiss_icp.yaml"
+                   % (t["points"], CFG)),
+        "play": [t["points"]], "in": {t["points"]: PC2}, "key": t["points"],
+        "out": "/kiss/odometry", "out_type": ODOM, "tum_frame": lidar,
+        "proc": r"kiss_icp_node", "stamp_tol_s": 0.0, "nominal_hz": LIDAR_HZ,
+        "settings": {"data.deskew": [True, False, "the Ouster gives per-point times"],
+                     "data.min_range": [MIN_RANGE, 0.0, "RKO-LIO's; leaves out the robot and operator"],
+                     "publish_debug_clouds": [False, True, "odometry only"]}}
+
+
+def rko_lio(paths, edges, machine, a):
+    t = LIDAR[machine]
+    _, lidar = frame_of(paths, t["points"])
+    _, imu = frame_of(paths, t["imu"])
+    cfg = {"lidar_topic": t["points"], "imu_topic": t["imu"],
+           "base_frame": lidar, "lidar_frame": lidar, "imu_frame": imu,
+           "extrinsic_lidar2base_quat_xyzw_xyz": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+           "extrinsic_imu2base_quat_xyzw_xyz": quat_xyzw_xyz(static(edges, lidar, imu)),
+           "publish_local_map": False, "publish_deskewed_scan": False}
+    return {
+        "files": {"rko_lio.yaml": yaml.safe_dump(cfg, sort_keys=False)},
+        "launch": ("ros2 launch rko_lio odometry.launch.py config_file:=%s/rko_lio.yaml mode:=online "
+                   "rviz:=false use_sim_time:=true autodetect:=false" % CFG),
+        "play": [t["points"], t["imu"]], "in": {t["points"]: PC2, t["imu"]: IMU}, "key": t["points"],
+        "out": "/rko_lio/odom", "out_type": ODOM, "tum_frame": lidar,
+        "proc": r"rko_lio.*online_node|/online_node", "stamp_tol_s": 0.0, "nominal_hz": LIDAR_HZ,
+        "settings": {"base_frame": [lidar, None, "the pose is the LiDAR's"],
+                     "publish_local_map": [False, True, "odometry only"],
+                     "publish_deskewed_scan": [False, True, "odometry only"]}}
+
+
+def fast_lio(paths, edges, machine, a):
+    t = LIDAR[machine]
+    pc, lidar = frame_of(paths, t["points"])
+    _, imu = frame_of(paths, t["imu"])
+    T = static(edges, imu, lidar)                         # the LiDAR in the IMU frame
+    cfg = {"/**": {"ros__parameters": {
+        "feature_extract_enable": False, "point_filter_num": 3, "max_iteration": 3,
+        "filter_size_surf": 0.5, "filter_size_map": 0.5, "cube_side_length": 1000.0,
+        "runtime_pos_log_enable": False, "map_file_path": "/work/fast_lio.pcd",
+        "common": {"lid_topic": t["points"], "imu_topic": t["imu"],
+                   "time_sync_en": False, "time_offset_lidar_to_imu": 0.0},
+        "preprocess": {"lidar_type": 3, "scan_line": int(pc.height), "timestamp_unit": 3,
+                       "blind": MIN_RANGE},
+        "mapping": {"acc_cov": 0.1, "gyr_cov": 0.1, "b_acc_cov": 0.0001, "b_gyr_cov": 0.0001,
+                    "fov_degree": 360.0, "det_range": 150.0, "extrinsic_est_en": False,
+                    "extrinsic_T": [float(v) for v in T[:3, 3]],
+                    "extrinsic_R": [float(v) for v in T[:3, :3].reshape(-1)]},
+        "publish": {"path_en": False, "scan_publish_en": False, "dense_publish_en": False,
+                    "scan_bodyframe_pub_en": False},
+        "pcd_save": {"pcd_save_en": False, "interval": -1}}}}
+    return {
+        "files": {"fast_lio.yaml": yaml.safe_dump(cfg, sort_keys=False)},
+        "launch": ("ros2 launch fast_lio mapping.launch.py config_path:=%s config_file:=fast_lio.yaml "
+                   "use_sim_time:=true rviz:=false" % CFG),
+        "play": [t["points"], t["imu"]], "in": {t["points"]: PC2, t["imu"]: IMU}, "key": t["points"],
+        "out": "/Odometry", "out_type": ODOM, "tum_frame": imu,
+        "proc": r"fastlio_mapping", "stamp_tol_s": 0.0, "nominal_hz": LIDAR_HZ,
+        "settings": {"preprocess.blind": [MIN_RANGE, 4.0, "4 m is most of the room"],
+                     "preprocess.scan_line": [int(pc.height), 64, "the cloud's height"],
+                     "mapping.extrinsic_T/R": ["/tf_static", "identity", "the LiDAR in the IMU frame"],
+                     "publish.*": [False, True, "odometry only"],
+                     "pcd_save.pcd_save_en": [False, True, "odometry only"]}}
+
+
+def camera(machine, method):
+    if machine not in D455:
+        raise Refused(f"{method} on {machine}: only mobile_2's D455 is prepared (the ZED: PLAN.md; "
+                      "the 20261015 recordings hold it at ~1 fps)")
+    return D455[machine]
+
+
+def kalibr_cam(T_cam_imu, info, topic, overlaps):
+    k = list(info.k)
+    d = [float(v) for v in list(info.d)[:4]] + [0.0] * max(0, 4 - len(info.d))
+    rows = "\n".join("    - [%s]" % ", ".join("%.12g" % v for v in r) for r in T_cam_imu)
+    return ("  T_cam_imu:\n%s\n  cam_overlaps: %s\n  camera_model: pinhole\n"
+            "  distortion_coeffs: [%s]\n  distortion_model: radtan\n"
+            "  intrinsics: [%.9g, %.9g, %.9g, %.9g]\n  resolution: [%d, %d]\n"
+            "  rostopic: %s\n  timeshift_cam_imu: 0.0\n"
+            % (rows, overlaps, ", ".join("%.12g" % v for v in d), k[0], k[4], k[2], k[5],
+               info.width, info.height, topic))
+
+
+# OpenVINS's config/rs_d455/estimator_config.yaml at v2.7, with stereo on (two
+# infrared cameras here, its own example is the colour camera alone)
+OV_ESTIMATOR = """%%YAML:1.0
+verbosity: "INFO"
+use_fej: true
+integration: "rk4"
+use_stereo: true
+max_cameras: 2
+calib_cam_extrinsics: true
+calib_cam_intrinsics: true
+calib_cam_timeoffset: true
+calib_imu_intrinsics: false
+calib_imu_g_sensitivity: false
+max_clones: 11
+max_slam: 50
+max_slam_in_update: 25
+max_msckf_in_update: 40
+dt_slam_delay: 1
+gravity_mag: 9.81
+feat_rep_msckf: "GLOBAL_3D"
+feat_rep_slam: "ANCHORED_MSCKF_INVERSE_DEPTH"
+feat_rep_aruco: "ANCHORED_MSCKF_INVERSE_DEPTH"
+try_zupt: false
+zupt_chi2_multipler: 0
+zupt_max_velocity: 0.1
+zupt_noise_multiplier: 10
+zupt_max_disparity: 0.5
+zupt_only_at_beginning: false
+init_window_time: 2.0
+init_imu_thresh: 1.5
+init_max_disparity: 10.0
+init_max_features: 50
+init_dyn_use: false
+init_dyn_mle_opt_calib: false
+init_dyn_mle_max_iter: 50
+init_dyn_mle_max_time: 0.05
+init_dyn_mle_max_threads: 6
+init_dyn_num_pose: 6
+init_dyn_min_deg: 10.0
+init_dyn_inflation_ori: 10
+init_dyn_inflation_vel: 100
+init_dyn_inflation_bg: 10
+init_dyn_inflation_ba: 100
+init_dyn_min_rec_cond: 1e-12
+init_dyn_bias_g: [ 0.0, 0.0, 0.0 ]
+init_dyn_bias_a: [ 0.0, 0.0, 0.0 ]
+record_timing_information: false
+record_timing_filepath: "/work/ov_timing.txt"
+save_total_state: false
+filepath_est: "/work/ov_estimate.txt"
+filepath_std: "/work/ov_estimate_std.txt"
+filepath_gt: "/work/ov_groundtruth.txt"
+use_klt: true
+num_pts: 200
+fast_threshold: 30
+grid_x: 5
+grid_y: 5
+min_px_dist: 15
+knn_ratio: 0.70
+track_frequency: %(track_hz)g
+downsample_cameras: false
+num_opencv_threads: 4
+histogram_method: "HISTOGRAM"
+use_aruco: false
+num_aruco: 1024
+downsize_aruco: true
+up_msckf_sigma_px: 1
+up_msckf_chi2_multipler: 1
+up_slam_sigma_px: 1
+up_slam_chi2_multipler: 1
+up_aruco_sigma_px: 1
+up_aruco_chi2_multipler: 1
+use_mask: false
+relative_config_imu: "kalibr_imu_chain.yaml"
+relative_config_imucam: "kalibr_imucam_chain.yaml"
+"""
+OV_IMU = """%%YAML:1.0
+
+imu0:
+  T_i_b:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  accelerometer_noise_density: %(accelerometer_noise_density).12g
+  accelerometer_random_walk: %(accelerometer_random_walk).12g
+  gyroscope_noise_density: %(gyroscope_noise_density).12g
+  gyroscope_random_walk: %(gyroscope_random_walk).12g
+  rostopic: %(topic)s
+  time_offset: 0.0
+  update_rate: %(rate).1f
+  model: "kalibr"
+  Tw:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  R_IMUtoGYRO:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  Ta:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  R_IMUtoACC:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  Tg:
+    - [ 0.0, 0.0, 0.0 ]
+    - [ 0.0, 0.0, 0.0 ]
+    - [ 0.0, 0.0, 0.0 ]
+"""
+
+
+def imu_noise(path):
+    if not path:
+        raise Refused("openvins needs --imu-noise: the D455 IMU's Allan variance (%s); "
+                      "record the IMU standing still for 2-3 h first" % ", ".join(NOISE_KEYS))
+    v = yaml.safe_load(open(path)) or {}
+    missing = [k for k in NOISE_KEYS if not isinstance(v.get(k), (int, float))]
+    if missing:
+        raise Refused(f"{path}: no {', '.join(missing)}")
+    return {k: float(v[k]) for k in NOISE_KEYS}
+
+
+def openvins(paths, edges, machine, a):
+    c = camera(machine, "openvins")
+    noise = imu_noise(a.imu_noise)
+    li, lf = frame_of(paths, c["left_info"])
+    ri, rf = frame_of(paths, c["right_info"])
+    _, imu = frame_of(paths, c["imu"])
+    _, imu_hz = topic_rate(paths, c["imu"])
+    if not imu_hz:
+        raise Refused(f"{c['imu']}: no rate in the bag")
+    imucam = ("%YAML:1.0\n\ncam0:\n" + kalibr_cam(static(edges, lf, imu), li, c["left"], [1])
+              + "cam1:\n" + kalibr_cam(static(edges, rf, imu), ri, c["right"], [0]))
+    return {
+        "files": {"estimator_config.yaml": OV_ESTIMATOR % {"track_hz": c["hz"] + 1.0},
+                  "kalibr_imu_chain.yaml": OV_IMU % dict(noise, topic=c["imu"], rate=imu_hz),
+                  "kalibr_imucam_chain.yaml": imucam},
+        "launch": ("ros2 launch ov_msckf subscribe.launch.py config_path:=%s/estimator_config.yaml "
+                   "use_stereo:=true max_cameras:=2 rviz_enable:=false" % CFG),
+        "play": [c["left"], c["right"], c["imu"]],
+        "in": {c["left"]: IMG, c["right"]: IMG, c["imu"]: IMU}, "key": c["left"],
+        "out": "/ov_msckf/poseimu", "out_type": "geometry_msgs/msg/PoseWithCovarianceStamped",
+        "tum_frame": imu, "proc": r"run_subscribe_msckf",
+        # the state's time is the image's plus the camera-IMU offset it calibrates online
+        "stamp_tol_s": 0.5 / c["hz"], "nominal_hz": c["hz"],
+        "settings": {"use_stereo, max_cameras": [[True, 2], [True, 1], "both infrared cameras (rs_d455 is colour alone)"],
+                     "imu noise": [a.imu_noise, "rs_d455's inflated values", "this D455's Allan variance"],
+                     "track_frequency": [c["hz"] + 1.0, 31.0, "the camera's rate + 1"]}}
+
+
+def rtabmap_rgbd(paths, edges, machine, a):
+    c = camera(machine, "rtabmap_rgbd")
+    li, lf = frame_of(paths, c["left_info"])
+    di, df = frame_of(paths, c["depth_info"])
+    if (li.width, li.height) != (di.width, di.height) or not np.allclose(li.k, di.k, atol=1e-3):
+        raise Refused(f"the depth ({di.width}x{di.height}, K {list(di.k)}) is not in the left infrared "
+                      f"camera ({li.width}x{li.height}, K {list(li.k)}): it would need registering")
+    T = static(edges, lf, df)
+    if np.abs(T[:3, 3]).max() > 1e-3 or Rotation.from_matrix(T[:3, :3]).magnitude() > 1e-3:
+        raise Refused(f"{df} is not {lf}: {T[:3, 3]} m apart")
+    return {
+        "files": {},
+        "launch": ("ros2 run rtabmap_odom rgbd_odometry --ros-args -p frame_id:=%s -p publish_tf:=false "
+                   "-p use_sim_time:=true -p approx_sync:=true -p approx_sync_max_interval:=0.005 "
+                   "-p qos:=1 -r rgb/image:=%s -r depth/image:=%s -r rgb/camera_info:=%s"
+                   % (lf, c["left"], c["depth"], c["left_info"])),
+        "play": [c["left"], c["left_info"], c["depth"]],
+        "in": {c["left"]: IMG, c["depth"]: IMG}, "key": c["left"],
+        "out": "/odom", "out_type": ODOM, "tum_frame": lf,
+        "proc": r"rgbd_odometry", "stamp_tol_s": 0.0, "nominal_hz": c["hz"],
+        "settings": {"image": [c["left"], "colour", "the left infrared image: the depth is computed in it, "
+                                                     "so no registration (the emitter was off: weak depth on bare walls)"],
+                     "qos": [1, 0, "reliable: the default best-effort subscription loses frames below the node"],
+                     "loop closure": ["none", None, "rgbd_odometry alone, no rtabmap node"]}}
+
+
+METHODS = {"kiss_icp": kiss_icp, "rko_lio": rko_lio, "fast_lio": fast_lio,
+           "openvins": openvins, "rtabmap_rgbd": rtabmap_rgbd}
+
+
+def make(method, bag, machine, run, start=0.0, duration=0.0, imu_noise=None, min_rate_frac=0.9):
+    if method not in METHODS:
+        raise Refused(f"{method}: one of {sorted(METHODS)}")
+    if machine not in LIDAR:
+        raise Refused(f"{machine}: one of {sorted(LIDAR)}")
+    bag = os.path.abspath(os.path.expanduser(bag))
+    t0, dur = bag_metadata(bag)
+    paths = mc._paths(bag)
+    edges = mc.build_tf_static(paths)
+    a = argparse.Namespace(imu_noise=imu_noise)
+    m = METHODS[method](paths, edges, machine, a)
+    rate = gate(paths, m["key"], m["nominal_hz"], min_rate_frac)
+    if os.path.exists(os.path.join(run, "run.json")):
+        raise Refused(f"{run} holds a run already: pick another folder")
+    os.makedirs(os.path.join(run, "config"), exist_ok=True)
+    for name, text in m["files"].items():
+        open(os.path.join(run, "config", name), "w").write(text)
+    rj = {"method": method, "machine": machine, "bag": bag,
+          "bag_start_ns": t0, "bag_duration_s": dur * 1e-9,
+          "start_s": start, "duration_s": duration,
+          "play_topics": m["play"], "in_topics": m["in"], "key_topic": m["key"],
+          "out_topic": m["out"], "out_type": m["out_type"], "tum_frame": m["tum_frame"],
+          "proc_regex": m["proc"], "stamp_tol_s": m["stamp_tol_s"], "launch": m["launch"],
+          "key_rate": rate, "settings": m["settings"], "config_files": sorted(m["files"])}
+    json.dump(rj, open(os.path.join(run, "run.json"), "w"), indent=1)
+    return rj
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("method", choices=sorted(METHODS))
+    ap.add_argument("bag", help="the rosbag2 folder (the finalized merged pass bag)")
+    ap.add_argument("machine", choices=sorted(LIDAR))
+    ap.add_argument("run", help="the run folder to create")
+    ap.add_argument("--start", type=float, default=0.0, help="s into the bag")
+    ap.add_argument("--duration", type=float, default=0.0, help="s (0: to the end)")
+    ap.add_argument("--imu-noise", default=None, help="openvins: the IMU's Allan variance (YAML)")
+    ap.add_argument("--min-rate-frac", type=float, default=0.9)
+    a = ap.parse_args()
+    try:
+        rj = make(a.method, a.bag, a.machine, a.run, a.start, a.duration, a.imu_noise, a.min_rate_frac)
+    except (Refused, mc.ConvertError) as e:
+        sys.exit(f"refused: {e}")
+    print(json.dumps({k: rj[k] for k in ("method", "machine", "play_topics", "key_topic", "out_topic",
+                                          "tum_frame", "key_rate")}, indent=1))
+
+
+if __name__ == "__main__":
+    main()

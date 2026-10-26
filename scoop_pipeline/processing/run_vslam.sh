@@ -20,6 +20,13 @@
 # $ISAAC_ROS_WS (default ~/workspaces/isaac_ros-dev) are the same files below
 # $VSLAM_CONTAINER_WS (default /workspaces/isaac_ros-dev) in there.
 # Also: VSLAM_ROS_SETUP (a setup.bash to source).
+#
+# VSLAM_MONITOR=1: log what cuVSLAM costs and how fast it answers, as
+# slam/odometry/run_odometry.sh does for the other methods (slam/monitor/):
+# <out_bag>/monitor/ gets messages.csv (every image, IMU and odometry message),
+# resources.csv (the component container's CPU and memory, the GPU),
+# trajectory.tum (the odometry, of base_frame) and summary.json (latency per
+# left image, drops, rates, MB/s, whether it kept up). Meaningful at rate 1.
 set -euo pipefail
 die() { echo "run_vslam: $*" >&2; exit 1; }
 
@@ -53,13 +60,19 @@ if [ -z "${VSLAM_IN_CONTAINER:-}" ]; then
         docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" \
             || die "no ros2 + isaac_ros_visual_slam here and container $CONTAINER is not running; start it or set VSLAM_CONTAINER"
         C_BAG=$(inside "$BAG"); C_OUT=$(inside "$OUT"); C_LAUNCH=$(inside "$LAUNCH")
+        C_MON=""
+        if [ "${VSLAM_MONITOR:-0}" = 1 ]; then        # the container sees only the workspace
+            MON="$(dirname "$OUT")/.monitor_$(basename "$OUT")"
+            mkdir -p "$MON" && cp "$(dirname "$(realpath "$0")")"/../slam/monitor/*.py "$MON"/
+            C_MON=$(inside "$MON")
+        fi
         PIDFILE="$(dirname "$OUT")/.$(basename "$OUT").pid"; C_PIDFILE=$(inside "$PIDFILE")
         rm -f "$PIDFILE"
         echo "run_vslam: running in container $CONTAINER"
         docker exec -i -e VSLAM_IN_CONTAINER=1 -e VSLAM_ROS_SETUP="${VSLAM_ROS_SETUP:-}" \
             -e PYTHONDONTWRITEBYTECODE=1 \
             -e VSLAM_WS="$CONT_WS" -e VSLAM_OWNER="$(id -u):$(id -g)" \
-            -e VSLAM_PIDFILE="$C_PIDFILE" \
+            -e VSLAM_PIDFILE="$C_PIDFILE" -e VSLAM_MONITOR_SCRIPTS="$C_MON" \
             "$CONTAINER" bash -s -- "$C_BAG" "$C_OUT" "$C_LAUNCH" "$RATE" "$@" < "$0" &
         DX=$!
         # Ctrl+C does not reach processes started by docker exec: stop it in
@@ -82,6 +95,9 @@ if [ -z "${VSLAM_IN_CONTAINER:-}" ]; then
     fi
 fi
 
+if [ -z "${VSLAM_IN_CONTAINER:-}" ] && [ "${VSLAM_MONITOR:-0}" = 1 ]; then
+    VSLAM_MONITOR_SCRIPTS=$(realpath "$(dirname "$(realpath "$0")")/../slam/monitor")
+fi
 if ! have_vslam; then                  # in the container: source ROS and the workspace
     set +u
     for f in "/opt/ros/${ROS_DISTRO:-humble}/setup.bash" \
@@ -96,7 +112,7 @@ if env --default-signal=INT true 2>/dev/null; then SIGDFL=(env --default-signal=
 else set -m; SIGDFL=(); fi
 
 LOGS=$(mktemp -d)
-REC=""; SLAM=""; PLAY=""
+REC=""; SLAM=""; PLAY=""; PROBE=""; RES=""
 [ -n "${VSLAM_PIDFILE:-}" ] && echo $$ > "$VSLAM_PIDFILE"  # so the host can stop us
 stop() {                               # SIGINT, then wait (at most $2 s) for it to exit
     local pid=$1 t=0
@@ -107,7 +123,11 @@ stop() {                               # SIGINT, then wait (at most $2 s) for it
     wait "$pid" 2>/dev/null || true
 }
 finish() {
-    stop "$PLAY" 10; stop "$SLAM" 30; stop "$REC" 60
+    stop "$PLAY" 10; stop "$SLAM" 30; stop "$REC" 60; stop "$PROBE" 10; stop "$RES" 5
+    if [ -n "$PROBE" ] && [ -d "$OUT/monitor" ]; then
+        python3 "$VSLAM_MONITOR_SCRIPTS/summarize.py" "$OUT/monitor" || true
+        [ -n "${VSLAM_IN_CONTAINER:-}" ] && rm -rf "$VSLAM_MONITOR_SCRIPTS"
+    fi
     if [ -d "$OUT" ]; then
         mkdir -p "$OUT/vslam_logs"; cp "$LOGS"/* "$OUT/vslam_logs/" 2>/dev/null || true
     else
@@ -138,10 +158,36 @@ for _ in $(seq 30); do                 # until the recorder listens
     kill -0 "$REC" 2>/dev/null || { cat "$LOGS/record.log"; die "ros2 bag record did not start"; }
     sleep 1
 done
+if [ -n "${VSLAM_MONITOR_SCRIPTS:-}" ]; then
+    mkdir -p "$OUT/monitor"
+    PARGS=(); KEY=""
+    for t in "$@"; do
+        case "$t" in
+            */camera_info|/tf_static|/tf) ;;
+            *imu*) PARGS+=(--in "$t=sensor_msgs/msg/Imu") ;;
+            *) PARGS+=(--in "$t=sensor_msgs/msg/Image"); [ -n "$KEY" ] || KEY=$t ;;
+        esac
+    done
+    python3 - "$OUT/monitor/run.json" "$KEY" <<'PYEOF'
+import json, sys
+json.dump({"method": "cuvslam", "key_topic": sys.argv[2], "out_topic": "/visual_slam/tracking/odometry",
+           "stamp_tol_s": 0.0, "tum_frame": "odometry child frame (base_frame)"}, open(sys.argv[1], "w"), indent=1)
+PYEOF
+    "${SIGDFL[@]}" python3 "$VSLAM_MONITOR_SCRIPTS/probe.py" --dir "$OUT/monitor" "${PARGS[@]}" \
+        --out /visual_slam/tracking/odometry=nav_msgs/msg/Odometry --tum /visual_slam/tracking/odometry \
+        </dev/null >"$LOGS/probe.log" 2>&1 &
+    PROBE=$!
+    "${SIGDFL[@]}" python3 "$VSLAM_MONITOR_SCRIPTS/resources.py" --dir "$OUT/monitor" \
+        --match component_container </dev/null >"$LOGS/resources.log" 2>&1 &
+    RES=$!
+    echo "monitor: $OUT/monitor (key $KEY)"
+fi
 sleep "${VSLAM_START_S:-8}"            # cuVSLAM up before the first image
 kill -0 "$SLAM" 2>/dev/null || { tail -n 30 "$LOGS/vslam.log"; die "cuVSLAM exited at start"; }
 
-"${SIGDFL[@]}" ros2 bag play "$BAG" --clock --rate "$RATE" --topics "$@" \
+# with the monitor, the player's publishers exist a second before the first message
+DELAY=(); [ -n "$PROBE" ] && DELAY=(--delay 1)
+"${SIGDFL[@]}" ros2 bag play "$BAG" --clock --rate "$RATE" "${DELAY[@]}" --topics "$@" \
     </dev/null >"$LOGS/play.log" 2>&1 &
 PLAY=$!
 echo "playing the bag (logs: $OUT/vslam_logs/ when done) ..."
