@@ -161,6 +161,10 @@ analysis/            measuring results; reads outputs, writes nothing back
    slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel;
    slam/run_hydra.sh <hydra export> <channel>: every robot's Hydra streaming its
    scene graph to a server through the channel, one run per channel)
+  slam/patches/cslam_gnc_known_inliers.py  run once in the container, then colcon build
+                     --packages-select cslam: GNC may reject odometry edges (it cut robot 1's
+                     chain on site_2, 3 loop closures); the prior and the odometry become its
+                     known inliers, loop closures alone are judged
   slam/patches/cslam_lidar_lc_direction.py  run once in Swarm-SLAM's container: its LiDAR
                      loop closures (TEASER++ + ICP) enter the pose graph inverted; measured
                      against the ground truth, they are right only the other way round
