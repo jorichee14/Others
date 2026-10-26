@@ -1,5 +1,8 @@
 # SCooP-iT: section-by-section writing guide
 
+> **26 Oct:** superseded by `OUTLINE.md` (revision after the pre-review: the
+> Gym is out of this paper, the claim is a measured, validated, replayable link).
+
 > **25 Oct:** `OUTLINE.md` holds the final outline, tests and scope. It
 > supersedes the task lists for Secs. VIII-IX below; the Gym moves before the
 > Experiments.

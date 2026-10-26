@@ -1,5 +1,7 @@
 # SCooP-iT: final direction
 
+> **26 Oct:** superseded by `OUTLINE.md`.
+
 > **24 Oct:** the section plan and the work plan are now `WRITING_GUIDE.md`
 > (section by section) and `../PLAN.md` (train in the Gym, test on the
 > recordings, deploy on the testbed). The paper is split into

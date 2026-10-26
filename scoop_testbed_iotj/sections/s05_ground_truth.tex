@@ -1,8 +1,11 @@
 % Sec. Ground Truth Without Motion Capture
-\section{Ground Truth Without Motion Capture}
+% Sec. V Pose Reference Without Motion Capture (about 0.9 page).
+\section{A Pose Reference Without Motion Capture}
 \label{sec:gt}
 This section answers how accurately the testbed knows where every
-agent is, at building scale, using only onboard sensors. The reference
+agent is, at building scale, using only onboard sensors. The result is a
+reference, not survey-grade ground truth: each check below bounds one
+of its errors, and absolute scale rests on the control distances. The reference
 map is SLAM-derived, which removes the survey scanner normally required
 for map registration; every scan is registered against it, so the pose
 is carried by the map and not by odometry between anchors; and
@@ -74,19 +77,15 @@ therefore established by four checks that did not enter the
 estimation (Table~\ref{tab:gt}; error distributions in the
 supplementary material).
 
-\paragraph{Second mapping pass.} Surfaces are measured by their
-thickness, the p95--p5 spread of points about planes fitted to
-\SI{0.25}{\metre} patches, against the sensor noise floor from
-individual sweeps, which carry no pose error. After refinement, floors
-are within \SI{1}{\centi\metre} of that floor; walls, observed at
-longer range and shallower incidence, remain above it, and more so in
-single-visit corridor sections where no revisit constrains lateral
-placement. The second pass, captured four weeks later and processed
-independently, reproduces the surface placement to
-\SI{1.06}{\centi\metre} on walls, with relative scale agreeing to
-$2\times10^{-5}$. Since both runs share the sensor and the algorithm,
-this establishes scale stability, not absolute scale.
-A pass by the other robot checks the reference across robots and days:
+\paragraph{Surface thickness and a second pass.} Surfaces are measured
+by their thickness, the p95--p5 spread of points about planes fitted to
+\SI{0.25}{\metre} patches, against the noise of single sweeps, which
+carry no pose error (walls \SI{3.0}{\centi\metre}, floors
+\SI{1.4}{\centi\metre}). The reference reaches
+\SI{7.6}{\centi\metre} on walls and \SI{1.8}{\centi\metre} on floors;
+walls, seen at longer range and shallower incidence, stay above the
+noise, most in single-visit corridors. A second pass by the other robot
+checks the reference across robots and days:
 \texttt{mobile\_1}, whose OS1-64 has half the beams of \texttt{mobile\_2}'s OS1-128,
 mapped the site three weeks before the reference pass, processed by the
 same pipeline with the same settings (board loop closure
@@ -112,7 +111,9 @@ deformation would act, which closes the gap left by the second pass.
 \paragraph{Held-out boards.} When an agent sights a board during a
 run, its registered pose and camera extrinsic predict where the board
 should appear; the difference from the observed board pose is a
-residual that did not enter the registration. On coop2\_0828 (two
+residual that did not enter the registration. Since the boards were
+posed from the mapping session, the residual measures how well a run
+agrees with the map, not the map's absolute accuracy. On coop2\_0828 (two
 agents, one room, \SIrange{146}{152}{\second}, \SIrange{26}{31}{\metre}
 of path, three boards, LiDAR held out of every estimate it scores) the
 residual is \SI{10.0}{\milli\metre} / 0.88$^\circ$ for

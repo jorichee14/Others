@@ -1,4 +1,4 @@
-% Sec. Time and Space Alignment
+% Sec. IV Time and Space Alignment (about 0.8 page).
 \section{Time and Space Alignment}
 \label{sec:alignment}
 This section answers how well the testbed puts every measurement from
@@ -38,13 +38,14 @@ is relevant only for \texttt{sniffer}, which reaches the server over
 its \SI{2.4}{\giga\hertz} management link with a path delay several
 times larger than that of the other units, so its bias may be as large
 as half that delay, \SI{7.8}{\milli\second}. We measure the bias
-directly from the probe packets that \texttt{mobile\_2} sends and
-\texttt{sniffer} captures. Each packet is stamped at transmission on
-the clock of \texttt{mobile\_2} and at reception on the clock of
-\texttt{sniffer}. Since the packet is in flight for only nanoseconds,
-the difference between the two stamps equals the bias of the sniffer
-plus its driver latency: the measured link calibrates the clock. The
-median difference over a run is \todo{}, which bounds the bias.
+from the probe packets that \texttt{mobile\_2} sends and
+\texttt{sniffer} captures. Each packet is stamped by the sending
+application on the clock of \texttt{mobile\_2} and on capture on the
+clock of \texttt{sniffer}; the difference is the bias plus the time the
+packet spent queued and in the drivers, which grows with load. The bias
+is therefore estimated from the lower envelope of the differences, their
+minimum over windows in which the link is idle \cite{paxson1998calibrating},
+which bounds bias plus the irreducible driver latency: \todo{value}.
 
 \subsection{Error Budget}
 \label{sec:budget}
@@ -62,13 +63,11 @@ platform moving at speed $v$ by
   \delta x = v \, \Delta t .
   \label{eq:time_bound}
 \end{equation}
-We take $v_{\max} = \SI{3}{\metre\per\second}$ as an upper bound on
-agent speed; indoor agents move far slower, and E1 uses the measured
-95th-percentile speed. The measured clock offset of
-\SI{0.99}{\milli\second} then corresponds to \SI{3}{\milli\metre}
-at $v_{\max}$ and to \SI{1}{\milli\metre} at \SI{1}{\metre\per\second};
-the strict \SI{12}{\milli\second} bound to \SI{3.6}{\centi\metre}
-and \SI{1.2}{\centi\metre}. The sniffer bias of \todo{} corresponds
+We take $v$ as the measured 95th-percentile agent speed,
+\todo{$v_{95}$} on \texttt{coop\_2}; at \SI{1}{\metre\per\second} the
+measured clock offset of \SI{0.99}{\milli\second} corresponds to
+\SI{1}{\milli\metre}, and the strict \SI{12}{\milli\second} bound to
+\SI{1.2}{\centi\metre}. The sniffer bias of \todo{} corresponds
 to \todo{}, which is \todo{}\,\% of the half-wavelength
 $\lambda/2 = \SI{26.1}{\milli\metre}$ at \SI{5745}{\mega\hertz} that
 sets the CSI sampling requirement (Sec.~\ref{sec:csi}). Transport
@@ -79,9 +78,9 @@ the LiDAR sweep, \SI{100}{\milli\second} at \SI{10}{\hertz}, so the
 first and last points of a scan can be \SI{30}{\centi\metre} apart;
 it is removed by per-point deskewing with IMU-propagated motion in the
 reference pipeline \cite{glim}. Combining the terms that remain after
-compensation, the worst-case intra-frame spatial error at $v_{\max}$ is
+compensation, the worst-case intra-frame spatial error at $v_{95}$ is
 \begin{equation}
-  \delta x_{\max} = v_{\max}\,\big(\Delta t_{\mathrm{clk}}
+  \delta x_{\max} = v_{95}\,\big(\Delta t_{\mathrm{clk}}
   + \Delta t_{\mathrm{lat}} + \Delta t_{\mathrm{exp}}\big)
   = \todo{Y}\,\si{\centi\metre},
   \label{eq:fusion_bound}

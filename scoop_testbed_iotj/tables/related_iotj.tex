@@ -34,9 +34,9 @@ CPM Lab \cite{kloock2021cpmlab} & ECC'21 & $N$ / 0 & \cmark & Aggregate RTT (UI 
 ChoiRbot \cite{testa2021choirbot} & RA-L'21 & $N$ / 0 & \cmark & --- & \xmark & Motion capture & \xmark & \xmark & \xmark \\
 CHORD / ACHORD \cite{ginting2021chord,saboia2022achord} & RA-L'21/'22 & 6 / base + relays & subterr. & Partial: per-link SNR, not released & \xmark & \xmark & \xmark & \xmark & \xmark \\
 MOCHA \cite{cladera2024mocha} & ICRA'24 & UAV+UGVs / base & \xmark & Partial: per-peer RSSI, RTT, bandwidth, not released & \xmark & Not reported & \xmark & \xmark & \xmark \\
+Lajoie et al.\ \cite{planetary_cslam} & T-FR'25 & 3 / 0 & \xmark & Inter-robot throughput, latency (released) & \xmark & GPS\unsure{verify} & \unsure{verify} & \xmark & C-SLAM \\
 ROS-NetSim \cite{calvofullana2021rosnetsim} & RA-L'21 & sim. & --- & Simulated & \xmark & --- & \xmark & Sim. & \xmark \\
 Mahimahi / NetEm \cite{netravali2015mahimahi,hemminger2005netem} & ATC'15 / LCA'05 & --- & --- & Recorded trace & \xmark & --- & \xmark & Transport & \xmark \\
-Lingjing \cite{lingjing} & arXiv'26 & sim.\ city & \xmark & Ideal bus (message count) & \xmark & Simulator & --- & \xmark & Task success (sim.) \\
 \midrule
 \multicolumn{10}{@{}l}{\textit{Cooperative-perception platforms}} \\
 CoPeD \cite{coped} & RA-L'24 & 5 / 0 & partial & --- & \xmark & VIO + GPS & NTP, no number & \xmark & Partial$^b$ \\
@@ -46,7 +46,7 @@ V2X-ReaLO \cite{v2xrealo} & arXiv'25 & 2 / 2 & \xmark & Latency (Wi-Fi) & \xmark
 CooperScene \cite{cooperscene} & ECCV'26 & 3 / 1 & \xmark & Pairwise C-V2X RTT, throughput, loss, jitter & \xmark & RTK + ICP & Claimed sub-ms & Scalar delay$^c$ & Detection \\
 AutoCast \cite{qiu2022autocast} & MobiSys'22 & sim. & \xmark & Simulated & \xmark & Simulator & \xmark & Sim. & Sim. \\
 \midrule
-\textbf{SCooP-iT (ours)} & --- & 2 / 3 & \cmark & RSSI, MCS, retries (5\,Hz), RTT (100\,Hz), goodput (4\,s), per pair & \cmark$^d$ & Map + fiducials & Measured & Per message; Gym & C-SLAM, det. \\
+\textbf{SCooP-iT (ours)} & --- & 2 / 3 & \cmark & RSSI, MCS, retries (5\,Hz), RTT (100\,Hz), goodput (4\,s), per pair & \cmark$^d$ & Map + fiducials & Measured & Per message, ROS~2 relay, validated (E3) & C-SLAM, det. \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -55,5 +55,5 @@ AutoCast \cite{qiu2022autocast} & MobiSys'22 & sim. & \xmark & Simulated & \xmar
 $^a$Planned deployment in the 2020 paper.\quad
 $^b$Zero-shot foundation-model image labels, no 3D boxes.\quad
 $^c$One delay derived from mean measured throughput, not a per-message trace.\quad
-$^d$Single-antenna Wi-Fi CSI on the data links (BCM43455c0, \SI{80}{\mega\hertz}, \SIrange{104}{141}{\hertz}), not phase-coherent across nodes.}
+$^d$Single-antenna Wi-Fi CSI overheard by a sniffer on the agents' uplinks (BCM43455c0, \SI{80}{\mega\hertz}, \SIrange{104}{141}{\hertz}), not phase-coherent across nodes.}
 \end{table*}

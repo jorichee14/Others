@@ -1,4 +1,4 @@
-% Sec. Testbed Design
+% Sec. III Testbed Design (about 0.7 page).
 \section{Testbed Design}
 \label{sec:design}
 SCooP-iT consists of two mobile agents and three infrastructure
@@ -8,11 +8,8 @@ senses, computes, and communicates: the mobile agents are mobile IoT
 nodes, the masts fixed ones, and the access point the shared network
 whose behavior the testbed measures. Fig.~\ref{fig:overview} shows a recording
 scenario with the agents placed in the map frame and the measured
-links between them. \todo{Redraw Fig.~\ref{fig:overview} per the plan:
-floor plan with agents in the map frame, links colored by measured RTT
-or RSSI, and a strip below with one shared timeline of sensor frames,
-link samples, and CSI. It should say ``one clock, one frame, every
-link'' without text.}
+links between them, with one window of a cooperation run on one
+timeline.
 
 \input{figures/overview}
 
@@ -48,9 +45,12 @@ imposed by the CSI receiver: a 1$\times$1 802.11ac configuration.
 802.11ax is disabled, since the receiver cannot demodulate HE frames
 and would capture only control frames, and the number of spatial
 streams is fixed to one, since a single-antenna receiver cannot
-separate a two-stream transmission. The measured single-stream
-capacity is \numrange{275}{282}\,Mbit/s uplink and
-\numrange{598}{676}\,Mbit/s downlink per mobile agent.
+separate a two-stream transmission. The measured TCP goodput of a mobile agent alone on the channel is
+\numrange{275}{282}\,Mbit/s uplink. \unsure{The logged downlink of
+598--676\,Mbit/s exceeds the 433\,Mbit/s PHY maximum of one stream at
+VHT-80: check NSS and MCS from the radiotap headers. The uplink sits at
+the practical ceiling of the RTL8852BU's USB~2.0 host interface, so state
+whether the radio or the bus limits it.}
 
 \subsection{Design Decisions}
 \label{sec:decisions}
@@ -66,16 +66,18 @@ and the active probes of Sec.~\ref{sec:link}, present in every run and
 therefore part of the channel that is measured.
 
 \emph{Single stream, 802.11ax off.} The 1$\times$1 CSI receiver
-requires it. It also keeps capacity governed by geometry rather than
-by scattering richness, which two-stream capacity depends on and which
-a map does not capture.
+requires it. The price is external validity: multi-stream and OFDMA
+scheduling, which change contention, are outside what the testbed
+measures (Sec.~\ref{sec:lessons}).
 
 \emph{Survey and cooperation modes.} In survey mode each agent owns
 the whole channel; in cooperation mode several agents run their active
-tests at the same time by design. Contention becomes a controlled knob
-instead of an accident, and its effect is measurable: RTT moves from
-\SI{3.3}{\milli\second} idle to \SIrange{60}{109}{\milli\second} under
-load (Sec.~\ref{sec:link}).
+tests at the same time by design. Contention becomes a controlled setting
+instead of an accident, and its effect is measurable: on the 24
+September passes RTT moves from \SIrange{5}{10}{\milli\second} idle to
+\SIrange{25}{33}{\milli\second} under load (Sec.~\ref{sec:link}). The
+load is bulk TCP from the active tests, a worst case rather than a
+perception workload; E3 replaces it with message traffic.
 
 \emph{Fixed sensor rigs.} In each agent a fixed rig compounds the
 sensors (Fig.~\ref{fig:platforms}), so calibration is done once and

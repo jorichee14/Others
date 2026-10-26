@@ -1,0 +1,19 @@
+% Sec. X Conclusion (about 0.2 page).
+\section{Conclusion}
+\label{sec:conclusion}
+SCooP-iT records a heterogeneous indoor team's sensing and every
+inter-agent link on one clock, with measured offsets below
+\SI{1}{\milli\second}, and in one metric frame, with the LiDAR robot
+placed to \SI{10}{\milli\metre} against held-out boards, without motion
+capture or GNSS. Its logged link replays per message into any
+collaborative method, including unmodified ROS~2 systems,
+\todo{reproducing live arrivals to within one frame}. Compared with a
+synthetic channel fitted to the same statistics, the logged link
+\todo{changes the predicted delivery of large messages, the best
+send-size policy, and the behaviour of a collaborative SLAM system}. The
+next step is a closed-loop environment built from the same capture, a
+twin of the measured building with its measured link, in which agents
+can act on what they receive and whose predictions can be checked on
+the testbed. The pipeline and the replay module are released with this
+paper, and the sequences and labels as the SCooP dataset
+\cite{scoop_dataset}.

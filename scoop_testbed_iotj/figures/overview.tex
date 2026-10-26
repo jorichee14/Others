@@ -1,13 +1,14 @@
 \begin{figure}[t]
 \centering
 \fbox{\parbox[c][5cm][c]{0.95\columnwidth}{\centering
-\todo{Fig.~1 (testbed): building floor plan with the five agents placed
-in the map frame, the inter-agent links drawn and colored by measured
-RTT or RSSI, and a strip below with one shared timeline of sensor
-frames, link samples, and CSI. It should say ``one clock, one frame,
-every link'' without text. Distinct from the dataset paper's top-view
-scenario figure.}}}
-\caption{SCooP-iT at a glance: agents in one map frame, every link
-measured, one shared timeline.}
+\todo{Fig.~1: one window of \texttt{coop\_2} on one timeline. Top: floor
+plan with both robots' paths and the masts in the map frame, the
+robot-to-AP paths coloured by Fresnel clearance. Below, stacked on a
+shared time axis: clearance, RSSI, RTT, goodput, and each
+\SI{1.5}{\mega\byte} message's predicted arrival against the
+\SI{100}{\milli\second} frame boundary.}}}
+\caption{SCooP-iT in one window: agents in one map frame, every link
+measured, one clock. Where the map shows the path obstructed, the
+signal drops, goodput falls, and large messages miss their frame.}
 \label{fig:overview}
 \end{figure}

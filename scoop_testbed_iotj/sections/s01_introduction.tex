@@ -1,8 +1,6 @@
-% Sec. I Introduction (about 1 page).
-% Paragraphs: (1) the real-world gap; (2) IoRT and the surveys: why now;
-% (3) why indoors is hard on every layer; (4) no existing platform;
-% (5) SCooP-iT and its three uses; (6) contributions; (7) seven questions
-% and the roadmap.
+% Sec. I Introduction (about 0.9 page).
+% Paragraphs: (1) the gap; (2) why indoors is hard; (3) what exists;
+% (4) SCooP-iT and the one claim; (5) contributions; (6) roadmap.
 \section{Introduction}
 \label{sec:introduction}
 \IEEEPARstart{T}{eams} of robots and fixed sensors that share what they
@@ -10,120 +8,67 @@ perceive can see beyond the occlusions of any one of them. They
 cooperate through collaborative SLAM, which places every agent in one
 shared map \cite{swarmslam,doorslam,kimeramulti}, and cooperative
 perception, which fuses what the agents observe within it
-\cite{where2comm,zhou2022gnnperception}. The methods for both are
-developed on vehicle datasets and in simulation
-\cite{opv2v,v2xsim,dairv2x,v2v4real}, where agents carry the same
-sensors, ground truth comes from GNSS, and messages arrive on time. A
-real indoor team differs on every layer at once. Its sensors fall
-short of their nominal rates and differ from agent to agent; its
-clocks drift; there is no GNSS to tell where an agent was; the
-building occludes cameras and radio alike; and its agents share one
-contended wireless network, so a neighbor's message may arrive after
-the scene has changed. Data freshness, studied as the age of
-information \cite{kaul2012aoi,yates2021aoi}, here has a concrete
-deadline of one sensor frame.
-
-The Internet of Robotic Things treats such robots as mobile nodes that
-sense and share data over the same network as fixed devices
-\cite{simoens2018iort}. Recent surveys of networked embodied
-intelligence draw the consequence for evaluation: delivering a message
-is only an intermediate step whose value depends on whether it arrives
-in time for the task, so sensing, communication, and the task outcome
-have to be measured together \cite{zhang2026mean}. They and surveys of
-embodied multi-robot systems name the missing instrument: benchmarks
-evaluate communication, robotics, or perception separately, most in
-simulations that overlook real sensing and communication, and
-integrated testbeds with real wireless dynamics, heterogeneous agents,
-and multi-agent tasks, bridged to simulation, are an open problem
+\cite{where2comm,zhou2022gnnperception}. Both are evaluated on vehicle
+datasets and in simulation \cite{opv2v,v2xsim,dairv2x,v2v4real}, where
+the link between agents is ideal, a constant delay, or a random drop
+\cite{v2xvit,lei2022syncnet,wei2023cobevflow}. The Internet of Robotic
+Things treats such agents as nodes of one network
+\cite{simoens2018iort}, and recent surveys of networked embodied systems
+argue that the network and the task have to be measured together
 \cite{zhang2026mean,wen2026embodiedmrs}.
 
-Building such an instrument indoors is hard on every layer. Each
-agent's sensing must be on one timeline with every other's, with a
-bound on the error; each agent must have a pose in one metric frame
-at building scale, without motion capture or GNSS; each link must be
-recorded per agent pair, with the channel beneath it; and, for the
-instrument to be used by others, the capture must be replayable into a
-new method and extensible into situations it did not record.
+Indoors this is hard to do. The agents share one access point, so their
+traffic contends; there is no GNSS to say where an agent was when it
+sent a message; and the channel changes with the walls the agents move
+past. Measuring what the link does to a collaborative method therefore
+needs every agent's sensors and every pair's link on one timeline, a
+pose for every agent in one frame, and a way to run a new method against
+the link the agents actually had, with evidence that this replay is
+faithful.
 
-No existing platform provides this. IoT and wireless testbeds measure
-the radio but run no scored task
-\cite{adjih2015iotlab,breen2021powder,raychaudhuri2020cosmos,bonati2021colosseum}.
-Wi-Fi channel datasets measure CSI on dedicated sounding links, with
-positions from a survey instrument \cite{dichasus,espargos}.
-Communication-aware robot systems run over real links that they
-monitor but do not release, and score nothing against a reference
-\cite{ginting2021chord,saboia2022achord,cladera2024mocha}.
-Cooperative-perception platforms are outdoor and GNSS-referenced, and
-reduce the measured link to a scalar delay or a live run
-\cite{v2v4real,zimmer2024tumtrafv2x,v2xrealo,cooperscene}. Embodied
-multi-agent environments are simulated, with generated worlds and an
-ideal network \cite{lingjing}.
+Existing platforms provide parts of this. IoT and wireless testbeds
+measure the radio but score no perception task
+\cite{adjih2015iotlab,breen2021powder,bonati2021colosseum}. Multi-robot
+field systems run over real links
+\cite{ginting2021chord,saboia2022achord,cladera2024mocha}, and the most
+recent C-SLAM dataset releases inter-robot throughput and latency
+outdoors \cite{planetary_cslam}. Cooperative-perception platforms are
+outdoor, GNSS-referenced, and enter the measured link into evaluation as
+a scalar delay or a live run
+\cite{v2v4real,zimmer2024tumtrafv2x,v2xrealo,cooperscene}. Trace-driven
+network emulation replays links for network software
+\cite{noble1997trace,netravali2015mahimahi,yan2018pantheon}, and for
+Wi-Fi it is accurate only when aggregation and medium access are
+modelled \cite{syed2020wifiemu,nemfi}.
 
 This paper presents SCooP-iT, the indoor testbed of SCooP (Sensing and
-Communication for Cooperative Perception): a real-world testbed in
-which a heterogeneous team is captured on one clock and in one frame,
-sensing and communication alike, and an environment built from that
-capture. It is meant to be used in three ways. The \emph{recordings}
-are a test bench: any collaborative method is replayed on what the
-agents sensed and against the link they had. \emph{SCooP-iT Gym} is a
-closed-loop environment whose world, sensors, link, and failure
-conditions are built from the recordings, in which agents are trained
-where the recordings cannot go. And the \emph{testbed} itself closes
-the loop: a policy trained in the Gym is deployed on the real agents,
-and what happened is compared with what the Gym predicted. Each use is
-validated against reality. The contributions are:
+Communication for Cooperative Perception). Its claim is that a real
+indoor team can be captured precisely enough, sensing and communication
+on one clock and in one frame, for its logged link to be replayed into
+any collaborative method, and that the link's measured structure, not
+only its statistics, changes what such methods achieve. The
+contributions are:
 \begin{enumerate}
     \item \textbf{A heterogeneous indoor testbed with sensing and
     communication on one clock}: two mobile and three infrastructure
-    agents on one access point, every pair's link recorded (passive
-    state at \SI{5}{\hertz}, RTT at \SI{100}{\hertz}, goodput in
-    \SI{4}{\second} windows, CSI at \SIrange{104}{141}{\hertz}),
-    contention as a controlled knob, and measured clock offsets below
-    \SI{1}{\milli\second} (Secs.~\ref{sec:design}, \ref{sec:alignment},
-    \ref{sec:link}).
-    \item \textbf{Building-scale ground truth without motion capture,
-    GNSS, or surveyed anchors}: a self-built reference map and a
-    fiducial chain for agents without LiDAR, validated by measurements
-    that never enter it, \todo{cross-pass figure} and
-    \SI{10}{\milli\metre} against held-out fiducials
-    (Sec.~\ref{sec:gt}).
-    \item \textbf{A replay validated against live runs}: the recorded
-    per-pair, per-message link, and the other recorded conditions, fed
-    into any collaborative method keyed to sensor time,
-    \todo{validated against live execution to within one receiver
-    frame} (Sec.~\ref{sec:replay}, E3).
-    \item \textbf{SCooP-iT Gym}: a closed-loop multi-agent environment
-    with a Gymnasium interface, whose building, sensors, motion, link,
-    and failure conditions are built from the recordings and each
-    checked against held-out real runs, with every failure traced to
-    its cause, and a train--test--deploy protocol that ends on the real
-    testbed (Sec.~\ref{sec:gym}).
-    \item \textbf{What the real world shows that simulation hides}: with
-    a second robot on the access point, the loaded round trip of
-    \SIrange{25}{33}{\milli\second} stays well inside one
-    \SI{100}{\milli\second} LiDAR frame, yet only
-    \SIrange{59}{68}{\percent} of \SI{1.5}{\mega\byte} messages arrive
-    within it (86\,\% with one robot), while the synthetic channels of
-    prior benchmarks deliver 100\,\% (Sec.~\ref{sec:experiments}).
+    agents on one access point, every pair's link recorded (link state,
+    RTT, goodput, CSI), contention as a controlled setting, measured
+    clock offsets below \SI{1}{\milli\second}, and a pose reference
+    without motion capture or GNSS, each checked against measurements
+    that did not produce it (Secs.~\ref{sec:design}--\ref{sec:link}).
+    \item \textbf{A replay of the logged link, validated against live
+    runs}: per-message arrivals for message-level models and for
+    unmodified ROS~2 systems through a relay, \todo{reproducing live
+    arrivals to within one frame} (Sec.~\ref{sec:replay}, E3).
+    \item \textbf{Evidence that the measured link's structure matters}:
+    against a synthetic channel fitted to the same link, the logged link
+    changes the predicted delivery of large messages, the best
+    send-size policy, and the behaviour of an unmodified collaborative
+    SLAM system (E5).
 \end{enumerate}
-
-A testbed paper is judged on seven questions, five about whether the
-instrument can be trusted and two about whether it is worth having
-(Table~\ref{tab:spec}): \emph{Is it precise?} Are its own errors small
-next to the effects it measures (E1)? \emph{Is it consistent?} Do the
-poses and the link logs agree when neither was checked by hand (E2)?
-\emph{Is it faithful?} Do the replay and the Gym reproduce what the
-real agents sensed, sent, and achieved (E3)? \emph{Is it repeatable?}
-Does the same setting give the same link on another day (E4)? \emph{Is
-it necessary?} What does the real world show that a synthetic one
-hides (E5)? \emph{Is it unique?} What can it do that no existing
-platform can (Sec.~\ref{sec:related})? \emph{Is it reproducible?} Can
-someone else build and use it (Secs.~\ref{sec:design},
-\ref{sec:lessons})? Each trust question has a pass criterion fixed
-before the data were read. Sec.~\ref{sec:related} reviews related work;
-Secs.~\ref{sec:design}--\ref{sec:replay} describe the testbed and its
-replay; Sec.~\ref{sec:experiments} reports the experiments;
-Sec.~\ref{sec:gym} presents the Gym and its train--test--deploy
-protocol; and Sec.~\ref{sec:lessons} gives the lessons the real world
-taught and the limitations. The sequences and labels recorded on the
+Sec.~\ref{sec:related} reviews related work;
+Secs.~\ref{sec:design}--\ref{sec:replay} describe the testbed and the
+replay; Sec.~\ref{sec:experiments} reports five tests, each with a pass
+criterion stated before the test was run; and Sec.~\ref{sec:lessons}
+gives lessons and limitations. The sequences and labels recorded on the
 testbed are released as the SCooP dataset \cite{scoop_dataset}.

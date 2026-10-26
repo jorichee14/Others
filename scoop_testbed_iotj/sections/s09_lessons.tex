@@ -1,0 +1,34 @@
+% Sec. IX Lessons and Limitations (about 0.4 page).
+\section{Lessons and Limitations}
+\label{sec:lessons}
+
+\paragraph{The CSI receiver shapes the network.} Commodity CSI extraction
+imposed one spatial stream, 802.11ac rather than ax, and
+\SI{80}{\mega\hertz} on every transmitter, and aggregation caps the CSI
+rate at roughly \SIrange{100}{140}{\hertz} under load. These are
+constraints of the measurement, not of the robots, and accompany every
+throughput number recorded on the platform.
+
+\paragraph{A second wireless hop adds a bias the clock cannot see.}
+Reaching the CSI host over a separate management link introduced the
+only clock bias chrony cannot observe; stamped probes bound it, and a
+wired connection removes it. \todo{Confirm once the Ethernet change is made.}
+
+\paragraph{Check the SLAM solution's clock before refining it.} The SLAM
+poses were stamped \SI{46}{\milli\second} early; uncorrected, this alone
+made walls \SI{18.8}{\centi\metre} thick over the run instead of
+\SI{12.0}{\centi\metre}.
+
+\paragraph{Sensors fall short of their nominal rate.} Recorded at full
+resolution with lossless compression, the stereo camera wrote about one
+frame per second instead of 15 in one cooperative session, a shortfall
+no driver reported. Rates are logged per stream and missing frames are
+flagged in the release.
+
+\paragraph{Limits.} One band, one access point, and one CSI receiver per
+site; no 802.11ax or multi-stream operation; the CSI describes overheard
+channels, not the data links; absolute scale rests on the control
+distances; the replayed link cannot react to a load larger than the one
+recorded; and on real data the loop from received message to action is
+open, since no agent acts on what it receives.
+\todo{Add scale: sites, sessions, hours.}

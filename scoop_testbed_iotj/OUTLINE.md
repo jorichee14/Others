@@ -1,116 +1,95 @@
-# SCooP-iT: final outline, tests and scope (25 Oct)
+# SCooP-iT: direction, outline, tests and scope (26 Oct revision)
 
-This file supersedes the task lists in `WRITING_GUIDE.md` (Secs. VIII-IX) and
-`DIRECTION.md`. Where they disagree, this file wins.
+This revision follows the pre-review. It supersedes `WRITING_GUIDE.md`,
+`DIRECTION.md` and the 25 Oct version of this file.
 
-**Title:** SCooP-iT: A Real-World Indoor Testbed and Environment for Embodied
-Multi-Agent Perception. SCooP = Sensing and Communication for Cooperative
-Perception. IEEE IoT-J.
+## Direction
 
-**Claim:** a real heterogeneous indoor team, captured on one clock and in one
-frame, sensing and communication alike. It is offered three ways, each
-checked against reality:
-- **the recordings**, a replay test bench, for testing;
-- **the Gym**, a closed-loop twin built from the recordings, for training;
-- **the testbed**, where a Gym-trained policy is deployed, for validation.
+**Title:** SCooP-iT: An Indoor Multi-Agent Testbed with a Measured, Replayable
+Wireless Link. SCooP = Sensing and Communication for Cooperative Perception.
+Venue: IEEE IoT-J (target 10 pages; charges beyond 8).
 
-**Rule for every test:** it must depend on something only SCooP-iT has, and
-it must be able to change an answer. The comparison that matters is the
-**fitted** channel (the real link's statistics, without its structure in time
-and place) against the **logged** one.
+**One claim:** a real indoor team can be captured precisely enough (sensing
+and communication on one clock and in one frame) for its logged link to be
+replayed into any collaborative method. The link's measured structure, not
+only its statistics, changes what those methods achieve.
 
-## 1. Outline (target 12 pages, about 8,400 words)
+**The comparison that carries the paper:** the **fitted** channel (the logged
+link's statistics, with no structure in time or place) against the **logged**
+one. Published synthetic channels are shown only for reference, because they
+deliver everything by construction.
 
-| Sec. | Title | Content | Words |
-|---|---|---|---|
-| — | Abstract | Real-world gap; what is captured; three uses; E1, E2, E3, E5 results | 250 |
-| I | Introduction | Real indoor team vs. vehicles and simulation; IoRT and the surveys; why indoors is hard; no existing platform; SCooP-iT and its three uses; five contributions; seven questions | 900 |
-| II | Related Work | IoT testbeds; timeliness and trace replay; channel measurement; robots as IoT nodes; cooperative perception; simulators and environments; the gap (Table II) | 1000 |
-| III | Testbed Design | Agents, network, four design decisions, recording | 700 |
-| IV | Time and Space Alignment | Clock, sniffer bias, error budget, extrinsics | 800 |
-| V | Ground Truth Without Motion Capture | Reference map, fiducial chain, four validation checks, scoring capability | 900 |
-| VI | Link Instrumentation | Link state, CSI | 350 |
-| VII | Replay: The Recordings as a Test Bench | Model; conditions (link, sensors, pose: ideal / logged / fitted); interface (message models and ROS 2 relay); positioning | 500 |
-| VIII | SCooP-iT Gym | World built from real data (Table); interface; conditions and augmentation; OcclusionHandoff; train-test-deploy | 900 |
-| IX | Experiments | Spec sheet; E1-E5 (below) | 1600 |
-| X | Lessons from the Real World, and Limitations | Five lessons, each now a Gym condition; limits | 400 |
-| XI | Conclusion | | 150 |
+**Three contributions:**
+1. The testbed: heterogeneous agents, every link on the sensors' clock, a pose reference without motion capture or GNSS, each checked against measurements it did not use.
+2. A replay of the logged link, validated against live runs (E3), for message models and for unmodified ROS 2 systems.
+3. Evidence that the link's structure matters (E5: messages, a decision, a real SLAM system).
 
-Change from the current draft: the Gym moves **before** the Experiments
-(VIII), so E3 and E5 can test it. In the Gym section, OcclusionHandoff is
-the only task, and the task table becomes a one-line "the interface also
-supports" sentence.
+## What was removed, and where it went
 
-## 2. Tests
-
-### Trust: can the tools be relied on?
-
-| Test | Question | Pass (fixed before the data) | Data | State |
-|---|---|---|---|---|
-| **E1 Precise** | Are the testbed's errors small next to the effects it measures? | every term >= 10x below the breaking point of its kind | existing passes | partly; terms missing |
-| **E2 Consistent** | Do poses and link logs agree when neither was checked by hand? | clearance vs. detrended RSSI: rho > 0.3 and drop > 5 dB on one link kind | existing passes | passes on mobile_2 (rho 0.60, 5.4 dB); CI to add |
-| **E3a Replay vs. live** | Does replaying the logged link reproduce live arrivals? | >= 90 % frame agreement; logged closer than fitted | field session B1 | not run |
-| **E3b Gym world vs. real** | Does each part of the twin match real runs that did not build it? | synthetic scans within 3 cm of real at the same poses; fitted dropout and noise match a held-out session; the place-indexed link, fitted on survey_1, predicts a held-out pass's in-frame share within 10 points and better than the fitted channel | twin run of coop_2; existing passes | not run |
-| **E3c Gym prediction vs. testbed** | Does the Gym predict what the real robots do? | OcclusionHandoff real success rate within the Gym's 95 % interval for the same scenario | trained policy; field session B2 | not run |
-| **E4 Repeatable** | Does the same setting give the same link on another day? | day distance < half the survey-vs-cooperation distance (RTT, goodput) | existing passes (mode half); B1 (day half) | mode half computable |
-
-### Necessity: what the real world changes
-
-| Test | Question | Report | Data | State |
-|---|---|---|---|---|
-| **E5a Messages** | What does a synthetic channel hide? | in-frame share of 1 KB / 100 KB / 1.5 MB under published synthetic, fitted and logged channels; loaded RTT alongside | existing passes | in hand (86 % / 59-68 % / 100 %); fitted column to add |
-| **E5b A decision** | Is a policy tuned on the fitted channel still right on the real one? | `CommSchedule`: the policy best under fitted, scored under logged; regret against the best under logged | existing passes | code ready; not run on real passes |
-| **E5c A real system** | Does the real link change an unmodified multi-robot SLAM beyond what its statistics predict? | Swarm-SLAM on coop_2 through the ROS 2 relay, under ideal, fitted and logged (5 runs each): joint ATE, inter-robot loop closures, merge time, map age. Claim only differences larger than run-to-run spread | existing passes; tools exist | not run |
-| **E5d A closed-loop policy** | Does training over the measured link change what happens on the real robots? | OcclusionHandoff policy trained over the ideal link vs. over the measured link: success in the Gym and on the testbed | Gym; B2 | not run |
-
-E5 has no pass criterion; each part reports whether fitted and logged
-differ, and either outcome is reported.
-
-## 3. Scope
-
-**In this paper**
-- The platform and its validation: clock, frame, ground truth, link (E1, E2, E4).
-- The replay test bench:
-  - the link, plus sensor and pose conditions;
-  - message-level and ROS 2 relay interfaces (E3a, E5a-c).
-- The Gym:
-  - the Isaac twin built from site 1, with every part checked (E3b);
-  - the interface, conditions and object augmentation (training only);
-  - one closed-loop task, OcclusionHandoff, through train, test and deploy (E3c, E5d).
-- One collaborative-SLAM system on one sequence (E5c).
-
-**In the SCooP dataset paper**
-- Labels, collaborative detection and segmentation.
-- The T1/T2 benchmarks at every site; Q1-Q4.
-- "Does augmentation help" as a finding.
-
-**In the extension (after this paper)**
-- Further Gym tasks: ActiveCoopDetect, CoopSearch, ConnectedCoverage, RelayPlacement, EdgeOffload / VLA, language agents.
-- The agent benchmark (rule-based, RL, VLM); camera-based tasks; other sites in the Gym.
-
-**Not planned**
-- More agents, other radios, multi-antenna CSI: listed as next steps only.
-
-## 4. What has to happen, in order
-
-| # | Work | Unlocks |
+| Removed | Why | Where it goes |
 |---|---|---|
-| 1 | Compute on existing passes: E1 terms, E2 CI, E4 mode half, E5a fitted column, E5b on coop_2 and survey_1; decide the cross-pass figure | IV, V, E1, E2, E4, E5a, E5b |
-| 2 | Swarm-SLAM through the relay on coop_2, 5 runs per channel (check the camera rates first; use the camera-only setup if LiDAR-to-RGB-D matching fails) | E5c |
-| 3 | Field session B1 (payload node, A1/B1 survey, A2/B2 cooperation, probe-off) | E3a, E4 day half, sniffer bias |
-| 4 | Isaac world of site 1: scene, Scout Mini differential drive, cart, mast, RTX LiDAR, semantics; fitted conditions; place-indexed link | E3b |
-| 5 | OcclusionHandoff in Isaac Lab: scripted baseline, then RL over ideal and over measured link | E5d (Gym half) |
-| 6 | Field session B2: deploy both policies | E3c, E5d (testbed half) |
-| 7 | Condense, figures, Table II check, no `\todo`; submit and post to arXiv | submission |
+| SCooP-iT Gym (Isaac twin, closed loop, train-test-deploy, E3b, E3c, task tables) | not built; validation would need SRCC across policies | follow-up paper; one sentence in the Conclusion |
+| Embodied / Gym framing in title, abstract, keywords | the paper no longer claims it | follow-up |
+| The seven-questions framing and "worth" subsection | uniqueness belongs in Sec. II, reproducibility in the design and release | — |
+| Related work on AoI, task-oriented communication, edge, simulators, Lingjing | not needed for the claim | — |
+| Stale numbers: 1.06 cm cross-pass, 7.9/2.1 cm, 0.15 cm, `mapping_A`, two mixed RTT regimes | superseded by the 20261015 reference and the 24 Sep passes | replaced |
+| "Capacity governed by geometry" | not supported (see the capacity check) | removed |
+| "Only a synchronized testbed can measure one-way delay" | the replay uses RTT/2 until E3's payload stamps exist | reworded |
 
-Steps 1, 2 and 4 can run in parallel now. Step 3 needs only the payload
-node.
+## Outline (compiles to 13 pages with placeholders; about 6,800 words)
 
-## 5. Fallbacks
+| Sec. | Content | Words now | Target |
+|---|---|---|---|
+| Abstract | problem; capture; checks; replay; logged vs. fitted | 250 | 250 |
+| I Introduction | the gap; why indoors is hard; what exists; the one claim; three contributions | 560 | 600 |
+| II Related Work | testbeds; trace replay (Mahimahi, Pantheon, NemFi, Syed et al., CausalSim); channel measurement; multi-robot datasets with real links (Lajoie et al.); cooperative perception (CooperScene, EMP); the gap + Table II | 630 | 650 |
+| III Testbed Design | agents; network (capacity check flagged); four design decisions; recording | 890 | 650 |
+| IV Time and Space Alignment | clock; sniffer bias (lower envelope); error budget at measured speed; extrinsics | 1070 | 750 |
+| V Pose Reference | map; fiducial chain; checks (thickness, second pass, control distances, held-out boards); scoring | 1160 | 850 |
+| VI Link Instrumentation | link state; CSI (overheard channel; Doppler argument) | 390 | 350 |
+| VII Replay of the Logged Link | model (RTT/2 + s/G, two hops); four channels; message API and ROS 2 relay; assumptions and limits | 470 | 450 |
+| VIII Experiments | spec sheet; E1-E5 | 1150 | 1500 when results arrive |
+| IX Lessons and Limitations | four lessons; limits | 260 | 250 |
+| X Conclusion | results; closed-loop twin as the next step; release | 160 | 150 |
 
-| If | Then |
-|---|---|
-| B2 can't happen before the deadline | E3c and E5d report the Gym half only; the deployment is described as the next step |
-| The place-indexed link fails E3b | OcclusionHandoff uses the fitted link, and the paper says the twin's link is statistical only |
-| Fitted ≈ logged in E5b or E5c | Report it: for that task, the real link's statistics suffice. E5a still stands |
-| Swarm-SLAM finds no inter-robot loop closures | Use the camera-only setup; if it still fails, E5c reports map age and per-robot ATE only |
+Condense III-V by about 900 words, for example the board-detector
+distortion detail and the extrinsics checks (move to the supplementary).
+
+**Figures:**
+- Fig. 1 is now one window of coop_2 on one timeline: positions, clearance, RSSI, RTT, goodput, and message arrivals against the frame.
+- The others: platforms, reference pipeline, link trace, headroom (E1), clearance (E2), simgap (E3 left, E5a right).
+- The replay diagram is dropped; the equation suffices.
+
+## Tests
+
+| Test | Question | Pass (stated before the test) | Data | State |
+|---|---|---|---|---|
+| E1 Precision | testbed errors vs. breaking points derived for indoor objects (person box: 0.20 m at IoU 0.5, 0.11 m at IoU 0.7) | each term >= 10x below | existing | LiDAR robot, clock, detector pass at IoU 0.5; cart (6.5x), second pass (6.7x), strict clock bound (8.3x) fall short; v95, sniffer bias, radar to fill |
+| E2 Consistency | map clearance predicts detrended RSSI | rho > 0.3, drop > 5 dB, block-bootstrap CI excluding 0 | existing | point estimates in hand; CI, exponent sweep, cart-side split to run |
+| E3 Replay | replayed vs. live arrivals | >= 90 % frame agreement; logged closer than fitted | field session (payload node at 10 Hz, 1 KB / 100 KB / 1.5 MB, alone and with the other robot, survey and cooperation) | not run |
+| E4 Repeatability | same setting, same link on another day | day distance < half the mode distance | existing + the E3 session | mode half computable |
+| E5a Messages | in-frame share, logged vs. fitted (published for reference), also against offered load over goodput | none, report either way | existing | logged in hand (86 % / 59-68 %); fitted column to add |
+| E5b Decision | send-size threshold tuned on fitted, regret on logged | none | existing | code ready |
+| E5c Real system | Swarm-SLAM through the ROS 2 relay on coop_2, 5 runs per channel: ATE, loop closures, merge time, map age | none; claim only differences beyond the run spread | existing; tools exist | not run |
+
+## Checks to run before anything else
+1. **Capacity:** the logged downlink of 598-676 Mbit/s exceeds the 433 Mbit/s PHY maximum for one stream at VHT-80. Pull NSS and MCS from the radiotap headers. The uplink of 275-282 Mbit/s sits at the practical USB 2.0 ceiling of the RTL8852BU. Every replayed arrival uses G(t), so this goes first.
+2. **Reference numbers:** the stage table says 12.3 mm loop and 7.6 / 1.8 cm; the results log says 13.9 mm and 7.8 / 1.9 cm for the same pass. Scan-to-map vs. the reference is 1.3 cm in the paper and 1.5 cm in the log. Pick the final run.
+3. **Frame offset:** explain the 0.49 m / 2.95 deg offset between the two passes' board-anchored frames.
+
+## Scope
+- **In this paper:** the testbed and its checks (E1, E2, E4); the replay and its validation (E3); logged vs. fitted at three scales (E5).
+- **In the SCooP dataset paper:**
+  - the data at every site, labels, detection and segmentation, Q1-Q4;
+  - ideal vs. logged cost across methods and sites, including the T1 C-SLAM benchmark.
+  - E5c here reports only fitted vs. logged on one sequence, so the two papers share no comparison.
+- **In a follow-up paper:**
+  - the closed-loop Gym: Isaac twin, place-indexed link, train-test-deploy;
+  - validated with sim-vs-real correlation across policies (Kadian et al., RA-L 2020).
+
+## Order of work
+1. The three checks above.
+2. Compute: E1 terms, E2 intervals and sensitivity, E4 mode half, E5a fitted column, E5b.
+3. E5c: Swarm-SLAM through the relay.
+4. The field session: E3, E4 day half, sniffer bias.
+5. Condense to about 10 pages, draw the figures, verify Table II (including the new Lajoie et al. row), clear every `\todo`, then submit and post to arXiv.

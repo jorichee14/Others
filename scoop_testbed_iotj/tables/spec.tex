@@ -1,33 +1,23 @@
-% Specification sheet, with the seven questions of Sec. I and their pass
-% criteria folded in (tables/questions.tex is the working ledger and is
-% not input). Q1-Q5: trust; Q6-Q7: worth.
+% Specification sheet: the five tests, each guarantee, its pass criterion
+% stated before the test was run, the measured bound, and the check.
 \begin{table*}[!t]
-\caption{SCooP-iT Specification Sheet: The Question Each Guarantee Answers, Its Pass Criterion Fixed Before the Data Were Read, the Measured Bound, and the Check That Produced It}
+\caption{SCooP-iT Specification Sheet: Each Guarantee, the Pass Criterion Stated Before the Test, the Measured Bound, and the Check That Produced It}
 \label{tab:spec}
 \begin{center}
 \renewcommand{\arraystretch}{1.2}
 \setlength{\tabcolsep}{4pt}
 \scriptsize
-\begin{tabular}{@{}p{1.7cm} p{2.5cm} p{3.0cm} p{5.3cm} p{3.4cm}@{}}
+\begin{tabular}{@{}p{1.6cm} p{2.6cm} p{3.6cm} p{5.2cm} p{3.0cm}@{}}
 \toprule
-\textbf{Question} & \textbf{Guarantee} & \textbf{Pass criterion} & \textbf{Measured bound} & \textbf{Validated by} \\
+\textbf{Test} & \textbf{Guarantee} & \textbf{Pass criterion} & \textbf{Measured bound} & \textbf{Check} \\
 \midrule
-\multicolumn{5}{@{}l}{\textit{Trust: can readers rely on the instrument?}} \\
-Q1 Precise (E1) & Clock agreement between agents & every error term $\geq 10\times$ below the fusion breaking point of its kind (\SI{0.2}{\metre} pose; one \SI{100}{\milli\second} frame as displacement) & measured offset $\leq$ \SI{0.99}{\milli\second} ($101\times$); strict chrony bound $\leq$ \SI{12}{\milli\second} ($8.3\times$, worst case only); RMS \SIrange{10.9}{42.5}{\micro\second} per client & chrony offset logs, every run \\
- & Sniffer clock bias & same & \todo{to be measured} (worst case \SI{7.8}{\milli\second}) & probe stamps on both ends \\
- & Spatial extrinsics & same & per sensor pair, Table~\ref{tab:calib}; board detector \SI{8}{\milli\metre} ($24\times$) & held-out reflector and board positions \\
- & Agent pose in the site frame & same & held-out boards \SI{10.0}{\milli\metre} / 0.88$^\circ$ (LiDAR robot), \SI{3.1}{\centi\metre} median (RGB-D cart, $6.5\times$); map refinement ($15\times$); cross-pass agreement ($19\times$); control distances \todo{} & second mapping pass, held-out boards, rangefinder distances \\
-Q2 Consistent (E2) & Link state agrees with the poses & clearance vs.\ detrended RSSI: $\rho > 0.3$ and drop $> \SI{5}{\decibel}$ on one link kind & \SI{5}{\hertz} passive, \SI{100}{\hertz} RTT, \SI{4}{\second} goodput; outages labelled; \texttt{mobile\_2} link $\rho = 0.60$, \SI{5.4}{\decibel} (passes) & Fresnel clearance through the anchored map \\
- & Channel state (CSI) & --- & \SIrange{104}{141}{\hertz}; valid below \SI{1.2}{\metre\per\second} relative speed & $\lambda/2$ sampling argument \\
-Q3 Faithful (E3) & Replay fidelity, live (E3a) & $\geq 90\,\%$ agreement on the receiver frame each message lands in; logged replay closer than synthetic & \todo{arrival-time error; frame-assignment agreement} & live payload against replayed trace \\
- & The Gym's world (E3b) & scans within real scan noise (\SI{3}{\centi\metre}); fitted conditions match a held-out session; place-indexed link predicts in-frame share within 10 points; link-induced $\Delta$AP within half of the real one & \todo{scan agreement; condition fit; link prediction; $\Delta$AP} & twin and models against real runs that did not build them \\
- & Gym policy on the testbed (E3c) & real success rate within the Gym's predicted interval & \todo{} & deployment on the real agents \\
-Q4 Repeatable (E4) & Contention as a knob & day-to-day distance $<$ half the survey-to-cooperation distance (RTT, goodput) & RTT \SIrange{5}{10}{} to \SIrange{25}{33}{\milli\second} idle to loaded (24 Sep), \SI{3.3}{} to \SIrange{60}{109}{\milli\second} (earlier pass); \todo{day and mode distances} & survey vs.\ cooperation mode on two days \\
-Q5 Necessary (E5) & The measured link changes the task outcome & demonstration, no pass & \SI{1.5}{\mega\byte} messages within one frame: 86\,\% alone, \SIrange{59}{68}{\percent} with two robots, 100\,\% synthetic; loaded RTT \SIrange{25}{33}{\milli\second}, inside the frame & logged link vs.\ published synthetic channels \\
-\midrule
-\multicolumn{5}{@{}l}{\textit{Worth: should anyone care?}} \\
-Q6 Unique (Sec.~\ref{sec:related}) & No other platform has all capabilities & fills every column of Table~\ref{tab:gap_iotj} & indoor mobile and fixed nodes; no mocap or GNSS; every pair's link; CSI on data links; measured clock bound; per-message replay; perception scoring & cells checked against the cited papers \\
-Q7 Reproducible (Secs.~\ref{sec:design}, \ref{sec:lessons}) & Others can build and use it & bill of materials, setup effort per site, released pipeline & Table~\ref{tab:bom}; pipeline released; this sheet & --- \\
+E1 Precision & Clock between agents & each error term $\geq 10\times$ below the breaking point of its kind & measured offset $\leq$ \SI{0.99}{\milli\second}; strict bound $\leq$ \SI{12}{\milli\second} (worst case only); sniffer bias \todo{} & chrony logs; probe stamps, lower envelope \\
+ & Agent pose & same, at IoU 0.5 and 0.7 & LiDAR robot \SI{10}{\milli\metre} (held-out boards); RGB-D cart \SI{3.1}{\centi\metre} median, $\sigma$ \SI{5.3}{\centi\metre}; second pass RMS \SI{3.0}{\centi\metre}; control distances \todo{} & held-out boards, second pass, rangefinder \\
+ & Extrinsics & same & Table~\ref{tab:calib} & held-out reflector and board positions \\
+E2 Consistency & Poses and link agree & clearance vs.\ detrended RSSI: $\rho > 0.3$ and drop $> \SI{5}{\decibel}$ on one link, 95\,\% CI excluding 0 & \texttt{mobile\_2}: $\rho = 0.60$, \SI{5.4}{\decibel}, CI \todo{}; \texttt{infra\_1}: $\rho = 0.23$, \SI{4.7}{\decibel} & Fresnel clearance through the map \\
+E3 Replay & Replay reproduces live arrivals & $\geq 90\,\%$ agreement on the receiver frame of each message; logged closer than fitted & \todo{} & payload messages live vs.\ replayed \\
+E4 Repeatability & Same setting, same link & day distance $<$ half the survey-vs.-cooperation distance (RTT, goodput) & \todo{} & two days, two modes \\
+E5 Effect & The link's structure matters & none: logged vs.\ fitted, either outcome reported & messages, send-size policy, collaborative SLAM: \todo{} & same methods, channel the only variable \\
 \bottomrule
 \end{tabular}
 \end{center}

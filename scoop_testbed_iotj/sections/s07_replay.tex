@@ -1,66 +1,56 @@
-% Sec. VII Replay: the recordings as a test bench (about 0.6 page).
-% Paragraphs: model; beyond the link (the other recorded conditions);
-% interface; positioning.
-\section{Replay: The Recordings as a Test Bench}
+% Sec. VII Replay of the Logged Link (about 0.6 page).
+% Paragraphs: model; the four channels; interfaces; assumptions and limits.
+\section{Replay of the Logged Link}
 \label{sec:replay}
-This section answers whether any collaborative method can be run on
-what the agents sensed and against the link they actually had.
+This section describes how a new method is run against the link the
+agents had. Whether the replay is faithful is tested in E3.
 
-\paragraph{Model.} A message of size $s$ sent at time $t$ over link
-$(a,b)$ arrives at
+\paragraph{Model.} A message of size $s$ sent at time $t$ from agent $a$
+to agent $b$ through the access point crosses two hops, $a$'s uplink and
+$b$'s downlink, and arrives at
 \begin{equation}
-  t + d_{ab}(t) + s / G_{ab}(t),
+  t + \tfrac{1}{2}\big(\mathrm{RTT}_a(t) + \mathrm{RTT}_b(t)\big)
+    + s\Big(\frac{1}{G^{\uparrow}_a(t)} + \frac{1}{G^{\downarrow}_b(t)}\Big),
   \label{eq:replay}
 \end{equation}
-where $d_{ab}(t)$ is the one-way delay and $G_{ab}(t)$ the most recent
-goodput measured on that link, and is dropped when the link was down
-(\texttt{associated=false}, or a run of lost pings). Because the
-measured clock offset is below \SI{1}{\milli\second}, $d_{ab}$ can be
-measured directly from stamped probes where they exist, instead of
-being assumed to be $\mathrm{RTT}/2$; only a synchronized testbed can
-do this. The strict \SI{12}{\milli\second} chrony bound exceeds the
-idle one-way delay, so one-way-delay claims rest on the measured
-offset, and where probes are absent the module falls back to
-$\mathrm{RTT}/2$ and says so. The ideal channel (instant, lossless), the synthetic channels
-of prior benchmarks (a fixed bandwidth budget and a fixed or sampled
-delay \cite{where2comm,v2xvit,lei2022syncnet,wei2023cobevflow}), and
-the logged channel all pass through one module
-(Fig.~\ref{fig:replay}), so the channel is the only variable between
-runs of a method.
+where $\mathrm{RTT}$ is the most recent round trip measured outside the
+agent's own active test and $G$ the goodput of its most recent test in
+that direction. A message sent during an outage, a run of unanswered
+pings of at least one frame, is dropped. Round trips stand in for the
+one-way delays until the payload stamps of E3 measure them: on a
+contended link the two directions are not symmetric, and the strict
+\SI{12}{\milli\second} clock bound is larger than an idle one-way delay,
+so the clocks alone cannot resolve it.
 
-\paragraph{Beyond the link.} The link is one of the conditions the
-recordings carry; the others are replayed the same way, each in the
-same modes. \emph{Sensors}: a frame that was not recorded is missing in
-replay, and the agent is told so (logged); every frame is present
-(ideal, where the twin supplies it); or frames drop with each sensor's
-measured rate and burst length (fitted). \emph{Pose}: each agent uses
-the reference (ideal), its own recorded estimate (logged), or the
-reference perturbed with the measured estimate error (fitted). A
-method is thus scored with each real-world condition on or off, one at
-a time, and a failure is attributed to the condition that caused it
-(Sec.~\ref{sec:gym}).
+\paragraph{Channels.} Four channels pass through one module, so the
+channel is the only variable between runs of a method. \emph{Ideal}:
+instant and lossless. \emph{Published}: the channels of prior benchmarks
+as configured, a constant \SI{100}{\milli\second} (V2X-ViT \cite{v2xvit}),
+a bandwidth budget without delay (Where2comm \cite{where2comm}), or a
+Binomial frame lag (CoBEVFlow \cite{wei2023cobevflow}). \emph{Fitted}: a
+synthetic channel per link with the logged link's statistics, a
+lognormal latency, its median goodput, and two-state outages with the
+measured share of time and mean length, but no tie to time or place.
+\emph{Logged}: Eq.~\eqref{eq:replay}. The fitted channel is the
+comparison that matters: any difference between it and the logged
+channel comes from structure that only a measurement carries, such as
+contention between agents and outages tied to places.
 
-\paragraph{Interface.} Any method that emits (sender, receiver, $t$,
-size) plugs in and receives, for each message, an arrival time or a
-drop. The implementation extends an OpenCOOD-style wrapper that already
-turns latency into staleness and drops collaborators, with a schedule
-driven by the trace; a converter places recorded frames in the layout
-it reads. \todo{Name the released modules.}
+\paragraph{Interfaces.} A method that emits (sender, receiver, $t$,
+size) receives an arrival time or a drop. Unmodified ROS~2 systems run
+through a relay: each agent runs in its own ROS domain, and the relay
+carries the topics one agent publishes and another subscribes to,
+holding each serialized message until the channel releases it, on the
+recording's clock. An optional queue makes back-to-back messages on a
+link wait for each other.
 
-\paragraph{Positioning.} Trace-driven network emulation replays a link
-for network software, from trace modulation \cite{noble1997trace}
-through netem \cite{hemminger2005netem}, Cellsim
-\cite{winstein2013sprout}, Mahimahi \cite{netravali2015mahimahi}, and
-Pantheon \cite{yan2018pantheon}; robotics and network co-simulators
-couple a robot simulator with a simulated network
-\cite{calvofullana2021rosnetsim,sommer2011veins,xu2021opencda};
-collaborative-perception benchmarks simulate a link for perception,
-and CooperScene \cite{cooperscene} evaluates detectors under one delay
-derived from mean measured throughput. SCooP-iT replays the measured
-per-message link of each node pair into perception, on the same clock
-as the sensors. The fluid model of Eq.~\eqref{eq:replay} is
-chosen because the iperf windows give goodput, not per-packet delivery
-opportunities as in Mahimahi; E3 measures how much accuracy the simpler
-model loses.
-
-\input{figures/replay}
+\paragraph{Assumptions and limits.} Eq.~\eqref{eq:replay} is a fluid
+model: it ignores frame aggregation and medium-access dynamics, which
+NemFi \cite{nemfi} shows matter for faithful Wi-Fi replay, and its
+goodput comes from saturating tests, whose result depends on concurrent
+traffic \cite{syed2020wifiemu}. The trace was recorded under that
+saturating load, so it describes a loaded channel, and a method's
+messages are taken to replace part of that load rather than add to it; a
+policy whose offered load exceeds the recorded one is outside what a
+replayed trace can evaluate \cite{causalsim}. E3 measures the error that
+remains.

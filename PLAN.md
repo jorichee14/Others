@@ -1,4 +1,9 @@
-# Plan: SCooP-iT (with its Gym) and SCooP
+# Plan: SCooP-iT, SCooP, and the Gym follow-up
+
+> **26 Oct:** after the pre-review, the Gym leaves the SCooP-iT paper and
+> becomes the follow-up paper. SCooP-iT is the instrument plus a validated
+> replay (`scoop_testbed_iotj/OUTLINE.md`). The work streams below still
+> hold; streams D, E and G and milestones M4-M6 now feed the follow-up.
 
 SCooP: Sensing and Communication for Cooperative Perception.
 
