@@ -12,7 +12,12 @@ rtabmap_rgbd (the D455, mobile_2). Writes <run dir>/run.json and
 
 Read from the bag, never typed in: topics and frames (first message of each),
 the LiDAR's beams (the cloud's height), T_imu_lidar and the camera-IMU
-transforms (/tf_static), the cameras' intrinsics (camera_info), the IMU's rate.
+transforms (/tf_static; T_lidar_imu from the robot's GLIM config, which
+processing/glim_config.py took from its own bag, where the pass bag does not
+link the two), the cameras' intrinsics (camera_info), the IMU's rate.
+
+LiDAR methods get their clouds through sweep_relay.py, at the sweep's end as
+a live driver publishes them (the retimed bags replay them at its start).
 
 Indoor changes, each named in run.json's "settings" beside its published
 default:
@@ -38,6 +43,7 @@ Refusals (nothing written):
 import argparse
 import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -67,6 +73,9 @@ MIN_RANGE = 1.0
 PC2, IMU, IMG = "sensor_msgs/msg/PointCloud2", "sensor_msgs/msg/Imu", "sensor_msgs/msg/Image"
 ODOM = "nav_msgs/msg/Odometry"
 CFG = "/work/config"
+
+
+GLIM_CONFIG = os.path.join(ROOT, "configs", "glim", "%s", "config_sensors.json")
 
 
 class Refused(RuntimeError):
@@ -125,6 +134,46 @@ def static(edges, src, dst):
     return T
 
 
+def lidar_imu(edges, machine, lidar, imu):
+    """(T_lidar_imu, where it came from): /tf_static, or, where the pass bag
+    does not link the two (mobile_2's Ouster in the 20261015 merged bags), the
+    value processing/glim_config.py took from the robot's own bag for GLIM."""
+    try:
+        return static(edges, lidar, imu), "/tf_static"
+    except Refused:
+        pass
+    path = GLIM_CONFIG % machine
+    m = re.search(r'"T_lidar_imu"\s*:\s*\[([^\]]*)\]', open(path).read()) if os.path.exists(path) else None
+    if m is None:
+        raise Refused(f"/tf_static does not link {lidar} and {imu}, and {path} has no T_lidar_imu")
+    v = [float(x) for x in m.group(1).replace("\n", " ").split(",")]
+    T = np.eye(4)
+    T[:3, :3] = Rotation.from_quat(v[3:7]).as_matrix()
+    T[:3, 3] = v[:3]
+    return T, os.path.relpath(path, ROOT) + " (not in the bag's /tf_static)"
+
+
+def to_lidar(paths, edges, machine, frame):
+    """(T_frame_lidar, where it came from): the robot's LiDAR in the frame a
+    method reports, to put its trajectory in the reference's frame (stage 04's
+    track is the LiDAR's). The IMU of the Ouster through lidar_imu(); a camera
+    through the bag's /tf_static (mobile_2: the camera-LiDAR calibration)."""
+    _, lidar = frame_of(paths, LIDAR[machine]["points"])
+    if frame == lidar:
+        return np.eye(4), "the LiDAR itself"
+    _, imu = frame_of(paths, LIDAR[machine]["imu"])
+    if frame == imu:
+        T_li, src = lidar_imu(edges, machine, lidar, imu)
+        return np.linalg.inv(T_li), src
+    return static(edges, frame, lidar), "/tf_static"
+
+
+def relay(points):
+    """The sweep relay (sweep_relay.py) for a LiDAR method: the player's clouds
+    renamed, handed on at the sweep's end."""
+    return {"in": "/replay" + points, "out": points, "hold_s": 1.0 / LIDAR_HZ}
+
+
 def quat_xyzw_xyz(T):
     q = Rotation.from_matrix(T[:3, :3]).as_quat()
     return [float(v) for v in q] + [float(v) for v in T[:3, 3]]
@@ -155,7 +204,7 @@ def kiss_icp(paths, edges, machine, a):
                    "visualize:=false publish_odom_tf:=false config_file:=%s/kiss_icp.yaml"
                    % (t["points"], CFG)),
         "play": [t["points"]], "in": {t["points"]: PC2}, "key": t["points"],
-        "out": "/kiss/odometry", "out_type": ODOM, "tum_frame": lidar,
+        "out": "/kiss/odometry", "out_type": ODOM, "tum_frame": lidar, "relay": relay(t["points"]),
         "proc": r"kiss_icp_node", "stamp_tol_s": 0.0, "nominal_hz": LIDAR_HZ,
         "settings": {"data.deskew": [True, False, "the Ouster gives per-point times"],
                      "data.min_range": [MIN_RANGE, 0.0, "RKO-LIO's; leaves out the robot and operator"],
@@ -166,19 +215,21 @@ def rko_lio(paths, edges, machine, a):
     t = LIDAR[machine]
     _, lidar = frame_of(paths, t["points"])
     _, imu = frame_of(paths, t["imu"])
+    T_li, src = lidar_imu(edges, machine, lidar, imu)
     cfg = {"lidar_topic": t["points"], "imu_topic": t["imu"],
            "base_frame": lidar, "lidar_frame": lidar, "imu_frame": imu,
            "extrinsic_lidar2base_quat_xyzw_xyz": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
-           "extrinsic_imu2base_quat_xyzw_xyz": quat_xyzw_xyz(static(edges, lidar, imu)),
+           "extrinsic_imu2base_quat_xyzw_xyz": quat_xyzw_xyz(T_li),
            "publish_local_map": False, "publish_deskewed_scan": False}
     return {
         "files": {"rko_lio.yaml": yaml.safe_dump(cfg, sort_keys=False)},
         "launch": ("ros2 launch rko_lio odometry.launch.py config_file:=%s/rko_lio.yaml mode:=online "
                    "rviz:=false use_sim_time:=true autodetect:=false" % CFG),
         "play": [t["points"], t["imu"]], "in": {t["points"]: PC2, t["imu"]: IMU}, "key": t["points"],
-        "out": "/rko_lio/odom", "out_type": ODOM, "tum_frame": lidar,
+        "out": "/rko_lio/odom", "out_type": ODOM, "tum_frame": lidar, "relay": relay(t["points"]),
         "proc": r"rko_lio.*online_node|/online_node", "stamp_tol_s": 0.0, "nominal_hz": LIDAR_HZ,
         "settings": {"base_frame": [lidar, None, "the pose is the LiDAR's"],
+                     "extrinsic_imu2base": [src, "tf", "the IMU in the LiDAR frame"],
                      "publish_local_map": [False, True, "odometry only"],
                      "publish_deskewed_scan": [False, True, "odometry only"]}}
 
@@ -187,7 +238,8 @@ def fast_lio(paths, edges, machine, a):
     t = LIDAR[machine]
     pc, lidar = frame_of(paths, t["points"])
     _, imu = frame_of(paths, t["imu"])
-    T = static(edges, imu, lidar)                         # the LiDAR in the IMU frame
+    T_li, src = lidar_imu(edges, machine, lidar, imu)
+    T = np.linalg.inv(T_li)                               # the LiDAR in the IMU frame
     cfg = {"/**": {"ros__parameters": {
         "feature_extract_enable": False, "point_filter_num": 3, "max_iteration": 3,
         "filter_size_surf": 0.5, "filter_size_map": 0.5, "cube_side_length": 1000.0,
@@ -208,11 +260,11 @@ def fast_lio(paths, edges, machine, a):
         "launch": ("ros2 launch fast_lio mapping.launch.py config_path:=%s config_file:=fast_lio.yaml "
                    "use_sim_time:=true rviz:=false" % CFG),
         "play": [t["points"], t["imu"]], "in": {t["points"]: PC2, t["imu"]: IMU}, "key": t["points"],
-        "out": "/Odometry", "out_type": ODOM, "tum_frame": imu,
+        "out": "/Odometry", "out_type": ODOM, "tum_frame": imu, "relay": relay(t["points"]),
         "proc": r"fastlio_mapping", "stamp_tol_s": 0.0, "nominal_hz": LIDAR_HZ,
         "settings": {"preprocess.blind": [MIN_RANGE, 4.0, "4 m is most of the room"],
                      "preprocess.scan_line": [int(pc.height), 64, "the cloud's height"],
-                     "mapping.extrinsic_T/R": ["/tf_static", "identity", "the LiDAR in the IMU frame"],
+                     "mapping.extrinsic_T/R": [src, "identity", "the LiDAR in the IMU frame"],
                      "publish.*": [False, True, "odometry only"],
                      "pcd_save.pcd_save_en": [False, True, "odometry only"]}}
 
@@ -443,6 +495,7 @@ def make(method, bag, machine, run, start=0.0, duration=0.0, imu_noise=None, min
           "play_topics": m["play"], "in_topics": m["in"], "key_topic": m["key"],
           "out_topic": m["out"], "out_type": m["out_type"], "tum_frame": m["tum_frame"],
           "proc_regex": m["proc"], "stamp_tol_s": m["stamp_tol_s"], "launch": m["launch"],
+          "relay": m.get("relay"),
           "key_rate": rate, "settings": m["settings"], "config_files": sorted(m["files"])}
     json.dump(rj, open(os.path.join(run, "run.json"), "w"), indent=1)
     return rj

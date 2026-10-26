@@ -31,7 +31,7 @@ import subprocess
 import threading
 import time
 
-EXCLUDE = r"probe\.py|resources\.py|summarize\.py|ros2 bag|ros2-bag|rosbag2|bag play"
+EXCLUDE = r"probe\.py|resources\.py|summarize\.py|sweep_relay\.py|ros2 bag|ros2-bag|rosbag2|bag play"
 TICK = os.sysconf("SC_CLK_TCK")
 PAGE = os.sysconf("SC_PAGE_SIZE")
 

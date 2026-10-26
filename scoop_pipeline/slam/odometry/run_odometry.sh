@@ -19,7 +19,8 @@
 # (the method's estimate, of run.json's tum_frame, on the bag's clock: give it
 # to datasets/swarm_slam_lidar.py --odom-tum <machine> <tum> <tum_frame>),
 # messages.csv, resources.csv, host.json, probe.json, summary.json
-# (slam/monitor/summarize.py), status.json, logs/.
+# (slam/monitor/summarize.py), accuracy.json (score.py: ATE, RPE, drift against
+# stage 04's reference, also in summary.json), status.json, logs/.
 set -euo pipefail
 if [ $# -lt 4 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then sed -n '2,24p' "$0"; exit 1; fi
 HERE=$(dirname "$(realpath "$0")")
@@ -41,3 +42,6 @@ docker run --rm -i "${TTY[@]}" "${GPU[@]}" --network none --shm-size 4g \
     -e OWNER="$(id -u):$(id -g)" -e RATE="${RATE:-1.0}" \
     -e START_WAIT="${START_WAIT:-8}" -e DRAIN="${DRAIN:-5}" \
     "$IMAGE" bash /opt/odometry/inside.sh
+
+# accuracy against stage 04's reference (score.py; ATE, RPE, drift, coverage, jumps)
+"${PYTHON:-python3}" "$HERE/score.py" "$RUN" || echo "(no accuracy: see above; score.py $RUN --ref <TUM> to give the reference)"

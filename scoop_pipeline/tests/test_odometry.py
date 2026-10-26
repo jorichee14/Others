@@ -7,12 +7,16 @@ pair, depth in the left camera, its IMU) and hand-made probe logs.
 make_config must read every frame, the beams and the transforms off the bag:
 FAST-LIO2's extrinsic is the LiDAR in the IMU frame, RKO-LIO's the IMU in the
 LiDAR (= base) frame, OpenVINS's T_cam_imu per camera; every LiDAR method
-leaves out the first 1.0 m. It must refuse OpenVINS without an IMU noise
+leaves out the first 1.0 m. Where the bag does not link a robot's
+LiDAR and IMU (mobile_2), T_lidar_imu comes from its GLIM config. LiDAR
+methods get the sweep relay. It must refuse OpenVINS without an IMU noise
 file, a camera method on mobile_1, RTAB-Map when the depth is not in the
 left camera, a key topic under 90 % of its nominal rate, and a run folder
 that holds a run.
 
-summarize must time latency between publishers (the send times, not the
+score must put an estimate in the LiDAR frame and find ATE 0 for a perfect
+one in another odom frame, ~1 % drift for a 1 % scale error, a gap and a
+jump where they are. summarize must time latency between publishers (the send times, not the
 probe's own late arrival), match each output to its own input: one stamped at the
 scan's last point (FAST-LIO2) also when the next scan has arrived before it,
 one stamped a few ms before its image (OpenVINS, with its tolerance); count
@@ -90,9 +94,12 @@ def write_bag(path, cam_hz=30.0, depth_k=K):
         a = np.zeros(64 * 16, OUSTER)
         a["x"] = 5.0
         recs.append((t, "/mobile_1/ouster/points", rosmsg.pointcloud2(a, t, "os_lidar_mobile1", height=64)))
+        # mobile_2's Ouster, which the pass bag's /tf_static does not link to its IMU
+        recs.append((t, "/mobile_2/ouster/points", rosmsg.pointcloud2(a, t, "os_lidar_mobile2", height=64)))
     for k in range(int(DUR * 100)):
         t = T0 + k * S // 100
         recs.append((t, "/mobile_1/ouster/imu", rosmsg.imu(t, "os_imu_mobile1", [0, 0, 9.81], [0, 0, 0])))
+        recs.append((t, "/mobile_2/ouster/imu", rosmsg.imu(t, "os_imu_mobile2", [0, 0, 9.81], [0, 0, 0])))
     for k in range(int(DUR * 200)):
         t = T0 + k * S // 200
         recs.append((t, "/mobile_2/imu", rosmsg.imu(t, "camera_imu_optical_frame", [0, -9.81, 0], [0, 0, 0])))
@@ -154,6 +161,20 @@ def check_config(tmp, f):
     if np.abs(Tr - np.linalg.inv(T_imu_lidar)).max() > 1e-6 or c["base_frame"] != "os_lidar_mobile1":
         f.append("rko_lio: imu2base\n%s\nwant\n%s, base %s" % (Tr, np.linalg.inv(T_imu_lidar), c["base_frame"]))
 
+    rl = MK.make("fast_lio", bag, "mobile_1", run("fastlio_relay"))["relay"]
+    if rl != {"in": "/replay/mobile_1/ouster/points", "out": "/mobile_1/ouster/points", "hold_s": 0.1}:
+        f.append("fast_lio: relay %s" % rl)
+    # mobile_2: no /tf_static link between its Ouster's LiDAR and IMU -> the GLIM config's T_lidar_imu
+    r2 = MK.make("rko_lio", bag, "mobile_2", run("rko_m2"))
+    c = yaml.safe_load(open(os.path.join(run("rko_m2"), "config", "rko_lio.yaml")))
+    v = c["extrinsic_imu2base_quat_xyzw_xyz"]
+    import re as _re
+    g = [float(x) for x in _re.search(r'"T_lidar_imu"\s*:\s*\[([^\]]*)\]',
+                                      open(MK.GLIM_CONFIG % "mobile_2").read()).group(1).split(",")]
+    if np.abs(T_of(v[4:], v[:4]) - T_of(g[:3], g[3:7])).max() > 1e-9 \
+            or "glim" not in r2["settings"]["extrinsic_imu2base"][0]:
+        f.append("rko_lio mobile_2: imu2base %s from %s, want GLIM's %s"
+                 % (v, r2["settings"]["extrinsic_imu2base"][0], g))
     refused(f, "openvins without --imu-noise", MK.make, "openvins", bag, "mobile_2", run("ov0"))
     noise = os.path.join(tmp, "noise.yaml")
     yaml.safe_dump({k: 1e-3 for k in MK.NOISE_KEYS}, open(noise, "w"))
@@ -275,12 +296,70 @@ def check_summary(tmp, f):
         f.append("send-time latency: %s (want 10 answered, 25 ms)" % t)
 
 
+def ref_traj(n=600, dt=0.1):
+    """A reference T_map_lidar: a 3 m circle at 0.5 m/s, 10 Hz."""
+    t = T0 / S + np.arange(n) * dt
+    a = 0.5 / 3.0 * (t - t[0])
+    T = np.tile(np.eye(4), (n, 1, 1))
+    T[:, :3, :3] = Rotation.from_euler("z", (a + np.pi / 2)[:, None]).as_matrix()
+    T[:, 0, 3], T[:, 1, 3], T[:, 2, 3] = 3 * np.cos(a), 3 * np.sin(a), 0.4
+    return t, T
+
+
+def write_tum(path, t, T):
+    with open(path, "w") as fh:
+        for ti, Ti in zip(t, T):
+            q = Rotation.from_matrix(Ti[:3, :3]).as_quat()
+            fh.write("%.9f %.9f %.9f %.9f %.9f %.9f %.9f %.9f\n" % ((ti,) + tuple(Ti[:3, 3]) + tuple(q)))
+
+
+def check_score(tmp, f):
+    import score as SC
+    tr, Tr = ref_traj()
+    T_off = T_of([1.0, -2.0, 0.3], Rotation.from_euler("z", 40, degrees=True).as_quat())
+    E = np.einsum("ij,njk->nik", np.linalg.inv(T_off), Tr)          # the same motion in its own odom frame
+    a = SC.score(tr, E, tr, Tr)
+    if a["ate"]["position_cm"]["rmse"] > 1e-6 or a["start_aligned"]["max_cm"] > 1e-6 \
+            or abs(a["path"]["ratio"] - 1) > 1e-9 or a["coverage"]["pct"] != 100.0 or a["jumps"]["count"]:
+        f.append("score, a perfect estimate in its own odom frame: %s" % a)
+    # 1 % long: over 10 m of a 3 m circle the motion is 1 % of the chord, divided by the 10 m
+    # travelled (KITTI's drift): 1 % x 6 sin(10/6) / 10
+    Es = E.copy()
+    Es[:, :3, 3] *= 1.01
+    a = SC.score(tr, Es, tr, Tr)
+    d = a.get("drift_10m_pct")
+    want = 1.0 * 6 * np.sin(10.0 / 6) / 10
+    if not d or abs(d["median"] - want) > 0.01 or abs(a["path"]["ratio"] - 1.01) > 1e-6 or a["ate"]["position_cm"]["rmse"] < 1:
+        f.append("score, 1 %% scale: drift %s, ratio %s, ATE %s" % (d, a["path"]["ratio"], a["ate"]["position_cm"]))
+    # a 2 s gap and a 1 m jump
+    keep = np.ones(len(tr), bool)
+    keep[100:120] = False
+    Ej = E.copy()
+    Ej[300:, 0, 3] += 1.0
+    a = SC.score(tr[keep], Ej[keep], tr, Tr)
+    if a["jumps"]["count"] != 1 or len(a["coverage"]["gaps_over_0.5s"]) != 1 or a["coverage"]["pct"] > 97:
+        f.append("score, a gap and a jump: coverage %s, jumps %s" % (a["coverage"], a["jumps"]))
+    # a whole run: FAST-LIO2's IMU-frame estimate through run.json, the reference by --ref
+    bag = os.path.join(tmp, "bag")
+    run = os.path.join(tmp, "runs", "score_fastlio")
+    MK.make("fast_lio", bag, "mobile_1", run)
+    T_imu_lidar = np.linalg.inv(T_of(*T_SENSOR_IMU)) @ T_of(*T_SENSOR_LIDAR)
+    write_tum(os.path.join(run, "trajectory.tum"), tr, np.einsum("nij,jk->nik", E, np.linalg.inv(T_imu_lidar)))
+    ref = os.path.join(tmp, "ref.tum")
+    write_tum(ref, tr, Tr)
+    a = SC.run_score(run, ref)
+    if "error" in a or a["ate"]["position_cm"]["rmse"] > 1e-3 or a["ate"]["rotation_deg"]["rmse"] > 1e-3:
+        f.append("score, FAST-LIO2's IMU frame not put in the LiDAR's: %s" % a)
+    SC.report(a)
+
+
 def main():
     tmp = tempfile.mkdtemp()
     f = []
     try:
         check_config(tmp, f)
         check_summary(tmp, f)
+        check_score(tmp, f)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if f:

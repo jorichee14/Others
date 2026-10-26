@@ -18,7 +18,9 @@ import json, shlex
 r = json.load(open("/work/run.json"))
 v = {"METHOD": r["method"], "LAUNCH": r["launch"], "PROC": r["proc_regex"],
      "OUT_TOPIC": r["out_topic"], "PLAY": " ".join(r["play_topics"]),
-     "START_S": str(r.get("start_s") or 0), "DURATION_S": str(r.get("duration_s") or 0)}
+     "START_S": str(r.get("start_s") or 0), "DURATION_S": str(r.get("duration_s") or 0),
+     "RELAY_IN": (r.get("relay") or {}).get("in", ""), "RELAY_OUT": (r.get("relay") or {}).get("out", ""),
+     "RELAY_HOLD": str((r.get("relay") or {}).get("hold_s", 0))}
 v["PROBE_ARGS"] = " ".join(["--in %s=%s" % kv for kv in r["in_topics"].items()]
                            + ["--out %s=%s" % (r["out_topic"], r["out_type"]), "--tum " + r["out_topic"]])
 for k, x in v.items():
@@ -26,7 +28,7 @@ for k, x in v.items():
 EOF
 )"
 
-PROBE=""; RES=""; SLAM=""; PLAY_PID=""
+PROBE=""; RES=""; SLAM=""; PLAY_PID=""; RELAY=""
 stop_group() {                         # SIGINT to a process group, then insist after $2 s
     local pid=$1 t=0
     [ -n "$pid" ] || return 0
@@ -40,6 +42,7 @@ finish() {
     trap '' INT TERM
     stop_group "$PLAY_PID" 5
     stop_group "$SLAM" 20
+    stop_group "$RELAY" 5
     stop_group "$PROBE" 10
     stop_group "$RES" 5
     python3 - "$STATUS_METHOD" "$STATUS_PLAY" <<'EOF'
@@ -58,13 +61,18 @@ echo "launch : $LAUNCH"
 echo "play   : $PLAY (rate ${RATE:-1.0}, from ${START_S} s, ${DURATION_S} s)"
 setsid python3 "$M/probe.py" --dir "$W" $PROBE_ARGS >"$L/probe.log" 2>&1 & PROBE=$!
 setsid python3 "$M/resources.py" --dir "$W" --match "$PROC" >"$L/resources.log" 2>&1 & RES=$!
+if [ -n "$RELAY_IN" ]; then
+    echo "relay  : $RELAY_IN -> $RELAY_OUT, ${RELAY_HOLD} s later (the sweep's end)"
+    setsid python3 /opt/odometry/sweep_relay.py --in "$RELAY_IN" --out "$RELAY_OUT" \
+        --hold-s "$RELAY_HOLD" --rate "${RATE:-1.0}" >"$L/relay.log" 2>&1 & RELAY=$!
+fi
 setsid bash -c "$LAUNCH" >"$L/method.log" 2>&1 & SLAM=$!
 sleep "${START_WAIT:-8}"
-for p in PROBE RES SLAM; do
+for p in PROBE RES SLAM $([ -n "$RELAY" ] && echo RELAY); do
     if ! kill -0 "${!p}" 2>/dev/null; then
         echo "$p exited at start:" >&2
         case $p in PROBE) tail -n 20 "$L/probe.log";; RES) tail -n 20 "$L/resources.log";;
-                   SLAM) tail -n 30 "$L/method.log";; esac >&2
+                   SLAM) tail -n 30 "$L/method.log";; RELAY) tail -n 20 "$L/relay.log";; esac >&2
         STATUS_METHOD=exited_at_start; finish; exit 4
     fi
 done
@@ -73,6 +81,7 @@ done
 # the probe has subscribed to every input by then
 ARGS=(--clock --rate "${RATE:-1.0}" --delay 1 --disable-keyboard-controls --topics $PLAY)
 [ "$START_S" != 0 ] && ARGS+=(--start-offset "$START_S")
+[ -n "$RELAY_IN" ] && ARGS+=(--remap "$RELAY_OUT:=$RELAY_IN")
 setsid ros2 bag play /bag "${ARGS[@]}" </dev/null >"$L/play.log" 2>&1 & PLAY_PID=$!
 STATUS_PLAY=playing
 T0=$SECONDS; shown=0

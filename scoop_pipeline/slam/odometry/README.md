@@ -58,11 +58,31 @@ Repeat RTAB-Map at least 3 times: it is not reproducible run to run.
 | `trajectory.tum` | the estimate on the bag's clock, of `run.json`'s `tum_frame` (FAST-LIO2 and OpenVINS: the IMU; the others: the LiDAR or the left camera) |
 | `messages.csv` | every input and output message: when its publisher sent it, when it arrived at the probe, stamp, bytes |
 | `resources.csv`, `host.json` | the method's processes (CPU, 100 = one core; its own memory, RssAnon, and everything resident, RSS), the machine, the GPU (nvidia-smi; tegrastats on a Jetson) every 0.5 s; CPU and GPU model |
+| `accuracy.json` | `score.py`, against stage 04's reference (`traj_<machine>_lidar.tum`), the estimate first put in the LiDAR frame: ATE after a rigid fit (cm, deg), RPE over 1 / 10 / 100 s, drift over 5 / 10 m of travel (% of it), the error at the end with the start aligned, path-length ratio, coverage and gaps, jumps over 3 m/s; also in `summary.json` |
 | `summary.json` | per topic Hz, KB, MB/s; latency per input, from the player sending it to the method sending its answer (median, p95, max), drops, whether it kept up (drops <= 1 % and p95 latency <= the input period); CPU mean / p95 / max, peak memory, GPU, power |
 | `status.json`, `logs/` | whether the method ran through and the play finished; each process's log |
 
 Scoring against the reference is `check.py trajs` with `trajectory.tum`; for
 Swarm-SLAM, `datasets/swarm_slam_lidar.py --odom-tum <machine> trajectory.tum <tum_frame>`.
+
+## Scoring a run again
+
+```bash
+python scoop_pipeline/slam/odometry/score.py <run dir> [--ref <T_map_lidar TUM>]
+```
+
+The reference is the pipeline's own output: an ATE near its uncertainty (about
+1-3 cm) is agreement with it, not accuracy beyond it.
+
+## When a LiDAR method gets its cloud
+
+The pass bags are retimed: a cloud is replayed at its header stamp, the first
+point of its sweep, a sweep before a live driver could publish it. Played as
+recorded, a LiDAR-inertial method waits that sweep for the IMU to cover the
+cloud, and the wait is counted as its latency (RKO-LIO and FAST-LIO2 measured
+~110-120 ms that way, KISS-ICP 9). `sweep_relay.py` takes the player's clouds
+(renamed to `/replay/...`) and hands each on 0.1 s later, at the sweep's end;
+the method and the probe listen to the relay.
 
 ## The transport
 
@@ -78,6 +98,10 @@ driver and the method in one process.
 
 Listed per run in `run.json`; in short:
 
+- T_lidar_imu from the bag's `/tf_static`; where the pass bag does not link a
+  robot's Ouster LiDAR and IMU (mobile_2 on 20261015), from its GLIM config
+  (`configs/glim/<machine>/config_sensors.json`, which `processing/glim_config.py`
+  took from that robot's own bag); `run.json` names the source;
 - every LiDAR method leaves out points within 1.0 m (RKO-LIO's default;
   KISS-ICP's 0.0 keeps the robot and the operator, FAST-LIO2's 4.0 m is most of
   the room), so KISS-ICP and RKO-LIO differ in the IMU alone; KISS-ICP deskews;
