@@ -111,7 +111,7 @@ def main():
             f.append("robot 1 not faded 1 m off before the merge (robot 0 not at all)")
         if sorted(e[3] for e in edges) != ["inter", "intra"]:
             f.append("edges %s" % [e[3] for e in edges])
-        out = os.path.join(tmp, "swarm.mp4")
+        out = os.path.join(tmp, "videos", "swarm.mp4")
         if len(events) != 1 or abs(events[0]["t"] - merged_at) > 1e-9:
             f.append("loop-closure events %s" % [e["t"] for e in events])
         # scans: robot b's placed by the loop closure lands on the points as robot a

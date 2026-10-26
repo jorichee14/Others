@@ -145,6 +145,7 @@ def render(out, tracks, refs, edges, title, speed=10.0, fps=30, size=(1280, 720)
             insets.append(ia)
     et = np.array([e[0] for e in edges]) if edges else np.zeros(0)
 
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     vw = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
     if not vw.isOpened():
         raise SystemExit("cannot write %s (OpenCV's mp4v writer)" % out)
