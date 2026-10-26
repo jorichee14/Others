@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gym_scenarios.py as one column: real data, the gym's scenarios, train,
+"""gym_scenarios.py as one column: real data, the digital twin's scenarios, train,
 test on real, top to bottom.
 
     python3 slides_media/gym_scenarios_column.py slides_media/gym_scenarios_column.png
@@ -71,11 +71,11 @@ for i, (t, s) in enumerate(items):
     ax.text(ix + 64, iy + 30, t, ha="left", va="center", fontsize=15, weight="bold", color=INK)
     ax.text(ix + 64, iy + 60, s, ha="left", va="center", fontsize=12.5, color=SOFT)
 
-# ------------------------------------------------------------ 2 the gym
+# ------------------------------------------------------------ 2 the digital twin
 y2 = y1 + 300 + 64
 GH = 690
 rbox(X, y2, CW, GH, "sim")
-heading(X + 26, y2 + 40, "2  Gym · Isaac Sim", "change what you want, keep the rest real")
+heading(X + 26, y2 + 40, "2  Digital Twin · Isaac Sim", "change what you want, keep the rest real")
 # the knobs: what a scenario controls
 knobs = [("Comms", "latency · loss · bursts · bandwidth", False),
          ("Sensor dropouts", "LiDAR or camera off · lost frames", True),
@@ -115,7 +115,7 @@ ax.text(X + 134, y2 + GH - 30, "planned", ha="left", va="center", fontsize=12, c
 y3 = y2 + GH + 64
 rbox(X, y3, CW, 150, "data")
 ax.text(X + 28, y3 + 42, "3  Train", ha="left", va="center", fontsize=20, weight="bold", color=INK)
-ax.text(X + 28, y3 + 88, "collaborative perception models on gym scenarios built from real data",
+ax.text(X + 28, y3 + 88, "collaborative perception models on digital-twin scenarios built from real data",
         ha="left", va="center", fontsize=14, color=INK)
 ax.text(X + 28, y3 + 120, "next step", ha="left", va="center", fontsize=12, style="italic", color=SOFT)
 
