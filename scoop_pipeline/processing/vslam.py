@@ -337,6 +337,30 @@ def main():
         print("  ! no odometry for %.1f s at %.1f s (tracking lost?)" % (d, at))
     for at, d in s["jumps_over_0.3m"][:10]:
         print("  ! jump of %.2f m at %.1f s" % (d, at))
+    score_monitor(rec, bag, c)
+
+
+def score_monitor(rec, bag, c, ref=None):
+    """A run with VSLAM_MONITOR=1: complete its monitor's run.json (the bag, the
+    robot, the pose frame) and score it as slam/odometry/score.py scores the
+    other methods, against stage 04's LiDAR track."""
+    mon = os.path.join(rec, "monitor")
+    rj_path = os.path.join(mon, "run.json")
+    if not os.path.isfile(rj_path):
+        print("no monitor (run with VSLAM_MONITOR=1 and --redo to measure and score cuVSLAM)")
+        return None
+    rj = json.load(open(rj_path))
+    rj.update({"bag": os.path.abspath(bag), "machine": c["machine"], "tum_frame": c["base_frame"],
+               "play_topics": list(c["images"]) + list(c["camera_infos"]) + [c["imu"]]})
+    json.dump(rj, open(rj_path, "w"), indent=1)
+    sys.path.insert(0, os.path.join(ROOT, "slam", "odometry"))
+    import score as SC
+    try:
+        out = SC.run_score(mon, ref)
+    except (SC.MK.Refused, SC.MK.mc.ConvertError) as e:
+        out = {"error": str(e)}
+    print("cuVSLAM on %s\n%s" % (c["machine"], SC.report(out)))
+    return out
 
 
 if __name__ == "__main__":
