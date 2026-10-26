@@ -54,9 +54,22 @@ known start).
 
 --start / --duration (s, from the first scan of any robot): a slice of the
 pass, for a small test.
+
+Boards (--boards [SESSION_ANCHOR], or --boards-only for an export already
+written): board_start.json, where each robot's odom frame lies in map by the
+anchor board it started at (03_init_from_boards' session_anchor.json, default
+data/processed/<date>/<pass>/frames/; the camera --anchor-cam MACHINE NAME,
+default mobile_1 zed, mobile_2 realsense, moved to the LiDAR through
+/tf_static, at its dwell_t_end, where the export's odometry is taken).
+slam/run_swarm_slam.sh with BOARDS=1 turns it into one inter-robot measurement
+between the robots' first keyframes (slam/board_rendezvous.py), so the robots
+share a frame from the start instead of from their first loop closure. The
+odometry in the bag is not changed. The report gives each board start against
+the ground truth: the error that measurement carries.
 """
 import argparse
 import heapq
+import json
 import logging
 import os
 import sys
@@ -76,6 +89,7 @@ log = logging.getLogger("swarm_slam_lidar")
 POINTS = {"mobile_1": "/mobile_1/ouster/points",
           "mobile_2": "/mobile_2/ouster/points"}
 IMU = {"mobile_1": "/mobile_1/ouster/imu", "mobile_2": "/mobile_2/ouster/imu"}
+ANCHOR_CAM = {"mobile_1": "zed", "mobile_2": "realsense"}     # 04_reference's anchor_cam of each
 XYZ = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4")])
 # cslam_experiments/config/ouster_lidar.yaml, but: evaluation logs on, with the pose
 # timestamps (cslam_eval); visualization off; max_waiting_time_sec 60 (as
@@ -302,6 +316,58 @@ def convert(bag, out=None, *, agents=("mobile_1", "mobile_2"), odom="gt", odom_t
     return {"out": out, "frames": [r.n for r in robots], "robots": robots}
 
 
+def anchor_default(bag):
+    proc, _ = pass_paths(bag)
+    return os.path.join(proc, "frames", "session_anchor.json") if proc else None
+
+
+def board_start(bag, out, agents=("mobile_1", "mobile_2"), anchor=None, anchor_cams=None):
+    """Write <out>/board_start.json from an export's bag: per robot T_map_odom,
+    its odom frame in map where 03's session anchor put its camera (moved to
+    the LiDAR through the pass bag's /tf_static) at dwell_t_end, by the
+    export's own /r<i>/odom there. Returns (path, report lines)."""
+    paths, exp = mc._paths(bag), mc._paths(os.path.join(out, "bag"))
+    anchor = anchor or anchor_default(bag)
+    if not anchor or not os.path.exists(anchor):
+        raise mc.ConvertError(f"no session anchor {anchor} (03_init_from_boards): give --boards PATH")
+    cams = json.load(open(anchor)).get("cameras", {})
+    cams_by = dict(ANCHOR_CAM, **(anchor_cams or {}))
+    edges = mc.build_tf_static(paths)
+    robots, lines = [], ["boards              : %s" % anchor]
+    for i, m in enumerate(agents):
+        lidar = mc.first_msg(paths, POINTS[m]).header.frame_id.lstrip("/")
+        T_map_lidar, t_a, cam = SS.anchor_of(cams, m, lidar, edges, cams_by.get(m))
+        odom = mc.PoseInterp.from_topic(exp, "/r%d/odom" % i)
+        t = int(np.clip(t_a, odom.ts[0], odom.ts[-1]))
+        O = odom.at(t)
+        if O is None:
+            t = int(odom.ts[np.argmin(np.abs(odom.ts - t))])
+            O = odom.at(t)
+        T_mo = T_map_lidar @ np.linalg.inv(O)
+        rec = {"robot_id": i, "machine": m, "camera": cam, "lidar_frame": lidar,
+               "t_anchor": t_a * 1e-9, "t_odom": t * 1e-9, "T_map_odom": T_mo.tolist()}
+        # against the ground truth, at the export's first scan
+        gt = os.path.join(out, "gt_r%d.tum" % i)
+        if os.path.exists(gt):
+            G = mc.PoseInterp.from_tum(gt)
+            both = [int(t0) for t0 in odom.ts[:50] if G.at(int(t0)) is not None]
+            if both:
+                D = np.linalg.inv(G.at(both[0])) @ T_mo @ odom.at(both[0])
+                rec["vs_ground_truth"] = {"t_m": float(np.linalg.norm(D[:3, 3])),
+                                          "yaw_deg": float(np.degrees(np.arctan2(D[1, 0], D[0, 0]))),
+                                          "r_deg": float(np.degrees(np.arccos(np.clip((np.trace(D[:3, :3]) - 1) / 2,
+                                                                                      -1, 1))))}
+        robots.append(rec)
+        v = rec.get("vs_ground_truth")
+        lines.append("r%d %-16s: board camera %s at %.3f%s; against the ground truth %s"
+                     % (i, m, cam, t_a * 1e-9,
+                        "" if t == t_a else " (odometry from %.3f, the nearest)" % (t * 1e-9),
+                        "%.3f m, %.2f deg (yaw %+.2f)" % (v["t_m"], v["r_deg"], v["yaw_deg"]) if v else "-"))
+    path = os.path.join(out, "board_start.json")
+    json.dump({"session_anchor": anchor, "robots": robots}, open(path, "w"), indent=1)
+    return path, lines
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -325,6 +391,12 @@ def main():
                     help="cslam's frontend.voxel_size (m; ouster_lidar.yaml's 0.5)")
     ap.add_argument("--start-at-gt", action="store_true",
                     help="each robot's odometry starts in map at its ground truth")
+    ap.add_argument("--boards", nargs="?", const="auto", default=None, metavar="SESSION_ANCHOR",
+                    help="also write board_start.json (default anchor: the pass's frames/session_anchor.json)")
+    ap.add_argument("--boards-only", action="store_true",
+                    help="only write board_start.json, for the export already in <out>")
+    ap.add_argument("--anchor-cam", nargs=2, action="append", default=[], metavar=("MACHINE", "NAME"),
+                    help="the session-anchor camera of a robot (default %s)" % ANCHOR_CAM)
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     odom_tums = {}
@@ -332,10 +404,20 @@ def main():
         if len(v) not in (2, 3) or v[0] not in POINTS:
             ap.error("--odom-tum MACHINE TUM [FRAME], MACHINE one of %s: got %s" % (sorted(POINTS), v))
         odom_tums[v[0]] = (v[1], v[2] if len(v) == 3 else None)
+    anchor = None if a.boards in (None, "auto") else a.boards
     try:
-        convert(a.bag, a.out, agents=a.agents, odom=a.odom, odom_tums=odom_tums,
-                gt_tums=dict(a.gt_tum), ref_dir=a.ref_dir, start=a.start, duration=a.duration,
-                rate=a.rate, min_range=a.min_range, voxel=a.voxel, start_at_gt=a.start_at_gt)
+        out = a.out
+        if not a.boards_only:
+            out = convert(a.bag, a.out, agents=a.agents, odom=a.odom, odom_tums=odom_tums,
+                          gt_tums=dict(a.gt_tum), ref_dir=a.ref_dir, start=a.start, duration=a.duration,
+                          rate=a.rate, min_range=a.min_range, voxel=a.voxel,
+                          start_at_gt=a.start_at_gt)["out"]
+        elif not out:
+            ap.error("--boards-only needs <out>, the export")
+        if a.boards is not None or a.boards_only:
+            path, lines = board_start(a.bag, out, a.agents, anchor, dict(a.anchor_cam))
+            open(os.path.join(out, "report.txt"), "a").write("\n".join(lines) + "\n")
+            log.info("\n".join(lines) + "\nwrote " + path)
     except mc.ConvertError as e:
         sys.exit(str(e))
 

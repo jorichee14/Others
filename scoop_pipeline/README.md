@@ -137,6 +137,11 @@ datasets/            bags -> datasets for other tools
                      and any method's odometry (--odom-tum MACHINE TUM [FRAME]: KISS-ICP,
                      FAST-LIO2, ...; or the ground truth), stage 04's track as ground truth,
                      --start/--duration for a slice; slam/run_swarm_slam.sh runs it too
+                     --boards (--boards-only for an export already written): board_start.json,
+                     each robot's odom frame in map by its start board (03's session anchor),
+                     and its error against the ground truth in report.txt; run_swarm_slam.sh
+                     with BOARDS=1 gives cslam that as one inter-robot measurement between the
+                     first keyframes (slam/board_rendezvous.py), runs/<channel>_boards
   hydra.py           a swarm_slam.py export as Hydra input: one bag per robot (colour,
                      depth, camera_info, /tf odom -> base -> camera), a hydra_ros config
                      each (scene graph + mesh streamed once a second) and a launch file

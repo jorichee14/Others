@@ -20,6 +20,11 @@
 #       -v ~/workspaces:$HOME/workspaces swarmslam
 #   docker exec -it swarmslam bash -c "cd ~/workspaces/Others && scoop_pipeline/slam/run_swarm_slam.sh <export> ideal 1.0"
 #
+# BOARDS=1 (environment): the anchor boards as one more inter-robot measurement,
+#   between the robots' first keyframes (slam/board_rendezvous.py, one per robot in
+#   its domain; the export's board_start.json from swarm_slam_lidar.py --boards),
+#   in runs/<channel>_boards.
+#
 # Writes <export dir>/runs/<channel>/: results/ (cslam's logs), keyframes_r<i>/
 # (each robot's /r<i>/cslam/keyframe_odom), relay.csv
 # (every message: sent, size, lost, arrival), cslam_r<i>.log, relay.log.
@@ -41,7 +46,10 @@ if [ "$CFG" = scoop_rgbd.yaml ] && [ ! -f "$OUT/resnet18_64.pth" ]; then
   python3 -c "import torch; m = torch.hub.load('gmberton/cosplace', 'get_trained_model', backbone='ResNet18', fc_output_dim=64); torch.save(m.state_dict(), '$OUT/resnet18_64.pth')"
 fi
 # REPEAT=<n> (environment): a repeat of the same channel, in runs/<channel>_r<n>
-TAG=$(echo "$CHANNEL" | sed -E 's#:[^,]*/([^/,]+)#:\1#; s#[:,=/]#_#g')${REPEAT:+_r$REPEAT}
+if [ -n "$BOARDS" ] && [ ! -f "$OUT/board_start.json" ]; then
+  echo "BOARDS set but no $OUT/board_start.json: run datasets/swarm_slam_lidar.py <bag> $OUT --boards-only"; exit 1
+fi
+TAG=$(echo "$CHANNEL" | sed -E 's#:[^,]*/([^/,]+)#:\1#; s#[:,=/]#_#g')${BOARDS:+_boards}${REPEAT:+_r$REPEAT}
 RUN="$OUT/runs/$TAG"
 [ -e "$RUN" ] && { echo "$RUN exists: remove it to run this channel again"; exit 1; }
 # cslam nodes left in these domains (e.g. from an earlier run in another container
@@ -78,6 +86,14 @@ for ((i = 0; i < N; i++)); do
       > "$RUN/record_r$i.log" 2>&1 &
   REC+=($!)
 done
+if [ -n "$BOARDS" ]; then
+  for ((i = 0; i < N; i++)); do
+    D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
+    ROS_DOMAIN_ID=$D setsid env --default-signal=INT python3 "$HERE/board_rendezvous.py" --robot-id $i \
+        --board-start "$OUT/board_start.json" > "$RUN/boards_r$i.log" 2>&1 &
+    PIDS+=($!)
+  done
+fi
 if [ "$CHANNEL" != direct ]; then
   DOMAINS=$(for ((i = 0; i < N; i++)); do echo -n "$((BASE + i)) "; done)
   setsid env --default-signal=INT python3 "$HERE/channel_relay.py" --channel "$CHANNEL" --robots "${ROBOTS[@]}" --domains $DOMAINS \

@@ -16,6 +16,12 @@ per scan; the cslam config. mobile_2's odometry in its Ouster IMU frame, which
 /tf_static does not link, must go to the LiDAR through its GLIM config's
 T_lidar_imu. A TUM whose frame nothing links must be refused.
 
+Boards: a session anchor (03's) with each robot's IMU frame as its camera,
+mobile_2's 2 deg off: board_start.json must put mobile_1's odom frame where
+its first scans' ground truth is, and report mobile_2 2 deg off. Then
+slam/board_rendezvous.py's measurement between the first keyframes, through
+its quaternion conversion, must be inv(P_0) P_1.
+
     python scoop_pipeline/tests/test_swarm_slam_lidar.py
 """
 import os
@@ -201,6 +207,39 @@ def check(out, msgs, f, *, start, duration, start_at_gt):
             f.append("config: no %r" % want)
 
 
+def boards(tmp, bag, out, f):
+    import json
+    sys.path.insert(0, os.path.join(ROOT, "slam"))
+    import board_rendezvous as BR
+    fr = os.path.join(tmp, "data", "processed", "20261015", "coop", "site_1", "frames")
+    os.makedirs(fr, exist_ok=True)
+    off = np.eye(4)
+    off[:3, :3] = Rotation.from_euler("z", 2.0, degrees=True).as_matrix()
+    cams = {}
+    for m, nm, t_a, E in (("mobile_1", "zed", T0 + 6 * S, np.eye(4)), ("mobile_2", "realsense", T0 + 8 * S, off)):
+        q = mc.T_to_xyzq(lidar_pose(m, t_a) @ E @ np.linalg.inv(T_IL))
+        cams[nm] = {"cam_frame": IMU[m], "dwell_t_end": t_a / S,
+                    "map_to_cam": {"xyz": list(q[:3]), "qxyzw": list(q[3:])}}
+    json.dump({"cameras": cams}, open(os.path.join(fr, "session_anchor.json"), "w"))
+    path, lines = SL.board_start(bag, out)
+    rec = {r["robot_id"]: r for r in json.load(open(path))["robots"]}
+    v0, v1 = rec[0]["vs_ground_truth"], rec[1]["vs_ground_truth"]
+    if v0["t_m"] > 1e-3 or v0["r_deg"] > 0.01:
+        f.append("boards: mobile_1 off its ground truth by %.4f m %.3f deg" % (v0["t_m"], v0["r_deg"]))
+    if abs(v1["r_deg"] - 2.0) > 0.01 or abs(abs(v1["yaw_deg"]) - 2.0) > 0.01:
+        f.append("boards: mobile_2 %.3f deg (yaw %.3f) off, want 2" % (v1["r_deg"], v1["yaw_deg"]))
+    # the rendezvous measurement, through its quaternions
+    P0, P1 = lidar_pose("mobile_1", T0), lidar_pose("mobile_2", T0 + 3 * S)
+    M = BR.measurement(P0, P1)
+    M2 = BR.T_of(M[:3, 3], BR.quat_of(M[:3, :3]))
+    if np.abs(P0 @ M2 - P1).max() > 1e-9:
+        f.append("board_rendezvous: inv(P_0) P_1 does not take P_0 to P_1")
+    for ang in (0.0, 179.9, -120.0):
+        R = Rotation.from_euler("xyz", [ang, 30, ang / 2], degrees=True).as_matrix()
+        if np.abs(BR.T_of([0, 0, 0], BR.quat_of(R))[:3, :3] - R).max() > 1e-9:
+            f.append("board_rendezvous: quaternion round trip at %g deg" % ang)
+
+
 def main():
     tmp = tempfile.mkdtemp()
     f = []
@@ -228,6 +267,7 @@ def main():
         check(out, read_out(SL.convert(bag2, out, odom_tums=dict(tums, mobile_2=(odom2, IMU["mobile_2"])),
                                        start=4.0, duration=10.0, start_at_gt=True)["out"]),
               f, start=4.0, duration=10.0, start_at_gt=True)
+        boards(tmp, bag, r["out"], f)
         try:
             SL.convert(bag, os.path.join(tmp, "bad"), odom_tums={"mobile_1": (odom, "nowhere")})
             f.append("an odometry frame not in /tf_static was accepted")
