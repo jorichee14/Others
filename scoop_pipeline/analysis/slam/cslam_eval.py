@@ -25,7 +25,10 @@ Reported, from the last global graph (the one with the most keyframes):
   edges           every edge of the graph by kind (odometry, intra-robot loop,
                   inter-robot) against the ground truth, read as written and
                   inverted: odometry edges must agree to a few cm, so a large
-                  error there is a convention or frame error, not a bad match
+                  error there is a convention or frame error, not a bad match;
+                  and against the optimized poses: an edge whose measurement is
+                  right but whose residual is large is one the optimizer gave up
+                  (a broken odometry chain)
   loop closures   every inter-robot edge against the ground-truth relative
                   pose of its two keyframes: translation / rotation error,
                   correct within --lc-ok (m, deg)
@@ -354,6 +357,27 @@ def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), 
                     D = np.linalg.inv(M) @ G
                     kinds.setdefault(kind, {}).setdefault(how, []).append(
                         (float(np.linalg.norm(D[:3, 3])), rot_deg(D[:3, :3])))
+            # and against the optimized poses: an edge the optimizer gave up (a broken
+            # odometry chain) has a large residual although its measurement is right
+            res = {}
+            for a, b, Tm in E:
+                if a not in V or b not in V:
+                    continue
+                (ra, ia), (rb, ib) = key_robot(a), key_robot(b)
+                kind = "inter_robot" if ra != rb else ("odometry" if abs(int(ib) - int(ia)) == 1
+                                                       else "intra_robot_loop")
+                D = np.linalg.inv(Tm) @ np.linalg.inv(V[a]) @ V[b]
+                res.setdefault(kind, []).append((float(np.linalg.norm(D[:3, 3])), rot_deg(D[:3, :3]),
+                                                 [int(ra), int(ia)], [int(rb), int(ib)],
+                                                 (st[a] - t_start) if a in st else None))
+            rep["edges_vs_optimized"] = {
+                k: {"edges": len(v), "t_median_m": float(np.median([e[0] for e in v])),
+                    "t_max_m": float(max(e[0] for e in v)),
+                    "over_0.5m": sum(1 for e in v if e[0] > 0.5),
+                    "worst": [{"from": e[2], "to": e[3], "t_m": round(e[0], 3), "r_deg": round(e[1], 1),
+                               "at_s": round(e[4], 1) if e[4] is not None else None}
+                              for e in sorted(v, key=lambda e: -e[0])[:3]]}
+                for k, v in res.items()}
             rep["edges_vs_ground_truth"] = {
                 k: dict({h: {"t_median_m": float(np.median([e[0] for e in v])),
                              "r_median_deg": float(np.median([e[1] for e in v]))}
@@ -473,6 +497,11 @@ def main():
               "(medians)" % (k, d["edges"], fmt(d["as_written"]["t_median_m"]),
                              fmt(d["as_written"]["r_median_deg"], 1), fmt(d["inverted"]["t_median_m"]),
                              fmt(d["inverted"]["r_median_deg"], 1)))
+    for k, d in sorted((rep.get("edges_vs_optimized") or {}).items()):
+        print("  %-17s %4d edges against the optimized poses: median %s m, max %s m, %d over 0.5 m; worst %s"
+              % (k, d["edges"], fmt(d["t_median_m"]), fmt(d["t_max_m"]), d["over_0.5m"],
+                 ", ".join("(%d,%d)-(%d,%d) %.2f m %.0f deg at %s s" % (tuple(w["from"]) + tuple(w["to"])
+                           + (w["t_m"], w["r_deg"], w["at_s"])) for w in d["worst"])))
     rc = rep.get("rejected_candidates") or {}
     if rc.get("total"):
         print("rejected candidates: %d, %d with ground truth: %d at the same place (<= 3 m, 30 deg); "
