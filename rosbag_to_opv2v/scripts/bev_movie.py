@@ -17,7 +17,7 @@ The access points, picked in each site's own anchored cloud (and note the
 leading minus on site 2: pass it as --ap=-28.249,-7.207 or the shell reads it
 as a flag):
 
-    site 1   --ap 4.392,6.831
+    site 1   --ap 4.506,7.063      # where chair_3 stood, before it was moved
     site 2   --ap=-28.249,-7.207
 
 A camera slower than the frame grid (the ZED at 1.3 Hz on a 10 Hz grid) has no
