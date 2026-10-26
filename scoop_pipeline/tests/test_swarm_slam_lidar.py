@@ -12,8 +12,9 @@ messages, at most --rate, only in the --start/--duration slice; clouds of x y z
 float32 in the LiDAR frame without the no-returns and the points within
 --min-range; odometry that is the LiDAR's pose in the robot's odom frame at
 the scan stamp (with --start-at-gt: the ground truth itself); the ground truth
-per scan; the cslam config. A TUM whose frame /tf_static does not link must be
-refused.
+per scan; the cslam config. mobile_2's odometry in its Ouster IMU frame, which
+/tf_static does not link, must go to the LiDAR through its GLIM config's
+T_lidar_imu. A TUM whose frame nothing links must be refused.
 
     python scoop_pipeline/tests/test_swarm_slam_lidar.py
 """
@@ -83,8 +84,10 @@ def cloud(m, t, P_map):
     return rosmsg.pointcloud2(a, t, LIDAR[m])
 
 
-def write_pass(root):
-    """The bag and stage 04's tracks in data/{work,processed}/20261015/coop/site_1/."""
+def write_pass(root, linked=("mobile_1", "mobile_2")):
+    """The bag and stage 04's tracks in data/{work,processed}/20261015/coop/site_1/.
+    `linked`: the robots whose IMU /tf_static links to their LiDAR; the others
+    have an IMU topic and no link (mobile_2's Ouster in the 20261015 bags)."""
     bag = os.path.join(root, "work", "20261015", "coop", "site_1", "merged_final")
     ref = os.path.join(root, "processed", "20261015", "coop", "site_1", "odometry",
                        "reference_coop_site_1_20261015")
@@ -92,7 +95,10 @@ def write_pass(root):
     P_map = room()
     q = mc.T_to_xyzq(T_IL)
     recs = [(T0, "/tf_static", rosmsg.tf_message(
-        [(IMU[m], LIDAR[m], q[:3], q[3:]) for m in LIDAR], T0))]
+        [(IMU[m], LIDAR[m], q[:3], q[3:]) for m in LIDAR if m in linked], T0))]
+    for m in LIDAR:
+        if m not in linked:
+            recs.append((T0, SL.IMU[m], rosmsg.imu(T0, IMU[m], [0, 0, 9.81], [0, 0, 0])))
     gt = {m: [] for m in LIDAR}
     for k in range(int(DUR * 10)):
         for j, m in enumerate(LIDAR):
@@ -109,6 +115,14 @@ def write_pass(root):
         w.write(topic, msg, t)
     w.close()
     return bag
+
+
+def glim_T_lidar_imu(machine):
+    """T_lidar_imu from configs/glim/<machine>/config_sensors.json: [x y z qx qy qz qw]."""
+    import re
+    v = [float(x) for x in re.search(r'"T_lidar_imu"\s*:\s*\[([^\]]*)\]',
+                                     open(SL.MK.GLIM_CONFIG % machine).read()).group(1).split(",")]
+    return mc.xyzq_to_T(v)
 
 
 def write_odom(path):
@@ -203,6 +217,16 @@ def main():
         out = os.path.join(tmp, "at_gt")
         check(out, read_out(SL.convert(bag, out, odom_tums=tums, start=4.0, duration=10.0,
                                        start_at_gt=True)["out"]),
+              f, start=4.0, duration=10.0, start_at_gt=True)
+        # mobile_2's Ouster IMU, which /tf_static does not link: its GLIM config's T_lidar_imu
+        bag2 = write_pass(os.path.join(tmp, "data2"), linked=("mobile_1",))
+        T_li = glim_T_lidar_imu("mobile_2")
+        odom2 = os.path.join(tmp, "traj_fastlio_m2.tum")
+        mc.write_tum(odom2, [mc.tum_line(T0 + k * S // 50, lidar_pose("mobile_2", T0 + k * S // 50) @ T_li)
+                             for k in range(int(DUR * 50) + 1)])
+        out = os.path.join(tmp, "m2_glim")
+        check(out, read_out(SL.convert(bag2, out, odom_tums=dict(tums, mobile_2=(odom2, IMU["mobile_2"])),
+                                       start=4.0, duration=10.0, start_at_gt=True)["out"]),
               f, start=4.0, duration=10.0, start_at_gt=True)
         try:
             SL.convert(bag, os.path.join(tmp, "bad"), odom_tums={"mobile_1": (odom, "nowhere")})

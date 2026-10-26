@@ -41,7 +41,8 @@ within pointcloud_odom_approx_time_sync_s):
                              interpolated to every scan stamp. FRAME defaults to
                              the LiDAR's (KISS-ICP); another frame (FAST-LIO2's
                              IMU, os_imu_mobile1) is moved to the LiDAR through
-                             /tf_static. It must be odometry, not a loop-closed
+                             /tf_static, the Ouster's IMU through the robot's
+                             GLIM config where /tf_static does not link it. It must be odometry, not a loop-closed
                              trajectory: a correction jump would be fed to
                              cslam's graph as motion
 A robot without --odom-tum takes --odom (default gt).
@@ -67,11 +68,14 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 import mcap_convert as mc                                           # noqa: E402
 import swarm_slam as SS                                             # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "slam", "odometry"))
+import make_config as MK                                            # noqa: E402
 
 log = logging.getLogger("swarm_slam_lidar")
 
 POINTS = {"mobile_1": "/mobile_1/ouster/points",
           "mobile_2": "/mobile_2/ouster/points"}
+IMU = {"mobile_1": "/mobile_1/ouster/imu", "mobile_2": "/mobile_2/ouster/imu"}
 XYZ = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4")])
 # cslam_experiments/config/ouster_lidar.yaml, but: evaluation logs on, with the pose
 # timestamps (cslam_eval); visualization off; max_waiting_time_sec 60 (as
@@ -178,6 +182,14 @@ class Robot:
         else:
             frame = (odom_frame or self.lidar).lstrip("/")
             self.T_fl = np.eye(4) if frame == self.lidar else mc.lookup_static(edges, frame, self.lidar)
+            if self.T_fl is None:
+                # the Ouster's IMU where the pass bag does not link it (mobile_2 on 20261015):
+                # the robot's GLIM config, as the odometry runs take it (slam/odometry/make_config.py)
+                imu = mc.first_msg(paths, IMU[machine])
+                if imu is not None and imu.header.frame_id.lstrip("/") == frame:
+                    T_li, src = MK.lidar_imu(edges, machine, self.lidar, frame)
+                    self.T_fl = np.linalg.inv(T_li)
+                    frame += " via " + src
             if self.T_fl is None:
                 raise mc.ConvertError(f"{machine}: the odometry's frame {frame} and the LiDAR frame "
                                       f"{self.lidar} are not connected in /tf_static")
