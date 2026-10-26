@@ -6,7 +6,10 @@ machine's, and the GPU's, sampled from /proc (no psutil) every --period s.
 
 Writes into OUT:
   resources.csv  wall_ns, n_procs, threads, method_cpu_pct (100 = one core),
-                 method_rss_mb, system_cpu_pct (100 = every core), mem_used_mb,
+                 method_rss_mb (everything resident: its own memory, shared
+                 libraries, the shared-memory transport's segments),
+                 method_anon_mb (its own memory alone: RssAnon),
+                 system_cpu_pct (100 = every core), mem_used_mb,
                  gpu_util_pct, gpu_mem_mb, power_mw (empty where not measured)
   host.json      CPU model and cores, memory, GPU name, Jetson model
 
@@ -42,7 +45,7 @@ def read(path):
 
 
 def processes(match, exclude):
-    """{pid: (cpu ticks, rss bytes, threads)} of the matching processes."""
+    """{pid: (cpu ticks, rss bytes, threads, anon bytes)} of the matching processes."""
     out = {}
     me = os.getpid()
     for d in os.listdir("/proc"):
@@ -56,11 +59,17 @@ def processes(match, exclude):
             continue
         stat = read("/proc/%s/stat" % d)
         statm = read("/proc/%s/statm" % d)
+        status = read("/proc/%s/status" % d)
         if stat is None or statm is None:
             continue
         f = stat.decode(errors="replace").rsplit(")", 1)[1].split()
+        anon = 0
+        for line in (status or b"").decode(errors="replace").splitlines():
+            if line.startswith("RssAnon:"):
+                anon = int(line.split()[1]) * 1024
+                break
         # after "pid (comm)": state is f[0]; utime, stime are fields 14, 15 -> f[11], f[12]
-        out[int(d)] = (int(f[11]) + int(f[12]), int(statm.split()[1]) * PAGE, int(f[17]))
+        out[int(d)] = (int(f[11]) + int(f[12]), int(statm.split()[1]) * PAGE, int(f[17]), anon)
     return out
 
 
@@ -163,8 +172,8 @@ def main():
     gpu = Gpu(int(a.period * 1000))
     json.dump(host_info(gpu), open(os.path.join(a.dir, "host.json"), "w"), indent=1)
     fh = open(os.path.join(a.dir, "resources.csv"), "w")
-    fh.write("wall_ns,n_procs,threads,method_cpu_pct,method_rss_mb,system_cpu_pct,mem_used_mb,"
-             "gpu_util_pct,gpu_mem_mb,power_mw\n")
+    fh.write("wall_ns,n_procs,threads,method_cpu_pct,method_rss_mb,method_anon_mb,system_cpu_pct,"
+             "mem_used_mb,gpu_util_pct,gpu_mem_mb,power_mw\n")
     stop = []
     signal.signal(signal.SIGINT, lambda *_: stop.append(1))
     signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
@@ -173,15 +182,16 @@ def main():
         time.sleep(a.period)
         now, t1 = time.time_ns(), time.monotonic()
         procs = processes(match, exclude)
-        dticks = sum(c - seen[p] for p, (c, _, _) in procs.items() if p in seen)
-        seen = {p: c for p, (c, _, _) in procs.items()}
+        dticks = sum(v[0] - seen[p] for p, v in procs.items() if p in seen)
+        seen = {p: v[0] for p, v in procs.items()}
         busy1, tot1 = system_cpu()
         m = meminfo()
         dt = t1 - t0
-        fh.write("%d,%d,%d,%s,%s,%s,%s,%s,%s,%s\n" % (
-            now, len(procs), sum(t for _, _, t in procs.values()),
+        fh.write("%d,%d,%d,%s,%s,%s,%s,%s,%s,%s,%s\n" % (
+            now, len(procs), sum(v[2] for v in procs.values()),
             fmt(100.0 * dticks / TICK / dt if dt > 0 else None),
-            fmt(sum(r for _, r, _ in procs.values()) / 2**20),
+            fmt(sum(v[1] for v in procs.values()) / 2**20),
+            fmt(sum(v[3] for v in procs.values()) / 2**20),
             fmt(100.0 * (busy1 - busy0) / (tot1 - tot0) if tot1 > tot0 else None),
             fmt((m["MemTotal"] - m.get("MemAvailable", m["MemFree"])) / 2**20, "%.0f"),
             fmt(gpu.util), fmt(gpu.mem, "%.0f"), fmt(gpu.power, "%.0f")))

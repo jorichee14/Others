@@ -11,9 +11,12 @@ override it. Writes RUN_DIR/summary.json and prints it as a few lines.
 
   topics      per topic: messages, rate (Hz), mean size (KB), MB/s, over the
               span it was seen in
-  latency     per output, from the wall time its input arrived to the wall time
-              it did. Its input is the newest key input that had arrived by
-              then with a stamp at or before the output's stamp + tol (a
+  latency     per output, from when its input was sent (the player's publish)
+              to when the output was sent (the method's publish): the
+              middleware's source timestamps (probe.py's src_ns), or, in a log
+              without them, the wall times both arrived at the probe. Its input
+              is the newest key input sent by then with a stamp at or before
+              the output's stamp + tol (a
               method may stamp its output later than the scan: FAST-LIO2 at the
               scan's last point, within the scan period, so tol stays 0; one
               that calibrates a camera-IMU time offset online, OpenVINS, needs
@@ -22,7 +25,8 @@ override it. Writes RUN_DIR/summary.json and prints it as a few lines.
   drops       key inputs no output answered
   real time   kept up: drops <= 1 % and p95 latency <= the key input's period
   resources   over the play (first key input to last output): the method's CPU
-              (100 = one core) mean / p95 / max, its peak RSS, the machine's
+              (100 = one core) mean / p95 / max, its peak memory (its own,
+              RssAnon, and everything resident, RSS), the machine's
               CPU and memory, GPU utilisation / memory / power where measured
 """
 import argparse
@@ -49,12 +53,16 @@ def stats(v, nd=1):
             "p95": round(pct(v, 95), nd), "max": round(max(v), nd)}
 
 
-def load_messages(path):
+def load_messages(path, sent=True):
+    """{topic: {role, m: [(time, stamp, bytes)]}}, time the publisher's send
+    time (src_ns) where logged and `sent`, else the arrival at the probe."""
     by = {}
     with open(path) as f:
         for r in csv.DictReader(f):
+            src = int(r.get("src_ns") or -1)
+            t = src if sent and src > 0 else int(r["wall_ns"])
             by.setdefault(r["topic"], {"role": r["role"], "m": []})["m"].append(
-                (int(r["wall_ns"]), int(r["stamp_ns"]), int(r["bytes"])))
+                (t, int(r["stamp_ns"]), int(r["bytes"])))
     for t in by.values():
         t["m"].sort()
     return by
@@ -147,6 +155,7 @@ def resources(path, t0, t1):
             "method_processes_max": int(max(g("n_procs"))) if g("n_procs") else 0,
             "method_cpu_pct": stats(g("method_cpu_pct")),
             "method_rss_mb_peak": round(max(g("method_rss_mb")), 1) if g("method_rss_mb") else None,
+            "method_anon_mb_peak": round(max(g("method_anon_mb")), 1) if g("method_anon_mb") else None,
             "system_cpu_pct": stats(g("system_cpu_pct")),
             "mem_used_mb_peak": round(max(g("mem_used_mb"))) if g("mem_used_mb") else None,
             "gpu_util_pct": stats(g("gpu_util_pct")),
@@ -161,12 +170,13 @@ def summarize(run, key=None, out=None, tol_s=None):
     out = out or cfg.get("out_topic")
     tol_s = cfg.get("stamp_tol_s", 0.0) if tol_s is None else tol_s
     by = load_messages(os.path.join(run, "messages.csv"))
+    arrived = load_messages(os.path.join(run, "messages.csv"), sent=False)
     s = {"method": cfg.get("method"), "machine": cfg.get("machine"),
-         "topics": topic_stats(by)}
+         "topics": topic_stats(arrived)}
     if key and out:
         s["timing"] = latency(by, key, out, tol_s)
-    t0 = by[key]["m"][0][0] if key in by else None
-    t1 = by[out]["m"][-1][0] if out in by else None
+    t0 = arrived[key]["m"][0][0] if key in arrived else None
+    t1 = arrived[out]["m"][-1][0] if out in arrived else None
     s["resources"] = resources(os.path.join(run, "resources.csv"), t0, t1)
     hj = os.path.join(run, "host.json")
     if os.path.exists(hj):
@@ -194,8 +204,9 @@ def report(s):
     r = s.get("resources") or {}
     if r.get("samples"):
         c = r["method_cpu_pct"] or {}
-        lines.append("  CPU %s %% mean / %s %% p95 (100 = one core), RSS %s MB peak; machine CPU %s %% mean"
-                     % (c.get("mean"), c.get("p95"), r["method_rss_mb_peak"],
+        lines.append("  CPU %s %% mean / %s %% p95 (100 = one core); memory %s MB own peak (RSS %s MB "
+                     "with libraries and transport); machine CPU %s %% mean"
+                     % (c.get("mean"), c.get("p95"), r.get("method_anon_mb_peak"), r["method_rss_mb_peak"],
                         (r["system_cpu_pct"] or {}).get("mean")))
         if r.get("gpu_util_pct"):
             lines.append("  GPU %s %% mean, %s MB peak; power %s mW mean"

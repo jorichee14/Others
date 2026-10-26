@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Fast DDS for every process in the odometry container (inside.sh sets
+     FASTRTPS_DEFAULT_PROFILES_FILE): messages up to 64 MB go through shared
+     memory in one piece. With the default 512 KB segment a 3 MB Ouster cloud
+     goes as fragmented UDP, and a best-effort subscriber (KISS-ICP, RKO-LIO,
+     FAST-LIO2 all use SensorDataQoS) loses most of them below the method: 2 of
+     100 delivered in a test, 100 of 100 with this profile. -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>shm_large</transport_id>
+      <type>SHM</type>
+      <segment_size>67108864</segment_size>
+    </transport_descriptor>
+    <transport_descriptor>
+      <transport_id>udp</transport_id>
+      <type>UDPv4</type>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="large_messages" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>shm_large</transport_id>
+        <transport_id>udp</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

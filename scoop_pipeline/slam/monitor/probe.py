@@ -8,8 +8,11 @@ node that subscribes to the method's input and output topics as raw bytes
         --out /Odometry=nav_msgs/msg/Odometry --tum /Odometry
 
 Writes into OUT:
-  messages.csv     wall_ns, role (in/out), topic, stamp_ns, bytes: one row per
-                   message, the wall clock (time.time_ns) when it arrived here
+  messages.csv     wall_ns, role (in/out), topic, stamp_ns, bytes, src_ns: one
+                   row per message; wall_ns when it arrived here (time.time_ns),
+                   src_ns when its publisher sent it (the middleware's source
+                   timestamp, the same clock): latency is timed between
+                   publishers, so this probe's own delivery does not enter it
   trajectory.tum   the --tum topic's poses (Odometry, PoseStamped or
                    PoseWithCovarianceStamped), 't x y z qx qy qz qw' on the
                    message stamps
@@ -61,8 +64,21 @@ def main():
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+    from rclpy.executors import SingleThreadedExecutor, await_or_execute
     from rclpy.serialization import deserialize_message
     from rosidl_runtime_py.utilities import get_message
+
+    class InfoExecutor(SingleThreadedExecutor):
+        """Hands a subscription callback the message info as well (Humble's
+        executor takes it from the middleware and drops it)."""
+
+        def _take_subscription(self, sub):
+            with sub.handle:
+                return sub.handle.take_message(sub.msg_type, sub.raw)
+
+        async def _execute_subscription(self, sub, msg_info):
+            if msg_info:
+                await await_or_execute(sub.callback, msg_info[0], msg_info[1])
 
     topics = {}
     for role, specs in (("in", a.ins), ("out", a.outs)):
@@ -76,7 +92,7 @@ def main():
     os.makedirs(a.dir, exist_ok=True)
     rows, tum, meta = [], [], {"qos": {}, "tum_topic": a.tum}
     fh = open(os.path.join(a.dir, "messages.csv"), "w")
-    fh.write("wall_ns,role,topic,stamp_ns,bytes\n")
+    fh.write("wall_ns,role,topic,stamp_ns,bytes,src_ns\n")
     tum_fh = open(os.path.join(a.dir, "trajectory.tum"), "w") if a.tum else None
 
     rclpy.init(args=ros_args)
@@ -86,9 +102,10 @@ def main():
     def make_cb(topic, role):
         tum_type = get_message(topics[topic][1]) if topic == a.tum else None
 
-        def cb(raw):
+        def cb(raw, info):
             now = time.time_ns()
-            rows.append("%d,%s,%s,%d,%d\n" % (now, role, topic, header_stamp_ns(raw), len(raw)))
+            rows.append("%d,%s,%s,%d,%d,%d\n" % (now, role, topic, header_stamp_ns(raw), len(raw),
+                                                info.get("source_timestamp", -1)))
             if tum_type is not None:
                 m = deserialize_message(raw, tum_type)
                 st = m.header.stamp.sec * 1_000_000_000 + m.header.stamp.nanosec
@@ -126,9 +143,11 @@ def main():
     stop = []
     signal.signal(signal.SIGINT, lambda *_: stop.append(1))
     signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+    ex = InfoExecutor()
+    ex.add_node(node)
     try:
         while not stop and rclpy.ok():
-            rclpy.spin_once(node, timeout_sec=0.1)
+            ex.spin_once(timeout_sec=0.1)
     finally:
         flush()
         fh.close()

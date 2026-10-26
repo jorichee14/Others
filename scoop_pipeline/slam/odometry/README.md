@@ -56,13 +56,23 @@ Repeat RTAB-Map at least 3 times: it is not reproducible run to run.
 | `run.json` | the method, robot, topics played, the launch line, the output topic, the frame of `trajectory.tum`, every setting changed from its published default and why, the key topic's rate in the bag |
 | `config/` | the method's config files, made from the bag (topics, beams, `/tf_static` extrinsics, camera_info intrinsics) |
 | `trajectory.tum` | the estimate on the bag's clock, of `run.json`'s `tum_frame` (FAST-LIO2 and OpenVINS: the IMU; the others: the LiDAR or the left camera) |
-| `messages.csv` | every input and output message: wall time of arrival, stamp, bytes |
-| `resources.csv`, `host.json` | the method's processes (CPU, 100 = one core; RSS), the machine, the GPU (nvidia-smi; tegrastats on a Jetson) every 0.5 s; CPU and GPU model |
-| `summary.json` | per topic Hz, KB, MB/s; latency per input (median, p95, max), drops, whether it kept up (drops <= 1 % and p95 latency <= the input period); CPU mean / p95 / max, peak RSS, GPU, power |
+| `messages.csv` | every input and output message: when its publisher sent it, when it arrived at the probe, stamp, bytes |
+| `resources.csv`, `host.json` | the method's processes (CPU, 100 = one core; its own memory, RssAnon, and everything resident, RSS), the machine, the GPU (nvidia-smi; tegrastats on a Jetson) every 0.5 s; CPU and GPU model |
+| `summary.json` | per topic Hz, KB, MB/s; latency per input, from the player sending it to the method sending its answer (median, p95, max), drops, whether it kept up (drops <= 1 % and p95 latency <= the input period); CPU mean / p95 / max, peak memory, GPU, power |
 | `status.json`, `logs/` | whether the method ran through and the play finished; each process's log |
 
 Scoring against the reference is `check.py trajs` with `trajectory.tum`; for
 Swarm-SLAM, `datasets/swarm_slam_lidar.py --odom-tum <machine> trajectory.tum <tum_frame>`.
+
+## The transport
+
+Every process in the container uses `fastdds.xml`: messages up to 64 MB go
+through shared memory in one piece. KISS-ICP, RKO-LIO and FAST-LIO2 subscribe
+best-effort (SensorDataQoS); with Fast DDS's default 512 KB shared-memory
+segment a 3 MB Ouster cloud goes as fragmented UDP and most are lost before
+the method sees them (the first KISS-ICP run: 44 % of scans; a test: 98 of
+100). A robot running these methods live needs the same profile, or the
+driver and the method in one process.
 
 ## Settings changed from the published defaults
 

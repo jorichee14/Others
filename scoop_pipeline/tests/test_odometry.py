@@ -12,7 +12,8 @@ file, a camera method on mobile_1, RTAB-Map when the depth is not in the
 left camera, a key topic under 90 % of its nominal rate, and a run folder
 that holds a run.
 
-summarize must match each output to its own input: one stamped at the
+summarize must time latency between publishers (the send times, not the
+probe's own late arrival), match each output to its own input: one stamped at the
 scan's last point (FAST-LIO2) also when the next scan has arrived before it,
 one stamped a few ms before its image (OpenVINS, with its tolerance); count
 drops and repeats; decide "kept up"; and window the resources to the play.
@@ -258,6 +259,20 @@ def check_summary(tmp, f):
     if not s["timing"]["kept_up"] or not os.path.exists(os.path.join(run, "summary.json")):
         f.append("summary: %s" % s["timing"])
     SM.report(s)
+    # send times, when logged, time the latency: the probe got each scan 40 ms late
+    # (its own delivery), the method answered 25 ms after the player sent it
+    run2 = os.path.join(tmp, "sent")
+    os.makedirs(run2)
+    with open(os.path.join(run2, "messages.csv"), "w") as fh:
+        fh.write("wall_ns,role,topic,stamp_ns,bytes,src_ns\n")
+        for k in range(10):
+            sent = T0 + k * 100 * ms
+            fh.write("%d,in,/pts,%d,3000000,%d\n" % (sent + 40 * ms, sent, sent))
+            fh.write("%d,out,/odo,%d,100,%d\n" % (sent + 26 * ms, sent, sent + 25 * ms))
+    json.dump({"key_topic": "/pts", "out_topic": "/odo"}, open(os.path.join(run2, "run.json"), "w"))
+    t = SM.summarize(run2)["timing"]
+    if t["answered"] != 10 or abs(t["latency_ms"]["median"] - 25.0) > 1e-6:
+        f.append("send-time latency: %s (want 10 answered, 25 ms)" % t)
 
 
 def main():

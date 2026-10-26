@@ -8,6 +8,8 @@ source /opt/ros/humble/setup.bash
 [ -f /ws/install/setup.bash ] && source /ws/install/setup.bash
 set -u
 W=/work; M=/opt/monitor; L=$W/logs
+# large messages (the Ouster's 3 MB clouds) through shared memory, whole
+export FASTRTPS_DEFAULT_PROFILES_FILE=${FASTRTPS_DEFAULT_PROFILES_FILE:-/opt/odometry/fastdds.xml}
 mkdir -p "$L"
 
 # run.json -> shell variables
