@@ -979,7 +979,9 @@ def read_splats(path):
 def write_splats(path, G, header):
     """A 3DGS .ply back from read_splats's array (the header's vertex count set)."""
     hl = [f"element vertex {len(G)}" if h.startswith("element vertex") else h for h in header]
-    with open(os.path.expanduser(path), "wb") as f:
+    path = os.path.expanduser(path)
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "wb") as f:
         f.write(("\n".join(hl) + "\n").encode("ascii"))
         G.tofile(f)
 
