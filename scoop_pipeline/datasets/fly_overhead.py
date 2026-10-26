@@ -36,11 +36,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt                                  # noqa: E402
 import numpy as np                                               # noqa: E402
+from matplotlib.colors import LinearSegmentedColormap            # noqa: E402
 from matplotlib.patches import Polygon                           # noqa: E402
 
 
-def read_xy_rgb(path: str, stride: int):
-    """The plan positions, and colours where there are any, of a mesh or cloud."""
+def read_xy(path: str, stride: int):
+    """The plan positions of a mesh's vertices or a cloud's points."""
     try:
         import open3d as o3d
     except ImportError:                                          # pragma: no cover
@@ -48,17 +49,11 @@ def read_xy_rgb(path: str, stride: int):
     o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
     path = os.path.expanduser(path)
     mesh = o3d.io.read_triangle_mesh(path)
-    if len(mesh.triangles):
-        points = np.asarray(mesh.vertices)
-        colours = np.asarray(mesh.vertex_colors) if mesh.has_vertex_colors() else None
-    else:
-        cloud = o3d.io.read_point_cloud(path)
-        points = np.asarray(cloud.points)
-        colours = np.asarray(cloud.colors) if cloud.has_colors() else None
+    points = (np.asarray(mesh.vertices) if len(mesh.triangles)
+              else np.asarray(o3d.io.read_point_cloud(path).points))
     if not len(points):
         raise SystemExit(f"{path}: no vertices and no points")
-    keep = slice(None, None, max(1, stride))
-    return points[keep, :2], (colours[keep] if colours is not None and len(colours) else None)
+    return points[::max(1, stride), :2]
 
 
 def cone(eye, look, reach: float, half_angle: float):
@@ -111,9 +106,9 @@ def main() -> int:
                              os.path.splitext(os.path.expanduser(args.path_json))[0]
                              .replace("_path", "") + "_overhead.mp4")
 
-    xy, rgb = read_xy_rgb(source, args.stride)
+    xy = read_xy(source, args.stride)
     print(f"{len(eye):,} frames at {fps:g} fps; map {os.path.basename(source)}, "
-          f"{len(xy):,} points drawn")
+          f"{len(xy):,} points binned")
 
     # The extent covers the map and the flight both: a route that leaves the
     # frame is exactly the moment a viewer needs it.
@@ -140,8 +135,16 @@ def main() -> int:
     for spine in axis.spines.values():
         spine.set_visible(False)
 
-    axis.scatter(xy[:, 0], xy[:, 1], s=0.5, linewidths=0, zorder=1,
-                 c=(rgb if rgb is not None else "#C7CDD4"))
+    pixels = int(round(width * args.dpi))
+    bins = (np.linspace(low[0], high[0], max(2, pixels // 2)),
+            np.linspace(low[1], high[1], max(2, int(round(height * args.dpi)) // 2)))
+    counts = np.histogram2d(xy[:, 0], xy[:, 1], bins=bins)[0]
+    shade = np.log1p(counts) / max(1e-9, np.log1p(counts).max())
+    axis.imshow(shade.T, origin="lower", extent=[low[0], high[0], low[1], high[1]],
+                cmap=LinearSegmentedColormap.from_list(
+                    "map", ["#FFFFFF", "#C7CDD4", "#6B7682"]),
+                vmin=0.0, vmax=0.75, interpolation="nearest", zorder=1,
+                aspect="auto")
     axis.plot(eye[:, 0], eye[:, 1], color="#9AA3AD", lw=1.0, ls=(0, (4, 3)), zorder=2)
     flown, = axis.plot([], [], color="#1B6FA8", lw=2.2, zorder=3)
     wedge = Polygon(np.zeros((3, 2)), closed=True, facecolor="#1B6FA8", alpha=0.22,
