@@ -22,6 +22,10 @@ Reported, from the last global graph (the one with the most keyframes):
                   which per-robot alignment hides
   initial         the same for the graph before optimization (what the
                   inter-robot loop closures and optimization changed)
+  edges           every edge of the graph by kind (odometry, intra-robot loop,
+                  inter-robot) against the ground truth, read as written and
+                  inverted: odometry edges must agree to a few cm, so a large
+                  error there is a convention or frame error, not a bad match
   loop closures   every inter-robot edge against the ground-truth relative
                   pose of its two keyframes: translation / rotation error,
                   correct within --lc-ok (m, deg)
@@ -333,6 +337,28 @@ def evaluate(export, results=None, cov=None, sigma_max=0.15, lc_ok=(0.5, 10.0), 
                             "correct": bool(et <= lc_ok[0] and er <= lc_ok[1]),
                             "residual_m": float(np.linalg.norm(Dk[:3, 3])) if Dk is not None else None,
                             "stamps": [st.get(a), st.get(b)]})
+            # every edge of the graph against the ground truth, by kind, read as written
+            # and inverted: odometry edges (consecutive keyframes of a robot) must agree
+            # to a few cm with the right reading, so they tell a convention or frame error
+            # in the measurements (or in this check) from loop closures that are wrong
+            kinds = {}
+            for a, b, Tm in E:
+                (ra, ia), (rb, ib) = key_robot(a), key_robot(b)
+                kind = "inter_robot" if ra != rb else ("odometry" if abs(int(ib) - int(ia)) == 1
+                                                       else "intra_robot_loop")
+                Ga, Gb = gt_of(a), gt_of(b)
+                if Ga is None or Gb is None:
+                    continue
+                G = np.linalg.inv(Ga) @ Gb
+                for how, M in (("as_written", Tm), ("inverted", np.linalg.inv(Tm))):
+                    D = np.linalg.inv(M) @ G
+                    kinds.setdefault(kind, {}).setdefault(how, []).append(
+                        (float(np.linalg.norm(D[:3, 3])), rot_deg(D[:3, :3])))
+            rep["edges_vs_ground_truth"] = {
+                k: dict({h: {"t_median_m": float(np.median([e[0] for e in v])),
+                             "r_median_deg": float(np.median([e[1] for e in v]))}
+                         for h, v in d.items()}, edges=len(d["as_written"]))
+                for k, d in kinds.items()}
             ck = [x for x in lcs if x["checked"]]
             kept = [x for x in ck if x["residual_m"] is not None and x["residual_m"] <= lc_ok[0]]
             rep["inter_robot_loop_closures"] = {
@@ -442,6 +468,11 @@ def main():
           "residual %s m)" % (lc.get("total", 0), lc.get("checked", 0), lc.get("correct", 0),
                               fmt(lc.get("t_err_median_m")), fmt(lc.get("r_err_median_deg"), 1),
                               lc.get("kept", 0), lc.get("correct_kept", 0), fmt(lc.get("residual_median_m"))))
+    for k, d in sorted((rep.get("edges_vs_ground_truth") or {}).items()):
+        print("  %-17s %4d edges against the ground truth: as written %s m / %s deg, inverted %s m / %s deg "
+              "(medians)" % (k, d["edges"], fmt(d["as_written"]["t_median_m"]),
+                             fmt(d["as_written"]["r_median_deg"], 1), fmt(d["inverted"]["t_median_m"]),
+                             fmt(d["inverted"]["r_median_deg"], 1)))
     rc = rep.get("rejected_candidates") or {}
     if rc.get("total"):
         print("rejected candidates: %d, %d with ground truth: %d at the same place (<= 3 m, 30 deg); "
