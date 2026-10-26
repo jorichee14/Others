@@ -161,6 +161,9 @@ analysis/            measuring results; reads outputs, writes nothing back
    slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel;
    slam/run_hydra.sh <hydra export> <channel>: every robot's Hydra streaming its
    scene graph to a server through the channel, one run per channel)
+  slam/patches/cslam_lidar_lc_direction.py  run once in Swarm-SLAM's container: its LiDAR
+                     loop closures (TEASER++ + ICP) enter the pose graph inverted; measured
+                     against the ground truth, they are right only the other way round
   slam/odometry/      the odometry methods of slam/odometry/PLAN.md (KISS-ICP, RKO-LIO,
                      FAST-LIO2, OpenVINS, RTAB-Map's rgbd_odometry) in one ROS 2 image
                      (build.sh); run_odometry.sh <method> <bag> <machine> <run>: the bag at 1x,
@@ -211,6 +214,8 @@ tests/               self-tests, no real bag needed
   test_cslam_eval.py cslam_eval: keys to robots, ATE, wrong loop closure flagged, merge time
   test_swarm_slam.py swarm_slam: topics, intrinsics, registered depth, odometry in the
                      robot's odom frame at the image stamp, ground truth
+  test_cslam_lidar_patch.py  the patch: compute_transform returns the pose of dst in src,
+                     a second run changes nothing, unknown code is refused
   test_odometry.py   make_config: frames, beams and extrinsics from the bag, the refusals
                      (no IMU noise, the ZED, depth outside the left camera, a 1 fps camera);
                      summarize: outputs matched to their inputs (FAST-LIO2's late stamp,
