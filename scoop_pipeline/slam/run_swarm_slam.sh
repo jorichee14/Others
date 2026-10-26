@@ -1,5 +1,6 @@
 #!/bin/bash
-# Swarm-SLAM (cslam, RGB-D) on a datasets/swarm_slam.py export, the robots
+# Swarm-SLAM (cslam) on a datasets/swarm_slam.py export (RGB-D) or a
+# datasets/swarm_slam_lidar.py one (LiDAR, any odometry), the robots
 # talking through a channel (scoop/channel.py). Run inside Swarm-SLAM's
 # container (cslam_experiments/docker), with the data and this repo mounted
 # at the same paths as outside.
@@ -19,10 +20,12 @@ set -e
 OUT=$(realpath "$1"); CHANNEL=${2:-ideal}; RATE=${3:-0.5}; ROBOTS=(${4:-mobile_1 mobile_2})
 N=${#ROBOTS[@]}; BASE=${DOMAIN_BASE:-10}
 HERE=$(dirname "$(realpath "$0")")
-[ -f "$OUT/scoop_rgbd.yaml" ] || { echo "no $OUT/scoop_rgbd.yaml: run datasets/swarm_slam.py first"; exit 1; }
+if [ -f "$OUT/scoop_lidar.yaml" ]; then CFG=scoop_lidar.yaml; LAUNCH=cslam_lidar.launch.py
+elif [ -f "$OUT/scoop_rgbd.yaml" ]; then CFG=scoop_rgbd.yaml; LAUNCH=cslam_rgbd.launch.py
+else echo "no $OUT/scoop_rgbd.yaml or scoop_lidar.yaml: run datasets/swarm_slam.py or swarm_slam_lidar.py first"; exit 1; fi
 source /opt/ros/$ROS_DISTRO/setup.bash
 source /Swarm-SLAM/install/setup.bash 2>/dev/null || source ~/Swarm-SLAM/install/setup.bash
-if [ ! -f "$OUT/resnet18_64.pth" ]; then
+if [ "$CFG" = scoop_rgbd.yaml ] && [ ! -f "$OUT/resnet18_64.pth" ]; then
   echo "fetching the CosPlace ResNet-18/64 weights -> $OUT/resnet18_64.pth"
   python3 -c "import torch; m = torch.hub.load('gmberton/cosplace', 'get_trained_model', backbone='ResNet18', fc_output_dim=64); torch.save(m.state_dict(), '$OUT/resnet18_64.pth')"
 fi
@@ -39,7 +42,7 @@ for ((i = 0; i < N; i++)); do
   fi
 done
 mkdir -p "$RUN/results"
-sed "s#log_folder: .*#log_folder: \"$RUN/results\"#" "$OUT/scoop_rgbd.yaml" > "$RUN/scoop_rgbd.yaml"
+sed "s#log_folder: .*#log_folder: \"$RUN/results\"#" "$OUT/$CFG" > "$RUN/$CFG"
 PIDS=(); PLAY=(); REC=()
 # each launch in its own process group, so that the nodes it starts stop with it, and
 # with SIGINT restored (a background job of a script starts with it ignored);
@@ -53,8 +56,8 @@ trap 'set +e; for p in ${REC[@]}; do kill -INT -- -$p 2>/dev/null; done
       chown -R --reference="$OUT" "$RUN" 2>/dev/null' EXIT
 for ((i = 0; i < N; i++)); do
   D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
-  ROS_DOMAIN_ID=$D setsid env --default-signal=INT ros2 launch cslam_experiments cslam_rgbd.launch.py config_path:="$RUN/" \
-      config_file:=scoop_rgbd.yaml robot_id:=$i namespace:=/r$i max_nb_robots:=$N > "$RUN/cslam_r$i.log" 2>&1 &
+  ROS_DOMAIN_ID=$D setsid env --default-signal=INT ros2 launch cslam_experiments $LAUNCH config_path:="$RUN/" \
+      config_file:=$CFG robot_id:=$i namespace:=/r$i max_nb_robots:=$N > "$RUN/cslam_r$i.log" 2>&1 &
   PIDS+=($!)
 done
 # every robot's keyframe ids and stamps (cslam logs them only once a robot is in an optimization)

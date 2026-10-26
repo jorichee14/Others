@@ -133,6 +133,10 @@ datasets/            bags -> datasets for other tools
                      offline cuVSLAM (vslam.py --machine), onboard or ground-truth odometry,
                      started where 03's session_anchor.json
                      put each robot) + config; slam/run_swarm_slam.sh runs it
+  swarm_slam_lidar.py  the same in LiDAR mode: each robot's Ouster cloud (/r<i>/pointcloud)
+                     and any method's odometry (--odom-tum MACHINE TUM [FRAME]: KISS-ICP,
+                     FAST-LIO2, ...; or the ground truth), stage 04's track as ground truth,
+                     --start/--duration for a slice; slam/run_swarm_slam.sh runs it too
   hydra.py           a swarm_slam.py export as Hydra input: one bag per robot (colour,
                      depth, camera_info, /tf odom -> base -> camera), a hydra_ros config
                      each (scene graph + mesh streamed once a second) and a launch file
@@ -200,6 +204,9 @@ tests/               self-tests, no real bag needed
   test_cslam_eval.py cslam_eval: keys to robots, ATE, wrong loop closure flagged, merge time
   test_swarm_slam.py swarm_slam: topics, intrinsics, registered depth, odometry in the
                      robot's odom frame at the image stamp, ground truth
+  test_swarm_slam_lidar.py  swarm_slam_lidar: clouds and odometry per robot in the slice,
+                     no-returns and the robot itself out, an IMU-frame odometry moved to the
+                     LiDAR in its own odom frame (or in map with --start-at-gt), ground truth
   test_euroc.py      euroc: stereo pairs at --rate, unpaired frames out, IMU increasing,
                      intrinsics from P, T_BS from /tf_static, flags, --imu-only --imu-delay
   test_hydra_export.py  hydra: a bag per robot, images byte for byte, /tf composing to the

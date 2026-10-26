@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Swarm-SLAM (cslam) against the ground truth: a run of
-slam/run_swarm_slam.sh on a datasets/swarm_slam.py export.
+slam/run_swarm_slam.sh on a datasets/swarm_slam.py (or swarm_slam_lidar.py) export.
 
     python scoop_pipeline/analysis/slam/cslam_eval.py <export dir> [--run runs/<channel>] [--results DIR]
         [--cov ROBOT FILE] [--sigma-max 0.15] [--lc-ok 0.5 10]
 
 Reads <export>/results/<..._experiment_robot_<i>>/<time>/ (cslam's logs,
 evaluation.enable_logs): optimized_global_pose_graph.g2o and
-initial_global_pose_graph.g2o (keyframe poses of the colour camera, gtsam keys
+initial_global_pose_graph.g2o (keyframe poses of the colour camera, or the LiDAR
+for a datasets/swarm_slam_lidar.py export; gtsam keys
 'g', 'A' + robot, keyframe), pose_timestamps<i>.csv (key -> stamp), log.csv;
 the run's keyframes_r<i>/ (run_swarm_slam.sh records every robot's
 /r<i>/cslam/keyframe_odom: keyframe -> stamp, also for a robot that never
-wrote logs); and gt_r<i>.tum (the colour camera in map at every frame
+wrote logs); and gt_r<i>.tum (the same frame in map at every frame
 exported).
 
 Reported, from the last global graph (the one with the most keyframes):
