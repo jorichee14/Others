@@ -250,6 +250,17 @@ def check_summary(tmp, f):
     t0 = SM.latency(msgs(rows), "/img", "/pose", 0.0)                 # without the tolerance:
     if t0["answered"] == 30:                                           # each matched the image before
         f.append("openvins-like without tolerance matched every image to itself")
+    # start-up and stop: 3 scans before the first answer, 2 after the last, none in between
+    rows = []
+    for k in range(40):
+        st, w = T0 + k * 100 * ms, T0 + k * 100 * ms + 5 * ms
+        rows.append((w, "in", "/pts", st, 1000))
+        if 3 <= k < 38:
+            rows.append((w + 20 * ms, "out", "/odo", st, 100))
+    t = SM.latency(msgs(rows), "/pts", "/odo", 0.0)
+    if t["dropped"] != 5 or t["steady"]["dropped"] != 0 or t["steady"]["dropped_at_start"] != 3 \
+            or t["steady"]["dropped_at_end"] != 2 or not t["kept_up"]:
+        f.append("start-up / stop drops counted as not keeping up: %s" % t)
     # repeats: two outputs for one input
     rows = [(T0, "in", "/a", T0, 1), (T0 + 10 * ms, "out", "/b", T0, 1), (T0 + 20 * ms, "out", "/b", T0, 1)]
     t = SM.latency(msgs(rows), "/a", "/b", 0.0)
@@ -322,6 +333,19 @@ def check_score(tmp, f):
     if a["ate"]["position_cm"]["rmse"] > 1e-6 or a["start_aligned"]["max_cm"] > 1e-6 \
             or abs(a["path"]["ratio"] - 1) > 1e-9 or a["coverage"]["pct"] != 100.0 or a["jumps"]["count"]:
         f.append("score, a perfect estimate in its own odom frame: %s" % a)
+    # a flat path, the estimate's odom frame tilted 2 deg: a fit of positions alone
+    # cannot see the tilt; the fit of the poses removes it
+    T_tilt = T_of([0.5, 0.2, 0.0], Rotation.from_euler("xy", [2.0, -1.5], degrees=True).as_quat())
+    a = SC.score(tr, np.einsum("ij,njk->nik", T_tilt, E), tr, Tr)
+    if a["ate"]["rotation_deg"]["rmse"] > 1e-6 or a["ate"]["position_cm"]["rmse"] > 1e-6:
+        f.append("score, a tilted odom frame: ATE %s" % a["ate"])
+    # 1 cm of jitter per pose: the path from poses 1 s apart is not inflated by it
+    rng = np.random.default_rng(1)
+    Ejit = E.copy()
+    Ejit[:, :3, 3] += rng.normal(0, 0.01, (len(E), 3))
+    a = SC.score(tr, Ejit, tr, Tr)
+    if abs(a["path"]["ratio"] - 1) > 0.02 or abs(a["path"]["sim3_scale"] - 1) > 0.005:
+        f.append("score, 1 cm jitter: path %s" % a["path"])
     # 1 % long: over 10 m of a 3 m circle the motion is 1 % of the chord, divided by the 10 m
     # travelled (KITTI's drift): 1 % x 6 sin(10/6) / 10
     Es = E.copy()
@@ -329,6 +353,8 @@ def check_score(tmp, f):
     a = SC.score(tr, Es, tr, Tr)
     d = a.get("drift_10m_pct")
     want = 1.0 * 6 * np.sin(10.0 / 6) / 10
+    if abs(a["path"]["sim3_scale"] - 1.01) > 1e-4:
+        f.append("score, 1 %% scale: sim3 scale %s" % a["path"]["sim3_scale"])
     if not d or abs(d["median"] - want) > 0.01 or abs(a["path"]["ratio"] - 1.01) > 1e-6 or a["ate"]["position_cm"]["rmse"] < 1:
         f.append("score, 1 %% scale: drift %s, ratio %s, ATE %s" % (d, a["path"]["ratio"], a["ate"]["position_cm"]))
     # a 2 s gap and a 1 m jump

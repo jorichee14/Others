@@ -23,7 +23,10 @@ override it. Writes RUN_DIR/summary.json and prints it as a few lines.
               a few ms). Outputs after the first for the same input count as
               repeats, not latencies
   drops       key inputs no output answered, and when (dropped_at_s)
-  real time   kept up: drops <= 1 % and p95 latency <= the key input's period
+  steady      the drops between the method's first answer and its last: the
+              ones before (starting up, the player's opening burst) and after
+              (the player stopped) are counted apart
+  real time   kept up: steady drops <= 1 % and p95 latency <= the key input's period
   resources   over the play (first key input to last output): the method's CPU
               (100 = one core) mean / p95 / max, its peak memory (its own,
               RssAnon, and everything resident, RSS), the machine's
@@ -128,16 +131,26 @@ def latency(by, key, out, tol_s):
     # where they fell, s after the first input: a burst at the start is the method
     # starting up, one at the end the run stopping, spread out the method keeping up
     dropped_at = [round((ins[i][0] - ins[0][0]) * 1e-9, 2) for i in range(len(ins)) if i not in answered]
+    # steady running: from the method's first answer to its last (before it, the
+    # method starting and the player's opening burst; after it, the player stopped)
+    first_ans = min(answered) if answered else len(ins)
+    last_ans = max(answered) if answered else -1
+    steady = [i for i in range(first_ans, last_ans + 1)]
+    steady_drops = sum(1 for i in steady if i not in answered)
+    steady_pct = 100.0 * steady_drops / len(steady) if steady else None
     p95 = pct(lat, 95)
     return {"key": key, "out": out, "stamp_tol_s": tol_s,
             "inputs": len(ins), "outputs": len(outs), "answered": len(answered),
             "dropped": drops, "dropped_pct": round(drop_pct, 2) if drop_pct is not None else None,
             "dropped_after_last_output": tail, "dropped_at_s": dropped_at,
+            "steady": {"inputs": len(steady), "dropped": steady_drops,
+                       "dropped_pct": round(steady_pct, 2) if steady_pct is not None else None,
+                       "dropped_at_start": first_ans, "dropped_at_end": len(ins) - 1 - last_ans},
             "repeats": repeats, "unmatched_outputs": unmatched,
             "input_period_ms": round(period, 2) if period else None,
             "latency_ms": stats(lat),
-            "kept_up": (drop_pct is not None and p95 is not None and period is not None
-                        and drop_pct <= 1.0 and p95 <= period)}
+            "kept_up": (steady_pct is not None and p95 is not None and period is not None
+                        and steady_pct <= 1.0 and p95 <= period)}
 
 
 def resources(path, t0, t1):
@@ -205,6 +218,11 @@ def report(s):
                      % (t["inputs"], t["answered"], t["dropped"], t["dropped_pct"] or 0.0,
                         lat.get("median"), lat.get("p95"), lat.get("max"), t["input_period_ms"],
                         "kept up" if t["kept_up"] else "did NOT keep up"))
+        st = t.get("steady")
+        if st:
+            lines.append("  steady running: %d of %d dropped (%s %%); %d before the first answer, %d after the last"
+                         % (st["dropped"], st["inputs"], st["dropped_pct"], st["dropped_at_start"],
+                            st["dropped_at_end"]))
         if t.get("dropped_at_s"):
             at = t["dropped_at_s"]
             lines.append("  dropped at %s s (of %.1f s)%s"

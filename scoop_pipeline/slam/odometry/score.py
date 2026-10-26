@@ -12,9 +12,11 @@ and OpenVINS's IMU, RTAB-Map's camera), then compared with
 analysis/trajs.py, as check.py trajs compares the pass's own trajectories.
 
 Writes <run dir>/accuracy.json and adds it to summary.json as "accuracy":
-  ate               after the best rigid fit of the estimate onto the reference
-                    (the estimate is in its own odom frame): position cm and
-                    rotation deg, rmse / median / p95 / max
+  ate               after the best rigid fit of the estimate's poses onto the
+                    reference's (positions and orientations: a near-planar path
+                    leaves roll and pitch free in a fit of positions alone, which
+                    is kept as ate_position_only_fit): position cm and rotation
+                    deg, rmse / median / p95 / max
   rpe_<d>s          the motion over d = 1, 10, 100 s against the reference's,
                     translation cm and rotation deg
   drift_<d>m_pct    the translation error over every d = 5, 10 m of travel, as
@@ -22,7 +24,11 @@ Writes <run dir>/accuracy.json and adds it to summary.json as "accuracy":
   start_aligned     the estimate put on the reference at its first pose, no
                     fit: the error at the end (cm and % of the path), and its
                     max: drift as it accumulated
-  path              path length of each and their ratio (a scale error shows)
+  path              path length of each from poses 1 s apart (pose-to-pose
+                    jitter at 10 Hz would add length the robot did not travel),
+                    their ratio, and the scale of the best similarity fit
+                    (sim3_scale: the estimate's size against the reference's,
+                    1.01 = 1 % too long)
   coverage          the share of the played span with an estimate pose no more
                     than 0.5 s away; the gaps longer than that
   jumps             steps faster than 3 m/s between consecutive poses (a hand-
@@ -73,6 +79,34 @@ def drift(t, E, R, d):
     return trajs.stats(np.linalg.norm(rel(E) - rel(R), axis=1) / d * 100.0)
 
 
+def pose_fit(E, R, arm=1.0):
+    """The rigid transform (R, t) putting the estimate's poses on the
+    reference's: positions and, so that a near-planar path still fixes roll and
+    pitch, a point `arm` m along each pose's three axes (Kabsch, no scale)."""
+    def pts(T):
+        return np.concatenate([T[:, :3, 3]] + [T[:, :3, 3] + arm * T[:, :3, k] for k in range(3)])
+    return trajs.rigid_fit(pts(E), pts(R))
+
+
+def sim3_scale(E, R):
+    """The estimate's size against the reference's, from the best similarity
+    fit of its positions onto them (Umeyama): 1.01 is 1 % too long."""
+    a, b = E[:, :3, 3] - E[:, :3, 3].mean(0), R[:, :3, 3] - R[:, :3, 3].mean(0)
+    U, D, Vt = np.linalg.svd(b.T @ a / len(a))
+    S = np.diag([1, 1, np.sign(np.linalg.det(U @ Vt))])
+    return float((a ** 2).sum(1).mean() / np.trace(np.diag(D) @ S))
+
+
+def every(t, T, step):
+    """The poses at least `step` s apart: path length without the pose-to-pose jitter."""
+    keep, last = [], -np.inf
+    for k, ti in enumerate(t):
+        if ti - last >= step:
+            keep.append(k)
+            last = ti
+    return T[keep]
+
+
 def score(t, E, tr, Tr, window=None):
     """Accuracy of (t, E) against the reference (tr, Tr), both T_world_lidar."""
     lo, hi = max(t[0], tr[0]), min(t[-1], tr[-1])
@@ -85,14 +119,21 @@ def score(t, E, tr, Tr, window=None):
     A = Rs[0] @ np.linalg.inv(Es[0])                    # the estimate on the reference at its start
     Ea = np.einsum("ij,njk->nik", A, Es)
     err = np.linalg.norm(Ea[:, :3, 3] - Rs[:, :3, 3], axis=1)
-    path_e, path_r = trajs.path_length(Es), trajs.path_length(Rs)
+    Rf, tf = pose_fit(Es, Rs)
+    Ef = np.einsum("ij,njk->nik", Rf, Es[:, :3, :])
+    dp = np.linalg.norm(Ef[:, :, 3] + tf - Rs[:, :3, 3], axis=1)
+    dR = trajs.rot_deg(np.einsum("nji,njk->nik", Ef[:, :, :3], Rs[:, :3, :3]))
+    path_e, path_r = trajs.path_length(every(ts, Es, 1.0)), trajs.path_length(every(ts, Rs, 1.0))
     out = {"poses_scored": int(m.sum()), "span_s": round(float(ts[-1] - ts[0]), 2),
-           "ate": {"position_cm": c["after_rigid_fit_cm"], "rotation_deg": c["after_rigid_fit_deg"]},
+           "ate": {"position_cm": trajs.stats(dp * 100), "rotation_deg": trajs.stats(dR)},
+           "ate_position_only_fit": {"position_cm": c["after_rigid_fit_cm"],
+                                     "rotation_deg": c["after_rigid_fit_deg"]},
            "start_aligned": {"end_cm": round(float(err[-1] * 100), 2),
                              "end_pct_of_path": round(float(err[-1] / path_r * 100), 3) if path_r > 0 else None,
                              "max_cm": round(float(err.max() * 100), 2)},
            "path": {"estimate_m": round(path_e, 3), "reference_m": round(path_r, 3),
-                    "ratio": round(path_e / path_r, 4) if path_r > 0 else None}}
+                    "ratio": round(path_e / path_r, 4) if path_r > 0 else None,
+                    "sampled_s": 1.0, "sim3_scale": round(sim3_scale(Es, Rs), 4)}}
     for d in trajs.DELTAS:
         r = c["relative"]["%gs" % d]
         if r["translation_cm"] is not None:
@@ -161,12 +202,14 @@ def report(a):
                     for k, v in a.items() if k.startswith("rpe_"))
     if rpe:
         lines.append("  RPE (rmse) %s" % rpe)
-    dr = ", ".join("%s m %s %%" % (k[6:-6], f(v, "median")) for k, v in a.items() if k.startswith("drift_"))
+    dr = ", ".join("%s m %s %%" % (k[len("drift_"):-len("m_pct")], f(v, "median"))
+                   for k, v in a.items() if k.startswith("drift_"))
     if dr:
         lines.append("  drift (median) per %s" % dr)
     sa, p = a["start_aligned"], a["path"]
-    lines.append("  from the start: %.1f cm off at the end (%s %% of %.1f m), %.1f cm at most; path ratio %s"
-                 % (sa["end_cm"], sa["end_pct_of_path"], p["reference_m"], sa["max_cm"], p["ratio"]))
+    lines.append("  from the start: %.1f cm off at the end (%s %% of %.1f m), %.1f cm at most; path ratio %s, "
+                 "scale %s" % (sa["end_cm"], sa["end_pct_of_path"], p["reference_m"], sa["max_cm"], p["ratio"],
+                               p["sim3_scale"]))
     cv, j = a["coverage"], a["jumps"]
     lines.append("  coverage %s %%, %d gaps > %g s; %d jumps > %g m/s"
                  % (cv["pct"], len(cv["gaps_over_%gs" % GAP_S]), GAP_S, j["count"], j["over_m_s"]))
