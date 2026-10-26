@@ -11,6 +11,9 @@ looking down -- so the two read together.
     python3 scoop_pipeline/datasets/fly_overhead.py <fly_path.json> [out.mp4]
         [--cloud map.ply] [--reach 6] [--stride 8] [--every 1]
 
+    python3 scoop_pipeline/datasets/fly_overhead.py --path lap.txt out.mp4 \
+        --cloud map.ply [--speed 0.8] [--fps 30] [--ahead 3]
+
 The json is the one `lod3dgs.py fly` writes beside its video
 (`<out>_path.json`): the camera's position and look-at point for every frame
 it rendered, at the fps it rendered them. Taking the motion from there rather
@@ -56,6 +59,40 @@ def read_xy(path: str, stride: int):
     return points[::max(1, stride), :2]
 
 
+def read_waypoints(path: str) -> np.ndarray:
+    """The `X,Y;X,Y;...` lap fly_path.py writes, as (n, 2)."""
+    text = open(os.path.expanduser(path), encoding="utf-8").read().strip()
+    pairs = [p for p in text.replace("\n", ";").split(";") if p.strip()]
+    return np.array([[float(v) for v in pair.split(",")[:2]] for pair in pairs])
+
+
+def walk_loop(waypoints, speed: float, fps: float, ahead: float):
+    """The camera along a closed lap: (eye, look) for every frame.
+
+    The same walk `fly` does with the same path -- densified to 20 cm, closed,
+    then stepped at a constant speed along its arc length, looking a fixed
+    distance further on. Driving the plan from the lap itself rather than from
+    a flight's record is what lets this be made before, or without, any
+    flythrough of it.
+    """
+    loop = np.vstack([waypoints, waypoints[:1]])
+    legs = np.linalg.norm(np.diff(loop, axis=0), axis=1)
+    dense = np.vstack([np.linspace(loop[i], loop[i + 1],
+                                   max(2, int(np.ceil(legs[i] / 0.2))), endpoint=False)
+                       for i in range(len(legs))])
+    closed = np.vstack([dense, dense[:1]])
+    along = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(closed, axis=0), axis=1))]
+    total = float(along[-1])
+
+    def at(distance):
+        d = np.asarray(distance, dtype=float) % total
+        return np.c_[np.interp(d, along, closed[:, 0]), np.interp(d, along, closed[:, 1])]
+
+    steps = max(2, int(total / max(1e-6, speed) * fps))
+    travelled = np.arange(steps) * speed / fps
+    return at(travelled), at(travelled + ahead), total
+
+
 def cone(eye, look, reach: float, half_angle: float):
     """The wedge the camera is looking down, as a polygon in plan."""
     forward = np.asarray(look[:2]) - np.asarray(eye[:2])
@@ -71,7 +108,15 @@ def cone(eye, look, reach: float, half_angle: float):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("path_json", help="the _path.json lod3dgs fly wrote")
+    parser.add_argument("path_json", nargs="?", default=None,
+                        help="the _path.json lod3dgs fly wrote (or use --path)")
+    parser.add_argument("--path", default=None, metavar="FILE",
+                        help="the lap fly_path.py wrote (X,Y;X,Y;...), walked here "
+                             "the way fly walks it; needs --cloud")
+    parser.add_argument("--speed", type=float, default=1.0, help="--path: m/s")
+    parser.add_argument("--fps", type=float, default=30.0, help="--path: frames a second")
+    parser.add_argument("--ahead", type=float, default=2.0, metavar="M",
+                        help="--path: look this far along the way, as fly does")
     parser.add_argument("out", nargs="?", default=None)
     parser.add_argument("--cloud", default=None,
                         help="the map to draw underneath (default: the one the json names)")
@@ -93,18 +138,32 @@ def main() -> int:
     parser.add_argument("--keep-frames", action="store_true")
     args = parser.parse_args()
 
-    with open(os.path.expanduser(args.path_json), encoding="utf-8") as handle:
-        flight = json.load(handle)
-    eye = np.asarray(flight["eye"], dtype=float)
-    look = np.asarray(flight["look"], dtype=float)
-    fps = float(flight.get("fps", 30))
-    source = args.cloud or flight.get("mesh")
-    if not source:
-        print("the json names no mesh: pass --cloud", file=sys.stderr)
+    if not args.path_json and not args.path:
+        print("give either a flight's _path.json or --path (fly_path.py's lap)",
+              file=sys.stderr)
         return 2
-    out = os.path.expanduser(args.out or
-                             os.path.splitext(os.path.expanduser(args.path_json))[0]
-                             .replace("_path", "") + "_overhead.mp4")
+    if args.path:
+        eye, look, total = walk_loop(read_waypoints(args.path), args.speed,
+                                     args.fps, args.ahead)
+        fps, stem = args.fps, os.path.splitext(os.path.expanduser(args.path))[0]
+        source = args.cloud
+        print(f"lap {os.path.basename(args.path)}: {total:.0f} m at {args.speed:g} m/s")
+        if not source:
+            print("--path needs --cloud: there is no mesh named anywhere else",
+                  file=sys.stderr)
+            return 2
+    else:
+        with open(os.path.expanduser(args.path_json), encoding="utf-8") as handle:
+            flight = json.load(handle)
+        eye = np.asarray(flight["eye"], dtype=float)
+        look = np.asarray(flight["look"], dtype=float)
+        fps = float(flight.get("fps", 30))
+        source = args.cloud or flight.get("mesh")
+        stem = os.path.splitext(os.path.expanduser(args.path_json))[0].replace("_path", "")
+        if not source:
+            print("the json names no mesh: pass --cloud", file=sys.stderr)
+            return 2
+    out = os.path.expanduser(args.out or stem + "_overhead.mp4")
 
     xy = read_xy(source, args.stride)
     print(f"{len(eye):,} frames at {fps:g} fps; map {os.path.basename(source)}, "
