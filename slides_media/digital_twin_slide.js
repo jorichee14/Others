@@ -1,5 +1,6 @@
 // One slide: the digital twin built from real data, as editable PowerPoint
 // shapes in the deck's style (blue title band, page number bottom right).
+// The diagram takes the left half; the right half is left free.
 //   node slides_media/digital_twin_slide.js slides_media/digital_twin_slide.pptx
 const pptxgen = require("pptxgenjs");
 
@@ -33,117 +34,105 @@ s.addText("2/40", { x: 8.9, y: 5.28, w: 0.9, h: 0.28, fontFace: F, fontSize: 12,
 
 function panel(x, y, w, h, kind, name) {
   const [fill, shadow, edge] = K[kind];
-  s.addShape(pres.ShapeType.roundRect, { x: x + 0.04, y: y + 0.04, w, h, rectRadius: 0.08,
+  s.addShape(pres.ShapeType.roundRect, { x: x + 0.03, y: y + 0.03, w, h, rectRadius: 0.07,
     fill: { color: shadow }, line: { color: shadow }, objectName: name + " shadow" });
-  s.addShape(pres.ShapeType.roundRect, { x, y, w, h, rectRadius: 0.08,
+  s.addShape(pres.ShapeType.roundRect, { x, y, w, h, rectRadius: 0.07,
     fill: { color: fill }, line: { color: edge, width: 1 }, objectName: name });
 }
-function card(x, y, w, h, kind, name, dashed) {
-  s.addShape(pres.ShapeType.roundRect, { x, y, w, h, rectRadius: 0.05, fill: { color: "FFFFFF" },
-    line: { color: K[kind][2], width: 0.9, dashType: dashed ? "dash" : "solid" }, objectName: name });
+function card(x, y, w, h, kind, name) {
+  s.addShape(pres.ShapeType.roundRect, { x, y, w, h, rectRadius: 0.04, fill: { color: "FFFFFF" },
+    line: { color: K[kind][2], width: 0.9 }, objectName: name });
 }
-function heading(x, y, text, sub, name) {
-  s.addText([
-    { text: text, options: { bold: true, fontSize: 13, color: INK } },
-    { text: "    " + sub, options: { italic: true, fontSize: 10, color: SOFT } },
-  ], { x, y, w: 7, h: 0.28, fontFace: F, valign: "middle", isTextBox: true, margin: 0, objectName: name });
+function text(runs, opts, name) {
+  s.addText(runs, Object.assign({ fontFace: F, valign: "middle", isTextBox: true, margin: 0, objectName: name }, opts));
 }
 function dot(x, y, filled, name) {
-  s.addShape(pres.ShapeType.ellipse, { x, y, w: 0.11, h: 0.11, fill: { color: filled ? ACCENT : "FFFFFF" },
-    line: { color: ACCENT, width: 1.25 }, objectName: name });
+  s.addShape(pres.ShapeType.ellipse, { x, y, w: 0.09, h: 0.09, fill: { color: filled ? ACCENT : "FFFFFF" },
+    line: { color: ACCENT, width: 1.1 }, objectName: name });
 }
-function twoLines(x, y, w, h, t, sub, name, size) {
-  s.addText([
-    { text: t, options: { bold: true, fontSize: size || 10.5, color: INK, breakLine: true } },
-    { text: sub, options: { fontSize: 9, color: SOFT } },
-  ], { x, y, w, h, fontFace: F, valign: "middle", isTextBox: true, margin: 0, objectName: name });
+function twoLines(x, y, w, h, t, sub, name) {
+  text([
+    { text: t, options: { bold: true, fontSize: 9.5, color: INK, breakLine: true } },
+    { text: sub, options: { fontSize: 8, color: SOFT } },
+  ], { x, y, w, h }, name);
 }
 function down(x, y0, y1, name) {
   s.addShape(pres.ShapeType.line, { x, y: y0, w: 0, h: y1 - y0,
-    line: { color: INK, width: 1.5, endArrowType: "triangle" }, objectName: name });
+    line: { color: INK, width: 1.25, endArrowType: "triangle" }, objectName: name });
 }
 
-const X = 0.6, W = 8.95;
+const X = 0.6, W = 4.35, PAD = 0.12, GAP = 0.12;
+const cw2 = (W - 2 * PAD - 0.08) / 2;          // two cards across
 
 // 1 real data
-const y1 = 0.95, h1 = 0.8;
+const y1 = 0.95, h1 = 0.98;
 panel(X, y1, W, h1, "real", "real data");
-heading(X + 0.15, y1 + 0.05, "1  Real data", "one recorded pass", "real data title");
+text([
+  { text: "1  Real data", options: { bold: true, fontSize: 12, color: INK } },
+  { text: "   one recorded pass", options: { italic: true, fontSize: 9, color: SOFT } },
+], { x: X + PAD, y: y1 + 0.03, w: W - 2 * PAD, h: 0.26 }, "real data title");
 const items = [["Scanned building", "reference map, cm-level"], ["Robots and sensors", "real LiDARs, cameras, mounts"],
   ["Real trajectories", "where the robots drove"], ["Measured Wi-Fi link", "RTT, goodput, outages"]];
-const iw = (W - 0.3 - 0.3) / 4;
 items.forEach(([t, sub], i) => {
-  const ix = X + 0.15 + i * (iw + 0.1), iy = y1 + 0.34;
-  card(ix, iy, iw, 0.38, "real", "real item " + (i + 1));
-  dot(ix + 0.1, iy + 0.135, true, "real dot " + (i + 1));
-  twoLines(ix + 0.28, iy + 0.02, iw - 0.32, 0.34, t, sub, "real item text " + (i + 1));
+  const ix = X + PAD + (i % 2) * (cw2 + 0.08), iy = y1 + 0.3 + Math.floor(i / 2) * 0.33;
+  card(ix, iy, cw2, 0.3, "real", "real item " + (i + 1));
+  dot(ix + 0.08, iy + 0.105, true, "real dot " + (i + 1));
+  twoLines(ix + 0.24, iy + 0.02, cw2 - 0.27, 0.26, t, sub, "real item text " + (i + 1));
 });
 
 // 2 digital twin
-const y2 = y1 + h1 + 0.15, h2 = 1.95;
+const y2 = y1 + h1 + GAP, h2 = 2.1;
 panel(X, y2, W, h2, "sim", "digital twin");
-heading(X + 0.15, y2 + 0.05, "2  Digital Twin · Isaac Sim", "change what you want, keep the rest real", "digital twin title");
+text("2  Digital Twin · Isaac Sim", { x: X + PAD, y: y2 + 0.03, w: W - 1.4, h: 0.26, fontSize: 12, bold: true,
+  color: INK }, "digital twin title");
 const knobs = [["Comms", "latency · loss · bandwidth", true], ["Sensor dropouts", "LiDAR or camera off", false],
   ["Pose source", "ground truth · noisy · SLAM", false], ["People and objects", "walkers · furniture", true],
   ["Robot paths", "new routes · speed", true], ["Sensor models", "LiDAR beams · resolution", true]];
-const kw = 1.72, kh = 0.6, kg = 0.08;
 knobs.forEach(([t, sub, built], i) => {
-  const kx = X + 0.15 + (i % 3) * (kw + kg), ky = y2 + 0.38 + Math.floor(i / 3) * (kh + kg);
-  card(kx, ky, kw, kh, "sim", "knob " + t);
-  dot(kx + 0.1, ky + 0.12, built, "knob dot " + t);
-  s.addText(t, { x: kx + 0.27, y: ky + 0.05, w: kw - 0.3, h: 0.24, fontFace: F, fontSize: 10.5, bold: true, color: INK,
-    valign: "middle", isTextBox: true, margin: 0, objectName: "knob title " + t });
-  s.addText(sub, { x: kx + 0.1, y: ky + 0.3, w: kw - 0.15, h: 0.26, fontFace: F, fontSize: 9, color: SOFT,
-    valign: "middle", isTextBox: true, margin: 0, objectName: "knob text " + t });
+  const kx = X + PAD + (i % 2) * (cw2 + 0.08), ky = y2 + 0.32 + Math.floor(i / 2) * 0.36;
+  card(kx, ky, cw2, 0.32, "sim", "knob " + t);
+  dot(kx + 0.08, ky + 0.115, built, "knob dot " + t);
+  twoLines(kx + 0.24, ky + 0.025, cw2 - 0.27, 0.27, t, sub, "knob text " + t);
 });
-// legend for the dots
-dot(X + 0.17, y2 + h2 - 0.25, true, "legend built dot");
-s.addText("built", { x: X + 0.33, y: y2 + h2 - 0.31, w: 0.5, h: 0.22, fontFace: F, fontSize: 9, color: SOFT,
-  valign: "middle", isTextBox: true, margin: 0, objectName: "legend built" });
-dot(X + 0.8, y2 + h2 - 0.25, false, "legend planned dot");
-s.addText("planned", { x: X + 0.96, y: y2 + h2 - 0.31, w: 0.8, h: 0.22, fontFace: F, fontSize: 9, color: SOFT,
-  valign: "middle", isTextBox: true, margin: 0, objectName: "legend planned" });
-
-// the deck of scenarios
-const cx = X + 0.15 + 3 * (kw + kg) + 0.1, cy = y2 + 0.38, cw = X + W - 0.3 - cx, ch = 1.18;
-card(cx + 0.12, cy + 0.12, cw - 0.12, ch, "sim", "scenario card 3");
-card(cx + 0.06, cy + 0.06, cw - 0.12, ch, "sim", "scenario card 2");
-card(cx, cy, cw - 0.12, ch, "sim", "scenario card 1");
-s.addText([
-  { text: "Scenario 1", options: { bold: true, fontSize: 12, color: INK, breakLine: true } },
-  { text: "4 people · 30% loss · camera off · SLAM poses", options: { fontSize: 8.5, color: SOFT } },
-], { x: cx + 0.15, y: cy + 0.06, w: cw - 0.4, h: 0.42, fontFace: F, valign: "top", isTextBox: true, margin: 0,
-  objectName: "scenario title" });
-const checks = [["LiDAR + camera data", "every robot"], ["Ground-truth boxes", "every frame, free"], ["Link per frame", "measured or tuned"]];
-checks.forEach(([t, sub], j) => {
-  s.addText([
-    { text: "✓  ", options: { bold: true, color: CHECK } },
-    { text: t, options: { bold: true, color: INK } },
-    { text: "   " + sub, options: { color: SOFT, fontSize: 8.5 } },
-  ], { x: cx + 0.15, y: cy + 0.52 + j * 0.2, w: cw - 0.35, h: 0.2, fontFace: F, fontSize: 9.5, valign: "middle",
-    isTextBox: true, margin: 0, objectName: "scenario check " + (j + 1) });
-});
-s.addText("× N scenarios", { x: X + W - 2.0, y: y2 + h2 - 0.33, w: 1.85, h: 0.26, fontFace: F, fontSize: 13, bold: true,
-  color: ACCENT, align: "right", valign: "middle", isTextBox: true, margin: 0, objectName: "n scenarios" });
+// a deck of scenarios
+const sy = y2 + 0.32 + 3 * 0.36 + 0.04, sw = W - 2 * PAD - 0.1, sh = 0.5;
+card(X + PAD + 0.08, sy + 0.08, sw, sh, "sim", "scenario card 3");
+card(X + PAD + 0.04, sy + 0.04, sw, sh, "sim", "scenario card 2");
+card(X + PAD, sy, sw, sh, "sim", "scenario card 1");
+text([
+  { text: "Scenario 1", options: { bold: true, fontSize: 9.5, color: INK } },
+  { text: "  4 people · 30% loss · camera off · SLAM poses", options: { fontSize: 8, color: SOFT, breakLine: true } },
+  { text: "✓ ", options: { bold: true, fontSize: 8.5, color: CHECK } },
+  { text: "sensor data   ", options: { fontSize: 8.5, color: INK } },
+  { text: "✓ ", options: { bold: true, fontSize: 8.5, color: CHECK } },
+  { text: "GT boxes   ", options: { fontSize: 8.5, color: INK } },
+  { text: "✓ ", options: { bold: true, fontSize: 8.5, color: CHECK } },
+  { text: "link per frame", options: { fontSize: 8.5, color: INK } },
+], { x: X + PAD + 0.1, y: sy + 0.04, w: sw - 0.65, h: sh - 0.08 }, "scenario text");
+text("× N", { x: X + PAD + sw - 0.55, y: sy, w: 0.48, h: sh, fontSize: 14, bold: true, color: ACCENT, align: "right" },
+  "n scenarios");
+// legend for the dots, top right of the panel
+dot(X + W - 1.18, y2 + 0.115, true, "legend built dot");
+text("built", { x: X + W - 1.06, y: y2 + 0.06, w: 0.35, h: 0.2, fontSize: 8, color: SOFT }, "legend built");
+dot(X + W - 0.7, y2 + 0.115, false, "legend planned dot");
+text("planned", { x: X + W - 0.58, y: y2 + 0.06, w: 0.5, h: 0.2, fontSize: 8, color: SOFT }, "legend planned");
 
 // 3 train, 4 test on real
-const y3 = y2 + h2 + 0.15, h3 = 0.5;
+const y3 = y2 + h2 + GAP, h3 = 0.42;
 panel(X, y3, W, h3, "data", "train");
-s.addText([
-  { text: "3  Train", options: { bold: true, fontSize: 13, color: INK } },
-  { text: "      collaborative perception models on digital-twin scenarios built from real data", options: { fontSize: 10.5, color: INK } },
-], { x: X + 0.15, y: y3, w: W - 1.3, h: h3, fontFace: F, valign: "middle", isTextBox: true, margin: 0, objectName: "train text" });
-s.addText("next step", { x: X + W - 1.15, y: y3, w: 1.0, h: h3, fontFace: F, fontSize: 9.5, italic: true, color: SOFT,
-  align: "right", valign: "middle", isTextBox: true, margin: 0, objectName: "train status" });
+text([
+  { text: "3  Train", options: { bold: true, fontSize: 12, color: INK } },
+  { text: "   on digital-twin scenarios", options: { fontSize: 9.5, color: INK } },
+], { x: X + PAD, y: y3, w: W - 0.9, h: h3 }, "train text");
+text("next step", { x: X + W - 0.85, y: y3, w: 0.73, h: h3, fontSize: 8.5, italic: true, color: SOFT, align: "right" },
+  "train status");
 
-const y4 = y3 + h3 + 0.15, h4 = 0.5;
+const y4 = y3 + h3 + GAP, h4 = 0.42;
 panel(X, y4, W, h4, "label", "test on real");
-s.addText([
-  { text: "4  Test on real", options: { bold: true, fontSize: 13, color: INK } },
-  { text: "      a held-out real recording with its measured link", options: { fontSize: 10.5, color: INK } },
-], { x: X + 0.15, y: y4, w: W - 3.0, h: h4, fontFace: F, valign: "middle", isTextBox: true, margin: 0, objectName: "test text" });
-s.addText("sim-trained vs real-trained", { x: X + W - 2.65, y: y4, w: 2.5, h: h4, fontFace: F, fontSize: 9.5, italic: true,
-  color: SOFT, align: "right", valign: "middle", isTextBox: true, margin: 0, objectName: "test note" });
+text([
+  { text: "4  Test on real", options: { bold: true, fontSize: 12, color: INK } },
+  { text: "   held-out real recording", options: { fontSize: 9.5, color: INK } },
+], { x: X + PAD, y: y4, w: W - 2 * PAD, h: h4 }, "test text");
 
 // arrows down the middle
 const mid = X + W / 2;
@@ -152,14 +141,15 @@ down(mid, y2 + h2, y3, "arrow twin to train");
 down(mid, y3 + h3, y4, "arrow train to test");
 
 // held-out real recording, down the left edge
-const lx = 0.42;
-s.addShape(pres.ShapeType.line, { x: lx, y: y1 + 0.4, w: X - lx, h: 0, line: { color: SOFT, width: 1.25, dashType: "dash" }, objectName: "held-out top" });
-s.addShape(pres.ShapeType.line, { x: lx, y: y1 + 0.4, w: 0, h: y4 + h4 / 2 - (y1 + 0.4), line: { color: SOFT, width: 1.25, dashType: "dash" }, objectName: "held-out down" });
-s.addShape(pres.ShapeType.line, { x: lx, y: y4 + h4 / 2, w: X - lx, h: 0,
-  line: { color: SOFT, width: 1.25, dashType: "dash", endArrowType: "triangle" }, objectName: "held-out in" });
-s.addText("held-out real recording", { x: 0.12, y: 2.0, w: 0.24, h: 2.2, fontFace: F, fontSize: 9, italic: true, color: SOFT,
-  align: "center", valign: "middle", vert: "vert270", isTextBox: true, margin: 0, objectName: "held-out label" });
+const lx = 0.42, top = y1 + 0.45, bot = y4 + h4 / 2;
+const dash = { color: SOFT, width: 1.1, dashType: "dash" };
+s.addShape(pres.ShapeType.line, { x: lx, y: top, w: X - lx, h: 0, line: dash, objectName: "held-out top" });
+s.addShape(pres.ShapeType.line, { x: lx, y: top, w: 0, h: bot - top, line: dash, objectName: "held-out down" });
+s.addShape(pres.ShapeType.line, { x: lx, y: bot, w: X - lx, h: 0, line: Object.assign({ endArrowType: "triangle" }, dash),
+  objectName: "held-out in" });
+text("held-out real recording", { x: 0.15, y: 2.1, w: 0.22, h: 2.0, fontSize: 8.5, italic: true, color: SOFT,
+  align: "center", vert: "vert270" }, "held-out label");
 
-s.addNotes("Start from one real recorded pass: the scanned building, our real robots and sensor mounts, the trajectories they drove, and the Wi-Fi link we measured. The digital twin in Isaac Sim keeps all of that real and lets us change one thing at a time: the comms (latency, loss, bursts, bandwidth), sensor dropouts, where the poses come from (ground truth, noisy, or a SLAM algorithm's output), people and furniture, robot paths, and sensor models. Each setting is a scenario that comes with sensor data from every robot, ground-truth boxes for free, and the link per frame, so we can make as many training scenarios as we want. The models are then tested on a held-out real recording with its own measured link. Built today: comms, people and objects, robot paths, sensor models. Planned: sensor dropouts, SLAM as the pose source, and the training step itself.");
+s.addNotes("Start from one real recorded pass: the scanned building, our real robots and sensor mounts, the trajectories they drove, and the Wi-Fi link we measured. The digital twin in Isaac Sim keeps all of that real and lets us change one thing at a time: the comms (latency, loss, bursts, bandwidth), sensor dropouts, where the poses come from (ground truth, noisy, or a SLAM algorithm's output), people and furniture, robot paths, and sensor models. Each setting is a scenario that comes with sensor data from every robot, ground-truth boxes for free, and the link per frame, so we can make as many training scenarios as we want. The models are then tested on a held-out real recording with its own measured link, so sim-trained and real-trained models can be compared on the same scene. Built today: comms, people and objects, robot paths, sensor models. Planned: sensor dropouts, SLAM as the pose source, and the training step itself.");
 
 pres.writeFile({ fileName: out }).then(f => console.log(f));
