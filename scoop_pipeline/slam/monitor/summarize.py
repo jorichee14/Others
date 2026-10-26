@@ -23,9 +23,10 @@ override it. Writes RUN_DIR/summary.json and prints it as a few lines.
               a few ms). Outputs after the first for the same input count as
               repeats, not latencies
   drops       key inputs no output answered, and when (dropped_at_s)
-  steady      the drops between the method's first answer and its last: the
-              ones before (starting up, the player's opening burst) and after
-              (the player stopped) are counted apart
+  steady      the drops between the method's first answer (or the end of the
+              player's opening burst, inputs closer than half a period, if
+              later) and its last: the ones before (starting up, the burst)
+              and after (the player stopped) are counted apart
   real time   kept up: steady drops <= 1 % and p95 latency <= the key input's period
   resources   over the play (first key input to last output): the method's CPU
               (100 = one core) mean / p95 / max, its peak memory (its own,
@@ -110,6 +111,9 @@ def latency(by, key, out, tol_s):
         return {"error": "no messages on %s" % (key if key not in by else out)}
     ins, outs = by[key]["m"], by[out]["m"]
     res, answered = match(ins, outs, int(round(tol_s * 1e9)))
+    st = sorted(s for _, s, _ in ins)
+    gaps = [(b - a) * 1e-6 for a, b in zip(st, st[1:]) if b > a]
+    period = pct(gaps, 50)
     first, lat = set(), []
     repeats = unmatched = 0
     for k, dt in res:
@@ -120,9 +124,7 @@ def latency(by, key, out, tol_s):
         else:
             first.add(k)
             lat.append(dt * 1e-6)
-    st = sorted(s for _, s, _ in ins)
-    gaps = [(b - a) * 1e-6 for a, b in zip(st, st[1:]) if b > a]
-    period = pct(gaps, 50)
+
     # inputs after the last output may still have been in flight when the run stopped
     last_out = outs[-1][0] if outs else 0
     tail = sum(1 for w, _, _ in ins if w > last_out)
@@ -131,9 +133,14 @@ def latency(by, key, out, tol_s):
     # where they fell, s after the first input: a burst at the start is the method
     # starting up, one at the end the run stopping, spread out the method keeping up
     dropped_at = [round((ins[i][0] - ins[0][0]) * 1e-9, 2) for i in range(len(ins)) if i not in answered]
-    # steady running: from the method's first answer to its last (before it, the
-    # method starting and the player's opening burst; after it, the player stopped)
-    first_ans = min(answered) if answered else len(ins)
+    # steady running: from the method's first answer, and the end of the player's
+    # opening burst (started at an offset, it sends the first clouds almost at once,
+    # closer than half a period: a best-effort queue of 5 overflows on it), to the
+    # method's last answer (after it, the player stopped)
+    burst = 0
+    while burst + 1 < len(ins) and period and (ins[burst + 1][0] - ins[burst][0]) * 1e-6 < 0.5 * period:
+        burst += 1
+    first_ans = max(min(answered), burst) if answered else len(ins)
     last_ans = max(answered) if answered else -1
     steady = [i for i in range(first_ans, last_ans + 1)]
     steady_drops = sum(1 for i in steady if i not in answered)
@@ -145,7 +152,9 @@ def latency(by, key, out, tol_s):
             "dropped_after_last_output": tail, "dropped_at_s": dropped_at,
             "steady": {"inputs": len(steady), "dropped": steady_drops,
                        "dropped_pct": round(steady_pct, 2) if steady_pct is not None else None,
-                       "dropped_at_start": first_ans, "dropped_at_end": len(ins) - 1 - last_ans},
+                       "before": first_ans, "opening_burst": burst,
+                       "dropped_before": sum(1 for i in range(first_ans) if i not in answered),
+                       "dropped_after": len(ins) - 1 - last_ans},
             "repeats": repeats, "unmatched_outputs": unmatched,
             "input_period_ms": round(period, 2) if period else None,
             "latency_ms": stats(lat),
@@ -220,9 +229,10 @@ def report(s):
                         "kept up" if t["kept_up"] else "did NOT keep up"))
         st = t.get("steady")
         if st:
-            lines.append("  steady running: %d of %d dropped (%s %%); %d before the first answer, %d after the last"
-                         % (st["dropped"], st["inputs"], st["dropped_pct"], st["dropped_at_start"],
-                            st["dropped_at_end"]))
+            lines.append("  steady running: %d of %d dropped (%s %%); before it %d dropped (start-up, a %d-scan "
+                         "opening burst), %d after the last answer"
+                         % (st["dropped"], st["inputs"], st["dropped_pct"], st["dropped_before"],
+                            st["opening_burst"], st["dropped_after"]))
         if t.get("dropped_at_s"):
             at = t["dropped_at_s"]
             lines.append("  dropped at %s s (of %.1f s)%s"

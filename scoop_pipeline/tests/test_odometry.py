@@ -258,9 +258,21 @@ def check_summary(tmp, f):
         if 3 <= k < 38:
             rows.append((w + 20 * ms, "out", "/odo", st, 100))
     t = SM.latency(msgs(rows), "/pts", "/odo", 0.0)
-    if t["dropped"] != 5 or t["steady"]["dropped"] != 0 or t["steady"]["dropped_at_start"] != 3 \
-            or t["steady"]["dropped_at_end"] != 2 or not t["kept_up"]:
+    if t["dropped"] != 5 or t["steady"]["dropped"] != 0 or t["steady"]["dropped_before"] != 3 \
+            or t["steady"]["dropped_after"] != 2 or not t["kept_up"]:
         f.append("start-up / stop drops counted as not keeping up: %s" % t)
+    # the player's opening burst: 8 clouds 3 ms apart, 3 of them lost, then 10 Hz, all answered
+    rows = []
+    for k in range(40):
+        st = T0 + k * 100 * ms
+        w = T0 + k * 3 * ms if k < 8 else T0 + (k - 7) * 100 * ms
+        rows.append((w, "in", "/pts", st, 1000))
+        if k not in (2, 4, 6):
+            rows.append((max(w, T0 + 30 * ms) + 20 * ms + k * ms, "out", "/odo", st, 100))
+    t = SM.latency(msgs(rows), "/pts", "/odo", 0.0)
+    if t["steady"]["dropped"] or t["steady"]["opening_burst"] != 7 or t["steady"]["dropped_before"] != 3 \
+            or not t["kept_up"]:
+        f.append("the opening burst counted as steady running: %s" % t["steady"])
     # repeats: two outputs for one input
     rows = [(T0, "in", "/a", T0, 1), (T0 + 10 * ms, "out", "/b", T0, 1), (T0 + 20 * ms, "out", "/b", T0, 1)]
     t = SM.latency(msgs(rows), "/a", "/b", 0.0)
