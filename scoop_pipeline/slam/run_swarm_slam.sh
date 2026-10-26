@@ -64,7 +64,7 @@ trap 'set +e; for p in ${REC[@]}; do kill -INT -- -$p 2>/dev/null; done
       for k in $(seq 30); do kill -0 ${REC[@]} 2>/dev/null || break; sleep 1; done
       for p in ${PIDS[@]} ${PLAY[@]}; do kill -INT -- -$p 2>/dev/null; done; sleep 3
       for p in ${PIDS[@]} ${PLAY[@]} ${REC[@]}; do kill -KILL -- -$p 2>/dev/null; done; wait 2>/dev/null
-      chown -R --reference="$OUT" "$RUN" 2>/dev/null' EXIT
+      chown --reference="$OUT" "$OUT/runs" 2>/dev/null; chown -R --reference="$OUT" "$RUN" 2>/dev/null' EXIT
 for ((i = 0; i < N; i++)); do
   D=$([ "$CHANNEL" = direct ] && echo 0 || echo $((BASE + i)))
   ROS_DOMAIN_ID=$D setsid env --default-signal=INT ros2 launch cslam_experiments $LAUNCH config_path:="$RUN/" \
