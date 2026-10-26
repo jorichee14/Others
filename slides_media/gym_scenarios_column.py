@@ -22,7 +22,7 @@ KIND = {  # fill, shadow, edge
 }
 ACCENT = "#C2571A"
 
-W, H = 1100, 1375
+W, H = 1100, 1545
 fig = plt.figure(figsize=(W / 100, H / 100), dpi=150)
 ax = fig.add_axes([0, 0, 1, 1])
 ax.set_xlim(0, W); ax.set_ylim(H, 0); ax.axis("off")
@@ -73,22 +73,30 @@ for i, (t, s) in enumerate(items):
 
 # ------------------------------------------------------------ 2 the gym
 y2 = y1 + 300 + 64
-GH = 520
+GH = 690
 rbox(X, y2, CW, GH, "sim")
 heading(X + 26, y2 + 40, "2  Gym · Isaac Sim", "change what you want, keep the rest real")
-kx = X + 26
-for k in ["+ people walking", "move furniture", "new robot paths", "harsher link"]:
-    w = 24 + 9.0 * len(k)
-    ax.add_patch(FancyBboxPatch((kx, y2 + 80), w, 40, boxstyle="round,pad=0,rounding_size=20",
-                                fc="white", ec=KIND["sim"][2], lw=1.2))
-    ax.text(kx + w / 2, y2 + 100, k, ha="center", va="center", fontsize=12.5, color=INK)
-    kx += w + 10
-fx, fy, fw, fh = X + 60, y2 + 160, 760, 280
+# the knobs: what a scenario controls
+knobs = [("Comms", "latency · loss · bursts · bandwidth", False),
+         ("Sensor dropouts", "LiDAR or camera off · lost frames", True),
+         ("Pose source", "ground truth · noisy · SLAM output", True),
+         ("People and objects", "walkers · moved furniture", False),
+         ("Robot paths", "real routes · new routes · speed", False),
+         ("Sensor models", "LiDAR beams · camera resolution", False)]
+kw, kh, kg = (CW - 52 - 2 * 14) / 3, 86, 14
+for i, (t, s, planned) in enumerate(knobs):
+    kx, ky = X + 26 + (i % 3) * (kw + kg), y2 + 80 + (i // 3) * (kh + kg)
+    rbox(kx, ky, kw, kh, "sim", r=8, white=True, lw=1.2, shadow=False)
+    ax.add_patch(Circle((kx + 24, ky + 29), 7, fc="white" if planned else ACCENT, ec=ACCENT, lw=1.6))
+    ax.text(kx + 42, ky + 29, t, ha="left", va="center", fontsize=14, weight="bold", color=INK)
+    ax.text(kx + 18, ky + 60, s, ha="left", va="center", fontsize=11.5, color=SOFT)
+fx, fy, fw, fh = X + 60, y2 + 300, 760, 300
 for i in range(3):
     off = (2 - i) * 22
     rbox(fx + off, fy + off, fw, fh, "sim", r=10, white=True, lw=1.3, shadow=(i == 2))
 ax.text(fx + 30, fy + 42, "Scenario 1", ha="left", va="center", fontsize=17, weight="bold", color=INK)
-ax.text(fx + 30, fy + 76, "4 people crossing · lossy link", ha="left", va="center", fontsize=13, color=SOFT)
+ax.text(fx + 30, fy + 76, "4 people crossing · 30% packet loss · camera dropout · SLAM poses",
+        ha="left", va="center", fontsize=13, color=SOFT)
 for j, (t, s) in enumerate([("LiDAR + camera data", "from every robot, like a real bag"),
                             ("Ground-truth boxes", "every object, every frame, free"),
                             ("Link per frame", "the measured or tuned channel")]):
@@ -98,6 +106,10 @@ for j, (t, s) in enumerate([("LiDAR + camera data", "from every robot, like a re
     ax.text(fx + 330, yy, s, ha="left", va="center", fontsize=12.5, color=SOFT)
 ax.text(X + CW - 30, y2 + GH - 30, "× N scenarios", ha="right", va="center", fontsize=20, weight="bold",
         color=ACCENT)
+ax.add_patch(Circle((X + 40, y2 + GH - 30), 7, fc=ACCENT, ec=ACCENT, lw=1.6))
+ax.text(X + 54, y2 + GH - 30, "built", ha="left", va="center", fontsize=12, color=SOFT)
+ax.add_patch(Circle((X + 120, y2 + GH - 30), 7, fc="white", ec=ACCENT, lw=1.6))
+ax.text(X + 134, y2 + GH - 30, "planned", ha="left", va="center", fontsize=12, color=SOFT)
 
 # ------------------------------------------------------------ 3 train, 4 test on real
 y3 = y2 + GH + 64
