@@ -51,12 +51,14 @@ RUN apt-get update \
     && rosdep install --from-paths /ws/src --ignore-src -y -r --rosdistro humble \
     && rm -rf /var/lib/apt/lists/*
 
+# livox_ros_driver2 reads ROS_EDITION and DISTRO_ROS (its build.sh's -D flags);
+# --continue-on-error: one failing package does not hide the others' errors
 WORKDIR /ws
 RUN source /opt/ros/humble/setup.bash \
-    && colcon build --merge-install \
+    && colcon build --merge-install --continue-on-error --event-handlers console_cohesion+ \
          --packages-up-to fast_lio kiss_icp rko_lio ov_msckf \
          --cmake-args -DCMAKE_BUILD_TYPE=Release \
-                      -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble \
+                      -DROS_EDITION=ROS2 -DDISTRO_ROS=humble \
                       -DRKO_LIO_FETCH_CONTENT_DEPS=ON \
     && rm -rf build log \
     && dpkg-query -W ros-humble-rtabmap-odom ros-humble-rtabmap >> /opt/versions.txt
