@@ -13,6 +13,13 @@
 #   the bag (--clock), and slam/channel_relay.py carries what they exchange.
 #   "direct": every robot in one domain, no relay (Swarm-SLAM's own setup).
 #
+# The container: Swarm-SLAM's own (cslam_experiments/docker, image swarmslam,
+# Swarm-SLAM in /Swarm-SLAM, TEASER++ for the LiDAR front-end), started with this
+# repo and the data at the same paths as outside, e.g.
+#   docker run -itd --rm --ipc host --net host --pid host --name swarmslam \
+#       -v ~/workspaces:$HOME/workspaces swarmslam
+#   docker exec -it swarmslam bash -c "cd ~/workspaces/Others && scoop_pipeline/slam/run_swarm_slam.sh <export> ideal 1.0"
+#
 # Writes <export dir>/runs/<channel>/: results/ (cslam's logs), keyframes_r<i>/
 # (each robot's /r<i>/cslam/keyframe_odom), relay.csv
 # (every message: sent, size, lost, arrival), cslam_r<i>.log, relay.log.
@@ -21,6 +28,10 @@ OUT=$(realpath "$1"); CHANNEL=${2:-ideal}; RATE=${3:-0.5}; ROBOTS=(${4:-mobile_1
 N=${#ROBOTS[@]}; BASE=${DOMAIN_BASE:-10}
 HERE=$(dirname "$(realpath "$0")")
 if [ -f "$OUT/scoop_lidar.yaml" ]; then CFG=scoop_lidar.yaml; LAUNCH=cslam_lidar.launch.py
+  # cslam's LiDAR front-end subscribes best-effort and the clouds are 0.5-1 MB: past
+  # Fast DDS's 512 KB shared-memory segment they go as fragmented UDP and are lost
+  # (slam/odometry/fastdds.xml: 64 MB segments, every process this script starts)
+  export FASTRTPS_DEFAULT_PROFILES_FILE=${FASTRTPS_DEFAULT_PROFILES_FILE:-$HERE/odometry/fastdds.xml}
 elif [ -f "$OUT/scoop_rgbd.yaml" ]; then CFG=scoop_rgbd.yaml; LAUNCH=cslam_rgbd.launch.py
 else echo "no $OUT/scoop_rgbd.yaml or scoop_lidar.yaml: run datasets/swarm_slam.py or swarm_slam_lidar.py first"; exit 1; fi
 source /opt/ros/$ROS_DISTRO/setup.bash
