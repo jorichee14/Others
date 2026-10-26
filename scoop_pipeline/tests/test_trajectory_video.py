@@ -4,13 +4,17 @@
 swarm: a synthetic Swarm-SLAM run (cslam's logs, as test_cslam_eval.py writes
 them): two robots' keyframes in cslam's frame, robot 1 a further 1 m off in
 the graph before optimization, one inter-robot loop closure at keyframes
-(0,10)-(1,12) and one intra-robot at (0,2)-(0,30). The tracks must land on the
+(0,10)-(1,12) and one intra-robot at (0,2)-(0,30). One loop-closure event, at the merge, held 2 s.
+The tracks must land on the
 ground truth after the one fit, robot 1 be faded (its own frame) until the
 merge, which is the later of the two keyframes' stamps; the edges sorted into
 inter and intra. odometry: test_odometry.py's bag, FAST-LIO2's IMU-frame
 estimate in an odom frame of its own: placed on the reference at its first
 pose, it must lie on the reference. Both videos are written and hold the
-frames the speed asks for.
+frames the speed asks for. The loop closure's scans come from an export bag
+of every keyframe seeing the same points: robot 1's, placed by the loop
+closure, must land on them as robot 0 sees them; placed with no shared frame,
+not.
 
     python scoop_pipeline/tests/test_trajectory_video.py
 """
@@ -26,6 +30,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "analysis", "slam"))
 sys.path.insert(0, os.path.join(ROOT, "slam", "odometry"))
+sys.path.insert(0, os.path.join(ROOT, "datasets"))
 import test_cslam_eval as TC                                        # noqa: E402
 import trajectory_video as TV                                       # noqa: E402
 
@@ -51,6 +56,21 @@ def swarm_fixture(tmp):
         E += [(TC.key(0, i), TC.key(0, i + 1), np.eye(4)) for i in range(39)]
         return V, E
 
+    # the export's bag: every keyframe's scan of the same points, in its LiDAR frame
+    import swarm_slam as SS
+    import swarm_slam_lidar as SL
+    from scoop.bagwrite import BagWriter
+    rng = np.random.default_rng(3)
+    world = np.c_[rng.uniform(-3, 12, (3000, 2)), np.full(3000, 0.5)]
+    w = BagWriter(os.path.join(tmp, "bag"))
+    for (r, i), T in sorted(gt.items(), key=lambda x: st[TC.key(*x[0])]):
+        P = (world - T[:3, 3]) @ T[:3, :3]
+        a = np.empty(len(P), SL.XYZ)
+        a["x"], a["y"], a["z"] = P[:, 0], P[:, 1], P[:, 2]
+        ns = int(round(st[TC.key(r, i)] * 1e9))
+        w.write("/r%d/pointcloud" % r, SS.T_msg().pointcloud2(a, ns, "r%d/lidar" % r), ns)
+    w.close()
+
     run = os.path.join(tmp, "runs", "ideal")
     for r in (0, 1):
         d = os.path.join(run, "results", "x_experiment_robot_%d" % r, "t0")
@@ -63,7 +83,7 @@ def swarm_fixture(tmp):
         if r == 0:
             TC.write_g2o(os.path.join(d, "optimized_global_pose_graph.g2o"), *graph(False))
             TC.write_g2o(os.path.join(d, "initial_global_pose_graph.g2o"), *graph(True))
-    return run, gt, st
+    return run, gt, st, world
 
 
 def frames(path):
@@ -78,8 +98,8 @@ def main():
     tmp = tempfile.mkdtemp()
     f = []
     try:
-        run, gt, st = swarm_fixture(tmp)
-        tracks, refs, edges, merged_at, _ = TV.swarm_tracks(tmp, run)
+        run, gt, st, world = swarm_fixture(tmp)
+        tracks, refs, edges, merged_at, _, events = TV.swarm_tracks(tmp, run)
         for r, tr in enumerate(tracks):
             want = np.array([gt[(r, i)][:3, 3] for i in range(40)])
             if np.abs(tr.P - want).max() > 1e-6:
@@ -92,14 +112,29 @@ def main():
         if sorted(e[3] for e in edges) != ["inter", "intra"]:
             f.append("edges %s" % [e[3] for e in edges])
         out = os.path.join(tmp, "swarm.mp4")
-        n = TV.render(out, tracks, refs, edges, "test", speed=4.0, fps=10, size=(320, 240), merged_at=merged_at)
-        if frames(out) != n or n != int(np.ceil(19.5 / 4.0 * 10)) + 10:
+        if len(events) != 1 or abs(events[0]["t"] - merged_at) > 1e-9:
+            f.append("loop-closure events %s" % [e["t"] for e in events])
+        # scans: robot b's placed by the loop closure lands on the points as robot a
+        # sees them; with no shared frame, it does not
+        from scipy.spatial import cKDTree
+        e = events[0]
+        Ta = gt[(0, 10)]
+        seen = cKDTree(((world - Ta[:3, 3]) @ Ta[:3, :3])[:, :2])
+        if e.get("cloud_a") is None:
+            f.append("no scans for the loop closure")
+        else:
+            d_a, d_after, d_before = (np.median(seen.query(e[k])[0]) for k in ("cloud_a", "cloud_b_after", "cloud_b_before"))
+            if max(d_a, d_after) > 1e-6 or d_before < 0.05:
+                f.append("scans: robot a %.3g m, b after %.3g m, b before %.3g m off" % (d_a, d_after, d_before))
+        n = TV.render(out, tracks, refs, edges, "test", speed=4.0, fps=10, size=(320, 240), merged_at=merged_at,
+                      events=events, hold=3, hold_s=2.0)
+        if frames(out) != n or n != int(np.ceil(19.5 / 4.0 * 10)) + 10 + 20:
             f.append("swarm video: %d frames written, %d rendered" % (frames(out), n))
 
         # odometry: test_odometry's bag, FAST-LIO2's estimate in its IMU frame
         import test_odometry as TO
         import make_config as MK
-        bag = os.path.join(tmp, "bag")
+        bag = os.path.join(tmp, "obag")
         TO.write_bag(bag)
         orun = os.path.join(tmp, "odo")
         MK.make("fast_lio", bag, "mobile_1", orun)

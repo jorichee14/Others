@@ -26,7 +26,11 @@ swarm      a slam/run_swarm_slam.sh run of a datasets/swarm_slam_lidar.py
            is drawn faded where the graph before optimization had it, in its
            own frame; from then on, in the merged map. A loop closure is drawn
            once both its keyframes exist (Swarm-SLAM may have found it later):
-           green between the robots, purple within one.
+           green between the robots, purple within one. Each inter-robot one
+           is shown in action: highlighted in red, the time stopped at the
+           first --hold of them, and an inset of its two keyframes' scans (from
+           the export's bag), robot b's placed with no shared frame and then by
+           the loop closure, onto robot a's.
 
 --map: a cloud of the site in the reference's frame (e.g. the pass's
 mapping/cloud_in_ref_<tag>.pcd), its points between --zband m drawn as the
@@ -71,9 +75,14 @@ def floor_plan(path, zband, cell=0.05):
 
 
 def render(out, tracks, refs, edges, title, speed=10.0, fps=30, size=(1280, 720), plan=None,
-           notes=None, merged_at=None):
+           notes=None, merged_at=None, events=None, hold=3, hold_s=2.0):
     """Write the video. refs: [(label, P)] drawn whole in grey; edges: [(t,
-    p_a, p_b, kind)] drawn from t on; notes: lines under the title."""
+    p_a, p_b, kind)] drawn from t on; notes: lines under the title. events:
+    loop closures to show in action (lc_events()): each one highlighted from
+    its time on until the next, the first `hold` of them with the time
+    stopped for hold_s s of video, and, where its scans are given, both scans
+    in an inset: robot b's placed with no shared frame, and by the loop
+    closure."""
     import cv2
     import matplotlib
     matplotlib.use("Agg")
@@ -122,14 +131,51 @@ def render(out, tracks, refs, edges, title, speed=10.0, fps=30, size=(1280, 720)
     ax.legend(loc="upper left", fontsize=8, framealpha=0.85)
     info = side.text(0.0, 1.0, "", va="top", ha="left", fontsize=10, family="monospace",
                      transform=side.transAxes)
+    events = sorted(events or [], key=lambda e: e["t"])
+    hl = ax.plot([], [], color="#d62728", lw=3.0, zorder=6)[0]
+    hl_ends = ax.plot([], [], "s", color="#d62728", ms=9, mfc="none", mew=2, zorder=6)[0]
+    insets = []
+    if any(e.get("cloud_a") is not None for e in events):
+        for k, x in enumerate((0.70, 0.85)):
+            ia = fig.add_axes([x, 0.07, 0.135, 0.34])
+            ia.set_aspect("equal")
+            ia.set_xticks([])
+            ia.set_yticks([])
+            ia.set_visible(False)
+            insets.append(ia)
     et = np.array([e[0] for e in edges]) if edges else np.zeros(0)
 
     vw = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
     if not vw.isOpened():
         raise SystemExit("cannot write %s (OpenCV's mp4v writer)" % out)
-    n = max(1, int(np.ceil((t1 - t0) / speed * fps)) + fps)       # a second of the end held
-    for f in range(n):
-        now = min(t0 + f * speed / fps, t1)
+    # the frames' times: the run at --speed, the time stopped for hold_s at the
+    # first `hold` loop closures, a second of the end held
+    base = max(1, int(np.ceil((t1 - t0) / speed * fps)) + fps)
+    times = [min(t0 + f * speed / fps, t1) for f in range(base)]
+    for e in reversed(events[:hold]):
+        k = int(np.searchsorted(times, e["t"]))
+        times[k:k] = [e["t"]] * int(round(hold_s * fps))
+    shown = None
+
+    def draw_insets(e):
+        for ia, (which, title_) in zip(insets, (("cloud_b_before", "before: no shared frame"),
+                                                 ("cloud_b_after", "after: by the loop closure"))):
+            ia.cla()
+            ia.set_xticks([])
+            ia.set_yticks([])
+            ia.set_visible(e.get("cloud_a") is not None)
+            if e.get("cloud_a") is None:
+                continue
+            A, B = e["cloud_a"], e[which]
+            ia.scatter(A[:, 0], A[:, 1], s=0.4, c=e["color_a"], lw=0)
+            ia.scatter(B[:, 0], B[:, 1], s=0.4, c=e["color_b"], lw=0)
+            r = e.get("radius", 12.0)
+            ia.set_xlim(-r, r)
+            ia.set_ylim(-r, r)
+            ia.set_title(title_, fontsize=8)
+
+    n = len(times)
+    for f, now in enumerate(times):
         txt = ["t = %6.1f s" % (now - t0), ""]
         for tr, ln, hd, fd in zip(tracks, lines, heads, fades):
             if tr.faded and now < tr.faded[0]:
@@ -158,6 +204,20 @@ def render(out, tracks, refs, edges, title, speed=10.0, fps=30, size=(1280, 720)
                     "  one robot      %3d" % sum(1 for e, o in zip(edges, on) if o and e[3] == "intra")]
             if merged_at is not None:
                 txt.append("merged at %.1f s" % (merged_at - t0) if now >= merged_at else "not merged yet")
+        cur = None
+        for i, e in enumerate(events):
+            if e["t"] <= now:
+                cur = i
+        if cur is not None:
+            e = events[cur]
+            hl.set_data([e["p_a"][0], e["p_b"][0]], [e["p_a"][1], e["p_b"][1]])
+            hl_ends.set_data([e["p_a"][0], e["p_b"][0]], [e["p_a"][1], e["p_b"][1]])
+            txt += ["", "LOOP CLOSURE" + (" (first: the merge)" if cur == 0 else ""), "  " + e["label"]]
+            if f > 0 and times[f - 1] == now and cur < hold:
+                txt.append("  (time stopped)")
+            if insets and shown != cur:
+                draw_insets(e)
+                shown = cur
         if notes:
             txt += [""] + notes
         info.set_text("\n".join(txt))
@@ -200,7 +260,7 @@ def odometry_tracks(runs, ref_override=None):
 
 # ------------------------------------------------------------------ swarm
 
-def swarm_tracks(export, run):
+def swarm_tracks(export, run, clouds=True):
     import cslam_eval as CE
     import score as SC
     results = os.path.join(run, "results")
@@ -266,6 +326,20 @@ def swarm_tracks(export, run):
             continue
         edges.append((max(st[a], st[b]), to_ref(V[a]), to_ref(V[b]), kind))
     refs = [("r%d" % r, gts[r][1][:, :3, 3]) for r in sorted(gts)]
+    events = []
+    names = ["mobile_1", "mobile_2"]
+    for a, b, Tm in E:
+        (ra, ia), (rb, ib) = CE.key_robot(a), CE.key_robot(b)
+        if ra == rb or a not in st or b not in st or a not in V or b not in V:
+            continue
+        events.append({"t": max(st[a], st[b]), "p_a": to_ref(V[a]), "p_b": to_ref(V[b]),
+                       "label": "%s kf %d <-> %s kf %d" % (names[ra] if ra < 2 else ra, ia,
+                                                         names[rb] if rb < 2 else rb, ib),
+                       "keys": (a, b), "robots": (ra, rb), "Tm": Tm,
+                       "T_before": (np.linalg.inv(V0[a]) @ V0[b]) if a in V0 and b in V0 else None,
+                       "color_a": COLORS[ra % len(COLORS)], "color_b": COLORS[rb % len(COLORS)]})
+    if clouds:
+        add_scans(export, events, st)
     notes = []
     ej = os.path.join(run, "cslam_eval.json")
     if os.path.exists(ej):
@@ -273,7 +347,46 @@ def swarm_tracks(export, run):
         o = (e.get("optimized") or {}).get("joint_ate_rmse_m")
         if o is not None:
             notes.append("joint ATE %.1f cm" % (o * 100))
-    return tracks, refs, edges, merged_at, notes
+    return tracks, refs, edges, merged_at, notes, events
+
+
+def add_scans(export, events, st, cell=0.1, zband=(-0.5, 1.5), radius=12.0, tol=0.005):
+    """Each event's two keyframe scans, from the export's bag (/r<i>/pointcloud
+    at the keyframe stamps), top view in keyframe a's LiDAR frame: robot a's as
+    it is, robot b's placed by the graph before optimization (no shared frame)
+    and by the loop closure. One point per `cell`, within zband m of the sensor
+    height and `radius` m; a scan is the one within tol s of the stamp."""
+    bag = os.path.join(export, "bag")
+    if not os.path.isdir(bag):
+        return
+    import mcap_convert as mc
+    want = {}                                   # robot -> {keyframe stamp (s): scan}
+    for e in events:
+        for k, r in zip(e["keys"], e["robots"]):
+            want.setdefault(r, {})[st[k]] = None
+    stamps = {r: np.array(sorted(w)) for r, w in want.items()}
+    for m in mc.read(mc._paths(bag), sorted("/r%d/pointcloud" % r for r in want)):
+        r = int(m.channel.topic.split("/")[1][1:])
+        t = mc.stamp_ns(m.ros_msg) * 1e-9
+        i = int(np.argmin(np.abs(stamps[r] - t)))
+        if abs(stamps[r][i] - t) > tol or want[r][stamps[r][i]] is not None:
+            continue
+        P, _ = mc.cloud_points(m.ros_msg)
+        P = P[(P[:, 2] >= zband[0]) & (P[:, 2] <= zband[1])
+              & (np.einsum("ij,ij->i", P[:, :2], P[:, :2]) <= radius * radius)]
+        _, k = np.unique(np.floor(P[:, :2] / cell).astype(np.int64), axis=0, return_index=True)
+        want[r][stamps[r][i]] = P[k]
+    for e in events:
+        A, B = (want[r][st[k]] for k, r in zip(e["keys"], e["robots"]))
+        if A is None or B is None:
+            continue
+
+        def place(T, P):
+            return (P @ T[:3, :3].T + T[:3, 3])[:, :2]
+        e["cloud_a"] = A[:, :2]
+        e["cloud_b_after"] = place(e["Tm"], B)
+        e["cloud_b_before"] = place(e["T_before"], B) if e["T_before"] is not None else B[:, :2]
+        e["radius"] = radius
 
 
 def main():
@@ -291,6 +404,9 @@ def main():
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--size", default="1280x720")
     ap.add_argument("--title", default=None)
+    ap.add_argument("--hold", type=int, default=3, help="swarm: stop the time at the first N loop closures")
+    ap.add_argument("--hold-s", type=float, default=2.0, help="swarm: for this many s of video")
+    ap.add_argument("--no-scans", action="store_true", help="swarm: no inset of the loop closure's scans")
     a = ap.parse_args()
     size = tuple(int(v) for v in a.size.lower().split("x"))
     plan = floor_plan(a.map, a.zband) if a.map else None
@@ -303,9 +419,10 @@ def main():
     else:
         if not a.export or len(a.run) != 1:
             ap.error("swarm: <export dir> --run <export>/runs/<channel>")
-        tracks, refs, edges, merged_at, notes = swarm_tracks(a.export, a.run[0])
+        tracks, refs, edges, merged_at, notes, events = swarm_tracks(a.export, a.run[0], not a.no_scans)
         title = a.title or "Swarm-SLAM: final graph in time order, one rigid fit for both robots"
-        n = render(a.out, tracks, refs, edges, title, a.speed, a.fps, size, plan, notes, merged_at)
+        n = render(a.out, tracks, refs, edges, title, a.speed, a.fps, size, plan, notes, merged_at,
+                   events, a.hold, a.hold_s)
     print("wrote %s (%d frames, %d fps, x%g)" % (a.out, n, a.fps, a.speed))
 
 
