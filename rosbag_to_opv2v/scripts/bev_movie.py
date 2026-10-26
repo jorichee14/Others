@@ -13,11 +13,11 @@ doing, at one glance.
         [--cameras] [--comms wifi.rssi] [--theme dark]
         [--seconds 45] [--fps 20] [--trail 0]      # 0: the whole path stays
 
-The access points, picked in each site's own anchored cloud (and note the
-leading minus on site 2: pass it as --ap=-28.249,-7.207 or the shell reads it
-as a flag):
+The access points, picked in each site's own anchored cloud. Both carry a
+leading minus, so pass them with an equals sign or the shell reads the value
+as another flag:
 
-    site 1   --ap 4.506,7.063      # where chair_3 stood, before it was moved
+    site 1   --ap=-3.823,7.394
     site 2   --ap=-28.249,-7.207
 
 A camera slower than the frame grid (the ZED at 1.3 Hz on a 10 Hz grid) has no
