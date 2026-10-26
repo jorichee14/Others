@@ -13,6 +13,7 @@ looking down -- so the two read together.
 
     python3 scoop_pipeline/datasets/fly_overhead.py --path lap.txt out.mp4 \
         --cloud map.ply [--speed 0.8] [--fps 30] [--ahead 3]
+        [--write-json lap_path.json --eye-z 1.1]     # for splat_walk --fly
 
 The json is the one `lod3dgs.py fly` writes beside its video
 (`<out>_path.json`): the camera's position and look-at point for every frame
@@ -117,6 +118,14 @@ def main() -> int:
     parser.add_argument("--fps", type=float, default=30.0, help="--path: frames a second")
     parser.add_argument("--ahead", type=float, default=2.0, metavar="M",
                         help="--path: look this far along the way, as fly does")
+    parser.add_argument("--write-json", default=None, metavar="FILE",
+                        help="--path: also write the walk as a flight record, the "
+                             "same form lod3dgs fly writes, so splat_walk --fly "
+                             "(or another fly) can follow this exact lap")
+    parser.add_argument("--eye-z", type=float, default=None, metavar="Z",
+                        help="--write-json: the camera's height in the map frame "
+                             "(not over the floor); read it off an existing "
+                             "flight's json to match one")
     parser.add_argument("out", nargs="?", default=None)
     parser.add_argument("--cloud", default=None,
                         help="the map to draw underneath (default: the one the json names)")
@@ -164,6 +173,24 @@ def main() -> int:
             print("the json names no mesh: pass --cloud", file=sys.stderr)
             return 2
     out = os.path.expanduser(args.out or stem + "_overhead.mp4")
+
+    if args.write_json:
+        if not args.path:
+            print("--write-json goes with --path: a json already is one",
+                  file=sys.stderr)
+            return 2
+        if args.eye_z is None:
+            print("--write-json needs --eye-z: the lap is a plan route and says "
+                  "nothing about height", file=sys.stderr)
+            return 2
+        # fly's own form, so anything that flies a flight record flies this.
+        record = {"fps": fps, "mesh": source or "",
+                  "eye": np.c_[eye, np.full(len(eye), args.eye_z)].round(4).tolist(),
+                  "look": np.c_[look, np.full(len(look), args.eye_z)].round(4).tolist()}
+        with open(os.path.expanduser(args.write_json), "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+        print(f"wrote {args.write_json}: {len(eye)} frames at {fps:g} fps, "
+              f"eye at z={args.eye_z:g}")
 
     xy = read_xy(source, args.stride)
     print(f"{len(eye):,} frames at {fps:g} fps; map {os.path.basename(source)}, "
