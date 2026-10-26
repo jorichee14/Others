@@ -67,7 +67,7 @@ def read_waypoints(path: str) -> np.ndarray:
     return np.array([[float(v) for v in pair.split(",")[:2]] for pair in pairs])
 
 
-def walk_loop(waypoints, speed: float, fps: float, ahead: float):
+def walk_loop(waypoints, speed: float, fps: float, ahead: float, frames: int = 0):
     """The camera along a closed lap: (eye, look) for every frame.
 
     The same walk `fly` does with the same path -- densified to 20 cm, closed,
@@ -89,9 +89,16 @@ def walk_loop(waypoints, speed: float, fps: float, ahead: float):
         d = np.asarray(distance, dtype=float) % total
         return np.c_[np.interp(d, along, closed[:, 0]), np.interp(d, along, closed[:, 1])]
 
-    steps = max(2, int(total / max(1e-6, speed) * fps))
-    travelled = np.arange(steps) * speed / fps
-    return at(travelled), at(travelled + ahead), total
+    # A frame count is the exact way to match another video: one lap spread
+    # over that many frames, whatever speed that implies. Asking for a speed
+    # that happens to divide the lap into the right number is the same thing
+    # arrived at by arithmetic, and wrong by a frame or two when it is not.
+    if frames:
+        steps, step = max(2, int(frames)), total / max(2, int(frames))
+    else:
+        steps, step = max(2, int(total / max(1e-6, speed) * fps)), speed / fps
+    travelled = np.arange(steps) * step
+    return at(travelled), at(travelled + ahead), total, step * fps
 
 
 def cone(eye, look, reach: float, half_angle: float):
@@ -118,6 +125,9 @@ def main() -> int:
     parser.add_argument("--fps", type=float, default=30.0, help="--path: frames a second")
     parser.add_argument("--ahead", type=float, default=2.0, metavar="M",
                         help="--path: look this far along the way, as fly does")
+    parser.add_argument("--frames", type=int, default=0, metavar="N",
+                        help="--path: spread the lap over exactly N frames instead "
+                             "of using --speed, to match another video's length")
     parser.add_argument("--write-json", default=None, metavar="FILE",
                         help="--path: also write the walk as a flight record, the "
                              "same form lod3dgs fly writes, so splat_walk --fly "
@@ -152,11 +162,12 @@ def main() -> int:
               file=sys.stderr)
         return 2
     if args.path:
-        eye, look, total = walk_loop(read_waypoints(args.path), args.speed,
-                                     args.fps, args.ahead)
+        eye, look, total, pace = walk_loop(read_waypoints(args.path), args.speed,
+                                           args.fps, args.ahead, args.frames)
         fps, stem = args.fps, os.path.splitext(os.path.expanduser(args.path))[0]
         source = args.cloud
-        print(f"lap {os.path.basename(args.path)}: {total:.0f} m at {args.speed:g} m/s")
+        print(f"lap {os.path.basename(args.path)}: {total:.0f} m in {len(eye)} "
+              f"frames at {fps:g} fps ({len(eye) / fps:.0f} s, {pace:.2f} m/s)")
         if not source:
             print("--path needs --cloud: there is no mesh named anywhere else",
                   file=sys.stderr)
