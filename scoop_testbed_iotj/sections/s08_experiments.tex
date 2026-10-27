@@ -30,12 +30,14 @@ against both (Fig.~\ref{fig:headroom}).
 \emph{Result.} At IoU 0.5 the measured clock offset (\SI{0.99}{\milli\second},
 \SI{1}{\milli\metre} at \SI{1}{\metre\per\second}), the LiDAR robot's
 held-out board residual (\SI{10}{\milli\metre}, $20\times$), and the
-board detector (\SI{8}{\milli\metre}, $25\times$) pass. Three terms fall
+board detector (\SI{8}{\milli\metre}, $25\times$) pass, and the control
+distances (\SI{2}{\centi\metre} RMS, $10\times$) meet the criterion
+exactly. Three terms fall
 short: the RGB-D cart (\SI{3.1}{\centi\metre} median, $6.5\times$), the
 second-pass registration (\SI{3.0}{\centi\metre} RMS, $6.7\times$), and
 the strict clock bound (\SI{12}{\milli\second}, $8.3\times$ against one
 frame). At IoU 0.7 only the clock, the LiDAR robot, and the detector stay
-near $10\times$; the cart's poses are then only about $3\times$ below the
+near $10\times$, and the control distances fall to $5.5\times$; the cart's poses are then only about $3\times$ below the
 breaking point, so perception scored from the cart's viewpoint at strict
 IoU is limited by the reference. \todo{Fill $v_{95}$, the sniffer bias,
 the LiDAR robot on \texttt{coop\_2}, and the radar residuals.}

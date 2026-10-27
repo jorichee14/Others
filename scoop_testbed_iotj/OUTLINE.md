@@ -19,10 +19,11 @@ link's statistics, with no structure in time or place) against the **logged**
 one. Published synthetic channels are shown only for reference, because they
 deliver everything by construction.
 
-**Three contributions:**
-1. The testbed: heterogeneous agents, every link on the sensors' clock, a pose reference without motion capture or GNSS, each checked against measurements it did not use.
-2. A replay of the logged link, validated against live runs (E3), for message models and for unmodified ROS 2 systems.
-3. Evidence that the link's structure matters (E5: messages, a decision, a real SLAM system).
+**Four contributions:**
+1. The testbed: heterogeneous agents, every link on the sensors' clock, sniffer bias bounded.
+2. A building-scale pose reference without motion capture, GNSS or a survey scanner. Checked by a second pass, held-out boards and rangefinder control distances (about 2 cm RMS). The LiDAR robot is placed to 10 mm, the cart to 3.1 cm median.
+3. A replay of the logged link, validated against live runs (E3), for message models and for unmodified ROS 2 systems.
+4. Evidence that the link's structure matters (E5: messages, a decision, a real SLAM system).
 
 ## What was removed, and where it went
 
@@ -64,7 +65,7 @@ distortion detail and the extrinsics checks (move to the supplementary).
 
 | Test | Question | Pass (stated before the test) | Data | State |
 |---|---|---|---|---|
-| E1 Precision | testbed errors vs. breaking points derived for indoor objects (person box: 0.20 m at IoU 0.5, 0.11 m at IoU 0.7) | each term >= 10x below | existing | LiDAR robot, clock, detector pass at IoU 0.5; cart (6.5x), second pass (6.7x), strict clock bound (8.3x) fall short; v95, sniffer bias, radar to fill |
+| E1 Precision | testbed errors vs. breaking points derived for indoor objects (person box: 0.20 m at IoU 0.5, 0.11 m at IoU 0.7) | each term >= 10x below | existing | LiDAR robot, clock, detector pass at IoU 0.5; control distances (2 cm RMS) meet 10x exactly; cart (6.5x), second pass (6.7x), strict clock bound (8.3x) fall short; v95, sniffer bias, radar to fill |
 | E2 Consistency | map clearance predicts detrended RSSI | rho > 0.3, drop > 5 dB, block-bootstrap CI excluding 0 | existing | point estimates in hand; CI, exponent sweep, cart-side split to run |
 | E3 Replay | replayed vs. live arrivals | >= 90 % frame agreement; logged closer than fitted | field session (payload node at 10 Hz, 1 KB / 100 KB / 1.5 MB, alone and with the other robot, survey and cooperation) | not run |
 | E4 Repeatability | same setting, same link on another day | day distance < half the mode distance | existing + the E3 session | mode half computable |
@@ -75,6 +76,7 @@ distortion detail and the extrinsics checks (move to the supplementary).
 ## Checks to run before anything else
 1. **Capacity:** the logged downlink of 598-676 Mbit/s exceeds the 433 Mbit/s PHY maximum for one stream at VHT-80. Pull NSS and MCS from the radiotap headers. The uplink of 275-282 Mbit/s sits at the practical USB 2.0 ceiling of the RTL8852BU. Every replayed arrival uses G(t), so this goes first.
 2. **Reference numbers:** the stage table says 12.3 mm loop and 7.6 / 1.8 cm; the results log says 13.9 mm and 7.8 / 1.9 cm for the same pass. Scan-to-map vs. the reference is 1.3 cm in the paper and 1.5 cm in the log. Pick the final run.
+   Control distances: 2 cm RMS is in; add N, the length range, the max and the relative error.
 3. **Frame offset:** explain the 0.49 m / 2.95 deg offset between the two passes' board-anchored frames.
 
 ## Scope

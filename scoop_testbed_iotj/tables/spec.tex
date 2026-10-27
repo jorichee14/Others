@@ -12,7 +12,7 @@
 \textbf{Test} & \textbf{Guarantee} & \textbf{Pass criterion} & \textbf{Measured bound} & \textbf{Check} \\
 \midrule
 E1 Precision & Clock between agents & each error term $\geq 10\times$ below the breaking point of its kind & measured offset $\leq$ \SI{0.99}{\milli\second}; strict bound $\leq$ \SI{12}{\milli\second} (worst case only); sniffer bias \todo{} & chrony logs; probe stamps, lower envelope \\
- & Agent pose & same, at IoU 0.5 and 0.7 & LiDAR robot \SI{10}{\milli\metre} (held-out boards); RGB-D cart \SI{3.1}{\centi\metre} median, $\sigma$ \SI{5.3}{\centi\metre}; second pass RMS \SI{3.0}{\centi\metre}; control distances \todo{} & held-out boards, second pass, rangefinder \\
+ & Agent pose & same, at IoU 0.5 and 0.7 & LiDAR robot \SI{10}{\milli\metre} (held-out boards); RGB-D cart \SI{3.1}{\centi\metre} median, $\sigma$ \SI{5.3}{\centi\metre}; second pass RMS \SI{3.0}{\centi\metre}; control distances $\approx$\SI{2}{\centi\metre} RMS & held-out boards, second pass, rangefinder \\
  & Extrinsics & same & Table~\ref{tab:calib} & held-out reflector and board positions \\
 E2 Consistency & Poses and link agree & clearance vs.\ detrended RSSI: $\rho > 0.3$ and drop $> \SI{5}{\decibel}$ on one link, 95\,\% CI excluding 0 & \texttt{mobile\_2}: $\rho = 0.60$, \SI{5.4}{\decibel}, CI \todo{}; \texttt{infra\_1}: $\rho = 0.23$, \SI{4.7}{\decibel} & Fresnel clearance through the map \\
 E3 Replay & Replay reproduces live arrivals & $\geq 90\,\%$ agreement on the receiver frame of each message; logged closer than fitted & \todo{} & payload messages live vs.\ replayed \\

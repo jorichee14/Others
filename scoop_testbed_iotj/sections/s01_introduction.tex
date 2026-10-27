@@ -53,9 +53,17 @@ contributions are:
     communication on one clock}: two mobile and three infrastructure
     agents on one access point, every pair's link recorded (link state,
     RTT, goodput, CSI), contention as a controlled setting, measured
-    clock offsets below \SI{1}{\milli\second}, and a pose reference
-    without motion capture or GNSS, each checked against measurements
-    that did not produce it (Secs.~\ref{sec:design}--\ref{sec:link}).
+    clock offsets below \SI{1}{\milli\second}, and sniffer bias bounded
+    by stamped probes (Secs.~\ref{sec:design}, \ref{sec:alignment},
+    \ref{sec:link}).
+    \item \textbf{A building-scale pose reference without motion capture,
+    GNSS, or a survey scanner}: a self-built reference map and a fiducial
+    chain for agents without LiDAR, checked by measurements that never
+    entered it (a second pass by the other robot, held-out boards, and
+    rangefinder control distances, which agree with the map to about
+    \SI{2}{\centi\metre} RMS); the LiDAR robot is placed to
+    \SI{10}{\milli\metre} and the RGB-D cart to \SI{3.1}{\centi\metre}
+    median (Sec.~\ref{sec:gt}).
     \item \textbf{A replay of the logged link, validated against live
     runs}: per-message arrivals for message-level models and for
     unmodified ROS~2 systems through a relay, \todo{reproducing live

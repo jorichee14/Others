@@ -5,7 +5,7 @@
 This section answers how accurately the testbed knows where every
 agent is, at building scale, using only onboard sensors. The result is a
 reference, not survey-grade ground truth: each check below bounds one
-of its errors, and absolute scale rests on the control distances. The reference
+of its errors, and absolute scale is fixed by the control distances. The reference
 map is SLAM-derived, which removes the survey scanner normally required
 for map registration; every scan is registered against it, so the pose
 is carried by the map and not by odometry between anchors; and
@@ -102,11 +102,13 @@ different anchor board?}, so maps of different passes are compared after
 registration.
 
 \paragraph{Control distances.} Laser-rangefinder distances between
-landmarks such as walls, \todo{$N$ distances of
-\SIrange{5}{40}{\metre} per site}, establish the absolute scale; their
-disagreement with the map grows with the scale at which a common
-deformation would act, which closes the gap left by the second pass.
-\todo{Report per site: mean and max map-minus-rangefinder error.}
+landmarks such as opposite walls establish the absolute scale, which
+the second pass, sharing the pipeline, cannot: a deformation common to
+both passes would shorten or lengthen them alike. Over \todo{$N$}
+distances of \todo{a}--\todo{b}\,\si{\metre}, the map agrees with the
+rangefinder to about \SI{2}{\centi\metre} RMS \todo{max; relative
+error}, so the reference is metric at building scale, not only
+self-consistent.
 
 \paragraph{Held-out boards.} When an agent sights a board during a
 run, its registered pose and camera extrinsic predict where the board

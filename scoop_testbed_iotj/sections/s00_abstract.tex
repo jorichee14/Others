@@ -11,8 +11,10 @@ an RGB-D cart, and camera--radar masts record their sensors and every
 inter-agent link on one clock and in one metric frame: link state at
 \SI{5}{\hertz}, round-trip time at \SI{100}{\hertz}, goodput in
 \SI{4}{\second} windows, and Wi-Fi channel state, with measured clock
-offsets below \SI{1}{\milli\second} and agent poses from a self-built
-reference map and fiducial chain, without motion capture or GNSS. The
+offsets below \SI{1}{\milli\second}, and agent poses from a self-built
+reference map and fiducial chain, without motion capture or GNSS, whose
+scale rangefinder control distances confirm to about
+\SI{2}{\centi\metre} RMS. The
 logged link is replayed per message into any collaborative method,
 including unmodified ROS~2 systems. The instrument is checked against
 measurements it never used: most of its error terms lie an order of
