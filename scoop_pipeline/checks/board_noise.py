@@ -7,8 +7,8 @@ size, placed where you choose, found by the camera and measured by the LiDAR.
         [--robot mobile_1] [--image TOPIC --info TOPIC --lidar TOPIC] [--raw]
         [--static-tf configs/static_tf.yaml] [--T x,y,z,qx,qy,qz,qw]
         [--period 0.5] [--tol 0.05] [--span FROM TO]
-        [--margin 0.05] [--slab 0.25] [--min-points 12]
-        [--station-gap 0.5] [--bin 0] [--min-sightings 3] [--out DIR]
+        [--margin 0.05] [--slab 0.25] [--min-points 12] [--min-range 0.3]
+        [--runs] [--station-gap 0.5] [--bin 0] [--min-sightings 3] [--out DIR]
 
 `check.py noise` reads the noise floor off whatever flat patches a scan
 happens to hold: walls and floors at whatever range and incidence the room
@@ -40,6 +40,12 @@ rejection), and per sighting:
   tilt          between the two planes' normals, the same caveat
   spacing       the measured point spacing on the board: how many beams the
                 target is worth at that range
+  repeat        per station: the scan-to-scan spread of that plane's own
+                distance from the sensor, with board and robot standing
+                still. No camera in it, and the random part of sigma is
+                already averaged over the whole board, so this is what is
+                left: the floor under any movement read off a surface
+  step          per station: how far that plane sits from the station before
 
 Sightings are grouped into stations (the places the board stood): by default
 single-linkage on range with a --station-gap m gap, or fixed --bin m bins when
@@ -47,6 +53,28 @@ the board was carried about rather than placed. Per station the medians, and
 the scan-to-scan spread of the bias, which is the sensor's frame-to-frame
 range stability with everything standing still. Over the stations: a line
 fitted to sigma along the beam against range, the sensor's noise model.
+
+FINE MOVEMENT, 0.5 to 1.5 m
+  To ask how small a movement the cloud can carry, `repeat` is the number,
+  not `sigma`. A plane fitted to N points averages the random part down by
+  sqrt(N) -- 2000 points on a board at 1 m turn 6 mm of range noise into
+  well under a millimetre -- so what limits a small movement is what does not
+  average: the sensor's own drift between scans, the deskew when anything
+  moves, and the near-field behaviour of the first metre, which is the
+  LiDAR's worst regime (an OS1 is specified from 0.3 m, and its precision is
+  poorest below about 2 m). `repeat` holds all of it.
+
+  Give the movement a truth: stand the board at the distance you work at,
+  record a minute, then shim it forward by a known few mm (feeler gauges, a
+  slip gauge, a micrometer stage) and record again, a few steps. Read it with
+  --runs --station-gap 0.003, which keeps stations millimetres apart apart,
+  and compare the `step` column with the shim. The smallest step that comes
+  back cleanly, against the `repeat` beside it, is the answer for that
+  surface at that range. A board of about 0.5 x 0.4 m (5 x 4 squares of
+  0.1 m) is the one to use there: a 22 cm board is under 10 px of marker for
+  the robot's cameras at 1.5 m, and a metre board overfills the image at
+  0.5 m. Mind --min-range as well: the default 0.3 m drops returns nearer
+  than that.
 
 A station whose board is worth few beams is marked "!": a plane fitted to a
 handful of points reads low whatever the sensor does (and the fit eats the
@@ -256,11 +284,12 @@ def measure(xyz, T_lb, size, a):
     cos_inc = float(min(abs(beam @ nrm), 1.0))
     cos_cam = float(min(abs(beam[2]), 1.0))                    # the camera plane's normal is z
     res = (P[keep] - c) @ nrm
+    plane = float(abs((c - sensor) @ nrm))        # sensor to the fitted plane, no camera in it
     sigma = float(np.std(res, ddof=1))
     p5, p95 = np.percentile(res, [5, 95])
     board_z = float(np.median(P[keep, 2]))
     return dict(
-        range_m=rng, n=int(keep.sum()), rejected=int((~keep).sum()),
+        range_m=rng, plane_m=plane, n=int(keep.sum()), rejected=int((~keep).sum()),
         inc_deg=float(np.degrees(np.arccos(cos_inc))),
         sigma_mm=sigma * 1e3, beam_mm=sigma * 1e3 / max(cos_inc, 1e-3),
         thick_mm=float(p95 - p5) * 1e3,
@@ -271,13 +300,23 @@ def measure(xyz, T_lb, size, a):
 
 
 # ----------------------------------------------------------------- stations --
-def group(rows, bin_m, gap, min_n):
-    """Sightings -> stations: fixed bins (bin_m > 0) or single-linkage on
-    range. [(label, [row, ...])], by range, the small ones last."""
+def group(rows, bin_m, gap, min_n, by_runs=False):
+    """Sightings -> stations: time-ordered runs (--runs), fixed bins
+    (--bin) or single-linkage on range. [(label, [row, ...])], the small
+    ones apart."""
     d = np.array([r["range_m"] for r in rows])
     order = np.argsort(d)
     lab = np.zeros(len(rows), int)
-    if bin_m > 0:
+    if by_runs:
+        # the board stands, is moved, stands again: a run ends where the range
+        # leaves `gap` of the run's own median. Millimetres apart still part.
+        k, cur = 0, []
+        for i in sorted(range(len(rows)), key=lambda i: rows[i]["t"]):
+            if cur and abs(d[i] - np.median(d[cur])) > gap:
+                k, cur = k + 1, []
+            cur.append(i)
+            lab[i] = k
+    elif bin_m > 0:
         lab = np.floor(d / bin_m).astype(int)
     else:
         k = 0
@@ -286,29 +325,43 @@ def group(rows, bin_m, gap, min_n):
                 k += 1
             lab[i] = k
     out = []
-    for k in sorted(set(lab.tolist()), key=lambda k: np.median(d[lab == k])):
+    keys = sorted(set(lab.tolist())) if by_runs else \
+        sorted(set(lab.tolist()), key=lambda k: np.median(d[lab == k]))
+    for k in keys:
         sel = [r for r, kk in zip(rows, lab) if kk == k]
         out.append((len(out) + 1, sel))
     return [(i, s) for i, s in out if len(s) >= min_n], \
            [(i, s) for i, s in out if len(s) < min_n]
 
 
-def station_stats(sel):
+def station_stats(sel, before=None):
+    """One station's medians. `repeat_mm` is the scan-to-scan spread of the
+    fitted plane's own distance from the sensor, with the board and the robot
+    standing still: the floor under any movement read off this surface, and
+    the one number here with no camera in it. `step_mm` is how far that plane
+    sits from the station before, which a shimmed board gives a truth for."""
     med = lambda key: float(np.median([r[key] for r in sel]))             # noqa: E731
     bias = np.array([r["bias_mm"] for r in sel])
-    return dict(
+    plane = np.array([r["plane_m"] for r in sel]) * 1e3
+    st = dict(
         sightings=len(sel), range_m=med("range_m"), points=med("n"),
         spacing_cm=med("spacing_m") * 100, inc_deg=med("inc_deg"),
         sigma_mm=med("sigma_mm"), beam_mm=med("beam_mm"), thick_mm=med("thick_mm"),
+        plane_mm=float(np.median(plane)),
+        repeat_mm=float(np.std(plane, ddof=1)) if len(plane) > 1 else None,
         bias_mm=float(np.median(bias)),
         bias_sd_mm=float(np.std(bias, ddof=1)) if len(bias) > 1 else None,
         tilt_deg=med("tilt_deg"), thin=med("n") < THIN)
+    st["step_mm"] = None if before is None else st["plane_mm"] - before["plane_mm"]
+    return st
 
 
-def fit_line(x, y):
-    """y = a + b x by least squares, with r^2. None under three points."""
+def fit_line(x, y, span=0.5):
+    """y = a + b x by least squares, with r^2. None under three points, or
+    when they stand too close in x to say anything about the slope (stations
+    shimmed millimetres apart)."""
     x, y = np.asarray(x, float), np.asarray(y, float)
-    if len(x) < 3 or np.ptp(x) < 1e-6:
+    if len(x) < 3 or np.ptp(x) < span:
         return None
     b, a = np.polyfit(x, y, 1)
     resid = y - (a + b * x)
@@ -319,17 +372,19 @@ def fit_line(x, y):
 
 # ------------------------------------------------------------------- output --
 def table(stations, dropped):
-    rows = ["  station  range m  views  pts/scan  spacing cm  inc deg   sigma mm  "
-            "along beam  thick mm   bias mm (scan-to-scan)  tilt deg",
-            "  " + "-" * 118]
+    rows = ["  station  range m  views  pts/scan  spacing cm  inc deg  sigma mm  along beam"
+            "  thick mm  repeat mm  step mm   bias mm  tilt deg",
+            "  " + "-" * 128]
     for st in stations:
-        sd = "" if st["bias_sd_mm"] is None else " (%.1f)" % st["bias_sd_mm"]
-        rows.append("  %5d %c %7.2f %6d %9.0f %11.1f %8.1f %10.1f %11.1f %10.1f  %+8.1f%-9s %8.2f"
-                    % (st["station"], "!" if st["thin"] else " ", st["range_m"], st["sightings"],
-                       st["points"], st["spacing_cm"], st["inc_deg"], st["sigma_mm"],
-                       st["beam_mm"], st["thick_mm"], st["bias_mm"], sd, st["tilt_deg"]))
+        rows.append("  %5d %c %7.3f %6d %9.0f %11.1f %8.1f %9.1f %11.1f %9.1f %10s %8s  %+8.1f %8.2f"
+                    % (st["station"], "!" if st["thin"] else " ", st["range_m"],
+                       st["sightings"], st["points"], st["spacing_cm"], st["inc_deg"],
+                       st["sigma_mm"], st["beam_mm"], st["thick_mm"],
+                       "-" if st["repeat_mm"] is None else "%.2f" % st["repeat_mm"],
+                       "-" if st["step_mm"] is None else "%+.1f" % st["step_mm"],
+                       st["bias_mm"], st["tilt_deg"]))
     for i, sel in dropped:
-        rows.append("  %5d   %7.2f %6d   too few sightings, left out"
+        rows.append("  %5d   %7.3f %6d   too few sightings, left out"
                     % (i, float(np.median([r["range_m"] for r in sel])), len(sel)))
     return "\n".join(rows)
 
@@ -342,21 +397,26 @@ def markdown(rep):
              rep["topics"]["image"], rep["topics"]["lidar"], rep["extrinsic"]["source"]),
           "%d sightings in %d stations." % (rep["sightings"], len(rep["stations"])), "",
           "| station | range m | views | pts/scan | spacing cm | incidence deg | sigma mm "
-          "| along beam mm | thickness mm | bias mm | scan-to-scan mm | tilt deg |",
-          "|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|"]
+          "| along beam mm | thickness mm | repeat mm | step mm | bias mm | tilt deg |",
+          "|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|"]
     for st in rep["stations"]:
-        md.append("| %d%s | %.2f | %d | %.0f | %.1f | %.1f | %.1f | %.1f | %.1f | %+.1f | %s | %.2f |"
+        md.append("| %d%s | %.3f | %d | %.0f | %.1f | %.1f | %.1f | %.1f | %.1f | %s | %s | %+.1f | %.2f |"
                   % (st["station"], " !" if st["thin"] else "", st["range_m"], st["sightings"],
                      st["points"], st["spacing_cm"], st["inc_deg"], st["sigma_mm"],
-                     st["beam_mm"], st["thick_mm"], st["bias_mm"],
-                     "-" if st["bias_sd_mm"] is None else "%.1f" % st["bias_sd_mm"],
-                     st["tilt_deg"]))
+                     st["beam_mm"], st["thick_mm"],
+                     "-" if st["repeat_mm"] is None else "%.2f" % st["repeat_mm"],
+                     "-" if st["step_mm"] is None else "%+.1f" % st["step_mm"],
+                     st["bias_mm"], st["tilt_deg"]))
     f = rep.get("fit")
     if f:
         md += ["", "Range noise: **sigma = %.1f + %.2f d mm** (d in m, r2 %.2f), "
                    "%.1f x that as 5-95 %% thickness."
                % (f["a_mm"], f["b_mm_per_m"], f["r2"], CHI)]
-    md += ["", "sigma: the points' rms about their own plane. Along beam: that over "
+    md += ["", "Repeat: the scan-to-scan spread of the fitted plane's own distance from the "
+               "sensor, standing still -- the floor under any movement read off this surface, "
+               "and the one column with no camera in it. Step: how far that plane sits from the "
+               "station before.",
+           "", "sigma: the points' rms about their own plane. Along beam: that over "
                "cos(incidence), the range noise. Thickness: their 5-95 %% spread, the number "
                "`check.py noise` prints. Bias: against the camera's plane, along the beam "
                "(+ = the LiDAR ranges long), only as good as the camera -> LiDAR translation. "
@@ -381,10 +441,13 @@ def draw(rep, path):
                    label="%.1f + %.2f d mm" % (f["a_mm"], f["b_mm_per_m"]))
     ax[0].set_ylabel("range noise, mm (1 sigma along the beam)")
     ax[0].legend(fontsize=8)
-    ax[1].axhline(0, color="0.8", lw=1)
-    ax[1].errorbar([s["range_m"] for s in st], [s["bias_mm"] for s in st],
-                   yerr=[s["bias_sd_mm"] or 0 for s in st], fmt="o-", capsize=3, color="C2")
-    ax[1].set_ylabel("bias against the camera's plane, mm")
+    ax[1].plot([s["range_m"] for s in st], [s["repeat_mm"] or np.nan for s in st], "o-",
+               color="C2", label="plane, scan to scan")
+    ax[1].plot([s["range_m"] for s in st], [abs(s["bias_mm"]) for s in st], "s--", color="0.6",
+               label="|bias| vs the camera")
+    ax[1].set_ylabel("repeatability standing still, mm")
+    ax[1].set_yscale("log")
+    ax[1].legend(fontsize=8)
     ax[2].plot([s["range_m"] for s in st], [s["points"] for s in st], "o-", color="C1")
     ax[2].axhline(THIN, color="C3", ls="--", lw=1)
     ax[2].set_ylabel("points on the board per scan")
@@ -458,16 +521,18 @@ def run(a):
           (len(rows), a.tol * 1e3,
            ", %s" % "; ".join("%s x%d" % (k, v) for k, v in why.items()) if why else ""))
 
-    stations, dropped = group(rows, a.bin, a.station_gap, a.min_sightings)
+    stations, dropped = group(rows, a.bin, a.station_gap, a.min_sightings, a.runs)
     if not stations:
         raise SystemExit("no station with %d sightings; lower --min-sightings or raise "
                          "--station-gap" % a.min_sightings)
-    st = [dict(station=i, **station_stats(sel)) for i, sel in stations]
+    st = []
+    for i, sel in stations:
+        st.append(dict(station=i, **station_stats(sel, st[-1] if st else None)))
     fit = fit_line([s["range_m"] for s in st], [s["beam_mm"] for s in st])
 
-    print("\n%d sightings, %d stations (%s)\n"
-          % (len(rows), len(st), "%.2g m bins" % a.bin if a.bin > 0
-             else "linked within %.2g m" % a.station_gap))
+    how = ("runs, the board still within %.3g m" % a.station_gap if a.runs else
+           "%.2g m bins" % a.bin if a.bin > 0 else "linked within %.2g m" % a.station_gap)
+    print("\n%d sightings, %d stations (%s)\n" % (len(rows), len(st), how))
     print(table(st, dropped))
     allbeam = np.median([r["beam_mm"] for r in rows])
     print("\n  all stations: %.1f mm along the beam, %.1f mm (%.1f cm) as 5-95 %% thickness"
@@ -476,6 +541,11 @@ def run(a):
     if fit:
         print("  range noise:  sigma = %.1f + %.2f d mm   (d in m, r2 %.2f)"
               % (fit["a_mm"], fit["b_mm_per_m"], fit["r2"]))
+    rep_mm = [s["repeat_mm"] for s in st if s["repeat_mm"] is not None]
+    if rep_mm:
+        print("  standing still: the fitted plane repeats to %.2f mm scan to scan (%.2f at "
+              "the worst station); a movement of that surface is read above it, not above "
+              "sigma" % (float(np.median(rep_mm)), max(rep_mm)))
     if any(s["thin"] for s in st):
         print("  ! stations under %d points on the board: the plane fit eats the noise there; "
               "a bigger board or a shorter range" % THIN)
@@ -490,7 +560,7 @@ def run(a):
                settings=dict(period=a.period, tol=a.tol, margin=a.margin, slab=a.slab,
                              min_points=a.min_points, bin=a.bin, station_gap=a.station_gap,
                              min_sightings=a.min_sightings),
-               sightings=len(rows), stations=st, fit=fit,
+               sightings=len(rows), stations=st, fit=fit, runs=bool(a.runs),
                median=dict(beam_mm=float(allbeam),
                            thick_mm=float(np.median([r["thick_mm"] for r in rows]))),
                rows=rows)
@@ -549,12 +619,19 @@ def main():
     ap.add_argument("--slab", type=float, default=0.25,
                     help="m about the board's plane a return may be")
     ap.add_argument("--min-points", type=int, default=12, help="points for a sighting to count")
-    ap.add_argument("--min-range", type=float, default=0.5, help="m (the robot itself)")
+    ap.add_argument("--min-range", type=float, default=0.3,
+                    help="m: returns nearer than this are dropped (the robot's own body). "
+                         "Lower it for a board under 0.5 m away")
     ap.add_argument("--max-range", type=float, default=100.0)
     ap.add_argument("--bin", type=float, default=0.0,
                     help="m: fixed range bins instead of linked stations")
+    ap.add_argument("--runs", action="store_true",
+                    help="stations are time-ordered runs with the board standing still "
+                         "(within --station-gap), not ranges linked: the way to separate "
+                         "stations a few mm apart")
     ap.add_argument("--station-gap", type=float, default=0.5,
-                    help="m between sightings of one station")
+                    help="m: how far a station's sightings may spread in range "
+                         "(with --runs, how still the board must stand)")
     ap.add_argument("--min-sightings", type=int, default=3, help="per station")
     ap.add_argument("--out", help="folder for board_noise.{json,md,png} (default: by the bag)")
     a = ap.parse_args()

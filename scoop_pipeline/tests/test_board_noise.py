@@ -8,6 +8,14 @@ a floor. Every LiDAR point is ranged along its own beam with a known noise
   bias                  +10 mm at every station, whatever the incidence
   thickness             3.29 x sigma about the board's normal
 
+and, on a second bag of the board shimmed 5 mm at a time at 2 m, read as runs
+(the stations are millimetres apart, so range alone cannot separate them):
+
+  step                  +5.0 mm per shim, from the LiDAR's plane alone
+  repeat                under a millimetre: 1300 points average the 6 mm of
+                        range noise away, which is why a movement far under
+                        sigma is still read
+
     python tests/test_board_noise.py
 """
 import json
@@ -40,6 +48,7 @@ SQ_PX = 60                                 # the printed board's pixels per squa
 BOARD = {"squares_x": 8, "squares_y": 6, "square_len": 0.125, "marker_len": 0.094,
          "dictionary": "DICT_5X5_100", "min_corners": 8, "max_reproj": 1.0}
 STATIONS = (2.0, 3.0, 4.0, 5.0)
+SHIMS = (0.0, 0.005, 0.010)                # the step test: the board at 2 m, shimmed
 YAW = np.radians(20.0)                     # off square, so PnP is not a mirror flip
 SIG_A, SIG_B, BIAS = 0.004, 0.0012, 0.010  # m, m per m, m: the truth to read back
 T0 = 1_800_000_000
@@ -54,8 +63,8 @@ def T_lidar_cam():
     return T
 
 
-def T_lidar_board(d):
-    """The board d m ahead of the LiDAR, centred on its x axis, 0.1 m up, its
+def T_lidar_board(d, shim=0.0):
+    """The board d m ahead of the LiDAR (shim m further along its own normal), centred on its x axis, 0.1 m up, its
     printed face toward the sensor and turned YAW about the vertical. Board
     axes are OpenCV's: x across, y down, z into the face."""
     # columns: the board's axes in the LiDAR's frame. Facing the sensor from
@@ -67,6 +76,7 @@ def T_lidar_board(d):
     T = np.eye(4)
     T[:3, :3] = Rz @ R
     T[:3, 3] = np.array([d, 0.0, 0.1]) - T[:3, :3] @ np.array([w / 2, h / 2, 0.0])
+    T[:3, 3] += shim * T[:3, :3][:, 2]                 # along the board's normal, away
     return T
 
 
@@ -86,10 +96,10 @@ def plane_hit(u, nrm, p0):
     return np.where(t > 0, t, np.inf)
 
 
-def scan(d, rng, u):
+def scan(d, rng, u, shim=0.0):
     """One scan: the board at d m, a wall 1.2 m behind it, the floor 0.9 m
     below, each point ranged along its own beam with the noise and bias."""
-    T = T_lidar_board(d)
+    T = T_lidar_board(d, shim)
     R, t = T[:3, :3], T[:3, 3]
     w, h = BOARD["squares_x"] * BOARD["square_len"], BOARD["squares_y"] * BOARD["square_len"]
     nb = R[:, 2]                                     # the board's normal in the LiDAR frame
@@ -119,15 +129,17 @@ def board_image(design, T_cam_board, rng):
                    255).astype(np.uint8)
 
 
-def build(tmp):
-    """A bag with the camera, its info, /tf_static and the LiDAR."""
+def build(tmp, stations=None, name="board_bag"):
+    """A bag with the camera, its info, /tf_static and the LiDAR. `stations`
+    is [(range m, shim m)], five seconds standing at each."""
+    stations = [(d, 0.0) for d in STATIONS] if stations is None else list(stations)
     design = Board("test_board", BOARD)
     T_lc = T_lidar_cam()
     T_cl = np.linalg.inv(T_lc)
     rng = np.random.default_rng(3)
     u = beams()
     S = 10 ** 9
-    bag = os.path.join(tmp, "board_bag")
+    bag = os.path.join(tmp, name)
     MT = rosmsg.msg_type
     with BagWriter(bag) as w:
         ns0 = T0 * S
@@ -143,8 +155,8 @@ def build(tmp):
                                                        width=0, do_rectify=False))
         w.write(INFO, info, ns0 + 1)
         k = 0
-        for d in STATIONS:
-            T_cb = T_cl @ T_lidar_board(d)
+        for d, shim in stations:
+            T_cb = T_cl @ T_lidar_board(d, shim)
             img = board_image(design, T_cb, rng)
             for _ in range(5):                       # 5 s standing at each station
                 ns = ns0 + int(k * 1.0 * S)
@@ -155,7 +167,7 @@ def build(tmp):
                     data=np.clip(img.astype(np.float32)
                                  + rng.normal(0, 1.0, img.shape), 0, 255).astype(np.uint8).ravel())
                 w.write(IMAGE, im, ns)
-                ps = scan(d, rng, u)
+                ps = scan(d, rng, u, shim)
                 pts = np.zeros(len(ps), [("x", "<f4"), ("y", "<f4"), ("z", "<f4")])
                 pts["x"], pts["y"], pts["z"] = ps.T
                 w.write(LIDAR, rosmsg.pointcloud2(pts, ns, LIDAR_FRAME), ns)
@@ -196,6 +208,28 @@ def main():
                 fails.append("%.0f m: incidence %.1f deg, want 20" % (d, s["inc_deg"]))
             if s["points"] < 50:
                 fails.append("%.0f m: %d points on the board" % (d, s["points"]))
+        # the board shimmed 5 mm at a time at one distance: stations millimetres
+        # apart, read as runs, and the step read back from the plane alone
+        step_bag = build(tmp, [(2.0, h) for h in SHIMS], name="step_bag")
+        sout = os.path.join(tmp, "step")
+        r2 = subprocess.run([sys.executable, os.path.join(ROOT, "check.py"), "board", step_bag,
+                             "--squares", "8x6", "--square-len", "0.125",
+                             "--marker-len", "0.094", "--dict", "DICT_5X5_100",
+                             "--period", "0.5", "--runs", "--station-gap", "0.003",
+                             "--out", sout], capture_output=True, text=True)
+        print(r2.stdout[-1800:] + r2.stderr[-800:])
+        if r2.returncode:
+            fails.append("check.py board --runs exited %d" % r2.returncode)
+        step = json.load(open(os.path.join(sout, "board_noise.json")))["stations"]
+        if len(step) != len(SHIMS):
+            fails.append("%d shimmed stations, want %d" % (len(step), len(SHIMS)))
+        for st_, want in zip(step[1:], np.diff(SHIMS) * 1e3):
+            if st_["step_mm"] is None or abs(st_["step_mm"] - want) > 1.0:
+                fails.append("step %s mm, want %+.0f" % (st_["step_mm"], want))
+        if any(s["repeat_mm"] is None or s["repeat_mm"] > 1.0 for s in step):
+            fails.append("plane repeats to %s mm standing still, want under 1"
+                         % [s["repeat_mm"] for s in step])
+
         fit = rep["fit"]
         if not fit or abs(fit["a_mm"] - SIG_A * 1e3) > 2.0 \
                 or abs(fit["b_mm_per_m"] - SIG_B * 1e3) > 0.5:
@@ -210,6 +244,10 @@ def main():
                 for s in st))
             print("  ok    sigma = %.1f + %.2f d mm (truth %.1f + %.1f), r2 %.2f"
                   % (fit["a_mm"], fit["b_mm_per_m"], SIG_A * 1e3, SIG_B * 1e3, fit["r2"]))
+            print("  ok    shimmed 5 mm at a time at 2 m: steps %s mm, the plane repeating "
+                  "to %.2f mm scan to scan"
+                  % (", ".join("%+.1f" % s["step_mm"] for s in step[1:]),
+                     max(s["repeat_mm"] for s in step)))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     for f in fails:
