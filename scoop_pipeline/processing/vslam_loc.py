@@ -327,13 +327,26 @@ def play(part, launch, bag, c, rate):
         raise SystemExit("cuVSLAM failed (exit %d); what there is stays in %s" % (code, part))
 
 
+def clear(d):
+    """Remove `d`; what the container wrote in it is root's, so if it cannot
+    be removed it is moved aside (<d>_stale_<n>) for a sudo rm later."""
+    try:
+        shutil.rmtree(d)
+    except PermissionError:
+        n = 1
+        while os.path.exists("%s_stale_%d" % (d, n)):
+            n += 1
+        os.rename(d, "%s_stale_%d" % (d, n))
+        print("! %s has the container's (root's) files: moved to %s_stale_%d (sudo rm -rf it)" % (d, d, n))
+
+
 def fresh(out, redo):
     if os.path.isdir(out):
         if not redo:
             return False
         prev = out + "_prev"
         if os.path.isdir(prev):
-            shutil.rmtree(prev)
+            clear(prev)
         shutil.move(out, prev)
         print("the run before: kept as %s" % prev)
     return True
@@ -360,7 +373,7 @@ def cmd_map(a):
         VS.check(bag, c)
         part = os.path.join(os.path.dirname(out), ".partial", "vslam_map")
         if os.path.isdir(part):
-            shutil.rmtree(part)
+            clear(part)
         launch = stage(part, c, bag)
         json.dump({"map": "map"}, open(os.path.join(part, "after_play.json"), "w"))
         play(part, launch, bag, c, a.rate)
@@ -501,14 +514,14 @@ def cmd_localize(a):
         VS.check(bag, c)
         part = os.path.join(os.path.dirname(out), ".partial", "vslam_loc")
         if os.path.isdir(part):
-            shutil.rmtree(part)
+            clear(part)
         launch = stage(part, c, bag)
         shutil.copytree(os.path.join(mdir, "map"), os.path.join(part, "map"))
         open(os.path.join(part, "record_extra.txt"), "w").write("/tf\n")
         json.dump({"at_s": t_call, "hint": vec_of(hint), "map": "map", "tries": 15, "every_s": 2.0},
                   open(os.path.join(part, "during_play.json"), "w"), indent=1)
         play(part, launch, bag, c, a.rate)
-        shutil.rmtree(os.path.join(part, "map"))                  # a copy of the mapping pass's
+        clear(os.path.join(part, "map"))                  # a copy of the mapping pass's
         shutil.move(part, out)
     else:
         print("[skip] the run is there (--redo runs it again)")
