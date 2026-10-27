@@ -105,6 +105,15 @@ check.py <command>   every check, one command (check.py -h; check.py <command> -
     ouster  <packets bag>   offline Ouster packet decoding against the replayed clouds
     sync    <bag>           a robot's camera and LiDAR on one clock: the turn rate from
                             image shifts and from scan azimuth shifts, per segment (PASS/FAIL)
+    board   <bag>           the LiDAR's noise on a ChArUco board placed at several
+                            distances: the board found by the camera, its returns fitted
+                            a plane of their own; per station sigma along the beam,
+                            5-95 % thickness, the plane's scan-to-scan repeatability
+                            standing still (what a fine movement is read above, the one
+                            number with no camera in it) and its step from the station
+                            before, bias against the camera's plane, and sigma = a + b d
+                            fitted over the stations. --runs keeps stations millimetres
+                            apart apart, for a board shimmed by a known few mm
     glim    <machine folder> a GLIM run: trajectory summary and loop closure on the boards
     topics  <bag> [PATTERN] what a bag's topics hold: type, count, definition, first messages
     spacing <bag> <topic>.. intervals, gaps and repeated frames of topics in a bag
@@ -315,6 +324,11 @@ tests/               self-tests, no real bag needed
                      reported, a map scaled 1.002 read as +2000 ppm
   test_noise.py      check.py noise on a synthetic bag: one scan's walls and floors
                      read 3.29 x the points' 1.4 cm noise
+  test_board_noise.py  check.py board on a synthetic bag: a 1.00 x 0.75 m board at 2, 3,
+                     4 and 5 m, each point ranged along its own beam with 4 mm + 1.2 mm/m
+                     of noise and a 10 mm bias, read back per station and as the line;
+                     then the board shimmed 5 mm at a time at 2 m (--runs): the step read
+                     back to a millimetre, the plane repeating to 0.6 mm scan to scan
   test_figures.py    check.py figures on a made-up pass: seven figures as PNG and
                      PDF, noise skipped without --bag
   test_chain.py      check.py chain on a made-up pass: consistent; then the export
