@@ -1,0 +1,68 @@
+% Sec. VII-B Train: a twin built from the recordings. Plan: ../scoop_gym/docs/twin_plan.pdf.
+% Paragraphs: purpose; the world and where each part comes from; the
+% gate; train in the twin, test on held-out recordings; interface.
+\subsection{Train: A Twin Built from the Recordings}
+\label{sec:twin}
+Recordings answer what happened; they cannot show what an agent would
+have sensed or sent along a route it never took, with more people in
+the corridor, or with a camera that failed, and they hold few objects
+to learn from. The twin generates such scenarios at will, with one rule
+that keeps it tied to the testbed: nothing trained in the twin is
+evaluated in the twin. Passes are split into build passes, from which the twin is made,
+and held-out passes from another day, which are used only to check the
+twin and to test what is trained in it (Fig.~\ref{fig:gym}).
+
+\paragraph{The world.} Each part is built from the build passes, and
+each is tagged by where it comes from. \emph{Measured}: the building,
+the coloured mesh of Sec.~\ref{sec:gt} exported to Isaac Sim
+\cite{isaacsim} in the map frame, so that its cameras see the
+appearance the robots recorded; the sensors, with the
+real LiDAR beam patterns, camera intrinsics, and the mounts of
+Table~\ref{tab:calib}; the recorded paths; the link, logged or fitted
+along those paths (Sec.~\ref{sec:replay}), and indexed by place for new
+routes, from the survey's measurements per map cell and the contention
+measured between survey and cooperation passes; and sensor dropouts
+and pose error, fitted from the recordings. \emph{Added}: new routes,
+people, objects, and lighting, placed in the map's free space at the
+class counts of the recordings, each with an exact box at every stamp.
+A scenario chooses a setting per part, and any number of scenarios are
+generated.
+
+\paragraph{The gate.} Before any part is used for training, it is
+checked against the held-out passes: synthetic scans at the recorded
+poses against the real scans, the fitted dropouts against the dropouts
+of a held-out session, and the place-indexed link against the logged
+link of a held-out pass along that pass's own path (E6a). A part that
+fails is not used to train; a failed link, for example, falls back to
+the logged or fitted link on the recorded paths.
+
+\paragraph{Train in the twin, test on held-out recordings.} Perception
+and communication models, a cooperative detector, a fusion method, or a
+policy for what to send, are trained on twin scenarios and tested on the
+held-out real recordings through the replay, with the logged link and
+real labels (E6b). Motion cannot be tested on a recording; a motion
+policy trained in the twin is tested by deploying it on the testbed,
+the step after this paper.
+
+\paragraph{Interface, for both uses.} Agents reset and step through the Gymnasium and
+PettingZoo interfaces \cite{gymnasium,pettingzoo} on Isaac Lab
+\cite{orbit}; in the twin and on the recordings alike, the replay of
+Sec.~\ref{sec:replay} decides which
+messages arrive, and every miss is logged with its cause (outage,
+queue, transmission, or latency). Unlike simulators that generate their
+world and pass messages over an ideal bus \cite{lingjing}, and unlike
+network gyms over a simulated network \cite{ns3gym}, every part here is
+measured or checked against the place it was measured.
+
+\begin{figure}[t]
+\centering
+\fbox{\parbox[c][5cm][c]{0.95\columnwidth}{\centering
+\todo{Fig.: testing and training on the recordings, from \texttt{scoop\_gym/docs/twin\_plan.pdf}
+without the status markers: build and held-out passes; the twin, each
+part measured or added; the gate against held-out passes; train in the
+twin; test on held-out recordings.}}}
+\caption{Training on the recordings. The twin is built from build passes only; every
+part is checked against held-out passes before it trains anything, and
+what is trained is tested on held-out real recordings.}
+\label{fig:gym}
+\end{figure}

@@ -5,7 +5,7 @@
 This section answers how accurately the testbed knows where every
 agent is, at building scale, using only onboard sensors. The result is a
 reference, not survey-grade ground truth: each check below bounds one
-of its errors, and absolute scale rests on the control distances. The reference
+of its errors, and absolute scale is fixed by the control distances. The reference
 map is SLAM-derived, which removes the survey scanner normally required
 for map registration; every scan is registered against it, so the pose
 is carried by the map and not by odometry between anchors; and
@@ -18,6 +18,16 @@ shows the pipeline.
 \subsection{Reference Map}
 \label{sec:map}
 \input{sections/refmap_main}
+
+\paragraph{A coloured mesh.} The zero-level surface of the signed
+distance field is extracted as a mesh, and its colours come from a 3D
+Gaussian splatting model \cite{kerbl2023gaussian} trained on the
+mapping session's camera images at their reference poses
+\unsure{state how the splats' colours are transferred to the mesh
+vertices or faces}. The same map is thus a metric reference for poses
+and an appearance reference for rendering: a view rendered from it at a
+held-out camera pose can be compared with the image that camera
+recorded, \todo{PSNR / SSIM / LPIPS on held-out views}.
 
 The frozen map is the metric backbone of every run. LiDAR agents are
 localized by scan-to-map registration. For \texttt{mobile\_2}, depth
@@ -102,11 +112,13 @@ different anchor board?}, so maps of different passes are compared after
 registration.
 
 \paragraph{Control distances.} Laser-rangefinder distances between
-landmarks such as walls, \todo{$N$ distances of
-\SIrange{5}{40}{\metre} per site}, establish the absolute scale; their
-disagreement with the map grows with the scale at which a common
-deformation would act, which closes the gap left by the second pass.
-\todo{Report per site: mean and max map-minus-rangefinder error.}
+landmarks such as opposite walls establish the absolute scale, which
+the second pass, sharing the pipeline, cannot: a deformation common to
+both passes would shorten or lengthen them alike. Over \todo{$N$}
+distances of \todo{a}--\todo{b}\,\si{\metre}, the map agrees with the
+rangefinder to about \SI{2}{\centi\metre} RMS \todo{max; relative
+error}, so the reference is metric at building scale, not only
+self-consistent.
 
 \paragraph{Held-out boards.} When an agent sights a board during a
 run, its registered pose and camera extrinsic predict where the board

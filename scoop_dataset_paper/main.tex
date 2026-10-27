@@ -925,7 +925,7 @@ clearance, paradigm label) from the map, annotations, and poses, with
 the parameters of Table~\ref{tab:params} exposed so that users can
 regenerate \texttt{\_geom.yaml} under other thresholds.
 \item \emph{Channel replay.} The module that applies the ideal,
-synthetic, and logged channels of Sec.~\ref{sec:channels} to any
+synthetic, fitted, and logged channels of Sec.~\ref{sec:channels} to any
 message stream, reading goodput, RTT, and link state from
 \texttt{\_link.yaml}; the CSI parsers that produce the NumPy/HDF5
 representation.
@@ -963,7 +963,7 @@ Every experiment of Sec.~\ref{sec:experiments} is run on these
 benchmarks, so the questions differ only in what is varied: the
 training source (Q1), the collaborator's sensing (Q2), the stratum of
 collaboration geometry (Q3), or the channel (Q4). Inter-agent messages
-are delivered through one replay module under one of three channels,
+are delivered through one replay module under one of four channels,
 so that in Q4 any difference in accuracy is caused by the channel
 alone. Splits are cut by sequence, never by frame, and by site where a
 question tests transfer across buildings; the frame-history rule and
@@ -977,11 +977,16 @@ Under the \emph{ideal} channel, messages arrive complete, in order,
 and with zero delay. Under the \emph{synthetic} channel, the
 bandwidth is a fixed budget and the delay is drawn from a fixed
 distribution, as in prior collaborative perception benchmarks
-\cite{where2comm,v2xvit}. Under the \emph{logged} channel, a message
+\cite{where2comm,v2xvit}. Under the \emph{fitted} channel, each link
+has the logged link's statistics (a lognormal latency, its median
+goodput, and two-state outages with the measured share of time and
+mean length) but no tie to time or place; the testbed paper
+\cite{scoop_testbed} shows that it misstates message delivery, and Q4
+measures what that costs the tasks. Under the \emph{logged} channel, a message
 of size $s$ sent at time $t$ over link $(a,b)$ arrives after
 $\mathrm{RTT}_{ab}(t)/2 + s/G_{ab}(t)$, where $G_{ab}(t)$ is the
 goodput measured on that link at $t$ (Sec.~\ref{sec:commgt}), and it
-is dropped if the link was down. One replay module applies all three
+is dropped if the link was down. One replay module applies all four
 channels (Fig.~\ref{fig:replay}), so the channel is the only
 variable between runs. Q4 evaluates leave-one-site-out over the
 three sites (Sec.~\ref{sec:q2}), so that nothing fitted on one site
@@ -1140,8 +1145,8 @@ strata.}
 \subsection{Q4: What Does the Real Link Cost, and Could the Map Have Foreseen It?}
 \label{sec:results}
 This is the question no outdoor dataset can answer. Both benchmarks
-are run on the same frames three times, under the ideal, synthetic,
-and logged channels of Sec.~\ref{sec:channels}, so that any
+are run on the same frames four times, under the ideal, synthetic,
+fitted, and logged channels of Sec.~\ref{sec:channels}, so that any
 difference is caused by the channel alone; the link's cost is then
 related, frame by frame, to the geometry of Sec.~\ref{sec:paradigms}.
 
@@ -1169,8 +1174,13 @@ semantic loss in alignment or in the exchanged content; (4) T2: which
 message size survived, and whether the ideal-channel ranking of
 fusion methods held under the logged channel; (5) T2 boxes against
 labels, which separates misplaced objects from lost coverage; (6)
-synthetic against logged, where the impairment model over- or
-under-stated the cost; (7) T2 on T1 poses (table in the appendix),
+synthetic and fitted against logged, where the impairment model over-
+or under-stated the cost, including Swarm-SLAM's map-merge time and
+map age under fitted against logged (five runs per channel, only
+differences beyond the run spread claimed); (6b) a send-size decision
+(features or raw cloud, per frame, on monitored goodput) tuned under
+the fitted channel and scored under the logged one, with its regret
+against the threshold tuned on the logged channel; (7) T2 on T1 poses (table in the appendix),
 the added loss from degraded localization; (8) the
 clearance-against-RSSI check of Sec.~\ref{sec:environments}; (9) the
 latency cliff: in the OPV2V study \SI{100}{\milli\second} puts every

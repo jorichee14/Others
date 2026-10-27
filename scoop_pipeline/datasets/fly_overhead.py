@@ -67,7 +67,7 @@ def read_waypoints(path: str) -> np.ndarray:
     return np.array([[float(v) for v in pair.split(",")[:2]] for pair in pairs])
 
 
-def walk_loop(waypoints, speed: float, fps: float, ahead: float):
+def walk_loop(waypoints, speed: float, fps: float, ahead: float, frames: int = 0):
     """The camera along a closed lap: (eye, look) for every frame.
 
     The same walk `fly` does with the same path -- densified to 20 cm, closed,
@@ -89,9 +89,47 @@ def walk_loop(waypoints, speed: float, fps: float, ahead: float):
         d = np.asarray(distance, dtype=float) % total
         return np.c_[np.interp(d, along, closed[:, 0]), np.interp(d, along, closed[:, 1])]
 
-    steps = max(2, int(total / max(1e-6, speed) * fps))
-    travelled = np.arange(steps) * speed / fps
-    return at(travelled), at(travelled + ahead), total
+    # A frame count is the exact way to match another video: one lap spread
+    # over that many frames, whatever speed that implies. Asking for a speed
+    # that happens to divide the lap into the right number is the same thing
+    # arrived at by arithmetic, and wrong by a frame or two when it is not.
+    if frames:
+        steps, step = max(2, int(frames)), total / max(2, int(frames))
+    else:
+        steps, step = max(2, int(total / max(1e-6, speed) * fps)), speed / fps
+    travelled = np.arange(steps) * step
+    return at(travelled), at(travelled + ahead), total, step * fps
+
+
+def camera_height(scene: str, anchor: str):
+    """Where the training cameras actually sat, in the anchored frame.
+
+    The one height a splat render is sharp at is the height it was trained
+    from: a Gaussian is fitted to look right from the views that saw it, and
+    seen from a metre above them the flat ones turn to streaks. The cameras
+    are on disk, so the number is there to be read rather than guessed at a
+    nudge per render -- and it has to cross into the anchored frame, because
+    that is the frame a flight record is written in.
+    """
+    centres = []
+    with open(os.path.join(os.path.expanduser(scene), "sparse", "0", "images.txt"),
+              encoding="utf-8") as handle:
+        for line in handle:
+            v = line.split()
+            if len(v) >= 8 and v[0].isdigit():
+                w, x, y, z = (float(c) for c in v[1:5])
+                t = np.array([float(c) for c in v[5:8]])
+                rotation = np.array(
+                    [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                     [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                     [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+                centres.append(-rotation.T @ t)       # world-to-camera, so the centre
+    if not centres:
+        raise SystemExit(f"{scene}: no cameras in sparse/0/images.txt")
+    with open(os.path.expanduser(anchor), encoding="utf-8") as handle:
+        T = np.array(json.load(handle)["T_N_world"], dtype=float)
+    anchored = np.asarray(centres) @ T[:3, :3].T + T[:3, 3]
+    return anchored[:, 2], len(centres)
 
 
 def cone(eye, look, reach: float, half_angle: float):
@@ -118,10 +156,20 @@ def main() -> int:
     parser.add_argument("--fps", type=float, default=30.0, help="--path: frames a second")
     parser.add_argument("--ahead", type=float, default=2.0, metavar="M",
                         help="--path: look this far along the way, as fly does")
+    parser.add_argument("--frames", type=int, default=0, metavar="N",
+                        help="--path: spread the lap over exactly N frames instead "
+                             "of using --speed, to match another video's length")
     parser.add_argument("--write-json", default=None, metavar="FILE",
                         help="--path: also write the walk as a flight record, the "
                              "same form lod3dgs fly writes, so splat_walk --fly "
                              "(or another fly) can follow this exact lap")
+    parser.add_argument("--eye-from-scene", default=None, metavar="SCENE",
+                        help="--write-json: take the height from the training "
+                             "cameras of this scene folder (needs --anchor); the "
+                             "height a splat model is sharp at is the one it saw")
+    parser.add_argument("--anchor", default=None, metavar="FILE",
+                        help="frames/anchor_frame.json, to bring those cameras "
+                             "into the frame a flight record is written in")
     parser.add_argument("--eye-z", type=float, default=None, metavar="Z",
                         help="--write-json: the camera's height in the map frame "
                              "(not over the floor); read it off an existing "
@@ -152,11 +200,12 @@ def main() -> int:
               file=sys.stderr)
         return 2
     if args.path:
-        eye, look, total = walk_loop(read_waypoints(args.path), args.speed,
-                                     args.fps, args.ahead)
+        eye, look, total, pace = walk_loop(read_waypoints(args.path), args.speed,
+                                           args.fps, args.ahead, args.frames)
         fps, stem = args.fps, os.path.splitext(os.path.expanduser(args.path))[0]
         source = args.cloud
-        print(f"lap {os.path.basename(args.path)}: {total:.0f} m at {args.speed:g} m/s")
+        print(f"lap {os.path.basename(args.path)}: {total:.0f} m in {len(eye)} "
+              f"frames at {fps:g} fps ({len(eye) / fps:.0f} s, {pace:.2f} m/s)")
         if not source:
             print("--path needs --cloud: there is no mesh named anywhere else",
                   file=sys.stderr)
@@ -179,18 +228,28 @@ def main() -> int:
             print("--write-json goes with --path: a json already is one",
                   file=sys.stderr)
             return 2
-        if args.eye_z is None:
-            print("--write-json needs --eye-z: the lap is a plan route and says "
-                  "nothing about height", file=sys.stderr)
+        eye_z = args.eye_z
+        if args.eye_from_scene:
+            if not args.anchor:
+                print("--eye-from-scene needs --anchor (frames/anchor_frame.json)",
+                      file=sys.stderr)
+                return 2
+            heights, how_many = camera_height(args.eye_from_scene, args.anchor)
+            eye_z = float(np.median(heights))
+            print(f"{how_many} training cameras: z from {heights.min():.2f} to "
+                  f"{heights.max():.2f}, median {eye_z:.2f} -- flying at the median")
+        if eye_z is None:
+            print("--write-json needs --eye-z or --eye-from-scene: the lap is a "
+                  "plan route and says nothing about height", file=sys.stderr)
             return 2
         # fly's own form, so anything that flies a flight record flies this.
         record = {"fps": fps, "mesh": source or "",
-                  "eye": np.c_[eye, np.full(len(eye), args.eye_z)].round(4).tolist(),
-                  "look": np.c_[look, np.full(len(look), args.eye_z)].round(4).tolist()}
+                  "eye": np.c_[eye, np.full(len(eye), eye_z)].round(4).tolist(),
+                  "look": np.c_[look, np.full(len(look), eye_z)].round(4).tolist()}
         with open(os.path.expanduser(args.write_json), "w", encoding="utf-8") as handle:
             json.dump(record, handle)
         print(f"wrote {args.write_json}: {len(eye)} frames at {fps:g} fps, "
-              f"eye at z={args.eye_z:g}")
+              f"eye at z={eye_z:.3f}")
 
     xy = read_xy(source, args.stride)
     print(f"{len(eye):,} frames at {fps:g} fps; map {os.path.basename(source)}, "

@@ -1,10 +1,12 @@
 % Sec. VIII Experiments (about 1.6 pages): spec sheet; E1-E4 test the
-% instrument; E5 tests whether the measured link matters.
+% instrument; E5 tests what a fitted channel misses.
 \section{Experiments}
 \label{sec:experiments}
-Five tests check the instrument and what it adds (Table~\ref{tab:spec}).
-E1 to E4 ask whether the testbed can be trusted; E5 asks whether its
-measured link changes answers that a synthetic channel would give. Each
+Six tests check the instrument and what it adds (Table~\ref{tab:spec}).
+E1 to E4 ask whether the testbed can be trusted; E5 asks whether a
+synthetic channel with the same statistics reproduces the logged link; E6
+asks whether the twin matches reality and whether what it trains
+holds on real data. Each
 pass criterion was stated before its test was run. Unless stated
 otherwise, link numbers come from the 24 September session at site 1:
 \texttt{survey\_1}, in which one agent owns the channel, and
@@ -30,12 +32,14 @@ against both (Fig.~\ref{fig:headroom}).
 \emph{Result.} At IoU 0.5 the measured clock offset (\SI{0.99}{\milli\second},
 \SI{1}{\milli\metre} at \SI{1}{\metre\per\second}), the LiDAR robot's
 held-out board residual (\SI{10}{\milli\metre}, $20\times$), and the
-board detector (\SI{8}{\milli\metre}, $25\times$) pass. Three terms fall
+board detector (\SI{8}{\milli\metre}, $25\times$) pass, and the control
+distances (\SI{2}{\centi\metre} RMS, $10\times$) meet the criterion
+exactly. Three terms fall
 short: the RGB-D cart (\SI{3.1}{\centi\metre} median, $6.5\times$), the
 second-pass registration (\SI{3.0}{\centi\metre} RMS, $6.7\times$), and
 the strict clock bound (\SI{12}{\milli\second}, $8.3\times$ against one
 frame). At IoU 0.7 only the clock, the LiDAR robot, and the detector stay
-near $10\times$; the cart's poses are then only about $3\times$ below the
+near $10\times$, and the control distances fall to $5.5\times$; the cart's poses are then only about $3\times$ below the
 breaking point, so perception scored from the cart's viewpoint at strict
 IoU is limited by the reference. \todo{Fill $v_{95}$, the sniffer bias,
 the LiDAR robot on \texttt{coop\_2}, and the radar residuals.}
@@ -101,14 +105,15 @@ survey and cooperation mode on the same route. \emph{Result.}
 \todo{Mode distance from \texttt{survey\_1} and \texttt{coop\_2}; day
 distance from the E3 session.}
 
-\subsection{E5 Effect: What the Measured Link Changes}
-\emph{Question.} Does the logged link change an answer that a synthetic
-channel with the same statistics gives? Three cases at increasing scale
-are compared under the fitted and logged channels, and the published
-channels are shown for reference; there is no pass criterion, and either
-outcome is reported.
+\subsection{E5 Gap: What a Fitted Channel Misses}
+\emph{Question.} Does a synthetic channel with the logged link's
+statistics deliver messages as the logged link does? The fitted and
+logged channels are compared, and the published channels are shown for
+reference; there is no pass criterion, and either outcome is reported.
+What the gap costs collaborative SLAM and perception, across methods
+and sites, is measured on the SCooP dataset \cite{scoop_dataset}.
 
-\emph{E5a, messages.} Messages of \SI{1}{\kilo\byte}, \SI{100}{\kilo\byte},
+\emph{Setup and result.} Messages of \SI{1}{\kilo\byte}, \SI{100}{\kilo\byte},
 and \SI{1.5}{\mega\byte} are sent through each channel at \SI{10}{\hertz}.
 Under the logged link the predicted share of \SI{1.5}{\mega\byte} messages
 that arrive within one frame is 86\,\% with one robot on the channel and
@@ -123,20 +128,27 @@ measured goodput, so the share is also reported against offered load
 divided by goodput, to separate a capacity limit from the link's
 structure. \todo{Fitted column; share against normalized load.}
 
-\emph{E5b, a decision.} A sender chooses, per frame, between features and
-the raw cloud. The threshold on monitored goodput above which it sends
-the cloud is tuned under the fitted channel and then scored under the
-logged one, and its regret against the threshold tuned on the logged
-channel is reported. \todo{Run on \texttt{coop\_2} and \texttt{survey\_1}.}
-
-\emph{E5c, a real system.} Swarm-SLAM \cite{swarmslam}, unmodified, runs
-on \texttt{coop\_2} with its inter-robot messages carried by the relay of
-Sec.~\ref{sec:replay}, five runs per channel. Reported are joint and
-per-robot ATE against the reference, the number and error of
-inter-robot loop closures, the time to the first map merge, and the age
-of each robot's copy of the other's map. Only differences between the
-fitted and logged channels larger than the spread between runs are
-claimed. If the robot's LiDAR and the cart's RGB-D find no common loop
-closures, both run on their cameras. \todo{Run.}
-
 \input{figures/simgap}
+
+\subsection{E6 Twin: The Twin Against Held-Out Passes}
+\emph{Question.} Does the twin reproduce held-out real passes, and does
+a model trained in it hold on real data? \emph{Pass.} E6a: synthetic
+scans at the recorded poses within \SI{3}{\centi\metre} median of the real
+scans; fitted dropout rates and burst lengths within the spread between
+real sessions; the place-indexed link predicting the held-out pass's
+in-frame share within 10 points and closer than the fitted channel. E6b:
+a model trained on twin scenarios and the build passes, tested on the
+held-out recordings, scores no worse than the same model trained on the
+build passes alone.
+
+\emph{E6a, the gate.} The twin drives the recorded paths of a held-out
+pass; its scans are registered to the map and compared with the real
+scans at the same poses, its camera views are compared with the
+recorded images at the same poses, and the dropout and link models fitted on the
+build passes are compared with that pass. \emph{E6b, train and test.} A
+cooperative detector is trained with and without twin scenarios that
+add people and objects at the recordings' class counts, and both are
+scored on the held-out recordings with real labels and the logged link.
+\emph{Result.} \todo{Run the twin on a held-out pass; label the
+held-out frames; train and score.}
+

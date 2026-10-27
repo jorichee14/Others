@@ -4,16 +4,21 @@
 SCooP-iT records a heterogeneous indoor team's sensing and every
 inter-agent link on one clock, with measured offsets below
 \SI{1}{\milli\second}, and in one metric frame, with the LiDAR robot
-placed to \SI{10}{\milli\metre} against held-out boards, without motion
-capture or GNSS. Its logged link replays per message into any
-collaborative method, including unmodified ROS~2 systems,
-\todo{reproducing live arrivals to within one frame}. Compared with a
-synthetic channel fitted to the same statistics, the logged link
-\todo{changes the predicted delivery of large messages, the best
-send-size policy, and the behaviour of a collaborative SLAM system}. The
-next step is a closed-loop environment built from the same capture, a
-twin of the measured building with its measured link, in which agents
-can act on what they receive and whose predictions can be checked on
-the testbed. The pipeline and the replay module are released with this
+placed to \SI{10}{\milli\metre} against held-out boards and its scale
+confirmed to about \SI{2}{\centi\metre} RMS by control distances,
+without motion capture or GNSS. Other researchers can test any collaborative method,
+including unmodified ROS~2 systems, on the recordings through a replay
+of the recorded link, \todo{whose predicted arrivals match
+live messages to within one frame}. A
+synthetic channel fitted to the same statistics \todo{misstates the
+delivery of large messages by X points}, so the link has to be
+measured, not modelled. How much the real link costs collaborative
+SLAM and perception across methods and sites is reported with the SCooP
+dataset \cite{scoop_dataset}. A
+digital twin built from the same capture with each part checked against
+held-out passes, trains models that are then tested on held-out real
+recordings \todo{result}. The next step closes the loop: motion
+policies trained in the twin, deployed on the testbed, and their real
+outcomes compared with the twin's predictions. The pipeline, the replay, and the twin are released with this
 paper, and the sequences and labels as the SCooP dataset
 \cite{scoop_dataset}.

@@ -71,6 +71,18 @@ PTP-synchronized sensors and benchmarks detection under the measured
 throughput. CoPeD \cite{coped} records an air--ground team indoors and
 outdoors with no link log.
 
+\subsection{Simulators and Digital Twins}
+Embodied agents are trained in simulators that generate their world,
+from Isaac Lab \cite{orbit} to city-scale multi-agent platforms whose
+messages pass an ideal bus \cite{lingjing}; ns3-gym \cite{ns3gym} exposes
+a simulated network to learning. Twins of real testbeds are checked
+against them: Colosseum reproduces an indoor wireless testbed's
+throughput and SINR \cite{villa2024colosseumdt}, and for navigation, how
+well simulation predicts real results is measured by the correlation of
+sim and real scores across policies \cite{kadian2020sim2real}. No twin
+reproduces a multi-agent team's sensing and link together and is checked
+against held-out real passes before it trains anything.
+
 \subsection{The Gap}
 Table~\ref{tab:gap_iotj} compares the closest platforms. Testbeds
 measure the radio without a perception task; replay systems are
