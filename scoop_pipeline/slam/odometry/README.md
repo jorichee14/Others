@@ -12,8 +12,8 @@ what it cost.
 | `fast_lio` | mobile_1, mobile_2 | Ouster + its IMU | this image |
 | `fast2lamaa` | mobile_1, mobile_2 | Ouster + its IMU: 2Fast-2Lamaa odometry + mapping (one global map) | `scoop/odometry:2f2l-jazzy` |
 | `fast2lamaa_loc` | mobile_1, mobile_2 | Ouster + its IMU: 2Fast-2Lamaa localizing in the reference pass's anchored map | `scoop/odometry:2f2l-jazzy` |
-| `rtabmap_map` | mobile_2 | D455 left infrared + depth, on the robot's pose in the twin (`/mobile_2/global_pose` of the mapping pass): a visual map in the twin's frame | `scoop/odometry:rtabmap` |
-| `rtabmap_loc` | mobile_2 | D455 left infrared + depth: RTAB-Map localizing in that map (`--db`), its own odometry between recognised places | `scoop/odometry:rtabmap` |
+| `rtabmap_map` | mobile_2 | D455 colour + the depth reprojected into it (`--rtab-image infra`: left infrared + depth), on the robot's pose in the twin (`/mobile_2/global_pose` of the mapping pass): a visual map in the twin's frame | `scoop/odometry:rtabmap` |
+| `rtabmap_loc` | mobile_2 | D455 colour (the same image as the map's) + infrared odometry: RTAB-Map localizing in that map (`--db`), its own odometry between recognised places | `scoop/odometry:rtabmap` |
 | `openvins` | mobile_2 | D455 infrared pair + IMU (needs `--imu-noise`) | this image |
 | `rtabmap_rgbd` | mobile_2 | D455 left infrared + depth | this image |
 | cuVSLAM | mobile_2 | D455 infrared pair (+ IMU) | the Isaac ROS container: `VSLAM_MONITOR=1 processing/vslam.py ...` |
@@ -92,7 +92,10 @@ scoop_pipeline/slam/odometry/run_odometry.sh rtabmap_loc $B mobile_2 $R/rtabmap_
 ```
 
 `/rtabmap/localization_pose` comes at each recognised place only: its
-coverage is how often RTAB-Map localized, its error how well.
+coverage is how often RTAB-Map localized, its error how well. RTAB-Map maps
+and recognises places in the colour image by default: the infrared images
+change with the D455's projector, and on the infrared images the coop runs
+never localized in the mapping pass's map.
 
 `openvins` refuses until `--imu-noise noise.yaml` gives the D455 IMU's Allan
 variance (`accelerometer_noise_density`, `accelerometer_random_walk`,
