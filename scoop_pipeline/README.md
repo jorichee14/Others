@@ -209,7 +209,8 @@ analysis/            measuring results; reads outputs, writes nothing back
                      compare.py tables every run and robot-to-robot result given;
                      processing/vslam_loc.py: cuVSLAM localizing in a map it saved on the mapping
                      pass (map <mapping config> --ref-topic /mobile_2/global_pose, then localize
-                     <coop config> --map-from <mapping config>), scored the same way
+                     <coop config> --map-from <mapping config>), put in the twin keyframe by
+                     keyframe (score/; the one fitted transform in score_fit/), scored the same way
                      rtabmap_map / rtabmap_loc (build.sh rtabmap): a visual map built on the
                      mapping pass's /mobile_2/global_pose (in the twin by construction), each
                      coop run localized in it, scored in map like fast2lamaa_loc
@@ -268,8 +269,8 @@ tests/               self-tests, no real bag needed
                      path, /tf_static played, refused without the pose; rtabmap_loc: the database
                      copied, localization mode, refused without a database
   test_vslam_loc.py  vslam_loc: the hook script compiles; keyframes fitted back onto the twin give
-                     the map's pose (residual 0); map -> odom (latest at each stamp) @ odometry
-                     from the localization on
+                     the map's pose (residual 0); a bent map anchored keyframe by keyframe;
+                     map -> odom (latest at each stamp) @ odometry from the localization on
   test_fast2lamaa.py fast2lamaa: the LiDAR in the IMU frame, the IMU as it is, the bag's clock;
                      fast2lamaa_loc: the map as gp_map loads it, the reference's IMU pose at the
                      first scan, refused without a reference; score's in-map error (0, then

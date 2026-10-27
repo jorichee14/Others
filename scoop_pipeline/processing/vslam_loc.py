@@ -23,16 +23,21 @@ in the mapping config's 04_reference), by the same pose fit score.py uses.
 
 localize: cuVSLAM over the coop pass with that map, the map's frame put in
 the twin by the map poses within --align-radius m (5) of the run's path only
-(a long drive's map bends; around one site it can still sit right); 3 s after the robot's
+(a long drive's map bends; around one site it can still sit right), for the
+LocalizeInMap hint and score_fit/; 3 s after the robot's
 first image and its reference both exist, LocalizeInMap is called with the
 reference's pose there, put in the map's frame (run_vslam.sh's during-play
 hook, on /clock), and retried every 2 s until it succeeds. From then on the
-pose in the twin is T_twin_cmap @ T_cmap_odom (/tf, recorded) @ T_odom_base
-(the odometry): written as score/trajectory.tum with a run.json saying it is
-in map, and scored against the coop pass's stage 04 track (ATE, in map with
+pose in the map is T_cmap_odom (/tf, recorded) @ T_odom_base (the odometry),
+put in the twin keyframe by keyframe (--anchor keyframes, the default): each
+map keyframe's own correction T_twin_base (the mapping pass's reference at
+its stamp) @ inv(T_cmap_base), averaged over the pose's --anchor-k (8)
+nearest keyframes, so the map's bend drops out; written as
+score/trajectory.tum with a run.json saying it is in map, and scored against the coop pass's stage 04 track (ATE, in map with
 no fit, RPE, drift; with VSLAM_MONITOR=1 also CPU, GPU and latency).
   -> work/<date>/<coop pass>/<machine>/vslam_loc/: odometry/, localize.json,
-     score/ (run.json, trajectory.tum, accuracy.json, summary.json)
+     score/ (run.json, trajectory.tum, accuracy.json, summary.json), score_fit/
+     (the same with the one fitted transform, to compare)
 
 Run with VSLAM_MONITOR=1 in front for the cost columns. The service names
 and request fields are looked up in the running node (isaac_ros_visual_slam
@@ -431,6 +436,35 @@ def align_near(mdir, aj, T_bl, run_T, radius, out):
     return A
 
 
+def anchor_keyframes(mdir, aj, T_bl, P, k=8):
+    """The poses P (T_cmap_base) in the twin, keyframe by keyframe: each
+    keyframe's correction C = T_twin_base (the mapping pass's reference at its
+    stamp) @ inv(T_cmap_base) put on the pose, for its k nearest keyframes (in
+    the map's frame), and the k results averaged. A map that bends over a long
+    drive is then right wherever it has keyframes: no single transform for
+    all of it. Also the distance (m) from each pose to its nearest keyframe."""
+    from scipy.spatial import cKDTree
+    from scipy.spatial.transform import Rotation
+    import trajs
+    if not str(aj.get("from", "")).startswith("keyframes"):
+        raise SystemExit("the map's poses are not its keyframes (%s): --anchor fit" % aj.get("from"))
+    t, K = load_tum(os.path.join(mdir, "keyframes.tum"))
+    mt, mT = load_tum(aj["reference"])
+    m = (t >= mt[0]) & (t <= mt[-1])
+    t, K = t[m], K[m]
+    C = trajs.interp(mt, mT, t) @ np.linalg.inv(T_bl) @ np.linalg.inv(K)
+    k = min(k, len(K))
+    d, idx = cKDTree(K[:, :3, 3]).query(P[:, :3, 3], k=k)
+    d, idx = d.reshape(len(P), k), idx.reshape(len(P), k)
+    out = np.empty_like(P)
+    for i in range(len(P)):
+        X = C[idx[i]] @ P[i]
+        out[i] = np.eye(4)
+        out[i][:3, :3] = Rotation.from_matrix(X[:, :3, :3]).mean().as_matrix()
+        out[i][:3, 3] = X[:, :3, 3].mean(axis=0)
+    return out, d[:, 0]
+
+
 def first_stamp(bag, topic):
     import make_config as MK
     m = MK.mc.first_msg(MK.mc._paths(bag), topic)
@@ -488,23 +522,40 @@ def cmd_localize(a):
     VS.to_tum(rec, os.path.join(out, "odometry.tum"), c["base_frame"])
     to, To = load_tum(os.path.join(out, "odometry.tum"))
     tm, Tm = compose(to, To, read_map_odom(rec), t_ok)
-    sd = os.path.join(out, "score")
+    fit = "the map poses within %g m of the run" % a.align_radius if a.align_radius > 0 else "the whole map"
+    runs = [("score_fit", np.einsum("ij,njk->nik", A, Tm), "one transform, fitted on %s" % fit)]
+    if a.anchor == "keyframes":
+        Tk, dk = anchor_keyframes(mdir, aj, T_bl, Tm, a.anchor_k)
+        runs.insert(0, ("score", Tk, "keyframe by keyframe: its %d nearest keyframes' corrections (nearest "
+                        "keyframe %.2f m median, %.2f m p95)" % (a.anchor_k, np.median(dk), np.percentile(dk, 95))))
+    else:
+        runs[0] = ("score",) + runs[0][1:]
+    reports = []
+    for name, Tw, how in runs:
+        reports.append((name, how, score_one(os.path.join(out, name), tm, Tw, how, a, c, bag, ref, mdir, t_ok,
+                                              loc, rec)))
+    print("cuVSLAM localized in its %s map from %.1f s (%d tries); %d poses"
+          % (os.path.basename(os.path.dirname(os.path.dirname(mdir))), t_ok - rt[0], len(loc["tries"]), len(tm)))
+    for name, how, acc in reports:
+        print("\n%s/ (map in the twin: %s)\n%s" % (name, how, SC.report(acc)))
+
+
+def score_one(sd, tm, Tw, how, a, c, bag, ref, mdir, t_ok, loc, rec):
+    import score as SC
     os.makedirs(sd, exist_ok=True)
-    write_tum(os.path.join(sd, "trajectory.tum"), tm, np.einsum("ij,njk->nik", A, Tm))
+    write_tum(os.path.join(sd, "trajectory.tum"), tm, Tw)
     rj = {"method": "cuvslam_loc", "machine": a.machine, "bag": os.path.abspath(bag), "tum_frame": c["base_frame"],
           "world": "map", "ref": os.path.abspath(ref), "key_topic": c["images"][0],
           "play_topics": list(c["images"]) + list(c["camera_infos"]) + [c["imu"]],
           "settings": {"map": [mdir, None, "cuVSLAM's own, saved on %s" % a.map_from],
-                       "localized_at_s": [t_ok, None, "%d tries" % len(loc["tries"])]}}
+                       "localized_at_s": [t_ok, None, "%d tries" % len(loc["tries"])],
+                       "map_in_twin": [how, None, "how the map's frame is put in the twin"]}}
     json.dump(rj, open(os.path.join(sd, "run.json"), "w"), indent=1)
     mon = os.path.join(rec, "monitor", "summary.json")
     if os.path.exists(mon):
         shutil.copy(mon, os.path.join(sd, "summary.json"))
     json.dump({"method": "ran", "play": "done"}, open(os.path.join(sd, "status.json"), "w"))
-    acc = SC.run_score(sd, ref)
-    print("cuVSLAM localized in its %s map from %.1f s (%d tries); %d poses\n%s"
-          % (os.path.basename(os.path.dirname(os.path.dirname(mdir))), t_ok - rt[0], len(loc["tries"]), len(tm),
-             SC.report(acc)))
+    return SC.run_score(sd, ref)
 
 
 def main():
@@ -524,6 +575,10 @@ def main():
                     "config puts them")
     ap.add_argument("--align-radius", type=float, default=5.0, help="localize: fit the map to the twin with the "
                     "map poses within this many m of the run's path only (0: the map's global fit)")
+    ap.add_argument("--anchor", default="keyframes", choices=("keyframes", "fit"),
+                    help="localize: put the poses in the twin keyframe by keyframe (score/; the fit in score_fit/ "
+                    "beside it), or by the one fitted transform only")
+    ap.add_argument("--anchor-k", type=int, default=8, help="--anchor keyframes: how many nearest keyframes")
     ap.add_argument("--rate", type=float, default=1.0)
     ap.add_argument("--redo", action="store_true")
     a = ap.parse_args()

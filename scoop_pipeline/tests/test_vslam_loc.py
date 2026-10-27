@@ -2,7 +2,8 @@
 """Self-test for processing/vslam_loc.py, no ROS, no GPU: the hook script
 compiles; a map's keyframes, in the camera base frame and the map's own frame,
 fitted onto a reference track in the twin give back the map's pose in the twin
-(residual 0); the poses in the map are map -> odom (the latest at or before
+(residual 0); a bent map, put in the twin keyframe by keyframe, lands
+each pose on the twin with its own part's transform; the poses in the map are map -> odom (the latest at or before
 each stamp) composed with the odometry, from the localization's moment on;
 TUM round trip.
 
@@ -56,6 +57,20 @@ def main():
     Al = VL.align_near(d, aj, T_bl, R[:150], 1.0, os.path.join(d, "out", "vslam_loc"))
     if np.abs(Al - A).max() > 1e-4:
         f.append("align_near: got\n%s\nwant\n%s" % (Al, A))
+    # keyframe by keyframe: poses in the map near either half land on the twin with that half's own
+    # transform (no single fit can do both), off the keyframes by a little
+    aj["from"] = "keyframes (GetAllPoses)"
+    off = T_of([0.03, -0.02, 0.0], [0.0, 0.0, 0.05])
+    want = np.concatenate([R[20:140:7], Rm[170:290:7]]) @ off
+    P = np.concatenate([np.linalg.inv(A) @ want[:18], np.linalg.inv(A2) @ want[18:]]) @ np.linalg.inv(T_bl)
+    Pk, dk = VL.anchor_keyframes(d, aj, T_bl, P)
+    if np.abs(Pk @ T_bl - want).max() > 1e-6 or dk.max() > 0.1:
+        f.append("anchor_keyframes: %.2e off, nearest keyframe %.3f m" % (np.abs(Pk @ T_bl - want).max(), dk.max()))
+    try:
+        VL.anchor_keyframes(d, dict(aj, **{"from": "odometry (map = odom at the start)"}), T_bl, P)
+        f.append("anchor_keyframes on odometry poses: not refused")
+    except SystemExit:
+        pass
     # map -> odom: identity until 1010 s (not localized), then a correction, then another
     C1, C2 = T_of([1.0, 0.0, 0.0], [0, 0, 0.1]), T_of([1.1, 0.0, 0.0], [0, 0, 0.1])
     tf = [(1000.0, np.eye(4)), (1010.0, C1), (1020.0, C2)]
