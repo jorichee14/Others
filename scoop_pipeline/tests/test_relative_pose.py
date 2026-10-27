@@ -2,13 +2,15 @@
 """Self-test for analysis/slam/relative_pose.py on a synthetic Swarm-SLAM run:
 two robots moving 40 s, each robot's odometry perfect in an odom frame of its
 own, keyframes every second. cslam's logs: a single-robot graph (no
-inter-robot edge, so not merged), a merged graph whose newest keyframe is at
-10 s with robot 1 placed 0.3 m off, and an exact merged graph at 20 s.
+inter-robot edge, so not merged), a graph at 4 s joined only by the board
+edge (both keyframes 0) with robot 1 placed 0.6 m off, a graph at 10 s with a
+loop closure and robot 1 0.3 m off, and an exact graph at 20 s.
 
-Before 10 s there must be no relative pose; from 10 to 20 s an error of
-0.3 m and 0 deg (the odometry carries the poses between keyframes exactly);
-from 20 s none. So: available 75 % of the run from 10 s, usable within 0.5 m
-75 %, within 0.2 m 50 %.
+Before 4 s there must be no relative pose; 4-10 s an error of 0.6 m; 10-20 s
+0.3 m; from 20 s none (the odometry carries the poses between keyframes
+exactly). So: available 90 % from 4 s, usable within 0.5 m 75 %, within
+0.2 m 50 %; the first loop closure at 10 s, before it 0.6 m over 6 s
+available, after it 30 s with median 0.
 
     python scoop_pipeline/tests/test_relative_pose.py
 """
@@ -55,20 +57,25 @@ def fixture(tmp):
     G = TC.rz(0.9, [10.0, 4.0, 1.0])                               # the graph's frame
     shift = TC.rz(0.0, [0.3, 0.0, 0.0])
 
-    def graph(upto, off):
+    def graph(upto, off, board_only=False):
         V = {TC.key(r, i): (off if r == 1 else np.eye(4)) @ np.linalg.inv(G) @ truth(r, i)
              for r in (0, 1) for i in range(upto + 1)}
         E = [(TC.key(r, i), TC.key(r, i + 1), np.eye(4)) for r in (0, 1) for i in range(upto)]
-        E.append((TC.key(0, upto), TC.key(1, upto), np.eye(4)))
+        E.append((TC.key(0, 0), TC.key(1, 0), np.eye(4)))             # the board edge
+        if not board_only:
+            E.append((TC.key(0, upto), TC.key(1, upto), np.eye(4)))   # a loop closure
         return V, E
 
     run = os.path.join(tmp, "runs", "ideal")
     d0 = os.path.join(run, "results", "x_experiment_robot_0")
-    for n, (name, upto, off, merged) in enumerate([("g1", 4, np.eye(4), False), ("g2", 10, shift, True),
-                                                    ("g3", 20, np.eye(4), True)]):
+    board_off = TC.rz(0.0, [0.6, 0.0, 0.0])
+    for n, (name, upto, off, merged, board) in enumerate([("g0", 2, np.eye(4), False, False),
+                                                          ("g1", 4, board_off, True, True),
+                                                          ("g2", 10, shift, True, False),
+                                                          ("g3", 20, np.eye(4), True, False)]):
         d = os.path.join(d0, name)
         os.makedirs(d)
-        V, E = graph(upto, off)
+        V, E = graph(upto, off, board)
         if not merged:
             V = {k: v for k, v in V.items() if CE_robot(k) == 0}
             E = [e for e in E if CE_robot(e[0]) == 0 and CE_robot(e[1]) == 0]
@@ -94,23 +101,33 @@ def main():
     f = []
     try:
         run = fixture(tmp)
-        Sx, dur = RP.series(tmp, run, step=1.0)
+        Sx, dur, lc = RP.series(tmp, run, step=1.0)
         t, tr, rot = Sx[:, 0], Sx[:, 1], Sx[:, 2]
-        if not np.isnan(tr[t < 9.5]).all():
+        if not np.isnan(tr[t < 3.5]).all():
             f.append("a relative pose before the first merged graph")
+        early = (t >= 4) & (t < 9.5)
+        if np.abs(tr[early] - 0.6).max() > 1e-3:
+            f.append("4-10 s (board edge only): %.4f m, want 0.6" % np.nanmax(np.abs(tr[early] - 0.6)))
+        if lc is None or abs(lc - 10.0) > 1e-6:
+            f.append("first loop closure at %s, want 10 s (the board edge is no loop closure)" % lc)
         mid = (t >= 10) & (t < 19.5)
         if np.abs(tr[mid] - 0.3).max() > 1e-3 or rot[mid].max() > 1e-3:
             f.append("10-20 s: %.4f m / %.4f deg, want 0.3 m / 0" % (np.nanmax(np.abs(tr[mid] - 0.3)), np.nanmax(rot[mid])))
         late = t >= 20
         if np.nanmax(tr[late]) > 1e-3 or np.nanmax(rot[late]) > 1e-3:
             f.append("after 20 s: %.4f m / %.4f deg, want 0" % (np.nanmax(tr[late]), np.nanmax(rot[late])))
-        rep = RP.summarize(Sx, dur, 20.0, (0.5, 2.0))
-        if rep["available_pct"] != 75.0 or rep["available_from_s"] != 10.0 or rep["usable"]["pct_of_run"] != 75.0:
-            f.append("summary %s" % rep)
-        if RP.summarize(Sx, dur, 20.0, (0.2, 2.0))["usable"]["pct_of_run"] != 50.0:
+        rep = RP.summarize(Sx, dur, 20.0, (0.5, 2.0), lc)
+        if rep["available_pct"] != 90.0 or rep["available_from_s"] != 4.0 or rep["usable"]["pct_of_run"] != 75.0:
+            f.append("summary %s" % {k: rep[k] for k in ("available_pct", "available_from_s", "usable")})
+        b, a = rep["before_loop_closure"], rep["after_loop_closure"]
+        if b["seconds"] != 10 or abs(b["translation_m"]["median"] - 0.6) > 1e-3 or a["seconds"] != 30 \
+                or a["translation_m"]["median"] > 1e-3 or a["available_pct"] != 100.0:
+            f.append("before/after split: %s / %s" % (b, a))
+        if RP.summarize(Sx, dur, 20.0, (0.2, 2.0), lc)["usable"]["pct_of_run"] != 50.0:
             f.append("usable within 0.2 m: want 50 %")
+        print(RP.report("test", rep))
         out = os.path.join(tmp, "rp.png")
-        RP.plot([("ideal", Sx)], out)
+        RP.plot([("ideal", Sx)], out, [lc])
         if not os.path.getsize(out):
             f.append("no plot")
     finally:

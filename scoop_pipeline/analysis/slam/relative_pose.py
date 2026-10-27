@@ -29,6 +29,11 @@ Per run:
                  a fused detection that far away is moved by
   usable         share of the run with a relative pose within --usable
                  (m, deg) (default 0.5 m, 2 deg)
+  before / after the first loop closure
+                 the same, split at the first graph with an inter-robot loop
+                 closure (an edge other than the board edge between the
+                 robots' first keyframes): what the boards alone gave, and
+                 what the loop closures made of it
 
 Writes relative_pose.json and relative_pose.csv (t, error per step) into
 each run, and with --out one plot of the error over time for every run given
@@ -53,26 +58,29 @@ def interp(export, r):
 
 
 def merged_graphs(results, st):
-    """[(t, {key: 4x4})] of the optimized global graphs with an inter-robot
-    edge, t = their newest keyframe's stamp, in time order."""
+    """[(t, {key: 4x4}, has a loop closure)] of the optimized global graphs
+    with an inter-robot edge, t = their newest keyframe's stamp, in time order."""
     out = []
     for _, s in CE.runs(results):
         p = os.path.join(s, "optimized_global_pose_graph.g2o")
         if not os.path.exists(p):
             continue
         V, E = CE.read_g2o(p)
-        if not any(CE.key_robot(a)[0] != CE.key_robot(b)[0] for a, b, _ in E):
+        inter = [(CE.key_robot(a), CE.key_robot(b)) for a, b, _ in E if CE.key_robot(a)[0] != CE.key_robot(b)[0]]
+        if not inter:
             continue
         ts = [st[k] for k in V if k in st]
         if ts:
-            out.append((max(ts), V))
+            # a loop closure: an inter-robot edge that is not the board edge (keyframe 0 to keyframe 0)
+            out.append((max(ts), V, any(not (ka[1] == 0 and kb[1] == 0) for ka, kb in inter)))
     out.sort(key=lambda g: g[0])
     return out
 
 
 def series(export, run, step=1.0, robots=(0, 1)):
-    """[(t, translation error m, rotation error deg)] over the run (NaN where
-    there is no relative pose), and the run's start and end."""
+    """([(t, translation error m, rotation error deg)] over the run (NaN where
+    there is no relative pose), the run's length, and the time of the first
+    loop closure (s into the run, or None))."""
     mc = CE._mc()
     results = os.path.join(run, "results")
     st = CE.stamps(results)
@@ -85,7 +93,7 @@ def series(export, run, step=1.0, robots=(0, 1)):
     t1 = min(gts[r].ts[-1] for r in robots) * 1e-9
     # each graph's keyframes per robot, by stamp
     kf = []
-    for tg, V in graphs:
+    for tg, V, _ in graphs:
         per = {}
         for k in V:
             r, _ = CE.key_robot(k)
@@ -116,14 +124,26 @@ def series(export, run, step=1.0, robots=(0, 1)):
                 D = np.linalg.inv(np.linalg.inv(G[a]) @ G[b]) @ (np.linalg.inv(P[a]) @ P[b])
                 row[1], row[2] = float(np.linalg.norm(D[:3, 3])), CE.rot_deg(D[:3, :3])
         out.append(row)
-    return np.array(out), t1 - t0
+    lc = [g[0] for g in graphs if g[2]]
+    return np.array(out), t1 - t0, (float(lc[0] - t0) if lc else None)
 
 
-def summarize(S, dur, rng=20.0, usable=(0.5, 2.0)):
+def summarize(S, dur, rng=20.0, usable=(0.5, 2.0), lc=None):
+    rep = _summary(S, dur, rng, usable)
+    rep["first_loop_closure_s"] = None if lc is None else round(lc, 1)
+    if lc is not None:
+        for name, m in (("before_loop_closure", S[:, 0] < lc), ("after_loop_closure", S[:, 0] >= lc)):
+            part = _summary(S[m], dur * m.mean(), rng, usable)
+            part["seconds"] = int(m.sum())
+            rep[name] = part
+    return rep
+
+
+def _summary(S, dur, rng, usable):
     ok = ~np.isnan(S[:, 1])
     rep = {"duration_s": round(float(dur), 1), "steps": int(len(S)),
            "available_pct": round(100.0 * ok.mean(), 1) if len(S) else 0.0,
-           "available_from_s": round(float(S[ok, 0][0]), 1) if ok.any() else None}
+           "available_from_s": round(float(S[ok, 0][0]), 1) if ok.any() and len(S) else None}
     if ok.any():
         tr, rot = S[ok, 1], S[ok, 2]
         at = tr + rng * np.radians(rot)
@@ -146,26 +166,44 @@ def report(name, rep):
                 "-" if rep["available_from_s"] is None else "%.1f" % rep["available_from_s"])]
     if "translation_m" in rep:
         t, r, a, u = rep["translation_m"], rep["rotation_deg"], rep["at_range_m"], rep["usable"]
-        lines += ["  translation median %.3f / p95 %.3f / max %.3f m; rotation median %.2f / p95 %.2f / max %.2f deg"
+        lines += ["  robot-to-robot position median %.3f / p95 %.3f / max %.3f m; rotation median %.2f / p95 %.2f / max %.2f deg"
                   % (t["median"], t["p95"], t["max"], r["median"], r["p95"], r["max"]),
                   "  a point %g m away moved by: median %.3f / p95 %.3f m"
                   % (rep["range_m"], a["median"], a["p95"]),
                   "  usable (within %g m, %g deg): %.1f %% of the run"
                   % (u["within_m"], u["within_deg"], u["pct_of_run"])]
+    if rep.get("first_loop_closure_s") is not None:
+        lines.append("  first loop closure at %.1f s" % rep["first_loop_closure_s"])
+        for name in ("before_loop_closure", "after_loop_closure"):
+            p = rep[name]
+            if "translation_m" in p:
+                lines.append("    %-20s %4d s: available %5.1f %%, position %.3f / %.3f m, rotation %.2f / %.2f deg "
+                             "(median / p95), usable %.1f %%"
+                             % (name.replace("_", " "), p["seconds"], p["available_pct"], p["translation_m"]["median"],
+                                p["translation_m"]["p95"], p["rotation_deg"]["median"], p["rotation_deg"]["p95"],
+                                p["usable"]["pct_of_run"]))
+            else:
+                lines.append("    %-20s %4d s: no shared frame" % (name.replace("_", " "), p["seconds"]))
+    else:
+        lines.append("  no inter-robot loop closure in the run")
     return "\n".join(lines)
 
 
-def plot(curves, path):
+def plot(curves, path, lcs=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-    for name, S in curves:
-        ax[0].plot(S[:, 0], S[:, 1], label=name, lw=1.5)
-        ax[1].plot(S[:, 0], S[:, 2], label=name, lw=1.5)
+    for i, (name, S) in enumerate(curves):
+        l0 = ax[0].plot(S[:, 0], S[:, 1], label=name, lw=1.5)[0]
+        ax[1].plot(S[:, 0], S[:, 2], label=name, lw=1.5, color=l0.get_color())
+        lc = (lcs or [None] * len(curves))[i]
+        if lc is not None:
+            for a in ax:
+                a.axvline(lc, color=l0.get_color(), ls=":", lw=1.2)
     ax[0].set_ylabel("translation error (m)")
     ax[1].set_ylabel("rotation error (deg)")
-    ax[1].set_xlabel("time into the run (s); no line = no shared frame yet")
+    ax[1].set_xlabel("time into the run (s); no line = no shared frame yet; dotted = first loop closure")
     for a in ax:
         a.grid(alpha=0.3)
         a.set_ylim(bottom=0)
@@ -185,10 +223,11 @@ def main():
     ap.add_argument("--usable", type=float, nargs=2, default=[0.5, 2.0], metavar=("M", "DEG"))
     ap.add_argument("--out", default=None, help="plot of every run's error over time (png)")
     a = ap.parse_args()
-    curves = []
+    curves, lcs = [], []
     for run in a.run:
-        S, dur = series(a.export, run, a.step)
-        rep = summarize(S, dur, a.range, tuple(a.usable))
+        S, dur, lc = series(a.export, run, a.step)
+        rep = summarize(S, dur, a.range, tuple(a.usable), lc)
+        lcs.append(lc)
         name = os.path.basename(os.path.normpath(run))
         print(report(name, rep))
         json.dump(rep, open(os.path.join(run, "relative_pose.json"), "w"), indent=1)
@@ -196,7 +235,7 @@ def main():
                    header="t_s,translation_m,rotation_deg", comments="")
         curves.append((name, S))
     if a.out:
-        plot(curves, a.out)
+        plot(curves, a.out, lcs)
         print("wrote", a.out)
 
 
