@@ -32,7 +32,7 @@ generated.
 checked against the held-out passes: synthetic scans at the recorded
 poses against the real scans, the fitted dropouts against the dropouts
 of a held-out session, and the place-indexed link against the logged
-link of a held-out pass along that pass's own path (E6a). A part that
+link of a held-out pass along that pass's own path (E6). A part that
 fails is not used to train; a failed link, for example, falls back to
 the logged or fitted link on the recorded paths.
 
@@ -40,7 +40,8 @@ the logged or fitted link on the recorded paths.
 and communication models, a cooperative detector, a fusion method, or a
 policy for what to send, are trained on twin scenarios and tested on the
 held-out real recordings through the replay, with the logged link and
-real labels (E6b). Motion cannot be tested on a recording; a motion
+real labels; that test is reported with the SCooP dataset
+\cite{scoop_dataset}. Motion cannot be tested on a recording; a motion
 policy trained in the twin is tested by deploying it on the testbed,
 the step after this paper.
 

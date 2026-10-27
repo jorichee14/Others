@@ -14,7 +14,7 @@
 %   V    Design and Collection         2.0  + sites, paradigms, geometry, params, seq, sessions, stats
 %   VI   Release                       1.2  + topics table, two trees
 %   VII  Benchmarks                    0.8  + replay fig, t1 table
-%   VIII Experiments (Q1-Q4)           2.5  + res tables, q1/q2 figs, failures
+%   VIII Experiments (Q1-Q5)           2.5  + res tables, q1/q2 figs, failures
 %   IX   Discussion                    0.8
 %   X    Conclusion                    0.2
 %   References (~75)                   1.3
@@ -202,10 +202,12 @@ The main contributions are:
     \item \textbf{Benchmarks and findings.} Geometric and semantic
     C-SLAM, collaborative 3D detection, and collaborative segmentation
     baselines under idealized, synthetic, and measured channels, used
-    to answer four questions with one controlled experiment each: Q1,
+    to answer five questions with one controlled experiment each: Q1,
     transfer from vehicle datasets; Q2, heterogeneity between
     collaborators; Q3, where the indoor gain comes from; Q4, what the
-    real link costs and how much of it the map foresees.
+    real link costs and how much of it the map foresees; Q5, whether
+    training on scenarios from the testbed's digital twin helps on real
+    recordings.
 \end{itemize}
 
 %=======================================================================
@@ -1217,6 +1219,22 @@ over time. Position against map-based link prediction work.}
 
 \input{figures/q2}
 
+\subsection{Q5: Does Training in the Twin Help on Real Recordings?}
+\label{sec:q5}
+The testbed's digital twin \cite{scoop_testbed} is built from build
+passes only, and each of its parts is checked against held-out passes
+before it trains anything. It adds people and objects in the map's free
+space at the class counts of the recordings, each with an exact box at
+every stamp, along recorded and new routes, with fitted sensor dropouts
+and the logged or place-indexed link. A cooperative detector is trained
+three ways: on the build passes alone, on twin scenarios alone, and on
+both. All three are scored on held-out recordings from another day with
+real labels, under the ideal and logged channels. \emph{Pass.} The model
+trained on both scores no worse than the model trained on the build
+passes alone; the gain is reported per class, with the rare classes
+separate. \todo{Generate twin scenarios; train; score on held-out
+recordings.}
+
 \subsection{Failure Cases}
 \label{sec:failures}
 
@@ -1315,7 +1333,7 @@ We presented SCooP, a multi-agent dataset that jointly captures
 synchronized sensing, cooperative perception labels, and measured
 communication, with dense reconstruction supervision, per-frame
 collaboration geometry, and benchmarks across the three layers, and
-used it to answer four questions about collaborative perception in
+used it to answer five questions about collaborative perception in
 indoor robot teams. \todo{One sentence of headline findings per
 question.} Future work includes scaling
 to larger teams, adding modalities, and richer channel models.
