@@ -27,6 +27,13 @@
 # resources.csv (the component container's CPU and memory, the GPU),
 # trajectory.tum (the odometry, of base_frame) and summary.json (latency per
 # left image, drops, rates, MB/s, whether it kept up). Meaningful at rate 1.
+#
+# Hooks, beside the launch file (processing/vslam_loc.py writes them; a plain
+# run has none): record_extra.txt, more topics to record (one per line);
+# during_play.json, `python3 vslam_srv.py during <its folder>` runs alongside the
+# play (it waits for its own moment on /clock: localize in a saved map);
+# after_play.json, `python3 vslam_srv.py after <its folder>` runs once the bag
+# has played, before cuVSLAM is stopped (save the map, dump its keyframes).
 set -euo pipefail
 die() { echo "run_vslam: $*" >&2; exit 1; }
 
@@ -112,7 +119,9 @@ if env --default-signal=INT true 2>/dev/null; then SIGDFL=(env --default-signal=
 else set -m; SIGDFL=(); fi
 
 LOGS=$(mktemp -d)
-REC=""; SLAM=""; PLAY=""; PROBE=""; RES=""
+HOOKS=$(dirname "$LAUNCH")
+EXTRA=(); [ -f "$HOOKS/record_extra.txt" ] && mapfile -t EXTRA < <(grep -v '^\s*$' "$HOOKS/record_extra.txt")
+REC=""; SLAM=""; PLAY=""; PROBE=""; RES=""; DURING=""
 [ -n "${VSLAM_PIDFILE:-}" ] && echo $$ > "$VSLAM_PIDFILE"  # so the host can stop us
 stop() {                               # SIGINT, then wait (at most $2 s) for it to exit
     local pid=$1 t=0
@@ -123,7 +132,7 @@ stop() {                               # SIGINT, then wait (at most $2 s) for it
     wait "$pid" 2>/dev/null || true
 }
 finish() {
-    stop "$PLAY" 10; stop "$SLAM" 30; stop "$REC" 60; stop "$PROBE" 10; stop "$RES" 5
+    stop "$DURING" 5; stop "$PLAY" 10; stop "$SLAM" 30; stop "$REC" 60; stop "$PROBE" 10; stop "$RES" 5
     if [ -n "$PROBE" ] && [ -d "$OUT/monitor" ]; then
         python3 "$VSLAM_MONITOR_SCRIPTS/summarize.py" "$OUT/monitor" || true
         [ -n "${VSLAM_IN_CONTAINER:-}" ] && rm -rf "$VSLAM_MONITOR_SCRIPTS"
@@ -150,7 +159,7 @@ echo "play:   $* (rate $RATE)"
 "${SIGDFL[@]}" ros2 launch "$LAUNCH" </dev/null >"$LOGS/vslam.log" 2>&1 &
 SLAM=$!
 "${SIGDFL[@]}" ros2 bag record -s mcap -o "$OUT" --use-sim-time \
-    /visual_slam/tracking/odometry /visual_slam/status \
+    /visual_slam/tracking/odometry /visual_slam/status "${EXTRA[@]}" \
     </dev/null >"$LOGS/record.log" 2>&1 &
 REC=$!
 for _ in $(seq 30); do                 # until the recorder listens
@@ -191,6 +200,11 @@ DELAY=(); [ -n "$PROBE" ] && DELAY=(--delay 1)
     </dev/null >"$LOGS/play.log" 2>&1 &
 PLAY=$!
 echo "playing the bag (logs: $OUT/vslam_logs/ when done) ..."
+if [ -f "$HOOKS/during_play.json" ]; then
+    "${SIGDFL[@]}" python3 "$HOOKS/vslam_srv.py" during "$HOOKS" </dev/null >"$LOGS/during.log" 2>&1 &
+    DURING=$!
+    echo "during the play: vslam_srv.py during (log: during.log)"
+fi
 start=$SECONDS; shown=0
 while kill -0 "$PLAY" 2>/dev/null; do
     kill -0 "$SLAM" 2>/dev/null || { tail -n 30 "$LOGS/vslam.log"; die "cuVSLAM exited during the play"; }
@@ -205,6 +219,16 @@ wait "$PLAY" || { tail -n 20 "$LOGS/play.log"; die "ros2 bag play failed"; }
 PLAY=""
 echo "end of the bag after $((SECONDS - start)) s"
 sleep "${VSLAM_DRAIN_S:-3}"
+if [ -n "$DURING" ]; then
+    kill -0 "$DURING" 2>/dev/null && echo "the during-play hook is still running: stopped"
+    stop "$DURING" 5; DURING=""; cat "$LOGS/during.log"
+fi
+if [ -f "$HOOKS/after_play.json" ]; then
+    echo "after the play: vslam_srv.py after (save the map, keyframes) ..."
+    timeout "${VSLAM_AFTER_TIMEOUT_S:-900}" python3 "$HOOKS/vslam_srv.py" after "$HOOKS" </dev/null \
+        >"$LOGS/after.log" 2>&1 || { cat "$LOGS/after.log"; die "the after-play hook failed"; }
+    cat "$LOGS/after.log"
+fi
 stop "$REC" 60; REC=""
 stop "$SLAM" 30; SLAM=""
 [ -f "$OUT/metadata.yaml" ] || die "ros2 bag record left no metadata.yaml in $OUT"

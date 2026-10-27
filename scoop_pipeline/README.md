@@ -197,7 +197,10 @@ analysis/            measuring results; reads outputs, writes nothing back
                      same for cuVSLAM with VSLAM_MONITOR=1. 2Fast-2Lamaa (fast2lamaa: odometry +
                      mapping; fast2lamaa_loc: localization in the reference pass's anchored map,
                      scored also in map with no fit) in its own Jazzy image (build.sh 2f2l);
-                     compare.py tables every run and robot-to-robot result given
+                     compare.py tables every run and robot-to-robot result given;
+                     processing/vslam_loc.py: cuVSLAM localizing in a map it saved on the survey
+                     pass (map <survey config> --ref-topic /mobile_2/global_pose, then localize
+                     <coop config> --map-from <survey config>), scored the same way
   slam/cslam_eval.py  Swarm-SLAM run against the ground truth: ATE per robot and joint,
                      inter-robot loop closures checked, time to merge, bytes exchanged
   slam/kimera_eval.py  Kimera-VIO (slam/run_kimera.sh) against the ground truth: ATE and
@@ -249,6 +252,9 @@ tests/               self-tests, no real bag needed
                      faded until the merge, edges sorted, the loop closure's scans overlapping
                      once placed by it; odometry placed at its first pose; both videos written
                      with the frames asked for (and the hold)
+  test_vslam_loc.py  vslam_loc: the hook script compiles; keyframes fitted back onto the twin give
+                     the map's pose (residual 0); map -> odom (latest at each stamp) @ odometry
+                     from the localization on
   test_fast2lamaa.py fast2lamaa: the LiDAR in the IMU frame, the IMU as it is, the bag's clock;
                      fast2lamaa_loc: the map as gp_map loads it, the reference's IMU pose at the
                      first scan, refused without a reference; score's in-map error (0, then
