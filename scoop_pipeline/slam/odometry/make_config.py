@@ -629,7 +629,7 @@ def rtabmap_loc(paths, edges, machine, a):
         raise Refused(f"rtabmap_loc: no database {a.db}: --db <the rtabmap_map run>/rtabmap.db")
     a.copy = {"rtabmap.db": os.path.abspath(a.db)}
     rt = dict(common, **{"odom_frame_id": "odom_vis", "Mem/IncrementalMemory": "false",
-                         "Mem/InitWMWithAllNodes": "true"})
+                         "Mem/InitWMWithAllNodes": "true", "RGBD/MaxOdomCacheSize": "0"})
     od = {"frame_id": base, "odom_frame_id": "odom_vis", "publish_tf": True, "approx_sync": True,
           "approx_sync_max_interval": 0.005, "qos": 1, "use_sim_time": True, "wait_for_transform": 0.3}
     return {
@@ -650,7 +650,9 @@ def rtabmap_loc(paths, edges, machine, a):
                      "image": [v["image"], None, "what RTAB-Map recognises places in (rtabmap_map's must match)"],
                      "output": ["/rtabmap/localization_pose", None, "a pose in the map (= the twin) at each "
                                 "recognised place: scored as it is, its coverage is how often that happens"],
-                     "Mem/IncrementalMemory": ["false", "true", "localization: the map is not extended"]}}
+                     "Mem/IncrementalMemory": ["false", "true", "localization: the map is not extended"],
+                     "RGBD/MaxOdomCacheSize": ["0", "10", "a good localization is taken at once, not held for "
+                                               "a second one to confirm it"]}}
 
 
 F2L_LAUNCH = '''# made by make_config.py: 2Fast-2Lamaa's two nodes on the bag's clock
