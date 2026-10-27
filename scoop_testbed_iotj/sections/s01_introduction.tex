@@ -65,15 +65,16 @@ contributions are:
     \SI{2}{\centi\metre} RMS); the LiDAR robot is placed to
     \SI{10}{\milli\metre} and the RGB-D cart to \SI{3.1}{\centi\metre}
     median (Sec.~\ref{sec:gt}).
-    \item \textbf{SCooP-iT Gym, a research tool on real recordings}:
-    other researchers \emph{test} any collaborative method on the
-    recordings, with each message's arrival predicted from the recorded
-    link, for message-level models and unmodified ROS~2 systems, checked
-    against messages sent live \todo{to within one frame} (E3); and
-    \emph{train} it on scenarios from a twin built from the recordings,
-    each part checked against held-out passes before it trains anything,
-    with results tested on held-out real recordings \todo{result} (E6)
-    (Sec.~\ref{sec:gym}).
+    \item \textbf{A replay and a digital twin that let other researchers
+    test and train collaborative methods on the recordings}: the replay
+    takes the messages a method sends and predicts, from the recorded
+    link, when each would have arrived or whether it would have been
+    lost, for message-level models and unmodified ROS~2 systems alike,
+    and is checked against messages sent live \todo{to within one frame}
+    (E3); the twin, built from the recordings with each part checked
+    against held-out passes before it trains anything, generates new
+    scenarios to train on, and what is trained in it is tested on
+    held-out real recordings \todo{result} (E6) (Sec.~\ref{sec:gym}).
     \item \textbf{Evidence that the measured link's structure matters}:
     against a synthetic channel fitted to the same link, the logged link
     changes the predicted delivery of large messages, the best
@@ -82,8 +83,8 @@ contributions are:
 \end{enumerate}
 Sec.~\ref{sec:related} reviews related work;
 Secs.~\ref{sec:design}--\ref{sec:link} describe the testbed;
-Sec.~\ref{sec:gym} presents the Gym, its replay of the recordings and
-its twin; Sec.~\ref{sec:experiments}
+Sec.~\ref{sec:gym} describes how others test and train methods on the
+recordings, through the replay and the twin; Sec.~\ref{sec:experiments}
 reports six tests, each with a pass criterion stated before the test was
 run; and Sec.~\ref{sec:lessons}
 gives lessons and limitations. The sequences and labels recorded on the

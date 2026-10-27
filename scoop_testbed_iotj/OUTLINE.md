@@ -22,16 +22,16 @@ deliver everything by construction.
 **Four contributions:**
 1. The testbed: heterogeneous agents, every link on the sensors' clock, sniffer bias bounded.
 2. A building-scale pose reference without motion capture, GNSS or a survey scanner: the map's mesh coloured by 3D Gaussian splatting of the recorded images (to do: PSNR/SSIM on held-out views), checked by a second pass, held-out boards and control distances (about 2 cm RMS).
-3. **SCooP-iT Gym, a research tool on real recordings** (Sec. VII), with two uses through one interface:
-   - **test** any method on the recordings, each message's arrival predicted from the recorded link (message models and unmodified ROS 2 systems), checked against messages sent live (E3);
-   - **train** it on scenarios from a twin built from the recordings, each part checked against held-out passes, with results tested on held-out recordings (E6).
+3. **A replay and a digital twin that let other researchers test and train collaborative methods on the recordings** (Sec. VII):
+   - **replay (test):** takes the messages a method sends and predicts, from the recorded link, when each would have arrived or whether it would have been lost; works for message-level models and unmodified ROS 2 systems; checked against messages sent live (E3);
+   - **twin (train):** built from the recordings, each part checked against held-out passes before it trains anything; generates new scenarios to train on; what it trains is tested on held-out real recordings (E6).
 4. Evidence that the link's structure matters (E5).
 
 ## What was removed, and where it went
 
 | Removed | Why | Where it goes |
 |---|---|---|
-| Gym deployment on the robots (closed loop), task tables | needs trained motion policies and a second session | next step; the Gym itself is back as Sec. VIII and E6 (27 Oct) |
+| Gym deployment on the robots (closed loop), task tables | needs trained motion policies and a second session | next step; the replay and twin are back as Sec. VII and E6 (27 Oct) |
 | Embodied / Gym framing in title, abstract, keywords | the paper no longer claims it | follow-up |
 | The seven-questions framing and "worth" subsection | uniqueness belongs in Sec. II, reproducibility in the design and release | — |
 | Related work on AoI, task-oriented communication, edge, simulators, Lingjing | not needed for the claim | — |
@@ -50,8 +50,8 @@ deliver everything by construction.
 | IV Time and Space Alignment | clock; sniffer bias (lower envelope); error budget at measured speed; extrinsics | 1070 | 750 |
 | V Pose Reference | map; fiducial chain; checks (thickness, second pass, control distances, held-out boards); scoring | 1160 | 850 |
 | VI Link Instrumentation | link state; CSI (overheard channel; Doppler argument) | 390 | 350 |
-| VII Replay of the Logged Link | model (RTT/2 + s/G, two hops); four channels; message API and ROS 2 relay; assumptions and limits | 470 | 450 |
-| VIII SCooP-iT Gym | twin from build passes; measured vs. added parts; the gate; train in twin, test on held-out recordings; interface | 650 | 600 |
+| VII-A Replay | model (RTT/2 + s/G, two hops); four channels; message API and ROS 2 relay; assumptions and limits | 470 | 450 |
+| VII-B Twin | twin from build passes; measured vs. added parts; the gate; train in twin, test on held-out recordings; interface | 650 | 600 |
 | IX Experiments | spec sheet; E1-E5 | 1150 | 1500 when results arrive |
 | X Lessons and Limitations | four lessons; limits | 260 | 250 |
 | XI Conclusion | results; closed-loop twin as the next step; release | 160 | 150 |
@@ -74,8 +74,8 @@ distortion detail and the extrinsics checks (move to the supplementary).
 | E4 Repeatability | same setting, same link on another day | day distance < half the mode distance | existing + the E3 session | mode half computable |
 | E5a Messages | in-frame share, logged vs. fitted (published for reference), also against offered load over goodput | none, report either way | existing | logged in hand (86 % / 59-68 %); fitted column to add |
 | E5b Decision | send-size threshold tuned on fitted, regret on logged | none | existing | code ready |
-| E6a Gym gate | twin vs. held-out pass: scans, dropouts, place-indexed link | scans <= 3 cm; dropouts within session spread; link within 10 pt and closer than fitted | twin run on a held-out pass | not run |
-| E6b Gym train/test | detector trained with vs. without twin scenarios, tested on held-out recordings | twin-trained no worse than real-trained | labels on held-out frames | not run |
+| E6a Twin gate | twin vs. held-out pass: scans, dropouts, place-indexed link | scans <= 3 cm; dropouts within session spread; link within 10 pt and closer than fitted | twin run on a held-out pass | not run |
+| E6b Twin train/test | detector trained with vs. without twin scenarios, tested on held-out recordings | twin-trained no worse than real-trained | labels on held-out frames | not run |
 | E5c Real system | Swarm-SLAM through the ROS 2 relay on coop_2, 5 runs per channel: ATE, loop closures, merge time, map age | none; claim only differences beyond the run spread | existing; tools exist | not run |
 
 ## Checks to run before anything else
@@ -91,7 +91,7 @@ distortion detail and the extrinsics checks (move to the supplementary).
   - ideal vs. logged cost across methods and sites, including the T1 C-SLAM benchmark.
   - E5c here reports only fitted vs. logged on one sequence, so the two papers share no comparison.
 - **In a follow-up paper:**
-  - the closed-loop Gym: Isaac twin, place-indexed link, train-test-deploy;
+  - closing the loop: motion policies trained in the twin, deployed on the robots;
   - validated with sim-vs-real correlation across policies (Kadian et al., RA-L 2020).
 
 ## Order of work

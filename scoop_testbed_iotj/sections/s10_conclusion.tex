@@ -6,17 +6,17 @@ inter-agent link on one clock, with measured offsets below
 \SI{1}{\milli\second}, and in one metric frame, with the LiDAR robot
 placed to \SI{10}{\milli\metre} against held-out boards and its scale
 confirmed to about \SI{2}{\centi\metre} RMS by control distances,
-without motion capture or GNSS. SCooP-iT Gym makes the recordings a research tool:
-any collaborative method, including unmodified ROS~2 systems, is tested
-on them against the recorded link, \todo{whose predicted arrivals match
+without motion capture or GNSS. Other researchers can test any collaborative method,
+including unmodified ROS~2 systems, on the recordings through a replay
+of the recorded link, \todo{whose predicted arrivals match
 live messages to within one frame}. Compared with a
 synthetic channel fitted to the same statistics, the logged link
 \todo{changes the predicted delivery of large messages, the best
-send-size policy, and the behaviour of a collaborative SLAM system}. The
-Gym's twin, built from the same capture with each part checked against
+send-size policy, and the behaviour of a collaborative SLAM system}. A
+digital twin built from the same capture with each part checked against
 held-out passes, trains models that are then tested on held-out real
 recordings \todo{result}. The next step closes the loop: motion
 policies trained in the twin, deployed on the testbed, and their real
-outcomes compared with the twin's predictions. The pipeline and SCooP-iT Gym are released with this
+outcomes compared with the twin's predictions. The pipeline, the replay, and the twin are released with this
 paper, and the sequences and labels as the SCooP dataset
 \cite{scoop_dataset}.
