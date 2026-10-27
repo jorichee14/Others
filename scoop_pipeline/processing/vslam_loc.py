@@ -78,6 +78,7 @@ import time
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from rosgraph_msgs.msg import Clock
 from rosidl_runtime_py.utilities import get_service
 
@@ -162,7 +163,9 @@ def after(node, d):
 def during(node, d):
     cfg = json.load(open(os.path.join(d, "during_play.json")))
     now = {"t": 0.0}
-    node.create_subscription(Clock, "/clock", lambda m: now.update(t=m.clock.sec + m.clock.nanosec * 1e-9), 10)
+    # best effort takes /clock from any publisher (the bag player's is best effort)
+    node.create_subscription(Clock, "/clock", lambda m: now.update(t=m.clock.sec + m.clock.nanosec * 1e-9),
+                             QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
     print("waiting for %.3f s on /clock" % cfg["at_s"], flush=True)
     while now["t"] < cfg["at_s"]:
         rclpy.spin_once(node, timeout_sec=0.2)
@@ -199,7 +202,7 @@ def main():
         (after if mode == "after" else during)(node, d)
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":
