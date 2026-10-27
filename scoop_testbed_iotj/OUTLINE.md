@@ -21,7 +21,7 @@ deliver everything by construction.
 
 **Four contributions:**
 1. The testbed: heterogeneous agents, every link on the sensors' clock, sniffer bias bounded.
-2. A building-scale pose reference without motion capture, GNSS or a survey scanner. Checked by a second pass, held-out boards and control distances (about 2 cm RMS).
+2. A building-scale pose reference without motion capture, GNSS or a survey scanner: the map's mesh coloured by 3D Gaussian splatting of the recorded images (to do: PSNR/SSIM on held-out views), checked by a second pass, held-out boards and control distances (about 2 cm RMS).
 3. **SCooP-iT Gym, a research tool on real recordings** (Sec. VII), with two uses through one interface:
    - **test** any method on the recordings, each message's arrival predicted from the recorded link (message models and unmodified ROS 2 systems), checked against messages sent live (E3);
    - **train** it on scenarios from a twin built from the recordings, each part checked against held-out passes, with results tested on held-out recordings (E6).

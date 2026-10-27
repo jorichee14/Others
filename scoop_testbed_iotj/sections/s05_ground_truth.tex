@@ -19,6 +19,16 @@ shows the pipeline.
 \label{sec:map}
 \input{sections/refmap_main}
 
+\paragraph{A coloured mesh.} The zero-level surface of the signed
+distance field is extracted as a mesh, and its colours come from a 3D
+Gaussian splatting model \cite{kerbl2023gaussian} trained on the
+mapping session's camera images at their reference poses
+\unsure{state how the splats' colours are transferred to the mesh
+vertices or faces}. The same map is thus a metric reference for poses
+and an appearance reference for rendering: a view rendered from it at a
+held-out camera pose can be compared with the image that camera
+recorded, \todo{PSNR / SSIM / LPIPS on held-out views}.
+
 The frozen map is the metric backbone of every run. LiDAR agents are
 localized by scan-to-map registration. For \texttt{mobile\_2}, depth
 registration, visual odometry, and a subset of the board sightings of

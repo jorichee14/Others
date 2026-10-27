@@ -14,8 +14,9 @@ twin and to test what is trained in it (Fig.~\ref{fig:gym}).
 
 \paragraph{The world.} Each part is built from the build passes, and
 each is tagged by where it comes from. \emph{Measured}: the building,
-the reference map of Sec.~\ref{sec:gt} exported to Isaac Sim
-\cite{isaacsim} as a surface in the map frame; the sensors, with the
+the coloured mesh of Sec.~\ref{sec:gt} exported to Isaac Sim
+\cite{isaacsim} in the map frame, so that its cameras see the
+appearance the robots recorded; the sensors, with the
 real LiDAR beam patterns, camera intrinsics, and the mounts of
 Table~\ref{tab:calib}; the recorded paths; the link, logged or fitted
 along those paths (Sec.~\ref{sec:replay}), and indexed by place for new
