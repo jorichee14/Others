@@ -65,7 +65,9 @@ python scoop_pipeline/slam/odometry/compare.py $R <swarm-slam runs ...> --md $R/
 `summary_<machine>_lidar.json`; `--map` for another), thinned to a 5 cm voxel
 mean and written as gp_map's `map.ply`, and starts at the reference's pose at
 the first scan (`--ref` for another TUM; live, the board start gives it); the
-first scan is still pulled onto the map coarse to fine. Its trajectory is in
+first scan is matched from that seed as it is (`--coarse-init` for the coarse-to-fine match a
+rough seed needs; on site_2 it slid mobile_2 17.6 m off a right seed). The play starts where the
+reference does, so the seed is the pose of the first scan played. Its trajectory is in
 map, so `accuracy.json` also has `in_map`: the error with no fit at all. That
 reference is stage 04's own registration to the same map: an `in_map` of a
 few cm is agreement with the offline localization, not accuracy beyond it.

@@ -108,6 +108,19 @@ def check_config(tmp, f):
     if not gmap["localization_only"] or np.abs(Ti - want).max() > 1e-6 or r["world"] != "map" \
             or gmap["map_path"] != "/work/map/":
         f.append("fast2lamaa_loc: init\n%s\nwant\n%s, world %s, map_path %s" % (Ti, want, r["world"], gmap["map_path"]))
+    if gmap["can_trust_init"] is not True or r["start_s"] != 0.0:
+        f.append("fast2lamaa_loc: can_trust_init %s, start %s" % (gmap["can_trust_init"], r["start_s"]))
+    # a reference that starts 2 s into the bag: the play starts there, the seed is its first pose
+    late = os.path.join(tmp, "ref_late.tum")
+    TO.write_tum(late, tr[20:], Tr[20:])
+    r = MK.make("fast2lamaa_loc", bag, "mobile_1", run("loc_late"), map_path=mp, ref=late, coarse_init=True)
+    odom, gmap = launch_params(run("loc_late"))
+    Ti[:3, :3] = Rotation.from_rotvec([gmap["init_pose_rx"], gmap["init_pose_ry"], gmap["init_pose_rz"]]).as_matrix()
+    Ti[:3, 3] = [gmap["init_pose_x"], gmap["init_pose_y"], gmap["init_pose_z"]]
+    want = Tr[20] @ np.linalg.inv(T_imu_lidar)
+    if abs(r["start_s"] - 2.0) > 1e-6 or np.abs(Ti - want).max() > 1e-6 or gmap["can_trust_init"] is not False:
+        f.append("fast2lamaa_loc, late reference: start %s, can_trust_init %s, init\n%s\nwant\n%s"
+                 % (r["start_s"], gmap["can_trust_init"], Ti, want))
     return bag, T_imu_lidar
 
 

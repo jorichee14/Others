@@ -10,7 +10,9 @@ mobile_1 / mobile_2), openvins, rtabmap_rgbd (the D455, mobile_2).
 fast2lamaa runs 2Fast-2Lamaa's odometry + mapping (one global map);
 fast2lamaa_loc localizes in the reference pass's anchored map (--map, default
 the one stage 04 registered the robot to), started at the reference's first
-pose (--ref, default stage 04's trajectory): its trajectory is in map. Writes <run dir>/run.json and
+pose (--ref, default stage 04's trajectory; the play starts where it does),
+trusting that seed (--coarse-init to match the first scan coarse to fine
+instead): its trajectory is in map. Writes <run dir>/run.json and
 <run dir>/config/ (the method's files, as the container sees them under
 /work/config); run_odometry.sh then runs it.
 
@@ -572,15 +574,16 @@ def fast2lamaa(paths, edges, machine, a, localize=False):
         P = mc.read_cloud(mp)
         P = voxel_mean(P[np.isfinite(P).all(1)], F2L_VOXEL / 3.0)
         a.map_points = P
-        t0 = a.bag_start_ns + int(round(a.start * 1e9))
         G = mc.PoseInterp.from_tum(ref, max_gap_s=1.0)
-        t_init = max(t0, int(G.ts[0]))
+        # the play starts where the reference does, so the seed is the pose of the first scan played
+        start = max(a.start, (int(G.ts[0]) - a.bag_start_ns) * 1e-9)
+        t_init = a.bag_start_ns + int(round(start * 1e9))
         T_ml = G.at(t_init)
         if T_ml is None:
             raise Refused(f"{ref}: no pose at {t_init * 1e-9:.3f} s")
         T_mi = T_ml @ T_li                                 # the IMU in map at the first scan
         ri = Rotation.from_matrix(T_mi[:3, :3]).as_rotvec()
-        gmap.update({"localization_only": True, "can_trust_init": False,
+        gmap.update({"localization_only": True, "can_trust_init": not a.coarse_init,
                      "init_pose_x": float(T_mi[0, 3]), "init_pose_y": float(T_mi[1, 3]),
                      "init_pose_z": float(T_mi[2, 3]), "init_pose_rx": float(ri[0]),
                      "init_pose_ry": float(ri[1]), "init_pose_rz": float(ri[2]),
@@ -592,9 +595,12 @@ def fast2lamaa(paths, edges, machine, a, localize=False):
             "mode": ["localization only, in the reference pass's anchored map", None,
                      "%s: %d points after a %.2f m voxel mean" % (mp, len(P), F2L_VOXEL / 3.0)],
             "init_pose": ["the reference's pose at the first scan (%.3f s)" % (t_init * 1e-9), "origin",
-                          "%s; live, the board start gives it (0.4-0.9 deg heading error there); "
-                          "can_trust_init false: the first scan is pulled onto the map coarse to fine"
-                          % os.path.basename(ref)],
+                          "%s; live, the board start gives it (cm, 0.4-0.9 deg heading error there); the play "
+                          "starts at %.1f s, where the reference does" % (os.path.basename(ref), start)],
+            "can_trust_init": [not a.coarse_init, False,
+                               "the seed is good: the first scan gets the normal registration (the coarse-to-fine "
+                               "one, losses 10/5/2 m, slid site_2 mobile_2 17.6 m off a right seed)"
+                               if not a.coarse_init else "--coarse-init: the first scan coarse to fine"],
             "key_framing": [True, False, "the OS1 localization launch's (0.05 s: every scan at 10 Hz)"]})
     files["fast2lamaa.launch.py"] = F2L_LAUNCH % {"odom": odom, "map": gmap, "imu": t["imu"],
                                                  "points": t["points"]}
@@ -603,7 +609,7 @@ def fast2lamaa(paths, edges, machine, a, localize=False):
         "launch": "mkdir -p /work/map && ros2 launch %s/fast2lamaa.launch.py" % CFG,
         "play": [t["points"], t["imu"]], "in": {t["points"]: PC2, t["imu"]: IMU}, "key": t["points"],
         "out": "/scan_to_map_pose", "out_type": TFS, "tum_frame": imu, "relay": relay(t["points"]),
-        "world": "map" if localize else "odom",
+        "world": "map" if localize else "odom", "start_s": start if localize else None,
         # the pose is stamped at the scan's reference time, not its header's: matched within a period
         "proc": r"lidar_scan_odometry|gp_map", "stamp_tol_s": 1.0 / LIDAR_HZ, "nominal_hz": LIDAR_HZ,
         "settings": settings}
@@ -625,7 +631,7 @@ METHODS = {"kiss_icp": kiss_icp, "rko_lio": rko_lio, "fast_lio": fast_lio,
 
 
 def make(method, bag, machine, run, start=0.0, duration=0.0, imu_noise=None, min_rate_frac=0.9,
-         map_path=None, ref=None):
+         map_path=None, ref=None, coarse_init=False):
     if method not in METHODS:
         raise Refused(f"{method}: one of {sorted(METHODS)}")
     if machine not in LIDAR:
@@ -635,9 +641,11 @@ def make(method, bag, machine, run, start=0.0, duration=0.0, imu_noise=None, min
     paths = mc._paths(bag)
     edges = mc.build_tf_static(paths)
     a = argparse.Namespace(imu_noise=imu_noise, map=map_path, ref=ref, bag=bag, bag_start_ns=t0, start=start,
-                           map_points=None)
+                           map_points=None, coarse_init=coarse_init)
     m = METHODS[method](paths, edges, machine, a)
     rate = gate(paths, m["key"], m["nominal_hz"], min_rate_frac)
+    if m.get("start_s") is not None:                     # the method moved the start (fast2lamaa_loc)
+        start = m["start_s"]
     if os.path.exists(os.path.join(run, "run.json")):
         raise Refused(f"{run} holds a run already: pick another folder")
     os.makedirs(os.path.join(run, "config"), exist_ok=True)
@@ -675,10 +683,12 @@ def main():
                     "default: the one stage 04's summary names)")
     ap.add_argument("--ref", default=None, help="fast2lamaa_loc: the T_map_lidar TUM whose first pose starts it "
                     "(default: stage 04's for the robot)")
+    ap.add_argument("--coarse-init", action="store_true", help="fast2lamaa_loc: register the first scan coarse to "
+                    "fine (for a rough seed) instead of trusting the seed")
     a = ap.parse_args()
     try:
         rj = make(a.method, a.bag, a.machine, a.run, a.start, a.duration, a.imu_noise, a.min_rate_frac,
-                  a.map, a.ref)
+                  a.map, a.ref, a.coarse_init)
     except (Refused, mc.ConvertError) as e:
         sys.exit(f"refused: {e}")
     print(json.dumps({k: rj[k] for k in ("method", "machine", "play_topics", "key_topic", "out_topic",

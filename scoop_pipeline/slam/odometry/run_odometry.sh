@@ -4,7 +4,7 @@
 # logged (slam/monitor/).
 #
 #   scoop_pipeline/slam/odometry/run_odometry.sh <method> <bag> <machine> <run dir> \
-#       [--start S] [--duration S] [--imu-noise FILE] [--map PCD] [--ref TUM]
+#       [--start S] [--duration S] [--imu-noise FILE] [--map PCD] [--ref TUM] [--coarse-init]
 #
 #   method   kiss_icp | rko_lio | fast_lio | fast2lamaa | fast2lamaa_loc (mobile_1, mobile_2) |
 #            openvins | rtabmap_rgbd (mobile_2)
