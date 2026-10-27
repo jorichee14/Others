@@ -4,14 +4,18 @@
 # logged (slam/monitor/).
 #
 #   scoop_pipeline/slam/odometry/run_odometry.sh <method> <bag> <machine> <run dir> \
-#       [--start S] [--duration S] [--imu-noise FILE]
+#       [--start S] [--duration S] [--imu-noise FILE] [--map PCD] [--ref TUM] [--coarse-init]
+#       [--gt-topic T] [--gt-frame F] [--db RTABMAP_DB]
 #
-#   method   kiss_icp | rko_lio | fast_lio (mobile_1, mobile_2) | openvins | rtabmap_rgbd (mobile_2)
+#   method   kiss_icp | rko_lio | fast_lio | fast2lamaa | fast2lamaa_loc (mobile_1, mobile_2) |
+#            openvins | rtabmap_rgbd | rtabmap_map | rtabmap_loc (mobile_2)
 #   bag      the pass's rosbag2 folder (the finalized merged bag)
 #   run dir  created; must not hold a run
 #
 # Environment: RATE (play rate, default 1.0: anything else is not a real-time
-# run), ODOM_IMAGE (default scoop/odometry:humble), PYTHON (the scoop env's
+# run), ODOM_IMAGE (default scoop/odometry:humble), ODOM_IMAGE_2F2L (the
+# fast2lamaa methods', default scoop/odometry:2f2l-jazzy), ODOM_IMAGE_RTAB (the
+# rtabmap_map / rtabmap_loc methods', default scoop/odometry:rtabmap), PYTHON (the scoop env's
 # python, for make_config.py), START_WAIT (s the method gets to start, 8),
 # DRAIN (s after the bag for the last outputs, 5).
 #
@@ -22,11 +26,15 @@
 # (slam/monitor/summarize.py), accuracy.json (score.py: ATE, RPE, drift against
 # stage 04's reference, also in summary.json), status.json, logs/.
 set -euo pipefail
-if [ $# -lt 4 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then sed -n '2,24p' "$0"; exit 1; fi
+if [ $# -lt 4 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then sed -n '2,29p' "$0"; exit 1; fi
 HERE=$(dirname "$(realpath "$0")")
 MONITOR=$(realpath "$HERE/../monitor")
 METHOD=$1; BAG=$(realpath "$2"); MACHINE=$3; RUN=$(realpath -m "$4"); shift 4
 IMAGE=${ODOM_IMAGE:-scoop/odometry:humble}
+case $METHOD in
+    fast2lamaa*) IMAGE=${ODOM_IMAGE_2F2L:-scoop/odometry:2f2l-jazzy};;
+    rtabmap_map|rtabmap_loc) IMAGE=${ODOM_IMAGE_RTAB:-scoop/odometry:rtabmap};;
+esac
 
 "${PYTHON:-python3}" "$HERE/make_config.py" "$METHOD" "$BAG" "$MACHINE" "$RUN" "$@"
 

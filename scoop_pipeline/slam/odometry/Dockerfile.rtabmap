@@ -1,0 +1,16 @@
+# RTAB-Map's SLAM node (rtabmap_slam) next to its odometry, for the camera
+# localizer test: rtabmap_map builds a visual map on known poses (the mapping
+# pass's /<robot>/global_pose), rtabmap_loc localizes the coop runs in it. The
+# Humble image has rgbd_odometry alone; this one is small and builds on its own.
+#
+#   scoop_pipeline/slam/odometry/build.sh rtabmap      (tag scoop/odometry:rtabmap)
+ARG BASE=ros:humble-ros-base
+FROM ${BASE}
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-rtabmap-slam ros-humble-rtabmap-odom ros-humble-rtabmap-msgs \
+        ros-humble-rosbag2-storage-mcap ros-humble-tf2-ros python3-numpy \
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg-query -W ros-humble-rtabmap-slam ros-humble-rtabmap-odom ros-humble-rtabmap > /opt/versions.txt
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc

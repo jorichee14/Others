@@ -21,6 +21,10 @@ Writes <run dir>/accuracy.json and adds it to summary.json as "accuracy":
                     translation cm and rotation deg
   drift_<d>m_pct    the translation error over every d = 5, 10 m of travel, as
                     % of d (the KITTI-style odometry number)
+  in_map            only for a run in map (run.json "world": "map", the
+                    fast2lamaa_loc localizer): the error as it is, no fit and no
+                    alignment at all: position cm and rotation deg, rmse /
+                    median / p95 / max (what a consumer of the map pose sees)
   start_aligned     the estimate put on the reference at its first pose, no
                     fit: the error at the end (cm and % of the path), and its
                     max: drift as it accumulated
@@ -107,8 +111,9 @@ def every(t, T, step):
     return T[keep]
 
 
-def score(t, E, tr, Tr, window=None):
-    """Accuracy of (t, E) against the reference (tr, Tr), both T_world_lidar."""
+def score(t, E, tr, Tr, window=None, in_map=False):
+    """Accuracy of (t, E) against the reference (tr, Tr), both T_world_lidar
+    (in_map: the estimate's world is the reference's map, so also unaligned)."""
     lo, hi = max(t[0], tr[0]), min(t[-1], tr[-1])
     if hi <= lo:
         return {"error": "the estimate and the reference do not overlap in time"}
@@ -134,6 +139,10 @@ def score(t, E, tr, Tr, window=None):
            "path": {"estimate_m": round(path_e, 3), "reference_m": round(path_r, 3),
                     "ratio": round(path_e / path_r, 4) if path_r > 0 else None,
                     "sampled_s": 1.0, "sim3_scale": round(sim3_scale(Es, Rs), 4)}}
+    if in_map:
+        out["in_map"] = {"position_cm": trajs.stats(np.linalg.norm(Es[:, :3, 3] - Rs[:, :3, 3], axis=1) * 100),
+                         "rotation_deg": trajs.stats(trajs.rot_deg(
+                             np.einsum("nji,njk->nik", Es[:, :3, :3], Rs[:, :3, :3])))}
     for d in trajs.DELTAS:
         r = c["relative"]["%gs" % d]
         if r["translation_cm"] is not None:
@@ -164,7 +173,7 @@ def run_score(run, ref=None):
     tum = os.path.join(run, "trajectory.tum")
     if not os.path.exists(tum) or os.path.getsize(tum) == 0:
         return {"error": "no trajectory.tum"}
-    ref = ref or default_ref(rj["bag"], rj["machine"])
+    ref = ref or rj.get("ref") or default_ref(rj["bag"], rj["machine"])
     if not ref or not os.path.exists(ref):
         return {"error": "no reference at %s (give --ref)" % ref}
     paths = MK.mc._paths(rj["bag"])
@@ -181,7 +190,7 @@ def run_score(run, ref=None):
               if r["topic"] == rj["key_topic"] and int(r["stamp_ns"]) > 0]
         if st:
             window = (min(st), max(st))
-    out = score(t, E, tr, Tr, window)
+    out = score(t, E, tr, Tr, window, in_map=rj.get("world") == "map")
     out.update({"reference": ref, "estimate_frame": rj["tum_frame"], "to_lidar": src})
     json.dump(out, open(os.path.join(run, "accuracy.json"), "w"), indent=1)
     if os.path.exists(s):
@@ -198,6 +207,11 @@ def report(a):
     lines = ["  ATE %s cm / %s deg rmse (median %s cm, max %s cm) over %d poses, %.1f s"
              % (f(a["ate"]["position_cm"]), f(a["ate"]["rotation_deg"]), f(a["ate"]["position_cm"], "median"),
                 f(a["ate"]["position_cm"], "max"), a["poses_scored"], a["span_s"])]
+    if "in_map" in a:
+        lines.append("  in map, no alignment: %s cm / %s deg rmse (median %s cm, p95 %s cm, max %s cm)"
+                     % (f(a["in_map"]["position_cm"]), f(a["in_map"]["rotation_deg"]),
+                        f(a["in_map"]["position_cm"], "median"), f(a["in_map"]["position_cm"], "p95"),
+                        f(a["in_map"]["position_cm"], "max")))
     rpe = ", ".join("%s %s cm / %s deg" % (k[4:], f(v["translation_cm"]), f(v["rotation_deg"]))
                     for k, v in a.items() if k.startswith("rpe_"))
     if rpe:

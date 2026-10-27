@@ -173,6 +173,13 @@ analysis/            measuring results; reads outputs, writes nothing back
   slam/patches/cslam_lidar_lc_direction.py  run once in Swarm-SLAM's container: its LiDAR
                      loop closures (TEASER++ + ICP) enter the pose graph inverted; measured
                      against the ground truth, they are right only the other way round
+  analysis/slam/relative_pose.py  the robots' relative pose over a Swarm-SLAM run, as collaborative
+                     perception uses it: at every second the latest merged graph, carried by
+                     each robot's odometry, against the ground truth; share of the run with a
+                     shared frame, translation / rotation error, a point at --range m, usable
+                     share (<export> --run <run> [--run ...] --out plot.png)
+  analysis/slam/relative_pose_loc.py  the same for two robots each localized in the map (two
+                     fast2lamaa_loc runs): no graph, no alignment, the map as the shared frame
   analysis/slam/trajectory_video.py  top-view videos over the reference (and --map's floor plan): two
                      robots' odometry each placed at its own first pose (odometry --run <run>
                      --run <run>), or Swarm-SLAM's graph in time order with its loop closures,
@@ -187,7 +194,16 @@ analysis/            measuring results; reads outputs, writes nothing back
                      a trajectory, and the cost (slam/monitor/: messages.csv, resources.csv,
                      summary.json: latency, drops, Hz, MB/s, CPU, RSS, GPU); make_config.py
                      makes each method's config from the bag; processing/run_vslam.sh does the
-                     same for cuVSLAM with VSLAM_MONITOR=1
+                     same for cuVSLAM with VSLAM_MONITOR=1. 2Fast-2Lamaa (fast2lamaa: odometry +
+                     mapping; fast2lamaa_loc: localization in the reference pass's anchored map,
+                     scored also in map with no fit) in its own Jazzy image (build.sh 2f2l);
+                     compare.py tables every run and robot-to-robot result given;
+                     processing/vslam_loc.py: cuVSLAM localizing in a map it saved on the mapping
+                     pass (map <mapping config> --ref-topic /mobile_2/global_pose, then localize
+                     <coop config> --map-from <mapping config>), scored the same way
+                     rtabmap_map / rtabmap_loc (build.sh rtabmap): a visual map built on the
+                     mapping pass's /mobile_2/global_pose (in the twin by construction), each
+                     coop run localized in it, scored in map like fast2lamaa_loc
   slam/cslam_eval.py  Swarm-SLAM run against the ground truth: ATE per robot and joint,
                      inter-robot loop closures checked, time to merge, bytes exchanged
   slam/kimera_eval.py  Kimera-VIO (slam/run_kimera.sh) against the ground truth: ATE and
@@ -228,6 +244,8 @@ tests/               self-tests, no real bag needed
   test_channel_relay.py  channel_relay: messages held to their arrival, outage dropped,
                      never back to the sender, every message logged; MB updates to a
                      server queued per robot uplink
+  test_relative_pose.py  relative_pose: no shared frame before the first merged graph, a graph's
+                     0.3 m offset carried by the odometry until the next graph, then 0
   test_cslam_eval.py cslam_eval: keys to robots, ATE, wrong loop closure flagged, merge time
   test_swarm_slam.py swarm_slam: topics, intrinsics, registered depth, odometry in the
                      robot's odom frame at the image stamp, ground truth
@@ -237,6 +255,17 @@ tests/               self-tests, no real bag needed
                      faded until the merge, edges sorted, the loop closure's scans overlapping
                      once placed by it; odometry placed at its first pose; both videos written
                      with the frames asked for (and the hold)
+  test_rtabmap_map.py rtabmap_map: the pose topic relayed as RTAB-Map's odometry, the database
+                     path, /tf_static played, refused without the pose; rtabmap_loc: the database
+                     copied, localization mode, refused without a database
+  test_vslam_loc.py  vslam_loc: the hook script compiles; keyframes fitted back onto the twin give
+                     the map's pose (residual 0); map -> odom (latest at each stamp) @ odometry
+                     from the localization on
+  test_fast2lamaa.py fast2lamaa: the LiDAR in the IMU frame, the IMU as it is, the bag's clock;
+                     fast2lamaa_loc: the map as gp_map loads it, the reference's IMU pose at the
+                     first scan, refused without a reference; score's in-map error (0, then
+                     a 10 cm offset the rigid fit hides); relative_pose_loc 0 and 0.2 m;
+                     compare's rows
   test_odometry.py   make_config: frames, beams and extrinsics from the bag, the refusals
                      (no IMU noise, the ZED, depth outside the left camera, a 1 fps camera);
                      summarize: outputs matched to their inputs (FAST-LIO2's late stamp,

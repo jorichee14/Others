@@ -4,7 +4,7 @@
 # everything stopped in reverse order and summarized, also when interrupted.
 set -uo pipefail
 set +u
-source /opt/ros/humble/setup.bash
+source /opt/ros/${ROS_DISTRO:-humble}/setup.bash          # humble, or jazzy for 2Fast-2Lamaa
 [ -f /ws/install/setup.bash ] && source /ws/install/setup.bash
 set -u
 W=/work; M=/opt/monitor; L=$W/logs
@@ -20,7 +20,7 @@ v = {"METHOD": r["method"], "LAUNCH": r["launch"], "PROC": r["proc_regex"],
      "OUT_TOPIC": r["out_topic"], "PLAY": " ".join(r["play_topics"]),
      "START_S": str(r.get("start_s") or 0), "DURATION_S": str(r.get("duration_s") or 0),
      "RELAY_IN": (r.get("relay") or {}).get("in", ""), "RELAY_OUT": (r.get("relay") or {}).get("out", ""),
-     "RELAY_HOLD": str((r.get("relay") or {}).get("hold_s", 0))}
+     "RELAY_HOLD": str((r.get("relay") or {}).get("hold_s", 0)), "STOP_S": str(int(r.get("stop_s") or 20))}
 v["PROBE_ARGS"] = " ".join(["--in %s=%s" % kv for kv in r["in_topics"].items()]
                            + ["--out %s=%s" % (r["out_topic"], r["out_type"]), "--tum " + r["out_topic"]])
 for k, x in v.items():
@@ -41,7 +41,7 @@ STATUS_METHOD=running; STATUS_PLAY=not_started
 finish() {
     trap '' INT TERM
     stop_group "$PLAY_PID" 5
-    stop_group "$SLAM" 20
+    stop_group "$SLAM" "${STOP_S:-20}"                # a map-saving method gets longer (run.json stop_s)
     stop_group "$RELAY" 5
     stop_group "$PROBE" 10
     stop_group "$RES" 5

@@ -10,6 +10,10 @@ what it cost.
 | `kiss_icp` | mobile_1, mobile_2 | Ouster | this image |
 | `rko_lio` | mobile_1, mobile_2 | Ouster + its IMU | this image |
 | `fast_lio` | mobile_1, mobile_2 | Ouster + its IMU | this image |
+| `fast2lamaa` | mobile_1, mobile_2 | Ouster + its IMU: 2Fast-2Lamaa odometry + mapping (one global map) | `scoop/odometry:2f2l-jazzy` |
+| `fast2lamaa_loc` | mobile_1, mobile_2 | Ouster + its IMU: 2Fast-2Lamaa localizing in the reference pass's anchored map | `scoop/odometry:2f2l-jazzy` |
+| `rtabmap_map` | mobile_2 | D455 left infrared + depth, on the robot's pose in the twin (`/mobile_2/global_pose` of the mapping pass): a visual map in the twin's frame | `scoop/odometry:rtabmap` |
+| `rtabmap_loc` | mobile_2 | D455 left infrared + depth: RTAB-Map localizing in that map (`--db`), its own odometry between recognised places | `scoop/odometry:rtabmap` |
 | `openvins` | mobile_2 | D455 infrared pair + IMU (needs `--imu-noise`) | this image |
 | `rtabmap_rgbd` | mobile_2 | D455 left infrared + depth | this image |
 | cuVSLAM | mobile_2 | D455 infrared pair (+ IMU) | the Isaac ROS container: `VSLAM_MONITOR=1 processing/vslam.py ...` |
@@ -22,6 +26,13 @@ scoop_pipeline/slam/odometry/build.sh        # scoop/odometry:humble, ~3-4 GB, 2
 
 Every source is pinned in the `Dockerfile`; the image's `/opt/versions.txt`
 lists them and RTAB-Map's apt version.
+
+2Fast-2Lamaa needs Ceres >= 2.2 (Ubuntu 24.04), so it has its own ROS 2 Jazzy
+image; the harness is the same (a Humble bag plays in Jazzy as it is):
+
+```bash
+scoop_pipeline/slam/odometry/build.sh 2f2l   # scoop/odometry:2f2l-jazzy, ~1 GB, 10-20 min
+```
 
 ## Run
 
@@ -38,6 +49,50 @@ scoop_pipeline/slam/odometry/run_odometry.sh rtabmap_rgbd $B mobile_2 $R/rtabmap
 
 # then the whole pass (no --start / --duration)
 ```
+
+2Fast-2Lamaa, odometry and then localization in the map, both robots, and
+the robot-to-robot error of the two localized runs (the same measure as
+Swarm-SLAM's, `analysis/slam/relative_pose.py`):
+
+```bash
+for r in mobile_1 mobile_2; do
+  scoop_pipeline/slam/odometry/run_odometry.sh fast2lamaa $B $r $R/fast2lamaa_$r
+  scoop_pipeline/slam/odometry/run_odometry.sh fast2lamaa_loc $B $r $R/fast2lamaa_loc_$r
+done
+python scoop_pipeline/analysis/slam/relative_pose_loc.py $R/fast2lamaa_loc_mobile_1 $R/fast2lamaa_loc_mobile_2
+python scoop_pipeline/slam/odometry/compare.py $R <swarm-slam runs ...> --md $R/compare.md
+```
+
+`fast2lamaa_loc` loads the map stage 04 registered the robot to (named in its
+`summary_<machine>_lidar.json`; `--map` for another), thinned to a 5 cm voxel
+mean and written as gp_map's `map.ply`, and starts at the reference's pose at
+the first scan (`--ref` for another TUM; live, the board start gives it); the
+first scan is matched from that seed as it is (`--coarse-init` for the coarse-to-fine match a
+rough seed needs; on site_2 it slid mobile_2 17.6 m off a right seed). The play starts where the
+reference does, so the seed is the pose of the first scan played. Its trajectory is in
+map, so `accuracy.json` also has `in_map`: the error with no fit at all. That
+reference is stage 04's own registration to the same map: an `in_map` of a
+few cm is agreement with the offline localization, not accuracy beyond it.
+
+`compare.py` puts every run given (folders searched two levels down) in one
+table: ATE, in map, RPE 1 s, drift per 10 m, coverage, CPU, memory, latency,
+kept up; and a robot-to-robot table from any `relative_pose.json` (Swarm-SLAM)
+or `relative_pose_loc.json` beside them.
+
+Camera localization in the twin, RTAB-Map on known poses (`build.sh rtabmap`
+once): the mapping pass's images mapped on its `/mobile_2/global_pose`, so the
+map is in the twin's frame with nothing to align, then each coop run
+localized in it and scored as `fast2lamaa_loc` is (`in_map`, no fit):
+
+```bash
+MB=<the mapping pass's finalized bag>
+scoop_pipeline/slam/odometry/run_odometry.sh rtabmap_map $MB mobile_2 $R_MAP/rtabmap_map_mobile_2
+scoop_pipeline/slam/odometry/run_odometry.sh rtabmap_loc $B mobile_2 $R/rtabmap_loc_mobile_2 \
+    --db $R_MAP/rtabmap_map_mobile_2/rtabmap.db
+```
+
+`/rtabmap/localization_pose` comes at each recognised place only: its
+coverage is how often RTAB-Map localized, its error how well.
 
 `openvins` refuses until `--imu-noise noise.yaml` gives the D455 IMU's Allan
 variance (`accelerometer_noise_density`, `accelerometer_random_walk`,
