@@ -13,9 +13,9 @@ Writes into OUT:
                    src_ns when its publisher sent it (the middleware's source
                    timestamp, the same clock): latency is timed between
                    publishers, so this probe's own delivery does not enter it
-  trajectory.tum   the --tum topic's poses (Odometry, PoseStamped or
-                   PoseWithCovarianceStamped), 't x y z qx qy qz qw' on the
-                   message stamps
+  trajectory.tum   the --tum topic's poses (Odometry, PoseStamped,
+                   PoseWithCovarianceStamped or TransformStamped),
+                   't x y z qx qy qz qw' on the message stamps
   probe.json       the frames of the --tum topic's first message, QoS used
 
 Each topic is subscribed once a publisher for it exists, with that publisher's
@@ -44,7 +44,11 @@ def header_stamp_ns(raw):
 
 
 def pose_of(msg):
-    """(x y z qx qy qz qw) of an Odometry / PoseWithCovarianceStamped / PoseStamped."""
+    """(x y z qx qy qz qw) of an Odometry / PoseWithCovarianceStamped / PoseStamped /
+    TransformStamped."""
+    if hasattr(msg, "transform"):
+        t, q = msg.transform.translation, msg.transform.rotation
+        return (t.x, t.y, t.z, q.x, q.y, q.z, q.w)
     p = msg.pose
     p = getattr(p, "pose", p)
     return (p.position.x, p.position.y, p.position.z,
@@ -68,9 +72,12 @@ def main():
     from rclpy.serialization import deserialize_message
     from rosidl_runtime_py.utilities import get_message
 
+    from rclpy.subscription import Subscription
+
     class InfoExecutor(SingleThreadedExecutor):
         """Hands a subscription callback the message info as well (Humble's
-        executor takes it from the middleware and drops it)."""
+        executor takes it from the middleware and drops it; from Jazzy on, a
+        callback taking two arguments gets it anyway: Subscription.CallbackType)."""
 
         def _take_subscription(self, sub):
             with sub.handle:
@@ -143,7 +150,7 @@ def main():
     stop = []
     signal.signal(signal.SIGINT, lambda *_: stop.append(1))
     signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
-    ex = InfoExecutor()
+    ex = SingleThreadedExecutor() if hasattr(Subscription, "CallbackType") else InfoExecutor()
     ex.add_node(node)
     try:
         while not stop and rclpy.ok():

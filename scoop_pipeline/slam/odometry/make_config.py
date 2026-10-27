@@ -5,8 +5,12 @@ start the method, what it answers on, and the method's config files.
     python scoop_pipeline/slam/odometry/make_config.py <method> <bag> <machine> <run dir>
         [--start S] [--duration S] [--imu-noise FILE] [--min-rate-frac 0.9]
 
-method: kiss_icp, rko_lio, fast_lio (LiDAR, mobile_1 / mobile_2), openvins,
-rtabmap_rgbd (the D455, mobile_2). Writes <run dir>/run.json and
+method: kiss_icp, rko_lio, fast_lio, fast2lamaa, fast2lamaa_loc (LiDAR,
+mobile_1 / mobile_2), openvins, rtabmap_rgbd (the D455, mobile_2).
+fast2lamaa runs 2Fast-2Lamaa's odometry + mapping (one global map);
+fast2lamaa_loc localizes in the reference pass's anchored map (--map, default
+the one stage 04 registered the robot to), started at the reference's first
+pose (--ref, default stage 04's trajectory): its trajectory is in map. Writes <run dir>/run.json and
 <run dir>/config/ (the method's files, as the container sees them under
 /work/config); run_odometry.sh then runs it.
 
@@ -72,6 +76,7 @@ NOISE_KEYS = ("accelerometer_noise_density", "accelerometer_random_walk",
 MIN_RANGE = 1.0
 PC2, IMU, IMG = "sensor_msgs/msg/PointCloud2", "sensor_msgs/msg/Imu", "sensor_msgs/msg/Image"
 ODOM = "nav_msgs/msg/Odometry"
+TFS = "geometry_msgs/msg/TransformStamped"
 CFG = "/work/config"
 
 
@@ -468,11 +473,159 @@ def rtabmap_rgbd(paths, edges, machine, a):
                      "loop closure": ["none", None, "rgbd_odometry alone, no rtabmap node"]}}
 
 
+F2L_LAUNCH = '''# made by make_config.py: 2Fast-2Lamaa's two nodes on the bag's clock
+from launch import LaunchDescription
+from launch.actions import Shutdown
+from launch_ros.actions import Node
+
+ODOM = %(odom)r
+MAP = %(map)r
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(package="ffastllamaa", executable="lidar_scan_odometry", name="lidar_scan_odometry",
+             remappings=[("/imu/acc", %(imu)r), ("/imu/gyr", %(imu)r), ("/lidar_raw_points", %(points)r)],
+             parameters=[ODOM], output="screen"),
+        Node(package="ffastllamaa", executable="gp_map", name="gp_map",
+             remappings=[("/points_input", "/lidar_scan_undistorted"), ("/pose_input", "/undistortion_pose")],
+             parameters=[MAP], output="screen", on_exit=Shutdown()),
+    ])
+'''
+F2L_VOXEL = 0.15                        # the Newer College OS1 launches' (an Ouster, handheld)
+
+
+def write_ply(path, P):
+    """P (Nx3) as a binary PLY of double x y z, as gp_map writes and loads its maps."""
+    P = np.ascontiguousarray(P, dtype="<f8")
+    with open(path, "wb") as f:
+        f.write(("ply\nformat binary_little_endian 1.0\nelement vertex %d\nproperty double x\n"
+                 "property double y\nproperty double z\nend_header\n" % len(P)).encode())
+        f.write(P.tobytes())
+
+
+def voxel_mean(P, v):
+    """One point per v-m voxel, the mean of the points in it."""
+    k = np.floor(P / v).astype(np.int64)
+    _, inv, n = np.unique(k, axis=0, return_inverse=True, return_counts=True)
+    out = np.zeros((len(n), 3))
+    np.add.at(out, inv.reshape(-1), P)
+    return out / n[:, None]
+
+
+def stage04_map(ref):
+    """The map stage 04 registered the robot to (its summary next to the reference TUM), or None."""
+    d, name = os.path.dirname(ref), os.path.basename(ref)[len("traj_"):-len(".tum")]
+    s = os.path.join(d, "summary_%s.json" % name)
+    if not os.path.exists(s):
+        return None
+
+    def find(o):
+        if isinstance(o, dict):
+            if isinstance(o.get("ref_map"), str):
+                return o["ref_map"]
+            for v in o.values():
+                r = find(v)
+                if r:
+                    return r
+        return None
+    return find(json.load(open(s)))
+
+
+def fast2lamaa(paths, edges, machine, a, localize=False):
+    t = LIDAR[machine]
+    _, lidar = frame_of(paths, t["points"])
+    _, imu = frame_of(paths, t["imu"])
+    T_li, src = lidar_imu(edges, machine, lidar, imu)
+    T_il = np.linalg.inv(T_li)                            # the LiDAR in the IMU frame
+    rv = Rotation.from_matrix(T_il[:3, :3]).as_rotvec()
+    imu_par = {"acc_in_m_per_s2": True, "invert_imu": False, "use_sim_time": True}
+    odom = dict(imu_par, **{
+        "min_range": MIN_RANGE, "max_range": 100.0, "feature_voxel_size": F2L_VOXEL,
+        "max_associations_per_type": 1000, "planar_only": True, "mode": "imu", "g": 9.81,
+        "calib_px": float(T_il[0, 3]), "calib_py": float(T_il[1, 3]), "calib_pz": float(T_il[2, 3]),
+        "calib_rx": float(rv[0]), "calib_ry": float(rv[1]), "calib_rz": float(rv[2]),
+        "unsorted_pc": True, "point_cloud_scale": 1.0, "dense_pc_output": False})
+    gmap = dict(imu_par, **{
+        "voxel_size": F2L_VOXEL, "min_range": MIN_RANGE, "map_path": "/work/map/",
+        "submap_length": -200.0, "using_submaps": False})
+    settings = {"invert_imu": [False, True, "the Ouster's IMU reads as is (the default flips it)"],
+                "calib_*": [src, None, "the LiDAR in the IMU frame"],
+                "min_range": [MIN_RANGE, 1.0, "the harness's, every LiDAR method"],
+                "voxel_size": [F2L_VOXEL, 0.3, "the Newer College OS1 launches' (Ouster, handheld)"],
+                "unsorted_pc": [True, False, "the Ouster's cloud is in column order, not time order"],
+                "use_imu_estimator": [False, False, "the pose at the scan is what is scored"],
+                "rviz": ["off", "on", "odometry only"]}
+    files = {}
+    if not localize:
+        gmap.update({"key_framing": False, "max_num_pts_for_registration": 2000,
+                     "free_space_carving_radius": -50.0})
+        settings["mode"] = ["odometry + mapping, one global map", None, "the paper's 'global map' variant"]
+    else:
+        ref = a.ref or default_ref(a.bag, machine)
+        if not ref or not os.path.exists(ref):
+            raise Refused(f"fast2lamaa_loc: no reference trajectory {ref} for the initial pose (give --ref)")
+        mp = a.map or stage04_map(ref)
+        if not mp or not os.path.exists(mp):
+            raise Refused(f"fast2lamaa_loc: no map {mp}: give --map, the anchored map stage 04 "
+                          f"registered {machine} to (map_final_<tag>_anchored.pcd of the reference pass)")
+        P = mc.read_cloud(mp)
+        P = voxel_mean(P[np.isfinite(P).all(1)], F2L_VOXEL / 3.0)
+        a.map_points = P
+        t0 = a.bag_start_ns + int(round(a.start * 1e9))
+        G = mc.PoseInterp.from_tum(ref, max_gap_s=1.0)
+        t_init = max(t0, int(G.ts[0]))
+        T_ml = G.at(t_init)
+        if T_ml is None:
+            raise Refused(f"{ref}: no pose at {t_init * 1e-9:.3f} s")
+        T_mi = T_ml @ T_li                                 # the IMU in map at the first scan
+        ri = Rotation.from_matrix(T_mi[:3, :3]).as_rotvec()
+        gmap.update({"localization_only": True, "can_trust_init": False,
+                     "init_pose_x": float(T_mi[0, 3]), "init_pose_y": float(T_mi[1, 3]),
+                     "init_pose_z": float(T_mi[2, 3]), "init_pose_rx": float(ri[0]),
+                     "init_pose_ry": float(ri[1]), "init_pose_rz": float(ri[2]),
+                     "key_framing": True, "key_framing_dist_thr": 1.5,
+                     "key_framing_rot_thr": float(np.radians(15.0)), "key_framing_time_thr": 0.05,
+                     "max_num_pts_for_registration": 1500, "free_space_carving_radius": -20.0})
+        files["map/map.info"] = "cell_size %g\n" % F2L_VOXEL
+        settings.update({
+            "mode": ["localization only, in the reference pass's anchored map", None,
+                     "%s: %d points after a %.2f m voxel mean" % (mp, len(P), F2L_VOXEL / 3.0)],
+            "init_pose": ["the reference's pose at the first scan (%.3f s)" % (t_init * 1e-9), "origin",
+                          "%s; live, the board start gives it (0.4-0.9 deg heading error there); "
+                          "can_trust_init false: the first scan is pulled onto the map coarse to fine"
+                          % os.path.basename(ref)],
+            "key_framing": [True, False, "the OS1 localization launch's (0.05 s: every scan at 10 Hz)"]})
+    files["fast2lamaa.launch.py"] = F2L_LAUNCH % {"odom": odom, "map": gmap, "imu": t["imu"],
+                                                 "points": t["points"]}
+    return {
+        "files": files,
+        "launch": "mkdir -p /work/map && ros2 launch %s/fast2lamaa.launch.py" % CFG,
+        "play": [t["points"], t["imu"]], "in": {t["points"]: PC2, t["imu"]: IMU}, "key": t["points"],
+        "out": "/scan_to_map_pose", "out_type": TFS, "tum_frame": imu, "relay": relay(t["points"]),
+        "world": "map" if localize else "odom",
+        # the pose is stamped at the scan's reference time, not its header's: matched within a period
+        "proc": r"lidar_scan_odometry|gp_map", "stamp_tol_s": 1.0 / LIDAR_HZ, "nominal_hz": LIDAR_HZ,
+        "settings": settings}
+
+
+def fast2lamaa_loc(paths, edges, machine, a):
+    return fast2lamaa(paths, edges, machine, a, localize=True)
+
+
+def default_ref(bag, machine):
+    sys.path.insert(0, os.path.join(ROOT, "datasets"))
+    import swarm_slam_lidar as SL
+    return SL.default_gt(bag, machine)
+
+
 METHODS = {"kiss_icp": kiss_icp, "rko_lio": rko_lio, "fast_lio": fast_lio,
+           "fast2lamaa": fast2lamaa, "fast2lamaa_loc": fast2lamaa_loc,
            "openvins": openvins, "rtabmap_rgbd": rtabmap_rgbd}
 
 
-def make(method, bag, machine, run, start=0.0, duration=0.0, imu_noise=None, min_rate_frac=0.9):
+def make(method, bag, machine, run, start=0.0, duration=0.0, imu_noise=None, min_rate_frac=0.9,
+         map_path=None, ref=None):
     if method not in METHODS:
         raise Refused(f"{method}: one of {sorted(METHODS)}")
     if machine not in LIDAR:
@@ -481,21 +634,27 @@ def make(method, bag, machine, run, start=0.0, duration=0.0, imu_noise=None, min
     t0, dur = bag_metadata(bag)
     paths = mc._paths(bag)
     edges = mc.build_tf_static(paths)
-    a = argparse.Namespace(imu_noise=imu_noise)
+    a = argparse.Namespace(imu_noise=imu_noise, map=map_path, ref=ref, bag=bag, bag_start_ns=t0, start=start,
+                           map_points=None)
     m = METHODS[method](paths, edges, machine, a)
     rate = gate(paths, m["key"], m["nominal_hz"], min_rate_frac)
     if os.path.exists(os.path.join(run, "run.json")):
         raise Refused(f"{run} holds a run already: pick another folder")
     os.makedirs(os.path.join(run, "config"), exist_ok=True)
     for name, text in m["files"].items():
-        open(os.path.join(run, "config", name), "w").write(text)
+        path = os.path.join(run, name) if name.startswith("map/") else os.path.join(run, "config", name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").write(text)
+    if a.map_points is not None:                         # fast2lamaa_loc: the map gp_map loads
+        write_ply(os.path.join(run, "map", "map.ply"), a.map_points)
     rj = {"method": method, "machine": machine, "bag": bag,
           "bag_start_ns": t0, "bag_duration_s": dur * 1e-9,
           "start_s": start, "duration_s": duration,
           "play_topics": m["play"], "in_topics": m["in"], "key_topic": m["key"],
           "out_topic": m["out"], "out_type": m["out_type"], "tum_frame": m["tum_frame"],
           "proc_regex": m["proc"], "stamp_tol_s": m["stamp_tol_s"], "launch": m["launch"],
-          "relay": m.get("relay"),
+          "relay": m.get("relay"), "world": m.get("world", "odom"),
+          "ref": os.path.abspath(ref) if ref else None,
           "key_rate": rate, "settings": m["settings"], "config_files": sorted(m["files"])}
     json.dump(rj, open(os.path.join(run, "run.json"), "w"), indent=1)
     return rj
@@ -512,9 +671,14 @@ def main():
     ap.add_argument("--duration", type=float, default=0.0, help="s (0: to the end)")
     ap.add_argument("--imu-noise", default=None, help="openvins: the IMU's Allan variance (YAML)")
     ap.add_argument("--min-rate-frac", type=float, default=0.9)
+    ap.add_argument("--map", default=None, help="fast2lamaa_loc: the anchored map to localize in (.pcd/.ply; "
+                    "default: the one stage 04's summary names)")
+    ap.add_argument("--ref", default=None, help="fast2lamaa_loc: the T_map_lidar TUM whose first pose starts it "
+                    "(default: stage 04's for the robot)")
     a = ap.parse_args()
     try:
-        rj = make(a.method, a.bag, a.machine, a.run, a.start, a.duration, a.imu_noise, a.min_rate_frac)
+        rj = make(a.method, a.bag, a.machine, a.run, a.start, a.duration, a.imu_noise, a.min_rate_frac,
+                  a.map, a.ref)
     except (Refused, mc.ConvertError) as e:
         sys.exit(f"refused: {e}")
     print(json.dumps({k: rj[k] for k in ("method", "machine", "play_topics", "key_topic", "out_topic",

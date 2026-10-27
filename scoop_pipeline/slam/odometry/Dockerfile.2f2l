@@ -1,0 +1,40 @@
+# 2Fast-2Lamaa (lidar_scan_odometry + gp_map) in its own image: it needs Ceres
+# >= 2.2, which Ubuntu 24.04 ships and Humble's 22.04 does not, and its README
+# tests it on ROS 2 Jazzy. The harness (inside.sh, the monitor) is the same as
+# the Humble image's, mounted by run_odometry.sh; a Humble-recorded bag plays
+# in Jazzy as it is.
+#
+#   scoop_pipeline/slam/odometry/build.sh 2f2l        (tag scoop/odometry:2f2l-jazzy)
+#
+# On the Jetson (Ubuntu 22.04 host) the same image runs as it is: the
+# container's 24.04 userland brings its own Ceres.
+ARG BASE=ros:jazzy-ros-base
+FROM ${BASE}
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG FFASTLLAMAA=fbeb70b3d658e955400f36272253ac403cf50652
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git build-essential cmake python3-colcon-common-extensions python3-rosdep \
+        ros-jazzy-rosbag2-storage-mcap libceres-dev libopencv-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /ws/src
+RUN git clone -q https://github.com/UTS-RI/2fast2lamaa.git ffastllamaa \
+    && git -C ffastllamaa checkout -q ${FFASTLLAMAA} \
+    && echo "ffastllamaa $(git -C ffastllamaa rev-parse HEAD)" > /opt/versions.txt
+
+RUN apt-get update \
+    && (rosdep init 2>/dev/null || true) && rosdep update --rosdistro jazzy \
+    && rosdep install --from-paths /ws/src --ignore-src -y -r --rosdistro jazzy \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /ws
+RUN source /opt/ros/jazzy/setup.bash \
+    && colcon build --merge-install --event-handlers console_cohesion+ --packages-select ffastllamaa \
+         --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    && rm -rf build log \
+    && dpkg-query -W libceres-dev >> /opt/versions.txt
+
+RUN echo "source /opt/ros/jazzy/setup.bash && source /ws/install/setup.bash" >> /root/.bashrc

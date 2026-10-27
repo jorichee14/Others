@@ -178,6 +178,8 @@ analysis/            measuring results; reads outputs, writes nothing back
                      each robot's odometry, against the ground truth; share of the run with a
                      shared frame, translation / rotation error, a point at --range m, usable
                      share (<export> --run <run> [--run ...] --out plot.png)
+  analysis/slam/relative_pose_loc.py  the same for two robots each localized in the map (two
+                     fast2lamaa_loc runs): no graph, no alignment, the map as the shared frame
   analysis/slam/trajectory_video.py  top-view videos over the reference (and --map's floor plan): two
                      robots' odometry each placed at its own first pose (odometry --run <run>
                      --run <run>), or Swarm-SLAM's graph in time order with its loop closures,
@@ -192,7 +194,10 @@ analysis/            measuring results; reads outputs, writes nothing back
                      a trajectory, and the cost (slam/monitor/: messages.csv, resources.csv,
                      summary.json: latency, drops, Hz, MB/s, CPU, RSS, GPU); make_config.py
                      makes each method's config from the bag; processing/run_vslam.sh does the
-                     same for cuVSLAM with VSLAM_MONITOR=1
+                     same for cuVSLAM with VSLAM_MONITOR=1. 2Fast-2Lamaa (fast2lamaa: odometry +
+                     mapping; fast2lamaa_loc: localization in the reference pass's anchored map,
+                     scored also in map with no fit) in its own Jazzy image (build.sh 2f2l);
+                     compare.py tables every run and robot-to-robot result given
   slam/cslam_eval.py  Swarm-SLAM run against the ground truth: ATE per robot and joint,
                      inter-robot loop closures checked, time to merge, bytes exchanged
   slam/kimera_eval.py  Kimera-VIO (slam/run_kimera.sh) against the ground truth: ATE and
@@ -244,6 +249,11 @@ tests/               self-tests, no real bag needed
                      faded until the merge, edges sorted, the loop closure's scans overlapping
                      once placed by it; odometry placed at its first pose; both videos written
                      with the frames asked for (and the hold)
+  test_fast2lamaa.py fast2lamaa: the LiDAR in the IMU frame, the IMU as it is, the bag's clock;
+                     fast2lamaa_loc: the map as gp_map loads it, the reference's IMU pose at the
+                     first scan, refused without a reference; score's in-map error (0, then
+                     a 10 cm offset the rigid fit hides); relative_pose_loc 0 and 0.2 m;
+                     compare's rows
   test_odometry.py   make_config: frames, beams and extrinsics from the bag, the refusals
                      (no IMU noise, the ZED, depth outside the left camera, a 1 fps camera);
                      summarize: outputs matched to their inputs (FAST-LIO2's late stamp,

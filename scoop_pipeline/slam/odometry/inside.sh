@@ -4,7 +4,7 @@
 # everything stopped in reverse order and summarized, also when interrupted.
 set -uo pipefail
 set +u
-source /opt/ros/humble/setup.bash
+source /opt/ros/${ROS_DISTRO:-humble}/setup.bash          # humble, or jazzy for 2Fast-2Lamaa
 [ -f /ws/install/setup.bash ] && source /ws/install/setup.bash
 set -u
 W=/work; M=/opt/monitor; L=$W/logs
