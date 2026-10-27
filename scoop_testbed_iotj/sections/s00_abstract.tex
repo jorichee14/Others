@@ -14,12 +14,12 @@ inter-agent link on one clock and in one metric frame: link state at
 offsets below \SI{1}{\milli\second}, and agent poses from a self-built
 reference map and fiducial chain, without motion capture or GNSS, whose
 scale rangefinder control distances confirm to about
-\SI{2}{\centi\metre} RMS. The
-logged link is replayed per message into any collaborative method,
-including unmodified ROS~2 systems, and SCooP-iT Gym, a digital twin
-built from the recordings and checked against held-out passes, generates
-scenarios for training methods that are then tested on held-out real
-recordings. The instrument is checked against
+\SI{2}{\centi\metre} RMS. SCooP-iT
+Gym makes the recordings a research tool: any collaborative method,
+including unmodified ROS~2 systems, is tested on them with each
+message's arrival predicted from the recorded link, and trained on
+scenarios from a twin built from the recordings and checked against
+held-out passes. The instrument is checked against
 measurements it never used: most of its error terms lie an order of
 magnitude below the errors at which fusion breaks; map-derived Fresnel
 clearance predicts the measured signal (Spearman $\rho = 0.60$,

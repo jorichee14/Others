@@ -64,15 +64,15 @@ contributions are:
     \SI{2}{\centi\metre} RMS); the LiDAR robot is placed to
     \SI{10}{\milli\metre} and the RGB-D cart to \SI{3.1}{\centi\metre}
     median (Sec.~\ref{sec:gt}).
-    \item \textbf{A replay of the logged link, validated against live
-    runs}: per-message arrivals for message-level models and for
-    unmodified ROS~2 systems through a relay, \todo{reproducing live
-    arrivals to within one frame} (Sec.~\ref{sec:replay}, E3).
-    \item \textbf{SCooP-iT Gym}: a digital twin built from the
-    recordings, each part measured or added and checked against held-out
-    passes before it trains anything, in which perception and
-    communication models are trained and then tested on held-out real
-    recordings \todo{result} (Sec.~\ref{sec:gym}, E6).
+    \item \textbf{SCooP-iT Gym, a research tool on real recordings}:
+    other researchers \emph{test} any collaborative method on the
+    recordings, with each message's arrival predicted from the recorded
+    link, for message-level models and unmodified ROS~2 systems, checked
+    against messages sent live \todo{to within one frame} (E3); and
+    \emph{train} it on scenarios from a twin built from the recordings,
+    each part checked against held-out passes before it trains anything,
+    with results tested on held-out real recordings \todo{result} (E6)
+    (Sec.~\ref{sec:gym}).
     \item \textbf{Evidence that the measured link's structure matters}:
     against a synthetic channel fitted to the same link, the logged link
     changes the predicted delivery of large messages, the best
@@ -80,8 +80,9 @@ contributions are:
     SLAM system (E5).
 \end{enumerate}
 Sec.~\ref{sec:related} reviews related work;
-Secs.~\ref{sec:design}--\ref{sec:replay} describe the testbed and the
-replay; Sec.~\ref{sec:gym} presents the Gym; Sec.~\ref{sec:experiments}
+Secs.~\ref{sec:design}--\ref{sec:link} describe the testbed;
+Sec.~\ref{sec:gym} presents the Gym, its replay of the recordings and
+its twin; Sec.~\ref{sec:experiments}
 reports six tests, each with a pass criterion stated before the test was
 run; and Sec.~\ref{sec:lessons}
 gives lessons and limitations. The sequences and labels recorded on the

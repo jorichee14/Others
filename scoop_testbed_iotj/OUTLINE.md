@@ -19,12 +19,13 @@ link's statistics, with no structure in time or place) against the **logged**
 one. Published synthetic channels are shown only for reference, because they
 deliver everything by construction.
 
-**Five contributions:**
+**Four contributions:**
 1. The testbed: heterogeneous agents, every link on the sensors' clock, sniffer bias bounded.
 2. A building-scale pose reference without motion capture, GNSS or a survey scanner. Checked by a second pass, held-out boards and control distances (about 2 cm RMS).
-3. A replay of the logged link, validated against live runs (E3), for message models and for unmodified ROS 2 systems.
-4. **SCooP-iT Gym (back in, 27 Oct; results to do):** a twin built from build passes. Each part is measured or added and checked against held-out passes before it trains anything (E6a). Perception and comms models are trained in it and tested on held-out recordings (E6b). Deploying motion policies on the robots is the next step, not part of this paper.
-5. Evidence that the link's structure matters (E5).
+3. **SCooP-iT Gym, a research tool on real recordings** (Sec. VII), with two uses through one interface:
+   - **test** any method on the recordings, each message's arrival predicted from the recorded link (message models and unmodified ROS 2 systems), checked against messages sent live (E3);
+   - **train** it on scenarios from a twin built from the recordings, each part checked against held-out passes, with results tested on held-out recordings (E6).
+4. Evidence that the link's structure matters (E5).
 
 ## What was removed, and where it went
 

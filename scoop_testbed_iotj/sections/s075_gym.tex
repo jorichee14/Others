@@ -1,15 +1,14 @@
-% Sec. VIII SCooP-iT Gym (about 0.8 page). Plan: ../scoop_gym/docs/twin_plan.pdf.
+% Sec. VII-B Train: a twin built from the recordings. Plan: ../scoop_gym/docs/twin_plan.pdf.
 % Paragraphs: purpose; the world and where each part comes from; the
-% gate; train in the twin, test on held-out recordings; interface; scope.
-\section{SCooP-iT Gym: A Twin Built from the Recordings}
-\label{sec:gym}
+% gate; train in the twin, test on held-out recordings; interface.
+\subsection{Train: A Twin Built from the Recordings}
+\label{sec:twin}
 Recordings answer what happened; they cannot show what an agent would
 have sensed or sent along a route it never took, with more people in
-the corridor, or with a camera that failed. SCooP-iT Gym is a digital
-twin built from the recordings for those questions, in which data can
-be generated at will and methods trained, with one rule that keeps it
-tied to the testbed: nothing trained in the twin is evaluated in the
-twin. Passes are split into build passes, from which the twin is made,
+the corridor, or with a camera that failed, and they hold few objects
+to learn from. The twin generates such scenarios at will, with one rule
+that keeps it tied to the testbed: nothing trained in the twin is
+evaluated in the twin. Passes are split into build passes, from which the twin is made,
 and held-out passes from another day, which are used only to check the
 twin and to test what is trained in it (Fig.~\ref{fig:gym}).
 
@@ -44,9 +43,10 @@ real labels (E6b). Motion cannot be tested on a recording; a motion
 policy trained in the twin is tested by deploying it on the testbed,
 the step after this paper.
 
-\paragraph{Interface.} Agents reset and step through the Gymnasium and
+\paragraph{Interface, for both uses.} Agents reset and step through the Gymnasium and
 PettingZoo interfaces \cite{gymnasium,pettingzoo} on Isaac Lab
-\cite{orbit}; the replay of Sec.~\ref{sec:replay} decides which
+\cite{orbit}; in the twin and on the recordings alike, the replay of
+Sec.~\ref{sec:replay} decides which
 messages arrive, and every miss is logged with its cause (outage,
 queue, transmission, or latency). Unlike simulators that generate their
 world and pass messages over an ideal bus \cite{lingjing}, and unlike
