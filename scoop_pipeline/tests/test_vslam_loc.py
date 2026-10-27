@@ -42,6 +42,20 @@ def main():
     Af, res, n = VL.align(t[::10], K[::10], t, R, T_bl)
     if np.abs(Af - A).max() > 1e-6 or res.max() > 1e-6 or n != 30:
         f.append("align: got\n%s\nwant\n%s, residual %s, %d" % (Af, A, res.max(), n))
+    # a bent map: the second half of the drive is off by another 2 m / 5 deg; a run near the first half
+    # gets the first half's transform back from align_near, exactly
+    d = tempfile.mkdtemp()
+    far = np.array([T_of([20.0 + 0.1 * k, 0.0, 0.0], [0, 0, 0]) for k in range(150)])   # the drive's second part
+    Rm = np.concatenate([R[:150], far])                                  # reference of the mapping drive
+    A2 = T_of([2.0, 1.0, 0.0], [0.0, 0.0, 0.09]) @ A
+    Km = np.concatenate([np.linalg.inv(A) @ Rm[:150] @ np.linalg.inv(T_bl),
+                         np.linalg.inv(A2) @ Rm[150:] @ np.linalg.inv(T_bl)])
+    VL.write_tum(os.path.join(d, "keyframes.tum"), t, Km)
+    VL.write_tum(os.path.join(d, "ref.tum"), t, Rm)
+    aj = {"reference": os.path.join(d, "ref.tum"), "residual_cm": {"rmse": 100.0}}
+    Al = VL.align_near(d, aj, T_bl, R[:150], 1.0, os.path.join(d, "out", "vslam_loc"))
+    if np.abs(Al - A).max() > 1e-4:
+        f.append("align_near: got\n%s\nwant\n%s" % (Al, A))
     # map -> odom: identity until 1010 s (not localized), then a correction, then another
     C1, C2 = T_of([1.0, 0.0, 0.0], [0, 0, 0.1]), T_of([1.1, 0.0, 0.0], [0, 0, 0.1])
     tf = [(1000.0, np.eye(4)), (1010.0, C1), (1020.0, C2)]

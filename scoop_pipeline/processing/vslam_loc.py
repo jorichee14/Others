@@ -21,7 +21,9 @@ in the mapping config's 04_reference), by the same pose fit score.py uses.
   -> work/<date>/<mapping pass>/<machine>/vslam_map/: map/, keyframes.tum
      (T_cmap_base), alignment.json (T_twin_cmap, the fit's residual), odometry/
 
-localize: cuVSLAM over the coop pass with that map; 3 s after the robot's
+localize: cuVSLAM over the coop pass with that map, the map's frame put in
+the twin by the map poses within --align-radius m (5) of the run's path only
+(a long drive's map bends; around one site it can still sit right); 3 s after the robot's
 first image and its reference both exist, LocalizeInMap is called with the
 reference's pose there, put in the map's frame (run_vslam.sh's during-play
 hook, on /clock), and retried every 2 s until it succeeds. From then on the
@@ -400,6 +402,35 @@ def ref_from_topic(bag, machine, topic, frame, path):
     return path
 
 
+def align_near(mdir, aj, T_bl, run_T, radius, out):
+    """T_twin_cmap from the map's poses within `radius` m of this run's path
+    only (where they were, by the mapping pass's reference): a map that bends
+    over a long drive can still sit right around one site."""
+    from scipy.spatial import cKDTree
+    import trajs
+    t, K = load_tum(os.path.join(mdir, "keyframes.tum"))
+    mt, mT = load_tum(aj["reference"])
+    m = (t >= mt[0]) & (t <= mt[-1])
+    t, K = t[m], K[m]
+    d, _ = cKDTree(run_T[::5, :3, 3]).query(trajs.interp(mt, mT, t)[:, :3, 3])
+    near = d <= radius
+    if near.sum() < 30:
+        raise SystemExit("only %d map poses within %g m of this run's path: --align-radius 0 for the "
+                         "global fit, or a larger radius" % (near.sum(), radius))
+    A, res, n = align(t[near], K[near], mt, mT, T_bl)
+    rep = {"T_twin_cmap": A.tolist(), "radius_m": radius, "poses": n,
+           "residual_cm": {"rmse": round(float(np.sqrt((res ** 2).mean()) * 100), 2),
+                           "median": round(float(np.median(res) * 100), 2), "max": round(float(res.max() * 100), 2)},
+           "global_residual_cm": aj["residual_cm"]}
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    json.dump(rep, open(out + "_alignment.json", "w"), indent=1)
+    print("map aligned around this run: %d map poses within %g m of its path, residual %.2f cm rmse "
+          "(median %.2f, max %.2f; the global fit: %.2f cm rmse)"
+          % (n, radius, rep["residual_cm"]["rmse"], rep["residual_cm"]["median"], rep["residual_cm"]["max"],
+             aj["residual_cm"]["rmse"]))
+    return A
+
+
 def first_stamp(bag, topic):
     import make_config as MK
     m = MK.mc.first_msg(MK.mc._paths(bag), topic)
@@ -419,13 +450,16 @@ def cmd_localize(a):
     mdir = out_for(Pm, a.machine, "vslam_map")
     if not os.path.isfile(os.path.join(mdir, "alignment.json")):
         raise SystemExit("no map at %s: vslam_loc.py map %s first" % (mdir, a.map_from))
-    A = np.array(json.load(open(os.path.join(mdir, "alignment.json")))["T_twin_cmap"])
+    aj = json.load(open(os.path.join(mdir, "alignment.json")))
+    A = np.array(aj["T_twin_cmap"])
     ref = a.ref or SL.default_gt(bag, a.machine)
     if not ref or not os.path.exists(ref):
         raise SystemExit("no reference track of %s in this pass (%s)" % (a.machine, ref))
     T_bl, _ = T_base_lidar(bag, a.machine, c["base_frame"])
     rt, rT = load_tum(ref)
     import trajs
+    if a.align_radius > 0:
+        A = align_near(mdir, aj, T_bl, rT, a.align_radius, out)
     t_call = max(first_stamp(bag, c["images"][0]), rt[0]) + WARM_S
     hint = np.linalg.inv(A) @ trajs.interp(rt, rT, np.array([t_call]))[0] @ np.linalg.inv(T_bl)
     print("bag: %s\nout: %s\nmap: %s\nlocalize at %.3f s, from the reference's pose there" % (bag, out, mdir, t_call))
@@ -488,6 +522,8 @@ def main():
     ap.add_argument("--bag", default=None, help="map: the pass bag, where it is not at the config's path (an "
                     "external drive: the container must see it at the same path); the outputs stay where the "
                     "config puts them")
+    ap.add_argument("--align-radius", type=float, default=5.0, help="localize: fit the map to the twin with the "
+                    "map poses within this many m of the run's path only (0: the map's global fit)")
     ap.add_argument("--rate", type=float, default=1.0)
     ap.add_argument("--redo", action="store_true")
     a = ap.parse_args()
