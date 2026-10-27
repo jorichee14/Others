@@ -24,7 +24,7 @@ deliver everything by construction.
 2. A building-scale pose reference without motion capture, GNSS or a survey scanner: the map's mesh coloured by 3D Gaussian splatting of the recorded images (to do: PSNR/SSIM on held-out views), checked by a second pass, held-out boards and control distances (about 2 cm RMS).
 3. **A replay and a digital twin that let other researchers test and train collaborative methods on the recordings** (Sec. VII):
    - **replay (test):** takes the messages a method sends and predicts, from the recorded link, when each would have arrived or whether it would have been lost; works for message-level models and unmodified ROS 2 systems; checked against messages sent live (E3); a synthetic channel with the same statistics misstates the delivery of large messages (E5);
-   - **twin (train):** built from the recordings, each part checked against held-out passes before it trains anything; generates new scenarios to train on; what it trains is tested on held-out real recordings (E6).
+   - **twin (train):** built from the recordings; generates new scenarios to train on; each part checked against held-out passes before it trains anything (E6). Training in the twin and testing on held-out recordings moved to the SCooP dataset paper (Q5).
 
 The send-size decision and Swarm-SLAM under fitted vs. logged moved to the SCooP dataset paper (Q4), which judges methods; this paper only shows the gap at the message level.
 
@@ -74,8 +74,7 @@ distortion detail and the extrinsics checks (move to the supplementary).
 | E3 Replay | replayed vs. live arrivals | >= 90 % frame agreement; logged closer than fitted | field session (payload node at 10 Hz, 1 KB / 100 KB / 1.5 MB, alone and with the other robot, survey and cooperation) | not run |
 | E4 Repeatability | same setting, same link on another day | day distance < half the mode distance | existing + the E3 session | mode half computable |
 | E5 Gap | in-frame share, logged vs. fitted (published for reference), also against offered load over goodput | none, report either way | existing | logged in hand (86 % / 59-68 %); fitted column to add |
-| E6a Twin gate | twin vs. held-out pass: scans, dropouts, place-indexed link | scans <= 3 cm; dropouts within session spread; link within 10 pt and closer than fitted | twin run on a held-out pass | not run |
-| E6b Twin train/test | detector trained with vs. without twin scenarios, tested on held-out recordings | twin-trained no worse than real-trained | labels on held-out frames | not run |
+| E6 Twin | twin vs. held-out pass: scans, dropouts, place-indexed link | scans <= 3 cm; dropouts within session spread; link within 10 pt and closer than fitted | twin run on a held-out pass | not run |
 
 ## Checks to run before anything else
 1. **Capacity:** the logged downlink of 598-676 Mbit/s exceeds the 433 Mbit/s PHY maximum for one stream at VHT-80. Pull NSS and MCS from the radiotap headers. The uplink of 275-282 Mbit/s sits at the practical USB 2.0 ceiling of the RTL8852BU. Every replayed arrival uses G(t), so this goes first.
@@ -88,7 +87,7 @@ distortion detail and the extrinsics checks (move to the supplementary).
 - **In the SCooP dataset paper:**
   - the data at every site, labels, detection and segmentation, Q1-Q4;
   - ideal, synthetic, fitted and logged cost across methods and sites, including the T1 C-SLAM benchmark;
-  - moved from here: the send-size decision and Swarm-SLAM under fitted vs. logged (Q4).
+  - moved from here: the send-size decision and Swarm-SLAM under fitted vs. logged (Q4); training in the twin, tested on held-out recordings (Q5).
 - **In a follow-up paper:**
   - closing the loop: motion policies trained in the twin, deployed on the robots;
   - validated with sim-vs-real correlation across policies (Kadian et al., RA-L 2020).

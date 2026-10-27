@@ -131,24 +131,19 @@ structure. \todo{Fitted column; share against normalized load.}
 \input{figures/simgap}
 
 \subsection{E6 Twin: The Twin Against Held-Out Passes}
-\emph{Question.} Does the twin reproduce held-out real passes, and does
-a model trained in it hold on real data? \emph{Pass.} E6a: synthetic
+\emph{Question.} Does the twin reproduce held-out real passes?
+\emph{Pass.} Synthetic
 scans at the recorded poses within \SI{3}{\centi\metre} median of the real
 scans; fitted dropout rates and burst lengths within the spread between
 real sessions; the place-indexed link predicting the held-out pass's
-in-frame share within 10 points and closer than the fitted channel. E6b:
-a model trained on twin scenarios and the build passes, tested on the
-held-out recordings, scores no worse than the same model trained on the
-build passes alone.
+in-frame share within 10 points and closer than the fitted channel.
 
-\emph{E6a, the gate.} The twin drives the recorded paths of a held-out
+\emph{Setup.} The twin drives the recorded paths of a held-out
 pass; its scans are registered to the map and compared with the real
 scans at the same poses, its camera views are compared with the
 recorded images at the same poses, and the dropout and link models fitted on the
-build passes are compared with that pass. \emph{E6b, train and test.} A
-cooperative detector is trained with and without twin scenarios that
-add people and objects at the recordings' class counts, and both are
-scored on the held-out recordings with real labels and the logged link.
-\emph{Result.} \todo{Run the twin on a held-out pass; label the
-held-out frames; train and score.}
+build passes are compared with that pass. Whether models trained in
+the twin hold on real recordings needs labels and is reported with the
+SCooP dataset \cite{scoop_dataset}. \emph{Result.} \todo{Run the twin
+on a held-out pass.}
 
