@@ -52,6 +52,14 @@ def main():
     j15, j25 = int(np.argmin(np.abs(tm - 1015.0))), int(np.argmin(np.abs(tm - 1025.0)))
     if tm[0] < 1010.0 - 1e-9 or np.abs(Tm[j15] - C1 @ O[k15]).max() > 1e-9 or np.abs(Tm[j25] - C2 @ O[k25]).max() > 1e-9:
         f.append("compose: first %s, at 1015 / 1025 s not map->odom @ odom" % tm[0])
+    # outputs beside the robot's: no second <machine>/ for a bag already in the robot's folder
+    class P:
+        def __init__(self, bag):
+            self.dataset, self.cfg = {"bag": bag}, {}
+    for bag, want in (("/d/work/x/coop/site_1/coop_bag", "/d/work/x/coop/site_1/mobile_2/vslam_loc"),
+                      ("/d/work/x/mapping/mobile_2/map_bag", "/d/work/x/mapping/mobile_2/vslam_loc")):
+        if VL.out_for(P(bag), "mobile_2", "vslam_loc") != want:
+            f.append("out_for %s: %s" % (bag, VL.out_for(P(bag), "mobile_2", "vslam_loc")))
     p = os.path.join(tempfile.mkdtemp(), "x.tum")
     VL.write_tum(p, t[:5], R[:5])
     t2, R2 = VL.load_tum(p)

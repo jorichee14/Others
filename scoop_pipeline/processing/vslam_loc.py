@@ -283,6 +283,16 @@ def read_map_odom(rec):
     return out
 
 
+def out_for(P, machine, name):
+    """work/<date>/<pass>/<machine>/<name>, beside the robot's other outputs (a
+    pass bag that is already in its robot's folder, as the mapping pass's, gets
+    no second <machine>/)."""
+    d = os.path.dirname(VS.out_dir(P, machine))
+    if os.path.basename(os.path.dirname(d)) == machine:
+        d = os.path.dirname(d)
+    return os.path.join(d, name)
+
+
 def preset(machine, imu):
     c = dict(VS.MACHINES[machine])
     c["enable_imu_fusion"] = bool(imu)
@@ -328,7 +338,7 @@ def cmd_map(a):
     P = load_pipeline(a.config)
     bag = os.path.abspath(os.path.expanduser(a.bag)) if a.bag else os.path.expanduser(P.dataset["bag"])
     c = preset(a.machine, a.imu)
-    out = os.path.join(os.path.dirname(VS.out_dir(P, a.machine)), "vslam_map")
+    out = out_for(P, a.machine, "vslam_map")
     if a.ref_topic:
         ref = ref_from_topic(bag, a.machine, a.ref_topic, a.ref_frame,
                              os.path.join(os.path.dirname(out), "ref_%s.tum" % a.ref_topic.strip("/").replace("/", "_")))
@@ -384,6 +394,7 @@ def ref_from_topic(bag, machine, topic, frame, path):
     paths = MK.mc._paths(bag)
     T_fl, src = MK.to_lidar(paths, MK.mc.build_tf_static(paths), machine, frame)
     poses.sort(key=lambda x: x[0])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     write_tum(path, np.array([p[0] for p in poses]) * 1e-9, np.array([p[1] @ T_fl for p in poses]))
     print("reference: %s (%d poses of %s in %s) -> the LiDAR by %s: %s" % (topic, len(poses), frame, parent, src, path))
     return path
@@ -404,8 +415,8 @@ def cmd_localize(a):
     P, Pm = load_pipeline(a.config), load_pipeline(a.map_from)
     bag = os.path.expanduser(P.dataset["bag"])
     c = preset(a.machine, a.imu)
-    out = os.path.join(os.path.dirname(VS.out_dir(P, a.machine)), "vslam_loc")
-    mdir = os.path.join(os.path.dirname(VS.out_dir(Pm, a.machine)), "vslam_map")
+    out = out_for(P, a.machine, "vslam_loc")
+    mdir = out_for(Pm, a.machine, "vslam_map")
     if not os.path.isfile(os.path.join(mdir, "alignment.json")):
         raise SystemExit("no map at %s: vslam_loc.py map %s first" % (mdir, a.map_from))
     A = np.array(json.load(open(os.path.join(mdir, "alignment.json")))["T_twin_cmap"])
