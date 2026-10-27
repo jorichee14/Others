@@ -75,11 +75,14 @@ contributions are:
     against held-out passes before it trains anything, generates new
     scenarios to train on, and what is trained in it is tested on
     held-out real recordings \todo{result} (E6) (Sec.~\ref{sec:gym}).
-    \item \textbf{Evidence that the measured link's structure matters}:
-    against a synthetic channel fitted to the same link, the logged link
-    changes the predicted delivery of large messages, the best
-    send-size policy, and the behaviour of an unmodified collaborative
-    SLAM system (E5).
+    \item \textbf{An empirical demonstration that the link's temporal and
+    spatial structure, beyond its marginal statistics, determines the
+    performance of collaborative methods}: a synthetic channel matched to
+    the logged link's latency distribution, median goodput, and outage
+    rate and duration, but independent of time and place, is compared
+    with the logged link at three levels: message delivery, the choice
+    of a communication policy, and the behaviour of an unmodified
+    collaborative SLAM system (E5).
 \end{enumerate}
 Sec.~\ref{sec:related} reviews related work;
 Secs.~\ref{sec:design}--\ref{sec:link} describe the testbed;

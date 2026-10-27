@@ -25,7 +25,7 @@ deliver everything by construction.
 3. **A replay and a digital twin that let other researchers test and train collaborative methods on the recordings** (Sec. VII):
    - **replay (test):** takes the messages a method sends and predicts, from the recorded link, when each would have arrived or whether it would have been lost; works for message-level models and unmodified ROS 2 systems; checked against messages sent live (E3);
    - **twin (train):** built from the recordings, each part checked against held-out passes before it trains anything; generates new scenarios to train on; what it trains is tested on held-out real recordings (E6).
-4. Evidence that the link's structure matters (E5).
+4. An empirical demonstration that the link's temporal and spatial structure, beyond its marginal statistics, determines the performance of collaborative methods: a synthetic channel matched to the logged link's latency distribution, median goodput, and outage rate and duration, but independent of time and place, is compared with the logged link at three levels: message delivery, the choice of a communication policy, and the behaviour of an unmodified collaborative SLAM system (E5).
 
 ## What was removed, and where it went
 
