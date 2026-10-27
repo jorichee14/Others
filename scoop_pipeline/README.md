@@ -201,6 +201,9 @@ analysis/            measuring results; reads outputs, writes nothing back
                      processing/vslam_loc.py: cuVSLAM localizing in a map it saved on the mapping
                      pass (map <mapping config> --ref-topic /mobile_2/global_pose, then localize
                      <coop config> --map-from <mapping config>), scored the same way
+                     rtabmap_map / rtabmap_loc (build.sh rtabmap): a visual map built on the
+                     mapping pass's /mobile_2/global_pose (in the twin by construction), each
+                     coop run localized in it, scored in map like fast2lamaa_loc
   slam/cslam_eval.py  Swarm-SLAM run against the ground truth: ATE per robot and joint,
                      inter-robot loop closures checked, time to merge, bytes exchanged
   slam/kimera_eval.py  Kimera-VIO (slam/run_kimera.sh) against the ground truth: ATE and
@@ -252,6 +255,9 @@ tests/               self-tests, no real bag needed
                      faded until the merge, edges sorted, the loop closure's scans overlapping
                      once placed by it; odometry placed at its first pose; both videos written
                      with the frames asked for (and the hold)
+  test_rtabmap_map.py rtabmap_map: the pose topic relayed as RTAB-Map's odometry, the database
+                     path, /tf_static played, refused without the pose; rtabmap_loc: the database
+                     copied, localization mode, refused without a database
   test_vslam_loc.py  vslam_loc: the hook script compiles; keyframes fitted back onto the twin give
                      the map's pose (residual 0); map -> odom (latest at each stamp) @ odometry
                      from the localization on

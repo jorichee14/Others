@@ -6,7 +6,11 @@ start the method, what it answers on, and the method's config files.
         [--start S] [--duration S] [--imu-noise FILE] [--min-rate-frac 0.9]
 
 method: kiss_icp, rko_lio, fast_lio, fast2lamaa, fast2lamaa_loc (LiDAR,
-mobile_1 / mobile_2), openvins, rtabmap_rgbd (the D455, mobile_2).
+mobile_1 / mobile_2), openvins, rtabmap_rgbd, rtabmap_map, rtabmap_loc (the
+D455, mobile_2). rtabmap_map maps the left infrared image + depth on the
+robot's pose in the twin (--gt-topic, default /<machine>/global_pose: the
+mapping pass), so its database is in the twin's frame; rtabmap_loc localizes
+a run in it (--db) with RTAB-Map's own odometry between recognised places.
 fast2lamaa runs 2Fast-2Lamaa's odometry + mapping (one global map);
 fast2lamaa_loc localizes in the reference pass's anchored map (--map, default
 the one stage 04 registered the robot to), started at the reference's first
@@ -449,8 +453,8 @@ def openvins(paths, edges, machine, a):
                      "track_frequency": [c["hz"] + 1.0, 31.0, "the camera's rate + 1"]}}
 
 
-def rtabmap_rgbd(paths, edges, machine, a):
-    c = camera(machine, "rtabmap_rgbd")
+def depth_in_left(paths, edges, c):
+    """The left infrared frame, refusing a depth that is not in it."""
     li, lf = frame_of(paths, c["left_info"])
     di, df = frame_of(paths, c["depth_info"])
     if (li.width, li.height) != (di.width, di.height) or not np.allclose(li.k, di.k, atol=1e-3):
@@ -459,6 +463,12 @@ def rtabmap_rgbd(paths, edges, machine, a):
     T = static(edges, lf, df)
     if np.abs(T[:3, 3]).max() > 1e-3 or Rotation.from_matrix(T[:3, :3]).magnitude() > 1e-3:
         raise Refused(f"{df} is not {lf}: {T[:3, 3]} m apart")
+    return lf
+
+
+def rtabmap_rgbd(paths, edges, machine, a):
+    c = camera(machine, "rtabmap_rgbd")
+    lf = depth_in_left(paths, edges, c)
     return {
         "files": {},
         "launch": ("ros2 run rtabmap_odom rgbd_odometry --ros-args -p frame_id:=%s -p publish_tf:=false "
@@ -473,6 +483,129 @@ def rtabmap_rgbd(paths, edges, machine, a):
                                                      "so no registration (the emitter was off: weak depth on bare walls)"],
                      "qos": [1, 0, "reliable: the default best-effort subscription loses frames below the node"],
                      "loop closure": ["none", None, "rgbd_odometry alone, no rtabmap node"]}}
+
+
+RTAB_LAUNCH = '''# made by make_config.py: RTAB-Map on the bag's clock, %(mode)s
+from launch import LaunchDescription
+from launch.actions import ExecuteProcess
+from launch_ros.actions import Node
+
+RTABMAP = %(rtabmap)r
+ODOM = %(odom)r
+IMAGES = %(images)r
+RELAY = %(relay)r
+
+
+def generate_launch_description():
+    first = ([ExecuteProcess(cmd=["python3", "/work/config/gt_relay.py"] + RELAY, output="screen")] if RELAY else
+             [Node(package="rtabmap_odom", executable="rgbd_odometry", name="rgbd_odometry", parameters=[ODOM],
+                   remappings=IMAGES, output="screen")])
+    return LaunchDescription(first + [
+        Node(package="rtabmap_slam", executable="rtabmap", name="rtabmap", namespace="rtabmap",
+             parameters=[RTABMAP], remappings=IMAGES, arguments=%(args)r, output="screen")])
+'''
+GT_RELAY = '''# made by make_config.py: a pose topic in map as the odometry RTAB-Map maps on
+#   python3 gt_relay.py <PoseStamped topic> <its frame> <odom frame name>
+# Publishes the pose as TF <odom frame> -> <its frame> (and on /gt_odom), on the
+# message stamps: RTAB-Map looks the pose up at each image's stamp.
+import sys
+
+import rclpy
+from geometry_msgs.msg import PoseStamped, TransformStamped
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from rclpy.parameter import Parameter
+from tf2_ros import TransformBroadcaster
+
+
+def main():
+    topic, frame, odom = sys.argv[1:4]
+    rclpy.init()
+    n = Node("gt_relay", parameter_overrides=[Parameter("use_sim_time", value=True)])
+    tf, pub = TransformBroadcaster(n), n.create_publisher(Odometry, "/gt_odom", 100)
+
+    def cb(m):
+        t = TransformStamped()
+        t.header.stamp, t.header.frame_id, t.child_frame_id = m.header.stamp, odom, frame
+        p, q = m.pose.position, m.pose.orientation
+        t.transform.translation.x, t.transform.translation.y, t.transform.translation.z = p.x, p.y, p.z
+        t.transform.rotation = q
+        tf.sendTransform(t)
+        o = Odometry()
+        o.header.stamp, o.header.frame_id, o.child_frame_id = m.header.stamp, odom, frame
+        o.pose.pose = m.pose
+        pub.publish(o)
+    n.create_subscription(PoseStamped, topic, cb, 100)
+    rclpy.spin(n)
+
+
+if __name__ == "__main__":
+    main()
+'''
+RTAB_MAP_FRAME = "map_rtab"
+
+
+def rtabmap_common(paths, edges, machine, a, method):
+    c = camera(machine, method)
+    lf = depth_in_left(paths, edges, c)
+    base = a.gt_frame or "%s_base_link" % machine
+    static(edges, base, lf)                               # the robot's base reaches its camera in /tf_static
+    images = [("rgb/image", c["left"]), ("depth/image", c["depth"]), ("rgb/camera_info", c["left_info"])]
+    common = {"frame_id": base, "map_frame_id": RTAB_MAP_FRAME, "subscribe_rgb": True, "subscribe_depth": True,
+              "approx_sync": True, "approx_sync_max_interval": 0.005, "qos": 1, "use_sim_time": True,
+              "wait_for_transform": 0.3, "database_path": "/work/rtabmap.db",
+              "Rtabmap/DetectionRate": "2", "RGBD/LinearUpdate": "0.1", "RGBD/AngularUpdate": "0.1"}
+    return c, lf, base, images, common
+
+
+def rtabmap_map(paths, edges, machine, a):
+    c, lf, base, images, common = rtabmap_common(paths, edges, machine, a, "rtabmap_map")
+    gt = a.gt_topic or "/%s/global_pose" % machine
+    frame_of(paths, gt)                                   # refuses a bag without it
+    rt = dict(common, **{"odom_frame_id": "twin_map", "Mem/IncrementalMemory": "true",
+                         "Mem/InitWMWithAllNodes": "false"})
+    return {
+        "files": {"gt_relay.py": GT_RELAY,
+                  "rtabmap.launch.py": RTAB_LAUNCH % {"mode": "mapping on known poses", "rtabmap": rt, "odom": {},
+                                                      "images": images, "relay": [gt, base, "twin_map"],
+                                                      "args": ["-d"]}},
+        "launch": "ros2 launch %s/rtabmap.launch.py" % CFG,
+        "play": [c["left"], c["left_info"], c["depth"], gt, "/tf_static"],
+        "in": {c["left"]: IMG, c["depth"]: IMG}, "key": c["left"],
+        "out": "/gt_odom", "out_type": ODOM, "tum_frame": base, "world": "map",
+        "proc": r"rtabmap|gt_relay", "stamp_tol_s": 0.05, "nominal_hz": c["hz"], "stop_s": 180,
+        "settings": {"odometry": [gt, "visual", "the robot's pose in the twin (stage 10): every map node sits at "
+                                               "its twin pose, so the map is in the twin's frame"],
+                     "frame_id": [base, "base_link", "the frame %s is in" % gt],
+                     "image": [c["left"], "colour", "the left infrared image, the depth's own camera"],
+                     "Rtabmap/DetectionRate": ["2", "1", "a node every 0.5 s at most"],
+                     "database": ["/work/rtabmap.db", "~/.ros/rtabmap.db", "rtabmap_loc's --db"]}}
+
+
+def rtabmap_loc(paths, edges, machine, a):
+    c, lf, base, images, common = rtabmap_common(paths, edges, machine, a, "rtabmap_loc")
+    if not a.db or not os.path.exists(a.db):
+        raise Refused(f"rtabmap_loc: no database {a.db}: --db <the rtabmap_map run>/rtabmap.db")
+    a.copy = {"rtabmap.db": os.path.abspath(a.db)}
+    rt = dict(common, **{"odom_frame_id": "odom_vis", "Mem/IncrementalMemory": "false",
+                         "Mem/InitWMWithAllNodes": "true"})
+    od = {"frame_id": base, "odom_frame_id": "odom_vis", "publish_tf": True, "approx_sync": True,
+          "approx_sync_max_interval": 0.005, "qos": 1, "use_sim_time": True, "wait_for_transform": 0.3}
+    return {
+        "files": {"rtabmap.launch.py": RTAB_LAUNCH % {"mode": "localization in the rtabmap_map database",
+                                                      "rtabmap": rt, "odom": od, "images": images, "relay": [],
+                                                      "args": []}},
+        "launch": "ros2 launch %s/rtabmap.launch.py" % CFG,
+        "play": [c["left"], c["left_info"], c["depth"], "/tf_static"],
+        "in": {c["left"]: IMG, c["depth"]: IMG}, "key": c["left"],
+        "out": "/rtabmap/localization_pose", "out_type": "geometry_msgs/msg/PoseWithCovarianceStamped",
+        "tum_frame": base, "world": "map",
+        "proc": r"rtabmap|rgbd_odometry", "stamp_tol_s": 0.05, "nominal_hz": c["hz"], "stop_s": 60,
+        "settings": {"database": [os.path.abspath(a.db), None, "rtabmap_map's, on the mapping pass: in the twin"],
+                     "odometry": ["rgbd_odometry", None, "RTAB-Map's own, between localizations"],
+                     "output": ["/rtabmap/localization_pose", None, "a pose in the map (= the twin) at each "
+                                "recognised place: scored as it is, its coverage is how often that happens"],
+                     "Mem/IncrementalMemory": ["false", "true", "localization: the map is not extended"]}}
 
 
 F2L_LAUNCH = '''# made by make_config.py: 2Fast-2Lamaa's two nodes on the bag's clock
@@ -627,11 +760,12 @@ def default_ref(bag, machine):
 
 METHODS = {"kiss_icp": kiss_icp, "rko_lio": rko_lio, "fast_lio": fast_lio,
            "fast2lamaa": fast2lamaa, "fast2lamaa_loc": fast2lamaa_loc,
+           "rtabmap_map": rtabmap_map, "rtabmap_loc": rtabmap_loc,
            "openvins": openvins, "rtabmap_rgbd": rtabmap_rgbd}
 
 
 def make(method, bag, machine, run, start=0.0, duration=0.0, imu_noise=None, min_rate_frac=0.9,
-         map_path=None, ref=None, coarse_init=False):
+         map_path=None, ref=None, coarse_init=False, gt_topic=None, gt_frame=None, db=None):
     if method not in METHODS:
         raise Refused(f"{method}: one of {sorted(METHODS)}")
     if machine not in LIDAR:
@@ -641,7 +775,8 @@ def make(method, bag, machine, run, start=0.0, duration=0.0, imu_noise=None, min
     paths = mc._paths(bag)
     edges = mc.build_tf_static(paths)
     a = argparse.Namespace(imu_noise=imu_noise, map=map_path, ref=ref, bag=bag, bag_start_ns=t0, start=start,
-                           map_points=None, coarse_init=coarse_init)
+                           map_points=None, coarse_init=coarse_init, gt_topic=gt_topic, gt_frame=gt_frame,
+                           db=db, copy={})
     m = METHODS[method](paths, edges, machine, a)
     rate = gate(paths, m["key"], m["nominal_hz"], min_rate_frac)
     if m.get("start_s") is not None:                     # the method moved the start (fast2lamaa_loc)
@@ -655,6 +790,9 @@ def make(method, bag, machine, run, start=0.0, duration=0.0, imu_noise=None, min
         open(path, "w").write(text)
     if a.map_points is not None:                         # fast2lamaa_loc: the map gp_map loads
         write_ply(os.path.join(run, "map", "map.ply"), a.map_points)
+    import shutil
+    for dst, src in a.copy.items():                      # rtabmap_loc: the database, a copy per run
+        shutil.copyfile(src, os.path.join(run, dst))
     rj = {"method": method, "machine": machine, "bag": bag,
           "bag_start_ns": t0, "bag_duration_s": dur * 1e-9,
           "start_s": start, "duration_s": duration,
@@ -662,7 +800,7 @@ def make(method, bag, machine, run, start=0.0, duration=0.0, imu_noise=None, min
           "out_topic": m["out"], "out_type": m["out_type"], "tum_frame": m["tum_frame"],
           "proc_regex": m["proc"], "stamp_tol_s": m["stamp_tol_s"], "launch": m["launch"],
           "relay": m.get("relay"), "world": m.get("world", "odom"),
-          "ref": os.path.abspath(ref) if ref else None,
+          "ref": os.path.abspath(ref) if ref else None, "stop_s": m.get("stop_s"),
           "key_rate": rate, "settings": m["settings"], "config_files": sorted(m["files"])}
     json.dump(rj, open(os.path.join(run, "run.json"), "w"), indent=1)
     return rj
@@ -683,12 +821,17 @@ def main():
                     "default: the one stage 04's summary names)")
     ap.add_argument("--ref", default=None, help="fast2lamaa_loc: the T_map_lidar TUM whose first pose starts it "
                     "(default: stage 04's for the robot)")
+    ap.add_argument("--gt-topic", default=None, help="rtabmap_map: the robot's pose in map to map on "
+                    "(default /<machine>/global_pose)")
+    ap.add_argument("--gt-frame", default=None, help="rtabmap_*: the frame of that pose, RTAB-Map's frame_id "
+                    "(default <machine>_base_link)")
+    ap.add_argument("--db", default=None, help="rtabmap_loc: the rtabmap_map run's rtabmap.db")
     ap.add_argument("--coarse-init", action="store_true", help="fast2lamaa_loc: register the first scan coarse to "
                     "fine (for a rough seed) instead of trusting the seed")
     a = ap.parse_args()
     try:
         rj = make(a.method, a.bag, a.machine, a.run, a.start, a.duration, a.imu_noise, a.min_rate_frac,
-                  a.map, a.ref, a.coarse_init)
+                  a.map, a.ref, a.coarse_init, a.gt_topic, a.gt_frame, a.db)
     except (Refused, mc.ConvertError) as e:
         sys.exit(f"refused: {e}")
     print(json.dumps({k: rj[k] for k in ("method", "machine", "play_topics", "key_topic", "out_topic",

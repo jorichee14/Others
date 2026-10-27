@@ -12,6 +12,8 @@ what it cost.
 | `fast_lio` | mobile_1, mobile_2 | Ouster + its IMU | this image |
 | `fast2lamaa` | mobile_1, mobile_2 | Ouster + its IMU: 2Fast-2Lamaa odometry + mapping (one global map) | `scoop/odometry:2f2l-jazzy` |
 | `fast2lamaa_loc` | mobile_1, mobile_2 | Ouster + its IMU: 2Fast-2Lamaa localizing in the reference pass's anchored map | `scoop/odometry:2f2l-jazzy` |
+| `rtabmap_map` | mobile_2 | D455 left infrared + depth, on the robot's pose in the twin (`/mobile_2/global_pose` of the mapping pass): a visual map in the twin's frame | `scoop/odometry:rtabmap` |
+| `rtabmap_loc` | mobile_2 | D455 left infrared + depth: RTAB-Map localizing in that map (`--db`), its own odometry between recognised places | `scoop/odometry:rtabmap` |
 | `openvins` | mobile_2 | D455 infrared pair + IMU (needs `--imu-noise`) | this image |
 | `rtabmap_rgbd` | mobile_2 | D455 left infrared + depth | this image |
 | cuVSLAM | mobile_2 | D455 infrared pair (+ IMU) | the Isaac ROS container: `VSLAM_MONITOR=1 processing/vslam.py ...` |
@@ -76,6 +78,21 @@ few cm is agreement with the offline localization, not accuracy beyond it.
 table: ATE, in map, RPE 1 s, drift per 10 m, coverage, CPU, memory, latency,
 kept up; and a robot-to-robot table from any `relative_pose.json` (Swarm-SLAM)
 or `relative_pose_loc.json` beside them.
+
+Camera localization in the twin, RTAB-Map on known poses (`build.sh rtabmap`
+once): the mapping pass's images mapped on its `/mobile_2/global_pose`, so the
+map is in the twin's frame with nothing to align, then each coop run
+localized in it and scored as `fast2lamaa_loc` is (`in_map`, no fit):
+
+```bash
+MB=<the mapping pass's finalized bag>
+scoop_pipeline/slam/odometry/run_odometry.sh rtabmap_map $MB mobile_2 $R_MAP/rtabmap_map_mobile_2
+scoop_pipeline/slam/odometry/run_odometry.sh rtabmap_loc $B mobile_2 $R/rtabmap_loc_mobile_2 \
+    --db $R_MAP/rtabmap_map_mobile_2/rtabmap.db
+```
+
+`/rtabmap/localization_pose` comes at each recognised place only: its
+coverage is how often RTAB-Map localized, its error how well.
 
 `openvins` refuses until `--imu-noise noise.yaml` gives the D455 IMU's Allan
 variance (`accelerometer_noise_density`, `accelerometer_random_walk`,
