@@ -27,7 +27,9 @@ the twin by the map poses within --align-radius m (5) of the run's path only
 LocalizeInMap hint and score_fit/; 3 s after the robot's
 first image and its reference both exist, LocalizeInMap is called with the
 reference's pose there, put in the map's frame (run_vslam.sh's during-play
-hook, on /clock), and retried every 2 s until it succeeds. From then on the
+hook, on /clock; the bag player is paused until it answers, as cuVSLAM
+tracks nothing while it loads the map), and retried every 2 s until it
+succeeds. From then on the
 pose in the map is T_cmap_odom (/tf, recorded) @ T_odom_base (the odometry),
 put in the twin keyframe by keyframe (--anchor keyframes, the default): each
 map keyframe's own correction T_twin_base (the mapping pass's reference at
@@ -71,6 +73,7 @@ SRV = '''# written by scoop_pipeline/processing/vslam_loc.py: cuVSLAM's map serv
 # called from processing/run_vslam.sh's hooks, in the container
 #   python3 vslam_srv.py after <dir>    keyframes (GetAllPoses) -> keyframes.tum, map -> <dir>/map
 #   python3 vslam_srv.py during <dir>   at during_play.json's time on /clock, LocalizeInMap
+#                                        (the bag player paused until it answers)
 import json
 import os
 import sys
@@ -96,8 +99,8 @@ def find(node, kind, wait_s=60.0):
     sys.exit("no %s service after %.0f s; the node offers %s" % (kind, wait_s, offered))
 
 
-def call(node, name, kind, fill, timeout_s=600.0):
-    srv = get_service(PKG + kind)
+def call(node, name, kind, fill, timeout_s=600.0, pkg=PKG, may_time_out=False):
+    srv = get_service(pkg + kind)
     cli = node.create_client(srv, name)
     if not cli.wait_for_service(timeout_sec=30.0):
         sys.exit("%s is not answering" % name)
@@ -107,8 +110,25 @@ def call(node, name, kind, fill, timeout_s=600.0):
     fut = cli.call_async(req)
     rclpy.spin_until_future_complete(node, fut, timeout_sec=timeout_s)
     if not fut.done():
+        if may_time_out:
+            return None
         sys.exit("%s: no answer in %.0f s" % (name, timeout_s))
     return fut.result()
+
+
+def player(node, verb):
+    """Pause or resume the bag player (rosbag2_interfaces/srv/Pause, Resume),
+    if it offers it: LocalizeInMap holds cuVSLAM while it loads the map, and
+    the bag must not run on without it."""
+    kind = verb.capitalize()
+    names = sorted(n for n, ts in node.get_service_names_and_types()
+                   if "rosbag2_interfaces/srv/" + kind in ts)
+    if not names:
+        print("! the bag player offers no %s service: the bag runs on" % verb, flush=True)
+        return False
+    call(node, names[0], kind, lambda req, fields: None, timeout_s=10.0, pkg="rosbag2_interfaces/srv/")
+    print("bag player: %s" % verb, flush=True)
+    return True
 
 
 def field(fields, want):
@@ -179,15 +199,25 @@ def during(node, d):
         pose = getattr(req, field(fields, "geometry_msgs/Pose"))
         pose.position.x, pose.position.y, pose.position.z = h[:3]
         pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = h[3:7]
+    timeout_s = float(cfg.get("timeout_s", 1200))
     for k in range(int(cfg.get("tries", 15))):
         t_call = now["t"]
-        res = call(node, name, "LocalizeInMap", fill, timeout_s=60.0)
-        tries.append({"clock_s": t_call, "success": ok(res), "answer": str(res)})
-        print("try %d at %.3f s: %s" % (k + 1, t_call, res), flush=True)
+        paused = player(node, "pause")
+        t0 = time.time()
+        res = call(node, name, "LocalizeInMap", fill, timeout_s=timeout_s, may_time_out=True)
+        took = time.time() - t0
+        if paused:
+            player(node, "resume")
+        won = res is not None and ok(res)
+        tries.append({"clock_s": t_call, "success": won, "took_s": round(took, 1), "bag_paused": paused,
+                      "answer": str(res) if res is not None else "no answer in %.0f s" % timeout_s})
+        print("try %d at %.3f s, %.1f s: %s" % (k + 1, t_call, took, tries[-1]["answer"]), flush=True)
         json.dump({"service": name, "map": path, "hint": h, "tries": tries},
                   open(os.path.join(d, "localize.json"), "w"), indent=1)
-        if ok(res):
+        if won:
             return
+        if res is None:
+            sys.exit("LocalizeInMap: no answer in %.0f s" % timeout_s)
         t_next = now["t"] + float(cfg.get("every_s", 2.0))
         while now["t"] < t_next:
             rclpy.spin_once(node, timeout_sec=0.2)
