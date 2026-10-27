@@ -1,10 +1,10 @@
 % Sec. VIII Experiments (about 1.6 pages): spec sheet; E1-E4 test the
-% instrument; E5 tests whether the measured link matters.
+% instrument; E5 tests what a fitted channel misses.
 \section{Experiments}
 \label{sec:experiments}
 Six tests check the instrument and what it adds (Table~\ref{tab:spec}).
-E1 to E4 ask whether the testbed can be trusted; E5 asks whether its
-measured link changes answers that a synthetic channel would give; E6
+E1 to E4 ask whether the testbed can be trusted; E5 asks whether a
+synthetic channel with the same statistics reproduces the logged link; E6
 asks whether the twin matches reality and whether what it trains
 holds on real data. Each
 pass criterion was stated before its test was run. Unless stated
@@ -105,14 +105,15 @@ survey and cooperation mode on the same route. \emph{Result.}
 \todo{Mode distance from \texttt{survey\_1} and \texttt{coop\_2}; day
 distance from the E3 session.}
 
-\subsection{E5 Effect: What the Measured Link Changes}
-\emph{Question.} Does the logged link change an answer that a synthetic
-channel with the same statistics gives? Three cases at increasing scale
-are compared under the fitted and logged channels, and the published
-channels are shown for reference; there is no pass criterion, and either
-outcome is reported.
+\subsection{E5 Gap: What a Fitted Channel Misses}
+\emph{Question.} Does a synthetic channel with the logged link's
+statistics deliver messages as the logged link does? The fitted and
+logged channels are compared, and the published channels are shown for
+reference; there is no pass criterion, and either outcome is reported.
+What the gap costs collaborative SLAM and perception, across methods
+and sites, is measured on the SCooP dataset \cite{scoop_dataset}.
 
-\emph{E5a, messages.} Messages of \SI{1}{\kilo\byte}, \SI{100}{\kilo\byte},
+\emph{Setup and result.} Messages of \SI{1}{\kilo\byte}, \SI{100}{\kilo\byte},
 and \SI{1.5}{\mega\byte} are sent through each channel at \SI{10}{\hertz}.
 Under the logged link the predicted share of \SI{1.5}{\mega\byte} messages
 that arrive within one frame is 86\,\% with one robot on the channel and
@@ -126,22 +127,6 @@ clouds at \SI{10}{\hertz} offer \SI{240}{\mega\bit\per\second}, close to the
 measured goodput, so the share is also reported against offered load
 divided by goodput, to separate a capacity limit from the link's
 structure. \todo{Fitted column; share against normalized load.}
-
-\emph{E5b, a decision.} A sender chooses, per frame, between features and
-the raw cloud. The threshold on monitored goodput above which it sends
-the cloud is tuned under the fitted channel and then scored under the
-logged one, and its regret against the threshold tuned on the logged
-channel is reported. \todo{Run on \texttt{coop\_2} and \texttt{survey\_1}.}
-
-\emph{E5c, a real system.} Swarm-SLAM \cite{swarmslam}, unmodified, runs
-on \texttt{coop\_2} with its inter-robot messages carried by the relay of
-Sec.~\ref{sec:replay}, five runs per channel. Reported are joint and
-per-robot ATE against the reference, the number and error of
-inter-robot loop closures, the time to the first map merge, and the age
-of each robot's copy of the other's map. Only differences between the
-fitted and logged channels larger than the spread between runs are
-claimed. If the robot's LiDAR and the cart's RGB-D find no common loop
-closures, both run on their cameras. \todo{Run.}
 
 \input{figures/simgap}
 

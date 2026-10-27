@@ -9,10 +9,12 @@ confirmed to about \SI{2}{\centi\metre} RMS by control distances,
 without motion capture or GNSS. Other researchers can test any collaborative method,
 including unmodified ROS~2 systems, on the recordings through a replay
 of the recorded link, \todo{whose predicted arrivals match
-live messages to within one frame}. Compared with a
-synthetic channel fitted to the same statistics, the logged link
-\todo{changes the predicted delivery of large messages, the best
-send-size policy, and the behaviour of a collaborative SLAM system}. A
+live messages to within one frame}. A
+synthetic channel fitted to the same statistics \todo{misstates the
+delivery of large messages by X points}, so the link has to be
+measured, not modelled. How much the real link costs collaborative
+SLAM and perception across methods and sites is reported with the SCooP
+dataset \cite{scoop_dataset}. A
 digital twin built from the same capture with each part checked against
 held-out passes, trains models that are then tested on held-out real
 recordings \todo{result}. The next step closes the loop: motion
