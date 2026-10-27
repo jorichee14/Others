@@ -2,9 +2,11 @@
 % instrument; E5 tests whether the measured link matters.
 \section{Experiments}
 \label{sec:experiments}
-Five tests check the instrument and what it adds (Table~\ref{tab:spec}).
+Six tests check the instrument and what it adds (Table~\ref{tab:spec}).
 E1 to E4 ask whether the testbed can be trusted; E5 asks whether its
-measured link changes answers that a synthetic channel would give. Each
+measured link changes answers that a synthetic channel would give; E6
+asks whether the Gym's twin matches reality and whether what it trains
+holds on real data. Each
 pass criterion was stated before its test was run. Unless stated
 otherwise, link numbers come from the 24 September session at site 1:
 \texttt{survey\_1}, in which one agent owns the channel, and
@@ -142,3 +144,25 @@ claimed. If the robot's LiDAR and the cart's RGB-D find no common loop
 closures, both run on their cameras. \todo{Run.}
 
 \input{figures/simgap}
+
+\subsection{E6 Gym: The Twin Against Held-Out Passes}
+\emph{Question.} Does the twin reproduce held-out real passes, and does
+a model trained in it hold on real data? \emph{Pass.} E6a: synthetic
+scans at the recorded poses within \SI{3}{\centi\metre} median of the real
+scans; fitted dropout rates and burst lengths within the spread between
+real sessions; the place-indexed link predicting the held-out pass's
+in-frame share within 10 points and closer than the fitted channel. E6b:
+a model trained on twin scenarios and the build passes, tested on the
+held-out recordings, scores no worse than the same model trained on the
+build passes alone.
+
+\emph{E6a, the gate.} The twin drives the recorded paths of a held-out
+pass; its scans are registered to the map and compared with the real
+scans at the same poses, and the dropout and link models fitted on the
+build passes are compared with that pass. \emph{E6b, train and test.} A
+cooperative detector is trained with and without twin scenarios that
+add people and objects at the recordings' class counts, and both are
+scored on the held-out recordings with real labels and the logged link.
+\emph{Result.} \todo{Run the twin on a held-out pass; label the
+held-out frames; train and score.}
+

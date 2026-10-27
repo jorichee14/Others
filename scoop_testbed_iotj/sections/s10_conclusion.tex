@@ -11,10 +11,11 @@ collaborative method, including unmodified ROS~2 systems,
 \todo{reproducing live arrivals to within one frame}. Compared with a
 synthetic channel fitted to the same statistics, the logged link
 \todo{changes the predicted delivery of large messages, the best
-send-size policy, and the behaviour of a collaborative SLAM system}. The
-next step is a closed-loop environment built from the same capture, a
-twin of the measured building with its measured link, in which agents
-can act on what they receive and whose predictions can be checked on
-the testbed. The pipeline and the replay module are released with this
+send-size policy, and the behaviour of a collaborative SLAM system}. SCooP-iT
+Gym builds a twin from the same capture, checks each of its parts
+against held-out passes, and trains models that are tested on held-out
+real recordings \todo{result}. The next step closes the loop: motion
+policies trained in the twin, deployed on the testbed, and their real
+outcomes compared with the twin's predictions. The pipeline and the replay module are released with this
 paper, and the sequences and labels as the SCooP dataset
 \cite{scoop_dataset}.

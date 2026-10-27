@@ -68,6 +68,11 @@ contributions are:
     runs}: per-message arrivals for message-level models and for
     unmodified ROS~2 systems through a relay, \todo{reproducing live
     arrivals to within one frame} (Sec.~\ref{sec:replay}, E3).
+    \item \textbf{SCooP-iT Gym}: a digital twin built from the
+    recordings, each part measured or added and checked against held-out
+    passes before it trains anything, in which perception and
+    communication models are trained and then tested on held-out real
+    recordings \todo{result} (Sec.~\ref{sec:gym}, E6).
     \item \textbf{Evidence that the measured link's structure matters}:
     against a synthetic channel fitted to the same link, the logged link
     changes the predicted delivery of large messages, the best
@@ -76,7 +81,8 @@ contributions are:
 \end{enumerate}
 Sec.~\ref{sec:related} reviews related work;
 Secs.~\ref{sec:design}--\ref{sec:replay} describe the testbed and the
-replay; Sec.~\ref{sec:experiments} reports five tests, each with a pass
-criterion stated before the test was run; and Sec.~\ref{sec:lessons}
+replay; Sec.~\ref{sec:gym} presents the Gym; Sec.~\ref{sec:experiments}
+reports six tests, each with a pass criterion stated before the test was
+run; and Sec.~\ref{sec:lessons}
 gives lessons and limitations. The sequences and labels recorded on the
 testbed are released as the SCooP dataset \cite{scoop_dataset}.
