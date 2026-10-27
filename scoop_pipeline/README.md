@@ -173,6 +173,11 @@ analysis/            measuring results; reads outputs, writes nothing back
   slam/patches/cslam_lidar_lc_direction.py  run once in Swarm-SLAM's container: its LiDAR
                      loop closures (TEASER++ + ICP) enter the pose graph inverted; measured
                      against the ground truth, they are right only the other way round
+  analysis/slam/relative_pose.py  the robots' relative pose over a Swarm-SLAM run, as collaborative
+                     perception uses it: at every second the latest merged graph, carried by
+                     each robot's odometry, against the ground truth; share of the run with a
+                     shared frame, translation / rotation error, a point at --range m, usable
+                     share (<export> --run <run> [--run ...] --out plot.png)
   analysis/slam/trajectory_video.py  top-view videos over the reference (and --map's floor plan): two
                      robots' odometry each placed at its own first pose (odometry --run <run>
                      --run <run>), or Swarm-SLAM's graph in time order with its loop closures,
@@ -228,6 +233,8 @@ tests/               self-tests, no real bag needed
   test_channel_relay.py  channel_relay: messages held to their arrival, outage dropped,
                      never back to the sender, every message logged; MB updates to a
                      server queued per robot uplink
+  test_relative_pose.py  relative_pose: no shared frame before the first merged graph, a graph's
+                     0.3 m offset carried by the odometry until the next graph, then 0
   test_cslam_eval.py cslam_eval: keys to robots, ATE, wrong loop closure flagged, merge time
   test_swarm_slam.py swarm_slam: topics, intrinsics, registered depth, odometry in the
                      robot's odom frame at the image stamp, ground truth
