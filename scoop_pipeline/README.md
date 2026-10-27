@@ -198,9 +198,9 @@ analysis/            measuring results; reads outputs, writes nothing back
                      mapping; fast2lamaa_loc: localization in the reference pass's anchored map,
                      scored also in map with no fit) in its own Jazzy image (build.sh 2f2l);
                      compare.py tables every run and robot-to-robot result given;
-                     processing/vslam_loc.py: cuVSLAM localizing in a map it saved on the survey
-                     pass (map <survey config> --ref-topic /mobile_2/global_pose, then localize
-                     <coop config> --map-from <survey config>), scored the same way
+                     processing/vslam_loc.py: cuVSLAM localizing in a map it saved on the mapping
+                     pass (map <mapping config> --ref-topic /mobile_2/global_pose, then localize
+                     <coop config> --map-from <mapping config>), scored the same way
   slam/cslam_eval.py  Swarm-SLAM run against the ground truth: ATE per robot and joint,
                      inter-robot loop closures checked, time to merge, bytes exchanged
   slam/kimera_eval.py  Kimera-VIO (slam/run_kimera.sh) against the ground truth: ATE and

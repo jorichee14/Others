@@ -2,21 +2,23 @@
 """cuVSLAM localizing in a map it saved on another pass, scored as the other
 methods are (slam/odometry/score.py): does a map improve cuVSLAM's odometry?
 
-    python scoop_pipeline/processing/vslam_loc.py map <survey config> [--machine mobile_2]
+    python scoop_pipeline/processing/vslam_loc.py map <mapping config> [--machine mobile_2] [--bag B]
         [--ref-topic /mobile_2/global_pose [--ref-frame F]] [--imu] [--rate R] [--redo]
-    python scoop_pipeline/processing/vslam_loc.py localize <coop config> --map-from <survey config>
+    python scoop_pipeline/processing/vslam_loc.py localize <coop config> --map-from <mapping config>
         [--machine mobile_2] [--imu] [--rate R] [--redo]
 
-map: cuVSLAM (SLAM on) over the survey pass's stereo pair (processing/vslam.py's
+map: cuVSLAM (SLAM on) over the mapping pass's stereo pair (the pass the
+twin's anchored map was built from, so the camera map and the LiDAR map come
+from the same drive; a mapping pass's mobile_2 was parked) (processing/vslam.py's
 preset for the robot); once the bag has played, its keyframes (GetAllPoses)
 and the map (the FilePath service named save_map) are written, through
 run_vslam.sh's after-play hook. Then the map's frame is put in the twin's: the
-keyframes, in the LiDAR frame (the bag's /tf_static), fitted onto the survey
+keyframes, in the LiDAR frame (the bag's /tf_static), fitted onto the mapping
 pass's track of the robot in the twin: --ref-topic /<machine>/global_pose
 (stage 10's, in the finalized bag; --ref-frame, the camera optical frame by
 default), or stage 04's traj_<machine>_lidar.tum (the robot's "tracks" entry
-in the survey config's 04_reference), by the same pose fit score.py uses.
-  -> work/<date>/<survey pass>/<machine>/vslam_map/: map/, keyframes.tum
+in the mapping config's 04_reference), by the same pose fit score.py uses.
+  -> work/<date>/<mapping pass>/<machine>/vslam_map/: map/, keyframes.tum
      (T_cmap_base), alignment.json (T_twin_cmap, the fit's residual), odometry/
 
 localize: cuVSLAM over the coop pass with that map; 3 s after the robot's
@@ -324,7 +326,7 @@ def cmd_map(a):
     from pipeline_common import load_pipeline
     import swarm_slam_lidar as SL
     P = load_pipeline(a.config)
-    bag = os.path.expanduser(P.dataset["bag"])
+    bag = os.path.abspath(os.path.expanduser(a.bag)) if a.bag else os.path.expanduser(P.dataset["bag"])
     c = preset(a.machine, a.imu)
     out = os.path.join(os.path.dirname(VS.out_dir(P, a.machine)), "vslam_map")
     if a.ref_topic:
@@ -427,7 +429,7 @@ def cmd_localize(a):
         json.dump({"at_s": t_call, "hint": vec_of(hint), "map": "map", "tries": 15, "every_s": 2.0},
                   open(os.path.join(part, "during_play.json"), "w"), indent=1)
         play(part, launch, bag, c, a.rate)
-        shutil.rmtree(os.path.join(part, "map"))                  # a copy of the survey's
+        shutil.rmtree(os.path.join(part, "map"))                  # a copy of the mapping pass's
         shutil.move(part, out)
     else:
         print("[skip] the run is there (--redo runs it again)")
@@ -464,7 +466,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("step", choices=("map", "localize"))
     ap.add_argument("config")
-    ap.add_argument("--map-from", default=None, help="localize: the survey pass's config (where the map is)")
+    ap.add_argument("--map-from", default=None, help="localize: the mapping pass's config (where the map is)")
     ap.add_argument("--machine", default="mobile_2", choices=sorted(VS.MACHINES))
     ap.add_argument("--ref", default=None, help="the pass's T_map_lidar TUM of the robot (default: stage 04's)")
     ap.add_argument("--ref-topic", default=None, help="map: the robot's pose topic in map in the pass bag instead "
@@ -472,11 +474,14 @@ def main():
     ap.add_argument("--ref-frame", default="camera_color_optical_frame",
                     help="--ref-topic's frame (stage 10: the camera optical frame, or the pass's base_frame)")
     ap.add_argument("--imu", action="store_true", help="IMU fusion on (the measured odometry had it off)")
+    ap.add_argument("--bag", default=None, help="map: the pass bag, where it is not at the config's path (an "
+                    "external drive: the container must see it at the same path); the outputs stay where the "
+                    "config puts them")
     ap.add_argument("--rate", type=float, default=1.0)
     ap.add_argument("--redo", action="store_true")
     a = ap.parse_args()
     if a.step == "localize" and not a.map_from:
-        ap.error("localize needs --map-from <survey config>")
+        ap.error("localize needs --map-from <mapping config>")
     (cmd_map if a.step == "map" else cmd_localize)(a)
 
 

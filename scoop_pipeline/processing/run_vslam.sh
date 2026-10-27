@@ -59,7 +59,8 @@ if [ -z "${VSLAM_IN_CONTAINER:-}" ]; then
         inside() {
             case "$1" in
                 "$HOST_WS"/*) echo "$CONT_WS${1#"$HOST_WS"}" ;;
-                *) die "$1 is not below $HOST_WS, the folder the container sees" ;;
+                *) if docker exec "$CONTAINER" test -e "$1" 2>/dev/null; then echo "$1"   # mounted at the same path
+                   else die "$1 is not below $HOST_WS, the folder the container sees, nor mounted in $CONTAINER at the same path (add -v $1:$1 to its docker args, or copy it below $HOST_WS)"; fi ;;
             esac
         }
         command -v docker >/dev/null 2>&1 \
