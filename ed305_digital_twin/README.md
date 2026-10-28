@@ -2,7 +2,9 @@
 
 Digital twin of the ED305 room (16 Basler cameras, see the lab wiki "ED305
 Indoor Camera User Guide") for collaborative perception. The plan is
-[PLAN.md](PLAN.md); camera placement step by step is [WORKFLOW.md](WORKFLOW.md); what runs on the robots' Jetson Orin vs the server in the dynamic twin is [DATAFLOW.md](DATAFLOW.md). v1 so far: coverage / blind spots, placement within each mount's range, and measuring that range from video.
+[PLAN.md](PLAN.md); camera placement step by step is [WORKFLOW.md](WORKFLOW.md); what runs on the robots' Jetson Orin vs the server in the dynamic twin is
+[DATAFLOW.md](DATAFLOW.md); how to improve the Gaussian map's appearance without
+loosening the geometry is [APPEARANCE.md](APPEARANCE.md). v1 so far: coverage / blind spots, placement within each mount's range, and measuring that range from video.
 
 ```
 ed305/camera.py        pinhole camera in the room frame; loads cameras YAML
