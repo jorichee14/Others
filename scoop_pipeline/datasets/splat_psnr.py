@@ -57,6 +57,45 @@ def diagnose(render, image):
     return (99.0 if mse <= 0 else 10 * np.log10(255.0 ** 2 / mse)), float(np.mean(gains))
 
 
+def offset(render, image):
+    """The shift that best lines a render up with its image, and what it buys.
+
+    A spatial error has three causes that look identical in a PSNR and call
+    for completely different work. The shift tells them apart:
+
+      a consistent shift across views  -- the camera is not where the rig says
+        it is: an extrinsic or a principal point, one constant to re-measure
+      shifts scattered view to view    -- the poses themselves are noisy, and
+        only bundle adjustment fixes that
+      no shift, and the gain unmoved   -- nothing is misplaced; the image is
+        blurred or the geometry is wrong
+
+    Phase correlation finds it to a fraction of a pixel, and the PSNR after
+    shifting says how much of the error was only ever misalignment.
+    """
+    import cv2
+    a = cv2.cvtColor(render, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    b = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    window = cv2.createHanningWindow((a.shape[1], a.shape[0]), cv2.CV_32F)
+    (dx, dy), response = cv2.phaseCorrelate(a * window, b * window)
+    moved = cv2.warpAffine(render, np.array([[1, 0, dx], [0, 1, dy]], dtype=np.float32),
+                           (render.shape[1], render.shape[0]),
+                           flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    return float(dx), float(dy), float(response), psnr(moved, image)
+
+
+def sharpness(image):
+    """How much high-frequency detail an image carries (variance of Laplacian).
+
+    Compared between a render and its image it says which of the two is the
+    blurred one -- the model smearing Gaussians to cover inconsistent poses,
+    or the camera smearing the scene because the robot was moving.
+    """
+    import cv2
+    return float(cv2.Laplacian(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY),
+                               cv2.CV_64F).var())
+
+
 def compare(renders, scene, log=print):
     """[{frame, name, camera, psnr, psnr_gain, gain, l1}] and a summary per camera."""
     import cv2
@@ -71,8 +110,12 @@ def compare(renders, scene, log=print):
         if r.shape != im.shape:
             r = cv2.resize(r, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_AREA)
         corrected, gain = diagnose(r, im)
+        dx, dy, response, shifted = offset(r, im)
         rows.append({"frame": n, "name": fr["name"], "camera": int(fr.get("camera", 1)), "psnr": psnr(r, im),
                      "psnr_gain": corrected, "gain": gain,
+                     "dx": dx, "dy": dy, "shift": float(np.hypot(dx, dy)),
+                     "psnr_shift": shifted,
+                     "sharp_render": sharpness(r), "sharp_image": sharpness(im),
                      "l1": float(np.mean(np.abs(r.astype(np.float32) - im.astype(np.float32))) / 255.0)})
     summ = {}
     for cam in sorted({r["camera"] for r in rows}) + ["all"]:
@@ -89,6 +132,23 @@ def compare(renders, scene, log=print):
         log("               after a per-view gain: mean %.2f dB, median %.2f  (+%.2f); "
             "gain 10-90%% spread %.2f"
             % (g.mean(), np.median(g), g.mean() - p.mean(), summ[cam]["gain_spread"]))
+        dx = np.array([r["dx"] for r in sel])
+        dy = np.array([r["dy"] for r in sel])
+        sh = np.array([r["psnr_shift"] for r in sel])
+        sr = np.array([r["sharp_render"] for r in sel])
+        si = np.array([r["sharp_image"] for r in sel])
+        summ[cam].update({"dx_median": float(np.median(dx)), "dy_median": float(np.median(dy)),
+                          "shift_spread": float(np.hypot(dx.std(), dy.std())),
+                          "psnr_shift_mean": float(sh.mean()),
+                          "sharp_render": float(np.median(sr)),
+                          "sharp_image": float(np.median(si))})
+        log("               shift median (%.2f, %.2f) px, scatter %.2f px; after it: "
+            "%.2f dB (+%.2f)"
+            % (np.median(dx), np.median(dy), summ[cam]["shift_spread"],
+               sh.mean(), sh.mean() - p.mean()))
+        log("               detail: render %.0f, image %.0f (%s is the blurred one)"
+            % (np.median(sr), np.median(si),
+               "the render" if np.median(sr) < np.median(si) else "the image"))
     return rows, summ
 
 
@@ -106,11 +166,36 @@ def main():
     out = a.out or os.path.join(renders, "psnr.csv")
     with open(out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=["frame", "name", "camera", "psnr",
-                                           "psnr_gain", "gain", "l1"])
+                                           "psnr_gain", "gain", "dx", "dy", "shift",
+                                           "psnr_shift", "sharp_render", "sharp_image",
+                                           "l1"])
         w.writeheader()
         w.writerows(rows)
     print("wrote %s" % out)
-    lift = summ["all"]["psnr_gain_mean"] - summ["all"]["psnr_mean"]
+    a = summ["all"]
+    systematic = float(np.hypot(a["dx_median"], a["dy_median"]))
+    print("")
+    if systematic >= 1.0 and systematic > a["shift_spread"]:
+        print("  every view is off by about the same (%.1f, %.1f) px, more than they\n"
+              "  differ from each other (%.1f px): one constant is wrong, not the poses.\n"
+              "  Re-measure the camera-to-LiDAR extrinsic and the principal point before\n"
+              "  touching the training."
+              % (a["dx_median"], a["dy_median"], a["shift_spread"]))
+    elif a["shift_spread"] >= 1.0:
+        print("  the views are off by %.1f px in scattered directions: the poses are\n"
+              "  noisy. Bundle-adjust the images with the LiDAR poses as priors, or\n"
+              "  optimise the cameras during training, then retrain."
+              % a["shift_spread"])
+    elif a["sharp_render"] < 0.6 * a["sharp_image"]:
+        print("  nothing is misplaced (%.1f px) and the render carries %.0f%% of the\n"
+              "  image's detail: the model is smearing. Capacity, densification or an\n"
+              "  over-strong regulariser -- not the capture."
+              % (a["shift_spread"], 100 * a["sharp_render"] / max(1e-9, a["sharp_image"])))
+    else:
+        print("  nothing is misplaced (%.1f px) and the render is as sharp as the image:\n"
+              "  the images themselves are the limit -- motion blur, noise or rolling\n"
+              "  shutter on a moving base." % a["shift_spread"])
+    lift = a["psnr_gain_mean"] - a["psnr_mean"]
     if lift >= 2.0:
         print("\n  a per-view gain recovers %.1f dB: the brightness disagrees between "
               "views, not\n  the geometry -- auto-exposure, not poses. Train with "
