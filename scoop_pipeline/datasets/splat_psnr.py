@@ -29,8 +29,36 @@ def psnr(a, b):
     return 99.0 if mse <= 0 else 10 * np.log10(255.0 ** 2 / mse)
 
 
+def diagnose(render, image):
+    """PSNR after the best per-channel gain and bias, and that gain.
+
+    Separates the two ways a model fails on views it was TRAINED on. If the
+    geometry and poses are right and only the brightness disagrees -- the
+    camera's auto-exposure having moved between a dark corridor and a bright
+    window -- then one scalar per channel removes most of the error, and the
+    corrected PSNR jumps. If the error survives the correction it is spatial:
+    poses, blur, or geometry, none of which a gain can fix.
+
+    A model cannot be blamed for failing to reproduce two different exposures
+    of one wall; it can be blamed for the rest.
+    """
+    a = render.astype(np.float64).reshape(-1, render.shape[-1])
+    b = image.astype(np.float64).reshape(-1, image.shape[-1])
+    fixed = np.empty_like(a)
+    gains = []
+    for c in range(a.shape[1]):
+        x, y = a[:, c], b[:, c]
+        var = float(((x - x.mean()) ** 2).mean())
+        gain = float(((x - x.mean()) * (y - y.mean())).mean() / var) if var > 1e-9 else 1.0
+        fixed[:, c] = gain * x + (y.mean() - gain * x.mean())
+        gains.append(gain)
+    fixed = np.clip(fixed, 0, 255)
+    mse = float(np.mean((fixed - b) ** 2))
+    return (99.0 if mse <= 0 else 10 * np.log10(255.0 ** 2 / mse)), float(np.mean(gains))
+
+
 def compare(renders, scene, log=print):
-    """[{frame, name, camera, psnr, l1}] and {camera: {n, psnr_mean, psnr_median, l1}} ('all' too)."""
+    """[{frame, name, camera, psnr, psnr_gain, gain, l1}] and a summary per camera."""
     import cv2
     meta = json.load(open(os.path.join(renders, "cameras.json")))
     rows = []
@@ -42,16 +70,25 @@ def compare(renders, scene, log=print):
             continue
         if r.shape != im.shape:
             r = cv2.resize(r, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_AREA)
+        corrected, gain = diagnose(r, im)
         rows.append({"frame": n, "name": fr["name"], "camera": int(fr.get("camera", 1)), "psnr": psnr(r, im),
+                     "psnr_gain": corrected, "gain": gain,
                      "l1": float(np.mean(np.abs(r.astype(np.float32) - im.astype(np.float32))) / 255.0)})
     summ = {}
     for cam in sorted({r["camera"] for r in rows}) + ["all"]:
         sel = [r for r in rows if cam == "all" or r["camera"] == cam]
         p = np.array([r["psnr"] for r in sel])
+        g = np.array([r["psnr_gain"] for r in sel])
+        gains = np.array([r["gain"] for r in sel])
         summ[cam] = {"n": len(sel), "psnr_mean": float(p.mean()), "psnr_median": float(np.median(p)),
+                     "psnr_gain_mean": float(g.mean()), "psnr_gain_median": float(np.median(g)),
+                     "gain_spread": float(np.percentile(gains, 90) - np.percentile(gains, 10)),
                      "l1": float(np.mean([r["l1"] for r in sel]))}
         log("  camera %-4s %5d views  PSNR mean %.2f dB, median %.2f  L1 %.4f"
             % (cam, len(sel), p.mean(), np.median(p), summ[cam]["l1"]))
+        log("               after a per-view gain: mean %.2f dB, median %.2f  (+%.2f); "
+            "gain 10-90%% spread %.2f"
+            % (g.mean(), np.median(g), g.mean() - p.mean(), summ[cam]["gain_spread"]))
     return rows, summ
 
 
@@ -68,10 +105,22 @@ def main():
         sys.exit("no render matched an image (cameras.json names against <scene>/images)")
     out = a.out or os.path.join(renders, "psnr.csv")
     with open(out, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=["frame", "name", "camera", "psnr", "l1"])
+        w = csv.DictWriter(fh, fieldnames=["frame", "name", "camera", "psnr",
+                                           "psnr_gain", "gain", "l1"])
         w.writeheader()
         w.writerows(rows)
     print("wrote %s" % out)
+    lift = summ["all"]["psnr_gain_mean"] - summ["all"]["psnr_mean"]
+    if lift >= 2.0:
+        print("\n  a per-view gain recovers %.1f dB: the brightness disagrees between "
+              "views, not\n  the geometry -- auto-exposure, not poses. Train with "
+              "per-image appearance\n  compensation (Gaussian-LIC models exactly this) "
+              "and lock the camera's exposure\n  on the next capture." % lift)
+    else:
+        print("\n  a per-view gain recovers only %.1f dB: the error is spatial, not "
+              "photometric.\n  Poses, motion blur or geometry -- bundle-adjust the "
+              "images (or optimise the\n  cameras during training) before anything "
+              "else." % lift)
 
 
 if __name__ == "__main__":
