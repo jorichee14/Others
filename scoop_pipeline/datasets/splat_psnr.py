@@ -81,7 +81,34 @@ def offset(render, image):
     moved = cv2.warpAffine(render, np.array([[1, 0, dx], [0, 1, dy]], dtype=np.float32),
                            (render.shape[1], render.shape[0]),
                            flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-    return float(dx), float(dy), float(response), psnr(moved, image)
+
+    # The same question asked of nine tiles instead of the whole frame. A
+    # camera in the wrong PLACE moves near surfaces further across the image
+    # than far ones, so the tiles disagree and no single offset can fix the
+    # frame; a camera merely pointed slightly wrong moves everything together
+    # and the tiles agree. One distinguishes a wrong extrinsic translation or
+    # wrong geometry from a wrong rotation, and they are not the same repair.
+    h, w = a.shape
+    th, tw = h // 3, w // 3
+    tile_window = cv2.createHanningWindow((tw, th), cv2.CV_32F)
+    tiles = []
+    for i in range(3):
+        for j in range(3):
+            pa = a[i * th:(i + 1) * th, j * tw:(j + 1) * tw]
+            pb = b[i * th:(i + 1) * th, j * tw:(j + 1) * tw]
+            if pa.shape != (th, tw):
+                continue
+            (tx, ty), tr = cv2.phaseCorrelate(np.ascontiguousarray(pa) * tile_window,
+                                              np.ascontiguousarray(pb) * tile_window)
+            tiles.append((tx, ty, tr))
+    strong = [t for t in tiles if t[2] >= 0.05]
+    if len(strong) >= 4:
+        spread = float(np.hypot(np.std([t[0] for t in strong]),
+                                np.std([t[1] for t in strong])))
+    else:
+        spread = float("nan")
+    return (float(dx), float(dy), float(response), psnr(moved, image), spread,
+            float(np.median([t[2] for t in tiles])) if tiles else 0.0)
 
 
 def sharpness(image):
@@ -110,11 +137,12 @@ def compare(renders, scene, log=print):
         if r.shape != im.shape:
             r = cv2.resize(r, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_AREA)
         corrected, gain = diagnose(r, im)
-        dx, dy, response, shifted = offset(r, im)
+        dx, dy, response, shifted, within, tile_response = offset(r, im)
         rows.append({"frame": n, "name": fr["name"], "camera": int(fr.get("camera", 1)), "psnr": psnr(r, im),
                      "psnr_gain": corrected, "gain": gain,
                      "dx": dx, "dy": dy, "shift": float(np.hypot(dx, dy)),
-                     "psnr_shift": shifted,
+                     "psnr_shift": shifted, "response": response,
+                     "within_view": within, "tile_response": tile_response,
                      "sharp_render": sharpness(r), "sharp_image": sharpness(im),
                      "l1": float(np.mean(np.abs(r.astype(np.float32) - im.astype(np.float32))) / 255.0)})
     summ = {}
@@ -142,10 +170,16 @@ def compare(renders, scene, log=print):
                           "psnr_shift_mean": float(sh.mean()),
                           "sharp_render": float(np.median(sr)),
                           "sharp_image": float(np.median(si))})
+        within = np.array([r["within_view"] for r in sel], dtype=float)
+        within = within[np.isfinite(within)]
+        summ[cam]["within_view"] = float(np.median(within)) if len(within) else float("nan")
+        summ[cam]["response"] = float(np.median([r["response"] for r in sel]))
         log("               shift median (%.2f, %.2f) px, scatter %.2f px; after it: "
-            "%.2f dB (+%.2f)"
+            "%.2f dB (%+.2f)   [peak %.3f]"
             % (np.median(dx), np.median(dy), summ[cam]["shift_spread"],
-               sh.mean(), sh.mean() - p.mean()))
+               sh.mean(), sh.mean() - p.mean(), summ[cam]["response"]))
+        log("               within one frame, tiles disagree by %.2f px"
+            % summ[cam]["within_view"])
         log("               detail: render %.0f, image %.0f (%s is the blurred one)"
             % (np.median(sr), np.median(si),
                "the render" if np.median(sr) < np.median(si) else "the image"))
@@ -167,15 +201,39 @@ def main():
     with open(out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=["frame", "name", "camera", "psnr",
                                            "psnr_gain", "gain", "dx", "dy", "shift",
-                                           "psnr_shift", "sharp_render", "sharp_image",
-                                           "l1"])
+                                           "psnr_shift", "response", "within_view",
+                                           "tile_response", "sharp_render",
+                                           "sharp_image", "l1"])
         w.writeheader()
         w.writerows(rows)
     print("wrote %s" % out)
     a = summ["all"]
     systematic = float(np.hypot(a["dx_median"], a["dy_median"]))
+    helps = a["psnr_shift_mean"] - a["psnr_mean"]
+    within = a["within_view"]
     print("")
-    if systematic >= 1.0 and systematic > a["shift_spread"]:
+    if within == within and within >= 1.0:
+        # Asked first, because a camera in the wrong place also responds a
+        # little to a global shift and would otherwise read as a rotation.
+        print("  tiles within one frame disagree by %.1f px: the misalignment depends "
+              "on depth,\n  which is what a camera in the wrong PLACE looks like. The "
+              "camera-to-LiDAR\n  translation, or the scale of the geometry -- not the "
+              "rotations, and not something\n  bundle adjustment fixes with the extrinsic "
+              "held fixed." % within)
+    elif helps < 0.5:
+        # A shift that buys nothing found no real misalignment, whatever number
+        # it reported: a peak in noise is still a peak.
+        if a["sharp_render"] < 0.85 * a["sharp_image"]:
+            print("  no shift helps (%+.2f dB) and nothing moves within a frame "
+                  "(%.1f px), but the\n  render carries %.0f%% of the image's detail: "
+                  "the model is smearing. Capacity,\n  densification, or Gaussians "
+                  "covering observations that disagree."
+                  % (helps, within, 100 * a["sharp_render"] / max(1e-9, a["sharp_image"])))
+        else:
+            print("  no shift helps (%+.2f dB) and the render is as sharp as the "
+                  "image: the\n  images themselves are the limit -- motion blur, noise "
+                  "or rolling shutter." % helps)
+    elif systematic >= 1.0 and systematic > a["shift_spread"]:
         print("  every view is off by about the same (%.1f, %.1f) px, more than they\n"
               "  differ from each other (%.1f px): one constant is wrong, not the poses.\n"
               "  Re-measure the camera-to-LiDAR extrinsic and the principal point before\n"
