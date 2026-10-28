@@ -19,6 +19,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -123,10 +124,53 @@ def sharpness(image):
                                cv2.CV_64F).var())
 
 
+def steps_between_frames(scene):
+    """How far the camera moved into each frame, by image name: {name: metres}.
+
+    The frames are numbered in the order they were taken, so the distance
+    between a frame's centre and its neighbours' is the robot's speed at that
+    moment, up to the constant frame interval. It is the one thing a static
+    extrinsic error does not depend on and a timestamp offset does: a camera
+    whose image is stamped a little before or after the pose it is given
+    sits further from where it really was the faster the robot went.
+    """
+    centres = {}
+    with open(os.path.join(scene, "sparse", "0", "images.txt"), encoding="utf-8") as handle:
+        for line in handle:
+            v = line.split()
+            if len(v) >= 10 and v[0].isdigit():
+                w, x, y, z = (float(c) for c in v[1:5])
+                t = np.array([float(c) for c in v[5:8]])
+                R = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                              [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                              [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+                centres[v[9]] = -R.T @ t
+    by_index = {}
+    for name, centre in centres.items():
+        m = re.search(r"(\d+)\.\w+$", name)
+        if m:
+            by_index.setdefault(name.split("frame")[0] if "frame" in name else "",
+                                {})[int(m.group(1))] = (name, centre)
+    steps = {}
+    for series in by_index.values():
+        keys = sorted(series)
+        for k, index in enumerate(keys):
+            before = series[keys[k - 1]][1] if k > 0 else None
+            after = series[keys[k + 1]][1] if k + 1 < len(keys) else None
+            name, here = series[index]
+            gaps = [np.linalg.norm(here - n) for n in (before, after) if n is not None]
+            steps[name] = float(np.mean(gaps)) if gaps else float("nan")
+    return steps
+
+
 def compare(renders, scene, log=print):
     """[{frame, name, camera, psnr, psnr_gain, gain, l1}] and a summary per camera."""
     import cv2
     meta = json.load(open(os.path.join(renders, "cameras.json")))
+    try:
+        steps = steps_between_frames(scene)
+    except OSError:
+        steps = {}
     rows = []
     for n, fr in enumerate(meta["frames"]):
         rp = os.path.join(renders, f"frame{n:06d}.jpg")
@@ -144,6 +188,7 @@ def compare(renders, scene, log=print):
                      "psnr_shift": shifted, "response": response,
                      "within_view": within, "tile_response": tile_response,
                      "sharp_render": sharpness(r), "sharp_image": sharpness(im),
+                     "step": steps.get(fr["name"], float("nan")),
                      "l1": float(np.mean(np.abs(r.astype(np.float32) - im.astype(np.float32))) / 255.0)})
     summ = {}
     for cam in sorted({r["camera"] for r in rows}) + ["all"]:
@@ -180,6 +225,22 @@ def compare(renders, scene, log=print):
                sh.mean(), sh.mean() - p.mean(), summ[cam]["response"]))
         log("               within one frame, tiles disagree by %.2f px"
             % summ[cam]["within_view"])
+        moving = np.array([r["step"] for r in sel], dtype=float)
+        err = np.array([r["within_view"] for r in sel], dtype=float)
+        ok = np.isfinite(moving) & np.isfinite(err)
+        if ok.sum() >= 12 and moving[ok].std() > 1e-6:
+            order = np.argsort(moving[ok])
+            third = max(1, ok.sum() // 3)
+            slow, fast = err[ok][order[:third]], err[ok][order[-third:]]
+            # An error that never varies has no correlation to compute, and
+            # that is the static answer, not a missing one.
+            summ[cam]["speed_corr"] = (float(np.corrcoef(moving[ok], err[ok])[0, 1])
+                                       if err[ok].std() > 1e-9 else 0.0)
+            summ[cam]["slow_err"], summ[cam]["fast_err"] = float(slow.mean()), float(fast.mean())
+            log("               by speed: slowest third %.2f px, fastest third %.2f px "
+                "(r = %+.2f)" % (slow.mean(), fast.mean(), summ[cam]["speed_corr"]))
+        else:
+            summ[cam]["speed_corr"] = float("nan")
         log("               detail: render %.0f, image %.0f (%s is the blurred one)"
             % (np.median(sr), np.median(si),
                "the render" if np.median(sr) < np.median(si) else "the image"))
@@ -203,7 +264,7 @@ def main():
                                            "psnr_gain", "gain", "dx", "dy", "shift",
                                            "psnr_shift", "response", "within_view",
                                            "tile_response", "sharp_render",
-                                           "sharp_image", "l1"])
+                                           "sharp_image", "step", "l1"])
         w.writeheader()
         w.writerows(rows)
     print("wrote %s" % out)
@@ -216,10 +277,21 @@ def main():
         # Asked first, because a camera in the wrong place also responds a
         # little to a global shift and would otherwise read as a rotation.
         print("  tiles within one frame disagree by %.1f px: the misalignment depends "
-              "on depth,\n  which is what a camera in the wrong PLACE looks like. The "
-              "camera-to-LiDAR\n  translation, or the scale of the geometry -- not the "
-              "rotations, and not something\n  bundle adjustment fixes with the extrinsic "
-              "held fixed." % within)
+              "on depth,\n  which is what a camera in the wrong PLACE looks like -- not "
+              "the rotations, and not\n  something bundle adjustment fixes with the "
+              "extrinsic held fixed." % within)
+        corr = a.get("speed_corr", float("nan"))
+        if corr == corr and a["fast_err"] >= 1.5 * a["slow_err"] and corr >= 0.3:
+            print("  It grows with speed (%.1f px slow, %.1f px fast): the image is "
+                  "stamped at a\n  different time than the pose it was given. Find the "
+                  "camera-to-pose time offset\n  and re-export; a static extrinsic "
+                  "would not care how fast the robot went."
+                  % (a["slow_err"], a["fast_err"]))
+        elif corr == corr:
+            print("  It does not grow with speed (%.1f px slow, %.1f px fast): a static "
+                  "offset. The\n  camera-to-LiDAR translation is wrong by about a "
+                  "centimetre; re-measure it, or\n  let training optimise each camera's "
+                  "pose, which absorbs it." % (a["slow_err"], a["fast_err"]))
     elif helps < 0.5:
         # A shift that buys nothing found no real misalignment, whatever number
         # it reported: a peak in noise is still a peak.
