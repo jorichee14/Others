@@ -1,0 +1,169 @@
+diff --git a/scene/dataset_readers.py b/scene/dataset_readers.py
+index 504acad..8e0967c 100644
+--- a/scene/dataset_readers.py
++++ b/scene/dataset_readers.py
+@@ -124,14 +124,23 @@ def fetchPly(path):
+     plydata = PlyData.read(path)
+     vertices = plydata['vertex']
+     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
+-
+-    # colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
+-    # normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
+-
+     num_pts = positions.shape[0]
+-    shs = np.random.random((num_pts, 3)) / 255.0
+-    colors = SH2RGB(shs)
+-    normals = np.zeros((num_pts, 3))
++
++    # A LiDAR scene arrives with the surface already known: colours sampled
++    # from the frames and normals from the mesh. Random colours and zero
++    # normals throw both away and leave the surfels to rediscover, from
++    # photographs taken at a grazing angle, which way a wall faces.
++    names = vertices.data.dtype.names
++    if all(k in names for k in ('red', 'green', 'blue')):
++        colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
++    else:
++        colors = SH2RGB(np.random.random((num_pts, 3)) / 255.0)
++    if all(k in names for k in ('nx', 'ny', 'nz')):
++        normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T.astype(np.float64)
++        length = np.linalg.norm(normals, axis=1, keepdims=True)
++        normals = np.where(length > 1e-6, normals / np.maximum(length, 1e-6), 0.0)
++    else:
++        normals = np.zeros((num_pts, 3))
+ 
+     return BasicPointCloud(points=positions, colors=colors, normals=normals)
+ 
+diff --git a/scene/gaussian_model.py b/scene/gaussian_model.py
+index 8166657..4aa4472 100644
+--- a/scene/gaussian_model.py
++++ b/scene/gaussian_model.py
+@@ -21,6 +21,44 @@ from simple_knn._C import distCUDA2
+ from utils.graphics_utils import BasicPointCloud
+ from utils.general_utils import strip_symmetric, build_scaling_rotation
+ 
++def quaternions_with_normal(n):
++    """(N, 4) unit quaternions (w, x, y, z) whose rotation's third axis is n.
++
++    Build an orthonormal frame [t1, t2, n] per point and convert it, the
++    same way build_rotation reads a quaternion back, so the surfel's normal
++    comes out exactly n.
++    """
++    n = n / n.norm(dim=1, keepdim=True).clamp_min(1e-9)
++    helper = torch.where((n[:, 2:3].abs() < 0.9), torch.tensor([[0.0, 0.0, 1.0]], device=n.device),
++                         torch.tensor([[1.0, 0.0, 0.0]], device=n.device)).expand_as(n)
++    t1 = torch.cross(helper, n, dim=1)
++    t1 = t1 / t1.norm(dim=1, keepdim=True).clamp_min(1e-9)
++    t2 = torch.cross(n, t1, dim=1)
++    R = torch.stack([t1, t2, n], dim=2)                      # columns: t1, t2, n
++    m00, m01, m02 = R[:, 0, 0], R[:, 0, 1], R[:, 0, 2]
++    m10, m11, m12 = R[:, 1, 0], R[:, 1, 1], R[:, 1, 2]
++    m20, m21, m22 = R[:, 2, 0], R[:, 2, 1], R[:, 2, 2]
++    trace = m00 + m11 + m22
++    q = torch.zeros((len(n), 4), device=n.device)
++    # Shepperd's method: pick the largest of the four candidates per row.
++    c0 = 1 + trace
++    c1 = 1 + m00 - m11 - m22
++    c2 = 1 - m00 + m11 - m22
++    c3 = 1 - m00 - m11 + m22
++    choice = torch.stack([c0, c1, c2, c3], dim=1).argmax(dim=1)
++    s = torch.sqrt(c0.clamp_min(1e-12)) * 2
++    q0 = torch.stack([0.25 * s, (m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s], dim=1)
++    s = torch.sqrt(c1.clamp_min(1e-12)) * 2
++    q1 = torch.stack([(m21 - m12) / s, 0.25 * s, (m01 + m10) / s, (m02 + m20) / s], dim=1)
++    s = torch.sqrt(c2.clamp_min(1e-12)) * 2
++    q2 = torch.stack([(m02 - m20) / s, (m01 + m10) / s, 0.25 * s, (m12 + m21) / s], dim=1)
++    s = torch.sqrt(c3.clamp_min(1e-12)) * 2
++    q3 = torch.stack([(m10 - m01) / s, (m02 + m20) / s, (m12 + m21) / s, 0.25 * s], dim=1)
++    for k, cand in enumerate((q0, q1, q2, q3)):
++        q[choice == k] = cand[choice == k]
++    return q / q.norm(dim=1, keepdim=True)
++
++
+ class GaussianModel:
+ 
+     def setup_functions(self):
+@@ -154,7 +192,18 @@ class GaussianModel:
+ 
+         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
+         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 2)
+-        rots = torch.rand((fused_point_cloud.shape[0], 4), device="cuda")
++        normals = torch.tensor(np.asarray(pcd.normals)).float().cuda()
++        known = normals.norm(dim=1) > 0.5
++        if known.any():
++            # The surfel's normal is the third column of its rotation. A
++            # quaternion whose third axis is the mesh normal starts every
++            # surfel lying on the LiDAR surface, which is where it belongs;
++            # the two tangent axes are arbitrary and training turns them.
++            rots = quaternions_with_normal(normals)
++            rots[~known] = torch.rand((int((~known).sum()), 4), device="cuda")
++            print(f"[LiDAR init] {int(known.sum())} of {len(known)} surfels oriented to the mesh normal")
++        else:
++            rots = torch.rand((fused_point_cloud.shape[0], 4), device="cuda")
+         opacities = self.inverse_opacity_activation(0.05 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
+ 
+         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
+diff --git a/train.py b/train.py
+index c961173..d481ad2 100644
+--- a/train.py
++++ b/train.py
+@@ -195,8 +195,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+         normal_loss = lambda_normal * (normal_error).mean()
+         dist_loss = lambda_dist * (rend_dist).mean()
+ 
++        # LiDAR depth: where the rendered surface sits IN FRONT of the LiDAR
++        # one -- a floater, or a wisp hanging off a wall -- push it back. Never
++        # pull it forward: the LiDAR map is centimetres off wherever it was
++        # smoothed, and a two-sided loss drags the surfels onto that error.
++        lambda_depth = getattr(opt, 'lambda_depth', 0.0) if iteration > getattr(cfg_model.loss, 'depth_iter', 0) else 0.0
++        depth_loss = torch.zeros((), device="cuda")
++        if lambda_depth > 0.0:
++            lidar = lidar_depth_of(viewpoint_cam, dataset.source_path)
++            if lidar is not None:
++                surf_depth = render_pkg['surf_depth']
++                ahead = (lidar > 0) & (surf_depth < lidar)
++                if ahead.any():
++                    depth_loss = lambda_depth * torch.abs((lidar - surf_depth)[ahead]).mean()
++
+         # loss
+-        total_loss = loss + dist_loss + normal_loss + mask_loss
++        total_loss = loss + dist_loss + normal_loss + mask_loss + depth_loss
+ 
+         total_loss.backward()
+ 
+@@ -422,6 +436,36 @@ ingp_model, beta, args, cfg_model, test_psnr = None, train_psnr = None, iter_lis
+         
+         torch.cuda.empty_cache()
+ 
++def lidar_depth_of(cam, source_path):
++    """The LiDAR depth map beside this image, in metres on the GPU, cached on the camera.
++
++    The scene builder writes <scene>/depths/<name>.png as 8-bit grey + alpha:
++    grey = d / 20 below 10 m and 1 - 5 / d beyond, alpha 0 where the map
++    had no return. Decoded once per camera and kept.
++    """
++    if cam.depth_map is not None:
++        return cam.depth_map if cam.depth_map is not False else None
++    path = os.path.join(source_path, "depths", os.path.splitext(cam.image_name)[0] + ".png")
++    if not os.path.exists(path):
++        cam.depth_map = False
++        return None
++    import cv2
++    png = cv2.imread(path, cv2.IMREAD_UNCHANGED)
++    if png is None:
++        cam.depth_map = False
++        return None
++    grey = png[:, :, 0].astype(np.float32) / 255.0 if png.ndim == 3 else png.astype(np.float32) / 255.0
++    metres = np.where(grey < 0.5, 20.0 * grey, 5.0 / np.maximum(1.0 - grey, 1e-6))
++    valid = png[:, :, 3] > 0 if png.ndim == 3 and png.shape[2] == 4 else grey > 0
++    metres[~valid] = 0.0
++    depth = torch.from_numpy(metres)[None].cuda()
++    if depth.shape[1:] != (cam.image_height, cam.image_width):
++        depth = torch.nn.functional.interpolate(depth[None], (cam.image_height, cam.image_width),
++                                                mode="nearest")[0]
++    cam.depth_map = depth
++    return depth
++
++
+ def merge_cfg_to_args(args, cfg):
+     """Merge specific sections from config into args
+     Args:
