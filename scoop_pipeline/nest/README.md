@@ -20,12 +20,31 @@ its commit `058a3df`:
 cd ~/workspaces && git clone https://github.com/zhangxin-cg/nest-splatting.git
 cd nest-splatting && git checkout 058a3df
 git apply ~/workspaces/Others/scoop_pipeline/nest/nest_lidar.patch
-conda env create -f environment.yml && conda activate nest_splatting
+git submodule update --init --recursive
+conda env create -f environment.yml        # the conda half succeeds; the pip half fails -- expected
+conda activate nest_splatting
 ```
 
-`environment.yml` builds the surfel rasteriser, simple-knn, the grid
-encoder and tinycudann from source; that is the step that can fail, and it
-fails on the compiler or CUDA version, not on anything here.
+`environment.yml`'s pip section cannot build the CUDA extensions as written,
+for three reasons that are all about the machine and none about NeST. What
+worked on the RTX 3080 (Ubuntu 22.04, gcc 11.4, system CUDA 13):
+
+```bash
+pip install "numpy<2" "setuptools<70"        # torch 2.1 was built against numpy 1; its extension
+                                             # builder imports pkg_resources, gone from setuptools 70+
+conda install -y -c "nvidia/label/cuda-11.8.0" cuda-toolkit    # an nvcc that matches torch's CUDA
+export CUDA_HOME=$CONDA_PREFIX
+export TORCH_CUDA_ARCH_LIST="8.6"            # the 3080 alone; the default compiles for every GPU
+pip install --no-build-isolation ./submodules/diff-surfel-rasterization ./submodules/simple-knn ./gridencoder
+pip install --no-build-isolation git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
+python -c "import torch, tinycudann, diff_surfel_rasterization, simple_knn; print('ok', torch.cuda.is_available())"
+```
+
+`--no-build-isolation` matters: these setup.py files import torch, which
+pip's isolated build environment does not have. nvcc 11.8 refuses gcc 12 or
+newer; on a newer distribution add `conda install -c conda-forge gcc_linux-64=11
+gxx_linux-64=11` and point CC/CXX at them. The two `export`s are per shell:
+set them again before any later rebuild.
 
 ## Size the texture grid to the scene
 
