@@ -71,7 +71,7 @@ encoding:
     enabled: True
     init_active_level: 2
     step: 3000
-    warm_up: 1000
+  warm_up: 1000                         # under encoding, not coarse2fine: the code reads encoding.warm_up
 
 rgb:
   mlp:
