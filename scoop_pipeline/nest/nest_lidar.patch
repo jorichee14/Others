@@ -1,3 +1,19 @@
+diff --git a/eval_render.py b/eval_render.py
+index e4f91b5..a481c63 100644
+--- a/eval_render.py
++++ b/eval_render.py
+@@ -102,9 +102,9 @@ if __name__ == "__main__":
+                 image = render_pkg["render"]
+                 gt = cam.original_image
+ 
+-                img_name = os.path.join(test_renders, cam_name)
++                img_name = os.path.join(train_renders, cam_name)
+                 save_img_u8(image.permute(1,2,0).detach().cpu().numpy(), img_name)
+-                img_name = os.path.join(test_gt, cam_name)
++                img_name = os.path.join(train_gt, cam_name)
+                 save_img_u8(gt.permute(1,2,0).detach().cpu().numpy(), img_name)
+ 
+     if (not args.skip_test) and (len(scene.getTestCameras()) > 0):
 diff --git a/scene/dataset_readers.py b/scene/dataset_readers.py
 index 504acad..8e0967c 100644
 --- a/scene/dataset_readers.py

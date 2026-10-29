@@ -9,6 +9,10 @@ its commit `058a3df`:
   colours and zero normals;
 - `create_from_pcd` starts every surfel lying on the mesh normal (its
   rotation's third axis) instead of at a random orientation;
+- `eval_render.py`'s train branch writes to the test branch's folders (two
+  pasted names, never exercised upstream); fixed, so a model can be rendered
+  at every camera of a scene -- which is how a model is scored on another
+  session's trajectory (see `subscene.py`);
 - `train.py` adds a one-sided LiDAR depth loss from the scene's `depths/`:
   a surface rendered in front of the LiDAR one is pushed back, never pulled
   forward onto the map's own smoothing error. Weight and start iteration
