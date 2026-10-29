@@ -163,7 +163,7 @@ def steps_between_frames(scene):
     return steps
 
 
-def pairs_of(renders, scene, gt_dir=None):
+def pairs_of(renders, scene, gt_dir=None, only=""):
     """(n, name, camera, render path, image path) for every view to score.
 
     Two layouts: splat_walk's (frameNNNNNN.jpg beside a cameras.json naming
@@ -171,15 +171,17 @@ def pairs_of(renders, scene, gt_dir=None):
     holding the same file names), given as --gt-dir.
     """
     if gt_dir:
-        names = sorted(f for f in os.listdir(renders) if f.lower().endswith((".png", ".jpg")))
+        names = sorted(f for f in os.listdir(renders)
+                       if f.lower().endswith((".png", ".jpg")) and f.startswith(only))
         return [(n, os.path.splitext(f)[0] + ".jpg", 1, os.path.join(renders, f),
                  os.path.join(gt_dir, f)) for n, f in enumerate(names)]
     meta = json.load(open(os.path.join(renders, "cameras.json")))
     return [(n, fr["name"], int(fr.get("camera", 1)), os.path.join(renders, f"frame{n:06d}.jpg"),
-             os.path.join(scene, "images", fr["name"])) for n, fr in enumerate(meta["frames"])]
+             os.path.join(scene, "images", fr["name"]))
+            for n, fr in enumerate(meta["frames"]) if fr["name"].startswith(only)]
 
 
-def compare(renders, scene, log=print, gt_dir=None):
+def compare(renders, scene, log=print, gt_dir=None, only=""):
     """[{frame, name, camera, psnr, psnr_gain, gain, l1}] and a summary per camera."""
     import cv2
     try:
@@ -187,7 +189,7 @@ def compare(renders, scene, log=print, gt_dir=None):
     except OSError:
         steps = {}
     rows = []
-    for n, name, camera_id, rp, ip in pairs_of(renders, scene, gt_dir):
+    for n, name, camera_id, rp, ip in pairs_of(renders, scene, gt_dir, only):
         fr = {"name": name, "camera": camera_id}
         r, im = cv2.imread(rp), cv2.imread(ip)
         if r is None or im is None:
@@ -268,6 +270,7 @@ def main():
     ap.add_argument("--gt-dir", default=None,
                     help="NeST's layout: a gt/ folder with the same file names as the renders; "
                          "--scene is then optional (its images.txt gives the speed test)")
+    ap.add_argument("--only", default="", help="score only views whose name starts with this (c2_ for one session)")
     ap.add_argument("--out", default=None, help="default <renders>/psnr.csv")
     a = ap.parse_args()
     renders = os.path.expanduser(a.renders)
@@ -276,7 +279,7 @@ def main():
     if not scene and not gt_dir:
         sys.exit("give --scene (splat_walk's layout) or --gt-dir (NeST's)")
     print("%s against %s" % (renders, gt_dir or (scene + "/images")))
-    rows, summ = compare(renders, scene, gt_dir=gt_dir)
+    rows, summ = compare(renders, scene, gt_dir=gt_dir, only=args.only)
     if not rows:
         sys.exit("no render matched an image (cameras.json names against <scene>/images)")
     out = a.out or os.path.join(renders, "psnr.csv")
