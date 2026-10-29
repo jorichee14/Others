@@ -175,46 +175,71 @@ Method check: `scoop_pipeline/README.md:852` measures 100 GB for an 18-minute
 ZED decode at 960x540 uncompressed = 92 MB/s. The same arithmetic applied to
 those streams gives ~92 MB/s, so the framework reproduces a measured figure.
 
-### A representative day
+### Per pass
 
-`map_1` (10 min), `survey_1-2` (5 each), `coop_1-3` (5 each), `contention_1`
-(5 min). The `profiles:` block in `record.yaml` decides who records: `infra_1`
-and the sniffer sit out `map`, and `contention` is link/IMU only.
+Passes run 20-30 minutes.
 
-| Machine | Recording min | Day total |
-|---|---|---|
-| `mobile_1` bag | 35 | 19 GB |
-| `mobile_1` SVO | 35 | 126 GB (or 7 GB — see warning) |
-| `mobile_2` bag | 35 | 297 GB |
-| `infra_1` bag | 25 | 5.5 GB |
-| sniffer bag | 30 | 0.5 GB |
-| **total** | | **~330-450 GB/day** |
+| Machine | GB/min | 20-min pass | 30-min pass |
+|---|---|---|---|
+| `mobile_1` bag | 0.54 | 10.8 | 16.2 |
+| `mobile_1` SVO -- *lossless* | 3.6 | 72 | 108 |
+| `mobile_1` SVO -- *if H265* | 0.19 | 3.8 | 5.7 |
+| `mobile_2` bag | 8.5 | 170 | 255 |
+| `infra_1` bag | 0.22 | 4.4 | 6.6 |
+| sniffer bag | 0.018 | 0.4 | 0.5 |
+| **all machines, lossless SVO** | | **258** | **386** |
+| **all machines, H265 SVO** | | **190** | **284** |
+
+One 30-minute coop pass with every machine running is ~386 GB. A six-pass day
+is ~2.3 TB.
 
 ### What this means for the drives
 
-- `mobile_2` at 297 GB/day: ~6.7 field days on a 2 TB T7 Shield.
-- `mobile_1` at ~145 GB/day (bag + lossless SVO) **also needs external
-  storage**. So the two T7 Shields are one per mobile agent, both justified on
-  capacity rather than redundancy. Keep the end-of-day rsync to the 8 TB for
-  the second-copy problem.
-- 8 TB archive holds ~20 field days of raw bags. Processed products are several
-  times larger again (a ZED decode alone is ~100 GB per 18-minute recording,
-  ~245 GB with the point cloud), so plan to top up the archive, or keep only
-  raw bags plus the processing recipe.
+- **Field drives hold.** `mobile_2` at 255 GB per 30-minute pass fits 7.8
+  passes on a 2 TB T7 Shield; `mobile_1` fits 16. One drive per mobile agent
+  per day works **provided the offload happens nightly**, which the
+  second-copy discipline requires anyway. The two T7 Shields are therefore one
+  per mobile agent, justified on capacity rather than redundancy.
+- **The 8 TB archive does not hold.** At 386 GB/pass it takes ~20 passes, about
+  3 field days. Undersized by 4-6x.
+- Processed products are larger again and should not be archived: a ZED decode
+  alone is ~100 GB per 18-minute recording, ~245 GB with the point cloud. Keep
+  raw bags plus the processing recipe and regenerate.
+
+### Fixing the archive
+
+The free lever first: `compression_mode: 0` in `svo.sh` is worth **100 GB per
+30-minute pass**, 26% of everything recorded. If that enum means LOSSLESS in
+your wrapper version, switching to H265 (`2`) takes `mobile_1` from 124 to 22
+GB/pass and a six-pass day from 2.3 to 1.7 TB. Verify by comparing an existing
+`.svo` size against its duration.
+
+Then, in preference order:
+
+1. **Offload to institutional storage.** At 1.7-2.3 TB/day, USB drives are a
+   stopgap at any capacity. The 8 TB becomes a transfer buffer rather than the
+   archive, and nothing in the buy list changes.
+2. **Add a second 8 TB** (+NT$5,500; two line items of 5,500 each stay under
+   the cap, where a single 16 TB would not). Fund from headroom, the 5-port
+   switch, and trimmed mounting hardware -- PTP never justified the switch at a
+   0.99 ms budget.
+3. **Defer the PPS GNSS pair** (NT$3,600). Covers it, but gives up the one
+   purchase aimed at the open `tables/spec.tex` todo.
+
+Option 1 is the recommendation: storage at this rate is an infrastructure
+question, and deferring `infra_2`, the second sniffer or the GNSS pair trades
+research capability for disk.
 
 ### Two things to verify before trusting these numbers
 
 1. **SVO compression mode.** `svo.sh` calls `StartSvoRec` with
    `compression_mode: 0`. In the ZED SDK that enum is `0 = LOSSLESS`,
-   `1 = H264`, `2 = H265`. If 0 means lossless in your wrapper version, the SVO
-   is ~60 MB/s and is the largest single data producer in the rig — 7x
-   `mobile_1`'s whole bag. `compression_mode: 2` (H265) would cut it ~20x to
-   ~3 MB/s. Whether that is acceptable depends on whether lossless was
-   deliberate for the depth/photometric work. Check the service definition and
-   the size of an existing `.svo`; this one number moves the day estimate by
-   120 GB.
+   `1 = H264`, `2 = H265`. At 30-minute passes this single setting is 108 vs
+   5.7 GB per pass -- the largest open variable in the whole estimate.
 2. **`slam_path` / `vo_path` are `nav_msgs/Path`**, which accumulate poses. If
-   Isaac VSLAM republishes the full path at 30 Hz, total bytes grow as O(t^2):
-   ~2.3 GB over a 5-minute pass, ~9 GB over 10 minutes. `summarize.py` prints
-   per-topic MB/s and will show it immediately. If confirmed, drop both —
-   `tracking/odometry` carries the same information incrementally.
+   Isaac VSLAM republishes the full path at 30 Hz, total bytes grow as O(t^2).
+   At 5 minutes that is ~2.3 GB; **at 30 minutes it is ~82 GB**, which at these
+   pass lengths makes it a first-order item rather than a footnote.
+   `summarize.py` prints per-topic MB/s and will show it immediately. If
+   confirmed, drop both -- `tracking/odometry` carries the same information
+   incrementally.
