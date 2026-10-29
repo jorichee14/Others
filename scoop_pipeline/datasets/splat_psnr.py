@@ -279,7 +279,7 @@ def main():
     if not scene and not gt_dir:
         sys.exit("give --scene (splat_walk's layout) or --gt-dir (NeST's)")
     print("%s against %s" % (renders, gt_dir or (scene + "/images")))
-    rows, summ = compare(renders, scene, gt_dir=gt_dir, only=args.only)
+    rows, summ = compare(renders, scene, gt_dir=gt_dir, only=a.only)
     if not rows:
         sys.exit("no render matched an image (cameras.json names against <scene>/images)")
     out = a.out or os.path.join(renders, "psnr.csv")
