@@ -84,6 +84,47 @@ def rewrite_images(path, correction, camera_id=None):
     return moved, backup
 
 
+def per_frame_search(chosen, args, render_one, torch):
+    """Each frame refined alone, six parameters in its own camera frame.
+
+    The whole-session search asks whether one move fixes every view. This
+    asks whether ANY move fixes each view: a frame that gains several dB
+    from its own small move has a pose error; a frame that gains nothing
+    however it is moved is looking at something the model does not hold
+    (a thing that moved between sessions, a colour the camera saw
+    differently, a surface never captured in October).
+    """
+    quiet = lambda *a, **k: None
+    rows = []
+    for k, (cam, w2c, image) in enumerate(chosen):
+        def score(params):
+            with torch.no_grad():
+                move_camera(cam, np.linalg.inv(transform_of(params[:6])) @ w2c, torch)   # c2w' = c2w @ dT
+                out = render_one(cam)
+            rgb = (out.clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+            return psnr(rgb, image)
+        before = score([0.0] * 6)
+        best, after = descend(score, [0.0] * 6, [args.rot_step] * 3 + [args.trans_step] * 3,
+                              [0.02] * 3 + [0.002] * 3, log=quiet)
+        move_camera(cam, w2c, torch)
+        shift = 100 * math.sqrt(sum(v * v for v in best[3:6]))
+        turn = math.sqrt(sum(v * v for v in best[:3]))
+        rows.append((cam.image_name, before, after, after - before, shift, turn))
+        print(f"  {k + 1:3d} {cam.image_name:>28s}  {before:6.2f} -> {after:6.2f} dB  ({after - before:+5.2f})"
+              f"  moved {shift:5.1f} cm, turned {turn:5.2f} deg", flush=True)
+    gains = np.array([r[3] for r in rows])
+    shifts = np.array([r[4] for r in rows])
+    print(f"\nper-frame refinement on {len(rows)} frames: median gain {np.median(gains):+.2f} dB, "
+          f"{int((gains > 1).sum())} frames gain over 1 dB, {int((gains > 3).sum())} over 3 dB; "
+          f"median move {np.median(shifts):.1f} cm (max {shifts.max():.1f})")
+    print("read it so: gains of several dB with moves of centimetres = per-frame pose error (fix: refine poses);"
+          " gains near zero whatever the move = the content differs, not the camera")
+    out = args.out or os.path.join(args.source_path, "per_frame_align.json")
+    json.dump([{"image": r[0], "psnr_before": r[1], "psnr_after": r[2], "move_cm": r[4], "turn_deg": r[5]}
+               for r in rows], open(out, "w"), indent=1)
+    print(f"wrote {out}")
+
+
 def main():
     import torch
     from argparse import ArgumentParser
@@ -102,10 +143,13 @@ def main():
     parser.add_argument("--frames", type=int, default=40)
     parser.add_argument("--rot-step", type=float, default=1.0, help="first rotation step (degrees)")
     parser.add_argument("--trans-step", type=float, default=0.10, help="first translation step (m)")
-    parser.add_argument("--out", default=None, help="json of the correction (default <scene>/session_align.json)")
+    parser.add_argument("--out", default="", help="json of the correction (default <scene>/session_align.json)")
     parser.add_argument("--write-images", action="store_true", help="rewrite the scene's images.txt")
-    parser.add_argument("--also-fix", default=None, help="a two-session scene to apply the same move to")
-    parser.add_argument("--camera", type=int, default=None, help="--also-fix: the camera id of this session there")
+    parser.add_argument("--also-fix", default="", help="a two-session scene to apply the same move to")
+    parser.add_argument("--camera", type=int, default=-1, help="--also-fix: the camera id of this session there")
+    parser.add_argument("--force", action="store_true", help="write poses even when the gain is under half a dB")
+    parser.add_argument("--per-frame", action="store_true",
+                        help="instead: refine each chosen frame on its own (camera frame), to tell pose from content")
     args = get_combined_args(parser)
     cfg_model = Config(args.yaml)
     merge_cfg_to_args(args, cfg_model)
@@ -145,6 +189,12 @@ def main():
                 total += psnr(rgb, image)
         return total / len(chosen)
 
+    if args.per_frame:
+        per_frame_search(chosen, args, render_one=lambda cam: render(
+            cam, gaussians, pipe, background, ingp=ingp_model, beta=beta,
+            iteration=args.iteration, cfg=cfg_model)["render"], torch=torch)
+        return
+
     start = [0.0] * 6
     before = score(start)
     best, after = descend(score, start, [args.rot_step] * 3 + [args.trans_step] * 3,
@@ -168,11 +218,14 @@ def main():
                "iteration": args.iteration}, open(out, "w"), indent=1)
     print(f"wrote {out}")
 
+    if (args.write_images or args.also_fix) and after - before < 0.5 and not args.force:
+        print("poses left untouched (--force to write them anyway)")
+        return
     if args.write_images:
         moved, backup = rewrite_images(os.path.join(args.source_path, "sparse", "0", "images.txt"), correction)
         print(f"moved {moved} cameras in {args.source_path}/sparse/0/images.txt (original: {backup})")
     if args.also_fix:
-        if args.camera is None:
+        if args.camera < 0:
             sys.exit("--also-fix needs --camera: which id this session is in that scene")
         moved, backup = rewrite_images(os.path.join(os.path.expanduser(args.also_fix), "sparse", "0", "images.txt"),
                                        correction, camera_id=args.camera)
