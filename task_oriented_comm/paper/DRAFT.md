@@ -461,3 +461,159 @@ away. Neither feeds the residual back into a communication decision,
 and neither has had the data to try: CSI on the data links, both poses
 per packet, a metric map and a radio map on one clock exist only on
 SCooP.
+
+---
+
+## 7. Scaling to N mobile and M fixed agents
+
+Let |𝓜| = N robots, |𝓘| = M masts, one access point per site (several
+at a large site, Sec. 7.6). Everything in Secs. 3–4 was written for
+general 𝓜 and 𝓘; this section says what each quantity does as N and M
+grow, and where the design must change.
+
+### 7.1 Links: sensing grows quadratically, traffic linearly
+
+Data links are to the access point: N + M uplinks and downlinks. Sensing
+links are every pair (i → j) whose frames node j can overhear with a
+CSI-capable radio, up to (N + M)(N + M − 1) directed pairs; in practice
+every CSI node overhears every transmitter within range, so the sensing
+set grows as the square of the team while the data traffic grows
+linearly. The static sub-mesh is the M mast–AP links plus up to
+M(M − 1)/2 mast–mast pairs: a fixed tripwire net laid over the building
+by the masts' placement, which turns Sec. 3.6's certificates from one
+corridor into a coverage problem (Sec. 7.4).
+
+**CSI budget.** A CSI node extracts at most R_csi frames per second
+(104–141 Hz measured [R]), shared over the links it overhears. Per link
+the rate is R_csi / L_j, with L_j the transmitters j hears. The Sec. 3.5
+CUSUM needs a few samples per window; at w = 0.5 s and R_csi = 100 Hz a
+node can monitor ~20 links at 2–3 samples per window before the window
+must grow. Beyond that, nodes take disjoint subsets of the links (an
+assignment the server fixes from the poses), or the window lengthens
+and T_det grows accordingly.
+
+### 7.2 Evidence: a region's radio signal-to-noise grows with the links that cross it
+
+With many links, Sec. 3.6's sum becomes a log-likelihood combination.
+For region r let 𝓛_r(t) = {ℓ : w_ℓr(t) > 0}. Under the Sec. 4
+assumption (an onset in r shifts every ℓ ∈ 𝓛_r by ≥ γ σ_ℓ), the
+per-window log-likelihood ratio for "r changed" is
+
+    Λ_r(t) = Σ_{ℓ ∈ 𝓛_r(t)} w_ℓr(t) · ( |ρ_ℓ(t)| / σ_ℓ − γ/2 ) · γ ,
+
+and e_r is its CUSUM. The detectability of r is γ √|𝓛_r|: doubling
+the links crossing a region halves the shift a single link needs. The
+false-alarm rate is controlled per region, not per link, so the
+α |𝓛| T term of the scaling proposition is replaced by α_r |𝓡| T with
+α_r set by the regional CUSUM threshold; it does not grow with the
+number of links. This is the standard multi-sensor gain, and it is what
+makes the moving robots useful as sensors even when each robot's
+residual is marginal (Sec. 3.4's interpolation penalty).
+
+### 7.3 Sweep time falls with N
+
+T_sweep(r) is the mean time until some active link crosses r. The static
+net covers a fixed set 𝓡_static of regions with T_sweep = 0. For the
+rest, with N robots moving independently at speed v along the team's
+planned paths, the coverage process of the Fresnel zones is a union of
+N renewal processes, so
+
+    T_sweep(r) ≈ T_sweep^(1)(r) / N
+
+to first order, with T_sweep^(1) the single-robot sweep time measured on
+the survey route. Staleness delay in the proposition therefore falls as
+1/N while its other terms (T_det, D_kf) do not grow.
+
+### 7.4 Mast placement as tripwire coverage
+
+Given the corridor graph of the twin, each candidate mast pair (and
+each mast–AP pair) defines a line of sight; a corridor segment is
+covered if some static line crosses it inside the first Fresnel zone.
+Choosing M mast positions to cover the segments with the highest need
+n_r is weighted set cover; greedy placement is within ln(|segments|) of
+optimal, and the masts already serve as perception nodes, so the cost
+is their placement, not their count. The covered set 𝓡_static is the
+set of corridors with certificates at zero sweep time; the paper
+reports it for site 1 with M = 3.
+
+### 7.5 Who responds: a weighted max-coverage, not a per-node index
+
+With N + M cameras, several may see an alarmed region and one camera
+may see several alarmed regions. The request set A(t) replaces the
+single-node index of Sec. 4 with
+
+    max_{A ⊆ 𝓜 ∪ 𝓘}  Σ_{r ∈ ∪_{i ∈ A} V_i(t)} n_r e_r(t)  −  λ Σ_{i ∈ A} b_kf / Ĝ_i(t)
+    s.t.  the keyframe tokens of A fit the deadline capacity of their senders after control and pose,
+
+a monotone submodular objective under a knapsack-like feasibility
+constraint; greedy by marginal gain per byte, with the best single
+request as a fallback, is within (1 − 1/e)/2 of optimal
+[khuller1999budgeted]. The marginal-gain step is also what prevents m
+in the scaling proposition from growing with N: once one camera's
+keyframe is requested for r, the gain of every other camera seeing r is
+zero. Election from poses alone (`../METHODS.md` M5) gives the same
+result distributedly when the server is unreachable.
+
+### 7.6 Contention: the deadline capacity shrinks as 1/N_active, the certificates do not
+
+Under DCF the N_active backlogged robots share the airtime roughly
+evenly [heusse2003anomaly], so a robot's keyframe deadline capacity is
+S_i ≈ (T − δ_i − W_i)⁺ G_i / N_active and the in-time probability
+P(S_i ≥ b_kf) in the index falls with N_active. The radio map carries
+this through its contention mode (survey vs cooperation, measured as
+86 % vs 59–68 % in-frame [R]); for general N the mode is indexed by
+N_active, measured during the survey with k robots loading the link, or
+modeled by the DCF share. Two consequences:
+
+- the gated policy's advantage *grows* with N: timer traffic
+  b_kf f N T competes for a capacity that shrinks per robot, while gated
+  traffic stays bounded by changes;
+- the time-critical flows need the priority access category more, not
+  less, as N grows: N × 10 Hz pose tokens plus control stay a few
+  percent of airtime, but behind bulk FIFO they would miss.
+
+Certificates and alarms are 1-bit-per-link-per-window reports: |𝓛|
+bits per 0.5 s, negligible at any N.
+
+With several access points, each AP is a contention domain; links to
+different APs do not share airtime, and the sensing links still overhear
+across domains. The radio map is per AP association; the survey records
+it by walking each cell associated to each AP in range.
+
+### 7.7 The survey scales with the site, not with the team
+
+The survey robot records, at every cell, the channel to every endpoint
+that transmits during the survey: all M masts and the AP at once. Its
+cost is therefore O(|cells|), independent of M. Robot–robot links need
+cell pairs, O(|cells|²); the survey records those its route happens to
+visit, and the rest fall back to the clearance model of E2 (a
+parametric prediction from the map) with a larger σ_ℓ. Reciprocity
+halves the pairs. For N robots the map is shared, not per robot, since
+the radios are identical (single stream, 802.11ac, 80 MHz [R]); a
+different radio class needs its own survey.
+
+### 7.8 The scaling proposition, restated for (N, M)
+
+Under the assumptions of Sec. 4 with per-region false-alarm control
+(Sec. 7.2):
+
+    E[bytes_gated]  ≤  b_kf ( Σ_r E[N_r(T)] + α_r |𝓡| T ),            independent of N and M
+    E[bytes_timer]  =  b_kf f N T,                                       linear in N
+    E[u_r − τ_r]    ≤  1{r ∉ 𝓡_static} T_sweep^(1)(r)/N + E[T_det(r)] + E[D_kf],
+
+with T_det(r) falling as 1/(γ √|𝓛_r|) and 𝓡_static growing with M. So
+adding robots adds sensing and shortens delay without adding gated
+traffic, and adding masts turns corridors from swept to certified. The
+only quantity that worsens with N is the per-robot deadline capacity
+under contention, which hurts the timer policy far more than the gated
+one.
+
+### 7.9 What SCooP can and cannot test at scale
+
+Site 1 has N = 2, M = 3. The quantities that depend on N (sweep time,
+contention mode) are measured at N = 1 and N = 2 and extrapolated by the
+1/N and DCF models; the quantities that depend on M (static coverage)
+are computed on the corridor graph for any placement, since they are
+geometry. The scaling claims are therefore stated as the proposition
+with measured constants, and the N = 1 vs N = 2 contrast is the one
+empirical scaling point. A larger team is the stated next step.
