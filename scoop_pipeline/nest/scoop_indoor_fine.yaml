@@ -1,6 +1,6 @@
 # The quality run: scoop_indoor.yaml with the texture taken down to the pixel
 # footprint and the exposure flicker taken out of the texture.
-#   texel 1.15 cm -> 2.9 mm (7 levels to 2^15 over 94 m): the RealSense pixel at 2 m
+#   texel 1.15 cm -> 2.9 mm (8 levels to 2^15 over 94 m): the RealSense pixel at 2 m
 #   is 3.2 mm, so the old texel was 3.5x coarser than what the photographs hold,
 #   which is the measured sharpness gap (render 50-67 against image 146-149).
 #   dict_size 23: twice the table for four times the cells (hash collisions rise;
@@ -74,7 +74,7 @@ surfel:
 
 encoding:
   type: hashgrid
-  levels: 7
+  levels: 8                             # levels x dim must be 3, 8, 16, 24, 32 or 48: the rasteriser's channel counts
   hashgrid:
     min_logres: 9                       # 2^9 cells over the range: ~20 cm at 100 m
     max_logres: 15                      # 2^15 over 94 m: 2.9 mm, the pixel footprint at 2 m

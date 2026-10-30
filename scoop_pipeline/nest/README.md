@@ -116,7 +116,7 @@ responses and matches neither.
 ## The quality run
 
 `scoop_indoor_fine.yaml`: the same recipe with the texture taken to the pixel
-footprint (7 levels to 2^15, 2.9 mm texels against the 3.2 mm RealSense pixel at
+footprint (8 levels to 2^15, 2.9 mm texels against the 3.2 mm RealSense pixel at
 2 m; `dict_size` 23), per-image exposure terms, and 140k iterations. Train it on
 the October scene alone: joint training with September gave October nothing
 (20.4 against 22.8 dB held-out) and the September views add surface October's
@@ -133,3 +133,8 @@ python train.py -s "$S" -m "$R" --yaml configs/scoop_indoor_fine.yaml --eval \
 
 If it stops with CUDA out of memory in the first minute, set `dict_size: 22` and
 start again; nothing else needs to change.
+
+The surfel rasteriser renders the texture features and is compiled for 3, 8, 16,
+24, 32 or 48 channels (`levels` x `dim`). Any other count prints "Unsupported
+channel count" once per frame and renders nothing, and training runs to the end at
+6 dB. The patched train.py refuses such a yaml at start.

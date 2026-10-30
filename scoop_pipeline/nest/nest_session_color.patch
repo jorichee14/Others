@@ -157,7 +157,7 @@ index 0000000..b0ba17a
 +        model.describe()
 +        return model
 diff --git a/train.py b/train.py
-index d481ad2..e101772 100644
+index d481ad2..7a9708e 100644
 --- a/train.py
 +++ b/train.py
 @@ -30,6 +30,7 @@ except ImportError:
@@ -168,16 +168,20 @@ index d481ad2..e101772 100644
  from utils.render_utils import save_img_u8, convert_gray_to_cmap
  from utils.render_utils import gsnum_trans_color
  import open3d as o3d
-@@ -55,6 +56,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+@@ -55,6 +56,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
      gaussians = GaussianModel(dataset.sh_degree)
      scene = Scene(dataset, gaussians)
      gaussians.training_setup(opt)
++    channels = cfg_model.encoding.levels * cfg_model.encoding.hashgrid.dim
++    if channels not in (3, 8, 16, 24, 32, 48):
++        sys.exit(f"encoding.levels x hashgrid.dim = {channels}: the surfel rasteriser is compiled for "
++                 "3, 8, 16, 24, 32 or 48 channels and would render nothing")
 +    color = SessionColor(scene.getTrainCameras(), per_image=getattr(cfg_model.training_cfg, 'image_color', False)) \
 +        if getattr(cfg_model.training_cfg, 'session_color', False) else None
      if checkpoint:
          (model_params, first_iter) = torch.load(checkpoint)
          gaussians.restore(model_params, opt)
-@@ -151,6 +154,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+@@ -151,6 +158,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
          image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
      
          gt_image = viewpoint_cam.original_image.cuda()
@@ -186,7 +190,7 @@ index d481ad2..e101772 100644
  
          error_img = torch.abs(gt_image - image)
  
-@@ -246,13 +251,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+@@ -246,13 +255,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                  tb_writer.add_scalar('train_loss_patches/normal_loss', ema_normal_for_log, iteration)
                  tb_writer.add_scalar('train_loss_patches/mask_loss', ema_mask_for_log, iteration)
  
@@ -204,7 +208,7 @@ index d481ad2..e101772 100644
  
              # Densification
              if iteration < opt.densify_until_iter and optim_gaussian:
-@@ -280,6 +288,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+@@ -280,6 +292,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                  if optim_ngp:
                      ingp.current_optimizer.step()
                      ingp.current_optimizer.zero_grad(set_to_none = True)
@@ -213,7 +217,7 @@ index d481ad2..e101772 100644
  
              if (iteration in checkpoint_iterations):
                  print("\n[ITER {}] Saving Checkpoint".format(iteration))
-@@ -393,7 +403,7 @@ def prepare_output_and_logger(args, scene_name, yaml_file = ""):
+@@ -393,7 +407,7 @@ def prepare_output_and_logger(args, scene_name, yaml_file = ""):
      return tb_writer
  
  @torch.no_grad()
@@ -222,7 +226,7 @@ index d481ad2..e101772 100644
  ingp_model, beta, args, cfg_model, test_psnr = None, train_psnr = None, iter_list = None):
      if tb_writer:
          tb_writer.add_scalar('train_loss_patches/reg_loss', Ll1.item(), iteration)
-@@ -415,7 +425,10 @@ ingp_model, beta, args, cfg_model, test_psnr = None, train_psnr = None, iter_lis
+@@ -415,7 +429,10 @@ ingp_model, beta, args, cfg_model, test_psnr = None, train_psnr = None, iter_lis
                      
                      render_pkg = renderFunc(viewpoint, scene.gaussians, *renderArgs, ingp = ingp_model, \
                           beta = beta, iteration = iteration, cfg = cfg_model)
