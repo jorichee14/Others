@@ -1,0 +1,110 @@
+# The quality run: scoop_indoor.yaml with the texture taken down to the pixel
+# footprint and the exposure flicker taken out of the texture.
+#   texel 1.15 cm -> 2.9 mm (7 levels to 2^15 over 94 m): the RealSense pixel at 2 m
+#   is 3.2 mm, so the old texel was 3.5x coarser than what the photographs hold,
+#   which is the measured sharpness gap (render 50-67 against image 146-149).
+#   dict_size 23: twice the table for four times the cells (hash collisions rise;
+#   24 if memory allows, 22 if it does not).
+#   image_color: each training image owns a gain and bias, so auto-exposure drift
+#   is absorbed there and not painted into the texture; novel views get the steady
+#   session term only.
+#   140k iterations: forty passes over 3462 images, for the finer levels to fill.
+#
+# NeST-Splatting on a LiDAR scene from lod3dgs.py scene, trained the way
+# LetsGo trains a LiDAR-initialised model (no opacity reset, no growth, the
+# points are the geometry) with a one-sided LiDAR depth loss.
+#
+# Set `range` to the scene's bounds before use -- see README.md. It is the
+# cube the texture hash grid covers, in the scene's own (GLIM world) frame.
+
+EXP_COMMENTS: "scoop indoor, LiDAR init, fine texture, per-image exposure"
+
+training_cfg:
+  iterations: 140_000                   # forty passes over 3462 images
+  densify_from_iter: 1_000_000          # never: the LiDAR points are the geometry
+  densify_until_iter: 0
+  opacity_reset_interval: 1_000_000     # never: with thousands of images a reset never recovers
+  reset_until_iter: 0
+  session_color: true                   # one learned colour response per camera id (nest_session_color.patch)
+  image_color: true                     # and one per training image: exposure flicker stays out of the texture
+  position_lr_max_steps: 140_000
+  densification_interval: 100
+  ingp_densification_interval: 100
+  ingp_opacity_reset_interval: 1_000_000
+  opacity_reset_protect: 10
+  densify_grad_threshold: 0.0002
+  ingp_densify_threshold: 0.0004
+  opacity_cull: 0.005                   # vanilla's; NeST's 0.05 culls a tenth of a LiDAR init
+  sh_degree: 2
+  pixel_densify_from_iter: 1_000_000
+
+settings:
+  if_ingp: True
+  white_background: False
+  gt_alpha: False
+  gs_alpha: False
+  depth_ratio: 1                        # median depth: a bounded, indoor scene
+  contract: False                       # the range below holds the whole building
+  pixel_densify_enhance: False
+  save_interval: 10000
+
+loss:
+  lambda_normal: 0.0
+  lambda_dist: 0.0
+  lambda_mask: 0.0
+  lambda_depth: 0.8                     # LetsGo's weight, one-sided (floaters only)
+  normal_iter: 7_000
+  dist_iter: 3_000
+  mask_iter: 0
+  depth_iter: 0
+
+ingp_stage:
+  initialize: 10_000                    # surfels alone first, as NeST does
+  switch_iter: 10_000
+  keep_geometry: 1000
+  XYZ_TYPE: "UV"
+
+surfel:
+  base_beta: 0
+  base_opacity: 0
+  tg_beta: 0
+  tg_base_alpha: 0
+  update_interval: 500
+  update_interations: 5_000
+
+encoding:
+  type: hashgrid
+  levels: 7
+  hashgrid:
+    min_logres: 9                       # 2^9 cells over the range: ~20 cm at 100 m
+    max_logres: 15                      # 2^15 over 94 m: 2.9 mm, the pixel footprint at 2 m
+    dict_size: 23                       # 24 if the 3080 takes it, 22 if it does not
+    dim: 4
+    range: [-47, 47]                    # the 20261015 building: x -43.8..16.7, y -45..25.9, z -3.9..5.3
+  coarse2fine:
+    enabled: True
+    init_active_level: 2
+    step: 3000
+  warm_up: 1000                         # under encoding, not coarse2fine: the code reads encoding.warm_up
+
+rgb:
+  mlp:
+    num_layers: 2
+    hidden_dim: 256
+    skip: []
+    activ: relu_
+    activ_params: {}
+    weight_norm: True
+  mode: idr
+  view_dep: True
+  encoding_view:
+    type: SphericalHarmonics
+    degree: 4
+
+optim:
+  type: Adam
+  params:
+    feat_lr: 2e-2
+    view_lr: 2e-2
+    mlp_lr: 1e-3
+    spec_lr: 2e-4

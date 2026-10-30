@@ -103,10 +103,33 @@ one affine colour map (gain and bias per channel) per COLMAP camera id, learned
 with the texture and applied to the render before the photometric loss. The
 lowest id is the reference and stays at identity, so the texture is kept in that
 session's colour; every other id learns how its sensor differs. Switched on by
-`training_cfg.session_color: true` in the yaml, saved as `session_color.pth` in
+`training_cfg.session_color: true` in the yaml (`image_color: true` adds a gain and
+bias per training image as well, for auto-exposure drift; novel and held-out views
+get the session term only), saved as `session_color.pth` in
 the model dir, printed at every save, and applied by `eval_render.py` to each
 test camera's own session (`--no_color_terms` renders everything in the
 reference colour). Why: trained on October (RealSense) and September (ZED)
 together with one texture, both sessions' held-out views sat near 20 dB while
 October alone reached 22.8 dB; a shared texture has to settle between two colour
 responses and matches neither.
+
+## The quality run
+
+`scoop_indoor_fine.yaml`: the same recipe with the texture taken to the pixel
+footprint (7 levels to 2^15, 2.9 mm texels against the 3.2 mm RealSense pixel at
+2 m; `dict_size` 23), per-image exposure terms, and 140k iterations. Train it on
+the October scene alone: joint training with September gave October nothing
+(20.4 against 22.8 dB held-out) and the September views add surface October's
+path never looks at.
+
+```bash
+cd ~/workspaces/nest-splatting && conda activate nest_splatting
+cp ~/workspaces/Others/scoop_pipeline/nest/scoop_indoor_fine.yaml configs/
+S=~/workspaces/isaac_ros-dev/data/processed/20261015/mapping/datasets/mobile_2/lod3dgs_map_mapping_20261015
+R=~/workspaces/lod3dgs_runs/nest_20261015_fine
+python train.py -s "$S" -m "$R" --yaml configs/scoop_indoor_fine.yaml --eval \
+    --position_lr_init 0.000016 --scaling_lr 0.0015 --data_device cpu 2>&1 | tee "$R.log"
+```
+
+If it stops with CUDA out of memory in the first minute, set `dict_size: 22` and
+start again; nothing else needs to change.
