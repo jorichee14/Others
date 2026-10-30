@@ -11,6 +11,7 @@
 # recording.yaml ouster.frame_suffix): os_lidar_mobile1, os_sensor_mobile1,
 # os_imu_mobile1; _mobile2 on mobile_2. A bag decoded before that says os_lidar:
 # processing/rename_frames.py --suffix _mobileN.
+# The current rigs; a 20261015 recording: static_tf_20261015.yaml.
 transforms:
   - parent: os_lidar_mobile1                              # mobile_1's Ouster
     child: zed_left_camera_optical_frame
@@ -30,15 +31,17 @@ transforms:
     rotation_xyzw: [0.571431, 0.563856, 0.432969, -0.409965]
   - parent: os_lidar_mobile2                              # mobile_2's Ouster
     child: camera_color_optical_frame                     # mobile_2's RealSense colour
-    translation: [-0.273322, 0.029175, 0.004183]          # |t| = 0.275 m
-    rotation_xyzw: [0.552208, 0.540455, -0.450592, -0.447148]
+    translation: [-0.085629, -0.010055, -0.027424]        # |t| = 0.090 m
+    rotation_xyzw: [0.515573, 0.513620, -0.483613, -0.486310]
     quality:                                              # not read by the merge; the record
       method: direct_visual_lidar_calibration (Koide), NID on reflectivity, static integration
-      camera: /mobile_2/color (fx 427.703 fy 427.108 cx 423.132 cy 239.735, plumb_bob)
-      recording: 20261015 mapping, mirc_dataset_mapping_2_run_20261015_mobile_2
-      pauses: [pause_01, pause_02, pause_03, pause_04]    # processing/dvlc_pauses.py
-      initial_guess: manual, 8 point pairs
-      cost: {initial: 3.724714, final: 3.716170, iterations: 10}
-      change_from_guess: {translation_m: 0.030, rotation_deg: 0.41}
-      viewer_check: edges matched in all pauses
-      calib_json: work/20261015/mobile_2_calib/pauses_preprocessed/calib.json
+      camera: /mobile_2/color (fx 427.122 fy 426.527 cx 423.132 cy 239.735, plumb_bob)
+      rig: rebuilt after 20261015, LiDAR and camera closer (the old one, 0.275 m, is in
+           static_tf_20261015.yaml; 0.188 m and 7.8 deg from this one)
+      recording: 20261030, three still bags calib_bag, calib_bag2, calib_bag3 (.db3)
+      pauses: first 2 s of each cut (dvlc_pauses.py --intervals 2-20), as the latched
+              image topic starts a bag with the previous position's frame
+      initial_guess: manual, 12 point pairs (6 RANSAC inliers)
+      cost: {initial: 2.824362, final: 2.816138}
+      change_from_guess: {translation_m: 0.030, rotation_deg: 0.65}
+      calib_json: work/20261030/mobile_2_calib/pauses_v2_preprocessed/calib.json

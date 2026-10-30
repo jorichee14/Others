@@ -27,6 +27,7 @@ configs/recording.yaml  settings for processing a recording (topics, remaps, GLI
 configs/zed/         the robot's zed_wrapper config, used to replay SVOs
 configs/record.yaml  what each machine records (the robots' record.yaml)
 configs/static_tf.yaml  calibrated transforms the merge adds to /tf_static
+                        (static_tf_20261015.yaml: the 20261015 rigs')
 configs/glim/<machine>/  GLIM's config folder per robot (configs/glim/README.md)
 configs/comms.yaml   which TF frame places each machine in the comms tables
 environment.yml      conda env for all offline processing
@@ -949,9 +950,10 @@ W=work/mobile_2_calib
 #    /tf, /tf_static); os_lidar, os_sensor, os_imu -> *_mobile2 everywhere
 python processing/decode_ouster.py $RAW $W/decoded \
     --packets-ns /mobile_2/ouster --out-ns /mobile_2/ouster --frame-suffix _mobile2 \
-    --static-tf configs/static_tf.yaml \
+    --static-tf configs/static_tf_20261015.yaml \
     --copy-all --exclude /mobile_2/ouster/lidar_packets --exclude /mobile_2/ouster/imu_packets
-#    (--static-tf: its calibration, os_lidar_mobile2 -> colour camera, into /tf_static)
+#    (--static-tf: its calibration, os_lidar_mobile2 -> colour camera, into /tf_static;
+#     the 20261015 rig's -- a recording on today's rig takes configs/static_tf.yaml)
 # 2. retime: the Ouster on the PC clock, with everything else  ->  the processed bag
 python processing/retime.py $RAW $W/decoded $W/retimed /mobile_2/ouster /mobile_2/ouster
 # 3. the pauses: look first, then cut
