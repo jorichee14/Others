@@ -211,6 +211,7 @@ def compare(renders, scene, log=print, gt_dir=None, only="", exclude=None):
     summ = {}
     if not rows:
         return rows, summ
+    for cam in sorted({r["camera"] for r in rows}) + ["all"]:
         sel = [r for r in rows if cam == "all" or r["camera"] == cam]
         p = np.array([r["psnr"] for r in sel])
         g = np.array([r["psnr_gain"] for r in sel])
