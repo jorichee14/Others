@@ -7,6 +7,9 @@ states the open problem in the literature, assesses each family against what
 SCooP measured, and ranks the options. Each option comes with a first
 experiment and a decision rule fixed before any data are read.
 
+The theoretical foundation, the formal results and the novelty claims are
+in [`THEORY.md`](THEORY.md).
+
 Literature tags follow `temporal_messaging/RELATED_WORK.md`. **[S]** means
 the claim comes from abstracts or search summaries only. **[R]** means it
 comes from this repository's own measurements. Read the primary text before
@@ -60,11 +63,15 @@ predict the task outcome. This is already contribution 4 of the SCooP-iT
 paper.
 
 **Hypothesis H0 (to check, section 6, step 0).** Indoors at about 1 m/s, a
-100 ms delay moves an object about 0.1 m, which is below the 0.2 m fusion
-breaking point. If so, the displacement mechanism that dominated OPV2V at
-20 m/s is second-order in SCooP. What costs the task is then whether, and
-how much of, a message arrives in time. That moves the problem away from
-latency compensation, where the vehicle literature is crowded, and toward
+100 ms delay moves an object about 0.1 m. That is below the 0.2 m pose
+breaking point, but it is close to a person's IoU-0.7 tolerance (0.11 m).
+`THEORY.md` §2.5 makes this precise with a displacement number Π per class
+and IoU threshold. Uncorrected indoor people sit near Π ≈ 1. With a
+velocity tag in the first unit of every message, they sit at Π ≈ 0.2, and
+the displacement mechanism that dominated OPV2V at 20 m/s becomes
+second-order. What costs the task is then whether, and how much of, a
+message arrives in time. That moves the problem away from latency
+compensation, where the vehicle literature is crowded, and toward
 delivery-time-aware transmission.
 
 ---
@@ -206,7 +213,7 @@ fixed here, before any data are read.
 
 | Step | Experiment | Decision rule |
 |---|---|---|
-| **0. H0: does displacement matter indoors?** | p95 speed of every agent and annotated person from the reference tracks, times the logged one-way delay of messages that landed in time | If the p95 displacement is < 0.1 m (half the 0.2 m breaking point), latency compensation is out of scope and the plan proceeds as written. If it is > 0.2 m, add the kinematic correction as a required receiver component |
+| **0. H0: does displacement matter indoors?** | Π and Π_c (`THEORY.md` §2.5) per class at θ = 0.5 and 0.7: p95 speed and velocity-estimate error from the reference tracks, times the measured age of messages that landed in time | If Π_c < 0.5 for every class, the plan proceeds as written, with the velocity tag in unit 1. If Π_c ≥ 1 for any class, a learned receiver-side compensation becomes a required component for that class |
 | **1. Oracle headroom for O1** | Per frame and sender on coop_2 and survey_1: the largest size that would land by the frame boundary, s*(t) = (T − d(t))·G(t), under `logged`. Compare the in-deadline value of an oracle size-matched policy against the best fixed kind in `CommSchedule-v0`. Use placeholder values (0.2 / 0.6 / 1.0), with a value proportional to delivered bytes for the progressive case | **NO-GO for O1** if the oracle gains < 15 % over the best fixed kind on coop_2. Report the same number under `fit:` and `v2xvit`: if synthetic channels show ≈ 0 headroom, that contrast is itself a result |
 | **2. Predictability for O2** | Predict, at horizons 0.1 / 0.5 / 1.0 s, whether a 100 KB and a 1.5 MB message would land in-frame. Features: clearance along the recorded future path, CSI power, recent goodput. Baseline: persistence. Train on survey_1, test on coop_2 and the reverse | **GO for O2** if the predictor beats persistence by ≥ 5 points of balanced accuracy at 0.5 s, out of run. Otherwise O2 drops to a reactive policy (recent goodput only), and the map is reported as not predictive at the time scale of a message |
 | **3. Policy on replay** | A size-matching sender (O1 without learned features: choose among boxes, features and cloud by predicted s*) against fixed kinds, AoI-optimal, and TAMP-style schedulers. Run each under ideal, `v2xvit`, `fit:`, and `logged` | Headline result if the ranking of policies under `logged` differs from their ranking under synthetic channels |
