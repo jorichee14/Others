@@ -124,9 +124,22 @@ The AP-side decision itself is not new: AoI-guaranteed scheduling for CP
 (Wang et al. 2023) allocates resource units at a center with per-region
 age constraints; TAMP (Zhu et al. 2026) schedules regions by a
 timeliness penalty at an RSU; SchedCP (2025) schedules users by CSI and
-semantics; the "PRISM" the plan cites could not be verified: the PDF
-supplied under that name (arXiv 2603.22754) is an LLM-reasoning paper,
-so the MAC-level reference is either misnamed or missing. The precise claim that survives them: **selection of
+semantics; PRISM (Mazandarani, Shokrnezhad, Taleb, IEEE TNSM 2026) is
+the closest MAC-level work and was read in full. PRISM is a
+*distributed* MADRL MAC in which each UE chooses a channel and a packet
+length from local observations, with shared "semantic segments" across
+UEs given by an orchestration-supplied association matrix, scored by
+self and assisted throughput under α-fairness or energy efficiency. It
+differs from this plan on every axis that matters here: decisions are
+per UE, not at the AP; segments have equal value, not a task gain;
+there is no deadline; time is slotted with no airtime or MCS; access is
+contention-based with collisions; the decision is a whole packet, not a
+ranked prefix of units; and the redundancy structure is an input
+(association matrix), not computed from poses and visibility. Its own
+future work lists realistic channels, HARQ and a testbed. PRISM is
+therefore the right contrast for "semantic-aware MAC exists", and this
+plan's claim is the centralized, task-valued, deadline-bound,
+airtime-charged, one-round counterpart on 802.11ax. The precise claim that survives them: **selection of
 sub-message units by task value with cross-agent redundancy, inside the
 uplink scheduling loop, in one round.** Each of the four must be a
 baseline or an explicit contrast.

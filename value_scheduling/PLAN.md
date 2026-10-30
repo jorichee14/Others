@@ -23,7 +23,7 @@ at N = 2 the gap may be within noise and that is reported.
 |---|---|---|
 | Communication-efficient CP (Where2comm, Dense Coverage/Sparse Refinement, V2X-DSC) | shrinks each message to KB scale | a private per-link budget; no contention or airtime; cross-sender redundancy remains |
 | Receiver-driven CP (WhisperNet, CoSDH) | plans who sends what, globally | an extra request round that pays channel access again |
-| Semantic / AoI-aware access (PRISM, SchedCP) and center-side CP scheduling (AoI-guaranteed scheduling, TAMP) **[amended]** | schedules whole agents or regions by redundancy, freshness or age | no sub-message units by task value, not in the uplink loop, generic content |
+| Semantic-aware access (PRISM, TNSM 2026: distributed MADRL, equal-value segments, slotted, no deadline), SchedCP, and center-side CP scheduling (AoI-guaranteed scheduling, TAMP) **[amended]** | schedules whole packets, agents or regions by redundancy, freshness or age | no sub-message units by task value, no deadline, no airtime, not in the AP's uplink loop |
 
 **The claim [amended]:** selection of sub-message units by task value
 with cross-agent redundancy, inside the uplink scheduling loop, in one

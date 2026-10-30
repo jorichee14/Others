@@ -106,7 +106,9 @@ reviewer will ask for.
 MCS spread; the two-round protocol model (request round + response
 round, same codec, same MAC); AoI-guaranteed center scheduling and
 TAMP-style region scheduling implemented on the same MAC with the same
-patches; DAIR-V2X and V2X-Real at their fixed N for perception realism.
+patches; a PRISM-style distributed semantic-aware access policy (each
+agent chooses when and how much to send from local feedback, redundancy
+by segment association) as the semantic-MAC contrast; DAIR-V2X and V2X-Real at their fixed N for perception realism.
 At each N, the no-quantization diagnostic to separate codec artifacts
 from scheduling.
 
@@ -170,9 +172,9 @@ so the hardware session needs no new code.
 
 1. Whether FZI has released the DR code (the paper says "will be
    published"); if not, phase 0 reimplements it, +1 week.
-2. The intended MAC-level reference behind "PRISM": the PDF supplied
-   (arXiv 2603.22754) is an LLM-reasoning paper with the same name. Drop
-   it or supply the right one.
+2. ~~PRISM~~ resolved: Mazandarani, Shokrnezhad, Taleb, IEEE TNSM 2026
+   (`refs/`); PRISM-lite-style and a PRISM-style distributed policy go
+   into phase 3 as the semantic-aware MAC contrast.
 3. Confirmation that the RTX 3080 machine (`wicomsrobot`) and the
    OpenCOOD install from the parent study are available for phase 0.
 4. ns-3 version on hand, if any; otherwise phase 1 installs ns-3.42+
