@@ -44,4 +44,5 @@ transforms:
       initial_guess: manual, 12 point pairs (6 RANSAC inliers)
       cost: {initial: 2.824362, final: 2.816138}
       change_from_guess: {translation_m: 0.030, rotation_deg: 0.65}
+      status: final for this rig (20261030)
       calib_json: work/20261030/mobile_2_calib/pauses_v2_preprocessed/calib.json
