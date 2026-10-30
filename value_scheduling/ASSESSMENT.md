@@ -62,9 +62,9 @@ different sides are not redundant when one is occluded). Two changes:
   value-prediction error and redundancy error, so that a shortfall is
   attributed.
 
-The cited predictor AUC (0.785, from "Dense Coverage, Sparse
-Refinement") is unverified here; the number must be reproduced on the
-harness before it is relied on.
+The cited predictor AUC (0.785) is confirmed in the DR paper (Supp. G,
+against counterfactual marginal detection gain, Precision@10 % = 0.51);
+it must still be reproduced on our harness before it is relied on.
 
 ### 2.3 Submodularity is a surrogate property
 
@@ -86,12 +86,14 @@ transmits) and state the resulting one-frame staleness, or shrink the
 backbone. The deadline-miss metric must be defined against that
 timeline.
 
-### 2.5 Per-unit headers at KB scale
+### 2.5 Unit size and headers
 
-Each unit carries BEV cell, layer and deadline. At units of a few KB a
-16–32 byte header is 1–3 %; fine. At sub-KB units it is not. Fix the
-unit size (suggest 1 MTU, ≈ 1.4 KB) so one unit is one frame on the
-air, and fold the header into the value report rather than the unit.
+DR's fine patch is 1,584 bits ≈ 198 B including a 48-bit header (3 %).
+That is the unit; it is far below one 802.11 frame, so the scheduler
+packs about seven patches per frame per agent and charges airtime per
+packed frame, including the fixed PHY preamble that dominates at this
+size. The original plan's "equal-size units" holds; "one unit = one
+frame" does not.
 
 ### 2.6 MCS-aware cost is circular under OFDMA
 
@@ -122,8 +124,9 @@ The AP-side decision itself is not new: AoI-guaranteed scheduling for CP
 (Wang et al. 2023) allocates resource units at a center with per-region
 age constraints; TAMP (Zhu et al. 2026) schedules regions by a
 timeliness penalty at an RSU; SchedCP (2025) schedules users by CSI and
-semantics; PRISM (2026) is the closest MAC-level work and is
-unverified here. The precise claim that survives them: **selection of
+semantics; the "PRISM" the plan cites could not be verified: the PDF
+supplied under that name (arXiv 2603.22754) is an LLM-reasoning paper,
+so the MAC-level reference is either misnamed or missing. The precise claim that survives them: **selection of
 sub-message units by task value with cross-agent redundancy, inside the
 uplink scheduling loop, in one round.** Each of the four must be a
 baseline or an explicit contrast.

@@ -38,9 +38,12 @@ the buffer status report (trigger loop) or on a one-frame AC_VO
 datagram (grant emulation, `HARDWARE.md`).
 
 **A. Layered message format.** Coarse dense base layer plus refinement
-units of **one MTU each [amended]**, nested so any prefix is decodable.
-Unit metadata (cell, layer, deadline) travels in the value report, not
-in the unit. Guarantee [amended]: with equal-size units the greedy order
+units, nested so any prefix is decodable. **[amended after reading the
+DR paper]** The unit is DR's fine patch: 16×16 cells, 256 SimVQ tokens
+× 6 bits + 48-bit header = 1,584 bits ≈ 198 B. About seven patches pack
+into one 802.11 frame; the scheduler selects patches and packs them per
+agent per grant, and airtime is charged per packed frame. Patch metadata
+(cell coordinates, β) travels in the value report. Guarantee [amended]: with equal-size units the greedy order
 is within 1 − 1/e of a clairvoyant order for every airtime budget at
 once; the gain of a prefix-decodable message over an atomic one equals
 the probability mass of partial delivery, which is zero under a fixed
