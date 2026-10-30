@@ -101,3 +101,58 @@ The simple problem is DTCV with one flow, an atomic message, M fixed,
 ρ ≡ 1. Everything the paper claims is already visible in it: the random
 deadline capacity, the prediction, and the zero gain under synthetic
 channels.
+
+---
+
+## 6. Current literature on this simple problem (checked 30 Oct 2026)
+
+Adaptive compression for collaborative perception is an occupied line.
+These are the papers that set the compression level from the channel
+rather than from a fixed budget. All [S]: from abstracts and search
+summaries, since arXiv is not reachable from this session; read before
+citing.
+
+| Paper | What adapts, and to what | Channel at decision time | Deadline | Evaluation |
+|---|---|---|---|---|
+| SmartCooper (Fang et al., arXiv 2402.00321) | per-agent compression ratio from the allocated sub-channel capacity; a "judger" drops agents whose data would not help | known: capacity allocated by the base station | none stated | simulation |
+| PACP (Fang et al., IEEE TMC, arXiv 2404.06891) | priority per collaborator from BEV match; transmission rate, link and compression ratio jointly by submodular optimization; adaptive autoencoder from CSI feedback | known CSI | delay minimized in the related ACC-DA, not a per-message deadline | simulation |
+| ACC-DA (Hu, Fang et al., GLOBECOM 2024, arXiv 2310.00013) | communication graph and rate–distortion trade-off to minimize average transmission delay | known | average delay, not a deadline | simulation |
+| R-ACP (Fang et al., JSAC 2025) | video compression rate to channel capacity; drops links with high loss; priority scheduling | measured current capacity | none stated | multi-camera ground vehicles, emulated loss |
+| EffiComm (arXiv 2507.19354) | per-vehicle keep ratio from role, scene complexity and instantaneous network load, by a graph attention network | measured current load | none | OPV2V |
+| BEVCooper (Hou et al., arXiv 2512.19082) | online selection of collaborators and feature fusion under changing utility and V2V channel quality, bandit style; claims a real testbed | measured, learned online | latency reported, not a deadline | real testbed (details unverified) |
+| WhisperNet (Chen et al., CVPR 2026, arXiv 2603.01708) | spatial and channel-importance scoring at the sender for a given bandwidth; motivates by "fixed-rate encoders adapt poorly" | budget given | none | OPV2V, DAIR-V2X |
+| Variable-rate deep JSCC (DeepJSCC-V and successors), TCS-JSCC (WCL 2026), AdaSem (arXiv 2401.08360) | code length from target quality and SNR; AdaSem trades accuracy against end-to-end latency | SNR known | AdaSem: latency, not a deadline | single link, PHY simulation |
+
+**What they share.** The compression level is matched to a capacity that
+is known at decision time: allocated by a base station, read from CSI,
+or measured as the current load. The decision is then deterministic:
+pick the largest level that fits, b(r) ≤ C_now. In the notation of
+section 2 this is P(S ≥ b | x) = 1{b ≤ C_now}, the persistence predictor
+with no uncertainty. None of them counts a message that misses its
+frame as worth zero, none evaluates on a shared CSMA link where the
+other agent's traffic moves S between frames, and none predicts S ahead
+from where the agent is going.
+
+**What the simple problem still owns, after this check.**
+
+1. **The in-time probability, not the capacity, is the decision
+   variable.** V(r)·P(S ≥ b(r) | x) with S random. The matched-capacity
+   rule is the corner P ∈ {0, 1}. When S is dispersed (coop_2: a 1.5 MB
+   message lands in 59–68 % of frames at the same RTT) the two rules
+   choose differently, and the matched rule misses whenever S drops
+   below C_now within the frame.
+2. **Prediction ahead of the message, from geometry.** x_t includes the
+   planned path and the map's clearance along it, so P(S ≥ b | x) can
+   change before the measured capacity does. No entry above uses
+   anything but the current channel.
+3. **A measured, contended link as the test.** Every entry evaluates on
+   an allocated or simulated channel, except BEVCooper, whose testbed
+   details are unverified. SCooP supplies the logged S_t per frame and
+   the replay check (E3).
+
+So the simple form is not new as "adaptive compression"; it is new as
+**deadline-probabilistic, predictive compression on a measured shared
+link**, and the paper must say so in those words. The progressive step
+(section 5, step 1) is where the formulation leaves the adaptive-
+compression line entirely, since none of the entries has a message that
+is worth something when only part of it arrives.
