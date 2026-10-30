@@ -24,6 +24,7 @@ its commit `058a3df`:
 cd ~/workspaces && git clone https://github.com/zhangxin-cg/nest-splatting.git
 cd nest-splatting && git checkout 058a3df
 git apply ~/workspaces/Others/scoop_pipeline/nest/nest_lidar.patch
+git apply ~/workspaces/Others/scoop_pipeline/nest/nest_session_color.patch   # on top: one colour response per camera id
 git submodule update --init --recursive
 conda env create -f environment.yml        # the conda half succeeds; the pip half fails -- expected
 conda activate nest_splatting
@@ -94,3 +95,18 @@ image, as 3DGS does). For the like-for-like against the LOD-3DGS runs, render
 the same 693 views and score with `splat_psnr.py` -- that needs a NeST
 renderer for `splat_walk.py --render-views`, which is the next thing to add
 once a model exists.
+
+## Two sessions, two sensors: the colour term
+
+`nest_session_color.patch` (applied after the LiDAR patch) adds `session_color.py`:
+one affine colour map (gain and bias per channel) per COLMAP camera id, learned
+with the texture and applied to the render before the photometric loss. The
+lowest id is the reference and stays at identity, so the texture is kept in that
+session's colour; every other id learns how its sensor differs. Switched on by
+`training_cfg.session_color: true` in the yaml, saved as `session_color.pth` in
+the model dir, printed at every save, and applied by `eval_render.py` to each
+test camera's own session (`--no_color_terms` renders everything in the
+reference colour). Why: trained on October (RealSense) and September (ZED)
+together with one texture, both sessions' held-out views sat near 20 dB while
+October alone reached 22.8 dB; a shared texture has to settle between two colour
+responses and matches neither.

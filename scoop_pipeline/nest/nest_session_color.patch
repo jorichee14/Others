@@ -1,0 +1,195 @@
+diff --git a/eval_render.py b/eval_render.py
+index a481c63..5794edb 100644
+--- a/eval_render.py
++++ b/eval_render.py
+@@ -24,6 +24,7 @@ from utils.mesh_utils import GaussianExtractor, to_cam_open3d, post_process_mesh
+ from utils.render_utils import generate_path, create_videos
+ from hash_encoder.modules import INGP
+ from hash_encoder.config import Config
++from session_color import SessionColor
+ from utils.render_utils import save_img_u8
+ from lpipsPyTorch import lpips
+ from train import merge_cfg_to_args
+@@ -40,6 +41,7 @@ if __name__ == "__main__":
+     parser.add_argument("--skip_train", action="store_true")
+     parser.add_argument("--skip_test", action="store_true")
+     parser.add_argument("--skip_mesh", action="store_true")
++    parser.add_argument("--no_color_terms", action="store_true", help="render in the reference session's colour for every camera")
+     parser.add_argument("--quiet", action="store_true")
+     parser.add_argument("--render_path", action="store_true")
+     parser.add_argument("--voxel_size", default=-1.0, type=float, help='Mesh: voxel size for TSDF')
+@@ -80,6 +82,7 @@ if __name__ == "__main__":
+ 
+     gaussians.XYZ_TYPE = "UV"
+     active_levels = ingp_model.set_active_levels(iteration)
++    color = None if args.no_color_terms else SessionColor.load(args.model_path)
+ 
+ 
+     train_dir = os.path.join(scene.model_path, 'train', "ours_{}".format(iteration))
+@@ -100,6 +103,8 @@ if __name__ == "__main__":
+                 render_pkg = render(cam, gaussians, pipe, background, ingp = ingp_model, \
+                     beta = beta, iteration = iteration, cfg = cfg_model)
+                 image = render_pkg["render"]
++                if color is not None:
++                    image = color.apply(image, cam)
+                 gt = cam.original_image
+ 
+                 img_name = os.path.join(train_renders, cam_name)
+@@ -123,6 +128,8 @@ if __name__ == "__main__":
+                     beta = beta, iteration = iteration, cfg = cfg_model)
+             
+                 image = render_pkg["render"]
++                if color is not None:
++                    image = color.apply(image, cam)
+                 gt = cam.original_image
+ 
+                 img_name = os.path.join(test_renders, cam_name)
+diff --git a/session_color.py b/session_color.py
+new file mode 100644
+index 0000000..e209198
+--- /dev/null
++++ b/session_color.py
+@@ -0,0 +1,65 @@
++"""One colour response per camera session, learned beside the texture.
++
++Two sensors photograph one building a month apart; one texture has to be
++read by both. Left alone, the texture settles on the average of the two
++colour responses and neither photograph is matched. Here each COLMAP camera
++id (one per sensor, one per session) owns an affine colour map, gain and
++bias per channel, applied to the render before the photometric loss. The
++lowest id is the reference and stays at identity, so the texture is kept in
++that session's colour; the others learn how they differ from it. Twelve
++numbers per extra session: nothing to overfit, and a direct measurement of
++how far apart the sensors sit.
++"""
++import os
++import torch
++import torch.nn as nn
++
++
++class SessionColor(nn.Module):
++    FILE = "session_color.pth"
++
++    def __init__(self, camera_ids, lr=1e-3):
++        super().__init__()
++        ids = sorted(set(int(i) for i in camera_ids))
++        self.reference = ids[0]
++        self.index = {i: k for k, i in enumerate(ids)}
++        self.gain = nn.Parameter(torch.ones(len(ids), 3, 1, 1, device="cuda"))
++        self.bias = nn.Parameter(torch.zeros(len(ids), 3, 1, 1, device="cuda"))
++        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr) if len(ids) > 1 else None
++        print(f"[session colour] {len(ids)} session(s) {ids}; id {self.reference} is the reference")
++
++    def apply(self, image, cam):
++        """The render as this camera's session would have photographed it."""
++        k = self.index.get(int(cam.colmap_id))
++        if k is None or int(cam.colmap_id) == self.reference:
++            return image
++        return image * self.gain[k] + self.bias[k]
++
++    def step(self):
++        if self.optimizer is not None:
++            self.optimizer.step()
++            self.optimizer.zero_grad(set_to_none=True)
++
++    def describe(self):
++        for i, k in sorted(self.index.items()):
++            g, b = self.gain[k].flatten().tolist(), self.bias[k].flatten().tolist()
++            tag = " (reference)" if i == self.reference else ""
++            print(f"[session colour] id {i}{tag}: gain {g[0]:.3f} {g[1]:.3f} {g[2]:.3f}"
++                  f"  bias {b[0]:+.3f} {b[1]:+.3f} {b[2]:+.3f}")
++
++    def save(self, model_path):
++        torch.save({"ids": sorted(self.index, key=self.index.get), "gain": self.gain.detach().cpu(),
++                    "bias": self.bias.detach().cpu()}, os.path.join(model_path, self.FILE))
++
++    @classmethod
++    def load(cls, model_path):
++        path = os.path.join(model_path, cls.FILE)
++        if not os.path.exists(path):
++            return None
++        state = torch.load(path)
++        model = cls(state["ids"])
++        with torch.no_grad():
++            model.gain.copy_(state["gain"].cuda())
++            model.bias.copy_(state["bias"].cuda())
++        model.describe()
++        return model
+diff --git a/train.py b/train.py
+index d481ad2..5af0188 100644
+--- a/train.py
++++ b/train.py
+@@ -30,6 +30,7 @@ except ImportError:
+ 
+ from hash_encoder.modules import INGP
+ from hash_encoder.config import Config
++from session_color import SessionColor
+ from utils.render_utils import save_img_u8, convert_gray_to_cmap
+ from utils.render_utils import gsnum_trans_color
+ import open3d as o3d
+@@ -55,6 +56,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+     gaussians = GaussianModel(dataset.sh_degree)
+     scene = Scene(dataset, gaussians)
+     gaussians.training_setup(opt)
++    color = SessionColor([c.colmap_id for c in scene.getTrainCameras()]) \
++        if getattr(cfg_model.training_cfg, 'session_color', False) else None
+     if checkpoint:
+         (model_params, first_iter) = torch.load(checkpoint)
+         gaussians.restore(model_params, opt)
+@@ -151,6 +154,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+     
+         gt_image = viewpoint_cam.original_image.cuda()
++        if color is not None:
++            image = color.apply(image, viewpoint_cam)
+ 
+         error_img = torch.abs(gt_image - image)
+ 
+@@ -246,13 +251,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+                 tb_writer.add_scalar('train_loss_patches/normal_loss', ema_normal_for_log, iteration)
+                 tb_writer.add_scalar('train_loss_patches/mask_loss', ema_mask_for_log, iteration)
+ 
+-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), \
++            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), color, \
+                 ingp_model=ingp, beta = beta, args = args, cfg_model = cfg_model, test_psnr = test_psnr, train_psnr = train_psnr, iter_list = iter_list)
+             if (iteration in saving_iterations):
+                 print("\n[ITER {}] Saving Gaussians".format(iteration))
+                 scene.save(iteration)
+                 if ingp is not None:
+                     ingp.save_model(scene.model_path, iteration)
++                if color is not None:
++                    color.save(scene.model_path)
++                    color.describe()
+ 
+             # Densification
+             if iteration < opt.densify_until_iter and optim_gaussian:
+@@ -280,6 +288,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+                 if optim_ngp:
+                     ingp.current_optimizer.step()
+                     ingp.current_optimizer.zero_grad(set_to_none = True)
++                if color is not None:
++                    color.step()
+ 
+             if (iteration in checkpoint_iterations):
+                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
+@@ -393,7 +403,7 @@ def prepare_output_and_logger(args, scene_name, yaml_file = ""):
+     return tb_writer
+ 
+ @torch.no_grad()
+-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, \
++def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, color, \
+ ingp_model, beta, args, cfg_model, test_psnr = None, train_psnr = None, iter_list = None):
+     if tb_writer:
+         tb_writer.add_scalar('train_loss_patches/reg_loss', Ll1.item(), iteration)
+@@ -415,7 +425,10 @@ ingp_model, beta, args, cfg_model, test_psnr = None, train_psnr = None, iter_lis
+                     
+                     render_pkg = renderFunc(viewpoint, scene.gaussians, *renderArgs, ingp = ingp_model, \
+                          beta = beta, iteration = iteration, cfg = cfg_model)
+-                    image = torch.clamp(render_pkg["render"], 0.0, 1.0)
++                    image = render_pkg["render"]
++                    if color is not None:
++                        image = color.apply(image, viewpoint)
++                    image = torch.clamp(image, 0.0, 1.0)
+                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+                     
+                     l1_test += l1_loss(image, gt_image).mean().double()

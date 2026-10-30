@@ -13,6 +13,7 @@ training_cfg:
   densify_until_iter: 0
   opacity_reset_interval: 1_000_000     # never: with thousands of images a reset never recovers
   reset_until_iter: 0
+  session_color: true                   # one learned colour response per camera id (nest_session_color.patch)
   position_lr_max_steps: 70_000
   densification_interval: 100
   ingp_densification_interval: 100
