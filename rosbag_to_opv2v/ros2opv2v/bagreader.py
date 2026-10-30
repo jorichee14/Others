@@ -171,6 +171,16 @@ class BagReader:
         self.files, self.storage = resolve_bag_files(self.path)
         self._topics: Optional[Dict[str, TopicInfo]] = None
 
+    def _rosbags_paths(self):
+        """What rosbags opens a .db3 bag by: its folder with metadata.yaml
+        (given the .db3 file itself, it parses it as a ROS 1 bag)."""
+        from pathlib import Path
+        folder = self.path if os.path.isdir(self.path) else os.path.dirname(self.path)
+        if not os.path.isfile(os.path.join(folder, "metadata.yaml")):
+            raise BagError(f"{self.path}: a .db3 bag is read with its metadata.yaml, "
+                           f"and there is none in {folder}")
+        return [Path(folder)]
+
     # ------------------------------------------------------------------ summary
 
     def topics(self) -> Dict[str, TopicInfo]:
@@ -192,9 +202,8 @@ class BagReader:
                             TopicInfo(channel.topic, schema.name if schema else "?", 0))
                         info.count += int(counts.get(channel_id, 0))
         else:
-            from pathlib import Path
             from rosbags.highlevel import AnyReader
-            with AnyReader([Path(f) for f in self.files]) as reader:
+            with AnyReader(self._rosbags_paths()) as reader:
                 for connection in reader.connections:
                     info = topics.setdefault(
                         connection.topic,
@@ -217,9 +226,8 @@ class BagReader:
                         ends.append(int(stats.message_end_time))
             if starts:
                 return min(starts), max(ends)
-        from pathlib import Path
         from rosbags.highlevel import AnyReader
-        with AnyReader([Path(f) for f in self.files]) as reader:
+        with AnyReader(self._rosbags_paths()) as reader:
             return int(reader.start_time), int(reader.end_time)
 
     # ------------------------------------------------------------------- raw io
@@ -261,9 +269,8 @@ class BagReader:
                     yield channel.topic, int(message.log_time), message.data, decoder
 
     def _iter_raw_rosbags(self, topics, start_ns, end_ns):
-        from pathlib import Path
         from rosbags.highlevel import AnyReader
-        with AnyReader([Path(f) for f in self.files]) as reader:
+        with AnyReader(self._rosbags_paths()) as reader:
             connections = [c for c in reader.connections
                            if topics is None or c.topic in topics]
             for connection, timestamp, raw in reader.messages(

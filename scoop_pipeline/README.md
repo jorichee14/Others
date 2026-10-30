@@ -985,6 +985,19 @@ infra1 camera instead: pass `/mobile_2/infra1/image_rect_raw` and
 `run_dvlc.sh` mounts only the `pause_*` folders, read-only; `DVLC_IMAGE`
 picks another image than `dvlc:humble-mcap`.
 
+A short bag recorded for calibration (the three DVLC topics, `.db3` or MCAP,
+no odometry or IMU) goes through `--intervals` as well, one output folder per
+bag. Cut its first seconds: DVLC keeps only the first image of each bag, and
+the latched image topic hands a new recording the camera's last frame from
+before it started (20261030: bag 2's image showed bag 1's place).
+
+```
+for b in calib_bag calib_bag2 calib_bag3; do
+  python processing/dvlc_pauses.py $W/$b $W/${b}_cut --intervals 2-20 &&
+  mv $W/${b}_cut/pause_00 $W/pauses/pause_$b
+done
+```
+
 ## Merging chosen topics of any bags
 
 ```
