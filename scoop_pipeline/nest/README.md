@@ -25,6 +25,7 @@ cd ~/workspaces && git clone https://github.com/zhangxin-cg/nest-splatting.git
 cd nest-splatting && git checkout 058a3df
 git apply ~/workspaces/Others/scoop_pipeline/nest/nest_lidar.patch
 git apply ~/workspaces/Others/scoop_pipeline/nest/nest_session_color.patch   # on top: one colour response per camera id
+git apply ~/workspaces/Others/scoop_pipeline/nest/nest_blur_loss.patch       # on top of that: blur-matched loss
 git submodule update --init --recursive
 conda env create -f environment.yml        # the conda half succeeds; the pip half fails -- expected
 conda activate nest_splatting
@@ -138,3 +139,22 @@ The surfel rasteriser renders the texture features and is compiled for 3, 8, 16,
 24, 32 or 48 channels (`levels` x `dim`). Any other count prints "Unsupported
 channel count" once per frame and renders nothing, and training runs to the end at
 6 dB. The patched train.py refuses such a yaml at start.
+
+## Motion blur: the blur-matched loss
+
+A fifth of the October photographs are smeared by the robot's own motion
+(sharpness falls with the turning rate: blur_vs_motion.py). Picking the sharpest
+frame of each window does not help, because the blur lasts seconds at a time.
+`nest_blur_loss.patch` (after the colour patch) adds `blur_match.py`: each
+training frame's render is blurred by the frame's own Gaussian sigma before the
+photometric loss, so a smeared frame fixes geometry and low-frequency colour but
+never teaches the texture its smear; the sharp frames supply the detail. The
+sigmas come from the scene's own images:
+
+```bash
+python3 ~/workspaces/Others/scoop_pipeline/datasets/blur_levels.py <scene>     # writes <scene>/blur_sigma.csv
+```
+
+(each frame against the sharpest frame within ten of it, the same view a moment
+apart, so a bare wall is not taken for blur). Switched on by
+`training_cfg.blur_match: true`; train.py prints how many frames it applies to.

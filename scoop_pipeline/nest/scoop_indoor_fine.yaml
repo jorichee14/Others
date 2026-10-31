@@ -8,6 +8,9 @@
 #   image_color: each training image owns a gain and bias, so auto-exposure drift
 #   is absorbed there and not painted into the texture; novel views get the steady
 #   session term only.
+#   blur_match: a fifth of the photographs are motion-smeared (the robot turning);
+#   each such frame's render is blurred to the frame's measured level before the
+#   loss, so it fixes geometry and colour but never teaches the texture its smear.
 #   140k iterations: forty passes over 3462 images, for the finer levels to fill.
 #
 # NeST-Splatting on a LiDAR scene from lod3dgs.py scene, trained the way
@@ -27,6 +30,7 @@ training_cfg:
   reset_until_iter: 0
   session_color: true                   # one learned colour response per camera id (nest_session_color.patch)
   image_color: true                     # and one per training image: exposure flicker stays out of the texture
+  blur_match: true                      # a smeared frame's render is blurred to its level before the loss (nest_blur_loss.patch; needs <scene>/blur_sigma.csv)
   position_lr_max_steps: 140_000
   densification_interval: 100
   ingp_densification_interval: 100
