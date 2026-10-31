@@ -117,3 +117,59 @@ i.e. bytes those methods spend on what the receiver sees anyway; (c)
 detection AP and, separately, occupancy-map error, for shadow filling
 against each at equal airtime. (b) alone is a result: it says how much
 of the field's traffic is provably worthless to its receiver.
+
+## When the map is dynamic
+
+The shadow definition above uses the static map twice: to exclude cells
+the receiver already knows, and to cast occlusions. Both break when
+doors close, furniture moves and people walk. The repair is not a new
+feature; it is replacing a binary exclusion with the scalar it was a
+special case of.
+
+**The scalar.** What communication can change at cell x for receiver j
+is j's uncertainty about x at the moment x matters, a_j(x), given only
+what j will have observed for itself by then:
+
+    w_j(x) = H[ W(x, a_j(x)) | j's own observations up to a_j(x) ].
+
+A static wall in the map: w = 0 (the old exclusion). A cell j will see
+for itself before a_j(x): w = 0 (the old shadow test). A cell no one has
+observed: w = prior entropy. A cell observed τ seconds ago whose content
+changes at rate λ(x): w grows with λ(x)·τ. The shadow is the support of
+w_j, and the schedule fills cells in order of a_j(x) weighted by w_j(x).
+Nothing else in the scheduler changes.
+
+**Where λ(x) comes from.** From the observations the team already has:
+how often the occupancy of x changed between successive observations of
+it, kept as one number per cell by whoever maintains the shared map (the
+twin's change log, or simply a count). Corridors get high λ, walls zero,
+doors in between. It is a statistic of the environment, not of any
+task.
+
+**Timing falls out.** A unit sent now about x is worth, at a_j(x), only
+what survives the gap: w_j(x) − H[W(x, a_j) | W(x, t)]. For a volatile
+cell far in the future that is near zero, so the scheduler defers it;
+for a static or near cell it is the full weight, so it sends now. This
+is just-in-time delivery with no deadline model: the same scalar, read
+at two times.
+
+**Occlusion through a changing map.** Self-coverage C_j is cast through
+the receiver's *current belief* of the map, not the recorded one. Where
+that belief is uncertain (a doorway with high λ), the cast is
+conservative: assume the occluder may be there, so C_j shrinks and the
+shadow grows. The cost of being wrong is a few extra units; the cost of
+the other error is a receiver that was promised a view it never gets.
+
+**The proposition survives unchanged.** It conditions on the receiver's
+own observation of x before any decision depends on x; dynamics make
+that observation more valuable relative to a stale unit, not less. What
+dynamics change is the *weight* and the *timing* inside the shadow,
+which is exactly where the corollary said task- and world-dependence
+would live.
+
+**Moving objects** are the extreme of high λ: a person in a corridor
+cell will not be there at a_j(x). The unit the sender holds for that
+cell is then whatever its pipeline produces, and if that is a box with
+velocity, the receiver can propagate it; the scheduler still does not
+look inside. Whether the representation can be propagated is the
+sender's codec problem and is out of scope, deliberately.
