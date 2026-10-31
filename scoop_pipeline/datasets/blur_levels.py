@@ -37,7 +37,7 @@ def lapvar(g):
     return float(cv2.Laplacian(g, cv2.CV_64F).var())
 
 
-def sigma_to_match(ref, target, lo=0.0, hi=12.0, steps=14):
+def sigma_to_match(ref, target, lo=0.0, hi=16.0, steps=14):
     """The Gaussian sigma (small-image pixels) that takes ref's sharpness down to target."""
     if lapvar(ref) <= target:
         return 0.0
@@ -73,6 +73,12 @@ def main():
     session = [n.split("_")[0] if "_" in n else "" for n in names]
     greys, widths = zip(*(small_grey(p, a.width) for p in paths))
     sharp = np.array([lapvar(g) for g in greys])
+    # a coarse copy as well: at the working size a 4 px smear and a 20 px smear both leave
+    # nothing in the Laplacian, so the fine scale alone stops short on the heavy ones
+    coarse = a.width // 4
+    greys_c = [cv2.resize(g, (coarse, max(1, int(round(g.shape[0] * coarse / g.shape[1])))), interpolation=cv2.INTER_AREA)
+               for g in greys]
+    sharp_c = np.array([lapvar(g) for g in greys_c])
     print(f"{len(paths)} images; sharpness median {np.median(sharp):.1f}, "
           f"10% {np.percentile(sharp, 10):.1f}, 90% {np.percentile(sharp, 90):.1f}", flush=True)
     rows, sigmas = [], []
@@ -84,8 +90,12 @@ def main():
         # the sharpest of 21 frames is above all the others by construction, and a frame a
         # little under it is a different view of the same place, not a smeared one
         level = np.percentile(sharp[cand], 75)
-        s_small = sigma_to_match(greys[r], sharp[i]) if (r != i and sharp[i] < a.ratio * level) else 0.0
-        s_full = s_small * widths[i] / a.width
+        if r != i and sharp[i] < a.ratio * level:
+            s_fine = sigma_to_match(greys[r], sharp[i]) * widths[i] / a.width
+            s_coarse = sigma_to_match(greys_c[r], sharp_c[i]) * widths[i] / coarse
+            s_full = max(s_fine, s_coarse)
+        else:
+            s_full = 0.0
         sigmas.append(s_full)
         rows.append((names[i], f"{sharp[i]:.2f}", names[r], f"{s_full:.3f}"))
     sigmas = np.array(sigmas)
