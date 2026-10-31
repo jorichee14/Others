@@ -93,7 +93,9 @@ def main():
         if r != i and sharp[i] < a.ratio * level:
             s_fine = sigma_to_match(greys[r], sharp[i]) * widths[i] / a.width
             s_coarse = sigma_to_match(greys_c[r], sharp_c[i]) * widths[i] / coarse
-            s_full = max(s_fine, s_coarse)
+            # the fine scale is exact up to a few px and then stops short; the coarse one reads
+            # the heavy smears right and the light ones a px or two high: each where it is good
+            s_full = s_coarse if s_coarse > 6.0 else s_fine
         else:
             s_full = 0.0
         sigmas.append(s_full)
