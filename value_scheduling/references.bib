@@ -88,3 +88,23 @@
   author={Heusse, M. and Rousseau, F. and Berger-Sabbatel, G. and Duda, A.},
   title={Performance Anomaly of 802.11b},
   booktitle={Proc. IEEE INFOCOM}, pages={836--843}, year={2003}}
+
+% --- read in full (PDFs in refs/) -----------------------------------------
+@misc{wang2026jigsawcomm,
+  author={Wang, C. and Li, Z. and Li, M. F. and Wen, W.},
+  title={{JigsawComm}: Joint Semantic Feature Encoding and Transmission for Communication-Efficient Cooperative Perception},
+  year={2026}, note={arXiv:2511.17843v2 (13 Mar 2026). Sparse encoder (L1 + learnable threshold kappa), FUE 1x1 conv utility u_i^l, cell utility U^l = sum m u - sum_{j!=i} m_i m_j min(u_i,u_j)/2, top-1 agent per cell then greedy by utility/cost to budget B; identical decision at every agent (V2I or V2V); meta utility maps 0.03 KB/agent; O(1) payload in N; OPV2V 0.92/0.82 at 44 KB total; Top-2 worse than Top-1 under max/attention fusion ("more is worse"); delay tested as feature staleness 0-500 ms; packet drop with ego fallback; cost uniform bytes per cell, no airtime, no deadline; code github.com/WiSeR-Lab/JigsawComm}}
+@misc{bansal2026r2t,
+  author={Bansal, A. and Gangwani, I.},
+  title={Reason-to-Transmit: Deliberative Adaptive Communication for Cooperative Perception},
+  year={2026}, note={arXiv:2603.20308 (19 Mar 2026), Synthetic Sciences. 2-layer transformer (0.26M) over 64 region tokens + agent context + neighbor-state token (positions/orientations, to estimate receiver visibility) + budget token; synthetic 64x64 BEV, N=4, K=20 objects, 128 B/region; oracle = ground-truth object content. Findings: any communication +58% AP over none; all selective policies within ~0.5 AP at 10% budget; R2T leads only under high occlusion (0.205 = oracle); "the fusion module matters more than the selection policy"}}
+@misc{ma2026unseen,
+  author={Ma, Y. and Zhao, Z. and Fang, Z. and An, H. and Chen, X. and Fang, Y.},
+  title={Update the Unseen Only: Minimizing {AoI} for Collaborative Perception through Online Learning},
+  year={2026}, note={arXiv:2607.20967 (23 Jul 2026), CityU / HKU. BS downlink broadcast of K of B areas per slot; per-user per-area AoI resets to 0 when the user senses the area locally or loses interest; INAR(1) model of the interested-but-unobserving population with persistence rho_b; PO-RMAB; mean-field lower bound; LocMW index W_b = beta rho A / (1 - rho + rho eta); sublinear excess AoI O(K L sqrt(T log BT)); pNEUMA and FLUID trajectories, V2X-Sim with PointPillars, 400 grids x 1 KB; up to 31.6% lower AoI, +16.3% mAP@70 vs traditional max-demand}}
+% The PDF supplied as "AutoCast" is AutoCast++ (Yan, Seraj, He, Meng, Sylvain, ICLR 2024,
+% arXiv:2310.01880), an LLM event-forecasting paper. NOT Qiu et al. MobiSys 2022.
+@inproceedings{qiu2022autocast,
+  author={Qiu, H. and Huang, P.-H. and Asavisanu, N. and Liu, X. and Psounis, K. and Govindan, R.},
+  title={{AutoCast}: Scalable Infrastructure-less Cooperative Perception for Distributed Collaborative Driving},
+  booktitle={Proc. ACM MobiSys}, year={2022}, doi={10.1145/3498361.3538925}, note={still [S]: wrong PDF supplied; read before citing}}

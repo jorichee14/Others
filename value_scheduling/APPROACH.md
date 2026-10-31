@@ -118,6 +118,19 @@ value estimation, to allocation, or to the channel.
   airtime, the receiver's future is not where the value is and the idea
   reduces to AP-side scheduling of DR patches (still a result, a smaller
   one).
+- Reason-to-Transmit's finding, read in full: on its synthetic
+  environment all selection policies sit within ~0.5 AP and the oracle
+  barely leads, so "what to send" can matter far less than the fusion
+  operator. The approach must be shown where receiver asymmetry is high
+  (occlusion, distance, blind corners) and on a channel that does not
+  deliver everything, with fusion held fixed and the oracle gap reported
+  first; where the oracle gap is small, so is everything built on it.
+- JigsawComm, read in full, already removes cross-agent redundancy at
+  feature level with a top-1-per-cell rule that is identical at every
+  agent and O(1) in N. The AP is not new as a place to run such a rule;
+  what it adds is per-sender airtime and per-receiver geometry over a
+  horizon. The redundancy discount here must be per receiver and over
+  time, or it is JigsawComm's.
 - If the learned V_j head's AUC against the oracle is far below DR's
   0.785 for β, the quantity is right but not estimable from the inputs
   available online; the oracle gap says by how much.

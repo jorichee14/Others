@@ -528,3 +528,75 @@ Wang et al. ICML 2020; Rocha et al. 2005; Aragues et al.; Commerge
 (2026); CQLite; Howard 1966; Krause and Guestrin. All [S] except where
 marked, and all to be added with checked records before any of this is
 cited.
+
+---
+
+## Corrections after reading JigsawComm, Reason-to-Transmit and Update the Unseen Only in full (31 Oct 2026)
+
+The AutoCast PDF supplied was AutoCast++ (Yan et al., ICLR 2024, LLM
+event forecasting); Qiu et al. 2022 stays [S]. The other three are now
+[F]. What changes:
+
+**JigsawComm (Wang, Li, Li, Wen; arXiv 2511.17843v2).** The review's
+description holds, with four sharpenings that matter for the gaps.
+(a) The scheduler's decision is a deterministic function of the
+exchanged meta utility maps and is *identical at every agent*, so it
+runs equally at a center or at each vehicle; the locus is not a
+differentiator against it, which weakens G5 as stated: the AP is not
+new as a place to run a top-1 rule, only as the place that holds
+per-sender airtime and per-receiver geometry. (b) The utility
+u_i^l is a 1×1 convolution of agent i's own feature, with no receiver
+input; the cross-agent term min(u_i, u_j) is symmetric. G1 and G4
+stand. (c) Cost is uniform bytes per cell, the budget B = BW / frame
+rate is deterministic, and delay is tested only as feature staleness
+(0–500 ms) with everything delivered; G3 and G8 stand. (d) Their
+"more is worse" result, Top-2 per cell below Top-1 under max and
+attention fusion, is evidence *against* the complementarity half of G4
+for detection: with today's fusion operators a second view of a cell
+dilutes rather than reinforces. G4 is therefore restated: redundancy
+over time and per receiver (a cell is redundant for j only until j
+sees it) stands; complementary viewpoints as positive value holds for
+mapping and for fusion operators yet to be built, and JigsawComm's
+finding is the citation for why. (e) JigsawComm occupies feature-level
+cross-agent redundancy with O(1) payload in N (Nov 2025), earlier than
+DR's "future work" sentence (Sep 2026); the value_scheduling plan's
+"redundancy discount at the AP" is JigsawComm's rule unless it is
+per-receiver and over a horizon.
+
+**Reason-to-Transmit (Bansal, Gangwani; arXiv 2603.20308).** Two
+corrections. (a) R2T *does* condition on the receiver: a neighbor-state
+token (positions, orientations) lets the transformer estimate which
+regions the receiver likely sees now; so E1 at horizon zero exists in
+learned form, in a synthetic environment. (b) Its central finding is a
+threat to every selection paper including ours: on its environment, any
+communication gives +58 % AP over none, and all nine selection policies
+land within ~0.5 AP of each other at a 10 % budget, with the ground-
+truth oracle only marginally above the learned ones; "the fusion module
+matters more than the selection policy". R2T leads only under high
+occlusion, where receiver information asymmetry is largest. The honest
+reading: the gain from choosing *what* to send is bounded above by the
+oracle gap, which can be small when agents' views overlap heavily; the
+gain from value-driven scheduling must therefore be shown where
+asymmetry is high (occlusion, distance, indoor corners) and on a channel
+that does not deliver everything, and reported against the oracle. G7
+is strengthened by this, G1's expected effect size is tempered.
+
+**Update the Unseen Only (Ma, Zhao, Fang, An, Chen, Fang; arXiv
+2607.20967).** One correction and one confirmation. (a) It does predict
+future non-visibility, statistically: the interested-but-unobserving
+population per area follows an INAR(1) process with persistence ρ_b,
+and the LocMW index discounts an area by ρ̂_b, so an area whose users
+will soon see it themselves is scheduled less. That is a population-
+level, non-geometric version of G1's "will the receiver see it", and
+the review's "visibility form" understated it. (b) Everything else
+holds: downlink broadcast from one source, areas of 1 KB as atomic
+units, age as the objective with mAP reported empirically, allocated
+K-of-B slots, no airtime, no per-receiver value. The approach's
+per-receiver, geometric, task-valued counterfactual over a horizon is
+the deterministic, uplink, feature-level counterpart.
+
+**Net effect on the gaps.** G1, G2, G3, G6, G8, G9, G10 unchanged.
+G4 restated (time and receiver, not viewpoint complementarity for
+detection). G5 narrowed: the AP's novelty is holding airtime and
+geometry, not being a center. G7 strengthened: R2T shows the oracle gap
+can be near zero, so no claim about selection is meaningful without it.
