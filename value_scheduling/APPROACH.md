@@ -42,8 +42,9 @@ The deadline of u for j is d_j(u) = τ_j(x_u), not the frame.
 
 **Why this is a change in kind.** Every feature-level method prices u by
 a property of the sender's data (confidence, utility, information); the
-object-level relevance line prices by a binary "will j see it" with no
-task loss. V_j(u) is a property of the triple (unit, receiver, horizon)
+object-level line, AutoCast (read in full), prices an object to j by
+(1 − visible to j now) × (can collide with j's planned path), with no
+task loss and visibility at the present pose only. V_j(u) is a property of the triple (unit, receiver, horizon)
 with the receiver's own future as the baseline. The number being
 estimated is different, its oracle is different, and its supervision is
 different.

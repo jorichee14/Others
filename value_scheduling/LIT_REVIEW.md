@@ -600,3 +600,47 @@ G4 restated (time and receiver, not viewpoint complementarity for
 detection). G5 narrowed: the AP's novelty is holding airtime and
 geometry, not being a center. G7 strengthened: R2T shows the oracle gap
 can be near zero, so no claim about selection is meaningful without it.
+
+## Corrections after reading AutoCast (Qiu et al., MobiSys 2022) in full
+
+AutoCast holds more of the approach than the summaries showed, and
+three gaps must be restated against it.
+
+- **Value.** The reward of object k from vehicle i to vehicle j is
+  y = (1 − v_(i,k),j) · r_(i,k),j: v is visibility of k to j by ray
+  tracing from j's *current* pose, r is relevance by whether k's
+  extrapolated trajectory can collide with j's planned trajectory
+  (boolean or 1/time-to-collision). So AutoCast already has a
+  per-(unit, receiver) value with a *future* relevance term and a
+  *current* visibility term. **G1 restated:** what is missing is future
+  visibility (j will see k itself before it matters) and a task loss in
+  place of a collision indicator; the object-level, planner-defined
+  value exists.
+- **Time.** Decisions are per 100 ms interval with a starvation term
+  that raises the weight of objects not sent for m intervals; that is a
+  crude deadline. **G2 stands** but with AutoCast as the nearest prior:
+  it has urgency through 1/TTC, not a per-unit deadline derived from the
+  receiver's decision time, and the starvation term is age.
+- **Resource.** Frame time is S/B with a uniform bandwidth B on a
+  TDMA channel, and the greedy ranks by reward per byte. **G3
+  restated:** "airtime appears nowhere" was wrong; AutoCast charges
+  channel time at one rate. What is absent is per-sender rate (MCS),
+  contention, and the packing overhead that dominates at kilobyte
+  units.
+- **Locus.** Every vehicle computes the identical schedule from the
+  common control messages; like JigsawComm, the decision is distributed
+  by replication. **G5 narrowed further:** no prior work needs a center;
+  the AP's role is only that it holds per-sender rates and the
+  contention state that replicated computation cannot see.
+- **Units and task.** Object point clouds, no detector in the loop, no
+  oracle against a task loss, no receiver memory. G6, G7, G9 stand.
+- **Evaluation.** CARLA with 5–40 vehicles, a modeled LTE-Direct
+  channel with 3GPP loss, and a three-radio DSRC replay of the schedule.
+  Closer to G8's requirement than any CP paper since, and still a
+  modeled channel.
+
+Net: the approach's novelty over AutoCast is exactly three things:
+feature units with a task-loss value, future (not current) receiver
+visibility over a horizon, and airtime priced per sender under
+contention. The object-level, current-visibility, uniform-rate version
+is AutoCast's and must be cited as the ancestor of each.
