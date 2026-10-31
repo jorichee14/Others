@@ -1,146 +1,119 @@
-# The approach: need-before-see scheduling
+# Shadow scheduling
 
-One sentence: **a message unit is worth, to a given receiver, the task
-loss it removes at the moment that receiver's decision depends on it,
-beyond what the receiver will have perceived by itself by then; the
-access point computes that value for every (unit, receiver) pair from
-the poses and plans it already holds, prices it in airtime, and grants
-the units with the highest value per airtime in the one round the uplink
-scheduler already runs.**
+**The whole method in one sentence.** Each receiver's *shadow* is the set
+of space-time cells it will not observe for itself before its path
+reaches them; the team's airtime goes to filling shadows, nearest-
+approach first, one sender per cell, and nothing else is ever sent.
 
-This is not a plan. It is the mechanism, the quantities it introduces,
-why it is a change in kind, and what would show it wrong.
+That is the method. There is no value head, no task loss, no learned
+module, no per-unit metadata, no deadline model, no redundancy model and
+no priority ladder, because each of those is what the shadow already is.
 
----
+## The quantity
 
-## 1. The quantity: value as the receiver's future counterfactual
+Receiver j has a pose, a planned (robot) or predicted (vehicle) path
+over a horizon H, and a sensor model (range, field of view). From these
+and the shared map, ray-cast forward: the set of cells j will observe
+itself in [t, t + H] is its **self-coverage** C_j. Its **shadow** is
 
-Let unit u (a DR fine patch, a box with velocity, a centroid) be held by
-sender i at time t. Let receiver j have a planned or predicted motion
-over a horizon H, a decision time τ_j(x) for each location x (the time
-its path makes x decision-relevant: entry into its collision cone or
-planned corridor, minus reaction time), and its own observations O_j(t′)
-for t′ ∈ [t, t + H] (in a dataset these are its future frames; online
-they are predicted by ray-casting its planned path against the map and
-the predicted motion of known objects).
+    S_j = { (x, t′) : x within j's planning envelope at t′,  x ∉ C_j(t′),  x not static-and-already-mapped }.
 
-The value of u to j is
+Each shadow cell carries one number: the time a_j(x) at which j's path
+first makes x matter (enters its stopping distance or planning
+corridor). Cells j will see for itself before a_j(x) are not in the
+shadow by construction. Cells it never approaches are not in it either.
 
-    V_j(u) = E[ ℓ_j( τ_j ; O_j[t, τ_j] )  −  ℓ_j( τ_j ; O_j[t, τ_j] ∪ {u at t} ) ],
+Everything the earlier drafts listed as separate features is a face of
+this one set:
 
-the drop in j's decision-time task loss from having u now, measured
-against the baseline of everything j will have seen on its own by τ_j.
-Three cases make the behaviour clear:
+| Earlier feature | What it is here |
+|---|---|
+| "value conditional on the receiver" | x ∈ S_j or not; binary, geometric |
+| "deadline from the receiver's decision" | a_j(x), the ordering key |
+| "redundancy across senders" | a shadow cell is filled once; a second sender's observation of it has no shadow left to fill |
+| "receiver memory as side information" | static mapped cells are excluded from the shadow |
+| "future visibility, not current" | C_j is cast along the path, not from the current pose |
+| "task value" | none; see the proposition |
 
-- j will see the content of u itself before τ_j: V_j(u) ≈ 0, whatever
-  the sender's confidence;
-- j will not see it and τ_j is near: V_j(u) is the full detection gain,
-  with deadline τ_j;
-- τ_j is beyond H (j never goes there): V_j(u) = 0.
+## The scheduler
 
-The deadline of u for j is d_j(u) = τ_j(x_u), not the frame.
+At each interval the AP (or any node that holds everyone's path and
+the map; the schedule is a deterministic function of shared state) does:
 
-**Why this is a change in kind.** Every feature-level method prices u by
-a property of the sender's data (confidence, utility, information); the
-object-level line, AutoCast (read in full), prices an object to j by
-(1 − visible to j now) × (can collide with j's planned path), with no
-task loss and visibility at the present pose only. V_j(u) is a property of the triple (unit, receiver, horizon)
-with the receiver's own future as the baseline. The number being
-estimated is different, its oracle is different, and its supervision is
-different.
+1. cast C_j and S_j for every receiver j;
+2. for every shadow cell, find the senders that observe it now (each
+   sender reports a bitmap of observed cells, a few hundred bytes);
+3. sort (cell, receiver) pairs by a_j(x) ascending;
+4. walk the list, assigning each cell to the sender with the lowest
+   airtime per cell (its rate, its packing), until the interval's
+   airtime is spent; a cell already assigned for one receiver serves
+   every receiver that shares it (multicast on Wi-Fi is one frame).
 
-## 2. The oracle, and the training target it gives
+What is transmitted for a cell is whatever representation the sender
+holds for it, in equal-size units: a feature patch, a voxel block, a
+point tile, a box. The scheduler does not look inside. That is what
+makes it task-agnostic: the same schedule feeds a detector, a mapper, a
+tracker or a planner, because each of them depends on the world only in
+cells the receiver cannot see for itself.
 
-On any sequential dataset the counterfactual is computable: fuse j's
-own frames up to τ_j with and without u, score ℓ_j at τ_j. This is the
-clairvoyant bound for "what to send to j" and it has never been
-reported for feature units (DR's counterfactual is over the coarse layer
-at time t; AutoCast's is object visibility). It also gives a supervised
-target: train a value head on (sender features, receiver pose and plan,
-horizon) → V_j(u), the way DR trains β on counterfactual gain over
-coarse. The head learns "will j see this, and does it matter when", not
-"is this patch informative".
+## The proposition that makes it legitimate
 
-## 3. The locus and the resource: the AP, in airtime
+For any receiver task whose loss depends on the world state only
+through the receiver's belief, and any unit about cell x that j will
+observe itself before a_j(x), the expected loss reduction from receiving
+the unit is zero. Hence the optimal schedule can be restricted to shadow
+cells without loss, for every task at once.
 
-Only a center has, at every trigger interval, every agent's pose and
-plan (from the pose flow), every sender's reported ranking (DR's β list,
-which rides on the buffer status report), and every sender's PHY rate.
-The AP therefore computes V_j(u) for all pairs, discounts a unit's value
-by what it has already granted this interval (a cell granted from one
-sender has value ≈ 0 from another *for the same receiver*; for a
-different receiver it may not), prices u at airtime b_u / R_i plus
-packing overhead, and runs a cost-ratio greedy under the airtime left
-after the protected base-layer window, subject to each unit's deadline
-d_j(u). Monotone submodular surrogate, knapsack budget, deadline
-feasibility as EDF: greedy with a known bound, microseconds for tens of
-agents. One round: the value report rides on the BSR, the grant on the
-trigger frame. No request round, no utility-map exchange.
+Proof sketch: by a_j(x) the receiver's belief about x conditions on its
+own observation of x; a unit received earlier about x changes the belief
+only during [arrival, self-observation), when by definition no decision
+depends on x. ∎
 
-Redundancy (G4), granularity (G6) and the receiver's memory (G9) fall
-out of the same quantity: redundancy is V_j(u) after a grant to the same
-j; granularity is a centroid and a patch of the same object competing
-at their own V_j and airtime; memory is the horizon-zero case of O_j.
+The converse is not claimed: a shadow cell may be worthless to a given
+task (an empty corridor). The method fills it anyway, in approach order,
+and the cost of that is the only thing a task-specific method could win
+back. Measuring that cost is the experiment.
 
-## 4. The metric that goes with it
+## Why it is new and why it is not a merge
 
-Frame-level AP cannot see V_j: at the frame boundary everything matters
-now. The task metric must be scored at decision time:
+- AutoCast prices an object to j by *current* visibility; Update the
+  Unseen Only by the statistical persistence of unobservability;
+  JigsawComm assigns one sender per cell by learned utility. None of
+  them has the receiver's own future observations as the demand signal.
+  Casting the future shadow is a single operation that replaces all
+  three of their mechanisms, and it is possible because paths are
+  planned or predicted and the map is shared, which AutoCast had and
+  did not use for visibility.
+- The approach-time ordering is a deadline derived from motion, not
+  from a frame clock or an age counter; no scheduler in the literature
+  has it.
+- The claim is a sufficiency result (the shadow is a task-agnostic
+  sufficient demand), not a better accuracy number. The paper's
+  evidence is how little is lost against task-specific oracles across
+  tasks, and how much is saved in airtime.
 
-    need-weighted timely detection = share of (object, receiver) pairs with τ_j < ∞
-    that the receiver's fused perception has detected before τ_j,
-    weighted by the loss of missing them,
+## What would kill it
 
-plus the airtime used and the deadline misses of the time-critical
-flows. AutoCast's "visibility into safety-critical objects" is the
-object-level ancestor of this metric. Reported against the clairvoyant
-bound of section 2 as a regret, so that a shortfall is attributed to
-value estimation, to allocation, or to the channel.
+- If, on sequential data with a detector and with a mapper, a task-
+  specific oracle beats shadow filling by a large margin at equal
+  airtime on *both* tasks, the shadow is too coarse a demand and the
+  method is only a cheap baseline.
+- If path prediction for vehicles is poor beyond 1 s, the shadow is
+  wrong where it matters; robots with planned paths are the clean
+  case, vehicles need the horizon chosen where prediction holds.
+- If most of the shadow is empty space, airtime is spent certifying
+  nothing. The fix is not a feature: a sender whose observation of a
+  shadow cell is "free" sends one bit, which is the free-space
+  certificate, and it is the same mechanism with a one-bit unit.
 
-## 5. Why it is cutting edge and not a merge
+## The test that settles it first
 
-- It introduces a quantity (V_j over the receiver's future), an oracle
-  (the receiver-future counterfactual), a training target, a deadline
-  (τ_j from decisions), a cost (airtime at the AP) and a metric
-  (need-weighted timely detection with regret to clairvoyant) that do
-  not exist in the literature, each of which can be computed on today's
-  datasets.
-- It makes three open problems the same problem: DR's cross-agent
-  redundancy, AutoCast's object-only relevance, and the AoI line's
-  content-blind timeliness are all V_j(u) with different restrictions.
-- It is deployable in the control loop that exists: 802.11ax uplink
-  scheduling (trigger frames, buffer status reports), with grants as the
-  emulation on APs that expose no scheduler.
-
-## 6. What would show it wrong, and what it costs
-
-- If, on OPV2V or V2V4Real, the receiver-future counterfactual oracle
-  does not beat the sender-side oracle by a clear margin at equal
-  airtime, the receiver's future is not where the value is and the idea
-  reduces to AP-side scheduling of DR patches (still a result, a smaller
-  one).
-- Reason-to-Transmit's finding, read in full: on its synthetic
-  environment all selection policies sit within ~0.5 AP and the oracle
-  barely leads, so "what to send" can matter far less than the fusion
-  operator. The approach must be shown where receiver asymmetry is high
-  (occlusion, distance, blind corners) and on a channel that does not
-  deliver everything, with fusion held fixed and the oracle gap reported
-  first; where the oracle gap is small, so is everything built on it.
-- JigsawComm, read in full, already removes cross-agent redundancy at
-  feature level with a top-1-per-cell rule that is identical at every
-  agent and O(1) in N. The AP is not new as a place to run such a rule;
-  what it adds is per-sender airtime and per-receiver geometry over a
-  horizon. The redundancy discount here must be per receiver and over
-  time, or it is JigsawComm's.
-- If the learned V_j head's AUC against the oracle is far below DR's
-  0.785 for β, the quantity is right but not estimable from the inputs
-  available online; the oracle gap says by how much.
-- Vehicles need predicted trajectories for τ_j and O_j; robots have
-  planned paths. The error of that prediction enters V_j directly, and
-  the horizon H must be chosen where prediction is still good (1–2 s on
-  roads, longer in corridors).
-- The metric is unfamiliar; the paper must report frame AP alongside it
-  and show where the two disagree.
-- Compute: the counterfactual oracle is one fusion pass per (unit,
-  receiver, horizon) on frozen checkpoints; feasible offline at a few
-  hundred frames, not for every frame of every sweep.
+On OPV2V (future frames give the true self-coverage): for each receiver
+and frame, compute the true shadow from the dataset and the predicted
+shadow from a constant-velocity path. Report (a) shadow prediction
+IoU over horizons 0.5, 1, 2 s; (b) the fraction of transmitted units
+in DR, JigsawComm and Where2comm that fall *outside* the true shadow,
+i.e. bytes those methods spend on what the receiver sees anyway; (c)
+detection AP and, separately, occupancy-map error, for shadow filling
+against each at equal airtime. (b) alone is a result: it says how much
+of the field's traffic is provably worthless to its receiver.
