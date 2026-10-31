@@ -4,7 +4,7 @@ LOD-3DGS scene (LetsGo, github.com/zhaofuq/LOD-3DGS; Cui et al., ACM TOG 43(6),
 2024): COLMAP layout with known poses, no structure from motion.
 
     python scoop_pipeline/datasets/lod3dgs.py scene <replica dataset> --map <map .pcd/.ply>
-        [<out scene>] [--every 1] [--voxel 0.02] [--poisson-depth 0] [--trim 0.10]
+        [<out scene>] [--every 1] [--pick stride|sharpest] [--voxel 0.02] [--poisson-depth 0] [--trim 0.10]
         [--spacing 0.04] [--color-views 300] [--jpeg-quality 95]
     python scoop_pipeline/datasets/lod3dgs.py mesh <map .pcd/.ply> --traj <TUM of the map>
         [<out mesh .ply>] [--ceil auto|Z] [--ceil-margin 0.10] [--voxel 0.02]
@@ -104,6 +104,44 @@ def read_replica(path):
         raise ConvertError(f"{path}: {len(rgb)} colour, {len(dep)} depth images and "
                            f"{len(T)} poses")
     return cam, T, rgb, dep
+
+
+def frame_sharpness(path, width=320):
+    """How much fine detail a photograph holds: the variance of its Laplacian,
+    on a small grey copy (the same number for every frame, fast to take).
+    Low on a frame the camera smeared because the robot was moving or turning
+    while the shutter was open."""
+    bgr = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if bgr is None:
+        raise ConvertError(f"cannot read {path}")
+    h = max(1, int(round(bgr.shape[0] * width / bgr.shape[1])))
+    small = cv2.resize(bgr, (width, h), interpolation=cv2.INTER_AREA)
+    return float(cv2.Laplacian(small, cv2.CV_64F).var())
+
+
+def sharpest_frames(rgb_all, every, log_=None):
+    """One frame per window of `every`: the sharpest, not the first.
+
+    A fixed stride keeps whatever frame falls on it, blurred or not, and the
+    texture is then fitted to smeared photographs. Picking the sharpest of
+    each window keeps the same count and spacing, and leaves out the turns
+    and the fast stretches wherever a steadier neighbour exists.
+    """
+    every = max(1, int(every))
+    sharp = np.array([frame_sharpness(p) for p in rgb_all])
+    keep, chosen = [], []
+    for start in range(0, len(rgb_all), every):
+        window = np.arange(start, min(start + every, len(rgb_all)))
+        best = window[int(np.argmax(sharp[window]))]
+        keep.append(best)
+        chosen.append(sharp[best])
+    stride = sharp[::every]
+    if log_:
+        log_(f"  sharpness (Laplacian variance): all frames median {np.median(sharp):.1f}, "
+             f"every {every}th median {np.median(stride):.1f}, sharpest-of-{every} median {np.median(chosen):.1f}; "
+             f"frames under half the median: {100 * np.mean(sharp < 0.5 * np.median(sharp)):.1f}% of all, "
+             f"{100 * np.mean(np.array(chosen) < 0.5 * np.median(sharp)):.1f}% of those kept")
+    return np.array(keep), sharp
 
 
 def undistort_maps(cam, dist=None, model=None):
@@ -3085,7 +3123,8 @@ def default_out(dataset):
 
 def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0,
             trim=0.10, spacing=0.04, color_views=300, jpeg_quality=95, mesh_path=None,
-            lod_min=10000, dist=None, dist_model=None, bag=None, info=None, transform=None):
+            lod_min=10000, dist=None, dist_model=None, bag=None, info=None, transform=None,
+            pick="stride"):
     """The scene LOD-3DGS trains from, of one replica export, or of several
     (a list: each robot's or session's), each with its own camera
     (cameras.txt), its frames named c<k>_frame... from the second on; bag
@@ -3125,12 +3164,15 @@ def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0
             log.info(f"  the colour images undistorted ({dm_ or cam.get('distortion_model')} "
                      f"[{', '.join(f'{v:.4g}' for v in (d_ if d_ is not None else cam['dist']))}]): pinhole, "
                      "as the depth is and LOD-3DGS assumes")
-        keep = np.arange(0, len(T_all), max(1, int(every)))
+        if pick == "sharpest":
+            keep, _ = sharpest_frames(rgb_all, every, log.info)
+        else:
+            keep = np.arange(0, len(T_all), max(1, int(every)))
         Wc, Hc, ox, oy = centred_camera(cam)
         fx, fy = cam["fx"], cam["fy"]
         Kc = (fx, fy, (Wc - 1) / 2.0, (Hc - 1) / 2.0)
         scale = cam["png_depth_scale"]
-        log.info(f"{ds}: {len(T_all)} frames, {len(keep)} kept (every {every}); "
+        log.info(f"{ds}: {len(T_all)} frames, {len(keep)} kept ({'sharpest of every' if pick == 'sharpest' else 'every'} {every}); "
                  f"{int(cam['image_width'])}x{int(cam['image_height'])} -> {Wc}x{Hc} centred "
                  f"on ({cam['cx']:.2f}, {cam['cy']:.2f})" + (f"; camera {k + 1}" if len(datasets) > 1 else ""))
         cam_lines.append(f"{k + 1} PINHOLE {Wc} {Hc} {fx:.6f} {fy:.6f} {Kc[2]:.6f} {Kc[3]:.6f}\n")
@@ -3204,7 +3246,7 @@ def convert(dataset, map_path, out=None, *, every=1, voxel=0.02, poisson_depth=0
 
     report = (
         "".join(f"dataset             : {os.path.abspath(p_['dataset'])}\n"
-                f"frames              : {p_['frames']} of {p_['of']} (every {every})\n"
+                f"frames              : {p_['frames']} of {p_['of']} ({'sharpest of every' if pick == 'sharpest' else 'every'} {every})\n"
                 f"camera              : PINHOLE {p_['W']}x{p_['H']} fx={p_['fx']:.3f} fy={p_['fy']:.3f}, centred "
                 f"(input {int(p_['cam']['image_width'])}x{int(p_['cam']['image_height'])}, "
                 f"cx={p_['cam']['cx']:.3f} cy={p_['cam']['cy']:.3f})"
@@ -3254,6 +3296,8 @@ def main():
     sc.add_argument("--out", dest="out_opt", default=None, help="the scene folder")
     sc.add_argument("--map", required=True, help="the map the export's depth came from")
     sc.add_argument("--every", type=int, default=1, help="keep every Nth frame")
+    sc.add_argument("--pick", choices=["stride", "sharpest"], default="stride",
+                    help="which frame of each window of N: the first (stride) or the sharpest")
     meshing(sc)
     sc.add_argument("--spacing", type=float, default=0.04, help="starting point spacing (m)")
     sc.add_argument("--color-views", type=int, default=300,
@@ -3513,7 +3557,8 @@ def main():
                     poisson_depth=a.poisson_depth, trim=a.trim, spacing=a.spacing,
                     color_views=a.color_views, jpeg_quality=a.jpeg_quality,
                     mesh_path=a.mesh, lod_min=a.lod_min, bag=a.bag, info=a.info, dist_model=a.dist_model,
-                    dist=[float(v) for v in a.dist.split(",")] if a.dist else None, transform=a.transform)
+                    dist=[float(v) for v in a.dist.split(",")] if a.dist else None, transform=a.transform,
+                    pick=a.pick)
         elif a.cmd == "align":
             align_maps(a.src, a.dst, a.out, voxel=a.voxel,
                        init=[float(v) for v in a.init.split(",")] if a.init else None)
