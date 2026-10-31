@@ -53,12 +53,22 @@ def main():
     ap.add_argument("scene")
     ap.add_argument("--window", type=int, default=10, help="frames either side to take the reference from")
     ap.add_argument("--width", type=int, default=424, help="working width (px) for the measure")
+    ap.add_argument("--ratio", type=float, default=0.5,
+                    help="a frame counts as blurred under this fraction of its neighbourhood's sharp level")
     a = ap.parse_args()
     scene = os.path.expanduser(a.scene)
-    paths = sorted(glob.glob(os.path.join(scene, "images", "*.jpg")) + glob.glob(os.path.join(scene, "images", "*.png")))
+    found = sorted(glob.glob(os.path.join(scene, "images", "*.jpg")) + glob.glob(os.path.join(scene, "images", "*.png")))
+    by_name = {}                                   # one file per frame name; the .jpg is the training image
+    for p in found:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        if stem not in by_name or p.lower().endswith(".jpg"):
+            by_name[stem] = p
+    paths = [by_name[n] for n in sorted(by_name)]
     if not paths:
         raise SystemExit(f"{scene}/images: no images")
-    names = [os.path.splitext(os.path.basename(p))[0] for p in paths]
+    if len(found) != len(paths):
+        print(f"{len(found)} files, {len(paths)} frames (a .jpg and a .png of the same name count once)")
+    names = sorted(by_name)
     # frames of one session are consecutive by name; the reference is searched within the session only
     session = [n.split("_")[0] if "_" in n else "" for n in names]
     greys, widths = zip(*(small_grey(p, a.width) for p in paths))
@@ -70,7 +80,11 @@ def main():
         lo, hi = max(0, i - a.window), min(len(paths), i + a.window + 1)
         cand = [j for j in range(lo, hi) if session[j] == session[i]]
         r = max(cand, key=lambda j: sharp[j])
-        s_small = sigma_to_match(greys[r], sharp[i]) if r != i else 0.0
+        # blurred only when well under the neighbourhood's sharp level (its upper quartile):
+        # the sharpest of 21 frames is above all the others by construction, and a frame a
+        # little under it is a different view of the same place, not a smeared one
+        level = np.percentile(sharp[cand], 75)
+        s_small = sigma_to_match(greys[r], sharp[i]) if (r != i and sharp[i] < a.ratio * level) else 0.0
         s_full = s_small * widths[i] / a.width
         sigmas.append(s_full)
         rows.append((names[i], f"{sharp[i]:.2f}", names[r], f"{s_full:.3f}"))
@@ -80,9 +94,11 @@ def main():
         w = csv.writer(fh)
         w.writerow(["name", "sharpness", "reference", "sigma_px"])
         w.writerows(rows)
-    print(f"blur sigma (full-res px): median {np.median(sigmas):.2f}, 75% {np.percentile(sigmas, 75):.2f}, "
-          f"90% {np.percentile(sigmas, 90):.2f}, max {sigmas.max():.2f}; "
-          f"frames over 1 px: {100 * np.mean(sigmas > 1):.1f}%, over 2 px: {100 * np.mean(sigmas > 2):.1f}%")
+    flagged = sigmas > 0
+    print(f"blurred frames (under {a.ratio:g} of their neighbourhood's sharp level): {int(flagged.sum())} of {len(sigmas)} "
+          f"({100 * flagged.mean():.1f}%); their sigma (full-res px): median {np.median(sigmas[flagged]) if flagged.any() else 0:.2f}, "
+          f"90% {np.percentile(sigmas[flagged], 90) if flagged.any() else 0:.2f}, max {sigmas.max():.2f}; "
+          f"over 2 px: {100 * np.mean(sigmas > 2):.1f}% of all frames")
     print(f"wrote {out}")
 
 
