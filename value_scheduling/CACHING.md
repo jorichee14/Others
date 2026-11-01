@@ -22,7 +22,17 @@ keyframes update the twin; the twin invalidates tiles. The channel
 between tiers is the contended Wi-Fi link; the uplink is CSMA among
 robots, the downlink is owned by the AP.
 
-## Work package A. Known-future prefetch and eviction on the robot
+## Correction (1 Nov): the static map is preloaded, not cached
+
+Site 1's reference map fits on every node (a few hundred MB as TSDF,
+a few GB as splat tiles; 16 GB and NVMe on the Orin NX, the SD card on
+a Pi). Caching static tiles would solve a problem the rig does not
+have. Every node preloads the static map and holds a version number;
+the cache is the *dynamic layer only*: changes since mapping and other
+agents' observations, which expire. Work package A is deferred to the
+multi-site case where capacity is real; B and C are the project.
+
+## Work package A (deferred). Known-future prefetch and eviction on the robot
 
 The robot's planned path gives its future access sequence to tiles. A
 cache whose future accesses are known can run Belady's MIN for
