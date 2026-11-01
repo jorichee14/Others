@@ -292,6 +292,7 @@ optical axis, `roll` its in-plane rotation and `pitch`, `yaw` its tilt about the
 | `calibrate_extrinsics.py` | all cameras in the room frame (bundle adjustment with floor tags), test on held-out events |
 | `evaluate.py` | re-score a stored calibration on test sets or on a new recording, no refit |
 | `verify.py` | triangulate a tag live and compare with a measured spot |
+| `flash_sync.py` | put ffmpeg recordings of the RTSP streams (`cam_N.mkv`) on one clock with a light flash, +- 1 frame |
 | `make_boards.py` | printable boards and floor tags |
 | `calib/intr.py`, `calib/extr.py` | the fitting, split and evaluation code shared by the scripts |
 | `config/` | camera URLs, boards, floor tag survey, who does which cameras |
