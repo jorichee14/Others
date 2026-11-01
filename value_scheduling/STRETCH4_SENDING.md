@@ -73,3 +73,38 @@ filtering), robot-vs-cloud offloading, learned features for one model.
 Not covered as one problem: a robot whose deadlines and accuracy
 tolerances change by phase of the task, and whose link depends on
 where it is in the room.
+
+## The contribution: the sending policy
+
+Measurement, the link map and placement are inputs the policy uses,
+not contributions on their own.
+
+**Inputs per request.** Phase k from the stage machine (gives D_k and
+ε_k); robot position and planned path, with the link expected along it
+(link map + live estimate); the server's reported queue; the profile
+table (bytes, error per phase, encode and inference time for each
+configuration).
+
+**Decision.** The configuration c (skip / full / crop, resolution,
+quality, codec) and the moment and place to send it.
+
+**Rule.**
+1. Pick the cheapest c with e_k(c) ≤ ε_k and P[T(c, x) ≤ D_k] ≥ 1 − δ.
+2. If none fits here, send earlier from a point on the path where the
+   link is good enough, if there is one before the deadline.
+3. If still none fits, slow the robot: D_k = tolerance / speed, so a
+   lower speed extends the deadline until a configuration fits.
+Server side: serve requests by deadline, drop those whose phase has
+ended.
+
+**Baselines.** Current raw stream; continuous JPEG; on-request fixed
+form; link-adaptive only (bandwidth-driven, phase-blind, AWStream
+style). Ablations: without position (live link only), without phase
+(one deadline for all).
+
+**Conditions.** Good link; a weak spot at the table (AP placement or
+`tc` throttling); background traffic from the camera network.
+
+**Metrics.** Pick success; answers correct and in time at the robot's
+action, per phase; deadline hit rate; bytes per pick; robot time per
+pick (the cost of slowing).
