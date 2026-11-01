@@ -213,6 +213,69 @@ Three masts, two robots driving, pose and control live, person 2's
 slotting and person 3's speed rule as switches. Four runs. Not yours to
 design; bring the nodes and the scorer.
 
+## 4b. Changes to the static map
+
+The static map is preloaded on every node as version v. It is the
+baseline, not an item that expires; what expires is the record that a
+cell *differs* from it. Changes are handled at two timescales by the
+same store.
+
+**Detecting a change.** Any node that observes cell x compares its
+observation with the static map at x (occupancy from the TSDF, height
+band 0.2–1.8 m). Occupied where the map says free, or free where the
+map says occupied, for k = 5 consecutive frames (0.5 s) → a *change
+observation*: `Obs` with `extra = {"diverges": true, "map_version": v}`.
+A person standing still for 0.5 s is also a change observation; that
+is correct, the planner must treat it the same. No learned component.
+
+**The overlay (seconds to minutes).** The store keeps change
+observations as an overlay on the static map: cell, observed state,
+t_obs, TTL(x). Robots hold the same overlay in memory and consult it
+before the static map for every envelope cell. Validity is TTL(x) as
+for any observation; a cabinet in a corridor with λ high expires in
+seconds and is refreshed before approach; a closed door in a doorway
+with λ low stays valid for minutes.
+
+**Invalidation push.** When a change observation for x arrives, the
+server publishes an `Invalidate(ix, iy, t_obs)` (≈ 20 bytes, AC_VO) to
+every robot whose current `belief` lists x in its envelope. The robot
+marks its copy stale; the observation itself is served at approach time
+like any other (store mode) or pulled on request. Invalidation is small
+and immediate; the content follows when it is needed.
+
+**Promotion (hours to days).** A change that persists, observed
+diverging on every visit for longer than T_promote (default 1 h, set
+per site) is promoted into the static map: the server rewrites the
+affected tile, bumps the version to v+1, and publishes the version.
+Robots compare versions in their `belief` and pull the diff tile
+(only the changed cells, a few KB) before the tile enters their
+envelope, by the same approach-time rule. λ(x) keeps its history
+across promotion; a cell that changed once stays "a cell that changes".
+
+**Localization.** LiDAR scan-to-map localization tolerates a moved
+cabinet (outlier rejection on a small fraction of the scan); the
+planner does not. So the overlay feeds the planner and the decision
+immediately, and the localization map only on promotion. Verify in S2
+that localization error against the reference does not grow with the
+cabinet present; if it does, promotion must be faster for large
+changes.
+
+**What S2 tests, precisely.** Trial A (cabinet in a corridor, λ high):
+the first observer is the other robot or a mast; measure time from its
+change observation to the approaching robot holding the overlay, and
+whether that is before the robot's stopping distance. Trial B (door
+closed, λ low): the same, plus the TTL case where the robot holds a
+stale "open" overlay from an earlier pass and must be invalidated.
+Trial C (optional): leave the cabinet for T_promote and verify
+promotion, the diff tile size, and that robots starting a new session
+load v+1.
+
+**Modes compared.** No refresh (robot trusts the static map until it
+sees the change itself); periodic refresh of every envelope cell at
+0.1 Hz (bytes ∝ envelope size regardless of change); TTL + invalidation
+(bytes ∝ changes). Outputs as in §4 S2, plus the invalidation-to-hold
+latency and the promotion check.
+
 ## 5. λ(x) from the recordings
 
 Input: processed passes with repeated visits (survey_1 stops; coop_2;
