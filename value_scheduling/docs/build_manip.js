@@ -49,8 +49,6 @@ const children = [
   num("Where a stage runs is a choice. Offloading buys a stronger model at the price of delay and of bytes on a shared link; running on the robot buys immediacy at the price of a weaker model. The right choice changes from stage to stage."),
   num("The Cartesian arm needs the base. Lateral and yaw corrections at the gripper are base motions, so the final alignment is a base–arm loop whose rate a Wi-Fi round trip cannot sustain."),
   RH("The quantity.", "The position error of the gripper relative to the object at closure, decomposed into the contribution of each stage and of the link delay (v·d per offloaded answer), measured against fiducials; together with first-attempt success, time per stage and bytes per stage."),
-  RH("The approach.", "Write the pick as a chain of stages with an error budget in which delay is converted to distance. Offload a stage only when its tolerance divided by the relative speed exceeds the measured end-to-end delay with margin; slow the motion when it does not; send to the server only the region the stage needs and only what changed since the server's last copy; keep the alignment and closure loops on the robot, steering base yaw and arm extension from the wrist camera; switch from head to wrist at the distance where head-camera error plus delay error exceeds the remaining tolerance."),
-
   ...table("Table 1. The stages of a pick: tolerance, delay budget, where each runs and what crosses the link.", ["Stage", "Must be within", "Delay budget at its speed", "Runs on", "Sent over the link"], [
     ["1 Localise and drive","5–10 cm","≈ 0.2–0.5 s at 0.3 m/s","robot: lidar–inertial localisation, base planner; server: semantic goal once","a low-resolution frame on request"],
     ["2 Find the object","2–3 cm","≈ 0.3 s when the base is stopped, near zero while moving","server: detection and grasp proposal","one full-resolution crop of the target region"],
@@ -59,16 +57,36 @@ const children = [
     ["5 Close and verify","—","≈ 0.3 s","robot: effort; server: verification","events; one crop after the lift"],
   ], [1300, 1250, 2200, 2650, 2100], "Delay budget = tolerance / relative speed. Values are starting points to be replaced by measurement; the loaded round trip measured on the group's own testbed was 25–33 ms, rising to 60–109 ms on a busier pass, before any server queue or inference time."),
 
-  RH("What is measured.", "Stamps on one clock (chrony) at capture, send, server receive, after inference and at the robot's command; AprilTags on gripper and object for the error at the end of each stage; the link throttled with tc and loaded by a second stream to sweep the delay. Per pick: the error per stage and the share attributable to delay; first-attempt success; time and bytes per stage."),
-  RH("Comparisons.", "(a) Everything on the server except low-level control; (b) everything on the robot with lighter models; (c) the per-stage split of Table 1. Each under idle and loaded Wi-Fi. Within (c): open-loop grasp from the head camera against wrist servo; hand-off distance swept from 40 cm to 10 cm; full frames against region-and-change uplink."),
-  RH("What it delivers.", "A measured error budget from map to fingertip in which the link's delay is a term like any sensor's; the rule for which stage to offload given the measured delay; and the hand-off distance that maximises first-attempt success under a given link."),
 
-  H("2. The Literature by Category"),
+  H("2. The Communication Design"),
+  P("The design has six parts. Each removes a different share of the error that the link adds at the gripper, and each is switched on in turn in the experiment of Table 2."),
+  RH("2.1 Motion-compensated answers.", "Every image goes up with its capture time and the robot's pose at that instant (base pose from localisation, joint positions from the encoders). The server answers in the frame of that capture. On arrival, the robot transforms the answer by its own motion since the capture, using odometry and forward kinematics. The robot's own motion during the delay is thereby cancelled; what remains is the motion of the scene, close to zero for an object resting on a table. This converts most of the v·d term to zero without changing the link."),
+  RH("2.2 Queue discipline.", "Under load most of the delay is queueing, not transmission. The robot publishes with best-effort, keep-last-one quality of service so that only the newest image ever waits; each request carries its stage and deadline; the server drops a request whose stage has ended and serves the rest earliest-deadline-first rather than in arrival order."),
+  RH("2.3 Region, change and timing of the uplink.", "Only the region the stage needs is sent, and within it only what changed since the server's last copy (an RGB difference and a depth difference above about 2 cm). Resolution and depth precision are set per stage. The image for the next stage is requested ahead of time, from the pose the planned motion will reach, so that its answer arrives as that stage begins rather than after."),
+  RH("2.4 Anytime answers.", "The server first returns a fast, coarse answer (a box from a light model) and then the refined one (the full grasp). The robot starts on the first and corrects on the second, so that under load a usable answer still arrives within the stage's delay budget."),
+  RH("2.5 Speed that follows the link.", "The robot measures the end-to-end delay continuously and limits its speed so that v·d stays within the current stage's tolerance: fast on an idle link, slow only where the tolerance is tight and the link is busy. Motion compensation (2.1) removes the delay the robot can predict; speed adaptation absorbs the delay it cannot."),
+  RH("2.6 Link configuration.", "Power saving off on the robot's Wi-Fi interface, the 5 GHz band pinned, request and answer traffic marked for the voice or video access category (WMM, via DSCP), and a datagram transport for images instead of a stream transport. These are configuration changes, measured like the others."),
+  RH("Where the novelty lies.", "Each part has precedent. What is new is that all of them are scored by one quantity, the gripper error at closure, and that compensation (2.1) and speed adaptation (2.5) are combined: the robot cancels the delay it can predict and slows for the delay it cannot. Offloading policies decide whether to offload and video-analytics systems decide what to send; neither has an arm whose accuracy depends on the delay."),
+
+  ...table("Table 2. The experiment: parts switched on cumulatively, each under the same delay sweep.", ["Step", "Configuration"], [
+    ["1","Naive: every frame streamed, the latest answer acted upon"],
+    ["2","+ motion-compensated answers (2.1)"],
+    ["3","+ queue discipline (2.2)"],
+    ["4","+ region and change uplink and early requests (2.3)"],
+    ["5","+ anytime answers (2.4)"],
+    ["6","+ speed that follows the link (2.5)"],
+    ["—","each step with and without the link configuration (2.6)"],
+  ], [1200, 8300], "Delay sweep with tc: 0, 50, 100, 200 and 500 ms, each with and without jitter and with and without a background stream. Measured per pick: gripper error at closure and its decomposition, first-attempt success, time per pick, bytes per pick. The main figure is gripper error against delay, one curve per step."),
+
+  RH("What is measured.", "Stamps on one clock (chrony) at capture, send, server receive, after inference and at the robot's command; AprilTags on gripper and object for the error at the end of each stage. Per pick: the error per stage and the share attributable to delay; first-attempt success; time and bytes per stage. Two reference configurations frame the comparison: everything on the server except low-level control, and everything on the robot with lighter models."),
+  RH("What it delivers.", "A measured map-to-fingertip error budget in which the link's delay is a term like any sensor's; the reduction of that term contributed by each part of the design; and a rule for speed and offloading given the measured delay."),
+
+  H("3. The Literature by Category"),
   P("Tags: [F] read in full in this project; [V] venue or headline result checked against a listing or the paper's own page; [S] abstract, summary or memory only, to be checked before citation."),
 
-  H3("2.1 Cloud and fog robotics: whether to offload"),
+  H3("3.1 Cloud and fog robotics: whether to offload"),
   P("Owns the decision to run a computation remotely and the infrastructure for it. Scores average task performance or latency; does not turn delay into an error at the gripper or let the split change with the motion stage."),
-  ...lit("Table 2. Cloud and fog robotics.", [
+  ...lit("Table 3. Cloud and fog robotics.", [
     ["Kehoe, Patil, Abbeel, Goldberg, a survey of research on cloud robotics and automation","IEEE T-ASE 2015 [S]","the survey"],
     ["Chinchali et al., network offloading policies for cloud robotics","RSS 2019; Auton. Robots 2021 [V]","when to offload a sensing query, by deep RL; 1.3–2.3 times better task performance than benchmark policies"],
     ["FogROS2 (Ichnowski et al.)","arXiv 2205.09778 [S]","ROS 2 platform for cloud and fog robotics; video compression cuts image round-trip latency by 97 %"],
@@ -76,33 +94,33 @@ const children = [
     ["Nakanoya et al., task-relevant representation learning for networked robotic perception","RSS 2021 [S]","learned task-relevant compression for robot uplink; record not found in this session"],
   ]),
 
-  H3("2.2 Server-driven and adaptive video analytics: what to send"),
+  H3("3.2 Server-driven and adaptive video analytics: what to send"),
   P("Owns how a camera stream is filtered, cropped and encoded for a remote model under a bandwidth limit. Has no actuator: accuracy is per frame, not at a commit."),
-  ...lit("Table 3. Server-driven and adaptive video analytics.", [
+  ...lit("Table 4. Server-driven and adaptive video analytics.", [
     ["DDS, server-driven video streaming for deep learning inference (Du et al.)","SIGCOMM 2020 [V]","the server's model asks for regions to re-send at high quality; up to 59 % less bandwidth at higher accuracy"],
     ["Reducto (Li et al.)","SIGCOMM 2020 [S]","on-camera frame filtering by feature difference"],
     ["Glimpse (Chen et al.)","SenSys 2015 [S]","track on the device, offload only when needed"],
     ["Liu et al., edge-assisted real-time object detection for mobile AR","MobiCom 2019 [S]","region-of-interest encoding and local tracking between server results"],
   ]),
 
-  H3("2.3 Split computing and edge inference: where to cut"),
+  H3("3.3 Split computing and edge inference: where to cut"),
   P("Owns partitioning a model between device and server. One model, one cut, no motion."),
-  ...lit("Table 4. Split computing.", [
+  ...lit("Table 5. Split computing.", [
     ["Neurosurgeon (Kang et al.)","ASPLOS 2017 [S]","layer-level partitioning by latency and energy"],
     ["Matsubara, Levorato, Restuccia, split computing and early exiting","ACM CSUR 2022 [S]","the survey"],
   ]),
 
-  H3("2.4 Base localisation"),
+  H3("3.4 Base localisation"),
   P("Owns where the base is. Reports trajectory error, not the error left at the gripper; runs on the robot."),
-  ...lit("Table 5. Base localisation.", [
+  ...lit("Table 6. Base localisation.", [
     ["2Fast-2Lamaa (Le Gentil, Falque, Lisus, Barfoot)","IJRR 2026, arXiv 2410.05433 [F]","lidar–inertial localisation against a prebuilt map at under 16 % of a laptop CPU; evaluated on 3-D lidars only"],
     ["FAST-LIO2 (Xu et al.)","T-RO 2022 [S]","iterated Kalman-filter lidar–inertial odometry"],
     ["Thrun, Burgard, Fox, Probabilistic Robotics","MIT Press 2005","Monte Carlo localisation on a planar lidar, the Stretch default"],
   ]),
 
-  H3("2.5 Grasp detection and visual servoing"),
+  H3("3.5 Grasp detection and visual servoing"),
   P("Owns where to grasp and the closed loop that gets there. Assumes the model runs where the camera is, or that the link is ideal."),
-  ...lit("Table 6. Grasp detection and visual servoing.", [
+  ...lit("Table 7. Grasp detection and visual servoing.", [
     ["Contact-GraspNet (Sundermeyer et al.)","ICRA 2021 [V]","6-DoF parallel-jaw grasps from a depth image"],
     ["AnyGrasp (Fang et al.)","T-RO 2023 [V]","grasp perception in space and time; 93.3 % bin-clearing success on unseen objects"],
     ["GG-CNN (Morrison, Corke, Leitner)","RSS 2018 [S]","fast grasp network run in a closed loop"],
@@ -110,31 +128,42 @@ const children = [
     ["Precise mobile manipulation of small everyday objects","arXiv 2502.13964, 2025 [S]","eye-in-hand servoing guided by vision foundation models on a mobile manipulator"],
   ]),
 
-  H3("2.6 Mobile manipulation systems on Stretch"),
+  H3("3.6 Mobile manipulation systems on Stretch"),
   P("Own the whole pipeline in real homes, typically with a GPU workstation; report overall success, not where in the chain or in the link failures arise."),
-  ...lit("Table 7. Systems on Stretch.", [
+  ...lit("Table 8. Systems on Stretch.", [
     ["Kemp, Edsinger, Clever, Matulevich, The Design of Stretch","ICRA 2022 [V]","the platform"],
     ["OK-Robot (Liu et al.)","arXiv 2401.12202, 2024 [V]","modular zero-shot pick-and-drop with models on a remote workstation; 58.5 % in 10 homes, 82.4 % in less cluttered rooms"],
     ["Dobb-E (Shafiullah et al.)","arXiv 2311.16098, 2023 [V]","imitation from a hand-held tool; 81 % over 109 tasks in 10 homes"],
     ["HomeRobot (Yenamandra et al.)","CoRL 2023 [S]","open-vocabulary mobile manipulation benchmark on Stretch"],
   ]),
 
-  H3("2.7 Timeliness"),
-  ...lit("Table 8. Timeliness.", [
+  H3("3.7 Timeliness"),
+  ...lit("Table 9. Timeliness.", [
     ["Maatouk, Kriouile, Assaad, Ephremides, age of incorrect information","ToN 2020","freshness that counts only while the receiver is wrong"],
     ["Sun, Polyanskiy, Uysal","T-IT 2020 [V]","signal-aware sampling over a random-delay channel"],
   ]),
 
-  H("3. Where the Gaps Are"),
-  ...table("Table 9. The four properties of the scenario against the nearest prior work.", ["Property", "Nearest prior", "What is missing"], [
+
+  H3("3.8 Delay compensation, networked control and the link layer"),
+  P("Owns the theory of acting on delayed information and the mechanisms for prioritising traffic. Not applied to a mobile manipulator whose grasp error is the score."),
+  ...lit("Table 10. Delay compensation, networked control and the link layer.", [
+    ["Smith, closer control of loops with dead time","Chem. Eng. Prog. 1957","the Smith predictor: compensate a known delay with a model of the plant"],
+    ["Hespanha, Naghshtabrizi, Xu, a survey of recent results in networked control systems","Proc. IEEE 2007","control over delayed, lossy networks"],
+    ["Bejczy, Kim, Venema, the phantom robot: predictive displays for teleoperation with time delay","ICRA 1990 [S]","predict the robot's motion over the delay for the operator"],
+    ["IEEE 802.11e (WMM)","standard","access categories for priority traffic"],
+  ]),
+
+  H("4. Where the Gaps Are"),
+  ...table("Table 11. The properties of the scenario against the nearest prior work.", ["Property", "Nearest prior", "What is missing"], [
     ["errors compound, and the link is one of them","localisation (ATE); grasp detection (success on fixed arms); offloading (average accuracy)","one error budget from map to fingertip in which delay is converted to distance at the gripper"],
     ["tolerance and delay budget shrink together","FogROS2-LS latency targets; coarse-then-fine grasping","stage-wise delay budgets derived from tolerance and speed, and the measured point where offloading stops paying"],
     ["where a stage runs is a choice","Chinchali's offloading policy; Neurosurgeon's cut; Glimpse","a split that moves with the motion stage, scored at the grasp rather than per query"],
+    ["the robot can predict part of the delay","Smith predictor; predictive displays in teleoperation","motion-compensated answers from a remote perception model, combined with speed adaptation for the unpredictable remainder"],
     ["the Cartesian arm needs the base","whole-body servoing on arms with lateral joints; OK-Robot open-loop grasping","an on-robot base-yaw and arm-extension servo for the stages no round trip can serve, with the server reduced to proposals and verification"],
   ], [2300, 3400, 3800]),
-  P("In short: offloading and video-analytics work optimises what crosses the link without an actuator at the other end; manipulation work optimises the grasp without a link in the loop; systems on Stretch use a remote workstation and report overall success. Converting delay into gripper error closes the space between them. Chinchali et al., DDS and OK-Robot are the three to position against first."),
+  P("In short: offloading and video-analytics work optimises what crosses the link without an actuator at the other end; manipulation work optimises the grasp without a link in the loop; systems on Stretch use a remote workstation and report overall success. Converting delay into gripper error, cancelling the part the robot can predict and slowing for the rest, closes the space between them. Chinchali et al., DDS and OK-Robot are the three to position against first."),
 
-  H("4. What Is Asked of the Collaborators"),
+  H("5. What Is Asked of the Collaborators"),
   bullet("The Stretch 4 configuration: lidar (planar or 3-D), head and wrist cameras, gripper, on-board compute, ROS 2 distribution."),
   bullet("The current pipeline: which models run on the server, their inference time and what they return; whether the grasp is open-loop from the head camera; which localisation runs and in which mode."),
   bullet("The object set, the surfaces and the success criterion."),
