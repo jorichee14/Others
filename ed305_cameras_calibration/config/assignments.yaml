@@ -1,7 +1,0 @@
-# Who does which cameras in the INTRINSICS round (each person: own laptop, own board, own area).
-# Groups follow the room layout so one board walk serves one person's cameras.
-people:
-  Jorich:  {board: A, cams: [1, 2, 3, 4, 13, 14]}    # left wall + ceiling lower-left
-  Ralph:   {board: B, cams: [5, 6, 7, 8, 15, 16]}    # right wall + ceiling lower-right
-  Britney: {board: C, cams: [9, 10, 11, 12]}         # ceiling upper row
-# In the EXTRINSICS round everyone captures all 16 cameras and walks their own board.

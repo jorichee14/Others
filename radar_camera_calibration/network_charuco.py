@@ -5,7 +5,7 @@ Network ChArUco extrinsics  —  general_charuco.py for one ZED and MANY cameras
 Camera A = the ZED (ROS 2: rectified left image + camera_info; its pose in the ZED map from TF).
 Cameras B = any number of RTSP cameras: the 16 ED305 cameras, the robot's other cameras streamed
 with ros_image_to_rtsp.py, ... Their intrinsics come from the calibration dashboard
-(ed305_cameras_calibration/results/intrinsics/cam_N.json), the board from its config/boards.yaml.
+(ED305-deploy repo: results/intrinsics/cam_N.json), the board from its config/boards.yaml.
 
 Hold ONE board STILL where the ZED and a camera B both see it. Every still moment gives a sample
     T_world_B = T_world_A · T_A_board · inv(T_B_board)        (world = the ZED map, map_zed)
@@ -46,11 +46,13 @@ from sensor_msgs.msg import CameraInfo, Image
 from tf2_ros import Buffer, TransformListener
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CALIB_DIR = os.path.join(os.path.dirname(HERE), "ed305_cameras_calibration")
+# the shared ED305 code (ed305/, config/, results/) is in the ED305-deploy repo (jorichee14/ED305-deploy),
+# cloned next to this one, or set ED305_DEPLOY to its folder
+CALIB_DIR = os.environ.get("ED305_DEPLOY") or os.path.join(os.path.dirname(os.path.dirname(HERE)), "ED305-deploy")
 sys.path.insert(0, CALIB_DIR)
-from calib.common import camera_urls, load_boards, load_intrinsics  # noqa: E402
-from calib.network import BoardPose, Pair, Still, pose_dict  # noqa: E402
-from calib.streams import Stream  # noqa: E402
+from ed305.common import camera_urls, load_boards, load_intrinsics  # noqa: E402
+from ed305.network import BoardPose, Pair, Still, pose_dict  # noqa: E402
+from ed305.streams import Stream  # noqa: E402
 
 
 def transform_to_T(tr):
@@ -104,10 +106,10 @@ class NetworkCharuco(Node):
         dp("cam_a_map_frame", "zed_left_camera_optical_frame")  # the ZED's frame in the TF tree
         dp("use_map", True)                                     # false: pool T_A_B (A and B must not move)
         # cameras B
-        dp("cameras", "")       # "1,2,3": ED305 cameras from ed305_cameras_calibration/config/cameras.yaml
+        dp("cameras", "")       # "1,2,3": ED305 cameras from ED305-deploy/config/cameras.yaml
         dp("urls", "")          # "17=rtsp://...,18=rtsp://...": any other streams (number=url)
         dp("intrinsics_dir", os.path.join(CALIB_DIR, "results"))   # results/intrinsics/cam_N.json (newest round)
-        dp("board", "A")        # board name in ed305_cameras_calibration/config/boards.yaml
+        dp("board", "A")        # board name in ED305-deploy/config/boards.yaml
         # detection and pairing
         dp("rate", 5.0); dp("min_corners", 8); dp("max_reproj_px", 1.5)
         dp("still_s", 0.6); dp("still_mm", 3.0); dp("still_deg", 0.3)

@@ -144,7 +144,7 @@ def main():
             json.dump({"camera": n, "K": K_B.tolist(), "dist": [0, 0, 0, 0, 0], "model": "full"}, f)
     sys.path.insert(0, HERE)
     import network_charuco as nc
-    from calib.common import load_boards
+    from ed305.common import load_boards
     BOARD_IMG = load_boards(["A"])["A"].board.generateImage((900, 700), marginSize=0)
 
     truth = {5: look_at(np.array([0.0, -3.0, 2.0]), [0.0, 0.0, 0.6]),       # wall camera

@@ -1,7 +1,7 @@
 # ZED + camera network extrinsics (`network_charuco.py`)
 
-The same method is built into the calibration dashboard (`ed305_cameras_calibration`, "Extrinsics with
-the ZED" in its README): there the ZED is streamed over RTSP and its pose served by
+The same method is built into the calibration dashboard (`jorichee14/ED305-deploy`, `calibration/extrinsics/README.md`; clone it next to this repo,
+e.g. `~/workspaces/ED305-deploy`, or set `ED305_DEPLOY` to its folder): there the ZED is streamed over RTSP and its pose served by
 `robot/zed_pose_server.py`, and everything is done from a browser. This ROS node is the alternative
 that runs entirely on the robot.
 
@@ -12,8 +12,8 @@ not on ROS (the 16 ED305 cameras, streamed over RTSP), and places every camera i
 ```
 camera A = the ZED        ROS 2: rectified left image + camera_info, its pose in map_zed (TF, cuVSLAM)
 cameras B = RTSP cameras  ED305 cam_1 ... cam_16, the robot's RealSense via ros_image_to_rtsp.py, ...
-                          intrinsics: ed305_cameras_calibration/results/intrinsics/cam_N.json (the dashboard)
-board                     ed305_cameras_calibration/config/boards.yaml (board A), the same for all cameras
+                          intrinsics: ED305-deploy/results/intrinsics/cam_N.json (the dashboard)
+board                     ED305-deploy/config/boards.yaml (board A), the same for all cameras
 ```
 
 Each time the board is held **still** where the ZED and a camera both see it, one sample is taken:
@@ -33,7 +33,7 @@ while the board is still in both images. Hold it still for about a second each t
 
 ## Before
 
-1. **Intrinsics of every camera B**: calibrate them in the dashboard (`ed305_cameras_calibration`,
+1. **Intrinsics of every camera B**: calibrate them in the dashboard (`ED305-deploy`,
    standard 5-coefficient model). Copy its `results/` folder to the robot, or pass its path with
    `intrinsics_dir`. Fisheye calibrations are not supported here.
 2. **ZED**: the ZED wrapper running with positional tracking (cuVSLAM), so TF has
@@ -44,8 +44,8 @@ while the board is still in both images. Hold it still for about a second each t
    (e.g. `rtsp://192.168.1.13:8554/cam_3`). Check one in VLC or `ffprobe` from the robot.
 4. **Board**: large enough for both. The ED305 cameras see it from 3 to 6 m and the ZED (720p) from
    1.5 to 3 m; squares should be at least ~15 px in both images. The A4 board (24.5 mm squares) is
-   too small for that; print an A2 or A1 board with `python make_boards.py --page A2` in
-   `ed305_cameras_calibration`, mount it flat and rigid, measure it, and write it into `boards.yaml`.
+   too small for that; print an A2 or A1 board with `python calibration/make_boards.py --page A2` in
+   `ED305-deploy`, mount it flat and rigid, measure it, and write it into `boards.yaml`.
 5. **Python on the robot**: `pip install "opencv-contrib-python>=4.8" scipy pyyaml` (the ChArUco
    detector of OpenCV 4.7+), plus ROS 2 with `cv_bridge` and `tf2_ros`.
 
@@ -96,7 +96,7 @@ wrong intrinsics, or the ZED's map pose drifting; recalibrate that camera.
 | `use_map` | `true` | `false`: pool T_ZED_B (cameras on the same rig) |
 | `cameras` | | ED305 camera numbers from `config/cameras.yaml`, e.g. `"1,2,3"` |
 | `urls` | | other streams, `"17=rtsp://...,18=rtsp://..."` |
-| `intrinsics_dir` | `../ed305_cameras_calibration/results` | where `intrinsics/cam_N.json` are |
+| `intrinsics_dir` | `../../ED305-deploy/results` | where `intrinsics/cam_N.json` are |
 | `board` | `A` | board name in `boards.yaml` |
 | `rate` | `5` | detections per second |
 | `min_corners`, `max_reproj_px` | `8`, `1.5` | a board pose is used only with enough corners and a low error |
