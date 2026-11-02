@@ -5,7 +5,7 @@ Layout follows the group's original diagram; additions are in teal.
 """
 from pathlib import Path
 
-W, H = 2000, 1440
+W, H = 2000, 1410
 C = {
     'hw': ('#eef0f3', '#c3c7cf'),
     'loc': ('#e4eefb', '#a9c3ec'),
@@ -105,26 +105,21 @@ for y0, y1 in [(706, 718), (822, 834), (938, 950)]:
     line([(482, y0), (482, y1)])
 
 # comms awareness box (new)
-box(62, 1100, 688, 262, 'com', 'Comms awareness <span class="new">new</span>',
+box(62, 1100, 688, 222, 'com', 'Comms awareness <span class="new">new</span>',
     '')
-card(88, 1145, 200, 160, 'Link monitor',
-     ['RSSI · RTT · goodput', 'server queue (heartbeat)',
-      'expected answer time', 'T̂ = RTT + size / goodput', '+ server time'], new=True, title_size=18)
-card(306, 1145, 200, 160, 'Answer handler',
-     ['capture stamp → age', 'drop answers past', 'their validity',
-      'late server answer', '→ onboard answer'], new=True, title_size=18)
-card(524, 1145, 202, 160, 'Comms-aware policy',
-     ['per stage: wait for server', 'or onboard fallback', 'stop where link is good',
-      'speed limit →', 'Nav2 /speed_limit'], new=True, title_size=18)
-text(88, 1318, 'the robot knows the link and the age of what it was told; the policy '
+card(88, 1145, 200, 100, 'Link monitor',
+     ['RSSI · RTT · server queue', '+ link map ahead', '→ expected answer time'], new=True, title_size=18)
+card(306, 1145, 200, 100, 'Answer handler',
+     ['age of each answer', 'drop stale answers', 'late → onboard answer'], new=True, title_size=18)
+card(524, 1145, 202, 100, 'Comms-aware policy',
+     ['wait or use onboard', 'stop where link is good', 'slow down → Nav2'], new=True, title_size=18)
+text(88, 1260, 'the robot knows the link and the age of what it was told; the policy '
      'decides who answers, when to send, how fast to move', 'note', w=640)
 line([(625, 1145), (625, 1077)], color=TEAL)
 text(636, 1081, 'per-stage decision', 'lbl teal')
-line([(288, 1225), (306, 1225)], color=TEAL)
-line([(506, 1225), (524, 1225)], color=TEAL)
+line([(288, 1195), (306, 1195)], color=TEAL)
+line([(506, 1195), (524, 1195)], color=TEAL)
 
-text(62, 1392, 'cabinet targets: the door-opening skill (keypoint + RANSAC door plane) '
-     'runs between 2 and 3', 'note')
 
 # ---------------- right: server ----------------
 text(800, 212, 'ED305 SERVER + INFRASTRUCTURE · RTX workstation · edge PC: '
@@ -164,53 +159,54 @@ text(1447, 462, 'images, detections', 'lbl')
 line([(1700, 455), (1700, 528)])
 text(1710, 462, 'object query', 'lbl')
 
-box(800, 728, 1140, 190, 'task', 'Latency + bottleneck analysis', 'every stage, robot + server')
-lc = [('Stage + hop stamps', ['capture, send, receive,', 'answer · per request'], False),
-      ('Perception–action loop', ['image → mask → command', 'p50 / p95 per stage'], False),
-      ('Localization loop', ['scan → AMCL pose → Nav2', 'pose age at each command'], False),
-      ('Bottleneck → placement', ['robot · edge PC · server', 'where each model runs'], False),
-      ('Link logger <span class="new">new</span>', ['RSSI · RTT · goodput', 'with pose → link map'], True)]
-for i, (t, l, n) in enumerate(lc):
-    card(822 + i * 222, 778, 206, 100, t, l, new=n, title_size=16)
-
-box(800, 945, 1140, 245, 'hw', 'Link robot ↔ server', 'Wi-Fi 5 GHz · ROS 2 topics')
+box(800, 728, 1140, 180, 'hw', 'Link robot ↔ server', 'Wi-Fi 5 GHz · ROS 2 topics')
 rows_l = [('↓ 2D grid', 'map frame · per map version'),
-          ('↓ Target + view pose', 'per request · stamped, with age'),
-          ('↓ SAM 3 mask', 'per crop · small (RLE) <span class="new">new</span>'),
-          ('↑ Map-frame pose', '10 Hz · ~1 KB/s')]
+          ('↓ Target + view pose', 'per request · with capture time'),
+          ('↓ Object mask', 'per crop · small <span class="new">new</span>')]
 rows_r = [('↑ RGB crop (JPEG)', 'on request · depth stays on robot'),
-          ('↑ Stage timestamps', 'per stage → latency analysis'),
-          ('↕ Heartbeat', '5–10 Hz · RTT, queue → link monitor <span class="new">new</span>')]
-for i, (a, b) in enumerate(rows_l):
-    text(822, 990 + i * 27, a, 'lk')
-    text(1025, 992 + i * 27, b, 'lv')
-for i, (a, b) in enumerate(rows_r):
-    text(1390, 990 + i * 27, a, 'lk')
-    text(1590, 992 + i * 27, b, 'lv')
-text(822, 1108, 'transport: requests and answers carry request ID + capture time · '
-     'server serves by deadline, drops stale', 'lv teal', w=1100)
-text(822, 1134, 'images best effort, keep last 1, never raw streams · DSCP high priority '
-     'for requests · DDS tuned for large messages · Wi-Fi power save off', 'lv teal', w=1100)
+          ('↑ Map-frame pose', '10 Hz · ~1 KB/s'),
+          ('↕ Heartbeat', '5–10 Hz · RTT, server queue <span class="new">new</span>')]
+for i, (a_, b_) in enumerate(rows_l):
+    text(822, 773 + i * 28, a_, 'lk')
+    text(1025, 775 + i * 28, b_, 'lv')
+for i, (a_, b_) in enumerate(rows_r):
+    text(1390, 773 + i * 28, a_, 'lk')
+    text(1590, 775 + i * 28, b_, 'lv')
+text(822, 870, 'no raw image streams · best effort, keep last 1 · priority for robot '
+     'requests · every message carries its capture time', 'lv teal', w=1100)
+
+box(800, 935, 1140, 245, 'com', 'What comms contributes')
+contrib = [
+    ('1  Send less', 'JPEG crop on request instead of raw streams; mask comes back, depth stays on the robot', 'stage 2, 4'),
+    ('2  Know the link', 'link map of ED305 + live monitor → expected answer time before sending', 'all stages'),
+    ('3  Act only on fresh answers', 'every answer has an age; late or stale → last valid target or onboard detector', 'stage 1, 2'),
+    ('4  Move with the link', 'stop where the link is good to send; slow down when answers are stale', 'stage 1, 2'),
+]
+for i, (t, d, st) in enumerate(contrib):
+    y = 983 + i * 46
+    text(822, y, t, 'lk teal')
+    text(1100, y + 2, d, 'lv', w=680)
+    text(1800, y + 2, st, 'lv', w=120, align='right')
 
 # legend
 lg = [('hw', 'hardware, infra'), ('loc', 'localization'), ('man', 'manipulation, perception'),
-      ('twin', 'offline twin'), ('task', 'task, analysis'), ('com', 'comms-aware (new)')]
+      ('twin', 'offline twin'), ('task', 'task'), ('com', 'comms (new)')]
 LX = [800, 985, 1160, 1425, 1590, 1765]
 for i, (k, s) in enumerate(lg):
     bg, bd = C[k]
     x = LX[i]
-    out.append(f'<div class="sw" style="left:{x}px;top:1302px;background:{bg};border-color:{bd}"></div>')
-    text(x + 40, 1300, s, 'lg')
-svg.append('<line x1="800" y1="1352" x2="830" y2="1352" stroke="#d6262c" '
+    out.append(f'<div class="sw" style="left:{x}px;top:1242px;background:{bg};border-color:{bd}"></div>')
+    text(x + 40, 1240, s, 'lg')
+svg.append('<line x1="800" y1="1292" x2="830" y2="1292" stroke="#d6262c" '
            'stroke-width="3" stroke-dasharray="9,6"/>')
-text(840, 1341, 'network: robot ↔ server', 'lg')
-out.append('<div class="sw" style="left:1090px;top:1341px;background:#fff;'
+text(840, 1281, 'network: robot ↔ server', 'lg')
+out.append('<div class="sw" style="left:1090px;top:1281px;background:#fff;'
            'border:2px dashed #aaa"></div>')
-text(1130, 1341, 'not built yet', 'lg')
-out.append(f'<div class="sw" style="left:1300px;top:1341px;background:#fff;'
+text(1130, 1281, 'not built yet', 'lg')
+out.append(f'<div class="sw" style="left:1300px;top:1281px;background:#fff;'
            f'border:2px dashed {TEAL}"></div>')
-text(1340, 1341, 'comms addition', 'lg')
-text(1530, 1341, 'solid: built in the cabinet-door demo (Nav2, AMCL)', 'lg')
+text(1340, 1281, 'comms addition', 'lg')
+text(1530, 1281, 'solid: built in the cabinet-door demo (Nav2, AMCL)', 'lg')
 
 # ---------------- cross arrows ----------------
 # reference map -> map frame
@@ -225,10 +221,8 @@ text(806, 710, 'target + view pose', 'lbl')
 line([(262, 388), (262, 450)])
 # verify -> back to look + align
 line([(726, 1000), (742, 1000), (742, 760), (729, 760)])
-# pick -> latency analysis
-line([(750, 820), (820, 820)])
 # heartbeat / link -> comms awareness
-line([(800, 1170), (752, 1170)], color=TEAL)
+line([(800, 885), (762, 885), (762, 1170), (752, 1170)], color=TEAL)
 
 # divider
 svg.append(f'<line x1="775" y1="200" x2="775" y2="{H - 40}" stroke="#d6262c" '
