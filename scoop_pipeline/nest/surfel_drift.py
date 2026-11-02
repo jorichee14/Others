@@ -23,8 +23,9 @@ TYPES = {"char": "i1", "uchar": "u1", "int8": "i1", "uint8": "u1", "short": "<i2
          "float": "<f4", "float32": "<f4", "double": "<f8", "float64": "<f8"}
 
 
-def read_xyz(path):
-    """x y z of a PLY's vertices (binary little endian or ascii; other properties skipped)."""
+def read_xyz(path, with_normals=False):
+    """x y z of a PLY's vertices (binary little endian or ascii; other properties skipped);
+    with_normals: also nx ny nz, or None when the file has none."""
     with open(path, "rb") as fh:
         header, props, n, fmt, in_vertex = [], [], 0, "", False
         while True:
@@ -48,11 +49,20 @@ def read_xyz(path):
         if fmt == "ascii":
             a = np.loadtxt(fh, max_rows=n, ndmin=2)
             names = [p for p, _ in props]
-            return a[:, [names.index("x"), names.index("y"), names.index("z")]].astype(np.float64)
+            xyz = a[:, [names.index("x"), names.index("y"), names.index("z")]].astype(np.float64)
+            if not with_normals:
+                return xyz
+            N = a[:, [names.index(k) for k in ("nx", "ny", "nz")]] if "nx" in names else None
+            return xyz, N
         if fmt != "binary_little_endian":
             raise SystemExit(f"{path}: {fmt} not handled")
         rec = np.frombuffer(fh.read(n * np.dtype(props).itemsize), dtype=np.dtype(props), count=n)
-    return np.stack([rec["x"], rec["y"], rec["z"]], 1).astype(np.float64)
+    xyz = np.stack([rec["x"], rec["y"], rec["z"]], 1).astype(np.float64)
+    if not with_normals:
+        return xyz
+    names = rec.dtype.names
+    N = np.stack([rec[k] for k in ("nx", "ny", "nz")], 1).astype(np.float64) if "nx" in names else None
+    return xyz, N
 
 
 def write_coloured(path, P, rgb):
@@ -73,9 +83,26 @@ def main():
     ap.add_argument("--out", default=None, help="the moved surfels, coloured (default beside the trained ply)")
     ap.add_argument("--far", type=float, default=0.10, help="metres from every starting point to count as moved")
     a = ap.parse_args()
-    S, T = read_xyz(os.path.expanduser(a.start)), read_xyz(os.path.expanduser(a.trained))
+    S, N = read_xyz(os.path.expanduser(a.start), with_normals=True)
+    T = read_xyz(os.path.expanduser(a.trained))
     print(f"{len(S)} starting points, {len(T)} trained surfels")
-    d, _ = cKDTree(S).query(T, k=1, workers=-1)
+    if len(S) == len(T):
+        # nothing grown or pruned: surfel k started on point k, so the move is exact
+        D = T - S
+        d = np.linalg.norm(D, axis=1)
+        print("same count: each surfel against its own starting point")
+        if N is not None and np.isfinite(N).all() and (np.linalg.norm(N, axis=1) > 0.5).mean() > 0.9:
+            n = N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-9)
+            off = np.abs((D * n).sum(1))                    # off the surface: thickening, floaters
+            along = np.linalg.norm(D - (D * n).sum(1, keepdims=True) * n, axis=1)   # sliding along it
+            for name, v in (("off the surface (along its normal)", off), ("along the surface", along)):
+                print(f"  {name}: median {np.median(v) * 100:.1f} cm, 90% {np.percentile(v, 90) * 100:.1f} cm, "
+                      f"99% {np.percentile(v, 99) * 100:.1f} cm, over 10 cm {100 * np.mean(v > 0.10):.2f}%")
+            d = off                                         # what makes a floater is leaving the surface
+            print("the histogram and drift.ply below are the move OFF the surface")
+    else:
+        d, _ = cKDTree(S).query(T, k=1, workers=-1)
+        print("different counts: each surfel against the nearest starting point")
     edges = [0, 0.01, 0.02, 0.05, 0.10, 0.25, 0.5, 1.0, 2.0, np.inf]
     print("distance from the nearest starting point:")
     for lo, hi in zip(edges[:-1], edges[1:]):
