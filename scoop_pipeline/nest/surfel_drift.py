@@ -91,9 +91,20 @@ def main():
         D = T - S
         d = np.linalg.norm(D, axis=1)
         print("same count: each surfel against its own starting point")
-        if N is not None and np.isfinite(N).all() and (np.linalg.norm(N, axis=1) > 0.5).mean() > 0.9:
-            n = N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-9)
-            off = np.abs((D * n).sum(1))                    # off the surface: thickening, floaters
+        good = None
+        if N is None:
+            print("  the starting points carry no normals (no nx ny nz): only the total move")
+        else:
+            ln = np.linalg.norm(np.nan_to_num(N), axis=1)
+            good = np.isfinite(N).all(1) & (ln > 0.5)
+            print(f"  starting points with a usable normal: {int(good.sum())} of {len(N)} "
+                  f"(normal length median {np.median(ln):.3f})")
+            if good.mean() < 0.5:
+                good = None
+        if good is not None:
+            n = np.nan_to_num(N) / np.maximum(np.linalg.norm(np.nan_to_num(N), axis=1, keepdims=True), 1e-9)
+            n[~good] = 0.0
+            off = np.where(good, np.abs((D * n).sum(1)), d)  # off the surface: thickening, floaters
             along = np.linalg.norm(D - (D * n).sum(1, keepdims=True) * n, axis=1)   # sliding along it
             for name, v in (("off the surface (along its normal)", off), ("along the surface", along)):
                 print(f"  {name}: median {np.median(v) * 100:.1f} cm, 90% {np.percentile(v, 90) * 100:.1f} cm, "
@@ -104,7 +115,7 @@ def main():
         d, _ = cKDTree(S).query(T, k=1, workers=-1)
         print("different counts: each surfel against the nearest starting point")
     edges = [0, 0.01, 0.02, 0.05, 0.10, 0.25, 0.5, 1.0, 2.0, np.inf]
-    print("distance from the nearest starting point:")
+    print("move (from its own starting point when the counts match, else from the nearest one):")
     for lo, hi in zip(edges[:-1], edges[1:]):
         k = int(((d >= lo) & (d < hi)).sum())
         print(f"  {lo * 100:6.0f} .. {hi * 100 if np.isfinite(hi) else float('inf'):>6} cm  {k:9d}  {100 * k / len(d):6.2f}%")
