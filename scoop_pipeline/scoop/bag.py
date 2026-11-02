@@ -113,9 +113,13 @@ def iter_mcap_records(reader: BagReader, topics=None):
 def topic_schemas(reader: BagReader) -> Dict[str, TopicSchema]:
     """topic -> :class:`TopicSchema`, read from the MCAP summaries (nothing is
     decoded). With it a topic can be copied into another bag byte for byte,
-    custom message types included (:meth:`scoop.bagwrite.BagWriter.write_raw`)."""
+    custom message types included (:meth:`scoop.bagwrite.BagWriter.write_raw`).
+    A .db3 bag stores no definitions: they are generated from the type names,
+    so only types rosbags knows (the standard messages) are copied."""
     if reader.storage != "mcap":
-        raise BagError(f"topic schemas need an MCAP bag ({reader.path} is {reader.storage})")
+        from scoop import rosmsg
+        return {t: TopicSchema(i.msgtype, "ros2msg", rosmsg.msgdef(i.msgtype).encode(), "cdr")
+                for t, i in reader.topics().items()}
     from mcap.reader import make_reader
     out: Dict[str, TopicSchema] = {}
     for f in reader.files:

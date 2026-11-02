@@ -208,6 +208,30 @@ def main():
             assert [p["name"] for p in meta["pauses"]] == ["pause_01"]
             assert sorted(os.listdir(out_dir)) == ["pause_01", "pauses.yaml"]
 
+        def test_db3_bag_cut_by_intervals():
+            # a .db3 calibration bag: no odometry or IMU, no stored definitions
+            from rosbags.rosbag2 import Writer
+            db3 = os.path.join(d, "calib_db3")
+            src = bag.open_bag(rec)
+            keep = {t: i.msgtype for t, i in src.topics().items()
+                    if t in ("/mobile_2/ouster/points", "/mobile_2/color/image_raw",
+                             "/mobile_2/color/camera_info")}
+            with Writer(db3) as w:
+                conns = {t: w.add_connection(t, ty, typestore=TS) for t, ty in keep.items()}
+                for topic, log_ns, payload, _ in src.iter_raw(list(keep)):
+                    w.write(conns[topic], log_ns, bytes(payload))
+            out_dir = os.path.join(d, "db3_cut")
+            run(db3, out_dir, "--intervals", "2-5", *common)
+            r = bag.open_bag(os.path.join(out_dir, "pause_00"))
+            assert set(r.topics()) == set(keep), set(r.topics())
+            got = list(r.iter_raw())
+            assert got and all(t0 + 2 * 10**9 <= ns <= t0 + 5 * 10**9 for _, ns, _, _ in got)
+            orig = {(t, ns): bytes(b) for t, ns, b, _ in bag.open_bag(db3).iter_raw()}
+            for topic, log_ns, payload, _ in got:
+                assert bytes(payload) == orig[(topic, log_ns)], topic
+            frames = list(bag.iter_images(r, "/mobile_2/color/image_raw"))
+            assert frames and frames[0].image.shape == (4, 6, 3)
+
         def test_refuses_a_full_output_folder():
             msg = run(rec, os.path.join(d, "out"), *common, fail=True)
             assert "not empty" in msg, msg
@@ -217,7 +241,7 @@ def main():
                 check(name, fn)
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    n = 4
+    n = 5
     print(f"\n{n - len(FAILED)}/{n} passed")
     sys.exit(1 if FAILED else 0)
 

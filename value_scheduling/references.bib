@@ -1,0 +1,110 @@
+% value_scheduling: references. "confirm" marks entries not checked
+% against a primary text in this project.
+
+% --- the plan's own references ------------------------------------------
+@misc{yazgan2026dr,
+  author={Yazgan, M. and Mueller, T. and Zoellner, J. M.},
+  title={Dense Coverage, Sparse Refinement: Byte-Constrained Cooperative Perception},
+  year={2026}, note={arXiv:2609.29456 (24 Sep 2026), FZI / KIT. CoBEVT-DR: SimVQ codebook K=64, d=64; coarse base layer S_base=4 (2,304 bits on DAIR-V2X); fine patch 16x16 cells = 256 tokens x 6 bits + 48-bit header = 1,584 bits; Pyramid Window Attention benefit selector, 1.27 M params, 28.84 GFLOPs, ROC-AUC 0.785 vs counterfactual marginal detection gain; 0.60 AP@0.7 at 1.87 KB on DAIR-V2X; one-shot broadcast; states cross-agent redundancy as open. PDF in refs/}}
+@inproceedings{chen2026whispernet,
+  author={Chen, G. and Zhang, C. and Zhao, X.},
+  title={{WhisperNet}: A Scalable Solution for Bandwidth-Efficient Collaboration},
+  booktitle={Proc. IEEE/CVF CVPR}, year={2026}, note={arXiv:2603.01708}}
+@inproceedings{xu2025cosdh,
+  author={Xu, J. and others},
+  title={{CoSDH}: Communication-Efficient Collaborative Perception via Supply-Demand Awareness and Intermediate-Late Hybridization},
+  booktitle={Proc. IEEE/CVF CVPR}, year={2025}, note={author list: confirm}}
+@inproceedings{where2comm,
+  author={Hu, Y. and Fang, S. and Lei, Z. and Zhong, Y. and Chen, S.},
+  title={Where2comm: Communication-Efficient Collaborative Perception via Spatial Confidence Maps},
+  booktitle={Advances in Neural Information Processing Systems (NeurIPS)}, year={2022}}
+@misc{v2xdsc2026,
+  title={{V2X-DSC}: conditional / distributed source coding for collaborative perception},
+  year={2026}, note={title, authors, venue: confirm}}
+@article{mazandarani2026prism,
+  author={Mazandarani, H. and Shokrnezhad, M. and Taleb, T.},
+  title={A Semantic-Aware Multiple Access Scheme Leveraging Spatial Redundancy for Uplink-Dominant Network Services},
+  journal={IEEE Trans. Netw. Service Manag.}, volume={23}, pages={8095--8110}, year={2026}, doi={10.1109/TNSM.2026.3737571},
+  note={PRISM: Protocol for Redundancy Identification in Semantic Multiple-access. Distributed MADRL MAC (D3QL, VDN/QPLEX, CTDE); each UE picks channel and packet length from local observations; shared semantic segments across UEs via an association matrix from orchestration (KB MANO); self and assisted throughput; alpha-fairness and energy-efficiency objectives; MINLP centralized benchmark (Gurobi, N=4); evaluation N=8, C=4 slotted channels, synthetic association matrices, 10% channel failure. No deadlines, segments of equal value, slot-based (no airtime/MCS), collisions, whole-packet decisions. Future work: dynamic association, realistic channels, HARQ, testbed. PDF in refs/}}
+
+@misc{schedcp2025,
+  title={Deep Reinforcement Learning-Based User Scheduling for Collaborative Perception ({SchedCP})},
+  year={2025}, note={arXiv:2502.10456; authors: confirm}}
+@article{shao2022multidevice,
+  author={Shao, J. and Mao, Y. and Zhang, J.},
+  title={Task-Oriented Communication for Multi-Device Cooperative Edge Inference},
+  journal={IEEE Trans. Wireless Commun.}, volume={22}, number={1}, pages={73--87}, year={2023}, note={year 2022 online; distributed information bottleneck}}
+
+% --- added by the assessment ---------------------------------------------
+@misc{wang2023aoicp,
+  author={Wang, L. and Sun, J. and Sun, Y. and Zhou, S. and Niu, Z.},
+  title={Age of Information Guaranteed Scheduling for Asynchronous Status Updates in Collaborative Perception},
+  year={2023}, note={arXiv:2310.04813; center-side RU scheduling with per-region AoI constraints; WiOpt version lists different authors: confirm}}
+@misc{zhu2026tamp,
+  author={Zhu, M. and Sun, Y. and Jia, Y. and Chen, W. and Ai, B. and Zhou, S.},
+  title={Timeliness-Oriented Scheduling and Resource Allocation in Multi-Region Collaborative Perception},
+  year={2026}, note={arXiv:2601.04542}}
+@inproceedings{hu2024codefilling,
+  author={Hu, Y. and others},
+  title={Communication-Efficient Collaborative Perception via Information Filling with Codebook},
+  booktitle={Proc. IEEE/CVF CVPR}, year={2024}, note={author list: confirm}}
+@article{nemhauser1978analysis,
+  author={Nemhauser, G. L. and Wolsey, L. A. and Fisher, M. L.},
+  title={An Analysis of Approximations for Maximizing Submodular Set Functions---{I}},
+  journal={Mathematical Programming}, volume={14}, pages={265--294}, year={1978}}
+@article{khuller1999budgeted,
+  author={Khuller, S. and Moss, A. and Naor, J.},
+  title={The Budgeted Maximum Coverage Problem},
+  journal={Information Processing Letters}, volume={70}, number={1}, pages={39--45}, year={1999}}
+@article{sviridenko2004knapsack,
+  author={Sviridenko, M.},
+  title={A Note on Maximizing a Submodular Set Function Subject to a Knapsack Constraint},
+  journal={Operations Research Letters}, volume={32}, number={1}, pages={41--43}, year={2004}}
+@misc{ieee80211ax,
+  author={{IEEE}},
+  title={{IEEE} Std 802.11ax-2021: Enhancements for High-Efficiency {WLAN}},
+  year={2021}, note={uplink OFDMA, trigger frames, buffer status reports, target wake time}}
+@misc{ieee80211be,
+  author={{IEEE}},
+  title={{IEEE} Std 802.11be: Enhancements for Extremely High Throughput ({EHT})},
+  year={2024}, note={restricted TWT}}
+@misc{ns3wifi,
+  author={{ns-3 project}},
+  title={ns-3 Wi-Fi module: 802.11ax {OFDMA} and the {MultiUserScheduler} interface},
+  howpublished={\url{https://www.nsnam.org/docs/models/html/wifi-design.html}}, year={2024}}
+@inproceedings{xu2022opv2v,
+  author={Xu, R. and Xiang, H. and Xia, X. and Han, X. and Li, J. and Ma, J.},
+  title={{OPV2V}: An Open Benchmark Dataset and Fusion Pipeline for Perception with Vehicle-to-Vehicle Communication},
+  booktitle={Proc. IEEE ICRA}, year={2022}}
+@inproceedings{yu2022dairv2x,
+  author={Yu, H. and others},
+  title={{DAIR-V2X}: A Large-Scale Dataset for Vehicle-Infrastructure Cooperative {3D} Object Detection},
+  booktitle={Proc. IEEE/CVF CVPR}, year={2022}, note={author list: confirm}}
+@inproceedings{xiang2024v2xreal,
+  author={Xiang, H. and others},
+  title={{V2X-Real}: A Large-Scale Dataset for Vehicle-to-Everything Cooperative Perception},
+  booktitle={Proc. ECCV}, year={2024}, note={author list: confirm}}
+@inproceedings{heusse2003anomaly,
+  author={Heusse, M. and Rousseau, F. and Berger-Sabbatel, G. and Duda, A.},
+  title={Performance Anomaly of 802.11b},
+  booktitle={Proc. IEEE INFOCOM}, pages={836--843}, year={2003}}
+
+% --- read in full (PDFs in refs/) -----------------------------------------
+@misc{wang2026jigsawcomm,
+  author={Wang, C. and Li, Z. and Li, M. F. and Wen, W.},
+  title={{JigsawComm}: Joint Semantic Feature Encoding and Transmission for Communication-Efficient Cooperative Perception},
+  year={2026}, note={arXiv:2511.17843v2 (13 Mar 2026). Sparse encoder (L1 + learnable threshold kappa), FUE 1x1 conv utility u_i^l, cell utility U^l = sum m u - sum_{j!=i} m_i m_j min(u_i,u_j)/2, top-1 agent per cell then greedy by utility/cost to budget B; identical decision at every agent (V2I or V2V); meta utility maps 0.03 KB/agent; O(1) payload in N; OPV2V 0.92/0.82 at 44 KB total; Top-2 worse than Top-1 under max/attention fusion ("more is worse"); delay tested as feature staleness 0-500 ms; packet drop with ego fallback; cost uniform bytes per cell, no airtime, no deadline; code github.com/WiSeR-Lab/JigsawComm}}
+@misc{bansal2026r2t,
+  author={Bansal, A. and Gangwani, I.},
+  title={Reason-to-Transmit: Deliberative Adaptive Communication for Cooperative Perception},
+  year={2026}, note={arXiv:2603.20308 (19 Mar 2026), Synthetic Sciences. 2-layer transformer (0.26M) over 64 region tokens + agent context + neighbor-state token (positions/orientations, to estimate receiver visibility) + budget token; synthetic 64x64 BEV, N=4, K=20 objects, 128 B/region; oracle = ground-truth object content. Findings: any communication +58% AP over none; all selective policies within ~0.5 AP at 10% budget; R2T leads only under high occlusion (0.205 = oracle); "the fusion module matters more than the selection policy"}}
+@misc{ma2026unseen,
+  author={Ma, Y. and Zhao, Z. and Fang, Z. and An, H. and Chen, X. and Fang, Y.},
+  title={Update the Unseen Only: Minimizing {AoI} for Collaborative Perception through Online Learning},
+  year={2026}, note={arXiv:2607.20967 (23 Jul 2026), CityU / HKU. BS downlink broadcast of K of B areas per slot; per-user per-area AoI resets to 0 when the user senses the area locally or loses interest; INAR(1) model of the interested-but-unobserving population with persistence rho_b; PO-RMAB; mean-field lower bound; LocMW index W_b = beta rho A / (1 - rho + rho eta); sublinear excess AoI O(K L sqrt(T log BT)); pNEUMA and FLUID trajectories, V2X-Sim with PointPillars, 400 grids x 1 KB; up to 31.6% lower AoI, +16.3% mAP@70 vs traditional max-demand}}
+% The PDF supplied as "AutoCast" is AutoCast++ (Yan, Seraj, He, Meng, Sylvain, ICLR 2024,
+% arXiv:2310.01880), an LLM event-forecasting paper. NOT Qiu et al. MobiSys 2022.
+@inproceedings{qiu2022autocast,
+  author={Qiu, H. and Huang, P.-H. and Asavisanu, N. and Liu, X. and Psounis, K. and Govindan, R.},
+  title={{AutoCast}: Scalable Infrastructure-less Cooperative Perception for Distributed Collaborative Driving},
+  booktitle={Proc. ACM MobiSys}, year={2022}, doi={10.1145/3498361.3538925}, note={read in full (arXiv:2112.14947v1, PDF in refs/). Units: point clouds of detected roadway objects (~200 pts, 38.4 kbit). Control plane every T_d=100 ms: trajectory waypoints + object map (id, size, v_(i,k),j visible-to-j by ray trace from j's CURRENT pose, r_(i,k),j relevant-to-j by extrapolated-trajectory collision, boolean or 1/TTC). Reward y=(1-v)r; MDP over PHY frames with delivery probabilities p_ij; greedy max-weight by H/s (reward per byte), within 2% of DP; FPTAS; starvation compensation (variance-normalized age term). Schedule identical at every vehicle from common control messages (distributed). Channel: LTE-Direct TDMA mode 4, 7.2 Mbps uniform B, frame time S/B, 3GPP loss; CARLA 5-40 vehicles; DSRC replay; 80 ms pipeline. No detector task loss, no future visibility, no per-sender rate, no contention}}

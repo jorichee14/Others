@@ -1,0 +1,48 @@
+# The calibrations of the 20261015 rigs. mobile_2's camera-LiDAR mount was
+# rebuilt after that (static_tf.yaml has the new one): reprocess a 20261015
+# recording with this file (--static-tf, recording.yaml ouster.static_tf).
+#
+# Calibrated transforms. A robot's own -- reached from its Ouster frames, e.g.
+# os_lidar_mobile1 -> ZED -> radars -- go into its processed bag at decode
+# (recording.yaml ouster.static_tf, decode_ouster.py --static-tf), so the bag
+# carries its TF alone; the merge (processing/merge_session.py) adds the rest
+# (infra_1's camera -> radar) and any a bag does not have yet (older bags).
+# pose of `child` in `parent`: translation in m, rotation as a quaternion xyzw.
+# If `child` already has a parent in the bags' TF tree (the ZED optical frame
+# does), the merge adds the same geometry as `child` -> <root of parent's tree>
+# instead, so every frame keeps one parent (scoop/tftree.py).
+# Each robot's Ouster frames carry its suffix (decode_ouster.py --frame-suffix,
+# recording.yaml ouster.frame_suffix): os_lidar_mobile1, os_sensor_mobile1,
+# os_imu_mobile1; _mobile2 on mobile_2. A bag decoded before that says os_lidar:
+# processing/rename_frames.py --suffix _mobileN.
+transforms:
+  - parent: os_lidar_mobile1                              # mobile_1's Ouster
+    child: zed_left_camera_optical_frame
+    translation: [-0.074928, -0.066971, -0.091627]      # |t| = 0.135 m
+    rotation_xyzw: [-0.497829, -0.498035, 0.501789, 0.502329]
+  - parent: zed_left_camera_optical_frame
+    child: radar1_link
+    translation: [0.207505, 0.076150, -0.108883]         # |t| = 0.246 m
+    rotation_xyzw: [-0.551338, 0.560743, -0.443155, -0.430356]
+  - parent: zed_left_camera_optical_frame
+    child: radar2_link                                    # MP#1, rigid to the ZED
+    translation: [-0.053850, 0.046553, -0.112039]        # |t| = 0.133 m
+    rotation_xyzw: [0.724722, 0.038269, 0.687594, -0.022953]
+  - parent: arducam_optical_frame
+    child: infra1_link                                    # infra_1's radar
+    translation: [0.017773, -0.208023, -0.155788]        # |t| = 0.260 m
+    rotation_xyzw: [0.571431, 0.563856, 0.432969, -0.409965]
+  - parent: os_lidar_mobile2                              # mobile_2's Ouster
+    child: camera_color_optical_frame                     # mobile_2's RealSense colour
+    translation: [-0.273322, 0.029175, 0.004183]          # |t| = 0.275 m
+    rotation_xyzw: [0.552208, 0.540455, -0.450592, -0.447148]
+    quality:                                              # not read by the merge; the record
+      method: direct_visual_lidar_calibration (Koide), NID on reflectivity, static integration
+      camera: /mobile_2/color (fx 427.703 fy 427.108 cx 423.132 cy 239.735, plumb_bob)
+      recording: 20261015 mapping, mirc_dataset_mapping_2_run_20261015_mobile_2
+      pauses: [pause_01, pause_02, pause_03, pause_04]    # processing/dvlc_pauses.py
+      initial_guess: manual, 8 point pairs
+      cost: {initial: 3.724714, final: 3.716170, iterations: 10}
+      change_from_guess: {translation_m: 0.030, rotation_deg: 0.41}
+      viewer_check: edges matched in all pauses
+      calib_json: work/20261015/mobile_2_calib/pauses_preprocessed/calib.json

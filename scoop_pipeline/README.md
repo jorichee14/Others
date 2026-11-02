@@ -27,6 +27,7 @@ configs/recording.yaml  settings for processing a recording (topics, remaps, GLI
 configs/zed/         the robot's zed_wrapper config, used to replay SVOs
 configs/record.yaml  what each machine records (the robots' record.yaml)
 configs/static_tf.yaml  calibrated transforms the merge adds to /tf_static
+                        (static_tf_20261015.yaml: the 20261015 rigs')
 configs/glim/<machine>/  GLIM's config folder per robot (configs/glim/README.md)
 configs/comms.yaml   which TF frame places each machine in the comms tables
 environment.yml      conda env for all offline processing
@@ -949,9 +950,10 @@ W=work/mobile_2_calib
 #    /tf, /tf_static); os_lidar, os_sensor, os_imu -> *_mobile2 everywhere
 python processing/decode_ouster.py $RAW $W/decoded \
     --packets-ns /mobile_2/ouster --out-ns /mobile_2/ouster --frame-suffix _mobile2 \
-    --static-tf configs/static_tf.yaml \
+    --static-tf configs/static_tf_20261015.yaml \
     --copy-all --exclude /mobile_2/ouster/lidar_packets --exclude /mobile_2/ouster/imu_packets
-#    (--static-tf: its calibration, os_lidar_mobile2 -> colour camera, into /tf_static)
+#    (--static-tf: its calibration, os_lidar_mobile2 -> colour camera, into /tf_static;
+#     the 20261015 rig's -- a recording on today's rig takes configs/static_tf.yaml)
 # 2. retime: the Ouster on the PC clock, with everything else  ->  the processed bag
 python processing/retime.py $RAW $W/decoded $W/retimed /mobile_2/ouster /mobile_2/ouster
 # 3. the pauses: look first, then cut
@@ -984,6 +986,19 @@ infra1 camera instead: pass `/mobile_2/infra1/image_rect_raw` and
 (and to `run_dvlc.sh` as `IMAGE_TOPIC=... CAMERA_INFO_TOPIC=...`).
 `run_dvlc.sh` mounts only the `pause_*` folders, read-only; `DVLC_IMAGE`
 picks another image than `dvlc:humble-mcap`.
+
+A short bag recorded for calibration (the three DVLC topics, `.db3` or MCAP,
+no odometry or IMU) goes through `--intervals` as well, one output folder per
+bag. Cut its first seconds: DVLC keeps only the first image of each bag, and
+the latched image topic hands a new recording the camera's last frame from
+before it started (20261030: bag 2's image showed bag 1's place).
+
+```
+for b in calib_bag calib_bag2 calib_bag3; do
+  python processing/dvlc_pauses.py $W/$b $W/${b}_cut --intervals 2-20 &&
+  mv $W/${b}_cut/pause_00 $W/pauses/pause_$b
+done
+```
 
 ## Merging chosen topics of any bags
 

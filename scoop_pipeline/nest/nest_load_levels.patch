@@ -1,0 +1,15 @@
+diff --git a/scene/gaussian_model.py b/scene/gaussian_model.py
+index 4aa4472..530b723 100644
+--- a/scene/gaussian_model.py
++++ b/scene/gaussian_model.py
+@@ -340,7 +340,9 @@ class GaussianModel:
+ 
+         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+ 
+-        init_level = 6
++        # every texture level, as in training (create_from_pcd: 24). NeST's 6 capped a loaded
++        # model at six levels: with more, the finest were trained but never rendered after loading
++        init_level = 24
+         ap_level = init_level * torch.ones((self.get_xyz.shape[0], 1), device="cuda").float()
+         self._appearance_level = nn.Parameter(ap_level.requires_grad_(True))
+ 

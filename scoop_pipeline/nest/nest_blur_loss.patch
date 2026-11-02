@@ -1,0 +1,91 @@
+diff --git a/blur_match.py b/blur_match.py
+new file mode 100644
+index 0000000..9ce951d
+--- /dev/null
++++ b/blur_match.py
+@@ -0,0 +1,56 @@
++"""A smeared photograph supervises only what it can see.
++
++The robot turns, the shutter is open, the photograph is a smear; fitted as
++it is, the texture learns the smear. Here each training image carries the
++Gaussian sigma that takes a sharp neighbour of the same view down to its own
++sharpness (blur_levels.py writes <scene>/blur_sigma.csv), and the render is
++blurred by that sigma before the photometric loss. The frame still fixes
++geometry and low-frequency colour; the fine detail is left to the sharp
++frames, which are most of them.
++"""
++import csv
++import math
++import os
++
++import torch
++import torch.nn.functional as F
++
++
++class BlurMatch:
++    FILE = "blur_sigma.csv"
++
++    def __init__(self, scene_path, min_sigma=0.6):
++        self.sigma = {}
++        path = os.path.join(scene_path, self.FILE)
++        if os.path.exists(path):
++            for row in csv.DictReader(open(path)):
++                s = float(row["sigma_px"])
++                if s >= min_sigma:
++                    self.sigma[row["name"]] = s
++            print(f"[blur match] {len(self.sigma)} of the scene's frames are blurred (sigma >= {min_sigma} px); "
++                  f"their renders are blurred to match before the loss")
++        else:
++            print(f"[blur match] no {path}: run blur_levels.py on the scene first; training as if every frame were sharp")
++        self._kernels = {}
++
++    def kernel(self, sigma):
++        key = round(sigma, 2)
++        if key not in self._kernels:
++            r = int(math.ceil(3 * key))
++            x = torch.arange(-r, r + 1, dtype=torch.float32, device="cuda")
++            k = torch.exp(-0.5 * (x / key) ** 2)
++            self._kernels[key] = (k / k.sum())
++        return self._kernels[key]
++
++    def apply(self, image, cam):
++        """The render (3,H,W) blurred to the frame's level; unchanged for a sharp frame."""
++        s = self.sigma.get(cam.image_name)
++        if s is None:
++            return image
++        k = self.kernel(s)
++        r = (k.numel() - 1) // 2
++        x = image.unsqueeze(0)
++        x = F.pad(x, (r, r, r, r), mode="reflect")
++        x = F.conv2d(x, k.view(1, 1, 1, -1).expand(3, 1, 1, -1), groups=3)
++        x = F.conv2d(x, k.view(1, 1, -1, 1).expand(3, 1, -1, 1), groups=3)
++        return x.squeeze(0)
+diff --git a/train.py b/train.py
+index 7a9708e..d6ca9ff 100644
+--- a/train.py
++++ b/train.py
+@@ -31,6 +31,7 @@ except ImportError:
+ from hash_encoder.modules import INGP
+ from hash_encoder.config import Config
+ from session_color import SessionColor
++from blur_match import BlurMatch
+ from utils.render_utils import save_img_u8, convert_gray_to_cmap
+ from utils.render_utils import gsnum_trans_color
+ import open3d as o3d
+@@ -60,6 +61,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+     if channels not in (3, 8, 16, 24, 32, 48):
+         sys.exit(f"encoding.levels x hashgrid.dim = {channels}: the surfel rasteriser is compiled for "
+                  "3, 8, 16, 24, 32 or 48 channels and would render nothing")
++    blur = BlurMatch(dataset.source_path) if getattr(cfg_model.training_cfg, 'blur_match', False) else None
+     color = SessionColor(scene.getTrainCameras(), per_image=getattr(cfg_model.training_cfg, 'image_color', False)) \
+         if getattr(cfg_model.training_cfg, 'session_color', False) else None
+     if checkpoint:
+@@ -160,6 +162,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+         gt_image = viewpoint_cam.original_image.cuda()
+         if color is not None:
+             image = color.apply(image, viewpoint_cam, training=True)
++        if blur is not None:
++            image = blur.apply(image, viewpoint_cam)
+ 
+         error_img = torch.abs(gt_image - image)
+ 
