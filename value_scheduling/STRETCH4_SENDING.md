@@ -113,3 +113,41 @@ The 2026 arXiv entries were checked from their abstracts and search
 summaries; the full PDFs could not be opened from this session
 (arxiv.org is not in its allowed network domains). Read them before
 citing details.
+
+## Coarse-to-fine in the literature, and how it is made communication-aware
+
+**How coarse-to-fine is done**
+
+| Family | Coarse | Fine | Handover | Work |
+|---|---|---|---|---|
+| Two-stage with a bottleneck pose | pose estimate + motion planning to a pre-interaction pose | closed-loop policy from the wrist camera | the bottleneck pose, fixed by the task | Johns, Coarse-to-Fine Imitation Learning (ICRA 2021); Valassakis, Di Palo, Johns, sub-millimetre coarse-to-fine sim-to-real; Di Palo & Johns, self-replay; MILES (2024) |
+| Mobile manipulation pipelines | map, language query, navigation | grasp model, mostly open-loop | arrival at the object | OK-Robot (RSS 2024, on Stretch: heavy models on a workstation over the network, controllers on the robot) |
+| Dual-rate (slow–fast) policies | slow VLM: what and where | fast policy: how, at high rate | continuous; slow output conditions the fast one | HiRT (CoRL 2024); RoboDual (2024); Hi Robot (2025); FiS-VLA (2025); asynchronous fast–slow VLA (arXiv 2512.20188); TIC-VLA (2026) |
+
+**How it is made communication-aware**
+
+1. **Split along coarse/fine:** coarse offloaded, fine on the robot
+   (OK-Robot; Edge-SLAM; Chinchali et al. RSS 2019); Pohland et al.
+   (2026) measure that added latency hurts the fine part.
+2. **Make the fine loop tolerate a late coarse answer:** delay-aware
+   training (RoboDual, TIC-VLA), the cloud working on a delayed frame
+   while the robot fuses the current one (latency-tolerant cloud–edge
+   VLA, arXiv 2608.00569), a buffer of precomputed waypoints (SPO,
+   arXiv 2603.19418), hold / match / fuse stale outputs (Slow Brain,
+   Fast Planner, arXiv 2606.20458).
+3. **Choose where the coarse request is sent from:** Liu et al. (2026),
+   Gordon et al. (INFOCOM 2026 workshop), RCAMP (IROS 2017).
+4. **Adapt what is sent to bandwidth:** video analytics (AWStream,
+   Chameleon, DDS); AdaptSLAM for SLAM data.
+
+**What stays fixed in all of them.** The handover point and the
+slow/fast rates are set by the task or a fixed ratio, and the form of
+what is sent is the same in every stage. The link does not change
+either.
+
+**For the Stretch pick.** Coarse = drive and locate (server:
+2Fast-2Lamaa, YOLO); handover = the stop at the table (the bottleneck
+pose); fine = wrist and gripper, local. The one message that matters
+most is the arrival image and scan at the handover; the policy makes
+each stage's form, rate and send point follow that stage's deadline
+and tolerance and the link where the robot is.
