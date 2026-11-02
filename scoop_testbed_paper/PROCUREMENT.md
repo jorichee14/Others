@@ -1,7 +1,7 @@
 # SCooP-iT hardware procurement
 
-Budget NT$52,000; no single line item over NT$10,000. Total below: **NT$49,650**,
-leaving NT$2,350 for shipping and 5% VAT (the TI and Arducam orders are the
+Budget NT$52,000; no single line item over NT$10,000. Total below: **NT$49,850**,
+leaving NT$2,150 for shipping and 5% VAT (the TI and Arducam orders are the
 exposure).
 
 The **must-have spec** column is what makes the part work in this rig. Where it
@@ -96,7 +96,8 @@ you don't own.
 
 | Item | Qty | NT$ | Must-have spec | Why this spec |
 |---|---|---|---|---|
-| Powered USB3 hub, 4-port | 1 | 800 | **External 12 V PSU** (not bus-powered); USB 3.0+ | `mobile_1` runs ZED 2i + 2× IWR6843 + Wi-Fi dongle. A bus-powered hub cannot feed that |
+| Self-powered USB3 hub, 4-port | 1 | 750 | USB 3.0+; **self-powered** (its own supply, not bus-powered) | `mobile_1` runs ZED 2i + 2x IWR6843 + Wi-Fi dongle -- four devices on two usable USB-A ports, ~2.4 A at 5 V. A bus-powered hub may legally promise only ~100 mA per port, so devices are refused configuration or brown out mid-pass. The failure that matters: an under-fed RTL8852BU drops its link on TX bursts, which is indistinguishable from a real radio outage in the recorded `wifi/status` |
+| 5 V 5-6 A step-down converter (12-30 V in) | 1 | 250 | 5 V out, >=5 A, barrel to match the hub | **A consumer powered hub ships with an AC wall brick, and `mobile_1` is a battery-powered Scout Mini.** This replaces the brick off the robot's own rail. The alternative is an industrial USB3 hub with 12-24 V DC terminal input (Delock / StarTech / Moxa / Advantech, NT$2,500-5,000) -- cleaner engineering at 3-5x the price |
 | Micro-USB cable | 6 | 600 | **Data-capable** (not charge-only); 24–28 AWG; ≤1 m | Charge-only cables are the single most common "radar won't enumerate" cause |
 | Cat6 / Cat6a, 2 m + 5 m mix | 8 | 800 | Cat6+; **stranded** (not solid) core | Stranded survives flexing on a robot. Solid-core cracks |
 | 5-port gigabit switch | 1 | 450 | Unmanaged gigabit is fine | One wired segment for the Ouster link-local net + NTP. A PTP transparent-clock switch is NT$10k+ and buys nothing at your 0.99 ms budget |
@@ -106,6 +107,22 @@ you don't own.
 | 12 V pack + DC connector + inline fuse | 1 | 1,500 | MIC-713 accepts **9–36 VDC**; size for ~135 W peak (≈11 A at 12 V). LiFePO4 12 V ≥20 Ah, ≥15 A continuous. 15 A inline fuse | 9–36 V means a 12 V or 24 V pack drives it directly, no inverter. AT mode (jumper default) auto-powers-on when voltage is applied — no button press when you set the cart down. 24 V halves the current if you prefer |
 | 12 V fan, 120 mm + guard + mount | 1 | 400 | 12 V DC, 2-pin, with finger guard | The MIC-713 is **fanless**, derated to ~50 °C ambient in MAXN_SUPER. You're about to run 141 MB/s of serialization alongside Isaac VSLAM in it. The cart already has 12 V |
 | Velcro, cable ties, labels, spare fuses | — | 400 | — | Strain relief on the SSD cable is not optional on a cart |
+
+**Hub wiring:** the ZED 2i goes **direct to an Orin USB 3 port** -- it is the
+only bandwidth-hungry device and should not share a hub uplink. The two radars
+and the Wi-Fi dongle go on the hub: low bandwidth, power-sensitive.
+
+**On per-port power switching (PPPS):** software-controlled PPPS, the kind
+`uhubctl` drives, is a shrinking and revision-specific category -- the
+well-known compatible hubs are mostly USB 2.0 and discontinued, and published
+compatibility tables are stale snapshots. Do not pay a premium chasing a model
+name. Buy where returns are possible, then test:
+`lsusb -v | grep -A1 wHubCharacteristic` should report `Per-port power
+switching`, confirmed with `sudo uhubctl -a cycle -p <port>`. Hubs advertising
+"per-port switches" usually mean physical buttons, which are useless for a
+robot you cannot reach. If it turns out ganged, restart the sensor's ROS node
+instead; nothing else is lost. The Pi's onboard hub advertises per-port
+switching but gangs all four ports, so do not rely on it there either.
 
 ---
 
