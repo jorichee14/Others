@@ -327,14 +327,20 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   rob.forEach(([k, t, r, b, h], i) => { block(s, RX, y, RW, h, k, t, r, b, 'Robot ' + i); y += h + 0.1; });
   const rbY = y, rbH = 6.85 - y;
   block(s, RX, rbY, RW, rbH, 'com', 'Comms bridge · robot', 'ROS 2 nodes', '', 'Robot bridge');
-  const rnodes = ['offload_client', 'link_monitor', 'policy', 'keyframe_packer', 'recorder'];
-  const nw = (RW - 0.2 - 0.08 * 2) / 3;
-  rnodes.forEach((n, i) => {
-    const cx = RX + 0.1 + (i % 3) * (nw + 0.08), cy = rbY + 0.36 + Math.floor(i / 3) * 0.42;
-    addT(s, n, { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.05, x: cx, y: cy, w: nw, h: 0.34,
-      fill: { color: 'FFFFFF' }, line: { color: '0B7F74', width: 1 }, fontSize: 11, bold: true, color: '0B7F74',
-      align: 'center', valign: 'middle', margin: 0, objectName: 'node ' + n });
-  });
+  // comms nodes: [name, later?]
+  const drawNodes = (nodes, bx, by, bw, cols, prefix) => {
+    const gw = (bw - 0.2 - 0.08 * (cols - 1)) / cols;
+    nodes.forEach(([n, later], i) => {
+      const cx = bx + 0.1 + (i % cols) * (gw + 0.08), cy = by + 0.36 + Math.floor(i / cols) * 0.42;
+      addT(s, later ? [{ text: n, options: { breakLine: false } }, { text: '  later', options: { fontSize: 9, bold: false, italic: true } }] : n,
+        { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.05, x: cx, y: cy, w: gw, h: 0.34,
+          fill: { color: later ? 'F4FAF9' : 'FFFFFF' }, line: { color: later ? '8CC9C1' : '0B7F74', width: 1, dashType: later ? 'dash' : 'solid' },
+          fontSize: 11, bold: true, color: later ? '4F8F87' : '0B7F74', align: 'center', valign: 'middle', margin: 0,
+          objectName: prefix + ' node ' + n });
+    });
+  };
+  drawNodes([['offload_client'], ['link_monitor'], ['comms_policy'], ['target_tracker'], ['keyframe_packer', 1], ['recorder', 1]],
+    RX, rbY, RW, 3, 'robot');
 
   // server column
   y = Y0;
@@ -347,14 +353,8 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   srv.forEach(([k, t, r, b, h], i) => { block(s, SX, y, SW, h, k, t, r, b, 'Server ' + i); y += h + 0.1; });
   const sbY = y, sbH = 6.85 - y;
   block(s, SX, sbY, SW, sbH, 'com', 'Comms bridge · server', 'ROS 2 nodes', '', 'Server bridge');
-  const snodes = ['offload_server', 'keyframe_ingest', 'GPU scheduler', 'logger'];
-  const sw2 = (SW - 0.2 - 0.08) / 2;
-  snodes.forEach((n, i) => {
-    const cx = SX + 0.1 + (i % 2) * (sw2 + 0.08), cy = sbY + 0.36 + Math.floor(i / 2) * 0.42;
-    addT(s, n, { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.05, x: cx, y: cy, w: sw2, h: 0.34,
-      fill: { color: 'FFFFFF' }, line: { color: '0B7F74', width: 1 }, fontSize: 11, bold: true, color: '0B7F74',
-      align: 'center', valign: 'middle', margin: 0, objectName: 'node ' + n });
-  });
+  drawNodes([['offload_server'], ['target_server'], ['link_mapper'], ['logger'], ['keyframe_ingest', 1], ['gpu_scheduler', 1]],
+    SX, sbY, SW, 3, 'server');
 
   // Wi-Fi column
   s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: MX, y: Y0, w: MW, h: 6.85 - Y0, rectRadius: 0.08,
@@ -382,10 +382,10 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
     line: { color: '0B7F74', width: 2.5, beginArrowType: 'triangle', endArrowType: 'triangle' }, objectName: 'robot link' });
   s.addShape(pres.shapes.LINE, { x: MX + MW - 0.08, y: sbY + 0.6, w: SX - (MX + MW - 0.08), h: 0,
     line: { color: '0B7F74', width: 2.5, beginArrowType: 'triangle', endArrowType: 'triangle' }, objectName: 'server link' });
-  addT(s, 'wraps the one network call per look; sends background and offline traffic only when the pick allows',
+  addT(s, 'messages: Target (pose, time seen, source, validity) · LinkState (RTT, RSSI, queue, predicted request time) · Detect (+ ID, times)',
     { x: RX + 0.1, y: rbY + rbH - 0.5, w: RW - 0.2, h: 0.42, fontSize: 11, color: '174F49', italic: true,
       valign: 'bottom', isTextBox: true, margin: 0, objectName: 'Robot bridge note' });
-  addT(s, 'answers requests by ID and age; takes in keyframe packs; serves pick requests first on the GPU; logs every hop',
+  addT(s, 'targets sent only on change, with their age · link map = request time p50/p95 + failures per cell, not just RSSI',
     { x: SX + 0.1, y: sbY + sbH - 0.5, w: SW - 0.2, h: 0.42, fontSize: 11, color: '174F49', italic: true,
       valign: 'bottom', isTextBox: true, margin: 0, objectName: 'Server bridge note' });
   s.addNotes('Left: everything on the robot. Middle: the Wi-Fi, with four traffic tiers. Right: the server and the wired room cameras. The teal dashed blocks are the comms side.');
@@ -396,22 +396,25 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   const wcell = (t, bg, fg) => ({ text: t, options: { bold: true, color: fg, fill: { color: bg } } });
   const hd = (t) => ({ text: t, options: { bold: true, color: 'FFFFFF', fill: { color: '0B3D3A' } } });
   const R_ = (t) => wcell(t, 'DFF3E6', '1F6F43'), S_ = (t) => wcell(t, 'ECE6FB', '5B3FB0'), B_ = (t) => wcell(t, 'EEF0F3', '333333');
+  const nm = (t, later) => ({ text: later ? t + '  (later)' : t, options: { bold: true, color: later ? '4F8F87' : '1D1D1F' } });
   const crow = [
-    [hd('Component'), hd('Where'), hd('What it does')],
-    [{ text: 'offload_client', options: { bold: true } }, R_('Robot'), 'Sends one resized JPEG when a step needs it, with an ID and capture time; waits with a timeout; retries; drops old answers'],
-    [{ text: 'link_monitor', options: { bold: true } }, R_('Robot'), 'Measures round-trip time, signal strength and the server’s queue; predicts how long an answer will take'],
-    [{ text: 'policy', options: { bold: true } }, R_('Robot'), 'Per step: wait, retry, use the onboard model, keep the current goal, or slow down'],
-    [{ text: 'keyframe_packer', options: { bold: true } }, R_('Robot'), 'Sends keyframe packs when the view changes; pauses while detecting and grasping'],
-    [{ text: 'recorder', options: { bold: true } }, R_('Robot'), 'Saves full-rate data and bags to disk; uploads them at the dock'],
-    [{ text: 'offload_server', options: { bold: true } }, S_('Server'), 'Runs the model (SAM 3 / YOLOE) on the photo; answers with the same ID and its own times; drops requests that are too old'],
-    [{ text: 'keyframe_ingest', options: { bold: true } }, S_('Server'), 'Receives keyframe packs, fills gaps after a pause, updates the map and the keyframe search'],
-    [{ text: 'GPU scheduler', options: { bold: true } }, S_('Server'), 'Runs pick requests before map training and SAM 3D'],
-    [{ text: 'logger', options: { bold: true } }, S_('Server'), 'Records times, sizes and link quality per request → where the time goes, and the link map'],
-    [{ text: 'link map', options: { bold: true } }, B_('Both'), 'Signal quality per spot in the room; tells the robot where it can send from'],
+    [hd('Node'), hd('Where'), hd('What it does')],
+    [nm('offload_client'), R_('Robot'), 'One photo per look (resized or cropped JPEG, with ID, capture time and pose); waits up to the time limit; retries; drops old answers'],
+    [nm('link_monitor'), R_('Robot'), 'Heartbeat (RTT, server queue) + RSSI + link map at the current and next position → predicted request time (p50 / p95)'],
+    [nm('comms_policy'), R_('Robot'), 'Per step: time limit, retry or onboard fallback, speed limit when targets are old, pause / resume background traffic'],
+    [nm('target_tracker'), R_('Robot'), 'Latest target per type (object, person) with its age and source; checks validity; asks for a refresh when old; goal to Nav2'],
+    [nm('keyframe_packer', 1), R_('Robot'), 'Map updates when the view changes; paused while detecting and grasping'],
+    [nm('recorder', 1), R_('Robot'), 'Full-rate data and bags to disk; uploaded at the dock'],
+    [nm('offload_server'), S_('Server'), 'Wraps detect: runs YOLOE / SAM 3, answers with the same ID and server times, drops requests already too old, reports its queue'],
+    [nm('target_server'), S_('Server'), 'Room-camera detections + object cache → targets, sent only on change, with time seen, source, validity, verified / last seen'],
+    [nm('link_mapper'), S_('Server'), 'Link map per cell: request time p50 / p95, failure rate, RTT, RSSI; from a survey drive, then from every logged request'],
+    [nm('logger'), S_('Server'), 'Every request: time at each hop, sizes, step, RSSI, RTT, pose → where the time goes'],
+    [nm('keyframe_ingest', 1), S_('Server'), 'Receives map updates, fills gaps after a pause'],
+    [nm('gpu_scheduler', 1), S_('Server'), 'Runs pick requests before map training and SAM 3D'],
   ];
-  s.addTable(crow, { x: 0.5, y: 1.25, w: 12.33, colW: [2.2, 1.1, 9.03], fontSize: 13, fontFace: FONT, color: '1D1D1F',
+  s.addTable(crow, { x: 0.5, y: 1.2, w: 12.33, colW: [2.35, 1.0, 8.98], fontSize: 12, fontFace: FONT, color: '1D1D1F',
     border: { type: 'solid', pt: 0.75, color: 'C8D6D3' }, fill: { color: 'FFFFFF' }, valign: 'middle',
-    rowH: [0.42, ...Array(10).fill(0.47)], objectName: 'Comms components' });
+    rowH: [0.38, ...Array(12).fill(0.42)], objectName: 'Comms nodes' });
   s.addNotes('The comms side is two small sets of ROS 2 nodes, one on each machine, plus the link map. They wrap the one network call in the existing grasp code and manage the background traffic.');
 
   // 8 What crosses the Wi-Fi
