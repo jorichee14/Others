@@ -19,6 +19,9 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   pres.theme = { headFontFace: THEME.headFontFace, bodyFontFace: THEME.bodyFontFace };
   pres.title = 'Pringles from the cabinet: pipeline and architecture';
   const C = pres.SchemeColor;
+  // Fonts are set explicitly so the text keeps its size when slides are pasted into another deck.
+  const FONT = 'Calibri';
+  const addT = (sl, t, o) => sl.addText(t, { fontFace: FONT, ...o });
 
   pres.defineSlideMaster({
     title: 'TITLE_DARK', background: { color: C.text2 },
@@ -51,7 +54,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   const card = (slide, x, y, w, h, head, body, tint, headColor, name) => {
     slide.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w, h, rectRadius: 0.08,
       fill: { color: tint }, line: { color: tint }, objectName: name + ' card' });
-    slide.addText([
+    addT(slide, [
       { text: head, options: { bold: true, fontSize: 16, color: headColor, breakLine: true } },
       { text: body, options: { fontSize: 14, color: C.text1 } },
     ], { x: x + 0.15, y: y + 0.1, w: w - 0.3, h: h - 0.2, valign: 'top', isTextBox: true,
@@ -61,8 +64,8 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   // 1 Title
   pres.addSection({ title: 'Overview' });
   let s = pres.addSlide({ masterName: 'TITLE_DARK', sectionTitle: 'Overview' });
-  s.addText('Pringles from the Cabinet', { placeholder: 'title' });
-  s.addText('Task pipeline and system architecture\nStretch robot · wired room cameras · GPU server · what crosses the robot’s Wi-Fi',
+  addT(s, 'Pringles from the Cabinet', { placeholder: 'title' });
+  addT(s, 'Task pipeline and system architecture\nStretch robot · wired room cameras · GPU server · what crosses the robot’s Wi-Fi',
     { placeholder: 'body' });
   s.addNotes('Two parts: the task pipeline step by step, then the system architecture with the comms layer.');
 
@@ -115,7 +118,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
     return out;
   };
   const chip = (slide, x, y, label, bg, fg, w) => {
-    slide.addText(label, { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.06, x, y, w, h: 0.22,
+    addT(slide, label, { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.06, x, y, w, h: 0.22,
       fill: { color: bg }, line: { color: bg }, fontSize: 10, bold: true, color: fg, align: 'center',
       valign: 'middle', margin: 0, objectName: 'chip ' + label });
   };
@@ -126,7 +129,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
       runs.push({ text: gr.name, options: { bold: true, color: GRP[gr.g].fg } });
       if (i < groups.length - 1) runs.push({ text: '  →  ', options: { bold: true, color: '555555' } });
     });
-    slide.addText(runs, { x: 0.5, y, w: 12.33, h: 0.35, fontSize: 15, isTextBox: true, margin: 0, objectName: 'Task line' });
+    addT(slide, runs, { x: 0.5, y, w: 12.33, h: 0.35, fontSize: 15, isTextBox: true, margin: 0, objectName: 'Task line' });
   };
 
   // detailed card
@@ -145,37 +148,37 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
       slide.addImage({ path: PIC(st.img), x: ix, y: y + 0.1, w: iw, h: ph, sizing: { type: 'cover', w: iw, h: ph },
         altText: st.title, objectName: `Step ${st.n} photo` });
     } else {
-      slide.addText([{ text: st.ph, options: { breakLine: true } }, { text: '(image to add)', options: { fontSize: 9, color: '999999' } }],
+      addT(slide, [{ text: st.ph, options: { breakLine: true } }, { text: '(image to add)', options: { fontSize: 9, color: '999999' } }],
         { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.06, x: ix, y: y + 0.1, w: iw, h: ph,
           fill: { color: 'FAFAFA' }, line: { color: 'AAAAAA', dashType: 'dash', width: 1 }, fontSize: 11, color: '777777',
           align: 'center', valign: 'middle', objectName: `Step ${st.n} placeholder` });
     }
     // number + title
     let cy = y + 0.1 + ph + 0.08;
-    slide.addText(String(st.n), { shape: pres.shapes.OVAL, x: ix, y: cy + 0.02, w: 0.28, h: 0.28,
+    addT(slide, String(st.n), { shape: pres.shapes.OVAL, x: ix, y: cy + 0.02, w: 0.28, h: 0.28,
       fill: { color: '333333' }, line: { color: '333333' }, fontSize: 11, bold: true, color: 'FFFFFF',
       align: 'center', valign: 'middle', margin: 0, objectName: `Step ${st.n} number` });
-    slide.addText(st.title, { x: ix + 0.36, y: cy, w: iw - 0.36, h: 0.32, fontSize: 15, bold: true, color: '1D1D1F',
+    addT(slide, st.title, { x: ix + 0.36, y: cy, w: iw - 0.36, h: 0.32, fontSize: 15, bold: true, color: '1D1D1F',
       valign: 'middle', isTextBox: true, margin: 0, objectName: `Step ${st.n} title` });
     // runs on
     cy += 0.38;
-    slide.addText('Runs on', { x: ix, y: cy, w: 0.6, h: 0.22, fontSize: 10, color: '666666', valign: 'middle',
+    addT(slide, 'Runs on', { x: ix, y: cy, w: 0.6, h: 0.22, fontSize: 10, color: '666666', valign: 'middle',
       isTextBox: true, margin: 0, objectName: `Step ${st.n} runs label` });
     st.run.forEach((r, k) => chip(slide, ix + 0.62 + k * 0.68, cy, RUNC[r][0], RUNC[r][1], RUNC[r][2], 0.62));
     // does
     cy += 0.3;
-    slide.addText(st.does, { x: ix, y: cy, w: iw, h: 0.62, fontSize: 11.5, color: '333333', valign: 'top',
+    addT(slide, st.does, { x: ix, y: cy, w: iw, h: 0.62, fontSize: 11.5, color: '333333', valign: 'top',
       isTextBox: true, margin: 0, objectName: `Step ${st.n} description` });
     // input / output
     cy += 0.62;
-    slide.addText([
+    addT(slide, [
       { text: 'Input: ', options: { bold: true, color: '1A5FD0' } }, { text: st.inp, options: { color: '444444', breakLine: true } },
       { text: 'Output: ', options: { bold: true, color: '1A5FD0' } }, { text: st.out, options: { color: '444444' } },
     ], { x: ix, y: cy, w: iw, h: 0.62, fontSize: 10.5, valign: 'top', isTextBox: true, margin: 0,
       paraSpaceAfter: 2, objectName: `Step ${st.n} input output` });
     // room cameras
     cy += 0.62;
-    slide.addText([{ text: 'Room cameras: ', options: { bold: true } }, { text: st.cam }],
+    addT(slide, [{ text: 'Room cameras: ', options: { bold: true } }, { text: st.cam }],
       { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.05, x: ix, y: cy, w: iw, h: 0.42,
         fill: { color: 'F3EFFC' }, line: { color: 'F3EFFC' }, fontSize: 10.5, color: '3B2A7A', valign: 'middle',
         margin: [2, 5, 2, 5], objectName: `Step ${st.n} room cameras` });
@@ -191,7 +194,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
       ...(st.down ? [{ text: 'Server → robot: ', options: { bold: true, color: '0B7F74' } }, { text: st.down, options: { breakLine: true } }] : []),
       { text: 'If late: ', options: { bold: true, color: 'A3171D' } }, { text: st.late },
     ] : [{ text: 'nothing crosses the Wi-Fi' }];
-    slide.addText(lines, { x: ix + 0.07, y: cy + 0.33, w: iw - 0.14, h: wh - 0.38, fontSize: 10, color: '174F49',
+    addT(slide, lines, { x: ix + 0.07, y: cy + 0.33, w: iw - 0.14, h: wh - 0.38, fontSize: 10, color: '174F49',
       valign: 'top', isTextBox: true, margin: 0, paraSpaceAfter: 2, objectName: `Step ${st.n} wifi text` });
   };
 
@@ -205,7 +208,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
       const pw = gr.steps.length * cw + (gr.steps.length - 1) * GAP + 2 * PAD;
       slide.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y: y0, w: pw, h: CARD_H + 0.55, rectRadius: 0.12,
         fill: { color: GRP[gr.g].bg }, line: { color: GRP[gr.g].bg }, objectName: gr.name + ' panel' });
-      slide.addText(gr.name, { x: x + PAD, y: y0 + 0.06, w: pw - 2 * PAD, h: 0.36, fontSize: 15, bold: true,
+      addT(slide, gr.name, { x: x + PAD, y: y0 + 0.06, w: pw - 2 * PAD, h: 0.36, fontSize: 15, bold: true,
         color: GRP[gr.g].fg, valign: 'middle', isTextBox: true, margin: 0, objectName: gr.name + ' heading' });
       gr.steps.forEach((st, k) => drawCard(slide, st, x + PAD + k * (cw + GAP), y0 + 0.45, cw));
       x += pw;
@@ -219,7 +222,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
 
   // 2 Overview as shapes
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Overview' });
-  s.addText('The task, step by step', { placeholder: 'title' });
+  addT(s, 'The task, step by step', { placeholder: 'title' });
   taskLine(s, 1.15);
   {
     const groups = groupsOf(STEPS);
@@ -231,20 +234,20 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
       const pw = gr.steps.length * cw + (gr.steps.length - 1) * GAP + 2 * PAD;
       s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y: y0, w: pw, h: ch + 0.5, rectRadius: 0.1,
         fill: { color: GRP[gr.g].bg }, line: { color: GRP[gr.g].bg }, objectName: gr.name + ' panel' });
-      s.addText(gr.name === 'Return to the person' ? 'Return' : gr.name, { x: x + PAD, y: y0 + 0.05, w: pw - 2 * PAD, h: 0.36, fontSize: 12, bold: true,
+      addT(s, gr.name === 'Return to the person' ? 'Return' : gr.name, { x: x + PAD, y: y0 + 0.05, w: pw - 2 * PAD, h: 0.36, fontSize: 12, bold: true,
         color: GRP[gr.g].fg, valign: 'middle', isTextBox: true, margin: 0, objectName: gr.name + ' heading' });
       gr.steps.forEach((st, k) => {
         const cx = x + PAD + k * (cw + GAP), cy = y0 + 0.42;
         s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: cx, y: cy, w: cw, h: ch, rectRadius: 0.06,
           fill: { color: 'FFFFFF' }, line: { color: 'D6D6D6', width: 1 }, objectName: `Overview ${st.n} card` });
-        s.addText(String(st.n), { shape: pres.shapes.OVAL, x: cx + 0.08, y: cy + 0.1, w: 0.3, h: 0.3,
+        addT(s, String(st.n), { shape: pres.shapes.OVAL, x: cx + 0.08, y: cy + 0.1, w: 0.3, h: 0.3,
           fill: { color: '333333' }, line: { color: '333333' }, fontSize: 11, bold: true, color: 'FFFFFF',
           align: 'center', valign: 'middle', margin: 0, objectName: `Overview ${st.n} number` });
-        s.addText(st.title, { x: cx + 0.08, y: cy + 0.45, w: cw - 0.16, h: 0.55, fontSize: 13, bold: true,
+        addT(s, st.title, { x: cx + 0.08, y: cy + 0.45, w: cw - 0.16, h: 0.55, fontSize: 13, bold: true,
           color: '1D1D1F', valign: 'top', isTextBox: true, margin: 0, objectName: `Overview ${st.n} title` });
         st.run.forEach((r, kk) => chip(s, cx + 0.08, cy + 1.05 + kk * 0.27, RUNC[r][0], RUNC[r][1], RUNC[r][2], 0.7));
         const [lab, bg, fg] = LOADC[st.load];
-        s.addText(lab.replace('Wi-Fi: ', ''), { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.06,
+        addT(s, lab.replace('Wi-Fi: ', ''), { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.06,
           x: cx + 0.08, y: cy + ch - 0.62, w: cw - 0.16, h: 0.5, fill: { color: bg }, line: { color: bg },
           fontSize: 11, bold: true, color: fg, align: 'center', valign: 'middle', margin: 2,
           objectName: `Overview ${st.n} wifi` });
@@ -256,7 +259,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
         x += ARR;
       }
     });
-    s.addText('Wi-Fi load per step', { x: 0.5, y: 4.85, w: 4, h: 0.3, fontSize: 12, color: '666666', italic: true,
+    addT(s, 'Wi-Fi load per step', { x: 0.5, y: 4.85, w: 4, h: 0.3, fontSize: 12, color: '666666', italic: true,
       isTextBox: true, margin: 0, objectName: 'Overview caption' });
   }
   const stats = [
@@ -265,7 +268,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
     ['2 steps', 'one photo (~50 KB)', 'local navigation · detect', C.accent3],
   ];
   stats.forEach(([big, mid, small, col], i) => {
-    s.addText([
+    addT(s, [
       { text: big, options: { fontSize: 30, bold: true, color: col, breakLine: true } },
       { text: mid, options: { fontSize: 16, bold: true, color: C.text1, breakLine: true } },
       { text: small, options: { fontSize: 12, color: '666666' } },
@@ -276,19 +279,19 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   // 3-4 detailed halves as shapes
   pres.addSection({ title: 'Pipeline' });
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Pipeline' });
-  s.addText('Steps 1–4: acknowledge, navigate, open the cabinet', { placeholder: 'title' });
+  addT(s, 'Steps 1–4: acknowledge, navigate, open the cabinet', { placeholder: 'title' });
   drawRow(s, STEPS.slice(0, 4), 1.2);
   s.addNotes('Acknowledge and global navigation exchange only targets and poses; Nav2, AMCL and obstacle avoidance run on the robot. Local navigation sends one photo and gets the handle position back. Opening the cabinet is local.');
 
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Pipeline' });
-  s.addText('Steps 5–8: pick up, return, hand over', { placeholder: 'title' });
+  addT(s, 'Steps 5–8: pick up, return, hand over', { placeholder: 'title' });
   drawRow(s, STEPS.slice(4), 1.2);
   s.addNotes('Detect sends one photo and gets the best mask back; depth stays on the robot. Grasp and hand over are local. Return uses the person position from the room cameras, with its time.');
 
   // 5 Architecture
   pres.addSection({ title: 'Architecture' });
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
-  s.addText('System architecture', { placeholder: 'title' });
+  addT(s, 'System architecture', { placeholder: 'title' });
   const a = fitImage(s, 'arch_full.png', { x: 0.5, y: 1.2, w: 8.9, h: 5.7 }, 'System architecture');
   const ax = a.x + a.w + 0.35, aw = 12.83 - ax;
   card(s, ax, 1.2, aw, 1.75, 'Robot', 'Sensors, localization, task executive, object fusion, motion, and the robot side of the comms bridge.', 'E4EEFB', C.accent2, 'Robot');
@@ -298,7 +301,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
 
   // 6 Robot side
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
-  s.addText('Robot side: time-critical work stays local', { placeholder: 'title' });
+  addT(s, 'Robot side: time-critical work stays local', { placeholder: 'title' });
   const rb = fitImage(s, 'arch_robot.png', { x: 0.5, y: 1.2, w: 4.2, h: 5.7 }, 'Robot side of the architecture');
   const rx = rb.x + rb.w + 0.45, rw = 12.83 - rx;
   card(s, rx, 1.2, rw, 1.65, 'Runs on the robot', 'Localization (AMCL / LiDAR-inertial odometry), Nav2 with obstacle avoidance, mask × depth → 3-D points, IK, arm and gripper.', 'E4EEFB', C.accent2, 'Local');
@@ -308,7 +311,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
 
   // 7 Server side
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
-  s.addText('Server side: map, retrieval, assets', { placeholder: 'title' });
+  addT(s, 'Server side: map, retrieval, assets', { placeholder: 'title' });
   const sb = fitImage(s, 'arch_server.png', { x: 0.5, y: 1.2, w: 6.2, h: 5.7 }, 'Server side of the architecture');
   const sx = sb.x + sb.w + 0.45, sw = 12.83 - sx;
   card(s, sx, 1.2, sw, 1.4, 'Offline', 'Gaussian SLAM map (~16 h per run), link map seeded from its Sionna export.', 'E4F4E9', C.accent5, 'Offline');
@@ -320,7 +323,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   // 8 What crosses the Wi-Fi
   pres.addSection({ title: 'Link' });
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Link' });
-  s.addText('What crosses the robot’s Wi-Fi', { placeholder: 'title' });
+  addT(s, 'What crosses the robot’s Wi-Fi', { placeholder: 'title' });
   const hdr = (t) => ({ text: t, options: { bold: true, color: C.background1, fill: { color: C.text2 } } });
   const rows = [
     [hdr('Tier'), hdr('What'), hdr('When'), hdr('Priority')],
@@ -332,8 +335,8 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   s.addTable(rows, { x: 0.5, y: 1.3, w: 12.33, colW: [1.6, 6.0, 3.33, 1.4], fontSize: 15,
     color: C.text1, border: { type: 'solid', pt: 0.75, color: 'C8D6D3' },
     fill: { color: C.background1 }, valign: 'middle', rowH: [0.5, 0.75, 0.75, 0.65, 0.55],
-    objectName: 'Wi-Fi tiers' });
-  s.addText('Never sent during a task: raw image streams, depth images, raw lidar scans. Every request carries an ID and capture time; every answer echoes them.',
+    objectName: 'Wi-Fi tiers', fontFace: FONT });
+  addT(s, 'Never sent during a task: raw image streams, depth images, raw lidar scans. Every request carries an ID and capture time; every answer echoes them.',
     { x: 0.5, y: 5.0, w: 12.33, h: 0.8, fontSize: 16, color: C.accent1, bold: true, isTextBox: true,
       margin: 0, objectName: 'Rule' });
   s.addNotes('Pick requests always go first; background and offline traffic give way while the robot is detecting and grasping.');
