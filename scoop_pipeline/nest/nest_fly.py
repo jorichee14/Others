@@ -114,6 +114,27 @@ def seen_counts(xyz, cameras, source_path, torch, margin=0.10):
     return count
 
 
+def panels(bgr, pkg, i, fps):
+    """colour | depth / normal | opacity, labelled, with the time on the colour panel."""
+    import cv2
+    H, W = bgr.shape[:2]
+    d = pkg["surf_depth"].detach()[0].cpu().numpy()
+    depth = cv2.applyColorMap((np.clip(d / 10.0, 0, 1) * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
+    depth[d <= 0] = 0
+    n = pkg["rend_normal"].detach().permute(1, 2, 0).cpu().numpy()
+    normal = (np.clip((n + 1) / 2, 0, 1) * 255).astype(np.uint8)[:, :, ::-1]
+    a = pkg["rend_alpha"].detach()[0].cpu().numpy()
+    alpha = cv2.cvtColor((np.clip(a, 0, 1) * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+    tiles = []
+    for img, label in ((bgr, f"colour  {i / fps:6.1f} s  frame {i}"), (depth, "depth 0-10 m"),
+                       (normal, "normal (world)"), (alpha, "opacity")):
+        img = np.ascontiguousarray(img)
+        cv2.putText(img, label, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(img, label, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        tiles.append(img)
+    return np.vstack([np.hstack(tiles[:2]), np.hstack(tiles[2:])])
+
+
 def video_writer(out, fps, size):
     if shutil.which("ffmpeg"):
         p = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
@@ -151,6 +172,9 @@ def main():
     parser.add_argument("--unseen-level", type=int, default=3,
                         help="texture levels for surfels no training camera saw (24: all, as for seen ones; "
                              "-1: leave them out altogether)")
+    parser.add_argument("--panels", action="store_true",
+                        help="four panels per frame: colour, depth (0-10 m), world normal, opacity -- to tell a "
+                             "floater (nearer than the surface, ragged normal) from texture painted on a surface")
     parser.add_argument("--write-unseen", default="", metavar="PLY",
                         help="write the unseen surfels' positions to this .ply, to look at where they are")
     parser.add_argument("--min-views", type=int, default=3, help="training cameras that must see a surfel to count it seen")
@@ -219,15 +243,21 @@ def main():
             print(f"wrote {args.write_unseen}: {len(P)} unseen surfels", flush=True)
     up = np.array([0.0, 0.0, 1.0])
     out = os.path.expanduser(args.fly[1])
-    write, release = video_writer(out, fps, (W, H))
+    if args.panels:                                   # four half-size panels in a frame of the same size
+        W, H = (W // 2) - (W // 2) % 2, (H // 2) - (H // 2) % 2
+    write, release = video_writer(out, fps, (2 * W, 2 * H) if args.panels else (W, H))
     print(f"flying frames {args.start}..{stop - 1} of {len(E)} at {fps} fps, {W}x{H} -> {out}", flush=True)
     with torch.no_grad():
         for i in range(args.start, stop):
             cam = FlyCamera(E[i], Lk[i], up, W, H, fov, torch, getProjectionMatrix)
-            img = render(cam, gaussians, pipe, background, ingp=ingp_model, beta=beta,
-                         iteration=args.iteration, cfg=cfg_model)["render"]
-            rgb = (img.clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
-            write(rgb[:, :, ::-1])
+            pkg = render(cam, gaussians, pipe, background, ingp=ingp_model, beta=beta,
+                         iteration=args.iteration, cfg=cfg_model)
+            rgb = (pkg["render"].clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)[:, :, ::-1]
+            if args.panels:
+                rgb = np.ascontiguousarray(rgb)
+                write(panels(rgb, pkg, i, fps))
+            else:
+                write(rgb)
             if (i - args.start) % (10 * fps) == 0:
                 print(f"  {(i - args.start) // fps} s of {(stop - args.start) // fps}", flush=True)
     release()
