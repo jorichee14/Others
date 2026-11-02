@@ -351,7 +351,140 @@ P.text(40, 1085, 'Raw images, depth and LiDAR scans never cross the link; '
        'every request carries an ID and capture time, every answer echoes them.',
        'lbl', w=1900, style='font-size:16px;color:#555;font-style:italic')
 
+# =====================================================================
+# Figure 3: general architecture (platform-agnostic)
+# =====================================================================
+G = Fig(2000, 1230, 'Coarse-to-Fine Pick: General Architecture',
+        'any mobile manipulator and site: robot, edge server, and what crosses the link')
+DIV = 790
+G.text(60, 185, 'ROBOT · any mobile manipulator · onboard CPU + GPU · ROS 2', 'colh')
+G.text(820, 185, 'EDGE SERVER + SITE INFRASTRUCTURE · GPU server', 'colh')
+
+# robot column
+G.box(60, 220, 700, 150, 'hw', 'Sensors + actuators')
+for i, (t, l) in enumerate([('Depth source', 'RGB-D camera or 3-D LiDAR'),
+                            ('RGB camera(s)', 'head and / or wrist'),
+                            ('Odometry + IMU', 'wheels, IMU')]):
+    G.card(84 + i * 226, 262, 210, 52, t, [l], ts=17, fs=14)
+G.card(84, 322, 436, 36, '', ['mobile base · arm · wrist · gripper'],
+       fs=14)
+G.card(530, 322, 210, 36, '', ['compute: CPU + GPU'], fs=14)
+
+G.box(60, 390, 700, 112, 'loc', 'Localization', 'on the robot')
+G.card(84, 430, 330, 60, 'Map-based localization', ['2-D scan (AMCL), 3-D scan or visual'],
+       ts=17, fs=14)
+G.card(430, 430, 310, 60, 'Map frame = twin frame', ['robot pose in the map, 10 Hz'],
+       ts=17, fs=14)
+
+G.box(60, 522, 700, 100, 'task', 'Task executive', 'stage machine')
+G.card(84, 562, 656, 46, '', ['coarse → mid → fine → verify · publishes the stage · '
+                              'triggers captures · retry or go'], fs=15)
+
+G.box(60, 642, 700, 150, 'per', 'Object fusion', 'on the robot · RGB + depth in')
+G.card(84, 682, 210, 96, 'Mask + depth', ['depth points inside', 'the segmentation mask', '(camera or LiDAR)'],
+       ts=17, fs=14)
+G.card(308, 682, 210, 96, 'Shape fit', ['cylinder / box RANSAC', '→ object pose + axis',
+                                         'in the base frame'], ts=17, fs=14)
+G.card(532, 682, 208, 96, 'Local tracking', ['camera, every frame', 'depth or known size', 'fine stage only'], ts=17, fs=14)
+
+G.box(60, 812, 700, 112, 'man', 'Motion', 'on the robot')
+G.card(84, 852, 210, 58, 'Navigation', ['base · coarse'], ts=17, fs=14)
+G.card(308, 852, 210, 58, 'Base + arm', ['approach and align · mid'], ts=17, fs=14)
+G.card(532, 852, 208, 58, 'Arm + wrist + gripper', ['servo · contact by force'],
+       ts=16, fs=14)
+
+G.box(60, 944, 700, 180, 'com', 'Comms bridge · robot', 'ROS 2 nodes')
+G.card(84, 984, 210, 124, 'offload_client', ['capture on trigger', 'crop + JPEG',
+                                              'ID · capture time · pose',
+                                              'timeout · retry · drop stale'],
+       border=TEAL, dash=True, ts=17, fs=14)
+G.card(308, 984, 210, 124, 'link_monitor', ['heartbeat: RTT, queue', 'RSSI + link map',
+                                             '→ expected answer time'],
+       border=TEAL, dash=True, ts=17, fs=14)
+G.card(532, 984, 208, 124, 'policy', ['send when stopped', 'wait / retry / fallback',
+                                       'speed limit → navigation'],
+       border=TEAL, dash=True, ts=17, fs=14)
+
+# server column
+G.box(820, 220, 360, 200, 'twin', 'Site twin', 'offline')
+G.card(842, 262, 316, 70, 'Reference map', ['any SLAM · keyframes, objects'], ts=17, fs=14)
+G.card(842, 342, 316, 62, 'Link map', ['RSSI · RTT · goodput per cell'],
+       border=TEAL, dash=True, ts=17, fs=14)
+G.box(1200, 220, 340, 200, 'hw', 'Site cameras', 'optional · wired')
+G.card(1222, 262, 296, 96, 'Fixed cameras', ['calibrated in the map frame',
+                                                       'live object detections'],
+       dash=True, ts=17, fs=14)
+G.box(1560, 220, 380, 200, 'task', 'Task')
+G.card(1582, 262, 336, 96, 'Request → object query', ['natural-language request',
+                                                       '→ class, instance, deliver to'],
+       dash=True, ts=17, fs=14)
+
+G.box(820, 445, 1120, 190, 'per', 'Object retrieval', 'coarse: where is it?')
+for i, (t, l) in enumerate([('Place search', ['image–text embeddings', 'twin keyframes + live views']),
+                            ('Segmentation', ['open-vocabulary (e.g. SAM 3)', 'site views + robot crops']),
+                            ('Object cache', ['pose, class, ID', 'fused across views']),
+                            ('Target + view pose', ['object pose in map', '→ base pose that sees it'])]):
+    x = 842 + i * 272
+    G.card(x, 488, 254, 92, t, l, dash=True, ts=17, fs=14)
+for i in range(3):
+    x = 842 + i * 272 + 254
+    G.line([(x, 534), (x + 16, 534)])
+
+G.box(820, 660, 1120, 160, 'com', 'Comms bridge · server', 'ROS 2 nodes')
+G.card(842, 702, 540, 102, 'offload_server', ['decode JPEG → model input · match answer to request ID',
+                                               'add server times · drop requests past deadline',
+                                               'report queue length'],
+       border=TEAL, dash=True, ts=17, fs=14)
+G.card(1398, 702, 520, 102, 'logger', ['per request: capture, send, receive, answer times',
+                                        'size, stage, RSSI, RTT', '→ link map'],
+       border=TEAL, dash=True, ts=17, fs=14)
+
+G.box(820, 845, 1120, 205, 'hw', 'Link robot ↔ server', 'Wi-Fi / 5G · ROS 2 topics')
+rows = [('↓ Map', 'once · per map version'),
+        ('↓ Target + view pose', 'per task · ID + capture time'),
+        ('↑ JPEG crop', 'per request · ~50 KB · RGB only'),
+        ('↓ Mask', 'per request · small')]
+rows2 = [('↑ Robot pose', '10 Hz · ~1 KB/s'),
+         ('↕ Heartbeat', '5–10 Hz · RTT, queue'),
+         ('✕ never sent', 'raw images, depth, point clouds')]
+for i, (a, b) in enumerate(rows):
+    G.text(842, 890 + i * 30, a, 'lk')
+    G.text(1045, 892 + i * 30, b, 'lv')
+for i, (a, b) in enumerate(rows2):
+    G.text(1400, 890 + i * 30, a, 'lk')
+    G.text(1560, 892 + i * 30, b, 'lv')
+G.text(842, 1020, 'QoS: images best effort, keep last 1 · answers reliable · '
+       'DSCP priority for requests · DDS tuned for large messages', 'lv', style=f'color:{TEAL};font-weight:600')
+
+legend(G, 820, 1078, [('hw', 'hardware, link'), ('loc', 'localization'), ('task', 'task'),
+                      ('per', 'perception'), ('man', 'motion'), ('twin', 'twin'),
+                      ('com', 'comms bridge')])
+G.svg.append(f'<line x1="820" y1="1132" x2="850" y2="1132" stroke="{RED}" stroke-width="3" '
+             f'stroke-dasharray="9,6"/>')
+G.text(860, 1121, 'network boundary', 'lg')
+G.out.append('<div class="sw" style="left:1060px;top:1121px;background:#fff;'
+             'border:2px dashed #999"></div>')
+G.text(1100, 1121, 'dashed: not built yet', 'lg')
+
+# arrows, robot column
+G.line([(250, 370), (250, 428)])
+G.line([(560, 370), (560, 380), (775, 380), (775, 730), (742, 730)])
+G.line([(410, 502), (410, 520)])
+G.line([(410, 622), (410, 640)])
+G.line([(410, 792), (410, 810)])
+G.line([(150, 942), (150, 926)])
+# map to robot localization
+# bridges <-> link
+G.line([(1380, 820), (1380, 843)], color=TEAL, both=True)
+G.line([(820, 960), (765, 960), (765, 1046), (742, 1046)], color=TEAL, both=True)
+# divider
+G.svg.append(f'<line x1="{DIV}" y1="175" x2="{DIV}" y2="1190" stroke="{RED}" stroke-width="3" '
+             f'stroke-dasharray="14,9"/>')
+
+
 here = Path(__file__).parent
 (here / 'fig_architecture.html').write_text(A.html('Stretch 4 Architecture'), encoding='utf-8')
 (here / 'fig_pipeline.html').write_text(P.html('Stretch 4 Pipeline'), encoding='utf-8')
 print('ok')
+
+(here / 'fig_architecture_general.html').write_text(G.html('General Architecture'), encoding='utf-8')
