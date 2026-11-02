@@ -1,110 +1,115 @@
-# Stretch 4: what to send, formulation, approaches, literature
+# Stretch 4: the sending policy (2Fast-2Lamaa and YOLO both on the server)
+
+## Setup assumed
+
+Both heavy jobs run on the server:
+- **L, localization:** 2Fast-2Lamaa. Up: lidar scans (two hemispherical
+  3-D lidars) and IMU. Down: map→odom correction. The robot keeps
+  wheel/IMU odometry locally at full rate and applies corrections when
+  they arrive.
+- **V, perception:** YOLO. Up: images (central RGB camera). Down: boxes;
+  the robot turns a box into 3-D with its own depth.
+
+Fine alignment and closing run on the robot (arm encoders, wrist
+camera, gripper effort).
+
+## How the literature does communication-aware robotics
+
+| Question | How it is done | Work |
+|---|---|---|
+| Which loops stay on the robot | fast, fine loops local; heavy, slower jobs offloaded | Edge-SLAM, Ben Ali et al. (ACM TECS 2022): tracking local, mapping on the edge; Chinchali et al. (RSS 2019): query the cloud only when the local model is unsure; Pohland et al., *Offload or Overload* (MSR-TR-2026-14, incl. Stretch 3): tens of ms of added latency lower manipulation accuracy by more than 10 % |
+| What form is sent | adapt resolution / quality / region to bandwidth, profiled offline | Chameleon, AWStream (SIGCOMM 2018); DDS (SIGCOMM 2020); EAAR (MobiCom 2019); AdaptSLAM (adapts SLAM data to bandwidth and compute) |
+| Lidar over the link | compress scans (Draco, range images); fixed settings give a fixed, high bitrate | 5G-edge KISS-SLAM over L4S with Draco (arXiv 2511.15677, 2025): runs in real time but bitrate is not adaptive, authors point to adaptive encoding; FLiCR (2023); D-Compress (2026) |
+| Where to send from | a communication map tells the robot where a request will make it back in time | Liu, Ohsita, Murata, Shimonishi (arXiv 2606.31497, 2026): request–response window, choose the point for the next cloud request, simulation with a known map; Gordon et al. (INFOCOM 2026 NetRobiCS): radio map → QoS risk costmap for path planning; RCAMP, Caccamo et al. (IROS 2017); Rahman et al. (GLOBECOM 2017): offload decision, path and AP chosen jointly |
+| Hiding the delay | buffer or predict ahead; send redundantly | Speculative Policy Orchestration (arXiv 2603.19418, 2026): cloud precomputes waypoints into a local buffer; latency-tolerant cloud–edge VLA (arXiv 2608.00569, 2026); FogROS2-PLR (2024): choose routes to minimise deadline-miss probability; FogROS2 (ICRA 2023): H.264 for image topics |
+| Speed and delay | slow down as delay grows; stop when updates stop | mostly teleoperation practice and patents; industrial AMR work keeps safety onboard and widens margins with delay |
+| Scoring freshness | age of the information, or of wrong information, when used | AoI, Kaul et al. (INFOCOM 2012); AoII, Maatouk et al. (ToN 2020) |
+| Offloading over Wi-Fi in practice | offload gain can be cancelled by link delay | Computation offloading for ground robots over Wi-Fi (Empirical Software Engineering, 2023) |
 
 ## Formulation
 
-Phases k = 1..K of the pick, each with
-- a deadline D_k, from motion: D_k ≈ position tolerance / speed;
-- an accuracy tolerance ε_k: how wrong the answer may be (e.g. object
-  position within 10 cm at approach, within 1 cm before the grasp).
+Phase k has a base/arm speed v_k and tolerances: ε_k^L for the robot's
+pose, ε_k^V for the object's position.
 
-For each request i in phase k the robot chooses a configuration
-c ∈ C: send or not, region (full / crop), resolution, codec and
-quality, where it is computed (robot / server).
+**Localization (L).** Configuration c_L: scan rate, which lidar(s),
+voxel size, Draco quantization. Pose error when the robot acts:
 
-Delay of a request sent at position x:
+    e_L = e_loc(c_L) + ρ · v_k · A_L(c_L, x)
 
-    T(c, x) = t_enc(c) + S(c) / R(x) + q + t_inf(c) + t_ret
+e_loc: 2Fast-2Lamaa error with that configuration (profiled on the
+bag); ρ: odometry drift per metre (measured); A_L: age of the latest
+correction = scan interval + uplink + server + downlink.
+Constraint: e_L ≤ ε_k^L. When the base is still (v_k = 0), odometry does
+not drift and the lidar can pause.
 
-S(c) bytes, R(x) link throughput at position x (from the ED305 link
-map), q server queue, t_inf inference, t_ret answer back.
+**Perception (V).** Configuration c_V: skip / full / crop, resolution,
+codec, quality. Deadline D_k = ε_k^V / v_k. Constraints:
+P[T_V(c_V, x) ≤ D_k] ≥ 1 − δ and e_V(c_V) ≤ ε_k^V.
 
-Error e(c): how wrong the answer is with configuration c (missed
-detection, 3-D position error), profiled offline on the rosbag.
+**Shared link.** rate(c_L) + rate(c_V) ≤ R(x), R(x) from the ED305 link
+map and the live estimate.
 
-**Problem**
+**Objective.** Minimize bytes on the link (equivalently, maximize
+answers correct and in time when the robot acts), choosing c_L, c_V and,
+for one-shot requests, the place x they are sent from; the speed v_k is
+the last resort.
 
-    minimize    Σ_i S(c_i)                          (bytes on the link)
-    subject to  P[ T(c_i, x_i) ≤ D_k ] ≥ 1 − δ      (deadline, with link uncertainty)
-                e(c_i) ≤ ε_k                         (accuracy the phase needs)
+## What this gives per phase: the two flows take turns
 
-Equivalent success form: maximize Σ_k P[answer k on time and within
-ε_k] under a byte budget.
-
-**Weak spots** enter through R(x). Where the robot sends from is also
-a choice: send the big one-shot images (arrival, grasp) from where the
-link is good, or before entering a weak spot; downgrade the form when
-the request has to be sent from a weak spot.
-
-**Complexity.** C is small and discrete (tens of configurations), so
-each request is a lookup: the cheapest c whose profiled error is within
-ε_k and whose delay at the current (or predicted) R(x) fits D_k. No
-optimizer, no training.
-
-## Approaches, best fit first
-
-| Approach | Idea | Fits | Key literature |
+| Phase | Base | L (lidar up) | V (images up) |
 |---|---|---|---|
-| Profile and select | profile accuracy, size, delay per configuration offline; pick the cheapest that fits at run time | the lookup above | Chameleon (SIGCOMM 2018); AWStream (SIGCOMM 2018) |
-| Server-driven regions | send low quality first, server returns where to look, robot sends those regions at high quality | crop after the object is found | DDS, Du et al. (SIGCOMM 2020); EAAR, Liu et al. (MobiCom 2019) |
-| Filter and track on the device | track locally between server answers; send only when the scene changed or tracking is lost | search and approach | Glimpse, Chen et al. (SenSys 2015); Reducto, Li et al. (SIGCOMM 2020) |
-| Where to compute | robot vs server per frame or per model layer, from link and load | localization placement, YOLO placement | Neurosurgeon, Kang et al. (ASPLOS 2017); Chinchali et al. (RSS 2019); FogROS2, Ichnowski et al. (ICRA 2023) |
-| Accuracy-aware standard encoding | a small model chooses quality per image block; codec stays H.264 | if crops are still too big at weak spots | AccMPEG, Du et al. (MLSys 2022) |
-| Learned features / split computing | send intermediate features or a learned code instead of pixels | only if all of the above fails | Shao et al., IB edge inference (JSAC 2021); Matsubara et al., survey (ACM CSUR 2022); Duan et al., video coding for machines (TIP 2020) |
-| Freshness at the decision | score whether the answer was right when the robot acted | the measurement in step 5 | AoI, Kaul et al. (INFOCOM 2012); AoII, Maatouk et al. (ToN 2020) |
+| Find the goal | moving | keyframes, downsampled + Draco, priority | low-rate video, yields to L |
+| Drive | moving | keyframes, priority | off or very low |
+| Arrive at the table | stopping | one high-quality scan (base pose sets the arm's reach), then pause | one full image, sent from the stop point |
+| Plan the grasp | still | paused | one crop |
+| Fine alignment, close | still | paused | nothing (local) |
+| Verify, leave | still → moving | resumes when the base moves | one crop |
 
-## Do we train encoders?
+While the base moves, the lidar needs the link; while it is still, the
+images do. The robot's phase decides which flow gets it.
 
-Not at first.
-- The largest savings come from when, where and what (10–100×);
-  a trained codec adds 2–5× on top of JPEG/H.264 with crops.
-- Trained codecs and split computing need YOLO retrained or cut, which
-  changes 廖恩莆's pipeline, and need a GPU encoder on the robot.
-- Middle ground if needed: train only a small "which blocks matter"
-  model and keep the standard codec (AccMPEG style).
+## The policy
 
-Train only if the profiling shows that at the weak spots even the
-smallest standard configuration misses the deadline at the needed
-accuracy.
+1. From the phase: tolerances, speed, deadline.
+2. Pick the cheapest (c_L, c_V) that meets both error constraints and
+   fits the link at the robot's position.
+3. If none fits: send the one-shot image from a point on the path where
+   the link is good (stop point chosen with the link map), or before
+   entering a weak spot.
+4. If still none fits: lower the speed; this extends D_k and reduces
+   odometry drift between corrections.
+5. Server: corrections first while the base moves, YOLO requests by
+   deadline, drop requests whose phase has ended.
 
-## What the literature covers and what it does not
+Each step is a lookup over a profiled table (tens of configurations
+per flow); no training.
 
-Covered: video analytics accuracy vs bandwidth (profiling, regions,
-filtering), robot-vs-cloud offloading, learned features for one model.
-Not covered as one problem: a robot whose deadlines and accuracy
-tolerances change by phase of the task, and whose link depends on
-where it is in the room.
+## Where it stands against the literature
 
-## The contribution: the sending policy
+Adaptive streaming chooses the form of one video stream for one
+model; SLAM offloading compresses or splits one localization stream;
+Liu et al. (2026) choose where to send the next request from a
+communication map, in simulation. The policy here chooses the form of
+both the localization and the perception streams and the place of the
+one-shot requests, per phase of a real pick, with the phase setting
+each flow's tolerance and deadline.
 
-Measurement, the link map and placement are inputs the policy uses,
-not contributions on their own.
+## Evaluation
 
-**Inputs per request.** Phase k from the stage machine (gives D_k and
-ε_k); robot position and planned path, with the link expected along it
-(link map + live estimate); the server's reported queue; the profile
-table (bytes, error per phase, encode and inference time for each
-configuration).
+- **Baselines:** current raw streams; fixed compression for both flows;
+  bandwidth-adaptive only (phase-blind); communication-map placement
+  only (Liu et al. style, fixed form).
+- **Ablations:** no phase (one deadline); no position (live link only);
+  no speed step.
+- **Conditions:** good link; weak spot at the table (AP placement or
+  `tc`); background traffic from the camera network.
+- **Metrics:** pick success; pose error and object error at the moment
+  of each action; deadline hit rate per phase; bytes per pick; time
+  per pick.
 
-**Decision.** The configuration c (skip / full / crop, resolution,
-quality, codec) and the moment and place to send it.
+## Note on sources
 
-**Rule.**
-1. Pick the cheapest c with e_k(c) ≤ ε_k and P[T(c, x) ≤ D_k] ≥ 1 − δ.
-2. If none fits here, send earlier from a point on the path where the
-   link is good enough, if there is one before the deadline.
-3. If still none fits, slow the robot: D_k = tolerance / speed, so a
-   lower speed extends the deadline until a configuration fits.
-Server side: serve requests by deadline, drop those whose phase has
-ended.
-
-**Baselines.** Current raw stream; continuous JPEG; on-request fixed
-form; link-adaptive only (bandwidth-driven, phase-blind, AWStream
-style). Ablations: without position (live link only), without phase
-(one deadline for all).
-
-**Conditions.** Good link; a weak spot at the table (AP placement or
-`tc` throttling); background traffic from the camera network.
-
-**Metrics.** Pick success; answers correct and in time at the robot's
-action, per phase; deadline hit rate; bytes per pick; robot time per
-pick (the cost of slowing).
+The 2026 arXiv entries were checked from their abstracts and search
+summaries; the full PDFs could not be opened from this session
+(arxiv.org is not in its allowed network domains). Read them before
+citing details.
