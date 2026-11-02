@@ -580,6 +580,75 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
       margin: 0, objectName: 'Rule' });
   s.addNotes('Pick requests always go first; background and offline traffic give way while the robot is detecting and grasping.');
 
+  // ---------- overhead cameras: tracking architecture ----------
+  pres.addSection({ title: 'Tracking' });
+  s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Tracking' });
+  addT(s, 'Overhead cameras: tracking architecture', { placeholder: 'title' });
+  {
+    const K2 = '555555', T2 = '0B7F74';
+    const hdr = (x, w, t, col) => addT(s, t, { x, y: 1.06, w, h: 0.3, fontSize: 12, bold: true, color: col || '333333',
+      align: col ? 'center' : 'left', isTextBox: true, margin: 0, objectName: 'hdr ' + t });
+    hdr(0.5, 3.55, 'PER CAMERA · overhead, wired (× N)');
+    hdr(4.45, 4.9, 'CENTRAL · server');
+    hdr(11.05, 1.78, 'ROBOT');
+    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 9.6, y: 1.06, w: 1.25, h: 4.95, rectRadius: 0.08, fill: { color: 'FFF7F7' },
+      line: { color: 'D6262C', width: 1.25, dashType: 'dash' }, objectName: 'WiFi band' });
+    addT(s, 'Wi-Fi', { x: 9.6, y: 1.1, w: 1.25, h: 0.26, fontSize: 12, bold: true, color: 'D6262C', align: 'center', isTextBox: true, margin: 0, objectName: 'WiFi label' });
+
+    // per camera
+    const PX = 0.5, PW = 3.55;
+    node(PX, 1.45, PW, 0.5, 'existing', 'Decode + undistort', 'fisheye → rectified, if needed', 'cam decode', true);
+    node(PX, 2.08, PW, 0.65, 'per', 'Overhead person detector', 'rotated boxes (e.g. RAPiD) or YOLO fine-tuned on overhead frames', 'cam detector', true);
+    node(PX, 2.86, PW, 0.4, 'per', 'Per-camera tracker', '', 'cam tracker', true);
+    node(PX, 3.39, PW, 0.7, 'per', 'Floor projection', 'ray ∩ plane at body height → map (x, y) · error grows away from straight down', 'cam floor', true);
+    node(PX, 4.22, PW, 0.6, 'per', 'Appearance cue', 'every N frames, good crops · overhead colour / embedding', 'cam appearance', true);
+    node(PX, 4.98, PW, 0.6, 'per', 'Object region check', 'pixel change in the object’s region · SAM 3 on request', 'cam objects', true);
+    [[1.95, 2.08], [2.73, 2.86], [3.26, 3.39], [4.09, 4.22]].forEach(([a, b]) => flow(2.27, a, 2.27, b, K2, '', 0, 0, 0));
+
+    // central
+    const CX = 4.45, CW = 2.65;
+    node(CX, 1.45, CW, 1.0, 'per', 'Ground-plane fusion', 'merge detections < 0.4 m apart · gate + Hungarian · Kalman per person → global tracks', 'fusion');
+    node(CX, 2.8, CW, 1.4, 'task', 'Identity manager', 'track alive = identity · LOST: last position, time, zone · re-entry: position + time first, appearance breaks ties · requester ID + side-view embedding', 'identity');
+    node(CX, 4.55, CW, 0.95, 'offline', 'Object manager', 'SAM 3 once, then region check · moved / gone / carried by person · closed cabinet: unverified', 'objects');
+    node(7.35, 2.8, 2.0, 2.7, 'neu', 'target_server', 'targets: requester position, object positions · sends moved / lost / back · heartbeat · relays the side-view photo for verification', 'target_server');
+    // per camera -> central
+    s.addShape(pres.shapes.LINE, { x: 4.05, y: 3.74, w: 0.1, h: 0, line: { color: K2, width: 1.75 }, objectName: 'r1a' });
+    s.addShape(pres.shapes.LINE, { x: 4.15, y: 1.95, w: 0, h: 1.79, line: { color: K2, width: 1.75 }, objectName: 'r1b' });
+    flow(4.15, 1.95, 4.45, 1.95, K2, '', 0, 0, 0);
+    s.addShape(pres.shapes.LINE, { x: 4.05, y: 4.52, w: 0.2, h: 0, line: { color: K2, width: 1.75 }, objectName: 'r2a' });
+    s.addShape(pres.shapes.LINE, { x: 4.25, y: 3.95, w: 0, h: 0.57, line: { color: K2, width: 1.75 }, objectName: 'r2b' });
+    flow(4.25, 3.95, 4.45, 3.95, K2, '', 0, 0, 0);
+    flow(4.05, 5.28, 4.45, 5.28, K2, '', 0, 0, 0);
+    // central internal
+    flow(5.77, 2.45, 5.77, 2.8, K2, 'global tracks', 5.85, 2.5, 1.2, 'left');
+    flow(7.1, 3.5, 7.35, 3.5, K2, '', 0, 0, 0);
+    flow(7.1, 5.0, 7.35, 5.0, K2, '', 0, 0, 0);
+
+    // robot
+    node(11.05, 2.8, 1.78, 1.35, 'neu', 'target_client', 'goal to Nav2 · fresh / unverified · near target: slow, look', 'robot target_client', true);
+    node(11.05, 4.45, 1.78, 1.05, 'existing', 'Head camera', 'side-view photo at Acknowledge and handover', 'robot head cam', true);
+    // across the Wi-Fi
+    flow(9.35, 3.3, 11.05, 3.3, T2, 'moved / lost / back · heartbeat', 9.62, 2.86, 1.21);
+    flow(11.05, 4.75, 9.35, 4.75, T2, 'side-view photo', 9.62, 4.48, 1.21);
+    flow(9.35, 5.25, 11.05, 5.25, T2, 'same person? yes / no', 9.62, 4.98, 1.21);
+
+    // legend + note
+    const LG2 = [['neu', 'new node'], ['per', 'perception'], ['task', 'identity'], ['offline', 'objects'], ['existing', 'existing']];
+    LG2.forEach(([k, lab], i) => {
+      const st = ST[k], lx = 0.5 + i * 1.75;
+      s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: lx, y: 6.2, w: 0.34, h: 0.2, rectRadius: 0.04, fill: { color: st.fill },
+        line: { color: st.line, width: st.w, dashType: st.dash }, objectName: 'lg ' + lab });
+      addT(s, lab, { x: lx + 0.42, y: 6.17, w: 1.3, h: 0.26, fontSize: 11, color: '444444', valign: 'middle', isTextBox: true, margin: 0, objectName: 'lg text ' + lab });
+    });
+    s.addShape(pres.shapes.LINE, { x: 9.35, y: 6.3, w: 0.4, h: 0, line: { color: T2, width: 1.75, endArrowType: 'triangle' }, objectName: 'lg comms' });
+    addT(s, 'comms flow', { x: 9.83, y: 6.17, w: 1.2, h: 0.26, fontSize: 11, color: '444444', valign: 'middle', isTextBox: true, margin: 0, objectName: 'lg comms text' });
+    s.addShape(pres.shapes.LINE, { x: 11.1, y: 6.3, w: 0.4, h: 0, line: { color: K2, width: 1.75, endArrowType: 'triangle' }, objectName: 'lg local' });
+    addT(s, 'local flow', { x: 11.58, y: 6.17, w: 1.2, h: 0.26, fontSize: 11, color: '444444', valign: 'middle', isTextBox: true, margin: 0, objectName: 'lg local text' });
+    addT(s, 'Identity is kept by the continuous floor track; appearance only breaks ties after a loss; the strong check is the robot’s side-view photo.',
+      { x: 0.5, y: 6.55, w: 12.33, h: 0.3, fontSize: 13, bold: true, color: T2, isTextBox: true, margin: 0, objectName: 'tracking note' });
+  }
+  s.addNotes('Overhead cameras give accurate floor positions but weak appearance. Each camera detects and projects people onto the floor; the server fuses all cameras into one tracker in the map frame, so a person stays one track across cameras. Identity follows the track; after a loss, re-entry is matched by position and time first. The robot’s side-view photo at Acknowledge and handover is the strong identity check.');
+
   await pres.writeFile({ fileName: OUT });
   await applyTheme(OUT, THEME);
   console.log(OUT);
