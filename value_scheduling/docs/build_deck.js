@@ -490,7 +490,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   // ---- server ----
   node(SX, 1.45, 2.0, 0.62, 'offline', 'Map (offline)', 'Gaussian SLAM · 2D grid', 'Map');
   node(10.83, 1.45, 2.0, 0.62, 'existing', 'Room cameras', 'wired · RGB · depth from the map', 'Room cameras', true);
-  node(SX, 2.4, 2.0, 1.05, 'neu', 'target_server', 'targets: cabinet, object, person · sent when moved or out of view · heartbeat · answers “still there?”', 'target_server');
+  node(SX, 2.4, 2.0, 1.05, 'neu', 'target_server', 'watches only the camera that sees the target · all cameras when lost · sends moved / lost · heartbeat', 'target_server');
   node(10.83, 2.4, 2.0, 1.05, 'per', 'Object retrieval', 'keyframe search → SAM 3 → object cloud → object cache (pose, ID, time seen)', 'Object retrieval');
   node(SX, 3.95, SW, 1.05, 'edit', 'detector (mm_perception)', 'decode JPEG → YOLOE / SAM 3 → best mask · echo ID + server times · drop requests already too old · report queue', 'detector');
   node(SX, 5.4, 2.0, 0.55, 'existing', 'CSV log', 'one line per request', 'Server log', true);
@@ -517,8 +517,8 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   flow(10.33, 5.67, 10.83, 5.67, K, '', 0, 0, 0, null, 'dash'); // log -> link map script
 
   // ---- flows across the Wi-Fi ----
-  flow(SX, 2.68, 5.0, 2.68, T, 'target moved / out of view · heartbeat', BX + 0.05, 2.42, BW - 0.1);
-  flow(5.0, 3.18, SX, 3.18, T, 'robot pose · “still there?”', BX + 0.05, 2.92, BW - 0.1);
+  flow(SX, 2.68, 5.0, 2.68, T, 'target moved / lost · heartbeat', BX + 0.05, 2.42, BW - 0.1);
+  flow(5.0, 3.18, SX, 3.18, T, 'robot pose', BX + 0.05, 2.92, BW - 0.1);
   flow(4.92, 4.23, SX, 4.23, T, 'one JPEG + ID + capture time', BX + 0.05, 3.97, BW - 0.1);
   flow(SX, 4.73, 4.92, 4.73, T, 'best mask + ID + server times', BX + 0.05, 4.47, BW - 0.1);
   flow(5.0, 5.67, SX, 5.67, K, 'logs, after the run', BX + 0.05, 5.41, BW - 0.1, 'center', 'dash');
@@ -535,7 +535,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   addT(s, 'comms flow', { x: 10.38, y: 6.28, w: 1.2, h: 0.26, fontSize: 11, color: '444444', valign: 'middle', isTextBox: true, margin: 0, objectName: 'legend comms text' });
   s.addShape(pres.shapes.LINE, { x: 11.55, y: 6.41, w: 0.4, h: 0, line: { color: K, width: 1.75, endArrowType: 'triangle' }, objectName: 'legend local arrow' });
   addT(s, 'local flow', { x: 12.03, y: 6.28, w: 0.85, h: 0.26, fontSize: 11, color: '444444', valign: 'middle', isTextBox: true, margin: 0, objectName: 'legend local text' });
-  s.addNotes('Teal arrows cross the Wi-Fi: targets down (only when they change), robot pose and “still there?” up, one photo per look up, the best mask back. Grey arrows stay on one machine. New: target_client and target_server. Edited: their detect client and detector. Offline: map and link-map script.');
+  s.addNotes('Teal arrows cross the Wi-Fi: targets down (only when they change), robot pose up, one photo per look up, the best mask back. Grey arrows stay on one machine. New: target_client and target_server. Edited: their detect client and detector. Offline: map and link-map script.');
 
   // ---------- the comms pieces ----------
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
@@ -548,7 +548,7 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
     [hd('Piece'), hd('Type'), hd('Where'), hd('What it does')],
     [nm('detect client'), 'edit to locator.py', R_('Robot'), 'One photo per look (resized, with ID, capture time and pose); time limit; one retry; drops answers for old photos; logs a CSV line'],
     [nm('detector'), 'edit to detector_node.py', S_('Server'), 'Echoes the ID; adds server times; returns the best mask only; drops requests already too old; reports its queue; logs a CSV line'],
-    [nm('target_server'), 'new node', S_('Server'), 'Targets (cabinet, object, person) from the object cache and room cameras; sends a target when it moves or leaves camera view; heartbeat ~1 Hz; answers “still there?”'],
+    [nm('target_server'), 'new node', S_('Server'), 'Finds each target once on all room cameras, then watches only the camera that sees it; if lost, searches all cameras; sends a target when it moves or is lost; heartbeat ~1 Hz'],
     [nm('target_client'), 'new node', R_('Robot'), 'Keeps each target and whether it is fresh; goal to Nav2; heartbeat → link alive and time limit; near an unverified target: slows down and looks with its own camera'],
     [nm('link-map script'), 'offline script', O_('Offline'), 'From the survey drive and the CSV logs: request time p50 / p95 and failures per cell; only if the survey shows slow spots'],
     [nm('keyframe_packer / ingest', 'later'), 'later, if needed', R_('Both'), 'Only if map updates run during tasks: sent when the view changes, paused during detect and grasp'],
