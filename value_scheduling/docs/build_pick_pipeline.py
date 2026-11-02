@@ -23,11 +23,11 @@ groups = [
              link='↑ request text · ↓ targets + age')]),
     ('nav', 'Navigate to the cabinet', [
         dict(img='global_nav.png', title='Global navigation',
-             desc='Nav2 on the map brings the robot near the cabinet (AMCL on the 2D lidar).',
+             desc='Nav2 on the robot drives to the cabinet’s view pose: AMCL on the 2D lidar, and the robot’s own costmap avoids obstacles.',
              inp='2D lidar scan; cabinet view pose',
              out='the robot is near the cabinet',
-             cam='confirm the cabinet’s position and a clear path; update the target if it changed',
-             link='↓ target updates · ↑ robot pose 10 Hz · late → keep last target, slow down'),
+             cam='confirm the cabinet’s position; send a new goal only if it changed',
+             link='↓ new goal only if the target changed · ↑ robot pose (status) · late → keep the current goal'),
         dict(img='local_nav.png', title='Local navigation',
              desc='Gripper camera: handle keypoint + RANSAC door plane. Rotate – translate – rotate '
                   'to 0.7 m off the door.',
@@ -59,7 +59,7 @@ groups = [
              link='none · runs on the robot')]),
     ('nav', 'Return to the person', [
         dict(img=None, ph='room-camera view of the person', title='Return',
-             desc='Nav2 to the person’s position, kept fresh by the room cameras because people move.',
+             desc='Nav2 on the robot drives to the person; the goal is updated when the room cameras see the person move.',
              inp='person position + age; 2D lidar scan',
              out='the robot is in front of the person',
              cam='live person position; re-sent when the person moves',

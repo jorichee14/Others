@@ -43,11 +43,11 @@ h1 { font-size:46px; font-weight:800 }
 <div class="io cam"><b>Room cameras:</b> find the cabinet and the person (SAM 3 on the room views, depth from the map)</div>
 <div class="io link"><b>Link:</b> ↑ request text · ↓ targets + age</div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#e8f0fb"><div class="pt" style="color:#1a5fd0">Navigate to the cabinet</div><div class="row"><div class="card"><img class="pic" src="pick_img/global_nav.png">
 <div class="t"><span class="n">2</span>Global navigation</div>
-<div class="d">Nav2 on the map brings the robot near the cabinet (AMCL on the 2D lidar).</div>
+<div class="d">Nav2 on the robot drives to the cabinet’s view pose: AMCL on the 2D lidar, and the robot’s own costmap avoids obstacles.</div>
 <div class="io"><b class="in">Input:</b> 2D lidar scan; cabinet view pose</div>
 <div class="io"><b class="in">Output:</b> the robot is near the cabinet</div>
-<div class="io cam"><b>Room cameras:</b> confirm the cabinet’s position and a clear path; update the target if it changed</div>
-<div class="io link"><b>Link:</b> ↓ target updates · ↑ robot pose 10 Hz · late → keep last target, slow down</div></div><div class="card"><img class="pic" src="pick_img/local_nav.png">
+<div class="io cam"><b>Room cameras:</b> confirm the cabinet’s position; send a new goal only if it changed</div>
+<div class="io link"><b>Link:</b> ↓ new goal only if the target changed · ↑ robot pose (status) · late → keep the current goal</div></div><div class="card"><img class="pic" src="pick_img/local_nav.png">
 <div class="t"><span class="n">3</span>Local navigation</div>
 <div class="d">Gripper camera: handle keypoint + RANSAC door plane. Rotate – translate – rotate to 0.7 m off the door.</div>
 <div class="io"><b class="in">Input:</b> one RGB-D image (robot stopped)</div>
@@ -73,7 +73,7 @@ h1 { font-size:46px; font-weight:800 }
 <div class="io cam"><b>Room cameras:</b> —</div>
 <div class="io link"><b>Link:</b> none · runs on the robot</div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#e8f0fb"><div class="pt" style="color:#1a5fd0">Return to the person</div><div class="row"><div class="card"><div class="ph">room-camera view of the person<br><span>(image to add)</span></div>
 <div class="t"><span class="n">7</span>Return</div>
-<div class="d">Nav2 to the person’s position, kept fresh by the room cameras because people move.</div>
+<div class="d">Nav2 on the robot drives to the person; the goal is updated when the room cameras see the person move.</div>
 <div class="io"><b class="in">Input:</b> person position + age; 2D lidar scan</div>
 <div class="io"><b class="in">Output:</b> the robot is in front of the person</div>
 <div class="io cam"><b>Room cameras:</b> live person position; re-sent when the person moves</div>
